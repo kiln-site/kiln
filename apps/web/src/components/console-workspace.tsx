@@ -1145,10 +1145,6 @@ function ConsoleLogViewport({
     if (!active || !autoScroll || filteredLines.length === 0 || loading) return
     programmaticScroll.current = true
     rowVirtualizer.scrollToIndex(filteredLines.length - 1, { align: "end" })
-    // Chromium can defer this programmatic scroll event until pointer movement.
-    queueMicrotask(() => {
-      parentRef.current?.dispatchEvent(new Event("scroll"))
-    })
     const frame = window.requestAnimationFrame(() => {
       programmaticScroll.current = false
     })
@@ -1160,9 +1156,6 @@ function ConsoleLogViewport({
     programmaticScroll.current = true
     if (filteredLines.length > 0) {
       rowVirtualizer.scrollToIndex(filteredLines.length - 1, { align: "end" })
-      queueMicrotask(() => {
-        parentRef.current?.dispatchEvent(new Event("scroll"))
-      })
     }
     window.requestAnimationFrame(() => {
       programmaticScroll.current = false
@@ -1364,7 +1357,7 @@ const ConsoleLogRow = React.memo(function ConsoleLogRow({
       data-index={index}
       className={`absolute top-0 left-0 flex min-h-[30px] transition-colors ${stateLine ? "border-l-0 pr-0 text-center" : "border-l-2 pr-5 text-left"} ${wrapLines ? "w-full items-start py-1.5 whitespace-pre-wrap" : "h-[30px] min-w-full items-center whitespace-nowrap"} ${lineTone(line.level, selected, stateLine)}`}
       style={{
-        transform: `translateY(${start}px)`,
+        top: start,
         width: wrapLines ? "100%" : "max(100%, max-content)",
       }}
       onClick={(event) => toggle(event.shiftKey)}
