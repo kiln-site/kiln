@@ -22,7 +22,7 @@ export const GlobalPageToolbar = React.memo(function GlobalPageToolbar({
 }: GlobalPageToolbarProps) {
   return (
     <header className="shrink-0 bg-background/90 backdrop-blur-xl">
-      <div className="flex min-h-24 items-center gap-4 px-3 py-4 sm:px-5">
+      <div className="flex min-h-16 items-center gap-4 px-3 py-2 sm:px-5">
         <ToolbarSidebarTrigger />
         <span className="h-8 w-px shrink-0 bg-border/80" aria-hidden="true" />
         <PageTitle section={section} title={title} />
