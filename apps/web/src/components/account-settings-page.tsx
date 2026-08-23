@@ -4,8 +4,6 @@ import QRCode from "react-qr-code"
 import {
   Check,
   Clipboard,
-  Eye,
-  EyeOff,
   Fingerprint,
   Laptop,
   LoaderCircle,
@@ -27,6 +25,11 @@ import {
 } from "@workspace/ui/components/dialog"
 import { Input } from "@workspace/ui/components/input"
 import { showToast } from "@workspace/ui/components/sonner"
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@workspace/ui/components/tooltip"
 
 import { ensuringPromise, recoverPromise } from "@/effect/promise"
 import { authClient } from "@/lib/auth-client"
@@ -44,6 +47,7 @@ const accountDateFormatter = new Intl.DateTimeFormat(undefined, {
 })
 const activeSessionsQueryKey = ["account", "active-sessions"] as const
 const linkedCliQueryKey = ["account", "linked-clis"] as const
+const redactedTextAlphabet = "abcdefghjkmnpqrstuvwxyz23456789"
 
 type ActiveSession = AccountSessionSummary
 
@@ -233,7 +237,6 @@ function DisplayNameCard({
 function EmailAddressCard({ initialEmail }: { initialEmail: string }) {
   const session = authClient.useSession()
   const [open, setOpen] = React.useState(false)
-  const [emailRevealed, setEmailRevealed] = React.useState(false)
   const [email, setEmail] = React.useState(initialEmail)
   const [code, setCode] = React.useState("")
   const [requestedEmail, setRequestedEmail] = React.useState<string | null>(
@@ -325,26 +328,7 @@ function EmailAddressCard({ initialEmail }: { initialEmail: string }) {
   return (
     <AccountSection title="Email address">
       <div className="flex min-w-0 items-center justify-between gap-3">
-        <button
-          type="button"
-          className="flex min-w-0 items-center gap-2 text-xs text-muted-foreground transition-colors hover:text-foreground"
-          aria-label={
-            emailRevealed
-              ? `${currentEmail}. Hide email address`
-              : "Reveal email address"
-          }
-          aria-expanded={emailRevealed}
-          onClick={() => setEmailRevealed((revealed) => !revealed)}
-        >
-          <span className="truncate">
-            {emailRevealed ? currentEmail : "••••••••@••••••••"}
-          </span>
-          {emailRevealed ? (
-            <EyeOff className="size-3.5 shrink-0" aria-hidden="true" />
-          ) : (
-            <Eye className="size-3.5 shrink-0" aria-hidden="true" />
-          )}
-        </button>
+        <RedactedEmail value={currentEmail} />
         <Button
           type="button"
           variant="outline"
@@ -440,6 +424,50 @@ function EmailAddressCard({ initialEmail }: { initialEmail: string }) {
       </Dialog>
     </AccountSection>
   )
+}
+
+function RedactedEmail({ value }: { value: string }) {
+  const [revealed, setRevealed] = React.useState(false)
+  const redacted = React.useMemo(() => redactedPlaceholder(value), [value])
+
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <button
+          type="button"
+          className={`min-w-0 cursor-pointer truncate rounded-sm font-mono text-[11px] leading-none transition hover:text-foreground ${revealed ? "text-muted-foreground" : "text-muted-foreground blur-[2px] select-none"}`}
+          aria-label="Toggle account email visibility"
+          onClick={() => setRevealed((current) => !current)}
+        >
+          {revealed ? value : redacted}
+        </button>
+      </TooltipTrigger>
+      <TooltipContent side="top" sideOffset={6}>
+        {revealed ? "Click to hide email" : "Click to reveal email"}
+      </TooltipContent>
+    </Tooltip>
+  )
+}
+
+function redactedPlaceholder(value: string): string {
+  let state = 0x811c9dc5
+  for (let index = 0; index < value.length; index += 1) {
+    state ^= value.charCodeAt(index)
+    state = Math.imul(state, 0x01000193)
+  }
+
+  const nextCharacter = () => {
+    state = Math.imul(state ^ (state >>> 13), 0x85ebca6b)
+    state = Math.imul(state ^ (state >>> 16), 0xc2b2ae35)
+    return (
+      redactedTextAlphabet[Math.abs(state) % redactedTextAlphabet.length] ?? "x"
+    )
+  }
+
+  return Array.from(value, (character) => {
+    if (["@", ".", "-", "_"].includes(character)) return character
+    return nextCharacter()
+  }).join("")
 }
 
 function PasswordCard() {
