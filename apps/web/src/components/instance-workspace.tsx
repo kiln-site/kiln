@@ -262,9 +262,9 @@ function InstanceWorkspaceHeader() {
   return (
     <header className="shrink-0 border-b bg-background/90 backdrop-blur-xl">
       <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-3 px-3 py-3 sm:px-5 lg:min-h-20 lg:py-2 xl:grid-cols-[minmax(0,1fr)_39rem_auto] xl:gap-x-5">
-        <div className="col-start-1 row-start-1 flex min-w-0 items-center gap-2">
+        <div className="col-start-1 row-start-1 flex min-w-0 items-center gap-4">
           <ToolbarSidebarTrigger />
-          <span className="h-6 w-px shrink-0 bg-border/80" aria-hidden="true" />
+          <span className="h-8 w-px shrink-0 bg-border/80" aria-hidden="true" />
           <InstanceIdentityBoundary error={error} instance={instance} />
         </div>
         <LiveResourceMetersBoundary instance={instance} />
@@ -494,7 +494,9 @@ function InstanceIdentity({
         <InstanceAddressControl address={instance.connectAddress} />
       </div>
       {error ? (
-        <p className="mt-0.5 truncate text-[0.5625rem] text-destructive">{error}</p>
+        <p className="mt-0.5 truncate text-[0.5625rem] text-destructive">
+          {error}
+        </p>
       ) : null}
     </div>
   )
