@@ -755,6 +755,10 @@ const filesEffect = Effect.fn("cli.files")(function* (
             : formatBytes(result.sizes[path]),
         ])
       )
+      if (result.truncated) {
+        writeLine()
+        writeLine(`Showing ${result.paths.length} of ${result.total} entries.`)
+      }
     }
     return
   }

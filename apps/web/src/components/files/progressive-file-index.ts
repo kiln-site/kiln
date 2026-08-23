@@ -5,7 +5,7 @@ import { ensuringPromise, promiseEffect } from "@/effect/promise"
 import { getRelayDirectoryPage, searchRelayFiles } from "@/server/relay"
 
 const emptyEntries: ReadonlyArray<RelayFileEntry> = []
-const fileTreeInitialLoadingDelayMs = 120
+const fileTreeInitialLoadingDelayMs = 160
 const emptyDirectorySnapshot: FileDirectorySnapshot = {
   complete: false,
   entries: emptyEntries,
