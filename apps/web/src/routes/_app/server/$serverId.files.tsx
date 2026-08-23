@@ -92,7 +92,7 @@ function FilesRoute() {
                     <p className="truncate text-sm font-semibold">
                       {fileNameFromPath(filePath)}
                     </p>
-                    <p className="truncate font-mono text-[0.625rem] text-muted-foreground sm:text-[0.6875rem]">
+                    <p className="type-code truncate text-muted-foreground">
                       /data/{normalizeFilePath(filePath)}
                     </p>
                   </div>

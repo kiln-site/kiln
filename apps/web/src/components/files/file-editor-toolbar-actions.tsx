@@ -274,7 +274,7 @@ function EditorOverflowMenu({
         collisionPadding={8}
         className="w-[min(17rem,calc(100vw-1rem))] p-1"
       >
-        <p className="border-b px-2 py-2 text-[0.625rem] font-semibold tracking-[0.12em] text-muted-foreground uppercase">
+        <p className="type-technical-label border-b px-2 py-2 text-muted-foreground">
           File actions
         </p>
         <FilePinActionMenuItem
@@ -316,9 +316,7 @@ function EditorMobileFontSizeSection({
         <span className="flex items-center gap-2 text-xs font-medium text-foreground">
           <ALargeSmall className="size-4 text-muted-foreground" /> Text size
         </span>
-        <span className="font-mono text-[0.625rem] text-muted-foreground">
-          {fontSize}px
-        </span>
+        <span className="type-code text-muted-foreground">{fontSize}px</span>
       </div>
       <EditorFontSizeControl
         fontSize={fontSize}
@@ -518,7 +516,7 @@ function EditorMobileOverflowMenu({
         collisionPadding={8}
         className="w-[min(18rem,calc(100vw-1rem))] p-1.5"
       >
-        <p className="px-2 pt-1 pb-1.5 font-mono text-[0.5625rem] tracking-[0.12em] text-muted-foreground uppercase">
+        <p className="type-technical-label px-2 pt-1 pb-1.5 text-muted-foreground">
           File actions
         </p>
         <EditorMobileFontSizeSection preferencesStore={preferencesStore} />
@@ -775,7 +773,7 @@ function EditorFontSizeControl({
 
   return (
     <div className="flex items-center gap-2.5">
-      <span className="w-3 shrink-0 text-left font-mono text-[0.5625rem] text-muted-foreground">
+      <span className="type-meta w-3 shrink-0 text-left font-mono text-muted-foreground">
         A
       </span>
       <div className="relative min-w-0 flex-1 py-1.5">

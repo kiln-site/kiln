@@ -102,7 +102,7 @@ function ConsoleRuntimeReasonContent({
     <ConsoleTooltip content={message}>
       <span
         aria-label={`Server state reason: ${message}`}
-        className="flex max-w-64 min-w-0 shrink items-center gap-1.5 text-[0.625rem] font-medium text-amber-300 outline-none sm:text-xs"
+        className="type-label flex max-w-64 min-w-0 shrink items-center gap-1.5 text-amber-300 outline-none"
         role="status"
         tabIndex={0}
       >

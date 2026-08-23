@@ -89,11 +89,11 @@ function FileActivityRow({
         <span className="block truncate text-sm font-medium text-foreground">
           {formatName(entry.path)}
         </span>
-        <span className="mt-0.5 block truncate font-mono text-[0.625rem] text-muted-foreground">
+        <span className="type-code mt-0.5 block truncate text-muted-foreground">
           /data/{entry.path}
         </span>
       </span>
-      <span className="flex shrink-0 items-center gap-2 pl-2 text-[0.625rem] text-muted-foreground">
+      <span className="type-meta flex shrink-0 items-center gap-2 pl-2 text-muted-foreground">
         <span>
           {kind}{" "}
           <time
@@ -197,7 +197,7 @@ export function FilesHome({
             <div className="mb-7">
               <div className="mb-2 flex items-center gap-2 px-1">
                 <Pin className="size-3.5 text-primary" />
-                <h2 className="font-mono text-[0.625rem] font-semibold tracking-[0.12em] text-muted-foreground uppercase">
+                <h2 className="type-technical-label text-muted-foreground">
                   Pinned
                 </h2>
               </div>
@@ -217,7 +217,7 @@ export function FilesHome({
             <div>
               <div className="mb-2 flex items-center gap-2 px-1">
                 <Clock3 className="size-3.5 text-primary" />
-                <h2 className="font-mono text-[0.625rem] font-semibold tracking-[0.12em] text-muted-foreground uppercase">
+                <h2 className="type-technical-label text-muted-foreground">
                   Recent
                 </h2>
               </div>

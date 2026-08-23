@@ -300,7 +300,7 @@ function EditorDiskConflictNotice({
           <p className="text-xs font-medium text-destructive">
             File changed on disk
           </p>
-          <p className="text-[0.625rem] leading-4 text-muted-foreground">
+          <p className="type-meta text-muted-foreground">
             Reload the latest version or explicitly overwrite it with your
             changes.
           </p>
@@ -368,7 +368,7 @@ function EditorFooter({
     sessionStore.getSaveErrorSnapshot
   )
   return (
-    <div className="flex h-7 shrink-0 items-center justify-between border-t bg-muted/10 px-3 font-mono text-[0.5625rem] text-muted-foreground">
+    <div className="type-meta flex h-7 shrink-0 items-center justify-between border-t bg-muted/10 px-3 font-mono text-muted-foreground">
       <span className={error || saveError ? "text-destructive" : undefined}>
         {error ||
           saveError ||

@@ -323,7 +323,7 @@ function ConsoleConnectionNoticeContent({
 }) {
   return (
     <div className="pointer-events-none absolute top-3 left-1/2 z-20 -translate-x-1/2">
-      <div className="flex items-center gap-1.5 border border-amber-400/20 bg-stone-950/90 px-2.5 py-1.5 font-mono text-[0.5625rem] text-amber-200 shadow-lg shadow-black/35 backdrop-blur-sm">
+      <div className="type-meta flex items-center gap-1.5 border border-amber-400/20 bg-stone-950/90 px-2.5 py-1.5 font-mono text-amber-200 shadow-lg shadow-black/35 backdrop-blur-sm">
         {loading ? (
           <LoaderCircle className="size-3 animate-spin" />
         ) : (

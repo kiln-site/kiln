@@ -450,7 +450,7 @@ export function FileActionMenuItem({
         <span className="block text-xs font-medium text-foreground">
           {label}
         </span>
-        <span className="block truncate text-[0.625rem] text-muted-foreground">
+        <span className="type-meta block truncate text-muted-foreground">
           {detail}
         </span>
       </span>

@@ -129,10 +129,10 @@ function ConsoleLevelMenuSummary({ uiStore }: { uiStore: ConsoleUiStore }) {
 
   return (
     <div className="flex items-center justify-between border-b px-2 py-2">
-      <p className="text-[0.625rem] font-semibold tracking-[0.12em] text-muted-foreground uppercase">
+      <p className="type-technical-label text-muted-foreground">
         Console levels
       </p>
-      <span className="font-mono text-[0.5625rem] text-muted-foreground/75 tabular-nums">
+      <span className="type-meta font-mono text-muted-foreground tabular-nums">
         {levelCount}/{consoleLevels.length}
       </span>
     </div>
@@ -342,10 +342,8 @@ function ConsoleFilterMenuSummary({
 }) {
   return (
     <div className="flex items-center justify-between border-b px-2 py-2">
-      <p className="text-[0.625rem] font-semibold tracking-[0.12em] text-muted-foreground uppercase">
-        {label}
-      </p>
-      <span className="font-mono text-[0.5625rem] text-muted-foreground/75 tabular-nums">
+      <p className="type-technical-label text-muted-foreground">{label}</p>
+      <span className="type-meta font-mono text-muted-foreground tabular-nums">
         {active}/{total}
       </span>
     </div>

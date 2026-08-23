@@ -61,10 +61,19 @@ larger screens.
 
 ## Specialist surfaces
 
-The console, file tree, file viewer, code editor, and charts may maintain an
-independent content scale where density is part of the task. Their surrounding
-toolbars, menus, labels, timestamps, empty states, and actions still use this
-system. The file editor keeps its user-controlled font size and a 16px default.
+Specialist surfaces use the product roles for their surrounding chrome and keep
+smaller sizes only where density is intrinsic to the data plane:
+
+| Surface               | Exception                                        |
+| --------------------- | ------------------------------------------------ |
+| Console output        | 11px log rows and 9px nonessential timestamps    |
+| Chart plotting region | 10px axis ticks and reference labels             |
+| Code editor           | User-controlled content size with a 16px default |
+
+Console filters, warnings and actions; file-tree metadata and menus; file-viewer
+toolbars; and chart legends and tooltips use the product roles. These exceptions
+should not be copied into ordinary components or expanded without a documented
+density requirement.
 
 ## Example
 

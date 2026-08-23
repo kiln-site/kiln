@@ -35,7 +35,7 @@ function UploadProgressDescription({
   const progress = total ? Math.round((completed / total) * 100) : 0
   return (
     <div className="mt-1.5 space-y-2">
-      <div className="flex items-center justify-between gap-4 font-mono text-[0.625rem] text-muted-foreground">
+      <div className="type-code flex items-center justify-between gap-4 text-muted-foreground">
         <span className="truncate">
           /data/{normalizeDirectoryPath(directory)}
         </span>
@@ -220,7 +220,7 @@ export function FileDropOverlay({ directory }: { directory: string }) {
           <Upload className="size-5" />
         </div>
         <p className="mt-3 text-sm font-semibold">Drop files to upload</p>
-        <p className="mt-1 font-mono text-[0.625rem] text-muted-foreground">
+        <p className="type-code mt-1 text-muted-foreground">
           /data/{normalizeDirectoryPath(directory)}
         </p>
       </div>

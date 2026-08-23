@@ -364,7 +364,7 @@ function FileTreeSearchInput({
         value={search.value}
         placeholder="Search files…"
         aria-label="Search instance files"
-        className="h-full min-w-0 flex-1 bg-transparent px-2 text-base text-foreground outline-none placeholder:text-muted-foreground/70 md:text-sm"
+        className="type-input h-full min-w-0 flex-1 bg-transparent px-2 text-foreground outline-none placeholder:text-muted-foreground"
         onChange={(event) => {
           const value = event.target.value
           if (value) search.setValue(value)
@@ -453,15 +453,13 @@ function FileActionPreview({
     <button
       type="button"
       disabled
-      className="flex w-full items-center gap-2.5 px-2 py-2 text-left text-xs text-muted-foreground/80 transition-colors hover:bg-popover-accent/75 hover:text-foreground focus-visible:bg-popover-accent focus-visible:text-foreground focus-visible:outline-none disabled:cursor-default disabled:hover:bg-transparent disabled:hover:text-muted-foreground/80"
+      className="type-label flex w-full items-center gap-2.5 px-2 py-2 text-left text-muted-foreground transition-colors hover:bg-popover-accent/75 hover:text-foreground focus-visible:bg-popover-accent focus-visible:text-foreground focus-visible:outline-none disabled:cursor-default disabled:hover:bg-transparent disabled:hover:text-muted-foreground"
     >
       <span className="grid size-7 shrink-0 place-items-center border border-border/70 bg-card [&>svg]:size-3.5">
         {icon}
       </span>
-      <span className="min-w-0 flex-1 text-foreground/75">{label}</span>
-      <span className="font-mono text-[0.5rem] tracking-wider text-muted-foreground/60 uppercase">
-        Soon
-      </span>
+      <span className="min-w-0 flex-1 text-foreground">{label}</span>
+      <span className="type-technical-label text-muted-foreground">Soon</span>
     </button>
   )
 }
@@ -492,9 +490,7 @@ function FileUploadPickerAction({
       <span className="min-w-0 flex-1 text-foreground">
         {uploading ? "Uploading…" : label}
       </span>
-      <span className="font-mono text-[0.5rem] tracking-wider text-primary uppercase">
-        Direct
-      </span>
+      <span className="type-technical-label text-primary">Direct</span>
     </button>
   )
 }
@@ -1129,9 +1125,7 @@ export function FileTreePanel({
           <FolderTree className="size-[18px] shrink-0 text-primary" />
           <div className="min-w-0">
             <p className="truncate text-sm font-semibold">Browse files</p>
-            <p className="truncate font-mono text-[0.625rem] text-muted-foreground">
-              /data
-            </p>
+            <p className="type-code truncate text-muted-foreground">/data</p>
           </div>
         </div>
         <Button
@@ -1189,7 +1183,7 @@ export function FileTreePanel({
               sideOffset={6}
               className="w-56 p-1"
             >
-              <p className="border-b px-2 py-2 text-[0.625rem] font-semibold tracking-[0.12em] text-muted-foreground uppercase">
+              <p className="type-technical-label border-b px-2 py-2 text-muted-foreground">
                 Add to instance
               </p>
               <FileActionPreview icon={<FolderPlus />} label="New directory" />
@@ -1413,7 +1407,7 @@ export function FileTreePanel({
         <span className="min-w-0 flex-1 truncate">Upload to</span>
         <span
           ref={dropPathLabelRef}
-          className="max-w-[65%] truncate font-mono text-[0.625rem] text-primary"
+          className="type-code max-w-[65%] truncate text-primary"
         >
           /data/
         </span>

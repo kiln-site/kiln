@@ -76,7 +76,7 @@ export function ConsoleShareButton({
               : "ghost"
         }
         size="sm"
-        className="h-8 gap-1.5 px-2.5 text-[0.6875rem]"
+        className="type-control-sm h-8 gap-1.5 px-2.5"
         disabled={state === "uploading" || !hasLines}
         onClick={share}
       >
@@ -169,7 +169,7 @@ export function ConsoleSelectionControl({
         onEscapeKeyDown={uiStore.clearSelection}
       >
         <span
-          className="font-mono text-[0.625rem] whitespace-nowrap text-muted-foreground"
+          className="type-code whitespace-nowrap text-muted-foreground"
           aria-live="polite"
         >
           {copied

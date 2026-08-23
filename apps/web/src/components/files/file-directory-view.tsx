@@ -97,9 +97,7 @@ function formatFileModifiedAt(modifiedAt: number): string {
 function FileModifiedAtTime({ modifiedAt }: { modifiedAt: number }) {
   if (modifiedAt <= 0) {
     return (
-      <span className="truncate pr-2 font-mono text-[0.625rem] text-muted-foreground">
-        —
-      </span>
+      <span className="type-code truncate pr-2 text-muted-foreground">—</span>
     )
   }
 
@@ -107,7 +105,7 @@ function FileModifiedAtTime({ modifiedAt }: { modifiedAt: number }) {
     <Tooltip>
       <TooltipTrigger asChild>
         <time
-          className="cursor-help truncate pr-2 font-mono text-[0.625rem] text-muted-foreground"
+          className="type-code cursor-help truncate pr-2 text-muted-foreground"
           dateTime={new Date(modifiedAt).toISOString()}
           suppressHydrationWarning
         >
@@ -301,11 +299,11 @@ export function RootDirectoryList({
     <div className="mt-8">
       <div className="mb-2 flex min-h-8 items-center gap-2 px-1">
         <Folder className="size-3.5 text-primary" />
-        <h2 className="font-mono text-[0.625rem] font-semibold tracking-[0.12em] text-muted-foreground uppercase">
+        <h2 className="type-technical-label text-muted-foreground">
           Root · /data
         </h2>
         {selectedPaths.length ? (
-          <span className="ml-auto font-mono text-[0.625rem] text-muted-foreground">
+          <span className="type-code ml-auto text-muted-foreground">
             {selectedPaths.length} selected
           </span>
         ) : (
@@ -314,7 +312,7 @@ export function RootDirectoryList({
         <FileActionsDropdown controller={actions} paths={selectedPaths} />
       </div>
       <div className="overflow-hidden border border-border/75 bg-muted/[0.025]">
-        <div className="grid h-9 grid-cols-[2.25rem_minmax(12rem,1fr)_7rem_11rem_2.5rem] items-center border-b border-border/75 bg-muted/10 px-2 font-mono text-[0.5625rem] font-semibold tracking-[0.1em] text-muted-foreground uppercase">
+        <div className="type-technical-label grid h-9 grid-cols-[2.25rem_minmax(12rem,1fr)_7rem_11rem_2.5rem] items-center border-b border-border/75 bg-muted/10 px-2 text-muted-foreground">
           <label className="grid size-7 place-items-center">
             <input
               type="checkbox"
@@ -376,7 +374,7 @@ export function RootDirectoryList({
               )}
               <span className="truncate">{entry.name}</span>
             </button>
-            <span className="font-mono text-[0.625rem] text-muted-foreground">
+            <span className="type-code text-muted-foreground">
               {formatFileSize(entry.size)}
             </span>
             <FileModifiedAtTime modifiedAt={entry.modifiedAt} />
@@ -503,7 +501,7 @@ function DirectoryViewContent({
           <FileToolbarIdentity path={path} directory />
           <div className="ml-auto flex shrink-0 items-center gap-1">
             {selectedPaths.length ? (
-              <span className="mr-1 hidden font-mono text-[0.625rem] text-muted-foreground sm:inline">
+              <span className="type-code mr-1 hidden text-muted-foreground sm:inline">
                 {selectedPaths.length} selected
               </span>
             ) : null}
@@ -561,7 +559,7 @@ function DirectoryViewContent({
 
       <div className="min-h-0 flex-1 overflow-auto px-3 py-4 sm:px-5 lg:px-7">
         <div className="mx-auto w-full max-w-5xl overflow-hidden border border-border/75 bg-muted/[0.025]">
-          <div className="grid h-9 grid-cols-[2.25rem_minmax(12rem,1fr)_7rem_11rem_2.5rem] items-center border-b border-border/75 bg-muted/10 px-2 font-mono text-[0.5625rem] font-semibold tracking-[0.1em] text-muted-foreground uppercase">
+          <div className="type-technical-label grid h-9 grid-cols-[2.25rem_minmax(12rem,1fr)_7rem_11rem_2.5rem] items-center border-b border-border/75 bg-muted/10 px-2 text-muted-foreground">
             <label className="grid size-7 place-items-center">
               <input
                 type="checkbox"
@@ -611,12 +609,8 @@ function DirectoryViewContent({
               <Folder className="size-4 shrink-0 text-primary/80" />
               <span className="truncate">...</span>
             </span>
-            <span className="font-mono text-[0.625rem] text-muted-foreground">
-              —
-            </span>
-            <span className="font-mono text-[0.625rem] text-muted-foreground">
-              —
-            </span>
+            <span className="type-code text-muted-foreground">—</span>
+            <span className="type-code text-muted-foreground">—</span>
             <span />
           </button>
 
@@ -646,7 +640,7 @@ function DirectoryViewContent({
                 )}
                 <span className="truncate">{entry.name}</span>
               </button>
-              <span className="font-mono text-[0.625rem] text-muted-foreground">
+              <span className="type-code text-muted-foreground">
                 {formatFileSize(entry.size)}
               </span>
               <FileModifiedAtTime modifiedAt={entry.modifiedAt} />

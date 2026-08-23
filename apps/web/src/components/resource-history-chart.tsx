@@ -227,7 +227,7 @@ export function ResourceHistoryChart({
   return (
     <div className="relative">
       {resourceId === "network" || resourceId === "storage" ? (
-        <div className="pointer-events-none absolute top-0 right-3 z-10 flex items-center gap-3 font-mono text-[0.5rem] tracking-[0.07em] text-muted-foreground">
+        <div className="type-meta pointer-events-none absolute top-0 right-3 z-10 flex items-center gap-3 font-mono tracking-[0.07em] text-muted-foreground">
           <span className="flex items-center gap-1.5">
             <span
               className={`h-1.5 w-3 ${resourceId === "network" ? "bg-current opacity-70" : ""}`}

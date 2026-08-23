@@ -230,7 +230,7 @@ export const MinecraftJavaVersionFields = React.memo(
               />
             )}
             {showDescriptions ? (
-              <span className="block text-[0.5625rem] leading-4 font-normal">
+              <span className="type-meta block font-normal">
                 {versionDefinition.description}
               </span>
             ) : null}
@@ -298,7 +298,7 @@ export const MinecraftJavaVersionFields = React.memo(
           ) : null}
         </div>
         {javaDefinition && showDescriptions ? (
-          <span className="block text-[0.5625rem] leading-4 font-normal">
+          <span className="type-meta block font-normal">
             {javaDefinition.description}
           </span>
         ) : null}

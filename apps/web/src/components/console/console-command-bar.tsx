@@ -174,7 +174,7 @@ export const ConsoleCommandBar = React.memo(function ConsoleCommandBar({
           </Button>
         </form>
       ) : (
-        <div className="flex h-10 items-center gap-2 font-mono text-[0.625rem] text-muted-foreground">
+        <div className="type-code flex h-10 items-center gap-2 text-muted-foreground">
           <EyeOff className="size-3.5" /> Read-only console access
         </div>
       )}
