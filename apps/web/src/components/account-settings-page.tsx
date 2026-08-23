@@ -31,6 +31,8 @@ import { authClient } from "@/lib/auth-client"
 import type { AuthenticatedUser } from "@/lib/auth-session"
 import { clearAppearanceCache } from "@/lib/appearance"
 import { getCliCredentials, revokeCliCredential } from "@/server/cli"
+import { getActiveSessions, revokeActiveSession } from "@/server/sessions"
+import type { AccountSessionSummary } from "@/effect/account-sessions"
 
 const accountDateFormatter = new Intl.DateTimeFormat(undefined, {
   dateStyle: "medium",
@@ -39,8 +41,7 @@ const accountDateFormatter = new Intl.DateTimeFormat(undefined, {
 const activeSessionsQueryKey = ["account", "active-sessions"] as const
 const linkedCliQueryKey = ["account", "linked-clis"] as const
 
-type SessionListResult = Awaited<ReturnType<typeof authClient.listSessions>>
-type ActiveSession = NonNullable<SessionListResult["data"]>[number]
+type ActiveSession = AccountSessionSummary
 
 interface SetupState {
   backupCodes: Array<string>
@@ -991,42 +992,38 @@ function CliCredentialsCard({ enabled }: { enabled: boolean }) {
 function SessionsCard({ enabled }: { enabled: boolean }) {
   const session = authClient.useSession()
   const queryClient = useQueryClient()
-  const [pendingToken, setPendingToken] = React.useState<string | null>(null)
+  const [pendingSessionId, setPendingSessionId] = React.useState<string | null>(
+    null
+  )
   const [logoutDialogOpen, setLogoutDialogOpen] = React.useState(false)
   const [loggingOut, setLoggingOut] = React.useState(false)
   const sessions = useQuery({
     queryKey: activeSessionsQueryKey,
     enabled,
-    queryFn: async () => {
-      const result = await authClient.listSessions()
-      if (result.error) {
-        throw new Error(
-          authErrorMessage(result.error, "Could not load active sessions")
-        )
-      }
-      return result.data ?? []
-    },
+    queryFn: () => getActiveSessions(),
   })
-  const currentToken = session.data?.session.token
+  const currentSessionId = session.data?.session.id
 
   const revokeSession = React.useCallback(
     async (activeSession: ActiveSession) => {
-      const isCurrent = activeSession.token === currentToken
-      setPendingToken(activeSession.token)
-      const error = isCurrent
-        ? (
-            await recoverPromise(
-              () => authClient.signOut(),
-              (cause) => failedAuthResult(cause, "Could not sign out")
-            )
-          ).error
-        : (
-            await recoverPromise(
-              () => authClient.revokeSession({ token: activeSession.token }),
-              (cause) => failedAuthResult(cause, "Could not revoke the session")
-            )
-          ).error
-      setPendingToken(null)
+      const isCurrent = activeSession.id === currentSessionId
+      setPendingSessionId(activeSession.id)
+      const result = await recoverPromise(
+        async () => {
+          if (isCurrent) {
+            const signOutResult = await authClient.signOut()
+            if (signOutResult.error) throw signOutResult.error
+          } else {
+            await revokeActiveSession({
+              data: { sessionId: activeSession.id },
+            })
+          }
+          return { error: null }
+        },
+        (cause) => failedAuthResult(cause, "Could not revoke the session")
+      )
+      setPendingSessionId(null)
+      const { error } = result
       if (error) {
         showToast({
           message: authErrorMessage(error, "Could not revoke the session"),
@@ -1042,7 +1039,7 @@ function SessionsCard({ enabled }: { enabled: boolean }) {
       showToast({ message: "Session revoked.", type: "success" })
       await queryClient.invalidateQueries({ queryKey: activeSessionsQueryKey })
     },
-    [currentToken, queryClient]
+    [currentSessionId, queryClient]
   )
 
   async function logoutEverywhere() {
@@ -1119,9 +1116,9 @@ function SessionsCard({ enabled }: { enabled: boolean }) {
             <SessionRow
               key={activeSession.id}
               activeSession={activeSession}
-              current={activeSession.token === currentToken}
-              pending={pendingToken === activeSession.token}
-              disabled={pendingToken !== null || loggingOut}
+              current={activeSession.id === currentSessionId}
+              pending={pendingSessionId === activeSession.id}
+              disabled={pendingSessionId !== null || loggingOut}
               onRevoke={revokeSession}
             />
           ))
