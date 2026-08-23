@@ -116,8 +116,8 @@ export function InvitationPage({
               Invitation unavailable
             </h1>
             <p className="mt-2 text-sm leading-6 text-muted-foreground">
-              This invitation has expired, was revoked, or has already been
-              used.
+              This invitation is invalid, has expired, was revoked, or has
+              already been used.
             </p>
             <Button className="mt-6" variant="outline" asChild>
               <Link to="/">Return to Kiln</Link>

@@ -325,6 +325,9 @@ const activityCalendarDay = new Intl.DateTimeFormat(undefined, {
 const activityCalendarWeekdays = ["SU", "MO", "TU", "WE", "TH", "FR", "SA"]
 
 const minimumActivitySyncFeedbackMs = 500
+const subscribeToHydration = () => () => {}
+const getClientHydrationSnapshot = () => true
+const getServerHydrationSnapshot = () => false
 const activityTableBottomPadding = 12
 
 export const ActivityPage = React.memo(function ActivityPage({
@@ -781,11 +784,16 @@ const ActivitySyncButton = React.memo(function ActivitySyncButton({
     ...activityQueryOptions(from, to),
     notifyOnChangeProps: ["fetchStatus"],
   })
+  const hydrated = React.useSyncExternalStore(
+    subscribeToHydration,
+    getClientHydrationSnapshot,
+    getServerHydrationSnapshot
+  )
   const [manualSyncing, setManualSyncing] = React.useState(false)
   const manualSyncingRef = React.useRef(false)
   const feedbackTimeoutRef = React.useRef<number>(undefined)
   const mountedRef = React.useRef(true)
-  const syncing = manualSyncing || fetchStatus === "fetching"
+  const syncing = manualSyncing || (hydrated && fetchStatus === "fetching")
 
   React.useEffect(() => {
     mountedRef.current = true
