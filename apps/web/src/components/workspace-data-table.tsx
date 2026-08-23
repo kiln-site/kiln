@@ -163,7 +163,7 @@ export const WorkspaceTableHead = React.memo(function WorkspaceTableHead({
 }) {
   return (
     <thead className={className}>
-      <tr className="border-b bg-muted/20 font-mono text-[0.5625rem] tracking-[0.12em] text-muted-foreground uppercase">
+      <tr className="type-technical-label border-b bg-muted/20 text-muted-foreground">
         {children}
       </tr>
     </thead>

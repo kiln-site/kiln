@@ -14,10 +14,7 @@ const nestedFloatingSelector = [
   "[data-radix-popper-content-wrapper]",
 ].join(",")
 
-function Dialog({
-  onOpenChange,
-  ...props
-}: DialogPrimitive.Root.Props) {
+function Dialog({ onOpenChange, ...props }: DialogPrimitive.Root.Props) {
   return (
     <DialogPrimitive.Root
       data-slot="dialog"
@@ -83,7 +80,7 @@ function DialogContent({
       <DialogPrimitive.Popup
         data-slot="dialog-content"
         className={cn(
-          "fixed top-1/2 left-1/2 z-50 grid max-h-[calc(100dvh-2rem)] w-full max-w-[calc(100%-2rem)] -translate-x-1/2 -translate-y-1/2 gap-5 overflow-y-auto rounded-xl border border-accent-border/25 bg-[color-mix(in_oklab,var(--surface-overlay)_70%,transparent)] p-5 text-sm text-popover-foreground shadow-2xl shadow-black/55 backdrop-blur-xl duration-150 outline-none sm:max-w-lg data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
+          "type-body fixed top-1/2 left-1/2 z-50 grid max-h-[calc(100dvh-2rem)] w-full max-w-[calc(100%-2rem)] -translate-x-1/2 -translate-y-1/2 gap-5 overflow-y-auto rounded-xl border border-accent-border/25 bg-[color-mix(in_oklab,var(--surface-overlay)_70%,transparent)] p-5 text-popover-foreground shadow-2xl shadow-black/55 backdrop-blur-xl duration-150 outline-none sm:max-w-lg data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
           disableOpenAnimation &&
             "data-open:animate-none! data-open:duration-0!",
           className
@@ -137,10 +134,7 @@ function DialogTitle({ className, ...props }: DialogPrimitive.Title.Props) {
   return (
     <DialogPrimitive.Title
       data-slot="dialog-title"
-      className={cn(
-        "font-heading text-xl leading-none font-semibold tracking-[-0.03em] text-foreground",
-        className
-      )}
+      className={cn("type-dialog-title text-foreground", className)}
       {...props}
     />
   )
@@ -153,7 +147,7 @@ function DialogDescription({
   return (
     <DialogPrimitive.Description
       data-slot="dialog-description"
-      className={cn("text-xs leading-5 text-muted-foreground", className)}
+      className={cn("type-support text-muted-foreground", className)}
       {...props}
     />
   )

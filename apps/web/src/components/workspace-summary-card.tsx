@@ -37,7 +37,7 @@ export function WorkspaceSummaryCard({
         </span>
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
-            <p className="truncate text-sm font-semibold">{title}</p>
+            <p className="type-card-title truncate">{title}</p>
             {titleAccessory}
           </div>
           {children}

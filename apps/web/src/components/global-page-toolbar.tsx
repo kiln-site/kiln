@@ -41,8 +41,8 @@ const PageTitle = React.memo(function PageTitle({
   const pageTitle = title ?? (section ? sectionTitles[section] : "Hearth")
 
   return (
-    <h1 className="flex min-w-0 flex-1 items-baseline gap-2 font-heading tracking-[-0.035em]">
-      <span className="shrink-0 text-xl font-semibold text-foreground sm:text-2xl">
+    <h1 className="flex min-w-0 flex-1 items-baseline gap-2">
+      <span className="type-page-title shrink-0 text-foreground">
         {pageTitle}
       </span>
       {section ? <SectionRouteTitle section={section} /> : null}
@@ -69,7 +69,7 @@ function SectionRouteTitle({ section }: { section: PageSection }) {
   return (
     <>
       <span className="shrink-0 text-border">/</span>
-      <span className="min-w-0 truncate text-base font-medium text-muted-foreground sm:text-lg">
+      <span className="type-page-context min-w-0 truncate text-muted-foreground">
         {title}
       </span>
     </>

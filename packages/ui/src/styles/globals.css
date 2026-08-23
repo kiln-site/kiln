@@ -21,6 +21,7 @@
   --color-sidebar-accent: var(--sidebar-accent);
   --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
   --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-muted-foreground: var(--sidebar-muted-foreground);
   --color-sidebar-foreground: var(--sidebar-foreground);
   --color-sidebar: var(--sidebar);
   --color-chart-5: var(--chart-5);
@@ -130,6 +131,7 @@
   --radius: 0rem;
   --sidebar: var(--surface-low);
   --sidebar-foreground: hsl(var(--accent-hue) 8% 89%);
+  --sidebar-muted-foreground: var(--text-subtle);
   --sidebar-primary: var(--primary);
   --sidebar-primary-foreground: var(--primary-foreground);
   --sidebar-accent: hsl(var(--accent-hue) 34% 16%);
@@ -196,6 +198,7 @@
   --ring: hsl(var(--accent-hue) var(--accent-saturation) 44%);
   --sidebar: var(--surface-low);
   --sidebar-foreground: hsl(var(--accent-hue) 16% 16%);
+  --sidebar-muted-foreground: var(--text-subtle);
   --sidebar-primary: var(--primary);
   --sidebar-primary-foreground: var(--primary-foreground);
   --sidebar-accent: hsl(var(--accent-hue) 34% 90%);
@@ -244,6 +247,7 @@ html {
   body {
     @apply bg-background text-foreground;
     background-image: var(--ambient-gradient);
+    line-height: 1.5;
   }
   ::selection {
     background: hsl(var(--accent-hue) var(--accent-saturation) 58% / 0.28);
@@ -252,6 +256,139 @@ html {
   button:not(:disabled),
   [role="button"]:not(:disabled) {
     cursor: pointer;
+  }
+}
+
+/*
+ * Hearth typography roles bundle the visual decisions that should remain
+ * consistent across product surfaces. Color remains explicit at the call
+ * site: use text-foreground for primary copy and text-muted-foreground for
+ * secondary copy without additional alpha. Opacity is reserved for state.
+ */
+@layer components {
+  .type-display {
+    font-family: var(--font-heading);
+    font-size: 2rem;
+    font-weight: 600;
+    letter-spacing: -0.045em;
+    line-height: 1.15;
+  }
+
+  .type-page-title {
+    font-family: var(--font-heading);
+    font-size: 1.25rem;
+    font-weight: 600;
+    letter-spacing: -0.035em;
+    line-height: 1.2;
+  }
+
+  .type-page-context {
+    font-family: var(--font-heading);
+    font-size: 1rem;
+    font-weight: 500;
+    letter-spacing: -0.025em;
+    line-height: 1.25;
+  }
+
+  .type-dialog-title {
+    font-family: var(--font-heading);
+    font-size: 1.25rem;
+    font-weight: 600;
+    letter-spacing: -0.03em;
+    line-height: 1.2;
+  }
+
+  .type-section-title {
+    font-family: var(--font-heading);
+    font-size: 1rem;
+    font-weight: 600;
+    letter-spacing: -0.015em;
+    line-height: 1.3;
+  }
+
+  .type-card-title {
+    font-size: 0.875rem;
+    font-weight: 600;
+    line-height: 1.35;
+  }
+
+  .type-body {
+    font-size: 0.875rem;
+    font-weight: 400;
+    line-height: 1.5;
+  }
+
+  .type-support {
+    font-size: 0.8125rem;
+    font-weight: 400;
+    line-height: 1.5;
+  }
+
+  .type-menu {
+    font-size: 0.875rem;
+    font-weight: 400;
+    line-height: 1.35;
+  }
+
+  .type-control {
+    font-size: 0.875rem;
+    font-weight: 500;
+    line-height: 1.25;
+  }
+
+  .type-control-sm {
+    font-size: 0.8125rem;
+    font-weight: 500;
+    line-height: 1.25;
+  }
+
+  .type-input {
+    font-size: 1rem;
+    line-height: 1.4;
+  }
+
+  .type-label {
+    font-size: 0.75rem;
+    font-weight: 500;
+    line-height: 1.35;
+  }
+
+  .type-meta {
+    font-size: 0.75rem;
+    font-weight: 400;
+    line-height: 1.4;
+  }
+
+  .type-technical-label {
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    line-height: 1.35;
+    text-transform: uppercase;
+  }
+
+  .type-code {
+    font-family: var(--font-mono);
+    font-size: 0.8125rem;
+    font-weight: 400;
+    line-height: 1.5;
+  }
+
+  @media (min-width: 640px) {
+    .type-page-title {
+      font-size: 1.5rem;
+    }
+
+    .type-page-context {
+      font-size: 1.125rem;
+    }
+  }
+
+  @media (min-width: 768px) {
+    .type-input {
+      font-size: 0.875rem;
+    }
   }
 }
 

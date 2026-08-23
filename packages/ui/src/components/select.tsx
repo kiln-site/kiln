@@ -35,7 +35,7 @@ function SelectTrigger({
     <SelectPrimitive.Trigger
       data-slot="select-trigger"
       className={cn(
-        "flex h-8 w-fit items-center justify-between gap-2 rounded-md border border-input/90 bg-input/20 px-2.5 text-sm text-foreground/90 transition-[color,background-color,border-color,box-shadow] duration-150 outline-none select-none focus-visible:border-ring/75 focus-visible:ring-2 focus-visible:ring-ring/40 disabled:pointer-events-none disabled:opacity-50 data-[placeholder]:text-muted-foreground [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
+        "type-control flex h-8 w-fit items-center justify-between gap-2 rounded-md border border-input/90 bg-input/20 px-2.5 text-foreground transition-[color,background-color,border-color,box-shadow] duration-150 outline-none select-none focus-visible:border-ring/75 focus-visible:ring-2 focus-visible:ring-ring/40 disabled:pointer-events-none disabled:opacity-50 data-[placeholder]:text-muted-foreground [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
         className
       )}
       {...props}
@@ -84,10 +84,7 @@ function SelectLabel({
   return (
     <SelectPrimitive.Label
       data-slot="select-label"
-      className={cn(
-        "px-1.5 py-1 text-xs font-medium text-muted-foreground",
-        className
-      )}
+      className={cn("type-label px-1.5 py-1 text-muted-foreground", className)}
       {...props}
     />
   )
@@ -102,7 +99,7 @@ function SelectItem({
     <SelectPrimitive.Item
       data-slot="select-item"
       className={cn(
-        "relative flex w-full cursor-default items-center rounded-md py-1 pr-8 pl-1.5 text-sm outline-hidden select-none focus:bg-popover-accent focus:text-popover-accent-foreground focus:**:text-popover-accent-foreground data-disabled:pointer-events-none data-disabled:opacity-50",
+        "type-menu relative flex w-full cursor-default items-center rounded-md py-1 pr-8 pl-1.5 outline-hidden select-none focus:bg-popover-accent focus:text-popover-accent-foreground focus:**:text-popover-accent-foreground data-disabled:pointer-events-none data-disabled:opacity-50",
         className
       )}
       {...props}
