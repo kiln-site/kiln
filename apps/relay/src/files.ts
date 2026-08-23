@@ -52,6 +52,8 @@ import { RelayFilesystemError } from "./effect/errors.js"
 
 const MAX_FILE_BYTES = 2 * 1024 * 1024
 const MAX_LOG_SHARE_BYTES = 10 * 1024 * 1024
+const MAX_TREE_ITEMS = 5_000
+const MAX_TREE_DEPTH = 10
 const MAX_ARCHIVE_ITEMS = 50_000
 const FILE_SCAN_PAGE_BYTES = 192 * 1024
 const FILE_DIRECTORY_PAGE_ITEMS = 128
@@ -66,6 +68,7 @@ export class FilesystemDriver {
   readonly #config: RelayConfig
   readonly #directoryScans = new Map<string, DirectoryScan>()
   readonly #searchScans = new Map<string, SearchScan>()
+  #openingDirectoryScans = 0
 
   constructor(config: RelayConfig) {
     this.#config = config
@@ -77,16 +80,28 @@ export class FilesystemDriver {
       const modifiedAt: Record<string, number> = {}
       const paths: Array<string> = []
       const sizes: Record<string, number> = {}
+      let truncated = false
 
       const visit = (
-        directory: string
+        directory: string,
+        depth: number
       ): Effect.Effect<number, RelayFilesystemError> =>
         Effect.gen(function* () {
+          if (paths.length >= MAX_TREE_ITEMS || depth > MAX_TREE_DEPTH) {
+            truncated = true
+            return 0
+          }
+
           const entries = yield* filesystemOperation(
             "tree.readDirectory",
             async () => {
-              const values = []
+              const values: Array<Dirent> = []
               for await (const entry of await opendir(directory)) {
+                if (!supportedDirectoryEntry(entry)) continue
+                if (values.length >= MAX_TREE_ITEMS - paths.length) {
+                  truncated = true
+                  break
+                }
                 values.push(entry)
               }
               return values
@@ -110,13 +125,17 @@ export class FilesystemDriver {
 
           let directorySize = 0
           for (const [index, entry] of entries.entries()) {
+            if (paths.length >= MAX_TREE_ITEMS) {
+              truncated = true
+              break
+            }
             const absolute = join(directory, entry.name)
             const path = relative(root, absolute).split(sep).join("/")
             if (entry.isDirectory()) {
               const directoryPath = `${path}/`
               paths.push(directoryPath)
               modifiedAt[directoryPath] = metadata[index]?.mtimeMs ?? 0
-              const size = yield* visit(absolute)
+              const size = yield* visit(absolute, depth + 1)
               sizes[directoryPath] = size
               directorySize += size
             } else if (entry.isFile() || entry.isSymbolicLink()) {
@@ -130,16 +149,14 @@ export class FilesystemDriver {
           return directorySize
         })
 
-      sizes[""] = yield* visit(root)
+      sizes[""] = yield* visit(root, 0)
       return {
         instanceId: instance.id,
         modifiedAt,
         paths,
         sizes,
         total: paths.length,
-        // Kept for wire compatibility with older CLI builds that require the
-        // field when parsing tree responses.
-        truncated: false,
+        truncated,
       } satisfies RelayFileTree
     }).pipe(Effect.withSpan("relay.files.tree"))
   }
@@ -165,25 +182,41 @@ export class FilesystemDriver {
         }
         scan = existing
       } else {
-        this.#makeDirectoryScanRoom()
-        const absolute = yield* resolveInstanceDirectory(
-          root,
-          requestedDirectory
-        )
-        const handle = yield* filesystemOperation("directory.open", () =>
-          opendir(absolute)
-        )
-        scan = {
-          busy: false,
-          directory: requestedDirectory,
-          expires: null,
-          handle,
-          id: randomUUID(),
-          instanceId: instance.id,
-          pending: null,
-          root,
+        if (!this.#reserveDirectoryScan()) {
+          return yield* filesystemFailure(
+            "io_error",
+            "directory.open",
+            "Too many active directory scans; retry shortly"
+          )
         }
-        this.#directoryScans.set(scan.id, scan)
+        scan = yield* Effect.gen({ self: this }, function* () {
+          const absolute = yield* resolveInstanceDirectory(
+            root,
+            requestedDirectory
+          )
+          const handle = yield* filesystemOperation("directory.open", () =>
+            opendir(absolute)
+          )
+          const opened: DirectoryScan = {
+            busy: false,
+            directory: requestedDirectory,
+            expires: null,
+            handle,
+            id: randomUUID(),
+            instanceId: instance.id,
+            pending: null,
+            root,
+          }
+          this.#directoryScans.set(opened.id, opened)
+          this.#armDirectoryScan(opened)
+          return opened
+        }).pipe(
+          Effect.ensuring(
+            Effect.sync(() => {
+              this.#openingDirectoryScans -= 1
+            })
+          )
+        )
       }
 
       if (scan.busy) {
@@ -234,7 +267,13 @@ export class FilesystemDriver {
         }
         scan = existing
       } else {
-        this.#makeSearchScanRoom()
+        if (this.#searchScans.size >= FILE_SCAN_MAX_SESSIONS) {
+          return yield* filesystemFailure(
+            "io_error",
+            "search.open",
+            "Too many active file searches; retry shortly"
+          )
+        }
         scan = {
           active: null,
           busy: false,
@@ -689,13 +728,15 @@ export class FilesystemDriver {
     Effect.runFork(closeDirectoryEffect(scan.handle).pipe(Effect.ignore))
   }
 
-  #makeDirectoryScanRoom() {
-    if (this.#directoryScans.size < FILE_SCAN_MAX_SESSIONS) return
-    for (const scan of this.#directoryScans.values()) {
-      if (scan.busy) continue
-      this.#finishDirectoryScan(scan)
-      return
+  #reserveDirectoryScan() {
+    if (
+      this.#directoryScans.size + this.#openingDirectoryScans >=
+      FILE_SCAN_MAX_SESSIONS
+    ) {
+      return false
     }
+    this.#openingDirectoryScans += 1
+    return true
   }
 
   #armSearchScan(scan: SearchScan) {
@@ -716,15 +757,6 @@ export class FilesystemDriver {
       )
     }
     scan.active = null
-  }
-
-  #makeSearchScanRoom() {
-    if (this.#searchScans.size < FILE_SCAN_MAX_SESSIONS) return
-    for (const scan of this.#searchScans.values()) {
-      if (scan.busy) continue
-      this.#finishSearchScan(scan)
-      return
-    }
   }
 }
 

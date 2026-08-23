@@ -169,7 +169,7 @@ export class ProgressiveFileIndex {
   ensureDirectory(directory: string): Promise<void> {
     const normalized = normalizeDirectoryPath(directory)
     const existing = this.#directories.get(normalized)
-    if (existing) return Promise.resolve()
+    if (existing && !existing.error) return Promise.resolve()
     this.#scheduleTreeDirectoryLoading(normalized)
     return this.#loadNextDirectoryPage(normalized)
   }

@@ -77,6 +77,105 @@ describe("Relay paged file index", () => {
       })
     )
   )
+
+  it.effect("caps scan sessions without expiring existing cursors", () =>
+    withSetup(({ driver, instance, root }) =>
+      Effect.gen(function* () {
+        yield* fromPromise(() =>
+          Promise.all(
+            Array.from({ length: 128 }, (_, index) =>
+              writeFile(resolve(root, "world", `entry-${index}.txt`), "")
+            )
+          )
+        )
+
+        const cursors: Array<string> = []
+        for (let index = 0; index < 256; index += 1) {
+          const page = yield* driver.directory(instance, {
+            instanceId: instance.id,
+            path: "world/",
+          })
+          assert.isString(page.cursor)
+          if (page.cursor) cursors.push(page.cursor)
+        }
+
+        const failure = yield* driver
+          .directory(instance, {
+            instanceId: instance.id,
+            path: "world/",
+          })
+          .pipe(Effect.flip)
+        assert.instanceOf(failure, RelayFilesystemError)
+        assert.strictEqual(failure.operation, "directory.open")
+
+        const firstCursor = cursors[0]
+        assert.isString(firstCursor)
+        const resumed = yield* driver.directory(instance, {
+          cursor: firstCursor,
+          instanceId: instance.id,
+          path: "world/",
+        })
+        assert.isNull(resumed.cursor)
+
+        yield* Effect.forEach(
+          cursors.slice(1),
+          (cursor) =>
+            driver.directory(instance, {
+              cursor,
+              instanceId: instance.id,
+              path: "world/",
+            }),
+          { concurrency: 16, discard: true }
+        )
+      })
+    )
+  )
+})
+
+describe("Relay legacy file tree", () => {
+  it.effect("stops collecting paths at the compatibility limit", () =>
+    withSetup(({ driver, instance, root }) =>
+      Effect.gen(function* () {
+        for (let offset = 0; offset < 5_001; offset += 256) {
+          yield* fromPromise(() =>
+            Promise.all(
+              Array.from(
+                { length: Math.min(256, 5_001 - offset) },
+                (_, index) =>
+                  writeFile(resolve(root, `entry-${offset + index}.txt`), "")
+              )
+            )
+          )
+        }
+
+        const tree = yield* driver.tree(instance)
+
+        assert.lengthOf(tree.paths, 5_000)
+        assert.isTrue(tree.truncated)
+      })
+    )
+  )
+
+  it.effect("stops walking below the compatibility depth", () =>
+    withSetup(({ driver, instance, root }) =>
+      Effect.gen(function* () {
+        let directory = resolve(root, "world")
+        for (let depth = 0; depth < 12; depth += 1) {
+          directory = resolve(directory, `level-${depth}`)
+          yield* fromPromise(() => mkdir(directory))
+        }
+
+        const tree = yield* driver.tree(instance)
+
+        assert.isTrue(tree.truncated)
+        assert.include(tree.paths, "world/level-0/level-1/")
+        assert.notInclude(
+          tree.paths,
+          "world/level-0/level-1/level-2/level-3/level-4/level-5/level-6/level-7/level-8/level-9/level-10/"
+        )
+      })
+    )
+  )
 })
 
 describeLinux("Relay direct file transfers", () => {
