@@ -1,6 +1,24 @@
+import * as React from "react"
 import { WrapText } from "lucide-react"
 
 import { Button } from "@workspace/ui/components/button"
+
+type WorkspaceLineWrapButtonProps = Omit<
+  React.ComponentProps<typeof Button>,
+  | "aria-label"
+  | "aria-pressed"
+  | "children"
+  | "className"
+  | "onClick"
+  | "size"
+  | "variant"
+> & {
+  ariaLabel: string
+  buttonClassName?: string
+  iconClassName?: string
+  onToggle: () => void
+  wrapLines: boolean
+}
 
 export function WorkspaceLineWrapButton({
   ariaLabel,
@@ -8,15 +26,11 @@ export function WorkspaceLineWrapButton({
   iconClassName,
   onToggle,
   wrapLines,
-}: {
-  ariaLabel: string
-  buttonClassName?: string
-  iconClassName?: string
-  onToggle: () => void
-  wrapLines: boolean
-}) {
+  ...buttonProps
+}: WorkspaceLineWrapButtonProps) {
   return (
     <Button
+      {...buttonProps}
       variant={wrapLines ? "secondary" : "ghost"}
       size="icon"
       className={buttonClassName}
