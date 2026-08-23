@@ -2,6 +2,7 @@ import { describe, expect, it } from "vite-plus/test"
 
 import {
   consoleRecoveryLine,
+  consoleSessionIsCurrent,
   consoleStateLine,
   initialConsoleStateLines,
   isConsoleRecoveryLine,
@@ -9,6 +10,7 @@ import {
   isConsoleStateLineFor,
   mergeConsoleHistory,
   mergeConsoleStateLines,
+  reconcileConsoleLifecycleLines,
   retimestampConsoleStateLine,
   shouldRecordConsoleStateTransition,
 } from "./console-lifecycle"
@@ -148,6 +150,41 @@ describe("console lifecycle lines", () => {
       "Server is running",
       "Player joined",
     ])
+  })
+
+  it("keeps replacement-session output when its starting snapshot arrives later", () => {
+    const replacementStartedAt = "2026-07-28T20:10:00.000Z"
+    const lines = [
+      consoleStateLine("stopped", null),
+      {
+        id: "replacement-output",
+        level: "info" as const,
+        text: "Loading properties",
+        timestamp: "2026-07-28T20:10:01.000Z",
+      },
+    ]
+
+    expect(
+      consoleSessionIsCurrent(
+        false,
+        replacementStartedAt,
+        replacementStartedAt
+      )
+    ).toBe(true)
+    expect(
+      reconcileConsoleLifecycleLines(
+        lines,
+        replacementStartedAt,
+        "starting"
+      ).map((line) => line.text)
+    ).toEqual(["Server is starting", "Loading properties"])
+  })
+
+  it("continues awaiting a replacement when the current session is unchanged", () => {
+    expect(consoleSessionIsCurrent(true, startedAt, startedAt)).toBe(false)
+    expect(
+      consoleSessionIsCurrent(false, startedAt, "2026-07-28T20:10:00.000Z")
+    ).toBe(false)
   })
 
   it("inserts a live running transition at its readiness timestamp", () => {

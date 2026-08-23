@@ -43,6 +43,37 @@ export function mergeConsoleStateLines(
   ].sort(compareConsoleLineOrder)
 }
 
+export function reconcileConsoleLifecycleLines(
+  lines: ReadonlyArray<RelayConsoleLine>,
+  startedAt: string | null,
+  state: RelayObservedState | undefined,
+  readyAt: string | null = null,
+  recovery: RelayInstanceRecovery | null = null
+): Array<RelayConsoleLine> {
+  return mergeConsoleStateLines(
+    lines.filter(
+      (line) => !isConsoleStateLine(line) && !isConsoleRecoveryLine(line)
+    ),
+    startedAt,
+    state,
+    readyAt,
+    recovery
+  )
+}
+
+export function consoleSessionIsCurrent(
+  awaitingNewSession: boolean,
+  consoleStartedAt: string | null | undefined,
+  runtimeStartedAt: string | null | undefined
+): boolean {
+  return (
+    !awaitingNewSession &&
+    runtimeStartedAt !== null &&
+    runtimeStartedAt !== undefined &&
+    consoleStartedAt === runtimeStartedAt
+  )
+}
+
 export function consoleRecoveryLine(
   recovery: RelayInstanceRecovery,
   timestamp: string | null
