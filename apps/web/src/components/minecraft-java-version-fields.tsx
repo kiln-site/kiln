@@ -54,6 +54,7 @@ export const MinecraftJavaVersionFields = React.memo(
     onJavaVersionChange,
     onVersionChange,
     selectLatestByDefault = false,
+    showDescriptions = true,
     variableDefinitions,
     version,
     versionInputName,
@@ -66,6 +67,7 @@ export const MinecraftJavaVersionFields = React.memo(
     onJavaVersionChange: (value: string) => void
     onVersionChange: (value: string) => void
     selectLatestByDefault?: boolean
+    showDescriptions?: boolean
     variableDefinitions: Brick["variables"]
     version: string
     versionInputName?: string
@@ -227,9 +229,11 @@ export const MinecraftJavaVersionFields = React.memo(
                 required={required}
               />
             )}
-            <span className="block text-[0.5625rem] leading-4 font-normal">
-              {versionDefinition.description}
-            </span>
+            {showDescriptions ? (
+              <span className="block text-[0.5625rem] leading-4 font-normal">
+                {versionDefinition.description}
+              </span>
+            ) : null}
           </div>
           {javaDefinition ? (
             <div
@@ -293,7 +297,7 @@ export const MinecraftJavaVersionFields = React.memo(
             </div>
           ) : null}
         </div>
-        {javaDefinition ? (
+        {javaDefinition && showDescriptions ? (
           <span className="block text-[0.5625rem] leading-4 font-normal">
             {javaDefinition.description}
           </span>

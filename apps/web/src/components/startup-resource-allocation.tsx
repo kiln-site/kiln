@@ -20,7 +20,6 @@ export const ResourceAllocationCard = React.memo(
     configuredMemoryBytes,
     diskLimitGiB,
     disabled,
-    memoryDescription,
     memoryMaxLength,
     memoryPattern,
     memoryRequired,
@@ -32,7 +31,6 @@ export const ResourceAllocationCard = React.memo(
     configuredMemoryBytes: number
     diskLimitGiB: string
     disabled: boolean
-    memoryDescription?: string
     memoryMaxLength?: number
     memoryPattern?: string
     memoryRequired?: boolean
@@ -50,7 +48,6 @@ export const ResourceAllocationCard = React.memo(
           nodeUsedBytes={allocation.memory.nodeUsedBytes}
           nodeTotalBytes={allocation.memory.nodeTotalBytes}
           warning={configuredMemoryBytes > allocation.memory.availableBytes}
-          footer={memoryDescription ?? "Container memory limit."}
           input={
             memoryValue !== undefined && onMemoryChange ? (
               <Input
@@ -99,9 +96,6 @@ export const ResourceAllocationCard = React.memo(
             usedBytes={allocation.storage.nodeUsedBytes}
             totalBytes={allocation.storage.nodeTotalBytes}
           />
-          <p className="mt-2 text-[0.5rem] leading-3 text-muted-foreground/65">
-            25 GiB by default. Relay keeps 10 GiB free for node overhead.
-          </p>
         </div>
       </div>
     )
@@ -116,7 +110,6 @@ function ResourceAllocationPanel({
   nodeUsedBytes,
   nodeTotalBytes,
   warning,
-  footer,
   input,
 }: {
   icon: React.ReactNode
@@ -126,7 +119,6 @@ function ResourceAllocationPanel({
   nodeUsedBytes: number
   nodeTotalBytes: number
   warning: boolean
-  footer: string
   input: React.ReactNode
 }) {
   return (
@@ -152,9 +144,6 @@ function ResourceAllocationPanel({
         </p>
       )}
       <NodeCapacityBar usedBytes={nodeUsedBytes} totalBytes={nodeTotalBytes} />
-      <p className="mt-2 text-[0.5rem] leading-3 text-muted-foreground/65">
-        {footer}
-      </p>
     </div>
   )
 }

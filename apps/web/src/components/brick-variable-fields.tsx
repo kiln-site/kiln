@@ -17,17 +17,20 @@ const NOT_SET_SELECT_VALUE = "not-set"
 const optionSelectValue = (index: number) => `option:${index}`
 
 export const BrickVariableField = React.memo(function BrickVariableField({
+  description,
   name,
   definition,
   value,
   onChange,
 }: {
+  description?: string
   name: string
   definition: BrickVariable
   value: BrickVariableValue | undefined
   onChange: (value: BrickVariableValue | undefined) => void
 }) {
   const labelId = React.useId()
+  const fieldDescription = description ?? definition.description
 
   if (definition.type === "boolean") {
     return (
@@ -35,7 +38,7 @@ export const BrickVariableField = React.memo(function BrickVariableField({
         <span>
           <span className="block font-medium">{definition.label}</span>
           <span className="mt-0.5 block text-[0.5625rem] leading-4 text-muted-foreground">
-            {definition.description}
+            {fieldDescription}
           </span>
         </span>
         <input
@@ -165,7 +168,7 @@ export const BrickVariableField = React.memo(function BrickVariableField({
         />
       )}
       <span className="block text-[0.5625rem] leading-4 font-normal">
-        {definition.description}
+        {fieldDescription}
       </span>
     </div>
   )

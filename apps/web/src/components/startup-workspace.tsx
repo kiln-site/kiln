@@ -542,7 +542,6 @@ function StartupSettingsForm({
             Node capacity
           </span>
         }
-        description="Limits are validated against every server on this node."
         title="Resource Allocation"
       >
         <ResourceAllocationCard
@@ -550,7 +549,6 @@ function StartupSettingsForm({
           configuredMemoryBytes={configuredMemoryBytes}
           diskLimitGiB={diskLimitGiB}
           disabled={!canEdit || pending}
-          memoryDescription={memoryDefinition?.description}
           memoryMaxLength={memoryDefinition?.rules?.maxLength}
           memoryPattern={memoryDefinition?.rules?.pattern}
           memoryRequired={memoryDefinition?.required}
@@ -604,6 +602,7 @@ function StartupSettingsForm({
                   onVersionChange={(value) =>
                     onVariableChange("version", value)
                   }
+                  showDescriptions={false}
                   variableDefinitions={variableDefinitions}
                   version={
                     typeof variables.version === "string"
@@ -616,6 +615,10 @@ function StartupSettingsForm({
                 <>
                   <ManagedJavaFlagsField value={managedFlags ?? ""} />
                   <BrickVariableField
+                    description={javaArgsDefinition.description.replace(
+                      /^Extra JVM flags\.\s*/u,
+                      ""
+                    )}
                     name="java_args"
                     definition={javaArgsDefinition}
                     value={variables.java_args}
