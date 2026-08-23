@@ -1,6 +1,5 @@
 import * as React from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { Effect } from "effect"
 import type { RelayFileActivity, RelayFileContent } from "@workspace/contracts"
 import {
   ALargeSmall,
@@ -34,6 +33,12 @@ import {
 } from "@/components/files/file-editor-save"
 import { EditorTooltip } from "@/components/files/editor-tooltip"
 import {
+  mclogsShareLabel,
+  mclogsShareTooltip,
+  useMclogsShareAction,
+} from "@/components/use-mclogs-share-action"
+import { WorkspaceLineWrapButton } from "@/components/workspace-line-wrap-button"
+import {
   type EditorSessionStore,
   fileEditorFontSizes,
   type FileEditorPreferencesStore,
@@ -57,47 +62,19 @@ function useEditorShareAction({
   path: string
   sessionStore: EditorSessionStore
 }) {
-  const [state, setState] = React.useState<
-    "idle" | "uploading" | "copied" | "error"
-  >("idle")
-  const resetTimer = React.useRef<number | null>(null)
-  React.useEffect(
-    () => () => {
-      if (resetTimer.current) window.clearTimeout(resetTimer.current)
-    },
-    []
-  )
-
-  async function handleShare() {
-    setState("uploading")
-    await Effect.runPromise(
-      Effect.tryPromise({
-        try: async () => {
-          const result = await uploadToMclogs({
-            data: {
-              content: redactSensitiveText(sessionStore.getValue()),
-              instanceId: instance.id,
-              relayId: instance.relayId,
-              path,
-              implementation: instance.implementation,
-              version: instance.version,
-            },
-          })
-          await copyToClipboard(result.url)
-        },
-        catch: (cause) => cause,
-      }).pipe(
-        Effect.match({
-          onFailure: () => setState("error"),
-          onSuccess: () => setState("copied"),
-        })
-      )
-    )
-    if (resetTimer.current) window.clearTimeout(resetTimer.current)
-    resetTimer.current = window.setTimeout(() => setState("idle"), 2800)
-  }
-
-  return { share: handleShare, state }
+  return useMclogsShareAction(async () => {
+    const result = await uploadToMclogs({
+      data: {
+        content: redactSensitiveText(sessionStore.getValue()),
+        instanceId: instance.id,
+        relayId: instance.relayId,
+        path,
+        implementation: instance.implementation,
+        version: instance.version,
+      },
+    })
+    await copyToClipboard(result.url)
+  })
 }
 
 function EditorShareButton({
@@ -118,17 +95,7 @@ function EditorShareButton({
   })
 
   return (
-    <EditorTooltip
-      content={
-        state === "uploading"
-          ? "Uploading to mclo.gs"
-          : state === "copied"
-            ? "Link Copied"
-            : state === "error"
-              ? "Retry mclo.gs Upload"
-              : "Upload to mclo.gs"
-      }
-    >
+    <EditorTooltip content={mclogsShareTooltip(state)}>
       <Button
         variant={
           state === "copied"
@@ -152,15 +119,7 @@ function EditorShareButton({
         ) : (
           <Share2 className="size-[17px]" />
         )}
-        <span>
-          {state === "uploading"
-            ? "Uploading"
-            : state === "copied"
-              ? "Link copied"
-              : state === "error"
-                ? "Try again"
-                : "mclo.gs"}
-        </span>
+        <span>{mclogsShareLabel(state)}</span>
       </Button>
     </EditorTooltip>
   )
@@ -227,15 +186,12 @@ function EditorWrapButton({
     <EditorTooltip
       content={wrapLines ? "Disable Line Wrap" : "Enable Line Wrap"}
     >
-      <Button
-        variant={wrapLines ? "secondary" : "ghost"}
-        size="icon"
-        aria-label={wrapLines ? "Disable line wrap" : "Enable line wrap"}
-        aria-pressed={wrapLines}
-        onClick={sessionStore.toggleWrapLines}
-      >
-        <WrapText className="size-[17px]" />
-      </Button>
+      <WorkspaceLineWrapButton
+        wrapLines={wrapLines}
+        ariaLabel={wrapLines ? "Disable line wrap" : "Enable line wrap"}
+        iconClassName="size-[17px]"
+        onToggle={sessionStore.toggleWrapLines}
+      />
     </EditorTooltip>
   )
 }

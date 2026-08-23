@@ -8,7 +8,6 @@ import {
   LoaderCircle,
   Share2,
   TriangleAlert,
-  WrapText,
   X,
 } from "lucide-react"
 
@@ -25,6 +24,12 @@ import type {
 } from "@/components/console/console-stores"
 import { ConsoleTooltip } from "@/components/console/console-tooltip"
 import { useInstanceRelayConnected } from "@/components/instance-workspace-context"
+import {
+  mclogsShareLabel,
+  mclogsShareTooltip,
+  useMclogsShareAction,
+} from "@/components/use-mclogs-share-action"
+import { WorkspaceLineWrapButton } from "@/components/workspace-line-wrap-button"
 import type { InstanceWorkspaceInstance } from "@/lib/relay-selectors"
 import { uploadConsoleLogToMclogs } from "@/server/relay"
 
@@ -40,53 +45,28 @@ export function ConsoleShareButton({
   uiStore: ConsoleUiStore
 }) {
   const relayConnected = useInstanceRelayConnected()
-  const [state, setState] = React.useState<
-    "idle" | "uploading" | "copied" | "error"
-  >("idle")
-  const resetTimer = React.useRef<number | null>(null)
   const hasLines = React.useSyncExternalStore(
     streamStore.subscribe,
     streamStore.getHasLinesSnapshot,
     streamStore.getHasLinesSnapshot
   )
-  React.useEffect(
-    () => () => {
-      if (resetTimer.current) window.clearTimeout(resetTimer.current)
-    },
-    []
-  )
+  const { share, state } = useMclogsShareAction(async () => {
+    const result = await uploadConsoleLogToMclogs({
+      data: {
+        instanceId: instance.id,
+        relayId: instance.relayId,
+        implementation: instance.implementation,
+        version: instance.version,
+        redactSensitive: uiStore.getRedactSensitiveSnapshot(),
+      },
+    })
+    await copyToClipboard(result.url)
+  })
+
   if (!canShare || !relayConnected) return null
 
-  async function handleShare() {
-    setState("uploading")
-    await Effect.runPromise(
-      Effect.tryPromise({
-        try: async () => {
-          const result = await uploadConsoleLogToMclogs({
-            data: {
-              instanceId: instance.id,
-              relayId: instance.relayId,
-              implementation: instance.implementation,
-              version: instance.version,
-              redactSensitive: uiStore.getRedactSensitiveSnapshot(),
-            },
-          })
-          await copyToClipboard(result.url)
-        },
-        catch: (cause) => cause,
-      }).pipe(
-        Effect.match({
-          onFailure: () => setState("error"),
-          onSuccess: () => setState("copied"),
-        })
-      )
-    )
-    if (resetTimer.current) window.clearTimeout(resetTimer.current)
-    resetTimer.current = window.setTimeout(() => setState("idle"), 2800)
-  }
-
   return (
-    <ConsoleTooltip content={shareTooltip(state)}>
+    <ConsoleTooltip content={mclogsShareTooltip(state)}>
       <Button
         variant={
           state === "copied"
@@ -98,7 +78,7 @@ export function ConsoleShareButton({
         size="sm"
         className="h-8 gap-1.5 px-2.5 text-[0.6875rem]"
         disabled={state === "uploading" || !hasLines}
-        onClick={handleShare}
+        onClick={share}
       >
         {state === "uploading" ? (
           <LoaderCircle className="animate-spin" />
@@ -109,7 +89,7 @@ export function ConsoleShareButton({
         ) : (
           <Share2 />
         )}
-        {shareLabel(state)}
+        {mclogsShareLabel(state)}
       </Button>
     </ConsoleTooltip>
   )
@@ -244,16 +224,12 @@ export function ConsoleWrapButton({ uiStore }: { uiStore: ConsoleUiStore }) {
     <ConsoleTooltip
       content={wrapLines ? "Disable Line Wrap" : "Enable Line Wrap"}
     >
-      <Button
-        variant={wrapLines ? "secondary" : "ghost"}
-        size="icon"
-        className="size-8"
-        aria-label={wrapLines ? "Disable Line Wrap" : "Enable Line Wrap"}
-        aria-pressed={wrapLines}
-        onClick={uiStore.toggleWrapLines}
-      >
-        <WrapText />
-      </Button>
+      <WorkspaceLineWrapButton
+        wrapLines={wrapLines}
+        ariaLabel={wrapLines ? "Disable Line Wrap" : "Enable Line Wrap"}
+        buttonClassName="size-8"
+        onToggle={uiStore.toggleWrapLines}
+      />
     </ConsoleTooltip>
   )
 }
@@ -283,22 +259,6 @@ export function ConsoleTimestampButton({
       </Button>
     </ConsoleTooltip>
   )
-}
-
-function shareTooltip(
-  state: "idle" | "uploading" | "copied" | "error"
-): string {
-  if (state === "uploading") return "Uploading to mclo.gs"
-  if (state === "copied") return "Link Copied"
-  if (state === "error") return "Retry mclo.gs Upload"
-  return "Upload to mclo.gs"
-}
-
-function shareLabel(state: "idle" | "uploading" | "copied" | "error"): string {
-  if (state === "uploading") return "Uploading"
-  if (state === "copied") return "Link copied"
-  if (state === "error") return "Try again"
-  return "mclo.gs"
 }
 
 async function copyToClipboard(value: string) {

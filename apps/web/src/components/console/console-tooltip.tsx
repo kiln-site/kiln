@@ -1,24 +1,17 @@
 import * as React from "react"
 
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from "@workspace/ui/components/tooltip"
+import { WorkspaceToolbarTooltip } from "@/components/workspace-toolbar-tooltip"
 
 export function ConsoleTooltip({
   content,
   children,
 }: {
   content: string
-  children: React.ReactElement
+  children: React.ReactElement<{ disabled?: boolean }>
 }) {
   return (
-    <Tooltip>
-      <TooltipTrigger asChild>{children}</TooltipTrigger>
-      <TooltipContent side="bottom" sideOffset={6}>
-        {content}
-      </TooltipContent>
-    </Tooltip>
+    <WorkspaceToolbarTooltip content={content}>
+      {children}
+    </WorkspaceToolbarTooltip>
   )
 }
