@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from "vite-plus/test"
 
 import {
   cliDefaultAccessDays,
+  emailDeliveryConfig,
   kilnGitRepository,
   kilnInstallationId,
   kilnRootDomain,
@@ -11,6 +12,8 @@ const originalKilnUrl = process.env.KILN_URL
 const originalCliDefaultAccessDays = process.env.KILN_CLI_DEFAULT_ACCESS_DAYS
 const originalKilnInstallationId = process.env.KILN_INSTALLATION_ID
 const originalKilnGitRepo = process.env.KILN_GIT_REPO
+const originalResendApiKey = process.env.RESEND_API_KEY
+const originalResendFromEmail = process.env.RESEND_FROM_EMAIL
 
 afterEach(() => {
   if (originalKilnUrl === undefined) delete process.env.KILN_URL
@@ -27,6 +30,30 @@ afterEach(() => {
   }
   if (originalKilnGitRepo === undefined) delete process.env.KILN_GIT_REPO
   else process.env.KILN_GIT_REPO = originalKilnGitRepo
+  if (originalResendApiKey === undefined) delete process.env.RESEND_API_KEY
+  else process.env.RESEND_API_KEY = originalResendApiKey
+  if (originalResendFromEmail === undefined) {
+    delete process.env.RESEND_FROM_EMAIL
+  } else {
+    process.env.RESEND_FROM_EMAIL = originalResendFromEmail
+  }
+})
+
+describe("emailDeliveryConfig", () => {
+  it("enables delivery only when both Resend settings are configured", () => {
+    delete process.env.RESEND_API_KEY
+    delete process.env.RESEND_FROM_EMAIL
+    expect(emailDeliveryConfig()).toBeNull()
+
+    process.env.RESEND_API_KEY = "resend-key"
+    expect(emailDeliveryConfig()).toBeNull()
+
+    process.env.RESEND_FROM_EMAIL = "Kiln <kiln@example.com>"
+    expect(emailDeliveryConfig()).toEqual({
+      apiKey: "resend-key",
+      from: "Kiln <kiln@example.com>",
+    })
+  })
 })
 
 describe("kilnGitRepository", () => {

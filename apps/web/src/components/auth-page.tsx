@@ -131,6 +131,10 @@ export function AuthPage({
               callbackURL: destination(redirectPath),
             })
             if (result.error) throw new Error(readAuthError(result.error))
+            if (!emailDeliveryEnabled) {
+              await signIn(email, password, redirectPath)
+              return
+            }
             setVerification({
               email,
               password,

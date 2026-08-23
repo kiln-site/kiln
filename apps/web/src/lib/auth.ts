@@ -24,6 +24,7 @@ import {
 
 const publicUrl = kilnPublicUrl()
 const authUrl = betterAuthUrl()
+const emailDeliveryEnabled = emailDeliveryConfig() !== null
 const UNVERIFIED_ACCOUNT_TTL_MS = 1000 * 60 * 60 * 24
 
 type PendingUser = {
@@ -50,7 +51,7 @@ export const auth = betterAuth({
   emailAndPassword: {
     enabled: true,
     autoSignIn: false,
-    requireEmailVerification: true,
+    requireEmailVerification: emailDeliveryEnabled,
     minPasswordLength: 12,
     maxPasswordLength: 128,
     resetPasswordTokenExpiresIn: 60 * 30,
@@ -66,9 +67,18 @@ export const auth = betterAuth({
     }),
   },
   emailVerification: {
-    sendOnSignUp: true,
+    sendOnSignUp: emailDeliveryEnabled,
     autoSignInAfterVerification: false,
     expiresIn: 60 * 10,
+  },
+  databaseHooks: {
+    user: {
+      create: {
+        before: async (user) => ({
+          data: emailDeliveryEnabled ? user : { ...user, emailVerified: true },
+        }),
+      },
+    },
   },
   rateLimit: {
     modelName: databaseTableName("rateLimit"),
