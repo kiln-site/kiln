@@ -60,6 +60,7 @@ import type {
 } from "@/components/console/console-stores"
 import {
   consoleRecoveryLine,
+  consoleSessionAcceptedAheadOfRuntime,
   consoleSessionIsCurrent,
   consoleStateLine,
   initialConsoleStateLines,
@@ -70,6 +71,7 @@ import {
   mergeConsoleStateLines,
   reconcileConsoleLifecycleLines,
   retimestampConsoleStateLine,
+  shouldAwaitConsoleRecoverySession,
   shouldRecordConsoleStateTransition,
 } from "@/components/console/console-lifecycle"
 import {
@@ -2167,6 +2169,7 @@ function useRelayConsoleStream(
   )
   const sessionInitializedRef = React.useRef(Boolean(consoleDataRef.current))
   const awaitingNewSessionRef = React.useRef(false)
+  const sessionAcceptedAheadOfRuntimeRef = React.useRef(false)
   const previousStateRef = React.useRef<RelayObservedState | undefined>(
     runtime?.observedState
   )
@@ -2199,6 +2202,13 @@ function useRelayConsoleStream(
     if (!state) return
 
     const current = consoleDataRef.current
+    if (
+      state === "running" &&
+      runtime.startedAt &&
+      runtime.startedAt === sessionStartedAtRef.current
+    ) {
+      sessionAcceptedAheadOfRuntimeRef.current = false
+    }
     if (state === "running" && runtime.readyAt && current) {
       const retimestampedLines = retimestampConsoleStateLine(
         current.lines,
@@ -2225,6 +2235,7 @@ function useRelayConsoleStream(
         current &&
         consoleSessionIsCurrent(
           awaitingNewSessionRef.current,
+          sessionAcceptedAheadOfRuntimeRef.current,
           current.startedAt,
           runtime.startedAt
         )
@@ -2237,7 +2248,7 @@ function useRelayConsoleStream(
           ...current,
           lines: reconcileConsoleLifecycleLines(
             current.lines,
-            runtime.startedAt ?? null,
+            current.startedAt ?? runtime.startedAt ?? null,
             state,
             runtime.readyAt,
             runtime.recovery
@@ -2322,7 +2333,14 @@ function useRelayConsoleStream(
   React.useEffect(() => {
     const recovery = runtime?.recovery
     if (!recovery) return
-    if (recovery.phase === "pending") awaitingNewSessionRef.current = true
+    if (
+      shouldAwaitConsoleRecoverySession(
+        recovery.phase,
+        sessionAcceptedAheadOfRuntimeRef.current
+      )
+    ) {
+      awaitingNewSessionRef.current = true
+    }
     const current = consoleDataRef.current
     if (!current) return
     const line = consoleRecoveryLine(recovery, new Date().toISOString())
@@ -2408,6 +2426,14 @@ function useRelayConsoleStream(
         flushTimer = null
       }
       pending.length = 0
+      sessionAcceptedAheadOfRuntimeRef.current =
+        consoleSessionAcceptedAheadOfRuntime(
+          sessionAcceptedAheadOfRuntimeRef.current,
+          sessionStartedAtRef.current,
+          startedAt,
+          runtimeRef.current?.observedState,
+          runtimeRef.current?.startedAt
+        )
       // A reset is the authoritative session boundary. Runtime snapshots can
       // arrive later, but must not put an accepted session back into waiting.
       awaitingNewSessionRef.current = false

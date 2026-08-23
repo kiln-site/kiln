@@ -63,15 +63,45 @@ export function reconcileConsoleLifecycleLines(
 
 export function consoleSessionIsCurrent(
   awaitingNewSession: boolean,
+  sessionAcceptedAheadOfRuntime: boolean,
   consoleStartedAt: string | null | undefined,
   runtimeStartedAt: string | null | undefined
 ): boolean {
   return (
     !awaitingNewSession &&
-    runtimeStartedAt !== null &&
-    runtimeStartedAt !== undefined &&
-    consoleStartedAt === runtimeStartedAt
+    consoleStartedAt !== null &&
+    consoleStartedAt !== undefined &&
+    (sessionAcceptedAheadOfRuntime || consoleStartedAt === runtimeStartedAt)
   )
+}
+
+export function consoleSessionAcceptedAheadOfRuntime(
+  wasAcceptedAheadOfRuntime: boolean,
+  previousConsoleStartedAt: string | null | undefined,
+  nextConsoleStartedAt: string | null,
+  runtimeState: RelayObservedState | undefined,
+  runtimeStartedAt: string | null | undefined
+): boolean {
+  if (nextConsoleStartedAt !== previousConsoleStartedAt) {
+    return (
+      nextConsoleStartedAt !== null &&
+      (runtimeState !== "running" || runtimeStartedAt !== nextConsoleStartedAt)
+    )
+  }
+  if (
+    runtimeState === "running" &&
+    runtimeStartedAt === nextConsoleStartedAt
+  ) {
+    return false
+  }
+  return wasAcceptedAheadOfRuntime
+}
+
+export function shouldAwaitConsoleRecoverySession(
+  recoveryPhase: RelayInstanceRecovery["phase"] | undefined,
+  sessionAcceptedAheadOfRuntime: boolean
+): boolean {
+  return recoveryPhase === "pending" && !sessionAcceptedAheadOfRuntime
 }
 
 export function consoleRecoveryLine(
