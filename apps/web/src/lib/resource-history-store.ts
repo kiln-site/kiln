@@ -12,6 +12,7 @@ export interface ResourceHistoryPoint {
 }
 
 export interface ResourceHistoryStore {
+  getLatestSampleSequence: () => number
   getSnapshot: () => Array<ResourceHistoryPoint>
   record: (
     history: ReadonlyArray<RelayInstanceResources>,
@@ -32,8 +33,11 @@ export function resourceHistoryStore(
   if (existing) return existing
 
   let points: Array<ResourceHistoryPoint> = []
+  let latestSampleSequence = 0
+  let latestSampleTimestamp: number | null = null
   const listeners = new Set<() => void>()
   const store: ResourceHistoryStore = {
+    getLatestSampleSequence: () => latestSampleSequence,
     getSnapshot: () => points,
     record: (history, current) => {
       const byTimestamp = new Map(
@@ -53,6 +57,16 @@ export function resourceHistoryStore(
       ) {
         return
       }
+      const nextLatestSampleTimestamp = next.at(-1)?.timestamp ?? null
+      if (nextLatestSampleTimestamp === null) {
+        latestSampleSequence = 0
+      } else if (
+        latestSampleTimestamp !== null &&
+        nextLatestSampleTimestamp !== latestSampleTimestamp
+      ) {
+        latestSampleSequence += 1
+      }
+      latestSampleTimestamp = nextLatestSampleTimestamp
       points = next
       for (const listener of listeners) listener()
     },

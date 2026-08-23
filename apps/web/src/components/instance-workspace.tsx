@@ -60,10 +60,7 @@ import {
   reconcilePendingPowerInstance,
   type ServerAction,
 } from "@/lib/instance-power-state"
-import {
-  openRelayResourceStream,
-  RELAY_RESOURCE_POLL_INTERVAL_MS,
-} from "@/lib/relay-resource-stream"
+import { openRelayResourceStream } from "@/lib/relay-resource-stream"
 import {
   RESOURCE_HISTORY_WINDOW_MS,
   resourceHistoryStore,
@@ -1050,14 +1047,12 @@ function NetworkTransferValue({
   received: string
   sent: string
 }) {
-  const latestSampledAt = React.useSyncExternalStore(
+  const sampleSequence = React.useSyncExternalStore(
     historyStore.subscribe,
-    () => historyStore.getSnapshot().at(-1)?.timestamp ?? null,
-    () => null
+    historyStore.getLatestSampleSequence,
+    () => 0
   )
-  const isReceived =
-    latestSampledAt === null ||
-    Math.floor(latestSampledAt / RELAY_RESOURCE_POLL_INTERVAL_MS) % 2 === 0
+  const isReceived = sampleSequence % 2 === 0
   return (
     <span
       className={`min-w-0 truncate font-medium tracking-[-0.045em] tabular-nums ${isReceived ? "text-cyan-200/95" : "text-primary/90"}`}
