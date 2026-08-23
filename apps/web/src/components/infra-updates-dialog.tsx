@@ -319,7 +319,7 @@ export const InfraUpdatesDialog = React.memo(function InfraUpdatesDialog({
       ),
     onMutate: async (update) => {
       setSystemUpdateOverviewRefetchBlocked(true)
-      await queryClient.cancelQueries({
+      const cancelOverviewQuery = queryClient.cancelQueries({
         exact: true,
         queryKey: queryKeys.updates,
       })
@@ -354,9 +354,9 @@ export const InfraUpdatesDialog = React.memo(function InfraUpdatesDialog({
         batch.current.versionName ?? update.latestVersionName,
         false
       )
+      await cancelOverviewQuery
     },
     onSuccess: ({ failures }) => {
-      setPending(null)
       for (const failure of failures) {
         batch.current = recordSystemUpdateFailure(batch.current, failure)
       }
@@ -755,7 +755,9 @@ export const InfraUpdatesDialog = React.memo(function InfraUpdatesDialog({
               mutationPending: updateMutation.isPending,
             })
           ) {
-            updateMutation.mutate(pending)
+            const update = pending
+            setPending(null)
+            updateMutation.mutate(update)
           }
         }}
         onOpenChange={(nextOpen) => {
