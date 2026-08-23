@@ -60,7 +60,10 @@ import {
   reconcilePendingPowerInstance,
   type ServerAction,
 } from "@/lib/instance-power-state"
-import { openRelayResourceStream } from "@/lib/relay-resource-stream"
+import {
+  openRelayResourceStream,
+  RELAY_RESOURCE_POLL_INTERVAL_MS,
+} from "@/lib/relay-resource-stream"
 import {
   RESOURCE_HISTORY_WINDOW_MS,
   resourceHistoryStore,
@@ -966,7 +969,7 @@ function LiveResourceMeters({
       className="hidden min-w-0 md:col-span-2 md:block xl:col-span-1 xl:col-start-2 xl:row-start-1"
       aria-label="Server resource usage"
     >
-      <div className="grid h-14 min-w-0 grid-cols-[repeat(3,minmax(0,1fr))_minmax(0,1.25fr)_5.5rem] divide-x divide-border/60 border border-border/80 bg-card/40 px-1.5 py-2 xl:grid-cols-[repeat(3,minmax(0,1fr))_minmax(0,1.15fr)_5.75rem]">
+      <div className="grid h-14 min-w-0 grid-cols-[repeat(4,minmax(0,1fr))_5.5rem] divide-x divide-border/60 border border-border/80 bg-card/40 px-1.5 py-2 xl:grid-cols-[repeat(4,minmax(0,1fr))_5.75rem]">
         {RESOURCE_IDS.map((resourceId) => (
           <LiveResourceMeter
             key={resourceId}
@@ -1019,14 +1022,11 @@ function LiveResourceMeter({
             {resource.label}
           </span>
           {resource.id === "network" ? (
-            <span className="flex min-w-0 items-center gap-1 font-medium tracking-[-0.045em] tabular-nums xl:gap-1.5">
-              <span className="truncate text-cyan-200/95">
-                ↓ {resource.receivedDisplayValue}
-              </span>
-              <span className="truncate text-primary/90">
-                ↑ {resource.sentDisplayValue}
-              </span>
-            </span>
+            <NetworkTransferValue
+              historyStore={historyStore}
+              received={resource.receivedDisplayValue ?? "—"}
+              sent={resource.sentDisplayValue ?? "—"}
+            />
           ) : (
             <span
               className={`truncate font-medium tabular-nums ${resource.valueClassName}`}
@@ -1035,9 +1035,36 @@ function LiveResourceMeter({
             </span>
           )}
         </div>
-        <ResourceBar resource={resource} className="mt-3" />
+        <ResourceBar resource={resource} className="mt-2" />
       </button>
     </ResourceHistoryPopover>
+  )
+}
+
+function NetworkTransferValue({
+  historyStore,
+  received,
+  sent,
+}: {
+  historyStore: ResourceHistoryStore
+  received: string
+  sent: string
+}) {
+  const latestSampledAt = React.useSyncExternalStore(
+    historyStore.subscribe,
+    () => historyStore.getSnapshot().at(-1)?.timestamp ?? null,
+    () => null
+  )
+  const isReceived =
+    latestSampledAt === null ||
+    Math.floor(latestSampledAt / RELAY_RESOURCE_POLL_INTERVAL_MS) % 2 === 0
+  return (
+    <span
+      className={`min-w-0 truncate font-medium tracking-[-0.045em] tabular-nums ${isReceived ? "text-cyan-200/95" : "text-primary/90"}`}
+      aria-label={`Download ${received}, upload ${sent}`}
+    >
+      {isReceived ? "↓" : "↑"} {isReceived ? received : sent}
+    </span>
   )
 }
 
@@ -1307,7 +1334,7 @@ function ResourceBar({
 }) {
   return (
     <div
-      className={`h-2 ${resource.id === "network" ? "grid grid-rows-2 gap-px" : "overflow-hidden bg-muted/55"} ${className}`}
+      className={`h-3 ${resource.id === "network" ? "grid grid-rows-2 gap-px" : "overflow-hidden bg-muted/55"} ${className}`}
       role="progressbar"
       aria-label={`${resource.label} usage`}
       aria-valuemin={0}

@@ -9,6 +9,8 @@ import { Effect, Result, Stream } from "effect"
 import { issueResourceCapability } from "@/server/relay-capability"
 import { getRelayInstanceResources } from "@/server/relay"
 
+export const RELAY_RESOURCE_POLL_INTERVAL_MS = 2_000
+
 export async function* openRelayResourceStream(
   relayId: string,
   instanceId: string,
@@ -150,7 +152,7 @@ export function warmHistoryOnce<T>(): (history: Array<T>) => Array<T> {
 function waitForPoll(signal: AbortSignal): Promise<void> {
   if (signal.aborted) return Promise.resolve()
   return new Promise((resolve) => {
-    const timer = globalThis.setTimeout(done, 2_000)
+    const timer = globalThis.setTimeout(done, RELAY_RESOURCE_POLL_INTERVAL_MS)
     function done() {
       globalThis.clearTimeout(timer)
       signal.removeEventListener("abort", done)
