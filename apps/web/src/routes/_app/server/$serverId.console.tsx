@@ -1,6 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router"
 
-import { ConsoleWorkspace } from "@/components/console-workspace"
+import { ConsoleWorkspace } from "@/components/console/console-workspace"
 import {
   useInstanceIdentity,
   useInstancePermissions,
