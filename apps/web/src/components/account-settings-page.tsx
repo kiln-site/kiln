@@ -445,7 +445,10 @@ function RedactedEmail({ value }: { value: string }) {
         <button
           type="button"
           className={`min-w-0 cursor-pointer truncate rounded-sm font-mono text-[11px] leading-none transition hover:text-foreground ${revealed ? "text-muted-foreground" : "text-muted-foreground blur-[2px] select-none"}`}
-          aria-label="Toggle account email visibility"
+          aria-label={
+            revealed ? `${value}. Hide email address` : "Reveal email address"
+          }
+          aria-pressed={revealed}
           onClick={() => setRevealed((current) => !current)}
         >
           {revealed ? value : redacted}
