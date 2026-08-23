@@ -15,6 +15,7 @@ import { Input } from "@workspace/ui/components/input"
 
 import { HearthMark } from "@/components/hearth-mark"
 import { authClient } from "@/lib/auth-client"
+import { DISPLAY_NAME_MAX_LENGTH, parseDisplayName } from "@/lib/display-name"
 import {
   createInitialAdministrator,
   enableDevelopmentBypass,
@@ -104,12 +105,15 @@ export function AuthPage({
           }
 
           if (mode === "setup" || mode === "sign-up") {
+            const displayName = parseDisplayName(
+              String(form.get("displayName") ?? "")
+            )
             const confirmPassword = String(form.get("confirmPassword") ?? "")
             validateNewPassword(password, confirmPassword)
 
             if (mode === "setup") {
               const result = await createInitialAdministrator({
-                data: { email, password },
+                data: { displayName, email, password },
               })
               if (result.verificationRequired) {
                 setVerification({
@@ -125,7 +129,7 @@ export function AuthPage({
             }
 
             const result = await authClient.signUp.email({
-              name: displayNameFromEmail(email),
+              name: displayName,
               email,
               password,
               callbackURL: destination(redirectPath),
@@ -459,6 +463,21 @@ export function AuthPage({
               method="post"
               onSubmit={handleSubmit}
             >
+              {mode === "setup" || mode === "sign-up" ? (
+                <Field label="Display Name" htmlFor="display-name">
+                  <Input
+                    id="display-name"
+                    name="displayName"
+                    type="text"
+                    autoComplete="name"
+                    maxLength={DISPLAY_NAME_MAX_LENGTH}
+                    placeholder="Your name"
+                    required
+                    autoFocus
+                    className="h-11 bg-card/60"
+                  />
+                </Field>
+              ) : null}
               <Field label="Email" htmlFor="email">
                 <Input
                   id="email"
@@ -469,7 +488,9 @@ export function AuthPage({
                   defaultValue={lockedEmail ?? initialEmail}
                   readOnly={Boolean(lockedEmail)}
                   required
-                  autoFocus={!lockedEmail}
+                  autoFocus={
+                    mode !== "setup" && mode !== "sign-up" && !lockedEmail
+                  }
                   className="h-11 bg-card/60 read-only:bg-muted/35 read-only:text-foreground/85"
                 />
               </Field>
@@ -506,7 +527,11 @@ export function AuthPage({
                     }
                     placeholder="••••••••••••"
                     required
-                    autoFocus={Boolean(lockedEmail)}
+                    autoFocus={
+                      mode !== "setup" &&
+                      mode !== "sign-up" &&
+                      Boolean(lockedEmail)
+                    }
                     className="h-11 bg-card/60 font-mono"
                   />
                 </Field>
@@ -970,10 +995,6 @@ function validateNewPassword(password: string, confirmation: string) {
   if (password.length > 128)
     throw new Error("Use no more than 128 characters for your password")
   if (password !== confirmation) throw new Error("The passwords do not match")
-}
-
-function displayNameFromEmail(email: string): string {
-  return email.split("@")[0] || "Kiln operator"
 }
 
 function destination(redirectPath?: string): string {

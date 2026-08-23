@@ -1,6 +1,7 @@
 import type { AuthSession } from "@/lib/auth"
 
 import { auth } from "@/lib/auth"
+import { resolveDisplayName } from "@/lib/display-name"
 import { developmentBypassEnabled } from "@/lib/environment"
 import type { PlatformRole } from "@/lib/permissions"
 import { platformRoles } from "@/lib/permissions"
@@ -45,7 +46,7 @@ export async function getAuthenticatedUserFromHeaders(
     emailVerified: session.user.emailVerified,
     id: session.user.id,
     isDevelopmentBypass: false,
-    name: session.user.name,
+    name: resolveDisplayName(session.user.name, session.user.email),
     role: platformRole(
       (session.user as typeof session.user & { role?: string }).role
     ),

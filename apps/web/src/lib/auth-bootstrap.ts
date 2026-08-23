@@ -6,9 +6,14 @@ import type {
 } from "mysql2/promise"
 import { z } from "zod"
 
-import { auth, displayNameFromEmail } from "@/lib/auth"
+import { auth } from "@/lib/auth"
 import { databasePool } from "@/lib/database"
 import { databaseTable, databaseTablePrefix } from "@/lib/database-config"
+import {
+  displayNameFromEmail,
+  parseDisplayName,
+  resolveDisplayName,
+} from "@/lib/display-name"
 import { emailDeliveryConfig, publicSignupEnabled } from "@/lib/environment"
 
 const emailSchema = z.email().transform((value) => value.trim().toLowerCase())
@@ -22,6 +27,7 @@ interface PendingCredentialRow extends RowDataPacket {
   email: string
   emailVerified: number
   id: string
+  name: string
   password: string | null
   role: string | null
 }
@@ -64,12 +70,14 @@ export async function installationState(): Promise<{
 }
 
 export async function createInitialAdministrator(input: {
+  displayName: string
   email: string
   password: string
 }): Promise<{ email: string; verificationRequired: boolean }> {
   const email = emailSchema.parse(input.email)
   const verificationRequired = emailDeliveryConfig() !== null
   const created = await createFirstUser({
+    displayName: parseDisplayName(input.displayName),
     email,
     password: input.password,
     verified: !verificationRequired,
@@ -97,6 +105,7 @@ export async function replacePendingAccountEmail(input: {
     async (connection) => {
       const [rows] = await connection.query<Array<PendingCredentialRow>>(
         `SELECT auth_user.id, auth_user.email, auth_user.emailVerified,
+              auth_user.name,
               auth_user.role, auth_account.password
          FROM ${databaseTable("user")} AS auth_user
          JOIN ${databaseTable("account")} AS auth_account
@@ -134,6 +143,7 @@ export async function replacePendingAccountEmail(input: {
 
       await context.internalAdapter.deleteUser(pending.id)
       await createCredentialUser({
+        displayName: resolveDisplayName(pending.name, pending.email),
         email: nextEmail,
         password: input.password,
         role: isInitialAdmin ? "admin" : "user",
@@ -147,6 +157,7 @@ export async function replacePendingAccountEmail(input: {
 }
 
 async function createFirstUser(input: {
+  displayName?: string
   email: string
   password: string
   verified: boolean
@@ -166,6 +177,7 @@ async function createFirstUser(input: {
 }
 
 async function createCredentialUser(input: {
+  displayName?: string
   email: string
   password: string
   role: "admin" | "user"
@@ -181,7 +193,9 @@ async function createCredentialUser(input: {
         context.internalAdapter.createUser({
           email: input.email,
           emailVerified: input.verified,
-          name: displayNameFromEmail(input.email),
+          name: input.displayName
+            ? parseDisplayName(input.displayName)
+            : displayNameFromEmail(input.email),
           role: input.role,
         })
       )

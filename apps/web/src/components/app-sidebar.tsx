@@ -765,12 +765,9 @@ function AccountNavigation({
                 {initials(user.name)}
               </AvatarFallback>
             </Avatar>
-            <span className="flex min-w-0 flex-1 flex-col items-start leading-none group-data-[collapsible=icon]:hidden">
+            <span className="flex min-w-0 flex-1 items-center leading-none group-data-[collapsible=icon]:hidden">
               <span className="w-full truncate text-xs font-semibold">
                 {user.name}
-              </span>
-              <span className="type-meta mt-1 w-full truncate text-sidebar-muted-foreground">
-                {user.isDevelopmentBypass ? "Development bypass" : user.email}
               </span>
             </span>
             <SignOutButton

@@ -4,6 +4,8 @@ import QRCode from "react-qr-code"
 import {
   Check,
   Clipboard,
+  Eye,
+  EyeOff,
   Fingerprint,
   Laptop,
   LoaderCircle,
@@ -30,6 +32,8 @@ import { ensuringPromise, recoverPromise } from "@/effect/promise"
 import { authClient } from "@/lib/auth-client"
 import type { AuthenticatedUser } from "@/lib/auth-session"
 import { clearAppearanceCache } from "@/lib/appearance"
+import { DISPLAY_NAME_MAX_LENGTH, parseDisplayName } from "@/lib/display-name"
+import { queryKeys } from "@/lib/query-options"
 import { getCliCredentials, revokeCliCredential } from "@/server/cli"
 import { getActiveSessions, revokeActiveSession } from "@/server/sessions"
 import type { AccountSessionSummary } from "@/effect/account-sessions"
@@ -82,6 +86,7 @@ export function AccountSettingsPage({ user }: { user: AuthenticatedUser }) {
         className={`min-w-0 border-0 p-0 ${user.isDevelopmentBypass ? "opacity-45" : ""}`}
       >
         <div className="border-b">
+          <DisplayNameCard initialDisplayName={user.name} />
           <EmailAddressCard initialEmail={user.email} />
           <PasswordCard />
           <TwoFactorCard />
@@ -98,9 +103,137 @@ export function AccountSettingsPage({ user }: { user: AuthenticatedUser }) {
   )
 }
 
+function DisplayNameCard({
+  initialDisplayName,
+}: {
+  initialDisplayName: string
+}) {
+  const queryClient = useQueryClient()
+  const session = authClient.useSession()
+  const [open, setOpen] = React.useState(false)
+  const [currentDisplayName, setCurrentDisplayName] =
+    React.useState(initialDisplayName)
+  const [displayName, setDisplayName] = React.useState(initialDisplayName)
+  const [pending, setPending] = React.useState(false)
+
+  async function updateDisplayName(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    let nextDisplayName: string
+    try {
+      nextDisplayName = parseDisplayName(displayName)
+    } catch (cause) {
+      showToast({
+        message:
+          cause instanceof Error ? cause.message : "Enter a display name",
+        type: "error",
+      })
+      return
+    }
+
+    setPending(true)
+    const result = await ensuringPromise(
+      () =>
+        recoverPromise(
+          () => authClient.updateUser({ name: nextDisplayName }),
+          (cause) =>
+            failedAuthResult(cause, "Could not update your display name")
+        ),
+      () => setPending(false)
+    )
+    if (result.error) {
+      showToast({
+        message: authErrorMessage(
+          result.error,
+          "Could not update your display name"
+        ),
+        type: "error",
+      })
+      return
+    }
+
+    setCurrentDisplayName(nextDisplayName)
+    setDisplayName(nextDisplayName)
+    setOpen(false)
+    showToast({ message: "Display name updated.", type: "success" })
+    await Promise.all([
+      session.refetch(),
+      queryClient.invalidateQueries({ queryKey: queryKeys.auth.state }),
+      queryClient.invalidateQueries({
+        queryKey: queryKeys.access.capabilities,
+      }),
+    ])
+  }
+
+  function changeOpen(nextOpen: boolean) {
+    if (pending) return
+    setOpen(nextOpen)
+    if (!nextOpen) setDisplayName(currentDisplayName)
+  }
+
+  return (
+    <AccountSection title="Display Name">
+      <div className="flex min-w-0 items-center justify-between gap-3">
+        <p className="truncate text-xs text-muted-foreground">
+          {currentDisplayName}
+        </p>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="shrink-0"
+          onClick={() => setOpen(true)}
+        >
+          Change
+        </Button>
+      </div>
+
+      <Dialog open={open} onOpenChange={changeOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Change display name</DialogTitle>
+            <DialogDescription>
+              This is how your name appears to other Kiln users.
+            </DialogDescription>
+          </DialogHeader>
+          <form className="grid gap-4" onSubmit={updateDisplayName}>
+            <Field label="Display Name" htmlFor="account-display-name">
+              <Input
+                id="account-display-name"
+                type="text"
+                value={displayName}
+                onChange={(event) => setDisplayName(event.target.value)}
+                autoComplete="name"
+                maxLength={DISPLAY_NAME_MAX_LENGTH}
+                className="h-10 bg-background/70"
+                required
+                autoFocus
+              />
+            </Field>
+            <DialogFooter>
+              <Button
+                type="button"
+                variant="ghost"
+                onClick={() => changeOpen(false)}
+                disabled={pending}
+              >
+                Cancel
+              </Button>
+              <Button type="submit" disabled={pending || !displayName.trim()}>
+                {pending ? <LoaderCircle className="animate-spin" /> : null}
+                Save name
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+    </AccountSection>
+  )
+}
+
 function EmailAddressCard({ initialEmail }: { initialEmail: string }) {
   const session = authClient.useSession()
   const [open, setOpen] = React.useState(false)
+  const [emailRevealed, setEmailRevealed] = React.useState(false)
   const [email, setEmail] = React.useState(initialEmail)
   const [code, setCode] = React.useState("")
   const [requestedEmail, setRequestedEmail] = React.useState<string | null>(
@@ -192,7 +325,26 @@ function EmailAddressCard({ initialEmail }: { initialEmail: string }) {
   return (
     <AccountSection title="Email address">
       <div className="flex min-w-0 items-center justify-between gap-3">
-        <p className="truncate text-xs text-muted-foreground">{currentEmail}</p>
+        <button
+          type="button"
+          className="flex min-w-0 items-center gap-2 text-xs text-muted-foreground transition-colors hover:text-foreground"
+          aria-label={
+            emailRevealed
+              ? `${currentEmail}. Hide email address`
+              : "Reveal email address"
+          }
+          aria-expanded={emailRevealed}
+          onClick={() => setEmailRevealed((revealed) => !revealed)}
+        >
+          <span className="truncate">
+            {emailRevealed ? currentEmail : "••••••••@••••••••"}
+          </span>
+          {emailRevealed ? (
+            <EyeOff className="size-3.5 shrink-0" aria-hidden="true" />
+          ) : (
+            <Eye className="size-3.5 shrink-0" aria-hidden="true" />
+          )}
+        </button>
         <Button
           type="button"
           variant="outline"

@@ -50,14 +50,14 @@ export const getAuthState = createServerFn({ method: "GET" }).handler(
 export const createInitialAdministrator = createServerFn({ method: "POST" })
   .validator(
     z.object({
+      displayName: z.string().trim().min(1).max(16),
       email: z.email(),
       password: z.string().min(12).max(128),
     })
   )
   .handler(async ({ data }) => {
-    const { createInitialAdministrator: createAdministrator } = await import(
-      "@/lib/auth-bootstrap"
-    )
+    const { createInitialAdministrator: createAdministrator } =
+      await import("@/lib/auth-bootstrap")
     return createAdministrator(data)
   })
 
@@ -70,9 +70,8 @@ export const replacePendingAccountEmail = createServerFn({ method: "POST" })
     })
   )
   .handler(async ({ data }) => {
-    const { replacePendingAccountEmail: replaceEmail } = await import(
-      "@/lib/auth-bootstrap"
-    )
+    const { replacePendingAccountEmail: replaceEmail } =
+      await import("@/lib/auth-bootstrap")
     return replaceEmail(data)
   })
 

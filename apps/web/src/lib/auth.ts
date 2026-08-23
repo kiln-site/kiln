@@ -13,6 +13,7 @@ import { Resend } from "resend"
 import { AuthCodeEmail } from "@/emails/auth-code-email"
 import { databasePool } from "@/lib/database"
 import { databaseTable, databaseTableName } from "@/lib/database-config"
+import { parseDisplayName } from "@/lib/display-name"
 import {
   betterAuthSecrets,
   betterAuthUrl,
@@ -75,8 +76,21 @@ export const auth = betterAuth({
   databaseHooks: {
     user: {
       create: {
+        before: async (user) => {
+          const name = parseDisplayName(user.name)
+          return {
+            data: emailDeliveryEnabled
+              ? { ...user, name }
+              : { ...user, name, emailVerified: true },
+          }
+        },
+      },
+      update: {
         before: async (user) => ({
-          data: emailDeliveryEnabled ? user : { ...user, emailVerified: true },
+          data:
+            typeof user.name === "string"
+              ? { ...user, name: parseDisplayName(user.name) }
+              : user,
         }),
       },
     },
@@ -229,7 +243,3 @@ export const auth = betterAuth({
 export type AuthSession = typeof auth.$Infer.Session
 
 export { publicSignupEnabled }
-
-export function displayNameFromEmail(email: string): string {
-  return email.trim().toLowerCase().split("@")[0] || "Kiln operator"
-}
