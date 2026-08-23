@@ -116,7 +116,7 @@ export function StartupWorkspace() {
         <div className="max-w-sm">
           <CircleAlert className="mx-auto size-5 text-amber-300" />
           <p className="mt-3 text-sm font-semibold">Startup unavailable</p>
-          <p className="mt-1 text-[0.6875rem] leading-5 text-muted-foreground">
+          <p className="type-support mt-1 text-muted-foreground">
             {startupQuery.error?.message ??
               "This server does not expose Brick startup variables yet."}
           </p>
@@ -538,7 +538,7 @@ function StartupSettingsForm({
     <form className="space-y-6" onSubmit={onSubmit}>
       <StartupSection
         accessory={
-          <span className="font-mono text-[0.5rem] tracking-[0.08em] text-muted-foreground/60 uppercase">
+          <span className="type-technical-label text-muted-foreground">
             Node capacity
           </span>
         }
@@ -644,7 +644,7 @@ function StartupSettingsForm({
 
       <div className="flex flex-wrap items-center justify-end gap-2">
         {!canEdit ? (
-          <p className="mr-auto text-[0.6875rem] text-muted-foreground">
+          <p className="type-support mr-auto text-muted-foreground">
             Connect the Relay and use an account with settings access to change
             Startup.
           </p>
@@ -679,12 +679,10 @@ const ManagedJavaFlagsField = React.memo(function ManagedJavaFlagsField({
 }) {
   const labelId = React.useId()
   return (
-    <div className="block space-y-1.5 text-[0.625rem] font-medium text-muted-foreground">
+    <div className="type-label block space-y-1.5 text-muted-foreground">
       <span className="flex items-center justify-between gap-2">
         <span id={labelId}>Managed flags</span>
-        <span className="font-mono text-[0.5rem] text-muted-foreground/55">
-          ember
-        </span>
+        <span className="type-meta font-mono text-muted-foreground">ember</span>
       </span>
       <Input
         aria-labelledby={labelId}
@@ -712,11 +710,9 @@ function StartupSection({
     <section className="space-y-2">
       <div className="flex items-end justify-between gap-3">
         <div>
-          <p className="font-mono text-[0.5625rem] tracking-[0.14em] text-primary uppercase">
-            {title}
-          </p>
+          <p className="type-technical-label text-primary">{title}</p>
           {description ? (
-            <p className="mt-0.5 text-[0.625rem] text-muted-foreground">
+            <p className="type-meta mt-0.5 text-muted-foreground">
               {description}
             </p>
           ) : null}
@@ -773,15 +769,15 @@ function BrickSummary({
       icon={<ServerTypeIcon implementation={view.id} className="size-5" />}
       title={view.name}
       titleAccessory={
-        <Badge variant="outline" className="font-mono text-[0.5625rem]">
+        <Badge variant="outline" className="type-meta font-mono">
           {view.game}
         </Badge>
       }
     >
-      <p className="mt-0.5 truncate text-[0.625rem] text-muted-foreground">
+      <p className="type-meta mt-0.5 truncate text-muted-foreground">
         {view.description}
       </p>
-      <p className="mt-1 truncate font-mono text-[0.5625rem] text-muted-foreground/70">
+      <p className="type-meta mt-1 truncate font-mono text-muted-foreground">
         {view.source}
       </p>
     </WorkspaceSummaryCard>

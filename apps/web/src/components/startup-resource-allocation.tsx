@@ -66,11 +66,11 @@ export const ResourceAllocationCard = React.memo(
         />
         <div className="p-4">
           <div className="flex items-center justify-between gap-3">
-            <span className="flex items-center gap-2 font-mono text-[0.5625rem] tracking-[0.08em] text-muted-foreground uppercase">
+            <span className="type-technical-label flex items-center gap-2 text-muted-foreground">
               <HardDrive className="size-3.5" />
               Disk quota
             </span>
-            <span className="font-mono text-[0.5rem] text-muted-foreground/60">
+            <span className="type-meta font-mono text-muted-foreground">
               {formatResourceBytes(allocation.storage.availableBytes)}{" "}
               assignable
             </span>
@@ -88,9 +88,7 @@ export const ResourceAllocationCard = React.memo(
               onChange={(event) => onDiskLimitChange(event.target.value)}
               className="font-mono tabular-nums"
             />
-            <span className="font-mono text-[0.625rem] text-muted-foreground">
-              GiB
-            </span>
+            <span className="type-code text-muted-foreground">GiB</span>
           </div>
           <NodeCapacityBar
             usedBytes={allocation.storage.nodeUsedBytes}
@@ -124,11 +122,11 @@ function ResourceAllocationPanel({
   return (
     <div className="p-4">
       <div className="flex items-center justify-between gap-3">
-        <span className="flex items-center gap-2 font-mono text-[0.5625rem] tracking-[0.08em] text-muted-foreground uppercase">
+        <span className="type-technical-label flex items-center gap-2 text-muted-foreground">
           {icon}
           {label}
         </span>
-        <span className="font-mono text-[0.5rem] text-muted-foreground/60">
+        <span className="type-meta font-mono text-muted-foreground">
           {formatResourceBytes(availableBytes)} assignable
         </span>
       </div>
@@ -165,7 +163,7 @@ function NodeCapacityBar({
           style={{ width: `${percent}%` }}
         />
       </div>
-      <div className="mt-1 flex justify-between font-mono text-[0.4375rem] text-muted-foreground/50 tabular-nums">
+      <div className="type-meta mt-1 flex justify-between font-mono text-muted-foreground tabular-nums">
         <span>{formatResourceBytes(usedBytes)} node used</span>
         <span>{formatResourceBytes(totalBytes)} total</span>
       </div>

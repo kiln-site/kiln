@@ -661,7 +661,7 @@ function ScheduleTiming({ cron }: { cron: string }) {
   const alias = cronAliasLabel(cron)
   if (!alias) {
     return (
-      <span className="-my-1 inline-flex h-7 items-center px-1 font-mono text-[0.625rem] leading-none text-foreground">
+      <span className="type-code -my-1 inline-flex h-7 items-center px-1 text-foreground">
         {cron}
       </span>
     )
@@ -671,7 +671,7 @@ function ScheduleTiming({ cron }: { cron: string }) {
       <TooltipTrigger asChild>
         <span
           tabIndex={0}
-          className="-my-1 inline-flex h-7 cursor-default items-center rounded-sm px-1 text-[0.625rem] leading-none font-medium text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
+          className="type-control-sm -my-1 inline-flex h-7 cursor-default items-center rounded-sm px-1 text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
         >
           {alias}
         </span>
@@ -692,7 +692,7 @@ function ScheduleNextRun({
 }) {
   if (!nextRun) {
     return (
-      <span className="-my-1 inline-flex h-7 items-center px-1 text-[0.625rem] leading-none text-muted-foreground">
+      <span className="type-meta -my-1 inline-flex h-7 items-center px-1 text-muted-foreground">
         Not scheduled
       </span>
     )
@@ -703,7 +703,7 @@ function ScheduleNextRun({
         <time
           dateTime={nextRun.toISOString()}
           tabIndex={0}
-          className="-my-1 inline-flex h-7 cursor-default items-center rounded-sm px-1 text-[0.625rem] leading-none text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
+          className="type-control-sm -my-1 inline-flex h-7 cursor-default items-center rounded-sm px-1 text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
           suppressHydrationWarning
         >
           <RelativeTimeText date={nextRun} />
@@ -745,7 +745,7 @@ function ScheduleLastRun({
 }) {
   if (!run) {
     return (
-      <span className="-my-1 inline-flex h-7 items-center px-1 text-[0.625rem] leading-none text-muted-foreground">
+      <span className="type-meta -my-1 inline-flex h-7 items-center px-1 text-muted-foreground">
         Never
       </span>
     )
@@ -762,7 +762,7 @@ function ScheduleLastRun({
         >
           <Badge
             variant="outline"
-            className={`px-1.5 py-0 text-[0.625rem] ${result === "Success" ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300" : result === "Errored" ? "border-amber-500/35 bg-amber-500/10 text-amber-700 dark:text-amber-300" : "border-destructive/30 bg-destructive/10 text-destructive"}`}
+            className={`type-meta px-1.5 py-0 ${result === "Success" ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300" : result === "Errored" ? "border-amber-500/35 bg-amber-500/10 text-amber-700 dark:text-amber-300" : "border-destructive/30 bg-destructive/10 text-destructive"}`}
           >
             {result}
           </Badge>
@@ -810,7 +810,7 @@ function EmptyScheduleTable({
             ? "No schedules for this instance"
             : "No schedules yet"}
       </p>
-      <p className="mt-1 max-w-sm text-[0.625rem] leading-4 text-muted-foreground">
+      <p className="type-support mt-1 max-w-sm text-muted-foreground">
         {searchActive
           ? "Try a schedule name, cron expression, action, or target."
           : scopeActive
@@ -987,7 +987,7 @@ const HistoryToolbar = React.memo(function HistoryToolbar({
           type="button"
           size="sm"
           variant="outline"
-          className="flex max-w-32 min-w-0 gap-1.5 px-2 text-[0.625rem] sm:max-w-52"
+          className="type-control-sm flex max-w-32 min-w-0 gap-1.5 px-2 sm:max-w-52"
           aria-label={`Clear history filter for ${filteredScheduleName}`}
           onClick={onClearScheduleFilter}
         >
@@ -995,7 +995,7 @@ const HistoryToolbar = React.memo(function HistoryToolbar({
           <X className="shrink-0" />
         </Button>
       ) : null}
-      <Badge variant="outline" className="font-mono text-[0.625rem]">
+      <Badge variant="outline" className="type-meta font-mono">
         {runCount} run{runCount === 1 ? "" : "s"}
       </Badge>
     </div>
@@ -1030,7 +1030,7 @@ const ScheduleHistoryTable = React.memo(function ScheduleHistoryTable({
               ? "No runs for this instance"
               : "No schedule runs yet"}
         </p>
-        <p className="mt-1 max-w-sm text-[0.625rem] leading-4 text-muted-foreground">
+        <p className="type-support mt-1 max-w-sm text-muted-foreground">
           {scopeActive && !searchActive
             ? "Completed and attempted runs for this instance will appear here."
             : "Completed and attempted schedule runs will appear here."}
@@ -1107,33 +1107,33 @@ const ScheduleHistoryRow = React.memo(function ScheduleHistoryRow({
           <p className="truncate text-xs font-semibold text-foreground">
             {run.scheduleName}
           </p>
-          <p className="truncate font-mono text-[0.5rem] text-muted-foreground">
+          <p className="type-meta truncate font-mono text-muted-foreground">
             r{run.revision} · {run.status.replaceAll("_", " ")}
           </p>
         </div>
       </WorkspaceTableCell>
       <WorkspaceTableCell className="hidden md:table-cell">
         <div className="min-w-0">
-          <p className="truncate text-[0.625rem] text-foreground">
+          <p className="type-meta truncate text-foreground">
             {timestampLabel(new Date(run.startedAt), run.timezone)}
           </p>
-          <p className="truncate text-[0.5rem] text-muted-foreground">
+          <p className="type-meta truncate text-muted-foreground">
             <RelativeTimeText date={new Date(run.startedAt)} />
           </p>
         </div>
       </WorkspaceTableCell>
       <WorkspaceTableCell className="hidden lg:table-cell">
-        <span className="font-mono text-[0.5625rem] text-foreground">
+        <span className="type-meta font-mono text-foreground">
           {durationLabel(run.finishedAt - run.startedAt)}
         </span>
       </WorkspaceTableCell>
       <WorkspaceTableCell className="hidden xl:table-cell">
-        <span className="text-[0.625rem] text-foreground">
+        <span className="type-meta text-foreground">
           {run.targetRuns.length}
         </span>
       </WorkspaceTableCell>
       <WorkspaceTableCell className="hidden sm:table-cell">
-        <span className="block truncate font-mono text-[0.5625rem] text-muted-foreground">
+        <span className="type-meta block truncate font-mono text-muted-foreground">
           {run.relayId}
         </span>
       </WorkspaceTableCell>
@@ -1199,7 +1199,7 @@ const ScheduleRunDialog = React.memo(function ScheduleRunDialog({
 
               <section className="border-b px-5 py-4">
                 <h3 className="text-xs font-semibold">Run metadata</h3>
-                <dl className="mt-3 grid gap-x-6 gap-y-3 text-[0.625rem] sm:grid-cols-2">
+                <dl className="type-meta mt-3 grid gap-x-6 gap-y-3 sm:grid-cols-2">
                   <RunMetadataRow label="Run ID" value={run.id} mono />
                   <RunMetadataRow
                     label="Schedule ID"
@@ -1244,14 +1244,11 @@ const ScheduleRunDialog = React.memo(function ScheduleRunDialog({
                       <h3 className="text-xs font-semibold">
                         Sequence activity
                       </h3>
-                      <p className="mt-0.5 text-[0.625rem] text-muted-foreground">
+                      <p className="type-meta mt-0.5 text-muted-foreground">
                         Waits pause the sequence once between target actions.
                       </p>
                     </div>
-                    <Badge
-                      variant="outline"
-                      className="font-mono text-[0.5625rem]"
-                    >
+                    <Badge variant="outline" className="type-meta font-mono">
                       {run.sequenceAttempts.length} attempts
                     </Badge>
                   </div>
@@ -1269,14 +1266,11 @@ const ScheduleRunDialog = React.memo(function ScheduleRunDialog({
                 <div className="flex items-center justify-between gap-4">
                   <div>
                     <h3 className="text-xs font-semibold">Target activity</h3>
-                    <p className="mt-0.5 text-[0.625rem] text-muted-foreground">
+                    <p className="type-meta mt-0.5 text-muted-foreground">
                       Actions are shown in the order the Relay attempted them.
                     </p>
                   </div>
-                  <Badge
-                    variant="outline"
-                    className="font-mono text-[0.5625rem]"
-                  >
+                  <Badge variant="outline" className="type-meta font-mono">
                     {run.targetRuns.reduce(
                       (count, targetRun) => count + targetRun.attempts.length,
                       0
@@ -1323,9 +1317,7 @@ function RunMetadataItem({
 }) {
   return (
     <div className="min-w-0 bg-background px-5 py-3.5">
-      <p className="font-mono text-[0.5rem] tracking-[0.12em] text-muted-foreground uppercase">
-        {label}
-      </p>
+      <p className="type-technical-label text-muted-foreground">{label}</p>
       <p
         className={`mt-1 truncate text-xs font-medium text-foreground ${mono ? "font-mono" : ""}`}
         title={value}
@@ -1333,9 +1325,7 @@ function RunMetadataItem({
         {value}
       </p>
       {detail ? (
-        <p className="mt-0.5 text-[0.5625rem] text-muted-foreground">
-          {detail}
-        </p>
+        <p className="type-meta mt-0.5 text-muted-foreground">{detail}</p>
       ) : null}
     </div>
   )
@@ -1354,7 +1344,7 @@ function RunMetadataRow({
     <div className="min-w-0">
       <dt className="text-muted-foreground">{label}</dt>
       <dd
-        className={`mt-0.5 truncate text-foreground ${mono ? "font-mono text-[0.5625rem]" : ""}`}
+        className={`type-meta mt-0.5 truncate text-foreground ${mono ? "font-mono" : ""}`}
         title={value}
       >
         {value}
@@ -1381,22 +1371,22 @@ function TargetRunAudit({
         />
         <div className="min-w-0 flex-1">
           <p className="truncate text-xs font-semibold">{run.target.name}</p>
-          <p className="truncate font-mono text-[0.5rem] text-muted-foreground">
+          <p className="type-meta truncate font-mono text-muted-foreground">
             {run.target.kind} · {run.target.id}
           </p>
         </div>
-        <span className="text-[0.5625rem] text-muted-foreground">
+        <span className="type-meta text-muted-foreground">
           {durationLabel(run.finishedAt - run.startedAt)}
         </span>
         <RunResultIcon status={run.status} className="size-4 shrink-0" />
       </header>
       {run.error ? (
-        <p className="border-b border-destructive/20 bg-destructive/5 px-3 py-2 text-[0.625rem] text-destructive">
+        <p className="type-meta border-b border-destructive/20 bg-destructive/5 px-3 py-2 text-destructive">
           {run.error}
         </p>
       ) : null}
       {run.attempts.length === 0 ? (
-        <p className="px-3 py-4 text-[0.625rem] text-muted-foreground">
+        <p className="type-meta px-3 py-4 text-muted-foreground">
           No actions were attempted.
         </p>
       ) : (
@@ -1425,7 +1415,7 @@ function ActionAttemptAudit({
         const action = actionsById.get(attempt.actionId)
         return (
           <li key={attempt.id} className="flex gap-3 px-3 py-3">
-            <span className="relative mt-0.5 grid size-5 shrink-0 place-items-center rounded-full border bg-background font-mono text-[0.5rem] text-muted-foreground">
+            <span className="type-meta relative mt-0.5 grid size-6 shrink-0 place-items-center rounded-full border bg-background font-mono text-muted-foreground">
               {index + 1}
             </span>
             <ActionIcon
@@ -1434,20 +1424,20 @@ function ActionAttemptAudit({
             />
             <div className="min-w-0 flex-1">
               <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-                <p className="text-[0.6875rem] font-semibold">
+                <p className="type-card-title">
                   {actionLabel(attempt.actionType)}
                 </p>
                 <AttemptStatus status={attempt.status} />
               </div>
-              <p className="mt-0.5 truncate font-mono text-[0.5625rem] text-muted-foreground">
+              <p className="type-meta mt-0.5 truncate font-mono text-muted-foreground">
                 {actionAuditSummary(action, attempt.actionId)}
               </p>
-              <p className="mt-1 text-[0.5625rem] text-muted-foreground">
+              <p className="type-meta mt-1 text-muted-foreground">
                 {timestampLabel(new Date(attempt.startedAt), timezone)} ·{" "}
                 {durationLabel(attempt.finishedAt - attempt.startedAt)}
               </p>
               {attempt.error ? (
-                <p className="mt-2 rounded-md border border-destructive/20 bg-destructive/5 px-2.5 py-2 text-[0.625rem] leading-4 text-destructive">
+                <p className="type-meta mt-2 rounded-md border border-destructive/20 bg-destructive/5 px-2.5 py-2 text-destructive">
                   {attempt.error}
                 </p>
               ) : null}
@@ -1468,7 +1458,7 @@ function AttemptStatus({
   const failed = status === "failed" || status === "interrupted"
   return (
     <span
-      className={`inline-flex items-center gap-1 text-[0.5625rem] font-medium capitalize ${succeeded ? "text-emerald-400" : failed ? "text-destructive" : "text-muted-foreground"}`}
+      className={`type-label inline-flex items-center gap-1 capitalize ${succeeded ? "text-emerald-400" : failed ? "text-destructive" : "text-muted-foreground"}`}
     >
       {succeeded ? (
         <Check className="size-3" />
@@ -1775,7 +1765,7 @@ const ScheduleEditorFields = React.memo(function ScheduleEditorFields({
       />
       <EditorSection
         aside={
-          <span className="font-mono text-[0.625rem] text-muted-foreground">
+          <span className="type-code text-muted-foreground">
             {selectedOptionsCount} selected
           </span>
         }
@@ -1834,7 +1824,7 @@ function ScheduleActionValidationMessage({
   valid: boolean
 }) {
   return actions.some((action) => action.type !== null) && !valid ? (
-    <p className="mt-2 text-[0.625rem] leading-4 text-destructive" role="alert">
+    <p className="type-meta mt-2 text-destructive" role="alert">
       You do not have permission to configure one or more selected actions.
     </p>
   ) : null
@@ -2047,7 +2037,7 @@ const ScheduleTargetSelector = React.memo(function ScheduleTargetSelector({
               Select every server, database, or Relay this schedule applies to.
             </p>
           </div>
-          <span className="font-mono text-[0.625rem] text-muted-foreground">
+          <span className="type-code text-muted-foreground">
             {selectedOptionsCount} selected
           </span>
         </div>
@@ -2525,7 +2515,7 @@ function ScheduleActionTargetsButton({
         </TooltipContent>
       </Tooltip>
       <PopoverContent align="end" className="w-72 p-1.5">
-        <p className="px-2 py-1.5 text-[0.625rem] text-muted-foreground">
+        <p className="type-meta px-2 py-1.5 text-muted-foreground">
           Choose which selected targets run this action.
         </p>
         <div className="space-y-0.5">
@@ -2550,7 +2540,7 @@ function ScheduleActionTargetsButton({
                   {checked ? <Check className="size-3" /> : null}
                 </span>
                 <span className="min-w-0 flex-1 truncate">{target.name}</span>
-                <span className="shrink-0 text-[0.5625rem] text-muted-foreground">
+                <span className="type-meta shrink-0 text-muted-foreground">
                   {target.kind}
                 </span>
               </button>
@@ -2901,7 +2891,7 @@ function ScheduleState({
         : "Disabled"
   return (
     <span
-      className={`inline-flex items-center gap-1.5 text-[0.625rem] font-medium ${state === "enabled" ? "text-emerald-400" : state === "running" ? "text-amber-300" : "text-muted-foreground"}`}
+      className={`type-label inline-flex items-center gap-1.5 ${state === "enabled" ? "text-emerald-400" : state === "running" ? "text-amber-300" : "text-muted-foreground"}`}
     >
       <span
         className={`size-1.5 shrink-0 rounded-full ${state === "enabled" ? "bg-emerald-400" : state === "running" ? "animate-pulse bg-amber-400" : "bg-muted-foreground"}`}
@@ -2919,7 +2909,7 @@ function RunStatusDot({
   const label = status.replaceAll("_", " ")
   return (
     <span
-      className={`inline-flex items-center gap-1.5 text-[0.625rem] font-medium capitalize ${status === "succeeded" ? "text-emerald-400" : status === "failed" || status === "interrupted" ? "text-destructive" : status === "partial" || status === "running" ? "text-amber-300" : "text-muted-foreground"}`}
+      className={`type-label inline-flex items-center gap-1.5 capitalize ${status === "succeeded" ? "text-emerald-400" : status === "failed" || status === "interrupted" ? "text-destructive" : status === "partial" || status === "running" ? "text-amber-300" : "text-muted-foreground"}`}
     >
       <span
         className={`size-1.5 shrink-0 rounded-full ${status === "succeeded" ? "bg-emerald-400" : status === "failed" || status === "interrupted" ? "bg-destructive" : status === "partial" || status === "running" ? `${status === "running" ? "animate-pulse " : ""}bg-amber-400` : "bg-muted-foreground"}`}
