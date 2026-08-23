@@ -8,68 +8,81 @@ import {
   TooltipTrigger,
 } from "@workspace/ui/components/tooltip"
 
+import type { GlobalSection } from "@/lib/route-sections"
+
+type PageSection = Exclude<GlobalSection, null>
+
+type GlobalPageToolbarProps =
+  | { section: PageSection; title?: never }
+  | { section?: never; title: string }
+
 export const GlobalPageToolbar = React.memo(function GlobalPageToolbar({
-  identity,
-  label,
-}: {
-  identity?: "infra" | "settings"
-  label: string
-}) {
+  section,
+  title,
+}: GlobalPageToolbarProps) {
   return (
-    <header className="shrink-0 border-b bg-background/90 backdrop-blur-xl">
-      <div className="flex min-h-20 items-center gap-3 px-3 py-3 sm:px-5 lg:py-2">
+    <header className="shrink-0 bg-background/90 backdrop-blur-xl">
+      <div className="flex min-h-24 items-center gap-4 px-3 py-4 sm:px-5">
         <ToolbarSidebarTrigger />
-        <span className="h-6 w-px shrink-0 bg-border/80" aria-hidden="true" />
-        {identity ? (
-          <SectionIdentity section={identity} />
-        ) : (
-          <div className="min-w-0">
-            <p className="font-mono text-[0.5625rem] tracking-[0.16em] text-primary uppercase">
-              {sectionFromLabel(label)}
-            </p>
-            <h1 className="mt-0.5 truncate font-heading text-xl font-semibold tracking-[-0.035em]">
-              {titleFromLabel(label)}
-            </h1>
-          </div>
-        )}
+        <span className="h-8 w-px shrink-0 bg-border/80" aria-hidden="true" />
+        <PageIdentity section={section} title={title} />
       </div>
     </header>
   )
 })
 
-const SectionIdentity = React.memo(function SectionIdentity({
+const PageIdentity = React.memo(function PageIdentity({
   section,
+  title,
 }: {
-  section: "infra" | "settings"
+  section?: PageSection
+  title?: string
 }) {
+  const pageTitle = title ?? (section ? sectionTitles[section] : "Hearth")
+
   return (
     <div className="min-w-0 flex-1">
-      <h1 className="flex min-w-0 items-baseline gap-1.5 font-heading tracking-[-0.03em]">
-        <span className="shrink-0 text-lg font-semibold text-foreground sm:text-xl">
-          {section === "infra" ? "Infrastructure" : "Settings"}
+      <h1 className="flex min-w-0 items-baseline gap-2 font-heading tracking-[-0.035em]">
+        <span className="shrink-0 text-xl font-semibold text-foreground sm:text-2xl">
+          {pageTitle}
         </span>
-        <span className="shrink-0 text-border">/</span>
-        <span className="min-w-0 truncate text-sm font-medium text-muted-foreground sm:text-base">
-          <SectionRouteTitle section={section} />
-        </span>
+        {section ? <SectionRouteTitle section={section} /> : null}
       </h1>
       <HearthBuildMetadata />
     </div>
   )
 })
 
-function SectionRouteTitle({ section }: { section: "infra" | "settings" }) {
+const sectionTitles: Record<PageSection, string> = {
+  access: "Access",
+  activity: "Activity",
+  automations: "Automations",
+  backups: "Backups",
+  infra: "Infrastructure",
+  settings: "Settings",
+}
+
+function SectionRouteTitle({ section }: { section: PageSection }) {
   const title = useRouterState({
     select: (state) =>
       sectionPageFromPathname(section, state.location.pathname),
   })
-  return <>{title}</>
+  if (!title) return null
+
+  return (
+    <>
+      <span className="shrink-0 text-border">/</span>
+      <span className="min-w-0 truncate text-base font-medium text-muted-foreground sm:text-lg">
+        {title}
+      </span>
+    </>
+  )
 }
 
 function sectionPageFromPathname(
-  section: "infra" | "settings",
+  section: PageSection,
   pathname: string
-) {
+): string | null {
   if (section === "infra") {
     if (pathname.startsWith("/infra/setup")) return "Setup"
     if (pathname.startsWith("/infra/relays")) return "Relays"
@@ -77,12 +90,22 @@ function sectionPageFromPathname(
     if (pathname.startsWith("/infra/domains")) return "Domains"
     if (pathname.startsWith("/infra/servers")) return "Servers"
     if (pathname.startsWith("/infra/databases")) return "Databases"
-    return "Infrastructure"
+    return null
   }
-  if (pathname.startsWith("/settings/appearance")) return "Appearance"
-  if (pathname.startsWith("/settings/account")) return "Account"
-  if (pathname.startsWith("/settings/billing")) return "Billing"
-  return "Settings"
+  if (section === "settings") {
+    if (pathname.startsWith("/settings/appearance")) return "Appearance"
+    if (pathname.startsWith("/settings/files")) return "Files"
+    if (pathname.startsWith("/settings/account")) return "Account"
+    if (pathname.startsWith("/settings/billing")) return "Billing"
+    return null
+  }
+  if (section === "automations") {
+    if (pathname.startsWith("/automations/schedules")) return "Schedules"
+    if (pathname.startsWith("/automations/sync")) return "Sync"
+    if (pathname.startsWith("/automations/history")) return "History"
+    if (pathname.startsWith("/automations/calendar")) return "Calendar"
+  }
+  return null
 }
 
 const HearthBuildMetadata = React.memo(function HearthBuildMetadata() {
@@ -91,7 +114,7 @@ const HearthBuildMetadata = React.memo(function HearthBuildMetadata() {
   const shortCommit = commit ? commit.slice(0, 8) : "Development"
 
   return (
-    <div className="mt-0.5 flex min-w-0 items-center gap-1.5 overflow-hidden text-[0.625rem] whitespace-nowrap text-muted-foreground sm:text-xs">
+    <div className="mt-1 flex min-w-0 items-center gap-2 overflow-hidden text-xs whitespace-nowrap text-muted-foreground sm:text-sm">
       <span className="shrink-0">Hearth {version}</span>
       <span className="text-border" aria-hidden="true">
         /
@@ -130,16 +153,6 @@ function currentSiteHost() {
 
 function emptySiteHost() {
   return ""
-}
-
-function sectionFromLabel(label: string) {
-  const separator = label.indexOf(" / ")
-  return separator === -1 ? "Hearth" : label.slice(0, separator)
-}
-
-function titleFromLabel(label: string) {
-  const separator = label.lastIndexOf(" / ")
-  return separator === -1 ? label : label.slice(separator + 3)
 }
 
 export const ToolbarSidebarTrigger = React.memo(

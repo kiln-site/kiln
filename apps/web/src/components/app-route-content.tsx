@@ -61,9 +61,7 @@ const NotFoundRouteFrame = React.memo(function NotFoundRouteFrame({
   children: React.ReactNode
 }) {
   return (
-    <WorkspaceFrame
-      header={<GlobalPageToolbar label="Navigation / Not found" />}
-    >
+    <WorkspaceFrame header={<GlobalPageToolbar title="Not found" />}>
       {children}
     </WorkspaceFrame>
   )
@@ -77,20 +75,7 @@ const GlobalRouteFrame = React.memo(function GlobalRouteFrame({
   section: Exclude<GlobalSection, null>
 }) {
   return (
-    <WorkspaceFrame
-      header={
-        <GlobalPageToolbar
-          label={routeLabel(section)}
-          identity={
-            section === "infra"
-              ? "infra"
-              : section === "settings"
-                ? "settings"
-                : undefined
-          }
-        />
-      }
-    >
+    <WorkspaceFrame header={<GlobalPageToolbar section={section} />}>
       <div
         data-slot="global-route-content"
         className="min-h-0 min-w-0 flex-1 overflow-y-auto bg-background/55"
@@ -179,13 +164,4 @@ function RouteEmptyState() {
       onConfigure={configure}
     />
   )
-}
-
-function routeLabel(section: Exclude<GlobalSection, null>) {
-  if (section === "infra") return "Infrastructure"
-  if (section === "backups") return "Backups"
-  if (section === "automations") return "Automations"
-  if (section === "activity") return "Activity"
-  if (section === "access") return "Administration / Access"
-  return "Settings"
 }
