@@ -37,11 +37,11 @@ export function RelayUnavailableState({
       />
       <section className="relative w-full max-w-xl overflow-hidden rounded-2xl border border-border/80 bg-card/80 shadow-2xl shadow-black/15 backdrop-blur-sm">
         <div className="flex items-center justify-between border-b border-border/70 px-5 py-3">
-          <span className="flex items-center gap-2 font-mono text-[0.5625rem] tracking-[0.18em] text-muted-foreground uppercase">
+          <span className="type-technical-label flex items-center gap-2 text-muted-foreground">
             <span className="size-1.5 rounded-full bg-amber-400 shadow-[0_0_12px_rgba(251,191,36,0.65)]" />
             Control plane status
           </span>
-          <span className="font-mono text-[0.5625rem] text-amber-400 uppercase">
+          <span className="type-technical-label text-amber-400">
             {paused ? "Paused" : configured ? "Disconnected" : "Setup required"}
           </span>
         </div>
@@ -55,7 +55,7 @@ export function RelayUnavailableState({
               <Cable className="size-5" />
             )}
           </div>
-          <p className="mt-6 font-mono text-[0.625rem] tracking-[0.16em] text-primary uppercase">
+          <p className="type-technical-label mt-6 text-primary">
             {configured ? connection.relay.name : "Relay enrollment"}
           </p>
           <h1 className="mt-2 font-heading text-2xl font-semibold tracking-[-0.04em] sm:text-3xl">
@@ -85,7 +85,7 @@ export function RelayUnavailableState({
             )}
           </div>
         </div>
-        <div className="border-t border-border/70 bg-muted/10 px-5 py-3 font-mono text-[0.5625rem] leading-4 text-muted-foreground">
+        <div className="type-code border-t border-border/70 bg-muted/10 px-5 py-3 text-muted-foreground">
           {paused
             ? "Paused Relays remain online; only Hearth's requests are suspended."
             : "Hearth checks configured Relays automatically. No page reload is required."}

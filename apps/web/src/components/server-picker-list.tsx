@@ -121,7 +121,7 @@ export const ServerPickerList = React.memo(function ServerPickerList({
         {groups.map((group) => (
           <React.Fragment key={group.label ?? "items"}>
             {group.label ? (
-              <p className="px-2.5 pt-2 pb-1 text-[0.625rem] font-semibold tracking-wide text-muted-foreground uppercase">
+              <p className="type-technical-label px-2.5 pt-2 pb-1 text-muted-foreground">
                 {group.label}
               </p>
             ) : null}
@@ -198,7 +198,7 @@ const ServerPickerRow = React.memo(function ServerPickerRow({
         <span className="block truncate text-sm font-semibold tracking-tight">
           {name}
         </span>
-        <span className="mt-0.5 block truncate text-[0.6875rem] text-muted-foreground">
+        <span className="type-support mt-0.5 block truncate text-muted-foreground">
           {description}
         </span>
       </span>
@@ -226,17 +226,13 @@ function groupServerPickerOptions(
     return [{ items: servers, label: null }]
   }
   return [
-    grouped.server.length
-      ? { items: grouped.server, label: "Servers" }
-      : null,
+    grouped.server.length ? { items: grouped.server, label: "Servers" } : null,
     grouped.database.length
       ? { items: grouped.database, label: "Databases" }
       : null,
     grouped.relay.length ? { items: grouped.relay, label: "Relays" } : null,
   ].filter(
-    (
-      group
-    ): group is { items: Array<ServerPickerOption>; label: string } =>
+    (group): group is { items: Array<ServerPickerOption>; label: string } =>
       group !== null
   )
 }

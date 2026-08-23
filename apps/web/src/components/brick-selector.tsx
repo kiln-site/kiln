@@ -157,7 +157,7 @@ const ArchitectureTag = React.memo(function ArchitectureTag({
   return (
     <span
       className={cn(
-        "inline-flex h-4 items-center gap-0.5 rounded-md border px-1 font-mono text-[0.5625rem] font-semibold",
+        "type-meta inline-flex h-5 items-center gap-0.5 rounded-md border px-1 font-mono font-semibold",
         supported
           ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300"
           : "border-destructive/30 bg-destructive/10 text-destructive"
@@ -272,7 +272,7 @@ const BrickTabSidebar = React.memo(function BrickTabSidebar({
 }) {
   return (
     <aside className="flex min-h-0 flex-col border-b border-border/60 max-md:min-h-max md:border-r md:border-b-0">
-      <p className="px-3 pt-3 pb-2 font-mono text-[0.625rem] tracking-[0.14em] text-muted-foreground uppercase">
+      <p className="type-technical-label px-3 pt-3 pb-2 text-muted-foreground">
         Categories
       </p>
       <nav className="flex gap-1 overflow-x-auto px-2 pb-2 md:flex-col md:overflow-y-auto md:pb-3">
@@ -512,7 +512,7 @@ export const BrickCatalogBrowser = React.memo(function BrickCatalogBrowser({
               </label>
               {customOpen ? (
                 <div className="flex h-8 items-center justify-between gap-2">
-                  <span className="font-mono text-[0.625rem] tracking-[0.08em] text-muted-foreground uppercase">
+                  <span className="type-technical-label text-muted-foreground">
                     {customBricks.length} saved
                   </span>
                   <Button
@@ -639,7 +639,7 @@ export const BrickCatalogBrowser = React.memo(function BrickCatalogBrowser({
                             <span className="block truncate text-sm font-semibold tracking-tight">
                               {brick.metadata.name}
                             </span>
-                            <span className="mt-0.5 block truncate text-[0.6875rem] text-muted-foreground">
+                            <span className="type-support mt-0.5 block truncate text-muted-foreground">
                               {custom
                                 ? "Custom"
                                 : sourceLabel(brick, gitRepositorySlug)}{" "}
@@ -649,14 +649,14 @@ export const BrickCatalogBrowser = React.memo(function BrickCatalogBrowser({
                           {custom ? (
                             <Badge
                               variant="outline"
-                              className="h-5 shrink-0 px-1.5 font-mono text-[0.625rem] text-muted-foreground"
+                              className="type-meta h-6 shrink-0 px-1.5 font-mono text-muted-foreground"
                             >
                               Custom
                             </Badge>
                           ) : verified ? (
                             <Badge
                               variant="outline"
-                              className="h-5 shrink-0 gap-1 border-primary/35 bg-primary/10 px-1.5 font-mono text-[0.625rem] text-primary"
+                              className="type-meta h-6 shrink-0 gap-1 border-primary/35 bg-primary/10 px-1.5 font-mono text-primary"
                             >
                               <BadgeCheck className="size-3" />
                               Verified
@@ -784,7 +784,7 @@ const BrickCatalogManager = React.memo(function BrickCatalogManager({
               if (value) addMutation.mutate(value)
             }}
           >
-            <p className="font-mono text-[0.625rem] tracking-[0.14em] text-muted-foreground uppercase">
+            <p className="type-technical-label text-muted-foreground">
               Catalog sources
             </p>
             <div className="mt-2 grid grid-cols-[minmax(0,1fr)_auto] gap-2">
@@ -810,7 +810,7 @@ const BrickCatalogManager = React.memo(function BrickCatalogManager({
                 Add
               </Button>
             </div>
-            <p className="mt-2 text-[0.6875rem] leading-relaxed text-muted-foreground">
+            <p className="type-support mt-2 text-muted-foreground">
               Example catalog can be found{" "}
               <a
                 href="https://github.com/kiln-site/kiln/blob/main/apps/bricks/catalog.yml"
@@ -871,7 +871,7 @@ const BrickCatalogManager = React.memo(function BrickCatalogManager({
                           <CatalogTrustBadge catalog={catalog} />
                         </span>
                         {catalog.author ? (
-                          <span className="mt-0.5 block truncate text-[0.6875rem] text-muted-foreground">
+                          <span className="type-support mt-0.5 block truncate text-muted-foreground">
                             By {catalog.author}
                           </span>
                         ) : null}
@@ -888,7 +888,7 @@ const BrickCatalogManager = React.memo(function BrickCatalogManager({
                             target="_blank"
                             rel="noreferrer"
                             aria-label={`Open ${catalogDisplayName(catalog)} documentation`}
-                            className="inline-flex h-7 items-center gap-1.5 rounded-md border border-border/70 bg-muted/25 px-2 text-[0.6875rem] font-medium transition-colors hover:border-primary/35 hover:bg-primary/8 hover:text-primary"
+                            className="type-control-sm inline-flex h-7 items-center gap-1.5 rounded-md border border-border/70 bg-muted/25 px-2 transition-colors hover:border-primary/35 hover:bg-primary/8 hover:text-primary"
                           >
                             <BookOpen className="size-3" />
                             Docs
@@ -900,7 +900,7 @@ const BrickCatalogManager = React.memo(function BrickCatalogManager({
                             target="_blank"
                             rel="noreferrer"
                             aria-label={`Open ${catalogDisplayName(catalog)} support`}
-                            className="inline-flex h-7 items-center gap-1.5 rounded-md border border-border/70 bg-muted/25 px-2 text-[0.6875rem] font-medium transition-colors hover:border-primary/35 hover:bg-primary/8 hover:text-primary"
+                            className="type-control-sm inline-flex h-7 items-center gap-1.5 rounded-md border border-border/70 bg-muted/25 px-2 transition-colors hover:border-primary/35 hover:bg-primary/8 hover:text-primary"
                           >
                             <LifeBuoy className="size-3" />
                             Support
@@ -927,7 +927,7 @@ const BrickCatalogManager = React.memo(function BrickCatalogManager({
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0">
                   {selected.isDefault ? null : (
-                    <p className="font-mono text-[0.625rem] tracking-[0.14em] text-muted-foreground uppercase">
+                    <p className="type-technical-label text-muted-foreground">
                       {catalogVisibilityLabel(selected.visibility)}
                     </p>
                   )}
@@ -944,7 +944,7 @@ const BrickCatalogManager = React.memo(function BrickCatalogManager({
                   </div>
                   {catalogsQuery.data?.isPlatformAdmin &&
                   selected.ownerUserId ? (
-                    <p className="mt-1 truncate text-[0.6875rem] text-muted-foreground">
+                    <p className="type-support mt-1 truncate text-muted-foreground">
                       Owner:{" "}
                       {selected.ownerEmail ??
                         selected.ownerName ??
@@ -966,7 +966,7 @@ const BrickCatalogManager = React.memo(function BrickCatalogManager({
                         ? "Published snapshot"
                         : "Source snapshot"}
                     </span>
-                    <span className="font-mono text-[0.625rem] text-muted-foreground">
+                    <span className="type-code text-muted-foreground">
                       commit {selected.revisionSha.slice(0, 10)}
                     </span>
                   </span>
@@ -977,7 +977,7 @@ const BrickCatalogManager = React.memo(function BrickCatalogManager({
                   <span className="block text-xs font-medium">
                     Saved snapshot
                   </span>
-                  <span className="font-mono text-[0.625rem] text-muted-foreground">
+                  <span className="type-code text-muted-foreground">
                     sha256:{selected.snapshotSha256.slice(0, 12)}
                   </span>
                 </div>
@@ -1009,7 +1009,7 @@ const BrickCatalogManager = React.memo(function BrickCatalogManager({
                       <span className="min-w-0 flex-1 truncate text-xs font-medium">
                         {brick.metadata.name}
                       </span>
-                      <span className="font-mono text-[0.5625rem] text-muted-foreground">
+                      <span className="type-meta font-mono text-muted-foreground">
                         {brick.metadata.id}
                       </span>
                     </li>
@@ -1161,7 +1161,7 @@ function CatalogTrustBadge({
     return (
       <Badge
         variant="outline"
-        className="h-5 shrink-0 gap-1 border-primary/35 bg-primary/10 px-1.5 text-[0.625rem] text-primary"
+        className="type-meta h-6 shrink-0 gap-1 border-primary/35 bg-primary/10 px-1.5 text-primary"
       >
         <BadgeCheck className="size-3" />
         Verified
@@ -1170,7 +1170,7 @@ function CatalogTrustBadge({
   }
   if (catalog.visibility === "community") {
     return (
-      <Badge variant="outline" className="h-5 shrink-0 px-1.5 text-[0.625rem]">
+      <Badge variant="outline" className="type-meta h-6 shrink-0 px-1.5">
         Community
       </Badge>
     )
@@ -1218,7 +1218,7 @@ const BrickDetailsPanel = React.memo(function BrickDetailsPanel({
             if (source) onSaveCustomBrick(source)
           }}
         >
-          <p className="font-mono text-[0.625rem] tracking-[0.14em] text-muted-foreground uppercase">
+          <p className="type-technical-label text-muted-foreground">
             Custom recipe
           </p>
           <h3 className="mt-2 font-heading text-lg font-semibold tracking-[-0.03em]">
@@ -1317,20 +1317,20 @@ const BrickDetailsPanel = React.memo(function BrickDetailsPanel({
               {custom ? (
                 <Badge
                   variant="outline"
-                  className="h-5 px-1.5 text-[0.625rem] text-muted-foreground"
+                  className="type-meta h-6 px-1.5 text-muted-foreground"
                 >
                   Custom
                 </Badge>
               ) : verified ? (
                 <Badge
                   variant="outline"
-                  className="h-5 gap-1 border-primary/35 bg-primary/10 px-1.5 text-[0.625rem] text-primary"
+                  className="type-meta h-6 gap-1 border-primary/35 bg-primary/10 px-1.5 text-primary"
                 >
                   <BadgeCheck className="size-3" />
                   Verified
                 </Badge>
               ) : (
-                <Badge variant="outline" className="h-5 px-1.5 text-[0.625rem]">
+                <Badge variant="outline" className="type-meta h-6 px-1.5">
                   Community
                 </Badge>
               )}
@@ -1347,7 +1347,7 @@ const BrickDetailsPanel = React.memo(function BrickDetailsPanel({
           </div>
         </div>
 
-        <p className="mt-4 text-[0.8125rem] leading-relaxed text-foreground/90">
+        <p className="type-support mt-4 text-foreground">
           {brick.metadata.description}
         </p>
 
@@ -1357,7 +1357,7 @@ const BrickDetailsPanel = React.memo(function BrickDetailsPanel({
               <Badge
                 key={tag}
                 variant="outline"
-                className="h-5 px-1.5 font-mono text-[0.625rem] text-muted-foreground"
+                className="type-meta h-6 px-1.5 font-mono text-muted-foreground"
               >
                 {tag}
               </Badge>

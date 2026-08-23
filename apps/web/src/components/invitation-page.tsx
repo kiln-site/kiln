@@ -103,7 +103,7 @@ export function InvitationPage({
             <HearthMark className="size-8" /> Kiln
           </div>
           {preview ? (
-            <span className="flex items-center gap-1.5 border px-2.5 py-1 font-mono text-[0.5625rem] tracking-wide text-muted-foreground uppercase">
+            <span className="type-technical-label flex items-center gap-1.5 border px-2.5 py-1 text-muted-foreground">
               <Clock3 className="size-3" /> 7-day invite
             </span>
           ) : null}
@@ -138,7 +138,7 @@ export function InvitationPage({
         ) : (
           <>
             <div className="mt-10">
-              <p className="font-mono text-[0.625rem] tracking-[0.16em] text-primary uppercase">
+              <p className="type-technical-label text-primary">
                 Access request
               </p>
               <h1 className="mt-2 font-heading text-3xl font-semibold tracking-[-0.05em]">
@@ -171,7 +171,7 @@ export function InvitationPage({
               )}
               <span className="text-xs font-medium">{preview.relayName}</span>
               <span />
-              <span className="font-mono text-[0.625rem] text-muted-foreground">
+              <span className="type-code text-muted-foreground">
                 {platformInvitation
                   ? invitationLabel
                   : `${
@@ -237,7 +237,7 @@ export function InvitationPage({
                 </Link>
               </Button>
             )}
-            <p className="mt-5 text-center text-[0.625rem] leading-4 text-muted-foreground/70">
+            <p className="type-meta mt-5 text-center text-muted-foreground">
               Only the verified address {preview.email} can accept this
               invitation.
             </p>

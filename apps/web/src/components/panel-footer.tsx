@@ -14,12 +14,12 @@ export function PanelFooter({ className }: { className?: string }) {
     <footer
       aria-label="Hearth Panel build information"
       className={cn(
-        "hidden h-14 shrink-0 grid-cols-[minmax(0,1fr)_auto] grid-rows-2 bg-background text-center text-[0.6875rem] tracking-wide text-muted-foreground/82 sm:grid sm:grid-cols-[minmax(4.5rem,1fr)_auto_minmax(4.5rem,1fr)]",
+        "type-meta hidden h-14 shrink-0 grid-cols-[minmax(0,1fr)_auto] grid-rows-2 bg-background text-center tracking-wide text-muted-foreground sm:grid sm:grid-cols-[minmax(4.5rem,1fr)_auto_minmax(4.5rem,1fr)]",
         className
       )}
     >
       <div className="col-start-1 row-start-1 flex items-center gap-1.5 self-end justify-self-center pb-0.5 whitespace-nowrap sm:col-start-2">
-        <span className="text-muted-foreground/90">Kiln · Hearth Panel</span>
+        <span className="text-muted-foreground">Kiln · Hearth Panel</span>
         {commitUrl ? (
           <a
             href={commitUrl}

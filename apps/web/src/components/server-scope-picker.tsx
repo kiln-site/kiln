@@ -122,7 +122,7 @@ export const ServerScopePicker = React.memo(function ServerScopePicker({
           icon={<ScopeIcon className="size-5" />}
           title={selectedServer?.name ?? allLabel}
           titleAccessory={
-            <Badge variant="outline" className="font-mono text-[0.5625rem]">
+            <Badge variant="outline" className="type-meta font-mono">
               {selectedServer?.kind === "relay"
                 ? "Relay"
                 : (selectedServer?.relayName ??
@@ -131,7 +131,7 @@ export const ServerScopePicker = React.memo(function ServerScopePicker({
             </Badge>
           }
         >
-          <p className="mt-1 truncate font-mono text-[0.5625rem] text-muted-foreground/70">
+          <p className="type-meta mt-1 truncate font-mono text-muted-foreground">
             {selectionMetadata}
           </p>
         </WorkspaceSummaryCard>

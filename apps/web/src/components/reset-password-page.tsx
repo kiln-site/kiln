@@ -130,7 +130,7 @@ export function ResetPasswordPage({
                   autoFocus
                   className="h-11 bg-card/60 font-mono"
                 />
-                <span className="text-[0.625rem] leading-4 text-muted-foreground">
+                <span className="type-meta text-muted-foreground">
                   At least 12 characters
                 </span>
               </PasswordField>
@@ -188,10 +188,7 @@ function PasswordField({
 }) {
   return (
     <div className="grid gap-1.5">
-      <label
-        htmlFor={htmlFor}
-        className="text-[0.6875rem] font-medium text-foreground/85"
-      >
+      <label htmlFor={htmlFor} className="type-control-sm text-foreground">
         {label}
       </label>
       {children}
@@ -219,9 +216,7 @@ function RecoveryState({
       <div className="grid size-11 place-items-center rounded-xl border border-primary/25 bg-primary/8 text-primary">
         <Icon className="size-5" />
       </div>
-      <p className="mt-7 font-mono text-[0.625rem] tracking-[0.17em] text-primary uppercase">
-        {eyebrow}
-      </p>
+      <p className="type-technical-label mt-7 text-primary">{eyebrow}</p>
       <h1 className="mt-2 font-heading text-3xl font-semibold tracking-[-0.045em]">
         {title}
       </h1>

@@ -127,7 +127,7 @@ const AddServerDialog = React.memo(function AddServerDialog({
                 <p className="mt-2 text-sm font-semibold">
                   Brick catalog unavailable
                 </p>
-                <p className="mt-1 text-[0.6875rem] text-muted-foreground">
+                <p className="type-support mt-1 text-muted-foreground">
                   {catalogQuery.error?.message ??
                     "Connect a Relay to load verified Bricks."}
                 </p>
@@ -312,9 +312,7 @@ const AddServerConfiguration = React.memo(function AddServerConfiguration({
     const submittedName = formData.get("name")
     const name = typeof submittedName === "string" ? submittedName.trim() : ""
     const variables =
-      selection.kind === "catalog"
-        ? defaultBrickVariables(selection.brick)
-        : {}
+      selection.kind === "catalog" ? defaultBrickVariables(selection.brick) : {}
 
     submittingRef.current = true
     await Effect.runPromise(
@@ -359,7 +357,7 @@ const AddServerConfiguration = React.memo(function AddServerConfiguration({
 
   return (
     <form className="space-y-3" onSubmit={provision}>
-      <p className="font-mono text-[0.625rem] tracking-[0.14em] text-muted-foreground uppercase">
+      <p className="type-technical-label text-muted-foreground">
         Server details
       </p>
       <label className="block space-y-1.5 text-xs font-medium text-muted-foreground">

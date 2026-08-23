@@ -379,7 +379,7 @@ function BackupDestinationChoices({
           />
         ))}
       </div>
-      <span className="mt-1.5 block text-[0.625rem] text-muted-foreground">
+      <span className="type-meta mt-1.5 block text-muted-foreground">
         {effectiveMode === "incremental"
           ? "Choose one destination. Incremental snapshots can stay on this Relay or use S3."
           : singleDestination
@@ -437,7 +437,7 @@ function BackupDestinationChoice({
       </span>
       <span className="min-w-0 flex-1">
         <span className="block text-xs font-semibold">{label}</span>
-        <span className="block truncate text-[0.625rem] text-muted-foreground">
+        <span className="type-meta block truncate text-muted-foreground">
           {description}
         </span>
       </span>

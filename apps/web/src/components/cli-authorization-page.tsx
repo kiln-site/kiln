@@ -115,7 +115,7 @@ export function CliAuthorizationPage({
           <Terminal className="size-5" />
         </span>
         <div className="min-w-0">
-          <p className="font-mono text-[0.5625rem] tracking-[0.14em] text-primary uppercase">
+          <p className="type-technical-label text-primary">
             Device authorization
           </p>
           <h1 className="mt-1 truncate font-heading text-2xl font-semibold tracking-[-0.04em]">
@@ -130,7 +130,7 @@ export function CliAuthorizationPage({
 
       <div className="grid gap-5 py-5">
         <div className="flex items-center justify-between border bg-muted/25 px-3 py-2.5">
-          <span className="flex items-center gap-2 font-mono text-[0.625rem] text-muted-foreground">
+          <span className="type-code flex items-center gap-2 text-muted-foreground">
             <KeyRound className="size-3.5" /> Authorization code
           </span>
           <code className="text-sm font-semibold tracking-[0.18em]">

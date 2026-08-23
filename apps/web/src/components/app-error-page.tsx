@@ -243,11 +243,11 @@ function StatusPanel({
             Kiln
           </span>
         </div>
-        <div className="col-span-2 row-start-2 flex items-center gap-2 justify-self-center font-mono text-[0.5625rem] tracking-[0.16em] text-primary uppercase sm:col-span-1 sm:col-start-2 sm:row-start-1">
+        <div className="type-technical-label col-span-2 row-start-2 flex items-center gap-2 justify-self-center text-primary sm:col-span-1 sm:col-start-2 sm:row-start-1">
           <TriangleAlert className="size-3.5 shrink-0" />
           <span className="text-center">{eyebrow}</span>
         </div>
-        <span className="col-start-2 row-start-1 justify-self-end font-mono text-[0.5625rem] tracking-[0.18em] whitespace-nowrap text-destructive uppercase sm:col-start-3">
+        <span className="type-technical-label col-start-2 row-start-1 justify-self-end whitespace-nowrap text-destructive sm:col-start-3">
           Fault / {code}
         </span>
       </header>
@@ -262,7 +262,7 @@ function StatusPanel({
           </p>
           {route ? (
             <div className="mt-5 min-w-0 overflow-hidden border border-border/70 bg-background/55 px-3 py-2.5">
-              <div className="font-mono text-[0.5rem] tracking-[0.16em] text-muted-foreground uppercase">
+              <div className="type-technical-label text-muted-foreground">
                 Requested route
               </div>
               <div
@@ -278,7 +278,7 @@ function StatusPanel({
             </div>
           ) : null}
           {detail ? (
-            <pre className="mt-5 max-h-32 overflow-auto border border-destructive/20 bg-destructive/5 p-3 font-mono text-[0.625rem] leading-5 whitespace-pre-wrap text-destructive/85">
+            <pre className="type-code mt-5 max-h-32 overflow-auto border border-destructive/20 bg-destructive/5 p-3 whitespace-pre-wrap text-destructive">
               {detail}
             </pre>
           ) : null}
@@ -295,7 +295,7 @@ function StatusPanel({
         </div>
       </div>
 
-      <footer className="border-t border-border/70 bg-muted/10 px-4 py-3 text-center font-mono text-[0.5625rem] tracking-[0.08em] text-muted-foreground uppercase sm:px-5 sm:text-left">
+      <footer className="type-technical-label border-t border-border/70 bg-muted/10 px-4 py-3 text-center text-muted-foreground sm:px-5 sm:text-left">
         Hearth interface / protected recovery state
       </footer>
     </section>

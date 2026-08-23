@@ -32,7 +32,7 @@ export function LegalPage({
         </header>
 
         <article className="mx-auto w-full max-w-2xl flex-1 py-12 sm:py-16">
-          <p className="font-mono text-[0.625rem] uppercase tracking-[0.18em] text-primary/75">
+          <p className="type-technical-label text-primary">
             QuartzDev · Hearth Panel
           </p>
           <h1 className="mt-3 font-heading text-3xl font-semibold tracking-[-0.04em] text-foreground sm:text-4xl">
@@ -41,7 +41,7 @@ export function LegalPage({
           <p className="mt-3 text-xs text-muted-foreground">
             Effective {updated}
           </p>
-          <div className="mt-10 space-y-8 text-[0.8125rem] leading-6 text-muted-foreground">
+          <div className="type-support mt-10 max-w-[65ch] space-y-8 text-muted-foreground">
             {children}
           </div>
         </article>

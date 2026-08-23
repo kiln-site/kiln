@@ -481,7 +481,7 @@ export function AuthPage({
                     mode === "sign-in" ? (
                       <button
                         type="button"
-                        className="text-[0.6875rem] text-muted-foreground transition-colors hover:text-foreground"
+                        className="type-control-sm text-muted-foreground transition-colors hover:text-foreground"
                         onClick={() => {
                           setMode("forgot-password")
                           setError(null)
@@ -708,7 +708,7 @@ function VerificationPanel({
             readOnly={emailLocked}
             className="h-11 bg-card/60 read-only:bg-muted/35 read-only:text-foreground/85"
           />
-          <span className="text-[0.625rem] leading-4 text-muted-foreground">
+          <span className="type-meta text-muted-foreground">
             Codes expire in 10 minutes · pending accounts expire after 24 hours
           </span>
         </Field>
@@ -890,9 +890,7 @@ function StateHeading({
       <div className="grid size-11 place-items-center rounded-xl border border-primary/25 bg-primary/8 text-primary">
         <Icon className="size-5" />
       </div>
-      <p className="mt-7 font-mono text-[0.625rem] tracking-[0.17em] text-primary uppercase">
-        {eyebrow}
-      </p>
+      <p className="type-technical-label mt-7 text-primary">{eyebrow}</p>
       <h2 className="mt-2 font-heading text-3xl font-semibold tracking-[-0.045em]">
         {title}
       </h2>
@@ -917,10 +915,7 @@ function Field({
   return (
     <div className="grid gap-1.5">
       <div className="flex items-center justify-between gap-4">
-        <label
-          htmlFor={htmlFor}
-          className="text-[0.6875rem] font-medium text-foreground/85"
-        >
+        <label htmlFor={htmlFor} className="type-control-sm text-foreground">
           {label}
         </label>
         {action}

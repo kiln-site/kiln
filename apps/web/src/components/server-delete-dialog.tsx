@@ -147,7 +147,7 @@ export const ServerDeleteDialog = React.memo(function ServerDeleteDialog({
           onSubmit={(event) => void removeServer(event)}
         >
           <div className="grid gap-2">
-            <span className="text-[0.625rem] font-semibold tracking-wider text-muted-foreground uppercase">
+            <span className="type-technical-label text-muted-foreground">
               Server ID
             </span>
             <button
@@ -156,7 +156,7 @@ export const ServerDeleteDialog = React.memo(function ServerDeleteDialog({
               aria-label="Copy server ID"
               onClick={() => void copyServerId()}
             >
-              <code className="min-w-0 flex-1 font-mono text-[0.625rem] leading-4 break-all text-foreground">
+              <code className="type-code min-w-0 flex-1 break-all text-foreground">
                 {target.id}
               </code>
               <span className="grid size-7 shrink-0 place-items-center rounded-md border bg-background text-muted-foreground group-hover:text-foreground">
@@ -167,7 +167,7 @@ export const ServerDeleteDialog = React.memo(function ServerDeleteDialog({
                 )}
               </span>
             </button>
-            <p className="text-[0.625rem] leading-4 text-muted-foreground">
+            <p className="type-meta text-muted-foreground">
               {copied
                 ? "Copied. Paste the full ID below to continue."
                 : "Click the ID to copy it, then paste it below."}
@@ -177,7 +177,7 @@ export const ServerDeleteDialog = React.memo(function ServerDeleteDialog({
           <div className="grid gap-1.5">
             <label
               htmlFor="delete-server-id-confirmation"
-              className="text-[0.625rem] font-semibold tracking-wider text-muted-foreground uppercase"
+              className="type-technical-label text-muted-foreground"
             >
               Paste server ID
             </label>
@@ -201,7 +201,7 @@ export const ServerDeleteDialog = React.memo(function ServerDeleteDialog({
           <div className="grid gap-1.5">
             <label
               htmlFor="delete-server-password"
-              className="text-[0.625rem] font-semibold tracking-wider text-muted-foreground uppercase"
+              className="type-technical-label text-muted-foreground"
             >
               Account password
             </label>
@@ -224,7 +224,7 @@ export const ServerDeleteDialog = React.memo(function ServerDeleteDialog({
 
           <p
             role={error ? "alert" : undefined}
-            className={`min-h-4 text-[0.625rem] leading-4 ${
+            className={`type-meta min-h-4 ${
               error ? "text-destructive" : "text-muted-foreground"
             }`}
           >

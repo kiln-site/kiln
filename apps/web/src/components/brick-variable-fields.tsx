@@ -37,7 +37,7 @@ export const BrickVariableField = React.memo(function BrickVariableField({
       <label className="flex cursor-pointer items-center justify-between rounded-lg border border-border/75 bg-background/45 px-3 py-2.5 text-xs">
         <span>
           <span className="block font-medium">{definition.label}</span>
-          <span className="mt-0.5 block text-[0.5625rem] leading-4 text-muted-foreground">
+          <span className="type-meta mt-0.5 block text-muted-foreground">
             {fieldDescription}
           </span>
         </span>
@@ -64,10 +64,10 @@ export const BrickVariableField = React.memo(function BrickVariableField({
         : ""
 
   return (
-    <div className="block space-y-1.5 text-[0.625rem] font-medium text-muted-foreground">
+    <div className="type-label block space-y-1.5 text-muted-foreground">
       <span className="flex items-center justify-between gap-2">
         <span id={labelId}>{definition.label}</span>
-        <span className="font-mono text-[0.5rem] text-muted-foreground/55">
+        <span className="type-meta font-mono text-muted-foreground">
           {name}
         </span>
       </span>
@@ -167,9 +167,7 @@ export const BrickVariableField = React.memo(function BrickVariableField({
           required={definition.required}
         />
       )}
-      <span className="block text-[0.5625rem] leading-4 font-normal">
-        {fieldDescription}
-      </span>
+      <span className="type-meta block font-normal">{fieldDescription}</span>
     </div>
   )
 })
