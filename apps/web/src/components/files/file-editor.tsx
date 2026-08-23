@@ -119,27 +119,54 @@ function Editor({
 
   React.useLayoutEffect(() => {
     const section = sectionRef.current
-    const gutters = section?.querySelector<HTMLElement>(".cm-gutters")
-    if (!section || !gutters) return
+    if (!section) return
     const sectionElement = section
-    const gutterElement = gutters
+    let gutterElement: HTMLElement | null = null
+    let resizeObserver: ResizeObserver | null = null
 
     function syncGutterWidth() {
-      const nextWidth = `${gutterElement.getBoundingClientRect().width}px`
+      if (!gutterElement) return false
+      const gutterWidth = gutterElement.getBoundingClientRect().width
+      if (gutterWidth <= 0) return false
+      const nextWidth = `${gutterWidth}px`
       if (
         sectionElement.style.getPropertyValue("--file-editor-gutter-width") ===
         nextWidth
       ) {
-        return
+        return true
       }
       sectionElement.style.setProperty("--file-editor-gutter-width", nextWidth)
+      return true
     }
 
-    syncGutterWidth()
-    const observer = new ResizeObserver(syncGutterWidth)
-    observer.observe(gutterElement)
-    return () => observer.disconnect()
-  }, [file.path])
+    function observeGutter() {
+      gutterElement =
+        sectionElement.querySelector<HTMLElement>(".cm-gutters")
+      if (!gutterElement) return false
+      resizeObserver = new ResizeObserver(() => {
+        if (syncGutterWidth()) resizeObserver?.unobserve(sectionElement)
+      })
+      resizeObserver.observe(gutterElement)
+      if (!syncGutterWidth()) resizeObserver.observe(sectionElement)
+      return true
+    }
+
+    const mutationObserver = new MutationObserver(() => {
+      if (observeGutter()) mutationObserver.disconnect()
+    })
+
+    if (!observeGutter()) {
+      mutationObserver.observe(sectionElement, {
+        childList: true,
+        subtree: true,
+      })
+    }
+
+    return () => {
+      mutationObserver.disconnect()
+      resizeObserver?.disconnect()
+    }
+  }, [file.path, treeCollapsed])
 
   return (
     <section
