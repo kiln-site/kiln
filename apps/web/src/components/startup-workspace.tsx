@@ -404,34 +404,23 @@ const StartupForm = React.memo(function StartupForm({
   return (
     <section className="min-h-0 flex-1 overflow-y-auto bg-card">
       <div className="mx-auto max-w-3xl space-y-6 px-5 py-6 sm:px-8 sm:py-8">
-        <StartupSection title="Brick Selection">
-          <BrickSummary
-            view={view}
-            canEdit={canEdit}
-            pending={pending}
-            onReinstall={() => setReinstallOpen(true)}
-            onSwap={() => setSwapOpen(true)}
-          />
-        </StartupSection>
-
         <StartupSettingsForm
           allocation={allocation}
-          brickId={view.id}
-          brickName={view.name}
           canEdit={canEdit}
           configuredMemoryBytes={configuredMemoryBytes}
           diskLimitGiB={diskLimitGiB}
-          environment={view.environment}
           error={reinstallOpen ? null : error}
           isRunning={isRunning}
           pending={pending}
           saved={saved}
-          variableDefinitions={view.variables}
-          variables={variables}
           memoryVariable={memoryVariable}
           memoryValue={memoryValue}
+          variables={variables}
+          view={view}
           onDiskLimitChange={setDiskLimitGiB}
+          onReinstall={() => setReinstallOpen(true)}
           onSubmit={onSubmit}
+          onSwap={() => setSwapOpen(true)}
           onVariableChange={(name, value) => {
             if (!canEdit) return
             setVariables((current) => {
@@ -480,46 +469,45 @@ const StartupForm = React.memo(function StartupForm({
 
 function StartupSettingsForm({
   allocation,
-  brickId,
-  brickName,
   canEdit,
   configuredMemoryBytes,
   diskLimitGiB,
-  environment,
   error,
   isRunning,
   pending,
   saved,
-  variableDefinitions,
-  variables,
   memoryVariable,
   memoryValue,
+  variables,
+  view,
   onDiskLimitChange,
+  onReinstall,
   onSubmit,
+  onSwap,
   onVariableChange,
 }: {
   allocation: StartupResourceAllocation
-  brickId: string
-  brickName: string
   canEdit: boolean
   configuredMemoryBytes: number
   diskLimitGiB: string
-  environment: Brick["runtime"]["environment"]
   error: string | null
   isRunning: boolean
   pending: boolean
   saved: boolean
-  variableDefinitions: Brick["variables"]
-  variables: Record<string, BrickVariableValue>
   memoryVariable: string | null
   memoryValue: string | undefined
+  variables: Record<string, BrickVariableValue>
+  view: BrickView
   onDiskLimitChange: (value: string) => void
+  onReinstall: () => void
   onSubmit: React.FormEventHandler<HTMLFormElement>
+  onSwap: () => void
   onVariableChange: (
     name: string,
     value: BrickVariableValue | undefined
   ) => void
 }) {
+  const variableDefinitions = view.variables
   const javaArgsDefinition = variableDefinitions.java_args
   const pairVersionAndJava =
     canPairMinecraftJavaVersionFields(variableDefinitions)
@@ -538,9 +526,9 @@ function StartupSettingsForm({
     ? variableDefinitions[memoryVariable]
     : undefined
   const managedFlags = javaArgsDefinition
-    ? managedJavaStartupFlags(environment, memoryValue, variables, {
-        id: brickId,
-        name: brickName,
+    ? managedJavaStartupFlags(view.environment, memoryValue, variables, {
+        id: view.id,
+        name: view.name,
       })
     : null
   const hasFields =
@@ -581,54 +569,67 @@ function StartupSettingsForm({
       </StartupSection>
 
       <StartupSection title="Brick Configuration">
-        {hasFields ? (
-          <div className="space-y-3 rounded-xl border border-border/75 bg-background/45 p-4">
-            {entries.map(([name, definition]) => (
-              <BrickVariableField
-                key={name}
-                name={name}
-                definition={definition}
-                value={variables[name]}
-                onChange={(value) => onVariableChange(name, value)}
-              />
-            ))}
-            {pairVersionAndJava ? (
-              <MinecraftJavaVersionFields
-                brickId={brickId}
-                disabled={!canEdit || pending}
-                environment={environment}
-                javaVersion={
-                  typeof variables.java_version === "string"
-                    ? variables.java_version
-                    : ""
-                }
-                onJavaVersionChange={(value) =>
-                  onVariableChange("java_version", value)
-                }
-                onVersionChange={(value) => onVariableChange("version", value)}
-                variableDefinitions={variableDefinitions}
-                version={
-                  typeof variables.version === "string" ? variables.version : ""
-                }
-              />
-            ) : null}
-            {javaArgsDefinition ? (
-              <>
-                <ManagedJavaFlagsField value={managedFlags ?? ""} />
+        <div className="overflow-hidden rounded-xl border border-border/75 bg-background/45">
+          <BrickSummary
+            view={view}
+            canEdit={canEdit}
+            pending={pending}
+            onReinstall={onReinstall}
+            onSwap={onSwap}
+          />
+          {hasFields ? (
+            <div className="space-y-3 border-t border-border/65 p-4">
+              {entries.map(([name, definition]) => (
                 <BrickVariableField
-                  name="java_args"
-                  definition={javaArgsDefinition}
-                  value={variables.java_args}
-                  onChange={(value) => onVariableChange("java_args", value)}
+                  key={name}
+                  name={name}
+                  definition={definition}
+                  value={variables[name]}
+                  onChange={(value) => onVariableChange(name, value)}
                 />
-              </>
-            ) : null}
-          </div>
-        ) : (
-          <div className="rounded-xl border border-border/75 bg-background/45 px-4 py-8 text-center text-xs text-muted-foreground">
-            This Brick has no configurable Startup variables.
-          </div>
-        )}
+              ))}
+              {pairVersionAndJava ? (
+                <MinecraftJavaVersionFields
+                  brickId={view.id}
+                  disabled={!canEdit || pending}
+                  environment={view.environment}
+                  javaVersion={
+                    typeof variables.java_version === "string"
+                      ? variables.java_version
+                      : ""
+                  }
+                  onJavaVersionChange={(value) =>
+                    onVariableChange("java_version", value)
+                  }
+                  onVersionChange={(value) =>
+                    onVariableChange("version", value)
+                  }
+                  variableDefinitions={variableDefinitions}
+                  version={
+                    typeof variables.version === "string"
+                      ? variables.version
+                      : ""
+                  }
+                />
+              ) : null}
+              {javaArgsDefinition ? (
+                <>
+                  <ManagedJavaFlagsField value={managedFlags ?? ""} />
+                  <BrickVariableField
+                    name="java_args"
+                    definition={javaArgsDefinition}
+                    value={variables.java_args}
+                    onChange={(value) => onVariableChange("java_args", value)}
+                  />
+                </>
+              ) : null}
+            </div>
+          ) : (
+            <div className="border-t border-border/65 px-4 py-8 text-center text-xs text-muted-foreground">
+              This Brick has no configurable Startup variables.
+            </div>
+          )}
+        </div>
       </StartupSection>
 
       {error ? (
@@ -765,7 +766,7 @@ function BrickSummary({
           </div>
         ) : null
       }
-      className="bg-background/45"
+      className="rounded-none border-0 bg-transparent"
       icon={<ServerTypeIcon implementation={view.id} className="size-5" />}
       title={view.name}
       titleAccessory={
