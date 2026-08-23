@@ -21,6 +21,7 @@ import {
   parseTrustedOrigins,
   publicSignupEnabled,
 } from "@/lib/environment"
+import { passwordConfirmation } from "@/lib/password-confirmation"
 
 const publicUrl = kilnPublicUrl()
 const authUrl = betterAuthUrl()
@@ -92,6 +93,7 @@ export const auth = betterAuth({
       "/email-otp/send-verification-otp": { window: 60, max: 3 },
       "/email-otp/request-password-reset": { window: 60, max: 3 },
       "/email-otp/reset-password": { window: 60, max: 5 },
+      "/password-confirmation/confirm": { window: 60, max: 5 },
     },
   },
   hooks: {
@@ -219,6 +221,7 @@ export const auth = betterAuth({
         userVerification: "required",
       },
     }),
+    passwordConfirmation(),
     tanstackStartCookies(),
   ],
 })

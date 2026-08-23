@@ -697,8 +697,11 @@ function TwoFactorCard() {
 
 function PasskeysCard() {
   const passkeys = authClient.useListPasskeys()
+  const session = authClient.useSession()
+  const queryClient = useQueryClient()
   const [open, setOpen] = React.useState(false)
   const [passkeyName, setPasskeyName] = React.useState("")
+  const [password, setPassword] = React.useState("")
   const [pending, setPending] = React.useState<string | null>(null)
 
   async function addPasskey(event: React.FormEvent<HTMLFormElement>) {
@@ -711,6 +714,30 @@ function PasskeysCard() {
       return
     }
     setPending("add")
+    const confirmation = await recoverPromise(
+      () => authClient.passwordConfirmation.confirm({ password }),
+      (cause) => failedAuthResult(cause, "Could not confirm your password")
+    )
+    if (confirmation.error) {
+      setPending(null)
+      setPassword("")
+      showToast({
+        message: hasAuthErrorCode(confirmation.error, "INVALID_PASSWORD")
+          ? "Incorrect password. Try again."
+          : authErrorMessage(
+              confirmation.error,
+              "Could not confirm your password"
+            ),
+        type: "error",
+      })
+      return
+    }
+
+    setPassword("")
+    await Promise.all([
+      session.refetch(),
+      queryClient.invalidateQueries({ queryKey: activeSessionsQueryKey }),
+    ])
     const result = await recoverPromise(
       () =>
         authClient.passkey.addPasskey({
@@ -720,6 +747,14 @@ function PasskeysCard() {
     )
     setPending(null)
     if (result.error) {
+      if (isSessionNotFresh(result.error)) {
+        showToast({
+          message:
+            "Your password confirmation expired. Enter your password and try again.",
+          type: "error",
+        })
+        return
+      }
       showToast({
         message: authErrorMessage(result.error, "Could not add the passkey"),
         type: "error",
@@ -727,9 +762,18 @@ function PasskeysCard() {
       return
     }
     setPasskeyName("")
-    setOpen(false)
+    changeOpen(false)
     showToast({ message: "Passkey added.", type: "success" })
     await passkeys.refetch()
+  }
+
+  function changeOpen(nextOpen: boolean) {
+    if (pending) return
+    setOpen(nextOpen)
+    if (!nextOpen) {
+      setPasskeyName("")
+      setPassword("")
+    }
   }
 
   async function deletePasskey(id: string) {
@@ -805,12 +849,13 @@ function PasskeysCard() {
         </div>
       ) : null}
 
-      <Dialog open={open} onOpenChange={setOpen}>
+      <Dialog open={open} onOpenChange={changeOpen}>
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Add a passkey</DialogTitle>
             <DialogDescription>
-              Use this device’s fingerprint, face recognition, or security key.
+              Confirm your password, then use this device’s fingerprint, face
+              recognition, or security key.
             </DialogDescription>
           </DialogHeader>
           <form className="grid gap-4" onSubmit={addPasskey}>
@@ -825,11 +870,22 @@ function PasskeysCard() {
                 autoFocus
               />
             </Field>
+            <Field label="Current password" htmlFor="passkey-password">
+              <Input
+                id="passkey-password"
+                type="password"
+                value={password}
+                onChange={(event) => setPassword(event.target.value)}
+                autoComplete="current-password"
+                className="h-10 bg-background/70"
+                required
+              />
+            </Field>
             <DialogFooter>
               <Button
                 type="button"
                 variant="ghost"
-                onClick={() => setOpen(false)}
+                onClick={() => changeOpen(false)}
                 disabled={pending !== null}
               >
                 Cancel
@@ -1287,6 +1343,20 @@ function authErrorMessage(error: unknown, fallback: string): string {
   if (typeof message === "string" && message) return message
   const statusText = Reflect.get(error, "statusText")
   return typeof statusText === "string" && statusText ? statusText : fallback
+}
+
+function isSessionNotFresh(error: unknown): boolean {
+  if (hasAuthErrorCode(error, "SESSION_NOT_FRESH")) return true
+  if (typeof error !== "object" || error === null) return false
+  return Reflect.get(error, "message") === "Session is not fresh"
+}
+
+function hasAuthErrorCode(error: unknown, expectedCode: string): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    Reflect.get(error, "code") === expectedCode
+  )
 }
 
 function validateNewPassword(
