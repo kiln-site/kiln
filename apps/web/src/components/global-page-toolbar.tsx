@@ -111,7 +111,7 @@ export const ToolbarSidebarTrigger = React.memo(
       <Tooltip>
         <TooltipTrigger asChild>
           <SidebarTrigger
-            className="-ml-1 size-8 shrink-0 text-muted-foreground shadow-none hover:bg-accent/70 hover:text-foreground"
+            className="-mr-1.5 -ml-2.5 size-8 shrink-0 text-muted-foreground shadow-none hover:bg-accent/70 hover:text-foreground"
             aria-label="Toggle sidebar"
           />
         </TooltipTrigger>

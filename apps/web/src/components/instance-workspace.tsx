@@ -261,7 +261,7 @@ function InstanceWorkspaceHeader() {
 
   return (
     <header className="shrink-0 border-b bg-background/90 backdrop-blur-xl">
-      <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-3 px-3 py-3 sm:px-5 lg:min-h-20 lg:py-2 xl:grid-cols-[minmax(0,1fr)_39rem_auto] xl:gap-x-5">
+      <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-3 px-3 py-3 sm:px-5 lg:min-h-20 lg:py-2 xl:grid-cols-[minmax(0,1fr)_36rem_auto] xl:gap-x-3">
         <div className="col-start-1 row-start-1 flex min-w-0 items-center gap-4">
           <ToolbarSidebarTrigger />
           <span className="h-8 w-px shrink-0 bg-border/80" aria-hidden="true" />
@@ -605,7 +605,7 @@ function ServerPowerControls({
               <Button
                 variant="outline"
                 size="icon-lg"
-                className="bg-card shadow-none"
+                className="h-9 w-8 bg-card shadow-none"
                 aria-label="Server actions"
                 disabled={controlsUnavailable}
               >
