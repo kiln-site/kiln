@@ -1441,12 +1441,6 @@ function ResourceHistoryCard({
     : null
   const peak = values.length ? Math.max(...values) : null
   const latest = visibleHistory.at(-1)
-  const receivedStats = historyStatistics(
-    visibleHistory.map((sample) => sample.networkReceived)
-  )
-  const sentStats = historyStatistics(
-    visibleHistory.map((sample) => sample.networkSent)
-  )
   const chartData = visibleHistory.map((sample) => ({
     timestamp: sample.timestamp,
     value: sample[resource.id],
@@ -1463,8 +1457,6 @@ function ResourceHistoryCard({
         peak={peak}
         networkReceived={latest?.networkReceived ?? null}
         networkSent={latest?.networkSent ?? null}
-        receivedStats={receivedStats}
-        sentStats={sentStats}
       />
 
       <div className="px-1.5 pt-2.5">
@@ -1498,32 +1490,18 @@ function ResourceHistoryHeader({
   peak,
   networkReceived,
   networkSent,
-  receivedStats,
-  sentStats,
 }: {
   resource: ResourceItem
   average: number | null
   peak: number | null
   networkReceived: number | null
   networkSent: number | null
-  receivedStats: ReturnType<typeof historyStatistics>
-  sentStats: ReturnType<typeof historyStatistics>
 }) {
   if (resource.id === "network") {
     return (
-      <div className="grid h-14 grid-cols-2 divide-x divide-border/55 border-b border-border/70 bg-muted/[0.08]">
-        <NetworkHistoryValue
-          direction="down"
-          value={networkReceived}
-          average={receivedStats.average}
-          peak={receivedStats.peak}
-        />
-        <NetworkHistoryValue
-          direction="up"
-          value={networkSent}
-          average={sentStats.average}
-          peak={sentStats.peak}
-        />
+      <div className="grid h-12 grid-cols-2 divide-x divide-border/55 border-b border-border/70 bg-muted/[0.08]">
+        <NetworkHistoryValue direction="down" value={networkReceived} />
+        <NetworkHistoryValue direction="up" value={networkSent} />
       </div>
     )
   }
@@ -1620,47 +1598,22 @@ function HistoryStat({
 function NetworkHistoryValue({
   direction,
   value,
-  average,
-  peak,
 }: {
   direction: "down" | "up"
   value: number | null
-  average: number | null
-  peak: number | null
 }) {
   return (
-    <div className="flex min-w-0 flex-col justify-center gap-1.5 px-3 py-2">
-      <div className="flex min-w-0 items-baseline justify-between gap-3">
-        <span className="type-technical-label shrink-0 text-muted-foreground">
-          {direction === "down" ? "↓ In" : "↑ Out"}
-        </span>
-        <span
-          className={`type-code truncate leading-none font-medium tracking-[-0.025em] tabular-nums ${direction === "down" ? "text-cyan-200" : "text-primary"}`}
-        >
-          {value === null ? "—" : formatBytesPerSecond(value)}
-        </span>
-      </div>
-      <div className="type-meta flex items-center justify-between gap-3 font-mono leading-none tracking-[0.02em] text-muted-foreground uppercase tabular-nums">
-        <span>
-          Avg {average === null ? "—" : formatBytesPerSecond(average)}
-        </span>
-        <span>Peak {peak === null ? "—" : formatBytesPerSecond(peak)}</span>
-      </div>
+    <div className="flex min-w-0 items-baseline justify-between gap-3 px-3">
+      <span className="type-technical-label shrink-0 text-muted-foreground">
+        {direction === "down" ? "↓ In" : "↑ Out"}
+      </span>
+      <span
+        className={`type-code truncate leading-none font-medium tracking-[-0.025em] tabular-nums ${direction === "down" ? "text-cyan-200" : "text-primary"}`}
+      >
+        {value === null ? "—" : formatBytesPerSecond(value)}
+      </span>
     </div>
   )
-}
-
-function historyStatistics(values: Array<number | null>): {
-  average: number | null
-  peak: number | null
-} {
-  const samples = values.filter((value): value is number => value !== null)
-  return {
-    average: samples.length
-      ? samples.reduce((total, value) => total + value, 0) / samples.length
-      : null,
-    peak: samples.length ? Math.max(...samples) : null,
-  }
 }
 
 function formatHistoryValue(
