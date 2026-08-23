@@ -6,42 +6,47 @@ import {
 } from "./managed-java-flags.js"
 
 const paperEnv = {
+  KILN_ARTIFACT_FILE: "{{ variables.server_jar_file }}",
   KILN_JAVA_MAX_RAM_PERCENTAGE: "75.0",
   MIN_RAM: "512M",
 }
 
 describe("managed Java startup flags", () => {
   it("shows a 75% heap from container memory and --nogui", () => {
-    expect(managedJavaStartupFlags(paperEnv, "2G")).toBe(
-      "-Xms512M -Xmx1536M --nogui"
-    )
-    expect(managedJavaStartupFlags(paperEnv, "4G")).toBe(
-      "-Xms512M -Xmx3G --nogui"
-    )
+    expect(
+      managedJavaStartupFlags(paperEnv, "2G", {
+        server_jar_file: "paper.jar",
+      })
+    ).toBe("-Xms512M -Xmx1536M -jar paper.jar --nogui")
+    expect(
+      managedJavaStartupFlags(paperEnv, "4G", {
+        server_jar_file: "custom.jar",
+      })
+    ).toBe("-Xms512M -Xmx3G -jar custom.jar --nogui")
   })
 
   it("omits --nogui when the recipe clears server arguments", () => {
     expect(
-      managedJavaStartupFlags(
-        { ...paperEnv, KILN_SERVER_ARGS: "" },
-        "1G"
-      )
-    ).toBe("-Xms512M -Xmx768M")
+      managedJavaStartupFlags({ ...paperEnv, KILN_SERVER_ARGS: "" }, "1G", {
+        server_jar_file: "paper.jar",
+      })
+    ).toBe("-Xms512M -Xmx768M -jar paper.jar")
   })
 
   it("uses MAX_RAM when the recipe pins an explicit heap", () => {
     expect(
-      managedJavaStartupFlags(
-        { ...paperEnv, MAX_RAM: "1800M" },
-        "4G"
-      )
-    ).toBe("-Xms512M -Xmx1800M --nogui")
+      managedJavaStartupFlags({ ...paperEnv, MAX_RAM: "1800M" }, "4G", {
+        server_jar_file: "paper.jar",
+      })
+    ).toBe("-Xms512M -Xmx1800M -jar paper.jar --nogui")
   })
 
   it("falls back to MaxRAMPercentage when memory is not a Docker size", () => {
-    expect(managedJavaStartupFlags(paperEnv, "plenty")).toBe(
-      "-Xms512M -XX:MaxRAMPercentage=75 --nogui"
-    )
+    expect(
+      managedJavaStartupFlags(paperEnv, "plenty", {
+        server_jar_file: "paper.jar",
+      })
+    ).toBe("-Xms512M -XX:MaxRAMPercentage=75 -jar paper.jar --nogui")
   })
 
   it("parses Docker memory amounts", () => {

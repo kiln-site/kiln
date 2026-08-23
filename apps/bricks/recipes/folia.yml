@@ -28,13 +28,20 @@ variables:
     required: true
     default: "21"
     rules: { pattern: "^(?:11|17|21|25)$", maxLength: 2 }
+  server_jar_file:
+    type: string
+    label: Server Jar File
+    description: Filename Kiln downloads and starts.
+    required: true
+    default: folia.jar
+    rules: { pattern: "^[A-Za-z0-9][A-Za-z0-9._\\-]{0,123}\\.jar$", maxLength: 128 }
   java_args:
     type: string
     label: Java arguments
-    description: Extra JVM flags. Heap size and --nogui are managed by Kiln and cannot be set here.
+    description: Extra JVM flags. Heap size and startup command arguments are managed by Kiln and cannot be set here.
     required: false
     default: "-XX:+UseG1GC -XX:+ParallelRefProcEnabled -XX:MaxGCPauseMillis=200 -XX:+UnlockExperimentalVMOptions -XX:+DisableExplicitGC -XX:+AlwaysPreTouch -XX:G1HeapWastePercent=5 -XX:G1MixedGCCountTarget=4 -XX:InitiatingHeapOccupancyPercent=15 -XX:G1MixedGCLiveThresholdPercent=90 -XX:G1RSetUpdatingPauseTimePercent=5 -XX:SurvivorRatio=32 -XX:+PerfDisableSharedMem -XX:MaxTenuringThreshold=1 -Dusing.aikars.flags=https://mcflags.emc.gs -Daikars.new.flags=true -XX:G1NewSizePercent=30 -XX:G1MaxNewSizePercent=40 -XX:G1HeapRegionSize=8M -XX:G1ReservePercent=20"
-    rules: { maxLength: 2048, pattern: "^(?!.*(?:^|\\s)(?:@(?!@)\\S+|-Xm[sx]\\S*|-XX:(?:-UseContainerSupport|-UseCGroupMemoryLimitForHeap|InitialHeapSize|MaxHeapSize|SoftMaxHeapSize|MaxRAMPercentage|MinRAMPercentage|InitialRAMPercentage|MaxRAMFraction|InitialRAMFraction|MinRAMFraction|MaxRAM|VMOptionsFile|Flags)(?:=\\S*)?|--nogui)(?:\\s|$)).*$" }
+    rules: { maxLength: 2048, pattern: "^(?!.*(?:^|\\s)(?:@(?!@)\\S+|-Xm[sx]\\S*|-XX:(?:-UseContainerSupport|-UseCGroupMemoryLimitForHeap|InitialHeapSize|MaxHeapSize|SoftMaxHeapSize|MaxRAMPercentage|MinRAMPercentage|InitialRAMPercentage|MaxRAMFraction|InitialRAMFraction|MinRAMFraction|MaxRAM|VMOptionsFile|Flags)(?:=\\S*)?|--nogui|-jar)(?:\\s|$)).*$" }
 runtime:
   image: "ghcr.io/kiln-site/bricks-java:{{ variables.java_version }}"
   name: "Java {{ variables.java_version }}"
@@ -42,7 +49,7 @@ runtime:
     KILN_IMPLEMENTATION: folia
     KILN_VERSION: "{{ variables.version }}"
     KILN_ARTIFACT_URL: "https://mcjarfiles.com/api/get-jar/servers/folia/{{ variables.version }}"
-    KILN_ARTIFACT_FILE: folia.jar
+    KILN_ARTIFACT_FILE: "{{ variables.server_jar_file }}"
     KILN_INSTALLATION_MARKER: .kiln-ember-installed
     KILN_SERVER_KIND: minecraft
     KILN_JAVA_ARGS: "{{ variables.java_args }}"

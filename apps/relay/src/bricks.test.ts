@@ -190,7 +190,7 @@ describe("Brick recipes", () => {
           rules: {
             maxLength: 2048,
             pattern:
-              "^(?!.*(?:^|\\s)(?:@(?!@)\\S+|-Xm[sx]\\S*|-XX:(?:-UseContainerSupport|-UseCGroupMemoryLimitForHeap|InitialHeapSize|MaxHeapSize|SoftMaxHeapSize|MaxRAMPercentage|MinRAMPercentage|InitialRAMPercentage|MaxRAMFraction|InitialRAMFraction|MinRAMFraction|MaxRAM|VMOptionsFile|Flags)(?:=\\S*)?|--nogui)(?:\\s|$)).*$",
+              "^(?!.*(?:^|\\s)(?:@(?!@)\\S+|-Xm[sx]\\S*|-XX:(?:-UseContainerSupport|-UseCGroupMemoryLimitForHeap|InitialHeapSize|MaxHeapSize|SoftMaxHeapSize|MaxRAMPercentage|MinRAMPercentage|InitialRAMPercentage|MaxRAMFraction|InitialRAMFraction|MinRAMFraction|MaxRAM|VMOptionsFile|Flags)(?:=\\S*)?|--nogui|-jar)(?:\\s|$)).*$",
           },
         },
       },
@@ -221,6 +221,9 @@ describe("Brick recipes", () => {
     ).toThrow(/recipe rule/u)
     expect(() =>
       resolveBrick(javaRecipe, { java_args: "-XX:+UseG1GC --nogui" })
+    ).toThrow(/recipe rule/u)
+    expect(() =>
+      resolveBrick(javaRecipe, { java_args: "-jar untrusted.jar" })
     ).toThrow(/recipe rule/u)
     expect(
       resolveBrick(javaRecipe, {

@@ -80,7 +80,10 @@ async function runPaperJavaEmber(context, envOverrides = {}) {
 }
 
 test("the Java Ember jlink runtime includes the Java SE API set", async () => {
-  const dockerfile = await readFile(join(root, "embers/java/Dockerfile"), "utf8")
+  const dockerfile = await readFile(
+    join(root, "embers/java/Dockerfile"),
+    "utf8"
+  )
   assert.match(dockerfile, /\bjava\.se\b/u)
   assert.match(dockerfile, /\bjdk\.unsupported\b/u)
   assert.match(dockerfile, /\bjdk\.incubator\.vector\b/u)
@@ -376,7 +379,7 @@ test("the Java Ember inserts extra JVM arguments between memory flags and the ja
 
 test("the Java Ember keeps quoted JVM argument values as a single argument", async (context) => {
   const result = await runPaperJavaEmber(context, {
-    KILN_JAVA_ARGS: '-Dmessage="hello world" -Dpath=\'plugins/My Plugin\'',
+    KILN_JAVA_ARGS: "-Dmessage=\"hello world\" -Dpath='plugins/My Plugin'",
   })
 
   assert.equal(result.status, 0, result.stderr)
@@ -393,11 +396,35 @@ test("the Java Ember keeps quoted JVM argument values as a single argument", asy
 
 test("the Java Ember ignores heap aliases in extra JVM arguments", async (context) => {
   const result = await runPaperJavaEmber(context, {
-    KILN_JAVA_ARGS: "-XX:+UseG1GC -XX:MaxHeapSize=1G -Xmx2G -XX:MaxRAMPercentage=90",
+    KILN_JAVA_ARGS:
+      "-XX:+UseG1GC -XX:MaxHeapSize=1G -Xmx2G -XX:MaxRAMPercentage=90",
   })
 
   assert.equal(result.status, 0, result.stderr)
-  assert.match(result.stderr, /ignoring managed JVM flags: -XX:MaxHeapSize=1G -Xmx2G -XX:MaxRAMPercentage=90/u)
+  assert.match(
+    result.stderr,
+    /ignoring managed JVM flags: -XX:MaxHeapSize=1G -Xmx2G -XX:MaxRAMPercentage=90/u
+  )
+  assert.deepEqual(result.args, [
+    "-Xms512M",
+    "-XX:MaxRAMPercentage=75.0",
+    "-XX:+UseG1GC",
+    "-jar",
+    "paper.jar",
+    "--nogui",
+  ])
+})
+
+test("the Java Ember ignores an overridden server jar", async (context) => {
+  const result = await runPaperJavaEmber(context, {
+    KILN_JAVA_ARGS: "-XX:+UseG1GC -jar untrusted.jar",
+  })
+
+  assert.equal(result.status, 0, result.stderr)
+  assert.match(
+    result.stderr,
+    /ignoring managed JVM flags: -jar untrusted\.jar/u
+  )
   assert.deepEqual(result.args, [
     "-Xms512M",
     "-XX:MaxRAMPercentage=75.0",
@@ -410,7 +437,8 @@ test("the Java Ember ignores heap aliases in extra JVM arguments", async (contex
 
 test("the Java Ember ignores flags that disable container-aware heap", async (context) => {
   const result = await runPaperJavaEmber(context, {
-    KILN_JAVA_ARGS: "-XX:+UseG1GC -XX:-UseContainerSupport -XX:-UseCGroupMemoryLimitForHeap",
+    KILN_JAVA_ARGS:
+      "-XX:+UseG1GC -XX:-UseContainerSupport -XX:-UseCGroupMemoryLimitForHeap",
   })
 
   assert.equal(result.status, 0, result.stderr)
@@ -443,14 +471,20 @@ test("the Java Ember rejects JVM argument files in extra JVM arguments", async (
     KILN_JAVA_ARGS: "-XX:+UseG1GC @/server/flags.txt",
   })
   assert.equal(argfile.status, 64, argfile.stderr)
-  assert.match(argfile.stderr, /Java argument files are not allowed in KILN_JAVA_ARGS: @\/server\/flags.txt/u)
+  assert.match(
+    argfile.stderr,
+    /Java argument files are not allowed in KILN_JAVA_ARGS: @\/server\/flags.txt/u
+  )
   assert.deepEqual(argfile.args, [])
 
   const optionsFile = await runPaperJavaEmber(context, {
     KILN_JAVA_ARGS: "-XX:VMOptionsFile=/server/flags.txt",
   })
   assert.equal(optionsFile.status, 64, optionsFile.stderr)
-  assert.match(optionsFile.stderr, /Java argument files are not allowed in KILN_JAVA_ARGS: -XX:VMOptionsFile=\/server\/flags.txt/u)
+  assert.match(
+    optionsFile.stderr,
+    /Java argument files are not allowed in KILN_JAVA_ARGS: -XX:VMOptionsFile=\/server\/flags.txt/u
+  )
   assert.deepEqual(optionsFile.args, [])
 })
 

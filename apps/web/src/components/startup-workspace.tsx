@@ -577,15 +577,6 @@ function StartupSettingsForm({
           />
           {hasFields ? (
             <div className="space-y-3 border-t border-border/65 p-4">
-              {entries.map(([name, definition]) => (
-                <BrickVariableField
-                  key={name}
-                  name={name}
-                  definition={definition}
-                  value={variables[name]}
-                  onChange={(value) => onVariableChange(name, value)}
-                />
-              ))}
               {pairVersionAndJava ? (
                 <MinecraftJavaVersionFields
                   brickId={view.id}
@@ -611,6 +602,15 @@ function StartupSettingsForm({
                   }
                 />
               ) : null}
+              {entries.map(([name, definition]) => (
+                <BrickVariableField
+                  key={name}
+                  name={name}
+                  definition={definition}
+                  value={variables[name]}
+                  onChange={(value) => onVariableChange(name, value)}
+                />
+              ))}
               {javaArgsDefinition ? (
                 <>
                   <ManagedJavaFlagsField value={managedFlags ?? ""} />

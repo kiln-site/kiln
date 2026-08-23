@@ -51,6 +51,8 @@ export function managedJavaStartupFlags(
         : `-XX:MaxRAMPercentage=${Number.isFinite(percentage) ? percentage : DEFAULT_MAX_RAM_PERCENTAGE}`
     )
   }
+  const artifactFile = resolved.KILN_ARTIFACT_FILE?.trim()
+  if (artifactFile) flags.push("-jar", artifactFile)
   if (!Object.hasOwn(resolved, "KILN_SERVER_ARGS")) flags.push("--nogui")
   else {
     const serverArgs = resolved.KILN_SERVER_ARGS.trim()

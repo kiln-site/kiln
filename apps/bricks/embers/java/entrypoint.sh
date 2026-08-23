@@ -123,7 +123,16 @@ is_managed_java_arg() {
 parse_quoted_args "${KILN_JAVA_ARGS:-}" || exit $?
 extra_java_args=()
 ignored_java_args=()
-for arg in "${quoted_args[@]}"; do
+for ((argument_index = 0; argument_index < ${#quoted_args[@]}; argument_index++)); do
+  arg=${quoted_args[argument_index]}
+  if [[ ${arg} == -jar ]]; then
+    ignored_java_args+=("${arg}")
+    if ((argument_index + 1 < ${#quoted_args[@]})); then
+      argument_index=$((argument_index + 1))
+      ignored_java_args+=("${quoted_args[argument_index]}")
+    fi
+    continue
+  fi
   if is_java_argument_file "${arg}"; then
     echo "[Kiln Ember] Java argument files are not allowed in KILN_JAVA_ARGS: ${arg}" >&2
     exit 64
