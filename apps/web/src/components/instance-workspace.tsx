@@ -1603,12 +1603,12 @@ function NetworkHistoryValue({
   value: number | null
 }) {
   return (
-    <div className="flex min-w-0 items-baseline justify-between gap-3 px-3">
-      <span className="type-technical-label shrink-0 text-muted-foreground">
+    <div className="flex min-w-0 flex-col justify-center gap-1 px-3">
+      <span className="type-technical-label text-muted-foreground">
         {direction === "down" ? "↓ In" : "↑ Out"}
       </span>
       <span
-        className={`type-code truncate leading-none font-medium tracking-[-0.025em] tabular-nums ${direction === "down" ? "text-cyan-200" : "text-primary"}`}
+        className={`type-code truncate leading-none font-medium tracking-[-0.035em] tabular-nums ${direction === "down" ? "text-cyan-200" : "text-primary"}`}
       >
         {value === null ? "—" : formatBytesPerSecond(value)}
       </span>
