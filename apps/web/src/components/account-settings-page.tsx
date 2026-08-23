@@ -1,5 +1,6 @@
 import * as React from "react"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
+import { Effect } from "effect"
 import QRCode from "react-qr-code"
 import {
   Check,
@@ -122,17 +123,25 @@ function DisplayNameCard({
 
   async function updateDisplayName(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault()
-    let nextDisplayName: string
-    try {
-      nextDisplayName = parseDisplayName(displayName)
-    } catch (cause) {
-      showToast({
-        message:
-          cause instanceof Error ? cause.message : "Enter a display name",
-        type: "error",
-      })
-      return
-    }
+    const nextDisplayName = await Effect.runPromise(
+      Effect.try({
+        try: () => parseDisplayName(displayName),
+        catch: (cause) => cause,
+      }).pipe(
+        Effect.match({
+          onFailure: (cause) => {
+            showToast({
+              message:
+                cause instanceof Error ? cause.message : "Enter a display name",
+              type: "error",
+            })
+            return null
+          },
+          onSuccess: (name) => name,
+        })
+      )
+    )
+    if (!nextDisplayName) return
 
     setPending(true)
     const result = await ensuringPromise(
