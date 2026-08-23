@@ -146,7 +146,7 @@ const DomainSummaryCard = React.memo(function DomainSummaryCard({
       title="Vanity URL"
       titleAccessory={<DomainStatus enabled={active} verified={configured} />}
     >
-      <p className="mt-1 truncate font-mono text-[0.625rem] text-muted-foreground">
+      <p className="type-code mt-1 truncate text-muted-foreground">
         {`<vanity>.${integration?.domain ?? "example.com"}`}
       </p>
     </WorkspaceSummaryCard>
@@ -341,7 +341,7 @@ const ManagedDomainRow = React.memo(function ManagedDomainRow({
       <WorkspaceTableCell>
         <div className="min-w-0">
           <p
-            className="truncate font-mono text-[0.625rem] text-foreground"
+            className="type-code truncate text-foreground"
             title={domain.address}
           >
             {domain.address}
@@ -356,29 +356,29 @@ const ManagedDomainRow = React.memo(function ManagedDomainRow({
                     : "size-1.5 rounded-full bg-destructive"
               }
             />
-            <span className="font-mono text-[0.5rem] text-muted-foreground uppercase">
+            <span className="type-technical-label text-muted-foreground">
               {domain.status}
             </span>
           </div>
         </div>
       </WorkspaceTableCell>
       <WorkspaceTableCell className="hidden sm:table-cell">
-        <p className="truncate text-[0.625rem]" title={domain.relayName}>
+        <p className="type-meta truncate" title={domain.relayName}>
           {domain.relayName}
         </p>
-        <p className="truncate font-mono text-[0.5rem] text-muted-foreground">
+        <p className="type-meta truncate font-mono text-muted-foreground">
           {domain.relayId.slice(0, 8)}
         </p>
       </WorkspaceTableCell>
       <WorkspaceTableCell>
-        <span className="font-mono text-[0.625rem]">{domain.port}</span>
+        <span className="type-code">{domain.port}</span>
       </WorkspaceTableCell>
       <WorkspaceTableCell className="hidden md:table-cell">
         <span
           className={
             domain.srvActive
-              ? "inline-flex items-center gap-1 text-[0.5625rem] text-emerald-300"
-              : "text-[0.5625rem] text-muted-foreground"
+              ? "type-meta inline-flex items-center gap-1 text-emerald-300"
+              : "type-meta text-muted-foreground"
           }
         >
           {domain.srvActive ? <Check className="size-3" /> : null}
@@ -391,10 +391,10 @@ const ManagedDomainRow = React.memo(function ManagedDomainRow({
             <Server className="size-3.5" />
           </span>
           <div className="min-w-0">
-            <p className="truncate text-[0.625rem]" title={domain.serverName}>
+            <p className="type-meta truncate" title={domain.serverName}>
               {domain.serverName}
             </p>
-            <p className="truncate font-mono text-[0.5rem] text-muted-foreground">
+            <p className="type-meta truncate font-mono text-muted-foreground">
               {domain.instanceId.slice(0, 8)}
             </p>
           </div>
@@ -411,7 +411,7 @@ function EmptyDomainsTable({ searchActive }: { searchActive: boolean }) {
       <p className="mt-3 text-sm font-semibold">
         {searchActive ? "No domains match your search" : "No Active Domains"}
       </p>
-      <p className="mt-1 max-w-sm text-[0.625rem] leading-4 text-muted-foreground">
+      <p className="type-support mt-1 max-w-sm text-muted-foreground">
         {searchActive
           ? "Try a vanity address, server, Relay, port, status, or ID."
           : "Active vanity addresses will appear here after a server is provisioned."}
@@ -629,7 +629,7 @@ function VanitySettingsForm({
 
   return (
     <div className="space-y-4">
-      <label className="block space-y-1.5 text-[0.6875rem] font-medium">
+      <label className="type-label block space-y-1.5">
         Vanity domain
         <Input
           autoCapitalize="none"
@@ -641,21 +641,18 @@ function VanitySettingsForm({
           value={domain}
           onChange={(event) => onDomainChange(event.currentTarget.value)}
         />
-        <span className="block font-mono text-[0.5625rem] font-normal text-muted-foreground">
+        <span className="type-meta block font-mono text-muted-foreground">
           {`<vanity>.${domain.trim() || "example.gg"}`}
         </span>
       </label>
 
       <div className="space-y-1.5">
         <div className="flex items-center justify-between gap-3">
-          <label
-            className="text-[0.6875rem] font-medium"
-            htmlFor="cloudflare-api-token"
-          >
+          <label className="type-control-sm" htmlFor="cloudflare-api-token">
             Cloudflare API token
           </label>
           <a
-            className="inline-flex items-center gap-1 text-[0.5625rem] font-medium text-primary hover:underline"
+            className="type-label inline-flex items-center gap-1 text-primary hover:underline"
             href="https://dash.cloudflare.com/profile/api-tokens"
             rel="noreferrer"
             target="_blank"
@@ -699,7 +696,7 @@ function VanitySettingsForm({
             </TooltipContent>
           </Tooltip>
         </div>
-        <p className="flex items-start gap-1.5 text-[0.5625rem] leading-4 text-muted-foreground">
+        <p className="type-meta flex items-start gap-1.5 text-muted-foreground">
           <KeyRound className="mt-0.5 size-3 shrink-0" />
           <span>
             {hasIntegration
@@ -712,7 +709,7 @@ function VanitySettingsForm({
       <div className="flex items-center justify-between gap-4 border border-border/75 bg-background/35 p-3">
         <div>
           <p className="text-xs font-medium">Automatic provisioning</p>
-          <p className="mt-0.5 text-[0.625rem] text-muted-foreground">
+          <p className="type-meta mt-0.5 text-muted-foreground">
             Create and reconcile DNS records as servers are provisioned.
           </p>
         </div>
@@ -723,7 +720,7 @@ function VanitySettingsForm({
         />
       </div>
 
-      <label className="block space-y-1.5 text-[0.6875rem] font-medium">
+      <label className="type-label block space-y-1.5">
         Blacklisted vanity names
         <Textarea
           aria-label="Blacklisted vanity name patterns"
@@ -734,7 +731,7 @@ function VanitySettingsForm({
             onBlacklistPatternsChange(event.currentTarget.value)
           }
         />
-        <span className="block text-[0.5625rem] font-normal text-muted-foreground">
+        <span className="type-meta block text-muted-foreground">
           One case-insensitive regular expression per line.
         </span>
       </label>
@@ -771,7 +768,7 @@ function CloudflarePermissionsPreview({
 
       <div className="flex gap-2 border border-amber-500/25 bg-amber-400/8 p-3 text-amber-950/85 dark:border-amber-400/20 dark:bg-amber-400/5 dark:text-amber-100/85">
         <KeyRound className="mt-0.5 size-3.5 shrink-0 text-amber-700 dark:text-amber-300" />
-        <p className="text-[0.625rem] leading-relaxed">
+        <p className="type-meta">
           Kiln encrypts the token at rest, never returns it to the browser, and
           keeps every managed record DNS-only.
         </p>
@@ -786,20 +783,20 @@ function CloudflarePermissionPolicy({ domain }: { domain: string }) {
   return (
     <div className="overflow-hidden rounded-lg border border-black/15 bg-[#fafafa] text-[#191919] shadow-lg shadow-black/10 dark:border-white/12 dark:bg-[#101010] dark:text-[#ededed] dark:shadow-black/15">
       <div className="flex items-center justify-between border-b border-black/10 bg-[#f1f1f1] px-3 py-2.5 dark:border-white/10 dark:bg-[#141414]">
-        <p className="text-[0.625rem] font-semibold">Edit policy</p>
-        <span className="text-[0.5625rem] text-black/55 dark:text-white/55">
+        <p className="type-label">Edit policy</p>
+        <span className="type-meta text-stone-600 dark:text-stone-300">
           Custom
         </span>
       </div>
 
       <div className="grid gap-2 border-b border-black/10 p-3 sm:grid-cols-[minmax(9rem,0.8fr)_minmax(0,1.35fr)] dark:border-white/10">
         <div className="flex min-w-0 items-center justify-between gap-3 rounded-md border border-black/15 bg-white px-3 py-2.5 dark:border-white/15 dark:bg-white/[0.025]">
-          <span className="text-[0.625rem] font-medium">Specified Domains</span>
+          <span className="type-label">Specified domains</span>
           <ChevronDown className="size-3.5 shrink-0 text-black/45 dark:text-white/45" />
         </div>
         <div className="flex min-w-0 items-center gap-2 rounded-md border border-black/20 bg-white px-3 py-2.5 dark:border-white/20 dark:bg-white/[0.045]">
           <Globe2 className="size-3.5 shrink-0 text-black/70 dark:text-white/70" />
-          <span className="truncate font-mono text-[0.625rem] text-black/90 dark:text-white/90">
+          <span className="type-code truncate text-stone-900 dark:text-stone-100">
             {domain}
           </span>
           <ChevronDown className="ml-auto size-3.5 shrink-0 text-black/45 dark:text-white/45" />
@@ -861,13 +858,13 @@ function VisualPermissionGroup({
         <span
           className={
             expanded
-              ? "text-[0.625rem] font-semibold text-black/90 dark:text-white/90"
-              : "text-[0.625rem] font-medium text-black/40 dark:text-white/40"
+              ? "type-label text-stone-900 dark:text-stone-100"
+              : "type-label text-stone-600 dark:text-stone-300"
           }
         >
           {label}
         </span>
-        <span className="ml-auto font-mono text-[0.5rem] text-black/35 dark:text-white/30">
+        <span className="type-meta ml-auto font-mono text-stone-600 dark:text-stone-300">
           {selected}/{total}
         </span>
       </div>
@@ -889,10 +886,10 @@ function CloudflarePermissionRow({
 }) {
   return (
     <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-x-3 border-t border-dashed border-black/10 px-3 py-2.5 sm:grid-cols-[minmax(8rem,0.8fr)_minmax(10rem,1.25fr)_auto] sm:items-center dark:border-white/10">
-      <p className="col-start-1 row-start-1 truncate text-[0.625rem] font-medium text-black/85 dark:text-white/85">
+      <p className="type-label col-start-1 row-start-1 truncate text-stone-900 dark:text-stone-100">
         {name}
       </p>
-      <p className="col-start-1 row-start-2 mt-0.5 truncate text-[0.5rem] text-black/45 sm:col-start-2 sm:row-start-1 sm:mt-0 dark:text-white/35">
+      <p className="type-meta col-start-1 row-start-2 mt-0.5 truncate text-stone-600 sm:col-start-2 sm:row-start-1 sm:mt-0 dark:text-stone-300">
         {description}
       </p>
       <div className="col-start-2 row-span-2 row-start-1 flex items-center rounded-md border border-black/12 bg-black/[0.035] p-1 sm:col-start-3 sm:row-span-1 dark:border-white/12 dark:bg-black/25">
@@ -914,8 +911,8 @@ function PermissionAccess({
     <span
       className={
         active
-          ? "flex items-center gap-1.5 rounded px-1.5 py-1 text-[0.5625rem] font-medium text-black/90 dark:text-white/90"
-          : "flex items-center gap-1.5 rounded px-1.5 py-1 text-[0.5625rem] text-black/35 dark:text-white/30"
+          ? "type-label flex items-center gap-1.5 rounded px-1.5 py-1 text-stone-900 dark:text-stone-100"
+          : "type-meta flex items-center gap-1.5 rounded px-1.5 py-1 text-stone-600 dark:text-stone-300"
       }
     >
       <span
@@ -953,8 +950,8 @@ function DomainStatus({
     <span
       className={
         active
-          ? "inline-flex items-center gap-1 font-mono text-[0.5rem] text-emerald-300 uppercase"
-          : "inline-flex items-center gap-1 font-mono text-[0.5rem] text-muted-foreground uppercase"
+          ? "type-technical-label inline-flex items-center gap-1 text-emerald-300"
+          : "type-technical-label inline-flex items-center gap-1 text-muted-foreground"
       }
     >
       {verified ? (

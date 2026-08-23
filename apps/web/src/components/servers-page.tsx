@@ -574,7 +574,7 @@ const ServerTableRow = React.memo(function ServerTableRow({
             >
               {server.name}
             </Link>
-            <p className="truncate font-mono text-[0.5rem] text-muted-foreground">
+            <p className="type-meta truncate font-mono text-muted-foreground">
               {server.game} · {server.implementation}
             </p>
           </div>
@@ -582,7 +582,7 @@ const ServerTableRow = React.memo(function ServerTableRow({
       </WorkspaceTableCell>
       <WorkspaceTableCell className="hidden lg:table-cell">
         <span
-          className={`font-mono text-[0.5625rem] ${canonical ? "text-foreground" : "text-amber-300"}`}
+          className={`type-meta font-mono ${canonical ? "text-foreground" : "text-amber-300"}`}
           title={
             canonical
               ? server.id
@@ -594,17 +594,17 @@ const ServerTableRow = React.memo(function ServerTableRow({
       </WorkspaceTableCell>
       <WorkspaceTableCell className="hidden lg:table-cell">
         <div className="min-w-0">
-          <p className="truncate text-[0.625rem] text-foreground">
+          <p className="type-meta truncate text-foreground">
             {server.relayName}
           </p>
-          <p className="truncate font-mono text-[0.5rem] text-muted-foreground">
+          <p className="type-meta truncate font-mono text-muted-foreground">
             {server.relayStatus}
           </p>
         </div>
       </WorkspaceTableCell>
       <WorkspaceTableCell className="hidden xl:table-cell">
         <span
-          className={`block truncate font-mono text-[0.5625rem] ${
+          className={`type-meta block truncate font-mono ${
             server.connectAddress.startsWith("Error:")
               ? "font-semibold text-destructive"
               : "text-foreground"
@@ -618,10 +618,10 @@ const ServerTableRow = React.memo(function ServerTableRow({
       </WorkspaceTableCell>
       <WorkspaceTableCell className="hidden md:table-cell">
         <div className="min-w-0">
-          <p className="truncate font-mono text-[0.5625rem] text-foreground">
+          <p className="type-meta truncate font-mono text-foreground">
             {server.version}
           </p>
-          <p className="truncate text-[0.5rem] text-muted-foreground">
+          <p className="type-meta truncate text-muted-foreground">
             {server.implementation}
           </p>
         </div>
@@ -779,7 +779,7 @@ function ServerStatus({ server }: { server: ServerListInstance }) {
   return (
     <span
       aria-label={status.label}
-      className={`inline-flex items-center gap-1.5 text-[0.625rem] font-medium ${status.text}`}
+      className={`type-label inline-flex items-center gap-1.5 ${status.text}`}
     >
       <span className={`size-1.5 shrink-0 rounded-full ${status.dot}`} />
       <span className="hidden sm:inline">{status.label}</span>
@@ -802,7 +802,7 @@ function EmptyServerTable({
       <p className="mt-3 text-sm font-semibold">
         {searchActive ? "No servers match your search" : "No managed servers"}
       </p>
-      <p className="mt-1 max-w-sm text-[0.625rem] leading-4 text-muted-foreground">
+      <p className="type-support mt-1 max-w-sm text-muted-foreground">
         {searchActive
           ? "Try a server name, short ID, Relay, address, game, implementation, or version."
           : canProvision

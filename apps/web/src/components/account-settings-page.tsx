@@ -578,7 +578,7 @@ function TwoFactorCard() {
                   <QRCode value={setup.totpURI} className="h-auto w-full" />
                 </div>
                 <div className="min-w-0">
-                  <code className="block truncate border bg-background px-2 py-1.5 font-mono text-[0.5625rem] text-muted-foreground">
+                  <code className="type-code block truncate border bg-background px-2 py-1.5 text-muted-foreground">
                     {readTotpSecret(setup.totpURI)}
                   </code>
                   <Field label="Six-digit code" htmlFor="account-totp-code">
@@ -603,7 +603,7 @@ function TwoFactorCard() {
               </div>
               <div>
                 <div className="flex items-center justify-between gap-3">
-                  <p className="text-[0.625rem] font-medium">Recovery codes</p>
+                  <p className="type-label">Recovery codes</p>
                   <Button
                     type="button"
                     variant="ghost"
@@ -617,7 +617,7 @@ function TwoFactorCard() {
                   {setup.backupCodes.map((code) => (
                     <code
                       key={code}
-                      className="text-center font-mono text-[0.5625rem] text-foreground/80"
+                      className="type-meta text-center font-mono text-foreground"
                     >
                       {code}
                     </code>
@@ -781,7 +781,7 @@ function PasskeysCard() {
                 <span className="block truncate text-xs font-medium">
                   {passkey.name || "Unnamed passkey"}
                 </span>
-                <span className="mt-0.5 block font-mono text-[0.5rem] text-muted-foreground uppercase">
+                <span className="type-technical-label mt-0.5 block text-muted-foreground">
                   {passkey.deviceType || "Authenticator"} · Added{" "}
                   {formatDate(passkey.createdAt)}
                 </span>
@@ -941,7 +941,7 @@ function CliCredentialsCard({ enabled }: { enabled: boolean }) {
                     <span className="block truncate text-xs font-medium">
                       {credential.name}
                     </span>
-                    <span className="mt-0.5 block font-mono text-[0.5rem] text-muted-foreground uppercase">
+                    <span className="type-technical-label mt-0.5 block text-muted-foreground">
                       {credential.mode === "read_only"
                         ? "Read-only"
                         : "Full access"}
@@ -951,7 +951,7 @@ function CliCredentialsCard({ enabled }: { enabled: boolean }) {
                     </span>
                   </span>
                 </div>
-                <div className="text-[0.625rem] leading-4 text-muted-foreground sm:text-right">
+                <div className="type-meta text-muted-foreground sm:text-right">
                   <span className="block">
                     Last used {formatDate(credential.lastUsedAt)}
                   </span>
@@ -1195,17 +1195,17 @@ const SessionRow = React.memo(function SessionRow({
               {device.browser} on {device.platform}
             </span>
             {current ? (
-              <span className="shrink-0 border border-emerald-500/25 bg-emerald-500/8 px-1.5 py-0.5 font-mono text-[0.4375rem] tracking-wider text-emerald-500 uppercase">
+              <span className="type-technical-label shrink-0 border border-emerald-500/25 bg-emerald-500/8 px-1.5 py-0.5 text-emerald-500">
                 Current
               </span>
             ) : null}
           </span>
-          <span className="mt-0.5 block truncate font-mono text-[0.5rem] text-muted-foreground uppercase">
+          <span className="type-technical-label mt-0.5 block truncate text-muted-foreground">
             {activeSession.ipAddress || "IP unavailable"}
           </span>
         </span>
       </div>
-      <div className="text-[0.625rem] leading-4 text-muted-foreground sm:text-right">
+      <div className="type-meta text-muted-foreground sm:text-right">
         <span className="block">
           Started {formatDate(activeSession.createdAt)}
         </span>
@@ -1267,9 +1267,7 @@ function Field({
 }) {
   return (
     <label className="grid gap-1.5" htmlFor={htmlFor}>
-      <span className="text-[0.625rem] font-medium text-foreground/85">
-        {label}
-      </span>
+      <span className="type-label text-foreground">{label}</span>
       {children}
     </label>
   )

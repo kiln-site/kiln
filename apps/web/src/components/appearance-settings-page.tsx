@@ -450,7 +450,7 @@ function SwatchGroup({
       <div className="flex min-h-9 flex-wrap items-center justify-center gap-2">
         {children}
       </div>
-      <p className="text-center text-[0.625rem] font-medium tracking-[0.12em] text-muted-foreground uppercase">
+      <p className="type-technical-label text-center text-muted-foreground">
         {label}
       </p>
     </div>

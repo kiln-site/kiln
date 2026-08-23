@@ -569,7 +569,7 @@ const AccessToolbar = React.memo(function AccessToolbar({
               <span className="hidden sm:inline">Pending</span>
               <Badge
                 variant="outline"
-                className="h-4 min-w-4 justify-center border-border/80 px-1 font-mono text-[0.5rem]"
+                className="type-meta h-5 min-w-5 justify-center border-border/80 px-1 font-mono"
               >
                 {invitationCount}
               </Badge>
@@ -705,7 +705,7 @@ const AccessDirectoryTable = React.memo(function AccessDirectoryTable({
               ? "No matching access"
               : "No users yet"}
           </p>
-          <p className="mt-1 text-[0.6875rem] text-muted-foreground">
+          <p className="type-support mt-1 text-muted-foreground">
             {searchActive || filtersActive
               ? "Try another email, scope, Relay, or role."
               : "Add a user to grant platform or scoped access."}
@@ -808,7 +808,7 @@ const AccessDirectoryTableRow = React.memo(function AccessDirectoryTableRow({
     >
       <SelectTrigger
         aria-label={`Role for ${row.email} on ${row.resourceName}`}
-        className="h-8 w-full text-[0.625rem]"
+        className="type-control-sm h-8 w-full"
       >
         <SelectValue />
       </SelectTrigger>
@@ -838,10 +838,10 @@ const AccessDirectoryTableRow = React.memo(function AccessDirectoryTableRow({
         <div className="flex min-w-0 items-center gap-2">
           <ScopeIcon resourceType={row.resourceType} />
           <div className="min-w-0">
-            <p className="truncate text-[0.625rem] font-medium text-foreground">
+            <p className="type-label truncate text-foreground">
               {row.resourceName}
             </p>
-            <p className="truncate font-mono text-[0.5rem] text-muted-foreground uppercase">
+            <p className="type-technical-label truncate text-muted-foreground">
               {row.resourceType === "instance" ? "Server" : row.resourceType}
               {row.instanceOwner ? " · owner" : ""}
             </p>
@@ -849,10 +849,8 @@ const AccessDirectoryTableRow = React.memo(function AccessDirectoryTableRow({
         </div>
       </WorkspaceTableCell>
       <WorkspaceTableCell className="hidden lg:table-cell">
-        <p className="truncate text-[0.625rem] text-foreground">
-          {row.relayName}
-        </p>
-        <p className="truncate font-mono text-[0.5rem] text-muted-foreground">
+        <p className="type-meta truncate text-foreground">{row.relayName}</p>
+        <p className="type-meta truncate font-mono text-muted-foreground">
           {row.relayId}
         </p>
       </WorkspaceTableCell>
@@ -876,7 +874,7 @@ const AccessDirectoryTableRow = React.memo(function AccessDirectoryTableRow({
           roleSelect
         )}
       </WorkspaceTableCell>
-      <WorkspaceTableCell className="hidden font-mono text-[0.5625rem] text-muted-foreground xl:table-cell">
+      <WorkspaceTableCell className="type-meta hidden font-mono text-muted-foreground xl:table-cell">
         <HydratedDate value={row.createdAt} />
       </WorkspaceTableCell>
       <WorkspaceTableCell className="px-1 sm:px-3">
@@ -962,29 +960,29 @@ const PlatformAccessDirectoryTableRow = React.memo(
               <ShieldCheck className="size-3.5" />
             </span>
             <div className="min-w-0">
-              <p className="truncate text-[0.625rem] font-medium text-foreground">
+              <p className="type-label truncate text-foreground">
                 {row.resourceName}
               </p>
-              <p className="truncate font-mono text-[0.5rem] text-muted-foreground uppercase">
+              <p className="type-technical-label truncate text-muted-foreground">
                 Platform
               </p>
             </div>
           </div>
         </WorkspaceTableCell>
         <WorkspaceTableCell className="hidden lg:table-cell">
-          <p className="truncate text-[0.625rem] text-foreground">
+          <p className="type-meta truncate text-foreground">
             {row.accessType === "platform_admin" ? "All Relays" : "Own Relays"}
           </p>
-          <p className="truncate font-mono text-[0.5rem] text-muted-foreground">
+          <p className="type-meta truncate font-mono text-muted-foreground">
             —
           </p>
         </WorkspaceTableCell>
         <WorkspaceTableCell>
-          <div className="flex h-8 w-full items-center rounded-md border border-primary/25 bg-primary/10 px-3 text-[0.625rem] font-medium text-primary">
+          <div className="type-label flex h-8 w-full items-center rounded-md border border-primary/25 bg-primary/10 px-3 text-primary">
             {label}
           </div>
         </WorkspaceTableCell>
-        <WorkspaceTableCell className="hidden font-mono text-[0.5625rem] text-muted-foreground xl:table-cell">
+        <WorkspaceTableCell className="type-meta hidden font-mono text-muted-foreground xl:table-cell">
           <HydratedDate value={row.createdAt} />
         </WorkspaceTableCell>
         <WorkspaceTableCell className="px-1 sm:px-3">
@@ -1174,7 +1172,7 @@ const AccessConfigurationFields = React.memo(
     return (
       <>
         {canAssignPlatformAccess ? (
-          <div className="text-[0.625rem] font-medium text-muted-foreground">
+          <div className="type-label text-muted-foreground">
             <span className="mb-1.5 block">Type</span>
             <AccessTypePicker
               accessType={accessType}
@@ -1205,7 +1203,7 @@ const PresetAccessField = React.memo(function PresetAccessField({
 }) {
   return (
     <Field label="Access">
-      <div className="flex h-10 w-full items-center rounded-md border border-input/90 bg-input/20 px-3 text-xs text-foreground/70">
+      <div className="type-input flex h-10 w-full items-center rounded-md border border-input/90 bg-input/20 px-3 text-foreground">
         {accessType === "platform_admin" ? "Hearth + all Relays" : "Own Relays"}
       </div>
     </Field>
@@ -1451,7 +1449,7 @@ const AccessTypeOption = React.memo(function AccessTypeOption({
   return (
     <button
       aria-pressed={selected}
-      className={`min-h-10 rounded-md px-2 py-1.5 text-center text-[0.625rem] leading-4 font-semibold transition-colors focus-visible:ring-2 focus-visible:ring-ring/40 focus-visible:outline-none sm:text-xs ${
+      className={`type-label min-h-10 rounded-md px-2 py-1.5 text-center transition-colors focus-visible:ring-2 focus-visible:ring-ring/40 focus-visible:outline-none ${
         selected
           ? "bg-primary/15 text-primary shadow-sm ring-1 ring-primary/35"
           : "text-muted-foreground hover:bg-background/60 hover:text-foreground"
@@ -1648,10 +1646,8 @@ function PendingInvitationsDialog({
                         </p>
                       </WorkspaceTableCell>
                       <WorkspaceTableCell>
-                        <p className="truncate text-[0.625rem]">
-                          {resourceName}
-                        </p>
-                        <p className="font-mono text-[0.5rem] text-muted-foreground uppercase">
+                        <p className="type-meta truncate">{resourceName}</p>
+                        <p className="type-technical-label text-muted-foreground">
                           {platformInvitation
                             ? "Platform"
                             : databaseName
@@ -1664,12 +1660,12 @@ function PendingInvitationsDialog({
                       <WorkspaceTableCell>
                         <Badge
                           variant="outline"
-                          className="font-mono text-[0.5rem] capitalize"
+                          className="type-meta font-mono capitalize"
                         >
                           {invitationRole}
                         </Badge>
                       </WorkspaceTableCell>
-                      <WorkspaceTableCell className="font-mono text-[0.5625rem] text-muted-foreground">
+                      <WorkspaceTableCell className="type-meta font-mono text-muted-foreground">
                         <HydratedDate value={invitation.expiresAt} />
                       </WorkspaceTableCell>
                       <WorkspaceTableCell>
@@ -1723,7 +1719,7 @@ function PendingInvitationsDialog({
               <p className="mt-3 text-sm font-semibold">
                 No pending invitations
               </p>
-              <p className="mt-1 text-[0.6875rem] text-muted-foreground">
+              <p className="type-support mt-1 text-muted-foreground">
                 New invitations will appear here until they are accepted or
                 revoked.
               </p>
@@ -1761,7 +1757,7 @@ function Field({
   children: React.ReactNode
 }) {
   return (
-    <label className="block text-[0.625rem] font-medium text-muted-foreground">
+    <label className="type-label block text-muted-foreground">
       <span className="mb-1.5 block">{label}</span>
       {children}
     </label>

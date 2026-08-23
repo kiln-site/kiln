@@ -1221,7 +1221,7 @@ const BackupMobileSelectAll = React.memo(function BackupMobileSelectAll({
         />
         Select visible
       </label>
-      <span className="font-mono text-[0.625rem] text-muted-foreground">
+      <span className="type-code text-muted-foreground">
         {backups.length} {backups.length === 1 ? "backup" : "backups"}
       </span>
     </div>
@@ -1957,8 +1957,8 @@ const ActiveBackupTaskState = React.memo(function ActiveBackupTaskState({
   return (
     <div className="min-w-0">
       <div aria-live="polite">
-        <div className="mb-1 flex min-w-0 items-center justify-between gap-2 text-[0.6875rem] leading-none text-muted-foreground">
-          <span className="truncate font-medium text-foreground/80">
+        <div className="type-support mb-1 flex min-w-0 items-center justify-between gap-2 text-muted-foreground">
+          <span className="truncate font-medium text-foreground">
             {backupTaskPhaseLabel(backup.taskPhase, backup.taskStatus)}
           </span>
           <span className="shrink-0 tabular-nums">{progressDetail}</span>
@@ -1973,7 +1973,7 @@ const ActiveBackupTaskState = React.memo(function ActiveBackupTaskState({
           value={percent ?? undefined}
         />
       </div>
-      <div className="mt-1 flex min-w-0 items-center gap-1.5 text-[0.625rem] text-muted-foreground">
+      <div className="type-meta mt-1 flex min-w-0 items-center gap-1.5 text-muted-foreground">
         <div aria-live="polite" className="flex min-w-0 flex-1">
           {backup.taskCurrentPath ? (
             <BackupCurrentPath path={backup.taskCurrentPath} />
@@ -2372,9 +2372,7 @@ const BackupAvailabilityTags = React.memo(function BackupAvailabilityTags({
 
   return (
     <div className="mt-2 flex min-w-0 flex-wrap items-center gap-1.5">
-      <span className="text-[0.625rem] text-muted-foreground">
-        Availability:
-      </span>
+      <span className="type-meta text-muted-foreground">Availability:</span>
       {tags.map((tag) => (
         <BackupAvailabilityTag key={tag.key} tag={tag} />
       ))}
@@ -2440,7 +2438,7 @@ function BackupAvailabilityTag({ tag }: { tag: BackupAvailabilityTagView }) {
     <Tooltip>
       <TooltipTrigger asChild>
         <span
-          className={`inline-flex h-6 max-w-36 items-center gap-1 rounded-md border px-2 font-mono text-[0.5625rem] font-semibold ${tag.key === "local" || tag.key === "s3" ? "uppercase" : ""} ${availabilityTagClassName(tag.state)}`}
+          className={`type-meta inline-flex h-6 max-w-36 items-center gap-1 rounded-md border px-2 font-mono font-semibold ${tag.key === "local" || tag.key === "s3" ? "uppercase" : ""} ${availabilityTagClassName(tag.state)}`}
         >
           {tag.uploadPercent !== null ? (
             <BackupUploadProgress
@@ -2912,7 +2910,7 @@ function DownloadBackupDialog({
 
           <div className="grid grid-cols-2 gap-3 rounded-lg border bg-muted/15 p-3">
             <div>
-              <p className="font-mono text-[0.5625rem] tracking-wider text-muted-foreground uppercase">
+              <p className="type-technical-label text-muted-foreground">
                 Destination
               </p>
               <p className="mt-1 truncate text-sm font-medium">
@@ -2922,9 +2920,7 @@ function DownloadBackupDialog({
               </p>
             </div>
             <div>
-              <p className="font-mono text-[0.5625rem] tracking-wider text-muted-foreground uppercase">
-                Size
-              </p>
+              <p className="type-technical-label text-muted-foreground">Size</p>
               <p className="mt-1 font-mono text-sm font-medium">
                 {artifact?.bytes === null || artifact?.bytes === undefined
                   ? "—"
@@ -2982,14 +2978,14 @@ function DownloadBackupDialog({
                 Get URL
               </Button>
             </div>
-            <p className="mt-2 text-[0.625rem] text-muted-foreground">
+            <p className="type-meta mt-2 text-muted-foreground">
               Links can remain valid from 1 minute up to 7 days.
             </p>
             {shared ? (
               <div className="mt-3 flex gap-2">
                 <Input
                   aria-label="Generated temporary backup URL"
-                  className="font-mono text-[0.625rem]"
+                  className="type-code"
                   readOnly
                   value={shared.url}
                 />
@@ -3312,7 +3308,7 @@ function InstanceBackupSettingsEditor({
         {!isPlatformAdmin &&
         (policy.adminQuantityLimit !== null ||
           policy.adminSizeLimitBytes !== null) ? (
-          <div className="rounded-lg border border-amber-500/25 bg-amber-500/8 p-3 text-[0.625rem] leading-4 text-muted-foreground sm:col-span-2">
+          <div className="type-meta rounded-lg border border-amber-500/25 bg-amber-500/8 p-3 text-muted-foreground sm:col-span-2">
             Platform ceiling: {policy.adminQuantityLimit ?? "unlimited"} backups
             ·{" "}
             {policy.adminSizeLimitBytes === null
@@ -3352,7 +3348,7 @@ function InstanceBackupSettingsEditor({
             value={exclude}
             onChange={(event) => setExclude(event.currentTarget.value)}
           />
-          <span className="mt-1.5 block text-[0.625rem] text-muted-foreground">
+          <span className="type-meta mt-1.5 block text-muted-foreground">
             One relative glob per line. Absolute paths and parent traversal are
             rejected by Relay.
           </span>
@@ -3427,7 +3423,7 @@ function BackupStorageDialog({
                     <span className="block text-xs font-semibold">
                       Local Relay storage
                     </span>
-                    <span className="mt-0.5 block text-[0.625rem] text-muted-foreground">
+                    <span className="type-meta mt-0.5 block text-muted-foreground">
                       Stored on the Relay that owns the resource
                     </span>
                   </span>
@@ -3461,14 +3457,14 @@ function BackupStorageDialog({
                             <Badge variant="outline">Disabled</Badge>
                           ) : null}
                         </span>
-                        <span className="mt-1 block truncate font-mono text-[0.5625rem] text-muted-foreground">
+                        <span className="type-meta mt-1 block truncate font-mono text-muted-foreground">
                           {destination.endpoint} / {destination.bucket}
                           {destination.objectPrefix
                             ? ` / ${destination.objectPrefix}`
                             : ""}
                         </span>
                         {destination.lastError ? (
-                          <span className="mt-1 block text-[0.625rem] leading-4 text-destructive">
+                          <span className="type-meta mt-1 block text-destructive">
                             {destination.lastError}
                           </span>
                         ) : null}
@@ -3781,7 +3777,7 @@ function StorageSwitch({
     <label className="flex items-center justify-between gap-3 rounded-lg border border-border/70 bg-background/35 p-3">
       <span>
         <span className="block text-xs font-semibold">{label}</span>
-        <span className="mt-0.5 block text-[0.625rem] leading-4 text-muted-foreground">
+        <span className="type-meta mt-0.5 block text-muted-foreground">
           {description}
         </span>
       </span>
@@ -3913,7 +3909,7 @@ function RestoreBackupDialog({
         <label className="flex items-center justify-between gap-4 rounded-lg border border-border/70 bg-background/35 p-3">
           <span>
             <span className="block text-xs font-semibold">Safety backup</span>
-            <span className="mt-1 block text-[0.625rem] leading-4 text-muted-foreground">
+            <span className="type-meta mt-1 block text-muted-foreground">
               Take a new full backup immediately before restoring.
             </span>
           </span>
@@ -4245,7 +4241,7 @@ const BackupModeBadge = React.memo(function BackupModeBadge({
   mode: Backup["backupMode"]
 }) {
   return (
-    <Badge variant="outline" className="shrink-0 px-1.5 py-0 text-[0.625rem]">
+    <Badge variant="outline" className="type-meta shrink-0 px-1.5 py-0">
       {mode === "incremental" ? "Incremental" : "Full"}
     </Badge>
   )

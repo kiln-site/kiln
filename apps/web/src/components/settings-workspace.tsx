@@ -105,7 +105,7 @@ export function SettingsWorkspace({
                   <Badge
                     variant="outline"
                     className={cn(
-                      "font-mono text-[0.5625rem]",
+                      "type-meta font-mono",
                       instance.game.toLowerCase() === "minecraft" &&
                         "border-emerald-500/35 bg-emerald-500/12 text-emerald-300"
                     )}
@@ -163,7 +163,7 @@ export function SettingsWorkspace({
             title="Relay placement"
             action={
               <span
-                className={`flex items-center gap-1.5 font-mono text-[0.5625rem] ${relayConnected ? "text-emerald-400" : "text-amber-300"}`}
+                className={`type-meta flex items-center gap-1.5 font-mono ${relayConnected ? "text-emerald-400" : "text-amber-300"}`}
               >
                 <span
                   className={`size-1.5 rounded-full ${relayConnected ? "bg-emerald-400" : "bg-amber-300"}`}
@@ -281,7 +281,7 @@ function CopyMetaRow({
     <div className="flex min-h-16 items-center gap-3 border-b px-4 py-3 last:border-b-0">
       <Globe2 className="size-3.5 shrink-0 text-muted-foreground" />
       <span className="min-w-0 flex-1">
-        <span className="block text-[0.5625rem] tracking-wider text-muted-foreground uppercase">
+        <span className="type-technical-label block text-muted-foreground">
           {label}
         </span>
         <span
@@ -523,7 +523,7 @@ function InstanceUsersCard({
         <div className="min-h-0 flex-1 overflow-y-auto">
           <table className="w-full table-fixed text-left">
             <thead className="sticky top-0 z-10 bg-background/95 backdrop-blur-sm">
-              <tr className="border-b text-[0.5625rem] tracking-wider text-muted-foreground uppercase">
+              <tr className="type-technical-label border-b text-muted-foreground">
                 <th className="px-4 py-2 font-medium">Email</th>
                 <th className="w-40 px-4 py-2 text-right font-medium">
                   Actions
@@ -577,7 +577,7 @@ function InstanceUsersCard({
               is coming soon.
             </DialogDescription>
           </DialogHeader>
-          <div className="rounded-lg border border-dashed bg-muted/15 px-4 py-6 text-center font-mono text-[0.5625rem] tracking-[0.14em] text-muted-foreground uppercase">
+          <div className="type-technical-label rounded-lg border border-dashed bg-muted/15 px-4 py-6 text-center text-muted-foreground">
             Coming soon
           </div>
         </DialogContent>
@@ -727,7 +727,7 @@ function AccessUserRow({
           {owner ? (
             <Badge
               variant="outline"
-              className="border-amber-400/35 bg-amber-400/12 font-mono text-[0.5rem] text-amber-300"
+              className="type-meta border-amber-400/35 bg-amber-400/12 font-mono text-amber-300"
             >
               Owner
             </Badge>
@@ -735,7 +735,7 @@ function AccessUserRow({
           {relayAccess ? (
             <Badge
               variant="outline"
-              className="font-mono text-[0.5rem] text-muted-foreground"
+              className="type-meta font-mono text-muted-foreground"
               title="Access to every server on this Relay"
             >
               Relay
@@ -867,11 +867,9 @@ function ServerDangerZone({
             <TriangleAlert className="size-4" />
           </span>
           <div className="min-w-0">
-            <p className="font-mono text-[0.5625rem] tracking-[0.16em] text-destructive uppercase">
-              Danger zone
-            </p>
+            <p className="type-technical-label text-destructive">Danger zone</p>
             <h3 className="mt-1 text-sm font-semibold">Delete this server</h3>
-            <p className="mt-1 font-mono text-[0.5625rem] break-all text-muted-foreground">
+            <p className="type-meta mt-1 font-mono break-all text-muted-foreground">
               {instance.id}
             </p>
           </div>
@@ -980,7 +978,7 @@ function InstanceNameForm({
         <Server className="size-3.5 shrink-0 text-muted-foreground" />
         <label
           htmlFor="instance-display-name"
-          className="text-[0.5625rem] tracking-wider text-muted-foreground uppercase"
+          className="type-technical-label text-muted-foreground"
         >
           Display name
         </label>
@@ -1022,7 +1020,7 @@ function InstanceNameForm({
         </Button>
       </div>
       <p
-        className={`mt-1.5 text-[0.5625rem] ${error ? "text-destructive" : "text-muted-foreground"}`}
+        className={`type-meta mt-1.5 ${error ? "text-destructive" : "text-muted-foreground"}`}
       >
         {error ??
           (canRename
@@ -1059,7 +1057,7 @@ function MetaRow({
     >
       <Icon className="size-3.5 shrink-0 text-muted-foreground" />
       <span className="min-w-0 flex-1">
-        <span className="block text-[0.5625rem] tracking-wider text-muted-foreground uppercase">
+        <span className="type-technical-label block text-muted-foreground">
           {label}
         </span>
         <span

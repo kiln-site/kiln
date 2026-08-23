@@ -131,7 +131,7 @@ const ArchiveFormatButton = React.memo(function ArchiveFormatButton({
       <Icon className={cn("size-4", active && "text-primary")} />
       <span className="min-w-0">
         <span className="block text-xs font-medium">{label}</span>
-        <span className="block text-[0.625rem] text-muted-foreground">
+        <span className="type-meta block text-muted-foreground">
           {description}
         </span>
       </span>
@@ -157,13 +157,13 @@ function SettingRow({
     <div className="grid gap-3 border-b py-5 last:border-b-0 sm:grid-cols-[9rem_minmax(0,1fr)] sm:items-center">
       <div>
         <p className="text-xs font-medium text-foreground">{label}</p>
-        <p className="mt-1 text-[0.625rem] leading-4 text-muted-foreground sm:hidden">
+        <p className="type-meta mt-1 text-muted-foreground sm:hidden">
           {description}
         </p>
       </div>
       <div className="min-w-0">
         {children}
-        <p className="mt-1.5 hidden text-[0.625rem] leading-4 text-muted-foreground sm:block">
+        <p className="type-meta mt-1.5 hidden text-muted-foreground sm:block">
           {description}
         </p>
       </div>

@@ -350,7 +350,7 @@ const TailscaleTableRow = React.memo(function TailscaleTableRow({
             <p className="truncate text-xs font-semibold text-foreground">
               {stack.name}
             </p>
-            <p className="font-mono text-[0.5rem] text-muted-foreground sm:hidden">
+            <p className="type-meta font-mono text-muted-foreground sm:hidden">
               {stack.deployments.length} nodes · {stack.bindings.length} servers
               · .{stack.domain}
             </p>
@@ -358,19 +358,17 @@ const TailscaleTableRow = React.memo(function TailscaleTableRow({
         </div>
       </WorkspaceTableCell>
       <WorkspaceTableCell className="hidden sm:table-cell">
-        <span className="font-mono text-[0.625rem] text-foreground">
+        <span className="type-code text-foreground">
           {stack.deployments.length}
         </span>
       </WorkspaceTableCell>
       <WorkspaceTableCell className="hidden md:table-cell">
-        <span className="font-mono text-[0.625rem] text-foreground">
+        <span className="type-code text-foreground">
           {stack.bindings.length}
         </span>
       </WorkspaceTableCell>
       <WorkspaceTableCell className="hidden lg:table-cell">
-        <span className="font-mono text-[0.625rem] text-foreground">
-          {stack.domain}
-        </span>
+        <span className="type-code text-foreground">{stack.domain}</span>
       </WorkspaceTableCell>
       <WorkspaceTableCell className="px-2 sm:px-3">
         <div className="flex items-center justify-end gap-1">
@@ -778,7 +776,7 @@ const CreateNetworkForm = React.memo(function CreateNetworkForm({
               className="font-mono"
             />
             {selectedRelayCount > 1 ? (
-              <span className="mt-2 flex gap-1.5 text-[0.625rem] leading-relaxed text-amber-400">
+              <span className="type-meta mt-2 flex gap-1.5 text-amber-400">
                 <CircleAlert className="mt-0.5 size-3 shrink-0" />
                 Manual auth installs one Relay at a time. Select servers on one
                 Relay, then connect Kiln to Tailscale before adding more.
@@ -810,7 +808,7 @@ const CreateNetworkForm = React.memo(function CreateNetworkForm({
         <div className="border-b p-4">
           <div className="flex items-center justify-between gap-4">
             <h3 className="font-heading font-semibold">Servers</h3>
-            <Badge variant="outline" className="font-mono text-[0.625rem]">
+            <Badge variant="outline" className="type-meta font-mono">
               {bindings.size} selected
             </Badge>
           </div>
@@ -901,7 +899,7 @@ const CreateNetworkServerRow = React.memo(function CreateNetworkServerRow({
             <span className="block truncate text-sm font-medium">
               {server.name}
             </span>
-            <span className="block truncate font-mono text-[0.625rem] text-muted-foreground">
+            <span className="type-code block truncate text-muted-foreground">
               {server.shortId} · {server.relayName}
             </span>
           </button>
@@ -919,7 +917,7 @@ const CreateNetworkServerRow = React.memo(function CreateNetworkServerRow({
               className="h-8 rounded-r-none font-mono text-xs"
               aria-label={`${server.name} hostname`}
             />
-            <span className="flex h-8 items-center rounded-r-md border border-l-0 bg-muted/45 px-2 font-mono text-[0.625rem] text-muted-foreground">
+            <span className="type-code flex h-8 items-center rounded-r-md border border-l-0 bg-muted/45 px-2 text-muted-foreground">
               .{domain || "test"}
             </span>
           </div>
