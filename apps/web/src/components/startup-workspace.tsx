@@ -382,9 +382,11 @@ const StartupForm = React.memo(function StartupForm({
     )
   }
 
+  const memoryValue = resolvedMemoryValue(view.memoryTemplate, variables)
   const configuredMemoryBytes =
-    resolvedMemoryBytes(view.memoryTemplate, variables) ??
+    (memoryValue ? dockerMemoryBytes(memoryValue) : null) ??
     initialLimits.memoryBytes
+  const memoryVariable = brickMemoryVariable(view.memoryTemplate)
   const catalogBrick =
     [
       ...(catalogQuery.data?.bricks ?? emptyBricks),
@@ -426,6 +428,8 @@ const StartupForm = React.memo(function StartupForm({
           saved={saved}
           variableDefinitions={view.variables}
           variables={variables}
+          memoryVariable={memoryVariable}
+          memoryValue={memoryValue}
           onDiskLimitChange={setDiskLimitGiB}
           onSubmit={onSubmit}
           onVariableChange={(name, value) => {
@@ -488,6 +492,8 @@ function StartupSettingsForm({
   saved,
   variableDefinitions,
   variables,
+  memoryVariable,
+  memoryValue,
   onDiskLimitChange,
   onSubmit,
   onVariableChange,
@@ -505,6 +511,8 @@ function StartupSettingsForm({
   saved: boolean
   variableDefinitions: Brick["variables"]
   variables: Record<string, BrickVariableValue>
+  memoryVariable: string | null
+  memoryValue: string | undefined
   onDiskLimitChange: (value: string) => void
   onSubmit: React.FormEventHandler<HTMLFormElement>
   onVariableChange: (
@@ -517,6 +525,7 @@ function StartupSettingsForm({
     canPairMinecraftJavaVersionFields(variableDefinitions)
   const groupedNames = new Set(
     [
+      memoryVariable,
       pairVersionAndJava ? "version" : null,
       pairVersionAndJava ? "java_version" : null,
       javaArgsDefinition ? "java_args" : null,
@@ -525,10 +534,11 @@ function StartupSettingsForm({
   const entries = Object.entries(variableDefinitions).filter(
     ([name]) => !groupedNames.has(name)
   )
-  const memory =
-    typeof variables.memory === "string" ? variables.memory : undefined
+  const memoryDefinition = memoryVariable
+    ? variableDefinitions[memoryVariable]
+    : undefined
   const managedFlags = javaArgsDefinition
-    ? managedJavaStartupFlags(environment, memory, variables, {
+    ? managedJavaStartupFlags(environment, memoryValue, variables, {
         id: brickId,
         name: brickName,
       })
@@ -552,7 +562,21 @@ function StartupSettingsForm({
           configuredMemoryBytes={configuredMemoryBytes}
           diskLimitGiB={diskLimitGiB}
           disabled={!canEdit || pending}
+          memoryDescription={memoryDefinition?.description}
+          memoryMaxLength={memoryDefinition?.rules?.maxLength}
+          memoryPattern={memoryDefinition?.rules?.pattern}
+          memoryRequired={memoryDefinition?.required}
+          memoryValue={
+            memoryDefinition?.type === "string"
+              ? (memoryValue ?? "")
+              : undefined
+          }
           onDiskLimitChange={onDiskLimitChange}
+          onMemoryChange={
+            memoryDefinition?.type === "string" && memoryVariable
+              ? (value) => onVariableChange(memoryVariable, value)
+              : undefined
+          }
         />
       </StartupSection>
 
@@ -764,11 +788,24 @@ function resolvedMemoryBytes(
   template: string,
   variables: Readonly<Record<string, BrickVariableValue>>
 ): number | null {
-  const variable = template.match(
-    /^\{\{\s*variables\.([a-z][a-z0-9_]{0,47})\s*\}\}$/u
-  )?.[1]
+  const value = resolvedMemoryValue(template, variables)
+  return value ? dockerMemoryBytes(value) : null
+}
+
+function resolvedMemoryValue(
+  template: string,
+  variables: Readonly<Record<string, BrickVariableValue>>
+): string | undefined {
+  const variable = brickMemoryVariable(template)
   const value = variable ? variables[variable] : template
-  return typeof value === "string" ? dockerMemoryBytes(value) : null
+  return typeof value === "string" ? value : undefined
+}
+
+function brickMemoryVariable(template: string): string | null {
+  return (
+    template.match(/^\{\{\s*variables\.([a-z][a-z0-9_]{0,47})\s*\}\}$/u)?.[1] ??
+    null
+  )
 }
 
 function gibibytesToBytes(value: string): number | null {
