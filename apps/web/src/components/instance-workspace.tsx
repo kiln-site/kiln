@@ -1509,69 +1509,60 @@ function ResourceHistoryHeader({
   receivedStats: ReturnType<typeof historyStatistics>
   sentStats: ReturnType<typeof historyStatistics>
 }) {
-  return (
-    <div className="h-[61px] border-b border-border/70 bg-muted/[0.08]">
-      <div className="flex h-6 items-center justify-between border-b border-border/45 px-3">
-        <span className="type-technical-label text-foreground">
-          {resource.label}
-        </span>
-        <span className="type-meta font-mono tracking-[0.08em] text-muted-foreground">
-          6m window
-        </span>
+  if (resource.id === "network") {
+    return (
+      <div className="grid h-14 grid-cols-2 divide-x divide-border/55 border-b border-border/70 bg-muted/[0.08]">
+        <NetworkHistoryValue
+          direction="down"
+          value={networkReceived}
+          average={receivedStats.average}
+          peak={receivedStats.peak}
+        />
+        <NetworkHistoryValue
+          direction="up"
+          value={networkSent}
+          average={sentStats.average}
+          peak={sentStats.peak}
+        />
       </div>
+    )
+  }
 
-      {resource.id === "network" ? (
-        <div className="grid h-9 grid-cols-2 divide-x divide-border/55">
-          <NetworkHistoryValue
-            direction="down"
-            value={networkReceived}
-            average={receivedStats.average}
-            peak={receivedStats.peak}
-          />
-          <NetworkHistoryValue
-            direction="up"
-            value={networkSent}
-            average={sentStats.average}
-            peak={sentStats.peak}
-          />
-        </div>
-      ) : resource.id === "storage" ? (
-        <div className="grid h-9 grid-cols-2 divide-x divide-border/55">
-          <DiskHistoryValue
-            label="Server"
-            value={resource.historyDisplayValue ?? "—"}
-            valueClassName={resource.valueClassName}
-          />
-          <DiskHistoryValue
-            label="Node"
-            value={resource.historySecondaryDisplayValue ?? "—"}
-            valueClassName="text-foreground"
-          />
-        </div>
-      ) : (
-        <div className="grid h-9 grid-cols-[1fr_4.5rem_4.5rem] divide-x divide-border/55">
-          <div className="flex min-w-0 items-center gap-2 px-3">
-            <span
-              className={`truncate font-mono font-semibold tracking-[-0.04em] tabular-nums ${resource.id === "memory" ? "type-code" : "text-xl"} ${resource.valueClassName}`}
-            >
-              {resource.historyDisplayValue ?? resource.displayValue}
-            </span>
-            <span className="type-technical-label text-muted-foreground">
-              Now
-            </span>
-          </div>
-          <HistoryStat
-            label="Avg"
-            value={
-              average === null ? "—" : formatHistoryValue(resource.id, average)
-            }
-          />
-          <HistoryStat
-            label="Peak"
-            value={peak === null ? "—" : formatHistoryValue(resource.id, peak)}
-          />
-        </div>
-      )}
+  if (resource.id === "storage") {
+    return (
+      <div className="grid h-12 grid-cols-2 divide-x divide-border/55 border-b border-border/70 bg-muted/[0.08]">
+        <DiskHistoryValue
+          label="Server"
+          value={resource.historyDisplayValue ?? "—"}
+          valueClassName={resource.valueClassName}
+        />
+        <DiskHistoryValue
+          label="Node"
+          value={resource.historySecondaryDisplayValue ?? "—"}
+          valueClassName="text-foreground"
+        />
+      </div>
+    )
+  }
+
+  return (
+    <div className="grid h-12 grid-cols-[minmax(0,1.6fr)_minmax(0,0.7fr)_minmax(0,0.7fr)] divide-x divide-border/55 border-b border-border/70 bg-muted/[0.08]">
+      <HistoryStat
+        align="left"
+        label="Now"
+        value={resource.historyDisplayValue ?? resource.displayValue}
+        valueClassName={resource.valueClassName}
+      />
+      <HistoryStat
+        label="Avg"
+        value={
+          average === null ? "—" : formatHistoryValue(resource.id, average)
+        }
+      />
+      <HistoryStat
+        label="Peak"
+        value={peak === null ? "—" : formatHistoryValue(resource.id, peak)}
+      />
     </div>
   )
 }
@@ -1586,12 +1577,12 @@ function DiskHistoryValue({
   valueClassName: string
 }) {
   return (
-    <div className="flex min-w-0 flex-col justify-center px-3">
+    <div className="flex min-w-0 flex-col justify-center gap-1 px-3">
       <span className="type-technical-label text-muted-foreground">
         {label}
       </span>
       <span
-        className={`mt-1 truncate font-mono text-xs leading-none font-semibold tracking-[-0.035em] tabular-nums ${valueClassName}`}
+        className={`type-code truncate leading-none font-medium tracking-[-0.035em] tabular-nums ${valueClassName}`}
       >
         {value}
       </span>
@@ -1599,13 +1590,27 @@ function DiskHistoryValue({
   )
 }
 
-function HistoryStat({ label, value }: { label: string; value: string }) {
+function HistoryStat({
+  align = "right",
+  label,
+  value,
+  valueClassName = "text-foreground",
+}: {
+  align?: "left" | "right"
+  label: string
+  value: string
+  valueClassName?: string
+}) {
   return (
-    <div className="flex min-w-0 flex-col justify-center px-2 text-right">
+    <div
+      className={`flex min-w-0 flex-col justify-center gap-1 px-2 ${align === "left" ? "text-left" : "text-right"}`}
+    >
       <span className="type-technical-label text-muted-foreground">
         {label}
       </span>
-      <span className="type-code mt-1 truncate font-medium text-foreground tabular-nums">
+      <span
+        className={`type-code truncate leading-none font-medium tracking-[-0.025em] tabular-nums ${valueClassName}`}
+      >
         {value}
       </span>
     </div>
@@ -1624,18 +1629,18 @@ function NetworkHistoryValue({
   peak: number | null
 }) {
   return (
-    <div className="min-w-0 px-3 py-1.5">
-      <div className="flex items-baseline justify-between gap-2">
-        <span className="type-technical-label text-muted-foreground">
+    <div className="flex min-w-0 flex-col justify-center gap-1.5 px-3 py-2">
+      <div className="flex min-w-0 items-baseline justify-between gap-3">
+        <span className="type-technical-label shrink-0 text-muted-foreground">
           {direction === "down" ? "↓ In" : "↑ Out"}
         </span>
         <span
-          className={`type-code truncate font-semibold tracking-[-0.03em] tabular-nums ${direction === "down" ? "text-cyan-200" : "text-primary"}`}
+          className={`type-code truncate leading-none font-medium tracking-[-0.025em] tabular-nums ${direction === "down" ? "text-cyan-200" : "text-primary"}`}
         >
           {value === null ? "—" : formatBytesPerSecond(value)}
         </span>
       </div>
-      <div className="type-meta mt-1 flex items-center justify-between gap-2 font-mono tracking-[0.02em] text-muted-foreground uppercase tabular-nums">
+      <div className="type-meta flex items-center justify-between gap-3 font-mono leading-none tracking-[0.02em] text-muted-foreground uppercase tabular-nums">
         <span>
           Avg {average === null ? "—" : formatBytesPerSecond(average)}
         </span>

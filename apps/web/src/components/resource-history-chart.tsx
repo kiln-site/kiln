@@ -8,8 +8,10 @@ import { Grid } from "@/components/dither-kit/grid"
 import type { Rgb, Seed } from "@/components/dither-kit/palette"
 import { Tooltip } from "@/components/dither-kit/tooltip"
 
-const NETWORK_SENT_SEED = seedFromOklch(0.73, 0.15, 65)
-const NETWORK_RECEIVED_SEED = seedFromOklch(0.78, 0.11, 205)
+const NETWORK_SENT_COLOR = "oklch(0.73 0.15 65)"
+const NETWORK_RECEIVED_COLOR = "oklch(0.78 0.11 205)"
+const NETWORK_SENT_SEED = seedFromCssColor(NETWORK_SENT_COLOR)
+const NETWORK_RECEIVED_SEED = seedFromCssColor(NETWORK_RECEIVED_COLOR)
 const NODE_STORAGE_COLOR = "oklch(0.72 0.13 75)"
 const NODE_STORAGE_SEED = seedFromCssColor(NODE_STORAGE_COLOR)
 const RESOURCE_VISUAL_FLOOR_RATIO = 0.06
@@ -131,12 +133,12 @@ export function ResourceHistoryChart({
     if (resourceId === "network") {
       const config: ChartConfig = {
         receivedVisual: {
-          label: "Download",
+          label: "In",
           color: NETWORK_RECEIVED_SEED,
           tooltipDataKey: "received",
         },
         sentVisual: {
-          label: "Upload",
+          label: "Out",
           color: NETWORK_SENT_SEED,
           tooltipDataKey: "sent",
         },
@@ -230,18 +232,25 @@ export function ResourceHistoryChart({
         <div className="type-meta pointer-events-none absolute top-0 right-3 z-10 flex items-center gap-3 font-mono tracking-[0.07em] text-muted-foreground">
           <span className="flex items-center gap-1.5">
             <span
-              className={`h-1.5 w-3 ${resourceId === "network" ? "bg-current opacity-70" : ""}`}
-              style={
-                resourceId === "storage"
-                  ? { backgroundColor: NODE_STORAGE_COLOR }
-                  : undefined
-              }
+              className="h-1.5 w-3"
+              style={{
+                backgroundColor:
+                  resourceId === "network"
+                    ? NETWORK_RECEIVED_COLOR
+                    : NODE_STORAGE_COLOR,
+              }}
             />
-            {resourceId === "network" ? "↓ DOWN" : "NODE"}
+            {resourceId === "network" ? "↓ IN" : "NODE"}
           </span>
           <span className="flex items-center gap-1.5">
-            <span className="h-1.5 w-3" style={{ backgroundColor: color }} />
-            {resourceId === "network" ? "↑ UP" : "INSTANCE"}
+            <span
+              className="h-1.5 w-3"
+              style={{
+                backgroundColor:
+                  resourceId === "network" ? NETWORK_SENT_COLOR : color,
+              }}
+            />
+            {resourceId === "network" ? "↑ OUT" : "INSTANCE"}
           </span>
         </div>
       ) : null}
