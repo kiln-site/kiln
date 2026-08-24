@@ -157,24 +157,22 @@ const AppSidebarView = React.memo(function AppSidebarView({
       relayConfigured={relayConfigured}
     >
       <Sidebar collapsible="icon" className="border-sidebar-border/80">
-        <SidebarHeader className="h-20 justify-center gap-0 px-2 py-0">
-          <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-1 group-data-[collapsible=icon]:grid-cols-1">
-            <SidebarMenu>
-              <SidebarMenuItem>
-                <SidebarMenuButton
-                  size="lg"
-                  className="h-11 data-[state=open]:bg-sidebar-accent"
-                  tooltip="Kiln"
-                >
-                  <HearthMark className="group-data-[collapsible=icon]:size-[32px]!" />
-                  <span className="min-w-0 flex-1 truncate font-heading text-lg font-semibold tracking-[0.04em]">
-                    KILN
-                  </span>
-                </SidebarMenuButton>
-              </SidebarMenuItem>
-            </SidebarMenu>
-            <RouteCommandMenuTrigger />
-          </div>
+        <SidebarHeader className="gap-1.5 px-2 py-2">
+          <SidebarMenu className="h-16 justify-center">
+            <SidebarMenuItem>
+              <SidebarMenuButton
+                size="lg"
+                className="h-11 data-[state=open]:bg-sidebar-accent"
+                tooltip="Kiln"
+              >
+                <HearthMark className="group-data-[collapsible=icon]:size-[32px]!" />
+                <span className="min-w-0 flex-1 truncate font-heading text-lg font-semibold tracking-[0.04em]">
+                  KILN
+                </span>
+              </SidebarMenuButton>
+            </SidebarMenuItem>
+          </SidebarMenu>
+          <RouteCommandMenuTrigger />
         </SidebarHeader>
 
         <SidebarSeparator />

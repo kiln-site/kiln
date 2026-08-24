@@ -487,18 +487,20 @@ export const RouteCommandMenuTrigger = React.memo(
     }
 
     return (
-      <SidebarMenu className="w-fit self-center justify-self-end group-data-[collapsible=icon]:justify-self-center">
+      <SidebarMenu>
         <SidebarMenuItem>
           <SidebarMenuButton
             aria-keyshortcuts="Control+K Meta+K"
-            aria-label={`Search routes, ${shortcutLabel}`}
-            className="h-8 w-auto! justify-start gap-2.5 bg-black/10 px-1.5 shadow-[0_0_0_0.5px_color-mix(in_oklab,var(--sidebar-foreground)_16%,transparent)]! group-data-[collapsible=icon]:justify-center hover:bg-black/15 hover:shadow-[0_0_0_0.5px_color-mix(in_oklab,var(--sidebar-foreground)_24%,transparent)]! dark:bg-black/25 dark:hover:bg-black/35"
-            tooltip={`Search routes · ${shortcutLabel}`}
+            aria-label={`Search Kiln, ${shortcutLabel}`}
+            className="h-8 w-full justify-start gap-2.5 bg-black/10 px-2 shadow-[0_0_0_0.5px_color-mix(in_oklab,var(--sidebar-foreground)_16%,transparent)]! group-data-[collapsible=icon]:justify-center hover:bg-black/15 hover:shadow-[0_0_0_0.5px_color-mix(in_oklab,var(--sidebar-foreground)_24%,transparent)]! dark:bg-black/25 dark:hover:bg-black/35"
+            tooltip={`Search Kiln · ${shortcutLabel}`}
             type="button"
             onClick={openMenu}
           >
             <Search />
-            <span className="sr-only">Search routes</span>
+            <span className="min-w-0 flex-1 truncate text-sidebar-foreground/60 group-data-[collapsible=icon]:sr-only">
+              Search Kiln...
+            </span>
             <Kbd
               aria-label={shortcutLabel}
               className="h-[18px] min-w-8 gap-0.5 px-1 group-data-[collapsible=icon]:hidden"
