@@ -8,6 +8,7 @@ import {
   TooltipTrigger,
 } from "@workspace/ui/components/tooltip"
 
+import { sectionDestinationLabel } from "@/lib/navigation-destinations"
 import type { GlobalSection } from "@/lib/route-sections"
 
 type PageSection = Exclude<GlobalSection, null>
@@ -80,29 +81,14 @@ function sectionPageFromPathname(
   section: PageSection,
   pathname: string
 ): string | null {
-  if (section === "infra") {
-    if (pathname.startsWith("/infra/setup")) return "Setup"
-    if (pathname.startsWith("/infra/relays")) return "Relays"
-    if (pathname.startsWith("/infra/tailscale")) return "Tailscale"
-    if (pathname.startsWith("/infra/domains")) return "Domains"
-    if (pathname.startsWith("/infra/servers")) return "Servers"
-    if (pathname.startsWith("/infra/databases")) return "Databases"
+  if (
+    section !== "infra" &&
+    section !== "settings" &&
+    section !== "automations"
+  ) {
     return null
   }
-  if (section === "settings") {
-    if (pathname.startsWith("/settings/appearance")) return "Appearance"
-    if (pathname.startsWith("/settings/files")) return "Files"
-    if (pathname.startsWith("/settings/account")) return "Account"
-    if (pathname.startsWith("/settings/billing")) return "Billing"
-    return null
-  }
-  if (section === "automations") {
-    if (pathname.startsWith("/automations/schedules")) return "Schedules"
-    if (pathname.startsWith("/automations/sync")) return "Sync"
-    if (pathname.startsWith("/automations/history")) return "History"
-    if (pathname.startsWith("/automations/calendar")) return "Calendar"
-  }
-  return null
+  return sectionDestinationLabel(section, pathname)
 }
 
 export const ToolbarSidebarTrigger = React.memo(

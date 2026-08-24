@@ -12,7 +12,13 @@ export type RelayConnectionSummary =
 
 export type SidebarInstance = Pick<
   RelayInstance,
-  "id" | "implementation" | "name" | "observedState" | "shortId" | "version"
+  | "brickId"
+  | "id"
+  | "implementation"
+  | "name"
+  | "observedState"
+  | "shortId"
+  | "version"
 > & {
   relayId: string
   relayName: string
@@ -63,12 +69,7 @@ export type InstanceWorkspaceInstance = Pick<
 
 export type InstanceRuntime = Pick<
   RelayInstance,
-  | "id"
-  | "observedState"
-  | "readyAt"
-  | "recovery"
-  | "resources"
-  | "startedAt"
+  "id" | "observedState" | "readyAt" | "recovery" | "resources" | "startedAt"
 > & { relayId: string }
 
 export type InstanceSettingsInstance = Pick<
@@ -154,6 +155,7 @@ function sidebarInstance(
   instance: RelayFleetSnapshot["instances"][number]
 ): SidebarInstance {
   return {
+    brickId: instance.brickId,
     id: instance.id,
     implementation: instance.implementation,
     name: instance.name,

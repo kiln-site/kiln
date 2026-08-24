@@ -2,28 +2,10 @@ import * as React from "react"
 import { useQuery } from "@tanstack/react-query"
 import { useNavigate, useRouterState } from "@tanstack/react-router"
 import {
-  CalendarDays,
-  CircleUserRound,
   Command as CommandIcon,
-  CreditCard,
-  Database,
-  Folder,
-  FolderDown,
-  Globe2,
-  History,
   ListTodo,
-  Network,
-  Palette,
-  RadioTower,
-  RefreshCw,
-  Rocket,
   Search,
-  Server,
-  SlidersHorizontal,
-  TerminalSquare,
   UserRoundCog,
-  Waypoints,
-  Wrench,
 } from "lucide-react"
 
 import {
@@ -53,6 +35,14 @@ import {
 } from "@/lib/relay-selectors"
 import type { SidebarInstance } from "@/lib/relay-selectors"
 import { readSelectedInstanceRouteId } from "@/lib/ui-preference-cookies"
+import {
+  automationDestinations,
+  destinationsForServer,
+  infrastructureDestinations,
+  serverDestinationHref,
+  settingsDestinations,
+  type NavigationDestination,
+} from "@/lib/navigation-destinations"
 
 interface RouteCommandMenuProviderProps {
   canManageAccess: boolean
@@ -63,172 +53,49 @@ interface RouteCommandMenuProviderProps {
   relayConfigured: boolean
 }
 
-interface RouteDestination {
-  href: string
-  icon: React.ComponentType<{ className?: string }>
-  keywords: Array<string>
-  label: string
-}
-
-const infrastructureRoutes: Array<RouteDestination> = [
+const managementRoutes: Array<NavigationDestination> = [
   {
-    href: "/infra/setup",
-    icon: Wrench,
-    keywords: ["infrastructure", "configure"],
-    label: "Setup",
-  },
-  {
-    href: "/infra/servers",
-    icon: Server,
-    keywords: ["infrastructure", "instances"],
-    label: "Servers",
-  },
-  {
-    href: "/infra/databases",
-    icon: Database,
-    keywords: ["infrastructure", "mysql"],
-    label: "Databases",
-  },
-]
-
-const relayRoutes: Array<RouteDestination> = [
-  {
-    href: "/infra/relays",
-    icon: RadioTower,
-    keywords: ["infrastructure", "nodes"],
-    label: "Relays",
-  },
-]
-
-const platformRoutes: Array<RouteDestination> = [
-  {
-    href: "/infra/tailscale",
-    icon: Waypoints,
-    keywords: ["infrastructure", "network"],
-    label: "Tailscale",
-  },
-  {
-    href: "/infra/domains",
-    icon: Globe2,
-    keywords: ["infrastructure", "cloudflare", "urls"],
-    label: "Domains",
-  },
-]
-
-const automationRoutes: Array<RouteDestination> = [
-  {
-    href: "/automations/schedules",
-    icon: ListTodo,
-    keywords: ["automations", "tasks"],
-    label: "Schedules",
-  },
-  {
-    href: "/automations/sync",
-    icon: RefreshCw,
-    keywords: ["automations", "synchronize"],
-    label: "Sync",
-  },
-  {
-    href: "/automations/history",
-    icon: History,
-    keywords: ["automations", "runs"],
-    label: "History",
-  },
-  {
-    href: "/automations/calendar",
-    icon: CalendarDays,
-    keywords: ["automations", "dates"],
-    label: "Calendar",
-  },
-]
-
-const managementRoutes: Array<RouteDestination> = [
-  {
-    href: "/backups",
     icon: BackupIcon,
     keywords: ["manage", "restore", "snapshots"],
     label: "Backups",
+    to: "/backups",
   },
   {
-    href: "/activity",
     icon: ListTodo,
     keywords: ["manage", "audit", "events"],
     label: "Activity",
+    to: "/activity",
   },
 ]
 
-const accessRoute: RouteDestination = {
-  href: "/access",
+const accessRoute: NavigationDestination = {
   icon: UserRoundCog,
   keywords: ["manage", "users", "permissions"],
   label: "Access",
+  to: "/access",
 }
 
-const settingsRoutes: Array<RouteDestination> = [
-  {
-    href: "/settings/appearance",
-    icon: Palette,
-    keywords: ["settings", "theme", "color"],
-    label: "Appearance",
-  },
-  {
-    href: "/settings/files",
-    icon: FolderDown,
-    keywords: ["settings", "downloads", "editor"],
-    label: "Files",
-  },
-  {
-    href: "/settings/account",
-    icon: CircleUserRound,
-    keywords: ["settings", "profile", "security"],
-    label: "Account",
-  },
-  {
-    href: "/settings/billing",
-    icon: CreditCard,
-    keywords: ["settings", "plan", "subscription"],
-    label: "Billing",
-  },
-]
+const authenticatedInfrastructureDestinations =
+  infrastructureDestinations.filter(
+    (destination) => destination.access === "authenticated"
+  )
+const relayInfrastructureDestinations = infrastructureDestinations.filter(
+  (destination) => destination.access === "manage-relays"
+)
+const platformInfrastructureDestinations = infrastructureDestinations.filter(
+  (destination) => destination.access === "platform-admin"
+)
 
 const emptyInstances: Array<SidebarInstance> = []
 
 function serverRoutes(instance: SidebarInstance, routeId: string) {
   const serverKeywords = ["server", instance.name, instance.implementation]
-  const encodedRouteId = encodeURIComponent(routeId)
-
-  return [
-    {
-      href: `/server/${encodedRouteId}/console`,
-      icon: TerminalSquare,
-      keywords: [...serverKeywords, "terminal"],
-      label: "Console",
-    },
-    {
-      href: `/server/${encodedRouteId}/files/`,
-      icon: Folder,
-      keywords: [...serverKeywords, "browser", "storage"],
-      label: "Files",
-    },
-    {
-      href: `/server/${encodedRouteId}/startup`,
-      icon: Rocket,
-      keywords: [...serverKeywords, "configuration", "variables"],
-      label: "Startup",
-    },
-    {
-      href: `/server/${encodedRouteId}/network`,
-      icon: Network,
-      keywords: [...serverKeywords, "ports", "allocation"],
-      label: "Network",
-    },
-    {
-      href: `/server/${encodedRouteId}/info`,
-      icon: SlidersHorizontal,
-      keywords: [...serverKeywords, "settings", "details"],
-      label: "Info",
-    },
-  ] satisfies Array<RouteDestination>
+  return destinationsForServer(instance).map((destination) => ({
+    icon: destination.icon,
+    keywords: [...serverKeywords, ...destination.keywords],
+    label: destination.label,
+    to: serverDestinationHref(destination, routeId),
+  })) satisfies Array<NavigationDestination>
 }
 
 function editDistance(left: string, right: string) {
@@ -377,9 +244,9 @@ export function RouteCommandMenuProvider({
   }, [])
 
   const navigateToRoute = React.useCallback(
-    (href: string) => {
+    (to: string) => {
       setOpen(false)
-      void navigate({ href })
+      void navigate({ href: to })
     },
     [navigate]
   )
@@ -413,7 +280,7 @@ export function RouteCommandMenuProvider({
             ) : null}
             <CommandGroup heading="Manage">
               <RouteItems
-                routes={automationRoutes}
+                routes={automationDestinations}
                 onSelect={navigateToRoute}
               />
               <RouteItems
@@ -427,21 +294,24 @@ export function RouteCommandMenuProvider({
             <CommandSeparator />
             <RouteGroup
               heading="Settings"
-              routes={settingsRoutes}
+              routes={settingsDestinations}
               onSelect={navigateToRoute}
             />
             <CommandSeparator />
             <CommandGroup heading="Infrastructure">
               <RouteItems
-                routes={infrastructureRoutes}
+                routes={authenticatedInfrastructureDestinations}
                 onSelect={navigateToRoute}
               />
               {canManageRelays ? (
-                <RouteItems routes={relayRoutes} onSelect={navigateToRoute} />
+                <RouteItems
+                  routes={relayInfrastructureDestinations}
+                  onSelect={navigateToRoute}
+                />
               ) : null}
               {isPlatformAdmin ? (
                 <RouteItems
-                  routes={platformRoutes}
+                  routes={platformInfrastructureDestinations}
                   onSelect={navigateToRoute}
                 />
               ) : null}
@@ -525,8 +395,8 @@ function RouteGroup({
   onSelect,
 }: {
   heading: string
-  routes: Array<RouteDestination>
-  onSelect: (href: string) => void
+  routes: ReadonlyArray<NavigationDestination>
+  onSelect: (to: string) => void
 }) {
   return (
     <CommandGroup heading={heading}>
@@ -539,11 +409,11 @@ function RouteItems({
   routes,
   onSelect,
 }: {
-  routes: Array<RouteDestination>
-  onSelect: (href: string) => void
+  routes: ReadonlyArray<NavigationDestination>
+  onSelect: (to: string) => void
 }) {
   return routes.map((route) => (
-    <RouteItem key={route.href} route={route} onSelect={onSelect} />
+    <RouteItem key={route.to} route={route} onSelect={onSelect} />
   ))
 }
 
@@ -551,13 +421,13 @@ function RouteItem({
   route,
   onSelect,
 }: {
-  route: RouteDestination
-  onSelect: (href: string) => void
+  route: NavigationDestination
+  onSelect: (to: string) => void
 }) {
   return (
     <CommandItem
       keywords={[route.label, ...route.keywords]}
-      value={route.href}
+      value={route.to}
       onSelect={onSelect}
     >
       <route.icon className="text-muted-foreground" />

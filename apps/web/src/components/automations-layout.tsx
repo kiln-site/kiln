@@ -1,11 +1,11 @@
 import * as React from "react"
 import { useSuspenseQuery } from "@tanstack/react-query"
 import { Link, Outlet, useNavigate, useSearch } from "@tanstack/react-router"
-import { CalendarDays, History, ListTodo, RefreshCw } from "lucide-react"
 
 import type { ServerPickerOption } from "@/components/server-picker-list"
 import { ServerScopePicker } from "@/components/server-scope-picker"
 import { ScheduleScopeContext } from "@/components/schedule-scope"
+import { automationDestinations } from "@/lib/navigation-destinations"
 import {
   relaySnapshotQueryOptions,
   scheduleOptionsQueryOptions,
@@ -15,33 +15,6 @@ import { getScheduleOptions } from "@/server/schedules"
 
 type ScheduleOption = Awaited<ReturnType<typeof getScheduleOptions>>[number]
 type RelaySnapshot = Awaited<ReturnType<typeof getRelaySnapshot>>
-
-const automationTabs = [
-  {
-    label: "Schedules",
-    to: "/automations/schedules",
-    icon: ListTodo,
-    exact: false,
-  },
-  {
-    label: "Sync",
-    to: "/automations/sync",
-    icon: RefreshCw,
-    exact: false,
-  },
-  {
-    label: "History",
-    to: "/automations/history",
-    icon: History,
-    exact: false,
-  },
-  {
-    label: "Calendar",
-    to: "/automations/calendar",
-    icon: CalendarDays,
-    exact: false,
-  },
-] as const
 
 export const AutomationsShell = React.memo(function AutomationsShell({
   children,
@@ -134,11 +107,11 @@ const AutomationsNavigation = React.memo(function AutomationsNavigation() {
       aria-label="Automation sections"
       className="mb-6 no-scrollbar flex gap-1 overflow-x-auto overflow-y-hidden border-b"
     >
-      {automationTabs.map((tab) => (
+      {automationDestinations.map((tab) => (
         <Link
           key={tab.to}
           to={tab.to}
-          activeOptions={{ exact: tab.exact }}
+          activeOptions={{ exact: false }}
           search={(previous) => ({
             kind: previous.kind,
             relay: previous.relay,

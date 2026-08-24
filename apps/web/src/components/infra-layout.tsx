@@ -1,15 +1,7 @@
 import * as React from "react"
 import { useSuspenseQuery } from "@tanstack/react-query"
 import { Link, Outlet } from "@tanstack/react-router"
-import {
-  CloudDownload,
-  Database,
-  Globe2,
-  RadioTower,
-  Server,
-  Waypoints,
-  Wrench,
-} from "lucide-react"
+import { CloudDownload } from "lucide-react"
 
 import { Button } from "@workspace/ui/components/button"
 import {
@@ -19,16 +11,8 @@ import {
 } from "@workspace/ui/components/tooltip"
 
 import { useInfraUpdateDialogStore } from "@/components/infra-update-dialog-provider"
+import { infrastructureDestinations } from "@/lib/navigation-destinations"
 import { accessCapabilitiesQueryOptions } from "@/lib/query-options"
-
-const infraTabs = [
-  { label: "Setup", to: "/infra/setup", icon: Wrench },
-  { label: "Relays", to: "/infra/relays", icon: RadioTower },
-  { label: "Tailscale", to: "/infra/tailscale", icon: Waypoints },
-  { label: "Domains", to: "/infra/domains", icon: Globe2 },
-  { label: "Servers", to: "/infra/servers", icon: Server },
-  { label: "Databases", to: "/infra/databases", icon: Database },
-] as const
 
 export const InfraShell = React.memo(function InfraShell({
   children,
@@ -63,13 +47,10 @@ const InfraNavigation = React.memo(function InfraNavigation() {
         aria-label="Infrastructure sections"
         className="no-scrollbar flex min-w-0 flex-1 gap-1 overflow-x-auto overflow-y-hidden"
       >
-        {infraTabs.map((tab) =>
-          (tab.to === "/infra/relays" ||
-            tab.to === "/infra/tailscale" ||
-            tab.to === "/infra/domains") &&
-          !(tab.to === "/infra/relays"
-            ? capabilities.canManageRelays
-            : capabilities.isPlatformAdmin) ? null : (
+        {infrastructureDestinations.map((tab) =>
+          (tab.access === "manage-relays" && !capabilities.canManageRelays) ||
+          (tab.access === "platform-admin" &&
+            !capabilities.isPlatformAdmin) ? null : (
             <Link
               key={tab.to}
               to={tab.to}

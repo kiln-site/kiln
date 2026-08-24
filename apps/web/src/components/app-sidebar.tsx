@@ -8,16 +8,11 @@ import {
   CalendarClock,
   ChevronsUpDown,
   Database,
-  Folder,
   ListTodo,
   LoaderCircle,
   LogOut,
-  Network,
-  Rocket,
   Server as ServerIcon,
   Settings,
-  SlidersHorizontal,
-  TerminalSquare,
   UserRoundCog,
 } from "lucide-react"
 import { Link, useNavigate, useRouterState } from "@tanstack/react-router"
@@ -84,24 +79,18 @@ import type { SidebarInstance } from "@/lib/relay-selectors"
 import { globalSectionFromRouteId } from "@/lib/route-sections"
 import type { GlobalSection } from "@/lib/route-sections"
 import {
+  destinationsForServer,
+  serverDestinations,
+  type ServerDestination,
+  type ServerDestinationId,
+} from "@/lib/navigation-destinations"
+import {
   persistSelectedInstanceRouteId,
   readSelectedInstanceRouteId,
 } from "@/lib/ui-preference-cookies"
 import { warmFileWorkspaceModule } from "@/lib/workspace-module-preloads"
 
-export type InstanceTab = "console" | "files" | "info" | "network" | "startup"
-
-const instanceItems: Array<{
-  title: string
-  value: InstanceTab
-  icon: typeof TerminalSquare
-}> = [
-  { title: "Console", value: "console", icon: TerminalSquare },
-  { title: "Files", value: "files", icon: Folder },
-  { title: "Startup", value: "startup", icon: Rocket },
-  { title: "Network", value: "network", icon: Network },
-  { title: "Info", value: "info", icon: SlidersHorizontal },
-]
+export type InstanceTab = ServerDestinationId
 
 interface AppSidebarViewProps {
   user: AuthenticatedUser
@@ -427,7 +416,7 @@ const InstanceNavigation = React.memo(function InstanceNavigation({
             navigateToTab={navigateToTab}
           />
           <InstanceTabNavigation
-            isTailscale={instance?.implementation.toLowerCase() === "tailscale"}
+            instance={instance}
             instanceRouteId={instanceRouteId}
             unresolvedServerId={unresolvedServerId}
           />
@@ -599,22 +588,18 @@ const ServerSelectorItem = React.memo(function ServerSelectorItem({
 })
 
 const InstanceTabNavigation = React.memo(function InstanceTabNavigation({
-  isTailscale,
+  instance,
   instanceRouteId,
   unresolvedServerId,
 }: {
-  isTailscale: boolean
+  instance: SidebarInstance | null
   instanceRouteId: string | null
   unresolvedServerId: string | undefined
 }) {
-  const items = isTailscale
-    ? instanceItems.filter(
-        (item) => item.value !== "startup" && item.value !== "info"
-      )
-    : instanceItems
+  const items = instance ? destinationsForServer(instance) : serverDestinations
   return items.map((item) => (
     <InstanceTabNavigationItem
-      key={item.value}
+      key={item.id}
       item={item}
       instanceRouteId={instanceRouteId}
       unresolvedServerId={unresolvedServerId}
@@ -628,20 +613,20 @@ const InstanceTabNavigationItem = React.memo(
     instanceRouteId,
     unresolvedServerId,
   }: {
-    item: (typeof instanceItems)[number]
+    item: ServerDestination
     instanceRouteId: string | null
     unresolvedServerId: string | undefined
   }) {
     const content = (
       <>
         <item.icon />
-        <span>{item.title}</span>
+        <span>{item.label}</span>
       </>
     )
 
     return (
       <SidebarMenuItem>
-        <SidebarMenuButton asChild tooltip={item.title}>
+        <SidebarMenuButton asChild tooltip={item.label}>
           {!instanceRouteId ? (
             <Link
               to="/infra/servers"
@@ -650,7 +635,7 @@ const InstanceTabNavigationItem = React.memo(
             >
               {content}
             </Link>
-          ) : item.value === "console" ? (
+          ) : item.id === "console" ? (
             <Link
               to="/server/$serverId/console"
               params={{ serverId: instanceRouteId }}
@@ -660,7 +645,7 @@ const InstanceTabNavigationItem = React.memo(
             >
               {content}
             </Link>
-          ) : item.value === "files" ? (
+          ) : item.id === "files" ? (
             <Link
               to="/server/$serverId/files/$"
               params={{ serverId: instanceRouteId, _splat: "" }}
@@ -672,7 +657,7 @@ const InstanceTabNavigationItem = React.memo(
             >
               {content}
             </Link>
-          ) : item.value === "network" ? (
+          ) : item.id === "network" ? (
             <Link
               to="/server/$serverId/network"
               params={{ serverId: instanceRouteId }}
@@ -682,7 +667,7 @@ const InstanceTabNavigationItem = React.memo(
             >
               {content}
             </Link>
-          ) : item.value === "startup" ? (
+          ) : item.id === "startup" ? (
             <Link
               to="/server/$serverId/startup"
               params={{ serverId: instanceRouteId }}
