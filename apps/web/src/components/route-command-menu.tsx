@@ -489,12 +489,12 @@ export const RouteCommandMenuTrigger = React.memo(
     }
 
     return (
-      <SidebarMenu className="self-center">
+      <SidebarMenu className="w-fit self-center justify-self-end group-data-[collapsible=icon]:justify-self-center">
         <SidebarMenuItem>
           <SidebarMenuButton
             aria-keyshortcuts="Control+K Meta+K"
             aria-label={`Search routes, ${shortcutLabel}`}
-            className="h-8 justify-start gap-1.5 bg-black/10 px-1.5 shadow-[0_0_0_0.5px_color-mix(in_oklab,var(--sidebar-foreground)_16%,transparent)]! group-data-[collapsible=icon]:justify-center hover:bg-black/15 hover:shadow-[0_0_0_0.5px_color-mix(in_oklab,var(--sidebar-foreground)_24%,transparent)]! dark:bg-black/25 dark:hover:bg-black/35"
+            className="h-8 w-auto! justify-start gap-1.5 bg-black/10 px-1.5 shadow-[0_0_0_0.5px_color-mix(in_oklab,var(--sidebar-foreground)_16%,transparent)]! group-data-[collapsible=icon]:justify-center hover:bg-black/15 hover:shadow-[0_0_0_0.5px_color-mix(in_oklab,var(--sidebar-foreground)_24%,transparent)]! dark:bg-black/25 dark:hover:bg-black/35"
             tooltip={`Search routes · ${shortcutLabel}`}
             type="button"
             onClick={openMenu}

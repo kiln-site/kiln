@@ -158,7 +158,7 @@ const AppSidebarView = React.memo(function AppSidebarView({
     >
       <Sidebar collapsible="icon" className="border-sidebar-border/80">
         <SidebarHeader className="h-20 justify-center gap-0 px-2 py-0">
-          <div className="grid grid-cols-[minmax(0,1fr)_4.5rem] gap-1 group-data-[collapsible=icon]:grid-cols-1">
+          <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-1 group-data-[collapsible=icon]:grid-cols-1">
             <SidebarMenu>
               <SidebarMenuItem>
                 <SidebarMenuButton
