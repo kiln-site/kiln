@@ -445,6 +445,7 @@ export const relayCreateInstanceSchema = z.object({
 
 export const relayPrepareInstanceSchema = relayCreateInstanceSchema.extend({
   idempotencyKey: z.uuid(),
+  instanceId: z.string().regex(/^[a-f0-9]{40}$/u),
 })
 
 export const relayProvisionInstanceSchema = z.object({

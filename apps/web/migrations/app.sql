@@ -71,6 +71,7 @@ CREATE TABLE IF NOT EXISTS kiln_instance (
   instance_id CHAR(40) NOT NULL,
   display_name VARCHAR(120) NULL,
   owner_id VARCHAR(36) NULL,
+  provisioning_reserved_until TIMESTAMP(3) NULL,
   created_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
   updated_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
   PRIMARY KEY (relay_id, instance_id),

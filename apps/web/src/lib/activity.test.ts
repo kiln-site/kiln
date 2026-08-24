@@ -26,12 +26,22 @@ function audit(
 }
 
 describe("activity", () => {
-  it("only recognizes literal instance creation audits as ownership evidence", () => {
+  it("recognizes synchronous and prepared instance creation as ownership evidence", () => {
     expect(
       auditInstanceCreatorId(
         audit({
           instanceId: "server-a",
           operation: "instance.create",
+          subject: "creator-a",
+        }),
+        "server-a"
+      )
+    ).toBe("creator-a")
+    expect(
+      auditInstanceCreatorId(
+        audit({
+          instanceId: "server-a",
+          operation: "instance.provision.prepare",
           subject: "creator-a",
         }),
         "server-a"

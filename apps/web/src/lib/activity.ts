@@ -47,7 +47,8 @@ export function auditInstanceCreatorId(
   instanceId: string
 ): string | null {
   if (
-    audit.details.operation !== "instance.create" ||
+    (audit.details.operation !== "instance.create" &&
+      audit.details.operation !== "instance.provision.prepare") ||
     auditInstanceId(audit) !== instanceId
   ) {
     return null

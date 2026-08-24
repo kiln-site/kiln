@@ -1724,22 +1724,23 @@ const makeRelayStateStore = Effect.gen(function* () {
         sql.withTransaction(
           Effect.gen(function* () {
             const rows = yield* sql<{ instanceId: string }>`
-              SELECT instance_id AS instanceId
-              FROM relay_instance_provisioning_jobs
-              WHERE status = 'queued'
-              ORDER BY created_at ASC, instance_id ASC
-              LIMIT 1
-            `
-            const instanceId = rows[0]?.instanceId
-            if (!instanceId) return null
-            yield* sql`
               UPDATE relay_instance_provisioning_jobs
               SET status = 'running',
                   attempt = attempt + 1,
                   updated_at = ${now},
                   error = NULL
-              WHERE instance_id = ${instanceId} AND status = 'queued'
+              WHERE instance_id = (
+                SELECT instance_id
+                FROM relay_instance_provisioning_jobs
+                WHERE status = 'queued'
+                ORDER BY created_at ASC, instance_id ASC
+                LIMIT 1
+              )
+                AND status = 'queued'
+              RETURNING instance_id AS instanceId
             `
+            const instanceId = rows[0]?.instanceId
+            if (!instanceId) return null
             return (yield* provisioningJobs({ instanceId }))[0] ?? null
           })
         )
@@ -1749,19 +1750,12 @@ const makeRelayStateStore = Effect.gen(function* () {
         "cancel_provisioning_job",
         Effect.gen(function* () {
           const rows = yield* sql<{ instanceId: string }>`
-            SELECT instance_id AS instanceId
-            FROM relay_instance_provisioning_jobs
-            WHERE instance_id = ${instanceId}
-              AND status IN ('awaiting_claim', 'queued', 'failed')
-            LIMIT 1
-          `
-          if (!rows[0]) return false
-          yield* sql`
             DELETE FROM relay_instance_provisioning_jobs
             WHERE instance_id = ${instanceId}
               AND status IN ('awaiting_claim', 'queued', 'failed')
+            RETURNING instance_id AS instanceId
           `
-          return true
+          return rows.length > 0
         })
       ),
     failProvisioningJob: (instanceId, error, placeholder, now) =>
@@ -1857,6 +1851,17 @@ const makeRelayStateStore = Effect.gen(function* () {
                   placeholder_json,
                   '$.observedState', 'failed',
                   '$.status', 'Provisioning failed',
+                  '$.provisioning.failedPhase',
+                    CASE json_extract(
+                      placeholder_json,
+                      '$.provisioning.phase'
+                    )
+                      WHEN 'preparing' THEN 'preparing'
+                      WHEN 'pulling_image' THEN 'pulling_image'
+                      WHEN 'creating_container' THEN 'creating_container'
+                      WHEN 'finalizing' THEN 'finalizing'
+                      ELSE 'preparing'
+                    END,
                   '$.provisioning.phase', 'failed',
                   '$.provisioning.error', ${error}
                 ),

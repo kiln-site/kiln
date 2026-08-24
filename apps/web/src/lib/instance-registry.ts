@@ -37,6 +37,39 @@ export function registerPreparedInstance(
   )
 }
 
+export function reservePreparedInstance(
+  relayId: string,
+  instance: Pick<RelayInstance, "id">,
+  ownerId: string
+): Promise<void> {
+  return runAppEffect(
+    "instances.registry.reservePrepared",
+    reservePreparedInstanceEffect(relayId, instance, ownerId)
+  )
+}
+
+export const reservePreparedInstanceEffect = Effect.fn(
+  "instances.registry.reservePrepared"
+)(function* (
+  relayId: string,
+  instance: Pick<RelayInstance, "id">,
+  ownerId: string
+) {
+  const database = yield* Database
+  yield* database.execute(
+    "instances.registry.reservePrepared",
+    `INSERT INTO ${databaseTable("instance")}
+       (relay_id, instance_id, display_name, owner_id,
+        provisioning_reserved_until)
+     VALUES (?, ?, NULL, ?, DATE_ADD(CURRENT_TIMESTAMP(3), INTERVAL 2 MINUTE))
+     ON DUPLICATE KEY UPDATE
+       owner_id = COALESCE(owner_id, VALUES(owner_id)),
+       provisioning_reserved_until = VALUES(provisioning_reserved_until),
+       updated_at = CURRENT_TIMESTAMP(3)`,
+    [relayId, instance.id, ownerId]
+  )
+})
+
 export const registerPreparedInstanceEffect = Effect.fn(
   "instances.registry.registerPrepared"
 )(function* (
@@ -53,6 +86,7 @@ export const registerPreparedInstanceEffect = Effect.fn(
          VALUES (?, ?, NULL, ?)
          ON DUPLICATE KEY UPDATE
            owner_id = COALESCE(owner_id, VALUES(owner_id)),
+           provisioning_reserved_until = NULL,
            updated_at = CURRENT_TIMESTAMP(3)`,
         [relayId, instance.id, ownerId]
       )
@@ -123,13 +157,23 @@ export const syncInstanceRegistryEffect = Effect.fn("instances.registry.sync")(
           const placeholders = instances.map(() => "?").join(", ")
           yield* transaction.execute(
             `DELETE FROM ${databaseTable("instance")}
-          WHERE relay_id = ? AND instance_id NOT IN (${placeholders})`,
+          WHERE relay_id = ?
+            AND instance_id NOT IN (${placeholders})
+            AND (
+              provisioning_reserved_until IS NULL
+              OR provisioning_reserved_until <= CURRENT_TIMESTAMP(3)
+            )`,
             [relayId, ...instances.map((instance) => instance.id)]
           )
           return
         }
         yield* transaction.execute(
-          `DELETE FROM ${databaseTable("instance")} WHERE relay_id = ?`,
+          `DELETE FROM ${databaseTable("instance")}
+            WHERE relay_id = ?
+              AND (
+                provisioning_reserved_until IS NULL
+                OR provisioning_reserved_until <= CURRENT_TIMESTAMP(3)
+              )`,
           [relayId]
         )
       })

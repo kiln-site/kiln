@@ -1342,8 +1342,7 @@ async function executeControlRequest(
         throw new Error("New server provisioning is disabled on this Relay")
       }
       const prepared = relayPrepareInstanceSchema.parse(request.payload)
-      const { idempotencyKey, ...input } = prepared
-      const instanceId = randomBytes(20).toString("hex")
+      const { idempotencyKey, instanceId, ...input } = prepared
       const placeholder = await lifecycle.prepareInstance(instanceId, input)
       return runRelayEffect(
         "relay.instance.provision.prepare",
@@ -1427,6 +1426,11 @@ async function executeControlRequest(
         ) {
           await serializeInstanceMutation(instanceId, () =>
             lifecycle.deleteInstance(instanceId, payload.deleteData === true)
+          )
+        } else {
+          await lifecycle.deletePreparedInstance(
+            instanceId,
+            payload.deleteData === true
           )
         }
         await runRelayEffect(

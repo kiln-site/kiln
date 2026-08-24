@@ -37,6 +37,7 @@ import { promiseEffect } from "@/effect/promise"
 import { forkAppEffect, runAppEffect } from "@/effect/runtime"
 import {
   registerPreparedInstance,
+  reservePreparedInstance,
   unregisterInstance,
 } from "@/lib/instance-registry"
 import {
@@ -69,6 +70,10 @@ const networkingInputSchema = relayNetworkingSchema.extend(
 const recipeInputSchema = relayInputSchema.extend({ source: brickSourceSchema })
 const instanceInputSchema = relayInputSchema.extend({
   instanceId: z.string().regex(/^[a-f0-9]{40}$/u),
+})
+const cancelProvisioningResultSchema = z.object({
+  cancelled: z.boolean(),
+  instanceId: instanceInputSchema.shape.instanceId,
 })
 export const hearthUpdateInstanceStartupInputSchema =
   relayUpdateInstanceStartupSchema
@@ -189,51 +194,118 @@ export const createBrickInstance = createServerFn({ method: "POST" })
       ...createInput,
       recipeDefinition,
     })
-    const instance = relayInstanceSchema.parse(
-      await requestRelay(
+    const instanceId = provisioningInstanceId(idempotencyKey)
+    const cancel = () =>
+      requestRelay(
         relay,
-        "/v1/instance-provisioning",
-        {
-          method: "POST",
-          body: JSON.stringify({ ...input, idempotencyKey }),
-        },
+        `/v1/instances/${encodeURIComponent(instanceId)}/provision`,
+        { method: "DELETE" },
         30_000,
         user.id
+      ).then((result) => cancelProvisioningResultSchema.parse(result).cancelled)
+    const unregister = () => unregisterInstance(relay.id, instanceId)
+    await reservePreparedInstance(relay.id, { id: instanceId }, user.id)
+    const instance = await Effect.runPromise(
+      promiseEffect(() =>
+        requestRelay(
+          relay,
+          "/v1/instance-provisioning",
+          {
+            method: "POST",
+            body: JSON.stringify({ ...input, idempotencyKey, instanceId }),
+          },
+          30_000,
+          user.id
+        )
+      ).pipe(
+        Effect.map(relayInstanceSchema.parse),
+        Effect.tapError(() =>
+          compensatePreparedProvisioning(cancel, unregister)
+        )
       )
     )
     await Effect.runPromise(
-      promiseEffect(async () => {
-        await registerPreparedInstance(relay.id, instance, user.id)
-        await requestRelay(
+      promiseEffect(() =>
+        registerPreparedInstance(relay.id, instance, user.id)
+      ).pipe(
+        Effect.tapError(() =>
+          compensatePreparedProvisioning(cancel, unregister)
+        )
+      )
+    )
+    await claimPreparedProvisioning({
+      cancel,
+      claim: () =>
+        requestRelay(
           relay,
           `/v1/instances/${encodeURIComponent(instance.id)}/provision`,
           { method: "POST" },
           30_000,
           user.id
-        )
-      }).pipe(
-        Effect.tapError(() =>
-          Effect.promise(() =>
-            Promise.allSettled([
-              requestRelay(
-                relay,
-                `/v1/instances/${encodeURIComponent(instance.id)}/provision`,
-                { method: "DELETE" },
-                30_000,
-                user.id
-              ),
-              unregisterInstance(relay.id, instance.id),
-            ])
-          )
-        )
-      )
-    )
+        ),
+      unregister,
+    })
     forkAppEffect(
       "relay.snapshot.invalidate",
       invalidateRelayCache(relayCachePolicy.snapshot(relay.id))
     )
     return instance
   })
+
+export function compensatePreparedProvisioning(
+  cancel: () => Promise<boolean>,
+  unregister: () => Promise<void>
+) {
+  return promiseEffect(cancel).pipe(
+    Effect.flatMap((cancelled) =>
+      cancelled ? promiseEffect(unregister) : Effect.void
+    ),
+    Effect.catch(() => Effect.void)
+  )
+}
+
+export function provisioningInstanceId(idempotencyKey: string): string {
+  const hex = idempotencyKey.replaceAll("-", "")
+  return `${hex}${hex.slice(0, 8)}`
+}
+
+export function claimPreparedProvisioning(input: {
+  cancel: () => Promise<boolean>
+  claim: () => Promise<unknown>
+  unregister: () => Promise<void>
+}): Promise<void> {
+  return Effect.runPromise(
+    promiseEffect(input.claim).pipe(
+      Effect.asVoid,
+      Effect.matchEffect({
+        onFailure: (claimFailure) =>
+          promiseEffect(input.cancel).pipe(
+            Effect.matchEffect({
+              onFailure: () =>
+                Effect.fail(
+                  new Error(
+                    `Kiln could not confirm whether Relay accepted provisioning. Retry the unchanged request to resume the same server. ${
+                      claimFailure instanceof Error
+                        ? claimFailure.message
+                        : "Relay claim failed"
+                    }`,
+                    { cause: claimFailure }
+                  )
+                ),
+              onSuccess: (cancelled) =>
+                cancelled
+                  ? promiseEffect(input.unregister).pipe(
+                      Effect.catch(() => Effect.void),
+                      Effect.andThen(Effect.fail(claimFailure))
+                    )
+                  : Effect.void,
+            })
+          ),
+        onSuccess: () => Effect.void,
+      })
+    )
+  )
+}
 
 export const getInstanceRecipe = createServerFn({ method: "GET" })
   .validator(instanceInputSchema)

@@ -281,13 +281,21 @@ async function ensureBackupResticS3Schema(database) {
 }
 
 async function ensureInstanceOwnershipSchema(database) {
-  const [ownerIdColumns] = await database.query(
-    `SHOW COLUMNS FROM ${databaseTable("instance")} LIKE 'owner_id'`
+  const [columns] = await database.query(
+    `SHOW COLUMNS FROM ${databaseTable("instance")}`
   )
-  if (ownerIdColumns.length === 0) {
+  const names = new Set(columns.map((column) => column.Field))
+  const additions = [
+    !names.has("owner_id")
+      ? "ADD COLUMN owner_id VARCHAR(36) NULL AFTER display_name"
+      : null,
+    !names.has("provisioning_reserved_until")
+      ? "ADD COLUMN provisioning_reserved_until TIMESTAMP(3) NULL AFTER owner_id"
+      : null,
+  ].filter(Boolean)
+  if (additions.length > 0) {
     await database.query(
-      `ALTER TABLE ${databaseTable("instance")}
-       ADD COLUMN owner_id VARCHAR(36) NULL AFTER display_name`
+      `ALTER TABLE ${databaseTable("instance")} ${additions.join(", ")}`
     )
   }
 }

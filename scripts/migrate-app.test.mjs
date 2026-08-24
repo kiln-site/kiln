@@ -31,3 +31,10 @@ test("adds the running state to schedule run status", () => {
     /MODIFY status ENUM\('running', 'succeeded', 'partial', 'failed', 'noop', 'interrupted', 'missed'\)/
   )
 })
+
+test("migrates prepared-instance ownership reservations", () => {
+  assert.match(
+    source,
+    /ADD COLUMN provisioning_reserved_until TIMESTAMP\(3\) NULL AFTER owner_id/
+  )
+})

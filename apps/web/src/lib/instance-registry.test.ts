@@ -5,6 +5,7 @@ import type { ResultSetHeader } from "mysql2/promise"
 import { Database } from "@/effect/database"
 import {
   registerInstanceEffect,
+  reservePreparedInstanceEffect,
   syncInstanceRegistryEffect,
 } from "@/lib/instance-registry"
 
@@ -53,6 +54,36 @@ describe("instance registry sync", () => {
   })
 
   it.effect(
+    "protects a prepared owner reservation from snapshot pruning",
+    () => {
+      const statements: Array<{
+        sql: string
+        values: ReadonlyArray<unknown>
+      }> = []
+      const databaseLayer = Layer.succeed(Database)({
+        execute: (_operation, sql, values) =>
+          Effect.sync(() => {
+            statements.push({ sql, values: values ?? [] })
+            return emptyResult
+          }),
+        queryRows: () => Effect.die("Unexpected database query"),
+        transaction: () => Effect.die("Unexpected transaction"),
+      })
+
+      return Effect.gen(function* () {
+        yield* reservePreparedInstanceEffect(
+          "relay-one",
+          { id: "instance-one" },
+          "user-one"
+        )
+
+        assert.include(statements[0]?.sql ?? "", "provisioning_reserved_until")
+        assert.include(statements[0]?.sql ?? "", "INTERVAL 2 MINUTE")
+      }).pipe(Effect.provide(databaseLayer))
+    }
+  )
+
+  it.effect(
     "does not write non-unique Relay names into the registry key",
     () => {
       const statements: Array<{
@@ -84,6 +115,9 @@ describe("instance registry sync", () => {
         assert.include(insert.sql, "(relay_id, instance_id, display_name)")
         assert.include(insert.sql, "(?, ?, NULL), (?, ?, NULL)")
         assert.notInclude(insert.sql, "display_name = VALUES(display_name)")
+        const prune = statements[1]
+        assert.isDefined(prune)
+        assert.include(prune.sql, "provisioning_reserved_until")
         assert.deepEqual(insert.values, [
           "relay-one",
           "instance-one",

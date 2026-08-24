@@ -2914,6 +2914,16 @@ export class LifecycleDriver {
     await this.#refreshTailscaleDns()
   }
 
+  async deletePreparedInstance(id: string, deleteData: boolean): Promise<void> {
+    await this.#docker.forgetRecoveryState(id)
+    if (!deleteData) return
+    await rm(join(this.#config.rootDirectory, id), {
+      recursive: true,
+      force: true,
+    })
+    await removeResticRepository(this.#config, id)
+  }
+
   async #ensureNetwork(): Promise<void> {
     await this.#ensureOwnedNetwork(this.#resources.gameNetwork, "game")
   }

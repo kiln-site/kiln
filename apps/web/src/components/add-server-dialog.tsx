@@ -282,6 +282,10 @@ const AddServerConfiguration = React.memo(function AddServerConfiguration({
   const relayConnected = useSelectedRelayConnected(relayId)
 
   const submittingRef = React.useRef(false)
+  const provisioningAttemptRef = React.useRef<{
+    fingerprint: string
+    idempotencyKey: string
+  } | null>(null)
 
   async function provision(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -313,6 +317,21 @@ const AddServerConfiguration = React.memo(function AddServerConfiguration({
     const name = typeof submittedName === "string" ? submittedName.trim() : ""
     const variables =
       selection.kind === "catalog" ? defaultBrickVariables(selection.brick) : {}
+    const provisioningInput = {
+      diskLimitBytes: DEFAULT_INSTANCE_DISK_LIMIT_BYTES,
+      name: name || selectionName || "New server",
+      recipe,
+      relayId,
+      start: false,
+      variables,
+    }
+    const fingerprint = JSON.stringify(provisioningInput)
+    const previousAttempt = provisioningAttemptRef.current
+    const idempotencyKey =
+      previousAttempt?.fingerprint === fingerprint
+        ? previousAttempt.idempotencyKey
+        : randomIdempotencyKey()
+    provisioningAttemptRef.current = { fingerprint, idempotencyKey }
 
     submittingRef.current = true
     await Effect.runPromise(
@@ -320,13 +339,8 @@ const AddServerConfiguration = React.memo(function AddServerConfiguration({
         try: () =>
           onProvision({
             data: {
-              diskLimitBytes: DEFAULT_INSTANCE_DISK_LIMIT_BYTES,
-              idempotencyKey: randomIdempotencyKey(),
-              name: name || selectionName || "New server",
-              recipe,
-              relayId,
-              start: false,
-              variables,
+              ...provisioningInput,
+              idempotencyKey,
             },
           }),
         catch: (cause) => cause,

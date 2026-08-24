@@ -1104,8 +1104,101 @@ describe("Relay state", () => {
         const failed = yield* store.getProvisioningJob(instanceId)
         assert.strictEqual(failed?.status, "failed")
         assert.strictEqual(failed?.placeholder.provisioning?.phase, "failed")
+        assert.strictEqual(
+          failed?.placeholder.provisioning?.failedPhase,
+          "preparing"
+        )
         assert.isTrue(yield* store.cancelProvisioningJob(instanceId))
         assert.isNull(yield* store.getProvisioningJob(instanceId))
+      })
+    )
+
+    it.effect("keeps claiming after a queued job is cancelled", () =>
+      Effect.gen(function* () {
+        const store = yield* RelayStateStore
+        const firstId = "c".repeat(40)
+        const secondId = "d".repeat(40)
+        const input = relayCreateInstanceSchema.parse({
+          diskLimitBytes: 25 * 1024 ** 3,
+          name: "Queued server",
+          recipe: "https://example.com/brick.yml",
+          start: false,
+          variables: {},
+        })
+        const placeholder = (instanceId: string) =>
+          relayInstanceSchema.parse({
+            connectAddress: "relay.example.com",
+            containerId: null,
+            desiredState: "stopped",
+            directory: instanceId,
+            game: "Minecraft",
+            id: instanceId,
+            implementation: "Paper",
+            javaVersion: "Java 21",
+            limits: { diskBytes: input.diskLimitBytes, memoryBytes: 0 },
+            managedByRelay: true,
+            name: input.name,
+            observedState: "provisioning",
+            ports: [],
+            provisioning: {
+              attempt: 0,
+              error: null,
+              phase: "awaiting_claim",
+            },
+            resources: null,
+            service: `kiln-${instanceId}`,
+            shortId: instanceId.slice(0, 8),
+            status: "Waiting for Hearth",
+            version: "1.21.8",
+          })
+        yield* store.enqueueProvisioningJob(
+          {
+            idempotencyKey: "55000000-0000-4000-8000-000000000002",
+            input,
+            instanceId: firstId,
+            placeholder: placeholder(firstId),
+          },
+          2_000
+        )
+        yield* store.enqueueProvisioningJob(
+          {
+            idempotencyKey: "55000000-0000-4000-8000-000000000003",
+            input,
+            instanceId: secondId,
+            placeholder: placeholder(secondId),
+          },
+          2_001
+        )
+        yield* store.claimProvisioningJob(firstId, 2_010)
+        yield* store.claimProvisioningJob(secondId, 2_011)
+
+        const [cancelled, claimed] = yield* Effect.all(
+          [
+            store.cancelProvisioningJob(firstId),
+            store.claimNextProvisioningJob(2_020),
+          ],
+          { concurrency: "unbounded" }
+        )
+        const running = cancelled
+          ? claimed
+          : claimed?.instanceId === firstId
+            ? yield* store.claimNextProvisioningJob(2_021)
+            : claimed
+        if (!running) {
+          return yield* Effect.die(
+            "The remaining provisioning job was not claimed"
+          )
+        }
+        assert.strictEqual(running.instanceId, secondId)
+        assert.strictEqual(running.status, "running")
+        yield* store.failProvisioningJob(
+          secondId,
+          "test finished",
+          running.placeholder,
+          2_030
+        )
+        yield* store.cancelProvisioningJob(secondId)
+        yield* store.cancelProvisioningJob(firstId)
       })
     )
   })
