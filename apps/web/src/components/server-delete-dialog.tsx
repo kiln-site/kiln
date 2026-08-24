@@ -16,6 +16,7 @@ import {
 import { Input } from "@workspace/ui/components/input"
 import { showToast } from "@workspace/ui/components/sonner"
 
+import { copyTextToClipboard } from "@/lib/clipboard"
 import type { RelayFleetSnapshot } from "@/lib/relay-fleet"
 import { queryKeys, type RelayConnection } from "@/lib/query-options"
 import { deleteInstance } from "@/server/relay"
@@ -31,11 +32,13 @@ export const ServerDeleteDialog = React.memo(function ServerDeleteDialog({
   target,
   onDeleted,
   onOpenChange,
+  passwordRequired = true,
 }: {
   open: boolean
   target: ServerDeleteTarget
   onDeleted?: () => Promise<void> | void
   onOpenChange: (open: boolean) => void
+  passwordRequired?: boolean
 }) {
   const queryClient = useQueryClient()
   const [confirmation, setConfirmation] = React.useState("")
@@ -58,28 +61,18 @@ export const ServerDeleteDialog = React.memo(function ServerDeleteDialog({
   )
 
   async function copyServerId() {
-    await Effect.runPromise(
-      Effect.tryPromise({
-        try: () => navigator.clipboard.writeText(target.id),
-        catch: (cause) => cause,
-      }).pipe(
-        Effect.match({
-          onFailure: () =>
-            setError(
-              "Could not copy the server ID. Select and copy it manually."
-            ),
-          onSuccess: () => {
-            setCopied(true)
-            setError(null)
-          },
-        })
-      )
-    )
+    const copiedId = await copyTextToClipboard(target.id)
+    if (!copiedId) {
+      setError("Could not copy the server ID. Select and copy it manually.")
+      return
+    }
+    setCopied(true)
+    setError(null)
   }
 
   async function removeServer(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault()
-    if (!confirmed || !password || pending) return
+    if (!confirmed || (passwordRequired && !password) || pending) return
     setError(null)
     const deleted = await Effect.runPromise(
       Effect.tryPromise({
@@ -198,29 +191,31 @@ export const ServerDeleteDialog = React.memo(function ServerDeleteDialog({
             />
           </div>
 
-          <div className="grid gap-1.5">
-            <label
-              htmlFor="delete-server-password"
-              className="type-technical-label text-muted-foreground"
-            >
-              Account password
-            </label>
-            <Input
-              id="delete-server-password"
-              aria-label="Account password"
-              type="password"
-              value={password}
-              onChange={(event) => {
-                setPassword(event.currentTarget.value)
-                setError(null)
-              }}
-              autoComplete="current-password"
-              placeholder="Enter your account password"
-              className="bg-background"
-              disabled={pending}
-              required
-            />
-          </div>
+          {passwordRequired ? (
+            <div className="grid gap-1.5">
+              <label
+                htmlFor="delete-server-password"
+                className="type-technical-label text-muted-foreground"
+              >
+                Account password
+              </label>
+              <Input
+                id="delete-server-password"
+                aria-label="Account password"
+                type="password"
+                value={password}
+                onChange={(event) => {
+                  setPassword(event.currentTarget.value)
+                  setError(null)
+                }}
+                autoComplete="current-password"
+                placeholder="Enter your account password"
+                className="bg-background"
+                disabled={pending}
+                required
+              />
+            </div>
+          ) : null}
 
           <p
             role={error ? "alert" : undefined}
@@ -231,7 +226,9 @@ export const ServerDeleteDialog = React.memo(function ServerDeleteDialog({
             {error ??
               (confirmation.length > 0 && !confirmed
                 ? "The pasted server ID does not match."
-                : "Both confirmations are checked again by Hearth before deletion.")}
+                : passwordRequired
+                  ? "Both confirmations are checked again by Hearth before deletion."
+                  : "The server ID is checked again by Hearth before deletion.")}
           </p>
 
           <DialogFooter>
@@ -246,7 +243,9 @@ export const ServerDeleteDialog = React.memo(function ServerDeleteDialog({
             <Button
               type="submit"
               variant="destructive"
-              disabled={!confirmed || !password || pending}
+              disabled={
+                !confirmed || (passwordRequired && !password) || pending
+              }
             >
               {pending ? <LoaderCircle className="animate-spin" /> : <Trash2 />}
               {pending ? "Deleting server…" : "Delete server"}

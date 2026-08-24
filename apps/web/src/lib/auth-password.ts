@@ -5,6 +5,8 @@ import { AuthenticationError } from "@/effect/errors"
 import { Database } from "@/effect/database"
 import { runAppEffect } from "@/effect/runtime"
 import { databaseTable } from "@/lib/database-config"
+import { isDevelopmentBypassIdentity } from "@/lib/development-bypass"
+import { developmentBypassEnabled } from "@/lib/environment"
 
 interface CredentialAccountRow extends RowDataPacket {
   password: string | null
@@ -14,8 +16,6 @@ interface AccountPasswordIdentity {
   id: string
   isDevelopmentBypass: boolean
 }
-
-const developmentBypassDeletePassword = "zzz"
 
 const passwordDidNotMatch = () =>
   AuthenticationError.make({
@@ -34,8 +34,8 @@ export async function requireAccountPassword(
 
 export const requireAccountPasswordEffect = Effect.fn("auth.password.confirm")(
   function* (user: AccountPasswordIdentity, password: string) {
-    if (user.isDevelopmentBypass) {
-      if (password === developmentBypassDeletePassword) return
+    if (isDevelopmentBypassIdentity(user)) {
+      if (developmentBypassEnabled() && password.length === 0) return
       return yield* passwordDidNotMatch()
     }
 

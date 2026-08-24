@@ -91,6 +91,7 @@ export type InstanceSettingsInstance = Pick<
   | "implementation"
   | "javaVersion"
   | "name"
+  | "provisioning"
   | "publicHost"
   | "publicPort"
   | "service"
@@ -271,6 +272,7 @@ export function selectInstanceSettings(instanceId: string, relayId?: string) {
         implementation: instance.implementation,
         javaVersion: instance.javaVersion,
         name: instance.name,
+        provisioning: instance.provisioning,
         publicHost: instance.publicHost,
         publicPort: instance.publicPort,
         relayId: instance.relayId,

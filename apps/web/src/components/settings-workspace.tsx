@@ -75,6 +75,7 @@ export function SettingsWorkspace({
   canDelete,
   canRename,
   onDeleted,
+  passwordRequired,
   relayConnected,
 }: {
   instance: InstanceSettingsInstance
@@ -83,6 +84,7 @@ export function SettingsWorkspace({
   canDelete: boolean
   canRename: boolean
   onDeleted: () => Promise<void> | void
+  passwordRequired: boolean
   relayConnected: boolean
 }) {
   const rawAddress =
@@ -91,6 +93,19 @@ export function SettingsWorkspace({
       : instance.connectAddress
   const configuredAddress =
     instance.connectAddress !== rawAddress ? instance.connectAddress : null
+
+  if (instance.provisioning) {
+    return (
+      <ProvisioningInfoWorkspace
+        instance={instance}
+        node={node}
+        canDelete={canDelete}
+        onDeleted={onDeleted}
+        passwordRequired={passwordRequired}
+        relayConnected={relayConnected}
+      />
+    )
+  }
 
   return (
     <section className="min-h-0 flex-1 overflow-y-auto bg-card">
@@ -203,12 +218,161 @@ export function SettingsWorkspace({
           <ServerDangerZone
             instance={instance}
             onDeleted={onDeleted}
+            passwordRequired={passwordRequired}
             relayConnected={relayConnected}
           />
         ) : null}
       </div>
     </section>
   )
+}
+
+function ProvisioningInfoWorkspace({
+  instance,
+  node,
+  canDelete,
+  onDeleted,
+  passwordRequired,
+  relayConnected,
+}: {
+  instance: InstanceSettingsInstance
+  node: RelayNodeSummary
+  canDelete: boolean
+  onDeleted: () => Promise<void> | void
+  passwordRequired: boolean
+  relayConnected: boolean
+}) {
+  const provisioning = instance.provisioning
+  if (!provisioning) return null
+  const failed = provisioning.phase === "failed"
+
+  return (
+    <section className="min-h-0 flex-1 overflow-y-auto bg-card">
+      <div className="mx-auto max-w-5xl px-5 py-6 sm:px-8 sm:py-8">
+        <div className="grid items-start gap-4 lg:grid-cols-2">
+          <InfoCard>
+            <InfoCardHeader
+              icon={<Fingerprint />}
+              title="Attempted server identity"
+              action={
+                <Badge
+                  variant="outline"
+                  className={cn(
+                    "type-meta font-mono",
+                    failed
+                      ? "border-destructive/35 bg-destructive/10 text-destructive"
+                      : "border-amber-500/35 bg-amber-500/10 text-amber-300"
+                  )}
+                >
+                  {failed ? "FAILED" : "PROVISIONING"}
+                </Badge>
+              }
+            />
+            <MetaRow icon={Server} label="Name" value={instance.name} />
+            <MetaRow
+              icon={Fingerprint}
+              label="Server full ID"
+              value={instance.id}
+              mono
+              wrap
+            />
+            <MetaRow
+              icon={Box}
+              label="Brick"
+              value={`${instance.implementation} · ${instance.version}`}
+            />
+          </InfoCard>
+
+          <InfoCard>
+            <InfoCardHeader
+              icon={failed ? <TriangleAlert /> : <LoaderCircle />}
+              title="Provisioning attempt"
+            />
+            <MetaRow
+              icon={Activity}
+              label="Attempt"
+              value={String(Math.max(1, provisioning.attempt))}
+            />
+            <MetaRow
+              icon={Tags}
+              label="Phase"
+              value={formatProvisioningPhase(
+                provisioning.failedPhase ?? provisioning.phase
+              )}
+              mono
+            />
+            <MetaRow
+              icon={TriangleAlert}
+              label={failed ? "Failure" : "Status"}
+              value={
+                provisioning.error ??
+                (failed
+                  ? "The Relay did not provide an error message."
+                  : "The Relay is still building this server.")
+              }
+              wrap
+            />
+          </InfoCard>
+        </div>
+
+        <InfoCard className="mt-4">
+          <InfoCardHeader
+            icon={<Network />}
+            title="Retained placement data"
+            action={
+              <span
+                className={`type-meta flex items-center gap-1.5 font-mono ${relayConnected ? "text-emerald-400" : "text-amber-300"}`}
+              >
+                <span
+                  className={`size-1.5 rounded-full ${relayConnected ? "bg-emerald-400" : "bg-amber-300"}`}
+                />
+                {relayConnected ? "CONNECTED" : "LAST KNOWN"}
+              </span>
+            }
+          />
+          <div className="grid sm:grid-cols-2 lg:grid-cols-4">
+            <MetaRow
+              icon={HardDrive}
+              label="Node"
+              value={`${node.name} · ${node.id}`}
+            />
+            <MetaRow
+              icon={Box}
+              label="Container"
+              value={instance.containerId ?? "Not created"}
+              mono
+            />
+            <MetaRow
+              icon={Tags}
+              label="Compose service"
+              value={instance.service}
+              mono
+            />
+            <MetaRow
+              icon={HardDrive}
+              label="Data directory"
+              value={instance.directory}
+              mono
+            />
+          </div>
+        </InfoCard>
+
+        {canDelete ? (
+          <ServerDangerZone
+            instance={instance}
+            onDeleted={onDeleted}
+            passwordRequired={passwordRequired}
+            relayConnected={relayConnected}
+          />
+        ) : null}
+      </div>
+    </section>
+  )
+}
+
+function formatProvisioningPhase(phase: string): string {
+  const words = phase.replaceAll("_", " ")
+  return `${words.charAt(0).toUpperCase()}${words.slice(1)}`
 }
 
 function InfoCard({
@@ -851,10 +1015,12 @@ function AccessUserRow({
 function ServerDangerZone({
   instance,
   onDeleted,
+  passwordRequired,
   relayConnected,
 }: {
   instance: InstanceSettingsInstance
   onDeleted: () => Promise<void> | void
+  passwordRequired: boolean
   relayConnected: boolean
 }) {
   const [open, setOpen] = React.useState(false)
@@ -899,6 +1065,7 @@ function ServerDangerZone({
             relayId: instance.relayId,
           }}
           onDeleted={onDeleted}
+          passwordRequired={passwordRequired}
           onOpenChange={setOpen}
         />
       ) : null}

@@ -110,7 +110,7 @@ const instanceNameInputSchema = instanceInputSchema.extend({
 
 const deleteInstanceInputSchema = instanceInputSchema.extend({
   confirmation: z.string().max(64),
-  password: z.string().min(1).max(128),
+  password: z.string().max(128),
 })
 
 const deleteInstanceResultSchema = z.object({

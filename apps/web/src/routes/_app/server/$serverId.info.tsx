@@ -8,6 +8,7 @@ import {
   useInstanceRelayConnected,
 } from "@/components/instance-workspace-context"
 import { SettingsWorkspace } from "@/components/settings-workspace"
+import { isDevelopmentBypassIdentity } from "@/lib/development-bypass"
 import { pageTitle } from "@/lib/page-title"
 import { relaySnapshotQueryOptions } from "@/lib/query-options"
 import { selectInstanceSettings } from "@/lib/relay-selectors"
@@ -19,6 +20,7 @@ export const Route = createFileRoute("/_app/server/$serverId/info")({
 
 function InfoRoute() {
   const navigate = Route.useNavigate()
+  const { user } = Route.useRouteContext()
   const workspaceInstance = useInstanceIdentity()
   const permissions = useInstancePermissions()
   const relayConnected = useInstanceRelayConnected()
@@ -44,6 +46,7 @@ function InfoRoute() {
       canDelete={permissions.deleteServer}
       canRename={permissions.settings}
       canShare={permissions.shareLogs}
+      passwordRequired={!isDevelopmentBypassIdentity(user)}
       relayConnected={relayConnected}
       onDeleted={returnToServers}
     />

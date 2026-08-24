@@ -236,7 +236,11 @@ function InstanceProvisioningBoundary({
   children: React.ReactNode
   instance: InstanceWorkspaceInstance
 }) {
+  const isInfoRoute = useRouterState({
+    select: (state) => state.location.pathname.endsWith("/info"),
+  })
   if (!instance.provisioning) return children
+  if (isInfoRoute) return children
   return <InstanceProvisioningState instance={instance} />
 }
 
@@ -770,7 +774,7 @@ function ServerPowerControls({
 }: {
   action: ServerAction | null
   canControlPower: boolean
-  instance: Pick<InstanceWorkspaceInstance, "id" | "name"> &
+  instance: Pick<InstanceWorkspaceInstance, "id" | "name" | "provisioning"> &
     Pick<InstanceRuntime, "observedState">
   onAction: (action: ServerAction) => Promise<void>
   relayConnected: boolean
@@ -782,7 +786,10 @@ function ServerPowerControls({
   const isRunning = instance.observedState === "running"
   const isStarting = instance.observedState === "starting"
   const isStopping = instance.observedState === "stopping"
-  const isProvisioning = isPowerControlLocked(instance.observedState)
+  const isProvisioning =
+    Boolean(instance.provisioning) ||
+    isPowerControlLocked(instance.observedState)
+  const provisioningFailed = instance.provisioning?.phase === "failed"
   const powerIsOn = isRunning || isStarting
   const powerIsTransitioning =
     action === "start" ||
@@ -826,7 +833,9 @@ function ServerPowerControls({
           : action === "stop" || action === "restart" || isStopping
             ? "Stopping"
             : isProvisioning
-              ? "Provisioning"
+              ? provisioningFailed
+                ? "Failed"
+                : "Provisioning"
               : powerIsOn
                 ? "Stop"
                 : "Start"}
@@ -983,6 +992,7 @@ function InstancePowerControls({
       if (
         !relayConnected ||
         !observedState ||
+        instance.provisioning ||
         isPowerControlLocked(observedState)
       ) {
         return
@@ -1051,6 +1061,7 @@ function InstancePowerControls({
     },
     [
       instance.id,
+      instance.provisioning,
       instance.relayId,
       mutateRelayAction,
       onError,
@@ -1076,7 +1087,12 @@ function InstancePowerControls({
     <ServerPowerControls
       action={action}
       canControlPower={canControlPower}
-      instance={{ id: instance.id, name: instance.name, observedState }}
+      instance={{
+        id: instance.id,
+        name: instance.name,
+        observedState,
+        provisioning: instance.provisioning,
+      }}
       onAction={handleAction}
       relayConnected={relayConnected}
     />

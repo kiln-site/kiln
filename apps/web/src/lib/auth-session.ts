@@ -2,6 +2,7 @@ import type { AuthSession } from "@/lib/auth"
 
 import { auth } from "@/lib/auth"
 import { resolveDisplayName } from "@/lib/display-name"
+import { developmentBypassUserId } from "@/lib/development-bypass"
 import { developmentBypassEnabled } from "@/lib/environment"
 import type { PlatformRole } from "@/lib/permissions"
 import { platformRoles } from "@/lib/permissions"
@@ -31,7 +32,7 @@ export async function getAuthenticatedUserFromHeaders(
     return {
       email: "developer@kiln.local",
       emailVerified: true,
-      id: "kiln-development-bypass",
+      id: developmentBypassUserId,
       isDevelopmentBypass: true,
       name: "Kiln Developer",
       role: "admin",
