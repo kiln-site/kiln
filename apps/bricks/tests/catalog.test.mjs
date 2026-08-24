@@ -12,6 +12,13 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), "..")
 const JAVA_ARGS_RULE_PATTERN =
   "^(?!.*(?:^|\\s)(?:@(?!@)\\S+|-Xm[sx]\\S*|-XX:(?:-UseContainerSupport|-UseCGroupMemoryLimitForHeap|InitialHeapSize|MaxHeapSize|SoftMaxHeapSize|MaxRAMPercentage|MinRAMPercentage|InitialRAMPercentage|MaxRAMFraction|InitialRAMFraction|MinRAMFraction|MaxRAM|VMOptionsFile|Flags)(?:=\\S*)?|--nogui|-jar)(?:\\s|$)).*$"
 const SERVER_JAR_FILE_RULE_PATTERN = "^[A-Za-z0-9][A-Za-z0-9._\\-]{0,123}\\.jar$"
+const OFFICIAL_READINESS_LOGS = {
+  fabric: [")! For help, type "],
+  folia: [")! For help, type "],
+  palworld: ["Setting breakpad minidump AppID = 2394010"],
+  paper: [")! For help, type "],
+  velocity: ["Done ("],
+}
 const loadJson = async (path) =>
   JSON.parse(await readFile(join(root, path), "utf8"))
 const loadYaml = async (path) =>
@@ -89,6 +96,13 @@ test("the official catalog and every recipe satisfy the v1 schemas", async () =>
       recipe.console?.stopCommands.length ?? 0,
       `${recipePath}: console stop commands must be unique`
     )
+    if (recipe.metadata.id in OFFICIAL_READINESS_LOGS) {
+      assert.deepEqual(
+        recipe.readiness?.logs,
+        OFFICIAL_READINESS_LOGS[recipe.metadata.id],
+        `${recipePath}: readiness logs must match the official startup signal`
+      )
+    }
     const installationMarker =
       recipe.runtime.environment.KILN_INSTALLATION_MARKER
     if (installationMarker) {
