@@ -495,9 +495,9 @@ const ServerSelector = React.memo(function ServerSelector({
                 ? `Switch server. ${instance.name}, ${instance.implementation} ${instance.version}, ${serverStatusLabel(instance.observedState)}`
                 : "Choose a server"
             }
-            className="mb-1.5 h-11 border border-sidebar-border/75 bg-background/35 px-2 py-2 group-data-[collapsible=icon]:h-[32px]! group-data-[collapsible=icon]:bg-black/10 hover:border-sidebar-border hover:bg-sidebar-accent group-data-[collapsible=icon]:hover:bg-black/15 data-[state=open]:border-sidebar-border data-[state=open]:bg-sidebar-accent dark:group-data-[collapsible=icon]:bg-black/25 dark:group-data-[collapsible=icon]:hover:bg-black/35"
+            className="mb-1.5 h-11 border border-sidebar-border/75 bg-background/35 px-2 py-2 group-data-[collapsible=icon]:h-[32px]! group-data-[collapsible=icon]:overflow-visible group-data-[collapsible=icon]:bg-black/10 hover:border-sidebar-border hover:bg-sidebar-accent group-data-[collapsible=icon]:hover:bg-black/15 data-[state=open]:border-sidebar-border data-[state=open]:bg-sidebar-accent dark:group-data-[collapsible=icon]:bg-black/25 dark:group-data-[collapsible=icon]:hover:bg-black/35"
           >
-            <span className="relative grid size-7 shrink-0 place-items-center rounded-md border border-sidebar-border/70 bg-background/25 group-data-[collapsible=icon]:absolute group-data-[collapsible=icon]:inset-0 group-data-[collapsible=icon]:m-auto group-data-[collapsible=icon]:size-4 group-data-[collapsible=icon]:rounded-none group-data-[collapsible=icon]:border-0 group-data-[collapsible=icon]:bg-transparent">
+            <span className="relative grid size-7 shrink-0 place-items-center rounded-md border border-sidebar-border/70 bg-background/25 group-data-[collapsible=icon]:absolute group-data-[collapsible=icon]:inset-0 group-data-[collapsible=icon]:m-auto group-data-[collapsible=icon]:size-6 group-data-[collapsible=icon]:rounded-none group-data-[collapsible=icon]:border-0 group-data-[collapsible=icon]:bg-transparent">
               <ServerTypeIcon
                 implementation={instance?.implementation ?? ""}
                 className="size-4 text-sidebar-foreground/85"
@@ -505,7 +505,7 @@ const ServerSelector = React.memo(function ServerSelector({
               />
               {instance ? (
                 <span
-                  className={`absolute -right-0.5 -bottom-0.5 size-1.5 rounded-full ring-2 ring-popover group-data-[collapsible=icon]:hidden ${statusDotTone(instance.observedState)}`}
+                  className={`absolute -right-0.5 -bottom-0.5 size-1.5 rounded-full ring-2 ring-popover ${statusDotTone(instance.observedState)}`}
                   aria-hidden="true"
                 />
               ) : null}
