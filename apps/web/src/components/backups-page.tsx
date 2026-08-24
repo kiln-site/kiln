@@ -35,6 +35,7 @@ import {
   Trash2,
   X,
 } from "lucide-react"
+import type { BackupTarget } from "@workspace/contracts"
 
 import { Badge } from "@workspace/ui/components/badge"
 import { Button } from "@workspace/ui/components/button"
@@ -99,7 +100,7 @@ import {
   accessCapabilitiesQueryOptions,
   backupStorageQueryOptions,
   backupsQueryOptions,
-  instanceBackupPolicyQueryOptions,
+  backupPolicyQueryOptions,
   managedDatabaseDirectoryQueryOptions,
   queryKeys,
   relaySnapshotQueryOptions,
@@ -115,9 +116,9 @@ import {
   renameBackup,
   restoreDatabaseBackup,
   restoreInstanceBackup,
-  type getInstanceBackupPolicy,
-  updateInstanceBackupExcludes,
-  updateInstanceBackupLimits,
+  getBackupPolicy,
+  updateBackupExcludes,
+  updateBackupLimits,
   type getBackups,
 } from "@/server/backups"
 import type { getAccessCapabilities } from "@/server/access"
@@ -144,7 +145,7 @@ type BackupBulkDeleteOutcome =
     }
   | { backup: Backup; message: string; status: "failed" }
 type BackupStorage = Awaited<ReturnType<typeof getBackupStorage>>[number]
-type InstanceBackupPolicy = Awaited<ReturnType<typeof getInstanceBackupPolicy>>
+type BackupPolicy = Awaited<ReturnType<typeof getBackupPolicy>>
 type BackupAvailabilityDestination = {
   enabled: boolean
   id: string | null
@@ -633,14 +634,10 @@ export const BackupsPage = React.memo(function BackupsPage({
   )
     ? scopedCreateTargetKey
     : undefined
-  const canManageSelectedServer = Boolean(
+  const canManageSelectedTarget = Boolean(
     selectedServer &&
-    (selectedServer.kind ?? "server") === "server" &&
     createTargets.some(
-      (target) =>
-        target.kind === "instance" &&
-        target.relayId === selectedServer.relayId &&
-        target.id === selectedServer.id
+      (target) => target.key === selectedBackupCreateTargetKey(selectedServer)
     )
   )
   const canCreateBackup = React.useCallback(
@@ -662,7 +659,7 @@ export const BackupsPage = React.memo(function BackupsPage({
         allDescription="Every accessible server, database, and Relay"
         allLabel="All instances"
         ariaLabel="Accessible instances"
-        canManageSettings={canManageSelectedServer}
+        canManageSettings={canManageSelectedTarget}
         changeLabel="Change instance"
         chooseLabel="Choose instance"
         emptyMessage="No accessible instances found."
@@ -975,14 +972,12 @@ const BackupDialogHost = React.memo(function BackupDialogHost({
     )
   }
   if (dialog.kind === "settings") {
-    if (!selectedServer || (selectedServer.kind ?? "server") !== "server") {
-      return null
-    }
+    if (!selectedServer) return null
     return (
-      <InstanceBackupSettingsDialog
+      <BackupSettingsDialog
         isPlatformAdmin={capabilities.isPlatformAdmin}
         open
-        server={selectedServer}
+        target={selectedServer}
         storage={storage}
         onOpenChange={close}
       />
@@ -3111,39 +3106,40 @@ function CreateBackupDialog({
   )
 }
 
-function InstanceBackupSettingsDialog({
+function BackupSettingsDialog({
   isPlatformAdmin,
   onOpenChange,
   open,
-  server,
+  target,
   storage,
 }: {
   isPlatformAdmin: boolean
   onOpenChange: (open: boolean) => void
   open: boolean
-  server: ServerPickerOption
+  target: ServerPickerOption
   storage: Array<BackupStorage>
 }) {
+  const policyTarget = React.useMemo(() => backupPolicyTarget(target), [target])
   const policy = useQuery(
-    instanceBackupPolicyQueryOptions(server.relayId, server.id)
+    backupPolicyQueryOptions(target.relayId, policyTarget)
   )
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-2xl">
         <DialogHeader>
-          <DialogTitle>{server.name} backup settings</DialogTitle>
+          <DialogTitle>{target.name} backup settings</DialogTitle>
           <DialogDescription>
-            Set retention ceilings, a preferred destination, and extra archive
-            exclusions. Relay’s built-in lockfile exclusions still apply.
+            Set retention ceilings, a preferred destination, and extra
+            exclusions for this backup target.
           </DialogDescription>
         </DialogHeader>
         {policy.data ? (
-          <InstanceBackupSettingsEditor
-            key={`${server.relayId}:${server.id}`}
+          <BackupSettingsEditor
+            key={`${target.relayId}:${policyTarget.kind}:${policyTarget.id}`}
             isPlatformAdmin={isPlatformAdmin}
             policy={policy.data}
-            server={server}
+            target={target}
             storage={storage}
             onSaved={() => onOpenChange(false)}
           />
@@ -3159,20 +3155,21 @@ function InstanceBackupSettingsDialog({
   )
 }
 
-function InstanceBackupSettingsEditor({
+function BackupSettingsEditor({
   isPlatformAdmin,
   onSaved,
   policy,
-  server,
+  target,
   storage,
 }: {
   isPlatformAdmin: boolean
   onSaved: () => void
-  policy: InstanceBackupPolicy
-  server: ServerPickerOption
+  policy: BackupPolicy
+  target: ServerPickerOption
   storage: Array<BackupStorage>
 }) {
   const queryClient = useQueryClient()
+  const policyTarget = React.useMemo(() => backupPolicyTarget(target), [target])
   const [quantityLimit, setQuantityLimit] = React.useState(
     () => policy.quantityLimit?.toString() ?? ""
   )
@@ -3188,18 +3185,16 @@ function InstanceBackupSettingsEditor({
   const enabledStorage = React.useMemo(
     () =>
       storage.filter(
-        (destination) => destination.enabled && !destination.deleting
+        (destination) =>
+          destination.enabled &&
+          !destination.deleting &&
+          (policyTarget.kind !== "platform" || destination.ownerUserId === null)
       ),
-    [storage]
+    [policyTarget.kind, storage]
   )
   const [storageId, setStorageId] = React.useState(() =>
     policy.storageId &&
-    storage.some(
-      (destination) =>
-        destination.id === policy.storageId &&
-        destination.enabled &&
-        !destination.deleting
-    )
+    enabledStorage.some((destination) => destination.id === policy.storageId)
       ? policy.storageId
       : "local"
   )
@@ -3207,48 +3202,48 @@ function InstanceBackupSettingsEditor({
   const save = useMutation({
     mutationFn: async () => {
       const operations: Array<Promise<unknown>> = [
-        updateInstanceBackupLimits({
+        updateBackupLimits({
           data: {
-            instanceId: server.id,
             quantityLimit: parseOptionalInteger(
               quantityLimit,
               "Quantity limit"
             ),
-            relayId: server.relayId,
+            relayId: target.relayId,
             scope: "user",
             sizeLimitBytes: parseOptionalGiB(sizeLimit, "Size limit"),
+            target: policyTarget,
           },
         }),
-        updateInstanceBackupExcludes({
+        updateBackupExcludes({
           data: {
             exclude: excludeLines(exclude),
-            instanceId: server.id,
-            relayId: server.relayId,
+            relayId: target.relayId,
+            target: policyTarget,
           },
         }),
         setPreferredBackupStorage({
           data: {
-            instanceId: server.id,
-            relayId: server.relayId,
+            relayId: target.relayId,
             storageId: storageId === "local" ? null : storageId,
+            target: policyTarget,
           },
         }),
       ]
       if (isPlatformAdmin) {
         operations.push(
-          updateInstanceBackupLimits({
+          updateBackupLimits({
             data: {
-              instanceId: server.id,
               quantityLimit: parseOptionalInteger(
                 adminQuantityLimit,
                 "Platform quantity limit"
               ),
-              relayId: server.relayId,
+              relayId: target.relayId,
               scope: "platform",
               sizeLimitBytes: parseOptionalGiB(
                 adminSizeLimit,
                 "Platform size limit"
               ),
+              target: policyTarget,
             },
           })
         )
@@ -3258,12 +3253,12 @@ function InstanceBackupSettingsEditor({
     onSuccess: async () => {
       await Promise.all([
         queryClient.invalidateQueries({
-          queryKey: queryKeys.backups.policy(server.relayId, server.id),
+          queryKey: queryKeys.backups.policy(target.relayId, policyTarget),
         }),
         queryClient.invalidateQueries({ queryKey: queryKeys.backups.all }),
       ])
       showToast({
-        message: `${server.name} backup settings saved`,
+        message: `${target.name} backup settings saved`,
         type: "success",
       })
       onSaved()
@@ -3349,8 +3344,8 @@ function InstanceBackupSettingsEditor({
             onChange={(event) => setExclude(event.currentTarget.value)}
           />
           <span className="type-meta mt-1.5 block text-muted-foreground">
-            One relative glob per line. Absolute paths and parent traversal are
-            rejected by Relay.
+            One glob per line. Relay validates exclusions before applying them
+            to compatible archives.
           </span>
         </label>
       </div>
@@ -4111,6 +4106,14 @@ function backupMatchesScope(
     )
   }
   return backup.targetKind === "platform" && backup.relayId === selected.relayId
+}
+
+function backupPolicyTarget(target: ServerPickerOption): BackupTarget {
+  const kind = target.kind ?? "server"
+  return {
+    id: target.id,
+    kind: kind === "server" ? "instance" : kind === "relay" ? "platform" : kind,
+  }
 }
 
 function selectedBackupCreateTargetKey(selected: ServerPickerOption): string {

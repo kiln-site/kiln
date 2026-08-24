@@ -4,17 +4,19 @@ import { createServerFn } from "@tanstack/react-start"
 import { z } from "zod"
 
 import {
+  backupTargetSchema,
   databaseEngineSupportsLogicalBackups,
   relayBackupTaskSchema,
   relayIdSchema,
   relaySnapshotSchema,
+  type BackupTarget,
 } from "@workspace/contracts"
 
 import { createBackupDownloadShareEffect } from "@/effect/backup-download-shares"
 import {
   forgetBackupEffect,
   listBackupCatalogEffect,
-  getInstanceBackupPolicyEffect,
+  getBackupPolicyEffect,
   reconcileBackupTaskEffect,
   renameBackupEffect,
   reserveBackupCopyEffect,
@@ -138,7 +140,6 @@ const backupRestoreInputSchema = z.strictObject({
 })
 
 const backupLimitsInputSchema = z.strictObject({
-  instanceId: z.string().min(1).max(120),
   quantityLimit: z.number().int().nonnegative().max(1_000_000).nullable(),
   relayId: relayIdSchema,
   scope: z.enum(["platform", "user"]),
@@ -148,17 +149,18 @@ const backupLimitsInputSchema = z.strictObject({
     .nonnegative()
     .max(Number.MAX_SAFE_INTEGER)
     .nullable(),
+  target: backupTargetSchema,
 })
 
 const backupExcludesInputSchema = z.strictObject({
   exclude: z.array(z.string().trim().min(1).max(1_024)).max(1_000),
-  instanceId: z.string().min(1).max(120),
   relayId: relayIdSchema,
+  target: backupTargetSchema,
 })
 
-const instanceBackupPolicyInputSchema = z.strictObject({
-  instanceId: z.string().min(1).max(120),
+const backupPolicyInputSchema = z.strictObject({
   relayId: relayIdSchema,
+  target: backupTargetSchema,
 })
 
 export const createInstanceBackup = createServerFn({ method: "POST" })
@@ -374,19 +376,14 @@ export const getBackups = createServerFn({ method: "GET" }).handler(
   }
 )
 
-export const getInstanceBackupPolicy = createServerFn({ method: "GET" })
-  .validator(instanceBackupPolicyInputSchema)
+export const getBackupPolicy = createServerFn({ method: "GET" })
+  .validator(backupPolicyInputSchema)
   .handler(async ({ data }) => {
     const user = await requireAuthenticatedUser()
-    await requireRelayPermission({
-      instanceId: data.instanceId,
-      permission: "backup.create",
-      relayId: data.relayId,
-      user,
-    })
+    const target = await requireBackupPolicyTarget(data, user)
     return runAppEffect(
-      "backups.getInstancePolicy",
-      getInstanceBackupPolicyEffect(data.relayId, data.instanceId)
+      "backups.getPolicy",
+      getBackupPolicyEffect(data.relayId, target.kind, target.id)
     )
   })
 
@@ -816,16 +813,11 @@ export const restoreDatabaseBackup = createServerFn({ method: "POST" })
     }
   })
 
-export const updateInstanceBackupLimits = createServerFn({ method: "POST" })
+export const updateBackupLimits = createServerFn({ method: "POST" })
   .validator(backupLimitsInputSchema)
   .handler(async ({ data }) => {
     const user = await requireAuthenticatedUser()
-    await requireRelayPermission({
-      instanceId: data.instanceId,
-      permission: "backup.create",
-      relayId: data.relayId,
-      user,
-    })
+    const target = await requireBackupPolicyTarget(data, user)
     if (
       data.scope === "platform" &&
       !hasPlatformPermission(user, "platform.backups.manage-limits")
@@ -839,32 +831,50 @@ export const updateInstanceBackupLimits = createServerFn({ method: "POST" })
         quantityLimit: data.quantityLimit,
         relayId: data.relayId,
         sizeLimitBytes: data.sizeLimitBytes,
-        targetId: data.instanceId,
+        targetId: target.id,
+        targetKind: target.kind,
       })
     )
     return { updated: true }
   })
 
-export const updateInstanceBackupExcludes = createServerFn({ method: "POST" })
+export const updateBackupExcludes = createServerFn({ method: "POST" })
   .validator(backupExcludesInputSchema)
   .handler(async ({ data }) => {
     const user = await requireAuthenticatedUser()
-    await requireRelayPermission({
-      instanceId: data.instanceId,
-      permission: "backup.create",
-      relayId: data.relayId,
-      user,
-    })
+    const target = await requireBackupPolicyTarget(data, user)
     await runAppEffect(
       "backups.updateExcludes",
       updateBackupExcludesEffect({
         exclude: data.exclude,
         relayId: data.relayId,
-        targetId: data.instanceId,
+        targetId: target.id,
+        targetKind: target.kind,
       })
     )
     return { updated: true }
   })
+
+async function requireBackupPolicyTarget(
+  input: { relayId: string; target: BackupTarget },
+  user: AuthenticatedUser
+): Promise<BackupTarget> {
+  if (input.target.kind === "platform") {
+    if (!isPlatformAdmin(user)) {
+      throw new Error("Platform backup settings require administrator access")
+    }
+    return { id: kilnInstallationId(), kind: "platform" }
+  }
+  await requireRelayPermission({
+    ...(input.target.kind === "database"
+      ? { databaseId: input.target.id }
+      : { instanceId: input.target.id }),
+    permission: "backup.create",
+    relayId: input.relayId,
+    user,
+  })
+  return input.target
+}
 
 async function resticBackupDownload(input: {
   backup: BackupCatalogRecord

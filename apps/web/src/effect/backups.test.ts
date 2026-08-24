@@ -10,12 +10,15 @@ import {
   canReuseBackupExport,
   clampBackupExportTtlMs,
   effectiveBackupLimit,
+  getBackupPolicyEffect,
   purgeInstanceBackupRepositoriesEffect,
   renameBackupEffect,
   reserveBackupCopyEffect,
   reserveInstanceBackupEffect,
   reconcileBackupTaskEffect,
   shouldApplyRelayBackupTaskSnapshot,
+  updateBackupExcludesEffect,
+  updateBackupLimitsEffect,
 } from "@/effect/backups"
 import { deleteS3BackupPrefix } from "@/backups/destinations/s3"
 
@@ -561,6 +564,77 @@ describe("backup limits", () => {
     expect(
       queries.find((sql) => sql.includes("backup_final_delete"))
     ).toContain("FOR UPDATE")
+  })
+})
+
+describe("backup policies", () => {
+  it("reads and updates policies for every backup target kind", async () => {
+    const writes: Array<ReadonlyArray<unknown> | undefined> = []
+    let queryValues: ReadonlyArray<unknown> | undefined
+    const databaseLayer = Layer.succeed(Database)({
+      execute: (_operation, _sql, values) =>
+        Effect.sync(() => {
+          writes.push(values)
+          return emptyResult
+        }),
+      queryRows: <TRow extends RowDataPacket>(
+        _operation: string,
+        _sql: string,
+        values?: ReadonlyArray<unknown>
+      ) =>
+        Effect.sync(() => {
+          queryValues = values
+          return [
+            {
+              admin_quantity_limit: 12,
+              admin_size_limit_bytes: 4_096,
+              exclude_patterns: ["cache/**"],
+              quantity_limit: 6,
+              size_limit_bytes: 2_048,
+              storage_id: null,
+            },
+          ] as unknown as ReadonlyArray<TRow>
+        }),
+      transaction: () => Effect.die("Unexpected database transaction"),
+    })
+
+    const policy = await Effect.runPromise(
+      getBackupPolicyEffect("relay-one", "database", "database-one").pipe(
+        Effect.provide(databaseLayer)
+      )
+    )
+    await Effect.runPromise(
+      updateBackupLimitsEffect({
+        admin: false,
+        quantityLimit: 6,
+        relayId: "relay-one",
+        sizeLimitBytes: 2_048,
+        targetId: "database-one",
+        targetKind: "database",
+      }).pipe(Effect.provide(databaseLayer))
+    )
+    await Effect.runPromise(
+      updateBackupExcludesEffect({
+        exclude: ["cache/**"],
+        relayId: "relay-one",
+        targetId: "kiln.dev",
+        targetKind: "platform",
+      }).pipe(Effect.provide(databaseLayer))
+    )
+
+    expect(policy).toEqual({
+      adminQuantityLimit: 12,
+      adminSizeLimitBytes: 4_096,
+      exclude: ["cache/**"],
+      quantityLimit: 6,
+      sizeLimitBytes: 2_048,
+      storageId: null,
+    })
+    expect(queryValues).toEqual(["relay-one", "database", "database-one"])
+    expect(writes).toEqual([
+      ["relay-one", "database", "database-one", 6, 2_048],
+      ["relay-one", "platform", "kiln.dev", '["cache/**"]'],
+    ])
   })
 })
 

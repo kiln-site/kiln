@@ -4,9 +4,11 @@ import { createServerFn } from "@tanstack/react-start"
 import { z } from "zod"
 
 import {
+  backupTargetSchema,
   relayIdSchema,
   resticS3BucketSchema,
   resticS3RegionSchema,
+  type BackupTarget,
 } from "@workspace/contracts"
 
 import {
@@ -21,8 +23,10 @@ import {
 import { runAppEffect } from "@/effect/runtime"
 import {
   hasPlatformPermission,
+  isPlatformAdmin,
   requireRelayPermission,
 } from "@/lib/access-control"
+import { kilnInstallationId } from "@/lib/environment"
 import {
   normalizeObjectPrefix,
   normalizeS3Endpoint,
@@ -48,9 +52,9 @@ export const backupStorageInputSchema = z.strictObject({
 })
 
 const preferredStorageInputSchema = z.strictObject({
-  instanceId: z.string().min(1).max(120),
   relayId: relayIdSchema,
   storageId: backupStorageIdSchema.nullable(),
+  target: backupTargetSchema,
 })
 
 export const getBackupStorage = createServerFn({ method: "GET" }).handler(
@@ -175,12 +179,7 @@ export const setPreferredBackupStorage = createServerFn({ method: "POST" })
   .validator(preferredStorageInputSchema)
   .handler(async ({ data }) => {
     const user = await requireAuthenticatedUser()
-    await requireRelayPermission({
-      instanceId: data.instanceId,
-      permission: "backup.create",
-      relayId: data.relayId,
-      user,
-    })
+    const target = await requireBackupPolicyTarget(data, user)
     if (data.storageId) {
       const storage = await runAppEffect(
         "backupStorage.loadPreferred",
@@ -188,7 +187,9 @@ export const setPreferredBackupStorage = createServerFn({ method: "POST" })
       )
       if (
         !storage ||
-        !canUseStorage(storage, user.id) ||
+        (target.kind === "platform"
+          ? storage.ownerUserId !== null
+          : !canUseStorage(storage, user.id)) ||
         !storage.enabled ||
         storage.deleting
       ) {
@@ -200,12 +201,33 @@ export const setPreferredBackupStorage = createServerFn({ method: "POST" })
       setBackupPolicyStorageEffect({
         relayId: data.relayId,
         storageId: data.storageId,
-        targetId: data.instanceId,
-        targetKind: "instance",
+        targetId: target.id,
+        targetKind: target.kind,
       })
     )
     return { updated: true }
   })
+
+async function requireBackupPolicyTarget(
+  input: { relayId: string; target: BackupTarget },
+  user: Awaited<ReturnType<typeof requireAuthenticatedUser>>
+): Promise<BackupTarget> {
+  if (input.target.kind === "platform") {
+    if (!isPlatformAdmin(user)) {
+      throw new Error("Platform backup settings require administrator access")
+    }
+    return { id: kilnInstallationId(), kind: "platform" }
+  }
+  await requireRelayPermission({
+    ...(input.target.kind === "database"
+      ? { databaseId: input.target.id }
+      : { instanceId: input.target.id }),
+    permission: "backup.create",
+    relayId: input.relayId,
+    user,
+  })
+  return input.target
+}
 
 export function visibleBackupStorage(
   storage: ReadonlyArray<BackupStorageRecord>,

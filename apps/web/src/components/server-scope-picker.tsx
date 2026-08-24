@@ -88,7 +88,7 @@ export const ServerScopePicker = React.memo(function ServerScopePicker({
                   <TooltipTrigger asChild>
                     <span className="inline-flex">
                       <Button
-                        aria-label="Manage selected server backup settings"
+                        aria-label="Manage selected backup settings"
                         disabled={!canManageSettings}
                         size="icon-sm"
                         type="button"
@@ -101,8 +101,8 @@ export const ServerScopePicker = React.memo(function ServerScopePicker({
                   </TooltipTrigger>
                   <TooltipContent side="bottom">
                     {canManageSettings
-                      ? "Server backup settings"
-                      : "Choose a server to manage its backup settings"}
+                      ? "Backup settings"
+                      : "Choose an instance to manage its backup settings"}
                   </TooltipContent>
                 </Tooltip>
               ) : null}

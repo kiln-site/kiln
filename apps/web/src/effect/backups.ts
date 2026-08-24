@@ -8,6 +8,7 @@ import type {
   BackupRestoreTaskInput,
   BackupTaskPhase,
   BackupTaskStatus,
+  BackupTargetKind,
   RelayBackupTask,
 } from "@workspace/contracts"
 import {
@@ -272,7 +273,7 @@ export interface BackupDispatchArtifact {
   storageId: string | null
 }
 
-export interface InstanceBackupPolicy {
+export interface BackupPolicy {
   adminQuantityLimit: number | null
   adminSizeLimitBytes: number | null
   exclude: Array<string>
@@ -2374,6 +2375,7 @@ export const updateBackupLimitsEffect = Effect.fn("backups.updateLimits")(
     relayId: string
     sizeLimitBytes: number | null
     targetId: string
+    targetKind: BackupTargetKind
   }) {
     const database = yield* Database
     const quantityColumn = input.admin
@@ -2387,27 +2389,35 @@ export const updateBackupLimitsEffect = Effect.fn("backups.updateLimits")(
       `INSERT INTO ${databaseTable("backup_policy")}
         (relay_id, target_kind, target_id, exclude_patterns,
          ${quantityColumn}, ${sizeColumn})
-       VALUES (?, 'instance', ?, JSON_ARRAY(), ?, ?)
+       VALUES (?, ?, ?, JSON_ARRAY(), ?, ?)
        ON DUPLICATE KEY UPDATE
          ${quantityColumn} = VALUES(${quantityColumn}),
          ${sizeColumn} = VALUES(${sizeColumn})`,
-      [input.relayId, input.targetId, input.quantityLimit, input.sizeLimitBytes]
+      [
+        input.relayId,
+        input.targetKind,
+        input.targetId,
+        input.quantityLimit,
+        input.sizeLimitBytes,
+      ]
     )
   }
 )
 
-export const getInstanceBackupPolicyEffect = Effect.fn(
-  "backups.getInstancePolicy"
-)(function* (relayId: string, targetId: string) {
+export const getBackupPolicyEffect = Effect.fn("backups.getPolicy")(function* (
+  relayId: string,
+  targetKind: BackupTargetKind,
+  targetId: string
+) {
   const database = yield* Database
   const rows = yield* database.queryRows<BackupPolicyRow>(
-    "backup_policy_get_instance",
+    "backup_policy_get",
     `SELECT exclude_patterns, quantity_limit, size_limit_bytes, storage_id,
             admin_quantity_limit, admin_size_limit_bytes
        FROM ${databaseTable("backup_policy")}
-      WHERE relay_id = ? AND target_kind = 'instance' AND target_id = ?
+      WHERE relay_id = ? AND target_kind = ? AND target_id = ?
       LIMIT 1`,
-    [relayId, targetId]
+    [relayId, targetKind, targetId]
   )
   const policy = rows[0]
   return {
@@ -2423,7 +2433,7 @@ export const getInstanceBackupPolicyEffect = Effect.fn(
       "backup size limit"
     ),
     storageId: policy?.storage_id ?? null,
-  } satisfies InstanceBackupPolicy
+  } satisfies BackupPolicy
 })
 
 export const updateBackupExcludesEffect = Effect.fn("backups.updateExcludes")(
@@ -2431,15 +2441,21 @@ export const updateBackupExcludesEffect = Effect.fn("backups.updateExcludes")(
     exclude: ReadonlyArray<string>
     relayId: string
     targetId: string
+    targetKind: BackupTargetKind
   }) {
     const database = yield* Database
     yield* database.execute(
       "backup_excludes_update",
       `INSERT INTO ${databaseTable("backup_policy")}
         (relay_id, target_kind, target_id, exclude_patterns)
-       VALUES (?, 'instance', ?, ?)
+       VALUES (?, ?, ?, ?)
        ON DUPLICATE KEY UPDATE exclude_patterns = VALUES(exclude_patterns)`,
-      [input.relayId, input.targetId, JSON.stringify(input.exclude)]
+      [
+        input.relayId,
+        input.targetKind,
+        input.targetId,
+        JSON.stringify(input.exclude),
+      ]
     )
   }
 )

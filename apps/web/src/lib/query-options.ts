@@ -1,6 +1,6 @@
 import { queryOptions } from "@tanstack/react-query"
 import type { QueryClient } from "@tanstack/react-query"
-import type { RelayInstance } from "@workspace/contracts"
+import type { BackupTarget, RelayInstance } from "@workspace/contracts"
 
 import {
   getAccessCapabilities,
@@ -9,7 +9,7 @@ import {
   getInvitationPreview,
 } from "@/server/access"
 import { getActivity } from "@/server/activity"
-import { getBackups, getInstanceBackupPolicy } from "@/server/backups"
+import { getBackupPolicy, getBackups } from "@/server/backups"
 import { getBackupStorage } from "@/server/backup-storage"
 import {
   getBrickCatalog,
@@ -77,8 +77,8 @@ export const queryKeys = {
   activity: (from?: string, to?: string) => ["activity", { from, to }] as const,
   backups: {
     all: ["backups"] as const,
-    policy: (relayId: string, instanceId: string) =>
-      ["backups", "policy", relayId, instanceId] as const,
+    policy: (relayId: string, target: BackupTarget) =>
+      ["backups", "policy", relayId, target.kind, target.id] as const,
     storage: ["backups", "storage"] as const,
   },
   bricks: ["bricks", "catalog"] as const,
@@ -230,13 +230,13 @@ export function backupStorageQueryOptions() {
   })
 }
 
-export function instanceBackupPolicyQueryOptions(
+export function backupPolicyQueryOptions(
   relayId: string,
-  instanceId: string
+  target: BackupTarget
 ) {
   return queryOptions({
-    queryKey: queryKeys.backups.policy(relayId, instanceId),
-    queryFn: () => getInstanceBackupPolicy({ data: { instanceId, relayId } }),
+    queryKey: queryKeys.backups.policy(relayId, target),
+    queryFn: () => getBackupPolicy({ data: { relayId, target } }),
     staleTime: 5_000,
   })
 }
