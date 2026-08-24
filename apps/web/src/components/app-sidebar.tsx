@@ -55,6 +55,10 @@ import {
 } from "@workspace/ui/components/tooltip"
 import { HearthMark } from "@/components/hearth-mark"
 import { BackupIcon } from "@/components/backup-icon"
+import {
+  RouteCommandMenuProvider,
+  RouteCommandMenuTrigger,
+} from "@/components/route-command-menu"
 import { ServerTypeIcon } from "@/components/server-type-icon"
 import { authClient } from "@/lib/auth-client"
 import type { AuthenticatedUser } from "@/lib/auth-session"
@@ -80,8 +84,8 @@ import type { SidebarInstance } from "@/lib/relay-selectors"
 import { globalSectionFromRouteId } from "@/lib/route-sections"
 import type { GlobalSection } from "@/lib/route-sections"
 import {
-  selectedInstanceCookieName,
-  uiPreferenceCookieMaxAge,
+  persistSelectedInstanceRouteId,
+  readSelectedInstanceRouteId,
 } from "@/lib/ui-preference-cookies"
 import { warmFileWorkspaceModule } from "@/lib/workspace-module-preloads"
 
@@ -99,29 +103,12 @@ const instanceItems: Array<{
   { title: "Info", value: "info", icon: SlidersHorizontal },
 ]
 
-function readSelectedInstance(): string | null {
-  if (typeof document === "undefined") return null
-
-  return (
-    document.cookie
-      .split(";")
-      .map((cookie) => cookie.trim())
-      .find((cookie) => cookie.startsWith(`${selectedInstanceCookieName}=`))
-      ?.slice(selectedInstanceCookieName.length + 1) ?? null
-  )
-}
-
-function persistSelectedInstance(routeId: string) {
-  const currentRouteId = readSelectedInstance()
-  if (currentRouteId === routeId) return
-
-  document.cookie = `${selectedInstanceCookieName}=${routeId}; path=/; max-age=${uiPreferenceCookieMaxAge}; SameSite=Lax`
-}
-
 interface AppSidebarViewProps {
   user: AuthenticatedUser
   canManageAccess: boolean
+  canManageRelays: boolean
   initialSelectedInstanceRouteId: string | null
+  isPlatformAdmin: boolean
   relayConfigured: boolean
 }
 
@@ -144,7 +131,9 @@ export const AppSidebar = React.memo(function AppSidebar({
   return (
     <AppSidebarView
       canManageAccess={capabilities.canManageAccess}
+      canManageRelays={capabilities.canManageRelays}
       initialSelectedInstanceRouteId={initialSelectedInstanceRouteId}
+      isPlatformAdmin={capabilities.isPlatformAdmin}
       relayConfigured={relayConfigured}
       user={capabilities.user}
     />
@@ -154,39 +143,54 @@ export const AppSidebar = React.memo(function AppSidebar({
 const AppSidebarView = React.memo(function AppSidebarView({
   user,
   canManageAccess,
+  canManageRelays,
   initialSelectedInstanceRouteId,
+  isPlatformAdmin,
   relayConfigured,
 }: AppSidebarViewProps) {
   return (
-    <Sidebar collapsible="icon" className="border-sidebar-border/80">
-      <SidebarHeader className="gap-1 px-2 pt-3">
-        <SidebarMenu>
-          <SidebarMenuItem>
-            <SidebarMenuButton
-              size="lg"
-              className="h-11 data-[state=open]:bg-sidebar-accent"
-              tooltip="Kiln"
-            >
-              <HearthMark className="group-data-[collapsible=icon]:size-[32px]!" />
-              <span className="min-w-0 flex-1 truncate font-heading text-[0.9375rem] font-semibold tracking-[-0.02em]">
-                Kiln
-              </span>
-            </SidebarMenuButton>
-          </SidebarMenuItem>
-        </SidebarMenu>
-      </SidebarHeader>
+    <RouteCommandMenuProvider
+      canManageAccess={canManageAccess}
+      canManageRelays={canManageRelays}
+      initialSelectedInstanceRouteId={initialSelectedInstanceRouteId}
+      isPlatformAdmin={isPlatformAdmin}
+      relayConfigured={relayConfigured}
+    >
+      <Sidebar collapsible="icon" className="border-sidebar-border/80">
+        <SidebarHeader className="gap-1 px-2 pt-3">
+          <div className="grid grid-cols-[minmax(0,1fr)_2rem] gap-1 group-data-[collapsible=icon]:grid-cols-1">
+            <SidebarMenu>
+              <SidebarMenuItem>
+                <SidebarMenuButton
+                  size="lg"
+                  className="h-11 data-[state=open]:bg-sidebar-accent"
+                  tooltip="Kiln"
+                >
+                  <HearthMark className="group-data-[collapsible=icon]:size-[32px]!" />
+                  <span className="min-w-0 flex-1 truncate font-heading text-[0.9375rem] font-semibold tracking-[-0.02em]">
+                    Kiln
+                  </span>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+            </SidebarMenu>
+            <RouteCommandMenuTrigger />
+          </div>
+        </SidebarHeader>
 
-      <SidebarContent>
-        <InfrastructureNavigation relayConfigured={relayConfigured} />
+        <SidebarSeparator className="my-1" />
 
-        <SidebarInstanceNavigation
-          initialSelectedInstanceRouteId={initialSelectedInstanceRouteId}
-          relayConfigured={relayConfigured}
-        />
-      </SidebarContent>
+        <SidebarContent>
+          <InfrastructureNavigation relayConfigured={relayConfigured} />
 
-      <AccountNavigation canManageAccess={canManageAccess} user={user} />
-    </Sidebar>
+          <SidebarInstanceNavigation
+            initialSelectedInstanceRouteId={initialSelectedInstanceRouteId}
+            relayConfigured={relayConfigured}
+          />
+        </SidebarContent>
+
+        <AccountNavigation canManageAccess={canManageAccess} user={user} />
+      </Sidebar>
+    </RouteCommandMenuProvider>
   )
 })
 
@@ -308,7 +312,10 @@ function SidebarInstanceNavigation({
         ?.serverId,
   })
   const selectedInstanceRouteId = React.useMemo(
-    () => serverId ?? readSelectedInstance() ?? initialSelectedInstanceRouteId,
+    () =>
+      serverId ??
+      readSelectedInstanceRouteId() ??
+      initialSelectedInstanceRouteId,
     [initialSelectedInstanceRouteId, serverId]
   )
   const preferredResolution = resolveCanonicalRelayInstance(
@@ -351,7 +358,7 @@ function RememberSelectedInstance({
   instanceRouteId: string
 }) {
   React.useEffect(() => {
-    persistSelectedInstance(instanceRouteId)
+    persistSelectedInstanceRouteId(instanceRouteId)
   }, [instanceRouteId])
 
   return null
