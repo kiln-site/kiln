@@ -42,10 +42,13 @@ import {
 import type { DecorationSet, Panel, ViewUpdate } from "@codemirror/view"
 import { tags } from "@lezer/highlight"
 import { minimalSetup } from "codemirror"
-import { snbtDiagnostic } from "@workspace/contracts"
 
 import { findSensitiveTextRedactions } from "@/lib/redaction"
 import { fileLanguageForPath } from "@/lib/file-language"
+import {
+  maxInlineSnbtValidationCharacters,
+  snbtDiagnosticForEditor,
+} from "@/lib/snbt-validation"
 
 const defaultIndentUnit = "  "
 const indentationScanLimit = 64 * 1024
@@ -446,8 +449,13 @@ function snbtExtensions(path: string): Extension {
     snbtLanguage,
     linter(
       (view) => {
+        if (view.state.doc.length > maxInlineSnbtValidationCharacters) {
+          return []
+        }
         const source = view.state.doc.toString()
-        const diagnostic = snbtDiagnostic(source, { binaryCompatible })
+        const diagnostic = snbtDiagnosticForEditor(source, {
+          binaryCompatible,
+        })
         if (!diagnostic) return []
         return [
           {

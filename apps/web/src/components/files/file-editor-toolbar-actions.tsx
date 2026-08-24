@@ -320,7 +320,7 @@ function ForceSaveDialog({
     )
   }
 
-  const binary = file.encoding === "nbt" || file.encoding === "nbt-gzip"
+  const binary = !file.path.toLowerCase().endsWith(".snbt")
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent>

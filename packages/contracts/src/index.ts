@@ -1103,7 +1103,7 @@ export const relayFileContentSchema = z.object({
   content: z.string(),
   size: z.number().int().nonnegative(),
   decodedSize: z.number().int().nonnegative(),
-  encoding: z.enum(["utf8", "gzip", "nbt", "nbt-gzip", "snbt"]),
+  encoding: z.enum(["utf8", "gzip", "nbt", "nbt-gzip", "snbt", "snbt-gzip"]),
   readOnly: z.boolean(),
   modifiedAt: z.string().datetime(),
 })

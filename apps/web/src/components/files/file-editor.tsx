@@ -421,6 +421,9 @@ function fileEncodingSummary(file: RelayFileContent) {
   if (file.encoding === "snbt") {
     return `${file.size.toLocaleString()} B SNBT TEXT`
   }
+  if (file.encoding === "snbt-gzip") {
+    return `${file.size.toLocaleString()} B GZIP SNBT → ${file.decodedSize.toLocaleString()} B`
+  }
   return `${file.size.toLocaleString()} BYTES`
 }
 

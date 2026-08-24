@@ -228,9 +228,11 @@ describe("Relay NBT file editing", () => {
             expectedModifiedAt: opened.modifiedAt,
             force: true,
           })
-          assert.strictEqual(forced.encoding, "snbt")
+          assert.strictEqual(forced.encoding, "snbt-gzip")
           assert.strictEqual(
-            yield* fromPromise(() => readFile(path, "utf8")),
+            gunzipSync(yield* fromPromise(() => readFile(path))).toString(
+              "utf8"
+            ),
             invalid
           )
 
@@ -250,6 +252,52 @@ describe("Relay NBT file editing", () => {
           )
         })
       )
+  )
+
+  it.effect("preserves uncompressed NBT through force-save recovery", () =>
+    withSetup(({ driver, instance, root }) =>
+      Effect.gen(function* () {
+        const requestedPath = "world/servers.dat"
+        const path = resolve(root, requestedPath)
+        yield* fromPromise(() =>
+          writeFile(
+            path,
+            encodeNbt({
+              name: "",
+              tag: parseSnbt('{servers: [{name: "Local"}]}', {
+                binaryCompatible: true,
+              }),
+            })
+          )
+        )
+
+        const opened = yield* driver.read(instance, requestedPath)
+        assert.strictEqual(opened.encoding, "nbt")
+        const invalid = opened.content.slice(0, -2)
+        const forced = yield* driver.write(instance, requestedPath, {
+          content: invalid,
+          expectedModifiedAt: opened.modifiedAt,
+          force: true,
+        })
+        assert.strictEqual(forced.encoding, "snbt")
+        assert.strictEqual(
+          yield* fromPromise(() => readFile(path, "utf8")),
+          invalid
+        )
+
+        const repaired = yield* driver.write(instance, requestedPath, {
+          content: '{servers: [{name: "Repaired"}]}\n',
+          expectedModifiedAt: forced.modifiedAt,
+        })
+        assert.strictEqual(repaired.encoding, "nbt")
+        assert.deepEqual(
+          decodeNbt(yield* fromPromise(() => readFile(path))).tag,
+          parseSnbt('{servers: [{name: "Repaired"}]}', {
+            binaryCompatible: true,
+          })
+        )
+      })
+    )
   )
 })
 

@@ -2,11 +2,11 @@ import * as React from "react"
 import { useMutation, useQueryClient } from "@tanstack/react-query"
 import { Effect } from "effect"
 import type { RelayFileContent } from "@workspace/contracts"
-import { snbtDiagnostic } from "@workspace/contracts"
 
 import type { EditorSessionStore } from "@/components/files/file-workspace-stores"
 import { queryKeys } from "@/lib/query-options"
 import type { InstanceWorkspaceInstance } from "@/lib/relay-selectors"
+import { snbtDiagnosticForEditor } from "@/lib/snbt-validation"
 import { saveRelayFile } from "@/server/relay"
 
 export async function runEditorSave(
@@ -139,6 +139,7 @@ export function useFileSaveAction(
 export function isSnbtFile(file: RelayFileContent) {
   return (
     file.encoding === "snbt" ||
+    file.encoding === "snbt-gzip" ||
     file.encoding === "nbt" ||
     file.encoding === "nbt-gzip"
   )
@@ -146,7 +147,7 @@ export function isSnbtFile(file: RelayFileContent) {
 
 function validateEditorContent(file: RelayFileContent, content: string) {
   if (!isSnbtFile(file)) return null
-  const diagnostic = snbtDiagnostic(content, {
+  const diagnostic = snbtDiagnosticForEditor(content, {
     binaryCompatible: !file.path.toLowerCase().endsWith(".snbt"),
   })
   return diagnostic?.message ?? null

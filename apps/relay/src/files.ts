@@ -411,7 +411,7 @@ export class FilesystemDriver {
             content: rawText,
             size: metadata.size,
             decodedSize: nbtSource.byteLength,
-            encoding: "snbt",
+            encoding: isGzip(source) ? "snbt-gzip" : "snbt",
             readOnly: false,
             modifiedAt: metadata.mtime.toISOString(),
           } satisfies RelayFileContent
@@ -1557,17 +1557,14 @@ function prepareFileWrite(
       if (!isBinaryNbtPath(lowerPath)) return Buffer.from(content, "utf8")
 
       const compressed = isGzip(current)
-      let currentNbt = null
-      if (compressed) {
-        const decoded = await gunzipAsync(current, {
-          maxOutputLength: MAX_FILE_BYTES,
-        })
-        currentNbt = tryDecodeNbt(decoded)
-      } else {
-        currentNbt = tryDecodeNbt(current)
-      }
+      const decodedCurrent = compressed
+        ? await gunzipAsync(current, {
+            maxOutputLength: MAX_FILE_BYTES,
+          })
+        : current
+      const currentNbt = tryDecodeNbt(decodedCurrent)
 
-      const rawText = currentNbt ? null : decodeUtf8(current)
+      const rawText = currentNbt ? null : decodeUtf8(decodedCurrent)
       const rawSnbt = rawText !== null && looksLikeSnbt(rawText)
       if (!currentNbt && !rawSnbt) return Buffer.from(content, "utf8")
 
@@ -1576,10 +1573,15 @@ function prepareFileWrite(
         return encodeNbt({ name: currentNbt?.name ?? "", tag })
       })
       if (Result.isFailure(converted)) {
-        if (force) return Buffer.from(content, "utf8")
+        if (force) {
+          const rawContent = Buffer.from(content, "utf8")
+          return compressed
+            ? gzipAsync(rawContent, { level: zlibConstants.Z_BEST_SPEED })
+            : rawContent
+        }
         throw converted.failure
       }
-      return compressed || rawSnbt
+      return compressed
         ? gzipAsync(converted.success, { level: zlibConstants.Z_BEST_SPEED })
         : converted.success
     },
