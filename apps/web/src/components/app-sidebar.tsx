@@ -653,7 +653,7 @@ const ServerSelectorResults = React.memo(function ServerSelectorResults({
 
   return filteredInstances.length > 0 ? (
     <VirtualizedServerSelectorResults
-      key={`${query}:${filteredInstances.length}`}
+      key={query}
       activeInstanceId={activeInstanceId}
       activeRelayId={activeRelayId}
       instances={filteredInstances}
@@ -723,12 +723,10 @@ const VirtualizedServerSelectorResults = React.memo(
             return (
               <div
                 key={virtualRow.key}
+                ref={rowVirtualizer.measureElement}
                 className="absolute top-0 left-0 w-full"
                 data-index={virtualRow.index}
-                style={{
-                  height: `${virtualRow.size}px`,
-                  top: virtualRow.start,
-                }}
+                style={{ top: virtualRow.start }}
               >
                 <ServerSelectorItem
                   active={
@@ -750,7 +748,7 @@ const VirtualizedServerSelectorResults = React.memo(
 const serverSelectorRowGap = 2
 
 function estimateServerSelectorRowSize(): number {
-  return 40
+  return 48
 }
 
 function serverSelectorResultsAreEqual(
