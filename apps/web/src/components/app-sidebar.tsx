@@ -727,7 +727,7 @@ const VirtualizedServerSelectorResults = React.memo(
                 data-index={virtualRow.index}
                 style={{
                   height: `${virtualRow.size}px`,
-                  transform: `translateY(${virtualRow.start}px)`,
+                  top: virtualRow.start,
                 }}
               >
                 <ServerSelectorItem
