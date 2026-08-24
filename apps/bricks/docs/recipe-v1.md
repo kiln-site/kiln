@@ -16,6 +16,10 @@ This prevents a misspelling from silently producing a less secure container.
   the server when a user sends them through Hearth's console. Relay uses this
   only to suppress automatic crash recovery for that panel action; it does not
   interpret container signals, external console clients, or server log lines.
+- `readiness.logs` optionally lists literal log fragments that indicate the
+  server has completed startup. Relay searches the current container session
+  for these fragments before marking the server running; Docker health checks
+  take precedence when present.
 - `network` declares ports and one of two stable Relay routing modes.
 - `constraints` can limit CPU architectures.
 

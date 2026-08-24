@@ -70,6 +70,8 @@ runtime:
   storage: { mount: /server }
 console:
   stopCommands: [end, /end, shutdown, /shutdown, stop, /stop]
+readiness:
+  logs: ["Done ("]
 network:
   mode: minecraft-backend
   primaryPort: game

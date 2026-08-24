@@ -13,6 +13,7 @@ import {
   useInstanceRelayConnected,
 } from "@/components/instance-workspace-context"
 import { pageTitle } from "@/lib/page-title"
+import { requireServerDestinationAccess } from "@/lib/route-access"
 import {
   relayConnectionQueryOptions,
   relayFileActivityQueryOptions,
@@ -29,6 +30,14 @@ const FileWorkspace = React.lazy(async () => {
 })
 
 export const Route = createFileRoute("/_app/server/$serverId/files")({
+  beforeLoad: async ({ context, params }) => {
+    await requireServerDestinationAccess(
+      context.queryClient,
+      context.instance,
+      "files",
+      params.serverId
+    )
+  },
   loader: async ({ context, params }) => {
     if (params.serverId === "unavailable") return
 

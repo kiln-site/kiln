@@ -20,6 +20,7 @@ export const Route = createFileRoute("/_app")({
         search: { redirect: location.href },
       })
     }
+    await context.queryClient.ensureQueryData(accessCapabilitiesQueryOptions())
     return { user }
   },
   loader: async ({ context }) => {
@@ -27,7 +28,6 @@ export const Route = createFileRoute("/_app")({
       context.queryClient.ensureQueryData(
         relayConnectionQueryOptions(context.queryClient)
       ),
-      context.queryClient.ensureQueryData(accessCapabilitiesQueryOptions()),
       context.queryClient.ensureQueryData(uiPreferencesQueryOptions()),
     ])
   },

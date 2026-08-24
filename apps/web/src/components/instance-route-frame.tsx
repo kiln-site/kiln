@@ -2,8 +2,7 @@ import * as React from "react"
 import { useQuery, useSuspenseQuery } from "@tanstack/react-query"
 
 import { InstanceWorkspace } from "@/components/instance-workspace"
-import type { AccessPermission } from "@/lib/permissions"
-import { roleHasPermission } from "@/lib/permissions"
+import { canAccessInstancePermission } from "@/lib/navigation-destinations"
 import {
   accessCapabilitiesQueryOptions,
   relaySnapshotQueryOptions,
@@ -52,16 +51,16 @@ export const InstanceRouteFrame = React.memo(function InstanceRouteFrame({
     [uiPreferences.fileTreeCollapsed, uiPreferences.fileTreeWidth]
   )
   const permissions = React.useMemo(() => {
-    const can = (permission: AccessPermission): boolean =>
-      capabilities.isPlatformAdmin ||
-      capabilities.grants.some(
-        (grant) =>
-          roleHasPermission(grant.role, permission) &&
-          grant.relayId === relayId &&
-          (grant.resourceType === "relay"
-            ? grant.resourceId === relayId
-            : grant.resourceId === instanceId)
-      )
+    const can = (
+      permission: Parameters<typeof canAccessInstancePermission>[2]
+    ): boolean =>
+      instanceId && relayId
+        ? canAccessInstancePermission(
+            capabilities,
+            { id: instanceId, relayId },
+            permission
+          )
+        : false
 
     return {
       consoleWrite: can("instance.console.write"),
@@ -74,7 +73,7 @@ export const InstanceRouteFrame = React.memo(function InstanceRouteFrame({
       settings: can("instance.settings"),
       shareLogs: can("instance.logs.share"),
     }
-  }, [capabilities.grants, capabilities.isPlatformAdmin, instanceId, relayId])
+  }, [capabilities, instanceId, relayId])
 
   if (!instance) return null
 

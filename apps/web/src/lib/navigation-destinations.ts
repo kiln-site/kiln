@@ -25,6 +25,9 @@ import {
   type RelayInstance,
 } from "@workspace/contracts"
 
+import type { AccessPermission, AccessRole } from "@/lib/permissions"
+import { roleHasPermission } from "@/lib/permissions"
+
 export type NavigationIcon = ComponentType<{ className?: string }>
 
 export interface NavigationDestination {
@@ -35,13 +38,26 @@ export interface NavigationDestination {
 }
 
 export type InfrastructureDestinationAccess =
-  | "authenticated"
+  | "database-read"
+  | "instance-read"
   | "manage-relays"
   | "platform-admin"
 
+export interface NavigationAccessCapabilities {
+  canManageAccess: boolean
+  canManageRelays: boolean
+  grants: ReadonlyArray<{
+    relayId: string
+    resourceId: string
+    resourceType: "database" | "instance" | "relay"
+    role: AccessRole
+  }>
+  isPlatformAdmin: boolean
+}
+
 export const infrastructureDestinations = [
   {
-    access: "authenticated",
+    access: "manage-relays",
     icon: Wrench,
     keywords: ["infrastructure", "configure"],
     label: "Setup",
@@ -69,14 +85,14 @@ export const infrastructureDestinations = [
     to: "/infra/domains",
   },
   {
-    access: "authenticated",
+    access: "instance-read",
     icon: Server,
     keywords: ["infrastructure", "instances"],
     label: "Servers",
     to: "/infra/servers",
   },
   {
-    access: "authenticated",
+    access: "database-read",
     icon: Database,
     keywords: ["infrastructure", "mysql"],
     label: "Databases",
@@ -151,6 +167,7 @@ type ServerWorkspaceKind = "network-stack" | "server"
 
 export interface ServerDestination extends NavigationDestination {
   id: ServerDestinationId
+  permission: AccessPermission
   workspaces: ReadonlyArray<ServerWorkspaceKind>
 }
 
@@ -160,6 +177,7 @@ export const serverDestinations = [
     id: "console",
     keywords: ["terminal"],
     label: "Console",
+    permission: "instance.console.read",
     to: "/server/$serverId/console",
     workspaces: ["network-stack", "server"],
   },
@@ -168,6 +186,7 @@ export const serverDestinations = [
     id: "files",
     keywords: ["browser", "storage"],
     label: "Files",
+    permission: "instance.files.read",
     to: "/server/$serverId/files/$",
     workspaces: ["network-stack", "server"],
   },
@@ -176,6 +195,7 @@ export const serverDestinations = [
     id: "startup",
     keywords: ["configuration", "variables"],
     label: "Startup",
+    permission: "instance.settings",
     to: "/server/$serverId/startup",
     workspaces: ["server"],
   },
@@ -184,6 +204,7 @@ export const serverDestinations = [
     id: "network",
     keywords: ["ports", "allocation"],
     label: "Network",
+    permission: "instance.network.read",
     to: "/server/$serverId/network",
     workspaces: ["network-stack", "server"],
   },
@@ -192,12 +213,18 @@ export const serverDestinations = [
     id: "info",
     keywords: ["settings", "details"],
     label: "Info",
+    permission: "instance.read",
     to: "/server/$serverId/info",
     workspaces: ["server"],
   },
 ] as const satisfies ReadonlyArray<ServerDestination>
 
 type NavigableServer = Pick<RelayInstance, "brickId">
+
+type AccessibleServer = NavigableServer & {
+  id: string
+  relayId: string
+}
 
 export function destinationsForServer(
   instance: NavigableServer
@@ -207,6 +234,126 @@ export function destinationsForServer(
   const destinations: ReadonlyArray<ServerDestination> = serverDestinations
   return destinations.filter((destination) =>
     destination.workspaces.includes(workspace)
+  )
+}
+
+export function accessibleDestinationsForServer(
+  instance: AccessibleServer,
+  capabilities: NavigationAccessCapabilities
+): ReadonlyArray<ServerDestination> {
+  return destinationsForServer(instance).filter((destination) =>
+    canAccessServerDestination(capabilities, instance, destination.id)
+  )
+}
+
+export function canAccessServerDestination(
+  capabilities: NavigationAccessCapabilities,
+  instance: Pick<AccessibleServer, "id" | "relayId">,
+  destinationId: ServerDestinationId
+): boolean {
+  const destination = serverDestinations.find(
+    (candidate) => candidate.id === destinationId
+  )
+  if (!destination) return false
+  return canAccessInstancePermission(
+    capabilities,
+    instance,
+    destination.permission
+  )
+}
+
+export function canAccessInstancePermission(
+  capabilities: NavigationAccessCapabilities,
+  instance: Pick<AccessibleServer, "id" | "relayId">,
+  permission: AccessPermission
+): boolean {
+  if (capabilities.isPlatformAdmin) return true
+  return capabilities.grants.some(
+    (grant) =>
+      grant.relayId === instance.relayId &&
+      roleHasPermission(grant.role, permission) &&
+      ((grant.resourceType === "relay" &&
+        grant.resourceId === instance.relayId) ||
+        (grant.resourceType === "instance" && grant.resourceId === instance.id))
+  )
+}
+
+export function accessibleInfrastructureDestinations(
+  capabilities: NavigationAccessCapabilities
+) {
+  return infrastructureDestinations.filter((destination) =>
+    canAccessInfrastructureDestination(capabilities, destination)
+  )
+}
+
+export function canAccessInfrastructureDestination(
+  capabilities: NavigationAccessCapabilities,
+  destination: (typeof infrastructureDestinations)[number]
+): boolean {
+  if (destination.access === "manage-relays") {
+    return capabilities.canManageRelays
+  }
+  if (destination.access === "platform-admin") {
+    return capabilities.isPlatformAdmin
+  }
+  if (destination.access === "instance-read") {
+    return (
+      capabilities.canManageRelays ||
+      hasScopedPermission(capabilities, "instance.read", ["instance", "relay"])
+    )
+  }
+  return hasScopedPermission(capabilities, "database.read", [
+    "database",
+    "relay",
+  ])
+}
+
+export function canAccessAutomations(
+  capabilities: NavigationAccessCapabilities
+): boolean {
+  return hasScopedPermission(capabilities, "schedule.read")
+}
+
+export function canAccessBackups(
+  capabilities: NavigationAccessCapabilities
+): boolean {
+  return hasScopedPermission(capabilities, "backup.read")
+}
+
+export function canAccessActivity(
+  capabilities: NavigationAccessCapabilities
+): boolean {
+  return hasScopedPermission(capabilities, "instance.read", [
+    "instance",
+    "relay",
+  ])
+}
+
+export function firstAccessibleAppHref(
+  capabilities: NavigationAccessCapabilities
+): string {
+  const infrastructure = accessibleInfrastructureDestinations(capabilities)[0]
+  if (infrastructure) return infrastructure.to
+  if (canAccessAutomations(capabilities)) return "/automations/schedules"
+  if (canAccessBackups(capabilities)) return "/backups"
+  if (canAccessActivity(capabilities)) return "/activity"
+  if (capabilities.canManageAccess) return "/access"
+  return "/settings/account"
+}
+
+function hasScopedPermission(
+  capabilities: NavigationAccessCapabilities,
+  permission: AccessPermission,
+  resourceTypes?: ReadonlyArray<
+    NavigationAccessCapabilities["grants"][number]["resourceType"]
+  >
+): boolean {
+  if (capabilities.isPlatformAdmin) return true
+  const allowedResourceTypes = resourceTypes ? new Set(resourceTypes) : null
+  return capabilities.grants.some(
+    (grant) =>
+      (!allowedResourceTypes || allowedResourceTypes.has(grant.resourceType)) &&
+      roleHasPermission(grant.role, permission)
   )
 }
 

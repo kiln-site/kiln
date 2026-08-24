@@ -1,4 +1,4 @@
-import { createFileRoute, redirect } from "@tanstack/react-router"
+import { createFileRoute } from "@tanstack/react-router"
 import { z } from "zod"
 
 import { TailscalePage } from "@/components/tailscale-page"
@@ -7,15 +7,17 @@ import {
   relaysQueryOptions,
   tailscaleStacksQueryOptions,
 } from "@/lib/query-options"
+import { requireInfrastructureDestinationAccess } from "@/lib/route-access"
 
 export const Route = createFileRoute("/_app/infra/tailscale")({
   validateSearch: z.object({
     create: z.boolean().optional(),
   }),
-  beforeLoad: ({ context }) => {
-    if (!context.user.isDevelopmentBypass && context.user.role !== "admin") {
-      throw redirect({ to: "/infra/servers", replace: true })
-    }
+  beforeLoad: async ({ context }) => {
+    await requireInfrastructureDestinationAccess(
+      context.queryClient,
+      "/infra/tailscale"
+    )
   },
   loader: ({ context }) =>
     Promise.all([

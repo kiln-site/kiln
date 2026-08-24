@@ -45,6 +45,8 @@ runtime:
     memoryReservation: "{{ variables.memory }}"
     pids: 2048
   storage: { mount: /server }
+readiness:
+  logs: ["Setting breakpad minidump AppID = 2394010"]
 network:
   mode: direct
   primaryPort: game

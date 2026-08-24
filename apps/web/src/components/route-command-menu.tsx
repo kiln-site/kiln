@@ -36,20 +36,22 @@ import {
 import type { SidebarInstance } from "@/lib/relay-selectors"
 import { readSelectedInstanceRouteId } from "@/lib/ui-preference-cookies"
 import {
+  accessibleDestinationsForServer,
+  accessibleInfrastructureDestinations,
   automationDestinations,
-  destinationsForServer,
-  infrastructureDestinations,
+  canAccessActivity,
+  canAccessAutomations,
+  canAccessBackups,
   serverDestinationHref,
   settingsDestinations,
+  type NavigationAccessCapabilities,
   type NavigationDestination,
 } from "@/lib/navigation-destinations"
 
 interface RouteCommandMenuProviderProps {
-  canManageAccess: boolean
-  canManageRelays: boolean
+  capabilities: NavigationAccessCapabilities
   children: React.ReactNode
   initialSelectedInstanceRouteId: string | null
-  isPlatformAdmin: boolean
   relayConfigured: boolean
 }
 
@@ -75,27 +77,22 @@ const accessRoute: NavigationDestination = {
   to: "/access",
 }
 
-const authenticatedInfrastructureDestinations =
-  infrastructureDestinations.filter(
-    (destination) => destination.access === "authenticated"
-  )
-const relayInfrastructureDestinations = infrastructureDestinations.filter(
-  (destination) => destination.access === "manage-relays"
-)
-const platformInfrastructureDestinations = infrastructureDestinations.filter(
-  (destination) => destination.access === "platform-admin"
-)
-
 const emptyInstances: Array<SidebarInstance> = []
 
-function serverRoutes(instance: SidebarInstance, routeId: string) {
+function serverRoutes(
+  instance: SidebarInstance,
+  routeId: string,
+  capabilities: NavigationAccessCapabilities
+) {
   const serverKeywords = ["server", instance.name, instance.implementation]
-  return destinationsForServer(instance).map((destination) => ({
-    icon: destination.icon,
-    keywords: [...serverKeywords, ...destination.keywords],
-    label: destination.label,
-    to: serverDestinationHref(destination, routeId),
-  })) satisfies Array<NavigationDestination>
+  return accessibleDestinationsForServer(instance, capabilities).map(
+    (destination) => ({
+      icon: destination.icon,
+      keywords: [...serverKeywords, ...destination.keywords],
+      label: destination.label,
+      to: serverDestinationHref(destination, routeId),
+    })
+  ) satisfies Array<NavigationDestination>
 }
 
 function editDistance(left: string, right: string) {
@@ -181,11 +178,9 @@ function isApplePlatform() {
 }
 
 export function RouteCommandMenuProvider({
-  canManageAccess,
-  canManageRelays,
+  capabilities,
   children,
   initialSelectedInstanceRouteId,
-  isPlatformAdmin,
   relayConfigured,
 }: RouteCommandMenuProviderProps) {
   const navigate = useNavigate()
@@ -218,10 +213,22 @@ export function RouteCommandMenuProvider({
   const selectedServerRoutes = React.useMemo(
     () =>
       selectedInstance && selectedInstanceRouteIdentifier
-        ? serverRoutes(selectedInstance, selectedInstanceRouteIdentifier)
+        ? serverRoutes(
+            selectedInstance,
+            selectedInstanceRouteIdentifier,
+            capabilities
+          )
         : [],
-    [selectedInstance, selectedInstanceRouteIdentifier]
+    [capabilities, selectedInstance, selectedInstanceRouteIdentifier]
   )
+  const infrastructureRoutes =
+    accessibleInfrastructureDestinations(capabilities)
+  const manageRoutes = [
+    ...(canAccessAutomations(capabilities) ? automationDestinations : []),
+    ...(canAccessBackups(capabilities) ? [managementRoutes[0]!] : []),
+    ...(canAccessActivity(capabilities) ? [managementRoutes[1]!] : []),
+    ...(capabilities.canManageAccess ? [accessRoute] : []),
+  ]
 
   const openMenu = React.useCallback(() => setOpen(true), [])
 
@@ -278,44 +285,31 @@ export function RouteCommandMenuProvider({
                 <CommandSeparator />
               </>
             ) : null}
-            <CommandGroup heading="Manage">
-              <RouteItems
-                routes={automationDestinations}
-                onSelect={navigateToRoute}
-              />
-              <RouteItems
-                routes={managementRoutes}
-                onSelect={navigateToRoute}
-              />
-              {canManageAccess ? (
-                <RouteItem route={accessRoute} onSelect={navigateToRoute} />
-              ) : null}
-            </CommandGroup>
-            <CommandSeparator />
+            {manageRoutes.length > 0 ? (
+              <>
+                <RouteGroup
+                  heading="Manage"
+                  routes={manageRoutes}
+                  onSelect={navigateToRoute}
+                />
+                <CommandSeparator />
+              </>
+            ) : null}
             <RouteGroup
               heading="Settings"
               routes={settingsDestinations}
               onSelect={navigateToRoute}
             />
-            <CommandSeparator />
-            <CommandGroup heading="Infrastructure">
-              <RouteItems
-                routes={authenticatedInfrastructureDestinations}
-                onSelect={navigateToRoute}
-              />
-              {canManageRelays ? (
-                <RouteItems
-                  routes={relayInfrastructureDestinations}
+            {infrastructureRoutes.length > 0 ? (
+              <>
+                <CommandSeparator />
+                <RouteGroup
+                  heading="Infrastructure"
+                  routes={infrastructureRoutes}
                   onSelect={navigateToRoute}
                 />
-              ) : null}
-              {isPlatformAdmin ? (
-                <RouteItems
-                  routes={platformInfrastructureDestinations}
-                  onSelect={navigateToRoute}
-                />
-              ) : null}
-            </CommandGroup>
+              </>
+            ) : null}
           </CommandList>
           <div className="type-meta flex items-center justify-between border-t border-border/70 bg-background/35 px-3 py-2 text-muted-foreground">
             <span>Navigate Kiln</span>

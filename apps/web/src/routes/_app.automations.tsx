@@ -6,6 +6,7 @@ import {
   relaySnapshotQueryOptions,
   scheduleOptionsQueryOptions,
 } from "@/lib/query-options"
+import { requireGlobalDestinationAccess } from "@/lib/route-access"
 
 const scheduleSearchSchema = z.object({
   kind: z.enum(["database", "relay", "server"]).optional(),
@@ -18,6 +19,9 @@ const scheduleSearchSchema = z.object({
 
 export const Route = createFileRoute("/_app/automations")({
   validateSearch: scheduleSearchSchema,
+  beforeLoad: async ({ context }) => {
+    await requireGlobalDestinationAccess(context.queryClient, "automations")
+  },
   loader: async ({ context }) => {
     await Promise.all([
       context.queryClient.ensureQueryData(scheduleOptionsQueryOptions()),
