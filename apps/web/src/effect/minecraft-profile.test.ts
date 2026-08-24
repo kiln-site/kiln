@@ -57,4 +57,33 @@ describe("Minecraft profile lookup", () => {
       assert.strictEqual(fetchMock.mock.calls.length, 1)
     })
   })
+
+  it.effect("fails when Mojang returns a transient HTTP error", () => {
+    const fetchMock = vi.fn(async () => new Response(null, { status: 503 }))
+    vi.stubGlobal("fetch", fetchMock)
+
+    return Effect.gen(function* () {
+      const failure = yield* resolveMinecraftProfileEffect("Notch").pipe(
+        Effect.flip
+      )
+
+      assert.strictEqual(failure._tag, "ExternalServiceError")
+      assert.strictEqual(failure.service, "Mojang")
+      assert.strictEqual(failure.message, "Mojang returned HTTP 503")
+    })
+  })
+
+  it.effect("fails when Mojang returns an invalid profile", () => {
+    const fetchMock = vi.fn(async () => Response.json({ name: "Notch" }))
+    vi.stubGlobal("fetch", fetchMock)
+
+    return Effect.gen(function* () {
+      const failure = yield* resolveMinecraftProfileEffect("Notch").pipe(
+        Effect.flip
+      )
+
+      assert.strictEqual(failure._tag, "ExternalServiceError")
+      assert.strictEqual(failure.service, "Mojang")
+    })
+  })
 })

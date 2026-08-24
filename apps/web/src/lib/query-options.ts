@@ -27,6 +27,7 @@ import {
   getManagedDatabaseDirectory,
   getManagedDatabases,
 } from "@/server/databases"
+import { isMinecraftUsername } from "@/lib/minecraft-profile"
 import { getUiPreferences } from "@/server/preferences"
 import { getMinecraftProfile } from "@/server/minecraft"
 import { reconcilePendingPowerSnapshot } from "@/lib/instance-power-state"
@@ -194,6 +195,7 @@ export function minecraftProfileQueryOptions(displayName: string) {
   return queryOptions({
     queryKey: queryKeys.minecraft.profile(displayName),
     queryFn: () => getMinecraftProfile(),
+    enabled: isMinecraftUsername(displayName),
     staleTime: 60 * 60_000,
   })
 }
