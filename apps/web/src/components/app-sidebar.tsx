@@ -503,6 +503,12 @@ const ServerSelector = React.memo(function ServerSelector({
                 className="size-4 text-sidebar-foreground/85"
                 aria-hidden="true"
               />
+              {instance ? (
+                <span
+                  className={`absolute -right-0.5 -bottom-0.5 size-1.5 rounded-full ring-2 ring-popover group-data-[collapsible=icon]:hidden ${statusDotTone(instance.observedState)}`}
+                  aria-hidden="true"
+                />
+              ) : null}
             </span>
             <span className="flex min-w-0 flex-1 flex-col items-start group-data-[collapsible=icon]:hidden">
               <span className="type-control-sm w-full truncate">
@@ -511,10 +517,6 @@ const ServerSelector = React.memo(function ServerSelector({
               <span className="type-meta flex w-full items-center gap-1.5 truncate text-sidebar-muted-foreground">
                 {instance ? (
                   <>
-                    <span
-                      className={`size-1.5 shrink-0 rounded-full ${statusDotTone(instance.observedState)}`}
-                      aria-hidden="true"
-                    />
                     <span className="truncate">
                       {instance.implementation} {instance.version}
                     </span>
