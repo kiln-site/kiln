@@ -299,7 +299,7 @@ export function RootDirectoryList({
   }
 
   return (
-    <div className="mt-8">
+    <div className="mt-5">
       <div className="mb-2 flex min-h-8 items-center gap-2 px-1">
         <Folder className="size-3.5 text-primary" />
         <h2 className="type-technical-label text-muted-foreground">
@@ -315,7 +315,6 @@ export function RootDirectoryList({
         <FileActionsDropdown controller={actions} paths={selectedPaths} />
       </div>
       <div className="overflow-hidden border border-border/75 bg-muted/[0.025]">
-        <FileTypeIconSprite />
         <div className="type-technical-label grid h-9 grid-cols-[2.25rem_minmax(12rem,1fr)_7rem_11rem_2.5rem] items-center border-b border-border/75 bg-muted/10 px-2 text-muted-foreground">
           <label className="grid size-7 place-items-center">
             <input

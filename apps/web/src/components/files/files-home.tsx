@@ -1,9 +1,13 @@
 import * as React from "react"
 import { useQuery } from "@tanstack/react-query"
 import type { RelayFileActivityEntry } from "@workspace/contracts"
-import { Clock3, FileCode2, LoaderCircle, Pin } from "lucide-react"
+import { Clock3, LoaderCircle, Pin } from "lucide-react"
 
 import { RootDirectoryList } from "@/components/files/file-directory-view"
+import {
+  FileTypeIcon,
+  FileTypeIconSprite,
+} from "@/components/files/file-type-icon"
 import type { FileActionsController } from "@/components/files/file-tree-utils"
 import {
   FileDropOverlay,
@@ -79,21 +83,21 @@ function FileActivityRow({
   return (
     <button
       type="button"
-      className="group grid w-full grid-cols-[2rem_minmax(0,1fr)_auto] items-center gap-3 border-t border-border/55 px-2 py-3 text-left transition-colors first:border-t-0 hover:bg-accent/35 focus-visible:bg-accent/45 focus-visible:outline-none sm:px-3"
+      className="group grid min-h-10 w-full grid-cols-[1.75rem_minmax(0,1fr)_auto] items-center gap-2 border-t border-border/55 px-2 py-1.5 text-left transition-colors first:border-t-0 hover:bg-accent/35 focus-visible:bg-accent/45 focus-visible:outline-none sm:px-3"
       onClick={() => onOpen(entry.path)}
     >
-      <span className="grid size-8 place-items-center border border-border/70 bg-muted/20 text-muted-foreground transition-colors group-hover:border-primary/25 group-hover:text-primary">
-        <FileCode2 className="size-4" />
+      <span className="grid size-7 place-items-center border border-border/70 bg-muted/20 transition-colors group-hover:border-primary/25">
+        <FileTypeIcon path={entry.path} />
       </span>
-      <span className="min-w-0">
-        <span className="block truncate text-sm font-medium text-foreground">
+      <span className="flex min-w-0 items-baseline gap-2">
+        <span className="min-w-0 truncate text-sm font-medium text-foreground">
           {formatName(entry.path)}
         </span>
-        <span className="type-code mt-0.5 block truncate text-muted-foreground">
+        <span className="type-code hidden min-w-0 truncate text-muted-foreground sm:block">
           /data/{entry.path}
         </span>
       </span>
-      <span className="type-meta flex shrink-0 items-center gap-2 pl-2 text-muted-foreground">
+      <span className="type-meta flex shrink-0 items-center gap-1.5 pl-2 text-muted-foreground">
         <span>
           {kind}{" "}
           <time
@@ -165,6 +169,7 @@ export function FilesHome({
       className="group/drop relative flex min-h-[360px] min-w-0 flex-1 flex-col bg-card"
       {...dropTarget}
     >
+      <FileTypeIconSprite />
       <FileDropOverlay directory="" />
       <div className={fileEditorHeaderClassName}>
         {treeCollapsed ? <FileTreeRevealButton onClick={onTreeExpand} /> : null}
@@ -194,8 +199,8 @@ export function FilesHome({
           ) : null}
 
           {!loading && !error && pinned.length > 0 ? (
-            <div className="mb-7">
-              <div className="mb-2 flex items-center gap-2 px-1">
+            <div className="mb-4">
+              <div className="mb-1.5 flex items-center gap-2 px-1">
                 <Pin className="size-3.5 text-primary" />
                 <h2 className="type-technical-label text-muted-foreground">
                   Pinned
@@ -215,7 +220,7 @@ export function FilesHome({
 
           {!loading && !error && recent.length > 0 ? (
             <div>
-              <div className="mb-2 flex items-center gap-2 px-1">
+              <div className="mb-1.5 flex items-center gap-2 px-1">
                 <Clock3 className="size-3.5 text-primary" />
                 <h2 className="type-technical-label text-muted-foreground">
                   Recent
