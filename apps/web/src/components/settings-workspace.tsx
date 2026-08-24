@@ -37,6 +37,7 @@ import {
   DialogTitle,
 } from "@workspace/ui/components/dialog"
 import { Input } from "@workspace/ui/components/input"
+import { showToast } from "@workspace/ui/components/sonner"
 import {
   Tooltip,
   TooltipContent,
@@ -47,6 +48,7 @@ import { cn } from "@workspace/ui/lib/utils"
 import { ReadOnlyCodeViewer } from "@/components/read-only-code-viewer"
 import { ServerDeleteDialog } from "@/components/server-delete-dialog"
 import { hostPortAddress } from "@/lib/domain-address"
+import { provisioningFailureDiagnostics } from "@/lib/provisioning-diagnostics"
 import { warmSyntaxCodeEditorModule } from "@/lib/syntax-editor-module-preload"
 import {
   instanceRecipeQueryOptions,
@@ -245,6 +247,37 @@ function ProvisioningInfoWorkspace({
   const provisioning = instance.provisioning
   if (!provisioning) return null
   const failed = provisioning.phase === "failed"
+  const failureDiagnostics = provisioningFailureDiagnostics({
+    attempt: provisioning.attempt,
+    error: provisioning.error,
+    failedPhase: provisioning.failedPhase,
+    instanceId: instance.id,
+    instanceName: instance.name,
+    relayId: instance.relayId,
+  })
+
+  function copyDiagnostics() {
+    Effect.runFork(
+      Effect.tryPromise({
+        try: () => navigator.clipboard.writeText(failureDiagnostics),
+        catch: (cause) => cause,
+      }).pipe(
+        Effect.match({
+          onFailure: () =>
+            showToast({
+              message:
+                "Could not copy diagnostics. Select the error text manually.",
+              type: "error",
+            }),
+          onSuccess: () =>
+            showToast({
+              message: "Provisioning diagnostics copied",
+              type: "success",
+            }),
+        })
+      )
+    )
+  }
 
   return (
     <section className="min-h-0 flex-1 overflow-y-auto bg-card">
@@ -301,17 +334,37 @@ function ProvisioningInfoWorkspace({
               )}
               mono
             />
-            <MetaRow
-              icon={TriangleAlert}
-              label={failed ? "Failure" : "Status"}
-              value={
-                provisioning.error ??
-                (failed
-                  ? "The Relay did not provide an error message."
-                  : "The Relay is still building this server.")
-              }
-              wrap
-            />
+            {failed ? (
+              <div className="flex min-h-14 items-start gap-3 border-b px-4 py-3 last:border-b-0">
+                <TriangleAlert className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" />
+                <div className="min-w-0 flex-1">
+                  <span className="type-technical-label block text-muted-foreground">
+                    Failure
+                  </span>
+                  <p className="mt-0.5 text-xs leading-5 break-words">
+                    {provisioning.error ??
+                      "The Relay did not provide an error message."}
+                  </p>
+                  <Button
+                    className="mt-4"
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={copyDiagnostics}
+                  >
+                    <Copy />
+                    Copy diagnostics
+                  </Button>
+                </div>
+              </div>
+            ) : (
+              <MetaRow
+                icon={Activity}
+                label="Status"
+                value="The Relay is still building this server."
+                wrap
+              />
+            )}
           </InfoCard>
         </div>
 

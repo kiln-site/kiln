@@ -55,6 +55,7 @@ import type {
 } from "@/components/instance-workspace-context"
 import { WorkspaceFrame } from "@/components/workspace-frame"
 import { roleHasPermission } from "@/lib/permissions"
+import { provisioningFailureDiagnostics } from "@/lib/provisioning-diagnostics"
 import {
   beginPendingPowerAction,
   finishPendingPowerAction,
@@ -266,13 +267,14 @@ const InstanceProvisioningState = React.memo(
     const failureGuidance = failed
       ? PROVISIONING_FAILURE_GUIDANCE[provisioning.failedPhase ?? "preparing"]
       : null
-    const diagnostics = [
-      `Server: ${instance.name} (${instance.id})`,
-      `Relay: ${instance.relayId}`,
-      `Failed phase: ${activeStep?.label ?? "Provisioning"}`,
-      `Attempt: ${Math.max(1, provisioning.attempt)}`,
-      `Reason: ${provisioning.error ?? "The Relay did not provide an error message."}`,
-    ].join("\n")
+    const diagnostics = provisioningFailureDiagnostics({
+      attempt: provisioning.attempt,
+      error: provisioning.error,
+      failedPhase: provisioning.failedPhase,
+      instanceId: instance.id,
+      instanceName: instance.name,
+      relayId: instance.relayId,
+    })
 
     function copyDiagnostics() {
       Effect.runFork(
@@ -325,7 +327,13 @@ const InstanceProvisioningState = React.memo(
                   <p className="type-technical-label text-destructive">
                     Failed during {activeStep?.label ?? "provisioning"}
                   </p>
-                  <p className="mt-2 text-sm leading-6 text-foreground">
+                  <p
+                    className="mt-2 line-clamp-3 text-sm leading-6 break-words text-foreground"
+                    title={
+                      provisioning.error ??
+                      "The Relay did not provide an error message."
+                    }
+                  >
                     {provisioning.error ??
                       "The Relay did not provide an error message."}
                   </p>
