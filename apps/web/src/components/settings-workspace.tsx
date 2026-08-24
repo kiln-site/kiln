@@ -71,20 +71,28 @@ type InstanceUsers = Awaited<ReturnType<typeof getInstanceUsers>>
 export function SettingsWorkspace({
   instance,
   node,
-  canShare,
-  canDelete,
-  canRename,
+  permissions,
   onDeleted,
   relayConnected,
 }: {
   instance: InstanceSettingsInstance
   node: RelayNodeSummary
-  canShare: boolean
-  canDelete: boolean
-  canRename: boolean
+  permissions: {
+    deleteServer: boolean
+    networkRead: boolean
+    settings: boolean
+    shareLogs: boolean
+  }
   onDeleted: () => Promise<void> | void
   relayConnected: boolean
 }) {
+  const {
+    deleteServer: canDelete,
+    networkRead: canViewNetwork,
+    settings: canRename,
+    shareLogs: canShare,
+  } = permissions
+  const canViewStartup = permissions.settings
   const rawAddress =
     instance.publicHost && instance.publicPort
       ? hostPortAddress(instance.publicHost, instance.publicPort)
@@ -132,15 +140,17 @@ export function SettingsWorkspace({
                 icon={<Globe2 />}
                 title="Connection info"
                 action={
-                  <Button asChild size="sm" variant="ghost">
-                    <Link
-                      to="/server/$serverId/network"
-                      params={{ serverId: instance.routeId }}
-                    >
-                      Network
-                      <ArrowRight />
-                    </Link>
-                  </Button>
+                  canViewNetwork ? (
+                    <Button asChild size="sm" variant="ghost">
+                      <Link
+                        to="/server/$serverId/network"
+                        params={{ serverId: instance.routeId }}
+                      >
+                        Network
+                        <ArrowRight />
+                      </Link>
+                    </Button>
+                  ) : null
                 }
               />
               <CopyMetaRow label="Raw connection URL" value={rawAddress} />
@@ -151,7 +161,11 @@ export function SettingsWorkspace({
               />
             </InfoCard>
 
-            <BrickInfoCard canShare={canShare} instance={instance} />
+            <BrickInfoCard
+              canShare={canShare}
+              canViewStartup={canViewStartup}
+              instance={instance}
+            />
           </div>
 
           <InstanceUsersCard instance={instance} />
@@ -307,9 +321,11 @@ function CopyMetaRow({
 
 function BrickInfoCard({
   canShare,
+  canViewStartup,
   instance,
 }: {
   canShare: boolean
+  canViewStartup: boolean
   instance: InstanceSettingsInstance
 }) {
   const [recipeOpen, setRecipeOpen] = React.useState(false)
@@ -341,15 +357,17 @@ function BrickInfoCard({
           icon={<Box />}
           title="Brick info"
           action={
-            <Button asChild size="sm" variant="ghost">
-              <Link
-                to="/server/$serverId/startup"
-                params={{ serverId: instance.routeId }}
-              >
-                Startup
-                <ArrowRight />
-              </Link>
-            </Button>
+            canViewStartup ? (
+              <Button asChild size="sm" variant="ghost">
+                <Link
+                  to="/server/$serverId/startup"
+                  params={{ serverId: instance.routeId }}
+                >
+                  Startup
+                  <ArrowRight />
+                </Link>
+              </Button>
+            ) : null
           }
         />
         <MetaRow

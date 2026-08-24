@@ -89,8 +89,13 @@ import type { SidebarInstance } from "@/lib/relay-selectors"
 import { globalSectionFromRouteId } from "@/lib/route-sections"
 import type { GlobalSection } from "@/lib/route-sections"
 import {
-  destinationsForServer,
+  accessibleDestinationsForServer,
+  accessibleInfrastructureDestinations,
+  canAccessActivity,
+  canAccessAutomations,
+  canAccessBackups,
   serverDestinations,
+  type NavigationAccessCapabilities,
   type ServerDestination,
   type ServerDestinationId,
 } from "@/lib/navigation-destinations"
@@ -103,11 +108,9 @@ import { warmFileWorkspaceModule } from "@/lib/workspace-module-preloads"
 export type InstanceTab = ServerDestinationId
 
 interface AppSidebarViewProps {
+  capabilities: NavigationAccessCapabilities
   user: AuthenticatedUser
-  canManageAccess: boolean
-  canManageRelays: boolean
   initialSelectedInstanceRouteId: string | null
-  isPlatformAdmin: boolean
   relayConfigured: boolean
 }
 
@@ -130,10 +133,8 @@ export const AppSidebar = React.memo(function AppSidebar({
 
   return (
     <AppSidebarView
-      canManageAccess={capabilities.canManageAccess}
-      canManageRelays={capabilities.canManageRelays}
+      capabilities={capabilities}
       initialSelectedInstanceRouteId={initialSelectedInstanceRouteId}
-      isPlatformAdmin={capabilities.isPlatformAdmin}
       relayConfigured={relayConfigured}
       user={capabilities.user}
     />
@@ -141,19 +142,15 @@ export const AppSidebar = React.memo(function AppSidebar({
 })
 
 const AppSidebarView = React.memo(function AppSidebarView({
+  capabilities,
   user,
-  canManageAccess,
-  canManageRelays,
   initialSelectedInstanceRouteId,
-  isPlatformAdmin,
   relayConfigured,
 }: AppSidebarViewProps) {
   return (
     <RouteCommandMenuProvider
-      canManageAccess={canManageAccess}
-      canManageRelays={canManageRelays}
+      capabilities={capabilities}
       initialSelectedInstanceRouteId={initialSelectedInstanceRouteId}
-      isPlatformAdmin={isPlatformAdmin}
       relayConfigured={relayConfigured}
     >
       <Sidebar collapsible="icon" className="border-sidebar-border/80">
@@ -178,25 +175,40 @@ const AppSidebarView = React.memo(function AppSidebarView({
         <SidebarSeparator />
 
         <SidebarContent>
-          <InfrastructureNavigation relayConfigured={relayConfigured} />
+          <InfrastructureNavigation
+            capabilities={capabilities}
+            relayConfigured={relayConfigured}
+          />
 
           <SidebarInstanceNavigation
+            capabilities={capabilities}
             initialSelectedInstanceRouteId={initialSelectedInstanceRouteId}
             relayConfigured={relayConfigured}
           />
         </SidebarContent>
 
-        <AccountNavigation canManageAccess={canManageAccess} user={user} />
+        <AccountNavigation capabilities={capabilities} user={user} />
       </Sidebar>
     </RouteCommandMenuProvider>
   )
 })
 
 function InfrastructureNavigation({
+  capabilities,
   relayConfigured,
 }: {
+  capabilities: NavigationAccessCapabilities
   relayConfigured: boolean
 }) {
+  const destinations = accessibleInfrastructureDestinations(capabilities)
+  const showServers = destinations.some(
+    (destination) => destination.to === "/infra/servers"
+  )
+  const showDatabases = destinations.some(
+    (destination) => destination.to === "/infra/databases"
+  )
+  if (!showServers && !showDatabases) return null
+
   return (
     <SidebarGroup className="pt-2">
       <SidebarGroupLabel className="type-technical-label">
@@ -204,8 +216,12 @@ function InfrastructureNavigation({
       </SidebarGroupLabel>
       <SidebarGroupContent>
         <SidebarMenu>
-          <ServersNavigationItem relayConfigured={relayConfigured} />
-          <DatabasesNavigationItem relayConfigured={relayConfigured} />
+          {showServers ? (
+            <ServersNavigationItem relayConfigured={relayConfigured} />
+          ) : null}
+          {showDatabases ? (
+            <DatabasesNavigationItem relayConfigured={relayConfigured} />
+          ) : null}
         </SidebarMenu>
       </SidebarGroupContent>
     </SidebarGroup>
@@ -293,9 +309,11 @@ const InfrastructureInstanceCount = React.memo(
 )
 
 function SidebarInstanceNavigation({
+  capabilities,
   initialSelectedInstanceRouteId,
   relayConfigured,
 }: {
+  capabilities: NavigationAccessCapabilities
   initialSelectedInstanceRouteId: string | null
   relayConfigured: boolean
 }) {
@@ -329,6 +347,8 @@ function SidebarInstanceNavigation({
   const instanceRouteId = instance
     ? (relayInstanceRouteIdentifier(instances, instance) ?? null)
     : null
+  if (instances.length === 0) return null
+
   return (
     <>
       {instanceRouteId ? (
@@ -336,6 +356,7 @@ function SidebarInstanceNavigation({
       ) : null}
       <SidebarSeparator />
       <InstanceNavigation
+        capabilities={capabilities}
         instance={instance}
         instanceRouteId={instanceRouteId}
         instances={instances}
@@ -363,11 +384,13 @@ function RememberSelectedInstance({
 }
 
 const InstanceNavigation = React.memo(function InstanceNavigation({
+  capabilities,
   instance,
   instanceRouteId,
   instances,
   unresolvedServerId,
 }: {
+  capabilities: NavigationAccessCapabilities
   instance: SidebarInstance | null
   instanceRouteId: string | null
   instances: Array<SidebarInstance>
@@ -427,6 +450,7 @@ const InstanceNavigation = React.memo(function InstanceNavigation({
             navigateToTab={navigateToTab}
           />
           <InstanceTabNavigation
+            capabilities={capabilities}
             instance={instance}
             instanceRouteId={instanceRouteId}
             unresolvedServerId={unresolvedServerId}
@@ -877,15 +901,19 @@ const ServerSelectorItem = React.memo(function ServerSelectorItem({
 })
 
 const InstanceTabNavigation = React.memo(function InstanceTabNavigation({
+  capabilities,
   instance,
   instanceRouteId,
   unresolvedServerId,
 }: {
+  capabilities: NavigationAccessCapabilities
   instance: SidebarInstance | null
   instanceRouteId: string | null
   unresolvedServerId: string | undefined
 }) {
-  const items = instance ? destinationsForServer(instance) : serverDestinations
+  const items = instance
+    ? accessibleDestinationsForServer(instance, capabilities)
+    : serverDestinations
   return items.map((item) => (
     <InstanceTabNavigationItem
       key={item.id}
@@ -984,67 +1012,87 @@ const InstanceTabNavigationItem = React.memo(
 )
 
 function AccountNavigation({
-  canManageAccess,
+  capabilities,
   user,
 }: {
-  canManageAccess: boolean
+  capabilities: NavigationAccessCapabilities
   user: AuthenticatedUser
 }) {
   const { isMobile, state } = useSidebar()
+  const showAutomations = canAccessAutomations(capabilities)
+  const showBackups = canAccessBackups(capabilities)
+  const showActivity = canAccessActivity(capabilities)
+  const showManage =
+    showAutomations ||
+    showBackups ||
+    showActivity ||
+    capabilities.canManageAccess
   return (
     <SidebarFooter>
-      <SidebarGroup className="p-0">
-        <SidebarGroupLabel className="type-technical-label">
-          Manage
-        </SidebarGroupLabel>
-        <SidebarGroupContent>
-          <SidebarMenu>
-            <SidebarMenuItem>
-              <SidebarMenuButton asChild tooltip="Automations">
-                <Link
-                  to="/automations/schedules"
-                  activeOptions={{ includeSearch: false }}
-                  activeProps={{ "data-active": true }}
-                  preload="intent"
-                >
-                  <CalendarClock />
-                  <span>Automations</span>
-                </Link>
-              </SidebarMenuButton>
-            </SidebarMenuItem>
-            <SidebarMenuItem>
-              <SidebarMenuButton asChild tooltip="Backups">
-                <Link
-                  to="/backups"
-                  activeOptions={{ exact: true, includeSearch: false }}
-                  activeProps={{ "data-active": true }}
-                  preload="intent"
-                >
-                  <BackupIcon />
-                  <span>Backups</span>
-                </Link>
-              </SidebarMenuButton>
-            </SidebarMenuItem>
-            <SidebarMenuItem>
-              <SidebarMenuButton asChild tooltip="Activity">
-                <Link
-                  to="/activity"
-                  activeOptions={{ exact: true, includeSearch: false }}
-                  activeProps={{ "data-active": true }}
-                  preload="intent"
-                >
-                  <ListTodo />
-                  <span>Activity</span>
-                </Link>
-              </SidebarMenuButton>
-            </SidebarMenuItem>
-            <SidebarMenuItem>
-              {canManageAccess ? <AccessNavigationButton /> : null}
-            </SidebarMenuItem>
-          </SidebarMenu>
-        </SidebarGroupContent>
-      </SidebarGroup>
-      <SidebarSeparator />
+      {showManage ? (
+        <>
+          <SidebarGroup className="p-0">
+            <SidebarGroupLabel className="type-technical-label">
+              Manage
+            </SidebarGroupLabel>
+            <SidebarGroupContent>
+              <SidebarMenu>
+                {showAutomations ? (
+                  <SidebarMenuItem>
+                    <SidebarMenuButton asChild tooltip="Automations">
+                      <Link
+                        to="/automations/schedules"
+                        activeOptions={{ includeSearch: false }}
+                        activeProps={{ "data-active": true }}
+                        preload="intent"
+                      >
+                        <CalendarClock />
+                        <span>Automations</span>
+                      </Link>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                ) : null}
+                {showBackups ? (
+                  <SidebarMenuItem>
+                    <SidebarMenuButton asChild tooltip="Backups">
+                      <Link
+                        to="/backups"
+                        activeOptions={{ exact: true, includeSearch: false }}
+                        activeProps={{ "data-active": true }}
+                        preload="intent"
+                      >
+                        <BackupIcon />
+                        <span>Backups</span>
+                      </Link>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                ) : null}
+                {showActivity ? (
+                  <SidebarMenuItem>
+                    <SidebarMenuButton asChild tooltip="Activity">
+                      <Link
+                        to="/activity"
+                        activeOptions={{ exact: true, includeSearch: false }}
+                        activeProps={{ "data-active": true }}
+                        preload="intent"
+                      >
+                        <ListTodo />
+                        <span>Activity</span>
+                      </Link>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                ) : null}
+                {capabilities.canManageAccess ? (
+                  <SidebarMenuItem>
+                    <AccessNavigationButton />
+                  </SidebarMenuItem>
+                ) : null}
+              </SidebarMenu>
+            </SidebarGroupContent>
+          </SidebarGroup>
+          <SidebarSeparator />
+        </>
+      ) : null}
       <SidebarMenu>
         <SidebarMenuItem>
           {state === "collapsed" && !isMobile ? (

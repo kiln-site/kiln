@@ -14,6 +14,7 @@ import {
 } from "@/lib/activity"
 import { activityQueryOptions } from "@/lib/query-options"
 import { pageTitle } from "@/lib/page-title"
+import { requireGlobalDestinationAccess } from "@/lib/route-access"
 
 const activitySearchSchema = z
   .object({
@@ -37,6 +38,9 @@ const activitySearchSchema = z
 export const Route = createFileRoute("/_app/activity")({
   validateSearch: activitySearchSchema,
   loaderDeps: ({ search }) => ({ from: search.from, to: search.to }),
+  beforeLoad: async ({ context }) => {
+    await requireGlobalDestinationAccess(context.queryClient, "activity")
+  },
   loader: ({ context, deps }) =>
     context.queryClient.ensureQueryData(
       activityQueryOptions(deps.from, deps.to)

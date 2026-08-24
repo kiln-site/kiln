@@ -14,6 +14,7 @@ import {
   relaySnapshotQueryOptions,
 } from "@/lib/query-options"
 import { pageTitle } from "@/lib/page-title"
+import { requireGlobalDestinationAccess } from "@/lib/route-access"
 
 const backupSearchSchema = z.object({
   kind: z.enum(["database", "relay", "server"]).optional(),
@@ -25,6 +26,9 @@ const backupSearchSchema = z.object({
 
 export const Route = createFileRoute("/_app/backups")({
   validateSearch: backupSearchSchema,
+  beforeLoad: async ({ context }) => {
+    await requireGlobalDestinationAccess(context.queryClient, "backups")
+  },
   loader: async ({ context }) => {
     await Promise.all([
       context.queryClient.ensureQueryData(backupsQueryOptions()),

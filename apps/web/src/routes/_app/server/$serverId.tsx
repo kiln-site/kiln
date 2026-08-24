@@ -1,8 +1,4 @@
-import {
-  Outlet,
-  createFileRoute,
-  redirect,
-} from "@tanstack/react-router"
+import { Outlet, createFileRoute, redirect } from "@tanstack/react-router"
 
 import {
   relayConnectionQueryOptions,
@@ -15,8 +11,8 @@ import {
 
 export const Route = createFileRoute("/_app/server/$serverId")({
   staleTime: Infinity,
-  loader: async ({ context, location, params }) => {
-    if (params.serverId === "unavailable") return
+  beforeLoad: async ({ context, location, params }) => {
+    if (params.serverId === "unavailable") return { instance: null }
 
     const connection = await context.queryClient.ensureQueryData(
       relayConnectionQueryOptions(context.queryClient)
@@ -53,6 +49,13 @@ export const Route = createFileRoute("/_app/server/$serverId")({
         href: `${segments.join("/")}${location.searchStr}${location.hash ? `#${location.hash}` : ""}`,
         replace: true,
       })
+    }
+    return {
+      instance: {
+        brickId: instance.brickId,
+        id: instance.id,
+        relayId: instance.relayId,
+      },
     }
   },
   component: Outlet,

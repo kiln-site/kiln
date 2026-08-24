@@ -4,11 +4,18 @@ import { z } from "zod"
 
 import { ServersPage, createServerSearchStore } from "@/components/servers-page"
 import { pageTitle } from "@/lib/page-title"
+import { requireInfrastructureDestinationAccess } from "@/lib/route-access"
 
 export const Route = createFileRoute("/_app/infra/servers")({
   validateSearch: z.object({
     search: z.string().optional(),
   }),
+  beforeLoad: async ({ context }) => {
+    await requireInfrastructureDestinationAccess(
+      context.queryClient,
+      "/infra/servers"
+    )
+  },
   head: () => ({ meta: [{ title: pageTitle("Servers") }] }),
   component: ServersRoute,
 })

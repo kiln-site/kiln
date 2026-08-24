@@ -1,11 +1,13 @@
-import { createFileRoute, redirect } from "@tanstack/react-router"
+import { createFileRoute } from "@tanstack/react-router"
+
+import { redirectToFirstAccessibleServerDestination } from "@/lib/route-access"
 
 export const Route = createFileRoute("/_app/server/$serverId/")({
-  beforeLoad: ({ params }) => {
-    throw redirect({
-      to: "/server/$serverId/console",
-      replace: true,
-      params: { serverId: params.serverId },
-    })
+  beforeLoad: async ({ context, params }) => {
+    await redirectToFirstAccessibleServerDestination(
+      context.queryClient,
+      context.instance,
+      params.serverId
+    )
   },
 })
