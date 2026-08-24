@@ -4,6 +4,7 @@ import {
   useQueryClient,
   useSuspenseQuery,
 } from "@tanstack/react-query"
+import { useVirtualizer } from "@tanstack/react-virtual"
 import {
   ArrowRight,
   CalendarClock,
@@ -642,27 +643,22 @@ const ServerSelectorResults = React.memo(function ServerSelectorResults({
   onSelect,
   search,
 }: ServerSelectorResultsProps) {
+  const query = normalizeServerSearch(search)
   const filteredInstances = React.useMemo(() => {
-    const query = normalizeServerSearch(search)
     if (!query) return instances
     return instances.filter((item) =>
       matchesNormalizedServerSearch(item, query)
     )
-  }, [instances, search])
+  }, [instances, query])
 
   return filteredInstances.length > 0 ? (
-    <div className="max-h-64 space-y-0.5 overflow-y-auto p-1.5">
-      {filteredInstances.map((item) => (
-        <ServerSelectorItem
-          key={`${item.relayId}:${item.id}`}
-          active={
-            item.id === activeInstanceId && item.relayId === activeRelayId
-          }
-          item={item}
-          onSelect={onSelect}
-        />
-      ))}
-    </div>
+    <VirtualizedServerSelectorResults
+      key={`${query}:${filteredInstances.length}`}
+      activeInstanceId={activeInstanceId}
+      activeRelayId={activeRelayId}
+      instances={filteredInstances}
+      onSelect={onSelect}
+    />
   ) : (
     <div className="px-4 py-6 text-center">
       <p className="type-control-sm">
@@ -678,6 +674,84 @@ const ServerSelectorResults = React.memo(function ServerSelectorResults({
     </div>
   )
 }, serverSelectorResultsAreEqual)
+
+const VirtualizedServerSelectorResults = React.memo(
+  function VirtualizedServerSelectorResults({
+    activeInstanceId,
+    activeRelayId,
+    instances,
+    onSelect,
+  }: {
+    activeInstanceId: string | undefined
+    activeRelayId: string | undefined
+    instances: Array<SidebarInstance>
+    onSelect: (routeId: string) => void
+  }) {
+    const scrollElementRef = React.useRef<HTMLDivElement>(null)
+    const getScrollElement = React.useCallback(
+      () => scrollElementRef.current,
+      []
+    )
+    const getItemKey = React.useCallback(
+      (index: number) => {
+        const item = instances[index]
+        return item ? `${item.relayId}:${item.id}` : index
+      },
+      [instances]
+    )
+    const rowVirtualizer = useVirtualizer({
+      count: instances.length,
+      estimateSize: estimateServerSelectorRowSize,
+      gap: serverSelectorRowGap,
+      getItemKey,
+      getScrollElement,
+      overscan: 3,
+    })
+
+    return (
+      <div
+        ref={scrollElementRef}
+        className="max-h-64 overflow-y-auto overscroll-contain p-1.5"
+      >
+        <div
+          className="relative w-full"
+          style={{ height: `${rowVirtualizer.getTotalSize()}px` }}
+        >
+          {rowVirtualizer.getVirtualItems().map((virtualRow) => {
+            const item = instances[virtualRow.index]
+            if (!item) return null
+            return (
+              <div
+                key={virtualRow.key}
+                className="absolute top-0 left-0 w-full"
+                data-index={virtualRow.index}
+                style={{
+                  height: `${virtualRow.size}px`,
+                  transform: `translateY(${virtualRow.start}px)`,
+                }}
+              >
+                <ServerSelectorItem
+                  active={
+                    item.id === activeInstanceId &&
+                    item.relayId === activeRelayId
+                  }
+                  item={item}
+                  onSelect={onSelect}
+                />
+              </div>
+            )
+          })}
+        </div>
+      </div>
+    )
+  }
+)
+
+const serverSelectorRowGap = 2
+
+function estimateServerSelectorRowSize(): number {
+  return 40
+}
 
 function serverSelectorResultsAreEqual(
   previous: ServerSelectorResultsProps,
