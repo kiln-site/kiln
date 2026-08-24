@@ -1546,7 +1546,6 @@ const UpdateTargetRow = React.memo(function UpdateTargetRow({
               </>
             ) : null}
             <UpdateTargetStatusCallout
-              activityStore={activityStore}
               releases={releases}
               target={target}
             />
@@ -1636,22 +1635,19 @@ const UpdateTargetIcon = React.memo(function UpdateTargetIcon({
 
 const UpdateTargetStatusCallout = React.memo(
   function UpdateTargetStatusCallout({
-    activityStore,
     releases,
     target,
   }: {
-    activityStore: SystemUpdateActivityStore
     releases: ReadonlyArray<PublicKilnRelease>
     target: UpdateTarget
   }) {
-    const updating = useTargetActivity(activityStore, target.key) !== undefined
     const comparison = compareLatestReleaseVersion(
       target.currentVersion,
       releases
     )
     return (
       <UpdateStatusCallout
-        status={targetStatus(target, comparison, updating)}
+        status={targetStatus(target, comparison)}
       />
     )
   }
@@ -2706,15 +2702,8 @@ function releaseDates(
 
 function targetStatus(
   target: UpdateTarget,
-  comparison: -1 | 0 | 1 | null,
-  updating: boolean
+  comparison: -1 | 0 | 1 | null
 ): UpdateTargetStatus {
-  if (updating) {
-    return {
-      label: "Updating...",
-      tone: "border-sky-300/35 bg-sky-300/10 text-sky-200",
-    }
-  }
   if (comparison === 0) {
     return {
       label: "Latest",
