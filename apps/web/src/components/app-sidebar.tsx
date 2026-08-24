@@ -511,39 +511,44 @@ const ServerSelector = React.memo(function ServerSelector({
           <SidebarMenuButton
             size="lg"
             tooltip="Switch server"
-            className="mb-1.5 h-10 border border-sidebar-border/75 bg-background/35 px-2 py-1.5 group-data-[collapsible=icon]:h-[32px]! group-data-[collapsible=icon]:border-0 group-data-[collapsible=icon]:bg-black/10 group-data-[collapsible=icon]:p-[8px]! group-data-[collapsible=icon]:shadow-[0_0_0_0.5px_color-mix(in_oklab,var(--sidebar-foreground)_16%,transparent)]! hover:border-sidebar-border hover:bg-sidebar-accent group-data-[collapsible=icon]:hover:bg-black/15 group-data-[collapsible=icon]:hover:shadow-[0_0_0_0.5px_color-mix(in_oklab,var(--sidebar-foreground)_24%,transparent)]! data-[state=open]:border-sidebar-border data-[state=open]:bg-sidebar-accent dark:group-data-[collapsible=icon]:bg-black/25 dark:group-data-[collapsible=icon]:hover:bg-black/35"
+            aria-label={
+              instance
+                ? `Switch server. ${instance.name}, ${instance.implementation}, ${serverStatusLabel(instance.observedState)}`
+                : "Choose a server"
+            }
+            className={`mb-1.5 h-11 border border-sidebar-border/75 bg-background/35 px-2 py-2 group-data-[collapsible=icon]:h-[32px]! group-data-[collapsible=icon]:bg-black/10 hover:border-sidebar-border hover:bg-sidebar-accent group-data-[collapsible=icon]:hover:bg-black/15 data-[state=open]:border-sidebar-border data-[state=open]:bg-sidebar-accent dark:group-data-[collapsible=icon]:bg-black/25 dark:group-data-[collapsible=icon]:hover:bg-black/35 ${collapsedStatusBorderTone(instance?.observedState)}`}
           >
-            <span className="relative grid size-6 shrink-0 place-items-center group-data-[collapsible=icon]:size-4">
+            <span className="relative grid size-6 shrink-0 place-items-center group-data-[collapsible=icon]:absolute group-data-[collapsible=icon]:inset-0 group-data-[collapsible=icon]:m-auto group-data-[collapsible=icon]:size-4">
               <ServerTypeIcon
                 implementation={instance?.implementation ?? ""}
                 className="size-3.5 text-sidebar-foreground/85 group-data-[collapsible=icon]:size-4!"
                 aria-hidden="true"
               />
-              {instance ? (
-                <span
-                  className={`absolute -right-1 -bottom-1 size-1.5 rounded-full ring-2 ring-sidebar ${statusDotTone(instance.observedState)}`}
-                  aria-hidden="true"
-                />
-              ) : null}
             </span>
-            <span className="flex min-w-0 flex-1 flex-col items-start">
+            <span className="flex min-w-0 flex-1 flex-col items-start group-data-[collapsible=icon]:hidden">
               <span className="type-control-sm w-full truncate">
                 {instance?.name ?? "Choose a server"}
               </span>
-              <span className="type-meta w-full truncate text-sidebar-muted-foreground">
-                {instance
-                  ? `${instance.implementation} ${instance.version}`
-                  : instances.length === 0
-                    ? "No managed servers"
-                    : "Selection required"}
+              <span className="type-meta flex w-full items-center gap-1.5 truncate text-sidebar-muted-foreground">
+                {instance ? (
+                  <>
+                    <span
+                      className={`size-1.5 shrink-0 rounded-full ${statusDotTone(instance.observedState)}`}
+                      aria-hidden="true"
+                    />
+                    <span className="truncate">{instance.implementation}</span>
+                    <span className="sr-only">
+                      Status: {serverStatusLabel(instance.observedState)}
+                    </span>
+                  </>
+                ) : instances.length === 0 ? (
+                  "No managed servers"
+                ) : (
+                  "Selection required"
+                )}
               </span>
             </span>
-            {instance ? (
-              <span className="sr-only">
-                Status: {serverStatusLabel(instance.observedState)}
-              </span>
-            ) : null}
-            <ChevronsUpDown className="ml-auto size-3.5! text-sidebar-foreground/60" />
+            <ChevronsUpDown className="ml-auto size-3.5! text-sidebar-foreground/60 group-data-[collapsible=icon]:hidden" />
           </SidebarMenuButton>
         </PopoverTrigger>
         <PopoverContent
@@ -1056,6 +1061,24 @@ function statusDotTone(state: SidebarInstance["observedState"]): string {
   }
   if (state === "stopping") return "bg-amber-400/70"
   return "bg-muted-foreground/45"
+}
+
+function collapsedStatusBorderTone(
+  state: SidebarInstance["observedState"] | undefined
+): string {
+  if (state === "running") {
+    return "group-data-[collapsible=icon]:border-emerald-400/80 group-data-[collapsible=icon]:hover:border-emerald-400"
+  }
+  if (state === "failed") {
+    return "group-data-[collapsible=icon]:border-destructive/80 group-data-[collapsible=icon]:hover:border-destructive"
+  }
+  if (state === "starting" || state === "provisioning") {
+    return "group-data-[collapsible=icon]:border-amber-400/80 group-data-[collapsible=icon]:hover:border-amber-400"
+  }
+  if (state === "stopping") {
+    return "group-data-[collapsible=icon]:border-amber-400/60 group-data-[collapsible=icon]:hover:border-amber-400/80"
+  }
+  return "group-data-[collapsible=icon]:border-sidebar-foreground/25 group-data-[collapsible=icon]:hover:border-sidebar-foreground/40"
 }
 
 function serverStatusLabel(state: SidebarInstance["observedState"]): string {
