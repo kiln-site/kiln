@@ -5,7 +5,6 @@ import {
   ArrowUp,
   ChevronDown,
   ChevronUp,
-  FileIcon,
   FilePlus,
   Folder,
   FolderPlus,
@@ -27,6 +26,10 @@ import {
 } from "@workspace/ui/components/tooltip"
 
 import { FileActionsDropdown } from "@/components/files/file-actions"
+import {
+  FileTypeIcon,
+  FileTypeIconSprite,
+} from "@/components/files/file-type-icon"
 import { selectedUploadFiles } from "@/components/files/file-upload-selection"
 import {
   type FileActionsController,
@@ -312,6 +315,7 @@ export function RootDirectoryList({
         <FileActionsDropdown controller={actions} paths={selectedPaths} />
       </div>
       <div className="overflow-hidden border border-border/75 bg-muted/[0.025]">
+        <FileTypeIconSprite />
         <div className="type-technical-label grid h-9 grid-cols-[2.25rem_minmax(12rem,1fr)_7rem_11rem_2.5rem] items-center border-b border-border/75 bg-muted/10 px-2 text-muted-foreground">
           <label className="grid size-7 place-items-center">
             <input
@@ -370,7 +374,7 @@ export function RootDirectoryList({
               {entry.kind === "directory" ? (
                 <Folder className="size-4 shrink-0 text-primary/80" />
               ) : (
-                <FileIcon className="size-4 shrink-0 text-muted-foreground" />
+                <FileTypeIcon path={entry.path} />
               )}
               <span className="truncate">{entry.name}</span>
             </button>
@@ -559,6 +563,7 @@ function DirectoryViewContent({
 
       <div className="min-h-0 flex-1 overflow-auto px-3 py-4 sm:px-5 lg:px-7">
         <div className="mx-auto w-full max-w-5xl overflow-hidden border border-border/75 bg-muted/[0.025]">
+          <FileTypeIconSprite />
           <div className="type-technical-label grid h-9 grid-cols-[2.25rem_minmax(12rem,1fr)_7rem_11rem_2.5rem] items-center border-b border-border/75 bg-muted/10 px-2 text-muted-foreground">
             <label className="grid size-7 place-items-center">
               <input
@@ -636,7 +641,7 @@ function DirectoryViewContent({
                 {entry.kind === "directory" ? (
                   <Folder className="size-4 shrink-0 text-primary/80" />
                 ) : (
-                  <FileIcon className="size-4 shrink-0 text-muted-foreground" />
+                  <FileTypeIcon path={entry.path} />
                 )}
                 <span className="truncate">{entry.name}</span>
               </button>
