@@ -130,7 +130,7 @@ function ConsoleTimestamp({ timestamp }: { timestamp: string | null }) {
   )
 
   return (
-    <span className="mr-2 ml-3 w-[3.25rem] shrink-0 text-[0.5625rem] text-muted-foreground/65 tabular-nums">
+    <span className="mr-2 ml-3 w-[3.25rem] shrink-0 text-left text-[0.5625rem] text-muted-foreground/65 tabular-nums">
       {formattedTimestamp}
     </span>
   )
