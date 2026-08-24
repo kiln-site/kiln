@@ -40,6 +40,7 @@ export type ServerListInstance = Pick<
   | "implementation"
   | "name"
   | "observedState"
+  | "provisioning"
   | "shortId"
   | "version"
 > & {
@@ -151,6 +152,7 @@ export function selectServerListInstances(
     implementation: instance.implementation,
     name: instance.name,
     observedState: instance.observedState,
+    provisioning: instance.provisioning,
     relayId: instance.relayId,
     relayName: instance.relayName,
     relayStatus: instance.relayStatus,

@@ -1060,6 +1060,7 @@ function ServerDangerZone({
         <ServerDeleteDialog
           open
           target={{
+            backupAvailable: !instance.provisioning,
             id: instance.id,
             name: instance.name,
             relayId: instance.relayId,

@@ -64,7 +64,10 @@ import {
   provisionInstanceDomainBestEffort,
 } from "@/server/domains.server"
 import { syncInstanceDomainAfterPortUpdateBestEffort } from "@/server/relay-port-update.server"
-import { deleteInstanceWithFinalBackup } from "@/lib/final-instance-deletion"
+import {
+  deleteInstanceWithoutFinalBackup,
+  deleteInstanceWithFinalBackup,
+} from "@/lib/final-instance-deletion"
 import {
   cachedRelayFallbackJsonEffect,
   cachedRelayJsonEffect,
@@ -110,7 +113,9 @@ const instanceNameInputSchema = instanceInputSchema.extend({
 
 const deleteInstanceInputSchema = instanceInputSchema.extend({
   confirmation: z.string().max(64),
+  createBackup: z.boolean().default(true),
   password: z.string().max(128),
+  storageId: z.uuid().nullable().optional(),
 })
 
 const deleteInstanceResultSchema = z.object({
@@ -328,11 +333,20 @@ export const deleteInstance = createServerFn({ method: "POST" })
     const { requireAccountPassword } = await import("@/lib/auth-password")
     await requireAccountPassword(user, data.password)
 
-    await deleteInstanceWithFinalBackup({
-      instanceId: data.instanceId,
-      relay,
-      requestedBy: user.id,
-    })
+    if (data.createBackup) {
+      await deleteInstanceWithFinalBackup({
+        instanceId: data.instanceId,
+        relay,
+        requestedBy: user.id,
+        ...(data.storageId === undefined ? {} : { storageId: data.storageId }),
+      })
+    } else {
+      await deleteInstanceWithoutFinalBackup({
+        instanceId: data.instanceId,
+        relay,
+        requestedBy: user.id,
+      })
+    }
     return {
       ...deleteInstanceResultSchema.parse({
         deleted: true,

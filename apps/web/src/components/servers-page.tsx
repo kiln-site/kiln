@@ -714,6 +714,7 @@ const ServerActions = React.memo(function ServerActions({
               disabled={!deleteEnabled}
               onClick={() =>
                 onDelete({
+                  backupAvailable: !server.provisioning,
                   id: server.id,
                   name: server.name,
                   relayId: server.relayId,

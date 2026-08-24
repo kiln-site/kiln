@@ -1,8 +1,15 @@
 import * as React from "react"
-import { useMutation, useQueryClient } from "@tanstack/react-query"
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import type { QueryClient } from "@tanstack/react-query"
 import { Effect } from "effect"
-import { Check, Copy, LoaderCircle, Trash2, TriangleAlert } from "lucide-react"
+import {
+  Archive,
+  Check,
+  Copy,
+  LoaderCircle,
+  Trash2,
+  TriangleAlert,
+} from "lucide-react"
 
 import { Button } from "@workspace/ui/components/button"
 import {
@@ -14,14 +21,26 @@ import {
   DialogTitle,
 } from "@workspace/ui/components/dialog"
 import { Input } from "@workspace/ui/components/input"
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@workspace/ui/components/select"
 import { showToast } from "@workspace/ui/components/sonner"
 
 import { copyTextToClipboard } from "@/lib/clipboard"
 import type { RelayFleetSnapshot } from "@/lib/relay-fleet"
-import { queryKeys, type RelayConnection } from "@/lib/query-options"
+import {
+  backupStorageQueryOptions,
+  queryKeys,
+  type RelayConnection,
+} from "@/lib/query-options"
 import { deleteInstance } from "@/server/relay"
 
 export interface ServerDeleteTarget {
+  backupAvailable: boolean
   id: string
   name: string
   relayId: string
@@ -45,12 +64,18 @@ export const ServerDeleteDialog = React.memo(function ServerDeleteDialog({
   const [password, setPassword] = React.useState("")
   const [copied, setCopied] = React.useState(false)
   const [error, setError] = React.useState<string | null>(null)
+  const [createBackup, setCreateBackup] = React.useState(target.backupAvailable)
+  const [backupDestination, setBackupDestination] = React.useState("default")
   const deletion = useMutation({
     mutationFn: deleteInstance,
     onSuccess: () => removeDeletedInstanceFromCache(queryClient, target),
   })
   const pending = deletion.isPending
   const confirmed = confirmation === target.id
+  const changeCreateBackup = React.useCallback((nextCreateBackup: boolean) => {
+    setCreateBackup(nextCreateBackup)
+    setError(null)
+  }, [])
 
   const changeOpen = React.useCallback(
     (nextOpen: boolean) => {
@@ -80,9 +105,16 @@ export const ServerDeleteDialog = React.memo(function ServerDeleteDialog({
           deletion.mutateAsync({
             data: {
               confirmation,
+              createBackup,
               instanceId: target.id,
               password,
               relayId: target.relayId,
+              ...(createBackup && backupDestination !== "default"
+                ? {
+                    storageId:
+                      backupDestination === "local" ? null : backupDestination,
+                  }
+                : {}),
             },
           }),
         catch: (cause) => cause,
@@ -105,7 +137,9 @@ export const ServerDeleteDialog = React.memo(function ServerDeleteDialog({
     showToast({
       type: "success",
       message: `${target.name} deleted`,
-      description: "The server and its stored data were removed.",
+      description: createBackup
+        ? "The final backup was saved and the server data was removed."
+        : "The server and its stored data were removed without a final backup.",
       duration: 5_000,
     })
     onOpenChange(false)
@@ -131,7 +165,7 @@ export const ServerDeleteDialog = React.memo(function ServerDeleteDialog({
           <DialogTitle>Delete {target.name}?</DialogTitle>
           <DialogDescription>
             This permanently removes the server, its container, and all data in
-            its managed server directory. This cannot be undone.
+            its managed server directory.
           </DialogDescription>
         </DialogHeader>
 
@@ -191,6 +225,16 @@ export const ServerDeleteDialog = React.memo(function ServerDeleteDialog({
             />
           </div>
 
+          <FinalBackupFields
+            available={target.backupAvailable}
+            createBackup={createBackup}
+            destination={backupDestination}
+            open={open}
+            pending={pending}
+            onCreateBackupChange={changeCreateBackup}
+            onDestinationChange={setBackupDestination}
+          />
+
           {passwordRequired ? (
             <div className="grid gap-1.5">
               <label
@@ -217,19 +261,14 @@ export const ServerDeleteDialog = React.memo(function ServerDeleteDialog({
             </div>
           ) : null}
 
-          <p
-            role={error ? "alert" : undefined}
-            className={`type-meta min-h-4 ${
-              error ? "text-destructive" : "text-muted-foreground"
-            }`}
-          >
-            {error ??
-              (confirmation.length > 0 && !confirmed
-                ? "The pasted server ID does not match."
-                : passwordRequired
-                  ? "Both confirmations are checked again by Hearth before deletion."
-                  : "The server ID is checked again by Hearth before deletion.")}
-          </p>
+          {error || (confirmation.length > 0 && !confirmed) ? (
+            <p
+              role={error ? "alert" : undefined}
+              className="type-meta text-destructive"
+            >
+              {error ?? "The pasted server ID does not match."}
+            </p>
+          ) : null}
 
           <DialogFooter>
             <Button
@@ -254,6 +293,97 @@ export const ServerDeleteDialog = React.memo(function ServerDeleteDialog({
         </form>
       </DialogContent>
     </Dialog>
+  )
+})
+
+const FinalBackupFields = React.memo(function FinalBackupFields({
+  available,
+  createBackup,
+  destination,
+  open,
+  pending,
+  onCreateBackupChange,
+  onDestinationChange,
+}: {
+  available: boolean
+  createBackup: boolean
+  destination: string
+  open: boolean
+  pending: boolean
+  onCreateBackupChange: (createBackup: boolean) => void
+  onDestinationChange: (destination: string) => void
+}) {
+  const backupStorage = useQuery({
+    ...backupStorageQueryOptions(),
+    enabled: open && available && createBackup,
+  })
+  const availableStorage = React.useMemo(
+    () =>
+      (backupStorage.data ?? []).filter(
+        (candidate) => candidate.enabled && !candidate.deleting
+      ),
+    [backupStorage.data]
+  )
+
+  return (
+    <div className="grid gap-3 rounded-lg border border-border/80 bg-background/45 p-3">
+      <label
+        className={`flex items-start gap-3 ${
+          available ? "cursor-pointer" : "cursor-not-allowed opacity-60"
+        }`}
+      >
+        <input
+          aria-label="Back up server before deleting"
+          checked={createBackup}
+          className="mt-0.5 size-4 rounded-[3px] border-input accent-primary"
+          disabled={!available || pending}
+          type="checkbox"
+          onChange={(event) =>
+            onCreateBackupChange(event.currentTarget.checked)
+          }
+        />
+        <span className="min-w-0 flex-1">
+          <span className="flex items-center gap-2 text-sm font-medium">
+            <Archive className="size-4 text-muted-foreground" />
+            Back up server before deleting
+          </span>
+          {available ? null : (
+            <span className="type-meta mt-1 block text-muted-foreground">
+              Unavailable because this server never finished provisioning.
+            </span>
+          )}
+        </span>
+      </label>
+
+      <label className="grid gap-1.5 border-t border-border/70 pt-3">
+        <span className="type-technical-label text-muted-foreground">
+          Backup destination
+        </span>
+        <Select
+          disabled={!available || !createBackup || pending}
+          value={destination}
+          onValueChange={onDestinationChange}
+        >
+          <SelectTrigger
+            aria-label="Backup destination"
+            className="h-9 w-full bg-background"
+          >
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent className="min-w-(--radix-select-trigger-width)">
+            <SelectItem value="default">
+              Default · Preferred destination
+            </SelectItem>
+            <SelectItem value="local">Local Relay</SelectItem>
+            {availableStorage.map((candidate) => (
+              <SelectItem key={candidate.id} value={candidate.id}>
+                S3 · {candidate.name}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </label>
+    </div>
   )
 })
 

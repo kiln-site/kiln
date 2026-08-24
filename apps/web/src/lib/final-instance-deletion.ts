@@ -35,6 +35,7 @@ export async function ensureFinalInstanceDeletion(input: {
   instanceId: string
   relay: PersistedRelay
   requestedBy: string
+  storageId?: string | null
 }): Promise<FinalInstanceDeletion> {
   const existing = await finalDeletion(input.relay.id, input.instanceId)
   if (existing?.status !== "failed") {
@@ -58,6 +59,9 @@ export async function ensureFinalInstanceDeletion(input: {
               reason: "final_delete",
               relayId: input.relay.id,
               requestedMaxBytes: null,
+              ...(input.storageId === undefined
+                ? {}
+                : { storageId: input.storageId }),
               targetId: input.instanceId,
               taskId: randomUUID(),
             })
@@ -83,6 +87,7 @@ export async function deleteInstanceWithFinalBackup(input: {
   instanceId: string
   relay: PersistedRelay
   requestedBy: string
+  storageId?: string | null
 }): Promise<void> {
   const deletion = await ensureFinalInstanceDeletion(input)
   if (deletion.status === "failed") throw finalBackupFailure(deletion)
@@ -99,6 +104,30 @@ export async function deleteInstanceWithFinalBackup(input: {
   throw new Error(
     "The final backup is still running. Server deletion will continue in the background."
   )
+}
+
+export async function deleteInstanceWithoutFinalBackup(input: {
+  instanceId: string
+  relay: PersistedRelay
+  requestedBy: string
+}): Promise<void> {
+  const existing = await finalDeletion(input.relay.id, input.instanceId)
+  if (existing?.status === "completed") return
+  if (existing && existing.status !== "failed") {
+    throw new Error(
+      "The final backup is already running. Wait for it to finish before changing the deletion plan."
+    )
+  }
+  if (existing) {
+    const cleared = await runAppEffect(
+      "backups.finalDelete.skipFailed",
+      clearFailedFinalInstanceDeletionEffect(input.relay.id, input.instanceId)
+    )
+    if (!cleared) {
+      throw new Error("The server deletion plan changed. Try deleting again.")
+    }
+  }
+  await deleteInstanceResources(input)
 }
 
 export async function processFinalInstanceDeletions(
@@ -195,9 +224,27 @@ async function deleteFinalizedInstanceAttempt(
   relay: PersistedRelay,
   deletion: FinalInstanceDeletion
 ): Promise<void> {
+  await deleteInstanceResources({
+    instanceId: deletion.targetId,
+    relay,
+    requestedBy: deletion.requestedBy,
+  })
+  await updateFinalDeletion({
+    deletion,
+    error: null,
+    from: ["deleting"],
+    status: "completed",
+  })
+}
+
+async function deleteInstanceResources(input: {
+  instanceId: string
+  relay: PersistedRelay
+  requestedBy: string
+}): Promise<void> {
   await runAppEffect(
     "domains.instance.finalDelete",
-    deleteInstanceDomainEffect(relay.id, deletion.targetId)
+    deleteInstanceDomainEffect(input.relay.id, input.instanceId)
   )
   const relayDeletion = await Effect.runPromise(
     Effect.result(
@@ -205,11 +252,11 @@ async function deleteFinalizedInstanceAttempt(
         try: async () =>
           deleteResultSchema.parse(
             await relayRpc(
-              relay,
+              input.relay,
               "instance.delete",
-              { deleteData: true, instanceId: deletion.targetId },
+              { deleteData: true, instanceId: input.instanceId },
               relayControlDeadlineMs("instance.delete"),
-              deletion.requestedBy
+              input.requestedBy
             )
           ),
         catch: (cause) => cause,
@@ -218,28 +265,28 @@ async function deleteFinalizedInstanceAttempt(
   )
   if (Result.isFailure(relayDeletion)) {
     const snapshot = relaySnapshotSchema.parse(
-      await relayRpc(relay, "relay.snapshot", {}, 15_000, deletion.requestedBy)
+      await relayRpc(
+        input.relay,
+        "relay.snapshot",
+        {},
+        15_000,
+        input.requestedBy
+      )
     )
     if (
-      snapshot.instances.some((instance) => instance.id === deletion.targetId)
+      snapshot.instances.some((instance) => instance.id === input.instanceId)
     ) {
       throw relayDeletion.failure
     }
   }
   await runAppEffect(
     "backups.finalDelete.purgeRepositories",
-    purgeInstanceBackupRepositoriesEffect(relay.id, deletion.targetId)
+    purgeInstanceBackupRepositoriesEffect(input.relay.id, input.instanceId)
   )
   await runAppEffect(
     "instances.finalDelete.finalize",
-    finalizeInstanceDeletionEffect(relay.id, deletion.targetId)
+    finalizeInstanceDeletionEffect(input.relay.id, input.instanceId)
   )
-  await updateFinalDeletion({
-    deletion,
-    error: null,
-    from: ["deleting"],
-    status: "completed",
-  })
 }
 
 function updateFinalDeletion(input: {
