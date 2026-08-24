@@ -181,6 +181,9 @@ importers:
       '@codemirror/legacy-modes':
         specifier: ^6.5.3
         version: 6.5.3
+      '@codemirror/lint':
+        specifier: ^6.9.7
+        version: 6.9.7
       '@codemirror/merge':
         specifier: ^6.12.2
         version: 6.12.2(patch_hash=805fe528f11a7cd690977b0fa7de7bf0c333292113623f87b59d75e7ef1546a8)

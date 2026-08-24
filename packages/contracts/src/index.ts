@@ -18,6 +18,7 @@ export * from "./backups.js"
 export * from "./git-repository.js"
 export * from "./tailscale.js"
 export * from "./schedules.js"
+export * from "./snbt.js"
 
 export const relayIdSchema = z.string().regex(/^[A-Za-z\d_-]{43}$/u)
 
@@ -1102,7 +1103,7 @@ export const relayFileContentSchema = z.object({
   content: z.string(),
   size: z.number().int().nonnegative(),
   decodedSize: z.number().int().nonnegative(),
-  encoding: z.enum(["utf8", "gzip"]),
+  encoding: z.enum(["utf8", "gzip", "nbt", "nbt-gzip", "snbt"]),
   readOnly: z.boolean(),
   modifiedAt: z.string().datetime(),
 })
@@ -1110,6 +1111,7 @@ export const relayFileContentSchema = z.object({
 export const relaySaveFileInputSchema = z.object({
   content: z.string().max(2 * 1024 * 1024),
   expectedModifiedAt: z.string().datetime().optional(),
+  force: z.boolean().optional(),
 })
 
 const relayFileMutationPathSchema = z

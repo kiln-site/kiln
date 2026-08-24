@@ -10,13 +10,16 @@ import {
 } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { resolve } from "node:path"
+import { gzipSync, gunzipSync } from "node:zlib"
 import type { FileHandle } from "node:fs/promises"
 import { assert, describe, it } from "@effect/vitest"
 import { Deferred, Effect, Fiber } from "effect"
+import { parseSnbt } from "@workspace/contracts"
 
 import { loadConfig } from "./config.js"
 import { FilesystemDriver, MAX_TRANSFER_BYTES } from "./files.js"
 import { RelayFilesystemError } from "./effect/errors.js"
+import { decodeNbt, encodeNbt } from "./nbt.js"
 import type { RelayInstanceConfig } from "./config.js"
 
 const describeLinux = process.platform === "linux" ? describe : describe.skip
@@ -175,6 +178,69 @@ describe("Relay legacy file tree", () => {
         )
       })
     )
+  )
+})
+
+describe("Relay NBT file editing", () => {
+  it.effect(
+    "opens, validates, force saves, and repairs compressed player data",
+    () =>
+      withSetup(({ driver, instance, root }) =>
+        Effect.gen(function* () {
+          const path = resolve(root, "world", "player.dat")
+          const original = gzipSync(
+            encodeNbt({
+              name: "",
+              tag: parseSnbt("{Health: 20.0f, Inventory: []}", {
+                binaryCompatible: true,
+              }),
+            })
+          )
+          yield* fromPromise(() => writeFile(path, original))
+
+          const opened = yield* driver.read(instance, "world/player.dat")
+          assert.strictEqual(opened.encoding, "nbt-gzip")
+          assert.include(opened.content, "Health: 20.0f")
+          assert.isFalse(opened.readOnly)
+
+          const invalid = `${opened.content.slice(0, -2)},`
+          const failure = yield* driver
+            .write(instance, "world/player.dat", {
+              content: invalid,
+              expectedModifiedAt: opened.modifiedAt,
+            })
+            .pipe(Effect.flip)
+          assert.instanceOf(failure, RelayFilesystemError)
+          assert.strictEqual(failure.code, "invalid_snbt")
+          assert.deepEqual(yield* fromPromise(() => readFile(path)), original)
+
+          const forced = yield* driver.write(instance, "world/player.dat", {
+            content: invalid,
+            expectedModifiedAt: opened.modifiedAt,
+            force: true,
+          })
+          assert.strictEqual(forced.encoding, "snbt")
+          assert.strictEqual(
+            yield* fromPromise(() => readFile(path, "utf8")),
+            invalid
+          )
+
+          const repaired = yield* driver.write(instance, "world/player.dat", {
+            content: "{Health: 18.0f, Inventory: []}\n",
+            expectedModifiedAt: forced.modifiedAt,
+          })
+          assert.strictEqual(repaired.encoding, "nbt-gzip")
+          const decoded = decodeNbt(
+            gunzipSync(yield* fromPromise(() => readFile(path)))
+          )
+          assert.deepEqual(
+            decoded.tag,
+            parseSnbt("{Health: 18.0f, Inventory: []}", {
+              binaryCompatible: true,
+            })
+          )
+        })
+      )
   )
 })
 

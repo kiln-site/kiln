@@ -5,6 +5,7 @@ export type FileLanguage = {
     | "log"
     | "properties"
     | "shell"
+    | "snbt"
     | "text"
     | "toml"
     | "valve-keyvalues"
@@ -16,6 +17,13 @@ export type FileLanguage = {
 export function fileLanguageForPath(path: string): FileLanguage {
   const lowerPath = path.toLowerCase()
   const filename = lowerPath.split("/").at(-1) ?? lowerPath
+  if (
+    lowerPath.endsWith(".snbt") ||
+    lowerPath.endsWith(".nbt") ||
+    lowerPath.endsWith(".dat")
+  ) {
+    return { id: "snbt", label: "SNBT" }
+  }
   if (lowerPath.endsWith(".json")) return { id: "json", label: "JSON" }
   if (lowerPath.endsWith(".json5")) return { id: "json", label: "JSON5" }
   if (lowerPath.endsWith(".mcmeta")) return { id: "json", label: "MCMETA" }

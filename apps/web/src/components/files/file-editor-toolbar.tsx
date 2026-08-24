@@ -60,9 +60,11 @@ export function EditorResponsiveActions({
           canWrite={canWrite}
           filePath={file.path}
           fileReadOnly={file.readOnly}
+          file={file}
           instance={instance}
           loading={loading}
           preferencesStore={preferencesStore}
+          saveFile={saveFile}
           sessionStore={sessionStore}
         />
       </div>
@@ -102,8 +104,10 @@ export function EditorResponsiveActions({
         canWrite={canWrite}
         filePath={file.path}
         fileReadOnly={file.readOnly}
+        file={file}
         instance={instance}
         loading={loading}
+        saveFile={saveFile}
         sessionStore={sessionStore}
       />
     </div>

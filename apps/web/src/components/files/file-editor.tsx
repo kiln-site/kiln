@@ -91,6 +91,7 @@ function Editor({
   React.useEffect(() => {
     const saveOptions = {
       canWrite,
+      file,
       fileReadOnly: file.readOnly,
       loading,
       saveFile,
@@ -115,7 +116,7 @@ function Editor({
 
     window.addEventListener("keydown", handleSaveShortcut)
     return () => window.removeEventListener("keydown", handleSaveShortcut)
-  }, [canWrite, file.readOnly, loading, saveFile, sessionStore])
+  }, [canWrite, file, loading, saveFile, sessionStore])
 
   React.useLayoutEffect(() => {
     const section = sectionRef.current
@@ -140,8 +141,7 @@ function Editor({
     }
 
     function observeGutter() {
-      gutterElement =
-        sectionElement.querySelector<HTMLElement>(".cm-gutters")
+      gutterElement = sectionElement.querySelector<HTMLElement>(".cm-gutters")
       if (!gutterElement) return false
       resizeObserver = new ResizeObserver(() => {
         if (syncGutterWidth()) resizeObserver?.unobserve(sectionElement)
@@ -397,11 +397,7 @@ function EditorFooter({
   return (
     <div className="type-meta flex h-7 shrink-0 items-center justify-between border-t bg-muted/10 px-3 font-mono text-muted-foreground">
       <span className={error || saveError ? "text-destructive" : undefined}>
-        {error ||
-          saveError ||
-          (file.encoding === "gzip"
-            ? `${file.size.toLocaleString()} B GZIP → ${file.decodedSize.toLocaleString()} B TEXT`
-            : `${file.size.toLocaleString()} BYTES`)}
+        {error || saveError || fileEncodingSummary(file)}
       </span>
       <div className="flex items-center gap-3">
         <span>UTF-8</span>
@@ -410,6 +406,22 @@ function EditorFooter({
       </div>
     </div>
   )
+}
+
+function fileEncodingSummary(file: RelayFileContent) {
+  if (file.encoding === "gzip") {
+    return `${file.size.toLocaleString()} B GZIP → ${file.decodedSize.toLocaleString()} B TEXT`
+  }
+  if (file.encoding === "nbt-gzip") {
+    return `${file.size.toLocaleString()} B GZIP NBT → ${file.decodedSize.toLocaleString()} B`
+  }
+  if (file.encoding === "nbt") {
+    return `${file.size.toLocaleString()} B BINARY NBT`
+  }
+  if (file.encoding === "snbt") {
+    return `${file.size.toLocaleString()} B SNBT TEXT`
+  }
+  return `${file.size.toLocaleString()} BYTES`
 }
 
 function EditorDocument({

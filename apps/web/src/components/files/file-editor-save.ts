@@ -2,6 +2,7 @@ import * as React from "react"
 import { useMutation, useQueryClient } from "@tanstack/react-query"
 import { Effect } from "effect"
 import type { RelayFileContent } from "@workspace/contracts"
+import { snbtDiagnostic } from "@workspace/contracts"
 
 import type { EditorSessionStore } from "@/components/files/file-workspace-stores"
 import { queryKeys } from "@/lib/query-options"
@@ -33,11 +34,13 @@ export async function runEditorSave(
 
 export type SaveFileRevision = (
   content: string,
-  expectedModifiedAt: string | undefined
+  expectedModifiedAt: string | undefined,
+  force?: boolean
 ) => Promise<RelayFileContent>
 
 export interface EditorSaveOptions {
   canWrite: boolean
+  file: RelayFileContent
   fileReadOnly: boolean
   loading: boolean
   saveFile: SaveFileRevision
@@ -60,15 +63,30 @@ export function canSaveEditor({
   )
 }
 
-export async function saveEditorChanges(options: EditorSaveOptions) {
+export async function saveEditorChanges(
+  options: EditorSaveOptions,
+  saveOptions: { force?: boolean } = {}
+) {
   if (!canSaveEditor(options)) return
 
-  const { saveFile, sessionStore } = options
+  const { file, saveFile, sessionStore } = options
+  const content = sessionStore.getValue()
+  if (!saveOptions.force) {
+    const validationError = validateEditorContent(file, content)
+    if (validationError) {
+      sessionStore.setSaveError(validationError)
+      return
+    }
+  }
   sessionStore.setSaving(true)
   sessionStore.setSaveError(null)
   await runEditorSave(
     () =>
-      saveFile(sessionStore.getValue(), sessionStore.getExpectedModifiedAt()),
+      saveFile(
+        content,
+        sessionStore.getExpectedModifiedAt(),
+        saveOptions.force
+      ),
     sessionStore,
     "Save failed"
   )
@@ -83,7 +101,7 @@ export function useFileSaveAction(
   const saveMutation = useMutation({
     mutationFn: saveRelayFile,
     onSuccess: async (nextFile, variables) => {
-      sessionStore.markSaved(variables.data.content, nextFile.modifiedAt)
+      sessionStore.markSaved(nextFile.content, nextFile.modifiedAt)
       queryClient.setQueryData(
         queryKeys.relay.file(
           variables.data.relayId,
@@ -103,7 +121,7 @@ export function useFileSaveAction(
   const saveFile = saveMutation.mutateAsync
 
   return React.useCallback(
-    (content: string, expectedModifiedAt: string | undefined) =>
+    (content: string, expectedModifiedAt: string | undefined, force = false) =>
       saveFile({
         data: {
           instanceId: instance.id,
@@ -111,8 +129,25 @@ export function useFileSaveAction(
           path: file.path,
           content,
           expectedModifiedAt,
+          ...(force ? { force: true } : {}),
         },
       }),
     [file.path, instance.id, instance.relayId, saveFile]
   )
+}
+
+export function isSnbtFile(file: RelayFileContent) {
+  return (
+    file.encoding === "snbt" ||
+    file.encoding === "nbt" ||
+    file.encoding === "nbt-gzip"
+  )
+}
+
+function validateEditorContent(file: RelayFileContent, content: string) {
+  if (!isSnbtFile(file)) return null
+  const diagnostic = snbtDiagnostic(content, {
+    binaryCompatible: !file.path.toLowerCase().endsWith(".snbt"),
+  })
+  return diagnostic?.message ?? null
 }

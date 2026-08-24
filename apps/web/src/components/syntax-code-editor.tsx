@@ -13,6 +13,7 @@ import { shell } from "@codemirror/legacy-modes/mode/shell"
 import { toml } from "@codemirror/legacy-modes/mode/toml"
 import { xml } from "@codemirror/legacy-modes/mode/xml"
 import { yaml } from "@codemirror/legacy-modes/mode/yaml"
+import { linter } from "@codemirror/lint"
 import {
   SearchQuery,
   closeSearchPanel,
@@ -41,6 +42,7 @@ import {
 import type { DecorationSet, Panel, ViewUpdate } from "@codemirror/view"
 import { tags } from "@lezer/highlight"
 import { minimalSetup } from "codemirror"
+import { snbtDiagnostic } from "@workspace/contracts"
 
 import { findSensitiveTextRedactions } from "@/lib/redaction"
 import { fileLanguageForPath } from "@/lib/file-language"
@@ -406,6 +408,61 @@ const valveKeyValuesLanguage = StreamLanguage.define<ValveKeyValuesState>({
   },
 })
 
+const snbtLanguage = StreamLanguage.define({
+  token(stream) {
+    if (stream.eatSpace()) return null
+    if (stream.match(/^[{}[\],:;]/u)) return "punctuation"
+    if (stream.peek() === '"' || stream.peek() === "'") {
+      const quote = stream.next()
+      let escaped = false
+      while (!stream.eol()) {
+        const character = stream.next()
+        if (character === quote && !escaped) break
+        escaped = character === "\\" && !escaped
+        if (character !== "\\") escaped = false
+      }
+      return "string"
+    }
+    if (stream.match(/^(?:bool|uuid)(?=\s*\()/u)) return "keyword"
+    if (stream.match(/^(?:true|false)\b/u)) return "bool"
+    if (
+      stream.match(
+        /^[+-]?(?:(?:0[xX][\da-fA-F](?:_?[\da-fA-F])*)|(?:0[bB][01](?:_?[01])*)|(?:(?:\d(?:_?\d)*)?(?:\.\d(?:_?\d)*)?|\d(?:_?\d)*)(?:[eE][+-]?\d(?:_?\d)*)?)(?:[su]?[bBsSiIlLfFdD])?(?![\w.])/u
+      )
+    ) {
+      return "number"
+    }
+    if (stream.match(/^[^\s{}[\],:;()]+(?=\s*:)/u)) return "propertyName"
+    if (stream.match(/^[BIL](?=\s*;)/u)) return "typeName"
+    if (stream.match(/^[^\s{}[\],:;()]+/u)) return "string"
+    stream.next()
+    return null
+  },
+})
+
+function snbtExtensions(path: string): Extension {
+  const binaryCompatible = !path.toLowerCase().endsWith(".snbt")
+  return [
+    snbtLanguage,
+    linter(
+      (view) => {
+        const source = view.state.doc.toString()
+        const diagnostic = snbtDiagnostic(source, { binaryCompatible })
+        if (!diagnostic) return []
+        return [
+          {
+            from: diagnostic.from,
+            to: diagnostic.to,
+            severity: "error" as const,
+            message: diagnostic.message,
+          },
+        ]
+      },
+      { delay: 300 }
+    ),
+  ]
+}
+
 function languageForPath(path: string): Extension {
   switch (fileLanguageForPath(path).id) {
     case "json":
@@ -423,6 +480,8 @@ function languageForPath(path: string): Extension {
       return StreamLanguage.define(properties)
     case "shell":
       return StreamLanguage.define(shell)
+    case "snbt":
+      return snbtExtensions(path)
     case "valve-keyvalues":
       return valveKeyValuesLanguage
     case "text":

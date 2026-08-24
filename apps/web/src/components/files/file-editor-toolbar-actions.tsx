@@ -20,6 +20,14 @@ import {
 
 import { Button } from "@workspace/ui/components/button"
 import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@workspace/ui/components/dialog"
+import {
   Popover,
   PopoverContent,
   PopoverTrigger,
@@ -29,6 +37,7 @@ import { FileActionMenuItem } from "@/components/files/file-actions"
 import { FileDownloadDialog } from "@/components/files/file-download-dialog"
 import {
   type SaveFileRevision,
+  isSnbtFile,
   saveEditorChanges,
 } from "@/components/files/file-editor-save"
 import { EditorTooltip } from "@/components/files/editor-tooltip"
@@ -238,64 +247,193 @@ function EditorReviewChangesMenuItem({
   )
 }
 
+function EditorForceSaveMenuItem({
+  canWrite,
+  file,
+  loading,
+  sessionStore,
+  onSelect,
+}: {
+  canWrite: boolean
+  file: RelayFileContent
+  loading: boolean
+  sessionStore: EditorSessionStore
+  onSelect: () => void
+}) {
+  const dirty = React.useSyncExternalStore(
+    sessionStore.subscribe,
+    sessionStore.getDirtySnapshot,
+    sessionStore.getDirtySnapshot
+  )
+  const saving = React.useSyncExternalStore(
+    sessionStore.subscribe,
+    sessionStore.getSavingSnapshot,
+    sessionStore.getSavingSnapshot
+  )
+  const conflicted = React.useSyncExternalStore(
+    sessionStore.subscribe,
+    sessionStore.getDiskConflictSnapshot,
+    sessionStore.getDiskConflictSnapshot
+  )
+  return (
+    <FileActionMenuItem
+      icon={<TriangleAlert />}
+      label="Force save"
+      detail="Bypass SNBT validation"
+      disabled={
+        !canWrite || file.readOnly || loading || !dirty || conflicted || saving
+      }
+      onClick={onSelect}
+    />
+  )
+}
+
+function ForceSaveDialog({
+  canWrite,
+  file,
+  loading,
+  open,
+  saveFile,
+  sessionStore,
+  onOpenChange,
+}: {
+  canWrite: boolean
+  file: RelayFileContent
+  loading: boolean
+  open: boolean
+  saveFile: SaveFileRevision
+  sessionStore: EditorSessionStore
+  onOpenChange: (open: boolean) => void
+}) {
+  function handleForceSave() {
+    onOpenChange(false)
+    void saveEditorChanges(
+      {
+        canWrite,
+        file,
+        fileReadOnly: file.readOnly,
+        loading,
+        saveFile,
+        sessionStore,
+      },
+      { force: true }
+    )
+  }
+
+  const binary = file.encoding === "nbt" || file.encoding === "nbt-gzip"
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Force save invalid SNBT?</DialogTitle>
+          <DialogDescription>
+            {binary
+              ? "If this cannot be encoded as NBT, Kiln will replace the binary file with your SNBT text. Minecraft may not load it until you repair and save it again."
+              : "Kiln will write your changes even if the SNBT is invalid. Minecraft may not load this file until it is repaired."}
+          </DialogDescription>
+        </DialogHeader>
+        <div className="rounded-lg border border-destructive/25 bg-destructive/8 px-3 py-2.5 text-xs leading-relaxed text-muted-foreground">
+          A normal save is safer and preserves the file&apos;s binary format.
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)}>
+            Cancel
+          </Button>
+          <Button variant="destructive" onClick={handleForceSave}>
+            Force save
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
 function EditorOverflowMenu({
   canWrite,
+  file,
   filePath,
   fileReadOnly,
   instance,
   loading,
+  saveFile,
   sessionStore,
 }: {
   canWrite: boolean
+  file: RelayFileContent
   filePath: string
   fileReadOnly: boolean
   instance: InstanceWorkspaceInstance
   loading: boolean
+  saveFile: SaveFileRevision
   sessionStore: EditorSessionStore
 }) {
   const [open, setOpen] = React.useState(false)
+  const [forceSaveOpen, setForceSaveOpen] = React.useState(false)
   return (
-    <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger asChild>
-        <Button
-          variant={open ? "secondary" : "ghost"}
-          size="icon"
-          aria-label="More file actions"
-          aria-expanded={open}
-          title="More file actions"
+    <>
+      <Popover open={open} onOpenChange={setOpen}>
+        <PopoverTrigger asChild>
+          <Button
+            variant={open ? "secondary" : "ghost"}
+            size="icon"
+            aria-label="More file actions"
+            aria-expanded={open}
+            title="More file actions"
+          >
+            <EllipsisVertical className="size-[18px]" />
+          </Button>
+        </PopoverTrigger>
+        <PopoverContent
+          align="end"
+          side="bottom"
+          sideOffset={7}
+          collisionPadding={8}
+          className="w-[min(17rem,calc(100vw-1rem))] p-1"
         >
-          <EllipsisVertical className="size-[18px]" />
-        </Button>
-      </PopoverTrigger>
-      <PopoverContent
-        align="end"
-        side="bottom"
-        sideOffset={7}
-        collisionPadding={8}
-        className="w-[min(17rem,calc(100vw-1rem))] p-1"
-      >
-        <p className="type-technical-label border-b px-2 py-2 text-muted-foreground">
-          File actions
-        </p>
-        <FilePinActionMenuItem
-          canWrite={canWrite}
-          editorLoading={loading}
-          instance={instance}
-          path={filePath}
-        />
-        <EditorReviewChangesMenuItem
-          fileReadOnly={fileReadOnly}
-          labelMode="dynamic"
-          loading={loading}
-          sessionStore={sessionStore}
-        />
-        <EditorDownloadActionMenuItem
-          instance={instance}
-          loading={loading}
-          path={filePath}
-        />
-      </PopoverContent>
-    </Popover>
+          <p className="type-technical-label border-b px-2 py-2 text-muted-foreground">
+            File actions
+          </p>
+          <FilePinActionMenuItem
+            canWrite={canWrite}
+            editorLoading={loading}
+            instance={instance}
+            path={filePath}
+          />
+          <EditorReviewChangesMenuItem
+            fileReadOnly={fileReadOnly}
+            labelMode="dynamic"
+            loading={loading}
+            sessionStore={sessionStore}
+          />
+          {isSnbtFile(file) ? (
+            <EditorForceSaveMenuItem
+              canWrite={canWrite}
+              file={file}
+              loading={loading}
+              sessionStore={sessionStore}
+              onSelect={() => {
+                setOpen(false)
+                setForceSaveOpen(true)
+              }}
+            />
+          ) : null}
+          <EditorDownloadActionMenuItem
+            instance={instance}
+            loading={loading}
+            path={filePath}
+          />
+        </PopoverContent>
+      </Popover>
+      <ForceSaveDialog
+        canWrite={canWrite}
+        file={file}
+        loading={loading}
+        open={forceSaveOpen}
+        saveFile={saveFile}
+        sessionStore={sessionStore}
+        onOpenChange={setForceSaveOpen}
+      />
+    </>
   )
 }
 
@@ -478,77 +616,105 @@ export function EditorDownloadButton({
 function EditorMobileOverflowMenu({
   canShare,
   canWrite,
+  file,
   filePath,
   fileReadOnly,
   instance,
   loading,
   preferencesStore,
+  saveFile,
   sessionStore,
 }: {
   canShare: boolean
   canWrite: boolean
+  file: RelayFileContent
   filePath: string
   fileReadOnly: boolean
   instance: InstanceWorkspaceInstance
   loading: boolean
   preferencesStore: FileEditorPreferencesStore
+  saveFile: SaveFileRevision
   sessionStore: EditorSessionStore
 }) {
   const [open, setOpen] = React.useState(false)
+  const [forceSaveOpen, setForceSaveOpen] = React.useState(false)
 
   return (
-    <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger asChild>
-        <Button
-          variant={open ? "secondary" : "ghost"}
-          size="icon"
-          className="shadow-none"
-          aria-label="More file actions"
-          aria-expanded={open}
+    <>
+      <Popover open={open} onOpenChange={setOpen}>
+        <PopoverTrigger asChild>
+          <Button
+            variant={open ? "secondary" : "ghost"}
+            size="icon"
+            className="shadow-none"
+            aria-label="More file actions"
+            aria-expanded={open}
+          >
+            <EllipsisVertical className="size-[18px]" />
+          </Button>
+        </PopoverTrigger>
+        <PopoverContent
+          align="end"
+          side="bottom"
+          sideOffset={7}
+          collisionPadding={8}
+          className="w-[min(18rem,calc(100vw-1rem))] p-1.5"
         >
-          <EllipsisVertical className="size-[18px]" />
-        </Button>
-      </PopoverTrigger>
-      <PopoverContent
-        align="end"
-        side="bottom"
-        sideOffset={7}
-        collisionPadding={8}
-        className="w-[min(18rem,calc(100vw-1rem))] p-1.5"
-      >
-        <p className="type-technical-label px-2 pt-1 pb-1.5 text-muted-foreground">
-          File actions
-        </p>
-        <EditorMobileFontSizeSection preferencesStore={preferencesStore} />
-        {canShare ? (
-          <EditorShareActionMenuItem
+          <p className="type-technical-label px-2 pt-1 pb-1.5 text-muted-foreground">
+            File actions
+          </p>
+          <EditorMobileFontSizeSection preferencesStore={preferencesStore} />
+          {canShare ? (
+            <EditorShareActionMenuItem
+              instance={instance}
+              loading={loading}
+              path={filePath}
+              sessionStore={sessionStore}
+            />
+          ) : null}
+          <FilePinActionMenuItem
+            canWrite={canWrite}
+            editorLoading={loading}
+            instance={instance}
+            path={filePath}
+          />
+          <EditorWrapActionMenuItem sessionStore={sessionStore} />
+          <EditorCopyActionMenuItem sessionStore={sessionStore} />
+          <EditorReviewChangesMenuItem
+            fileReadOnly={fileReadOnly}
+            labelMode="static"
+            loading={loading}
+            sessionStore={sessionStore}
+          />
+          {isSnbtFile(file) ? (
+            <EditorForceSaveMenuItem
+              canWrite={canWrite}
+              file={file}
+              loading={loading}
+              sessionStore={sessionStore}
+              onSelect={() => {
+                setOpen(false)
+                setForceSaveOpen(true)
+              }}
+            />
+          ) : null}
+          <EditorDownloadActionMenuItem
             instance={instance}
             loading={loading}
             path={filePath}
-            sessionStore={sessionStore}
           />
-        ) : null}
-        <FilePinActionMenuItem
-          canWrite={canWrite}
-          editorLoading={loading}
-          instance={instance}
-          path={filePath}
-        />
-        <EditorWrapActionMenuItem sessionStore={sessionStore} />
-        <EditorCopyActionMenuItem sessionStore={sessionStore} />
-        <EditorReviewChangesMenuItem
-          fileReadOnly={fileReadOnly}
-          labelMode="static"
-          loading={loading}
-          sessionStore={sessionStore}
-        />
-        <EditorDownloadActionMenuItem
-          instance={instance}
-          loading={loading}
-          path={filePath}
-        />
-      </PopoverContent>
-    </Popover>
+        </PopoverContent>
+      </Popover>
+      <ForceSaveDialog
+        canWrite={canWrite}
+        file={file}
+        loading={loading}
+        open={forceSaveOpen}
+        saveFile={saveFile}
+        sessionStore={sessionStore}
+        onOpenChange={setForceSaveOpen}
+      />
+    </>
   )
 }
 
@@ -668,6 +834,7 @@ export function EditorSaveButton({
   function handleSave() {
     void saveEditorChanges({
       canWrite,
+      file,
       fileReadOnly: file.readOnly,
       loading,
       saveFile,

@@ -28,9 +28,9 @@ import {
   sep,
 } from "node:path"
 import { createHash, randomUUID } from "node:crypto"
-import { gunzip, constants as zlibConstants } from "node:zlib"
+import { gzip, gunzip, constants as zlibConstants } from "node:zlib"
 import { promisify } from "node:util"
-import { Effect, Stream } from "effect"
+import { Effect, Result, Stream } from "effect"
 import ZipStream from "zip-stream"
 
 import type {
@@ -46,9 +46,11 @@ import type {
   RelayLatestLog,
   RelaySaveFileInput,
 } from "@workspace/contracts"
+import { formatSnbt, parseSnbt } from "@workspace/contracts"
 
 import type { RelayConfig, RelayInstanceConfig } from "./config.js"
 import { RelayFilesystemError } from "./effect/errors.js"
+import { decodeNbt, encodeNbt } from "./nbt.js"
 
 const MAX_FILE_BYTES = 2 * 1024 * 1024
 const MAX_LOG_SHARE_BYTES = 10 * 1024 * 1024
@@ -63,6 +65,7 @@ const FILE_SCAN_SESSION_TTL_MS = 2 * 60_000
 const FILE_SCAN_MAX_SESSIONS = 256
 export const MAX_TRANSFER_BYTES = 20 * 1024 * 1024 * 1024
 const gunzipAsync = promisify(gunzip)
+const gzipAsync = promisify(gzip)
 
 export class FilesystemDriver {
   readonly #config: RelayConfig
@@ -358,8 +361,9 @@ export class FilesystemDriver {
           `Files larger than ${MAX_FILE_BYTES} bytes cannot be edited`
         )
       }
-      const compressed = requestedPath.toLowerCase().endsWith(".log.gz")
-      if (requestedPath.toLowerCase().endsWith(".gz") && !compressed) {
+      const lowerPath = requestedPath.toLowerCase()
+      const compressed = lowerPath.endsWith(".log.gz")
+      if (lowerPath.endsWith(".gz") && !compressed) {
         return yield* filesystemFailure(
           "unsupported_file",
           "read",
@@ -370,6 +374,50 @@ export class FilesystemDriver {
       const source = yield* filesystemOperation("read.contents", () =>
         readFile(path)
       )
+
+      if (isBinaryNbtPath(lowerPath)) {
+        const nbtSource = isGzip(source)
+          ? yield* Effect.tryPromise({
+              try: () =>
+                gunzipAsync(source, { maxOutputLength: MAX_FILE_BYTES }),
+              catch: (cause) =>
+                makeFilesystemError(
+                  "invalid_nbt",
+                  "read.nbt.decompress",
+                  `The NBT file is invalid or expands beyond ${MAX_FILE_BYTES} bytes`,
+                  cause
+                ),
+            })
+          : source
+        const parsed = tryDecodeNbt(nbtSource)
+        if (parsed) {
+          return {
+            instanceId: instance.id,
+            path: requestedPath,
+            content: formatSnbt(parsed.tag),
+            size: metadata.size,
+            decodedSize: nbtSource.byteLength,
+            encoding: isGzip(source) ? "nbt-gzip" : "nbt",
+            readOnly: false,
+            modifiedAt: metadata.mtime.toISOString(),
+          } satisfies RelayFileContent
+        }
+
+        const rawText = decodeUtf8(nbtSource)
+        if (rawText !== null && looksLikeSnbt(rawText)) {
+          return {
+            instanceId: instance.id,
+            path: requestedPath,
+            content: rawText,
+            size: metadata.size,
+            decodedSize: nbtSource.byteLength,
+            encoding: "snbt",
+            readOnly: false,
+            modifiedAt: metadata.mtime.toISOString(),
+          } satisfies RelayFileContent
+        }
+      }
+
       const decoded = compressed
         ? yield* Effect.tryPromise({
             try: () => gunzipAsync(source, { maxOutputLength: MAX_FILE_BYTES }),
@@ -399,7 +447,11 @@ export class FilesystemDriver {
         content,
         size: metadata.size,
         decodedSize: decoded.byteLength,
-        encoding: compressed ? "gzip" : "utf8",
+        encoding: lowerPath.endsWith(".snbt")
+          ? "snbt"
+          : compressed
+            ? "gzip"
+            : "utf8",
         readOnly: compressed,
         modifiedAt: metadata.mtime.toISOString(),
       } satisfies RelayFileContent
@@ -434,10 +486,21 @@ export class FilesystemDriver {
         )
       }
 
+      const lowerPath = requestedPath.toLowerCase()
+      const current = yield* filesystemOperation("write.read", () =>
+        readFile(path)
+      )
+      const encoded = yield* prepareFileWrite(
+        lowerPath,
+        current,
+        input.content,
+        input.force ?? false
+      )
+
       const temporary = `${path}.hearth-${process.pid}-${randomUUID()}`
       return yield* Effect.acquireUseRelease(
         filesystemOperation("write.temporary", () =>
-          writeFile(temporary, input.content, { mode: metadata.mode })
+          writeFile(temporary, encoded, { mode: metadata.mode })
         ),
         () =>
           filesystemOperation("write.replace", () =>
@@ -1476,6 +1539,83 @@ function cleanupPathEffect(path: string) {
       Effect.logWarning("Relay temporary-file cleanup failed", cause)
     )
   )
+}
+
+function prepareFileWrite(
+  lowerPath: string,
+  current: Buffer,
+  content: string,
+  force: boolean
+) {
+  return Effect.tryPromise({
+    try: async () => {
+      if (lowerPath.endsWith(".snbt")) {
+        if (!force) parseSnbt(content)
+        return Buffer.from(content, "utf8")
+      }
+
+      if (!isBinaryNbtPath(lowerPath)) return Buffer.from(content, "utf8")
+
+      const compressed = isGzip(current)
+      let currentNbt = null
+      if (compressed) {
+        const decoded = await gunzipAsync(current, {
+          maxOutputLength: MAX_FILE_BYTES,
+        })
+        currentNbt = tryDecodeNbt(decoded)
+      } else {
+        currentNbt = tryDecodeNbt(current)
+      }
+
+      const rawText = currentNbt ? null : decodeUtf8(current)
+      const rawSnbt = rawText !== null && looksLikeSnbt(rawText)
+      if (!currentNbt && !rawSnbt) return Buffer.from(content, "utf8")
+
+      const converted = Result.try(() => {
+        const tag = parseSnbt(content, { binaryCompatible: true })
+        return encodeNbt({ name: currentNbt?.name ?? "", tag })
+      })
+      if (Result.isFailure(converted)) {
+        if (force) return Buffer.from(content, "utf8")
+        throw converted.failure
+      }
+      return compressed || rawSnbt
+        ? gzipAsync(converted.success, { level: zlibConstants.Z_BEST_SPEED })
+        : converted.success
+    },
+    catch: (cause) =>
+      makeFilesystemError(
+        "invalid_snbt",
+        "write.nbt",
+        cause instanceof Error
+          ? cause.message
+          : "The edited SNBT could not be encoded",
+        cause
+      ),
+  })
+}
+
+function isBinaryNbtPath(lowerPath: string) {
+  return lowerPath.endsWith(".dat") || lowerPath.endsWith(".nbt")
+}
+
+function isGzip(source: Uint8Array) {
+  return source[0] === 0x1f && source[1] === 0x8b
+}
+
+function tryDecodeNbt(source: Uint8Array) {
+  return Result.getOrNull(Result.try(() => decodeNbt(source)))
+}
+
+function decodeUtf8(source: Uint8Array) {
+  return Result.getOrNull(
+    Result.try(() => new TextDecoder("utf-8", { fatal: true }).decode(source))
+  )
+}
+
+function looksLikeSnbt(source: string) {
+  const first = source.trimStart()[0]
+  return first === "{" || first === "["
 }
 
 function filesystemFailure(code: string, operation: string, reason: string) {
