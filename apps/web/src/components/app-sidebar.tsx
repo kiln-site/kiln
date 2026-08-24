@@ -516,7 +516,7 @@ const ServerSelector = React.memo(function ServerSelector({
                 ? `Switch server. ${instance.name}, ${instance.implementation}, ${serverStatusLabel(instance.observedState)}`
                 : "Choose a server"
             }
-            className={`mb-1.5 h-11 border border-sidebar-border/75 bg-background/35 px-2 py-2 group-data-[collapsible=icon]:h-[32px]! group-data-[collapsible=icon]:bg-black/10 hover:border-sidebar-border hover:bg-sidebar-accent group-data-[collapsible=icon]:hover:bg-black/15 data-[state=open]:border-sidebar-border data-[state=open]:bg-sidebar-accent dark:group-data-[collapsible=icon]:bg-black/25 dark:group-data-[collapsible=icon]:hover:bg-black/35 ${collapsedStatusBorderTone(instance?.observedState)}`}
+            className="mb-1.5 h-11 border border-sidebar-border/75 bg-background/35 px-2 py-2 group-data-[collapsible=icon]:h-[32px]! group-data-[collapsible=icon]:bg-black/10 hover:border-sidebar-border hover:bg-sidebar-accent group-data-[collapsible=icon]:hover:bg-black/15 data-[state=open]:border-sidebar-border data-[state=open]:bg-sidebar-accent dark:group-data-[collapsible=icon]:bg-black/25 dark:group-data-[collapsible=icon]:hover:bg-black/35"
           >
             <span className="relative grid size-6 shrink-0 place-items-center group-data-[collapsible=icon]:absolute group-data-[collapsible=icon]:inset-0 group-data-[collapsible=icon]:m-auto group-data-[collapsible=icon]:size-4">
               <ServerTypeIcon
@@ -1061,24 +1061,6 @@ function statusDotTone(state: SidebarInstance["observedState"]): string {
   }
   if (state === "stopping") return "bg-amber-400/70"
   return "bg-muted-foreground/45"
-}
-
-function collapsedStatusBorderTone(
-  state: SidebarInstance["observedState"] | undefined
-): string {
-  if (state === "running") {
-    return "group-data-[collapsible=icon]:border-emerald-400/80 group-data-[collapsible=icon]:hover:border-emerald-400"
-  }
-  if (state === "failed") {
-    return "group-data-[collapsible=icon]:border-destructive/80 group-data-[collapsible=icon]:hover:border-destructive"
-  }
-  if (state === "starting" || state === "provisioning") {
-    return "group-data-[collapsible=icon]:border-amber-400/80 group-data-[collapsible=icon]:hover:border-amber-400"
-  }
-  if (state === "stopping") {
-    return "group-data-[collapsible=icon]:border-amber-400/60 group-data-[collapsible=icon]:hover:border-amber-400/80"
-  }
-  return "group-data-[collapsible=icon]:border-sidebar-foreground/25 group-data-[collapsible=icon]:hover:border-sidebar-foreground/40"
 }
 
 function serverStatusLabel(state: SidebarInstance["observedState"]): string {
