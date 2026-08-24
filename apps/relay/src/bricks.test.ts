@@ -14,6 +14,7 @@ import {
   interpolateTemplate,
   isPublicRecipeAddress,
   readResponseDocument,
+  resolveRecipeIconSource,
   resolveBrick,
 } from "./bricks.js"
 import type { BrickRecipe } from "@workspace/contracts"
@@ -106,6 +107,35 @@ describe("Brick recipes", () => {
         network: { ...recipe.network, supportsSrv: true },
       }).network.supportsSrv
     ).toBe(true)
+  })
+
+  it.each([
+    "http://example.com/icon.svg",
+    "data:image/svg+xml,<svg></svg>",
+    "file:///tmp/icon.svg",
+    "https://[",
+  ])("ignores an unusable optional icon URL: %s", (icon) => {
+    const resolved = resolveRecipeIconSource(
+      { ...recipe, metadata: { ...recipe.metadata, icon } },
+      new URL("https://example.com/recipe.yml"),
+      false
+    )
+
+    expect(resolved.metadata.icon).toBeUndefined()
+    expect(resolved.metadata.id).toBe(recipe.metadata.id)
+  })
+
+  it("resolves a valid recipe-relative icon URL", () => {
+    expect(
+      resolveRecipeIconSource(
+        {
+          ...recipe,
+          metadata: { ...recipe.metadata, icon: "../icons/example.svg" },
+        },
+        new URL("https://example.com/recipes/example.yml"),
+        false
+      ).metadata.icon
+    ).toBe("https://example.com/icons/example.svg")
   })
 
   it("resolves defaults, overrides, resources, and literal templates", () => {

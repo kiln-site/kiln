@@ -25,6 +25,8 @@ const MAX_SNAPSHOT_BYTES = 8 * 1024 * 1024
 const MAX_REDIRECTS = 5
 const FETCH_CONCURRENCY = 8
 const CATALOG_LOAD_TIMEOUT_MS = 60_000
+const ICON_HYDRATION_TIMEOUT_MS = 60_000
+const ICON_SUCCESS_TTL_MS = 5 * 60_000
 const ICON_RETRY_DELAYS_MS = [2_000, 10_000, 60_000, 15 * 60_000] as const
 
 interface BrickIconCacheEntry {
@@ -102,14 +104,7 @@ export async function loadBrickCatalogSource(
         options.allowFile === true
       )
       validateRecipeSemantics(recipe, source)
-      return hydrateBrickIcon(
-        { ...recipe, source: source.href },
-        {
-          allowFile: options.allowFile === true,
-          catalogUrl: resolvedSource.catalogUrl,
-          signal: deadline,
-        }
-      )
+      return { ...recipe, source: source.href }
     }
   )
   const ids = new Set<string>()
@@ -121,13 +116,18 @@ export async function loadBrickCatalogSource(
     }
     ids.add(brick.metadata.id)
   }
-  const snapshot = relayCatalogSchema.parse({
+  const parsedSnapshot = relayCatalogSchema.parse({
     format: "kiln.catalog/v1",
     name: document.name,
     author: document.author,
     docs: document.docs,
     support: document.support,
     bricks,
+  })
+  const snapshot = await hydrateBrickCatalogIcons(parsedSnapshot, {
+    allowFile: options.allowFile === true,
+    catalogUrl: resolvedSource.catalogUrl,
+    signal: AbortSignal.timeout(ICON_HYDRATION_TIMEOUT_MS),
   })
   const encoded = JSON.stringify(snapshot)
   if (Buffer.byteLength(encoded) > MAX_SNAPSHOT_BYTES) {
@@ -169,7 +169,15 @@ export async function hydrateBrickIcon(
   } = {}
 ): Promise<Brick> {
   if (brick.iconSvg || !brick.metadata.icon) return brick
-  const source = new URL(brick.metadata.icon, brick.source)
+  const source = resolveBrickIconSource(
+    brick.metadata.icon,
+    new URL(brick.source),
+    options.allowFile === true
+  )
+  if (!source) {
+    const { icon: _icon, ...metadata } = brick.metadata
+    return { ...brick, metadata }
+  }
   const svg = await cachedBrickIcon(
     source,
     options.catalogUrl ?? new URL(brick.source),
@@ -186,20 +194,37 @@ function resolveRecipeIconSource(
 ): BrickRecipe {
   const reference = recipe.metadata.icon
   if (!reference) return recipe
-  const source = Result.try(() => new URL(reference, recipeSource))
-  if (Result.isFailure(source)) {
-    throw new Error(`${recipeSource.href}: metadata.icon is not a valid URL`)
-  }
-  if (
-    source.success.protocol !== "https:" &&
-    !(allowFile && source.success.protocol === "file:")
-  ) {
-    throw new Error(`${recipeSource.href}: metadata.icon must use HTTPS`)
-  }
+  const source = resolveBrickIconSource(reference, recipeSource, allowFile)
+  if (!source) return withoutRecipeIcon(recipe)
   return {
     ...recipe,
-    metadata: { ...recipe.metadata, icon: source.success.href },
+    metadata: { ...recipe.metadata, icon: source.href },
   }
+}
+
+function resolveBrickIconSource(
+  reference: string,
+  recipeSource: URL,
+  allowFile: boolean
+): URL | null {
+  const source = Result.try(() => new URL(reference, recipeSource))
+  if (Result.isFailure(source)) return null
+  if (
+    source.success.protocol !== "https:" &&
+    !(
+      allowFile &&
+      recipeSource.protocol === "file:" &&
+      source.success.protocol === "file:"
+    )
+  ) {
+    return null
+  }
+  return source.success
+}
+
+function withoutRecipeIcon(recipe: BrickRecipe): BrickRecipe {
+  const { icon: _icon, ...metadata } = recipe.metadata
+  return { ...recipe, metadata }
 }
 
 async function cachedBrickIcon(
@@ -209,7 +234,7 @@ async function cachedBrickIcon(
   signal: AbortSignal
 ): Promise<string | undefined> {
   const existing = brickIconCache.get(source.href)
-  if (existing?.svg) return existing.svg
+  if (existing?.svg && existing.nextAttemptAt > Date.now()) return existing.svg
   if (existing?.pending) return existing.pending
   if (existing && existing.nextAttemptAt > Date.now()) return undefined
 
@@ -225,13 +250,14 @@ async function cachedBrickIcon(
           brickIconCache.set(source.href, {
             failures: failures + 1,
             nextAttemptAt: Date.now() + brickIconRetryDelay(failures),
+            ...(existing?.svg ? { svg: existing.svg } : {}),
           })
-          return undefined
+          return existing?.svg
         },
         onSuccess: (svg) => {
           brickIconCache.set(source.href, {
             failures: 0,
-            nextAttemptAt: Number.POSITIVE_INFINITY,
+            nextAttemptAt: Date.now() + ICON_SUCCESS_TTL_MS,
             svg,
           })
           return svg

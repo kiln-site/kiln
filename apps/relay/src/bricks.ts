@@ -161,13 +161,16 @@ export class BrickCatalog {
   }
 }
 
-function resolveRecipeIconSource(
+export function resolveRecipeIconSource(
   recipe: BrickRecipe,
   recipeSource: URL,
   fromCatalog: boolean
 ): BrickRecipe {
-  if (!recipe.metadata.icon) return recipe
-  const source = parseUrl(recipe.metadata.icon, recipeSource)
+  const reference = recipe.metadata.icon
+  if (!reference) return recipe
+  const parsedSource = Result.try(() => new URL(reference, recipeSource))
+  if (Result.isFailure(parsedSource)) return withoutRecipeIcon(recipe)
+  const source = parsedSource.success
   if (
     source.protocol !== "https:" &&
     !(
@@ -176,16 +179,17 @@ function resolveRecipeIconSource(
       source.protocol === "file:"
     )
   ) {
-    throw recipeError(
-      "insecure_recipe_source",
-      source.href,
-      "Brick icons must use HTTPS"
-    )
+    return withoutRecipeIcon(recipe)
   }
   return {
     ...recipe,
     metadata: { ...recipe.metadata, icon: source.href },
   }
+}
+
+function withoutRecipeIcon(recipe: BrickRecipe): BrickRecipe {
+  const { icon: _icon, ...metadata } = recipe.metadata
+  return { ...recipe, metadata }
 }
 
 export function brickSnapshotDirectory(dataDirectory: string): string {

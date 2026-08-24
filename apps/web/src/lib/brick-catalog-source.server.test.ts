@@ -110,6 +110,36 @@ recipes: [paper.yml]
     expect(loaded.snapshot.bricks[0]?.iconSvg).toBeUndefined()
   })
 
+  it.each([
+    "http://example.com/icon.svg",
+    "data:image/svg+xml,<svg></svg>",
+    "https://[",
+  ])("keeps a Brick usable with an unusable icon URL: %s", async (icon) => {
+    const directory = await temporaryDirectory()
+    await writeFile(
+      resolve(directory, "catalog.yml"),
+      "format: kiln.catalog/v1\nrecipes: [paper.yml]\n"
+    )
+    await writeFile(
+      resolve(directory, "paper.yml"),
+      recipe("paper", "Paper").replace(
+        "  author: Kiln",
+        `  author: Kiln\n  icon: ${JSON.stringify(icon)}\n  color: "#e67e7e"`
+      )
+    )
+
+    const loaded = await loadBrickCatalogSource(
+      pathToFileURL(resolve(directory, "catalog.yml")).href,
+      { allowFile: true }
+    )
+
+    expect(loaded.snapshot.bricks[0]).toMatchObject({
+      metadata: { color: "#e67e7e", id: "paper" },
+    })
+    expect(loaded.snapshot.bricks[0]?.metadata.icon).toBeUndefined()
+    expect(loaded.snapshot.bricks[0]?.iconSvg).toBeUndefined()
+  })
+
   it("backs off repeated icon failures after a few quick retries", () => {
     expect(
       Array.from({ length: 6 }, (_, failures) => brickIconRetryDelay(failures))
