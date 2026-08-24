@@ -5,12 +5,15 @@ import {
   useSuspenseQuery,
 } from "@tanstack/react-query"
 import {
+  ArrowRight,
   CalendarClock,
+  Check,
   ChevronsUpDown,
   Database,
   ListTodo,
   LoaderCircle,
   LogOut,
+  Search,
   Server as ServerIcon,
   Settings,
   UserRoundCog,
@@ -28,6 +31,7 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@workspace/ui/components/popover"
+import { Input } from "@workspace/ui/components/input"
 import {
   Sidebar,
   SidebarContent,
@@ -443,9 +447,33 @@ const ServerSelector = React.memo(function ServerSelector({
   const navigate = useNavigate()
   const queryClient = useQueryClient()
   const [open, setOpen] = React.useState(false)
+  const [search, setSearch] = React.useState("")
+  const filteredInstances = React.useMemo(() => {
+    const query = search.trim().toLocaleLowerCase()
+    if (!query) return instances
+
+    return instances.filter((item) =>
+      [
+        item.name,
+        item.implementation,
+        item.version,
+        item.shortId,
+        item.routeId,
+        item.relayName,
+        item.observedState,
+      ]
+        .join(" ")
+        .toLocaleLowerCase()
+        .includes(query)
+    )
+  }, [instances, search])
+  const handleOpenChange = React.useCallback((nextOpen: boolean) => {
+    setOpen(nextOpen)
+    if (!nextOpen) setSearch("")
+  }, [])
   const selectInstance = React.useCallback(
     (routeId: string) => {
-      setOpen(false)
+      handleOpenChange(false)
       const snapshot = queryClient.getQueryData(
         relaySnapshotQueryOptions().queryKey
       )
@@ -473,35 +501,48 @@ const ServerSelector = React.memo(function ServerSelector({
         routeIdentifier
       )
     },
-    [navigate, navigateToTab, queryClient]
+    [handleOpenChange, navigate, navigateToTab, queryClient]
   )
 
   return (
     <SidebarMenuItem>
-      <Popover open={open} onOpenChange={setOpen}>
+      <Popover open={open} onOpenChange={handleOpenChange}>
         <PopoverTrigger asChild>
           <SidebarMenuButton
             size="lg"
             tooltip="Switch server"
-            className={`mb-2 h-auto min-h-13 border border-l-2 border-sidebar-border/80 bg-background/45 py-2 ${instance ? statusBorderTone(instance.observedState) : "border-l-muted-foreground/25"} group-data-[collapsible=icon]:min-h-[32px]! group-data-[collapsible=icon]:border-0 group-data-[collapsible=icon]:bg-black/10 group-data-[collapsible=icon]:p-[8px]! group-data-[collapsible=icon]:shadow-[0_0_0_0.5px_color-mix(in_oklab,var(--sidebar-foreground)_16%,transparent)]! group-data-[collapsible=icon]:hover:bg-black/15 group-data-[collapsible=icon]:hover:shadow-[0_0_0_0.5px_color-mix(in_oklab,var(--sidebar-foreground)_24%,transparent)]! dark:group-data-[collapsible=icon]:bg-black/25 dark:group-data-[collapsible=icon]:hover:bg-black/35`}
+            className="mb-1.5 h-10 border border-sidebar-border/75 bg-background/35 px-2 py-1.5 group-data-[collapsible=icon]:h-[32px]! group-data-[collapsible=icon]:border-0 group-data-[collapsible=icon]:bg-black/10 group-data-[collapsible=icon]:p-[8px]! group-data-[collapsible=icon]:shadow-[0_0_0_0.5px_color-mix(in_oklab,var(--sidebar-foreground)_16%,transparent)]! hover:border-sidebar-border hover:bg-sidebar-accent group-data-[collapsible=icon]:hover:bg-black/15 group-data-[collapsible=icon]:hover:shadow-[0_0_0_0.5px_color-mix(in_oklab,var(--sidebar-foreground)_24%,transparent)]! data-[state=open]:border-sidebar-border data-[state=open]:bg-sidebar-accent dark:group-data-[collapsible=icon]:bg-black/25 dark:group-data-[collapsible=icon]:hover:bg-black/35"
           >
-            <ServerTypeIcon
-              implementation={instance?.implementation ?? ""}
-              className="size-4 shrink-0 text-sidebar-foreground/80"
-              aria-hidden="true"
-            />
-            <span className="flex min-w-0 flex-1 flex-col items-start leading-none">
-              <span className="w-full truncate text-xs font-semibold">
+            <span className="relative grid size-6 shrink-0 place-items-center group-data-[collapsible=icon]:size-4">
+              <ServerTypeIcon
+                implementation={instance?.implementation ?? ""}
+                className="size-3.5 text-sidebar-foreground/85 group-data-[collapsible=icon]:size-4!"
+                aria-hidden="true"
+              />
+              {instance ? (
+                <span
+                  className={`absolute -right-1 -bottom-1 size-1.5 rounded-full ring-2 ring-sidebar ${statusDotTone(instance.observedState)}`}
+                  aria-hidden="true"
+                />
+              ) : null}
+            </span>
+            <span className="flex min-w-0 flex-1 flex-col items-start">
+              <span className="type-control-sm w-full truncate">
                 {instance?.name ?? "Choose a server"}
               </span>
-              <span className="type-meta mt-1 truncate font-mono text-sidebar-muted-foreground">
+              <span className="type-meta w-full truncate text-sidebar-muted-foreground">
                 {instance
-                  ? `${instance.implementation} ${instance.version} · ${instance.shortId}`
+                  ? `${instance.implementation} ${instance.version}`
                   : instances.length === 0
                     ? "No managed servers"
                     : "Selection required"}
               </span>
             </span>
+            {instance ? (
+              <span className="sr-only">
+                Status: {serverStatusLabel(instance.observedState)}
+              </span>
+            ) : null}
             <ChevronsUpDown className="ml-auto size-3.5! text-sidebar-foreground/60" />
           </SidebarMenuButton>
         </PopoverTrigger>
@@ -509,18 +550,29 @@ const ServerSelector = React.memo(function ServerSelector({
           aria-label="Managed servers"
           side={isMobile ? "bottom" : "right"}
           align="start"
-          className="w-64 max-w-[calc(100vw-1rem)] p-1"
+          sideOffset={6}
+          className="w-72 max-w-[calc(100vw-1rem)] overflow-hidden p-0"
         >
-          <div className="flex items-center justify-between px-2 py-1.5 text-sm font-semibold">
-            <span>Managed servers</span>
-            <span className="type-meta font-mono text-muted-foreground">
-              {instances.length} discovered
-            </span>
+          <div className="border-b border-border/70 p-2">
+            <div className="relative">
+              <Search
+                className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-muted-foreground"
+                aria-hidden="true"
+              />
+              <Input
+                autoFocus
+                type="search"
+                value={search}
+                onChange={(event) => setSearch(event.currentTarget.value)}
+                placeholder="Search servers"
+                aria-label="Search servers"
+                className="h-8 bg-input/14 pr-2 pl-8 text-sm"
+              />
+            </div>
           </div>
-          <div className="-mx-1 my-1 h-px bg-border" />
-          {instances.length > 0 ? (
-            <div className="space-y-0.5">
-              {instances.map((item) => (
+          {filteredInstances.length > 0 ? (
+            <div className="max-h-64 space-y-0.5 overflow-y-auto p-1.5">
+              {filteredInstances.map((item) => (
                 <ServerSelectorItem
                   key={`${item.relayId}:${item.id}`}
                   active={
@@ -533,19 +585,36 @@ const ServerSelector = React.memo(function ServerSelector({
               ))}
             </div>
           ) : (
-            <div className="px-2 py-3">
-              <p className="text-xs font-medium">No managed servers</p>
-              <p className="type-meta mt-1 text-muted-foreground">
-                Open the server workspace to provision or discover a server.
+            <div className="px-4 py-6 text-center">
+              <p className="type-control-sm">
+                {instances.length === 0
+                  ? "No managed servers"
+                  : "No servers match your search"}
               </p>
-              <Link
-                to="/infra/servers"
-                className="type-label mt-2 inline-flex text-primary hover:underline"
-              >
-                View servers
-              </Link>
+              <p className="type-meta mt-1 text-muted-foreground">
+                {instances.length === 0
+                  ? "Servers will appear here once they are provisioned."
+                  : "Try a name, version, ID, or status."}
+              </p>
             </div>
           )}
+          <div className="border-t border-border/70 p-1.5">
+            <Link
+              to="/infra/servers"
+              onClick={() => handleOpenChange(false)}
+              className="type-control-sm group flex h-9 w-full items-center gap-2 rounded-md bg-muted/45 px-2.5 text-foreground transition-colors outline-none hover:bg-muted/70 focus-visible:ring-2 focus-visible:ring-ring/40"
+            >
+              <ServerIcon
+                className="size-3.5 text-muted-foreground"
+                aria-hidden="true"
+              />
+              <span>View all servers</span>
+              <ArrowRight
+                className="ml-auto size-3.5 text-muted-foreground transition-transform duration-150 group-hover:translate-x-0.5 group-focus-visible:translate-x-0.5"
+                aria-hidden="true"
+              />
+            </Link>
+          </div>
         </PopoverContent>
       </Popover>
     </SidebarMenuItem>
@@ -566,22 +635,28 @@ const ServerSelectorItem = React.memo(function ServerSelectorItem({
       type="button"
       aria-label={`${item.name}, ${item.implementation} ${item.version}, ${item.observedState}`}
       aria-pressed={active}
-      className={`flex w-full items-center gap-2.5 rounded-md border-l-2 px-1.5 py-2 text-left transition-colors duration-100 outline-none hover:bg-popover-accent hover:text-popover-accent-foreground focus-visible:bg-popover-accent focus-visible:text-popover-accent-foreground ${statusBorderTone(item.observedState)}`}
+      className={`flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left transition-[color,background-color,box-shadow] duration-100 outline-none hover:bg-popover-accent hover:text-popover-accent-foreground focus-visible:bg-popover-accent focus-visible:text-popover-accent-foreground focus-visible:ring-2 focus-visible:ring-ring/35 ${active ? "bg-primary/8 shadow-[inset_0_0_0_1px_color-mix(in_oklab,var(--primary)_14%,transparent)]" : ""}`}
       onClick={() => onSelect(item.routeId)}
     >
-      <ServerTypeIcon
-        implementation={item.implementation}
-        className="size-4 shrink-0 text-muted-foreground"
-        aria-hidden="true"
-      />
+      <span className="relative grid size-7 shrink-0 place-items-center rounded-md bg-muted/55">
+        <ServerTypeIcon
+          implementation={item.implementation}
+          className="size-3.5 text-muted-foreground"
+          aria-hidden="true"
+        />
+        <span
+          className={`absolute -right-0.5 -bottom-0.5 size-1.5 rounded-full ring-2 ring-popover ${statusDotTone(item.observedState)}`}
+          aria-hidden="true"
+        />
+      </span>
       <span className="min-w-0 flex-1">
-        <span className="block truncate text-xs font-medium">{item.name}</span>
+        <span className="type-control-sm block truncate">{item.name}</span>
         <span className="type-meta block truncate font-mono text-muted-foreground">
           {item.implementation} {item.version} · {item.shortId}
         </span>
       </span>
       {active ? (
-        <span className="type-technical-label text-primary">Active</span>
+        <Check className="size-4 shrink-0 text-primary" aria-hidden="true" />
       ) : null}
     </button>
   )
@@ -973,14 +1048,23 @@ function initials(name: string): string {
     .join("")
 }
 
-function statusBorderTone(state: SidebarInstance["observedState"]): string {
-  if (state === "running") return "border-l-emerald-400/80"
-  if (state === "failed") return "border-l-red-400/80"
+function statusDotTone(state: SidebarInstance["observedState"]): string {
+  if (state === "running") return "bg-emerald-400"
+  if (state === "failed") return "bg-destructive"
   if (state === "starting" || state === "provisioning") {
-    return "border-l-amber-400/70"
+    return "bg-amber-400"
   }
-  if (state === "stopping") return "border-l-amber-400/45"
-  return "border-l-muted-foreground/25"
+  if (state === "stopping") return "bg-amber-400/70"
+  return "bg-muted-foreground/45"
+}
+
+function serverStatusLabel(state: SidebarInstance["observedState"]): string {
+  if (state === "running") return "Running"
+  if (state === "failed") return "Failed"
+  if (state === "starting") return "Starting"
+  if (state === "provisioning") return "Provisioning"
+  if (state === "stopping") return "Stopping"
+  return "Stopped"
 }
 
 function globalSectionFromPathname(pathname: string): GlobalSection {
