@@ -341,12 +341,8 @@ function ProvisioningInfoWorkspace({
                   <span className="type-technical-label block text-muted-foreground">
                     Failure
                   </span>
-                  <p className="mt-0.5 text-xs leading-5 break-words">
-                    {provisioning.error ??
-                      "The Relay did not provide an error message."}
-                  </p>
                   <Button
-                    className="mt-4"
+                    className="mt-2"
                     type="button"
                     variant="outline"
                     size="sm"
