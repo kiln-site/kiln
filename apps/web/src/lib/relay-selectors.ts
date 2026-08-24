@@ -13,6 +13,7 @@ export type RelayConnectionSummary =
 export type SidebarInstance = Pick<
   RelayInstance,
   | "brickId"
+  | "brickSource"
   | "id"
   | "implementation"
   | "name"
@@ -31,6 +32,8 @@ export type RouteInstance = SidebarInstance & {
 
 export type ServerListInstance = Pick<
   RelayInstance,
+  | "brickId"
+  | "brickSource"
   | "connectAddress"
   | "game"
   | "id"
@@ -136,6 +139,8 @@ export function selectServerListInstances(
   snapshot: RelayFleetSnapshot
 ): Array<ServerListInstance> {
   return snapshot.instances.map((instance) => ({
+    brickId: instance.brickId,
+    brickSource: instance.brickSource,
     connectAddress: instance.connectAddress,
     game: instance.game,
     id: instance.id,
@@ -156,6 +161,7 @@ function sidebarInstance(
 ): SidebarInstance {
   return {
     brickId: instance.brickId,
+    brickSource: instance.brickSource,
     id: instance.id,
     implementation: instance.implementation,
     name: instance.name,

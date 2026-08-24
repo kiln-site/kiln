@@ -36,7 +36,12 @@ import {
   ServerDeleteDialog,
   type ServerDeleteTarget,
 } from "@/components/server-delete-dialog"
-import { ServerTypeIcon } from "@/components/server-type-icon"
+import {
+  BrickIcon,
+  brickIconPresentation,
+  type BrickIconDefinition,
+  type BrickIconPresentation,
+} from "@/components/brick-icon"
 import {
   WorkspaceDataTable,
   WorkspaceTableCell,
@@ -49,6 +54,7 @@ import type { WorkspaceTableSearchStore } from "@/components/workspace-data-tabl
 import {
   accessCapabilitiesQueryOptions,
   brickCatalogQueryOptions,
+  brickIconPresentationsQueryOptions,
   relayConnectionQueryOptions,
   relaySnapshotQueryOptions,
 } from "@/lib/query-options"
@@ -60,6 +66,7 @@ import {
 import type { ServerListInstance } from "@/lib/relay-selectors"
 
 const emptyServers: Array<ServerListInstance> = []
+const emptyBrickIcons: Array<BrickIconDefinition> = []
 const minimumManualSyncFeedbackMs = 500
 
 interface ServerDeleteAccess {
@@ -413,6 +420,7 @@ const AddServerButton = React.memo(function AddServerButton({
 
 const ServerTableSearchBoundary = React.memo(
   function ServerTableSearchBoundary({
+    bricks,
     canProvision,
     deleteAccess,
     dialogStore,
@@ -420,6 +428,7 @@ const ServerTableSearchBoundary = React.memo(
     searchStore,
     servers,
   }: {
+    bricks: Array<BrickIconDefinition>
     canProvision: boolean
     deleteAccess: ServerDeleteAccess
     dialogStore: AddServerDialogStore
@@ -435,20 +444,28 @@ const ServerTableSearchBoundary = React.memo(
       return counts
     }, [servers])
     const renderRow = React.useCallback(
-      (server: ServerListInstance) => (
-        <ServerTableRow
-          canonical={shortIdCounts.get(server.shortId) === 1}
-          canDelete={canDeleteServer(deleteAccess, server)}
-          onDelete={onDelete}
-          routeIdentifier={
-            shortIdCounts.get(server.shortId) === 1
-              ? server.shortId
-              : server.routeId
-          }
-          server={server}
-        />
-      ),
-      [deleteAccess, onDelete, shortIdCounts]
+      (server: ServerListInstance) => {
+        const icon = brickIconPresentation(bricks, {
+          brickId: server.brickId,
+          brickSource: server.brickSource,
+          implementation: server.implementation,
+        })
+        return (
+          <ServerTableRow
+            canonical={shortIdCounts.get(server.shortId) === 1}
+            canDelete={canDeleteServer(deleteAccess, server)}
+            icon={icon}
+            onDelete={onDelete}
+            routeIdentifier={
+              shortIdCounts.get(server.shortId) === 1
+                ? server.shortId
+                : server.routeId
+            }
+            server={server}
+          />
+        )
+      },
+      [bricks, deleteAccess, onDelete, shortIdCounts]
     )
     const renderEmpty = React.useCallback(
       (searchActive: boolean) => (
@@ -497,8 +514,13 @@ const FilteredServerTableBoundary = React.memo(
       notifyOnChangeProps: ["data"],
       select: selectServerListInstances,
     })
+    const { data: bricks = emptyBrickIcons } = useQuery({
+      ...brickIconPresentationsQueryOptions(),
+      notifyOnChangeProps: ["data"],
+    })
     return (
       <ServerTableSearchBoundary
+        bricks={bricks}
         canProvision={canProvision}
         deleteAccess={deleteAccess}
         dialogStore={dialogStore}
@@ -541,12 +563,14 @@ const ServerTableHead = React.memo(function ServerTableHead() {
 const ServerTableRow = React.memo(function ServerTableRow({
   canonical,
   canDelete,
+  icon,
   onDelete,
   routeIdentifier,
   server,
 }: {
   canonical: boolean
   canDelete: boolean
+  icon: BrickIconPresentation
   onDelete: (target: ServerDeleteTarget) => void
   routeIdentifier: string
   server: ServerListInstance
@@ -559,8 +583,10 @@ const ServerTableRow = React.memo(function ServerTableRow({
       <WorkspaceTableCell>
         <div className="flex min-w-0 items-center gap-2.5">
           <span className="flex size-7 shrink-0 items-center justify-center rounded-md border border-border/70 bg-background/35 text-muted-foreground">
-            <ServerTypeIcon
-              implementation={server.implementation}
+            <BrickIcon
+              id={icon.id}
+              color={icon.color}
+              iconSvg={icon.iconSvg}
               className="size-3.5"
               aria-hidden="true"
             />

@@ -9,6 +9,7 @@ vi.hoisted(() => {
 })
 
 import {
+  brickRecipeDefinition,
   hearthCreateInstanceInputSchema,
   hearthUpdateInstanceStartupInputSchema,
   isBrickSourceChange,
@@ -23,6 +24,16 @@ describe("Hearth Brick mutation inputs", () => {
     expect(isBrickSourceChange(source, "https://example.com/other.yml")).toBe(
       true
     )
+  })
+
+  it("keeps cached icon markup out of Relay recipe definitions", () => {
+    const definition = brickRecipeDefinition({
+      ...builtinTailscaleBrick,
+      iconSvg: '<svg viewBox="0 0 24 24"></svg>',
+    })
+
+    expect(definition).not.toHaveProperty("iconSvg")
+    expect(definition.metadata.id).toBe(builtinTailscaleBrick.metadata.id)
   })
 
   it("rejects browser-supplied recipes during server creation", () => {

@@ -8,7 +8,10 @@ import {
 import type { BrickCatalogRecord } from "@/effect/brick-catalogs"
 import { hasPlatformPermission, isPlatformAdmin } from "@/lib/access-control"
 import type { AuthenticatedUser } from "@/lib/auth-session"
-import { loadBrickCatalogSource } from "@/lib/brick-catalog-source.server"
+import {
+  hydrateBrickCatalogIcons,
+  loadBrickCatalogSource,
+} from "@/lib/brick-catalog-source.server"
 import { kilnBrickCatalogUrl } from "@/lib/environment"
 import { runAppEffect } from "@/effect/runtime"
 import { promiseEffect, recoverPromise } from "@/effect/promise"
@@ -68,14 +71,25 @@ export async function getBrickCatalogDetailsHandler(data: {
     const catalog = await loadDefaultCatalog()
     return {
       ...defaultSummary(catalog, null),
-      bricks: catalog.snapshot.bricks,
+      bricks: (
+        await hydrateBrickCatalogIcons(catalog.snapshot, {
+          allowFile: catalog.snapshot.bricks.some((brick) =>
+            brick.source.startsWith("file:")
+          ),
+          ...(catalog.source.startsWith("file:")
+            ? { catalogUrl: new URL(catalog.source) }
+            : {}),
+        })
+      ).bricks,
     }
   }
   const catalog = await requiredCatalog(data.catalogId)
   requireCatalogView(user, catalog)
   return {
     ...catalogSummary(catalog, isPlatformAdmin(user)),
-    bricks: catalog.snapshot?.bricks ?? [],
+    bricks: catalog.snapshot
+      ? (await hydrateBrickCatalogIcons(catalog.snapshot)).bricks
+      : [],
   }
 }
 
@@ -150,10 +164,24 @@ export async function visibleBrickCatalogs(user: AuthenticatedUser) {
       listBrickCatalogsEffect(user.id, false)
     ),
   ])
-  return [
-    ...(defaultCatalog ? [defaultCatalog.snapshot] : []),
-    ...records.flatMap((record) => (record.snapshot ? [record.snapshot] : [])),
-  ]
+  return Promise.all(
+    [
+      ...(defaultCatalog ? [defaultCatalog.snapshot] : []),
+      ...records.flatMap((record) =>
+        record.snapshot ? [record.snapshot] : []
+      ),
+    ].map((catalog) =>
+      hydrateBrickCatalogIcons(catalog, {
+        allowFile: catalog.bricks.some((brick) =>
+          brick.source.startsWith("file:")
+        ),
+        ...(defaultCatalog?.snapshot === catalog &&
+        defaultCatalog.source.startsWith("file:")
+          ? { catalogUrl: new URL(defaultCatalog.source) }
+          : {}),
+      })
+    )
+  )
 }
 
 async function requiredCatalog(catalogId: string): Promise<BrickCatalogRecord> {

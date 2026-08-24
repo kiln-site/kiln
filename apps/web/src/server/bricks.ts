@@ -1,5 +1,7 @@
 import { createServerFn } from "@tanstack/react-start"
 import {
+  type Brick,
+  type BrickRecipe,
   brickSchema,
   brickSourceSchema,
   brickVariableValuesSchema,
@@ -22,6 +24,7 @@ import {
 } from "@/lib/access-control"
 import type { AuthenticatedUser } from "@/lib/auth-session"
 import { hydrateBrickVariables } from "@/lib/brick-variables"
+import { hydrateBrickIcon } from "@/lib/brick-catalog-source.server"
 import {
   listCustomBricksEffect,
   saveCustomBrickEffect,
@@ -83,7 +86,10 @@ export const getBrickCatalog = createServerFn({ method: "GET" }).handler(
       "platform.bricks.add-custom"
     )
     const customBricksPromise = canAddCustomBrick
-      ? runAppEffect("customBricks.list", listCustomBricksEffect(user.id))
+      ? runAppEffect("customBricks.list", listCustomBricksEffect(user.id)).then(
+          (bricks) =>
+            Promise.all(bricks.map((brick) => hydrateBrickIcon(brick)))
+        )
       : Promise.resolve([])
     const catalogsPromise = visibleBrickCatalogs(user)
     const candidates = (await listPersistedRelays()).filter(
@@ -117,6 +123,40 @@ export const getBrickCatalog = createServerFn({ method: "GET" }).handler(
     }
   }
 )
+
+export const getBrickIconPresentations = createServerFn({
+  method: "GET",
+}).handler(async () => {
+  const user = await requireAuthenticatedUser()
+  const canUseCustomBricks = hasPlatformPermission(
+    user,
+    "platform.bricks.add-custom"
+  )
+  const [catalogs, customBricks] = await Promise.all([
+    visibleBrickCatalogs(user),
+    canUseCustomBricks
+      ? runAppEffect("customBricks.list", listCustomBricksEffect(user.id)).then(
+          (bricks) =>
+            Promise.all(bricks.map((brick) => hydrateBrickIcon(brick)))
+        )
+      : Promise.resolve([]),
+  ])
+  const sources = new Set<string>()
+  const bricks = catalogs.flatMap((catalog) => catalog.bricks)
+  bricks.push(...customBricks)
+  const presentations = []
+  for (const brick of bricks) {
+    if (sources.has(brick.source)) continue
+    sources.add(brick.source)
+    presentations.push({
+      id: brick.metadata.id,
+      source: brick.source,
+      ...(brick.metadata.color ? { color: brick.metadata.color } : {}),
+      ...(brick.iconSvg ? { iconSvg: brick.iconSvg } : {}),
+    })
+  }
+  return presentations
+})
 
 export const getBrickVersions = createServerFn({ method: "GET" })
   .validator(brickVersionCatalogSchema)
@@ -300,22 +340,25 @@ async function loadInstanceRecipe(
   if (!brickSource) {
     throw new Error("This server has no Brick recipe")
   }
-  const brick = brickSchema.parse(
-    await requestRelay(
-      relay,
-      `/v1/bricks/recipe?source=${encodeURIComponent(brickSource)}${
-        instance.brickSnapshotSha256
-          ? `&snapshotSha256=${encodeURIComponent(instance.brickSnapshotSha256)}`
-          : ""
-      }`
+  const brick = await hydrateBrickIcon(
+    brickSchema.parse(
+      await requestRelay(
+        relay,
+        `/v1/bricks/recipe?source=${encodeURIComponent(brickSource)}${
+          instance.brickSnapshotSha256
+            ? `&snapshotSha256=${encodeURIComponent(instance.brickSnapshotSha256)}`
+            : ""
+        }`
+      )
     )
   )
   return { brick, brickSource }
 }
 
 function recipePreview(brick: z.infer<typeof brickSchema>) {
+  const { iconSvg: _iconSvg, ...recipe } = brick
   return {
-    ...brick,
+    ...recipe,
     variables: Object.fromEntries(
       Object.entries(brick.variables).map(([name, variable]) => [
         name,
@@ -347,10 +390,12 @@ export const loadBrickRecipe = createServerFn({ method: "POST" })
     requireBrickSourcePermission(user, "platform.bricks.add-custom")
     const relay = await requiredRelay(data.relayId)
     requireRelayProvisionAccess(user, relay)
-    return brickSchema.parse(
-      await requestRelay(
-        relay,
-        `/v1/bricks/recipe?source=${encodeURIComponent(data.source)}`
+    return hydrateBrickIcon(
+      brickSchema.parse(
+        await requestRelay(
+          relay,
+          `/v1/bricks/recipe?source=${encodeURIComponent(data.source)}`
+        )
       )
     )
   })
@@ -363,10 +408,12 @@ export const saveCustomBrick = createServerFn({ method: "POST" })
     const relay = await requiredRelay(data.relayId)
     requireRelayProvisionAccess(user, relay)
 
-    const brick = brickSchema.parse(
-      await requestRelay(
-        relay,
-        `/v1/bricks/recipe?source=${encodeURIComponent(data.source)}`
+    const brick = await hydrateBrickIcon(
+      brickSchema.parse(
+        await requestRelay(
+          relay,
+          `/v1/bricks/recipe?source=${encodeURIComponent(data.source)}`
+        )
       )
     )
     return runAppEffect(
@@ -455,6 +502,11 @@ async function requiredVisibleRecipeDefinition(
   return definition
 }
 
+export function brickRecipeDefinition(brick: Brick): BrickRecipe {
+  const { iconSvg: _iconSvg, source: _source, ...definition } = brick
+  return definition
+}
+
 async function visibleRecipeDefinition(
   user: AuthenticatedUser,
   source: string
@@ -474,8 +526,7 @@ async function visibleRecipeDefinition(
     ...customBricks,
   ].find((candidate) => candidate.source === source)
   if (!brick) return null
-  const { source: _source, ...definition } = brick
-  return definition
+  return brickRecipeDefinition(brick)
 }
 
 async function requiredRelayInstance(

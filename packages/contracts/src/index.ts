@@ -1,5 +1,7 @@
 import { z } from "zod"
 
+export { validateBrickIconSvg } from "./brick-icons"
+
 import { MINIMUM_INSTANCE_DISK_LIMIT_BYTES } from "./instance-limits.js"
 import { relayInstanceStateReasonSchema } from "./instance-state-reason.js"
 import {
@@ -220,6 +222,11 @@ export const brickRecipeSchema = z
         description: z.string().min(1).max(280),
         game: z.string().min(1).max(80),
         author: z.string().min(1).max(80),
+        icon: z.string().trim().min(1).max(2_048).optional(),
+        color: z
+          .string()
+          .regex(/^#[\da-f]{6}$/iu, "Brick colors must use #rrggbb")
+          .optional(),
         documentation: z.url().max(2_048).optional(),
         tags: z
           .array(z.string().regex(/^[a-z0-9][a-z0-9-]{0,31}$/u))
@@ -329,6 +336,10 @@ export function relayDiskAllocationAvailableBytes(
 }
 
 export const brickSchema = brickRecipeSchema.extend({
+  iconSvg: z
+    .string()
+    .max(64 * 1024)
+    .optional(),
   source: brickSourceSchema,
 })
 

@@ -36,7 +36,7 @@ import {
 } from "@/components/brick-selector"
 import { BrickVariableField } from "@/components/brick-variable-fields"
 import { MinecraftJavaVersionFields } from "@/components/minecraft-java-version-fields"
-import { ServerTypeIcon } from "@/components/server-type-icon"
+import { BrickIcon } from "@/components/brick-icon"
 import {
   formatResourceBytes,
   ResourceAllocationCard,
@@ -71,10 +71,12 @@ import { updateInstanceStartup } from "@/server/bricks"
 const emptyBricks: Array<Brick> = []
 
 type BrickView = {
+  color?: string | undefined
   description: string
   environment: Brick["runtime"]["environment"]
   game: string
   id: string
+  iconSvg?: string | undefined
   memoryTemplate: string
   name: string
   source: string
@@ -83,10 +85,12 @@ type BrickView = {
 
 function brickViewFromBrick(brick: Brick, source = brick.source): BrickView {
   return {
+    ...(brick.metadata.color ? { color: brick.metadata.color } : {}),
     description: brick.metadata.description,
     environment: brick.runtime.environment,
     game: brick.metadata.game,
     id: brick.metadata.id,
+    ...(brick.iconSvg ? { iconSvg: brick.iconSvg } : {}),
     memoryTemplate: brick.runtime.resources.memory,
     name: brick.metadata.name,
     source,
@@ -766,7 +770,14 @@ function BrickSummary({
         ) : null
       }
       className="rounded-none border-0 bg-transparent"
-      icon={<ServerTypeIcon implementation={view.id} className="size-5" />}
+      icon={
+        <BrickIcon
+          id={view.id}
+          color={view.color}
+          iconSvg={view.iconSvg}
+          className="size-5"
+        />
+      }
       title={view.name}
       titleAccessory={
         <Badge variant="outline" className="type-meta font-mono">

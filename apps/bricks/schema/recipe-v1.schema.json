@@ -17,6 +17,11 @@
         "description": { "type": "string", "minLength": 1, "maxLength": 280 },
         "game": { "type": "string", "minLength": 1, "maxLength": 80 },
         "author": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "icon": { "type": "string", "minLength": 1, "maxLength": 2048 },
+        "color": {
+          "type": "string",
+          "pattern": "^#[0-9A-Fa-f]{6}$"
+        },
         "documentation": {
           "type": "string",
           "format": "uri",

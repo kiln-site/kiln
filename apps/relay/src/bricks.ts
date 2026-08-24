@@ -155,8 +155,36 @@ export class BrickCatalog {
           .join("; ")
       )
     }
-    validateRecipeSemantics(parsed.data, source)
-    return parsed.data
+    const recipe = resolveRecipeIconSource(parsed.data, source, fromCatalog)
+    validateRecipeSemantics(recipe, source)
+    return recipe
+  }
+}
+
+function resolveRecipeIconSource(
+  recipe: BrickRecipe,
+  recipeSource: URL,
+  fromCatalog: boolean
+): BrickRecipe {
+  if (!recipe.metadata.icon) return recipe
+  const source = parseUrl(recipe.metadata.icon, recipeSource)
+  if (
+    source.protocol !== "https:" &&
+    !(
+      fromCatalog &&
+      recipeSource.protocol === "file:" &&
+      source.protocol === "file:"
+    )
+  ) {
+    throw recipeError(
+      "insecure_recipe_source",
+      source.href,
+      "Brick icons must use HTTPS"
+    )
+  }
+  return {
+    ...recipe,
+    metadata: { ...recipe.metadata, icon: source.href },
   }
 }
 

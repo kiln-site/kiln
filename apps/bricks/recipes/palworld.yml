@@ -5,6 +5,8 @@ metadata:
   description: Native Linux dedicated server installed and updated through SteamCMD.
   game: Palworld
   author: Kiln
+  icon: ../icons/palworld.svg
+  color: "#55b9d1"
   tags: [steam, survival, direct]
 variables:
   version:

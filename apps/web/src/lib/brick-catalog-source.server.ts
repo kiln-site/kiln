@@ -12,6 +12,7 @@ import {
   brickRecipeSchema,
   relayCatalogSchema,
   resolveKilnGitRepository,
+  validateBrickIconSvg,
 } from "@workspace/contracts"
 import type { Brick, BrickRecipe, RelayCatalog } from "@workspace/contracts"
 import { Effect, Result } from "effect"
@@ -24,6 +25,22 @@ const MAX_SNAPSHOT_BYTES = 8 * 1024 * 1024
 const MAX_REDIRECTS = 5
 const FETCH_CONCURRENCY = 8
 const CATALOG_LOAD_TIMEOUT_MS = 60_000
+const ICON_RETRY_DELAYS_MS = [2_000, 10_000, 60_000, 15 * 60_000] as const
+
+interface BrickIconCacheEntry {
+  failures: number
+  nextAttemptAt: number
+  pending?: Promise<string | undefined>
+  svg?: string
+}
+
+const brickIconCache = new Map<string, BrickIconCacheEntry>()
+
+export function brickIconRetryDelay(failures: number): number {
+  return ICON_RETRY_DELAYS_MS[
+    Math.min(Math.max(0, failures), ICON_RETRY_DELAYS_MS.length - 1)
+  ]!
+}
 
 export interface LoadedBrickCatalog {
   revisionSha: string | null
@@ -68,7 +85,7 @@ export async function loadBrickCatalogSource(
     FETCH_CONCURRENCY,
     async (reference): Promise<Brick> => {
       const source = new URL(reference, resolvedSource.catalogUrl)
-      const recipe = brickRecipeSchema.parse(
+      const parsedRecipe = brickRecipeSchema.parse(
         parseYaml(
           await readDocument(
             source,
@@ -79,8 +96,20 @@ export async function loadBrickCatalogSource(
           source
         )
       )
+      const recipe = resolveRecipeIconSource(
+        parsedRecipe,
+        source,
+        options.allowFile === true
+      )
       validateRecipeSemantics(recipe, source)
-      return { ...recipe, source: source.href }
+      return hydrateBrickIcon(
+        { ...recipe, source: source.href },
+        {
+          allowFile: options.allowFile === true,
+          catalogUrl: resolvedSource.catalogUrl,
+          signal: deadline,
+        }
+      )
     }
   )
   const ids = new Set<string>()
@@ -109,6 +138,113 @@ export async function loadBrickCatalogSource(
     snapshot,
     snapshotSha256: createHash("sha256").update(encoded).digest("hex"),
   }
+}
+
+export async function hydrateBrickCatalogIcons(
+  catalog: RelayCatalog,
+  options: { allowFile?: boolean; catalogUrl?: URL; signal?: AbortSignal } = {}
+): Promise<RelayCatalog> {
+  const signal = options.signal ?? AbortSignal.timeout(CATALOG_LOAD_TIMEOUT_MS)
+  return {
+    ...catalog,
+    bricks: await mapConcurrent(
+      catalog.bricks,
+      FETCH_CONCURRENCY,
+      async (brick) =>
+        hydrateBrickIcon(brick, {
+          allowFile: options.allowFile === true,
+          catalogUrl: options.catalogUrl ?? new URL(brick.source),
+          signal,
+        })
+    ),
+  }
+}
+
+export async function hydrateBrickIcon(
+  brick: Brick,
+  options: {
+    allowFile?: boolean
+    catalogUrl?: URL
+    signal?: AbortSignal
+  } = {}
+): Promise<Brick> {
+  if (brick.iconSvg || !brick.metadata.icon) return brick
+  const source = new URL(brick.metadata.icon, brick.source)
+  const svg = await cachedBrickIcon(
+    source,
+    options.catalogUrl ?? new URL(brick.source),
+    options.allowFile === true,
+    options.signal ?? AbortSignal.timeout(CATALOG_LOAD_TIMEOUT_MS)
+  )
+  return svg ? { ...brick, iconSvg: svg } : brick
+}
+
+function resolveRecipeIconSource(
+  recipe: BrickRecipe,
+  recipeSource: URL,
+  allowFile: boolean
+): BrickRecipe {
+  const reference = recipe.metadata.icon
+  if (!reference) return recipe
+  const source = Result.try(() => new URL(reference, recipeSource))
+  if (Result.isFailure(source)) {
+    throw new Error(`${recipeSource.href}: metadata.icon is not a valid URL`)
+  }
+  if (
+    source.success.protocol !== "https:" &&
+    !(allowFile && source.success.protocol === "file:")
+  ) {
+    throw new Error(`${recipeSource.href}: metadata.icon must use HTTPS`)
+  }
+  return {
+    ...recipe,
+    metadata: { ...recipe.metadata, icon: source.success.href },
+  }
+}
+
+async function cachedBrickIcon(
+  source: URL,
+  catalog: URL,
+  allowFile: boolean,
+  signal: AbortSignal
+): Promise<string | undefined> {
+  const existing = brickIconCache.get(source.href)
+  if (existing?.svg) return existing.svg
+  if (existing?.pending) return existing.pending
+  if (existing && existing.nextAttemptAt > Date.now()) return undefined
+
+  const failures = existing?.failures ?? 0
+  const pending = Effect.runPromise(
+    promiseEffect(() =>
+      readDocument(source, catalog, allowFile, signal, {
+        Accept: "image/svg+xml",
+      }).then(validateBrickIconSvg)
+    ).pipe(
+      Effect.match({
+        onFailure: () => {
+          brickIconCache.set(source.href, {
+            failures: failures + 1,
+            nextAttemptAt: Date.now() + brickIconRetryDelay(failures),
+          })
+          return undefined
+        },
+        onSuccess: (svg) => {
+          brickIconCache.set(source.href, {
+            failures: 0,
+            nextAttemptAt: Number.POSITIVE_INFINITY,
+            svg,
+          })
+          return svg
+        },
+      })
+    )
+  )
+  brickIconCache.set(source.href, {
+    failures,
+    nextAttemptAt: 0,
+    pending,
+  })
+  return pending
 }
 
 async function resolveCatalogSource(
@@ -277,7 +413,8 @@ async function readDocument(
   source: URL,
   catalog: URL,
   allowFile: boolean,
-  signal: AbortSignal
+  signal: AbortSignal,
+  headers?: Readonly<Record<string, string>>
 ): Promise<string> {
   if (source.protocol === "file:") {
     if (!allowFile || catalog.protocol !== "file:") {
@@ -297,7 +434,7 @@ async function readDocument(
   if (source.protocol !== "https:") {
     throw new Error("Brick documents must use HTTPS")
   }
-  return readHttpsDocument(source, source, 0, signal)
+  return readHttpsDocument(source, source, 0, signal, headers)
 }
 
 function readHttpsDocument(
@@ -305,7 +442,7 @@ function readHttpsDocument(
   originalSource: URL,
   redirects: number,
   signal: AbortSignal,
-  headers: Readonly<Record<string, string>> = {
+  headers: Readonly<Record<string, string>> | undefined = {
     Accept: "application/yaml, text/yaml, application/json",
   }
 ): Promise<string> {

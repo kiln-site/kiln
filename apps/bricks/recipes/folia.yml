@@ -5,6 +5,8 @@ metadata:
   description: Paper's regionized multithreaded server for concurrency-heavy worlds.
   game: Minecraft
   author: Kiln
+  icon: ../icons/folia.svg
+  color: "#6aa54f"
   tags: [minecraft, java, plugins]
 variables:
   version:
@@ -34,14 +36,19 @@ variables:
     description: Filename Kiln downloads and starts.
     required: true
     default: folia.jar
-    rules: { pattern: "^[A-Za-z0-9][A-Za-z0-9._\\-]{0,123}\\.jar$", maxLength: 128 }
+    rules:
+      { pattern: "^[A-Za-z0-9][A-Za-z0-9._\\-]{0,123}\\.jar$", maxLength: 128 }
   java_args:
     type: string
     label: Java arguments
     description: Extra JVM flags. Heap size and startup command arguments are managed by Kiln and cannot be set here.
     required: false
     default: "-XX:+UseG1GC -XX:+ParallelRefProcEnabled -XX:MaxGCPauseMillis=200 -XX:+UnlockExperimentalVMOptions -XX:+DisableExplicitGC -XX:+AlwaysPreTouch -XX:G1HeapWastePercent=5 -XX:G1MixedGCCountTarget=4 -XX:InitiatingHeapOccupancyPercent=15 -XX:G1MixedGCLiveThresholdPercent=90 -XX:G1RSetUpdatingPauseTimePercent=5 -XX:SurvivorRatio=32 -XX:+PerfDisableSharedMem -XX:MaxTenuringThreshold=1 -Dusing.aikars.flags=https://mcflags.emc.gs -Daikars.new.flags=true -XX:G1NewSizePercent=30 -XX:G1MaxNewSizePercent=40 -XX:G1HeapRegionSize=8M -XX:G1ReservePercent=20"
-    rules: { maxLength: 2048, pattern: "^(?!.*(?:^|\\s)(?:@(?!@)\\S+|-Xm[sx]\\S*|-XX:(?:-UseContainerSupport|-UseCGroupMemoryLimitForHeap|InitialHeapSize|MaxHeapSize|SoftMaxHeapSize|MaxRAMPercentage|MinRAMPercentage|InitialRAMPercentage|MaxRAMFraction|InitialRAMFraction|MinRAMFraction|MaxRAM|VMOptionsFile|Flags)(?:=\\S*)?|--nogui|-jar)(?:\\s|$)).*$" }
+    rules:
+      {
+        maxLength: 2048,
+        pattern: "^(?!.*(?:^|\\s)(?:@(?!@)\\S+|-Xm[sx]\\S*|-XX:(?:-UseContainerSupport|-UseCGroupMemoryLimitForHeap|InitialHeapSize|MaxHeapSize|SoftMaxHeapSize|MaxRAMPercentage|MinRAMPercentage|InitialRAMPercentage|MaxRAMFraction|InitialRAMFraction|MinRAMFraction|MaxRAM|VMOptionsFile|Flags)(?:=\\S*)?|--nogui|-jar)(?:\\s|$)).*$",
+      }
 runtime:
   image: "ghcr.io/kiln-site/bricks-java:{{ variables.java_version }}"
   name: "Java {{ variables.java_version }}"

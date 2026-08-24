@@ -21,6 +21,28 @@ This prevents a misspelling from silently producing a less secure container.
 
 The normative schema is [`schema/recipe-v1.schema.json`](../schema/recipe-v1.schema.json).
 
+## Icons and colors
+
+`metadata.icon` may link to an SVG over HTTPS or use a path relative to the
+recipe. Kiln snapshots valid icons with catalogs and custom recipes. Icon
+failures never make the Brick unavailable; Kiln shows a generic box and retries
+with backoff. `metadata.color` is an optional `#rrggbb` color. An icon without a
+color receives a deterministic color derived from the Brick id, while a color
+without an icon colors the generic fallback.
+
+Icons should follow the same compact mark style as Simple Icons: a transparent,
+square canvas with one foreground color and no embedded text or background.
+Kiln renders SVGs as masks, so gradients and source colors are intentionally
+reduced to the configured single color. SVGs must be at most 64 KiB, declare a
+square `viewBox`, and contain no scripts, event handlers, external resources,
+animation, or embedded HTML.
+
+```yaml
+metadata:
+  icon: ../icons/example.svg
+  color: "#4b98b0"
+```
+
 `runtime.resources.memory` is the exact Docker hard limit. The optional
 `memoryReservation` is the soft reservation and defaults to the hard limit.
 Runtime-specific overhead must fit inside that limit; Relay does not silently

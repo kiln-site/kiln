@@ -40,7 +40,7 @@ import {
 } from "@workspace/ui/components/select"
 import { cn } from "@workspace/ui/lib/utils"
 
-import { ServerTypeIcon } from "@/components/server-type-icon"
+import { BrickIcon } from "@/components/brick-icon"
 import { useKilnGitRepositorySlug } from "@/lib/git-repository"
 import {
   brickCatalogDetailsQueryOptions,
@@ -353,7 +353,10 @@ function useSaveCustomBrick(
         message: `${brick.metadata.name} saved`,
         description: "This custom Brick is now available in your catalog.",
       })
-      await queryClient.invalidateQueries({ queryKey: queryKeys.bricks })
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: queryKeys.bricks }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.brickIcons }),
+      ])
     },
     onError: (cause) => {
       showToast({
@@ -630,8 +633,10 @@ export const BrickCatalogBrowser = React.memo(function BrickCatalogBrowser({
                           )}
                         >
                           <span className="grid size-8 shrink-0 place-items-center rounded-md border border-border/70 bg-background/70 text-muted-foreground">
-                            <ServerTypeIcon
-                              implementation={brick.metadata.id}
+                            <BrickIcon
+                              id={brick.metadata.id}
+                              color={brick.metadata.color}
+                              iconSvg={brick.iconSvg}
                               className="size-4"
                             />
                           </span>
@@ -708,6 +713,7 @@ const BrickCatalogManager = React.memo(function BrickCatalogManager({
     await Promise.all([
       queryClient.invalidateQueries({ queryKey: queryKeys.brickCatalogs.all }),
       queryClient.invalidateQueries({ queryKey: queryKeys.bricks }),
+      queryClient.invalidateQueries({ queryKey: queryKeys.brickIcons }),
     ])
   }, [queryClient])
   const addMutation = useMutation({
@@ -1002,8 +1008,10 @@ const BrickCatalogManager = React.memo(function BrickCatalogManager({
                       key={brick.source}
                       className="flex items-center gap-2 rounded-md border border-border/60 px-2.5 py-2"
                     >
-                      <ServerTypeIcon
-                        implementation={brick.metadata.id}
+                      <BrickIcon
+                        id={brick.metadata.id}
+                        color={brick.metadata.color}
+                        iconSvg={brick.iconSvg}
                         className="size-3.5 shrink-0 text-muted-foreground"
                       />
                       <span className="min-w-0 flex-1 truncate text-xs font-medium">
@@ -1304,8 +1312,10 @@ const BrickDetailsPanel = React.memo(function BrickDetailsPanel({
       <div className="min-h-0 flex-1 overflow-y-auto p-4 pr-11">
         <div className="flex items-start gap-3">
           <span className="grid size-11 shrink-0 place-items-center rounded-lg border border-border/70 bg-background/70 text-muted-foreground">
-            <ServerTypeIcon
-              implementation={brick.metadata.id}
+            <BrickIcon
+              id={brick.metadata.id}
+              color={brick.metadata.color}
+              iconSvg={brick.iconSvg}
               className="size-5"
             />
           </span>

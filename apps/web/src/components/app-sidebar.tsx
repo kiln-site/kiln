@@ -59,13 +59,18 @@ import {
   RouteCommandMenuProvider,
   RouteCommandMenuTrigger,
 } from "@/components/route-command-menu"
-import { ServerTypeIcon } from "@/components/server-type-icon"
+import {
+  BrickIcon,
+  brickIconPresentation,
+  type BrickIconDefinition,
+} from "@/components/brick-icon"
 import { authClient } from "@/lib/auth-client"
 import type { AuthenticatedUser } from "@/lib/auth-session"
 import { clearAppearanceCache } from "@/lib/appearance"
 import { minecraftHeadUrl } from "@/lib/minecraft-profile"
 import {
   accessCapabilitiesQueryOptions,
+  brickIconPresentationsQueryOptions,
   managedDatabaseDirectoryQueryOptions,
   minecraftProfileQueryOptions,
   relayConnectionQueryOptions,
@@ -107,6 +112,7 @@ interface AppSidebarViewProps {
 }
 
 const emptyInstances: Array<SidebarInstance> = []
+const emptyBrickIcons: Array<BrickIconDefinition> = []
 
 export const AppSidebar = React.memo(function AppSidebar({
   initialSelectedInstanceRouteId,
@@ -448,6 +454,15 @@ const ServerSelector = React.memo(function ServerSelector({
   const navigate = useNavigate()
   const queryClient = useQueryClient()
   const [open, setOpen] = React.useState(false)
+  const { data: bricks = emptyBrickIcons } = useQuery({
+    ...brickIconPresentationsQueryOptions(),
+    notifyOnChangeProps: ["data"],
+  })
+  const activeIcon = brickIconPresentation(bricks, {
+    brickId: instance?.brickId,
+    brickSource: instance?.brickSource,
+    implementation: instance?.implementation ?? "",
+  })
   const handleOpenChange = React.useCallback((nextOpen: boolean) => {
     setOpen(nextOpen)
   }, [])
@@ -499,8 +514,10 @@ const ServerSelector = React.memo(function ServerSelector({
             className="mb-1.5 h-11 border border-sidebar-border/75 bg-background/35 px-2 py-2 group-data-[collapsible=icon]:h-[32px]! group-data-[collapsible=icon]:overflow-visible group-data-[collapsible=icon]:bg-black/10 hover:border-sidebar-border hover:bg-sidebar-accent group-data-[collapsible=icon]:hover:bg-black/15 data-[state=open]:border-sidebar-border data-[state=open]:bg-sidebar-accent dark:group-data-[collapsible=icon]:bg-black/25 dark:group-data-[collapsible=icon]:hover:bg-black/35"
           >
             <span className="relative grid size-7 shrink-0 place-items-center rounded-md border border-sidebar-border/70 bg-background/25 group-data-[collapsible=icon]:absolute group-data-[collapsible=icon]:inset-0 group-data-[collapsible=icon]:m-auto group-data-[collapsible=icon]:size-6 group-data-[collapsible=icon]:rounded-none group-data-[collapsible=icon]:border-0 group-data-[collapsible=icon]:bg-transparent">
-              <ServerTypeIcon
-                implementation={instance?.implementation ?? ""}
+              <BrickIcon
+                id={activeIcon.id}
+                color={activeIcon.color}
+                iconSvg={activeIcon.iconSvg}
                 className="size-4 text-sidebar-foreground/85"
                 aria-hidden="true"
               />
@@ -545,6 +562,7 @@ const ServerSelector = React.memo(function ServerSelector({
           <ServerSelectorSearch
             activeInstanceId={instance?.id}
             activeRelayId={instance?.relayId}
+            bricks={bricks}
             instances={instances}
             onSelect={selectInstance}
           />
@@ -574,11 +592,13 @@ const ServerSelector = React.memo(function ServerSelector({
 const ServerSelectorSearch = React.memo(function ServerSelectorSearch({
   activeInstanceId,
   activeRelayId,
+  bricks,
   instances,
   onSelect,
 }: {
   activeInstanceId: string | undefined
   activeRelayId: string | undefined
+  bricks: Array<BrickIconDefinition>
   instances: Array<SidebarInstance>
   onSelect: (routeId: string) => void
 }) {
@@ -590,6 +610,7 @@ const ServerSelectorSearch = React.memo(function ServerSelectorSearch({
       <ServerSelectorResults
         activeInstanceId={activeInstanceId}
         activeRelayId={activeRelayId}
+        bricks={bricks}
         instances={instances}
         onSelect={onSelect}
         search={search}
@@ -631,6 +652,7 @@ const ServerSelectorSearchField = React.memo(
 interface ServerSelectorResultsProps {
   activeInstanceId: string | undefined
   activeRelayId: string | undefined
+  bricks: Array<BrickIconDefinition>
   instances: Array<SidebarInstance>
   onSelect: (routeId: string) => void
   search: string
@@ -639,6 +661,7 @@ interface ServerSelectorResultsProps {
 const ServerSelectorResults = React.memo(function ServerSelectorResults({
   activeInstanceId,
   activeRelayId,
+  bricks,
   instances,
   onSelect,
   search,
@@ -656,6 +679,7 @@ const ServerSelectorResults = React.memo(function ServerSelectorResults({
       key={query}
       activeInstanceId={activeInstanceId}
       activeRelayId={activeRelayId}
+      bricks={bricks}
       instances={filteredInstances}
       onSelect={onSelect}
     />
@@ -679,11 +703,13 @@ const VirtualizedServerSelectorResults = React.memo(
   function VirtualizedServerSelectorResults({
     activeInstanceId,
     activeRelayId,
+    bricks,
     instances,
     onSelect,
   }: {
     activeInstanceId: string | undefined
     activeRelayId: string | undefined
+    bricks: Array<BrickIconDefinition>
     instances: Array<SidebarInstance>
     onSelect: (routeId: string) => void
   }) {
@@ -733,6 +759,7 @@ const VirtualizedServerSelectorResults = React.memo(
                     item.id === activeInstanceId &&
                     item.relayId === activeRelayId
                   }
+                  bricks={bricks}
                   item={item}
                   onSelect={onSelect}
                 />
@@ -758,6 +785,7 @@ function serverSelectorResultsAreEqual(
   if (
     previous.activeInstanceId !== next.activeInstanceId ||
     previous.activeRelayId !== next.activeRelayId ||
+    previous.bricks !== next.bricks ||
     previous.instances !== next.instances ||
     previous.onSelect !== next.onSelect
   ) {
@@ -800,13 +828,20 @@ function matchesNormalizedServerSearch(
 
 const ServerSelectorItem = React.memo(function ServerSelectorItem({
   active,
+  bricks,
   item,
   onSelect,
 }: {
   active: boolean
+  bricks: Array<BrickIconDefinition>
   item: SidebarInstance
   onSelect: (routeId: string) => void
 }) {
+  const icon = brickIconPresentation(bricks, {
+    brickId: item.brickId,
+    brickSource: item.brickSource,
+    implementation: item.implementation,
+  })
   return (
     <button
       type="button"
@@ -816,8 +851,10 @@ const ServerSelectorItem = React.memo(function ServerSelectorItem({
       onClick={() => onSelect(item.routeId)}
     >
       <span className="relative grid size-7 shrink-0 place-items-center rounded-md bg-muted/55">
-        <ServerTypeIcon
-          implementation={item.implementation}
+        <BrickIcon
+          id={icon.id}
+          color={icon.color}
+          iconSvg={icon.iconSvg}
           className="size-3.5 text-muted-foreground"
           aria-hidden="true"
         />

@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises"
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 import { pathToFileURL } from "node:url"
@@ -6,6 +6,7 @@ import { pathToFileURL } from "node:url"
 import { afterEach, describe, expect, it } from "vite-plus/test"
 
 import {
+  brickIconRetryDelay,
   githubCatalogRevisionUrl,
   loadBrickCatalogSource,
 } from "./brick-catalog-source.server"
@@ -54,6 +55,67 @@ recipes: [paper.yml]
     expect(loaded.snapshotSha256).toMatch(/^[a-f0-9]{64}$/u)
   })
 
+  it("snapshots a safe recipe-relative SVG icon", async () => {
+    const directory = await temporaryDirectory()
+    await writeFile(
+      resolve(directory, "catalog.yml"),
+      "format: kiln.catalog/v1\nrecipes: [recipes/paper.yml]\n"
+    )
+    await writeFile(
+      resolve(directory, "recipes", "paper.yml"),
+      recipe("paper", "Paper").replace(
+        "  author: Kiln",
+        '  author: Kiln\n  icon: ../icons/paper.svg\n  color: "#e67e7e"'
+      )
+    )
+    await writeFile(
+      resolve(directory, "icons", "paper.svg"),
+      '<svg viewBox="0 0 24 24"><path d="M2 2h20v20H2z"/></svg>'
+    )
+
+    const loaded = await loadBrickCatalogSource(
+      pathToFileURL(resolve(directory, "catalog.yml")).href,
+      { allowFile: true }
+    )
+
+    expect(loaded.snapshot.bricks[0]).toMatchObject({
+      iconSvg: expect.stringContaining('viewBox="0 0 24 24"'),
+      metadata: {
+        color: "#e67e7e",
+        icon: pathToFileURL(resolve(directory, "icons", "paper.svg")).href,
+      },
+    })
+  })
+
+  it("keeps a Brick usable when its icon cannot load", async () => {
+    const directory = await temporaryDirectory()
+    await writeFile(
+      resolve(directory, "catalog.yml"),
+      "format: kiln.catalog/v1\nrecipes: [paper.yml]\n"
+    )
+    await writeFile(
+      resolve(directory, "paper.yml"),
+      recipe("paper", "Paper").replace(
+        "  author: Kiln",
+        "  author: Kiln\n  icon: missing.svg"
+      )
+    )
+
+    const loaded = await loadBrickCatalogSource(
+      pathToFileURL(resolve(directory, "catalog.yml")).href,
+      { allowFile: true }
+    )
+
+    expect(loaded.snapshot.bricks[0]?.metadata.id).toBe("paper")
+    expect(loaded.snapshot.bricks[0]?.iconSvg).toBeUndefined()
+  })
+
+  it("backs off repeated icon failures after a few quick retries", () => {
+    expect(
+      Array.from({ length: 6 }, (_, failures) => brickIconRetryDelay(failures))
+    ).toEqual([2_000, 10_000, 60_000, 900_000, 900_000, 900_000])
+  })
+
   it("rejects duplicate Brick ids within one catalog", async () => {
     const directory = await temporaryDirectory()
     await writeFile(
@@ -99,6 +161,10 @@ recipes: [paper.yml]
 async function temporaryDirectory(): Promise<string> {
   const directory = await mkdtemp(join(tmpdir(), "kiln-hearth-catalog-"))
   directories.push(directory)
+  await Promise.all([
+    mkdir(resolve(directory, "icons"), { recursive: true }),
+    mkdir(resolve(directory, "recipes"), { recursive: true }),
+  ])
   return directory
 }
 
