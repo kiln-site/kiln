@@ -13,7 +13,9 @@ import type { CommandResult } from "./command.js"
 import type { BrickCatalog } from "./bricks.js"
 import { directoryApparentSizeEffect } from "./disk-usage.js"
 import { ensuringPromise } from "./effect/promise.js"
+import type { RelayStateStore } from "./effect/state.js"
 import type {
+  BrickReadiness,
   BrickVariableValue,
   RelayConsole,
   RelayConsoleCompletion,
@@ -520,6 +522,7 @@ export function initialDiskUsageCacheEntry(): DiskUsageCacheEntry {
 
 export class DockerDriver {
   readonly #bricks: BrickCatalog | null
+  readonly #brickReadinessCache = new Map<string, BrickReadiness | null>()
   readonly #config: RelayConfig
   readonly #resources: RelayResourceNames
   #cachedDockerVersion: string | null | undefined
@@ -533,25 +536,31 @@ export class DockerDriver {
     string,
     { readonly readyAt: string | null; readonly startedAt: string }
   >()
+  #readySessionsInitialization: Promise<void> | null = null
   readonly #diskUsageSemaphore = Semaphore.makeUnsafe(1)
   #relayStartedAt: Promise<string | null> | undefined
   #relaySftpPublication: Promise<RelaySftpPublication> | undefined
   readonly #resourceCache = new Map<string, ResourceCacheEntry>()
   readonly #resourceHistory = new Map<string, Array<RelayInstanceResources>>()
+  readonly #state: RelayStateStore["Service"] | null
 
   constructor(
     config: RelayConfig,
     runtimeRecovery: RuntimeRecoveryManager | null = null,
-    bricks: BrickCatalog | null = null
+    bricks: BrickCatalog | null = null,
+    state: RelayStateStore["Service"] | null = null
   ) {
     this.#bricks = bricks
     this.#config = config
     this.#resources = relayResourceNames(config)
     this.#runtimeRecovery = runtimeRecovery
+    this.#state = state
   }
 
   async inspectInstances(): Promise<Array<RelayInstance>> {
+    await this.#initializeReadySessions()
     const discovered = await this.#discover()
+    const readySessionUpdates: Array<Promise<void>> = []
     const activeContainerIds = new Set(
       discovered.map(({ container }) => container.Id)
     )
@@ -568,6 +577,10 @@ export class DockerDriver {
       if (!activeInstanceIds.has(instanceId))
         this.#diskUsageCache.delete(instanceId)
     }
+    for (const instanceId of this.#brickReadinessCache.keys()) {
+      if (!activeInstanceIds.has(instanceId))
+        this.#brickReadinessCache.delete(instanceId)
+    }
     for (const instanceId of this.#resourceHistory.keys()) {
       if (!activeInstanceIds.has(instanceId))
         this.#resourceHistory.delete(instanceId)
@@ -577,8 +590,10 @@ export class DockerDriver {
         this.#powerTransitions.delete(instanceId)
     }
     for (const instanceId of this.#readySessions.keys()) {
-      if (!activeInstanceIds.has(instanceId))
+      if (!activeInstanceIds.has(instanceId)) {
         this.#readySessions.delete(instanceId)
+        readySessionUpdates.push(this.#deleteReadySession(instanceId))
+      }
     }
     await runEffect(
       Effect.forEach(
@@ -622,13 +637,14 @@ export class DockerDriver {
           readiness.set(config.id, true)
           return
         }
+        const brickReadiness = await this.#brickReadiness(config)
         const startedAt = Date.parse(container.State.StartedAt)
         const startedRecently =
           Number.isFinite(startedAt) &&
           now - startedAt < INSTANCE_STARTUP_READINESS_TIMEOUT_MS
         const readinessProbe = instanceReadinessProbe({
           hasHealthCheck: container.State.Health !== undefined,
-          hasLogReadiness: config.brickReadiness !== undefined,
+          hasLogReadiness: brickReadiness !== undefined,
           running: container.State.Running,
           startedRecently,
           transitionAction: transition?.action,
@@ -637,7 +653,8 @@ export class DockerDriver {
         const result = await this.#instanceReady(
           config,
           container,
-          readinessProbe
+          readinessProbe,
+          brickReadiness
         )
         if (!result) return
         readiness.set(config.id, result.ready)
@@ -724,19 +741,26 @@ export class DockerDriver {
         powerState.observedState === "running" &&
         (!readySession || readySession.startedAt !== containerStartedAt)
       ) {
-        this.#readySessions.set(config.id, {
+        const containerStartedAtMs = Date.parse(containerStartedAt)
+        const observedDuringStartup =
+          Number.isFinite(containerStartedAtMs) &&
+          now - containerStartedAtMs < INSTANCE_STARTUP_READINESS_TIMEOUT_MS
+        const session = {
           readyAt: observedSessionReadyAt(
             readyAt.get(config.id),
-            transition !== undefined,
+            transition !== undefined || observedDuringStartup,
             now
           ),
           startedAt: containerStartedAt,
-        })
+        }
+        this.#readySessions.set(config.id, session)
+        readySessionUpdates.push(this.#persistReadySession(config.id, session))
       } else if (
         powerState.observedState === "starting" &&
         readySession?.startedAt !== containerStartedAt
       ) {
         this.#readySessions.delete(config.id)
+        readySessionUpdates.push(this.#deleteReadySession(config.id))
       }
       const currentReadySession = this.#readySessions.get(config.id)
       const resources = this.#resourcesFor({ config, container })
@@ -775,6 +799,8 @@ export class DockerDriver {
         resources,
       }
     })
+
+    await Promise.all(readySessionUpdates)
 
     return instances.sort((a, b) =>
       `${a.implementation}-${a.version}`.localeCompare(
@@ -837,8 +863,13 @@ export class DockerDriver {
   }
 
   async forgetRecoveryState(instanceId: string): Promise<void> {
-    if (!this.#runtimeRecovery) return
-    await runEffect(this.#runtimeRecovery.forget(instanceId))
+    this.#readySessions.delete(instanceId)
+    await Promise.all([
+      this.#runtimeRecovery
+        ? runEffect(this.#runtimeRecovery.forget(instanceId))
+        : Promise.resolve(),
+      this.#deleteReadySession(instanceId),
+    ])
   }
 
   async webRouteLabelSnapshots(): Promise<Array<RelayWebRouteLabelSnapshot>> {
@@ -1760,44 +1791,41 @@ export class DockerDriver {
   async #instanceReady(
     instance: RelayInstanceConfig,
     container: DockerInspect,
-    probe: InstanceReadinessProbe
+    probe: InstanceReadinessProbe,
+    brickReadiness: BrickReadiness | undefined
   ): Promise<InstanceReadiness | undefined> {
-    if (instance.brickReadiness) {
-      return this.#startupLogReady(instance, container, probe)
+    if (brickReadiness) {
+      return this.#startupLogReady(brickReadiness, container, probe)
     }
     const ready = await this.#primaryPortReady(instance, container)
     return ready === undefined ? undefined : { ready }
   }
 
   async #startupLogReady(
-    instance: RelayInstanceConfig,
+    readiness: BrickReadiness,
     container: DockerInspect,
     probe: InstanceReadinessProbe
   ): Promise<InstanceReadiness | undefined> {
     const historical = probe === "historical"
+    const logWindowArguments = historical
+      ? historicalReadinessLogArguments(container.State.StartedAt)
+      : [
+          ...dockerLogSinceArguments(container.State.StartedAt),
+          "--tail",
+          String(STARTUP_READINESS_LOG_LINES),
+        ]
     return runEffect(
       promiseEffect(() =>
         command(
           "docker",
-          [
-            "logs",
-            "--timestamps",
-            ...dockerLogSinceArguments(container.State.StartedAt),
-            "--tail",
-            String(
-              historical
-                ? MAX_CONSOLE_HISTORY_LINES
-                : STARTUP_READINESS_LOG_LINES
-            ),
-            container.Id,
-          ],
+          ["logs", "--timestamps", ...logWindowArguments, container.Id],
           { timeout: historical ? 15_000 : 2_000 }
         )
       ).pipe(
         Effect.map((result) => {
           const match = matchingReadyLogLine(
             parseConsoleOutput(result),
-            instance.brickReadiness?.logs ?? []
+            readiness.logs
           )
           return match
             ? {
@@ -1837,6 +1865,71 @@ export class DockerDriver {
     }
     const listening = await containerPortListening(container.Id, port)
     return listening ?? (attempts.length > 0 ? false : undefined)
+  }
+
+  async #initializeReadySessions(): Promise<void> {
+    if (!this.#state) return
+    this.#readySessionsInitialization ??= runEffect(
+      this.#state.listReadySessions()
+    ).then((sessions) => {
+      for (const session of sessions) {
+        this.#readySessions.set(session.instanceId, session)
+      }
+    })
+    await this.#readySessionsInitialization
+  }
+
+  #persistReadySession(
+    instanceId: string,
+    session: { readonly readyAt: string | null; readonly startedAt: string }
+  ): Promise<void> {
+    if (!this.#state) return Promise.resolve()
+    return session.readyAt
+      ? runEffect(
+          this.#state.setReadySession({
+            instanceId,
+            readyAt: session.readyAt,
+            startedAt: session.startedAt,
+          })
+        )
+      : this.#deleteReadySession(instanceId)
+  }
+
+  #deleteReadySession(instanceId: string): Promise<void> {
+    return this.#state
+      ? runEffect(this.#state.deleteReadySession(instanceId))
+      : Promise.resolve()
+  }
+
+  async #brickReadiness(
+    instance: RelayInstanceConfig
+  ): Promise<BrickReadiness | undefined> {
+    if (instance.brickReadiness) return instance.brickReadiness
+    const cached = this.#brickReadinessCache.get(instance.id)
+    if (cached !== undefined) return cached ?? undefined
+    const bricks = this.#bricks
+    const source = instance.brickSource
+    if (!bricks || !source) {
+      this.#brickReadinessCache.set(instance.id, null)
+      return undefined
+    }
+
+    const readiness = await runEffect(
+      promiseEffect(
+        async () =>
+          (await bricks.recipe(source, instance.brickSnapshotSha256)).readiness
+      ).pipe(
+        Effect.catch((cause) =>
+          Effect.logWarning("Could not recover legacy Brick readiness", {
+            cause,
+            instanceId: instance.id,
+            source,
+          }).pipe(Effect.as(undefined))
+        )
+      )
+    )
+    this.#brickReadinessCache.set(instance.id, readiness ?? null)
+    return readiness
   }
 
   #resourcesFor(instance: DiscoveredInstance): RelayInstanceResources | null {
@@ -2728,13 +2821,28 @@ export const resolveConsoleStopCommands = Effect.fn(
 
 export function observedSessionReadyAt(
   detectedReadyAt: string | undefined,
-  transitionActive: boolean,
+  observedDuringStartup: boolean,
   now = Date.now()
 ): string | null {
   if (detectedReadyAt) return detectedReadyAt
   // A rediscovered session has no trustworthy historical probe time. Keep it
   // unknown so restored console history does not place readiness at startup.
-  return transitionActive ? new Date(now).toISOString() : null
+  return observedDuringStartup ? new Date(now).toISOString() : null
+}
+
+export function historicalReadinessLogArguments(
+  startedAt: string
+): Array<string> {
+  const since = dockerLogSinceArguments(startedAt)
+  const parsed = Date.parse(startedAt)
+  if (since.length === 0 || !Number.isFinite(parsed)) {
+    return ["--tail", String(MAX_CONSOLE_HISTORY_LINES)]
+  }
+  return [
+    ...since,
+    "--until",
+    new Date(parsed + INSTANCE_STARTUP_READINESS_TIMEOUT_MS).toISOString(),
+  ]
 }
 
 export type InstanceReadinessProbe = "historical" | "live"
@@ -2769,8 +2877,8 @@ export function instanceReadinessProbe({
     return "live"
   }
 
-  // A configured startup log is historical evidence. Re-read the complete
-  // restorable console window once when Relay rediscovers an existing session.
+  // A configured startup log is historical evidence. Re-read the bounded
+  // startup window once when Relay rediscovers an existing session.
   return hasLogReadiness ? "historical" : null
 }
 

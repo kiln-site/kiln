@@ -101,6 +101,12 @@ export interface RelayStoredPendingPrimaryPort extends RelayInstancePendingPrima
   readonly instanceId: string
 }
 
+export interface RelayStoredReadySession {
+  readonly instanceId: string
+  readonly readyAt: string
+  readonly startedAt: string
+}
+
 export type RelayProvisioningJobStatus =
   | "awaiting_claim"
   | "queued"
@@ -200,6 +206,12 @@ const RelayPendingPrimaryPortRowSchema = Schema.Struct({
   instanceId: Schema.String,
   internalPort: Schema.Number,
   protocol: RelayInstancePortProtocolSchema,
+})
+
+const RelayReadySessionRowSchema = Schema.Struct({
+  instanceId: Schema.String,
+  readyAt: Schema.String,
+  startedAt: Schema.String,
 })
 
 const RelayDesiredStateSchema = Schema.Literals(["stopped", "running"])
@@ -434,6 +446,10 @@ export class RelayStateStore extends Context.Service<
       ReadonlyArray<RelayStoredPendingPrimaryPort>,
       RelayStateError
     >
+    readonly listReadySessions: () => Effect.Effect<
+      ReadonlyArray<RelayStoredReadySession>,
+      RelayStateError
+    >
     readonly listInstanceRoutes: (
       instanceId: string
     ) => Effect.Effect<ReadonlyArray<RelayInstanceWebRoute>, RelayStateError>
@@ -463,6 +479,9 @@ export class RelayStateStore extends Context.Service<
     readonly setRuntimeRecovery: (
       recovery: RelayRuntimeRecoveryRecord
     ) => Effect.Effect<void, RelayStateError>
+    readonly setReadySession: (
+      session: RelayStoredReadySession
+    ) => Effect.Effect<void, RelayStateError>
     readonly deleteRuntimeRecovery: (
       instanceId: string
     ) => Effect.Effect<void, RelayStateError>
@@ -470,6 +489,9 @@ export class RelayStateStore extends Context.Service<
       instanceId: string
     ) => Effect.Effect<void, RelayStateError>
     readonly deletePendingPrimaryPort: (
+      instanceId: string
+    ) => Effect.Effect<void, RelayStateError>
+    readonly deleteReadySession: (
       instanceId: string
     ) => Effect.Effect<void, RelayStateError>
     readonly setPendingPrimaryPort: (
@@ -775,6 +797,17 @@ const migrations = SqliteMigrator.fromRecord({
       ON relay_instance_provisioning_jobs (status, created_at, instance_id)
     `
   }),
+  "12_instance_ready_sessions": Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient
+    yield* sql`
+      CREATE TABLE relay_instance_ready_sessions (
+        instance_id TEXT PRIMARY KEY NOT NULL,
+        started_at TEXT NOT NULL,
+        ready_at TEXT NOT NULL,
+        updated_at INTEGER NOT NULL
+      ) STRICT
+    `
+  }),
 })
 
 export function scrubBackupTaskInputJson(inputJson: string): string {
@@ -808,6 +841,9 @@ const makeRelayStateStore = Effect.gen(function* () {
   )
   const decodePendingPrimaryPortRows = Schema.decodeUnknownEffect(
     Schema.Array(RelayPendingPrimaryPortRowSchema)
+  )
+  const decodeReadySessionRows = Schema.decodeUnknownEffect(
+    Schema.Array(RelayReadySessionRowSchema)
   )
   const decodeRuntimeRecoveryRows = Schema.decodeUnknownEffect(
     Schema.Array(RelayRuntimeRecoveryRowSchema)
@@ -902,6 +938,20 @@ const makeRelayStateStore = Effect.gen(function* () {
             stopPending: row.stopPending === 1,
           }) satisfies RelayRuntimeRecoveryRecord
       )
+    }
+  )
+
+  const readySessions = Effect.fn("RelayStateStore.readySessions")(
+    function* () {
+      const rows = yield* sql<Record<string, unknown>>`
+      SELECT
+        instance_id AS instanceId,
+        started_at AS startedAt,
+        ready_at AS readyAt
+      FROM relay_instance_ready_sessions
+      ORDER BY instance_id ASC
+    `
+      return yield* decodeReadySessionRows(rows)
     }
   )
 
@@ -2083,6 +2133,7 @@ const makeRelayStateStore = Effect.gen(function* () {
       ),
     listPendingPrimaryPorts: () =>
       run("list_pending_primary_ports", pendingPrimaryPorts()),
+    listReadySessions: () => run("list_ready_sessions", readySessions()),
     listInstanceRoutes: (instanceId) =>
       run(
         "list_instance_routes",
@@ -2285,6 +2336,27 @@ const makeRelayStateStore = Effect.gen(function* () {
             updated_at = excluded.updated_at
         `.pipe(Effect.asVoid)
       ),
+    setReadySession: (session) =>
+      run(
+        "set_ready_session",
+        sql`
+          INSERT INTO relay_instance_ready_sessions (
+            instance_id,
+            started_at,
+            ready_at,
+            updated_at
+          ) VALUES (
+            ${session.instanceId},
+            ${session.startedAt},
+            ${session.readyAt},
+            ${Date.now()}
+          )
+          ON CONFLICT (instance_id) DO UPDATE SET
+            started_at = excluded.started_at,
+            ready_at = excluded.ready_at,
+            updated_at = excluded.updated_at
+        `.pipe(Effect.asVoid)
+      ),
     deleteInstanceName: (instanceId) =>
       run(
         "delete_instance_name",
@@ -2304,6 +2376,14 @@ const makeRelayStateStore = Effect.gen(function* () {
         "delete_pending_primary_port",
         sql`
           DELETE FROM relay_pending_primary_ports
+          WHERE instance_id = ${instanceId}
+        `.pipe(Effect.asVoid)
+      ),
+    deleteReadySession: (instanceId) =>
+      run(
+        "delete_ready_session",
+        sql`
+          DELETE FROM relay_instance_ready_sessions
           WHERE instance_id = ${instanceId}
         `.pipe(Effect.asVoid)
       ),

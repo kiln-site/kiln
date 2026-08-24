@@ -333,6 +333,30 @@ describe("Relay state", () => {
       })
     )
 
+    it.effect("persists readiness by exact container session", () =>
+      Effect.gen(function* () {
+        const store = yield* RelayStateStore
+        const first = {
+          instanceId: "ready-instance",
+          readyAt: "2026-08-24T01:00:15.000Z",
+          startedAt: "2026-08-24T01:00:00.000Z",
+        }
+        yield* store.setReadySession(first)
+        assert.deepStrictEqual(yield* store.listReadySessions(), [first])
+
+        const replacement = {
+          ...first,
+          readyAt: "2026-08-24T02:00:20.000Z",
+          startedAt: "2026-08-24T02:00:00.000Z",
+        }
+        yield* store.setReadySession(replacement)
+        assert.deepStrictEqual(yield* store.listReadySessions(), [replacement])
+
+        yield* store.deleteReadySession(first.instanceId)
+        assert.isEmpty(yield* store.listReadySessions())
+      })
+    )
+
     it.effect(
       "replaces instance web routes and rejects hostname collisions",
       () =>

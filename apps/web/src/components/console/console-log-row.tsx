@@ -59,7 +59,7 @@ export const ConsoleLogRow = React.memo(function ConsoleLogRow({
       tabIndex={0}
       ref={measureElement}
       data-index={index}
-      className={`absolute top-0 left-0 flex min-h-[30px] transition-colors ${stateLine ? "border-l-0 pr-0 text-center" : "border-l-2 pr-5 text-left"} ${wrapLines ? "w-full items-start py-1.5 whitespace-pre-wrap" : "h-[30px] min-w-full items-center whitespace-nowrap"} ${lineTone(line.level, selected, stateLine)}`}
+      className={`absolute top-0 left-0 flex min-h-[30px] border-l-2 transition-colors ${stateLine ? "border-transparent pr-0 text-center" : "pr-5 text-left"} ${wrapLines ? "w-full items-start py-1.5 whitespace-pre-wrap" : "h-[30px] min-w-full items-center whitespace-nowrap"} ${lineTone(line.level, selected, stateLine)}`}
       style={{
         top: start,
         width: wrapLines ? "100%" : "max(100%, max-content)",
@@ -72,20 +72,29 @@ export const ConsoleLogRow = React.memo(function ConsoleLogRow({
         }
       }}
     >
-      {showTimestamps && !stateLine ? (
-        <ConsoleTimestamp timestamp={line.timestamp} />
-      ) : null}
-      <span
-        className={`${stateLine ? "sticky left-0 w-[100cqw] shrink-0 px-3 text-center" : `min-w-0 flex-1 ${showTimestamps ? "" : "ml-3"}`} leading-[18px] ${wrapLines ? "break-words" : ""} ${lineTextTone(line.level)}`}
-      >
-        {stateLine ? (
+      {stateLine ? (
+        <span
+          className={`sticky left-0 flex w-[100cqw] shrink-0 items-center leading-[18px] ${lineTextTone(line.level)}`}
+        >
+          {showTimestamps ? (
+            <ConsoleTimestamp timestamp={line.timestamp} />
+          ) : null}
           <span className="mx-auto flex w-[min(76%,44rem)] items-center gap-3 before:min-w-0 before:flex-1 before:border-t before:border-stone-500/20 after:min-w-0 after:flex-1 after:border-t after:border-stone-500/20">
             <span className="shrink-0">{renderConsoleText(line, query)}</span>
           </span>
-        ) : (
-          renderConsoleText(line, query)
-        )}
-      </span>
+        </span>
+      ) : (
+        <>
+          {showTimestamps ? (
+            <ConsoleTimestamp timestamp={line.timestamp} />
+          ) : null}
+          <span
+            className={`min-w-0 flex-1 ${showTimestamps ? "" : "ml-3"} leading-[18px] ${wrapLines ? "break-words" : ""} ${lineTextTone(line.level)}`}
+          >
+            {renderConsoleText(line, query)}
+          </span>
+        </>
+      )}
     </div>
   )
 })

@@ -3,13 +3,16 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 
 import { afterEach, describe, expect, it, vi } from "vite-plus/test"
+import { Effect } from "effect"
 
 const commandMock = vi.hoisted(() => vi.fn())
 
 vi.mock("./command.js", () => ({ command: commandMock }))
 
 import { loadConfig } from "./config.js"
+import type { BrickCatalog } from "./bricks.js"
 import { DockerDriver, MAX_CONSOLE_HISTORY_LINES } from "./docker.js"
+import type { RelayStateStore } from "./effect/state.js"
 
 const temporaryDirectories: Array<string> = []
 
@@ -23,7 +26,7 @@ afterEach(async () => {
 })
 
 describe("rediscovered startup readiness", () => {
-  it("recovers readyAt beyond the live 1000-line probe window", async () => {
+  it("recovers and persists readyAt beyond the recent console tail", async () => {
     const dataDirectory = await mkdtemp(join(tmpdir(), "kiln-readiness-"))
     temporaryDirectories.push(dataDirectory)
     const config = loadConfig({
@@ -39,7 +42,7 @@ describe("rediscovered startup readiness", () => {
     const readyAt = "2026-08-21T20:40:19.000Z"
     const lines = [
       `${readyAt} Done (21.758s)! For help, type "help"`,
-      ...Array.from({ length: 1_001 }, (_, index) => {
+      ...Array.from({ length: MAX_CONSOLE_HISTORY_LINES + 1 }, (_, index) => {
         const timestamp = new Date(
           Date.parse(readyAt) + index + 1
         ).toISOString()
@@ -50,9 +53,8 @@ describe("rediscovered startup readiness", () => {
       Config: {
         Image: "kiln-ember:test",
         Labels: {
-          "kiln.brick.readiness": JSON.stringify({
-            logs: [")! For help, type "],
-          }),
+          "kiln.brick.snapshot-sha256": "b".repeat(64),
+          "kiln.brick.source": "https://bricks.example.test/paper.yml",
           "kiln.instance.directory": id,
           "kiln.instance.disk-bytes": String(1024 * 1024 * 1024),
           "kiln.instance.memory-bytes": String(1024 * 1024 * 1024),
@@ -83,6 +85,30 @@ describe("rediscovered startup readiness", () => {
         Status: "running",
       },
     }
+    const storedReadySessions = new Map<
+      string,
+      { instanceId: string; readyAt: string; startedAt: string }
+    >()
+    const recipeMock = vi.fn(async () => ({
+      readiness: { logs: [")! For help, type "] },
+    }))
+    const bricks = { recipe: recipeMock } as unknown as BrickCatalog
+    const state = {
+      deleteReadySession: (instanceId: string) =>
+        Effect.sync(() => {
+          storedReadySessions.delete(instanceId)
+        }),
+      listReadySessions: () =>
+        Effect.succeed([...storedReadySessions.values()]),
+      setReadySession: (session: {
+        instanceId: string
+        readyAt: string
+        startedAt: string
+      }) =>
+        Effect.sync(() => {
+          storedReadySessions.set(session.instanceId, session)
+        }),
+    } as unknown as RelayStateStore["Service"]
 
     commandMock.mockImplementation(
       async (
@@ -97,17 +123,34 @@ describe("rediscovered startup readiness", () => {
         }
         if (arguments_[0] === "logs") {
           const tailIndex = arguments_.indexOf("--tail")
-          const limit = Number(arguments_[tailIndex + 1])
-          return { stderr: "", stdout: lines.slice(-limit).join("\n") }
+          const selected =
+            tailIndex === -1
+              ? lines
+              : lines.slice(-Number(arguments_[tailIndex + 1]))
+          return { stderr: "", stdout: selected.join("\n") }
         }
         return { stderr: "", stdout: "" }
       }
     )
 
-    const [instance] = await new DockerDriver(config).inspectInstances()
+    const [instance] = await new DockerDriver(
+      config,
+      null,
+      bricks,
+      state
+    ).inspectInstances()
 
     expect(instance?.observedState).toBe("running")
     expect(instance?.readyAt).toBe(readyAt)
+    expect(storedReadySessions.get(id)).toEqual({
+      instanceId: id,
+      readyAt,
+      startedAt,
+    })
+    expect(recipeMock).toHaveBeenCalledWith(
+      "https://bricks.example.test/paper.yml",
+      "b".repeat(64)
+    )
     expect(commandMock).toHaveBeenCalledWith(
       "docker",
       [
@@ -115,11 +158,30 @@ describe("rediscovered startup readiness", () => {
         "--timestamps",
         "--since",
         startedAt,
-        "--tail",
-        String(MAX_CONSOLE_HISTORY_LINES),
+        "--until",
+        "2026-08-21T20:41:57.000Z",
         container.Id,
       ],
       { timeout: 15_000 }
     )
+
+    const logCallsBeforeRestart = commandMock.mock.calls.filter(
+      ([, arguments_]) => arguments_[0] === "logs"
+    ).length
+    const [afterRelayRestart] = await new DockerDriver(
+      config,
+      null,
+      bricks,
+      state
+    ).inspectInstances()
+
+    expect(afterRelayRestart?.observedState).toBe("running")
+    expect(afterRelayRestart?.readyAt).toBe(readyAt)
+    expect(recipeMock).toHaveBeenCalledTimes(1)
+    expect(
+      commandMock.mock.calls.filter(
+        ([, arguments_]) => arguments_[0] === "logs"
+      )
+    ).toHaveLength(logCallsBeforeRestart)
   })
 })

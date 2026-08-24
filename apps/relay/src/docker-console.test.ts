@@ -2,6 +2,7 @@ import { describe, expect, it } from "vite-plus/test"
 
 import {
   dockerLogSinceArguments,
+  historicalReadinessLogArguments,
   isIntentionalServerStopCommand,
   matchingReadyLogLine,
   observedSessionReadyAt,
@@ -16,6 +17,17 @@ describe("Docker console parsing", () => {
       "2026-07-25T17:59:03.000000000Z",
     ])
     expect(dockerLogSinceArguments("0001-01-01T00:00:00Z")).toEqual([])
+  })
+
+  it("recovers readiness from the startup window instead of a recent log tail", () => {
+    expect(
+      historicalReadinessLogArguments("2026-07-25T17:59:03.000000000Z")
+    ).toEqual([
+      "--since",
+      "2026-07-25T17:59:03.000000000Z",
+      "--until",
+      "2026-07-25T18:01:03.000Z",
+    ])
   })
 
   it("retains safe ANSI styling while keeping searchable plain text", () => {

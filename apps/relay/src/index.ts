@@ -166,7 +166,12 @@ await runRelayEffect(
   "relay.startup.runtimeRecovery",
   runtimeRecovery.initialize()
 )
-const docker = new DockerDriver(config, runtimeRecovery, bricks)
+const docker = new DockerDriver(
+  config,
+  runtimeRecovery,
+  bricks,
+  startupCore.state
+)
 const databases = new DatabaseDriver(config, docker)
 const systemUpdates = new SystemUpdateManager(config)
 const filesystem = new FilesystemDriver(config)
