@@ -401,6 +401,36 @@ export function RouteCommandMenuProvider({
           <CommandInput placeholder="Search routes..." />
           <CommandList className="max-h-[min(28rem,60dvh)] p-1">
             <CommandEmpty>No matching routes.</CommandEmpty>
+            {selectedServerRoutes.length > 0 ? (
+              <>
+                <RouteGroup
+                  heading="Server"
+                  routes={selectedServerRoutes}
+                  onSelect={navigateToRoute}
+                />
+                <CommandSeparator />
+              </>
+            ) : null}
+            <CommandGroup heading="Manage">
+              <RouteItems
+                routes={automationRoutes}
+                onSelect={navigateToRoute}
+              />
+              <RouteItems
+                routes={managementRoutes}
+                onSelect={navigateToRoute}
+              />
+              {canManageAccess ? (
+                <RouteItem route={accessRoute} onSelect={navigateToRoute} />
+              ) : null}
+            </CommandGroup>
+            <CommandSeparator />
+            <RouteGroup
+              heading="Settings"
+              routes={settingsRoutes}
+              onSelect={navigateToRoute}
+            />
+            <CommandSeparator />
             <CommandGroup heading="Infrastructure">
               <RouteItems
                 routes={infrastructureRoutes}
@@ -416,38 +446,6 @@ export function RouteCommandMenuProvider({
                 />
               ) : null}
             </CommandGroup>
-            <CommandSeparator />
-            {selectedServerRoutes.length > 0 ? (
-              <>
-                <RouteGroup
-                  heading="Server"
-                  routes={selectedServerRoutes}
-                  onSelect={navigateToRoute}
-                />
-                <CommandSeparator />
-              </>
-            ) : null}
-            <RouteGroup
-              heading="Automations"
-              routes={automationRoutes}
-              onSelect={navigateToRoute}
-            />
-            <CommandSeparator />
-            <CommandGroup heading="Manage">
-              <RouteItems
-                routes={managementRoutes}
-                onSelect={navigateToRoute}
-              />
-              {canManageAccess ? (
-                <RouteItem route={accessRoute} onSelect={navigateToRoute} />
-              ) : null}
-            </CommandGroup>
-            <CommandSeparator />
-            <RouteGroup
-              heading="Settings"
-              routes={settingsRoutes}
-              onSelect={navigateToRoute}
-            />
           </CommandList>
           <div className="type-meta flex items-center justify-between border-t border-border/70 bg-background/35 px-3 py-2 text-muted-foreground">
             <span>Navigate Kiln</span>
