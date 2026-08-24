@@ -53,7 +53,6 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@workspace/ui/components/tooltip"
-
 import { HearthMark } from "@/components/hearth-mark"
 import { BackupIcon } from "@/components/backup-icon"
 import { ServerTypeIcon } from "@/components/server-type-icon"
@@ -413,7 +412,7 @@ const InstanceNavigation = React.memo(function InstanceNavigation({
   return (
     <SidebarGroup>
       <SidebarGroupLabel className="type-technical-label">
-        Selected server
+        Server
       </SidebarGroupLabel>
       <SidebarGroupContent>
         <SidebarMenu>
@@ -712,68 +711,68 @@ function AccountNavigation({
   canManageAccess: boolean
   user: AuthenticatedUser
 }) {
-  const { isMobile } = useSidebar()
+  const { isMobile, state } = useSidebar()
   return (
     <SidebarFooter>
+      <SidebarGroup className="p-0">
+        <SidebarGroupLabel className="type-technical-label">
+          Manage
+        </SidebarGroupLabel>
+        <SidebarGroupContent>
+          <SidebarMenu>
+            <SidebarMenuItem>
+              <SidebarMenuButton asChild tooltip="Automations">
+                <Link
+                  to="/automations/schedules"
+                  activeOptions={{ includeSearch: false }}
+                  activeProps={{ "data-active": true }}
+                  preload="intent"
+                >
+                  <CalendarClock />
+                  <span>Automations</span>
+                </Link>
+              </SidebarMenuButton>
+            </SidebarMenuItem>
+            <SidebarMenuItem>
+              <SidebarMenuButton asChild tooltip="Backups">
+                <Link
+                  to="/backups"
+                  activeOptions={{ exact: true, includeSearch: false }}
+                  activeProps={{ "data-active": true }}
+                  preload="intent"
+                >
+                  <BackupIcon />
+                  <span>Backups</span>
+                </Link>
+              </SidebarMenuButton>
+            </SidebarMenuItem>
+            <SidebarMenuItem>
+              <SidebarMenuButton asChild tooltip="Activity">
+                <Link
+                  to="/activity"
+                  activeOptions={{ exact: true, includeSearch: false }}
+                  activeProps={{ "data-active": true }}
+                  preload="intent"
+                >
+                  <ListTodo />
+                  <span>Activity</span>
+                </Link>
+              </SidebarMenuButton>
+            </SidebarMenuItem>
+            <SidebarMenuItem>
+              {canManageAccess ? <AccessNavigationButton /> : null}
+            </SidebarMenuItem>
+          </SidebarMenu>
+        </SidebarGroupContent>
+      </SidebarGroup>
+      <SidebarSeparator />
       <SidebarMenu>
         <SidebarMenuItem>
-          <SidebarMenuButton asChild tooltip="Automations">
-            <Link
-              to="/automations/schedules"
-              activeOptions={{ includeSearch: false }}
-              activeProps={{ "data-active": true }}
-              preload="intent"
-            >
-              <CalendarClock />
-              <span>Automations</span>
-            </Link>
-          </SidebarMenuButton>
-        </SidebarMenuItem>
-        <SidebarMenuItem>
-          <SidebarMenuButton asChild tooltip="Backups">
-            <Link
-              to="/backups"
-              activeOptions={{ exact: true, includeSearch: false }}
-              activeProps={{ "data-active": true }}
-              preload="intent"
-            >
-              <BackupIcon />
-              <span>Backups</span>
-            </Link>
-          </SidebarMenuButton>
-        </SidebarMenuItem>
-        <SidebarMenuItem>
-          <SidebarMenuButton asChild tooltip="Activity">
-            <Link
-              to="/activity"
-              activeOptions={{ exact: true, includeSearch: false }}
-              activeProps={{ "data-active": true }}
-              preload="intent"
-            >
-              <ListTodo />
-              <span>Activity</span>
-            </Link>
-          </SidebarMenuButton>
-        </SidebarMenuItem>
-        <SidebarMenuItem>
-          {canManageAccess ? <AccessNavigationButton /> : null}
-        </SidebarMenuItem>
-        <SidebarMenuItem>
-          <SettingsNavigationButton />
-        </SidebarMenuItem>
-        <SidebarMenuItem>
-          <div className="flex h-11 items-center gap-2 px-2 group-data-[collapsible=icon]:h-[44px] group-data-[collapsible=icon]:px-0">
-            <AccountAvatar name={user.name} />
-            <span className="flex min-w-0 flex-1 items-center leading-none group-data-[collapsible=icon]:hidden">
-              <span className="w-full truncate text-xs font-semibold">
-                {user.name}
-              </span>
-            </span>
-            <SignOutButton
-              developmentBypass={user.isDevelopmentBypass}
-              tooltipHidden={isMobile}
-            />
-          </div>
+          {state === "collapsed" && !isMobile ? (
+            <CollapsedAccountMenu user={user} />
+          ) : (
+            <ExpandedAccountRow isMobile={isMobile} user={user} />
+          )}
         </SidebarMenuItem>
       </SidebarMenu>
     </SidebarFooter>
@@ -788,10 +787,7 @@ const AccountAvatar = React.memo(function AccountAvatar({
   const { data: profile } = useQuery(minecraftProfileQueryOptions(name))
 
   return (
-    <Avatar
-      size="sm"
-      className="rounded-none group-data-[collapsible=icon]:hidden"
-    >
+    <Avatar size="sm" className="rounded-none">
       {profile ? (
         <AvatarImage
           src={minecraftHeadUrl(profile.id)}
@@ -805,6 +801,113 @@ const AccountAvatar = React.memo(function AccountAvatar({
     </Avatar>
   )
 })
+
+function CollapsedAccountMenu({ user }: { user: AuthenticatedUser }) {
+  const [open, setOpen] = React.useState(false)
+  const [signingOut, setSigningOut] = React.useState(false)
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          className="grid size-[32px] place-items-center transition-colors hover:bg-sidebar-accent focus-visible:ring-2 focus-visible:ring-sidebar-ring/45 focus-visible:outline-none data-[state=open]:bg-sidebar-accent"
+          aria-label={`Open account menu for ${user.name}`}
+        >
+          <AccountAvatar name={user.name} />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent
+        aria-label="Account menu"
+        side="right"
+        align="end"
+        className="w-48 p-1"
+      >
+        <p className="truncate px-2 py-2 text-xs text-muted-foreground">
+          {user.name}
+        </p>
+        <div className="-mx-1 mb-1 h-px bg-border" />
+        <Link
+          to="/settings/account"
+          preload="intent"
+          className="flex h-9 w-full items-center gap-2 px-2 text-sm transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:ring-2 focus-visible:ring-ring/45 focus-visible:outline-none"
+          onClick={() => setOpen(false)}
+        >
+          <Settings className="size-4" />
+          <span>Settings</span>
+        </Link>
+        <button
+          type="button"
+          className="flex h-9 w-full items-center gap-2 px-2 text-left text-sm transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:ring-2 focus-visible:ring-ring/45 focus-visible:outline-none disabled:pointer-events-none disabled:opacity-45"
+          aria-label={signingOut ? "Signing out" : "Logout"}
+          disabled={signingOut}
+          onClick={() => {
+            setSigningOut(true)
+            forkPromise(
+              () => signOut(user.isDevelopmentBypass),
+              () => setSigningOut(false)
+            )
+          }}
+        >
+          {signingOut ? (
+            <LoaderCircle className="size-4 animate-spin" />
+          ) : (
+            <LogOut className="size-4" />
+          )}
+          <span>{signingOut ? "Signing out" : "Logout"}</span>
+        </button>
+      </PopoverContent>
+    </Popover>
+  )
+}
+
+function ExpandedAccountRow({
+  isMobile,
+  user,
+}: {
+  isMobile: boolean
+  user: AuthenticatedUser
+}) {
+  return (
+    <div className="flex h-11 items-center gap-1 px-2">
+      <Link
+        to="/settings/account"
+        preload="intent"
+        className="flex min-w-0 flex-1 items-center gap-2 text-sidebar-foreground transition-colors hover:text-sidebar-accent-foreground focus-visible:ring-2 focus-visible:ring-sidebar-ring/45 focus-visible:outline-none"
+      >
+        <AccountAvatar name={user.name} />
+        <span className="min-w-0 flex-1 truncate text-xs font-semibold">
+          {user.name}
+        </span>
+      </Link>
+      <SettingsIconButton tooltipHidden={isMobile} />
+      <SignOutButton
+        developmentBypass={user.isDevelopmentBypass}
+        tooltipHidden={isMobile}
+      />
+    </div>
+  )
+}
+
+function SettingsIconButton({ tooltipHidden }: { tooltipHidden: boolean }) {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Link
+          to="/settings/account"
+          preload="intent"
+          className="grid size-7 shrink-0 place-items-center text-sidebar-foreground/55 transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:ring-2 focus-visible:ring-sidebar-ring/45 focus-visible:outline-none"
+          aria-label="Settings"
+        >
+          <Settings className="size-4" />
+        </Link>
+      </TooltipTrigger>
+      <TooltipContent side="right" align="center" hidden={tooltipHidden}>
+        Settings
+      </TooltipContent>
+    </Tooltip>
+  )
+}
 
 function SignOutButton({
   developmentBypass,
@@ -820,7 +923,7 @@ function SignOutButton({
       <TooltipTrigger asChild>
         <button
           type="button"
-          className="ml-auto grid size-7 shrink-0 place-items-center text-sidebar-foreground/55 transition-colors group-data-[collapsible=icon]:mx-auto group-data-[collapsible=icon]:size-[28px]! hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:ring-2 focus-visible:ring-sidebar-ring/45 focus-visible:outline-none disabled:pointer-events-none disabled:opacity-45"
+          className="ml-auto grid size-7 shrink-0 place-items-center text-sidebar-foreground/55 transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:ring-2 focus-visible:ring-sidebar-ring/45 focus-visible:outline-none disabled:pointer-events-none disabled:opacity-45"
           aria-label={signingOut ? "Signing out" : "Sign out"}
           disabled={signingOut}
           onClick={() => {
@@ -832,9 +935,9 @@ function SignOutButton({
           }}
         >
           {signingOut ? (
-            <LoaderCircle className="size-4 animate-spin group-data-[collapsible=icon]:size-[16px]!" />
+            <LoaderCircle className="size-4 animate-spin" />
           ) : (
-            <LogOut className="size-4 group-data-[collapsible=icon]:size-[16px]!" />
+            <LogOut className="size-4" />
           )}
         </button>
       </TooltipTrigger>
@@ -860,25 +963,6 @@ function AccessNavigationButton() {
     >
       <UserRoundCog />
       <span>Access</span>
-    </SidebarMenuButton>
-  )
-}
-
-function SettingsNavigationButton() {
-  const navigate = useNavigate()
-  const isActive = useRouterState({
-    select: (state) =>
-      globalSectionFromRouteId(state.matches.at(-1)?.routeId) === "settings",
-  })
-  return (
-    <SidebarMenuButton
-      tooltip="Settings"
-      type="button"
-      isActive={isActive}
-      onClick={() => void navigate({ to: "/settings" })}
-    >
-      <Settings />
-      <span>Settings</span>
     </SidebarMenuButton>
   )
 }
