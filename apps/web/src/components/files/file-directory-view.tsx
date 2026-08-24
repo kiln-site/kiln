@@ -26,10 +26,7 @@ import {
 } from "@workspace/ui/components/tooltip"
 
 import { FileActionsDropdown } from "@/components/files/file-actions"
-import {
-  FileTypeIcon,
-  FileTypeIconSprite,
-} from "@/components/files/file-type-icon"
+import { FileTypeIcon } from "@/components/files/file-type-icon"
 import { selectedUploadFiles } from "@/components/files/file-upload-selection"
 import {
   type FileActionsController,
@@ -562,7 +559,6 @@ function DirectoryViewContent({
 
       <div className="min-h-0 flex-1 overflow-auto px-3 py-4 sm:px-5 lg:px-7">
         <div className="mx-auto w-full max-w-5xl overflow-hidden border border-border/75 bg-muted/[0.025]">
-          <FileTypeIconSprite />
           <div className="type-technical-label grid h-9 grid-cols-[2.25rem_minmax(12rem,1fr)_7rem_11rem_2.5rem] items-center border-b border-border/75 bg-muted/10 px-2 text-muted-foreground">
             <label className="grid size-7 place-items-center">
               <input

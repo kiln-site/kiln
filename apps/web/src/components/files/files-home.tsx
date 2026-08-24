@@ -4,10 +4,7 @@ import type { RelayFileActivityEntry } from "@workspace/contracts"
 import { Clock3, LoaderCircle, Pin } from "lucide-react"
 
 import { RootDirectoryList } from "@/components/files/file-directory-view"
-import {
-  FileTypeIcon,
-  FileTypeIconSprite,
-} from "@/components/files/file-type-icon"
+import { FileTypeIcon } from "@/components/files/file-type-icon"
 import type { FileActionsController } from "@/components/files/file-tree-utils"
 import {
   FileDropOverlay,
@@ -169,7 +166,6 @@ export function FilesHome({
       className="group/drop relative flex min-h-[360px] min-w-0 flex-1 flex-col bg-card"
       {...dropTarget}
     >
-      <FileTypeIconSprite />
       <FileDropOverlay directory="" />
       <div className={fileEditorHeaderClassName}>
         {treeCollapsed ? <FileTreeRevealButton onClick={onTreeExpand} /> : null}

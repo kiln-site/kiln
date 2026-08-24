@@ -9,6 +9,7 @@ import {
   useFileActions,
 } from "@/components/files/file-actions"
 import { FileDownloadDialog } from "@/components/files/file-download-dialog"
+import { FileTypeIconSprite } from "@/components/files/file-type-icon"
 import { FileTreePanel } from "@/components/files/file-tree-panel"
 import {
   createFileEditorPreferencesStore,
@@ -297,6 +298,7 @@ const StableFileWorkspaceSurface = React.memo(function FileWorkspaceSurface({
         />
       )}
       <div className="relative flex min-h-0 min-w-0 flex-1 pb-11 md:pb-0">
+        <FileTypeIconSprite />
         <FileViewer
           canShare={canShare && relayConnected}
           canWrite={canWrite && relayConnected}
