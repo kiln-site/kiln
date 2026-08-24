@@ -494,7 +494,7 @@ const ServerSelector = React.memo(function ServerSelector({
           <SidebarMenuButton
             size="lg"
             tooltip="Switch server"
-            className={`mb-2 h-auto min-h-13 border border-l-2 border-sidebar-border/80 bg-background/45 py-2 ${instance ? statusBorderTone(instance.observedState) : "border-l-muted-foreground/25"} group-data-[collapsible=icon]:min-h-[32px]! group-data-[collapsible=icon]:border-0 group-data-[collapsible=icon]:p-[8px]!`}
+            className={`mb-2 h-auto min-h-13 border border-l-2 border-sidebar-border/80 bg-background/45 py-2 ${instance ? statusBorderTone(instance.observedState) : "border-l-muted-foreground/25"} group-data-[collapsible=icon]:min-h-[32px]! group-data-[collapsible=icon]:border-0 group-data-[collapsible=icon]:bg-black/10 group-data-[collapsible=icon]:p-[8px]! group-data-[collapsible=icon]:shadow-[0_0_0_0.5px_color-mix(in_oklab,var(--sidebar-foreground)_16%,transparent)]! group-data-[collapsible=icon]:hover:bg-black/15 group-data-[collapsible=icon]:hover:shadow-[0_0_0_0.5px_color-mix(in_oklab,var(--sidebar-foreground)_24%,transparent)]! dark:group-data-[collapsible=icon]:bg-black/25 dark:group-data-[collapsible=icon]:hover:bg-black/35`}
           >
             <ServerTypeIcon
               implementation={instance?.implementation ?? ""}
