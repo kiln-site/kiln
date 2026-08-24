@@ -101,10 +101,13 @@ export interface RelayStoredPendingPrimaryPort extends RelayInstancePendingPrima
   readonly instanceId: string
 }
 
-export interface RelayStoredReadySession {
+export interface RelayStoredLifecycleSession {
+  readonly failedAt: string | null
   readonly instanceId: string
-  readonly readyAt: string
+  readonly readyAt: string | null
   readonly startedAt: string
+  readonly stoppedAt: string | null
+  readonly stoppingAt: string | null
 }
 
 export type RelayProvisioningJobStatus =
@@ -208,10 +211,13 @@ const RelayPendingPrimaryPortRowSchema = Schema.Struct({
   protocol: RelayInstancePortProtocolSchema,
 })
 
-const RelayReadySessionRowSchema = Schema.Struct({
+const RelayLifecycleSessionRowSchema = Schema.Struct({
+  failedAt: Schema.NullOr(Schema.String),
   instanceId: Schema.String,
-  readyAt: Schema.String,
+  readyAt: Schema.NullOr(Schema.String),
   startedAt: Schema.String,
+  stoppedAt: Schema.NullOr(Schema.String),
+  stoppingAt: Schema.NullOr(Schema.String),
 })
 
 const RelayDesiredStateSchema = Schema.Literals(["stopped", "running"])
@@ -446,8 +452,8 @@ export class RelayStateStore extends Context.Service<
       ReadonlyArray<RelayStoredPendingPrimaryPort>,
       RelayStateError
     >
-    readonly listReadySessions: () => Effect.Effect<
-      ReadonlyArray<RelayStoredReadySession>,
+    readonly listLifecycleSessions: () => Effect.Effect<
+      ReadonlyArray<RelayStoredLifecycleSession>,
       RelayStateError
     >
     readonly listInstanceRoutes: (
@@ -479,8 +485,8 @@ export class RelayStateStore extends Context.Service<
     readonly setRuntimeRecovery: (
       recovery: RelayRuntimeRecoveryRecord
     ) => Effect.Effect<void, RelayStateError>
-    readonly setReadySession: (
-      session: RelayStoredReadySession
+    readonly setLifecycleSession: (
+      session: RelayStoredLifecycleSession
     ) => Effect.Effect<void, RelayStateError>
     readonly deleteRuntimeRecovery: (
       instanceId: string
@@ -491,7 +497,7 @@ export class RelayStateStore extends Context.Service<
     readonly deletePendingPrimaryPort: (
       instanceId: string
     ) => Effect.Effect<void, RelayStateError>
-    readonly deleteReadySession: (
+    readonly deleteLifecycleSession: (
       instanceId: string
     ) => Effect.Effect<void, RelayStateError>
     readonly setPendingPrimaryPort: (
@@ -808,6 +814,41 @@ const migrations = SqliteMigrator.fromRecord({
       ) STRICT
     `
   }),
+  "13_instance_lifecycle_sessions": Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient
+    yield* sql`
+      CREATE TABLE relay_instance_lifecycle_sessions (
+        instance_id TEXT PRIMARY KEY NOT NULL,
+        started_at TEXT NOT NULL,
+        ready_at TEXT,
+        stopping_at TEXT,
+        stopped_at TEXT,
+        failed_at TEXT,
+        updated_at INTEGER NOT NULL
+      ) STRICT
+    `
+    yield* sql`
+      INSERT INTO relay_instance_lifecycle_sessions (
+        instance_id,
+        started_at,
+        ready_at,
+        stopping_at,
+        stopped_at,
+        failed_at,
+        updated_at
+      )
+      SELECT
+        instance_id,
+        started_at,
+        ready_at,
+        NULL,
+        NULL,
+        NULL,
+        updated_at
+      FROM relay_instance_ready_sessions
+    `
+    yield* sql`DROP TABLE relay_instance_ready_sessions`
+  }),
 })
 
 export function scrubBackupTaskInputJson(inputJson: string): string {
@@ -842,8 +883,8 @@ const makeRelayStateStore = Effect.gen(function* () {
   const decodePendingPrimaryPortRows = Schema.decodeUnknownEffect(
     Schema.Array(RelayPendingPrimaryPortRowSchema)
   )
-  const decodeReadySessionRows = Schema.decodeUnknownEffect(
-    Schema.Array(RelayReadySessionRowSchema)
+  const decodeLifecycleSessionRows = Schema.decodeUnknownEffect(
+    Schema.Array(RelayLifecycleSessionRowSchema)
   )
   const decodeRuntimeRecoveryRows = Schema.decodeUnknownEffect(
     Schema.Array(RelayRuntimeRecoveryRowSchema)
@@ -941,17 +982,20 @@ const makeRelayStateStore = Effect.gen(function* () {
     }
   )
 
-  const readySessions = Effect.fn("RelayStateStore.readySessions")(
+  const lifecycleSessions = Effect.fn("RelayStateStore.lifecycleSessions")(
     function* () {
       const rows = yield* sql<Record<string, unknown>>`
       SELECT
         instance_id AS instanceId,
         started_at AS startedAt,
-        ready_at AS readyAt
-      FROM relay_instance_ready_sessions
+        ready_at AS readyAt,
+        stopping_at AS stoppingAt,
+        stopped_at AS stoppedAt,
+        failed_at AS failedAt
+      FROM relay_instance_lifecycle_sessions
       ORDER BY instance_id ASC
     `
-      return yield* decodeReadySessionRows(rows)
+      return yield* decodeLifecycleSessionRows(rows)
     }
   )
 
@@ -2133,7 +2177,8 @@ const makeRelayStateStore = Effect.gen(function* () {
       ),
     listPendingPrimaryPorts: () =>
       run("list_pending_primary_ports", pendingPrimaryPorts()),
-    listReadySessions: () => run("list_ready_sessions", readySessions()),
+    listLifecycleSessions: () =>
+      run("list_lifecycle_sessions", lifecycleSessions()),
     listInstanceRoutes: (instanceId) =>
       run(
         "list_instance_routes",
@@ -2336,24 +2381,33 @@ const makeRelayStateStore = Effect.gen(function* () {
             updated_at = excluded.updated_at
         `.pipe(Effect.asVoid)
       ),
-    setReadySession: (session) =>
+    setLifecycleSession: (session) =>
       run(
-        "set_ready_session",
+        "set_lifecycle_session",
         sql`
-          INSERT INTO relay_instance_ready_sessions (
+          INSERT INTO relay_instance_lifecycle_sessions (
             instance_id,
             started_at,
             ready_at,
+            stopping_at,
+            stopped_at,
+            failed_at,
             updated_at
           ) VALUES (
             ${session.instanceId},
             ${session.startedAt},
             ${session.readyAt},
+            ${session.stoppingAt},
+            ${session.stoppedAt},
+            ${session.failedAt},
             ${Date.now()}
           )
           ON CONFLICT (instance_id) DO UPDATE SET
             started_at = excluded.started_at,
             ready_at = excluded.ready_at,
+            stopping_at = excluded.stopping_at,
+            stopped_at = excluded.stopped_at,
+            failed_at = excluded.failed_at,
             updated_at = excluded.updated_at
         `.pipe(Effect.asVoid)
       ),
@@ -2379,11 +2433,11 @@ const makeRelayStateStore = Effect.gen(function* () {
           WHERE instance_id = ${instanceId}
         `.pipe(Effect.asVoid)
       ),
-    deleteReadySession: (instanceId) =>
+    deleteLifecycleSession: (instanceId) =>
       run(
-        "delete_ready_session",
+        "delete_lifecycle_session",
         sql`
-          DELETE FROM relay_instance_ready_sessions
+          DELETE FROM relay_instance_lifecycle_sessions
           WHERE instance_id = ${instanceId}
         `.pipe(Effect.asVoid)
       ),

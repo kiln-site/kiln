@@ -95,34 +95,37 @@ export function useRelayConsoleStream(
     ) {
       sessionAcceptedAheadOfRuntimeRef.current = false
     }
-    if (state === "running" && runtime.readyAt && current) {
-      const retimestampedLines = retimestampConsoleStateLine(
-        current.lines,
-        "running",
-        runtime.readyAt
-      )
-      if (retimestampedLines) {
-        if (shouldRecordConsoleStateTransition(previous, state)) {
-          previousStateRef.current = state
-        }
-        commitConsole({
-          ...current,
-          lines: retimestampedLines,
-        })
-        return
-      }
-    }
+    const retimestampedLines = current
+      ? retimestampRuntimeLifecycleLines(
+          current.lines,
+          current.startedAt,
+          runtime.sessionStartedAt,
+          runtime.readyAt,
+          runtime.stoppingAt,
+          runtime.stoppedAt,
+          runtime.failedAt
+        )
+      : null
+    const currentWithTimestamps =
+      current && retimestampedLines
+        ? { ...current, lines: retimestampedLines }
+        : current
 
-    if (!shouldRecordConsoleStateTransition(previous, state)) return
+    if (!shouldRecordConsoleStateTransition(previous, state)) {
+      if (currentWithTimestamps && retimestampedLines) {
+        commitConsole(currentWithTimestamps)
+      }
+      return
+    }
     previousStateRef.current = state
 
     if (state === "starting") {
       if (
-        current &&
+        currentWithTimestamps &&
         consoleSessionIsCurrent(
           awaitingNewSessionRef.current,
           sessionAcceptedAheadOfRuntimeRef.current,
-          current.startedAt,
+          currentWithTimestamps.startedAt,
           runtime.startedAt
         )
       ) {
@@ -131,13 +134,21 @@ export function useRelayConsoleStream(
         // markers from the older snapshot.
         sessionInitializedRef.current = true
         commitConsole({
-          ...current,
+          ...currentWithTimestamps,
           lines: reconcileConsoleLifecycleLines(
-            current.lines,
-            current.startedAt ?? runtime.startedAt ?? null,
+            currentWithTimestamps.lines,
+            currentWithTimestamps.startedAt ??
+              runtime.sessionStartedAt ??
+              runtime.startedAt ??
+              null,
             state,
             runtime.readyAt,
-            runtime.recovery
+            runtime.recovery,
+            retainedLifecycleTimestamps(
+              runtime.stoppingAt,
+              runtime.stoppedAt,
+              runtime.failedAt
+            )
           ),
         })
         return
@@ -146,7 +157,17 @@ export function useRelayConsoleStream(
       // Preserve the crashed session until Docker has actually started the
       // replacement process, so the failure context remains visible.
       if (runtime?.recovery?.phase === "pending") return
-      const line = consoleStateLine("starting", new Date().toISOString())
+      const line = consoleStateLine(
+        "starting",
+        runtimeLifecycleTimestamp(
+          "starting",
+          runtime.sessionStartedAt,
+          runtime.readyAt,
+          runtime.stoppingAt,
+          runtime.stoppedAt,
+          runtime.failedAt
+        ) ?? new Date().toISOString()
+      )
       const next = {
         instanceId,
         lines: [line],
@@ -158,30 +179,47 @@ export function useRelayConsoleStream(
       return
     }
 
-    if (!sessionInitializedRef.current && previous === undefined) return
-    if (!current) return
+    if (!sessionInitializedRef.current && previous === undefined) {
+      if (currentWithTimestamps && retimestampedLines) {
+        commitConsole(currentWithTimestamps)
+      }
+      return
+    }
+    if (!currentWithTimestamps) return
     const line = consoleStateLine(
       state,
-      state === "running"
-        ? (runtime?.readyAt ?? new Date().toISOString())
-        : new Date().toISOString()
+      runtimeLifecycleTimestamp(
+        state,
+        runtime.sessionStartedAt,
+        runtime.readyAt,
+        runtime.stoppingAt,
+        runtime.stoppedAt,
+        runtime.failedAt
+      ) ?? new Date().toISOString()
     )
     if (
-      current.lines.some((existing) => isConsoleStateLineFor(existing, state))
+      currentWithTimestamps.lines.some((existing) =>
+        isConsoleStateLineFor(existing, state)
+      )
     ) {
+      if (retimestampedLines) commitConsole(currentWithTimestamps)
       return
     }
     commitConsole({
-      ...current,
-      lines: mergeConsoleHistory(current.lines, [line]),
+      ...currentWithTimestamps,
+      lines: mergeConsoleHistory(currentWithTimestamps.lines, [line]),
     })
   }, [
     commitConsole,
     instanceId,
+    runtime?.failedAt,
     runtime?.observedState,
     runtime?.readyAt,
     runtime?.recovery,
+    runtime?.sessionStartedAt,
     runtime?.startedAt,
+    runtime?.stoppedAt,
+    runtime?.stoppingAt,
   ])
 
   React.useEffect(() => {
@@ -199,10 +237,15 @@ export function useRelayConsoleStream(
     commitConsole({
       instanceId,
       lines: initialConsoleStateLines(
-        startedAt,
+        runtime.sessionStartedAt ?? startedAt,
         runtime.observedState,
         runtime.readyAt,
-        runtime.recovery
+        runtime.recovery,
+        retainedLifecycleTimestamps(
+          runtime.stoppingAt,
+          runtime.stoppedAt,
+          runtime.failedAt
+        )
       ),
       startedAt,
       truncated: false,
@@ -210,10 +253,14 @@ export function useRelayConsoleStream(
   }, [
     commitConsole,
     instanceId,
+    runtime?.failedAt,
     runtime?.observedState,
     runtime?.readyAt,
     runtime?.recovery,
+    runtime?.sessionStartedAt,
     runtime?.startedAt,
+    runtime?.stoppedAt,
+    runtime?.stoppingAt,
   ])
 
   React.useEffect(() => {
@@ -325,12 +372,29 @@ export function useRelayConsoleStream(
       awaitingNewSessionRef.current = false
       sessionStartedAtRef.current = startedAt
       sessionInitializedRef.current = true
+      const currentRuntime = runtimeRef.current
+      const runtimeMatchesSession = Boolean(
+        startedAt &&
+        (currentRuntime?.sessionStartedAt === startedAt ||
+          currentRuntime?.startedAt === startedAt)
+      )
       const nextLines = mergeConsoleStateLines(
         lines,
         startedAt,
-        runtimeRef.current?.observedState,
-        runtimeRef.current?.readyAt ?? null,
-        runtimeRef.current?.recovery ?? null
+        runtimeMatchesSession
+          ? currentRuntime?.observedState
+          : startedAt
+            ? "starting"
+            : currentRuntime?.observedState,
+        runtimeMatchesSession ? (currentRuntime?.readyAt ?? null) : null,
+        runtimeMatchesSession ? (currentRuntime?.recovery ?? null) : null,
+        runtimeMatchesSession
+          ? retainedLifecycleTimestamps(
+              currentRuntime?.stoppingAt,
+              currentRuntime?.stoppedAt,
+              currentRuntime?.failedAt
+            )
+          : {}
       )
       seen.clear()
       for (const line of nextLines) seen.add(line.id)
@@ -384,11 +448,32 @@ export function useRelayConsoleStream(
                   ) {
                     replaceSession(event.startedAt, [], false)
                   }
-                  const nextConsole = consoleDataRef.current ?? {
+                  let nextConsole = consoleDataRef.current ?? {
                     instanceId,
                     lines: [],
                     startedAt: event.startedAt ?? null,
                     truncated: false,
+                  }
+                  const readyRuntime = runtimeRef.current
+                  if (
+                    readyRuntime?.sessionStartedAt &&
+                    readyRuntime.sessionStartedAt === nextConsole.startedAt
+                  ) {
+                    nextConsole = {
+                      ...nextConsole,
+                      lines: reconcileConsoleLifecycleLines(
+                        nextConsole.lines,
+                        readyRuntime.sessionStartedAt,
+                        readyRuntime.observedState,
+                        readyRuntime.readyAt,
+                        readyRuntime.recovery,
+                        retainedLifecycleTimestamps(
+                          readyRuntime.stoppingAt,
+                          readyRuntime.stoppedAt,
+                          readyRuntime.failedAt
+                        )
+                      ),
+                    }
                   }
                   if (event.startedAt !== undefined) {
                     sessionStartedAtRef.current = event.startedAt
@@ -496,8 +581,70 @@ function consoleMatchesRuntime(
   consoleData: RelayConsole | null,
   runtime: InstanceRuntime | null | undefined
 ): boolean {
-  if (!consoleData || !runtime?.startedAt) return Boolean(consoleData)
-  return consoleData.startedAt === runtime.startedAt
+  if (!consoleData) return false
+  const expectedStartedAt = runtime?.sessionStartedAt ?? runtime?.startedAt
+  return !expectedStartedAt || consoleData.startedAt === expectedStartedAt
+}
+
+function retainedLifecycleTimestamps(
+  stoppingAt: string | null | undefined,
+  stoppedAt: string | null | undefined,
+  failedAt: string | null | undefined
+) {
+  return {
+    failedAt: failedAt ?? null,
+    stoppedAt: stoppedAt ?? null,
+    stoppingAt: stoppingAt ?? null,
+  }
+}
+
+function runtimeLifecycleTimestamp(
+  state: RelayObservedState,
+  sessionStartedAt: string | null,
+  readyAt: string | null,
+  stoppingAt: string | null,
+  stoppedAt: string | null,
+  failedAt: string | null
+): string | null {
+  if (state === "starting") return sessionStartedAt
+  if (state === "running") return readyAt
+  if (state === "stopping") return stoppingAt
+  if (state === "stopped") return stoppedAt
+  if (state === "failed") return failedAt
+  return null
+}
+
+function retimestampRuntimeLifecycleLines(
+  lines: ReadonlyArray<RelayConsoleLine>,
+  startedAt: string | null | undefined,
+  sessionStartedAt: string | null,
+  readyAt: string | null,
+  stoppingAt: string | null,
+  stoppedAt: string | null,
+  failedAt: string | null
+): Array<RelayConsoleLine> | null {
+  if (sessionStartedAt && startedAt && sessionStartedAt !== startedAt) {
+    return null
+  }
+  let next = [...lines]
+  let changed = false
+  const timestamps: ReadonlyArray<
+    readonly [RelayObservedState, string | null]
+  > = [
+    ["starting", sessionStartedAt],
+    ["running", readyAt],
+    ["stopping", stoppingAt],
+    ["stopped", stoppedAt],
+    ["failed", failedAt],
+  ]
+  for (const [state, timestamp] of timestamps) {
+    if (!timestamp) continue
+    const retimestamped = retimestampConsoleStateLine(next, state, timestamp)
+    if (!retimestamped) continue
+    next = retimestamped
+    changed = true
+  }
+  return changed ? next : null
 }
 
 function prependConsoleHistory(

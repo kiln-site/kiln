@@ -93,6 +93,35 @@ describe("console lifecycle lines", () => {
     ])
   })
 
+  it("preserves Docker nanosecond ordering within one millisecond", () => {
+    const doneAt = "2026-08-24T14:48:22.051488536Z"
+    const lines = [
+      {
+        id: "done",
+        level: "info" as const,
+        text: 'Done (10.617s)! For help, type "help"',
+        timestamp: doneAt,
+      },
+      {
+        id: "first-start-help",
+        level: "info" as const,
+        text: "This is the first time you're starting this server.",
+        timestamp: "2026-08-24T14:48:22.051821247Z",
+      },
+    ]
+
+    expect(
+      mergeConsoleStateLines(lines, startedAt, "running", doneAt).map(
+        (line) => line.text
+      )
+    ).toEqual([
+      "Server is starting",
+      'Done (10.617s)! For help, type "help"',
+      "Server is running",
+      "This is the first time you're starting this server.",
+    ])
+  })
+
   it("keeps unknown restored readiness after console history", () => {
     const lines = [
       {
@@ -308,6 +337,53 @@ describe("console lifecycle lines", () => {
     expect(
       initialConsoleStateLines(startedAt, "stopping").map((line) => line.text)
     ).toEqual(["Server is starting", "Server is stopping"])
+  })
+
+  it("restores the complete stopped session in chronological order", () => {
+    const stoppingAt = "2026-07-28T20:10:00.000Z"
+    const stoppedAt = "2026-07-28T20:10:04.000Z"
+    const lines = initialConsoleStateLines(
+      startedAt,
+      "stopped",
+      readyAt,
+      null,
+      { stoppedAt, stoppingAt }
+    )
+
+    expect(lines.map((line) => [line.text, line.timestamp])).toEqual([
+      ["Server is starting", startedAt],
+      ["Server is running", readyAt],
+      ["Server is stopping", stoppingAt],
+      ["Server stopped", stoppedAt],
+    ])
+  })
+
+  it("keeps a crash marker while automatic recovery awaits a new session", () => {
+    const failedAt = "2026-07-28T20:10:04.000Z"
+    const lines = initialConsoleStateLines(
+      startedAt,
+      "starting",
+      readyAt,
+      {
+        attempt: 1,
+        exitCode: 137,
+        maxAttempts: 2,
+        nextAttemptAt: "2026-07-28T20:10:09.000Z",
+        oomKilled: true,
+        phase: "pending",
+        reason: "out_of_memory",
+        runtimeMs: 780_000,
+      },
+      { failedAt }
+    )
+
+    expect(lines.slice(0, 3).map((line) => line.text)).toEqual([
+      "Server is starting",
+      "Server is running",
+      "Server failed",
+    ])
+    expect(lines[2]?.timestamp).toBe(failedAt)
+    expect(lines[3]?.text).toContain("ran out of memory")
   })
 
   it("identifies synthetic lifecycle lines for centered rendering", () => {

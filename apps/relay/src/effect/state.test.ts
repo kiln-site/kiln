@@ -333,27 +333,34 @@ describe("Relay state", () => {
       })
     )
 
-    it.effect("persists readiness by exact container session", () =>
+    it.effect("persists lifecycle timestamps by exact container session", () =>
       Effect.gen(function* () {
         const store = yield* RelayStateStore
         const first = {
+          failedAt: null,
           instanceId: "ready-instance",
           readyAt: "2026-08-24T01:00:15.000Z",
           startedAt: "2026-08-24T01:00:00.000Z",
+          stoppedAt: null,
+          stoppingAt: null,
         }
-        yield* store.setReadySession(first)
-        assert.deepStrictEqual(yield* store.listReadySessions(), [first])
+        yield* store.setLifecycleSession(first)
+        assert.deepStrictEqual(yield* store.listLifecycleSessions(), [first])
 
         const replacement = {
           ...first,
-          readyAt: "2026-08-24T02:00:20.000Z",
+          failedAt: "2026-08-24T02:01:00.000Z",
+          readyAt: null,
           startedAt: "2026-08-24T02:00:00.000Z",
+          stoppingAt: "2026-08-24T02:00:55.000Z",
         }
-        yield* store.setReadySession(replacement)
-        assert.deepStrictEqual(yield* store.listReadySessions(), [replacement])
+        yield* store.setLifecycleSession(replacement)
+        assert.deepStrictEqual(yield* store.listLifecycleSessions(), [
+          replacement,
+        ])
 
-        yield* store.deleteReadySession(first.instanceId)
-        assert.isEmpty(yield* store.listReadySessions())
+        yield* store.deleteLifecycleSession(first.instanceId)
+        assert.isEmpty(yield* store.listLifecycleSessions())
       })
     )
 

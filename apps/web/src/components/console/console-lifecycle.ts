@@ -4,30 +4,42 @@ import type {
   RelayObservedState,
 } from "@workspace/contracts"
 
+export interface RetainedConsoleLifecycleTimestamps {
+  readonly failedAt?: string | null
+  readonly stoppedAt?: string | null
+  readonly stoppingAt?: string | null
+}
+
 export function initialConsoleStateLines(
   startedAt: string | null,
   state: RelayObservedState | undefined,
   readyAt: string | null = null,
-  recovery: RelayInstanceRecovery | null = null
+  recovery: RelayInstanceRecovery | null = null,
+  retained: RetainedConsoleLifecycleTimestamps = {}
 ): Array<RelayConsoleLine> {
   const recoveryLines = recovery ? [consoleRecoveryLine(recovery, null)] : []
   if (!startedAt) {
     return state
-      ? [consoleStateLine(state, null), ...recoveryLines]
+      ? [
+          consoleStateLine(state, stateTimestamp(state, readyAt, retained)),
+          ...recoveryLines,
+        ]
       : recoveryLines
   }
 
   const lines = [consoleStateLine("starting", startedAt)]
-  if (state === "running") {
+  if (readyAt || state === "running") {
     lines.push(consoleStateLine("running", readyAt))
-  } else if (
-    state === "stopping" ||
-    state === "stopped" ||
-    state === "failed"
-  ) {
-    lines.push(consoleStateLine(state, null))
   }
-  return [...lines, ...recoveryLines]
+  if (retained.stoppingAt || state === "stopping") {
+    lines.push(consoleStateLine("stopping", retained.stoppingAt ?? null))
+  }
+  if (retained.failedAt || state === "failed") {
+    lines.push(consoleStateLine("failed", retained.failedAt ?? null))
+  } else if (retained.stoppedAt || state === "stopped") {
+    lines.push(consoleStateLine("stopped", retained.stoppedAt ?? null))
+  }
+  return [...lines, ...recoveryLines].sort(compareConsoleLineOrder)
 }
 
 export function mergeConsoleStateLines(
@@ -35,10 +47,11 @@ export function mergeConsoleStateLines(
   startedAt: string | null,
   state: RelayObservedState | undefined,
   readyAt: string | null = null,
-  recovery: RelayInstanceRecovery | null = null
+  recovery: RelayInstanceRecovery | null = null,
+  retained: RetainedConsoleLifecycleTimestamps = {}
 ): Array<RelayConsoleLine> {
   return [
-    ...initialConsoleStateLines(startedAt, state, readyAt, recovery),
+    ...initialConsoleStateLines(startedAt, state, readyAt, recovery, retained),
     ...lines,
   ].sort(compareConsoleLineOrder)
 }
@@ -48,7 +61,8 @@ export function reconcileConsoleLifecycleLines(
   startedAt: string | null,
   state: RelayObservedState | undefined,
   readyAt: string | null = null,
-  recovery: RelayInstanceRecovery | null = null
+  recovery: RelayInstanceRecovery | null = null,
+  retained: RetainedConsoleLifecycleTimestamps = {}
 ): Array<RelayConsoleLine> {
   return mergeConsoleStateLines(
     lines.filter(
@@ -57,7 +71,8 @@ export function reconcileConsoleLifecycleLines(
     startedAt,
     state,
     readyAt,
-    recovery
+    recovery,
+    retained
   )
 }
 
@@ -88,10 +103,7 @@ export function consoleSessionAcceptedAheadOfRuntime(
       (runtimeState !== "running" || runtimeStartedAt !== nextConsoleStartedAt)
     )
   }
-  if (
-    runtimeState === "running" &&
-    runtimeStartedAt === nextConsoleStartedAt
-  ) {
+  if (runtimeState === "running" && runtimeStartedAt === nextConsoleStartedAt) {
     return false
   }
   return wasAcceptedAheadOfRuntime
@@ -208,16 +220,66 @@ function compareConsoleLineOrder(
   left: RelayConsoleLine,
   right: RelayConsoleLine
 ): number {
-  const leftTimestamp = consoleTimestamp(left.timestamp)
-  const rightTimestamp = consoleTimestamp(right.timestamp)
-  if (leftTimestamp !== rightTimestamp) return leftTimestamp - rightTimestamp
+  const timestampOrder = compareConsoleTimestamps(
+    left.timestamp,
+    right.timestamp
+  )
+  if (timestampOrder !== 0) return timestampOrder
   return linePosition(left) - linePosition(right)
 }
 
-function consoleTimestamp(timestamp: string | null): number {
-  if (timestamp === null) return Number.POSITIVE_INFINITY
-  const parsed = Date.parse(timestamp)
-  return Number.isFinite(parsed) ? parsed : Number.POSITIVE_INFINITY
+function compareConsoleTimestamps(
+  left: string | null,
+  right: string | null
+): number {
+  if (left === right) return 0
+  if (left === null) return 1
+  if (right === null) return -1
+
+  const leftExact = exactUtcTimestamp(left)
+  const rightExact = exactUtcTimestamp(right)
+  if (leftExact && rightExact) {
+    if (leftExact.seconds !== rightExact.seconds) {
+      return leftExact.seconds - rightExact.seconds
+    }
+    return leftExact.nanoseconds - rightExact.nanoseconds
+  }
+
+  const leftParsed = Date.parse(left)
+  const rightParsed = Date.parse(right)
+  if (Number.isFinite(leftParsed) && Number.isFinite(rightParsed)) {
+    return leftParsed - rightParsed
+  }
+  if (Number.isFinite(leftParsed)) return -1
+  if (Number.isFinite(rightParsed)) return 1
+  return 0
+}
+
+function exactUtcTimestamp(
+  timestamp: string
+): { nanoseconds: number; seconds: number } | null {
+  const match = timestamp.match(
+    /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.(\d+))?Z$/u
+  )
+  if (!match?.[1]) return null
+  const milliseconds = Date.parse(`${match[1]}Z`)
+  if (!Number.isFinite(milliseconds)) return null
+  return {
+    nanoseconds: Number((match[2] ?? "").slice(0, 9).padEnd(9, "0")),
+    seconds: Math.floor(milliseconds / 1_000),
+  }
+}
+
+function stateTimestamp(
+  state: RelayObservedState,
+  readyAt: string | null,
+  retained: RetainedConsoleLifecycleTimestamps
+): string | null {
+  if (state === "running") return readyAt
+  if (state === "stopping") return retained.stoppingAt ?? null
+  if (state === "stopped") return retained.stoppedAt ?? null
+  if (state === "failed") return retained.failedAt ?? null
+  return null
 }
 
 function linePosition(line: RelayConsoleLine): number {

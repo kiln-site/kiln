@@ -13,7 +13,10 @@ import type { CommandResult } from "./command.js"
 import type { BrickCatalog } from "./bricks.js"
 import { directoryApparentSizeEffect } from "./disk-usage.js"
 import { ensuringPromise } from "./effect/promise.js"
-import type { RelayStateStore } from "./effect/state.js"
+import type {
+  RelayStateStore,
+  RelayStoredLifecycleSession,
+} from "./effect/state.js"
 import type {
   BrickReadiness,
   BrickVariableValue,
@@ -532,11 +535,8 @@ export class DockerDriver {
   readonly #diskUsageCache = new Map<string, DiskUsageCacheEntry>()
   readonly #powerTransitions = new Map<string, InstancePowerTransition>()
   readonly #runtimeRecovery: RuntimeRecoveryManager | null
-  readonly #readySessions = new Map<
-    string,
-    { readonly readyAt: string | null; readonly startedAt: string }
-  >()
-  #readySessionsInitialization: Promise<void> | null = null
+  readonly #lifecycleSessions = new Map<string, RelayStoredLifecycleSession>()
+  #lifecycleSessionsInitialization: Promise<void> | null = null
   readonly #diskUsageSemaphore = Semaphore.makeUnsafe(1)
   #relayStartedAt: Promise<string | null> | undefined
   #relaySftpPublication: Promise<RelaySftpPublication> | undefined
@@ -558,9 +558,9 @@ export class DockerDriver {
   }
 
   async inspectInstances(): Promise<Array<RelayInstance>> {
-    await this.#initializeReadySessions()
+    await this.#initializeLifecycleSessions()
     const discovered = await this.#discover()
-    const readySessionUpdates: Array<Promise<void>> = []
+    const lifecycleSessionUpdates: Array<Promise<void>> = []
     const activeContainerIds = new Set(
       discovered.map(({ container }) => container.Id)
     )
@@ -589,10 +589,10 @@ export class DockerDriver {
       if (!activeInstanceIds.has(instanceId))
         this.#powerTransitions.delete(instanceId)
     }
-    for (const instanceId of this.#readySessions.keys()) {
+    for (const instanceId of this.#lifecycleSessions.keys()) {
       if (!activeInstanceIds.has(instanceId)) {
-        this.#readySessions.delete(instanceId)
-        readySessionUpdates.push(this.#deleteReadySession(instanceId))
+        this.#lifecycleSessions.delete(instanceId)
+        lifecycleSessionUpdates.push(this.#deleteLifecycleSession(instanceId))
       }
     }
     await runEffect(
@@ -630,10 +630,14 @@ export class DockerDriver {
     await Promise.all(
       discovered.map(async ({ config, container }) => {
         const transition = this.#powerTransitions.get(config.id)
-        const readySession = this.#readySessions.get(config.id)
-        const readySessionMatches =
-          readySession?.startedAt === container.State.StartedAt
-        if (readySessionMatches && container.State.Running) {
+        const lifecycleSession = this.#lifecycleSessions.get(config.id)
+        const lifecycleSessionMatches =
+          lifecycleSession?.startedAt === container.State.StartedAt
+        if (
+          lifecycleSessionMatches &&
+          lifecycleSession.readyAt &&
+          container.State.Running
+        ) {
           readiness.set(config.id, true)
           return
         }
@@ -642,13 +646,18 @@ export class DockerDriver {
         const startedRecently =
           Number.isFinite(startedAt) &&
           now - startedAt < INSTANCE_STARTUP_READINESS_TIMEOUT_MS
-        const readinessProbe = instanceReadinessProbe({
-          hasHealthCheck: container.State.Health !== undefined,
-          hasLogReadiness: brickReadiness !== undefined,
-          running: container.State.Running,
-          startedRecently,
-          transitionAction: transition?.action,
-        })
+        const readinessProbe =
+          !container.State.Running &&
+          brickReadiness !== undefined &&
+          !lifecycleSession?.readyAt
+            ? "historical"
+            : instanceReadinessProbe({
+                hasHealthCheck: container.State.Health !== undefined,
+                hasLogReadiness: brickReadiness !== undefined,
+                running: container.State.Running,
+                startedRecently,
+                transitionAction: transition?.action,
+              })
         if (!readinessProbe) return
         const result = await this.#instanceReady(
           config,
@@ -735,34 +744,28 @@ export class DockerDriver {
       if (powerState.transitionComplete) {
         this.#powerTransitions.delete(config.id)
       }
-      const containerStartedAt = container.State.StartedAt
-      const readySession = this.#readySessions.get(config.id)
-      if (
-        powerState.observedState === "running" &&
-        (!readySession || readySession.startedAt !== containerStartedAt)
-      ) {
-        const containerStartedAtMs = Date.parse(containerStartedAt)
-        const observedDuringStartup =
-          Number.isFinite(containerStartedAtMs) &&
-          now - containerStartedAtMs < INSTANCE_STARTUP_READINESS_TIMEOUT_MS
-        const session = {
-          readyAt: observedSessionReadyAt(
-            readyAt.get(config.id),
-            transition !== undefined || observedDuringStartup,
-            now
-          ),
-          startedAt: containerStartedAt,
+      const previousLifecycleSession = this.#lifecycleSessions.get(config.id)
+      const lifecycleSession = observedLifecycleSession({
+        container,
+        instanceId: config.id,
+        now,
+        observedReadyAt: readyAt.get(config.id),
+        observedState: powerState.observedState,
+        previous: previousLifecycleSession,
+        recovery: recoveryState?.recovery ?? null,
+        transition,
+      })
+      if (lifecycleSession) {
+        this.#lifecycleSessions.set(config.id, lifecycleSession)
+        if (!sameLifecycleSession(previousLifecycleSession, lifecycleSession)) {
+          lifecycleSessionUpdates.push(
+            this.#persistLifecycleSession(lifecycleSession)
+          )
         }
-        this.#readySessions.set(config.id, session)
-        readySessionUpdates.push(this.#persistReadySession(config.id, session))
-      } else if (
-        powerState.observedState === "starting" &&
-        readySession?.startedAt !== containerStartedAt
-      ) {
-        this.#readySessions.delete(config.id)
-        readySessionUpdates.push(this.#deleteReadySession(config.id))
+      } else if (previousLifecycleSession) {
+        this.#lifecycleSessions.delete(config.id)
+        lifecycleSessionUpdates.push(this.#deleteLifecycleSession(config.id))
       }
-      const currentReadySession = this.#readySessions.get(config.id)
       const resources = this.#resourcesFor({ config, container })
 
       return {
@@ -780,10 +783,11 @@ export class DockerDriver {
         ),
         recovery: recoveryState?.recovery ?? null,
         startedAt: container.State.Running ? container.State.StartedAt : null,
-        readyAt:
-          currentReadySession?.startedAt === containerStartedAt
-            ? currentReadySession.readyAt
-            : null,
+        sessionStartedAt: lifecycleSession?.startedAt ?? null,
+        readyAt: lifecycleSession?.readyAt ?? null,
+        stoppingAt: lifecycleSession?.stoppingAt ?? null,
+        stoppedAt: lifecycleSession?.stoppedAt ?? null,
+        failedAt: lifecycleSession?.failedAt ?? null,
         status:
           recoveryStatus(recoveryState?.recovery, now) ??
           (powerState.observedState === "running"
@@ -800,7 +804,7 @@ export class DockerDriver {
       }
     })
 
-    await Promise.all(readySessionUpdates)
+    await Promise.all(lifecycleSessionUpdates)
 
     return instances.sort((a, b) =>
       `${a.implementation}-${a.version}`.localeCompare(
@@ -863,12 +867,12 @@ export class DockerDriver {
   }
 
   async forgetRecoveryState(instanceId: string): Promise<void> {
-    this.#readySessions.delete(instanceId)
+    this.#lifecycleSessions.delete(instanceId)
     await Promise.all([
       this.#runtimeRecovery
         ? runEffect(this.#runtimeRecovery.forget(instanceId))
         : Promise.resolve(),
-      this.#deleteReadySession(instanceId),
+      this.#deleteLifecycleSession(instanceId),
     ])
   }
 
@@ -885,6 +889,10 @@ export class DockerDriver {
     action: InstancePowerAction
   ): Promise<RelayInstance> {
     const discovered = await this.#findDiscovered(instance.id)
+    await this.#initializeLifecycleSessions()
+    const lifecycleSessionBeforeTransition = this.#lifecycleSessions.get(
+      instance.id
+    )
     const previousRecovery =
       instance.managedByRelay && this.#runtimeRecovery
         ? await runEffect(
@@ -900,6 +908,13 @@ export class DockerDriver {
       requestedAt: Date.now(),
     }
     this.#powerTransitions.set(instance.id, transition)
+    if (action !== "start") {
+      await this.#recordStoppingSession(
+        instance.id,
+        discovered.container,
+        transition
+      )
+    }
 
     await runEffect(
       promiseEffect(async () => {
@@ -953,6 +968,14 @@ export class DockerDriver {
                 ? this.#runtimeRecovery
                     .restore(instance.id, previousRecovery)
                     .pipe(Effect.ignore)
+                : Effect.void,
+              action !== "start"
+                ? promiseEffect(() =>
+                    this.#restoreLifecycleSession(
+                      instance.id,
+                      lifecycleSessionBeforeTransition
+                    )
+                  ).pipe(Effect.ignore)
                 : Effect.void,
             ],
             { discard: true }
@@ -1867,37 +1890,61 @@ export class DockerDriver {
     return listening ?? (attempts.length > 0 ? false : undefined)
   }
 
-  async #initializeReadySessions(): Promise<void> {
+  async #initializeLifecycleSessions(): Promise<void> {
     if (!this.#state) return
-    this.#readySessionsInitialization ??= runEffect(
-      this.#state.listReadySessions()
+    this.#lifecycleSessionsInitialization ??= runEffect(
+      this.#state.listLifecycleSessions()
     ).then((sessions) => {
       for (const session of sessions) {
-        this.#readySessions.set(session.instanceId, session)
+        this.#lifecycleSessions.set(session.instanceId, session)
       }
     })
-    await this.#readySessionsInitialization
+    await this.#lifecycleSessionsInitialization
   }
 
-  #persistReadySession(
-    instanceId: string,
-    session: { readonly readyAt: string | null; readonly startedAt: string }
+  #persistLifecycleSession(
+    session: RelayStoredLifecycleSession
   ): Promise<void> {
     if (!this.#state) return Promise.resolve()
-    return session.readyAt
-      ? runEffect(
-          this.#state.setReadySession({
-            instanceId,
-            readyAt: session.readyAt,
-            startedAt: session.startedAt,
-          })
-        )
-      : this.#deleteReadySession(instanceId)
+    return runEffect(this.#state.setLifecycleSession(session))
   }
 
-  #deleteReadySession(instanceId: string): Promise<void> {
+  async #recordStoppingSession(
+    instanceId: string,
+    container: DockerInspect,
+    transition: InstancePowerTransition
+  ): Promise<void> {
+    const session = observedLifecycleSession({
+      container,
+      instanceId,
+      now: transition.requestedAt,
+      observedReadyAt: undefined,
+      observedState: "stopping",
+      previous: this.#lifecycleSessions.get(instanceId),
+      recovery: null,
+      transition,
+    })
+    if (!session) return
+    this.#lifecycleSessions.set(instanceId, session)
+    await this.#persistLifecycleSession(session)
+  }
+
+  async #restoreLifecycleSession(
+    instanceId: string,
+    session: RelayStoredLifecycleSession | undefined
+  ): Promise<void> {
+    if (session) {
+      this.#lifecycleSessions.set(instanceId, session)
+      await this.#persistLifecycleSession(session)
+      return
+    }
+    this.#lifecycleSessions.delete(instanceId)
+    await this.#deleteLifecycleSession(instanceId)
+  }
+
+  #deleteLifecycleSession(instanceId: string): Promise<void> {
     return this.#state
-      ? runEffect(this.#state.deleteReadySession(instanceId))
+      ? runEffect(this.#state.deleteLifecycleSession(instanceId))
       : Promise.resolve()
   }
 
@@ -2830,6 +2877,105 @@ export function observedSessionReadyAt(
   return observedDuringStartup ? new Date(now).toISOString() : null
 }
 
+function observedLifecycleSession({
+  container,
+  instanceId,
+  now,
+  observedReadyAt,
+  observedState,
+  previous,
+  recovery,
+  transition,
+}: {
+  readonly container: DockerInspect
+  readonly instanceId: string
+  readonly now: number
+  readonly observedReadyAt: string | undefined
+  readonly observedState: RelayInstance["observedState"]
+  readonly previous: RelayStoredLifecycleSession | undefined
+  readonly recovery: RelayInstanceRecovery | null
+  readonly transition: InstancePowerTransition | undefined
+}): RelayStoredLifecycleSession | null {
+  const startedAt = consoleStartedAt(container)
+  if (!startedAt) return null
+
+  const session: RelayStoredLifecycleSession =
+    previous?.startedAt === startedAt
+      ? previous
+      : {
+          failedAt: null,
+          instanceId,
+          readyAt: null,
+          startedAt,
+          stoppedAt: null,
+          stoppingAt: null,
+        }
+  let next = session
+  if (observedState === "running" && !next.readyAt) {
+    const startedAtMs = Date.parse(startedAt)
+    const observedDuringStartup =
+      Number.isFinite(startedAtMs) &&
+      now - startedAtMs < INSTANCE_STARTUP_READINESS_TIMEOUT_MS
+    next = {
+      ...next,
+      readyAt: observedSessionReadyAt(
+        observedReadyAt,
+        transition !== undefined || observedDuringStartup,
+        now
+      ),
+    }
+  } else if (observedReadyAt && !next.readyAt) {
+    // Legacy stopped sessions can still recover the exact declared ready log.
+    next = { ...next, readyAt: observedReadyAt }
+  }
+
+  if (
+    !next.stoppingAt &&
+    transition &&
+    (transition.action === "stop" ||
+      transition.action === "restart" ||
+      transition.action === "kill")
+  ) {
+    next = {
+      ...next,
+      stoppingAt: new Date(transition.requestedAt).toISOString(),
+    }
+  }
+
+  const finishedAt = consoleFinishedAt(container)
+  if (!container.State.Running && finishedAt && recovery) {
+    next =
+      recovery.reason === "clean_exit"
+        ? { ...next, stoppedAt: next.stoppedAt ?? finishedAt }
+        : { ...next, failedAt: next.failedAt ?? finishedAt }
+  } else if (observedState === "stopped") {
+    next = {
+      ...next,
+      stoppedAt: next.stoppedAt ?? finishedAt ?? new Date(now).toISOString(),
+    }
+  } else if (observedState === "failed") {
+    next = {
+      ...next,
+      failedAt: next.failedAt ?? finishedAt ?? new Date(now).toISOString(),
+    }
+  }
+  return next
+}
+
+function sameLifecycleSession(
+  left: RelayStoredLifecycleSession | undefined,
+  right: RelayStoredLifecycleSession
+): boolean {
+  return (
+    left?.instanceId === right.instanceId &&
+    left.startedAt === right.startedAt &&
+    left.readyAt === right.readyAt &&
+    left.stoppingAt === right.stoppingAt &&
+    left.stoppedAt === right.stoppedAt &&
+    left.failedAt === right.failedAt
+  )
+}
+
 export function historicalReadinessLogArguments(
   startedAt: string
 ): Array<string> {
@@ -3202,6 +3348,13 @@ function consoleStartedAt(container: DockerInspect): string | null {
   const timestamp = Date.parse(container.State.StartedAt)
   return Number.isFinite(timestamp) && timestamp > 0
     ? container.State.StartedAt
+    : null
+}
+
+function consoleFinishedAt(container: DockerInspect): string | null {
+  const timestamp = Date.parse(container.State.FinishedAt)
+  return Number.isFinite(timestamp) && timestamp > 0
+    ? container.State.FinishedAt
     : null
 }
 

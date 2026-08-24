@@ -18,10 +18,14 @@ function provisioningInstance(instance: RelayInstance): RelayInstance {
     containerId: null,
     observedState: "provisioning",
     stateReason: null,
+    failedAt: null,
     readyAt: null,
     recovery: null,
     resources: null,
+    sessionStartedAt: null,
     startedAt: null,
+    stoppedAt: null,
+    stoppingAt: null,
     status: "Reprovisioning",
   }
 }
