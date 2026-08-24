@@ -40,6 +40,7 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@workspace/ui/components/tooltip"
+import { showToast } from "@workspace/ui/components/sonner"
 
 import { ToolbarSidebarTrigger } from "@/components/global-page-toolbar"
 import {
@@ -214,6 +215,20 @@ const PROVISIONING_PHASES: ReadonlyArray<{
   },
 ]
 
+const PROVISIONING_FAILURE_GUIDANCE: Record<
+  NonNullable<RelayInstanceProvisioning["failedPhase"]>,
+  string
+> = {
+  preparing:
+    "Check Docker networking, storage, and capacity on the Relay. After resolving the cause, delete this failed server and provision it again.",
+  pulling_image:
+    "Check the image name, registry access, and the Relay's internet connection. After resolving the cause, delete this failed server and provision it again.",
+  creating_container:
+    "Check the Relay for port conflicts and Docker container errors. After resolving the cause, delete this failed server and provision it again.",
+  finalizing:
+    "Check Relay networking and service configuration. After resolving the cause, delete this failed server and provision it again.",
+}
+
 function InstanceProvisioningBoundary({
   children,
   instance,
@@ -234,13 +249,49 @@ const InstanceProvisioningState = React.memo(
     const provisioning = instance.provisioning
     if (!provisioning) return null
     const failed = provisioning.phase === "failed"
-    const effectivePhase =
-      provisioning.phase === "awaiting_claim" || provisioning.phase === "queued"
+    const effectivePhase = failed
+      ? (provisioning.failedPhase ?? "preparing")
+      : provisioning.phase === "awaiting_claim" ||
+          provisioning.phase === "queued"
         ? "preparing"
         : provisioning.phase
     const activeIndex = PROVISIONING_PHASES.findIndex(
       (step) => step.phase === effectivePhase
     )
+    const activeStep = PROVISIONING_PHASES[activeIndex]
+    const failureGuidance = failed
+      ? PROVISIONING_FAILURE_GUIDANCE[provisioning.failedPhase ?? "preparing"]
+      : null
+    const diagnostics = [
+      `Server: ${instance.name} (${instance.id})`,
+      `Relay: ${instance.relayId}`,
+      `Failed phase: ${activeStep?.label ?? "Provisioning"}`,
+      `Attempt: ${Math.max(1, provisioning.attempt)}`,
+      `Reason: ${provisioning.error ?? "The Relay did not provide an error message."}`,
+    ].join("\n")
+
+    function copyDiagnostics() {
+      Effect.runFork(
+        Effect.tryPromise({
+          try: () => navigator.clipboard.writeText(diagnostics),
+          catch: (cause) => cause,
+        }).pipe(
+          Effect.match({
+            onFailure: () =>
+              showToast({
+                message:
+                  "Could not copy diagnostics. Select the error text manually.",
+                type: "error",
+              }),
+            onSuccess: () =>
+              showToast({
+                message: "Provisioning diagnostics copied",
+                type: "success",
+              }),
+          })
+        )
+      )
+    }
 
     return (
       <div className="flex min-h-0 w-full flex-1 overflow-y-auto">
@@ -261,13 +312,39 @@ const InstanceProvisioningState = React.memo(
             </h1>
             <p className="mt-4 max-w-xl text-sm leading-6 text-muted-foreground sm:text-base">
               {failed
-                ? "Kiln kept the server record intact, but the Relay could not finish building it. The error below is safe to share when troubleshooting."
+                ? "Kiln kept the server record intact, but the Relay could not finish building it. The Relay's reported reason and next step are below."
                 : "Kiln is downloading and assembling the server on the Relay. You can leave this page; provisioning will continue and this workspace will unlock automatically."}
             </p>
-            {failed && provisioning.error ? (
-              <pre className="mt-7 max-w-2xl overflow-x-auto border border-destructive/30 bg-destructive/6 p-4 font-mono text-xs leading-5 whitespace-pre-wrap text-destructive">
-                {provisioning.error}
-              </pre>
+            {failed ? (
+              <div className="mt-7 max-w-2xl border border-destructive/30 bg-destructive/6">
+                <div className="border-b border-destructive/20 p-4">
+                  <p className="type-technical-label text-destructive">
+                    Failed during {activeStep?.label ?? "provisioning"}
+                  </p>
+                  <p className="mt-2 text-sm leading-6 text-foreground">
+                    {provisioning.error ??
+                      "The Relay did not provide an error message."}
+                  </p>
+                </div>
+                <div className="p-4">
+                  <p className="type-technical-label text-muted-foreground">
+                    Next step
+                  </p>
+                  <p className="mt-2 text-sm leading-6 text-muted-foreground">
+                    {failureGuidance}
+                  </p>
+                  <Button
+                    className="mt-4"
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={copyDiagnostics}
+                  >
+                    <Copy />
+                    Copy diagnostics
+                  </Button>
+                </div>
+              </div>
             ) : (
               <div className="mt-8 h-px max-w-xl overflow-hidden bg-border">
                 <div className="h-full w-1/3 animate-pulse bg-primary" />
@@ -282,8 +359,9 @@ const InstanceProvisioningState = React.memo(
             </div>
             <ol className="p-4">
               {PROVISIONING_PHASES.map((step, index) => {
-                const complete = !failed && index < activeIndex
+                const complete = index < activeIndex
                 const active = !failed && index === activeIndex
+                const failedStep = failed && index === activeIndex
                 return (
                   <li
                     key={step.phase}
@@ -294,12 +372,20 @@ const InstanceProvisioningState = React.memo(
                         className={`grid size-6 place-items-center border text-[10px] ${
                           complete
                             ? "border-primary bg-primary text-primary-foreground"
-                            : active
-                              ? "border-primary bg-primary/10 text-primary"
-                              : "border-border text-muted-foreground"
+                            : failedStep
+                              ? "border-destructive bg-destructive/10 text-destructive"
+                              : active
+                                ? "border-primary bg-primary/10 text-primary"
+                                : "border-border text-muted-foreground"
                         }`}
                       >
-                        {complete ? <Check className="size-3.5" /> : index + 1}
+                        {complete ? (
+                          <Check className="size-3.5" />
+                        ) : failedStep ? (
+                          <OctagonX className="size-3.5" />
+                        ) : (
+                          index + 1
+                        )}
                       </span>
                       {index < PROVISIONING_PHASES.length - 1 ? (
                         <span className="mt-1 h-full w-px bg-border" />
@@ -307,7 +393,13 @@ const InstanceProvisioningState = React.memo(
                     </div>
                     <div className="min-w-0 pt-0.5">
                       <p
-                        className={`text-sm font-medium ${active ? "text-primary" : "text-foreground"}`}
+                        className={`text-sm font-medium ${
+                          failedStep
+                            ? "text-destructive"
+                            : active
+                              ? "text-primary"
+                              : "text-foreground"
+                        }`}
                       >
                         {step.label}
                       </p>

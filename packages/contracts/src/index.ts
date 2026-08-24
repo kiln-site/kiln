@@ -70,6 +70,9 @@ export const relayInstanceProvisioningSchema = z
   .object({
     attempt: z.number().int().nonnegative(),
     error: z.string().max(2_048).nullable(),
+    failedPhase: z
+      .enum(["preparing", "pulling_image", "creating_container", "finalizing"])
+      .optional(),
     phase: z.enum([
       "awaiting_claim",
       "queued",
