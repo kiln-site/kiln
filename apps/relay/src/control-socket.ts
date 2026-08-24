@@ -723,6 +723,9 @@ export function isAuditedOperation(operation: RelayControlOperation): boolean {
     operation === "relay.tailscale.write" ||
     operation === "relay.proxy.write" ||
     operation === "instance.create" ||
+    operation === "instance.provision.prepare" ||
+    operation === "instance.provision.claim" ||
+    operation === "instance.provision.cancel" ||
     operation === "instance.startup.write" ||
     operation === "instance.rename" ||
     operation === "instance.delete" ||
@@ -798,7 +801,8 @@ export function auditDetailsForRequest(
     details.reinstall = true
   }
   if (
-    request.operation === "instance.create" &&
+    (request.operation === "instance.create" ||
+      request.operation === "instance.provision.prepare") &&
     result &&
     typeof result === "object" &&
     !Array.isArray(result)
@@ -937,8 +941,12 @@ function actionForRequest(request: RelayControlRequest): RelayAction | null {
     case "schedule.overview":
       return "schedule.read"
     case "instance.create":
+    case "instance.provision.prepare":
+    case "instance.provision.claim":
     case "instance.startup.write":
       return "instance.create"
+    case "instance.provision.cancel":
+      return "instance.delete"
     case "instance.resources.read":
       return "instance.read"
     case "instance.rename":

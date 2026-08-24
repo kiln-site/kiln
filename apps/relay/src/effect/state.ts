@@ -7,6 +7,8 @@ import type {
   BackupTaskResult,
   RelayBackupTask,
   RelayDesiredState,
+  RelayCreateInstance,
+  RelayInstance,
   RelayInstanceRecovery,
   RelayInstancePendingPrimaryPort,
   RelayInstancePortProtocol,
@@ -19,6 +21,8 @@ import {
   backupTaskResultSchema,
   omitBackupSecrets,
   relayBackupTaskSchema,
+  relayCreateInstanceSchema,
+  relayInstanceSchema,
   resticSnapshotIdSchema,
 } from "@workspace/contracts"
 
@@ -95,6 +99,24 @@ export interface RelayStoredInstanceName {
 
 export interface RelayStoredPendingPrimaryPort extends RelayInstancePendingPrimaryPort {
   readonly instanceId: string
+}
+
+export type RelayProvisioningJobStatus =
+  | "awaiting_claim"
+  | "queued"
+  | "running"
+  | "failed"
+
+export interface RelayProvisioningJob {
+  readonly attempt: number
+  readonly createdAt: number
+  readonly error: string | null
+  readonly idempotencyKey: string
+  readonly input: RelayCreateInstance
+  readonly instanceId: string
+  readonly placeholder: RelayInstance
+  readonly status: RelayProvisioningJobStatus
+  readonly updatedAt: number
 }
 
 export type RelayRuntimeRecoveryPhase =
@@ -252,6 +274,24 @@ const RelayBackupTaskRowSchema = Schema.Struct({
   updatedAt: Schema.Number,
 })
 
+const RelayProvisioningJobStatusSchema = Schema.Literals([
+  "awaiting_claim",
+  "queued",
+  "running",
+  "failed",
+])
+const RelayProvisioningJobRowSchema = Schema.Struct({
+  attempt: Schema.Number,
+  createdAt: Schema.Number,
+  error: Schema.NullOr(Schema.String),
+  idempotencyKey: Schema.String,
+  inputJson: Schema.String,
+  instanceId: Schema.String,
+  placeholderJson: Schema.String,
+  status: RelayProvisioningJobStatusSchema,
+  updatedAt: Schema.Number,
+})
+
 export class RelayStateStore extends Context.Service<
   RelayStateStore,
   {
@@ -321,6 +361,49 @@ export class RelayStateStore extends Context.Service<
       now: number
     ) => Effect.Effect<boolean, RelayStateError>
     readonly requeueInterruptedBackupTasks: (
+      now: number
+    ) => Effect.Effect<number, RelayStateError>
+    readonly enqueueProvisioningJob: (
+      input: {
+        readonly idempotencyKey: string
+        readonly instanceId: string
+        readonly input: RelayCreateInstance
+        readonly placeholder: RelayInstance
+      },
+      now: number
+    ) => Effect.Effect<RelayProvisioningJob, RelayStateError>
+    readonly claimProvisioningJob: (
+      instanceId: string,
+      now: number
+    ) => Effect.Effect<RelayProvisioningJob | null, RelayStateError>
+    readonly claimNextProvisioningJob: (
+      now: number
+    ) => Effect.Effect<RelayProvisioningJob | null, RelayStateError>
+    readonly cancelProvisioningJob: (
+      instanceId: string
+    ) => Effect.Effect<boolean, RelayStateError>
+    readonly failProvisioningJob: (
+      instanceId: string,
+      error: string,
+      placeholder: RelayInstance,
+      now: number
+    ) => Effect.Effect<boolean, RelayStateError>
+    readonly completeProvisioningJob: (
+      instanceId: string
+    ) => Effect.Effect<boolean, RelayStateError>
+    readonly getProvisioningJob: (
+      instanceId: string
+    ) => Effect.Effect<RelayProvisioningJob | null, RelayStateError>
+    readonly listProvisioningJobs: () => Effect.Effect<
+      ReadonlyArray<RelayProvisioningJob>,
+      RelayStateError
+    >
+    readonly updateProvisioningJobPlaceholder: (
+      instanceId: string,
+      placeholder: RelayInstance,
+      now: number
+    ) => Effect.Effect<boolean, RelayStateError>
+    readonly requeueInterruptedProvisioningJobs: (
       now: number
     ) => Effect.Effect<number, RelayStateError>
     readonly listClients: () => Effect.Effect<
@@ -671,6 +754,27 @@ const migrations = SqliteMigrator.fromRecord({
       ON relay_backup_tasks (updated_at, task_id)
     `
   }),
+  "11_instance_provisioning_jobs": Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient
+    yield* sql`
+      CREATE TABLE relay_instance_provisioning_jobs (
+        instance_id TEXT PRIMARY KEY NOT NULL,
+        idempotency_key TEXT UNIQUE NOT NULL,
+        status TEXT NOT NULL
+          CHECK (status IN ('awaiting_claim', 'queued', 'running', 'failed')),
+        input_json TEXT NOT NULL,
+        placeholder_json TEXT NOT NULL,
+        error TEXT,
+        attempt INTEGER NOT NULL DEFAULT 0 CHECK (attempt >= 0),
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      ) STRICT
+    `
+    yield* sql`
+      CREATE INDEX relay_instance_provisioning_queue
+      ON relay_instance_provisioning_jobs (status, created_at, instance_id)
+    `
+  }),
 })
 
 export function scrubBackupTaskInputJson(inputJson: string): string {
@@ -710,6 +814,9 @@ const makeRelayStateStore = Effect.gen(function* () {
   )
   const decodeBackupTaskRows = Schema.decodeUnknownEffect(
     Schema.Array(RelayBackupTaskRowSchema)
+  )
+  const decodeProvisioningJobRows = Schema.decodeUnknownEffect(
+    Schema.Array(RelayProvisioningJobRowSchema)
   )
 
   const pendingPrimaryPorts = Effect.fn("RelayStateStore.pendingPrimaryPorts")(
@@ -912,6 +1019,79 @@ const makeRelayStateStore = Effect.gen(function* () {
     const decoded = yield* decodeBackupTaskRows(rows)
     return yield* Effect.forEach(decoded, backupTaskFromRow)
   })
+
+  const provisioningJobs = Effect.fn("RelayStateStore.provisioningJobs")(
+    function* (
+      filter:
+        | { readonly idempotencyKey: string }
+        | { readonly instanceId: string }
+        | undefined
+    ) {
+      const rows = filter
+        ? "instanceId" in filter
+          ? yield* sql<Record<string, unknown>>`
+              SELECT instance_id AS instanceId,
+                     idempotency_key AS idempotencyKey,
+                     status,
+                     input_json AS inputJson,
+                     placeholder_json AS placeholderJson,
+                     error,
+                     attempt,
+                     created_at AS createdAt,
+                     updated_at AS updatedAt
+              FROM relay_instance_provisioning_jobs
+              WHERE instance_id = ${filter.instanceId}
+              LIMIT 1
+            `
+          : yield* sql<Record<string, unknown>>`
+              SELECT instance_id AS instanceId,
+                     idempotency_key AS idempotencyKey,
+                     status,
+                     input_json AS inputJson,
+                     placeholder_json AS placeholderJson,
+                     error,
+                     attempt,
+                     created_at AS createdAt,
+                     updated_at AS updatedAt
+              FROM relay_instance_provisioning_jobs
+              WHERE idempotency_key = ${filter.idempotencyKey}
+              LIMIT 1
+            `
+        : yield* sql<Record<string, unknown>>`
+            SELECT instance_id AS instanceId,
+                   idempotency_key AS idempotencyKey,
+                   status,
+                   input_json AS inputJson,
+                   placeholder_json AS placeholderJson,
+                   error,
+                   attempt,
+                   created_at AS createdAt,
+                   updated_at AS updatedAt
+            FROM relay_instance_provisioning_jobs
+            ORDER BY created_at ASC, instance_id ASC
+          `
+      const decoded = yield* decodeProvisioningJobRows(rows)
+      return yield* Effect.forEach(decoded, (row) =>
+        Effect.try({
+          try: () =>
+            ({
+              attempt: row.attempt,
+              createdAt: row.createdAt,
+              error: row.error,
+              idempotencyKey: row.idempotencyKey,
+              input: relayCreateInstanceSchema.parse(JSON.parse(row.inputJson)),
+              instanceId: row.instanceId,
+              placeholder: relayInstanceSchema.parse(
+                JSON.parse(row.placeholderJson)
+              ),
+              status: row.status,
+              updatedAt: row.updatedAt,
+            }) satisfies RelayProvisioningJob,
+          catch: (cause) => cause,
+        })
+      )
+    }
+  )
 
   const warnedUnparseableTaskIds = new Set<string>()
   const pruneSupersededExportTasks = () => sql`
@@ -1481,6 +1661,210 @@ const makeRelayStateStore = Effect.gen(function* () {
             return count
           })
         )
+      ),
+    enqueueProvisioningJob: (input, now) =>
+      run(
+        "enqueue_provisioning_job",
+        sql.withTransaction(
+          Effect.gen(function* () {
+            const existing = (yield* provisioningJobs({
+              idempotencyKey: input.idempotencyKey,
+            }))[0]
+            if (existing) {
+              if (
+                JSON.stringify(existing.input) !== JSON.stringify(input.input)
+              ) {
+                return yield* Effect.fail(
+                  new Error("Provisioning key already has different input")
+                )
+              }
+              return existing
+            }
+            yield* sql`
+              INSERT INTO relay_instance_provisioning_jobs (
+                instance_id, idempotency_key, status, input_json,
+                placeholder_json, created_at, updated_at
+              ) VALUES (
+                ${input.instanceId},
+                ${input.idempotencyKey},
+                'awaiting_claim',
+                ${JSON.stringify(input.input)},
+                ${JSON.stringify(input.placeholder)},
+                ${now},
+                ${now}
+              )
+            `
+            const created = (yield* provisioningJobs({
+              instanceId: input.instanceId,
+            }))[0]
+            return yield* created
+              ? Effect.succeed(created)
+              : Effect.fail(new Error("Provisioning job was not persisted"))
+          })
+        )
+      ),
+    claimProvisioningJob: (instanceId, now) =>
+      run(
+        "claim_provisioning_job",
+        sql.withTransaction(
+          Effect.gen(function* () {
+            yield* sql`
+              UPDATE relay_instance_provisioning_jobs
+              SET status = 'queued', updated_at = ${now}, error = NULL
+              WHERE instance_id = ${instanceId}
+                AND status = 'awaiting_claim'
+            `
+            return (yield* provisioningJobs({ instanceId }))[0] ?? null
+          })
+        )
+      ),
+    claimNextProvisioningJob: (now) =>
+      run(
+        "claim_next_provisioning_job",
+        sql.withTransaction(
+          Effect.gen(function* () {
+            const rows = yield* sql<{ instanceId: string }>`
+              SELECT instance_id AS instanceId
+              FROM relay_instance_provisioning_jobs
+              WHERE status = 'queued'
+              ORDER BY created_at ASC, instance_id ASC
+              LIMIT 1
+            `
+            const instanceId = rows[0]?.instanceId
+            if (!instanceId) return null
+            yield* sql`
+              UPDATE relay_instance_provisioning_jobs
+              SET status = 'running',
+                  attempt = attempt + 1,
+                  updated_at = ${now},
+                  error = NULL
+              WHERE instance_id = ${instanceId} AND status = 'queued'
+            `
+            return (yield* provisioningJobs({ instanceId }))[0] ?? null
+          })
+        )
+      ),
+    cancelProvisioningJob: (instanceId) =>
+      run(
+        "cancel_provisioning_job",
+        Effect.gen(function* () {
+          const rows = yield* sql<{ instanceId: string }>`
+            SELECT instance_id AS instanceId
+            FROM relay_instance_provisioning_jobs
+            WHERE instance_id = ${instanceId}
+              AND status IN ('awaiting_claim', 'queued', 'failed')
+            LIMIT 1
+          `
+          if (!rows[0]) return false
+          yield* sql`
+            DELETE FROM relay_instance_provisioning_jobs
+            WHERE instance_id = ${instanceId}
+              AND status IN ('awaiting_claim', 'queued', 'failed')
+          `
+          return true
+        })
+      ),
+    failProvisioningJob: (instanceId, error, placeholder, now) =>
+      run(
+        "fail_provisioning_job",
+        Effect.gen(function* () {
+          const rows = yield* sql<{ instanceId: string }>`
+            SELECT instance_id AS instanceId
+            FROM relay_instance_provisioning_jobs
+            WHERE instance_id = ${instanceId}
+              AND status IN ('queued', 'running')
+            LIMIT 1
+          `
+          if (!rows[0]) return false
+          yield* sql`
+            UPDATE relay_instance_provisioning_jobs
+            SET status = 'failed',
+                placeholder_json = ${JSON.stringify(placeholder)},
+                error = ${error.slice(0, 2_048)},
+                updated_at = ${now}
+            WHERE instance_id = ${instanceId}
+              AND status IN ('queued', 'running')
+          `
+          return true
+        })
+      ),
+    completeProvisioningJob: (instanceId) =>
+      run(
+        "complete_provisioning_job",
+        Effect.gen(function* () {
+          const rows = yield* sql<{ instanceId: string }>`
+            SELECT instance_id AS instanceId
+            FROM relay_instance_provisioning_jobs
+            WHERE instance_id = ${instanceId} AND status = 'running'
+            LIMIT 1
+          `
+          if (!rows[0]) return false
+          yield* sql`
+            DELETE FROM relay_instance_provisioning_jobs
+            WHERE instance_id = ${instanceId} AND status = 'running'
+          `
+          return true
+        })
+      ),
+    getProvisioningJob: (instanceId) =>
+      run(
+        "get_provisioning_job",
+        provisioningJobs({ instanceId }).pipe(
+          Effect.map((jobs) => jobs[0] ?? null)
+        )
+      ),
+    listProvisioningJobs: () =>
+      run("list_provisioning_jobs", provisioningJobs(undefined)),
+    updateProvisioningJobPlaceholder: (instanceId, placeholder, now) =>
+      run(
+        "update_provisioning_job_placeholder",
+        Effect.gen(function* () {
+          const rows = yield* sql<{ instanceId: string }>`
+            SELECT instance_id AS instanceId
+            FROM relay_instance_provisioning_jobs
+            WHERE instance_id = ${instanceId}
+              AND status IN ('awaiting_claim', 'queued', 'running')
+            LIMIT 1
+          `
+          if (!rows[0]) return false
+          yield* sql`
+            UPDATE relay_instance_provisioning_jobs
+            SET placeholder_json = ${JSON.stringify(placeholder)},
+                updated_at = ${now}
+            WHERE instance_id = ${instanceId}
+              AND status IN ('awaiting_claim', 'queued', 'running')
+          `
+          return true
+        })
+      ),
+    requeueInterruptedProvisioningJobs: (now) =>
+      run(
+        "requeue_interrupted_provisioning_jobs",
+        Effect.gen(function* () {
+          const rows = yield* sql<{ count: number }>`
+            SELECT COUNT(*) AS count
+            FROM relay_instance_provisioning_jobs
+            WHERE status = 'running'
+          `
+          const count = rows[0]?.count ?? 0
+          if (count === 0) return 0
+          const error = "Relay restarted before provisioning completed"
+          yield* sql`
+            UPDATE relay_instance_provisioning_jobs
+            SET status = 'failed',
+                error = ${error},
+                placeholder_json = json_set(
+                  placeholder_json,
+                  '$.observedState', 'failed',
+                  '$.status', 'Provisioning failed',
+                  '$.provisioning.phase', 'failed',
+                  '$.provisioning.error', ${error}
+                ),
+                updated_at = ${now}
+            WHERE status = 'running'
+          `
+          return count
+        })
       ),
     findActiveInvitation: (invitationId, now) =>
       run(

@@ -8,6 +8,7 @@ import {
 import { Link, useParams, useRouterState } from "@tanstack/react-router"
 import { Effect } from "effect"
 import type {
+  RelayInstanceProvisioning,
   RelayInstanceResources,
   RelayObservedState,
 } from "@workspace/contracts"
@@ -131,7 +132,9 @@ export function InstanceWorkspace({
       <InstancePermissionsContext.Provider value={permissions}>
         <FileTreePreferencesContext.Provider value={fileTreePreferences}>
           <InstanceRelayConnectionBoundary instance={instance}>
-            {children}
+            <InstanceProvisioningBoundary instance={instance}>
+              {children}
+            </InstanceProvisioningBoundary>
           </InstanceRelayConnectionBoundary>
         </FileTreePreferencesContext.Provider>
       </InstancePermissionsContext.Provider>
@@ -170,14 +173,158 @@ function InstanceRelayConnectionBoundary({
 
   return (
     <InstanceRelayConnectedContext.Provider value={relayConnected}>
-      <RelayResourceStreamController
-        instance={instance}
-        relayConnected={relayConnected}
-      />
+      {!instance.provisioning ? (
+        <RelayResourceStreamController
+          instance={instance}
+          relayConnected={relayConnected}
+        />
+      ) : null}
       {children}
     </InstanceRelayConnectedContext.Provider>
   )
 }
+
+const PROVISIONING_PHASES: ReadonlyArray<{
+  phase: Exclude<
+    RelayInstanceProvisioning["phase"],
+    "awaiting_claim" | "queued" | "failed"
+  >
+  detail: string
+  label: string
+}> = [
+  {
+    phase: "preparing",
+    label: "Prepare",
+    detail: "Checking capacity and creating storage",
+  },
+  {
+    phase: "pulling_image",
+    label: "Download",
+    detail: "Fetching the server image",
+  },
+  {
+    phase: "creating_container",
+    label: "Build",
+    detail: "Allocating ports and creating the container",
+  },
+  {
+    phase: "finalizing",
+    label: "Finalize",
+    detail: "Connecting services and publishing the server",
+  },
+]
+
+function InstanceProvisioningBoundary({
+  children,
+  instance,
+}: {
+  children: React.ReactNode
+  instance: InstanceWorkspaceInstance
+}) {
+  if (!instance.provisioning) return children
+  return <InstanceProvisioningState instance={instance} />
+}
+
+const InstanceProvisioningState = React.memo(
+  function InstanceProvisioningState({
+    instance,
+  }: {
+    instance: InstanceWorkspaceInstance
+  }) {
+    const provisioning = instance.provisioning
+    if (!provisioning) return null
+    const failed = provisioning.phase === "failed"
+    const effectivePhase =
+      provisioning.phase === "awaiting_claim" || provisioning.phase === "queued"
+        ? "preparing"
+        : provisioning.phase
+    const activeIndex = PROVISIONING_PHASES.findIndex(
+      (step) => step.phase === effectivePhase
+    )
+
+    return (
+      <div className="flex min-h-0 w-full flex-1 overflow-y-auto">
+        <div className="m-auto grid w-full max-w-5xl gap-10 px-6 py-12 lg:grid-cols-[minmax(0,1fr)_22rem] lg:px-10">
+          <section className="self-center">
+            <div className="type-technical-label mb-5 flex items-center gap-2 text-primary">
+              {failed ? (
+                <TriangleAlert className="size-4" />
+              ) : (
+                <LoaderCircle className="size-4 animate-spin" />
+              )}
+              {failed ? "Provisioning stopped" : "Provisioning in background"}
+            </div>
+            <h1 className="max-w-2xl text-3xl font-semibold tracking-tight text-balance sm:text-4xl">
+              {failed
+                ? `${instance.name} needs your attention.`
+                : `${instance.name} is already yours.`}
+            </h1>
+            <p className="mt-4 max-w-xl text-sm leading-6 text-muted-foreground sm:text-base">
+              {failed
+                ? "Kiln kept the server record intact, but the Relay could not finish building it. The error below is safe to share when troubleshooting."
+                : "Kiln is downloading and assembling the server on the Relay. You can leave this page; provisioning will continue and this workspace will unlock automatically."}
+            </p>
+            {failed && provisioning.error ? (
+              <pre className="mt-7 max-w-2xl overflow-x-auto border border-destructive/30 bg-destructive/6 p-4 font-mono text-xs leading-5 whitespace-pre-wrap text-destructive">
+                {provisioning.error}
+              </pre>
+            ) : (
+              <div className="mt-8 h-px max-w-xl overflow-hidden bg-border">
+                <div className="h-full w-1/3 animate-pulse bg-primary" />
+              </div>
+            )}
+          </section>
+
+          <aside className="border border-border/80 bg-background/50">
+            <div className="type-technical-label flex items-center justify-between border-b border-border/80 px-4 py-3 text-muted-foreground">
+              <span>Build sequence</span>
+              <span>Attempt {Math.max(1, provisioning.attempt)}</span>
+            </div>
+            <ol className="p-4">
+              {PROVISIONING_PHASES.map((step, index) => {
+                const complete = !failed && index < activeIndex
+                const active = !failed && index === activeIndex
+                return (
+                  <li
+                    key={step.phase}
+                    className="grid grid-cols-[1.5rem_1fr] gap-x-3 pb-5 last:pb-0"
+                  >
+                    <div className="flex flex-col items-center">
+                      <span
+                        className={`grid size-6 place-items-center border text-[10px] ${
+                          complete
+                            ? "border-primary bg-primary text-primary-foreground"
+                            : active
+                              ? "border-primary bg-primary/10 text-primary"
+                              : "border-border text-muted-foreground"
+                        }`}
+                      >
+                        {complete ? <Check className="size-3.5" /> : index + 1}
+                      </span>
+                      {index < PROVISIONING_PHASES.length - 1 ? (
+                        <span className="mt-1 h-full w-px bg-border" />
+                      ) : null}
+                    </div>
+                    <div className="min-w-0 pt-0.5">
+                      <p
+                        className={`text-sm font-medium ${active ? "text-primary" : "text-foreground"}`}
+                      >
+                        {step.label}
+                      </p>
+                      <p className="mt-1 text-xs leading-5 text-muted-foreground">
+                        {step.detail}
+                      </p>
+                    </div>
+                  </li>
+                )
+              })}
+            </ol>
+          </aside>
+        </div>
+      </div>
+    )
+  }
+)
 
 function RelayResourceStreamController({
   instance,

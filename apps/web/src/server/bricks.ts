@@ -1,4 +1,5 @@
 import { createServerFn } from "@tanstack/react-start"
+import { Effect } from "effect"
 import {
   type Brick,
   type BrickRecipe,
@@ -32,8 +33,12 @@ import {
 import type { PersistedRelay } from "@/lib/relay-registry"
 import { listPersistedRelays } from "@/lib/relay-registry"
 import { listMcJarVersionsEffect } from "@/effect/mcjarfiles"
-import { runAppEffect } from "@/effect/runtime"
-import { registerInstance } from "@/lib/instance-registry"
+import { promiseEffect } from "@/effect/promise"
+import { forkAppEffect, runAppEffect } from "@/effect/runtime"
+import {
+  registerPreparedInstance,
+  unregisterInstance,
+} from "@/lib/instance-registry"
 import {
   invalidateRelayCache,
   relayCachePolicy,
@@ -54,6 +59,7 @@ export const hearthCreateInstanceInputSchema = relayCreateInstanceSchema
   .omit({ recipeDefinition: true })
   .extend({
     ...relayInputSchema.shape,
+    idempotencyKey: z.uuid(),
     name: relayInstanceNameSchema,
   })
   .strict()
@@ -178,25 +184,51 @@ export const createBrickInstance = createServerFn({ method: "POST" })
       user,
       data.recipe
     )
+    const { idempotencyKey, relayId: _, ...createInput } = data
     const input = relayCreateInstanceSchema.parse({
-      ...data,
+      ...createInput,
       recipeDefinition,
     })
     const instance = relayInstanceSchema.parse(
       await requestRelay(
         relay,
-        "/v1/instances",
+        "/v1/instance-provisioning",
         {
           method: "POST",
-          body: JSON.stringify(input),
+          body: JSON.stringify({ ...input, idempotencyKey }),
         },
-        360_000,
+        30_000,
         user.id
       )
     )
-    await registerInstance(relay.id, instance, user.id)
-    await provisionInstanceDomainBestEffort(instance, relay.id)
-    await runAppEffect(
+    await Effect.runPromise(
+      promiseEffect(async () => {
+        await registerPreparedInstance(relay.id, instance, user.id)
+        await requestRelay(
+          relay,
+          `/v1/instances/${encodeURIComponent(instance.id)}/provision`,
+          { method: "POST" },
+          30_000,
+          user.id
+        )
+      }).pipe(
+        Effect.tapError(() =>
+          Effect.promise(() =>
+            Promise.allSettled([
+              requestRelay(
+                relay,
+                `/v1/instances/${encodeURIComponent(instance.id)}/provision`,
+                { method: "DELETE" },
+                30_000,
+                user.id
+              ),
+              unregisterInstance(relay.id, instance.id),
+            ])
+          )
+        )
+      )
+    )
+    forkAppEffect(
       "relay.snapshot.invalidate",
       invalidateRelayCache(relayCachePolicy.snapshot(relay.id))
     )

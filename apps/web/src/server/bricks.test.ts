@@ -38,6 +38,7 @@ describe("Hearth Brick mutation inputs", () => {
 
   it("rejects browser-supplied recipes during server creation", () => {
     const parsed = hearthCreateInstanceInputSchema.safeParse({
+      idempotencyKey: "55000000-0000-4000-8000-000000000001",
       name: "Example",
       recipe: source,
       recipeDefinition,

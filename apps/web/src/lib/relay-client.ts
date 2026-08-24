@@ -261,8 +261,11 @@ function relayControlRequest(path: string, init?: RequestInit) {
   if (url.pathname === "/v1/instances" && method === "POST") {
     return { operation: "instance.create" as const, payload: body }
   }
+  if (url.pathname === "/v1/instance-provisioning" && method === "POST") {
+    return { operation: "instance.provision.prepare" as const, payload: body }
+  }
   const match = url.pathname.match(
-    /^\/v1\/instances\/([^/]+)(?:\/(tree|directory|file-search|file-stat|file|file-mutations|actions|resources|console|console-completions|console-share|latest-log|ports|web-routes|startup))?$/u
+    /^\/v1\/instances\/([^/]+)(?:\/(tree|directory|file-search|file-stat|file|file-mutations|actions|resources|console|console-completions|console-share|latest-log|ports|web-routes|startup|provision))?$/u
   )
   if (!match) throw new Error("Unsupported Relay request")
   const instanceId = decodeURIComponent(match[1])
@@ -280,6 +283,18 @@ function relayControlRequest(path: string, init?: RequestInit) {
     return {
       operation: "instance.rename" as const,
       payload: { instanceId, name: body.name },
+    }
+  }
+  if (resource === "provision" && method === "POST") {
+    return {
+      operation: "instance.provision.claim" as const,
+      payload: { instanceId },
+    }
+  }
+  if (resource === "provision" && method === "DELETE") {
+    return {
+      operation: "instance.provision.cancel" as const,
+      payload: { instanceId },
     }
   }
   if (resource === "startup" && method === "PUT") {

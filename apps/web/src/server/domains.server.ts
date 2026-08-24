@@ -283,6 +283,16 @@ export async function provisionInstanceDomainBestEffort(
   )
 }
 
+export async function provisionInstanceDomain(
+  instance: RelayInstance,
+  relayId: string
+): Promise<void> {
+  await runAppEffect(
+    "domains.instance.provision",
+    provisionInstanceDomainEffect({ ...instance, relayId }).pipe(Effect.asVoid)
+  )
+}
+
 export const applyManagedDomainAddressesEffect = Effect.fn(
   "domains.assignments.apply"
 )(function* (instances: Array<FleetRelayInstance>) {

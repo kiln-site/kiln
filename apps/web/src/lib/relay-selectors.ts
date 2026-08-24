@@ -58,11 +58,14 @@ export type InstanceWorkspaceInstance = Pick<
   | "javaVersion"
   | "managedByRelay"
   | "name"
+  | "observedState"
   | "pendingPrimaryPort"
   | "ports"
   | "publicHost"
   | "service"
   | "shortId"
+  | "status"
+  | "provisioning"
   | "version"
 > & {
   relayId: string
@@ -199,6 +202,7 @@ export function selectInstanceWorkspaceInstance(identifier: string) {
       javaVersion: instance.javaVersion,
       managedByRelay: instance.managedByRelay,
       name: instance.name,
+      observedState: instance.observedState,
       pendingPrimaryPort: instance.pendingPrimaryPort,
       ports: instance.ports,
       publicHost: instance.publicHost,
@@ -207,6 +211,8 @@ export function selectInstanceWorkspaceInstance(identifier: string) {
       routeId: instance.routeId,
       service: instance.service,
       shortId: instance.shortId,
+      status: instance.status,
+      provisioning: instance.provisioning,
       version: instance.version,
     }
   }

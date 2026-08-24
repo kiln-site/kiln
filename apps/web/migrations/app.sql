@@ -79,6 +79,21 @@ CREATE TABLE IF NOT EXISTS kiln_instance (
     FOREIGN KEY (relay_id) REFERENCES kiln_relay (id) ON DELETE CASCADE
 );
 
+CREATE TABLE IF NOT EXISTS kiln_instance_post_provision (
+  relay_id CHAR(43) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+  instance_id CHAR(40) NOT NULL,
+  attempts INT UNSIGNED NOT NULL DEFAULT 0,
+  next_attempt_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  last_error VARCHAR(512) NULL,
+  created_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  updated_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+  PRIMARY KEY (relay_id, instance_id),
+  KEY kiln_instance_post_provision_due_idx (next_attempt_at, updated_at),
+  CONSTRAINT kiln_instance_post_provision_instance_fk
+    FOREIGN KEY (relay_id, instance_id)
+    REFERENCES kiln_instance (relay_id, instance_id) ON DELETE CASCADE
+);
+
 CREATE TABLE IF NOT EXISTS kiln_database (
   database_id CHAR(40) CHARACTER SET ascii COLLATE ascii_bin NOT NULL PRIMARY KEY,
   relay_id CHAR(43) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,

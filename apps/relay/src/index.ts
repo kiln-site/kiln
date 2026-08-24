@@ -21,6 +21,8 @@ import {
   relayDeleteDatabaseSchema,
   relayAuditQuerySchema,
   relayCreateInstanceSchema,
+  relayPrepareInstanceSchema,
+  relayProvisionInstanceSchema,
   relayInstanceActionSchema,
   relayInstanceNameSchema,
   relayInstanceSchema,
@@ -109,6 +111,7 @@ import { withRemoteFileSource } from "./remote-file-source.js"
 import { RelaySnapshotHub } from "./snapshot-hub.js"
 import { retainProvisioningInstances } from "./instance-mutation-snapshot.js"
 import { RuntimeRecoveryManager } from "./runtime-recovery.js"
+import { ProvisioningManager } from "./provisioning.js"
 import { SystemUpdateManager } from "./system-updates.js"
 import { ScheduleManager } from "./schedules.js"
 import { assignRelayWebRouteIds } from "./web-route-ids.js"
@@ -251,6 +254,17 @@ const snapshotHub = new RelaySnapshotHub(relaySnapshot)
 // Keep one shared snapshot sampler active so crash recovery does not depend on
 // a Hearth control connection. Interactive readers reuse the same cached loop.
 snapshotHub.subscribe(() => undefined, false)
+const provisioningManager = await runRelayEffect(
+  "relay.startup.provisioning",
+  ProvisioningManager.make({
+    lifecycle,
+    refreshSnapshot: () => snapshotHub.refresh(),
+  })
+)
+const provisioningFiber = forkRelayEffect(
+  "relay.provisioning.worker",
+  provisioningManager.run()
+)
 const backupManager = await runRelayEffect(
   "relay.startup.backups",
   BackupManager.make({
@@ -614,6 +628,7 @@ const sftpServer = await Effect.runPromise(
       Effect.sync(() => {
         tailscaleFirewallFiber.interruptUnsafe()
         backupFiber.interruptUnsafe()
+        provisioningFiber.interruptUnsafe()
         scheduleFiber.interruptUnsafe()
         scheduleManager.close()
         lifecycle.close()
@@ -838,6 +853,7 @@ function shutdownRelay(signal: NodeJS.Signals): Promise<void> {
         tailscaleFirewallFiber.interruptUnsafe()
         tlsRefreshFiber.interruptUnsafe()
         backupFiber.interruptUnsafe()
+        provisioningFiber.interruptUnsafe()
         scheduleFiber.interruptUnsafe()
         scheduleManager.close()
         lifecycle.close()
@@ -879,29 +895,41 @@ function shutdownRelay(signal: NodeJS.Signals): Promise<void> {
 }
 
 async function relaySnapshot() {
-  const [node, instances, storedNames, pendingPrimaryPorts, sftpPublication] =
-    await Effect.runPromise(
-      Effect.all(
-        [
-          relayOperation(() => nodeSnapshot(config, docker)),
-          relayOperation(() => docker.inspectInstances()),
-          relayOperation(() =>
-            runRelayEffect(
-              "relay.snapshot.instanceNames",
-              startup.state.listInstanceNames()
-            )
-          ),
-          relayOperation(() =>
-            runRelayEffect(
-              "relay.snapshot.pendingPrimaryPorts",
-              startup.state.listPendingPrimaryPorts()
-            )
-          ),
-          relayOperation(() => docker.relaySftpPublication(sftpServer.port)),
-        ] as const,
-        { concurrency: 4 }
-      )
+  const [
+    node,
+    instances,
+    storedNames,
+    pendingPrimaryPorts,
+    provisioningJobs,
+    sftpPublication,
+  ] = await Effect.runPromise(
+    Effect.all(
+      [
+        relayOperation(() => nodeSnapshot(config, docker)),
+        relayOperation(() => docker.inspectInstances()),
+        relayOperation(() =>
+          runRelayEffect(
+            "relay.snapshot.instanceNames",
+            startup.state.listInstanceNames()
+          )
+        ),
+        relayOperation(() =>
+          runRelayEffect(
+            "relay.snapshot.pendingPrimaryPorts",
+            startup.state.listPendingPrimaryPorts()
+          )
+        ),
+        relayOperation(() =>
+          runRelayEffect(
+            "relay.snapshot.provisioningJobs",
+            startup.state.listProvisioningJobs()
+          )
+        ),
+        relayOperation(() => docker.relaySftpPublication(sftpServer.port)),
+      ] as const,
+      { concurrency: 4 }
     )
+  )
   const visibleInstances = applyStoredPendingPrimaryPorts(
     applyStoredInstanceNames(instances, storedNames),
     pendingPrimaryPorts
@@ -909,9 +937,26 @@ async function relaySnapshot() {
   const retainedInstances = Array.from(instanceMutations.values()).flatMap(
     (entry) => (entry.retainedInstance ? [entry.retainedInstance] : [])
   )
+  const provisioningById = new Map(
+    provisioningJobs.map((job) => [job.instanceId, job.placeholder])
+  )
+  const instancesWithProvisioning = visibleInstances.map((instance) => {
+    const placeholder = provisioningById.get(instance.id)
+    if (!placeholder) return instance
+    provisioningById.delete(instance.id)
+    return {
+      ...instance,
+      observedState: placeholder.observedState,
+      provisioning: placeholder.provisioning,
+      status: placeholder.status,
+    }
+  })
   return {
     node,
-    instances: retainProvisioningInstances(visibleInstances, retainedInstances),
+    instances: retainProvisioningInstances(
+      [...instancesWithProvisioning, ...provisioningById.values()],
+      retainedInstances
+    ),
     relay: {
       id: relayIdentity.fingerprint,
       name: relayIdentity.name,
@@ -1292,6 +1337,39 @@ async function executeControlRequest(
       )
       return refreshRelayInstance(instance)
     }
+    case "instance.provision.prepare": {
+      if (!config.canProvisionInstances) {
+        throw new Error("New server provisioning is disabled on this Relay")
+      }
+      const prepared = relayPrepareInstanceSchema.parse(request.payload)
+      const { idempotencyKey, ...input } = prepared
+      const instanceId = randomBytes(20).toString("hex")
+      const placeholder = await lifecycle.prepareInstance(instanceId, input)
+      return runRelayEffect(
+        "relay.instance.provision.prepare",
+        provisioningManager.prepare({
+          idempotencyKey,
+          input,
+          instanceId,
+          placeholder,
+        })
+      )
+    }
+    case "instance.provision.claim": {
+      const { instanceId } = relayProvisionInstanceSchema.parse(request.payload)
+      return runRelayEffect(
+        "relay.instance.provision.claim",
+        provisioningManager.claim(instanceId)
+      )
+    }
+    case "instance.provision.cancel": {
+      const { instanceId } = relayProvisionInstanceSchema.parse(request.payload)
+      const cancelled = await runRelayEffect(
+        "relay.instance.provision.cancel",
+        provisioningManager.cancel(instanceId)
+      )
+      return { cancelled, instanceId }
+    }
     case "instance.startup.write": {
       const instanceId = requiredString(payload, "instanceId")
       const input = relayUpdateInstanceStartupSchema.parse(payload)
@@ -1329,6 +1407,34 @@ async function executeControlRequest(
     }
     case "instance.delete": {
       const instanceId = requiredString(payload, "instanceId")
+      const provisioningJob = await runRelayEffect(
+        "relay.instance.provision.readForDelete",
+        startup.state.getProvisioningJob(instanceId)
+      )
+      if (provisioningJob) {
+        const cancelled = await runRelayEffect(
+          "relay.instance.provision.cancelForDelete",
+          provisioningManager.cancel(instanceId)
+        )
+        if (!cancelled) {
+          throw new Error(
+            "Wait for server provisioning to finish before deleting it"
+          )
+        }
+        if (
+          provisioningJob.status === "failed" &&
+          (await docker.findInstance(instanceId))
+        ) {
+          await serializeInstanceMutation(instanceId, () =>
+            lifecycle.deleteInstance(instanceId, payload.deleteData === true)
+          )
+        }
+        await runRelayEffect(
+          "relay.instance.deletePreparedName",
+          startup.state.deleteInstanceName(instanceId)
+        )
+        return { deleted: true, instanceId }
+      }
       await serializeInstanceMutation(instanceId, () =>
         lifecycle.deleteInstance(
           instanceId,

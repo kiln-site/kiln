@@ -5,8 +5,16 @@ import { DatabaseSync } from "node:sqlite"
 import { afterAll, assert, describe, it, layer } from "@effect/vitest"
 import { Effect } from "effect"
 import type { BackupTaskInput, BackupTaskResult } from "@workspace/contracts"
+import {
+  relayCreateInstanceSchema,
+  relayInstanceSchema,
+} from "@workspace/contracts"
 
-import { makeRelayStateLayer, RelayStateStore, scrubBackupTaskInputJson } from "./state.js"
+import {
+  makeRelayStateLayer,
+  RelayStateStore,
+  scrubBackupTaskInputJson,
+} from "./state.js"
 
 const testDirectory = mkdtempSync(join(tmpdir(), "kiln-relay-state-"))
 const stateDatabase = join(testDirectory, "relay.sqlite")
@@ -837,13 +845,15 @@ describe("Relay state", () => {
       })
     )
 
-    it.effect("scrubs unparseable terminal journal input to an empty object", () =>
-      Effect.gen(function* () {
-        const store = yield* RelayStateStore
-        const taskId = "41200000-0000-4000-8000-000000000011"
-        yield* Effect.sync(() => {
-          const database = new DatabaseSync(stateDatabase)
-          database.exec(`
+    it.effect(
+      "scrubs unparseable terminal journal input to an empty object",
+      () =>
+        Effect.gen(function* () {
+          const store = yield* RelayStateStore
+          const taskId = "41200000-0000-4000-8000-000000000011"
+          yield* Effect.sync(() => {
+            const database = new DatabaseSync(stateDatabase)
+            database.exec(`
             INSERT INTO relay_backup_tasks (
               task_id, backup_id, kind, status, input_json,
               bytes_completed, created_at, updated_at
@@ -858,44 +868,48 @@ describe("Relay state", () => {
               560
             )
           `)
-          database.close()
+            database.close()
+          })
+          assert.isTrue(
+            yield* store.failBackupTask(taskId, "test finished", 570)
+          )
+          const stored = yield* Effect.sync(() => {
+            const database = new DatabaseSync(stateDatabase)
+            const row = database
+              .prepare(
+                "SELECT input_json AS inputJson FROM relay_backup_tasks WHERE task_id = ?"
+              )
+              .get(taskId) as { inputJson: string } | undefined
+            database.close()
+            return row?.inputJson
+          })
+          assert.strictEqual(stored, "{}")
         })
-        assert.isTrue(yield* store.failBackupTask(taskId, "test finished", 570))
-        const stored = yield* Effect.sync(() => {
-          const database = new DatabaseSync(stateDatabase)
-          const row = database
-            .prepare(
-              "SELECT input_json AS inputJson FROM relay_backup_tasks WHERE task_id = ?"
-            )
-            .get(taskId) as { inputJson: string } | undefined
-          database.close()
-          return row?.inputJson
-        })
-        assert.strictEqual(stored, "{}")
-      })
     )
 
-    it.effect("lists backup tasks when a journal row fails schema parsing", () =>
-      Effect.gen(function* () {
-        const store = yield* RelayStateStore
-        const valid: BackupTaskInput = {
-          artifactKind: "restic_snapshot",
-          backupId: "42000000-0000-4000-8000-000000000001",
-          destination: { kind: "restic", repository: { kind: "local" } },
-          exclude: [],
-          kind: "create",
-          maxBytes: 100,
-          mode: "incremental",
-          reason: "manual",
-          target: { id: "instance-a", kind: "instance" },
-          taskId: "42000000-0000-4000-8000-000000000011",
-        }
-        yield* store.enqueueBackupTask(valid, 600)
-        yield* store.claimNextBackupTask(610)
-        yield* store.failBackupTask(valid.taskId, "backup_too_large", 620)
-        yield* Effect.sync(() => {
-          const database = new DatabaseSync(stateDatabase)
-          database.exec(`
+    it.effect(
+      "lists backup tasks when a journal row fails schema parsing",
+      () =>
+        Effect.gen(function* () {
+          const store = yield* RelayStateStore
+          const valid: BackupTaskInput = {
+            artifactKind: "restic_snapshot",
+            backupId: "42000000-0000-4000-8000-000000000001",
+            destination: { kind: "restic", repository: { kind: "local" } },
+            exclude: [],
+            kind: "create",
+            maxBytes: 100,
+            mode: "incremental",
+            reason: "manual",
+            target: { id: "instance-a", kind: "instance" },
+            taskId: "42000000-0000-4000-8000-000000000011",
+          }
+          yield* store.enqueueBackupTask(valid, 600)
+          yield* store.claimNextBackupTask(610)
+          yield* store.failBackupTask(valid.taskId, "backup_too_large", 620)
+          yield* Effect.sync(() => {
+            const database = new DatabaseSync(stateDatabase)
+            database.exec(`
             INSERT INTO relay_backup_tasks (
               task_id, backup_id, kind, status, input_json, result_json,
               bytes_completed, created_at, started_at, finished_at, updated_at
@@ -913,30 +927,32 @@ describe("Relay state", () => {
               630
             )
           `)
-          database.close()
-        })
+            database.close()
+          })
 
-        const listed = yield* store.listBackupTasks()
-        const listedIds = listed.map((task) => task.taskId)
-        assert.include(listedIds, valid.taskId)
-        const fallback = listed.find(
-          (task) => task.taskId === "42000000-0000-4000-8000-000000000012"
-        )
-        assert.strictEqual(fallback?.status, "failed")
-        assert.strictEqual(fallback?.kind, "export")
-        assert.include(
-          fallback?.error ?? "",
-          "journal row could not be parsed"
-        )
-      })
+          const listed = yield* store.listBackupTasks()
+          const listedIds = listed.map((task) => task.taskId)
+          assert.include(listedIds, valid.taskId)
+          const fallback = listed.find(
+            (task) => task.taskId === "42000000-0000-4000-8000-000000000012"
+          )
+          assert.strictEqual(fallback?.status, "failed")
+          assert.strictEqual(fallback?.kind, "export")
+          assert.include(
+            fallback?.error ?? "",
+            "journal row could not be parsed"
+          )
+        })
     )
 
-    it.effect("claims past a queued journal row that fails schema parsing", () =>
-      Effect.gen(function* () {
-        const store = yield* RelayStateStore
-        yield* Effect.sync(() => {
-          const database = new DatabaseSync(stateDatabase)
-          database.exec(`
+    it.effect(
+      "claims past a queued journal row that fails schema parsing",
+      () =>
+        Effect.gen(function* () {
+          const store = yield* RelayStateStore
+          yield* Effect.sync(() => {
+            const database = new DatabaseSync(stateDatabase)
+            database.exec(`
             INSERT INTO relay_backup_tasks (
               task_id, backup_id, kind, status, input_json,
               bytes_completed, created_at, updated_at
@@ -951,28 +967,28 @@ describe("Relay state", () => {
               100
             )
           `)
-          database.close()
+            database.close()
+          })
+          const valid: BackupTaskInput = {
+            backupId: "44000000-0000-4000-8000-000000000002",
+            kind: "export",
+            repository: { kind: "local" },
+            snapshotId: "abcdef12",
+            target: { id: "instance-a", kind: "instance" },
+            taskId: "44000000-0000-4000-8000-000000000012",
+            ttlMs: 60_000,
+          }
+          yield* store.enqueueBackupTask(valid, 900)
+          const claimed = yield* store.claimNextBackupTask(910)
+          assert.strictEqual(claimed?.taskId, valid.taskId)
+          assert.strictEqual(claimed?.status, "running")
+          const corrupt = yield* store.listBackupTasks()
+          const failed = corrupt.find(
+            (task) => task.taskId === "44000000-0000-4000-8000-000000000011"
+          )
+          assert.strictEqual(failed?.status, "failed")
+          yield* store.failBackupTask(valid.taskId, "test finished", 920)
         })
-        const valid: BackupTaskInput = {
-          backupId: "44000000-0000-4000-8000-000000000002",
-          kind: "export",
-          repository: { kind: "local" },
-          snapshotId: "abcdef12",
-          target: { id: "instance-a", kind: "instance" },
-          taskId: "44000000-0000-4000-8000-000000000012",
-          ttlMs: 60_000,
-        }
-        yield* store.enqueueBackupTask(valid, 900)
-        const claimed = yield* store.claimNextBackupTask(910)
-        assert.strictEqual(claimed?.taskId, valid.taskId)
-        assert.strictEqual(claimed?.status, "running")
-        const corrupt = yield* store.listBackupTasks()
-        const failed = corrupt.find(
-          (task) => task.taskId === "44000000-0000-4000-8000-000000000011"
-        )
-        assert.strictEqual(failed?.status, "failed")
-        yield* store.failBackupTask(valid.taskId, "test finished", 920)
-      })
     )
 
     it.effect("prunes superseded succeeded export journal rows", () =>
@@ -1013,6 +1029,83 @@ describe("Relay state", () => {
           [second.taskId]
         )
         yield* store.failBackupTask(second.taskId, "test finished", 740)
+      })
+    )
+
+    it.effect("durably claims and reports an instance provisioning job", () =>
+      Effect.gen(function* () {
+        const store = yield* RelayStateStore
+        const instanceId = "a".repeat(40)
+        const input = relayCreateInstanceSchema.parse({
+          diskLimitBytes: 25 * 1024 ** 3,
+          name: "Instant server",
+          recipe: "https://example.com/brick.yml",
+          start: false,
+          variables: {},
+        })
+        const placeholder = relayInstanceSchema.parse({
+          connectAddress: "relay.example.com",
+          containerId: null,
+          desiredState: "stopped",
+          directory: instanceId,
+          game: "Minecraft",
+          id: instanceId,
+          implementation: "Paper",
+          javaVersion: "Java 21",
+          limits: { diskBytes: input.diskLimitBytes, memoryBytes: 0 },
+          managedByRelay: true,
+          name: input.name,
+          observedState: "provisioning",
+          ports: [],
+          provisioning: {
+            attempt: 0,
+            error: null,
+            phase: "awaiting_claim",
+          },
+          resources: null,
+          service: `kiln-${instanceId}`,
+          shortId: instanceId.slice(0, 8),
+          status: "Waiting for Hearth",
+          version: "1.21.8",
+        })
+
+        const enqueued = yield* store.enqueueProvisioningJob(
+          {
+            idempotencyKey: "55000000-0000-4000-8000-000000000001",
+            input,
+            instanceId,
+            placeholder,
+          },
+          1_000
+        )
+        assert.strictEqual(enqueued.status, "awaiting_claim")
+        const duplicate = yield* store.enqueueProvisioningJob(
+          {
+            idempotencyKey: enqueued.idempotencyKey,
+            input,
+            instanceId: "b".repeat(40),
+            placeholder: { ...placeholder, id: "b".repeat(40) },
+          },
+          1_001
+        )
+        assert.strictEqual(duplicate.instanceId, instanceId)
+
+        assert.strictEqual(
+          (yield* store.claimProvisioningJob(instanceId, 1_010))?.status,
+          "queued"
+        )
+        const running = yield* store.claimNextProvisioningJob(1_020)
+        assert.strictEqual(running?.status, "running")
+        assert.strictEqual(running?.attempt, 1)
+        assert.strictEqual(
+          yield* store.requeueInterruptedProvisioningJobs(1_030),
+          1
+        )
+        const failed = yield* store.getProvisioningJob(instanceId)
+        assert.strictEqual(failed?.status, "failed")
+        assert.strictEqual(failed?.placeholder.provisioning?.phase, "failed")
+        assert.isTrue(yield* store.cancelProvisioningJob(instanceId))
+        assert.isNull(yield* store.getProvisioningJob(instanceId))
       })
     )
   })

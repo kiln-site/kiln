@@ -22,6 +22,7 @@ import type {
   BrickRecipe,
   RelayCreateInstance,
   RelayInstance,
+  RelayInstanceProvisioning,
   RelayInstancePendingPrimaryPort,
   RelayInstancePortAllocation,
   RelayInstancePortInput,
@@ -46,6 +47,7 @@ import {
   builtinTailscaleBrickSource,
   relayDiskAllocationAvailableBytes,
   relayProxySettingsSchema,
+  relayInstanceSchema,
   relayTailscaleOverviewSchema,
   relayTailscaleSettingsSchema,
   relayTailscaleStackConfigSchema,
@@ -1901,16 +1903,116 @@ export class LifecycleDriver {
   }
 
   async createInstance(input: RelayCreateInstance): Promise<RelayInstance> {
+    const id = randomBytes(32).toString("hex").slice(0, 40)
+    return this.createInstanceWithId(id, input)
+  }
+
+  async prepareInstance(
+    id: string,
+    input: RelayCreateInstance
+  ): Promise<RelayInstance> {
     if (input.recipe === builtinTailscaleBrickSource) {
       throw new Error(
         "Create Tailscale from the Tailscale page so Hearth can place its node deployments"
       )
     }
-    const id = randomBytes(32).toString("hex").slice(0, 40)
+    const definition =
+      input.recipeDefinition ?? (await this.#bricks.recipe(input.recipe))
+    const snapshotSha256 = await this.#bricks.saveSnapshot(definition)
+    const resolved = resolveBrick(definition, input.variables, input.recipe)
+    const primaryPort = definition.network.ports.find(
+      (port) => port.name === definition.network.primaryPort
+    )
+    if (!primaryPort) {
+      throw new Error("Brick primary network port disappeared after validation")
+    }
+    const architecture =
+      process.arch === "x64"
+        ? "amd64"
+        : process.arch === "arm64"
+          ? "arm64"
+          : null
+    if (
+      definition.constraints.architectures &&
+      (!architecture ||
+        !definition.constraints.architectures.includes(architecture))
+    ) {
+      throw new Error(
+        `${definition.metadata.name} does not support Relay architecture ${architecture}`
+      )
+    }
+    const installationMarkerValue =
+      resolved.environment[INSTALLATION_MARKER_ENV]
+    if (
+      installationMarkerValue &&
+      !installationMarkerName(installationMarkerValue)
+    ) {
+      throw new Error(
+        `${INSTALLATION_MARKER_ENV} must be a .kiln-* filename containing only letters, numbers, dots, underscores, or hyphens`
+      )
+    }
+    const version = Object.hasOwn(resolved.values, "version")
+      ? String(resolved.values.version)
+      : "custom"
+    return relayInstanceSchema.parse({
+      brickFormat: definition.format,
+      brickId: definition.metadata.id,
+      brickNetworkMode: definition.network.mode,
+      brickPrimaryPort: primaryPort.container,
+      brickPrimaryPortProtocol: primaryPort.protocol,
+      brickSnapshotSha256: snapshotSha256,
+      brickSource: input.recipe,
+      brickSupportsSrv: definition.network.supportsSrv,
+      connectAddress: this.#config.gameHost,
+      containerId: null,
+      desiredState: input.start ? "running" : "stopped",
+      directory: id,
+      game: definition.metadata.game,
+      id,
+      implementation: definition.metadata.name,
+      javaVersion: resolved.runtimeName,
+      limits: {
+        diskBytes: input.diskLimitBytes,
+        memoryBytes: dockerMemoryBytes(resolved.memory),
+      },
+      managedByRelay: true,
+      name: input.name ?? `kiln-${id.slice(0, 8)}`,
+      observedState: "provisioning",
+      ports: [],
+      provisioning: {
+        attempt: 0,
+        error: null,
+        phase: "awaiting_claim",
+      },
+      publicHost: this.#config.gameHost,
+      recovery: null,
+      resources: null,
+      service: this.#resources.instanceContainer(id),
+      shortId: id.slice(0, 8),
+      startedAt: null,
+      stateReason: null,
+      status: "Waiting for Hearth",
+      tailscale: input.tailscale ?? { enabled: false },
+      variables: resolved.values,
+      version,
+    })
+  }
+
+  async createInstanceWithId(
+    id: string,
+    input: RelayCreateInstance,
+    onPhase?: (phase: RelayInstanceProvisioning["phase"]) => Promise<void>
+  ): Promise<RelayInstance> {
+    if (input.recipe === builtinTailscaleBrickSource) {
+      throw new Error(
+        "Create Tailscale from the Tailscale page so Hearth can place its node deployments"
+      )
+    }
     return this.#provisionManagedInstance({
       diskLimitBytes: input.diskLimitBytes,
       grandfatheredDiskLimitBytes: 0,
       id,
+      onPhase,
       prepareDirectory: true,
       recipe: input.recipe,
       recipeDefinition: input.recipeDefinition,
@@ -2034,6 +2136,7 @@ export class LifecycleDriver {
     diskLimitBytes: number
     grandfatheredDiskLimitBytes: number
     id: string
+    onPhase?: (phase: RelayInstanceProvisioning["phase"]) => Promise<void>
     prepareDirectory: boolean
     ports?: ReadonlyArray<RelayInstancePortAllocation>
     recipe: string
@@ -2044,6 +2147,7 @@ export class LifecycleDriver {
     tailscale: RelayInstanceTailscale
     variables: RelayCreateInstance["variables"]
   }): Promise<RelayInstance> {
+    await input.onPhase?.("preparing")
     const definition =
       input.recipeDefinition ??
       (await this.#bricks.recipe(input.recipe, input.snapshotSha256))
@@ -2165,6 +2269,7 @@ export class LifecycleDriver {
         command("docker", ["pull", image], { timeout: 300_000 })
       )
     if (!input.skipImagePull) {
+      await input.onPhase?.("pulling_image")
       if (installationMarker) {
         await runLifecycle(
           pullImage().pipe(
@@ -2392,9 +2497,11 @@ export class LifecycleDriver {
     arguments_.push(...(definition.runtime.entrypoint?.slice(1) ?? []))
     arguments_.push(...(definition.runtime.command ?? []))
 
+    await input.onPhase?.("creating_container")
     await runLifecycle(
       lifecycleOperation(async () => {
         await command("docker", arguments_, { timeout: 60_000 })
+        await input.onPhase?.("finalizing")
         if (usesExternalEdge && webRoutes.length > 0) {
           await command("docker", [
             "network",
