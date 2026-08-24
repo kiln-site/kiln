@@ -30,7 +30,6 @@ import {
 } from "@workspace/ui/components/select"
 import { showToast } from "@workspace/ui/components/sonner"
 
-import { copyTextToClipboard } from "@/lib/clipboard"
 import type { RelayFleetSnapshot } from "@/lib/relay-fleet"
 import {
   backupStorageQueryOptions,
@@ -86,13 +85,23 @@ export const ServerDeleteDialog = React.memo(function ServerDeleteDialog({
   )
 
   async function copyServerId() {
-    const copiedId = await copyTextToClipboard(target.id)
-    if (!copiedId) {
-      setError("Could not copy the server ID. Select and copy it manually.")
-      return
-    }
-    setCopied(true)
-    setError(null)
+    await Effect.runPromise(
+      Effect.tryPromise({
+        try: () => navigator.clipboard.writeText(target.id),
+        catch: (cause) => cause,
+      }).pipe(
+        Effect.match({
+          onFailure: () =>
+            setError(
+              "Could not copy the server ID. Select and copy it manually."
+            ),
+          onSuccess: () => {
+            setCopied(true)
+            setError(null)
+          },
+        })
+      )
+    )
   }
 
   async function removeServer(event: React.FormEvent<HTMLFormElement>) {
