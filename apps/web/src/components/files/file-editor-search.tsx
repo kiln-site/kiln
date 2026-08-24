@@ -6,7 +6,6 @@ import { Input } from "@workspace/ui/components/input"
 import { Popover, PopoverContent } from "@workspace/ui/components/popover"
 
 import type { SyntaxCodeEditorHandle } from "@/components/syntax-code-editor"
-import { EditorTooltip } from "@/components/files/editor-tooltip"
 import type {
   EditorSearchStore,
   EditorSessionStore,
@@ -54,36 +53,6 @@ export function EditorSearchBoundary({
         />
       </PopoverContent>
     </Popover>
-  )
-}
-
-function EditorSearchToggleButtonContent({
-  loading,
-  sessionStore,
-}: {
-  loading: boolean
-  sessionStore: EditorSessionStore
-}) {
-  const open = React.useSyncExternalStore(
-    sessionStore.subscribe,
-    sessionStore.getSearchOpenSnapshot,
-    sessionStore.getSearchOpenSnapshot
-  )
-  return (
-    <EditorTooltip content={open ? "Hide Search in File" : "Search in File"}>
-      <Button
-        variant={open ? "secondary" : "ghost"}
-        size="icon"
-        className="disabled:opacity-100"
-        aria-label={open ? "Close file search" : "Search file"}
-        aria-pressed={open}
-        aria-keyshortcuts="Control+F Meta+F"
-        disabled={loading}
-        onClick={() => sessionStore.setSearchOpen(!open)}
-      >
-        <Search className="size-[17px]" />
-      </Button>
-    </EditorTooltip>
   )
 }
 
@@ -158,7 +127,3 @@ function EditorSearchContent({
     </div>
   )
 }
-
-export const EditorSearchToggleButton = React.memo(
-  EditorSearchToggleButtonContent
-)

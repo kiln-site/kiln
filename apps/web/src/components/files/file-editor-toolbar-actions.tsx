@@ -13,6 +13,7 @@ import {
   Pin,
   PinOff,
   Save,
+  Search,
   Share2,
   TriangleAlert,
   WrapText,
@@ -46,7 +47,6 @@ import {
   mclogsShareTooltip,
   useMclogsShareAction,
 } from "@/components/use-mclogs-share-action"
-import { WorkspaceLineWrapButton } from "@/components/workspace-line-wrap-button"
 import {
   type EditorSessionStore,
   fileEditorFontSizes,
@@ -115,7 +115,7 @@ function EditorShareButton({
         }
         size="default"
         className="h-8 shrink-0 gap-1.5 px-2.5 text-xs shadow-none disabled:opacity-100"
-        aria-label={`Upload ${formatName(path)} to mclo.gs and copy link`}
+        aria-label={`Share ${formatName(path)} via mclo.gs and copy link`}
         disabled={state === "uploading" || loading}
         onClick={share}
       >
@@ -128,7 +128,7 @@ function EditorShareButton({
         ) : (
           <Share2 className="size-[17px]" />
         )}
-        <span>{mclogsShareLabel(state)}</span>
+        <span>{state === "idle" ? "Share" : mclogsShareLabel(state)}</span>
       </Button>
     </EditorTooltip>
   )
@@ -152,57 +152,6 @@ function useEditorCopyAction(sessionStore: EditorSessionStore) {
   }
 
   return { copied, copy }
-}
-
-function EditorCopyButton({
-  sessionStore,
-}: {
-  sessionStore: EditorSessionStore
-}) {
-  const { copied, copy } = useEditorCopyAction(sessionStore)
-
-  return (
-    <EditorTooltip
-      content={copied ? "File Contents Copied" : "Copy File Contents"}
-    >
-      <Button
-        variant={copied ? "secondary" : "ghost"}
-        size="icon"
-        aria-label={copied ? "File Contents Copied" : "Copy File Contents"}
-        onClick={copy}
-      >
-        {copied ? (
-          <Check className="size-[17px]" />
-        ) : (
-          <Copy className="size-[17px]" />
-        )}
-      </Button>
-    </EditorTooltip>
-  )
-}
-
-function EditorWrapButton({
-  sessionStore,
-}: {
-  sessionStore: EditorSessionStore
-}) {
-  const wrapLines = React.useSyncExternalStore(
-    sessionStore.subscribe,
-    sessionStore.getWrapLinesSnapshot,
-    sessionStore.getWrapLinesSnapshot
-  )
-  return (
-    <EditorTooltip
-      content={wrapLines ? "Disable Line Wrap" : "Enable Line Wrap"}
-    >
-      <WorkspaceLineWrapButton
-        wrapLines={wrapLines}
-        ariaLabel={wrapLines ? "Disable line wrap" : "Enable line wrap"}
-        iconClassName="size-[17px]"
-        onToggle={sessionStore.toggleWrapLines}
-      />
-    </EditorTooltip>
-  )
 }
 
 function EditorReviewChangesMenuItem({
@@ -355,6 +304,7 @@ function EditorOverflowMenu({
   fileReadOnly,
   instance,
   loading,
+  preferencesStore,
   saveFile,
   sessionStore,
 }: {
@@ -364,6 +314,7 @@ function EditorOverflowMenu({
   fileReadOnly: boolean
   instance: InstanceWorkspaceInstance
   loading: boolean
+  preferencesStore: FileEditorPreferencesStore
   saveFile: SaveFileRevision
   sessionStore: EditorSessionStore
 }) {
@@ -390,9 +341,17 @@ function EditorOverflowMenu({
           collisionPadding={8}
           className="w-[min(17rem,calc(100vw-1rem))] p-1"
         >
-          <p className="type-technical-label border-b px-2 py-2 text-muted-foreground">
+          <p className="type-technical-label px-2 pt-1 pb-1.5 text-muted-foreground">
             File actions
           </p>
+          <EditorFontSizeSection preferencesStore={preferencesStore} />
+          <EditorSearchActionMenuItem
+            loading={loading}
+            sessionStore={sessionStore}
+            onSelect={() => setOpen(false)}
+          />
+          <EditorCopyActionMenuItem sessionStore={sessionStore} />
+          <EditorWrapActionMenuItem sessionStore={sessionStore} />
           <FilePinActionMenuItem
             canWrite={canWrite}
             editorLoading={loading}
@@ -437,7 +396,7 @@ function EditorOverflowMenu({
   )
 }
 
-function EditorMobileFontSizeSection({
+function EditorFontSizeSection({
   preferencesStore,
 }: {
   preferencesStore: FileEditorPreferencesStore
@@ -528,6 +487,36 @@ function EditorWrapActionMenuItem({
       label="Wrap long lines"
       detail="Fit text to the editor"
       onClick={sessionStore.toggleWrapLines}
+    />
+  )
+}
+
+function EditorSearchActionMenuItem({
+  loading,
+  sessionStore,
+  onSelect,
+}: {
+  loading: boolean
+  sessionStore: EditorSessionStore
+  onSelect: () => void
+}) {
+  const open = React.useSyncExternalStore(
+    sessionStore.subscribe,
+    sessionStore.getSearchOpenSnapshot,
+    sessionStore.getSearchOpenSnapshot
+  )
+
+  return (
+    <FileActionMenuItem
+      active={open}
+      icon={<Search />}
+      label={open ? "Close search" : "Search in file"}
+      detail="Find text in the editor"
+      disabled={loading}
+      onClick={() => {
+        onSelect()
+        sessionStore.setSearchOpen(!open)
+      }}
     />
   )
 }
@@ -663,7 +652,7 @@ function EditorMobileOverflowMenu({
           <p className="type-technical-label px-2 pt-1 pb-1.5 text-muted-foreground">
             File actions
           </p>
-          <EditorMobileFontSizeSection preferencesStore={preferencesStore} />
+          <EditorFontSizeSection preferencesStore={preferencesStore} />
           {canShare ? (
             <EditorShareActionMenuItem
               instance={instance}
@@ -672,6 +661,12 @@ function EditorMobileOverflowMenu({
               sessionStore={sessionStore}
             />
           ) : null}
+          <EditorSearchActionMenuItem
+            loading={loading}
+            sessionStore={sessionStore}
+            onSelect={() => setOpen(false)}
+          />
+          <EditorCopyActionMenuItem sessionStore={sessionStore} />
           <FilePinActionMenuItem
             canWrite={canWrite}
             editorLoading={loading}
@@ -679,7 +674,6 @@ function EditorMobileOverflowMenu({
             path={filePath}
           />
           <EditorWrapActionMenuItem sessionStore={sessionStore} />
-          <EditorCopyActionMenuItem sessionStore={sessionStore} />
           <EditorReviewChangesMenuItem
             fileReadOnly={fileReadOnly}
             labelMode="static"
@@ -887,48 +881,6 @@ export function EditorSaveButton({
   )
 }
 
-function EditorFontSizeButton({
-  preferencesStore,
-}: {
-  preferencesStore: FileEditorPreferencesStore
-}) {
-  const [open, setOpen] = React.useState(false)
-  const fontSize = React.useSyncExternalStore(
-    preferencesStore.subscribe,
-    preferencesStore.getFontSizeSnapshot,
-    preferencesStore.getFontSizeSnapshot
-  )
-
-  return (
-    <Popover open={open} onOpenChange={setOpen}>
-      <EditorTooltip content="File Text Size">
-        <PopoverTrigger asChild>
-          <Button
-            variant={open ? "secondary" : "ghost"}
-            size="icon"
-            aria-label={`File text size, ${fontSize} pixels`}
-            aria-expanded={open}
-          >
-            <ALargeSmall className="size-[18px]" />
-          </Button>
-        </PopoverTrigger>
-      </EditorTooltip>
-      <PopoverContent
-        align="end"
-        side="bottom"
-        sideOffset={7}
-        collisionPadding={12}
-        className="w-[min(13rem,calc(100vw-1rem))] p-2.5"
-      >
-        <EditorFontSizeControl
-          fontSize={fontSize}
-          onFontSizeChange={preferencesStore.setFontSize}
-        />
-      </PopoverContent>
-    </Popover>
-  )
-}
-
 function EditorFontSizeControl({
   fontSize,
   onFontSizeChange,
@@ -980,9 +932,6 @@ function queryErrorMessage(error: Error | null, fallback: string) {
 }
 
 export const StableEditorShareButton = React.memo(EditorShareButton)
-export const StableEditorFontSizeButton = React.memo(EditorFontSizeButton)
-export const StableEditorWrapButton = React.memo(EditorWrapButton)
-export const StableEditorCopyButton = React.memo(EditorCopyButton)
 export const StableEditorOverflowMenu = React.memo(EditorOverflowMenu)
 export const StableEditorMobileOverflowMenu = React.memo(
   EditorMobileOverflowMenu

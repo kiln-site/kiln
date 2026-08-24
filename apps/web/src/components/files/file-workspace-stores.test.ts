@@ -1,12 +1,79 @@
-import { describe, expect, it } from "vite-plus/test"
+import { afterEach, describe, expect, it, vi } from "vite-plus/test"
 
 import {
   createEditorSessionStore,
+  createFileEditorPreferencesStore,
   deletedPathContainsSelection,
 } from "@/components/files/file-workspace-stores"
 
 const firstRevision = "2026-07-23T12:00:00.000Z"
 const secondRevision = "2026-07-23T12:01:00.000Z"
+const fontSizeStorageKey = "kiln:file-editor-font-size"
+
+afterEach(() => vi.unstubAllGlobals())
+
+function installBrowserStorage({
+  fontSize,
+  width,
+}: {
+  fontSize?: number
+  width: number
+}) {
+  const values = new Map<string, string>()
+  if (fontSize !== undefined) {
+    values.set(fontSizeStorageKey, String(fontSize))
+  }
+  vi.stubGlobal("window", {
+    innerWidth: width,
+    localStorage: {
+      getItem: (key: string) => values.get(key) ?? null,
+      removeItem: (key: string) => values.delete(key),
+      setItem: (key: string, value: string) => values.set(key, value),
+    },
+  })
+  return values
+}
+
+describe("file editor font size preferences", () => {
+  it("uses 12px by default and removes the desktop override at 12px", () => {
+    const storage = installBrowserStorage({ width: 1280 })
+    const store = createFileEditorPreferencesStore()
+
+    store.hydrate()
+    expect(store.getFontSizeSnapshot()).toBe(12)
+
+    store.setFontSize(14)
+    expect(storage.get(fontSizeStorageKey)).toBe("14")
+
+    store.setFontSize(12)
+    expect(storage.has(fontSizeStorageKey)).toBe(false)
+  })
+
+  it("uses 16px on mobile and removes the mobile override at 16px", () => {
+    const storage = installBrowserStorage({ width: 390 })
+    const store = createFileEditorPreferencesStore()
+
+    store.hydrate()
+    expect(store.getFontSizeSnapshot()).toBe(16)
+
+    store.setFontSize(14)
+    expect(storage.get(fontSizeStorageKey)).toBe("14")
+
+    store.setFontSize(16)
+    expect(storage.has(fontSizeStorageKey)).toBe(false)
+  })
+
+  it("keeps a stored browser override across responsive defaults", () => {
+    installBrowserStorage({ fontSize: 14, width: 390 })
+    const store = createFileEditorPreferencesStore()
+
+    store.hydrate()
+    expect(store.getFontSizeSnapshot()).toBe(14)
+
+    store.setDefaultFontSize(12)
+    expect(store.getFontSizeSnapshot()).toBe(14)
+  })
+})
 
 describe("editor session revisions", () => {
   it("adopts a newer disk revision while the session is clean", () => {

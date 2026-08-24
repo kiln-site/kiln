@@ -1,9 +1,16 @@
 import * as Sentry from "@sentry/tanstackstart-react"
 import { Result } from "effect"
 
+import { mobileBreakpoint } from "@workspace/ui/hooks/use-mobile"
+
 export const fileEditorFontSizes = [10, 11, 12, 14, 16]
 const fileEditorFontSizeStorageKey = "kiln:file-editor-font-size"
-const defaultFileEditorFontSize = 16
+const desktopFileEditorFontSize = 12
+const mobileFileEditorFontSize = 16
+
+export function defaultFileEditorFontSize(isMobile: boolean): number {
+  return isMobile ? mobileFileEditorFontSize : desktopFileEditorFontSize
+}
 
 export function deletedPathContainsSelection(
   deletedPath: string,
@@ -23,6 +30,7 @@ export interface EditorSearchStore {
 export interface FileEditorPreferencesStore {
   getFontSizeSnapshot: () => number
   hydrate: () => void
+  setDefaultFontSize: (fontSize: number) => void
   setFontSize: (fontSize: number) => void
   subscribe: (listener: () => void) => () => void
 }
@@ -142,40 +150,66 @@ export function createEditorSearchStore(): EditorSearchStore {
 }
 
 export function createFileEditorPreferencesStore(): FileEditorPreferencesStore {
-  let fontSize = defaultFileEditorFontSize
+  let currentDefaultFontSize = desktopFileEditorFontSize
+  let fontSize = currentDefaultFontSize
+  let hasStoredOverride = false
   const listeners = new Set<() => void>()
   const notify = () => {
     for (const listener of listeners) listener()
   }
-  const setFontSize = (nextFontSize: number) => {
+  const updateFontSize = (nextFontSize: number) => {
+    if (fontSize === nextFontSize) return
+    fontSize = nextFontSize
+    notify()
+  }
+  const setDefaultFontSize = (nextDefaultFontSize: number) => {
     if (
-      fontSize === nextFontSize ||
-      !fileEditorFontSizes.includes(nextFontSize)
+      currentDefaultFontSize === nextDefaultFontSize ||
+      !fileEditorFontSizes.includes(nextDefaultFontSize)
     ) {
       return
     }
-    fontSize = nextFontSize
-    Result.try(() =>
-      window.localStorage.setItem(
-        fileEditorFontSizeStorageKey,
-        String(nextFontSize)
-      )
-    )
+    currentDefaultFontSize = nextDefaultFontSize
+    if (!hasStoredOverride) updateFontSize(nextDefaultFontSize)
+  }
+  const setFontSize = (nextFontSize: number) => {
+    if (!fileEditorFontSizes.includes(nextFontSize)) return
+    hasStoredOverride = nextFontSize !== currentDefaultFontSize
+    Result.try(() => {
+      if (hasStoredOverride) {
+        window.localStorage.setItem(
+          fileEditorFontSizeStorageKey,
+          String(nextFontSize)
+        )
+      } else {
+        window.localStorage.removeItem(fileEditorFontSizeStorageKey)
+      }
+    })
     // The editor remains usable when browser storage is unavailable.
-    notify()
+    updateFontSize(nextFontSize)
   }
   return {
     getFontSizeSnapshot: () => fontSize,
     hydrate: () => {
       Result.try(() => {
-        const storedValue = Number.parseInt(
-          window.localStorage.getItem(fileEditorFontSizeStorageKey) ?? "",
-          10
+        setDefaultFontSize(
+          defaultFileEditorFontSize(window.innerWidth < mobileBreakpoint)
         )
-        setFontSize(storedValue)
+        const stored = window.localStorage.getItem(
+          fileEditorFontSizeStorageKey
+        )
+        const storedValue = Number.parseInt(stored ?? "", 10)
+        hasStoredOverride = fileEditorFontSizes.includes(storedValue)
+        if (!hasStoredOverride && stored !== null) {
+          window.localStorage.removeItem(fileEditorFontSizeStorageKey)
+        }
+        updateFontSize(
+          hasStoredOverride ? storedValue : currentDefaultFontSize
+        )
       })
       // Keep the default when browser storage is unavailable.
     },
+    setDefaultFontSize,
     setFontSize,
     subscribe: (listener) => {
       listeners.add(listener)
