@@ -162,7 +162,7 @@ const AppSidebarView = React.memo(function AppSidebarView({
             <SidebarMenuItem>
               <SidebarMenuButton
                 size="lg"
-                className="h-11 data-[state=open]:bg-sidebar-accent"
+                className="h-11 hover:bg-transparent active:bg-transparent data-[state=open]:bg-transparent"
                 tooltip="Kiln"
               >
                 <HearthMark className="group-data-[collapsible=icon]:size-[32px]!" />
