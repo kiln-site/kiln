@@ -496,7 +496,7 @@ const ServerSelector = React.memo(function ServerSelector({
                 ? `Switch server. ${instance.name}, ${instance.implementation} ${instance.version}, ${serverStatusLabel(instance.observedState)}`
                 : "Choose a server"
             }
-            className="mb-1.5 h-11 border border-sidebar-border/75 bg-background/35 px-2 py-2 group-data-[collapsible=icon]:h-[32px]! group-data-[collapsible=icon]:overflow-visible group-data-[collapsible=icon]:bg-black/10 hover:border-sidebar-border hover:bg-sidebar-accent group-data-[collapsible=icon]:hover:bg-black/15 data-[state=open]:border-sidebar-border data-[state=open]:bg-sidebar-accent dark:group-data-[collapsible=icon]:bg-black/25 dark:group-data-[collapsible=icon]:hover:bg-black/35"
+            className="mb-1.5 h-auto border border-sidebar-border/75 bg-background/35 px-2 py-2 group-data-[collapsible=icon]:h-[32px]! group-data-[collapsible=icon]:overflow-visible group-data-[collapsible=icon]:bg-black/10 hover:border-sidebar-border hover:bg-sidebar-accent group-data-[collapsible=icon]:hover:bg-black/15 data-[state=open]:border-sidebar-border data-[state=open]:bg-sidebar-accent dark:group-data-[collapsible=icon]:bg-black/25 dark:group-data-[collapsible=icon]:hover:bg-black/35"
           >
             <span className="relative grid size-7 shrink-0 place-items-center rounded-md border border-sidebar-border/70 bg-background/25 group-data-[collapsible=icon]:absolute group-data-[collapsible=icon]:inset-0 group-data-[collapsible=icon]:m-auto group-data-[collapsible=icon]:size-6 group-data-[collapsible=icon]:rounded-none group-data-[collapsible=icon]:border-0 group-data-[collapsible=icon]:bg-transparent">
               <ServerTypeIcon
@@ -724,7 +724,7 @@ const VirtualizedServerSelectorResults = React.memo(
               <div
                 key={virtualRow.key}
                 ref={rowVirtualizer.measureElement}
-                className="absolute top-0 left-0 w-full"
+                className={`absolute top-0 left-0 w-full pb-0.5 ${virtualRow.index < instances.length - 1 ? "border-b border-border/50" : ""}`}
                 data-index={virtualRow.index}
                 style={{ top: virtualRow.start }}
               >
@@ -745,10 +745,10 @@ const VirtualizedServerSelectorResults = React.memo(
   }
 )
 
-const serverSelectorRowGap = 2
+const serverSelectorRowGap = 3
 
 function estimateServerSelectorRowSize(): number {
-  return 48
+  return 46
 }
 
 function serverSelectorResultsAreEqual(
