@@ -1596,7 +1596,11 @@ function prepareFileWrite(
 }
 
 function isBinaryNbtPath(lowerPath: string) {
-  return lowerPath.endsWith(".dat") || lowerPath.endsWith(".nbt")
+  return (
+    lowerPath.endsWith(".dat") ||
+    lowerPath.endsWith(".dat_old") ||
+    lowerPath.endsWith(".nbt")
+  )
 }
 
 function isGzip(source: Uint8Array) {

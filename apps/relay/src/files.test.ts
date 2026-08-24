@@ -198,6 +198,15 @@ describe("Relay NBT file editing", () => {
           )
           yield* fromPromise(() => writeFile(path, original))
 
+          const backupPath = resolve(root, "world", "level.dat_old")
+          yield* fromPromise(() => writeFile(backupPath, original))
+          const openedBackup = yield* driver.read(
+            instance,
+            "world/level.dat_old"
+          )
+          assert.strictEqual(openedBackup.encoding, "nbt-gzip")
+          assert.include(openedBackup.content, "Health: 20.0f")
+
           const opened = yield* driver.read(instance, "world/player.dat")
           assert.strictEqual(opened.encoding, "nbt-gzip")
           assert.include(opened.content, "Health: 20.0f")

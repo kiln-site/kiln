@@ -20,7 +20,8 @@ export function fileLanguageForPath(path: string): FileLanguage {
   if (
     lowerPath.endsWith(".snbt") ||
     lowerPath.endsWith(".nbt") ||
-    lowerPath.endsWith(".dat")
+    lowerPath.endsWith(".dat") ||
+    lowerPath.endsWith(".dat_old")
   ) {
     return { id: "snbt", label: "SNBT" }
   }
