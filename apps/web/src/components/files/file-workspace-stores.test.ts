@@ -34,6 +34,30 @@ function installBrowserStorage({
   return values
 }
 
+function installMobileQuery(initialMatches: boolean) {
+  let matches = initialMatches
+  const listeners = new Set<() => void>()
+  Object.assign(window, {
+    matchMedia: () => ({
+      get matches() {
+        return matches
+      },
+      addEventListener: (_event: string, listener: () => void) =>
+        listeners.add(listener),
+      removeEventListener: (_event: string, listener: () => void) =>
+        listeners.delete(listener),
+    }),
+  })
+
+  return {
+    listenerCount: () => listeners.size,
+    setMatches(nextMatches: boolean) {
+      matches = nextMatches
+      for (const listener of listeners) listener()
+    },
+  }
+}
+
 describe("file editor font size preferences", () => {
   it("uses 12px by default and removes the desktop override at 12px", () => {
     const storage = installBrowserStorage({ width: 1280 })
@@ -72,6 +96,39 @@ describe("file editor font size preferences", () => {
 
     store.setDefaultFontSize(12)
     expect(store.getFontSizeSnapshot()).toBe(14)
+  })
+
+  it("keeps an explicit override that equals the other viewport default", () => {
+    const storage = installBrowserStorage({ fontSize: 12, width: 390 })
+    const store = createFileEditorPreferencesStore()
+
+    store.hydrate()
+    expect(store.getFontSizeSnapshot()).toBe(12)
+
+    store.setDefaultFontSize(12)
+    store.setDefaultFontSize(16)
+    expect(store.getFontSizeSnapshot()).toBe(12)
+    expect(storage.get(fontSizeStorageKey)).toBe("12")
+  })
+
+  it("follows measured viewport changes without a stored override", () => {
+    installBrowserStorage({ width: 390 })
+    const mobileQuery = installMobileQuery(true)
+    const store = createFileEditorPreferencesStore()
+
+    store.hydrate()
+    const stopObserving = store.observeViewport()
+    expect(store.getFontSizeSnapshot()).toBe(16)
+    expect(mobileQuery.listenerCount()).toBe(1)
+
+    mobileQuery.setMatches(false)
+    expect(store.getFontSizeSnapshot()).toBe(12)
+
+    mobileQuery.setMatches(true)
+    expect(store.getFontSizeSnapshot()).toBe(16)
+
+    stopObserving()
+    expect(mobileQuery.listenerCount()).toBe(0)
   })
 })
 

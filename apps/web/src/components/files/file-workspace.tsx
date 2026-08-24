@@ -183,7 +183,10 @@ const StableFileWorkspaceSurface = React.memo(function FileWorkspaceSurface({
 
   React.useEffect(() => () => fileIndex.dispose(), [fileIndex])
 
-  React.useEffect(() => preferencesStore.hydrate(), [preferencesStore])
+  React.useEffect(() => {
+    preferencesStore.hydrate()
+    return preferencesStore.observeViewport()
+  }, [preferencesStore])
 
   React.useEffect(() => {
     if (!treeReady || selectionStore.getSnapshot()) return

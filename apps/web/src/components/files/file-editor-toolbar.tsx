@@ -1,4 +1,3 @@
-import * as React from "react"
 import type { RelayFileContent } from "@workspace/contracts"
 
 import { useIsMobile } from "@workspace/ui/hooks/use-mobile"
@@ -11,10 +10,9 @@ import {
   StableEditorShareButton,
 } from "@/components/files/file-editor-toolbar-actions"
 import type { SaveFileRevision } from "@/components/files/file-editor-save"
-import {
-  defaultFileEditorFontSize,
-  type EditorSessionStore,
-  type FileEditorPreferencesStore,
+import type {
+  EditorSessionStore,
+  FileEditorPreferencesStore,
 } from "@/components/files/file-workspace-stores"
 import type { InstanceWorkspaceInstance } from "@/lib/relay-selectors"
 
@@ -38,10 +36,6 @@ export function EditorResponsiveActions({
   sessionStore: EditorSessionStore
 }) {
   const isMobile = useIsMobile()
-
-  React.useEffect(() => {
-    preferencesStore.setDefaultFontSize(defaultFileEditorFontSize(isMobile))
-  }, [isMobile, preferencesStore])
 
   if (isMobile) {
     return (

@@ -30,6 +30,7 @@ export interface EditorSearchStore {
 export interface FileEditorPreferencesStore {
   getFontSizeSnapshot: () => number
   hydrate: () => void
+  observeViewport: () => () => void
   setDefaultFontSize: (fontSize: number) => void
   setFontSize: (fontSize: number) => void
   subscribe: (listener: () => void) => () => void
@@ -208,6 +209,19 @@ export function createFileEditorPreferencesStore(): FileEditorPreferencesStore {
         )
       })
       // Keep the default when browser storage is unavailable.
+    },
+    observeViewport: () => {
+      const mobileQuery = window.matchMedia(
+        `(max-width: ${mobileBreakpoint - 1}px)`
+      )
+      const updateDefaultFontSize = () => {
+        setDefaultFontSize(defaultFileEditorFontSize(mobileQuery.matches))
+      }
+
+      mobileQuery.addEventListener("change", updateDefaultFontSize)
+      updateDefaultFontSize()
+      return () =>
+        mobileQuery.removeEventListener("change", updateDefaultFontSize)
     },
     setDefaultFontSize,
     setFontSize,
