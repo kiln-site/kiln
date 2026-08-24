@@ -1491,7 +1491,7 @@ const UpdateStatusCallout = React.memo(function UpdateStatusCallout({
 }) {
   return (
     <span
-      className={`type-technical-label inline-flex h-6 w-fit shrink-0 items-center justify-center rounded-[3px] border px-1.5 whitespace-nowrap ${status.tone}`}
+      className={`type-technical-label inline-flex h-6 w-fit shrink-0 items-center justify-center rounded-[3px] border-x-0 border-y px-1.5 whitespace-nowrap ${status.tone}`}
     >
       {status.label}
     </span>
@@ -2135,7 +2135,7 @@ const ChangelogRelease = React.memo(function ChangelogRelease({
           <div className="flex flex-wrap items-center gap-2">
             <h3 className="text-sm font-semibold">{release.name}</h3>
             {latest ? (
-              <Badge className="border border-emerald-300/35 bg-emerald-300/10 text-emerald-200">
+              <Badge className="border-x-0 border-y border-emerald-300/35 bg-emerald-300/10 text-emerald-200">
                 Latest
               </Badge>
             ) : null}
