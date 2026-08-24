@@ -41,7 +41,7 @@ import {
   SidebarMenuButton,
   SidebarMenuItem,
 } from "@workspace/ui/components/sidebar"
-import { Kbd, KbdGroup } from "@workspace/ui/components/kbd"
+import { Kbd } from "@workspace/ui/components/kbd"
 
 import { BackupIcon } from "@/components/backup-icon"
 import { relaySnapshotQueryOptions } from "@/lib/query-options"
@@ -494,28 +494,24 @@ export const RouteCommandMenuTrigger = React.memo(
           <SidebarMenuButton
             aria-keyshortcuts="Control+K Meta+K"
             aria-label={`Search routes, ${shortcutLabel}`}
-            className="h-8 justify-between bg-black/10 px-1.5 shadow-[0_0_0_0.5px_color-mix(in_oklab,var(--sidebar-foreground)_16%,transparent)]! group-data-[collapsible=icon]:justify-center hover:bg-black/15 hover:shadow-[0_0_0_0.5px_color-mix(in_oklab,var(--sidebar-foreground)_24%,transparent)]! dark:bg-black/25 dark:hover:bg-black/35"
+            className="h-8 justify-start gap-1.5 bg-black/10 px-1.5 shadow-[0_0_0_0.5px_color-mix(in_oklab,var(--sidebar-foreground)_16%,transparent)]! group-data-[collapsible=icon]:justify-center hover:bg-black/15 hover:shadow-[0_0_0_0.5px_color-mix(in_oklab,var(--sidebar-foreground)_24%,transparent)]! dark:bg-black/25 dark:hover:bg-black/35"
             tooltip={`Search routes · ${shortcutLabel}`}
             type="button"
             onClick={openMenu}
           >
             <Search />
             <span className="sr-only">Search routes</span>
-            <KbdGroup
+            <Kbd
               aria-label={shortcutLabel}
-              className="ml-auto gap-0.5 group-data-[collapsible=icon]:hidden [&_[data-slot=kbd]]:h-[18px] [&_[data-slot=kbd]]:min-w-[18px] [&_[data-slot=kbd]]:px-0.5"
+              className="h-[18px] min-w-8 gap-0.5 px-1 group-data-[collapsible=icon]:hidden"
             >
-              <Kbd
-                className={isApple ? undefined : "min-w-7! tracking-[-0.03em]"}
-              >
-                {isApple ? (
-                  <CommandIcon className="size-3!" aria-hidden="true" />
-                ) : (
-                  "Ctrl"
-                )}
-              </Kbd>
-              <Kbd>K</Kbd>
-            </KbdGroup>
+              {isApple ? (
+                <CommandIcon className="size-3!" aria-hidden="true" />
+              ) : (
+                <span className="tracking-[-0.03em]">Ctrl</span>
+              )}
+              <span>K</span>
+            </Kbd>
           </SidebarMenuButton>
         </SidebarMenuItem>
       </SidebarMenu>
