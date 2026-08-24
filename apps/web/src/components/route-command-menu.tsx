@@ -4,6 +4,7 @@ import { useNavigate, useRouterState } from "@tanstack/react-router"
 import {
   CalendarDays,
   CircleUserRound,
+  Command as CommandIcon,
   CreditCard,
   Database,
   Folder,
@@ -40,6 +41,7 @@ import {
   SidebarMenuButton,
   SidebarMenuItem,
 } from "@workspace/ui/components/sidebar"
+import { Kbd, KbdGroup } from "@workspace/ui/components/kbd"
 
 import { BackupIcon } from "@/components/backup-icon"
 import { relaySnapshotQueryOptions } from "@/lib/query-options"
@@ -303,6 +305,14 @@ export function filterRoutes(
 
 const RouteCommandMenuContext = React.createContext<(() => void) | null>(null)
 
+function subscribeToPlatform() {
+  return () => undefined
+}
+
+function isApplePlatform() {
+  return /Mac|iPhone|iPad|iPod/i.test(navigator.userAgent)
+}
+
 export function RouteCommandMenuProvider({
   canManageAccess,
   canManageRelays,
@@ -443,11 +453,15 @@ export function RouteCommandMenuProvider({
             <span>Navigate Kiln</span>
             <span className="flex items-center gap-3">
               <span className="flex items-center gap-1">
-                <kbd className="font-mono text-foreground">↑↓</kbd>
+                <Kbd className="border-0 bg-transparent p-0 text-foreground shadow-none">
+                  ↑↓
+                </Kbd>
                 Select
               </span>
               <span className="flex items-center gap-1">
-                <kbd className="font-mono text-foreground">Esc</kbd>
+                <Kbd className="border-0 bg-transparent p-0 text-foreground shadow-none">
+                  Esc
+                </Kbd>
                 Close
               </span>
             </span>
@@ -461,6 +475,12 @@ export function RouteCommandMenuProvider({
 export const RouteCommandMenuTrigger = React.memo(
   function RouteCommandMenuTrigger() {
     const openMenu = React.useContext(RouteCommandMenuContext)
+    const isApple = React.useSyncExternalStore(
+      subscribeToPlatform,
+      isApplePlatform,
+      () => true
+    )
+    const shortcutLabel = isApple ? "Command K" : "Ctrl K"
 
     if (!openMenu) {
       throw new Error(
@@ -469,21 +489,33 @@ export const RouteCommandMenuTrigger = React.memo(
     }
 
     return (
-      <SidebarMenu>
+      <SidebarMenu className="self-center">
         <SidebarMenuItem>
           <SidebarMenuButton
             aria-keyshortcuts="Control+K Meta+K"
-            aria-label="Search routes"
-            className="h-11 justify-center p-0"
-            tooltip={{
-              children: "Search routes · Ctrl/Command K",
-              hidden: false,
-            }}
+            aria-label={`Search routes, ${shortcutLabel}`}
+            className="h-8 justify-between bg-black/10 px-1.5 shadow-[0_0_0_0.5px_color-mix(in_oklab,var(--sidebar-foreground)_16%,transparent)]! group-data-[collapsible=icon]:justify-center hover:bg-black/15 hover:shadow-[0_0_0_0.5px_color-mix(in_oklab,var(--sidebar-foreground)_24%,transparent)]! dark:bg-black/25 dark:hover:bg-black/35"
+            tooltip={`Search routes · ${shortcutLabel}`}
             type="button"
             onClick={openMenu}
           >
             <Search />
             <span className="sr-only">Search routes</span>
+            <KbdGroup
+              aria-label={shortcutLabel}
+              className="ml-auto gap-0.5 group-data-[collapsible=icon]:hidden [&_[data-slot=kbd]]:h-[18px] [&_[data-slot=kbd]]:min-w-[18px] [&_[data-slot=kbd]]:px-0.5"
+            >
+              <Kbd
+                className={isApple ? undefined : "min-w-7! tracking-[-0.03em]"}
+              >
+                {isApple ? (
+                  <CommandIcon className="size-3!" aria-hidden="true" />
+                ) : (
+                  "Ctrl"
+                )}
+              </Kbd>
+              <Kbd>K</Kbd>
+            </KbdGroup>
           </SidebarMenuButton>
         </SidebarMenuItem>
       </SidebarMenu>

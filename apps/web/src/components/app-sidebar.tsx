@@ -157,8 +157,8 @@ const AppSidebarView = React.memo(function AppSidebarView({
       relayConfigured={relayConfigured}
     >
       <Sidebar collapsible="icon" className="border-sidebar-border/80">
-        <SidebarHeader className="gap-1 px-2 pt-3">
-          <div className="grid grid-cols-[minmax(0,1fr)_2rem] gap-1 group-data-[collapsible=icon]:grid-cols-1">
+        <SidebarHeader className="h-20 justify-center gap-0 px-2 py-0">
+          <div className="grid grid-cols-[minmax(0,1fr)_5.75rem] gap-1 group-data-[collapsible=icon]:grid-cols-1">
             <SidebarMenu>
               <SidebarMenuItem>
                 <SidebarMenuButton
@@ -167,7 +167,7 @@ const AppSidebarView = React.memo(function AppSidebarView({
                   tooltip="Kiln"
                 >
                   <HearthMark className="group-data-[collapsible=icon]:size-[32px]!" />
-                  <span className="min-w-0 flex-1 truncate font-heading text-[0.9375rem] font-semibold tracking-[-0.02em]">
+                  <span className="min-w-0 flex-1 truncate font-heading text-lg font-semibold tracking-[-0.025em]">
                     Kiln
                   </span>
                 </SidebarMenuButton>
@@ -177,7 +177,7 @@ const AppSidebarView = React.memo(function AppSidebarView({
           </div>
         </SidebarHeader>
 
-        <SidebarSeparator className="my-1" />
+        <SidebarSeparator />
 
         <SidebarContent>
           <InfrastructureNavigation relayConfigured={relayConfigured} />
