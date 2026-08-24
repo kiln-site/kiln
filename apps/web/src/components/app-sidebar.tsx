@@ -23,7 +23,11 @@ import {
 import { Link, useNavigate, useRouterState } from "@tanstack/react-router"
 import { forkPromise } from "@/effect/promise"
 
-import { Avatar, AvatarFallback } from "@workspace/ui/components/avatar"
+import {
+  Avatar,
+  AvatarFallback,
+  AvatarImage,
+} from "@workspace/ui/components/avatar"
 import {
   Popover,
   PopoverContent,
@@ -56,9 +60,11 @@ import { ServerTypeIcon } from "@/components/server-type-icon"
 import { authClient } from "@/lib/auth-client"
 import type { AuthenticatedUser } from "@/lib/auth-session"
 import { clearAppearanceCache } from "@/lib/appearance"
+import { minecraftHeadUrl } from "@/lib/minecraft-profile"
 import {
   accessCapabilitiesQueryOptions,
   managedDatabaseDirectoryQueryOptions,
+  minecraftProfileQueryOptions,
   relayConnectionQueryOptions,
   relaySnapshotQueryOptions,
 } from "@/lib/query-options"
@@ -757,14 +763,7 @@ function AccountNavigation({
         </SidebarMenuItem>
         <SidebarMenuItem>
           <div className="flex h-11 items-center gap-2 px-2 group-data-[collapsible=icon]:h-[44px] group-data-[collapsible=icon]:px-0">
-            <Avatar
-              size="sm"
-              className="rounded-none group-data-[collapsible=icon]:hidden"
-            >
-              <AvatarFallback className="type-label rounded-none bg-primary/12 font-bold text-primary">
-                {initials(user.name)}
-              </AvatarFallback>
-            </Avatar>
+            <AccountAvatar name={user.name} />
             <span className="flex min-w-0 flex-1 items-center leading-none group-data-[collapsible=icon]:hidden">
               <span className="w-full truncate text-xs font-semibold">
                 {user.name}
@@ -780,6 +779,32 @@ function AccountNavigation({
     </SidebarFooter>
   )
 }
+
+const AccountAvatar = React.memo(function AccountAvatar({
+  name,
+}: {
+  name: string
+}) {
+  const { data: profile } = useQuery(minecraftProfileQueryOptions(name))
+
+  return (
+    <Avatar
+      size="sm"
+      className="rounded-none group-data-[collapsible=icon]:hidden"
+    >
+      {profile ? (
+        <AvatarImage
+          src={minecraftHeadUrl(profile.id)}
+          alt=""
+          referrerPolicy="no-referrer"
+        />
+      ) : null}
+      <AvatarFallback className="type-label rounded-none bg-primary/12 font-bold text-primary">
+        {initials(name)}
+      </AvatarFallback>
+    </Avatar>
+  )
+})
 
 function SignOutButton({
   developmentBypass,

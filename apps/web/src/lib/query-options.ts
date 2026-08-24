@@ -28,6 +28,7 @@ import {
   getManagedDatabases,
 } from "@/server/databases"
 import { getUiPreferences } from "@/server/preferences"
+import { getMinecraftProfile } from "@/server/minecraft"
 import { reconcilePendingPowerSnapshot } from "@/lib/instance-power-state"
 import { systemUpdateOverviewRefetchPolicy } from "@/lib/system-update-presence"
 import {
@@ -59,6 +60,10 @@ const relayPollHeaders = { "x-kiln-request-purpose": "relay-poll" }
 export const queryKeys = {
   auth: {
     state: ["auth", "state"] as const,
+  },
+  minecraft: {
+    profile: (displayName: string) =>
+      ["minecraft", "profile", displayName] as const,
   },
   access: {
     capabilities: ["access", "capabilities"] as const,
@@ -182,6 +187,14 @@ export function authStateQueryOptions() {
     queryKey: queryKeys.auth.state,
     queryFn: () => getAuthState(),
     staleTime: 30_000,
+  })
+}
+
+export function minecraftProfileQueryOptions(displayName: string) {
+  return queryOptions({
+    queryKey: queryKeys.minecraft.profile(displayName),
+    queryFn: () => getMinecraftProfile(),
+    staleTime: 60 * 60_000,
   })
 }
 
