@@ -447,29 +447,8 @@ const ServerSelector = React.memo(function ServerSelector({
   const navigate = useNavigate()
   const queryClient = useQueryClient()
   const [open, setOpen] = React.useState(false)
-  const [search, setSearch] = React.useState("")
-  const filteredInstances = React.useMemo(() => {
-    const query = search.trim().toLocaleLowerCase()
-    if (!query) return instances
-
-    return instances.filter((item) =>
-      [
-        item.name,
-        item.implementation,
-        item.version,
-        item.shortId,
-        item.routeId,
-        item.relayName,
-        item.observedState,
-      ]
-        .join(" ")
-        .toLocaleLowerCase()
-        .includes(query)
-    )
-  }, [instances, search])
   const handleOpenChange = React.useCallback((nextOpen: boolean) => {
     setOpen(nextOpen)
-    if (!nextOpen) setSearch("")
   }, [])
   const selectInstance = React.useCallback(
     (routeId: string) => {
@@ -513,12 +492,12 @@ const ServerSelector = React.memo(function ServerSelector({
             tooltip="Switch server"
             aria-label={
               instance
-                ? `Switch server. ${instance.name}, ${instance.implementation}, ${serverStatusLabel(instance.observedState)}`
+                ? `Switch server. ${instance.name}, ${instance.implementation} ${instance.version}, ${serverStatusLabel(instance.observedState)}`
                 : "Choose a server"
             }
             className="mb-1.5 h-11 border border-sidebar-border/75 bg-background/35 px-2 py-2 group-data-[collapsible=icon]:h-[32px]! group-data-[collapsible=icon]:bg-black/10 hover:border-sidebar-border hover:bg-sidebar-accent group-data-[collapsible=icon]:hover:bg-black/15 data-[state=open]:border-sidebar-border data-[state=open]:bg-sidebar-accent dark:group-data-[collapsible=icon]:bg-black/25 dark:group-data-[collapsible=icon]:hover:bg-black/35"
           >
-            <span className="relative grid size-6 shrink-0 place-items-center group-data-[collapsible=icon]:absolute group-data-[collapsible=icon]:inset-0 group-data-[collapsible=icon]:m-auto group-data-[collapsible=icon]:size-4">
+            <span className="relative grid size-6 shrink-0 place-items-center rounded-md border border-sidebar-border/70 bg-background/25 group-data-[collapsible=icon]:absolute group-data-[collapsible=icon]:inset-0 group-data-[collapsible=icon]:m-auto group-data-[collapsible=icon]:size-4 group-data-[collapsible=icon]:rounded-none group-data-[collapsible=icon]:border-0 group-data-[collapsible=icon]:bg-transparent">
               <ServerTypeIcon
                 implementation={instance?.implementation ?? ""}
                 className="size-3.5 text-sidebar-foreground/85 group-data-[collapsible=icon]:size-4!"
@@ -536,7 +515,9 @@ const ServerSelector = React.memo(function ServerSelector({
                       className={`size-1.5 shrink-0 rounded-full ${statusDotTone(instance.observedState)}`}
                       aria-hidden="true"
                     />
-                    <span className="truncate">{instance.implementation}</span>
+                    <span className="truncate">
+                      {instance.implementation} {instance.version}
+                    </span>
                     <span className="sr-only">
                       Status: {serverStatusLabel(instance.observedState)}
                     </span>
@@ -558,51 +539,12 @@ const ServerSelector = React.memo(function ServerSelector({
           sideOffset={6}
           className="w-72 max-w-[calc(100vw-1rem)] overflow-hidden p-0"
         >
-          <div className="border-b border-border/70 p-2">
-            <div className="relative">
-              <Search
-                className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-muted-foreground"
-                aria-hidden="true"
-              />
-              <Input
-                autoFocus
-                type="search"
-                value={search}
-                onChange={(event) => setSearch(event.currentTarget.value)}
-                placeholder="Search servers"
-                aria-label="Search servers"
-                className="h-8 bg-input/14 pr-2 pl-8 text-sm"
-              />
-            </div>
-          </div>
-          {filteredInstances.length > 0 ? (
-            <div className="max-h-64 space-y-0.5 overflow-y-auto p-1.5">
-              {filteredInstances.map((item) => (
-                <ServerSelectorItem
-                  key={`${item.relayId}:${item.id}`}
-                  active={
-                    item.id === instance?.id &&
-                    item.relayId === instance.relayId
-                  }
-                  item={item}
-                  onSelect={selectInstance}
-                />
-              ))}
-            </div>
-          ) : (
-            <div className="px-4 py-6 text-center">
-              <p className="type-control-sm">
-                {instances.length === 0
-                  ? "No managed servers"
-                  : "No servers match your search"}
-              </p>
-              <p className="type-meta mt-1 text-muted-foreground">
-                {instances.length === 0
-                  ? "Servers will appear here once they are provisioned."
-                  : "Try a name, version, ID, or status."}
-              </p>
-            </div>
-          )}
+          <ServerSelectorSearch
+            activeInstanceId={instance?.id}
+            activeRelayId={instance?.relayId}
+            instances={instances}
+            onSelect={selectInstance}
+          />
           <div className="border-t border-border/70 p-1.5">
             <Link
               to="/infra/servers"
@@ -625,6 +567,162 @@ const ServerSelector = React.memo(function ServerSelector({
     </SidebarMenuItem>
   )
 })
+
+const ServerSelectorSearch = React.memo(function ServerSelectorSearch({
+  activeInstanceId,
+  activeRelayId,
+  instances,
+  onSelect,
+}: {
+  activeInstanceId: string | undefined
+  activeRelayId: string | undefined
+  instances: Array<SidebarInstance>
+  onSelect: (routeId: string) => void
+}) {
+  const [search, setSearch] = React.useState("")
+
+  return (
+    <>
+      <ServerSelectorSearchField value={search} onValueChange={setSearch} />
+      <ServerSelectorResults
+        activeInstanceId={activeInstanceId}
+        activeRelayId={activeRelayId}
+        instances={instances}
+        onSelect={onSelect}
+        search={search}
+      />
+    </>
+  )
+})
+
+const ServerSelectorSearchField = React.memo(
+  function ServerSelectorSearchField({
+    value,
+    onValueChange,
+  }: {
+    value: string
+    onValueChange: (value: string) => void
+  }) {
+    return (
+      <div className="border-b border-border/70 p-2">
+        <div className="relative">
+          <Search
+            className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-muted-foreground"
+            aria-hidden="true"
+          />
+          <Input
+            autoFocus
+            type="search"
+            value={value}
+            onChange={(event) => onValueChange(event.currentTarget.value)}
+            placeholder="Search servers"
+            aria-label="Search servers"
+            className="h-8 bg-input/14 pr-2 pl-8 text-sm"
+          />
+        </div>
+      </div>
+    )
+  }
+)
+
+interface ServerSelectorResultsProps {
+  activeInstanceId: string | undefined
+  activeRelayId: string | undefined
+  instances: Array<SidebarInstance>
+  onSelect: (routeId: string) => void
+  search: string
+}
+
+const ServerSelectorResults = React.memo(function ServerSelectorResults({
+  activeInstanceId,
+  activeRelayId,
+  instances,
+  onSelect,
+  search,
+}: ServerSelectorResultsProps) {
+  const filteredInstances = React.useMemo(() => {
+    const query = normalizeServerSearch(search)
+    if (!query) return instances
+    return instances.filter((item) =>
+      matchesNormalizedServerSearch(item, query)
+    )
+  }, [instances, search])
+
+  return filteredInstances.length > 0 ? (
+    <div className="max-h-64 space-y-0.5 overflow-y-auto p-1.5">
+      {filteredInstances.map((item) => (
+        <ServerSelectorItem
+          key={`${item.relayId}:${item.id}`}
+          active={
+            item.id === activeInstanceId && item.relayId === activeRelayId
+          }
+          item={item}
+          onSelect={onSelect}
+        />
+      ))}
+    </div>
+  ) : (
+    <div className="px-4 py-6 text-center">
+      <p className="type-control-sm">
+        {instances.length === 0
+          ? "No managed servers"
+          : "No servers match your search"}
+      </p>
+      <p className="type-meta mt-1 text-muted-foreground">
+        {instances.length === 0
+          ? "Servers will appear here once they are provisioned."
+          : "Try a name, version, ID, or status."}
+      </p>
+    </div>
+  )
+}, serverSelectorResultsAreEqual)
+
+function serverSelectorResultsAreEqual(
+  previous: ServerSelectorResultsProps,
+  next: ServerSelectorResultsProps
+): boolean {
+  if (
+    previous.activeInstanceId !== next.activeInstanceId ||
+    previous.activeRelayId !== next.activeRelayId ||
+    previous.instances !== next.instances ||
+    previous.onSelect !== next.onSelect
+  ) {
+    return false
+  }
+  if (previous.search === next.search) return true
+
+  const previousQuery = normalizeServerSearch(previous.search)
+  const nextQuery = normalizeServerSearch(next.search)
+  return previous.instances.every(
+    (item) =>
+      matchesNormalizedServerSearch(item, previousQuery) ===
+      matchesNormalizedServerSearch(item, nextQuery)
+  )
+}
+
+function normalizeServerSearch(search: string): string {
+  return search.trim().toLocaleLowerCase()
+}
+
+function matchesNormalizedServerSearch(
+  item: SidebarInstance,
+  query: string
+): boolean {
+  if (!query) return true
+
+  return [
+    item.name,
+    item.implementation,
+    item.version,
+    item.shortId,
+    item.routeId,
+    item.relayName,
+    item.observedState,
+  ]
+    .join(" ")
+    .toLocaleLowerCase()
+    .includes(query)
+}
 
 const ServerSelectorItem = React.memo(function ServerSelectorItem({
   active,
