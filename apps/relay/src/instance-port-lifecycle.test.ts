@@ -195,7 +195,10 @@ describe("instance port lifecycle", () => {
     )
 
     expect(updated.ports).toEqual([updatedPrimary])
-    expect(publishedHostPorts).toHaveBeenCalledWith("udp")
+    expect(publishedHostPorts).toHaveBeenCalledWith("udp", {
+      end: 32_123,
+      start: 32_123,
+    })
     expect(recreateOwnedInstance).toHaveBeenCalledWith(
       instance,
       expect.any(Object),
@@ -467,6 +470,14 @@ describe("instance port lifecycle", () => {
 
     expect(updated.ports).toEqual([updatedPrimary])
     expect(publishedHostPorts).toHaveBeenCalledTimes(2)
+    expect(publishedHostPorts).toHaveBeenNthCalledWith(1, "tcp", {
+      end: 32_124,
+      start: 32_124,
+    })
+    expect(publishedHostPorts).toHaveBeenNthCalledWith(2, "udp", {
+      end: 32_124,
+      start: 32_124,
+    })
     expect(recreateOwnedInstance).toHaveBeenCalledWith(
       instance,
       expect.any(Object),

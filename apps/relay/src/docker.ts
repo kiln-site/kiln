@@ -370,6 +370,37 @@ export function dockerPublishedHostPorts(
   return ports
 }
 
+export function dockerPublishedHostPortsFromListing(
+  listing: string,
+  protocol: "tcp" | "udp"
+): Set<number> {
+  const ports = new Set<number>()
+  for (const line of listing.split("\n")) {
+    for (const rawEntry of line.split(",")) {
+      const entry = rawEntry.trim()
+      const arrow = entry.indexOf("->")
+      if (arrow < 0 || !entry.slice(arrow + 2).endsWith(`/${protocol}`)) {
+        continue
+      }
+      const match = /(?:^|:)(\d+)(?:-(\d+))?$/u.exec(entry.slice(0, arrow))
+      if (!match?.[1]) continue
+      const start = Number(match[1])
+      const end = Number(match[2] ?? match[1])
+      if (
+        !Number.isInteger(start) ||
+        !Number.isInteger(end) ||
+        start < 1 ||
+        end > 65_535 ||
+        end < start
+      ) {
+        continue
+      }
+      for (let port = start; port <= end; port += 1) ports.add(port)
+    }
+  }
+  return ports
+}
+
 export function publicConnectAddress(host: string, port: number): string {
   const formattedHost =
     host.includes(":") && !host.startsWith("[") ? `[${host}]` : host
@@ -792,32 +823,23 @@ export class DockerDriver {
     return found?.config ?? null
   }
 
-  async publishedHostPorts(protocol: "tcp" | "udp"): Promise<Set<number>> {
-    const idsResult = await command("docker", [
+  async publishedHostPorts(
+    protocol: "tcp" | "udp",
+    range: { end: number; start: number }
+  ): Promise<Set<number>> {
+    const publishedPort =
+      range.start === range.end
+        ? `${range.start}/${protocol}`
+        : `${range.start}-${range.end}/${protocol}`
+    const portsResult = await command("docker", [
       "container",
       "ls",
-      "--all",
+      "--filter",
+      `publish=${publishedPort}`,
       "--format",
-      "{{.ID}}",
+      "{{.Ports}}",
     ])
-    const ids = idsResult.stdout.split("\n").filter(Boolean)
-    if (ids.length === 0) return new Set()
-
-    const inspectResult = await command("docker", ["inspect", ...ids])
-    const containers = JSON.parse(inspectResult.stdout) as Array<DockerInspect>
-    const ports = new Set<number>()
-    for (const container of containers) {
-      const bindings = [
-        container.HostConfig?.PortBindings,
-        container.NetworkSettings?.Ports,
-      ]
-      for (const source of bindings) {
-        for (const port of dockerPublishedHostPorts(source, protocol)) {
-          ports.add(port)
-        }
-      }
-    }
-    return ports
+    return dockerPublishedHostPortsFromListing(portsResult.stdout, protocol)
   }
 
   resourceHistory(instanceId: string): Array<RelayInstanceResources> {

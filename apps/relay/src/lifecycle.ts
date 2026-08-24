@@ -2583,7 +2583,12 @@ export class LifecycleDriver {
         const key = `${protocol}:${port}`
         if (
           this.#pendingGamePorts.has(key) ||
-          (await this.#docker.publishedHostPorts(protocol)).has(port)
+          (
+            await this.#docker.publishedHostPorts(protocol, {
+              end: port,
+              start: port,
+            })
+          ).has(port)
         ) {
           throw new Error(`Public port ${port}/${protocol} is already in use`)
         }
@@ -2638,8 +2643,16 @@ export class LifecycleDriver {
   ): Promise<number> {
     const protocols = portProtocols(protocol)
     const unavailable = new Set<number>()
+    const { end, start } = this.#config.gamePortRange
+    const checkedRange =
+      requestedPort !== undefined
+        ? { end: requestedPort, start: requestedPort }
+        : { end, start }
     for (const candidate of protocols) {
-      for (const port of await this.#docker.publishedHostPorts(candidate)) {
+      for (const port of await this.#docker.publishedHostPorts(
+        candidate,
+        checkedRange
+      )) {
         unavailable.add(port)
       }
       const pendingPrefix = `${candidate}:`
@@ -2660,7 +2673,6 @@ export class LifecycleDriver {
         unavailable.add(instance.publicPort)
       }
     }
-    const { end, start } = this.#config.gamePortRange
     if (
       requestedPort !== undefined &&
       !overridePortRange &&

@@ -10,6 +10,7 @@ vi.mock("./command.js", () => ({
 import {
   containerPortListening,
   dockerPublishedHostPorts,
+  dockerPublishedHostPortsFromListing,
   dockerPublishedPort,
   dockerPublishedPrimaryPort,
   instanceConnectAddress,
@@ -104,6 +105,35 @@ describe("Docker public game ports", () => {
 
     expect([...dockerPublishedHostPorts(bindings, "tcp")]).toEqual([30_000])
     expect([...dockerPublishedHostPorts(bindings, "udp")]).toEqual([30_001])
+  })
+
+  it("collects published ports from Docker's compact container listing", () => {
+    const listing = [
+      "0.0.0.0:30000->25565/tcp, [::]:30000->25565/tcp",
+      "127.0.0.1:30001-30003->19132-19134/udp",
+      "8080/tcp, 9000/udp",
+      "",
+    ].join("\n")
+
+    expect([...dockerPublishedHostPortsFromListing(listing, "tcp")]).toEqual([
+      30_000,
+    ])
+    expect([...dockerPublishedHostPortsFromListing(listing, "udp")]).toEqual([
+      30_001, 30_002, 30_003,
+    ])
+  })
+
+  it("scales with compact port bindings instead of container metadata", () => {
+    const listing = Array.from(
+      { length: 5_000 },
+      (_, index) => `0.0.0.0:${30_000 + (index % 1_000)}->25565/tcp`
+    ).join("\n")
+
+    const ports = dockerPublishedHostPortsFromListing(listing, "tcp")
+
+    expect(ports.size).toBe(1_000)
+    expect(ports.has(30_000)).toBe(true)
+    expect(ports.has(30_999)).toBe(true)
   })
 
   it("formats IPv4, hostnames, and IPv6 connect addresses", () => {
