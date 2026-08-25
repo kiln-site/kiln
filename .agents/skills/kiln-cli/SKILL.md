@@ -132,6 +132,10 @@ Inspect safe server metadata, limits, state, and current resource usage:
 kiln server info <server>
 ```
 
+Lifecycle timestamps in the server response are represented as ordered
+`{ state, time }` events. There are no separate `startedAt` or `readyAt`
+fields.
+
 The response omits Brick variables, container identifiers, and internal paths.
 For custom Brick sources, credentials, query parameters, and fragments are
 removed from the displayed URL.

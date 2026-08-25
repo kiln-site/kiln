@@ -32,7 +32,10 @@ describe("pending instance power state", () => {
       directory: "/srv/power-test",
       desiredState: "running",
       observedState: "running",
-      startedAt: "2026-07-28T20:00:00.000Z",
+      lifecycle: [
+        { state: "started", time: "2026-07-28T20:00:00.000Z" },
+        { state: "ready", time: "2026-07-28T20:00:15.000Z" },
+      ],
       containerId: "container",
       status: "Running",
     })
@@ -84,7 +87,7 @@ describe("pending instance power state", () => {
       ...stopped,
       desiredState: "running",
       observedState: "starting",
-      startedAt,
+      lifecycle: [{ state: "started", time: startedAt }],
       status: "Starting",
     })
     const running = relayInstanceSchema.parse({
@@ -92,7 +95,7 @@ describe("pending instance power state", () => {
       observedState: "running",
       status: "Running",
     })
-    beginPendingPowerAction(relayId, stopped.id, "start", stopped.startedAt)
+    beginPendingPowerAction(relayId, stopped.id, "start")
 
     try {
       const actionResponse = reconcilePendingPowerInstance(relayId, starting)
@@ -128,7 +131,10 @@ describe("pending instance power state", () => {
       directory: "/srv/restart-test",
       desiredState: "running",
       observedState: "running",
-      startedAt: "2026-07-28T20:00:00.000Z",
+      lifecycle: [
+        { state: "started", time: "2026-07-28T20:00:00.000Z" },
+        { state: "ready", time: "2026-07-28T20:00:15.000Z" },
+      ],
       containerId: "container",
       status: "Running",
     })
@@ -136,7 +142,7 @@ describe("pending instance power state", () => {
     const replacement = relayInstanceSchema.parse({
       ...previous,
       observedState: "starting",
-      startedAt: replacementStartedAt,
+      lifecycle: [{ state: "started", time: replacementStartedAt }],
       status: "Starting",
     })
     const ready = relayInstanceSchema.parse({
@@ -144,7 +150,12 @@ describe("pending instance power state", () => {
       observedState: "running",
       status: "Running",
     })
-    beginPendingPowerAction(relayId, previous.id, "restart", previous.startedAt)
+    beginPendingPowerAction(
+      relayId,
+      previous.id,
+      "restart",
+      "2026-07-28T20:00:00.000Z"
+    )
 
     try {
       expect(
@@ -164,7 +175,10 @@ describe("pending instance power state", () => {
           ...previous,
           desiredState: "stopped",
           observedState: "stopped",
-          startedAt: null,
+          lifecycle: [
+            ...previous.lifecycle,
+            { state: "stopped", time: "2026-07-28T21:01:00.000Z" },
+          ],
           status: "Exited (143)",
         }).observedState
       ).toBe("stopped")

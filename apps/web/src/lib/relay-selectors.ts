@@ -1,4 +1,5 @@
 import type { RelayInstance, RelayNode } from "@workspace/contracts"
+import { relayInstanceLifecycleEventTime } from "@workspace/contracts"
 
 import type { RelayConnection } from "@/lib/query-options"
 import type { RelayFleetSnapshot } from "@/lib/relay-fleet"
@@ -75,7 +76,7 @@ export type InstanceWorkspaceInstance = Pick<
 
 export type InstanceRuntime = Pick<
   RelayInstance,
-  "id" | "lifecycle" | "observedState" | "recovery" | "resources" | "startedAt"
+  "id" | "lifecycle" | "observedState" | "recovery" | "resources"
 > & { relayId: string }
 
 export type InstanceSettingsInstance = Pick<
@@ -246,7 +247,6 @@ export function selectInstanceRuntime(instanceId: string, relayId?: string) {
           recovery: instance.recovery,
           relayId: instance.relayId,
           resources: instance.resources,
-          startedAt: instance.startedAt,
         }
       : null
   }
@@ -323,7 +323,11 @@ export function selectInstanceContainerRunning(
       (instance) =>
         instance.id === instanceId &&
         (!relayId || instance.relayId === relayId) &&
-        instance.startedAt !== null
+        relayInstanceLifecycleEventTime(instance.lifecycle, "started") !==
+          null &&
+        (instance.observedState === "starting" ||
+          instance.observedState === "running" ||
+          instance.observedState === "stopping")
     )
 }
 

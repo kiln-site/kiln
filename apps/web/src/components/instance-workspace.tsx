@@ -12,6 +12,7 @@ import type {
   RelayInstanceResources,
   RelayObservedState,
 } from "@workspace/contracts"
+import { relayInstanceLifecycleEventTime } from "@workspace/contracts"
 import {
   Check,
   CircleStop,
@@ -997,7 +998,10 @@ function InstancePowerControls({
         instance.relayId,
         instance.id,
         nextAction,
-        previousInstance?.startedAt ?? null
+        relayInstanceLifecycleEventTime(
+          previousInstance?.lifecycle ?? [],
+          "started"
+        )
       )
       queryClient.setQueryData<RelayFleetSnapshot>(
         queryKeys.relay.snapshot,
@@ -1006,8 +1010,7 @@ function InstancePowerControls({
             snapshot,
             instance.id,
             instance.relayId,
-            pendingPowerAction.phase,
-            nextAction === "start" ? null : undefined
+            pendingPowerAction.phase
           )
       )
       setAction(nextAction)
@@ -1035,8 +1038,7 @@ function InstancePowerControls({
                       snapshot,
                       instance.id,
                       instance.relayId,
-                      previousInstance.observedState,
-                      previousInstance.startedAt
+                      previousInstance.observedState
                     )
                 )
               }
@@ -1087,8 +1089,7 @@ function updateInstancePowerState(
   snapshot: RelayFleetSnapshot | undefined,
   instanceId: string,
   relayId: string,
-  observedState: RelayObservedState,
-  startedAt: string | null | undefined
+  observedState: RelayObservedState
 ): RelayFleetSnapshot | undefined {
   if (!snapshot) return snapshot
   return {
@@ -1098,7 +1099,6 @@ function updateInstancePowerState(
         ? {
             ...instance,
             observedState,
-            ...(startedAt !== undefined ? { startedAt } : {}),
           }
         : instance
     ),
@@ -1320,7 +1320,7 @@ function InstanceUptimeMeter({
             observedState: instance.observedState,
             relayId: instance.relayId,
             resources: null,
-            startedAt: instance.startedAt,
+            lifecycle: instance.lifecycle,
           }
         : null
     },
@@ -1331,7 +1331,11 @@ function InstanceUptimeMeter({
     select: selectRuntime,
   })
   const uptime = useInstanceUptime(instance)
-  const startedAt = useBrowserLocalTimestamp(instance?.startedAt ?? null)
+  const sessionStartedAt = relayInstanceLifecycleEventTime(
+    instance?.lifecycle ?? [],
+    "started"
+  )
+  const startedAt = useBrowserLocalTimestamp(sessionStartedAt)
 
   return (
     <HoverCard openDelay={160} closeDelay={100}>
@@ -1364,7 +1368,7 @@ function InstanceUptimeMeter({
               Started on
             </p>
             <time
-              dateTime={instance?.startedAt ?? undefined}
+              dateTime={sessionStartedAt ?? undefined}
               className="type-code mt-1 block whitespace-nowrap text-foreground"
             >
               {startedAt}
@@ -1398,12 +1402,14 @@ interface ResourceItem {
 
 function useInstanceUptime(
   instance:
-    | Pick<InstanceRuntime, "id" | "observedState" | "startedAt">
+    | Pick<InstanceRuntime, "id" | "lifecycle" | "observedState">
     | null
     | undefined
 ): string | null {
   const [now, setNow] = React.useState<number | null>(null)
-  const startedAt = instance?.startedAt ? Date.parse(instance.startedAt) : NaN
+  const startedAt = Date.parse(
+    relayInstanceLifecycleEventTime(instance?.lifecycle ?? [], "started") ?? ""
+  )
   const running = instance?.observedState === "running"
 
   React.useEffect(() => {

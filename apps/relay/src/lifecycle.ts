@@ -226,7 +226,6 @@ export function tailscaleStackPendingRemoval(
       containerId: null,
       observedState: "stopped",
       resources: null,
-      startedAt: null,
       status: "Removal pending",
     },
     status: {
@@ -1989,7 +1988,6 @@ export class LifecycleDriver {
       resources: null,
       service: this.#resources.instanceContainer(id),
       shortId: id.slice(0, 8),
-      startedAt: null,
       stateReason: null,
       status: "Waiting for Hearth",
       tailscale: input.tailscale ?? { enabled: false },

@@ -448,7 +448,10 @@ describe("Tailscale Brick networking", () => {
         observedState: "running",
         service: "kiln-tailscale-private-network",
         shortId: id.slice(0, 8),
-        startedAt: "2026-07-28T12:00:00.000Z",
+        lifecycle: [
+          { state: "started", time: "2026-07-28T12:00:00.000Z" },
+          { state: "ready", time: "2026-07-28T12:00:15.000Z" },
+        ],
         status: "Running",
         version: "stable",
       },

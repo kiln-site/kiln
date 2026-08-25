@@ -26,6 +26,7 @@ import {
   relayBrowserConsoleProtocol,
   relayBrowserConsoleProtocols,
   relayBrowserProtocol,
+  relayInstanceLifecycleEventTime,
 } from "@workspace/contracts"
 import type { RelayConsole, RelayConsoleLine } from "@workspace/contracts"
 import {
@@ -1807,9 +1808,13 @@ class ConsoleHub {
     if (this.#abort.signal.aborted || this.#sessionStartedAt === undefined) {
       return
     }
-    const startedAt = sample.snapshot.instances.find(
+    const lifecycle = sample.snapshot.instances.find(
       (instance) => instance.id === this.#instance.id
-    )?.startedAt
+    )?.lifecycle
+    const startedAt = relayInstanceLifecycleEventTime(
+      lifecycle ?? [],
+      "started"
+    )
     if (
       !startedAt ||
       startedAt === this.#sessionStartedAt ||

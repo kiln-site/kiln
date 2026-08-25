@@ -42,6 +42,7 @@ import {
   DEFAULT_INSTANCE_DISK_LIMIT_BYTES,
   MINIMUM_INSTANCE_DISK_LIMIT_BYTES,
   relayDiskAllocationAvailableBytes,
+  relayInstanceLifecycleEventTime as lifecycleEventTime,
   relayInstanceTailscaleSchema,
 } from "@workspace/contracts"
 
@@ -634,11 +635,11 @@ export class DockerDriver {
         const transition = this.#powerTransitions.get(config.id)
         const lifecycleSession = this.#lifecycleSessions.get(config.id)
         const lifecycleSessionMatches =
-          lifecycleEventTime(lifecycleSession?.events, "started") ===
+          lifecycleEventTime(lifecycleSession?.events ?? [], "started") ===
           container.State.StartedAt
         if (
           lifecycleSessionMatches &&
-          lifecycleEventTime(lifecycleSession?.events, "ready") &&
+          lifecycleEventTime(lifecycleSession?.events ?? [], "ready") &&
           container.State.Running
         ) {
           readiness.set(config.id, true)
@@ -652,7 +653,7 @@ export class DockerDriver {
         const readinessProbe =
           !container.State.Running &&
           brickReadiness !== undefined &&
-          !lifecycleEventTime(lifecycleSession?.events, "ready")
+          !lifecycleEventTime(lifecycleSession?.events ?? [], "ready")
             ? "historical"
             : instanceReadinessProbe({
                 hasHealthCheck: container.State.Health !== undefined,
@@ -785,7 +786,6 @@ export class DockerDriver {
           desiredState
         ),
         recovery: recoveryState?.recovery ?? null,
-        startedAt: container.State.Running ? container.State.StartedAt : null,
         lifecycle: lifecycleSession?.events ?? [],
         status:
           recoveryStatus(recoveryState?.recovery, now) ??
@@ -2985,13 +2985,6 @@ function addLifecycleEvent(
   return !time || lifecycleEventTime(events, state)
     ? events
     : [...events, { state, time }]
-}
-
-function lifecycleEventTime(
-  events: ReadonlyArray<RelayInstanceLifecycleEvent> | undefined,
-  state: RelayInstanceLifecycleState
-): string | null {
-  return events?.find((event) => event.state === state)?.time ?? null
 }
 
 export function historicalReadinessLogArguments(

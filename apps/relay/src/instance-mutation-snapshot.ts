@@ -21,7 +21,6 @@ function provisioningInstance(instance: RelayInstance): RelayInstance {
     stateReason: null,
     recovery: null,
     resources: null,
-    startedAt: null,
     status: "Reprovisioning",
   }
 }

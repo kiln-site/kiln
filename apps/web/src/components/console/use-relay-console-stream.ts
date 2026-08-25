@@ -8,6 +8,7 @@ import type {
   RelayInstanceLifecycleState,
   RelayObservedState,
 } from "@workspace/contracts"
+import { relayInstanceLifecycleEventTime as lifecycleEventTime } from "@workspace/contracts"
 
 import {
   consoleRecoveryLine,
@@ -18,7 +19,6 @@ import {
   isConsoleRecoveryLine,
   isConsoleStateLine,
   isConsoleStateLineFor,
-  lifecycleEventTime,
   mergeConsoleHistory,
   mergeConsoleStateLines,
   reconcileConsoleLifecycleLines,
@@ -93,8 +93,8 @@ export function useRelayConsoleStream(
     const current = consoleDataRef.current
     if (
       state === "running" &&
-      runtime.startedAt &&
-      runtime.startedAt === sessionStartedAtRef.current
+      lifecycleEventTime(runtime.lifecycle, "started") ===
+        sessionStartedAtRef.current
     ) {
       sessionAcceptedAheadOfRuntimeRef.current = false
     }
@@ -125,7 +125,7 @@ export function useRelayConsoleStream(
           awaitingNewSessionRef.current,
           sessionAcceptedAheadOfRuntimeRef.current,
           currentWithTimestamps.startedAt,
-          runtime.startedAt
+          lifecycleEventTime(runtime.lifecycle, "started")
         )
       ) {
         // The console stream can observe the replacement container before the
@@ -193,12 +193,12 @@ export function useRelayConsoleStream(
     runtime?.lifecycle,
     runtime?.observedState,
     runtime?.recovery,
-    runtime?.startedAt,
   ])
 
   React.useEffect(() => {
-    const startedAt = runtime?.startedAt
+    const startedAt = lifecycleEventTime(runtime?.lifecycle ?? [], "started")
     if (
+      !runtime ||
       !awaitingNewSessionRef.current ||
       !startedAt ||
       startedAt === sessionStartedAtRef.current
@@ -224,7 +224,6 @@ export function useRelayConsoleStream(
     runtime?.lifecycle,
     runtime?.observedState,
     runtime?.recovery,
-    runtime?.startedAt,
   ])
 
   React.useEffect(() => {
@@ -329,7 +328,7 @@ export function useRelayConsoleStream(
           sessionStartedAtRef.current,
           startedAt,
           runtimeRef.current?.observedState,
-          runtimeRef.current?.startedAt
+          lifecycleEventTime(runtimeRef.current?.lifecycle ?? [], "started")
         )
       // A reset is the authoritative session boundary. Runtime snapshots can
       // arrive later, but must not put an accepted session back into waiting.
@@ -339,9 +338,8 @@ export function useRelayConsoleStream(
       const currentRuntime = runtimeRef.current
       const runtimeMatchesSession = Boolean(
         startedAt &&
-        (lifecycleEventTime(currentRuntime?.lifecycle ?? [], "started") ===
-          startedAt ||
-          currentRuntime?.startedAt === startedAt)
+        lifecycleEventTime(currentRuntime?.lifecycle ?? [], "started") ===
+          startedAt
       )
       const nextLines = mergeConsoleStateLines(
         lines,
@@ -486,7 +484,10 @@ export function useRelayConsoleStream(
                   commitSnapshot({ consoleData: nextConsole })
                 } else {
                   if (awaitingNewSessionRef.current) {
-                    const startedAt = runtimeRef.current?.startedAt
+                    const startedAt = lifecycleEventTime(
+                      runtimeRef.current?.lifecycle ?? [],
+                      "started"
+                    )
                     if (
                       !startedAt ||
                       startedAt === sessionStartedAtRef.current
@@ -541,9 +542,10 @@ function consoleMatchesRuntime(
   runtime: InstanceRuntime | null | undefined
 ): boolean {
   if (!consoleData) return false
-  const expectedStartedAt =
-    lifecycleEventTime(runtime?.lifecycle ?? [], "started") ??
-    runtime?.startedAt
+  const expectedStartedAt = lifecycleEventTime(
+    runtime?.lifecycle ?? [],
+    "started"
+  )
   return !expectedStartedAt || consoleData.startedAt === expectedStartedAt
 }
 

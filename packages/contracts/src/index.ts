@@ -3,6 +3,7 @@ import { z } from "zod"
 export { validateBrickIconSvg } from "./brick-icons"
 
 import { MINIMUM_INSTANCE_DISK_LIMIT_BYTES } from "./instance-limits.js"
+import { relayInstanceLifecycleEventSchema } from "./instance-lifecycle.js"
 import { relayInstanceStateReasonSchema } from "./instance-state-reason.js"
 import {
   relayTailscaleDomainSchema,
@@ -15,6 +16,7 @@ export * from "./release-version.js"
 export * from "./minecraft-java.js"
 export * from "./cli.js"
 export * from "./instance-limits.js"
+export * from "./instance-lifecycle.js"
 export * from "./instance-state-reason.js"
 export * from "./backups.js"
 export * from "./git-repository.js"
@@ -65,21 +67,6 @@ export const relayObservedStateSchema = z
   .transform((state) => (state === "offline" ? ("stopped" as const) : state))
 
 export const relayDesiredStateSchema = z.enum(["stopped", "running"])
-
-export const relayInstanceLifecycleStateSchema = z.enum([
-  "started",
-  "ready",
-  "stopping",
-  "stopped",
-  "failed",
-])
-
-export const relayInstanceLifecycleEventSchema = z
-  .object({
-    state: relayInstanceLifecycleStateSchema,
-    time: z.string().datetime(),
-  })
-  .strict()
 
 export const relayInstanceProvisioningSchema = z
   .object({
@@ -949,7 +936,6 @@ export const relayInstanceSchema = z.object({
   observedState: relayObservedStateSchema,
   stateReason: relayInstanceStateReasonSchema.nullable().default(null),
   recovery: relayInstanceRecoverySchema.nullable().default(null),
-  startedAt: z.string().datetime().nullable().default(null),
   lifecycle: z.array(relayInstanceLifecycleEventSchema).default([]),
   containerId: z.string().nullable(),
   status: z.string(),
@@ -1503,12 +1489,6 @@ export type RelayInstanceWebRouteState = z.infer<
   typeof relayInstanceWebRouteStateSchema
 >
 export type RelayObservedState = z.infer<typeof relayObservedStateSchema>
-export type RelayInstanceLifecycleState = z.infer<
-  typeof relayInstanceLifecycleStateSchema
->
-export type RelayInstanceLifecycleEvent = z.infer<
-  typeof relayInstanceLifecycleEventSchema
->
 export type RelayInstanceRecovery = z.infer<typeof relayInstanceRecoverySchema>
 export type RelayInstanceResources = z.infer<
   typeof relayInstanceResourcesSchema

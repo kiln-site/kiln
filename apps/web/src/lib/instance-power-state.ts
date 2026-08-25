@@ -1,4 +1,5 @@
 import type { RelayInstance, RelayObservedState } from "@workspace/contracts"
+import { relayInstanceLifecycleEventTime } from "@workspace/contracts"
 
 import type { RelayFleetSnapshot } from "@/lib/relay-fleet"
 
@@ -45,12 +46,13 @@ export function reconcilePendingPowerInstance<T extends RelayInstance>(
   const reconciled = reconcilePendingPowerState(
     pending,
     instance.observedState,
-    instance.startedAt
+    relayInstanceLifecycleEventTime(instance.lifecycle, "started")
   )
   const terminalConfirmed =
     isTerminalPowerPhase(pending.phase) &&
     instance.observedState === pending.phase &&
-    instance.startedAt === pending.terminalStartedAt
+    relayInstanceLifecycleEventTime(instance.lifecycle, "started") ===
+      pending.terminalStartedAt
   if (terminalConfirmed) {
     pendingPowerActions.delete(key)
   } else {

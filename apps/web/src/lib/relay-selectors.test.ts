@@ -40,7 +40,10 @@ const instance = {
   },
   service: "test-server",
   shortId: "aaaaaaaa",
-  startedAt: "2026-07-20T11:00:00.000Z",
+  lifecycle: [
+    { state: "started", time: "2026-07-20T11:00:00.000Z" },
+    { state: "ready", time: "2026-07-20T11:00:15.000Z" },
+  ],
   version: "1.21.11",
 } as RelayInstance
 

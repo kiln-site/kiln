@@ -342,10 +342,9 @@ describe("CLI response and URL boundaries", () => {
           reason: "process_exit",
         },
         publicAddress: "play.example.com:25565",
-        readyAt: null,
+        lifecycle: [],
         resources: null,
         shortId: "a".repeat(8),
-        startedAt: null,
         version: "1.21.11",
       },
     }

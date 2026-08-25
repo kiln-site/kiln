@@ -21,7 +21,10 @@ const instance = relayInstanceSchema.parse({
   observedState: "running",
   service: "kiln-test-server",
   shortId: "aaaaaaaa",
-  startedAt: "2026-08-08T12:00:00.000Z",
+  lifecycle: [
+    { state: "started", time: "2026-08-08T12:00:00.000Z" },
+    { state: "ready", time: "2026-08-08T12:00:15.000Z" },
+  ],
   status: "Running",
   version: "1.21.8",
 })
@@ -39,9 +42,9 @@ describe("instance mutation snapshots", () => {
         containerId: null,
         id: instance.id,
         name: instance.name,
+        lifecycle: [],
         observedState: "provisioning",
         resources: null,
-        startedAt: null,
         status: "Reprovisioning",
       }),
     ])

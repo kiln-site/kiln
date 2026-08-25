@@ -10,6 +10,7 @@ import {
   backupTaskStatusSchema,
 } from "./backups.js"
 import { MINIMUM_INSTANCE_DISK_LIMIT_BYTES } from "./instance-limits.js"
+import { relayInstanceLifecycleEventSchema } from "./instance-lifecycle.js"
 import { relayInstanceStateReasonSchema } from "./instance-state-reason.js"
 
 export const cliAccessModes = ["full_access", "read_only"] as const
@@ -225,10 +226,9 @@ export const cliServerInfoResponseSchema = z
         observedState: z.string().min(1),
         stateReason: relayInstanceStateReasonSchema.nullable().default(null),
         publicAddress: z.string().nullable(),
-        readyAt: z.string().datetime().nullable(),
+        lifecycle: z.array(relayInstanceLifecycleEventSchema),
         resources: cliServerResourceSchema.nullable(),
         shortId: z.string().regex(/^[a-f\d]{8}$/u),
-        startedAt: z.string().datetime().nullable(),
         version: z.string().min(1),
       })
       .strict(),

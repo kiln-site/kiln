@@ -49,13 +49,6 @@ export function reconcileConsoleLifecycleLines(
   )
 }
 
-export function lifecycleEventTime(
-  lifecycle: ReadonlyArray<RelayInstanceLifecycleEvent>,
-  state: RelayInstanceLifecycleState
-): string | null {
-  return lifecycle.find((event) => event.state === state)?.time ?? null
-}
-
 export function consoleSessionIsCurrent(
   awaitingNewSession: boolean,
   sessionAcceptedAheadOfRuntime: boolean,
