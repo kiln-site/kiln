@@ -3,11 +3,10 @@ import { Effect } from "effect"
 import {
   type Brick,
   type BrickRecipe,
+  brickIdExceedsRecommendedLength,
   brickSchema,
   brickSourceSchema,
   brickVariableValuesSchema,
-  importedBrickSchema,
-  normalizeImportedBrickRecipeId,
   relayCreateInstanceSchema,
   relayInstanceNameSchema,
   relayInstanceSchema,
@@ -499,7 +498,7 @@ export const loadBrickRecipe = createServerFn({ method: "POST" })
     const { brick } = parseImportedBrickFromRelay(
       await requestRelay(
         relay,
-        `/v1/bricks/recipe?source=${encodeURIComponent(data.source)}&reportNormalization=true`
+        `/v1/bricks/recipe?source=${encodeURIComponent(data.source)}`
       )
     )
     return hydrateBrickIcon(brick)
@@ -515,29 +514,28 @@ export const saveCustomBrick = createServerFn({ method: "POST" })
 
     const imported = await requestRelay(
       relay,
-      `/v1/bricks/recipe?source=${encodeURIComponent(data.source)}&reportNormalization=true`
+      `/v1/bricks/recipe?source=${encodeURIComponent(data.source)}`
     )
-    const { brick: parsedBrick, brickIdWasTruncated } =
+    const { brick: parsedBrick, brickIdExceedsRecommendation } =
       parseImportedBrickFromRelay(imported)
     const brick = await hydrateBrickIcon(parsedBrick)
     const saved = await runAppEffect(
       "customBricks.save",
       saveCustomBrickEffect(user.id, brick)
     )
-    return { brick: saved, brickIdWasTruncated }
+    return { brick: saved, brickIdExceedsRecommendation }
   })
 
 export function parseImportedBrickFromRelay(value: unknown): {
   brick: Brick
-  brickIdWasTruncated: boolean
+  brickIdExceedsRecommendation: boolean
 } {
-  const normalized = normalizeImportedBrickRecipeId(value)
-  const imported = importedBrickSchema.parse(normalized.value)
-  const { brickIdWasTruncated = false, ...brick } = imported
+  const brick = brickSchema.parse(value)
   return {
     brick,
-    brickIdWasTruncated:
-      normalized.idWasTruncated || brickIdWasTruncated,
+    brickIdExceedsRecommendation: brickIdExceedsRecommendedLength(
+      brick.metadata.id
+    ),
   }
 }
 

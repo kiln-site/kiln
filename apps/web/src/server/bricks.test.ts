@@ -89,27 +89,17 @@ describe("Hearth Brick mutation inputs", () => {
     expect(definition.metadata.id).toBe(builtinTailscaleBrick.metadata.id)
   })
 
-  it("normalizes overlong ids returned by an older Relay", () => {
+  it("preserves ids beyond the recommendation returned by a Relay", () => {
     const imported = parseImportedBrickFromRelay({
       ...builtinTailscaleBrick,
       metadata: {
         ...builtinTailscaleBrick.metadata,
-        id: "abcdefghijklmnopqrst-extra",
+        id: "abcdefghijklmnopqrstuvwxyz",
       },
     })
 
-    expect(imported.brick.metadata.id).toBe("abcdefghijklmnopqrst")
-    expect(imported.brickIdWasTruncated).toBe(true)
-  })
-
-  it("preserves a new Relay's id truncation marker", () => {
-    const imported = parseImportedBrickFromRelay({
-      ...builtinTailscaleBrick,
-      brickIdWasTruncated: true,
-    })
-
-    expect(imported.brick).toEqual(builtinTailscaleBrick)
-    expect(imported.brickIdWasTruncated).toBe(true)
+    expect(imported.brick.metadata.id).toBe("abcdefghijklmnopqrstuvwxyz")
+    expect(imported.brickIdExceedsRecommendation).toBe(true)
   })
 
   it("rejects browser-supplied recipes during server creation", () => {

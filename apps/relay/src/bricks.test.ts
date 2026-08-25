@@ -330,7 +330,7 @@ describe("Brick recipes", () => {
     }
   })
 
-  it("shortens an overlong id when importing a recipe", async () => {
+  it("preserves a Brick id beyond the recommended length", async () => {
     const directory = await mkdtemp(join(tmpdir(), "kiln-brick-import-"))
     try {
       const catalogPath = join(directory, "catalog.yml")
@@ -356,12 +356,9 @@ describe("Brick recipes", () => {
         join(directory, "data")
       )
 
-      const imported = await catalog.importedRecipe(
-        pathToFileURL(recipePath).href
-      )
+      const imported = await catalog.recipe(pathToFileURL(recipePath).href)
 
-      expect(imported.idWasTruncated).toBe(true)
-      expect(imported.recipe.metadata.id).toBe("abcdefghijklmnopqrst")
+      expect(imported.metadata.id).toBe("abcdefghijklmnopqrst-extra")
     } finally {
       await rm(directory, { force: true, recursive: true })
     }

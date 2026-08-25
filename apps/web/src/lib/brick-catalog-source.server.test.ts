@@ -163,7 +163,7 @@ recipes: [paper.yml]
     ).rejects.toThrow("duplicate Brick id paper")
   })
 
-  it("shortens overlong Brick ids and reports the adjustment", async () => {
+  it("preserves and reports Brick ids beyond the recommended length", async () => {
     const directory = await temporaryDirectory()
     await writeFile(
       resolve(directory, "catalog.yml"),
@@ -180,9 +180,9 @@ recipes: [paper.yml]
     )
 
     expect(loaded.snapshot.bricks[0]?.metadata.id).toBe(
-      "abcdefghijklmnopqrst"
+      "abcdefghijklmnopqrst-extra"
     )
-    expect(loaded.truncatedBrickIds).toEqual(["abcdefghijklmnopqrst"])
+    expect(loaded.overlongBrickIds).toEqual(["abcdefghijklmnopqrst-extra"])
   })
 
   it("does not allow personal file catalogs", async () => {

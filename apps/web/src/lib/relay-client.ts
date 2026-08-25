@@ -196,8 +196,6 @@ function relayControlRequest(path: string, init?: RequestInit) {
     return {
       operation: "brick.recipe" as const,
       payload: {
-        reportNormalization:
-          url.searchParams.get("reportNormalization") === "true",
         snapshotSha256: url.searchParams.get("snapshotSha256"),
         source: url.searchParams.get("source"),
       },

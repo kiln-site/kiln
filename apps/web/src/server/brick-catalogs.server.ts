@@ -111,11 +111,8 @@ export async function addBrickCatalogHandler(data: { source: string }) {
     })
   )
   return {
-    ...catalogSummary(
-      await requiredCatalog(catalogId),
-      isPlatformAdmin(user)
-    ),
-    truncatedBrickIds: loaded.truncatedBrickIds,
+    ...catalogSummary(await requiredCatalog(catalogId), isPlatformAdmin(user)),
+    overlongBrickIds: loaded.overlongBrickIds,
   }
 }
 

@@ -1,6 +1,9 @@
 import * as React from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import type { Brick } from "@workspace/contracts"
+import {
+  RECOMMENDED_MAXIMUM_BRICK_ID_LENGTH,
+  type Brick,
+} from "@workspace/contracts"
 import { Result } from "effect"
 import {
   BadgeCheck,
@@ -346,15 +349,15 @@ function useSaveCustomBrick(
   return useMutation({
     mutationFn: (source: string) =>
       saveCustomBrick({ data: { relayId, source } }),
-    onSuccess: async ({ brick, brickIdWasTruncated }) => {
+    onSuccess: async ({ brick, brickIdExceedsRecommendation }) => {
       onSelectionChange({ kind: "catalog", brick })
       showToast({
-        type: brickIdWasTruncated ? "warning" : "success",
-        message: brickIdWasTruncated
-          ? `${brick.metadata.name} saved with a shortened id`
+        type: brickIdExceedsRecommendation ? "warning" : "success",
+        message: brickIdExceedsRecommendation
+          ? `${brick.metadata.name} saved with a nonstandard id`
           : `${brick.metadata.name} saved`,
-        description: brickIdWasTruncated
-          ? `Its Brick id was shortened to “${brick.metadata.id}” to fit the 20-character limit.`
+        description: brickIdExceedsRecommendation
+          ? `Its Brick id exceeds the recommended ${RECOMMENDED_MAXIMUM_BRICK_ID_LENGTH} characters, but was preserved and remains usable.`
           : "This custom Brick is now available in your catalog.",
       })
       await Promise.all([
@@ -719,18 +722,18 @@ const BrickCatalogManager = React.memo(function BrickCatalogManager({
     onSuccess: async (catalog) => {
       setSource("")
       setSelectedId(catalog.id)
-      const truncatedCount = catalog.truncatedBrickIds.length
-      const truncatedPreview = catalog.truncatedBrickIds.slice(0, 3).join(", ")
-      const remainingTruncated = truncatedCount - 3
+      const overlongCount = catalog.overlongBrickIds.length
+      const overlongPreview = catalog.overlongBrickIds.slice(0, 3).join(", ")
+      const remainingOverlong = overlongCount - 3
       showToast({
-        type: truncatedCount > 0 ? "warning" : "success",
+        type: overlongCount > 0 ? "warning" : "success",
         message:
-          truncatedCount > 0
-            ? "Catalog added with shortened Brick ids"
+          overlongCount > 0
+            ? "Catalog added with nonstandard Brick ids"
             : "Catalog added",
         description:
-          truncatedCount > 0
-            ? `${truncatedCount} Brick id${truncatedCount === 1 ? " was" : "s were"} shortened to fit the 20-character limit: ${truncatedPreview}${remainingTruncated > 0 ? `, and ${remainingTruncated} more` : ""}.`
+          overlongCount > 0
+            ? `${overlongCount} Brick id${overlongCount === 1 ? " exceeds" : "s exceed"} the recommended ${RECOMMENDED_MAXIMUM_BRICK_ID_LENGTH} characters and remain usable: ${overlongPreview}${remainingOverlong > 0 ? `, and ${remainingOverlong} more` : ""}.`
             : `${catalog.brickCount} Brick${catalog.brickCount === 1 ? "" : "s"} saved in this snapshot.`,
       })
       await Promise.all([

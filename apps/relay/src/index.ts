@@ -1213,16 +1213,12 @@ async function executeControlRequest(
       return bricks.catalog()
     case "brick.recipe": {
       const source = requiredString(payload, "source")
-      const imported = await bricks.importedRecipe(
-        source,
-        optionalString(payload, "snapshotSha256")
-      )
       return {
-        ...imported.recipe,
+        ...(await bricks.recipe(
+          source,
+          optionalString(payload, "snapshotSha256")
+        )),
         source,
-        ...(payload.reportNormalization === true && imported.idWasTruncated
-          ? { brickIdWasTruncated: true as const }
-          : {}),
       }
     }
     case "database.list":

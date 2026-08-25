@@ -99,11 +99,13 @@ export const cliServerReferenceSchema = z
   .string()
   .regex(/^[A-Za-z\d_-]{43}:[a-f\d]{40}$/u)
 
+const cliStoredServerNameSchema = z.string().min(1).max(120)
+
 export const cliServerSchema = z
   .object({
     id: cliServerReferenceSchema,
     instanceId: z.string().regex(/^[a-f\d]{40}$/u),
-    name: z.string().min(1).max(MAXIMUM_INSTANCE_NAME_LENGTH),
+    name: cliStoredServerNameSchema,
     relayId: z.string().regex(/^[A-Za-z\d_-]{43}$/u),
     relayName: z.string().min(1).max(120),
     shortId: z.string().min(1).max(40),
@@ -225,7 +227,7 @@ export const cliServerInfoResponseSchema = z
         implementation: z.string().min(1),
         javaVersion: z.string().min(1),
         memoryLimitBytes: z.number().int().nonnegative(),
-        name: z.string().min(1).max(MAXIMUM_INSTANCE_NAME_LENGTH),
+        name: cliStoredServerNameSchema,
         observedState: z.string().min(1),
         stateReason: relayInstanceStateReasonSchema.nullable().default(null),
         publicAddress: z.string().nullable(),
@@ -424,7 +426,7 @@ export const cliActivityEntrySchema = z
     server: z
       .object({
         id: z.string(),
-        name: z.string().min(1).max(MAXIMUM_INSTANCE_NAME_LENGTH),
+        name: cliStoredServerNameSchema,
       })
       .strict()
       .nullable(),

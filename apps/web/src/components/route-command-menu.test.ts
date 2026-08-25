@@ -37,7 +37,7 @@ describe("route command filtering", () => {
       filterRoutes("/server/1047601c/console", "paper", [
         "Console",
         "server",
-        "Your Paper Server",
+        "Paper Server",
         "Paper",
         "terminal",
       ])

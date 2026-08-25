@@ -152,7 +152,9 @@ kiln servers create <relay-id> https://example.com/custom-brick.yml \
 Server creation requires a full-access CLI credential. Platform administrators
 can create on any Relay; Bring Your Own Relays users can create only on Relays
 they paired. Disk quotas must be at least `0.1GiB`, matching the Relay
-allocation minimum. `--no-start` leaves the new server stopped.
+allocation minimum. New and renamed server names are limited to 32 characters;
+read commands still accept legacy stored names up to 120 characters.
+`--no-start` leaves the new server stopped.
 
 Permanently delete a server and its data only after verifying the full target:
 

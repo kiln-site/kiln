@@ -77,8 +77,19 @@ describe("Minecraft Java defaults", () => {
 
   it("uses a brick name without its version for the server default", () => {
     expect(defaultBrickInstanceName({ ...paper, source: "paper.yml" })).toBe(
-      "Your Paper Server"
+      "Paper Server"
     )
+  })
+
+  it("keeps generated server names within the write limit", () => {
+    const brick = {
+      ...paper,
+      metadata: { ...paper.metadata, name: "A".repeat(80) },
+      source: "paper.yml",
+    }
+
+    expect(defaultBrickInstanceName(brick)).toBe(`${"A".repeat(25)} Server`)
+    expect(defaultBrickInstanceName(brick)).toHaveLength(32)
   })
 
   it.each([
@@ -139,13 +150,25 @@ describe("Minecraft Java defaults", () => {
       "25",
     ])
     expect(
-      recommendedSupportedJavaVersion("paper", paper.variables.java_version, "1.21.11")
+      recommendedSupportedJavaVersion(
+        "paper",
+        paper.variables.java_version,
+        "1.21.11"
+      )
     ).toBe("21")
     expect(
-      recommendedSupportedJavaVersion("paper", paper.variables.java_version, "26.2")
+      recommendedSupportedJavaVersion(
+        "paper",
+        paper.variables.java_version,
+        "26.2"
+      )
     ).toBe("25")
     expect(
-      recommendedSupportedJavaVersion("paper", paper.variables.java_version, "1.16.5")
+      recommendedSupportedJavaVersion(
+        "paper",
+        paper.variables.java_version,
+        "1.16.5"
+      )
     ).toBe("17")
     expect(
       supportedJavaVersions({
@@ -178,9 +201,9 @@ describe("Minecraft Java defaults", () => {
         "graal-21"
       )
     ).toEqual([])
-    expect(recommendedSupportedJavaVersion("paper", customJava, "1.21.11")).toBe(
-      "22"
-    )
+    expect(
+      recommendedSupportedJavaVersion("paper", customJava, "1.21.11")
+    ).toBe("22")
   })
 
   it("rejects custom versions that break Brick pattern or length rules", () => {
@@ -237,9 +260,7 @@ describe("Minecraft Java defaults", () => {
     expect(missingRequiredBrickVersion(requiredVersion, "   ")).toBe(true)
     expect(missingRequiredBrickVersion(requiredVersion, null)).toBe(true)
     expect(missingRequiredBrickVersion(requiredVersion, "1.21.11")).toBe(false)
-    expect(
-      missingRequiredBrickVersion(paper.variables.version, "")
-    ).toBe(false)
+    expect(missingRequiredBrickVersion(paper.variables.version, "")).toBe(false)
   })
 
   it("reports required Java Embers that are not published", () => {

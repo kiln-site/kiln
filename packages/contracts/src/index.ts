@@ -194,45 +194,14 @@ export const relayDatabaseExportSchema = relayDatabaseDumpSchema.omit({
   content: true,
 })
 
-export const MAXIMUM_BRICK_ID_LENGTH = 20
+export const BRICK_INSTANCE_NAME_SUFFIX = " Server"
+export const RECOMMENDED_MAXIMUM_BRICK_ID_LENGTH =
+  MAXIMUM_INSTANCE_NAME_LENGTH - BRICK_INSTANCE_NAME_SUFFIX.length
 
-export const brickIdSchema = z
-  .string()
-  .max(
-    MAXIMUM_BRICK_ID_LENGTH,
-    `Brick ids must be ${MAXIMUM_BRICK_ID_LENGTH} characters or fewer`
-  )
-  .regex(/^[a-z0-9][a-z0-9.-]*$/u)
+export const brickIdSchema = z.string().regex(/^[a-z0-9][a-z0-9.-]{0,63}$/u)
 
-export interface ImportedBrickRecipeIdNormalization {
-  idWasTruncated: boolean
-  value: unknown
-}
-
-export function normalizeImportedBrickRecipeId(
-  value: unknown
-): ImportedBrickRecipeIdNormalization {
-  if (!isUnknownRecord(value) || !isUnknownRecord(value.metadata)) {
-    return { idWasTruncated: false, value }
-  }
-  const id = value.metadata.id
-  if (typeof id !== "string" || id.length <= MAXIMUM_BRICK_ID_LENGTH) {
-    return { idWasTruncated: false, value }
-  }
-  return {
-    idWasTruncated: true,
-    value: {
-      ...value,
-      metadata: {
-        ...value.metadata,
-        id: id.slice(0, MAXIMUM_BRICK_ID_LENGTH),
-      },
-    },
-  }
-}
-
-function isUnknownRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
+export function brickIdExceedsRecommendedLength(id: string): boolean {
+  return id.length > RECOMMENDED_MAXIMUM_BRICK_ID_LENGTH
 }
 
 export const brickVariableValueSchema = z.union([
@@ -411,10 +380,6 @@ export const brickSchema = brickRecipeSchema.extend({
     .max(64 * 1024)
     .optional(),
   source: brickSourceSchema,
-})
-
-export const importedBrickSchema = brickSchema.extend({
-  brickIdWasTruncated: z.literal(true).optional(),
 })
 
 export const builtinTailscaleBrickId = "tailscale"

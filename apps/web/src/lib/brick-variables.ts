@@ -1,4 +1,6 @@
 import {
+  BRICK_INSTANCE_NAME_SUFFIX,
+  RECOMMENDED_MAXIMUM_BRICK_ID_LENGTH,
   requiredMinecraftJavaVersion,
   type Brick,
   type BrickVariableValue,
@@ -87,7 +89,9 @@ export function supportedJavaVersions(
   const candidates = definition.options?.length
     ? definition.options.map(String)
     : PUBLISHED_JAVA_EMBERS
-  return candidates.filter((version) => stringVariableAllows(definition, version))
+  return candidates.filter((version) =>
+    stringVariableAllows(definition, version)
+  )
 }
 
 export function javaVersionSelectOptions(
@@ -196,7 +200,10 @@ export function stringVariableAllows(
 }
 
 export function defaultBrickInstanceName(brick: Brick): string {
-  return `Your ${brick.metadata.name} Server`
+  const brickName = brick.metadata.name
+    .slice(0, RECOMMENDED_MAXIMUM_BRICK_ID_LENGTH)
+    .trimEnd()
+  return `${brickName}${BRICK_INSTANCE_NAME_SUFFIX}`
 }
 
 export function latestStableVersion(

@@ -1,35 +1,36 @@
 import { describe, expect, it } from "vite-plus/test"
 
 import {
+  brickIdExceedsRecommendedLength,
   brickIdSchema,
-  MAXIMUM_BRICK_ID_LENGTH,
-  normalizeImportedBrickRecipeId,
+  RECOMMENDED_MAXIMUM_BRICK_ID_LENGTH,
 } from "./index"
 
 describe("Brick ids", () => {
-  it("enforces a 20-character maximum", () => {
+  it("treats the server-name-safe length as a recommendation", () => {
     expect(
-      brickIdSchema.safeParse("a".repeat(MAXIMUM_BRICK_ID_LENGTH)).success
+      brickIdSchema.safeParse("a".repeat(RECOMMENDED_MAXIMUM_BRICK_ID_LENGTH))
+        .success
     ).toBe(true)
     expect(
-      brickIdSchema.safeParse("a".repeat(MAXIMUM_BRICK_ID_LENGTH + 1))
-        .success
+      brickIdSchema.safeParse(
+        "a".repeat(RECOMMENDED_MAXIMUM_BRICK_ID_LENGTH + 1)
+      ).success
+    ).toBe(true)
+    expect(
+      brickIdExceedsRecommendedLength(
+        "a".repeat(RECOMMENDED_MAXIMUM_BRICK_ID_LENGTH)
+      )
     ).toBe(false)
+    expect(
+      brickIdExceedsRecommendedLength(
+        "a".repeat(RECOMMENDED_MAXIMUM_BRICK_ID_LENGTH + 1)
+      )
+    ).toBe(true)
   })
 
-  it("keeps the first 20 characters of an imported Brick id", () => {
-    const value = {
-      format: "kiln.brick/v1",
-      metadata: { id: "abcdefghijklmnopqrst-extra" },
-    }
-
-    expect(normalizeImportedBrickRecipeId(value)).toEqual({
-      idWasTruncated: true,
-      value: {
-        ...value,
-        metadata: { id: "abcdefghijklmnopqrst" },
-      },
-    })
-    expect(value.metadata.id).toBe("abcdefghijklmnopqrst-extra")
+  it("keeps the existing 64-character interoperability ceiling", () => {
+    expect(brickIdSchema.safeParse("a".repeat(64)).success).toBe(true)
+    expect(brickIdSchema.safeParse("a".repeat(65)).success).toBe(false)
   })
 })
