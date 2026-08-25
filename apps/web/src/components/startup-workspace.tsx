@@ -789,9 +789,6 @@ function BrickSummary({
       <p className="type-meta mt-0.5 truncate text-muted-foreground">
         {view.description}
       </p>
-      <p className="type-meta mt-1 truncate font-mono text-muted-foreground">
-        {view.source}
-      </p>
     </WorkspaceSummaryCard>
   )
 }
