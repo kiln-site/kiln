@@ -1227,7 +1227,7 @@ function InstanceNameForm({
             setSaved(false)
             setError(null)
           }}
-          maxLength={120}
+          maxLength={32}
           disabled={!canRename || pending}
           aria-invalid={Boolean(error)}
           className="h-9 min-w-0 flex-1"

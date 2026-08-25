@@ -428,9 +428,12 @@ async function ensureFileActivitySchema(database) {
   const [displayNameColumns] = await database.query(
     `SHOW COLUMNS FROM ${databaseTable("instance")} LIKE 'display_name'`
   )
-  if (displayNameColumns[0]?.Null === "NO") {
+  if (
+    displayNameColumns[0]?.Null === "NO" ||
+    displayNameColumns[0]?.Type?.toLowerCase() !== "varchar(32)"
+  ) {
     await database.query(
-      `ALTER TABLE ${databaseTable("instance")} MODIFY display_name VARCHAR(120) NULL`
+      `ALTER TABLE ${databaseTable("instance")} MODIFY display_name VARCHAR(32) NULL`
     )
   }
   await database.query(

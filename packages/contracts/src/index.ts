@@ -326,7 +326,7 @@ export const brickRecipeSchema = z
   .strict()
 
 export const brickSourceSchema = z.string().trim().url().max(2_048)
-export const relayInstanceNameSchema = z.string().trim().min(1).max(120)
+export const relayInstanceNameSchema = z.string().trim().min(1).max(32)
 export const DEFAULT_INSTANCE_DISK_LIMIT_BYTES = 25 * 1024 ** 3
 export const RELAY_NODE_DISK_RESERVE_BYTES = 10 * 1024 ** 3
 

@@ -3,6 +3,7 @@ import {
   MINIMUM_INSTANCE_DISK_LIMIT_BYTES,
   relayCreateInstanceSchema,
   relayDiskAllocationAvailableBytes,
+  relayInstanceNameSchema,
   relayInstanceLimitsSchema,
   relayUpdateInstanceStartupSchema,
 } from "@workspace/contracts"
@@ -17,6 +18,15 @@ import {
 const GIBIBYTE = 1024 ** 3
 
 describe("Relay disk quotas", () => {
+  it("limits instance names to 32 characters", () => {
+    expect(relayInstanceNameSchema.safeParse("a".repeat(32)).success).toBe(
+      true
+    )
+    expect(relayInstanceNameSchema.safeParse("a".repeat(33)).success).toBe(
+      false
+    )
+  })
+
   it("caps legacy defaults at node capacity after the 10 GiB reserve", () => {
     const assignments = legacyDiskLimitAssignments(
       ["d", "b", "a", "c"].map((id) => ({

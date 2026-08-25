@@ -69,7 +69,7 @@ CREATE TABLE IF NOT EXISTS kiln_brick_catalog (
 CREATE TABLE IF NOT EXISTS kiln_instance (
   relay_id CHAR(43) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
   instance_id CHAR(40) NOT NULL,
-  display_name VARCHAR(120) NULL,
+  display_name VARCHAR(32) NULL,
   owner_id VARCHAR(36) NULL,
   provisioning_reserved_until TIMESTAMP(3) NULL,
   created_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),

@@ -381,7 +381,7 @@ const AddServerConfiguration = React.memo(function AddServerConfiguration({
           key={selectionIdentity}
           name="name"
           defaultValue={selectionName}
-          maxLength={120}
+          maxLength={32}
           placeholder="Server name"
           disabled={pending}
           required
