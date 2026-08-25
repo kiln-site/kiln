@@ -23,6 +23,7 @@ describe("console log row timestamps", () => {
     )
 
     expect(lifecycleTimestampClass).toBe(normalTimestampClass)
+    expect(normalTimestampClass).toContain("leading-[18px]")
     expect(lifecycleTimestampClass.split(" ")).toContain("text-left")
   })
 })
