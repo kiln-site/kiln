@@ -318,6 +318,18 @@ export function selectInstanceStateReason(
     )?.stateReason ?? null
 }
 
+export function selectInstanceLifecycleStartedAt(
+  instanceId: string,
+  relayId?: string
+) {
+  return (snapshot: RelayFleetSnapshot) => {
+    const instance = snapshot.instances.find(
+      (item) => item.id === instanceId && (!relayId || item.relayId === relayId)
+    )
+    return relayInstanceLifecycleEventTime(instance?.lifecycle, "started")
+  }
+}
+
 export function selectInstanceContainerRunning(
   instanceId: string,
   relayId?: string

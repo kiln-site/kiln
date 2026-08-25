@@ -3,8 +3,23 @@ import type {
   RelayInstanceLifecycleEvent,
   RelayInstanceLifecycleState,
   RelayInstanceRecovery,
+  RelayInstanceStateReason,
   RelayObservedState,
 } from "@workspace/contracts"
+
+export const CONSOLE_STARTUP_REASON_DELAY_MS = 60_000
+
+export function consoleRuntimeReasonDelayRemaining(
+  reason: RelayInstanceStateReason,
+  startedAt: string | null,
+  now = Date.now()
+): number {
+  if (reason.code !== "waiting_for_readiness") return 0
+  if (!startedAt) return CONSOLE_STARTUP_REASON_DELAY_MS
+  const startedAtMs = Date.parse(startedAt)
+  if (!Number.isFinite(startedAtMs)) return CONSOLE_STARTUP_REASON_DELAY_MS
+  return Math.max(0, startedAtMs + CONSOLE_STARTUP_REASON_DELAY_MS - now)
+}
 
 export function initialConsoleStateLines(
   lifecycle: ReadonlyArray<RelayInstanceLifecycleEvent>,

@@ -11,6 +11,7 @@ import {
   ConsoleSearchControl,
   TailscaleConsoleFilterMenus,
 } from "@/components/console/console-filters"
+import { consoleRuntimeReasonDelayRemaining } from "@/components/console/console-lifecycle"
 import type {
   ConsoleStreamStore,
   ConsoleUiStore,
@@ -25,6 +26,7 @@ import {
 import { ConsoleTooltip } from "@/components/console/console-tooltip"
 import { relaySnapshotQueryOptions } from "@/lib/query-options"
 import {
+  selectInstanceLifecycleStartedAt,
   selectInstanceStateReason,
   type InstanceWorkspaceInstance,
 } from "@/lib/relay-selectors"
@@ -85,12 +87,52 @@ const ConsoleRuntimeReason = React.memo(function ConsoleRuntimeReason({
     () => selectInstanceStateReason(instanceId, relayId),
     [instanceId, relayId]
   )
+  const selectStartedAt = React.useMemo(
+    () => selectInstanceLifecycleStartedAt(instanceId, relayId),
+    [instanceId, relayId]
+  )
   const { data: reason } = useQuery({
     ...relaySnapshotQueryOptions(),
     select: selectReason,
   })
-  return reason ? <ConsoleRuntimeReasonContent reason={reason} /> : null
+  const { data: startedAt = null } = useQuery({
+    ...relaySnapshotQueryOptions(),
+    select: selectStartedAt,
+  })
+  if (!reason) return null
+  return reason.code === "waiting_for_readiness" ? (
+    <DelayedConsoleRuntimeReasonContent
+      key={startedAt ?? "unknown"}
+      reason={reason}
+      startedAt={startedAt}
+    />
+  ) : (
+    <ConsoleRuntimeReasonContent reason={reason} />
+  )
 })
+
+function DelayedConsoleRuntimeReasonContent({
+  reason,
+  startedAt,
+}: {
+  reason: RelayInstanceStateReason
+  startedAt: string | null
+}) {
+  const [visible, setVisible] = React.useState(
+    () => consoleRuntimeReasonDelayRemaining(reason, startedAt) === 0
+  )
+  React.useEffect(() => {
+    const remaining = consoleRuntimeReasonDelayRemaining(reason, startedAt)
+    if (remaining === 0) {
+      setVisible(true)
+      return
+    }
+    setVisible(false)
+    const timer = window.setTimeout(() => setVisible(true), remaining)
+    return () => window.clearTimeout(timer)
+  }, [reason, startedAt])
+  return visible ? <ConsoleRuntimeReasonContent reason={reason} /> : null
+}
 
 function ConsoleRuntimeReasonContent({
   reason,
@@ -102,12 +144,11 @@ function ConsoleRuntimeReasonContent({
     <ConsoleTooltip content={message}>
       <span
         aria-label={`Server state reason: ${message}`}
-        className="type-label flex max-w-64 min-w-0 shrink items-center gap-1.5 text-amber-300 outline-none"
+        className="inline-flex shrink-0 items-center text-amber-300 outline-none"
         role="status"
         tabIndex={0}
       >
         <TriangleAlert className="size-3.5 shrink-0" />
-        <span className="hidden truncate xl:inline">{message}</span>
       </span>
     </ConsoleTooltip>
   )

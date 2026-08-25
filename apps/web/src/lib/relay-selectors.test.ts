@@ -14,6 +14,7 @@ import {
   resolveCanonicalRelayInstance,
   resolveRelayInstance,
   selectInstanceContainerRunning,
+  selectInstanceLifecycleStartedAt,
   selectInstanceRelayConnected,
   selectInstanceRuntime,
   selectInstanceStateReason,
@@ -131,6 +132,18 @@ describe("Relay render selectors", () => {
     expect(before?.resources?.cpu.percent).toBe(1)
     expect(after?.resources?.cpu.percent).toBe(2)
     expect(after?.resources?.sampledAt).not.toBe(before?.resources?.sampledAt)
+  })
+
+  it("selects the current lifecycle start without subscribing to resources", () => {
+    const before = snapshotWithCpu(1)
+    const after = snapshotWithCpu(2)
+
+    expect(selectInstanceLifecycleStartedAt(instance.id)(before)).toBe(
+      "2026-07-20T11:00:00.000Z"
+    )
+    expect(selectInstanceLifecycleStartedAt(instance.id)(after)).toBe(
+      selectInstanceLifecycleStartedAt(instance.id)(before)
+    )
   })
 
   it("treats a starting container as available for console input", () => {

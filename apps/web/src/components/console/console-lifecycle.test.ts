@@ -2,6 +2,8 @@ import { describe, expect, it } from "vite-plus/test"
 import type { RelayInstanceLifecycleEvent } from "@workspace/contracts"
 
 import {
+  CONSOLE_STARTUP_REASON_DELAY_MS,
+  consoleRuntimeReasonDelayRemaining,
   consoleRecoveryLine,
   consoleSessionAcceptedAheadOfRuntime,
   consoleSessionIsCurrent,
@@ -33,6 +35,36 @@ function lifecycle(
 }
 
 describe("console lifecycle lines", () => {
+  it("delays only the expected startup readiness notice", () => {
+    const startedAtMs = Date.parse(startedAt)
+    const reason = { code: "waiting_for_readiness" } as const
+
+    expect(
+      consoleRuntimeReasonDelayRemaining(reason, startedAt, startedAtMs)
+    ).toBe(CONSOLE_STARTUP_REASON_DELAY_MS)
+    expect(
+      consoleRuntimeReasonDelayRemaining(
+        reason,
+        startedAt,
+        startedAtMs + CONSOLE_STARTUP_REASON_DELAY_MS - 1
+      )
+    ).toBe(1)
+    expect(
+      consoleRuntimeReasonDelayRemaining(
+        reason,
+        startedAt,
+        startedAtMs + CONSOLE_STARTUP_REASON_DELAY_MS
+      )
+    ).toBe(0)
+    expect(
+      consoleRuntimeReasonDelayRemaining(
+        { code: "health_check_failed" },
+        startedAt,
+        startedAtMs
+      )
+    ).toBe(0)
+  })
+
   it("shows starting and running for a ready server", () => {
     expect(
       initialConsoleStateLines(lifecycle(readyAt), "running").map(
