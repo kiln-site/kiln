@@ -24,8 +24,8 @@ export type RelayInstanceLifecycleEvent = z.infer<
 >
 
 export function relayInstanceLifecycleEventTime(
-  lifecycle: ReadonlyArray<RelayInstanceLifecycleEvent>,
+  lifecycle: ReadonlyArray<RelayInstanceLifecycleEvent> | null | undefined,
   state: RelayInstanceLifecycleState
 ): string | null {
-  return lifecycle.find((event) => event.state === state)?.time ?? null
+  return lifecycle?.find((event) => event.state === state)?.time ?? null
 }

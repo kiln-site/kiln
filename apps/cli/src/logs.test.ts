@@ -17,20 +17,20 @@ describe("followed CLI logs", () => {
     const streamEvents: Array<RelayConsoleStreamEvent> = [
       {
         instanceId: "instance",
+        lifecycle: [{ state: "started", time: "2026-08-09T12:00:00.000Z" }],
         lines: [recent, newest],
-        startedAt: "2026-08-09T12:00:00.000Z",
         truncated: true,
         type: "reset",
       },
       {
         instanceId: "instance",
-        startedAt: "2026-08-09T12:00:00.000Z",
+        lifecycle: [{ state: "started", time: "2026-08-09T12:00:00.000Z" }],
         type: "ready",
       },
       {
         instanceId: "instance",
+        lifecycle: [{ state: "started", time: "2026-08-09T12:00:00.000Z" }],
         lines: [oldest],
-        startedAt: "2026-08-09T12:00:00.000Z",
         truncated: false,
         type: "history",
       },

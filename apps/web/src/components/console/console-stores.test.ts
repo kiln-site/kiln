@@ -12,6 +12,7 @@ describe("Tailscale console stores", () => {
       connection: "live" as const,
       consoleData: {
         instanceId: "network-id",
+        lifecycle: [],
         lines: [
           {
             id: "same-line",
@@ -21,7 +22,6 @@ describe("Tailscale console stores", () => {
             text: "[tailscale] ready",
           },
         ],
-        startedAt: null,
         truncated: false,
       },
       error: null,

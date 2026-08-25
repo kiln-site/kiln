@@ -299,8 +299,8 @@ export function createConsoleAggregateStreamStore(
           ? null
           : {
               instanceId,
+              lifecycle: [],
               lines,
-              startedAt: null,
               truncated: snapshots.some(
                 (snapshot) => snapshot.consoleData?.truncated
               ),

@@ -37,7 +37,6 @@ describe("Relay mclo.gs uploads", () => {
             instanceId: "instance",
             path: "console.log",
             size: 29,
-            startedAt: "2026-07-25T17:59:03.123456789Z",
           },
           {
             implementation: "Paper",

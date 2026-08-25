@@ -1275,6 +1275,7 @@ export class DockerDriver {
 
     return {
       instanceId: instance.id,
+      lifecycle: startedAt ? [{ state: "started", time: startedAt }] : [],
       lines: rawLines.map((line) => {
         const hash = createHash("sha1")
           .update(`${line.timestamp ?? ""}\u0000${line.text}`)
@@ -1284,7 +1285,6 @@ export class DockerDriver {
         occurrences.set(hash, occurrence + 1)
         return { ...line, id: `${hash}-${occurrence}` }
       }),
-      startedAt,
       truncated: rawLines.length >= boundedLimit,
     }
   }
@@ -1292,7 +1292,6 @@ export class DockerDriver {
   async consoleLog(instance: RelayInstanceConfig): Promise<DockerConsoleLog> {
     const discovered = await this.#findDiscovered(instance.id)
     const targets = await this.#consoleTargets(instance, discovered)
-    const startedAt = consoleStartedAt(discovered.container)
     const results = await Promise.all(
       targets.map(async (target) => {
         const targetSince = dockerLogSinceArguments(
@@ -1333,7 +1332,6 @@ export class DockerDriver {
       path: "console.log",
       content,
       size,
-      startedAt,
     }
   }
 
@@ -3150,7 +3148,6 @@ export interface DockerConsoleLog {
   instanceId: string
   path: "console.log"
   size: number
-  startedAt: string | null
 }
 
 const ANSI_COLORS = [

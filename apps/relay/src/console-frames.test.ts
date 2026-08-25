@@ -17,8 +17,8 @@ describe("console browser frames", () => {
     }))
     const frames = encodeConsoleHistoryFrames({
       instanceId: "instance",
+      lifecycle: [{ state: "started", time: "2026-07-25T17:59:03.123456789Z" }],
       lines,
-      startedAt: "2026-07-25T17:59:03.123456789Z",
       truncated: false,
     })
 

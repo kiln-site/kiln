@@ -1268,8 +1268,8 @@ export const relayConsoleLineSchema = z.object({
 
 export const relayConsoleSchema = z.object({
   instanceId: z.string().min(1),
+  lifecycle: z.array(relayInstanceLifecycleEventSchema).default([]),
   lines: z.array(relayConsoleLineSchema),
-  startedAt: z.string().datetime().nullable().optional(),
   truncated: z.boolean(),
 })
 
@@ -1277,19 +1277,19 @@ export const relayConsoleStreamEventSchema = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("ready"),
     instanceId: z.string().min(1),
-    startedAt: z.string().datetime().nullable().optional(),
+    lifecycle: z.array(relayInstanceLifecycleEventSchema).default([]),
   }),
   z.object({
     type: z.literal("reset"),
     instanceId: z.string().min(1),
-    startedAt: z.string().datetime().nullable(),
+    lifecycle: z.array(relayInstanceLifecycleEventSchema),
     lines: z.array(relayConsoleLineSchema),
     truncated: z.boolean(),
   }),
   z.object({
     type: z.literal("history"),
     instanceId: z.string().min(1),
-    startedAt: z.string().datetime().nullable(),
+    lifecycle: z.array(relayInstanceLifecycleEventSchema),
     lines: z.array(relayConsoleLineSchema),
     truncated: z.boolean(),
   }),

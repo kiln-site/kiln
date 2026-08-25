@@ -26,9 +26,13 @@ import {
   relayBrowserConsoleProtocol,
   relayBrowserConsoleProtocols,
   relayBrowserProtocol,
-  relayInstanceLifecycleEventTime,
+  relayInstanceLifecycleEventTime as lifecycleEventTime,
 } from "@workspace/contracts"
-import type { RelayConsole, RelayConsoleLine } from "@workspace/contracts"
+import type {
+  RelayConsole,
+  RelayConsoleLine,
+  RelayInstanceLifecycleEvent,
+} from "@workspace/contracts"
 import {
   relayConsoleCommandSchema,
   relayConsoleCompletionInputSchema,
@@ -1615,7 +1619,7 @@ class ConsoleHub {
   #closed = false
   #graceFiber: Fiber.Fiber<void, never> | null = null
   #sessionFloor: string | null = null
-  #sessionStartedAt: string | null | undefined
+  #sessionLifecycle: Array<RelayInstanceLifecycleEvent> | undefined
   #streamFiber: Fiber.Fiber<void, never> | null = null
   #transitionStartedAt: string | null = null
   #truncated = false
@@ -1644,7 +1648,7 @@ class ConsoleHub {
     this.#graceFiber?.interruptUnsafe()
     this.#graceFiber = null
     this.#subscribers.add(socket)
-    if (this.#sessionStartedAt !== undefined) this.#sendSession(socket)
+    if (this.#sessionLifecycle !== undefined) this.#sendSession(socket)
     this.#startStream()
   }
 
@@ -1732,9 +1736,10 @@ class ConsoleHub {
     ).pipe(
       Effect.tap((snapshot) =>
         Effect.sync(() => {
-          const startedAt = snapshot.startedAt ?? null
-          const sessionChanged = this.#sessionStartedAt !== startedAt
-          if (this.#sessionStartedAt === undefined || sessionChanged) {
+          const startedAt = lifecycleEventTime(snapshot.lifecycle, "started")
+          const sessionChanged =
+            lifecycleEventTime(this.#sessionLifecycle, "started") !== startedAt
+          if (this.#sessionLifecycle === undefined || sessionChanged) {
             this.#replaceSession(snapshot)
           } else {
             for (const line of snapshot.lines) this.#append(line)
@@ -1805,19 +1810,16 @@ class ConsoleHub {
   }
 
   #observeSnapshot(sample: RelaySnapshotSample): void {
-    if (this.#abort.signal.aborted || this.#sessionStartedAt === undefined) {
+    if (this.#abort.signal.aborted || this.#sessionLifecycle === undefined) {
       return
     }
     const lifecycle = sample.snapshot.instances.find(
       (instance) => instance.id === this.#instance.id
     )?.lifecycle
-    const startedAt = relayInstanceLifecycleEventTime(
-      lifecycle ?? [],
-      "started"
-    )
+    const startedAt = lifecycleEventTime(lifecycle, "started")
     if (
       !startedAt ||
-      startedAt === this.#sessionStartedAt ||
+      startedAt === lifecycleEventTime(this.#sessionLifecycle, "started") ||
       startedAt === this.#transitionStartedAt
     ) {
       return
@@ -1830,9 +1832,9 @@ class ConsoleHub {
   }
 
   #replaceSession(snapshot: RelayConsole): void {
-    const startedAt = snapshot.startedAt ?? null
+    const startedAt = lifecycleEventTime(snapshot.lifecycle, "started")
     this.#sessionFloor = startedAt
-    this.#sessionStartedAt = startedAt
+    this.#sessionLifecycle = snapshot.lifecycle
     this.#backfillStartedAt = undefined
     this.#truncated = snapshot.truncated
     this.#recent.splice(0, this.#recent.length, ...snapshot.lines)
@@ -1850,8 +1852,9 @@ class ConsoleHub {
           if (
             this.#abort.signal.aborted ||
             this.#transitionStartedAt !== startedAt ||
-            this.#sessionStartedAt === startedAt ||
-            snapshot.startedAt !== startedAt
+            lifecycleEventTime(this.#sessionLifecycle, "started") ===
+              startedAt ||
+            lifecycleEventTime(snapshot.lifecycle, "started") !== startedAt
           ) {
             return
           }
@@ -1882,8 +1885,9 @@ class ConsoleHub {
         Effect.sync(() => {
           if (
             this.#abort.signal.aborted ||
-            this.#sessionStartedAt !== startedAt ||
-            (history.startedAt ?? null) !== startedAt
+            lifecycleEventTime(this.#sessionLifecycle, "started") !==
+              startedAt ||
+            lifecycleEventTime(history.lifecycle, "started") !== startedAt
           ) {
             return
           }
@@ -1926,13 +1930,13 @@ class ConsoleHub {
   }
 
   #sendSession(socket: WebSocket): void {
-    const startedAt = this.#sessionStartedAt ?? null
+    const lifecycle = this.#sessionLifecycle ?? []
     const snapshotStart = Math.max(0, this.#recent.length - 200)
     if (socket.protocol === relayBrowserProtocol) {
       send(socket, {
         type: "ready",
         instanceId: this.#instance.id,
-        startedAt,
+        lifecycle,
       })
       for (const line of this.#recent.slice(snapshotStart)) {
         sendEncoded(socket, encodeConsoleLineFrame(line))
@@ -1943,7 +1947,7 @@ class ConsoleHub {
     const reset = encodeNewestConsoleBatch({
       type: "reset",
       instanceId: this.#instance.id,
-      startedAt,
+      lifecycle,
       lines: this.#recent.slice(snapshotStart),
       truncated: this.#truncated || snapshotStart > 0,
     })
@@ -1951,7 +1955,7 @@ class ConsoleHub {
     send(socket, {
       type: "ready",
       instanceId: this.#instance.id,
-      startedAt,
+      lifecycle,
     })
     this.#sendHistory(
       new Set([socket]),
@@ -1969,7 +1973,7 @@ class ConsoleHub {
     if (subscribers.length === 0) return
     const frames = encodeConsoleHistoryFrames({
       instanceId: this.#instance.id,
-      startedAt: this.#sessionStartedAt ?? null,
+      lifecycle: this.#sessionLifecycle ?? [],
       lines,
       truncated: this.#truncated,
     })

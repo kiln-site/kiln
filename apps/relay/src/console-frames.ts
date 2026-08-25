@@ -1,5 +1,6 @@
 import {
   relayBrowserMaxFrameBytes,
+  type RelayInstanceLifecycleEvent,
   type RelayConsoleLine,
 } from "@workspace/contracts"
 
@@ -7,8 +8,8 @@ type ConsoleBatchType = "history" | "reset"
 
 interface ConsoleBatchInput {
   instanceId: string
+  lifecycle: ReadonlyArray<RelayInstanceLifecycleEvent>
   lines: ReadonlyArray<RelayConsoleLine>
-  startedAt: string | null
   truncated: boolean
   type: ConsoleBatchType
 }
@@ -118,7 +119,7 @@ function batchEnvelope(
   start: number
 ): [prefix: string, suffix: string] {
   return [
-    `{"type":${JSON.stringify(input.type)},"instanceId":${JSON.stringify(input.instanceId)},"startedAt":${JSON.stringify(input.startedAt)},"lines":[`,
+    `{"type":${JSON.stringify(input.type)},"instanceId":${JSON.stringify(input.instanceId)},"lifecycle":${JSON.stringify(input.lifecycle)},"lines":[`,
     `],"truncated":${input.truncated || start > 0}}`,
   ]
 }
