@@ -1019,7 +1019,10 @@ const BrickCatalogManager = React.memo(function BrickCatalogManager({
                       <span className="min-w-0 flex-1 truncate text-xs font-medium">
                         {brick.metadata.name}
                       </span>
-                      <span className="type-meta font-mono text-muted-foreground">
+                      <span
+                        className="type-meta max-w-[40%] shrink-0 truncate font-mono text-muted-foreground"
+                        title={brick.metadata.id}
+                      >
                         {brick.metadata.id}
                       </span>
                     </li>
