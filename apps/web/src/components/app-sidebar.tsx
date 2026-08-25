@@ -537,12 +537,12 @@ const ServerSelector = React.memo(function ServerSelector({
             }
             className="mb-1.5 h-auto border border-sidebar-border/75 bg-background/35 px-2 py-2 group-data-[collapsible=icon]:h-[32px]! group-data-[collapsible=icon]:overflow-visible group-data-[collapsible=icon]:bg-black/10 hover:border-sidebar-border hover:bg-sidebar-accent group-data-[collapsible=icon]:hover:bg-black/15 data-[state=open]:border-sidebar-border data-[state=open]:bg-sidebar-accent dark:group-data-[collapsible=icon]:bg-black/25 dark:group-data-[collapsible=icon]:hover:bg-black/35"
           >
-            <span className="relative grid size-7 shrink-0 place-items-center rounded-md border border-sidebar-border/70 bg-background/25 group-data-[collapsible=icon]:absolute group-data-[collapsible=icon]:inset-0 group-data-[collapsible=icon]:m-auto group-data-[collapsible=icon]:size-6 group-data-[collapsible=icon]:rounded-none group-data-[collapsible=icon]:border-0 group-data-[collapsible=icon]:bg-transparent">
+            <span className="relative grid size-8 shrink-0 place-items-center rounded-md border border-sidebar-border/70 bg-background/25 group-data-[collapsible=icon]:absolute group-data-[collapsible=icon]:inset-0 group-data-[collapsible=icon]:m-auto group-data-[collapsible=icon]:size-8 group-data-[collapsible=icon]:rounded-none group-data-[collapsible=icon]:border-0 group-data-[collapsible=icon]:bg-transparent">
               <BrickIcon
                 id={activeIcon.id}
                 color={activeIcon.color}
                 iconSvg={activeIcon.iconSvg}
-                className="size-4 text-sidebar-foreground/85"
+                className="size-6! text-sidebar-foreground/85 group-data-[collapsible=icon]:size-6!"
                 aria-hidden="true"
               />
               {instance ? (
@@ -874,12 +874,12 @@ const ServerSelectorItem = React.memo(function ServerSelectorItem({
       className={`flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left transition-[color,background-color,box-shadow] duration-100 outline-none hover:bg-popover-accent hover:text-popover-accent-foreground focus-visible:bg-popover-accent focus-visible:text-popover-accent-foreground focus-visible:ring-2 focus-visible:ring-ring/35 ${active ? "bg-primary/8 shadow-[inset_0_0_0_1px_color-mix(in_oklab,var(--primary)_14%,transparent)]" : ""}`}
       onClick={() => onSelect(item.routeId)}
     >
-      <span className="relative grid size-7 shrink-0 place-items-center rounded-md bg-muted/55">
+      <span className="relative grid size-8 shrink-0 place-items-center rounded-md bg-muted/55">
         <BrickIcon
           id={icon.id}
           color={icon.color}
           iconSvg={icon.iconSvg}
-          className="size-3.5 text-muted-foreground"
+          className="size-6 text-muted-foreground"
           aria-hidden="true"
         />
         <span

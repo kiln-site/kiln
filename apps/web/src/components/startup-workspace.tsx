@@ -770,12 +770,13 @@ function BrickSummary({
         ) : null
       }
       className="rounded-none border-0 bg-transparent"
+      iconClassName="size-14!"
       icon={
         <BrickIcon
           id={view.id}
           color={view.color}
           iconSvg={view.iconSvg}
-          className="size-5"
+          className="size-[42px]"
         />
       }
       title={view.name}

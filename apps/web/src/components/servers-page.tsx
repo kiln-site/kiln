@@ -585,12 +585,12 @@ const ServerTableRow = React.memo(function ServerTableRow({
       </WorkspaceTableCell>
       <WorkspaceTableCell>
         <div className="flex min-w-0 items-center gap-2.5">
-          <span className="flex size-7 shrink-0 items-center justify-center rounded-md border border-border/70 bg-background/35 text-muted-foreground">
+          <span className="flex size-8 shrink-0 items-center justify-center rounded-md border border-border/70 bg-background/35 text-muted-foreground">
             <BrickIcon
               id={icon.id}
               color={icon.color}
               iconSvg={icon.iconSvg}
-              className="size-3.5"
+              className="size-6"
               aria-hidden="true"
             />
           </span>
