@@ -6,6 +6,8 @@ import {
   brickSchema,
   brickSourceSchema,
   brickVariableValuesSchema,
+  importedBrickSchema,
+  normalizeImportedBrickRecipeId,
   relayCreateInstanceSchema,
   relayInstanceNameSchema,
   relayInstanceSchema,
@@ -494,14 +496,13 @@ export const loadBrickRecipe = createServerFn({ method: "POST" })
     requireBrickSourcePermission(user, "platform.bricks.add-custom")
     const relay = await requiredRelay(data.relayId)
     requireRelayProvisionAccess(user, relay)
-    return hydrateBrickIcon(
-      brickSchema.parse(
-        await requestRelay(
-          relay,
-          `/v1/bricks/recipe?source=${encodeURIComponent(data.source)}`
-        )
+    const { brick } = parseImportedBrickFromRelay(
+      await requestRelay(
+        relay,
+        `/v1/bricks/recipe?source=${encodeURIComponent(data.source)}&reportNormalization=true`
       )
     )
+    return hydrateBrickIcon(brick)
   })
 
 export const saveCustomBrick = createServerFn({ method: "POST" })
@@ -512,19 +513,33 @@ export const saveCustomBrick = createServerFn({ method: "POST" })
     const relay = await requiredRelay(data.relayId)
     requireRelayProvisionAccess(user, relay)
 
-    const brick = await hydrateBrickIcon(
-      brickSchema.parse(
-        await requestRelay(
-          relay,
-          `/v1/bricks/recipe?source=${encodeURIComponent(data.source)}`
-        )
-      )
+    const imported = await requestRelay(
+      relay,
+      `/v1/bricks/recipe?source=${encodeURIComponent(data.source)}&reportNormalization=true`
     )
-    return runAppEffect(
+    const { brick: parsedBrick, brickIdWasTruncated } =
+      parseImportedBrickFromRelay(imported)
+    const brick = await hydrateBrickIcon(parsedBrick)
+    const saved = await runAppEffect(
       "customBricks.save",
       saveCustomBrickEffect(user.id, brick)
     )
+    return { brick: saved, brickIdWasTruncated }
   })
+
+export function parseImportedBrickFromRelay(value: unknown): {
+  brick: Brick
+  brickIdWasTruncated: boolean
+} {
+  const normalized = normalizeImportedBrickRecipeId(value)
+  const imported = importedBrickSchema.parse(normalized.value)
+  const { brickIdWasTruncated = false, ...brick } = imported
+  return {
+    brick,
+    brickIdWasTruncated:
+      normalized.idWasTruncated || brickIdWasTruncated,
+  }
+}
 
 export const configureBrickNetworking = createServerFn({ method: "POST" })
   .validator(networkingInputSchema)

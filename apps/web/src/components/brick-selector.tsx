@@ -346,12 +346,16 @@ function useSaveCustomBrick(
   return useMutation({
     mutationFn: (source: string) =>
       saveCustomBrick({ data: { relayId, source } }),
-    onSuccess: async (brick) => {
+    onSuccess: async ({ brick, brickIdWasTruncated }) => {
       onSelectionChange({ kind: "catalog", brick })
       showToast({
-        type: "success",
-        message: `${brick.metadata.name} saved`,
-        description: "This custom Brick is now available in your catalog.",
+        type: brickIdWasTruncated ? "warning" : "success",
+        message: brickIdWasTruncated
+          ? `${brick.metadata.name} saved with a shortened id`
+          : `${brick.metadata.name} saved`,
+        description: brickIdWasTruncated
+          ? `Its Brick id was shortened to “${brick.metadata.id}” to fit the 20-character limit.`
+          : "This custom Brick is now available in your catalog.",
       })
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: queryKeys.bricks }),
@@ -709,25 +713,33 @@ const BrickCatalogManager = React.memo(function BrickCatalogManager({
     ...brickCatalogDetailsQueryOptions(selectedId),
     enabled: selectedId.length > 0,
   })
-  const refreshCatalogQueries = React.useCallback(async () => {
-    await Promise.all([
-      queryClient.invalidateQueries({ queryKey: queryKeys.brickCatalogs.all }),
-      queryClient.invalidateQueries({ queryKey: queryKeys.bricks }),
-      queryClient.invalidateQueries({ queryKey: queryKeys.brickIcons }),
-    ])
-  }, [queryClient])
   const addMutation = useMutation({
     mutationFn: (nextSource: string) =>
       addBrickCatalog({ data: { source: nextSource } }),
     onSuccess: async (catalog) => {
       setSource("")
       setSelectedId(catalog.id)
+      const truncatedCount = catalog.truncatedBrickIds.length
+      const truncatedPreview = catalog.truncatedBrickIds.slice(0, 3).join(", ")
+      const remainingTruncated = truncatedCount - 3
       showToast({
-        type: "success",
-        message: "Catalog added",
-        description: `${catalog.brickCount} Brick${catalog.brickCount === 1 ? "" : "s"} saved in this snapshot.`,
+        type: truncatedCount > 0 ? "warning" : "success",
+        message:
+          truncatedCount > 0
+            ? "Catalog added with shortened Brick ids"
+            : "Catalog added",
+        description:
+          truncatedCount > 0
+            ? `${truncatedCount} Brick id${truncatedCount === 1 ? " was" : "s were"} shortened to fit the 20-character limit: ${truncatedPreview}${remainingTruncated > 0 ? `, and ${remainingTruncated} more` : ""}.`
+            : `${catalog.brickCount} Brick${catalog.brickCount === 1 ? "" : "s"} saved in this snapshot.`,
       })
-      await refreshCatalogQueries()
+      await Promise.all([
+        queryClient.invalidateQueries({
+          queryKey: queryKeys.brickCatalogs.all,
+        }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.bricks }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.brickIcons }),
+      ])
     },
     onError: (cause) =>
       showToast({
@@ -752,7 +764,13 @@ const BrickCatalogManager = React.memo(function BrickCatalogManager({
             ? "Every account can now use this immutable snapshot."
             : "Only its owner can use this catalog now.",
       })
-      await refreshCatalogQueries()
+      await Promise.all([
+        queryClient.invalidateQueries({
+          queryKey: queryKeys.brickCatalogs.all,
+        }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.bricks }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.brickIcons }),
+      ])
     },
     onError: catalogMutationError,
   })
@@ -763,7 +781,13 @@ const BrickCatalogManager = React.memo(function BrickCatalogManager({
       setDeleteCandidateId(null)
       setSelectedId("default")
       showToast({ type: "success", message: "Catalog deleted" })
-      await refreshCatalogQueries()
+      await Promise.all([
+        queryClient.invalidateQueries({
+          queryKey: queryKeys.brickCatalogs.all,
+        }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.bricks }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.brickIcons }),
+      ])
     },
     onError: catalogMutationError,
   })

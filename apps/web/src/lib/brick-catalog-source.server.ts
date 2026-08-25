@@ -10,6 +10,7 @@ import { fileURLToPath } from "node:url"
 import {
   brickCatalogDocumentSchema,
   brickRecipeSchema,
+  normalizeImportedBrickRecipeId,
   relayCatalogSchema,
   resolveKilnGitRepository,
   validateBrickIconSvg,
@@ -50,6 +51,7 @@ export interface LoadedBrickCatalog {
   snapshot: RelayCatalog
   snapshotSha256: string
   source: string
+  truncatedBrickIds: Array<string>
 }
 
 interface ResolvedCatalogSource {
@@ -82,12 +84,15 @@ export async function loadBrickCatalogSource(
       resolvedSource.catalogUrl
     )
   )
-  const bricks = await mapConcurrent(
+  const loadedBricks = await mapConcurrent(
     document.recipes,
     FETCH_CONCURRENCY,
-    async (reference): Promise<Brick> => {
+    async (reference): Promise<{
+      brick: Brick
+      idWasTruncated: boolean
+    }> => {
       const source = new URL(reference, resolvedSource.catalogUrl)
-      const parsedRecipe = brickRecipeSchema.parse(
+      const normalized = normalizeImportedBrickRecipeId(
         parseYaml(
           await readDocument(
             source,
@@ -98,15 +103,20 @@ export async function loadBrickCatalogSource(
           source
         )
       )
+      const parsedRecipe = brickRecipeSchema.parse(normalized.value)
       const recipe = resolveRecipeIconSource(
         parsedRecipe,
         source,
         options.allowFile === true
       )
       validateRecipeSemantics(recipe, source)
-      return { ...recipe, source: source.href }
+      return {
+        brick: { ...recipe, source: source.href },
+        idWasTruncated: normalized.idWasTruncated,
+      }
     }
   )
+  const bricks = loadedBricks.map(({ brick }) => brick)
   const ids = new Set<string>()
   for (const brick of bricks) {
     if (ids.has(brick.metadata.id)) {
@@ -137,6 +147,9 @@ export async function loadBrickCatalogSource(
     ...resolvedSource,
     snapshot,
     snapshotSha256: createHash("sha256").update(encoded).digest("hex"),
+    truncatedBrickIds: loadedBricks.flatMap(({ brick, idWasTruncated }) =>
+      idWasTruncated ? [brick.metadata.id] : []
+    ),
   }
 }
 

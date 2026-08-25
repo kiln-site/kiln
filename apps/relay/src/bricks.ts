@@ -12,6 +12,7 @@ import {
   brickRecipeSchema,
   builtinTailscaleBrick,
   builtinTailscaleBrickSource,
+  normalizeImportedBrickRecipeId,
   requiredMinecraftJavaVersion,
   relayCatalogSchema,
 } from "@workspace/contracts"
@@ -54,6 +55,11 @@ export interface ResolvedBrick {
   values: Readonly<Record<string, BrickVariableValue>>
 }
 
+export interface ImportedBrickRecipe {
+  idWasTruncated: boolean
+  recipe: BrickRecipe
+}
+
 export class BrickCatalog {
   readonly #catalogUrl: URL
   readonly #snapshotDirectory: string
@@ -75,8 +81,9 @@ export class BrickCatalog {
     const bricks = await Promise.all(
       document.recipes.map(async (reference) => {
         const source = parseUrl(reference, this.#catalogUrl)
+        const imported = await this.#loadRecipe(source, true)
         return {
-          ...(await this.#loadRecipe(source, true)),
+          ...imported.recipe,
           source: source.href,
         } satisfies Brick
       })
@@ -105,12 +112,25 @@ export class BrickCatalog {
   }
 
   async recipe(source: string, snapshotSha256?: string): Promise<BrickRecipe> {
+    return (await this.importedRecipe(source, snapshotSha256)).recipe
+  }
+
+  async importedRecipe(
+    source: string,
+    snapshotSha256?: string
+  ): Promise<ImportedBrickRecipe> {
     if (source === builtinTailscaleBrickSource) {
       const { source: _source, ...recipe } = builtinTailscaleBrick
-      return recipe
+      return { idWasTruncated: false, recipe }
     }
     if (snapshotSha256) {
-      return readBrickSnapshot(this.#snapshotDirectory, snapshotSha256)
+      return {
+        idWasTruncated: false,
+        recipe: await readBrickSnapshot(
+          this.#snapshotDirectory,
+          snapshotSha256
+        ),
+      }
     }
     const url = parseUrl(source, "recipe source")
     if (url.protocol === "file:") {
@@ -130,7 +150,10 @@ export class BrickCatalog {
     return saveBrickSnapshot(this.#snapshotDirectory, recipe)
   }
 
-  async #loadRecipe(source: URL, fromCatalog: boolean): Promise<BrickRecipe> {
+  async #loadRecipe(
+    source: URL,
+    fromCatalog: boolean
+  ): Promise<ImportedBrickRecipe> {
     if (!fromCatalog && source.protocol !== "https:") {
       throw recipeError(
         "insecure_recipe_source",
@@ -138,11 +161,10 @@ export class BrickCatalog {
         "Custom Brick recipes must use HTTPS"
       )
     }
-    const input = parseYaml(
-      await readDocument(source, this.#catalogUrl),
-      source
+    const normalized = normalizeImportedBrickRecipeId(
+      parseYaml(await readDocument(source, this.#catalogUrl), source)
     )
-    const parsed = brickRecipeSchema.safeParse(input)
+    const parsed = brickRecipeSchema.safeParse(normalized.value)
     if (!parsed.success) {
       throw recipeError(
         "invalid_recipe",
@@ -157,7 +179,7 @@ export class BrickCatalog {
     }
     const recipe = resolveRecipeIconSource(parsed.data, source, fromCatalog)
     validateRecipeSemantics(recipe, source)
-    return recipe
+    return { idWasTruncated: normalized.idWasTruncated, recipe }
   }
 }
 

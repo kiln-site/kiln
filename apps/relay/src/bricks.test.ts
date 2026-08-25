@@ -329,4 +329,41 @@ describe("Brick recipes", () => {
       await rm(directory, { force: true, recursive: true })
     }
   })
+
+  it("shortens an overlong id when importing a recipe", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "kiln-brick-import-"))
+    try {
+      const catalogPath = join(directory, "catalog.yml")
+      const recipePath = join(directory, "recipe.yml")
+      await Promise.all([
+        writeFile(
+          catalogPath,
+          "format: kiln.catalog/v1\nrecipes: [recipe.yml]\n"
+        ),
+        writeFile(
+          recipePath,
+          JSON.stringify({
+            ...recipe,
+            metadata: {
+              ...recipe.metadata,
+              id: "abcdefghijklmnopqrst-extra",
+            },
+          })
+        ),
+      ])
+      const catalog = new BrickCatalog(
+        pathToFileURL(catalogPath).href,
+        join(directory, "data")
+      )
+
+      const imported = await catalog.importedRecipe(
+        pathToFileURL(recipePath).href
+      )
+
+      expect(imported.idWasTruncated).toBe(true)
+      expect(imported.recipe.metadata.id).toBe("abcdefghijklmnopqrst")
+    } finally {
+      await rm(directory, { force: true, recursive: true })
+    }
+  })
 })

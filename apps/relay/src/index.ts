@@ -1211,14 +1211,20 @@ async function executeControlRequest(
     }
     case "brick.catalog":
       return bricks.catalog()
-    case "brick.recipe":
+    case "brick.recipe": {
+      const source = requiredString(payload, "source")
+      const imported = await bricks.importedRecipe(
+        source,
+        optionalString(payload, "snapshotSha256")
+      )
       return {
-        ...(await bricks.recipe(
-          requiredString(payload, "source"),
-          optionalString(payload, "snapshotSha256")
-        )),
-        source: requiredString(payload, "source"),
+        ...imported.recipe,
+        source,
+        ...(payload.reportNormalization === true && imported.idWasTruncated
+          ? { brickIdWasTruncated: true as const }
+          : {}),
       }
+    }
     case "database.list":
       return databases.list()
     case "database.create":

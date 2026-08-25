@@ -110,7 +110,13 @@ export async function addBrickCatalogHandler(data: { source: string }) {
       source: loaded.source,
     })
   )
-  return catalogSummary(await requiredCatalog(catalogId), isPlatformAdmin(user))
+  return {
+    ...catalogSummary(
+      await requiredCatalog(catalogId),
+      isPlatformAdmin(user)
+    ),
+    truncatedBrickIds: loaded.truncatedBrickIds,
+  }
 }
 
 export async function deleteBrickCatalogHandler(data: { catalogId: string }) {

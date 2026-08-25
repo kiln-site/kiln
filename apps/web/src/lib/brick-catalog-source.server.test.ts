@@ -163,6 +163,28 @@ recipes: [paper.yml]
     ).rejects.toThrow("duplicate Brick id paper")
   })
 
+  it("shortens overlong Brick ids and reports the adjustment", async () => {
+    const directory = await temporaryDirectory()
+    await writeFile(
+      resolve(directory, "catalog.yml"),
+      "format: kiln.catalog/v1\nrecipes: [long.yml]\n"
+    )
+    await writeFile(
+      resolve(directory, "long.yml"),
+      recipe("abcdefghijklmnopqrst-extra", "Long id")
+    )
+
+    const loaded = await loadBrickCatalogSource(
+      pathToFileURL(resolve(directory, "catalog.yml")).href,
+      { allowFile: true }
+    )
+
+    expect(loaded.snapshot.bricks[0]?.metadata.id).toBe(
+      "abcdefghijklmnopqrst"
+    )
+    expect(loaded.truncatedBrickIds).toEqual(["abcdefghijklmnopqrst"])
+  })
+
   it("does not allow personal file catalogs", async () => {
     await expect(
       loadBrickCatalogSource("file:///tmp/catalog.yml")
