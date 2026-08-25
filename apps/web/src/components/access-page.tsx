@@ -14,6 +14,7 @@ import {
   ListFilter,
   LoaderCircle,
   Network,
+  Pencil,
   Plus,
   RefreshCw,
   Search,
@@ -201,6 +202,8 @@ export function AccessPage({
   )
   const [searchStore] = React.useState(createWorkspaceTableSearchStore)
   const [addOpen, setAddOpen] = React.useState(false)
+  const [editTarget, setEditTarget] =
+    React.useState<ScopedAccessDirectoryRow | null>(null)
   const [pendingOpen, setPendingOpen] = React.useState(false)
   const [filters, setFilters] =
     React.useState<AccessFilters>(emptyAccessFilters)
@@ -254,6 +257,11 @@ export function AccessPage({
     },
     [queryClient]
   )
+  const completeEditUser = React.useCallback(async () => {
+    setEditTarget(null)
+    showToast({ message: "Access updated", type: "success" })
+    await invalidateAccessQueries(queryClient)
+  }, [queryClient])
 
   const updateGrantMutation = useMutation({
     mutationFn: updateAccessGrant,
@@ -305,7 +313,16 @@ export function AccessPage({
         Effect.tryPromise({
           try: () =>
             updateGrant({
-              data: { id: grant.id, relayId: grant.relayId, role },
+              data: {
+                databaseId:
+                  grant.resourceType === "database" ? grant.resourceId : null,
+                id: grant.id,
+                instanceId:
+                  grant.resourceType === "instance" ? grant.resourceId : null,
+                relayId: grant.relayId,
+                role,
+                targetRelayId: grant.relayId,
+              },
             }),
           catch: (cause) => cause,
         }).pipe(
@@ -375,6 +392,7 @@ export function AccessPage({
           }
           rows={filteredRows}
           searchStore={searchStore}
+          onEdit={setEditTarget}
           onRemove={selectRemoveTarget}
           onRoleChange={changeRowRole}
         />
@@ -407,6 +425,19 @@ export function AccessPage({
           targets={targets}
           onComplete={completeAddUser}
           onOpenChange={setAddOpen}
+        />
+      ) : null}
+
+      {editTarget ? (
+        <EditUserAccessDialog
+          open
+          ownerRelayIds={ownerRelayIds}
+          row={editTarget}
+          targets={targets}
+          onComplete={completeEditUser}
+          onOpenChange={(open) => {
+            if (!open) setEditTarget(null)
+          }}
         />
       ) : null}
 
@@ -670,6 +701,7 @@ const AccessDirectoryTable = React.memo(function AccessDirectoryTable({
   rows,
   searchStore,
   solePlatformAdminId,
+  onEdit,
   onRemove,
   onRoleChange,
 }: {
@@ -679,6 +711,7 @@ const AccessDirectoryTable = React.memo(function AccessDirectoryTable({
   rows: Array<AccessDirectoryRow>
   searchStore: WorkspaceTableSearchStore
   solePlatformAdminId?: string
+  onEdit: (row: ScopedAccessDirectoryRow) => void
   onRemove: (row: AccessDirectoryRow) => void
   onRoleChange: (row: AccessDirectoryRow, role: AccessRole) => void
 }) {
@@ -689,11 +722,19 @@ const AccessDirectoryTable = React.memo(function AccessDirectoryTable({
         pending={row.grant?.id === pendingGrantId}
         protectedPlatformAdmin={row.userId === solePlatformAdminId}
         row={row}
+        onEdit={onEdit}
         onRemove={onRemove}
         onRoleChange={onRoleChange}
       />
     ),
-    [onRemove, onRoleChange, ownerRelayIds, pendingGrantId, solePlatformAdminId]
+    [
+      onEdit,
+      onRemove,
+      onRoleChange,
+      ownerRelayIds,
+      pendingGrantId,
+      solePlatformAdminId,
+    ]
   )
   const renderEmpty = React.useCallback(
     (searchActive: boolean) => (
@@ -761,6 +802,7 @@ const AccessDirectoryTableRow = React.memo(function AccessDirectoryTableRow({
   pending,
   protectedPlatformAdmin,
   row,
+  onEdit,
   onRemove,
   onRoleChange,
 }: {
@@ -768,6 +810,7 @@ const AccessDirectoryTableRow = React.memo(function AccessDirectoryTableRow({
   pending: boolean
   protectedPlatformAdmin: boolean
   row: AccessDirectoryRow
+  onEdit: (row: ScopedAccessDirectoryRow) => void
   onRemove: (row: AccessDirectoryRow) => void
   onRoleChange: (row: AccessDirectoryRow, role: AccessRole) => void
 }) {
@@ -797,6 +840,10 @@ const AccessDirectoryTableRow = React.memo(function AccessDirectoryTableRow({
     ownerActionAllowed &&
     (!row.instanceOwner || canRepairOwnerRole)
   const removeAllowed =
+    row.grant !== null &&
+    ownerActionAllowed &&
+    !row.grant.protectedInstanceOwnerGrant
+  const editAllowed =
     row.grant !== null &&
     ownerActionAllowed &&
     !row.grant.protectedInstanceOwnerGrant
@@ -895,6 +942,29 @@ const AccessDirectoryTableRow = React.memo(function AccessDirectoryTableRow({
               <TooltipContent side="bottom">View activity</TooltipContent>
             </Tooltip>
           ) : null}
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <span>
+                <Button
+                  type="button"
+                  size="icon-sm"
+                  variant="ghost"
+                  aria-label={`Edit access for ${row.email} on ${row.resourceName}`}
+                  disabled={pending || !editAllowed}
+                  onClick={() => onEdit(row)}
+                >
+                  <Pencil />
+                </Button>
+              </span>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">
+              {row.instanceOwner
+                ? "Transfer ownership before changing this access"
+                : row.grant
+                  ? "Edit role and scope"
+                  : "Owner access is managed by transfer"}
+            </TooltipContent>
+          </Tooltip>
           <Tooltip>
             <TooltipTrigger asChild>
               <span>
@@ -1146,6 +1216,128 @@ const AddUserDialog = React.memo(function AddUserDialog({
   )
 })
 
+const EditUserAccessDialog = React.memo(function EditUserAccessDialog({
+  open,
+  ownerRelayIds,
+  row,
+  targets,
+  onComplete,
+  onOpenChange,
+}: {
+  open: boolean
+  ownerRelayIds: ReadonlySet<string>
+  row: ScopedAccessDirectoryRow
+  targets: Array<AccessTarget>
+  onComplete: () => void | Promise<void>
+  onOpenChange: (open: boolean) => void
+}) {
+  const assignmentRef = React.useRef<AccessAssignmentDraft>({
+    accessType: "scoped",
+    role: row.role,
+    targetKey: accessTargetKey(row, targets),
+  })
+  const mutation = useMutation({
+    mutationFn: updateAccessGrant,
+    onError: (cause) =>
+      showToast({
+        message: errorMessage(cause, "Could not update access"),
+        type: "error",
+      }),
+    onSuccess: onComplete,
+  })
+
+  async function submit(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    if (mutation.isPending || !row.grant) return
+    const grant = row.grant
+    const assignment = assignmentRef.current
+    const selectedTarget = targets.find(
+      (target) => serverPickerOptionKey(target) === assignment.targetKey
+    )
+    if (!selectedTarget) {
+      showToast({ message: "Choose an access scope", type: "error" })
+      return
+    }
+    await Effect.runPromise(
+      Effect.tryPromise({
+        try: () =>
+          mutation.mutateAsync({
+            data: {
+              databaseId: selectedTarget.databaseId,
+              id: grant.id,
+              instanceId: selectedTarget.instanceId,
+              relayId: grant.relayId,
+              role: assignment.role,
+              targetRelayId: selectedTarget.relayId,
+            },
+          }),
+        catch: (cause) => cause,
+      }).pipe(Effect.catch(() => Effect.void))
+    )
+  }
+
+  return (
+    <Dialog
+      open={open}
+      onOpenChange={(nextOpen) => {
+        if (!mutation.isPending) onOpenChange(nextOpen)
+      }}
+    >
+      <DialogContent
+        className="overflow-visible sm:max-w-xl"
+        showCloseButton={!mutation.isPending}
+      >
+        <DialogHeader>
+          <DialogTitle>Edit User Access</DialogTitle>
+          <DialogDescription className="sr-only">
+            Change this user&apos;s role and access scope.
+          </DialogDescription>
+        </DialogHeader>
+
+        <form className="space-y-4" onSubmit={(event) => void submit(event)}>
+          <Field label="Email">
+            <Input
+              readOnly
+              aria-readonly="true"
+              className="bg-muted/30 text-muted-foreground"
+              name="email"
+              type="email"
+              value={row.email}
+            />
+          </Field>
+
+          <AccessConfigurationFields
+            assignmentRef={assignmentRef}
+            canAssignPlatformAccess={false}
+            disabled={mutation.isPending}
+            ownerRelayIds={ownerRelayIds}
+            targets={targets}
+          />
+
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              disabled={mutation.isPending}
+              onClick={() => onOpenChange(false)}
+            >
+              Cancel
+            </Button>
+            <Button type="submit" disabled={mutation.isPending}>
+              {mutation.isPending ? (
+                <LoaderCircle className="animate-spin" />
+              ) : (
+                <Pencil />
+              )}
+              Save changes
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  )
+})
+
 const AccessConfigurationFields = React.memo(
   function AccessConfigurationFields({
     assignmentRef,
@@ -1185,6 +1377,7 @@ const AccessConfigurationFields = React.memo(
         {accessType === "scoped" ? (
           <ScopedAccessFields
             assignmentRef={assignmentRef}
+            disabled={disabled}
             ownerRelayIds={ownerRelayIds}
             targets={targets}
           />
@@ -1218,11 +1411,15 @@ const AccessRoleField = React.memo(
   React.forwardRef<
     AccessRoleFieldHandle,
     {
+      disabled: boolean
       initialRole: AccessRole
       onRoleChange: (role: AccessRole) => void
       roles: ReadonlyArray<AccessRole>
     }
-  >(function AccessRoleField({ initialRole, onRoleChange, roles }, ref) {
+  >(function AccessRoleField(
+    { disabled, initialRole, onRoleChange, roles },
+    ref
+  ) {
     const [role, setRole] = React.useState(initialRole)
     React.useImperativeHandle(ref, () => ({ setRole }), [])
 
@@ -1237,7 +1434,7 @@ const AccessRoleField = React.memo(
 
     return (
       <Field label="Role">
-        <Select value={role} onValueChange={updateRole}>
+        <Select disabled={disabled} value={role} onValueChange={updateRole}>
           <SelectTrigger aria-label="Role" className="h-10 w-full px-3 text-xs">
             <SelectValue />
           </SelectTrigger>
@@ -1255,11 +1452,13 @@ const AccessRoleField = React.memo(
 )
 
 const AccessScopeField = React.memo(function AccessScopeField({
+  disabled,
   onSelect,
   selectedTarget,
   targetKey,
   targets,
 }: {
+  disabled: boolean
   onSelect: (option: ServerPickerOption) => void
   selectedTarget: AccessTarget | undefined
   targetKey: string
@@ -1286,6 +1485,7 @@ const AccessScopeField = React.memo(function AccessScopeField({
             type="button"
             variant="outline"
             className="h-10 w-full justify-between px-3 text-left"
+            disabled={disabled}
           >
             {selectedTarget ? (
               <span className="flex min-w-0 items-center gap-2.5">
@@ -1327,10 +1527,12 @@ const AccessScopeField = React.memo(function AccessScopeField({
 
 const ScopedAccessFields = React.memo(function ScopedAccessFields({
   assignmentRef,
+  disabled,
   ownerRelayIds,
   targets,
 }: {
   assignmentRef: React.RefObject<AccessAssignmentDraft>
+  disabled: boolean
   ownerRelayIds: ReadonlySet<string>
   targets: Array<AccessTarget>
 }) {
@@ -1377,6 +1579,7 @@ const ScopedAccessFields = React.memo(function ScopedAccessFields({
   return (
     <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_9rem]">
       <AccessScopeField
+        disabled={disabled}
         onSelect={selectTarget}
         selectedTarget={selectedTarget}
         targetKey={targetKey}
@@ -1384,6 +1587,7 @@ const ScopedAccessFields = React.memo(function ScopedAccessFields({
       />
       <AccessRoleField
         ref={roleFieldRef}
+        disabled={disabled}
         initialRole={assignmentRef.current.role}
         onRoleChange={updateRole}
         roles={assignableRoles}
@@ -1770,6 +1974,21 @@ function HydratedDate({ value }: { value: string }) {
     () => invitationExpiryFormatter.format(new Date(value)),
     () => "—"
   )
+}
+
+function accessTargetKey(
+  row: ScopedAccessDirectoryRow,
+  targets: Array<AccessTarget>
+): string {
+  const targetKind =
+    row.resourceType === "instance" ? "server" : row.resourceType
+  const target = targets.find(
+    (candidate) =>
+      candidate.kind === targetKind &&
+      candidate.relayId === row.relayId &&
+      candidate.id === row.resourceId
+  )
+  return target ? serverPickerOptionKey(target) : ""
 }
 
 function accessTargets(

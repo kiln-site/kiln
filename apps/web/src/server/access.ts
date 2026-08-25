@@ -74,9 +74,19 @@ const accessAssignmentSchema = z.discriminatedUnion("accessType", [
   }),
   scopedAccessAssignmentSchema,
 ])
-const updateGrantSchema = relayResourceIdSchema.extend({
-  role: z.enum(accessRoles),
-})
+const updateGrantSchema = relayResourceIdSchema
+  .extend({
+    databaseId: z
+      .string()
+      .regex(/^[a-f0-9]{40}$/u)
+      .nullable(),
+    instanceId: z.string().min(1).max(64).nullable(),
+    role: z.enum(accessRoles),
+    targetRelayId: relayIdSchema,
+  })
+  .refine((value) => !(value.databaseId && value.instanceId), {
+    message: "Choose one access scope",
+  })
 const revokeInvitationSchema = z.object({
   id: z.uuid(),
   relayId: relayIdSchema.nullable(),
@@ -205,6 +215,7 @@ interface InstanceScopedGrantRow extends InstanceOwnerGrantRow {
 }
 
 interface AccessGrantMutationRow extends InstanceScopedGrantRow {
+  id: string
   resource_id: string
   resource_type: "database" | "instance" | "relay"
 }
@@ -1016,7 +1027,30 @@ export const updateAccessGrant = createServerFn({ method: "POST" })
     const initialGrant = await accessGrantMutationTarget(data.id, relay.id)
     if (!initialGrant) return { updated: true }
     await ensureInstanceGrantOwner(relay, initialGrant)
+    const targetRelay =
+      data.targetRelayId === relay.id
+        ? relay
+        : await requiredRelay(data.targetRelayId)
+    await requireRelayPermission({
+      user,
+      databaseId: data.databaseId ?? undefined,
+      instanceId: data.instanceId ?? undefined,
+      relayId: targetRelay.id,
+      permission: "access.invite",
+    })
+    const targetScope = accessScope({
+      databaseId: data.databaseId,
+      instanceId: data.instanceId,
+      relayId: targetRelay.id,
+    })
+    if (targetScope.type === "instance") {
+      await instanceOwnerId(targetRelay, targetScope.id)
+    }
     const ownerAccess = await canManageOwners(user, relay.id)
+    const targetOwnerAccess =
+      targetRelay.id === relay.id
+        ? ownerAccess
+        : await canManageOwners(user, targetRelay.id)
     return runAppEffect(
       "access.updateGrant",
       withLockedAccessGrant({
@@ -1027,17 +1061,90 @@ export const updateAccessGrant = createServerFn({ method: "POST" })
         relayId: relay.id,
         use: ({ grant, ownerId, transaction }) =>
           Effect.gen(function* () {
+            const scopeChanged =
+              targetRelay.id !== relay.id ||
+              targetScope.type !== grant.resource_type ||
+              targetScope.id !== grant.resource_id
+            if (
+              scopeChanged &&
+              isProtectedInstanceOwnerGrant({
+                grantRole: grant.role,
+                grantUserId: grant.user_id,
+                ownerId: grant.resource_type === "instance" ? ownerId : null,
+              })
+            ) {
+              return yield* Effect.fail(
+                new Error(
+                  "Transfer ownership before changing this access scope"
+                )
+              )
+            }
+
+            if (scopeChanged) {
+              const sourceRoleError = accessGrantRoleChangeError({
+                canManageOwners: ownerAccess,
+                currentRole: grant.role,
+                nextRole: grant.role,
+                ownerId: grant.resource_type === "instance" ? ownerId : null,
+                userId: grant.user_id,
+              })
+              if (sourceRoleError) {
+                return yield* Effect.fail(sourceRoleError)
+              }
+            }
+
+            const targetOwnerRows =
+              targetScope.type === "instance"
+                ? yield* transaction.queryRows<InstanceOwnerRow>(
+                    `SELECT owner_id FROM ${databaseTable("instance")}
+                      WHERE relay_id = ? AND instance_id = ? LIMIT 1 FOR UPDATE`,
+                    [targetRelay.id, targetScope.id]
+                  )
+                : []
             const roleChangeError = accessGrantRoleChangeError({
-              canManageOwners: ownerAccess,
-              currentRole: grant.role,
+              canManageOwners: targetOwnerAccess,
+              currentRole: scopeChanged ? null : grant.role,
               nextRole: data.role,
-              ownerId: grant.resource_type === "instance" ? ownerId : null,
+              ownerId: targetOwnerRows.at(0)?.owner_id ?? null,
               userId: grant.user_id,
             })
             if (roleChangeError) return yield* Effect.fail(roleChangeError)
+
+            const targetGrants =
+              yield* transaction.queryRows<AccessGrantMutationRow>(
+                `SELECT id, user_id, role, resource_type, resource_id
+                   FROM ${databaseTable("access_grant")}
+                  WHERE user_id = ? AND relay_id = ?
+                    AND resource_type = ? AND resource_id = ?
+                  LIMIT 1 FOR UPDATE`,
+                [
+                  grant.user_id,
+                  targetRelay.id,
+                  targetScope.type,
+                  targetScope.id,
+                ]
+              )
+            if (
+              targetGrants.some((targetGrant) => targetGrant.id !== data.id)
+            ) {
+              return yield* Effect.fail(
+                new Error("This user already has access to that scope")
+              )
+            }
             yield* transaction.execute(
-              `UPDATE ${databaseTable("access_grant")} SET role = ? WHERE id = ? AND relay_id = ?`,
-              [data.role, data.id, relay.id]
+              `UPDATE ${databaseTable("access_grant")}
+                  SET relay_id = ?, resource_type = ?, resource_id = ?,
+                      role = ?, granted_by = ?
+                WHERE id = ? AND relay_id = ?`,
+              [
+                targetRelay.id,
+                targetScope.type,
+                targetScope.id,
+                data.role,
+                user.id,
+                data.id,
+                relay.id,
+              ]
             )
             return { updated: true }
           }),
@@ -1506,7 +1613,9 @@ function publicUrl(): string {
   return kilnPublicUrl().origin
 }
 
-function accessScope(data: ScopedAccessAssignment): {
+function accessScope(
+  data: Pick<ScopedAccessAssignment, "databaseId" | "instanceId" | "relayId">
+): {
   id: string
   type: AccessScope
 } {
