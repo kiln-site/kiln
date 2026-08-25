@@ -9,6 +9,7 @@ import type {
   RelayDesiredState,
   RelayCreateInstance,
   RelayInstance,
+  RelayInstanceLifecycleEvent,
   RelayInstanceRecovery,
   RelayInstancePendingPrimaryPort,
   RelayInstancePortProtocol,
@@ -102,12 +103,8 @@ export interface RelayStoredPendingPrimaryPort extends RelayInstancePendingPrima
 }
 
 export interface RelayStoredLifecycleSession {
-  readonly failedAt: string | null
+  readonly events: Array<RelayInstanceLifecycleEvent>
   readonly instanceId: string
-  readonly readyAt: string | null
-  readonly startedAt: string
-  readonly stoppedAt: string | null
-  readonly stoppingAt: string | null
 }
 
 export type RelayProvisioningJobStatus =
@@ -211,13 +208,18 @@ const RelayPendingPrimaryPortRowSchema = Schema.Struct({
   protocol: RelayInstancePortProtocolSchema,
 })
 
-const RelayLifecycleSessionRowSchema = Schema.Struct({
-  failedAt: Schema.NullOr(Schema.String),
+const RelayInstanceLifecycleStateSchema = Schema.Literals([
+  "started",
+  "ready",
+  "stopping",
+  "stopped",
+  "failed",
+])
+
+const RelayLifecycleEventRowSchema = Schema.Struct({
   instanceId: Schema.String,
-  readyAt: Schema.NullOr(Schema.String),
-  startedAt: Schema.String,
-  stoppedAt: Schema.NullOr(Schema.String),
-  stoppingAt: Schema.NullOr(Schema.String),
+  state: RelayInstanceLifecycleStateSchema,
+  time: Schema.String,
 })
 
 const RelayDesiredStateSchema = Schema.Literals(["stopped", "running"])
@@ -817,34 +819,22 @@ const migrations = SqliteMigrator.fromRecord({
   "13_instance_lifecycle_sessions": Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient
     yield* sql`
-      CREATE TABLE relay_instance_lifecycle_sessions (
-        instance_id TEXT PRIMARY KEY NOT NULL,
-        started_at TEXT NOT NULL,
-        ready_at TEXT,
-        stopping_at TEXT,
-        stopped_at TEXT,
-        failed_at TEXT,
-        updated_at INTEGER NOT NULL
+      CREATE TABLE relay_instance_lifecycle_events (
+        instance_id TEXT NOT NULL,
+        state TEXT NOT NULL
+          CHECK (state IN ('started', 'ready', 'stopping', 'stopped', 'failed')),
+        time TEXT NOT NULL,
+        PRIMARY KEY (instance_id, state)
       ) STRICT
     `
     yield* sql`
-      INSERT INTO relay_instance_lifecycle_sessions (
-        instance_id,
-        started_at,
-        ready_at,
-        stopping_at,
-        stopped_at,
-        failed_at,
-        updated_at
-      )
-      SELECT
-        instance_id,
-        started_at,
-        ready_at,
-        NULL,
-        NULL,
-        NULL,
-        updated_at
+      INSERT INTO relay_instance_lifecycle_events (instance_id, state, time)
+      SELECT instance_id, 'started', started_at
+      FROM relay_instance_ready_sessions
+    `
+    yield* sql`
+      INSERT INTO relay_instance_lifecycle_events (instance_id, state, time)
+      SELECT instance_id, 'ready', ready_at
       FROM relay_instance_ready_sessions
     `
     yield* sql`DROP TABLE relay_instance_ready_sessions`
@@ -883,8 +873,8 @@ const makeRelayStateStore = Effect.gen(function* () {
   const decodePendingPrimaryPortRows = Schema.decodeUnknownEffect(
     Schema.Array(RelayPendingPrimaryPortRowSchema)
   )
-  const decodeLifecycleSessionRows = Schema.decodeUnknownEffect(
-    Schema.Array(RelayLifecycleSessionRowSchema)
+  const decodeLifecycleEventRows = Schema.decodeUnknownEffect(
+    Schema.Array(RelayLifecycleEventRowSchema)
   )
   const decodeRuntimeRecoveryRows = Schema.decodeUnknownEffect(
     Schema.Array(RelayRuntimeRecoveryRowSchema)
@@ -987,15 +977,22 @@ const makeRelayStateStore = Effect.gen(function* () {
       const rows = yield* sql<Record<string, unknown>>`
       SELECT
         instance_id AS instanceId,
-        started_at AS startedAt,
-        ready_at AS readyAt,
-        stopping_at AS stoppingAt,
-        stopped_at AS stoppedAt,
-        failed_at AS failedAt
-      FROM relay_instance_lifecycle_sessions
-      ORDER BY instance_id ASC
+        state,
+        time
+      FROM relay_instance_lifecycle_events
+      ORDER BY instance_id ASC, time ASC
     `
-      return yield* decodeLifecycleSessionRows(rows)
+      const decoded = yield* decodeLifecycleEventRows(rows)
+      const sessions = new Map<string, Array<RelayInstanceLifecycleEvent>>()
+      for (const { instanceId, state, time } of decoded) {
+        const events = sessions.get(instanceId) ?? []
+        events.push({ state, time })
+        sessions.set(instanceId, events)
+      }
+      return Array.from(sessions, ([instanceId, events]) => ({
+        events,
+        instanceId,
+      }))
     }
   )
 
@@ -2384,32 +2381,30 @@ const makeRelayStateStore = Effect.gen(function* () {
     setLifecycleSession: (session) =>
       run(
         "set_lifecycle_session",
-        sql`
-          INSERT INTO relay_instance_lifecycle_sessions (
-            instance_id,
-            started_at,
-            ready_at,
-            stopping_at,
-            stopped_at,
-            failed_at,
-            updated_at
-          ) VALUES (
-            ${session.instanceId},
-            ${session.startedAt},
-            ${session.readyAt},
-            ${session.stoppingAt},
-            ${session.stoppedAt},
-            ${session.failedAt},
-            ${Date.now()}
-          )
-          ON CONFLICT (instance_id) DO UPDATE SET
-            started_at = excluded.started_at,
-            ready_at = excluded.ready_at,
-            stopping_at = excluded.stopping_at,
-            stopped_at = excluded.stopped_at,
-            failed_at = excluded.failed_at,
-            updated_at = excluded.updated_at
-        `.pipe(Effect.asVoid)
+        sql.withTransaction(
+          Effect.gen(function* () {
+            yield* sql`
+              DELETE FROM relay_instance_lifecycle_events
+              WHERE instance_id = ${session.instanceId}
+            `
+            yield* Effect.forEach(
+              session.events,
+              (event) =>
+                sql`
+                  INSERT INTO relay_instance_lifecycle_events (
+                    instance_id,
+                    state,
+                    time
+                  ) VALUES (
+                    ${session.instanceId},
+                    ${event.state},
+                    ${event.time}
+                  )
+                `,
+              { discard: true }
+            )
+          })
+        )
       ),
     deleteInstanceName: (instanceId) =>
       run(
@@ -2437,7 +2432,7 @@ const makeRelayStateStore = Effect.gen(function* () {
       run(
         "delete_lifecycle_session",
         sql`
-          DELETE FROM relay_instance_lifecycle_sessions
+          DELETE FROM relay_instance_lifecycle_events
           WHERE instance_id = ${instanceId}
         `.pipe(Effect.asVoid)
       ),

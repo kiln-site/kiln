@@ -1,79 +1,59 @@
 import type {
   RelayConsoleLine,
+  RelayInstanceLifecycleEvent,
+  RelayInstanceLifecycleState,
   RelayInstanceRecovery,
   RelayObservedState,
 } from "@workspace/contracts"
 
-export interface RetainedConsoleLifecycleTimestamps {
-  readonly failedAt?: string | null
-  readonly stoppedAt?: string | null
-  readonly stoppingAt?: string | null
-}
-
 export function initialConsoleStateLines(
-  startedAt: string | null,
+  lifecycle: ReadonlyArray<RelayInstanceLifecycleEvent>,
   state: RelayObservedState | undefined,
-  readyAt: string | null = null,
-  recovery: RelayInstanceRecovery | null = null,
-  retained: RetainedConsoleLifecycleTimestamps = {}
+  recovery: RelayInstanceRecovery | null = null
 ): Array<RelayConsoleLine> {
   const recoveryLines = recovery ? [consoleRecoveryLine(recovery, null)] : []
-  if (!startedAt) {
-    return state
-      ? [
-          consoleStateLine(state, stateTimestamp(state, readyAt, retained)),
-          ...recoveryLines,
-        ]
-      : recoveryLines
-  }
-
-  const lines = [consoleStateLine("starting", startedAt)]
-  if (readyAt || state === "running") {
-    lines.push(consoleStateLine("running", readyAt))
-  }
-  if (retained.stoppingAt || state === "stopping") {
-    lines.push(consoleStateLine("stopping", retained.stoppingAt ?? null))
-  }
-  if (retained.failedAt || state === "failed") {
-    lines.push(consoleStateLine("failed", retained.failedAt ?? null))
-  } else if (retained.stoppedAt || state === "stopped") {
-    lines.push(consoleStateLine("stopped", retained.stoppedAt ?? null))
+  const lines = lifecycle.map((event) =>
+    consoleStateLine(lifecycleObservedState(event.state), event.time)
+  )
+  if (state && !lines.some((line) => isConsoleStateLineFor(line, state))) {
+    lines.push(consoleStateLine(state, null))
   }
   return [...lines, ...recoveryLines].sort(compareConsoleLineOrder)
 }
 
 export function mergeConsoleStateLines(
   lines: ReadonlyArray<RelayConsoleLine>,
-  startedAt: string | null,
+  lifecycle: ReadonlyArray<RelayInstanceLifecycleEvent>,
   state: RelayObservedState | undefined,
-  readyAt: string | null = null,
-  recovery: RelayInstanceRecovery | null = null,
-  retained: RetainedConsoleLifecycleTimestamps = {}
+  recovery: RelayInstanceRecovery | null = null
 ): Array<RelayConsoleLine> {
   return [
-    ...initialConsoleStateLines(startedAt, state, readyAt, recovery, retained),
+    ...initialConsoleStateLines(lifecycle, state, recovery),
     ...lines,
   ].sort(compareConsoleLineOrder)
 }
 
 export function reconcileConsoleLifecycleLines(
   lines: ReadonlyArray<RelayConsoleLine>,
-  startedAt: string | null,
+  lifecycle: ReadonlyArray<RelayInstanceLifecycleEvent>,
   state: RelayObservedState | undefined,
-  readyAt: string | null = null,
-  recovery: RelayInstanceRecovery | null = null,
-  retained: RetainedConsoleLifecycleTimestamps = {}
+  recovery: RelayInstanceRecovery | null = null
 ): Array<RelayConsoleLine> {
   return mergeConsoleStateLines(
     lines.filter(
       (line) => !isConsoleStateLine(line) && !isConsoleRecoveryLine(line)
     ),
-    startedAt,
+    lifecycle,
     state,
-    readyAt,
-    recovery,
-    retained
+    recovery
   )
+}
+
+export function lifecycleEventTime(
+  lifecycle: ReadonlyArray<RelayInstanceLifecycleEvent>,
+  state: RelayInstanceLifecycleState
+): string | null {
+  return lifecycle.find((event) => event.state === state)?.time ?? null
 }
 
 export function consoleSessionIsCurrent(
@@ -270,16 +250,12 @@ function exactUtcTimestamp(
   }
 }
 
-function stateTimestamp(
-  state: RelayObservedState,
-  readyAt: string | null,
-  retained: RetainedConsoleLifecycleTimestamps
-): string | null {
-  if (state === "running") return readyAt
-  if (state === "stopping") return retained.stoppingAt ?? null
-  if (state === "stopped") return retained.stoppedAt ?? null
-  if (state === "failed") return retained.failedAt ?? null
-  return null
+function lifecycleObservedState(
+  state: RelayInstanceLifecycleState
+): RelayObservedState {
+  if (state === "started") return "starting"
+  if (state === "ready") return "running"
+  return state
 }
 
 function linePosition(line: RelayConsoleLine): number {

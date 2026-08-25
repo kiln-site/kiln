@@ -29,7 +29,7 @@ afterEach(async () => {
 })
 
 describe("rediscovered startup readiness", () => {
-  it("recovers and persists readyAt beyond the recent console tail", async () => {
+  it("recovers and persists a ready event beyond the recent console tail", async () => {
     const dataDirectory = await mkdtemp(join(tmpdir(), "kiln-readiness-"))
     temporaryDirectories.push(dataDirectory)
     const config = loadConfig({
@@ -90,14 +90,7 @@ describe("rediscovered startup readiness", () => {
     }
     const storedLifecycleSessions = new Map<
       string,
-      {
-        failedAt: string | null
-        instanceId: string
-        readyAt: string | null
-        startedAt: string
-        stoppedAt: string | null
-        stoppingAt: string | null
-      }
+      RelayStoredLifecycleSession
     >()
     const recipeMock = vi.fn(async () => ({
       readiness: { logs: [")! For help, type "] },
@@ -110,14 +103,7 @@ describe("rediscovered startup readiness", () => {
         }),
       listLifecycleSessions: () =>
         Effect.succeed([...storedLifecycleSessions.values()]),
-      setLifecycleSession: (session: {
-        failedAt: string | null
-        instanceId: string
-        readyAt: string | null
-        startedAt: string
-        stoppedAt: string | null
-        stoppingAt: string | null
-      }) =>
+      setLifecycleSession: (session: RelayStoredLifecycleSession) =>
         Effect.sync(() => {
           storedLifecycleSessions.set(session.instanceId, session)
         }),
@@ -154,14 +140,16 @@ describe("rediscovered startup readiness", () => {
     ).inspectInstances()
 
     expect(instance?.observedState).toBe("running")
-    expect(instance?.readyAt).toBe(readyAt)
+    expect(instance?.lifecycle).toEqual([
+      { state: "started", time: startedAt },
+      { state: "ready", time: readyAt },
+    ])
     expect(storedLifecycleSessions.get(id)).toEqual({
-      failedAt: null,
+      events: [
+        { state: "started", time: startedAt },
+        { state: "ready", time: readyAt },
+      ],
       instanceId: id,
-      readyAt,
-      startedAt,
-      stoppedAt: null,
-      stoppingAt: null,
     })
     expect(recipeMock).toHaveBeenCalledWith(
       "https://bricks.example.test/paper.yml",
@@ -192,7 +180,7 @@ describe("rediscovered startup readiness", () => {
     ).inspectInstances()
 
     expect(afterRelayRestart?.observedState).toBe("running")
-    expect(afterRelayRestart?.readyAt).toBe(readyAt)
+    expect(afterRelayRestart?.lifecycle).toEqual(instance?.lifecycle)
     expect(recipeMock).toHaveBeenCalledTimes(1)
     expect(
       commandMock.mock.calls.filter(
@@ -211,19 +199,15 @@ describe("rediscovered startup readiness", () => {
       state
     ).inspectInstances()
 
-    expect(afterServerStop).toMatchObject({
-      failedAt: null,
-      observedState: "stopped",
-      readyAt,
-      sessionStartedAt: startedAt,
-      stoppedAt,
-      stoppingAt: null,
-    })
-    expect(storedLifecycleSessions.get(id)).toMatchObject({
-      readyAt,
-      startedAt,
-      stoppedAt,
-    })
+    expect(afterServerStop?.observedState).toBe("stopped")
+    expect(afterServerStop?.lifecycle).toEqual([
+      { state: "started", time: startedAt },
+      { state: "ready", time: readyAt },
+      { state: "stopped", time: stoppedAt },
+    ])
+    expect(storedLifecycleSessions.get(id)?.events).toEqual(
+      afterServerStop?.lifecycle
+    )
 
     const crashedStartedAt = "2026-08-22T00:00:00.000Z"
     const crashedReadyAt = "2026-08-22T00:00:20.000Z"
@@ -245,13 +229,12 @@ describe("rediscovered startup readiness", () => {
       state
     ).inspectInstances()
 
-    expect(afterCrash).toMatchObject({
-      failedAt,
-      observedState: "failed",
-      readyAt: crashedReadyAt,
-      sessionStartedAt: crashedStartedAt,
-      stoppedAt: null,
-    })
+    expect(afterCrash?.observedState).toBe("failed")
+    expect(afterCrash?.lifecycle).toEqual([
+      { state: "started", time: crashedStartedAt },
+      { state: "ready", time: crashedReadyAt },
+      { state: "failed", time: failedAt },
+    ])
   })
 
   it("safely retains a legacy session when its Brick has no ready log", async () => {
@@ -338,11 +321,12 @@ describe("rediscovered startup readiness", () => {
     ).inspectInstances()
 
     expect(instance).toMatchObject({
+      lifecycle: [{ state: "started", time: startedAt }],
       observedState: "running",
-      readyAt: null,
-      sessionStartedAt: startedAt,
     })
-    expect(stored.get(id)).toMatchObject({ readyAt: null, startedAt })
+    expect(stored.get(id)?.events).toEqual([
+      { state: "started", time: startedAt },
+    ])
     expect(
       commandMock.mock.calls.some(([, arguments_]) => arguments_[0] === "logs")
     ).toBe(false)

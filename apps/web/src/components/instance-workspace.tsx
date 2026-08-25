@@ -1318,7 +1318,6 @@ function InstanceUptimeMeter({
         ? {
             id: instance.id,
             observedState: instance.observedState,
-            readyAt: instance.readyAt,
             relayId: instance.relayId,
             resources: null,
             startedAt: instance.startedAt,

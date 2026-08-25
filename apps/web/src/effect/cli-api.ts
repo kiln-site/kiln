@@ -1484,7 +1484,8 @@ function cliServerMetadata(instance: z.infer<typeof relayInstanceSchema>) {
       instance.publicHost && instance.publicPort
         ? `${instance.publicHost}:${instance.publicPort}`
         : null,
-    readyAt: instance.readyAt,
+    readyAt:
+      instance.lifecycle.find((event) => event.state === "ready")?.time ?? null,
     resources: instance.resources
       ? {
           cpuPercent: instance.resources.cpu.percent,

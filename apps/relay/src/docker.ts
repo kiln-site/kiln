@@ -28,6 +28,8 @@ import type {
   RelayDesiredState,
   RelayInstanceRecovery,
   RelayInstance,
+  RelayInstanceLifecycleEvent,
+  RelayInstanceLifecycleState,
   RelayInstancePortProtocol,
   RelayInstanceResources,
   RelaySftpPublicationStatus,
@@ -632,10 +634,11 @@ export class DockerDriver {
         const transition = this.#powerTransitions.get(config.id)
         const lifecycleSession = this.#lifecycleSessions.get(config.id)
         const lifecycleSessionMatches =
-          lifecycleSession?.startedAt === container.State.StartedAt
+          lifecycleEventTime(lifecycleSession?.events, "started") ===
+          container.State.StartedAt
         if (
           lifecycleSessionMatches &&
-          lifecycleSession.readyAt &&
+          lifecycleEventTime(lifecycleSession?.events, "ready") &&
           container.State.Running
         ) {
           readiness.set(config.id, true)
@@ -649,7 +652,7 @@ export class DockerDriver {
         const readinessProbe =
           !container.State.Running &&
           brickReadiness !== undefined &&
-          !lifecycleSession?.readyAt
+          !lifecycleEventTime(lifecycleSession?.events, "ready")
             ? "historical"
             : instanceReadinessProbe({
                 hasHealthCheck: container.State.Health !== undefined,
@@ -783,11 +786,7 @@ export class DockerDriver {
         ),
         recovery: recoveryState?.recovery ?? null,
         startedAt: container.State.Running ? container.State.StartedAt : null,
-        sessionStartedAt: lifecycleSession?.startedAt ?? null,
-        readyAt: lifecycleSession?.readyAt ?? null,
-        stoppingAt: lifecycleSession?.stoppingAt ?? null,
-        stoppedAt: lifecycleSession?.stoppedAt ?? null,
-        failedAt: lifecycleSession?.failedAt ?? null,
+        lifecycle: lifecycleSession?.events ?? [],
         status:
           recoveryStatus(recoveryState?.recovery, now) ??
           (powerState.observedState === "running"
@@ -2900,66 +2899,67 @@ function observedLifecycleSession({
   if (!startedAt) return null
 
   const session: RelayStoredLifecycleSession =
-    previous?.startedAt === startedAt
+    previous && lifecycleEventTime(previous.events, "started") === startedAt
       ? previous
       : {
-          failedAt: null,
+          events: [{ state: "started", time: startedAt }],
           instanceId,
-          readyAt: null,
-          startedAt,
-          stoppedAt: null,
-          stoppingAt: null,
         }
-  let next = session
-  if (observedState === "running" && !next.readyAt) {
+  let events = session.events
+  if (observedState === "running" && !lifecycleEventTime(events, "ready")) {
     const startedAtMs = Date.parse(startedAt)
     const observedDuringStartup =
       Number.isFinite(startedAtMs) &&
       now - startedAtMs < INSTANCE_STARTUP_READINESS_TIMEOUT_MS
-    next = {
-      ...next,
-      readyAt: observedSessionReadyAt(
+    events = addLifecycleEvent(
+      events,
+      "ready",
+      observedSessionReadyAt(
         observedReadyAt,
         transition !== undefined || observedDuringStartup,
         now
-      ),
-    }
-  } else if (observedReadyAt && !next.readyAt) {
+      )
+    )
+  } else if (observedReadyAt && !lifecycleEventTime(events, "ready")) {
     // Legacy stopped sessions can still recover the exact declared ready log.
-    next = { ...next, readyAt: observedReadyAt }
+    events = addLifecycleEvent(events, "ready", observedReadyAt)
   }
 
   if (
-    !next.stoppingAt &&
+    !lifecycleEventTime(events, "stopping") &&
     transition &&
     (transition.action === "stop" ||
       transition.action === "restart" ||
       transition.action === "kill")
   ) {
-    next = {
-      ...next,
-      stoppingAt: new Date(transition.requestedAt).toISOString(),
-    }
+    events = addLifecycleEvent(
+      events,
+      "stopping",
+      new Date(transition.requestedAt).toISOString()
+    )
   }
 
   const finishedAt = consoleFinishedAt(container)
   if (!container.State.Running && finishedAt && recovery) {
-    next =
-      recovery.reason === "clean_exit"
-        ? { ...next, stoppedAt: next.stoppedAt ?? finishedAt }
-        : { ...next, failedAt: next.failedAt ?? finishedAt }
+    events = addLifecycleEvent(
+      events,
+      recovery.reason === "clean_exit" ? "stopped" : "failed",
+      finishedAt
+    )
   } else if (observedState === "stopped") {
-    next = {
-      ...next,
-      stoppedAt: next.stoppedAt ?? finishedAt ?? new Date(now).toISOString(),
-    }
+    events = addLifecycleEvent(
+      events,
+      "stopped",
+      finishedAt ?? new Date(now).toISOString()
+    )
   } else if (observedState === "failed") {
-    next = {
-      ...next,
-      failedAt: next.failedAt ?? finishedAt ?? new Date(now).toISOString(),
-    }
+    events = addLifecycleEvent(
+      events,
+      "failed",
+      finishedAt ?? new Date(now).toISOString()
+    )
   }
-  return next
+  return events === session.events ? session : { ...session, events }
 }
 
 function sameLifecycleSession(
@@ -2968,12 +2968,30 @@ function sameLifecycleSession(
 ): boolean {
   return (
     left?.instanceId === right.instanceId &&
-    left.startedAt === right.startedAt &&
-    left.readyAt === right.readyAt &&
-    left.stoppingAt === right.stoppingAt &&
-    left.stoppedAt === right.stoppedAt &&
-    left.failedAt === right.failedAt
+    left.events.length === right.events.length &&
+    left.events.every(
+      (event, index) =>
+        event.state === right.events[index]?.state &&
+        event.time === right.events[index]?.time
+    )
   )
+}
+
+function addLifecycleEvent(
+  events: Array<RelayInstanceLifecycleEvent>,
+  state: RelayInstanceLifecycleState,
+  time: string | null
+): Array<RelayInstanceLifecycleEvent> {
+  return !time || lifecycleEventTime(events, state)
+    ? events
+    : [...events, { state, time }]
+}
+
+function lifecycleEventTime(
+  events: ReadonlyArray<RelayInstanceLifecycleEvent> | undefined,
+  state: RelayInstanceLifecycleState
+): string | null {
+  return events?.find((event) => event.state === state)?.time ?? null
 }
 
 export function historicalReadinessLogArguments(

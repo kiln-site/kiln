@@ -75,16 +75,7 @@ export type InstanceWorkspaceInstance = Pick<
 
 export type InstanceRuntime = Pick<
   RelayInstance,
-  | "failedAt"
-  | "id"
-  | "observedState"
-  | "readyAt"
-  | "recovery"
-  | "resources"
-  | "sessionStartedAt"
-  | "startedAt"
-  | "stoppedAt"
-  | "stoppingAt"
+  "id" | "lifecycle" | "observedState" | "recovery" | "resources" | "startedAt"
 > & { relayId: string }
 
 export type InstanceSettingsInstance = Pick<
@@ -249,17 +240,13 @@ export function selectInstanceRuntime(instanceId: string, relayId?: string) {
     )
     return instance
       ? {
-          failedAt: instance.failedAt,
           id: instance.id,
+          lifecycle: instance.lifecycle,
           observedState: instance.observedState,
-          readyAt: instance.readyAt,
           recovery: instance.recovery,
           relayId: instance.relayId,
           resources: instance.resources,
-          sessionStartedAt: instance.sessionStartedAt,
           startedAt: instance.startedAt,
-          stoppedAt: instance.stoppedAt,
-          stoppingAt: instance.stoppingAt,
         }
       : null
   }
