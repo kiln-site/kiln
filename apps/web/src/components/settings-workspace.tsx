@@ -44,6 +44,7 @@ import {
   TooltipTrigger,
 } from "@workspace/ui/components/tooltip"
 import { cn } from "@workspace/ui/lib/utils"
+import { MAXIMUM_INSTANCE_NAME_LENGTH } from "@workspace/contracts"
 
 import { ReadOnlyCodeViewer } from "@/components/read-only-code-viewer"
 import { ServerDeleteDialog } from "@/components/server-delete-dialog"
@@ -1227,7 +1228,7 @@ function InstanceNameForm({
             setSaved(false)
             setError(null)
           }}
-          maxLength={32}
+          maxLength={MAXIMUM_INSTANCE_NAME_LENGTH}
           disabled={!canRename || pending}
           aria-invalid={Boolean(error)}
           className="h-9 min-w-0 flex-1"

@@ -89,6 +89,7 @@ import { listManagedDatabaseRecordsEffect } from "@/effect/managed-databases"
 import { getActivityForUser } from "@/server/activity-data.server"
 import { provisionInstanceDomainBestEffort } from "@/server/domains.server"
 import { visibleBrickCatalogs } from "@/server/brick-catalogs.server"
+import { cliInvalidRequest } from "@/lib/cli-http"
 
 const CLI_RELAY_LONG_OPERATION_TIMEOUT_MS = 180_000
 
@@ -1584,12 +1585,6 @@ function parseRelaySnapshot(value: unknown) {
 function parseInput<TValue>(schema: z.ZodType<TValue>, value: unknown) {
   return Effect.try({
     try: () => schema.parse(value),
-    catch: (cause) =>
-      CliAccessError.make({
-        code: "invalid_request",
-        message: "The CLI request contains invalid input.",
-        retryable: false,
-        cause,
-      }),
+    catch: (cause) => cliInvalidRequest(cause),
   })
 }

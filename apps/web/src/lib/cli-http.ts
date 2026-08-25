@@ -1,4 +1,5 @@
 import { CliAccessError } from "@/effect/errors"
+import { z } from "zod"
 
 const CLI_RESPONSE_HEADERS = {
   "Cache-Control": "no-store",
@@ -9,6 +10,17 @@ export function cliJsonResponse(value: unknown, status = 200): Response {
   return new Response(JSON.stringify(value), {
     headers: CLI_RESPONSE_HEADERS,
     status,
+  })
+}
+
+export function cliInvalidRequest(cause: unknown): CliAccessError {
+  const detail = cause instanceof z.ZodError ? zodIssueDetail(cause) : null
+  return CliAccessError.make({
+    code: "invalid_request",
+    ...(detail ? { detail } : {}),
+    message: "The CLI request contains invalid input.",
+    retryable: false,
+    cause,
   })
 }
 
@@ -50,4 +62,15 @@ function statusForCliError(code: CliAccessError["code"]): number {
   if (code === "sftp_unavailable") return 503
   if (code === "unexpected_error") return 500
   return 400
+}
+
+function zodIssueDetail(error: z.ZodError): string | null {
+  const detail = error.issues
+    .map((issue) => {
+      const path = issue.path.map(String).join(".")
+      return `${path ? `${path}: ` : ""}${issue.message}`
+    })
+    .join("; ")
+  if (!detail) return null
+  return detail.length <= 240 ? detail : `${detail.slice(0, 237)}...`
 }

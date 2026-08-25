@@ -5,6 +5,7 @@ import { Effect } from "effect"
 import { CircleAlert, LoaderCircle, Rocket } from "lucide-react"
 import {
   DEFAULT_INSTANCE_DISK_LIMIT_BYTES,
+  MAXIMUM_INSTANCE_NAME_LENGTH,
   type Brick,
 } from "@workspace/contracts"
 
@@ -381,7 +382,7 @@ const AddServerConfiguration = React.memo(function AddServerConfiguration({
           key={selectionIdentity}
           name="name"
           defaultValue={selectionName}
-          maxLength={32}
+          maxLength={MAXIMUM_INSTANCE_NAME_LENGTH}
           placeholder="Server name"
           disabled={pending}
           required

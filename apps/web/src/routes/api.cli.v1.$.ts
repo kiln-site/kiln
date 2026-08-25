@@ -52,7 +52,11 @@ import { CliAccessError } from "@/effect/errors"
 import { runAppEffect } from "@/effect/runtime"
 import type { AppCache } from "@/effect/cache"
 import type { Database } from "@/effect/database"
-import { cliFailureResponse, cliJsonResponse } from "@/lib/cli-http"
+import {
+  cliFailureResponse,
+  cliInvalidRequest,
+  cliJsonResponse,
+} from "@/lib/cli-http"
 import { openHearthRelayConsoleStream } from "@/server/relay-console-proxy"
 
 const encoder = new TextEncoder()
@@ -342,13 +346,7 @@ function decodeBody<TValue>(
 ) {
   return Effect.try({
     try: () => schema.parse(value),
-    catch: (cause) =>
-      CliAccessError.make({
-        code: "invalid_request",
-        message: "The CLI request contains invalid input.",
-        retryable: false,
-        cause,
-      }),
+    catch: (cause) => cliInvalidRequest(cause),
   })
 }
 

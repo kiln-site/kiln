@@ -28,6 +28,7 @@ import {
   cliServersResponseSchema,
   cliSftpResponseSchema,
   DEFAULT_INSTANCE_DISK_LIMIT_BYTES,
+  MAXIMUM_INSTANCE_NAME_LENGTH,
   formatRelayInstanceStateReason,
   relayIdSchema,
   relayFileContentSchema,
@@ -407,9 +408,7 @@ const runCommandEffect = Effect.fn("cli.command")(function* (
         "Usage: kiln servers create <relayId> <brick-id|https-url> --name <name> [options]"
       )
     }
-    if (!args.name?.trim()) {
-      return yield* invalidUsage("--name is required when creating a server.")
-    }
+    const name = yield* parseServerNameEffect(args.name)
     const startup = yield* startupOptionsEffect(args)
     const result = yield* apiJsonEffect(
       session,
@@ -421,7 +420,7 @@ const runCommandEffect = Effect.fn("cli.command")(function* (
           brick,
           diskLimitBytes:
             startup.diskLimitBytes ?? DEFAULT_INSTANCE_DISK_LIMIT_BYTES,
-          name: args.name,
+          name,
           relayId,
           start: args.start,
           variables: startup.variables,
@@ -554,6 +553,21 @@ const runCommandEffect = Effect.fn("cli.command")(function* (
     return
   }
   return yield* invalidUsage(`Unknown command: ${args.command.join(" ")}`)
+})
+
+const parseServerNameEffect = Effect.fn("cli.serverName.parse")(function* (
+  value: string | undefined
+) {
+  const name = value?.trim() ?? ""
+  if (!name) {
+    return yield* invalidUsage("--name is required when creating a server.")
+  }
+  if (name.length > MAXIMUM_INSTANCE_NAME_LENGTH) {
+    return yield* invalidUsage(
+      `--name must be ${MAXIMUM_INSTANCE_NAME_LENGTH} characters or fewer.`
+    )
+  }
+  return name
 })
 
 const loginEffect = Effect.fn("cli.login")(function* (

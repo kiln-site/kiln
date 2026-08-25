@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vite-plus/test"
 import {
   cliCreateServerRequestSchema,
+  MAXIMUM_INSTANCE_NAME_LENGTH,
   cliUpdateServerStartupRequestSchema,
   MINIMUM_INSTANCE_DISK_LIMIT_BYTES,
 } from "@workspace/contracts"
@@ -40,6 +41,24 @@ describe("CLI startup inputs", () => {
         relayId: "r".repeat(43),
         start: true,
         variables: {},
+      }).success
+    ).toBe(false)
+  })
+
+  it("enforces the server-name maximum at the CLI API boundary", () => {
+    const input = {
+      brick: "paper",
+      diskLimitBytes: MINIMUM_INSTANCE_DISK_LIMIT_BYTES,
+      name: "a".repeat(MAXIMUM_INSTANCE_NAME_LENGTH),
+      relayId: "r".repeat(43),
+      start: true,
+      variables: {},
+    }
+    expect(cliCreateServerRequestSchema.safeParse(input).success).toBe(true)
+    expect(
+      cliCreateServerRequestSchema.safeParse({
+        ...input,
+        name: `${input.name}a`,
       }).success
     ).toBe(false)
   })

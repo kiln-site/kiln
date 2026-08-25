@@ -114,7 +114,7 @@ CREATE TABLE IF NOT EXISTS kiln_database (
 
 CREATE TABLE IF NOT EXISTS kiln_tailscale_network (
   id CHAR(40) CHARACTER SET ascii COLLATE ascii_bin NOT NULL PRIMARY KEY,
-  name VARCHAR(120) NOT NULL,
+  name VARCHAR(32) NOT NULL,
   domain VARCHAR(120) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
   oauth_client_id VARCHAR(120) CHARACTER SET ascii COLLATE ascii_bin NULL,
   oauth_client_secret_ciphertext TEXT NULL,

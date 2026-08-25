@@ -38,6 +38,7 @@ import {
   TooltipTrigger,
 } from "@workspace/ui/components/tooltip"
 import { cn } from "@workspace/ui/lib/utils"
+import { MAXIMUM_INSTANCE_NAME_LENGTH } from "@workspace/contracts"
 
 import {
   WorkspaceDataTable,
@@ -485,6 +486,7 @@ const EditNetworkDialog = React.memo(function EditNetworkDialog({
             <Input
               value={name}
               onChange={(event) => setName(event.target.value)}
+              maxLength={MAXIMUM_INSTANCE_NAME_LENGTH}
               autoFocus
             />
           </label>
@@ -751,6 +753,7 @@ const CreateNetworkForm = React.memo(function CreateNetworkForm({
             <Input
               value={name}
               onChange={(event) => setName(event.target.value)}
+              maxLength={MAXIMUM_INSTANCE_NAME_LENGTH}
               autoFocus
             />
           </label>
