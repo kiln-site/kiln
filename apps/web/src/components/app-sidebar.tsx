@@ -542,7 +542,7 @@ const ServerSelector = React.memo(function ServerSelector({
                 id={activeIcon.id}
                 color={activeIcon.color}
                 iconSvg={activeIcon.iconSvg}
-                className="size-[24px]! text-sidebar-foreground/85 group-data-[collapsible=icon]:size-[24px]!"
+                className="size-[24px]! text-sidebar-foreground/85 group-data-[collapsible=icon]:size-[20px]!"
                 aria-hidden="true"
               />
               {instance ? (
