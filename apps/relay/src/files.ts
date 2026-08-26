@@ -1631,66 +1631,68 @@ async function extractZipArchive(
   signal: AbortSignal,
   onDestinationCreated: (destination: string) => void
 ): Promise<void> {
-  const zip = await openPromise(source, {
-    autoClose: false,
-    decodeStrings: true,
-    lazyEntries: true,
-    strictFileNames: true,
-    validateEntrySizes: true,
-  }).catch((cause: unknown) => {
-    throw archiveExtractionCause(cause, signal)
-  })
-  return ensuringPromise(
-    async () => {
-      const entries: Array<Entry> = []
-      const names = new Set<string>()
-      let totalSize = 0
-      for await (const entry of zip.eachEntry()) {
-        if (signal.aborted) throw archiveExtractionCancelled()
-        if (entries.length >= MAX_ARCHIVE_ITEMS) {
-          throw archiveExtractionError(
-            "archive_too_large",
-            `Archives cannot contain more than ${MAX_ARCHIVE_ITEMS.toLocaleString("en-US")} entries`
-          )
+  const zip = await archiveExtractionResult(
+    openPromise(source, {
+      autoClose: false,
+      decodeStrings: true,
+      lazyEntries: true,
+      strictFileNames: true,
+      validateEntrySizes: true,
+    }),
+    signal
+  )
+  return archiveExtractionResult(
+    ensuringPromise(
+      async () => {
+        const entries: Array<Entry> = []
+        const names = new Set<string>()
+        let totalSize = 0
+        for await (const entry of zip.eachEntry()) {
+          if (signal.aborted) throw archiveExtractionCancelled()
+          if (entries.length >= MAX_ARCHIVE_ITEMS) {
+            throw archiveExtractionError(
+              "archive_too_large",
+              `Archives cannot contain more than ${MAX_ARCHIVE_ITEMS.toLocaleString("en-US")} entries`
+            )
+          }
+          validateZipEntry(entry, names)
+          totalSize += entry.uncompressedSize
+          if (
+            !Number.isSafeInteger(totalSize) ||
+            totalSize > MAX_TRANSFER_BYTES
+          ) {
+            throw archiveExtractionError(
+              "archive_too_large",
+              "The archive expands beyond the 20 GiB transfer limit"
+            )
+          }
+          entries.push(entry)
         }
-        validateZipEntry(entry, names)
-        totalSize += entry.uncompressedSize
-        if (
-          !Number.isSafeInteger(totalSize) ||
-          totalSize > MAX_TRANSFER_BYTES
-        ) {
-          throw archiveExtractionError(
-            "archive_too_large",
-            "The archive expands beyond the 20 GiB transfer limit"
+
+        const singleEntry = entries.length === 1 ? entries[0] : undefined
+        if (singleEntry && isRootFileEntry(singleEntry)) {
+          await extractSingleZipEntry(
+            zip,
+            singleEntry,
+            requestedDestination,
+            signal,
+            onDestinationCreated
           )
+          return
         }
-        entries.push(entry)
-      }
 
-      const singleEntry = entries.length === 1 ? entries[0] : undefined
-      if (singleEntry && isRootFileEntry(singleEntry)) {
-        await extractSingleZipEntry(
-          zip,
-          singleEntry,
-          requestedDestination,
-          signal,
-          onDestinationCreated
-        )
-        return
-      }
-
-      const destination =
-        await createAvailableUnarchiveDirectory(requestedDestination)
-      onDestinationCreated(destination)
-      for (const entry of entries) {
-        if (signal.aborted) throw archiveExtractionCancelled()
-        await extractZipEntry(zip, entry, destination, signal)
-      }
-    },
-    () => zip.close()
-  ).catch((cause: unknown) => {
-    throw archiveExtractionCause(cause, signal)
-  })
+        const destination =
+          await createAvailableUnarchiveDirectory(requestedDestination)
+        onDestinationCreated(destination)
+        for (const entry of entries) {
+          if (signal.aborted) throw archiveExtractionCancelled()
+          await extractZipEntry(zip, entry, destination, signal)
+        }
+      },
+      () => zip.close()
+    ),
+    signal
+  )
 }
 
 interface TarArchiveEntry {
@@ -2167,6 +2169,19 @@ function directUnarchiveDestination(
 
 function archiveExtractionError(code: string, reason: string, cause?: unknown) {
   return makeFilesystemError(code, "mutation.unarchive", reason, cause)
+}
+
+async function archiveExtractionResult<TResult>(
+  promise: PromiseLike<TResult>,
+  signal: AbortSignal
+): Promise<TResult> {
+  const result = await Effect.runPromise(
+    Effect.result(promiseEffect(() => promise))
+  )
+  if (Result.isFailure(result)) {
+    throw archiveExtractionCause(result.failure, signal)
+  }
+  return result.success
 }
 
 function archiveExtractionCause(
