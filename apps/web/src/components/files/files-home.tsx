@@ -124,9 +124,11 @@ export function FilesHome({
   fileIndex,
   fileTreeLoading,
   fileTreeError,
+  fileTreeRetrying,
   treeCollapsed,
   onTreeExpand,
   onOpen,
+  onRetryFileTree,
   canWrite,
   onUploadFiles,
   actions,
@@ -135,9 +137,11 @@ export function FilesHome({
   fileIndex: ProgressiveFileIndex
   fileTreeLoading: boolean
   fileTreeError: string | null
+  fileTreeRetrying: boolean
   treeCollapsed: boolean
   onTreeExpand: () => void
   onOpen: (path: string) => void
+  onRetryFileTree: () => void
   canWrite: boolean
   onUploadFiles: UploadFiles
   actions: FileActionsController
@@ -154,9 +158,10 @@ export function FilesHome({
   )
   const activity = activityQuery.data?.files ?? []
   const loading = fileTreeLoading || activityQuery.isFetching
-  const error =
-    fileTreeError ??
-    queryErrorMessage(activityQuery.error, "Could not load recent files")
+  const error = queryErrorMessage(
+    activityQuery.error,
+    "Could not load recent files"
+  )
   const pinned = activity.filter((entry) => entry.pinned)
   const recent = activity.filter((entry) => !entry.pinned).slice(0, 3)
 
@@ -236,9 +241,12 @@ export function FilesHome({
 
           <RootDirectoryList
             actions={actions}
-            enabled={!fileTreeLoading}
+            enabled={!fileTreeLoading && !fileTreeError}
             fileIndex={fileIndex}
+            loadError={fileTreeError}
             onOpen={onOpen}
+            onRetry={onRetryFileTree}
+            retrying={fileTreeRetrying}
           />
         </div>
       </div>

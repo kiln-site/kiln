@@ -3,7 +3,10 @@ import { prepareFileTreeInput } from "@pierre/trees"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { useRouter } from "@tanstack/react-router"
 
-import { FileTreeLoadingPanel } from "@/components/file-tree-loading-panel"
+import {
+  FileTreeErrorPanel,
+  FileTreeLoadingPanel,
+} from "@/components/file-tree-loading-panel"
 import {
   FileActionDialogHost,
   useFileActions,
@@ -167,6 +170,10 @@ const StableFileWorkspaceSurface = React.memo(function FileWorkspaceSurface({
       })
   )
   const treeReady = rootDirectoryQuery.data !== undefined
+  const rootDirectoryError = queryErrorMessage(
+    rootDirectoryQuery.error,
+    "Could not load files"
+  )
   const initialTreePaths = React.useMemo(
     () => rootDirectoryQuery.data?.entries.map((entry) => entry.path) ?? [],
     [rootDirectoryQuery.data]
@@ -239,7 +246,12 @@ const StableFileWorkspaceSurface = React.memo(function FileWorkspaceSurface({
     setMobileTreeOpen(false)
   }, [])
 
+  const retryRootDirectory = React.useCallback(() => {
+    void rootDirectoryQuery.refetch()
+  }, [rootDirectoryQuery.refetch])
+
   const handleRefresh = React.useCallback(() => {
+    if (rootDirectoryQuery.isError) retryRootDirectory()
     fileIndex.refresh()
     void queryClient.invalidateQueries({
       exact: true,
@@ -247,7 +259,14 @@ const StableFileWorkspaceSurface = React.memo(function FileWorkspaceSurface({
         .queryKey,
       refetchType: "none",
     })
-  }, [fileIndex, instance.id, instance.relayId, queryClient])
+  }, [
+    fileIndex,
+    instance.id,
+    instance.relayId,
+    queryClient,
+    retryRootDirectory,
+    rootDirectoryQuery.isError,
+  ])
   const uploads = useFileUploadAction({
     canWrite: canWrite && relayConnected,
     instance,
@@ -291,6 +310,14 @@ const StableFileWorkspaceSurface = React.memo(function FileWorkspaceSurface({
           uploading={uploads.uploading}
           actions={fileActions.controller}
         />
+      ) : rootDirectoryError ? (
+        <FileTreeErrorPanel
+          collapsed={displayedTreeCollapsed}
+          width={initialTreeWidth}
+          message={rootDirectoryError}
+          retrying={rootDirectoryQuery.isFetching}
+          onRetry={retryRootDirectory}
+        />
       ) : (
         <FileTreeLoadingPanel
           collapsed={displayedTreeCollapsed}
@@ -302,14 +329,13 @@ const StableFileWorkspaceSurface = React.memo(function FileWorkspaceSurface({
         <FileViewer
           canShare={canShare && relayConnected}
           canWrite={canWrite && relayConnected}
-          fileTreeError={queryErrorMessage(
-            rootDirectoryQuery.error,
-            "Could not load files"
-          )}
+          fileTreeError={rootDirectoryError}
           fileTreeLoading={rootDirectoryQuery.isPending}
+          fileTreeRetrying={rootDirectoryQuery.isFetching}
           fileIndex={fileIndex}
           instance={instance}
           onPathChange={onPathChange}
+          onRetryFileTree={retryRootDirectory}
           onTreeExpand={handleTreeExpand}
           preferencesStore={preferencesStore}
           selectionStore={selectionStore}

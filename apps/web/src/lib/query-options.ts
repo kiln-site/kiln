@@ -497,7 +497,10 @@ export function relayRootDirectoryQueryOptions(
     ] as const,
     queryFn: () =>
       getRelayDirectoryPage({ data: { instanceId, path: "", relayId } }),
-    retry: false,
+    retry: 3,
+    retryDelay: (attempt) => Math.min(500 * 2 ** attempt, 2_000),
+    refetchOnReconnect: false,
+    refetchOnWindowFocus: false,
     staleTime: 15_000,
   })
 }

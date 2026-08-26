@@ -51,7 +51,12 @@ export const Route = createFileRoute("/_app/server/$serverId/files")({
     const instance = findRelayInstance(snapshot.instances, params.serverId)
     if (!instance) return
 
-    // Start data work with the route chunk without holding the transition open.
+    // Start data work with client-side route transitions without holding them
+    // open. Pending Relay requests cannot cross SSR hydration safely: if the
+    // Relay disappears mid-request, the dehydrated promise remains pending in
+    // the browser instead of reaching the bounded query error state.
+    if (typeof window === "undefined") return
+
     // FileWorkspace observes these same query keys and reuses the in-flight work.
     void Promise.all([
       context.queryClient.prefetchQuery(

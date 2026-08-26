@@ -143,9 +143,11 @@ interface FileViewerProps {
   canWrite: boolean
   fileTreeError: string | null
   fileTreeLoading: boolean
+  fileTreeRetrying: boolean
   fileIndex: ProgressiveFileIndex
   instance: InstanceWorkspaceInstance
   onPathChange: (path: string) => void
+  onRetryFileTree: () => void
   onTreeExpand: () => void
   preferencesStore: FileEditorPreferencesStore
   selectionStore: FileSelectionStore
@@ -161,9 +163,11 @@ export function FileViewer({
   canWrite,
   fileTreeError,
   fileTreeLoading,
+  fileTreeRetrying,
   fileIndex,
   instance,
   onPathChange,
+  onRetryFileTree,
   onTreeExpand,
   preferencesStore,
   selectionStore,
@@ -290,9 +294,11 @@ export function FileViewer({
         fileIndex={fileIndex}
         fileTreeLoading={fileTreeLoading}
         fileTreeError={fileTreeError}
+        fileTreeRetrying={fileTreeRetrying}
         treeCollapsed={treeCollapsed}
         onTreeExpand={onTreeExpand}
         onOpen={onPathChange}
+        onRetryFileTree={onRetryFileTree}
         canWrite={canWrite}
         onUploadFiles={onUploadFiles}
         actions={actions}

@@ -252,12 +252,18 @@ export function RootDirectoryList({
   actions,
   enabled,
   fileIndex,
+  loadError,
   onOpen,
+  onRetry,
+  retrying,
 }: {
   actions: FileActionsController
   enabled: boolean
   fileIndex: ProgressiveFileIndex
+  loadError: string | null
   onOpen: (path: string) => void
+  onRetry: () => void
+  retrying: boolean
 }) {
   const directory = useFileDirectory(fileIndex, "", enabled)
   const entries = React.useMemo(
@@ -381,7 +387,30 @@ export function RootDirectoryList({
             <FileActionsDropdown controller={actions} paths={[entry.path]} />
           </div>
         ))}
-        {directory.loading && !hasBufferedEntries ? (
+        {loadError ? (
+          <div
+            className="flex min-h-10 items-center justify-center gap-1.5 border-t border-destructive/30 bg-destructive/5 px-6 text-xs text-destructive"
+            role="alert"
+          >
+            {retrying ? (
+              <>
+                <LoaderCircle className="size-3.5 animate-spin" />
+                Retrying…
+              </>
+            ) : (
+              <>
+                <span>Loading failed.</span>
+                <button
+                  type="button"
+                  className="font-medium underline underline-offset-2 hover:text-destructive/80 focus-visible:ring-1 focus-visible:ring-ring/60 focus-visible:outline-none"
+                  onClick={onRetry}
+                >
+                  Retry
+                </button>
+              </>
+            )}
+          </div>
+        ) : directory.loading && !hasBufferedEntries ? (
           <div className="flex min-h-10 items-center justify-center gap-2 border-t border-border/55 px-6 text-xs text-muted-foreground">
             <LoaderCircle className="size-3.5 animate-spin text-primary" />
             Loading more files
@@ -398,7 +427,7 @@ export function RootDirectoryList({
             Load more files
           </button>
         ) : null}
-        {directory.error ? (
+        {!loadError && directory.error ? (
           <div className="border-t border-destructive/30 bg-destructive/5 px-4 py-3 text-xs text-destructive">
             {directory.error.message || "Could not load this directory"}
           </div>
