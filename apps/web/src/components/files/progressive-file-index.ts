@@ -53,6 +53,8 @@ export class ProgressiveFileIndex {
   readonly #relayId: string
   readonly #directories = new Map<string, MutableDirectorySnapshot>()
   readonly #directoryListeners = new Map<string, Set<() => void>>()
+  readonly #directorySizes = new Map<string, number>()
+  readonly #directorySizeListeners = new Map<string, Set<() => void>>()
   readonly #directorySizePolls = new Set<ReturnType<typeof setTimeout>>()
   readonly #knownEntries = new Map<string, RelayFileEntry>()
   readonly #pathListeners = new Set<(event: FileIndexPathEvent) => void>()
@@ -95,6 +97,7 @@ export class ProgressiveFileIndex {
     this.#epoch += 1
     this.#searchGeneration += 1
     this.#directoryListeners.clear()
+    this.#directorySizeListeners.clear()
     this.#pathListeners.clear()
     this.#statusListeners.clear()
     this.#loads.clear()
@@ -109,6 +112,7 @@ export class ProgressiveFileIndex {
     this.#epoch += 1
     this.#searchGeneration += 1
     this.#directories.clear()
+    this.#directorySizes.clear()
     this.#knownEntries.clear()
     this.#loads.clear()
     this.#clearDirectorySizePolls()
@@ -119,6 +123,9 @@ export class ProgressiveFileIndex {
       listener({ entries: emptyEntries, type: "reset" })
     )
     this.#directoryListeners.forEach((listeners) =>
+      listeners.forEach((listener) => listener())
+    )
+    this.#directorySizeListeners.forEach((listeners) =>
       listeners.forEach((listener) => listener())
     )
     const epoch = this.#epoch
@@ -151,6 +158,10 @@ export class ProgressiveFileIndex {
     )
   }
 
+  getDirectorySize(path: string): number | null {
+    return this.#directorySizes.get(normalizeDirectoryPath(path)) ?? null
+  }
+
   getStatusSnapshot(): FileIndexStatusSnapshot {
     return this.#status
   }
@@ -163,6 +174,17 @@ export class ProgressiveFileIndex {
     return () => {
       listeners.delete(listener)
       if (!listeners.size) this.#directoryListeners.delete(normalized)
+    }
+  }
+
+  subscribeDirectorySize(path: string, listener: () => void): () => void {
+    const normalized = normalizeDirectoryPath(path)
+    const listeners = this.#directorySizeListeners.get(normalized) ?? new Set()
+    listeners.add(listener)
+    this.#directorySizeListeners.set(normalized, listeners)
+    return () => {
+      listeners.delete(listener)
+      if (!listeners.size) this.#directorySizeListeners.delete(normalized)
     }
   }
 
@@ -278,6 +300,11 @@ export class ProgressiveFileIndex {
       previous?.entries ?? emptyEntries,
       page.entries
     )
+    for (const entry of page.entries) {
+      if (entry.kind === "directory" && entry.size !== null) {
+        this.#setDirectorySize(entry.path, entry.size)
+      }
+    }
     this.#setDirectory(directory, {
       complete: page.cursor === null,
       cursor: page.cursor,
@@ -300,7 +327,8 @@ export class ProgressiveFileIndex {
     directory: string,
     paths: ReadonlyArray<string>,
     epoch: number,
-    pollAttempt = 0
+    pollAttempt = 0,
+    backoffAttempt = 0
   ): Promise<void> {
     if (!paths.length || this.#disposed || epoch !== this.#epoch) return
     const result = await promiseResult(() =>
@@ -315,15 +343,22 @@ export class ProgressiveFileIndex {
     if (this.#disposed || epoch !== this.#epoch || Result.isFailure(result)) {
       return
     }
-    this.#applyDirectorySizes(directory, result.success.sizes)
+    const sizesChanged = this.#applyDirectorySizes(
+      directory,
+      result.success.sizes
+    )
     if (
       !result.success.pending.length ||
       pollAttempt >= directorySizePollMaxAttempts
     ) {
       return
     }
+    const madeProgress =
+      sizesChanged || !sameDirectorySizePaths(paths, result.success.pending)
+    const nextBackoffAttempt = madeProgress ? 0 : backoffAttempt + 1
     const delay = Math.min(
-      directorySizePollInitialDelayMs * 2 ** pollAttempt,
+      directorySizePollInitialDelayMs *
+        2 ** (madeProgress ? 0 : backoffAttempt),
       directorySizePollMaxDelayMs
     )
     const timer = setTimeout(() => {
@@ -332,7 +367,8 @@ export class ProgressiveFileIndex {
         directory,
         result.success.pending,
         epoch,
-        pollAttempt + 1
+        pollAttempt + 1,
+        nextBackoffAttempt
       )
     }, delay)
     this.#directorySizePolls.add(timer)
@@ -341,23 +377,32 @@ export class ProgressiveFileIndex {
   #applyDirectorySizes(
     directory: string,
     sizes: Readonly<Record<string, number>>
-  ): void {
+  ): boolean {
     const snapshot = this.#directories.get(directory)
-    if (!snapshot) return
+    if (!snapshot) return false
     let changed = false
-    const entries = snapshot.entries.map((entry) => {
+    for (const entry of snapshot.entries) {
       const size = sizes[entry.path]
       if (
         entry.kind !== "directory" ||
         size === undefined ||
-        size === entry.size
+        !this.#setDirectorySize(entry.path, size)
       ) {
-        return entry
+        continue
       }
       changed = true
-      return { ...entry, size }
-    })
-    if (changed) this.#setDirectory(directory, { ...snapshot, entries })
+    }
+    return changed
+  }
+
+  #setDirectorySize(path: string, size: number): boolean {
+    const normalized = normalizeDirectoryPath(path)
+    if (size === this.#directorySizes.get(normalized)) return false
+    this.#directorySizes.set(normalized, size)
+    this.#directorySizeListeners
+      .get(normalized)
+      ?.forEach((listener) => listener())
+    return true
   }
 
   #discover(entries: ReadonlyArray<RelayFileEntry>): void {
@@ -469,6 +514,15 @@ function promiseResult<TResult>(run: () => Promise<TResult>) {
 function normalizeDirectoryPath(path: string): string {
   const normalized = path.replace(/^\/+|\/+$/gu, "")
   return normalized ? `${normalized}/` : ""
+}
+
+function sameDirectorySizePaths(
+  left: ReadonlyArray<string>,
+  right: ReadonlyArray<string>
+): boolean {
+  if (left.length !== right.length) return false
+  const rightPaths = new Set(right)
+  return left.every((path) => rightPaths.has(path))
 }
 
 function mergeEntries(

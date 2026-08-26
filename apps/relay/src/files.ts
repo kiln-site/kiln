@@ -81,8 +81,9 @@ export class FilesystemDriver {
   readonly #directorySizeEpochs = new Map<string, number>()
   readonly #directorySizeQueue: Array<DirectorySizeScan> = []
   readonly #directorySizeScans = new Set<string>()
+  readonly #activeDirectorySizeScans = new Map<string, DirectorySizeScan>()
+  readonly #directorySizeRescans = new Map<string, DirectorySizeScan>()
   readonly #searchScans = new Map<string, SearchScan>()
-  #activeDirectorySizeScans = 0
   #openingDirectoryScans = 0
 
   constructor(config: RelayConfig) {
@@ -831,18 +832,32 @@ export class FilesystemDriver {
   }
 
   #invalidateDirectorySizes(instanceId: string) {
-    this.#directorySizeEpochs.set(
-      instanceId,
-      this.#directorySizeEpoch(instanceId) + 1
-    )
+    const epoch = this.#directorySizeEpoch(instanceId) + 1
+    this.#directorySizeEpochs.set(instanceId, epoch)
     const prefix = `${instanceId}\0`
     for (const key of this.#directorySizeCache.keys()) {
       if (key.startsWith(prefix)) this.#directorySizeCache.delete(key)
     }
+    for (let index = this.#directorySizeQueue.length - 1; index >= 0; index--) {
+      const scan = this.#directorySizeQueue[index]
+      if (!scan || scan.instanceId !== instanceId) continue
+      this.#directorySizeQueue.splice(index, 1)
+      this.#directorySizeScans.delete(scan.key)
+    }
+    for (const scan of this.#activeDirectorySizeScans.values()) {
+      if (scan.instanceId !== instanceId) continue
+      this.#directorySizeRescans.set(scan.key, { ...scan, epoch })
+    }
   }
 
   #queueDirectorySizeScan(scan: DirectorySizeScan) {
-    if (this.#directorySizeScans.has(scan.key)) return true
+    if (this.#directorySizeScans.has(scan.key)) {
+      const active = this.#activeDirectorySizeScans.get(scan.key)
+      if (active && active.epoch !== scan.epoch) {
+        this.#directorySizeRescans.set(scan.key, scan)
+      }
+      return true
+    }
     if (this.#directorySizeScans.size >= FILE_DIRECTORY_SIZE_MAX_PENDING) {
       return false
     }
@@ -854,12 +869,12 @@ export class FilesystemDriver {
 
   #drainDirectorySizeQueue() {
     while (
-      this.#activeDirectorySizeScans < FILE_DIRECTORY_SIZE_MAX_SCANS &&
+      this.#activeDirectorySizeScans.size < FILE_DIRECTORY_SIZE_MAX_SCANS &&
       this.#directorySizeQueue.length
     ) {
       const scan = this.#directorySizeQueue.shift()
       if (!scan) return
-      this.#activeDirectorySizeScans += 1
+      this.#activeDirectorySizeScans.set(scan.key, scan)
       Effect.runFork(
         directoryApparentSizeEffect(scan.absolute).pipe(
           Effect.tap((size) =>
@@ -870,8 +885,11 @@ export class FilesystemDriver {
           ),
           Effect.ensuring(
             Effect.sync(() => {
+              const rescan = this.#directorySizeRescans.get(scan.key)
+              this.#directorySizeRescans.delete(scan.key)
+              this.#activeDirectorySizeScans.delete(scan.key)
               this.#directorySizeScans.delete(scan.key)
-              this.#activeDirectorySizeScans -= 1
+              if (rescan) this.#queueDirectorySizeScan(rescan)
               this.#drainDirectorySizeQueue()
             })
           )

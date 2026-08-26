@@ -15,7 +15,7 @@ afterEach(() => {
 })
 
 describe("ProgressiveFileIndex", () => {
-  it("fills sizes while notifying only the affected directory", async () => {
+  it("fills sizes while notifying only the affected size cell", async () => {
     let resolveSizes:
       | ((value: {
           instanceId: string
@@ -59,10 +59,12 @@ describe("ProgressiveFileIndex", () => {
     })
     const rootDirectoryListener = vi.fn()
     const nestedDirectoryListener = vi.fn()
+    const directorySizeListener = vi.fn()
     const pathListener = vi.fn()
     const statusListener = vi.fn()
     index.subscribeDirectory("", rootDirectoryListener)
     index.subscribeDirectory("world/", nestedDirectoryListener)
+    index.subscribeDirectorySize("world/", directorySizeListener)
     index.subscribePaths(pathListener)
     index.subscribeStatus(statusListener)
     // subscribePaths replays known entries once to initialize the tree model.
@@ -73,18 +75,41 @@ describe("ProgressiveFileIndex", () => {
       pending: [],
       sizes: { "world/": 3_072 },
     })
-    await vi.waitFor(() =>
-      expect(index.getDirectorySnapshot("").entries[0]?.size).toBe(3_072)
-    )
-    expect(rootDirectoryListener).toHaveBeenCalledTimes(1)
+    await vi.waitFor(() => expect(index.getDirectorySize("world/")).toBe(3_072))
+    expect(index.getDirectorySnapshot("").entries[0]?.size).toBeNull()
+    expect(directorySizeListener).toHaveBeenCalledTimes(1)
+    expect(rootDirectoryListener).not.toHaveBeenCalled()
     expect(nestedDirectoryListener).not.toHaveBeenCalled()
     expect(pathListener).not.toHaveBeenCalled()
     expect(statusListener).not.toHaveBeenCalled()
     index.dispose()
   })
 
-  it("continues polling valid directories after another path disappears", async () => {
+  it("resets size polling backoff when a batch makes progress", async () => {
     vi.useFakeTimers()
+    const pollTimes: Array<number> = []
+    const sizeResponses = [
+      {
+        instanceId: "instance-1",
+        pending: ["ready/", "removed/", "slow/"],
+        sizes: {},
+      },
+      {
+        instanceId: "instance-1",
+        pending: ["ready/", "removed/", "slow/"],
+        sizes: {},
+      },
+      {
+        instanceId: "instance-1",
+        pending: ["slow/"],
+        sizes: { "ready/": 10 },
+      },
+      {
+        instanceId: "instance-1",
+        pending: [],
+        sizes: { "slow/": 20 },
+      },
+    ]
     relay.getRelayDirectoryPage.mockResolvedValueOnce({
       cursor: null,
       directory: "",
@@ -95,17 +120,10 @@ describe("ProgressiveFileIndex", () => {
       ],
       instanceId: "instance-1",
     })
-    relay.getRelayDirectorySizes
-      .mockResolvedValueOnce({
-        instanceId: "instance-1",
-        pending: ["slow/"],
-        sizes: { "ready/": 10 },
-      })
-      .mockResolvedValueOnce({
-        instanceId: "instance-1",
-        pending: [],
-        sizes: { "slow/": 20 },
-      })
+    relay.getRelayDirectorySizes.mockImplementation(() => {
+      pollTimes.push(Date.now())
+      return Promise.resolve(sizeResponses.shift())
+    })
     const index = new ProgressiveFileIndex({
       initialRoot: null,
       instanceId: "instance-1",
@@ -114,20 +132,28 @@ describe("ProgressiveFileIndex", () => {
 
     try {
       await index.ensureDirectory("")
-      await vi.advanceTimersByTimeAsync(1_000)
+      await vi.runAllTimersAsync()
 
-      expect(relay.getRelayDirectorySizes).toHaveBeenNthCalledWith(2, {
+      expect(relay.getRelayDirectorySizes).toHaveBeenNthCalledWith(3, {
+        data: {
+          instanceId: "instance-1",
+          paths: ["ready/", "removed/", "slow/"],
+          relayId: "relay-1",
+        },
+      })
+      expect(relay.getRelayDirectorySizes).toHaveBeenNthCalledWith(4, {
         data: {
           instanceId: "instance-1",
           paths: ["slow/"],
           relayId: "relay-1",
         },
       })
-      expect(index.getDirectorySnapshot("").entries).toMatchObject([
-        { path: "ready/", size: 10 },
-        { path: "removed/", size: null },
-        { path: "slow/", size: 20 },
+      expect(pollTimes.map((time) => time - (pollTimes[0] ?? 0))).toEqual([
+        0, 1_000, 3_000, 4_000,
       ])
+      expect(index.getDirectorySize("ready/")).toBe(10)
+      expect(index.getDirectorySize("removed/")).toBeNull()
+      expect(index.getDirectorySize("slow/")).toBe(20)
     } finally {
       index.dispose()
       vi.useRealTimers()

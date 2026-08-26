@@ -121,6 +121,46 @@ function FileModifiedAtTime({ modifiedAt }: { modifiedAt: number }) {
   )
 }
 
+const DirectorySizeCell = React.memo(function DirectorySizeCell({
+  fileIndex,
+  path,
+}: {
+  fileIndex: ProgressiveFileIndex
+  path: string
+}) {
+  const subscribe = React.useCallback(
+    (listener: () => void) => fileIndex.subscribeDirectorySize(path, listener),
+    [fileIndex, path]
+  )
+  const getSnapshot = React.useCallback(
+    () => fileIndex.getDirectorySize(path),
+    [fileIndex, path]
+  )
+  const size = React.useSyncExternalStore(subscribe, getSnapshot, getSnapshot)
+  return (
+    <span className="type-code text-muted-foreground">
+      {formatFileSize(size)}
+    </span>
+  )
+})
+
+function FileSizeCell({
+  entry,
+  fileIndex,
+}: {
+  entry: DirectoryEntry
+  fileIndex: ProgressiveFileIndex
+}) {
+  if (entry.kind === "directory") {
+    return <DirectorySizeCell fileIndex={fileIndex} path={entry.path} />
+  }
+  return (
+    <span className="type-code text-muted-foreground">
+      {formatFileSize(entry.size)}
+    </span>
+  )
+}
+
 function useFileDirectory(
   fileIndex: ProgressiveFileIndex,
   directory: string,
@@ -156,7 +196,22 @@ function directoryEntries(
   }))
 }
 
-function useSortedDirectoryEntries(entries: Array<DirectoryEntry>) {
+function directoryEntrySortNumber(
+  entry: DirectoryEntry,
+  sortKey: Exclude<DirectorySortKey, "name">,
+  fileIndex: ProgressiveFileIndex
+) {
+  const value =
+    sortKey === "size" && entry.kind === "directory"
+      ? fileIndex.getDirectorySize(entry.path)
+      : entry[sortKey]
+  return value ?? -1
+}
+
+function useSortedDirectoryEntries(
+  entries: Array<DirectoryEntry>,
+  fileIndex: ProgressiveFileIndex
+) {
   const [sortKey, setSortKey] = React.useState<DirectorySortKey>("name")
   const [sortDirection, setSortDirection] =
     React.useState<DirectorySortDirection>("ascending")
@@ -170,12 +225,13 @@ function useSortedDirectoryEntries(entries: Array<DirectoryEntry>) {
               numeric: true,
               sensitivity: "base",
             })
-          : (left[sortKey] ?? -1) - (right[sortKey] ?? -1)
+          : directoryEntrySortNumber(left, sortKey, fileIndex) -
+            directoryEntrySortNumber(right, sortKey, fileIndex)
       return comparison === 0
         ? left.name.localeCompare(right.name, undefined, { numeric: true })
         : comparison * direction
     })
-  }, [entries, sortDirection, sortKey])
+  }, [entries, fileIndex, sortDirection, sortKey])
 
   const toggleSort = React.useCallback(
     (nextKey: DirectorySortKey) => {
@@ -271,7 +327,7 @@ export function RootDirectoryList({
     [directory.entries]
   )
   const { sortDirection, sortedEntries, sortKey, toggleSort } =
-    useSortedDirectoryEntries(entries)
+    useSortedDirectoryEntries(entries, fileIndex)
   const loadMore = React.useCallback(
     () => fileIndex.loadMoreDirectory(""),
     [fileIndex]
@@ -380,9 +436,7 @@ export function RootDirectoryList({
               )}
               <span className="truncate">{entry.name}</span>
             </button>
-            <span className="type-code text-muted-foreground">
-              {formatFileSize(entry.size)}
-            </span>
+            <FileSizeCell entry={entry} fileIndex={fileIndex} />
             <FileModifiedAtTime modifiedAt={entry.modifiedAt} />
             <FileActionsDropdown controller={actions} paths={[entry.path]} />
           </div>
@@ -470,7 +524,7 @@ function DirectoryViewContent({
     [directory.entries]
   )
   const { sortDirection, sortedEntries, sortKey, toggleSort } =
-    useSortedDirectoryEntries(entries)
+    useSortedDirectoryEntries(entries, fileIndex)
   const loadMore = React.useCallback(
     () => fileIndex.loadMoreDirectory(path),
     [fileIndex, path]
@@ -669,9 +723,7 @@ function DirectoryViewContent({
                 )}
                 <span className="truncate">{entry.name}</span>
               </button>
-              <span className="type-code text-muted-foreground">
-                {formatFileSize(entry.size)}
-              </span>
+              <FileSizeCell entry={entry} fileIndex={fileIndex} />
               <FileModifiedAtTime modifiedAt={entry.modifiedAt} />
               <FileActionsDropdown controller={actions} paths={[entry.path]} />
             </div>
