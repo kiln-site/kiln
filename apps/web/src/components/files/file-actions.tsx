@@ -410,7 +410,10 @@ export function FileActionsDropdown({
           <EllipsisVertical className="size-4" />
         </Button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="w-44">
+      <DropdownMenuContent
+        align="end"
+        className="w-44 [&_[data-slot=dropdown-menu-item]]:cursor-pointer"
+      >
         <DropdownMenuItem
           disabled={!controller.canWrite || paths.length !== 1}
           onSelect={() => controller.request("rename", paths)}
@@ -473,7 +476,10 @@ export function FileActionsContextMenu({
   return (
     <ContextMenu>
       <ContextMenuTrigger asChild>{children}</ContextMenuTrigger>
-      <ContextMenuContent className="w-44" aria-label={label}>
+      <ContextMenuContent
+        className="w-44 [&_[data-slot=context-menu-item]]:cursor-pointer"
+        aria-label={label}
+      >
         <ContextMenuItem onSelect={onOpen}>
           {directory ? <Folder /> : <FileIcon />} Open
         </ContextMenuItem>
