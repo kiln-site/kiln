@@ -53,7 +53,6 @@ type FileActionDialogState =
   | { kind: "archive"; paths: ReadonlyArray<string> }
   | { kind: "delete"; paths: ReadonlyArray<string> }
   | { kind: "rename"; path: string }
-  | { kind: "unarchive"; path: string }
   | null
 
 function formatName(path: string) {
@@ -217,7 +216,15 @@ export function useFileActions({
         paths.length === 1 &&
         isUnarchiveSupportedPath(paths[0] ?? "")
       ) {
-        setDialog({ kind: "unarchive", path: paths[0] ?? "" })
+        const path = paths[0] ?? ""
+        void runMutation(
+          {
+            operation: "unarchive",
+            path,
+            destination: unarchiveDestinationPath(path),
+          },
+          "Archive unarchived"
+        )
         return
       }
       if (action === "delete") {
@@ -275,24 +282,6 @@ export function useFileActions({
       }
       return
     }
-    if (dialog.kind === "unarchive") {
-      const name = value?.trim() ?? ""
-      if (!name || name.includes("/") || name.includes("\\")) {
-        showToast({
-          type: "error",
-          message: "Enter a valid extracted name",
-          description: "Names cannot contain slashes.",
-        })
-        return
-      }
-      const destination = joinFilePath(directoryPath(dialog.path), name)
-      const result = await runMutation(
-        { operation: "unarchive", path: dialog.path, destination },
-        "Archive unarchived"
-      )
-      if (result) setDialog(null)
-      return
-    }
     const created = await archive(dialog.paths, value?.trim() || "archive")
     if (created) setDialog(null)
   }
@@ -325,23 +314,19 @@ export function FileActionDialogHost({
   const initialValue =
     dialog?.kind === "rename"
       ? formatName(dialog.path)
-      : dialog?.kind === "unarchive"
-        ? formatName(unarchiveDestinationPath(dialog.path))
-        : dialog?.kind === "archive"
-          ? dialog.paths.length === 1
-            ? `${formatName(dialog.paths[0] ?? "archive")}.zip`
-            : "selected-files.zip"
-          : ""
+      : dialog?.kind === "archive"
+        ? dialog.paths.length === 1
+          ? `${formatName(dialog.paths[0] ?? "archive")}.zip`
+          : "selected-files.zip"
+        : ""
   const [value, setValue] = React.useState(initialValue)
   if (!dialog) return null
   const title =
     dialog.kind === "rename"
       ? "Rename item"
-      : dialog.kind === "unarchive"
-        ? "Unarchive ZIP"
-        : dialog.kind === "archive"
-          ? "Create archive"
-          : `Delete ${dialog.paths.length === 1 ? "item" : `${dialog.paths.length} items`}?`
+      : dialog.kind === "archive"
+        ? "Create archive"
+        : `Delete ${dialog.paths.length === 1 ? "item" : `${dialog.paths.length} items`}?`
 
   return (
     <Dialog open onOpenChange={onOpenChange}>
@@ -351,24 +336,16 @@ export function FileActionDialogHost({
           <DialogDescription>
             {dialog.kind === "delete"
               ? "This permanently removes the selected files from the server."
-              : dialog.kind === "unarchive"
-                ? "Choose a name for the extracted item. Multiple entries or folders use a folder; existing names get a number."
-                : dialog.kind === "archive"
-                  ? "The ZIP archive will be created in the current directory."
-                  : `Choose a new name for ${formatName(dialog.path)}.`}
+              : dialog.kind === "archive"
+                ? "The ZIP archive will be created in the current directory."
+                : `Choose a new name for ${formatName(dialog.path)}.`}
           </DialogDescription>
         </DialogHeader>
         {dialog.kind !== "delete" ? (
           <Input
             autoFocus
             value={value}
-            aria-label={
-              dialog.kind === "rename"
-                ? "New name"
-                : dialog.kind === "unarchive"
-                  ? "Extracted name"
-                  : "Archive name"
-            }
+            aria-label={dialog.kind === "rename" ? "New name" : "Archive name"}
             onChange={(event) => setValue(event.target.value)}
             onKeyDown={(event) => {
               if (event.key === "Enter" && value.trim()) {
@@ -394,11 +371,9 @@ export function FileActionDialogHost({
             {busy ? <LoaderCircle className="animate-spin" /> : null}
             {dialog.kind === "delete"
               ? "Delete"
-              : dialog.kind === "unarchive"
-                ? "Unarchive"
-                : dialog.kind === "archive"
-                  ? "Create archive"
-                  : "Rename"}
+              : dialog.kind === "archive"
+                ? "Create archive"
+                : "Rename"}
           </Button>
         </DialogFooter>
       </DialogContent>

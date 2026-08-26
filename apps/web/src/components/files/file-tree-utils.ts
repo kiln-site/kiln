@@ -24,11 +24,19 @@ export function joinFilePath(directory: string, name: string): string {
 }
 
 export function isUnarchiveSupportedPath(path: string): boolean {
-  return !path.endsWith("/") && path.toLowerCase().endsWith(".zip")
+  if (path.endsWith("/")) return false
+  const lowerPath = path.toLowerCase()
+  return (
+    lowerPath.endsWith(".zip") ||
+    lowerPath.endsWith(".tar.gz") ||
+    lowerPath.endsWith(".tgz")
+  )
 }
 
 export function unarchiveDestinationPath(path: string): string {
-  return isUnarchiveSupportedPath(path) ? path.slice(0, -4) : path
+  if (!isUnarchiveSupportedPath(path)) return path
+  const lowerPath = path.toLowerCase()
+  return lowerPath.endsWith(".tar.gz") ? path.slice(0, -7) : path.slice(0, -4)
 }
 
 export function hasDraggedFiles(event: {

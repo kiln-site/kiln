@@ -10,10 +10,12 @@ import {
 } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { resolve } from "node:path"
+import { buffer as consumeBuffer } from "node:stream/consumers"
 import { gzipSync, gunzipSync } from "node:zlib"
 import type { FileHandle } from "node:fs/promises"
 import { assert, describe, it } from "@effect/vitest"
 import { Deferred, Effect, Fiber } from "effect"
+import { pack as createTarPack, type Headers as TarHeaders } from "tar-stream"
 import { parseSnbt } from "@workspace/contracts"
 
 import { loadConfig } from "./config.js"
@@ -467,6 +469,76 @@ describeLinux("Relay direct file transfers", () => {
     )
   )
 
+  it.effect(
+    "unarchives compressed TAR files with direct files and wrapped trees",
+    () =>
+      withSetup(({ driver, instance, root }) =>
+        Effect.gen(function* () {
+          yield* fromPromise(() =>
+            writeTarGzArchive(resolve(root, "world", "bundle.tar.gz"), [
+              { content: "single tar file", name: "readme.txt" },
+            ])
+          )
+          for (const suffix of ["", " (1)"]) {
+            yield* driver.mutate(instance, {
+              operation: "unarchive",
+              path: "world/bundle.tar.gz",
+              destination: "world/bundle",
+            })
+            assert.strictEqual(
+              yield* fromPromise(() =>
+                readFile(resolve(root, "world", `bundle${suffix}.txt`), "utf8")
+              ),
+              "single tar file"
+            )
+          }
+
+          yield* fromPromise(() =>
+            writeTarGzArchive(resolve(root, "world", "tree.tgz"), [
+              { name: "only/", type: "directory" },
+              { content: "nested tar file", name: "only/inside.txt" },
+            ])
+          )
+          yield* driver.mutate(instance, {
+            operation: "unarchive",
+            path: "world/tree.tgz",
+            destination: "world/tree",
+          })
+          assert.strictEqual(
+            yield* fromPromise(() =>
+              readFile(
+                resolve(root, "world", "tree", "only", "inside.txt"),
+                "utf8"
+              )
+            ),
+            "nested tar file"
+          )
+        })
+      )
+  )
+
+  it.effect("returns a filesystem error for a malformed archive", () =>
+    withSetup(({ driver, instance, root }) =>
+      Effect.gen(function* () {
+        yield* fromPromise(() =>
+          writeFile(resolve(root, "world", "broken.tar.gz"), "not an archive")
+        )
+
+        const failure = yield* driver
+          .mutate(instance, {
+            operation: "unarchive",
+            path: "world/broken.tar.gz",
+            destination: "world/broken",
+          })
+          .pipe(Effect.flip)
+
+        assert.instanceOf(failure, RelayFilesystemError)
+        assert.strictEqual(failure.code, "invalid_archive")
+        assert.strictEqual(failure.operation, "mutation.unarchive")
+      })
+    )
+  )
+
   it.effect("creates missing parents for concurrent nested uploads", () =>
     withSetup(({ driver, instance }) =>
       Effect.gen(function* () {
@@ -720,6 +792,26 @@ async function* chunks(value: string): AsyncIterable<Uint8Array> {
 async function* failingChunks(): AsyncIterable<Uint8Array> {
   yield Buffer.from("partial")
   throw new Error("upload stream failed")
+}
+
+async function writeTarGzArchive(
+  path: string,
+  entries: ReadonlyArray<{
+    content?: string
+    name: string
+    type?: TarHeaders["type"]
+  }>
+): Promise<void> {
+  const archive = createTarPack()
+  const packed = consumeBuffer(archive)
+  for (const entry of entries) {
+    archive.entry(
+      { name: entry.name, type: entry.type ?? "file" },
+      Buffer.from(entry.content ?? "")
+    )
+  }
+  archive.finalize()
+  await writeFile(path, gzipSync(await packed))
 }
 
 function fromPromise<TResult>(run: () => Promise<TResult>) {
