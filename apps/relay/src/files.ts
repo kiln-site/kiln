@@ -1637,6 +1637,8 @@ async function extractZipArchive(
     lazyEntries: true,
     strictFileNames: true,
     validateEntrySizes: true,
+  }).catch((cause: unknown) => {
+    throw archiveExtractionCause(cause, signal)
   })
   return ensuringPromise(
     async () => {
@@ -1686,7 +1688,9 @@ async function extractZipArchive(
       }
     },
     () => zip.close()
-  )
+  ).catch((cause: unknown) => {
+    throw archiveExtractionCause(cause, signal)
+  })
 }
 
 interface TarArchiveEntry {
@@ -1702,6 +1706,10 @@ async function extractTarGzArchive(
   signal: AbortSignal,
   onDestinationCreated: (destination: string) => void
 ): Promise<void> {
+  // TAR has no central directory. Validate the complete stream before creating
+  // user-visible output so a bad final entry cannot leave earlier files behind.
+  // This intentionally trades a second gzip pass for atomic validation without
+  // writing another full copy of the archive into a staging directory.
   const entries = await inspectTarGzArchive(source, signal)
   const singleEntry = entries.length === 1 ? entries[0] : undefined
   if (
@@ -1732,6 +1740,14 @@ async function extractTarGzArchive(
       Effect.result(promiseEffect(() => file.close()))
     )
     if (Result.isFailure(extracted)) {
+      if (Result.isFailure(closed)) {
+        await Effect.runPromise(
+          Effect.logWarning(
+            "Relay extracted-file cleanup failed after extraction failed",
+            closed.failure
+          )
+        )
+      }
       throw archiveExtractionCause(extracted.failure, signal)
     }
     if (Result.isFailure(closed)) {

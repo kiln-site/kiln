@@ -17,6 +17,7 @@ import type { FileHandle } from "node:fs/promises"
 import { assert, describe, it } from "@effect/vitest"
 import { Deferred, Effect, Fiber } from "effect"
 import { pack as createTarPack, type Headers as TarHeaders } from "tar-stream"
+import ZipStream from "zip-stream"
 import { parseSnbt } from "@workspace/contracts"
 
 import { loadConfig } from "./config.js"
@@ -581,6 +582,105 @@ describeLinux("Relay direct file transfers", () => {
     )
   )
 
+  it.effect(
+    "rejects unsafe, duplicate, and link archive entries without output",
+    () =>
+      withSetup(({ driver, instance, root }) =>
+        Effect.gen(function* () {
+          const cases = [
+            {
+              archive: "unsafe.tar.gz",
+              destination: "unsafe-tar",
+              expectedCode: "unsafe_archive_path",
+              write: () =>
+                writeTarGzArchive(resolve(root, "world", "unsafe.tar.gz"), [
+                  { content: "safe", name: "first.txt" },
+                  { content: "escape", name: "../escape.txt" },
+                ]),
+            },
+            {
+              archive: "duplicate.tar.gz",
+              destination: "duplicate-tar",
+              expectedCode: "duplicate_archive_path",
+              write: () =>
+                writeTarGzArchive(resolve(root, "world", "duplicate.tar.gz"), [
+                  { content: "first", name: "same.txt" },
+                  { content: "second", name: "same.txt" },
+                ]),
+            },
+            {
+              archive: "link.tar.gz",
+              destination: "link-tar",
+              expectedCode: "unsupported_archive_entry",
+              write: () =>
+                writeTarGzArchive(resolve(root, "world", "link.tar.gz"), [
+                  {
+                    linkname: "target.txt",
+                    name: "linked.txt",
+                    type: "symlink",
+                  },
+                ]),
+            },
+            {
+              archive: "unsafe.zip",
+              destination: "unsafe-zip",
+              expectedCode: "invalid_archive",
+              write: () =>
+                writeUnsafeZipArchive(resolve(root, "world", "unsafe.zip")),
+            },
+            {
+              archive: "duplicate.zip",
+              destination: "duplicate-zip",
+              expectedCode: "duplicate_archive_path",
+              write: () =>
+                writeZipArchive(resolve(root, "world", "duplicate.zip"), [
+                  { content: "first", name: "same.txt" },
+                  { content: "second", name: "same.txt" },
+                ]),
+            },
+            {
+              archive: "link.zip",
+              destination: "link-zip",
+              expectedCode: "unsupported_archive_entry",
+              write: () =>
+                writeZipArchive(resolve(root, "world", "link.zip"), [
+                  {
+                    linkname: "target.txt",
+                    name: "linked.txt",
+                    type: "symlink",
+                  },
+                ]),
+            },
+          ] as const
+
+          for (const archiveCase of cases) {
+            yield* fromPromise(archiveCase.write)
+            const failure = yield* driver
+              .mutate(instance, {
+                operation: "unarchive",
+                path: `world/${archiveCase.archive}`,
+                destination: `world/${archiveCase.destination}`,
+              })
+              .pipe(Effect.flip)
+
+            assert.instanceOf(failure, RelayFilesystemError)
+            assert.strictEqual(failure.code, archiveCase.expectedCode)
+            const worldEntries = yield* fromPromise(() =>
+              readdir(resolve(root, "world"))
+            )
+            assert.notInclude(worldEntries, "escape.txt")
+            assert.isFalse(
+              worldEntries.some(
+                (entry) =>
+                  entry === archiveCase.destination ||
+                  entry.startsWith(`${archiveCase.destination}.`)
+              )
+            )
+          }
+        })
+      )
+  )
+
   it.effect("creates missing parents for concurrent nested uploads", () =>
     withSetup(({ driver, instance }) =>
       Effect.gen(function* () {
@@ -840,6 +940,7 @@ async function writeTarGzArchive(
   path: string,
   entries: ReadonlyArray<{
     content?: string
+    linkname?: string
     mode?: number
     name: string
     type?: TarHeaders["type"]
@@ -849,12 +950,70 @@ async function writeTarGzArchive(
   const packed = consumeBuffer(archive)
   for (const entry of entries) {
     archive.entry(
-      { mode: entry.mode, name: entry.name, type: entry.type ?? "file" },
+      {
+        linkname: entry.linkname,
+        mode: entry.mode,
+        name: entry.name,
+        type: entry.type ?? "file",
+      },
       Buffer.from(entry.content ?? "")
     )
   }
   archive.finalize()
   await writeFile(path, gzipSync(await packed))
+}
+
+async function writeZipArchive(
+  path: string,
+  entries: ReadonlyArray<{
+    content?: string
+    linkname?: string
+    name: string
+    type?: "directory" | "file" | "symlink"
+  }>
+): Promise<void> {
+  const archive = new ZipStream({ forceZip64: true })
+  const packed = consumeBuffer(archive)
+  for (const entry of entries) {
+    await new Promise<void>((resolveEntry, rejectEntry) => {
+      archive.entry(
+        Buffer.from(entry.content ?? ""),
+        {
+          linkname: entry.linkname,
+          name: entry.name,
+          type: entry.type ?? "file",
+        },
+        (cause) => {
+          if (cause) rejectEntry(cause)
+          else resolveEntry()
+        }
+      )
+    })
+  }
+  archive.finalize()
+  await writeFile(path, await packed)
+}
+
+async function writeUnsafeZipArchive(path: string): Promise<void> {
+  const safeName = "aa/escape.txt"
+  const unsafeName = "../escape.txt"
+  await writeZipArchive(path, [
+    { content: "safe", name: "first.txt" },
+    { content: "escape", name: safeName },
+  ])
+  const archive = await readFile(path)
+  const safeBytes = Buffer.from(safeName)
+  const unsafeBytes = Buffer.from(unsafeName)
+  assert.strictEqual(safeBytes.length, unsafeBytes.length)
+  let replacements = 0
+  let offset = archive.indexOf(safeBytes)
+  while (offset >= 0) {
+    unsafeBytes.copy(archive, offset)
+    replacements += 1
+    offset = archive.indexOf(safeBytes, offset + safeBytes.length)
+  }
+  assert.isAtLeast(replacements, 2)
+  await writeFile(path, archive)
 }
 
 function fromPromise<TResult>(run: () => Promise<TResult>) {
