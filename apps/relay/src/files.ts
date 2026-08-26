@@ -53,6 +53,7 @@ import { formatSnbt, parseSnbt } from "@workspace/contracts"
 
 import type { RelayConfig, RelayInstanceConfig } from "./config.js"
 import { RelayFilesystemError } from "./effect/errors.js"
+import { ensuringPromise, promiseEffect } from "./effect/promise.js"
 import { decodeNbt, encodeNbt } from "./nbt.js"
 
 const MAX_FILE_BYTES = 2 * 1024 * 1024
@@ -1578,13 +1579,16 @@ async function createAvailableUnarchiveDirectory(
   for (let index = 0; index <= 1_000; index += 1) {
     const destination =
       index === 0 ? requestedDestination : `${requestedDestination} (${index})`
-    try {
-      await mkdir(destination, { mode: 0o700, recursive: false })
-      return destination
-    } catch (cause) {
-      if (isAlreadyExists(cause)) continue
-      throw cause
-    }
+    const created = await Effect.runPromise(
+      Effect.result(
+        promiseEffect(() =>
+          mkdir(destination, { mode: 0o700, recursive: false })
+        )
+      )
+    )
+    if (Result.isSuccess(created)) return destination
+    if (isAlreadyExists(created.failure)) continue
+    throw created.failure
   }
   throw archiveExtractionError(
     "target_exists",
@@ -1605,51 +1609,55 @@ async function extractZipArchive(
     strictFileNames: true,
     validateEntrySizes: true,
   })
-  try {
-    const entries: Array<Entry> = []
-    const names = new Set<string>()
-    let totalSize = 0
-    for await (const entry of zip.eachEntry()) {
-      if (signal.aborted) throw new Error("Archive extraction was cancelled")
-      if (entries.length >= MAX_ARCHIVE_ITEMS) {
-        throw archiveExtractionError(
-          "archive_too_large",
-          `Archives cannot contain more than ${MAX_ARCHIVE_ITEMS.toLocaleString("en-US")} entries`
-        )
+  return ensuringPromise(
+    async () => {
+      const entries: Array<Entry> = []
+      const names = new Set<string>()
+      let totalSize = 0
+      for await (const entry of zip.eachEntry()) {
+        if (signal.aborted) throw new Error("Archive extraction was cancelled")
+        if (entries.length >= MAX_ARCHIVE_ITEMS) {
+          throw archiveExtractionError(
+            "archive_too_large",
+            `Archives cannot contain more than ${MAX_ARCHIVE_ITEMS.toLocaleString("en-US")} entries`
+          )
+        }
+        validateZipEntry(entry, names)
+        totalSize += entry.uncompressedSize
+        if (
+          !Number.isSafeInteger(totalSize) ||
+          totalSize > MAX_TRANSFER_BYTES
+        ) {
+          throw archiveExtractionError(
+            "archive_too_large",
+            "The archive expands beyond the 20 GiB transfer limit"
+          )
+        }
+        entries.push(entry)
       }
-      validateZipEntry(entry, names)
-      totalSize += entry.uncompressedSize
-      if (!Number.isSafeInteger(totalSize) || totalSize > MAX_TRANSFER_BYTES) {
-        throw archiveExtractionError(
-          "archive_too_large",
-          "The archive expands beyond the 20 GiB transfer limit"
+
+      const singleEntry = entries.length === 1 ? entries[0] : undefined
+      if (singleEntry && isRootFileEntry(singleEntry)) {
+        await extractSingleZipEntry(
+          zip,
+          singleEntry,
+          requestedDestination,
+          signal,
+          onDestinationCreated
         )
+        return
       }
-      entries.push(entry)
-    }
 
-    const singleEntry = entries.length === 1 ? entries[0] : undefined
-    if (singleEntry && isRootFileEntry(singleEntry)) {
-      await extractSingleZipEntry(
-        zip,
-        singleEntry,
-        requestedDestination,
-        signal,
-        onDestinationCreated
-      )
-      return
-    }
-
-    const destination =
-      await createAvailableUnarchiveDirectory(requestedDestination)
-    onDestinationCreated(destination)
-    for (const entry of entries) {
-      if (signal.aborted) throw new Error("Archive extraction was cancelled")
-      await extractZipEntry(zip, entry, destination, signal)
-    }
-  } finally {
-    zip.close()
-  }
+      const destination =
+        await createAvailableUnarchiveDirectory(requestedDestination)
+      onDestinationCreated(destination)
+      for (const entry of entries) {
+        if (signal.aborted) throw new Error("Archive extraction was cancelled")
+        await extractZipEntry(zip, entry, destination, signal)
+      }
+    },
+    () => zip.close()
+  )
 }
 
 function isRootFileEntry(entry: Entry): boolean {
@@ -1682,14 +1690,17 @@ async function extractSingleZipEntry(
       created = true
       onDestinationCreated(destination)
     })
-    try {
-      await pipeline(source, output, { signal })
-      await chmod(destination, mode)
-      return
-    } catch (cause) {
-      if (!created && isAlreadyExists(cause)) continue
-      throw cause
-    }
+    const extracted = await Effect.runPromise(
+      Effect.result(
+        promiseEffect(async () => {
+          await pipeline(source, output, { signal })
+          await chmod(destination, mode)
+        })
+      )
+    )
+    if (Result.isSuccess(extracted)) return
+    if (!created && isAlreadyExists(extracted.failure)) continue
+    throw extracted.failure
   }
   throw archiveExtractionError(
     "target_exists",
