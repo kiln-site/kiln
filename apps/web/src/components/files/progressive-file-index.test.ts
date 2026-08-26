@@ -104,4 +104,62 @@ describe("ProgressiveFileIndex", () => {
     })
     index.dispose()
   })
+
+  it("replays paths discovered before the file tree subscribes", async () => {
+    relay.getRelayDirectoryPage.mockResolvedValueOnce({
+      cursor: null,
+      directory: "world/",
+      entries: [
+        {
+          kind: "directory",
+          modifiedAt: 1,
+          path: "world/data/",
+          size: null,
+        },
+        {
+          kind: "file",
+          modifiedAt: 1,
+          path: "world/level.dat",
+          size: 42,
+        },
+      ],
+      instanceId: "instance-1",
+    })
+    relay.getRelayDirectorySizes.mockResolvedValueOnce({
+      instanceId: "instance-1",
+      pending: [],
+      sizes: { "world/data/": 24 },
+    })
+    const index = new ProgressiveFileIndex({
+      initialRoot: null,
+      instanceId: "instance-1",
+      relayId: "relay-1",
+    })
+
+    await index.ensureDirectory("world/")
+    const events: Array<unknown> = []
+    const unsubscribe = index.subscribePaths((event) => events.push(event))
+
+    expect(events).toEqual([
+      {
+        entries: [
+          {
+            kind: "directory",
+            modifiedAt: 1,
+            path: "world/data/",
+            size: null,
+          },
+          {
+            kind: "file",
+            modifiedAt: 1,
+            path: "world/level.dat",
+            size: 42,
+          },
+        ],
+        type: "add",
+      },
+    ])
+    unsubscribe()
+    index.dispose()
+  })
 })

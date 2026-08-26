@@ -52,7 +52,7 @@ export class ProgressiveFileIndex {
   readonly #directories = new Map<string, MutableDirectorySnapshot>()
   readonly #directoryListeners = new Map<string, Set<() => void>>()
   readonly #directorySizePolls = new Set<ReturnType<typeof setTimeout>>()
-  readonly #knownPaths = new Set<string>()
+  readonly #knownEntries = new Map<string, RelayFileEntry>()
   readonly #pathListeners = new Set<(event: FileIndexPathEvent) => void>()
   readonly #statusListeners = new Set<() => void>()
   readonly #loads = new Map<string, Promise<void>>()
@@ -107,7 +107,7 @@ export class ProgressiveFileIndex {
     this.#epoch += 1
     this.#searchGeneration += 1
     this.#directories.clear()
-    this.#knownPaths.clear()
+    this.#knownEntries.clear()
     this.#loads.clear()
     this.#clearDirectorySizePolls()
     this.#clearTreeLoadingTimers()
@@ -131,7 +131,7 @@ export class ProgressiveFileIndex {
   }
 
   getPaths(): ReadonlyArray<string> {
-    return [...this.#knownPaths]
+    return [...this.#knownEntries.keys()]
   }
 
   getTreePendingDirectories(): ReadonlyArray<string> {
@@ -166,6 +166,9 @@ export class ProgressiveFileIndex {
 
   subscribePaths(listener: (event: FileIndexPathEvent) => void): () => void {
     this.#pathListeners.add(listener)
+    if (this.#knownEntries.size) {
+      listener({ entries: [...this.#knownEntries.values()], type: "add" })
+    }
     return () => this.#pathListeners.delete(listener)
   }
 
@@ -343,8 +346,8 @@ export class ProgressiveFileIndex {
   #discover(entries: ReadonlyArray<RelayFileEntry>): void {
     const additions: Array<RelayFileEntry> = []
     for (const entry of entries) {
-      if (this.#knownPaths.has(entry.path)) continue
-      this.#knownPaths.add(entry.path)
+      if (this.#knownEntries.has(entry.path)) continue
+      this.#knownEntries.set(entry.path, entry)
       additions.push(entry)
     }
     if (!additions.length) return
