@@ -13,8 +13,8 @@ export function HearthMark({ className }: { className?: string }) {
         className="size-full scale-[1.35] bg-current [mask-position:center] [mask-repeat:no-repeat] [mask-size:contain]"
         style={{
           WebkitMaskImage:
-            "var(--kiln-logo, url('/branding/kiln-oven.svg'))",
-          maskImage: "var(--kiln-logo, url('/branding/kiln-oven.svg'))",
+            "var(--kiln-logo, url('/branding/kiln-logo.svg'))",
+          maskImage: "var(--kiln-logo, url('/branding/kiln-logo.svg'))",
         }}
       />
     </div>
