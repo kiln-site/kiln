@@ -301,6 +301,7 @@ function FloatingFileActionsMenu({
       role="menu"
       aria-label={label}
       data-file-actions-menu-root="true"
+      data-file-tree-context-menu-root="true"
       className={`${floatingSurfaceClassName} fixed z-[100] w-44 rounded-lg p-1 ring-1 ring-accent-border/22`}
       style={
         position
