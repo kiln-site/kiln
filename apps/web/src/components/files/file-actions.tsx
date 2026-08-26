@@ -10,11 +10,20 @@ import {
   Copy,
   Download,
   EllipsisVertical,
+  FileIcon,
+  Folder,
   LoaderCircle,
   Trash2,
 } from "lucide-react"
 
 import { Button } from "@workspace/ui/components/button"
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuSeparator,
+  ContextMenuTrigger,
+} from "@workspace/ui/components/context-menu"
 import {
   Dialog,
   DialogContent,
@@ -443,6 +452,70 @@ export function FileActionsDropdown({
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
+  )
+}
+
+export function FileActionsContextMenu({
+  children,
+  controller,
+  directory,
+  label,
+  onOpen,
+  paths,
+}: {
+  children: React.ReactNode
+  controller: FileActionsController
+  directory: boolean
+  label: string
+  onOpen: () => void
+  paths: ReadonlyArray<string>
+}) {
+  return (
+    <ContextMenu>
+      <ContextMenuTrigger asChild>{children}</ContextMenuTrigger>
+      <ContextMenuContent className="w-44" aria-label={label}>
+        <ContextMenuItem onSelect={onOpen}>
+          {directory ? <Folder /> : <FileIcon />} Open
+        </ContextMenuItem>
+        <ContextMenuItem
+          disabled={!controller.canWrite || paths.length !== 1}
+          onSelect={() => controller.request("rename", paths)}
+        >
+          <ALargeSmall /> Rename
+        </ContextMenuItem>
+        <ContextMenuItem onSelect={() => controller.request("download", paths)}>
+          <Download /> Download
+        </ContextMenuItem>
+        <ContextMenuItem
+          disabled={!controller.canWrite}
+          onSelect={() => controller.request("archive", paths)}
+        >
+          <Archive /> Archive
+        </ContextMenuItem>
+        {paths.length === 1 && isUnarchiveSupportedPath(paths[0] ?? "") ? (
+          <ContextMenuItem
+            disabled={!controller.canWrite}
+            onSelect={() => controller.request("unarchive", paths)}
+          >
+            <ArchiveRestore /> Unarchive
+          </ContextMenuItem>
+        ) : null}
+        <ContextMenuItem
+          disabled={!controller.canWrite}
+          onSelect={() => controller.request("duplicate", paths)}
+        >
+          <Copy /> Duplicate
+        </ContextMenuItem>
+        <ContextMenuSeparator />
+        <ContextMenuItem
+          variant="destructive"
+          disabled={!controller.canWrite}
+          onSelect={() => controller.request("delete", paths)}
+        >
+          <Trash2 /> Delete
+        </ContextMenuItem>
+      </ContextMenuContent>
+    </ContextMenu>
   )
 }
 
