@@ -25,6 +25,46 @@ import type { RelayInstanceConfig } from "./config.js"
 const describeLinux = process.platform === "linux" ? describe : describe.skip
 
 describe("Relay paged file index", () => {
+  it.effect("reports recursive sizes for listed directories", () =>
+    withSetup(({ driver, instance, root }) =>
+      Effect.gen(function* () {
+        yield* fromPromise(() =>
+          Promise.all([
+            writeFile(resolve(root, "world", "level.dat"), "level"),
+            mkdir(resolve(root, "world", "region")),
+          ])
+        )
+        yield* fromPromise(() =>
+          writeFile(resolve(root, "world", "region", "r.0.0.mca"), "region")
+        )
+
+        const rootPage = yield* driver.directory(instance, {
+          instanceId: instance.id,
+          path: "",
+        })
+        const world = rootPage.entries.find((entry) => entry.path === "world/")
+        assert.deepInclude(world, {
+          kind: "directory",
+          path: "world/",
+          size: 11,
+        })
+
+        const worldPage = yield* driver.directory(instance, {
+          instanceId: instance.id,
+          path: "world/",
+        })
+        const region = worldPage.entries.find(
+          (entry) => entry.path === "world/region/"
+        )
+        assert.deepInclude(region, {
+          kind: "directory",
+          path: "world/region/",
+          size: 6,
+        })
+      })
+    )
+  )
+
   it.effect("pages directories and searches every matching path", () =>
     withSetup(({ driver, instance, root }) =>
       Effect.gen(function* () {

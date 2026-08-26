@@ -49,6 +49,7 @@ import type {
 import { formatSnbt, parseSnbt } from "@workspace/contracts"
 
 import type { RelayConfig, RelayInstanceConfig } from "./config.js"
+import { directoryApparentSize } from "./disk-usage.js"
 import { RelayFilesystemError } from "./effect/errors.js"
 import { decodeNbt, encodeNbt } from "./nbt.js"
 
@@ -869,16 +870,23 @@ function supportedDirectoryEntry(entry: Dirent): boolean {
 async function relayFileEntry(
   root: string,
   directory: string,
-  entry: Dirent
+  entry: Dirent,
+  includeDirectorySize = false
 ): Promise<RelayFileEntry> {
   const path = fileEntryPath(directory, entry)
-  const metadata = await lstat(join(root, path.replace(/\/$/u, "")))
+  const absolute = join(root, path.replace(/\/$/u, ""))
+  const metadata = await lstat(absolute)
   const kind = entry.isDirectory() ? "directory" : "file"
   return {
     kind,
     modifiedAt: metadata.mtimeMs,
     path,
-    size: kind === "directory" ? null : metadata.size,
+    size:
+      kind === "directory"
+        ? includeDirectorySize
+          ? await directoryApparentSize(absolute)
+          : null
+        : metadata.size,
   }
 }
 
@@ -921,7 +929,9 @@ async function readDirectoryScanPage(
       ...(await Promise.all(
         entries
           .slice(offset, offset + 16)
-          .map((entry) => relayFileEntry(scan.root, scan.directory, entry))
+          .map((entry) =>
+            relayFileEntry(scan.root, scan.directory, entry, true)
+          )
       ))
     )
   }
