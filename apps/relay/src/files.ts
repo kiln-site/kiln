@@ -761,9 +761,14 @@ export class FilesystemDriver {
         let destination: string | null = null
         let completed = false
         yield* filesystemOperation("mutation.unarchive", async (signal) => {
-          destination =
-            await createAvailableUnarchiveDestination(requestedDestination)
-          await extractZipArchive(source.absolute, destination, signal)
+          await extractZipArchive(
+            source.absolute,
+            requestedDestination,
+            signal,
+            (createdDestination) => {
+              destination = createdDestination
+            }
+          )
         }).pipe(
           Effect.tap(() =>
             Effect.sync(() => {
@@ -773,7 +778,7 @@ export class FilesystemDriver {
           Effect.ensuring(
             Effect.suspend(() => {
               if (completed || !destination) return Effect.void
-              return cleanupDirectoryEffect(destination)
+              return cleanupExtractionEffect(destination)
             })
           )
         )
@@ -1567,7 +1572,7 @@ function writeZipArchive(
   })
 }
 
-async function createAvailableUnarchiveDestination(
+async function createAvailableUnarchiveDirectory(
   requestedDestination: string
 ): Promise<string> {
   for (let index = 0; index <= 1_000; index += 1) {
@@ -1589,8 +1594,9 @@ async function createAvailableUnarchiveDestination(
 
 async function extractZipArchive(
   source: string,
-  destination: string,
-  signal: AbortSignal
+  requestedDestination: string,
+  signal: AbortSignal,
+  onDestinationCreated: (destination: string) => void
 ): Promise<void> {
   const zip = await openPromise(source, {
     autoClose: false,
@@ -1622,6 +1628,21 @@ async function extractZipArchive(
       entries.push(entry)
     }
 
+    const singleEntry = entries.length === 1 ? entries[0] : undefined
+    if (singleEntry && isRootFileEntry(singleEntry)) {
+      await extractSingleZipEntry(
+        zip,
+        singleEntry,
+        requestedDestination,
+        signal,
+        onDestinationCreated
+      )
+      return
+    }
+
+    const destination =
+      await createAvailableUnarchiveDirectory(requestedDestination)
+    onDestinationCreated(destination)
     for (const entry of entries) {
       if (signal.aborted) throw new Error("Archive extraction was cancelled")
       await extractZipEntry(zip, entry, destination, signal)
@@ -1629,6 +1650,51 @@ async function extractZipArchive(
   } finally {
     zip.close()
   }
+}
+
+function isRootFileEntry(entry: Entry): boolean {
+  return !entry.fileName.endsWith("/") && !entry.fileName.includes("/")
+}
+
+async function extractSingleZipEntry(
+  zip: ZipFile,
+  entry: Entry,
+  requestedDestination: string,
+  signal: AbortSignal,
+  onDestinationCreated: (destination: string) => void
+): Promise<void> {
+  const archivedExtension = extname(entry.fileName)
+  const destinationWithExtension = extname(basename(requestedDestination))
+    ? requestedDestination
+    : `${requestedDestination}${archivedExtension}`
+  const mode = zipEntryMode(entry)
+  const extension = extname(destinationWithExtension)
+  const stem = extension
+    ? destinationWithExtension.slice(0, -extension.length)
+    : destinationWithExtension
+  for (let index = 0; index <= 1_000; index += 1) {
+    const destination =
+      index === 0 ? destinationWithExtension : `${stem} (${index})${extension}`
+    const source = await zip.openReadStreamPromise(entry)
+    const output = createWriteStream(destination, { flags: "wx", mode })
+    let created = false
+    output.once("open", () => {
+      created = true
+      onDestinationCreated(destination)
+    })
+    try {
+      await pipeline(source, output, { signal })
+      await chmod(destination, mode)
+      return
+    } catch (cause) {
+      if (!created && isAlreadyExists(cause)) continue
+      throw cause
+    }
+  }
+  throw archiveExtractionError(
+    "target_exists",
+    "Could not find an available file name for the archive"
+  )
 }
 
 function validateZipEntry(entry: Entry, names: Set<string>): void {
@@ -1689,14 +1755,13 @@ async function extractZipEntry(
   const name = directory ? entry.fileName.slice(0, -1) : entry.fileName
   const destination = resolve(root, name)
   requireExtractedPathContained(root, destination)
-  const unixMode = (entry.externalFileAttributes >>> 16) & 0xffff
   if (directory) {
     await mkdir(destination, { mode: 0o700, recursive: true })
     return
   }
   await mkdir(dirname(destination), { mode: 0o700, recursive: true })
   const source = await zip.openReadStreamPromise(entry)
-  const mode = 0o600 | (unixMode & 0o111)
+  const mode = zipEntryMode(entry)
   await pipeline(
     source,
     createWriteStream(destination, { flags: "wx", mode }),
@@ -1705,6 +1770,11 @@ async function extractZipEntry(
     }
   )
   await chmod(destination, mode)
+}
+
+function zipEntryMode(entry: Entry): number {
+  const unixMode = (entry.externalFileAttributes >>> 16) & 0xffff
+  return 0o600 | (unixMode & 0o111)
 }
 
 function requireExtractedPathContained(root: string, candidate: string): void {
@@ -1743,12 +1813,12 @@ function cleanupPathEffect(path: string) {
   )
 }
 
-function cleanupDirectoryEffect(path: string) {
-  return filesystemOperation("cleanup.directory", () =>
+function cleanupExtractionEffect(path: string) {
+  return filesystemOperation("cleanup.extraction", () =>
     rm(path, { force: true, recursive: true })
   ).pipe(
     Effect.catch((cause) =>
-      Effect.logWarning("Relay directory cleanup failed", cause)
+      Effect.logWarning("Relay extraction cleanup failed", cause)
     )
   )
 }

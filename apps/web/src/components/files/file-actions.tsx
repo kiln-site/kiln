@@ -280,8 +280,8 @@ export function useFileActions({
       if (!name || name.includes("/") || name.includes("\\")) {
         showToast({
           type: "error",
-          message: "Enter a valid folder name",
-          description: "Folder names cannot contain slashes.",
+          message: "Enter a valid extracted name",
+          description: "Names cannot contain slashes.",
         })
         return
       }
@@ -352,7 +352,7 @@ export function FileActionDialogHost({
             {dialog.kind === "delete"
               ? "This permanently removes the selected files from the server."
               : dialog.kind === "unarchive"
-                ? "Choose a folder for the extracted files. If it already exists, Kiln adds a number to the name."
+                ? "Choose a name for the extracted item. Multiple entries or folders use a folder; existing names get a number."
                 : dialog.kind === "archive"
                   ? "The ZIP archive will be created in the current directory."
                   : `Choose a new name for ${formatName(dialog.path)}.`}
@@ -366,7 +366,7 @@ export function FileActionDialogHost({
               dialog.kind === "rename"
                 ? "New name"
                 : dialog.kind === "unarchive"
-                  ? "Folder name"
+                  ? "Extracted name"
                   : "Archive name"
             }
             onChange={(event) => setValue(event.target.value)}

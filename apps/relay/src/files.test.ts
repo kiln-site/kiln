@@ -384,6 +384,63 @@ describeLinux("Relay direct file transfers", () => {
       )
   )
 
+  it.effect(
+    "extracts one root file directly and preserves archived directories",
+    () =>
+      withSetup(({ driver, instance, root }) =>
+        Effect.gen(function* () {
+          yield* fromPromise(() =>
+            writeFile(resolve(root, "world", "readme.txt"), "single file")
+          )
+          yield* driver.mutate(instance, {
+            operation: "archive",
+            paths: ["world/readme.txt"],
+            destination: "world/bundle.zip",
+          })
+          for (const suffix of ["", " (1)", " (2)"]) {
+            yield* driver.mutate(instance, {
+              operation: "unarchive",
+              path: "world/bundle.zip",
+              destination: "world/bundle",
+            })
+            assert.strictEqual(
+              yield* fromPromise(() =>
+                readFile(resolve(root, "world", `bundle${suffix}.txt`), "utf8")
+              ),
+              "single file"
+            )
+          }
+
+          yield* fromPromise(async () => {
+            await mkdir(resolve(root, "world", "only"))
+            await writeFile(
+              resolve(root, "world", "only", "inside.txt"),
+              "nested"
+            )
+          })
+          yield* driver.mutate(instance, {
+            operation: "archive",
+            paths: ["world/only"],
+            destination: "world/only.zip",
+          })
+          yield* driver.mutate(instance, {
+            operation: "unarchive",
+            path: "world/only.zip",
+            destination: "world/only-extracted",
+          })
+          assert.strictEqual(
+            yield* fromPromise(() =>
+              readFile(
+                resolve(root, "world", "only-extracted", "only", "inside.txt"),
+                "utf8"
+              )
+            ),
+            "nested"
+          )
+        })
+      )
+  )
+
   it.effect("atomically uploads and reads through a pinned file handle", () =>
     withSetup(({ driver, instance, root }) =>
       Effect.gen(function* () {
