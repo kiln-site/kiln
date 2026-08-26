@@ -356,6 +356,22 @@ describeLinux("Relay direct file transfers", () => {
             ),
             "settings"
           )
+          for (const suffix of [" (1)", " (2)"]) {
+            yield* driver.mutate(instance, {
+              operation: "unarchive",
+              path: "world/configs.zip",
+              destination: "world/configs",
+            })
+            assert.strictEqual(
+              yield* fromPromise(() =>
+                readFile(
+                  resolve(root, "world", `configs${suffix}`, "server.txt"),
+                  "utf8"
+                )
+              ),
+              "settings"
+            )
+          }
 
           yield* driver.mutate(instance, {
             operation: "delete",

@@ -754,21 +754,27 @@ export class FilesystemDriver {
             "Only ZIP files can be unarchived"
           )
         }
-        const destination = yield* mutationDestination(root, input.destination)
-        yield* requireMissingDestination(destination)
+        const requestedDestination = yield* mutationDestination(
+          root,
+          input.destination
+        )
+        let destination: string | null = null
         let completed = false
-        yield* filesystemOperation("mutation.unarchive", (signal) =>
-          extractZipArchive(source.absolute, destination, signal)
-        ).pipe(
+        yield* filesystemOperation("mutation.unarchive", async (signal) => {
+          destination =
+            await createAvailableUnarchiveDestination(requestedDestination)
+          await extractZipArchive(source.absolute, destination, signal)
+        }).pipe(
           Effect.tap(() =>
             Effect.sync(() => {
               completed = true
             })
           ),
           Effect.ensuring(
-            Effect.suspend(() =>
-              completed ? Effect.void : cleanupDirectoryEffect(destination)
-            )
+            Effect.suspend(() => {
+              if (completed || !destination) return Effect.void
+              return cleanupDirectoryEffect(destination)
+            })
           )
         )
       }
@@ -1561,6 +1567,26 @@ function writeZipArchive(
   })
 }
 
+async function createAvailableUnarchiveDestination(
+  requestedDestination: string
+): Promise<string> {
+  for (let index = 0; index <= 1_000; index += 1) {
+    const destination =
+      index === 0 ? requestedDestination : `${requestedDestination} (${index})`
+    try {
+      await mkdir(destination, { mode: 0o700, recursive: false })
+      return destination
+    } catch (cause) {
+      if (isAlreadyExists(cause)) continue
+      throw cause
+    }
+  }
+  throw archiveExtractionError(
+    "target_exists",
+    "Could not find an available folder name for the archive"
+  )
+}
+
 async function extractZipArchive(
   source: string,
   destination: string,
@@ -1596,7 +1622,6 @@ async function extractZipArchive(
       entries.push(entry)
     }
 
-    await mkdir(destination, { mode: 0o700, recursive: false })
     for (const entry of entries) {
       if (signal.aborted) throw new Error("Archive extraction was cancelled")
       await extractZipEntry(zip, entry, destination, signal)
