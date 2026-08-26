@@ -1,19 +1,9 @@
 import * as React from "react"
 import { Result } from "effect"
-import type {
-  ContextMenuAnchorRect,
-  FileTreePreparedInput,
-} from "@pierre/trees"
+import type { FileTreePreparedInput } from "@pierre/trees"
 import { FileTree, useFileTree, useFileTreeSearch } from "@pierre/trees/react"
 import {
-  ALargeSmall,
-  Archive,
-  ArchiveRestore,
-  Copy,
-  Download,
-  FileIcon,
   FilePlus,
-  Folder,
   FolderPlus,
   FolderTree,
   GripVertical,
@@ -24,12 +14,10 @@ import {
   Plus,
   RefreshCw,
   Search,
-  Trash2,
   TriangleAlert,
   Upload,
   X,
 } from "lucide-react"
-import { createPortal } from "react-dom"
 
 import { Button } from "@workspace/ui/components/button"
 import {
@@ -42,16 +30,15 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@workspace/ui/components/tooltip"
-import { floatingSurfaceClassName } from "@workspace/ui/lib/surface-styles"
 import type { InstanceWorkspaceInstance } from "@/lib/relay-selectors"
 import { EditorTooltip } from "@/components/files/editor-tooltip"
+import { FileActionsMenu } from "@/components/files/file-actions-menu"
 import { selectedUploadFiles } from "@/components/files/file-upload-selection"
 import {
   directoryPath,
   fileTreeParentDirectoryPaths,
   folderInputAttributes,
   hasDraggedFiles,
-  isUnarchiveSupportedPath,
   normalizeDirectoryPath,
   uploadDroppedFiles,
 } from "@/components/files/file-tree-utils"
@@ -62,8 +49,6 @@ import type {
 import type { FileSelectionStore } from "@/components/files/file-workspace-stores"
 import type { ProgressiveFileIndex } from "@/components/files/progressive-file-index"
 
-const contextMenuCursorGap = 4
-const contextMenuViewportPadding = 8
 const fileTreeWidthCookieName = "file_tree_width"
 const fileTreeCookieMaxAge = 60 * 60 * 24 * 7
 const fileTreeMinWidth = 224
@@ -207,95 +192,6 @@ function resolveTreeEventDirectory(event: Event): string | null {
     }
   }
   return null
-}
-
-export function FileTreeContextMenu({
-  anchorRect,
-  children,
-  label,
-}: {
-  anchorRect: ContextMenuAnchorRect
-  children: React.ReactNode
-  label: string
-}) {
-  const menuRef = React.useRef<HTMLDivElement>(null)
-  const portalTarget = typeof document === "undefined" ? null : document.body
-  const [position, setPosition] = React.useState<{
-    left: number
-    top: number
-  } | null>(null)
-
-  React.useLayoutEffect(() => {
-    if (!portalTarget) return
-
-    const updatePosition = () => {
-      const menu = menuRef.current
-      if (!menu) return
-
-      const { height, width } = menu.getBoundingClientRect()
-      const maxLeft = Math.max(
-        contextMenuViewportPadding,
-        window.innerWidth - width - contextMenuViewportPadding
-      )
-      const maxTop = Math.max(
-        contextMenuViewportPadding,
-        window.innerHeight - height - contextMenuViewportPadding
-      )
-      const fitsRight =
-        anchorRect.right + contextMenuCursorGap + width <=
-        window.innerWidth - contextMenuViewportPadding
-      const fitsBelow =
-        anchorRect.bottom + contextMenuCursorGap + height <=
-        window.innerHeight - contextMenuViewportPadding
-      const preferredLeft = fitsRight
-        ? anchorRect.right + contextMenuCursorGap
-        : anchorRect.left - width - contextMenuCursorGap
-      const preferredTop = fitsBelow
-        ? anchorRect.bottom + contextMenuCursorGap
-        : anchorRect.top - height - contextMenuCursorGap
-
-      setPosition({
-        left: Math.min(
-          maxLeft,
-          Math.max(contextMenuViewportPadding, preferredLeft)
-        ),
-        top: Math.min(
-          maxTop,
-          Math.max(contextMenuViewportPadding, preferredTop)
-        ),
-      })
-    }
-
-    updatePosition()
-    window.addEventListener("resize", updatePosition)
-    return () => window.removeEventListener("resize", updatePosition)
-  }, [
-    anchorRect.bottom,
-    anchorRect.left,
-    anchorRect.right,
-    anchorRect.top,
-    portalTarget,
-  ])
-
-  if (!portalTarget) return null
-
-  return createPortal(
-    <div
-      ref={menuRef}
-      role="menu"
-      aria-label={label}
-      data-file-tree-context-menu-root="true"
-      className={`${floatingSurfaceClassName} fixed z-[100] min-w-44 rounded-lg p-1 text-xs ring-1 ring-accent-border/22`}
-      style={
-        position
-          ? { left: position.left, top: position.top }
-          : { top: 0, left: 0, visibility: "hidden" }
-      }
-    >
-      {children}
-    </div>,
-    portalTarget
-  )
 }
 
 function FilesHomeButton({
@@ -1320,99 +1216,19 @@ export function FileTreePanel({
           }
           renderContextMenu={(item, context) =>
             loadingPlaceholderPaths.current.has(item.path) ? null : (
-              <FileTreeContextMenu
+              <FileActionsMenu
+                surface="tree"
                 anchorRect={context.anchorRect}
+                close={context.close}
+                controller={actions}
+                directory={item.kind === "directory"}
                 label={`Actions for ${item.name}`}
-              >
-                <button
-                  type="button"
-                  role="menuitem"
-                  className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-popover-accent focus-visible:bg-popover-accent focus-visible:outline-none [&>svg]:size-3.5"
-                  onClick={() => {
-                    context.close()
-                    onPathChange(item.path)
-                    onFileSelected()
-                  }}
-                >
-                  {item.kind === "directory" ? <Folder /> : <FileIcon />}
-                  Open
-                </button>
-                <button
-                  type="button"
-                  role="menuitem"
-                  disabled={!actions.canWrite}
-                  className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-popover-accent focus-visible:bg-popover-accent focus-visible:outline-none disabled:pointer-events-none disabled:opacity-40 [&>svg]:size-3.5"
-                  onClick={() => {
-                    context.close({ restoreFocus: false })
-                    actions.request("rename", [item.path])
-                  }}
-                >
-                  <ALargeSmall /> Rename
-                </button>
-                <button
-                  type="button"
-                  role="menuitem"
-                  className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-popover-accent focus-visible:bg-popover-accent focus-visible:outline-none [&>svg]:size-3.5"
-                  onClick={() => {
-                    context.close({ restoreFocus: false })
-                    actions.request("download", [item.path])
-                  }}
-                >
-                  <Download />
-                  Download
-                </button>
-                <button
-                  type="button"
-                  role="menuitem"
-                  disabled={!actions.canWrite}
-                  className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-popover-accent focus-visible:bg-popover-accent focus-visible:outline-none disabled:pointer-events-none disabled:opacity-40 [&>svg]:size-3.5"
-                  onClick={() => {
-                    context.close({ restoreFocus: false })
-                    actions.request("archive", [item.path])
-                  }}
-                >
-                  <Archive /> Archive
-                </button>
-                {isUnarchiveSupportedPath(item.path) ? (
-                  <button
-                    type="button"
-                    role="menuitem"
-                    disabled={!actions.canWrite}
-                    className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-popover-accent focus-visible:bg-popover-accent focus-visible:outline-none disabled:pointer-events-none disabled:opacity-40 [&>svg]:size-3.5"
-                    onClick={() => {
-                      context.close({ restoreFocus: false })
-                      actions.request("unarchive", [item.path])
-                    }}
-                  >
-                    <ArchiveRestore /> Unarchive
-                  </button>
-                ) : null}
-                <button
-                  type="button"
-                  role="menuitem"
-                  disabled={!actions.canWrite}
-                  className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-popover-accent focus-visible:bg-popover-accent focus-visible:outline-none disabled:pointer-events-none disabled:opacity-40 [&>svg]:size-3.5"
-                  onClick={() => {
-                    context.close()
-                    actions.request("duplicate", [item.path])
-                  }}
-                >
-                  <Copy /> Duplicate
-                </button>
-                <div className="-mx-1 my-1 h-px bg-border" />
-                <button
-                  type="button"
-                  role="menuitem"
-                  disabled={!actions.canWrite}
-                  className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-destructive transition-colors hover:bg-destructive/10 focus-visible:bg-destructive/10 focus-visible:outline-none disabled:pointer-events-none disabled:opacity-40 [&>svg]:size-3.5"
-                  onClick={() => {
-                    context.close({ restoreFocus: false })
-                    actions.request("delete", [item.path])
-                  }}
-                >
-                  <Trash2 /> Delete
-                </button>
-              </FileTreeContextMenu>
+                paths={[item.path]}
+                onOpen={() => {
+                  onPathChange(item.path)
+                  onFileSelected()
+                }}
+              />
             )
           }
         />

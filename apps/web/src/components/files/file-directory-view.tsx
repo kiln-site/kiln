@@ -25,10 +25,7 @@ import {
   TooltipTrigger,
 } from "@workspace/ui/components/tooltip"
 
-import {
-  FileActionsContextMenu,
-  FileActionsDropdown,
-} from "@/components/files/file-actions"
+import { FileActionsMenu } from "@/components/files/file-actions-menu"
 import { FileTypeIcon } from "@/components/files/file-type-icon"
 import { selectedUploadFiles } from "@/components/files/file-upload-selection"
 import {
@@ -374,7 +371,11 @@ export function RootDirectoryList({
         ) : (
           <span className="ml-auto" />
         )}
-        <FileActionsDropdown controller={actions} paths={selectedPaths} />
+        <FileActionsMenu
+          surface="dropdown"
+          controller={actions}
+          paths={selectedPaths}
+        />
       </div>
       <div className="overflow-hidden border border-border/75 bg-muted/[0.025]">
         <div className="type-technical-label grid h-9 grid-cols-[2.25rem_minmax(12rem,1fr)_7rem_11rem_2.5rem] items-center border-b border-border/75 bg-muted/10 px-2 text-muted-foreground">
@@ -414,7 +415,8 @@ export function RootDirectoryList({
           <span />
         </div>
         {visibleEntries.map((entry) => (
-          <FileActionsContextMenu
+          <FileActionsMenu
+            surface="context"
             key={entry.path}
             controller={actions}
             directory={entry.kind === "directory"}
@@ -446,9 +448,15 @@ export function RootDirectoryList({
               </button>
               <FileSizeCell entry={entry} fileIndex={fileIndex} />
               <FileModifiedAtTime modifiedAt={entry.modifiedAt} />
-              <FileActionsDropdown controller={actions} paths={[entry.path]} />
+              <FileActionsMenu
+                surface="dropdown"
+                controller={actions}
+                directory={entry.kind === "directory"}
+                paths={[entry.path]}
+                onOpen={() => onOpen(entry.path)}
+              />
             </div>
-          </FileActionsContextMenu>
+          </FileActionsMenu>
         ))}
         {loadError ? (
           <div
@@ -644,7 +652,11 @@ function DirectoryViewContent({
               aria-label={`Upload folder to /data/${path}`}
               onChange={handleUploadInput}
             />
-            <FileActionsDropdown controller={actions} paths={selectedPaths} />
+            <FileActionsMenu
+              surface="dropdown"
+              controller={actions}
+              paths={selectedPaths}
+            />
           </div>
         </div>
       </div>
@@ -707,7 +719,8 @@ function DirectoryViewContent({
           </button>
 
           {visibleEntries.map((entry) => (
-            <FileActionsContextMenu
+            <FileActionsMenu
+              surface="context"
               key={entry.path}
               controller={actions}
               directory={entry.kind === "directory"}
@@ -739,12 +752,15 @@ function DirectoryViewContent({
                 </button>
                 <FileSizeCell entry={entry} fileIndex={fileIndex} />
                 <FileModifiedAtTime modifiedAt={entry.modifiedAt} />
-                <FileActionsDropdown
+                <FileActionsMenu
+                  surface="dropdown"
                   controller={actions}
+                  directory={entry.kind === "directory"}
                   paths={[entry.path]}
+                  onOpen={() => onOpen(entry.path)}
                 />
               </div>
-            </FileActionsContextMenu>
+            </FileActionsMenu>
           ))}
 
           {directory.loading && !hasBufferedEntries ? (

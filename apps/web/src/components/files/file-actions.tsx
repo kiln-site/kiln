@@ -2,28 +2,9 @@ import * as React from "react"
 import { useMutation } from "@tanstack/react-query"
 import { Effect } from "effect"
 import type { RelayFileMutationInput } from "@workspace/contracts"
-import {
-  ALargeSmall,
-  Archive,
-  ArchiveRestore,
-  Check,
-  Copy,
-  Download,
-  EllipsisVertical,
-  FileIcon,
-  Folder,
-  LoaderCircle,
-  Trash2,
-} from "lucide-react"
+import { Check, LoaderCircle } from "lucide-react"
 
 import { Button } from "@workspace/ui/components/button"
-import {
-  ContextMenu,
-  ContextMenuContent,
-  ContextMenuItem,
-  ContextMenuSeparator,
-  ContextMenuTrigger,
-} from "@workspace/ui/components/context-menu"
 import {
   Dialog,
   DialogContent,
@@ -32,13 +13,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@workspace/ui/components/dialog"
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@workspace/ui/components/dropdown-menu"
 import { Input } from "@workspace/ui/components/input"
 import { dismissToast, showToast } from "@workspace/ui/components/sonner"
 
@@ -387,141 +361,6 @@ export function FileActionDialogHost({
         </DialogFooter>
       </DialogContent>
     </Dialog>
-  )
-}
-
-export function FileActionsDropdown({
-  controller,
-  paths,
-}: {
-  controller: FileActionsController
-  paths: ReadonlyArray<string>
-}) {
-  return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon-sm"
-          aria-label="File actions"
-          disabled={!paths.length || controller.busy}
-        >
-          <EllipsisVertical className="size-4" />
-        </Button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent
-        align="end"
-        className="w-44 [&_[data-slot=dropdown-menu-item]]:cursor-pointer"
-      >
-        <DropdownMenuItem
-          disabled={!controller.canWrite || paths.length !== 1}
-          onSelect={() => controller.request("rename", paths)}
-        >
-          <ALargeSmall /> Rename
-        </DropdownMenuItem>
-        <DropdownMenuItem
-          onSelect={() => controller.request("download", paths)}
-        >
-          <Download /> Download
-        </DropdownMenuItem>
-        <DropdownMenuItem
-          disabled={!controller.canWrite}
-          onSelect={() => controller.request("archive", paths)}
-        >
-          <Archive /> Archive
-        </DropdownMenuItem>
-        {paths.length === 1 && isUnarchiveSupportedPath(paths[0] ?? "") ? (
-          <DropdownMenuItem
-            disabled={!controller.canWrite}
-            onSelect={() => controller.request("unarchive", paths)}
-          >
-            <ArchiveRestore /> Unarchive
-          </DropdownMenuItem>
-        ) : null}
-        <DropdownMenuItem
-          disabled={!controller.canWrite}
-          onSelect={() => controller.request("duplicate", paths)}
-        >
-          <Copy /> Duplicate
-        </DropdownMenuItem>
-        <DropdownMenuSeparator />
-        <DropdownMenuItem
-          variant="destructive"
-          disabled={!controller.canWrite}
-          onSelect={() => controller.request("delete", paths)}
-        >
-          <Trash2 /> Delete
-        </DropdownMenuItem>
-      </DropdownMenuContent>
-    </DropdownMenu>
-  )
-}
-
-export function FileActionsContextMenu({
-  children,
-  controller,
-  directory,
-  label,
-  onOpen,
-  paths,
-}: {
-  children: React.ReactNode
-  controller: FileActionsController
-  directory: boolean
-  label: string
-  onOpen: () => void
-  paths: ReadonlyArray<string>
-}) {
-  return (
-    <ContextMenu>
-      <ContextMenuTrigger asChild>{children}</ContextMenuTrigger>
-      <ContextMenuContent
-        className="w-44 [&_[data-slot=context-menu-item]]:cursor-pointer"
-        aria-label={label}
-      >
-        <ContextMenuItem onSelect={onOpen}>
-          {directory ? <Folder /> : <FileIcon />} Open
-        </ContextMenuItem>
-        <ContextMenuItem
-          disabled={!controller.canWrite || paths.length !== 1}
-          onSelect={() => controller.request("rename", paths)}
-        >
-          <ALargeSmall /> Rename
-        </ContextMenuItem>
-        <ContextMenuItem onSelect={() => controller.request("download", paths)}>
-          <Download /> Download
-        </ContextMenuItem>
-        <ContextMenuItem
-          disabled={!controller.canWrite}
-          onSelect={() => controller.request("archive", paths)}
-        >
-          <Archive /> Archive
-        </ContextMenuItem>
-        {paths.length === 1 && isUnarchiveSupportedPath(paths[0] ?? "") ? (
-          <ContextMenuItem
-            disabled={!controller.canWrite}
-            onSelect={() => controller.request("unarchive", paths)}
-          >
-            <ArchiveRestore /> Unarchive
-          </ContextMenuItem>
-        ) : null}
-        <ContextMenuItem
-          disabled={!controller.canWrite}
-          onSelect={() => controller.request("duplicate", paths)}
-        >
-          <Copy /> Duplicate
-        </ContextMenuItem>
-        <ContextMenuSeparator />
-        <ContextMenuItem
-          variant="destructive"
-          disabled={!controller.canWrite}
-          onSelect={() => controller.request("delete", paths)}
-        >
-          <Trash2 /> Delete
-        </ContextMenuItem>
-      </ContextMenuContent>
-    </ContextMenu>
   )
 }
 
