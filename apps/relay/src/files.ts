@@ -1,4 +1,5 @@
 import {
+  chmod,
   cp,
   lstat,
   mkdir,
@@ -30,7 +31,9 @@ import {
 import { createHash, randomUUID } from "node:crypto"
 import { gzip, gunzip, constants as zlibConstants } from "node:zlib"
 import { promisify } from "node:util"
+import { pipeline } from "node:stream/promises"
 import { Effect, Result, Stream } from "effect"
+import { openPromise, type Entry, type ZipFile } from "yauzl"
 import ZipStream from "zip-stream"
 
 import type {
@@ -730,6 +733,41 @@ export class FilesystemDriver {
           Effect.ensuring(
             Effect.suspend(() =>
               completed ? Effect.void : cleanupPathEffect(destination)
+            )
+          )
+        )
+      }
+
+      if (input.operation === "unarchive") {
+        if (!input.path.toLowerCase().endsWith(".zip")) {
+          return yield* filesystemFailure(
+            "unsupported_archive",
+            "mutation.unarchive",
+            "Only ZIP archives can be unarchived"
+          )
+        }
+        const source = yield* existingMutationEntry(root, input.path)
+        if (source.kind !== "file") {
+          return yield* filesystemFailure(
+            "unsupported_archive",
+            "mutation.unarchive",
+            "Only ZIP files can be unarchived"
+          )
+        }
+        const destination = yield* mutationDestination(root, input.destination)
+        yield* requireMissingDestination(destination)
+        let completed = false
+        yield* filesystemOperation("mutation.unarchive", (signal) =>
+          extractZipArchive(source.absolute, destination, signal)
+        ).pipe(
+          Effect.tap(() =>
+            Effect.sync(() => {
+              completed = true
+            })
+          ),
+          Effect.ensuring(
+            Effect.suspend(() =>
+              completed ? Effect.void : cleanupDirectoryEffect(destination)
             )
           )
         )
@@ -1523,6 +1561,145 @@ function writeZipArchive(
   })
 }
 
+async function extractZipArchive(
+  source: string,
+  destination: string,
+  signal: AbortSignal
+): Promise<void> {
+  const zip = await openPromise(source, {
+    autoClose: false,
+    decodeStrings: true,
+    lazyEntries: true,
+    strictFileNames: true,
+    validateEntrySizes: true,
+  })
+  try {
+    const entries: Array<Entry> = []
+    const names = new Set<string>()
+    let totalSize = 0
+    for await (const entry of zip.eachEntry()) {
+      if (signal.aborted) throw new Error("Archive extraction was cancelled")
+      if (entries.length >= MAX_ARCHIVE_ITEMS) {
+        throw archiveExtractionError(
+          "archive_too_large",
+          `Archives cannot contain more than ${MAX_ARCHIVE_ITEMS.toLocaleString("en-US")} entries`
+        )
+      }
+      validateZipEntry(entry, names)
+      totalSize += entry.uncompressedSize
+      if (!Number.isSafeInteger(totalSize) || totalSize > MAX_TRANSFER_BYTES) {
+        throw archiveExtractionError(
+          "archive_too_large",
+          "The archive expands beyond the 20 GiB transfer limit"
+        )
+      }
+      entries.push(entry)
+    }
+
+    await mkdir(destination, { mode: 0o700, recursive: false })
+    for (const entry of entries) {
+      if (signal.aborted) throw new Error("Archive extraction was cancelled")
+      await extractZipEntry(zip, entry, destination, signal)
+    }
+  } finally {
+    zip.close()
+  }
+}
+
+function validateZipEntry(entry: Entry, names: Set<string>): void {
+  const directory = entry.fileName.endsWith("/")
+  const name = directory ? entry.fileName.slice(0, -1) : entry.fileName
+  const segments = name.split("/")
+  if (
+    !name ||
+    entry.fileName.includes("\\") ||
+    entry.fileName.includes("\0") ||
+    entry.fileName.startsWith("/") ||
+    segments.some((segment) => !segment || segment === "." || segment === "..")
+  ) {
+    throw archiveExtractionError(
+      "unsafe_archive_path",
+      "The archive contains an unsafe path"
+    )
+  }
+  if (names.has(name)) {
+    throw archiveExtractionError(
+      "duplicate_archive_path",
+      "The archive contains duplicate paths"
+    )
+  }
+  names.add(name)
+  if (
+    !Number.isSafeInteger(entry.uncompressedSize) ||
+    entry.uncompressedSize < 0 ||
+    !Number.isSafeInteger(entry.compressedSize) ||
+    entry.compressedSize < 0
+  ) {
+    throw archiveExtractionError(
+      "invalid_archive_size",
+      "The archive contains an invalid entry size"
+    )
+  }
+  const unixMode = (entry.externalFileAttributes >>> 16) & 0xffff
+  const fileType = unixMode & 0o170000
+  if (
+    fileType !== 0 &&
+    fileType !== 0o100000 &&
+    !(directory && fileType === 0o040000)
+  ) {
+    throw archiveExtractionError(
+      "unsupported_archive_entry",
+      "The archive contains a symbolic link or special file"
+    )
+  }
+}
+
+async function extractZipEntry(
+  zip: ZipFile,
+  entry: Entry,
+  root: string,
+  signal: AbortSignal
+): Promise<void> {
+  const directory = entry.fileName.endsWith("/")
+  const name = directory ? entry.fileName.slice(0, -1) : entry.fileName
+  const destination = resolve(root, name)
+  requireExtractedPathContained(root, destination)
+  const unixMode = (entry.externalFileAttributes >>> 16) & 0xffff
+  if (directory) {
+    await mkdir(destination, { mode: 0o700, recursive: true })
+    return
+  }
+  await mkdir(dirname(destination), { mode: 0o700, recursive: true })
+  const source = await zip.openReadStreamPromise(entry)
+  const mode = 0o600 | (unixMode & 0o111)
+  await pipeline(
+    source,
+    createWriteStream(destination, { flags: "wx", mode }),
+    {
+      signal,
+    }
+  )
+  await chmod(destination, mode)
+}
+
+function requireExtractedPathContained(root: string, candidate: string): void {
+  const normalizedRoot = resolve(root)
+  const normalizedCandidate = resolve(candidate)
+  if (
+    normalizedCandidate !== normalizedRoot &&
+    !normalizedCandidate.startsWith(`${normalizedRoot}${sep}`)
+  ) {
+    throw archiveExtractionError(
+      "unsafe_archive_path",
+      "The archive contains a path outside its destination"
+    )
+  }
+}
+
+function archiveExtractionError(code: string, reason: string) {
+  return makeFilesystemError(code, "mutation.unarchive", reason)
+}
+
 function closeHandleEffect(file: FileHandle, operation: string) {
   return filesystemOperation(operation, () => file.close()).pipe(
     Effect.catch((cause) =>
@@ -1537,6 +1714,16 @@ function cleanupPathEffect(path: string) {
   ).pipe(
     Effect.catch((cause) =>
       Effect.logWarning("Relay temporary-file cleanup failed", cause)
+    )
+  )
+}
+
+function cleanupDirectoryEffect(path: string) {
+  return filesystemOperation("cleanup.directory", () =>
+    rm(path, { force: true, recursive: true })
+  ).pipe(
+    Effect.catch((cause) =>
+      Effect.logWarning("Relay directory cleanup failed", cause)
     )
   )
 }

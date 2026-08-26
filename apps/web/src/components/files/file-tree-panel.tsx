@@ -8,6 +8,7 @@ import { FileTree, useFileTree, useFileTreeSearch } from "@pierre/trees/react"
 import {
   ALargeSmall,
   Archive,
+  ArchiveRestore,
   Copy,
   Download,
   FileIcon,
@@ -50,6 +51,7 @@ import {
   fileTreeParentDirectoryPaths,
   folderInputAttributes,
   hasDraggedFiles,
+  isUnarchiveSupportedPath,
   normalizeDirectoryPath,
   uploadDroppedFiles,
 } from "@/components/files/file-tree-utils"
@@ -1371,6 +1373,20 @@ export function FileTreePanel({
                 >
                   <Archive /> Archive
                 </button>
+                {isUnarchiveSupportedPath(item.path) ? (
+                  <button
+                    type="button"
+                    role="menuitem"
+                    disabled={!actions.canWrite}
+                    className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-popover-accent focus-visible:bg-popover-accent focus-visible:outline-none disabled:pointer-events-none disabled:opacity-40 [&>svg]:size-3.5"
+                    onClick={() => {
+                      context.close({ restoreFocus: false })
+                      actions.request("unarchive", [item.path])
+                    }}
+                  >
+                    <ArchiveRestore /> Unarchive
+                  </button>
+                ) : null}
                 <button
                   type="button"
                   role="menuitem"

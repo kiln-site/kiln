@@ -23,6 +23,14 @@ export function joinFilePath(directory: string, name: string): string {
   return `${normalizeDirectoryPath(directory)}${name}`
 }
 
+export function isUnarchiveSupportedPath(path: string): boolean {
+  return !path.endsWith("/") && path.toLowerCase().endsWith(".zip")
+}
+
+export function unarchiveDestinationPath(path: string): string {
+  return isUnarchiveSupportedPath(path) ? path.slice(0, -4) : path
+}
+
 export function hasDraggedFiles(event: {
   dataTransfer: DataTransfer
 }): boolean {
@@ -51,14 +59,12 @@ export type FileWorkspaceAction =
   | "download"
   | "duplicate"
   | "rename"
+  | "unarchive"
 
 export interface FileActionsController {
   busy: boolean
   canWrite: boolean
-  request: (
-    action: FileWorkspaceAction,
-    paths: ReadonlyArray<string>
-  ) => void
+  request: (action: FileWorkspaceAction, paths: ReadonlyArray<string>) => void
 }
 
 export async function uploadDroppedFiles(

@@ -302,47 +302,70 @@ describe("Relay NBT file editing", () => {
 })
 
 describeLinux("Relay direct file transfers", () => {
-  it.effect("renames, duplicates, archives, and deletes entries", () =>
-    withSetup(({ driver, instance, root }) =>
-      Effect.gen(function* () {
-        yield* fromPromise(() =>
-          writeFile(resolve(root, "world", "data.txt"), "settings")
-        )
-        yield* driver.mutate(instance, {
-          operation: "rename",
-          path: "world/data.txt",
-          destination: "world/server.txt",
-        })
-        yield* driver.mutate(instance, {
-          operation: "duplicate",
-          paths: ["world/server.txt"],
-        })
-        yield* driver.mutate(instance, {
-          operation: "archive",
-          paths: ["world/server.txt", "world/server copy.txt"],
-          destination: "world/configs.zip",
-        })
-        const archived = yield* driver.tree(instance)
-        assert.include(archived.paths, "world/configs.zip")
-        assert.strictEqual(archived.sizes["world/server.txt"], 8)
-        assert.isAtLeast(archived.sizes["world/"] ?? 0, 16)
-        assert.strictEqual(archived.sizes[""], archived.sizes["world/"])
-        assert.isAbove(archived.modifiedAt["world/server.txt"] ?? 0, 0)
-        assert.isAbove(archived.modifiedAt["world/"] ?? 0, 0)
-        const archive = yield* fromPromise(() =>
-          readFile(resolve(root, "world", "configs.zip"))
-        )
-        assert.strictEqual(archive.subarray(0, 2).toString(), "PK")
+  it.effect(
+    "renames, duplicates, archives, unarchives, and deletes entries",
+    () =>
+      withSetup(({ driver, instance, root }) =>
+        Effect.gen(function* () {
+          yield* fromPromise(() =>
+            writeFile(resolve(root, "world", "data.txt"), "settings")
+          )
+          yield* driver.mutate(instance, {
+            operation: "rename",
+            path: "world/data.txt",
+            destination: "world/server.txt",
+          })
+          yield* driver.mutate(instance, {
+            operation: "duplicate",
+            paths: ["world/server.txt"],
+          })
+          yield* driver.mutate(instance, {
+            operation: "archive",
+            paths: ["world/server.txt", "world/server copy.txt"],
+            destination: "world/configs.zip",
+          })
+          const archived = yield* driver.tree(instance)
+          assert.include(archived.paths, "world/configs.zip")
+          assert.strictEqual(archived.sizes["world/server.txt"], 8)
+          assert.isAtLeast(archived.sizes["world/"] ?? 0, 16)
+          assert.strictEqual(archived.sizes[""], archived.sizes["world/"])
+          assert.isAbove(archived.modifiedAt["world/server.txt"] ?? 0, 0)
+          assert.isAbove(archived.modifiedAt["world/"] ?? 0, 0)
+          const archive = yield* fromPromise(() =>
+            readFile(resolve(root, "world", "configs.zip"))
+          )
+          assert.strictEqual(archive.subarray(0, 2).toString(), "PK")
 
-        yield* driver.mutate(instance, {
-          operation: "delete",
-          paths: ["world/server.txt", "world/server copy.txt"],
+          yield* driver.mutate(instance, {
+            operation: "unarchive",
+            path: "world/configs.zip",
+            destination: "world/configs",
+          })
+          assert.strictEqual(
+            yield* fromPromise(() =>
+              readFile(resolve(root, "world", "configs", "server.txt"), "utf8")
+            ),
+            "settings"
+          )
+          assert.strictEqual(
+            yield* fromPromise(() =>
+              readFile(
+                resolve(root, "world", "configs", "server copy.txt"),
+                "utf8"
+              )
+            ),
+            "settings"
+          )
+
+          yield* driver.mutate(instance, {
+            operation: "delete",
+            paths: ["world/server.txt", "world/server copy.txt"],
+          })
+          const deleted = yield* driver.tree(instance)
+          assert.notInclude(deleted.paths, "world/server.txt")
+          assert.notInclude(deleted.paths, "world/server copy.txt")
         })
-        const deleted = yield* driver.tree(instance)
-        assert.notInclude(deleted.paths, "world/server.txt")
-        assert.notInclude(deleted.paths, "world/server copy.txt")
-      })
-    )
+      )
   )
 
   it.effect("atomically uploads and reads through a pinned file handle", () =>

@@ -5,6 +5,7 @@ import type { RelayFileMutationInput } from "@workspace/contracts"
 import {
   ALargeSmall,
   Archive,
+  ArchiveRestore,
   Check,
   Copy,
   Download,
@@ -34,7 +35,9 @@ import { dismissToast, showToast } from "@workspace/ui/components/sonner"
 
 import {
   directoryPath,
+  isUnarchiveSupportedPath,
   joinFilePath,
+  unarchiveDestinationPath,
   type FileActionsController,
   type FileWorkspaceAction,
 } from "@/components/files/file-tree-utils"
@@ -206,6 +209,22 @@ export function useFileActions({
       }
       if (action === "archive") {
         setDialog({ kind: "archive", paths })
+        return
+      }
+      if (
+        action === "unarchive" &&
+        paths.length === 1 &&
+        isUnarchiveSupportedPath(paths[0] ?? "")
+      ) {
+        const path = paths[0] ?? ""
+        void runMutation(
+          {
+            operation: "unarchive",
+            path,
+            destination: unarchiveDestinationPath(path),
+          },
+          "Archive unarchived"
+        )
         return
       }
       if (action === "delete") {
@@ -400,6 +419,14 @@ export function FileActionsDropdown({
         >
           <Archive /> Archive
         </DropdownMenuItem>
+        {paths.length === 1 && isUnarchiveSupportedPath(paths[0] ?? "") ? (
+          <DropdownMenuItem
+            disabled={!controller.canWrite}
+            onSelect={() => controller.request("unarchive", paths)}
+          >
+            <ArchiveRestore /> Unarchive
+          </DropdownMenuItem>
+        ) : null}
         <DropdownMenuItem
           disabled={!controller.canWrite}
           onSelect={() => controller.request("duplicate", paths)}

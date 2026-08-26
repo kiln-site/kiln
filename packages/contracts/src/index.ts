@@ -1233,6 +1233,11 @@ export const relayFileMutationInputSchema = z.discriminatedUnion("operation", [
     paths: z.array(relayFileMutationPathSchema).min(1).max(500),
     destination: relayFileMutationPathSchema,
   }),
+  z.object({
+    operation: z.literal("unarchive"),
+    path: relayFileMutationPathSchema,
+    destination: relayFileMutationPathSchema,
+  }),
 ])
 
 export const relayFileMutationResultSchema = z
