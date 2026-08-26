@@ -15,7 +15,7 @@ afterEach(() => {
 })
 
 describe("ProgressiveFileIndex", () => {
-  it("fills directory sizes without blocking the directory page", async () => {
+  it("fills sizes while notifying only the affected directory", async () => {
     let resolveSizes:
       | ((value: {
           instanceId: string
@@ -57,6 +57,17 @@ describe("ProgressiveFileIndex", () => {
         relayId: "relay-1",
       },
     })
+    const rootDirectoryListener = vi.fn()
+    const nestedDirectoryListener = vi.fn()
+    const pathListener = vi.fn()
+    const statusListener = vi.fn()
+    index.subscribeDirectory("", rootDirectoryListener)
+    index.subscribeDirectory("world/", nestedDirectoryListener)
+    index.subscribePaths(pathListener)
+    index.subscribeStatus(statusListener)
+    // subscribePaths replays known entries once to initialize the tree model.
+    pathListener.mockClear()
+
     resolveSizes?.({
       instanceId: "instance-1",
       pending: [],
@@ -65,6 +76,10 @@ describe("ProgressiveFileIndex", () => {
     await vi.waitFor(() =>
       expect(index.getDirectorySnapshot("").entries[0]?.size).toBe(3_072)
     )
+    expect(rootDirectoryListener).toHaveBeenCalledTimes(1)
+    expect(nestedDirectoryListener).not.toHaveBeenCalled()
+    expect(pathListener).not.toHaveBeenCalled()
+    expect(statusListener).not.toHaveBeenCalled()
     index.dispose()
   })
 
