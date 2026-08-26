@@ -18,5 +18,8 @@ describe("file archive paths", () => {
     expect(unarchiveDestinationPath("world/config.zip")).toBe("world/config")
     expect(unarchiveDestinationPath("world/config.tar.gz")).toBe("world/config")
     expect(unarchiveDestinationPath("world/config.tgz")).toBe("world/config")
+    expect(unarchiveDestinationPath("world/config.v1.zip")).toBe(
+      "world/config.v1"
+    )
   })
 })

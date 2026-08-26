@@ -4,6 +4,7 @@ import {
   readFile,
   readdir,
   rm,
+  stat,
   symlink,
   truncate,
   writeFile,
@@ -413,6 +414,23 @@ describeLinux("Relay direct file transfers", () => {
             )
           }
 
+          yield* driver.mutate(instance, {
+            operation: "archive",
+            paths: ["world/readme.txt"],
+            destination: "world/bundle.v1.zip",
+          })
+          yield* driver.mutate(instance, {
+            operation: "unarchive",
+            path: "world/bundle.v1.zip",
+            destination: "world/bundle.v1",
+          })
+          assert.strictEqual(
+            yield* fromPromise(() =>
+              readFile(resolve(root, "world", "bundle.v1.txt"), "utf8")
+            ),
+            "single file"
+          )
+
           yield* fromPromise(async () => {
             await mkdir(resolve(root, "world", "only"))
             await writeFile(
@@ -513,6 +531,30 @@ describeLinux("Relay direct file transfers", () => {
             ),
             "nested tar file"
           )
+
+          yield* fromPromise(() =>
+            writeTarGzArchive(resolve(root, "world", "executable.tar.gz"), [
+              { content: "#!/bin/sh\n", mode: 0o711, name: "run.sh" },
+            ])
+          )
+          const previousUmask = process.umask(0o177)
+          yield* driver
+            .mutate(instance, {
+              operation: "unarchive",
+              path: "world/executable.tar.gz",
+              destination: "world/executable",
+            })
+            .pipe(
+              Effect.ensuring(
+                Effect.sync(() => {
+                  process.umask(previousUmask)
+                })
+              )
+            )
+          const executable = yield* fromPromise(() =>
+            stat(resolve(root, "world", "executable.sh"))
+          )
+          assert.strictEqual(executable.mode & 0o777, 0o711)
         })
       )
   )
@@ -798,6 +840,7 @@ async function writeTarGzArchive(
   path: string,
   entries: ReadonlyArray<{
     content?: string
+    mode?: number
     name: string
     type?: TarHeaders["type"]
   }>
@@ -806,7 +849,7 @@ async function writeTarGzArchive(
   const packed = consumeBuffer(archive)
   for (const entry of entries) {
     archive.entry(
-      { name: entry.name, type: entry.type ?? "file" },
+      { mode: entry.mode, name: entry.name, type: entry.type ?? "file" },
       Buffer.from(entry.content ?? "")
     )
   }

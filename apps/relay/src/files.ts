@@ -59,7 +59,11 @@ import type {
   RelayLatestLog,
   RelaySaveFileInput,
 } from "@workspace/contracts"
-import { formatSnbt, parseSnbt } from "@workspace/contracts"
+import {
+  formatSnbt,
+  parseSnbt,
+  relayFileUnarchiveSuffix,
+} from "@workspace/contracts"
 
 import type { RelayConfig, RelayInstanceConfig } from "./config.js"
 import { RelayFilesystemError } from "./effect/errors.js"
@@ -750,8 +754,8 @@ export class FilesystemDriver {
       }
 
       if (input.operation === "unarchive") {
-        const format = unarchiveFormat(input.path)
-        if (!format) {
+        const archiveSuffix = relayFileUnarchiveSuffix(input.path)
+        if (!archiveSuffix) {
           return yield* filesystemFailure(
             "unsupported_archive",
             "mutation.unarchive",
@@ -776,7 +780,7 @@ export class FilesystemDriver {
           const onDestinationCreated = (createdDestination: string) => {
             destination = createdDestination
           }
-          if (format === "zip") {
+          if (archiveSuffix === ".zip") {
             await extractZipArchive(
               source.absolute,
               requestedDestination,
@@ -1594,15 +1598,6 @@ function writeZipArchive(
   })
 }
 
-function unarchiveFormat(path: string): "tar.gz" | "zip" | null {
-  const lowerPath = path.toLowerCase()
-  if (lowerPath.endsWith(".zip")) return "zip"
-  if (lowerPath.endsWith(".tar.gz") || lowerPath.endsWith(".tgz")) {
-    return "tar.gz"
-  }
-  return null
-}
-
 async function createAvailableUnarchiveDirectory(
   requestedDestination: string
 ): Promise<string> {
@@ -1728,6 +1723,7 @@ async function extractTarGzArchive(
         promiseEffect(() =>
           extractTarGzEntries(source, entries, signal, async (entry) => {
             await writeTarEntryToFile(entry, file, signal)
+            await file.chmod(singleEntry.mode)
           })
         )
       )
@@ -2144,9 +2140,13 @@ function directUnarchiveDestination(
   requestedDestination: string,
   archivedName: string
 ): string {
-  return extname(basename(requestedDestination))
+  const archivedExtension = extname(archivedName)
+  return !archivedExtension ||
+    basename(requestedDestination)
+      .toLowerCase()
+      .endsWith(archivedExtension.toLowerCase())
     ? requestedDestination
-    : `${requestedDestination}${extname(archivedName)}`
+    : `${requestedDestination}${archivedExtension}`
 }
 
 function archiveExtractionError(code: string, reason: string, cause?: unknown) {
@@ -2158,8 +2158,9 @@ function archiveExtractionCause(
   signal: AbortSignal
 ): RelayFilesystemError {
   if (cause instanceof RelayFilesystemError) return cause
-  return signal.aborted
-    ? archiveExtractionCancelled()
+  if (signal.aborted) return archiveExtractionCancelled()
+  return isFilesystemIoError(cause)
+    ? archiveExtractionError("io_error", errorMessage(cause), cause)
     : archiveExtractionError(
         "invalid_archive",
         "The archive could not be extracted",
@@ -2322,6 +2323,16 @@ function isAlreadyExists(cause: unknown): boolean {
     typeof cause === "object" &&
     "code" in cause &&
     cause.code === "EEXIST"
+  )
+}
+
+function isFilesystemIoError(cause: unknown): boolean {
+  return Boolean(
+    cause &&
+    typeof cause === "object" &&
+    "code" in cause &&
+    typeof cause.code === "string" &&
+    /^E[A-Z\d]+$/u.test(cause.code)
   )
 }
 
