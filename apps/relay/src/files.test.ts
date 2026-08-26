@@ -99,6 +99,44 @@ describe("Relay paged file index", () => {
     )
   )
 
+  it.effect("skips missing directories without blocking valid sizes", () =>
+    withSetup(({ driver, instance, root }) =>
+      Effect.gen(function* () {
+        yield* fromPromise(() =>
+          Promise.all([
+            writeFile(resolve(root, "world", "level.dat"), "level"),
+            mkdir(resolve(root, "plugins")),
+          ])
+        )
+        yield* fromPromise(() =>
+          writeFile(resolve(root, "plugins", "plugin.jar"), "plugin")
+        )
+
+        const input = {
+          instanceId: instance.id,
+          paths: ["missing/", "world/", "plugins/"],
+        }
+        const queued = yield* driver.directorySizes(instance, input)
+        assert.deepEqual(queued.sizes, {})
+        assert.deepEqual(queued.pending, ["world/", "plugins/"])
+
+        let completed = queued
+        for (let attempt = 0; attempt < 20; attempt += 1) {
+          yield* fromPromise(
+            () => new Promise((resolveDelay) => setTimeout(resolveDelay, 10))
+          )
+          completed = yield* driver.directorySizes(instance, input)
+          if (!completed.pending.length) break
+        }
+        assert.deepEqual(completed.pending, [])
+        assert.deepEqual(completed.sizes, {
+          "plugins/": 6,
+          "world/": 5,
+        })
+      })
+    )
+  )
+
   it.effect("pages directories and searches every matching path", () =>
     withSetup(({ driver, instance, root }) =>
       Effect.gen(function* () {

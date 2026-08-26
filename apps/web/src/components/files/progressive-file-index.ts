@@ -10,7 +10,9 @@ import {
 
 const emptyEntries: ReadonlyArray<RelayFileEntry> = []
 const fileTreeInitialLoadingDelayMs = 160
-const directorySizePollDelayMs = 1_000
+const directorySizePollInitialDelayMs = 1_000
+const directorySizePollMaxDelayMs = 10_000
+const directorySizePollMaxAttempts = 30
 const emptyDirectorySnapshot: FileDirectorySnapshot = {
   complete: false,
   entries: emptyEntries,
@@ -297,7 +299,8 @@ export class ProgressiveFileIndex {
   async #loadDirectorySizes(
     directory: string,
     paths: ReadonlyArray<string>,
-    epoch: number
+    epoch: number,
+    pollAttempt = 0
   ): Promise<void> {
     if (!paths.length || this.#disposed || epoch !== this.#epoch) return
     const result = await promiseResult(() =>
@@ -313,11 +316,25 @@ export class ProgressiveFileIndex {
       return
     }
     this.#applyDirectorySizes(directory, result.success.sizes)
-    if (!result.success.pending.length) return
+    if (
+      !result.success.pending.length ||
+      pollAttempt >= directorySizePollMaxAttempts
+    ) {
+      return
+    }
+    const delay = Math.min(
+      directorySizePollInitialDelayMs * 2 ** pollAttempt,
+      directorySizePollMaxDelayMs
+    )
     const timer = setTimeout(() => {
       this.#directorySizePolls.delete(timer)
-      void this.#loadDirectorySizes(directory, result.success.pending, epoch)
-    }, directorySizePollDelayMs)
+      void this.#loadDirectorySizes(
+        directory,
+        result.success.pending,
+        epoch,
+        pollAttempt + 1
+      )
+    }, delay)
     this.#directorySizePolls.add(timer)
   }
 

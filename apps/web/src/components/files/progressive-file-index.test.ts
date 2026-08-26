@@ -68,6 +68,91 @@ describe("ProgressiveFileIndex", () => {
     index.dispose()
   })
 
+  it("continues polling valid directories after another path disappears", async () => {
+    vi.useFakeTimers()
+    relay.getRelayDirectoryPage.mockResolvedValueOnce({
+      cursor: null,
+      directory: "",
+      entries: [
+        { kind: "directory", modifiedAt: 1, path: "ready/", size: null },
+        { kind: "directory", modifiedAt: 1, path: "removed/", size: null },
+        { kind: "directory", modifiedAt: 1, path: "slow/", size: null },
+      ],
+      instanceId: "instance-1",
+    })
+    relay.getRelayDirectorySizes
+      .mockResolvedValueOnce({
+        instanceId: "instance-1",
+        pending: ["slow/"],
+        sizes: { "ready/": 10 },
+      })
+      .mockResolvedValueOnce({
+        instanceId: "instance-1",
+        pending: [],
+        sizes: { "slow/": 20 },
+      })
+    const index = new ProgressiveFileIndex({
+      initialRoot: null,
+      instanceId: "instance-1",
+      relayId: "relay-1",
+    })
+
+    try {
+      await index.ensureDirectory("")
+      await vi.advanceTimersByTimeAsync(1_000)
+
+      expect(relay.getRelayDirectorySizes).toHaveBeenNthCalledWith(2, {
+        data: {
+          instanceId: "instance-1",
+          paths: ["slow/"],
+          relayId: "relay-1",
+        },
+      })
+      expect(index.getDirectorySnapshot("").entries).toMatchObject([
+        { path: "ready/", size: 10 },
+        { path: "removed/", size: null },
+        { path: "slow/", size: 20 },
+      ])
+    } finally {
+      index.dispose()
+      vi.useRealTimers()
+    }
+  })
+
+  it("stops polling directory sizes after the bounded retry window", async () => {
+    vi.useFakeTimers()
+    relay.getRelayDirectoryPage.mockResolvedValueOnce({
+      cursor: null,
+      directory: "",
+      entries: [
+        { kind: "directory", modifiedAt: 1, path: "slow/", size: null },
+      ],
+      instanceId: "instance-1",
+    })
+    relay.getRelayDirectorySizes.mockResolvedValue({
+      instanceId: "instance-1",
+      pending: ["slow/"],
+      sizes: {},
+    })
+    const index = new ProgressiveFileIndex({
+      initialRoot: null,
+      instanceId: "instance-1",
+      relayId: "relay-1",
+    })
+
+    try {
+      await index.ensureDirectory("")
+      await vi.runAllTimersAsync()
+
+      expect(relay.getRelayDirectorySizes).toHaveBeenCalledTimes(31)
+      await vi.advanceTimersByTimeAsync(60_000)
+      expect(relay.getRelayDirectorySizes).toHaveBeenCalledTimes(31)
+    } finally {
+      index.dispose()
+      vi.useRealTimers()
+    }
+  })
+
   it("retries a directory after a transient load failure", async () => {
     relay.getRelayDirectoryPage
       .mockRejectedValueOnce(new Error("Relay temporarily unavailable"))

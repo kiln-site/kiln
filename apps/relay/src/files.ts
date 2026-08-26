@@ -275,25 +275,22 @@ export class FilesystemDriver {
           "Select a directory below the instance root"
         )
       }
-      const directories = yield* Effect.forEach(
+      yield* Effect.forEach(
+        paths,
+        (path) => validateRelativePath(path.replace(/\/$/u, "")),
+        { concurrency: 16, discard: true }
+      )
+      const resolvedDirectories = yield* Effect.forEach(
         paths,
         (path) =>
-          Effect.gen(function* () {
-            const absolute = yield* resolveInstanceDirectory(root, path)
-            const metadata = yield* filesystemOperation(
-              "directorySizes.stat",
-              () => lstat(absolute)
-            )
-            if (!metadata.isDirectory()) {
-              return yield* filesystemFailure(
-                "invalid_path",
-                "directorySizes.stat",
-                "Path is not a directory"
-              )
-            }
-            return { absolute, path }
-          }),
+          resolveInstanceDirectory(root, path).pipe(
+            Effect.map((absolute) => ({ absolute, path })),
+            Effect.catch(() => Effect.succeed(null))
+          ),
         { concurrency: 16 }
+      )
+      const directories = resolvedDirectories.filter(
+        (directory) => directory !== null
       )
       const now = Date.now()
       const pending: Array<string> = []
@@ -302,15 +299,17 @@ export class FilesystemDriver {
       for (const directory of directories) {
         const key = directorySizeCacheKey(instance.id, directory.path)
         const cached = this.#directorySizeCache.get(key)
-        if (cached) sizes[directory.path] = cached.size
+        if (cached && cached.size !== null) {
+          sizes[directory.path] = cached.size
+        }
         if (!cached || cached.expiresAt <= now) {
-          pending.push(directory.path)
-          this.#queueDirectorySizeScan({
+          const queued = this.#queueDirectorySizeScan({
             ...directory,
             epoch: this.#directorySizeEpoch(instance.id),
             instanceId: instance.id,
             key,
           })
+          if (queued) pending.push(directory.path)
         }
       }
 
@@ -843,15 +842,14 @@ export class FilesystemDriver {
   }
 
   #queueDirectorySizeScan(scan: DirectorySizeScan) {
-    if (
-      this.#directorySizeScans.has(scan.key) ||
-      this.#directorySizeScans.size >= FILE_DIRECTORY_SIZE_MAX_PENDING
-    ) {
-      return
+    if (this.#directorySizeScans.has(scan.key)) return true
+    if (this.#directorySizeScans.size >= FILE_DIRECTORY_SIZE_MAX_PENDING) {
+      return false
     }
     this.#directorySizeScans.add(scan.key)
     this.#directorySizeQueue.push(scan)
     this.#drainDirectorySizeQueue()
+    return true
   }
 
   #drainDirectorySizeQueue() {
@@ -865,26 +863,11 @@ export class FilesystemDriver {
       Effect.runFork(
         directoryApparentSizeEffect(scan.absolute).pipe(
           Effect.tap((size) =>
-            Effect.sync(() => {
-              if (scan.epoch !== this.#directorySizeEpoch(scan.instanceId)) {
-                return
-              }
-              this.#directorySizeCache.delete(scan.key)
-              this.#directorySizeCache.set(scan.key, {
-                expiresAt: Date.now() + FILE_DIRECTORY_SIZE_CACHE_TTL_MS,
-                size,
-              })
-              while (
-                this.#directorySizeCache.size >
-                FILE_DIRECTORY_SIZE_CACHE_MAX_ENTRIES
-              ) {
-                const oldest = this.#directorySizeCache.keys().next().value
-                if (oldest === undefined) break
-                this.#directorySizeCache.delete(oldest)
-              }
-            })
+            Effect.sync(() => this.#cacheDirectorySize(scan, size))
           ),
-          Effect.catch(() => Effect.void),
+          Effect.catch(() =>
+            Effect.sync(() => this.#cacheDirectorySize(scan, null))
+          ),
           Effect.ensuring(
             Effect.sync(() => {
               this.#directorySizeScans.delete(scan.key)
@@ -894,6 +877,22 @@ export class FilesystemDriver {
           )
         )
       )
+    }
+  }
+
+  #cacheDirectorySize(scan: DirectorySizeScan, size: number | null) {
+    if (scan.epoch !== this.#directorySizeEpoch(scan.instanceId)) return
+    this.#directorySizeCache.delete(scan.key)
+    this.#directorySizeCache.set(scan.key, {
+      expiresAt: Date.now() + FILE_DIRECTORY_SIZE_CACHE_TTL_MS,
+      size,
+    })
+    while (
+      this.#directorySizeCache.size > FILE_DIRECTORY_SIZE_CACHE_MAX_ENTRIES
+    ) {
+      const oldest = this.#directorySizeCache.keys().next().value
+      if (oldest === undefined) break
+      this.#directorySizeCache.delete(oldest)
     }
   }
 
@@ -1012,7 +1011,7 @@ interface SearchScan {
 
 interface DirectorySizeCacheEntry {
   expiresAt: number
-  size: number
+  size: number | null
 }
 
 interface DirectorySizeScan {
