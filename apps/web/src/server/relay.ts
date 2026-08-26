@@ -5,6 +5,8 @@ import {
   relayFileContentSchema,
   relayDirectoryPageInputSchema,
   relayDirectoryPageSchema,
+  relayDirectorySizesInputSchema,
+  relayDirectorySizesSchema,
   relayFileSearchPageInputSchema,
   relayFileSearchPageSchema,
   relayFileEntrySchema,
@@ -100,6 +102,10 @@ const fileStatInputSchema = instanceInputSchema.extend({
 })
 
 const directoryPageInputSchema = relayDirectoryPageInputSchema.extend({
+  relayId: relayIdSchema,
+})
+
+const directorySizesInputSchema = relayDirectorySizesInputSchema.extend({
   relayId: relayIdSchema,
 })
 
@@ -558,6 +564,31 @@ export const getRelayDirectoryPage = createServerFn({ method: "GET" })
         relay,
         `/v1/instances/${encodeURIComponent(data.instanceId)}/directory?${search.toString()}`,
         relayDirectoryPageSchema.parse
+      )
+    )
+  })
+
+export const getRelayDirectorySizes = createServerFn({ method: "POST" })
+  .validator(directorySizesInputSchema)
+  .handler(async ({ data }) => {
+    const { relay, user } = await instanceRelayAccess(data.relayId)
+    await requireRelayPermission({
+      user,
+      relayId: relay.id,
+      permission: "instance.files.read",
+      instanceId: data.instanceId,
+    })
+    const input = relayDirectorySizesInputSchema.parse({
+      instanceId: data.instanceId,
+      paths: data.paths,
+    })
+    return runAppEffect(
+      "relay.directorySizes",
+      relayJsonEffect(
+        relay,
+        `/v1/instances/${encodeURIComponent(data.instanceId)}/directory-sizes`,
+        relayDirectorySizesSchema.parse,
+        { method: "POST", body: JSON.stringify(input) }
       )
     )
   })

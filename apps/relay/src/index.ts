@@ -33,6 +33,7 @@ import {
   relayNetworkingSchema,
   relayProxySettingsSchema,
   relayDirectoryPageInputSchema,
+  relayDirectorySizesInputSchema,
   relayFileMutationInputSchema,
   relayFileSearchPageInputSchema,
   relayFileStatInputSchema,
@@ -1558,6 +1559,13 @@ async function executeControlRequest(
       return runRelayEffect(
         "relay.files.directory",
         filesystem.directory(await requiredInstance(input), input)
+      )
+    }
+    case "instance.files.directory.sizes": {
+      const input = relayDirectorySizesInputSchema.parse(payload)
+      return runRelayEffect(
+        "relay.files.directorySizes",
+        filesystem.directorySizes(await requiredInstance(input), input)
       )
     }
     case "instance.files.search": {

@@ -265,7 +265,7 @@ function relayControlRequest(path: string, init?: RequestInit) {
     return { operation: "instance.provision.prepare" as const, payload: body }
   }
   const match = url.pathname.match(
-    /^\/v1\/instances\/([^/]+)(?:\/(tree|directory|file-search|file-stat|file|file-mutations|actions|resources|console|console-completions|console-share|latest-log|ports|web-routes|startup|provision))?$/u
+    /^\/v1\/instances\/([^/]+)(?:\/(tree|directory|directory-sizes|file-search|file-stat|file|file-mutations|actions|resources|console|console-completions|console-share|latest-log|ports|web-routes|startup|provision))?$/u
   )
   if (!match) throw new Error("Unsupported Relay request")
   const instanceId = decodeURIComponent(match[1])
@@ -318,6 +318,12 @@ function relayControlRequest(path: string, init?: RequestInit) {
         instanceId,
         path: url.searchParams.get("path") ?? "",
       },
+    }
+  }
+  if (resource === "directory-sizes" && method === "POST") {
+    return {
+      operation: "instance.files.directory.sizes" as const,
+      payload: { ...body, instanceId },
     }
   }
   if (resource === "file-search" && method === "GET") {

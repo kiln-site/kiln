@@ -70,6 +70,7 @@ export const relayControlOperations = [
   "instance.resources.read",
   "instance.files.list",
   "instance.files.directory.list",
+  "instance.files.directory.sizes",
   "instance.files.search",
   "instance.files.stat",
   "instance.files.read",

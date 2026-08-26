@@ -2,10 +2,15 @@ import type { RelayDirectoryPage, RelayFileEntry } from "@workspace/contracts"
 import { Effect, Result } from "effect"
 
 import { ensuringPromise, promiseEffect } from "@/effect/promise"
-import { getRelayDirectoryPage, searchRelayFiles } from "@/server/relay"
+import {
+  getRelayDirectoryPage,
+  getRelayDirectorySizes,
+  searchRelayFiles,
+} from "@/server/relay"
 
 const emptyEntries: ReadonlyArray<RelayFileEntry> = []
 const fileTreeInitialLoadingDelayMs = 160
+const directorySizePollDelayMs = 1_000
 const emptyDirectorySnapshot: FileDirectorySnapshot = {
   complete: false,
   entries: emptyEntries,
@@ -46,6 +51,7 @@ export class ProgressiveFileIndex {
   readonly #relayId: string
   readonly #directories = new Map<string, MutableDirectorySnapshot>()
   readonly #directoryListeners = new Map<string, Set<() => void>>()
+  readonly #directorySizePolls = new Set<ReturnType<typeof setTimeout>>()
   readonly #knownPaths = new Set<string>()
   readonly #pathListeners = new Set<(event: FileIndexPathEvent) => void>()
   readonly #statusListeners = new Set<() => void>()
@@ -90,6 +96,7 @@ export class ProgressiveFileIndex {
     this.#pathListeners.clear()
     this.#statusListeners.clear()
     this.#loads.clear()
+    this.#clearDirectorySizePolls()
     this.#clearTreeLoadingTimers()
     this.#treePendingDirectories.clear()
   }
@@ -102,6 +109,7 @@ export class ProgressiveFileIndex {
     this.#directories.clear()
     this.#knownPaths.clear()
     this.#loads.clear()
+    this.#clearDirectorySizePolls()
     this.#clearTreeLoadingTimers()
     this.#treePendingDirectories.clear()
     this.#setStatus({ ...initialStatus, refreshing: true })
@@ -273,7 +281,63 @@ export class ProgressiveFileIndex {
       loading: false,
     })
     this.#discover(page.entries)
+    void this.#loadDirectorySizes(
+      directory,
+      page.entries.flatMap((entry) =>
+        entry.kind === "directory" ? [entry.path] : []
+      ),
+      this.#epoch
+    )
     this.#setTreeDirectoryHasMore(directory, page.cursor !== null)
+  }
+
+  async #loadDirectorySizes(
+    directory: string,
+    paths: ReadonlyArray<string>,
+    epoch: number
+  ): Promise<void> {
+    if (!paths.length || this.#disposed || epoch !== this.#epoch) return
+    const result = await promiseResult(() =>
+      getRelayDirectorySizes({
+        data: {
+          instanceId: this.#instanceId,
+          paths: [...paths],
+          relayId: this.#relayId,
+        },
+      })
+    )
+    if (this.#disposed || epoch !== this.#epoch || Result.isFailure(result)) {
+      return
+    }
+    this.#applyDirectorySizes(directory, result.success.sizes)
+    if (!result.success.pending.length) return
+    const timer = setTimeout(() => {
+      this.#directorySizePolls.delete(timer)
+      void this.#loadDirectorySizes(directory, result.success.pending, epoch)
+    }, directorySizePollDelayMs)
+    this.#directorySizePolls.add(timer)
+  }
+
+  #applyDirectorySizes(
+    directory: string,
+    sizes: Readonly<Record<string, number>>
+  ): void {
+    const snapshot = this.#directories.get(directory)
+    if (!snapshot) return
+    let changed = false
+    const entries = snapshot.entries.map((entry) => {
+      const size = sizes[entry.path]
+      if (
+        entry.kind !== "directory" ||
+        size === undefined ||
+        size === entry.size
+      ) {
+        return entry
+      }
+      changed = true
+      return { ...entry, size }
+    })
+    if (changed) this.#setDirectory(directory, { ...snapshot, entries })
   }
 
   #discover(entries: ReadonlyArray<RelayFileEntry>): void {
@@ -370,6 +434,11 @@ export class ProgressiveFileIndex {
   #clearTreeLoadingTimers(): void {
     this.#treeLoadingTimers.forEach((timer) => clearTimeout(timer))
     this.#treeLoadingTimers.clear()
+  }
+
+  #clearDirectorySizePolls(): void {
+    this.#directorySizePolls.forEach((timer) => clearTimeout(timer))
+    this.#directorySizePolls.clear()
   }
 }
 

@@ -25,7 +25,7 @@ import type { RelayInstanceConfig } from "./config.js"
 const describeLinux = process.platform === "linux" ? describe : describe.skip
 
 describe("Relay paged file index", () => {
-  it.effect("reports recursive sizes for listed directories", () =>
+  it.effect("caches recursive directory sizes outside the listing path", () =>
     withSetup(({ driver, instance, root }) =>
       Effect.gen(function* () {
         yield* fromPromise(() =>
@@ -46,21 +46,55 @@ describe("Relay paged file index", () => {
         assert.deepInclude(world, {
           kind: "directory",
           path: "world/",
-          size: 11,
+          size: null,
         })
+
+        const queued = yield* driver.directorySizes(instance, {
+          instanceId: instance.id,
+          paths: ["world/"],
+        })
+        assert.deepEqual(queued.sizes, {})
+        assert.deepEqual(queued.pending, ["world/"])
+
+        let completed = queued
+        for (let attempt = 0; attempt < 20; attempt += 1) {
+          yield* fromPromise(
+            () => new Promise((resolveDelay) => setTimeout(resolveDelay, 10))
+          )
+          completed = yield* driver.directorySizes(instance, {
+            instanceId: instance.id,
+            paths: ["world/"],
+          })
+          if (!completed.pending.length) break
+        }
+        assert.deepEqual(completed.pending, [])
+        assert.strictEqual(completed.sizes["world/"], 11)
+
+        const shared = yield* driver.directorySizes(instance, {
+          instanceId: instance.id,
+          paths: ["world/"],
+        })
+        assert.deepEqual(shared.pending, [])
+        assert.strictEqual(shared.sizes["world/"], 11)
+
+        yield* driver.write(instance, "world/level.dat", {
+          content: "levels",
+        })
+        const invalidated = yield* driver.directorySizes(instance, {
+          instanceId: instance.id,
+          paths: ["world/"],
+        })
+        assert.deepEqual(invalidated.sizes, {})
+        assert.deepEqual(invalidated.pending, ["world/"])
 
         const worldPage = yield* driver.directory(instance, {
           instanceId: instance.id,
           path: "world/",
         })
-        const region = worldPage.entries.find(
-          (entry) => entry.path === "world/region/"
+        assert.deepInclude(
+          worldPage.entries.find((entry) => entry.path === "world/region/"),
+          { kind: "directory", path: "world/region/", size: null }
         )
-        assert.deepInclude(region, {
-          kind: "directory",
-          path: "world/region/",
-          size: 6,
-        })
       })
     )
   )
