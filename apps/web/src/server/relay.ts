@@ -683,7 +683,8 @@ export const getRelayFile = createServerFn({ method: "GET" })
     const file = relayFileContentSchema.parse(await response.json())
     await recordFileActivityBestEffort(
       "view",
-      recordFileViewed(relay.id, data.instanceId, data.path)
+      recordFileViewed(relay.id, data.instanceId, data.path),
+      relay.id
     )
     return file
   })
@@ -709,7 +710,8 @@ export const saveRelayFile = createServerFn({ method: "POST" })
     const file = relayFileContentSchema.parse(await response.json())
     await recordFileActivityBestEffort(
       "edit",
-      recordFileEdited(relay.id, instanceId, path)
+      recordFileEdited(relay.id, instanceId, path),
+      relay.id
     )
     return file
   })
@@ -806,7 +808,7 @@ export const updateRelayFilePin = createServerFn({ method: "POST" })
       validPinnedPaths.filter((path): path is string => path !== null)
     )
     validPaths.add(data.path)
-    return relayFileActivitySchema.parse(
+    const nextActivity = relayFileActivitySchema.parse(
       await setFilePinned(
         relay.id,
         data.instanceId,
@@ -815,6 +817,8 @@ export const updateRelayFilePin = createServerFn({ method: "POST" })
         validPaths
       )
     )
+    publishFileActivityChange(relay.id)
+    return nextActivity
   })
 
 export const performRelayAction = createServerFn({ method: "POST" })
@@ -973,13 +977,15 @@ function errorMessage(cause: unknown): string {
 
 async function recordFileActivityBestEffort(
   kind: "edit" | "view",
-  operation: Promise<void>
+  operation: Promise<void>,
+  relayId: string
 ): Promise<void> {
   await Effect.runPromise(
     Effect.tryPromise({
       try: () => operation,
       catch: (cause) => cause,
     }).pipe(
+      Effect.tap(() => Effect.sync(() => publishFileActivityChange(relayId))),
       Effect.catch((cause) =>
         Effect.sync(() => {
           console.warn(
@@ -990,6 +996,14 @@ async function recordFileActivityBestEffort(
       )
     )
   )
+}
+
+function publishFileActivityChange(relayId: string): void {
+  publishRealtimeChange({
+    audience: { kind: "relays", relayIds: [relayId] },
+    topics: ["file-activity"],
+    type: "hearth.invalidate",
+  })
 }
 
 async function relayRequest(

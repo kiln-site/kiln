@@ -8,6 +8,7 @@ import {
   resolveAppearance,
 } from "@/lib/appearance"
 import { selectedInstanceCookieName } from "@/lib/ui-preference-cookies"
+import { publishRealtimeChange } from "@/lib/realtime-source.server"
 
 const SIDEBAR_COOKIE_NAME = "sidebar_state"
 const FILE_TREE_COLLAPSED_COOKIE_NAME = "file_tree_collapsed"
@@ -168,6 +169,14 @@ export const updateAppearancePreferences = createServerFn({ method: "POST" })
       sameSite: "lax",
     })
     setResponseHeader("Cache-Control", "no-store")
+    publishRealtimeChange({
+      audience:
+        data.defaultForNewUsers === undefined
+          ? { kind: "users", userIds: [user.id] }
+          : { kind: "authenticated" },
+      topics: ["preferences"],
+      type: "hearth.invalidate",
+    })
     return {
       appearance,
       customAccentColor: appearanceOverride.accentColor,

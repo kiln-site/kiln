@@ -10,6 +10,12 @@ const basePolicy = {
 }
 
 describe("Hearth realtime audiences", () => {
+  it("allows every signed-in stream for non-sensitive shared state", () => {
+    expect(hearthAudienceAllows(basePolicy, { kind: "authenticated" })).toBe(
+      true
+    )
+  })
+
   it("targets exact users without exposing the event to others", () => {
     expect(
       hearthAudienceAllows(basePolicy, {

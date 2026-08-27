@@ -35,4 +35,21 @@ describe("Hearth realtime query refresh", () => {
       { throwOnError: true }
     )
   })
+
+  it("refreshes parameterized domains by prefix without touching Relay data", async () => {
+    const queryClient = new QueryClient()
+    const firstActivity = queryKeys.fileActivity("relay-a", "instance-a")
+    const secondActivity = queryKeys.fileActivity("relay-a", "instance-b")
+    queryClient.setQueryData(firstActivity, { files: [] })
+    queryClient.setQueryData(secondActivity, { files: [] })
+    queryClient.setQueryData(queryKeys.relay.snapshot, { instances: [] })
+
+    await refreshHearthRealtimeTopics(queryClient, ["file-activity"])
+
+    expect(queryClient.getQueryState(firstActivity)?.isInvalidated).toBe(true)
+    expect(queryClient.getQueryState(secondActivity)?.isInvalidated).toBe(true)
+    expect(
+      queryClient.getQueryState(queryKeys.relay.snapshot)?.isInvalidated
+    ).toBe(false)
+  })
 })

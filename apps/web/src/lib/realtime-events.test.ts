@@ -12,7 +12,7 @@ describe("realtime client events", () => {
     expect(
       realtimeClientEventSchema.safeParse({
         ...cursor,
-        topics: ["relays", "schedules"],
+        topics: ["file-activity", "relays", "schedules"],
         type: "collections.invalidate",
       }).success
     ).toBe(true)

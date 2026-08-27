@@ -3,31 +3,47 @@ import type { QueryClient, QueryKey } from "@tanstack/react-query"
 import type { HearthRealtimeTopic } from "@/lib/hearth-realtime-topics"
 import { queryKeys } from "@/lib/query-options"
 
-const hearthRealtimeQueryKeys = {
-  relays: [queryKeys.relays],
-  schedules: [queryKeys.schedules.all],
-} satisfies Record<HearthRealtimeTopic, ReadonlyArray<QueryKey>>
+interface HearthRealtimeQueryScope {
+  exact: boolean
+  queryKey: QueryKey
+}
+
+const exact = (queryKey: QueryKey): HearthRealtimeQueryScope => ({
+  exact: true,
+  queryKey,
+})
+
+const prefix = (queryKey: QueryKey): HearthRealtimeQueryScope => ({
+  exact: false,
+  queryKey,
+})
+
+const hearthRealtimeQueryScopes = {
+  access: [prefix(["access"])],
+  domains: [prefix(["domains"])],
+  "file-activity": [prefix(["file-activity"])],
+  preferences: [exact(queryKeys.uiPreferences)],
+  relays: [exact(queryKeys.relays)],
+  schedules: [exact(queryKeys.schedules.all)],
+} satisfies Record<HearthRealtimeTopic, ReadonlyArray<HearthRealtimeQueryScope>>
 
 export async function refreshHearthRealtimeTopics(
   queryClient: QueryClient,
   topics: ReadonlyArray<HearthRealtimeTopic>
 ): Promise<void> {
-  const queryHashes = new Set<string>()
-  const queryKeysToRefresh: Array<QueryKey> = []
+  const scopeHashes = new Set<string>()
+  const scopesToRefresh: Array<HearthRealtimeQueryScope> = []
   for (const topic of topics) {
-    for (const queryKey of hearthRealtimeQueryKeys[topic]) {
-      const hash = JSON.stringify(queryKey)
-      if (queryHashes.has(hash)) continue
-      queryHashes.add(hash)
-      queryKeysToRefresh.push(queryKey)
+    for (const scope of hearthRealtimeQueryScopes[topic]) {
+      const hash = `${scope.exact}:${JSON.stringify(scope.queryKey)}`
+      if (scopeHashes.has(hash)) continue
+      scopeHashes.add(hash)
+      scopesToRefresh.push(scope)
     }
   }
   await Promise.all(
-    queryKeysToRefresh.map((queryKey) =>
-      queryClient.invalidateQueries(
-        { exact: true, queryKey },
-        { throwOnError: true }
-      )
+    scopesToRefresh.map(({ exact, queryKey }) =>
+      queryClient.invalidateQueries({ exact, queryKey }, { throwOnError: true })
     )
   )
 }

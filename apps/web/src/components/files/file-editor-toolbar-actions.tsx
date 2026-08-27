@@ -727,7 +727,7 @@ function useFilePinAction(instance: InstanceWorkspaceInstance, path: string) {
     mutationFn: updateRelayFilePin,
     onSuccess: (nextActivity) => {
       queryClient.setQueryData(
-        queryKeys.relay.fileActivity(instance.relayId, instance.id),
+        queryKeys.fileActivity(instance.relayId, instance.id),
         nextActivity
       )
     },

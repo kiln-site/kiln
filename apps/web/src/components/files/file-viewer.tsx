@@ -258,7 +258,7 @@ export function FileViewer({
     if (activitySyncKey.current === nextKey) return
     activitySyncKey.current = nextKey
     void queryClient.invalidateQueries({
-      queryKey: queryKeys.relay.fileActivity(instance.relayId, instance.id),
+      queryKey: queryKeys.fileActivity(instance.relayId, instance.id),
       // Avoid refetching the active pin-only observer. Files Home mounts its
       // own observer and refetches this stale query when it opens.
       refetchType: "none",

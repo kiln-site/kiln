@@ -101,6 +101,8 @@ export const queryKeys = {
     directory: ["databases", "directory"] as const,
     list: ["databases", "list"] as const,
   },
+  fileActivity: (relayId: string, instanceId: string) =>
+    ["file-activity", relayId, instanceId] as const,
   relay: {
     all: ["relay"] as const,
     connection: ["relay", "connection"] as const,
@@ -116,8 +118,6 @@ export const queryKeys = {
         "content",
         path,
       ] as const,
-    fileActivity: (relayId: string, instanceId: string) =>
-      ["relay", relayId, "instances", instanceId, "files", "activity"] as const,
     recipe: (relayId: string, instanceId: string) =>
       ["relay", relayId, "instances", instanceId, "recipe"] as const,
     snapshot: ["relay", "snapshot"] as const,
@@ -568,7 +568,7 @@ export function relayFileActivityQueryOptions(
   instanceId: string
 ) {
   return queryOptions({
-    queryKey: queryKeys.relay.fileActivity(relayId, instanceId),
+    queryKey: queryKeys.fileActivity(relayId, instanceId),
     queryFn: () => getRelayFileActivity({ data: { instanceId, relayId } }),
     staleTime: 15_000,
   })

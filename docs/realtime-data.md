@@ -14,23 +14,26 @@ replace MySQL, Relay state, or high-frequency Relay streams.
 - Each field has one authority. Copies identify their source revision or
   observation time and are treated as projections.
 
-| Domain                                                                    | Authority | Browser delivery                                           |
-| ------------------------------------------------------------------------- | --------- | ---------------------------------------------------------- |
-| Users, memberships, roles, and access grants                              | Hearth    | Scoped collection invalidation                             |
-| Relay registration, display name, enabled state, and proxy configuration  | Hearth    | `relays` collection invalidation                           |
-| Server definitions, names, descriptions, ownership, and desired settings  | Hearth    | Scoped collection invalidation                             |
-| Schedules and their desired revisions                                     | Hearth    | `schedules` collection invalidation                        |
-| Pinned and recently viewed file records                                   | Hearth    | User-scoped collection invalidation                        |
-| Relay health, host facts, instance power state, and resource observations | Relay     | Incremental Relay snapshot deltas                          |
-| Containers, processes, console output, and host-local execution           | Relay     | Purpose-built Relay streams and commands                   |
-| Files, directory entries, file metadata, and file contents                | Relay     | Outside this rollout; never copied into Hearth collections |
-| Unsaved forms and open file editor buffers                                | Browser   | Local state until explicitly persisted                     |
+| Domain                                                                   | Authority | Browser delivery                                           |
+| ------------------------------------------------------------------------ | --------- | ---------------------------------------------------------- |
+| Users, memberships, roles, and access grants                             | Hearth    | `access` query-scope invalidation                          |
+| Relay registration, display name, enabled state, and proxy configuration | Hearth    | `relays` collection invalidation                           |
+| User appearance preferences and platform appearance defaults             | Hearth    | User or authenticated `preferences` invalidation           |
+| Domain integration and instance vanity assignments                       | Hearth    | `domains` query-scope invalidation                         |
+| Schedules and their desired revisions                                    | Hearth    | `schedules` collection invalidation                        |
+| Pinned and recently viewed file records                                  | Hearth    | Relay-reader `file-activity` invalidation                  |
+| Server definitions, names, startup, ports, routes, and power state       | Relay     | Incremental instance deltas                                |
+| Relay health, host facts, and resource observations                      | Relay     | Incremental Relay snapshot deltas                          |
+| Containers, processes, console output, and host-local execution          | Relay     | Purpose-built Relay streams and commands                   |
+| Files, directory entries, file metadata, and file contents               | Relay     | Outside this rollout; never copied into Hearth collections |
+| Unsaved forms and open file editor buffers                               | Browser   | Local state until explicitly persisted                     |
 
 The first Hearth collection rollout covers Relay registration and schedules.
-Other Hearth-owned domains follow the same topic-scoped transport as their
-existing query surfaces are migrated. A Relay may retain an applied projection
-of Hearth intent so it can continue operating offline, but it does not become
-the authority for that intent.
+Access, preferences, domains, and file activity retain their existing Query
+shapes and use the same topic-scoped transport; this avoids duplicating nested
+or parameterized data in browser memory merely to call it a collection. A Relay
+may retain an applied projection of Hearth intent so it can continue operating
+offline, but it does not become the authority for that intent.
 
 ## Browser collections
 
@@ -40,8 +43,8 @@ the authority for that intent.
 - TanStack Query remains the fetch and SSR hydration layer. Query Collections
   materialize its normalized rows and use existing server functions to persist
   mutations.
-- Authorized Hearth events mark only the affected exact Query collections
-  stale and refetch active observers. Reconnects, overflow, and invalid payloads
+- Authorized Hearth events mark only the affected exact collection or domain
+  query prefix stale and refetch active observers. Reconnects, overflow, and invalid payloads
   do the same for every Hearth domain. Relay deltas recover from an
   authoritative snapshot before replaying newer buffered deltas. Failed
   recovery retries with bounded backoff instead of leaving a connected tab

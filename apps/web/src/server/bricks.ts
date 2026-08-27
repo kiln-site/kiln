@@ -50,6 +50,7 @@ import {
 import { requireAuthenticatedUser } from "@/server/auth"
 import { visibleBrickCatalogs } from "@/server/brick-catalogs.server"
 import { provisionInstanceDomainBestEffort } from "@/server/domains.server"
+import { publishRealtimeChange } from "@/lib/realtime-source.server"
 
 const brickVersionCatalogSchema = z.object({
   type: z.string().regex(/^[a-z0-9-]+$/u),
@@ -250,6 +251,11 @@ export const createBrickInstance = createServerFn({ method: "POST" })
       "relay.snapshot.invalidate",
       invalidateRelayCache(relayCachePolicy.snapshot(relay.id))
     )
+    publishRealtimeChange({
+      instance,
+      relayId: relay.id,
+      type: "instance.upsert",
+    })
     return instance
   })
 
@@ -434,6 +440,11 @@ export const updateInstanceStartup = createServerFn({ method: "POST" })
       "relay.snapshot.invalidate",
       invalidateRelayCache(relayCachePolicy.snapshot(relay.id))
     )
+    publishRealtimeChange({
+      instance,
+      relayId: relay.id,
+      type: "instance.upsert",
+    })
     return instance
   })
 

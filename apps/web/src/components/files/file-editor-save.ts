@@ -111,7 +111,7 @@ export function useFileSaveAction(
         nextFile
       )
       await queryClient.invalidateQueries({
-        queryKey: queryKeys.relay.fileActivity(
+        queryKey: queryKeys.fileActivity(
           variables.data.relayId,
           variables.data.instanceId
         ),

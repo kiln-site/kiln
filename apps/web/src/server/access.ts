@@ -1535,6 +1535,13 @@ function publishAccessPolicyChange(
     type: "access.changed",
     userIds: uniqueUserIds,
   })
+  // The affected users rebuild their complete authorization projection above.
+  // Other open management views only need their access queries refreshed.
+  publishRealtimeChange({
+    audience: { kind: "authenticated" },
+    topics: ["access"],
+    type: "hearth.invalidate",
+  })
 }
 
 function publicUrl(): string {
