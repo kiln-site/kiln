@@ -1,5 +1,5 @@
 import * as React from "react"
-import { useLiveQuery } from "@tanstack/react-db"
+import { useLiveSuspenseQuery } from "@tanstack/react-db"
 import {
   queryOptions,
   useMutation,
@@ -435,16 +435,20 @@ const FilteredRelayTable = React.memo(function FilteredRelayTable({
   onEdit: (relayId: string) => void
   onOpenUpdates: (relayId?: string) => void
 }) {
-  const { data: relays } = useLiveQuery({
+  const { data: relays } = useLiveSuspenseQuery({
     query: (query) =>
-      query.from({ relay: relaysCollectionOptions }).select(({ relay }) => ({
-        hostname: relay.hostname,
-        id: relay.id,
-        name: relay.name,
-        nodeArch: relay.nodeArch,
-        nodePlatform: relay.nodePlatform,
-        nodeVersion: relay.nodeVersion,
-      })),
+      query
+        .from({ relay: relaysCollectionOptions })
+        .orderBy(({ relay }) => relay.name)
+        .orderBy(({ relay }) => relay.createdAt)
+        .select(({ relay }) => ({
+          hostname: relay.hostname,
+          id: relay.id,
+          name: relay.name,
+          nodeArch: relay.nodeArch,
+          nodePlatform: relay.nodePlatform,
+          nodeVersion: relay.nodeVersion,
+        })),
   })
   const { data: updateSummary = noRelayUpdateSummary } = useQuery({
     ...updateOverviewQueryOptions(),

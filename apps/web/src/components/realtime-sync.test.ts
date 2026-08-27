@@ -1,12 +1,16 @@
+import { QueryClient } from "@tanstack/react-query"
 import { describe, expect, it } from "vite-plus/test"
 
+import { queryKeys } from "@/lib/query-options"
 import type { RelayFleetSnapshot } from "@/lib/relay-fleet"
 import type { FleetInstance, FleetNode } from "@/lib/realtime-events"
 import {
+  applyProvisioningInstance,
+  applyRealtimeEvent,
   applyRealtimeSnapshotEvent,
   mergeRealtimeInstance,
   resetRealtimeEpoch,
-} from "./realtime-sync"
+} from "@/lib/realtime-client"
 
 const epoch = "00000000-0000-4000-8000-000000000001"
 
@@ -53,6 +57,40 @@ describe("realtime snapshot projection", () => {
 
     expect(result?.instances).toEqual([beta])
     expect(result?.nodes).toEqual([node])
+  })
+
+  it("updates Query caches without writing to an idle DB collection", () => {
+    const queryClient = new QueryClient()
+    queryClient.setQueryData(queryKeys.relay.snapshot, snapshot())
+    queryClient.setQueryData(queryKeys.relay.instances, [alpha])
+    const event = {
+      deleted: [{ instanceId: alpha.id, relayId: alpha.relayId }],
+      epoch,
+      sequence: 1,
+      type: "instances.delta" as const,
+      upserted: [beta],
+    }
+
+    applyRealtimeEvent({
+      event,
+      instances: {
+        isReady: () => false,
+        utils: {
+          writeBatch: () => {
+            throw new Error("idle collections cannot accept manual writes")
+          },
+        },
+      } as unknown as Parameters<typeof applyRealtimeEvent>[0]["instances"],
+      queryClient,
+    })
+
+    expect(
+      queryClient.getQueryData<RelayFleetSnapshot>(queryKeys.relay.snapshot)
+        ?.instances
+    ).toEqual([beta])
+    expect(
+      queryClient.getQueryData<Array<FleetInstance>>(queryKeys.relay.instances)
+    ).toEqual([beta])
   })
 
   it("updates a node without rebuilding instance data", () => {
@@ -108,6 +146,31 @@ describe("realtime snapshot projection", () => {
         alpha
       )
     ).not.toHaveProperty("provisioning")
+  })
+
+  it("reconciles only the active provisioning row into Relay caches", () => {
+    const queryClient = new QueryClient()
+    const provisioning = {
+      ...alpha,
+      provisioning: {
+        attempt: 1,
+        error: null,
+        phase: "finalizing" as const,
+      },
+    }
+    const current = { instances: [provisioning, beta], nodes: [node] }
+    queryClient.setQueryData(queryKeys.relay.snapshot, current)
+    queryClient.setQueryData(queryKeys.relay.instances, current.instances)
+
+    applyProvisioningInstance(queryClient, { ...alpha, name: "Ready" })
+
+    expect(
+      queryClient.getQueryData<RelayFleetSnapshot>(queryKeys.relay.snapshot)
+        ?.instances
+    ).toEqual([{ ...alpha, name: "Ready" }, beta])
+    expect(
+      queryClient.getQueryData<Array<FleetInstance>>(queryKeys.relay.instances)
+    ).toEqual([{ ...alpha, name: "Ready" }, beta])
   })
 
   it("drops an old sequence floor when the Hearth process epoch changes", () => {

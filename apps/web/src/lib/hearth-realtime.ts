@@ -24,7 +24,10 @@ export async function refreshHearthRealtimeTopics(
   }
   await Promise.all(
     queryKeysToRefresh.map((queryKey) =>
-      queryClient.invalidateQueries({ exact: true, queryKey })
+      queryClient.invalidateQueries(
+        { exact: true, queryKey },
+        { throwOnError: true }
+      )
     )
   )
 }

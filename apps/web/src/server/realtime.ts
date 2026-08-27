@@ -166,16 +166,13 @@ export async function openAuthorizedRealtimeStream(input: {
     if (!relay || !policy.readableRelays.has(relay.id)) return
 
     if (event.type === "relay.state") {
+      // Registry writes publish their own Hearth invalidation. Connection
+      // state only changes the Relay fleet snapshot, so keep one client event
+      // per source sequence and avoid a redundant control-plane fetch.
       enqueue({
         epoch: event.epoch,
         sequence: event.sequence,
         type: "relay.invalidate",
-      })
-      enqueue({
-        epoch: event.epoch,
-        sequence: event.sequence,
-        topics: ["relays"],
-        type: "collections.invalidate",
       })
       return
     }

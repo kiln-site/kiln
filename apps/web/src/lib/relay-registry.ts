@@ -928,7 +928,6 @@ export async function checkPersistedRelay(id: string): Promise<PersistedRelay> {
   const relay = (await listPersistedRelays()).find((item) => item.id === id)
   if (!relay) throw new Error("Relay not found")
   if (!relay.enabled) {
-    publishRelayCollectionChange()
     return relay
   }
 

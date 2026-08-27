@@ -1,5 +1,5 @@
 import * as React from "react"
-import { useLiveQuery } from "@tanstack/react-db"
+import { useLiveSuspenseQuery } from "@tanstack/react-db"
 import {
   useMutation,
   useQuery,
@@ -153,8 +153,12 @@ let relativeClockSnapshot = Date.now()
 let relativeClockTimer: ReturnType<typeof setInterval> | null = null
 
 export const SchedulesPage = React.memo(function SchedulesPage() {
-  const { data: schedules } = useLiveQuery({
-    query: (query) => query.from({ schedule: schedulesCollectionOptions }),
+  const { data: schedules } = useLiveSuspenseQuery({
+    query: (query) =>
+      query
+        .from({ schedule: schedulesCollectionOptions })
+        .orderBy(({ schedule }) => schedule.updatedAt, "desc")
+        .orderBy(({ schedule }) => schedule.id, "desc"),
   })
   const { data: scheduleOptions } = useSuspenseQuery({
     ...scheduleOptionsQueryOptions(),
@@ -449,7 +453,9 @@ const ScheduleTableRow = React.memo(function ScheduleTableRow({
   const runMutation = useMutation({
     mutationFn: () => runScheduleNow({ data: { id: schedule.id } }),
     onSuccess: async (result) => {
-      await queryClient.invalidateQueries({ queryKey: queryKeys.schedules.all })
+      await queryClient.invalidateQueries({
+        queryKey: queryKeys.schedules.all,
+      })
       showToast({
         message:
           result.started === result.total
@@ -832,8 +838,12 @@ function EmptyScheduleTable({
 }
 
 export const ScheduleHistoryPage = React.memo(function ScheduleHistoryPage() {
-  const { data: schedules } = useLiveQuery({
-    query: (query) => query.from({ schedule: schedulesCollectionOptions }),
+  const { data: schedules } = useLiveSuspenseQuery({
+    query: (query) =>
+      query
+        .from({ schedule: schedulesCollectionOptions })
+        .orderBy(({ schedule }) => schedule.updatedAt, "desc")
+        .orderBy(({ schedule }) => schedule.id, "desc"),
   })
   const search = useSearch({ from: "/_app/automations" })
   const navigate = useNavigate({ from: "/automations/history" })

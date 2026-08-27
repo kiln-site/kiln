@@ -2,10 +2,7 @@ import * as React from "react"
 import { useDbClient } from "@tanstack/react-db"
 import { useQueryClient } from "@tanstack/react-query"
 
-import {
-  getRelayInstancesCollection,
-  type RelayInstancesCollection,
-} from "@/lib/collections/relay-instances"
+import { getRelayInstancesCollection } from "@/lib/collections/relay-instances"
 import {
   authStateQueryOptions,
   queryKeys,
@@ -16,8 +13,12 @@ import { refreshHearthRealtimeTopics } from "@/lib/hearth-realtime"
 import { hearthRealtimeTopics } from "@/lib/hearth-realtime-topics"
 import { reconcilePendingPowerSnapshot } from "@/lib/instance-power-state"
 import {
+  applyRealtimeEvent,
+  parseRealtimeEventData,
+  resetRealtimeEpoch,
+} from "@/lib/realtime-client"
+import {
   realtimeClientEventSchema,
-  type FleetInstance,
   type RealtimeClientEvent,
 } from "@/lib/realtime-events"
 import type { RelayFleetSnapshot } from "@/lib/relay-fleet"
@@ -41,10 +42,14 @@ export const RealtimeSync = React.memo(function RealtimeSync() {
     let resetting: Promise<void> | null = null
     let recoveryRetry: ReturnType<typeof setTimeout> | null = null
     let recoveryFailures = 0
+    let activeRecoveryConnection = false
+    let activeRecoveryHearth = false
     let activeEpoch: string | null = null
     let recoveryFloor = 0
     let checkingAuthentication: Promise<void> | null = null
     let refreshingHearth: Promise<void> | null = null
+    let hearthRefreshRetry: ReturnType<typeof setTimeout> | null = null
+    let hearthRefreshFailures = 0
     const pendingHearthTopics = new Set<(typeof hearthRealtimeTopics)[number]>()
     let bufferedEvents: Array<
       Exclude<RealtimeClientEvent, { type: "relay.invalidate" | "reset" }>
@@ -88,26 +93,39 @@ export const RealtimeSync = React.memo(function RealtimeSync() {
     ): Promise<void> => {
       for (const topic of topics) pendingHearthTopics.add(topic)
       if (refreshingHearth) return refreshingHearth
+      if (hearthRefreshRetry) return Promise.resolve()
       const drainHearthRefreshes = (): Promise<void> => {
         if (closed || pendingHearthTopics.size === 0) return Promise.resolve()
         const next = [...pendingHearthTopics]
         pendingHearthTopics.clear()
         return refreshHearthRealtimeTopics(queryClient, next).then(
-          drainHearthRefreshes
+          () => {
+            hearthRefreshFailures = 0
+            return drainHearthRefreshes()
+          },
+          (cause) => {
+            for (const topic of next) pendingHearthTopics.add(topic)
+            if (!closed) {
+              console.warn("[Kiln realtime] Hearth refresh failed", cause)
+              const delay = Math.min(
+                1_000 * 2 ** hearthRefreshFailures,
+                maximumRecoveryRetryDelayMs
+              )
+              hearthRefreshFailures += 1
+              hearthRefreshRetry = setTimeout(() => {
+                hearthRefreshRetry = null
+                void requestHearthRefresh([])
+              }, delay)
+            }
+          }
         )
       }
-      refreshingHearth = drainHearthRefreshes()
-        .catch((cause) => {
-          if (!closed) {
-            console.warn("[Kiln realtime] Hearth refresh failed", cause)
-          }
-        })
-        .finally(() => {
-          refreshingHearth = null
-          if (!closed && pendingHearthTopics.size > 0) {
-            void requestHearthRefresh([])
-          }
-        })
+      refreshingHearth = drainHearthRefreshes().finally(() => {
+        refreshingHearth = null
+        if (!closed && !hearthRefreshRetry && pendingHearthTopics.size > 0) {
+          void requestHearthRefresh([])
+        }
+      })
       return refreshingHearth
     }
 
@@ -132,6 +150,8 @@ export const RealtimeSync = React.memo(function RealtimeSync() {
           const shouldRefetchHearth = hearthRefetchRequested
           connectionRefetchRequested = false
           hearthRefetchRequested = false
+          activeRecoveryConnection = shouldRefetchConnection
+          activeRecoveryHearth = shouldRefetchHearth
           const snapshotEpoch = activeEpoch
           if (closed) return
           const snapshot = reconcilePendingPowerSnapshot(
@@ -149,6 +169,8 @@ export const RealtimeSync = React.memo(function RealtimeSync() {
           if (shouldRefetchHearth) {
             await requestHearthRefresh(hearthRealtimeTopics)
           }
+          activeRecoveryConnection = false
+          activeRecoveryHearth = false
           // A newer reset supersedes events captured while this snapshot was
           // loading. Otherwise replay later deltas after the authoritative
           // snapshot so a slow response cannot overwrite fresh state.
@@ -170,6 +192,10 @@ export const RealtimeSync = React.memo(function RealtimeSync() {
       })()
         .catch((cause) => {
           if (!closed) {
+            connectionRefetchRequested ||= activeRecoveryConnection
+            hearthRefetchRequested ||= activeRecoveryHearth
+            activeRecoveryConnection = false
+            activeRecoveryHearth = false
             console.warn("[Kiln realtime] Snapshot recovery failed", cause)
             const delay = Math.min(
               1_000 * 2 ** recoveryFailures,
@@ -191,7 +217,7 @@ export const RealtimeSync = React.memo(function RealtimeSync() {
     const handleEvent = (message: Event) => {
       if (!(message instanceof MessageEvent) || closed) return
       const parsed = realtimeClientEventSchema.safeParse(
-        parseEventData(message.data)
+        parseRealtimeEventData(message.data)
       )
       if (!parsed.success) {
         requestReset(false, 0, true)
@@ -271,6 +297,7 @@ export const RealtimeSync = React.memo(function RealtimeSync() {
     return () => {
       closed = true
       if (recoveryRetry) clearTimeout(recoveryRetry)
+      if (hearthRefreshRetry) clearTimeout(hearthRefreshRetry)
       source.removeEventListener("kiln", handleEvent)
       source.removeEventListener("error", handleError)
       source.close()
@@ -279,133 +306,3 @@ export const RealtimeSync = React.memo(function RealtimeSync() {
 
   return null
 })
-
-export function applyRealtimeEvent(input: {
-  event: Exclude<RealtimeClientEvent, { type: "relay.invalidate" | "reset" }>
-  instances: RelayInstancesCollection
-  queryClient: ReturnType<typeof useQueryClient>
-  refreshTopics?: (
-    topics: ReadonlyArray<(typeof hearthRealtimeTopics)[number]>
-  ) => Promise<void>
-}): void {
-  const { event, instances, queryClient, refreshTopics } = input
-  if (event.type === "collections.invalidate") {
-    void (
-      refreshTopics?.(event.topics) ??
-      refreshHearthRealtimeTopics(queryClient, event.topics)
-    )
-    return
-  }
-  queryClient.setQueryData<RelayFleetSnapshot>(
-    queryKeys.relay.snapshot,
-    (snapshot) => applyRealtimeSnapshotEvent(snapshot, event)
-  )
-  queryClient.setQueryData<RelayConnection>(
-    queryKeys.relay.connection,
-    (connection) =>
-      connection?.status === "connected"
-        ? {
-            ...connection,
-            snapshot:
-              applyRealtimeSnapshotEvent(connection.snapshot, event) ??
-              connection.snapshot,
-          }
-        : connection
-  )
-  if (event.type === "instances.delta") {
-    instances.utils.writeBatch(() => {
-      for (const item of event.upserted) {
-        const key = `${item.relayId}:${item.id}`
-        instances.utils.writeUpsert(
-          mergeRealtimeInstance(
-            instances.get(key) as FleetInstance | undefined,
-            item
-          )
-        )
-      }
-      instances.utils.writeDelete(
-        event.deleted.map(
-          ({ instanceId, relayId }) => `${relayId}:${instanceId}`
-        )
-      )
-    })
-  }
-}
-
-export function applyRealtimeSnapshotEvent(
-  snapshot: RelayFleetSnapshot | undefined,
-  event: Exclude<RealtimeClientEvent, { type: "relay.invalidate" | "reset" }>
-): RelayFleetSnapshot | undefined {
-  if (!snapshot) return snapshot
-  if (event.type === "collections.invalidate") return snapshot
-  if (event.type === "nodes.delta") {
-    const nodes = new Map(event.nodes.map((node) => [node.relayId, node]))
-    const nextNodes = snapshot.nodes.map((node) => {
-      const updated = nodes.get(node.relayId)
-      if (updated) nodes.delete(node.relayId)
-      return updated ?? node
-    })
-    return { ...snapshot, nodes: [...nextNodes, ...nodes.values()] }
-  }
-
-  const deleted = new Set(
-    event.deleted.map(({ instanceId, relayId }) => `${relayId}:${instanceId}`)
-  )
-  const upserted = new Map(
-    event.upserted.map((instance) => [
-      `${instance.relayId}:${instance.id}`,
-      instance,
-    ])
-  )
-  const nextInstances = snapshot.instances.flatMap((instance) => {
-    const key = `${instance.relayId}:${instance.id}`
-    if (deleted.has(key)) return []
-    const updated = upserted.get(key)
-    if (updated) upserted.delete(key)
-    return [updated ? mergeRealtimeInstance(instance, updated) : instance]
-  })
-  return {
-    ...snapshot,
-    instances: [...upserted.values(), ...nextInstances],
-  }
-}
-
-export function mergeRealtimeInstance(
-  current: FleetInstance | undefined,
-  updated: FleetInstance
-): FleetInstance {
-  if (!current) return updated
-  const endpointUnchanged =
-    current.publicHost === updated.publicHost &&
-    current.publicPort === updated.publicPort
-  return {
-    ...updated,
-    connectAddress: endpointUnchanged
-      ? current.connectAddress
-      : updated.connectAddress,
-  }
-}
-
-export function resetRealtimeEpoch(input: {
-  currentEpoch: string | null
-  nextEpoch: string
-  recoveryFloor: number
-}): { changed: boolean; epoch: string; recoveryFloor: number } {
-  if (input.currentEpoch === input.nextEpoch) {
-    return {
-      changed: false,
-      epoch: input.nextEpoch,
-      recoveryFloor: input.recoveryFloor,
-    }
-  }
-  return { changed: true, epoch: input.nextEpoch, recoveryFloor: 0 }
-}
-
-function parseEventData(data: unknown): unknown {
-  if (typeof data !== "string") return null
-  try {
-    return JSON.parse(data)
-  } catch {
-    return null
-  }
-}

@@ -18,7 +18,7 @@ export const schedulesCollectionOptions = collectionOptions(
       queryKey: queryKeys.schedules.all,
       refetchInterval: 15_000,
       refetchOnReconnect: false,
-      refetchOnWindowFocus: false,
+      refetchOnWindowFocus: "always",
       staleTime: 5_000,
     })
 )
