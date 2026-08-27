@@ -5,6 +5,8 @@ import { WebSocket } from "ws"
 
 import {
   RelayControlServerMessageSchema,
+  applyRelaySnapshotDelta,
+  createRelaySnapshotDelta,
   relayAuthenticationWindowMs,
   relayAuthChallengeTranscript,
   relayAuthResponseTranscript,
@@ -12,11 +14,15 @@ import {
   relayControlMaxFrameBytes,
   relayControlRequestTimeoutMs,
   relayControlProtocol,
+  relaySnapshotDeltaFeature,
+  relaySnapshotDeltaSchema,
+  relaySnapshotSchema,
 } from "@workspace/contracts"
 import type {
   RelayAuthChallenge,
   RelayControlOperation,
   RelayControlRequest,
+  RelaySnapshot,
 } from "@workspace/contracts"
 import { relayTailscaleStackIdSchema } from "@workspace/contracts"
 import { z } from "zod"
@@ -30,6 +36,7 @@ import { forkAppEffect, runAppEffect } from "@/effect/runtime"
 import type { RelayCredentials } from "@/lib/relay-registry"
 import { resolveSftpAuthorization } from "@/lib/sftp-authorization"
 import { relayControlFailureError } from "@/lib/relay-control-errors"
+import { publishRealtimeChange } from "@/lib/realtime-source.server"
 
 export { relayControlEndpoint }
 export type { RelayEndpoint }
@@ -129,7 +136,7 @@ class RelayConnection {
     }
   >()
   #hasPushedSnapshot = false
-  #pushedSnapshot: unknown = null
+  #pushedSnapshot: RelaySnapshot | null = null
   #eventSequence = 0
   #relay: RelayEndpoint
   #reconnectFiber: Fiber.Fiber<void, unknown> | null = null
@@ -285,6 +292,7 @@ class RelayConnection {
       this.#setState("connecting", null)
       this.#eventSequence = 0
       this.#hasPushedSnapshot = false
+      this.#pushedSnapshot = null
       this.#socket = null
       const { loadRelayCredentials } = yield* Effect.tryPromise({
         try: () => import("@/lib/relay-registry"),
@@ -432,9 +440,53 @@ class RelayConnection {
           }
           this.#eventSequence = message.seq
           if (message.event === "relay.snapshot") {
-            this.#pushedSnapshot = message.payload
+            const snapshot = relaySnapshotSchema.safeParse(message.payload)
+            if (!snapshot.success) {
+              resume(relayConnectionFailure("Relay sent an invalid snapshot"))
+              activeSocket.close(4400, "Relay snapshot is invalid")
+              return
+            }
+            const previousSnapshot = this.#pushedSnapshot
+            this.#pushedSnapshot = snapshot.data
             this.#hasPushedSnapshot = true
+            if (!previousSnapshot) {
+              publishRealtimeChange({
+                relayId: this.#relay.id,
+                type: "relay.snapshot.reset",
+              })
+            } else {
+              const delta = createRelaySnapshotDelta(
+                previousSnapshot,
+                snapshot.data
+              )
+              if (delta) {
+                publishRealtimeChange({
+                  delta,
+                  relayId: this.#relay.id,
+                  type: "relay.snapshot.delta",
+                })
+              }
+            }
             if (authenticated) resume(Effect.void)
+          } else if (message.event === "relay.snapshot.delta") {
+            const delta = relaySnapshotDeltaSchema.safeParse(message.payload)
+            if (!delta.success || !this.#pushedSnapshot) {
+              resume(
+                relayConnectionFailure("Relay sent an invalid snapshot delta")
+              )
+              activeSocket.close(4400, "Relay snapshot delta is invalid")
+              return
+            }
+            this.#pushedSnapshot = applyRelaySnapshotDelta(
+              this.#pushedSnapshot,
+              delta.data
+            )
+            this.#hasPushedSnapshot = true
+            publishRealtimeChange({
+              delta: delta.data,
+              relayId: this.#relay.id,
+              type: "relay.snapshot.delta",
+            })
           }
           return
         }
@@ -488,6 +540,7 @@ class RelayConnection {
     socket.send(
       JSON.stringify({
         clientId: credentials.clientId,
+        features: [relaySnapshotDeltaFeature],
         signature: sign(
           null,
           Buffer.from(
@@ -703,6 +756,7 @@ class RelayConnection {
   #setState(status: RelayConnectionStatus, lastError: string | null): void {
     const becameAuthenticated =
       status === "authenticated" && this.#state.status !== "authenticated"
+    const statusChanged = status !== this.#state.status
     this.#state = { lastError, status, updatedAt: Date.now() }
     Sentry.addBreadcrumb({
       category: "relay.connection",
@@ -710,6 +764,9 @@ class RelayConnection {
       level: status === "unreachable" ? "warning" : "info",
       message: status,
     })
+    if (statusChanged) {
+      publishRealtimeChange({ relayId: this.#relay.id, type: "relay.state" })
+    }
     if (becameAuthenticated) {
       forkAppEffect(
         "backups.reconcileOnConnect",

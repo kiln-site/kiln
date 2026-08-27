@@ -12,6 +12,7 @@ import { AppRouteContent } from "@/components/app-route-content"
 import { AppSidebar } from "@/components/app-sidebar"
 import { InfraUpdateDialogProvider } from "@/components/infra-update-dialog-provider"
 import { PanelFooter } from "@/components/panel-footer"
+import { RealtimeSync } from "@/components/realtime-sync"
 import { RelayConnectionToastMonitor } from "@/components/relay-connection-toast"
 import { applyAppearance, saveAppearanceCache } from "@/lib/appearance"
 import type { AppearancePreferences } from "@/lib/appearance"
@@ -40,6 +41,7 @@ export const AppFrame = React.memo(function AppFrame({
     <SidebarProvider defaultOpen={uiPreferences.sidebarOpen}>
       <AppearanceHydrator appearance={uiPreferences.appearance} />
       <InfraUpdateDialogProvider>
+        <RealtimeSync />
         <RelayConnectionToastMonitor />
         <MobileSidebarNavigationDismiss />
         <AppSidebar

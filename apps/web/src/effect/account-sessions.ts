@@ -13,6 +13,10 @@ interface AccountSessionRow extends RowDataPacket {
   user_id: string
 }
 
+interface ActiveSessionRow extends RowDataPacket {
+  id: string
+}
+
 export interface AccountSessionSummary {
   createdAt: string
   expiresAt: string
@@ -66,3 +70,20 @@ export const revokeAccountSessionEffect = Effect.fn("auth.sessions.revoke")(
     )
   }
 )
+
+export const accountSessionActiveEffect = Effect.fn(
+  "auth.sessions.realtimeValidate"
+)(function* (userId: string, sessionId: string) {
+  const database = yield* Database
+  const rows = yield* database.queryRows<ActiveSessionRow>(
+    "auth.sessions.realtimeValidate",
+    `SELECT id
+       FROM ${databaseTable("session")}
+      WHERE id = ?
+        AND userId = ?
+        AND expiresAt > CURRENT_TIMESTAMP(3)
+      LIMIT 1`,
+    [sessionId, userId]
+  )
+  return rows[0]?.id === sessionId
+})

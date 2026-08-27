@@ -1095,6 +1095,18 @@ export const relaySnapshotSchema = z.object({
     .optional(),
 })
 
+/**
+ * Incremental replacement for the repeated full snapshot frames sent over the
+ * Relay control socket. A reconnect always starts with a full snapshot, so a
+ * delta only needs to describe changes since the previous frame on that
+ * authenticated socket.
+ */
+export const relaySnapshotDeltaSchema = z.object({
+  deletedInstanceIds: z.array(relayInstanceSchema.shape.id),
+  instances: z.array(relayInstanceSchema),
+  node: relayNodeSchema.optional(),
+})
+
 export const relayFileTreeSchema = z.object({
   instanceId: z.string(),
   modifiedAt: z.record(z.string(), z.number().nonnegative()),
@@ -1569,8 +1581,115 @@ export type RelayInstanceCustomRouteLabel = z.infer<
   typeof relayInstanceCustomRouteLabelSchema
 >
 export type RelayInstance = z.infer<typeof relayInstanceSchema>
+export type RelaySnapshotDelta = z.infer<typeof relaySnapshotDeltaSchema>
 export type RelayNode = z.infer<typeof relayNodeSchema>
 export type RelaySnapshot = z.infer<typeof relaySnapshotSchema>
+
+/**
+ * Builds the control-plane portion of a Relay snapshot update. High-frequency
+ * resource samples use their dedicated stream and must not wake every Hearth
+ * client through the fleet-wide realtime channel.
+ */
+export function createRelaySnapshotDelta(
+  previous: RelaySnapshot,
+  next: RelaySnapshot
+): RelaySnapshotDelta | null {
+  const previousInstances = new Map(
+    previous.instances.map((instance) => [instance.id, instance])
+  )
+  const nextIds = new Set<string>()
+  const instances = next.instances.filter((instance) => {
+    nextIds.add(instance.id)
+    const previousInstance = previousInstances.get(instance.id)
+    return (
+      previousInstance === undefined ||
+      !jsonValueEqual(
+        relayInstanceControlState(previousInstance),
+        relayInstanceControlState(instance)
+      )
+    )
+  })
+  const deletedInstanceIds = previous.instances.flatMap((instance) =>
+    nextIds.has(instance.id) ? [] : [instance.id]
+  )
+  const node = jsonValueEqual(
+    relayNodeControlState(previous.node),
+    relayNodeControlState(next.node)
+  )
+    ? undefined
+    : next.node
+
+  if (instances.length === 0 && deletedInstanceIds.length === 0 && !node) {
+    return null
+  }
+  return {
+    deletedInstanceIds,
+    instances,
+    ...(node ? { node } : {}),
+  }
+}
+
+export function applyRelaySnapshotDelta(
+  snapshot: RelaySnapshot,
+  delta: RelaySnapshotDelta
+): RelaySnapshot {
+  const deleted = new Set(delta.deletedInstanceIds)
+  const upserts = new Map(
+    delta.instances.map((instance) => [instance.id, instance])
+  )
+  const retained = snapshot.instances.flatMap((instance) => {
+    if (deleted.has(instance.id)) return []
+    const updated = upserts.get(instance.id)
+    if (updated) upserts.delete(instance.id)
+    return [updated ?? instance]
+  })
+  return {
+    ...snapshot,
+    instances: [...retained, ...upserts.values()],
+    node: delta.node ?? snapshot.node,
+  }
+}
+
+function relayInstanceControlState(instance: RelayInstance) {
+  const { resources: _resources, ...control } = instance
+  return control
+}
+
+function relayNodeControlState(node: RelayNode) {
+  const {
+    cpu: _cpu,
+    memory: _memory,
+    storage: _storage,
+    uptimeSeconds: _uptimeSeconds,
+    ...control
+  } = node
+  return control
+}
+
+function jsonValueEqual(left: unknown, right: unknown): boolean {
+  if (Object.is(left, right)) return true
+  if (left === null || right === null) return false
+  if (typeof left !== "object" || typeof right !== "object") return false
+  if (Array.isArray(left) || Array.isArray(right)) {
+    if (!Array.isArray(left) || !Array.isArray(right)) return false
+    return (
+      left.length === right.length &&
+      left.every((value, index) => jsonValueEqual(value, right[index]))
+    )
+  }
+  const leftRecord = left as Record<string, unknown>
+  const rightRecord = right as Record<string, unknown>
+  const leftKeys = Object.keys(leftRecord)
+  const rightKeys = Object.keys(rightRecord)
+  return (
+    leftKeys.length === rightKeys.length &&
+    leftKeys.every(
+      (key) =>
+        Object.hasOwn(rightRecord, key) &&
+        jsonValueEqual(leftRecord[key], rightRecord[key])
+    )
+  )
+}
 export type RelaySftpPublicationStatus = z.infer<
   typeof relaySftpPublicationStatusSchema
 >

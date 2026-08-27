@@ -1,16 +1,13 @@
 import * as Sentry from "@sentry/tanstackstart-react"
-import { DbProvider } from "@tanstack/react-db"
 import { createRouter as createTanStackRouter } from "@tanstack/react-router"
+import { routerWithDbClient } from "@tanstack/react-router-with-db"
 import { setupRouterSsrQueryIntegration } from "@tanstack/react-router-ssr-query"
 
 import {
   AppNotFoundPage,
   AppRouterErrorBoundary,
 } from "@/components/app-error-page"
-import {
-  createAppClients,
-  registerDbClientSsrCleanup,
-} from "@/lib/query-client"
+import { createAppClients } from "@/lib/query-client"
 import { routeTree } from "./routeTree.gen"
 
 export function getRouter() {
@@ -27,21 +24,18 @@ export function getRouter() {
     defaultNotFoundComponent: AppNotFoundPage,
     disableGlobalCatchBoundary: true,
     InnerWrap: AppRouterErrorBoundary,
-    Wrap: ({ children }) => (
-      <DbProvider client={dbClient}>{children}</DbProvider>
-    ),
   })
 
   setupRouterSsrQueryIntegration({ queryClient, router })
-  registerDbClientSsrCleanup(router, dbClient)
+  const dbRouter = routerWithDbClient(router, dbClient)
 
-  if (!router.isServer && Sentry.isInitialized()) {
+  if (!dbRouter.isServer && Sentry.isInitialized()) {
     Sentry.addIntegration(
-      Sentry.tanstackRouterBrowserTracingIntegration(router)
+      Sentry.tanstackRouterBrowserTracingIntegration(dbRouter)
     )
   }
 
-  return router
+  return dbRouter
 }
 
 declare module "@tanstack/react-router" {

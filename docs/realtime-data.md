@@ -22,16 +22,38 @@ replace MySQL, Relay state, or high-frequency Relay streams.
 - TanStack Query remains the fetch and SSR hydration layer. Query Collections
   materialize its normalized rows and use existing server functions to persist
   mutations.
-- Authorized Hearth events apply incremental direct writes. A missing event
-  sequence refetches only the affected active collections.
+- Authorized Hearth events apply incremental direct writes. Reconnects,
+  overflow, and invalid payloads recover from an authoritative snapshot before
+  replaying newer buffered deltas. Failed recovery retries with bounded
+  backoff instead of leaving a connected tab stale.
 - Console output, resource samples, file contents, editor buffers, and secrets
   never enter general-purpose collections.
+
+## Transport
+
+- Each Relay control connection starts with one validated full snapshot and
+  subsequently sends only changed instance rows, deleted IDs, and changed node
+  observations. Unchanged 2-second samples do not produce a frame.
+- Each authenticated browser tab opens one same-origin SSE stream to Hearth.
+  Hearth projects Relay and mutation events through a cached per-user access
+  policy before any payload is serialized.
+- Every Hearth process has a unique stream epoch, so a reconnect after restart
+  or worker failover cannot confuse new sequence numbers with an older stream.
+- Session revocations close matching streams immediately. Access revocations
+  clear browser projections before rebuilding policy, and periodic session
+  validation covers revocations handled by another process.
+- The per-client queue is bounded. A slow client receives a coalesced reset
+  instead of allowing memory or stale deltas to grow without limit.
+- A 15-second comment heartbeat keeps intermediaries from idling out the
+  stream without creating application-level renders.
 
 ## Performance and lifecycle
 
 - One `QueryClient` and one dependent `DbClient` exist per SSR request or
   browser router session. They are never module-global.
 - Components subscribe to the smallest live query that can render their view.
+- The server list projects only fields it displays, so resource-only Relay
+  samples do not trigger collection writes, rebuilds, or row repaints.
 - Collection IDs include business scope. Filters, ordering, and pagination do
   not create additional collection instances.
 - Authentication changes clean up the previous DB client before another

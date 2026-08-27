@@ -23,6 +23,7 @@ import {
   publicSignupEnabled,
 } from "@/lib/environment"
 import { passwordConfirmation } from "@/lib/password-confirmation"
+import { publishRealtimeChange } from "@/lib/realtime-source.server"
 
 const publicUrl = kilnPublicUrl()
 const authUrl = betterAuthUrl()
@@ -74,6 +75,16 @@ export const auth = betterAuth({
     expiresIn: 60 * 10,
   },
   databaseHooks: {
+    session: {
+      delete: {
+        after: async (session) => {
+          publishRealtimeChange({
+            sessionIds: [session.id],
+            type: "session.revoked",
+          })
+        },
+      },
+    },
     user: {
       create: {
         before: async (user) => {

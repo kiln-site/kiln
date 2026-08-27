@@ -11,6 +11,7 @@ import {
   relayControlDeadlineMs,
   relayControlRequestTimeoutMs,
   relayControlProtocol,
+  relaySnapshotDeltaFeature,
 } from "@workspace/contracts"
 import type {
   RelayAuthChallenge,
@@ -356,6 +357,7 @@ describe("Relay control socket", () => {
       socket.send(
         JSON.stringify({
           clientId: client.id,
+          features: [relaySnapshotDeltaFeature],
           signature: sign(
             null,
             Buffer.from(relayAuthResponseTranscript(challenge, client.id)),
@@ -574,12 +576,46 @@ describe("Relay control socket", () => {
       const pushed = await inbox.next()
       expect(pushed.type).toBe("event")
       if (pushed.type === "event") {
+        expect(pushed.event).toBe("relay.snapshot.delta")
         expect(pushed.seq).toBe(2)
         expect(pushed.payload).toEqual({
+          deletedInstanceIds: [],
           instances: [{ id: "updated" }],
-          node: {},
         })
       }
+
+      const legacySocket = new WebSocket(
+        `ws://127.0.0.1:${address.port}/v1/socket`,
+        relayControlProtocol
+      )
+      const legacyInbox = messageInbox(legacySocket)
+      const legacyChallenge = (await legacyInbox.next()) as RelayAuthChallenge
+      legacySocket.send(
+        JSON.stringify({
+          clientId: client.id,
+          signature: sign(
+            null,
+            Buffer.from(
+              relayAuthResponseTranscript(legacyChallenge, client.id)
+            ),
+            hearthKeys.privateKey
+          ).toString("base64url"),
+          type: "auth.response",
+          v: 1,
+        })
+      )
+      expect((await legacyInbox.next()).type).toBe("auth.ready")
+      expect((await legacyInbox.next()).type).toBe("event")
+      const legacySnapshot = { instances: [{ id: "legacy" }], node: {} }
+      pushSnapshot?.(legacySnapshot)
+      const legacyPush = await legacyInbox.next()
+      expect(legacyPush.type).toBe("event")
+      if (legacyPush.type === "event") {
+        expect(legacyPush.event).toBe("relay.snapshot")
+        expect(legacyPush.payload).toEqual(legacySnapshot)
+      }
+      legacySocket.close()
+      await once(legacySocket, "close")
     } finally {
       socket.close()
       await once(socket, "close")
@@ -970,6 +1006,7 @@ async function authenticateTestSocket(
   socket.send(
     JSON.stringify({
       clientId: client.id,
+      features: [relaySnapshotDeltaFeature],
       signature: sign(
         null,
         Buffer.from(relayAuthResponseTranscript(challenge, client.id)),

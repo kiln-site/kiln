@@ -19,6 +19,11 @@ export interface AuthenticatedUser {
   twoFactorEnabled: boolean
 }
 
+export interface AuthenticatedRealtimeIdentity {
+  sessionId: string | null
+  user: AuthenticatedUser
+}
+
 export async function getSessionFromHeaders(
   headers: Headers
 ): Promise<AuthSession | null> {
@@ -28,32 +33,46 @@ export async function getSessionFromHeaders(
 export async function getAuthenticatedUserFromHeaders(
   headers: Headers
 ): Promise<AuthenticatedUser | null> {
+  return (
+    (await getAuthenticatedRealtimeIdentityFromHeaders(headers))?.user ?? null
+  )
+}
+
+export async function getAuthenticatedRealtimeIdentityFromHeaders(
+  headers: Headers
+): Promise<AuthenticatedRealtimeIdentity | null> {
   if (hasDevelopmentBypass(headers)) {
     return {
-      email: "developer@kiln.local",
-      emailVerified: true,
-      id: developmentBypassUserId,
-      isDevelopmentBypass: true,
-      name: "Kiln Developer",
-      role: "admin",
-      twoFactorEnabled: false,
+      sessionId: null,
+      user: {
+        email: "developer@kiln.local",
+        emailVerified: true,
+        id: developmentBypassUserId,
+        isDevelopmentBypass: true,
+        name: "Kiln Developer",
+        role: "admin",
+        twoFactorEnabled: false,
+      },
     }
   }
 
   const session = await getSessionFromHeaders(headers)
   if (!session) return null
   return {
-    email: session.user.email,
-    emailVerified: session.user.emailVerified,
-    id: session.user.id,
-    isDevelopmentBypass: false,
-    name: resolveDisplayName(session.user.name, session.user.email),
-    role: platformRole(
-      (session.user as typeof session.user & { role?: string }).role
-    ),
-    twoFactorEnabled:
-      (session.user as typeof session.user & { twoFactorEnabled?: boolean })
-        .twoFactorEnabled ?? false,
+    sessionId: session.session.id,
+    user: {
+      email: session.user.email,
+      emailVerified: session.user.emailVerified,
+      id: session.user.id,
+      isDevelopmentBypass: false,
+      name: resolveDisplayName(session.user.name, session.user.email),
+      role: platformRole(
+        (session.user as typeof session.user & { role?: string }).role
+      ),
+      twoFactorEnabled:
+        (session.user as typeof session.user & { twoFactorEnabled?: boolean })
+          .twoFactorEnabled ?? false,
+    },
   }
 }
 

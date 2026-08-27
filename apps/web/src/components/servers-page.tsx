@@ -1,4 +1,5 @@
 import * as React from "react"
+import { useDbClient, useLiveQuery } from "@tanstack/react-db"
 import {
   useQuery,
   useQueryClient,
@@ -56,13 +57,13 @@ import {
   brickCatalogQueryOptions,
   brickIconPresentationsQueryOptions,
   relayConnectionQueryOptions,
-  relaySnapshotQueryOptions,
 } from "@/lib/query-options"
-import { roleHasPermission } from "@/lib/permissions"
 import {
-  selectRelayConfigured,
-  selectServerListInstances,
-} from "@/lib/relay-selectors"
+  getRelayInstancesCollection,
+  relayInstancesCollectionOptions,
+} from "@/lib/collections/relay-instances"
+import { roleHasPermission } from "@/lib/permissions"
+import { selectRelayConfigured } from "@/lib/relay-selectors"
 import type { ServerListInstance } from "@/lib/relay-selectors"
 
 const emptyServers: Array<ServerListInstance> = []
@@ -254,16 +255,13 @@ const ServerSyncButton = React.memo(function ServerSyncButton({
 }: {
   disabled: boolean
 }) {
-  const { fetchStatus, refetch } = useQuery({
-    ...relaySnapshotQueryOptions(),
-    enabled: !disabled,
-    notifyOnChangeProps: ["fetchStatus"],
-  })
+  const dbClient = useDbClient()
+  const instances = getRelayInstancesCollection(dbClient)
   const [manualSyncing, setManualSyncing] = React.useState(false)
   const manualSyncingRef = React.useRef(false)
   const feedbackTimeoutRef = React.useRef<number>(undefined)
   const mountedRef = React.useRef(true)
-  const syncing = manualSyncing || fetchStatus === "fetching"
+  const syncing = manualSyncing
 
   React.useEffect(() => {
     mountedRef.current = true
@@ -282,18 +280,21 @@ const ServerSyncButton = React.memo(function ServerSyncButton({
     const startedAt = performance.now()
 
     forkPromise(() =>
-      ensuringPromise(refetch, () => {
-        if (!mountedRef.current) return
-        const elapsed = performance.now() - startedAt
-        const remaining = Math.max(0, minimumManualSyncFeedbackMs - elapsed)
-        feedbackTimeoutRef.current = window.setTimeout(() => {
-          manualSyncingRef.current = false
-          setManualSyncing(false)
-          feedbackTimeoutRef.current = undefined
-        }, remaining)
-      })
+      ensuringPromise(
+        () => instances.utils.refetch({ throwOnError: true }),
+        () => {
+          if (!mountedRef.current) return
+          const elapsed = performance.now() - startedAt
+          const remaining = Math.max(0, minimumManualSyncFeedbackMs - elapsed)
+          feedbackTimeoutRef.current = window.setTimeout(() => {
+            manualSyncingRef.current = false
+            setManualSyncing(false)
+            feedbackTimeoutRef.current = undefined
+          }, remaining)
+        }
+      )
     )
-  }, [disabled, refetch])
+  }, [disabled, instances])
 
   return (
     <Tooltip>
@@ -511,11 +512,29 @@ const FilteredServerTableBoundary = React.memo(
     relayConfigured: boolean
     searchStore: ServerSearchStore
   }) {
-    const { data: servers = emptyServers } = useQuery({
-      ...relaySnapshotQueryOptions(),
-      enabled: relayConfigured,
-      notifyOnChangeProps: ["data"],
-      select: selectServerListInstances,
+    const { data: servers = emptyServers } = useLiveQuery({
+      query: (query) => {
+        if (!relayConfigured) return undefined
+        return query
+          .from({ instance: relayInstancesCollectionOptions })
+          .select(({ instance }) => ({
+            brickId: instance.brickId,
+            brickSource: instance.brickSource,
+            connectAddress: instance.connectAddress,
+            game: instance.game,
+            id: instance.id,
+            implementation: instance.implementation,
+            name: instance.name,
+            observedState: instance.observedState,
+            provisioning: instance.provisioning,
+            relayId: instance.relayId,
+            relayName: instance.relayName,
+            relayStatus: instance.relayStatus,
+            routeId: instance.routeId,
+            shortId: instance.shortId,
+            version: instance.version,
+          }))
+      },
     })
     const { data: bricks = emptyBrickIcons } = useQuery({
       ...brickIconPresentationsQueryOptions(),

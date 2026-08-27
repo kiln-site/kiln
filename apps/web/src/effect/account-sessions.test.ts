@@ -3,6 +3,7 @@ import { Effect, Layer } from "effect"
 import type { ResultSetHeader, RowDataPacket } from "mysql2/promise"
 
 import {
+  accountSessionActiveEffect,
   listAccountSessionsEffect,
   revokeAccountSessionEffect,
 } from "@/effect/account-sessions"
@@ -60,6 +61,34 @@ describe("account sessions", () => {
       ])
     }).pipe(Effect.provide(databaseLayer))
   })
+
+  it.effect(
+    "validates a live stream against its exact unexpired session",
+    () => {
+      const statements: Array<Statement> = []
+      const databaseLayer = accountSessionDatabaseLayer({
+        rows: [sessionRow("session-own", "user-one")],
+        statements,
+      })
+
+      return Effect.gen(function* () {
+        const active = yield* accountSessionActiveEffect(
+          "user-one",
+          "session-own"
+        )
+
+        assert.isTrue(active)
+        assert.match(
+          statements[0]!.sql,
+          /WHERE id = \?\s+AND userId = \?\s+AND expiresAt > CURRENT_TIMESTAMP/u
+        )
+        assert.deepStrictEqual(statements[0]!.values, [
+          "session-own",
+          "user-one",
+        ])
+      }).pipe(Effect.provide(databaseLayer))
+    }
+  )
 })
 
 interface Statement {

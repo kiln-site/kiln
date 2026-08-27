@@ -33,6 +33,7 @@ import { Route as AppOperationsRouteImport } from './routes/_app.operations'
 import { Route as AppServersRouteImport } from './routes/_app.servers'
 import { Route as AppSettingsRouteImport } from './routes/_app.settings'
 import { Route as ApiHealthRouteImport } from './routes/api.health'
+import { Route as ApiRealtimeRouteImport } from './routes/api.realtime'
 import { Route as ApiSentryCheckRouteImport } from './routes/api.sentry-check'
 import { Route as CliAuthorizeRouteImport } from './routes/cli.authorize'
 import { Route as DownloadsIdRouteImport } from './routes/downloads.$id'
@@ -186,6 +187,11 @@ const AppSettingsRoute = AppSettingsRouteImport.update({
 const ApiHealthRoute = ApiHealthRouteImport.update({
   id: '/api/health',
   path: '/api/health',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiRealtimeRoute = ApiRealtimeRouteImport.update({
+  id: '/api/realtime',
+  path: '/api/realtime',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ApiSentryCheckRoute = ApiSentryCheckRouteImport.update({
@@ -392,6 +398,7 @@ export interface FileRoutesByFullPath {
   '/servers': typeof AppServersRoute
   '/settings': typeof AppSettingsRouteWithChildren
   '/api/health': typeof ApiHealthRoute
+  '/api/realtime': typeof ApiRealtimeRoute
   '/api/sentry-check': typeof ApiSentryCheckRoute
   '/cli/authorize': typeof CliAuthorizeRoute
   '/downloads/$id': typeof DownloadsIdRoute
@@ -449,6 +456,7 @@ export interface FileRoutesByTo {
   '/operations': typeof AppOperationsRoute
   '/servers': typeof AppServersRoute
   '/api/health': typeof ApiHealthRoute
+  '/api/realtime': typeof ApiRealtimeRoute
   '/api/sentry-check': typeof ApiSentryCheckRoute
   '/cli/authorize': typeof CliAuthorizeRoute
   '/downloads/$id': typeof DownloadsIdRoute
@@ -510,6 +518,7 @@ export interface FileRoutesById {
   '/_app/servers': typeof AppServersRoute
   '/_app/settings': typeof AppSettingsRouteWithChildren
   '/api/health': typeof ApiHealthRoute
+  '/api/realtime': typeof ApiRealtimeRoute
   '/api/sentry-check': typeof ApiSentryCheckRoute
   '/cli/authorize': typeof CliAuthorizeRoute
   '/downloads/$id': typeof DownloadsIdRoute
@@ -572,6 +581,7 @@ export interface FileRouteTypes {
     | '/servers'
     | '/settings'
     | '/api/health'
+    | '/api/realtime'
     | '/api/sentry-check'
     | '/cli/authorize'
     | '/downloads/$id'
@@ -629,6 +639,7 @@ export interface FileRouteTypes {
     | '/operations'
     | '/servers'
     | '/api/health'
+    | '/api/realtime'
     | '/api/sentry-check'
     | '/cli/authorize'
     | '/downloads/$id'
@@ -689,6 +700,7 @@ export interface FileRouteTypes {
     | '/_app/servers'
     | '/_app/settings'
     | '/api/health'
+    | '/api/realtime'
     | '/api/sentry-check'
     | '/cli/authorize'
     | '/downloads/$id'
@@ -742,6 +754,7 @@ export interface RootRouteChildren {
   TwoFactorRoute: typeof TwoFactorRoute
   XRoute: typeof XRoute
   ApiHealthRoute: typeof ApiHealthRoute
+  ApiRealtimeRoute: typeof ApiRealtimeRoute
   ApiSentryCheckRoute: typeof ApiSentryCheckRoute
   CliAuthorizeRoute: typeof CliAuthorizeRoute
   DownloadsIdRoute: typeof DownloadsIdRoute
@@ -920,6 +933,13 @@ declare module '@tanstack/react-router' {
       path: '/api/health'
       fullPath: '/api/health'
       preLoaderRoute: typeof ApiHealthRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/realtime': {
+      id: '/api/realtime'
+      path: '/api/realtime'
+      fullPath: '/api/realtime'
+      preLoaderRoute: typeof ApiRealtimeRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/api/sentry-check': {
@@ -1317,6 +1337,7 @@ const rootRouteChildren: RootRouteChildren = {
   TwoFactorRoute: TwoFactorRoute,
   XRoute: XRoute,
   ApiHealthRoute: ApiHealthRoute,
+  ApiRealtimeRoute: ApiRealtimeRoute,
   ApiSentryCheckRoute: ApiSentryCheckRoute,
   CliAuthorizeRoute: CliAuthorizeRoute,
   DownloadsIdRoute: DownloadsIdRoute,

@@ -41,17 +41,10 @@ export function addRelayInstanceToSnapshot(
   const existingIndex = snapshot.instances.findIndex(
     (item) => item.id === instance.id && item.relayId === relay.id
   )
-  if (existingIndex === -1) {
-    return {
-      ...snapshot,
-      instances: [relayInstance, ...snapshot.instances],
-    }
-  }
+  if (existingIndex !== -1) return snapshot
 
   return {
     ...snapshot,
-    instances: snapshot.instances.map((item, index) =>
-      index === existingIndex ? relayInstance : item
-    ),
+    instances: [relayInstance, ...snapshot.instances],
   }
 }

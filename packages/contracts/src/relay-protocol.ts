@@ -134,6 +134,8 @@ export const RelayControlOperationSchema = Schema.Literals(
   relayControlOperations
 )
 
+export const relaySnapshotDeltaFeature = "relay.snapshot.delta.v1"
+
 export const RelayAuthChallengeSchema = Schema.Struct({
   expiresAt: Schema.Number,
   nonce: Schema.String,
@@ -146,6 +148,7 @@ export const RelayAuthChallengeSchema = Schema.Struct({
 
 export const RelayAuthResponseSchema = Schema.Struct({
   clientId: Schema.String,
+  features: Schema.optionalKey(Schema.Array(Schema.String)),
   signature: Schema.String,
   type: Schema.Literal("auth.response"),
   v: Schema.Literal(1),

@@ -6,6 +6,7 @@ import {
   revokeAccountSessionEffect,
 } from "@/effect/account-sessions"
 import { runAppEffect } from "@/effect/runtime"
+import { publishRealtimeChange } from "@/lib/realtime-source.server"
 import { requireAuthenticatedUser } from "@/server/auth"
 
 export const getActiveSessions = createServerFn({ method: "GET" }).handler(
@@ -30,4 +31,8 @@ export const revokeActiveSession = createServerFn({ method: "POST" })
       "auth.sessions.revoke",
       revokeAccountSessionEffect(user.id, data.sessionId)
     )
+    publishRealtimeChange({
+      sessionIds: [data.sessionId],
+      type: "session.revoked",
+    })
   })

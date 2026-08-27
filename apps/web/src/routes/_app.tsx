@@ -31,6 +31,10 @@ export const Route = createFileRoute("/_app")({
       context.queryClient.ensureQueryData(uiPreferencesQueryOptions()),
     ])
   },
-  component: Outlet,
+  component: AuthenticatedApp,
   notFoundComponent: AppNotFoundPage,
 })
+
+function AuthenticatedApp() {
+  return <Outlet />
+}

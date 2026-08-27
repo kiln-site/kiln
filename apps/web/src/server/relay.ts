@@ -87,6 +87,7 @@ import {
 import type { PersistedRelay } from "@/lib/relay-registry"
 import { listPersistedRelays } from "@/lib/relay-registry"
 import { resolveMclogsApiUrl } from "@/lib/mclogs"
+import { publishRealtimeChange } from "@/lib/realtime-source.server"
 
 const instanceInputSchema = z.object({
   instanceId: z.string().min(1),
@@ -215,6 +216,20 @@ export const getRelaySnapshot = createServerFn({ method: "POST" }).handler(
   }
 )
 
+export const getFreshRelaySnapshot = createServerFn({ method: "POST" }).handler(
+  async () => {
+    const user = await requireAuthenticatedUser()
+    return authorizedFleetSnapshot(user, false, true)
+  }
+)
+
+export const getRelayInstances = createServerFn({ method: "POST" }).handler(
+  async () => {
+    const user = await requireAuthenticatedUser()
+    return (await authorizedFleetSnapshot(user, true)).instances
+  }
+)
+
 export const getRelayConnectionState = createServerFn({
   method: "GET",
 }).handler(async () => {
@@ -318,6 +333,11 @@ export const updateInstanceName = createServerFn({ method: "POST" })
       "relay.snapshot.invalidate",
       invalidateRelayCache(relayCachePolicy.snapshot(relay.id))
     )
+    publishRealtimeChange({
+      instance: renamed,
+      relayId: relay.id,
+      type: "instance.upsert",
+    })
     return { ...renamed, relayId: relay.id }
   })
 
@@ -353,6 +373,11 @@ export const deleteInstance = createServerFn({ method: "POST" })
         requestedBy: user.id,
       })
     }
+    publishRealtimeChange({
+      instanceId: data.instanceId,
+      relayId: relay.id,
+      type: "instance.delete",
+    })
     return {
       ...deleteInstanceResultSchema.parse({
         deleted: true,
@@ -466,6 +491,11 @@ export const updateInstancePorts = createServerFn({ method: "POST" })
       "relay.snapshot.invalidate",
       invalidateRelayCache(relayCachePolicy.snapshot(data.relayId))
     )
+    publishRealtimeChange({
+      instance,
+      relayId: data.relayId,
+      type: "instance.upsert",
+    })
     return { ...instance, relayId: data.relayId }
   })
 
@@ -813,6 +843,11 @@ export const performRelayAction = createServerFn({ method: "POST" })
       "relay.snapshot.invalidate",
       invalidateRelayCache(relayCachePolicy.snapshot(relay.id))
     )
+    publishRealtimeChange({
+      instance,
+      relayId: relay.id,
+      type: "instance.upsert",
+    })
     return { ...instance, relayId: relay.id }
   })
 
@@ -1001,6 +1036,10 @@ async function relaySnapshot(relay: RelayEndpoint) {
   )
 }
 
+async function freshRelaySnapshot(relay: RelayEndpoint) {
+  return relaySnapshotSchema.parse(await relayRequestRaw(relay, "/v1/snapshot"))
+}
+
 async function relayFallbackSnapshot(relay: RelayEndpoint) {
   return runAppEffect(
     "relay.snapshotFallback",
@@ -1031,11 +1070,16 @@ async function authorizeRelaySnapshot(
 async function authorizedRelayEntry(
   relay: PersistedRelay,
   user: AuthenticatedUser,
-  options: { fallbackOnError: boolean; warnOnUnavailable: boolean }
+  options: {
+    fallbackOnError: boolean
+    fresh?: boolean
+    warnOnUnavailable: boolean
+  }
 ) {
   return Effect.runPromise(
     Effect.tryPromise({
-      try: () => relaySnapshot(relay),
+      try: () =>
+        options.fresh ? freshRelaySnapshot(relay) : relaySnapshot(relay),
       catch: (cause) => cause,
     }).pipe(
       Effect.map((snapshot) => ({
@@ -1126,7 +1170,8 @@ async function instanceRelayAccess(relayId: string) {
 
 async function authorizedFleetSnapshot(
   user: AuthenticatedUser,
-  fallbackOnError: boolean
+  fallbackOnError: boolean,
+  fresh = false
 ): Promise<RelayFleetSnapshot> {
   const relays = (
     await authorizedRelays(user, await listPersistedRelays())
@@ -1135,6 +1180,7 @@ async function authorizedFleetSnapshot(
     relays.map((relay) =>
       authorizedRelayEntry(relay, user, {
         fallbackOnError,
+        fresh,
         warnOnUnavailable: false,
       })
     )

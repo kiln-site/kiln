@@ -1,8 +1,14 @@
 import { describe, expect, it } from "vite-plus/test"
 import type { QueryClient } from "@tanstack/react-query"
 
-import { createAppClients, registerDbClientSsrCleanup } from "./query-client"
-import type { RouterSsrCleanupLifecycle } from "./query-client"
+import { createAppClients } from "./query-client"
+import {
+  connectionWithCanonicalSnapshot,
+  queryKeys,
+  snapshotWithCanonicalState,
+  type RelayConnection,
+} from "./query-options"
+import type { RelayFleetSnapshot } from "./relay-fleet"
 
 describe("app data clients", () => {
   it("isolates Query and DB state by router request or browser session", async () => {
@@ -21,32 +27,54 @@ describe("app data clients", () => {
     await Promise.all([first.dbClient.cleanup(), second.dbClient.cleanup()])
   })
 
-  it("cleans DB state up at the end of an SSR request", async () => {
-    let cleaned = false
-    let cleanup: (() => void) | undefined
-    const router: RouterSsrCleanupLifecycle = { isServer: true }
+  it("never lets a connection refetch overwrite newer live fleet state", async () => {
+    const clients = createAppClients()
+    const live: RelayFleetSnapshot = { instances: [], nodes: [] }
+    const cached: RelayFleetSnapshot = { instances: [], nodes: [] }
+    clients.queryClient.setQueryData(queryKeys.relay.snapshot, live)
+    clients.queryClient.setQueryData(queryKeys.relay.instances, live.instances)
 
-    registerDbClientSsrCleanup(router, {
-      cleanup: async () => {
-        cleaned = true
-      },
-    })
-    router.serverSsrLifecycle?.onServerSsrAttach?.[0]?.({
-      onCleanup: (listener: () => void) => {
-        cleanup = listener
-      },
-    } as NonNullable<RouterSsrCleanupLifecycle["serverSsr"]>)
+    const current = {
+      snapshot: live,
+      status: "connected",
+    } as RelayConnection
+    const fetched = {
+      snapshot: cached,
+      status: "connected",
+    } as RelayConnection
+    clients.queryClient.setQueryData(queryKeys.relay.connection, current)
 
-    cleanup?.()
-    await Promise.resolve()
-    expect(cleaned).toBe(true)
+    const resolved = connectionWithCanonicalSnapshot(
+      clients.queryClient,
+      fetched as Extract<RelayConnection, { status: "connected" }>
+    )
+
+    expect(clients.queryClient.getQueryData(queryKeys.relay.snapshot)).toBe(
+      live
+    )
+    expect(clients.queryClient.getQueryData(queryKeys.relay.instances)).toBe(
+      live.instances
+    )
+    expect(resolved.snapshot).toBe(live)
+    await clients.dbClient.cleanup()
   })
 
-  it("does not register SSR cleanup in the browser", () => {
-    const router: RouterSsrCleanupLifecycle = { isServer: false }
+  it("never lets a snapshot refetch overwrite newer live fleet state", async () => {
+    const clients = createAppClients()
+    const live: RelayFleetSnapshot = { instances: [], nodes: [] }
+    const fetched: RelayFleetSnapshot = { instances: [], nodes: [] }
+    clients.queryClient.setQueryData(queryKeys.relay.snapshot, live)
+    clients.queryClient.setQueryData(queryKeys.relay.connection, {
+      snapshot: live,
+      status: "connected",
+    } as RelayConnection)
 
-    registerDbClientSsrCleanup(router, { cleanup: async () => undefined })
+    const resolved = snapshotWithCanonicalState(clients.queryClient, fetched)
 
-    expect(router).not.toHaveProperty("serverSsrLifecycle")
+    expect(resolved).toBe(live)
+    expect(clients.queryClient.getQueryData(queryKeys.relay.instances)).toBe(
+      live.instances
+    )
+    await clients.dbClient.cleanup()
   })
 })
