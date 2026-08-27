@@ -1,5 +1,6 @@
 import type { AuthenticatedUser } from "@/lib/auth-session"
 import { accountSessionActiveEffect } from "@/effect/account-sessions"
+import { ensuringPromise, recoverPromise } from "@/effect/promise"
 import { runAppEffect } from "@/effect/runtime"
 import {
   isPlatformAdmin,
@@ -19,6 +20,7 @@ import {
 import { relayInstanceRouteId, type RelayReachability } from "@/lib/relay-fleet"
 import { listPersistedRelays, type PersistedRelay } from "@/lib/relay-registry"
 import type { RelayInstance, RelayNode } from "@workspace/contracts"
+import { Result } from "effect"
 import type {
   FleetInstance,
   FleetNode,
@@ -128,12 +130,15 @@ export async function openAuthorizedRealtimeStream(input: {
       // events from being projected through the stale policy; EventSource will
       // reconnect and rebuild it from scratch.
       enqueueReset(event, true, true)
-      try {
-        policy = await loadRealtimeAccessPolicy(input.user)
-      } catch (cause) {
-        console.warn("[Kiln realtime] Could not refresh access policy", cause)
-        finish(true)
-      }
+      const refreshedPolicy = await recoverPromise(
+        () => loadRealtimeAccessPolicy(input.user),
+        (cause) => {
+          console.warn("[Kiln realtime] Could not refresh access policy", cause)
+          finish(true)
+          return null
+        }
+      )
+      if (refreshedPolicy) policy = refreshedPolicy
       return
     }
 
@@ -252,17 +257,20 @@ export async function openAuthorizedRealtimeStream(input: {
       return
     }
     queuedEvents += 1
-    processing = processing
-      .then(async () => {
-        await processEvent(event)
-      })
-      .catch((cause) => {
-        console.error("[Kiln realtime] Could not project event", cause)
-        enqueueReset(event, false, event.type === "hearth.invalidate")
-      })
-      .finally(() => {
+    const previousProcessing = processing
+    processing = ensuringPromise(
+      () =>
+        recoverPromise(
+          () => previousProcessing.then(() => processEvent(event)),
+          (cause) => {
+            console.error("[Kiln realtime] Could not project event", cause)
+            enqueueReset(event, false, event.type === "hearth.invalidate")
+          }
+        ),
+      () => {
         queuedEvents -= 1
-      })
+      }
+    )
   })
 
   function finish(closeController: boolean) {
@@ -273,11 +281,8 @@ export async function openAuthorizedRealtimeStream(input: {
     if (sessionValidation) clearInterval(sessionValidation)
     input.signal.removeEventListener("abort", abort)
     if (closeController && controller) {
-      try {
-        controller.close()
-      } catch {
-        // The consumer may have already cancelled the stream.
-      }
+      const activeController = controller
+      Result.try(() => activeController.close())
     }
     controller = null
   }
@@ -288,20 +293,26 @@ export async function openAuthorizedRealtimeStream(input: {
 
   const validateSession = () => {
     if (!input.sessionId || closed || validatingSession) return
-    validatingSession = runAppEffect(
+    const validation = runAppEffect(
       "auth.sessions.realtimeValidate",
       accountSessionActiveEffect(input.user.id, input.sessionId)
     )
-      .then((active) => {
-        if (!active) finish(true)
-      })
-      .catch((cause) => {
-        console.warn("[Kiln realtime] Session validation failed", cause)
-        finish(true)
-      })
-      .finally(() => {
+    validatingSession = ensuringPromise(
+      () =>
+        recoverPromise(
+          () =>
+            validation.then((active) => {
+              if (!active) finish(true)
+            }),
+          (cause) => {
+            console.warn("[Kiln realtime] Session validation failed", cause)
+            finish(true)
+          }
+        ),
+      () => {
         validatingSession = null
-      })
+      }
+    )
   }
   if (input.sessionId) {
     sessionValidation = setInterval(

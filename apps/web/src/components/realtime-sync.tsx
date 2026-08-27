@@ -2,6 +2,7 @@ import * as React from "react"
 import { useDbClient } from "@tanstack/react-db"
 import { useQueryClient } from "@tanstack/react-query"
 
+import { ensuringPromise, recoverPromise } from "@/effect/promise"
 import { getRelayInstancesCollection } from "@/lib/collections/relay-instances"
 import {
   authStateQueryOptions,
@@ -124,15 +125,16 @@ export const RealtimeSync = React.memo(function RealtimeSync() {
         }
         const next = [...pendingHearthRefreshes.values()]
         pendingHearthRefreshes.clear()
-        return Promise.all(
-          next.map(({ scope: nextScope, topic }) =>
-            refreshHearthRealtimeTopics(queryClient, [topic], nextScope)
-          )
-        ).then(
-          () => {
-            hearthRefreshFailures = 0
-            return drainHearthRefreshes()
-          },
+        return recoverPromise(
+          () =>
+            Promise.all(
+              next.map(({ scope: nextScope, topic }) =>
+                refreshHearthRealtimeTopics(queryClient, [topic], nextScope)
+              )
+            ).then(() => {
+              hearthRefreshFailures = 0
+              return drainHearthRefreshes()
+            }),
           (cause) => {
             for (const refresh of next) {
               void requestHearthRefresh([refresh.topic], refresh.scope)
@@ -152,16 +154,19 @@ export const RealtimeSync = React.memo(function RealtimeSync() {
           }
         )
       }
-      refreshingHearth = drainHearthRefreshes().finally(() => {
-        refreshingHearth = null
-        if (
-          !closed &&
-          !hearthRefreshRetry &&
-          pendingHearthRefreshes.size > 0
-        ) {
-          void requestHearthRefresh([])
+      refreshingHearth = ensuringPromise(
+        drainHearthRefreshes,
+        () => {
+          refreshingHearth = null
+          if (
+            !closed &&
+            !hearthRefreshRetry &&
+            pendingHearthRefreshes.size > 0
+          ) {
+            void requestHearthRefresh([])
+          }
         }
-      })
+      )
       return refreshingHearth
     }
 
@@ -179,75 +184,85 @@ export const RealtimeSync = React.memo(function RealtimeSync() {
       connectionRefetchRequested ||= refetchConnection
       hearthRefetchRequested ||= refetchHearth
       if (resetting) return
-      resetting = (async () => {
-        while (!closed && resetRequested) {
-          resetRequested = false
-          const shouldRefetchConnection = connectionRefetchRequested
-          const shouldRefetchHearth = hearthRefetchRequested
-          connectionRefetchRequested = false
-          hearthRefetchRequested = false
-          activeRecoveryConnection = shouldRefetchConnection
-          activeRecoveryHearth = shouldRefetchHearth
-          const snapshotEpoch = activeEpoch
-          if (closed) return
-          const snapshot = reconcilePendingPowerSnapshot(
-            await getFreshRelaySnapshot()
-          )
-          if (snapshotEpoch !== activeEpoch) continue
-          if (!applyRecoverySnapshot(snapshot)) return
-          recoveryFailures = 0
-          if (shouldRefetchConnection) {
-            await queryClient.refetchQueries({
-              exact: true,
-              queryKey: relayConnectionQueryOptions(queryClient).queryKey,
-            })
-          }
-          if (shouldRefetchHearth) {
-            await requestHearthRefresh(hearthRealtimeTopics)
-          }
-          activeRecoveryConnection = false
-          activeRecoveryHearth = false
-          // A newer reset supersedes events captured while this snapshot was
-          // loading. Otherwise replay later deltas after the authoritative
-          // snapshot so a slow response cannot overwrite fresh state.
-          if (resetRequested) continue
-          const replay = bufferedEvents.filter(
-            (event) =>
-              event.epoch === activeEpoch && event.sequence > recoveryFloor
-          )
-          bufferedEvents = []
-          for (const event of replay) {
-            applyRealtimeEvent({
-              event,
-              instances,
-              queryClient,
-              refreshTopics: requestHearthRefresh,
-            })
-          }
-        }
-      })()
-        .catch((cause) => {
-          if (!closed) {
-            connectionRefetchRequested ||= activeRecoveryConnection
-            hearthRefetchRequested ||= activeRecoveryHearth
-            activeRecoveryConnection = false
-            activeRecoveryHearth = false
-            console.warn("[Kiln realtime] Snapshot recovery failed", cause)
-            const delay = Math.min(
-              1_000 * 2 ** recoveryFailures,
-              maximumRecoveryRetryDelayMs
-            )
-            recoveryFailures += 1
-            recoveryRetry = setTimeout(() => {
-              recoveryRetry = null
-              requestReset(false)
-            }, delay)
-          }
-        })
-        .finally(() => {
+      resetting = ensuringPromise(
+        () =>
+          recoverPromise(
+            async () => {
+              while (!closed && resetRequested) {
+                resetRequested = false
+                const shouldRefetchConnection = connectionRefetchRequested
+                const shouldRefetchHearth = hearthRefetchRequested
+                connectionRefetchRequested = false
+                hearthRefetchRequested = false
+                activeRecoveryConnection = shouldRefetchConnection
+                activeRecoveryHearth = shouldRefetchHearth
+                const snapshotEpoch = activeEpoch
+                if (closed) return
+                const snapshot = reconcilePendingPowerSnapshot(
+                  await getFreshRelaySnapshot()
+                )
+                if (snapshotEpoch !== activeEpoch) continue
+                if (!applyRecoverySnapshot(snapshot)) return
+                recoveryFailures = 0
+                if (shouldRefetchConnection) {
+                  await queryClient.refetchQueries({
+                    exact: true,
+                    queryKey: relayConnectionQueryOptions(queryClient).queryKey,
+                  })
+                }
+                if (shouldRefetchHearth) {
+                  await requestHearthRefresh(hearthRealtimeTopics)
+                }
+                activeRecoveryConnection = false
+                activeRecoveryHearth = false
+                // A newer reset supersedes events captured while this snapshot
+                // was loading. Otherwise replay later deltas after the
+                // authoritative snapshot so a slow response cannot overwrite
+                // fresh state.
+                if (resetRequested) continue
+                const replay = bufferedEvents.filter(
+                  (event) =>
+                    event.epoch === activeEpoch &&
+                    event.sequence > recoveryFloor
+                )
+                bufferedEvents = []
+                for (const event of replay) {
+                  applyRealtimeEvent({
+                    event,
+                    instances,
+                    queryClient,
+                    refreshTopics: requestHearthRefresh,
+                  })
+                }
+              }
+            },
+            (cause) => {
+              if (!closed) {
+                connectionRefetchRequested ||= activeRecoveryConnection
+                hearthRefetchRequested ||= activeRecoveryHearth
+                activeRecoveryConnection = false
+                activeRecoveryHearth = false
+                console.warn(
+                  "[Kiln realtime] Snapshot recovery failed",
+                  cause
+                )
+                const delay = Math.min(
+                  1_000 * 2 ** recoveryFailures,
+                  maximumRecoveryRetryDelayMs
+                )
+                recoveryFailures += 1
+                recoveryRetry = setTimeout(() => {
+                  recoveryRetry = null
+                  requestReset(false)
+                }, delay)
+              }
+            }
+          ),
+        () => {
           resetting = null
           if (!closed && resetRequested) requestReset(false)
-        })
+        }
+      )
     }
 
     const handleEvent = (message: Event) => {
@@ -314,19 +329,23 @@ export const RealtimeSync = React.memo(function RealtimeSync() {
     }
     const handleError = () => {
       if (closed || checkingAuthentication) return
-      checkingAuthentication = queryClient
-        .fetchQuery({ ...authStateQueryOptions(), staleTime: 0 })
-        .then((auth) => {
-          if (auth.user || closed) return
-          closed = true
-          source.close()
-        })
-        .catch(() => {
-          // Transient network failures should keep EventSource's native retry.
-        })
-        .finally(() => {
+      checkingAuthentication = ensuringPromise(
+        () =>
+          recoverPromise(
+            () =>
+              queryClient
+                .fetchQuery({ ...authStateQueryOptions(), staleTime: 0 })
+                .then((auth) => {
+                  if (auth.user || closed) return
+                  closed = true
+                  source.close()
+                }),
+            () => undefined
+          ),
+        () => {
           checkingAuthentication = null
-        })
+        }
+      )
     }
     source.addEventListener("kiln", handleEvent)
     source.addEventListener("error", handleError)

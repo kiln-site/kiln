@@ -26,6 +26,7 @@ import {
   relayFileEntryQueryOptions,
   relayFileQueryOptions,
 } from "@/lib/query-options"
+import { forkPromise } from "@/effect/promise"
 import type { InstanceWorkspaceInstance } from "@/lib/relay-selectors"
 import { warmSyntaxCodeEditorModule } from "@/lib/syntax-editor-module-preload"
 import { recordRelayFileView } from "@/server/relay"
@@ -256,13 +257,15 @@ export function FileViewer({
     const nextKey = `${fileQuery.data.path}:${fileQuery.data.modifiedAt}`
     if (activitySyncKey.current === nextKey) return
     activitySyncKey.current = nextKey
-    void recordRelayFileView({
-      data: {
-        instanceId: instance.id,
-        path: fileQuery.data.path,
-        relayId: instance.relayId,
-      },
-    }).catch(() => undefined)
+    forkPromise(() =>
+      recordRelayFileView({
+        data: {
+          instanceId: instance.id,
+          path: fileQuery.data.path,
+          relayId: instance.relayId,
+        },
+      })
+    )
   }, [fileQuery.data, instance.id, instance.relayId, selectedPath])
 
   React.useEffect(() => {

@@ -1,4 +1,5 @@
 import type { QueryClient } from "@tanstack/react-query"
+import { Result } from "effect"
 
 import type { RelayInstancesCollection } from "@/lib/collections/relay-instances"
 import { refreshHearthRealtimeTopics } from "@/lib/hearth-realtime"
@@ -196,9 +197,5 @@ export function resetRealtimeEpoch(input: {
 
 export function parseRealtimeEventData(data: unknown): unknown {
   if (typeof data !== "string") return null
-  try {
-    return JSON.parse(data)
-  } catch {
-    return null
-  }
+  return Result.getOrNull(Result.try(() => JSON.parse(data) as unknown))
 }

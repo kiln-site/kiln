@@ -6,6 +6,7 @@ import {
 } from "@tanstack/react-query"
 
 import { InstanceWorkspace } from "@/components/instance-workspace"
+import { ensuringPromise, recoverPromise } from "@/effect/promise"
 import { canAccessInstancePermission } from "@/lib/navigation-destinations"
 import {
   accessCapabilitiesQueryOptions,
@@ -124,19 +125,20 @@ function ProvisioningReconciler({
     const interval = setInterval(() => {
       if (inFlight || performance.now() < nextAttemptAt) return
       inFlight = true
-      void getFreshRelaySnapshot()
-        .then((snapshot) => {
-          if (closed) return
-          const updated = snapshot.instances.find(
-            (item) => item.id === instanceId && item.relayId === relayId
-          )
-          if (updated) applyProvisioningInstance(queryClient, updated)
-        })
-        .catch(() => {
-          // The realtime stream remains authoritative. This bounded backoff is
-          // only a safety net when a short provisioning transition was missed.
-        })
-        .finally(() => {
+      void ensuringPromise(
+        () =>
+          recoverPromise(
+            () =>
+              getFreshRelaySnapshot().then((snapshot) => {
+                if (closed) return
+                const updated = snapshot.instances.find(
+                  (item) => item.id === instanceId && item.relayId === relayId
+                )
+                if (updated) applyProvisioningInstance(queryClient, updated)
+              }),
+            () => undefined
+          ),
+        () => {
           inFlight = false
           attempt += 1
           nextAttemptAt =
@@ -145,7 +147,8 @@ function ProvisioningReconciler({
               initialProvisioningReconciliationDelayMs * 2 ** attempt,
               maximumProvisioningReconciliationDelayMs
             )
-        })
+        }
+      )
     }, initialProvisioningReconciliationDelayMs)
 
     return () => {

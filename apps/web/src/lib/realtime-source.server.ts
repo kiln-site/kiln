@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto"
 
 import type { RelayInstance, RelaySnapshotDelta } from "@workspace/contracts"
+import { Result } from "effect"
 
 import type {
   HearthRealtimeAudience,
@@ -65,11 +66,13 @@ export function publishRealtimeChange(
 ): RealtimeSourceEvent {
   const event = { ...change, epoch: state.epoch, sequence: ++state.sequence }
   for (const listener of state.listeners) {
-    try {
-      listener(event)
-    } catch (cause) {
-      console.error("[Kiln realtime] Event listener failed", cause)
-    }
+    Result.try(() => listener(event)).pipe(
+      Result.match({
+        onFailure: (cause) =>
+          console.error("[Kiln realtime] Event listener failed", cause),
+        onSuccess: () => undefined,
+      })
+    )
   }
   return event
 }
