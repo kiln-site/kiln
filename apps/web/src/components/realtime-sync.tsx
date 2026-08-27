@@ -12,6 +12,8 @@ import {
   type RelayConnection,
   relayConnectionQueryOptions,
 } from "@/lib/query-options"
+import { refreshHearthRealtimeTopics } from "@/lib/hearth-realtime"
+import { hearthRealtimeTopics } from "@/lib/hearth-realtime-topics"
 import { reconcilePendingPowerSnapshot } from "@/lib/instance-power-state"
 import {
   realtimeClientEventSchema,
@@ -35,12 +37,15 @@ export const RealtimeSync = React.memo(function RealtimeSync() {
     let closed = false
     let resetRequested = false
     let connectionRefetchRequested = false
+    let hearthRefetchRequested = false
     let resetting: Promise<void> | null = null
     let recoveryRetry: ReturnType<typeof setTimeout> | null = null
     let recoveryFailures = 0
     let activeEpoch: string | null = null
     let recoveryFloor = 0
     let checkingAuthentication: Promise<void> | null = null
+    let refreshingHearth: Promise<void> | null = null
+    const pendingHearthTopics = new Set<(typeof hearthRealtimeTopics)[number]>()
     let bufferedEvents: Array<
       Exclude<RealtimeClientEvent, { type: "relay.invalidate" | "reset" }>
     > = []
@@ -78,7 +83,39 @@ export const RealtimeSync = React.memo(function RealtimeSync() {
       return true
     }
 
-    const requestReset = (refetchConnection: boolean, sequence = 0) => {
+    const requestHearthRefresh = (
+      topics: ReadonlyArray<(typeof hearthRealtimeTopics)[number]>
+    ): Promise<void> => {
+      for (const topic of topics) pendingHearthTopics.add(topic)
+      if (refreshingHearth) return refreshingHearth
+      const drainHearthRefreshes = (): Promise<void> => {
+        if (closed || pendingHearthTopics.size === 0) return Promise.resolve()
+        const next = [...pendingHearthTopics]
+        pendingHearthTopics.clear()
+        return refreshHearthRealtimeTopics(queryClient, next).then(
+          drainHearthRefreshes
+        )
+      }
+      refreshingHearth = drainHearthRefreshes()
+        .catch((cause) => {
+          if (!closed) {
+            console.warn("[Kiln realtime] Hearth refresh failed", cause)
+          }
+        })
+        .finally(() => {
+          refreshingHearth = null
+          if (!closed && pendingHearthTopics.size > 0) {
+            void requestHearthRefresh([])
+          }
+        })
+      return refreshingHearth
+    }
+
+    const requestReset = (
+      refetchConnection: boolean,
+      sequence = 0,
+      refetchHearth = false
+    ) => {
       if (recoveryRetry) {
         clearTimeout(recoveryRetry)
         recoveryRetry = null
@@ -86,12 +123,15 @@ export const RealtimeSync = React.memo(function RealtimeSync() {
       recoveryFloor = Math.max(recoveryFloor, sequence)
       resetRequested = true
       connectionRefetchRequested ||= refetchConnection
+      hearthRefetchRequested ||= refetchHearth
       if (resetting) return
       resetting = (async () => {
         while (!closed && resetRequested) {
           resetRequested = false
           const shouldRefetchConnection = connectionRefetchRequested
+          const shouldRefetchHearth = hearthRefetchRequested
           connectionRefetchRequested = false
+          hearthRefetchRequested = false
           const snapshotEpoch = activeEpoch
           if (closed) return
           const snapshot = reconcilePendingPowerSnapshot(
@@ -106,6 +146,9 @@ export const RealtimeSync = React.memo(function RealtimeSync() {
               queryKey: relayConnectionQueryOptions(queryClient).queryKey,
             })
           }
+          if (shouldRefetchHearth) {
+            await requestHearthRefresh(hearthRealtimeTopics)
+          }
           // A newer reset supersedes events captured while this snapshot was
           // loading. Otherwise replay later deltas after the authoritative
           // snapshot so a slow response cannot overwrite fresh state.
@@ -116,7 +159,12 @@ export const RealtimeSync = React.memo(function RealtimeSync() {
           )
           bufferedEvents = []
           for (const event of replay) {
-            applyRealtimeEvent({ event, instances, queryClient })
+            applyRealtimeEvent({
+              event,
+              instances,
+              queryClient,
+              refreshTopics: requestHearthRefresh,
+            })
           }
         }
       })()
@@ -146,10 +194,11 @@ export const RealtimeSync = React.memo(function RealtimeSync() {
         parseEventData(message.data)
       )
       if (!parsed.success) {
-        requestReset(false)
+        requestReset(false, 0, true)
         return
       }
       const event = parsed.data
+      const initialEpoch = activeEpoch === null
       const epoch = resetRealtimeEpoch({
         currentEpoch: activeEpoch,
         nextEpoch: event.epoch,
@@ -162,6 +211,7 @@ export const RealtimeSync = React.memo(function RealtimeSync() {
         recoveryFailures = 0
         resetRequested = false
         connectionRefetchRequested = false
+        hearthRefetchRequested = false
         bufferedEvents = []
         rememberedEvents.clear()
         rememberedEventOrder.length = 0
@@ -170,7 +220,11 @@ export const RealtimeSync = React.memo(function RealtimeSync() {
         if (event.clear) {
           applyRecoverySnapshot({ instances: [], nodes: [] })
         }
-        requestReset(false, event.sequence)
+        requestReset(
+          false,
+          event.sequence,
+          event.hearth || (epochChanged && !initialEpoch)
+        )
         return
       }
       if (event.type === "relay.invalidate") {
@@ -182,14 +236,19 @@ export const RealtimeSync = React.memo(function RealtimeSync() {
       if (epochChanged || resetting || resetRequested) {
         if (bufferedEvents.length >= maximumBufferedEvents) {
           bufferedEvents = []
-          requestReset(false, event.sequence)
+          requestReset(false, event.sequence, true)
           return
         }
         bufferedEvents.push(event)
-        if (epochChanged) requestReset(false)
+        if (epochChanged) requestReset(false, 0, !initialEpoch)
         return
       }
-      applyRealtimeEvent({ event, instances, queryClient })
+      applyRealtimeEvent({
+        event,
+        instances,
+        queryClient,
+        refreshTopics: requestHearthRefresh,
+      })
     }
     const handleError = () => {
       if (closed || checkingAuthentication) return
@@ -225,8 +284,18 @@ export function applyRealtimeEvent(input: {
   event: Exclude<RealtimeClientEvent, { type: "relay.invalidate" | "reset" }>
   instances: RelayInstancesCollection
   queryClient: ReturnType<typeof useQueryClient>
+  refreshTopics?: (
+    topics: ReadonlyArray<(typeof hearthRealtimeTopics)[number]>
+  ) => Promise<void>
 }): void {
-  const { event, instances, queryClient } = input
+  const { event, instances, queryClient, refreshTopics } = input
+  if (event.type === "collections.invalidate") {
+    void (
+      refreshTopics?.(event.topics) ??
+      refreshHearthRealtimeTopics(queryClient, event.topics)
+    )
+    return
+  }
   queryClient.setQueryData<RelayFleetSnapshot>(
     queryKeys.relay.snapshot,
     (snapshot) => applyRealtimeSnapshotEvent(snapshot, event)
@@ -268,6 +337,7 @@ export function applyRealtimeSnapshotEvent(
   event: Exclude<RealtimeClientEvent, { type: "relay.invalidate" | "reset" }>
 ): RelayFleetSnapshot | undefined {
   if (!snapshot) return snapshot
+  if (event.type === "collections.invalidate") return snapshot
   if (event.type === "nodes.delta") {
     const nodes = new Map(event.nodes.map((node) => [node.relayId, node]))
     const nextNodes = snapshot.nodes.map((node) => {

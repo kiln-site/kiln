@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto"
 
 import { createServerFn } from "@tanstack/react-start"
 import { Data, Effect, Result } from "effect"
-import type { RowDataPacket } from "mysql2/promise"
+import type { ResultSetHeader, RowDataPacket } from "mysql2/promise"
 import { z } from "zod"
 
 import {
@@ -33,6 +33,7 @@ import { Database, type DatabaseTransaction } from "@/effect/database"
 import { forkAppEffect, runAppEffect } from "@/effect/runtime"
 import { databasePool } from "@/lib/database"
 import { databaseTable } from "@/lib/database-config"
+import { publishRealtimeChange } from "@/lib/realtime-source.server"
 import { kilnInstallationId } from "@/lib/environment"
 import {
   hasPlatformPermission,
@@ -109,6 +110,10 @@ interface ScheduleRunRow extends RowDataPacket {
   relay_id: string
   run_json: unknown
   schedule_id: string
+}
+
+interface StoredScheduleIdRow extends RowDataPacket {
+  id: string
 }
 
 interface ScheduleTombstoneRow extends RowDataPacket {
@@ -230,9 +235,13 @@ export const createSchedule = createServerFn({ method: "POST" })
     await requireScheduleBackupDestinations(definition.actions, user)
     await saveNewSchedule(definition, user.id)
     await deploySchedule(definition, user.id)
-    return (await loadSchedules()).find(
+    const created = (await loadSchedules()).find(
       (schedule) => schedule.id === definition.id
     )
+    publishScheduleCollectionChange(
+      definition.targets.map((target) => target.relayId)
+    )
+    return created
   })
 
 export const updateSchedule = createServerFn({ method: "POST" })
@@ -289,9 +298,11 @@ export const updateSchedule = createServerFn({ method: "POST" })
       [...previousRelayIds].filter((relayId) => !nextRelayIds.has(relayId)),
       user.id
     )
-    return (await loadSchedules()).find(
+    const updated = (await loadSchedules()).find(
       (schedule) => schedule.id === definition.id
     )
+    publishScheduleCollectionChange([...previousRelayIds, ...nextRelayIds])
+    return updated
   })
 
 export const deleteSchedule = createServerFn({ method: "POST" })
@@ -322,6 +333,9 @@ export const deleteSchedule = createServerFn({ method: "POST" })
       revision,
       [...new Set(schedule.targets.map((target) => target.relayId))],
       user.id
+    )
+    publishScheduleCollectionChange(
+      schedule.targets.map((target) => target.relayId)
     )
     return { deleted: true, id: schedule.id }
   })
@@ -1081,8 +1095,23 @@ async function importRelayScheduleOverview(
   relayId: string,
   overview: z.infer<typeof relayScheduleOverviewSchema>
 ) {
+  const [storedDeploymentIds, storedRunIds] = await Promise.all([
+    loadStoredScheduleIds(
+      "schedule_deployment",
+      "schedule_id",
+      relayId,
+      overview.deployments.map((deployment) => deployment.scheduleId)
+    ),
+    loadStoredScheduleIds(
+      "schedule_run",
+      "id",
+      relayId,
+      overview.runs.map((run) => run.id)
+    ),
+  ])
+  let changed = false
   for (const deployment of overview.deployments) {
-    await databasePool.execute(
+    const [result] = await databasePool.execute<ResultSetHeader>(
       `INSERT INTO ${databaseTable("schedule_deployment")}
          (schedule_id, relay_id, desired_revision, acknowledged_revision,
           status, next_run_at, last_error)
@@ -1105,12 +1134,46 @@ async function importRelayScheduleOverview(
         deployment.nextRunAt,
       ]
     )
+    changed ||=
+      !storedDeploymentIds.has(deployment.scheduleId) || result.affectedRows > 1
   }
-  for (const run of overview.runs) await importScheduleRun(relayId, run)
+  for (const run of overview.runs) {
+    const result = await importScheduleRun(relayId, run)
+    changed ||= !storedRunIds.has(run.id) || result.affectedRows > 1
+  }
+  if (changed) publishScheduleCollectionChange([relayId])
+}
+
+async function loadStoredScheduleIds(
+  table: "schedule_deployment" | "schedule_run",
+  idColumn: "id" | "schedule_id",
+  relayId: string,
+  ids: ReadonlyArray<string>
+): Promise<Set<string>> {
+  if (ids.length === 0) return new Set()
+  const placeholders = ids.map(() => "?").join(", ")
+  const [rows] = await databasePool.query<StoredScheduleIdRow[]>(
+    `SELECT ${idColumn} AS id
+       FROM ${databaseTable(table)}
+      WHERE relay_id = ?
+        AND ${idColumn} IN (${placeholders})`,
+    [relayId, ...ids]
+  )
+  return new Set(rows.map((row) => row.id))
+}
+
+function publishScheduleCollectionChange(relayIds: Iterable<string>): void {
+  const uniqueRelayIds = [...new Set(relayIds)]
+  if (uniqueRelayIds.length === 0) return
+  publishRealtimeChange({
+    audience: { kind: "relays", relayIds: uniqueRelayIds },
+    topics: ["schedules"],
+    type: "hearth.invalidate",
+  })
 }
 
 async function importScheduleRun(relayId: string, run: ScheduleRun) {
-  await databasePool.execute(
+  const [result] = await databasePool.execute<ResultSetHeader>(
     `INSERT INTO ${databaseTable("schedule_run")}
        (id, schedule_id, relay_id, scheduled_at, status, run_json)
      VALUES (?, ?, ?, FROM_UNIXTIME(? / 1000), ?, ?)
@@ -1125,6 +1188,7 @@ async function importScheduleRun(relayId: string, run: ScheduleRun) {
       JSON.stringify(run),
     ]
   )
+  return result
 }
 
 async function upsertDeployment(

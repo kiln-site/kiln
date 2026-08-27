@@ -41,6 +41,7 @@ import { databasePool } from "@/lib/database"
 import { databaseTable } from "@/lib/database-config"
 import { betterAuthSecrets, kilnPublicUrl } from "@/lib/environment"
 import { syncInstanceRegistry } from "@/lib/instance-registry"
+import { publishRealtimeChange } from "@/lib/realtime-source.server"
 
 import { decryptWithKeyring, encryptWithKeyring } from "../../keyring.mjs"
 
@@ -441,7 +442,9 @@ export async function renamePersistedRelay(
     `UPDATE ${databaseTable("relay")} SET name = ? WHERE id = ?`,
     [renamed.name, relay.id]
   )
-  return requiredPersistedRelay(relay.id)
+  const updated = await requiredPersistedRelay(relay.id)
+  publishRelayCollectionChange()
+  return updated
 }
 
 export async function initializeRelayFromEnvironment(): Promise<PersistedRelay | null> {
@@ -842,14 +845,16 @@ export async function updatePersistedRelay(input: {
   return checkPersistedRelay(input.id)
 }
 
-export function setPersistedRelayEnabled(
+export async function setPersistedRelayEnabled(
   id: string,
   enabled: boolean
 ): Promise<PersistedRelay> {
-  return runAppEffect(
+  const relay = await runAppEffect(
     "relays.setEnabled",
     setPersistedRelayEnabledEffect(id, enabled)
   )
+  publishRelayCollectionChange()
+  return relay
 }
 
 export const setPersistedRelayEnabledEffect = Effect.fn("relays.setEnabled")(
@@ -916,12 +921,16 @@ export async function deletePersistedRelay(id: string): Promise<void> {
   await runAppEffect("relay.deletePersisted", deletePersistedRelayEffect(id))
   const { closeRelayConnection } = await import("@/lib/relay-connection")
   closeRelayConnection(id)
+  publishRelayCollectionChange()
 }
 
 export async function checkPersistedRelay(id: string): Promise<PersistedRelay> {
   const relay = (await listPersistedRelays()).find((item) => item.id === id)
   if (!relay) throw new Error("Relay not found")
-  if (!relay.enabled) return relay
+  if (!relay.enabled) {
+    publishRelayCollectionChange()
+    return relay
+  }
 
   let error: string | null = null
   await Effect.runPromise(
@@ -961,7 +970,16 @@ export async function checkPersistedRelay(id: string): Promise<PersistedRelay> {
   )
   const checked = (await listPersistedRelays()).find((item) => item.id === id)
   if (!checked) throw new Error("Relay not found")
+  publishRelayCollectionChange()
   return checked
+}
+
+function publishRelayCollectionChange(): void {
+  publishRealtimeChange({
+    audience: { kind: "relay-managers" },
+    topics: ["relays"],
+    type: "hearth.invalidate",
+  })
 }
 
 export async function resolveDefaultRelay(): Promise<PersistedRelay | null> {

@@ -3,10 +3,12 @@ import { accountSessionActiveEffect } from "@/effect/account-sessions"
 import { runAppEffect } from "@/effect/runtime"
 import {
   isPlatformAdmin,
+  isRelayCreator,
   listUserGrants,
   visibleRelaysForUser,
 } from "@/lib/access-control"
 import { roleHasPermission } from "@/lib/permissions"
+import { hearthAudienceAllows } from "@/lib/hearth-realtime-topics"
 import { relayConnectionState } from "@/lib/relay-connection"
 import {
   allocateRealtimeCursor,
@@ -32,6 +34,7 @@ const encoder = new TextEncoder()
 type RealtimeCursor = Pick<RealtimeSourceEvent, "epoch" | "sequence">
 
 interface RealtimeAccessPolicy {
+  canManageRelays: boolean
   isPlatformAdmin: boolean
   readableInstances: Map<string, Set<string>>
   readableRelays: Set<string>
@@ -51,7 +54,9 @@ export async function openAuthorizedRealtimeStream(input: {
   let sessionValidation: ReturnType<typeof setInterval> | null = null
   let validatingSession: Promise<void> | null = null
   let queuedEvents = 0
-  let pendingRecovery: (RealtimeCursor & { clear: boolean }) | null = null
+  let pendingRecovery:
+    | (RealtimeCursor & { clear: boolean; hearth: boolean })
+    | null = null
   let processing = Promise.resolve()
   let unsubscribe: () => void = () => undefined
 
@@ -71,6 +76,7 @@ export async function openAuthorizedRealtimeStream(input: {
         encodeServerEvent({
           clear: pendingRecovery.clear,
           epoch: pendingRecovery.epoch,
+          hearth: pendingRecovery.hearth,
           sequence: pendingRecovery.sequence,
           type: "reset",
         }),
@@ -82,25 +88,31 @@ export async function openAuthorizedRealtimeStream(input: {
   }
   const enqueueReset = (
     cursor: RealtimeCursor = allocateRealtimeCursor(),
-    clear = false
+    clear = false,
+    hearth = false
   ) => {
     pendingRecovery =
       pendingRecovery?.epoch === cursor.epoch
         ? {
             clear: pendingRecovery.clear || clear,
             epoch: cursor.epoch,
+            hearth: pendingRecovery.hearth || hearth,
             sequence: Math.max(pendingRecovery.sequence, cursor.sequence),
           }
-        : { ...cursor, clear }
+        : { ...cursor, clear, hearth }
     flushRecovery()
   }
   const enqueue = (event: RealtimeClientEvent) => {
     if (pendingRecovery) {
-      enqueueReset(event, pendingRecovery.clear)
+      enqueueReset(
+        event,
+        pendingRecovery.clear,
+        pendingRecovery.hearth || event.type === "collections.invalidate"
+      )
       return
     }
     if (!tryEnqueue(encodeServerEvent(event))) {
-      enqueueReset(event)
+      enqueueReset(event, false, event.type === "collections.invalidate")
     }
   }
 
@@ -115,7 +127,7 @@ export async function openAuthorizedRealtimeStream(input: {
       // the database is unavailable, closing the stream prevents later Relay
       // events from being projected through the stale policy; EventSource will
       // reconnect and rebuild it from scratch.
-      enqueueReset(event, true)
+      enqueueReset(event, true, true)
       try {
         policy = await loadRealtimeAccessPolicy(input.user)
       } catch (cause) {
@@ -127,6 +139,29 @@ export async function openAuthorizedRealtimeStream(input: {
 
     if (event.type === "session.revoked") return
 
+    if (event.type === "hearth.invalidate") {
+      if (
+        !hearthAudienceAllows(
+          {
+            canManageRelays: policy.canManageRelays,
+            isPlatformAdmin: policy.isPlatformAdmin,
+            readableRelays: policy.readableRelays,
+            userId: input.user.id,
+          },
+          event.audience
+        )
+      ) {
+        return
+      }
+      enqueue({
+        epoch: event.epoch,
+        sequence: event.sequence,
+        topics: event.topics,
+        type: "collections.invalidate",
+      })
+      return
+    }
+
     const relay = policy.relays.get(event.relayId)
     if (!relay || !policy.readableRelays.has(relay.id)) return
 
@@ -135,6 +170,12 @@ export async function openAuthorizedRealtimeStream(input: {
         epoch: event.epoch,
         sequence: event.sequence,
         type: "relay.invalidate",
+      })
+      enqueue({
+        epoch: event.epoch,
+        sequence: event.sequence,
+        topics: ["relays"],
+        type: "collections.invalidate",
       })
       return
     }
@@ -204,12 +245,12 @@ export async function openAuthorizedRealtimeStream(input: {
     })
     if (delivery === "ignore") return
     if (delivery === "close") {
-      if (event.type === "access.changed") enqueueReset(event, true)
+      if (event.type === "access.changed") enqueueReset(event, true, true)
       finish(true)
       return
     }
     if (delivery === "normal" && queuedEvents >= maximumProcessingBacklog) {
-      enqueueReset(event)
+      enqueueReset(event, false, event.type === "hearth.invalidate")
       return
     }
     queuedEvents += 1
@@ -219,7 +260,7 @@ export async function openAuthorizedRealtimeStream(input: {
       })
       .catch((cause) => {
         console.error("[Kiln realtime] Could not project event", cause)
-        enqueueReset(event)
+        enqueueReset(event, false, event.type === "hearth.invalidate")
       })
       .finally(() => {
         queuedEvents -= 1
@@ -275,7 +316,10 @@ export async function openAuthorizedRealtimeStream(input: {
     {
       start(nextController) {
         controller = nextController
-        enqueueReset()
+        // The stream is intentionally not replayed. Refresh active Hearth
+        // collections on every connection so a mutation that happened while
+        // this tab was disconnected cannot leave an Infinity-stale domain.
+        enqueueReset(undefined, false, true)
         heartbeat = setInterval(() => {
           if (!closed) tryEnqueue(encoder.encode(": heartbeat\n\n"))
         }, heartbeatIntervalMs)
@@ -321,6 +365,7 @@ async function loadRealtimeAccessPolicy(
     ids.add(grant.resourceId)
   }
   return {
+    canManageRelays: isPlatformAdmin(user) || isRelayCreator(user),
     isPlatformAdmin: isPlatformAdmin(user),
     readableInstances,
     readableRelays,

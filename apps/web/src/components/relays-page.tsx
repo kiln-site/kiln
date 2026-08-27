@@ -1,4 +1,5 @@
 import * as React from "react"
+import { useLiveQuery } from "@tanstack/react-db"
 import {
   queryOptions,
   useMutation,
@@ -71,6 +72,7 @@ import {
 } from "@/components/workspace-data-table"
 import type { WorkspaceTableSearchStore } from "@/components/workspace-data-table"
 import type { RelayFleetSnapshot } from "@/lib/relay-fleet"
+import { relaysCollectionOptions } from "@/lib/collections/relays"
 import { pairingFeedbackFrom } from "@/lib/relay-pairing-errors"
 import { canRefetchSystemUpdateOverview } from "@/lib/system-update-presence"
 import {
@@ -433,9 +435,16 @@ const FilteredRelayTable = React.memo(function FilteredRelayTable({
   onEdit: (relayId: string) => void
   onOpenUpdates: (relayId?: string) => void
 }) {
-  const { data: relays } = useSuspenseQuery({
-    ...relaysQueryOptions(),
-    select: selectRelayTableItems,
+  const { data: relays } = useLiveQuery({
+    query: (query) =>
+      query.from({ relay: relaysCollectionOptions }).select(({ relay }) => ({
+        hostname: relay.hostname,
+        id: relay.id,
+        name: relay.name,
+        nodeArch: relay.nodeArch,
+        nodePlatform: relay.nodePlatform,
+        nodeVersion: relay.nodeVersion,
+      })),
   })
   const { data: updateSummary = noRelayUpdateSummary } = useQuery({
     ...updateOverviewQueryOptions(),
@@ -1919,19 +1928,6 @@ function Field({
       {children}
     </div>
   )
-}
-
-function selectRelayTableItems(
-  relays: Array<PersistedRelay>
-): Array<RelayTableItem> {
-  return relays.map((relay) => ({
-    hostname: relay.hostname,
-    id: relay.id,
-    name: relay.name,
-    nodeArch: relay.nodeArch,
-    nodePlatform: relay.nodePlatform,
-    nodeVersion: relay.nodeVersion,
-  }))
 }
 
 function selectHasEnabledRelay(relays: Array<PersistedRelay>): boolean {

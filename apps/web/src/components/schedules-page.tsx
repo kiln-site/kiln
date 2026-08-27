@@ -1,4 +1,5 @@
 import * as React from "react"
+import { useLiveQuery } from "@tanstack/react-db"
 import {
   useMutation,
   useQuery,
@@ -110,6 +111,11 @@ import { useScheduleScope } from "@/components/schedule-scope"
 import { forkPromise } from "@/effect/promise"
 import { scheduleBackupDestination } from "@/lib/schedule-backup-configuration"
 import {
+  removeScheduleFromCache,
+  schedulesCollectionOptions,
+  upsertScheduleCache,
+} from "@/lib/collections/schedules"
+import {
   backupStorageQueryOptions,
   queryKeys,
   relaySnapshotQueryOptions,
@@ -147,9 +153,8 @@ let relativeClockSnapshot = Date.now()
 let relativeClockTimer: ReturnType<typeof setInterval> | null = null
 
 export const SchedulesPage = React.memo(function SchedulesPage() {
-  const { data: schedules } = useSuspenseQuery({
-    ...schedulesQueryOptions(),
-    notifyOnChangeProps: ["data"],
+  const { data: schedules } = useLiveQuery({
+    query: (query) => query.from({ schedule: schedulesCollectionOptions }),
   })
   const { data: scheduleOptions } = useSuspenseQuery({
     ...scheduleOptionsQueryOptions(),
@@ -469,8 +474,8 @@ const ScheduleTableRow = React.memo(function ScheduleTableRow({
           revision: schedule.revision,
         },
       }),
-    onSuccess: async (_updated, enabled) => {
-      await queryClient.invalidateQueries({ queryKey: queryKeys.schedules.all })
+    onSuccess: (updated, enabled) => {
+      upsertScheduleCache(queryClient, updated)
       showToast({
         message: enabled ? "Schedule enabled" : "Schedule disabled",
         type: "success",
@@ -494,8 +499,8 @@ const ScheduleTableRow = React.memo(function ScheduleTableRow({
           enabled: false,
         },
       }),
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: queryKeys.schedules.all })
+    onSuccess: (created) => {
+      upsertScheduleCache(queryClient, created)
       showToast({ message: "Schedule duplicated", type: "success" })
     },
     onError: (cause) =>
@@ -827,9 +832,8 @@ function EmptyScheduleTable({
 }
 
 export const ScheduleHistoryPage = React.memo(function ScheduleHistoryPage() {
-  const { data: schedules } = useSuspenseQuery({
-    ...schedulesQueryOptions(),
-    notifyOnChangeProps: ["data"],
+  const { data: schedules } = useLiveQuery({
+    query: (query) => query.from({ schedule: schedulesCollectionOptions }),
   })
   const search = useSearch({ from: "/_app/automations" })
   const navigate = useNavigate({ from: "/automations/history" })
@@ -1568,8 +1572,8 @@ function ScheduleEditorDialog({
           })
         : createSchedule({ data })
     },
-    onSuccess: async (schedule) => {
-      await queryClient.invalidateQueries({ queryKey: queryKeys.schedules.all })
+    onSuccess: (schedule) => {
+      upsertScheduleCache(queryClient, schedule)
       showToast({
         message: existing ? "Schedule updated" : "Schedule created",
         type: "success",
@@ -2832,8 +2836,8 @@ function DeleteScheduleDialog({
       schedule
         ? deleteSchedule({ data: { id: schedule.id } })
         : Promise.resolve(null),
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: queryKeys.schedules.all })
+    onSuccess: () => {
+      if (schedule) removeScheduleFromCache(queryClient, schedule.id)
       showToast({ message: "Schedule deleted", type: "success" })
       onClose()
     },

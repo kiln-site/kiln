@@ -5,6 +5,8 @@ import {
 } from "@workspace/contracts"
 import { z } from "zod"
 
+import { hearthRealtimeTopicSchema } from "@/lib/hearth-realtime-topics"
+
 export const fleetInstanceSchema = relayInstanceSchema.extend({
   relayId: relayIdSchema,
   relayName: z.string().min(1),
@@ -26,7 +28,12 @@ const sequencedEventSchema = z.object({
 export const realtimeClientEventSchema = z.discriminatedUnion("type", [
   sequencedEventSchema.extend({
     clear: z.boolean(),
+    hearth: z.boolean(),
     type: z.literal("reset"),
+  }),
+  sequencedEventSchema.extend({
+    topics: z.array(hearthRealtimeTopicSchema).min(1).max(8),
+    type: z.literal("collections.invalidate"),
   }),
   sequencedEventSchema.extend({
     deleted: z.array(

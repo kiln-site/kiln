@@ -69,6 +69,18 @@ describe("realtime snapshot projection", () => {
     expect(result?.nodes).toEqual([updatedNode])
   })
 
+  it("does not rebuild Relay state for a Hearth collection event", () => {
+    const current = snapshot()
+    const result = applyRealtimeSnapshotEvent(current, {
+      epoch,
+      sequence: 1,
+      topics: ["relays"],
+      type: "collections.invalidate",
+    })
+
+    expect(result).toBe(current)
+  })
+
   it("preserves Hearth's managed address for observation-only updates", () => {
     expect(
       mergeRealtimeInstance(alpha, {

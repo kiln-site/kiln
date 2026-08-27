@@ -19,7 +19,6 @@ export const relayInstancesCollectionOptions = collectionOptions(
       refetchOnReconnect: false,
       refetchOnWindowFocus: false,
       schema: fleetInstanceSchema,
-      startSync: true,
       staleTime: Infinity,
     })
 )

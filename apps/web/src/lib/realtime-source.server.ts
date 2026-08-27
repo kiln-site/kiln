@@ -2,6 +2,11 @@ import { randomUUID } from "node:crypto"
 
 import type { RelayInstance, RelaySnapshotDelta } from "@workspace/contracts"
 
+import type {
+  HearthRealtimeAudience,
+  HearthRealtimeTopic,
+} from "@/lib/hearth-realtime-topics"
+
 export type RealtimeSourceChange =
   | {
       reauthenticate: boolean
@@ -11,6 +16,11 @@ export type RealtimeSourceChange =
   | {
       sessionIds: Array<string>
       type: "session.revoked"
+    }
+  | {
+      audience: HearthRealtimeAudience
+      topics: Array<HearthRealtimeTopic>
+      type: "hearth.invalidate"
     }
   | {
       relayId: string

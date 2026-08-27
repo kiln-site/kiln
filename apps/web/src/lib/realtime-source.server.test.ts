@@ -81,4 +81,16 @@ describe("realtime source", () => {
 
     expect(classifyRealtimeEvent(event, identity)).toBe("ignore")
   })
+
+  it("keeps scoped Hearth invalidations on the bounded normal path", () => {
+    const event = {
+      audience: { kind: "relays", relayIds: ["relay-a"] },
+      epoch,
+      sequence: 1,
+      topics: ["schedules"],
+      type: "hearth.invalidate",
+    } satisfies RealtimeSourceEvent
+
+    expect(classifyRealtimeEvent(event, identity)).toBe("normal")
+  })
 })
