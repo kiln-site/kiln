@@ -4,6 +4,7 @@ import type { RelayInstance, RelaySnapshotDelta } from "@workspace/contracts"
 
 import type {
   HearthRealtimeAudience,
+  HearthRealtimeScope,
   HearthRealtimeTopic,
 } from "@/lib/hearth-realtime-topics"
 
@@ -19,6 +20,7 @@ export type RealtimeSourceChange =
     }
   | {
       audience: HearthRealtimeAudience
+      scope?: HearthRealtimeScope
       topics: Array<HearthRealtimeTopic>
       type: "hearth.invalidate"
     }

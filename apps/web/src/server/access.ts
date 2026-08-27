@@ -665,7 +665,7 @@ export const grantOrInviteAccess = createServerFn({ method: "POST" })
           userId: existingUser.id,
         })
       )
-      publishAccessPolicyChange([existingUser.id])
+      publishAccessPolicyChange([existingUser.id], false, relay.id)
       const notificationStatus = await runAppEffect(
         "access.notifyExistingUser",
         sendAccessGrantedNotification({
@@ -806,6 +806,7 @@ export const grantOrInviteAccess = createServerFn({ method: "POST" })
     } else {
       console.info(`[Kiln access] Invitation for ${data.email}: ${inviteUrl}`)
     }
+    publishAccessCollectionChange(scoped ? data.relayId : undefined)
     return {
       expiresAt: expiresAt.toISOString(),
       id,
@@ -928,7 +929,7 @@ export const acceptAccessInvitation = createServerFn({ method: "POST" })
                 `UPDATE ${databaseTable("invitation")} SET accepted_at = CURRENT_TIMESTAMP(3) WHERE id = ?`,
                 [invitation.id]
               )
-              return { accepted: true }
+              return { accepted: true, relayId: invitation.relay_id }
             }
             if (currentRole === "admin" || currentRole === "relay_creator") {
               return yield* Effect.fail(
@@ -980,13 +981,17 @@ export const acceptAccessInvitation = createServerFn({ method: "POST" })
               `UPDATE ${databaseTable("invitation")} SET accepted_at = CURRENT_TIMESTAMP(3) WHERE id = ?`,
               [invitation.id]
             )
-            return { accepted: true }
+            return { accepted: true, relayId: invitation.relay_id }
           })
         )
       })
     )
-    publishAccessPolicyChange([user.id], true)
-    return result
+    publishAccessPolicyChange(
+      [user.id],
+      true,
+      result.relayId ?? undefined
+    )
+    return { accepted: result.accepted }
   })
 
 export const removePlatformAccess = createServerFn({ method: "POST" })
@@ -1050,7 +1055,7 @@ export const updateAccessGrant = createServerFn({ method: "POST" })
           }),
       })
     )
-    publishAccessPolicyChange([initialGrant.user_id])
+    publishAccessPolicyChange([initialGrant.user_id], false, relay.id)
     return result
   })
 
@@ -1107,7 +1112,7 @@ export const removeAccessGrant = createServerFn({ method: "POST" })
           }),
       })
     )
-    publishAccessPolicyChange([initialGrant.user_id])
+    publishAccessPolicyChange([initialGrant.user_id], false, relay.id)
     return result
   })
 
@@ -1174,7 +1179,9 @@ export const removeInstanceAccessGrant = createServerFn({ method: "POST" })
         )
       })
     )
-    if (initialGrant) publishAccessPolicyChange([initialGrant.user_id])
+    if (initialGrant) {
+      publishAccessPolicyChange([initialGrant.user_id], false, relay.id)
+    }
     return result
   })
 
@@ -1256,7 +1263,9 @@ export const transferInstanceOwnership = createServerFn({ method: "POST" })
     publishAccessPolicyChange(
       [previousOwnerId, data.userId].filter(
         (userId): userId is string => userId !== null
-      )
+      ),
+      false,
+      relay.id
     )
     return result
   })
@@ -1276,6 +1285,7 @@ export const revokeAccessInvitation = createServerFn({ method: "POST" })
           WHERE id = ? AND relay_id IS NULL AND accepted_at IS NULL`,
         [data.id]
       )
+      publishAccessCollectionChange()
       return { revoked: true }
     }
     const relay = await requiredRelay(data.relayId)
@@ -1303,6 +1313,7 @@ export const revokeAccessInvitation = createServerFn({ method: "POST" })
         WHERE id = ? AND relay_id = ? AND accepted_at IS NULL`,
       [data.id, relay.id]
     )
+    publishAccessCollectionChange(relay.id)
     return { revoked: true }
   })
 
@@ -1526,7 +1537,8 @@ function hashToken(token: string): string {
 
 function publishAccessPolicyChange(
   userIds: Array<string>,
-  reauthenticate = false
+  reauthenticate = false,
+  relayId?: string
 ): void {
   const uniqueUserIds = [...new Set(userIds)]
   if (uniqueUserIds.length === 0) return
@@ -1535,10 +1547,15 @@ function publishAccessPolicyChange(
     type: "access.changed",
     userIds: uniqueUserIds,
   })
-  // The affected users rebuild their complete authorization projection above.
-  // Other open management views only need their access queries refreshed.
+  publishAccessCollectionChange(relayId)
+}
+
+function publishAccessCollectionChange(relayId?: string): void {
   publishRealtimeChange({
-    audience: { kind: "authenticated" },
+    audience: relayId
+      ? { kind: "relays", relayIds: [relayId] }
+      : { kind: "relay-managers" },
+    scope: relayId ? { relayId } : undefined,
     topics: ["access"],
     type: "hearth.invalidate",
   })

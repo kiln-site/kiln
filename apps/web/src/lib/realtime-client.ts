@@ -2,7 +2,10 @@ import type { QueryClient } from "@tanstack/react-query"
 
 import type { RelayInstancesCollection } from "@/lib/collections/relay-instances"
 import { refreshHearthRealtimeTopics } from "@/lib/hearth-realtime"
-import type { hearthRealtimeTopics } from "@/lib/hearth-realtime-topics"
+import type {
+  HearthRealtimeScope,
+  hearthRealtimeTopics,
+} from "@/lib/hearth-realtime-topics"
 import {
   queryKeys,
   replaceRelaySnapshotInstance,
@@ -16,14 +19,15 @@ export function applyRealtimeEvent(input: {
   instances: RelayInstancesCollection
   queryClient: QueryClient
   refreshTopics?: (
-    topics: ReadonlyArray<(typeof hearthRealtimeTopics)[number]>
+    topics: ReadonlyArray<(typeof hearthRealtimeTopics)[number]>,
+    scope?: HearthRealtimeScope
   ) => Promise<void>
 }): void {
   const { event, instances, queryClient, refreshTopics } = input
   if (event.type === "collections.invalidate") {
     void (
-      refreshTopics?.(event.topics) ??
-      refreshHearthRealtimeTopics(queryClient, event.topics)
+      refreshTopics?.(event.topics, event.scope) ??
+      refreshHearthRealtimeTopics(queryClient, event.topics, event.scope)
     )
     return
   }

@@ -6,16 +6,27 @@ const cursor = {
   epoch: "00000000-0000-4000-8000-000000000001",
   sequence: 1,
 }
+const relayId = "r".repeat(43)
+const instanceId = "a".repeat(40)
 
 describe("realtime client events", () => {
   it("validates scoped Hearth collection invalidations", () => {
     expect(
       realtimeClientEventSchema.safeParse({
         ...cursor,
+        scope: { instanceId, relayId },
         topics: ["file-activity", "relays", "schedules"],
         type: "collections.invalidate",
       }).success
     ).toBe(true)
+    expect(
+      realtimeClientEventSchema.safeParse({
+        ...cursor,
+        scope: { instanceId, relayId: "invalid" },
+        topics: ["file-activity"],
+        type: "collections.invalidate",
+      }).success
+    ).toBe(false)
     expect(
       realtimeClientEventSchema.safeParse({
         ...cursor,

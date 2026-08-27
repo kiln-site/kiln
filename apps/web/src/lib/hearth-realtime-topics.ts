@@ -13,6 +13,11 @@ export const hearthRealtimeTopicSchema = z.enum(hearthRealtimeTopics)
 
 export type HearthRealtimeTopic = z.infer<typeof hearthRealtimeTopicSchema>
 
+export interface HearthRealtimeScope {
+  instanceId?: string
+  relayId: string
+}
+
 export type HearthRealtimeAudience =
   | { kind: "authenticated" }
   | { kind: "relay-managers" }

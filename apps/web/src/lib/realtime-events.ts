@@ -32,6 +32,12 @@ export const realtimeClientEventSchema = z.discriminatedUnion("type", [
     type: z.literal("reset"),
   }),
   sequencedEventSchema.extend({
+    scope: z
+      .object({
+        instanceId: relayInstanceSchema.shape.id.optional(),
+        relayId: relayIdSchema,
+      })
+      .optional(),
     topics: z.array(hearthRealtimeTopicSchema).min(1).max(8),
     type: z.literal("collections.invalidate"),
   }),

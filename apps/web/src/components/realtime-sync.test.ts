@@ -1,5 +1,5 @@
 import { QueryClient } from "@tanstack/react-query"
-import { describe, expect, it } from "vite-plus/test"
+import { describe, expect, it, vi } from "vite-plus/test"
 
 import { queryKeys } from "@/lib/query-options"
 import type { RelayFleetSnapshot } from "@/lib/relay-fleet"
@@ -117,6 +117,31 @@ describe("realtime snapshot projection", () => {
     })
 
     expect(result).toBe(current)
+  })
+
+  it("forwards collection scope without touching Relay caches", () => {
+    const queryClient = new QueryClient()
+    queryClient.setQueryData(queryKeys.relay.snapshot, snapshot())
+    const refreshTopics = vi.fn().mockResolvedValue(undefined)
+    const scope = { instanceId: alpha.id, relayId: alpha.relayId }
+
+    applyRealtimeEvent({
+      event: {
+        epoch,
+        scope,
+        sequence: 1,
+        topics: ["file-activity"],
+        type: "collections.invalidate",
+      },
+      instances: {} as Parameters<typeof applyRealtimeEvent>[0]["instances"],
+      queryClient,
+      refreshTopics,
+    })
+
+    expect(refreshTopics).toHaveBeenCalledWith(["file-activity"], scope)
+    expect(
+      queryClient.getQueryData<RelayFleetSnapshot>(queryKeys.relay.snapshot)
+    ).toEqual(snapshot())
   })
 
   it("preserves Hearth's managed address for observation-only updates", () => {

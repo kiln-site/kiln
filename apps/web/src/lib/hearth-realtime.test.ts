@@ -36,7 +36,7 @@ describe("Hearth realtime query refresh", () => {
     )
   })
 
-  it("refreshes parameterized domains by prefix without touching Relay data", async () => {
+  it("refreshes only one scoped file activity query", async () => {
     const queryClient = new QueryClient()
     const firstActivity = queryKeys.fileActivity("relay-a", "instance-a")
     const secondActivity = queryKeys.fileActivity("relay-a", "instance-b")
@@ -44,12 +44,43 @@ describe("Hearth realtime query refresh", () => {
     queryClient.setQueryData(secondActivity, { files: [] })
     queryClient.setQueryData(queryKeys.relay.snapshot, { instances: [] })
 
-    await refreshHearthRealtimeTopics(queryClient, ["file-activity"])
+    await refreshHearthRealtimeTopics(queryClient, ["file-activity"], {
+      instanceId: "instance-a",
+      relayId: "relay-a",
+    })
 
     expect(queryClient.getQueryState(firstActivity)?.isInvalidated).toBe(true)
-    expect(queryClient.getQueryState(secondActivity)?.isInvalidated).toBe(true)
+    expect(queryClient.getQueryState(secondActivity)?.isInvalidated).toBe(
+      false
+    )
     expect(
       queryClient.getQueryState(queryKeys.relay.snapshot)?.isInvalidated
     ).toBe(false)
+  })
+
+  it("keeps access capabilities and invitation previews out of live refreshes", async () => {
+    const queryClient = new QueryClient()
+    const relayAUsers = queryKeys.access.instanceUsers("relay-a", "instance-a")
+    const relayBUsers = queryKeys.access.instanceUsers("relay-b", "instance-b")
+    const invitation = queryKeys.access.invitation("token")
+    queryClient.setQueryData(queryKeys.access.overview, {})
+    queryClient.setQueryData(queryKeys.access.capabilities, {})
+    queryClient.setQueryData(relayAUsers, [])
+    queryClient.setQueryData(relayBUsers, [])
+    queryClient.setQueryData(invitation, {})
+
+    await refreshHearthRealtimeTopics(queryClient, ["access"], {
+      relayId: "relay-a",
+    })
+
+    expect(
+      queryClient.getQueryState(queryKeys.access.overview)?.isInvalidated
+    ).toBe(true)
+    expect(queryClient.getQueryState(relayAUsers)?.isInvalidated).toBe(true)
+    expect(queryClient.getQueryState(relayBUsers)?.isInvalidated).toBe(false)
+    expect(
+      queryClient.getQueryState(queryKeys.access.capabilities)?.isInvalidated
+    ).toBe(false)
+    expect(queryClient.getQueryState(invitation)?.isInvalidated).toBe(false)
   })
 })

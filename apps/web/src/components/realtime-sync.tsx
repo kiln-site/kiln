@@ -10,7 +10,10 @@ import {
   relayConnectionQueryOptions,
 } from "@/lib/query-options"
 import { refreshHearthRealtimeTopics } from "@/lib/hearth-realtime"
-import { hearthRealtimeTopics } from "@/lib/hearth-realtime-topics"
+import {
+  type HearthRealtimeScope,
+  hearthRealtimeTopics,
+} from "@/lib/hearth-realtime-topics"
 import { reconcilePendingPowerSnapshot } from "@/lib/instance-power-state"
 import {
   applyRealtimeEvent,
@@ -50,7 +53,13 @@ export const RealtimeSync = React.memo(function RealtimeSync() {
     let refreshingHearth: Promise<void> | null = null
     let hearthRefreshRetry: ReturnType<typeof setTimeout> | null = null
     let hearthRefreshFailures = 0
-    const pendingHearthTopics = new Set<(typeof hearthRealtimeTopics)[number]>()
+    const pendingHearthRefreshes = new Map<
+      string,
+      {
+        scope?: HearthRealtimeScope
+        topic: (typeof hearthRealtimeTopics)[number]
+      }
+    >()
     let bufferedEvents: Array<
       Exclude<RealtimeClientEvent, { type: "relay.invalidate" | "reset" }>
     > = []
@@ -89,22 +98,45 @@ export const RealtimeSync = React.memo(function RealtimeSync() {
     }
 
     const requestHearthRefresh = (
-      topics: ReadonlyArray<(typeof hearthRealtimeTopics)[number]>
+      topics: ReadonlyArray<(typeof hearthRealtimeTopics)[number]>,
+      scope?: HearthRealtimeScope
     ): Promise<void> => {
-      for (const topic of topics) pendingHearthTopics.add(topic)
+      for (const topic of topics) {
+        const unscopedKey = `${topic}:*`
+        if (!scope) {
+          for (const key of pendingHearthRefreshes.keys()) {
+            if (key.startsWith(`${topic}:`)) pendingHearthRefreshes.delete(key)
+          }
+          pendingHearthRefreshes.set(unscopedKey, { topic })
+          continue
+        }
+        if (pendingHearthRefreshes.has(unscopedKey)) continue
+        pendingHearthRefreshes.set(
+          `${topic}:${scope.relayId}:${scope.instanceId ?? "*"}`,
+          { scope, topic }
+        )
+      }
       if (refreshingHearth) return refreshingHearth
       if (hearthRefreshRetry) return Promise.resolve()
       const drainHearthRefreshes = (): Promise<void> => {
-        if (closed || pendingHearthTopics.size === 0) return Promise.resolve()
-        const next = [...pendingHearthTopics]
-        pendingHearthTopics.clear()
-        return refreshHearthRealtimeTopics(queryClient, next).then(
+        if (closed || pendingHearthRefreshes.size === 0) {
+          return Promise.resolve()
+        }
+        const next = [...pendingHearthRefreshes.values()]
+        pendingHearthRefreshes.clear()
+        return Promise.all(
+          next.map(({ scope: nextScope, topic }) =>
+            refreshHearthRealtimeTopics(queryClient, [topic], nextScope)
+          )
+        ).then(
           () => {
             hearthRefreshFailures = 0
             return drainHearthRefreshes()
           },
           (cause) => {
-            for (const topic of next) pendingHearthTopics.add(topic)
+            for (const refresh of next) {
+              void requestHearthRefresh([refresh.topic], refresh.scope)
+            }
             if (!closed) {
               console.warn("[Kiln realtime] Hearth refresh failed", cause)
               const delay = Math.min(
@@ -122,7 +154,11 @@ export const RealtimeSync = React.memo(function RealtimeSync() {
       }
       refreshingHearth = drainHearthRefreshes().finally(() => {
         refreshingHearth = null
-        if (!closed && !hearthRefreshRetry && pendingHearthTopics.size > 0) {
+        if (
+          !closed &&
+          !hearthRefreshRetry &&
+          pendingHearthRefreshes.size > 0
+        ) {
           void requestHearthRefresh([])
         }
       })

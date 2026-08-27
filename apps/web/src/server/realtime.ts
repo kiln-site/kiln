@@ -155,6 +155,7 @@ export async function openAuthorizedRealtimeStream(input: {
       }
       enqueue({
         epoch: event.epoch,
+        scope: event.scope,
         sequence: event.sequence,
         topics: event.topics,
         type: "collections.invalidate",

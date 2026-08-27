@@ -14,7 +14,7 @@ import {
   resyncDomainAssignmentsHandler,
   setInstanceVanityHandler,
 } from "@/server/domains.server"
-import { publishRealtimeChange } from "@/lib/realtime-source.server"
+import { publishDomainChange } from "@/lib/domain-realtime.server"
 
 const configureDomainInputSchema = z.object({
   apiToken: z.string().trim().min(20).max(512).optional(),
@@ -87,14 +87,6 @@ export const setInstanceVanity = createServerFn({ method: "POST" })
   .validator(setVanityInputSchema)
   .handler(async ({ data }) => {
     const result = await setInstanceVanityHandler(data)
-    publishDomainChange()
+    publishDomainChange(data)
     return result
   })
-
-function publishDomainChange(): void {
-  publishRealtimeChange({
-    audience: { kind: "authenticated" },
-    topics: ["domains"],
-    type: "hearth.invalidate",
-  })
-}

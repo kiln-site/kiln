@@ -54,6 +54,7 @@ import {
   validateBlacklistPatterns,
   vanityLabelAllowed,
 } from "@/lib/domain-schemas"
+import { publishDomainChange } from "@/lib/domain-realtime.server"
 import { kilnRootDomain } from "@/lib/environment"
 import type { FleetRelayInstance } from "@/lib/relay-fleet"
 import type { PersistedRelay } from "@/lib/relay-registry"
@@ -268,29 +269,35 @@ export async function provisionInstanceDomainBestEffort(
   instance: RelayInstance,
   relayId: string
 ): Promise<void> {
-  await runAppEffect(
+  const provisioned = await runAppEffect(
     "domains.instance.provision",
     provisionInstanceDomainEffect({ ...instance, relayId }).pipe(
+      Effect.map((assignment) => assignment !== null),
       Effect.catch((cause) =>
         Effect.sync(() => {
           console.warn(
             `[Kiln Domains] Server ${instance.id} was provisioned, but its vanity address could not be created:`,
             cause
           )
+          return false
         })
       )
     )
   )
+  if (provisioned) publishDomainChange({ instanceId: instance.id, relayId })
 }
 
 export async function provisionInstanceDomain(
   instance: RelayInstance,
   relayId: string
 ): Promise<void> {
-  await runAppEffect(
+  const provisioned = await runAppEffect(
     "domains.instance.provision",
-    provisionInstanceDomainEffect({ ...instance, relayId }).pipe(Effect.asVoid)
+    provisionInstanceDomainEffect({ ...instance, relayId }).pipe(
+      Effect.map((assignment) => assignment !== null)
+    )
   )
+  if (provisioned) publishDomainChange({ instanceId: instance.id, relayId })
 }
 
 export const applyManagedDomainAddressesEffect = Effect.fn(

@@ -680,13 +680,26 @@ export const getRelayFile = createServerFn({ method: "GET" })
       relay,
       `/v1/instances/${encodeURIComponent(data.instanceId)}/file?path=${encodeURIComponent(data.path)}`
     )
-    const file = relayFileContentSchema.parse(await response.json())
+    return relayFileContentSchema.parse(await response.json())
+  })
+
+export const recordRelayFileView = createServerFn({ method: "POST" })
+  .validator(fileInputSchema)
+  .handler(async ({ data }) => {
+    const { relay, user } = await instanceRelayAccess(data.relayId)
+    await requireRelayPermission({
+      user,
+      relayId: relay.id,
+      permission: "instance.files.read",
+      instanceId: data.instanceId,
+    })
     await recordFileActivityBestEffort(
       "view",
       recordFileViewed(relay.id, data.instanceId, data.path),
-      relay.id
+      relay.id,
+      data.instanceId
     )
-    return file
+    return { recorded: true }
   })
 
 export const saveRelayFile = createServerFn({ method: "POST" })
@@ -711,7 +724,8 @@ export const saveRelayFile = createServerFn({ method: "POST" })
     await recordFileActivityBestEffort(
       "edit",
       recordFileEdited(relay.id, instanceId, path),
-      relay.id
+      relay.id,
+      instanceId
     )
     return file
   })
@@ -817,7 +831,7 @@ export const updateRelayFilePin = createServerFn({ method: "POST" })
         validPaths
       )
     )
-    publishFileActivityChange(relay.id)
+    publishFileActivityChange(relay.id, data.instanceId)
     return nextActivity
   })
 
@@ -978,14 +992,17 @@ function errorMessage(cause: unknown): string {
 async function recordFileActivityBestEffort(
   kind: "edit" | "view",
   operation: Promise<void>,
-  relayId: string
+  relayId: string,
+  instanceId: string
 ): Promise<void> {
   await Effect.runPromise(
     Effect.tryPromise({
       try: () => operation,
       catch: (cause) => cause,
     }).pipe(
-      Effect.tap(() => Effect.sync(() => publishFileActivityChange(relayId))),
+      Effect.tap(() =>
+        Effect.sync(() => publishFileActivityChange(relayId, instanceId))
+      ),
       Effect.catch((cause) =>
         Effect.sync(() => {
           console.warn(
@@ -998,9 +1015,13 @@ async function recordFileActivityBestEffort(
   )
 }
 
-function publishFileActivityChange(relayId: string): void {
+function publishFileActivityChange(
+  relayId: string,
+  instanceId: string
+): void {
   publishRealtimeChange({
     audience: { kind: "relays", relayIds: [relayId] },
+    scope: { instanceId, relayId },
     topics: ["file-activity"],
     type: "hearth.invalidate",
   })

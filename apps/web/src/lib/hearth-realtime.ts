@@ -1,6 +1,9 @@
 import type { QueryClient, QueryKey } from "@tanstack/react-query"
 
-import type { HearthRealtimeTopic } from "@/lib/hearth-realtime-topics"
+import type {
+  HearthRealtimeScope,
+  HearthRealtimeTopic,
+} from "@/lib/hearth-realtime-topics"
 import { queryKeys } from "@/lib/query-options"
 
 interface HearthRealtimeQueryScope {
@@ -19,7 +22,10 @@ const prefix = (queryKey: QueryKey): HearthRealtimeQueryScope => ({
 })
 
 const hearthRealtimeQueryScopes = {
-  access: [prefix(["access"])],
+  access: [
+    exact(queryKeys.access.overview),
+    prefix(["access", "instances"]),
+  ],
   domains: [prefix(["domains"])],
   "file-activity": [prefix(["file-activity"])],
   preferences: [exact(queryKeys.uiPreferences)],
@@ -27,18 +33,38 @@ const hearthRealtimeQueryScopes = {
   schedules: [exact(queryKeys.schedules.all)],
 } satisfies Record<HearthRealtimeTopic, ReadonlyArray<HearthRealtimeQueryScope>>
 
+function queryScopes(
+  topic: HearthRealtimeTopic,
+  scope: HearthRealtimeScope | undefined
+): ReadonlyArray<HearthRealtimeQueryScope> {
+  if (topic === "access" && scope) {
+    return [
+      exact(queryKeys.access.overview),
+      prefix(["access", "instances", scope.relayId]),
+    ]
+  }
+  if (topic === "domains" && scope?.instanceId) {
+    return [exact(queryKeys.domains.instance(scope.relayId, scope.instanceId))]
+  }
+  if (topic === "file-activity" && scope?.instanceId) {
+    return [exact(queryKeys.fileActivity(scope.relayId, scope.instanceId))]
+  }
+  return hearthRealtimeQueryScopes[topic]
+}
+
 export async function refreshHearthRealtimeTopics(
   queryClient: QueryClient,
-  topics: ReadonlyArray<HearthRealtimeTopic>
+  topics: ReadonlyArray<HearthRealtimeTopic>,
+  scope?: HearthRealtimeScope
 ): Promise<void> {
   const scopeHashes = new Set<string>()
   const scopesToRefresh: Array<HearthRealtimeQueryScope> = []
   for (const topic of topics) {
-    for (const scope of hearthRealtimeQueryScopes[topic]) {
-      const hash = `${scope.exact}:${JSON.stringify(scope.queryKey)}`
+    for (const queryScope of queryScopes(topic, scope)) {
+      const hash = `${queryScope.exact}:${JSON.stringify(queryScope.queryKey)}`
       if (scopeHashes.has(hash)) continue
       scopeHashes.add(hash)
-      scopesToRefresh.push(scope)
+      scopesToRefresh.push(queryScope)
     }
   }
   await Promise.all(

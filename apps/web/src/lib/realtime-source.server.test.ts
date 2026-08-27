@@ -86,6 +86,7 @@ describe("realtime source", () => {
     const event = {
       audience: { kind: "relays", relayIds: ["relay-a"] },
       epoch,
+      scope: { instanceId: "instance-a", relayId: "relay-a" },
       sequence: 1,
       topics: ["schedules"],
       type: "hearth.invalidate",

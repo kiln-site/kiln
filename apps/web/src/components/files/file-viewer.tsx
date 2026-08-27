@@ -1,5 +1,5 @@
 import * as React from "react"
-import { useQuery, useQueryClient } from "@tanstack/react-query"
+import { useQuery } from "@tanstack/react-query"
 import { HardDriveDownload } from "lucide-react"
 
 import { FileWorkspaceLoadingState } from "@/components/file-tree-loading-panel"
@@ -23,12 +23,12 @@ import {
   FileTreeRevealButton,
 } from "@/components/files/file-viewer-toolbar"
 import {
-  queryKeys,
   relayFileEntryQueryOptions,
   relayFileQueryOptions,
 } from "@/lib/query-options"
 import type { InstanceWorkspaceInstance } from "@/lib/relay-selectors"
 import { warmSyntaxCodeEditorModule } from "@/lib/syntax-editor-module-preload"
+import { recordRelayFileView } from "@/server/relay"
 
 const activeFileRevisionPollDelayMs = 30_000
 
@@ -176,7 +176,6 @@ export function FileViewer({
   onUploadFiles,
   uploading,
 }: FileViewerProps) {
-  const queryClient = useQueryClient()
   const selectedPath = React.useSyncExternalStore(
     selectionStore.subscribe,
     selectionStore.getSnapshot,
@@ -257,13 +256,14 @@ export function FileViewer({
     const nextKey = `${fileQuery.data.path}:${fileQuery.data.modifiedAt}`
     if (activitySyncKey.current === nextKey) return
     activitySyncKey.current = nextKey
-    void queryClient.invalidateQueries({
-      queryKey: queryKeys.fileActivity(instance.relayId, instance.id),
-      // Avoid refetching the active pin-only observer. Files Home mounts its
-      // own observer and refetches this stale query when it opens.
-      refetchType: "none",
-    })
-  }, [fileQuery.data, instance.id, instance.relayId, queryClient, selectedPath])
+    void recordRelayFileView({
+      data: {
+        instanceId: instance.id,
+        path: fileQuery.data.path,
+        relayId: instance.relayId,
+      },
+    }).catch(() => undefined)
+  }, [fileQuery.data, instance.id, instance.relayId, selectedPath])
 
   React.useEffect(() => {
     if (isHome) {
