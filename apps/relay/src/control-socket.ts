@@ -20,6 +20,7 @@ import {
   relayControlRequestTimeoutMs,
   relayControlProtocol,
   relaySnapshotDeltaFeature,
+  isAuditedRelayControlOperation,
 } from "@workspace/contracts"
 import type {
   RelayAuthChallenge,
@@ -741,47 +742,7 @@ function reverseRequestCancellationGraceMs(
 }
 
 export function isAuditedOperation(operation: RelayControlOperation): boolean {
-  return (
-    operation === "relay.rename" ||
-    operation === "relay.update.apply" ||
-    operation === "relay.pairing.create" ||
-    operation === "relay.pairing.revoke" ||
-    operation === "relay.clients.update" ||
-    operation === "relay.clients.revoke" ||
-    operation === "relay.networking.write" ||
-    operation === "relay.tailscale.install" ||
-    operation === "relay.tailscale.stack.apply" ||
-    operation === "relay.tailscale.stack.dns" ||
-    operation === "relay.tailscale.stack.remove" ||
-    operation === "relay.tailscale.write" ||
-    operation === "relay.proxy.write" ||
-    operation === "instance.create" ||
-    operation === "instance.provision.prepare" ||
-    operation === "instance.provision.claim" ||
-    operation === "instance.provision.cancel" ||
-    operation === "instance.startup.write" ||
-    operation === "instance.rename" ||
-    operation === "instance.delete" ||
-    operation === "instance.action" ||
-    operation === "instance.files.write" ||
-    operation === "instance.files.upload-url" ||
-    operation === "instance.files.mutate" ||
-    operation === "instance.console.write" ||
-    operation === "instance.network.ports.write" ||
-    operation === "instance.network.routes.write" ||
-    operation === "database.create" ||
-    operation === "database.delete" ||
-    operation === "database.action" ||
-    operation === "database.credentials.rotate" ||
-    operation === "database.network.write" ||
-    operation === "database.dump.export" ||
-    operation === "database.dump.import" ||
-    operation === "backup.task.enqueue" ||
-    operation === "backup.task.cancel" ||
-    operation === "schedule.apply" ||
-    operation === "schedule.run" ||
-    operation === "schedule.remove"
-  )
+  return isAuditedRelayControlOperation(operation)
 }
 
 export function auditDetailsForRequest(

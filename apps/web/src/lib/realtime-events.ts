@@ -25,6 +25,15 @@ const sequencedEventSchema = z.object({
   sequence: z.number().int().positive(),
 })
 
+const hearthScopeSchema = z.object({
+  databaseId: z
+    .string()
+    .regex(/^[a-f0-9]{40}$/u)
+    .optional(),
+  instanceId: relayInstanceSchema.shape.id.optional(),
+  relayId: relayIdSchema,
+})
+
 export const realtimeClientEventSchema = z.discriminatedUnion("type", [
   sequencedEventSchema.extend({
     clear: z.boolean(),
@@ -32,12 +41,7 @@ export const realtimeClientEventSchema = z.discriminatedUnion("type", [
     type: z.literal("reset"),
   }),
   sequencedEventSchema.extend({
-    scope: z
-      .object({
-        instanceId: relayInstanceSchema.shape.id.optional(),
-        relayId: relayIdSchema,
-      })
-      .optional(),
+    scope: hearthScopeSchema.optional(),
     topics: z.array(hearthRealtimeTopicSchema).min(1).max(8),
     type: z.literal("collections.invalidate"),
   }),
@@ -55,9 +59,22 @@ export const realtimeClientEventSchema = z.discriminatedUnion("type", [
     nodes: z.array(fleetNodeSchema),
     type: z.literal("nodes.delta"),
   }),
-  sequencedEventSchema.extend({ type: z.literal("relay.invalidate") }),
+  sequencedEventSchema.extend({
+    scope: hearthScopeSchema.optional(),
+    topics: z.array(hearthRealtimeTopicSchema).min(1).max(8).optional(),
+    type: z.literal("relay.invalidate"),
+  }),
 ])
 
 export type FleetInstance = z.infer<typeof fleetInstanceSchema>
 export type FleetNode = z.infer<typeof fleetNodeSchema>
 export type RealtimeClientEvent = z.infer<typeof realtimeClientEventSchema>
+
+export function realtimeEventRefreshesHearth(
+  event: RealtimeClientEvent
+): boolean {
+  return (
+    event.type === "collections.invalidate" ||
+    (event.type === "relay.invalidate" && event.topics !== undefined)
+  )
+}

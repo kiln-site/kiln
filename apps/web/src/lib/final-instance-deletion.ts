@@ -21,6 +21,7 @@ import { runAppEffect } from "@/effect/runtime"
 import { deleteInstanceDomainEffect } from "@/server/domains.server"
 import { finalizeInstanceDeletionEffect } from "@/server/instance-deletion-cleanup"
 import { timestampedBackupName } from "@/lib/backup-name"
+import { publishBackupChange } from "@/lib/backup-realtime.server"
 import { relayRpc } from "@/lib/relay-connection"
 import type { PersistedRelay } from "@/lib/relay-registry"
 
@@ -75,6 +76,7 @@ export async function ensureFinalInstanceDeletion(input: {
     if (concurrent) return concurrent
     throw reserved.failure
   }
+  publishBackupChange(input.relay.id)
   const backup = reserved.success
   const { dispatchBackupTask } = await import("@/lib/backup-reconciliation")
   await dispatchBackupTask(input.relay, backup, input.requestedBy)

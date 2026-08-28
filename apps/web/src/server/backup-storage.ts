@@ -26,6 +26,10 @@ import {
   isPlatformAdmin,
   requireRelayPermission,
 } from "@/lib/access-control"
+import {
+  publishBackupSettingsChange,
+  publishBackupStorageChange,
+} from "@/lib/backup-realtime.server"
 import { kilnInstallationId } from "@/lib/environment"
 import {
   normalizeObjectPrefix,
@@ -150,6 +154,7 @@ export const saveBackupStorage = createServerFn({ method: "POST" })
         ownerUserId,
       })
     )
+    publishBackupStorageChange(ownerUserId)
     return { id, verified: true }
   })
 
@@ -172,6 +177,7 @@ export const deleteBackupStorage = createServerFn({ method: "POST" })
       "backupStorage.delete",
       deleteBackupStorageEffect(data.id)
     )
+    publishBackupStorageChange(existing.ownerUserId)
     return { deleted: true }
   })
 
@@ -205,6 +211,7 @@ export const setPreferredBackupStorage = createServerFn({ method: "POST" })
         targetKind: target.kind,
       })
     )
+    publishBackupSettingsChange(data.relayId)
     return { updated: true }
   })
 

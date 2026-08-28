@@ -7,6 +7,7 @@ import {
   RelayControlServerMessageSchema,
   applyRelaySnapshotDelta,
   createRelaySnapshotDelta,
+  isAuditedRelayControlOperation,
   relayAuthenticationWindowMs,
   relayAuthChallengeTranscript,
   relayAuthResponseTranscript,
@@ -96,10 +97,19 @@ export async function relayRpc(
     connection = new RelayConnection(effectiveRelay)
     connections.set(relay.id, connection)
   }
-  return runAppEffect(
+  const result = await runAppEffect(
     `relay.rpc.${operation}`,
     connection.request(operation, payload, timeoutMs, subject)
   )
+  if (subject && isAuditedRelayControlOperation(operation)) {
+    publishRealtimeChange({
+      audience: { kind: "relays", relayIds: [relay.id] },
+      scope: { relayId: relay.id },
+      topics: ["activity"],
+      type: "hearth.invalidate",
+    })
+  }
+  return result
 }
 
 export function relayConnectionState(relayId: string): RelayConnectionState {

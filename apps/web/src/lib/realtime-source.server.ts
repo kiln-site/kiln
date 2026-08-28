@@ -31,6 +31,7 @@ export type RealtimeSourceChange =
       delta: RelaySnapshotDelta
     }
   | { relayId: string; type: "relay.snapshot.reset" }
+  | { relayId: string; type: "relay.metadata"; userIds?: Array<string> }
   | { relayId: string; type: "relay.state" }
   | { relayId: string; type: "instance.upsert"; instance: RelayInstance }
   | { relayId: string; type: "instance.delete"; instanceId: string }
@@ -100,6 +101,7 @@ export function classifyRealtimeEvent(
       ? "close"
       : "ignore"
   }
+  if (event.type === "relay.metadata") return "ordered"
   if (event.type !== "access.changed") return "normal"
   if (!event.userIds.includes(identity.userId)) return "ignore"
   return event.reauthenticate ? "close" : "ordered"

@@ -772,11 +772,13 @@ describe("backup reconciliation", () => {
       updatedAt: Date.UTC(2026, 7, 21, 10, 29, 20),
     } satisfies RelayBackupTask
 
-    await Effect.runPromise(
+    const changed = await Effect.runPromise(
       reconcileBackupTaskEffect(task, "relay-a").pipe(
         Effect.provide(databaseLayer)
       )
     )
+
+    expect(changed).toBe(true)
 
     const catalogWrite = writes.find(
       ({ sql }) =>

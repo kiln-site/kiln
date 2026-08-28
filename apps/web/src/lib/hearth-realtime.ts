@@ -23,14 +23,43 @@ const prefix = (queryKey: QueryKey): HearthRealtimeQueryScope => ({
 
 const hearthRealtimeQueryScopes = {
   access: [
+    exact(queryKeys.access.capabilities),
     exact(queryKeys.access.overview),
     prefix(["access", "instances"]),
   ],
+  activity: [prefix(["activity"])],
+  "backup-settings": [prefix(["backups", "policy"])],
+  "backup-storage": [exact(queryKeys.backups.storage)],
+  backups: [exact(queryKeys.backups.all)],
+  "database-credentials": [prefix(["databases"])],
+  "database-directory": [
+    exact(queryKeys.databases.directory),
+    exact(queryKeys.schedules.options),
+  ],
+  databases: [exact(queryKeys.databases.list)],
   domains: [prefix(["domains"])],
   "file-activity": [prefix(["file-activity"])],
   preferences: [exact(queryKeys.uiPreferences)],
-  relays: [exact(queryKeys.relays)],
+  "relay-health": [exact(queryKeys.relays)],
+  "relay-proxy": [prefix(["relays", "proxy"])],
+  relays: [
+    exact(queryKeys.relays),
+    exact(queryKeys.backups.all),
+    exact(queryKeys.databases.list),
+    exact(queryKeys.databases.directory),
+    exact(queryKeys.domains.settings),
+    exact(queryKeys.schedules.all),
+    exact(queryKeys.schedules.options),
+    exact(queryKeys.tailscaleStacks),
+    exact(queryKeys.access.overview),
+    prefix(["activity"]),
+    prefix(["relays", "proxy"]),
+  ],
   schedules: [exact(queryKeys.schedules.all)],
+  tailscale: [
+    exact(queryKeys.tailscaleStacks),
+    prefix(["tailscale", "relays"]),
+  ],
 } satisfies Record<HearthRealtimeTopic, ReadonlyArray<HearthRealtimeQueryScope>>
 
 function queryScopes(
@@ -39,8 +68,17 @@ function queryScopes(
 ): ReadonlyArray<HearthRealtimeQueryScope> {
   if (topic === "access" && scope) {
     return [
+      exact(queryKeys.access.capabilities),
       exact(queryKeys.access.overview),
       prefix(["access", "instances", scope.relayId]),
+    ]
+  }
+  if (topic === "backup-settings" && scope) {
+    return [prefix(["backups", "policy", scope.relayId])]
+  }
+  if (topic === "database-credentials" && scope?.databaseId) {
+    return [
+      exact(queryKeys.databases.credential(scope.relayId, scope.databaseId)),
     ]
   }
   if (topic === "domains" && scope?.instanceId) {
@@ -48,6 +86,25 @@ function queryScopes(
   }
   if (topic === "file-activity" && scope?.instanceId) {
     return [exact(queryKeys.fileActivity(scope.relayId, scope.instanceId))]
+  }
+  if (topic === "relay-proxy" && scope) {
+    return [exact(["relays", "proxy", scope.relayId])]
+  }
+  if (topic === "relays" && scope) {
+    return [
+      ...hearthRealtimeQueryScopes.relays.filter(
+        ({ queryKey }) => queryKey[0] !== "relays"
+      ),
+      exact(queryKeys.relays),
+      exact(["relays", "proxy", scope.relayId]),
+      prefix(["databases", scope.relayId]),
+    ]
+  }
+  if (topic === "tailscale" && scope) {
+    return [
+      exact(queryKeys.tailscaleStacks),
+      exact(queryKeys.tailscale(scope.relayId)),
+    ]
   }
   return hearthRealtimeQueryScopes[topic]
 }
@@ -58,15 +115,29 @@ export async function refreshHearthRealtimeTopics(
   scope?: HearthRealtimeScope
 ): Promise<void> {
   const scopeHashes = new Set<string>()
-  const scopesToRefresh: Array<HearthRealtimeQueryScope> = []
+  const requestedScopes: Array<HearthRealtimeQueryScope> = []
   for (const topic of topics) {
     for (const queryScope of queryScopes(topic, scope)) {
       const hash = `${queryScope.exact}:${JSON.stringify(queryScope.queryKey)}`
       if (scopeHashes.has(hash)) continue
       scopeHashes.add(hash)
-      scopesToRefresh.push(queryScope)
+      requestedScopes.push(queryScope)
     }
   }
+  const scopesToRefresh = requestedScopes.filter(
+    (candidate, candidateIndex) =>
+      !requestedScopes.some(
+        (possiblePrefix, prefixIndex) =>
+          candidateIndex !== prefixIndex &&
+          !possiblePrefix.exact &&
+          possiblePrefix.queryKey.length < candidate.queryKey.length &&
+          possiblePrefix.queryKey.every(
+            (part, partIndex) =>
+              JSON.stringify(part) ===
+              JSON.stringify(candidate.queryKey[partIndex])
+          )
+      )
+  )
   await Promise.all(
     scopesToRefresh.map(({ exact, queryKey }) =>
       queryClient.invalidateQueries({ exact, queryKey }, { throwOnError: true })

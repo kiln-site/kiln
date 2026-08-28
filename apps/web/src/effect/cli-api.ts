@@ -68,6 +68,7 @@ import {
   requireRelayPermissionEffect,
 } from "@/lib/access-control"
 import { hasBackupPermission } from "@/lib/backup-access"
+import { publishBackupChange } from "@/lib/backup-realtime.server"
 import { signLocalBackupDownload } from "@/backups/destinations/local"
 import { signS3BackupDownload } from "@/backups/destinations/s3"
 import type { AccessPermission } from "@/lib/permissions"
@@ -421,6 +422,7 @@ export const createCliBackupEffect = Effect.fn("cli.api.backups.create")(
             }),
       "Hearth could not reserve the backup."
     )
+    yield* Effect.sync(() => publishBackupChange(relay.id))
     const relayAccepted = yield* enqueueCliBackupEffect(
       principal,
       relay,
@@ -533,6 +535,7 @@ export const restoreCliBackupEffect = Effect.fn("cli.api.backups.restore")(
       }),
       "Hearth could not reserve the restore."
     )
+    yield* Effect.sync(() => publishBackupChange(relay.id))
     const relayAccepted = yield* enqueueCliBackupEffect(
       principal,
       relay,
@@ -572,6 +575,7 @@ export const deleteCliBackupEffect = Effect.fn("cli.api.backups.delete")(
       }),
       "Hearth could not reserve backup deletion."
     )
+    yield* Effect.sync(() => publishBackupChange(relay.id))
     const relayAccepted = yield* enqueueCliBackupEffect(
       principal,
       relay,
@@ -618,6 +622,7 @@ export const getCliBackupDownloadEffect = Effect.fn("cli.api.backups.download")(
       )
       if (reserved.kind === "dispatch") {
         const relay = yield* requiredRelay(backup.relayId)
+        yield* Effect.sync(() => publishBackupChange(relay.id))
         yield* enqueueCliBackupEffect(principal, relay, reserved.dispatch)
         return cliBackupDownloadResponseSchema.parse({
           status: "preparing",

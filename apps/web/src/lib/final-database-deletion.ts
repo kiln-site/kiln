@@ -16,6 +16,7 @@ import {
 import { deleteManagedDatabaseRecordEffect } from "@/effect/managed-databases"
 import { runAppEffect } from "@/effect/runtime"
 import { timestampedBackupName } from "@/lib/backup-name"
+import { publishBackupChange } from "@/lib/backup-realtime.server"
 import { relayRpc } from "@/lib/relay-connection"
 import type { PersistedRelay } from "@/lib/relay-registry"
 
@@ -135,6 +136,7 @@ async function ensureFinalDatabaseDeletion(input: {
     if (concurrent) return concurrent
     throw reserved.failure
   }
+  publishBackupChange(input.relay.id)
   const { dispatchBackupTask } = await import("@/lib/backup-reconciliation")
   await dispatchBackupTask(input.relay, reserved.success, input.requestedBy)
   const created = await finalDatabaseDeletion(input.relay.id, input.databaseId)

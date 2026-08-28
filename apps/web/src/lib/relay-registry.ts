@@ -443,7 +443,7 @@ export async function renamePersistedRelay(
     [renamed.name, relay.id]
   )
   const updated = await requiredPersistedRelay(relay.id)
-  publishRelayCollectionChange()
+  publishRelayCollectionChange(relay.id)
   return updated
 }
 
@@ -687,7 +687,12 @@ async function pairWithEnvelope(
           subject
         )
       }
-      return checkPersistedRelay(envelope.relayFingerprint)
+      const checked = await inspectPersistedRelay(envelope.relayFingerprint)
+      publishRelayCollectionChange(
+        checked.id,
+        creatorUserId ? [creatorUserId] : []
+      )
+      return checked
     }).pipe(
       Effect.catch((cause) =>
         (existing
@@ -842,7 +847,9 @@ export async function updatePersistedRelay(input: {
     [input.hostname, input.port, input.useTls, input.id]
   )
   if (result.affectedRows !== 1) throw new Error("Relay not found")
-  return checkPersistedRelay(input.id)
+  const relay = await inspectPersistedRelay(input.id)
+  publishRelayCollectionChange(relay.id)
+  return relay
 }
 
 export async function setPersistedRelayEnabled(
@@ -853,7 +860,7 @@ export async function setPersistedRelayEnabled(
     "relays.setEnabled",
     setPersistedRelayEnabledEffect(id, enabled)
   )
-  publishRelayCollectionChange()
+  publishRelayCollectionChange(id)
   return relay
 }
 
@@ -921,15 +928,19 @@ export async function deletePersistedRelay(id: string): Promise<void> {
   await runAppEffect("relay.deletePersisted", deletePersistedRelayEffect(id))
   const { closeRelayConnection } = await import("@/lib/relay-connection")
   closeRelayConnection(id)
-  publishRelayCollectionChange()
+  publishRelayCollectionChange(id)
 }
 
 export async function checkPersistedRelay(id: string): Promise<PersistedRelay> {
+  const checked = await inspectPersistedRelay(id)
+  if (checked.enabled) publishRelayHealthChange(id)
+  return checked
+}
+
+async function inspectPersistedRelay(id: string): Promise<PersistedRelay> {
   const relay = (await listPersistedRelays()).find((item) => item.id === id)
   if (!relay) throw new Error("Relay not found")
-  if (!relay.enabled) {
-    return relay
-  }
+  if (!relay.enabled) return relay
 
   let error: string | null = null
   await Effect.runPromise(
@@ -941,12 +952,11 @@ export async function checkPersistedRelay(id: string): Promise<PersistedRelay> {
       await databasePool.execute(
         `UPDATE ${databaseTable("relay")}
           SET last_connected_at = ?, last_error = NULL,
-              name = ?, managed_ember_count = ?, node_arch = ?,
+              managed_ember_count = ?, node_arch = ?,
               node_platform = ?, node_version = ?
         WHERE id = ?`,
         [
           new Date(),
-          snapshot.node.name,
           snapshot.instances.filter((instance) => instance.managedByRelay)
             .length,
           snapshot.node.arch,
@@ -969,14 +979,25 @@ export async function checkPersistedRelay(id: string): Promise<PersistedRelay> {
   )
   const checked = (await listPersistedRelays()).find((item) => item.id === id)
   if (!checked) throw new Error("Relay not found")
-  publishRelayCollectionChange()
   return checked
 }
 
-function publishRelayCollectionChange(): void {
+function publishRelayCollectionChange(
+  relayId: string,
+  userIds: Array<string> = []
+): void {
   publishRealtimeChange({
-    audience: { kind: "relay-managers" },
-    topics: ["relays"],
+    relayId,
+    type: "relay.metadata",
+    ...(userIds.length > 0 ? { userIds: [...new Set(userIds)] } : {}),
+  })
+}
+
+function publishRelayHealthChange(relayId: string): void {
+  publishRealtimeChange({
+    audience: { kind: "relays", relayIds: [relayId] },
+    scope: { relayId },
+    topics: ["relay-health"],
     type: "hearth.invalidate",
   })
 }

@@ -13,6 +13,7 @@ import { z } from "zod"
 
 import { isPlatformAdmin, isRelayCreator } from "@/lib/access-control"
 import { runAppEffect } from "@/effect/runtime"
+import { publishRealtimeChange } from "@/lib/realtime-source.server"
 import type { PersistedRelay } from "@/lib/relay-registry"
 import { requireAuthenticatedUser } from "@/server/auth"
 import { removeRelayThenCleanup } from "@/server/relay-removal"
@@ -279,9 +280,11 @@ export const updateRelayProxy = createServerFn({ method: "POST" })
       mode: data.mode,
       traefikImage: data.traefikImage,
     })
-    return relayProxyResponseSchema.parse(
+    const proxy = relayProxyResponseSchema.parse(
       await relayRpc(relay, "relay.proxy.write", settings, 240_000, user.id)
     )
+    publishRelayProxyChange(relay.id)
+    return proxy
   })
 
 export const getRelayTailscale = createServerFn({ method: "GET" })
@@ -318,9 +321,11 @@ export const updateRelayTailscale = createServerFn({ method: "POST" })
       domain: data.domain,
       hostname: data.hostname,
     })
-    return relayTailscaleOverviewSchema.parse(
+    const tailscale = relayTailscaleOverviewSchema.parse(
       await relayRpc(relay, "relay.tailscale.write", settings, 90_000, user.id)
     )
+    publishRelayTailscaleChange(relay.id)
+    return tailscale
   })
 
 export const installRelayTailscale = createServerFn({ method: "POST" })
@@ -336,7 +341,27 @@ export const installRelayTailscale = createServerFn({ method: "POST" })
     )
     if (!relay) throw new Error("Relay is not configured or is paused")
     const input = relayTailscaleInstallSchema.parse({ authKey: data.authKey })
-    return relayTailscaleOverviewSchema.parse(
+    const tailscale = relayTailscaleOverviewSchema.parse(
       await relayRpc(relay, "relay.tailscale.install", input, 240_000, user.id)
     )
+    publishRelayTailscaleChange(relay.id)
+    return tailscale
   })
+
+function publishRelayProxyChange(relayId: string): void {
+  publishRealtimeChange({
+    audience: { kind: "relays", relayIds: [relayId] },
+    scope: { relayId },
+    topics: ["relay-proxy"],
+    type: "hearth.invalidate",
+  })
+}
+
+function publishRelayTailscaleChange(relayId: string): void {
+  publishRealtimeChange({
+    audience: { kind: "relays", relayIds: [relayId] },
+    scope: { relayId },
+    topics: ["tailscale"],
+    type: "hearth.invalidate",
+  })
+}

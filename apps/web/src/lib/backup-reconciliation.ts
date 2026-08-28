@@ -9,6 +9,7 @@ import {
   type BackupDispatch,
 } from "@/effect/backups"
 import { runAppEffect } from "@/effect/runtime"
+import { publishBackupChange } from "@/lib/backup-realtime.server"
 import { prepareBackupTaskEffect } from "@/lib/backup-task-prepare"
 import { relayRpc } from "@/lib/relay-connection"
 import { listPersistedRelays, type PersistedRelay } from "@/lib/relay-registry"
@@ -34,7 +35,7 @@ export async function reconcileRelayBackups(
     .array(relayBackupTaskSchema)
     .parse(await relayRpc(relay, "backup.task.list", {}, 15_000, subject))
   const relayTasksById = new Map(tasks.map((task) => [task.taskId, task]))
-  await Promise.all(
+  const reconciled = await Promise.all(
     tasks.map((task) =>
       runAppEffect(
         "backups.reconcileTask",
@@ -42,6 +43,7 @@ export async function reconcileRelayBackups(
       )
     )
   )
+  if (reconciled.some(Boolean)) publishBackupChange(relay.id)
   const dispatchable = await runAppEffect(
     "backups.dispatchable",
     listDispatchableBackupTasksEffect(relay.id)

@@ -113,7 +113,7 @@ export const RealtimeSync = React.memo(function RealtimeSync() {
         }
         if (pendingHearthRefreshes.has(unscopedKey)) continue
         pendingHearthRefreshes.set(
-          `${topic}:${scope.relayId}:${scope.instanceId ?? "*"}`,
+          `${topic}:${scope.relayId}:${scope.instanceId ?? "*"}:${scope.databaseId ?? "*"}`,
           { scope, topic }
         )
       }
@@ -125,11 +125,29 @@ export const RealtimeSync = React.memo(function RealtimeSync() {
         }
         const next = [...pendingHearthRefreshes.values()]
         pendingHearthRefreshes.clear()
+        const grouped = new Map<
+          string,
+          {
+            scope?: HearthRealtimeScope
+            topics: Array<(typeof hearthRealtimeTopics)[number]>
+          }
+        >()
+        for (const refresh of next) {
+          const key = refresh.scope
+            ? `${refresh.scope.relayId}:${refresh.scope.instanceId ?? "*"}:${refresh.scope.databaseId ?? "*"}`
+            : "*"
+          const group = grouped.get(key) ?? {
+            ...(refresh.scope ? { scope: refresh.scope } : {}),
+            topics: [],
+          }
+          group.topics.push(refresh.topic)
+          grouped.set(key, group)
+        }
         return recoverPromise(
           () =>
             Promise.all(
-              next.map(({ scope: nextScope, topic }) =>
-                refreshHearthRealtimeTopics(queryClient, [topic], nextScope)
+              [...grouped.values()].map(({ scope: nextScope, topics }) =>
+                refreshHearthRealtimeTopics(queryClient, topics, nextScope)
               )
             ).then(() => {
               hearthRefreshFailures = 0
@@ -154,19 +172,12 @@ export const RealtimeSync = React.memo(function RealtimeSync() {
           }
         )
       }
-      refreshingHearth = ensuringPromise(
-        drainHearthRefreshes,
-        () => {
-          refreshingHearth = null
-          if (
-            !closed &&
-            !hearthRefreshRetry &&
-            pendingHearthRefreshes.size > 0
-          ) {
-            void requestHearthRefresh([])
-          }
+      refreshingHearth = ensuringPromise(drainHearthRefreshes, () => {
+        refreshingHearth = null
+        if (!closed && !hearthRefreshRetry && pendingHearthRefreshes.size > 0) {
+          void requestHearthRefresh([])
         }
-      )
+      })
       return refreshingHearth
     }
 
@@ -242,10 +253,7 @@ export const RealtimeSync = React.memo(function RealtimeSync() {
                 hearthRefetchRequested ||= activeRecoveryHearth
                 activeRecoveryConnection = false
                 activeRecoveryHearth = false
-                console.warn(
-                  "[Kiln realtime] Snapshot recovery failed",
-                  cause
-                )
+                console.warn("[Kiln realtime] Snapshot recovery failed", cause)
                 const delay = Math.min(
                   1_000 * 2 ** recoveryFailures,
                   maximumRecoveryRetryDelayMs
@@ -305,6 +313,9 @@ export const RealtimeSync = React.memo(function RealtimeSync() {
         return
       }
       if (event.type === "relay.invalidate") {
+        if (event.topics) {
+          void requestHearthRefresh(event.topics, event.scope)
+        }
         requestReset(true, event.sequence)
         return
       }

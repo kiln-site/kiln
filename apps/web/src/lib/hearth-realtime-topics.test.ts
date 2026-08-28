@@ -43,6 +43,45 @@ describe("Hearth realtime audiences", () => {
     ).toBe(true)
   })
 
+  it("targets backup storage owners and platform administrators", () => {
+    expect(
+      hearthAudienceAllows(basePolicy, {
+        kind: "backup-storage",
+        ownerUserId: "user-a",
+      })
+    ).toBe(true)
+    expect(
+      hearthAudienceAllows(basePolicy, {
+        kind: "backup-storage",
+        ownerUserId: "user-b",
+      })
+    ).toBe(false)
+    expect(
+      hearthAudienceAllows(
+        { ...basePolicy, isPlatformAdmin: true },
+        { kind: "backup-storage", ownerUserId: "user-b" }
+      )
+    ).toBe(true)
+    expect(
+      hearthAudienceAllows(basePolicy, {
+        kind: "backup-storage",
+        ownerUserId: null,
+      })
+    ).toBe(true)
+  })
+
+  it("targets platform administrators without broadcasting admin state", () => {
+    expect(hearthAudienceAllows(basePolicy, { kind: "platform-admins" })).toBe(
+      false
+    )
+    expect(
+      hearthAudienceAllows(
+        { ...basePolicy, isPlatformAdmin: true },
+        { kind: "platform-admins" }
+      )
+    ).toBe(true)
+  })
+
   it("matches Relay-scoped state without requiring every Relay", () => {
     expect(
       hearthAudienceAllows(basePolicy, {

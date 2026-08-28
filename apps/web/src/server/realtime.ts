@@ -26,6 +26,7 @@ import type {
   FleetNode,
   RealtimeClientEvent,
 } from "@/lib/realtime-events"
+import { realtimeEventRefreshesHearth } from "@/lib/realtime-events"
 
 const heartbeatIntervalMs = 15_000
 const maximumProcessingBacklog = 64
@@ -109,12 +110,12 @@ export async function openAuthorizedRealtimeStream(input: {
       enqueueReset(
         event,
         pendingRecovery.clear,
-        pendingRecovery.hearth || event.type === "collections.invalidate"
+        pendingRecovery.hearth || realtimeEventRefreshesHearth(event)
       )
       return
     }
     if (!tryEnqueue(encodeServerEvent(event))) {
-      enqueueReset(event, false, event.type === "collections.invalidate")
+      enqueueReset(event, false, realtimeEventRefreshesHearth(event))
     }
   }
 
@@ -168,13 +169,48 @@ export async function openAuthorizedRealtimeStream(input: {
       return
     }
 
+    if (event.type === "relay.metadata") {
+      const previouslyReadable = policy.readableRelays.has(event.relayId)
+      if (
+        !previouslyReadable &&
+        !policy.isPlatformAdmin &&
+        !event.userIds?.includes(input.user.id)
+      ) {
+        return
+      }
+      const refreshedPolicy = await recoverPromise(
+        () => loadRealtimeAccessPolicy(input.user),
+        (cause) => {
+          console.warn("[Kiln realtime] Could not refresh Relay policy", cause)
+          finish(true)
+          return null
+        }
+      )
+      if (!refreshedPolicy) return
+      policy = refreshedPolicy
+      if (!previouslyReadable && !policy.readableRelays.has(event.relayId)) {
+        return
+      }
+      // Identity writes can add or remove a Relay from this stream. Refresh
+      // authorization before projecting later deltas, then refresh both the
+      // control-plane queries and the derived fleet snapshot.
+      enqueue({
+        epoch: event.epoch,
+        scope: { relayId: event.relayId },
+        sequence: event.sequence,
+        topics: ["relays"],
+        type: "relay.invalidate",
+      })
+      return
+    }
+
     const relay = policy.relays.get(event.relayId)
     if (!relay || !policy.readableRelays.has(relay.id)) return
 
     if (event.type === "relay.state") {
-      // Registry writes publish their own Hearth invalidation. Connection
-      // state only changes the Relay fleet snapshot, so keep one client event
-      // per source sequence and avoid a redundant control-plane fetch.
+      // Connection state only changes the Relay fleet snapshot, so keep one
+      // client event per source sequence and avoid a redundant control-plane
+      // fetch.
       enqueue({
         epoch: event.epoch,
         sequence: event.sequence,

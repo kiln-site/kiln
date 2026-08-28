@@ -52,6 +52,17 @@ describe("realtime source", () => {
     expect(classifyRealtimeEvent(event, identity)).toBe("ordered")
   })
 
+  it("never skips Relay identity policy refresh during overflow", () => {
+    const event = {
+      epoch,
+      relayId: "relay-a",
+      sequence: 1,
+      type: "relay.metadata",
+    } satisfies RealtimeSourceEvent
+
+    expect(classifyRealtimeEvent(event, identity)).toBe("ordered")
+  })
+
   it("closes immediately for access and session revocation", () => {
     const access = {
       epoch,

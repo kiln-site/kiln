@@ -130,7 +130,7 @@ export const queryKeys = {
     options: ["schedules", "options"] as const,
   },
   relays: ["relays"] as const,
-  tailscale: (relayId: string) => ["relays", relayId, "tailscale"] as const,
+  tailscale: (relayId: string) => ["tailscale", "relays", relayId] as const,
   tailscaleStacks: ["tailscale", "stacks"] as const,
   updates: ["updates", "overview"] as const,
   uiPreferences: ["ui", "preferences"] as const,

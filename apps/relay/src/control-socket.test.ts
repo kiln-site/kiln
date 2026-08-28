@@ -106,6 +106,7 @@ describe("Relay control errors", () => {
 describe("Relay control audit details", () => {
   it("audits database dump exports", () => {
     expect(isAuditedOperation("database.dump.export")).toBe(true)
+    expect(isAuditedOperation("database.list")).toBe(false)
   })
 
   it("attributes mutations and scopes created instances from the result", () => {

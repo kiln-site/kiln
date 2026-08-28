@@ -47,6 +47,10 @@ import { hasBackupPermission } from "@/lib/backup-access"
 import { roleHasPermission } from "@/lib/permissions"
 import { scheduleBackupCopyProcessing } from "@/lib/backup-copy"
 import { selectBackupCopySource } from "@/lib/backup-copy-source"
+import {
+  publishBackupChange,
+  publishBackupSettingsChange,
+} from "@/lib/backup-realtime.server"
 import { signLocalBackupDownload } from "@/backups/destinations/local"
 import { relayRpc } from "@/lib/relay-connection"
 import { kilnInstallationId, kilnPublicUrl } from "@/lib/environment"
@@ -201,6 +205,7 @@ export const createInstanceBackup = createServerFn({ method: "POST" })
         taskId: randomUUID(),
       })
     )
+    publishBackupChange(relay.id)
     let relayAccepted = true
     const dispatched = await Promise.allSettled([
       dispatchBackupTask(relay, input, user.id),
@@ -257,6 +262,7 @@ export const createDatabaseBackup = createServerFn({ method: "POST" })
         taskId: randomUUID(),
       })
     )
+    publishBackupChange(relay.id)
     const dispatched = await Promise.allSettled([
       dispatchBackupTask(relay, input, user.id),
     ])
@@ -298,6 +304,7 @@ export const createPlatformBackup = createServerFn({ method: "POST" })
         taskId: randomUUID(),
       })
     )
+    publishBackupChange(relay.id)
     const dispatched = await Promise.allSettled([
       dispatchBackupTask(relay, input, user.id),
     ])
@@ -427,6 +434,7 @@ export const cancelBackup = createServerFn({ method: "POST" })
     if (task.status !== "cancelled") {
       throw new Error("This backup is no longer being created")
     }
+    publishBackupChange(relay.id)
     return { cancelled: true as const }
   })
 
@@ -463,6 +471,7 @@ export const deleteBackup = createServerFn({ method: "POST" })
         )
       }
       if (forgetResult === "not_found") throw new Error("Backup not found")
+      publishBackupChange(backup.relayId)
       return { forgotten: true as const }
     }
     if (!hasBackupPermission(user, grants, backup, "backup.delete")) {
@@ -482,6 +491,7 @@ export const deleteBackup = createServerFn({ method: "POST" })
         taskId: randomUUID(),
       })
     )
+    publishBackupChange(relay.id)
     const dispatched = await Promise.allSettled([
       dispatchBackupTask(relay, input, user.id),
     ])
@@ -513,6 +523,7 @@ export const renameBackup = createServerFn({ method: "POST" })
       })
     )
     if (!renamed) throw new Error("Backup not found")
+    publishBackupChange(backup.relayId)
     return { name: data.name }
   })
 
@@ -559,6 +570,7 @@ export const copyBackupToDestination = createServerFn({ method: "POST" })
       })
     )
     scheduleBackupCopyProcessing()
+    publishBackupChange(backup.relayId)
     return { copied: false, queued: true, taskId: reserved.taskId }
   })
 
@@ -719,6 +731,7 @@ export const restoreInstanceBackup = createServerFn({ method: "POST" })
         taskId: randomUUID(),
       })
     )
+    publishBackupChange(relay.id)
     const firstTask = safety ?? restore
     const dispatched = await Promise.allSettled([
       dispatchBackupTask(relay, firstTask, user.id),
@@ -800,6 +813,7 @@ export const restoreDatabaseBackup = createServerFn({ method: "POST" })
         taskId: randomUUID(),
       })
     )
+    publishBackupChange(relay.id)
     const dispatched = await Promise.allSettled([
       dispatchBackupTask(relay, safety ?? restore, user.id),
     ])
@@ -835,6 +849,7 @@ export const updateBackupLimits = createServerFn({ method: "POST" })
         targetKind: target.kind,
       })
     )
+    publishBackupSettingsChange(data.relayId)
     return { updated: true }
   })
 
@@ -852,6 +867,7 @@ export const updateBackupExcludes = createServerFn({ method: "POST" })
         targetKind: target.kind,
       })
     )
+    publishBackupSettingsChange(data.relayId)
     return { updated: true }
   })
 
@@ -897,6 +913,7 @@ async function resticBackupDownload(input: {
     })
   )
   if (reserved.kind === "dispatch") {
+    publishBackupChange(input.backup.relayId)
     const relay = await requireBackupRelay(input.backup.relayId)
     await dispatchBackupTask(relay, reserved.dispatch, input.user.id)
     return { preparing: true, taskId: reserved.dispatch.taskId }

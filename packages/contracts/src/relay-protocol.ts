@@ -94,6 +94,54 @@ export const relayControlOperations = [
 
 export type RelayControlOperation = (typeof relayControlOperations)[number]
 
+const auditedRelayControlOperations = new Set<RelayControlOperation>([
+  "relay.rename",
+  "relay.update.apply",
+  "relay.pairing.create",
+  "relay.pairing.revoke",
+  "relay.clients.update",
+  "relay.clients.revoke",
+  "relay.networking.write",
+  "relay.tailscale.install",
+  "relay.tailscale.stack.apply",
+  "relay.tailscale.stack.dns",
+  "relay.tailscale.stack.remove",
+  "relay.tailscale.write",
+  "relay.proxy.write",
+  "instance.create",
+  "instance.provision.prepare",
+  "instance.provision.claim",
+  "instance.provision.cancel",
+  "instance.startup.write",
+  "instance.rename",
+  "instance.delete",
+  "instance.action",
+  "instance.files.write",
+  "instance.files.upload-url",
+  "instance.files.mutate",
+  "instance.console.write",
+  "instance.network.ports.write",
+  "instance.network.routes.write",
+  "database.create",
+  "database.delete",
+  "database.action",
+  "database.credentials.rotate",
+  "database.network.write",
+  "database.dump.export",
+  "database.dump.import",
+  "backup.task.enqueue",
+  "backup.task.cancel",
+  "schedule.apply",
+  "schedule.run",
+  "schedule.remove",
+])
+
+export function isAuditedRelayControlOperation(
+  operation: RelayControlOperation
+): boolean {
+  return auditedRelayControlOperations.has(operation)
+}
+
 export function relayControlDeadlineMs(
   operation: RelayControlOperation
 ): number {

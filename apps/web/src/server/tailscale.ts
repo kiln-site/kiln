@@ -38,6 +38,7 @@ import { runAppEffect } from "@/effect/runtime"
 import { isPlatformAdmin } from "@/lib/access-control"
 import { invalidateRelayCache, relayCachePolicy } from "@/lib/relay-client"
 import { relayRpc } from "@/lib/relay-connection"
+import { publishRealtimeChange } from "@/lib/realtime-source.server"
 import type { PersistedRelay } from "@/lib/relay-registry"
 import { listPersistedRelays } from "@/lib/relay-registry"
 import { requireAuthenticatedUser } from "@/server/auth"
@@ -152,7 +153,7 @@ export const configureTailscaleIntegration = createServerFn({ method: "POST" })
       ...verified,
       clientSecret: data.clientSecret,
     } satisfies TailscaleOAuthCredential
-    return Effect.runPromise(
+    const configured = await Effect.runPromise(
       promiseEffect(async () => {
         const result = await loadTailscaleStacks()
         requireCompleteTailscaleDeploymentList(result.unavailableRelays)
@@ -176,6 +177,8 @@ export const configureTailscaleIntegration = createServerFn({ method: "POST" })
         }
       }).pipe(Effect.tapError(recordTailscaleSyncFailure(data.id)))
     )
+    publishTailscaleChange()
+    return configured
   })
 
 export const previewTailscaleIntegration = createServerFn({ method: "POST" })
@@ -234,12 +237,14 @@ export const syncTailscaleIntegration = createServerFn({ method: "POST" })
     requireCompleteTailscaleDeploymentList(result.unavailableRelays)
     const stack = result.stacks.find(({ id }) => id === data.id)
     if (!stack) throw new Error("Tailscale network not found")
-    return Effect.runPromise(
+    const synchronized = await Effect.runPromise(
       promiseEffect(async () => {
         await synchronizeTailscaleControlPlane(credential, stack)
         return loadTailscaleStacks()
       }).pipe(Effect.tapError(recordTailscaleSyncFailure(data.id)))
     )
+    publishTailscaleChange()
+    return synchronized
   })
 
 export const saveTailscaleStack = createServerFn({ method: "POST" })
@@ -492,10 +497,12 @@ export const saveTailscaleStack = createServerFn({ method: "POST" })
       })
     )
 
-    await invalidateRelaySnapshots([
+    const affectedRelayIds = [
       ...desiredRelayIds,
       ...removed.map(({ relayId }) => relayId),
-    ])
+    ]
+    await invalidateRelaySnapshots(affectedRelayIds)
+    publishTailscaleChange()
     return {
       stacks: groupTailscaleDeployments(
         [
@@ -563,8 +570,17 @@ export const removeTailscaleStack = createServerFn({ method: "POST" })
     )
     await removeTailscaleNetworkDefinition(data.id)
     await invalidateRelaySnapshots(deployments.map(({ relayId }) => relayId))
+    publishTailscaleChange()
     return { removed: true }
   })
+
+function publishTailscaleChange(): void {
+  publishRealtimeChange({
+    audience: { kind: "platform-admins" },
+    topics: ["tailscale"],
+    type: "hearth.invalidate",
+  })
+}
 
 async function requireTailscaleAdministrator() {
   const user = await requireAuthenticatedUser()
@@ -1030,7 +1046,13 @@ function errorMessage(cause: unknown): string {
 
 function recordTailscaleSyncFailure(id: string) {
   return (cause: unknown) =>
-    promiseEffect(() => recordTailscaleSync(id, errorMessage(cause)))
+    promiseEffect(() => recordTailscaleSync(id, errorMessage(cause))).pipe(
+      Effect.andThen(
+        Effect.sync(() => {
+          publishTailscaleChange()
+        })
+      )
+    )
 }
 
 function promiseEffect<TResult>(

@@ -32,6 +32,7 @@ import {
   relayRpc,
 } from "@/lib/relay-connection"
 import { loadRelayCredentials } from "@/lib/relay-registry"
+import { subscribeRealtimeChanges } from "@/lib/realtime-source.server"
 
 const relayId = "relay-connection-effect-test"
 const pushedSnapshot = {
@@ -65,6 +66,12 @@ effectIt.effect(
     withRelayServer(
       ({ cancelled, disconnect, endpoint, reconnected, requests }) =>
         Effect.gen(function* () {
+          const activityEvents: Array<string> = []
+          const unsubscribe = subscribeRealtimeChanges((event) => {
+            if (event.type === "hearth.invalidate") {
+              activityEvents.push(...event.topics)
+            }
+          })
           const snapshot = yield* promiseEffect(() =>
             relayRpc(endpoint, "relay.snapshot", {}, 1_000)
           )
@@ -76,6 +83,18 @@ effectIt.effect(
           )
           expect(inspection).toEqual({ eligible: true })
           expect(requests).toHaveLength(1)
+
+          yield* promiseEffect(() =>
+            relayRpc(
+              endpoint,
+              "relay.proxy.write",
+              { mode: "none" },
+              1_000,
+              "user-a"
+            )
+          )
+          expect(activityEvents).toEqual(["activity"])
+          unsubscribe()
 
           vi.spyOn(Math, "random").mockReturnValue(0)
           disconnect()

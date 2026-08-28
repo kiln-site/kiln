@@ -328,14 +328,14 @@ export const deleteSchedule = createServerFn({ method: "POST" })
         WHERE id = ? AND deleted_at IS NULL`,
       [revision, schedule.id]
     )
+    publishScheduleCollectionChange(
+      schedule.targets.map((target) => target.relayId)
+    )
     await removeRelayProjections(
       schedule.id,
       revision,
       [...new Set(schedule.targets.map((target) => target.relayId))],
       user.id
-    )
-    publishScheduleCollectionChange(
-      schedule.targets.map((target) => target.relayId)
     )
     return { deleted: true, id: schedule.id }
   })
@@ -384,14 +384,29 @@ export const runScheduleNow = createServerFn({ method: "POST" })
             )
           )
         )
-        return Result.isSuccess(started)
-          ? { error: null, relayId, started: true }
-          : {
-              error: errorMessage(started.failure),
-              relayId,
-              started: false,
-            }
+        if (Result.isFailure(started)) {
+          return {
+            error: errorMessage(started.failure),
+            relayId,
+            started: false,
+          }
+        }
+        const imported = await Effect.runPromise(
+          Effect.result(
+            promiseEffect(() => importScheduleRun(relayId, started.success))
+          )
+        )
+        if (Result.isFailure(imported)) {
+          console.warn(
+            "[Kiln schedules] A started run could not be imported immediately",
+            imported.failure
+          )
+        }
+        return { error: null, relayId, started: true }
       })
+    )
+    publishScheduleCollectionChange(
+      results.flatMap((result) => (result.started ? [result.relayId] : []))
     )
     return {
       relays: results,

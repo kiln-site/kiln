@@ -798,6 +798,7 @@ const adoptScheduledBackupTask = Effect.fnUntraced(function* (
 export const reconcileBackupTaskEffect = Effect.fn("backups.reconcile")(
   function* (task: RelayBackupTask, relayId?: string) {
     const database = yield* Database
+    let changed = false
     yield* database.transaction("backup_reconcile", (transaction) =>
       Effect.gen(function* () {
         const knownTasks = yield* transaction.queryRows<KnownBackupTaskRow>(
@@ -813,6 +814,7 @@ export const reconcileBackupTaskEffect = Effect.fn("backups.reconcile")(
         let knownTask = knownTasks[0]
         if (!knownTask && relayId) {
           yield* adoptScheduledBackupTask(transaction, relayId, task)
+          changed = true
           const adoptedTasks = yield* transaction.queryRows<KnownBackupTaskRow>(
             `SELECT task.id, task.status, task.bytes_completed,
                       backup.status AS backup_status,
@@ -844,6 +846,7 @@ export const reconcileBackupTaskEffect = Effect.fn("backups.reconcile")(
         ) {
           return
         }
+        changed = true
         yield* transaction.execute(
           `UPDATE ${databaseTable("backup_task")}
               SET status = ?, bytes_completed = ?, bytes_total = ?,
@@ -1097,6 +1100,7 @@ export const reconcileBackupTaskEffect = Effect.fn("backups.reconcile")(
         }
       })
     )
+    return changed
   }
 )
 

@@ -38,6 +38,7 @@ import {
 } from "@/lib/final-database-deletion"
 import { accessPermissions, roleHasPermission } from "@/lib/permissions"
 import type { AccessPermission } from "@/lib/permissions"
+import { publishRealtimeChange } from "@/lib/realtime-source.server"
 import type { PersistedRelay } from "@/lib/relay-registry"
 import { listPersistedRelays } from "@/lib/relay-registry"
 import { requireAuthenticatedUser } from "@/server/auth"
@@ -403,6 +404,7 @@ export const createManagedDatabase = createServerFn({ method: "POST" })
       )
       throw persisted.failure
     }
+    publishDatabaseChange(relay.id, true)
     return { ...created, relayId: relay.id, relayName: relay.name }
   })
 
@@ -410,7 +412,7 @@ export const runManagedDatabaseAction = createServerFn({ method: "POST" })
   .validator(databaseActionInputSchema)
   .handler(async ({ data }) => {
     const { relay, user } = await authorizedDatabase(data, "database.power")
-    return relayManagedDatabaseSchema.parse(
+    const database = relayManagedDatabaseSchema.parse(
       await databaseRpc(
         relay,
         "database.action",
@@ -419,6 +421,8 @@ export const runManagedDatabaseAction = createServerFn({ method: "POST" })
         user.id
       )
     )
+    publishDatabaseChange(relay.id, false)
+    return database
   })
 
 export const rotateManagedDatabasePassword = createServerFn({ method: "POST" })
@@ -469,6 +473,7 @@ export const rotateManagedDatabasePassword = createServerFn({ method: "POST" })
       )
       throw persisted.failure
     }
+    publishDatabaseCredentialChange(relay.id, data.databaseId)
     return { rotated: true }
   })
 
@@ -485,7 +490,7 @@ export const updateManagedDatabaseNetwork = createServerFn({ method: "POST" })
       relayId: data.relayId,
       user,
     })
-    return relayManagedDatabaseSchema.parse(
+    const database = relayManagedDatabaseSchema.parse(
       await databaseRpc(
         relay,
         "database.network.write",
@@ -498,6 +503,8 @@ export const updateManagedDatabaseNetwork = createServerFn({ method: "POST" })
         user.id
       )
     )
+    publishDatabaseChange(relay.id, false)
+    return database
   })
 
 export const exportManagedDatabase = createServerFn({ method: "POST" })
@@ -572,8 +579,40 @@ export const deleteManagedDatabase = createServerFn({ method: "POST" })
     } else {
       await deleteDatabaseWithoutFinalBackup(deletion)
     }
+    publishDatabaseChange(relay.id, true, data.databaseId)
     return { deleted: true }
   })
+
+function publishDatabaseChange(
+  relayId: string,
+  directoryChanged: boolean,
+  deletedDatabaseId?: string
+): void {
+  publishRealtimeChange({
+    audience: { kind: "relays", relayIds: [relayId] },
+    scope: deletedDatabaseId
+      ? { databaseId: deletedDatabaseId, relayId }
+      : { relayId },
+    topics: deletedDatabaseId
+      ? ["databases", "database-directory", "database-credentials"]
+      : directoryChanged
+        ? ["databases", "database-directory"]
+        : ["databases"],
+    type: "hearth.invalidate",
+  })
+}
+
+function publishDatabaseCredentialChange(
+  relayId: string,
+  databaseId: string
+): void {
+  publishRealtimeChange({
+    audience: { kind: "relays", relayIds: [relayId] },
+    scope: { databaseId, relayId },
+    topics: ["database-credentials"],
+    type: "hearth.invalidate",
+  })
+}
 
 async function authorizedDatabase(
   data: { databaseId: string; relayId: string },
