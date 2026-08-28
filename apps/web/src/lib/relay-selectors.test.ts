@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vite-plus/test"
 import type { RelayInstance, RelaySnapshot } from "@workspace/contracts"
+import { builtinTailscaleBrickId } from "@workspace/contracts"
 
 import {
   addRelayInstanceToSnapshot,
@@ -22,6 +23,7 @@ import {
   selectInstanceWorkspaceInstance,
   selectRouteInstances,
   selectServerListInstances,
+  selectSidebarInstanceCount,
   selectSidebarInstances,
 } from "@/lib/relay-selectors"
 
@@ -141,6 +143,22 @@ describe("Relay render selectors", () => {
     expect(selectInstanceSettings(instance.id)(after)).toEqual(
       selectInstanceSettings(instance.id)(before)
     )
+  })
+
+  it("keeps internal Tailscale nodes out of server navigation", () => {
+    const snapshot = snapshotWithCpu(1)
+    snapshot.instances.push({
+      ...snapshot.instances[0]!,
+      brickId: builtinTailscaleBrickId,
+      id: "b".repeat(40),
+      routeId: "relay-one-bbbbbbbb",
+      shortId: "bbbbbbbb",
+    })
+
+    expect(selectSidebarInstanceCount(snapshot)).toBe(1)
+    expect(selectSidebarInstances(snapshot).map(({ id }) => id)).toEqual([
+      instance.id,
+    ])
   })
 
   it("continues publishing each resource sample to the runtime subscriber", () => {

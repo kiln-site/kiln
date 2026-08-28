@@ -122,9 +122,29 @@ CREATE TABLE IF NOT EXISTS kiln_tailscale_network (
   oauth_tags JSON NULL,
   oauth_last_synced_at TIMESTAMP(3) NULL,
   oauth_last_error VARCHAR(512) NULL,
+  deletion_requested_at TIMESTAMP(3) NULL,
+  deletion_requested_by VARCHAR(36) NULL,
+  cleanup_attempts INT UNSIGNED NOT NULL DEFAULT 0,
+  cleanup_next_attempt_at TIMESTAMP(3) NULL,
+  cleanup_last_error VARCHAR(512) NULL,
   created_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
   updated_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
   UNIQUE KEY kiln_tailscale_network_domain_unique (domain)
+);
+
+CREATE TABLE IF NOT EXISTS kiln_tailscale_network_deployment (
+  network_id CHAR(40) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+  relay_id CHAR(43) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+  deployment JSON NOT NULL,
+  cleanup_attempts INT UNSIGNED NOT NULL DEFAULT 0,
+  cleanup_next_attempt_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  cleanup_last_error VARCHAR(512) NULL,
+  observed_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  updated_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+  PRIMARY KEY (network_id, relay_id),
+  KEY kiln_tailscale_network_deployment_cleanup_due_idx (cleanup_next_attempt_at, updated_at),
+  CONSTRAINT kiln_tailscale_network_deployment_network_fk
+    FOREIGN KEY (network_id) REFERENCES kiln_tailscale_network (id) ON DELETE CASCADE
 );
 
 CREATE TABLE IF NOT EXISTS kiln_domain_integration (

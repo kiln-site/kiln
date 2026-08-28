@@ -379,6 +379,11 @@ async function ensureTailscaleNetworkSchema(database) {
     ["oauth_tags", "JSON NULL"],
     ["oauth_last_synced_at", "TIMESTAMP(3) NULL"],
     ["oauth_last_error", "VARCHAR(512) NULL"],
+    ["deletion_requested_at", "TIMESTAMP(3) NULL"],
+    ["deletion_requested_by", "VARCHAR(36) NULL"],
+    ["cleanup_attempts", "INT UNSIGNED NOT NULL DEFAULT 0"],
+    ["cleanup_next_attempt_at", "TIMESTAMP(3) NULL"],
+    ["cleanup_last_error", "VARCHAR(512) NULL"],
   ].filter(([name]) => !names.has(name))
   if (additions.length > 0) {
     await database.query(

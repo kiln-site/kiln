@@ -37,13 +37,27 @@ export interface TailscaleOAuthCredential {
 }
 
 export interface TailscaleNetworkDefinition {
+  cleanup: TailscaleNetworkCleanup | null
   domain: string
   id: string
   integration: TailscaleIntegration | null
   name: string
 }
 
+export interface TailscaleNetworkCleanup {
+  attempts: number
+  lastError: string | null
+  nextAttemptAt: string | null
+  pendingRelays: number
+  requestedAt: string
+}
+
 interface TailscaleNetworkRow extends RowDataPacket {
+  cleanup_attempts: number
+  cleanup_last_error: string | null
+  cleanup_next_attempt_at: Date | string | null
+  cleanup_pending_relays: number | string
+  deletion_requested_at: Date | string | null
   domain: string
   id: string
   name: string
@@ -61,18 +75,51 @@ export const loadTailscaleNetworkDefinitionsEffect = Effect.fn(
   const database = yield* Database
   const rows = yield* database.queryRows<TailscaleNetworkRow>(
     "tailscaleNetworks.load",
-    `SELECT id, name, domain, oauth_client_id,
+    `SELECT network.id, network.name, network.domain, network.oauth_client_id,
             oauth_client_secret_ciphertext, oauth_scopes, oauth_tags,
-            oauth_last_synced_at, oauth_last_error
-       FROM ${databaseTable("tailscale_network")}
-      ORDER BY name, id`
+            oauth_last_synced_at, oauth_last_error,
+            deletion_requested_at, cleanup_attempts,
+            cleanup_next_attempt_at, cleanup_last_error,
+            (SELECT COUNT(*)
+               FROM ${databaseTable("tailscale_network_deployment")} deployment
+              WHERE deployment.network_id = network.id) AS cleanup_pending_relays
+       FROM ${databaseTable("tailscale_network")} network
+      ORDER BY network.name, network.id`
   )
   return rows.map((row) => ({
+    cleanup: cleanupState(row),
     domain: relayTailscaleDomainSchema.parse(row.domain),
     id: relayTailscaleStackIdSchema.parse(row.id),
     integration: publicIntegration(row),
     name: relayInstanceNameSchema.parse(row.name),
   }))
+})
+
+export const createTailscaleNetworkDefinitionEffect = Effect.fn(
+  "tailscaleNetworks.create"
+)(function* (
+  definition: Omit<TailscaleNetworkDefinition, "cleanup" | "integration">,
+  credential: Omit<TailscaleOAuthCredential, "clientSecret">,
+  clientSecret: string
+) {
+  const database = yield* Database
+  const ciphertext = yield* encryptTailscaleClientSecretEffect(clientSecret)
+  yield* database.execute(
+    "tailscaleNetworks.create",
+    `INSERT INTO ${databaseTable("tailscale_network")}
+       (id, name, domain, oauth_client_id, oauth_client_secret_ciphertext,
+        oauth_scopes, oauth_tags)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    [
+      definition.id,
+      definition.name,
+      definition.domain,
+      credential.clientId,
+      ciphertext,
+      JSON.stringify(credential.scopes),
+      JSON.stringify(credential.tags),
+    ]
+  )
 })
 
 export const saveTailscaleNetworkDefinitionEffect = Effect.fn(
@@ -115,19 +162,7 @@ export const saveTailscaleNetworkIntegrationEffect = Effect.fn(
   clientSecret: string
 ) {
   const database = yield* Database
-  const ciphertext = yield* Effect.try({
-    try: () =>
-      encryptWithKeyring(
-        clientSecret,
-        betterAuthSecrets(),
-        TAILSCALE_OAUTH_SECRET_PURPOSE
-      ),
-    catch: (cause) =>
-      CredentialError.make({
-        operation: "encrypt_tailscale_oauth_secret",
-        cause,
-      }),
-  })
+  const ciphertext = yield* encryptTailscaleClientSecretEffect(clientSecret)
   const result = yield* database.execute(
     "tailscaleNetworks.integration.save",
     `UPDATE ${databaseTable("tailscale_network")}
@@ -265,6 +300,36 @@ function publicIntegration(
     scopes: parseStringArray(row.oauth_scopes),
     tags: parseStringArray(row.oauth_tags),
   }
+}
+
+function cleanupState(
+  row: TailscaleNetworkRow
+): TailscaleNetworkCleanup | null {
+  const requestedAt = timestamp(row.deletion_requested_at)
+  if (!requestedAt) return null
+  return {
+    attempts: row.cleanup_attempts,
+    lastError: row.cleanup_last_error,
+    nextAttemptAt: timestamp(row.cleanup_next_attempt_at),
+    pendingRelays: Number(row.cleanup_pending_relays),
+    requestedAt,
+  }
+}
+
+function encryptTailscaleClientSecretEffect(clientSecret: string) {
+  return Effect.try({
+    try: () =>
+      encryptWithKeyring(
+        clientSecret,
+        betterAuthSecrets(),
+        TAILSCALE_OAUTH_SECRET_PURPOSE
+      ),
+    catch: (cause) =>
+      CredentialError.make({
+        operation: "encrypt_tailscale_oauth_secret",
+        cause,
+      }),
+  })
 }
 
 function parseStringArray(value: unknown): Array<string> {

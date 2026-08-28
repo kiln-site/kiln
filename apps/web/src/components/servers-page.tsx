@@ -1,4 +1,5 @@
 import * as React from "react"
+import { eq, not } from "@tanstack/db"
 import { useDbClient, useLiveQuery } from "@tanstack/react-db"
 import {
   useQuery,
@@ -518,6 +519,9 @@ const FilteredServerTableBoundary = React.memo(
         if (!relayConfigured) return undefined
         return query
           .from({ instance: relayInstancesCollectionOptions })
+          .where(({ instance }) =>
+            not(eq(instance.brickId, builtinTailscaleBrickId))
+          )
           .select(({ instance }) => ({
             brickId: instance.brickId,
             brickSource: instance.brickSource,

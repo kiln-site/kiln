@@ -17,6 +17,11 @@ import { Effect } from "effect"
 import { z } from "zod"
 
 import {
+  observeTailscaleDeploymentsEffect,
+  replaceTailscaleDeploymentsEffect,
+  requestTailscaleNetworkCleanupEffect,
+} from "@/effect/tailscale-cleanup"
+import {
   createTailscaleNodeAuthKeyEffect,
   inspectTailscaleControlPlaneEffect,
   removeTailscaleControlPlaneDeviceEffect,
@@ -24,10 +29,10 @@ import {
   verifyTailscaleOAuthCredentialEffect,
 } from "@/effect/tailscale-api"
 import {
+  createTailscaleNetworkDefinitionEffect,
   loadTailscaleNetworkCredentialEffect,
   loadTailscaleNetworkDefinitionsEffect,
   recordTailscaleNetworkSyncEffect,
-  removeTailscaleNetworkDefinitionEffect,
   saveTailscaleNetworkIntegrationEffect,
   saveTailscaleNetworkDefinitionEffect,
   type TailscaleIntegration,
@@ -59,8 +64,20 @@ const saveTailscaleStackSchema = z.strictObject({
   authKey: relayTailscaleInstallSchema.shape.authKey.optional(),
   bindings: z.array(stackBindingInputSchema).max(4_096),
   domain: relayTailscaleDomainSchema,
-  id: relayTailscaleStackIdSchema.optional(),
+  id: relayTailscaleStackIdSchema,
   name: relayInstanceNameSchema,
+})
+
+const createTailscaleNetworkSchema = z.strictObject({
+  clientId: z.string().trim().min(1).max(120),
+  clientSecret: z.string().trim().min(20).max(512),
+  domain: relayTailscaleDomainSchema,
+  name: relayInstanceNameSchema,
+  tag: z
+    .string()
+    .trim()
+    .transform((value) => (value.startsWith("tag:") ? value : `tag:${value}`))
+    .pipe(z.string().regex(/^tag:[a-zA-Z0-9][a-zA-Z0-9-]*$/u)),
 })
 
 const removeTailscaleStackSchema = z.strictObject({
@@ -101,6 +118,7 @@ export interface TailscaleStackOverview {
     relayName: string
   }>
   deployments: Array<TailscaleDeployment>
+  cleanup: TailscaleNetworkDefinition["cleanup"]
   domain: string
   id: string
   integration: TailscaleIntegration | null
@@ -127,6 +145,41 @@ export const getTailscaleStacks = createServerFn({ method: "GET" }).handler(
     return loadTailscaleStacks()
   }
 )
+
+export const createTailscaleNetwork = createServerFn({ method: "POST" })
+  .validator(createTailscaleNetworkSchema)
+  .handler(async ({ data }) => {
+    await requireTailscaleAdministrator()
+    const definitions = await loadTailscaleNetworkDefinitions()
+    const domainOwner = definitions.find(
+      (definition) => definition.domain === data.domain
+    )
+    if (domainOwner) {
+      throw new Error(
+        `Network TLD .${data.domain} is already used by ${domainOwner.name}`
+      )
+    }
+    const verified = await runAppEffect(
+      "tailscale.oauth.verify",
+      verifyTailscaleOAuthCredentialEffect(data.clientId, data.clientSecret, [
+        data.tag,
+      ])
+    )
+    await runAppEffect(
+      "tailscale.networks.create",
+      createTailscaleNetworkDefinitionEffect(
+        {
+          domain: data.domain,
+          id: randomBytes(32).toString("hex").slice(0, 40),
+          name: data.name,
+        },
+        verified,
+        data.clientSecret
+      )
+    )
+    publishTailscaleChange()
+    return loadTailscaleStacks()
+  })
 
 export const configureTailscaleIntegration = createServerFn({ method: "POST" })
   .validator(configureTailscaleIntegrationSchema)
@@ -255,7 +308,7 @@ export const saveTailscaleStack = createServerFn({ method: "POST" })
       (relay) => relay.enabled
     )
     const relayById = new Map(relays.map((relay) => [relay.id, relay]))
-    const id = data.id ?? randomBytes(32).toString("hex").slice(0, 40)
+    const id = data.id
     const duplicateHostname = data.bindings.find(
       (binding, index, bindings) =>
         bindings.findIndex(
@@ -284,6 +337,18 @@ export const saveTailscaleStack = createServerFn({ method: "POST" })
     const current = currentResult.deployments
     const currentForStack = current.filter((deployment) => deployment.id === id)
     const definition = definitions.find((candidate) => candidate.id === id)
+    if (!definition) throw new Error("Tailscale network not found")
+    if (
+      !definition.integration &&
+      !sameTailscaleBindings(data.bindings, currentForStack)
+    ) {
+      throw new Error(
+        "Connect this network to Tailscale before assigning servers"
+      )
+    }
+    if (definition.cleanup) {
+      throw new Error("This Tailscale network is being removed")
+    }
     const currentRelayIds = new Set(
       currentForStack.map(({ relayId }) => relayId)
     )
@@ -295,9 +360,7 @@ export const saveTailscaleStack = createServerFn({ method: "POST" })
         `Network TLD .${data.domain} is already used by ${domainOwner.name}`
       )
     }
-    if (definition || currentForStack.length > 0) {
-      requireCompleteTailscaleDeploymentList(currentResult.unavailableRelays)
-    }
+    requireCompleteTailscaleDeploymentList(currentResult.unavailableRelays)
     for (const binding of data.bindings) {
       const snapshot = currentResult.snapshots.get(binding.relayId)
       if (!snapshot) {
@@ -332,15 +395,12 @@ export const saveTailscaleStack = createServerFn({ method: "POST" })
     }
 
     const nextDefinition = {
+      cleanup: definition.cleanup,
       domain: data.domain,
       id,
-      integration: definition?.integration ?? null,
+      integration: definition.integration,
       name: data.name,
     }
-    if (grouped.size === 0 && !definition && currentForStack.length === 0) {
-      throw new Error("Select at least one server to create this network")
-    }
-
     const desired = [...grouped.entries()]
       .sort(([left], [right]) => left.localeCompare(right))
       .map<DesiredTailscaleDeployment>(([relayId, bindings]) => {
@@ -502,6 +562,10 @@ export const saveTailscaleStack = createServerFn({ method: "POST" })
       ...removed.map(({ relayId }) => relayId),
     ]
     await invalidateRelaySnapshots(affectedRelayIds)
+    await runAppEffect(
+      "tailscale.cleanup.deployments.replace",
+      replaceTailscaleDeploymentsEffect(id, synchronized)
+    )
     publishTailscaleChange()
     return {
       stacks: groupTailscaleDeployments(
@@ -523,55 +587,21 @@ export const removeTailscaleStack = createServerFn({ method: "POST" })
     const relays = (await listPersistedRelays()).filter(
       (relay) => relay.enabled
     )
-    const relayById = new Map(relays.map((relay) => [relay.id, relay]))
     const [current, definitions] = await Promise.all([
       loadTailscaleDeployments(relays),
       loadTailscaleNetworkDefinitions(),
     ])
-    requireCompleteTailscaleDeploymentList(current.unavailableRelays)
     const deployments = current.deployments.filter(
       (deployment) => deployment.id === data.id
     )
-    requireStagedRemovalSupport(deployments, current.snapshots, relayById)
     const definition = definitions.find(({ id }) => id === data.id)
-    const credential = definition?.integration
-      ? await loadTailscaleNetworkCredential(data.id)
-      : null
-    const fallback = deployments[0]
+    if (!definition) throw new Error("Tailscale network not found")
     await runAppEffect(
-      "tailscale.deployment.remove",
-      applyTailscaleDeploymentPlanEffect({
-        current: deployments,
-        desired: [],
-        domain: definition?.domain ?? fallback?.domain ?? "test",
-        id: data.id,
-        name: definition?.name ?? fallback?.name ?? "Tailscale network",
-        operations: tailscaleDeploymentOperations(
-          relayById,
-          user.id,
-          credential
-            ? (deployment) =>
-                removeTailscaleControlPlaneDevice(credential, deployment)
-            : undefined
-        ),
-        beforeFinalize: async () => {
-          if (credential && definition) {
-            await Effect.runPromise(
-              promiseEffect(() =>
-                synchronizeTailscaleControlPlane(
-                  credential,
-                  tailscaleOverviewForDeployments(definition, [])
-                )
-              ).pipe(Effect.tapError(recordTailscaleSyncFailure(data.id)))
-            )
-          }
-        },
-      })
+      "tailscale.cleanup.request",
+      requestTailscaleNetworkCleanupEffect(data.id, user.id, deployments)
     )
-    await removeTailscaleNetworkDefinition(data.id)
-    await invalidateRelaySnapshots(deployments.map(({ relayId }) => relayId))
     publishTailscaleChange()
-    return { removed: true }
+    return loadTailscaleStacks()
   })
 
 function publishTailscaleChange(): void {
@@ -596,6 +626,16 @@ async function loadTailscaleStacks(): Promise<TailscaleStacksResult> {
     loadTailscaleNetworkDefinitions(),
     loadTailscaleDeployments(relays),
   ])
+  const definitionIds = new Set(definitions.map(({ id }) => id))
+  const observed = result.deployments.filter((deployment) =>
+    definitionIds.has(deployment.id)
+  )
+  if (observed.length > 0) {
+    await runAppEffect(
+      "tailscale.cleanup.deployments.observe",
+      observeTailscaleDeploymentsEffect(observed)
+    )
+  }
   return {
     stacks: groupTailscaleDeployments(result.deployments, definitions),
     unavailableRelays: result.unavailableRelays,
@@ -618,6 +658,7 @@ function groupTailscaleDeployments(
   for (const deployment of deployments) {
     const stack = grouped.get(deployment.id) ?? {
       bindings: [],
+      cleanup: null,
       deployments: [],
       domain: deployment.domain,
       id: deployment.id,
@@ -906,13 +947,6 @@ function recordTailscaleSync(id: string, error: string | null) {
   )
 }
 
-function removeTailscaleNetworkDefinition(id: string) {
-  return runAppEffect(
-    "tailscale.networks.remove",
-    removeTailscaleNetworkDefinitionEffect(id)
-  )
-}
-
 function replaceTailscaleNetworkDefinition(
   definitions: ReadonlyArray<TailscaleNetworkDefinition>,
   next: TailscaleNetworkDefinition
@@ -921,6 +955,28 @@ function replaceTailscaleNetworkDefinition(
     ...definitions.filter((definition) => definition.id !== next.id),
     next,
   ]
+}
+
+function sameTailscaleBindings(
+  bindings: ReadonlyArray<z.infer<typeof stackBindingInputSchema>>,
+  deployments: ReadonlyArray<TailscaleDeployment>
+): boolean {
+  const current = new Set(
+    deployments.flatMap((deployment) =>
+      deployment.bindings.map(
+        (binding) =>
+          `${deployment.relayId}:${binding.instanceId}:${binding.hostname}`
+      )
+    )
+  )
+  return (
+    current.size === bindings.length &&
+    bindings.every((binding) =>
+      current.has(
+        `${binding.relayId}:${binding.instanceId}:${binding.hostname}`
+      )
+    )
+  )
 }
 
 function requireCompleteTailscaleDeploymentList(

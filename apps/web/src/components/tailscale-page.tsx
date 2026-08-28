@@ -1,15 +1,16 @@
 import * as React from "react"
 import {
   useMutation,
-  useQuery,
   useQueryClient,
   useSuspenseQuery,
 } from "@tanstack/react-query"
 import { Link } from "@tanstack/react-router"
 import { ensuringPromise, forkPromise } from "@/effect/promise"
 import {
+  ArrowLeft,
   Check,
   CircleAlert,
+  ExternalLink,
   KeyRound,
   LoaderCircle,
   Network,
@@ -32,12 +33,12 @@ import {
   DialogTitle,
 } from "@workspace/ui/components/dialog"
 import { Input } from "@workspace/ui/components/input"
+import { showToast } from "@workspace/ui/components/sonner"
 import {
   Tooltip,
   TooltipContent,
   TooltipTrigger,
 } from "@workspace/ui/components/tooltip"
-import { cn } from "@workspace/ui/lib/utils"
 import { MAXIMUM_INSTANCE_NAME_LENGTH } from "@workspace/contracts"
 
 import {
@@ -49,26 +50,10 @@ import {
   useWorkspaceTableSearchInput,
 } from "@/components/workspace-data-table"
 import type { WorkspaceTableSearchStore } from "@/components/workspace-data-table"
-import { TailscaleRelayUpdateHint } from "@/components/tailscale-relay-update-hint"
-import { relayInstanceRouteId } from "@/lib/relay-fleet"
+import { TailscaleNetworkMembershipPage } from "@/components/tailscale-network-membership"
+import { queryKeys, tailscaleStacksQueryOptions } from "@/lib/query-options"
 import {
-  queryKeys,
-  relaySnapshotQueryOptions,
-  tailscaleStacksQueryOptions,
-} from "@/lib/query-options"
-import {
-  defaultTailscaleHostname,
-  selectTailscaleServers,
-  tailscaleServerKey,
-} from "@/lib/tailscale-selectors"
-import type { TailscaleServer } from "@/lib/tailscale-selectors"
-import {
-  showTailscaleOperationError,
-  showTailscaleOperationProgress,
-  showTailscaleOperationSuccess,
-  tailscaleOperationToastId,
-} from "@/lib/tailscale-operation-toasts"
-import {
+  createTailscaleNetwork,
   removeTailscaleStack,
   saveTailscaleStack,
   type TailscaleStackOverview,
@@ -76,13 +61,22 @@ import {
 
 type SaveStackInput = Parameters<typeof saveTailscaleStack>[0]["data"]
 
-const emptyServers: Array<TailscaleServer> = []
+const tailscaleCredentialPermissions = [
+  { group: "General", permission: "DNS" },
+  { group: "Devices", permission: "Core" },
+  { group: "Devices", permission: "Routes" },
+  { group: "Keys", permission: "Auth Keys" },
+] as const
 
 export const TailscalePage = React.memo(function TailscalePage({
   createOpen,
+  highlightedServerKey,
+  selectedNetworkId,
   onCreateOpenChange,
 }: {
   createOpen: boolean
+  highlightedServerKey?: string
+  selectedNetworkId?: string
   onCreateOpenChange: (open: boolean) => void
 }) {
   const [searchStore] = React.useState(createWorkspaceTableSearchStore)
@@ -92,6 +86,25 @@ export const TailscalePage = React.memo(function TailscalePage({
   const { stacks } = data
   const editingStack = stacks.find((stack) => stack.id === editingId) ?? null
   const removingStack = stacks.find((stack) => stack.id === removingId) ?? null
+
+  if (selectedNetworkId) {
+    return (
+      <div>
+        <div className="mx-auto w-full max-w-[90rem] px-3 sm:px-5">
+          <Button asChild type="button" size="sm" variant="ghost">
+            <Link to="/infra/tailscale" search={{}}>
+              <ArrowLeft />
+              All networks
+            </Link>
+          </Button>
+        </div>
+        <TailscaleNetworkMembershipPage
+          highlightedServerKey={highlightedServerKey}
+          stackId={selectedNetworkId}
+        />
+      </div>
+    )
+  }
 
   return (
     <div className="mx-auto w-full max-w-[90rem] px-3 pb-10 sm:px-5">
@@ -335,11 +348,6 @@ const TailscaleTableRow = React.memo(function TailscaleTableRow({
   stack: TailscaleStackOverview
   onEdit: (id: string) => void
 }) {
-  const deployment = stack.deployments[0]
-  const routeId = deployment
-    ? relayInstanceRouteId(deployment.relayId, deployment.instance.shortId)
-    : null
-
   return (
     <tr className="group transition-colors hover:bg-accent/25">
       <WorkspaceTableCell>
@@ -348,9 +356,23 @@ const TailscaleTableRow = React.memo(function TailscaleTableRow({
             <Network className="size-3.5" />
           </span>
           <div className="min-w-0">
-            <p className="truncate text-xs font-semibold text-foreground">
-              {stack.name}
-            </p>
+            <div className="flex min-w-0 items-center gap-2">
+              <p className="truncate text-xs font-semibold text-foreground">
+                {stack.name}
+              </p>
+              {stack.cleanup ? (
+                <Badge
+                  variant="outline"
+                  className="shrink-0 text-amber-400"
+                  title={
+                    stack.cleanup.lastError ??
+                    "Cleanup will continue automatically"
+                  }
+                >
+                  Removing · {stack.cleanup.pendingRelays} pending
+                </Badge>
+              ) : null}
+            </div>
             <p className="type-meta font-mono text-muted-foreground sm:hidden">
               {stack.deployments.length} nodes · {stack.bindings.length} servers
               · .{stack.domain}
@@ -360,7 +382,7 @@ const TailscaleTableRow = React.memo(function TailscaleTableRow({
       </WorkspaceTableCell>
       <WorkspaceTableCell className="hidden sm:table-cell">
         <span className="type-code text-foreground">
-          {stack.deployments.length}
+          {stack.cleanup?.pendingRelays ?? stack.deployments.length}
         </span>
       </WorkspaceTableCell>
       <WorkspaceTableCell className="hidden md:table-cell">
@@ -379,6 +401,7 @@ const TailscaleTableRow = React.memo(function TailscaleTableRow({
                 type="button"
                 size="icon-sm"
                 variant="ghost"
+                disabled={Boolean(stack.cleanup)}
                 aria-label={`Edit ${stack.name}`}
                 onClick={() => onEdit(stack.id)}
               >
@@ -390,18 +413,15 @@ const TailscaleTableRow = React.memo(function TailscaleTableRow({
           <Tooltip>
             <TooltipTrigger asChild>
               <Button
-                asChild={Boolean(routeId)}
+                asChild={!stack.cleanup}
                 type="button"
                 size="icon-sm"
                 variant="ghost"
-                disabled={!routeId}
+                disabled={Boolean(stack.cleanup)}
                 aria-label={`Configure ${stack.name}`}
               >
-                {routeId ? (
-                  <Link
-                    to="/server/$serverId/network"
-                    params={{ serverId: routeId }}
-                  >
+                {!stack.cleanup ? (
+                  <Link to="/infra/tailscale" search={{ network: stack.id }}>
                     <Settings2 />
                   </Link>
                 ) : (
@@ -553,12 +573,11 @@ const RemoveNetworkDialog = React.memo(function RemoveNetworkDialog({
   const queryClient = useQueryClient()
   const remove = useMutation({
     mutationFn: () => removeTailscaleStack({ data: { id: stack.id } }),
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({
-        queryKey: queryKeys.tailscaleStacks,
-      })
-      await queryClient.invalidateQueries({
-        queryKey: queryKeys.relay.snapshot,
+    onSuccess: (next) => {
+      queryClient.setQueryData(queryKeys.tailscaleStacks, next)
+      showToast({
+        message: `Removing ${stack.name} in the background`,
+        type: "success",
       })
       onOpenChange(false)
     },
@@ -572,8 +591,9 @@ const RemoveNetworkDialog = React.memo(function RemoveNetworkDialog({
         </DialogHeader>
         <div className="flex items-start gap-3 rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm">
           <CircleAlert className="mt-0.5 size-4 shrink-0 text-destructive" />
-          Tailscale and CoreDNS will be removed from all{" "}
-          {stack.deployments.length} nodes.
+          Tailscale, CoreDNS, and the private Docker network will be removed
+          from every node. Offline Relays will clean up automatically when they
+          reconnect.
         </div>
         {remove.error ? (
           <p className="text-xs text-destructive">{remove.error.message}</p>
@@ -592,7 +612,7 @@ const RemoveNetworkDialog = React.memo(function RemoveNetworkDialog({
             ) : (
               <Trash2 />
             )}
-            Remove
+            Remove network
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -609,7 +629,7 @@ const CreateNetworkDialog = React.memo(function CreateNetworkDialog({
 }) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="h-[min(42rem,calc(100dvh-2rem))] max-h-none gap-0 overflow-hidden p-0 sm:max-w-[min(62rem,calc(100%-2rem))]">
+      <DialogContent className="max-h-[calc(100dvh-2rem)] gap-0 overflow-y-auto p-0 sm:max-w-3xl">
         <DialogTitle className="sr-only">Add Tailscale network</DialogTitle>
         {open ? <CreateNetworkForm onDone={() => onOpenChange(false)} /> : null}
       </DialogContent>
@@ -623,131 +643,60 @@ const CreateNetworkForm = React.memo(function CreateNetworkForm({
   onDone: () => void
 }) {
   const queryClient = useQueryClient()
-  const [id] = React.useState(randomStackId)
   const [name, setName] = React.useState("Private Network")
-  const [domain, setDomain] = React.useState("test")
-  const [authKey, setAuthKey] = React.useState("")
-  const [search, setSearch] = React.useState("")
-  const [bindings, setBindings] = React.useState<
-    Map<string, { hostname: string; relayId: string }>
-  >(new Map())
-  const { data: servers = emptyServers, isPending } = useQuery({
-    ...relaySnapshotQueryOptions(),
-    notifyOnChangeProps: ["data", "isPending"],
-    select: selectTailscaleServers,
-  })
-  const visible = React.useMemo(() => {
-    const query = search.trim().toLowerCase()
-    if (!query) return servers
-    return servers.filter((server) =>
-      `${server.name} ${server.shortId} ${server.relayName}`
-        .toLowerCase()
-        .includes(query)
-    )
-  }, [search, servers])
-  const supportedServerKeys = React.useMemo(
-    () =>
-      new Set(
-        servers.flatMap((server) =>
-          server.tailscaleSupported
-            ? [tailscaleServerKey(server.relayId, server.id)]
-            : []
-        )
-      ),
-    [servers]
-  )
-  const install = useMutation({
-    mutationFn: (input: SaveStackInput) => saveTailscaleStack({ data: input }),
-    onMutate: (input) => {
-      const toast = {
-        id: tailscaleOperationToastId(input.id ?? id),
-        networkName: input.name,
-        nodeCount: new Set(input.bindings.map(({ relayId }) => relayId)).size,
-        operation: "install" as const,
-      }
-      showTailscaleOperationProgress(toast)
-      return toast
-    },
-    onSuccess: async (next) => {
+  const [domain, setDomain] = React.useState("")
+  const [clientId, setClientId] = React.useState("")
+  const [clientSecret, setClientSecret] = React.useState("")
+  const [tag, setTag] = React.useState("tag:kiln")
+  const create = useMutation({
+    mutationFn: () =>
+      createTailscaleNetwork({
+        data: {
+          clientId: clientId.trim(),
+          clientSecret: clientSecret.trim(),
+          domain: domain.trim(),
+          name: name.trim(),
+          tag: tag.trim(),
+        },
+      }),
+    onSuccess: (next) => {
       queryClient.setQueryData(queryKeys.tailscaleStacks, next)
-      await queryClient.invalidateQueries({
-        queryKey: queryKeys.relay.snapshot,
+      showToast({
+        message: `${name.trim()} is ready for servers`,
+        type: "success",
       })
       onDone()
     },
-    onError: (cause, _input, toast) => {
-      if (toast) showTailscaleOperationError(toast, cause)
-    },
-    onSettled: (_data, error, _input, toast) => {
-      if (!error && toast) showTailscaleOperationSuccess(toast)
-    },
   })
-  const toggle = React.useCallback((server: TailscaleServer) => {
-    const key = tailscaleServerKey(server.relayId, server.id)
-    setBindings((current) => {
-      const next = new Map(current)
-      if (next.has(key)) next.delete(key)
-      else if (server.tailscaleSupported)
-        next.set(key, {
-          hostname: defaultTailscaleHostname(server),
-          relayId: server.relayId,
-        })
-      return next
-    })
-  }, [])
-  const updateHostname = React.useCallback(
-    (server: TailscaleServer, hostname: string) => {
-      const key = tailscaleServerKey(server.relayId, server.id)
-      setBindings((current) => {
-        const existing = current.get(key)
-        if (!existing) return current
-        const next = new Map(current)
-        next.set(key, { ...existing, hostname })
-        return next
-      })
-    },
-    []
-  )
-  const selectedRelayCount = new Set(
-    [...bindings.values()].map(({ relayId }) => relayId)
-  ).size
   const canSubmit =
     name.trim() &&
     domain.trim() &&
-    authKey.trim() &&
-    bindings.size > 0 &&
-    selectedRelayCount === 1 &&
-    [...bindings.keys()].every((key) => supportedServerKeys.has(key)) &&
-    [...bindings.values()].every((binding) => binding.hostname.trim())
+    clientId.trim() &&
+    clientSecret.trim().length >= 20 &&
+    tag.trim()
+  const displayedTag = tag.trim().startsWith("tag:")
+    ? tag.trim()
+    : `tag:${tag.trim() || "kiln"}`
 
   return (
     <form
-      className="grid h-full min-h-0 md:grid-cols-[18rem_minmax(0,1fr)]"
+      className="grid min-h-0 md:grid-cols-[minmax(0,1fr)_17rem]"
       onSubmit={(event) => {
         event.preventDefault()
-        install.mutate({
-          authKey: authKey.trim(),
-          bindings: [...bindings.entries()].map(([key, binding]) => ({
-            hostname: binding.hostname,
-            instanceId: key.split(":")[1] ?? "",
-            relayId: binding.relayId,
-          })),
-          domain: domain.trim(),
-          id,
-          name: name.trim(),
-        })
+        create.mutate()
       }}
     >
-      <aside className="flex min-h-0 flex-col border-b bg-muted/15 md:border-r md:border-b-0">
-        <div className="border-b p-5">
-          <div className="grid size-10 place-items-center rounded-lg border bg-background text-primary">
+      <section className="min-w-0 p-5 sm:p-6">
+        <div className="flex items-center gap-3">
+          <span className="grid size-10 shrink-0 place-items-center rounded-lg border bg-background text-primary">
             <Network className="size-4" />
-          </div>
-          <h2 className="mt-4 font-heading text-lg font-semibold">
-            Add Tailscale
+          </span>
+          <h2 className="font-heading text-lg font-semibold">
+            Connect a tailnet
           </h2>
         </div>
-        <div className="min-h-0 flex-1 space-y-5 overflow-y-auto p-5">
+
+        <div className="mt-6 grid gap-4 sm:grid-cols-2">
           <label className="block">
             <span className="mb-2 block text-xs font-medium">Network name</span>
             <Input
@@ -758,178 +707,132 @@ const CreateNetworkForm = React.memo(function CreateNetworkForm({
             />
           </label>
           <label className="block">
-            <span className="mb-2 block text-xs font-medium">Network TLD</span>
+            <span className="mb-2 block text-xs font-medium">
+              Private domain
+            </span>
             <Input
               value={domain}
               onChange={(event) => setDomain(event.target.value)}
+              placeholder=".kiln"
               className="font-mono"
             />
           </label>
           <label className="block">
-            <span className="mb-2 flex items-center gap-1.5 text-xs font-medium">
-              <KeyRound className="size-3.5" />
-              Auth key
+            <span className="mb-2 block text-xs font-medium">
+              OAuth client ID
+            </span>
+            <Input
+              value={clientId}
+              onChange={(event) => setClientId(event.target.value)}
+              autoCapitalize="none"
+              autoCorrect="off"
+              autoComplete="off"
+              placeholder="kAbCdEfGh123CNTRL"
+              className="font-mono"
+            />
+          </label>
+          <label className="block">
+            <span className="mb-2 block text-xs font-medium">Device tag</span>
+            <Input
+              value={tag}
+              onChange={(event) => setTag(event.target.value)}
+              autoCapitalize="none"
+              autoCorrect="off"
+              autoComplete="off"
+              placeholder="tag:kiln"
+              className="font-mono"
+            />
+          </label>
+          <label className="block sm:col-span-2">
+            <span className="mb-2 block text-xs font-medium">
+              OAuth client secret
             </span>
             <Input
               type="password"
+              value={clientSecret}
+              onChange={(event) => setClientSecret(event.target.value)}
+              autoCapitalize="none"
+              autoCorrect="off"
               autoComplete="off"
-              value={authKey}
-              onChange={(event) => setAuthKey(event.target.value)}
-              placeholder="tskey-auth-…"
+              placeholder="tskey-client-kAbCdEfGh123CNTRL-a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6"
               className="font-mono"
             />
-            {selectedRelayCount > 1 ? (
-              <span className="type-meta mt-2 flex gap-1.5 text-amber-400">
-                <CircleAlert className="mt-0.5 size-3 shrink-0" />
-                Manual auth installs one Relay at a time. Select servers on one
-                Relay, then connect Kiln to Tailscale before adding more.
-              </span>
-            ) : null}
           </label>
         </div>
-        <div className="border-t p-4">
-          {install.error ? (
-            <p className="mb-3 text-xs text-destructive">
-              {install.error.message}
-            </p>
-          ) : null}
-          <Button
-            type="submit"
-            className="w-full"
-            disabled={!canSubmit || install.isPending}
+
+        {create.error ? (
+          <p
+            className="mt-4 border border-destructive/30 bg-destructive/5 px-3 py-2.5 text-xs text-destructive"
+            role="alert"
           >
-            {install.isPending ? (
+            {create.error.message}
+          </p>
+        ) : null}
+
+        <div className="mt-6 flex justify-end gap-2 border-t pt-4">
+          <Button type="button" variant="ghost" onClick={onDone}>
+            Cancel
+          </Button>
+          <Button type="submit" disabled={!canSubmit || create.isPending}>
+            {create.isPending ? (
               <LoaderCircle className="animate-spin" />
             ) : (
-              <Network />
+              <KeyRound />
             )}
-            Install
+            {create.isPending ? "Validating…" : "Validate and connect"}
           </Button>
         </div>
-      </aside>
-      <section className="flex min-h-0 min-w-0 flex-col">
-        <div className="border-b p-4">
-          <div className="flex items-center justify-between gap-4">
-            <h3 className="font-heading font-semibold">Servers</h3>
-            <Badge variant="outline" className="type-meta font-mono">
-              {bindings.size} selected
-            </Badge>
-          </div>
-          <label className="relative mt-3 block">
-            <Search className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-muted-foreground" />
-            <Input
-              type="search"
-              value={search}
-              onChange={(event) => setSearch(event.target.value)}
-              placeholder="Search servers"
-              className="pl-8"
-            />
-          </label>
-        </div>
-        <div className="min-h-0 flex-1 overflow-y-auto p-3">
-          {isPending ? (
-            <div className="grid h-full place-items-center">
-              <LoaderCircle className="size-5 animate-spin text-muted-foreground" />
-            </div>
-          ) : (
-            visible.map((server) => (
-              <CreateNetworkServerRow
-                key={server.routeId}
-                binding={bindings.get(
-                  tailscaleServerKey(server.relayId, server.id)
-                )}
-                domain={domain}
-                server={server}
-                onHostnameChange={updateHostname}
-                onToggle={toggle}
-              />
-            ))
-          )}
-        </div>
       </section>
+
+      <aside className="border-t bg-muted/15 p-5 md:border-t-0 md:border-l">
+        <h3 className="text-xs font-semibold">Tailscale access</h3>
+        <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
+          Select <span className="font-medium text-foreground">Write</span> for
+          these permissions. Tailscale selects Read automatically.
+        </p>
+        <ul className="mt-3 divide-y divide-border/70 border border-border/70">
+          {tailscaleCredentialPermissions.map(({ group, permission }) => (
+            <li
+              key={`${group}:${permission}`}
+              className="flex items-center justify-between gap-3 px-2.5 py-2"
+            >
+              <span className="flex min-w-0 items-baseline gap-1">
+                <span className="type-technical-label shrink-0 text-muted-foreground">
+                  {group} /
+                </span>
+                <span className="truncate text-xs font-medium">
+                  {permission}
+                </span>
+              </span>
+              <span className="type-technical-label text-primary">Write</span>
+            </li>
+          ))}
+        </ul>
+        <p className="type-meta mt-3 leading-relaxed text-muted-foreground">
+          For Devices → Core and Keys → Auth Keys, select{" "}
+          <span className="font-mono text-foreground">{displayedTag}</span>{" "}
+          under Tags.
+        </p>
+        <Button
+          asChild
+          type="button"
+          size="sm"
+          variant="outline"
+          className="mt-5"
+        >
+          <a
+            href="https://console.tailscale.com/admin/settings/trust-credentials/add"
+            target="_blank"
+            rel="noreferrer"
+          >
+            Create credential
+            <ExternalLink />
+          </a>
+        </Button>
+      </aside>
     </form>
   )
 })
-
-const CreateNetworkServerRow = React.memo(function CreateNetworkServerRow({
-  binding,
-  domain,
-  server,
-  onHostnameChange,
-  onToggle,
-}: {
-  binding: { hostname: string; relayId: string } | undefined
-  domain: string
-  server: TailscaleServer
-  onHostnameChange: (server: TailscaleServer, hostname: string) => void
-  onToggle: (server: TailscaleServer) => void
-}) {
-  return (
-    <div
-      className={cn(
-        "mb-1 grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 rounded-lg border px-3 py-2.5 transition-colors",
-        binding
-          ? "border-primary/25 bg-primary/6"
-          : server.tailscaleSupported
-            ? "border-transparent hover:bg-accent/35"
-            : "border-transparent opacity-60"
-      )}
-    >
-      <button
-        type="button"
-        role="checkbox"
-        aria-label={`${binding ? "Remove" : "Add"} ${server.name}`}
-        aria-checked={Boolean(binding)}
-        disabled={!server.tailscaleSupported && !binding}
-        onClick={() => onToggle(server)}
-        className={cn(
-          "mt-0.5 grid size-5 place-items-center rounded border",
-          binding
-            ? "border-primary bg-primary text-primary-foreground"
-            : "border-border bg-background"
-        )}
-      >
-        {binding ? <Check className="size-3.5" /> : null}
-      </button>
-      <div className="min-w-0">
-        <div className="flex min-w-0 items-start gap-1.5">
-          <button
-            type="button"
-            disabled={!server.tailscaleSupported && !binding}
-            className="block min-w-0 flex-1 text-left disabled:cursor-not-allowed"
-            onClick={() => onToggle(server)}
-          >
-            <span className="block truncate text-sm font-medium">
-              {server.name}
-            </span>
-            <span className="type-code block truncate text-muted-foreground">
-              {server.shortId} · {server.relayName}
-            </span>
-          </button>
-          <span className="grid size-4 shrink-0 place-items-center">
-            {!server.tailscaleSupported ? (
-              <TailscaleRelayUpdateHint relayName={server.relayName} />
-            ) : null}
-          </span>
-        </div>
-        {binding ? (
-          <div className="mt-2 flex">
-            <Input
-              value={binding.hostname}
-              onChange={(event) => onHostnameChange(server, event.target.value)}
-              className="h-8 rounded-r-none font-mono text-xs"
-              aria-label={`${server.name} hostname`}
-            />
-            <span className="type-code flex h-8 items-center rounded-r-md border border-l-0 bg-muted/45 px-2 text-muted-foreground">
-              .{domain || "test"}
-            </span>
-          </div>
-        ) : null}
-      </div>
-    </div>
-  )
-})
-
 function stackSaveInput(
   stack: TailscaleStackOverview,
   overrides: { domain?: string; name?: string } = {}
@@ -960,12 +863,4 @@ function tailscaleSearchText(stack: TailscaleStackOverview): string {
   ]
     .join(" ")
     .toLowerCase()
-}
-
-function randomStackId(): string {
-  const bytes = new Uint8Array(20)
-  globalThis.crypto.getRandomValues(bytes)
-  return Array.from(bytes, (value) => value.toString(16).padStart(2, "0")).join(
-    ""
-  )
 }

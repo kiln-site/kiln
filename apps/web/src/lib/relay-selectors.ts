@@ -1,5 +1,8 @@
 import type { RelayInstance, RelayNode } from "@workspace/contracts"
-import { relayInstanceLifecycleEventTime } from "@workspace/contracts"
+import {
+  builtinTailscaleBrickId,
+  relayInstanceLifecycleEventTime,
+} from "@workspace/contracts"
 
 import type { RelayConnection } from "@/lib/query-options"
 import type { RelayFleetSnapshot } from "@/lib/relay-fleet"
@@ -123,13 +126,21 @@ export function selectRelayConnectionSummary(
 export function selectSidebarInstances(
   snapshot: RelayFleetSnapshot
 ): Array<SidebarInstance> {
-  return snapshot.instances.map(sidebarInstance)
+  const instances: Array<SidebarInstance> = []
+  for (const instance of snapshot.instances) {
+    if (isServerInstance(instance)) instances.push(sidebarInstance(instance))
+  }
+  return instances
 }
 
 export function selectSidebarInstanceCount(
   snapshot: RelayFleetSnapshot
 ): number {
-  return snapshot.instances.length
+  let count = 0
+  for (const instance of snapshot.instances) {
+    if (isServerInstance(instance)) count += 1
+  }
+  return count
 }
 
 export function selectRouteInstances(
@@ -179,6 +190,12 @@ function sidebarInstance(
     shortId: instance.shortId,
     version: instance.version,
   }
+}
+
+function isServerInstance(
+  instance: RelayFleetSnapshot["instances"][number]
+): boolean {
+  return instance.brickId !== builtinTailscaleBrickId
 }
 
 export function selectRelayConfigured(connection: RelayConnection): boolean {

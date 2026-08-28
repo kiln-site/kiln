@@ -56,7 +56,6 @@ import {
 } from "@/components/workspace-data-table"
 import type { WorkspaceTableSearchStore } from "@/components/workspace-data-table"
 import { TailscaleRelayUpdateHint } from "@/components/tailscale-relay-update-hint"
-import { relayInstanceRouteId } from "@/lib/relay-fleet"
 import {
   queryKeys,
   relaySnapshotQueryOptions,
@@ -112,6 +111,15 @@ export function TailscaleNetworkMembershipPage({
     return (
       <CenteredNetworkState>
         This Tailscale network is no longer available.
+      </CenteredNetworkState>
+    )
+  }
+
+  if (stack.cleanup) {
+    return (
+      <CenteredNetworkState>
+        Removing {stack.name}. {stack.cleanup.pendingRelays} Relay
+        {stack.cleanup.pendingRelays === 1 ? "" : "s"} still pending cleanup.
       </CenteredNetworkState>
     )
   }
@@ -629,7 +637,7 @@ function SetupCredentialsStep({
         <SetupHeading icon={KeyRound} title="OAuth credentials" />
         <Button asChild type="button" size="sm" variant="ghost">
           <a
-            href="https://login.tailscale.com/admin/settings/oauth"
+            href="https://console.tailscale.com/admin/settings/trust-credentials/add"
             target="_blank"
             rel="noreferrer"
           >
@@ -695,9 +703,16 @@ function SetupCredentialsStep({
               value={errorMessage(error)}
             />
           ) : (
-            <p className="type-meta font-mono text-muted-foreground">
-              auth_keys · devices:core · devices:routes · dns
-            </p>
+            <div className="space-y-1">
+              <p className="type-meta text-muted-foreground">
+                Write: General → DNS · Devices → Core · Devices → Routes · Keys
+                → Auth Keys
+              </p>
+              <p className="type-meta text-muted-foreground">
+                Use <span className="font-mono">{tag || "tag:kiln"}</span> for
+                Core and Auth Keys.
+              </p>
+            </div>
           )}
         </div>
         <Button
@@ -1049,6 +1064,10 @@ export function GameServerTailscaleSection({
 }) {
   const { data } = useSuspenseQuery(tailscaleStacksQueryOptions())
   const { stacks, unsupportedRelays } = data
+  const availableStacks = React.useMemo(
+    () => stacks.filter((stack) => !stack.cleanup),
+    [stacks]
+  )
   const relayUnsupported = unsupportedRelays.some(
     ({ id }) => id === server.relayId
   )
@@ -1082,9 +1101,9 @@ export function GameServerTailscaleSection({
           </Button>
         </div>
       </div>
-      {stacks.length ? (
+      {availableStacks.length ? (
         <div className="divide-y divide-border/65">
-          {stacks.map((stack) => {
+          {availableStacks.map((stack) => {
             const binding = findBinding(stack, server)
             return (
               <GameServerMembershipRow
@@ -1483,12 +1502,6 @@ const GameServerMembershipRow = React.memo(function GameServerMembershipRow({
   onJoin: (stackId: string) => void
   onSave: ReturnType<typeof useStackMembershipMutation>["mutateAsync"]
 }) {
-  const deployment =
-    stack.deployments.find((candidate) => candidate.relayId === relayId) ??
-    stack.deployments[0]
-  const routeId = deployment
-    ? relayInstanceRouteId(deployment.relayId, deployment.instance.shortId)
-    : null
   const highlightedServerKey = tailscaleServerKey(relayId, serverId)
 
   return (
@@ -1508,24 +1521,22 @@ const GameServerMembershipRow = React.memo(function GameServerMembershipRow({
             <Tooltip>
               <TooltipTrigger asChild>
                 <Button
-                  asChild={Boolean(routeId)}
+                  asChild
                   type="button"
                   size="icon-sm"
                   variant="ghost"
-                  disabled={disabled || !routeId}
+                  disabled={disabled}
                   aria-label={`Edit ${binding.hostname}.${stack.domain}`}
                 >
-                  {routeId ? (
-                    <Link
-                      to="/server/$serverId/network"
-                      params={{ serverId: routeId }}
-                      search={{ member: highlightedServerKey }}
-                    >
-                      <Pencil />
-                    </Link>
-                  ) : (
+                  <Link
+                    to="/infra/tailscale"
+                    search={{
+                      member: highlightedServerKey,
+                      network: stack.id,
+                    }}
+                  >
                     <Pencil />
-                  )}
+                  </Link>
                 </Button>
               </TooltipTrigger>
               <TooltipContent side="top">Edit hostname</TooltipContent>

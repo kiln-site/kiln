@@ -8,6 +8,7 @@ import { hearthStreamHandler } from "./app-server-handler"
 import { disposeAppRuntime } from "./effect/runtime"
 import { scheduleBackupCopyProcessing } from "./lib/backup-copy"
 import { scheduleInstancePostProvisionProcessing } from "./lib/instance-post-provision"
+import { scheduleTailscaleCleanupProcessing } from "./lib/tailscale-cleanup.server"
 import {
   initializeRelayFromEnvironment,
   maintainPersistedRelayConnections,
@@ -51,6 +52,7 @@ await Effect.runPromise(
 
 scheduleBackupCopyProcessing()
 scheduleInstancePostProvisionProcessing()
+scheduleTailscaleCleanupProcessing()
 
 const handleStartRequest = createStartHandler(hearthStreamHandler)
 
