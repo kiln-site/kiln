@@ -77,4 +77,32 @@ describe("app data clients", () => {
     )
     await clients.dbClient.cleanup()
   })
+
+  it("keeps unreachable connection and fleet caches on one snapshot", async () => {
+    const clients = createAppClients()
+    const fallback: RelayFleetSnapshot = { instances: [], nodes: [] }
+    const connection = {
+      message: "Relay unavailable",
+      relay: { id: "relay-a", name: "Relay A" },
+      relays: [
+        { id: "relay-a", name: "Relay A", status: "unreachable" },
+      ],
+      snapshot: fallback,
+      status: "unreachable",
+    } as Extract<RelayConnection, { status: "unreachable" }>
+
+    const resolved = connectionWithCanonicalSnapshot(
+      clients.queryClient,
+      connection
+    )
+
+    expect(resolved.snapshot).toBe(fallback)
+    expect(clients.queryClient.getQueryData(queryKeys.relay.snapshot)).toBe(
+      fallback
+    )
+    expect(clients.queryClient.getQueryData(queryKeys.relay.instances)).toBe(
+      fallback.instances
+    )
+    await clients.dbClient.cleanup()
+  })
 })

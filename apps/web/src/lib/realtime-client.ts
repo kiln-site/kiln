@@ -85,11 +85,14 @@ export function applyRealtimeEvent(input: ApplyRealtimeEventInput): void {
           )
         )
       }
-      instances.utils.writeDelete(
-        event.deleted.map(
-          ({ instanceId, relayId }) => `${relayId}:${instanceId}`
-        )
-      )
+      const deletedKeys = [
+        ...new Set(
+          event.deleted.map(
+            ({ instanceId, relayId }) => `${relayId}:${instanceId}`
+          )
+        ),
+      ].filter((key) => instances.has(key))
+      if (deletedKeys.length > 0) instances.utils.writeDelete(deletedKeys)
     })
     return
   }
@@ -264,24 +267,25 @@ export function applyDeletedInstance(
   )
 }
 
-export function applyRecoveredRelaySnapshot(
-  connection: RelayConnection | undefined,
-  snapshot: RelayFleetSnapshot
-): RelayConnection | undefined {
-  if (!connection) return connection
-  if (connection.status === "connected") return { ...connection, snapshot }
-  if (
-    connection.status !== "unreachable" ||
-    !connection.relays.some((relay) => relay.status === "connected")
-  ) {
-    return connection
-  }
-  return {
-    relay: relayConnectionSummary(connection.relays),
-    relays: connection.relays,
-    snapshot,
-    status: "connected",
-  }
+export function applyRecoveredRelayConnection(
+  queryClient: QueryClient,
+  connection: RelayConnection
+): Promise<void> {
+  const snapshot =
+    connection.status === "connected" || connection.status === "unreachable"
+      ? connection.snapshot
+      : { instances: [], nodes: [] }
+  const cancellation = Promise.all(
+    [
+      queryKeys.relay.connection,
+      queryKeys.relay.instances,
+      queryKeys.relay.snapshot,
+    ].map((queryKey) => queryClient.cancelQueries({ exact: true, queryKey }))
+  ).then(() => undefined)
+  queryClient.setQueryData(queryKeys.relay.instances, snapshot.instances)
+  queryClient.setQueryData(queryKeys.relay.snapshot, snapshot)
+  queryClient.setQueryData(queryKeys.relay.connection, connection)
+  return cancellation
 }
 
 function applyRealtimeRelayStatus(
@@ -298,10 +302,26 @@ function applyRealtimeRelayStatus(
   const relays = connection.relays.map((relay) =>
     relay.id === event.relayId ? { ...relay, status: event.status } : relay
   )
+  return connectionWithRelayStatuses(connection, snapshot, relays)
+}
+
+function connectionWithRelayStatuses(
+  connection: Extract<
+    RelayConnection,
+    { status: "connected" } | { status: "unreachable" }
+  >,
+  snapshot: RelayFleetSnapshot | undefined,
+  relays: Array<{
+    id: string
+    name: string
+    status: "connected" | "unreachable"
+  }>
+): RelayConnection {
   const connectedCount = relays.filter(
     (relay) => relay.status === "connected"
   ).length
   const relay = relayConnectionSummary(relays)
+  const recoveredSnapshot = snapshot ?? connection.snapshot
   if (connectedCount === 0) {
     return {
       message:
@@ -310,11 +330,11 @@ function applyRealtimeRelayStatus(
           : "Hearth cannot reach any configured Relay right now.",
       relay,
       relays,
+      snapshot: recoveredSnapshot,
       status: "unreachable",
     }
   }
-  if (!snapshot) return { ...connection, relay, relays }
-  return { relay, relays, snapshot, status: "connected" }
+  return { relay, relays, snapshot: recoveredSnapshot, status: "connected" }
 }
 
 function relayConnectionSummary(

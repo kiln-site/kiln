@@ -67,16 +67,19 @@ effectIt.effect(
       ({ cancelled, disconnect, endpoint, reconnected, requests }) =>
         Effect.gen(function* () {
           const activityEvents: Array<string> = []
+          const relayStates: Array<"connected" | "unreachable"> = []
           const unsubscribe = subscribeRealtimeChanges((event) => {
             if (event.type === "hearth.invalidate") {
               activityEvents.push(...event.topics)
             }
+            if (event.type === "relay.state") relayStates.push(event.status)
           })
           const snapshot = yield* promiseEffect(() =>
             relayRpc(endpoint, "relay.snapshot", {}, 1_000)
           )
           expect(snapshot).toEqual(pushedSnapshot)
           expect(requests).toHaveLength(0)
+          expect(relayStates).toEqual(["connected"])
 
           const inspection = yield* promiseEffect(() =>
             relayRpc(endpoint, "relay.system.inspect", {}, 1_000)
@@ -94,7 +97,6 @@ effectIt.effect(
             )
           )
           expect(activityEvents).toEqual(["activity"])
-          unsubscribe()
 
           vi.spyOn(Math, "random").mockReturnValue(0)
           disconnect()
@@ -103,6 +105,11 @@ effectIt.effect(
             relayRpc(endpoint, "relay.snapshot", {}, 1_000)
           )
           expect(reconnectedSnapshot).toEqual(pushedSnapshot)
+          expect(relayStates).toEqual([
+            "connected",
+            "unreachable",
+            "connected",
+          ])
 
           const timeout = yield* promiseEffect(() =>
             relayRpc(endpoint, "relay.update.status", { ignored: true }, 20)
@@ -114,6 +121,12 @@ effectIt.effect(
 
           closeRelayConnection(relayId)
           expect(relayConnectionState(relayId).status).toBe("disconnected")
+          expect(relayStates).toEqual([
+            "connected",
+            "unreachable",
+            "connected",
+          ])
+          unsubscribe()
         })
     )
 )

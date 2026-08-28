@@ -253,7 +253,10 @@ export function relayConnectionQueryOptions(queryClient: QueryClient) {
       const connection = await getRelayConnectionState({
         headers: relayPollHeaders,
       })
-      if (connection.status === "connected") {
+      if (
+        connection.status === "connected" ||
+        connection.status === "unreachable"
+      ) {
         // Each router owns one QueryClient per SSR request or browser session.
         // Prime that same client from the connection's canonical snapshot so
         // snapshot consumers do not make a second Relay request.
@@ -301,15 +304,22 @@ export function snapshotWithCanonicalState(
     queryKeys.relay.snapshot
   )
   const snapshot =
-    connection?.status === "connected" && cached ? cached : fetched
+    (connection?.status === "connected" ||
+      connection?.status === "unreachable") &&
+    cached
+      ? cached
+      : fetched
   queryClient.setQueryData(queryKeys.relay.instances, snapshot.instances)
   return snapshot
 }
 
 export function connectionWithCanonicalSnapshot(
   queryClient: QueryClient,
-  connection: Extract<RelayConnection, { status: "connected" }>
-): Extract<RelayConnection, { status: "connected" }> {
+  connection: Extract<
+    RelayConnection,
+    { status: "connected" | "unreachable" }
+  >
+): Extract<RelayConnection, { status: "connected" | "unreachable" }> {
   const snapshot = snapshotWithCanonicalState(queryClient, connection.snapshot)
   queryClient.setQueryData(queryKeys.relay.snapshot, snapshot)
   return { ...connection, snapshot }

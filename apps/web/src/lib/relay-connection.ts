@@ -82,12 +82,10 @@ export async function relayRpc(
 ): Promise<unknown> {
   const effectiveRelay = relayControlEndpoint(relay)
   let connection = connections.get(relay.id)
-  // Vite preserves global state across SSR reloads, but class prototypes change.
-  if (connection && !(connection instanceof RelayConnection)) {
-    connection.close()
-    connections.delete(relay.id)
-    connection = undefined
-  }
+  // Vite preserves this global registry across SSR reloads. Existing instances
+  // remain usable through their own prototype; replacing them based on
+  // instanceof lets old and new module generations continuously evict each
+  // other while long-lived requests are still active.
   if (connection && !connection.matches(effectiveRelay)) {
     connection.close()
     connections.delete(relay.id)
@@ -123,8 +121,9 @@ export function relayConnectionState(relayId: string): RelayConnectionState {
 }
 
 export function closeRelayConnection(relayId: string): void {
-  connections.get(relayId)?.close()
+  const connection = connections.get(relayId)
   connections.delete(relayId)
+  connection?.close()
 }
 
 class RelayConnection {
@@ -766,7 +765,8 @@ class RelayConnection {
   #setState(status: RelayConnectionStatus, lastError: string | null): void {
     const becameAuthenticated =
       status === "authenticated" && this.#state.status !== "authenticated"
-    const statusChanged = status !== this.#state.status
+    const wasReachable = this.#state.status === "authenticated"
+    const isReachable = status === "authenticated"
     this.#state = { lastError, status, updatedAt: Date.now() }
     Sentry.addBreadcrumb({
       category: "relay.connection",
@@ -774,8 +774,15 @@ class RelayConnection {
       level: status === "unreachable" ? "warning" : "info",
       message: status,
     })
-    if (statusChanged) {
-      publishRealtimeChange({ relayId: this.#relay.id, type: "relay.state" })
+    if (
+      wasReachable !== isReachable &&
+      connections.get(this.#relay.id) === this
+    ) {
+      publishRealtimeChange({
+        relayId: this.#relay.id,
+        status: isReachable ? "connected" : "unreachable",
+        type: "relay.state",
+      })
     }
     if (becameAuthenticated) {
       forkAppEffect(

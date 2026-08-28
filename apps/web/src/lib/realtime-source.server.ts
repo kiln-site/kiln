@@ -32,7 +32,11 @@ export type RealtimeSourceChange =
     }
   | { relayId: string; type: "relay.snapshot.reset" }
   | { relayId: string; type: "relay.metadata"; userIds?: Array<string> }
-  | { relayId: string; type: "relay.state" }
+  | {
+      relayId: string
+      status: "connected" | "unreachable"
+      type: "relay.state"
+    }
   | { relayId: string; type: "instance.upsert"; instance: RelayInstance }
   | { relayId: string; type: "instance.delete"; instanceId: string }
 

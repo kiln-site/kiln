@@ -7,7 +7,7 @@ import type { FleetInstance, FleetNode } from "@/lib/realtime-events"
 import {
   applyDeletedInstance,
   applyProvisioningInstance,
-  applyRecoveredRelaySnapshot,
+  applyRecoveredRelayConnection,
   applyRealtimeEvent,
   applyRealtimeEventSafely,
   applyRealtimeSnapshotEvent,
@@ -213,21 +213,182 @@ describe("realtime snapshot projection", () => {
     })
   })
 
-  it("promotes an initially unreachable connection after snapshot recovery", () => {
-    expect(
-      applyRecoveredRelaySnapshot(
+  it("replaces connection membership during authoritative recovery", async () => {
+    const queryClient = new QueryClient()
+    queryClient.setQueryData(queryKeys.relay.connection, {
+      relay: { id: "stale-relay", name: "Stale Relay" },
+      relays: [
+        { id: "stale-relay", name: "Stale Relay", status: "connected" },
+      ],
+      snapshot: snapshot(),
+      status: "connected",
+    })
+
+    await applyRecoveredRelayConnection(queryClient, {
+      relay: { id: alpha.relayId, name: alpha.relayName },
+      relays: [
         {
-          message:
-            "The Relay is configured, but Hearth cannot reach it right now.",
-          relay: { id: alpha.relayId, name: alpha.relayName },
-          relays: [
-            { id: alpha.relayId, name: alpha.relayName, status: "connected" },
-          ],
+          id: alpha.relayId,
+          name: alpha.relayName,
+          status: "connected",
+        },
+      ],
+      snapshot: snapshot(),
+      status: "connected",
+    })
+
+    expect(queryClient.getQueryData(queryKeys.relay.connection)).toMatchObject({
+      relays: [{ id: alpha.relayId, status: "connected" }],
+      snapshot: snapshot(),
+      status: "connected",
+    })
+    expect(queryClient.getQueryData(queryKeys.relay.instances)).toEqual([
+      alpha,
+    ])
+
+    await applyRecoveredRelayConnection(queryClient, {
+      message: "No Relay has been configured yet.",
+      relay: null,
+      status: "unconfigured",
+    })
+
+    expect(queryClient.getQueryData(queryKeys.relay.connection)).toMatchObject({
+      relay: null,
+      status: "unconfigured",
+    })
+    expect(queryClient.getQueryData(queryKeys.relay.snapshot)).toEqual({
+      instances: [],
+      nodes: [],
+    })
+    expect(queryClient.getQueryData(queryKeys.relay.instances)).toEqual([])
+  })
+
+  it("cancels older Relay fetches before applying recovery", async () => {
+    const queryClient = new QueryClient()
+    let resolveStale!: (connection: {
+      message: string
+      relay: null
+      status: "unconfigured"
+    }) => void
+    let resolveStaleSnapshot!: (snapshot: RelayFleetSnapshot) => void
+    let resolveStaleInstances!: (instances: Array<FleetInstance>) => void
+    const connectionFlight = queryClient.fetchQuery({
+      queryKey: queryKeys.relay.connection,
+      queryFn: () =>
+        new Promise((resolve) => {
+          resolveStale = resolve
+        }),
+      retry: false,
+    })
+    const snapshotFlight = queryClient.fetchQuery({
+      queryKey: queryKeys.relay.snapshot,
+      queryFn: () =>
+        new Promise((resolve) => {
+          resolveStaleSnapshot = resolve
+        }),
+      retry: false,
+    })
+    const instancesFlight = queryClient.fetchQuery({
+      queryKey: queryKeys.relay.instances,
+      queryFn: () =>
+        new Promise((resolve) => {
+          resolveStaleInstances = resolve
+        }),
+      retry: false,
+    })
+
+    await applyRecoveredRelayConnection(queryClient, {
+      relay: { id: alpha.relayId, name: alpha.relayName },
+      relays: [
+        {
+          id: alpha.relayId,
+          name: alpha.relayName,
+          status: "connected",
+        },
+      ],
+      snapshot: snapshot(),
+      status: "connected",
+    })
+    resolveStale({
+      message: "No Relay has been configured yet.",
+      relay: null,
+      status: "unconfigured",
+    })
+    resolveStaleSnapshot({ instances: [beta], nodes: [node] })
+    resolveStaleInstances([beta])
+    await Promise.allSettled([
+      connectionFlight,
+      instancesFlight,
+      snapshotFlight,
+    ])
+
+    expect(queryClient.getQueryData(queryKeys.relay.connection)).toMatchObject({
+      relays: [{ id: alpha.relayId, status: "connected" }],
+      status: "connected",
+    })
+    expect(queryClient.getQueryData(queryKeys.relay.snapshot)).toEqual(
+      snapshot()
+    )
+    expect(queryClient.getQueryData(queryKeys.relay.instances)).toEqual([
+      alpha,
+    ])
+  })
+
+  it("keeps fallback rows when recovery marks a Relay unreachable", async () => {
+    const queryClient = new QueryClient()
+    const unreachableSnapshot = {
+      instances: [{ ...alpha, relayStatus: "unreachable" as const }],
+      nodes: [{ ...node, relayStatus: "unreachable" as const }],
+    }
+
+    await applyRecoveredRelayConnection(queryClient, {
+      message:
+        "The Relay is configured, but Hearth cannot reach it right now.",
+      relay: { id: alpha.relayId, name: alpha.relayName },
+      relays: [
+        {
+          id: alpha.relayId,
+          name: alpha.relayName,
           status: "unreachable",
         },
-        snapshot()
-      )
-    ).toMatchObject({ status: "connected", snapshot: snapshot() })
+      ],
+      snapshot: unreachableSnapshot,
+      status: "unreachable",
+    })
+
+    expect(queryClient.getQueryData(queryKeys.relay.instances)).toEqual(
+      unreachableSnapshot.instances
+    )
+    expect(queryClient.getQueryData(queryKeys.relay.connection)).toMatchObject({
+      relays: [{ id: alpha.relayId, status: "unreachable" }],
+      status: "unreachable",
+    })
+  })
+
+  it("ignores an SSE delete after an optimistic cache deletion", () => {
+    const queryClient = new QueryClient()
+    const writeDelete = vi.fn()
+
+    applyRealtimeEvent({
+      event: {
+        deleted: [{ instanceId: alpha.id, relayId: alpha.relayId }],
+        epoch,
+        sequence: 1,
+        type: "instances.delta",
+        upserted: [],
+      },
+      instances: {
+        has: () => false,
+        isReady: () => true,
+        utils: {
+          writeBatch: (write: () => void) => write(),
+          writeDelete,
+        },
+      } as unknown as Parameters<typeof applyRealtimeEvent>[0]["instances"],
+      queryClient,
+    })
+
+    expect(writeDelete).not.toHaveBeenCalled()
   })
 
   it("does not rebuild Relay state for a Hearth collection event", () => {

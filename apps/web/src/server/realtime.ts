@@ -78,19 +78,24 @@ export async function openAuthorizedRealtimeStream(input: {
   }
   const flushRecovery = () => {
     if (!pendingRecovery) return
+    const recovery = pendingRecovery
+    // Clear this before enqueueing because ReadableStream may synchronously
+    // call pull() as the consumer drains the chunk. Leaving it set lets that
+    // re-entrant pull enqueue the same reset twice.
+    pendingRecovery = null
     if (
-      tryEnqueue(
+      !tryEnqueue(
         encodeServerEvent({
-          clear: pendingRecovery.clear,
-          epoch: pendingRecovery.epoch,
-          hearth: pendingRecovery.hearth,
-          sequence: pendingRecovery.sequence,
+          clear: recovery.clear,
+          epoch: recovery.epoch,
+          hearth: recovery.hearth,
+          sequence: recovery.sequence,
           type: "reset",
         }),
-        pendingRecovery.clear
+        recovery.clear
       )
     ) {
-      pendingRecovery = null
+      pendingRecovery = recovery
     }
   }
   const enqueueReset = (
@@ -218,7 +223,7 @@ export async function openAuthorizedRealtimeStream(input: {
         epoch: event.epoch,
         relayId: event.relayId,
         sequence: event.sequence,
-        status: reachability(event.relayId),
+        status: event.status,
         type: "relay.status",
       })
       return

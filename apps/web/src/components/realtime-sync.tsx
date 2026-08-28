@@ -6,9 +6,7 @@ import { ensuringPromise, recoverPromise } from "@/effect/promise"
 import { getRelayInstancesCollection } from "@/lib/collections/relay-instances"
 import {
   authStateQueryOptions,
-  queryKeys,
   type RelayConnection,
-  relayConnectionQueryOptions,
 } from "@/lib/query-options"
 import { refreshHearthRealtimeTopics } from "@/lib/hearth-realtime"
 import {
@@ -17,7 +15,7 @@ import {
 } from "@/lib/hearth-realtime-topics"
 import { reconcilePendingPowerSnapshot } from "@/lib/instance-power-state"
 import {
-  applyRecoveredRelaySnapshot,
+  applyRecoveredRelayConnection,
   applyRealtimeEventSafely,
   parseRealtimeEventData,
   resetRealtimeEpoch,
@@ -30,8 +28,7 @@ import {
   realtimeClientEventSchema,
   type RealtimeClientEvent,
 } from "@/lib/realtime-events"
-import type { RelayFleetSnapshot } from "@/lib/relay-fleet"
-import { getFreshRelaySnapshot } from "@/server/relay"
+import { getFreshRelayConnectionState } from "@/server/relay"
 
 const maximumBufferedEvents = 256
 const maximumRememberedEvents = 512
@@ -46,12 +43,10 @@ export const RealtimeSync = React.memo(function RealtimeSync() {
     let source: EventSource | null = null
     let closed = false
     let resetRequested = false
-    let connectionRefetchRequested = false
     let hearthRefetchRequested = false
     let resetting: Promise<void> | null = null
     let recoveryRetry: ReturnType<typeof setTimeout> | null = null
     let recoveryFailures = 0
-    let activeRecoveryConnection = false
     let activeRecoveryHearth = false
     let activeEpoch: string | null = null
     let recoveryFloor = 0
@@ -74,14 +69,18 @@ export const RealtimeSync = React.memo(function RealtimeSync() {
     const rememberedEvents = new Set<string>()
     const rememberedEventOrder: Array<string> = []
 
-    const applyRecoverySnapshot = (snapshot: RelayFleetSnapshot): boolean => {
+    const applyRecoveryConnection = async (
+      connection: RelayConnection
+    ): Promise<boolean> => {
       if (closed) return false
-      queryClient.setQueryData(queryKeys.relay.instances, snapshot.instances)
-      queryClient.setQueryData(queryKeys.relay.snapshot, snapshot)
-      queryClient.setQueryData<RelayConnection>(
-        queryKeys.relay.connection,
-        (connection) => applyRecoveredRelaySnapshot(connection, snapshot)
-      )
+      const recoveredConnection =
+        connection.status === "connected" || connection.status === "unreachable"
+          ? {
+              ...connection,
+              snapshot: reconcilePendingPowerSnapshot(connection.snapshot),
+            }
+          : connection
+      await applyRecoveredRelayConnection(queryClient, recoveredConnection)
       return true
     }
 
@@ -185,18 +184,13 @@ export const RealtimeSync = React.memo(function RealtimeSync() {
       return refreshingHearth
     }
 
-    const requestReset = (
-      refetchConnection: boolean,
-      sequence = 0,
-      refetchHearth = false
-    ) => {
+    const requestReset = (sequence = 0, refetchHearth = false) => {
       if (recoveryRetry) {
         clearTimeout(recoveryRetry)
         recoveryRetry = null
       }
       recoveryFloor = Math.max(recoveryFloor, sequence)
       resetRequested = true
-      connectionRefetchRequested ||= refetchConnection
       hearthRefetchRequested ||= refetchHearth
       if (resetting) return
       resetting = ensuringPromise(
@@ -205,30 +199,28 @@ export const RealtimeSync = React.memo(function RealtimeSync() {
             async () => {
               while (!closed && resetRequested) {
                 resetRequested = false
-                const shouldRefetchConnection = connectionRefetchRequested
                 const shouldRefetchHearth = hearthRefetchRequested
-                connectionRefetchRequested = false
                 hearthRefetchRequested = false
-                activeRecoveryConnection = shouldRefetchConnection
                 activeRecoveryHearth = shouldRefetchHearth
-                const snapshotEpoch = activeEpoch
+                const recoveryEpoch = activeEpoch
                 if (closed) return
-                const snapshot = reconcilePendingPowerSnapshot(
-                  await getFreshRelaySnapshot()
-                )
-                if (snapshotEpoch !== activeEpoch) continue
-                if (!applyRecoverySnapshot(snapshot)) return
+                const connection = await getFreshRelayConnectionState()
+                if (recoveryEpoch !== activeEpoch) continue
+                if (resetRequested) {
+                  hearthRefetchRequested ||= shouldRefetchHearth
+                  activeRecoveryHearth = false
+                  continue
+                }
+                if (!(await applyRecoveryConnection(connection))) return
                 recoveryFailures = 0
-                if (shouldRefetchConnection) {
-                  await queryClient.refetchQueries({
-                    exact: true,
-                    queryKey: relayConnectionQueryOptions(queryClient).queryKey,
-                  })
+                if (resetRequested) {
+                  hearthRefetchRequested ||= shouldRefetchHearth
+                  activeRecoveryHearth = false
+                  continue
                 }
                 if (shouldRefetchHearth) {
                   await requestHearthRefresh(hearthRealtimeTopics)
                 }
-                activeRecoveryConnection = false
                 activeRecoveryHearth = false
                 // A newer reset supersedes events captured while this snapshot
                 // was loading. Otherwise replay later deltas after the
@@ -248,11 +240,9 @@ export const RealtimeSync = React.memo(function RealtimeSync() {
             },
             (cause) => {
               if (!closed) {
-                connectionRefetchRequested ||= activeRecoveryConnection
                 hearthRefetchRequested ||= activeRecoveryHearth
-                activeRecoveryConnection = false
                 activeRecoveryHearth = false
-                console.warn("[Kiln realtime] Snapshot recovery failed", cause)
+                console.warn("[Kiln realtime] Relay recovery failed", cause)
                 const delay = Math.min(
                   1_000 * 2 ** recoveryFailures,
                   maximumRecoveryRetryDelayMs
@@ -260,14 +250,14 @@ export const RealtimeSync = React.memo(function RealtimeSync() {
                 recoveryFailures += 1
                 recoveryRetry = setTimeout(() => {
                   recoveryRetry = null
-                  requestReset(false)
+                  requestReset()
                 }, delay)
               }
             }
           ),
         () => {
           resetting = null
-          if (!closed && resetRequested) requestReset(false)
+          if (!closed && resetRequested) requestReset()
         }
       )
     }
@@ -287,7 +277,7 @@ export const RealtimeSync = React.memo(function RealtimeSync() {
         },
         (cause) => {
           console.warn("[Kiln realtime] Could not apply event", cause)
-          requestReset(false, event.sequence, true)
+          requestReset(event.sequence, true)
         }
       )
 
@@ -298,7 +288,7 @@ export const RealtimeSync = React.memo(function RealtimeSync() {
         parseRealtimeEventData(message.data)
       )
       if (!parsed.success) {
-        requestReset(false, 0, true)
+        requestReset(0, true)
         return
       }
       const event = parsed.data
@@ -314,7 +304,6 @@ export const RealtimeSync = React.memo(function RealtimeSync() {
         recoveryFloor = epoch.recoveryFloor
         recoveryFailures = 0
         resetRequested = false
-        connectionRefetchRequested = false
         hearthRefetchRequested = false
         bufferedEvents = []
         rememberedEvents.clear()
@@ -322,10 +311,13 @@ export const RealtimeSync = React.memo(function RealtimeSync() {
       }
       if (event.type === "reset") {
         if (event.clear) {
-          applyRecoverySnapshot({ instances: [], nodes: [] })
+          void applyRecoveryConnection({
+            message: "No Relay has been configured yet.",
+            relay: null,
+            status: "unconfigured",
+          })
         }
         requestReset(
-          false,
           event.sequence,
           event.hearth || (epochChanged && !initialEpoch)
         )
@@ -335,7 +327,7 @@ export const RealtimeSync = React.memo(function RealtimeSync() {
         if (event.topics) {
           void requestHearthRefresh(event.topics, event.scope)
         }
-        requestReset(true, event.sequence)
+        requestReset(event.sequence)
         return
       }
       if (event.sequence <= recoveryFloor) return
@@ -343,11 +335,11 @@ export const RealtimeSync = React.memo(function RealtimeSync() {
       if (epochChanged || resetting || resetRequested) {
         if (bufferedEvents.length >= maximumBufferedEvents) {
           bufferedEvents = []
-          requestReset(false, event.sequence, true)
+          requestReset(event.sequence, true)
           return
         }
         bufferedEvents.push(event)
-        if (epochChanged) requestReset(false, 0, !initialEpoch)
+        if (epochChanged) requestReset(0, !initialEpoch)
         return
       }
       applyEventOrRecover(event)
@@ -401,7 +393,6 @@ export const RealtimeSync = React.memo(function RealtimeSync() {
         return
       }
       console.warn("[Kiln realtime] Stream heartbeat timed out; reconnecting")
-      requestReset(true, 0, true)
       disconnectSource()
       connectSource()
     }, realtimeHeartbeatIntervalMs)

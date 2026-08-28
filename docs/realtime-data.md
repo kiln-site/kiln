@@ -81,8 +81,9 @@ offline, but it does not become the authority for that intent.
   instead of allowing memory or stale deltas to grow without limit.
 - A 15-second named ping, accompanied by an SSE comment, keeps intermediaries
   and the browser watchdog active without creating application-level renders.
-  Forty-five seconds without a delivered frame triggers an authoritative
-  recovery and a fresh EventSource connection.
+  Forty-five seconds without a delivered frame replaces the EventSource; the
+  new stream's guaranteed initial reset performs one authoritative fleet and
+  Hearth recovery.
 - Successful audited Relay mutations publish one `activity` invalidation at
   the shared RPC boundary. Read operations never do, which keeps feature code
   simpler without adding background Activity polling.
@@ -121,8 +122,16 @@ offline, but it does not become the authority for that intent.
 - Provisioning fallback reads only the owning Relay and upserts only the active
   instance; it does not poll or replace the full authorized fleet.
 - Relay connection transitions rewrite only that Relay's reachability fields
-  in the existing rows. A reconnect's subsequent snapshot-reset event remains
-  the authoritative recovery boundary for deltas missed while offline.
+  in the existing rows and publish only when crossing the authenticated
+  boundary. A reconnect's subsequent reset recovers authoritative Relay
+  membership and the fleet snapshot in one server request, so queue coalescing
+  cannot split the toast and fleet state or retain a removed Relay. That reset
+  remains the recovery boundary for deltas missed while offline. Each
+  unavailable Relay falls back independently to its last snapshot and is
+  marked unreachable, so one outage cannot block membership recovery for the
+  rest of the fleet. Recovery cancels older in-flight fleet queries before
+  committing, preventing a slower pre-reset response from restoring stale
+  membership or rows.
 - Collection IDs include business scope. Filters, ordering, and pagination do
   not create additional collection instances.
 - Sign-in and sign-out use full-document navigation. The old JavaScript realm

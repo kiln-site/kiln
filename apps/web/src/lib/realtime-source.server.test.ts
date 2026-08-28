@@ -20,10 +20,15 @@ describe("realtime source", () => {
 
     const first = publishRealtimeChange({
       relayId: "relay-a",
+      status: "connected",
       type: "relay.state",
     })
     unsubscribe()
-    publishRealtimeChange({ relayId: "relay-a", type: "relay.state" })
+    publishRealtimeChange({
+      relayId: "relay-a",
+      status: "unreachable",
+      type: "relay.state",
+    })
 
     expect(received).toEqual([first.sequence])
     expect(first.epoch).toMatch(

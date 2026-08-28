@@ -217,12 +217,16 @@ export const getRelaySnapshot = createServerFn({ method: "POST" }).handler(
   }
 )
 
-export const getFreshRelaySnapshot = createServerFn({ method: "POST" }).handler(
-  async () => {
-    const user = await requireAuthenticatedUser()
-    return authorizedFleetSnapshot(user, false, true)
-  }
-)
+export const getFreshRelayConnectionState = createServerFn({
+  method: "POST",
+}).handler(async () => {
+  const user = await requireAuthenticatedUser()
+  return authorizedRelayConnectionState(user, {
+    fallbackOnError: true,
+    fresh: true,
+    warnOnUnavailable: false,
+  })
+})
 
 export const getFreshRelayInstance = createServerFn({ method: "POST" })
   .validator(instanceInputSchema)
@@ -256,61 +260,11 @@ export const getRelayConnectionState = createServerFn({
   method: "GET",
 }).handler(async () => {
   const user = await requireAuthenticatedUser()
-  const configuredRelays = await authorizedRelays(
-    user,
-    await listPersistedRelays()
-  )
-
-  if (configuredRelays.length === 0) {
-    return {
-      status: "unconfigured" as const,
-      message: "No Relay has been configured yet.",
-      relay: null,
-    }
-  }
-
-  const relays = configuredRelays.filter((relay) => relay.enabled)
-  if (relays.length === 0) {
-    return {
-      status: "paused" as const,
-      message: "All configured Relays are paused.",
-      relay: publicPausedFleetRelay(configuredRelays),
-      relays: configuredRelays.map((relay) =>
-        publicRelayState({ relay, status: "paused" })
-      ),
-    }
-  }
-
-  const entries = await Promise.all(
-    relays.map((relay) =>
-      authorizedRelayEntry(relay, user, {
-        fallbackOnError: true,
-        warnOnUnavailable: true,
-      })
-    )
-  )
-  const connectedCount = entries.filter(
-    (entry) => entry.status === "connected"
-  ).length
-  const snapshot = await mergeRelaySnapshots(entries)
-  const relay = publicFleetRelay(relays, connectedCount)
-  if (connectedCount === 0) {
-    return {
-      status: "unreachable" as const,
-      message:
-        relays.length === 1
-          ? "The Relay is configured, but Hearth cannot reach it right now."
-          : "Hearth cannot reach any configured Relay right now.",
-      relay,
-      relays: entries.map(publicRelayState),
-    }
-  }
-  return {
-    status: "connected" as const,
-    relay,
-    relays: entries.map(publicRelayState),
-    snapshot,
-  }
+  return authorizedRelayConnectionState(user, {
+    fallbackOnError: true,
+    fresh: false,
+    warnOnUnavailable: true,
+  })
 })
 
 function warnRelayUnavailable(relayId: string, cause: unknown) {
@@ -1247,6 +1201,66 @@ async function authorizedFleetSnapshot(
     )
   )
   return mergeRelaySnapshots(entries)
+}
+
+async function authorizedRelayConnectionState(
+  user: AuthenticatedUser,
+  options: {
+    fallbackOnError: boolean
+    fresh: boolean
+    warnOnUnavailable: boolean
+  }
+) {
+  const configuredRelays = await authorizedRelays(
+    user,
+    await listPersistedRelays()
+  )
+  if (configuredRelays.length === 0) {
+    return {
+      status: "unconfigured" as const,
+      message: "No Relay has been configured yet.",
+      relay: null,
+    }
+  }
+
+  const relays = configuredRelays.filter((relay) => relay.enabled)
+  if (relays.length === 0) {
+    return {
+      status: "paused" as const,
+      message: "All configured Relays are paused.",
+      relay: publicPausedFleetRelay(configuredRelays),
+      relays: configuredRelays.map((relay) =>
+        publicRelayState({ relay, status: "paused" })
+      ),
+    }
+  }
+
+  const entries = await Promise.all(
+    relays.map((relay) => authorizedRelayEntry(relay, user, options))
+  )
+  const connectedCount = entries.filter(
+    (entry) => entry.status === "connected"
+  ).length
+  const snapshot = await mergeRelaySnapshots(entries)
+  const relay = publicFleetRelay(relays, connectedCount)
+  if (connectedCount === 0) {
+    return {
+      status: "unreachable" as const,
+      message:
+        relays.length === 1
+          ? "The Relay is configured, but Hearth cannot reach it right now."
+          : "Hearth cannot reach any configured Relay right now.",
+      relay,
+      relays: entries.map(publicRelayState),
+      snapshot,
+    }
+  }
+  return {
+    status: "connected" as const,
+    relay,
+    relays: entries.map(publicRelayState),
+    snapshot,
+  }
 }
 
 async function authorizedRelays(
