@@ -8,8 +8,8 @@ import { Link } from "@tanstack/react-router"
 import { ensuringPromise, forkPromise } from "@/effect/promise"
 import {
   ArrowLeft,
-  Check,
   CircleAlert,
+  Copy,
   EllipsisVertical,
   ExternalLink,
   KeyRound,
@@ -60,6 +60,7 @@ import type { WorkspaceTableSearchStore } from "@/components/workspace-data-tabl
 import { TailscaleNetworkMembershipPage } from "@/components/tailscale-network-membership"
 import { queryKeys, tailscaleStacksQueryOptions } from "@/lib/query-options"
 import {
+  configureTailscaleIntegration,
   createTailscaleNetwork,
   removeTailscaleStack,
   saveTailscaleStack,
@@ -140,10 +141,6 @@ export const TailscalePage = React.memo(function TailscalePage({
           stack={editingStack}
           onOpenChange={(open) => {
             if (!open) setEditingId(null)
-          }}
-          onRemove={() => {
-            setEditingId(null)
-            setRemovingId(editingStack.id)
           }}
         />
       ) : null}
@@ -344,7 +341,7 @@ const TailscaleTableHead = React.memo(function TailscaleTableHead() {
       <WorkspaceTableHeading className="hidden w-[18%] lg:table-cell">
         Network TLD
       </WorkspaceTableHeading>
-      <WorkspaceTableHeading className="w-28 px-2 text-right sm:w-32 sm:px-3">
+      <WorkspaceTableHeading className="w-40 px-2 text-right sm:w-44 sm:px-3">
         Actions
       </WorkspaceTableHeading>
     </WorkspaceTableHead>
@@ -360,6 +357,20 @@ const TailscaleTableRow = React.memo(function TailscaleTableRow({
   onEdit: (id: string) => void
   onRemove: (id: string) => void
 }) {
+  const copyNetworkId = React.useCallback(() => {
+    forkPromise(
+      async () => {
+        await navigator.clipboard.writeText(stack.id)
+        showToast({ message: "Network ID copied", type: "success" })
+      },
+      () =>
+        showToast({
+          message: "The network ID could not be copied",
+          type: "error",
+        })
+    )
+  }, [stack.id])
+
   return (
     <tr className="group transition-colors hover:bg-accent/25">
       <WorkspaceTableCell>
@@ -414,6 +425,42 @@ const TailscaleTableRow = React.memo(function TailscaleTableRow({
                 size="icon-sm"
                 variant="ghost"
                 disabled={Boolean(stack.cleanup)}
+                aria-label={`Edit ${stack.name}`}
+                onClick={() => onEdit(stack.id)}
+              >
+                <Pencil />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="left">Edit</TooltipContent>
+          </Tooltip>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                asChild={!stack.cleanup}
+                type="button"
+                size="icon-sm"
+                variant="ghost"
+                disabled={Boolean(stack.cleanup)}
+                aria-label={`Configure ${stack.name}`}
+              >
+                {!stack.cleanup ? (
+                  <Link to="/infra/tailscale" search={{ network: stack.id }}>
+                    <Settings2 />
+                  </Link>
+                ) : (
+                  <Settings2 />
+                )}
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="left">Configure</TooltipContent>
+          </Tooltip>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                type="button"
+                size="icon-sm"
+                variant="ghost"
+                disabled={Boolean(stack.cleanup)}
                 aria-label={`Delete ${stack.name}`}
                 className="text-destructive hover:text-destructive"
                 onClick={() => onRemove(stack.id)}
@@ -431,7 +478,6 @@ const TailscaleTableRow = React.memo(function TailscaleTableRow({
                     type="button"
                     size="icon-sm"
                     variant="ghost"
-                    disabled={Boolean(stack.cleanup)}
                     aria-label={`More actions for ${stack.name}`}
                   >
                     <EllipsisVertical />
@@ -441,15 +487,9 @@ const TailscaleTableRow = React.memo(function TailscaleTableRow({
               <TooltipContent side="left">More actions</TooltipContent>
             </Tooltip>
             <DropdownMenuContent align="end" className="min-w-36">
-              <DropdownMenuItem onSelect={() => onEdit(stack.id)}>
-                <Pencil />
-                Edit
-              </DropdownMenuItem>
-              <DropdownMenuItem asChild>
-                <Link to="/infra/tailscale" search={{ network: stack.id }}>
-                  <Settings2 />
-                  Configure
-                </Link>
+              <DropdownMenuItem onSelect={copyNetworkId}>
+                <Copy />
+                Copy ID
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
@@ -488,96 +528,16 @@ const EditNetworkDialog = React.memo(function EditNetworkDialog({
   open,
   stack,
   onOpenChange,
-  onRemove,
 }: {
   open: boolean
   stack: TailscaleStackOverview
   onOpenChange: (open: boolean) => void
-  onRemove: () => void
 }) {
-  const queryClient = useQueryClient()
-  const [name, setName] = React.useState(stack.name)
-  const [domain, setDomain] = React.useState(stack.domain)
-  const update = useMutation({
-    mutationFn: () =>
-      saveTailscaleStack({
-        data: stackSaveInput(stack, {
-          domain: domain.trim(),
-          name: name.trim(),
-        }),
-      }),
-    onSuccess: async (next) => {
-      queryClient.setQueryData(queryKeys.tailscaleStacks, next)
-      await queryClient.invalidateQueries({
-        queryKey: queryKeys.relay.snapshot,
-      })
-      onOpenChange(false)
-    },
-  })
-  const unchanged = name.trim() === stack.name && domain.trim() === stack.domain
-
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-md">
-        <DialogHeader>
-          <DialogTitle>Edit network</DialogTitle>
-        </DialogHeader>
-        <div className="space-y-4 py-2">
-          <label className="block">
-            <span className="mb-2 block text-xs font-medium">Network name</span>
-            <Input
-              value={name}
-              onChange={(event) => setName(event.target.value)}
-              maxLength={MAXIMUM_INSTANCE_NAME_LENGTH}
-              autoFocus
-            />
-          </label>
-          <label className="block">
-            <span className="mb-2 block text-xs font-medium">Network TLD</span>
-            <Input
-              value={domain}
-              onChange={(event) => setDomain(event.target.value)}
-              className="font-mono"
-            />
-          </label>
-          {update.error ? (
-            <p className="text-xs text-destructive">{update.error.message}</p>
-          ) : null}
-        </div>
-        <DialogFooter className="sm:justify-between">
-          <Button
-            type="button"
-            variant="ghost"
-            className="text-destructive hover:text-destructive"
-            onClick={onRemove}
-          >
-            <Trash2 />
-            Remove
-          </Button>
-          <div className="flex justify-end gap-2">
-            <Button
-              type="button"
-              variant="ghost"
-              onClick={() => onOpenChange(false)}
-            >
-              Cancel
-            </Button>
-            <Button
-              type="button"
-              disabled={
-                update.isPending || unchanged || !name.trim() || !domain.trim()
-              }
-              onClick={() => update.mutate()}
-            >
-              {update.isPending ? (
-                <LoaderCircle className="animate-spin" />
-              ) : (
-                <Check />
-              )}
-              Save
-            </Button>
-          </div>
-        </DialogFooter>
+      <DialogContent className="max-h-[calc(100dvh-2rem)] gap-0 overflow-y-auto p-0 sm:max-w-3xl">
+        <DialogTitle className="sr-only">Edit Tailscale network</DialogTitle>
+        <NetworkForm stack={stack} onDone={() => onOpenChange(false)} />
       </DialogContent>
     </Dialog>
   )
@@ -653,41 +613,85 @@ const CreateNetworkDialog = React.memo(function CreateNetworkDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-h-[calc(100dvh-2rem)] gap-0 overflow-y-auto p-0 sm:max-w-3xl">
         <DialogTitle className="sr-only">Add Tailscale network</DialogTitle>
-        {open ? <CreateNetworkForm onDone={() => onOpenChange(false)} /> : null}
+        {open ? <NetworkForm onDone={() => onOpenChange(false)} /> : null}
       </DialogContent>
     </Dialog>
   )
 })
 
-const CreateNetworkForm = React.memo(function CreateNetworkForm({
+const NetworkForm = React.memo(function NetworkForm({
   onDone,
+  stack,
 }: {
   onDone: () => void
+  stack?: TailscaleStackOverview
 }) {
   const queryClient = useQueryClient()
-  const [name, setName] = React.useState("Private Network")
-  const [domain, setDomain] = React.useState("")
-  const [clientId, setClientId] = React.useState("")
+  const [name, setName] = React.useState(stack?.name ?? "Private Network")
+  const [domain, setDomain] = React.useState(stack?.domain ?? "")
+  const [clientId, setClientId] = React.useState(
+    stack?.integration?.clientId ?? ""
+  )
   const [clientSecret, setClientSecret] = React.useState("")
-  const [tag, setTag] = React.useState("tag:kiln")
-  const create = useMutation({
-    mutationFn: () =>
-      createTailscaleNetwork({
+  const [tag, setTag] = React.useState(
+    stack?.integration?.tags[0] ?? "tag:kiln"
+  )
+  const save = useMutation({
+    mutationFn: async () => {
+      const input = {
+        clientId: clientId.trim(),
+        clientSecret: clientSecret.trim(),
+        domain: normalizeTailscaleDomain(domain),
+        name: name.trim(),
+        tag: tag.trim(),
+      }
+      if (!stack) return createTailscaleNetwork({ data: input })
+
+      const configured = await configureTailscaleIntegration({
         data: {
-          clientId: clientId.trim(),
-          clientSecret: clientSecret.trim(),
-          domain: domain.trim(),
-          name: name.trim(),
-          tag: tag.trim(),
+          clientId: input.clientId,
+          clientSecret: input.clientSecret,
+          domain: stack.domain,
+          id: stack.id,
+          previousDomain: stack.domain,
+          tag: input.tag,
         },
-      }),
-    onSuccess: (next) => {
+      })
+      if (input.name !== stack.name || input.domain !== stack.domain) {
+        return saveTailscaleStack({
+          data: stackSaveInput(stack, {
+            domain: input.domain,
+            name: input.name,
+          }),
+        })
+      }
+      return configured.stacks
+    },
+    onSuccess: async (next) => {
       queryClient.setQueryData(queryKeys.tailscaleStacks, next)
+      if (stack) {
+        await queryClient.invalidateQueries({
+          queryKey: queryKeys.relay.snapshot,
+        })
+      }
       showToast({
-        message: `${name.trim()} is ready for servers`,
+        message: stack
+          ? `${name.trim()} was updated`
+          : `${name.trim()} is ready for servers`,
         type: "success",
       })
       onDone()
+    },
+    onError: async () => {
+      if (!stack) return
+      await Promise.all([
+        queryClient.invalidateQueries({
+          queryKey: queryKeys.tailscaleStacks,
+        }),
+        queryClient.invalidateQueries({
+          queryKey: queryKeys.relay.snapshot,
+        }),
+      ])
     },
   })
   const canSubmit =
@@ -705,7 +709,7 @@ const CreateNetworkForm = React.memo(function CreateNetworkForm({
       className="grid min-h-0 md:grid-cols-[minmax(0,1fr)_17rem]"
       onSubmit={(event) => {
         event.preventDefault()
-        create.mutate()
+        save.mutate()
       }}
     >
       <section className="min-w-0 p-5 sm:p-6">
@@ -714,7 +718,7 @@ const CreateNetworkForm = React.memo(function CreateNetworkForm({
             <Network className="size-4" />
           </span>
           <h2 className="font-heading text-lg font-semibold">
-            Connect a tailnet
+            {stack ? "Edit tailnet" : "Connect a tailnet"}
           </h2>
         </div>
 
@@ -782,12 +786,12 @@ const CreateNetworkForm = React.memo(function CreateNetworkForm({
           </label>
         </div>
 
-        {create.error ? (
+        {save.error ? (
           <p
             className="mt-4 border border-destructive/30 bg-destructive/5 px-3 py-2.5 text-xs text-destructive"
             role="alert"
           >
-            {create.error.message}
+            {save.error.message}
           </p>
         ) : null}
 
@@ -795,13 +799,17 @@ const CreateNetworkForm = React.memo(function CreateNetworkForm({
           <Button type="button" variant="ghost" onClick={onDone}>
             Cancel
           </Button>
-          <Button type="submit" disabled={!canSubmit || create.isPending}>
-            {create.isPending ? (
+          <Button type="submit" disabled={!canSubmit || save.isPending}>
+            {save.isPending ? (
               <LoaderCircle className="animate-spin" />
             ) : (
               <KeyRound />
             )}
-            {create.isPending ? "Validating…" : "Validate and connect"}
+            {save.isPending
+              ? "Validating…"
+              : stack
+                ? "Validate and update"
+                : "Validate and connect"}
           </Button>
         </div>
       </section>
@@ -861,6 +869,14 @@ const CreateNetworkForm = React.memo(function CreateNetworkForm({
     </form>
   )
 })
+
+function normalizeTailscaleDomain(value: string): string {
+  return value
+    .trim()
+    .replace(/^[.]+|[.]+$/gu, "")
+    .toLowerCase()
+}
+
 function stackSaveInput(
   stack: TailscaleStackOverview,
   overrides: { domain?: string; name?: string } = {}
