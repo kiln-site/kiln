@@ -672,7 +672,7 @@ const TailscaleMembershipRow = React.memo(function TailscaleMembershipRow({
                   </span>
                 </div>
                 <p className="type-meta truncate text-muted-foreground">
-                  {server.game} · {server.implementation}
+                  {server.implementation} {server.version}
                 </p>
               </div>
             </div>
