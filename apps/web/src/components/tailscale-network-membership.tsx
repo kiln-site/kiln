@@ -648,7 +648,7 @@ const TailscaleMembershipRow = React.memo(function TailscaleMembershipRow({
             params={{ serverId: server.routeId }}
             preload="intent"
             aria-label={`Open ${server.name}`}
-            className="group/server-link flex min-h-[3.25rem] w-full min-w-0 flex-col justify-center px-3 outline-none focus-visible:ring-2 focus-visible:ring-ring/40 focus-visible:ring-inset"
+            className="group/server-link flex min-h-[3.25rem] w-fit max-w-full min-w-0 flex-col justify-center px-3 outline-none focus-visible:ring-2 focus-visible:ring-ring/40 focus-visible:ring-inset"
           >
             <div className="flex min-w-0 items-center gap-2.5">
               <span className="flex size-8 shrink-0 items-center justify-center rounded-md border border-border/70 bg-background/35 text-muted-foreground">
