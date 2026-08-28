@@ -10,6 +10,7 @@ import {
   ArrowLeft,
   Check,
   CircleAlert,
+  EllipsisVertical,
   ExternalLink,
   KeyRound,
   LoaderCircle,
@@ -32,6 +33,12 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@workspace/ui/components/dialog"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@workspace/ui/components/dropdown-menu"
 import { Input } from "@workspace/ui/components/input"
 import { showToast } from "@workspace/ui/components/sonner"
 import {
@@ -118,6 +125,7 @@ export const TailscalePage = React.memo(function TailscalePage({
           stacks={stacks}
           onAdd={() => onCreateOpenChange(true)}
           onEdit={setEditingId}
+          onRemove={setRemovingId}
         />
       </section>
 
@@ -287,17 +295,19 @@ const TailscaleTable = React.memo(function TailscaleTable({
   stacks,
   onAdd,
   onEdit,
+  onRemove,
 }: {
   searchStore: WorkspaceTableSearchStore
   stacks: Array<TailscaleStackOverview>
   onAdd: () => void
   onEdit: (id: string) => void
+  onRemove: (id: string) => void
 }) {
   const renderRow = React.useCallback(
     (stack: TailscaleStackOverview) => (
-      <TailscaleTableRow stack={stack} onEdit={onEdit} />
+      <TailscaleTableRow stack={stack} onEdit={onEdit} onRemove={onRemove} />
     ),
-    [onEdit]
+    [onEdit, onRemove]
   )
   const renderEmpty = React.useCallback(
     (searchActive: boolean) => (
@@ -334,8 +344,8 @@ const TailscaleTableHead = React.memo(function TailscaleTableHead() {
       <WorkspaceTableHeading className="hidden w-[18%] lg:table-cell">
         Network TLD
       </WorkspaceTableHeading>
-      <WorkspaceTableHeading className="w-28 px-2 sm:w-32 sm:px-3">
-        Options
+      <WorkspaceTableHeading className="w-28 px-2 text-right sm:w-32 sm:px-3">
+        Actions
       </WorkspaceTableHeading>
     </WorkspaceTableHead>
   )
@@ -344,9 +354,11 @@ const TailscaleTableHead = React.memo(function TailscaleTableHead() {
 const TailscaleTableRow = React.memo(function TailscaleTableRow({
   stack,
   onEdit,
+  onRemove,
 }: {
   stack: TailscaleStackOverview
   onEdit: (id: string) => void
+  onRemove: (id: string) => void
 }) {
   return (
     <tr className="group transition-colors hover:bg-accent/25">
@@ -402,35 +414,45 @@ const TailscaleTableRow = React.memo(function TailscaleTableRow({
                 size="icon-sm"
                 variant="ghost"
                 disabled={Boolean(stack.cleanup)}
-                aria-label={`Edit ${stack.name}`}
-                onClick={() => onEdit(stack.id)}
+                aria-label={`Delete ${stack.name}`}
+                className="text-destructive hover:text-destructive"
+                onClick={() => onRemove(stack.id)}
               >
+                <Trash2 />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="left">Delete</TooltipContent>
+          </Tooltip>
+          <DropdownMenu>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <DropdownMenuTrigger asChild>
+                  <Button
+                    type="button"
+                    size="icon-sm"
+                    variant="ghost"
+                    disabled={Boolean(stack.cleanup)}
+                    aria-label={`More actions for ${stack.name}`}
+                  >
+                    <EllipsisVertical />
+                  </Button>
+                </DropdownMenuTrigger>
+              </TooltipTrigger>
+              <TooltipContent side="left">More actions</TooltipContent>
+            </Tooltip>
+            <DropdownMenuContent align="end" className="min-w-36">
+              <DropdownMenuItem onSelect={() => onEdit(stack.id)}>
                 <Pencil />
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent side="left">Edit</TooltipContent>
-          </Tooltip>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                asChild={!stack.cleanup}
-                type="button"
-                size="icon-sm"
-                variant="ghost"
-                disabled={Boolean(stack.cleanup)}
-                aria-label={`Configure ${stack.name}`}
-              >
-                {!stack.cleanup ? (
-                  <Link to="/infra/tailscale" search={{ network: stack.id }}>
-                    <Settings2 />
-                  </Link>
-                ) : (
+                Edit
+              </DropdownMenuItem>
+              <DropdownMenuItem asChild>
+                <Link to="/infra/tailscale" search={{ network: stack.id }}>
                   <Settings2 />
-                )}
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent side="left">Configure</TooltipContent>
-          </Tooltip>
+                  Configure
+                </Link>
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
         </div>
       </WorkspaceTableCell>
     </tr>
