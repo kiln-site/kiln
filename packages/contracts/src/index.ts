@@ -515,6 +515,7 @@ export const relayTailscaleStackIdSchema = z.string().regex(/^[a-f0-9]{40}$/u)
 
 export const relayTailscaleStackBindingInputSchema = z
   .object({
+    enabled: z.boolean().default(true),
     hostname: relayTailscaleSubdomainSchema,
     instanceId: z.string().regex(/^[a-f0-9]{40}$/u),
   })

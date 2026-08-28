@@ -1,4 +1,4 @@
-import { randomBytes } from "node:crypto"
+import { createHash, randomBytes } from "node:crypto"
 
 import { createServerFn } from "@tanstack/react-start"
 import {
@@ -55,6 +55,7 @@ import {
 import type { RelaySnapshot, RelayTailscaleStack } from "@workspace/contracts"
 
 const stackBindingInputSchema = z.strictObject({
+  enabled: z.boolean().default(true),
   hostname: relayTailscaleSubdomainSchema,
   instanceId: z.string().regex(/^[a-f0-9]{40}$/u),
   relayId: relayIdSchema,
@@ -115,6 +116,7 @@ export interface TailscaleDeployment extends RelayTailscaleStack {
 export interface TailscaleStackOverview {
   bindings: Array<{
     address: string
+    enabled: boolean
     hostname: string
     instanceId: string
     relayId: string
@@ -409,7 +411,8 @@ export const saveTailscaleStack = createServerFn({ method: "POST" })
         const relay = relayById.get(relayId)
         if (!relay) throw new Error("A selected server's node is unavailable")
         return {
-          bindings: bindings.map(({ hostname, instanceId }) => ({
+          bindings: bindings.map(({ enabled, hostname, instanceId }) => ({
+            enabled,
             hostname,
             instanceId,
           })),
@@ -869,7 +872,7 @@ function deploymentHostname(
     .toLowerCase()
     .replace(/[^a-z0-9]+/gu, "-")
     .replace(/^-+|-+$/gu, "")
-  const suffix = relayId.slice(0, 6).toLowerCase()
+  const suffix = createHash("sha256").update(relayId).digest("hex").slice(0, 6)
   return `${slug.slice(0, Math.max(1, 56 - suffix.length)).replace(/-+$/u, "")}-${suffix}`
 }
 
@@ -967,7 +970,7 @@ function sameTailscaleBindings(
     deployments.flatMap((deployment) =>
       deployment.bindings.map(
         (binding) =>
-          `${deployment.relayId}:${binding.instanceId}:${binding.hostname}`
+          `${deployment.relayId}:${binding.instanceId}:${binding.hostname}:${binding.enabled}`
       )
     )
   )
@@ -975,7 +978,7 @@ function sameTailscaleBindings(
     current.size === bindings.length &&
     bindings.every((binding) =>
       current.has(
-        `${binding.relayId}:${binding.instanceId}:${binding.hostname}`
+        `${binding.relayId}:${binding.instanceId}:${binding.hostname}:${binding.enabled}`
       )
     )
   )

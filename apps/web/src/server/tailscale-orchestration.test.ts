@@ -585,7 +585,9 @@ describe("Tailscale deployment orchestration", () => {
 
 function target(relayId: string): DesiredTailscaleDeployment {
   return {
-    bindings: [{ hostname: `new-${relayId}`, instanceId: relayId }],
+    bindings: [
+      { enabled: true, hostname: `new-${relayId}`, instanceId: relayId },
+    ],
     hostname: `network-${relayId}`,
     relayId,
     relayName: relayId,
@@ -601,6 +603,7 @@ function deployment(
     bindings: [
       {
         address,
+        enabled: true,
         hostname: revision === "old" ? "old" : `new-${relayId}`,
         instanceId: relayId,
       },

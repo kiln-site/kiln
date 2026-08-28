@@ -9,6 +9,7 @@ import { TailscaleOrchestrationError } from "@/effect/errors"
 
 interface TailscaleBindingState {
   address: string
+  enabled: boolean
   hostname: string
   instanceId: string
 }
@@ -25,7 +26,11 @@ export interface TailscaleDeploymentState {
 }
 
 export interface DesiredTailscaleDeployment {
-  bindings: Array<{ hostname: string; instanceId: string }>
+  bindings: Array<{
+    enabled: boolean
+    hostname: string
+    instanceId: string
+  }>
   hostname: string
   relayId: string
   relayName: string
@@ -298,10 +303,9 @@ export const applyTailscaleDeploymentPlanEffect = Effect.fn(
     )
 
     const records = applied.flatMap((deployment) =>
-      deployment.bindings.map(({ address, hostname }) => ({
-        address,
-        hostname,
-      }))
+      deployment.bindings.flatMap(({ address, enabled, hostname }) =>
+        enabled ? [{ address, hostname }] : []
+      )
     )
     const [dnsFailures, synchronizedDeployments] = yield* Effect.partition(
       applied,
@@ -410,10 +414,13 @@ const rollbackTailscaleDeploymentPlanEffect = Effect.fn(
       const rollback = previous
         ? promiseOperation("rollback", () =>
             operations.apply(deploymentTarget(previous), {
-              bindings: previous.bindings.map(({ hostname, instanceId }) => ({
-                hostname,
-                instanceId,
-              })),
+              bindings: previous.bindings.map(
+                ({ enabled, hostname, instanceId }) => ({
+                  enabled,
+                  hostname,
+                  instanceId,
+                })
+              ),
               domain: previous.domain,
               hostname: previous.hostname,
               id: previous.id,
@@ -436,7 +443,9 @@ const rollbackTailscaleDeploymentPlanEffect = Effect.fn(
   )
 
   const records = current.flatMap((deployment) =>
-    deployment.bindings.map(({ address, hostname }) => ({ address, hostname }))
+    deployment.bindings.flatMap(({ address, enabled, hostname }) =>
+      enabled ? [{ address, hostname }] : []
+    )
   )
   const [dnsFailures] = yield* Effect.partition(
     current,
@@ -500,7 +509,8 @@ function deploymentTarget(
   deployment: TailscaleDeploymentState
 ): DesiredTailscaleDeployment {
   return {
-    bindings: deployment.bindings.map(({ hostname, instanceId }) => ({
+    bindings: deployment.bindings.map(({ enabled, hostname, instanceId }) => ({
+      enabled,
       hostname,
       instanceId,
     })),
@@ -533,9 +543,8 @@ function deploymentRecords(
   relayId: string
 }> {
   return deployments.flatMap((deployment) =>
-    deployment.bindings.map((binding) => ({
-      ...binding,
-      relayId: deployment.relayId,
-    }))
+    deployment.bindings.flatMap((binding) =>
+      binding.enabled ? [{ ...binding, relayId: deployment.relayId }] : []
+    )
   )
 }

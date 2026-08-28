@@ -743,10 +743,9 @@ export class LifecycleDriver {
         await this.#configureTailscaleStackRouting(config)
         await this.#ensureTailscaleStackDns(
           config,
-          config.bindings.map(({ address, hostname }) => ({
-            address,
-            hostname,
-          }))
+          activeTailscaleStackBindings(config.bindings).map(
+            ({ address, hostname }) => ({ address, hostname })
+          )
         )
         return this.#tailscaleStack(config)
       }).pipe(
@@ -890,7 +889,9 @@ export class LifecycleDriver {
     await this.#configureTailscaleStackRouting(config)
     await this.#ensureTailscaleStackDns(
       config,
-      config.bindings.map(({ address, hostname }) => ({ address, hostname }))
+      activeTailscaleStackBindings(config.bindings).map(
+        ({ address, hostname }) => ({ address, hostname })
+      )
     )
     await rm(this.#tailscaleStackRemovalMarker(id), { force: true })
     await rm(this.#tailscaleStackRemovalSnapshot(id), { force: true })
@@ -3508,12 +3509,18 @@ export class LifecycleDriver {
   ): Promise<void> {
     const network = this.#resources.tailscaleStackNetwork(stackId)
     const previousById = new Map(
-      previous.map((binding) => [binding.instanceId, binding])
+      activeTailscaleStackBindings(previous).map((binding) => [
+        binding.instanceId,
+        binding,
+      ])
     )
     const desiredById = new Map(
-      desired.map((binding) => [binding.instanceId, binding])
+      activeTailscaleStackBindings(desired).map((binding) => [
+        binding.instanceId,
+        binding,
+      ])
     )
-    for (const binding of previous) {
+    for (const binding of previousById.values()) {
       const replacement = desiredById.get(binding.instanceId)
       if (replacement?.address === binding.address) continue
       const instance = await this.#docker.findInstance(binding.instanceId)
@@ -3530,7 +3537,7 @@ export class LifecycleDriver {
         () => undefined
       )
     }
-    for (const binding of desired) {
+    for (const binding of desiredById.values()) {
       const prior = previousById.get(binding.instanceId)
       const instance = await this.#docker.findInstance(binding.instanceId)
       if (!instance) continue
@@ -3777,7 +3784,7 @@ export class LifecycleDriver {
       tailscaleStackFirewallIsCurrent(
         Boolean(hook),
         specification.stdout,
-        config.bindings
+        activeTailscaleStackBindings(config.bindings)
       )
     ) {
       return
@@ -3801,7 +3808,9 @@ export class LifecycleDriver {
       ])
     }
     await command("docker", ["exec", container, "iptables", "-F", chain])
-    for (const rule of tailscaleStackFirewallRules(config.bindings)) {
+    for (const rule of tailscaleStackFirewallRules(
+      activeTailscaleStackBindings(config.bindings)
+    )) {
       await command("docker", ["exec", container, "iptables", ...rule])
     }
   }
@@ -3995,10 +4004,9 @@ export class LifecycleDriver {
             Effect.catch((fallbackCause) =>
               hasErrorCode(fallbackCause, "ENOENT")
                 ? Effect.succeed(
-                    config.bindings.map(({ address, hostname }) => ({
-                      address,
-                      hostname,
-                    }))
+                    activeTailscaleStackBindings(config.bindings).map(
+                      ({ address, hostname }) => ({ address, hostname })
+                    )
                   )
                 : Effect.fail(fallbackCause)
             )
@@ -4947,11 +4955,21 @@ export function assignTailscaleBindingAddresses(
   subnet: string,
   existing: ReadonlyArray<{
     address: string
+    enabled?: boolean
     hostname: string
     instanceId: string
   }>,
-  desired: ReadonlyArray<{ hostname: string; instanceId: string }>
-): Array<{ address: string; hostname: string; instanceId: string }> {
+  desired: ReadonlyArray<{
+    enabled?: boolean
+    hostname: string
+    instanceId: string
+  }>
+): Array<{
+  address: string
+  enabled: boolean
+  hostname: string
+  instanceId: string
+}> {
   const desiredInstanceIds = new Set(
     desired.map(({ instanceId }) => instanceId)
   )
@@ -4970,8 +4988,15 @@ export function assignTailscaleBindingAddresses(
       ...binding,
       address:
         previous?.address ?? allocateTailscaleBindingAddress(subnet, reserved),
+      enabled: binding.enabled ?? true,
     }
   })
+}
+
+function activeTailscaleStackBindings<TBinding extends { enabled: boolean }>(
+  bindings: ReadonlyArray<TBinding>
+): Array<TBinding> {
+  return bindings.filter((binding) => binding.enabled)
 }
 
 export function tailscaleStackWithoutInstance(

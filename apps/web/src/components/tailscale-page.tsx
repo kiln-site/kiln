@@ -50,7 +50,7 @@ import {
 } from "@/components/workspace-data-table"
 import type { WorkspaceTableSearchStore } from "@/components/workspace-data-table"
 import {
-  TailscaleAddServersDialog,
+  TailscaleConnectServersPopover,
   TailscaleConnectedServersTable,
 } from "@/components/tailscale-network-membership"
 import { WorkspaceSummaryCard } from "@/components/workspace-summary-card"
@@ -85,7 +85,7 @@ export const TailscalePage = React.memo(function TailscalePage({
   const [selectedNetworkId, setSelectedNetworkId] = React.useState<
     string | null
   >(null)
-  const [addServersOpen, setAddServersOpen] = React.useState(false)
+  const [serverPickerOpen, setServerPickerOpen] = React.useState(false)
   const [editingId, setEditingId] = React.useState<string | null>(null)
   const [removingId, setRemovingId] = React.useState<string | null>(null)
   const { data } = useSuspenseQuery(tailscaleStacksQueryOptions())
@@ -98,7 +98,10 @@ export const TailscalePage = React.memo(function TailscalePage({
     () => onCreateOpenChange(true),
     [onCreateOpenChange]
   )
-  const openAddServers = React.useCallback(() => setAddServersOpen(true), [])
+  const openServerPicker = React.useCallback(
+    () => setServerPickerOpen(true),
+    []
+  )
   const removeEditingStack = React.useCallback(() => {
     if (!editingId) return
     setEditingId(null)
@@ -124,15 +127,20 @@ export const TailscalePage = React.memo(function TailscalePage({
 
       <section className="relative flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border bg-card/45 [contain:paint]">
         <TailscaleToolbar
-          canAddServer={Boolean(selectedStack && !selectedStack.cleanup)}
           searchStore={searchStore}
-          onAddServer={openAddServers}
+          serverPicker={
+            <TailscaleConnectServersPopover
+              open={serverPickerOpen}
+              stack={selectedStack}
+              onOpenChange={setServerPickerOpen}
+            />
+          }
         />
         <div className="min-h-0 flex-1 overflow-auto">
           <TailscaleConnectedServersTable
             searchStore={searchStore}
             stack={selectedStack}
-            onAddServers={openAddServers}
+            onAddServers={openServerPicker}
             onSetup={openCreate}
           />
         </div>
@@ -152,14 +160,6 @@ export const TailscalePage = React.memo(function TailscalePage({
           onOpenChange={(open) => {
             if (!open) setEditingId(null)
           }}
-        />
-      ) : null}
-      {selectedStack && addServersOpen ? (
-        <TailscaleAddServersDialog
-          key={selectedStack.id}
-          open
-          stack={selectedStack}
-          onOpenChange={setAddServersOpen}
         />
       ) : null}
       {removingStack ? (
@@ -264,7 +264,7 @@ const TailscaleNetworkPicker = React.memo(function TailscaleNetworkPicker({
         >
           <p className="type-meta mt-1 truncate font-mono text-muted-foreground">
             {selectedStack
-              ? `${selectedStack.bindings.length} connected ${selectedStack.bindings.length === 1 ? "server" : "servers"} · ${selectedStack.deployments.length} ${selectedStack.deployments.length === 1 ? "node" : "nodes"}`
+              ? `${selectedStack.bindings.length} ${selectedStack.bindings.length === 1 ? "server" : "servers"} · ${selectedStack.deployments.length} ${selectedStack.deployments.length === 1 ? "node" : "nodes"}`
               : stacks.length > 0
                 ? `${stacks.length} networks available`
                 : "Add a network before connecting servers"}
@@ -335,13 +335,11 @@ const TailscaleNetworkPicker = React.memo(function TailscaleNetworkPicker({
 })
 
 const TailscaleToolbar = React.memo(function TailscaleToolbar({
-  canAddServer,
   searchStore,
-  onAddServer,
+  serverPicker,
 }: {
-  canAddServer: boolean
   searchStore: WorkspaceTableSearchStore
-  onAddServer: () => void
+  serverPicker: React.ReactNode
 }) {
   const [mobileSearchOpen, setMobileSearchOpen] = React.useState(false)
   const searchInputRef = React.useRef<HTMLInputElement>(null)
@@ -394,15 +392,9 @@ const TailscaleToolbar = React.memo(function TailscaleToolbar({
         </Button>
       ) : null}
 
-      <Button
-        type="button"
-        disabled={!canAddServer}
-        className={`${mobileSearchOpen ? "hidden sm:inline-flex" : ""} ml-auto`}
-        onClick={onAddServer}
-      >
-        <Plus />
-        Connect Servers
-      </Button>
+      <div className={`${mobileSearchOpen ? "hidden sm:block" : ""} ml-auto`}>
+        {serverPicker}
+      </div>
     </div>
   )
 })

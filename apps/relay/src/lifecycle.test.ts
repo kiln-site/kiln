@@ -325,18 +325,24 @@ describe("Tailscale Brick networking", () => {
       ],
       [
         { hostname: "replacement", instanceId: "replacement" },
-        { hostname: "retained-new-name", instanceId: "retained" },
+        {
+          enabled: false,
+          hostname: "retained-new-name",
+          instanceId: "retained",
+        },
       ]
     )
 
     expect(assigned).toEqual([
       {
         address: "10.165.55.10",
+        enabled: true,
         hostname: "replacement",
         instanceId: "replacement",
       },
       {
         address: "10.165.55.11",
+        enabled: false,
         hostname: "retained-new-name",
         instanceId: "retained",
       },
