@@ -9,6 +9,7 @@ import { Link } from "@tanstack/react-router"
 import {
   Copy,
   EllipsisVertical,
+  ExternalLink,
   KeyRound,
   LoaderCircle,
   Network,
@@ -26,6 +27,7 @@ import { forkPromise } from "@/effect/promise"
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle,
@@ -34,6 +36,7 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@workspace/ui/components/dropdown-menu"
 import { Input } from "@workspace/ui/components/input"
@@ -568,12 +571,16 @@ const TailscaleMembershipRow = React.memo(function TailscaleMembershipRow({
 }) {
   const binding = findBinding(stack, server)
   const [hostname, setHostname] = React.useState(binding?.hostname ?? "")
+  const [disconnectOpen, setDisconnectOpen] = React.useState(false)
   const deployment = stack.deployments.find(
     (deployment) => deployment.relayId === server.relayId
   )
   const disabled = pending || !server.tailscaleSupported
   const dirty = Boolean(binding && hostname.trim() !== binding.hostname)
   const status = tailscaleMembershipStatus(binding, deployment, server)
+  const onlyBindingOnRelay =
+    stack.bindings.filter((candidate) => candidate.relayId === server.relayId)
+      .length === 1
 
   if (!binding) return null
 
@@ -592,142 +599,200 @@ const TailscaleMembershipRow = React.memo(function TailscaleMembershipRow({
     forkPromise(() => updateBinding({ hostname: nextHostname }))
   }
 
+  const disconnect = () =>
+    onSave(
+      stack.bindings.filter(
+        (candidate) => stackBindingKey(candidate) !== stackBindingKey(binding)
+      )
+    )
+
   return (
-    <tr className="group transition-colors hover:bg-accent/25">
-      <WorkspaceTableCell>
-        <div className="flex items-center gap-2">
-          <span
-            className={`size-1.5 shrink-0 rounded-full ${status.dotClass}`}
-          />
-          <span className="truncate text-xs font-medium">{status.label}</span>
-        </div>
-      </WorkspaceTableCell>
-      <WorkspaceTableCell>
-        <div className="min-w-0">
+    <>
+      <tr className="group transition-colors hover:bg-accent/25">
+        <WorkspaceTableCell>
+          <div className="flex items-center gap-2">
+            <span
+              className={`size-1.5 shrink-0 rounded-full ${status.dotClass}`}
+            />
+            <span className="truncate text-xs font-medium">{status.label}</span>
+          </div>
+        </WorkspaceTableCell>
+        <WorkspaceTableCell>
+          <Link
+            to="/server/$serverId/console"
+            params={{ serverId: server.routeId }}
+            preload="intent"
+            aria-label={`Open ${server.name}`}
+            className="group/server-link block min-w-0 outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
+          >
+            <div className="flex min-w-0 items-center gap-1.5">
+              <p className="truncate text-xs font-semibold text-primary transition-colors group-hover/server-link:text-primary/80">
+                {server.name}
+              </p>
+              <span className="grid size-4 shrink-0 place-items-center md:hidden">
+                {!server.tailscaleSupported ? (
+                  <TailscaleRelayUpdateHint relayName={server.relayName} />
+                ) : null}
+              </span>
+            </div>
+            <p className="type-meta truncate text-muted-foreground md:hidden">
+              {server.relayName}
+            </p>
+            <p className="type-meta truncate font-mono text-muted-foreground sm:hidden">
+              {binding.hostname}.{stack.domain}
+            </p>
+          </Link>
+        </WorkspaceTableCell>
+        <WorkspaceTableCell className="hidden md:table-cell">
           <div className="flex min-w-0 items-center gap-1.5">
-            <p className="truncate text-xs font-semibold">{server.name}</p>
-            <span className="grid size-4 shrink-0 place-items-center md:hidden">
+            <span className="truncate text-xs text-muted-foreground">
+              {server.relayName}
+            </span>
+            <span className="grid size-4 shrink-0 place-items-center">
               {!server.tailscaleSupported ? (
                 <TailscaleRelayUpdateHint relayName={server.relayName} />
               ) : null}
             </span>
           </div>
-          <p className="type-meta truncate text-muted-foreground md:hidden">
-            {server.relayName}
-          </p>
-          <p className="type-meta truncate font-mono text-muted-foreground sm:hidden">
-            {binding.hostname}.{stack.domain}
-          </p>
-        </div>
-      </WorkspaceTableCell>
-      <WorkspaceTableCell className="hidden md:table-cell">
-        <div className="flex min-w-0 items-center gap-1.5">
-          <span className="truncate text-xs text-muted-foreground">
-            {server.relayName}
-          </span>
-          <span className="grid size-4 shrink-0 place-items-center">
-            {!server.tailscaleSupported ? (
-              <TailscaleRelayUpdateHint relayName={server.relayName} />
-            ) : null}
-          </span>
-        </div>
-      </WorkspaceTableCell>
-      <WorkspaceTableCell className="hidden sm:table-cell">
-        <div className="flex min-w-0 items-center gap-1.5">
-          <Input
-            value={hostname}
-            disabled={disabled}
-            onBlur={saveHostname}
-            onChange={(event) => setHostname(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === "Enter") event.currentTarget.blur()
-              if (event.key === "Escape") {
-                setHostname(binding.hostname)
-                event.currentTarget.blur()
-              }
-            }}
-            aria-label={`Hostname for ${server.name}`}
-            className="h-8 min-w-0 font-mono text-xs"
-          />
-          <span className="type-meta hidden shrink-0 font-mono text-muted-foreground lg:inline">
-            .{stack.domain}
-          </span>
-        </div>
-      </WorkspaceTableCell>
-      <WorkspaceTableCell>
-        <div className="flex items-center justify-end gap-0.5">
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                type="button"
-                size="icon-sm"
-                variant="ghost"
-                disabled={disabled}
-                aria-label={`${binding.enabled ? "Pause" : "Resume"} ${server.name}`}
-                onClick={() =>
-                  forkPromise(() =>
-                    updateBinding({ enabled: !binding.enabled })
-                  )
+        </WorkspaceTableCell>
+        <WorkspaceTableCell className="hidden sm:table-cell">
+          <div className="flex min-w-0 items-center gap-1.5">
+            <Input
+              value={hostname}
+              disabled={disabled}
+              onBlur={saveHostname}
+              onChange={(event) => setHostname(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") event.currentTarget.blur()
+                if (event.key === "Escape") {
+                  setHostname(binding.hostname)
+                  event.currentTarget.blur()
                 }
-              >
-                {pending ? (
-                  <LoaderCircle className="animate-spin" />
-                ) : binding.enabled ? (
-                  <Pause />
-                ) : (
-                  <Play />
-                )}
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent side="top">
-              {binding.enabled ? "Pause connection" : "Resume connection"}
-            </TooltipContent>
-          </Tooltip>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                type="button"
-                size="icon-sm"
-                variant="ghost"
-                disabled={disabled}
-                aria-label={`Disconnect ${server.name} from ${stack.name}`}
-                onClick={() =>
-                  forkPromise(() =>
-                    onSave(
-                      stack.bindings.filter(
-                        (candidate) =>
-                          stackBindingKey(candidate) !==
-                          stackBindingKey(binding)
-                      )
+              }}
+              aria-label={`Hostname for ${server.name}`}
+              className="h-8 min-w-0 font-mono text-xs"
+            />
+            <span className="type-meta hidden shrink-0 font-mono text-muted-foreground lg:inline">
+              .{stack.domain}
+            </span>
+          </div>
+        </WorkspaceTableCell>
+        <WorkspaceTableCell>
+          <div className="flex items-center justify-end gap-0.5">
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  type="button"
+                  size="icon-sm"
+                  variant="ghost"
+                  disabled={disabled}
+                  aria-label={`${binding.enabled ? "Pause" : "Resume"} ${server.name}`}
+                  onClick={() =>
+                    forkPromise(() =>
+                      updateBinding({ enabled: !binding.enabled })
                     )
-                  )
-                }
-              >
-                <Unplug />
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent side="top">Disconnect server</TooltipContent>
-          </Tooltip>
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button
-                type="button"
-                size="icon-sm"
-                variant="ghost"
-                aria-label={`More actions for ${server.name}`}
-              >
-                <EllipsisVertical />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="w-48">
-              <CopyIdentifierMenuItem label="server ID" value={server.id} />
-              <CopyIdentifierMenuItem label="Relay ID" value={server.relayId} />
-              <CopyIdentifierMenuItem label="tailnet ID" value={stack.id} />
-            </DropdownMenuContent>
-          </DropdownMenu>
-        </div>
-      </WorkspaceTableCell>
-    </tr>
+                  }
+                >
+                  {pending ? (
+                    <LoaderCircle className="animate-spin" />
+                  ) : binding.enabled ? (
+                    <Pause />
+                  ) : (
+                    <Play />
+                  )}
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent side="top">
+                {binding.enabled ? "Pause connection" : "Resume connection"}
+              </TooltipContent>
+            </Tooltip>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  type="button"
+                  size="icon-sm"
+                  variant="ghost"
+                  className="text-destructive hover:bg-destructive/10 hover:text-destructive"
+                  disabled={disabled}
+                  aria-label={`Disconnect ${server.name} from ${stack.name}`}
+                  onClick={() => setDisconnectOpen(true)}
+                >
+                  <Unplug />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent side="top">Disconnect server</TooltipContent>
+            </Tooltip>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  type="button"
+                  size="icon-sm"
+                  variant="ghost"
+                  aria-label={`More actions for ${server.name}`}
+                >
+                  <EllipsisVertical />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-48">
+                <DropdownMenuItem asChild>
+                  <Link
+                    to="/server/$serverId/console"
+                    params={{ serverId: server.routeId }}
+                    preload="intent"
+                  >
+                    <ExternalLink />
+                    Go to server
+                  </Link>
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <CopyIdentifierMenuItem label="server ID" value={server.id} />
+                <CopyIdentifierMenuItem
+                  label="Relay ID"
+                  value={server.relayId}
+                />
+                <CopyIdentifierMenuItem label="tailnet ID" value={stack.id} />
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
+        </WorkspaceTableCell>
+      </tr>
+      <Dialog open={disconnectOpen} onOpenChange={setDisconnectOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Disconnect {server.name}?</DialogTitle>
+            <DialogDescription>
+              {onlyBindingOnRelay
+                ? `This removes the server from ${stack.name}. Because it is the last connected server on ${server.relayName}, Tailscale will also be removed from that Relay in the background.`
+                : `This removes the server from ${stack.name}. Tailscale will stay installed on ${server.relayName} for its other connected servers.`}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="ghost"
+              disabled={pending}
+              onClick={() => setDisconnectOpen(false)}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              variant="destructive"
+              disabled={disabled}
+              onClick={() =>
+                forkPromise(async () => {
+                  await disconnect()
+                  setDisconnectOpen(false)
+                })
+              }
+            >
+              {pending ? <LoaderCircle className="animate-spin" /> : <Unplug />}
+              Disconnect Server
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </>
   )
 })
 
