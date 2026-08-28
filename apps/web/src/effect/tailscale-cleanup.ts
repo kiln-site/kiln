@@ -22,6 +22,11 @@ export interface PendingTailscaleCleanup {
   requestedBy: string
 }
 
+export interface PendingTailscaleCleanupBatch {
+  cleanups: Array<PendingTailscaleCleanup>
+  deferredCorruptRows: number
+}
+
 export function tailscaleCleanupRetryDelaySeconds(attempt: number): number {
   return Math.min(300, 2 ** Math.min(Math.max(1, attempt), 9))
 }
@@ -157,20 +162,40 @@ export const loadPendingTailscaleCleanupsEffect = Effect.fn(
       })
     )
   )
-  return cleanups.filter(
-    (cleanup): cleanup is PendingTailscaleCleanup => cleanup !== null
-  )
+  return {
+    cleanups: cleanups.filter(
+      (cleanup): cleanup is PendingTailscaleCleanup => cleanup !== null
+    ),
+    deferredCorruptRows: cleanups.filter((cleanup) => cleanup === null).length,
+  } satisfies PendingTailscaleCleanupBatch
 })
 
 export const completeTailscaleCleanupEffect = Effect.fn(
   "tailscaleCleanup.complete"
 )(function* (networkId: string, relayId: string) {
   const database = yield* Database
-  yield* database.execute(
-    "tailscaleCleanup.complete",
-    `DELETE FROM ${databaseTable("tailscale_network_deployment")}
-      WHERE network_id = ? AND relay_id = ?`,
-    [networkId, relayId]
+  yield* database.transaction("tailscaleCleanup.complete", (tx) =>
+    Effect.gen(function* () {
+      yield* tx.execute(
+        `DELETE FROM ${databaseTable("tailscale_network_deployment")}
+          WHERE network_id = ? AND relay_id = ?`,
+        [networkId, relayId]
+      )
+      yield* tx.execute(
+        `UPDATE ${databaseTable("tailscale_network")} network
+            SET network.cleanup_attempts = 0,
+                network.cleanup_next_attempt_at = CURRENT_TIMESTAMP(3),
+                network.cleanup_last_error = NULL
+          WHERE network.id = ?
+            AND network.deletion_requested_at IS NOT NULL
+            AND NOT EXISTS (
+              SELECT 1
+                FROM ${databaseTable("tailscale_network_deployment")} deployment
+               WHERE deployment.network_id = network.id
+            )`,
+        [networkId]
+      )
+    })
   )
 })
 

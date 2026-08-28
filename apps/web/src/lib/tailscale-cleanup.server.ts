@@ -47,7 +47,7 @@ export function scheduleTailscaleCleanupProcessing(): void {
 }
 
 export async function processTailscaleCleanupJobs(): Promise<void> {
-  const [pending, definitions, relays] = await Promise.all([
+  const [pendingBatch, definitions, relays] = await Promise.all([
     runAppEffect(
       "tailscale.cleanup.pending",
       loadPendingTailscaleCleanupsEffect()
@@ -60,7 +60,8 @@ export async function processTailscaleCleanupJobs(): Promise<void> {
   )
   const relayById = new Map(relays.map((relay) => [relay.id, relay]))
   const credentials = new Map<string, Promise<TailscaleOAuthCredential>>()
-  let changed = pending.length > 0
+  const pending = pendingBatch.cleanups
+  let changed = pending.length > 0 || pendingBatch.deferredCorruptRows > 0
 
   await Promise.all(
     pending.map((cleanup) =>

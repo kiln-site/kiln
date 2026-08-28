@@ -877,71 +877,123 @@ const GameServerMembershipRow = React.memo(function GameServerMembershipRow({
   onJoin: (stackId: string) => void
   onSave: ReturnType<typeof useStackMembershipMutation>["mutateAsync"]
 }) {
+  const [leaveOpen, setLeaveOpen] = React.useState(false)
+  const onlyBindingOnRelay =
+    stack.bindings.filter((candidate) => candidate.relayId === relayId)
+      .length === 1
+  const leave = React.useCallback(
+    () =>
+      onSave({
+        bindings: stack.bindings.filter(
+          (candidate) =>
+            candidate.relayId !== relayId || candidate.instanceId !== serverId
+        ),
+        stack,
+      }),
+    [onSave, relayId, serverId, stack]
+  )
+
   return (
-    <div className="grid items-center gap-3 px-4 py-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto]">
-      <div className="min-w-0">
-        <p className="truncate text-xs font-semibold">{stack.name}</p>
-        <p className="type-meta mt-0.5 truncate font-mono text-muted-foreground">
-          {binding ? binding.address : `*.${stack.domain}`}
+    <>
+      <div className="grid items-center gap-3 px-4 py-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto]">
+        <div className="min-w-0">
+          <p className="truncate text-xs font-semibold">{stack.name}</p>
+          <p className="type-meta mt-0.5 truncate font-mono text-muted-foreground">
+            {binding ? binding.address : `*.${stack.domain}`}
+          </p>
+        </div>
+        <p className="type-code min-w-0 truncate text-muted-foreground">
+          {binding ? `${binding.hostname}.${stack.domain}` : "Not connected"}
         </p>
-      </div>
-      <p className="type-code min-w-0 truncate text-muted-foreground">
-        {binding ? `${binding.hostname}.${stack.domain}` : "Not connected"}
-      </p>
-      <div className="flex items-center justify-end gap-1">
-        {binding ? (
-          <>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  type="button"
-                  size="icon-sm"
-                  variant="ghost"
-                  disabled={disabled}
-                  aria-label={`Edit ${binding.hostname}.${stack.domain}`}
-                  onClick={() => onJoin(stack.id)}
-                >
-                  <Pencil />
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent side="top">Edit hostname</TooltipContent>
-            </Tooltip>
+        <div className="flex items-center justify-end gap-1">
+          {binding ? (
+            <>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    type="button"
+                    size="icon-sm"
+                    variant="ghost"
+                    disabled={disabled}
+                    aria-label={`Edit ${binding.hostname}.${stack.domain}`}
+                    onClick={() => onJoin(stack.id)}
+                  >
+                    <Pencil />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent side="top">Edit hostname</TooltipContent>
+              </Tooltip>
+              <Button
+                type="button"
+                size="sm"
+                variant="ghost"
+                className="text-destructive hover:bg-destructive/10 hover:text-destructive"
+                disabled={disabled}
+                onClick={() => setLeaveOpen(true)}
+              >
+                {pending ? (
+                  <LoaderCircle className="animate-spin" />
+                ) : (
+                  <Unplug />
+                )}
+                Leave
+              </Button>
+            </>
+          ) : (
             <Button
               type="button"
               size="sm"
+              variant="outline"
+              disabled={disabled || joinDisabled}
+              onClick={() => onJoin(stack.id)}
+            >
+              {pending ? (
+                <LoaderCircle className="animate-spin" />
+              ) : (
+                <Network />
+              )}
+              Join
+            </Button>
+          )}
+        </div>
+      </div>
+      <Dialog open={leaveOpen} onOpenChange={setLeaveOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Leave {stack.name}?</DialogTitle>
+            <DialogDescription>
+              {onlyBindingOnRelay
+                ? `This disconnects this server from ${stack.name}. Because it is the last server on this Relay, Tailscale will also be removed from the Relay in the background.`
+                : `This disconnects this server from ${stack.name}. Tailscale will remain installed on the Relay for its other servers.`}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button
+              type="button"
               variant="ghost"
+              disabled={pending}
+              onClick={() => setLeaveOpen(false)}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              variant="destructive"
               disabled={disabled}
               onClick={() =>
-                forkPromise(() =>
-                  onSave({
-                    bindings: stack.bindings.filter(
-                      (candidate) =>
-                        candidate.relayId !== relayId ||
-                        candidate.instanceId !== serverId
-                    ),
-                    stack,
-                  })
-                )
+                forkPromise(async () => {
+                  await leave()
+                  setLeaveOpen(false)
+                })
               }
             >
               {pending ? <LoaderCircle className="animate-spin" /> : <Unplug />}
-              Leave
+              Leave Tailnet
             </Button>
-          </>
-        ) : (
-          <Button
-            type="button"
-            size="sm"
-            variant="outline"
-            disabled={disabled || joinDisabled}
-            onClick={() => onJoin(stack.id)}
-          >
-            {pending ? <LoaderCircle className="animate-spin" /> : <Network />}
-            Join
-          </Button>
-        )}
-      </div>
-    </div>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </>
   )
 })
 

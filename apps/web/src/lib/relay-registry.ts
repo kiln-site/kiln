@@ -912,6 +912,28 @@ export const deletePersistedRelayEffect = Effect.fn("relay.deletePersisted")(
           `DELETE FROM ${databaseTable("access_grant")} WHERE relay_id = ?`,
           [id]
         )
+        yield* transaction.execute(
+          `UPDATE ${databaseTable("tailscale_network")} network
+             JOIN ${databaseTable("tailscale_network_deployment")} target
+               ON target.network_id = network.id
+              AND target.relay_id = ?
+              SET network.cleanup_attempts = 0,
+                  network.cleanup_next_attempt_at = CURRENT_TIMESTAMP(3),
+                  network.cleanup_last_error = NULL
+            WHERE network.deletion_requested_at IS NOT NULL
+              AND NOT EXISTS (
+                SELECT 1
+                  FROM ${databaseTable("tailscale_network_deployment")} remaining
+                 WHERE remaining.network_id = network.id
+                   AND remaining.relay_id <> ?
+              )`,
+          [id, id]
+        )
+        yield* transaction.execute(
+          `DELETE FROM ${databaseTable("tailscale_network_deployment")}
+            WHERE relay_id = ?`,
+          [id]
+        )
         const result = yield* transaction.execute(
           `DELETE FROM ${databaseTable("relay")} WHERE id = ?`,
           [id]

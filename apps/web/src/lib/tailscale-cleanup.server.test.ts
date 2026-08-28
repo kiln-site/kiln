@@ -3,8 +3,10 @@ import { vi } from "vite-plus/test"
 
 const state = vi.hoisted(() => ({
   complete: false,
+  corruptOnly: false,
   events: [] as Array<string>,
   failCommit: false,
+  networkRetryAt: null as string | null,
   removed: false,
 }))
 
@@ -18,26 +20,29 @@ vi.mock("@/effect/tailscale-cleanup", async () => {
       Effect.sync(() => {
         state.events.push("complete")
         state.complete = true
+        state.networkRetryAt = null
       }),
     deferTailscaleCleanupEffect: () =>
       Effect.sync(() => state.events.push("defer")),
     loadPendingTailscaleCleanupsEffect: () =>
-      Effect.succeed(
-        state.complete
-          ? []
-          : [
-              {
-                attempts: 0,
-                deployment: {
-                  id: networkId,
-                  relayId,
-                  relayName: "Relay One",
+      Effect.succeed({
+        cleanups:
+          state.complete || state.corruptOnly
+            ? []
+            : [
+                {
+                  attempts: 0,
+                  deployment: {
+                    id: networkId,
+                    relayId,
+                    relayName: "Relay One",
+                  },
+                  lastError: null,
+                  requestedBy: "user-one",
                 },
-                lastError: null,
-                requestedBy: "user-one",
-              },
-            ]
-      ),
+              ],
+        deferredCorruptRows: state.corruptOnly ? 1 : 0,
+      }),
     recordTailscaleCleanupFinalizationFailureEffect: () => Effect.void,
     tailscaleCleanupRetryDelaySeconds: () => 2,
   }
@@ -64,7 +69,7 @@ vi.mock("@/effect/tailscale-networks", async () => {
                 cleanup: {
                   attempts: 0,
                   lastError: null,
-                  nextAttemptAt: null,
+                  nextAttemptAt: state.networkRetryAt,
                   pendingRelays: state.complete ? 0 : 1,
                   requestedAt: "2026-08-28T12:00:00.000Z",
                 },
@@ -114,7 +119,7 @@ vi.mock("@/lib/relay-connection", () => ({
 }))
 
 vi.mock("@/lib/realtime-source.server", () => ({
-  publishRealtimeChange: () => undefined,
+  publishRealtimeChange: () => state.events.push("publish"),
 }))
 
 vi.mock("@/lib/relay-registry", () => ({
@@ -128,12 +133,14 @@ import { processTailscaleCleanupJobs } from "./tailscale-cleanup.server"
 describe("Tailscale cleanup worker", () => {
   beforeEach(() => {
     state.complete = false
+    state.corruptOnly = false
     state.events.length = 0
     state.failCommit = false
+    state.networkRetryAt = "2099-08-28T12:00:00.000Z"
     state.removed = false
   })
 
-  it("prepares and commits Relay cleanup before finalizing the network", async () => {
+  it("finalizes immediately when the last Relay succeeds after a defer", async () => {
     await processTailscaleCleanupJobs()
 
     assert.deepEqual(state.events, [
@@ -142,6 +149,7 @@ describe("Tailscale cleanup worker", () => {
       "complete",
       "invalidate",
       "finalize",
+      "publish",
     ])
   })
 
@@ -150,6 +158,14 @@ describe("Tailscale cleanup worker", () => {
 
     await processTailscaleCleanupJobs()
 
-    assert.deepEqual(state.events, ["prepare", "commit", "defer"])
+    assert.deepEqual(state.events, ["prepare", "commit", "defer", "publish"])
+  })
+
+  it("publishes realtime state when every due row is corrupt", async () => {
+    state.corruptOnly = true
+
+    await processTailscaleCleanupJobs()
+
+    assert.deepEqual(state.events, ["publish"])
   })
 })

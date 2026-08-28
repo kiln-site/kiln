@@ -5,6 +5,7 @@ import type { ResultSetHeader } from "mysql2/promise"
 import { Database } from "@/effect/database"
 
 import {
+  completeTailscaleCleanupEffect,
   loadPendingTailscaleCleanupsEffect,
   reconcileTailscaleDeploymentsEffect,
   requestTailscaleNetworkCleanupEffect,
@@ -116,10 +117,11 @@ describe("Tailscale cleanup retries", () => {
         },
       ]
 
-      const cleanups = yield* loadPendingTailscaleCleanupsEffect()
+      const batch = yield* loadPendingTailscaleCleanupsEffect()
 
-      assert.strictEqual(cleanups.length, 1)
-      assert.strictEqual(cleanups[0]?.deployment.relayId, validRelayId)
+      assert.strictEqual(batch.cleanups.length, 1)
+      assert.strictEqual(batch.cleanups[0]?.deployment.relayId, validRelayId)
+      assert.strictEqual(batch.deferredCorruptRows, 1)
       assert.strictEqual(statements.length, 2)
       assert.include(
         String(statements[0]?.values[2]),
@@ -127,6 +129,28 @@ describe("Tailscale cleanup retries", () => {
       )
       pendingRows = []
     }).pipe(Effect.provide(databaseLayer))
+  )
+
+  it.effect(
+    "clears Relay retry state after completing the last deployment",
+    () =>
+      Effect.gen(function* () {
+        statements.length = 0
+        const networkId = "a".repeat(40)
+        const relayId = "b".repeat(43)
+
+        yield* completeTailscaleCleanupEffect(networkId, relayId)
+
+        assert.strictEqual(statements.length, 2)
+        assert.include(statements[0]?.sql, "DELETE FROM")
+        assert.deepEqual(statements[0]?.values, [networkId, relayId])
+        assert.include(statements[1]?.sql, "cleanup_next_attempt_at")
+        assert.include(statements[1]?.sql, "cleanup_attempts = 0")
+        assert.include(statements[1]?.sql, "CURRENT_TIMESTAMP(3)")
+        assert.include(statements[1]?.sql, "cleanup_last_error = NULL")
+        assert.include(statements[1]?.sql, "NOT EXISTS")
+        assert.deepEqual(statements[1]?.values, [networkId])
+      }).pipe(Effect.provide(databaseLayer))
   )
 })
 

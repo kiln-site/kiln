@@ -25,7 +25,7 @@ const removedResult: ResultSetHeader = {
 }
 
 describe("Relay deletion", () => {
-  it.effect("revokes invitations and grants before deleting the Relay", () => {
+  it.effect("cleans Relay projections before deleting the Relay", () => {
     const statements: Array<{ sql: string; values: ReadonlyArray<unknown> }> =
       []
     const databaseLayer = Layer.succeed(Database)({
@@ -45,14 +45,25 @@ describe("Relay deletion", () => {
     return Effect.gen(function* () {
       yield* deletePersistedRelayEffect("relay-one")
 
-      assert.strictEqual(statements.length, 3)
+      assert.strictEqual(statements.length, 5)
       assert.include(statements[0]?.sql, "kiln_invitation")
       assert.include(statements[0]?.sql, "revoked_at")
       assert.include(statements[1]?.sql, "kiln_access_grant")
-      assert.include(statements[2]?.sql, "kiln_relay")
+      assert.include(statements[2]?.sql, "kiln_tailscale_network")
+      assert.include(statements[2]?.sql, "cleanup_attempts = 0")
+      assert.include(statements[2]?.sql, "cleanup_last_error = NULL")
+      assert.include(statements[2]?.sql, "NOT EXISTS")
+      assert.include(statements[3]?.sql, "kiln_tailscale_network_deployment")
+      assert.include(statements[4]?.sql, "kiln_relay")
       assert.deepEqual(
         statements.map(({ values }) => values),
-        [["relay-one"], ["relay-one"], ["relay-one"]]
+        [
+          ["relay-one"],
+          ["relay-one"],
+          ["relay-one", "relay-one"],
+          ["relay-one"],
+          ["relay-one"],
+        ]
       )
     }).pipe(Effect.provide(databaseLayer))
   })
