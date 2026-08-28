@@ -11,8 +11,10 @@ import {
   LoaderCircle,
   Network,
   Pencil,
+  Plus,
   RefreshCw,
   Search,
+  Server,
   Settings2,
   Unplug,
 } from "lucide-react"
@@ -77,13 +79,23 @@ const emptyServers: Array<TailscaleServer> = []
 export function TailscaleConnectedServersTable({
   searchStore,
   stack,
+  onAddServers,
+  onSetup,
 }: {
   searchStore: WorkspaceTableSearchStore
   stack: TailscaleStackOverview | null
+  onAddServers: () => void
+  onSetup: () => void
 }) {
   if (!stack) {
     return (
-      <CenteredNetworkState>Select a Tailscale network.</CenteredNetworkState>
+      <TailscaleEmptyTable
+        actionLabel="Setup Tailscale"
+        description="Connect a tailnet before adding servers."
+        icon="network"
+        title="No Tailscale networks"
+        onAction={onSetup}
+      />
     )
   }
   if (stack.cleanup) {
@@ -94,7 +106,11 @@ export function TailscaleConnectedServersTable({
     )
   }
   return (
-    <ConnectedServersTableContent searchStore={searchStore} stack={stack} />
+    <ConnectedServersTableContent
+      searchStore={searchStore}
+      stack={stack}
+      onAddServers={onAddServers}
+    />
   )
 }
 
@@ -102,9 +118,11 @@ const ConnectedServersTableContent = React.memo(
   function ConnectedServersTableContent({
     searchStore,
     stack,
+    onAddServers,
   }: {
     searchStore: WorkspaceTableSearchStore
     stack: TailscaleStackOverview
+    onAddServers: () => void
   }) {
     const { data: servers = emptyServers, isPending: serversPending } =
       useQuery({
@@ -129,7 +147,9 @@ const ConnectedServersTableContent = React.memo(
           </p>
         ) : null}
         <TailscaleMembershipTable
-          emptyMessage="No servers are connected to this network."
+          emptyActionLabel="Add servers"
+          emptyDescription={`Add a server to ${stack.name} to reach it through this tailnet.`}
+          emptyMessage="No connected servers"
           pending={save.isPending}
           searchStore={searchStore}
           servers={connectedServers}
@@ -138,6 +158,7 @@ const ConnectedServersTableContent = React.memo(
           onSave={(bindings, authKey) =>
             save.mutateAsync({ authKey, bindings, stack })
           }
+          onEmptyAction={onAddServers}
         />
       </>
     )
@@ -188,6 +209,7 @@ export const TailscaleAddServersDialog = React.memo(
           ) : null}
           <div className="min-h-0 overflow-auto">
             <TailscaleMembershipTable
+              emptyDescription="There are no more servers to add to this network."
               emptyMessage="Every available server is already connected."
               pending={save.isPending}
               searchStore={searchStore}
@@ -420,20 +442,26 @@ const TailscaleMembershipSyncButton = React.memo(
 )
 
 const TailscaleMembershipTable = React.memo(function TailscaleMembershipTable({
+  emptyActionLabel,
+  emptyDescription,
   emptyMessage,
   pending,
   searchStore,
   servers,
   serversPending,
   stack,
+  onEmptyAction,
   onSave,
 }: {
+  emptyActionLabel?: string
+  emptyDescription: string
   emptyMessage: string
   pending: boolean
   searchStore: WorkspaceTableSearchStore
   servers: Array<TailscaleServer>
   serversPending: boolean
   stack: TailscaleStackOverview
+  onEmptyAction?: () => void
   onSave: (bindings: Array<StackBinding>, authKey?: string) => Promise<unknown>
 }) {
   const renderRow = React.useCallback(
@@ -449,15 +477,35 @@ const TailscaleMembershipTable = React.memo(function TailscaleMembershipTable({
   )
   const renderEmpty = React.useCallback(
     (searchActive: boolean) => (
-      <div className="grid min-h-52 place-items-center px-6 text-center text-xs text-muted-foreground">
-        {serversPending
-          ? "Loading servers…"
-          : searchActive
-            ? "No servers match your search."
-            : emptyMessage}
-      </div>
+      <TailscaleEmptyTable
+        actionLabel={
+          searchActive || serversPending ? undefined : emptyActionLabel
+        }
+        description={
+          serversPending
+            ? "Loading the server inventory."
+            : searchActive
+              ? "Try a server name, short ID, or Relay."
+              : emptyDescription
+        }
+        icon="server"
+        title={
+          serversPending
+            ? "Loading servers…"
+            : searchActive
+              ? "No servers match your search"
+              : emptyMessage
+        }
+        onAction={searchActive || serversPending ? undefined : onEmptyAction}
+      />
     ),
-    [emptyMessage, serversPending]
+    [
+      emptyActionLabel,
+      emptyDescription,
+      emptyMessage,
+      onEmptyAction,
+      serversPending,
+    ]
   )
   const getRowKey = React.useCallback(
     (server: TailscaleServer) =>
@@ -996,8 +1044,39 @@ function serverSearchText(server: TailscaleServer) {
 
 function CenteredNetworkState({ children }: { children: React.ReactNode }) {
   return (
-    <div className="grid min-h-64 place-items-center bg-background/55 px-6 text-center">
+    <div className="grid min-h-64 place-items-center px-6 text-center">
       <p className="text-sm text-muted-foreground">{children}</p>
+    </div>
+  )
+}
+
+function TailscaleEmptyTable({
+  actionLabel,
+  description,
+  icon,
+  title,
+  onAction,
+}: {
+  actionLabel?: string
+  description: string
+  icon: "network" | "server"
+  title: string
+  onAction?: () => void
+}) {
+  const Icon = icon === "network" ? Network : Server
+
+  return (
+    <div className="flex min-h-64 flex-col items-center justify-center px-6 py-12 text-center">
+      <Icon className="size-6 text-muted-foreground/45" />
+      <p className="mt-3 text-sm font-semibold">{title}</p>
+      <p className="type-support mt-1 max-w-sm text-muted-foreground">
+        {description}
+      </p>
+      {actionLabel && onAction ? (
+        <Button type="button" size="sm" className="mt-4" onClick={onAction}>
+          <Plus /> {actionLabel}
+        </Button>
+      ) : null}
     </div>
   )
 }

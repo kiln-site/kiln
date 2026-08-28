@@ -98,10 +98,14 @@ export const TailscalePage = React.memo(function TailscalePage({
   const { data } = useSuspenseQuery(tailscaleStacksQueryOptions())
   const { stacks } = data
   const selectedStack =
-    stacks.find((stack) => stack.id === selectedNetworkId) ??
-    (stacks.length === 1 ? stacks[0] : null)
+    stacks.find((stack) => stack.id === selectedNetworkId) ?? stacks[0] ?? null
   const editingStack = stacks.find((stack) => stack.id === editingId) ?? null
   const removingStack = stacks.find((stack) => stack.id === removingId) ?? null
+  const openCreate = React.useCallback(
+    () => onCreateOpenChange(true),
+    [onCreateOpenChange]
+  )
+  const openAddServers = React.useCallback(() => setAddServersOpen(true), [])
   const selectNetwork = React.useCallback(
     (id: string) => {
       searchStore.set("")
@@ -115,7 +119,7 @@ export const TailscalePage = React.memo(function TailscalePage({
       <TailscaleNetworkPicker
         selectedStack={selectedStack}
         stacks={stacks}
-        onAdd={() => onCreateOpenChange(true)}
+        onAdd={openCreate}
         onEdit={setEditingId}
         onRemove={setRemovingId}
         onSelect={selectNetwork}
@@ -125,13 +129,15 @@ export const TailscalePage = React.memo(function TailscalePage({
         <TailscaleToolbar
           canAddServer={Boolean(selectedStack && !selectedStack.cleanup)}
           searchStore={searchStore}
-          onAddNetwork={() => onCreateOpenChange(true)}
-          onAddServer={() => setAddServersOpen(true)}
+          onAddNetwork={openCreate}
+          onAddServer={openAddServers}
         />
         <div className="min-h-0 flex-1 overflow-auto">
           <TailscaleConnectedServersTable
             searchStore={searchStore}
             stack={selectedStack}
+            onAddServers={openAddServers}
+            onSetup={openCreate}
           />
         </div>
       </section>
