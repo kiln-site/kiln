@@ -252,6 +252,7 @@ export const createBrickInstance = createServerFn({ method: "POST" })
       invalidateRelayCache(relayCachePolicy.snapshot(relay.id))
     )
     publishRealtimeChange({
+      directoryChanged: true,
       instance,
       relayId: relay.id,
       type: "instance.upsert",

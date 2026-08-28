@@ -26,6 +26,7 @@ export type RealtimeSourceChange =
       type: "hearth.invalidate"
     }
   | {
+      directoryChanged: boolean
       relayId: string
       type: "relay.snapshot.delta"
       delta: RelaySnapshotDelta
@@ -37,7 +38,12 @@ export type RealtimeSourceChange =
       status: "connected" | "unreachable"
       type: "relay.state"
     }
-  | { relayId: string; type: "instance.upsert"; instance: RelayInstance }
+  | {
+      directoryChanged?: boolean
+      relayId: string
+      type: "instance.upsert"
+      instance: RelayInstance
+    }
   | { relayId: string; type: "instance.delete"; instanceId: string }
 
 export type RealtimeSourceEvent = RealtimeSourceChange & {
@@ -109,4 +115,18 @@ export function classifyRealtimeEvent(
   if (event.type !== "access.changed") return "normal"
   if (!event.userIds.includes(identity.userId)) return "ignore"
   return event.reauthenticate ? "close" : "ordered"
+}
+
+export function realtimeSourceEventRefreshesHearth(event: {
+  directoryChanged?: boolean
+  type: RealtimeSourceEvent["type"]
+}): boolean {
+  if (event.type === "hearth.invalidate" || event.type === "instance.delete") {
+    return true
+  }
+  return (
+    (event.type === "instance.upsert" ||
+      event.type === "relay.snapshot.delta") &&
+    event.directoryChanged === true
+  )
 }

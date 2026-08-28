@@ -146,22 +146,27 @@ function scheduleScopeOptions(
       instance,
     ])
   )
-  return targets.map((target) => ({
-    description: `${target.kind === "instance" ? "Server" : target.kind === "database" ? "Database" : "Relay"} · ${target.relayName} · ${target.id}`,
-    id: target.id,
-    kind: target.kind === "instance" ? "server" : target.kind,
-    name:
-      target.kind === "instance"
-        ? (instancesById.get(`${target.relayId}:${target.id}`)?.name ??
-          target.name)
-        : target.name,
-    relayId: target.relayId,
-    relayName:
-      target.kind === "instance"
-        ? (instancesById.get(`${target.relayId}:${target.id}`)?.relayName ??
-          target.relayName)
-        : target.relayName,
-  }))
+  const options: Array<ServerPickerOption> = []
+  for (const target of targets) {
+    if (!target.available) continue
+    options.push({
+      description: `${target.kind === "instance" ? "Server" : target.kind === "database" ? "Database" : "Relay"} · ${target.relayName} · ${target.id}`,
+      id: target.id,
+      kind: target.kind === "instance" ? "server" : target.kind,
+      name:
+        target.kind === "instance"
+          ? (instancesById.get(`${target.relayId}:${target.id}`)?.name ??
+            target.name)
+          : target.name,
+      relayId: target.relayId,
+      relayName:
+        target.kind === "instance"
+          ? (instancesById.get(`${target.relayId}:${target.id}`)?.relayName ??
+            target.relayName)
+          : target.relayName,
+    })
+  }
+  return options
 }
 
 function selectScheduleScopeInstances(snapshot: RelaySnapshot) {

@@ -39,6 +39,7 @@ const hearthRealtimeQueryScopes = {
   databases: [exact(queryKeys.databases.list)],
   domains: [prefix(["domains"])],
   "file-activity": [prefix(["file-activity"])],
+  "instance-directory": [exact(queryKeys.schedules.options)],
   "instance-web-routes": [prefix(["web-routes"])],
   preferences: [exact(queryKeys.uiPreferences)],
   "relay-health": [exact(queryKeys.relays)],

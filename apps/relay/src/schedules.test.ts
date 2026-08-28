@@ -204,6 +204,49 @@ describe("Relay schedule persistence", () => {
     })
   })
 
+  it("runs live targets when another target no longer exists", async () => {
+    const commands: Array<string> = []
+    const schedules = await manager({
+      findInstance: async (instanceId) =>
+        instanceId === "server-a" ? {} : null,
+      sendConsoleCommand: async (instanceId, command) => {
+        commands.push(`${instanceId}:${command}`)
+      },
+    })
+    await schedules.apply({
+      ...projection,
+      targets: [
+        ...projection.targets,
+        {
+          id: "deleted-server",
+          kind: "instance",
+          name: "Deleted server",
+          relayId: "relay-a",
+        },
+      ],
+    })
+
+    await schedules.runNow({
+      revision: projection.revision,
+      scheduleId: projection.id,
+    })
+
+    await vi.waitFor(() => {
+      expect(commands).toEqual(["server-a:say hello"])
+      expect(schedules.overview([projection.id]).runs[0]).toMatchObject({
+        status: "partial",
+        targetRuns: [
+          { status: "succeeded", target: { id: "server-a" } },
+          {
+            error: "Target no longer exists",
+            status: "failed",
+            target: { id: "deleted-server" },
+          },
+        ],
+      })
+    })
+  })
+
   it("waits between actions without delaying the server", async () => {
     const commands: Array<{ command: string; timestamp: number }> = []
     const schedules = await manager({

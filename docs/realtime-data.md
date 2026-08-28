@@ -119,6 +119,12 @@ offline, but it does not become the authority for that intent.
   Relay-originated executions and acknowledged next-run times are imported into
   Hearth by that read path. User mutations still invalidate every active tab
   immediately.
+- Schedule target options retain referenced targets that have disappeared from
+  the live directory. Authorized users can still run, edit, or delete the
+  schedule; execution is best-effort and records missing targets as failed so
+  successful live targets produce a partial run. Saving requires removing or
+  replacing unavailable targets. Instance membership deltas invalidate only
+  this target-options query.
 - Provisioning fallback reads only the owning Relay and upserts only the active
   instance; it does not poll or replace the full authorized fleet.
 - Relay connection transitions rewrite only that Relay's reachability fields

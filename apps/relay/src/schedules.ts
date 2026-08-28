@@ -1021,7 +1021,7 @@ function targetRun(
     status:
       state.activeKey === null
         ? "skipped_overlap"
-        : state.failure
+        : state.failure || state.missing
           ? "failed"
           : succeeded
             ? "succeeded"

@@ -24,6 +24,7 @@ import type {
   RelayControlOperation,
   RelayControlRequest,
   RelaySnapshot,
+  RelaySnapshotDelta,
 } from "@workspace/contracts"
 import { relayTailscaleStackIdSchema } from "@workspace/contracts"
 import { z } from "zod"
@@ -471,6 +472,10 @@ class RelayConnection {
               if (delta) {
                 publishRealtimeChange({
                   delta,
+                  directoryChanged: snapshotDeltaChangesDirectory(
+                    previousSnapshot,
+                    delta
+                  ),
                   relayId: this.#relay.id,
                   type: "relay.snapshot.delta",
                 })
@@ -486,13 +491,18 @@ class RelayConnection {
               activeSocket.close(4400, "Relay snapshot delta is invalid")
               return
             }
+            const previousSnapshot = this.#pushedSnapshot
             this.#pushedSnapshot = applyRelaySnapshotDelta(
-              this.#pushedSnapshot,
+              previousSnapshot,
               delta.data
             )
             this.#hasPushedSnapshot = true
             publishRealtimeChange({
               delta: delta.data,
+              directoryChanged: snapshotDeltaChangesDirectory(
+                previousSnapshot,
+                delta.data
+              ),
               relayId: this.#relay.id,
               type: "relay.snapshot.delta",
             })
@@ -830,6 +840,17 @@ class RelayConnection {
     )
     this.#reconnectFiber = reconnecting
   }
+}
+
+function snapshotDeltaChangesDirectory(
+  previous: RelaySnapshot,
+  delta: RelaySnapshotDelta
+): boolean {
+  if (delta.deletedInstanceIds.length > 0) return true
+  return delta.instances.some(
+    (instance) =>
+      !previous.instances.some((candidate) => candidate.id === instance.id)
+  )
 }
 
 function formatHost(hostname: string): string {

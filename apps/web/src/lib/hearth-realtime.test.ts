@@ -72,6 +72,20 @@ describe("Hearth realtime query refresh", () => {
     expect(queryClient.getQueryState(otherRoutes)?.isInvalidated).toBe(false)
   })
 
+  it("refreshes schedule targets when the instance directory changes", async () => {
+    const queryClient = new QueryClient()
+    queryClient.setQueryData(queryKeys.schedules.options, [])
+
+    await refreshHearthRealtimeTopics(queryClient, ["instance-directory"], {
+      instanceId: "instance-a",
+      relayId: "relay-a",
+    })
+
+    expect(
+      queryClient.getQueryState(queryKeys.schedules.options)?.isInvalidated
+    ).toBe(true)
+  })
+
   it("refreshes access capabilities but keeps invitation previews out", async () => {
     const queryClient = new QueryClient()
     const relayAUsers = queryKeys.access.instanceUsers("relay-a", "instance-a")

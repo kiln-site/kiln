@@ -4,6 +4,7 @@ import {
   allocateRealtimeCursor,
   classifyRealtimeEvent,
   publishRealtimeChange,
+  realtimeSourceEventRefreshesHearth,
   subscribeRealtimeChanges,
   type RealtimeSourceEvent,
 } from "./realtime-source.server"
@@ -109,5 +110,25 @@ describe("realtime source", () => {
     } satisfies RealtimeSourceEvent
 
     expect(classifyRealtimeEvent(event, identity)).toBe("normal")
+  })
+
+  it("retains target-directory invalidation when membership events recover", () => {
+    expect(
+      realtimeSourceEventRefreshesHearth({
+        type: "instance.delete",
+      })
+    ).toBe(true)
+    expect(
+      realtimeSourceEventRefreshesHearth({
+        directoryChanged: true,
+        type: "relay.snapshot.delta",
+      })
+    ).toBe(true)
+    expect(
+      realtimeSourceEventRefreshesHearth({
+        directoryChanged: false,
+        type: "relay.snapshot.delta",
+      })
+    ).toBe(false)
   })
 })

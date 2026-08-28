@@ -49,6 +49,7 @@ import {
 } from "@/lib/schedule-permissions"
 import { relayRpc } from "@/lib/relay-connection"
 import { listPersistedRelays } from "@/lib/relay-registry"
+import { scheduleTargetsWithAvailability } from "@/lib/schedule-target-options"
 import { promiseEffect } from "@/effect/promise"
 import { requireAuthenticatedUser } from "@/server/auth"
 
@@ -132,12 +133,18 @@ interface TargetDirectoryRow extends RowDataPacket {
 export const getScheduleOptions = createServerFn({ method: "GET" }).handler(
   async () => {
     const user = await requireAuthenticatedUser()
-    const [grants, targets, relays] = await Promise.all([
-      isPlatformAdmin(user) ? Promise.resolve([]) : listUserGrants(user.id),
-      loadTargetDirectory(),
-      listPersistedRelays(),
-    ])
+    const [grants, availableTargets, referencedTargets, relays] =
+      await Promise.all([
+        isPlatformAdmin(user) ? Promise.resolve([]) : listUserGrants(user.id),
+        loadTargetDirectory(),
+        loadReferencedScheduleTargets(),
+        listPersistedRelays(),
+      ])
     const relayNames = new Map(relays.map((relay) => [relay.id, relay.name]))
+    const targets = scheduleTargetsWithAvailability(
+      availableTargets,
+      referencedTargets
+    )
     return targets.flatMap((target) => {
       if (
         !hasScheduleTargetPermission({
@@ -162,12 +169,14 @@ export const getScheduleOptions = createServerFn({ method: "GET" }).handler(
         {
           ...target,
           relayName: relayNames.get(target.relayId) ?? target.relayId,
-          canCreate: hasScheduleTargetPermission({
-            grants,
-            permission: "schedule.create",
-            target,
-            user,
-          }),
+          canCreate:
+            target.available &&
+            hasScheduleTargetPermission({
+              grants,
+              permission: "schedule.create",
+              target,
+              user,
+            }),
           canDelete: hasScheduleTargetPermission({
             grants,
             permission: "schedule.delete",
@@ -450,6 +459,26 @@ async function loadTargetDirectory(): Promise<Array<ScheduleTarget>> {
        JOIN ${databaseTable("relay")} relay ON relay.id = managed.relay_id
       WHERE relay.enabled = TRUE
       ORDER BY relay_id, kind, name`
+  )
+  return rows.map((row) =>
+    scheduleTargetSchema.parse({
+      id: row.id,
+      kind: row.kind,
+      name: row.name,
+      relayId: row.relay_id,
+    })
+  )
+}
+
+async function loadReferencedScheduleTargets(): Promise<Array<ScheduleTarget>> {
+  const [rows] = await databasePool.query<TargetDirectoryRow[]>(
+    `SELECT DISTINCT target.target_id AS id, target.target_kind AS kind,
+            target.target_name AS name, target.relay_id
+       FROM ${databaseTable("schedule_target")} target
+       JOIN ${databaseTable("schedule")} schedule
+         ON schedule.id = target.schedule_id
+      WHERE schedule.deleted_at IS NULL
+      ORDER BY target.relay_id, target.target_kind, target.target_name`
   )
   return rows.map((row) =>
     scheduleTargetSchema.parse({

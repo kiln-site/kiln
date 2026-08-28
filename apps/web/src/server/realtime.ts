@@ -14,6 +14,7 @@ import { relayConnectionState } from "@/lib/relay-connection"
 import {
   allocateRealtimeCursor,
   classifyRealtimeEvent,
+  realtimeSourceEventRefreshesHearth,
   subscribeRealtimeChanges,
   type RealtimeSourceEvent,
 } from "@/lib/realtime-source.server"
@@ -242,6 +243,15 @@ export async function openAuthorizedRealtimeStream(input: {
         type: "instances.delta",
         upserted: [fleetInstance(event.instance, relay)],
       })
+      if (event.directoryChanged) {
+        enqueue({
+          epoch: event.epoch,
+          scope: { relayId: event.relayId },
+          sequence: event.sequence,
+          topics: ["instance-directory"],
+          type: "collections.invalidate",
+        })
+      }
       return
     }
 
@@ -253,6 +263,13 @@ export async function openAuthorizedRealtimeStream(input: {
         sequence: event.sequence,
         type: "instances.delta",
         upserted: [],
+      })
+      enqueue({
+        epoch: event.epoch,
+        scope: { relayId: event.relayId },
+        sequence: event.sequence,
+        topics: ["instance-directory"],
+        type: "collections.invalidate",
       })
       return
     }
@@ -274,6 +291,15 @@ export async function openAuthorizedRealtimeStream(input: {
         sequence: event.sequence,
         type: "instances.delta",
         upserted,
+      })
+    }
+    if (event.directoryChanged) {
+      enqueue({
+        epoch: event.epoch,
+        scope: { relayId: event.relayId },
+        sequence: event.sequence,
+        topics: ["instance-directory"],
+        type: "collections.invalidate",
       })
     }
     if (event.delta.node) {
@@ -299,7 +325,7 @@ export async function openAuthorizedRealtimeStream(input: {
       return
     }
     if (delivery === "normal" && queuedEvents >= maximumProcessingBacklog) {
-      enqueueReset(event, false, event.type === "hearth.invalidate")
+      enqueueReset(event, false, realtimeSourceEventRefreshesHearth(event))
       return
     }
     queuedEvents += 1
@@ -310,7 +336,11 @@ export async function openAuthorizedRealtimeStream(input: {
           () => previousProcessing.then(() => processEvent(event)),
           (cause) => {
             console.error("[Kiln realtime] Could not project event", cause)
-            enqueueReset(event, false, event.type === "hearth.invalidate")
+            enqueueReset(
+              event,
+              false,
+              realtimeSourceEventRefreshesHearth(event)
+            )
           }
         ),
       () => {

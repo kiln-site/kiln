@@ -12,6 +12,7 @@ import { Input } from "@workspace/ui/components/input"
 import { cn } from "@workspace/ui/lib/utils"
 
 export interface ServerPickerOption {
+  allowDeselectWhenDisabled?: boolean
   description?: string
   disabled?: boolean
   id: string
@@ -127,17 +128,22 @@ export const ServerPickerList = React.memo(function ServerPickerList({
             ) : null}
             {group.items.map((server) => {
               const key = serverPickerOptionKey(server)
+              const selected = selectedKeys.has(key)
               return (
                 <ServerPickerRow
                   key={key}
                   description={
                     server.description ?? `${server.relayName} · ${server.id}`
                   }
-                  disabled={server.disabled || pendingKey !== undefined}
+                  disabled={
+                    (server.disabled &&
+                      !(server.allowDeselectWhenDisabled && selected)) ||
+                    pendingKey !== undefined
+                  }
                   kind={server.kind}
                   name={server.name}
                   pending={pendingKey === key}
-                  selected={selectedKeys.has(key)}
+                  selected={selected}
                   onSelect={() => onSelect(server)}
                 />
               )
