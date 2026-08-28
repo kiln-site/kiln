@@ -30,11 +30,13 @@ export const Route = createFileRoute("/_app/infra/tailscale")({
 
 function TailscaleRoute() {
   const { create = false } = Route.useSearch()
+  const { user } = Route.useRouteContext()
   const navigate = Route.useNavigate()
 
   return (
     <TailscalePage
       createOpen={create}
+      displayName={user.name}
       onCreateOpenChange={(open) => {
         void navigate({
           replace: !open,

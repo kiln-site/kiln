@@ -83,9 +83,11 @@ const tailscaleCredentialPermissions = [
 
 export const TailscalePage = React.memo(function TailscalePage({
   createOpen,
+  displayName,
   onCreateOpenChange,
 }: {
   createOpen: boolean
+  displayName: string
   onCreateOpenChange: (open: boolean) => void
 }) {
   const [searchStore] = React.useState(createWorkspaceTableSearchStore)
@@ -142,6 +144,7 @@ export const TailscalePage = React.memo(function TailscalePage({
       </section>
 
       <CreateNetworkDialog
+        defaultNetworkName={`${displayName}'s Tailnet`}
         open={createOpen}
         onOpenChange={onCreateOpenChange}
       />
@@ -605,9 +608,11 @@ const RemoveNetworkDialog = React.memo(function RemoveNetworkDialog({
 })
 
 const CreateNetworkDialog = React.memo(function CreateNetworkDialog({
+  defaultNetworkName,
   open,
   onOpenChange,
 }: {
+  defaultNetworkName: string
   open: boolean
   onOpenChange: (open: boolean) => void
 }) {
@@ -615,21 +620,30 @@ const CreateNetworkDialog = React.memo(function CreateNetworkDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-h-[calc(100dvh-2rem)] gap-0 overflow-y-auto p-0 sm:max-w-3xl">
         <DialogTitle className="sr-only">Add Tailscale network</DialogTitle>
-        {open ? <NetworkForm onDone={() => onOpenChange(false)} /> : null}
+        {open ? (
+          <NetworkForm
+            defaultName={defaultNetworkName}
+            onDone={() => onOpenChange(false)}
+          />
+        ) : null}
       </DialogContent>
     </Dialog>
   )
 })
 
 const NetworkForm = React.memo(function NetworkForm({
+  defaultName,
   onDone,
   stack,
 }: {
+  defaultName?: string
   onDone: () => void
   stack?: TailscaleStackOverview
 }) {
   const queryClient = useQueryClient()
-  const [name, setName] = React.useState(stack?.name ?? "Private Network")
+  const [name, setName] = React.useState(
+    stack?.name ?? defaultName ?? "Private Network"
+  )
   const [domain, setDomain] = React.useState(stack?.domain ?? "")
   const [clientId, setClientId] = React.useState(
     stack?.integration?.clientId ?? ""
@@ -821,7 +835,7 @@ const NetworkForm = React.memo(function NetworkForm({
       </section>
 
       <aside className="border-t bg-muted/15 p-5 md:border-t-0 md:border-l">
-        <h3 className="text-xs font-semibold">Tailscale access</h3>
+        <h3 className="text-xs font-semibold">Tailscale Access Permissions</h3>
         <Button
           asChild
           type="button"
@@ -834,7 +848,7 @@ const NetworkForm = React.memo(function NetworkForm({
             target="_blank"
             rel="noreferrer"
           >
-            Create credential
+            Create OAuth Credential
             <ExternalLink />
           </a>
         </Button>
