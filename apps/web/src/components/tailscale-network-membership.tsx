@@ -147,8 +147,8 @@ const ConnectedServersTableContent = React.memo(
           </p>
         ) : null}
         <TailscaleMembershipTable
-          emptyActionLabel="Add servers"
-          emptyDescription={`Add a server to ${stack.name} to reach it through this tailnet.`}
+          emptyActionLabel="Connect Servers"
+          emptyDescription="Add a server to reach it through this tailnet"
           emptyMessage="No connected servers"
           pending={save.isPending}
           searchStore={searchStore}

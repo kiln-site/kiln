@@ -9,17 +9,14 @@ import {
   ArrowLeftRight,
   Check,
   CircleAlert,
-  Copy,
-  EllipsisVertical,
   ExternalLink,
   KeyRound,
   LoaderCircle,
   Network,
-  Pencil,
   Plus,
   RefreshCw,
   Search,
-  Server,
+  Settings2,
   Trash2,
   X,
 } from "lucide-react"
@@ -33,12 +30,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@workspace/ui/components/dialog"
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "@workspace/ui/components/dropdown-menu"
 import { Input } from "@workspace/ui/components/input"
 import {
   Popover,
@@ -108,6 +99,11 @@ export const TailscalePage = React.memo(function TailscalePage({
     [onCreateOpenChange]
   )
   const openAddServers = React.useCallback(() => setAddServersOpen(true), [])
+  const removeEditingStack = React.useCallback(() => {
+    if (!editingId) return
+    setEditingId(null)
+    setRemovingId(editingId)
+  }, [editingId])
   const selectNetwork = React.useCallback(
     (id: string) => {
       searchStore.set("")
@@ -122,8 +118,7 @@ export const TailscalePage = React.memo(function TailscalePage({
         selectedStack={selectedStack}
         stacks={stacks}
         onAdd={openCreate}
-        onEdit={setEditingId}
-        onRemove={setRemovingId}
+        onConfigure={setEditingId}
         onSelect={selectNetwork}
       />
 
@@ -153,6 +148,7 @@ export const TailscalePage = React.memo(function TailscalePage({
           key={editingStack.id}
           open
           stack={editingStack}
+          onRemove={removeEditingStack}
           onOpenChange={(open) => {
             if (!open) setEditingId(null)
           }}
@@ -183,15 +179,13 @@ const TailscaleNetworkPicker = React.memo(function TailscaleNetworkPicker({
   selectedStack,
   stacks,
   onAdd,
-  onEdit,
-  onRemove,
+  onConfigure,
   onSelect,
 }: {
   selectedStack: TailscaleStackOverview | null
   stacks: Array<TailscaleStackOverview>
   onAdd: () => void
-  onEdit: (id: string) => void
-  onRemove: (id: string) => void
+  onConfigure: (id: string) => void
   onSelect: (id: string) => void
 }) {
   const [open, setOpen] = React.useState(false)
@@ -205,21 +199,6 @@ const TailscaleNetworkPicker = React.memo(function TailscaleNetworkPicker({
         .includes(normalized)
     )
   }, [query, stacks])
-  const copySelectedId = React.useCallback(() => {
-    if (!selectedStack) return
-    forkPromise(
-      async () => {
-        await navigator.clipboard.writeText(selectedStack.id)
-        showToast({ message: "Network ID copied", type: "success" })
-      },
-      () =>
-        showToast({
-          message: "The network ID could not be copied",
-          type: "error",
-        })
-    )
-  }, [selectedStack])
-
   return (
     <div className="mb-3">
       <Popover
@@ -233,59 +212,23 @@ const TailscaleNetworkPicker = React.memo(function TailscaleNetworkPicker({
           action={
             <div className="flex shrink-0 items-center gap-1.5">
               {selectedStack ? (
-                <>
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <Button
-                        type="button"
-                        size="icon-sm"
-                        variant="outline"
-                        disabled={Boolean(selectedStack.cleanup)}
-                        aria-label={`Edit ${selectedStack.name}`}
-                        onClick={() => onEdit(selectedStack.id)}
-                      >
-                        <Pencil />
-                      </Button>
-                    </TooltipTrigger>
-                    <TooltipContent side="bottom">Edit network</TooltipContent>
-                  </Tooltip>
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <Button
-                        type="button"
-                        size="icon-sm"
-                        variant="outline"
-                        disabled={Boolean(selectedStack.cleanup)}
-                        aria-label={`Delete ${selectedStack.name}`}
-                        className="text-destructive hover:text-destructive"
-                        onClick={() => onRemove(selectedStack.id)}
-                      >
-                        <Trash2 />
-                      </Button>
-                    </TooltipTrigger>
-                    <TooltipContent side="bottom">
-                      Delete network
-                    </TooltipContent>
-                  </Tooltip>
-                  <DropdownMenu>
-                    <DropdownMenuTrigger asChild>
-                      <Button
-                        type="button"
-                        size="icon-sm"
-                        variant="outline"
-                        aria-label={`More actions for ${selectedStack.name}`}
-                      >
-                        <EllipsisVertical />
-                      </Button>
-                    </DropdownMenuTrigger>
-                    <DropdownMenuContent align="end">
-                      <DropdownMenuItem onSelect={copySelectedId}>
-                        <Copy />
-                        Copy ID
-                      </DropdownMenuItem>
-                    </DropdownMenuContent>
-                  </DropdownMenu>
-                </>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      type="button"
+                      size="icon-sm"
+                      variant="outline"
+                      disabled={Boolean(selectedStack.cleanup)}
+                      aria-label={`Configure ${selectedStack.name}`}
+                      onClick={() => onConfigure(selectedStack.id)}
+                    >
+                      <Settings2 />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom">
+                    Configure Tailnet
+                  </TooltipContent>
+                </Tooltip>
               ) : null}
               {stacks.length > 0 ? (
                 <PopoverTrigger asChild>
@@ -457,8 +400,8 @@ const TailscaleToolbar = React.memo(function TailscaleToolbar({
         className={`${mobileSearchOpen ? "hidden sm:inline-flex" : ""} ml-auto`}
         onClick={onAddServer}
       >
-        <Server />
-        Connect Server
+        <Plus />
+        Connect Servers
       </Button>
     </div>
   )
@@ -532,17 +475,25 @@ const TailscaleSearchInput = React.memo(function TailscaleSearchInput({
 const EditNetworkDialog = React.memo(function EditNetworkDialog({
   open,
   stack,
+  onRemove,
   onOpenChange,
 }: {
   open: boolean
   stack: TailscaleStackOverview
+  onRemove: () => void
   onOpenChange: (open: boolean) => void
 }) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-h-[calc(100dvh-2rem)] gap-0 overflow-y-auto p-0 sm:max-w-3xl">
-        <DialogTitle className="sr-only">Edit Tailscale network</DialogTitle>
-        <NetworkForm stack={stack} onDone={() => onOpenChange(false)} />
+        <DialogTitle className="sr-only">
+          Configure Tailscale network
+        </DialogTitle>
+        <NetworkForm
+          stack={stack}
+          onDone={() => onOpenChange(false)}
+          onRemove={onRemove}
+        />
       </DialogContent>
     </Dialog>
   )
@@ -574,7 +525,7 @@ const RemoveNetworkDialog = React.memo(function RemoveNetworkDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>Remove {stack.name}?</DialogTitle>
+          <DialogTitle>Delete {stack.name}?</DialogTitle>
         </DialogHeader>
         <div className="flex items-start gap-3 rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm">
           <CircleAlert className="mt-0.5 size-4 shrink-0 text-destructive" />
@@ -599,7 +550,7 @@ const RemoveNetworkDialog = React.memo(function RemoveNetworkDialog({
             ) : (
               <Trash2 />
             )}
-            Remove network
+            Delete Tailnet
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -634,10 +585,12 @@ const CreateNetworkDialog = React.memo(function CreateNetworkDialog({
 const NetworkForm = React.memo(function NetworkForm({
   defaultName,
   onDone,
+  onRemove,
   stack,
 }: {
   defaultName?: string
   onDone: () => void
+  onRemove?: () => void
   stack?: TailscaleStackOverview
 }) {
   const queryClient = useQueryClient()
@@ -734,7 +687,7 @@ const NetworkForm = React.memo(function NetworkForm({
             <Network className="size-4" />
           </span>
           <h2 className="font-heading text-lg font-semibold">
-            {stack ? "Edit tailnet" : "Connect a tailnet"}
+            {stack ? "Configure tailnet" : "Connect a tailnet"}
           </h2>
         </div>
 
@@ -816,6 +769,17 @@ const NetworkForm = React.memo(function NetworkForm({
         ) : null}
 
         <div className="mt-6 flex justify-end gap-2 border-t pt-4">
+          {stack && onRemove ? (
+            <Button
+              type="button"
+              variant="ghost"
+              className="mr-auto text-destructive hover:bg-destructive/10 hover:text-destructive"
+              onClick={onRemove}
+            >
+              <Trash2 />
+              Delete Tailnet
+            </Button>
+          ) : null}
           <Button type="button" variant="ghost" onClick={onDone}>
             Cancel
           </Button>
