@@ -60,12 +60,19 @@ import {
 } from "@/components/workspace-data-table"
 import type { WorkspaceTableSearchStore } from "@/components/workspace-data-table"
 import {
+  BrickIcon,
+  brickIconPresentation,
+  type BrickIconDefinition,
+  type BrickIconPresentation,
+} from "@/components/brick-icon"
+import {
   ServerPickerList,
   serverPickerOptionKey,
   type ServerPickerOption,
 } from "@/components/server-picker-list"
 import { TailscaleRelayUpdateHint } from "@/components/tailscale-relay-update-hint"
 import {
+  brickIconPresentationsQueryOptions,
   queryKeys,
   relaySnapshotQueryOptions,
   tailscaleStacksQueryOptions,
@@ -94,6 +101,7 @@ type StackBinding = TailscaleStackOverview["bindings"][number]
 type SaveStackInput = Parameters<typeof saveTailscaleStack>[0]["data"]
 
 const emptyServers: Array<TailscaleServer> = []
+const emptyBrickIcons: Array<BrickIconDefinition> = []
 const emptyServerKeys = new Set<string>()
 
 export function TailscaleConnectedServersTable({
@@ -154,6 +162,10 @@ const ConnectedServersTableContent = React.memo(
       () => servers.filter((server) => Boolean(findBinding(stack, server))),
       [servers, stack]
     )
+    const { data: bricks = emptyBrickIcons } = useQuery({
+      ...brickIconPresentationsQueryOptions(),
+      notifyOnChangeProps: ["data"],
+    })
     const save = useStackMembershipMutation()
 
     return (
@@ -167,6 +179,7 @@ const ConnectedServersTableContent = React.memo(
           </p>
         ) : null}
         <TailscaleMembershipTable
+          bricks={bricks}
           emptyActionLabel="Connect Servers"
           emptyDescription="Add a server to reach it through this tailnet"
           emptyMessage="No connected servers"
@@ -447,6 +460,7 @@ export function GameServerTailscaleSection({
 }
 
 const TailscaleMembershipTable = React.memo(function TailscaleMembershipTable({
+  bricks,
   emptyActionLabel,
   emptyDescription,
   emptyMessage,
@@ -458,6 +472,7 @@ const TailscaleMembershipTable = React.memo(function TailscaleMembershipTable({
   onEmptyAction,
   onSave,
 }: {
+  bricks: Array<BrickIconDefinition>
   emptyActionLabel?: string
   emptyDescription: string
   emptyMessage: string
@@ -470,15 +485,23 @@ const TailscaleMembershipTable = React.memo(function TailscaleMembershipTable({
   onSave: (bindings: Array<StackBinding>, authKey?: string) => Promise<unknown>
 }) {
   const renderRow = React.useCallback(
-    (server: TailscaleServer) => (
-      <TailscaleMembershipRow
-        pending={pending}
-        server={server}
-        stack={stack}
-        onSave={onSave}
-      />
-    ),
-    [onSave, pending, stack]
+    (server: TailscaleServer) => {
+      const icon = brickIconPresentation(bricks, {
+        brickId: server.brickId,
+        brickSource: server.brickSource,
+        implementation: server.implementation,
+      })
+      return (
+        <TailscaleMembershipRow
+          icon={icon}
+          pending={pending}
+          server={server}
+          stack={stack}
+          onSave={onSave}
+        />
+      )
+    },
+    [bricks, onSave, pending, stack]
   )
   const renderEmpty = React.useCallback(
     (searchActive: boolean) => (
@@ -543,7 +566,7 @@ const MembershipTableHead = React.memo(function MembershipTableHead() {
     <WorkspaceTableHead className="sticky top-0 z-10">
       <WorkspaceTableHeading className="w-32">Status</WorkspaceTableHeading>
       <WorkspaceTableHeading className="w-auto sm:w-[28%]">
-        Server name
+        Server
       </WorkspaceTableHeading>
       <WorkspaceTableHeading className="hidden w-[22%] md:table-cell">
         Relay name
@@ -559,11 +582,13 @@ const MembershipTableHead = React.memo(function MembershipTableHead() {
 })
 
 const TailscaleMembershipRow = React.memo(function TailscaleMembershipRow({
+  icon,
   pending,
   server,
   stack,
   onSave,
 }: {
+  icon: BrickIconPresentation
   pending: boolean
   server: TailscaleServer
   stack: TailscaleStackOverview
@@ -617,23 +642,39 @@ const TailscaleMembershipRow = React.memo(function TailscaleMembershipRow({
             <span className="truncate text-xs font-medium">{status.label}</span>
           </div>
         </WorkspaceTableCell>
-        <WorkspaceTableCell>
+        <WorkspaceTableCell className="px-0">
           <Link
             to="/server/$serverId/console"
             params={{ serverId: server.routeId }}
             preload="intent"
             aria-label={`Open ${server.name}`}
-            className="group/server-link block min-w-0 outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
+            className="group/server-link flex min-h-[3.25rem] w-full min-w-0 flex-col justify-center px-3 outline-none focus-visible:ring-2 focus-visible:ring-ring/40 focus-visible:ring-inset"
           >
-            <div className="flex min-w-0 items-center gap-1.5">
-              <p className="truncate text-xs font-semibold text-primary transition-colors group-hover/server-link:text-primary/80">
-                {server.name}
-              </p>
-              <span className="grid size-4 shrink-0 place-items-center md:hidden">
-                {!server.tailscaleSupported ? (
-                  <TailscaleRelayUpdateHint relayName={server.relayName} />
-                ) : null}
+            <div className="flex min-w-0 items-center gap-2.5">
+              <span className="flex size-8 shrink-0 items-center justify-center rounded-md border border-border/70 bg-background/35 text-muted-foreground">
+                <BrickIcon
+                  id={icon.id}
+                  color={icon.color}
+                  iconSvg={icon.iconSvg}
+                  className="size-6"
+                  aria-hidden="true"
+                />
               </span>
+              <div className="min-w-0">
+                <div className="flex min-w-0 items-center gap-1.5">
+                  <p className="truncate text-xs font-semibold text-foreground transition-colors group-hover/server-link:text-primary">
+                    {server.name}
+                  </p>
+                  <span className="grid size-4 shrink-0 place-items-center md:hidden">
+                    {!server.tailscaleSupported ? (
+                      <TailscaleRelayUpdateHint relayName={server.relayName} />
+                    ) : null}
+                  </span>
+                </div>
+                <p className="type-meta truncate text-muted-foreground">
+                  {server.game} · {server.implementation}
+                </p>
+              </div>
             </div>
             <p className="type-meta truncate text-muted-foreground md:hidden">
               {server.relayName}
