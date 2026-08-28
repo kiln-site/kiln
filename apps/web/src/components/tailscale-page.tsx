@@ -650,7 +650,7 @@ const NetworkForm = React.memo(function NetworkForm({
       const configured = await configureTailscaleIntegration({
         data: {
           clientId: input.clientId,
-          clientSecret: input.clientSecret,
+          clientSecret: input.clientSecret || undefined,
           domain: stack.domain,
           id: stack.id,
           previousDomain: stack.domain,
@@ -698,7 +698,7 @@ const NetworkForm = React.memo(function NetworkForm({
     name.trim() &&
     domain.trim() &&
     clientId.trim() &&
-    clientSecret.trim().length >= 20 &&
+    (!stack || !clientSecret.trim() || clientSecret.trim().length >= 20) &&
     tag.trim()
   const displayedTag = tag.trim().startsWith("tag:")
     ? tag.trim()
@@ -780,7 +780,11 @@ const NetworkForm = React.memo(function NetworkForm({
               autoCapitalize="none"
               autoCorrect="off"
               autoComplete="off"
-              placeholder="tskey-client-kAbCdEfGh123CNTRL-a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6"
+              placeholder={
+                stack
+                  ? "••••••••••••••••••••••••"
+                  : "tskey-client-kAbCdEfGh123CNTRL-a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6"
+              }
               className="font-mono"
             />
           </label>

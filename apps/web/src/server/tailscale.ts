@@ -60,6 +60,8 @@ const stackBindingInputSchema = z.strictObject({
   relayId: relayIdSchema,
 })
 
+const tailscaleClientSecretSchema = z.string().trim().min(20).max(512)
+
 const saveTailscaleStackSchema = z.strictObject({
   authKey: relayTailscaleInstallSchema.shape.authKey.optional(),
   bindings: z.array(stackBindingInputSchema).max(4_096),
@@ -70,7 +72,7 @@ const saveTailscaleStackSchema = z.strictObject({
 
 const createTailscaleNetworkSchema = z.strictObject({
   clientId: z.string().trim().min(1).max(120),
-  clientSecret: z.string().trim().min(20).max(512),
+  clientSecret: tailscaleClientSecretSchema,
   domain: relayTailscaleDomainSchema,
   name: relayInstanceNameSchema,
   tag: z
@@ -86,7 +88,7 @@ const removeTailscaleStackSchema = z.strictObject({
 
 const configureTailscaleIntegrationSchema = z.strictObject({
   clientId: z.string().trim().min(1).max(120),
-  clientSecret: z.string().trim().min(20).max(512),
+  clientSecret: tailscaleClientSecretSchema.optional(),
   domain: relayTailscaleDomainSchema,
   id: relayTailscaleStackIdSchema,
   previousDomain: relayTailscaleDomainSchema,
@@ -97,8 +99,9 @@ const configureTailscaleIntegrationSchema = z.strictObject({
     .pipe(z.string().regex(/^tag:[a-zA-Z0-9][a-zA-Z0-9-]*$/u)),
 })
 
-const previewTailscaleIntegrationSchema =
-  configureTailscaleIntegrationSchema.omit({ previousDomain: true })
+const previewTailscaleIntegrationSchema = configureTailscaleIntegrationSchema
+  .omit({ previousDomain: true })
+  .extend({ clientSecret: tailscaleClientSecretSchema })
 
 const syncTailscaleIntegrationSchema = z.strictObject({
   id: relayTailscaleStackIdSchema,
@@ -188,23 +191,22 @@ export const configureTailscaleIntegration = createServerFn({ method: "POST" })
     const definitions = await loadTailscaleNetworkDefinitions()
     const definition = definitions.find(({ id }) => id === data.id)
     if (!definition) throw new Error("Tailscale network not found")
+    const clientSecret =
+      data.clientSecret ??
+      (await loadTailscaleNetworkCredential(data.id)).clientSecret
     const verified = await runAppEffect(
       "tailscale.oauth.verify",
-      verifyTailscaleOAuthCredentialEffect(data.clientId, data.clientSecret, [
+      verifyTailscaleOAuthCredentialEffect(data.clientId, clientSecret, [
         data.tag,
       ])
     )
     await runAppEffect(
       "tailscale.networks.integration.save",
-      saveTailscaleNetworkIntegrationEffect(
-        data.id,
-        verified,
-        data.clientSecret
-      )
+      saveTailscaleNetworkIntegrationEffect(data.id, verified, clientSecret)
     )
     const credential = {
       ...verified,
-      clientSecret: data.clientSecret,
+      clientSecret,
     } satisfies TailscaleOAuthCredential
     const configured = await Effect.runPromise(
       promiseEffect(async () => {
