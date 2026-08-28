@@ -314,7 +314,7 @@ const TailscaleNetworkPicker = React.memo(function TailscaleNetworkPicker({
                     {stack.name}
                   </span>
                   <span className="type-support mt-0.5 block truncate font-mono text-muted-foreground">
-                    .{stack.domain} · {stack.bindings.length} connected
+                    .{stack.domain} · {connectedBindingCount(stack)} connected
                   </span>
                 </span>
                 {stack.id === selectedStack?.id ? (
@@ -659,7 +659,9 @@ const NetworkForm = React.memo(function NetworkForm({
     name.trim() &&
     domain.trim() &&
     clientId.trim() &&
-    (!stack || !clientSecret.trim() || clientSecret.trim().length >= 20) &&
+    (stack
+      ? !clientSecret.trim() || clientSecret.trim().length >= 20
+      : clientSecret.trim().length >= 20) &&
     tag.trim()
   const displayedTag = tag.trim().startsWith("tag:")
     ? tag.trim()
@@ -858,13 +860,20 @@ function stackSaveInput(
   overrides: { domain?: string; name?: string } = {}
 ): SaveStackInput {
   return {
-    bindings: stack.bindings.map(({ hostname, instanceId, relayId }) => ({
-      hostname,
-      instanceId,
-      relayId,
-    })),
+    bindings: stack.bindings.map(
+      ({ enabled, hostname, instanceId, relayId }) => ({
+        enabled,
+        hostname,
+        instanceId,
+        relayId,
+      })
+    ),
     domain: overrides.domain ?? stack.domain,
     id: stack.id,
     name: overrides.name ?? stack.name,
   }
+}
+
+function connectedBindingCount(stack: TailscaleStackOverview): number {
+  return stack.bindings.filter(({ enabled }) => enabled).length
 }

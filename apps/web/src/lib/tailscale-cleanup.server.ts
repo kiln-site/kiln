@@ -46,7 +46,7 @@ export function scheduleTailscaleCleanupProcessing(): void {
   )
 }
 
-async function processTailscaleCleanupJobs(): Promise<void> {
+export async function processTailscaleCleanupJobs(): Promise<void> {
   const [pending, definitions, relays] = await Promise.all([
     runAppEffect(
       "tailscale.cleanup.pending",

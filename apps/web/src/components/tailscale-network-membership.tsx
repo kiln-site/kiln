@@ -7,6 +7,7 @@ import {
 } from "@tanstack/react-query"
 import { Link } from "@tanstack/react-router"
 import {
+  CircleAlert,
   Copy,
   EllipsisVertical,
   ExternalLink,
@@ -23,7 +24,7 @@ import {
 } from "lucide-react"
 
 import { Button } from "@workspace/ui/components/button"
-import { forkPromise } from "@/effect/promise"
+import { forkPromise, recoverPromise } from "@/effect/promise"
 import {
   Dialog,
   DialogContent,
@@ -127,11 +128,7 @@ export function TailscaleConnectedServersTable({
     )
   }
   if (stack.cleanup) {
-    return (
-      <CenteredNetworkState>
-        Removing {stack.name}. Cleanup will continue automatically.
-      </CenteredNetworkState>
-    )
+    return <TailscaleCleanupState stack={stack} />
   }
   return (
     <ConnectedServersTableContent
@@ -1056,23 +1053,24 @@ function useStackMembershipMutation() {
       bindings: Array<StackBinding>
       stack: TailscaleStackOverview
     }) => {
-      try {
-        return {
+      return recoverPromise(
+        async () => ({
           data: await saveTailscaleStack({
             data: stackSaveInput(stack, bindings, authKey),
           }),
           reconcile: false,
+        }),
+        (cause) => {
+          if (!isFailedFetch(cause)) throw cause
+          const pending = queryClient.getQueryData<TailscaleStacksResult>(
+            queryKeys.tailscaleStacks
+          )
+          if (pending) {
+            return { data: pending, reconcile: true }
+          }
+          throw cause
         }
-      } catch (cause) {
-        if (!isFailedFetch(cause)) throw cause
-        const pending = queryClient.getQueryData<TailscaleStacksResult>(
-          queryKeys.tailscaleStacks
-        )
-        if (pending) {
-          return { data: pending, reconcile: true }
-        }
-        throw cause
-      }
+      )
     },
     onMutate: async ({ bindings, stack }) => {
       await queryClient.cancelQueries({ queryKey: queryKeys.tailscaleStacks })
@@ -1268,10 +1266,47 @@ function serverSearchText(server: TailscaleServer) {
   return `${server.name} ${server.shortId} ${server.relayName}`
 }
 
-function CenteredNetworkState({ children }: { children: React.ReactNode }) {
+const cleanupRetryFormatter = new Intl.DateTimeFormat(undefined, {
+  dateStyle: "medium",
+  timeStyle: "short",
+})
+
+function TailscaleCleanupState({ stack }: { stack: TailscaleStackOverview }) {
+  const cleanup = stack.cleanup
+  if (!cleanup) return null
+  const pendingRelays = `${cleanup.pendingRelays} ${cleanup.pendingRelays === 1 ? "Relay" : "Relays"} pending`
+  const nextAttemptAt = cleanup.nextAttemptAt
+    ? cleanupRetryFormatter.format(new Date(cleanup.nextAttemptAt))
+    : null
+
   return (
-    <div className="grid min-h-64 place-items-center px-6 text-center">
-      <p className="text-sm text-muted-foreground">{children}</p>
+    <div className="flex min-h-64 flex-col items-center justify-center px-6 py-12 text-center">
+      <LoaderCircle className="size-6 animate-spin text-primary" />
+      <p className="mt-3 text-sm font-semibold">Removing {stack.name}</p>
+      <p className="type-support mt-1 text-muted-foreground">
+        {pendingRelays}. Cleanup will continue automatically.
+      </p>
+      {cleanup.lastError ? (
+        <div
+          className="mt-4 flex max-w-lg items-start gap-2.5 rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2.5 text-left"
+          role="status"
+        >
+          <CircleAlert className="mt-0.5 size-4 shrink-0 text-destructive" />
+          <div className="min-w-0">
+            <p className="text-xs break-words text-destructive">
+              {cleanup.lastError}
+            </p>
+            <p className="type-meta mt-1 text-muted-foreground">
+              {nextAttemptAt
+                ? `Next automatic retry: ${nextAttemptAt}`
+                : "The next retry is queued automatically"}
+              {cleanup.attempts > 0
+                ? ` · ${cleanup.attempts} ${cleanup.attempts === 1 ? "attempt" : "attempts"}`
+                : ""}
+            </p>
+          </div>
+        </div>
+      ) : null}
     </div>
   )
 }

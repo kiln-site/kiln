@@ -3,6 +3,7 @@ import { createHash, randomBytes } from "node:crypto"
 import { createServerFn } from "@tanstack/react-start"
 import {
   builtinTailscaleBrickId,
+  MAXIMUM_TAILSCALE_STACK_BINDINGS,
   relayIdSchema,
   relayInstanceNameSchema,
   relaySnapshotSchema,
@@ -18,7 +19,7 @@ import { z } from "zod"
 
 import {
   observeTailscaleDeploymentsEffect,
-  replaceTailscaleDeploymentsEffect,
+  reconcileTailscaleDeploymentsEffect,
   requestTailscaleNetworkCleanupEffect,
 } from "@/effect/tailscale-cleanup"
 import {
@@ -65,7 +66,9 @@ const tailscaleClientSecretSchema = z.string().trim().min(20).max(512)
 
 const saveTailscaleStackSchema = z.strictObject({
   authKey: relayTailscaleInstallSchema.shape.authKey.optional(),
-  bindings: z.array(stackBindingInputSchema).max(4_096),
+  bindings: z
+    .array(stackBindingInputSchema)
+    .max(MAXIMUM_TAILSCALE_STACK_BINDINGS),
   domain: relayTailscaleDomainSchema,
   id: relayTailscaleStackIdSchema,
   name: relayInstanceNameSchema,
@@ -568,8 +571,12 @@ export const saveTailscaleStack = createServerFn({ method: "POST" })
     ]
     await invalidateRelaySnapshots(affectedRelayIds)
     await runAppEffect(
-      "tailscale.cleanup.deployments.replace",
-      replaceTailscaleDeploymentsEffect(id, synchronized)
+      "tailscale.cleanup.deployments.reconcile",
+      reconcileTailscaleDeploymentsEffect(
+        id,
+        synchronized,
+        removed.map(({ relayId }) => relayId)
+      )
     )
     publishTailscaleChange()
     return {
@@ -636,9 +643,22 @@ async function loadTailscaleStacks(): Promise<TailscaleStacksResult> {
     definitionIds.has(deployment.id)
   )
   if (observed.length > 0) {
-    await runAppEffect(
-      "tailscale.cleanup.deployments.observe",
-      observeTailscaleDeploymentsEffect(observed)
+    await Effect.runPromise(
+      promiseEffect(() =>
+        runAppEffect(
+          "tailscale.cleanup.deployments.observe",
+          observeTailscaleDeploymentsEffect(observed)
+        )
+      ).pipe(
+        Effect.catch((cause) =>
+          Effect.sync(() =>
+            console.warn(
+              "[Kiln] Could not persist observed Tailscale deployments:",
+              cause
+            )
+          )
+        )
+      )
     )
   }
   return {

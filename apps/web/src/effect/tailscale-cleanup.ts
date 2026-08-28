@@ -52,28 +52,22 @@ export const observeTailscaleDeploymentsEffect = Effect.fn(
   )
 })
 
-export const replaceTailscaleDeploymentsEffect = Effect.fn(
-  "tailscaleCleanup.replaceDeployments"
+export const reconcileTailscaleDeploymentsEffect = Effect.fn(
+  "tailscaleCleanup.reconcileDeployments"
 )(function* (
   networkId: string,
-  deployments: ReadonlyArray<PersistedTailscaleDeployment>
+  deployments: ReadonlyArray<PersistedTailscaleDeployment>,
+  removedRelayIds: ReadonlyArray<string>
 ) {
   const database = yield* Database
-  yield* database.transaction("tailscaleCleanup.replaceDeployments", (tx) =>
+  yield* database.transaction("tailscaleCleanup.reconcileDeployments", (tx) =>
     Effect.gen(function* () {
-      const relayIds = deployments.map(({ relayId }) => relayId)
-      if (relayIds.length === 0) {
+      if (removedRelayIds.length > 0) {
         yield* tx.execute(
           `DELETE FROM ${databaseTable("tailscale_network_deployment")}
-            WHERE network_id = ?`,
-          [networkId]
-        )
-      } else {
-        yield* tx.execute(
-          `DELETE FROM ${databaseTable("tailscale_network_deployment")}
-            WHERE network_id = ?
-              AND relay_id NOT IN (${relayIds.map(() => "?").join(", ")})`,
-          [networkId, ...relayIds]
+              WHERE network_id = ?
+                AND relay_id IN (${removedRelayIds.map(() => "?").join(", ")})`,
+          [networkId, ...removedRelayIds]
         )
       }
       yield* Effect.forEach(
@@ -133,12 +127,39 @@ export const loadPendingTailscaleCleanupsEffect = Effect.fn(
       LIMIT ?`,
     [limit]
   )
-  return rows.map((row) => ({
-    attempts: row.cleanup_attempts,
-    deployment: parseDeployment(row.deployment, row.network_id, row.relay_id),
-    lastError: row.cleanup_last_error,
-    requestedBy: row.requested_by,
-  })) satisfies Array<PendingTailscaleCleanup>
+  const cleanups = yield* Effect.forEach(rows, (row) =>
+    Effect.try({
+      try: () => ({
+        attempts: row.cleanup_attempts,
+        deployment: parseDeployment(
+          row.deployment,
+          row.network_id,
+          row.relay_id
+        ),
+        lastError: row.cleanup_last_error,
+        requestedBy: row.requested_by,
+      }),
+      catch: (cause) => cause,
+    }).pipe(
+      Effect.map((cleanup) => cleanup satisfies PendingTailscaleCleanup),
+      Effect.catch((cause) => {
+        const attempts = row.cleanup_attempts + 1
+        return deferTailscaleCleanupEffect(
+          row.network_id,
+          row.relay_id,
+          attempts,
+          tailscaleCleanupRetryDelaySeconds(attempts),
+          `Stored Tailscale cleanup data is invalid: ${errorMessage(cause)}`.slice(
+            0,
+            512
+          )
+        ).pipe(Effect.as(null))
+      })
+    )
+  )
+  return cleanups.filter(
+    (cleanup): cleanup is PendingTailscaleCleanup => cleanup !== null
+  )
 })
 
 export const completeTailscaleCleanupEffect = Effect.fn(
@@ -221,18 +242,29 @@ function parseDeployment(
   relayId: string
 ): PersistedTailscaleDeployment {
   const decoded = typeof value === "string" ? JSON.parse(value) : value
-  const candidate = decoded as { relayId?: unknown; relayName?: unknown }
-  const stack = relayTailscaleStackSchema.parse(decoded)
+  if (typeof decoded !== "object" || decoded === null) {
+    throw new Error("Stored Tailscale cleanup is not an object")
+  }
+  const {
+    relayId: candidateRelayId,
+    relayName,
+    ...stackValue
+  } = decoded as Record<string, unknown>
+  const stack = relayTailscaleStackSchema.parse(stackValue)
   if (stack.id !== networkId) {
     throw new Error("Stored Tailscale cleanup belongs to another network")
   }
-  const storedRelayId = relayIdSchema.parse(candidate.relayId ?? relayId)
+  const storedRelayId = relayIdSchema.parse(candidateRelayId ?? relayId)
   if (storedRelayId !== relayId) {
     throw new Error("Stored Tailscale cleanup belongs to another Relay")
   }
   return {
     ...stack,
     relayId: storedRelayId,
-    relayName: relayInstanceNameSchema.parse(candidate.relayName),
+    relayName: relayInstanceNameSchema.parse(relayName),
   }
+}
+
+function errorMessage(cause: unknown): string {
+  return cause instanceof Error ? cause.message : "unknown error"
 }

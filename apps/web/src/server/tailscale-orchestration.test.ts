@@ -120,6 +120,50 @@ describe("Tailscale deployment orchestration", () => {
     ])
   })
 
+  it("excludes paused bindings from replicated DNS", async () => {
+    const records: Array<{ address: string; hostname: string }> = []
+    const desired: DesiredTailscaleDeployment = {
+      ...target("relay-a"),
+      bindings: [
+        {
+          enabled: true,
+          hostname: "paper",
+          instanceId: "active",
+        },
+        {
+          enabled: false,
+          hostname: "paused",
+          instanceId: "paused",
+        },
+      ],
+    }
+
+    await applyTailscaleDeploymentPlan({
+      authKey: "test-auth-key",
+      current: [],
+      desired: [desired],
+      domain: "test",
+      id: "a".repeat(40),
+      name: "Test network",
+      operations: {
+        apply: async (_target, input) => ({
+          ...deployment("relay-a", "applied"),
+          bindings: input.bindings.map((binding, index) => ({
+            ...binding,
+            address: `10.165.55.${index + 10}`,
+          })),
+        }),
+        remove: async () => undefined,
+        syncDns: async (value, nextRecords) => {
+          records.push(...nextRecords)
+          return value
+        },
+      },
+    })
+
+    expect(records).toEqual([{ address: "10.165.55.10", hostname: "paper" }])
+  })
+
   it("rejects a manual auth key before applying more than one new node", async () => {
     const applied: Array<string> = []
 

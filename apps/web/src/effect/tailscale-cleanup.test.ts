@@ -5,6 +5,8 @@ import type { ResultSetHeader } from "mysql2/promise"
 import { Database } from "@/effect/database"
 
 import {
+  loadPendingTailscaleCleanupsEffect,
+  reconcileTailscaleDeploymentsEffect,
   requestTailscaleNetworkCleanupEffect,
   tailscaleCleanupRetryDelaySeconds,
 } from "./tailscale-cleanup"
@@ -24,10 +26,12 @@ const statements: Array<{
   sql: string
   values: ReadonlyArray<unknown>
 }> = []
+let pendingRows: Array<Record<string, unknown>> = []
 
 const databaseLayer = Layer.succeed(Database)({
   execute: () => Effect.die("Unexpected standalone database write"),
-  queryRows: () => Effect.die("Unexpected database query"),
+  queryRows: <TRow>() =>
+    Effect.succeed(pendingRows as unknown as ReadonlyArray<TRow>),
   transaction: (_operation, run) =>
     run({
       execute: (sql, values) =>
@@ -63,4 +67,107 @@ describe("Tailscale cleanup retries", () => {
       assert.deepEqual(statements[0]?.values, ["user-one", "a".repeat(40)])
     }).pipe(Effect.provide(databaseLayer))
   )
+
+  it.effect("only removes Relay snapshots explicitly removed by the save", () =>
+    Effect.gen(function* () {
+      statements.length = 0
+      const networkId = "a".repeat(40)
+      const removedRelayId = "b".repeat(43)
+
+      yield* reconcileTailscaleDeploymentsEffect(networkId, [], [])
+      assert.strictEqual(statements.length, 0)
+
+      yield* reconcileTailscaleDeploymentsEffect(
+        networkId,
+        [],
+        [removedRelayId]
+      )
+      assert.strictEqual(statements.length, 1)
+      assert.include(statements[0]?.sql, "relay_id IN (?)")
+      assert.notInclude(statements[0]?.sql, "NOT IN")
+      assert.deepEqual(statements[0]?.values, [networkId, removedRelayId])
+    }).pipe(Effect.provide(databaseLayer))
+  )
+
+  it.effect("defers corrupt rows without blocking valid cleanup jobs", () =>
+    Effect.gen(function* () {
+      statements.length = 0
+      const networkId = "a".repeat(40)
+      const corruptRelayId = "b".repeat(43)
+      const validRelayId = "c".repeat(43)
+      pendingRows = [
+        {
+          cleanup_attempts: 2,
+          cleanup_last_error: null,
+          deployment: "{not json",
+          network_id: networkId,
+          relay_id: corruptRelayId,
+          requested_by: "user-one",
+        },
+        {
+          cleanup_attempts: 0,
+          cleanup_last_error: null,
+          deployment: JSON.stringify(
+            persistedDeployment(networkId, validRelayId)
+          ),
+          network_id: networkId,
+          relay_id: validRelayId,
+          requested_by: "user-one",
+        },
+      ]
+
+      const cleanups = yield* loadPendingTailscaleCleanupsEffect()
+
+      assert.strictEqual(cleanups.length, 1)
+      assert.strictEqual(cleanups[0]?.deployment.relayId, validRelayId)
+      assert.strictEqual(statements.length, 2)
+      assert.include(
+        String(statements[0]?.values[2]),
+        "Stored Tailscale cleanup data is invalid"
+      )
+      pendingRows = []
+    }).pipe(Effect.provide(databaseLayer))
+  )
 })
+
+function persistedDeployment(networkId: string, relayId: string) {
+  return {
+    bindings: [],
+    components: {
+      coreDnsRunning: false,
+      tailscaleRunning: false,
+    },
+    domain: "test",
+    hostname: "private-network",
+    id: networkId,
+    instance: {
+      brickId: "tailscale",
+      connectAddress: "private-network.test",
+      containerId: "docker-container-id",
+      desiredState: "stopped",
+      directory: networkId,
+      game: "Networking",
+      id: networkId,
+      implementation: "Tailscale",
+      javaVersion: "Tailscale + CoreDNS",
+      managedByRelay: true,
+      name: "Private Network",
+      observedState: "stopped",
+      service: "kiln-ts-aaaaaaaa",
+      shortId: networkId.slice(0, 8),
+      startedAt: null,
+      status: "Exited (0)",
+      version: "stable",
+    },
+    name: "Private Network",
+    relayId,
+    relayName: "Relay One",
+    status: {
+      connected: false,
+      ipv4Address: null,
+      ipv6Address: null,
+      message: "Tailscale is stopped",
+    },
+    subnet: "10.165.55.0/24",
+  }
+}
