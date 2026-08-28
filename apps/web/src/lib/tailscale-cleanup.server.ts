@@ -60,45 +60,48 @@ async function processTailscaleCleanupJobs(): Promise<void> {
   )
   const relayById = new Map(relays.map((relay) => [relay.id, relay]))
   const credentials = new Map<string, Promise<TailscaleOAuthCredential>>()
-  let changed = false
+  let changed = pending.length > 0
 
-  for (const cleanup of pending) {
-    await Effect.runPromise(
-      promiseEffect(() =>
-        processDeploymentCleanup(
-          cleanup,
-          definitionById,
-          relayById,
-          credentials
-        )
-      ).pipe(
-        Effect.catch((cause) =>
-          promiseEffect(() => deferDeploymentCleanup(cleanup, cause))
+  await Promise.all(
+    pending.map((cleanup) =>
+      Effect.runPromise(
+        promiseEffect(() =>
+          processDeploymentCleanup(
+            cleanup,
+            definitionById,
+            relayById,
+            credentials
+          )
+        ).pipe(
+          Effect.catch((cause) =>
+            promiseEffect(() => deferDeploymentCleanup(cleanup, cause))
+          )
         )
       )
     )
-    changed = true
-  }
+  )
 
   const afterCleanup = await loadDefinitions()
-  for (const definition of afterCleanup) {
+  const readyToFinalize = afterCleanup.filter((definition) => {
     const cleanup = definition.cleanup
-    if (!cleanup || cleanup.pendingRelays > 0) continue
-    if (
-      cleanup.nextAttemptAt &&
-      new Date(cleanup.nextAttemptAt).valueOf() > Date.now()
-    ) {
-      continue
-    }
-    await Effect.runPromise(
-      promiseEffect(() => finalizeNetwork(definition)).pipe(
-        Effect.catch((cause) =>
-          promiseEffect(() => deferNetworkFinalization(definition, cause))
+    if (!cleanup || cleanup.pendingRelays > 0) return false
+    return (
+      !cleanup.nextAttemptAt ||
+      new Date(cleanup.nextAttemptAt).valueOf() <= Date.now()
+    )
+  })
+  changed ||= readyToFinalize.length > 0
+  await Promise.all(
+    readyToFinalize.map((definition) =>
+      Effect.runPromise(
+        promiseEffect(() => finalizeNetwork(definition)).pipe(
+          Effect.catch((cause) =>
+            promiseEffect(() => deferNetworkFinalization(definition, cause))
+          )
         )
       )
     )
-    changed = true
-  }
+  )
   if (changed) publishChange()
 }
 

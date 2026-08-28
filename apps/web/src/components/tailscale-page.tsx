@@ -786,10 +786,22 @@ const CreateNetworkForm = React.memo(function CreateNetworkForm({
 
       <aside className="border-t bg-muted/15 p-5 md:border-t-0 md:border-l">
         <h3 className="text-xs font-semibold">Tailscale access</h3>
-        <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
-          Select <span className="font-medium text-foreground">Write</span> for
-          these permissions. Tailscale selects Read automatically.
-        </p>
+        <Button
+          asChild
+          type="button"
+          size="sm"
+          variant="outline"
+          className="mt-3 w-full"
+        >
+          <a
+            href="https://console.tailscale.com/admin/settings/trust-credentials/add"
+            target="_blank"
+            rel="noreferrer"
+          >
+            Create credential
+            <ExternalLink />
+          </a>
+        </Button>
         <ul className="mt-3 divide-y divide-border/70 border border-border/70">
           {tailscaleCredentialPermissions.map(({ group, permission }) => (
             <li
@@ -804,7 +816,17 @@ const CreateNetworkForm = React.memo(function CreateNetworkForm({
                   {permission}
                 </span>
               </span>
-              <span className="type-technical-label text-primary">Write</span>
+              <span className="flex shrink-0 items-center gap-1.5">
+                <input
+                  type="checkbox"
+                  checked
+                  readOnly
+                  tabIndex={-1}
+                  aria-hidden="true"
+                  className="pointer-events-none size-3.5 accent-primary"
+                />
+                <span className="type-technical-label text-primary">Write</span>
+              </span>
             </li>
           ))}
         </ul>
@@ -813,22 +835,6 @@ const CreateNetworkForm = React.memo(function CreateNetworkForm({
           <span className="font-mono text-foreground">{displayedTag}</span>{" "}
           under Tags.
         </p>
-        <Button
-          asChild
-          type="button"
-          size="sm"
-          variant="outline"
-          className="mt-5"
-        >
-          <a
-            href="https://console.tailscale.com/admin/settings/trust-credentials/add"
-            target="_blank"
-            rel="noreferrer"
-          >
-            Create credential
-            <ExternalLink />
-          </a>
-        </Button>
       </aside>
     </form>
   )
