@@ -8,7 +8,6 @@ import { requireServerDestinationAccess } from "@/lib/route-access"
 export const Route = createFileRoute("/_app/server/$serverId/network")({
   validateSearch: z.object({
     edit: z.enum(["game-port"]).optional(),
-    member: z.string().max(512).optional(),
   }),
   beforeLoad: async ({ context, params }) => {
     await requireServerDestinationAccess(
@@ -23,12 +22,7 @@ export const Route = createFileRoute("/_app/server/$serverId/network")({
 })
 
 function NetworkRoute() {
-  const { edit, member } = Route.useSearch()
+  const { edit } = Route.useSearch()
 
-  return (
-    <InstanceNetworkPage
-      editGamePort={edit === "game-port"}
-      highlightedTailscaleMember={member}
-    />
-  )
+  return <InstanceNetworkPage editGamePort={edit === "game-port"} />
 }

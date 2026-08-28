@@ -4,10 +4,10 @@ import {
   useQueryClient,
   useSuspenseQuery,
 } from "@tanstack/react-query"
-import { Link } from "@tanstack/react-router"
 import { ensuringPromise, forkPromise } from "@/effect/promise"
 import {
-  ArrowLeft,
+  ArrowLeftRight,
+  Check,
   CircleAlert,
   Copy,
   EllipsisVertical,
@@ -19,7 +19,7 @@ import {
   Plus,
   RefreshCw,
   Search,
-  Settings2,
+  Server,
   Trash2,
   X,
 } from "lucide-react"
@@ -40,6 +40,11 @@ import {
   DropdownMenuTrigger,
 } from "@workspace/ui/components/dropdown-menu"
 import { Input } from "@workspace/ui/components/input"
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@workspace/ui/components/popover"
 import { showToast } from "@workspace/ui/components/sonner"
 import {
   Tooltip,
@@ -49,15 +54,15 @@ import {
 import { MAXIMUM_INSTANCE_NAME_LENGTH } from "@workspace/contracts"
 
 import {
-  WorkspaceDataTable,
-  WorkspaceTableCell,
-  WorkspaceTableHead,
-  WorkspaceTableHeading,
   createWorkspaceTableSearchStore,
   useWorkspaceTableSearchInput,
 } from "@/components/workspace-data-table"
 import type { WorkspaceTableSearchStore } from "@/components/workspace-data-table"
-import { TailscaleNetworkMembershipPage } from "@/components/tailscale-network-membership"
+import {
+  TailscaleAddServersDialog,
+  TailscaleConnectedServersTable,
+} from "@/components/tailscale-network-membership"
+import { WorkspaceSummaryCard } from "@/components/workspace-summary-card"
 import { queryKeys, tailscaleStacksQueryOptions } from "@/lib/query-options"
 import {
   configureTailscaleIntegration,
@@ -78,56 +83,57 @@ const tailscaleCredentialPermissions = [
 
 export const TailscalePage = React.memo(function TailscalePage({
   createOpen,
-  highlightedServerKey,
-  selectedNetworkId,
   onCreateOpenChange,
 }: {
   createOpen: boolean
-  highlightedServerKey?: string
-  selectedNetworkId?: string
   onCreateOpenChange: (open: boolean) => void
 }) {
   const [searchStore] = React.useState(createWorkspaceTableSearchStore)
+  const [selectedNetworkId, setSelectedNetworkId] = React.useState<
+    string | null
+  >(null)
+  const [addServersOpen, setAddServersOpen] = React.useState(false)
   const [editingId, setEditingId] = React.useState<string | null>(null)
   const [removingId, setRemovingId] = React.useState<string | null>(null)
   const { data } = useSuspenseQuery(tailscaleStacksQueryOptions())
   const { stacks } = data
+  const selectedStack =
+    stacks.find((stack) => stack.id === selectedNetworkId) ??
+    (stacks.length === 1 ? stacks[0] : null)
   const editingStack = stacks.find((stack) => stack.id === editingId) ?? null
   const removingStack = stacks.find((stack) => stack.id === removingId) ?? null
-
-  if (selectedNetworkId) {
-    return (
-      <div>
-        <div className="mx-auto w-full max-w-[90rem] px-3 sm:px-5">
-          <Button asChild type="button" size="sm" variant="ghost">
-            <Link to="/infra/tailscale" search={{}}>
-              <ArrowLeft />
-              All networks
-            </Link>
-          </Button>
-        </div>
-        <TailscaleNetworkMembershipPage
-          highlightedServerKey={highlightedServerKey}
-          stackId={selectedNetworkId}
-        />
-      </div>
-    )
-  }
+  const selectNetwork = React.useCallback(
+    (id: string) => {
+      searchStore.set("")
+      setSelectedNetworkId(id)
+    },
+    [searchStore]
+  )
 
   return (
-    <div className="mx-auto w-full max-w-[90rem] px-3 pb-10 sm:px-5">
-      <section className="overflow-hidden rounded-xl border bg-card/45 [contain:paint]">
+    <div className="mx-auto flex h-full min-h-[34rem] w-full max-w-[90rem] flex-col px-3 pt-3 pb-3 sm:px-5 sm:pt-5 sm:pb-5">
+      <TailscaleNetworkPicker
+        selectedStack={selectedStack}
+        stacks={stacks}
+        onAdd={() => onCreateOpenChange(true)}
+        onEdit={setEditingId}
+        onRemove={setRemovingId}
+        onSelect={selectNetwork}
+      />
+
+      <section className="relative flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border bg-card/45 [contain:paint]">
         <TailscaleToolbar
+          canAddServer={Boolean(selectedStack && !selectedStack.cleanup)}
           searchStore={searchStore}
-          onAdd={() => onCreateOpenChange(true)}
+          onAddNetwork={() => onCreateOpenChange(true)}
+          onAddServer={() => setAddServersOpen(true)}
         />
-        <TailscaleTable
-          searchStore={searchStore}
-          stacks={stacks}
-          onAdd={() => onCreateOpenChange(true)}
-          onEdit={setEditingId}
-          onRemove={setRemovingId}
-        />
+        <div className="min-h-0 flex-1 overflow-auto">
+          <TailscaleConnectedServersTable
+            searchStore={searchStore}
+            stack={selectedStack}
+          />
+        </div>
       </section>
 
       <CreateNetworkDialog
@@ -144,6 +150,14 @@ export const TailscalePage = React.memo(function TailscalePage({
           }}
         />
       ) : null}
+      {selectedStack && addServersOpen ? (
+        <TailscaleAddServersDialog
+          key={selectedStack.id}
+          open
+          stack={selectedStack}
+          onOpenChange={setAddServersOpen}
+        />
+      ) : null}
       {removingStack ? (
         <RemoveNetworkDialog
           open
@@ -157,12 +171,228 @@ export const TailscalePage = React.memo(function TailscalePage({
   )
 })
 
-const TailscaleToolbar = React.memo(function TailscaleToolbar({
-  searchStore,
+const TailscaleNetworkPicker = React.memo(function TailscaleNetworkPicker({
+  selectedStack,
+  stacks,
   onAdd,
+  onEdit,
+  onRemove,
+  onSelect,
 }: {
-  searchStore: WorkspaceTableSearchStore
+  selectedStack: TailscaleStackOverview | null
+  stacks: Array<TailscaleStackOverview>
   onAdd: () => void
+  onEdit: (id: string) => void
+  onRemove: (id: string) => void
+  onSelect: (id: string) => void
+}) {
+  const [open, setOpen] = React.useState(false)
+  const [query, setQuery] = React.useState("")
+  const visibleStacks = React.useMemo(() => {
+    const normalized = query.trim().toLowerCase()
+    if (!normalized) return stacks
+    return stacks.filter((stack) =>
+      `${stack.name} ${stack.domain} ${stack.id}`
+        .toLowerCase()
+        .includes(normalized)
+    )
+  }, [query, stacks])
+  const copySelectedId = React.useCallback(() => {
+    if (!selectedStack) return
+    forkPromise(
+      async () => {
+        await navigator.clipboard.writeText(selectedStack.id)
+        showToast({ message: "Network ID copied", type: "success" })
+      },
+      () =>
+        showToast({
+          message: "The network ID could not be copied",
+          type: "error",
+        })
+    )
+  }, [selectedStack])
+
+  return (
+    <div className="mb-3">
+      <Popover
+        open={open}
+        onOpenChange={(nextOpen) => {
+          setOpen(nextOpen)
+          if (!nextOpen) setQuery("")
+        }}
+      >
+        <WorkspaceSummaryCard
+          action={
+            <div className="flex shrink-0 items-center gap-1.5">
+              {selectedStack ? (
+                <>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Button
+                        type="button"
+                        size="icon-sm"
+                        variant="outline"
+                        disabled={Boolean(selectedStack.cleanup)}
+                        aria-label={`Edit ${selectedStack.name}`}
+                        onClick={() => onEdit(selectedStack.id)}
+                      >
+                        <Pencil />
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent side="bottom">Edit network</TooltipContent>
+                  </Tooltip>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Button
+                        type="button"
+                        size="icon-sm"
+                        variant="outline"
+                        disabled={Boolean(selectedStack.cleanup)}
+                        aria-label={`Delete ${selectedStack.name}`}
+                        className="text-destructive hover:text-destructive"
+                        onClick={() => onRemove(selectedStack.id)}
+                      >
+                        <Trash2 />
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent side="bottom">
+                      Delete network
+                    </TooltipContent>
+                  </Tooltip>
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button
+                        type="button"
+                        size="icon-sm"
+                        variant="outline"
+                        aria-label={`More actions for ${selectedStack.name}`}
+                      >
+                        <EllipsisVertical />
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end">
+                      <DropdownMenuItem onSelect={copySelectedId}>
+                        <Copy />
+                        Copy ID
+                      </DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                </>
+              ) : null}
+              {stacks.length > 0 ? (
+                <PopoverTrigger asChild>
+                  <Button type="button" size="sm" variant="outline">
+                    <ArrowLeftRight />
+                    {selectedStack ? "Change network" : "Choose network"}
+                  </Button>
+                </PopoverTrigger>
+              ) : (
+                <Button type="button" size="sm" onClick={onAdd}>
+                  <Plus />
+                  Add Network
+                </Button>
+              )}
+            </div>
+          }
+          icon={<Network className="size-5" />}
+          iconClassName={selectedStack ? "text-primary" : undefined}
+          title={
+            selectedStack
+              ? selectedStack.name
+              : stacks.length > 0
+                ? "Select a Tailscale network"
+                : "No Tailscale networks"
+          }
+          titleAccessory={
+            selectedStack ? (
+              <Badge variant="outline" className="type-meta font-mono">
+                .{selectedStack.domain}
+              </Badge>
+            ) : null
+          }
+        >
+          <p className="type-meta mt-1 truncate font-mono text-muted-foreground">
+            {selectedStack
+              ? `${selectedStack.bindings.length} connected ${selectedStack.bindings.length === 1 ? "server" : "servers"} · ${selectedStack.deployments.length} ${selectedStack.deployments.length === 1 ? "node" : "nodes"}`
+              : stacks.length > 0
+                ? `${stacks.length} networks available`
+                : "Add a network before connecting servers"}
+          </p>
+        </WorkspaceSummaryCard>
+        <PopoverContent
+          align="end"
+          className="w-[min(32rem,calc(100vw-2rem))] p-1.5"
+        >
+          <div className="relative mb-1.5">
+            <Search className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-muted-foreground" />
+            <Input
+              autoFocus
+              aria-label="Search Tailscale networks"
+              className="h-8 pl-8"
+              placeholder="Search networks"
+              value={query}
+              onChange={(event) => setQuery(event.currentTarget.value)}
+            />
+          </div>
+          <div
+            role="listbox"
+            aria-label="Tailscale networks"
+            className="no-scrollbar max-h-72 space-y-0.5 overflow-y-auto overscroll-contain"
+          >
+            {visibleStacks.map((stack) => (
+              <button
+                key={stack.id}
+                type="button"
+                role="option"
+                aria-selected={stack.id === selectedStack?.id}
+                className={`flex w-full items-center gap-3 rounded-lg px-2.5 py-2.5 text-left transition-colors duration-150 ${
+                  stack.id === selectedStack?.id
+                    ? "bg-primary/14 ring-1 ring-primary/35"
+                    : "hover:bg-accent/55"
+                }`}
+                onClick={() => {
+                  onSelect(stack.id)
+                  setOpen(false)
+                }}
+              >
+                <span className="grid size-8 shrink-0 place-items-center rounded-md border border-border/70 bg-background/70 text-muted-foreground">
+                  <Network className="size-4" />
+                </span>
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-sm font-semibold tracking-tight">
+                    {stack.name}
+                  </span>
+                  <span className="type-support mt-0.5 block truncate font-mono text-muted-foreground">
+                    .{stack.domain} · {stack.bindings.length} connected
+                  </span>
+                </span>
+                {stack.id === selectedStack?.id ? (
+                  <Check className="size-4 shrink-0 text-primary" />
+                ) : null}
+              </button>
+            ))}
+            {visibleStacks.length === 0 ? (
+              <p className="px-3 py-6 text-center text-xs text-muted-foreground">
+                No networks match your search.
+              </p>
+            ) : null}
+          </div>
+        </PopoverContent>
+      </Popover>
+    </div>
+  )
+})
+
+const TailscaleToolbar = React.memo(function TailscaleToolbar({
+  canAddServer,
+  searchStore,
+  onAddNetwork,
+  onAddServer,
+}: {
+  canAddServer: boolean
+  searchStore: WorkspaceTableSearchStore
+  onAddNetwork: () => void
+  onAddServer: () => void
 }) {
   const [mobileSearchOpen, setMobileSearchOpen] = React.useState(false)
   const searchInputRef = React.useRef<HTMLInputElement>(null)
@@ -182,14 +412,14 @@ const TailscaleToolbar = React.memo(function TailscaleToolbar({
               type="button"
               size="icon"
               variant="outline"
-              aria-label="Search Tailscale networks"
+              aria-label="Search connected servers"
               className="sm:hidden"
               onClick={() => setMobileSearchOpen(true)}
             >
               <Search />
             </Button>
           </TooltipTrigger>
-          <TooltipContent side="bottom">Search networks</TooltipContent>
+          <TooltipContent side="bottom">Search servers</TooltipContent>
         </Tooltip>
       ) : null}
 
@@ -204,7 +434,7 @@ const TailscaleToolbar = React.memo(function TailscaleToolbar({
           type="button"
           size="icon"
           variant="ghost"
-          aria-label="Close network search"
+          aria-label="Close server search"
           className="sm:hidden"
           onClick={() => {
             searchStore.set("")
@@ -217,11 +447,21 @@ const TailscaleToolbar = React.memo(function TailscaleToolbar({
 
       <Button
         type="button"
-        className={`${mobileSearchOpen ? "hidden sm:inline-flex" : ""} ml-auto`}
-        onClick={onAdd}
+        variant="outline"
+        className={`${mobileSearchOpen ? "hidden lg:inline-flex" : ""} ml-auto`}
+        onClick={onAddNetwork}
       >
         <Plus />
         Add Network
+      </Button>
+      <Button
+        type="button"
+        disabled={!canAddServer}
+        className={mobileSearchOpen ? "hidden sm:inline-flex" : ""}
+        onClick={onAddServer}
+      >
+        <Server />
+        Add Server
       </Button>
     </div>
   )
@@ -238,7 +478,7 @@ const TailscaleSyncButton = React.memo(function TailscaleSyncButton() {
           type="button"
           size="icon"
           variant="outline"
-          aria-label="Sync Tailscale networks"
+          aria-label="Refresh Tailscale servers"
           aria-busy={syncing}
           disabled={syncing}
           onClick={() => {
@@ -246,9 +486,14 @@ const TailscaleSyncButton = React.memo(function TailscaleSyncButton() {
             forkPromise(() =>
               ensuringPromise(
                 () =>
-                  queryClient.invalidateQueries({
-                    queryKey: queryKeys.tailscaleStacks,
-                  }),
+                  Promise.all([
+                    queryClient.invalidateQueries({
+                      queryKey: queryKeys.tailscaleStacks,
+                    }),
+                    queryClient.invalidateQueries({
+                      queryKey: queryKeys.relay.snapshot,
+                    }),
+                  ]),
                 () => setSyncing(false)
               )
             )
@@ -257,7 +502,7 @@ const TailscaleSyncButton = React.memo(function TailscaleSyncButton() {
           <RefreshCw className={syncing ? "animate-spin" : undefined} />
         </Button>
       </TooltipTrigger>
-      <TooltipContent side="bottom">Sync networks</TooltipContent>
+      <TooltipContent side="bottom">Refresh servers</TooltipContent>
     </Tooltip>
   )
 })
@@ -279,250 +524,13 @@ const TailscaleSearchInput = React.memo(function TailscaleSearchInput({
         type="search"
         defaultValue={store.getServerSnapshot()}
         onChange={(event) => store.set(event.currentTarget.value)}
-        placeholder="Search networks"
-        aria-label="Search Tailscale networks"
+        placeholder="Search connected servers"
+        aria-label="Search connected servers"
         className="pl-9 text-base md:text-sm"
       />
     </div>
   )
 })
-
-const TailscaleTable = React.memo(function TailscaleTable({
-  searchStore,
-  stacks,
-  onAdd,
-  onEdit,
-  onRemove,
-}: {
-  searchStore: WorkspaceTableSearchStore
-  stacks: Array<TailscaleStackOverview>
-  onAdd: () => void
-  onEdit: (id: string) => void
-  onRemove: (id: string) => void
-}) {
-  const renderRow = React.useCallback(
-    (stack: TailscaleStackOverview) => (
-      <TailscaleTableRow stack={stack} onEdit={onEdit} onRemove={onRemove} />
-    ),
-    [onEdit, onRemove]
-  )
-  const renderEmpty = React.useCallback(
-    (searchActive: boolean) => (
-      <EmptyTailscaleTable searchActive={searchActive} onAdd={onAdd} />
-    ),
-    [onAdd]
-  )
-
-  return (
-    <WorkspaceDataTable
-      getRowKey={tailscaleRowKey}
-      getSearchText={tailscaleSearchText}
-      head={<TailscaleTableHead />}
-      items={stacks}
-      renderEmpty={renderEmpty}
-      renderRow={renderRow}
-      searchStore={searchStore}
-    />
-  )
-})
-
-const TailscaleTableHead = React.memo(function TailscaleTableHead() {
-  return (
-    <WorkspaceTableHead>
-      <WorkspaceTableHeading className="w-auto sm:w-[34%]">
-        Network Name
-      </WorkspaceTableHeading>
-      <WorkspaceTableHeading className="hidden w-[16%] sm:table-cell">
-        Number of nodes
-      </WorkspaceTableHeading>
-      <WorkspaceTableHeading className="hidden w-[16%] md:table-cell">
-        Number of servers
-      </WorkspaceTableHeading>
-      <WorkspaceTableHeading className="hidden w-[18%] lg:table-cell">
-        Network TLD
-      </WorkspaceTableHeading>
-      <WorkspaceTableHeading className="w-40 px-2 text-right sm:w-44 sm:px-3">
-        Actions
-      </WorkspaceTableHeading>
-    </WorkspaceTableHead>
-  )
-})
-
-const TailscaleTableRow = React.memo(function TailscaleTableRow({
-  stack,
-  onEdit,
-  onRemove,
-}: {
-  stack: TailscaleStackOverview
-  onEdit: (id: string) => void
-  onRemove: (id: string) => void
-}) {
-  const copyNetworkId = React.useCallback(() => {
-    forkPromise(
-      async () => {
-        await navigator.clipboard.writeText(stack.id)
-        showToast({ message: "Network ID copied", type: "success" })
-      },
-      () =>
-        showToast({
-          message: "The network ID could not be copied",
-          type: "error",
-        })
-    )
-  }, [stack.id])
-
-  return (
-    <tr className="group transition-colors hover:bg-accent/25">
-      <WorkspaceTableCell>
-        <div className="flex min-w-0 items-center gap-2.5">
-          <span className="grid size-7 shrink-0 place-items-center rounded-md border border-border/70 bg-background/35 text-primary">
-            <Network className="size-3.5" />
-          </span>
-          <div className="min-w-0">
-            <div className="flex min-w-0 items-center gap-2">
-              <p className="truncate text-xs font-semibold text-foreground">
-                {stack.name}
-              </p>
-              {stack.cleanup ? (
-                <Badge
-                  variant="outline"
-                  className="shrink-0 text-amber-400"
-                  title={
-                    stack.cleanup.lastError ??
-                    "Cleanup will continue automatically"
-                  }
-                >
-                  Removing · {stack.cleanup.pendingRelays} pending
-                </Badge>
-              ) : null}
-            </div>
-            <p className="type-meta font-mono text-muted-foreground sm:hidden">
-              {stack.deployments.length} nodes · {stack.bindings.length} servers
-              · .{stack.domain}
-            </p>
-          </div>
-        </div>
-      </WorkspaceTableCell>
-      <WorkspaceTableCell className="hidden sm:table-cell">
-        <span className="type-code text-foreground">
-          {stack.cleanup?.pendingRelays ?? stack.deployments.length}
-        </span>
-      </WorkspaceTableCell>
-      <WorkspaceTableCell className="hidden md:table-cell">
-        <span className="type-code text-foreground">
-          {stack.bindings.length}
-        </span>
-      </WorkspaceTableCell>
-      <WorkspaceTableCell className="hidden lg:table-cell">
-        <span className="type-code text-foreground">{stack.domain}</span>
-      </WorkspaceTableCell>
-      <WorkspaceTableCell className="px-2 sm:px-3">
-        <div className="flex items-center justify-end gap-1">
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                type="button"
-                size="icon-sm"
-                variant="ghost"
-                disabled={Boolean(stack.cleanup)}
-                aria-label={`Edit ${stack.name}`}
-                onClick={() => onEdit(stack.id)}
-              >
-                <Pencil />
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent side="left">Edit</TooltipContent>
-          </Tooltip>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                asChild={!stack.cleanup}
-                type="button"
-                size="icon-sm"
-                variant="ghost"
-                disabled={Boolean(stack.cleanup)}
-                aria-label={`Configure ${stack.name}`}
-              >
-                {!stack.cleanup ? (
-                  <Link to="/infra/tailscale" search={{ network: stack.id }}>
-                    <Settings2 />
-                  </Link>
-                ) : (
-                  <Settings2 />
-                )}
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent side="left">Configure</TooltipContent>
-          </Tooltip>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                type="button"
-                size="icon-sm"
-                variant="ghost"
-                disabled={Boolean(stack.cleanup)}
-                aria-label={`Delete ${stack.name}`}
-                className="text-destructive hover:text-destructive"
-                onClick={() => onRemove(stack.id)}
-              >
-                <Trash2 />
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent side="left">Delete</TooltipContent>
-          </Tooltip>
-          <DropdownMenu>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <DropdownMenuTrigger asChild>
-                  <Button
-                    type="button"
-                    size="icon-sm"
-                    variant="ghost"
-                    aria-label={`More actions for ${stack.name}`}
-                  >
-                    <EllipsisVertical />
-                  </Button>
-                </DropdownMenuTrigger>
-              </TooltipTrigger>
-              <TooltipContent side="left">More actions</TooltipContent>
-            </Tooltip>
-            <DropdownMenuContent align="end" className="min-w-36">
-              <DropdownMenuItem onSelect={copyNetworkId}>
-                <Copy />
-                Copy ID
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
-        </div>
-      </WorkspaceTableCell>
-    </tr>
-  )
-})
-
-function EmptyTailscaleTable({
-  searchActive,
-  onAdd,
-}: {
-  searchActive: boolean
-  onAdd: () => void
-}) {
-  return (
-    <div className="flex min-h-64 flex-col items-center justify-center px-6 py-12 text-center">
-      <Network className="size-6 text-muted-foreground/45" />
-      <p className="mt-3 text-sm font-semibold">
-        {searchActive
-          ? "No networks match your search"
-          : "No Tailscale networks"}
-      </p>
-      {!searchActive ? (
-        <Button type="button" size="sm" className="mt-4" onClick={onAdd}>
-          <Plus />
-          Add Network
-        </Button>
-      ) : null}
-    </div>
-  )
-}
 
 const EditNetworkDialog = React.memo(function EditNetworkDialog({
   open,
@@ -895,20 +903,4 @@ function stackSaveInput(
     id: stack.id,
     name: overrides.name ?? stack.name,
   }
-}
-
-function tailscaleRowKey(stack: TailscaleStackOverview): string {
-  return stack.id
-}
-
-function tailscaleSearchText(stack: TailscaleStackOverview): string {
-  return [
-    stack.name,
-    stack.domain,
-    String(stack.deployments.length),
-    String(stack.bindings.length),
-    ...stack.deployments.map((deployment) => deployment.relayName),
-  ]
-    .join(" ")
-    .toLowerCase()
 }

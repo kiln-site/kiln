@@ -67,10 +67,7 @@ import {
   useInstancePermissions,
   useInstanceRelayConnected,
 } from "@/components/instance-workspace-context"
-import {
-  GameServerTailscaleSection,
-  TailscaleNetworkMembershipPage,
-} from "@/components/tailscale-network-membership"
+import { GameServerTailscaleSection } from "@/components/tailscale-network-membership"
 import {
   WorkspaceTableCell,
   WorkspaceTableHead,
@@ -94,10 +91,8 @@ import {
 
 export function InstanceNetworkPage({
   editGamePort = false,
-  highlightedTailscaleMember,
 }: {
   editGamePort?: boolean
-  highlightedTailscaleMember?: string
 }) {
   const instance = useInstanceIdentity()
   const { data: isPlatformAdmin } = useSuspenseQuery({
@@ -106,15 +101,10 @@ export function InstanceNetworkPage({
   })
 
   if (instance.implementation.toLowerCase() === "tailscale") {
-    return isPlatformAdmin ? (
-      <TailscaleNetworkMembershipPage
-        highlightedServerKey={highlightedTailscaleMember}
-        stackId={instance.id}
-      />
-    ) : (
-      <div className="grid min-h-0 flex-1 place-items-center bg-background/55">
+    return (
+      <div className="grid min-h-0 flex-1 place-items-center bg-background/55 px-6 text-center">
         <p className="text-sm text-muted-foreground">
-          Platform administrator access is required to configure this network.
+          This internal service is managed from Infrastructure → Tailscale.
         </p>
       </div>
     )

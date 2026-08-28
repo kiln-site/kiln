@@ -12,8 +12,6 @@ import { requireInfrastructureDestinationAccess } from "@/lib/route-access"
 export const Route = createFileRoute("/_app/infra/tailscale")({
   validateSearch: z.object({
     create: z.boolean().optional(),
-    member: z.string().optional(),
-    network: z.string().optional(),
   }),
   beforeLoad: async ({ context }) => {
     await requireInfrastructureDestinationAccess(
@@ -31,14 +29,12 @@ export const Route = createFileRoute("/_app/infra/tailscale")({
 })
 
 function TailscaleRoute() {
-  const { create = false, member, network } = Route.useSearch()
+  const { create = false } = Route.useSearch()
   const navigate = Route.useNavigate()
 
   return (
     <TailscalePage
       createOpen={create}
-      highlightedServerKey={member}
-      selectedNetworkId={network}
       onCreateOpenChange={(open) => {
         void navigate({
           replace: !open,
