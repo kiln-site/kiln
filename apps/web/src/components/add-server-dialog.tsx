@@ -32,11 +32,7 @@ import {
   defaultBrickInstanceName,
   defaultBrickVariables,
 } from "@/lib/brick-variables"
-import {
-  addRelayInstanceToSnapshot,
-  relayInstanceRouteId,
-  type RelayFleetSnapshot,
-} from "@/lib/relay-fleet"
+import { relayFleetInstance, relayInstanceRouteId } from "@/lib/relay-fleet"
 import type { PersistedRelay } from "@/lib/relay-registry"
 import {
   brickCatalogQueryOptions,
@@ -44,6 +40,7 @@ import {
   relayConnectionQueryOptions,
 } from "@/lib/query-options"
 import type { RelayConnection } from "@/lib/query-options"
+import { applyProvisioningInstance } from "@/lib/realtime-client"
 import { createBrickInstance } from "@/server/bricks"
 
 type AddServerDialogState = { kind: "closed" } | { kind: "open" }
@@ -178,15 +175,9 @@ const AddServerForm = React.memo(function AddServerForm({
       const relay = relays.find((item) => item.id === variables.data.relayId)
       if (!relay) throw new Error("Provisioning Relay is no longer available")
 
-      const addInstance = (snapshot: RelayFleetSnapshot | undefined) =>
-        addRelayInstanceToSnapshot(snapshot, instance, relay)
-      queryClient.setQueryData(queryKeys.relay.snapshot, addInstance)
-      queryClient.setQueryData<RelayConnection>(
-        queryKeys.relay.connection,
-        (connection) =>
-          connection?.status === "connected"
-            ? { ...connection, snapshot: addInstance(connection.snapshot)! }
-            : connection
+      applyProvisioningInstance(
+        queryClient,
+        relayFleetInstance(instance, relay)
       )
       onClose()
       await navigate({

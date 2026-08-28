@@ -80,6 +80,7 @@ import {
 } from "@/lib/relay-client"
 import type { RelayEndpoint } from "@/lib/relay-client"
 import {
+  relayFleetInstance,
   relayInstanceRouteId,
   type RelayFleetSnapshot,
   type RelayReachability,
@@ -222,6 +223,27 @@ export const getFreshRelaySnapshot = createServerFn({ method: "POST" }).handler(
     return authorizedFleetSnapshot(user, false, true)
   }
 )
+
+export const getFreshRelayInstance = createServerFn({ method: "POST" })
+  .validator(instanceInputSchema)
+  .handler(async ({ data }) => {
+    const { relay, user } = await instanceRelayAccess(data.relayId)
+    await requireRelayPermission({
+      user,
+      relayId: relay.id,
+      permission: "instance.read",
+      instanceId: data.instanceId,
+    })
+    const instance = (await freshRelaySnapshot(relay)).instances.find(
+      (candidate) => candidate.id === data.instanceId
+    )
+    if (!instance) return null
+    const [managed] = await runAppEffect(
+      "domains.assignments.applyInstance",
+      applyManagedDomainAddressesEffect([relayFleetInstance(instance, relay)])
+    )
+    return managed ?? null
+  })
 
 export const getRelayInstances = createServerFn({ method: "POST" }).handler(
   async () => {
@@ -462,7 +484,14 @@ export const updateInstanceWebRoutes = createServerFn({ method: "POST" })
       data.relayId,
       240_000
     )
-    return relayInstanceWebRouteStateSchema.parse(value)
+    const routes = relayInstanceWebRouteStateSchema.parse(value)
+    publishRealtimeChange({
+      audience: { kind: "relays", relayIds: [data.relayId] },
+      scope: { instanceId: data.instanceId, relayId: data.relayId },
+      topics: ["instance-web-routes"],
+      type: "hearth.invalidate",
+    })
+    return routes
   })
 
 export const updateInstancePorts = createServerFn({ method: "POST" })
@@ -1015,10 +1044,7 @@ async function recordFileActivityBestEffort(
   )
 }
 
-function publishFileActivityChange(
-  relayId: string,
-  instanceId: string
-): void {
+function publishFileActivityChange(relayId: string, instanceId: string): void {
   publishRealtimeChange({
     audience: { kind: "relays", relayIds: [relayId] },
     scope: { instanceId, relayId },

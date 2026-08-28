@@ -122,6 +122,8 @@ export const queryKeys = {
       ["relay", relayId, "instances", instanceId, "recipe"] as const,
     snapshot: ["relay", "snapshot"] as const,
     instances: ["relay", "instances"] as const,
+    webRoutes: (relayId: string, instanceId: string) =>
+      ["web-routes", relayId, instanceId] as const,
     tree: (relayId: string, instanceId: string) =>
       ["relay", relayId, "instances", instanceId, "files", "tree"] as const,
   },

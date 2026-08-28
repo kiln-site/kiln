@@ -27,12 +27,16 @@ import type {
   RealtimeClientEvent,
 } from "@/lib/realtime-events"
 import { realtimeEventRefreshesHearth } from "@/lib/realtime-events"
+import {
+  encodeRealtimeHeartbeat,
+  realtimeHeartbeatIntervalMs,
+} from "@/lib/realtime-heartbeat"
 
-const heartbeatIntervalMs = 15_000
 const maximumProcessingBacklog = 64
 const maximumStreamBufferBytes = 256 * 1024
 const sessionValidationIntervalMs = 60_000
 const encoder = new TextEncoder()
+const heartbeatFrame = encodeRealtimeHeartbeat(encoder)
 
 type RealtimeCursor = Pick<RealtimeSourceEvent, "epoch" | "sequence">
 
@@ -143,6 +147,8 @@ export async function openAuthorizedRealtimeStream(input: {
       return
     }
 
+    // classifyRealtimeEvent closes or ignores these before projection. Keep the
+    // guard here so processEvent remains exhaustively safe if called elsewhere.
     if (event.type === "session.revoked") return
 
     if (event.type === "hearth.invalidate") {
@@ -208,13 +214,12 @@ export async function openAuthorizedRealtimeStream(input: {
     if (!relay || !policy.readableRelays.has(relay.id)) return
 
     if (event.type === "relay.state") {
-      // Connection state only changes the Relay fleet snapshot, so keep one
-      // client event per source sequence and avoid a redundant control-plane
-      // fetch.
       enqueue({
         epoch: event.epoch,
+        relayId: event.relayId,
         sequence: event.sequence,
-        type: "relay.invalidate",
+        status: reachability(event.relayId),
+        type: "relay.status",
       })
       return
     }
@@ -366,8 +371,8 @@ export async function openAuthorizedRealtimeStream(input: {
         // this tab was disconnected cannot leave an Infinity-stale domain.
         enqueueReset(undefined, false, true)
         heartbeat = setInterval(() => {
-          if (!closed) tryEnqueue(encoder.encode(": heartbeat\n\n"))
-        }, heartbeatIntervalMs)
+          if (!closed) tryEnqueue(heartbeatFrame)
+        }, realtimeHeartbeatIntervalMs)
         if (input.signal.aborted) abort()
       },
       pull() {

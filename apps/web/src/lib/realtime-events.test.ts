@@ -101,4 +101,15 @@ describe("realtime client events", () => {
       }).success
     ).toBe(false)
   })
+
+  it("validates lightweight Relay reachability updates", () => {
+    expect(
+      realtimeClientEventSchema.safeParse({
+        ...cursor,
+        relayId,
+        status: "unreachable",
+        type: "relay.status",
+      }).success
+    ).toBe(true)
+  })
 })

@@ -31,7 +31,7 @@ replace MySQL, Relay state, or high-frequency Relay streams.
 | Tailscale deployments and observed node state                      | Relay     | Projected through the `tailscale` query                    |
 | Relay audit history                                                | Relay     | `activity` invalidation after audited control mutations    |
 | Pinned and recently viewed file records                            | Hearth    | Relay-reader `file-activity` invalidation                  |
-| Server definitions, names, startup, ports, routes, and power state | Relay     | Incremental instance deltas                                |
+| Server definitions, names, startup, ports, routes, and power state | Relay     | Instance deltas plus exact route-query invalidation        |
 | Relay health, host facts, and resource observations                | Relay     | Incremental Relay snapshot deltas                          |
 | Containers, processes, console output, and host-local execution    | Relay     | Purpose-built Relay streams and commands                   |
 | Files, directory entries, file metadata, and file contents         | Relay     | Outside this rollout; never copied into Hearth collections |
@@ -79,11 +79,17 @@ offline, but it does not become the authority for that intent.
   validation covers revocations handled by another process.
 - The per-client queue is bounded. A slow client receives a coalesced reset
   instead of allowing memory or stale deltas to grow without limit.
-- A 15-second comment heartbeat keeps intermediaries from idling out the
-  stream without creating application-level renders.
+- A 15-second named ping, accompanied by an SSE comment, keeps intermediaries
+  and the browser watchdog active without creating application-level renders.
+  Forty-five seconds without a delivered frame triggers an authoritative
+  recovery and a fresh EventSource connection.
 - Successful audited Relay mutations publish one `activity` invalidation at
   the shared RPC boundary. Read operations never do, which keeps feature code
   simpler without adding background Activity polling.
+- Mutation fan-out is currently process-local. Kiln's supported Compose image
+  runs one Hearth application process; horizontally replicated Hearth workers
+  require a shared pubsub transport before they are supported. Periodic session
+  validation protects cross-process revocation, but it is not mutation fan-out.
 
 ## Performance and lifecycle
 
@@ -104,10 +110,26 @@ offline, but it does not become the authority for that intent.
   refresh and fleet recovery requirements.
 - The server list projects only fields it displays, so resource-only Relay
   samples do not trigger collection writes, rebuilds, or row repaints.
+- Relay snapshot delta v1 compares control fields without resources. A rare
+  control change still carries one complete v1 row, including its current
+  resource sample, so old and new Relays reconstruct the same snapshot without
+  a protocol break.
+- Schedule views retain a visible-only 15-second reconciliation poll because
+  Relay-originated executions and acknowledged next-run times are imported into
+  Hearth by that read path. User mutations still invalidate every active tab
+  immediately.
+- Provisioning fallback reads only the owning Relay and upserts only the active
+  instance; it does not poll or replace the full authorized fleet.
+- Relay connection transitions rewrite only that Relay's reachability fields
+  in the existing rows. A reconnect's subsequent snapshot-reset event remains
+  the authoritative recovery boundary for deltas missed while offline.
 - Collection IDs include business scope. Filters, ordering, and pagination do
   not create additional collection instances.
-- Authentication changes clean up the previous DB client before another
-  user's collections can be materialized.
+- Sign-in and sign-out use full-document navigation. The old JavaScript realm
+  is discarded before the next router creates its per-session Query and DB
+  clients, so one user's collections cannot materialize for another user.
+- TanStack DB and the router integration remain pinned while their APIs are
+  pre-1.0; upgrades are deliberate and validated as part of this boundary.
 - Realtime payloads contain safe client DTOs only; encrypted credentials,
   hashes, tokens, and host paths are excluded at the source.
 

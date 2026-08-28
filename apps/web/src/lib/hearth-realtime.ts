@@ -39,6 +39,7 @@ const hearthRealtimeQueryScopes = {
   databases: [exact(queryKeys.databases.list)],
   domains: [prefix(["domains"])],
   "file-activity": [prefix(["file-activity"])],
+  "instance-web-routes": [prefix(["web-routes"])],
   preferences: [exact(queryKeys.uiPreferences)],
   "relay-health": [exact(queryKeys.relays)],
   "relay-proxy": [prefix(["relays", "proxy"])],
@@ -86,6 +87,9 @@ function queryScopes(
   }
   if (topic === "file-activity" && scope?.instanceId) {
     return [exact(queryKeys.fileActivity(scope.relayId, scope.instanceId))]
+  }
+  if (topic === "instance-web-routes" && scope?.instanceId) {
+    return [exact(queryKeys.relay.webRoutes(scope.relayId, scope.instanceId))]
   }
   if (topic === "relay-proxy" && scope) {
     return [exact(["relays", "proxy", scope.relayId])]

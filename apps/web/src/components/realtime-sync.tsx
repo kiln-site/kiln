@@ -17,10 +17,15 @@ import {
 } from "@/lib/hearth-realtime-topics"
 import { reconcilePendingPowerSnapshot } from "@/lib/instance-power-state"
 import {
-  applyRealtimeEvent,
+  applyRecoveredRelaySnapshot,
+  applyRealtimeEventSafely,
   parseRealtimeEventData,
   resetRealtimeEpoch,
 } from "@/lib/realtime-client"
+import {
+  realtimeHeartbeatIntervalMs,
+  realtimeStreamIsStale,
+} from "@/lib/realtime-heartbeat"
 import {
   realtimeClientEventSchema,
   type RealtimeClientEvent,
@@ -38,7 +43,7 @@ export const RealtimeSync = React.memo(function RealtimeSync() {
 
   React.useEffect(() => {
     const instances = getRelayInstancesCollection(dbClient)
-    const source = new EventSource("/api/realtime")
+    let source: EventSource | null = null
     let closed = false
     let resetRequested = false
     let connectionRefetchRequested = false
@@ -54,6 +59,8 @@ export const RealtimeSync = React.memo(function RealtimeSync() {
     let refreshingHearth: Promise<void> | null = null
     let hearthRefreshRetry: ReturnType<typeof setTimeout> | null = null
     let hearthRefreshFailures = 0
+    let lastStreamActivityAt = Date.now()
+    let streamWatchdog: ReturnType<typeof setInterval> | null = null
     const pendingHearthRefreshes = new Map<
       string,
       {
@@ -73,10 +80,7 @@ export const RealtimeSync = React.memo(function RealtimeSync() {
       queryClient.setQueryData(queryKeys.relay.snapshot, snapshot)
       queryClient.setQueryData<RelayConnection>(
         queryKeys.relay.connection,
-        (connection) =>
-          connection?.status === "connected"
-            ? { ...connection, snapshot }
-            : connection
+        (connection) => applyRecoveredRelaySnapshot(connection, snapshot)
       )
       return true
     }
@@ -238,12 +242,7 @@ export const RealtimeSync = React.memo(function RealtimeSync() {
                 )
                 bufferedEvents = []
                 for (const event of replay) {
-                  applyRealtimeEvent({
-                    event,
-                    instances,
-                    queryClient,
-                    refreshTopics: requestHearthRefresh,
-                  })
+                  if (!applyEventOrRecover(event)) break
                 }
               }
             },
@@ -273,8 +272,28 @@ export const RealtimeSync = React.memo(function RealtimeSync() {
       )
     }
 
+    const applyEventOrRecover = (
+      event: Exclude<
+        RealtimeClientEvent,
+        { type: "relay.invalidate" | "reset" }
+      >
+    ): boolean =>
+      applyRealtimeEventSafely(
+        {
+          event,
+          instances,
+          queryClient,
+          refreshTopics: requestHearthRefresh,
+        },
+        (cause) => {
+          console.warn("[Kiln realtime] Could not apply event", cause)
+          requestReset(false, event.sequence, true)
+        }
+      )
+
     const handleEvent = (message: Event) => {
       if (!(message instanceof MessageEvent) || closed) return
+      lastStreamActivityAt = Date.now()
       const parsed = realtimeClientEventSchema.safeParse(
         parseRealtimeEventData(message.data)
       )
@@ -331,12 +350,10 @@ export const RealtimeSync = React.memo(function RealtimeSync() {
         if (epochChanged) requestReset(false, 0, !initialEpoch)
         return
       }
-      applyRealtimeEvent({
-        event,
-        instances,
-        queryClient,
-        refreshTopics: requestHearthRefresh,
-      })
+      applyEventOrRecover(event)
+    }
+    const handleActivity = () => {
+      if (!closed) lastStreamActivityAt = Date.now()
     }
     const handleError = () => {
       if (closed || checkingAuthentication) return
@@ -349,7 +366,7 @@ export const RealtimeSync = React.memo(function RealtimeSync() {
                 .then((auth) => {
                   if (auth.user || closed) return
                   closed = true
-                  source.close()
+                  disconnectSource()
                 }),
             () => undefined
           ),
@@ -358,15 +375,42 @@ export const RealtimeSync = React.memo(function RealtimeSync() {
         }
       )
     }
-    source.addEventListener("kiln", handleEvent)
-    source.addEventListener("error", handleError)
+    const disconnectSource = () => {
+      const activeSource = source
+      if (!activeSource) return
+      source = null
+      activeSource.removeEventListener("kiln", handleEvent)
+      activeSource.removeEventListener("open", handleActivity)
+      activeSource.removeEventListener("ping", handleActivity)
+      activeSource.removeEventListener("error", handleError)
+      activeSource.close()
+    }
+    const connectSource = () => {
+      if (closed) return
+      const nextSource = new EventSource("/api/realtime")
+      source = nextSource
+      lastStreamActivityAt = Date.now()
+      nextSource.addEventListener("kiln", handleEvent)
+      nextSource.addEventListener("open", handleActivity)
+      nextSource.addEventListener("ping", handleActivity)
+      nextSource.addEventListener("error", handleError)
+    }
+    connectSource()
+    streamWatchdog = setInterval(() => {
+      if (closed || !realtimeStreamIsStale(lastStreamActivityAt, Date.now())) {
+        return
+      }
+      console.warn("[Kiln realtime] Stream heartbeat timed out; reconnecting")
+      requestReset(true, 0, true)
+      disconnectSource()
+      connectSource()
+    }, realtimeHeartbeatIntervalMs)
     return () => {
       closed = true
       if (recoveryRetry) clearTimeout(recoveryRetry)
       if (hearthRefreshRetry) clearTimeout(hearthRefreshRetry)
-      source.removeEventListener("kiln", handleEvent)
-      source.removeEventListener("error", handleError)
-      source.close()
+      if (streamWatchdog) clearInterval(streamWatchdog)
+      disconnectSource()
     }
   }, [dbClient, queryClient])
 

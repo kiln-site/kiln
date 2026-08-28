@@ -1,6 +1,5 @@
 import * as React from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import type { QueryClient } from "@tanstack/react-query"
 import { Effect } from "effect"
 import {
   Archive,
@@ -30,12 +29,8 @@ import {
 } from "@workspace/ui/components/select"
 import { showToast } from "@workspace/ui/components/sonner"
 
-import type { RelayFleetSnapshot } from "@/lib/relay-fleet"
-import {
-  backupStorageQueryOptions,
-  queryKeys,
-  type RelayConnection,
-} from "@/lib/query-options"
+import { backupStorageQueryOptions } from "@/lib/query-options"
+import { applyDeletedInstance } from "@/lib/realtime-client"
 import { deleteInstance } from "@/server/relay"
 
 export interface ServerDeleteTarget {
@@ -67,7 +62,11 @@ export const ServerDeleteDialog = React.memo(function ServerDeleteDialog({
   const [backupDestination, setBackupDestination] = React.useState("default")
   const deletion = useMutation({
     mutationFn: deleteInstance,
-    onSuccess: () => removeDeletedInstanceFromCache(queryClient, target),
+    onSuccess: () =>
+      applyDeletedInstance(queryClient, {
+        instanceId: target.id,
+        relayId: target.relayId,
+      }),
   })
   const pending = deletion.isPending
   const confirmed = confirmation === target.id
@@ -395,37 +394,3 @@ const FinalBackupFields = React.memo(function FinalBackupFields({
     </div>
   )
 })
-
-function removeDeletedInstanceFromCache(
-  queryClient: QueryClient,
-  target: ServerDeleteTarget
-): void {
-  queryClient.setQueryData<RelayFleetSnapshot>(
-    queryKeys.relay.snapshot,
-    (snapshot) =>
-      snapshot ? removeDeletedInstance(snapshot, target) : undefined
-  )
-  queryClient.setQueryData<RelayConnection>(
-    queryKeys.relay.connection,
-    (connection) =>
-      connection?.status === "connected"
-        ? {
-            ...connection,
-            snapshot: removeDeletedInstance(connection.snapshot, target),
-          }
-        : connection
-  )
-}
-
-function removeDeletedInstance(
-  snapshot: RelayFleetSnapshot,
-  target: ServerDeleteTarget
-): RelayFleetSnapshot {
-  return {
-    ...snapshot,
-    instances: snapshot.instances.filter(
-      (instance) =>
-        instance.id !== target.id || instance.relayId !== target.relayId
-    ),
-  }
-}

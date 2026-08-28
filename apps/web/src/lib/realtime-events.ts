@@ -60,6 +60,11 @@ export const realtimeClientEventSchema = z.discriminatedUnion("type", [
     type: z.literal("nodes.delta"),
   }),
   sequencedEventSchema.extend({
+    relayId: relayIdSchema,
+    status: z.enum(["connected", "unreachable"]),
+    type: z.literal("relay.status"),
+  }),
+  sequencedEventSchema.extend({
     scope: hearthScopeSchema.optional(),
     topics: z.array(hearthRealtimeTopicSchema).min(1).max(8).optional(),
     type: z.literal("relay.invalidate"),

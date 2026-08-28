@@ -56,6 +56,22 @@ describe("Hearth realtime query refresh", () => {
     ).toBe(false)
   })
 
+  it("refreshes only the changed instance web routes", async () => {
+    const queryClient = new QueryClient()
+    const changedRoutes = queryKeys.relay.webRoutes("relay-a", "instance-a")
+    const otherRoutes = queryKeys.relay.webRoutes("relay-a", "instance-b")
+    queryClient.setQueryData(changedRoutes, { routes: [] })
+    queryClient.setQueryData(otherRoutes, { routes: [] })
+
+    await refreshHearthRealtimeTopics(queryClient, ["instance-web-routes"], {
+      instanceId: "instance-a",
+      relayId: "relay-a",
+    })
+
+    expect(queryClient.getQueryState(changedRoutes)?.isInvalidated).toBe(true)
+    expect(queryClient.getQueryState(otherRoutes)?.isInvalidated).toBe(false)
+  })
+
   it("refreshes access capabilities but keeps invitation previews out", async () => {
     const queryClient = new QueryClient()
     const relayAUsers = queryKeys.access.instanceUsers("relay-a", "instance-a")

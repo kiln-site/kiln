@@ -140,7 +140,7 @@ function WebRoutesNetworkPage({
   const relayConnected = useInstanceRelayConnected()
   const queryClient = useQueryClient()
   const queryKey = React.useMemo(
-    () => ["relay", instance.relayId, "web-routes", instance.id] as const,
+    () => queryKeys.relay.webRoutes(instance.relayId, instance.id),
     [instance.id, instance.relayId]
   )
   const routes = useQuery({

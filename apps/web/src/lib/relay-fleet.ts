@@ -24,6 +24,20 @@ export function relayInstanceRouteId(relayId: string, shortId: string): string {
   return `${relayId}-${shortId}`
 }
 
+export function relayFleetInstance(
+  instance: RelayInstance,
+  relay: { id: string; name: string },
+  relayStatus: RelayReachability = "connected"
+): FleetRelayInstance {
+  return {
+    ...instance,
+    relayId: relay.id,
+    relayName: relay.name,
+    relayStatus,
+    routeId: relayInstanceRouteId(relay.id, instance.shortId),
+  }
+}
+
 export function addRelayInstanceToSnapshot(
   snapshot: RelayFleetSnapshot | undefined,
   instance: RelayInstance,
@@ -31,13 +45,7 @@ export function addRelayInstanceToSnapshot(
 ): RelayFleetSnapshot | undefined {
   if (!snapshot) return snapshot
 
-  const relayInstance: FleetRelayInstance = {
-    ...instance,
-    relayId: relay.id,
-    relayName: relay.name,
-    relayStatus: "connected",
-    routeId: relayInstanceRouteId(relay.id, instance.shortId),
-  }
+  const relayInstance = relayFleetInstance(instance, relay)
   const existingIndex = snapshot.instances.findIndex(
     (item) => item.id === instance.id && item.relayId === relay.id
   )

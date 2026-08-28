@@ -15,7 +15,7 @@ import {
 import type { FleetInstance, RealtimeClientEvent } from "@/lib/realtime-events"
 import type { RelayFleetSnapshot } from "@/lib/relay-fleet"
 
-export function applyRealtimeEvent(input: {
+export interface ApplyRealtimeEventInput {
   event: Exclude<RealtimeClientEvent, { type: "relay.invalidate" | "reset" }>
   instances: RelayInstancesCollection
   queryClient: QueryClient
@@ -23,7 +23,9 @@ export function applyRealtimeEvent(input: {
     topics: ReadonlyArray<(typeof hearthRealtimeTopics)[number]>,
     scope?: HearthRealtimeScope
   ) => Promise<void>
-}): void {
+}
+
+export function applyRealtimeEvent(input: ApplyRealtimeEventInput): void {
   const { event, instances, queryClient, refreshTopics } = input
   if (event.type === "collections.invalidate") {
     void (
@@ -38,8 +40,17 @@ export function applyRealtimeEvent(input: {
   )
   queryClient.setQueryData<RelayConnection>(
     queryKeys.relay.connection,
-    (connection) =>
-      connection?.status === "connected"
+    (connection) => {
+      if (event.type === "relay.status") {
+        return applyRealtimeRelayStatus(
+          connection,
+          queryClient.getQueryData<RelayFleetSnapshot>(
+            queryKeys.relay.snapshot
+          ),
+          event
+        )
+      }
+      return connection?.status === "connected"
         ? {
             ...connection,
             snapshot:
@@ -47,6 +58,7 @@ export function applyRealtimeEvent(input: {
               connection.snapshot,
           }
         : connection
+    }
   )
   if (event.type === "instances.delta") {
     if (!instances.isReady()) {
@@ -79,7 +91,43 @@ export function applyRealtimeEvent(input: {
         )
       )
     })
+    return
   }
+  if (event.type === "relay.status") {
+    if (!instances.isReady()) {
+      const snapshot = queryClient.getQueryData<RelayFleetSnapshot>(
+        queryKeys.relay.snapshot
+      )
+      queryClient.setQueryData<Array<FleetInstance>>(
+        queryKeys.relay.instances,
+        snapshot?.instances
+      )
+      return
+    }
+    const changed = instances.toArray.flatMap((instance) =>
+      instance.relayId === event.relayId &&
+      instance.relayStatus !== event.status
+        ? [{ ...instance, relayStatus: event.status }]
+        : []
+    )
+    if (changed.length > 0) instances.utils.writeUpsert(changed)
+  }
+}
+
+export function applyRealtimeEventSafely(
+  input: ApplyRealtimeEventInput,
+  onFailure: (cause: unknown) => void
+): boolean {
+  return Result.match(
+    Result.try(() => applyRealtimeEvent(input)),
+    {
+      onFailure: (cause) => {
+        onFailure(cause)
+        return false
+      },
+      onSuccess: () => true,
+    }
+  )
 }
 
 export function applyRealtimeSnapshotEvent(
@@ -96,6 +144,22 @@ export function applyRealtimeSnapshotEvent(
       return updated ?? node
     })
     return { ...snapshot, nodes: [...nextNodes, ...nodes.values()] }
+  }
+  if (event.type === "relay.status") {
+    return {
+      ...snapshot,
+      instances: snapshot.instances.map((instance) =>
+        instance.relayId === event.relayId &&
+        instance.relayStatus !== event.status
+          ? { ...instance, relayStatus: event.status }
+          : instance
+      ),
+      nodes: snapshot.nodes.map((node) =>
+        node.relayId === event.relayId && node.relayStatus !== event.status
+          ? { ...node, relayStatus: event.status }
+          : node
+      ),
+    }
   }
   return {
     ...snapshot,
@@ -132,7 +196,7 @@ export function applyProvisioningInstance(
 ): void {
   queryClient.setQueryData<RelayFleetSnapshot>(
     queryKeys.relay.snapshot,
-    (snapshot) => replaceRelaySnapshotInstance(snapshot, updated)
+    (snapshot) => upsertRelaySnapshotInstance(snapshot, updated)
   )
   queryClient.setQueryData<RelayConnection>(
     queryKeys.relay.connection,
@@ -141,7 +205,7 @@ export function applyProvisioningInstance(
         ? {
             ...connection,
             snapshot:
-              replaceRelaySnapshotInstance(connection.snapshot, updated) ??
+              upsertRelaySnapshotInstance(connection.snapshot, updated) ??
               connection.snapshot,
           }
         : connection
@@ -162,6 +226,129 @@ export function applyProvisioningInstance(
       )
     }
   )
+}
+
+export function applyDeletedInstance(
+  queryClient: QueryClient,
+  deleted: { instanceId: string; relayId: string }
+): void {
+  const remove = (instances: ReadonlyArray<FleetInstance>) =>
+    instances.filter(
+      (instance) =>
+        instance.id !== deleted.instanceId ||
+        instance.relayId !== deleted.relayId
+    )
+  queryClient.setQueryData<RelayFleetSnapshot>(
+    queryKeys.relay.snapshot,
+    (snapshot) =>
+      snapshot
+        ? { ...snapshot, instances: remove(snapshot.instances) }
+        : snapshot
+  )
+  queryClient.setQueryData<RelayConnection>(
+    queryKeys.relay.connection,
+    (connection) =>
+      connection?.status === "connected"
+        ? {
+            ...connection,
+            snapshot: {
+              ...connection.snapshot,
+              instances: remove(connection.snapshot.instances),
+            },
+          }
+        : connection
+  )
+  queryClient.setQueryData<Array<FleetInstance>>(
+    queryKeys.relay.instances,
+    (instances) => (instances ? remove(instances) : instances)
+  )
+}
+
+export function applyRecoveredRelaySnapshot(
+  connection: RelayConnection | undefined,
+  snapshot: RelayFleetSnapshot
+): RelayConnection | undefined {
+  if (!connection) return connection
+  if (connection.status === "connected") return { ...connection, snapshot }
+  if (
+    connection.status !== "unreachable" ||
+    !connection.relays.some((relay) => relay.status === "connected")
+  ) {
+    return connection
+  }
+  return {
+    relay: relayConnectionSummary(connection.relays),
+    relays: connection.relays,
+    snapshot,
+    status: "connected",
+  }
+}
+
+function applyRealtimeRelayStatus(
+  connection: RelayConnection | undefined,
+  snapshot: RelayFleetSnapshot | undefined,
+  event: Extract<RealtimeClientEvent, { type: "relay.status" }>
+): RelayConnection | undefined {
+  if (
+    !connection ||
+    (connection.status !== "connected" && connection.status !== "unreachable")
+  ) {
+    return connection
+  }
+  const relays = connection.relays.map((relay) =>
+    relay.id === event.relayId ? { ...relay, status: event.status } : relay
+  )
+  const connectedCount = relays.filter(
+    (relay) => relay.status === "connected"
+  ).length
+  const relay = relayConnectionSummary(relays)
+  if (connectedCount === 0) {
+    return {
+      message:
+        relays.length === 1
+          ? "The Relay is configured, but Hearth cannot reach it right now."
+          : "Hearth cannot reach any configured Relay right now.",
+      relay,
+      relays,
+      status: "unreachable",
+    }
+  }
+  if (!snapshot) return { ...connection, relay, relays }
+  return { relay, relays, snapshot, status: "connected" }
+}
+
+function relayConnectionSummary(
+  relays: ReadonlyArray<{
+    id: string
+    name: string
+    status: "connected" | "unreachable"
+  }>
+): { id: string; name: string } {
+  const relay = relays[0]
+  if (relays.length === 1 && relay) return { id: relay.id, name: relay.name }
+  const connectedCount = relays.filter(
+    (candidate) => candidate.status === "connected"
+  ).length
+  return {
+    id: "relay-fleet",
+    name: `${connectedCount}/${relays.length} Relays connected`,
+  }
+}
+
+function upsertRelaySnapshotInstance(
+  snapshot: RelayFleetSnapshot | undefined,
+  updated: FleetInstance
+): RelayFleetSnapshot | undefined {
+  if (!snapshot) return snapshot
+  if (
+    snapshot.instances.some(
+      (instance) =>
+        instance.id === updated.id && instance.relayId === updated.relayId
+    )
+  ) {
+    return replaceRelaySnapshotInstance(snapshot, updated)
+  }
+  return { ...snapshot, instances: [updated, ...snapshot.instances] }
 }
 
 export function mergeRealtimeInstance(

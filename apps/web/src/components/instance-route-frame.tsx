@@ -16,7 +16,7 @@ import {
 import type { UiPreferences } from "@/lib/query-options"
 import { applyProvisioningInstance } from "@/lib/realtime-client"
 import { selectInstanceWorkspaceInstance } from "@/lib/relay-selectors"
-import { getFreshRelaySnapshot } from "@/server/relay"
+import { getFreshRelayInstance } from "@/server/relay"
 
 const initialProvisioningReconciliationDelayMs = 1_000
 const maximumProvisioningReconciliationDelayMs = 10_000
@@ -129,11 +129,10 @@ function ProvisioningReconciler({
         () =>
           recoverPromise(
             () =>
-              getFreshRelaySnapshot().then((snapshot) => {
+              getFreshRelayInstance({
+                data: { instanceId, relayId },
+              }).then((updated) => {
                 if (closed) return
-                const updated = snapshot.instances.find(
-                  (item) => item.id === instanceId && item.relayId === relayId
-                )
                 if (updated) applyProvisioningInstance(queryClient, updated)
               }),
             () => undefined
