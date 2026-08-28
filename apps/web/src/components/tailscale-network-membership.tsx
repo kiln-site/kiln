@@ -91,7 +91,7 @@ export function TailscaleConnectedServersTable({
     return (
       <TailscaleEmptyTable
         actionLabel="Setup Tailscale"
-        description="Connect a tailnet before adding servers."
+        description="Setup Tailscale before connecting servers"
         icon="network"
         title="No Tailscale networks"
         onAction={onSetup}

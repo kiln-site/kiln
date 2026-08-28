@@ -129,7 +129,6 @@ export const TailscalePage = React.memo(function TailscalePage({
         <TailscaleToolbar
           canAddServer={Boolean(selectedStack && !selectedStack.cleanup)}
           searchStore={searchStore}
-          onAddNetwork={openCreate}
           onAddServer={openAddServers}
         />
         <div className="min-h-0 flex-1 overflow-auto">
@@ -295,7 +294,7 @@ const TailscaleNetworkPicker = React.memo(function TailscaleNetworkPicker({
               ) : (
                 <Button type="button" size="sm" onClick={onAdd}>
                   <Plus />
-                  Add Network
+                  Setup Tailscale
                 </Button>
               )}
             </div>
@@ -392,12 +391,10 @@ const TailscaleNetworkPicker = React.memo(function TailscaleNetworkPicker({
 const TailscaleToolbar = React.memo(function TailscaleToolbar({
   canAddServer,
   searchStore,
-  onAddNetwork,
   onAddServer,
 }: {
   canAddServer: boolean
   searchStore: WorkspaceTableSearchStore
-  onAddNetwork: () => void
   onAddServer: () => void
 }) {
   const [mobileSearchOpen, setMobileSearchOpen] = React.useState(false)
@@ -453,21 +450,12 @@ const TailscaleToolbar = React.memo(function TailscaleToolbar({
 
       <Button
         type="button"
-        variant="outline"
-        className={`${mobileSearchOpen ? "hidden lg:inline-flex" : ""} ml-auto`}
-        onClick={onAddNetwork}
-      >
-        <Plus />
-        Add Network
-      </Button>
-      <Button
-        type="button"
         disabled={!canAddServer}
-        className={mobileSearchOpen ? "hidden sm:inline-flex" : ""}
+        className={`${mobileSearchOpen ? "hidden sm:inline-flex" : ""} ml-auto`}
         onClick={onAddServer}
       >
         <Server />
-        Add Server
+        Connect Server
       </Button>
     </div>
   )
