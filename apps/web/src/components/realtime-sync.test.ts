@@ -1,7 +1,9 @@
 import { QueryClient } from "@tanstack/react-query"
 import { describe, expect, it, vi } from "vite-plus/test"
 
-import { queryKeys } from "@/lib/query-options"
+import { getRelayInstancesCollection } from "@/lib/collections/relay-instances"
+import { createAppClients } from "@/lib/query-client"
+import { queryKeys, type RelayConnection } from "@/lib/query-options"
 import type { RelayFleetSnapshot } from "@/lib/relay-fleet"
 import type { FleetInstance, FleetNode } from "@/lib/realtime-events"
 import {
@@ -211,6 +213,54 @@ describe("realtime snapshot projection", () => {
       relays: [{ id: alpha.relayId, status: "connected" }],
       status: "connected",
     })
+  })
+
+  it("keeps the Query cache synchronized through ready collection writes", async () => {
+    const clients = createAppClients()
+    const collectionAlpha = {
+      ...alpha,
+      containerId: null,
+      desiredState: "running",
+      directory: "/srv/instances/alpha",
+      game: "Minecraft",
+      implementation: "Paper",
+      javaVersion: "21",
+      observedState: "running",
+      relayId: "r".repeat(43),
+      routeId: `${"r".repeat(43)}-aaaaaaaa`,
+      service: "alpha",
+      status: "running",
+      version: "1.21.8",
+    } as FleetInstance
+    clients.queryClient.setQueryData(queryKeys.relay.instances, [
+      collectionAlpha,
+    ])
+    const instances = getRelayInstancesCollection(clients.dbClient)
+    await instances.preload()
+
+    applyRealtimeEvent({
+      event: {
+        epoch,
+        relayId: collectionAlpha.relayId,
+        sequence: 1,
+        status: "unreachable",
+        type: "relay.status",
+      },
+      instances,
+      queryClient: clients.queryClient,
+    })
+
+    expect(
+      instances.get(`${collectionAlpha.relayId}:${collectionAlpha.id}`)
+    ).toMatchObject({
+      relayStatus: "unreachable",
+    })
+    expect(
+      clients.queryClient.getQueryData<Array<FleetInstance>>(
+        queryKeys.relay.instances
+      )
+    ).toEqual([{ ...collectionAlpha, relayStatus: "unreachable" }])
+    await clients.dbClient.cleanup()
   })
 
   it("replaces connection membership during authoritative recovery", async () => {
@@ -525,6 +575,54 @@ describe("realtime snapshot projection", () => {
         queryKeys.relay.connection
       )?.snapshot.instances
     ).toEqual([beta])
+  })
+
+  it("keeps an unreachable connection snapshot current", () => {
+    const queryClient = new QueryClient()
+    const current = snapshot()
+    queryClient.setQueryData(queryKeys.relay.snapshot, current)
+    queryClient.setQueryData(queryKeys.relay.connection, {
+      message: "Relay unavailable",
+      relay: { id: alpha.relayId, name: alpha.relayName },
+      relays: [
+        {
+          id: alpha.relayId,
+          name: alpha.relayName,
+          status: "unreachable",
+        },
+      ],
+      snapshot: current,
+      status: "unreachable",
+    })
+    const instances = {
+      isReady: () => false,
+    } as unknown as Parameters<typeof applyRealtimeEvent>[0]["instances"]
+    const connectionInstances = () =>
+      queryClient.getQueryData<
+        Extract<RelayConnection, { status: "unreachable" }>
+      >(queryKeys.relay.connection)?.snapshot.instances
+
+    applyRealtimeEvent({
+      event: {
+        deleted: [{ instanceId: alpha.id, relayId: alpha.relayId }],
+        epoch,
+        sequence: 1,
+        type: "instances.delta",
+        upserted: [beta],
+      },
+      instances,
+      queryClient,
+    })
+    expect(connectionInstances()).toEqual([beta])
+
+    applyProvisioningInstance(queryClient, alpha)
+    expect(connectionInstances()).toEqual([alpha, beta])
+
+    applyDeletedInstance(queryClient, {
+      instanceId: beta.id,
+      relayId: beta.relayId,
+    })
+    expect(connectionInstances()).toEqual([alpha])
   })
 
   it("drops an old sequence floor when the Hearth process epoch changes", () => {

@@ -50,7 +50,7 @@ export function applyRealtimeEvent(input: ApplyRealtimeEventInput): void {
           event
         )
       }
-      return connection?.status === "connected"
+      return hasRelaySnapshot(connection)
         ? {
             ...connection,
             snapshot:
@@ -113,6 +113,9 @@ export function applyRealtimeEvent(input: ApplyRealtimeEventInput): void {
         ? [{ ...instance, relayStatus: event.status }]
         : []
     )
+    // Query Collection manual writes commit the collection and its backing
+    // TanStack Query cache together. A second setQueryData here would notify
+    // subscribers twice for the same reachability transition.
     if (changed.length > 0) instances.utils.writeUpsert(changed)
   }
 }
@@ -204,7 +207,7 @@ export function applyProvisioningInstance(
   queryClient.setQueryData<RelayConnection>(
     queryKeys.relay.connection,
     (connection) =>
-      connection?.status === "connected"
+      hasRelaySnapshot(connection)
         ? {
             ...connection,
             snapshot:
@@ -251,7 +254,7 @@ export function applyDeletedInstance(
   queryClient.setQueryData<RelayConnection>(
     queryKeys.relay.connection,
     (connection) =>
-      connection?.status === "connected"
+      hasRelaySnapshot(connection)
         ? {
             ...connection,
             snapshot: {
@@ -303,6 +306,17 @@ function applyRealtimeRelayStatus(
     relay.id === event.relayId ? { ...relay, status: event.status } : relay
   )
   return connectionWithRelayStatuses(connection, snapshot, relays)
+}
+
+function hasRelaySnapshot(
+  connection: RelayConnection | undefined
+): connection is Extract<
+  RelayConnection,
+  { status: "connected" | "unreachable" }
+> {
+  return (
+    connection?.status === "connected" || connection?.status === "unreachable"
+  )
 }
 
 function connectionWithRelayStatuses(

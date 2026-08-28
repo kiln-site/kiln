@@ -303,6 +303,9 @@ export function snapshotWithCanonicalState(
   const cached = queryClient.getQueryData<RelayFleetSnapshot>(
     queryKeys.relay.snapshot
   )
+  // A connection poll can finish behind newer SSE deltas. Keep the live
+  // snapshot canonical even while every Relay is unreachable; the stream
+  // watchdog performs the authoritative recovery if SSE itself has stalled.
   const snapshot =
     (connection?.status === "connected" ||
       connection?.status === "unreachable") &&
