@@ -31,6 +31,94 @@ afterEach(async () => {
 })
 
 describe("Tailscale pending removal recovery", () => {
+  it("commits cleanup when the prepared Tailscale container is already stopped", async () => {
+    const dataDirectory = await mkdtemp(
+      join(tmpdir(), "kiln-tailscale-prepared-")
+    )
+    temporaryDirectories.push(dataDirectory)
+    const config = loadConfig({
+      KILN_RELAY_DATA_DIR: dataDirectory,
+      KILN_RELAY_RESOURCE_NAMESPACE: "prepared-removal-test",
+      NODE_ENV: "test",
+    })
+    const id = "f".repeat(40)
+    const stackDirectory = join(config.rootDirectory, id)
+    const stackConfig = relayTailscaleStackConfigSchema.parse({
+      bindings: [],
+      domain: "test",
+      hostname: "private-network",
+      id,
+      name: "Private Network",
+      subnet: "10.165.54.0/24",
+    })
+    await mkdir(stackDirectory, { recursive: true })
+    await Promise.all([
+      writeFile(
+        join(stackDirectory, "stack.json"),
+        `${JSON.stringify(stackConfig)}\n`
+      ),
+      writeFile(join(stackDirectory, ".removing"), "prepared\n"),
+    ])
+
+    const container = "prepared-removal-test-kiln-ts-ffffffff"
+    let containerPresent = true
+    commandMock.mockImplementation(
+      async (_executable: string, arguments_: Array<string>) => {
+        const name = arguments_.at(-1)
+        if (arguments_[0] === "container" && arguments_[1] === "inspect") {
+          if (name !== container || !containerPresent) {
+            throw new Error("container not found")
+          }
+          if (arguments_[3] === "{{.State.Running}}") {
+            return { stderr: "", stdout: "false\n" }
+          }
+          if (arguments_[3] === "{{.Id}}") {
+            return { stderr: "", stdout: "container-id\n" }
+          }
+          return {
+            stderr: "",
+            stdout: JSON.stringify({
+              "kiln.relay.owner": "prepared-removal-test",
+            }),
+          }
+        }
+        if (arguments_[0] === "stop") {
+          throw new Error(`container ${container} is not running`)
+        }
+        if (arguments_[0] === "rm") containerPresent = false
+        if (arguments_[0] === "network" && arguments_[1] === "inspect") {
+          return {
+            stderr: "",
+            stdout: JSON.stringify({
+              "kiln.relay.owner": "prepared-removal-test",
+            }),
+          }
+        }
+        return { stderr: "", stdout: "" }
+      }
+    )
+
+    const lifecycle = new LifecycleDriver(
+      config,
+      new DockerDriver(config),
+      new BrickCatalog(config.brickCatalogUrl, config.dataDirectory)
+    )
+
+    await lifecycle.removeTailscaleStack(id)
+
+    expect(commandMock).not.toHaveBeenCalledWith(
+      "docker",
+      ["stop", "--time", "10", container],
+      expect.anything()
+    )
+    expect(commandMock).toHaveBeenCalledWith("docker", ["start", container], {
+      timeout: 30_000,
+    })
+    await expect(access(stackDirectory)).rejects.toMatchObject({
+      code: "ENOENT",
+    })
+  })
+
   it("rejects revival while a failed removal remains retryable", async () => {
     const dataDirectory = await mkdtemp(
       join(tmpdir(), "kiln-tailscale-removal-")

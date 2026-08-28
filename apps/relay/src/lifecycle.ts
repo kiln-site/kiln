@@ -862,7 +862,7 @@ export class LifecycleDriver {
           this.#resources.tailscaleStackDnsContainer(id)
         )
         const container = this.#resources.tailscaleStackContainer(id)
-        if (await this.#containerExists(container)) {
+        if (await this.#containerRunning(container)) {
           await command("docker", ["stop", "--time", "10", container], {
             timeout: 30_000,
           })
