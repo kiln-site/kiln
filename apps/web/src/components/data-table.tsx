@@ -49,7 +49,7 @@ export function DataTable<TData extends RowData>({
       aria-colcount={table.getAllLeafColumns().length}
       aria-label={ariaLabel}
       aria-rowcount={rows.length + 1}
-      className="flex h-full min-h-0 w-full min-w-0 flex-col overflow-hidden border-collapse pb-px text-left"
+      className="flex h-full min-h-0 w-full min-w-0 border-collapse flex-col overflow-hidden pb-px text-left"
     >
       <DataTableHead
         gridClassName={gridClassName}
@@ -221,6 +221,7 @@ function DataTableBody<TData extends RowData>({
       {rows.map((row) => (
         <MemoizedDataTableRow
           key={row.id}
+          canSelect={row.getCanSelect()}
           gridClassName={gridClassName}
           isSelected={row.getIsSelected()}
           row={row}
@@ -273,6 +274,7 @@ function VirtualDataTableBody<TData extends RowData>({
             key={row.id}
             ref={rowVirtualizer.measureElement}
             ariaRowIndex={virtualRow.index + 2}
+            canSelect={row.getCanSelect()}
             dataIndex={virtualRow.index}
             gridClassName={gridClassName}
             isSelected={row.getIsSelected()}
@@ -286,6 +288,18 @@ function VirtualDataTableBody<TData extends RowData>({
   )
 }
 
+interface DataTableRowProps<TData extends RowData> {
+  ariaRowIndex?: number
+  canSelect: boolean
+  dataIndex?: number
+  gridClassName: string
+  isSelected: boolean
+  row: Row<typeof dataTableFeatures, TData>
+  rowClassName?: string
+  virtualStart?: number
+  ref?: React.Ref<HTMLTableRowElement>
+}
+
 function DataTableRow<TData extends RowData>({
   ariaRowIndex,
   dataIndex,
@@ -295,16 +309,7 @@ function DataTableRow<TData extends RowData>({
   rowClassName,
   virtualStart,
   ref,
-}: {
-  ariaRowIndex?: number
-  dataIndex?: number
-  gridClassName: string
-  isSelected: boolean
-  row: Row<typeof dataTableFeatures, TData>
-  rowClassName?: string
-  virtualStart?: number
-  ref?: React.Ref<HTMLTableRowElement>
-}) {
+}: DataTableRowProps<TData>) {
   return (
     <tr
       ref={ref}
@@ -343,7 +348,29 @@ function DataTableRow<TData extends RowData>({
   )
 }
 
-const MemoizedDataTableRow = React.memo(DataTableRow) as typeof DataTableRow
+function areDataTableRowPropsEqual<TData extends RowData>(
+  previous: DataTableRowProps<TData>,
+  next: DataTableRowProps<TData>
+) {
+  return (
+    previous.ariaRowIndex === next.ariaRowIndex &&
+    previous.canSelect === next.canSelect &&
+    previous.dataIndex === next.dataIndex &&
+    previous.gridClassName === next.gridClassName &&
+    previous.isSelected === next.isSelected &&
+    previous.row.id === next.row.id &&
+    previous.row.index === next.row.index &&
+    previous.row.original === next.row.original &&
+    previous.row.table.options.columns === next.row.table.options.columns &&
+    previous.rowClassName === next.rowClassName &&
+    previous.virtualStart === next.virtualStart
+  )
+}
+
+const MemoizedDataTableRow = React.memo(
+  DataTableRow,
+  areDataTableRowPropsEqual
+) as typeof DataTableRow
 
 export function DataTableCheckbox({
   ariaLabel,
