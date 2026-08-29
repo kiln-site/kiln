@@ -173,6 +173,7 @@ function areDataTableHeadPropsEqual<TData extends RowData>(
   return (
     previous.gridClassName === next.gridClassName &&
     previous.scrollbarWidth === next.scrollbarWidth &&
+    previous.table.store === next.table.store &&
     previous.table.options.columns === next.table.options.columns
   )
 }
@@ -497,6 +498,7 @@ function areDataTableRowPropsEqual<TData extends RowData>(
     previous.dataIndex === next.dataIndex &&
     previous.gridClassName === next.gridClassName &&
     previous.isSelected === next.isSelected &&
+    previous.ref === next.ref &&
     previous.row.id === next.row.id &&
     previous.row.index === next.row.index &&
     previous.row.original === next.row.original &&

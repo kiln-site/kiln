@@ -2,11 +2,11 @@ import * as React from "react"
 import { createFileRoute } from "@tanstack/react-router"
 import { z } from "zod"
 
+import { BackupsPage } from "@/components/backups-page"
 import {
-  BackupsPage,
   createBackupSearchStore,
   type BackupFilters,
-} from "@/components/backups-page"
+} from "@/components/backups/state"
 import {
   backupStorageQueryOptions,
   backupsQueryOptions,
