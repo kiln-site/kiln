@@ -1033,7 +1033,7 @@ const BackupDialogHost = React.memo(function BackupDialogHost({
 
 const backupTableColumnHelper = createDataTableColumnHelper<Backup>()
 const backupTableGridClassName =
-  "grid-cols-[2.5rem_minmax(0,1.2fr)_minmax(0,1fr)_12rem_11.25rem] xl:grid-cols-[2.5rem_minmax(0,1.2fr)_minmax(0,1fr)_12rem_5.25rem_11.25rem]"
+  "grid-cols-[2.5rem_minmax(0,1.2fr)_minmax(0,1fr)_12rem_11.25rem] xl:grid-cols-[2.5rem_minmax(0,1.2fr)_minmax(0,1fr)_12rem_6.5rem_11.25rem]"
 
 const BackupTable = React.memo(function BackupTable({
   backups,
@@ -1249,61 +1249,68 @@ const BackupDesktopTable = React.memo(function BackupDesktopTable({
           },
           meta: { cellClassName: "h-auto py-2.5" },
         }),
-        backupTableColumnHelper.display({
-          id: "target",
-          header: "Target",
-          enableSorting: false,
-          cell: ({ row }) => {
-            const backup = row.original
-            const targetName = backupTargetName(backup, targetNames)
-            const target = backupTargetPresentation(
-              backup,
-              relayNames.get(backup.relayId) ?? backup.relayId,
-              targetName
-            )
-            const targetAvailable =
-              backup.targetKind === "platform"
-                ? relayNames.has(backup.relayId)
-                : targetNames.has(
-                    targetKey(
-                      backup.targetKind,
-                      backup.relayId,
-                      backup.targetId
+        backupTableColumnHelper.accessor(
+          (backup) => backupTargetSortName(backup, relayNames, targetNames),
+          {
+            id: "target",
+            header: "Target",
+            sortFn: "text",
+            cell: ({ row }) => {
+              const backup = row.original
+              const targetName = backupTargetName(backup, targetNames)
+              const target = backupTargetPresentation(
+                backup,
+                relayNames.get(backup.relayId) ?? backup.relayId,
+                targetName
+              )
+              const targetAvailable =
+                backup.targetKind === "platform"
+                  ? relayNames.has(backup.relayId)
+                  : targetNames.has(
+                      targetKey(
+                        backup.targetKind,
+                        backup.relayId,
+                        backup.targetId
+                      )
                     )
-                  )
 
-            return (
-              <BackupTargetLink
-                available={targetAvailable}
-                relayId={backup.relayId}
-                target={target}
-                targetId={backup.targetId}
-                targetKind={backup.targetKind}
-              />
-            )
-          },
-          meta: { cellClassName: "h-auto py-2.5" },
-        }),
-        backupTableColumnHelper.display({
-          id: "file",
-          header: "File",
-          enableSorting: false,
-          cell: ({ row }) => {
-            const backup = row.original
-            return backupShowsPrimaryTaskFeedback(backup) ? (
-              <DesktopBackupTaskFeedback backup={backup} />
-            ) : (
-              <BackupFileDetails
-                bytes={backupDisplayBytes(backup)}
-                filename={backupDisplayFilename(backup)}
-                mode={backup.backupMode}
-              />
-            )
-          },
-          meta: {
-            cellClassName: "h-auto py-2.5 text-sm text-muted-foreground",
-          },
-        }),
+              return (
+                <BackupTargetLink
+                  available={targetAvailable}
+                  relayId={backup.relayId}
+                  target={target}
+                  targetId={backup.targetId}
+                  targetKind={backup.targetKind}
+                />
+              )
+            },
+            meta: { cellClassName: "h-auto py-2.5" },
+          }
+        ),
+        backupTableColumnHelper.accessor(
+          (backup) => backupDisplayBytes(backup) ?? undefined,
+          {
+            id: "file",
+            header: "File",
+            sortDescFirst: true,
+            sortUndefined: "last",
+            cell: ({ row }) => {
+              const backup = row.original
+              return backupShowsPrimaryTaskFeedback(backup) ? (
+                <DesktopBackupTaskFeedback backup={backup} />
+              ) : (
+                <BackupFileDetails
+                  bytes={backupDisplayBytes(backup)}
+                  filename={backupDisplayFilename(backup)}
+                  mode={backup.backupMode}
+                />
+              )
+            },
+            meta: {
+              cellClassName: "h-auto py-2.5 text-sm text-muted-foreground",
+            },
+          }
+        ),
         backupTableColumnHelper.accessor(
           (backup) => Date.parse(backup.createdAt),
           {
@@ -1325,6 +1332,7 @@ const BackupDesktopTable = React.memo(function BackupDesktopTable({
               cellClassName:
                 "hidden h-auto py-2.5 text-sm text-muted-foreground xl:flex",
               headerClassName: "hidden px-2 xl:flex xl:items-center",
+              headerLabelClassName: "shrink-0 overflow-visible text-clip",
             },
           }
         ),
@@ -4407,6 +4415,21 @@ function backupTargetName(
     targetNames.get(
       targetKey(backup.targetKind, backup.relayId, backup.targetId)
     ) ?? backup.targetId
+  )
+}
+
+function backupTargetSortName(
+  backup: Backup,
+  relayNames: ReadonlyMap<string, string>,
+  targetNames: ReadonlyMap<string, string>
+): string {
+  if (backup.targetKind === "platform") {
+    return relayNames.get(backup.relayId) ?? ""
+  }
+  return (
+    targetNames.get(
+      targetKey(backup.targetKind, backup.relayId, backup.targetId)
+    ) ?? ""
   )
 }
 

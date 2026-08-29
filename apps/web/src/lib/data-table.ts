@@ -14,6 +14,7 @@ import {
 export interface DataTableColumnMeta {
   cellClassName?: string
   headerClassName?: string
+  headerLabelClassName?: string
 }
 
 export const dataTableFeatures = tableFeatures({

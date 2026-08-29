@@ -159,13 +159,18 @@ function DataTableHead<TData extends RowData>({
                     type="button"
                     onClick={header.column.getToggleSortingHandler()}
                   >
-                    <span className="truncate">
+                    <span
+                      className={cn(
+                        "truncate uppercase",
+                        meta?.headerLabelClassName
+                      )}
+                    >
                       <FlexRender header={header} />
                     </span>
                     <DataTableSortIcon direction={sortDirection} />
                   </button>
                 ) : (
-                  <span className="flex h-full items-center">
+                  <span className="flex h-full items-center uppercase">
                     <FlexRender header={header} />
                   </span>
                 )}
