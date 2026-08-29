@@ -625,7 +625,12 @@ export const BackupsPage = React.memo(function BackupsPage({
         new Set(
           filteredBackups.flatMap((backup) =>
             backupCanBeRemoved(backup) &&
-            backupMatchesSearch(backup, normalizedSearch)
+            backupMatchesSearch(
+              backup,
+              normalizedSearch,
+              relayNames,
+              targetNames
+            )
               ? [backup.id]
               : []
           )
@@ -635,7 +640,7 @@ export const BackupsPage = React.memo(function BackupsPage({
 
     retainVisibleSelection()
     return searchStore.subscribe(retainVisibleSelection)
-  }, [filteredBackups, searchStore, selectionStore])
+  }, [filteredBackups, relayNames, searchStore, selectionStore, targetNames])
   const createTargets = React.useMemo(
     () =>
       availableCreateTargets({
@@ -1121,10 +1126,12 @@ const BackupTable = React.memo(function BackupTable({
         <div className="h-full overflow-y-auto overscroll-contain">
           <BackupMobileList
             backups={backups}
+            relayNames={relayNames}
             renderEmpty={renderEmpty}
             renderRow={renderMobileRow}
             searchStore={searchStore}
             selectionStore={selectionStore}
+            targetNames={targetNames}
           />
         </div>
       ) : (
@@ -1208,6 +1215,18 @@ const BackupDesktopTable = React.memo(function BackupDesktopTable({
       searchStore.set(next)
     },
     [searchStore]
+  )
+  const globalFilter = React.useCallback<
+    FilterFn<typeof dataTableFeatures, Backup>
+  >(
+    (row, _columnId, filterValue) =>
+      backupMatchesSearch(
+        row.original,
+        typeof filterValue === "string" ? filterValue.trim().toLowerCase() : "",
+        relayNames,
+        targetNames
+      ),
+    [relayNames, targetNames]
   )
   const columns = React.useMemo(
     () =>
@@ -1381,7 +1400,7 @@ const BackupDesktopTable = React.memo(function BackupDesktopTable({
     enableSubRowSelection: false,
     getColumnCanGlobalFilter: (column) => column.id === "name",
     getRowId: backupRowKey,
-    globalFilterFn: backupGlobalFilter,
+    globalFilterFn: globalFilter,
     onGlobalFilterChange: updateGlobalFilter,
     onRowSelectionChange: updateRowSelection,
     state: { globalFilter: normalizedSearch, rowSelection },
@@ -1405,16 +1424,20 @@ const BackupDesktopTable = React.memo(function BackupDesktopTable({
 
 const BackupMobileList = React.memo(function BackupMobileList({
   backups,
+  relayNames,
   renderEmpty,
   renderRow,
   searchStore,
   selectionStore,
+  targetNames,
 }: {
   backups: Array<Backup>
+  relayNames: ReadonlyMap<string, string>
   renderEmpty: (searchActive: boolean) => React.ReactNode
   renderRow: (backup: Backup) => React.ReactNode
   searchStore: BackupSearchStore
   selectionStore: BackupSelectionStore
+  targetNames: ReadonlyMap<string, string>
 }) {
   const search = React.useSyncExternalStore(
     searchStore.subscribe,
@@ -1424,8 +1447,10 @@ const BackupMobileList = React.memo(function BackupMobileList({
   const normalizedSearch = search.trim().toLowerCase()
   const visible = React.useMemo(
     () =>
-      backups.filter((backup) => backupMatchesSearch(backup, normalizedSearch)),
-    [backups, normalizedSearch]
+      backups.filter((backup) =>
+        backupMatchesSearch(backup, normalizedSearch, relayNames, targetNames)
+      ),
+    [backups, normalizedSearch, relayNames, targetNames]
   )
 
   if (visible.length === 0) return renderEmpty(normalizedSearch.length > 0)
@@ -4739,31 +4764,26 @@ function backupRowKey(backup: Backup) {
   return backup.id
 }
 
-const backupGlobalFilter: FilterFn<typeof dataTableFeatures, Backup> = (
-  row,
-  _columnId,
-  filterValue
-) =>
-  backupMatchesSearch(
-    row.original,
-    typeof filterValue === "string" ? filterValue.trim().toLowerCase() : ""
-  )
+function backupSearchText(
+  backup: Backup,
+  relayNames: ReadonlyMap<string, string>,
+  targetNames: ReadonlyMap<string, string>
+): string {
+  const relayDisplayName = relayNames.get(backup.relayId)
+  const targetDisplayName =
+    backup.targetKind === "platform"
+      ? relayDisplayName
+      : targetNames.get(
+          targetKey(backup.targetKind, backup.relayId, backup.targetId)
+        )
 
-function backupSearchText(backup: Backup): string {
   return [
     backup.name,
-    backup.filename,
     backup.id,
     backup.targetId,
-    backup.targetKind,
-    backup.status,
     backup.relayId,
-    backup.taskCurrentPath,
-    backup.taskError,
-    backup.taskPhase,
-    ...backup.artifacts.map((artifact) =>
-      artifact.storageId ? "s3" : "local"
-    ),
+    targetDisplayName,
+    relayDisplayName,
   ]
     .filter(Boolean)
     .join(" ")
@@ -4771,11 +4791,15 @@ function backupSearchText(backup: Backup): string {
 
 function backupMatchesSearch(
   backup: Backup,
-  normalizedSearch: string
+  normalizedSearch: string,
+  relayNames: ReadonlyMap<string, string>,
+  targetNames: ReadonlyMap<string, string>
 ): boolean {
   return (
     normalizedSearch.length === 0 ||
-    backupSearchText(backup).toLowerCase().includes(normalizedSearch)
+    backupSearchText(backup, relayNames, targetNames)
+      .toLowerCase()
+      .includes(normalizedSearch)
   )
 }
 
