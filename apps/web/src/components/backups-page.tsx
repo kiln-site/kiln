@@ -1338,7 +1338,7 @@ const BackupDesktopTable = React.memo(function BackupDesktopTable({
         ),
         backupTableColumnHelper.display({
           id: "actions",
-          header: "Actions",
+          header: () => <span className="sr-only">Actions</span>,
           enableSorting: false,
           cell: ({ row }) => {
             const backup = row.original
