@@ -335,7 +335,7 @@ export function firstAccessibleAppHref(
   const infrastructure = accessibleInfrastructureDestinations(capabilities)[0]
   if (infrastructure) return infrastructure.to
   if (canAccessAutomations(capabilities)) return "/automations/schedules"
-  if (canAccessBackups(capabilities)) return "/backups"
+  if (canAccessBackups(capabilities)) return "/backups/runs"
   if (canAccessActivity(capabilities)) return "/activity"
   if (capabilities.canManageAccess) return "/access"
   return "/settings/account"

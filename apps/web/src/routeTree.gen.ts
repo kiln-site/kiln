@@ -42,6 +42,10 @@ import { Route as AppAutomationsCalendarRouteImport } from './routes/_app.automa
 import { Route as AppAutomationsHistoryRouteImport } from './routes/_app.automations.history'
 import { Route as AppAutomationsSchedulesRouteImport } from './routes/_app.automations.schedules'
 import { Route as AppAutomationsSyncRouteImport } from './routes/_app.automations.sync'
+import { Route as AppBackupsIndexRouteImport } from './routes/_app.backups.index'
+import { Route as AppBackupsDestinationsRouteImport } from './routes/_app.backups.destinations'
+import { Route as AppBackupsRunsRouteImport } from './routes/_app.backups.runs'
+import { Route as AppBackupsSettingsRouteImport } from './routes/_app.backups.settings'
 import { Route as AppInfraIndexRouteImport } from './routes/_app.infra.index'
 import { Route as AppInfraDatabasesRouteImport } from './routes/_app.infra.databases'
 import { Route as AppInfraDomainsRouteImport } from './routes/_app.infra.domains'
@@ -234,6 +238,26 @@ const AppAutomationsSyncRoute = AppAutomationsSyncRouteImport.update({
   path: '/sync',
   getParentRoute: () => AppAutomationsRoute,
 } as any)
+const AppBackupsIndexRoute = AppBackupsIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => AppBackupsRoute,
+} as any)
+const AppBackupsDestinationsRoute = AppBackupsDestinationsRouteImport.update({
+  id: '/destinations',
+  path: '/destinations',
+  getParentRoute: () => AppBackupsRoute,
+} as any)
+const AppBackupsRunsRoute = AppBackupsRunsRouteImport.update({
+  id: '/runs',
+  path: '/runs',
+  getParentRoute: () => AppBackupsRoute,
+} as any)
+const AppBackupsSettingsRoute = AppBackupsSettingsRouteImport.update({
+  id: '/settings',
+  path: '/settings',
+  getParentRoute: () => AppBackupsRoute,
+} as any)
 const AppInfraIndexRoute = AppInfraIndexRouteImport.update({
   id: '/',
   path: '/',
@@ -392,7 +416,7 @@ export interface FileRoutesByFullPath {
   '/access': typeof AppAccessRoute
   '/activity': typeof AppActivityRoute
   '/automations': typeof AppAutomationsRouteWithChildren
-  '/backups': typeof AppBackupsRoute
+  '/backups': typeof AppBackupsRouteWithChildren
   '/infra': typeof AppInfraRouteWithChildren
   '/operations': typeof AppOperationsRoute
   '/servers': typeof AppServersRoute
@@ -406,6 +430,9 @@ export interface FileRoutesByFullPath {
   '/automations/history': typeof AppAutomationsHistoryRoute
   '/automations/schedules': typeof AppAutomationsSchedulesRoute
   '/automations/sync': typeof AppAutomationsSyncRoute
+  '/backups/destinations': typeof AppBackupsDestinationsRoute
+  '/backups/runs': typeof AppBackupsRunsRoute
+  '/backups/settings': typeof AppBackupsSettingsRoute
   '/infra/databases': typeof AppInfraDatabasesRoute
   '/infra/domains': typeof AppInfraDomainsRoute
   '/infra/relays': typeof AppInfraRelaysRoute
@@ -421,6 +448,7 @@ export interface FileRoutesByFullPath {
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/console/$instanceId': typeof ApiConsoleInstanceIdRoute
   '/automations/': typeof AppAutomationsIndexRoute
+  '/backups/': typeof AppBackupsIndexRoute
   '/infra/': typeof AppInfraIndexRoute
   '/settings/': typeof AppSettingsIndexRoute
   '/server/$serverId/$': typeof AppServerServerIdSplatRoute
@@ -452,7 +480,6 @@ export interface FileRoutesByTo {
   '/$': typeof AppSplatRoute
   '/access': typeof AppAccessRoute
   '/activity': typeof AppActivityRoute
-  '/backups': typeof AppBackupsRoute
   '/operations': typeof AppOperationsRoute
   '/servers': typeof AppServersRoute
   '/api/health': typeof ApiHealthRoute
@@ -464,6 +491,9 @@ export interface FileRoutesByTo {
   '/automations/history': typeof AppAutomationsHistoryRoute
   '/automations/schedules': typeof AppAutomationsSchedulesRoute
   '/automations/sync': typeof AppAutomationsSyncRoute
+  '/backups/destinations': typeof AppBackupsDestinationsRoute
+  '/backups/runs': typeof AppBackupsRunsRoute
+  '/backups/settings': typeof AppBackupsSettingsRoute
   '/infra/databases': typeof AppInfraDatabasesRoute
   '/infra/domains': typeof AppInfraDomainsRoute
   '/infra/relays': typeof AppInfraRelaysRoute
@@ -478,6 +508,7 @@ export interface FileRoutesByTo {
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/console/$instanceId': typeof ApiConsoleInstanceIdRoute
   '/automations': typeof AppAutomationsIndexRoute
+  '/backups': typeof AppBackupsIndexRoute
   '/infra': typeof AppInfraIndexRoute
   '/settings': typeof AppSettingsIndexRoute
   '/server/$serverId/$': typeof AppServerServerIdSplatRoute
@@ -512,7 +543,7 @@ export interface FileRoutesById {
   '/_app/access': typeof AppAccessRoute
   '/_app/activity': typeof AppActivityRoute
   '/_app/automations': typeof AppAutomationsRouteWithChildren
-  '/_app/backups': typeof AppBackupsRoute
+  '/_app/backups': typeof AppBackupsRouteWithChildren
   '/_app/infra': typeof AppInfraRouteWithChildren
   '/_app/operations': typeof AppOperationsRoute
   '/_app/servers': typeof AppServersRoute
@@ -526,6 +557,9 @@ export interface FileRoutesById {
   '/_app/automations/history': typeof AppAutomationsHistoryRoute
   '/_app/automations/schedules': typeof AppAutomationsSchedulesRoute
   '/_app/automations/sync': typeof AppAutomationsSyncRoute
+  '/_app/backups/destinations': typeof AppBackupsDestinationsRoute
+  '/_app/backups/runs': typeof AppBackupsRunsRoute
+  '/_app/backups/settings': typeof AppBackupsSettingsRoute
   '/_app/infra/databases': typeof AppInfraDatabasesRoute
   '/_app/infra/domains': typeof AppInfraDomainsRoute
   '/_app/infra/relays': typeof AppInfraRelaysRoute
@@ -541,6 +575,7 @@ export interface FileRoutesById {
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/console/$instanceId': typeof ApiConsoleInstanceIdRoute
   '/_app/automations/': typeof AppAutomationsIndexRoute
+  '/_app/backups/': typeof AppBackupsIndexRoute
   '/_app/infra/': typeof AppInfraIndexRoute
   '/_app/settings/': typeof AppSettingsIndexRoute
   '/_app/server/$serverId/$': typeof AppServerServerIdSplatRoute
@@ -589,6 +624,9 @@ export interface FileRouteTypes {
     | '/automations/history'
     | '/automations/schedules'
     | '/automations/sync'
+    | '/backups/destinations'
+    | '/backups/runs'
+    | '/backups/settings'
     | '/infra/databases'
     | '/infra/domains'
     | '/infra/relays'
@@ -604,6 +642,7 @@ export interface FileRouteTypes {
     | '/api/auth/$'
     | '/api/console/$instanceId'
     | '/automations/'
+    | '/backups/'
     | '/infra/'
     | '/settings/'
     | '/server/$serverId/$'
@@ -635,7 +674,6 @@ export interface FileRouteTypes {
     | '/$'
     | '/access'
     | '/activity'
-    | '/backups'
     | '/operations'
     | '/servers'
     | '/api/health'
@@ -647,6 +685,9 @@ export interface FileRouteTypes {
     | '/automations/history'
     | '/automations/schedules'
     | '/automations/sync'
+    | '/backups/destinations'
+    | '/backups/runs'
+    | '/backups/settings'
     | '/infra/databases'
     | '/infra/domains'
     | '/infra/relays'
@@ -661,6 +702,7 @@ export interface FileRouteTypes {
     | '/api/auth/$'
     | '/api/console/$instanceId'
     | '/automations'
+    | '/backups'
     | '/infra'
     | '/settings'
     | '/server/$serverId/$'
@@ -708,6 +750,9 @@ export interface FileRouteTypes {
     | '/_app/automations/history'
     | '/_app/automations/schedules'
     | '/_app/automations/sync'
+    | '/_app/backups/destinations'
+    | '/_app/backups/runs'
+    | '/_app/backups/settings'
     | '/_app/infra/databases'
     | '/_app/infra/domains'
     | '/_app/infra/relays'
@@ -723,6 +768,7 @@ export interface FileRouteTypes {
     | '/api/auth/$'
     | '/api/console/$instanceId'
     | '/_app/automations/'
+    | '/_app/backups/'
     | '/_app/infra/'
     | '/_app/settings/'
     | '/_app/server/$serverId/$'
@@ -998,6 +1044,34 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppAutomationsSyncRouteImport
       parentRoute: typeof AppAutomationsRoute
     }
+    '/_app/backups/': {
+      id: '/_app/backups/'
+      path: '/'
+      fullPath: '/backups/'
+      preLoaderRoute: typeof AppBackupsIndexRouteImport
+      parentRoute: typeof AppBackupsRoute
+    }
+    '/_app/backups/destinations': {
+      id: '/_app/backups/destinations'
+      path: '/destinations'
+      fullPath: '/backups/destinations'
+      preLoaderRoute: typeof AppBackupsDestinationsRouteImport
+      parentRoute: typeof AppBackupsRoute
+    }
+    '/_app/backups/runs': {
+      id: '/_app/backups/runs'
+      path: '/runs'
+      fullPath: '/backups/runs'
+      preLoaderRoute: typeof AppBackupsRunsRouteImport
+      parentRoute: typeof AppBackupsRoute
+    }
+    '/_app/backups/settings': {
+      id: '/_app/backups/settings'
+      path: '/settings'
+      fullPath: '/backups/settings'
+      preLoaderRoute: typeof AppBackupsSettingsRouteImport
+      parentRoute: typeof AppBackupsRoute
+    }
     '/_app/infra/': {
       id: '/_app/infra/'
       path: '/'
@@ -1210,6 +1284,24 @@ const AppAutomationsRouteWithChildren = AppAutomationsRoute._addFileChildren(
   AppAutomationsRouteChildren,
 )
 
+interface AppBackupsRouteChildren {
+  AppBackupsDestinationsRoute: typeof AppBackupsDestinationsRoute
+  AppBackupsRunsRoute: typeof AppBackupsRunsRoute
+  AppBackupsSettingsRoute: typeof AppBackupsSettingsRoute
+  AppBackupsIndexRoute: typeof AppBackupsIndexRoute
+}
+
+const AppBackupsRouteChildren: AppBackupsRouteChildren = {
+  AppBackupsDestinationsRoute: AppBackupsDestinationsRoute,
+  AppBackupsRunsRoute: AppBackupsRunsRoute,
+  AppBackupsSettingsRoute: AppBackupsSettingsRoute,
+  AppBackupsIndexRoute: AppBackupsIndexRoute,
+}
+
+const AppBackupsRouteWithChildren = AppBackupsRoute._addFileChildren(
+  AppBackupsRouteChildren,
+)
+
 interface AppInfraRouteChildren {
   AppInfraDatabasesRoute: typeof AppInfraDatabasesRoute
   AppInfraDomainsRoute: typeof AppInfraDomainsRoute
@@ -1298,7 +1390,7 @@ interface AppRouteChildren {
   AppAccessRoute: typeof AppAccessRoute
   AppActivityRoute: typeof AppActivityRoute
   AppAutomationsRoute: typeof AppAutomationsRouteWithChildren
-  AppBackupsRoute: typeof AppBackupsRoute
+  AppBackupsRoute: typeof AppBackupsRouteWithChildren
   AppInfraRoute: typeof AppInfraRouteWithChildren
   AppOperationsRoute: typeof AppOperationsRoute
   AppServersRoute: typeof AppServersRoute
@@ -1311,7 +1403,7 @@ const AppRouteChildren: AppRouteChildren = {
   AppAccessRoute: AppAccessRoute,
   AppActivityRoute: AppActivityRoute,
   AppAutomationsRoute: AppAutomationsRouteWithChildren,
-  AppBackupsRoute: AppBackupsRoute,
+  AppBackupsRoute: AppBackupsRouteWithChildren,
   AppInfraRoute: AppInfraRouteWithChildren,
   AppOperationsRoute: AppOperationsRoute,
   AppServersRoute: AppServersRoute,

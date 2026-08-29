@@ -60,7 +60,7 @@ const managementRoutes: Array<NavigationDestination> = [
     icon: BackupIcon,
     keywords: ["manage", "restore", "snapshots"],
     label: "Backups",
-    to: "/backups",
+    to: "/backups/runs",
   },
   {
     icon: ListTodo,

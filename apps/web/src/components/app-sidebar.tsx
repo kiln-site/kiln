@@ -1056,8 +1056,8 @@ function AccountNavigation({
                   <SidebarMenuItem>
                     <SidebarMenuButton asChild tooltip="Backups">
                       <Link
-                        to="/backups"
-                        activeOptions={{ exact: true, includeSearch: false }}
+                        to="/backups/runs"
+                        activeOptions={{ includeSearch: false }}
                         activeProps={{ "data-active": true }}
                         preload="intent"
                       >
@@ -1334,7 +1334,9 @@ function globalSectionFromPathname(pathname: string): GlobalSection {
   if (pathname === "/automations" || pathname.startsWith("/automations/")) {
     return "automations"
   }
-  if (pathname === "/backups") return "backups"
+  if (pathname === "/backups" || pathname.startsWith("/backups/")) {
+    return "backups"
+  }
   if (pathname === "/access") return "access"
   if (pathname === "/settings" || pathname.startsWith("/settings/")) {
     return "settings"

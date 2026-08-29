@@ -2,7 +2,6 @@ import * as React from "react"
 import { useQuery } from "@tanstack/react-query"
 import {
   Check,
-  CloudCog,
   Plus,
   RefreshCw,
   Search,
@@ -115,21 +114,6 @@ export const BackupToolbar = React.memo(function BackupToolbar({
         mobileSearchOpen={mobileSearchOpen}
         statusFilterStore={statusFilterStore}
       />
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <Button
-            aria-label="Manage backup destinations"
-            className={`${mobileSearchOpen ? "hidden sm:inline-flex" : "inline-flex"} shrink-0`}
-            type="button"
-            variant="outline"
-            onClick={() => dialogStore.open({ kind: "storage" })}
-          >
-            <CloudCog />
-            <span className="hidden xl:inline">Destinations</span>
-          </Button>
-        </TooltipTrigger>
-        <TooltipContent side="bottom">Manage destinations</TooltipContent>
-      </Tooltip>
       <Tooltip>
         <TooltipTrigger asChild>
           <Button

@@ -26,8 +26,6 @@ export type BackupStatusFilterStore = ReturnType<
 export type BackupDialogState =
   | { kind: "closed" }
   | { kind: "create" }
-  | { kind: "settings" }
-  | { kind: "storage" }
   | { backup: Backup; kind: "delete" }
   | { backup: Backup; kind: "download" }
   | { backup: Backup; kind: "restore" }

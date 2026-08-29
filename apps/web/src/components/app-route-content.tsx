@@ -13,6 +13,7 @@ import { InstanceWorkspaceShell } from "@/components/instance-workspace"
 import { RelayUnavailableState } from "@/components/relay-unavailable-state"
 import { SettingsShell } from "@/components/settings-layout"
 import { AutomationsShell } from "@/components/automations-layout"
+import { BackupsShell } from "@/components/backups-layout"
 import { GlobalPageToolbar } from "@/components/global-page-toolbar"
 import { WorkspaceFrame } from "@/components/workspace-frame"
 import {
@@ -86,6 +87,8 @@ const GlobalRouteFrame = React.memo(function GlobalRouteFrame({
           <SettingsShell>{children}</SettingsShell>
         ) : section === "automations" ? (
           <AutomationsShell>{children}</AutomationsShell>
+        ) : section === "backups" ? (
+          <BackupsShell>{children}</BackupsShell>
         ) : (
           children
         )}

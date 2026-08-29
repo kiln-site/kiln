@@ -5,7 +5,7 @@ import { filterRoutes } from "@/components/route-command-menu"
 describe("route command filtering", () => {
   it("rejects weak scattered-character matches", () => {
     expect(
-      filterRoutes("/backups", "paper", [
+      filterRoutes("/backups/runs", "paper", [
         "Backups",
         "manage",
         "restore",

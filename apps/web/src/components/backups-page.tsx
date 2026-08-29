@@ -5,6 +5,7 @@ import {
   useQueryClient,
   useSuspenseQuery,
 } from "@tanstack/react-query"
+import { Link } from "@tanstack/react-router"
 import {
   ArchiveX,
   ArrowLeft,
@@ -324,10 +325,6 @@ export const BackupsPage = React.memo(function BackupsPage({
     },
     [onFiltersChange]
   )
-  const openSettings = React.useCallback(
-    () => dialogStore.open({ kind: "settings" }),
-    [dialogStore]
-  )
   const targetNames = React.useMemo(() => {
     const names = new Map<string, string>()
     for (const server of backupScope.servers) {
@@ -411,18 +408,48 @@ export const BackupsPage = React.memo(function BackupsPage({
   )
 
   return (
-    <div className="mx-auto flex h-full min-h-[34rem] w-full max-w-[90rem] flex-col px-3 pt-3 pb-3 sm:px-5 sm:pt-5 sm:pb-5">
+    <div className="mx-auto flex h-full min-h-[34rem] w-full max-w-[90rem] flex-col px-3 pb-3 sm:px-5 sm:pb-5">
       <ServerScopePicker
         allDescription="Every accessible server, database, and Relay"
         allLabel="All instances"
         ariaLabel="Accessible instances"
-        canManageSettings={canManageSelectedTarget}
         changeLabel="Change instance"
         chooseLabel="Choose instance"
         emptyMessage="No accessible instances found."
         selectedServer={selectedServer}
         servers={scopeOptions}
-        onManageSettings={openSettings}
+        manageSettingsControl={
+          canManageSelectedTarget && selectedServer ? (
+            <Button asChild size="icon-sm" variant="outline">
+              <Link
+                aria-label="Manage selected backup settings"
+                to="/backups/settings"
+                search={{
+                  kind: selectedServer.kind,
+                  relay: selectedServer.relayId,
+                  server: selectedServer.id,
+                }}
+              >
+                <SlidersHorizontal />
+              </Link>
+            </Button>
+          ) : (
+            <Button
+              aria-label="Manage selected backup settings"
+              disabled
+              size="icon-sm"
+              type="button"
+              variant="outline"
+            >
+              <SlidersHorizontal />
+            </Button>
+          )
+        }
+        manageSettingsTooltip={
+          canManageSelectedTarget
+            ? "Backup settings"
+            : "Choose an instance to manage its backup settings"
+        }
         onSelect={selectServer}
       />
 
@@ -451,11 +478,9 @@ export const BackupsPage = React.memo(function BackupsPage({
       </section>
 
       <BackupDialogHost
-        capabilities={capabilities}
         deleteFeedbackStore={deleteFeedbackStore}
         dialogStore={dialogStore}
         selectedCreateTargetKey={selectedCreateTargetKey}
-        selectedServer={selectedServer}
         storage={storage}
         storageNames={storageNames}
         targetNames={targetNames}
@@ -635,21 +660,17 @@ const BackupDataSurface = React.memo(function BackupDataSurface({
 })
 
 const BackupDialogHost = React.memo(function BackupDialogHost({
-  capabilities,
   deleteFeedbackStore,
   dialogStore,
   selectedCreateTargetKey,
-  selectedServer,
   storage,
   storageNames,
   targetNames,
   targets,
 }: {
-  capabilities: Awaited<ReturnType<typeof getAccessCapabilities>>
   deleteFeedbackStore: BackupDeleteFeedbackStore
   dialogStore: BackupDialogStore
   selectedCreateTargetKey?: string
-  selectedServer: ServerPickerOption | null
   storage: Array<BackupStorage>
   storageNames: ReadonlyMap<string, string>
   targetNames: ReadonlyMap<string, string>
@@ -675,29 +696,6 @@ const BackupDialogHost = React.memo(function BackupDialogHost({
         open
         storage={storage}
         targets={targets}
-        onOpenChange={close}
-      />
-    )
-  }
-  if (dialog.kind === "storage") {
-    return (
-      <BackupStorageDialog
-        currentUserId={capabilities.user.id}
-        isPlatformAdmin={capabilities.isPlatformAdmin}
-        open
-        storage={storage}
-        onOpenChange={close}
-      />
-    )
-  }
-  if (dialog.kind === "settings") {
-    if (!selectedServer) return null
-    return (
-      <BackupSettingsDialog
-        isPlatformAdmin={capabilities.isPlatformAdmin}
-        open
-        target={selectedServer}
-        storage={storage}
         onOpenChange={close}
       />
     )
@@ -1065,16 +1063,104 @@ function CreateBackupDialog({
   )
 }
 
-function BackupSettingsDialog({
+export const BackupSettingsPage = React.memo(function BackupSettingsPage({
+  filters,
+  onFiltersChange,
+}: {
+  filters: BackupFilters
+  onFiltersChange: (change: Partial<BackupFilters>) => void
+}) {
+  const { data: storage } = useSuspenseQuery(backupStorageQueryOptions())
+  const { data: backupScope } = useSuspenseQuery({
+    ...relaySnapshotQueryOptions(),
+    notifyOnChangeProps: ["data"],
+    select: selectBackupScope,
+  })
+  const { data: databases } = useSuspenseQuery(
+    managedDatabaseDirectoryQueryOptions()
+  )
+  const { data: capabilities } = useSuspenseQuery(
+    accessCapabilitiesQueryOptions()
+  )
+  const configurableOptions = React.useMemo(() => {
+    const targets = availableCreateTargets({
+      capabilities,
+      databases,
+      nodes: backupScope.nodes,
+      servers: backupScope.servers,
+    })
+    const targetKeys = new Set(targets.map((target) => target.key))
+    return backupScopeOptions({
+      databases,
+      includePlatform: capabilities.isPlatformAdmin,
+      nodes: backupScope.nodes,
+      servers: backupScope.servers,
+    }).filter((option) => targetKeys.has(selectedBackupCreateTargetKey(option)))
+  }, [backupScope.nodes, backupScope.servers, capabilities, databases])
+  const selectedTarget = React.useMemo(
+    () =>
+      configurableOptions.find(
+        (option) =>
+          option.id === filters.server &&
+          option.relayId === filters.relay &&
+          (option.kind ?? "server") === (filters.kind ?? "server")
+      ) ?? null,
+    [configurableOptions, filters.kind, filters.relay, filters.server]
+  )
+  const selectTarget = React.useCallback(
+    (target: ServerPickerOption | null) => {
+      onFiltersChange({
+        kind: target?.kind,
+        relay: target?.relayId,
+        server: target?.id,
+      })
+    },
+    [onFiltersChange]
+  )
+
+  return (
+    <div className="mx-auto w-full max-w-[90rem] px-3 pb-10 sm:px-5">
+      <ServerScopePicker
+        allDescription="Select a target to edit its backup policy"
+        allLabel="No instance selected"
+        ariaLabel="Configurable backup targets"
+        changeLabel="Change instance"
+        chooseLabel="Choose instance"
+        emptyMessage="No configurable backup targets found."
+        selectedServer={selectedTarget}
+        servers={configurableOptions}
+        onSelect={selectTarget}
+      />
+      {selectedTarget ? (
+        <BackupSettingsSurface
+          isPlatformAdmin={capabilities.isPlatformAdmin}
+          storage={storage}
+          target={selectedTarget}
+        />
+      ) : (
+        <section className="rounded-xl border border-dashed bg-card/30 px-5 py-12 text-center [contain:paint]">
+          <span className="mx-auto grid size-10 place-items-center rounded-lg border bg-background text-muted-foreground">
+            <SlidersHorizontal className="size-4" />
+          </span>
+          <h2 className="mt-4 font-heading text-base font-semibold">
+            Choose an instance to configure
+          </h2>
+          <p className="type-support mx-auto mt-1 max-w-md text-muted-foreground">
+            Backup limits, the preferred destination, and exclusions are set
+            independently for each server, database, or Relay.
+          </p>
+        </section>
+      )}
+    </div>
+  )
+})
+
+function BackupSettingsSurface({
   isPlatformAdmin,
-  onOpenChange,
-  open,
   target,
   storage,
 }: {
   isPlatformAdmin: boolean
-  onOpenChange: (open: boolean) => void
-  open: boolean
   target: ServerPickerOption
   storage: Array<BackupStorage>
 }) {
@@ -1084,45 +1170,42 @@ function BackupSettingsDialog({
   )
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-2xl">
-        <DialogHeader>
-          <DialogTitle>{target.name} backup settings</DialogTitle>
-          <DialogDescription>
-            Set retention ceilings, a preferred destination, and extra
-            exclusions for this backup target.
-          </DialogDescription>
-        </DialogHeader>
-        {policy.data ? (
-          <BackupSettingsEditor
-            key={`${target.relayId}:${policyTarget.kind}:${policyTarget.id}`}
-            isPlatformAdmin={isPlatformAdmin}
-            policy={policy.data}
-            target={target}
-            storage={storage}
-            onSaved={() => onOpenChange(false)}
-          />
-        ) : policy.error ? (
-          <p className="text-xs text-destructive">{policy.error.message}</p>
-        ) : (
-          <div className="grid h-40 place-items-center text-muted-foreground">
-            <LoaderCircle className="size-5 animate-spin" />
-          </div>
-        )}
-      </DialogContent>
-    </Dialog>
+    <section className="overflow-hidden rounded-xl border bg-card/45 [contain:paint]">
+      <div className="border-b px-5 py-4">
+        <h2 className="font-heading text-base font-semibold tracking-tight">
+          {target.name} backup settings
+        </h2>
+        <p className="type-support mt-1 text-muted-foreground">
+          Set retention ceilings, a preferred destination, and extra exclusions
+          for this backup target.
+        </p>
+      </div>
+      {policy.data ? (
+        <BackupSettingsEditor
+          key={`${target.relayId}:${policyTarget.kind}:${policyTarget.id}`}
+          isPlatformAdmin={isPlatformAdmin}
+          policy={policy.data}
+          target={target}
+          storage={storage}
+        />
+      ) : policy.error ? (
+        <p className="p-5 text-xs text-destructive">{policy.error.message}</p>
+      ) : (
+        <div className="grid h-40 place-items-center text-muted-foreground">
+          <LoaderCircle className="size-5 animate-spin" />
+        </div>
+      )}
+    </section>
   )
 }
 
 function BackupSettingsEditor({
   isPlatformAdmin,
-  onSaved,
   policy,
   target,
   storage,
 }: {
   isPlatformAdmin: boolean
-  onSaved: () => void
   policy: BackupPolicy
   target: ServerPickerOption
   storage: Array<BackupStorage>
@@ -1220,13 +1303,12 @@ function BackupSettingsEditor({
         message: `${target.name} backup settings saved`,
         type: "success",
       })
-      onSaved()
     },
   })
 
   return (
-    <>
-      <div className="grid gap-4 sm:grid-cols-2">
+    <div>
+      <div className="grid gap-4 p-5 sm:grid-cols-2">
         <StorageTextField
           label="Quantity limit"
           placeholder="Unlimited"
@@ -1307,14 +1389,13 @@ function BackupSettingsEditor({
             to compatible archives.
           </span>
         </label>
+        {save.error ? (
+          <p className="text-xs text-destructive sm:col-span-2">
+            {save.error.message}
+          </p>
+        ) : null}
       </div>
-      {save.error ? (
-        <p className="text-xs text-destructive">{save.error.message}</p>
-      ) : null}
-      <DialogFooter>
-        <Button variant="ghost" type="button" onClick={onSaved}>
-          Cancel
-        </Button>
+      <div className="flex justify-end border-t bg-background/35 px-5 py-4">
         <Button
           disabled={save.isPending}
           type="button"
@@ -1327,32 +1408,28 @@ function BackupSettingsEditor({
           )}
           Save settings
         </Button>
-      </DialogFooter>
-    </>
+      </div>
+    </div>
   )
 }
 
-function BackupStorageDialog({
-  currentUserId,
-  isPlatformAdmin,
-  onOpenChange,
-  open,
-  storage,
-}: {
-  currentUserId: string
-  isPlatformAdmin: boolean
-  onOpenChange: (open: boolean) => void
-  open: boolean
-  storage: Array<BackupStorage>
-}) {
-  const [editor, setEditor] = React.useState<BackupStorage | "new" | null>(null)
-  const [deleteCandidate, setDeleteCandidate] =
-    React.useState<BackupStorage | null>(null)
+export const BackupDestinationsPage = React.memo(
+  function BackupDestinationsPage() {
+    const { data: storage } = useSuspenseQuery(backupStorageQueryOptions())
+    const { data: capabilities } = useSuspenseQuery(
+      accessCapabilitiesQueryOptions()
+    )
+    const currentUserId = capabilities.user.id
+    const isPlatformAdmin = capabilities.isPlatformAdmin
+    const [editor, setEditor] = React.useState<BackupStorage | "new" | null>(
+      null
+    )
+    const [deleteCandidate, setDeleteCandidate] =
+      React.useState<BackupStorage | null>(null)
 
-  return (
-    <>
-      <Dialog open={open} onOpenChange={onOpenChange}>
-        <DialogContent className="min-w-0 overflow-x-hidden sm:max-w-2xl">
+    return (
+      <div className="mx-auto w-full max-w-[90rem] px-3 pb-10 sm:px-5">
+        <section className="min-w-0 overflow-hidden rounded-xl border bg-card/45 [contain:paint]">
           {editor ? (
             <BackupStorageEditor
               existing={editor === "new" ? null : editor}
@@ -1361,14 +1438,27 @@ function BackupStorageDialog({
             />
           ) : (
             <>
-              <DialogHeader className="min-w-0">
-                <DialogTitle>Backup destinations</DialogTitle>
-                <DialogDescription>
-                  Relay-local storage is always available. Add S3-compatible
-                  destinations for off-node copies and signed downloads.
-                </DialogDescription>
-              </DialogHeader>
-              <div className="min-w-0 space-y-2">
+              <div className="flex min-w-0 items-start justify-between gap-4 border-b px-5 py-4">
+                <div className="min-w-0">
+                  <h2 className="font-heading text-base font-semibold tracking-tight">
+                    Backup destinations
+                  </h2>
+                  <p className="type-support mt-1 text-muted-foreground">
+                    Relay-local storage is always available. Add S3-compatible
+                    destinations for off-node copies and signed downloads.
+                  </p>
+                </div>
+                <Button
+                  className="shrink-0"
+                  type="button"
+                  onClick={() => setEditor("new")}
+                >
+                  <Plus />
+                  <span className="hidden sm:inline">Add S3 destination</span>
+                  <span className="sm:hidden">Add</span>
+                </Button>
+              </div>
+              <div className="min-w-0 space-y-2 p-5">
                 <div className="flex items-center gap-3 rounded-lg border border-border/70 bg-background/35 p-3">
                   <span className="grid size-9 shrink-0 place-items-center rounded-md border border-border/70 bg-background text-muted-foreground">
                     <HardDrive className="size-4" />
@@ -1457,34 +1547,22 @@ function BackupStorageDialog({
                   )
                 })}
               </div>
-              <DialogFooter className="min-w-0">
-                <Button
-                  variant="ghost"
-                  type="button"
-                  onClick={() => onOpenChange(false)}
-                >
-                  Close
-                </Button>
-                <Button type="button" onClick={() => setEditor("new")}>
-                  <Plus /> Add S3 destination
-                </Button>
-              </DialogFooter>
             </>
           )}
-        </DialogContent>
-      </Dialog>
-      {deleteCandidate ? (
-        <DeleteBackupStorageDialog
-          destination={deleteCandidate}
-          open
-          onOpenChange={(nextOpen) => {
-            if (!nextOpen) setDeleteCandidate(null)
-          }}
-        />
-      ) : null}
-    </>
-  )
-}
+        </section>
+        {deleteCandidate ? (
+          <DeleteBackupStorageDialog
+            destination={deleteCandidate}
+            open
+            onOpenChange={(nextOpen) => {
+              if (!nextOpen) setDeleteCandidate(null)
+            }}
+          />
+        ) : null}
+      </div>
+    )
+  }
+)
 
 function BackupStorageEditor({
   existing,
@@ -1557,7 +1635,7 @@ function BackupStorageEditor({
 
   return (
     <>
-      <DialogHeader>
+      <div className="border-b px-5 py-4">
         <div className="mb-1 flex items-center gap-2">
           <Button
             aria-label="Back to backup destinations"
@@ -1568,17 +1646,17 @@ function BackupStorageEditor({
           >
             <ArrowLeft />
           </Button>
-          <DialogTitle>
+          <h2 className="font-heading text-base font-semibold tracking-tight">
             {existing ? `Edit ${existing.name}` : "Add S3 destination"}
-          </DialogTitle>
+          </h2>
         </div>
-        <DialogDescription>
+        <p className="type-support text-muted-foreground">
           {locationLocked
             ? "This destination is still deleting. Update credentials, save, then retry the prefix purge. Location fields stay locked."
             : "Credentials are encrypted by Hearth and verified before they are saved. Existing secrets are never sent back to the browser."}
-        </DialogDescription>
-      </DialogHeader>
-      <div className="grid gap-4 sm:grid-cols-2">
+        </p>
+      </div>
+      <div className="grid gap-4 p-5 sm:grid-cols-2">
         <StorageTextField label="Name" value={name} onChange={setName} />
         <StorageTextField
           disabled={locationLocked}
@@ -1625,7 +1703,7 @@ function BackupStorageEditor({
           onChange={setSecretAccessKey}
         />
       </div>
-      <div className="grid gap-2 sm:grid-cols-2">
+      <div className="grid gap-2 px-5 pb-5 sm:grid-cols-2">
         <StorageSwitch
           checked={enabled}
           description="Allow new backups to select this destination."
@@ -1658,9 +1736,11 @@ function BackupStorageEditor({
         ) : null}
       </div>
       {save.error ? (
-        <p className="text-xs text-destructive">{save.error.message}</p>
+        <p className="px-5 pb-5 text-xs text-destructive">
+          {save.error.message}
+        </p>
       ) : null}
-      <DialogFooter>
+      <div className="flex flex-col-reverse gap-2 border-t bg-background/35 px-5 py-4 sm:flex-row sm:justify-end">
         <Button variant="ghost" type="button" onClick={onBack}>
           Cancel
         </Button>
@@ -1676,7 +1756,7 @@ function BackupStorageEditor({
           )}
           Verify and save
         </Button>
-      </DialogFooter>
+      </div>
     </>
   )
 }

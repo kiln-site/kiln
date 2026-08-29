@@ -1,11 +1,5 @@
 import * as React from "react"
-import {
-  ArrowLeftRight,
-  Database,
-  Network,
-  Server,
-  SlidersHorizontal,
-} from "lucide-react"
+import { ArrowLeftRight, Database, Network, Server } from "lucide-react"
 
 import { Badge } from "@workspace/ui/components/badge"
 import { Button } from "@workspace/ui/components/button"
@@ -31,11 +25,11 @@ export const ServerScopePicker = React.memo(function ServerScopePicker({
   allDescription = "Every accessible instance",
   allLabel = "All servers",
   ariaLabel = "Accessible servers",
-  canManageSettings = false,
   changeLabel = "Change server",
   chooseLabel = "Choose server",
   emptyMessage = "No accessible servers found.",
-  onManageSettings,
+  manageSettingsControl,
+  manageSettingsTooltip,
   onSelect,
   selectedRelayName,
   selectedServer,
@@ -44,11 +38,11 @@ export const ServerScopePicker = React.memo(function ServerScopePicker({
   allDescription?: string
   allLabel?: string
   ariaLabel?: string
-  canManageSettings?: boolean
   changeLabel?: string
   chooseLabel?: string
   emptyMessage?: string
-  onManageSettings?: () => void
+  manageSettingsControl?: React.ReactNode
+  manageSettingsTooltip?: string
   onSelect: (server: ServerPickerOption | null) => void
   selectedRelayName?: string
   selectedServer: ServerPickerOption | null
@@ -83,26 +77,13 @@ export const ServerScopePicker = React.memo(function ServerScopePicker({
         <WorkspaceSummaryCard
           action={
             <div className="flex shrink-0 items-center gap-2">
-              {onManageSettings ? (
+              {manageSettingsControl ? (
                 <Tooltip>
                   <TooltipTrigger asChild>
-                    <span className="inline-flex">
-                      <Button
-                        aria-label="Manage selected backup settings"
-                        disabled={!canManageSettings}
-                        size="icon-sm"
-                        type="button"
-                        variant="outline"
-                        onClick={onManageSettings}
-                      >
-                        <SlidersHorizontal />
-                      </Button>
-                    </span>
+                    <span className="inline-flex">{manageSettingsControl}</span>
                   </TooltipTrigger>
                   <TooltipContent side="bottom">
-                    {canManageSettings
-                      ? "Backup settings"
-                      : "Choose an instance to manage its backup settings"}
+                    {manageSettingsTooltip ?? "Settings"}
                   </TooltipContent>
                 </Tooltip>
               ) : null}
