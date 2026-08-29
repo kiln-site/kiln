@@ -82,7 +82,6 @@ import {
 import { ServerScopePicker } from "@/components/server-scope-picker"
 import type { ServerPickerOption } from "@/components/server-picker-list"
 import {
-  backupDisplayFilename,
   backupDisplayBytes,
   backupHasReportedDeleteArtifactProgress,
   backupShowsPrimaryTaskFeedback,
@@ -1309,8 +1308,8 @@ const BackupDesktopTable = React.memo(function BackupDesktopTable({
         backupTableColumnHelper.accessor(
           (backup) => backupDisplayBytes(backup) ?? undefined,
           {
-            id: "file",
-            header: "File",
+            id: "size",
+            header: "Size",
             sortDescFirst: true,
             sortUndefined: "last",
             cell: ({ row }) => {
@@ -1318,9 +1317,8 @@ const BackupDesktopTable = React.memo(function BackupDesktopTable({
               return backupShowsPrimaryTaskFeedback(backup) ? (
                 <DesktopBackupTaskFeedback backup={backup} />
               ) : (
-                <BackupFileDetails
+                <BackupSizeDetails
                   bytes={backupDisplayBytes(backup)}
-                  filename={backupDisplayFilename(backup)}
                   mode={backup.backupMode}
                 />
               )
@@ -1617,7 +1615,6 @@ const BackupMobileRow = React.memo(function BackupMobileRow({
   const target = backupTargetPresentation(backup, relayName, targetName)
   const showsPrimaryTaskFeedback = backupShowsPrimaryTaskFeedback(backup)
   const displayBytes = backupDisplayBytes(backup)
-  const displayFilename = backupDisplayFilename(backup)
   return (
     <article
       aria-label={backup.name}
@@ -1648,11 +1645,7 @@ const BackupMobileRow = React.memo(function BackupMobileRow({
         </div>
       ) : (
         <div className="mt-2.5 grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-end gap-x-3 text-xs text-muted-foreground">
-          <BackupFileDetails
-            bytes={displayBytes}
-            filename={displayFilename}
-            mode={backup.backupMode}
-          />
+          <BackupSizeDetails bytes={displayBytes} mode={backup.backupMode} />
           <BackupCreatedTime createdAt={backup.createdAt} />
         </div>
       )}
@@ -4407,26 +4400,19 @@ const BackupModeBadge = React.memo(function BackupModeBadge({
   )
 })
 
-const BackupFileDetails = React.memo(function BackupFileDetails({
+const BackupSizeDetails = React.memo(function BackupSizeDetails({
   bytes,
-  filename,
   mode,
 }: {
   bytes: number | null
-  filename: string
   mode: Backup["backupMode"]
 }) {
   return (
-    <div className="min-w-0">
-      <span className="block truncate" title={filename}>
-        {filename}
+    <div className="flex items-center gap-1.5 text-xs">
+      <span className="whitespace-nowrap">
+        {bytes === null ? "—" : formatBytes(bytes)}
       </span>
-      <div className="mt-0.5 flex items-center gap-1.5 text-xs">
-        <span className="whitespace-nowrap">
-          {bytes === null ? "—" : formatBytes(bytes)}
-        </span>
-        <BackupModeBadge mode={mode} />
-      </div>
+      <BackupModeBadge mode={mode} />
     </div>
   )
 })
