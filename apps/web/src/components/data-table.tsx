@@ -19,8 +19,6 @@ type DataTableInstance<TData extends RowData> = Table<
 interface DataTableVirtualizationOptions {
   estimateRowHeight?: number
   overscan?: number
-  scrollElementRef: React.RefObject<HTMLElement | null>
-  scrollMargin?: number
 }
 
 interface DataTableProps<TData extends RowData> {
@@ -41,49 +39,89 @@ export function DataTable<TData extends RowData>({
   virtualization,
 }: DataTableProps<TData>) {
   const rows = table.getRowModel().rows
+  const scrollElementRef = React.useRef<HTMLTableSectionElement>(null)
+  const scrollbarWidth = useScrollbarWidth(scrollElementRef, rows.length)
 
   if (rows.length === 0) return emptyState
 
   return (
-    <div className="min-w-0 overflow-clip pb-px">
-      <table
-        aria-label={ariaLabel}
-        className="grid w-full border-collapse text-left"
-      >
-        <DataTableHead gridClassName={gridClassName} table={table} />
-        {virtualization ? (
-          <VirtualDataTableBody
-            getRowClassName={getRowClassName}
-            gridClassName={gridClassName}
-            rows={rows}
-            virtualization={virtualization}
-          />
-        ) : (
-          <DataTableBody
-            getRowClassName={getRowClassName}
-            gridClassName={gridClassName}
-            rows={rows}
-          />
-        )}
-      </table>
-    </div>
+    <table
+      aria-colcount={table.getAllLeafColumns().length}
+      aria-label={ariaLabel}
+      aria-rowcount={rows.length + 1}
+      className="flex h-full min-h-0 w-full min-w-0 flex-col overflow-hidden border-collapse pb-px text-left"
+    >
+      <DataTableHead
+        gridClassName={gridClassName}
+        scrollbarWidth={scrollbarWidth}
+        table={table}
+      />
+      {virtualization ? (
+        <VirtualDataTableBody
+          getRowClassName={getRowClassName}
+          gridClassName={gridClassName}
+          rows={rows}
+          scrollElementRef={scrollElementRef}
+          virtualization={virtualization}
+        />
+      ) : (
+        <DataTableBody
+          getRowClassName={getRowClassName}
+          gridClassName={gridClassName}
+          rows={rows}
+          scrollElementRef={scrollElementRef}
+        />
+      )}
+    </table>
   )
+}
+
+function useScrollbarWidth(
+  scrollElementRef: React.RefObject<HTMLElement | null>,
+  rowCount: number
+) {
+  const [scrollbarWidth, setScrollbarWidth] = React.useState(0)
+
+  React.useLayoutEffect(() => {
+    const scrollElement = scrollElementRef.current
+    if (!scrollElement) return
+
+    const updateScrollbarWidth = () => {
+      const nextWidth = scrollElement.offsetWidth - scrollElement.clientWidth
+      setScrollbarWidth((currentWidth) =>
+        currentWidth === nextWidth ? currentWidth : nextWidth
+      )
+    }
+    const resizeObserver = new ResizeObserver(updateScrollbarWidth)
+
+    updateScrollbarWidth()
+    resizeObserver.observe(scrollElement)
+    return () => resizeObserver.disconnect()
+  }, [rowCount, scrollElementRef])
+
+  return scrollbarWidth
 }
 
 function DataTableHead<TData extends RowData>({
   gridClassName,
+  scrollbarWidth,
   table,
 }: {
   gridClassName: string
+  scrollbarWidth: number
   table: DataTableInstance<TData>
 }) {
   return (
-    <thead className="sticky top-0 z-20 grid bg-background/95 shadow-[0_1px_0_var(--border)] backdrop-blur">
+    <thead
+      className="z-20 block shrink-0 bg-background/95 shadow-[0_1px_0_var(--border)] backdrop-blur"
+      style={{ paddingInlineEnd: scrollbarWidth }}
+    >
       {table.getHeaderGroups().map((headerGroup) => (
         <tr
           key={headerGroup.id}
+          aria-rowindex={1}
           className={cn(
-            "type-technical-label grid border-b bg-muted/20 text-muted-foreground",
+            "type-technical-label grid bg-muted/20 text-muted-foreground",
             gridClassName
           )}
         >
@@ -127,7 +165,9 @@ function DataTableHead<TData extends RowData>({
                     <DataTableSortIcon direction={sortDirection} />
                   </button>
                 ) : (
-                  <FlexRender header={header} />
+                  <span className="flex h-full items-center">
+                    <FlexRender header={header} />
+                  </span>
                 )}
               </th>
             )
@@ -161,17 +201,23 @@ function DataTableBody<TData extends RowData>({
   getRowClassName,
   gridClassName,
   rows,
+  scrollElementRef,
 }: {
   getRowClassName?: (row: Row<typeof dataTableFeatures, TData>) => string
   gridClassName: string
   rows: Array<Row<typeof dataTableFeatures, TData>>
+  scrollElementRef: React.RefObject<HTMLTableSectionElement | null>
 }) {
   return (
-    <tbody className="grid border-b border-border/70">
+    <tbody
+      ref={scrollElementRef}
+      className="block min-h-0 flex-1 overflow-y-auto overscroll-contain border-b border-border/70"
+    >
       {rows.map((row) => (
-        <DataTableRow
+        <MemoizedDataTableRow
           key={row.id}
           gridClassName={gridClassName}
+          isSelected={row.getIsSelected()}
           row={row}
           rowClassName={getRowClassName?.(row)}
         />
@@ -184,48 +230,50 @@ function VirtualDataTableBody<TData extends RowData>({
   getRowClassName,
   gridClassName,
   rows,
+  scrollElementRef,
   virtualization,
 }: {
   getRowClassName?: (row: Row<typeof dataTableFeatures, TData>) => string
   gridClassName: string
   rows: Array<Row<typeof dataTableFeatures, TData>>
+  scrollElementRef: React.RefObject<HTMLTableSectionElement | null>
   virtualization: DataTableVirtualizationOptions
 }) {
-  const scrollMargin = virtualization.scrollMargin ?? 40
   const rowVirtualizer = useVirtualizer({
     count: rows.length,
     estimateSize: () => virtualization.estimateRowHeight ?? 72,
     getItemKey: (index) => rows[index]?.id ?? index,
-    getScrollElement: () => virtualization.scrollElementRef.current,
+    getScrollElement: () => scrollElementRef.current,
     overscan: virtualization.overscan ?? 6,
-    scrollMargin,
   })
 
   return (
     <tbody
-      className="relative grid border-b border-border/70"
-      style={{ height: rowVirtualizer.getTotalSize() }}
+      ref={scrollElementRef}
+      className="relative block min-h-0 flex-1 overflow-y-auto overscroll-contain border-b border-border/70"
     >
+      <tr
+        aria-hidden="true"
+        className="pointer-events-none block w-full"
+        style={{ height: rowVirtualizer.getTotalSize() }}
+      >
+        <td className="block p-0" />
+      </tr>
       {rowVirtualizer.getVirtualItems().map((virtualRow) => {
         const row = rows[virtualRow.index]
         if (!row) return null
 
         return (
-          <DataTableRow
+          <MemoizedDataTableRow
             key={row.id}
             ref={rowVirtualizer.measureElement}
             ariaRowIndex={virtualRow.index + 2}
             dataIndex={virtualRow.index}
             gridClassName={gridClassName}
+            isSelected={row.getIsSelected()}
             row={row}
             rowClassName={getRowClassName?.(row)}
-            style={{
-              left: 0,
-              position: "absolute",
-              top: 0,
-              transform: `translateY(${virtualRow.start - scrollMargin}px)`,
-              width: "100%",
-            }}
+            virtualStart={virtualRow.start}
           />
         )
       })}
@@ -237,17 +285,19 @@ function DataTableRow<TData extends RowData>({
   ariaRowIndex,
   dataIndex,
   gridClassName,
+  isSelected,
   row,
   rowClassName,
-  style,
+  virtualStart,
   ref,
 }: {
   ariaRowIndex?: number
   dataIndex?: number
   gridClassName: string
+  isSelected: boolean
   row: Row<typeof dataTableFeatures, TData>
   rowClassName?: string
-  style?: React.CSSProperties
+  virtualStart?: number
   ref?: React.Ref<HTMLTableRowElement>
 }) {
   return (
@@ -260,13 +310,24 @@ function DataTableRow<TData extends RowData>({
         rowClassName
       )}
       data-index={dataIndex}
-      style={style}
+      data-state={isSelected ? "selected" : undefined}
+      style={
+        virtualStart === undefined
+          ? undefined
+          : {
+              left: 0,
+              position: "absolute",
+              top: 0,
+              transform: `translateY(${virtualStart}px)`,
+              width: "100%",
+            }
+      }
     >
       {row.getAllCells().map((cell) => (
         <td
           key={cell.id}
           className={cn(
-            "h-14 min-w-0 px-3 align-middle",
+            "flex h-14 min-w-0 items-center px-3",
             cell.column.columnDef.meta?.cellClassName
           )}
         >
@@ -276,6 +337,8 @@ function DataTableRow<TData extends RowData>({
     </tr>
   )
 }
+
+const MemoizedDataTableRow = React.memo(DataTableRow) as typeof DataTableRow
 
 export function DataTableCheckbox({
   ariaLabel,

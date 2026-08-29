@@ -523,7 +523,6 @@ export const BackupsPage = React.memo(function BackupsPage({
   const [dialogStore] = React.useState(createBackupDialogStore)
   const [deleteFeedbackStore] = React.useState(createBackupDeleteFeedbackStore)
   const [selectionStore] = React.useState(createBackupSelectionStore)
-  const tableScrollRef = React.useRef<HTMLDivElement>(null)
   const visibleBackups = useBackupsWithDeleteFeedback(
     backups,
     deleteFeedbackStore
@@ -698,21 +697,18 @@ export const BackupsPage = React.memo(function BackupsPage({
           searchStore={searchStore}
           onFiltersChange={onFiltersChange}
         />
-        <div ref={tableScrollRef} className="min-h-0 flex-1 overflow-auto">
-          <BackupTable
-            backups={filteredBackups}
-            canCreate={canCreateBackup}
-            currentUserId={capabilities.user.id}
-            destinations={availabilityDestinations}
-            dialogStore={dialogStore}
-            filtered={Boolean(selectedServer || filters.status)}
-            relayNames={relayNames}
-            searchStore={searchStore}
-            selectionStore={selectionStore}
-            scrollElementRef={tableScrollRef}
-            targetNames={targetNames}
-          />
-        </div>
+        <BackupTable
+          backups={filteredBackups}
+          canCreate={canCreateBackup}
+          currentUserId={capabilities.user.id}
+          destinations={availabilityDestinations}
+          dialogStore={dialogStore}
+          filtered={Boolean(selectedServer || filters.status)}
+          relayNames={relayNames}
+          searchStore={searchStore}
+          selectionStore={selectionStore}
+          targetNames={targetNames}
+        />
         <BackupBulkActions
           backups={backups}
           deleteFeedbackStore={deleteFeedbackStore}
@@ -1047,7 +1043,6 @@ const BackupTable = React.memo(function BackupTable({
   dialogStore,
   filtered,
   relayNames,
-  scrollElementRef,
   searchStore,
   selectionStore,
   targetNames,
@@ -1059,7 +1054,6 @@ const BackupTable = React.memo(function BackupTable({
   dialogStore: BackupDialogStore
   filtered: boolean
   relayNames: ReadonlyMap<string, string>
-  scrollElementRef: React.RefObject<HTMLDivElement | null>
   searchStore: BackupSearchStore
   selectionStore: BackupSelectionStore
   targetNames: ReadonlyMap<string, string>
@@ -1122,15 +1116,17 @@ const BackupTable = React.memo(function BackupTable({
   )
 
   return (
-    <div id="backup-table-root">
+    <div id="backup-table-root" className="min-h-0 flex-1">
       {mobileLayout ? (
-        <BackupMobileList
-          backups={backups}
-          renderEmpty={renderEmpty}
-          renderRow={renderMobileRow}
-          searchStore={searchStore}
-          selectionStore={selectionStore}
-        />
+        <div className="h-full overflow-y-auto overscroll-contain">
+          <BackupMobileList
+            backups={backups}
+            renderEmpty={renderEmpty}
+            renderRow={renderMobileRow}
+            searchStore={searchStore}
+            selectionStore={selectionStore}
+          />
+        </div>
       ) : (
         <BackupDesktopTable
           backups={backups}
@@ -1140,7 +1136,6 @@ const BackupTable = React.memo(function BackupTable({
           dialogStore={dialogStore}
           relayNames={relayNames}
           renderEmpty={renderEmpty}
-          scrollElementRef={scrollElementRef}
           searchStore={searchStore}
           selectionStore={selectionStore}
           targetNames={targetNames}
@@ -1158,7 +1153,6 @@ const BackupDesktopTable = React.memo(function BackupDesktopTable({
   dialogStore,
   relayNames,
   renderEmpty,
-  scrollElementRef,
   searchStore,
   selectionStore,
   targetNames,
@@ -1170,7 +1164,6 @@ const BackupDesktopTable = React.memo(function BackupDesktopTable({
   dialogStore: BackupDialogStore
   relayNames: ReadonlyMap<string, string>
   renderEmpty: (searchActive: boolean) => React.ReactNode
-  scrollElementRef: React.RefObject<HTMLDivElement | null>
   searchStore: BackupSearchStore
   selectionStore: BackupSelectionStore
   targetNames: ReadonlyMap<string, string>
@@ -1330,8 +1323,8 @@ const BackupDesktopTable = React.memo(function BackupDesktopTable({
             },
             meta: {
               cellClassName:
-                "hidden h-auto py-2.5 text-sm text-muted-foreground xl:table-cell",
-              headerClassName: "hidden px-2 xl:table-cell",
+                "hidden h-auto py-2.5 text-sm text-muted-foreground xl:flex",
+              headerClassName: "hidden px-2 xl:flex xl:items-center",
             },
           }
         ),
@@ -1386,13 +1379,8 @@ const BackupDesktopTable = React.memo(function BackupDesktopTable({
     state: { globalFilter: normalizedSearch, rowSelection },
   })
   const virtualization = React.useMemo(
-    () => ({
-      estimateRowHeight: 76,
-      overscan: 8,
-      scrollElementRef,
-      scrollMargin: 40,
-    }),
-    [scrollElementRef]
+    () => ({ estimateRowHeight: 76, overscan: 8 }),
+    []
   )
 
   return (
