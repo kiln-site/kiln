@@ -1171,15 +1171,6 @@ function BackupSettingsSurface({
 
   return (
     <section className="overflow-hidden rounded-xl border bg-card/45 [contain:paint]">
-      <div className="border-b px-5 py-4">
-        <h2 className="font-heading text-base font-semibold tracking-tight">
-          {target.name} backup settings
-        </h2>
-        <p className="type-support mt-1 text-muted-foreground">
-          Set retention ceilings, a preferred destination, and extra exclusions
-          for this backup target.
-        </p>
-      </div>
       {policy.data ? (
         <BackupSettingsEditor
           key={`${target.relayId}:${policyTarget.kind}:${policyTarget.id}`}
@@ -1307,106 +1298,96 @@ function BackupSettingsEditor({
   })
 
   return (
-    <div>
-      <div className="grid gap-4 p-5 sm:grid-cols-2">
+    <div className="grid gap-4 p-5 sm:grid-cols-2">
+      <StorageTextField
+        label="Quantity limit"
+        placeholder="Unlimited"
+        type="number"
+        value={quantityLimit}
+        onChange={setQuantityLimit}
+      />
+      <StorageTextField
+        label="Size limit (GiB)"
+        placeholder="Unlimited"
+        type="number"
+        value={sizeLimit}
+        onChange={setSizeLimit}
+      />
+      {isPlatformAdmin ? (
         <StorageTextField
-          label="Quantity limit"
-          placeholder="Unlimited"
+          label="Platform quantity ceiling"
+          placeholder="Not enforced"
           type="number"
-          value={quantityLimit}
-          onChange={setQuantityLimit}
+          value={adminQuantityLimit}
+          onChange={setAdminQuantityLimit}
         />
+      ) : null}
+      {isPlatformAdmin ? (
         <StorageTextField
-          label="Size limit (GiB)"
-          placeholder="Unlimited"
+          label="Platform size ceiling (GiB)"
+          placeholder="Not enforced"
           type="number"
-          value={sizeLimit}
-          onChange={setSizeLimit}
+          value={adminSizeLimit}
+          onChange={setAdminSizeLimit}
         />
-        {isPlatformAdmin ? (
-          <StorageTextField
-            label="Platform quantity ceiling"
-            placeholder="Not enforced"
-            type="number"
-            value={adminQuantityLimit}
-            onChange={setAdminQuantityLimit}
-          />
-        ) : null}
-        {isPlatformAdmin ? (
-          <StorageTextField
-            label="Platform size ceiling (GiB)"
-            placeholder="Not enforced"
-            type="number"
-            value={adminSizeLimit}
-            onChange={setAdminSizeLimit}
-          />
-        ) : null}
-        {!isPlatformAdmin &&
-        (policy.adminQuantityLimit !== null ||
-          policy.adminSizeLimitBytes !== null) ? (
-          <div className="type-meta rounded-lg border border-amber-500/25 bg-amber-500/8 p-3 text-muted-foreground sm:col-span-2">
-            Platform ceiling: {policy.adminQuantityLimit ?? "unlimited"} backups
-            ·{" "}
-            {policy.adminSizeLimitBytes === null
-              ? " unlimited size"
-              : ` ${formatBytes(policy.adminSizeLimitBytes)}`}
-          </div>
-        ) : null}
-        <label className="block sm:col-span-2">
-          <span className="mb-2 block text-xs font-medium">
-            Preferred destination
-          </span>
-          <Select value={storageId} onValueChange={setStorageId}>
-            <SelectTrigger
-              aria-label="Preferred backup destination"
-              className="h-9 w-full [&_[data-slot=select-value]]:min-w-0 [&_[data-slot=select-value]]:truncate"
-            >
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent className="w-max min-w-(--radix-select-trigger-width)">
-              <SelectItem value="local">Local Relay storage</SelectItem>
-              {enabledStorage.map((destination) => (
-                <SelectItem key={destination.id} value={destination.id}>
-                  {destination.name} · S3
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </label>
-        <label className="block sm:col-span-2">
-          <span className="mb-2 block text-xs font-medium">
-            Extra exclusions
-          </span>
-          <Textarea
-            aria-label="Extra backup exclusions"
-            className="min-h-28 font-mono text-xs"
-            placeholder={"cache/**\nlogs/*.log\nworld/session.lock"}
-            value={exclude}
-            onChange={(event) => setExclude(event.currentTarget.value)}
-          />
-          <span className="type-meta mt-1.5 block text-muted-foreground">
-            One glob per line. Relay validates exclusions before applying them
-            to compatible archives.
-          </span>
-        </label>
-        {save.error ? (
-          <p className="text-xs text-destructive sm:col-span-2">
-            {save.error.message}
-          </p>
-        ) : null}
-      </div>
-      <div className="flex justify-end border-t bg-background/35 px-5 py-4">
+      ) : null}
+      {!isPlatformAdmin &&
+      (policy.adminQuantityLimit !== null ||
+        policy.adminSizeLimitBytes !== null) ? (
+        <div className="type-meta rounded-lg border border-amber-500/25 bg-amber-500/8 p-3 text-muted-foreground sm:col-span-2">
+          Platform ceiling: {policy.adminQuantityLimit ?? "unlimited"} backups ·{" "}
+          {policy.adminSizeLimitBytes === null
+            ? " unlimited size"
+            : ` ${formatBytes(policy.adminSizeLimitBytes)}`}
+        </div>
+      ) : null}
+      <label className="block sm:col-span-2">
+        <span className="mb-2 block text-xs font-medium">
+          Preferred destination
+        </span>
+        <Select value={storageId} onValueChange={setStorageId}>
+          <SelectTrigger
+            aria-label="Preferred backup destination"
+            className="h-9 w-full [&_[data-slot=select-value]]:min-w-0 [&_[data-slot=select-value]]:truncate"
+          >
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent className="w-max min-w-(--radix-select-trigger-width)">
+            <SelectItem value="local">Local Relay storage</SelectItem>
+            {enabledStorage.map((destination) => (
+              <SelectItem key={destination.id} value={destination.id}>
+                {destination.name} · S3
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </label>
+      <label className="block sm:col-span-2">
+        <span className="mb-2 block text-xs font-medium">Extra exclusions</span>
+        <Textarea
+          aria-label="Extra backup exclusions"
+          className="min-h-28 font-mono text-xs"
+          placeholder={"cache/**\nlogs/*.log\nworld/session.lock"}
+          value={exclude}
+          onChange={(event) => setExclude(event.currentTarget.value)}
+        />
+        <span className="type-meta mt-1.5 block text-muted-foreground">
+          One glob per line. Relay validates exclusions before applying them to
+          compatible archives.
+        </span>
+      </label>
+      {save.error ? (
+        <p className="text-xs text-destructive sm:col-span-2">
+          {save.error.message}
+        </p>
+      ) : null}
+      <div className="flex justify-end sm:col-span-2">
         <Button
           disabled={save.isPending}
           type="button"
           onClick={() => save.mutate()}
         >
-          {save.isPending ? (
-            <LoaderCircle className="animate-spin" />
-          ) : (
-            <SlidersHorizontal />
-          )}
-          Save settings
+          {save.isPending ? "Saving…" : "Save settings"}
         </Button>
       </div>
     </div>
