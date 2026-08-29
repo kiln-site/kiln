@@ -206,6 +206,7 @@ type BackupDeleteFeedbackStore = ReturnType<
   typeof createBackupDeleteFeedbackStore
 >
 type BackupSelectionStore = ReturnType<typeof createBackupSelectionStore>
+type BackupNameStore = ReturnType<typeof createBackupNameStore>
 
 const closedBackupDialog = { kind: "closed" } as const
 const emptyBackupDeleteFeedback: ReadonlyMap<string, Backup> = new Map()
@@ -284,6 +285,54 @@ function createBackupSelectionStore() {
       if (next.has(backupId)) next.delete(backupId)
       else next.add(backupId)
       publish(next)
+    },
+  }
+}
+
+function createBackupNameStore() {
+  let revision = 0
+  const names = new Map<string, string>()
+  const listeners = new Set<() => void>()
+  const backupListeners = new Map<string, Set<() => void>>()
+
+  function publish(backupIds: ReadonlySet<string>) {
+    revision += 1
+    for (const listener of listeners) listener()
+    for (const backupId of backupIds) {
+      for (const listener of backupListeners.get(backupId) ?? []) listener()
+    }
+  }
+
+  return {
+    get: (backupId: string, fallback: string) =>
+      names.get(backupId) ?? fallback,
+    getRevision: () => revision,
+    set: (backupId: string, name: string) => {
+      if (names.get(backupId) === name) return
+      names.set(backupId, name)
+      publish(new Set([backupId]))
+    },
+    subscribe: (listener: () => void) => {
+      listeners.add(listener)
+      return () => listeners.delete(listener)
+    },
+    subscribeToBackup: (backupId: string, listener: () => void) => {
+      const current = backupListeners.get(backupId) ?? new Set()
+      current.add(listener)
+      backupListeners.set(backupId, current)
+      return () => {
+        current.delete(listener)
+        if (current.size === 0) backupListeners.delete(backupId)
+      }
+    },
+    sync: (entries: ReadonlyArray<readonly [string, string]>) => {
+      const changed = new Set<string>()
+      for (const [backupId, name] of entries) {
+        if (names.get(backupId) === name) continue
+        names.set(backupId, name)
+        changed.add(backupId)
+      }
+      if (changed.size > 0) publish(changed)
     },
   }
 }
@@ -522,10 +571,6 @@ export const BackupsPage = React.memo(function BackupsPage({
   onFiltersChange: (change: Partial<BackupFilters>) => void
   searchStore: BackupSearchStore
 }) {
-  const { data: backups } = useSuspenseQuery({
-    ...backupsQueryOptions(),
-    notifyOnChangeProps: ["data"],
-  })
   const { data: storage } = useSuspenseQuery(backupStorageQueryOptions())
   const { data: backupScope } = useSuspenseQuery({
     ...relaySnapshotQueryOptions(),
@@ -541,12 +586,9 @@ export const BackupsPage = React.memo(function BackupsPage({
   const [dialogStore] = React.useState(createBackupDialogStore)
   const [deleteFeedbackStore] = React.useState(createBackupDeleteFeedbackStore)
   const [selectionStore] = React.useState(createBackupSelectionStore)
+  const [nameStore] = React.useState(createBackupNameStore)
   const [statusFilterStore] = React.useState(() =>
     createBackupStatusFilterStore(filters.status)
-  )
-  const visibleBackups = useBackupsWithDeleteFeedback(
-    backups,
-    deleteFeedbackStore
   )
 
   const scopeOptions = React.useMemo(
@@ -630,47 +672,9 @@ export const BackupsPage = React.memo(function BackupsPage({
     ],
     [storage]
   )
-  const scopedBackups = React.useMemo(
-    () =>
-      visibleBackups.filter((backup) => {
-        if (backup.status === "deleted") return false
-        return backupMatchesScope(backup, selectedServer)
-      }),
-    [selectedServer, visibleBackups]
-  )
-  const filteredBackups = React.useMemo(
-    () =>
-      scopedBackups.filter((backup) =>
-        backupMatchesStatusFilter(backup, filters.status)
-      ),
-    [filters.status, scopedBackups]
-  )
   React.useLayoutEffect(() => {
     statusFilterStore.set(filters.status)
   }, [filters.status, statusFilterStore])
-  React.useLayoutEffect(() => {
-    const retainVisibleSelection = () => {
-      const normalizedSearch = searchStore.getSnapshot().trim().toLowerCase()
-      selectionStore.retain(
-        new Set(
-          filteredBackups.flatMap((backup) =>
-            backupCanBeRemoved(backup) &&
-            backupMatchesSearch(
-              backup,
-              normalizedSearch,
-              relayNames,
-              targetNames
-            )
-              ? [backup.id]
-              : []
-          )
-        )
-      )
-    }
-
-    retainVisibleSelection()
-    return searchStore.subscribe(retainVisibleSelection)
-  }, [filteredBackups, relayNames, searchStore, selectionStore, targetNames])
   const createTargets = React.useMemo(
     () =>
       availableCreateTargets({
@@ -725,32 +729,26 @@ export const BackupsPage = React.memo(function BackupsPage({
       />
 
       <section className="relative flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border bg-card/45 [contain:paint]">
+        <BackupNameQuerySync nameStore={nameStore} />
         <BackupToolbar
           canCreate={createTargets.length > 0}
           dialogStore={dialogStore}
-          filters={filters}
           searchStore={searchStore}
-          onFiltersChange={onFiltersChange}
+          statusFilterStore={statusFilterStore}
         />
-        <BackupTable
-          backups={filteredBackups}
+        <BackupDataSurface
           canCreate={canCreateBackup}
           currentUserId={capabilities.user.id}
+          deleteFeedbackStore={deleteFeedbackStore}
           destinations={availabilityDestinations}
           dialogStore={dialogStore}
-          desktopBackups={scopedBackups}
-          filtered={Boolean(selectedServer || filters.status)}
+          nameStore={nameStore}
           relayNames={relayNames}
-          scopeFiltered={Boolean(selectedServer)}
           searchStore={searchStore}
+          selectedServer={selectedServer}
           selectionStore={selectionStore}
           statusFilterStore={statusFilterStore}
           targetNames={targetNames}
-        />
-        <BackupBulkActions
-          backups={backups}
-          deleteFeedbackStore={deleteFeedbackStore}
-          selectionStore={selectionStore}
         />
       </section>
 
@@ -769,18 +767,184 @@ export const BackupsPage = React.memo(function BackupsPage({
   )
 })
 
+const BackupNameQuerySync = React.memo(function BackupNameQuerySync({
+  nameStore,
+}: {
+  nameStore: BackupNameStore
+}) {
+  const { data: names } = useQuery({
+    ...backupsQueryOptions(),
+    notifyOnChangeProps: ["data"],
+    select: React.useCallback(
+      (backups: Array<Backup>) =>
+        backups.map((backup) => [backup.id, backup.name] as const),
+      []
+    ),
+  })
+
+  React.useLayoutEffect(() => {
+    if (names) nameStore.sync(names)
+  }, [nameStore, names])
+
+  return null
+})
+
+function backupMatchesExceptName(left: Backup, right: Backup): boolean {
+  if (left === right) return true
+  const leftRecord = left as unknown as Record<string, unknown>
+  const rightRecord = right as unknown as Record<string, unknown>
+  const keys = Object.keys(leftRecord)
+  return (
+    keys.length === Object.keys(rightRecord).length &&
+    keys.every((key) => key === "name" || leftRecord[key] === rightRecord[key])
+  )
+}
+
+function createStructuralBackupSelector() {
+  let previous: Array<Backup> | undefined
+  return (backups: Array<Backup>) => {
+    if (
+      previous?.length === backups.length &&
+      previous.every(
+        (backup, index) =>
+          backup.id === backups[index]?.id &&
+          backupMatchesExceptName(backup, backups[index] as Backup)
+      )
+    ) {
+      return previous
+    }
+    previous = backups
+    return backups
+  }
+}
+
+const BackupDataSurface = React.memo(function BackupDataSurface({
+  canCreate,
+  currentUserId,
+  deleteFeedbackStore,
+  destinations,
+  dialogStore,
+  nameStore,
+  relayNames,
+  searchStore,
+  selectedServer,
+  selectionStore,
+  statusFilterStore,
+  targetNames,
+}: {
+  canCreate: (backup: Backup) => boolean
+  currentUserId: string
+  deleteFeedbackStore: BackupDeleteFeedbackStore
+  destinations: ReadonlyArray<BackupAvailabilityDestination>
+  dialogStore: BackupDialogStore
+  nameStore: BackupNameStore
+  relayNames: ReadonlyMap<string, string>
+  searchStore: BackupSearchStore
+  selectedServer: ServerPickerOption | null
+  selectionStore: BackupSelectionStore
+  statusFilterStore: BackupStatusFilterStore
+  targetNames: ReadonlyMap<string, string>
+}) {
+  const [selectStructuralBackups] = React.useState(
+    createStructuralBackupSelector
+  )
+  const { data: backups } = useSuspenseQuery({
+    ...backupsQueryOptions(),
+    notifyOnChangeProps: ["data"],
+    select: selectStructuralBackups,
+  })
+  const visibleBackups = useBackupsWithDeleteFeedback(
+    backups,
+    deleteFeedbackStore
+  )
+  const scopedBackups = React.useMemo(
+    () =>
+      visibleBackups.filter((backup) => {
+        if (backup.status === "deleted") return false
+        return backupMatchesScope(backup, selectedServer)
+      }),
+    [selectedServer, visibleBackups]
+  )
+
+  React.useLayoutEffect(() => {
+    const retainVisibleSelection = () => {
+      const normalizedSearch = searchStore.getSnapshot().trim().toLowerCase()
+      const status = statusFilterStore.getSnapshot()
+      selectionStore.retain(
+        new Set(
+          scopedBackups.flatMap((backup) =>
+            backupCanBeRemoved(backup) &&
+            backupMatchesStatusFilter(backup, status) &&
+            backupMatchesSearch(
+              backup,
+              normalizedSearch,
+              relayNames,
+              targetNames,
+              nameStore.get(backup.id, backup.name)
+            )
+              ? [backup.id]
+              : []
+          )
+        )
+      )
+    }
+
+    retainVisibleSelection()
+    const unsubscribeNames = nameStore.subscribe(retainVisibleSelection)
+    const unsubscribeSearch = searchStore.subscribe(retainVisibleSelection)
+    const unsubscribeStatus = statusFilterStore.subscribe(
+      retainVisibleSelection
+    )
+    return () => {
+      unsubscribeNames()
+      unsubscribeSearch()
+      unsubscribeStatus()
+    }
+  }, [
+    nameStore,
+    relayNames,
+    scopedBackups,
+    searchStore,
+    selectionStore,
+    statusFilterStore,
+    targetNames,
+  ])
+
+  return (
+    <>
+      <BackupTable
+        backups={scopedBackups}
+        canCreate={canCreate}
+        currentUserId={currentUserId}
+        destinations={destinations}
+        dialogStore={dialogStore}
+        nameStore={nameStore}
+        relayNames={relayNames}
+        scopeFiltered={Boolean(selectedServer)}
+        searchStore={searchStore}
+        selectionStore={selectionStore}
+        statusFilterStore={statusFilterStore}
+        targetNames={targetNames}
+      />
+      <BackupBulkActions
+        backups={visibleBackups}
+        deleteFeedbackStore={deleteFeedbackStore}
+        selectionStore={selectionStore}
+      />
+    </>
+  )
+})
+
 const BackupToolbar = React.memo(function BackupToolbar({
   canCreate,
   dialogStore,
-  filters,
-  onFiltersChange,
   searchStore,
+  statusFilterStore,
 }: {
   canCreate: boolean
   dialogStore: BackupDialogStore
-  filters: BackupFilters
-  onFiltersChange: (change: Partial<BackupFilters>) => void
   searchStore: BackupSearchStore
+  statusFilterStore: BackupStatusFilterStore
 }) {
   const inputRef = React.useRef<HTMLInputElement>(null)
   const [mobileSearchOpen, setMobileSearchOpen] = React.useState(
@@ -837,39 +1001,10 @@ const BackupToolbar = React.memo(function BackupToolbar({
           <X />
         </Button>
       ) : null}
-      <DropdownMenu>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <DropdownMenuTrigger asChild>
-              <Button
-                aria-label="Filter backups by status"
-                className={`${mobileSearchOpen ? "hidden sm:inline-flex" : "inline-flex"} shrink-0`}
-                type="button"
-                variant={filters.status ? "secondary" : "outline"}
-              >
-                <SlidersHorizontal />
-                <span className="hidden lg:inline">
-                  {backupStatusFilterLabel(filters.status)}
-                </span>
-              </Button>
-            </DropdownMenuTrigger>
-          </TooltipTrigger>
-          <TooltipContent side="bottom">Filter by status</TooltipContent>
-        </Tooltip>
-        <DropdownMenuContent align="end">
-          {backupStatusFilterOptions.map((option) => (
-            <DropdownMenuItem
-              key={option.label}
-              onSelect={() => onFiltersChange({ status: option.value })}
-            >
-              <span className="w-4">
-                {filters.status === option.value ? <Check /> : null}
-              </span>
-              {option.label}
-            </DropdownMenuItem>
-          ))}
-        </DropdownMenuContent>
-      </DropdownMenu>
+      <BackupStatusFilter
+        mobileSearchOpen={mobileSearchOpen}
+        statusFilterStore={statusFilterStore}
+      />
       <Tooltip>
         <TooltipTrigger asChild>
           <Button
@@ -903,16 +1038,66 @@ const BackupToolbar = React.memo(function BackupToolbar({
   )
 })
 
+const BackupStatusFilter = React.memo(function BackupStatusFilter({
+  mobileSearchOpen,
+  statusFilterStore,
+}: {
+  mobileSearchOpen: boolean
+  statusFilterStore: BackupStatusFilterStore
+}) {
+  const status = React.useSyncExternalStore(
+    statusFilterStore.subscribe,
+    statusFilterStore.getSnapshot,
+    statusFilterStore.getServerSnapshot
+  )
+
+  return (
+    <DropdownMenu>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <DropdownMenuTrigger asChild>
+            <Button
+              aria-label="Filter backups by status"
+              className={`${mobileSearchOpen ? "hidden sm:inline-flex" : "inline-flex"} shrink-0`}
+              type="button"
+              variant={status ? "secondary" : "outline"}
+            >
+              <SlidersHorizontal />
+              <span className="hidden lg:inline">
+                {backupStatusFilterLabel(status)}
+              </span>
+            </Button>
+          </DropdownMenuTrigger>
+        </TooltipTrigger>
+        <TooltipContent side="bottom">Filter by status</TooltipContent>
+      </Tooltip>
+      <DropdownMenuContent align="end">
+        {backupStatusFilterOptions.map((option) => (
+          <DropdownMenuItem
+            key={option.label}
+            onSelect={() => statusFilterStore.set(option.value)}
+          >
+            <span className="w-4">
+              {status === option.value ? <Check /> : null}
+            </span>
+            {option.label}
+          </DropdownMenuItem>
+        ))}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  )
+})
+
 const BackupSyncButton = React.memo(function BackupSyncButton() {
-  const { fetchStatus, refetch } = useQuery({
+  const { refetch } = useQuery({
     ...backupsQueryOptions(),
-    notifyOnChangeProps: ["fetchStatus"],
+    notifyOnChangeProps: [],
   })
   const [spinning, setSpinning] = React.useState(false)
   const fetchDoneRef = React.useRef(true)
   const fallbackTimeoutRef = React.useRef<number>(undefined)
   const mountedRef = React.useRef(true)
-  const syncing = spinning || fetchStatus === "fetching"
+  const syncing = spinning
 
   React.useEffect(() => {
     mountedRef.current = true
@@ -934,7 +1119,7 @@ const BackupSyncButton = React.memo(function BackupSyncButton() {
   }, [])
 
   const syncBackups = React.useCallback(() => {
-    if (spinning || fetchStatus === "fetching") return
+    if (spinning) return
     fetchDoneRef.current = false
     setSpinning(true)
     forkPromise(() =>
@@ -946,7 +1131,7 @@ const BackupSyncButton = React.memo(function BackupSyncButton() {
         )
       })
     )
-  }, [fetchStatus, refetch, spinning, stopSpinIfDone])
+  }, [refetch, spinning, stopSpinIfDone])
 
   return (
     <Tooltip>
@@ -1073,6 +1258,7 @@ const backupTableColumnHelper = createDataTableColumnHelper<Backup>()
 const backupTableGridClassName =
   "grid-cols-[2.5rem_minmax(0,1.2fr)_minmax(0,1fr)_12rem_11.25rem] xl:grid-cols-[2.5rem_minmax(0,1.2fr)_minmax(0,1fr)_12rem_6.5rem_11.25rem]"
 type BackupDesktopFilter = {
+  nameRevision?: number
   search: string
   status: BackupFilters["status"]
 }
@@ -1082,9 +1268,8 @@ const BackupTable = React.memo(function BackupTable({
   canCreate,
   currentUserId,
   destinations,
-  desktopBackups,
   dialogStore,
-  filtered,
+  nameStore,
   relayNames,
   scopeFiltered,
   searchStore,
@@ -1096,9 +1281,8 @@ const BackupTable = React.memo(function BackupTable({
   canCreate: (backup: Backup) => boolean
   currentUserId: string
   destinations: ReadonlyArray<BackupAvailabilityDestination>
-  desktopBackups: Array<Backup>
   dialogStore: BackupDialogStore
-  filtered: boolean
+  nameStore: BackupNameStore
   relayNames: ReadonlyMap<string, string>
   scopeFiltered: boolean
   searchStore: BackupSearchStore
@@ -1120,6 +1304,7 @@ const BackupTable = React.memo(function BackupTable({
         currentUserId={currentUserId}
         destinations={destinations}
         dialogStore={dialogStore}
+        nameStore={nameStore}
         relayName={relayNames.get(backup.relayId) ?? backup.relayId}
         selectionStore={selectionStore}
         targetAvailable={
@@ -1137,6 +1322,7 @@ const BackupTable = React.memo(function BackupTable({
       currentUserId,
       destinations,
       dialogStore,
+      nameStore,
       relayNames,
       selectionStore,
       targetNames,
@@ -1162,32 +1348,31 @@ const BackupTable = React.memo(function BackupTable({
     ),
     []
   )
-  const renderMobileEmpty = React.useCallback(
-    (searchActive: boolean) => renderEmpty(searchActive, filtered),
-    [filtered, renderEmpty]
-  )
-
   return (
     <div id="backup-table-root" className="min-h-0 flex-1">
       {mobileLayout ? (
         <div className="h-full overflow-y-auto overscroll-contain">
           <BackupMobileList
             backups={backups}
+            nameStore={nameStore}
             relayNames={relayNames}
-            renderEmpty={renderMobileEmpty}
+            renderEmpty={renderEmpty}
             renderRow={renderMobileRow}
+            scopeFiltered={scopeFiltered}
             searchStore={searchStore}
             selectionStore={selectionStore}
+            statusFilterStore={statusFilterStore}
             targetNames={targetNames}
           />
         </div>
       ) : (
         <BackupDesktopTable
-          backups={desktopBackups}
+          backups={backups}
           canCreate={canCreate}
           currentUserId={currentUserId}
           destinations={destinations}
           dialogStore={dialogStore}
+          nameStore={nameStore}
           relayNames={relayNames}
           renderEmpty={renderEmpty}
           scopeFiltered={scopeFiltered}
@@ -1207,6 +1392,7 @@ const BackupDesktopTable = React.memo(function BackupDesktopTable({
   currentUserId,
   destinations,
   dialogStore,
+  nameStore,
   relayNames,
   renderEmpty,
   scopeFiltered,
@@ -1220,6 +1406,7 @@ const BackupDesktopTable = React.memo(function BackupDesktopTable({
   currentUserId: string
   destinations: ReadonlyArray<BackupAvailabilityDestination>
   dialogStore: BackupDialogStore
+  nameStore: BackupNameStore
   relayNames: ReadonlyMap<string, string>
   renderEmpty: (searchActive: boolean, filterActive: boolean) => React.ReactNode
   scopeFiltered: boolean
@@ -1246,11 +1433,12 @@ const BackupDesktopTable = React.memo(function BackupDesktopTable({
           row.original,
           filter.search,
           relayNames,
-          targetNames
+          targetNames,
+          nameStore.get(row.original.id, row.original.name)
         )
       )
     },
-    [relayNames, targetNames]
+    [nameStore, relayNames, targetNames]
   )
   const columns = React.useMemo(
     () =>
@@ -1267,31 +1455,41 @@ const BackupDesktopTable = React.memo(function BackupDesktopTable({
             headerClassName: "px-2",
           },
         }),
-        backupTableColumnHelper.accessor("name", {
-          header: "Name",
-          enableGlobalFilter: true,
-          sortFn: "text",
-          cell: ({ row }) => {
-            const backup = row.original
-            const canCreateBackup = canCreate(backup)
-            return (
-              <div className="min-w-0">
-                <BackupNameEditor
-                  backupId={backup.id}
-                  editable={canCreateBackup}
-                  name={backup.name}
-                />
-                <BackupAvailabilityTags
-                  backup={backup}
-                  canCopy={canCreateBackup}
-                  currentUserId={currentUserId}
-                  destinations={destinations}
-                />
-              </div>
-            )
-          },
-          meta: { cellClassName: "h-auto py-2.5" },
-        }),
+        backupTableColumnHelper.accessor(
+          (backup) => nameStore.get(backup.id, backup.name),
+          {
+            id: "name",
+            header: "Name",
+            enableGlobalFilter: true,
+            sortFn: (left, right) =>
+              nameStore
+                .get(left.original.id, left.original.name)
+                .localeCompare(
+                  nameStore.get(right.original.id, right.original.name)
+                ),
+            cell: ({ row }) => {
+              const backup = row.original
+              const canCreateBackup = canCreate(backup)
+              return (
+                <div className="min-w-0">
+                  <BackupNameEditor
+                    backupId={backup.id}
+                    editable={canCreateBackup}
+                    nameStore={nameStore}
+                    name={backup.name}
+                  />
+                  <BackupAvailabilityTags
+                    backup={backup}
+                    canCopy={canCreateBackup}
+                    currentUserId={currentUserId}
+                    destinations={destinations}
+                  />
+                </div>
+              )
+            },
+            meta: { cellClassName: "h-auto py-2.5" },
+          }
+        ),
         backupTableColumnHelper.accessor(
           (backup) => backupTargetSortName(backup, relayNames, targetNames),
           {
@@ -1411,6 +1609,7 @@ const BackupDesktopTable = React.memo(function BackupDesktopTable({
       currentUserId,
       destinations,
       dialogStore,
+      nameStore,
       relayNames,
       targetNames,
     ]
@@ -1437,6 +1636,7 @@ const BackupDesktopTable = React.memo(function BackupDesktopTable({
   return (
     <>
       <BackupDesktopTableStateSync
+        nameStore={nameStore}
         searchStore={searchStore}
         selectionStore={selectionStore}
         statusFilterStore={statusFilterStore}
@@ -1463,11 +1663,13 @@ const BackupDesktopTable = React.memo(function BackupDesktopTable({
 
 const BackupDesktopTableStateSync = React.memo(
   function BackupDesktopTableStateSync({
+    nameStore,
     searchStore,
     selectionStore,
     statusFilterStore,
     table,
   }: {
+    nameStore: BackupNameStore
     searchStore: BackupSearchStore
     selectionStore: BackupSelectionStore
     statusFilterStore: BackupStatusFilterStore
@@ -1488,14 +1690,47 @@ const BackupDesktopTableStateSync = React.memo(
       statusFilterStore.getSnapshot,
       statusFilterStore.getServerSnapshot
     )
+    const nameRevision = React.useSyncExternalStore(
+      nameStore.subscribe,
+      nameStore.getRevision,
+      () => 0
+    )
+    const subscribeToSorting = React.useCallback(
+      (listener: () => void) => {
+        const subscription = table.atoms.sorting.subscribe(listener)
+        return () => subscription.unsubscribe()
+      },
+      [table]
+    )
+    const getSorting = React.useCallback(
+      () => table.atoms.sorting.get(),
+      [table]
+    )
+    const sorting = React.useSyncExternalStore(
+      subscribeToSorting,
+      getSorting,
+      getSorting
+    )
 
     React.useLayoutEffect(() => {
       const current = table.atoms.globalFilter.get() as BackupDesktopFilter
-      if (current.search === normalizedSearch && current.status === status) {
+      const nameAffectsRows =
+        normalizedSearch.length > 0 ||
+        sorting.some((sort) => sort.id === "name")
+      const nextNameRevision = nameAffectsRows ? nameRevision : undefined
+      if (
+        current.search === normalizedSearch &&
+        current.status === status &&
+        current.nameRevision === nextNameRevision
+      ) {
         return
       }
-      table.setGlobalFilter({ search: normalizedSearch, status })
-    }, [normalizedSearch, status, table])
+      table.setGlobalFilter({
+        nameRevision: nextNameRevision,
+        search: normalizedSearch,
+        status,
+      })
+    }, [nameRevision, normalizedSearch, sorting, status, table])
 
     React.useLayoutEffect(() => {
       const current = table.atoms.rowSelection.get()
@@ -1540,19 +1775,25 @@ const BackupDesktopEmptyState = React.memo(function BackupDesktopEmptyState({
 
 const BackupMobileList = React.memo(function BackupMobileList({
   backups,
+  nameStore,
   relayNames,
   renderEmpty,
   renderRow,
+  scopeFiltered,
   searchStore,
   selectionStore,
+  statusFilterStore,
   targetNames,
 }: {
   backups: Array<Backup>
+  nameStore: BackupNameStore
   relayNames: ReadonlyMap<string, string>
-  renderEmpty: (searchActive: boolean) => React.ReactNode
+  renderEmpty: (searchActive: boolean, filterActive: boolean) => React.ReactNode
   renderRow: (backup: Backup) => React.ReactNode
+  scopeFiltered: boolean
   searchStore: BackupSearchStore
   selectionStore: BackupSelectionStore
+  statusFilterStore: BackupStatusFilterStore
   targetNames: ReadonlyMap<string, string>
 }) {
   const search = React.useSyncExternalStore(
@@ -1560,16 +1801,51 @@ const BackupMobileList = React.memo(function BackupMobileList({
     searchStore.getSnapshot,
     searchStore.getServerSnapshot
   )
+  const status = React.useSyncExternalStore(
+    statusFilterStore.subscribe,
+    statusFilterStore.getSnapshot,
+    statusFilterStore.getServerSnapshot
+  )
   const normalizedSearch = search.trim().toLowerCase()
+  const getSearchNameRevision = React.useCallback(
+    () => (normalizedSearch.length > 0 ? nameStore.getRevision() : 0),
+    [nameStore, normalizedSearch.length]
+  )
+  const nameRevision = React.useSyncExternalStore(
+    nameStore.subscribe,
+    getSearchNameRevision,
+    () => 0
+  )
   const visible = React.useMemo(
     () =>
-      backups.filter((backup) =>
-        backupMatchesSearch(backup, normalizedSearch, relayNames, targetNames)
+      backups.filter(
+        (backup) =>
+          backupMatchesStatusFilter(backup, status) &&
+          backupMatchesSearch(
+            backup,
+            normalizedSearch,
+            relayNames,
+            targetNames,
+            nameStore.get(backup.id, backup.name)
+          )
       ),
-    [backups, normalizedSearch, relayNames, targetNames]
+    [
+      backups,
+      nameRevision,
+      nameStore,
+      normalizedSearch,
+      relayNames,
+      status,
+      targetNames,
+    ]
   )
 
-  if (visible.length === 0) return renderEmpty(normalizedSearch.length > 0)
+  if (visible.length === 0) {
+    return renderEmpty(
+      normalizedSearch.length > 0,
+      scopeFiltered || Boolean(status)
+    )
+  }
   return (
     <div>
       <BackupMobileSelectAll backups={visible} store={selectionStore} />
@@ -1669,36 +1945,56 @@ function BackupDesktopSelectAllCheckbox({
   return (
     <Subscribe
       source={table.store}
-      selector={(state) => ({
-        globalFilter: state.globalFilter,
-        rowSelection: state.rowSelection,
-      })}
+      selector={() => backupDesktopSelectAllState(table)}
     >
-      {() => <BackupDesktopSelectAllCheckboxContent table={table} />}
+      {(state) => (
+        <BackupDesktopSelectAllCheckboxContent state={state} table={table} />
+      )}
     </Subscribe>
   )
 }
 
 function BackupDesktopSelectAllCheckboxContent({
+  state,
   table,
 }: {
+  state: BackupDesktopSelectAllState
   table: Table<typeof dataTableFeatures, Backup>
 }) {
-  const rows = table.getRowModel().rows
-  const hasSelectableRows = rows.some((row) => row.getCanSelect())
-  const allSelected = hasSelectableRows && table.getIsAllRowsSelected()
-
   return (
     <span className="grid size-7 place-items-center">
       <DataTableCheckbox
         ariaLabel="Select all visible backups"
-        checked={allSelected}
-        disabled={!hasSelectableRows}
-        indeterminate={table.getIsSomeRowsSelected() && !allSelected}
+        checked={state === "checked"}
+        disabled={state === "disabled"}
+        indeterminate={state === "indeterminate"}
         onChange={(event) => table.getToggleAllRowsSelectedHandler()(event)}
       />
     </span>
   )
+}
+
+type BackupDesktopSelectAllState =
+  | "checked"
+  | "disabled"
+  | "indeterminate"
+  | "unchecked"
+
+function backupDesktopSelectAllState(
+  table: Table<typeof dataTableFeatures, Backup>
+): BackupDesktopSelectAllState {
+  const selectableRows = table
+    .getRowModel()
+    .rows.filter((row) => row.getCanSelect())
+  if (selectableRows.length === 0) return "disabled"
+
+  const selectedCount = selectableRows.reduce(
+    (count, row) => count + Number(row.getIsSelected()),
+    0
+  )
+  if (selectedCount === 0) return "unchecked"
+  if (selectedCount === selectableRows.length) return "checked"
+  return "indeterminate"
 }
 
 function BackupDesktopSelectionCheckbox({
@@ -1733,6 +2029,7 @@ const BackupMobileRow = React.memo(function BackupMobileRow({
   currentUserId,
   destinations,
   dialogStore,
+  nameStore,
   relayName,
   selectionStore,
   targetAvailable,
@@ -1743,6 +2040,7 @@ const BackupMobileRow = React.memo(function BackupMobileRow({
   currentUserId: string
   destinations: ReadonlyArray<BackupAvailabilityDestination>
   dialogStore: BackupDialogStore
+  nameStore: BackupNameStore
   relayName: string
   selectionStore: BackupSelectionStore
   targetAvailable: boolean
@@ -1762,6 +2060,7 @@ const BackupMobileRow = React.memo(function BackupMobileRow({
           <BackupNameEditor
             backupId={backup.id}
             editable={canCreate}
+            nameStore={nameStore}
             name={backup.name}
           />
         </div>
@@ -2455,15 +2754,30 @@ const CancelBackupButton = React.memo(function CancelBackupButton({
 const BackupNameEditor = React.memo(function BackupNameEditor({
   backupId,
   editable,
+  nameStore,
   name,
 }: {
   backupId: string
   editable: boolean
+  nameStore: BackupNameStore
   name: string
 }) {
   const queryClient = useQueryClient()
   const nameRef = React.useRef<HTMLInputElement>(null)
   const [editing, setEditing] = React.useState(false)
+  const getNameSnapshot = React.useCallback(
+    () => nameStore.get(backupId, name),
+    [backupId, name, nameStore]
+  )
+  const subscribeToName = React.useCallback(
+    (listener: () => void) => nameStore.subscribeToBackup(backupId, listener),
+    [backupId, nameStore]
+  )
+  const currentName = React.useSyncExternalStore(
+    subscribeToName,
+    getNameSnapshot,
+    () => name
+  )
   const rename = useMutation({
     mutationFn: (nextName: string) =>
       renameBackup({ data: { backupId, name: nextName } }),
@@ -2475,6 +2789,7 @@ const BackupNameEditor = React.memo(function BackupNameEditor({
       })
     },
     onSuccess: (result: { name: string }) => {
+      nameStore.set(backupId, result.name)
       queryClient.setQueryData<Array<Backup>>(
         queryKeys.backups.all,
         (current) => {
@@ -2510,7 +2825,7 @@ const BackupNameEditor = React.memo(function BackupNameEditor({
       })
       return
     }
-    if (next === name) {
+    if (next === currentName) {
       setEditing(false)
       return
     }
@@ -2528,10 +2843,10 @@ const BackupNameEditor = React.memo(function BackupNameEditor({
         <>
           <input
             ref={nameRef}
-            aria-label={`Backup name for ${name}`}
+            aria-label={`Backup name for ${currentName}`}
             autoComplete="off"
             className="h-6 min-w-0 flex-1 truncate border-0 bg-transparent p-0 text-sm leading-6 font-semibold shadow-none outline-none focus-visible:text-foreground"
-            defaultValue={name}
+            defaultValue={currentName}
             disabled={rename.isPending}
             maxLength={120}
             spellCheck={false}
@@ -2548,7 +2863,7 @@ const BackupNameEditor = React.memo(function BackupNameEditor({
           <BackupActionButton
             disabled={rename.isPending}
             icon={Check}
-            label={`Save name for ${name}`}
+            label={`Save name for ${currentName}`}
             size="icon-xs"
             spinning={rename.isPending}
             tooltip="Save"
@@ -2557,7 +2872,7 @@ const BackupNameEditor = React.memo(function BackupNameEditor({
           <BackupActionButton
             disabled={rename.isPending}
             icon={X}
-            label={`Cancel renaming ${name}`}
+            label={`Cancel renaming ${currentName}`}
             size="icon-xs"
             tooltip="Cancel"
             onClick={cancelEditing}
@@ -2567,15 +2882,15 @@ const BackupNameEditor = React.memo(function BackupNameEditor({
         <>
           <p
             className="min-w-0 truncate text-sm leading-6 font-semibold"
-            title={name}
+            title={currentName}
           >
-            {name}
+            {currentName}
           </p>
           {editable ? (
             <Tooltip>
               <TooltipTrigger asChild>
                 <Button
-                  aria-label={`Edit name for ${name}`}
+                  aria-label={`Edit name for ${currentName}`}
                   className="shrink-0"
                   size="icon-xs"
                   type="button"
@@ -4912,7 +5227,8 @@ function backupSelectionMatchesState(
 function backupSearchText(
   backup: Backup,
   relayNames: ReadonlyMap<string, string>,
-  targetNames: ReadonlyMap<string, string>
+  targetNames: ReadonlyMap<string, string>,
+  backupName: string = backup.name
 ): string {
   const relayDisplayName = relayNames.get(backup.relayId)
   const targetDisplayName =
@@ -4923,7 +5239,7 @@ function backupSearchText(
         )
 
   return [
-    backup.name,
+    backupName,
     backup.id,
     backup.targetId,
     backup.relayId,
@@ -4938,11 +5254,12 @@ function backupMatchesSearch(
   backup: Backup,
   normalizedSearch: string,
   relayNames: ReadonlyMap<string, string>,
-  targetNames: ReadonlyMap<string, string>
+  targetNames: ReadonlyMap<string, string>,
+  backupName: string = backup.name
 ): boolean {
   return (
     normalizedSearch.length === 0 ||
-    backupSearchText(backup, relayNames, targetNames)
+    backupSearchText(backup, relayNames, targetNames, backupName)
       .toLowerCase()
       .includes(normalizedSearch)
   )

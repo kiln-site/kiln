@@ -41,32 +41,18 @@ export function DataTable<TData extends RowData>({
 }: DataTableProps<TData>) {
   return (
     <Subscribe
-      source={table.atoms.globalFilter}
+      source={table.store}
       selector={() => table.getRowModel().rows.map((row) => row.id)}
     >
       {() => (
-        <Subscribe
-          source={table.atoms.columnFilters}
-          selector={() => table.getRowModel().rows.map((row) => row.id)}
-        >
-          {() => (
-            <Subscribe
-              source={table.atoms.sorting}
-              selector={() => table.getRowModel().rows.map((row) => row.id)}
-            >
-              {() => (
-                <DataTableRowModel
-                  ariaLabel={ariaLabel}
-                  emptyState={emptyState}
-                  getRowClassName={getRowClassName}
-                  gridClassName={gridClassName}
-                  table={table}
-                  virtualization={virtualization}
-                />
-              )}
-            </Subscribe>
-          )}
-        </Subscribe>
+        <DataTableRowModel
+          ariaLabel={ariaLabel}
+          emptyState={emptyState}
+          getRowClassName={getRowClassName}
+          gridClassName={gridClassName}
+          table={table}
+          virtualization={virtualization}
+        />
       )}
     </Subscribe>
   )
@@ -415,7 +401,7 @@ interface DataTableRowProps<TData extends RowData> {
   ref?: React.Ref<HTMLTableRowElement>
 }
 
-function DataTableRowSelectionBoundary<TData extends RowData>(
+function DataTableRowSelectionBoundaryComponent<TData extends RowData>(
   props: Omit<DataTableRowProps<TData>, "isSelected">
 ) {
   return (
@@ -429,6 +415,30 @@ function DataTableRowSelectionBoundary<TData extends RowData>(
     </Subscribe>
   )
 }
+
+function areDataTableRowBoundaryPropsEqual<TData extends RowData>(
+  previous: Omit<DataTableRowProps<TData>, "isSelected">,
+  next: Omit<DataTableRowProps<TData>, "isSelected">
+) {
+  return (
+    previous.ariaRowIndex === next.ariaRowIndex &&
+    previous.canSelect === next.canSelect &&
+    previous.dataIndex === next.dataIndex &&
+    previous.gridClassName === next.gridClassName &&
+    previous.ref === next.ref &&
+    previous.row.id === next.row.id &&
+    previous.row.index === next.row.index &&
+    previous.row.original === next.row.original &&
+    previous.row.table.options.columns === next.row.table.options.columns &&
+    previous.rowClassName === next.rowClassName &&
+    previous.virtualStart === next.virtualStart
+  )
+}
+
+const DataTableRowSelectionBoundary = React.memo(
+  DataTableRowSelectionBoundaryComponent,
+  areDataTableRowBoundaryPropsEqual
+) as typeof DataTableRowSelectionBoundaryComponent
 
 function DataTableRow<TData extends RowData>({
   ariaRowIndex,
