@@ -6,9 +6,7 @@ import {
   useSuspenseQuery,
 } from "@tanstack/react-query"
 import {
-  Subscribe,
   type FilterFn,
-  type Row,
   type RowSelectionState,
   type Table,
 } from "@tanstack/react-table"
@@ -97,7 +95,11 @@ import {
   useWorkspaceTableSearchInput,
   type WorkspaceTableSearchStore,
 } from "@/components/workspace-data-table"
-import { DataTable, DataTableCheckbox } from "@/components/data-table"
+import {
+  DataTable,
+  DataTableRowCheckbox,
+  DataTableSelectAllCheckbox,
+} from "@/components/data-table"
 import {
   createDataTableColumnHelper,
   dataTableFeatures,
@@ -1447,9 +1449,18 @@ const BackupDesktopTable = React.memo(function BackupDesktopTable({
           id: "selection",
           enableSorting: false,
           header: ({ table }) => (
-            <BackupDesktopSelectAllCheckbox table={table} />
+            <DataTableSelectAllCheckbox
+              ariaLabel="Select all visible backups"
+              table={table}
+            />
           ),
-          cell: ({ row }) => <BackupDesktopSelectionCheckbox row={row} />,
+          cell: ({ row }) => (
+            <DataTableRowCheckbox
+              ariaLabel={`Select ${row.original.name}`}
+              disabledTitle="Wait for active backup work to finish"
+              row={row}
+            />
+          ),
           meta: {
             cellClassName: "h-auto px-2 py-2.5",
             headerClassName: "px-2",
@@ -1936,88 +1947,6 @@ const BackupSelectAllCheckbox = React.memo(function BackupSelectAllCheckbox({
     />
   )
 })
-
-function BackupDesktopSelectAllCheckbox({
-  table,
-}: {
-  table: Table<typeof dataTableFeatures, Backup>
-}) {
-  return (
-    <Subscribe
-      source={table.store}
-      selector={() => backupDesktopSelectAllState(table)}
-    >
-      {(state) => (
-        <BackupDesktopSelectAllCheckboxContent state={state} table={table} />
-      )}
-    </Subscribe>
-  )
-}
-
-function BackupDesktopSelectAllCheckboxContent({
-  state,
-  table,
-}: {
-  state: BackupDesktopSelectAllState
-  table: Table<typeof dataTableFeatures, Backup>
-}) {
-  return (
-    <span className="grid size-7 place-items-center">
-      <DataTableCheckbox
-        ariaLabel="Select all visible backups"
-        checked={state === "checked"}
-        disabled={state === "disabled"}
-        indeterminate={state === "indeterminate"}
-        onChange={(event) => table.getToggleAllRowsSelectedHandler()(event)}
-      />
-    </span>
-  )
-}
-
-type BackupDesktopSelectAllState =
-  | "checked"
-  | "disabled"
-  | "indeterminate"
-  | "unchecked"
-
-function backupDesktopSelectAllState(
-  table: Table<typeof dataTableFeatures, Backup>
-): BackupDesktopSelectAllState {
-  const selectableRows = table
-    .getRowModel()
-    .rows.filter((row) => row.getCanSelect())
-  if (selectableRows.length === 0) return "disabled"
-
-  const selectedCount = selectableRows.reduce(
-    (count, row) => count + Number(row.getIsSelected()),
-    0
-  )
-  if (selectedCount === 0) return "unchecked"
-  if (selectedCount === selectableRows.length) return "checked"
-  return "indeterminate"
-}
-
-function BackupDesktopSelectionCheckbox({
-  row,
-}: {
-  row: Row<typeof dataTableFeatures, Backup>
-}) {
-  const disabled = !row.getCanSelect()
-
-  return (
-    <span
-      className="grid size-7 shrink-0 place-items-center"
-      title={disabled ? "Wait for active backup work to finish" : undefined}
-    >
-      <DataTableCheckbox
-        ariaLabel={`Select ${row.original.name}`}
-        checked={row.getIsSelected()}
-        disabled={disabled}
-        onChange={(event) => row.getToggleSelectedHandler()(event)}
-      />
-    </span>
-  )
-}
 
 function backupTableRowClassName() {
   return "group hover:bg-muted/20 has-checked:bg-primary/[0.07]"

@@ -173,8 +173,7 @@ function areDataTableHeadPropsEqual<TData extends RowData>(
   return (
     previous.gridClassName === next.gridClassName &&
     previous.scrollbarWidth === next.scrollbarWidth &&
-    previous.table.options.columns === next.table.options.columns &&
-    previous.table.options.data === next.table.options.data
+    previous.table.options.columns === next.table.options.columns
   )
 }
 
@@ -516,12 +515,14 @@ export function DataTableCheckbox({
   ariaLabel,
   checked,
   disabled,
+  id,
   indeterminate = false,
   onChange,
 }: {
   ariaLabel: string
   checked: boolean
   disabled?: boolean
+  id?: string
   indeterminate?: boolean
   onChange: React.ChangeEventHandler<HTMLInputElement>
 }) {
@@ -538,8 +539,96 @@ export function DataTableCheckbox({
       checked={checked}
       className="size-4 rounded-[3px] border-input accent-primary"
       disabled={disabled}
+      id={id}
       type="checkbox"
       onChange={onChange}
     />
+  )
+}
+
+type DataTableSelectAllState =
+  | "checked"
+  | "disabled"
+  | "indeterminate"
+  | "unchecked"
+
+export function DataTableSelectAllCheckbox<TData extends RowData>({
+  ariaLabel,
+  className = "grid size-7 place-items-center",
+  id,
+  table,
+}: {
+  ariaLabel: string
+  className?: string
+  id?: string
+  table: DataTableInstance<TData>
+}) {
+  return (
+    <Subscribe
+      source={table.store}
+      selector={() => getDataTableSelectAllState(table)}
+    >
+      {(state) => (
+        <span className={className}>
+          <DataTableCheckbox
+            ariaLabel={ariaLabel}
+            checked={state === "checked"}
+            disabled={state === "disabled"}
+            id={id}
+            indeterminate={state === "indeterminate"}
+            onChange={table.getToggleAllRowsSelectedHandler()}
+          />
+        </span>
+      )}
+    </Subscribe>
+  )
+}
+
+function getDataTableSelectAllState<TData extends RowData>(
+  table: DataTableInstance<TData>
+): DataTableSelectAllState {
+  const selectableRows = table
+    .getRowModel()
+    .rows.filter((row) => row.getCanSelect())
+  if (selectableRows.length === 0) return "disabled"
+
+  const selectedCount = selectableRows.reduce(
+    (count, row) => count + Number(row.getIsSelected()),
+    0
+  )
+  if (selectedCount === 0) return "unchecked"
+  if (selectedCount === selectableRows.length) return "checked"
+  return "indeterminate"
+}
+
+export function DataTableRowCheckbox<TData extends RowData>({
+  ariaLabel,
+  className = "grid size-7 shrink-0 place-items-center",
+  disabledTitle,
+  row,
+}: {
+  ariaLabel: string
+  className?: string
+  disabledTitle?: string
+  row: Row<typeof dataTableFeatures, TData>
+}) {
+  const disabled = !row.getCanSelect()
+
+  return (
+    <span className={className} title={disabled ? disabledTitle : undefined}>
+      <Subscribe
+        source={row.table.atoms.rowSelection}
+        selector={() => row.getIsSelected()}
+      >
+        {(selected) => (
+          <DataTableCheckbox
+            ariaLabel={ariaLabel}
+            checked={selected}
+            disabled={disabled}
+            onChange={row.getToggleSelectedHandler()}
+          />
+        )}
+      </Subscribe>
+    </span>
   )
 }
