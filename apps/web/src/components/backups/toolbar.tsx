@@ -25,6 +25,7 @@ import {
 
 import { useWorkspaceTableSearchInput } from "@/components/workspace-data-table"
 import { ensuringPromise, forkPromise } from "@/effect/promise"
+import { backupRunsSearchMaxLength } from "@/lib/backup-runs"
 import { resetActiveBackupRunsToFirstPage } from "@/lib/backup-runs-cache"
 import { syncBackupRuns } from "@/server/backups"
 import type {
@@ -91,6 +92,7 @@ export const BackupToolbar = React.memo(function BackupToolbar({
           aria-label="Search backups"
           className="pl-9 text-base md:text-sm"
           defaultValue={searchStore.getServerSnapshot()}
+          maxLength={backupRunsSearchMaxLength}
           placeholder="Search backups"
           type="search"
           onChange={(event) => searchStore.set(event.currentTarget.value)}

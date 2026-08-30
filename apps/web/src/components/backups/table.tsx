@@ -107,6 +107,7 @@ export const BackupTable = React.memo(function BackupTable({
   sortDirection,
   statusFilterStore,
   targetNames,
+  updating,
 }: {
   backups: Array<Backup>
   canCreate: (backup: Backup) => boolean
@@ -124,6 +125,7 @@ export const BackupTable = React.memo(function BackupTable({
   sortDirection: BackupRunSortDirection
   statusFilterStore: BackupStatusFilterStore
   targetNames: ReadonlyMap<string, string>
+  updating: boolean
 }) {
   const mobileScrollRootRef = React.useRef<HTMLDivElement>(null)
   const mobileLayout = React.useSyncExternalStore(
@@ -222,6 +224,7 @@ export const BackupTable = React.memo(function BackupTable({
           sortDirection={sortDirection}
           statusFilterStore={statusFilterStore}
           targetNames={targetNames}
+          updating={updating}
         />
       )}
     </div>
@@ -246,6 +249,7 @@ const BackupDesktopTable = React.memo(function BackupDesktopTable({
   sortDirection,
   statusFilterStore,
   targetNames,
+  updating,
 }: {
   backups: Array<Backup>
   canCreate: (backup: Backup) => boolean
@@ -264,6 +268,7 @@ const BackupDesktopTable = React.memo(function BackupDesktopTable({
   sortDirection: BackupRunSortDirection
   statusFilterStore: BackupStatusFilterStore
   targetNames: ReadonlyMap<string, string>
+  updating: boolean
 }) {
   const [initialTableState] = React.useState(() => ({
     rowSelection: backupRowSelectionState(selectionStore.getSnapshot()),
@@ -494,6 +499,7 @@ const BackupDesktopTable = React.memo(function BackupDesktopTable({
         gridClassName={backupTableGridClassName}
         pagination={pagination}
         table={table}
+        updating={updating}
         virtualization={virtualization}
       />
     </>

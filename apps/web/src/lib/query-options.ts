@@ -217,8 +217,11 @@ export function backupRunsInfiniteQueryOptions(input: BackupRunsQuery) {
   const { cursor: _, ...query } = normalized
   return infiniteQueryOptions({
     queryKey: queryKeys.backups.runs(query),
-    queryFn: ({ pageParam }) =>
-      getBackupRunsPage({ data: { ...query, cursor: pageParam } }),
+    queryFn: ({ pageParam, signal }) =>
+      getBackupRunsPage({
+        data: { ...query, cursor: pageParam },
+        signal,
+      }),
     initialPageParam: null as string | null,
     getNextPageParam: (page) => page.nextCursor,
     refetchOnMount: false,

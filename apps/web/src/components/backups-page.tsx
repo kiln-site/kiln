@@ -604,7 +604,7 @@ const BackupDataSurface = React.memo(function BackupDataSurface({
         : null,
     [selectedServer]
   )
-  const queryInput = React.useMemo(
+  const requestedQueryInput = React.useMemo(
     () => ({
       cursor: null,
       direction: sorting.direction,
@@ -615,6 +615,8 @@ const BackupDataSurface = React.memo(function BackupDataSurface({
     }),
     [debouncedSearch, scope, sorting.direction, sorting.sort, status]
   )
+  const queryInput = React.useDeferredValue(requestedQueryInput)
+  const isUpdating = queryInput !== requestedQueryInput
   const queryClient = useQueryClient()
   const queryOptions = React.useMemo(
     () => backupRunsInfiniteQueryOptions(queryInput),
@@ -637,13 +639,14 @@ const BackupDataSurface = React.memo(function BackupDataSurface({
   )
   const pagination = React.useMemo(
     () => ({
-      error: query.isFetchNextPageError ? query.error : null,
-      hasMore: query.hasNextPage,
-      isLoading: query.isFetchingNextPage,
+      error: !isUpdating && query.isFetchNextPageError ? query.error : null,
+      hasMore: !isUpdating && query.hasNextPage,
+      isLoading: !isUpdating && query.isFetchingNextPage,
       onLoadMore: query.fetchNextPage,
       resetKey: JSON.stringify(queryInput),
     }),
     [
+      isUpdating,
       query.error,
       query.fetchNextPage,
       query.hasNextPage,
@@ -699,6 +702,7 @@ const BackupDataSurface = React.memo(function BackupDataSurface({
         sortDirection={sorting.direction}
         statusFilterStore={statusFilterStore}
         targetNames={targetNames}
+        updating={isUpdating}
       />
       <BackupBulkActions
         backups={visibleBackups}

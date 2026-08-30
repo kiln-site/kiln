@@ -3,6 +3,7 @@ import { z } from "zod"
 import type { CursorPage } from "@/lib/cursor-page"
 
 export const backupRunSorts = ["name", "target", "size", "createdAt"] as const
+export const backupRunsSearchMaxLength = 200
 export type BackupRunSort = (typeof backupRunSorts)[number]
 export type BackupRunSortDirection = "asc" | "desc"
 export type BackupRunStatus = "active" | "available" | "failed"
@@ -17,7 +18,7 @@ export const backupRunsQuerySchema = z.strictObject({
   cursor: z.string().min(1).max(2_048).nullable().optional(),
   direction: z.enum(["asc", "desc"]).default("desc"),
   scope: backupRunScopeSchema.nullable().optional(),
-  search: z.string().trim().max(200).default(""),
+  search: z.string().trim().max(backupRunsSearchMaxLength).default(""),
   sort: z.enum(backupRunSorts).default("createdAt"),
   status: z.enum(["active", "available", "failed"]).nullable().optional(),
 })

@@ -93,6 +93,7 @@ interface DataTableProps<TData extends RowData> {
   gridClassName: string
   pagination?: DataTablePaginationOptions
   table: DataTableInstance<TData>
+  updating?: boolean
   virtualization?: DataTableVirtualizationOptions
 }
 
@@ -103,6 +104,7 @@ export function DataTable<TData extends RowData>({
   gridClassName,
   pagination,
   table,
+  updating,
   virtualization,
 }: DataTableProps<TData>) {
   return (
@@ -118,6 +120,7 @@ export function DataTable<TData extends RowData>({
           gridClassName={gridClassName}
           pagination={pagination}
           table={table}
+          updating={updating}
           virtualization={virtualization}
         />
       )}
@@ -132,6 +135,7 @@ function DataTableRowModel<TData extends RowData>({
   gridClassName,
   pagination,
   table,
+  updating,
   virtualization,
 }: DataTableProps<TData>) {
   const rows = table.getRowModel().rows
@@ -148,39 +152,61 @@ function DataTableRowModel<TData extends RowData>({
     return () => window.cancelAnimationFrame(frame)
   }, [pagination?.resetKey])
 
-  if (rows.length === 0) return emptyState
-
   return (
-    <table
-      aria-colcount={table.getAllLeafColumns().length}
-      aria-label={ariaLabel}
-      aria-rowcount={rows.length + 1}
-      className="flex h-full min-h-0 w-full min-w-0 border-collapse flex-col overflow-hidden pb-px text-left"
+    <div
+      aria-busy={updating || pagination?.isLoading || undefined}
+      className="relative flex h-full min-h-0 w-full min-w-0 flex-col"
     >
-      <MemoizedDataTableHead
-        gridClassName={gridClassName}
-        scrollbarWidth={scrollbarWidth}
-        table={table}
-      />
-      {virtualization ? (
-        <VirtualDataTableBody
-          getRowClassName={getRowClassName}
-          gridClassName={gridClassName}
-          pagination={pagination}
-          rows={rows}
-          scrollElementRef={scrollElementRef}
-          virtualization={virtualization}
-        />
+      {updating ? (
+        <span
+          aria-live="polite"
+          className="pointer-events-none absolute top-3 right-3 z-30 inline-flex items-center gap-1.5 text-xs text-muted-foreground"
+          role="status"
+        >
+          <LoaderCircle aria-hidden className="size-3.5 animate-spin" />
+          Updating
+        </span>
+      ) : null}
+      {!updating && pagination?.isLoading ? (
+        <span aria-live="polite" className="sr-only" role="status">
+          Loading more rows
+        </span>
+      ) : null}
+      {rows.length === 0 ? (
+        emptyState
       ) : (
-        <DataTableBody
-          getRowClassName={getRowClassName}
-          gridClassName={gridClassName}
-          pagination={pagination}
-          rows={rows}
-          scrollElementRef={scrollElementRef}
-        />
+        <table
+          aria-colcount={table.getAllLeafColumns().length}
+          aria-label={ariaLabel}
+          aria-rowcount={rows.length + 1}
+          className="flex h-full min-h-0 w-full min-w-0 border-collapse flex-col overflow-hidden pb-px text-left"
+        >
+          <MemoizedDataTableHead
+            gridClassName={gridClassName}
+            scrollbarWidth={scrollbarWidth}
+            table={table}
+          />
+          {virtualization ? (
+            <VirtualDataTableBody
+              getRowClassName={getRowClassName}
+              gridClassName={gridClassName}
+              pagination={pagination}
+              rows={rows}
+              scrollElementRef={scrollElementRef}
+              virtualization={virtualization}
+            />
+          ) : (
+            <DataTableBody
+              getRowClassName={getRowClassName}
+              gridClassName={gridClassName}
+              pagination={pagination}
+              rows={rows}
+              scrollElementRef={scrollElementRef}
+            />
+          )}
+        </table>
       )}
-    </table>
+    </div>
   )
 }
 
