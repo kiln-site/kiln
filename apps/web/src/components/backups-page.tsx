@@ -514,19 +514,28 @@ const BackupRunsSyncKick = React.memo(function BackupRunsSyncKick() {
   const queryClient = useQueryClient()
   React.useEffect(() => {
     const controller = new AbortController()
-    forkPromise(
-      async () => {
-        await syncBackupRuns({ signal: controller.signal })
-        await refreshActiveBackupRunsFirstPages(queryClient, controller.signal)
-      },
-      (cause) =>
-        captureBackupRunsBackgroundError(
-          "mountSync",
-          controller.signal,
-          cause
-        )
-    )
-    return () => controller.abort()
+    // Let Strict Mode tear down its probe effect before dispatching the POST.
+    const startTimeout = window.setTimeout(() => {
+      forkPromise(
+        async () => {
+          await syncBackupRuns({ signal: controller.signal })
+          await refreshActiveBackupRunsFirstPages(
+            queryClient,
+            controller.signal
+          )
+        },
+        (cause) =>
+          captureBackupRunsBackgroundError(
+            "mountSync",
+            controller.signal,
+            cause
+          )
+      )
+    })
+    return () => {
+      window.clearTimeout(startTimeout)
+      controller.abort()
+    }
   }, [queryClient])
   return null
 })

@@ -1,5 +1,10 @@
 import * as Sentry from "@sentry/tanstackstart-react"
 
+import {
+  isExpectedAppError,
+  parseSampleRate,
+} from "./src/observability/sentry-policy.ts"
+
 const dsn = process.env.SENTRY_DSN?.trim()
 
 if (dsn && !Sentry.isInitialized()) {
@@ -29,27 +34,4 @@ if (dsn && !Sentry.isInitialized()) {
       tags: { "kiln.service": "hearth-server" },
     },
   })
-}
-
-function parseSampleRate(value, fallback) {
-  if (!value?.trim()) return fallback
-  const parsed = Number(value)
-  return Number.isFinite(parsed) && parsed >= 0 && parsed <= 1
-    ? parsed
-    : fallback
-}
-
-function isExpectedAppError(value) {
-  if (!value || typeof value !== "object") return false
-  if (value.name === "AbortError") return true
-  if (
-    [
-      "AuthenticationError",
-      "PermissionDeniedError",
-      "ResourceNotFoundError",
-    ].includes(value._tag)
-  ) {
-    return true
-  }
-  return value._tag === "RelayResponseError" && value.status < 500
 }
