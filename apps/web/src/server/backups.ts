@@ -1,6 +1,7 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto"
 
 import { createServerFn } from "@tanstack/react-start"
+import { getRequest } from "@tanstack/react-start/server"
 import { z } from "zod"
 
 import {
@@ -342,6 +343,7 @@ async function dispatchAndLoadReservedBackup(
 export const getBackupRunsPage = createServerFn({ method: "GET" })
   .validator(backupRunsQuerySchema)
   .handler(async ({ data }): Promise<BackupRunsPage> => {
+    const signal = getRequest().signal
     const user = await requireAuthenticatedUser()
     const query = normalizeBackupRunsQuery(data)
     const fingerprint = backupRunsQueryFingerprint(query)
@@ -361,7 +363,8 @@ export const getBackupRunsPage = createServerFn({ method: "GET" })
         sort: query.sort,
         status: query.status,
         userId: user.id,
-      })
+      }),
+      { signal }
     )
     const items = page.items.map(publicBackupRun)
     const last = items.at(-1)
@@ -381,6 +384,7 @@ export const getBackupRunsPage = createServerFn({ method: "GET" })
 export const getBackupRunForQuery = createServerFn({ method: "GET" })
   .validator(backupRunForQuerySchema)
   .handler(async ({ data }): Promise<BackupRun | null> => {
+    const signal = getRequest().signal
     const user = await requireAuthenticatedUser()
     const query = normalizeBackupRunsQuery({ ...data, cursor: null })
     const page = await runAppEffect(
@@ -399,7 +403,8 @@ export const getBackupRunForQuery = createServerFn({ method: "GET" })
         sort: query.sort,
         status: query.status,
         userId: user.id,
-      })
+      }),
+      { signal }
     )
     const item = page.items[0]
     return item ? publicBackupRun(item) : null

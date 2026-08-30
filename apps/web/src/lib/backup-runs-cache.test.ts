@@ -1,8 +1,9 @@
-import type { InfiniteData } from "@tanstack/react-query"
-import { describe, expect, it } from "vite-plus/test"
+import { QueryClient, type InfiniteData } from "@tanstack/react-query"
+import { describe, expect, it, vi } from "vite-plus/test"
 
 import type { BackupRun, BackupRunsPage } from "@/lib/backup-runs"
 import {
+  commitRefreshedBackupRunsFirstPage,
   mergeRefreshedBackupRunsFirstPage,
   patchBackupRunsData,
 } from "@/lib/backup-runs-cache"
@@ -124,6 +125,66 @@ describe("backup runs background first-page refresh", () => {
       pageParams: [null],
       pages: [refreshed],
     })
+  })
+
+  it("cancels an in-flight page load before replacing a changed cursor chain", async () => {
+    const queryClient = new QueryClient()
+    const queryKey = ["backups", "runs", "test"] as const
+    const current = infiniteData([
+      [backupRun(firstId, 20)],
+      [backupRun(secondId, 10)],
+    ])
+    const refreshed = {
+      items: [
+        backupRun("84924518-b4c4-4fc0-a8fd-ee9a6b451f85", 30),
+      ],
+      nextCursor: "replacement-page-2",
+    }
+    queryClient.setQueryData(queryKey, current)
+    const cancel = vi.spyOn(queryClient, "cancelQueries")
+
+    await commitRefreshedBackupRunsFirstPage(
+      queryClient,
+      queryKey,
+      refreshed
+    )
+
+    expect(cancel).toHaveBeenCalledWith(
+      { exact: true, queryKey },
+      { silent: true }
+    )
+    expect(queryClient.getQueryData(queryKey)).toEqual({
+      pageParams: [null],
+      pages: [refreshed],
+    })
+  })
+
+  it("does not cancel a compatible in-flight next page", async () => {
+    const queryClient = new QueryClient()
+    const queryKey = ["backups", "runs", "test"] as const
+    const current = infiniteData([
+      [backupRun(firstId, 20)],
+      [backupRun(secondId, 10)],
+    ])
+    const refreshed = {
+      ...current.pages[0]!,
+      items: [{ ...current.pages[0]!.items[0]!, taskBytesCompleted: 5 }],
+    }
+    queryClient.setQueryData(queryKey, current)
+    const cancel = vi.spyOn(queryClient, "cancelQueries")
+
+    await commitRefreshedBackupRunsFirstPage(
+      queryClient,
+      queryKey,
+      refreshed
+    )
+
+    expect(cancel).not.toHaveBeenCalled()
+    expect(
+      queryClient.getQueryData<InfiniteData<BackupRunsPage, string | null>>(
+        queryKey
+      )?.pages
+    ).toHaveLength(2)
   })
 })
 

@@ -12,10 +12,11 @@ const runtime = ManagedRuntime.make(AppLive)
 
 export function runAppEffect<TResult, TError>(
   name: string,
-  effect: Effect.Effect<TResult, TError, AppCache | Database>
+  effect: Effect.Effect<TResult, TError, AppCache | Database>,
+  options?: { signal?: AbortSignal }
 ): Promise<TResult> {
   return Sentry.startSpan({ name, op: "kiln.effect" }, () =>
-    runtime.runPromise(effect)
+    runtime.runPromise(effect, options)
   )
 }
 

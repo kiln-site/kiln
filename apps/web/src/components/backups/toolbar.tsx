@@ -17,6 +17,7 @@ import {
   DropdownMenuTrigger,
 } from "@workspace/ui/components/dropdown-menu"
 import { Input } from "@workspace/ui/components/input"
+import { showToast } from "@workspace/ui/components/sonner"
 import {
   Tooltip,
   TooltipContent,
@@ -191,12 +192,14 @@ const BackupSyncButton = React.memo(function BackupSyncButton() {
   const fetchDoneRef = React.useRef(true)
   const fallbackTimeoutRef = React.useRef<number>(undefined)
   const mountedRef = React.useRef(true)
+  const syncControllerRef = React.useRef<AbortController>(undefined)
   const syncing = spinning
 
   React.useEffect(() => {
     mountedRef.current = true
     return () => {
       mountedRef.current = false
+      syncControllerRef.current?.abort()
       if (fallbackTimeoutRef.current !== undefined) {
         window.clearTimeout(fallbackTimeoutRef.current)
       }
@@ -213,23 +216,40 @@ const BackupSyncButton = React.memo(function BackupSyncButton() {
   }, [])
 
   const syncBackups = React.useCallback(() => {
-    if (spinning) return
+    if (spinning || syncControllerRef.current) return
+    const controller = new AbortController()
+    syncControllerRef.current = controller
     fetchDoneRef.current = false
     setSpinning(true)
-    forkPromise(() =>
-      ensuringPromise(
-        async () => {
-          await syncBackupRuns()
-          await resetActiveBackupRunsToFirstPage(queryClient)
-        },
-        () => {
-          fetchDoneRef.current = true
-          fallbackTimeoutRef.current = window.setTimeout(
-            stopSpinIfDone,
-            minimumBackupSyncFeedbackMs
-          )
-        }
-      )
+    forkPromise(
+      () =>
+        ensuringPromise(
+          async () => {
+            await syncBackupRuns({ signal: controller.signal })
+            await resetActiveBackupRunsToFirstPage(
+              queryClient,
+              controller.signal
+            )
+          },
+          () => {
+            if (syncControllerRef.current === controller) {
+              syncControllerRef.current = undefined
+            }
+            fetchDoneRef.current = true
+            if (!mountedRef.current) return
+            fallbackTimeoutRef.current = window.setTimeout(
+              stopSpinIfDone,
+              minimumBackupSyncFeedbackMs
+            )
+          }
+        ),
+      (cause) => {
+        if (controller.signal.aborted) return
+        showToast({
+          message: `Backup sync failed: ${cause instanceof Error ? cause.message : "Unknown error"}`,
+          type: "error",
+        })
+      }
     )
   }, [queryClient, spinning, stopSpinIfDone])
 

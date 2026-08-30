@@ -420,7 +420,6 @@ function areDataTableHeaderCellPropsEqual<TData extends RowData>(
   previous: React.ComponentProps<typeof DataTableHeaderCell<TData>>,
   next: React.ComponentProps<typeof DataTableHeaderCell<TData>>
 ) {
-  if (!previous.header.column.getCanSort()) return false
   return (
     previous.header.id === next.header.id &&
     previous.header.column.columnDef === next.header.column.columnDef &&

@@ -1,4 +1,5 @@
 import * as React from "react"
+import * as Sentry from "@sentry/tanstackstart-react"
 import {
   useInfiniteQuery,
   useMutation,
@@ -512,14 +513,20 @@ export const BackupsPage = React.memo(function BackupsPage({
 const BackupRunsSyncKick = React.memo(function BackupRunsSyncKick() {
   const queryClient = useQueryClient()
   React.useEffect(() => {
-    let active = true
-    forkPromise(async () => {
-      await syncBackupRuns()
-      if (active) await refreshActiveBackupRunsFirstPages(queryClient)
-    })
-    return () => {
-      active = false
-    }
+    const controller = new AbortController()
+    forkPromise(
+      async () => {
+        await syncBackupRuns({ signal: controller.signal })
+        await refreshActiveBackupRunsFirstPages(queryClient, controller.signal)
+      },
+      (cause) =>
+        captureBackupRunsBackgroundError(
+          "mountSync",
+          controller.signal,
+          cause
+        )
+    )
+    return () => controller.abort()
   }, [queryClient])
   return null
 })
@@ -608,7 +615,18 @@ const BackupDataSurface = React.memo(function BackupDataSurface({
   const isUpdating = query.isPlaceholderData && query.isFetching
   React.useEffect(() => {
     if (!refreshStaleCacheOnMount) return
-    forkPromise(() => resetBackupRunsToFirstPage(queryClient, queryInput))
+    const controller = new AbortController()
+    forkPromise(
+      () =>
+        resetBackupRunsToFirstPage(queryClient, queryInput, controller.signal),
+      (cause) =>
+        captureBackupRunsBackgroundError(
+          "staleRefresh",
+          controller.signal,
+          cause
+        )
+    )
+    return () => controller.abort()
   }, [queryClient, queryInput, refreshStaleCacheOnMount])
   const backups = React.useMemo(
     () =>
@@ -707,6 +725,17 @@ const BackupDataSurface = React.memo(function BackupDataSurface({
     </>
   )
 })
+
+function captureBackupRunsBackgroundError(
+  operation: "mountSync" | "staleRefresh",
+  signal: AbortSignal,
+  cause: unknown
+): void {
+  if (signal.aborted) return
+  Sentry.captureException(cause, {
+    tags: { "kiln.operation": `backups.${operation}` },
+  })
+}
 
 const BackupDialogHost = React.memo(function BackupDialogHost({
   deleteFeedbackStore,
