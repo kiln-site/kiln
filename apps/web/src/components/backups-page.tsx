@@ -48,6 +48,8 @@ import { Switch } from "@workspace/ui/components/switch"
 import { Textarea } from "@workspace/ui/components/textarea"
 import { ServerScopePicker } from "@/components/server-scope-picker"
 import type { ServerPickerOption } from "@/components/server-picker-list"
+import { brickIconPresentation } from "@/components/brick-icon"
+import type { InstanceNameInstance } from "@/components/instance-name"
 import { backupHasReportedDeleteArtifactProgress } from "@/lib/backup-progress-presentation"
 import {
   readFileDownloadPreferences,
@@ -83,8 +85,10 @@ import {
   accessCapabilitiesQueryOptions,
   backupRunsInfiniteQueryOptions,
   backupStorageQueryOptions,
+  brickIconPresentationsQueryOptions,
   backupPolicyQueryOptions,
   managedDatabaseDirectoryQueryOptions,
+  managedDatabasesQueryOptions,
   queryKeys,
   relaySnapshotQueryOptions,
 } from "@/lib/query-options"
@@ -135,16 +139,34 @@ function selectBackupScope(
   snapshot: Awaited<ReturnType<typeof getRelaySnapshot>>
 ) {
   return {
-    nodes: snapshot.nodes.map(({ relayId, relayName }) => ({
+    nodes: snapshot.nodes.map(({ relayId, relayName, relayStatus }) => ({
       relayId,
       relayName,
+      relayStatus,
     })),
-    servers: snapshot.instances.map(({ id, name, relayId, relayName }) => ({
-      id,
-      name,
-      relayId,
-      relayName,
-    })),
+    servers: snapshot.instances.map(
+      ({
+        brickId,
+        brickSource,
+        id,
+        implementation,
+        name,
+        observedState,
+        relayId,
+        relayName,
+        relayStatus,
+      }) => ({
+        brickId,
+        brickSource,
+        id,
+        implementation,
+        name,
+        observedState,
+        relayId,
+        relayName,
+        relayStatus,
+      })
+    ),
   }
 }
 
@@ -296,8 +318,12 @@ export const BackupsPage = React.memo(function BackupsPage({
     notifyOnChangeProps: ["data"],
     select: selectBackupScope,
   })
-  const { data: databases } = useSuspenseQuery(
-    managedDatabaseDirectoryQueryOptions()
+  const { data: databaseOverview } = useSuspenseQuery(
+    managedDatabasesQueryOptions()
+  )
+  const databases = databaseOverview.databases
+  const { data: bricks } = useSuspenseQuery(
+    brickIconPresentationsQueryOptions()
   )
   const { data: capabilities } = useSuspenseQuery(
     accessCapabilitiesQueryOptions()
@@ -358,6 +384,31 @@ export const BackupsPage = React.memo(function BackupsPage({
     }
     return names
   }, [backupScope.servers, databases])
+  const targetInstances = React.useMemo(() => {
+    const instances = new Map<string, InstanceNameInstance>()
+    for (const server of backupScope.servers) {
+      instances.set(targetKey("instance", server.relayId, server.id), {
+        icon: brickIconPresentation(bricks, server),
+        kind: "server",
+        observedState: server.observedState,
+        relayStatus: server.relayStatus,
+      })
+    }
+    for (const database of databases) {
+      instances.set(targetKey("database", database.relayId, database.id), {
+        inventoryStatus: database.inventoryStatus,
+        kind: "database",
+        observedState: database.observedState,
+      })
+    }
+    for (const relay of backupScope.nodes) {
+      instances.set(targetKey("platform", relay.relayId, "kiln"), {
+        kind: "relay",
+        relayStatus: relay.relayStatus,
+      })
+    }
+    return instances
+  }, [backupScope.nodes, backupScope.servers, bricks, databases])
   const relayNames = React.useMemo(
     () =>
       new Map([
@@ -487,6 +538,7 @@ export const BackupsPage = React.memo(function BackupsPage({
           deleteFeedbackStore={deleteFeedbackStore}
           destinations={availabilityDestinations}
           dialogStore={dialogStore}
+          targetInstances={targetInstances}
           nameStore={nameStore}
           relayNames={relayNames}
           searchStore={searchStore}
@@ -546,6 +598,7 @@ const BackupDataSurface = React.memo(function BackupDataSurface({
   deleteFeedbackStore,
   destinations,
   dialogStore,
+  targetInstances,
   nameStore,
   relayNames,
   searchStore,
@@ -559,6 +612,7 @@ const BackupDataSurface = React.memo(function BackupDataSurface({
   deleteFeedbackStore: BackupDeleteFeedbackStore
   destinations: ReadonlyArray<BackupAvailabilityDestination>
   dialogStore: BackupDialogStore
+  targetInstances: ReadonlyMap<string, InstanceNameInstance>
   nameStore: BackupNameStore
   relayNames: ReadonlyMap<string, string>
   searchStore: BackupSearchStore
@@ -705,6 +759,7 @@ const BackupDataSurface = React.memo(function BackupDataSurface({
         currentUserId={currentUserId}
         destinations={destinations}
         dialogStore={dialogStore}
+        targetInstances={targetInstances}
         error={
           query.isError && !query.data && !query.isFetchNextPageError
             ? query.error

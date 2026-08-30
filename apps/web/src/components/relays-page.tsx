@@ -22,7 +22,6 @@ import {
   Pencil,
   Play,
   Plus,
-  RadioTower,
   RefreshCw,
   Search,
   ServerCog,
@@ -809,16 +808,14 @@ const RelayIdentity = React.memo(function RelayIdentity({
   })
   if (!relay) return <WorkspaceTableCell>{null}</WorkspaceTableCell>
 
-  const status = relayStatusPresentation(relay)
   return (
     <WorkspaceTableCell>
       <div className="min-w-0">
         <InstanceName
-          icon={<RadioTower className="size-4" aria-hidden="true" />}
+          instance={{ kind: "relay", ...relay }}
           name={relay.name}
           meta={relay.hostname}
           metaClassName="font-mono"
-          status={{ className: status.dot, label: status.label }}
         />
         <div className="mt-0.5 pl-[2.625rem] lg:hidden">
           <RelayVersion
@@ -1218,7 +1215,11 @@ const RelayStatus = React.memo(function RelayStatus({
 
 function relayStatusPresentation(relay: RelayStatusView) {
   return !relay.enabled
-    ? { label: "Paused", dot: "bg-sky-400", text: "text-sky-300" }
+    ? {
+        label: "Paused",
+        dot: "bg-sky-400",
+        text: "text-sky-300",
+      }
     : relay.lastError
       ? {
           label: "Unreachable",
@@ -1226,7 +1227,11 @@ function relayStatusPresentation(relay: RelayStatusView) {
           text: "text-destructive",
         }
       : relay.connected
-        ? { label: "Online", dot: "bg-emerald-400", text: "text-emerald-300" }
+        ? {
+            label: "Online",
+            dot: "bg-emerald-400",
+            text: "text-emerald-300",
+          }
         : {
             label: "Offline",
             dot: "bg-muted-foreground/50",

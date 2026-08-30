@@ -47,6 +47,7 @@ import {
   backupTargetSortName,
   targetKey,
 } from "@/components/backups/table-row"
+import type { InstanceNameInstance } from "@/components/instance-name"
 import type {
   Backup,
   BackupAvailabilityDestination,
@@ -99,6 +100,7 @@ export const BackupTable = React.memo(function BackupTable({
   destinations,
   dialogStore,
   error,
+  targetInstances,
   loading,
   nameStore,
   onRetry,
@@ -120,6 +122,7 @@ export const BackupTable = React.memo(function BackupTable({
   destinations: ReadonlyArray<BackupAvailabilityDestination>
   dialogStore: BackupDialogStore
   error?: Error | null
+  targetInstances: ReadonlyMap<string, InstanceNameInstance>
   loading?: boolean
   nameStore: BackupNameStore
   onRetry?: () => void
@@ -150,6 +153,13 @@ export const BackupTable = React.memo(function BackupTable({
         currentUserId={currentUserId}
         destinations={destinations}
         dialogStore={dialogStore}
+        instance={targetInstances.get(
+          targetKey(
+            backup.targetKind,
+            backup.relayId,
+            backup.targetKind === "platform" ? "kiln" : backup.targetId
+          )
+        )}
         nameStore={nameStore}
         relayName={relayNames.get(backup.relayId) ?? backup.relayId}
         selectionStore={selectionStore}
@@ -168,6 +178,7 @@ export const BackupTable = React.memo(function BackupTable({
       currentUserId,
       destinations,
       dialogStore,
+      targetInstances,
       nameStore,
       relayNames,
       selectionStore,
@@ -224,6 +235,7 @@ export const BackupTable = React.memo(function BackupTable({
           destinations={destinations}
           dialogStore={dialogStore}
           error={error}
+          targetInstances={targetInstances}
           loading={loading}
           nameStore={nameStore}
           onRetry={onRetry}
@@ -252,6 +264,7 @@ const BackupDesktopTable = React.memo(function BackupDesktopTable({
   destinations,
   dialogStore,
   error,
+  targetInstances,
   loading,
   nameStore,
   onRetry,
@@ -274,6 +287,7 @@ const BackupDesktopTable = React.memo(function BackupDesktopTable({
   destinations: ReadonlyArray<BackupAvailabilityDestination>
   dialogStore: BackupDialogStore
   error?: Error | null
+  targetInstances: ReadonlyMap<string, InstanceNameInstance>
   loading?: boolean
   nameStore: BackupNameStore
   onRetry?: () => void
@@ -381,6 +395,15 @@ const BackupDesktopTable = React.memo(function BackupDesktopTable({
               return (
                 <BackupTargetLink
                   available={targetAvailable}
+                  instance={targetInstances.get(
+                    targetKey(
+                      backup.targetKind,
+                      backup.relayId,
+                      backup.targetKind === "platform"
+                        ? "kiln"
+                        : backup.targetId
+                    )
+                  )}
                   relayId={backup.relayId}
                   target={target}
                   targetId={backup.targetId}
@@ -473,6 +496,7 @@ const BackupDesktopTable = React.memo(function BackupDesktopTable({
       currentUserId,
       destinations,
       dialogStore,
+      targetInstances,
       nameStore,
       relayNames,
       targetNames,
@@ -756,6 +780,7 @@ const BackupMobileRow = React.memo(function BackupMobileRow({
   currentUserId,
   destinations,
   dialogStore,
+  instance,
   nameStore,
   relayName,
   selectionStore,
@@ -767,6 +792,7 @@ const BackupMobileRow = React.memo(function BackupMobileRow({
   currentUserId: string
   destinations: ReadonlyArray<BackupAvailabilityDestination>
   dialogStore: BackupDialogStore
+  instance?: InstanceNameInstance
   nameStore: BackupNameStore
   relayName: string
   selectionStore: BackupSelectionStore
@@ -795,6 +821,7 @@ const BackupMobileRow = React.memo(function BackupMobileRow({
       <div className="mt-2.5 overflow-hidden rounded-lg border bg-background/45 px-3 py-2.5">
         <BackupTargetLink
           available={targetAvailable}
+          instance={instance}
           relayId={backup.relayId}
           target={target}
           targetId={backup.targetId}

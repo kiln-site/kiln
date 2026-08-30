@@ -61,7 +61,6 @@ import {
 } from "@/components/workspace-data-table"
 import type { WorkspaceTableSearchStore } from "@/components/workspace-data-table"
 import {
-  BrickIcon,
   brickIconPresentation,
   type BrickIconDefinition,
   type BrickIconPresentation,
@@ -649,15 +648,12 @@ const TailscaleMembershipRow = React.memo(function TailscaleMembershipRow({
             className="group/server-link flex min-h-[3.25rem] w-fit max-w-full min-w-0 flex-col justify-center px-3 outline-none focus-visible:ring-2 focus-visible:ring-ring/40 focus-visible:ring-inset"
           >
             <InstanceName
-              icon={
-                <BrickIcon
-                  id={icon.id}
-                  color={icon.color}
-                  iconSvg={icon.iconSvg}
-                  className="size-6"
-                  aria-hidden="true"
-                />
-              }
+              instance={{
+                icon,
+                kind: "server",
+                observedState: server.observedState,
+                relayStatus: server.relayStatus,
+              }}
               name={
                 <span className="flex min-w-0 items-center gap-1.5">
                   <span className="truncate">{server.name}</span>
@@ -670,7 +666,6 @@ const TailscaleMembershipRow = React.memo(function TailscaleMembershipRow({
               }
               meta={`${server.implementation} ${server.version}`}
               nameClassName="transition-colors group-hover/server-link:text-primary"
-              status={{ className: status.dotClass, label: status.label }}
             />
             <p className="type-meta truncate text-muted-foreground md:hidden">
               {server.relayName}
@@ -1288,25 +1283,43 @@ function tailscaleMembershipStatus(
   server: TailscaleServer
 ) {
   if (!binding?.enabled) {
-    return { dotClass: "bg-muted-foreground/55", label: "Paused" }
+    return {
+      dotClass: "bg-muted-foreground/55",
+      label: "Paused",
+    }
   }
   if (!server.tailscaleSupported) {
-    return { dotClass: "bg-amber-400", label: "Update required" }
+    return {
+      dotClass: "bg-amber-400",
+      label: "Update required",
+    }
   }
   if (!deployment) {
-    return { dotClass: "animate-pulse bg-primary", label: "Provisioning" }
+    return {
+      dotClass: "animate-pulse bg-primary",
+      label: "Provisioning",
+    }
   }
   if (
     deployment.status.connected &&
     deployment.components.coreDnsRunning &&
     deployment.components.tailscaleRunning
   ) {
-    return { dotClass: "bg-emerald-400", label: "Connected" }
+    return {
+      dotClass: "bg-emerald-400",
+      label: "Connected",
+    }
   }
   if (deployment.status.message) {
-    return { dotClass: "bg-destructive", label: "Needs attention" }
+    return {
+      dotClass: "bg-destructive",
+      label: "Needs attention",
+    }
   }
-  return { dotClass: "bg-amber-400", label: "Connecting" }
+  return {
+    dotClass: "bg-amber-400",
+    label: "Connecting",
+  }
 }
 
 function serverRowKey(server: TailscaleServer) {

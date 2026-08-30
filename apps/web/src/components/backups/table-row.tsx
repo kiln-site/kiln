@@ -6,13 +6,10 @@ import {
   CircleAlert,
   CircleOff,
   CircleStop,
-  Database,
   Download,
   LoaderCircle,
   Pencil,
   Plus,
-  RadioTower,
-  Server,
   History as RotateCcwClock,
   Trash2,
   X,
@@ -34,7 +31,10 @@ import {
   TooltipTrigger,
 } from "@workspace/ui/components/tooltip"
 
-import { InstanceName } from "@/components/instance-name"
+import {
+  InstanceName,
+  type InstanceNameInstance,
+} from "@/components/instance-name"
 import {
   backupShowsArchivedLocalArtifact,
   backupTaskUploadProgressPercent,
@@ -76,7 +76,6 @@ type BackupTargetPresentation = {
   kindLabel: "Database" | "Relay" | "Server"
   name: string
 }
-
 const activeStatuses = new Set(["queued", "running", "deleting"])
 const backupDate = new Intl.DateTimeFormat(undefined, {
   dateStyle: "full",
@@ -781,36 +780,34 @@ function BackupMissingTargetTooltip({
   )
 }
 
-const BackupTargetIcon = React.memo(function BackupTargetIcon({
-  kind,
-}: {
-  kind: Backup["targetKind"]
-}) {
-  const Icon =
-    kind === "database" ? Database : kind === "platform" ? RadioTower : Server
-  return <Icon className="size-4" aria-hidden="true" />
-})
-
 export const BackupTargetLink = React.memo(function BackupTargetLink({
   available,
+  instance,
   relayId,
   target,
   targetId,
   targetKind,
 }: {
   available: boolean
+  instance?: InstanceNameInstance
   relayId: string
   target: BackupTargetPresentation
   targetId: string
   targetKind: Backup["targetKind"]
 }) {
-  const status = available
-    ? { className: "bg-emerald-400", label: "Available" }
-    : { className: "bg-destructive", label: "Missing" }
   const identity = (
     <InstanceName
       className="w-full"
-      icon={<BackupTargetIcon kind={targetKind} />}
+      instance={
+        instance ?? {
+          kind:
+            targetKind === "database"
+              ? "database"
+              : targetKind === "platform"
+                ? "relay"
+                : "server",
+        }
+      }
       name={target.name}
       nameClassName={
         available
@@ -819,7 +816,6 @@ export const BackupTargetLink = React.memo(function BackupTargetLink({
       }
       meta={`${target.kindLabel} · ${target.id.slice(0, 8)}`}
       metaClassName="font-mono"
-      status={status}
     />
   )
   const targetContent = available ? (

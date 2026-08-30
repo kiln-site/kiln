@@ -417,11 +417,14 @@ const DatabaseTableRow = React.memo(function DatabaseTableRow({
       </WorkspaceTableCell>
       <WorkspaceTableCell>
         <InstanceName
-          icon={<Database className="size-4" aria-hidden="true" />}
+          instance={{
+            inventoryStatus: database.inventoryStatus,
+            kind: "database",
+            observedState: database.observedState,
+          }}
           name={database.name}
           meta={`${database.shortId} · ${database.databaseName}`}
           metaClassName="font-mono"
-          status={{ className: status.dot, label: status.label }}
         />
       </WorkspaceTableCell>
       <WorkspaceTableCell className="hidden md:table-cell">
@@ -1238,7 +1241,11 @@ function databaseStatusPresentation(
   state: string
 ) {
   return inventoryStatus === "missing"
-    ? { dot: "bg-destructive", label: "Missing", text: "text-destructive" }
+    ? {
+        dot: "bg-destructive",
+        label: "Missing",
+        text: "text-destructive",
+      }
     : inventoryStatus === "unavailable"
       ? {
           dot: "bg-amber-300",
@@ -1252,7 +1259,11 @@ function databaseStatusPresentation(
             text: "text-emerald-300",
           }
         : state === "starting"
-          ? { dot: "bg-amber-300", label: "Starting", text: "text-amber-200" }
+          ? {
+              dot: "bg-amber-300",
+              label: "Starting",
+              text: "text-amber-200",
+            }
           : state === "failed"
             ? {
                 dot: "bg-destructive",

@@ -40,7 +40,6 @@ import {
   type ServerDeleteTarget,
 } from "@/components/server-delete-dialog"
 import {
-  BrickIcon,
   brickIconPresentation,
   type BrickIconDefinition,
   type BrickIconPresentation,
@@ -603,7 +602,6 @@ const ServerTableRow = React.memo(function ServerTableRow({
   routeIdentifier: string
   server: ServerListInstance
 }) {
-  const status = serverStatus(server)
   return (
     <tr className="group transition-colors hover:bg-accent/25">
       <WorkspaceTableCell className="px-2 sm:px-3">
@@ -618,20 +616,16 @@ const ServerTableRow = React.memo(function ServerTableRow({
           className="group/server-link flex min-h-14 w-fit max-w-full min-w-0 items-center px-3 outline-none focus-visible:ring-2 focus-visible:ring-ring/40 focus-visible:ring-inset"
         >
           <InstanceName
-            icon={
-              <BrickIcon
-                id={icon.id}
-                color={icon.color}
-                iconSvg={icon.iconSvg}
-                className="size-[24px]"
-                aria-hidden="true"
-              />
-            }
+            instance={{
+              icon,
+              kind: "server",
+              observedState: server.observedState,
+              relayStatus: server.relayStatus,
+            }}
             name={server.name}
             nameClassName="transition-colors group-hover/server-link:text-primary"
             meta={`${server.game} · ${server.implementation}`}
             metaClassName="font-mono"
-            status={{ className: status.dot, label: status.label }}
           />
         </Link>
       </WorkspaceTableCell>

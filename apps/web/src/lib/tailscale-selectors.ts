@@ -9,8 +9,10 @@ export type TailscaleServer = Pick<
   | "id"
   | "implementation"
   | "name"
+  | "observedState"
   | "relayId"
   | "relayName"
+  | "relayStatus"
   | "routeId"
   | "shortId"
   | "version"
@@ -40,8 +42,10 @@ export function selectTailscaleServers(
               brickSource: instance.brickSource,
               implementation: instance.implementation,
               name: instance.name,
+              observedState: instance.observedState,
               relayId: instance.relayId,
               relayName: instance.relayName,
+              relayStatus: instance.relayStatus,
               routeId: instance.routeId,
               shortId: instance.shortId,
               version: instance.version,

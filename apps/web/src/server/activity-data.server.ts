@@ -3,6 +3,7 @@ import {
   relayIdSchema,
   relaySnapshotSchema,
 } from "@workspace/contracts"
+import type { RelayObservedState } from "@workspace/contracts"
 import type { RowDataPacket } from "mysql2/promise"
 import { z } from "zod"
 
@@ -30,8 +31,12 @@ interface InstanceRow extends RowDataPacket {
 }
 
 interface ActivityInstance {
+  brickId?: string
+  brickSource?: string
   displayName: string | null
+  implementation?: string
   instanceId: string
+  observedState?: RelayObservedState
   relayId: string
 }
 
@@ -117,8 +122,12 @@ export async function getActivityForUser(
     ({ relay, snapshotResult }) =>
       snapshotResult.status === "fulfilled"
         ? snapshotResult.value.instances.map((instance) => ({
+            brickId: instance.brickId,
+            brickSource: instance.brickSource,
             displayName: instance.name,
+            implementation: instance.implementation,
             instanceId: instance.id,
+            observedState: instance.observedState,
             relayId: relay.id,
           }))
         : []
@@ -183,11 +192,19 @@ export async function getActivityForUser(
         occurredAt: record.occurredAt,
         permission: activityPermissionForAudit(record),
         rawEvent: record.event,
-        relay: { id: relay.id, name: relay.name },
+        relay: {
+          id: relay.id,
+          name: relay.name,
+          unavailable: unavailableRelayIds.has(relay.id),
+        },
         server: instanceId
           ? {
+              brickId: instance?.brickId,
+              brickSource: instance?.brickSource,
               id: instanceId,
+              implementation: instance?.implementation,
               name: instance?.displayName ?? `Server ${instanceId.slice(0, 8)}`,
+              observedState: instance?.observedState,
             }
           : null,
         source: activitySourceForAudit(record),
@@ -212,10 +229,14 @@ export async function getActivityForUser(
         return visible
           ? [
               {
+                brickId: instance.brickId,
+                brickSource: instance.brickSource,
                 id: instance.instanceId,
+                implementation: instance.implementation,
                 name:
                   instance.displayName ??
                   `Server ${instance.instanceId.slice(0, 8)}`,
+                observedState: instance.observedState,
                 relayId: instance.relayId,
               },
             ]
