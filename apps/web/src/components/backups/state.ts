@@ -2,9 +2,9 @@ import {
   createWorkspaceTableSearchStore,
   type WorkspaceTableSearchStore,
 } from "@/components/workspace-data-table"
-import type { getBackups } from "@/server/backups"
+import type { BackupRun } from "@/lib/backup-runs"
 
-export type Backup = Awaited<ReturnType<typeof getBackups>>[number]
+export type Backup = BackupRun
 export type BackupAvailabilityDestination = {
   enabled: boolean
   id: string | null

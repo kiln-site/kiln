@@ -26,6 +26,7 @@ const sequencedEventSchema = z.object({
 })
 
 const hearthScopeSchema = z.object({
+  backupId: z.uuid().optional(),
   databaseId: z
     .string()
     .regex(/^[a-f0-9]{40}$/u)

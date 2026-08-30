@@ -8,7 +8,7 @@ import {
 } from "@/components/backups/state"
 import {
   backupStorageQueryOptions,
-  backupsQueryOptions,
+  accessCapabilitiesQueryOptions,
   managedDatabaseDirectoryQueryOptions,
   relaySnapshotQueryOptions,
 } from "@/lib/query-options"
@@ -17,8 +17,8 @@ import { pageTitle } from "@/lib/page-title"
 export const Route = createFileRoute("/_app/backups/runs")({
   loader: async ({ context }) => {
     await Promise.all([
-      context.queryClient.ensureQueryData(backupsQueryOptions()),
       context.queryClient.ensureQueryData(backupStorageQueryOptions()),
+      context.queryClient.ensureQueryData(accessCapabilitiesQueryOptions()),
       context.queryClient.ensureQueryData(relaySnapshotQueryOptions()),
       context.queryClient.ensureQueryData(
         managedDatabaseDirectoryQueryOptions()

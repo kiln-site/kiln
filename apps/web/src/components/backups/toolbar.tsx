@@ -1,5 +1,5 @@
 import * as React from "react"
-import { useQuery } from "@tanstack/react-query"
+import { useQueryClient } from "@tanstack/react-query"
 import {
   Check,
   Plus,
@@ -25,7 +25,8 @@ import {
 
 import { useWorkspaceTableSearchInput } from "@/components/workspace-data-table"
 import { ensuringPromise, forkPromise } from "@/effect/promise"
-import { backupsQueryOptions } from "@/lib/query-options"
+import { resetActiveBackupRunsToFirstPage } from "@/lib/backup-runs-cache"
+import { syncBackupRuns } from "@/server/backups"
 import type {
   BackupDialogStore,
   BackupFilters,
@@ -183,10 +184,7 @@ const BackupStatusFilter = React.memo(function BackupStatusFilter({
 })
 
 const BackupSyncButton = React.memo(function BackupSyncButton() {
-  const { refetch } = useQuery({
-    ...backupsQueryOptions(),
-    notifyOnChangeProps: [],
-  })
+  const queryClient = useQueryClient()
   const [spinning, setSpinning] = React.useState(false)
   const fetchDoneRef = React.useRef(true)
   const fallbackTimeoutRef = React.useRef<number>(undefined)
@@ -217,15 +215,21 @@ const BackupSyncButton = React.memo(function BackupSyncButton() {
     fetchDoneRef.current = false
     setSpinning(true)
     forkPromise(() =>
-      ensuringPromise(refetch, () => {
-        fetchDoneRef.current = true
-        fallbackTimeoutRef.current = window.setTimeout(
-          stopSpinIfDone,
-          minimumBackupSyncFeedbackMs
-        )
-      })
+      ensuringPromise(
+        async () => {
+          await syncBackupRuns()
+          await resetActiveBackupRunsToFirstPage(queryClient)
+        },
+        () => {
+          fetchDoneRef.current = true
+          fallbackTimeoutRef.current = window.setTimeout(
+            stopSpinIfDone,
+            minimumBackupSyncFeedbackMs
+          )
+        }
+      )
     )
-  }, [refetch, spinning, stopSpinIfDone])
+  }, [queryClient, spinning, stopSpinIfDone])
 
   return (
     <Tooltip>

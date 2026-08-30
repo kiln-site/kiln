@@ -138,6 +138,35 @@ interface BackupRow extends RowDataPacket {
   warnings: unknown
 }
 
+interface BackupCatalogPageRow extends BackupRow {
+  order_value: number | string | null
+  relay_present: boolean | number
+}
+
+export interface BackupCatalogPageInput {
+  allowedRoles: ReadonlyArray<string>
+  backupId?: string
+  cursor: { id: string; value: number | string | null } | null
+  direction: "asc" | "desc"
+  isAdmin: boolean
+  limit: number
+  scope: {
+    kind: "database" | "instance" | "platform"
+    relayId: string
+    targetId: string
+  } | null
+  search: string
+  sort: "createdAt" | "name" | "size" | "target"
+  status: "active" | "available" | "failed" | null
+  userId: string
+}
+
+export interface BackupCatalogPageRecord {
+  orderValue: number | string | null
+  record: BackupCatalogRecord
+  relayPresent: boolean
+}
+
 interface DispatchableBackupRow extends RowDataPacket {
   artifact_kind: BackupRow["artifact_kind"]
   backup_id: string
@@ -1104,11 +1133,7 @@ export const reconcileBackupTaskEffect = Effect.fn("backups.reconcile")(
   }
 )
 
-export const listBackupCatalogEffect = Effect.fn("backups.list")(function* () {
-  const database = yield* Database
-  const rows = yield* database.queryRows<BackupRow>(
-    "backup_catalog_list",
-    `SELECT backup.id, backup.relay_id, backup.target_kind, backup.target_id,
+const backupCatalogColumns = `backup.id, backup.relay_id, backup.target_kind, backup.target_id,
             backup.artifact_kind, backup.backup_mode, backup.reason,
             backup.status, backup.name, backup.filename, backup.bytes,
             backup.checksum_sha256, backup.restic_snapshot_id, backup.warnings,
@@ -1121,15 +1146,65 @@ export const listBackupCatalogEffect = Effect.fn("backups.list")(function* () {
             task.current_artifact_id AS task_current_artifact_id,
             task.current_path AS task_current_path, task.error AS task_error,
             ROUND(UNIX_TIMESTAMP(task.started_at) * 1000) AS task_started_at_ms,
-            ROUND(UNIX_TIMESTAMP(task.updated_at) * 1000) AS task_updated_at_ms
-       FROM ${databaseTable("backup")} backup
-       JOIN ${databaseTable("backup_task")} task ON task.id = (
+            ROUND(UNIX_TIMESTAMP(task.updated_at) * 1000) AS task_updated_at_ms`
+
+const latestBackupTaskJoin = `JOIN ${databaseTable("backup_task")} task ON task.id = (
          SELECT latest.id
            FROM ${databaseTable("backup_task")} latest
           WHERE latest.backup_id = backup.id
           ORDER BY latest.created_at DESC, latest.id DESC
           LIMIT 1
-       )
+       )`
+
+const backupActiveSql = `(backup.status IN ('queued', 'running', 'deleting')
+  OR (backup.status = 'available' AND task.status IN ('queued', 'running'))
+  OR EXISTS (
+    SELECT 1 FROM ${databaseTable("backup_artifact")} active_artifact
+     WHERE active_artifact.backup_id = backup.id
+       AND active_artifact.status IN ('queued', 'running', 'deleting')
+  ))`
+
+const backupFailedSql = `(backup.status = 'failed' OR EXISTS (
+  SELECT 1 FROM ${databaseTable("backup_artifact")} failed_artifact
+   WHERE failed_artifact.backup_id = backup.id
+     AND failed_artifact.status = 'failed'
+))`
+
+const backupDisplayBytesSql = `(CASE
+  WHEN backup.bytes IS NOT NULL THEN backup.bytes
+  WHEN task.bytes_total IS NOT NULL
+    AND (task.phase = 'uploading'
+      OR (task.phase = 'finalizing' AND task.current_artifact_id IS NOT NULL))
+    AND EXISTS (
+      SELECT 1 FROM ${databaseTable("backup_artifact")} remote_artifact
+       WHERE remote_artifact.backup_id = backup.id
+         AND remote_artifact.storage_id IS NOT NULL
+         AND remote_artifact.status <> 'deleted'
+    )
+    AND (task.current_artifact_id IS NOT NULL OR (
+      SELECT COUNT(*) FROM ${databaseTable("backup_artifact")} remote_count
+       WHERE remote_count.backup_id = backup.id
+         AND remote_count.storage_id IS NOT NULL
+         AND remote_count.status <> 'deleted'
+    ) <= 1)
+  THEN task.bytes_total
+  ELSE NULL
+END)`
+
+const backupTargetSortSql = `(CASE backup.target_kind
+  WHEN 'platform' THEN COALESCE(relay.name, '')
+  WHEN 'instance' THEN COALESCE(instance.source_name, '')
+  WHEN 'database' THEN COALESCE(managed_database.name, '')
+  ELSE ''
+END)`
+
+export const listBackupCatalogEffect = Effect.fn("backups.list")(function* () {
+  const database = yield* Database
+  const rows = yield* database.queryRows<BackupRow>(
+    "backup_catalog_list",
+    `SELECT ${backupCatalogColumns}
+       FROM ${databaseTable("backup")} backup
+       ${latestBackupTaskJoin}
       WHERE backup.status <> 'deleted'
       ORDER BY backup.created_at DESC, backup.id DESC`
   )
@@ -1158,8 +1233,17 @@ export const listBackupCatalogEffect = Effect.fn("backups.list")(function* () {
     })
     artifactsByBackup.set(artifact.backup_id, records)
   }
-  return rows.map((row) => ({
-    artifacts: artifactsByBackup.get(row.id) ?? [],
+  return rows.map((row) =>
+    backupCatalogRecordFromRow(row, artifactsByBackup.get(row.id) ?? [])
+  ) satisfies Array<BackupCatalogRecord>
+})
+
+function backupCatalogRecordFromRow(
+  row: BackupRow,
+  artifacts: Array<BackupArtifactRecord>
+): BackupCatalogRecord {
+  return {
+    artifacts,
     artifactKind: row.artifact_kind,
     backupMode: row.backup_mode,
     bytes: nullableDatabaseNumber(row.bytes, "backup bytes"),
@@ -1202,8 +1286,243 @@ export const listBackupCatalogEffect = Effect.fn("backups.list")(function* () {
       "backup task updated at"
     ),
     warnings: parseWarnings(row.warnings),
-  })) satisfies Array<BackupCatalogRecord>
+  }
+}
+
+export const getBackupCatalogRecordEffect = Effect.fn("backups.get")(function* (
+  backupId: string
+) {
+  const database = yield* Database
+  const rows = yield* database.queryRows<BackupRow>(
+    "backup_catalog_get",
+    `SELECT ${backupCatalogColumns}
+       FROM ${databaseTable("backup")} backup
+       ${latestBackupTaskJoin}
+      WHERE backup.id = ? AND backup.status <> 'deleted'
+      LIMIT 1`,
+    [backupId]
+  )
+  const row = rows[0]
+  if (!row) return null
+  const artifacts = yield* database.queryRows<BackupArtifactRow>(
+    "backup_artifact_catalog_get",
+    `SELECT id, backup_id, storage_id, status, filename, object_key,
+            bytes, checksum_sha256, error
+       FROM ${databaseTable("backup_artifact")}
+      WHERE backup_id = ? AND status <> 'deleted'
+      ORDER BY created_at ASC, id ASC`,
+    [backupId]
+  )
+  return backupCatalogRecordFromRow(row, artifacts.map(backupArtifactFromRow))
 })
+
+export const listBackupCatalogPageEffect = Effect.fn("backups.page")(function* (
+  input: BackupCatalogPageInput
+) {
+  const database = yield* Database
+  const clauses = ["backup.status <> 'deleted'"]
+  const values: Array<boolean | null | number | string> = []
+
+  if (!input.isAdmin) {
+    if (input.allowedRoles.length === 0) {
+      return { hasMore: false, items: [] as Array<BackupCatalogPageRecord> }
+    }
+    const roles = input.allowedRoles.map(() => "?").join(", ")
+    clauses.push(`backup.target_kind <> 'platform' AND (
+        backup.created_by = ? OR EXISTS (
+          SELECT 1 FROM ${databaseTable("access_grant")} access_grant
+           WHERE access_grant.user_id = ?
+             AND access_grant.relay_id = backup.relay_id
+             AND access_grant.role IN (${roles})
+             AND (
+               access_grant.resource_type = 'relay'
+               OR (backup.target_kind = 'instance'
+                 AND access_grant.resource_type = 'instance'
+                 AND access_grant.resource_id = backup.target_id)
+               OR (backup.target_kind = 'database'
+                 AND access_grant.resource_type = 'database'
+                 AND access_grant.resource_id = backup.target_id)
+             )
+        )
+      )`)
+    values.push(input.userId, input.userId, ...input.allowedRoles)
+  }
+
+  if (input.backupId) {
+    clauses.push("backup.id = ?")
+    values.push(input.backupId)
+  }
+  if (input.scope) {
+    clauses.push("backup.relay_id = ?", "backup.target_kind = ?")
+    values.push(input.scope.relayId, input.scope.kind)
+    if (input.scope.kind !== "platform") {
+      clauses.push("backup.target_id = ?")
+      values.push(input.scope.targetId)
+    }
+  }
+  if (input.search) {
+    const pattern = `%${escapeBackupSearch(input.search)}%`
+    clauses.push(`(
+        LOWER(backup.name) LIKE ? ESCAPE '\\\\'
+        OR LOWER(CAST(backup.id AS CHAR)) LIKE ? ESCAPE '\\\\'
+        OR LOWER(CAST(backup.target_id AS CHAR)) LIKE ? ESCAPE '\\\\'
+        OR LOWER(CAST(backup.relay_id AS CHAR)) LIKE ? ESCAPE '\\\\'
+        OR LOWER(COALESCE(relay.name, '')) LIKE ? ESCAPE '\\\\'
+        OR LOWER(COALESCE(instance.source_name, '')) LIKE ? ESCAPE '\\\\'
+        OR LOWER(COALESCE(managed_database.name, '')) LIKE ? ESCAPE '\\\\'
+      )`)
+    values.push(pattern, pattern, pattern, pattern, pattern, pattern, pattern)
+  }
+  if (input.status === "active") clauses.push(backupActiveSql)
+  if (input.status === "failed") {
+    clauses.push(`NOT ${backupActiveSql}`, backupFailedSql)
+  }
+  if (input.status === "available") {
+    clauses.push(
+      `NOT ${backupActiveSql}`,
+      `NOT ${backupFailedSql}`,
+      "backup.status = 'available'"
+    )
+  }
+
+  const order = backupCatalogOrder(input.sort)
+  if (input.cursor) {
+    clauses.push(
+      backupCatalogCursorClause(
+        order.sql,
+        input.sort,
+        input.direction,
+        input.cursor.value
+      )
+    )
+    if (input.cursor.value === null) {
+      values.push(input.cursor.id)
+    } else if (input.sort === "size") {
+      values.push(input.cursor.value, input.cursor.value, input.cursor.id)
+    } else {
+      values.push(input.cursor.value, input.cursor.value, input.cursor.id)
+    }
+  }
+
+  const direction = input.direction === "asc" ? "ASC" : "DESC"
+  const nullOrder = input.sort === "size" ? `${order.sql} IS NULL ASC, ` : ""
+  values.push(input.limit + 1)
+  const rows = yield* database.queryRows<BackupCatalogPageRow>(
+    "backup_catalog_page",
+    `SELECT ${backupCatalogColumns},
+              relay.id IS NOT NULL AS relay_present,
+              ${order.selectSql} AS order_value
+         FROM ${databaseTable("backup")} backup
+         ${latestBackupTaskJoin}
+         LEFT JOIN ${databaseTable("relay")} relay
+           ON relay.id = backup.relay_id
+         LEFT JOIN ${databaseTable("instance")} instance
+           ON backup.target_kind = 'instance'
+          AND instance.relay_id = backup.relay_id
+          AND instance.instance_id = backup.target_id
+         LEFT JOIN ${databaseTable("database")} managed_database
+           ON backup.target_kind = 'database'
+          AND managed_database.relay_id = backup.relay_id
+          AND managed_database.database_id = backup.target_id
+        WHERE ${clauses.map((clause) => `(${clause})`).join(" AND ")}
+        ORDER BY ${nullOrder}${order.sql} ${direction}, backup.id ${direction}
+        LIMIT ?`,
+    values
+  )
+  const pageRows = rows.slice(0, input.limit)
+  const backupIds = pageRows.map((row) => row.id)
+  const artifactsByBackup = new Map<string, Array<BackupArtifactRecord>>()
+  if (backupIds.length > 0) {
+    const placeholders = backupIds.map(() => "?").join(", ")
+    const artifactRows = yield* database.queryRows<BackupArtifactRow>(
+      "backup_artifact_catalog_page",
+      `SELECT id, backup_id, storage_id, status, filename, object_key,
+                bytes, checksum_sha256, error
+           FROM ${databaseTable("backup_artifact")}
+          WHERE backup_id IN (${placeholders}) AND status <> 'deleted'
+          ORDER BY created_at ASC, id ASC`,
+      backupIds
+    )
+    for (const artifactRow of artifactRows) {
+      const artifacts = artifactsByBackup.get(artifactRow.backup_id) ?? []
+      artifacts.push(backupArtifactFromRow(artifactRow))
+      artifactsByBackup.set(artifactRow.backup_id, artifacts)
+    }
+  }
+  return {
+    hasMore: rows.length > input.limit,
+    items: pageRows.map((row) => ({
+      orderValue: backupOrderValue(row.order_value, input.sort),
+      record: backupCatalogRecordFromRow(
+        row,
+        artifactsByBackup.get(row.id) ?? []
+      ),
+      relayPresent: Boolean(row.relay_present),
+    })),
+  }
+})
+
+function backupArtifactFromRow(row: BackupArtifactRow): BackupArtifactRecord {
+  return {
+    bytes: nullableDatabaseNumber(row.bytes, "backup artifact bytes"),
+    checksumSha256: row.checksum_sha256,
+    error: row.error,
+    filename: row.filename,
+    id: row.id,
+    objectKey: row.object_key,
+    status: row.status,
+    storageId: row.storage_id,
+  }
+}
+
+function escapeBackupSearch(value: string): string {
+  return value.replace(/[\\%_]/gu, (character) => `\\${character}`)
+}
+
+function backupCatalogOrder(sort: BackupCatalogPageInput["sort"]): {
+  selectSql: string
+  sql: string
+} {
+  if (sort === "name") {
+    const sql = "LOWER(backup.name) COLLATE utf8mb4_bin"
+    return { selectSql: sql, sql }
+  }
+  if (sort === "target") {
+    const sql = `LOWER(${backupTargetSortSql}) COLLATE utf8mb4_bin`
+    return { selectSql: sql, sql }
+  }
+  if (sort === "size") {
+    return { selectSql: backupDisplayBytesSql, sql: backupDisplayBytesSql }
+  }
+  return {
+    selectSql: "ROUND(UNIX_TIMESTAMP(backup.created_at) * 1000)",
+    sql: "backup.created_at",
+  }
+}
+
+function backupCatalogCursorClause(
+  orderSql: string,
+  sort: BackupCatalogPageInput["sort"],
+  direction: BackupCatalogPageInput["direction"],
+  cursorValue: number | string | null
+): string {
+  const operator = direction === "asc" ? ">" : "<"
+  if (cursorValue === null) {
+    return `${orderSql} IS NULL AND backup.id ${operator} ?`
+  }
+  const cursorSql = sort === "createdAt" ? "FROM_UNIXTIME(? / 1000)" : "?"
+  return `(${orderSql} ${operator} ${cursorSql}
+    OR (${orderSql} = ${cursorSql} AND backup.id ${operator} ?)
+    ${orderSql === backupDisplayBytesSql ? `OR ${orderSql} IS NULL` : ""})`
+}
+
+function backupOrderValue(
+  value: number | string | null,
+  sort: BackupCatalogPageInput["sort"]
+): number | string | null {
+  if (value === null || sort === "name" || sort === "target") return value
+  return safeDatabaseNumber(value, "backup order value")
+}
 
 export const listDispatchableBackupTasksEffect = Effect.fn(
   "backups.dispatchable"

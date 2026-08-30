@@ -1,4 +1,4 @@
-import { queryOptions } from "@tanstack/react-query"
+import { infiniteQueryOptions, queryOptions } from "@tanstack/react-query"
 import type { QueryClient } from "@tanstack/react-query"
 import type { BackupTarget, RelayInstance } from "@workspace/contracts"
 
@@ -9,7 +9,7 @@ import {
   getInvitationPreview,
 } from "@/server/access"
 import { getActivity } from "@/server/activity"
-import { getBackupPolicy, getBackups } from "@/server/backups"
+import { getBackupPolicy, getBackupRunsPage } from "@/server/backups"
 import { getBackupStorage } from "@/server/backup-storage"
 import {
   getBrickCatalog,
@@ -48,6 +48,11 @@ import { getAuthState } from "@/server/auth"
 import { getUpdateOverview } from "@/server/updates"
 import { getScheduleOptions, getSchedules } from "@/server/schedules"
 import type { RelayFleetSnapshot } from "@/lib/relay-fleet"
+import {
+  backupRunsQueryKey,
+  normalizeBackupRunsQuery,
+  type BackupRunsQuery,
+} from "@/lib/backup-runs"
 
 export type UiPreferences = Awaited<ReturnType<typeof getUiPreferences>>
 
@@ -76,7 +81,7 @@ export const queryKeys = {
   },
   activity: (from?: string, to?: string) => ["activity", { from, to }] as const,
   backups: {
-    all: ["backups"] as const,
+    runs: backupRunsQueryKey,
     policy: (relayId: string, target: BackupTarget) =>
       ["backups", "policy", relayId, target.kind, target.id] as const,
     storage: ["backups", "storage"] as const,
@@ -207,23 +212,18 @@ export function minecraftProfileQueryOptions(displayName: string) {
   })
 }
 
-export function backupsQueryOptions() {
-  return queryOptions({
-    queryKey: queryKeys.backups.all,
-    queryFn: () => getBackups(),
-    refetchInterval: (query) =>
-      query.state.data?.some(
-        (backup) =>
-          ["queued", "running", "deleting"].includes(backup.status) ||
-          ["queued", "running"].includes(backup.taskStatus) ||
-          backup.artifacts.some((artifact) =>
-            ["queued", "running", "deleting"].includes(artifact.status)
-          )
-      )
-        ? 1_500
-        : false,
-    refetchOnWindowFocus: "always",
-    staleTime: 1_000,
+export function backupRunsInfiniteQueryOptions(input: BackupRunsQuery) {
+  const normalized = normalizeBackupRunsQuery(input)
+  const { cursor: _, ...query } = normalized
+  return infiniteQueryOptions({
+    queryKey: queryKeys.backups.runs(query),
+    queryFn: ({ pageParam }) =>
+      getBackupRunsPage({ data: { ...query, cursor: pageParam } }),
+    initialPageParam: null as string | null,
+    getNextPageParam: (page) => page.nextCursor,
+    refetchOnMount: false,
+    refetchOnReconnect: false,
+    refetchOnWindowFocus: false,
   })
 }
 
@@ -318,10 +318,7 @@ export function snapshotWithCanonicalState(
 
 export function connectionWithCanonicalSnapshot(
   queryClient: QueryClient,
-  connection: Extract<
-    RelayConnection,
-    { status: "connected" | "unreachable" }
-  >
+  connection: Extract<RelayConnection, { status: "connected" | "unreachable" }>
 ): Extract<RelayConnection, { status: "connected" | "unreachable" }> {
   const snapshot = snapshotWithCanonicalState(queryClient, connection.snapshot)
   queryClient.setQueryData(queryKeys.relay.snapshot, snapshot)

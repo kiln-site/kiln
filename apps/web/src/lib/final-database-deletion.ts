@@ -136,7 +136,7 @@ async function ensureFinalDatabaseDeletion(input: {
     if (concurrent) return concurrent
     throw reserved.failure
   }
-  publishBackupChange(input.relay.id)
+  publishBackupChange(input.relay.id, reserved.success.backupId)
   const { dispatchBackupTask } = await import("@/lib/backup-reconciliation")
   await dispatchBackupTask(input.relay, reserved.success, input.requestedBy)
   const created = await finalDatabaseDeletion(input.relay.id, input.databaseId)

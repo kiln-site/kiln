@@ -15,7 +15,8 @@ import {
 import { createBackupDownloadShareEffect } from "@/effect/backup-download-shares"
 import {
   forgetBackupEffect,
-  listBackupCatalogEffect,
+  getBackupCatalogRecordEffect,
+  listBackupCatalogPageEffect,
   getBackupPolicyEffect,
   reconcileBackupTaskEffect,
   renameBackupEffect,
@@ -29,6 +30,8 @@ import {
   updateBackupExcludesEffect,
   updateBackupLimitsEffect,
   type BackupCatalogRecord,
+  type BackupCatalogPageRecord,
+  type BackupDispatch,
 } from "@/effect/backups"
 import { listManagedDatabaseRecordsEffect } from "@/effect/managed-databases"
 import { loadBackupStorageEffect } from "@/backups/destinations/s3"
@@ -45,6 +48,7 @@ import {
 } from "@/lib/access-control"
 import { hasBackupPermission } from "@/lib/backup-access"
 import { roleHasPermission } from "@/lib/permissions"
+import { accessRoles } from "@/lib/permissions"
 import { scheduleBackupCopyProcessing } from "@/lib/backup-copy"
 import { selectBackupCopySource } from "@/lib/backup-copy-source"
 import {
@@ -57,11 +61,21 @@ import { kilnInstallationId, kilnPublicUrl } from "@/lib/environment"
 import {
   dispatchBackupTask,
   reconcileRelayBackups,
-  scheduleBackupReconciliation,
 } from "@/lib/backup-reconciliation"
 import { listPersistedRelays, type PersistedRelay } from "@/lib/relay-registry"
 import { requireAuthenticatedUser } from "@/server/auth"
 import type { AuthenticatedUser } from "@/lib/auth-session"
+import {
+  backupRunsQueryFingerprint,
+  backupRunsQuerySchema,
+  normalizeBackupRunsQuery,
+  type BackupRun,
+  type BackupRunsPage,
+} from "@/lib/backup-runs"
+import {
+  decodeBackupRunCursor,
+  encodeBackupRunCursor,
+} from "@/lib/backup-run-cursor.server"
 
 const instanceBackupInputSchema = z.strictObject({
   instanceId: z.string().min(1).max(120),
@@ -109,6 +123,10 @@ const platformBackupInputSchema = z.strictObject({
 })
 
 const backupIdInputSchema = z.strictObject({ backupId: z.uuid() })
+const backupRunsPageSize = 50
+const backupRunForQuerySchema = backupRunsQuerySchema.extend({
+  backupId: z.uuid(),
+})
 
 const backupRemovalInputSchema = z.strictObject({
   backupId: z.uuid(),
@@ -205,17 +223,13 @@ export const createInstanceBackup = createServerFn({ method: "POST" })
         taskId: randomUUID(),
       })
     )
-    publishBackupChange(relay.id)
-    let relayAccepted = true
-    const dispatched = await Promise.allSettled([
-      dispatchBackupTask(relay, input, user.id),
-    ])
-    if (dispatched[0]?.status === "rejected") relayAccepted = false
-    const backup = (
-      await runAppEffect("backups.listAfterCreate", listBackupCatalogEffect())
-    ).find((candidate) => candidate.id === input.backupId)
-    if (!backup) throw new Error("Backup catalog record was not created")
-    return { backup, relayAccepted }
+    publishBackupChange(relay.id, input.backupId)
+    return dispatchAndLoadReservedBackup(
+      relay,
+      input,
+      user.id,
+      "backups.getAfterCreate"
+    )
   })
 
 export const createDatabaseBackup = createServerFn({ method: "POST" })
@@ -262,21 +276,13 @@ export const createDatabaseBackup = createServerFn({ method: "POST" })
         taskId: randomUUID(),
       })
     )
-    publishBackupChange(relay.id)
-    const dispatched = await Promise.allSettled([
-      dispatchBackupTask(relay, input, user.id),
-    ])
-    const backup = (
-      await runAppEffect(
-        "backups.listAfterDatabaseCreate",
-        listBackupCatalogEffect()
-      )
-    ).find((candidate) => candidate.id === input.backupId)
-    if (!backup) throw new Error("Backup catalog record was not created")
-    return {
-      backup,
-      relayAccepted: dispatched[0]?.status === "fulfilled",
-    }
+    publishBackupChange(relay.id, input.backupId)
+    return dispatchAndLoadReservedBackup(
+      relay,
+      input,
+      user.id,
+      "backups.getAfterDatabaseCreate"
+    )
   })
 
 export const createPlatformBackup = createServerFn({ method: "POST" })
@@ -304,84 +310,137 @@ export const createPlatformBackup = createServerFn({ method: "POST" })
         taskId: randomUUID(),
       })
     )
-    publishBackupChange(relay.id)
-    const dispatched = await Promise.allSettled([
-      dispatchBackupTask(relay, input, user.id),
-    ])
-    const backup = (
-      await runAppEffect(
-        "backups.listAfterPlatformCreate",
-        listBackupCatalogEffect()
-      )
-    ).find((candidate) => candidate.id === input.backupId)
-    if (!backup) throw new Error("Backup catalog record was not created")
+    publishBackupChange(relay.id, input.backupId)
+    return dispatchAndLoadReservedBackup(
+      relay,
+      input,
+      user.id,
+      "backups.getAfterPlatformCreate"
+    )
+  })
+
+async function dispatchAndLoadReservedBackup(
+  relay: PersistedRelay,
+  input: BackupDispatch,
+  userId: string,
+  operation: string
+): Promise<{ backup: BackupCatalogRecord; relayAccepted: boolean }> {
+  const [dispatchResult, backupResult] = await Promise.allSettled([
+    dispatchBackupTask(relay, input, userId),
+    runAppEffect(operation, getBackupCatalogRecordEffect(input.backupId)),
+  ])
+  if (backupResult.status === "rejected") throw backupResult.reason
+  if (!backupResult.value) {
+    throw new Error("Backup catalog record was not created")
+  }
+  return {
+    backup: backupResult.value,
+    relayAccepted: dispatchResult.status === "fulfilled",
+  }
+}
+
+export const getBackupRunsPage = createServerFn({ method: "GET" })
+  .validator(backupRunsQuerySchema)
+  .handler(async ({ data }): Promise<BackupRunsPage> => {
+    const user = await requireAuthenticatedUser()
+    const query = normalizeBackupRunsQuery(data)
+    const fingerprint = backupRunsQueryFingerprint(query)
+    const cursor = decodeBackupRunCursor(query.cursor, fingerprint, query.sort)
+    const page = await runAppEffect(
+      "backups.page",
+      listBackupCatalogPageEffect({
+        allowedRoles: accessRoles.filter((role) =>
+          roleHasPermission(role, "backup.read")
+        ),
+        cursor,
+        direction: query.direction,
+        isAdmin: isPlatformAdmin(user),
+        limit: backupRunsPageSize,
+        scope: query.scope,
+        search: query.search,
+        sort: query.sort,
+        status: query.status,
+        userId: user.id,
+      })
+    )
+    const items = page.items.map(publicBackupRun)
+    const last = items.at(-1)
     return {
-      backup,
-      relayAccepted: dispatched[0]?.status === "fulfilled",
+      items,
+      nextCursor:
+        page.hasMore && last
+          ? encodeBackupRunCursor({
+              fingerprint,
+              id: last.id,
+              value: last.orderKey.value,
+            })
+          : null,
     }
   })
 
-export const getBackups = createServerFn({ method: "GET" }).handler(
+export const getBackupRunForQuery = createServerFn({ method: "GET" })
+  .validator(backupRunForQuerySchema)
+  .handler(async ({ data }): Promise<BackupRun | null> => {
+    const user = await requireAuthenticatedUser()
+    const query = normalizeBackupRunsQuery({ ...data, cursor: null })
+    const page = await runAppEffect(
+      "backups.getForQuery",
+      listBackupCatalogPageEffect({
+        allowedRoles: accessRoles.filter((role) =>
+          roleHasPermission(role, "backup.read")
+        ),
+        backupId: data.backupId,
+        cursor: null,
+        direction: query.direction,
+        isAdmin: isPlatformAdmin(user),
+        limit: 1,
+        scope: query.scope,
+        search: query.search,
+        sort: query.sort,
+        status: query.status,
+        userId: user.id,
+      })
+    )
+    const item = page.items[0]
+    return item ? publicBackupRun(item) : null
+  })
+
+export const syncBackupRuns = createServerFn({ method: "POST" }).handler(
   async () => {
     const user = await requireAuthenticatedUser()
     scheduleBackupCopyProcessing()
     const persistedRelays = await listPersistedRelays()
-    const persistedRelayIds = new Set(persistedRelays.map((relay) => relay.id))
-    const relays = persistedRelays.filter((relay) => relay.enabled)
     const grants = isPlatformAdmin(user) ? [] : await listUserGrants(user.id)
-    const catalog = await runAppEffect(
-      "backups.listForReconcile",
-      listBackupCatalogEffect()
+    const readableRelayIds = new Set(
+      grants.flatMap((grant) =>
+        roleHasPermission(grant.role, "backup.read") ? [grant.relayId] : []
+      )
     )
-    const visibleRelayIds = new Set<string>()
-    for (const backup of catalog) {
-      if (hasBackupPermission(user, grants, backup, "backup.read")) {
-        visibleRelayIds.add(backup.relayId)
-      }
-    }
-    const hasActiveRelayTasks = catalog.some(
-      (backup) =>
-        visibleRelayIds.has(backup.relayId) &&
-        (["queued", "running", "deleting"].includes(backup.status) ||
-          backup.taskStatus === "queued" ||
-          backup.taskStatus === "running")
+    const relays = persistedRelays.filter(
+      (relay) =>
+        relay.enabled &&
+        (isPlatformAdmin(user) ||
+          readableRelayIds.has(relay.id) ||
+          relay.createdBy === user.id)
     )
-    const discoverableRelayIds = isPlatformAdmin(user)
-      ? new Set(relays.map((relay) => relay.id))
-      : new Set(
-          grants.flatMap((grant) =>
-            roleHasPermission(grant.role, "backup.read") ? [grant.relayId] : []
-          )
-        )
-    const relayIdsToReconcile = hasActiveRelayTasks
-      ? visibleRelayIds
-      : discoverableRelayIds
-    const reconciliationPromises = []
-    for (const relay of relays) {
-      if (relayIdsToReconcile.has(relay.id)) {
-        reconciliationPromises.push(reconcileRelayBackups(relay, user.id))
-      }
-    }
-    await Promise.allSettled(reconciliationPromises)
-    const reconciled = await runAppEffect(
-      "backups.listReconciled",
-      listBackupCatalogEffect()
+    await Promise.allSettled(
+      relays.map((relay) => reconcileRelayBackups(relay, user.id))
     )
-    const visibleBackups = []
-    for (const candidate of reconciled) {
-      if (!hasBackupPermission(user, grants, candidate, "backup.read")) continue
-      const { createdBy: _, objectKey: __, ...backup } = candidate
-      visibleBackups.push({
-        ...backup,
-        relayPresent: persistedRelayIds.has(backup.relayId),
-        artifacts: backup.artifacts.map(
-          ({ objectKey: ___, ...artifact }) => artifact
-        ),
-      })
-    }
-    return visibleBackups
+    return { synced: true as const }
   }
 )
+
+function publicBackupRun(item: BackupCatalogPageRecord): BackupRun {
+  const { createdBy: _, objectKey: __, ...record } = item.record
+  return {
+    ...record,
+    artifacts: record.artifacts.map(
+      ({ objectKey: ___, ...artifact }) => artifact
+    ),
+    orderKey: { id: record.id, value: item.orderValue },
+    relayPresent: item.relayPresent,
+  }
+}
 
 export const getBackupPolicy = createServerFn({ method: "GET" })
   .validator(backupPolicyInputSchema)
@@ -398,11 +457,10 @@ export const cancelBackup = createServerFn({ method: "POST" })
   .validator(backupIdInputSchema)
   .handler(async ({ data }) => {
     const user = await requireAuthenticatedUser()
-    const catalog = await runAppEffect(
-      "backups.listForCancel",
-      listBackupCatalogEffect()
+    const backup = await runAppEffect(
+      "backups.getForCancel",
+      getBackupCatalogRecordEffect(data.backupId)
     )
-    const backup = catalog.find((candidate) => candidate.id === data.backupId)
     if (!backup) throw new Error("Backup not found")
     if (
       backup.taskKind !== "create" ||
@@ -434,7 +492,7 @@ export const cancelBackup = createServerFn({ method: "POST" })
     if (task.status !== "cancelled") {
       throw new Error("This backup is no longer being created")
     }
-    publishBackupChange(relay.id)
+    publishBackupChange(relay.id, backup.id)
     return { cancelled: true as const }
   })
 
@@ -442,11 +500,10 @@ export const deleteBackup = createServerFn({ method: "POST" })
   .validator(backupRemovalInputSchema)
   .handler(async ({ data }) => {
     const user = await requireAuthenticatedUser()
-    const catalog = await runAppEffect(
-      "backups.listForDelete",
-      listBackupCatalogEffect()
+    const backup = await runAppEffect(
+      "backups.getForDelete",
+      getBackupCatalogRecordEffect(data.backupId)
     )
-    const backup = catalog.find((candidate) => candidate.id === data.backupId)
     if (!backup) throw new Error("Backup not found")
     const grants = isPlatformAdmin(user) ? [] : await listUserGrants(user.id)
     const relayPresent = (await listPersistedRelays()).some(
@@ -471,7 +528,7 @@ export const deleteBackup = createServerFn({ method: "POST" })
         )
       }
       if (forgetResult === "not_found") throw new Error("Backup not found")
-      publishBackupChange(backup.relayId)
+      publishBackupChange(backup.relayId, backup.id)
       return { forgotten: true as const }
     }
     if (!hasBackupPermission(user, grants, backup, "backup.delete")) {
@@ -491,7 +548,7 @@ export const deleteBackup = createServerFn({ method: "POST" })
         taskId: randomUUID(),
       })
     )
-    publishBackupChange(relay.id)
+    publishBackupChange(relay.id, backup.id)
     const dispatched = await Promise.allSettled([
       dispatchBackupTask(relay, input, user.id),
     ])
@@ -505,11 +562,10 @@ export const renameBackup = createServerFn({ method: "POST" })
   .validator(renameBackupInputSchema)
   .handler(async ({ data }) => {
     const user = await requireAuthenticatedUser()
-    const catalog = await runAppEffect(
-      "backups.listForRename",
-      listBackupCatalogEffect()
+    const backup = await runAppEffect(
+      "backups.getForRename",
+      getBackupCatalogRecordEffect(data.backupId)
     )
-    const backup = catalog.find((candidate) => candidate.id === data.backupId)
     if (!backup) throw new Error("Backup not found")
     const grants = isPlatformAdmin(user) ? [] : await listUserGrants(user.id)
     if (!hasBackupPermission(user, grants, backup, "backup.create")) {
@@ -523,7 +579,7 @@ export const renameBackup = createServerFn({ method: "POST" })
       })
     )
     if (!renamed) throw new Error("Backup not found")
-    publishBackupChange(backup.relayId)
+    publishBackupChange(backup.relayId, backup.id)
     return { name: data.name }
   })
 
@@ -531,11 +587,10 @@ export const copyBackupToDestination = createServerFn({ method: "POST" })
   .validator(copyBackupInputSchema)
   .handler(async ({ data }) => {
     const user = await requireAuthenticatedUser()
-    const catalog = await runAppEffect(
-      "backups.listForCopy",
-      listBackupCatalogEffect()
+    const backup = await runAppEffect(
+      "backups.getForCopy",
+      getBackupCatalogRecordEffect(data.backupId)
     )
-    const backup = catalog.find((candidate) => candidate.id === data.backupId)
     if (!backup) throw new Error("Backup not found")
     const grants = isPlatformAdmin(user) ? [] : await listUserGrants(user.id)
     if (!hasBackupPermission(user, grants, backup, "backup.create")) {
@@ -570,7 +625,7 @@ export const copyBackupToDestination = createServerFn({ method: "POST" })
       })
     )
     scheduleBackupCopyProcessing()
-    publishBackupChange(backup.relayId)
+    publishBackupChange(backup.relayId, backup.id)
     return { copied: false, queued: true, taskId: reserved.taskId }
   })
 
@@ -580,11 +635,10 @@ export const getBackupDownloadUrl = createServerFn({ method: "POST" })
     const { setResponseHeader } = await import("@tanstack/react-start/server")
     setResponseHeader("Cache-Control", "no-store")
     const user = await requireAuthenticatedUser()
-    const catalog = await runAppEffect(
-      "backups.listForDownload",
-      listBackupCatalogEffect()
+    const backup = await runAppEffect(
+      "backups.getForDownload",
+      getBackupCatalogRecordEffect(data.backupId)
     )
-    const backup = catalog.find((candidate) => candidate.id === data.backupId)
     if (!backup || backup.status !== "available") {
       throw new Error("Backup is not available")
     }
@@ -663,11 +717,10 @@ export const restoreInstanceBackup = createServerFn({ method: "POST" })
   .validator(backupRestoreInputSchema)
   .handler(async ({ data }) => {
     const user = await requireAuthenticatedUser()
-    const catalog = await runAppEffect(
-      "backups.listForRestore",
-      listBackupCatalogEffect()
+    const backup = await runAppEffect(
+      "backups.getForRestore",
+      getBackupCatalogRecordEffect(data.backupId)
     )
-    const backup = catalog.find((candidate) => candidate.id === data.backupId)
     if (
       !backup ||
       backup.status !== "available" ||
@@ -731,14 +784,12 @@ export const restoreInstanceBackup = createServerFn({ method: "POST" })
         taskId: randomUUID(),
       })
     )
-    publishBackupChange(relay.id)
+    publishBackupChange(relay.id, backup.id)
+    if (safety) publishBackupChange(relay.id, safety.backupId)
     const firstTask = safety ?? restore
     const dispatched = await Promise.allSettled([
       dispatchBackupTask(relay, firstTask, user.id),
     ])
-    if (safety && dispatched[0]?.status === "fulfilled") {
-      scheduleBackupReconciliation(relay, user.id)
-    }
     return {
       relayAccepted: dispatched[0]?.status === "fulfilled",
       restoreTaskId: restore.taskId,
@@ -750,11 +801,10 @@ export const restoreDatabaseBackup = createServerFn({ method: "POST" })
   .validator(backupRestoreInputSchema)
   .handler(async ({ data }) => {
     const user = await requireAuthenticatedUser()
-    const catalog = await runAppEffect(
-      "backups.listForDatabaseRestore",
-      listBackupCatalogEffect()
+    const backup = await runAppEffect(
+      "backups.getForDatabaseRestore",
+      getBackupCatalogRecordEffect(data.backupId)
     )
-    const backup = catalog.find((candidate) => candidate.id === data.backupId)
     if (
       !backup ||
       backup.status !== "available" ||
@@ -813,13 +863,11 @@ export const restoreDatabaseBackup = createServerFn({ method: "POST" })
         taskId: randomUUID(),
       })
     )
-    publishBackupChange(relay.id)
+    publishBackupChange(relay.id, backup.id)
+    if (safety) publishBackupChange(relay.id, safety.backupId)
     const dispatched = await Promise.allSettled([
       dispatchBackupTask(relay, safety ?? restore, user.id),
     ])
-    if (safety && dispatched[0]?.status === "fulfilled") {
-      scheduleBackupReconciliation(relay, user.id)
-    }
     return {
       relayAccepted: dispatched[0]?.status === "fulfilled",
       restoreTaskId: restore.taskId,
@@ -913,7 +961,7 @@ async function resticBackupDownload(input: {
     })
   )
   if (reserved.kind === "dispatch") {
-    publishBackupChange(input.backup.relayId)
+    publishBackupChange(input.backup.relayId, input.backup.id)
     const relay = await requireBackupRelay(input.backup.relayId)
     await dispatchBackupTask(relay, reserved.dispatch, input.user.id)
     return { preparing: true, taskId: reserved.dispatch.taskId }

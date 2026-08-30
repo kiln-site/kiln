@@ -75,6 +75,7 @@ import type { RelayFleetSnapshot } from "@/lib/relay-fleet"
 import { relaysCollectionOptions } from "@/lib/collections/relays"
 import { pairingFeedbackFrom } from "@/lib/relay-pairing-errors"
 import { canRefetchSystemUpdateOverview } from "@/lib/system-update-presence"
+import { resetActiveBackupRunsToFirstPage } from "@/lib/backup-runs-cache"
 import {
   accessCapabilitiesQueryOptions,
   queryKeys,
@@ -939,7 +940,7 @@ const RelayDeleteButton = React.memo(function RelayDeleteButton({
       )
       await Promise.all([
         invalidateRelayRuntimeQueries(queryClient),
-        queryClient.invalidateQueries({ queryKey: queryKeys.backups.all }),
+        resetActiveBackupRunsToFirstPage(queryClient),
         queryClient.invalidateQueries({ queryKey: queryKeys.domains.settings }),
         queryClient.invalidateQueries({ queryKey: queryKeys.databases.all }),
         queryClient.invalidateQueries({ queryKey: queryKeys.schedules.all }),

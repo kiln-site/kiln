@@ -83,48 +83,48 @@ describe("instance registry sync", () => {
     }
   )
 
-  it.effect(
-    "does not write non-unique Relay names into the registry key",
-    () => {
-      const statements: Array<{
-        sql: string
-        values: ReadonlyArray<unknown>
-      }> = []
-      const databaseLayer = Layer.succeed(Database)({
-        execute: () => Effect.die("Unexpected standalone database write"),
-        queryRows: () => Effect.die("Unexpected database query"),
-        transaction: (_operation, run) =>
-          run({
-            execute: (sql, values) =>
-              Effect.sync(() => {
-                statements.push({ sql, values: values ?? [] })
-                return emptyResult
-              }),
-            queryRows: () => Effect.die("Unexpected transaction query"),
-          }),
-      })
+  it.effect("stores Relay names outside the unique display-name key", () => {
+    const statements: Array<{
+      sql: string
+      values: ReadonlyArray<unknown>
+    }> = []
+    const databaseLayer = Layer.succeed(Database)({
+      execute: () => Effect.die("Unexpected standalone database write"),
+      queryRows: () => Effect.die("Unexpected database query"),
+      transaction: (_operation, run) =>
+        run({
+          execute: (sql, values) =>
+            Effect.sync(() => {
+              statements.push({ sql, values: values ?? [] })
+              return emptyResult
+            }),
+          queryRows: () => Effect.die("Unexpected transaction query"),
+        }),
+    })
 
-      return Effect.gen(function* () {
-        yield* syncInstanceRegistryEffect("relay-one", [
-          { id: "instance-one", name: "Survival" },
-          { id: "instance-two", name: "Survival" },
-        ])
+    return Effect.gen(function* () {
+      yield* syncInstanceRegistryEffect("relay-one", [
+        { id: "instance-one", name: "Survival" },
+        { id: "instance-two", name: "Survival" },
+      ])
 
-        const insert = statements[0]
-        assert.isDefined(insert)
-        assert.include(insert.sql, "(relay_id, instance_id, display_name)")
-        assert.include(insert.sql, "(?, ?, NULL), (?, ?, NULL)")
-        assert.notInclude(insert.sql, "display_name = VALUES(display_name)")
-        const prune = statements[1]
-        assert.isDefined(prune)
-        assert.include(prune.sql, "provisioning_reserved_until")
-        assert.deepEqual(insert.values, [
-          "relay-one",
-          "instance-one",
-          "relay-one",
-          "instance-two",
-        ])
-      }).pipe(Effect.provide(databaseLayer))
-    }
-  )
+      const insert = statements[0]
+      assert.isDefined(insert)
+      assert.include(insert.sql, "display_name, source_name")
+      assert.include(insert.sql, "(?, ?, NULL, ?), (?, ?, NULL, ?)")
+      assert.notInclude(insert.sql, "display_name = VALUES(display_name)")
+      assert.include(insert.sql, "source_name = VALUES(source_name)")
+      const prune = statements[1]
+      assert.isDefined(prune)
+      assert.include(prune.sql, "provisioning_reserved_until")
+      assert.deepEqual(insert.values, [
+        "relay-one",
+        "instance-one",
+        "Survival",
+        "relay-one",
+        "instance-two",
+        "Survival",
+      ])
+    }).pipe(Effect.provide(databaseLayer))
+  })
 })

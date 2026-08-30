@@ -3,6 +3,7 @@ import {
   useMutation,
   useQuery,
   useQueryClient,
+  useSuspenseInfiniteQuery,
   useSuspenseQuery,
 } from "@tanstack/react-query"
 import { Link } from "@tanstack/react-router"
@@ -43,6 +44,7 @@ import {
 } from "@workspace/ui/components/select"
 import { showToast } from "@workspace/ui/components/sonner"
 import { Switch } from "@workspace/ui/components/switch"
+import { Skeleton } from "@workspace/ui/components/skeleton"
 import { Textarea } from "@workspace/ui/components/textarea"
 import { ServerScopePicker } from "@/components/server-scope-picker"
 import type { ServerPickerOption } from "@/components/server-picker-list"
@@ -67,14 +69,9 @@ import {
   type BackupSelectionStore,
   type BackupStatusFilterStore,
 } from "@/components/backups/state"
-import {
-  BackupBulkActions,
-  BackupTable,
-  backupMatchesSearch,
-} from "@/components/backups/table"
+import { BackupBulkActions, BackupTable } from "@/components/backups/table"
 import {
   backupCanBeRemoved,
-  backupMatchesStatusFilter,
   backupTargetName,
   BackupActionButton,
   formatBytes,
@@ -84,8 +81,8 @@ import { BackupToolbar } from "@/components/backups/toolbar"
 import { roleHasPermission } from "@/lib/permissions"
 import {
   accessCapabilitiesQueryOptions,
+  backupRunsInfiniteQueryOptions,
   backupStorageQueryOptions,
-  backupsQueryOptions,
   backupPolicyQueryOptions,
   managedDatabaseDirectoryQueryOptions,
   queryKeys,
@@ -99,6 +96,7 @@ import {
   getBackupDownloadUrl,
   restoreDatabaseBackup,
   restoreInstanceBackup,
+  syncBackupRuns,
   getBackupPolicy,
   updateBackupExcludes,
   updateBackupLimits,
@@ -117,11 +115,20 @@ import {
 } from "@/components/backup-configuration-dialog"
 import type { getManagedDatabaseDirectory } from "@/server/databases"
 import type { getRelaySnapshot } from "@/server/relay"
+import { DataTableBoundary } from "@/components/data-table-boundary"
+import { flattenCursorPages } from "@/lib/cursor-page"
+import type { BackupRunSort, BackupRunSortDirection } from "@/lib/backup-runs"
+import {
+  resetActiveBackupRunsToFirstPage,
+  resetBackupRunsToFirstPage,
+} from "@/lib/backup-runs-cache"
+import { forkPromise } from "@/effect/promise"
 type BackupStorage = Awaited<ReturnType<typeof getBackupStorage>>[number]
 type BackupPolicy = Awaited<ReturnType<typeof getBackupPolicy>>
 type CreateTarget = BackupConfigurationTarget
 
 const completedDeleteFeedbackMs = 1_000
+const emptyCompletedBackupFeedback: ReadonlyMap<string, Backup> = new Map()
 
 function selectBackupScope(
   snapshot: Awaited<ReturnType<typeof getRelaySnapshot>>
@@ -184,57 +191,52 @@ function useBackupsWithDeleteFeedback(
     deleteFeedbackStore.getSnapshot,
     deleteFeedbackStore.getServerSnapshot
   )
-  const [visibleBackups, setVisibleBackups] = React.useState(backups)
-  const visibleBackupsRef = React.useRef(backups)
+  const previousBackupsRef = React.useRef(backups)
+  const [completedFeedback, setCompletedFeedback] = React.useState<
+    ReadonlyMap<string, Backup>
+  >(emptyCompletedBackupFeedback)
+  const completedFeedbackRef = React.useRef(completedFeedback)
   const removalTimers = React.useRef(new Map<string, number>())
 
   React.useLayoutEffect(() => {
-    const incoming = new Map(backups.map((backup) => [backup.id, backup]))
-    const next: Array<Backup> = []
-    for (const current of visibleBackupsRef.current) {
-      const updated = incoming.get(current.id)
-      if (updated) {
-        const timer = removalTimers.current.get(current.id)
-        if (timer !== undefined) {
-          window.clearTimeout(timer)
-          removalTimers.current.delete(current.id)
-        }
-        const deleteIntent = deleting.has(current.id)
-        const deleteFinishedWithError =
-          updated.taskKind === "delete" &&
-          (updated.taskStatus === "cancelled" ||
-            updated.taskStatus === "failed")
-        next.push(
-          deleteIntent && !deleteFinishedWithError
-            ? backupHasReportedDeleteArtifactProgress(updated)
-              ? updated
-              : backupWithDeleteIntent(updated)
-            : updated
-        )
-        incoming.delete(current.id)
-        continue
+    const incomingIds = new Set(backups.map((backup) => backup.id))
+    let nextFeedback = completedFeedbackRef.current
+    const updateFeedback = () => {
+      if (nextFeedback === completedFeedbackRef.current) {
+        nextFeedback = new Map(nextFeedback)
       }
+      return nextFeedback as Map<string, Backup>
+    }
+    for (const backup of backups) {
+      const timer = removalTimers.current.get(backup.id)
+      if (timer !== undefined) {
+        window.clearTimeout(timer)
+        removalTimers.current.delete(backup.id)
+      }
+      if (nextFeedback.has(backup.id)) updateFeedback().delete(backup.id)
+    }
+    for (const current of previousBackupsRef.current) {
+      if (incomingIds.has(current.id)) continue
       if (current.status !== "deleting" && !deleting.has(current.id)) continue
-      next.push(completedDeleteFeedback(current))
+      if (!nextFeedback.has(current.id)) {
+        updateFeedback().set(current.id, completedDeleteFeedback(current))
+      }
       if (removalTimers.current.has(current.id)) continue
       const timer = window.setTimeout(() => {
         removalTimers.current.delete(current.id)
-        const remaining = visibleBackupsRef.current.filter(
-          (backup) => backup.id !== current.id
-        )
-        visibleBackupsRef.current = remaining
-        setVisibleBackups(remaining)
+        const remaining = new Map(completedFeedbackRef.current)
+        remaining.delete(current.id)
+        completedFeedbackRef.current = remaining
+        setCompletedFeedback(remaining)
         deleteFeedbackStore.remove([current.id])
       }, completedDeleteFeedbackMs)
       removalTimers.current.set(current.id, timer)
     }
-    next.push(
-      ...[...incoming.values()].map((backup) =>
-        deleting.has(backup.id) ? backupWithDeleteIntent(backup) : backup
-      )
-    )
-    visibleBackupsRef.current = next
-    setVisibleBackups(next)
+    previousBackupsRef.current = backups
+    if (nextFeedback !== completedFeedbackRef.current) {
+      completedFeedbackRef.current = nextFeedback
+      setCompletedFeedback(nextFeedback)
+    }
   }, [backups, deleteFeedbackStore, deleting])
 
   React.useEffect(
@@ -258,7 +260,24 @@ function useBackupsWithDeleteFeedback(
     if (finished.length > 0) deleteFeedbackStore.remove(finished)
   }, [backups, deleteFeedbackStore, deleting])
 
-  return visibleBackups
+  return React.useMemo(() => {
+    const incomingIds = new Set(backups.map((backup) => backup.id))
+    return [
+      ...backups.map((backup) => {
+        const deleteFinishedWithError =
+          backup.taskKind === "delete" &&
+          (backup.taskStatus === "cancelled" || backup.taskStatus === "failed")
+        return deleting.has(backup.id) && !deleteFinishedWithError
+          ? backupHasReportedDeleteArtifactProgress(backup)
+            ? backup
+            : backupWithDeleteIntent(backup)
+          : backup
+      }),
+      ...[...completedFeedback.values()].filter(
+        (backup) => !incomingIds.has(backup.id)
+      ),
+    ]
+  }, [backups, completedFeedback, deleting])
 }
 
 export const BackupsPage = React.memo(function BackupsPage({
@@ -454,27 +473,32 @@ export const BackupsPage = React.memo(function BackupsPage({
       />
 
       <section className="relative flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border bg-card/45 [contain:paint]">
-        <BackupNameQuerySync nameStore={nameStore} />
+        <BackupRunsSyncKick />
         <BackupToolbar
           canCreate={createTargets.length > 0}
           dialogStore={dialogStore}
           searchStore={searchStore}
           statusFilterStore={statusFilterStore}
         />
-        <BackupDataSurface
-          canCreate={canCreateBackup}
-          currentUserId={capabilities.user.id}
-          deleteFeedbackStore={deleteFeedbackStore}
-          destinations={availabilityDestinations}
-          dialogStore={dialogStore}
-          nameStore={nameStore}
-          relayNames={relayNames}
-          searchStore={searchStore}
-          selectedServer={selectedServer}
-          selectionStore={selectionStore}
-          statusFilterStore={statusFilterStore}
-          targetNames={targetNames}
-        />
+        <DataTableBoundary
+          fallback={<BackupTableSkeleton />}
+          resetKey={`${selectedServer?.kind}:${selectedServer?.relayId}:${selectedServer?.id}`}
+        >
+          <BackupDataSurface
+            canCreate={canCreateBackup}
+            currentUserId={capabilities.user.id}
+            deleteFeedbackStore={deleteFeedbackStore}
+            destinations={availabilityDestinations}
+            dialogStore={dialogStore}
+            nameStore={nameStore}
+            relayNames={relayNames}
+            searchStore={searchStore}
+            selectedServer={selectedServer}
+            selectionStore={selectionStore}
+            statusFilterStore={statusFilterStore}
+            targetNames={targetNames}
+          />
+        </DataTableBoundary>
       </section>
 
       <BackupDialogHost
@@ -490,55 +514,32 @@ export const BackupsPage = React.memo(function BackupsPage({
   )
 })
 
-const BackupNameQuerySync = React.memo(function BackupNameQuerySync({
-  nameStore,
-}: {
-  nameStore: BackupNameStore
-}) {
-  const { data: names } = useQuery({
-    ...backupsQueryOptions(),
-    notifyOnChangeProps: ["data"],
-    select: React.useCallback(
-      (backups: Array<Backup>) =>
-        backups.map((backup) => [backup.id, backup.name] as const),
-      []
-    ),
-  })
-
-  React.useLayoutEffect(() => {
-    if (names) nameStore.sync(names)
-  }, [nameStore, names])
-
+const BackupRunsSyncKick = React.memo(function BackupRunsSyncKick() {
+  const queryClient = useQueryClient()
+  React.useEffect(() => {
+    let active = true
+    forkPromise(async () => {
+      await syncBackupRuns()
+      if (active) await resetActiveBackupRunsToFirstPage(queryClient)
+    })
+    return () => {
+      active = false
+    }
+  }, [queryClient])
   return null
 })
 
-function backupMatchesExceptName(left: Backup, right: Backup): boolean {
-  if (left === right) return true
-  const leftRecord = left as unknown as Record<string, unknown>
-  const rightRecord = right as unknown as Record<string, unknown>
-  const keys = Object.keys(leftRecord)
+function BackupTableSkeleton() {
   return (
-    keys.length === Object.keys(rightRecord).length &&
-    keys.every((key) => key === "name" || leftRecord[key] === rightRecord[key])
+    <div aria-label="Loading backups" className="min-h-0 flex-1 p-3">
+      <Skeleton className="h-10 w-full" />
+      <div className="mt-2 space-y-2">
+        {Array.from({ length: 7 }, (_, index) => (
+          <Skeleton key={index} className="h-14 w-full" />
+        ))}
+      </div>
+    </div>
   )
-}
-
-function createStructuralBackupSelector() {
-  let previous: Array<Backup> | undefined
-  return (backups: Array<Backup>) => {
-    if (
-      previous?.length === backups.length &&
-      previous.every(
-        (backup, index) =>
-          backup.id === backups[index]?.id &&
-          backupMatchesExceptName(backup, backups[index] as Backup)
-      )
-    ) {
-      return previous
-    }
-    previous = backups
-    return backups
-  }
 }
 
 const BackupDataSurface = React.memo(function BackupDataSurface({
@@ -568,84 +569,134 @@ const BackupDataSurface = React.memo(function BackupDataSurface({
   statusFilterStore: BackupStatusFilterStore
   targetNames: ReadonlyMap<string, string>
 }) {
-  const [selectStructuralBackups] = React.useState(
-    createStructuralBackupSelector
+  const search = React.useSyncExternalStore(
+    searchStore.subscribe,
+    searchStore.getNormalizedSnapshot,
+    searchStore.getNormalizedServerSnapshot
   )
-  const { data: backups } = useSuspenseQuery({
-    ...backupsQueryOptions(),
-    notifyOnChangeProps: ["data"],
-    select: selectStructuralBackups,
-  })
+  const status = React.useSyncExternalStore(
+    statusFilterStore.subscribe,
+    statusFilterStore.getSnapshot,
+    statusFilterStore.getServerSnapshot
+  )
+  const [debouncedSearch, setDebouncedSearch] = React.useState(search)
+  const [sorting, setSorting] = React.useState<{
+    direction: BackupRunSortDirection
+    sort: BackupRunSort
+  }>({ direction: "desc", sort: "createdAt" })
+  React.useEffect(() => {
+    const timer = window.setTimeout(() => setDebouncedSearch(search), 250)
+    return () => window.clearTimeout(timer)
+  }, [search])
+  const scope = React.useMemo(
+    () =>
+      selectedServer
+        ? {
+            kind:
+              selectedServer.kind === "database"
+                ? ("database" as const)
+                : selectedServer.kind === "relay"
+                  ? ("platform" as const)
+                  : ("instance" as const),
+            relayId: selectedServer.relayId,
+            targetId: selectedServer.id,
+          }
+        : null,
+    [selectedServer]
+  )
+  const queryInput = React.useMemo(
+    () => ({
+      cursor: null,
+      direction: sorting.direction,
+      scope,
+      search: debouncedSearch,
+      sort: sorting.sort,
+      status: status ?? null,
+    }),
+    [debouncedSearch, scope, sorting.direction, sorting.sort, status]
+  )
+  const queryClient = useQueryClient()
+  const queryOptions = React.useMemo(
+    () => backupRunsInfiniteQueryOptions(queryInput),
+    [queryInput]
+  )
+  const refreshStaleCacheOnMount =
+    queryClient.getQueryState(queryOptions.queryKey)?.isInvalidated ?? false
+  const query = useSuspenseInfiniteQuery(queryOptions)
+  React.useEffect(() => {
+    if (!refreshStaleCacheOnMount) return
+    forkPromise(() => resetBackupRunsToFirstPage(queryClient, queryInput))
+  }, [queryClient, queryInput, refreshStaleCacheOnMount])
+  const backups = React.useMemo(
+    () => flattenCursorPages(query.data.pages, (backup) => backup.id),
+    [query.data.pages]
+  )
   const visibleBackups = useBackupsWithDeleteFeedback(
     backups,
     deleteFeedbackStore
   )
-  const scopedBackups = React.useMemo(
-    () =>
-      visibleBackups.filter((backup) => {
-        if (backup.status === "deleted") return false
-        return backupMatchesScope(backup, selectedServer)
-      }),
-    [selectedServer, visibleBackups]
+  const pagination = React.useMemo(
+    () => ({
+      error: query.isFetchNextPageError ? query.error : null,
+      hasMore: query.hasNextPage,
+      isLoading: query.isFetchingNextPage,
+      onLoadMore: query.fetchNextPage,
+      resetKey: JSON.stringify(queryInput),
+    }),
+    [
+      query.error,
+      query.fetchNextPage,
+      query.hasNextPage,
+      query.isFetchNextPageError,
+      query.isFetchingNextPage,
+      queryInput,
+    ]
+  )
+  const changeSort = React.useCallback(
+    (sort: BackupRunSort, direction: BackupRunSortDirection) => {
+      setSorting((current) =>
+        current.sort === sort && current.direction === direction
+          ? current
+          : { direction, sort }
+      )
+    },
+    []
   )
 
   React.useLayoutEffect(() => {
-    const retainVisibleSelection = () => {
-      const normalizedSearch = searchStore.getSnapshot().trim().toLowerCase()
-      const status = statusFilterStore.getSnapshot()
-      selectionStore.retain(
-        new Set(
-          scopedBackups.flatMap((backup) =>
-            backupCanBeRemoved(backup) &&
-            backupMatchesStatusFilter(backup, status) &&
-            backupMatchesSearch(
-              backup,
-              normalizedSearch,
-              relayNames,
-              targetNames,
-              nameStore.get(backup.id, backup.name)
-            )
-              ? [backup.id]
-              : []
-          )
+    nameStore.sync(
+      visibleBackups.map((backup) => [backup.id, backup.name] as const)
+    )
+    selectionStore.retain(
+      new Set(
+        visibleBackups.flatMap((backup) =>
+          backupCanBeRemoved(backup) ? [backup.id] : []
         )
       )
-    }
-
-    retainVisibleSelection()
-    const unsubscribeNames = nameStore.subscribe(retainVisibleSelection)
-    const unsubscribeSearch = searchStore.subscribe(retainVisibleSelection)
-    const unsubscribeStatus = statusFilterStore.subscribe(
-      retainVisibleSelection
     )
-    return () => {
-      unsubscribeNames()
-      unsubscribeSearch()
-      unsubscribeStatus()
-    }
-  }, [
-    nameStore,
-    relayNames,
-    scopedBackups,
-    searchStore,
-    selectionStore,
-    statusFilterStore,
-    targetNames,
-  ])
+  }, [nameStore, selectionStore, visibleBackups])
+
+  React.useLayoutEffect(() => {
+    selectionStore.clear()
+  }, [queryInput, selectionStore])
 
   return (
     <>
       <BackupTable
-        backups={scopedBackups}
+        backups={visibleBackups}
         canCreate={canCreate}
         currentUserId={currentUserId}
         destinations={destinations}
         dialogStore={dialogStore}
         nameStore={nameStore}
+        onSortChange={changeSort}
+        pagination={pagination}
         relayNames={relayNames}
         scopeFiltered={Boolean(selectedServer)}
         searchStore={searchStore}
         selectionStore={selectionStore}
+        sort={sorting.sort}
+        sortDirection={sorting.direction}
         statusFilterStore={statusFilterStore}
         targetNames={targetNames}
       />
@@ -1036,7 +1087,7 @@ function CreateBackupDialog({
       return createPlatformBackup({ data })
     },
     onSuccess: async (result, configuration) => {
-      await queryClient.invalidateQueries({ queryKey: queryKeys.backups.all })
+      await resetActiveBackupRunsToFirstPage(queryClient)
       showToast({
         message: result.relayAccepted
           ? `${configuration.name} queued`
@@ -1284,12 +1335,9 @@ function BackupSettingsEditor({
       await Promise.all(operations)
     },
     onSuccess: async () => {
-      await Promise.all([
-        queryClient.invalidateQueries({
-          queryKey: queryKeys.backups.policy(target.relayId, policyTarget),
-        }),
-        queryClient.invalidateQueries({ queryKey: queryKeys.backups.all }),
-      ])
+      await queryClient.invalidateQueries({
+        queryKey: queryKeys.backups.policy(target.relayId, policyTarget),
+      })
       showToast({
         message: `${target.name} backup settings saved`,
         type: "success",
@@ -1900,7 +1948,7 @@ function RestoreBackupDialog({
             data: { backupId: backup.id, safetyBackup },
           }),
     onSuccess: async (result) => {
-      await queryClient.invalidateQueries({ queryKey: queryKeys.backups.all })
+      await resetActiveBackupRunsToFirstPage(queryClient)
       showToast({
         message: result.relayAccepted
           ? `Restore of ${targetName} queued`
@@ -1988,10 +2036,10 @@ function DeleteBackupDialog({
       }),
     onError: async () => {
       deleteFeedbackStore.remove([backup.id])
-      await queryClient.invalidateQueries({ queryKey: queryKeys.backups.all })
+      await resetActiveBackupRunsToFirstPage(queryClient)
     },
     onSuccess: async (result) => {
-      await queryClient.invalidateQueries({ queryKey: queryKeys.backups.all })
+      await resetActiveBackupRunsToFirstPage(queryClient)
       showToast({
         message: result.forgotten
           ? `${backup.name} forgotten`
@@ -2103,29 +2151,6 @@ function backupScopeOptions({
     }
   }
   return options
-}
-
-function backupMatchesScope(
-  backup: Backup,
-  selected: ServerPickerOption | null
-): boolean {
-  if (!selected) return true
-  const kind = selected.kind ?? "server"
-  if (kind === "server") {
-    return (
-      backup.targetKind === "instance" &&
-      backup.relayId === selected.relayId &&
-      backup.targetId === selected.id
-    )
-  }
-  if (kind === "database") {
-    return (
-      backup.targetKind === "database" &&
-      backup.relayId === selected.relayId &&
-      backup.targetId === selected.id
-    )
-  }
-  return backup.targetKind === "platform" && backup.relayId === selected.relayId
 }
 
 function backupPolicyTarget(target: ServerPickerOption): BackupTarget {

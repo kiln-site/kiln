@@ -15,7 +15,7 @@ describe("backup realtime publishers", () => {
     const events: Array<RealtimeSourceEvent> = []
     const unsubscribe = subscribeRealtimeChanges((event) => events.push(event))
 
-    publishBackupChange("relay-a")
+    publishBackupChange("relay-a", "7ff61850-2e5e-4238-b960-755b743a246a")
     publishBackupSettingsChange("relay-a")
     publishBackupStorageChange("user-a")
     unsubscribe()
@@ -23,7 +23,10 @@ describe("backup realtime publishers", () => {
     expect(events).toMatchObject([
       {
         audience: { kind: "relays", relayIds: ["relay-a"] },
-        scope: { relayId: "relay-a" },
+        scope: {
+          backupId: "7ff61850-2e5e-4238-b960-755b743a246a",
+          relayId: "relay-a",
+        },
         topics: ["backups"],
         type: "hearth.invalidate",
       },

@@ -43,7 +43,10 @@ export async function reconcileRelayBackups(
       )
     )
   )
-  if (reconciled.some(Boolean)) publishBackupChange(relay.id)
+  reconciled.forEach((changed, index) => {
+    const backupId = tasks[index]?.backupId
+    if (changed && backupId) publishBackupChange(relay.id, backupId)
+  })
   const dispatchable = await runAppEffect(
     "backups.dispatchable",
     listDispatchableBackupTasksEffect(relay.id)
@@ -83,10 +86,12 @@ export async function dispatchBackupTask(
   const task = relayBackupTaskSchema.parse(
     await relayRpc(relay, "backup.task.enqueue", relayInput, 15_000, subject)
   )
-  await runAppEffect(
+  scheduleBackupReconciliation(relay, subject)
+  const changed = await runAppEffect(
     "backups.reconcileEnqueue",
     reconcileBackupTaskEffect(task, relay.id)
   )
+  if (changed) publishBackupChange(relay.id, task.backupId)
 }
 
 export { prepareBackupTaskEffect }

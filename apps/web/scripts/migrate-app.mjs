@@ -55,6 +55,22 @@ async function ensureScheduleSchema(database) {
 }
 
 async function ensureBackupSchema(database) {
+  await ensureIndex(database, "backup", "backup_created_idx", [
+    "created_at",
+    "id",
+  ])
+  await ensureIndex(
+    database,
+    "backup_task",
+    "backup_task_backup_created_id_idx",
+    ["backup_id", "created_at", "id"]
+  )
+  await dropIndexIfColumns(
+    database,
+    "backup_task",
+    "backup_task_backup_created_idx",
+    ["backup_id", "created_at"]
+  )
   const [taskColumns] = await database.query(
     `SHOW COLUMNS FROM ${databaseTable("backup_task")}`
   )
@@ -183,6 +199,53 @@ async function ensureBackupSchema(database) {
   }
 }
 
+async function ensureIndex(database, table, index, columns) {
+  const [rows] = await database.execute(
+    `SELECT COLUMN_NAME
+       FROM information_schema.STATISTICS
+      WHERE TABLE_SCHEMA = DATABASE()
+        AND TABLE_NAME = ?
+        AND INDEX_NAME = ?
+      ORDER BY SEQ_IN_INDEX`,
+    [databaseTableName(table), databaseTableName(index)]
+  )
+  if (
+    rows.length === columns.length &&
+    rows.every((row, position) => row.COLUMN_NAME === columns[position])
+  ) {
+    return
+  }
+  if (rows.length > 0) {
+    await database.query(
+      `ALTER TABLE ${databaseTable(table)} DROP INDEX ${databaseTable(index)}`
+    )
+  }
+  await database.query(
+    `ALTER TABLE ${databaseTable(table)} ADD KEY ${databaseTable(index)} (${columns.join(", ")})`
+  )
+}
+
+async function dropIndexIfColumns(database, table, index, columns) {
+  const [rows] = await database.execute(
+    `SELECT COLUMN_NAME
+       FROM information_schema.STATISTICS
+      WHERE TABLE_SCHEMA = DATABASE()
+        AND TABLE_NAME = ?
+        AND INDEX_NAME = ?
+      ORDER BY SEQ_IN_INDEX`,
+    [databaseTableName(table), databaseTableName(index)]
+  )
+  if (
+    rows.length !== columns.length ||
+    !rows.every((row, position) => row.COLUMN_NAME === columns[position])
+  ) {
+    return
+  }
+  await database.query(
+    `ALTER TABLE ${databaseTable(table)} DROP INDEX ${databaseTable(index)}`
+  )
+}
+
 async function ensureBackupResticS3Schema(database) {
   const [storageColumns] = await database.query(
     `SHOW COLUMNS FROM ${databaseTable("backup_storage")}`
@@ -286,8 +349,11 @@ async function ensureInstanceOwnershipSchema(database) {
   )
   const names = new Set(columns.map((column) => column.Field))
   const additions = [
+    !names.has("source_name")
+      ? "ADD COLUMN source_name VARCHAR(255) NULL AFTER display_name"
+      : null,
     !names.has("owner_id")
-      ? "ADD COLUMN owner_id VARCHAR(36) NULL AFTER display_name"
+      ? "ADD COLUMN owner_id VARCHAR(36) NULL AFTER source_name"
       : null,
     !names.has("provisioning_reserved_until")
       ? "ADD COLUMN provisioning_reserved_until TIMESTAMP(3) NULL AFTER owner_id"

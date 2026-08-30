@@ -26,6 +26,7 @@ export const hearthRealtimeTopicSchema = z.enum(hearthRealtimeTopics)
 export type HearthRealtimeTopic = z.infer<typeof hearthRealtimeTopicSchema>
 
 export interface HearthRealtimeScope {
+  backupId?: string
   databaseId?: string
   instanceId?: string
   relayId: string

@@ -41,7 +41,7 @@ import {
 } from "@/lib/backup-progress-presentation"
 import { forkPromise } from "@/effect/promise"
 import { relayInstanceRouteId } from "@/lib/relay-fleet"
-import { queryKeys } from "@/lib/query-options"
+import { resetActiveBackupRunsToFirstPage } from "@/lib/backup-runs-cache"
 import {
   cancelBackup,
   copyBackupToDestination,
@@ -382,7 +382,7 @@ const CancelBackupButton = React.memo(function CancelBackupButton({
       })
     },
     onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: queryKeys.backups.all })
+      await resetActiveBackupRunsToFirstPage(queryClient)
       showToast({ message: "Backup cancelled", type: "success" })
     },
   })
@@ -448,17 +448,9 @@ export const BackupNameEditor = React.memo(function BackupNameEditor({
         type: "error",
       })
     },
-    onSuccess: (result: { name: string }) => {
+    onSuccess: async (result: { name: string }) => {
       nameStore.set(backupId, result.name)
-      queryClient.setQueryData<Array<Backup>>(
-        queryKeys.backups.all,
-        (current) => {
-          if (!current) return current
-          return current.map((item) =>
-            item.id === backupId ? { ...item, name: result.name } : item
-          )
-        }
-      )
+      await resetActiveBackupRunsToFirstPage(queryClient)
       setEditing(false)
       showToast({
         message: "Backup renamed",
@@ -609,9 +601,7 @@ export const BackupAvailabilityTags = React.memo(
         })
       },
       onSuccess: async () => {
-        await queryClient.invalidateQueries({
-          queryKey: queryKeys.backups.all,
-        })
+        await resetActiveBackupRunsToFirstPage(queryClient)
         showToast({
           message: "Backup copy started",
           type: "success",

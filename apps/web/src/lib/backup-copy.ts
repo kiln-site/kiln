@@ -20,6 +20,7 @@ import {
   withS3BackupObject,
 } from "@/backups/destinations/s3"
 import { relayControlEndpoint } from "@/lib/relay-control-endpoint"
+import { publishBackupChange } from "@/lib/backup-realtime.server"
 import {
   listPersistedRelays,
   loadRelayCredentials,
@@ -107,7 +108,10 @@ const processBackupCopyTaskEffect = Effect.fn("backups.processCopy")(function* (
           ok: true,
           taskId: task.taskId,
         }),
-    })
+    }),
+    Effect.ensuring(
+      Effect.sync(() => publishBackupChange(task.relayId, task.backupId))
+    )
   )
 })
 

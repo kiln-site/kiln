@@ -76,8 +76,8 @@ export async function ensureFinalInstanceDeletion(input: {
     if (concurrent) return concurrent
     throw reserved.failure
   }
-  publishBackupChange(input.relay.id)
   const backup = reserved.success
+  publishBackupChange(input.relay.id, backup.backupId)
   const { dispatchBackupTask } = await import("@/lib/backup-reconciliation")
   await dispatchBackupTask(input.relay, backup, input.requestedBy)
   const created = await finalDeletion(input.relay.id, input.instanceId)

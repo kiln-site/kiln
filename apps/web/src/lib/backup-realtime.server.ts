@@ -1,9 +1,9 @@
 import { publishRealtimeChange } from "@/lib/realtime-source.server"
 
-export function publishBackupChange(relayId: string): void {
+export function publishBackupChange(relayId: string, backupId?: string): void {
   publishRealtimeChange({
     audience: { kind: "relays", relayIds: [relayId] },
-    scope: { relayId },
+    scope: { ...(backupId ? { backupId } : {}), relayId },
     topics: ["backups"],
     type: "hearth.invalidate",
   })

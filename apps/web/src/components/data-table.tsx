@@ -7,10 +7,11 @@ import {
   type RowData,
   type Table,
 } from "@tanstack/react-table"
-import { ArrowDown, ArrowUp, ArrowUpDown } from "lucide-react"
+import { ArrowDown, ArrowUp, ArrowUpDown, LoaderCircle } from "lucide-react"
 
 import { cn } from "@workspace/ui/lib/utils"
 import { dataTableFeatures } from "@/lib/data-table"
+import { forkPromise } from "@/effect/promise"
 
 type DataTableInstance<TData extends RowData> = Table<
   typeof dataTableFeatures,
@@ -22,11 +23,75 @@ interface DataTableVirtualizationOptions {
   overscan?: number
 }
 
+export interface DataTablePaginationOptions {
+  error?: Error | null
+  hasMore: boolean
+  isLoading: boolean
+  onLoadMore: () => Promise<unknown> | void
+  resetKey: string
+}
+
+export function DataTableLoadMoreTrigger({
+  pagination,
+  rowCount,
+  scrollRootRef,
+}: {
+  pagination: DataTablePaginationOptions
+  rowCount: number
+  scrollRootRef: React.RefObject<Element | null>
+}) {
+  const triggerRef = React.useRef<HTMLDivElement>(null)
+  const requestKey = `${pagination.resetKey}:${rowCount}`
+  const requestedKeyRef = React.useRef<string | null>(null)
+
+  React.useEffect(() => {
+    if (!pagination.hasMore || pagination.isLoading || pagination.error) return
+    const target = triggerRef.current
+    const scrollRoot = scrollRootRef.current
+    if (!target || !scrollRoot) return
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (!entry?.isIntersecting || requestedKeyRef.current === requestKey) {
+          return
+        }
+        requestedKeyRef.current = requestKey
+        forkPromise(() => Promise.resolve(pagination.onLoadMore()))
+      },
+      { root: scrollRoot, rootMargin: "320px 0px" }
+    )
+    observer.observe(target)
+    return () => observer.disconnect()
+  }, [pagination, requestKey, scrollRootRef])
+
+  if (!pagination.hasMore && !pagination.isLoading && !pagination.error) {
+    return null
+  }
+  return (
+    <div ref={triggerRef} className="grid h-12 place-items-center">
+      {pagination.error ? (
+        <button
+          className="text-xs font-medium text-muted-foreground hover:text-foreground"
+          type="button"
+          onClick={() => void pagination.onLoadMore()}
+        >
+          Loading failed. Try again
+        </button>
+      ) : (
+        <span className="inline-flex items-center gap-2 text-xs text-muted-foreground">
+          <LoaderCircle aria-hidden className="size-3.5 animate-spin" />
+          Loading more
+        </span>
+      )}
+    </div>
+  )
+}
+
 interface DataTableProps<TData extends RowData> {
   ariaLabel: string
   emptyState: React.ReactNode
   getRowClassName?: (row: Row<typeof dataTableFeatures, TData>) => string
   gridClassName: string
+  pagination?: DataTablePaginationOptions
   table: DataTableInstance<TData>
   virtualization?: DataTableVirtualizationOptions
 }
@@ -36,6 +101,7 @@ export function DataTable<TData extends RowData>({
   emptyState,
   getRowClassName,
   gridClassName,
+  pagination,
   table,
   virtualization,
 }: DataTableProps<TData>) {
@@ -50,6 +116,7 @@ export function DataTable<TData extends RowData>({
           emptyState={emptyState}
           getRowClassName={getRowClassName}
           gridClassName={gridClassName}
+          pagination={pagination}
           table={table}
           virtualization={virtualization}
         />
@@ -63,12 +130,23 @@ function DataTableRowModel<TData extends RowData>({
   emptyState,
   getRowClassName,
   gridClassName,
+  pagination,
   table,
   virtualization,
 }: DataTableProps<TData>) {
   const rows = table.getRowModel().rows
   const scrollElementRef = React.useRef<HTMLTableSectionElement>(null)
   const scrollbarWidth = useScrollbarWidth(scrollElementRef, rows.length)
+
+  React.useLayoutEffect(() => {
+    const scrollElement = scrollElementRef.current
+    if (!scrollElement) return
+    scrollElement.scrollTop = 0
+    const frame = window.requestAnimationFrame(() => {
+      scrollElement.scrollTop = 0
+    })
+    return () => window.cancelAnimationFrame(frame)
+  }, [pagination?.resetKey])
 
   if (rows.length === 0) return emptyState
 
@@ -88,6 +166,7 @@ function DataTableRowModel<TData extends RowData>({
         <VirtualDataTableBody
           getRowClassName={getRowClassName}
           gridClassName={gridClassName}
+          pagination={pagination}
           rows={rows}
           scrollElementRef={scrollElementRef}
           virtualization={virtualization}
@@ -96,6 +175,7 @@ function DataTableRowModel<TData extends RowData>({
         <DataTableBody
           getRowClassName={getRowClassName}
           gridClassName={gridClassName}
+          pagination={pagination}
           rows={rows}
           scrollElementRef={scrollElementRef}
         />
@@ -308,11 +388,13 @@ function DataTableSortIcon({
 function DataTableBody<TData extends RowData>({
   getRowClassName,
   gridClassName,
+  pagination,
   rows,
   scrollElementRef,
 }: {
   getRowClassName?: (row: Row<typeof dataTableFeatures, TData>) => string
   gridClassName: string
+  pagination?: DataTablePaginationOptions
   rows: Array<Row<typeof dataTableFeatures, TData>>
   scrollElementRef: React.RefObject<HTMLTableSectionElement | null>
 }) {
@@ -330,6 +412,13 @@ function DataTableBody<TData extends RowData>({
           rowClassName={getRowClassName?.(row)}
         />
       ))}
+      {pagination ? (
+        <DataTablePaginationRow
+          colSpan={rows[0]?.getAllCells().length ?? 1}
+          pagination={pagination}
+          rowCount={rows.length}
+        />
+      ) : null}
     </tbody>
   )
 }
@@ -337,20 +426,25 @@ function DataTableBody<TData extends RowData>({
 function VirtualDataTableBody<TData extends RowData>({
   getRowClassName,
   gridClassName,
+  pagination,
   rows,
   scrollElementRef,
   virtualization,
 }: {
   getRowClassName?: (row: Row<typeof dataTableFeatures, TData>) => string
   gridClassName: string
+  pagination?: DataTablePaginationOptions
   rows: Array<Row<typeof dataTableFeatures, TData>>
   scrollElementRef: React.RefObject<HTMLTableSectionElement | null>
   virtualization: DataTableVirtualizationOptions
 }) {
+  const showPagination = Boolean(
+    pagination?.hasMore || pagination?.isLoading || pagination?.error
+  )
   const rowVirtualizer = useVirtualizer({
-    count: rows.length,
+    count: rows.length + (showPagination ? 1 : 0),
     estimateSize: () => virtualization.estimateRowHeight ?? 72,
-    getItemKey: (index) => rows[index]?.id ?? index,
+    getItemKey: (index) => rows[index]?.id ?? `pagination-${index}`,
     getScrollElement: () => scrollElementRef.current,
     overscan: virtualization.overscan ?? 6,
   })
@@ -368,6 +462,19 @@ function VirtualDataTableBody<TData extends RowData>({
         <td className="block p-0" />
       </tr>
       {rowVirtualizer.getVirtualItems().map((virtualRow) => {
+        if (virtualRow.index === rows.length && pagination && showPagination) {
+          return (
+            <DataTablePaginationRow
+              key="pagination"
+              ref={rowVirtualizer.measureElement}
+              colSpan={rows[0]?.getAllCells().length ?? 1}
+              dataIndex={virtualRow.index}
+              pagination={pagination}
+              rowCount={rows.length}
+              virtualStart={virtualRow.start}
+            />
+          )
+        }
         const row = rows[virtualRow.index]
         if (!row) return null
 
@@ -386,6 +493,84 @@ function VirtualDataTableBody<TData extends RowData>({
         )
       })}
     </tbody>
+  )
+}
+
+function DataTablePaginationRow({
+  colSpan,
+  dataIndex,
+  pagination,
+  rowCount,
+  virtualStart,
+  ref,
+}: {
+  colSpan: number
+  dataIndex?: number
+  pagination: DataTablePaginationOptions
+  rowCount: number
+  virtualStart?: number
+  ref?: React.Ref<HTMLTableRowElement>
+}) {
+  const triggerRef = React.useRef<HTMLTableCellElement>(null)
+  const requestKey = `${pagination.resetKey}:${rowCount}`
+  const requestedKeyRef = React.useRef<string | null>(null)
+
+  React.useEffect(() => {
+    if (!pagination.hasMore || pagination.isLoading || pagination.error) return
+    const target = triggerRef.current
+    if (!target) return
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (!entry?.isIntersecting || requestedKeyRef.current === requestKey) {
+          return
+        }
+        requestedKeyRef.current = requestKey
+        forkPromise(() => Promise.resolve(pagination.onLoadMore()))
+      },
+      { root: target.closest("tbody"), rootMargin: "320px 0px" }
+    )
+    observer.observe(target)
+    return () => observer.disconnect()
+  }, [pagination, requestKey])
+
+  if (!pagination.hasMore && !pagination.isLoading && !pagination.error) {
+    return null
+  }
+  return (
+    <tr
+      ref={ref}
+      aria-hidden={!pagination.error}
+      className="grid h-12 place-items-center"
+      data-index={dataIndex}
+      style={
+        virtualStart === undefined
+          ? undefined
+          : {
+              left: 0,
+              position: "absolute",
+              top: 0,
+              transform: `translateY(${virtualStart}px)`,
+              width: "100%",
+            }
+      }
+    >
+      <td ref={triggerRef} className="col-span-full" colSpan={colSpan}>
+        {pagination.error ? (
+          <button
+            className="text-xs font-medium text-muted-foreground hover:text-foreground"
+            type="button"
+            onClick={() => void pagination.onLoadMore()}
+          >
+            Loading failed. Try again
+          </button>
+        ) : (
+          <span className="inline-flex items-center gap-2 text-xs text-muted-foreground">
+            <LoaderCircle aria-hidden className="size-3.5 animate-spin" />
+            Loading more
+          </span>
+        )}
+      </td>
+    </tr>
   )
 }
 
