@@ -72,6 +72,7 @@ import {
   useWorkspaceTableSearchInput,
 } from "@/components/workspace-data-table"
 import type { WorkspaceTableSearchStore } from "@/components/workspace-data-table"
+import { InstanceName } from "@/components/instance-name"
 import {
   ServerPickerList,
   serverPickerOptionKey,
@@ -405,28 +406,23 @@ const DatabaseTableRow = React.memo(function DatabaseTableRow({
   database: ManagedDatabase
   onDialog: (dialog: DatabaseDialog) => void
 }) {
+  const status = databaseStatusPresentation(
+    database.inventoryStatus,
+    database.observedState
+  )
   return (
     <tr className="group transition-colors hover:bg-accent/25">
       <WorkspaceTableCell className="px-2 sm:px-3">
-        <DatabaseStatus
-          inventoryStatus={database.inventoryStatus}
-          state={database.observedState}
-        />
+        <DatabaseStatus status={status} />
       </WorkspaceTableCell>
       <WorkspaceTableCell>
-        <div className="flex min-w-0 items-center gap-2.5">
-          <span className="flex size-7 shrink-0 items-center justify-center rounded-md border border-border/70 bg-background/35 text-muted-foreground">
-            <Database className="size-3.5" />
-          </span>
-          <div className="min-w-0">
-            <p className="truncate text-xs font-semibold text-foreground">
-              {database.name}
-            </p>
-            <p className="type-meta truncate font-mono text-muted-foreground">
-              {database.shortId} · {database.databaseName}
-            </p>
-          </div>
-        </div>
+        <InstanceName
+          icon={<Database className="size-4" aria-hidden="true" />}
+          name={database.name}
+          meta={`${database.shortId} · ${database.databaseName}`}
+          metaClassName="font-mono"
+          status={{ className: status.dot, label: status.label }}
+        />
       </WorkspaceTableCell>
       <WorkspaceTableCell className="hidden md:table-cell">
         <Badge
@@ -1237,41 +1233,44 @@ function DeleteDatabaseDialog({
   )
 }
 
-function DatabaseStatus({
-  inventoryStatus,
-  state,
-}: {
-  inventoryStatus: ManagedDatabase["inventoryStatus"]
+function databaseStatusPresentation(
+  inventoryStatus: ManagedDatabase["inventoryStatus"],
   state: string
-}) {
-  const status =
-    inventoryStatus === "missing"
-      ? { dot: "bg-destructive", label: "Missing", text: "text-destructive" }
-      : inventoryStatus === "unavailable"
+) {
+  return inventoryStatus === "missing"
+    ? { dot: "bg-destructive", label: "Missing", text: "text-destructive" }
+    : inventoryStatus === "unavailable"
+      ? {
+          dot: "bg-amber-300",
+          label: "Unavailable",
+          text: "text-amber-200",
+        }
+      : state === "running"
         ? {
-            dot: "bg-amber-300",
-            label: "Unavailable",
-            text: "text-amber-200",
+            dot: "bg-emerald-400",
+            label: "Running",
+            text: "text-emerald-300",
           }
-        : state === "running"
-          ? {
-              dot: "bg-emerald-400",
-              label: "Running",
-              text: "text-emerald-300",
-            }
-          : state === "starting"
-            ? { dot: "bg-amber-300", label: "Starting", text: "text-amber-200" }
-            : state === "failed"
-              ? {
-                  dot: "bg-destructive",
-                  label: "Failed",
-                  text: "text-destructive",
-                }
-              : {
-                  dot: "bg-muted-foreground",
-                  label: "Stopped",
-                  text: "text-muted-foreground",
-                }
+        : state === "starting"
+          ? { dot: "bg-amber-300", label: "Starting", text: "text-amber-200" }
+          : state === "failed"
+            ? {
+                dot: "bg-destructive",
+                label: "Failed",
+                text: "text-destructive",
+              }
+            : {
+                dot: "bg-muted-foreground",
+                label: "Stopped",
+                text: "text-muted-foreground",
+              }
+}
+
+function DatabaseStatus({
+  status,
+}: {
+  status: ReturnType<typeof databaseStatusPresentation>
+}) {
   return (
     <span
       aria-label={status.label}

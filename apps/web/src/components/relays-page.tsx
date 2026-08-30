@@ -22,6 +22,7 @@ import {
   Pencil,
   Play,
   Plus,
+  RadioTower,
   RefreshCw,
   Search,
   ServerCog,
@@ -61,6 +62,7 @@ import {
 } from "@workspace/contracts"
 
 import { RelayToastTitle } from "@/components/relay-toast-title"
+import { InstanceName } from "@/components/instance-name"
 import { useInfraUpdateDialogStore } from "@/components/infra-update-dialog-provider"
 import {
   WorkspaceDataTable,
@@ -151,6 +153,11 @@ interface RelayStaticView {
   nodeVersion: string | null
   port: number
   useTls: boolean
+}
+
+interface RelayIdentityView extends RelayStatusView {
+  hostname: string
+  name: string
 }
 
 interface RelayStatusView {
@@ -652,6 +659,13 @@ const RelayTableRow = React.memo(function RelayTableRow({
       <WorkspaceTableCell className="px-2 sm:px-3">
         <RelayStatus relayId={relayId} />
       </WorkspaceTableCell>
+      <RelayIdentity
+        outdated={outdated}
+        releases={releases}
+        relayId={relayId}
+        version={version}
+        onOpenUpdates={onOpenUpdates}
+      />
       <RelayStaticCells
         outdated={outdated}
         releases={releases}
@@ -711,26 +725,6 @@ const RelayStaticCells = React.memo(function RelayStaticCells({
   if (!relay) return null
   return (
     <>
-      <WorkspaceTableCell>
-        <div className="min-w-0">
-          <p className="truncate text-xs font-semibold text-foreground">
-            {relay.name}
-          </p>
-          <p className="type-meta truncate font-mono text-foreground lg:hidden">
-            {relay.hostname}
-          </p>
-          <div className="mt-0.5 lg:hidden">
-            <RelayVersion
-              name={relay.name}
-              outdated={outdated}
-              releases={releases}
-              relayId={relayId}
-              version={version}
-              onOpenUpdates={onOpenUpdates}
-            />
-          </div>
-        </div>
-      </WorkspaceTableCell>
       <WorkspaceTableCell className="hidden xl:table-cell">
         <Tooltip>
           <TooltipTrigger asChild>
@@ -777,6 +771,67 @@ const RelayStaticCells = React.memo(function RelayStaticCells({
         </span>
       </WorkspaceTableCell>
     </>
+  )
+})
+
+const RelayIdentity = React.memo(function RelayIdentity({
+  outdated,
+  releases,
+  relayId,
+  version,
+  onOpenUpdates,
+}: {
+  outdated: boolean
+  releases: ReadonlyArray<PublicKilnRelease>
+  relayId: string
+  version: string | null
+  onOpenUpdates: (relayId?: string) => void
+}) {
+  const selectIdentity = React.useCallback(
+    (relays: Array<PersistedRelay>): RelayIdentityView | null => {
+      const relay = relays.find((item) => item.id === relayId)
+      return relay
+        ? {
+            connected: relay.lastConnectedAt !== null,
+            enabled: relay.enabled,
+            hostname: relay.hostname,
+            lastError: relay.lastError,
+            name: relay.name,
+          }
+        : null
+    },
+    [relayId]
+  )
+  const { data: relay } = useQuery({
+    ...relaysQueryOptions(),
+    notifyOnChangeProps: ["data"],
+    select: selectIdentity,
+  })
+  if (!relay) return <WorkspaceTableCell>{null}</WorkspaceTableCell>
+
+  const status = relayStatusPresentation(relay)
+  return (
+    <WorkspaceTableCell>
+      <div className="min-w-0">
+        <InstanceName
+          icon={<RadioTower className="size-4" aria-hidden="true" />}
+          name={relay.name}
+          meta={relay.hostname}
+          metaClassName="font-mono"
+          status={{ className: status.dot, label: status.label }}
+        />
+        <div className="mt-0.5 pl-[2.625rem] lg:hidden">
+          <RelayVersion
+            name={relay.name}
+            outdated={outdated}
+            releases={releases}
+            relayId={relayId}
+            version={version}
+            onOpenUpdates={onOpenUpdates}
+          />
+        </div>
+      </div>
+    </WorkspaceTableCell>
   )
 })
 
@@ -1134,21 +1189,7 @@ const RelayStatus = React.memo(function RelayStatus({
   })
   if (!relay) return null
 
-  const status = !relay.enabled
-    ? { label: "Paused", dot: "bg-sky-400", text: "text-sky-300" }
-    : relay.lastError
-      ? {
-          label: "Unreachable",
-          dot: "bg-destructive",
-          text: "text-destructive",
-        }
-      : relay.connected
-        ? { label: "Online", dot: "bg-emerald-400", text: "text-emerald-300" }
-        : {
-            label: "Offline",
-            dot: "bg-muted-foreground/50",
-            text: "text-muted-foreground",
-          }
+  const status = relayStatusPresentation(relay)
   const indicator = (
     <span
       aria-label={status.label}
@@ -1174,6 +1215,24 @@ const RelayStatus = React.memo(function RelayStatus({
     </Tooltip>
   )
 })
+
+function relayStatusPresentation(relay: RelayStatusView) {
+  return !relay.enabled
+    ? { label: "Paused", dot: "bg-sky-400", text: "text-sky-300" }
+    : relay.lastError
+      ? {
+          label: "Unreachable",
+          dot: "bg-destructive",
+          text: "text-destructive",
+        }
+      : relay.connected
+        ? { label: "Online", dot: "bg-emerald-400", text: "text-emerald-300" }
+        : {
+            label: "Offline",
+            dot: "bg-muted-foreground/50",
+            text: "text-muted-foreground",
+          }
+}
 
 const RelayUptime = React.memo(function RelayUptime({
   relayId,
