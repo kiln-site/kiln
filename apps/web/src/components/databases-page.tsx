@@ -1,4 +1,5 @@
 import * as React from "react"
+import { useLiveSuspenseQuery } from "@tanstack/react-db"
 import {
   useMutation,
   useQuery,
@@ -73,6 +74,7 @@ import {
 } from "@/components/workspace-data-table"
 import type { WorkspaceTableSearchStore } from "@/components/workspace-data-table"
 import { InstanceName } from "@/components/instance-name"
+import { managedDatabasesCollectionOptions } from "@/lib/collections/managed-databases"
 import {
   ServerPickerList,
   serverPickerOptionKey,
@@ -145,7 +147,10 @@ export const DatabasesPage = React.memo(function DatabasesPage({
 }: {
   searchStore: DatabaseSearchStore
 }) {
-  const { data } = useSuspenseQuery(managedDatabasesQueryOptions())
+  const { data } = useSuspenseQuery({
+    ...managedDatabasesQueryOptions(),
+    select: selectDatabasePageMeta,
+  })
   const [createOpen, setCreateOpen] = React.useState(false)
   const [dialog, setDialog] = React.useState<DatabaseDialog>(null)
   const openDialog = React.useCallback((next: DatabaseDialog) => {
@@ -182,7 +187,6 @@ export const DatabasesPage = React.memo(function DatabasesPage({
         />
         <DatabaseTable
           canCreate={canCreate}
-          databases={data.databases}
           searchStore={searchStore}
           onCreate={() => setCreateOpen(true)}
           onDialog={openDialog}
@@ -229,6 +233,10 @@ export const DatabasesPage = React.memo(function DatabasesPage({
     </div>
   )
 })
+
+function selectDatabasePageMeta(data: ManagedDatabaseOverview) {
+  return { relayErrors: data.relayErrors, relays: data.relays }
+}
 
 const DatabaseToolbar = React.memo(function DatabaseToolbar({
   canCreate,
@@ -333,17 +341,21 @@ const DatabaseToolbar = React.memo(function DatabaseToolbar({
 
 const DatabaseTable = React.memo(function DatabaseTable({
   canCreate,
-  databases,
   onCreate,
   onDialog,
   searchStore,
 }: {
   canCreate: boolean
-  databases: Array<ManagedDatabase>
   onCreate: () => void
   onDialog: (dialog: DatabaseDialog) => void
   searchStore: DatabaseSearchStore
 }) {
+  const { data: databases } = useLiveSuspenseQuery({
+    query: (query) =>
+      query
+        .from({ database: managedDatabasesCollectionOptions })
+        .orderBy(({ database }) => database.name),
+  })
   const renderRow = React.useCallback(
     (database: ManagedDatabase) => (
       <DatabaseTableRow database={database} onDialog={onDialog} />
@@ -418,9 +430,11 @@ const DatabaseTableRow = React.memo(function DatabaseTableRow({
       <WorkspaceTableCell>
         <InstanceName
           instance={{
+            id: database.id,
             inventoryStatus: database.inventoryStatus,
             kind: "database",
             observedState: database.observedState,
+            relayId: database.relayId,
           }}
           name={database.name}
           meta={`${database.shortId} · ${database.databaseName}`}

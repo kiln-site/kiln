@@ -812,7 +812,13 @@ const RelayIdentity = React.memo(function RelayIdentity({
     <WorkspaceTableCell>
       <div className="min-w-0">
         <InstanceName
-          instance={{ kind: "relay", ...relay }}
+          instance={{
+            id: relayId,
+            kind: "relay",
+            relayId,
+            source: "registry",
+            ...relay,
+          }}
           name={relay.name}
           meta={relay.hostname}
           metaClassName="font-mono"

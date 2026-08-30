@@ -617,9 +617,11 @@ const ServerTableRow = React.memo(function ServerTableRow({
         >
           <InstanceName
             instance={{
+              id: server.id,
               icon,
               kind: "server",
               observedState: server.observedState,
+              relayId: server.relayId,
               relayStatus: server.relayStatus,
             }}
             name={server.name}

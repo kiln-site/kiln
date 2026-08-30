@@ -649,14 +649,14 @@ const TailscaleMembershipRow = React.memo(function TailscaleMembershipRow({
           >
             <InstanceName
               instance={{
+                id: server.id,
                 icon,
                 kind: "server",
-                observedState: server.observedState,
-                relayStatus: server.relayStatus,
+                relayId: server.relayId,
               }}
-              name={
+              name={server.name}
+              nameAccessory={
                 <span className="flex min-w-0 items-center gap-1.5">
-                  <span className="truncate">{server.name}</span>
                   <span className="grid size-4 shrink-0 place-items-center md:hidden">
                     {!server.tailscaleSupported ? (
                       <TailscaleRelayUpdateHint relayName={server.relayName} />

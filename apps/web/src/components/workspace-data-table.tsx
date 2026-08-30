@@ -125,34 +125,39 @@ export function WorkspaceDataTable<T>({
   )
 }
 
-function SearchableWorkspaceTableRow<T>({
-  item,
-  renderRow,
-  searchStore,
-  searchText,
-}: {
+interface SearchableWorkspaceTableRowProps<T> {
   item: T
   renderRow: (item: T) => React.ReactNode
   searchStore: WorkspaceTableSearchStore
   searchText: string
-}) {
-  const getMatchesSnapshot = React.useCallback(
-    () => matchesSearch(searchText, searchStore.getNormalizedSnapshot()),
-    [searchStore, searchText]
-  )
-  const getMatchesServerSnapshot = React.useCallback(
-    () => matchesSearch(searchText, searchStore.getNormalizedServerSnapshot()),
-    [searchStore, searchText]
-  )
-  const matches = React.useSyncExternalStore(
-    searchStore.subscribe,
-    getMatchesSnapshot,
-    getMatchesServerSnapshot
-  )
-
-  if (!matches) return null
-  return renderRow(item)
 }
+
+const SearchableWorkspaceTableRow = React.memo(
+  function SearchableWorkspaceTableRow<T>({
+    item,
+    renderRow,
+    searchStore,
+    searchText,
+  }: SearchableWorkspaceTableRowProps<T>) {
+    const getMatchesSnapshot = React.useCallback(
+      () => matchesSearch(searchText, searchStore.getNormalizedSnapshot()),
+      [searchStore, searchText]
+    )
+    const getMatchesServerSnapshot = React.useCallback(
+      () =>
+        matchesSearch(searchText, searchStore.getNormalizedServerSnapshot()),
+      [searchStore, searchText]
+    )
+    const matches = React.useSyncExternalStore(
+      searchStore.subscribe,
+      getMatchesSnapshot,
+      getMatchesServerSnapshot
+    )
+
+    if (!matches) return null
+    return renderRow(item)
+  }
+) as <T>(props: SearchableWorkspaceTableRowProps<T>) => React.ReactNode
 
 export const WorkspaceTableHead = React.memo(function WorkspaceTableHead({
   className = "",

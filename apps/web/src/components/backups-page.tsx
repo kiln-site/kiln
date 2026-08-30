@@ -88,7 +88,6 @@ import {
   brickIconPresentationsQueryOptions,
   backupPolicyQueryOptions,
   managedDatabaseDirectoryQueryOptions,
-  managedDatabasesQueryOptions,
   queryKeys,
   relaySnapshotQueryOptions,
 } from "@/lib/query-options"
@@ -139,10 +138,9 @@ function selectBackupScope(
   snapshot: Awaited<ReturnType<typeof getRelaySnapshot>>
 ) {
   return {
-    nodes: snapshot.nodes.map(({ relayId, relayName, relayStatus }) => ({
+    nodes: snapshot.nodes.map(({ relayId, relayName }) => ({
       relayId,
       relayName,
-      relayStatus,
     })),
     servers: snapshot.instances.map(
       ({
@@ -151,20 +149,16 @@ function selectBackupScope(
         id,
         implementation,
         name,
-        observedState,
         relayId,
         relayName,
-        relayStatus,
       }) => ({
         brickId,
         brickSource,
         id,
         implementation,
         name,
-        observedState,
         relayId,
         relayName,
-        relayStatus,
       })
     ),
   }
@@ -318,10 +312,9 @@ export const BackupsPage = React.memo(function BackupsPage({
     notifyOnChangeProps: ["data"],
     select: selectBackupScope,
   })
-  const { data: databaseOverview } = useSuspenseQuery(
-    managedDatabasesQueryOptions()
+  const { data: databases } = useSuspenseQuery(
+    managedDatabaseDirectoryQueryOptions()
   )
-  const databases = databaseOverview.databases
   const { data: bricks } = useSuspenseQuery(
     brickIconPresentationsQueryOptions()
   )
@@ -388,23 +381,24 @@ export const BackupsPage = React.memo(function BackupsPage({
     const instances = new Map<string, InstanceNameInstance>()
     for (const server of backupScope.servers) {
       instances.set(targetKey("instance", server.relayId, server.id), {
+        id: server.id,
         icon: brickIconPresentation(bricks, server),
         kind: "server",
-        observedState: server.observedState,
-        relayStatus: server.relayStatus,
+        relayId: server.relayId,
       })
     }
     for (const database of databases) {
       instances.set(targetKey("database", database.relayId, database.id), {
-        inventoryStatus: database.inventoryStatus,
+        id: database.id,
         kind: "database",
-        observedState: database.observedState,
+        relayId: database.relayId,
       })
     }
     for (const relay of backupScope.nodes) {
       instances.set(targetKey("platform", relay.relayId, "kiln"), {
+        id: relay.relayId,
         kind: "relay",
-        relayStatus: relay.relayStatus,
+        relayId: relay.relayId,
       })
     }
     return instances

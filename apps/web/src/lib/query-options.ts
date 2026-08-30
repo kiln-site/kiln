@@ -296,14 +296,19 @@ export function relayConnectionQueryOptions(queryClient: QueryClient) {
 export function relaySnapshotQueryOptions() {
   return queryOptions({
     queryKey: queryKeys.relay.snapshot,
-    queryFn: async ({ client }) =>
-      snapshotWithCanonicalState(
-        client,
-        reconcilePendingPowerSnapshot(await getRelaySnapshot())
-      ),
+    queryFn: ({ client }) => fetchRelaySnapshot(client),
     refetchOnWindowFocus: false,
     staleTime: connectedRelayPollDelayMs,
   })
+}
+
+export async function fetchRelaySnapshot(
+  queryClient: QueryClient
+): Promise<RelayFleetSnapshot> {
+  return snapshotWithCanonicalState(
+    queryClient,
+    reconcilePendingPowerSnapshot(await getRelaySnapshot())
+  )
 }
 
 export function snapshotWithCanonicalState(

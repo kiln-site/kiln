@@ -1746,12 +1746,16 @@ function ActivityWhereLink({
     : null
   const instance: InstanceNameInstance = entry.server
     ? {
+        id: entry.server.id,
         icon: serverIcon ?? undefined,
         kind: "server",
         observedState: entry.server.observedState,
+        relayId: entry.relay.id,
       }
     : {
+        id: entry.relay.id,
         kind: "relay",
+        relayId: entry.relay.id,
         relayStatus: entry.relay.unavailable ? "unreachable" : "connected",
       }
   const identity = (

@@ -800,12 +800,14 @@ export const BackupTargetLink = React.memo(function BackupTargetLink({
       className="w-full"
       instance={
         instance ?? {
+          id: targetKind === "platform" ? relayId : targetId,
           kind:
             targetKind === "database"
               ? "database"
               : targetKind === "platform"
                 ? "relay"
                 : "server",
+          relayId,
         }
       }
       name={target.name}
