@@ -66,6 +66,7 @@ import {
   type BrickIconDefinition,
   type BrickIconPresentation,
 } from "@/components/brick-icon"
+import { InstanceName } from "@/components/instance-name"
 import {
   ServerPickerList,
   serverPickerOptionKey,
@@ -647,8 +648,8 @@ const TailscaleMembershipRow = React.memo(function TailscaleMembershipRow({
             aria-label={`Open ${server.name}`}
             className="group/server-link flex min-h-[3.25rem] w-fit max-w-full min-w-0 flex-col justify-center px-3 outline-none focus-visible:ring-2 focus-visible:ring-ring/40 focus-visible:ring-inset"
           >
-            <div className="flex min-w-0 items-center gap-2.5">
-              <span className="flex size-8 shrink-0 items-center justify-center rounded-md border border-border/70 bg-background/35 text-muted-foreground">
+            <InstanceName
+              icon={
                 <BrickIcon
                   id={icon.id}
                   color={icon.color}
@@ -656,23 +657,21 @@ const TailscaleMembershipRow = React.memo(function TailscaleMembershipRow({
                   className="size-6"
                   aria-hidden="true"
                 />
-              </span>
-              <div className="min-w-0">
-                <div className="flex min-w-0 items-center gap-1.5">
-                  <p className="truncate text-xs font-semibold text-foreground transition-colors group-hover/server-link:text-primary">
-                    {server.name}
-                  </p>
+              }
+              name={
+                <span className="flex min-w-0 items-center gap-1.5">
+                  <span className="truncate">{server.name}</span>
                   <span className="grid size-4 shrink-0 place-items-center md:hidden">
                     {!server.tailscaleSupported ? (
                       <TailscaleRelayUpdateHint relayName={server.relayName} />
                     ) : null}
                   </span>
-                </div>
-                <p className="type-meta truncate text-muted-foreground">
-                  {server.implementation} {server.version}
-                </p>
-              </div>
-            </div>
+                </span>
+              }
+              meta={`${server.implementation} ${server.version}`}
+              nameClassName="transition-colors group-hover/server-link:text-primary"
+              status={{ className: status.dotClass, label: status.label }}
+            />
             <p className="type-meta truncate text-muted-foreground md:hidden">
               {server.relayName}
             </p>

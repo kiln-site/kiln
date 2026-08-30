@@ -45,6 +45,7 @@ import {
   type BrickIconDefinition,
   type BrickIconPresentation,
 } from "@/components/brick-icon"
+import { InstanceName } from "@/components/instance-name"
 import {
   WorkspaceDataTable,
   WorkspaceTableCell,
@@ -602,36 +603,37 @@ const ServerTableRow = React.memo(function ServerTableRow({
   routeIdentifier: string
   server: ServerListInstance
 }) {
+  const status = serverStatus(server)
   return (
     <tr className="group transition-colors hover:bg-accent/25">
       <WorkspaceTableCell className="px-2 sm:px-3">
         <ServerStatus server={server} />
       </WorkspaceTableCell>
-      <WorkspaceTableCell>
-        <div className="flex min-w-0 items-center gap-2.5">
-          <span className="flex size-[32px] shrink-0 items-center justify-center rounded-md border border-border/70 bg-background/35 text-muted-foreground">
-            <BrickIcon
-              id={icon.id}
-              color={icon.color}
-              iconSvg={icon.iconSvg}
-              className="size-[24px]"
-              aria-hidden="true"
-            />
-          </span>
-          <div className="min-w-0">
-            <Link
-              to="/server/$serverId/console"
-              params={{ serverId: routeIdentifier }}
-              preload="intent"
-              className="block truncate text-xs font-semibold text-foreground hover:text-primary"
-            >
-              {server.name}
-            </Link>
-            <p className="type-meta truncate font-mono text-muted-foreground">
-              {server.game} · {server.implementation}
-            </p>
-          </div>
-        </div>
+      <WorkspaceTableCell className="px-0">
+        <Link
+          to="/server/$serverId/console"
+          params={{ serverId: routeIdentifier }}
+          preload="intent"
+          aria-label={`Open ${server.name}`}
+          className="group/server-link flex min-h-14 w-fit max-w-full min-w-0 items-center px-3 outline-none focus-visible:ring-2 focus-visible:ring-ring/40 focus-visible:ring-inset"
+        >
+          <InstanceName
+            icon={
+              <BrickIcon
+                id={icon.id}
+                color={icon.color}
+                iconSvg={icon.iconSvg}
+                className="size-[24px]"
+                aria-hidden="true"
+              />
+            }
+            name={server.name}
+            nameClassName="transition-colors group-hover/server-link:text-primary"
+            meta={`${server.game} · ${server.implementation}`}
+            metaClassName="font-mono"
+            status={{ className: status.dot, label: status.label }}
+          />
+        </Link>
       </WorkspaceTableCell>
       <WorkspaceTableCell className="hidden lg:table-cell">
         <span
@@ -823,14 +825,7 @@ function canDeleteServer(
 }
 
 function ServerStatus({ server }: { server: ServerListInstance }) {
-  const status =
-    server.relayStatus === "unreachable"
-      ? {
-          dot: "bg-destructive",
-          label: "Relay unavailable",
-          text: "text-destructive",
-        }
-      : serverStatusTone(server.observedState)
+  const status = serverStatus(server)
   return (
     <span
       aria-label={status.label}
@@ -840,6 +835,16 @@ function ServerStatus({ server }: { server: ServerListInstance }) {
       <span className="hidden sm:inline">{status.label}</span>
     </span>
   )
+}
+
+function serverStatus(server: ServerListInstance) {
+  return server.relayStatus === "unreachable"
+    ? {
+        dot: "bg-destructive",
+        label: "Relay unavailable",
+        text: "text-destructive",
+      }
+    : serverStatusTone(server.observedState)
 }
 
 function EmptyServerTable({
