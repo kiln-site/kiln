@@ -41,6 +41,7 @@ function parseSampleRate(value, fallback) {
 
 function isExpectedAppError(value) {
   if (!value || typeof value !== "object") return false
+  if (value.name === "AbortError") return true
   if (
     [
       "AuthenticationError",
