@@ -5,9 +5,11 @@ import type {
   HearthRealtimeTopic,
 } from "@/lib/hearth-realtime-topics"
 import { queryKeys } from "@/lib/query-options"
-import type { BackupRunsPage } from "@/lib/backup-runs"
 import {
   backupRunsInputFromQueryKey,
+  type BackupRunsPage,
+} from "@/lib/backup-runs"
+import {
   patchBackupRunsData,
   resetBackupRunsToFirstPage,
 } from "@/lib/backup-runs-cache"

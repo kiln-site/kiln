@@ -118,6 +118,32 @@ export function backupRunsQueryKey(
   return ["backups", "runs", query] as const
 }
 
+export function backupRunsInputFromQueryKey(
+  queryKey: ReadonlyArray<unknown>
+): BackupRunsQuery | null {
+  if (
+    queryKey[0] !== "backups" ||
+    queryKey[1] !== "runs" ||
+    typeof queryKey[2] !== "object" ||
+    queryKey[2] === null
+  ) {
+    return null
+  }
+  return { ...(queryKey[2] as Omit<BackupRunsQuery, "cursor">), cursor: null }
+}
+
+export function backupRunScopesEqual(
+  left: BackupRunScope | null | undefined,
+  right: BackupRunScope | null | undefined
+): boolean {
+  if (!left || !right) return left == null && right == null
+  return (
+    left.kind === right.kind &&
+    left.relayId === right.relayId &&
+    left.targetId === right.targetId
+  )
+}
+
 export function compareBackupRunOrderKeys(
   left: BackupRunOrderKey,
   right: BackupRunOrderKey,

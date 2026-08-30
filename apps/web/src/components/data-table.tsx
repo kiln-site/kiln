@@ -9,6 +9,8 @@ import {
 } from "@tanstack/react-table"
 import { ArrowDown, ArrowUp, ArrowUpDown, LoaderCircle } from "lucide-react"
 
+import { Button } from "@workspace/ui/components/button"
+import { Skeleton } from "@workspace/ui/components/skeleton"
 import { cn } from "@workspace/ui/lib/utils"
 import { dataTableFeatures } from "@/lib/data-table"
 import { forkPromise } from "@/effect/promise"
@@ -89,8 +91,12 @@ export function DataTableLoadMoreTrigger({
 interface DataTableProps<TData extends RowData> {
   ariaLabel: string
   emptyState: React.ReactNode
+  error?: Error | null
   getRowClassName?: (row: Row<typeof dataTableFeatures, TData>) => string
   gridClassName: string
+  loading?: boolean
+  loadingRowCount?: number
+  onRetry?: () => void
   pagination?: DataTablePaginationOptions
   table: DataTableInstance<TData>
   updating?: boolean
@@ -100,8 +106,12 @@ interface DataTableProps<TData extends RowData> {
 export function DataTable<TData extends RowData>({
   ariaLabel,
   emptyState,
+  error,
   getRowClassName,
   gridClassName,
+  loading,
+  loadingRowCount,
+  onRetry,
   pagination,
   table,
   updating,
@@ -116,8 +126,12 @@ export function DataTable<TData extends RowData>({
         <DataTableRowModel
           ariaLabel={ariaLabel}
           emptyState={emptyState}
+          error={error}
           getRowClassName={getRowClassName}
           gridClassName={gridClassName}
+          loading={loading}
+          loadingRowCount={loadingRowCount}
+          onRetry={onRetry}
           pagination={pagination}
           table={table}
           updating={updating}
@@ -131,16 +145,32 @@ export function DataTable<TData extends RowData>({
 function DataTableRowModel<TData extends RowData>({
   ariaLabel,
   emptyState,
+  error,
   getRowClassName,
   gridClassName,
+  loading,
+  loadingRowCount,
+  onRetry,
   pagination,
   table,
   updating,
   virtualization,
 }: DataTableProps<TData>) {
   const rows = table.getRowModel().rows
+  const columnCount = table.getAllLeafColumns().length
   const scrollElementRef = React.useRef<HTMLTableSectionElement>(null)
-  const scrollbarWidth = useScrollbarWidth(scrollElementRef, rows.length)
+  const hasBodyState = Boolean(loading || error || rows.length === 0)
+  const scrollbarWidth = useScrollbarWidth(
+    scrollElementRef,
+    hasBodyState ? -1 : rows.length
+  )
+  const bodyState = loading ? (
+    <DataTableLoadingState rowCount={loadingRowCount} />
+  ) : error ? (
+    <DataTableErrorState onRetry={onRetry} />
+  ) : rows.length === 0 ? (
+    emptyState
+  ) : null
 
   React.useLayoutEffect(() => {
     const scrollElement = scrollElementRef.current
@@ -154,7 +184,7 @@ function DataTableRowModel<TData extends RowData>({
 
   return (
     <div
-      aria-busy={updating || pagination?.isLoading || undefined}
+      aria-busy={loading || updating || pagination?.isLoading || undefined}
       className="relative flex h-full min-h-0 w-full min-w-0 flex-col"
     >
       {updating ? (
@@ -172,40 +202,107 @@ function DataTableRowModel<TData extends RowData>({
           Loading more rows
         </span>
       ) : null}
-      {rows.length === 0 ? (
-        emptyState
-      ) : (
-        <table
-          aria-colcount={table.getAllLeafColumns().length}
-          aria-label={ariaLabel}
-          aria-rowcount={rows.length + 1}
-          className="flex h-full min-h-0 w-full min-w-0 border-collapse flex-col overflow-hidden pb-px text-left"
-        >
-          <MemoizedDataTableHead
+      <table
+        aria-colcount={columnCount}
+        aria-label={ariaLabel}
+        aria-rowcount={hasBodyState ? 2 : rows.length + 1}
+        className="flex h-full min-h-0 w-full min-w-0 border-collapse flex-col overflow-hidden pb-px text-left"
+      >
+        <MemoizedDataTableHead
+          gridClassName={gridClassName}
+          scrollbarWidth={scrollbarWidth}
+          table={table}
+        />
+        {hasBodyState ? (
+          <DataTableStateBody
+            colSpan={columnCount}
+            scrollElementRef={scrollElementRef}
+          >
+            {bodyState}
+          </DataTableStateBody>
+        ) : virtualization ? (
+          <VirtualDataTableBody
+            getRowClassName={getRowClassName}
             gridClassName={gridClassName}
-            scrollbarWidth={scrollbarWidth}
-            table={table}
+            pagination={pagination}
+            rows={rows}
+            scrollElementRef={scrollElementRef}
+            virtualization={virtualization}
           />
-          {virtualization ? (
-            <VirtualDataTableBody
-              getRowClassName={getRowClassName}
-              gridClassName={gridClassName}
-              pagination={pagination}
-              rows={rows}
-              scrollElementRef={scrollElementRef}
-              virtualization={virtualization}
-            />
-          ) : (
-            <DataTableBody
-              getRowClassName={getRowClassName}
-              gridClassName={gridClassName}
-              pagination={pagination}
-              rows={rows}
-              scrollElementRef={scrollElementRef}
-            />
-          )}
-        </table>
-      )}
+        ) : (
+          <DataTableBody
+            getRowClassName={getRowClassName}
+            gridClassName={gridClassName}
+            pagination={pagination}
+            rows={rows}
+            scrollElementRef={scrollElementRef}
+          />
+        )}
+      </table>
+    </div>
+  )
+}
+
+function DataTableStateBody({
+  children,
+  colSpan,
+  scrollElementRef,
+}: {
+  children: React.ReactNode
+  colSpan: number
+  scrollElementRef: React.RefObject<HTMLTableSectionElement | null>
+}) {
+  return (
+    <tbody
+      ref={scrollElementRef}
+      className="block min-h-0 flex-1 overflow-y-auto overscroll-contain border-b border-border/70"
+    >
+      <tr className="block">
+        <td className="block p-0" colSpan={colSpan}>
+          {children}
+        </td>
+      </tr>
+    </tbody>
+  )
+}
+
+export function DataTableLoadingState({ rowCount = 7 }: { rowCount?: number }) {
+  return (
+    <div
+      aria-label="Loading table rows"
+      className="space-y-2 p-3"
+      role="status"
+    >
+      {Array.from({ length: rowCount }, (_, index) => (
+        <Skeleton key={index} className="h-14 w-full" />
+      ))}
+    </div>
+  )
+}
+
+export function DataTableErrorState({ onRetry }: { onRetry?: () => void }) {
+  return (
+    <div
+      className="grid h-64 place-items-center px-6 text-center"
+      role="alert"
+    >
+      <div>
+        <p className="text-sm font-semibold">Could not load this table</p>
+        <p className="mt-1 text-xs text-muted-foreground">
+          Check your connection and try again.
+        </p>
+        {onRetry ? (
+          <Button
+            className="mt-4"
+            size="sm"
+            type="button"
+            variant="outline"
+            onClick={onRetry}
+          >
+            Try again
+          </Button>
+        ) : null}
+      </div>
     </div>
   )
 }

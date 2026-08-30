@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vite-plus/test"
 
 import {
+  backupRunScopesEqual,
+  backupRunsInputFromQueryKey,
+  backupRunsQueryKey,
   backupRunsQueryFingerprint,
   compareBackupRunOrderKeys,
   normalizeBackupRunsQuery,
@@ -26,6 +29,37 @@ describe("backup runs query primitives", () => {
     expect(backupRunsQueryFingerprint(first)).toBe(
       backupRunsQueryFingerprint(second)
     )
+  })
+
+  it("only retains rows when the backup scope is unchanged", () => {
+    const scope = {
+      kind: "instance" as const,
+      relayId: "relay-1",
+      targetId: "server-1",
+    }
+
+    expect(backupRunScopesEqual(scope, { ...scope })).toBe(true)
+    expect(
+      backupRunScopesEqual(scope, { ...scope, targetId: "server-2" })
+    ).toBe(false)
+    expect(backupRunScopesEqual(null, null)).toBe(true)
+    expect(backupRunScopesEqual(scope, null)).toBe(false)
+  })
+
+  it("recovers normalized backup input from its query key", () => {
+    const query = normalizeBackupRunsQuery({
+      direction: "desc",
+      scope: null,
+      search: "survival",
+      sort: "createdAt",
+      status: null,
+    })
+    const { cursor: _, ...queryWithoutCursor } = query
+
+    expect(
+      backupRunsInputFromQueryKey(backupRunsQueryKey(queryWithoutCursor))
+    ).toEqual(query)
+    expect(backupRunsInputFromQueryKey(["other", "query"])).toBeNull()
   })
 
   it("keeps null sizes last and breaks ties by id", () => {

@@ -49,6 +49,8 @@ import { getUpdateOverview } from "@/server/updates"
 import { getScheduleOptions, getSchedules } from "@/server/schedules"
 import type { RelayFleetSnapshot } from "@/lib/relay-fleet"
 import {
+  backupRunScopesEqual,
+  backupRunsInputFromQueryKey,
   backupRunsQueryKey,
   normalizeBackupRunsQuery,
   type BackupRunsQuery,
@@ -224,6 +226,14 @@ export function backupRunsInfiniteQueryOptions(input: BackupRunsQuery) {
       }),
     initialPageParam: null as string | null,
     getNextPageParam: (page) => page.nextCursor,
+    placeholderData: (previousData, previousQuery) => {
+      const previousInput = previousQuery
+        ? backupRunsInputFromQueryKey(previousQuery.queryKey)
+        : null
+      return backupRunScopesEqual(previousInput?.scope, query.scope)
+        ? previousData
+        : undefined
+    },
     refetchOnMount: false,
     refetchOnReconnect: false,
     refetchOnWindowFocus: false,

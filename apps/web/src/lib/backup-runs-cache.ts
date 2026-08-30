@@ -1,11 +1,15 @@
-import type { InfiniteData, QueryClient, QueryKey } from "@tanstack/react-query"
+import type { InfiniteData, QueryClient } from "@tanstack/react-query"
 
 import type {
   BackupRun,
   BackupRunsPage,
   BackupRunsQuery,
 } from "@/lib/backup-runs"
-import { backupRunsQueryKey, normalizeBackupRunsQuery } from "@/lib/backup-runs"
+import {
+  backupRunsInputFromQueryKey,
+  backupRunsQueryKey,
+  normalizeBackupRunsQuery,
+} from "@/lib/backup-runs"
 import { getBackupRunsPage } from "@/server/backups"
 
 export async function resetBackupRunsToFirstPage(
@@ -15,7 +19,7 @@ export async function resetBackupRunsToFirstPage(
   const normalized = normalizeBackupRunsQuery(input)
   const { cursor: _, ...query } = normalized
   const queryKey = backupRunsQueryKey(query)
-  await queryClient.cancelQueries({ exact: true, queryKey })
+  await queryClient.cancelQueries({ exact: true, queryKey }, { silent: true })
   const firstPage = await getBackupRunsPage({
     data: { ...query, cursor: null },
   })
@@ -37,20 +41,6 @@ export async function resetActiveBackupRunsToFirstPage(
       return input ? [resetBackupRunsToFirstPage(queryClient, input)] : []
     })
   )
-}
-
-export function backupRunsInputFromQueryKey(
-  queryKey: QueryKey
-): BackupRunsQuery | null {
-  if (
-    queryKey[0] !== "backups" ||
-    queryKey[1] !== "runs" ||
-    typeof queryKey[2] !== "object" ||
-    queryKey[2] === null
-  ) {
-    return null
-  }
-  return { ...(queryKey[2] as Omit<BackupRunsQuery, "cursor">), cursor: null }
 }
 
 export type BackupRunPatch =

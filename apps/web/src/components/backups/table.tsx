@@ -25,7 +25,9 @@ import {
 
 import {
   DataTable,
+  DataTableErrorState,
   DataTableLoadMoreTrigger,
+  DataTableLoadingState,
   DataTableRowCheckbox,
   DataTableSelectAllCheckbox,
   type DataTablePaginationOptions,
@@ -96,7 +98,10 @@ export const BackupTable = React.memo(function BackupTable({
   currentUserId,
   destinations,
   dialogStore,
+  error,
+  loading,
   nameStore,
+  onRetry,
   onSortChange,
   pagination,
   relayNames,
@@ -114,7 +119,10 @@ export const BackupTable = React.memo(function BackupTable({
   currentUserId: string
   destinations: ReadonlyArray<BackupAvailabilityDestination>
   dialogStore: BackupDialogStore
+  error?: Error | null
+  loading?: boolean
   nameStore: BackupNameStore
+  onRetry?: () => void
   onSortChange: (sort: BackupRunSort, direction: BackupRunSortDirection) => void
   pagination: DataTablePaginationOptions
   relayNames: ReadonlyMap<string, string>
@@ -195,6 +203,9 @@ export const BackupTable = React.memo(function BackupTable({
         >
           <BackupMobileList
             backups={backups}
+            error={error}
+            loading={loading}
+            onRetry={onRetry}
             pagination={pagination}
             renderEmpty={renderEmpty}
             renderRow={renderMobileRow}
@@ -212,7 +223,10 @@ export const BackupTable = React.memo(function BackupTable({
           currentUserId={currentUserId}
           destinations={destinations}
           dialogStore={dialogStore}
+          error={error}
+          loading={loading}
           nameStore={nameStore}
+          onRetry={onRetry}
           onSortChange={onSortChange}
           pagination={pagination}
           relayNames={relayNames}
@@ -237,7 +251,10 @@ const BackupDesktopTable = React.memo(function BackupDesktopTable({
   currentUserId,
   destinations,
   dialogStore,
+  error,
+  loading,
   nameStore,
+  onRetry,
   onSortChange,
   pagination,
   relayNames,
@@ -256,7 +273,10 @@ const BackupDesktopTable = React.memo(function BackupDesktopTable({
   currentUserId: string
   destinations: ReadonlyArray<BackupAvailabilityDestination>
   dialogStore: BackupDialogStore
+  error?: Error | null
+  loading?: boolean
   nameStore: BackupNameStore
+  onRetry?: () => void
   onSortChange: (sort: BackupRunSort, direction: BackupRunSortDirection) => void
   pagination: DataTablePaginationOptions
   relayNames: ReadonlyMap<string, string>
@@ -495,8 +515,11 @@ const BackupDesktopTable = React.memo(function BackupDesktopTable({
             statusFilterStore={statusFilterStore}
           />
         }
+        error={error}
         getRowClassName={backupTableRowClassName}
         gridClassName={backupTableGridClassName}
+        loading={loading}
+        onRetry={onRetry}
         pagination={pagination}
         table={table}
         updating={updating}
@@ -584,6 +607,9 @@ const BackupDesktopEmptyState = React.memo(function BackupDesktopEmptyState({
 
 const BackupMobileList = React.memo(function BackupMobileList({
   backups,
+  error,
+  loading,
+  onRetry,
   pagination,
   renderEmpty,
   renderRow,
@@ -594,6 +620,9 @@ const BackupMobileList = React.memo(function BackupMobileList({
   statusFilterStore,
 }: {
   backups: Array<Backup>
+  error?: Error | null
+  loading?: boolean
+  onRetry?: () => void
   pagination: DataTablePaginationOptions
   renderEmpty: (searchActive: boolean, filterActive: boolean) => React.ReactNode
   renderRow: (backup: Backup) => React.ReactNode
@@ -613,6 +642,8 @@ const BackupMobileList = React.memo(function BackupMobileList({
     statusFilterStore.getSnapshot,
     statusFilterStore.getServerSnapshot
   )
+  if (loading) return <DataTableLoadingState />
+  if (error) return <DataTableErrorState onRetry={onRetry} />
   if (backups.length === 0) {
     return renderEmpty(
       search.trim().length > 0,
