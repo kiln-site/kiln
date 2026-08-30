@@ -1494,6 +1494,9 @@ function backupCatalogOrder(sort: BackupCatalogPageInput["sort"]): {
   if (sort === "size") {
     return { selectSql: backupDisplayBytesSql, sql: backupDisplayBytesSql }
   }
+  // backup.created_at is TIMESTAMP(3), so this is the exact stored value. Keep
+  // the raw column in ORDER BY and the seek predicate so the default path uses
+  // the (created_at, id) index.
   return {
     selectSql: "ROUND(UNIX_TIMESTAMP(backup.created_at) * 1000)",
     sql: "backup.created_at",

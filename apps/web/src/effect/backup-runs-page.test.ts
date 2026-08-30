@@ -112,6 +112,20 @@ describe("backup runs page query", () => {
           assert.include(sql, `${operator} ?`)
           assert.include(sql, `backup.id ${operator} ?`)
           assert.include(sql, `backup.id ${direction.toUpperCase()}`)
+          if (testCase.sort === "createdAt") {
+            assert.include(
+              sql,
+              "ROUND(UNIX_TIMESTAMP(backup.created_at) * 1000) AS order_value"
+            )
+            assert.include(
+              sql,
+              `backup.created_at ${operator} FROM_UNIXTIME(? / 1000)`
+            )
+            assert.include(
+              sql,
+              `ORDER BY backup.created_at ${direction.toUpperCase()}, backup.id ${direction.toUpperCase()}`
+            )
+          }
           if (testCase.sort === "size") {
             assert.include(sql, "IS NULL ASC")
             assert.include(sql, "OR (CASE")

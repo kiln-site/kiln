@@ -89,6 +89,7 @@ import type { PersistedRelay } from "@/lib/relay-registry"
 import { listPersistedRelays } from "@/lib/relay-registry"
 import { resolveMclogsApiUrl } from "@/lib/mclogs"
 import { publishRealtimeChange } from "@/lib/realtime-source.server"
+import { updateInstanceSourceName } from "@/lib/instance-registry"
 
 const instanceInputSchema = z.object({
   instanceId: z.string().min(1),
@@ -305,6 +306,7 @@ export const updateInstanceName = createServerFn({ method: "POST" })
         user.id
       )
     )
+    await updateInstanceSourceName(relay.id, renamed)
     await runAppEffect(
       "relay.snapshot.invalidate",
       invalidateRelayCache(relayCachePolicy.snapshot(relay.id))

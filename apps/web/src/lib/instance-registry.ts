@@ -15,25 +15,34 @@ export function syncInstanceRegistry(
   )
 }
 
-export function registerInstance(
+export function backfillInstanceSourceNames(
   relayId: string,
-  instance: Pick<RelayInstance, "id">,
-  ownerId: string
+  instances: ReadonlyArray<Pick<RelayInstance, "id" | "name">>
 ): Promise<void> {
   return runAppEffect(
-    "instances.registry.register",
-    registerInstanceEffect(relayId, instance, ownerId)
+    "instances.registry.backfillSourceNames",
+    backfillInstanceSourceNamesEffect(relayId, instances)
   )
 }
 
 export function registerPreparedInstance(
   relayId: string,
-  instance: Pick<RelayInstance, "id">,
+  instance: Pick<RelayInstance, "id" | "name">,
   ownerId: string
 ): Promise<void> {
   return runAppEffect(
     "instances.registry.registerPrepared",
     registerPreparedInstanceEffect(relayId, instance, ownerId)
+  )
+}
+
+export function updateInstanceSourceName(
+  relayId: string,
+  instance: Pick<RelayInstance, "id" | "name">
+): Promise<void> {
+  return runAppEffect(
+    "instances.registry.updateSourceName",
+    updateInstanceSourceNameEffect(relayId, instance)
   )
 }
 
@@ -74,7 +83,7 @@ export const registerPreparedInstanceEffect = Effect.fn(
   "instances.registry.registerPrepared"
 )(function* (
   relayId: string,
-  instance: Pick<RelayInstance, "id">,
+  instance: Pick<RelayInstance, "id" | "name">,
   ownerId: string
 ) {
   const database = yield* Database
@@ -82,13 +91,14 @@ export const registerPreparedInstanceEffect = Effect.fn(
     Effect.gen(function* () {
       yield* tx.execute(
         `INSERT INTO ${databaseTable("instance")}
-           (relay_id, instance_id, display_name, owner_id)
-         VALUES (?, ?, NULL, ?)
+           (relay_id, instance_id, display_name, source_name, owner_id)
+         VALUES (?, ?, NULL, ?, ?)
          ON DUPLICATE KEY UPDATE
+           source_name = VALUES(source_name),
            owner_id = COALESCE(owner_id, VALUES(owner_id)),
            provisioning_reserved_until = NULL,
            updated_at = CURRENT_TIMESTAMP(3)`,
-        [relayId, instance.id, ownerId]
+        [relayId, instance.id, instance.name.slice(0, 255), ownerId]
       )
       yield* tx.execute(
         `INSERT INTO ${databaseTable("instance_post_provision")}
@@ -118,25 +128,46 @@ export function unregisterInstance(relayId: string, instanceId: string) {
   )
 }
 
-export const registerInstanceEffect = Effect.fn("instances.registry.register")(
-  function* (
-    relayId: string,
-    instance: Pick<RelayInstance, "id">,
-    ownerId: string
-  ) {
-    const database = yield* Database
-    yield* database.execute(
-      "instances.registry.register",
-      `INSERT INTO ${databaseTable("instance")}
-         (relay_id, instance_id, display_name, owner_id)
-       VALUES (?, ?, NULL, ?)
-       ON DUPLICATE KEY UPDATE
-         owner_id = COALESCE(owner_id, VALUES(owner_id)),
-         updated_at = CURRENT_TIMESTAMP(3)`,
-      [relayId, instance.id, ownerId]
-    )
-  }
-)
+export const backfillInstanceSourceNamesEffect = Effect.fn(
+  "instances.registry.backfillSourceNames"
+)(function* (
+  relayId: string,
+  instances: ReadonlyArray<Pick<RelayInstance, "id" | "name">>
+) {
+  if (instances.length === 0) return
+  const database = yield* Database
+  const values = instances.map(() => "(?, ?, NULL, ?)").join(", ")
+  yield* database.execute(
+    "instances.registry.backfillSourceNames",
+    `INSERT INTO ${databaseTable("instance")}
+       (relay_id, instance_id, display_name, source_name)
+     VALUES ${values}
+     ON DUPLICATE KEY UPDATE
+       updated_at = IF(source_name IS NULL, CURRENT_TIMESTAMP(3), updated_at),
+       source_name = COALESCE(source_name, VALUES(source_name))`,
+    instances.flatMap((instance) => [
+      relayId,
+      instance.id,
+      instance.name.slice(0, 255),
+    ])
+  )
+})
+
+export const updateInstanceSourceNameEffect = Effect.fn(
+  "instances.registry.updateSourceName"
+)(function* (
+  relayId: string,
+  instance: Pick<RelayInstance, "id" | "name">
+) {
+  const database = yield* Database
+  yield* database.execute(
+    "instances.registry.updateSourceName",
+    `UPDATE ${databaseTable("instance")}
+       SET source_name = ?, updated_at = CURRENT_TIMESTAMP(3)
+     WHERE relay_id = ? AND instance_id = ?`,
+    [instance.name.slice(0, 255), relayId, instance.id]
+  )
+})
 
 export const syncInstanceRegistryEffect = Effect.fn("instances.registry.sync")(
   function* (

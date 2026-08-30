@@ -4,9 +4,11 @@ import type { ResultSetHeader } from "mysql2/promise"
 
 import { Database } from "@/effect/database"
 import {
-  registerInstanceEffect,
+  backfillInstanceSourceNamesEffect,
+  registerPreparedInstanceEffect,
   reservePreparedInstanceEffect,
   syncInstanceRegistryEffect,
+  updateInstanceSourceNameEffect,
 } from "@/lib/instance-registry"
 
 const emptyResult: ResultSetHeader = {
@@ -21,33 +23,39 @@ const emptyResult: ResultSetHeader = {
 }
 
 describe("instance registry sync", () => {
-  it.effect("registers a newly created instance immediately", () => {
+  it.effect("registers a newly created instance and its source name", () => {
     const statements: Array<{
       sql: string
       values: ReadonlyArray<unknown>
     }> = []
     const databaseLayer = Layer.succeed(Database)({
-      execute: (_operation, sql, values) =>
-        Effect.sync(() => {
-          statements.push({ sql, values: values ?? [] })
-          return emptyResult
-        }),
+      execute: () => Effect.die("Unexpected standalone database write"),
       queryRows: () => Effect.die("Unexpected database query"),
-      transaction: () => Effect.die("Unexpected transaction"),
+      transaction: (_operation, run) =>
+        run({
+          execute: (sql, values) =>
+            Effect.sync(() => {
+              statements.push({ sql, values: values ?? [] })
+              return emptyResult
+            }),
+          queryRows: () => Effect.die("Unexpected transaction query"),
+        }),
     })
 
     return Effect.gen(function* () {
-      yield* registerInstanceEffect(
+      yield* registerPreparedInstanceEffect(
         "relay-one",
-        { id: "instance-one" },
+        { id: "instance-one", name: "Survival" },
         "user-one"
       )
 
-      assert.lengthOf(statements, 1)
+      assert.lengthOf(statements, 2)
       assert.include(statements[0]?.sql ?? "", "owner_id")
+      assert.include(statements[0]?.sql ?? "", "source_name")
       assert.deepEqual(statements[0]?.values, [
         "relay-one",
         "instance-one",
+        "Survival",
         "user-one",
       ])
     }).pipe(Effect.provide(databaseLayer))
@@ -82,6 +90,72 @@ describe("instance registry sync", () => {
       }).pipe(Effect.provide(databaseLayer))
     }
   )
+
+  it.effect("only fills missing names from a cached snapshot", () => {
+    const statements: Array<{
+      sql: string
+      values: ReadonlyArray<unknown>
+    }> = []
+    const databaseLayer = Layer.succeed(Database)({
+      execute: (_operation, sql, values) =>
+        Effect.sync(() => {
+          statements.push({ sql, values: values ?? [] })
+          return emptyResult
+        }),
+      queryRows: () => Effect.die("Unexpected database query"),
+      transaction: () => Effect.die("Unexpected transaction"),
+    })
+
+    return Effect.gen(function* () {
+      yield* backfillInstanceSourceNamesEffect("relay-one", [
+        { id: "instance-one", name: "Survival" },
+      ])
+
+      assert.lengthOf(statements, 1)
+      assert.include(
+        statements[0]?.sql ?? "",
+        "source_name = COALESCE(source_name, VALUES(source_name))"
+      )
+      assert.notInclude(statements[0]?.sql ?? "", "DELETE FROM")
+      assert.deepEqual(statements[0]?.values, [
+        "relay-one",
+        "instance-one",
+        "Survival",
+      ])
+    }).pipe(Effect.provide(databaseLayer))
+  })
+
+  it.effect("updates only the renamed instance source name", () => {
+    const statements: Array<{
+      sql: string
+      values: ReadonlyArray<unknown>
+    }> = []
+    const databaseLayer = Layer.succeed(Database)({
+      execute: (_operation, sql, values) =>
+        Effect.sync(() => {
+          statements.push({ sql, values: values ?? [] })
+          return emptyResult
+        }),
+      queryRows: () => Effect.die("Unexpected database query"),
+      transaction: () => Effect.die("Unexpected transaction"),
+    })
+
+    return Effect.gen(function* () {
+      yield* updateInstanceSourceNameEffect("relay-one", {
+        id: "instance-one",
+        name: "Creative",
+      })
+
+      assert.lengthOf(statements, 1)
+      assert.include(statements[0]?.sql ?? "", "UPDATE")
+      assert.notInclude(statements[0]?.sql ?? "", "DELETE FROM")
+      assert.deepEqual(statements[0]?.values, [
+        "Creative",
+        "relay-one",
+        "instance-one",
+      ])
+    }).pipe(Effect.provide(databaseLayer))
+  })
 
   it.effect("stores Relay names outside the unique display-name key", () => {
     const statements: Array<{

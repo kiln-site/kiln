@@ -1,4 +1,8 @@
-import type { InfiniteData, QueryClient } from "@tanstack/react-query"
+import {
+  type InfiniteData,
+  type QueryClient,
+  replaceEqualDeep,
+} from "@tanstack/react-query"
 
 import type {
   BackupRun,
@@ -41,6 +45,62 @@ export async function resetActiveBackupRunsToFirstPage(
       return input ? [resetBackupRunsToFirstPage(queryClient, input)] : []
     })
   )
+}
+
+export async function refreshActiveBackupRunsFirstPages(
+  queryClient: QueryClient
+): Promise<void> {
+  const active = queryClient
+    .getQueryCache()
+    .findAll({ queryKey: ["backups", "runs"], type: "active" })
+  await Promise.all(
+    active.flatMap((query) => {
+      const input = backupRunsInputFromQueryKey(query.queryKey)
+      return input ? [refreshBackupRunsFirstPage(queryClient, input)] : []
+    })
+  )
+}
+
+async function refreshBackupRunsFirstPage(
+  queryClient: QueryClient,
+  input: BackupRunsQuery
+): Promise<void> {
+  const normalized = normalizeBackupRunsQuery(input)
+  const { cursor: _, ...query } = normalized
+  const queryKey = backupRunsQueryKey(query)
+  const firstPage = await getBackupRunsPage({
+    data: { ...query, cursor: null },
+  })
+  queryClient.setQueryData<InfiniteData<BackupRunsPage, string | null>>(
+    queryKey,
+    (current) => mergeRefreshedBackupRunsFirstPage(current, firstPage)
+  )
+}
+
+export function mergeRefreshedBackupRunsFirstPage(
+  current: InfiniteData<BackupRunsPage, string | null> | undefined,
+  firstPage: BackupRunsPage
+): InfiniteData<BackupRunsPage, string | null> {
+  if (!current || current.pages.length === 0) {
+    return { pageParams: [null], pages: [firstPage] }
+  }
+  const currentFirstPage = current.pages[0]
+  const refreshedFirstPage = replaceEqualDeep(currentFirstPage, firstPage)
+  if (refreshedFirstPage === currentFirstPage) return current
+
+  const boundaryIsStable =
+    currentFirstPage.nextCursor === refreshedFirstPage.nextCursor &&
+    currentFirstPage.items.length === refreshedFirstPage.items.length &&
+    currentFirstPage.items.every(
+      (backup, index) => backup.id === refreshedFirstPage.items[index]?.id
+    )
+  if (boundaryIsStable) {
+    return {
+      ...current,
+      pages: [refreshedFirstPage, ...current.pages.slice(1)],
+    }
+  }
+  return { pageParams: [null], pages: [refreshedFirstPage] }
 }
 
 export type BackupRunPatch =

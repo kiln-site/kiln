@@ -2,7 +2,10 @@ import type { InfiniteData } from "@tanstack/react-query"
 import { describe, expect, it } from "vite-plus/test"
 
 import type { BackupRun, BackupRunsPage } from "@/lib/backup-runs"
-import { patchBackupRunsData } from "@/lib/backup-runs-cache"
+import {
+  mergeRefreshedBackupRunsFirstPage,
+  patchBackupRunsData,
+} from "@/lib/backup-runs-cache"
 
 const firstId = "7ff61850-2e5e-4238-b960-755b743a246a"
 const secondId = "ab145091-0f4d-44cc-a30b-b8b3ee21b36f"
@@ -74,6 +77,53 @@ describe("backup runs realtime cache patches", () => {
       patchBackupRunsData(infiniteData([[active]]), firstId, progressed, "size")
         .kind
     ).toBe("update")
+  })
+})
+
+describe("backup runs background first-page refresh", () => {
+  it("keeps the loaded cache untouched when reconciliation changed nothing", () => {
+    const current = infiniteData([
+      [backupRun(firstId, 20)],
+      [backupRun(secondId, 10)],
+    ])
+
+    expect(mergeRefreshedBackupRunsFirstPage(current, current.pages[0]!)).toBe(
+      current
+    )
+  })
+
+  it("updates stable first-page rows without discarding later pages", () => {
+    const current = infiniteData([
+      [backupRun(firstId, 20)],
+      [backupRun(secondId, 10)],
+    ])
+    const refreshed = {
+      ...current.pages[0]!,
+      items: [{ ...current.pages[0]!.items[0]!, taskBytesCompleted: 5 }],
+    }
+
+    const result = mergeRefreshedBackupRunsFirstPage(current, refreshed)
+
+    expect(result.pages).toHaveLength(2)
+    expect(result.pages[0]).toEqual(refreshed)
+    expect(result.pages[1]).toBe(current.pages[1])
+  })
+
+  it("resets an invalid cursor chain when first-page membership changes", () => {
+    const current = infiniteData([
+      [backupRun(firstId, 20)],
+      [backupRun(secondId, 10)],
+    ])
+    const replacementId = "84924518-b4c4-4fc0-a8fd-ee9a6b451f85"
+    const refreshed = {
+      items: [backupRun(replacementId, 30)],
+      nextCursor: "replacement-page-2",
+    }
+
+    expect(mergeRefreshedBackupRunsFirstPage(current, refreshed)).toEqual({
+      pageParams: [null],
+      pages: [refreshed],
+    })
   })
 })
 

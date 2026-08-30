@@ -40,7 +40,10 @@ import { runAppEffect } from "@/effect/runtime"
 import { databasePool } from "@/lib/database"
 import { databaseTable } from "@/lib/database-config"
 import { betterAuthSecrets, kilnPublicUrl } from "@/lib/environment"
-import { syncInstanceRegistry } from "@/lib/instance-registry"
+import {
+  backfillInstanceSourceNames,
+  syncInstanceRegistry,
+} from "@/lib/instance-registry"
 import { publishRealtimeChange } from "@/lib/realtime-source.server"
 
 import { decryptWithKeyring, encryptWithKeyring } from "../../keyring.mjs"
@@ -521,10 +524,37 @@ export async function maintainPersistedRelayConnections(): Promise<void> {
   const { relayRpc } = await import("@/lib/relay-connection")
   await Promise.allSettled(
     relays.map(async (relay) => {
-      const snapshot = relaySnapshotSchema.parse(
-        await relayRpc(relay, "relay.snapshot", {}, 5_000)
+      const freshSnapshot = await Effect.runPromise(
+        Effect.result(
+          Effect.tryPromise({
+            try: async () =>
+              relaySnapshotSchema.parse(
+                await relayRpc(relay, "relay.snapshot", {}, 5_000)
+              ),
+            catch: (cause) => cause,
+          })
+        )
       )
-      await syncInstanceRegistry(relay.id, snapshot.instances)
+      if (Result.isSuccess(freshSnapshot)) {
+        await syncInstanceRegistry(relay.id, freshSnapshot.success.instances)
+        return
+      }
+      const fallback = await cachedRelaySnapshotFallback(relay.id)
+      if (fallback) {
+        await backfillInstanceSourceNames(relay.id, fallback.instances)
+      }
+    })
+  )
+}
+
+async function cachedRelaySnapshotFallback(relayId: string) {
+  const { cachedRelayFallbackJsonEffect, relayCachePolicy } =
+    await import("@/lib/relay-client")
+  return runAppEffect(
+    "relay.snapshotFallback",
+    cachedRelayFallbackJsonEffect({
+      decode: relaySnapshotSchema.parse,
+      policy: relayCachePolicy.snapshot(relayId),
     })
   )
 }

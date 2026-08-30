@@ -117,6 +117,7 @@ import type { getRelaySnapshot } from "@/server/relay"
 import { flattenCursorPages } from "@/lib/cursor-page"
 import type { BackupRunSort, BackupRunSortDirection } from "@/lib/backup-runs"
 import {
+  refreshActiveBackupRunsFirstPages,
   resetActiveBackupRunsToFirstPage,
   resetBackupRunsToFirstPage,
 } from "@/lib/backup-runs-cache"
@@ -514,7 +515,7 @@ const BackupRunsSyncKick = React.memo(function BackupRunsSyncKick() {
     let active = true
     forkPromise(async () => {
       await syncBackupRuns()
-      if (active) await resetActiveBackupRunsToFirstPage(queryClient)
+      if (active) await refreshActiveBackupRunsFirstPages(queryClient)
     })
     return () => {
       active = false
