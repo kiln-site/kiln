@@ -1542,7 +1542,7 @@ class ConsoleHubRegistry {
     return timedBrowserOperation(
       "Discover console session",
       "relay.console.discovery",
-      () => this.#docker.consoleSession(instanceId)
+      (signal) => this.#docker.consoleSession(instanceId, signal)
     ).pipe(
       Effect.map((session) => {
         const hub = new ConsoleHub(
@@ -1617,7 +1617,6 @@ class ResourceHubRegistry {
 }
 
 class ConsoleHub {
-  readonly #abort = new AbortController()
   readonly #backgroundFibers = new Set<Fiber.Fiber<void, never>>()
   readonly #docker: DockerDriver
   readonly #instanceId: string
@@ -1696,7 +1695,6 @@ class ConsoleHub {
     this.#backgroundFibers.clear()
     this.#unsubscribeSnapshots?.()
     this.#unsubscribeSnapshots = null
-    this.#abort.abort()
     this.#onEmpty()
   }
 
@@ -1721,7 +1719,7 @@ class ConsoleHub {
     return this.#streamOnceEffect().pipe(
       Effect.catch((cause) =>
         Effect.sync(() => {
-          if (!this.#abort.signal.aborted) {
+          if (!this.#closed) {
             Sentry.captureException(cause, {
               tags: { "kiln.operation": "browser.console.stream" },
             })
@@ -1730,9 +1728,7 @@ class ConsoleHub {
       ),
       Effect.andThen(
         Effect.suspend(() =>
-          this.#closed ||
-          this.#abort.signal.aborted ||
-          this.#subscribers.size === 0
+          this.#closed || this.#subscribers.size === 0
             ? Effect.void
             : Effect.sleep("1 second").pipe(
                 Effect.andThen(Effect.suspend(() => this.#streamLoopEffect()))
@@ -1748,7 +1744,7 @@ class ConsoleHub {
         timedBrowserOperation(
           "Read initial console history",
           "relay.console.history",
-          () => session.history(200)
+          (signal) => session.history(200, signal)
         ).pipe(
           Effect.tap((snapshot) =>
             Effect.sync(() => {
@@ -1776,8 +1772,8 @@ class ConsoleHub {
             })
           ),
           Effect.andThen(
-            browserOperation(async () => {
-              for await (const line of session.stream(this.#abort.signal)) {
+            browserOperation(async (signal) => {
+              for await (const line of session.stream(signal)) {
                 this.#append(line)
               }
             })
@@ -1795,7 +1791,7 @@ class ConsoleHub {
       : timedBrowserOperation(
           "Rediscover console session",
           "relay.console.discovery",
-          () => this.#docker.consoleSession(this.#instanceId)
+          (signal) => this.#docker.consoleSession(this.#instanceId, signal)
         )
   }
 
@@ -1805,7 +1801,7 @@ class ConsoleHub {
       effect.pipe(
         Effect.catch((cause) =>
           Effect.sync(() => {
-            if (!this.#abort.signal.aborted) {
+            if (!this.#closed) {
               Sentry.captureException(cause, {
                 tags: { "kiln.operation": operation },
               })
@@ -1823,6 +1819,7 @@ class ConsoleHub {
   }
 
   #append(line: RelayConsoleLine): void {
+    if (this.#closed) return
     if (
       this.#sessionFloor &&
       line.timestamp &&
@@ -1843,7 +1840,7 @@ class ConsoleHub {
   }
 
   #observeSnapshot(sample: RelaySnapshotSample): void {
-    if (this.#abort.signal.aborted || this.#sessionLifecycle === undefined) {
+    if (this.#closed || this.#sessionLifecycle === undefined) {
       return
     }
     const lifecycle = sample.snapshot.instances.find(
@@ -1880,18 +1877,18 @@ class ConsoleHub {
     return timedBrowserOperation(
       "Discover replacement console session",
       "relay.console.discovery",
-      () => this.#docker.consoleSession(this.#instanceId)
+      (signal) => this.#docker.consoleSession(this.#instanceId, signal)
     ).pipe(
       Effect.flatMap((session) =>
         timedBrowserOperation(
           "Read replacement console history",
           "relay.console.history",
-          () => session.history(200)
+          (signal) => session.history(200, signal)
         ).pipe(
           Effect.tap((snapshot) =>
             Effect.sync(() => {
               if (
-                this.#abort.signal.aborted ||
+                this.#closed ||
                 this.#transitionStartedAt !== startedAt ||
                 lifecycleEventTime(this.#sessionLifecycle, "started") ===
                   startedAt ||
@@ -1929,12 +1926,12 @@ class ConsoleHub {
     return timedBrowserOperation(
       "Backfill console history",
       "relay.console.backfill",
-      () => session.history(MAX_CONSOLE_HISTORY_LINES)
+      (signal) => session.history(MAX_CONSOLE_HISTORY_LINES, signal)
     ).pipe(
       Effect.tap((history) =>
         Effect.sync(() => {
           if (
-            this.#abort.signal.aborted ||
+            this.#closed ||
             lifecycleEventTime(this.#sessionLifecycle, "started") !==
               startedAt ||
             lifecycleEventTime(history.lifecycle, "started") !== startedAt
@@ -2091,7 +2088,7 @@ function closeWebSocketServerEffect(
 }
 
 function browserOperation<TResult>(
-  run: () => Promise<TResult>
+  run: (signal: AbortSignal) => Promise<TResult>
 ): Effect.Effect<TResult, Error> {
   return Effect.tryPromise({ try: run, catch: asError })
 }
@@ -2099,9 +2096,11 @@ function browserOperation<TResult>(
 function timedBrowserOperation<TResult>(
   name: string,
   op: string,
-  run: () => Promise<TResult>
+  run: (signal: AbortSignal) => Promise<TResult>
 ): Effect.Effect<TResult, Error> {
-  return browserOperation(() => Sentry.startSpan({ name, op }, run))
+  return browserOperation((signal) =>
+    Sentry.startSpan({ name, op }, () => run(signal))
+  )
 }
 
 function asError(cause: unknown): Error {

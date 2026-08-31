@@ -153,7 +153,10 @@ interface ConsoleTarget {
 }
 
 export interface DockerConsoleSession {
-  readonly history: (limit?: number) => Promise<RelayConsole>
+  readonly history: (
+    limit?: number,
+    signal?: AbortSignal
+  ) => Promise<RelayConsole>
   readonly instance: RelayInstanceConfig
   readonly stream: (
     signal: AbortSignal,
@@ -1269,13 +1272,22 @@ export class DockerDriver {
     return session.history(limit)
   }
 
-  async consoleSession(instanceId: string): Promise<DockerConsoleSession> {
-    const discovered = await this.#findDiscovered(instanceId)
+  async consoleSession(
+    instanceId: string,
+    signal?: AbortSignal
+  ): Promise<DockerConsoleSession> {
+    const discovered = await this.#findDiscovered(instanceId, signal)
     const instance = discovered.config
-    const targets = await this.#consoleTargets(instance, discovered)
+    const targets = await this.#consoleTargets(instance, discovered, signal)
     return {
-      history: (limit = 2_000) =>
-        this.#consoleHistory(instance, discovered, targets, limit),
+      history: (limit = 2_000, historySignal) =>
+        this.#consoleHistory(
+          instance,
+          discovered,
+          targets,
+          limit,
+          historySignal
+        ),
       instance,
       stream: (signal, limit = 200) =>
         this.#streamConsoleTargets(targets, signal, limit),
@@ -1286,7 +1298,8 @@ export class DockerDriver {
     instance: RelayInstanceConfig,
     discovered: DiscoveredInstance,
     targets: ReadonlyArray<ConsoleTarget>,
-    limit: number
+    limit: number,
+    signal?: AbortSignal
   ): Promise<RelayConsole> {
     const boundedLimit = Math.min(
       Math.max(limit, 100),
@@ -1310,7 +1323,7 @@ export class DockerDriver {
               String(boundedLimit),
               target.container.Id,
             ],
-            { timeout: 15_000 }
+            { signal, timeout: 15_000 }
           ),
         }
       })
@@ -1392,7 +1405,7 @@ export class DockerDriver {
     signal: AbortSignal,
     limit = 200
   ): AsyncIterable<RelayConsoleLine> {
-    const openSession = () => this.consoleSession(instance.id)
+    const openSession = () => this.consoleSession(instance.id, signal)
     return (async function* () {
       const session = await openSession()
       yield* session.stream(signal, limit)
@@ -2388,8 +2401,11 @@ export class DockerDriver {
     })
   }
 
-  async #findDiscovered(id: string): Promise<DiscoveredInstance> {
-    const found = (await this.#discover()).find((item) =>
+  async #findDiscovered(
+    id: string,
+    signal?: AbortSignal
+  ): Promise<DiscoveredInstance> {
+    const found = (await this.#discover(signal)).find((item) =>
       matchesInstanceId(item.config, id)
     )
     if (!found) throw new Error(`Instance ${id} is no longer managed by Kiln`)
@@ -2398,7 +2414,8 @@ export class DockerDriver {
 
   async #consoleTargets(
     instance: RelayInstanceConfig,
-    discovered: DiscoveredInstance
+    discovered: DiscoveredInstance,
+    signal?: AbortSignal
   ): Promise<Array<ConsoleTarget>> {
     if (instance.brickId !== builtinTailscaleBrickId) {
       return [{ component: null, container: discovered.container }]
@@ -2407,9 +2424,9 @@ export class DockerDriver {
       instance.id
     )
     const inspected = await runEffect(
-      promiseEffect(() => command("docker", ["inspect", companionName])).pipe(
-        Effect.catch(() => Effect.succeed(null))
-      )
+      promiseEffect(() =>
+        command("docker", ["inspect", companionName], { signal })
+      ).pipe(Effect.catch(() => Effect.succeed(null)))
     )
     const companion = inspected
       ? (JSON.parse(inspected.stdout) as Array<DockerInspect>)[0]
@@ -2422,20 +2439,26 @@ export class DockerDriver {
     ]
   }
 
-  async #discover(): Promise<Array<DiscoveredInstance>> {
-    const idsResult = await command("docker", [
-      "container",
-      "ls",
-      "--all",
-      "--filter",
-      `label=${this.#config.managedLabel}`,
-      "--format",
-      "{{.ID}}",
-    ])
+  async #discover(signal?: AbortSignal): Promise<Array<DiscoveredInstance>> {
+    const idsResult = await command(
+      "docker",
+      [
+        "container",
+        "ls",
+        "--all",
+        "--filter",
+        `label=${this.#config.managedLabel}`,
+        "--format",
+        "{{.ID}}",
+      ],
+      { signal }
+    )
     const ids = idsResult.stdout.split("\n").filter(Boolean)
     if (ids.length === 0) return []
 
-    const inspectResult = await command("docker", ["inspect", ...ids])
+    const inspectResult = await command("docker", ["inspect", ...ids], {
+      signal,
+    })
     const containers = (
       JSON.parse(inspectResult.stdout) as Array<DockerInspect>
     ).filter(

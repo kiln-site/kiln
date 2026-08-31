@@ -132,15 +132,15 @@ export function startConsoleTimingSpan(
   })
 }
 
-export function withConsoleTimingSpan<TResult>(
+export function withConsoleTimingSpan<TResult, TError, TRequirements>(
   timing: ConsoleLoadTiming | undefined,
   name: string,
   op: string,
-  run: () => Promise<TResult>
-): Promise<TResult> {
-  const span = startConsoleTimingSpan(timing, name, op)
-  return Effect.runPromise(
-    Effect.tryPromise({ try: run, catch: (cause) => cause }).pipe(
+  effect: Effect.Effect<TResult, TError, TRequirements>
+): Effect.Effect<TResult, TError, TRequirements> {
+  return Effect.suspend(() => {
+    const span = startConsoleTimingSpan(timing, name, op)
+    return effect.pipe(
       Effect.tap(() =>
         Effect.sync(() => {
           span.setAttribute("kiln.console.result", "ok")
@@ -151,7 +151,12 @@ export function withConsoleTimingSpan<TResult>(
           span.setAttribute("kiln.console.result", "error")
         })
       ),
+      Effect.onInterrupt(() =>
+        Effect.sync(() => {
+          span.setAttribute("kiln.console.result", "cancelled")
+        })
+      ),
       Effect.ensuring(Effect.sync(() => span.end()))
     )
-  )
+  })
 }
