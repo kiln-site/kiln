@@ -68,7 +68,7 @@ const emptyServers: Array<ServerListInstance> = []
 const minimumManualSyncFeedbackMs = 500
 const serverInventoryError = new Error("Could not load servers")
 const serverTableGridClassName =
-  "grid-cols-[2.5rem_minmax(0,1fr)_8.5rem] sm:grid-cols-[6rem_minmax(0,1fr)_9.5rem] md:grid-cols-[6rem_minmax(0,1.2fr)_minmax(0,0.8fr)_9.5rem] xl:grid-cols-[6rem_minmax(0,1.2fr)_minmax(0,0.8fr)_minmax(12rem,1fr)_9.5rem]"
+  "grid-cols-[2.5rem_minmax(0,1fr)_8.5rem] sm:grid-cols-[6.5rem_minmax(0,1fr)_9.5rem] md:grid-cols-[6.5rem_minmax(0,1.2fr)_minmax(0,0.8fr)_9.5rem] xl:grid-cols-[6.5rem_minmax(0,1.2fr)_minmax(0,0.8fr)_minmax(12rem,1fr)_9.5rem]"
 const serverTableItemCache = new WeakMap<ServerListInstance, ServerTableItem>()
 const serverTableVirtualization = { estimateRowHeight: 56, overscan: 8 }
 
@@ -605,6 +605,7 @@ const ServerDataTable = React.memo(function ServerDataTable({
             meta: {
               cellClassName: "px-2 sm:px-3",
               headerClassName: "px-2 sm:px-3",
+              headerLabelClassName: "shrink-0 overflow-visible text-clip",
             },
           }
         ),
