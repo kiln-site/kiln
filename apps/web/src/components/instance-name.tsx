@@ -320,27 +320,16 @@ function instancePresentationEqual(
     return false
   }
   if (previous.kind === "relay" && next.kind === "relay") {
-    return (
-      previous.source === next.source &&
-      previous.connected === next.connected &&
-      previous.enabled === next.enabled &&
-      previous.lastError === next.lastError &&
-      previous.relayStatus === next.relayStatus
-    )
+    return previous.source === next.source
   }
   if (previous.kind === "database" && next.kind === "database") {
-    return (
-      previous.inventoryStatus === next.inventoryStatus &&
-      previous.observedState === next.observedState
-    )
+    return true
   }
   if (previous.kind !== "server" || next.kind !== "server") return false
   return (
     previous.icon?.id === next.icon?.id &&
     previous.icon?.color === next.icon?.color &&
-    previous.icon?.iconSvg === next.icon?.iconSvg &&
-    previous.observedState === next.observedState &&
-    previous.relayStatus === next.relayStatus
+    previous.icon?.iconSvg === next.icon?.iconSvg
   )
 }
 

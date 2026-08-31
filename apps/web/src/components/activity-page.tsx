@@ -1890,11 +1890,7 @@ function activityEntriesEqual(
     previousEntry.relay.name === nextEntry.relay.name &&
     previousEntry.relay.unavailable === nextEntry.relay.unavailable &&
     previousEntry.server?.id === nextEntry.server?.id &&
-    previousEntry.server?.name === nextEntry.server?.name &&
-    previousEntry.server?.brickId === nextEntry.server?.brickId &&
-    previousEntry.server?.brickSource === nextEntry.server?.brickSource &&
-    previousEntry.server?.implementation === nextEntry.server?.implementation &&
-    previousEntry.server?.observedState === nextEntry.server?.observedState
+    previousEntry.server?.name === nextEntry.server?.name
   )
 }
 
