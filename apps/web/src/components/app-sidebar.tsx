@@ -59,18 +59,13 @@ import {
   RouteCommandMenuProvider,
   RouteCommandMenuTrigger,
 } from "@/components/route-command-menu"
-import {
-  BrickIcon,
-  brickIconPresentation,
-  type BrickIconDefinition,
-} from "@/components/brick-icon"
+import { InstanceName } from "@/components/instance-name"
 import { authClient } from "@/lib/auth-client"
 import type { AuthenticatedUser } from "@/lib/auth-session"
 import { clearAppearanceCache } from "@/lib/appearance"
 import { minecraftHeadUrl } from "@/lib/minecraft-profile"
 import {
   accessCapabilitiesQueryOptions,
-  brickIconPresentationsQueryOptions,
   managedDatabaseDirectoryQueryOptions,
   minecraftProfileQueryOptions,
   relayConnectionQueryOptions,
@@ -115,7 +110,6 @@ interface AppSidebarViewProps {
 }
 
 const emptyInstances: Array<SidebarInstance> = []
-const emptyBrickIcons: Array<BrickIconDefinition> = []
 
 export const AppSidebar = React.memo(function AppSidebar({
   initialSelectedInstanceRouteId,
@@ -478,15 +472,6 @@ const ServerSelector = React.memo(function ServerSelector({
   const navigate = useNavigate()
   const queryClient = useQueryClient()
   const [open, setOpen] = React.useState(false)
-  const { data: bricks = emptyBrickIcons } = useQuery({
-    ...brickIconPresentationsQueryOptions(),
-    notifyOnChangeProps: ["data"],
-  })
-  const activeIcon = brickIconPresentation(bricks, {
-    brickId: instance?.brickId,
-    brickSource: instance?.brickSource,
-    implementation: instance?.implementation ?? "",
-  })
   const handleOpenChange = React.useCallback((nextOpen: boolean) => {
     setOpen(nextOpen)
   }, [])
@@ -530,49 +515,48 @@ const ServerSelector = React.memo(function ServerSelector({
           <SidebarMenuButton
             size="lg"
             tooltip="Switch server"
-            aria-label={
-              instance
-                ? `Switch server. ${instance.name}, ${instance.implementation} ${instance.version}, ${serverStatusLabel(instance.observedState)}`
-                : "Choose a server"
-            }
+            aria-label={instance ? undefined : "Choose a server"}
             className="mb-1.5 h-auto border border-sidebar-border/75 bg-background/35 px-2 py-2 group-data-[collapsible=icon]:h-[32px]! group-data-[collapsible=icon]:overflow-visible group-data-[collapsible=icon]:bg-black/10 hover:border-sidebar-border hover:bg-sidebar-accent group-data-[collapsible=icon]:hover:bg-black/15 data-[state=open]:border-sidebar-border data-[state=open]:bg-sidebar-accent dark:group-data-[collapsible=icon]:bg-black/25 dark:group-data-[collapsible=icon]:hover:bg-black/35"
           >
-            <span className="relative grid size-[32px] shrink-0 place-items-center rounded-md border border-sidebar-border/70 bg-background/25 group-data-[collapsible=icon]:absolute group-data-[collapsible=icon]:inset-0 group-data-[collapsible=icon]:m-auto group-data-[collapsible=icon]:size-[32px] group-data-[collapsible=icon]:rounded-none group-data-[collapsible=icon]:border-0 group-data-[collapsible=icon]:bg-transparent">
-              <BrickIcon
-                id={activeIcon.id}
-                color={activeIcon.color}
-                iconSvg={activeIcon.iconSvg}
-                className="size-[24px]! text-sidebar-foreground/85 group-data-[collapsible=icon]:size-[20px]!"
-                aria-hidden="true"
-              />
-              {instance ? (
-                <span
-                  className={`absolute -right-0.5 -bottom-0.5 size-1.5 rounded-full ring-2 ring-popover ${statusDotTone(instance.observedState)}`}
-                  aria-hidden="true"
+            {instance ? (
+              <>
+                <span className="sr-only">Switch server. </span>
+                <InstanceName
+                  className="min-w-0 flex-1 gap-2 group-data-[collapsible=icon]:gap-0"
+                  iconClassName="border-sidebar-border/70 bg-background/25 text-sidebar-foreground/85 group-data-[collapsible=icon]:absolute group-data-[collapsible=icon]:inset-0 group-data-[collapsible=icon]:m-auto group-data-[collapsible=icon]:rounded-none group-data-[collapsible=icon]:border-0 group-data-[collapsible=icon]:bg-transparent group-data-[collapsible=icon]:[&>span:first-child]:size-5! group-data-[collapsible=icon]:[&>svg:first-child]:size-5!"
+                  instance={{
+                    id: instance.id,
+                    kind: "server",
+                    observedState: instance.observedState,
+                    relayId: instance.relayId,
+                  }}
+                  meta={`${instance.implementation} ${instance.version}`}
+                  metaClassName="text-sidebar-muted-foreground"
+                  name={instance.name}
+                  nameClassName="type-control-sm text-sidebar-foreground"
+                  textClassName="group-data-[collapsible=icon]:sr-only"
                 />
-              ) : null}
-            </span>
-            <span className="flex min-w-0 flex-1 flex-col items-start group-data-[collapsible=icon]:hidden">
-              <span className="type-control-sm w-full truncate">
-                {instance?.name ?? "Choose a server"}
-              </span>
-              <span className="type-meta flex w-full items-center gap-1.5 truncate text-sidebar-muted-foreground">
-                {instance ? (
-                  <>
-                    <span className="truncate">
-                      {instance.implementation} {instance.version}
-                    </span>
-                    <span className="sr-only">
-                      Status: {serverStatusLabel(instance.observedState)}
-                    </span>
-                  </>
-                ) : instances.length === 0 ? (
-                  "No managed servers"
-                ) : (
-                  "Selection required"
-                )}
-              </span>
-            </span>
+              </>
+            ) : (
+              <>
+                <span className="relative grid size-8 shrink-0 place-items-center rounded-md border border-sidebar-border/70 bg-background/25 group-data-[collapsible=icon]:absolute group-data-[collapsible=icon]:inset-0 group-data-[collapsible=icon]:m-auto group-data-[collapsible=icon]:rounded-none group-data-[collapsible=icon]:border-0 group-data-[collapsible=icon]:bg-transparent">
+                  <ServerIcon
+                    className="size-4 text-sidebar-foreground/85"
+                    aria-hidden="true"
+                  />
+                </span>
+                <span className="flex min-w-0 flex-1 flex-col items-start group-data-[collapsible=icon]:hidden">
+                  <span className="type-control-sm w-full truncate">
+                    Choose a server
+                  </span>
+                  <span className="type-meta w-full truncate text-sidebar-muted-foreground">
+                    {instances.length === 0
+                      ? "No managed servers"
+                      : "Selection required"}
+                  </span>
+                </span>
+              </>
+            )}
             <ChevronsUpDown className="ml-auto size-3.5! text-sidebar-foreground/60 group-data-[collapsible=icon]:hidden" />
           </SidebarMenuButton>
         </PopoverTrigger>
@@ -586,7 +570,6 @@ const ServerSelector = React.memo(function ServerSelector({
           <ServerSelectorSearch
             activeInstanceId={instance?.id}
             activeRelayId={instance?.relayId}
-            bricks={bricks}
             instances={instances}
             onSelect={selectInstance}
           />
@@ -616,13 +599,11 @@ const ServerSelector = React.memo(function ServerSelector({
 const ServerSelectorSearch = React.memo(function ServerSelectorSearch({
   activeInstanceId,
   activeRelayId,
-  bricks,
   instances,
   onSelect,
 }: {
   activeInstanceId: string | undefined
   activeRelayId: string | undefined
-  bricks: Array<BrickIconDefinition>
   instances: Array<SidebarInstance>
   onSelect: (routeId: string) => void
 }) {
@@ -634,7 +615,6 @@ const ServerSelectorSearch = React.memo(function ServerSelectorSearch({
       <ServerSelectorResults
         activeInstanceId={activeInstanceId}
         activeRelayId={activeRelayId}
-        bricks={bricks}
         instances={instances}
         onSelect={onSelect}
         search={search}
@@ -676,7 +656,6 @@ const ServerSelectorSearchField = React.memo(
 interface ServerSelectorResultsProps {
   activeInstanceId: string | undefined
   activeRelayId: string | undefined
-  bricks: Array<BrickIconDefinition>
   instances: Array<SidebarInstance>
   onSelect: (routeId: string) => void
   search: string
@@ -685,7 +664,6 @@ interface ServerSelectorResultsProps {
 const ServerSelectorResults = React.memo(function ServerSelectorResults({
   activeInstanceId,
   activeRelayId,
-  bricks,
   instances,
   onSelect,
   search,
@@ -703,7 +681,6 @@ const ServerSelectorResults = React.memo(function ServerSelectorResults({
       key={query}
       activeInstanceId={activeInstanceId}
       activeRelayId={activeRelayId}
-      bricks={bricks}
       instances={filteredInstances}
       onSelect={onSelect}
     />
@@ -727,13 +704,11 @@ const VirtualizedServerSelectorResults = React.memo(
   function VirtualizedServerSelectorResults({
     activeInstanceId,
     activeRelayId,
-    bricks,
     instances,
     onSelect,
   }: {
     activeInstanceId: string | undefined
     activeRelayId: string | undefined
-    bricks: Array<BrickIconDefinition>
     instances: Array<SidebarInstance>
     onSelect: (routeId: string) => void
   }) {
@@ -783,7 +758,6 @@ const VirtualizedServerSelectorResults = React.memo(
                     item.id === activeInstanceId &&
                     item.relayId === activeRelayId
                   }
-                  bricks={bricks}
                   item={item}
                   onSelect={onSelect}
                 />
@@ -809,7 +783,6 @@ function serverSelectorResultsAreEqual(
   if (
     previous.activeInstanceId !== next.activeInstanceId ||
     previous.activeRelayId !== next.activeRelayId ||
-    previous.bricks !== next.bricks ||
     previous.instances !== next.instances ||
     previous.onSelect !== next.onSelect
   ) {
@@ -852,47 +825,34 @@ function matchesNormalizedServerSearch(
 
 const ServerSelectorItem = React.memo(function ServerSelectorItem({
   active,
-  bricks,
   item,
   onSelect,
 }: {
   active: boolean
-  bricks: Array<BrickIconDefinition>
   item: SidebarInstance
   onSelect: (routeId: string) => void
 }) {
-  const icon = brickIconPresentation(bricks, {
-    brickId: item.brickId,
-    brickSource: item.brickSource,
-    implementation: item.implementation,
-  })
   return (
     <button
       type="button"
-      aria-label={`${item.name}, ${item.implementation} ${item.version}, ${item.observedState}`}
       aria-pressed={active}
       className={`flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left transition-[color,background-color,box-shadow] duration-100 outline-none hover:bg-popover-accent hover:text-popover-accent-foreground focus-visible:bg-popover-accent focus-visible:text-popover-accent-foreground focus-visible:ring-2 focus-visible:ring-ring/35 ${active ? "bg-primary/8 shadow-[inset_0_0_0_1px_color-mix(in_oklab,var(--primary)_14%,transparent)]" : ""}`}
       onClick={() => onSelect(item.routeId)}
     >
-      <span className="relative grid size-[32px] shrink-0 place-items-center rounded-md bg-muted/55">
-        <BrickIcon
-          id={icon.id}
-          color={icon.color}
-          iconSvg={icon.iconSvg}
-          className="size-[24px] text-muted-foreground"
-          aria-hidden="true"
-        />
-        <span
-          className={`absolute -right-0.5 -bottom-0.5 size-1.5 rounded-full ring-2 ring-popover ${statusDotTone(item.observedState)}`}
-          aria-hidden="true"
-        />
-      </span>
-      <span className="min-w-0 flex-1">
-        <span className="type-control-sm block truncate">{item.name}</span>
-        <span className="type-meta block truncate font-mono text-muted-foreground">
-          {item.implementation} {item.version} · {item.shortId}
-        </span>
-      </span>
+      <InstanceName
+        className="min-w-0 flex-1 gap-2"
+        iconClassName="border-0 bg-muted/55"
+        instance={{
+          id: item.id,
+          kind: "server",
+          observedState: item.observedState,
+          relayId: item.relayId,
+        }}
+        meta={`${item.implementation} ${item.version} · ${item.shortId}`}
+        metaClassName="font-mono"
+        name={item.name}
+        nameClassName="type-control-sm"
+      />
       {active ? (
         <Check className="size-4 shrink-0 text-primary" aria-hidden="true" />
       ) : null}
@@ -1308,25 +1268,6 @@ function initials(name: string): string {
     .slice(0, 2)
     .map((part) => part[0].toUpperCase())
     .join("")
-}
-
-function statusDotTone(state: SidebarInstance["observedState"]): string {
-  if (state === "running") return "bg-emerald-400"
-  if (state === "failed") return "bg-destructive"
-  if (state === "starting" || state === "provisioning") {
-    return "bg-amber-400"
-  }
-  if (state === "stopping") return "bg-amber-400/70"
-  return "bg-muted-foreground/45"
-}
-
-function serverStatusLabel(state: SidebarInstance["observedState"]): string {
-  if (state === "running") return "Running"
-  if (state === "failed") return "Failed"
-  if (state === "starting") return "Starting"
-  if (state === "provisioning") return "Provisioning"
-  if (state === "stopping") return "Stopping"
-  return "Stopped"
 }
 
 function globalSectionFromPathname(pathname: string): GlobalSection {

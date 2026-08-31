@@ -32,6 +32,7 @@ interface InstanceNameProps {
   name: string
   nameAccessory?: React.ReactNode
   nameClassName?: string
+  textClassName?: string
 }
 
 export function InstanceName(props: InstanceNameProps) {
@@ -201,6 +202,7 @@ const InstanceNameView = React.memo(function InstanceNameView({
   nameAccessory,
   nameClassName,
   status,
+  textClassName,
 }: InstanceNameProps & {
   brickId?: string
   brickSource?: string
@@ -232,6 +234,7 @@ const InstanceNameView = React.memo(function InstanceNameView({
         name={liveName ?? name}
         nameAccessory={nameAccessory}
         nameClassName={nameClassName}
+        textClassName={textClassName}
       />
     </span>
   )
@@ -243,12 +246,18 @@ const InstanceText = React.memo(function InstanceText({
   name,
   nameAccessory,
   nameClassName,
+  textClassName,
 }: Pick<
   InstanceNameProps,
-  "meta" | "metaClassName" | "name" | "nameAccessory" | "nameClassName"
+  | "meta"
+  | "metaClassName"
+  | "name"
+  | "nameAccessory"
+  | "nameClassName"
+  | "textClassName"
 >) {
   return (
-    <span className="min-w-0 flex-1">
+    <span className={cn("min-w-0 flex-1", textClassName)}>
       <span
         className={cn(
           "flex min-w-0 items-center gap-1.5 text-xs font-semibold text-foreground",
@@ -367,6 +376,7 @@ function instanceNamePropsEqual(
     previous.name === next.name &&
     previous.nameAccessory === next.nameAccessory &&
     previous.nameClassName === next.nameClassName &&
+    previous.textClassName === next.textClassName &&
     instancePresentationEqual(previous.instance, next.instance)
   )
 }
