@@ -26,7 +26,6 @@ import { getDomainSettings, getInstanceDomain } from "@/server/domains"
 import {
   getManagedDatabaseCredential,
   getManagedDatabaseDirectory,
-  getManagedDatabases,
 } from "@/server/databases"
 import { isMinecraftUsername } from "@/lib/minecraft-profile"
 import { getUiPreferences } from "@/server/preferences"
@@ -341,15 +340,6 @@ export function connectionWithCanonicalSnapshot(
   const snapshot = snapshotWithCanonicalState(queryClient, connection.snapshot)
   queryClient.setQueryData(queryKeys.relay.snapshot, snapshot)
   return { ...connection, snapshot }
-}
-
-export function managedDatabasesQueryOptions() {
-  return queryOptions({
-    queryKey: queryKeys.databases.list,
-    queryFn: () => getManagedDatabases(),
-    refetchOnWindowFocus: "always",
-    staleTime: 5_000,
-  })
 }
 
 export function managedDatabaseDirectoryQueryOptions() {

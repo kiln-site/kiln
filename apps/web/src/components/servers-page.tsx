@@ -5,7 +5,6 @@ import { useQueryClient, useSuspenseQuery } from "@tanstack/react-query"
 import { Link } from "@tanstack/react-router"
 import { ensuringPromise, forkPromise } from "@/effect/promise"
 import {
-  Copy,
   EllipsisVertical,
   Folder,
   ListTodo,
@@ -20,10 +19,8 @@ import { Button } from "@workspace/ui/components/button"
 import {
   DropdownMenu,
   DropdownMenuContent,
-  DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@workspace/ui/components/dropdown-menu"
-import { showToast } from "@workspace/ui/components/sonner"
 import {
   Tooltip,
   TooltipContent,
@@ -36,6 +33,7 @@ import {
   createAddServerDialogStore,
 } from "@/components/add-server-dialog"
 import type { AddServerDialogStore } from "@/components/add-server-dialog"
+import { CopyIdentifierMenuItem } from "@/components/copy-identifier-menu-item"
 import { DataTableEmptyState, DataTableTextCell } from "@/components/data-table"
 import {
   ServerDeleteDialog,
@@ -630,8 +628,8 @@ const ServerActions = React.memo(function ServerActions({
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end" className="min-w-44">
-          <CopyServerIdentifierMenuItem label="server ID" value={server.id} />
-          <CopyServerIdentifierMenuItem
+          <CopyIdentifierMenuItem label="Server ID" value={server.id} />
+          <CopyIdentifierMenuItem
             label="Relay ID"
             value={server.relayId}
           />
@@ -640,39 +638,6 @@ const ServerActions = React.memo(function ServerActions({
     </div>
   )
 })
-
-const CopyServerIdentifierMenuItem = React.memo(
-  function CopyServerIdentifierMenuItem({
-    label,
-    value,
-  }: {
-    label: "server ID" | "Relay ID"
-    value: string
-  }) {
-    const copyIdentifier = React.useCallback(() => {
-      forkPromise(
-        async () => {
-          await navigator.clipboard.writeText(value)
-          showToast({
-            message: `${label === "server ID" ? "Server ID" : label} copied`,
-            type: "success",
-          })
-        },
-        () =>
-          showToast({
-            message: `Could not copy ${label}`,
-            type: "error",
-          })
-      )
-    }, [label, value])
-
-    return (
-      <DropdownMenuItem onSelect={copyIdentifier}>
-        <Copy /> Copy {label}
-      </DropdownMenuItem>
-    )
-  }
-)
 
 const ServerActionLink = React.memo(function ServerActionLink({
   icon: Icon,

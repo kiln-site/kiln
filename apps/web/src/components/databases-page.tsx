@@ -1,10 +1,13 @@
 import * as React from "react"
+import { useDbClient, useLiveQuery } from "@tanstack/react-db"
 import {
+  hashKey,
   useMutation,
   useQuery,
   useQueryClient,
   useSuspenseQuery,
 } from "@tanstack/react-query"
+import type { QueryClient } from "@tanstack/react-query"
 import type { DatabaseEngine } from "@workspace/contracts"
 import {
   CircleAlert,
@@ -62,6 +65,7 @@ import {
 } from "@workspace/ui/components/tooltip"
 
 import { DataTableEmptyState, DataTableTextCell } from "@/components/data-table"
+import { CopyIdentifierMenuItem } from "@/components/copy-identifier-menu-item"
 import { DataTableView } from "@/components/data-table-view"
 import {
   DataTableToolbar,
@@ -69,6 +73,7 @@ import {
 } from "@/components/data-table-workspace"
 import { InstanceName } from "@/components/instance-name"
 import { instanceStatusPresentation } from "@/components/instance-name-presentation"
+import { getManagedDatabasesCollection } from "@/lib/collections/managed-databases"
 import {
   ServerPickerList,
   serverPickerOptionKey,
@@ -82,14 +87,14 @@ import {
 } from "@/lib/data-table"
 import type { DataTableSearchStore } from "@/lib/data-table-search"
 import { useLiveDataTableSource } from "@/lib/data-table-source"
+import type { DataTableSource } from "@/lib/data-table-source"
 import {
   accessCapabilitiesQueryOptions,
   managedDatabaseCredentialQueryOptions,
-  managedDatabasesQueryOptions,
   queryKeys,
   relaySnapshotQueryOptions,
 } from "@/lib/query-options"
-import { forkPromise } from "@/effect/promise"
+import { ensuringPromise, forkPromise } from "@/effect/promise"
 import {
   createManagedDatabase,
   deleteManagedDatabase,
@@ -135,6 +140,8 @@ const engineBadgeClasses: Record<DatabaseEngine, string> = {
 
 const dumpLimitBytes = 700_000
 const databaseInventoryError = new Error("Could not load databases")
+const databaseOverviewQueryHash = hashKey(queryKeys.databases.list)
+const minimumManualSyncFeedbackMs = 500
 const databaseTableVirtualization = { estimateRowHeight: 56, overscan: 8 }
 const databaseTableColumnHelper = createDataTableColumnHelper<ManagedDatabase>()
 const databaseTableSearchFields = [
@@ -153,10 +160,21 @@ export const DatabasesPage = React.memo(function DatabasesPage({
 }: {
   searchStore: DataTableSearchStore
 }) {
-  const { data } = useSuspenseQuery({
-    ...managedDatabasesQueryOptions(),
-    select: selectDatabasePageMeta,
+  const dbClient = useDbClient()
+  const queryClient = useQueryClient()
+  const collection = getManagedDatabasesCollection(dbClient)
+  const result = useLiveQuery(collection)
+  const retry = React.useCallback(() => {
+    forkPromise(() => collection.utils.refetch({ throwOnError: true }))
+  }, [collection])
+  const source = useLiveDataTableSource<ManagedDatabase>({
+    data: result.data,
+    error: databaseInventoryError,
+    isError: result.isError,
+    isLoading: result.isLoading,
+    retry,
   })
+  const data = useManagedDatabaseOverview(queryClient)
   const [createOpen, setCreateOpen] = React.useState(false)
   const [dialog, setDialog] = React.useState<DatabaseDialog>(null)
   const openCreate = React.useCallback(() => setCreateOpen(true), [])
@@ -195,6 +213,7 @@ export const DatabasesPage = React.memo(function DatabasesPage({
         <DatabaseTable
           canCreate={canCreate}
           searchStore={searchStore}
+          source={source}
           onCreate={openCreate}
           onDialog={openDialog}
         />
@@ -245,8 +264,30 @@ function selectDatabasePageMeta(data: ManagedDatabaseOverview) {
   return { relayErrors: data.relayErrors, relays: data.relays }
 }
 
-function selectManagedDatabaseRows(data: ManagedDatabaseOverview) {
-  return data.databases
+function useManagedDatabaseOverview(
+  queryClient: QueryClient
+): ReturnType<typeof selectDatabasePageMeta> {
+  const subscribe = React.useCallback(
+    (listener: () => void) =>
+      queryClient.getQueryCache().subscribe((event) => {
+        if (event.query.queryHash === databaseOverviewQueryHash) listener()
+      }),
+    [queryClient]
+  )
+  const getSnapshot = React.useCallback(
+    () =>
+      queryClient.getQueryData<ManagedDatabaseOverview>(
+        queryKeys.databases.list
+      ),
+    [queryClient]
+  )
+  const overview = React.useSyncExternalStore(
+    subscribe,
+    getSnapshot,
+    getSnapshot
+  )
+  if (!overview) throw databaseInventoryError
+  return selectDatabasePageMeta(overview)
 }
 
 const DatabaseToolbar = React.memo(function DatabaseToolbar({
@@ -272,6 +313,7 @@ const DatabaseToolbar = React.memo(function DatabaseToolbar({
         ariaLabel: "Search databases",
         closeMobileWhenEmpty: true,
         id: "database-search",
+        onValueChange: replaceDatabaseSearch,
         placeholder: "Search databases",
         store: searchStore,
       }}
@@ -284,11 +326,47 @@ const DatabaseSyncButton = React.memo(function DatabaseSyncButton({
 }: {
   relayErrors: ManagedDatabaseOverview["relayErrors"]
 }) {
-  const { fetchStatus, refetch } = useQuery({
-    ...managedDatabasesQueryOptions(),
-    notifyOnChangeProps: ["fetchStatus"],
-  })
-  const syncing = fetchStatus === "fetching"
+  const dbClient = useDbClient()
+  const [syncing, setSyncing] = React.useState(false)
+  const syncingRef = React.useRef(false)
+  const feedbackTimeoutRef = React.useRef<number>(undefined)
+  const mountedRef = React.useRef(true)
+
+  React.useEffect(() => {
+    mountedRef.current = true
+    return () => {
+      mountedRef.current = false
+      if (feedbackTimeoutRef.current !== undefined) {
+        window.clearTimeout(feedbackTimeoutRef.current)
+      }
+    }
+  }, [])
+
+  const syncDatabases = React.useCallback(() => {
+    if (syncingRef.current) return
+    syncingRef.current = true
+    setSyncing(true)
+    const startedAt = performance.now()
+
+    forkPromise(() =>
+      ensuringPromise(
+        () =>
+          getManagedDatabasesCollection(dbClient).utils.refetch({
+            throwOnError: true,
+          }),
+        () => {
+          if (!mountedRef.current) return
+          const elapsed = performance.now() - startedAt
+          const remaining = Math.max(0, minimumManualSyncFeedbackMs - elapsed)
+          feedbackTimeoutRef.current = window.setTimeout(() => {
+            syncingRef.current = false
+            setSyncing(false)
+            feedbackTimeoutRef.current = undefined
+          }, remaining)
+        }
+      )
+    )
+  }, [dbClient])
 
   return (
     <Tooltip>
@@ -300,7 +378,7 @@ const DatabaseSyncButton = React.memo(function DatabaseSyncButton({
           size="icon"
           type="button"
           variant="outline"
-          onClick={() => void refetch()}
+          onClick={syncDatabases}
         >
           <RefreshCw className={syncing ? "animate-spin" : ""} />
         </Button>
@@ -319,34 +397,14 @@ const DatabaseTable = React.memo(function DatabaseTable({
   onCreate,
   onDialog,
   searchStore,
+  source,
 }: {
   canCreate: boolean
   onCreate: () => void
   onDialog: (dialog: DatabaseDialog) => void
   searchStore: DataTableSearchStore
+  source: DataTableSource<ManagedDatabase>
 }) {
-  const query = useQuery({
-    ...managedDatabasesQueryOptions(),
-    notifyOnChangeProps: [
-      "data",
-      "error",
-      "isError",
-      "isFetching",
-      "isLoading",
-    ],
-    select: selectManagedDatabaseRows,
-  })
-  const retry = React.useCallback(() => {
-    void query.refetch()
-  }, [query.refetch])
-  const source = useLiveDataTableSource<ManagedDatabase>({
-    data: query.data,
-    error: query.error ?? databaseInventoryError,
-    isError: query.isError,
-    isLoading: query.isLoading,
-    refreshing: query.isFetching && Boolean(query.data),
-    retry,
-  })
   const [initialTableState] = React.useState(() => ({
     sorting: [{ desc: false, id: "database" }],
   }))
@@ -613,11 +671,11 @@ const DatabaseActions = React.memo(function DatabaseActions({
             </DropdownMenuItem>
           ) : null}
           {hasOperationalActions ? <DropdownMenuSeparator /> : null}
-          <CopyDatabaseIdentifierMenuItem
+          <CopyIdentifierMenuItem
             label="Database ID"
             value={database.id}
           />
-          <CopyDatabaseIdentifierMenuItem
+          <CopyIdentifierMenuItem
             label="Relay ID"
             value={database.relayId}
           />
@@ -626,36 +684,6 @@ const DatabaseActions = React.memo(function DatabaseActions({
     </div>
   )
 })
-
-const CopyDatabaseIdentifierMenuItem = React.memo(
-  function CopyDatabaseIdentifierMenuItem({
-    label,
-    value,
-  }: {
-    label: "Database ID" | "Relay ID"
-    value: string
-  }) {
-    const copyIdentifier = React.useCallback(() => {
-      forkPromise(
-        async () => {
-          await navigator.clipboard.writeText(value)
-          showToast({ message: `${label} copied`, type: "success" })
-        },
-        () =>
-          showToast({
-            message: `Could not copy ${label.toLowerCase()}`,
-            type: "error",
-          })
-      )
-    }, [label, value])
-
-    return (
-      <DropdownMenuItem onSelect={copyIdentifier}>
-        <Copy /> Copy {label}
-      </DropdownMenuItem>
-    )
-  }
-)
 
 function ActionIconButton({
   disabled = false,
@@ -1365,6 +1393,23 @@ function databaseRowKey(database: ManagedDatabase): string {
 
 function databaseTableRowClassName() {
   return "group hover:bg-muted/20"
+}
+
+function replaceDatabaseSearch(search: string) {
+  const url = new URL(window.location.href)
+  if (search.length > 0) url.searchParams.set("search", search)
+  else url.searchParams.delete("search")
+
+  // TanStack patches the history instance methods so router consumers update
+  // after navigation. Search typing is intentionally local to this workspace;
+  // use the browser prototype method to update the current entry without
+  // repainting the router's SafeFragment and CatchBoundary tree.
+  History.prototype.replaceState.call(
+    window.history,
+    window.history.state,
+    "",
+    `${url.pathname}${url.search}${url.hash}`
+  )
 }
 
 function engineLabel(engine: DatabaseEngine): string {
