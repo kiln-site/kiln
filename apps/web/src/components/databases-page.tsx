@@ -1,5 +1,4 @@
 import * as React from "react"
-import { useLiveSuspenseQuery } from "@tanstack/react-db"
 import {
   useMutation,
   useQuery,
@@ -20,14 +19,11 @@ import {
   Plus,
   RefreshCw,
   RotateCw,
-  Search,
   Square,
   Trash2,
   Upload,
-  X,
 } from "lucide-react"
 
-import { Badge } from "@workspace/ui/components/badge"
 import { Button } from "@workspace/ui/components/button"
 import {
   Dialog,
@@ -64,18 +60,14 @@ import {
   TooltipTrigger,
 } from "@workspace/ui/components/tooltip"
 
+import { DataTableEmptyState, DataTableTextCell } from "@/components/data-table"
+import { DataTableView } from "@/components/data-table-view"
 import {
-  WorkspaceDataTable,
-  WorkspaceTableCell,
-  WorkspaceTableHead,
-  WorkspaceTableHeading,
-  createWorkspaceTableSearchStore,
-  useWorkspaceTableSearchInput,
-} from "@/components/workspace-data-table"
-import type { WorkspaceTableSearchStore } from "@/components/workspace-data-table"
+  DataTableToolbar,
+  DataTableWorkspace,
+} from "@/components/data-table-workspace"
 import { InstanceName } from "@/components/instance-name"
 import { instanceStatusPresentation } from "@/components/instance-name-presentation"
-import { managedDatabasesCollectionOptions } from "@/lib/collections/managed-databases"
 import {
   ServerPickerList,
   serverPickerOptionKey,
@@ -83,12 +75,20 @@ import {
 import { roleHasPermission } from "@/lib/permissions"
 import type { AccessPermission } from "@/lib/permissions"
 import {
+  createDataTableColumnHelper,
+  dataTableColumnMeta,
+  defineDataTable,
+} from "@/lib/data-table"
+import type { DataTableSearchStore } from "@/lib/data-table-search"
+import { useLiveDataTableSource } from "@/lib/data-table-source"
+import {
   accessCapabilitiesQueryOptions,
   managedDatabaseCredentialQueryOptions,
   managedDatabasesQueryOptions,
   queryKeys,
   relaySnapshotQueryOptions,
 } from "@/lib/query-options"
+import { forkPromise } from "@/effect/promise"
 import {
   createManagedDatabase,
   deleteManagedDatabase,
@@ -121,32 +121,25 @@ const engineOptions: ReadonlyArray<{
   { value: "valkey", label: "Valkey", description: "8" },
 ]
 
-const engineBadgeClasses: Record<DatabaseEngine, string> = {
-  mariadb:
-    "border-amber-500/35 bg-amber-500/10 text-amber-700 dark:text-amber-300",
-  mysql: "border-sky-500/35 bg-sky-500/10 text-sky-700 dark:text-sky-300",
-  postgres:
-    "border-emerald-500/35 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300",
-  redis: "border-red-500/35 bg-red-500/10 text-red-700 dark:text-red-300",
-  valkey:
-    "border-violet-500/35 bg-violet-500/10 text-violet-700 dark:text-violet-300",
-}
-
-const emptyDatabases: Array<ManagedDatabase> = []
 const dumpLimitBytes = 700_000
-
-export type DatabaseSearchStore = WorkspaceTableSearchStore
-
-export function createDatabaseSearchStore(
-  initialValue: string
-): DatabaseSearchStore {
-  return createWorkspaceTableSearchStore(initialValue)
-}
+const databaseInventoryError = new Error("Could not load databases")
+const databaseTableVirtualization = { estimateRowHeight: 56, overscan: 8 }
+const databaseTableColumnHelper = createDataTableColumnHelper<ManagedDatabase>()
+const databaseTableSearchFields = [
+  (database: ManagedDatabase) => database.name,
+  (database: ManagedDatabase) => database.id,
+  (database: ManagedDatabase) => database.shortId,
+  (database: ManagedDatabase) => database.engine,
+  (database: ManagedDatabase) => database.databaseName,
+  (database: ManagedDatabase) => database.hostname,
+  (database: ManagedDatabase) => database.relayId,
+  (database: ManagedDatabase) => database.relayName,
+] as const
 
 export const DatabasesPage = React.memo(function DatabasesPage({
   searchStore,
 }: {
-  searchStore: DatabaseSearchStore
+  searchStore: DataTableSearchStore
 }) {
   const { data } = useSuspenseQuery({
     ...managedDatabasesQueryOptions(),
@@ -154,6 +147,7 @@ export const DatabasesPage = React.memo(function DatabasesPage({
   })
   const [createOpen, setCreateOpen] = React.useState(false)
   const [dialog, setDialog] = React.useState<DatabaseDialog>(null)
+  const openCreate = React.useCallback(() => setCreateOpen(true), [])
   const openDialog = React.useCallback((next: DatabaseDialog) => {
     setDialog(next)
   }, [])
@@ -175,24 +169,24 @@ export const DatabasesPage = React.memo(function DatabasesPage({
   }, [relayErrorKey, relayErrorNames])
 
   return (
-    <div className="mx-auto w-full max-w-[90rem] px-3 pb-10 sm:px-5">
-      <section
-        data-slot="databases-workspace"
-        className="overflow-hidden rounded-xl border bg-card/45 [contain:paint]"
+    <div className="mx-auto flex h-full min-h-[34rem] w-full max-w-[90rem] flex-col px-3 pb-3 sm:px-5 sm:pb-5">
+      <DataTableWorkspace
+        toolbar={
+          <DatabaseToolbar
+            canCreate={canCreate}
+            relayErrors={data.relayErrors}
+            searchStore={searchStore}
+            onCreate={openCreate}
+          />
+        }
       >
-        <DatabaseToolbar
-          canCreate={canCreate}
-          relayErrors={data.relayErrors}
-          searchStore={searchStore}
-          onCreate={() => setCreateOpen(true)}
-        />
         <DatabaseTable
           canCreate={canCreate}
           searchStore={searchStore}
-          onCreate={() => setCreateOpen(true)}
+          onCreate={openCreate}
           onDialog={openDialog}
         />
-      </section>
+      </DataTableWorkspace>
 
       {createOpen ? (
         <CreateDatabaseDialog
@@ -239,6 +233,10 @@ function selectDatabasePageMeta(data: ManagedDatabaseOverview) {
   return { relayErrors: data.relayErrors, relays: data.relays }
 }
 
+function selectManagedDatabaseRows(data: ManagedDatabaseOverview) {
+  return data.databases
+}
+
 const DatabaseToolbar = React.memo(function DatabaseToolbar({
   canCreate,
   onCreate,
@@ -248,95 +246,59 @@ const DatabaseToolbar = React.memo(function DatabaseToolbar({
   canCreate: boolean
   onCreate: () => void
   relayErrors: ManagedDatabaseOverview["relayErrors"]
-  searchStore: DatabaseSearchStore
+  searchStore: DataTableSearchStore
 }) {
-  const inputRef = React.useRef<HTMLInputElement>(null)
-  const [mobileSearchOpen, setMobileSearchOpen] = React.useState(
-    () => searchStore.getSnapshot().length > 0
+  return (
+    <DataTableToolbar
+      actions={
+        <Button disabled={!canCreate} type="button" onClick={onCreate}>
+          <Plus /> Add Database
+        </Button>
+      }
+      leading={<DatabaseSyncButton relayErrors={relayErrors} />}
+      search={{
+        ariaLabel: "Search databases",
+        closeMobileWhenEmpty: true,
+        id: "database-search",
+        placeholder: "Search databases",
+        store: searchStore,
+      }}
+    />
   )
+})
+
+const DatabaseSyncButton = React.memo(function DatabaseSyncButton({
+  relayErrors,
+}: {
+  relayErrors: ManagedDatabaseOverview["relayErrors"]
+}) {
   const { fetchStatus, refetch } = useQuery({
     ...managedDatabasesQueryOptions(),
     notifyOnChangeProps: ["fetchStatus"],
   })
   const syncing = fetchStatus === "fetching"
-  useWorkspaceTableSearchInput(inputRef, searchStore)
-
-  React.useEffect(() => {
-    if (mobileSearchOpen) inputRef.current?.focus()
-  }, [mobileSearchOpen])
 
   return (
-    <div className="flex min-w-0 items-center gap-2 border-b bg-background/25 p-3">
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <Button
-            aria-label="Sync databases"
-            aria-busy={syncing}
-            disabled={syncing}
-            size="icon"
-            type="button"
-            variant="outline"
-            onClick={() => void refetch()}
-          >
-            <RefreshCw className={syncing ? "animate-spin" : ""} />
-          </Button>
-        </TooltipTrigger>
-        <TooltipContent side="bottom">
-          {relayErrors.length > 0
-            ? `Inventory unavailable from ${relayErrors.map((error) => error.relayName).join(", ")}. Sync again.`
-            : "Sync databases"}
-        </TooltipContent>
-      </Tooltip>
-
-      {!mobileSearchOpen ? (
+    <Tooltip>
+      <TooltipTrigger asChild>
         <Button
-          aria-label="Search databases"
-          className="sm:hidden"
+          aria-label="Sync databases"
+          aria-busy={syncing}
+          disabled={syncing}
           size="icon"
           type="button"
           variant="outline"
-          onClick={() => setMobileSearchOpen(true)}
+          onClick={() => void refetch()}
         >
-          <Search />
+          <RefreshCw className={syncing ? "animate-spin" : ""} />
         </Button>
-      ) : null}
-      <div
-        className={`${mobileSearchOpen ? "block" : "hidden"} relative min-w-0 flex-1 sm:block sm:max-w-md`}
-      >
-        <Search className="pointer-events-none absolute top-1/2 left-3 size-3.5 -translate-y-1/2 text-muted-foreground" />
-        <Input
-          ref={inputRef}
-          aria-label="Search databases"
-          className="pl-9 text-base md:text-sm"
-          defaultValue={searchStore.getServerSnapshot()}
-          placeholder="Search databases"
-          type="search"
-          onChange={(event) => searchStore.set(event.currentTarget.value)}
-        />
-      </div>
-      {mobileSearchOpen ? (
-        <Button
-          aria-label="Close database search"
-          className="sm:hidden"
-          size="icon"
-          type="button"
-          variant="ghost"
-          onClick={() => {
-            searchStore.set("")
-            setMobileSearchOpen(false)
-          }}
-        >
-          <X />
-        </Button>
-      ) : null}
-      <div
-        className={`${mobileSearchOpen ? "hidden sm:flex" : "flex"} ml-auto shrink-0`}
-      >
-        <Button disabled={!canCreate} type="button" onClick={onCreate}>
-          <Plus /> Add Database
-        </Button>
-      </div>
-    </div>
+      </TooltipTrigger>
+      <TooltipContent side="bottom">
+        {relayErrors.length > 0
+          ? `Inventory unavailable from ${relayErrors.map((error) => error.relayName).join(", ")}. Sync again.`
+          : "Sync databases"}
+      </TooltipContent>
+    </Tooltip>
   )
 })
 
@@ -349,141 +311,140 @@ const DatabaseTable = React.memo(function DatabaseTable({
   canCreate: boolean
   onCreate: () => void
   onDialog: (dialog: DatabaseDialog) => void
-  searchStore: DatabaseSearchStore
+  searchStore: DataTableSearchStore
 }) {
-  const { data: databases } = useLiveSuspenseQuery({
-    query: (query) =>
-      query
-        .from({ database: managedDatabasesCollectionOptions })
-        .orderBy(({ database }) => database.name),
+  const query = useQuery({
+    ...managedDatabasesQueryOptions(),
+    notifyOnChangeProps: [
+      "data",
+      "error",
+      "isError",
+      "isFetching",
+      "isLoading",
+    ],
+    select: selectManagedDatabaseRows,
   })
-  const renderRow = React.useCallback(
-    (database: ManagedDatabase) => (
-      <DatabaseTableRow database={database} onDialog={onDialog} />
-    ),
-    [onDialog]
-  )
-  const renderEmpty = React.useCallback(
-    (searchActive: boolean) => (
-      <EmptyDatabaseTable
-        canCreate={canCreate}
-        searchActive={searchActive}
-        onCreate={onCreate}
-      />
-    ),
-    [canCreate, onCreate]
-  )
+  const retry = React.useCallback(() => {
+    void query.refetch()
+  }, [query.refetch])
+  const source = useLiveDataTableSource<ManagedDatabase>({
+    data: query.data,
+    error: query.error ?? databaseInventoryError,
+    isError: query.isError,
+    isLoading: query.isLoading,
+    refreshing: query.isFetching && Boolean(query.data),
+    retry,
+  })
+  const [initialTableState] = React.useState(() => ({
+    sorting: [{ desc: false, id: "database" }],
+  }))
+  const definition = React.useMemo(() => {
+    const columns = databaseTableColumnHelper.columns([
+      databaseTableColumnHelper.accessor(
+        (database) =>
+          databaseStatusPresentation(
+            database.inventoryStatus,
+            database.observedState
+          ).label,
+        {
+          id: "status",
+          header: () => <span className="sr-only sm:not-sr-only">Status</span>,
+          sortFn: "text",
+          cell: ({ row }) => (
+            <DatabaseStatus
+              status={databaseStatusPresentation(
+                row.original.inventoryStatus,
+                row.original.observedState
+              )}
+            />
+          ),
+          meta: dataTableColumnMeta(
+            { width: { base: "2.5rem", sm: "6.5rem" } },
+            {
+              cellClassName: "px-2 sm:px-3",
+              headerClassName: "px-2 sm:px-3",
+              headerLabelClassName: "shrink-0 overflow-visible text-clip",
+            }
+          ),
+        }
+      ),
+      databaseTableColumnHelper.accessor((database) => database.name, {
+        id: "database",
+        header: "Database",
+        sortFn: "text",
+        cell: ({ row }) => {
+          const database = row.original
+          return (
+            <InstanceName
+              instance={{
+                id: database.id,
+                inventoryStatus: database.inventoryStatus,
+                kind: "database",
+                observedState: database.observedState,
+                relayId: database.relayId,
+              }}
+              name={database.name}
+              meta={`${engineLabel(database.engine)} · ${database.shortId}`}
+              metaClassName="font-mono"
+            />
+          )
+        },
+        meta: dataTableColumnMeta({
+          width: { base: "minmax(0,1fr)", md: "minmax(0,1.5fr)" },
+        }),
+      }),
+      databaseTableColumnHelper.accessor((database) => database.relayName, {
+        id: "relay",
+        header: "Relay",
+        sortFn: "text",
+        cell: ({ row }) => <DataTableTextCell value={row.original.relayName} />,
+        meta: dataTableColumnMeta({
+          hideBelow: "md",
+          width: "minmax(8rem,0.8fr)",
+        }),
+      }),
+      databaseTableColumnHelper.display({
+        id: "actions",
+        header: () => <span className="sr-only">Actions</span>,
+        enableSorting: false,
+        cell: ({ row }) => (
+          <DatabaseActions database={row.original} onDialog={onDialog} />
+        ),
+        meta: dataTableColumnMeta(
+          { width: { base: "8.5rem", sm: "9.5rem" } },
+          {
+            cellClassName: "px-1 sm:px-3",
+            headerClassName: "px-1 sm:px-3",
+          }
+        ),
+      }),
+    ])
+    return defineDataTable({
+      ariaLabel: "Databases",
+      columns,
+      getRowClassName: databaseTableRowClassName,
+      model: {
+        getRowId: databaseRowKey,
+        initialState: initialTableState,
+      },
+      search: { fields: databaseTableSearchFields },
+      virtualization: databaseTableVirtualization,
+    })
+  }, [initialTableState, onDialog])
 
   return (
-    <WorkspaceDataTable
-      getRowKey={databaseRowKey}
-      getSearchText={databaseSearchText}
-      head={<DatabaseTableHead />}
-      items={databases.length > 0 ? databases : emptyDatabases}
-      renderEmpty={renderEmpty}
-      renderRow={renderRow}
-      searchStore={searchStore}
-    />
-  )
-})
-
-const DatabaseTableHead = React.memo(function DatabaseTableHead() {
-  return (
-    <WorkspaceTableHead>
-      <WorkspaceTableHeading className="w-10 px-2 sm:w-24 sm:px-3">
-        <span className="sr-only sm:not-sr-only">Status</span>
-      </WorkspaceTableHeading>
-      <WorkspaceTableHeading className="w-auto sm:w-[26%]">
-        Database
-      </WorkspaceTableHeading>
-      <WorkspaceTableHeading className="hidden w-[14%] md:table-cell">
-        Engine
-      </WorkspaceTableHeading>
-      <WorkspaceTableHeading className="hidden w-[18%] lg:table-cell">
-        Relay
-      </WorkspaceTableHeading>
-      <WorkspaceTableHeading className="hidden w-[25%] xl:table-cell">
-        Internal host
-      </WorkspaceTableHeading>
-      <WorkspaceTableHeading className="w-32 px-1 text-right sm:w-40 sm:px-3">
-        Actions
-      </WorkspaceTableHeading>
-    </WorkspaceTableHead>
-  )
-})
-
-const DatabaseTableRow = React.memo(function DatabaseTableRow({
-  database,
-  onDialog,
-}: {
-  database: ManagedDatabase
-  onDialog: (dialog: DatabaseDialog) => void
-}) {
-  const status = databaseStatusPresentation(
-    database.inventoryStatus,
-    database.observedState
-  )
-  return (
-    <tr className="group transition-colors hover:bg-accent/25">
-      <WorkspaceTableCell className="px-2 sm:px-3">
-        <DatabaseStatus status={status} />
-      </WorkspaceTableCell>
-      <WorkspaceTableCell>
-        <InstanceName
-          instance={{
-            id: database.id,
-            inventoryStatus: database.inventoryStatus,
-            kind: "database",
-            observedState: database.observedState,
-            relayId: database.relayId,
-          }}
-          name={database.name}
-          meta={`${database.shortId} · ${database.databaseName}`}
-          metaClassName="font-mono"
+    <DataTableView
+      definition={definition}
+      emptyState={({ searchActive }) => (
+        <EmptyDatabaseTable
+          canCreate={canCreate}
+          searchActive={searchActive}
+          onCreate={onCreate}
         />
-      </WorkspaceTableCell>
-      <WorkspaceTableCell className="hidden md:table-cell">
-        <Badge
-          variant="outline"
-          className={`type-meta font-mono uppercase ${engineBadgeClasses[database.engine]}`}
-        >
-          {engineLabel(database.engine)}
-        </Badge>
-      </WorkspaceTableCell>
-      <WorkspaceTableCell className="hidden lg:table-cell">
-        <p className="type-meta truncate text-foreground">
-          {database.relayName}
-        </p>
-        <p className="type-meta font-mono text-muted-foreground">
-          {database.inventoryStatus === "available"
-            ? `${database.connectedInstanceIds.length} connected`
-            : database.inventoryStatus === "missing"
-              ? "container missing"
-              : "inventory unavailable"}
-        </p>
-      </WorkspaceTableCell>
-      <WorkspaceTableCell className="hidden xl:table-cell">
-        {database.inventoryStatus === "available" ? (
-          <>
-            <p className="type-meta truncate font-mono text-foreground">
-              {database.hostname}:{database.internalPort}
-            </p>
-            <p className="type-meta text-muted-foreground">
-              private network only
-            </p>
-          </>
-        ) : (
-          <p className="type-meta text-muted-foreground">
-            {database.inventoryStatus === "missing"
-              ? "Container missing"
-              : "Relay unavailable"}
-          </p>
-        )}
-      </WorkspaceTableCell>
-      <WorkspaceTableCell className="px-1 sm:px-3">
-        <DatabaseActions database={database} onDialog={onDialog} />
-      </WorkspaceTableCell>
-    </tr>
+      )}
+      searchStore={searchStore}
+      source={source}
+    />
   )
 })
 
@@ -540,13 +501,12 @@ const DatabaseActions = React.memo(function DatabaseActions({
     database.supportsImportExport &&
     can("database.dump.import")
   const hasDumpActions = canExport || canImport
-  const hasMenuActions =
-    (available && can("database.power")) ||
-    hasDumpActions ||
-    can("database.delete")
+  const canPower = available && can("database.power")
+  const canDelete = can("database.delete")
+  const hasOperationalActions = canPower || hasDumpActions
 
   return (
-    <div className="flex items-center justify-end gap-1">
+    <div className="flex w-full items-center justify-end gap-1">
       {can("database.credentials.read") && database.hasCredentials ? (
         <ActionIconButton
           icon={KeyRound}
@@ -558,76 +518,115 @@ const DatabaseActions = React.memo(function DatabaseActions({
       {available && can("database.network.write") ? (
         <DatabaseNetworkPicker database={database} />
       ) : null}
-      {hasMenuActions ? (
-        <DropdownMenu>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <DropdownMenuTrigger asChild>
-                <Button
-                  aria-label={`More actions for ${database.name}`}
-                  disabled={busy}
-                  size="icon-sm"
-                  type="button"
-                  variant="ghost"
-                >
-                  {busy ? (
-                    <LoaderCircle className="animate-spin" />
-                  ) : (
-                    <EllipsisVertical />
-                  )}
-                </Button>
-              </DropdownMenuTrigger>
-            </TooltipTrigger>
-            <TooltipContent side="bottom">More actions</TooltipContent>
-          </Tooltip>
-          <DropdownMenuContent align="end" className="min-w-44">
-            {available && can("database.power") ? (
-              <>
-                <DropdownMenuItem
-                  onSelect={() => action.mutate(running ? "stop" : "start")}
-                >
-                  {running ? <Square /> : <Play />}
-                  {running ? "Stop" : "Start"}
-                </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => action.mutate("restart")}>
-                  <RotateCw /> Restart
-                </DropdownMenuItem>
-              </>
-            ) : null}
-            {available &&
-            can("database.power") &&
-            (hasDumpActions || can("database.delete")) ? (
-              <DropdownMenuSeparator />
-            ) : null}
-            {canExport ? (
-              <DropdownMenuItem onSelect={() => exportDump.mutate()}>
-                <Download /> Export SQL
-              </DropdownMenuItem>
-            ) : null}
-            {canImport ? (
-              <DropdownMenuItem
-                onSelect={() => onDialog({ kind: "import", database })}
-              >
-                <Upload /> Import SQL
-              </DropdownMenuItem>
-            ) : null}
-            {hasDumpActions && can("database.delete") ? (
-              <DropdownMenuSeparator />
-            ) : null}
-            {can("database.delete") ? (
-              <DropdownMenuItem
-                variant="destructive"
-                onSelect={() => onDialog({ kind: "delete", database })}
-              >
-                <Trash2 /> Delete
-              </DropdownMenuItem>
-            ) : null}
-          </DropdownMenuContent>
-        </DropdownMenu>
+      {canDelete ? (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              aria-label={`Delete ${database.name}`}
+              className="text-destructive hover:bg-destructive/10 hover:text-destructive"
+              size="icon-sm"
+              type="button"
+              variant="ghost"
+              onClick={() => onDialog({ kind: "delete", database })}
+            >
+              <Trash2 />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">Delete</TooltipContent>
+        </Tooltip>
       ) : null}
+      <DropdownMenu>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <DropdownMenuTrigger asChild>
+              <Button
+                aria-label={`More actions for ${database.name}`}
+                disabled={busy}
+                size="icon-sm"
+                type="button"
+                variant="ghost"
+              >
+                {busy ? (
+                  <LoaderCircle className="animate-spin" />
+                ) : (
+                  <EllipsisVertical />
+                )}
+              </Button>
+            </DropdownMenuTrigger>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">More actions</TooltipContent>
+        </Tooltip>
+        <DropdownMenuContent align="end" className="min-w-44">
+          {canPower ? (
+            <>
+              <DropdownMenuItem
+                onSelect={() => action.mutate(running ? "stop" : "start")}
+              >
+                {running ? <Square /> : <Play />}
+                {running ? "Stop" : "Start"}
+              </DropdownMenuItem>
+              <DropdownMenuItem onSelect={() => action.mutate("restart")}>
+                <RotateCw /> Restart
+              </DropdownMenuItem>
+            </>
+          ) : null}
+          {canPower && hasDumpActions ? <DropdownMenuSeparator /> : null}
+          {canExport ? (
+            <DropdownMenuItem onSelect={() => exportDump.mutate()}>
+              <Download /> Export SQL
+            </DropdownMenuItem>
+          ) : null}
+          {canImport ? (
+            <DropdownMenuItem
+              onSelect={() => onDialog({ kind: "import", database })}
+            >
+              <Upload /> Import SQL
+            </DropdownMenuItem>
+          ) : null}
+          {hasOperationalActions ? <DropdownMenuSeparator /> : null}
+          <CopyDatabaseIdentifierMenuItem
+            label="Database ID"
+            value={database.id}
+          />
+          <CopyDatabaseIdentifierMenuItem
+            label="Relay ID"
+            value={database.relayId}
+          />
+        </DropdownMenuContent>
+      </DropdownMenu>
     </div>
   )
 })
+
+const CopyDatabaseIdentifierMenuItem = React.memo(
+  function CopyDatabaseIdentifierMenuItem({
+    label,
+    value,
+  }: {
+    label: "Database ID" | "Relay ID"
+    value: string
+  }) {
+    const copyIdentifier = React.useCallback(() => {
+      forkPromise(
+        async () => {
+          await navigator.clipboard.writeText(value)
+          showToast({ message: `${label} copied`, type: "success" })
+        },
+        () =>
+          showToast({
+            message: `Could not copy ${label.toLowerCase()}`,
+            type: "error",
+          })
+      )
+    }, [label, value])
+
+    return (
+      <DropdownMenuItem onSelect={copyIdentifier}>
+        <Copy /> Copy {label}
+      </DropdownMenuItem>
+    )
+  }
+)
 
 function ActionIconButton({
   disabled = false,
@@ -1306,26 +1305,28 @@ function EmptyDatabaseTable({
   searchActive: boolean
 }) {
   return (
-    <div className="flex min-h-64 flex-col items-center justify-center px-6 py-12 text-center">
-      <Database className="size-6 text-muted-foreground/45" />
-      <p className="mt-3 text-sm font-semibold">
-        {searchActive
-          ? "No databases match your search"
-          : "No managed databases"}
-      </p>
-      <p className="type-support mt-1 max-w-sm text-muted-foreground">
-        {searchActive
-          ? "Try a database name, engine, ID, Relay, or internal hostname."
-          : canCreate
-            ? "Provision a private MySQL, MariaDB, PostgreSQL, Redis, or Valkey database."
-            : "No databases have been assigned to your account yet."}
-      </p>
-      {!searchActive && canCreate ? (
-        <Button className="mt-4" size="sm" type="button" onClick={onCreate}>
-          <Plus /> Add Database
-        </Button>
-      ) : null}
-    </div>
+    <DataTableEmptyState
+      action={
+        !searchActive && canCreate ? (
+          <Button size="sm" type="button" onClick={onCreate}>
+            <Plus /> Add Database
+          </Button>
+        ) : null
+      }
+      description={
+        <span className="block max-w-sm">
+          {searchActive
+            ? "Try a database name, engine, ID, Relay, or internal hostname."
+            : canCreate
+              ? "Provision a private MySQL, MariaDB, PostgreSQL, Redis, or Valkey database."
+              : "No databases have been assigned to your account yet."}
+        </span>
+      }
+      icon={<Database className="size-6 text-muted-foreground/45" />}
+      title={
+        searchActive ? "No databases match your search" : "No managed databases"
+      }
+    />
   )
 }
 
@@ -1333,16 +1334,8 @@ function databaseRowKey(database: ManagedDatabase): string {
   return `${database.relayId}:${database.id}`
 }
 
-function databaseSearchText(database: ManagedDatabase): string {
-  return [
-    database.name,
-    database.id,
-    database.shortId,
-    database.engine,
-    database.databaseName,
-    database.hostname,
-    database.relayName,
-  ].join(" ")
+function databaseTableRowClassName() {
+  return "group hover:bg-muted/20"
 }
 
 function engineLabel(engine: DatabaseEngine): string {
