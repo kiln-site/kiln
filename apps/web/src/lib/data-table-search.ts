@@ -14,6 +14,8 @@ export interface DataTableSearchStore {
   subscribe: (listener: () => void) => () => void
 }
 
+export const DATA_TABLE_SEARCH_MAX_LENGTH = 256
+
 export function createDataTableSearchStore(
   initialValue = ""
 ): DataTableSearchStore {
@@ -39,6 +41,35 @@ export function createDataTableSearchStore(
       return () => listeners.delete(listener)
     },
   }
+}
+
+export function useDataTableSearchStore(value: string): DataTableSearchStore {
+  const [store] = React.useState(() => createDataTableSearchStore(value))
+
+  React.useLayoutEffect(() => {
+    store.set(value)
+  }, [store, value])
+
+  return store
+}
+
+export function replaceDataTableUrlSearch(
+  value: string,
+  parameter = "search"
+): void {
+  const url = new URL(window.location.href)
+  if (value.length > 0) url.searchParams.set(parameter, value)
+  else url.searchParams.delete(parameter)
+
+  // TanStack patches the history instance methods so router consumers update
+  // after navigation. Search typing stays local to the table workspace to avoid
+  // repainting the router's SafeFragment and CatchBoundary tree per keystroke.
+  History.prototype.replaceState.call(
+    window.history,
+    window.history.state,
+    "",
+    `${url.pathname}${url.search}${url.hash}`
+  )
 }
 
 export function useDataTableSearchInput(

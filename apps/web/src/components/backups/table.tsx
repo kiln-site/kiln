@@ -28,7 +28,7 @@ import {
   DataTableRowCheckbox,
   DataTableSelectAllCheckbox,
 } from "@/components/data-table"
-import { DataTableView } from "@/components/data-table-view"
+import { DataTable } from "@/components/data-table-view"
 import {
   BackupAvailabilityTags,
   BackupCreatedTime,
@@ -459,12 +459,12 @@ const BackupDesktopTable = React.memo(function BackupDesktopTable({
     return defineDataTable({
       ariaLabel: "Backups",
       columns,
+      getRowId: backupRowKey,
       getRowClassName: backupTableRowClassName,
       model: {
         enableRowRangeSelection: true,
         enableRowSelection: (row) => backupCanBeRemoved(row.original),
         enableSubRowSelection: false,
-        getRowId: backupRowKey,
         initialState: initialTableState,
         manualSorting: true,
       },
@@ -483,7 +483,7 @@ const BackupDesktopTable = React.memo(function BackupDesktopTable({
   ])
 
   return (
-    <DataTableView
+    <DataTable
       definition={definition}
       emptyState={
         <BackupDesktopEmptyState
@@ -502,7 +502,7 @@ const BackupDesktopTable = React.memo(function BackupDesktopTable({
           table={table}
         />
       )}
-    </DataTableView>
+    </DataTable>
   )
 })
 
@@ -711,7 +711,7 @@ const BackupSelectAllCheckbox = React.memo(function BackupSelectAllCheckbox({
 })
 
 function backupTableRowClassName() {
-  return "group hover:bg-muted/20 has-checked:bg-primary/[0.07]"
+  return "has-checked:bg-primary/[0.07]"
 }
 
 const BackupMobileRow = React.memo(function BackupMobileRow({

@@ -1,4 +1,5 @@
 import { createServerFn } from "@tanstack/react-start"
+import type { RowDataPacket } from "mysql2/promise"
 import {
   relayConnectionSettingsSchema,
   relayIdSchema as relayFingerprintSchema,
@@ -13,10 +14,21 @@ import { z } from "zod"
 
 import { isPlatformAdmin, isRelayCreator } from "@/lib/access-control"
 import { runAppEffect } from "@/effect/runtime"
+import { databasePool } from "@/lib/database"
+import { databaseTable } from "@/lib/database-config"
 import { publishRealtimeChange } from "@/lib/realtime-source.server"
 import type { PersistedRelay } from "@/lib/relay-registry"
 import { requireAuthenticatedUser } from "@/server/auth"
 import { removeRelayThenCleanup } from "@/server/relay-removal"
+
+export interface ManagedRelay extends PersistedRelay {
+  ownerName: string | null
+}
+
+interface RelayOwnerRow extends RowDataPacket {
+  id: string
+  name: string
+}
 
 const relayIdSchema = z.object({
   id: relayFingerprintSchema,
@@ -109,7 +121,7 @@ async function managedRelays(
 
 export const getRelays = createServerFn({ method: "GET" }).handler(async () => {
   const user = await requireRelayCreationAccess()
-  return managedRelays(user)
+  return attachRelayOwnerNames(await managedRelays(user))
 })
 
 export const addRelay = createServerFn({ method: "POST" })
@@ -122,11 +134,35 @@ export const addRelay = createServerFn({ method: "POST" })
     if (preview.mode === "repair") {
       await requireRelayAdministrator(preview.relayFingerprint)
     }
-    return pairPersistedRelay(data.pairingUri, {
+    const relay = await pairPersistedRelay(data.pairingUri, {
       canManageAnyRelay: isPlatformAdmin(user),
       userId: user.id,
     })
+    return (await attachRelayOwnerNames([relay]))[0]!
   })
+
+async function attachRelayOwnerNames(
+  relays: Array<PersistedRelay>
+): Promise<Array<ManagedRelay>> {
+  const ownerIds = [
+    ...new Set(
+      relays.flatMap((relay) => (relay.createdBy ? [relay.createdBy] : []))
+    ),
+  ]
+  if (ownerIds.length === 0) {
+    return relays.map((relay) => ({ ...relay, ownerName: null }))
+  }
+  const placeholders = ownerIds.map(() => "?").join(", ")
+  const [owners] = await databasePool.query<Array<RelayOwnerRow>>(
+    `SELECT id, name FROM ${databaseTable("user")} WHERE id IN (${placeholders})`,
+    ownerIds
+  )
+  const names = new Map(owners.map((owner) => [owner.id, owner.name]))
+  return relays.map((relay) => ({
+    ...relay,
+    ownerName: relay.createdBy ? (names.get(relay.createdBy) ?? null) : null,
+  }))
+}
 
 export const updateRelay = createServerFn({ method: "POST" })
   .validator(updateRelaySchema)

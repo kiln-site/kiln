@@ -11,6 +11,7 @@ import {
 import { cn } from "@workspace/ui/lib/utils"
 
 import {
+  DATA_TABLE_SEARCH_MAX_LENGTH,
   useDataTableSearchInput,
   type DataTableSearchStore,
 } from "@/lib/data-table-search"
@@ -128,7 +129,7 @@ export const DataTableToolbar = React.memo(function DataTableToolbar({
           className="pl-9 text-base md:text-sm"
           defaultValue={search.store.getServerSnapshot()}
           id={search.id}
-          maxLength={search.maxLength}
+          maxLength={search.maxLength ?? DATA_TABLE_SEARCH_MAX_LENGTH}
           placeholder={search.placeholder}
           type="search"
           onChange={(event) => setSearch(event.currentTarget.value)}

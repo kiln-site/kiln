@@ -87,7 +87,7 @@ describe("data table sources", () => {
     const complete: DataTableLoadMoreSource = {
       hasMore: false,
       loadMore: vi.fn(),
-      resetKey: "complete",
+      requestKey: "complete:1",
       state: { kind: "idle" },
     }
 

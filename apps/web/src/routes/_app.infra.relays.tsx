@@ -1,8 +1,8 @@
 import { createFileRoute } from "@tanstack/react-router"
 
 import { RelaysPage } from "@/components/relays-page"
+import { getRelaysCollection } from "@/lib/collections/relays"
 import { pageTitle } from "@/lib/page-title"
-import { relaysQueryOptions } from "@/lib/query-options"
 import { requireInfrastructureDestinationAccess } from "@/lib/route-access"
 
 export const Route = createFileRoute("/_app/infra/relays")({
@@ -12,8 +12,7 @@ export const Route = createFileRoute("/_app/infra/relays")({
       "/infra/relays"
     )
   },
-  loader: ({ context }) =>
-    context.queryClient.ensureQueryData(relaysQueryOptions()),
+  loader: ({ context }) => getRelaysCollection(context.dbClient).preload(),
   head: () => ({ meta: [{ title: pageTitle("Relays") }] }),
   component: RelaysPage,
 })

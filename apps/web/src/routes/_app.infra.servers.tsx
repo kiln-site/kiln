@@ -1,16 +1,18 @@
-import * as React from "react"
 import { createFileRoute } from "@tanstack/react-router"
 import { z } from "zod"
 
 import { ServersPage } from "@/components/servers-page"
-import { createDataTableSearchStore } from "@/lib/data-table-search"
+import {
+  DATA_TABLE_SEARCH_MAX_LENGTH,
+  useDataTableSearchStore,
+} from "@/lib/data-table-search"
 import { isDevelopmentBypassIdentity } from "@/lib/development-bypass"
 import { pageTitle } from "@/lib/page-title"
 import { requireInfrastructureDestinationAccess } from "@/lib/route-access"
 
 export const Route = createFileRoute("/_app/infra/servers")({
   validateSearch: z.object({
-    search: z.string().optional(),
+    search: z.string().max(DATA_TABLE_SEARCH_MAX_LENGTH).optional(),
   }),
   beforeLoad: async ({ context }) => {
     await requireInfrastructureDestinationAccess(
@@ -25,11 +27,7 @@ export const Route = createFileRoute("/_app/infra/servers")({
 function ServersRoute() {
   const { search = "" } = Route.useSearch()
   const { user } = Route.useRouteContext()
-  const [searchStore] = React.useState(() => createDataTableSearchStore(search))
-
-  React.useLayoutEffect(() => {
-    searchStore.set(search)
-  }, [search, searchStore])
+  const searchStore = useDataTableSearchStore(search)
 
   return (
     <ServersPage

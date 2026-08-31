@@ -62,9 +62,13 @@ import {
   TooltipTrigger,
 } from "@workspace/ui/components/tooltip"
 
-import { DataTableEmptyState, DataTableTextCell } from "@/components/data-table"
+import {
+  DataTableActionGroup,
+  DataTableEmptyState,
+  DataTableTextCell,
+} from "@/components/data-table"
 import { CopyIdentifierMenuItem } from "@/components/copy-identifier-menu-item"
-import { DataTableView } from "@/components/data-table-view"
+import { DataTable } from "@/components/data-table-view"
 import {
   DataTableToolbar,
   DataTableWorkspace,
@@ -83,7 +87,10 @@ import {
   dataTableColumnMeta,
   defineDataTable,
 } from "@/lib/data-table"
-import type { DataTableSearchStore } from "@/lib/data-table-search"
+import {
+  replaceDataTableUrlSearch,
+  type DataTableSearchStore,
+} from "@/lib/data-table-search"
 import { useLiveDataTableSource } from "@/lib/data-table-source"
 import {
   accessCapabilitiesQueryOptions,
@@ -139,7 +146,6 @@ const engineBadgeClasses: Record<DatabaseEngine, string> = {
 const dumpLimitBytes = 700_000
 const databaseInventoryError = new Error("Could not load databases")
 const minimumManualSyncFeedbackMs = 500
-const databaseTableVirtualization = { estimateRowHeight: 56, overscan: 8 }
 const databaseTableColumnHelper = createDataTableColumnHelper<ManagedDatabase>()
 const databaseTableSearchFields = [
   (database: ManagedDatabase) => database.name,
@@ -272,7 +278,7 @@ const DatabaseToolbar = React.memo(function DatabaseToolbar({
         ariaLabel: "Search databases",
         closeMobileWhenEmpty: true,
         id: "database-search",
-        onValueChange: replaceDatabaseSearch,
+        onValueChange: replaceDataTableUrlSearch,
         placeholder: "Search databases",
         store: searchStore,
       }}
@@ -423,6 +429,7 @@ const DatabaseTable = React.memo(function DatabaseTable({
                 observedState: database.observedState,
                 relayId: database.relayId,
               }}
+              live={false}
               name={database.name}
               meta={database.shortId}
               metaClassName="font-mono"
@@ -479,18 +486,17 @@ const DatabaseTable = React.memo(function DatabaseTable({
     return defineDataTable({
       ariaLabel: "Databases",
       columns,
-      getRowClassName: databaseTableRowClassName,
+      getRowId: databaseRowKey,
       model: {
-        getRowId: databaseRowKey,
         initialState: initialTableState,
       },
       search: { fields: databaseTableSearchFields },
-      virtualization: databaseTableVirtualization,
+      virtualization: true,
     })
   }, [initialTableState, onDialog])
 
   return (
-    <DataTableView
+    <DataTable
       definition={definition}
       emptyState={({ searchActive }) => (
         <EmptyDatabaseTable
@@ -563,7 +569,7 @@ const DatabaseActions = React.memo(function DatabaseActions({
   const hasOperationalActions = canPower || hasDumpActions
 
   return (
-    <div className="flex w-full items-center justify-end gap-1">
+    <DataTableActionGroup>
       {can("database.credentials.read") && database.hasCredentials ? (
         <ActionIconButton
           icon={KeyRound}
@@ -642,17 +648,11 @@ const DatabaseActions = React.memo(function DatabaseActions({
             </DropdownMenuItem>
           ) : null}
           {hasOperationalActions ? <DropdownMenuSeparator /> : null}
-          <CopyIdentifierMenuItem
-            label="Database ID"
-            value={database.id}
-          />
-          <CopyIdentifierMenuItem
-            label="Relay ID"
-            value={database.relayId}
-          />
+          <CopyIdentifierMenuItem label="Database ID" value={database.id} />
+          <CopyIdentifierMenuItem label="Relay ID" value={database.relayId} />
         </DropdownMenuContent>
       </DropdownMenu>
-    </div>
+    </DataTableActionGroup>
   )
 })
 
@@ -1360,27 +1360,6 @@ function EmptyDatabaseTable({
 
 function databaseRowKey(database: ManagedDatabase): string {
   return `${database.relayId}:${database.id}`
-}
-
-function databaseTableRowClassName() {
-  return "group hover:bg-muted/20"
-}
-
-function replaceDatabaseSearch(search: string) {
-  const url = new URL(window.location.href)
-  if (search.length > 0) url.searchParams.set("search", search)
-  else url.searchParams.delete("search")
-
-  // TanStack patches the history instance methods so router consumers update
-  // after navigation. Search typing is intentionally local to this workspace;
-  // use the browser prototype method to update the current entry without
-  // repainting the router's SafeFragment and CatchBoundary tree.
-  History.prototype.replaceState.call(
-    window.history,
-    window.history.state,
-    "",
-    `${url.pathname}${url.search}${url.hash}`
-  )
 }
 
 function engineLabel(engine: DatabaseEngine): string {

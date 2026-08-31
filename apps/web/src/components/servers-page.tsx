@@ -34,7 +34,11 @@ import {
 } from "@/components/add-server-dialog"
 import type { AddServerDialogStore } from "@/components/add-server-dialog"
 import { CopyIdentifierMenuItem } from "@/components/copy-identifier-menu-item"
-import { DataTableEmptyState, DataTableTextCell } from "@/components/data-table"
+import {
+  DataTableActionGroup,
+  DataTableEmptyState,
+  DataTableTextCell,
+} from "@/components/data-table"
 import {
   ServerDeleteDialog,
   type ServerDeleteTarget,
@@ -43,7 +47,7 @@ import {
   DataTableToolbar,
   DataTableWorkspace,
 } from "@/components/data-table-workspace"
-import { DataTableView } from "@/components/data-table-view"
+import { DataTable } from "@/components/data-table-view"
 import { InstanceName } from "@/components/instance-name"
 import {
   accessCapabilitiesQueryOptions,
@@ -59,7 +63,10 @@ import {
   dataTableColumnMeta,
   defineDataTable,
 } from "@/lib/data-table"
-import { type DataTableSearchStore } from "@/lib/data-table-search"
+import {
+  replaceDataTableUrlSearch,
+  type DataTableSearchStore,
+} from "@/lib/data-table-search"
 import {
   replaceDataTableRows,
   useLiveDataTableSource,
@@ -72,7 +79,6 @@ import type { ServerListInstance } from "@/lib/relay-selectors"
 const minimumManualSyncFeedbackMs = 500
 const serverInventoryError = new Error("Could not load servers")
 const serverTableItemCache = new WeakMap<ServerListInstance, ServerTableItem>()
-const serverTableVirtualization = { estimateRowHeight: 56, overscan: 8 }
 
 interface ServerTableItem {
   routeIdentifier: string
@@ -172,7 +178,7 @@ export const ServersPage = React.memo(function ServersPage({
               ariaLabel: "Search servers",
               closeMobileWhenEmpty: true,
               id: "server-search",
-              onValueChange: replaceServerSearch,
+              onValueChange: replaceDataTableUrlSearch,
               placeholder: "Search servers",
               store: searchStore,
             }}
@@ -449,12 +455,15 @@ const ServerDataTable = React.memo(function ServerDataTable({
             >
               <InstanceName
                 instance={{
+                  brickId: server.brickId,
                   id: server.id,
+                  implementation: server.implementation,
                   kind: "server",
                   observedState: server.observedState,
                   relayId: server.relayId,
                   relayStatus: server.relayStatus,
                 }}
+                live={false}
                 name={server.name}
                 nameClassName="transition-colors group-hover/server-link:text-primary"
                 meta={`${server.game} · ${server.implementation}`}
@@ -536,17 +545,16 @@ const ServerDataTable = React.memo(function ServerDataTable({
     return defineDataTable({
       ariaLabel: "Servers",
       columns,
-      getRowClassName: serverTableRowClassName,
+      getRowId: serverTableItemKey,
       model: {
-        getRowId: serverTableItemKey,
         initialState: initialTableState,
       },
       search: { fields: serverTableSearchFields },
-      virtualization: serverTableVirtualization,
+      virtualization: true,
     })
   }, [deleteAccess, initialTableState, onDelete])
   return (
-    <DataTableView
+    <DataTable
       definition={definition}
       emptyState={({ searchActive }) => (
         <EmptyServerTable
@@ -574,7 +582,7 @@ const ServerActions = React.memo(function ServerActions({
 }) {
   const deleteEnabled = server.relayStatus === "connected"
   return (
-    <div className="flex items-center justify-end gap-1">
+    <DataTableActionGroup>
       <ServerActionLink
         icon={TerminalSquare}
         label={`Open ${server.name} console`}
@@ -629,13 +637,10 @@ const ServerActions = React.memo(function ServerActions({
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end" className="min-w-44">
           <CopyIdentifierMenuItem label="Server ID" value={server.id} />
-          <CopyIdentifierMenuItem
-            label="Relay ID"
-            value={server.relayId}
-          />
+          <CopyIdentifierMenuItem label="Relay ID" value={server.relayId} />
         </DropdownMenuContent>
       </DropdownMenu>
-    </div>
+    </DataTableActionGroup>
   )
 })
 
@@ -791,27 +796,6 @@ function createServerTableItems(
     serverTableItemCache.set(server, item)
     return item
   })
-}
-
-function serverTableRowClassName() {
-  return "group hover:bg-muted/20"
-}
-
-function replaceServerSearch(search: string) {
-  const url = new URL(window.location.href)
-  if (search.length > 0) url.searchParams.set("search", search)
-  else url.searchParams.delete("search")
-
-  // TanStack patches the history instance methods so router consumers update
-  // after navigation. Search typing is intentionally local to this workspace;
-  // use the browser prototype method to update the current entry without
-  // repainting the router's SafeFragment and CatchBoundary tree.
-  History.prototype.replaceState.call(
-    window.history,
-    window.history.state,
-    "",
-    `${url.pathname}${url.search}${url.hash}`
-  )
 }
 
 function serverStatusTone(state: ServerListInstance["observedState"]) {

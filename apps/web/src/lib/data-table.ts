@@ -31,6 +31,11 @@ export interface DataTableVirtualizationOptions {
   overscan?: number
 }
 
+export const defaultDataTableVirtualization = {
+  estimateRowHeight: 56,
+  overscan: 8,
+} satisfies Required<DataTableVirtualizationOptions>
+
 export type DataTableSearchValue = boolean | number | string | null | undefined
 
 export interface DataTableSearchDefinition<TData extends RowData> {
@@ -57,16 +62,17 @@ type BoundDataTableOptions<TData extends RowData> = Omit<
 
 export type DataTableModelOptions<TData extends RowData> = Omit<
   BoundDataTableOptions<TData>,
-  "columns" | "data"
+  "columns" | "data" | "getRowId"
 >
 
 export interface DataTableDefinition<TData extends RowData> {
   ariaLabel: string
   columns: Array<ColumnDef<typeof dataTableFeatures, TData, any>>
+  getRowId: NonNullable<BoundDataTableOptions<TData>["getRowId"]>
   getRowClassName?: (row: Row<typeof dataTableFeatures, TData>) => string
   model?: DataTableModelOptions<TData>
   search?: DataTableSearchDefinition<TData>
-  virtualization?: DataTableVirtualizationOptions
+  virtualization?: true | DataTableVirtualizationOptions
 }
 
 export type DataTableInstance<TData extends RowData> = Table<

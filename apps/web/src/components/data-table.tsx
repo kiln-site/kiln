@@ -14,6 +14,7 @@ import { Skeleton } from "@workspace/ui/components/skeleton"
 import { cn } from "@workspace/ui/lib/utils"
 import {
   dataTableFeatures,
+  defaultDataTableVirtualization,
   type DataTableBreakpoint,
   type DataTableDefinition,
   type DataTableInstance,
@@ -29,62 +30,82 @@ import { forkPromise } from "@/effect/promise"
 
 export function DataTableLoadMoreTrigger({
   loadMoreSource,
-  rowCount,
   scrollRootRef,
 }: {
   loadMoreSource: DataTableLoadMoreSource
-  rowCount: number
   scrollRootRef: React.RefObject<Element | null>
 }) {
-  const triggerRef = React.useRef<HTMLDivElement>(null)
-  const requestKey = `${loadMoreSource.resetKey}:${rowCount}`
-  const requestedKeyRef = React.useRef<string | null>(null)
-
-  React.useEffect(() => {
-    if (
-      !loadMoreSource.hasMore ||
-      loadMoreSource.state.kind === "loading" ||
-      loadMoreSource.state.kind === "error"
-    ) {
-      return
-    }
-    const target = triggerRef.current
-    const scrollRoot = scrollRootRef.current
-    if (!target || !scrollRoot) return
-    const observer = new IntersectionObserver(
-      ([entry]) => {
-        if (!entry?.isIntersecting || requestedKeyRef.current === requestKey) {
-          return
-        }
-        requestedKeyRef.current = requestKey
-        forkPromise(() => Promise.resolve(loadMoreSource.loadMore()))
-      },
-      { root: scrollRoot, rootMargin: "320px 0px" }
-    )
-    observer.observe(target)
-    return () => observer.disconnect()
-  }, [loadMoreSource, requestKey, scrollRootRef])
+  const triggerRef = useDataTableLoadMoreTrigger<HTMLDivElement>(
+    loadMoreSource,
+    scrollRootRef
+  )
 
   if (!loadMoreSource.hasMore && loadMoreSource.state.kind === "idle") {
     return null
   }
   return (
     <div ref={triggerRef} className="grid h-12 place-items-center">
-      {loadMoreSource.state.kind === "error" ? (
-        <button
-          className="text-xs font-medium text-muted-foreground hover:text-foreground"
-          type="button"
-          onClick={() => void loadMoreSource.loadMore()}
-        >
-          Loading failed. Try again
-        </button>
-      ) : (
-        <span className="inline-flex items-center gap-2 text-xs text-muted-foreground">
-          <LoaderCircle aria-hidden className="size-3.5 animate-spin" />
-          Loading more
-        </span>
-      )}
+      <DataTableLoadMoreContent source={loadMoreSource} />
     </div>
+  )
+}
+
+function useDataTableLoadMoreTrigger<TElement extends Element>(
+  source: DataTableLoadMoreSource,
+  scrollRootRef?: React.RefObject<Element | null>
+): React.RefObject<TElement | null> {
+  const triggerRef = React.useRef<TElement>(null)
+  const requestedKeyRef = React.useRef<string | null>(null)
+
+  React.useEffect(() => {
+    if (
+      !source.hasMore ||
+      source.state.kind === "loading" ||
+      source.state.kind === "error"
+    ) {
+      return
+    }
+    const target = triggerRef.current
+    const scrollRoot = scrollRootRef?.current ?? target?.closest("tbody")
+    if (!target || !scrollRoot) return
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (
+          !entry?.isIntersecting ||
+          requestedKeyRef.current === source.requestKey
+        ) {
+          return
+        }
+        requestedKeyRef.current = source.requestKey
+        forkPromise(() => Promise.resolve(source.loadMore()))
+      },
+      { root: scrollRoot, rootMargin: "320px 0px" }
+    )
+    observer.observe(target)
+    return () => observer.disconnect()
+  }, [scrollRootRef, source])
+
+  return triggerRef
+}
+
+function DataTableLoadMoreContent({
+  source,
+}: {
+  source: DataTableLoadMoreSource
+}) {
+  return source.state.kind === "error" ? (
+    <button
+      className="text-xs font-medium text-muted-foreground hover:text-foreground"
+      type="button"
+      onClick={() => void source.loadMore()}
+    >
+      Loading failed. Try again
+    </button>
+  ) : (
+    <span className="inline-flex items-center gap-2 text-xs text-muted-foreground">
+      <LoaderCircle aria-hidden className="size-3.5 animate-spin" />
+      Loading more
+    </span>
   )
 }
 
@@ -123,6 +144,7 @@ export function DataTableCompactList<TItem>({
         undefined
       }
     >
+      {source.notice ? <DataTableSourceNotice notice={source.notice} /> : null}
       {header}
       <div className="divide-y divide-border/70 border-b border-border/70">
         {source.rows.map(renderRow)}
@@ -130,7 +152,6 @@ export function DataTableCompactList<TItem>({
       {source.loadMore && shouldRenderDataTableLoadMore(source.loadMore) ? (
         <DataTableLoadMoreTrigger
           loadMoreSource={source.loadMore}
-          rowCount={source.rows.length}
           scrollRootRef={scrollRootRef}
         />
       ) : null}
@@ -148,7 +169,7 @@ interface DataTableProps<TData extends RowData> {
 const dataTableScrollAreaClassName =
   "block min-h-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-y-contain border-b border-border/70"
 
-export function DataTable<TData extends RowData>({
+export function DataTableRenderer<TData extends RowData>({
   definition,
   emptyState,
   source,
@@ -157,20 +178,13 @@ export function DataTable<TData extends RowData>({
   return (
     <Subscribe source={table.atoms.sorting} selector={dataTableSortingResetKey}>
       {(sortingResetKey) => (
-        <Subscribe
-          source={table.store}
-          selector={() => table.getRowModel().rows.map((row) => row.id)}
-        >
-          {() => (
-            <DataTableRowModel
-              definition={definition}
-              emptyState={emptyState}
-              source={source}
-              sortingResetKey={sortingResetKey}
-              table={table}
-            />
-          )}
-        </Subscribe>
+        <DataTableRowModel
+          definition={definition}
+          emptyState={emptyState}
+          source={source}
+          sortingResetKey={sortingResetKey}
+          table={table}
+        />
       )}
     </Subscribe>
   )
@@ -200,7 +214,7 @@ function DataTableRowModel<TData extends RowData>({
   const bodyState = dataTableBodyState(source.body, emptyState, rows.length)
   const gridStyle = React.useMemo(
     () => dataTableGridStyle(table),
-    [table, table.options.columns]
+    [table, definition.columns]
   )
 
   React.useLayoutEffect(() => {
@@ -233,6 +247,9 @@ function DataTableRowModel<TData extends RowData>({
           Updating
         </span>
       ) : null}
+      {!source.refreshing && source.notice ? (
+        <DataTableSourceNotice floating notice={source.notice} />
+      ) : null}
       {!source.refreshing && source.loadMore?.state.kind === "loading" ? (
         <span aria-live="polite" className="sr-only" role="status">
           Loading more rows
@@ -245,7 +262,11 @@ function DataTableRowModel<TData extends RowData>({
         className="flex h-full min-h-0 w-full min-w-0 border-collapse flex-col overflow-hidden pb-px text-left"
         style={gridStyle}
       >
-        <MemoizedDataTableHead scrollbarWidth={scrollbarWidth} table={table} />
+        <MemoizedDataTableHead
+          columns={definition.columns}
+          scrollbarWidth={scrollbarWidth}
+          table={table}
+        />
         {hasBodyState ? (
           <DataTableStateBody
             centered={source.body.kind !== "loading"}
@@ -256,6 +277,7 @@ function DataTableRowModel<TData extends RowData>({
           </DataTableStateBody>
         ) : definition.virtualization ? (
           <VirtualDataTableBody
+            columns={definition.columns}
             getRowClassName={definition.getRowClassName}
             loadMoreSource={source.loadMore}
             rows={rows}
@@ -264,6 +286,7 @@ function DataTableRowModel<TData extends RowData>({
           />
         ) : (
           <DataTableBody
+            columns={definition.columns}
             getRowClassName={definition.getRowClassName}
             loadMoreSource={source.loadMore}
             rows={rows}
@@ -271,6 +294,38 @@ function DataTableRowModel<TData extends RowData>({
           />
         )}
       </table>
+    </div>
+  )
+}
+
+function DataTableSourceNotice({
+  floating = false,
+  notice,
+}: {
+  floating?: boolean
+  notice: NonNullable<DataTableSource<unknown>["notice"]>
+}) {
+  return (
+    <div
+      aria-live="polite"
+      className={cn(
+        "inline-flex items-center gap-1.5 text-xs text-amber-700 dark:text-amber-300",
+        floating
+          ? "absolute top-3 right-3 z-30 rounded-md border border-amber-500/25 bg-background/95 px-2 py-1 shadow-sm"
+          : "flex min-h-9 justify-end border-b border-amber-500/20 bg-amber-500/[0.06] px-3 py-2"
+      )}
+      role="status"
+    >
+      Data may be outdated.
+      {notice.retry ? (
+        <button
+          className="font-medium underline-offset-2 hover:underline"
+          type="button"
+          onClick={notice.retry}
+        >
+          Retry
+        </button>
+      ) : null}
     </div>
   )
 }
@@ -451,6 +506,22 @@ export const DataTableTextCell = React.memo(function DataTableTextCell({
   )
 })
 
+export function DataTableActionGroup({
+  children,
+  className,
+}: {
+  children: React.ReactNode
+  className?: string
+}) {
+  return (
+    <div
+      className={cn("flex w-full items-center justify-end gap-1", className)}
+    >
+      {children}
+    </div>
+  )
+}
+
 export function DataTableEmptyState({
   action,
   description,
@@ -519,9 +590,11 @@ function useScrollbarWidth(
 }
 
 function DataTableHead<TData extends RowData>({
+  columns: _columns,
   scrollbarWidth,
   table,
 }: {
+  columns: DataTableDefinition<TData>["columns"]
   scrollbarWidth: number
   table: DataTableInstance<TData>
 }) {
@@ -554,9 +627,9 @@ function areDataTableHeadPropsEqual<TData extends RowData>(
   next: React.ComponentProps<typeof DataTableHead<TData>>
 ) {
   return (
+    previous.columns === next.columns &&
     previous.scrollbarWidth === next.scrollbarWidth &&
-    previous.table.store === next.table.store &&
-    previous.table.options.columns === next.table.options.columns
+    previous.table.store === next.table.store
   )
 }
 
@@ -688,11 +761,13 @@ function DataTableSortIcon({
 }
 
 function DataTableBody<TData extends RowData>({
+  columns,
   getRowClassName,
   loadMoreSource,
   rows,
   scrollElementRef,
 }: {
+  columns: DataTableDefinition<TData>["columns"]
   getRowClassName?: (row: Row<typeof dataTableFeatures, TData>) => string
   loadMoreSource?: DataTableLoadMoreSource
   rows: Array<Row<typeof dataTableFeatures, TData>>
@@ -706,6 +781,7 @@ function DataTableBody<TData extends RowData>({
         <DataTableRowSelectionBoundary
           key={row.id}
           canSelect={row.getCanSelect()}
+          columns={columns}
           row={row}
           rowClassName={getRowClassName?.(row)}
         />
@@ -714,7 +790,6 @@ function DataTableBody<TData extends RowData>({
         <DataTableLoadMoreRow
           colSpan={rows[0]?.getAllCells().length ?? 1}
           loadMoreSource={loadMoreSource}
-          rowCount={rows.length}
         />
       ) : null}
     </tbody>
@@ -722,25 +797,32 @@ function DataTableBody<TData extends RowData>({
 }
 
 function VirtualDataTableBody<TData extends RowData>({
+  columns,
   getRowClassName,
   loadMoreSource,
   rows,
   scrollElementRef,
   virtualization,
 }: {
+  columns: DataTableDefinition<TData>["columns"]
   getRowClassName?: (row: Row<typeof dataTableFeatures, TData>) => string
   loadMoreSource?: DataTableLoadMoreSource
   rows: Array<Row<typeof dataTableFeatures, TData>>
   scrollElementRef: React.RefObject<HTMLTableSectionElement | null>
-  virtualization: DataTableVirtualizationOptions
+  virtualization: true | DataTableVirtualizationOptions
 }) {
   const showLoadMoreRow = shouldRenderDataTableLoadMore(loadMoreSource)
+  const virtualizationOptions =
+    virtualization === true ? defaultDataTableVirtualization : virtualization
   const rowVirtualizer = useVirtualizer({
     count: rows.length + (showLoadMoreRow ? 1 : 0),
-    estimateSize: () => virtualization.estimateRowHeight ?? 72,
+    estimateSize: () =>
+      virtualizationOptions.estimateRowHeight ??
+      defaultDataTableVirtualization.estimateRowHeight,
     getItemKey: (index) => rows[index]?.id ?? `load-more-${index}`,
     getScrollElement: () => scrollElementRef.current,
-    overscan: virtualization.overscan ?? 6,
+    overscan:
+      virtualizationOptions.overscan ?? defaultDataTableVirtualization.overscan,
   })
 
   return (
@@ -768,7 +850,6 @@ function VirtualDataTableBody<TData extends RowData>({
               colSpan={rows[0]?.getAllCells().length ?? 1}
               dataIndex={virtualRow.index}
               loadMoreSource={loadMoreSource}
-              rowCount={rows.length}
               virtualStart={virtualRow.start}
             />
           )
@@ -782,6 +863,7 @@ function VirtualDataTableBody<TData extends RowData>({
             ref={rowVirtualizer.measureElement}
             ariaRowIndex={virtualRow.index + 2}
             canSelect={row.getCanSelect()}
+            columns={columns}
             dataIndex={virtualRow.index}
             row={row}
             rowClassName={getRowClassName?.(row)}
@@ -797,44 +879,17 @@ function DataTableLoadMoreRow({
   colSpan,
   dataIndex,
   loadMoreSource,
-  rowCount,
   virtualStart,
   ref,
 }: {
   colSpan: number
   dataIndex?: number
   loadMoreSource: DataTableLoadMoreSource
-  rowCount: number
   virtualStart?: number
   ref?: React.Ref<HTMLTableRowElement>
 }) {
-  const triggerRef = React.useRef<HTMLTableCellElement>(null)
-  const requestKey = `${loadMoreSource.resetKey}:${rowCount}`
-  const requestedKeyRef = React.useRef<string | null>(null)
-
-  React.useEffect(() => {
-    if (
-      !loadMoreSource.hasMore ||
-      loadMoreSource.state.kind === "loading" ||
-      loadMoreSource.state.kind === "error"
-    ) {
-      return
-    }
-    const target = triggerRef.current
-    if (!target) return
-    const observer = new IntersectionObserver(
-      ([entry]) => {
-        if (!entry?.isIntersecting || requestedKeyRef.current === requestKey) {
-          return
-        }
-        requestedKeyRef.current = requestKey
-        forkPromise(() => Promise.resolve(loadMoreSource.loadMore()))
-      },
-      { root: target.closest("tbody"), rootMargin: "320px 0px" }
-    )
-    observer.observe(target)
-    return () => observer.disconnect()
-  }, [loadMoreSource, requestKey])
+  const triggerRef =
+    useDataTableLoadMoreTrigger<HTMLTableCellElement>(loadMoreSource)
 
   if (!loadMoreSource.hasMore && loadMoreSource.state.kind === "idle") {
     return null
@@ -858,20 +913,7 @@ function DataTableLoadMoreRow({
       }
     >
       <td ref={triggerRef} className="col-span-full" colSpan={colSpan}>
-        {loadMoreSource.state.kind === "error" ? (
-          <button
-            className="text-xs font-medium text-muted-foreground hover:text-foreground"
-            type="button"
-            onClick={() => void loadMoreSource.loadMore()}
-          >
-            Loading failed. Try again
-          </button>
-        ) : (
-          <span className="inline-flex items-center gap-2 text-xs text-muted-foreground">
-            <LoaderCircle aria-hidden className="size-3.5 animate-spin" />
-            Loading more
-          </span>
-        )}
+        <DataTableLoadMoreContent source={loadMoreSource} />
       </td>
     </tr>
   )
@@ -880,6 +922,7 @@ function DataTableLoadMoreRow({
 interface DataTableRowProps<TData extends RowData> {
   ariaRowIndex?: number
   canSelect: boolean
+  columns: DataTableDefinition<TData>["columns"]
   dataIndex?: number
   isSelected: boolean
   row: Row<typeof dataTableFeatures, TData>
@@ -913,12 +956,12 @@ function areDataTableRowBoundaryPropsEqual<TData extends RowData>(
   return (
     previous.ariaRowIndex === next.ariaRowIndex &&
     previous.canSelect === next.canSelect &&
+    previous.columns === next.columns &&
     previous.dataIndex === next.dataIndex &&
     previous.ref === next.ref &&
     previous.row.id === next.row.id &&
     previous.row.index === next.row.index &&
     previous.row.original === next.row.original &&
-    previous.row.table.options.columns === next.row.table.options.columns &&
     previous.rowClassName === next.rowClassName &&
     previous.virtualStart === next.virtualStart
   )
@@ -931,6 +974,7 @@ const DataTableRowSelectionBoundary = React.memo(
 
 function DataTableRow<TData extends RowData>({
   ariaRowIndex,
+  columns: _columns,
   dataIndex,
   isSelected,
   row,
@@ -943,7 +987,7 @@ function DataTableRow<TData extends RowData>({
       ref={ref}
       aria-rowindex={ariaRowIndex}
       className={cn(
-        "grid grid-cols-[var(--data-table-grid-base)] border-b border-border/70 transition-colors sm:grid-cols-[var(--data-table-grid-sm)] md:grid-cols-[var(--data-table-grid-md)] lg:grid-cols-[var(--data-table-grid-lg)] xl:grid-cols-[var(--data-table-grid-xl)]",
+        "group grid grid-cols-[var(--data-table-grid-base)] border-b border-border/70 transition-colors hover:bg-muted/20 sm:grid-cols-[var(--data-table-grid-sm)] md:grid-cols-[var(--data-table-grid-md)] lg:grid-cols-[var(--data-table-grid-lg)] xl:grid-cols-[var(--data-table-grid-xl)]",
         rowClassName
       )}
       data-index={dataIndex}
@@ -986,13 +1030,13 @@ function areDataTableRowPropsEqual<TData extends RowData>(
   return (
     previous.ariaRowIndex === next.ariaRowIndex &&
     previous.canSelect === next.canSelect &&
+    previous.columns === next.columns &&
     previous.dataIndex === next.dataIndex &&
     previous.isSelected === next.isSelected &&
     previous.ref === next.ref &&
     previous.row.id === next.row.id &&
     previous.row.index === next.row.index &&
     previous.row.original === next.row.original &&
-    previous.row.table.options.columns === next.row.table.options.columns &&
     previous.rowClassName === next.rowClassName &&
     previous.virtualStart === next.virtualStart
   )

@@ -13,16 +13,22 @@ export type DataTableLoadMoreState =
   | { kind: "idle" }
   | { kind: "loading" }
 
+export interface DataTableNotice {
+  kind: "stale"
+  retry?: () => void
+}
+
 export interface DataTableLoadMoreSource {
   hasMore: boolean
   loadMore: () => Promise<unknown> | void
-  resetKey: string
+  requestKey: string
   state: DataTableLoadMoreState
 }
 
 export interface DataTableSource<TItem> {
   body: DataTableBodyState
   loadMore?: DataTableLoadMoreSource
+  notice?: DataTableNotice
   refreshing: boolean
   resetKey?: string
   rows: Array<TItem>
@@ -97,6 +103,7 @@ export function useCursorDataTableSource<TItem, TCursor>({
     refetch,
   } = query
   const refreshing = isPlaceholderData && isFetching
+  const pageCount = data?.pages.length ?? 0
   const rows = React.useMemo(
     () => (data ? flattenCursorPages(data.pages, getRowKey) : []),
     [data, getRowKey]
@@ -121,7 +128,7 @@ export function useCursorDataTableSource<TItem, TCursor>({
     () => ({
       hasMore: !refreshing && hasNextPage,
       loadMore,
-      resetKey,
+      requestKey: `${resetKey}:${pageCount}`,
       state: resolveCursorDataTableLoadMoreState({
         error,
         isFetchNextPageError,
@@ -135,14 +142,29 @@ export function useCursorDataTableSource<TItem, TCursor>({
       isFetchingNextPage,
       isFetchNextPageError,
       loadMore,
+      pageCount,
       refreshing,
       resetKey,
     ]
   )
+  const notice = React.useMemo<DataTableNotice | undefined>(
+    () =>
+      isError && Boolean(data) && !isFetchNextPageError
+        ? { kind: "stale", retry }
+        : undefined,
+    [data, isError, isFetchNextPageError, retry]
+  )
 
   return React.useMemo(
-    () => ({ body, loadMore: loadMoreSource, refreshing, resetKey, rows }),
-    [body, loadMoreSource, refreshing, resetKey, rows]
+    () => ({
+      body,
+      loadMore: loadMoreSource,
+      notice,
+      refreshing,
+      resetKey,
+      rows,
+    }),
+    [body, loadMoreSource, notice, refreshing, resetKey, rows]
   )
 }
 
@@ -173,10 +195,14 @@ export function useLiveDataTableSource<TItem>({
       }),
     [error, isError, isLoading, retry, rows.length]
   )
+  const notice = React.useMemo<DataTableNotice | undefined>(
+    () => (isError && rows.length > 0 ? { kind: "stale", retry } : undefined),
+    [isError, retry, rows.length]
+  )
 
   return React.useMemo(
-    () => ({ body, refreshing, rows }),
-    [body, refreshing, rows]
+    () => ({ body, notice, refreshing, rows }),
+    [body, notice, refreshing, rows]
   )
 }
 

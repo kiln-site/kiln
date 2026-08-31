@@ -1,4 +1,4 @@
-import { collectionOptions } from "@tanstack/react-db"
+import { collectionOptions, type DbClient } from "@tanstack/react-db"
 import type { QueryClient } from "@tanstack/react-query"
 import { queryCollectionOptions } from "@tanstack/query-db-collection"
 
@@ -19,3 +19,7 @@ export const relaysCollectionOptions = collectionOptions(
       staleTime: Infinity,
     })
 )
+
+export function getRelaysCollection(client: DbClient) {
+  return client.collection(relaysCollectionOptions)
+}

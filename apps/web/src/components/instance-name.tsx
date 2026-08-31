@@ -28,11 +28,13 @@ interface InstanceNameProps {
   iconClassName?: string
   iconSizeClassName?: string
   instance: InstanceNameInstance
+  live?: boolean
   meta?: React.ReactNode
   metaClassName?: string
   name: string
   nameAccessory?: React.ReactNode
   nameClassName?: string
+  showStatus?: boolean
   statusClassName?: string
   textClassName?: string
 }
@@ -45,6 +47,7 @@ const MemoInstanceName = React.memo(function MemoInstanceName(
   props: InstanceNameProps
 ) {
   const { instance } = props
+  if (props.live === false) return <StaticInstanceName {...props} />
   if (instance.kind === "server") {
     return <LiveServerIdentity {...props} instance={instance} />
   }
@@ -60,6 +63,27 @@ const MemoInstanceName = React.memo(function MemoInstanceName(
 type ServerInstance = Extract<InstanceNameInstance, { kind: "server" }>
 type DatabaseInstance = Extract<InstanceNameInstance, { kind: "database" }>
 type RelayInstance = Extract<InstanceNameInstance, { kind: "relay" }>
+
+function StaticInstanceName(props: InstanceNameProps) {
+  const { instance } = props
+  return (
+    <InstanceNameView
+      {...props}
+      brickId={instance.kind === "server" ? instance.brickId : undefined}
+      brickSource={
+        instance.kind === "server" ? instance.brickSource : undefined
+      }
+      implementation={
+        instance.kind === "server" ? instance.implementation : undefined
+      }
+      status={
+        props.showStatus === false
+          ? undefined
+          : instanceStatusPresentation(instance)
+      }
+    />
+  )
+}
 
 function LiveServerIdentity(
   props: InstanceNameProps & { instance: ServerInstance }
@@ -89,11 +113,15 @@ function LiveServerIdentity(
       brickSource={live?.brickSource ?? instance.brickSource}
       implementation={live?.implementation ?? instance.implementation}
       liveName={live?.name}
-      status={instanceStatusPresentation({
-        ...instance,
-        observedState: live?.observedState ?? instance.observedState,
-        relayStatus: live?.relayStatus ?? instance.relayStatus,
-      })}
+      status={
+        props.showStatus === false
+          ? undefined
+          : instanceStatusPresentation({
+              ...instance,
+              observedState: live?.observedState ?? instance.observedState,
+              relayStatus: live?.relayStatus ?? instance.relayStatus,
+            })
+      }
     />
   )
 }
@@ -123,11 +151,16 @@ function LiveDatabaseIdentity(
     <InstanceNameView
       {...props}
       liveName={live?.name}
-      status={instanceStatusPresentation({
-        ...instance,
-        inventoryStatus: live?.inventoryStatus ?? instance.inventoryStatus,
-        observedState: live?.observedState ?? instance.observedState,
-      })}
+      status={
+        props.showStatus === false
+          ? undefined
+          : instanceStatusPresentation({
+              ...instance,
+              inventoryStatus:
+                live?.inventoryStatus ?? instance.inventoryStatus,
+              observedState: live?.observedState ?? instance.observedState,
+            })
+      }
     />
   )
 }
@@ -153,12 +186,18 @@ function LiveRegistryRelayIdentity(
     <InstanceNameView
       {...props}
       liveName={live?.name}
-      status={instanceStatusPresentation({
-        ...instance,
-        connected: live ? live.lastConnectedAt !== null : instance.connected,
-        enabled: live?.enabled ?? instance.enabled,
-        lastError: live ? live.lastError : instance.lastError,
-      })}
+      status={
+        props.showStatus === false
+          ? undefined
+          : instanceStatusPresentation({
+              ...instance,
+              connected: live
+                ? live.lastConnectedAt !== null
+                : instance.connected,
+              enabled: live?.enabled ?? instance.enabled,
+              lastError: live ? live.lastError : instance.lastError,
+            })
+      }
     />
   )
 }
@@ -182,10 +221,14 @@ function LiveFleetRelayIdentity(
     <InstanceNameView
       {...props}
       liveName={live?.name}
-      status={instanceStatusPresentation({
-        ...instance,
-        relayStatus: live?.relayStatus ?? instance.relayStatus,
-      })}
+      status={
+        props.showStatus === false
+          ? undefined
+          : instanceStatusPresentation({
+              ...instance,
+              relayStatus: live?.relayStatus ?? instance.relayStatus,
+            })
+      }
     />
   )
 }
@@ -388,20 +431,27 @@ function instanceNamePropsEqual(
     previous.className === next.className &&
     previous.iconClassName === next.iconClassName &&
     previous.iconSizeClassName === next.iconSizeClassName &&
+    previous.live === next.live &&
     previous.meta === next.meta &&
     previous.metaClassName === next.metaClassName &&
     previous.name === next.name &&
     previous.nameAccessory === next.nameAccessory &&
     previous.nameClassName === next.nameClassName &&
+    previous.showStatus === next.showStatus &&
     previous.statusClassName === next.statusClassName &&
     previous.textClassName === next.textClassName &&
-    instancePresentationEqual(previous.instance, next.instance)
+    instancePresentationEqual(
+      previous.instance,
+      next.instance,
+      previous.live !== false
+    )
   )
 }
 
 function instancePresentationEqual(
   previous: InstanceNameInstance,
-  next: InstanceNameInstance
+  next: InstanceNameInstance,
+  live: boolean
 ): boolean {
   if (
     previous.id !== next.id ||
@@ -411,16 +461,30 @@ function instancePresentationEqual(
     return false
   }
   if (previous.kind === "relay" && next.kind === "relay") {
-    return previous.source === next.source
+    return (
+      previous.source === next.source &&
+      (live ||
+        (previous.connected === next.connected &&
+          previous.enabled === next.enabled &&
+          previous.lastError === next.lastError &&
+          previous.relayStatus === next.relayStatus))
+    )
   }
   if (previous.kind === "database" && next.kind === "database") {
-    return true
+    return (
+      live ||
+      (previous.inventoryStatus === next.inventoryStatus &&
+        previous.observedState === next.observedState)
+    )
   }
   if (previous.kind !== "server" || next.kind !== "server") return false
   return (
     previous.brickId === next.brickId &&
     previous.brickSource === next.brickSource &&
-    previous.implementation === next.implementation
+    previous.implementation === next.implementation &&
+    (live ||
+      (previous.observedState === next.observedState &&
+        previous.relayStatus === next.relayStatus))
   )
 }
 

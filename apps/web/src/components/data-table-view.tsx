@@ -1,7 +1,7 @@
 import * as React from "react"
 import type { RowData } from "@tanstack/react-table"
 
-import { DataTable } from "@/components/data-table"
+import { DataTableRenderer } from "@/components/data-table"
 import {
   type DataTableDefinition,
   type DataTableInstance,
@@ -30,9 +30,14 @@ interface DataTableViewProps<TData extends RowData & object> {
   source: DataTableSource<TData>
 }
 
-export function DataTableView<TData extends RowData & object>(
+export function DataTable<TData extends RowData & object>(
   props: DataTableViewProps<TData>
 ) {
+  if (Boolean(props.definition.search) !== Boolean(props.searchStore)) {
+    throw new Error(
+      "DataTable search requires both definition.search and searchStore"
+    )
+  }
   if (props.definition.search && props.searchStore) {
     return (
       <SearchableDataTableView {...props} searchStore={props.searchStore} />
@@ -94,6 +99,7 @@ function DataTableModel<TData extends RowData & object>({
     ...definition.model,
     columns: definition.columns,
     data: source.rows,
+    getRowId: definition.getRowId,
   })
   const resolvedEmptyState =
     typeof emptyState === "function" ? emptyState({ searchActive }) : emptyState
@@ -101,7 +107,7 @@ function DataTableModel<TData extends RowData & object>({
   return (
     <>
       {children?.(table)}
-      <DataTable
+      <DataTableRenderer
         definition={definition}
         emptyState={resolvedEmptyState}
         source={source}
