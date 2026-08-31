@@ -665,7 +665,6 @@ const TailscaleMembershipRow = React.memo(function TailscaleMembershipRow({
               }
               meta={`${server.implementation} ${server.version}`}
               nameClassName="transition-colors group-hover/server-link:text-primary"
-              showStatus={false}
             />
             <p className="type-meta truncate text-muted-foreground md:hidden">
               {server.relayName}

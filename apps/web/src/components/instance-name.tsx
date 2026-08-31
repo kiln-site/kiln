@@ -10,7 +10,6 @@ import {
   type InstanceNameInstance,
   type InstanceStatusPresentation,
 } from "@/components/instance-name-presentation"
-import { managedDatabaseDirectoryCollectionOptions } from "@/lib/collections/managed-database-directory"
 import { managedDatabasesCollectionOptions } from "@/lib/collections/managed-databases"
 import { relayInstancesCollectionOptions } from "@/lib/collections/relay-instances"
 import { relayNodesCollectionOptions } from "@/lib/collections/relay-nodes"
@@ -22,13 +21,11 @@ interface InstanceNameProps {
   className?: string
   iconClassName?: string
   instance: InstanceNameInstance
-  live?: boolean
   meta?: React.ReactNode
   metaClassName?: string
   name: string
   nameAccessory?: React.ReactNode
   nameClassName?: string
-  showStatus?: boolean
 }
 
 export function InstanceName(props: InstanceNameProps) {
@@ -38,48 +35,24 @@ export function InstanceName(props: InstanceNameProps) {
 const MemoInstanceName = React.memo(function MemoInstanceName(
   props: InstanceNameProps
 ) {
-  const { instance, live = true, showStatus = true } = props
-  if (!live) {
-    return (
-      <InstanceNameView
-        {...props}
-        status={showStatus ? instanceStatusPresentation(instance) : undefined}
-      />
-    )
-  }
+  const { instance } = props
   if (instance.kind === "server") {
-    return showStatus ? (
-      <LiveServerIdentityWithStatus {...props} instance={instance} />
-    ) : (
-      <LiveServerIdentityNameOnly {...props} instance={instance} />
-    )
+    return <LiveServerIdentity {...props} instance={instance} />
   }
   if (instance.kind === "database") {
-    return showStatus ? (
-      <LiveDatabaseIdentityWithStatus {...props} instance={instance} />
-    ) : (
-      <LiveDatabaseIdentityNameOnly {...props} instance={instance} />
-    )
+    return <LiveDatabaseIdentity {...props} instance={instance} />
   }
   if (instance.source === "registry") {
-    return showStatus ? (
-      <LiveRegistryRelayIdentityWithStatus {...props} instance={instance} />
-    ) : (
-      <LiveRegistryRelayIdentityNameOnly {...props} instance={instance} />
-    )
+    return <LiveRegistryRelayIdentity {...props} instance={instance} />
   }
-  return showStatus ? (
-    <LiveFleetRelayIdentityWithStatus {...props} instance={instance} />
-  ) : (
-    <LiveFleetRelayIdentityNameOnly {...props} instance={instance} />
-  )
+  return <LiveFleetRelayIdentity {...props} instance={instance} />
 }, instanceNamePropsEqual)
 
 type ServerInstance = Extract<InstanceNameInstance, { kind: "server" }>
 type DatabaseInstance = Extract<InstanceNameInstance, { kind: "database" }>
 type RelayInstance = Extract<InstanceNameInstance, { kind: "relay" }>
 
-function LiveServerIdentityWithStatus(
+function LiveServerIdentity(
   props: InstanceNameProps & { instance: ServerInstance }
 ) {
   const { instance } = props
@@ -110,23 +83,7 @@ function LiveServerIdentityWithStatus(
   )
 }
 
-function LiveServerIdentityNameOnly(
-  props: InstanceNameProps & { instance: ServerInstance }
-) {
-  const { instance } = props
-  const { data } = useLiveQuery({
-    query: (query) =>
-      query
-        .from({ server: relayInstancesCollectionOptions })
-        .where(({ server }) =>
-          and(eq(server.id, instance.id), eq(server.relayId, instance.relayId))
-        )
-        .select(({ server }) => ({ name: server.name })),
-  })
-  return <InstanceNameView {...props} liveName={data?.[0]?.name} />
-}
-
-function LiveDatabaseIdentityWithStatus(
+function LiveDatabaseIdentity(
   props: InstanceNameProps & { instance: DatabaseInstance }
 ) {
   const { instance } = props
@@ -160,26 +117,7 @@ function LiveDatabaseIdentityWithStatus(
   )
 }
 
-function LiveDatabaseIdentityNameOnly(
-  props: InstanceNameProps & { instance: DatabaseInstance }
-) {
-  const { instance } = props
-  const { data } = useLiveQuery({
-    query: (query) =>
-      query
-        .from({ database: managedDatabaseDirectoryCollectionOptions })
-        .where(({ database }) =>
-          and(
-            eq(database.id, instance.id),
-            eq(database.relayId, instance.relayId)
-          )
-        )
-        .select(({ database }) => ({ name: database.name })),
-  })
-  return <InstanceNameView {...props} liveName={data?.[0]?.name} />
-}
-
-function LiveRegistryRelayIdentityWithStatus(
+function LiveRegistryRelayIdentity(
   props: InstanceNameProps & { instance: RelayInstance }
 ) {
   const { instance } = props
@@ -210,21 +148,7 @@ function LiveRegistryRelayIdentityWithStatus(
   )
 }
 
-function LiveRegistryRelayIdentityNameOnly(
-  props: InstanceNameProps & { instance: RelayInstance }
-) {
-  const { instance } = props
-  const { data } = useLiveQuery({
-    query: (query) =>
-      query
-        .from({ relay: relaysCollectionOptions })
-        .where(({ relay }) => eq(relay.id, instance.id))
-        .select(({ relay }) => ({ name: relay.name })),
-  })
-  return <InstanceNameView {...props} liveName={data?.[0]?.name} />
-}
-
-function LiveFleetRelayIdentityWithStatus(
+function LiveFleetRelayIdentity(
   props: InstanceNameProps & { instance: RelayInstance }
 ) {
   const { instance } = props
@@ -249,20 +173,6 @@ function LiveFleetRelayIdentityWithStatus(
       })}
     />
   )
-}
-
-function LiveFleetRelayIdentityNameOnly(
-  props: InstanceNameProps & { instance: RelayInstance }
-) {
-  const { instance } = props
-  const { data } = useLiveQuery({
-    query: (query) =>
-      query
-        .from({ relay: relayNodesCollectionOptions })
-        .where(({ relay }) => eq(relay.relayId, instance.relayId))
-        .select(({ relay }) => ({ name: relay.relayName })),
-  })
-  return <InstanceNameView {...props} liveName={data?.[0]?.name} />
 }
 
 const InstanceNameView = React.memo(function InstanceNameView({
@@ -389,13 +299,11 @@ function instanceNamePropsEqual(
   return (
     previous.className === next.className &&
     previous.iconClassName === next.iconClassName &&
-    (previous.live ?? true) === (next.live ?? true) &&
     previous.meta === next.meta &&
     previous.metaClassName === next.metaClassName &&
     previous.name === next.name &&
     previous.nameAccessory === next.nameAccessory &&
     previous.nameClassName === next.nameClassName &&
-    (previous.showStatus ?? true) === (next.showStatus ?? true) &&
     instancePresentationEqual(previous.instance, next.instance)
   )
 }

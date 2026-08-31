@@ -1731,12 +1731,10 @@ function ActivityWhereLink({
   const identity = (
     <InstanceName
       instance={instance}
-      live={false}
       name={entry.server?.name ?? entry.relay.name}
       nameClassName="transition-colors group-hover/where-link:text-primary"
       meta={entry.server ? entry.relay.name : "Relay-wide"}
       metaClassName="font-mono"
-      showStatus={false}
     />
   )
   const className =

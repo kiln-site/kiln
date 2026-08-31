@@ -822,7 +822,6 @@ export const BackupTargetLink = React.memo(function BackupTargetLink({
       }
       meta={`${kindLabel} · ${displayId.slice(0, 8)}`}
       metaClassName="font-mono"
-      showStatus={false}
     />
   )
   const targetContent = available ? (
