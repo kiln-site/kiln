@@ -371,7 +371,7 @@ const DatabaseTable = React.memo(function DatabaseTable({
             />
           ),
           meta: dataTableColumnMeta(
-            { width: { base: "2.5rem", sm: "6.5rem" } },
+            { width: { base: "2.5rem", sm: "7.5rem" } },
             {
               cellClassName: "px-2 sm:px-3",
               headerClassName: "px-2 sm:px-3",
@@ -419,7 +419,7 @@ const DatabaseTable = React.memo(function DatabaseTable({
         ),
         meta: dataTableColumnMeta({
           hideBelow: "md",
-          width: "7.5rem",
+          width: "8.5rem",
         }),
       }),
       databaseTableColumnHelper.accessor((database) => database.relayName, {
