@@ -533,6 +533,7 @@ const ServerSelector = React.memo(function ServerSelector({
                     kind: "server",
                     observedState: instance.observedState,
                     relayId: instance.relayId,
+                    relayStatus: instance.relayStatus,
                   }}
                   meta={`${instance.implementation} ${instance.version}`}
                   metaClassName="text-sidebar-muted-foreground"
@@ -855,6 +856,7 @@ const ServerSelectorItem = React.memo(function ServerSelectorItem({
           kind: "server",
           observedState: item.observedState,
           relayId: item.relayId,
+          relayStatus: item.relayStatus,
         }}
         meta={`${item.implementation} ${item.version} · ${item.shortId}`}
         metaClassName="font-mono"

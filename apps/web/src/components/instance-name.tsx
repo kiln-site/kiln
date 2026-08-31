@@ -1,7 +1,7 @@
 import * as React from "react"
 import { and, eq } from "@tanstack/db"
 import { useLiveQuery } from "@tanstack/react-db"
-import { useQuery } from "@tanstack/react-query"
+import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { Database, RadioTower, Server } from "lucide-react"
 
 import { cn } from "@workspace/ui/lib/utils"
@@ -20,7 +20,11 @@ import { managedDatabasesCollectionOptions } from "@/lib/collections/managed-dat
 import { relayInstancesCollectionOptions } from "@/lib/collections/relay-instances"
 import { relayNodesCollectionOptions } from "@/lib/collections/relay-nodes"
 import { relaysCollectionOptions } from "@/lib/collections/relays"
-import { brickIconPresentationsQueryOptions } from "@/lib/query-options"
+import {
+  brickIconPresentationsQueryOptions,
+  relayConnectionQueryOptions,
+  type RelayConnection,
+} from "@/lib/query-options"
 
 export type { InstanceNameInstance } from "@/components/instance-name-presentation"
 
@@ -177,6 +181,7 @@ function LiveRegistryRelayIdentity(
   props: InstanceNameProps & { instance: RelayInstance }
 ) {
   const { instance } = props
+  const queryClient = useQueryClient()
   const { data } = useLiveQuery({
     query: (query) =>
       query
@@ -184,10 +189,19 @@ function LiveRegistryRelayIdentity(
         .where(({ relay }) => eq(relay.id, instance.id))
         .select(({ relay }) => ({
           enabled: relay.enabled,
-          lastConnectedAt: relay.lastConnectedAt,
           lastError: relay.lastError,
           name: relay.name,
         })),
+  })
+  const selectRelayStatus = React.useCallback(
+    (connection: RelayConnection) =>
+      selectRegistryRelayStatus(connection, instance.id),
+    [instance.id]
+  )
+  const { data: relayStatus } = useQuery({
+    ...relayConnectionQueryOptions(queryClient),
+    notifyOnChangeProps: ["data"],
+    select: selectRelayStatus,
   })
   const live = data?.[0]
   return (
@@ -199,15 +213,28 @@ function LiveRegistryRelayIdentity(
           ? undefined
           : instanceStatusPresentation({
               ...instance,
-              connected: live
-                ? live.lastConnectedAt !== null
-                : instance.connected,
+              connected: undefined,
               enabled: live?.enabled ?? instance.enabled,
-              lastError: live ? live.lastError : instance.lastError,
+              lastError:
+                relayStatus === "unreachable"
+                  ? (live?.lastError ?? instance.lastError)
+                  : null,
+              relayStatus,
             })
       }
     />
   )
+}
+
+function selectRegistryRelayStatus(
+  connection: RelayConnection,
+  relayId: string
+): "connected" | "unreachable" | undefined {
+  if (!("relays" in connection)) return undefined
+  const status = connection.relays?.find(
+    (relay) => relay.id === relayId
+  )?.status
+  return status === "connected" || status === "unreachable" ? status : undefined
 }
 
 function LiveFleetRelayIdentity(

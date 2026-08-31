@@ -639,7 +639,6 @@ function RelayTable({
                 enabled: relay.enabled,
                 id: relay.id,
                 kind: "relay",
-                lastError: relay.lastError,
                 relayId: relay.id,
                 relayStatus:
                   relay.relayStatus === "paused"

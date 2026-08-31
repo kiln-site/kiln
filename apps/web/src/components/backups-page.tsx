@@ -157,8 +157,18 @@ function selectBackupTopology(
   snapshot: Awaited<ReturnType<typeof getRelaySnapshot>>
 ) {
   return {
-    nodes: snapshot.nodes.map(({ relayId }) => ({ relayId })),
-    servers: snapshot.instances.map(({ id, relayId }) => ({ id, relayId })),
+    nodes: snapshot.nodes.map(({ relayId, relayStatus }) => ({
+      relayId,
+      relayStatus,
+    })),
+    servers: snapshot.instances.map(
+      ({ id, observedState, relayId, relayStatus }) => ({
+        id,
+        observedState,
+        relayId,
+        relayStatus,
+      })
+    ),
   }
 }
 
@@ -375,7 +385,9 @@ export const BackupsPage = React.memo(function BackupsPage({
       instances.set(targetKey("instance", server.relayId, server.id), {
         id: server.id,
         kind: "server",
+        observedState: server.observedState,
         relayId: server.relayId,
+        relayStatus: server.relayStatus,
       })
     }
     for (const database of databases) {
@@ -390,6 +402,7 @@ export const BackupsPage = React.memo(function BackupsPage({
         id: relay.relayId,
         kind: "relay",
         relayId: relay.relayId,
+        relayStatus: relay.relayStatus,
       })
     }
     return instances

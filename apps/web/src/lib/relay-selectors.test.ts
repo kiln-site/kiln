@@ -194,7 +194,7 @@ describe("Relay render selectors", () => {
     ).toBe(true)
   })
 
-  it("keeps sidebar identity stable while route availability changes", () => {
+  it("publishes Relay reachability to sidebar and route identities", () => {
     const connected = snapshotWithCpu(1)
     const unreachable: RelayFleetSnapshot = {
       ...connected,
@@ -204,8 +204,11 @@ describe("Relay render selectors", () => {
       })),
     }
 
-    expect(selectSidebarInstances(unreachable)).toEqual(
+    expect(selectSidebarInstances(unreachable)).not.toEqual(
       selectSidebarInstances(connected)
+    )
+    expect(selectSidebarInstances(unreachable)[0]?.relayStatus).toBe(
+      "unreachable"
     )
     expect(selectRouteInstances(unreachable)).not.toEqual(
       selectRouteInstances(connected)
