@@ -24,6 +24,7 @@ import {
   Upload,
 } from "lucide-react"
 
+import { Badge } from "@workspace/ui/components/badge"
 import { Button } from "@workspace/ui/components/button"
 import {
   Dialog,
@@ -120,6 +121,17 @@ const engineOptions: ReadonlyArray<{
   { value: "redis", label: "Redis", description: "8" },
   { value: "valkey", label: "Valkey", description: "8" },
 ]
+
+const engineBadgeClasses: Record<DatabaseEngine, string> = {
+  mariadb:
+    "border-amber-500/35 bg-amber-500/10 text-amber-700 dark:text-amber-300",
+  mysql: "border-sky-500/35 bg-sky-500/10 text-sky-700 dark:text-sky-300",
+  postgres:
+    "border-emerald-500/35 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300",
+  redis: "border-red-500/35 bg-red-500/10 text-red-700 dark:text-red-300",
+  valkey:
+    "border-violet-500/35 bg-violet-500/10 text-violet-700 dark:text-violet-300",
+}
 
 const dumpLimitBytes = 700_000
 const databaseInventoryError = new Error("Could not load databases")
@@ -384,13 +396,30 @@ const DatabaseTable = React.memo(function DatabaseTable({
                 relayId: database.relayId,
               }}
               name={database.name}
-              meta={`${engineLabel(database.engine)} · ${database.shortId}`}
+              meta={database.shortId}
               metaClassName="font-mono"
             />
           )
         },
         meta: dataTableColumnMeta({
           width: { base: "minmax(0,1fr)", md: "minmax(0,1.5fr)" },
+        }),
+      }),
+      databaseTableColumnHelper.accessor((database) => database.engine, {
+        id: "engine",
+        header: "Engine",
+        sortFn: "text",
+        cell: ({ row }) => (
+          <Badge
+            variant="outline"
+            className={`type-meta font-mono uppercase ${engineBadgeClasses[row.original.engine]}`}
+          >
+            {engineLabel(row.original.engine)}
+          </Badge>
+        ),
+        meta: dataTableColumnMeta({
+          hideBelow: "md",
+          width: "7.5rem",
         }),
       }),
       databaseTableColumnHelper.accessor((database) => database.relayName, {
