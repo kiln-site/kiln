@@ -624,7 +624,10 @@ const TailscaleMembershipRow = React.memo(function TailscaleMembershipRow({
           >
             <InstanceName
               instance={{
+                brickId: server.brickId,
+                brickSource: server.brickSource,
                 id: server.id,
+                implementation: server.implementation,
                 kind: "server",
                 observedState: server.observedState,
                 relayId: server.relayId,

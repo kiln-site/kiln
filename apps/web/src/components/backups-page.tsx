@@ -163,8 +163,20 @@ function selectBackupTopology(
       relayStatus,
     })),
     servers: snapshot.instances.map(
-      ({ id, name, observedState, relayId, relayStatus }) => ({
+      ({
+        brickId,
+        brickSource,
         id,
+        implementation,
+        name,
+        observedState,
+        relayId,
+        relayStatus,
+      }) => ({
+        brickId,
+        brickSource,
+        id,
+        implementation,
         name,
         observedState,
         relayId,
@@ -386,7 +398,10 @@ export const BackupsPage = React.memo(function BackupsPage({
     const instances = new Map<string, InstanceNameInstance>()
     for (const server of topology.servers) {
       instances.set(targetKey("instance", server.relayId, server.id), {
+        brickId: server.brickId,
+        brickSource: server.brickSource,
         id: server.id,
+        implementation: server.implementation,
         kind: "server",
         observedState: server.observedState,
         relayId: server.relayId,

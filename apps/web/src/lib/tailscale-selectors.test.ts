@@ -18,6 +18,7 @@ describe("Tailscale server selectors", () => {
 
     expect(supported[0]?.tailscaleSupported).toBe(true)
     expect(supported[0]).toMatchObject({
+      implementation: "Paper",
       observedState: "running",
       relayStatus: "connected",
     })
