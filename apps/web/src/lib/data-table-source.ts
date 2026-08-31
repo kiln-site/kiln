@@ -8,24 +8,32 @@ export type DataTableBodyState =
   | { kind: "loading"; rowCount?: number }
   | { kind: "ready" }
 
-export type DataTableNextPageState =
+export type DataTableLoadMoreState =
   | { kind: "error"; error: Error }
   | { kind: "idle" }
   | { kind: "loading" }
 
-export interface DataTablePaginationSource {
+export interface DataTableLoadMoreSource {
   hasMore: boolean
   loadMore: () => Promise<unknown> | void
   resetKey: string
-  state: DataTableNextPageState
+  state: DataTableLoadMoreState
 }
 
 export interface DataTableSource<TItem> {
   body: DataTableBodyState
-  pagination?: DataTablePaginationSource
+  loadMore?: DataTableLoadMoreSource
   refreshing: boolean
   resetKey?: string
   rows: Array<TItem>
+}
+
+export function shouldRenderDataTableLoadMore(
+  loadMore: DataTableLoadMoreSource | undefined
+): boolean {
+  return Boolean(
+    loadMore && (loadMore.hasMore || loadMore.state.kind !== "idle")
+  )
 }
 
 interface CursorDataTableStateInput {
@@ -45,7 +53,7 @@ interface LiveDataTableStateInput {
   rowCount: number
 }
 
-interface CursorDataTableNextPageStateInput {
+interface CursorDataTableLoadMoreStateInput {
   error: Error | null
   isFetchNextPageError: boolean
   isFetchingNextPage: boolean
@@ -109,12 +117,12 @@ export function useCursorDataTableSource<TItem, TCursor>({
       }),
     [data, error, isError, isFetchNextPageError, isPending, retry]
   )
-  const pagination = React.useMemo<DataTablePaginationSource>(
+  const loadMoreSource = React.useMemo<DataTableLoadMoreSource>(
     () => ({
       hasMore: !refreshing && hasNextPage,
       loadMore,
       resetKey,
-      state: resolveCursorDataTableNextPageState({
+      state: resolveCursorDataTableLoadMoreState({
         error,
         isFetchNextPageError,
         isFetchingNextPage,
@@ -133,8 +141,8 @@ export function useCursorDataTableSource<TItem, TCursor>({
   )
 
   return React.useMemo(
-    () => ({ body, pagination, refreshing, resetKey, rows }),
-    [body, pagination, refreshing, resetKey, rows]
+    () => ({ body, loadMore: loadMoreSource, refreshing, resetKey, rows }),
+    [body, loadMoreSource, refreshing, resetKey, rows]
   )
 }
 
@@ -207,12 +215,12 @@ export function resolveLiveDataTableBodyState({
   return { kind: "ready" }
 }
 
-export function resolveCursorDataTableNextPageState({
+export function resolveCursorDataTableLoadMoreState({
   error,
   isFetchNextPageError,
   isFetchingNextPage,
   refreshing,
-}: CursorDataTableNextPageStateInput): DataTableNextPageState {
+}: CursorDataTableLoadMoreStateInput): DataTableLoadMoreState {
   if (refreshing) return { kind: "idle" }
   if (isFetchNextPageError && error) return { error, kind: "error" }
   if (isFetchingNextPage) return { kind: "loading" }

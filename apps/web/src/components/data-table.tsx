@@ -19,31 +19,32 @@ import {
   type DataTableInstance,
   type DataTableVirtualizationOptions,
 } from "@/lib/data-table"
-import type {
-  DataTableBodyState,
-  DataTablePaginationSource,
-  DataTableSource,
+import {
+  type DataTableBodyState,
+  type DataTableLoadMoreSource,
+  type DataTableSource,
+  shouldRenderDataTableLoadMore,
 } from "@/lib/data-table-source"
 import { forkPromise } from "@/effect/promise"
 
 export function DataTableLoadMoreTrigger({
-  pagination,
+  loadMoreSource,
   rowCount,
   scrollRootRef,
 }: {
-  pagination: DataTablePaginationSource
+  loadMoreSource: DataTableLoadMoreSource
   rowCount: number
   scrollRootRef: React.RefObject<Element | null>
 }) {
   const triggerRef = React.useRef<HTMLDivElement>(null)
-  const requestKey = `${pagination.resetKey}:${rowCount}`
+  const requestKey = `${loadMoreSource.resetKey}:${rowCount}`
   const requestedKeyRef = React.useRef<string | null>(null)
 
   React.useEffect(() => {
     if (
-      !pagination.hasMore ||
-      pagination.state.kind === "loading" ||
-      pagination.state.kind === "error"
+      !loadMoreSource.hasMore ||
+      loadMoreSource.state.kind === "loading" ||
+      loadMoreSource.state.kind === "error"
     ) {
       return
     }
@@ -56,24 +57,24 @@ export function DataTableLoadMoreTrigger({
           return
         }
         requestedKeyRef.current = requestKey
-        forkPromise(() => Promise.resolve(pagination.loadMore()))
+        forkPromise(() => Promise.resolve(loadMoreSource.loadMore()))
       },
       { root: scrollRoot, rootMargin: "320px 0px" }
     )
     observer.observe(target)
     return () => observer.disconnect()
-  }, [pagination, requestKey, scrollRootRef])
+  }, [loadMoreSource, requestKey, scrollRootRef])
 
-  if (!pagination.hasMore && pagination.state.kind === "idle") {
+  if (!loadMoreSource.hasMore && loadMoreSource.state.kind === "idle") {
     return null
   }
   return (
     <div ref={triggerRef} className="grid h-12 place-items-center">
-      {pagination.state.kind === "error" ? (
+      {loadMoreSource.state.kind === "error" ? (
         <button
           className="text-xs font-medium text-muted-foreground hover:text-foreground"
           type="button"
-          onClick={() => void pagination.loadMore()}
+          onClick={() => void loadMoreSource.loadMore()}
         >
           Loading failed. Try again
         </button>
@@ -118,7 +119,7 @@ export function DataTableCompactList<TItem>({
     <div
       aria-busy={
         source.refreshing ||
-        source.pagination?.state.kind === "loading" ||
+        source.loadMore?.state.kind === "loading" ||
         undefined
       }
     >
@@ -126,9 +127,9 @@ export function DataTableCompactList<TItem>({
       <div className="divide-y divide-border/70 border-b border-border/70">
         {source.rows.map(renderRow)}
       </div>
-      {source.pagination ? (
+      {source.loadMore && shouldRenderDataTableLoadMore(source.loadMore) ? (
         <DataTableLoadMoreTrigger
-          pagination={source.pagination}
+          loadMoreSource={source.loadMore}
           rowCount={source.rows.length}
           scrollRootRef={scrollRootRef}
         />
@@ -217,7 +218,7 @@ function DataTableRowModel<TData extends RowData>({
       aria-busy={
         source.body.kind === "loading" ||
         source.refreshing ||
-        source.pagination?.state.kind === "loading" ||
+        source.loadMore?.state.kind === "loading" ||
         undefined
       }
       className="relative flex h-full min-h-0 w-full min-w-0 flex-1 flex-col"
@@ -232,7 +233,7 @@ function DataTableRowModel<TData extends RowData>({
           Updating
         </span>
       ) : null}
-      {!source.refreshing && source.pagination?.state.kind === "loading" ? (
+      {!source.refreshing && source.loadMore?.state.kind === "loading" ? (
         <span aria-live="polite" className="sr-only" role="status">
           Loading more rows
         </span>
@@ -256,7 +257,7 @@ function DataTableRowModel<TData extends RowData>({
         ) : definition.virtualization ? (
           <VirtualDataTableBody
             getRowClassName={definition.getRowClassName}
-            pagination={source.pagination}
+            loadMoreSource={source.loadMore}
             rows={rows}
             scrollElementRef={scrollElementRef}
             virtualization={definition.virtualization}
@@ -264,7 +265,7 @@ function DataTableRowModel<TData extends RowData>({
         ) : (
           <DataTableBody
             getRowClassName={definition.getRowClassName}
-            pagination={source.pagination}
+            loadMoreSource={source.loadMore}
             rows={rows}
             scrollElementRef={scrollElementRef}
           />
@@ -688,15 +689,17 @@ function DataTableSortIcon({
 
 function DataTableBody<TData extends RowData>({
   getRowClassName,
-  pagination,
+  loadMoreSource,
   rows,
   scrollElementRef,
 }: {
   getRowClassName?: (row: Row<typeof dataTableFeatures, TData>) => string
-  pagination?: DataTablePaginationSource
+  loadMoreSource?: DataTableLoadMoreSource
   rows: Array<Row<typeof dataTableFeatures, TData>>
   scrollElementRef: React.RefObject<HTMLTableSectionElement | null>
 }) {
+  const showLoadMoreRow = shouldRenderDataTableLoadMore(loadMoreSource)
+
   return (
     <tbody ref={scrollElementRef} className={dataTableScrollAreaClassName}>
       {rows.map((row) => (
@@ -707,10 +710,10 @@ function DataTableBody<TData extends RowData>({
           rowClassName={getRowClassName?.(row)}
         />
       ))}
-      {pagination ? (
-        <DataTablePaginationRow
+      {loadMoreSource && showLoadMoreRow ? (
+        <DataTableLoadMoreRow
           colSpan={rows[0]?.getAllCells().length ?? 1}
-          pagination={pagination}
+          loadMoreSource={loadMoreSource}
           rowCount={rows.length}
         />
       ) : null}
@@ -720,24 +723,22 @@ function DataTableBody<TData extends RowData>({
 
 function VirtualDataTableBody<TData extends RowData>({
   getRowClassName,
-  pagination,
+  loadMoreSource,
   rows,
   scrollElementRef,
   virtualization,
 }: {
   getRowClassName?: (row: Row<typeof dataTableFeatures, TData>) => string
-  pagination?: DataTablePaginationSource
+  loadMoreSource?: DataTableLoadMoreSource
   rows: Array<Row<typeof dataTableFeatures, TData>>
   scrollElementRef: React.RefObject<HTMLTableSectionElement | null>
   virtualization: DataTableVirtualizationOptions
 }) {
-  const showPagination = Boolean(
-    pagination?.hasMore || pagination?.state.kind !== "idle"
-  )
+  const showLoadMoreRow = shouldRenderDataTableLoadMore(loadMoreSource)
   const rowVirtualizer = useVirtualizer({
-    count: rows.length + (showPagination ? 1 : 0),
+    count: rows.length + (showLoadMoreRow ? 1 : 0),
     estimateSize: () => virtualization.estimateRowHeight ?? 72,
-    getItemKey: (index) => rows[index]?.id ?? `pagination-${index}`,
+    getItemKey: (index) => rows[index]?.id ?? `load-more-${index}`,
     getScrollElement: () => scrollElementRef.current,
     overscan: virtualization.overscan ?? 6,
   })
@@ -755,14 +756,18 @@ function VirtualDataTableBody<TData extends RowData>({
         <td className="block p-0" />
       </tr>
       {rowVirtualizer.getVirtualItems().map((virtualRow) => {
-        if (virtualRow.index === rows.length && pagination && showPagination) {
+        if (
+          virtualRow.index === rows.length &&
+          loadMoreSource &&
+          showLoadMoreRow
+        ) {
           return (
-            <DataTablePaginationRow
-              key="pagination"
+            <DataTableLoadMoreRow
+              key="load-more"
               ref={rowVirtualizer.measureElement}
               colSpan={rows[0]?.getAllCells().length ?? 1}
               dataIndex={virtualRow.index}
-              pagination={pagination}
+              loadMoreSource={loadMoreSource}
               rowCount={rows.length}
               virtualStart={virtualRow.start}
             />
@@ -788,30 +793,30 @@ function VirtualDataTableBody<TData extends RowData>({
   )
 }
 
-function DataTablePaginationRow({
+function DataTableLoadMoreRow({
   colSpan,
   dataIndex,
-  pagination,
+  loadMoreSource,
   rowCount,
   virtualStart,
   ref,
 }: {
   colSpan: number
   dataIndex?: number
-  pagination: DataTablePaginationSource
+  loadMoreSource: DataTableLoadMoreSource
   rowCount: number
   virtualStart?: number
   ref?: React.Ref<HTMLTableRowElement>
 }) {
   const triggerRef = React.useRef<HTMLTableCellElement>(null)
-  const requestKey = `${pagination.resetKey}:${rowCount}`
+  const requestKey = `${loadMoreSource.resetKey}:${rowCount}`
   const requestedKeyRef = React.useRef<string | null>(null)
 
   React.useEffect(() => {
     if (
-      !pagination.hasMore ||
-      pagination.state.kind === "loading" ||
-      pagination.state.kind === "error"
+      !loadMoreSource.hasMore ||
+      loadMoreSource.state.kind === "loading" ||
+      loadMoreSource.state.kind === "error"
     ) {
       return
     }
@@ -823,21 +828,21 @@ function DataTablePaginationRow({
           return
         }
         requestedKeyRef.current = requestKey
-        forkPromise(() => Promise.resolve(pagination.loadMore()))
+        forkPromise(() => Promise.resolve(loadMoreSource.loadMore()))
       },
       { root: target.closest("tbody"), rootMargin: "320px 0px" }
     )
     observer.observe(target)
     return () => observer.disconnect()
-  }, [pagination, requestKey])
+  }, [loadMoreSource, requestKey])
 
-  if (!pagination.hasMore && pagination.state.kind === "idle") {
+  if (!loadMoreSource.hasMore && loadMoreSource.state.kind === "idle") {
     return null
   }
   return (
     <tr
       ref={ref}
-      aria-hidden={pagination.state.kind !== "error"}
+      aria-hidden={loadMoreSource.state.kind !== "error"}
       className="grid h-12 place-items-center"
       data-index={dataIndex}
       style={
@@ -853,11 +858,11 @@ function DataTablePaginationRow({
       }
     >
       <td ref={triggerRef} className="col-span-full" colSpan={colSpan}>
-        {pagination.state.kind === "error" ? (
+        {loadMoreSource.state.kind === "error" ? (
           <button
             className="text-xs font-medium text-muted-foreground hover:text-foreground"
             type="button"
-            onClick={() => void pagination.loadMore()}
+            onClick={() => void loadMoreSource.loadMore()}
           >
             Loading failed. Try again
           </button>

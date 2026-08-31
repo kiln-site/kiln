@@ -3,8 +3,10 @@ import { describe, expect, it, vi } from "vite-plus/test"
 import {
   replaceDataTableRows,
   resolveCursorDataTableBodyState,
-  resolveCursorDataTableNextPageState,
+  resolveCursorDataTableLoadMoreState,
   resolveLiveDataTableBodyState,
+  shouldRenderDataTableLoadMore,
+  type DataTableLoadMoreSource,
   type DataTableSource,
 } from "@/lib/data-table-source"
 
@@ -64,7 +66,7 @@ describe("data table sources", () => {
     const error = new Error("offline")
 
     expect(
-      resolveCursorDataTableNextPageState({
+      resolveCursorDataTableLoadMoreState({
         error,
         isFetchNextPageError: true,
         isFetchingNextPage: false,
@@ -72,13 +74,34 @@ describe("data table sources", () => {
       })
     ).toEqual({ error, kind: "error" })
     expect(
-      resolveCursorDataTableNextPageState({
+      resolveCursorDataTableLoadMoreState({
         error,
         isFetchNextPageError: true,
         isFetchingNextPage: true,
         refreshing: true,
       })
     ).toEqual({ kind: "idle" })
+  })
+
+  it("only reserves a load-more row for an active source", () => {
+    const complete: DataTableLoadMoreSource = {
+      hasMore: false,
+      loadMore: vi.fn(),
+      resetKey: "complete",
+      state: { kind: "idle" },
+    }
+
+    expect(shouldRenderDataTableLoadMore(undefined)).toBe(false)
+    expect(shouldRenderDataTableLoadMore(complete)).toBe(false)
+    expect(shouldRenderDataTableLoadMore({ ...complete, hasMore: true })).toBe(
+      true
+    )
+    expect(
+      shouldRenderDataTableLoadMore({
+        ...complete,
+        state: { kind: "loading" },
+      })
+    ).toBe(true)
   })
 
   it("projects domain feedback rows without losing source state", () => {
