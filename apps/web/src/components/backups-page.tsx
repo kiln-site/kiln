@@ -48,7 +48,6 @@ import { Switch } from "@workspace/ui/components/switch"
 import { Textarea } from "@workspace/ui/components/textarea"
 import { ServerScopePicker } from "@/components/server-scope-picker"
 import type { ServerPickerOption } from "@/components/server-picker-list"
-import { brickIconPresentation } from "@/components/brick-icon"
 import type { InstanceNameInstance } from "@/components/instance-name"
 import { backupHasReportedDeleteArtifactProgress } from "@/lib/backup-progress-presentation"
 import {
@@ -85,7 +84,6 @@ import {
   accessCapabilitiesQueryOptions,
   backupRunsInfiniteQueryOptions,
   backupStorageQueryOptions,
-  brickIconPresentationsQueryOptions,
   backupPolicyQueryOptions,
   managedDatabaseDirectoryQueryOptions,
   queryKeys,
@@ -142,25 +140,12 @@ function selectBackupScope(
       relayId,
       relayName,
     })),
-    servers: snapshot.instances.map(
-      ({
-        brickId,
-        brickSource,
-        id,
-        implementation,
-        name,
-        relayId,
-        relayName,
-      }) => ({
-        brickId,
-        brickSource,
-        id,
-        implementation,
-        name,
-        relayId,
-        relayName,
-      })
-    ),
+    servers: snapshot.instances.map(({ id, name, relayId, relayName }) => ({
+      id,
+      name,
+      relayId,
+      relayName,
+    })),
   }
 }
 
@@ -169,15 +154,7 @@ function selectBackupTopology(
 ) {
   return {
     nodes: snapshot.nodes.map(({ relayId }) => ({ relayId })),
-    servers: snapshot.instances.map(
-      ({ brickId, brickSource, id, implementation, relayId }) => ({
-        brickId,
-        brickSource,
-        id,
-        implementation,
-        relayId,
-      })
-    ),
+    servers: snapshot.instances.map(({ id, relayId }) => ({ id, relayId })),
   }
 }
 
@@ -343,9 +320,6 @@ export const BackupsPage = React.memo(function BackupsPage({
     ...managedDatabaseDirectoryQueryOptions(),
     select: selectBackupDatabaseTopology,
   })
-  const { data: bricks } = useSuspenseQuery(
-    brickIconPresentationsQueryOptions()
-  )
   const { data: capabilities } = useSuspenseQuery(
     accessCapabilitiesQueryOptions()
   )
@@ -396,7 +370,6 @@ export const BackupsPage = React.memo(function BackupsPage({
     for (const server of topology.servers) {
       instances.set(targetKey("instance", server.relayId, server.id), {
         id: server.id,
-        icon: brickIconPresentation(bricks, server),
         kind: "server",
         relayId: server.relayId,
       })
@@ -416,7 +389,7 @@ export const BackupsPage = React.memo(function BackupsPage({
       })
     }
     return instances
-  }, [bricks, databases, topology.nodes, topology.servers])
+  }, [databases, topology.nodes, topology.servers])
   const availableRelayIds = React.useMemo(
     () =>
       new Set(

@@ -9,7 +9,6 @@ import {
 import {
   backupStorageQueryOptions,
   accessCapabilitiesQueryOptions,
-  brickIconPresentationsQueryOptions,
   managedDatabaseDirectoryQueryOptions,
   relaySnapshotQueryOptions,
 } from "@/lib/query-options"
@@ -24,7 +23,6 @@ export const Route = createFileRoute("/_app/backups/runs")({
       context.queryClient.ensureQueryData(
         managedDatabaseDirectoryQueryOptions()
       ),
-      context.queryClient.ensureQueryData(brickIconPresentationsQueryOptions()),
     ])
   },
   head: () => ({ meta: [{ title: pageTitle("Backup Runs") }] }),

@@ -1,10 +1,15 @@
 import * as React from "react"
 import { and, eq } from "@tanstack/db"
 import { useLiveQuery } from "@tanstack/react-db"
+import { useQuery } from "@tanstack/react-query"
 import { Database, RadioTower, Server } from "lucide-react"
 
 import { cn } from "@workspace/ui/lib/utils"
-import { BrickIcon } from "@/components/brick-icon"
+import {
+  BrickIcon,
+  brickIconPresentation,
+  type BrickIconDefinition,
+} from "@/components/brick-icon"
 import {
   instanceStatusPresentation,
   type InstanceNameInstance,
@@ -14,6 +19,7 @@ import { managedDatabasesCollectionOptions } from "@/lib/collections/managed-dat
 import { relayInstancesCollectionOptions } from "@/lib/collections/relay-instances"
 import { relayNodesCollectionOptions } from "@/lib/collections/relay-nodes"
 import { relaysCollectionOptions } from "@/lib/collections/relays"
+import { brickIconPresentationsQueryOptions } from "@/lib/query-options"
 
 export type { InstanceNameInstance } from "@/components/instance-name-presentation"
 
@@ -64,6 +70,9 @@ function LiveServerIdentity(
           and(eq(server.id, instance.id), eq(server.relayId, instance.relayId))
         )
         .select(({ server }) => ({
+          brickId: server.brickId,
+          brickSource: server.brickSource,
+          implementation: server.implementation,
           name: server.name,
           observedState: server.observedState,
           relayStatus: server.relayStatus,
@@ -73,6 +82,9 @@ function LiveServerIdentity(
   return (
     <InstanceNameView
       {...props}
+      brickId={live?.brickId}
+      brickSource={live?.brickSource}
+      implementation={live?.implementation}
       liveName={live?.name}
       status={instanceStatusPresentation({
         ...instance,
@@ -177,7 +189,10 @@ function LiveFleetRelayIdentity(
 
 const InstanceNameView = React.memo(function InstanceNameView({
   className,
+  brickId,
+  brickSource,
   iconClassName,
+  implementation,
   instance,
   liveName,
   meta,
@@ -187,6 +202,9 @@ const InstanceNameView = React.memo(function InstanceNameView({
   nameClassName,
   status,
 }: InstanceNameProps & {
+  brickId?: string
+  brickSource?: string
+  implementation?: string
   liveName?: string
   status?: InstanceStatusPresentation
 }) {
@@ -198,7 +216,12 @@ const InstanceNameView = React.memo(function InstanceNameView({
           iconClassName
         )}
       >
-        <InstanceIcon instance={instance} />
+        <InstanceIcon
+          brickId={brickId}
+          brickSource={brickSource}
+          implementation={implementation}
+          instance={instance}
+        />
         {status ? (
           <InstanceStatus label={status.label} tone={status.tone} />
         ) : null}
@@ -268,19 +291,25 @@ const InstanceStatus = React.memo(function InstanceStatus({
 })
 
 const InstanceIcon = React.memo(function InstanceIcon({
+  brickId,
+  brickSource,
+  implementation,
   instance,
 }: {
+  brickId?: string
+  brickSource?: string
+  implementation?: string
   instance: InstanceNameInstance
 }) {
-  if (instance.kind === "server" && instance.icon) {
-    return (
-      <BrickIcon
-        id={instance.icon.id}
-        color={instance.icon.color}
-        iconSvg={instance.icon.iconSvg}
-        className="size-6"
-        aria-hidden="true"
+  if (instance.kind === "server") {
+    return implementation ? (
+      <LiveServerBrickIcon
+        brickId={brickId}
+        brickSource={brickSource}
+        implementation={implementation}
       />
+    ) : (
+      <Server className="size-4" aria-hidden="true" />
     )
   }
   const Icon =
@@ -290,6 +319,40 @@ const InstanceIcon = React.memo(function InstanceIcon({
         ? RadioTower
         : Server
   return <Icon className="size-4" aria-hidden="true" />
+})
+
+const LiveServerBrickIcon = React.memo(function LiveServerBrickIcon({
+  brickId,
+  brickSource,
+  implementation,
+}: {
+  brickId?: string
+  brickSource?: string
+  implementation: string
+}) {
+  const selectIcon = React.useCallback(
+    (bricks: Array<BrickIconDefinition>) =>
+      brickIconPresentation(bricks, {
+        brickId,
+        brickSource,
+        implementation,
+      }),
+    [brickId, brickSource, implementation]
+  )
+  const { data: icon } = useQuery({
+    ...brickIconPresentationsQueryOptions(),
+    notifyOnChangeProps: ["data"],
+    select: selectIcon,
+  })
+  return (
+    <BrickIcon
+      id={icon?.id ?? brickId ?? implementation}
+      color={icon?.color}
+      iconSvg={icon?.iconSvg}
+      className="size-6"
+      aria-hidden="true"
+    />
+  )
 })
 
 function instanceNamePropsEqual(
@@ -325,12 +388,7 @@ function instancePresentationEqual(
   if (previous.kind === "database" && next.kind === "database") {
     return true
   }
-  if (previous.kind !== "server" || next.kind !== "server") return false
-  return (
-    previous.icon?.id === next.icon?.id &&
-    previous.icon?.color === next.icon?.color &&
-    previous.icon?.iconSvg === next.icon?.iconSvg
-  )
+  return previous.kind === "server" && next.kind === "server"
 }
 
 const statusToneClassName: Record<InstanceStatusPresentation["tone"], string> =

@@ -1,11 +1,7 @@
 import * as React from "react"
 import { eq, not } from "@tanstack/db"
 import { useDbClient, useLiveQuery } from "@tanstack/react-db"
-import {
-  useQuery,
-  useQueryClient,
-  useSuspenseQuery,
-} from "@tanstack/react-query"
+import { useQueryClient, useSuspenseQuery } from "@tanstack/react-query"
 import { Link } from "@tanstack/react-router"
 import { ensuringPromise, forkPromise } from "@/effect/promise"
 import {
@@ -39,11 +35,6 @@ import {
   ServerDeleteDialog,
   type ServerDeleteTarget,
 } from "@/components/server-delete-dialog"
-import {
-  brickIconPresentation,
-  type BrickIconDefinition,
-  type BrickIconPresentation,
-} from "@/components/brick-icon"
 import { InstanceName } from "@/components/instance-name"
 import {
   WorkspaceDataTable,
@@ -57,7 +48,6 @@ import type { WorkspaceTableSearchStore } from "@/components/workspace-data-tabl
 import {
   accessCapabilitiesQueryOptions,
   brickCatalogQueryOptions,
-  brickIconPresentationsQueryOptions,
   relayConnectionQueryOptions,
 } from "@/lib/query-options"
 import {
@@ -69,7 +59,6 @@ import { selectRelayConfigured } from "@/lib/relay-selectors"
 import type { ServerListInstance } from "@/lib/relay-selectors"
 
 const emptyServers: Array<ServerListInstance> = []
-const emptyBrickIcons: Array<BrickIconDefinition> = []
 const minimumManualSyncFeedbackMs = 500
 
 interface ServerDeleteAccess {
@@ -426,7 +415,6 @@ const AddServerButton = React.memo(function AddServerButton({
 
 const ServerTableSearchBoundary = React.memo(
   function ServerTableSearchBoundary({
-    bricks,
     canProvision,
     deleteAccess,
     dialogStore,
@@ -434,7 +422,6 @@ const ServerTableSearchBoundary = React.memo(
     searchStore,
     servers,
   }: {
-    bricks: Array<BrickIconDefinition>
     canProvision: boolean
     deleteAccess: ServerDeleteAccess
     dialogStore: AddServerDialogStore
@@ -450,28 +437,20 @@ const ServerTableSearchBoundary = React.memo(
       return counts
     }, [servers])
     const renderRow = React.useCallback(
-      (server: ServerListInstance) => {
-        const icon = brickIconPresentation(bricks, {
-          brickId: server.brickId,
-          brickSource: server.brickSource,
-          implementation: server.implementation,
-        })
-        return (
-          <ServerTableRow
-            canonical={shortIdCounts.get(server.shortId) === 1}
-            canDelete={canDeleteServer(deleteAccess, server)}
-            icon={icon}
-            onDelete={onDelete}
-            routeIdentifier={
-              shortIdCounts.get(server.shortId) === 1
-                ? server.shortId
-                : server.routeId
-            }
-            server={server}
-          />
-        )
-      },
-      [bricks, deleteAccess, onDelete, shortIdCounts]
+      (server: ServerListInstance) => (
+        <ServerTableRow
+          canonical={shortIdCounts.get(server.shortId) === 1}
+          canDelete={canDeleteServer(deleteAccess, server)}
+          onDelete={onDelete}
+          routeIdentifier={
+            shortIdCounts.get(server.shortId) === 1
+              ? server.shortId
+              : server.routeId
+          }
+          server={server}
+        />
+      ),
+      [deleteAccess, onDelete, shortIdCounts]
     )
     const renderEmpty = React.useCallback(
       (searchActive: boolean) => (
@@ -524,7 +503,6 @@ const FilteredServerTableBoundary = React.memo(
           )
           .select(({ instance }) => ({
             brickId: instance.brickId,
-            brickSource: instance.brickSource,
             connectAddress: instance.connectAddress,
             game: instance.game,
             id: instance.id,
@@ -541,13 +519,8 @@ const FilteredServerTableBoundary = React.memo(
           }))
       },
     })
-    const { data: bricks = emptyBrickIcons } = useQuery({
-      ...brickIconPresentationsQueryOptions(),
-      notifyOnChangeProps: ["data"],
-    })
     return (
       <ServerTableSearchBoundary
-        bricks={bricks}
         canProvision={canProvision}
         deleteAccess={deleteAccess}
         dialogStore={dialogStore}
@@ -590,14 +563,12 @@ const ServerTableHead = React.memo(function ServerTableHead() {
 const ServerTableRow = React.memo(function ServerTableRow({
   canonical,
   canDelete,
-  icon,
   onDelete,
   routeIdentifier,
   server,
 }: {
   canonical: boolean
   canDelete: boolean
-  icon: BrickIconPresentation
   onDelete: (target: ServerDeleteTarget) => void
   routeIdentifier: string
   server: ServerListInstance
@@ -617,7 +588,6 @@ const ServerTableRow = React.memo(function ServerTableRow({
           <InstanceName
             instance={{
               id: server.id,
-              icon,
               kind: "server",
               observedState: server.observedState,
               relayId: server.relayId,

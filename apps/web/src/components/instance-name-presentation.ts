@@ -1,7 +1,5 @@
 import type { RelayObservedState } from "@workspace/contracts"
 
-import type { BrickIconPresentation } from "@/components/brick-icon"
-
 export interface InstanceStatusPresentation {
   label: string
   tone: "danger" | "info" | "neutral" | "success" | "warning"
@@ -14,7 +12,6 @@ interface InstanceIdentity {
 
 export type InstanceNameInstance =
   | (InstanceIdentity & {
-      icon?: BrickIconPresentation
       kind: "server"
       observedState?: RelayObservedState
       relayStatus?: "connected" | "unreachable"

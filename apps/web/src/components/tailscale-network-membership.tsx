@@ -60,11 +60,6 @@ import {
   WorkspaceTableHeading,
 } from "@/components/workspace-data-table"
 import type { WorkspaceTableSearchStore } from "@/components/workspace-data-table"
-import {
-  brickIconPresentation,
-  type BrickIconDefinition,
-  type BrickIconPresentation,
-} from "@/components/brick-icon"
 import { InstanceName } from "@/components/instance-name"
 import {
   ServerPickerList,
@@ -73,7 +68,6 @@ import {
 } from "@/components/server-picker-list"
 import { TailscaleRelayUpdateHint } from "@/components/tailscale-relay-update-hint"
 import {
-  brickIconPresentationsQueryOptions,
   queryKeys,
   relaySnapshotQueryOptions,
   tailscaleStacksQueryOptions,
@@ -102,7 +96,6 @@ type StackBinding = TailscaleStackOverview["bindings"][number]
 type SaveStackInput = Parameters<typeof saveTailscaleStack>[0]["data"]
 
 const emptyServers: Array<TailscaleServer> = []
-const emptyBrickIcons: Array<BrickIconDefinition> = []
 const emptyServerKeys = new Set<string>()
 
 export function TailscaleConnectedServersTable({
@@ -159,10 +152,6 @@ const ConnectedServersTableContent = React.memo(
       () => servers.filter((server) => Boolean(findBinding(stack, server))),
       [servers, stack]
     )
-    const { data: bricks = emptyBrickIcons } = useQuery({
-      ...brickIconPresentationsQueryOptions(),
-      notifyOnChangeProps: ["data"],
-    })
     const save = useStackMembershipMutation()
 
     return (
@@ -176,7 +165,6 @@ const ConnectedServersTableContent = React.memo(
           </p>
         ) : null}
         <TailscaleMembershipTable
-          bricks={bricks}
           emptyActionLabel="Connect Servers"
           emptyDescription="Connect a server to reach it through this tailnet"
           emptyMessage="No connected servers"
@@ -457,7 +445,6 @@ export function GameServerTailscaleSection({
 }
 
 const TailscaleMembershipTable = React.memo(function TailscaleMembershipTable({
-  bricks,
   emptyActionLabel,
   emptyDescription,
   emptyMessage,
@@ -469,7 +456,6 @@ const TailscaleMembershipTable = React.memo(function TailscaleMembershipTable({
   onEmptyAction,
   onSave,
 }: {
-  bricks: Array<BrickIconDefinition>
   emptyActionLabel?: string
   emptyDescription: string
   emptyMessage: string
@@ -482,23 +468,15 @@ const TailscaleMembershipTable = React.memo(function TailscaleMembershipTable({
   onSave: (bindings: Array<StackBinding>, authKey?: string) => Promise<unknown>
 }) {
   const renderRow = React.useCallback(
-    (server: TailscaleServer) => {
-      const icon = brickIconPresentation(bricks, {
-        brickId: server.brickId,
-        brickSource: server.brickSource,
-        implementation: server.implementation,
-      })
-      return (
-        <TailscaleMembershipRow
-          icon={icon}
-          pending={pending}
-          server={server}
-          stack={stack}
-          onSave={onSave}
-        />
-      )
-    },
-    [bricks, onSave, pending, stack]
+    (server: TailscaleServer) => (
+      <TailscaleMembershipRow
+        pending={pending}
+        server={server}
+        stack={stack}
+        onSave={onSave}
+      />
+    ),
+    [onSave, pending, stack]
   )
   const renderEmpty = React.useCallback(
     (searchActive: boolean) => (
@@ -579,13 +557,11 @@ const MembershipTableHead = React.memo(function MembershipTableHead() {
 })
 
 const TailscaleMembershipRow = React.memo(function TailscaleMembershipRow({
-  icon,
   pending,
   server,
   stack,
   onSave,
 }: {
-  icon: BrickIconPresentation
   pending: boolean
   server: TailscaleServer
   stack: TailscaleStackOverview
@@ -649,7 +625,6 @@ const TailscaleMembershipRow = React.memo(function TailscaleMembershipRow({
             <InstanceName
               instance={{
                 id: server.id,
-                icon,
                 kind: "server",
                 relayId: server.relayId,
               }}
