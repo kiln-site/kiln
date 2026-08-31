@@ -1,9 +1,7 @@
 import type { RelayObservedState } from "@workspace/contracts"
+import type { IdentityStatusPresentation } from "@/components/identity-name"
 
-export interface InstanceStatusPresentation {
-  label: string
-  tone: "danger" | "info" | "neutral" | "success" | "warning"
-}
+export type InstanceStatusPresentation = IdentityStatusPresentation
 
 interface InstanceIdentity {
   id: string
@@ -46,12 +44,14 @@ export function instanceStatusPresentation(
   }
   if (instance.kind === "relay") {
     if (instance.enabled === false) return { label: "Paused", tone: "info" }
-    if (instance.lastError || instance.relayStatus === "unreachable") {
+    if (instance.relayStatus === "unreachable") {
       return { label: "Unreachable", tone: "danger" }
     }
-    if (instance.connected || instance.relayStatus === "connected") {
+    if (instance.relayStatus === "connected") {
       return { label: "Online", tone: "success" }
     }
+    if (instance.lastError) return { label: "Unreachable", tone: "danger" }
+    if (instance.connected) return { label: "Online", tone: "success" }
     return { label: "Offline", tone: "neutral" }
   }
   if (instance.inventoryStatus === "missing") {

@@ -15,6 +15,7 @@ import {
   type InstanceNameInstance,
   type InstanceStatusPresentation,
 } from "@/components/instance-name-presentation"
+import { IdentityName } from "@/components/identity-name"
 import { managedDatabasesCollectionOptions } from "@/lib/collections/managed-databases"
 import { relayInstancesCollectionOptions } from "@/lib/collections/relay-instances"
 import { relayNodesCollectionOptions } from "@/lib/collections/relay-nodes"
@@ -28,7 +29,6 @@ interface InstanceNameProps {
   iconClassName?: string
   iconSizeClassName?: string
   instance: InstanceNameInstance
-  live?: boolean
   meta?: React.ReactNode
   metaClassName?: string
   name: string
@@ -43,11 +43,19 @@ export function InstanceName(props: InstanceNameProps) {
   return <MemoInstanceName {...props} />
 }
 
-const MemoInstanceName = React.memo(function MemoInstanceName(
+const MemoInstanceName = React.memo(
+  StaticInstanceName,
+  staticInstanceNamePropsEqual
+)
+
+export function LiveInstanceName(props: InstanceNameProps) {
+  return <MemoLiveInstanceName {...props} />
+}
+
+const MemoLiveInstanceName = React.memo(function MemoLiveInstanceName(
   props: InstanceNameProps
 ) {
   const { instance } = props
-  if (props.live === false) return <StaticInstanceName {...props} />
   if (instance.kind === "server") {
     return <LiveServerIdentity {...props} instance={instance} />
   }
@@ -58,7 +66,7 @@ const MemoInstanceName = React.memo(function MemoInstanceName(
     return <LiveRegistryRelayIdentity {...props} instance={instance} />
   }
   return <LiveFleetRelayIdentity {...props} instance={instance} />
-}, instanceNamePropsEqual)
+}, liveInstanceNamePropsEqual)
 
 type ServerInstance = Extract<InstanceNameInstance, { kind: "server" }>
 type DatabaseInstance = Extract<InstanceNameInstance, { kind: "database" }>
@@ -258,13 +266,9 @@ const InstanceNameView = React.memo(function InstanceNameView({
   status?: InstanceStatusPresentation
 }) {
   return (
-    <span className={cn("flex min-w-0 items-center gap-2.5", className)}>
-      <span
-        className={cn(
-          "relative grid size-8 shrink-0 place-items-center rounded-md border border-border/70 bg-background/35 text-muted-foreground",
-          iconClassName
-        )}
-      >
+    <IdentityName
+      className={className}
+      icon={
         <InstanceIcon
           brickId={brickId}
           brickSource={brickSource}
@@ -272,84 +276,17 @@ const InstanceNameView = React.memo(function InstanceNameView({
           implementation={implementation}
           instance={instance}
         />
-        {status ? (
-          <InstanceStatus
-            className={statusClassName}
-            label={status.label}
-            tone={status.tone}
-          />
-        ) : null}
-      </span>
-      <InstanceText
-        meta={meta}
-        metaClassName={metaClassName}
-        name={liveName ?? name}
-        nameAccessory={nameAccessory}
-        nameClassName={nameClassName}
-        textClassName={textClassName}
-      />
-    </span>
-  )
-})
-
-const InstanceText = React.memo(function InstanceText({
-  meta,
-  metaClassName,
-  name,
-  nameAccessory,
-  nameClassName,
-  textClassName,
-}: Pick<
-  InstanceNameProps,
-  | "meta"
-  | "metaClassName"
-  | "name"
-  | "nameAccessory"
-  | "nameClassName"
-  | "textClassName"
->) {
-  return (
-    <span className={cn("min-w-0 flex-1", textClassName)}>
-      <span
-        className={cn(
-          "flex min-w-0 items-center gap-1.5 text-xs font-semibold text-foreground",
-          nameClassName
-        )}
-      >
-        <span className="truncate">{name}</span>
-        {nameAccessory}
-      </span>
-      {meta ? (
-        <span
-          className={cn(
-            "type-meta block truncate text-muted-foreground",
-            metaClassName
-          )}
-        >
-          {meta}
-        </span>
-      ) : null}
-    </span>
-  )
-})
-
-const InstanceStatus = React.memo(function InstanceStatus({
-  className,
-  label,
-  tone,
-}: InstanceStatusPresentation & { className?: string }) {
-  return (
-    <>
-      <span
-        className={cn(
-          "absolute -right-0.5 -bottom-0.5 size-1.5 rounded-full ring-2 ring-background",
-          statusToneClassName[tone],
-          className
-        )}
-        aria-hidden="true"
-      />
-      <span className="sr-only">Status: {label}</span>
-    </>
+      }
+      iconClassName={iconClassName}
+      meta={meta}
+      metaClassName={metaClassName}
+      name={liveName ?? name}
+      nameAccessory={nameAccessory}
+      nameClassName={nameClassName}
+      status={status}
+      statusClassName={statusClassName}
+      textClassName={textClassName}
+    />
   )
 })
 
@@ -423,15 +360,29 @@ const LiveServerBrickIcon = React.memo(function LiveServerBrickIcon({
   )
 })
 
-function instanceNamePropsEqual(
+function staticInstanceNamePropsEqual(
   previous: InstanceNameProps,
   next: InstanceNameProps
+): boolean {
+  return instanceNamePropsEqual(previous, next, false)
+}
+
+function liveInstanceNamePropsEqual(
+  previous: InstanceNameProps,
+  next: InstanceNameProps
+): boolean {
+  return instanceNamePropsEqual(previous, next, true)
+}
+
+function instanceNamePropsEqual(
+  previous: InstanceNameProps,
+  next: InstanceNameProps,
+  live: boolean
 ): boolean {
   return (
     previous.className === next.className &&
     previous.iconClassName === next.iconClassName &&
     previous.iconSizeClassName === next.iconSizeClassName &&
-    previous.live === next.live &&
     previous.meta === next.meta &&
     previous.metaClassName === next.metaClassName &&
     previous.name === next.name &&
@@ -440,11 +391,7 @@ function instanceNamePropsEqual(
     previous.showStatus === next.showStatus &&
     previous.statusClassName === next.statusClassName &&
     previous.textClassName === next.textClassName &&
-    instancePresentationEqual(
-      previous.instance,
-      next.instance,
-      previous.live !== false
-    )
+    instancePresentationEqual(previous.instance, next.instance, live)
   )
 }
 
@@ -487,12 +434,3 @@ function instancePresentationEqual(
         previous.relayStatus === next.relayStatus))
   )
 }
-
-const statusToneClassName: Record<InstanceStatusPresentation["tone"], string> =
-  {
-    danger: "bg-destructive",
-    info: "bg-sky-400",
-    neutral: "bg-muted-foreground/45",
-    success: "bg-emerald-400",
-    warning: "bg-amber-400",
-  }

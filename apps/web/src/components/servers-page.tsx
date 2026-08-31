@@ -463,7 +463,6 @@ const ServerDataTable = React.memo(function ServerDataTable({
                   relayId: server.relayId,
                   relayStatus: server.relayStatus,
                 }}
-                live={false}
                 name={server.name}
                 nameClassName="transition-colors group-hover/server-link:text-primary"
                 meta={`${server.game} · ${server.implementation}`}

@@ -20,4 +20,30 @@ describe("instanceStatusPresentation", () => {
       ).toEqual({ label, tone })
     }
   )
+
+  it("prefers canonical Relay reachability over historical fields", () => {
+    expect(
+      instanceStatusPresentation({
+        connected: false,
+        enabled: true,
+        id: "relay-a",
+        kind: "relay",
+        lastError: "Previous connection failed",
+        relayId: "relay-a",
+        relayStatus: "connected",
+      })
+    ).toEqual({ label: "Online", tone: "success" })
+
+    expect(
+      instanceStatusPresentation({
+        connected: true,
+        enabled: true,
+        id: "relay-a",
+        kind: "relay",
+        lastError: null,
+        relayId: "relay-a",
+        relayStatus: "unreachable",
+      })
+    ).toEqual({ label: "Unreachable", tone: "danger" })
+  })
 })

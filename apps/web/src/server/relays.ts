@@ -22,10 +22,12 @@ import { requireAuthenticatedUser } from "@/server/auth"
 import { removeRelayThenCleanup } from "@/server/relay-removal"
 
 export interface ManagedRelay extends PersistedRelay {
+  ownerEmail: string | null
   ownerName: string | null
 }
 
 interface RelayOwnerRow extends RowDataPacket {
+  email: string
   id: string
   name: string
 }
@@ -121,7 +123,7 @@ async function managedRelays(
 
 export const getRelays = createServerFn({ method: "GET" }).handler(async () => {
   const user = await requireRelayCreationAccess()
-  return attachRelayOwnerNames(await managedRelays(user))
+  return attachRelayOwners(await managedRelays(user))
 })
 
 export const addRelay = createServerFn({ method: "POST" })
@@ -138,10 +140,10 @@ export const addRelay = createServerFn({ method: "POST" })
       canManageAnyRelay: isPlatformAdmin(user),
       userId: user.id,
     })
-    return (await attachRelayOwnerNames([relay]))[0]!
+    return (await attachRelayOwners([relay]))[0]!
   })
 
-async function attachRelayOwnerNames(
+async function attachRelayOwners(
   relays: Array<PersistedRelay>
 ): Promise<Array<ManagedRelay>> {
   const ownerIds = [
@@ -150,17 +152,26 @@ async function attachRelayOwnerNames(
     ),
   ]
   if (ownerIds.length === 0) {
-    return relays.map((relay) => ({ ...relay, ownerName: null }))
+    return relays.map((relay) => ({
+      ...relay,
+      ownerEmail: null,
+      ownerName: null,
+    }))
   }
   const placeholders = ownerIds.map(() => "?").join(", ")
   const [owners] = await databasePool.query<Array<RelayOwnerRow>>(
-    `SELECT id, name FROM ${databaseTable("user")} WHERE id IN (${placeholders})`,
+    `SELECT id, name, email FROM ${databaseTable("user")} WHERE id IN (${placeholders})`,
     ownerIds
   )
-  const names = new Map(owners.map((owner) => [owner.id, owner.name]))
+  const ownersById = new Map(owners.map((owner) => [owner.id, owner]))
   return relays.map((relay) => ({
     ...relay,
-    ownerName: relay.createdBy ? (names.get(relay.createdBy) ?? null) : null,
+    ownerEmail: relay.createdBy
+      ? (ownersById.get(relay.createdBy)?.email ?? null)
+      : null,
+    ownerName: relay.createdBy
+      ? (ownersById.get(relay.createdBy)?.name ?? null)
+      : null,
   }))
 }
 
