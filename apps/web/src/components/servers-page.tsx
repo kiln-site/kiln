@@ -156,14 +156,19 @@ export const ServersPage = React.memo(function ServersPage({
           relayConfigured={relayConfigured}
           searchStore={searchStore}
         />
-        <FilteredServerTableBoundary
-          canProvision={canProvision}
-          deleteAccess={deleteAccess}
-          dialogStore={dialogStore}
-          onDelete={openDelete}
-          relayConfigured={relayConfigured}
-          searchStore={searchStore}
-        />
+        <div
+          data-slot="servers-table"
+          className="min-h-0 flex-1 overflow-hidden"
+        >
+          <FilteredServerTableBoundary
+            canProvision={canProvision}
+            deleteAccess={deleteAccess}
+            dialogStore={dialogStore}
+            onDelete={openDelete}
+            relayConfigured={relayConfigured}
+            searchStore={searchStore}
+          />
+        </div>
       </section>
       {canProvision ? <AddServerDialogHost store={dialogStore} /> : null}
       {deleteTarget ? (
@@ -205,7 +210,7 @@ const ServerToolbar = React.memo(function ServerToolbar({
   }, [mobileSearchOpen])
 
   return (
-    <div className="flex min-w-0 items-center gap-2 border-b bg-background/25 p-3">
+    <div className="flex min-w-0 shrink-0 items-center gap-2 border-b bg-background/25 p-3">
       <ServerSyncButton disabled={!relayConfigured} />
 
       {!mobileSearchOpen ? (
