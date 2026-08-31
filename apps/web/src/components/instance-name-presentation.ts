@@ -12,6 +12,9 @@ interface InstanceIdentity {
 
 export type InstanceNameInstance =
   | (InstanceIdentity & {
+      brickId?: string
+      brickSource?: string
+      implementation?: string
       kind: "server"
       observedState?: RelayObservedState
       relayStatus?: "connected" | "unreachable"

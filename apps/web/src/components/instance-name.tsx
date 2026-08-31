@@ -26,12 +26,14 @@ export type { InstanceNameInstance } from "@/components/instance-name-presentati
 interface InstanceNameProps {
   className?: string
   iconClassName?: string
+  iconSizeClassName?: string
   instance: InstanceNameInstance
   meta?: React.ReactNode
   metaClassName?: string
   name: string
   nameAccessory?: React.ReactNode
   nameClassName?: string
+  statusClassName?: string
   textClassName?: string
 }
 
@@ -83,9 +85,9 @@ function LiveServerIdentity(
   return (
     <InstanceNameView
       {...props}
-      brickId={live?.brickId}
-      brickSource={live?.brickSource}
-      implementation={live?.implementation}
+      brickId={live?.brickId ?? instance.brickId}
+      brickSource={live?.brickSource ?? instance.brickSource}
+      implementation={live?.implementation ?? instance.implementation}
       liveName={live?.name}
       status={instanceStatusPresentation({
         ...instance,
@@ -193,6 +195,7 @@ const InstanceNameView = React.memo(function InstanceNameView({
   brickId,
   brickSource,
   iconClassName,
+  iconSizeClassName,
   implementation,
   instance,
   liveName,
@@ -202,6 +205,7 @@ const InstanceNameView = React.memo(function InstanceNameView({
   nameAccessory,
   nameClassName,
   status,
+  statusClassName,
   textClassName,
 }: InstanceNameProps & {
   brickId?: string
@@ -221,11 +225,16 @@ const InstanceNameView = React.memo(function InstanceNameView({
         <InstanceIcon
           brickId={brickId}
           brickSource={brickSource}
+          iconSizeClassName={iconSizeClassName}
           implementation={implementation}
           instance={instance}
         />
         {status ? (
-          <InstanceStatus label={status.label} tone={status.tone} />
+          <InstanceStatus
+            className={statusClassName}
+            label={status.label}
+            tone={status.tone}
+          />
         ) : null}
       </span>
       <InstanceText
@@ -282,15 +291,17 @@ const InstanceText = React.memo(function InstanceText({
 })
 
 const InstanceStatus = React.memo(function InstanceStatus({
+  className,
   label,
   tone,
-}: InstanceStatusPresentation) {
+}: InstanceStatusPresentation & { className?: string }) {
   return (
     <>
       <span
         className={cn(
           "absolute -right-0.5 -bottom-0.5 size-1.5 rounded-full ring-2 ring-background",
-          statusToneClassName[tone]
+          statusToneClassName[tone],
+          className
         )}
         aria-hidden="true"
       />
@@ -302,11 +313,13 @@ const InstanceStatus = React.memo(function InstanceStatus({
 const InstanceIcon = React.memo(function InstanceIcon({
   brickId,
   brickSource,
+  iconSizeClassName,
   implementation,
   instance,
 }: {
   brickId?: string
   brickSource?: string
+  iconSizeClassName?: string
   implementation?: string
   instance: InstanceNameInstance
 }) {
@@ -315,10 +328,11 @@ const InstanceIcon = React.memo(function InstanceIcon({
       <LiveServerBrickIcon
         brickId={brickId}
         brickSource={brickSource}
+        className={iconSizeClassName}
         implementation={implementation}
       />
     ) : (
-      <Server className="size-4" aria-hidden="true" />
+      <Server className={cn("size-4", iconSizeClassName)} aria-hidden="true" />
     )
   }
   const Icon =
@@ -327,16 +341,18 @@ const InstanceIcon = React.memo(function InstanceIcon({
       : instance.kind === "relay"
         ? RadioTower
         : Server
-  return <Icon className="size-4" aria-hidden="true" />
+  return <Icon className={cn("size-4", iconSizeClassName)} aria-hidden="true" />
 })
 
 const LiveServerBrickIcon = React.memo(function LiveServerBrickIcon({
   brickId,
   brickSource,
+  className,
   implementation,
 }: {
   brickId?: string
   brickSource?: string
+  className?: string
   implementation: string
 }) {
   const selectIcon = React.useCallback(
@@ -358,7 +374,7 @@ const LiveServerBrickIcon = React.memo(function LiveServerBrickIcon({
       id={icon?.id ?? brickId ?? implementation}
       color={icon?.color}
       iconSvg={icon?.iconSvg}
-      className="size-6"
+      className={cn("size-6", className)}
       aria-hidden="true"
     />
   )
@@ -371,11 +387,13 @@ function instanceNamePropsEqual(
   return (
     previous.className === next.className &&
     previous.iconClassName === next.iconClassName &&
+    previous.iconSizeClassName === next.iconSizeClassName &&
     previous.meta === next.meta &&
     previous.metaClassName === next.metaClassName &&
     previous.name === next.name &&
     previous.nameAccessory === next.nameAccessory &&
     previous.nameClassName === next.nameClassName &&
+    previous.statusClassName === next.statusClassName &&
     previous.textClassName === next.textClassName &&
     instancePresentationEqual(previous.instance, next.instance)
   )
@@ -398,7 +416,12 @@ function instancePresentationEqual(
   if (previous.kind === "database" && next.kind === "database") {
     return true
   }
-  return previous.kind === "server" && next.kind === "server"
+  if (previous.kind !== "server" || next.kind !== "server") return false
+  return (
+    previous.brickId === next.brickId &&
+    previous.brickSource === next.brickSource &&
+    previous.implementation === next.implementation
+  )
 }
 
 const statusToneClassName: Record<InstanceStatusPresentation["tone"], string> =

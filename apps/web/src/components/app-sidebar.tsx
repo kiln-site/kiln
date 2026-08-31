@@ -523,9 +523,13 @@ const ServerSelector = React.memo(function ServerSelector({
                 <span className="sr-only">Switch server. </span>
                 <InstanceName
                   className="min-w-0 flex-1 gap-2 group-data-[collapsible=icon]:gap-0"
-                  iconClassName="border-sidebar-border/70 bg-background/25 text-sidebar-foreground/85 group-data-[collapsible=icon]:absolute group-data-[collapsible=icon]:inset-0 group-data-[collapsible=icon]:m-auto group-data-[collapsible=icon]:rounded-none group-data-[collapsible=icon]:border-0 group-data-[collapsible=icon]:bg-transparent group-data-[collapsible=icon]:[&>span:first-child]:size-5! group-data-[collapsible=icon]:[&>svg:first-child]:size-5!"
+                  iconClassName="border-sidebar-border/70 bg-background/25 text-sidebar-foreground/85 group-data-[collapsible=icon]:absolute group-data-[collapsible=icon]:inset-0 group-data-[collapsible=icon]:m-auto group-data-[collapsible=icon]:rounded-none group-data-[collapsible=icon]:border-0 group-data-[collapsible=icon]:bg-transparent"
+                  iconSizeClassName="group-data-[collapsible=icon]:size-5!"
                   instance={{
+                    brickId: instance.brickId,
+                    brickSource: instance.brickSource,
                     id: instance.id,
+                    implementation: instance.implementation,
                     kind: "server",
                     observedState: instance.observedState,
                     relayId: instance.relayId,
@@ -534,6 +538,7 @@ const ServerSelector = React.memo(function ServerSelector({
                   metaClassName="text-sidebar-muted-foreground"
                   name={instance.name}
                   nameClassName="type-control-sm text-sidebar-foreground"
+                  statusClassName="ring-popover"
                   textClassName="group-data-[collapsible=icon]:sr-only"
                 />
               </>
@@ -843,7 +848,10 @@ const ServerSelectorItem = React.memo(function ServerSelectorItem({
         className="min-w-0 flex-1 gap-2"
         iconClassName="border-0 bg-muted/55"
         instance={{
+          brickId: item.brickId,
+          brickSource: item.brickSource,
           id: item.id,
+          implementation: item.implementation,
           kind: "server",
           observedState: item.observedState,
           relayId: item.relayId,
@@ -852,6 +860,7 @@ const ServerSelectorItem = React.memo(function ServerSelectorItem({
         metaClassName="font-mono"
         name={item.name}
         nameClassName="type-control-sm"
+        statusClassName="ring-popover"
       />
       {active ? (
         <Check className="size-4 shrink-0 text-primary" aria-hidden="true" />

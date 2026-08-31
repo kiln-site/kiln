@@ -17,6 +17,7 @@ export type RelayConnectionSummary =
 export type SidebarInstance = Pick<
   RelayInstance,
   | "brickId"
+  | "brickSource"
   | "id"
   | "implementation"
   | "name"
@@ -176,6 +177,7 @@ function sidebarInstance(
 ): SidebarInstance {
   return {
     brickId: instance.brickId,
+    brickSource: instance.brickSource,
     id: instance.id,
     implementation: instance.implementation,
     name: instance.name,
