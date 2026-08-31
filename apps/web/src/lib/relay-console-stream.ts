@@ -138,10 +138,19 @@ function openDirectRelayConsoleStream(
         )
       } else {
         const socketResult = yield* Fiber.join(socketAttempt.fiber)
-        if (Result.isFailure(socketResult)) {
-          return yield* Effect.fail(socketResult.failure)
+        if (
+          Result.isSuccess(socketResult) &&
+          canReuseRelayConsoleSocket(socketResult.success)
+        ) {
+          relaySocket = socketResult.success
+        } else {
+          yield* Scope.close(socketAttempt.scope, Exit.void)
+          relaySocket = yield* openRelayConsoleSocket(
+            capability.browserOrigin,
+            relayId,
+            timing
+          )
         }
-        relaySocket = socketResult.success
       }
       const { challenge, inbox, socket } = relaySocket
       const expiresAt = challenge.expiresAt
@@ -372,6 +381,15 @@ function sameRelayBrowserEndpoint(left: string, right: string): boolean {
   ])
   return (
     Result.isSuccess(endpoints) && endpoints.success[0] === endpoints.success[1]
+  )
+}
+
+function canReuseRelayConsoleSocket(
+  relaySocket: Effect.Success<ReturnType<typeof openRelayConsoleSocket>>
+): boolean {
+  return (
+    relaySocket.socket.readyState === WebSocket.OPEN &&
+    relaySocket.challenge.expiresAt > Date.now()
   )
 }
 
