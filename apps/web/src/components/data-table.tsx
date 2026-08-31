@@ -98,6 +98,7 @@ interface DataTableProps<TData extends RowData> {
   loadingRowCount?: number
   onRetry?: () => void
   pagination?: DataTablePaginationOptions
+  scrollResetKey?: string
   table: DataTableInstance<TData>
   updating?: boolean
   virtualization?: DataTableVirtualizationOptions
@@ -113,6 +114,7 @@ export function DataTable<TData extends RowData>({
   loadingRowCount,
   onRetry,
   pagination,
+  scrollResetKey,
   table,
   updating,
   virtualization,
@@ -133,6 +135,7 @@ export function DataTable<TData extends RowData>({
           loadingRowCount={loadingRowCount}
           onRetry={onRetry}
           pagination={pagination}
+          scrollResetKey={scrollResetKey}
           table={table}
           updating={updating}
           virtualization={virtualization}
@@ -152,6 +155,7 @@ function DataTableRowModel<TData extends RowData>({
   loadingRowCount,
   onRetry,
   pagination,
+  scrollResetKey,
   table,
   updating,
   virtualization,
@@ -180,7 +184,7 @@ function DataTableRowModel<TData extends RowData>({
       scrollElement.scrollTop = 0
     })
     return () => window.cancelAnimationFrame(frame)
-  }, [pagination?.resetKey])
+  }, [pagination?.resetKey, scrollResetKey])
 
   return (
     <div
@@ -282,10 +286,7 @@ export function DataTableLoadingState({ rowCount = 7 }: { rowCount?: number }) {
 
 export function DataTableErrorState({ onRetry }: { onRetry?: () => void }) {
   return (
-    <div
-      className="grid h-64 place-items-center px-6 text-center"
-      role="alert"
-    >
+    <div className="grid h-64 place-items-center px-6 text-center" role="alert">
       <div>
         <p className="text-sm font-semibold">Could not load this table</p>
         <p className="mt-1 text-xs text-muted-foreground">

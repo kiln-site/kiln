@@ -5,9 +5,10 @@ import { useQueryClient, useSuspenseQuery } from "@tanstack/react-query"
 import { Link } from "@tanstack/react-router"
 import { ensuringPromise, forkPromise } from "@/effect/promise"
 import {
+  Copy,
+  EllipsisVertical,
   Folder,
   ListTodo,
-  Network,
   Plus,
   RefreshCw,
   Search,
@@ -18,7 +19,14 @@ import {
 } from "lucide-react"
 
 import { Button } from "@workspace/ui/components/button"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@workspace/ui/components/dropdown-menu"
 import { Input } from "@workspace/ui/components/input"
+import { showToast } from "@workspace/ui/components/sonner"
 import {
   Tooltip,
   TooltipContent,
@@ -35,12 +43,9 @@ import {
   ServerDeleteDialog,
   type ServerDeleteTarget,
 } from "@/components/server-delete-dialog"
+import { DataTable } from "@/components/data-table"
 import { InstanceName } from "@/components/instance-name"
 import {
-  WorkspaceDataTable,
-  WorkspaceTableCell,
-  WorkspaceTableHead,
-  WorkspaceTableHeading,
   createWorkspaceTableSearchStore,
   useWorkspaceTableSearchInput,
 } from "@/components/workspace-data-table"
@@ -54,12 +59,26 @@ import {
   getRelayInstancesCollection,
   relayInstancesCollectionOptions,
 } from "@/lib/collections/relay-instances"
+import { createDataTableColumnHelper, useDataTable } from "@/lib/data-table"
 import { roleHasPermission } from "@/lib/permissions"
 import { selectRelayConfigured } from "@/lib/relay-selectors"
 import type { ServerListInstance } from "@/lib/relay-selectors"
 
 const emptyServers: Array<ServerListInstance> = []
 const minimumManualSyncFeedbackMs = 500
+const serverInventoryError = new Error("Could not load servers")
+const serverTableGridClassName =
+  "grid-cols-[2.5rem_minmax(0,1fr)_8.25rem] sm:grid-cols-[6rem_minmax(0,1fr)_9.25rem] md:grid-cols-[6rem_minmax(0,1.2fr)_minmax(0,0.8fr)_9.25rem] xl:grid-cols-[6rem_minmax(0,1.2fr)_minmax(0,0.8fr)_minmax(12rem,1fr)_9.25rem]"
+const serverTableItemCache = new WeakMap<ServerListInstance, ServerTableItem>()
+const serverTableVirtualization = { estimateRowHeight: 56, overscan: 8 }
+
+interface ServerTableItem {
+  routeIdentifier: string
+  searchText: string
+  server: ServerListInstance
+}
+
+const serverTableColumnHelper = createDataTableColumnHelper<ServerTableItem>()
 
 interface ServerDeleteAccess {
   all: boolean
@@ -126,10 +145,10 @@ export const ServersPage = React.memo(function ServersPage({
   }, [canProvision, queryClient])
 
   return (
-    <div className="mx-auto w-full max-w-[90rem] px-3 pb-10 sm:px-5">
+    <div className="mx-auto flex h-full min-h-[34rem] w-full max-w-[90rem] flex-col px-3 pb-3 sm:px-5 sm:pb-5">
       <section
         data-slot="servers-workspace"
-        className="overflow-hidden rounded-xl border bg-card/45 [contain:paint]"
+        className="relative flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border bg-card/45 [contain:paint]"
       >
         <ServerToolbar
           canProvision={canProvision}
@@ -418,60 +437,55 @@ const ServerTableSearchBoundary = React.memo(
     canProvision,
     deleteAccess,
     dialogStore,
+    error,
+    loading,
     onDelete,
+    onRetry,
     searchStore,
     servers,
+    updating,
   }: {
     canProvision: boolean
     deleteAccess: ServerDeleteAccess
     dialogStore: AddServerDialogStore
+    error?: Error | null
+    loading: boolean
     onDelete: (target: ServerDeleteTarget) => void
+    onRetry: () => void
     searchStore: ServerSearchStore
     servers: Array<ServerListInstance>
+    updating: boolean
   }) {
-    const shortIdCounts = React.useMemo(() => {
-      const counts = new Map<string, number>()
-      for (const server of servers) {
-        counts.set(server.shortId, (counts.get(server.shortId) ?? 0) + 1)
-      }
-      return counts
-    }, [servers])
-    const renderRow = React.useCallback(
-      (server: ServerListInstance) => (
-        <ServerTableRow
-          canonical={shortIdCounts.get(server.shortId) === 1}
-          canDelete={canDeleteServer(deleteAccess, server)}
-          onDelete={onDelete}
-          routeIdentifier={
-            shortIdCounts.get(server.shortId) === 1
-              ? server.shortId
-              : server.routeId
-          }
-          server={server}
-        />
-      ),
-      [deleteAccess, onDelete, shortIdCounts]
+    const search = React.useSyncExternalStore(
+      searchStore.subscribe,
+      searchStore.getNormalizedSnapshot,
+      searchStore.getNormalizedServerSnapshot
     )
-    const renderEmpty = React.useCallback(
-      (searchActive: boolean) => (
-        <EmptyServerTable
-          canProvision={canProvision}
-          dialogStore={dialogStore}
-          searchActive={searchActive}
-        />
-      ),
-      [canProvision, dialogStore]
+    const items = React.useMemo(
+      () => createServerTableItems(servers),
+      [servers]
+    )
+    const visibleItems = React.useMemo(
+      () =>
+        search.length === 0
+          ? items
+          : items.filter((item) => item.searchText.includes(search)),
+      [items, search]
     )
 
     return (
-      <WorkspaceDataTable
-        getRowKey={serverRowKey}
-        getSearchText={serverSearchText}
-        head={<ServerTableHead />}
-        items={servers}
-        renderEmpty={renderEmpty}
-        renderRow={renderRow}
-        searchStore={searchStore}
+      <ServerDataTable
+        canProvision={canProvision}
+        deleteAccess={deleteAccess}
+        dialogStore={dialogStore}
+        error={error}
+        items={visibleItems}
+        loading={loading}
+        onDelete={onDelete}
+        onRetry={onRetry}
+        scrollResetKey={search}
+        searchActive={search.length > 0}
+        updating={updating}
       />
     )
   }
@@ -493,7 +507,8 @@ const FilteredServerTableBoundary = React.memo(
     relayConfigured: boolean
     searchStore: ServerSearchStore
   }) {
-    const { data: servers = emptyServers } = useLiveQuery({
+    const dbClient = useDbClient()
+    const result = useLiveQuery({
       query: (query) => {
         if (!relayConfigured) return undefined
         return query
@@ -519,142 +534,217 @@ const FilteredServerTableBoundary = React.memo(
           }))
       },
     })
+    const retry = React.useCallback(() => {
+      forkPromise(() =>
+        getRelayInstancesCollection(dbClient).utils.refetch({
+          throwOnError: true,
+        })
+      )
+    }, [dbClient])
+
     return (
       <ServerTableSearchBoundary
         canProvision={canProvision}
         deleteAccess={deleteAccess}
         dialogStore={dialogStore}
+        error={result.isError ? serverInventoryError : null}
+        loading={result.isLoading && !result.isReady}
         onDelete={onDelete}
+        onRetry={retry}
         searchStore={searchStore}
-        servers={servers}
+        servers={result.data ?? emptyServers}
+        updating={result.isLoading && result.isReady}
       />
     )
   }
 )
 
-const ServerTableHead = React.memo(function ServerTableHead() {
-  return (
-    <WorkspaceTableHead>
-      <WorkspaceTableHeading className="w-10 px-2 sm:w-24 sm:px-3">
-        <span className="sr-only sm:not-sr-only">Status</span>
-      </WorkspaceTableHeading>
-      <WorkspaceTableHeading className="w-auto sm:w-[25%]">
-        Server
-      </WorkspaceTableHeading>
-      <WorkspaceTableHeading className="hidden w-[12%] lg:table-cell">
-        ID
-      </WorkspaceTableHeading>
-      <WorkspaceTableHeading className="hidden w-[18%] lg:table-cell">
-        Relay
-      </WorkspaceTableHeading>
-      <WorkspaceTableHeading className="hidden w-[24%] xl:table-cell">
-        Address
-      </WorkspaceTableHeading>
-      <WorkspaceTableHeading className="hidden w-[16%] md:table-cell">
-        Version
-      </WorkspaceTableHeading>
-      <WorkspaceTableHeading className="w-36 px-1 text-right sm:w-40 sm:px-3">
-        Actions
-      </WorkspaceTableHeading>
-    </WorkspaceTableHead>
-  )
-})
-
-const ServerTableRow = React.memo(function ServerTableRow({
-  canonical,
-  canDelete,
+const ServerDataTable = React.memo(function ServerDataTable({
+  canProvision,
+  deleteAccess,
+  dialogStore,
+  error,
+  items,
+  loading,
   onDelete,
-  routeIdentifier,
-  server,
+  onRetry,
+  scrollResetKey,
+  searchActive,
+  updating,
 }: {
-  canonical: boolean
-  canDelete: boolean
+  canProvision: boolean
+  deleteAccess: ServerDeleteAccess
+  dialogStore: AddServerDialogStore
+  error?: Error | null
+  items: Array<ServerTableItem>
+  loading: boolean
   onDelete: (target: ServerDeleteTarget) => void
-  routeIdentifier: string
-  server: ServerListInstance
+  onRetry: () => void
+  scrollResetKey: string
+  searchActive: boolean
+  updating: boolean
 }) {
-  return (
-    <tr className="group transition-colors hover:bg-accent/25">
-      <WorkspaceTableCell className="px-2 sm:px-3">
-        <ServerStatus server={server} />
-      </WorkspaceTableCell>
-      <WorkspaceTableCell className="!px-0">
-        <Link
-          to="/server/$serverId/console"
-          params={{ serverId: routeIdentifier }}
-          preload="intent"
-          className="group/server-link flex min-h-14 w-full min-w-0 items-center px-3 outline-none focus-visible:ring-2 focus-visible:ring-ring/40 focus-visible:ring-inset"
-        >
-          <InstanceName
-            instance={{
-              id: server.id,
-              kind: "server",
-              observedState: server.observedState,
-              relayId: server.relayId,
-              relayStatus: server.relayStatus,
-            }}
-            name={server.name}
-            nameClassName="transition-colors group-hover/server-link:text-primary"
-            meta={`${server.game} · ${server.implementation}`}
-            metaClassName="font-mono"
-          />
-        </Link>
-      </WorkspaceTableCell>
-      <WorkspaceTableCell className="hidden lg:table-cell">
-        <span
-          className={`type-meta font-mono ${canonical ? "text-foreground" : "text-amber-300"}`}
-          title={
-            canonical
-              ? server.id
-              : `${server.shortId} is shared by more than one accessible server; this row uses its Relay-qualified route`
+  const [initialTableState] = React.useState(() => ({
+    sorting: [{ desc: false, id: "server" }],
+  }))
+  const columns = React.useMemo(
+    () =>
+      serverTableColumnHelper.columns([
+        serverTableColumnHelper.accessor(
+          ({ server }) => serverStatus(server).label,
+          {
+            id: "status",
+            header: () => (
+              <span className="sr-only sm:not-sr-only">Status</span>
+            ),
+            sortFn: "text",
+            cell: ({ row }) => <ServerStatus server={row.original.server} />,
+            meta: {
+              cellClassName: "px-2 sm:px-3",
+              headerClassName: "px-2 sm:px-3",
+            },
           }
-        >
-          {server.shortId}
-        </span>
-      </WorkspaceTableCell>
-      <WorkspaceTableCell className="hidden lg:table-cell">
-        <div className="min-w-0">
-          <p className="type-meta truncate text-foreground">
-            {server.relayName}
-          </p>
-          <p className="type-meta truncate font-mono text-muted-foreground">
-            {server.relayStatus}
-          </p>
-        </div>
-      </WorkspaceTableCell>
-      <WorkspaceTableCell className="hidden xl:table-cell">
-        <span
-          className={`type-meta block truncate font-mono ${
-            server.connectAddress.startsWith("Error:")
-              ? "font-semibold text-destructive"
-              : "text-foreground"
-          }`}
-          title={server.connectAddress}
-        >
-          {server.connectAddress.startsWith("Error:")
-            ? "ERROR"
-            : server.connectAddress}
-        </span>
-      </WorkspaceTableCell>
-      <WorkspaceTableCell className="hidden md:table-cell">
-        <div className="min-w-0">
-          <p className="type-meta truncate font-mono text-foreground">
-            {server.version}
-          </p>
-          <p className="type-meta truncate text-muted-foreground">
-            {server.implementation}
-          </p>
-        </div>
-      </WorkspaceTableCell>
-      <WorkspaceTableCell className="px-1 sm:px-3">
-        <ServerActions
-          canDelete={canDelete}
-          routeIdentifier={routeIdentifier}
-          server={server}
-          onDelete={onDelete}
+        ),
+        serverTableColumnHelper.accessor(({ server }) => server.name, {
+          id: "server",
+          header: "Server",
+          sortFn: "text",
+          cell: ({ row }) => {
+            const { routeIdentifier, server } = row.original
+            return (
+              <Link
+                to="/server/$serverId/console"
+                params={{ serverId: routeIdentifier }}
+                preload="intent"
+                className="group/server-link flex min-h-14 w-full min-w-0 items-center px-3 outline-none focus-visible:ring-2 focus-visible:ring-ring/40 focus-visible:ring-inset"
+              >
+                <InstanceName
+                  instance={{
+                    id: server.id,
+                    kind: "server",
+                    observedState: server.observedState,
+                    relayId: server.relayId,
+                    relayStatus: server.relayStatus,
+                  }}
+                  name={server.name}
+                  nameClassName="transition-colors group-hover/server-link:text-primary"
+                  meta={`${server.game} · ${server.implementation}`}
+                  metaClassName="font-mono"
+                />
+              </Link>
+            )
+          },
+          meta: { cellClassName: "px-0" },
+        }),
+        serverTableColumnHelper.accessor(({ server }) => server.relayName, {
+          id: "relay",
+          header: "Relay",
+          sortFn: "text",
+          cell: ({ row }) => (
+            <span
+              className="type-meta truncate text-foreground"
+              title={row.original.server.relayName}
+            >
+              {row.original.server.relayName}
+            </span>
+          ),
+          meta: {
+            cellClassName: "hidden md:flex",
+            headerClassName: "hidden md:flex md:items-center",
+          },
+        }),
+        serverTableColumnHelper.accessor(
+          ({ server }) => server.connectAddress,
+          {
+            id: "address",
+            header: "Host / IP",
+            sortFn: "text",
+            cell: ({ row }) => {
+              const address = row.original.server.connectAddress
+              return (
+                <span
+                  className={`type-meta block truncate font-mono ${
+                    address.startsWith("Error:")
+                      ? "font-semibold text-destructive"
+                      : "text-foreground"
+                  }`}
+                  title={address}
+                >
+                  {address.startsWith("Error:") ? "ERROR" : address}
+                </span>
+              )
+            },
+            meta: {
+              cellClassName: "hidden xl:flex",
+              headerClassName: "hidden xl:flex xl:items-center",
+            },
+          }
+        ),
+        serverTableColumnHelper.display({
+          id: "actions",
+          header: () => <span className="sr-only">Actions</span>,
+          enableSorting: false,
+          cell: ({ row }) => {
+            const { routeIdentifier, server } = row.original
+            return (
+              <ServerActions
+                canDelete={canDeleteServer(deleteAccess, server)}
+                onDelete={onDelete}
+                routeIdentifier={routeIdentifier}
+                server={server}
+              />
+            )
+          },
+          meta: {
+            cellClassName: "px-1 sm:px-3",
+            headerClassName: "px-1 sm:px-3",
+          },
+        }),
+      ]),
+    [deleteAccess, onDelete]
+  )
+  const table = useDataTable(
+    {
+      columns,
+      data: items,
+      getRowId: serverTableItemKey,
+      initialState: initialTableState,
+    },
+    selectNoServerTableState
+  )
+  const [sortingResetKey, setSortingResetKey] = React.useState("server:asc")
+
+  React.useLayoutEffect(() => {
+    const subscription = table.atoms.sorting.subscribe((sorting) => {
+      const next = sorting
+        .map(({ desc, id }) => `${id}:${desc ? "desc" : "asc"}`)
+        .join("|")
+      setSortingResetKey((current) => (current === next ? current : next))
+    })
+    return () => subscription.unsubscribe()
+  }, [table])
+
+  return (
+    <DataTable
+      ariaLabel="Servers"
+      emptyState={
+        <EmptyServerTable
+          canProvision={canProvision}
+          dialogStore={dialogStore}
+          searchActive={searchActive}
         />
-      </WorkspaceTableCell>
-    </tr>
+      }
+      error={error}
+      getRowClassName={serverTableRowClassName}
+      gridClassName={serverTableGridClassName}
+      loading={loading}
+      loadingRowCount={8}
+      onRetry={onRetry}
+      scrollResetKey={`${scrollResetKey}\n${sortingResetKey}`}
+      table={table}
+      updating={updating}
+      virtualization={serverTableVirtualization}
+    />
   )
 })
 
@@ -686,13 +776,6 @@ const ServerActions = React.memo(function ServerActions({
         tab="files"
         tooltip="Files"
       />
-      <ServerActionLink
-        icon={Network}
-        label={`Open ${server.name} network`}
-        routeIdentifier={routeIdentifier}
-        tab="network"
-        tooltip="Network"
-      />
       {canDelete ? (
         <Tooltip>
           <TooltipTrigger asChild>
@@ -701,7 +784,7 @@ const ServerActions = React.memo(function ServerActions({
               size="icon-sm"
               variant="ghost"
               aria-label={`Delete ${server.name}`}
-              className="text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+              className="text-destructive hover:bg-destructive/10 hover:text-destructive"
               disabled={!deleteEnabled}
               onClick={() =>
                 onDelete({
@@ -720,9 +803,68 @@ const ServerActions = React.memo(function ServerActions({
           </TooltipContent>
         </Tooltip>
       ) : null}
+      <DropdownMenu>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <DropdownMenuTrigger asChild>
+              <Button
+                type="button"
+                size="icon-sm"
+                variant="ghost"
+                aria-label={`More actions for ${server.name}`}
+              >
+                <EllipsisVertical />
+              </Button>
+            </DropdownMenuTrigger>
+          </TooltipTrigger>
+          <TooltipContent side="bottom" sideOffset={6}>
+            More actions
+          </TooltipContent>
+        </Tooltip>
+        <DropdownMenuContent align="end" className="min-w-44">
+          <CopyServerIdentifierMenuItem label="server ID" value={server.id} />
+          <CopyServerIdentifierMenuItem
+            label="Relay ID"
+            value={server.relayId}
+          />
+        </DropdownMenuContent>
+      </DropdownMenu>
     </div>
   )
 })
+
+const CopyServerIdentifierMenuItem = React.memo(
+  function CopyServerIdentifierMenuItem({
+    label,
+    value,
+  }: {
+    label: "server ID" | "Relay ID"
+    value: string
+  }) {
+    const copyIdentifier = React.useCallback(() => {
+      forkPromise(
+        async () => {
+          await navigator.clipboard.writeText(value)
+          showToast({
+            message: `${label === "server ID" ? "Server ID" : label} copied`,
+            type: "success",
+          })
+        },
+        () =>
+          showToast({
+            message: `Could not copy ${label}`,
+            type: "error",
+          })
+      )
+    }, [label, value])
+
+    return (
+      <DropdownMenuItem onSelect={copyIdentifier}>
+        <Copy /> Copy {label}
+      </DropdownMenuItem>
+    )
+  }
+)
 
 const ServerActionLink = React.memo(function ServerActionLink({
   icon: Icon,
@@ -734,7 +876,7 @@ const ServerActionLink = React.memo(function ServerActionLink({
   icon: typeof TerminalSquare
   label: string
   routeIdentifier: string
-  tab: "console" | "files" | "network"
+  tab: "console" | "files"
   tooltip: string
 }) {
   const link =
@@ -850,6 +992,45 @@ function EmptyServerTable({
 
 function serverRowKey(server: ServerListInstance): string {
   return `${server.relayId}:${server.id}`
+}
+
+function serverTableItemKey(item: ServerTableItem): string {
+  return serverRowKey(item.server)
+}
+
+function createServerTableItems(
+  servers: Array<ServerListInstance>
+): Array<ServerTableItem> {
+  const shortIdCounts = new Map<string, number>()
+  for (const server of servers) {
+    shortIdCounts.set(
+      server.shortId,
+      (shortIdCounts.get(server.shortId) ?? 0) + 1
+    )
+  }
+
+  return servers.map((server) => {
+    const routeIdentifier =
+      shortIdCounts.get(server.shortId) === 1 ? server.shortId : server.routeId
+    const cached = serverTableItemCache.get(server)
+    if (cached?.routeIdentifier === routeIdentifier) return cached
+
+    const item = {
+      routeIdentifier,
+      searchText: serverSearchText(server),
+      server,
+    }
+    serverTableItemCache.set(server, item)
+    return item
+  })
+}
+
+function serverTableRowClassName() {
+  return "group hover:bg-muted/20"
+}
+
+function selectNoServerTableState() {
+  return undefined
 }
 
 function serverSearchText(server: ServerListInstance): string {
