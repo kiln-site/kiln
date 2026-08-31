@@ -89,27 +89,28 @@ export const ConsoleLogViewportController = React.memo(
     }, [filteredLines, uiStore])
 
     const firstRowsPaintedRef = React.useRef(false)
-    const hasRows = filteredLines.length > 0
-    const filteredLineCountRef = React.useRef(filteredLines.length)
+    const consoleLineCount = consoleData?.lines.length ?? 0
+    const hasConsoleLines = consoleLineCount > 0
+    const consoleLineCountRef = React.useRef(consoleLineCount)
     React.useLayoutEffect(() => {
-      filteredLineCountRef.current = filteredLines.length
-    }, [filteredLines.length])
+      consoleLineCountRef.current = consoleLineCount
+    }, [consoleLineCount])
     React.useLayoutEffect(() => {
-      if (firstRowsPaintedRef.current || !active || !hasRows) {
+      if (firstRowsPaintedRef.current || !active || !hasConsoleLines) {
         return
       }
       let secondFrame: number | undefined
       const firstFrame = window.requestAnimationFrame(() => {
         secondFrame = window.requestAnimationFrame(() => {
           firstRowsPaintedRef.current = true
-          loadTiming?.markFirstRowsPainted(filteredLineCountRef.current)
+          loadTiming?.markFirstRowsPainted(consoleLineCountRef.current)
         })
       })
       return () => {
         window.cancelAnimationFrame(firstFrame)
         if (secondFrame !== undefined) window.cancelAnimationFrame(secondFrame)
       }
-    }, [active, hasRows, loadTiming])
+    }, [active, hasConsoleLines, loadTiming])
 
     return (
       <ConsoleLogViewport

@@ -1451,10 +1451,11 @@ function safeBrowserError(cause: unknown): string {
     : "File transfer failed"
 }
 
-export function consoleSnapshotNeedsBackfill(
-  snapshot: Pick<RelayConsole, "truncated">
-): boolean {
-  return snapshot.truncated
+export function startConsoleBackfillIfNeeded(
+  snapshot: Pick<RelayConsole, "truncated">,
+  start: () => void
+): void {
+  if (snapshot.truncated) start()
 }
 
 class ConsoleHubRegistry {
@@ -1762,12 +1763,12 @@ class ConsoleHub {
               }
               if (this.#backfillStartedAt !== startedAt) {
                 this.#backfillStartedAt = startedAt
-                if (consoleSnapshotNeedsBackfill(snapshot)) {
+                startConsoleBackfillIfNeeded(snapshot, () => {
                   this.#forkBackground(
                     this.#backfillEffect(session, startedAt),
                     "browser.console.backfill"
                   )
-                }
+                })
               }
             })
           ),
@@ -1898,12 +1899,12 @@ class ConsoleHub {
               }
               this.#replaceSession(snapshot)
               this.#backfillStartedAt = startedAt
-              if (consoleSnapshotNeedsBackfill(snapshot)) {
+              startConsoleBackfillIfNeeded(snapshot, () => {
                 this.#forkBackground(
                   this.#backfillEffect(session, startedAt),
                   "browser.console.backfill"
                 )
-              }
+              })
             })
           )
         )

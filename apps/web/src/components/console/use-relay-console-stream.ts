@@ -247,7 +247,7 @@ export function useRelayConsoleStream(
 
   React.useEffect(() => {
     if (!relayConnected) {
-      loadTiming?.fail(new Error("Relay is unavailable"))
+      loadTiming?.markRetryableFailure(new Error("Relay is unavailable"))
       setSnapshot((current) =>
         updateConsoleStreamSnapshot(current, {
           connection: "unavailable",
@@ -512,7 +512,7 @@ export function useRelayConsoleStream(
           // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
           if (disposed) break
           if (failure === null) continue
-          loadTiming?.fail(failure)
+          loadTiming?.markRetryableFailure(failure)
           commitSnapshot({
             connection: hasEverBeenLiveRef.current
               ? "reconnecting"

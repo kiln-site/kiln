@@ -5,10 +5,10 @@ type ConsoleSpan = ReturnType<typeof Sentry.startInactiveSpan>
 
 export interface ConsoleLoadTiming {
   cancel: () => void
-  fail: (cause: unknown) => void
   markCache: (cacheHit: boolean) => void
   markFirstRowsPainted: (lineCount: number) => void
   markReady: (transport: "direct" | "hearth" | null, lineCount: number) => void
+  markRetryableFailure: (cause: unknown) => void
   markTransport: (transport: "direct" | "hearth") => void
   parentSpan: () => ConsoleSpan | undefined
 }
@@ -18,6 +18,7 @@ export function createConsoleLoadTiming(): ConsoleLoadTiming {
   let open = true
   let openSpan: ConsoleSpan | undefined
   let ready = false
+  let retryCount = 0
   let rowsPending = true
   let rowsSpan: ConsoleSpan | undefined
 
@@ -70,21 +71,15 @@ export function createConsoleLoadTiming(): ConsoleLoadTiming {
       }
       openSpan.end()
     },
-    fail: (cause) => {
+    markRetryableFailure: (cause) => {
       if (!open) return
       start()
-      open = false
-      openSpan?.setAttribute("kiln.console.result", "unavailable")
+      retryCount += 1
+      openSpan?.setAttribute("kiln.console.retry_count", retryCount)
       openSpan?.setAttribute(
-        "kiln.console.error",
+        "kiln.console.last_error",
         cause instanceof Error ? cause.name : "unknown"
       )
-      if (rowsPending) {
-        rowsPending = false
-        rowsSpan?.setAttribute("kiln.console.result", "unavailable")
-        rowsSpan?.end()
-      }
-      openSpan?.end()
     },
     markCache: (nextCacheHit) => {
       start()

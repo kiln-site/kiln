@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vite-plus/test"
-import { Effect, Queue } from "effect"
+import { describe, expect, it, vi } from "vite-plus/test"
+import { Effect, Fiber, Queue, Stream } from "effect"
 
 import { createSocketInbox } from "./relay-console-stream"
 
@@ -48,6 +48,56 @@ describe("Relay console socket inbox", () => {
       )
     )
 
+    expect(socket.listenerCount).toBe(0)
+  })
+
+  it("keeps the first terminal error when error and close both fire", async () => {
+    const socket = new FakeWebSocket()
+    const terminal = await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const inbox = yield* createSocketInbox(socket as unknown as WebSocket)
+          socket.dispatchEvent(new Event("error"))
+          const close = new Event("close")
+          Object.assign(close, { code: 1006, reason: "Relay disconnected" })
+
+          expect(() => socket.dispatchEvent(close)).not.toThrow()
+          return yield* Queue.take(inbox.messages).pipe(
+            Effect.match({
+              onFailure: (cause) => cause,
+              onSuccess: () => new Error("Expected the inbox to fail"),
+            })
+          )
+        })
+      )
+    )
+
+    expect(terminal).toEqual(new Error("Unable to connect to Relay"))
+  })
+
+  it("does not recover a cancelled inbox as a typed stream failure", async () => {
+    const socket = new FakeWebSocket()
+    const fallbackOpened = vi.fn()
+    const fiber = Effect.runFork(
+      Effect.scoped(
+        Stream.unwrap(
+          createSocketInbox(socket as unknown as WebSocket).pipe(
+            Effect.map(({ messages }) => Stream.fromQueue(messages))
+          )
+        ).pipe(
+          Stream.catch(() => {
+            fallbackOpened()
+            return Stream.empty
+          }),
+          Stream.runDrain
+        )
+      )
+    )
+
+    await vi.waitFor(() => expect(socket.listenerCount).toBe(3))
+    await Effect.runPromise(Fiber.interrupt(fiber))
+
+    expect(fallbackOpened).not.toHaveBeenCalled()
     expect(socket.listenerCount).toBe(0)
   })
 })
