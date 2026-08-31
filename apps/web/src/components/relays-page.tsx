@@ -558,7 +558,7 @@ function RelayTable({
               width: {
                 base: "2.5rem",
                 sm: "6.5rem",
-                xl: "minmax(9rem,0.8fr)",
+                xl: "minmax(6.5rem,0.8fr)",
               },
             },
             {
