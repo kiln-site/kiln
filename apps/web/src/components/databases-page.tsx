@@ -1,13 +1,11 @@
 import * as React from "react"
 import { useDbClient, useLiveQuery } from "@tanstack/react-db"
 import {
-  hashKey,
   useMutation,
   useQuery,
   useQueryClient,
   useSuspenseQuery,
 } from "@tanstack/react-query"
-import type { QueryClient } from "@tanstack/react-query"
 import type { DatabaseEngine } from "@workspace/contracts"
 import {
   CircleAlert,
@@ -87,10 +85,10 @@ import {
 } from "@/lib/data-table"
 import type { DataTableSearchStore } from "@/lib/data-table-search"
 import { useLiveDataTableSource } from "@/lib/data-table-source"
-import type { DataTableSource } from "@/lib/data-table-source"
 import {
   accessCapabilitiesQueryOptions,
   managedDatabaseCredentialQueryOptions,
+  managedDatabasesQueryOptions,
   queryKeys,
   relaySnapshotQueryOptions,
 } from "@/lib/query-options"
@@ -140,7 +138,6 @@ const engineBadgeClasses: Record<DatabaseEngine, string> = {
 
 const dumpLimitBytes = 700_000
 const databaseInventoryError = new Error("Could not load databases")
-const databaseOverviewQueryHash = hashKey(queryKeys.databases.list)
 const minimumManualSyncFeedbackMs = 500
 const databaseTableVirtualization = { estimateRowHeight: 56, overscan: 8 }
 const databaseTableColumnHelper = createDataTableColumnHelper<ManagedDatabase>()
@@ -160,21 +157,10 @@ export const DatabasesPage = React.memo(function DatabasesPage({
 }: {
   searchStore: DataTableSearchStore
 }) {
-  const dbClient = useDbClient()
-  const queryClient = useQueryClient()
-  const collection = getManagedDatabasesCollection(dbClient)
-  const result = useLiveQuery(collection)
-  const retry = React.useCallback(() => {
-    forkPromise(() => collection.utils.refetch({ throwOnError: true }))
-  }, [collection])
-  const source = useLiveDataTableSource<ManagedDatabase>({
-    data: result.data,
-    error: databaseInventoryError,
-    isError: result.isError,
-    isLoading: result.isLoading,
-    retry,
+  const { data } = useSuspenseQuery({
+    ...managedDatabasesQueryOptions(),
+    select: selectDatabasePageMeta,
   })
-  const data = useManagedDatabaseOverview(queryClient)
   const [createOpen, setCreateOpen] = React.useState(false)
   const [dialog, setDialog] = React.useState<DatabaseDialog>(null)
   const openCreate = React.useCallback(() => setCreateOpen(true), [])
@@ -213,7 +199,6 @@ export const DatabasesPage = React.memo(function DatabasesPage({
         <DatabaseTable
           canCreate={canCreate}
           searchStore={searchStore}
-          source={source}
           onCreate={openCreate}
           onDialog={openDialog}
         />
@@ -262,32 +247,6 @@ export const DatabasesPage = React.memo(function DatabasesPage({
 
 function selectDatabasePageMeta(data: ManagedDatabaseOverview) {
   return { relayErrors: data.relayErrors, relays: data.relays }
-}
-
-function useManagedDatabaseOverview(
-  queryClient: QueryClient
-): ReturnType<typeof selectDatabasePageMeta> {
-  const subscribe = React.useCallback(
-    (listener: () => void) =>
-      queryClient.getQueryCache().subscribe((event) => {
-        if (event.query.queryHash === databaseOverviewQueryHash) listener()
-      }),
-    [queryClient]
-  )
-  const getSnapshot = React.useCallback(
-    () =>
-      queryClient.getQueryData<ManagedDatabaseOverview>(
-        queryKeys.databases.list
-      ),
-    [queryClient]
-  )
-  const overview = React.useSyncExternalStore(
-    subscribe,
-    getSnapshot,
-    getSnapshot
-  )
-  if (!overview) throw databaseInventoryError
-  return selectDatabasePageMeta(overview)
 }
 
 const DatabaseToolbar = React.memo(function DatabaseToolbar({
@@ -397,14 +356,25 @@ const DatabaseTable = React.memo(function DatabaseTable({
   onCreate,
   onDialog,
   searchStore,
-  source,
 }: {
   canCreate: boolean
   onCreate: () => void
   onDialog: (dialog: DatabaseDialog) => void
   searchStore: DataTableSearchStore
-  source: DataTableSource<ManagedDatabase>
 }) {
+  const dbClient = useDbClient()
+  const collection = getManagedDatabasesCollection(dbClient)
+  const result = useLiveQuery(collection)
+  const retry = React.useCallback(() => {
+    forkPromise(() => collection.utils.refetch({ throwOnError: true }))
+  }, [collection])
+  const source = useLiveDataTableSource<ManagedDatabase>({
+    data: result.data,
+    error: databaseInventoryError,
+    isError: result.isError,
+    isLoading: result.isLoading,
+    retry,
+  })
   const [initialTableState] = React.useState(() => ({
     sorting: [{ desc: false, id: "database" }],
   }))
@@ -611,6 +581,7 @@ const DatabaseActions = React.memo(function DatabaseActions({
             <Button
               aria-label={`Delete ${database.name}`}
               className="text-destructive hover:bg-destructive/10 hover:text-destructive"
+              disabled={busy}
               size="icon-sm"
               type="button"
               variant="ghost"

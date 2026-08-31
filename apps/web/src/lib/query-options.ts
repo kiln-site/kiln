@@ -26,6 +26,7 @@ import { getDomainSettings, getInstanceDomain } from "@/server/domains"
 import {
   getManagedDatabaseCredential,
   getManagedDatabaseDirectory,
+  getManagedDatabases,
 } from "@/server/databases"
 import { isMinecraftUsername } from "@/lib/minecraft-profile"
 import { getUiPreferences } from "@/server/preferences"
@@ -348,6 +349,15 @@ export function managedDatabaseDirectoryQueryOptions() {
     queryFn: () => getManagedDatabaseDirectory(),
     refetchOnWindowFocus: false,
     staleTime: 30_000,
+  })
+}
+
+export function managedDatabasesQueryOptions() {
+  return queryOptions({
+    queryKey: queryKeys.databases.list,
+    queryFn: () => getManagedDatabases(),
+    refetchOnWindowFocus: "always",
+    staleTime: 5_000,
   })
 }
 
