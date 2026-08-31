@@ -123,7 +123,7 @@ export function DataTableCompactList<TItem>({
       }
     >
       {header}
-      <div className="divide-y divide-border/70">
+      <div className="divide-y divide-border/70 border-b border-border/70">
         {source.rows.map(renderRow)}
       </div>
       {source.pagination ? (
@@ -143,6 +143,9 @@ interface DataTableProps<TData extends RowData> {
   source: DataTableSource<TData>
   table: DataTableInstance<TData>
 }
+
+const dataTableScrollAreaClassName =
+  "block min-h-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-y-contain border-b border-border/70"
 
 export function DataTable<TData extends RowData>({
   definition,
@@ -390,10 +393,7 @@ function DataTableStateBody({
   scrollElementRef: React.RefObject<HTMLTableSectionElement | null>
 }) {
   return (
-    <tbody
-      ref={scrollElementRef}
-      className="block min-h-0 flex-1 overflow-y-auto overscroll-contain border-b border-border/70"
-    >
+    <tbody ref={scrollElementRef} className={dataTableScrollAreaClassName}>
       <tr className={cn("block", centered && "h-full")}>
         <td className={cn("block p-0", centered && "h-full")} colSpan={colSpan}>
           {centered ? (
@@ -698,10 +698,7 @@ function DataTableBody<TData extends RowData>({
   scrollElementRef: React.RefObject<HTMLTableSectionElement | null>
 }) {
   return (
-    <tbody
-      ref={scrollElementRef}
-      className="block min-h-0 flex-1 overflow-y-auto overscroll-contain border-b border-border/70"
-    >
+    <tbody ref={scrollElementRef} className={dataTableScrollAreaClassName}>
       {rows.map((row) => (
         <DataTableRowSelectionBoundary
           key={row.id}
@@ -748,7 +745,7 @@ function VirtualDataTableBody<TData extends RowData>({
   return (
     <tbody
       ref={scrollElementRef}
-      className="relative block min-h-0 flex-1 overflow-y-auto overscroll-contain border-b border-border/70"
+      className={cn("relative", dataTableScrollAreaClassName)}
     >
       <tr
         aria-hidden="true"
@@ -941,7 +938,7 @@ function DataTableRow<TData extends RowData>({
       ref={ref}
       aria-rowindex={ariaRowIndex}
       className={cn(
-        "grid grid-cols-[var(--data-table-grid-base)] border-b border-border/70 transition-colors last:border-b-0 sm:grid-cols-[var(--data-table-grid-sm)] md:grid-cols-[var(--data-table-grid-md)] lg:grid-cols-[var(--data-table-grid-lg)] xl:grid-cols-[var(--data-table-grid-xl)]",
+        "grid grid-cols-[var(--data-table-grid-base)] border-b border-border/70 transition-colors sm:grid-cols-[var(--data-table-grid-sm)] md:grid-cols-[var(--data-table-grid-md)] lg:grid-cols-[var(--data-table-grid-lg)] xl:grid-cols-[var(--data-table-grid-xl)]",
         rowClassName
       )}
       data-index={dataIndex}
