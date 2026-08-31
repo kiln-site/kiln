@@ -23,11 +23,6 @@ import { Link, useNavigate, useRouterState } from "@tanstack/react-router"
 import { forkPromise } from "@/effect/promise"
 
 import {
-  Avatar,
-  AvatarFallback,
-  AvatarImage,
-} from "@workspace/ui/components/avatar"
-import {
   Popover,
   PopoverContent,
   PopoverTrigger,
@@ -60,14 +55,13 @@ import {
   RouteCommandMenuTrigger,
 } from "@/components/route-command-menu"
 import { InstanceName } from "@/components/instance-name"
+import { CurrentUserAvatar } from "@/components/user-avatar"
 import { authClient } from "@/lib/auth-client"
 import type { AuthenticatedUser } from "@/lib/auth-session"
 import { clearAppearanceCache } from "@/lib/appearance"
-import { minecraftHeadUrl } from "@/lib/minecraft-profile"
 import {
   accessCapabilitiesQueryOptions,
   managedDatabaseDirectoryQueryOptions,
-  minecraftProfileQueryOptions,
   relayConnectionQueryOptions,
   relaySnapshotQueryOptions,
 } from "@/lib/query-options"
@@ -1077,29 +1071,6 @@ function AccountNavigation({
   )
 }
 
-const AccountAvatar = React.memo(function AccountAvatar({
-  name,
-}: {
-  name: string
-}) {
-  const { data: profile } = useQuery(minecraftProfileQueryOptions(name))
-
-  return (
-    <Avatar size="sm" className="rounded-none">
-      {profile ? (
-        <AvatarImage
-          src={minecraftHeadUrl(profile.id)}
-          alt=""
-          referrerPolicy="no-referrer"
-        />
-      ) : null}
-      <AvatarFallback className="type-label rounded-none bg-primary/12 font-bold text-primary">
-        {initials(name)}
-      </AvatarFallback>
-    </Avatar>
-  )
-})
-
 function CollapsedAccountMenu({ user }: { user: AuthenticatedUser }) {
   const [open, setOpen] = React.useState(false)
   const [signingOut, setSigningOut] = React.useState(false)
@@ -1112,7 +1083,7 @@ function CollapsedAccountMenu({ user }: { user: AuthenticatedUser }) {
           className="grid size-[32px] place-items-center transition-colors hover:bg-sidebar-accent focus-visible:ring-2 focus-visible:ring-sidebar-ring/45 focus-visible:outline-none data-[state=open]:bg-sidebar-accent"
           aria-label={`Open account menu for ${user.name}`}
         >
-          <AccountAvatar name={user.name} />
+          <CurrentUserAvatar name={user.name} />
         </button>
       </PopoverTrigger>
       <PopoverContent
@@ -1173,7 +1144,7 @@ function ExpandedAccountRow({
         preload="intent"
         className="flex min-w-0 flex-1 items-center gap-2 text-sidebar-foreground transition-colors hover:text-sidebar-accent-foreground focus-visible:ring-2 focus-visible:ring-sidebar-ring/45 focus-visible:outline-none"
       >
-        <AccountAvatar name={user.name} />
+        <CurrentUserAvatar name={user.name} />
         <span className="min-w-0 flex-1 truncate text-xs font-semibold">
           {user.name}
         </span>
@@ -1270,15 +1241,6 @@ async function signOut(isDevelopmentBypass: boolean) {
   else await authClient.signOut()
   clearAppearanceCache()
   window.location.assign("/")
-}
-
-function initials(name: string): string {
-  return name
-    .split(/\s+/u)
-    .filter(Boolean)
-    .slice(0, 2)
-    .map((part) => part[0].toUpperCase())
-    .join("")
 }
 
 function globalSectionFromPathname(pathname: string): GlobalSection {

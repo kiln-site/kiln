@@ -1,4 +1,5 @@
 import { createServerFn } from "@tanstack/react-start"
+import { Effect } from "effect"
 import type { RowDataPacket } from "mysql2/promise"
 import {
   relayConnectionSettingsSchema,
@@ -12,10 +13,16 @@ import {
 } from "@workspace/contracts"
 import { z } from "zod"
 
+import { resolveMinecraftProfileEffect } from "@/effect/minecraft-profile"
 import { isPlatformAdmin, isRelayCreator } from "@/lib/access-control"
 import { runAppEffect } from "@/effect/runtime"
 import { databasePool } from "@/lib/database"
 import { databaseTable } from "@/lib/database-config"
+import { resolveDisplayName } from "@/lib/display-name"
+import {
+  isMinecraftUsername,
+  minecraftUsernameKey,
+} from "@/lib/minecraft-profile"
 import { publishRealtimeChange } from "@/lib/realtime-source.server"
 import type { PersistedRelay } from "@/lib/relay-registry"
 import { requireAuthenticatedUser } from "@/server/auth"
@@ -29,7 +36,12 @@ export interface ManagedRelay extends PersistedRelay {
 interface RelayOwnerRow extends RowDataPacket {
   email: string
   id: string
-  name: string
+  name: string | null
+}
+
+export interface RelayOwnerMinecraftProfile {
+  displayName: string
+  profileId: string
 }
 
 const relayIdSchema = z.object({
@@ -126,6 +138,44 @@ export const getRelays = createServerFn({ method: "GET" }).handler(async () => {
   return attachRelayOwners(await managedRelays(user))
 })
 
+export const getRelayOwnerMinecraftProfiles = createServerFn({
+  method: "GET",
+}).handler(async () => {
+  const user = await requireRelayCreationAccess()
+  const relays = await attachRelayOwners(await managedRelays(user))
+  const displayNames = [
+    ...new Map(
+      relays.flatMap((relay) =>
+        relay.ownerName && isMinecraftUsername(relay.ownerName)
+          ? [[minecraftUsernameKey(relay.ownerName), relay.ownerName] as const]
+          : []
+      )
+    ).values(),
+  ]
+  const profiles = await runAppEffect(
+    "minecraft.relayOwnerProfiles.resolve",
+    Effect.forEach(
+      displayNames,
+      (displayName) =>
+        resolveMinecraftProfileEffect(displayName).pipe(
+          Effect.map((profile) =>
+            profile
+              ? ({
+                  displayName,
+                  profileId: profile.id,
+                } satisfies RelayOwnerMinecraftProfile)
+              : null
+          ),
+          Effect.catch(() => Effect.succeed(null))
+        ),
+      { concurrency: 4 }
+    )
+  )
+  return profiles.filter(
+    (profile): profile is RelayOwnerMinecraftProfile => profile !== null
+  )
+})
+
 export const addRelay = createServerFn({ method: "POST" })
   .validator(createRelaySchema)
   .handler(async ({ data }) => {
@@ -170,9 +220,13 @@ async function attachRelayOwners(
       ? (ownersById.get(relay.createdBy)?.email ?? null)
       : null,
     ownerName: relay.createdBy
-      ? (ownersById.get(relay.createdBy)?.name ?? null)
+      ? ownerDisplayName(ownersById.get(relay.createdBy))
       : null,
   }))
+}
+
+function ownerDisplayName(owner: RelayOwnerRow | undefined): string | null {
+  return owner ? resolveDisplayName(owner.name, owner.email) : null
 }
 
 export const updateRelay = createServerFn({ method: "POST" })

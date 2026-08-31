@@ -80,8 +80,10 @@ import {
 } from "@/components/data-table-workspace"
 import { IdentityName } from "@/components/identity-name"
 import { InstanceName } from "@/components/instance-name"
+import { UserAvatar } from "@/components/user-avatar"
 import { useInfraUpdateDialogStore } from "@/components/infra-update-dialog-provider"
 import { relaysCollectionOptions } from "@/lib/collections/relays"
+import { minecraftUsernameKey } from "@/lib/minecraft-profile"
 import { pairingFeedbackFrom } from "@/lib/relay-pairing-errors"
 import { canRefetchSystemUpdateOverview } from "@/lib/system-update-presence"
 import { resetActiveBackupRunsToFirstPage } from "@/lib/backup-runs-cache"
@@ -89,6 +91,7 @@ import {
   accessCapabilitiesQueryOptions,
   queryKeys,
   relayConnectionQueryOptions,
+  relayOwnerMinecraftProfilesQueryOptions,
   relaysQueryOptions,
   type RelayConnection,
   updateOverviewQueryOptions,
@@ -140,6 +143,7 @@ const pendingRelayResumes = new Map<string, Promise<void>>()
 const noOutdatedRelays: ReadonlySet<string> = new Set()
 const noPublicReleases: ReadonlyArray<PublicKilnRelease> = []
 const noReportedRelayVersions: ReadonlyMap<string, string | null> = new Map()
+const noOwnerProfileIds: ReadonlyMap<string, string> = new Map()
 const noRelayUpdateSummary = {
   outdatedRelayIds: noOutdatedRelays,
   reportedVersions: noReportedRelayVersions,
@@ -227,6 +231,31 @@ function selectRelayConnectionStates(
   return "relays" in connection
     ? (connection.relays ?? noRelayConnectionStates)
     : noRelayConnectionStates
+}
+
+function selectOwnerProfileIds(
+  profiles: Array<{ displayName: string; profileId: string }>
+): ReadonlyMap<string, string> {
+  return new Map(
+    profiles.map((profile) => [
+      minecraftUsernameKey(profile.displayName),
+      profile.profileId,
+    ])
+  )
+}
+
+function useMediaQuery(query: string): boolean {
+  const [matches, setMatches] = React.useState(false)
+
+  React.useEffect(() => {
+    const mediaQuery = window.matchMedia(query)
+    const update = () => setMatches(mediaQuery.matches)
+    mediaQuery.addEventListener("change", update)
+    update()
+    return () => mediaQuery.removeEventListener("change", update)
+  }, [query])
+
+  return matches
 }
 
 function projectRelayTableItems(
@@ -462,6 +491,12 @@ const FilteredRelayTable = React.memo(function FilteredRelayTable({
     notifyOnChangeProps: ["data"],
     select: selectRelayConnectionStates,
   })
+  const showOwnerAvatars = useMediaQuery("(min-width: 1280px)")
+  const { data: ownerProfileIds = noOwnerProfileIds } = useQuery({
+    ...relayOwnerMinecraftProfilesQueryOptions(),
+    enabled: showOwnerAvatars,
+    select: selectOwnerProfileIds,
+  })
   const relayStatuses = React.useMemo(
     () => new Map(connectionStates.map((relay) => [relay.id, relay.status])),
     [connectionStates]
@@ -492,6 +527,7 @@ const FilteredRelayTable = React.memo(function FilteredRelayTable({
   return (
     <RelayTable
       outdatedRelayIds={updateSummary.outdatedRelayIds}
+      ownerProfileIds={ownerProfileIds}
       reportedVersions={updateSummary.reportedVersions}
       releases={updateSummary.releases}
       source={source}
@@ -582,6 +618,7 @@ const RelaySyncButton = React.memo(function RelaySyncButton() {
 
 function RelayTable({
   outdatedRelayIds,
+  ownerProfileIds,
   reportedVersions,
   releases,
   searchStore,
@@ -591,6 +628,7 @@ function RelayTable({
   onOpenUpdates,
 }: {
   outdatedRelayIds: ReadonlySet<string>
+  ownerProfileIds: ReadonlyMap<string, string>
   reportedVersions: ReadonlyMap<string, string | null>
   releases: ReadonlyArray<PublicKilnRelease>
   searchStore: DataTableSearchStore
@@ -726,7 +764,19 @@ function RelayTable({
             const relay = row.original
             return (
               <IdentityName
-                icon={<UserRound className="size-4" aria-hidden="true" />}
+                icon={
+                  relay.ownerName ? (
+                    <UserAvatar
+                      name={relay.ownerName}
+                      profileId={ownerProfileIds.get(
+                        minecraftUsernameKey(relay.ownerName)
+                      )}
+                    />
+                  ) : (
+                    <UserRound className="size-4" aria-hidden="true" />
+                  )
+                }
+                iconClassName="border-0 bg-transparent"
                 meta={relay.ownerEmail}
                 name={relay.ownerName ?? "Unassigned"}
               />
@@ -772,6 +822,7 @@ function RelayTable({
     initialTableState,
     onEdit,
     onOpenUpdates,
+    ownerProfileIds,
     outdatedRelayIds,
     releases,
     reportedVersions,
