@@ -554,7 +554,13 @@ function RelayTable({
           sortFn: "text",
           cell: ({ row }) => <RelayStatus relay={row.original} />,
           meta: dataTableColumnMeta(
-            { width: { base: "2.5rem", sm: "6.5rem" } },
+            {
+              width: {
+                base: "2.5rem",
+                sm: "6.5rem",
+                xl: "minmax(9rem,0.8fr)",
+              },
+            },
             {
               cellClassName: "px-2 sm:px-3",
               headerClassName: "px-2 sm:px-3",
@@ -589,12 +595,15 @@ function RelayTable({
               }
               metaClassName="font-mono"
               name={relay.name}
-              showStatus={false}
             />
           )
         },
         meta: dataTableColumnMeta({
-          width: { base: "minmax(0,1fr)", md: "minmax(0,1.25fr)" },
+          width: {
+            base: "minmax(0,1fr)",
+            md: "minmax(0,1.25fr)",
+            xl: "minmax(0,1.5fr)",
+          },
         }),
       }),
       relayTableColumnHelper.accessor(
@@ -618,7 +627,10 @@ function RelayTable({
           },
           meta: dataTableColumnMeta({
             hideBelow: "md",
-            width: "minmax(7rem,0.65fr)",
+            width: {
+              base: "minmax(7rem,0.65fr)",
+              xl: "minmax(7rem,1fr)",
+            },
           }),
         }
       ),
@@ -638,7 +650,10 @@ function RelayTable({
         },
         meta: dataTableColumnMeta({
           hideBelow: "lg",
-          width: "minmax(10rem,1fr)",
+          width: {
+            base: "minmax(10rem,1fr)",
+            xl: "minmax(10rem,2fr)",
+          },
         }),
       }),
       relayTableColumnHelper.accessor(
@@ -652,7 +667,7 @@ function RelayTable({
           ),
           meta: dataTableColumnMeta({
             hideBelow: "xl",
-            width: "minmax(8rem,0.7fr)",
+            width: "minmax(8rem,1fr)",
           }),
         }
       ),
@@ -664,7 +679,13 @@ function RelayTable({
           <RelayActions relay={row.original} onEdit={onEdit} />
         ),
         meta: dataTableColumnMeta(
-          { width: { base: "9rem", sm: "10rem" } },
+          {
+            width: {
+              base: "9rem",
+              sm: "10rem",
+              xl: "minmax(10rem,1fr)",
+            },
+          },
           {
             cellClassName: "px-1 sm:px-3",
             headerClassName: "px-1 sm:px-3",
