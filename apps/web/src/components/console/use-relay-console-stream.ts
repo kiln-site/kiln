@@ -39,6 +39,7 @@ export function useRelayConsoleStream(
   relayId: string,
   instanceId: string,
   relayConnected: boolean,
+  browserOrigin: string | null,
   runtime: InstanceRuntime | null | undefined,
   loadTiming?: ConsoleLoadTiming
 ) {
@@ -376,6 +377,7 @@ export function useRelayConsoleStream(
           const failure = yield* openRelayConsoleStream(
             relayId,
             instanceId,
+            browserOrigin,
             loadTiming
           ).pipe(
             Stream.runForEach((event) =>
@@ -532,7 +534,14 @@ export function useRelayConsoleStream(
       disposed = true
       connectFiber.interruptUnsafe()
     }
-  }, [instanceId, loadTiming, queryClient, relayConnected, relayId])
+  }, [
+    browserOrigin,
+    instanceId,
+    loadTiming,
+    queryClient,
+    relayConnected,
+    relayId,
+  ])
 
   return snapshot
 }

@@ -291,6 +291,7 @@ describe("realtime snapshot projection", () => {
       relay: { id: alpha.relayId, name: alpha.relayName },
       relays: [
         {
+          browserOrigin: "https://relay.example.com",
           id: alpha.relayId,
           name: alpha.relayName,
           status: "connected",
@@ -362,6 +363,7 @@ describe("realtime snapshot projection", () => {
       relay: { id: alpha.relayId, name: alpha.relayName },
       relays: [
         {
+          browserOrigin: "https://relay.example.com",
           id: alpha.relayId,
           name: alpha.relayName,
           status: "connected",
@@ -405,6 +407,7 @@ describe("realtime snapshot projection", () => {
       relay: { id: alpha.relayId, name: alpha.relayName },
       relays: [
         {
+          browserOrigin: "https://relay.example.com",
           id: alpha.relayId,
           name: alpha.relayName,
           status: "unreachable",

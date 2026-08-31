@@ -6,7 +6,16 @@ import {
   relayConsoleStreamEventSchema,
 } from "@workspace/contracts"
 import type { RelayConsoleStreamEvent } from "@workspace/contracts"
-import { Cause, Effect, Queue, Result, Stream } from "effect"
+import {
+  Cause,
+  Effect,
+  Exit,
+  Fiber,
+  Queue,
+  Result,
+  Scope,
+  Stream,
+} from "effect"
 
 import {
   startConsoleTimingSpan,
@@ -48,6 +57,7 @@ export class RelayConsoleConnectionError extends Error {
 export function openRelayConsoleStream(
   relayId: string,
   instanceId: string,
+  browserOrigin: string | null,
   timing?: ConsoleLoadTiming
 ): Stream.Stream<KilnConsoleStreamEvent, Error> {
   if (!navigator.onLine) {
@@ -59,7 +69,12 @@ export function openRelayConsoleStream(
     )
   }
 
-  return openDirectRelayConsoleStream(relayId, instanceId, timing).pipe(
+  return openDirectRelayConsoleStream(
+    relayId,
+    instanceId,
+    browserOrigin,
+    timing
+  ).pipe(
     Stream.catch((directFailure) =>
       openHearthConsoleStream(
         relayId,
@@ -84,52 +99,18 @@ export function openRelayConsoleStream(
 function openDirectRelayConsoleStream(
   relayId: string,
   instanceId: string,
+  browserOrigin: string | null,
   timing?: ConsoleLoadTiming
 ): Stream.Stream<KilnConsoleStreamEvent, Error> {
   return Stream.unwrap(
     Effect.gen(function* () {
-      const { keys, publicKeyJwk } = yield* withConsoleTimingSpan(
-        timing,
-        "Generate console session key",
-        "crypto.console.key",
-        Effect.tryPromise({
-          try: async () => {
-            const keys = await crypto.subtle.generateKey(
-              { name: "ECDSA", namedCurve: "P-256" },
-              false,
-              ["sign", "verify"]
-            )
-            return {
-              keys,
-              publicKeyJwk: await crypto.subtle.exportKey(
-                "jwk",
-                keys.publicKey
-              ),
-            }
-          },
-          catch: asError,
-        })
-      )
-      const capability = yield* withConsoleTimingSpan(
-        timing,
-        "Issue console capability",
-        "http.console.capability",
-        Effect.tryPromise({
-          try: () =>
-            issueConsoleCapability({
-              data: {
-                instanceId,
-                publicKeyJwk: {
-                  crv: "P-256",
-                  kty: "EC",
-                  x: requiredJwkCoordinate(publicKeyJwk.x),
-                  y: requiredJwkCoordinate(publicKeyJwk.y),
-                },
-                relayId,
-              },
-            }),
-          catch: asError,
-        })
+      const socketAttempt = browserOrigin
+        ? yield* forkRelayConsoleSocket(browserOrigin, relayId, timing)
+        : null
+      const { capability, keys, publicKeyJwk } = yield* issueConsoleSession(
+        relayId,
+        instanceId,
+        timing
       )
       if (capability.proxyMode === "hearth") {
         return yield* Effect.fail(
@@ -139,45 +120,30 @@ function openDirectRelayConsoleStream(
           )
         )
       }
-      const relayOrigin = yield* Effect.try({
-        try: () => {
-          const origin = new URL(capability.browserOrigin)
-          origin.protocol = origin.protocol === "https:" ? "wss:" : "ws:"
-          origin.pathname = "/v1/browser"
-          return origin
-        },
-        catch: asError,
-      })
-      const socket = yield* Effect.acquireRelease(
-        Effect.try({
-          try: () =>
-            new WebSocket(relayOrigin, [...relayBrowserConsoleProtocols]),
-          catch: asError,
-        }),
-        (socket) =>
-          Effect.sync(() => {
-            socket.close(1000, "Console view closed")
-          })
-      )
-      const inbox = yield* createSocketInbox(socket)
-      const challenge = yield* withConsoleTimingSpan(
-        timing,
-        "Open Relay WebSocket",
-        "websocket.console.connect",
-        nextAuthenticationMessage(inbox.messages, "challenge")
-      )
-      if (
-        challenge.type !== "auth.challenge" ||
-        challenge.relayId !== relayId ||
-        typeof challenge.sessionId !== "string" ||
-        typeof challenge.nonce !== "string" ||
-        typeof challenge.expiresAt !== "number" ||
-        challenge.expiresAt <= Date.now()
-      ) {
-        return yield* Effect.fail(
-          new Error("Relay returned an invalid browser challenge")
+      let relaySocket
+      if (!socketAttempt || !browserOrigin) {
+        relaySocket = yield* openRelayConsoleSocket(
+          capability.browserOrigin,
+          relayId,
+          timing
         )
+      } else if (
+        !sameRelayBrowserEndpoint(browserOrigin, capability.browserOrigin)
+      ) {
+        yield* Scope.close(socketAttempt.scope, Exit.void)
+        relaySocket = yield* openRelayConsoleSocket(
+          capability.browserOrigin,
+          relayId,
+          timing
+        )
+      } else {
+        const socketResult = yield* Fiber.join(socketAttempt.fiber)
+        if (Result.isFailure(socketResult)) {
+          return yield* Effect.fail(socketResult.failure)
+        }
+        relaySocket = socketResult.success
       }
+      const { challenge, inbox, socket } = relaySocket
       const expiresAt = challenge.expiresAt
       const nonce = challenge.nonce
       const sessionId = challenge.sessionId
@@ -260,6 +226,152 @@ function openDirectRelayConsoleStream(
         ])
       )
     })
+  )
+}
+
+function issueConsoleSession(
+  relayId: string,
+  instanceId: string,
+  timing?: ConsoleLoadTiming
+) {
+  return Effect.gen(function* () {
+    const { keys, publicKeyJwk } = yield* withConsoleTimingSpan(
+      timing,
+      "Generate console session key",
+      "crypto.console.key",
+      Effect.tryPromise({
+        try: async () => {
+          const keys = await crypto.subtle.generateKey(
+            { name: "ECDSA", namedCurve: "P-256" },
+            false,
+            ["sign", "verify"]
+          )
+          return {
+            keys,
+            publicKeyJwk: await crypto.subtle.exportKey("jwk", keys.publicKey),
+          }
+        },
+        catch: asError,
+      })
+    )
+    const capability = yield* withConsoleTimingSpan(
+      timing,
+      "Issue console capability",
+      "http.console.capability",
+      Effect.tryPromise({
+        try: () =>
+          issueConsoleCapability({
+            data: {
+              instanceId,
+              publicKeyJwk: {
+                crv: "P-256",
+                kty: "EC",
+                x: requiredJwkCoordinate(publicKeyJwk.x),
+                y: requiredJwkCoordinate(publicKeyJwk.y),
+              },
+              relayId,
+            },
+          }),
+        catch: asError,
+      })
+    )
+    return { capability, keys, publicKeyJwk }
+  })
+}
+
+function forkRelayConsoleSocket(
+  browserOrigin: string,
+  relayId: string,
+  timing?: ConsoleLoadTiming
+) {
+  return Effect.gen(function* () {
+    const scope = yield* Effect.acquireRelease(Scope.make(), (scope) =>
+      Scope.close(scope, Exit.void)
+    )
+    const fiber = yield* openRelayConsoleSocket(
+      browserOrigin,
+      relayId,
+      timing
+    ).pipe(Effect.result, Scope.provide(scope), Effect.forkIn(scope))
+    return { fiber, scope }
+  })
+}
+
+function openRelayConsoleSocket(
+  browserOrigin: string,
+  relayId: string,
+  timing?: ConsoleLoadTiming
+) {
+  return Effect.gen(function* () {
+    const relayOrigin = yield* Effect.try({
+      try: () => relayBrowserEndpoint(browserOrigin),
+      catch: asError,
+    })
+    const socket = yield* Effect.acquireRelease(
+      Effect.try({
+        try: () =>
+          new WebSocket(relayOrigin, [...relayBrowserConsoleProtocols]),
+        catch: asError,
+      }),
+      (socket) =>
+        Effect.sync(() => {
+          socket.close(1000, "Console view closed")
+        })
+    )
+    const inbox = yield* createSocketInbox(socket)
+    const challenge = yield* withConsoleTimingSpan(
+      timing,
+      "Open Relay WebSocket",
+      "websocket.console.connect",
+      nextAuthenticationMessage(inbox.messages, "challenge")
+    ).pipe(
+      Effect.tapError(() =>
+        Effect.sync(() => {
+          socket.close(4400, "Relay challenge failed")
+        })
+      )
+    )
+    if (
+      challenge.type !== "auth.challenge" ||
+      challenge.relayId !== relayId ||
+      typeof challenge.sessionId !== "string" ||
+      typeof challenge.nonce !== "string" ||
+      typeof challenge.expiresAt !== "number" ||
+      challenge.expiresAt <= Date.now()
+    ) {
+      yield* Effect.sync(() => {
+        socket.close(4400, "Invalid Relay challenge")
+      })
+      return yield* Effect.fail(
+        new Error("Relay returned an invalid browser challenge")
+      )
+    }
+    return {
+      challenge: {
+        expiresAt: challenge.expiresAt,
+        nonce: challenge.nonce,
+        sessionId: challenge.sessionId,
+      },
+      inbox,
+      socket,
+    }
+  })
+}
+
+function relayBrowserEndpoint(browserOrigin: string): URL {
+  const origin = new URL(browserOrigin)
+  origin.protocol = origin.protocol === "https:" ? "wss:" : "ws:"
+  origin.pathname = "/v1/browser"
+  return origin
+}
+
+function sameRelayBrowserEndpoint(left: string, right: string): boolean {
+  const endpoints = Result.try(() => [
+    relayBrowserEndpoint(left).href,
+    relayBrowserEndpoint(right).href,
+  ])
+  return (
+    Result.isSuccess(endpoints) && endpoints.success[0] === endpoints.success[1]
   )
 }
 

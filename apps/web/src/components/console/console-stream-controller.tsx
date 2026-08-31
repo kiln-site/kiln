@@ -1,5 +1,5 @@
 import * as React from "react"
-import { useQuery } from "@tanstack/react-query"
+import { useQuery, useQueryClient } from "@tanstack/react-query"
 
 import type {
   ConsoleAggregateStreamStore,
@@ -8,12 +8,14 @@ import type {
 import { useRelayConsoleStream } from "@/components/console/use-relay-console-stream"
 import { useInstanceRelayConnected } from "@/components/instance-workspace-context"
 import {
+  relayConnectionQueryOptions,
   relaySnapshotQueryOptions,
   tailscaleStacksQueryOptions,
 } from "@/lib/query-options"
 import {
   selectInstanceRelayConnected,
   selectInstanceRuntime,
+  selectRelayBrowserOrigin,
 } from "@/lib/relay-selectors"
 import type { ConsoleLoadTiming } from "@/lib/console-performance"
 import type { TailscaleStackOverview } from "@/server/tailscale"
@@ -32,6 +34,7 @@ export function ConsoleStreamController({
   streamStore: ConsoleStreamStore
 }) {
   const relayConnected = useInstanceRelayConnected()
+  const browserOrigin = useRelayBrowserOrigin(relayId)
   const selectRuntime = React.useMemo(
     () => selectInstanceRuntime(instanceId, relayId),
     [instanceId, relayId]
@@ -44,6 +47,7 @@ export function ConsoleStreamController({
     relayId,
     instanceId,
     relayConnected,
+    browserOrigin,
     runtime,
     loadTiming
   )
@@ -118,10 +122,12 @@ function TailscaleConsoleStreamSource({
     ...relaySnapshotQueryOptions(),
     select: selectConnected,
   })
+  const browserOrigin = useRelayBrowserOrigin(relayId)
   const snapshot = useRelayConsoleStream(
     relayId,
     instanceId,
     relayConnected,
+    browserOrigin,
     runtime
   )
   const effectiveSnapshot = React.useMemo(
@@ -149,4 +155,17 @@ function TailscaleConsoleStreamSource({
     [relayId, streamStore]
   )
   return null
+}
+
+function useRelayBrowserOrigin(relayId: string): string | null {
+  const queryClient = useQueryClient()
+  const selectBrowserOrigin = React.useMemo(
+    () => selectRelayBrowserOrigin(relayId),
+    [relayId]
+  )
+  const { data = null } = useQuery({
+    ...relayConnectionQueryOptions(queryClient),
+    select: selectBrowserOrigin,
+  })
+  return data
 }

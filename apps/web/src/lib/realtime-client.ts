@@ -366,11 +366,9 @@ function connectionWithRelayStatuses(
     { status: "connected" } | { status: "unreachable" }
   >,
   snapshot: RelayFleetSnapshot | undefined,
-  relays: Array<{
-    id: string
-    name: string
-    status: "connected" | "unreachable"
-  }>
+  relays: Array<
+    Extract<RelayConnection, { status: "connected" }>["relays"][number]
+  >
 ): RelayConnection {
   const connectedCount = relays.filter(
     (relay) => relay.status === "connected"

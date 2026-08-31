@@ -1339,6 +1339,7 @@ function publicRelayState<TStatus extends RelayReachability | "paused">(entry: {
   status: TStatus
 }) {
   return {
+    browserOrigin: entry.relay.browserOrigin,
     id: entry.relay.id,
     name: entry.relay.name,
     status: entry.status,

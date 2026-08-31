@@ -209,6 +209,16 @@ export function selectRelayConnected(relayId: string) {
       (connection.relays.length === 0 && connection.relay?.id === relayId))
 }
 
+export function selectRelayBrowserOrigin(relayId: string) {
+  return (connection: RelayConnection): string | null => {
+    if (connection.status === "unconfigured") return null
+    return (
+      connection.relays.find((relay) => relay.id === relayId)?.browserOrigin ??
+      null
+    )
+  }
+}
+
 export function selectInstanceWorkspaceInstance(identifier: string) {
   return (snapshot: RelayFleetSnapshot): InstanceWorkspaceInstance | null => {
     const instance = findRelayInstance(snapshot.instances, identifier)
