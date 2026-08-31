@@ -157,13 +157,15 @@ function selectBackupTopology(
   snapshot: Awaited<ReturnType<typeof getRelaySnapshot>>
 ) {
   return {
-    nodes: snapshot.nodes.map(({ relayId, relayStatus }) => ({
+    nodes: snapshot.nodes.map(({ relayId, relayName, relayStatus }) => ({
       relayId,
+      relayName,
       relayStatus,
     })),
     servers: snapshot.instances.map(
-      ({ id, observedState, relayId, relayStatus }) => ({
+      ({ id, name, observedState, relayId, relayStatus }) => ({
         id,
+        name,
         observedState,
         relayId,
         relayStatus,
@@ -175,8 +177,9 @@ function selectBackupTopology(
 function selectBackupDatabaseTopology(
   databases: Awaited<ReturnType<typeof getManagedDatabaseDirectory>>
 ) {
-  return databases.map(({ id, relayId, supportsImportExport }) => ({
+  return databases.map(({ id, name, relayId, supportsImportExport }) => ({
     id,
+    name,
     relayId,
     supportsImportExport,
   }))
@@ -407,6 +410,22 @@ export const BackupsPage = React.memo(function BackupsPage({
     }
     return instances
   }, [databases, topology.nodes, topology.servers])
+  const targetNames = React.useMemo(() => {
+    const names = new Map<string, string>()
+    for (const server of topology.servers) {
+      names.set(targetKey("instance", server.relayId, server.id), server.name)
+    }
+    for (const database of databases) {
+      names.set(
+        targetKey("database", database.relayId, database.id),
+        database.name
+      )
+    }
+    for (const relay of topology.nodes) {
+      names.set(targetKey("platform", relay.relayId, "kiln"), relay.relayName)
+    }
+    return names
+  }, [databases, topology.nodes, topology.servers])
   const availableRelayIds = React.useMemo(
     () =>
       new Set(
@@ -495,6 +514,7 @@ export const BackupsPage = React.memo(function BackupsPage({
           destinations={availabilityDestinations}
           dialogStore={dialogStore}
           targetInstances={targetInstances}
+          targetNames={targetNames}
           nameStore={nameStore}
           searchStore={searchStore}
           selectedServer={selectedServer}
@@ -705,6 +725,7 @@ const BackupDataSurface = React.memo(function BackupDataSurface({
   destinations,
   dialogStore,
   targetInstances,
+  targetNames,
   nameStore,
   searchStore,
   selectedServer,
@@ -719,6 +740,7 @@ const BackupDataSurface = React.memo(function BackupDataSurface({
   destinations: ReadonlyArray<BackupAvailabilityDestination>
   dialogStore: BackupDialogStore
   targetInstances: ReadonlyMap<string, InstanceNameInstance>
+  targetNames: ReadonlyMap<string, string>
   nameStore: BackupNameStore
   searchStore: BackupSearchStore
   selectedServer: ServerPickerOption | null
@@ -844,6 +866,7 @@ const BackupDataSurface = React.memo(function BackupDataSurface({
         destinations={destinations}
         dialogStore={dialogStore}
         targetInstances={targetInstances}
+        targetNames={targetNames}
         nameStore={nameStore}
         onSortChange={changeSort}
         scopeFiltered={Boolean(selectedServer)}
