@@ -23,10 +23,9 @@ if (dsn) {
         blockAllMedia: true,
       }),
     ],
-    tracesSampleRate: parseSampleRate(
-      import.meta.env.VITE_SENTRY_TRACES_SAMPLE_RATE,
-      import.meta.env.PROD ? 0.05 : 1
-    ),
+    tracesSampleRate: import.meta.env.PROD
+      ? parseSampleRate(import.meta.env.VITE_SENTRY_TRACES_SAMPLE_RATE, 0.05)
+      : 0,
     replaysSessionSampleRate: parseSampleRate(
       import.meta.env.VITE_SENTRY_REPLAYS_SESSION_SAMPLE_RATE,
       0.05

@@ -12,10 +12,10 @@ if (dsn) {
       "production",
     release: process.env.SENTRY_RELEASE || bakedCommit || undefined,
     sendDefaultPii: false,
-    tracesSampleRate: parseSampleRate(
-      process.env.SENTRY_TRACES_SAMPLE_RATE,
-      process.env.NODE_ENV === "production" ? 0.05 : 1
-    ),
+    tracesSampleRate:
+      process.env.NODE_ENV === "production"
+        ? parseSampleRate(process.env.SENTRY_TRACES_SAMPLE_RATE, 0.05)
+        : 0,
     initialScope: {
       tags: { "kiln.service": "relay" },
     },
