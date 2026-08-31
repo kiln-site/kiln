@@ -55,9 +55,8 @@ import {
   instanceRecipeQueryOptions,
   instanceUsersQueryOptions,
   queryKeys,
-  replaceRelaySnapshotInstance,
 } from "@/lib/query-options"
-import type { RelayFleetSnapshot } from "@/lib/relay-fleet"
+import { applyUpdatedInstance } from "@/lib/realtime-client"
 import type {
   InstanceSettingsInstance,
   RelayNodeSummary,
@@ -1153,10 +1152,7 @@ function InstanceNameForm({
   const updateNameMutation = useMutation({
     mutationFn: updateInstanceName,
     onSuccess: (updated) => {
-      queryClient.setQueryData<RelayFleetSnapshot>(
-        queryKeys.relay.snapshot,
-        (snapshot) => replaceRelaySnapshotInstance(snapshot, updated)
-      )
+      applyUpdatedInstance(queryClient, updated)
     },
   })
   const [draftName, setDraftName] = React.useState<string | null>(null)

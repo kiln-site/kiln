@@ -1,5 +1,6 @@
 import type { QueryClient } from "@tanstack/react-query"
 import { Result } from "effect"
+import type { RelayInstance } from "@workspace/contracts"
 
 import type { RelayInstancesCollection } from "@/lib/collections/relay-instances"
 import { refreshHearthRealtimeTopics } from "@/lib/hearth-realtime"
@@ -231,6 +232,25 @@ export function applyProvisioningInstance(
           : instance
       )
     }
+  )
+}
+
+export function applyUpdatedInstance(
+  queryClient: QueryClient,
+  updated: RelayInstance & { relayId: string }
+): void {
+  queryClient.setQueryData<RelayFleetSnapshot>(
+    queryKeys.relay.snapshot,
+    (snapshot) => replaceRelaySnapshotInstance(snapshot, updated)
+  )
+  queryClient.setQueryData<Array<FleetInstance>>(
+    queryKeys.relay.instances,
+    (instances) =>
+      instances?.map((instance) =>
+        instance.id === updated.id && instance.relayId === updated.relayId
+          ? mergeRealtimeInstance(instance, { ...instance, ...updated })
+          : instance
+      )
   )
 }
 

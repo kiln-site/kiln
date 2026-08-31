@@ -13,6 +13,7 @@ import {
   applyRealtimeEvent,
   applyRealtimeEventSafely,
   applyRealtimeSnapshotEvent,
+  applyUpdatedInstance,
   mergeRealtimeInstance,
   resetRealtimeEpoch,
 } from "@/lib/realtime-client"
@@ -267,9 +268,7 @@ describe("realtime snapshot projection", () => {
     const queryClient = new QueryClient()
     queryClient.setQueryData(queryKeys.relay.connection, {
       relay: { id: "stale-relay", name: "Stale Relay" },
-      relays: [
-        { id: "stale-relay", name: "Stale Relay", status: "connected" },
-      ],
+      relays: [{ id: "stale-relay", name: "Stale Relay", status: "connected" }],
       snapshot: snapshot(),
       status: "connected",
     })
@@ -292,9 +291,7 @@ describe("realtime snapshot projection", () => {
       snapshot: snapshot(),
       status: "connected",
     })
-    expect(queryClient.getQueryData(queryKeys.relay.instances)).toEqual([
-      alpha,
-    ])
+    expect(queryClient.getQueryData(queryKeys.relay.instances)).toEqual([alpha])
 
     await applyRecoveredRelayConnection(queryClient, {
       message: "No Relay has been configured yet.",
@@ -379,9 +376,7 @@ describe("realtime snapshot projection", () => {
     expect(queryClient.getQueryData(queryKeys.relay.snapshot)).toEqual(
       snapshot()
     )
-    expect(queryClient.getQueryData(queryKeys.relay.instances)).toEqual([
-      alpha,
-    ])
+    expect(queryClient.getQueryData(queryKeys.relay.instances)).toEqual([alpha])
   })
 
   it("keeps fallback rows when recovery marks a Relay unreachable", async () => {
@@ -392,8 +387,7 @@ describe("realtime snapshot projection", () => {
     }
 
     await applyRecoveredRelayConnection(queryClient, {
-      message:
-        "The Relay is configured, but Hearth cannot reach it right now.",
+      message: "The Relay is configured, but Hearth cannot reach it right now.",
       relay: { id: alpha.relayId, name: alpha.relayName },
       relays: [
         {
@@ -530,6 +524,23 @@ describe("realtime snapshot projection", () => {
     expect(
       queryClient.getQueryData<Array<FleetInstance>>(queryKeys.relay.instances)
     ).toEqual([{ ...alpha, name: "Ready" }, beta])
+  })
+
+  it("writes mutation responses to the normalized instance cache", () => {
+    const queryClient = new QueryClient()
+    const current = { instances: [alpha, beta], nodes: [node] }
+    queryClient.setQueryData(queryKeys.relay.snapshot, current)
+    queryClient.setQueryData(queryKeys.relay.instances, current.instances)
+
+    applyUpdatedInstance(queryClient, { ...alpha, name: "Renamed" })
+
+    expect(
+      queryClient.getQueryData<RelayFleetSnapshot>(queryKeys.relay.snapshot)
+        ?.instances
+    ).toEqual([{ ...alpha, name: "Renamed" }, beta])
+    expect(
+      queryClient.getQueryData<Array<FleetInstance>>(queryKeys.relay.instances)
+    ).toEqual([{ ...alpha, name: "Renamed" }, beta])
   })
 
   it("adds a newly provisioned row to every populated fleet cache", () => {
