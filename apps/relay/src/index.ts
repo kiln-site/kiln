@@ -31,6 +31,8 @@ import {
   relayInstancePortInputsSchema,
   relayInstanceWebRouteInputsSchema,
   relayNetworkingSchema,
+  relayProxyBrowserMetadataSchema,
+  relayProxyReadInputSchema,
   relayProxySettingsSchema,
   relayDirectoryPageInputSchema,
   relayDirectorySizesInputSchema,
@@ -1092,6 +1094,13 @@ async function executeControlRequest(
     }
     case "relay.proxy.read": {
       const settings = await lifecycle.proxySettings()
+      const input = relayProxyReadInputSchema.parse(request.payload)
+      if (!input.includeDiagnostics) {
+        return relayProxyBrowserMetadataSchema.parse({
+          browserOrigin: config.browserOrigin,
+          mode: settings.mode,
+        })
+      }
       return {
         diagnostics: await lifecycle.proxyDiagnostics(settings),
         settings,

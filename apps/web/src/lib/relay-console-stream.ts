@@ -9,6 +9,11 @@ import type { RelayConsoleStreamEvent } from "@workspace/contracts"
 import { Effect, Result, Stream } from "effect"
 
 import { recoverPromise } from "@/effect/promise"
+import {
+  startConsoleTimingSpan,
+  withConsoleTimingSpan,
+} from "@/lib/console-performance"
+import type { ConsoleLoadTiming } from "@/lib/console-performance"
 import { issueConsoleCapability } from "@/server/relay-capability"
 
 const AUTHENTICATION_TIMEOUT_MS = 10_000
@@ -44,7 +49,8 @@ export class RelayConsoleConnectionError extends Error {
 export function openRelayConsoleStream(
   relayId: string,
   instanceId: string,
-  signal: AbortSignal
+  signal: AbortSignal,
+  timing?: ConsoleLoadTiming
 ): AsyncGenerator<KilnConsoleStreamEvent> {
   if (!navigator.onLine) {
     const offline = Stream.toAsyncIterable(
@@ -61,7 +67,7 @@ export function openRelayConsoleStream(
   }
 
   const direct = Stream.fromAsyncIterable(
-    openDirectRelayConsoleStream(relayId, instanceId, signal),
+    openDirectRelayConsoleStream(relayId, instanceId, signal, timing),
     asError
   )
   const stream = Stream.toAsyncIterable(
@@ -74,7 +80,8 @@ export function openRelayConsoleStream(
             relayId,
             instanceId,
             signal,
-            directFallbackMessage(directFailure)
+            directFallbackMessage(directFailure),
+            timing
           ),
           asError
         ).pipe(
@@ -101,26 +108,43 @@ export function openRelayConsoleStream(
 async function* openDirectRelayConsoleStream(
   relayId: string,
   instanceId: string,
-  signal: AbortSignal
+  signal: AbortSignal,
+  timing?: ConsoleLoadTiming
 ): AsyncGenerator<KilnConsoleStreamEvent> {
-  const keys = await crypto.subtle.generateKey(
-    { name: "ECDSA", namedCurve: "P-256" },
-    false,
-    ["sign", "verify"]
+  const { keys, publicKeyJwk } = await withConsoleTimingSpan(
+    timing,
+    "Generate console session key",
+    "crypto.console.key",
+    async () => {
+      const keys = await crypto.subtle.generateKey(
+        { name: "ECDSA", namedCurve: "P-256" },
+        false,
+        ["sign", "verify"]
+      )
+      return {
+        keys,
+        publicKeyJwk: await crypto.subtle.exportKey("jwk", keys.publicKey),
+      }
+    }
   )
-  const publicKeyJwk = await crypto.subtle.exportKey("jwk", keys.publicKey)
-  const capability = await issueConsoleCapability({
-    data: {
-      instanceId,
-      publicKeyJwk: {
-        crv: "P-256",
-        kty: "EC",
-        x: requiredJwkCoordinate(publicKeyJwk.x),
-        y: requiredJwkCoordinate(publicKeyJwk.y),
-      },
-      relayId,
-    },
-  })
+  const capability = await withConsoleTimingSpan(
+    timing,
+    "Issue console capability",
+    "http.console.capability",
+    () =>
+      issueConsoleCapability({
+        data: {
+          instanceId,
+          publicKeyJwk: {
+            crv: "P-256",
+            kty: "EC",
+            x: requiredJwkCoordinate(publicKeyJwk.x),
+            y: requiredJwkCoordinate(publicKeyJwk.y),
+          },
+          relayId,
+        },
+      })
+  )
   if (capability.proxyMode === "hearth") {
     throw new RelayConsoleConnectionError(
       "direct_secure_channel_failed",
@@ -135,7 +159,12 @@ async function* openDirectRelayConsoleStream(
 
   yield* managedAsyncIterable(
     (async function* () {
-      const challenge = await nextAuthenticationMessage(inbox, "challenge")
+      const challenge = await withConsoleTimingSpan(
+        timing,
+        "Open Relay WebSocket",
+        "websocket.console.connect",
+        () => nextAuthenticationMessage(inbox, "challenge")
+      )
       if (
         challenge.type !== "auth.challenge" ||
         challenge.relayId !== relayId ||
@@ -146,54 +175,97 @@ async function* openDirectRelayConsoleStream(
       ) {
         throw new Error("Relay returned an invalid browser challenge")
       }
-      const proof = await crypto.subtle.sign(
-        { hash: "SHA-256", name: "ECDSA" },
-        keys.privateKey,
-        new TextEncoder().encode(
-          relayBrowserProofTranscript(
-            {
-              capabilityId: capabilityId(capability.capability),
-              expiresAt: challenge.expiresAt,
-              nonce: challenge.nonce,
-              relayId,
-              sessionId: challenge.sessionId,
-            },
-            socket.protocol === relayBrowserConsoleProtocol
-              ? relayBrowserConsoleProtocol
-              : relayBrowserProtocol
+      const expiresAt = challenge.expiresAt
+      const nonce = challenge.nonce
+      const sessionId = challenge.sessionId
+      await withConsoleTimingSpan(
+        timing,
+        "Authenticate Relay WebSocket",
+        "websocket.console.authenticate",
+        async () => {
+          const proof = await crypto.subtle.sign(
+            { hash: "SHA-256", name: "ECDSA" },
+            keys.privateKey,
+            new TextEncoder().encode(
+              relayBrowserProofTranscript(
+                {
+                  capabilityId: capabilityId(capability.capability),
+                  expiresAt,
+                  nonce,
+                  relayId,
+                  sessionId,
+                },
+                socket.protocol === relayBrowserConsoleProtocol
+                  ? relayBrowserConsoleProtocol
+                  : relayBrowserProtocol
+              )
+            )
           )
-        )
+          socket.send(
+            JSON.stringify({
+              capability: capability.capability,
+              publicKeyJwk: {
+                crv: "P-256",
+                kty: "EC",
+                x: requiredJwkCoordinate(publicKeyJwk.x),
+                y: requiredJwkCoordinate(publicKeyJwk.y),
+              },
+              signature: bytesToBase64Url(new Uint8Array(proof)),
+              type: "auth",
+              v: 1,
+            })
+          )
+          const ready = await nextAuthenticationMessage(inbox, "confirmation")
+          if (ready.type !== "auth.ready" || ready.instanceId !== instanceId) {
+            throw new Error("Relay browser authentication failed")
+          }
+        }
       )
-      socket.send(
-        JSON.stringify({
-          capability: capability.capability,
-          publicKeyJwk: {
-            crv: "P-256",
-            kty: "EC",
-            x: requiredJwkCoordinate(publicKeyJwk.x),
-            y: requiredJwkCoordinate(publicKeyJwk.y),
-          },
-          signature: bytesToBase64Url(new Uint8Array(proof)),
-          type: "auth",
-          v: 1,
-        })
-      )
-      const ready = await nextAuthenticationMessage(inbox, "confirmation")
-      if (ready.type !== "auth.ready" || ready.instanceId !== instanceId) {
-        throw new Error("Relay browser authentication failed")
-      }
       socket.send(
         JSON.stringify({ instanceId, type: "console.subscribe", v: 1 })
       )
       yield { message: null, transport: "direct", type: "transport" } as const
 
-      // Console frames are a single ordered stream; concurrent reads could reorder them.
-      for (;;) {
-        // This is an ordered, unbounded socket stream; parallel reads would reorder frames.
-        // oxlint-disable-next-line react-doctor/async-await-in-loop
-        const message = await inbox.next()
-        yield relayConsoleStreamEventSchema.parse(message)
-      }
+      const initialSnapshotSpan = startConsoleTimingSpan(
+        timing,
+        "Receive initial Relay console snapshot",
+        "websocket.console.snapshot"
+      )
+      let initialSnapshotPending = true
+      yield* managedAsyncIterable(
+        (async function* () {
+          // Console frames are a single ordered stream; concurrent reads could reorder them.
+          for (;;) {
+            // This is an ordered, unbounded socket stream; parallel reads would reorder frames.
+            // oxlint-disable-next-line react-doctor/async-await-in-loop
+            const message = await inbox.next()
+            const event = relayConsoleStreamEventSchema.parse(message)
+            if (
+              initialSnapshotPending &&
+              (event.type === "reset" || event.type === "ready")
+            ) {
+              initialSnapshotPending = false
+              initialSnapshotSpan.setAttribute(
+                "kiln.console.event_type",
+                event.type
+              )
+              if (event.type === "reset") {
+                initialSnapshotSpan.setAttribute(
+                  "kiln.console.line_count",
+                  event.lines.length
+                )
+              }
+              initialSnapshotSpan.end()
+            }
+            yield event
+          }
+        })(),
+        () => {
+          if (!initialSnapshotPending) return
+          initialSnapshotSpan.setAttribute("kiln.console.result", "cancelled")
+          initialSnapshotSpan.end()
+        }
+      )
     })(),
     () => {
       inbox.close()
@@ -235,11 +307,18 @@ async function* openHearthConsoleStream(
   relayId: string,
   instanceId: string,
   signal: AbortSignal,
-  fallbackMessage: string
+  fallbackMessage: string,
+  timing?: ConsoleLoadTiming
 ): AsyncGenerator<KilnConsoleStreamEvent> {
-  const response = await fetch(
-    `/api/console/${encodeURIComponent(instanceId)}?relayId=${encodeURIComponent(relayId)}`,
-    { cache: "no-store", signal }
+  const response = await withConsoleTimingSpan(
+    timing,
+    "Open Hearth console stream",
+    "http.console.fallback",
+    () =>
+      fetch(
+        `/api/console/${encodeURIComponent(instanceId)}?relayId=${encodeURIComponent(relayId)}`,
+        { cache: "no-store", signal }
+      )
   )
   if (!response.ok || !response.body) {
     const problem = (await recoverPromise(
@@ -261,35 +340,68 @@ async function* openHearthConsoleStream(
   yield* managedAsyncIterable(
     (async function* () {
       yield { message: fallbackMessage, transport: "hearth", type: "transport" }
-      for (;;) {
-        // NDJSON chunks can split records at arbitrary byte boundaries.
-        // oxlint-disable-next-line react-doctor/async-await-in-loop
-        const result = await reader.read()
-        buffered += decoder.decode(result.value, { stream: !result.done })
-        const lines = buffered.split("\n")
-        buffered = lines.pop() ?? ""
-        for (const line of lines) {
-          if (!line) continue
-          const value = JSON.parse(line) as unknown
-          if (
-            value &&
-            typeof value === "object" &&
-            "type" in value &&
-            value.type === "proxy.error"
-          ) {
-            const message =
-              "message" in value && typeof value.message === "string"
-                ? value.message
-                : "Hearth console proxy was interrupted"
-            throw new Error(message)
+      const initialSnapshotSpan = startConsoleTimingSpan(
+        timing,
+        "Receive initial Hearth console snapshot",
+        "http.console.snapshot"
+      )
+      let initialSnapshotPending = true
+      yield* managedAsyncIterable(
+        (async function* () {
+          for (;;) {
+            // NDJSON chunks can split records at arbitrary byte boundaries.
+            // oxlint-disable-next-line react-doctor/async-await-in-loop
+            const result = await reader.read()
+            buffered += decoder.decode(result.value, { stream: !result.done })
+            const lines = buffered.split("\n")
+            buffered = lines.pop() ?? ""
+            for (const line of lines) {
+              if (!line) continue
+              const value = JSON.parse(line) as unknown
+              if (
+                value &&
+                typeof value === "object" &&
+                "type" in value &&
+                value.type === "proxy.error"
+              ) {
+                const message =
+                  "message" in value && typeof value.message === "string"
+                    ? value.message
+                    : "Hearth console proxy was interrupted"
+                throw new Error(message)
+              }
+              const event = relayConsoleStreamEventSchema.parse(value)
+              if (
+                initialSnapshotPending &&
+                (event.type === "reset" || event.type === "ready")
+              ) {
+                initialSnapshotPending = false
+                initialSnapshotSpan.setAttribute(
+                  "kiln.console.event_type",
+                  event.type
+                )
+                if (event.type === "reset") {
+                  initialSnapshotSpan.setAttribute(
+                    "kiln.console.line_count",
+                    event.lines.length
+                  )
+                }
+                initialSnapshotSpan.end()
+              }
+              yield event
+            }
+            if (result.done) break
           }
-          yield relayConsoleStreamEventSchema.parse(value)
+          if (buffered.trim()) {
+            yield relayConsoleStreamEventSchema.parse(JSON.parse(buffered))
+          }
+        })(),
+        () => {
+          if (!initialSnapshotPending) return
+          initialSnapshotSpan.setAttribute("kiln.console.result", "cancelled")
+          initialSnapshotSpan.end()
         }
-        if (result.done) break
-      }
-      if (buffered.trim()) {
-        yield relayConsoleStreamEventSchema.parse(JSON.parse(buffered))
-      }
+      )
     })(),
     () => reader.cancel()
   )

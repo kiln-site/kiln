@@ -16,6 +16,7 @@ import type {
   ConsoleAggregateStreamStore,
   ConsoleStreamStore,
 } from "@/components/console/console-stores"
+import { createConsoleLoadTiming } from "@/lib/console-performance"
 import type { InstanceWorkspaceInstance } from "@/lib/relay-selectors"
 
 export function ConsoleWorkspace({
@@ -58,6 +59,12 @@ function ConsoleWorkspaceSession({
       ? createConsoleAggregateStreamStore(instance.id)
       : createConsoleStreamStore()
   )
+  const [loadTiming] = React.useState(() =>
+    tailscale || typeof window === "undefined"
+      ? undefined
+      : createConsoleLoadTiming()
+  )
+  React.useEffect(() => () => loadTiming?.cancel(), [loadTiming])
 
   return (
     <section className="flex min-h-0 flex-1 flex-col bg-card">
@@ -69,6 +76,7 @@ function ConsoleWorkspaceSession({
       ) : (
         <ConsoleStreamController
           instanceId={instance.id}
+          loadTiming={loadTiming}
           relayId={instance.relayId}
           streamStore={streamStore}
         />
@@ -82,6 +90,7 @@ function ConsoleWorkspaceSession({
       />
       <ConsoleLogViewportController
         active={active}
+        loadTiming={loadTiming}
         streamStore={streamStore}
         uiStore={uiStore}
       />

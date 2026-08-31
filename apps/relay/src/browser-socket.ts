@@ -38,7 +38,11 @@ import {
   relayConsoleCompletionInputSchema,
 } from "@workspace/contracts"
 
-import { MAX_CONSOLE_HISTORY_LINES, type DockerDriver } from "./docker.js"
+import {
+  MAX_CONSOLE_HISTORY_LINES,
+  type DockerConsoleSession,
+  type DockerDriver,
+} from "./docker.js"
 import {
   encodeConsoleHistoryFrames,
   encodeConsoleLineFrame,
@@ -46,7 +50,6 @@ import {
 } from "./console-frames.js"
 import { MAX_TRANSFER_BYTES } from "./files.js"
 import type { ArchiveDownloadEntry, FilesystemDriver } from "./files.js"
-import type { RelayInstanceConfig } from "./config.js"
 import type { RelayIdentity } from "./effect/identity.js"
 import { forkPromise } from "./effect/promise.js"
 import type { RelayClientGrant, RelayStateStore } from "./effect/state.js"
@@ -1448,6 +1451,12 @@ function safeBrowserError(cause: unknown): string {
     : "File transfer failed"
 }
 
+export function consoleSnapshotNeedsBackfill(
+  snapshot: Pick<RelayConsole, "truncated">
+): boolean {
+  return snapshot.truncated
+}
+
 class ConsoleHubRegistry {
   readonly #docker: DockerDriver
   readonly #hubs = new Map<string, ConsoleHub>()
@@ -1530,21 +1539,22 @@ class ConsoleHubRegistry {
   }
 
   #createHubEffect(instanceId: string): Effect.Effect<ConsoleHub, Error> {
-    return browserOperation(() => this.#docker.findInstance(instanceId)).pipe(
-      Effect.flatMap((instance) => {
-        if (!instance) return Effect.fail(new Error("Instance not found"))
-        return Effect.sync(() => {
-          const hub = new ConsoleHub(
-            this.#docker,
-            instance,
-            this.#subscribeSnapshots,
-            () => {
-              if (hub.subscriberCount === 0) this.#hubs.delete(instanceId)
-            }
-          )
-          this.#hubs.set(instanceId, hub)
-          return hub
-        })
+    return timedBrowserOperation(
+      "Discover console session",
+      "relay.console.discovery",
+      () => this.#docker.consoleSession(instanceId)
+    ).pipe(
+      Effect.map((session) => {
+        const hub = new ConsoleHub(
+          this.#docker,
+          session,
+          this.#subscribeSnapshots,
+          () => {
+            if (hub.subscriberCount === 0) this.#hubs.delete(instanceId)
+          }
+        )
+        this.#hubs.set(instanceId, hub)
+        return hub
       })
     )
   }
@@ -1610,7 +1620,7 @@ class ConsoleHub {
   readonly #abort = new AbortController()
   readonly #backgroundFibers = new Set<Fiber.Fiber<void, never>>()
   readonly #docker: DockerDriver
-  readonly #instance: RelayInstanceConfig
+  readonly #instanceId: string
   readonly #lineIds = new Set<string>()
   readonly #onEmpty: () => void
   readonly #recent: Array<RelayConsoleLine> = []
@@ -1618,6 +1628,7 @@ class ConsoleHub {
   #backfillStartedAt: string | null | undefined
   #closed = false
   #graceFiber: Fiber.Fiber<void, never> | null = null
+  #nextSession: DockerConsoleSession | null
   #sessionFloor: string | null = null
   #sessionLifecycle: Array<RelayInstanceLifecycleEvent> | undefined
   #streamFiber: Fiber.Fiber<void, never> | null = null
@@ -1627,12 +1638,13 @@ class ConsoleHub {
 
   constructor(
     docker: DockerDriver,
-    instance: NonNullable<Awaited<ReturnType<DockerDriver["findInstance"]>>>,
+    session: DockerConsoleSession,
     subscribeSnapshots: BrowserSocketOptions["subscribeSnapshots"],
     onEmpty: () => void
   ) {
     this.#docker = docker
-    this.#instance = instance
+    this.#instanceId = session.instance.id
+    this.#nextSession = session
     this.#onEmpty = onEmpty
     this.#unsubscribeSnapshots = subscribeSnapshots((sample) => {
       this.#observeSnapshot(sample)
@@ -1731,39 +1743,60 @@ class ConsoleHub {
   }
 
   #streamOnceEffect(): Effect.Effect<void, Error> {
-    return browserOperation(() =>
-      this.#docker.console(this.#instance, 200)
-    ).pipe(
-      Effect.tap((snapshot) =>
-        Effect.sync(() => {
-          const startedAt = lifecycleEventTime(snapshot.lifecycle, "started")
-          const sessionChanged =
-            lifecycleEventTime(this.#sessionLifecycle, "started") !== startedAt
-          if (this.#sessionLifecycle === undefined || sessionChanged) {
-            this.#replaceSession(snapshot)
-          } else {
-            for (const line of snapshot.lines) this.#append(line)
-          }
-          if (this.#backfillStartedAt !== startedAt) {
-            this.#backfillStartedAt = startedAt
-            this.#forkBackground(
-              this.#backfillEffect(startedAt),
-              "browser.console.backfill"
-            )
-          }
-        })
-      ),
-      Effect.andThen(
-        browserOperation(async () => {
-          for await (const line of this.#docker.streamConsole(
-            this.#instance,
-            this.#abort.signal
-          )) {
-            this.#append(line)
-          }
-        })
+    return this.#takeSessionEffect().pipe(
+      Effect.flatMap((session) =>
+        timedBrowserOperation(
+          "Read initial console history",
+          "relay.console.history",
+          () => session.history(200)
+        ).pipe(
+          Effect.tap((snapshot) =>
+            Effect.sync(() => {
+              const startedAt = lifecycleEventTime(
+                snapshot.lifecycle,
+                "started"
+              )
+              const sessionChanged =
+                lifecycleEventTime(this.#sessionLifecycle, "started") !==
+                startedAt
+              if (this.#sessionLifecycle === undefined || sessionChanged) {
+                this.#replaceSession(snapshot)
+              } else {
+                for (const line of snapshot.lines) this.#append(line)
+              }
+              if (this.#backfillStartedAt !== startedAt) {
+                this.#backfillStartedAt = startedAt
+                if (consoleSnapshotNeedsBackfill(snapshot)) {
+                  this.#forkBackground(
+                    this.#backfillEffect(session, startedAt),
+                    "browser.console.backfill"
+                  )
+                }
+              }
+            })
+          ),
+          Effect.andThen(
+            browserOperation(async () => {
+              for await (const line of session.stream(this.#abort.signal)) {
+                this.#append(line)
+              }
+            })
+          )
+        )
       )
     )
+  }
+
+  #takeSessionEffect(): Effect.Effect<DockerConsoleSession, Error> {
+    const session = this.#nextSession
+    this.#nextSession = null
+    return session
+      ? Effect.succeed(session)
+      : timedBrowserOperation(
+          "Rediscover console session",
+          "relay.console.discovery",
+          () => this.#docker.consoleSession(this.#instanceId)
+        )
   }
 
   #forkBackground(effect: Effect.Effect<void, Error>, operation: string): void {
@@ -1814,7 +1847,7 @@ class ConsoleHub {
       return
     }
     const lifecycle = sample.snapshot.instances.find(
-      (instance) => instance.id === this.#instance.id
+      (instance) => instance.id === this.#instanceId
     )?.lifecycle
     const startedAt = lifecycleEventTime(lifecycle, "started")
     if (
@@ -1844,27 +1877,39 @@ class ConsoleHub {
   }
 
   #transitionSessionEffect(startedAt: string): Effect.Effect<void, Error> {
-    return browserOperation(() =>
-      this.#docker.console(this.#instance, 200)
+    return timedBrowserOperation(
+      "Discover replacement console session",
+      "relay.console.discovery",
+      () => this.#docker.consoleSession(this.#instanceId)
     ).pipe(
-      Effect.tap((snapshot) =>
-        Effect.sync(() => {
-          if (
-            this.#abort.signal.aborted ||
-            this.#transitionStartedAt !== startedAt ||
-            lifecycleEventTime(this.#sessionLifecycle, "started") ===
-              startedAt ||
-            lifecycleEventTime(snapshot.lifecycle, "started") !== startedAt
-          ) {
-            return
-          }
-          this.#replaceSession(snapshot)
-          this.#backfillStartedAt = startedAt
-          this.#forkBackground(
-            this.#backfillEffect(startedAt),
-            "browser.console.backfill"
+      Effect.flatMap((session) =>
+        timedBrowserOperation(
+          "Read replacement console history",
+          "relay.console.history",
+          () => session.history(200)
+        ).pipe(
+          Effect.tap((snapshot) =>
+            Effect.sync(() => {
+              if (
+                this.#abort.signal.aborted ||
+                this.#transitionStartedAt !== startedAt ||
+                lifecycleEventTime(this.#sessionLifecycle, "started") ===
+                  startedAt ||
+                lifecycleEventTime(snapshot.lifecycle, "started") !== startedAt
+              ) {
+                return
+              }
+              this.#replaceSession(snapshot)
+              this.#backfillStartedAt = startedAt
+              if (consoleSnapshotNeedsBackfill(snapshot)) {
+                this.#forkBackground(
+                  this.#backfillEffect(session, startedAt),
+                  "browser.console.backfill"
+                )
+              }
+            })
           )
-        })
+        )
       ),
       Effect.asVoid,
       Effect.ensuring(
@@ -1877,9 +1922,14 @@ class ConsoleHub {
     )
   }
 
-  #backfillEffect(startedAt: string | null): Effect.Effect<void, Error> {
-    return browserOperation(() =>
-      this.#docker.console(this.#instance, MAX_CONSOLE_HISTORY_LINES)
+  #backfillEffect(
+    session: DockerConsoleSession,
+    startedAt: string | null
+  ): Effect.Effect<void, Error> {
+    return timedBrowserOperation(
+      "Backfill console history",
+      "relay.console.backfill",
+      () => session.history(MAX_CONSOLE_HISTORY_LINES)
     ).pipe(
       Effect.tap((history) =>
         Effect.sync(() => {
@@ -1935,7 +1985,7 @@ class ConsoleHub {
     if (socket.protocol === relayBrowserProtocol) {
       send(socket, {
         type: "ready",
-        instanceId: this.#instance.id,
+        instanceId: this.#instanceId,
         lifecycle,
       })
       for (const line of this.#recent.slice(snapshotStart)) {
@@ -1946,7 +1996,7 @@ class ConsoleHub {
 
     const reset = encodeNewestConsoleBatch({
       type: "reset",
-      instanceId: this.#instance.id,
+      instanceId: this.#instanceId,
       lifecycle,
       lines: this.#recent.slice(snapshotStart),
       truncated: this.#truncated || snapshotStart > 0,
@@ -1954,7 +2004,7 @@ class ConsoleHub {
     sendEncoded(socket, reset.encoded)
     send(socket, {
       type: "ready",
-      instanceId: this.#instance.id,
+      instanceId: this.#instanceId,
       lifecycle,
     })
     this.#sendHistory(
@@ -1972,7 +2022,7 @@ class ConsoleHub {
     )
     if (subscribers.length === 0) return
     const frames = encodeConsoleHistoryFrames({
-      instanceId: this.#instance.id,
+      instanceId: this.#instanceId,
       lifecycle: this.#sessionLifecycle ?? [],
       lines,
       truncated: this.#truncated,
@@ -2044,6 +2094,14 @@ function browserOperation<TResult>(
   run: () => Promise<TResult>
 ): Effect.Effect<TResult, Error> {
   return Effect.tryPromise({ try: run, catch: asError })
+}
+
+function timedBrowserOperation<TResult>(
+  name: string,
+  op: string,
+  run: () => Promise<TResult>
+): Effect.Effect<TResult, Error> {
+  return browserOperation(() => Sentry.startSpan({ name, op }, run))
 }
 
 function asError(cause: unknown): Error {

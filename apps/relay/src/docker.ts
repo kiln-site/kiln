@@ -152,6 +152,15 @@ interface ConsoleTarget {
   container: DockerInspect
 }
 
+export interface DockerConsoleSession {
+  readonly history: (limit?: number) => Promise<RelayConsole>
+  readonly instance: RelayInstanceConfig
+  readonly stream: (
+    signal: AbortSignal,
+    limit?: number
+  ) => AsyncIterable<RelayConsoleLine>
+}
+
 interface DockerStats {
   cpu_stats?: {
     cpu_usage?: { total_usage?: number }
@@ -1256,8 +1265,29 @@ export class DockerDriver {
     instance: RelayInstanceConfig,
     limit = 2_000
   ): Promise<RelayConsole> {
-    const discovered = await this.#findDiscovered(instance.id)
+    const session = await this.consoleSession(instance.id)
+    return session.history(limit)
+  }
+
+  async consoleSession(instanceId: string): Promise<DockerConsoleSession> {
+    const discovered = await this.#findDiscovered(instanceId)
+    const instance = discovered.config
     const targets = await this.#consoleTargets(instance, discovered)
+    return {
+      history: (limit = 2_000) =>
+        this.#consoleHistory(instance, discovered, targets, limit),
+      instance,
+      stream: (signal, limit = 200) =>
+        this.#streamConsoleTargets(targets, signal, limit),
+    }
+  }
+
+  async #consoleHistory(
+    instance: RelayInstanceConfig,
+    discovered: DiscoveredInstance,
+    targets: ReadonlyArray<ConsoleTarget>,
+    limit: number
+  ): Promise<RelayConsole> {
     const boundedLimit = Math.min(
       Math.max(limit, 100),
       MAX_CONSOLE_HISTORY_LINES
@@ -1362,14 +1392,21 @@ export class DockerDriver {
     signal: AbortSignal,
     limit = 200
   ): AsyncIterable<RelayConsoleLine> {
-    const findDiscovered = () => this.#findDiscovered(instance.id)
-    const consoleTargets = (discovered: DiscoveredInstance) =>
-      this.#consoleTargets(instance, discovered)
+    const openSession = () => this.consoleSession(instance.id)
+    return (async function* () {
+      const session = await openSession()
+      yield* session.stream(signal, limit)
+    })()
+  }
+
+  #streamConsoleTargets(
+    targets: ReadonlyArray<ConsoleTarget>,
+    signal: AbortSignal,
+    limit: number
+  ): AsyncIterable<RelayConsoleLine> {
     return Stream.toAsyncIterable(
       Stream.callback<RelayConsoleLine, unknown>((queue) =>
         Effect.gen(function* () {
-          const discovered = yield* promiseEffect(findDiscovered)
-          const targets = yield* promiseEffect(() => consoleTargets(discovered))
           const boundedLimit = Math.min(
             Math.max(limit, 100),
             MAX_CONSOLE_HISTORY_LINES

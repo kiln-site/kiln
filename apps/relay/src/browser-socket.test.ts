@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vite-plus/test"
 
-import { parseRange } from "./browser-socket.js"
+import { consoleSnapshotNeedsBackfill, parseRange } from "./browser-socket.js"
 
 describe("Relay browser byte ranges", () => {
   it("supports open, bounded, oversized, and suffix ranges", () => {
@@ -17,5 +17,12 @@ describe("Relay browser byte ranges", () => {
     expect(() => parseRange("bytes=20-10", 100)).toThrow()
     expect(() => parseRange("bytes=-0", 100)).toThrow()
     expect(() => parseRange("bytes=0-1,3-4", 100)).toThrow()
+  })
+})
+
+describe("Relay browser console history", () => {
+  it("backfills only when the initial history reached its limit", () => {
+    expect(consoleSnapshotNeedsBackfill({ truncated: false })).toBe(false)
+    expect(consoleSnapshotNeedsBackfill({ truncated: true })).toBe(true)
   })
 })

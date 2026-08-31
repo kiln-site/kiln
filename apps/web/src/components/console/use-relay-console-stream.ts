@@ -31,6 +31,7 @@ import {
   openRelayConsoleStream,
   RelayConsoleConnectionError,
 } from "@/lib/relay-console-stream"
+import type { ConsoleLoadTiming } from "@/lib/console-performance"
 import { queryKeys } from "@/lib/query-options"
 import type { InstanceRuntime } from "@/lib/relay-selectors"
 
@@ -38,7 +39,8 @@ export function useRelayConsoleStream(
   relayId: string,
   instanceId: string,
   relayConnected: boolean,
-  runtime: InstanceRuntime | null | undefined
+  runtime: InstanceRuntime | null | undefined,
+  loadTiming?: ConsoleLoadTiming
 ) {
   const queryClient = useQueryClient()
   const hasEverBeenLiveRef = React.useRef(false)
@@ -245,6 +247,7 @@ export function useRelayConsoleStream(
 
   React.useEffect(() => {
     if (!relayConnected) {
+      loadTiming?.fail(new Error("Relay is unavailable"))
       setSnapshot((current) =>
         updateConsoleStreamSnapshot(current, {
           connection: "unavailable",
@@ -258,11 +261,13 @@ export function useRelayConsoleStream(
     let cancelled = false
     const lifecycle = new AbortController()
     let activeIterator: ReturnType<typeof openRelayConsoleStream> | null = null
+    let activeTransport: ConsoleStreamSnapshot["transport"] = null
     let flushTimer: number | null = null
     const pending: Array<RelayConsoleLine> = []
     const seen = new Set(
       consoleDataRef.current?.lines.map((line) => line.id) ?? []
     )
+    loadTiming?.markCache(Boolean(consoleDataRef.current))
     setSnapshot((current) =>
       updateConsoleStreamSnapshot(current, {
         connection: hasEverBeenLiveRef.current ? "reconnecting" : "opening",
@@ -375,7 +380,8 @@ export function useRelayConsoleStream(
               const stream = openRelayConsoleStream(
                 relayId,
                 instanceId,
-                lifecycle.signal
+                lifecycle.signal,
+                loadTiming
               )
               activeIterator = stream
               // Cancellation changes from the effect cleanup while next() awaits.
@@ -388,6 +394,8 @@ export function useRelayConsoleStream(
                 if (result.done) throw new Error("Console stream closed")
                 const event = result.value
                 if (event.type === "transport") {
+                  activeTransport = event.transport
+                  loadTiming?.markTransport(event.transport)
                   commitSnapshot({
                     error: null,
                     transport: event.transport,
@@ -443,6 +451,10 @@ export function useRelayConsoleStream(
                     error: null,
                     loading: false,
                   })
+                  loadTiming?.markReady(
+                    activeTransport,
+                    nextConsole.lines.length
+                  )
                   retryDelay = 400
                 } else if (event.type === "reset") {
                   if (
@@ -513,6 +525,7 @@ export function useRelayConsoleStream(
           // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
           if (cancelled) break
           if (failure === null) continue
+          loadTiming?.fail(failure)
           commitSnapshot({
             connection: hasEverBeenLiveRef.current
               ? "reconnecting"
@@ -534,7 +547,7 @@ export function useRelayConsoleStream(
       if (activeIterator) void activeIterator.return(undefined)
       connectFiber.interruptUnsafe()
     }
-  }, [instanceId, queryClient, relayConnected, relayId])
+  }, [instanceId, loadTiming, queryClient, relayConnected, relayId])
 
   return snapshot
 }

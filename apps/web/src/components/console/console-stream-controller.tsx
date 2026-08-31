@@ -15,16 +15,19 @@ import {
   selectInstanceRelayConnected,
   selectInstanceRuntime,
 } from "@/lib/relay-selectors"
+import type { ConsoleLoadTiming } from "@/lib/console-performance"
 import type { TailscaleStackOverview } from "@/server/tailscale"
 
 const emptyTailscaleStacks: Array<TailscaleStackOverview> = []
 
 export function ConsoleStreamController({
   instanceId,
+  loadTiming,
   relayId,
   streamStore,
 }: {
   instanceId: string
+  loadTiming?: ConsoleLoadTiming
   relayId: string
   streamStore: ConsoleStreamStore
 }) {
@@ -41,7 +44,8 @@ export function ConsoleStreamController({
     relayId,
     instanceId,
     relayConnected,
-    runtime
+    runtime,
+    loadTiming
   )
   const effectiveSnapshot = React.useMemo(
     () =>

@@ -649,6 +649,19 @@ export const relayProxySettingsSchema = z
   })
   .strict()
 
+export const relayProxyReadInputSchema = z
+  .object({
+    includeDiagnostics: z.boolean().optional().default(true),
+  })
+  .strict()
+
+export const relayProxyBrowserMetadataSchema = z
+  .object({
+    browserOrigin: z.url(),
+    mode: relayProxyModeSchema,
+  })
+  .strict()
+
 const webRouteHostnameSchema = z
   .string()
   .trim()
@@ -1545,6 +1558,9 @@ export type RelayTailscaleStackDns = z.infer<
 >
 export type RelayTailscaleStatus = z.infer<typeof relayTailscaleStatusSchema>
 export type RelayProxyMode = z.infer<typeof relayProxyModeSchema>
+export type RelayProxyBrowserMetadata = z.infer<
+  typeof relayProxyBrowserMetadataSchema
+>
 export type RelayProxySettings = z.infer<typeof relayProxySettingsSchema>
 export type RelayProxyDiagnostics = z.infer<typeof relayProxyDiagnosticsSchema>
 export type RelayInstanceWebRoute = z.infer<typeof relayInstanceWebRouteSchema>

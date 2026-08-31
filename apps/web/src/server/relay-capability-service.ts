@@ -1,6 +1,8 @@
 import { createHash, randomUUID, sign } from "node:crypto"
 
+import * as Sentry from "@sentry/tanstackstart-react"
 import {
+  relayProxyBrowserMetadataSchema,
   relayProxyDiagnosticsSchema,
   relayProxySettingsSchema,
 } from "@workspace/contracts"
@@ -130,19 +132,54 @@ async function createBrowserCapability(input: {
     import("@/lib/relay-connection"),
     loadRelayCredentials(input.relay.id),
   ])
-  const proxy = await recoverPromise(
-    async () => {
-      const value = await relayRpc(input.relay, "relay.proxy.read", {}, 5_000)
-      if (!value || typeof value !== "object") return null
-      const response = Object.fromEntries(Object.entries(value))
-      return {
-        diagnostics: relayProxyDiagnosticsSchema.parse(response.diagnostics),
-        settings: relayProxySettingsSchema.parse(response.settings),
-      }
+  const proxy = await Sentry.startSpan(
+    {
+      name: "Resolve Relay browser metadata",
+      op: "rpc.relay.browser-metadata",
+      attributes: { "relay.id": input.relay.id },
     },
-    () => null
+    (span) =>
+      recoverPromise(
+        async () => {
+          const value = await relayRpc(
+            input.relay,
+            "relay.proxy.read",
+            { includeDiagnostics: false },
+            5_000
+          )
+          if (!value || typeof value !== "object") {
+            span.setAttribute(
+              "kiln.console.metadata_shape",
+              "registry_fallback"
+            )
+            return null
+          }
+          const response = Object.fromEntries(Object.entries(value))
+          const metadata = relayProxyBrowserMetadataSchema.safeParse(response)
+          if (metadata.success) {
+            span.setAttribute("kiln.console.metadata_shape", "lightweight")
+            return metadata.data
+          }
+          // Relays predating the lightweight metadata hint ignore its payload
+          // and return full diagnostics. Keep rolling upgrades compatible
+          // without adding a second RPC.
+          const diagnostics = relayProxyDiagnosticsSchema.parse(
+            response.diagnostics
+          )
+          const settings = relayProxySettingsSchema.parse(response.settings)
+          span.setAttribute("kiln.console.metadata_shape", "legacy_diagnostics")
+          return {
+            browserOrigin: diagnostics.browserOrigin,
+            mode: settings.mode,
+          }
+        },
+        () => {
+          span.setAttribute("kiln.console.metadata_shape", "registry_fallback")
+          return null
+        }
+      )
   )
-  const proxyMode = proxy?.settings.mode ?? "none"
+  const proxyMode = proxy?.mode ?? "none"
   const now = Date.now()
   const payload = {
     actions: input.actions,
@@ -165,8 +202,7 @@ async function createBrowserCapability(input: {
     credentials.clientPrivateKeyPem
   ).toString("base64url")
   return {
-    browserOrigin:
-      proxy?.diagnostics.browserOrigin ?? input.relay.browserOrigin,
+    browserOrigin: proxy?.browserOrigin ?? input.relay.browserOrigin,
     capability: `${encoded}.${signature}`,
     expiresAt: payload.expiresAt,
     proxyMode,
