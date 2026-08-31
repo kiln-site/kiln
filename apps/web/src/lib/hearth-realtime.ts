@@ -129,6 +129,8 @@ export async function refreshHearthRealtimeTopics(
 ): Promise<void> {
   if (topics.includes("backups") || topics.includes("relays")) {
     await refreshBackupRuns(queryClient, scope?.backupId)
+  } else if (topics.includes("database-directory")) {
+    await invalidateNameDependentBackupRuns(queryClient)
   }
   const scopeHashes = new Set<string>()
   const requestedScopes: Array<HearthRealtimeQueryScope> = []
@@ -159,6 +161,17 @@ export async function refreshHearthRealtimeTopics(
       queryClient.invalidateQueries({ exact, queryKey }, { throwOnError: true })
     )
   )
+}
+
+export function invalidateNameDependentBackupRuns(
+  queryClient: QueryClient
+): Promise<void> {
+  return queryClient.invalidateQueries({
+    predicate: (query) => {
+      const input = backupRunsInputFromQueryKey(query.queryKey)
+      return Boolean(input && (input.search.trim() || input.sort === "target"))
+    },
+  })
 }
 
 async function refreshBackupRuns(

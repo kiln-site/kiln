@@ -74,6 +74,7 @@ import {
 } from "@/components/workspace-data-table"
 import type { WorkspaceTableSearchStore } from "@/components/workspace-data-table"
 import { InstanceName } from "@/components/instance-name"
+import { instanceStatusPresentation } from "@/components/instance-name-presentation"
 import { managedDatabasesCollectionOptions } from "@/lib/collections/managed-databases"
 import {
   ServerPickerList,
@@ -1252,44 +1253,32 @@ function DeleteDatabaseDialog({
 
 function databaseStatusPresentation(
   inventoryStatus: ManagedDatabase["inventoryStatus"],
-  state: string
+  state: ManagedDatabase["observedState"]
 ) {
-  return inventoryStatus === "missing"
-    ? {
-        dot: "bg-destructive",
-        label: "Missing",
-        text: "text-destructive",
-      }
-    : inventoryStatus === "unavailable"
-      ? {
-          dot: "bg-amber-300",
-          label: "Unavailable",
-          text: "text-amber-200",
-        }
-      : state === "running"
-        ? {
-            dot: "bg-emerald-400",
-            label: "Running",
-            text: "text-emerald-300",
-          }
-        : state === "starting"
-          ? {
-              dot: "bg-amber-300",
-              label: "Starting",
-              text: "text-amber-200",
-            }
-          : state === "failed"
-            ? {
-                dot: "bg-destructive",
-                label: "Failed",
-                text: "text-destructive",
-              }
-            : {
-                dot: "bg-muted-foreground",
-                label: "Stopped",
-                text: "text-muted-foreground",
-              }
+  const status = instanceStatusPresentation({
+    id: "status-presentation",
+    inventoryStatus,
+    kind: "database",
+    observedState: state,
+    relayId: "status-presentation",
+  })
+  return {
+    dot: databaseStatusToneClasses[status.tone].dot,
+    label: status.label,
+    text: databaseStatusToneClasses[status.tone].text,
+  }
 }
+
+const databaseStatusToneClasses = {
+  danger: { dot: "bg-destructive", text: "text-destructive" },
+  info: { dot: "bg-sky-400", text: "text-sky-300" },
+  neutral: {
+    dot: "bg-muted-foreground",
+    text: "text-muted-foreground",
+  },
+  success: { dot: "bg-emerald-400", text: "text-emerald-300" },
+  warning: { dot: "bg-amber-300", text: "text-amber-200" },
+} as const
 
 function DatabaseStatus({
   status,

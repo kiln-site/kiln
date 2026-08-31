@@ -607,13 +607,12 @@ const ServerTableRow = React.memo(function ServerTableRow({
       <WorkspaceTableCell className="px-2 sm:px-3">
         <ServerStatus server={server} />
       </WorkspaceTableCell>
-      <WorkspaceTableCell className="px-0">
+      <WorkspaceTableCell className="!px-0">
         <Link
           to="/server/$serverId/console"
           params={{ serverId: routeIdentifier }}
           preload="intent"
-          aria-label={`Open ${server.name}`}
-          className="group/server-link flex min-h-14 w-fit max-w-full min-w-0 items-center px-3 outline-none focus-visible:ring-2 focus-visible:ring-ring/40 focus-visible:ring-inset"
+          className="group/server-link flex min-h-14 w-full min-w-0 items-center px-3 outline-none focus-visible:ring-2 focus-visible:ring-ring/40 focus-visible:ring-inset"
         >
           <InstanceName
             instance={{

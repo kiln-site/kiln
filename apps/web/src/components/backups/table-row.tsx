@@ -782,16 +782,20 @@ function BackupMissingTargetTooltip({
 
 export const BackupTargetLink = React.memo(function BackupTargetLink({
   available,
+  displayId,
   instance,
+  kindLabel,
+  name,
   relayId,
-  target,
   targetId,
   targetKind,
 }: {
   available: boolean
+  displayId: string
   instance?: InstanceNameInstance
+  kindLabel: BackupTargetPresentation["kindLabel"]
+  name: string
   relayId: string
-  target: BackupTargetPresentation
   targetId: string
   targetKind: Backup["targetKind"]
 }) {
@@ -810,23 +814,23 @@ export const BackupTargetLink = React.memo(function BackupTargetLink({
           relayId,
         }
       }
-      name={target.name}
+      name={name}
       nameClassName={
         available
           ? "transition-colors group-hover/target-link:text-primary"
           : "text-muted-foreground"
       }
-      meta={`${target.kindLabel} · ${target.id.slice(0, 8)}`}
+      meta={`${kindLabel} · ${displayId.slice(0, 8)}`}
       metaClassName="font-mono"
+      showStatus={false}
     />
   )
   const targetContent = available ? (
     <BackupTargetAnchor
       relayId={relayId}
-      searchId={target.id}
+      searchId={displayId}
       targetId={targetId}
       targetKind={targetKind}
-      targetName={target.name}
     >
       {identity}
     </BackupTargetAnchor>
@@ -854,14 +858,12 @@ const BackupTargetAnchor = React.memo(function BackupTargetAnchor({
   searchId,
   targetId,
   targetKind,
-  targetName,
 }: {
   children: React.ReactNode
   relayId: string
   searchId: string
   targetId: string
   targetKind: Backup["targetKind"]
-  targetName: string
 }) {
   const className =
     "group/target-link flex min-h-14 min-w-0 flex-1 items-center px-3 py-2.5 outline-none focus-visible:ring-2 focus-visible:ring-ring/40 focus-visible:ring-inset"
@@ -869,7 +871,6 @@ const BackupTargetAnchor = React.memo(function BackupTargetAnchor({
   if (targetKind === "instance") {
     return (
       <Link
-        aria-label={`Open ${targetName}`}
         className={className}
         params={{
           serverId: relayInstanceRouteId(relayId, targetId.slice(0, 8)),
@@ -885,7 +886,6 @@ const BackupTargetAnchor = React.memo(function BackupTargetAnchor({
   if (targetKind === "database") {
     return (
       <Link
-        aria-label={`Open ${targetName}`}
         className={className}
         preload="intent"
         search={{ search: searchId }}
@@ -897,12 +897,7 @@ const BackupTargetAnchor = React.memo(function BackupTargetAnchor({
   }
 
   return (
-    <Link
-      aria-label={`View ${targetName}`}
-      className={className}
-      preload="intent"
-      to="/infra/relays"
-    >
+    <Link className={className} preload="intent" to="/infra/relays">
       {children}
     </Link>
   )
@@ -1036,21 +1031,6 @@ export function backupTargetName(
     targetNames.get(
       targetKey(backup.targetKind, backup.relayId, backup.targetId)
     ) ?? backup.targetId
-  )
-}
-
-export function backupTargetSortName(
-  backup: Backup,
-  relayNames: ReadonlyMap<string, string>,
-  targetNames: ReadonlyMap<string, string>
-): string {
-  if (backup.targetKind === "platform") {
-    return relayNames.get(backup.relayId) ?? ""
-  }
-  return (
-    targetNames.get(
-      targetKey(backup.targetKind, backup.relayId, backup.targetId)
-    ) ?? ""
   )
 }
 

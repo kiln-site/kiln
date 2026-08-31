@@ -3,7 +3,10 @@ import { Result } from "effect"
 import type { RelayInstance } from "@workspace/contracts"
 
 import type { RelayInstancesCollection } from "@/lib/collections/relay-instances"
-import { refreshHearthRealtimeTopics } from "@/lib/hearth-realtime"
+import {
+  invalidateNameDependentBackupRuns,
+  refreshHearthRealtimeTopics,
+} from "@/lib/hearth-realtime"
 import type {
   HearthRealtimeScope,
   hearthRealtimeTopics,
@@ -35,6 +38,9 @@ export function applyRealtimeEvent(input: ApplyRealtimeEventInput): void {
     )
     return
   }
+  const instanceIdentityChanged =
+    event.type === "instances.delta" &&
+    realtimeInstanceIdentityChanged(queryClient, event)
   queryClient.setQueryData<RelayFleetSnapshot>(
     queryKeys.relay.snapshot,
     (snapshot) => applyRealtimeSnapshotEvent(snapshot, event)
@@ -74,6 +80,9 @@ export function applyRealtimeEvent(input: ApplyRealtimeEventInput): void {
             event
           )
       )
+      if (instanceIdentityChanged) {
+        void invalidateNameDependentBackupRuns(queryClient)
+      }
       return
     }
     instances.utils.writeBatch(() => {
@@ -95,6 +104,9 @@ export function applyRealtimeEvent(input: ApplyRealtimeEventInput): void {
       ].filter((key) => instances.has(key))
       if (deletedKeys.length > 0) instances.utils.writeDelete(deletedKeys)
     })
+    if (instanceIdentityChanged) {
+      void invalidateNameDependentBackupRuns(queryClient)
+    }
     return
   }
   if (event.type === "relay.status") {
@@ -239,6 +251,12 @@ export function applyUpdatedInstance(
   queryClient: QueryClient,
   updated: RelayInstance & { relayId: string }
 ): void {
+  const current = queryClient
+    .getQueryData<RelayFleetSnapshot>(queryKeys.relay.snapshot)
+    ?.instances.find(
+      (instance) =>
+        instance.id === updated.id && instance.relayId === updated.relayId
+    )
   queryClient.setQueryData<RelayFleetSnapshot>(
     queryKeys.relay.snapshot,
     (snapshot) => replaceRelaySnapshotInstance(snapshot, updated)
@@ -252,6 +270,9 @@ export function applyUpdatedInstance(
           : instance
       )
   )
+  if (!current || current.name !== updated.name) {
+    void invalidateNameDependentBackupRuns(queryClient)
+  }
 }
 
 export function applyDeletedInstance(
@@ -403,6 +424,28 @@ function upsertRelaySnapshotInstance(
     return replaceRelaySnapshotInstance(snapshot, updated)
   }
   return { ...snapshot, instances: [updated, ...snapshot.instances] }
+}
+
+function realtimeInstanceIdentityChanged(
+  queryClient: QueryClient,
+  event: Extract<RealtimeClientEvent, { type: "instances.delta" }>
+): boolean {
+  if (event.deleted.length > 0) return true
+  const current =
+    queryClient.getQueryData<RelayFleetSnapshot>(queryKeys.relay.snapshot)
+      ?.instances ??
+    queryClient.getQueryData<Array<FleetInstance>>(queryKeys.relay.instances) ??
+    []
+  const currentNames = new Map(
+    current.map((instance) => [
+      `${instance.relayId}:${instance.id}`,
+      instance.name,
+    ])
+  )
+  return event.upserted.some(
+    (instance) =>
+      currentNames.get(`${instance.relayId}:${instance.id}`) !== instance.name
+  )
 }
 
 export function mergeRealtimeInstance(

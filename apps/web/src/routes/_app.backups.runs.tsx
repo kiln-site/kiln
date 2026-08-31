@@ -11,7 +11,6 @@ import {
   accessCapabilitiesQueryOptions,
   brickIconPresentationsQueryOptions,
   managedDatabaseDirectoryQueryOptions,
-  managedDatabasesQueryOptions,
   relaySnapshotQueryOptions,
 } from "@/lib/query-options"
 import { pageTitle } from "@/lib/page-title"
@@ -22,7 +21,6 @@ export const Route = createFileRoute("/_app/backups/runs")({
       context.queryClient.ensureQueryData(backupStorageQueryOptions()),
       context.queryClient.ensureQueryData(accessCapabilitiesQueryOptions()),
       context.queryClient.ensureQueryData(relaySnapshotQueryOptions()),
-      context.queryClient.ensureQueryData(managedDatabasesQueryOptions()),
       context.queryClient.ensureQueryData(
         managedDatabaseDirectoryQueryOptions()
       ),

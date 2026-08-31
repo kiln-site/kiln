@@ -639,13 +639,12 @@ const TailscaleMembershipRow = React.memo(function TailscaleMembershipRow({
             <span className="truncate text-xs font-medium">{status.label}</span>
           </div>
         </WorkspaceTableCell>
-        <WorkspaceTableCell className="px-0">
+        <WorkspaceTableCell className="!px-0">
           <Link
             to="/server/$serverId/console"
             params={{ serverId: server.routeId }}
             preload="intent"
-            aria-label={`Open ${server.name}`}
-            className="group/server-link flex min-h-[3.25rem] w-fit max-w-full min-w-0 flex-col justify-center px-3 outline-none focus-visible:ring-2 focus-visible:ring-ring/40 focus-visible:ring-inset"
+            className="group/server-link flex min-h-[3.25rem] w-full min-w-0 flex-col justify-center px-3 outline-none focus-visible:ring-2 focus-visible:ring-ring/40 focus-visible:ring-inset"
           >
             <InstanceName
               instance={{
@@ -666,6 +665,7 @@ const TailscaleMembershipRow = React.memo(function TailscaleMembershipRow({
               }
               meta={`${server.implementation} ${server.version}`}
               nameClassName="transition-colors group-hover/server-link:text-primary"
+              showStatus={false}
             />
             <p className="type-meta truncate text-muted-foreground md:hidden">
               {server.relayName}

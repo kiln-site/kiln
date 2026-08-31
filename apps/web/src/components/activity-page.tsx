@@ -46,10 +46,6 @@ import { cn } from "@workspace/ui/lib/utils"
 
 import { ServerScopePicker } from "@/components/server-scope-picker"
 import {
-  brickIconPresentation,
-  type BrickIconDefinition,
-} from "@/components/brick-icon"
-import {
   InstanceName,
   type InstanceNameInstance,
 } from "@/components/instance-name"
@@ -60,10 +56,7 @@ import {
   isActivityType,
 } from "@/lib/activity"
 import type { ActivitySource, ActivityType } from "@/lib/activity"
-import {
-  activityQueryOptions,
-  brickIconPresentationsQueryOptions,
-} from "@/lib/query-options"
+import { activityQueryOptions } from "@/lib/query-options"
 import { relayInstanceRouteId } from "@/lib/relay-fleet"
 import type { ActivityData, ActivityEntry } from "@/server/activity"
 
@@ -340,7 +333,6 @@ const subscribeToHydration = () => () => {}
 const getClientHydrationSnapshot = () => true
 const getServerHydrationSnapshot = () => false
 const activityTableBottomPadding = 12
-const emptyActivityBrickIcons: Array<BrickIconDefinition> = []
 
 export const ActivityPage = React.memo(function ActivityPage({
   initialData,
@@ -1503,10 +1495,6 @@ const ActivityResults = React.memo(function ActivityResults({
   )
   const entries = resultsStore.getEntries()
   const filtered = resultsStore.getFiltered()
-  const { data: bricks = emptyActivityBrickIcons } = useQuery({
-    ...brickIconPresentationsQueryOptions(),
-    notifyOnChangeProps: ["data"],
-  })
   const parentRef = React.useRef<HTMLDivElement>(null)
   const rowVirtualizer = useVirtualizer({
     count: entries.length,
@@ -1566,7 +1554,6 @@ const ActivityResults = React.memo(function ActivityResults({
             if (!entry) return null
             return (
               <ActivityRowController
-                bricks={bricks}
                 key={entry.id}
                 id={entry.id}
                 index={virtualRow.index}
@@ -1583,14 +1570,12 @@ const ActivityResults = React.memo(function ActivityResults({
 })
 
 const ActivityRowController = React.memo(function ActivityRowController({
-  bricks,
   id,
   index,
   measureElement,
   resultsStore,
   start,
 }: {
-  bricks: Array<BrickIconDefinition>
   id: string
   index: number
   measureElement: (node: Element | null) => void
@@ -1609,7 +1594,6 @@ const ActivityRowController = React.memo(function ActivityRowController({
   const entry = resultsStore.getEntry(id)
   return entry ? (
     <ActivityRow
-      bricks={bricks}
       entry={entry}
       index={index}
       measureElement={measureElement}
@@ -1619,7 +1603,6 @@ const ActivityRowController = React.memo(function ActivityRowController({
 })
 
 interface ActivityRowProps {
-  bricks: Array<BrickIconDefinition>
   entry: ActivityEntry
   index: number
   measureElement: (node: Element | null) => void
@@ -1627,7 +1610,6 @@ interface ActivityRowProps {
 }
 
 const ActivityRow = React.memo(function ActivityRow({
-  bricks,
   entry,
   index,
   measureElement,
@@ -1658,7 +1640,7 @@ const ActivityRow = React.memo(function ActivityRow({
       </time>
 
       <div className="hidden min-w-0 md:block">
-        <ActivityWhereLink bricks={bricks} entry={entry} />
+        <ActivityWhereLink entry={entry} />
       </div>
 
       <div className="hidden min-w-0 pr-3 md:block">
@@ -1700,11 +1682,9 @@ const ActivityRow = React.memo(function ActivityRow({
 }, areActivityRowPropsEqual)
 
 function ActivityWhereLink({
-  bricks = emptyActivityBrickIcons,
   compact = false,
   entry,
 }: {
-  bricks?: Array<BrickIconDefinition>
   compact?: boolean
   entry: ActivityEntry
 }) {
@@ -1737,34 +1717,26 @@ function ActivityWhereLink({
     )
   }
 
-  const serverIcon = entry.server?.implementation
-    ? brickIconPresentation(bricks, {
-        brickId: entry.server.brickId,
-        brickSource: entry.server.brickSource,
-        implementation: entry.server.implementation,
-      })
-    : null
   const instance: InstanceNameInstance = entry.server
     ? {
         id: entry.server.id,
-        icon: serverIcon ?? undefined,
         kind: "server",
-        observedState: entry.server.observedState,
         relayId: entry.relay.id,
       }
     : {
         id: entry.relay.id,
         kind: "relay",
         relayId: entry.relay.id,
-        relayStatus: entry.relay.unavailable ? "unreachable" : "connected",
       }
   const identity = (
     <InstanceName
       instance={instance}
+      live={false}
       name={entry.server?.name ?? entry.relay.name}
       nameClassName="transition-colors group-hover/where-link:text-primary"
       meta={entry.server ? entry.relay.name : "Relay-wide"}
       metaClassName="font-mono"
+      showStatus={false}
     />
   )
   const className =
@@ -1782,7 +1754,6 @@ function ActivityWhereLink({
         }}
         preload="intent"
         className={className}
-        aria-label={`Open ${entry.server.name}`}
       >
         {identity}
       </Link>
@@ -1795,7 +1766,6 @@ function ActivityWhereLink({
       search={{ search: entry.relay.name }}
       preload="intent"
       className={className}
-      aria-label={`View servers on ${entry.relay.name}`}
     >
       {identity}
     </Link>
@@ -1897,7 +1867,6 @@ function areActivityRowPropsEqual(
   next: ActivityRowProps
 ): boolean {
   return (
-    previous.bricks === next.bricks &&
     previous.index === next.index &&
     previous.start === next.start &&
     activityEntriesEqual(previous.entry, next.entry)

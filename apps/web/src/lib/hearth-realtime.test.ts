@@ -11,6 +11,20 @@ const backupRunsKey = queryKeys.backups.runs({
   sort: "createdAt",
   status: null,
 })
+const searchedBackupRunsKey = queryKeys.backups.runs({
+  direction: "desc",
+  scope: null,
+  search: "alpha",
+  sort: "createdAt",
+  status: null,
+})
+const targetSortedBackupRunsKey = queryKeys.backups.runs({
+  direction: "asc",
+  scope: null,
+  search: "",
+  sort: "target",
+  status: null,
+})
 
 describe("Hearth realtime query refresh", () => {
   it("invalidates only the requested domain", async () => {
@@ -95,6 +109,29 @@ describe("Hearth realtime query refresh", () => {
     ).toBe(true)
   })
 
+  it("refreshes only backup views whose results depend on target names", async () => {
+    const queryClient = new QueryClient()
+    queryClient.setQueryData(backupRunsKey, { pageParams: [null], pages: [] })
+    queryClient.setQueryData(searchedBackupRunsKey, {
+      pageParams: [null],
+      pages: [],
+    })
+    queryClient.setQueryData(targetSortedBackupRunsKey, {
+      pageParams: [null],
+      pages: [],
+    })
+
+    await refreshHearthRealtimeTopics(queryClient, ["database-directory"])
+
+    expect(queryClient.getQueryState(backupRunsKey)?.isInvalidated).toBe(false)
+    expect(
+      queryClient.getQueryState(searchedBackupRunsKey)?.isInvalidated
+    ).toBe(true)
+    expect(
+      queryClient.getQueryState(targetSortedBackupRunsKey)?.isInvalidated
+    ).toBe(true)
+  })
+
   it("refreshes access capabilities but keeps invitation previews out", async () => {
     const queryClient = new QueryClient()
     const relayAUsers = queryKeys.access.instanceUsers("relay-a", "instance-a")
@@ -129,7 +166,10 @@ describe("Hearth realtime query refresh", () => {
       ["databases", "database-directory", "database-credentials"]
     )
 
-    expect(invalidateQueries).toHaveBeenCalledTimes(2)
+    expect(invalidateQueries).toHaveBeenCalledTimes(3)
+    expect(invalidateQueries).toHaveBeenCalledWith({
+      predicate: expect.any(Function),
+    })
     expect(invalidateQueries).toHaveBeenCalledWith(
       { exact: false, queryKey: ["databases"] },
       { throwOnError: true }

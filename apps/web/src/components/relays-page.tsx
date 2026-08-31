@@ -154,7 +154,7 @@ interface RelayStaticView {
   useTls: boolean
 }
 
-interface RelayIdentityView extends RelayStatusView {
+interface RelayIdentityView {
   hostname: string
   name: string
 }
@@ -791,10 +791,7 @@ const RelayIdentity = React.memo(function RelayIdentity({
       const relay = relays.find((item) => item.id === relayId)
       return relay
         ? {
-            connected: relay.lastConnectedAt !== null,
-            enabled: relay.enabled,
             hostname: relay.hostname,
-            lastError: relay.lastError,
             name: relay.name,
           }
         : null
@@ -817,11 +814,10 @@ const RelayIdentity = React.memo(function RelayIdentity({
             kind: "relay",
             relayId,
             source: "registry",
-            ...relay,
           }}
           name={relay.name}
           meta={relay.hostname}
-          metaClassName="font-mono"
+          metaClassName="font-mono lg:hidden"
         />
         <div className="mt-0.5 pl-[2.625rem] lg:hidden">
           <RelayVersion

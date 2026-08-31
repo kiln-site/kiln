@@ -1,194 +1,119 @@
 import * as React from "react"
 import { and, eq } from "@tanstack/db"
 import { useLiveQuery } from "@tanstack/react-db"
-import type { RelayObservedState } from "@workspace/contracts"
 import { Database, RadioTower, Server } from "lucide-react"
 
 import { cn } from "@workspace/ui/lib/utils"
-import { BrickIcon, type BrickIconPresentation } from "@/components/brick-icon"
+import { BrickIcon } from "@/components/brick-icon"
+import {
+  instanceStatusPresentation,
+  type InstanceNameInstance,
+  type InstanceStatusPresentation,
+} from "@/components/instance-name-presentation"
+import { managedDatabaseDirectoryCollectionOptions } from "@/lib/collections/managed-database-directory"
 import { managedDatabasesCollectionOptions } from "@/lib/collections/managed-databases"
 import { relayInstancesCollectionOptions } from "@/lib/collections/relay-instances"
 import { relayNodesCollectionOptions } from "@/lib/collections/relay-nodes"
 import { relaysCollectionOptions } from "@/lib/collections/relays"
 
-interface InstanceNameStatus {
-  label: string
-  tone: "danger" | "info" | "neutral" | "success" | "warning"
-}
-
-interface InstanceIdentity {
-  id: string
-  relayId: string
-}
-
-export type InstanceNameInstance =
-  | (InstanceIdentity & {
-      icon?: BrickIconPresentation
-      kind: "server"
-      observedState?: RelayObservedState
-      relayStatus?: "connected" | "unreachable"
-    })
-  | (InstanceIdentity & {
-      connected?: boolean
-      enabled?: boolean
-      kind: "relay"
-      lastError?: string | null
-      relayStatus?: "connected" | "unreachable"
-      source?: "fleet" | "registry"
-    })
-  | (InstanceIdentity & {
-      inventoryStatus?: "available" | "missing" | "unavailable"
-      kind: "database"
-      observedState?: RelayObservedState
-    })
+export type { InstanceNameInstance } from "@/components/instance-name-presentation"
 
 interface InstanceNameProps {
   className?: string
   iconClassName?: string
   instance: InstanceNameInstance
+  live?: boolean
   meta?: React.ReactNode
   metaClassName?: string
   name: string
   nameAccessory?: React.ReactNode
   nameClassName?: string
+  showStatus?: boolean
 }
 
-function observedStatus(state: RelayObservedState): InstanceNameStatus {
-  if (state === "running") {
-    return { label: "Running", tone: "success" }
-  }
-  if (state === "failed") {
-    return { label: "Failed", tone: "danger" }
-  }
-  if (state === "starting" || state === "provisioning") {
-    return {
-      label: state === "starting" ? "Starting" : "Provisioning",
-      tone: "warning",
-    }
-  }
-  if (state === "stopping") {
-    return { label: "Stopping", tone: "warning" }
-  }
-  return { label: "Stopped", tone: "neutral" }
-}
-
-/**
- * The shell, live name, and live status own separate render boundaries so a
- * single field update cannot repaint the rest of the cell.
- */
 export function InstanceName(props: InstanceNameProps) {
   return <MemoInstanceName {...props} />
 }
 
-const MemoInstanceName = React.memo(function MemoInstanceName({
-  className,
-  iconClassName,
-  instance,
-  meta,
-  metaClassName,
-  name,
-  nameAccessory,
-  nameClassName,
-}: InstanceNameProps) {
-  return (
-    <span className={cn("flex min-w-0 items-center gap-2.5", className)}>
-      <span
-        className={cn(
-          "relative grid size-8 shrink-0 place-items-center rounded-md border border-border/70 bg-background/35 text-muted-foreground",
-          iconClassName
-        )}
-      >
-        <InstanceIcon instance={instance} />
-        <LiveInstanceStatus instance={instance} />
-      </span>
-      <span className="min-w-0 flex-1">
-        <span
-          className={cn(
-            "flex min-w-0 items-center gap-1.5 text-xs font-semibold text-foreground",
-            nameClassName
-          )}
-        >
-          <LiveInstanceName fallback={name} instance={instance} />
-          {nameAccessory}
-        </span>
-        {meta ? (
-          <span
-            className={cn(
-              "type-meta block truncate text-muted-foreground",
-              metaClassName
-            )}
-          >
-            {meta}
-          </span>
-        ) : null}
-      </span>
-    </span>
+const MemoInstanceName = React.memo(function MemoInstanceName(
+  props: InstanceNameProps
+) {
+  const { instance, live = true, showStatus = true } = props
+  if (!live) {
+    return (
+      <InstanceNameView
+        {...props}
+        status={showStatus ? instanceStatusPresentation(instance) : undefined}
+      />
+    )
+  }
+  if (instance.kind === "server") {
+    return showStatus ? (
+      <LiveServerIdentityWithStatus {...props} instance={instance} />
+    ) : (
+      <LiveServerIdentityNameOnly {...props} instance={instance} />
+    )
+  }
+  if (instance.kind === "database") {
+    return showStatus ? (
+      <LiveDatabaseIdentityWithStatus {...props} instance={instance} />
+    ) : (
+      <LiveDatabaseIdentityNameOnly {...props} instance={instance} />
+    )
+  }
+  if (instance.source === "registry") {
+    return showStatus ? (
+      <LiveRegistryRelayIdentityWithStatus {...props} instance={instance} />
+    ) : (
+      <LiveRegistryRelayIdentityNameOnly {...props} instance={instance} />
+    )
+  }
+  return showStatus ? (
+    <LiveFleetRelayIdentityWithStatus {...props} instance={instance} />
+  ) : (
+    <LiveFleetRelayIdentityNameOnly {...props} instance={instance} />
   )
 }, instanceNamePropsEqual)
 
-function instanceNamePropsEqual(
-  previous: InstanceNameProps,
-  next: InstanceNameProps
-): boolean {
+type ServerInstance = Extract<InstanceNameInstance, { kind: "server" }>
+type DatabaseInstance = Extract<InstanceNameInstance, { kind: "database" }>
+type RelayInstance = Extract<InstanceNameInstance, { kind: "relay" }>
+
+function LiveServerIdentityWithStatus(
+  props: InstanceNameProps & { instance: ServerInstance }
+) {
+  const { instance } = props
+  const { data } = useLiveQuery({
+    query: (query) =>
+      query
+        .from({ server: relayInstancesCollectionOptions })
+        .where(({ server }) =>
+          and(eq(server.id, instance.id), eq(server.relayId, instance.relayId))
+        )
+        .select(({ server }) => ({
+          name: server.name,
+          observedState: server.observedState,
+          relayStatus: server.relayStatus,
+        })),
+  })
+  const live = data?.[0]
   return (
-    previous.className === next.className &&
-    previous.iconClassName === next.iconClassName &&
-    previous.meta === next.meta &&
-    previous.metaClassName === next.metaClassName &&
-    previous.nameAccessory === next.nameAccessory &&
-    previous.nameClassName === next.nameClassName &&
-    instancePresentationEqual(previous.instance, next.instance)
+    <InstanceNameView
+      {...props}
+      liveName={live?.name}
+      status={instanceStatusPresentation({
+        ...instance,
+        observedState: live?.observedState ?? instance.observedState,
+        relayStatus: live?.relayStatus ?? instance.relayStatus,
+      })}
+    />
   )
 }
 
-function instancePresentationEqual(
-  previous: InstanceNameInstance,
-  next: InstanceNameInstance
-): boolean {
-  if (
-    previous.id !== next.id ||
-    previous.relayId !== next.relayId ||
-    previous.kind !== next.kind
-  ) {
-    return false
-  }
-  if (previous.kind === "relay" && next.kind === "relay") {
-    return previous.source === next.source
-  }
-  if (previous.kind !== "server" || next.kind !== "server") return true
-  return (
-    previous.icon?.id === next.icon?.id &&
-    previous.icon?.color === next.icon?.color &&
-    previous.icon?.iconSvg === next.icon?.iconSvg
-  )
-}
-
-const LiveInstanceName = React.memo(function LiveInstanceName({
-  fallback,
-  instance,
-}: {
-  fallback: string
-  instance: InstanceNameInstance
-}) {
-  if (instance.kind === "server") {
-    return <LiveServerName fallback={fallback} instance={instance} />
-  }
-  if (instance.kind === "database") {
-    return <LiveDatabaseName fallback={fallback} instance={instance} />
-  }
-  if (instance.source === "registry") {
-    return <LiveRegistryRelayName fallback={fallback} instance={instance} />
-  }
-  return <LiveFleetRelayName fallback={fallback} instance={instance} />
-})
-
-function LiveServerName({
-  fallback,
-  instance,
-}: {
-  fallback: string
-  instance: Extract<InstanceNameInstance, { kind: "server" }>
-}) {
+function LiveServerIdentityNameOnly(
+  props: InstanceNameProps & { instance: ServerInstance }
+) {
+  const { instance } = props
   const { data } = useLiveQuery({
     query: (query) =>
       query
@@ -198,16 +123,13 @@ function LiveServerName({
         )
         .select(({ server }) => ({ name: server.name })),
   })
-  return <span className="truncate">{data?.[0]?.name ?? fallback}</span>
+  return <InstanceNameView {...props} liveName={data?.[0]?.name} />
 }
 
-function LiveDatabaseName({
-  fallback,
-  instance,
-}: {
-  fallback: string
-  instance: Extract<InstanceNameInstance, { kind: "database" }>
-}) {
+function LiveDatabaseIdentityWithStatus(
+  props: InstanceNameProps & { instance: DatabaseInstance }
+) {
+  const { instance } = props
   const { data } = useLiveQuery({
     query: (query) =>
       query
@@ -218,18 +140,80 @@ function LiveDatabaseName({
             eq(database.relayId, instance.relayId)
           )
         )
-        .select(({ database }) => ({ name: database.name })),
+        .select(({ database }) => ({
+          inventoryStatus: database.inventoryStatus,
+          name: database.name,
+          observedState: database.observedState,
+        })),
   })
-  return <span className="truncate">{data?.[0]?.name ?? fallback}</span>
+  const live = data?.[0]
+  return (
+    <InstanceNameView
+      {...props}
+      liveName={live?.name}
+      status={instanceStatusPresentation({
+        ...instance,
+        inventoryStatus: live?.inventoryStatus ?? instance.inventoryStatus,
+        observedState: live?.observedState ?? instance.observedState,
+      })}
+    />
+  )
 }
 
-function LiveRegistryRelayName({
-  fallback,
-  instance,
-}: {
-  fallback: string
-  instance: Extract<InstanceNameInstance, { kind: "relay" }>
-}) {
+function LiveDatabaseIdentityNameOnly(
+  props: InstanceNameProps & { instance: DatabaseInstance }
+) {
+  const { instance } = props
+  const { data } = useLiveQuery({
+    query: (query) =>
+      query
+        .from({ database: managedDatabaseDirectoryCollectionOptions })
+        .where(({ database }) =>
+          and(
+            eq(database.id, instance.id),
+            eq(database.relayId, instance.relayId)
+          )
+        )
+        .select(({ database }) => ({ name: database.name })),
+  })
+  return <InstanceNameView {...props} liveName={data?.[0]?.name} />
+}
+
+function LiveRegistryRelayIdentityWithStatus(
+  props: InstanceNameProps & { instance: RelayInstance }
+) {
+  const { instance } = props
+  const { data } = useLiveQuery({
+    query: (query) =>
+      query
+        .from({ relay: relaysCollectionOptions })
+        .where(({ relay }) => eq(relay.id, instance.id))
+        .select(({ relay }) => ({
+          enabled: relay.enabled,
+          lastConnectedAt: relay.lastConnectedAt,
+          lastError: relay.lastError,
+          name: relay.name,
+        })),
+  })
+  const live = data?.[0]
+  return (
+    <InstanceNameView
+      {...props}
+      liveName={live?.name}
+      status={instanceStatusPresentation({
+        ...instance,
+        connected: live ? live.lastConnectedAt !== null : instance.connected,
+        enabled: live?.enabled ?? instance.enabled,
+        lastError: live ? live.lastError : instance.lastError,
+      })}
+    />
+  )
+}
+
+function LiveRegistryRelayIdentityNameOnly(
+  props: InstanceNameProps & { instance: RelayInstance }
+) {
+  const { instance } = props
   const { data } = useLiveQuery({
     query: (query) =>
       query
@@ -237,16 +221,40 @@ function LiveRegistryRelayName({
         .where(({ relay }) => eq(relay.id, instance.id))
         .select(({ relay }) => ({ name: relay.name })),
   })
-  return <span className="truncate">{data?.[0]?.name ?? fallback}</span>
+  return <InstanceNameView {...props} liveName={data?.[0]?.name} />
 }
 
-function LiveFleetRelayName({
-  fallback,
-  instance,
-}: {
-  fallback: string
-  instance: Extract<InstanceNameInstance, { kind: "relay" }>
-}) {
+function LiveFleetRelayIdentityWithStatus(
+  props: InstanceNameProps & { instance: RelayInstance }
+) {
+  const { instance } = props
+  const { data } = useLiveQuery({
+    query: (query) =>
+      query
+        .from({ relay: relayNodesCollectionOptions })
+        .where(({ relay }) => eq(relay.relayId, instance.relayId))
+        .select(({ relay }) => ({
+          name: relay.relayName,
+          relayStatus: relay.relayStatus,
+        })),
+  })
+  const live = data?.[0]
+  return (
+    <InstanceNameView
+      {...props}
+      liveName={live?.name}
+      status={instanceStatusPresentation({
+        ...instance,
+        relayStatus: live?.relayStatus ?? instance.relayStatus,
+      })}
+    />
+  )
+}
+
+function LiveFleetRelayIdentityNameOnly(
+  props: InstanceNameProps & { instance: RelayInstance }
+) {
+  const { instance } = props
   const { data } = useLiveQuery({
     query: (query) =>
       query
@@ -254,153 +262,97 @@ function LiveFleetRelayName({
         .where(({ relay }) => eq(relay.relayId, instance.relayId))
         .select(({ relay }) => ({ name: relay.relayName })),
   })
-  return <span className="truncate">{data?.[0]?.name ?? fallback}</span>
+  return <InstanceNameView {...props} liveName={data?.[0]?.name} />
 }
 
-const LiveInstanceStatus = React.memo(function LiveInstanceStatus({
+const InstanceNameView = React.memo(function InstanceNameView({
+  className,
+  iconClassName,
   instance,
-}: {
-  instance: InstanceNameInstance
+  liveName,
+  meta,
+  metaClassName,
+  name,
+  nameAccessory,
+  nameClassName,
+  status,
+}: InstanceNameProps & {
+  liveName?: string
+  status?: InstanceStatusPresentation
 }) {
-  if (instance.kind === "server") {
-    return <LiveServerStatus fallback={instance} />
-  }
-  if (instance.kind === "database") {
-    return <LiveDatabaseStatus fallback={instance} />
-  }
-  if (instance.source === "registry") {
-    return <LiveRegistryRelayStatus fallback={instance} />
-  }
-  return <LiveFleetRelayStatus fallback={instance} />
+  return (
+    <span className={cn("flex min-w-0 items-center gap-2.5", className)}>
+      <span
+        className={cn(
+          "relative grid size-8 shrink-0 place-items-center rounded-md border border-border/70 bg-background/35 text-muted-foreground",
+          iconClassName
+        )}
+      >
+        <InstanceIcon instance={instance} />
+        {status ? (
+          <InstanceStatus label={status.label} tone={status.tone} />
+        ) : null}
+      </span>
+      <InstanceText
+        meta={meta}
+        metaClassName={metaClassName}
+        name={liveName ?? name}
+        nameAccessory={nameAccessory}
+        nameClassName={nameClassName}
+      />
+    </span>
+  )
 })
 
-function LiveServerStatus({
-  fallback,
-}: {
-  fallback: Extract<InstanceNameInstance, { kind: "server" }>
-}) {
-  const { data } = useLiveQuery({
-    query: (query) =>
-      query
-        .from({ server: relayInstancesCollectionOptions })
-        .where(({ server }) =>
-          and(eq(server.id, fallback.id), eq(server.relayId, fallback.relayId))
-        )
-        .select(({ server }) => ({
-          observedState: server.observedState,
-          relayStatus: server.relayStatus,
-        })),
-  })
-  const live = data?.[0]
+const InstanceText = React.memo(function InstanceText({
+  meta,
+  metaClassName,
+  name,
+  nameAccessory,
+  nameClassName,
+}: Pick<
+  InstanceNameProps,
+  "meta" | "metaClassName" | "name" | "nameAccessory" | "nameClassName"
+>) {
   return (
-    <InstanceStatus
-      status={instanceStatus({
-        ...fallback,
-        observedState: live?.observedState ?? fallback.observedState,
-        relayStatus: live?.relayStatus ?? fallback.relayStatus,
-      })}
-    />
+    <span className="min-w-0 flex-1">
+      <span
+        className={cn(
+          "flex min-w-0 items-center gap-1.5 text-xs font-semibold text-foreground",
+          nameClassName
+        )}
+      >
+        <span className="truncate">{name}</span>
+        {nameAccessory}
+      </span>
+      {meta ? (
+        <span
+          className={cn(
+            "type-meta block truncate text-muted-foreground",
+            metaClassName
+          )}
+        >
+          {meta}
+        </span>
+      ) : null}
+    </span>
   )
-}
-
-function LiveDatabaseStatus({
-  fallback,
-}: {
-  fallback: Extract<InstanceNameInstance, { kind: "database" }>
-}) {
-  const { data } = useLiveQuery({
-    query: (query) =>
-      query
-        .from({ database: managedDatabasesCollectionOptions })
-        .where(({ database }) =>
-          and(
-            eq(database.id, fallback.id),
-            eq(database.relayId, fallback.relayId)
-          )
-        )
-        .select(({ database }) => ({
-          inventoryStatus: database.inventoryStatus,
-          observedState: database.observedState,
-        })),
-  })
-  const live = data?.[0]
-  return (
-    <InstanceStatus
-      status={instanceStatus({
-        ...fallback,
-        inventoryStatus: live?.inventoryStatus ?? fallback.inventoryStatus,
-        observedState: live?.observedState ?? fallback.observedState,
-      })}
-    />
-  )
-}
-
-function LiveRegistryRelayStatus({
-  fallback,
-}: {
-  fallback: Extract<InstanceNameInstance, { kind: "relay" }>
-}) {
-  const { data } = useLiveQuery({
-    query: (query) =>
-      query
-        .from({ relay: relaysCollectionOptions })
-        .where(({ relay }) => eq(relay.id, fallback.id))
-        .select(({ relay }) => ({
-          enabled: relay.enabled,
-          lastConnectedAt: relay.lastConnectedAt,
-          lastError: relay.lastError,
-        })),
-  })
-  const live = data?.[0]
-  return (
-    <InstanceStatus
-      status={instanceStatus({
-        ...fallback,
-        connected: live ? live.lastConnectedAt !== null : fallback.connected,
-        enabled: live?.enabled ?? fallback.enabled,
-        lastError: live ? live.lastError : fallback.lastError,
-      })}
-    />
-  )
-}
-
-function LiveFleetRelayStatus({
-  fallback,
-}: {
-  fallback: Extract<InstanceNameInstance, { kind: "relay" }>
-}) {
-  const { data } = useLiveQuery({
-    query: (query) =>
-      query
-        .from({ relay: relayNodesCollectionOptions })
-        .where(({ relay }) => eq(relay.relayId, fallback.relayId))
-        .select(({ relay }) => ({ relayStatus: relay.relayStatus })),
-  })
-  return (
-    <InstanceStatus
-      status={instanceStatus({
-        ...fallback,
-        relayStatus: data?.[0]?.relayStatus ?? fallback.relayStatus,
-      })}
-    />
-  )
-}
+})
 
 const InstanceStatus = React.memo(function InstanceStatus({
-  status,
-}: {
-  status: InstanceNameStatus
-}) {
+  label,
+  tone,
+}: InstanceStatusPresentation) {
   return (
     <>
       <span
         className={cn(
           "absolute -right-0.5 -bottom-0.5 size-1.5 rounded-full ring-2 ring-background",
-          statusToneClassName[status.tone]
+          statusToneClassName[tone]
         )}
         aria-hidden="true"
       />
-      <span className="sr-only">Status: {status.label}</span>
+      <span className="sr-only">Status: {label}</span>
     </>
   )
 })
@@ -421,7 +373,6 @@ const InstanceIcon = React.memo(function InstanceIcon({
       />
     )
   }
-
   const Icon =
     instance.kind === "database"
       ? Database
@@ -431,44 +382,65 @@ const InstanceIcon = React.memo(function InstanceIcon({
   return <Icon className="size-4" aria-hidden="true" />
 })
 
-function instanceStatus(instance: InstanceNameInstance): InstanceNameStatus {
-  if (instance.kind === "server") {
-    if (instance.relayStatus === "unreachable") {
-      return { label: "Relay unavailable", tone: "danger" }
-    }
-    return instance.observedState
-      ? observedStatus(instance.observedState)
-      : { label: "Status unavailable", tone: "neutral" }
-  }
-
-  if (instance.kind === "relay") {
-    if (instance.enabled === false) {
-      return { label: "Paused", tone: "info" }
-    }
-    if (instance.lastError || instance.relayStatus === "unreachable") {
-      return { label: "Unreachable", tone: "danger" }
-    }
-    if (instance.connected || instance.relayStatus === "connected") {
-      return { label: "Online", tone: "success" }
-    }
-    return { label: "Offline", tone: "neutral" }
-  }
-
-  if (instance.inventoryStatus === "missing") {
-    return { label: "Missing", tone: "danger" }
-  }
-  if (instance.inventoryStatus === "unavailable") {
-    return { label: "Unavailable", tone: "warning" }
-  }
-  return instance.observedState
-    ? observedStatus(instance.observedState)
-    : { label: "Status unavailable", tone: "neutral" }
+function instanceNamePropsEqual(
+  previous: InstanceNameProps,
+  next: InstanceNameProps
+): boolean {
+  return (
+    previous.className === next.className &&
+    previous.iconClassName === next.iconClassName &&
+    (previous.live ?? true) === (next.live ?? true) &&
+    previous.meta === next.meta &&
+    previous.metaClassName === next.metaClassName &&
+    previous.name === next.name &&
+    previous.nameAccessory === next.nameAccessory &&
+    previous.nameClassName === next.nameClassName &&
+    (previous.showStatus ?? true) === (next.showStatus ?? true) &&
+    instancePresentationEqual(previous.instance, next.instance)
+  )
 }
 
-const statusToneClassName: Record<InstanceNameStatus["tone"], string> = {
-  danger: "bg-destructive",
-  info: "bg-sky-400",
-  neutral: "bg-muted-foreground/45",
-  success: "bg-emerald-400",
-  warning: "bg-amber-400",
+function instancePresentationEqual(
+  previous: InstanceNameInstance,
+  next: InstanceNameInstance
+): boolean {
+  if (
+    previous.id !== next.id ||
+    previous.relayId !== next.relayId ||
+    previous.kind !== next.kind
+  ) {
+    return false
+  }
+  if (previous.kind === "relay" && next.kind === "relay") {
+    return (
+      previous.source === next.source &&
+      previous.connected === next.connected &&
+      previous.enabled === next.enabled &&
+      previous.lastError === next.lastError &&
+      previous.relayStatus === next.relayStatus
+    )
+  }
+  if (previous.kind === "database" && next.kind === "database") {
+    return (
+      previous.inventoryStatus === next.inventoryStatus &&
+      previous.observedState === next.observedState
+    )
+  }
+  if (previous.kind !== "server" || next.kind !== "server") return false
+  return (
+    previous.icon?.id === next.icon?.id &&
+    previous.icon?.color === next.icon?.color &&
+    previous.icon?.iconSvg === next.icon?.iconSvg &&
+    previous.observedState === next.observedState &&
+    previous.relayStatus === next.relayStatus
+  )
 }
+
+const statusToneClassName: Record<InstanceStatusPresentation["tone"], string> =
+  {
+    danger: "bg-destructive",
+    info: "bg-sky-400",
+    neutral: "bg-muted-foreground/45",
+    success: "bg-emerald-400",
+    warning: "bg-amber-400",
+  }

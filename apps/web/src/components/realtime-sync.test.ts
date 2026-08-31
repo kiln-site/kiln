@@ -19,6 +19,20 @@ import {
 } from "@/lib/realtime-client"
 
 const epoch = "00000000-0000-4000-8000-000000000001"
+const defaultBackupRunsKey = queryKeys.backups.runs({
+  direction: "desc",
+  scope: null,
+  search: "",
+  sort: "createdAt",
+  status: null,
+})
+const targetSortedBackupRunsKey = queryKeys.backups.runs({
+  direction: "asc",
+  scope: null,
+  search: "",
+  sort: "target",
+  status: null,
+})
 
 const alpha = {
   connectAddress: "play.example.test",
@@ -541,6 +555,31 @@ describe("realtime snapshot projection", () => {
     expect(
       queryClient.getQueryData<Array<FleetInstance>>(queryKeys.relay.instances)
     ).toEqual([{ ...alpha, name: "Renamed" }, beta])
+  })
+
+  it("invalidates only name-dependent backup results after a rename", async () => {
+    const queryClient = new QueryClient()
+    queryClient.setQueryData(queryKeys.relay.snapshot, snapshot())
+    queryClient.setQueryData(queryKeys.relay.instances, [alpha])
+    queryClient.setQueryData(defaultBackupRunsKey, {
+      pageParams: [null],
+      pages: [],
+    })
+    queryClient.setQueryData(targetSortedBackupRunsKey, {
+      pageParams: [null],
+      pages: [],
+    })
+
+    applyUpdatedInstance(queryClient, { ...alpha, name: "Renamed" })
+    await vi.waitFor(() => {
+      expect(
+        queryClient.getQueryState(targetSortedBackupRunsKey)?.isInvalidated
+      ).toBe(true)
+    })
+
+    expect(queryClient.getQueryState(defaultBackupRunsKey)?.isInvalidated).toBe(
+      false
+    )
   })
 
   it("adds a newly provisioned row to every populated fleet cache", () => {
