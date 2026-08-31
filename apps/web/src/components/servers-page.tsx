@@ -68,7 +68,7 @@ const emptyServers: Array<ServerListInstance> = []
 const minimumManualSyncFeedbackMs = 500
 const serverInventoryError = new Error("Could not load servers")
 const serverTableGridClassName =
-  "grid-cols-[2.5rem_minmax(0,1fr)_8.25rem] sm:grid-cols-[6rem_minmax(0,1fr)_9.25rem] md:grid-cols-[6rem_minmax(0,1.2fr)_minmax(0,0.8fr)_9.25rem] xl:grid-cols-[6rem_minmax(0,1.2fr)_minmax(0,0.8fr)_minmax(12rem,1fr)_9.25rem]"
+  "grid-cols-[2.5rem_minmax(0,1fr)_8.5rem] sm:grid-cols-[6rem_minmax(0,1fr)_9.5rem] md:grid-cols-[6rem_minmax(0,1.2fr)_minmax(0,0.8fr)_9.5rem] xl:grid-cols-[6rem_minmax(0,1.2fr)_minmax(0,0.8fr)_minmax(12rem,1fr)_9.5rem]"
 const serverTableItemCache = new WeakMap<ServerListInstance, ServerTableItem>()
 const serverTableVirtualization = { estimateRowHeight: 56, overscan: 8 }
 
@@ -541,18 +541,21 @@ const FilteredServerTableBoundary = React.memo(
         })
       )
     }, [dbClient])
+    const servers = result.data ?? emptyServers
 
     return (
       <ServerTableSearchBoundary
         canProvision={canProvision}
         deleteAccess={deleteAccess}
         dialogStore={dialogStore}
-        error={result.isError ? serverInventoryError : null}
+        error={
+          result.isError && servers.length === 0 ? serverInventoryError : null
+        }
         loading={result.isLoading && !result.isReady}
         onDelete={onDelete}
         onRetry={retry}
         searchStore={searchStore}
-        servers={result.data ?? emptyServers}
+        servers={servers}
         updating={result.isLoading && result.isReady}
       />
     )
@@ -712,18 +715,6 @@ const ServerDataTable = React.memo(function ServerDataTable({
     },
     selectNoServerTableState
   )
-  const [sortingResetKey, setSortingResetKey] = React.useState("server:asc")
-
-  React.useLayoutEffect(() => {
-    const subscription = table.atoms.sorting.subscribe((sorting) => {
-      const next = sorting
-        .map(({ desc, id }) => `${id}:${desc ? "desc" : "asc"}`)
-        .join("|")
-      setSortingResetKey((current) => (current === next ? current : next))
-    })
-    return () => subscription.unsubscribe()
-  }, [table])
-
   return (
     <DataTable
       ariaLabel="Servers"
@@ -740,7 +731,7 @@ const ServerDataTable = React.memo(function ServerDataTable({
       loading={loading}
       loadingRowCount={8}
       onRetry={onRetry}
-      scrollResetKey={`${scrollResetKey}\n${sortingResetKey}`}
+      scrollResetKey={scrollResetKey}
       table={table}
       updating={updating}
       virtualization={serverTableVirtualization}
@@ -804,23 +795,16 @@ const ServerActions = React.memo(function ServerActions({
         </Tooltip>
       ) : null}
       <DropdownMenu>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <DropdownMenuTrigger asChild>
-              <Button
-                type="button"
-                size="icon-sm"
-                variant="ghost"
-                aria-label={`More actions for ${server.name}`}
-              >
-                <EllipsisVertical />
-              </Button>
-            </DropdownMenuTrigger>
-          </TooltipTrigger>
-          <TooltipContent side="bottom" sideOffset={6}>
-            More actions
-          </TooltipContent>
-        </Tooltip>
+        <DropdownMenuTrigger asChild>
+          <Button
+            type="button"
+            size="icon-sm"
+            variant="ghost"
+            aria-label={`More actions for ${server.name}`}
+          >
+            <EllipsisVertical />
+          </Button>
+        </DropdownMenuTrigger>
         <DropdownMenuContent align="end" className="min-w-44">
           <CopyServerIdentifierMenuItem label="server ID" value={server.id} />
           <CopyServerIdentifierMenuItem

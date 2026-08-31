@@ -5,6 +5,7 @@ import {
   Subscribe,
   type Row,
   type RowData,
+  type SortingState,
   type Table,
 } from "@tanstack/react-table"
 import { ArrowDown, ArrowUp, ArrowUpDown, LoaderCircle } from "lucide-react"
@@ -120,29 +121,40 @@ export function DataTable<TData extends RowData>({
   virtualization,
 }: DataTableProps<TData>) {
   return (
-    <Subscribe
-      source={table.store}
-      selector={() => table.getRowModel().rows.map((row) => row.id)}
-    >
-      {() => (
-        <DataTableRowModel
-          ariaLabel={ariaLabel}
-          emptyState={emptyState}
-          error={error}
-          getRowClassName={getRowClassName}
-          gridClassName={gridClassName}
-          loading={loading}
-          loadingRowCount={loadingRowCount}
-          onRetry={onRetry}
-          pagination={pagination}
-          scrollResetKey={scrollResetKey}
-          table={table}
-          updating={updating}
-          virtualization={virtualization}
-        />
+    <Subscribe source={table.atoms.sorting} selector={dataTableSortingResetKey}>
+      {(sortingResetKey) => (
+        <Subscribe
+          source={table.store}
+          selector={() => table.getRowModel().rows.map((row) => row.id)}
+        >
+          {() => (
+            <DataTableRowModel
+              ariaLabel={ariaLabel}
+              emptyState={emptyState}
+              error={error}
+              getRowClassName={getRowClassName}
+              gridClassName={gridClassName}
+              loading={loading}
+              loadingRowCount={loadingRowCount}
+              onRetry={onRetry}
+              pagination={pagination}
+              scrollResetKey={scrollResetKey}
+              sortingResetKey={sortingResetKey}
+              table={table}
+              updating={updating}
+              virtualization={virtualization}
+            />
+          )}
+        </Subscribe>
       )}
     </Subscribe>
   )
+}
+
+interface DataTableRowModelProps<
+  TData extends RowData,
+> extends DataTableProps<TData> {
+  sortingResetKey: string
 }
 
 function DataTableRowModel<TData extends RowData>({
@@ -156,10 +168,11 @@ function DataTableRowModel<TData extends RowData>({
   onRetry,
   pagination,
   scrollResetKey,
+  sortingResetKey,
   table,
   updating,
   virtualization,
-}: DataTableProps<TData>) {
+}: DataTableRowModelProps<TData>) {
   const rows = table.getRowModel().rows
   const columnCount = table.getAllLeafColumns().length
   const scrollElementRef = React.useRef<HTMLTableSectionElement>(null)
@@ -184,7 +197,7 @@ function DataTableRowModel<TData extends RowData>({
       scrollElement.scrollTop = 0
     })
     return () => window.cancelAnimationFrame(frame)
-  }, [pagination?.resetKey, scrollResetKey])
+  }, [pagination?.resetKey, scrollResetKey, sortingResetKey])
 
   return (
     <div
@@ -245,6 +258,12 @@ function DataTableRowModel<TData extends RowData>({
       </table>
     </div>
   )
+}
+
+function dataTableSortingResetKey(sorting: SortingState): string {
+  return sorting
+    .map(({ desc, id }) => `${id}:${desc ? "desc" : "asc"}`)
+    .join("|")
 }
 
 function DataTableStateBody({

@@ -20,11 +20,14 @@ export const InfraShell = React.memo(function InfraShell({
   children: React.ReactNode
 }) {
   return (
-    <div className="min-h-full bg-background">
-      <header className="mx-auto w-full max-w-[90rem] px-3 pt-3 sm:px-5">
+    <div className="flex h-full min-h-0 flex-col overflow-hidden bg-background">
+      <header className="mx-auto w-full max-w-[90rem] shrink-0 px-3 pt-3 sm:px-5">
         <InfraNavigation />
       </header>
-      <div data-slot="infra-content" className="[contain:paint]">
+      <div
+        data-slot="infra-content"
+        className="min-h-0 flex-1 overflow-y-auto [contain:paint]"
+      >
         {children}
       </div>
     </div>
