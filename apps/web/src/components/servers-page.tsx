@@ -36,7 +36,7 @@ import {
   createAddServerDialogStore,
 } from "@/components/add-server-dialog"
 import type { AddServerDialogStore } from "@/components/add-server-dialog"
-import { DataTableTextCell } from "@/components/data-table"
+import { DataTableEmptyState, DataTableTextCell } from "@/components/data-table"
 import {
   ServerDeleteDialog,
   type ServerDeleteTarget,
@@ -772,29 +772,28 @@ function EmptyServerTable({
   searchActive: boolean
 }) {
   return (
-    <div className="flex min-h-64 flex-col items-center justify-center px-6 py-12 text-center">
-      <Server className="size-6 text-muted-foreground/45" />
-      <p className="mt-3 text-sm font-semibold">
-        {searchActive ? "No servers match your search" : "No managed servers"}
-      </p>
-      <p className="type-support mt-1 max-w-sm text-muted-foreground">
-        {searchActive
-          ? "Try a server name, short ID, Relay, address, game, implementation, or version."
-          : canProvision
-            ? "Provision the first game server managed by Hearth."
-            : "No server instances have been assigned to your account yet."}
-      </p>
-      {!searchActive && canProvision ? (
-        <Button
-          type="button"
-          size="sm"
-          className="mt-4"
-          onClick={dialogStore.open}
-        >
-          <Plus /> Add Server
-        </Button>
-      ) : null}
-    </div>
+    <DataTableEmptyState
+      action={
+        !searchActive && canProvision ? (
+          <Button type="button" size="sm" onClick={dialogStore.open}>
+            <Plus /> Add Server
+          </Button>
+        ) : null
+      }
+      description={
+        <span className="block max-w-sm">
+          {searchActive
+            ? "Try a server name, short ID, Relay, address, game, implementation, or version."
+            : canProvision
+              ? "Provision the first game server managed by Hearth."
+              : "No server instances have been assigned to your account yet."}
+        </span>
+      }
+      icon={<Server className="size-6 text-muted-foreground/45" />}
+      title={
+        searchActive ? "No servers match your search" : "No managed servers"
+      }
+    />
   )
 }
 

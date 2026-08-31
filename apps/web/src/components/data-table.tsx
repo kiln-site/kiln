@@ -104,9 +104,15 @@ export function DataTableCompactList<TItem>({
     return <DataTableLoadingState rowCount={source.body.rowCount} />
   }
   if (source.body.kind === "error") {
-    return <DataTableErrorState onRetry={source.body.retry} />
+    return (
+      <DataTableCenteredState>
+        <DataTableErrorState onRetry={source.body.retry} />
+      </DataTableCenteredState>
+    )
   }
-  if (source.rows.length === 0) return emptyState
+  if (source.rows.length === 0) {
+    return <DataTableCenteredState>{emptyState}</DataTableCenteredState>
+  }
 
   return (
     <div
@@ -238,6 +244,7 @@ function DataTableRowModel<TData extends RowData>({
         <MemoizedDataTableHead scrollbarWidth={scrollbarWidth} table={table} />
         {hasBodyState ? (
           <DataTableStateBody
+            centered={source.body.kind !== "loading"}
             colSpan={columnCount}
             scrollElementRef={scrollElementRef}
           >
@@ -372,10 +379,12 @@ const dataTableVisibilityClasses = {
 } as const
 
 function DataTableStateBody({
+  centered,
   children,
   colSpan,
   scrollElementRef,
 }: {
+  centered: boolean
   children: React.ReactNode
   colSpan: number
   scrollElementRef: React.RefObject<HTMLTableSectionElement | null>
@@ -385,13 +394,21 @@ function DataTableStateBody({
       ref={scrollElementRef}
       className="block min-h-0 flex-1 overflow-y-auto overscroll-contain border-b border-border/70"
     >
-      <tr className="block">
-        <td className="block p-0" colSpan={colSpan}>
-          {children}
+      <tr className={cn("block", centered && "h-full")}>
+        <td className={cn("block p-0", centered && "h-full")} colSpan={colSpan}>
+          {centered ? (
+            <DataTableCenteredState>{children}</DataTableCenteredState>
+          ) : (
+            children
+          )}
         </td>
       </tr>
     </tbody>
   )
+}
+
+function DataTableCenteredState({ children }: { children: React.ReactNode }) {
+  return <div className="grid h-full place-items-center">{children}</div>
 }
 
 export function DataTableLoadingState({ rowCount = 7 }: { rowCount?: number }) {
@@ -433,26 +450,43 @@ export const DataTableTextCell = React.memo(function DataTableTextCell({
   )
 })
 
+export function DataTableEmptyState({
+  action,
+  description,
+  icon,
+  title,
+}: {
+  action?: React.ReactNode
+  description: React.ReactNode
+  icon?: React.ReactNode
+  title: React.ReactNode
+}) {
+  return (
+    <div className="px-6 py-12 text-center">
+      {icon ? <div className="flex justify-center">{icon}</div> : null}
+      <p className="mt-3 text-sm font-semibold">{title}</p>
+      <div className="type-support mt-1 text-muted-foreground">
+        {description}
+      </div>
+      {action ? <div className="mt-4 flex justify-center">{action}</div> : null}
+    </div>
+  )
+}
+
 export function DataTableErrorState({ onRetry }: { onRetry?: () => void }) {
   return (
-    <div className="grid h-64 place-items-center px-6 text-center" role="alert">
-      <div>
-        <p className="text-sm font-semibold">Could not load this table</p>
-        <p className="mt-1 text-xs text-muted-foreground">
-          Check your connection and try again.
-        </p>
-        {onRetry ? (
-          <Button
-            className="mt-4"
-            size="sm"
-            type="button"
-            variant="outline"
-            onClick={onRetry}
-          >
-            Try again
-          </Button>
-        ) : null}
-      </div>
+    <div role="alert">
+      <DataTableEmptyState
+        action={
+          onRetry ? (
+            <Button size="sm" type="button" variant="outline" onClick={onRetry}>
+              Try again
+            </Button>
+          ) : null
+        }
+        description="Check your connection and try again."
+        title="Could not load this table"
+      />
     </div>
   )
 }

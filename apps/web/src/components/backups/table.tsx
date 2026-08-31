@@ -24,6 +24,7 @@ import {
 
 import {
   DataTableCompactList,
+  DataTableEmptyState,
   DataTableRowCheckbox,
   DataTableSelectAllCheckbox,
 } from "@/components/data-table"
@@ -171,21 +172,17 @@ export const BackupTable = React.memo(function BackupTable({
   )
   const renderEmpty = React.useCallback(
     (searchActive: boolean, filterActive: boolean) => (
-      <div className="grid h-64 place-items-center px-6 text-center">
-        <div>
-          <Archive className="mx-auto size-7 text-muted-foreground/45" />
-          <p className="mt-3 text-sm font-semibold">
-            {searchActive
-              ? "No backups match this search"
-              : filterActive
-                ? "No backups match these filters"
-                : "No backups yet"}
-          </p>
-          <p className="mt-1 text-xs text-muted-foreground">
-            Manual backups appear here as soon as Relay accepts them.
-          </p>
-        </div>
-      </div>
+      <DataTableEmptyState
+        description="Manual backups appear here as soon as Relay accepts them."
+        icon={<Archive className="size-7 text-muted-foreground/45" />}
+        title={
+          searchActive
+            ? "No backups match this search"
+            : filterActive
+              ? "No backups match these filters"
+              : "No backups yet"
+        }
+      />
     ),
     []
   )
