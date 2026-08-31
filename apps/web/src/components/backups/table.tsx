@@ -3,7 +3,6 @@ import { useMutation, useQueryClient } from "@tanstack/react-query"
 import {
   type RowSelectionState,
   type SortingState,
-  type Table,
 } from "@tanstack/react-table"
 import { Archive, ArchiveX, LoaderCircle, Trash2, X } from "lucide-react"
 
@@ -24,14 +23,11 @@ import {
 } from "@workspace/ui/components/tooltip"
 
 import {
-  DataTable,
-  DataTableErrorState,
-  DataTableLoadMoreTrigger,
-  DataTableLoadingState,
+  DataTableCompactList,
   DataTableRowCheckbox,
   DataTableSelectAllCheckbox,
-  type DataTablePaginationOptions,
 } from "@/components/data-table"
+import { DataTableView } from "@/components/data-table-view"
 import {
   BackupAvailabilityTags,
   BackupCreatedTime,
@@ -62,9 +58,11 @@ import {
 } from "@/lib/backup-progress-presentation"
 import {
   createDataTableColumnHelper,
-  dataTableFeatures,
-  useDataTable,
+  dataTableColumnMeta,
+  defineDataTable,
+  type DataTableInstance,
 } from "@/lib/data-table"
+import type { DataTableSource } from "@/lib/data-table-source"
 import { resetActiveBackupRunsToFirstPage } from "@/lib/backup-runs-cache"
 import { settlePromises } from "@/effect/promise"
 import { deleteBackup } from "@/server/backups"
@@ -89,52 +87,40 @@ const backupSelectionBlockingOverlaySelector = [
 ].join(",")
 
 const backupTableColumnHelper = createDataTableColumnHelper<Backup>()
-const backupTableGridClassName =
-  "grid-cols-[2.5rem_minmax(0,1.2fr)_minmax(0,1fr)_12rem_11.25rem] xl:grid-cols-[2.5rem_minmax(0,1.2fr)_minmax(0,1fr)_12rem_6.5rem_11.25rem]"
 export const BackupTable = React.memo(function BackupTable({
   availableRelayIds,
   availableTargetKeys,
-  backups,
   canCreate,
   currentUserId,
   destinations,
   dialogStore,
-  error,
   targetInstances,
-  loading,
   nameStore,
-  onRetry,
   onSortChange,
-  pagination,
   scopeFiltered,
   searchStore,
   selectionStore,
   sort,
   sortDirection,
+  source,
   statusFilterStore,
-  updating,
 }: {
   availableRelayIds: ReadonlySet<string>
   availableTargetKeys: ReadonlySet<string>
-  backups: Array<Backup>
   canCreate: (backup: Backup) => boolean
   currentUserId: string
   destinations: ReadonlyArray<BackupAvailabilityDestination>
   dialogStore: BackupDialogStore
-  error?: Error | null
   targetInstances: ReadonlyMap<string, InstanceNameInstance>
-  loading?: boolean
   nameStore: BackupNameStore
-  onRetry?: () => void
   onSortChange: (sort: BackupRunSort, direction: BackupRunSortDirection) => void
-  pagination: DataTablePaginationOptions
   scopeFiltered: boolean
   searchStore: BackupSearchStore
   selectionStore: BackupSelectionStore
   sort: BackupRunSort
   sortDirection: BackupRunSortDirection
+  source: DataTableSource<Backup>
   statusFilterStore: BackupStatusFilterStore
-  updating: boolean
 }) {
   const mobileScrollRootRef = React.useRef<HTMLDivElement>(null)
   const mobileLayout = React.useSyncExternalStore(
@@ -211,17 +197,13 @@ export const BackupTable = React.memo(function BackupTable({
           className="h-full overflow-y-auto overscroll-contain"
         >
           <BackupMobileList
-            backups={backups}
-            error={error}
-            loading={loading}
-            onRetry={onRetry}
-            pagination={pagination}
             renderEmpty={renderEmpty}
             renderRow={renderMobileRow}
             scopeFiltered={scopeFiltered}
             scrollRootRef={mobileScrollRootRef}
             searchStore={searchStore}
             selectionStore={selectionStore}
+            source={source}
             statusFilterStore={statusFilterStore}
           />
         </div>
@@ -229,26 +211,21 @@ export const BackupTable = React.memo(function BackupTable({
         <BackupDesktopTable
           availableRelayIds={availableRelayIds}
           availableTargetKeys={availableTargetKeys}
-          backups={backups}
           canCreate={canCreate}
           currentUserId={currentUserId}
           destinations={destinations}
           dialogStore={dialogStore}
-          error={error}
           targetInstances={targetInstances}
-          loading={loading}
           nameStore={nameStore}
-          onRetry={onRetry}
           onSortChange={onSortChange}
-          pagination={pagination}
           renderEmpty={renderEmpty}
           scopeFiltered={scopeFiltered}
           searchStore={searchStore}
           selectionStore={selectionStore}
           sort={sort}
           sortDirection={sortDirection}
+          source={source}
           statusFilterStore={statusFilterStore}
-          updating={updating}
         />
       )}
     </div>
@@ -258,292 +235,277 @@ export const BackupTable = React.memo(function BackupTable({
 const BackupDesktopTable = React.memo(function BackupDesktopTable({
   availableRelayIds,
   availableTargetKeys,
-  backups,
   canCreate,
   currentUserId,
   destinations,
   dialogStore,
-  error,
   targetInstances,
-  loading,
   nameStore,
-  onRetry,
   onSortChange,
-  pagination,
   renderEmpty,
   scopeFiltered,
   searchStore,
   selectionStore,
   sort,
   sortDirection,
+  source,
   statusFilterStore,
-  updating,
 }: {
   availableRelayIds: ReadonlySet<string>
   availableTargetKeys: ReadonlySet<string>
-  backups: Array<Backup>
   canCreate: (backup: Backup) => boolean
   currentUserId: string
   destinations: ReadonlyArray<BackupAvailabilityDestination>
   dialogStore: BackupDialogStore
-  error?: Error | null
   targetInstances: ReadonlyMap<string, InstanceNameInstance>
-  loading?: boolean
   nameStore: BackupNameStore
-  onRetry?: () => void
   onSortChange: (sort: BackupRunSort, direction: BackupRunSortDirection) => void
-  pagination: DataTablePaginationOptions
   renderEmpty: (searchActive: boolean, filterActive: boolean) => React.ReactNode
   scopeFiltered: boolean
   searchStore: BackupSearchStore
   selectionStore: BackupSelectionStore
   sort: BackupRunSort
   sortDirection: BackupRunSortDirection
+  source: DataTableSource<Backup>
   statusFilterStore: BackupStatusFilterStore
-  updating: boolean
 }) {
   const [initialTableState] = React.useState(() => ({
     rowSelection: backupRowSelectionState(selectionStore.getSnapshot()),
     sorting: [{ desc: sortDirection === "desc", id: sort }],
   }))
-  const columns = React.useMemo(
-    () =>
-      backupTableColumnHelper.columns([
-        backupTableColumnHelper.display({
-          id: "selection",
-          enableSorting: false,
-          header: ({ table }) => (
-            <DataTableSelectAllCheckbox
-              ariaLabel="Select all visible backups"
-              table={table}
-            />
-          ),
-          cell: ({ row }) => (
-            <DataTableRowCheckbox
-              ariaLabel={`Select ${row.original.name}`}
-              disabledTitle="Wait for active backup work to finish"
-              row={row}
-            />
-          ),
-          meta: {
+  const definition = React.useMemo(() => {
+    const columns = backupTableColumnHelper.columns([
+      backupTableColumnHelper.display({
+        id: "selection",
+        enableSorting: false,
+        header: ({ table }) => (
+          <DataTableSelectAllCheckbox
+            ariaLabel="Select all visible backups"
+            table={table}
+          />
+        ),
+        cell: ({ row }) => (
+          <DataTableRowCheckbox
+            ariaLabel={`Select ${row.original.name}`}
+            disabledTitle="Wait for active backup work to finish"
+            row={row}
+          />
+        ),
+        meta: dataTableColumnMeta(
+          { width: "2.5rem" },
+          {
             cellClassName: "h-auto px-2 py-2.5",
             headerClassName: "px-2",
-          },
-        }),
-        backupTableColumnHelper.accessor(
-          (backup) => nameStore.get(backup.id, backup.name),
-          {
-            id: "name",
-            header: "Name",
-            enableGlobalFilter: true,
-            sortFn: (left, right) =>
-              nameStore
-                .get(left.original.id, left.original.name)
-                .localeCompare(
-                  nameStore.get(right.original.id, right.original.name)
-                ),
-            cell: ({ row }) => {
-              const backup = row.original
-              const canCreateBackup = canCreate(backup)
-              return (
-                <div className="min-w-0">
-                  <BackupNameEditor
-                    backupId={backup.id}
-                    editable={canCreateBackup}
-                    nameStore={nameStore}
-                    name={backup.name}
-                  />
-                  <BackupAvailabilityTags
-                    backup={backup}
-                    canCopy={canCreateBackup}
-                    currentUserId={currentUserId}
-                    destinations={destinations}
-                  />
-                </div>
-              )
-            },
-            meta: { cellClassName: "h-auto py-2.5" },
           }
         ),
-        backupTableColumnHelper.accessor((backup) => backup.targetId, {
-          id: "target",
-          header: "Target",
-          sortFn: "text",
+      }),
+      backupTableColumnHelper.accessor(
+        (backup) => nameStore.get(backup.id, backup.name),
+        {
+          id: "name",
+          header: "Name",
+          sortFn: (left, right) =>
+            nameStore
+              .get(left.original.id, left.original.name)
+              .localeCompare(
+                nameStore.get(right.original.id, right.original.name)
+              ),
           cell: ({ row }) => {
             const backup = row.original
-            const target = backupTargetPresentation(
-              backup,
-              backup.relayId,
-              backup.targetId
-            )
-            const targetAvailable =
-              backup.targetKind === "platform"
-                ? availableRelayIds.has(backup.relayId)
-                : availableTargetKeys.has(
-                    targetKey(
-                      backup.targetKind,
-                      backup.relayId,
-                      backup.targetId
-                    )
-                  )
-
+            const canCreateBackup = canCreate(backup)
             return (
-              <BackupTargetLink
-                available={targetAvailable}
-                displayId={target.id}
-                instance={targetInstances.get(
-                  targetKey(
-                    backup.targetKind,
-                    backup.relayId,
-                    backup.targetKind === "platform" ? "kiln" : backup.targetId
-                  )
-                )}
-                kindLabel={target.kindLabel}
-                name={target.name}
-                relayId={backup.relayId}
-                targetId={backup.targetId}
-                targetKind={backup.targetKind}
-              />
-            )
-          },
-          meta: { cellClassName: "h-auto py-2.5" },
-        }),
-        backupTableColumnHelper.accessor(
-          (backup) => backupDisplayBytes(backup) ?? undefined,
-          {
-            id: "size",
-            header: "Size",
-            sortDescFirst: true,
-            sortUndefined: "last",
-            cell: ({ row }) => {
-              const backup = row.original
-              return backupShowsPrimaryTaskFeedback(backup) ? (
-                <DesktopBackupTaskFeedback backup={backup} />
-              ) : (
-                <BackupSizeDetails
-                  bytes={backupDisplayBytes(backup)}
-                  mode={backup.backupMode}
+              <div className="min-w-0">
+                <BackupNameEditor
+                  backupId={backup.id}
+                  editable={canCreateBackup}
+                  nameStore={nameStore}
+                  name={backup.name}
                 />
-              )
-            },
-            meta: {
-              cellClassName: "h-auto py-2.5 text-sm text-muted-foreground",
-            },
-          }
+                <BackupAvailabilityTags
+                  backup={backup}
+                  canCopy={canCreateBackup}
+                  currentUserId={currentUserId}
+                  destinations={destinations}
+                />
+              </div>
+            )
+          },
+          meta: dataTableColumnMeta(
+            { width: "minmax(0,1.2fr)" },
+            { cellClassName: "h-auto py-2.5" }
+          ),
+        }
+      ),
+      backupTableColumnHelper.accessor((backup) => backup.targetId, {
+        id: "target",
+        header: "Target",
+        sortFn: "text",
+        cell: ({ row }) => {
+          const backup = row.original
+          const target = backupTargetPresentation(
+            backup,
+            backup.relayId,
+            backup.targetId
+          )
+          const targetAvailable =
+            backup.targetKind === "platform"
+              ? availableRelayIds.has(backup.relayId)
+              : availableTargetKeys.has(
+                  targetKey(backup.targetKind, backup.relayId, backup.targetId)
+                )
+
+          return (
+            <BackupTargetLink
+              available={targetAvailable}
+              displayId={target.id}
+              instance={targetInstances.get(
+                targetKey(
+                  backup.targetKind,
+                  backup.relayId,
+                  backup.targetKind === "platform" ? "kiln" : backup.targetId
+                )
+              )}
+              kindLabel={target.kindLabel}
+              name={target.name}
+              relayId={backup.relayId}
+              targetId={backup.targetId}
+              targetKind={backup.targetKind}
+            />
+          )
+        },
+        meta: dataTableColumnMeta(
+          { width: "minmax(0,1fr)" },
+          { cellClassName: "h-auto py-2.5" }
         ),
-        backupTableColumnHelper.accessor(
-          (backup) => Date.parse(backup.createdAt),
-          {
-            id: "createdAt",
-            header: "Created",
-            sortDescFirst: true,
-            cell: ({ row }) => {
-              const backup = row.original
-              const hidesCreatedTime =
-                backupShowsPrimaryTaskFeedback(backup) &&
-                backup.taskStatus !== "cancelled"
-              return hidesCreatedTime ? null : (
-                <span className="whitespace-nowrap">
-                  <BackupCreatedTime createdAt={backup.createdAt} />
-                </span>
-              )
-            },
-            meta: {
-              cellClassName:
-                "hidden h-auto py-2.5 text-sm text-muted-foreground xl:flex",
-              headerClassName: "hidden px-2 xl:flex xl:items-center",
-              headerLabelClassName: "shrink-0 overflow-visible text-clip",
-            },
-          }
-        ),
-        backupTableColumnHelper.display({
-          id: "actions",
-          header: () => <span className="sr-only">Actions</span>,
-          enableSorting: false,
+      }),
+      backupTableColumnHelper.accessor(
+        (backup) => backupDisplayBytes(backup) ?? undefined,
+        {
+          id: "size",
+          header: "Size",
+          sortDescFirst: true,
+          sortUndefined: "last",
           cell: ({ row }) => {
             const backup = row.original
-            const targetAvailable =
-              backup.targetKind === "platform"
-                ? availableRelayIds.has(backup.relayId)
-                : availableTargetKeys.has(
-                    targetKey(
-                      backup.targetKind,
-                      backup.relayId,
-                      backup.targetId
-                    )
-                  )
-            return (
-              <BackupRowActions
-                backup={backup}
-                canCancel={canCreate(backup)}
-                dialogStore={dialogStore}
-                nameStore={nameStore}
-                targetAvailable={targetAvailable}
+            return backupShowsPrimaryTaskFeedback(backup) ? (
+              <DesktopBackupTaskFeedback backup={backup} />
+            ) : (
+              <BackupSizeDetails
+                bytes={backupDisplayBytes(backup)}
+                mode={backup.backupMode}
               />
             )
           },
-          meta: { cellClassName: "h-auto py-2.5" },
-        }),
-      ]),
-    [
-      canCreate,
-      currentUserId,
-      destinations,
-      dialogStore,
-      targetInstances,
-      nameStore,
-      availableRelayIds,
-      availableTargetKeys,
-    ]
-  )
-  const table = useDataTable(
-    {
+          meta: dataTableColumnMeta(
+            { width: "12rem" },
+            {
+              cellClassName: "h-auto py-2.5 text-sm text-muted-foreground",
+            }
+          ),
+        }
+      ),
+      backupTableColumnHelper.accessor(
+        (backup) => Date.parse(backup.createdAt),
+        {
+          id: "createdAt",
+          header: "Created",
+          sortDescFirst: true,
+          cell: ({ row }) => {
+            const backup = row.original
+            const hidesCreatedTime =
+              backupShowsPrimaryTaskFeedback(backup) &&
+              backup.taskStatus !== "cancelled"
+            return hidesCreatedTime ? null : (
+              <span className="whitespace-nowrap">
+                <BackupCreatedTime createdAt={backup.createdAt} />
+              </span>
+            )
+          },
+          meta: dataTableColumnMeta(
+            { hideBelow: "xl", width: "6.5rem" },
+            {
+              cellClassName: "h-auto py-2.5 text-sm text-muted-foreground",
+              headerClassName: "px-2",
+              headerLabelClassName: "shrink-0 overflow-visible text-clip",
+            }
+          ),
+        }
+      ),
+      backupTableColumnHelper.display({
+        id: "actions",
+        header: () => <span className="sr-only">Actions</span>,
+        enableSorting: false,
+        cell: ({ row }) => {
+          const backup = row.original
+          const targetAvailable =
+            backup.targetKind === "platform"
+              ? availableRelayIds.has(backup.relayId)
+              : availableTargetKeys.has(
+                  targetKey(backup.targetKind, backup.relayId, backup.targetId)
+                )
+          return (
+            <BackupRowActions
+              backup={backup}
+              canCancel={canCreate(backup)}
+              dialogStore={dialogStore}
+              nameStore={nameStore}
+              targetAvailable={targetAvailable}
+            />
+          )
+        },
+        meta: dataTableColumnMeta(
+          { width: "11.25rem" },
+          { cellClassName: "h-auto py-2.5" }
+        ),
+      }),
+    ])
+    return defineDataTable({
+      ariaLabel: "Backups",
       columns,
-      data: backups,
-      enableRowRangeSelection: true,
-      enableRowSelection: (row) => backupCanBeRemoved(row.original),
-      enableSubRowSelection: false,
-      getColumnCanGlobalFilter: (column) => column.id === "name",
-      getRowId: backupRowKey,
-      initialState: initialTableState,
-      manualFiltering: true,
-      manualSorting: true,
-    },
-    selectNoDataTableState
-  )
-  const virtualization = React.useMemo(
-    () => ({ estimateRowHeight: 76, overscan: 8 }),
-    []
-  )
+      getRowClassName: backupTableRowClassName,
+      model: {
+        enableRowRangeSelection: true,
+        enableRowSelection: (row) => backupCanBeRemoved(row.original),
+        enableSubRowSelection: false,
+        getRowId: backupRowKey,
+        initialState: initialTableState,
+        manualSorting: true,
+      },
+      virtualization: { estimateRowHeight: 76, overscan: 8 },
+    })
+  }, [
+    canCreate,
+    currentUserId,
+    destinations,
+    dialogStore,
+    targetInstances,
+    nameStore,
+    availableRelayIds,
+    availableTargetKeys,
+    initialTableState,
+  ])
 
   return (
-    <>
-      <BackupDesktopTableStateSync
-        onSortChange={onSortChange}
-        selectionStore={selectionStore}
-        table={table}
-      />
-      <DataTable
-        ariaLabel="Backups"
-        emptyState={
-          <BackupDesktopEmptyState
-            renderEmpty={renderEmpty}
-            scopeFiltered={scopeFiltered}
-            searchStore={searchStore}
-            statusFilterStore={statusFilterStore}
-          />
-        }
-        error={error}
-        getRowClassName={backupTableRowClassName}
-        gridClassName={backupTableGridClassName}
-        loading={loading}
-        onRetry={onRetry}
-        pagination={pagination}
-        table={table}
-        updating={updating}
-        virtualization={virtualization}
-      />
-    </>
+    <DataTableView
+      definition={definition}
+      emptyState={
+        <BackupDesktopEmptyState
+          renderEmpty={renderEmpty}
+          scopeFiltered={scopeFiltered}
+          searchStore={searchStore}
+          statusFilterStore={statusFilterStore}
+        />
+      }
+      source={source}
+    >
+      {(table) => (
+        <BackupDesktopTableStateSync
+          onSortChange={onSortChange}
+          selectionStore={selectionStore}
+          table={table}
+        />
+      )}
+    </DataTableView>
   )
 })
 
@@ -558,7 +520,7 @@ const BackupDesktopTableStateSync = React.memo(
       direction: BackupRunSortDirection
     ) => void
     selectionStore: BackupSelectionStore
-    table: Table<typeof dataTableFeatures, Backup>
+    table: DataTableInstance<Backup>
   }) {
     const selectedBackupIds = React.useSyncExternalStore(
       selectionStore.subscribe,
@@ -624,30 +586,22 @@ const BackupDesktopEmptyState = React.memo(function BackupDesktopEmptyState({
 })
 
 const BackupMobileList = React.memo(function BackupMobileList({
-  backups,
-  error,
-  loading,
-  onRetry,
-  pagination,
   renderEmpty,
   renderRow,
   scopeFiltered,
   scrollRootRef,
   searchStore,
   selectionStore,
+  source,
   statusFilterStore,
 }: {
-  backups: Array<Backup>
-  error?: Error | null
-  loading?: boolean
-  onRetry?: () => void
-  pagination: DataTablePaginationOptions
   renderEmpty: (searchActive: boolean, filterActive: boolean) => React.ReactNode
   renderRow: (backup: Backup) => React.ReactNode
   scopeFiltered: boolean
   scrollRootRef: React.RefObject<Element | null>
   searchStore: BackupSearchStore
   selectionStore: BackupSelectionStore
+  source: DataTableSource<Backup>
   statusFilterStore: BackupStatusFilterStore
 }) {
   const search = React.useSyncExternalStore(
@@ -660,24 +614,19 @@ const BackupMobileList = React.memo(function BackupMobileList({
     statusFilterStore.getSnapshot,
     statusFilterStore.getServerSnapshot
   )
-  if (loading) return <DataTableLoadingState />
-  if (error) return <DataTableErrorState onRetry={onRetry} />
-  if (backups.length === 0) {
-    return renderEmpty(
-      search.trim().length > 0,
-      scopeFiltered || Boolean(status)
-    )
-  }
   return (
-    <div>
-      <BackupMobileSelectAll backups={backups} store={selectionStore} />
-      <div className="divide-y divide-border/70">{backups.map(renderRow)}</div>
-      <DataTableLoadMoreTrigger
-        pagination={pagination}
-        rowCount={backups.length}
-        scrollRootRef={scrollRootRef}
-      />
-    </div>
+    <DataTableCompactList
+      emptyState={renderEmpty(
+        search.trim().length > 0,
+        scopeFiltered || Boolean(status)
+      )}
+      header={
+        <BackupMobileSelectAll backups={source.rows} store={selectionStore} />
+      }
+      renderRow={renderRow}
+      scrollRootRef={scrollRootRef}
+      source={source}
+    />
   )
 })
 
@@ -1221,10 +1170,6 @@ function getServerMobileBackupLayoutSnapshot(): boolean {
 
 function backupRowKey(backup: Backup) {
   return backup.id
-}
-
-function selectNoDataTableState() {
-  return undefined
 }
 
 function backupRowSelectionState(

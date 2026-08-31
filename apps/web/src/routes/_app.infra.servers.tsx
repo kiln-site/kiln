@@ -2,7 +2,8 @@ import * as React from "react"
 import { createFileRoute } from "@tanstack/react-router"
 import { z } from "zod"
 
-import { ServersPage, createServerSearchStore } from "@/components/servers-page"
+import { ServersPage } from "@/components/servers-page"
+import { createDataTableSearchStore } from "@/lib/data-table-search"
 import { isDevelopmentBypassIdentity } from "@/lib/development-bypass"
 import { pageTitle } from "@/lib/page-title"
 import { requireInfrastructureDestinationAccess } from "@/lib/route-access"
@@ -24,7 +25,7 @@ export const Route = createFileRoute("/_app/infra/servers")({
 function ServersRoute() {
   const { search = "" } = Route.useSearch()
   const { user } = Route.useRouteContext()
-  const [searchStore] = React.useState(() => createServerSearchStore(search))
+  const [searchStore] = React.useState(() => createDataTableSearchStore(search))
 
   React.useLayoutEffect(() => {
     searchStore.set(search)

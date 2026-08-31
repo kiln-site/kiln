@@ -71,6 +71,7 @@ import {
   type BackupStatusFilterStore,
 } from "@/components/backups/state"
 import { BackupBulkActions, BackupTable } from "@/components/backups/table"
+import { DataTableWorkspace } from "@/components/data-table-workspace"
 import {
   backupCanBeRemoved,
   backupTargetName,
@@ -116,7 +117,10 @@ import {
 } from "@/components/backup-configuration-dialog"
 import type { getManagedDatabaseDirectory } from "@/server/databases"
 import type { getRelaySnapshot } from "@/server/relay"
-import { flattenCursorPages } from "@/lib/cursor-page"
+import {
+  replaceDataTableRows,
+  useCursorDataTableSource,
+} from "@/lib/data-table-source"
 import type { BackupRunSort, BackupRunSortDirection } from "@/lib/backup-runs"
 import {
   refreshActiveBackupRunsFirstPages,
@@ -129,7 +133,7 @@ type BackupPolicy = Awaited<ReturnType<typeof getBackupPolicy>>
 type CreateTarget = BackupConfigurationTarget
 
 const completedDeleteFeedbackMs = 1_000
-const emptyBackups: Array<Backup> = []
+const backupDataTableRowKey = (backup: Backup) => backup.id
 const emptyCompletedBackupFeedback: ReadonlyMap<string, Backup> = new Map()
 
 function selectBackupScope(
@@ -458,14 +462,17 @@ export const BackupsPage = React.memo(function BackupsPage({
         storage={storage}
       />
 
-      <section className="relative flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border bg-card/45 [contain:paint]">
-        <BackupRunsSyncKick />
-        <BackupToolbar
-          canCreate={canCreateAny}
-          dialogStore={dialogStore}
-          searchStore={searchStore}
-          statusFilterStore={statusFilterStore}
-        />
+      <DataTableWorkspace
+        before={<BackupRunsSyncKick />}
+        toolbar={
+          <BackupToolbar
+            canCreate={canCreateAny}
+            dialogStore={dialogStore}
+            searchStore={searchStore}
+            statusFilterStore={statusFilterStore}
+          />
+        }
+      >
         <BackupDataSurface
           availableRelayIds={availableRelayIds}
           availableTargetKeys={availableTargetKeys}
@@ -481,7 +488,7 @@ export const BackupsPage = React.memo(function BackupsPage({
           selectionStore={selectionStore}
           statusFilterStore={statusFilterStore}
         />
-      </section>
+      </DataTableWorkspace>
     </div>
   )
 })
@@ -759,7 +766,11 @@ const BackupDataSurface = React.memo(function BackupDataSurface({
   const refreshStaleCacheOnMount =
     queryClient.getQueryState(queryOptions.queryKey)?.isInvalidated ?? false
   const query = useInfiniteQuery(queryOptions)
-  const isUpdating = query.isPlaceholderData && query.isFetching
+  const source = useCursorDataTableSource({
+    getRowKey: backupDataTableRowKey,
+    query,
+    resetKey: JSON.stringify(queryInput),
+  })
   React.useEffect(() => {
     if (!refreshStaleCacheOnMount) return
     const controller = new AbortController()
@@ -775,34 +786,13 @@ const BackupDataSurface = React.memo(function BackupDataSurface({
     )
     return () => controller.abort()
   }, [queryClient, queryInput, refreshStaleCacheOnMount])
-  const backups = React.useMemo(
-    () =>
-      query.data
-        ? flattenCursorPages(query.data.pages, (backup) => backup.id)
-        : emptyBackups,
-    [query.data]
-  )
   const visibleBackups = useBackupsWithDeleteFeedback(
-    backups,
+    source.rows,
     deleteFeedbackStore
   )
-  const pagination = React.useMemo(
-    () => ({
-      error: !isUpdating && query.isFetchNextPageError ? query.error : null,
-      hasMore: !isUpdating && query.hasNextPage,
-      isLoading: !isUpdating && query.isFetchingNextPage,
-      onLoadMore: query.fetchNextPage,
-      resetKey: JSON.stringify(queryInput),
-    }),
-    [
-      isUpdating,
-      query.error,
-      query.fetchNextPage,
-      query.hasNextPage,
-      query.isFetchNextPageError,
-      query.isFetchingNextPage,
-      queryInput,
-    ]
+  const visibleSource = React.useMemo(
+    () => replaceDataTableRows(source, visibleBackups),
+    [source, visibleBackups]
   )
   const changeSort = React.useCallback(
     (sort: BackupRunSort, direction: BackupRunSortDirection) => {
@@ -814,10 +804,6 @@ const BackupDataSurface = React.memo(function BackupDataSurface({
     },
     []
   )
-  const retry = React.useCallback(() => {
-    void query.refetch()
-  }, [query.refetch])
-
   React.useLayoutEffect(() => {
     nameStore.sync(
       visibleBackups.map((backup) => [backup.id, backup.name] as const)
@@ -840,29 +826,20 @@ const BackupDataSurface = React.memo(function BackupDataSurface({
       <BackupTable
         availableRelayIds={availableRelayIds}
         availableTargetKeys={availableTargetKeys}
-        backups={visibleBackups}
         canCreate={canCreate}
         currentUserId={currentUserId}
         destinations={destinations}
         dialogStore={dialogStore}
         targetInstances={targetInstances}
-        error={
-          query.isError && !query.data && !query.isFetchNextPageError
-            ? query.error
-            : null
-        }
-        loading={query.isPending}
         nameStore={nameStore}
-        onRetry={retry}
         onSortChange={changeSort}
-        pagination={pagination}
         scopeFiltered={Boolean(selectedServer)}
         searchStore={searchStore}
         selectionStore={selectionStore}
         sort={sorting.sort}
         sortDirection={sorting.direction}
+        source={visibleSource}
         statusFilterStore={statusFilterStore}
-        updating={isUpdating}
       />
       <BackupBulkActions
         backups={visibleBackups}

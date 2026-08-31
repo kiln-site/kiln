@@ -1,13 +1,6 @@
 import * as React from "react"
 import { useQueryClient } from "@tanstack/react-query"
-import {
-  Check,
-  Plus,
-  RefreshCw,
-  Search,
-  SlidersHorizontal,
-  X,
-} from "lucide-react"
+import { Check, Plus, RefreshCw, SlidersHorizontal } from "lucide-react"
 
 import { Button } from "@workspace/ui/components/button"
 import {
@@ -16,7 +9,6 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@workspace/ui/components/dropdown-menu"
-import { Input } from "@workspace/ui/components/input"
 import { showToast } from "@workspace/ui/components/sonner"
 import {
   Tooltip,
@@ -24,7 +16,7 @@ import {
   TooltipTrigger,
 } from "@workspace/ui/components/tooltip"
 
-import { useWorkspaceTableSearchInput } from "@/components/workspace-data-table"
+import { DataTableToolbar } from "@/components/data-table-workspace"
 import { ensuringPromise, forkPromise } from "@/effect/promise"
 import { backupRunsSearchMaxLength } from "@/lib/backup-runs"
 import { resetActiveBackupRunsToFirstPage } from "@/lib/backup-runs-cache"
@@ -58,89 +50,38 @@ export const BackupToolbar = React.memo(function BackupToolbar({
   searchStore: BackupSearchStore
   statusFilterStore: BackupStatusFilterStore
 }) {
-  const inputRef = React.useRef<HTMLInputElement>(null)
-  const [mobileSearchOpen, setMobileSearchOpen] = React.useState(
-    () => searchStore.getSnapshot().length > 0
-  )
-  useWorkspaceTableSearchInput(inputRef, searchStore)
-
-  React.useEffect(() => {
-    if (mobileSearchOpen) inputRef.current?.focus()
-  }, [mobileSearchOpen])
-
   return (
-    <div className="flex min-w-0 items-center gap-2 border-b bg-background/25 p-3">
-      <BackupSyncButton />
-
-      {!mobileSearchOpen ? (
-        <Button
-          aria-label="Search backups"
-          className="sm:hidden"
-          size="icon"
-          type="button"
-          variant="outline"
-          onClick={() => setMobileSearchOpen(true)}
-        >
-          <Search />
-        </Button>
-      ) : null}
-      <div
-        className={`${mobileSearchOpen ? "block" : "hidden"} relative min-w-0 flex-1 sm:block sm:max-w-md`}
-      >
-        <Search className="pointer-events-none absolute top-1/2 left-3 size-3.5 -translate-y-1/2 text-muted-foreground" />
-        <Input
-          ref={inputRef}
-          aria-label="Search backups"
-          className="pl-9 text-base md:text-sm"
-          defaultValue={searchStore.getServerSnapshot()}
-          maxLength={backupRunsSearchMaxLength}
-          placeholder="Search backups"
-          type="search"
-          onChange={(event) => searchStore.set(event.currentTarget.value)}
-        />
-      </div>
-      {mobileSearchOpen ? (
-        <Button
-          aria-label="Close backup search"
-          className="sm:hidden"
-          size="icon"
-          type="button"
-          variant="ghost"
-          onClick={() => {
-            searchStore.set("")
-            setMobileSearchOpen(false)
-          }}
-        >
-          <X />
-        </Button>
-      ) : null}
-      <BackupStatusFilter
-        mobileSearchOpen={mobileSearchOpen}
-        statusFilterStore={statusFilterStore}
-      />
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <Button
-            aria-label="New Backup"
-            className={`${mobileSearchOpen ? "hidden sm:inline-flex" : "inline-flex"} ml-auto shrink-0`}
-            disabled={!canCreate}
-            type="button"
-            onClick={() => dialogStore.open({ kind: "create" })}
-          >
-            <Plus /> <span className="hidden sm:inline">New Backup</span>
-          </Button>
-        </TooltipTrigger>
-        <TooltipContent side="bottom">New Backup</TooltipContent>
-      </Tooltip>
-    </div>
+    <DataTableToolbar
+      actions={
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              aria-label="New Backup"
+              disabled={!canCreate}
+              type="button"
+              onClick={() => dialogStore.open({ kind: "create" })}
+            >
+              <Plus /> <span className="hidden sm:inline">New Backup</span>
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">New Backup</TooltipContent>
+        </Tooltip>
+      }
+      controls={<BackupStatusFilter statusFilterStore={statusFilterStore} />}
+      leading={<BackupSyncButton />}
+      search={{
+        ariaLabel: "Search backups",
+        maxLength: backupRunsSearchMaxLength,
+        placeholder: "Search backups",
+        store: searchStore,
+      }}
+    />
   )
 })
 
 const BackupStatusFilter = React.memo(function BackupStatusFilter({
-  mobileSearchOpen,
   statusFilterStore,
 }: {
-  mobileSearchOpen: boolean
   statusFilterStore: BackupStatusFilterStore
 }) {
   const status = React.useSyncExternalStore(
@@ -156,7 +97,7 @@ const BackupStatusFilter = React.memo(function BackupStatusFilter({
           <DropdownMenuTrigger asChild>
             <Button
               aria-label="Filter backups by status"
-              className={`${mobileSearchOpen ? "hidden sm:inline-flex" : "inline-flex"} shrink-0`}
+              className="shrink-0"
               type="button"
               variant={status ? "secondary" : "outline"}
             >

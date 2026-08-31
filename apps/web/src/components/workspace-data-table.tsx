@@ -1,13 +1,12 @@
 import * as React from "react"
 
-export interface WorkspaceTableSearchStore {
-  getNormalizedServerSnapshot: () => string
-  getNormalizedSnapshot: () => string
-  getServerSnapshot: () => string
-  getSnapshot: () => string
-  set: (value: string) => void
-  subscribe: (listener: () => void) => () => void
-}
+import {
+  createDataTableSearchStore,
+  useDataTableSearchInput,
+  type DataTableSearchStore,
+} from "@/lib/data-table-search"
+
+export type WorkspaceTableSearchStore = DataTableSearchStore
 
 interface WorkspaceDataTableProps<T> {
   getRowKey: (item: T) => React.Key
@@ -27,43 +26,14 @@ interface SearchableItem<T> {
 export function createWorkspaceTableSearchStore(
   initialValue = ""
 ): WorkspaceTableSearchStore {
-  let value = initialValue
-  let normalizedValue = normalizeSearch(initialValue)
-  const serverValue = initialValue
-  const normalizedServerValue = normalizedValue
-  const listeners = new Set<() => void>()
-
-  return {
-    getNormalizedServerSnapshot: () => normalizedServerValue,
-    getNormalizedSnapshot: () => normalizedValue,
-    getServerSnapshot: () => serverValue,
-    getSnapshot: () => value,
-    set: (nextValue) => {
-      if (nextValue === value) return
-      value = nextValue
-      normalizedValue = normalizeSearch(nextValue)
-      for (const listener of listeners) listener()
-    },
-    subscribe: (listener) => {
-      listeners.add(listener)
-      return () => listeners.delete(listener)
-    },
-  }
+  return createDataTableSearchStore(initialValue)
 }
 
 export function useWorkspaceTableSearchInput(
   inputRef: React.RefObject<HTMLInputElement | null>,
   store: WorkspaceTableSearchStore
 ) {
-  React.useLayoutEffect(
-    () =>
-      store.subscribe(() => {
-        const input = inputRef.current
-        const search = store.getSnapshot()
-        if (input && input.value !== search) input.value = search
-      }),
-    [inputRef, store]
-  )
+  useDataTableSearchInput(inputRef, store)
 }
 
 export function WorkspaceDataTable<T>({
@@ -199,10 +169,6 @@ export function WorkspaceTableCell({
   children: React.ReactNode
 }) {
   return <td className={`h-14 px-3 align-middle ${className}`}>{children}</td>
-}
-
-function normalizeSearch(search: string): string {
-  return search.trim().toLowerCase()
 }
 
 function matchesSearch(searchText: string, normalizedSearch: string): boolean {

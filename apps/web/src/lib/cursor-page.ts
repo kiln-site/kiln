@@ -1,10 +1,10 @@
-export interface CursorPage<TItem> {
+export interface CursorPage<TItem, TCursor = string> {
   items: Array<TItem>
-  nextCursor: string | null
+  nextCursor: TCursor | null
 }
 
-export function flattenCursorPages<TItem>(
-  pages: ReadonlyArray<CursorPage<TItem>>,
+export function flattenCursorPages<TItem, TCursor = string>(
+  pages: ReadonlyArray<CursorPage<TItem, TCursor>>,
   getKey: (item: TItem) => string
 ): Array<TItem> {
   const keys = new Set<string>()
