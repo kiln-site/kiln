@@ -966,8 +966,10 @@ async function relaySnapshot() {
       retainedInstances
     ),
     relay: {
+      browserOrigin: config.browserOrigin,
       id: relayIdentity.fingerprint,
       name: relayIdentity.name,
+      proxyMode: config.proxyMode,
       sftp: {
         developmentAuthentication: config.sftpDevAuthentication,
         host: config.advertisedHost,
@@ -1108,7 +1110,9 @@ async function executeControlRequest(
         "relay.proxy.routes",
         startup.state.listWebRoutes()
       )
-      return lifecycle.configureProxy(settings, routes)
+      const proxy = await lifecycle.configureProxy(settings, routes)
+      await snapshotHub.refresh()
+      return proxy
     }
     case "relay.audit.list":
       return runRelayEffect(

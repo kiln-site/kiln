@@ -40,6 +40,7 @@ export function useRelayConsoleStream(
   instanceId: string,
   relayConnected: boolean,
   browserOrigin: string | null,
+  consoleTransport: "direct" | "hearth" | null,
   runtime: InstanceRuntime | null | undefined,
   loadTiming?: ConsoleLoadTiming
 ) {
@@ -378,6 +379,7 @@ export function useRelayConsoleStream(
             relayId,
             instanceId,
             browserOrigin,
+            consoleTransport,
             loadTiming
           ).pipe(
             Stream.runForEach((event) =>
@@ -536,6 +538,7 @@ export function useRelayConsoleStream(
     }
   }, [
     browserOrigin,
+    consoleTransport,
     instanceId,
     loadTiming,
     queryClient,

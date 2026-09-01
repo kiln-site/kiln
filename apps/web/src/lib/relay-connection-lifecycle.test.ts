@@ -28,6 +28,7 @@ vi.mock("@/lib/sftp-authorization", () => ({
 
 import {
   closeRelayConnection,
+  relayConnectionBrowserMetadata,
   relayConnectionState,
   relayRpc,
 } from "@/lib/relay-connection"
@@ -52,6 +53,20 @@ const pushedSnapshot = {
     storage: { totalBytes: 1, usedBytes: 0 },
     uptimeSeconds: 0,
     version: "test",
+  },
+  relay: {
+    browserOrigin: "https://relay.example.com",
+    id: "r".repeat(43),
+    name: "Relay test node",
+    proxyMode: "hearth",
+    sftp: {
+      developmentAuthentication: false,
+      host: "relay.example.com",
+      hostKeyFingerprint: "SHA256:test",
+      port: 2022,
+      publication: "published",
+    },
+    tls: null,
   },
 } satisfies RelaySnapshot
 
@@ -78,6 +93,10 @@ effectIt.effect(
             relayRpc(endpoint, "relay.snapshot", {}, 1_000)
           )
           expect(snapshot).toEqual(pushedSnapshot)
+          expect(relayConnectionBrowserMetadata(relayId)).toEqual({
+            browserOrigin: "https://relay.example.com",
+            mode: "hearth",
+          })
           expect(requests).toHaveLength(0)
           expect(relayStates).toEqual(["connected"])
 
@@ -105,11 +124,7 @@ effectIt.effect(
             relayRpc(endpoint, "relay.snapshot", {}, 1_000)
           )
           expect(reconnectedSnapshot).toEqual(pushedSnapshot)
-          expect(relayStates).toEqual([
-            "connected",
-            "unreachable",
-            "connected",
-          ])
+          expect(relayStates).toEqual(["connected", "unreachable", "connected"])
 
           const timeout = yield* promiseEffect(() =>
             relayRpc(endpoint, "relay.update.status", { ignored: true }, 20)
@@ -121,11 +136,7 @@ effectIt.effect(
 
           closeRelayConnection(relayId)
           expect(relayConnectionState(relayId).status).toBe("disconnected")
-          expect(relayStates).toEqual([
-            "connected",
-            "unreachable",
-            "connected",
-          ])
+          expect(relayStates).toEqual(["connected", "unreachable", "connected"])
           unsubscribe()
         })
     )

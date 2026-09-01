@@ -219,6 +219,16 @@ export function selectRelayBrowserOrigin(relayId: string) {
   }
 }
 
+export function selectRelayConsoleTransport(relayId: string) {
+  return (connection: RelayConnection): "direct" | "hearth" | null => {
+    if (connection.status === "unconfigured") return null
+    return (
+      connection.relays.find((relay) => relay.id === relayId)
+        ?.consoleTransport ?? null
+    )
+  }
+}
+
 export function selectInstanceWorkspaceInstance(identifier: string) {
   return (snapshot: RelayFleetSnapshot): InstanceWorkspaceInstance | null => {
     const instance = findRelayInstance(snapshot.instances, identifier)

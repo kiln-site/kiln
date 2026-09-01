@@ -310,6 +310,13 @@ export async function openAuthorizedRealtimeStream(input: {
         type: "nodes.delta",
       })
     }
+    if (event.delta.relay) {
+      enqueue({
+        epoch: event.epoch,
+        sequence: event.sequence,
+        type: "relay.invalidate",
+      })
+    }
   }
 
   unsubscribe = subscribeRealtimeChanges((event) => {

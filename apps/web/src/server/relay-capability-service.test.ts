@@ -12,6 +12,7 @@ vi.hoisted(() => {
 
 const fakes = vi.hoisted(() => ({
   decryptCredentials: vi.fn(),
+  relayBrowserMetadata: vi.fn(),
   loadRelay: vi.fn(),
   relayRpc: vi.fn(),
   requirePermissions: vi.fn(),
@@ -32,6 +33,7 @@ vi.mock("@/lib/environment", () => ({
 }))
 
 vi.mock("@/lib/relay-connection", () => ({
+  relayConnectionBrowserMetadata: fakes.relayBrowserMetadata,
   relayRpc: fakes.relayRpc,
 }))
 
@@ -46,7 +48,10 @@ import type {
   RelayCredentials,
   RelayIssuanceMaterial,
 } from "@/lib/relay-registry"
-import { issueConsoleCapabilityForRequest } from "@/server/relay-capability-service"
+import {
+  issueConsoleCapabilityForRequest,
+  prepareConsoleCapabilityForUser,
+} from "@/server/relay-capability-service"
 
 const user = {
   email: "user@example.com",
@@ -120,6 +125,7 @@ beforeEach(() => {
   fakes.loadRelay.mockReturnValue(Effect.succeed(material))
   fakes.requirePermissions.mockReturnValue(Effect.void)
   fakes.decryptCredentials.mockReturnValue(Effect.succeed(credentials))
+  fakes.relayBrowserMetadata.mockReturnValue(null)
   fakes.relayRpc.mockResolvedValue({
     browserOrigin: "https://relay-live.example.com",
     mode: "none",
@@ -211,6 +217,50 @@ describe("Relay capability issuance orchestration", () => {
       instanceId: "instance-one",
       origin: "https://hearth.example.com",
       subject: "user-one",
+    })
+  })
+
+  it("uses synchronized route metadata without contacting the Relay", async () => {
+    fakes.relayBrowserMetadata.mockReturnValue({
+      browserOrigin: "https://relay-snapshot.example.com",
+      mode: "hearth",
+    })
+
+    const issued = await issueConsoleCapabilityForRequest({
+      authenticate: () => Promise.resolve(user),
+      instanceId: "instance-one",
+      publicKeyJwk,
+      relayId: "relay-one",
+      write: false,
+    })
+
+    expect(fakes.relayBrowserMetadata).toHaveBeenCalledWith("relay-one")
+    expect(fakes.relayRpc).not.toHaveBeenCalled()
+    expect(issued).toMatchObject({
+      browserOrigin: "https://relay-snapshot.example.com",
+      proxyMode: "hearth",
+    })
+  })
+
+  it("does not resolve browser metadata for the Hearth proxy", async () => {
+    const prepared = await prepareConsoleCapabilityForUser({
+      instanceId: "instance-one",
+      publicKeyJwk,
+      relayId: "relay-one",
+      user,
+    })
+
+    expect(fakes.requirePermissions).toHaveBeenCalledWith({
+      instanceId: "instance-one",
+      permissions: ["instance.console.read"],
+      relayId: "relay-one",
+      user,
+    })
+    expect(fakes.relayBrowserMetadata).not.toHaveBeenCalled()
+    expect(fakes.relayRpc).not.toHaveBeenCalled()
+    expect(prepared.capability).toMatchObject({
+      browserOrigin: "https://relay.example.com",
+      proxyMode: "none",
     })
   })
 })

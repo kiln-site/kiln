@@ -70,6 +70,7 @@ export function issueConsoleCapabilityForRequest(input: {
       path: null,
       publicKeyJwk: input.publicKeyJwk,
       relayId: input.relayId,
+      resolveBrowserMetadata: true,
       user: authenticatedUserEffect(input.authenticate),
     }).pipe(Effect.map((prepared) => prepared.capability))
   )
@@ -89,6 +90,7 @@ export function prepareConsoleCapabilityForUser(input: {
       path: null,
       publicKeyJwk: input.publicKeyJwk,
       relayId: input.relayId,
+      resolveBrowserMetadata: false,
       user: Effect.succeed(input.user),
     })
   )
@@ -108,6 +110,7 @@ export function issueResourceCapabilityForRequest(input: {
       path: null,
       publicKeyJwk: input.publicKeyJwk,
       relayId: input.relayId,
+      resolveBrowserMetadata: true,
       user: authenticatedUserEffect(input.authenticate),
     }).pipe(Effect.map((prepared) => prepared.capability))
   )
@@ -129,6 +132,7 @@ export function issueFileCapabilityForRequest(input: {
       path: input.path,
       publicKeyJwk: input.publicKeyJwk,
       relayId: input.relayId,
+      resolveBrowserMetadata: true,
       user: authenticatedUserEffect(input.authenticate),
     }).pipe(Effect.map((prepared) => prepared.capability))
   )
@@ -141,6 +145,7 @@ const prepareBrowserCapabilityEffect = Effect.fn("relay.capability.prepare")(
     path: string | null
     publicKeyJwk: BrowserPublicKey
     relayId: string
+    resolveBrowserMetadata: boolean
     user: Effect.Effect<AuthenticatedUser, unknown>
   }) {
     const [userResult, materialResult] = yield* Effect.all(
@@ -173,7 +178,9 @@ const prepareBrowserCapabilityEffect = Effect.fn("relay.capability.prepare")(
     const [credentials, proxy] = yield* Effect.all(
       [
         decryptRelayIssuanceCredentialsEffect(material),
-        resolveRelayBrowserMetadataEffect(material.relay),
+        input.resolveBrowserMetadata
+          ? resolveRelayBrowserMetadataEffect(material.relay)
+          : Effect.succeed(null),
       ] as const,
       { concurrency: 2 }
     )
@@ -207,52 +214,52 @@ const resolveRelayBrowserMetadataEffect = Effect.fn(
       },
       (span) =>
         recoverPromise(
-          () =>
-            import("@/lib/relay-connection")
-              .then(({ relayRpc }) =>
-                relayRpc(
-                  relay,
-                  "relay.proxy.read",
-                  { includeDiagnostics: false },
-                  5_000
-                )
+          async () => {
+            const { relayConnectionBrowserMetadata, relayRpc } =
+              await import("@/lib/relay-connection")
+            const synchronized = relayConnectionBrowserMetadata(relay.id)
+            if (synchronized) {
+              span.setAttribute(
+                "kiln.console.metadata_shape",
+                "connection_snapshot"
               )
-              .then((value): RelayProxyBrowserMetadata | null => {
-                if (!value || typeof value !== "object") {
-                  span.setAttribute(
-                    "kiln.console.metadata_shape",
-                    "registry_fallback"
-                  )
-                  return null
-                }
-                const response = Object.fromEntries(Object.entries(value))
-                const metadata =
-                  relayProxyBrowserMetadataSchema.safeParse(response)
-                if (metadata.success) {
-                  span.setAttribute(
-                    "kiln.console.metadata_shape",
-                    "lightweight"
-                  )
-                  return metadata.data
-                }
-                // Relays predating the lightweight metadata hint ignore its payload
-                // and return full diagnostics. Keep rolling upgrades compatible
-                // without adding a second RPC.
-                const diagnostics = relayProxyDiagnosticsSchema.parse(
-                  response.diagnostics
-                )
-                const settings = relayProxySettingsSchema.parse(
-                  response.settings
-                )
-                span.setAttribute(
-                  "kiln.console.metadata_shape",
-                  "legacy_diagnostics"
-                )
-                return {
-                  browserOrigin: diagnostics.browserOrigin,
-                  mode: settings.mode,
-                }
-              }),
+              return synchronized
+            }
+            const value = await relayRpc(
+              relay,
+              "relay.proxy.read",
+              { includeDiagnostics: false },
+              5_000
+            )
+            if (!value || typeof value !== "object") {
+              span.setAttribute(
+                "kiln.console.metadata_shape",
+                "registry_fallback"
+              )
+              return null
+            }
+            const response = Object.fromEntries(Object.entries(value))
+            const metadata = relayProxyBrowserMetadataSchema.safeParse(response)
+            if (metadata.success) {
+              span.setAttribute("kiln.console.metadata_shape", "lightweight")
+              return metadata.data
+            }
+            // Relays predating the lightweight metadata hint ignore its payload
+            // and return full diagnostics. Keep rolling upgrades compatible
+            // without adding a second RPC.
+            const diagnostics = relayProxyDiagnosticsSchema.parse(
+              response.diagnostics
+            )
+            const settings = relayProxySettingsSchema.parse(response.settings)
+            span.setAttribute(
+              "kiln.console.metadata_shape",
+              "legacy_diagnostics"
+            )
+            return {
+              browserOrigin: diagnostics.browserOrigin,
+              mode: settings.mode,
+            } satisfies RelayProxyBrowserMetadata
+          },
           () => {
             span.setAttribute(
               "kiln.console.metadata_shape",

@@ -16,6 +16,7 @@ import {
   selectInstanceRelayConnected,
   selectInstanceRuntime,
   selectRelayBrowserOrigin,
+  selectRelayConsoleTransport,
 } from "@/lib/relay-selectors"
 import type { ConsoleLoadTiming } from "@/lib/console-performance"
 import type { TailscaleStackOverview } from "@/server/tailscale"
@@ -35,6 +36,7 @@ export function ConsoleStreamController({
 }) {
   const relayConnected = useInstanceRelayConnected()
   const browserOrigin = useRelayBrowserOrigin(relayId)
+  const consoleTransport = useRelayConsoleTransport(relayId)
   const selectRuntime = React.useMemo(
     () => selectInstanceRuntime(instanceId, relayId),
     [instanceId, relayId]
@@ -48,6 +50,7 @@ export function ConsoleStreamController({
     instanceId,
     relayConnected,
     browserOrigin,
+    consoleTransport,
     runtime,
     loadTiming
   )
@@ -123,11 +126,13 @@ function TailscaleConsoleStreamSource({
     select: selectConnected,
   })
   const browserOrigin = useRelayBrowserOrigin(relayId)
+  const consoleTransport = useRelayConsoleTransport(relayId)
   const snapshot = useRelayConsoleStream(
     relayId,
     instanceId,
     relayConnected,
     browserOrigin,
+    consoleTransport,
     runtime
   )
   const effectiveSnapshot = React.useMemo(
@@ -166,6 +171,19 @@ function useRelayBrowserOrigin(relayId: string): string | null {
   const { data = null } = useQuery({
     ...relayConnectionQueryOptions(queryClient),
     select: selectBrowserOrigin,
+  })
+  return data
+}
+
+function useRelayConsoleTransport(relayId: string): "direct" | "hearth" | null {
+  const queryClient = useQueryClient()
+  const selectConsoleTransport = React.useMemo(
+    () => selectRelayConsoleTransport(relayId),
+    [relayId]
+  )
+  const { data = null } = useQuery({
+    ...relayConnectionQueryOptions(queryClient),
+    select: selectConsoleTransport,
   })
   return data
 }

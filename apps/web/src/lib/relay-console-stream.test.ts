@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vite-plus/test"
-import { Effect, Fiber, Queue, Stream } from "effect"
+import { Effect, Fiber, Option, Queue, Stream } from "effect"
 
 const relayCapability = vi.hoisted(() => ({
   issue: vi.fn(),
@@ -30,6 +30,41 @@ afterEach(() => {
 })
 
 describe("Relay console connection setup", () => {
+  it("opens Hearth immediately when synchronized routing selects it", async () => {
+    const fetchStream = vi.fn().mockResolvedValue(
+      new Response(
+        new ReadableStream({
+          start() {},
+        }),
+        { status: 200 }
+      )
+    )
+    vi.stubGlobal("navigator", { onLine: true })
+    vi.stubGlobal("WebSocket", FakeWebSocket)
+    vi.stubGlobal("fetch", fetchStream)
+
+    const event = await Effect.runPromise(
+      openRelayConsoleStream(
+        "relay-one",
+        "instance-one",
+        "https://relay.example.com",
+        "hearth"
+      ).pipe(Stream.runHead)
+    )
+
+    expect(Option.getOrThrow(event)).toEqual({
+      message: null,
+      transport: "hearth",
+      type: "transport",
+    })
+    expect(fetchStream).toHaveBeenCalledWith(
+      "/api/console/instance-one?relayId=relay-one",
+      expect.objectContaining({ cache: "no-store" })
+    )
+    expect(relayCapability.issue).not.toHaveBeenCalled()
+    expect(FakeWebSocket.instances).toHaveLength(0)
+  })
+
   it("opens the socket early but waits for capability before authenticating", async () => {
     let resolveCapability: (value: {
       browserOrigin: string

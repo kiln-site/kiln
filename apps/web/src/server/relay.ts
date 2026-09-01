@@ -1336,10 +1336,19 @@ function publicPausedFleetRelay(relays: Array<PersistedRelay>) {
 
 function publicRelayState<TStatus extends RelayReachability | "paused">(entry: {
   relay: PersistedRelay
+  snapshot?: Awaited<ReturnType<typeof authorizeRelaySnapshot>> | null
   status: TStatus
 }) {
+  const proxyMode = entry.snapshot?.relay?.proxyMode
   return {
-    browserOrigin: entry.relay.browserOrigin,
+    browserOrigin:
+      entry.snapshot?.relay?.browserOrigin ?? entry.relay.browserOrigin,
+    consoleTransport:
+      proxyMode === undefined
+        ? null
+        : proxyMode === "hearth"
+          ? ("hearth" as const)
+          : ("direct" as const),
     id: entry.relay.id,
     name: entry.relay.name,
     status: entry.status,

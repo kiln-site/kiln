@@ -23,6 +23,7 @@ import type {
   RelayAuthChallenge,
   RelayControlOperation,
   RelayControlRequest,
+  RelayProxyBrowserMetadata,
   RelaySnapshot,
   RelaySnapshotDelta,
 } from "@workspace/contracts"
@@ -121,6 +122,12 @@ export function relayConnectionState(relayId: string): RelayConnectionState {
   )
 }
 
+export function relayConnectionBrowserMetadata(
+  relayId: string
+): RelayProxyBrowserMetadata | null {
+  return connections.get(relayId)?.browserMetadata ?? null
+}
+
 export function closeRelayConnection(relayId: string): void {
   const connection = connections.get(relayId)
   connections.delete(relayId)
@@ -163,6 +170,14 @@ class RelayConnection {
 
   get state(): RelayConnectionState {
     return this.#state
+  }
+
+  get browserMetadata(): RelayProxyBrowserMetadata | null {
+    if (this.#state.status !== "authenticated") return null
+    const relay = this.#pushedSnapshot?.relay
+    return relay?.browserOrigin && relay.proxyMode
+      ? { browserOrigin: relay.browserOrigin, mode: relay.proxyMode }
+      : null
   }
 
   matches(relay: RelayEndpoint): boolean {

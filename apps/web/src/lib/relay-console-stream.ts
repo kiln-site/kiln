@@ -58,6 +58,7 @@ export function openRelayConsoleStream(
   relayId: string,
   instanceId: string,
   browserOrigin: string | null,
+  consoleTransport: RelayConsoleTransport | null = null,
   timing?: ConsoleLoadTiming
 ): Stream.Stream<KilnConsoleStreamEvent, Error> {
   if (!navigator.onLine) {
@@ -69,6 +70,23 @@ export function openRelayConsoleStream(
     )
   }
 
+  const openHearth = (fallbackMessage: string | null) =>
+    openHearthConsoleStream(relayId, instanceId, fallbackMessage, timing).pipe(
+      Stream.catch((cause) =>
+        Stream.fail(
+          new RelayConsoleConnectionError(
+            "hearth_proxy_failed",
+            fallbackMessage === null
+              ? "Hearth can reach this Relay, but its secure console stream could not be opened."
+              : "Hearth can reach this Relay, but neither the secure direct stream nor the Hearth fallback could read the console.",
+            { cause }
+          )
+        )
+      )
+    )
+
+  if (consoleTransport === "hearth") return openHearth(null)
+
   return openDirectRelayConsoleStream(
     relayId,
     instanceId,
@@ -76,22 +94,7 @@ export function openRelayConsoleStream(
     timing
   ).pipe(
     Stream.catch((directFailure) =>
-      openHearthConsoleStream(
-        relayId,
-        instanceId,
-        directFallbackMessage(directFailure),
-        timing
-      ).pipe(
-        Stream.catch((cause) =>
-          Stream.fail(
-            new RelayConsoleConnectionError(
-              "hearth_proxy_failed",
-              "Hearth can reach this Relay, but neither the secure direct stream nor the Hearth fallback could read the console.",
-              { cause }
-            )
-          )
-        )
-      )
+      openHearth(directFallbackMessage(directFailure))
     )
   )
 }
@@ -408,7 +411,7 @@ function nextAuthenticationMessage(
 function openHearthConsoleStream(
   relayId: string,
   instanceId: string,
-  fallbackMessage: string,
+  fallbackMessage: string | null,
   timing?: ConsoleLoadTiming
 ): Stream.Stream<KilnConsoleStreamEvent, Error> {
   return Stream.unwrap(

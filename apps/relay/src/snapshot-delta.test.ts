@@ -21,12 +21,25 @@ const node = {
   id: "node-a",
   name: "relay-a",
 } as unknown as RelaySnapshot["node"]
+const relay = {
+  browserOrigin: "https://relay.example.com",
+  id: "relay-a",
+  name: "Relay A",
+  proxyMode: "none",
+  sftp: {},
+  tls: null,
+} as unknown as NonNullable<RelaySnapshot["relay"]>
 
 function snapshot(
   instances: RelaySnapshot["instances"],
-  nextNode = node
+  nextNode = node,
+  nextRelay?: RelaySnapshot["relay"]
 ): RelaySnapshot {
-  return { instances, node: nextNode }
+  return {
+    instances,
+    node: nextNode,
+    ...(nextRelay ? { relay: nextRelay } : {}),
+  }
 }
 
 describe("Relay snapshot deltas", () => {
@@ -93,6 +106,22 @@ describe("Relay snapshot deltas", () => {
     const delta = createRelaySnapshotDelta(previous, next)
 
     expect(delta).not.toBeNull()
+    expect(applyRelaySnapshotDelta(previous, delta!)).toEqual(next)
+  })
+
+  it("synchronizes browser routing metadata", () => {
+    const previous = snapshot([instanceA], node, relay)
+    const next = snapshot([instanceA], node, {
+      ...relay,
+      browserOrigin: "https://hearth.example.com",
+      proxyMode: "hearth",
+    })
+    const delta = createRelaySnapshotDelta(previous, next)
+
+    expect(delta?.relay).toMatchObject({
+      browserOrigin: "https://hearth.example.com",
+      proxyMode: "hearth",
+    })
     expect(applyRelaySnapshotDelta(previous, delta!)).toEqual(next)
   })
 })
