@@ -15,8 +15,7 @@ import { Effect, Result, Stream } from "effect"
 import type { AuthenticatedUser } from "@/lib/auth-session"
 import { kilnPublicUrl } from "@/lib/environment"
 import { relayControlEndpoint } from "@/lib/relay-connection"
-import { listPersistedRelays, loadRelayCredentials } from "@/lib/relay-registry"
-import { issueConsoleCapabilityForUser } from "@/server/relay-capability-service"
+import { prepareConsoleCapabilityForUser } from "@/server/relay-capability-service"
 
 const MAX_INBOX_BYTES = 2 * 1024 * 1024
 const MAX_INBOX_MESSAGES = 256
@@ -29,11 +28,6 @@ export async function* openHearthRelayConsoleStream(input: {
   user: AuthenticatedUser
 }): AsyncGenerator<RelayConsoleStreamEvent> {
   if (input.signal.aborted) throw new Error("Console proxy was cancelled")
-  const relay = (await listPersistedRelays()).find(
-    (candidate) => candidate.enabled && candidate.id === input.relayId
-  )
-  if (!relay) throw new Error("Relay is not configured or is paused")
-
   const keys = generateKeyPairSync("ec", { namedCurve: "prime256v1" })
   const publicKeyJwk = keys.publicKey.export({ format: "jwk" })
   const browserKey = {
@@ -42,25 +36,20 @@ export async function* openHearthRelayConsoleStream(input: {
     x: requiredCoordinate(publicKeyJwk.x),
     y: requiredCoordinate(publicKeyJwk.y),
   }
-  const [capability, credentials] = await Promise.all([
-    issueConsoleCapabilityForUser({
+  const { capability, relay, relayCaCertificatePem } =
+    await prepareConsoleCapabilityForUser({
       instanceId: input.instanceId,
       publicKeyJwk: browserKey,
       relayId: input.relayId,
       user: input.user,
-      write: false,
-    }),
-    loadRelayCredentials(input.relayId),
-  ])
+    })
   const control = relayControlEndpoint(relay)
   const protocol = control.useTls ? "wss" : "ws"
   const socket = new WebSocket(
     `${protocol}://${formatHost(control.hostname)}:${control.port}/v1/browser`,
     [...relayBrowserConsoleProtocols],
     {
-      ca: control.useTls
-        ? (credentials.caCertificatePem ?? undefined)
-        : undefined,
+      ca: control.useTls ? (relayCaCertificatePem ?? undefined) : undefined,
       handshakeTimeout: 5_000,
       maxPayload: relayBrowserMaxFrameBytes,
       origin: kilnPublicUrl().origin,

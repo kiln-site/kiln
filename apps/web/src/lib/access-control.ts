@@ -315,20 +315,42 @@ export const requireRelayPermissionEffect = Effect.fn(
   databaseId?: string
   instanceId?: string
 }) {
+  return yield* requireRelayPermissionsEffect({
+    ...input,
+    permissions: [input.permission],
+  })
+})
+
+export const requireRelayPermissionsEffect = Effect.fn(
+  "access.requireRelayPermissions"
+)(function* (input: {
+  user: AuthenticatedUser
+  relayId: string
+  permissions: ReadonlyArray<AccessPermission>
+  databaseId?: string
+  instanceId?: string
+}) {
+  if (input.permissions.length === 0) {
+    return yield* PermissionDeniedError.make({
+      message: "At least one permission is required",
+    })
+  }
   if (isPlatformAdmin(input.user)) return
   const grants = yield* listUserGrantsEffect(input.user.id, input.relayId)
-  const allowed = grants.some((grant) => {
-    if (!roleHasPermission(grant.role, input.permission)) return false
-    if (grant.resourceType === "relay") return true
-    return Boolean(
-      (grant.resourceType === "instance" &&
-        input.instanceId &&
-        grant.resourceId === input.instanceId) ||
-      (grant.resourceType === "database" &&
-        input.databaseId &&
-        grant.resourceId === input.databaseId)
-    )
-  })
+  const allowed = input.permissions.every((permission) =>
+    grants.some((grant) => {
+      if (!roleHasPermission(grant.role, permission)) return false
+      if (grant.resourceType === "relay") return true
+      return Boolean(
+        (grant.resourceType === "instance" &&
+          input.instanceId &&
+          grant.resourceId === input.instanceId) ||
+        (grant.resourceType === "database" &&
+          input.databaseId &&
+          grant.resourceId === input.databaseId)
+      )
+    })
+  )
   if (!allowed) {
     return yield* PermissionDeniedError.make({
       message: "You do not have permission to perform this action",

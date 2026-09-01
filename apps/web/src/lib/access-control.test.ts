@@ -1,6 +1,6 @@
 import { assert, describe, it } from "@effect/vitest"
-import { Effect, Layer } from "effect"
-import type { ResultSetHeader } from "mysql2/promise"
+import { Effect, Layer, Result } from "effect"
+import type { ResultSetHeader, RowDataPacket } from "mysql2/promise"
 
 import { Database } from "@/effect/database"
 import type { AuthenticatedUser } from "@/lib/auth-session"
@@ -13,6 +13,7 @@ import {
   isPlatformAdmin,
   isProtectedInstanceOwnerGrant,
   isRelayCreator,
+  requireRelayPermissionsEffect,
   visibleRelaysForUser,
 } from "@/lib/access-control"
 
@@ -75,6 +76,101 @@ describe("platform access roles", () => {
       ).map((relay) => relay.id),
       ["owned", "granted", "private"]
     )
+  })
+})
+
+describe("Relay permission requirements", () => {
+  it.effect("loads grants once and requires every requested permission", () => {
+    let queryCount = 0
+    const databaseLayer = Layer.succeed(Database)({
+      execute: () => Effect.die("Unexpected database write"),
+      queryRows: <TRow extends RowDataPacket>() =>
+        Effect.sync(() => {
+          queryCount += 1
+          return [
+            {
+              id: "grant-one",
+              relay_id: "relay-one",
+              resource_type: "instance",
+              resource_id: "instance-one",
+              role: "viewer",
+            },
+          ] as unknown as ReadonlyArray<TRow>
+        }),
+      transaction: () => Effect.die("Unexpected transaction"),
+    })
+
+    return Effect.gen(function* () {
+      const result = yield* Effect.result(
+        requireRelayPermissionsEffect({
+          instanceId: "instance-one",
+          permissions: ["instance.console.read", "instance.console.write"],
+          relayId: "relay-one",
+          user: authenticatedUser,
+        })
+      )
+
+      assert.isTrue(Result.isFailure(result))
+      if (Result.isFailure(result)) {
+        assert.strictEqual(result.failure._tag, "PermissionDeniedError")
+      }
+      assert.strictEqual(queryCount, 1)
+    }).pipe(Effect.provide(databaseLayer))
+  })
+
+  it.effect("allows every requested permission from one grant query", () => {
+    let queryCount = 0
+    const databaseLayer = Layer.succeed(Database)({
+      execute: () => Effect.die("Unexpected database write"),
+      queryRows: <TRow extends RowDataPacket>() =>
+        Effect.sync(() => {
+          queryCount += 1
+          return [
+            {
+              id: "grant-one",
+              relay_id: "relay-one",
+              resource_type: "instance",
+              resource_id: "instance-one",
+              role: "operator",
+            },
+          ] as unknown as ReadonlyArray<TRow>
+        }),
+      transaction: () => Effect.die("Unexpected transaction"),
+    })
+
+    return Effect.gen(function* () {
+      yield* requireRelayPermissionsEffect({
+        instanceId: "instance-one",
+        permissions: ["instance.console.read", "instance.console.write"],
+        relayId: "relay-one",
+        user: authenticatedUser,
+      })
+
+      assert.strictEqual(queryCount, 1)
+    }).pipe(Effect.provide(databaseLayer))
+  })
+
+  it.effect("fails closed when no permissions are requested", () => {
+    const databaseLayer = Layer.succeed(Database)({
+      execute: () => Effect.die("Unexpected database write"),
+      queryRows: () => Effect.die("Unexpected grant query"),
+      transaction: () => Effect.die("Unexpected transaction"),
+    })
+
+    return Effect.gen(function* () {
+      const result = yield* Effect.result(
+        requireRelayPermissionsEffect({
+          permissions: [],
+          relayId: "relay-one",
+          user: authenticatedUser,
+        })
+      )
+
+      assert.isTrue(Result.isFailure(result))
+      if (Result.isFailure(result)) {
+        assert.strictEqual(result.failure._tag, "PermissionDeniedError")
+      }
+    }).pipe(Effect.provide(databaseLayer))
   })
 })
 
