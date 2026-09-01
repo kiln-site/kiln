@@ -39,8 +39,8 @@ import {
   queryKeys,
   relayConnectionQueryOptions,
 } from "@/lib/query-options"
-import type { RelayConnection } from "@/lib/query-options"
 import { applyProvisioningInstance } from "@/lib/realtime-client"
+import { selectRelayConnected } from "@/lib/relay-selectors"
 import { createBrickInstance } from "@/server/bricks"
 
 type AddServerDialogState = { kind: "closed" } | { kind: "open" }
@@ -468,17 +468,13 @@ const AddServerConfiguration = React.memo(function AddServerConfiguration({
 
 function useSelectedRelayConnected(relayId: string): boolean {
   const queryClient = useQueryClient()
-  const selectRelayConnected = React.useCallback(
-    (connection: RelayConnection) =>
-      connection.status === "connected" &&
-      connection.relays.some(
-        (relay) => relay.id === relayId && relay.status === "connected"
-      ),
+  const selectConnected = React.useMemo(
+    () => selectRelayConnected(relayId),
     [relayId]
   )
   const { data = false } = useQuery({
     ...relayConnectionQueryOptions(queryClient),
-    select: selectRelayConnected,
+    select: selectConnected,
   })
   return data
 }

@@ -16,6 +16,7 @@ const minecraftProfileHeaders = {
   "User-Agent": "kiln-hearth",
 }
 const minecraftProfileCacheTtlMs = 60 * 60_000
+const minecraftProfileCacheMaxEntries = 512
 const minecraftProfileCache = new Map<
   string,
   { expiresAt: number; profile: MinecraftProfile | null }
@@ -78,14 +79,31 @@ function resolveCachedMinecraftProfile(
   if (pending) return { created: false, request: pending }
 
   const request = fetchMinecraftProfile(key).then((profile) => {
-    minecraftProfileCache.set(key, {
-      expiresAt: Date.now() + minecraftProfileCacheTtlMs,
-      profile,
-    })
+    cacheMinecraftProfile(key, profile)
     return profile
   })
   pendingMinecraftProfiles.set(key, request)
   return { created: true, request }
+}
+
+function cacheMinecraftProfile(
+  key: string,
+  profile: MinecraftProfile | null
+): void {
+  const now = Date.now()
+  minecraftProfileCache.delete(key)
+  for (const [cachedKey, cached] of minecraftProfileCache) {
+    if (cached.expiresAt <= now) minecraftProfileCache.delete(cachedKey)
+  }
+  while (minecraftProfileCache.size >= minecraftProfileCacheMaxEntries) {
+    const oldestKey = minecraftProfileCache.keys().next().value
+    if (oldestKey === undefined) break
+    minecraftProfileCache.delete(oldestKey)
+  }
+  minecraftProfileCache.set(key, {
+    expiresAt: now + minecraftProfileCacheTtlMs,
+    profile,
+  })
 }
 
 async function fetchMinecraftProfile(

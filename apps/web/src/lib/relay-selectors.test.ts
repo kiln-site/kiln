@@ -14,6 +14,7 @@ import {
   relayInstanceRouteIdentifier,
   resolveCanonicalRelayInstance,
   resolveRelayInstance,
+  relayConnectionReachability,
   selectInstanceContainerRunning,
   selectInstanceLifecycleStartedAt,
   selectInstanceRelayConnected,
@@ -26,6 +27,7 @@ import {
   selectSidebarInstanceCount,
   selectSidebarInstances,
 } from "@/lib/relay-selectors"
+import type { RelayConnection } from "@/lib/query-options"
 
 const instance = {
   connectAddress: "minecraft.test:25565",
@@ -78,6 +80,19 @@ function snapshotWithCpu(percent: number): RelayFleetSnapshot {
 }
 
 describe("Relay render selectors", () => {
+  it("keeps legacy single-Relay connection payloads canonical", () => {
+    const connection = {
+      relay: { id: "relay-one", name: "Relay one" },
+      relays: [],
+      status: "connected",
+    } as unknown as RelayConnection
+
+    expect(relayConnectionReachability(connection, "relay-one")).toBe(
+      "connected"
+    )
+    expect(relayConnectionReachability(connection, "relay-two")).toBeUndefined()
+  })
+
   it("builds route IDs from stable Relay and instance identities", () => {
     expect(relayInstanceRouteId("relay-one", "aaaaaaaa")).toBe(
       "relay-one-aaaaaaaa"

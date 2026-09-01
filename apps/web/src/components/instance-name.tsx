@@ -25,6 +25,7 @@ import {
   relayConnectionQueryOptions,
   type RelayConnection,
 } from "@/lib/query-options"
+import { relayConnectionReachability } from "@/lib/relay-selectors"
 
 export type { InstanceNameInstance } from "@/components/instance-name-presentation"
 
@@ -195,14 +196,17 @@ function LiveRegistryRelayIdentity(
   })
   const selectRelayStatus = React.useCallback(
     (connection: RelayConnection) =>
-      selectRegistryRelayStatus(connection, instance.id),
+      relayConnectionReachability(connection, instance.id),
     [instance.id]
   )
-  const { data: relayStatus } = useQuery({
+  const relayStatusQuery = useQuery({
     ...relayConnectionQueryOptions(queryClient),
-    notifyOnChangeProps: ["data"],
+    notifyOnChangeProps: ["data", "isPending"],
     select: selectRelayStatus,
   })
+  const relayStatus =
+    relayStatusQuery.data ??
+    (relayStatusQuery.isPending ? "checking" : "unknown")
   const live = data?.[0]
   return (
     <InstanceNameView
@@ -224,17 +228,6 @@ function LiveRegistryRelayIdentity(
       }
     />
   )
-}
-
-function selectRegistryRelayStatus(
-  connection: RelayConnection,
-  relayId: string
-): "connected" | "unreachable" | undefined {
-  if (!("relays" in connection)) return undefined
-  const status = connection.relays?.find(
-    (relay) => relay.id === relayId
-  )?.status
-  return status === "connected" || status === "unreachable" ? status : undefined
 }
 
 function LiveFleetRelayIdentity(

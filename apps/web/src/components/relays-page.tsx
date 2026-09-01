@@ -80,6 +80,11 @@ import {
 } from "@/components/data-table-workspace"
 import { IdentityName } from "@/components/identity-name"
 import { InstanceName } from "@/components/instance-name"
+import {
+  relayStatusPresentation as relayIdentityStatusPresentation,
+  type InstanceStatusPresentation,
+  type RelayIdentityStatus,
+} from "@/components/instance-name-presentation"
 import { UserAvatar } from "@/components/user-avatar"
 import { useInfraUpdateDialogStore } from "@/components/infra-update-dialog-provider"
 import { relaysCollectionOptions } from "@/lib/collections/relays"
@@ -104,6 +109,7 @@ import {
 import type { PublicKilnRelease } from "@/effect/github-releases"
 import { useKilnGitRepository } from "@/lib/git-repository"
 import type { PersistedRelay } from "@/lib/relay-registry"
+import { relayConnectionReachability } from "@/lib/relay-selectors"
 import {
   createDataTableColumnHelper,
   dataTableColumnMeta,
@@ -176,18 +182,19 @@ type RelayRegistryTableItem = Pick<
 >
 
 type RelayReachability = "connected" | "paused" | "unreachable"
+type RelayDisplayStatus = RelayIdentityStatus
 const noRelayConnectionStates: ReadonlyArray<{
   id: string
   status: RelayReachability
 }> = []
 
 interface RelayTableItem extends RelayRegistryTableItem {
-  relayStatus?: RelayReachability
+  relayStatus: RelayDisplayStatus
 }
 
 const relayTableItemCache = new WeakMap<
   RelayRegistryTableItem,
-  Map<RelayReachability | undefined, RelayTableItem>
+  Map<RelayDisplayStatus, RelayTableItem>
 >()
 
 const relayTableColumnHelper = createDataTableColumnHelper<RelayTableItem>()
@@ -200,13 +207,13 @@ const relayTableSearchFields = [
   (relay: RelayTableItem) => relay.nodeVersion,
   (relay: RelayTableItem) => relay.ownerEmail,
   (relay: RelayTableItem) => relay.ownerName,
-  (relay: RelayTableItem) => relayStatusPresentation(relay).label,
+  (relay: RelayTableItem) => relayStatusView(relay).label,
 ] as const
 
 interface RelayStatusView {
   enabled: boolean
   lastError: string | null
-  relayStatus?: RelayReachability
+  relayStatus: RelayDisplayStatus
 }
 
 type RelayStatusInput = RelayStatusView
@@ -228,9 +235,11 @@ interface RelayEditView {
 function selectRelayConnectionStates(
   connection: RelayConnection
 ): ReadonlyArray<{ id: string; status: RelayReachability }> {
-  return "relays" in connection
-    ? (connection.relays ?? noRelayConnectionStates)
-    : noRelayConnectionStates
+  const relays = connection.relays ?? noRelayConnectionStates
+  if (relays.length > 0) return relays
+  if (!connection.relay) return noRelayConnectionStates
+  const status = relayConnectionReachability(connection, connection.relay.id)
+  return status ? [{ id: connection.relay.id, status }] : noRelayConnectionStates
 }
 
 function selectOwnerProfileIds(
@@ -245,25 +254,35 @@ function selectOwnerProfileIds(
 }
 
 function useMediaQuery(query: string): boolean {
-  const [matches, setMatches] = React.useState(false)
-
-  React.useEffect(() => {
+  const subscribe = React.useCallback((onStoreChange: () => void) => {
     const mediaQuery = window.matchMedia(query)
-    const update = () => setMatches(mediaQuery.matches)
-    mediaQuery.addEventListener("change", update)
-    update()
-    return () => mediaQuery.removeEventListener("change", update)
+    mediaQuery.addEventListener("change", onStoreChange)
+    return () => mediaQuery.removeEventListener("change", onStoreChange)
   }, [query])
+  const getSnapshot = React.useCallback(
+    () => window.matchMedia(query).matches,
+    [query]
+  )
+  return React.useSyncExternalStore(
+    subscribe,
+    getSnapshot,
+    mediaQueryServerSnapshot
+  )
+}
 
-  return matches
+function mediaQueryServerSnapshot(): boolean {
+  return false
 }
 
 function projectRelayTableItems(
   relays: ReadonlyArray<RelayRegistryTableItem> | undefined,
-  relayStatuses: ReadonlyMap<string, RelayReachability>
+  relayStatuses: ReadonlyMap<string, RelayReachability>,
+  missingStatus: "checking" | "unknown"
 ): Array<RelayTableItem> | undefined {
   return relays?.map((relay) => {
-    const relayStatus = relay.enabled ? relayStatuses.get(relay.id) : "paused"
+    const relayStatus = relay.enabled
+      ? (relayStatuses.get(relay.id) ?? missingStatus)
+      : "paused"
     let statusCache = relayTableItemCache.get(relay)
     if (!statusCache) {
       statusCache = new Map()
@@ -486,11 +505,12 @@ const FilteredRelayTable = React.memo(function FilteredRelayTable({
           useTls: relay.useTls,
         })),
   })
-  const { data: connectionStates = noRelayConnectionStates } = useQuery({
+  const connectionQuery = useQuery({
     ...relayConnectionQueryOptions(queryClient),
-    notifyOnChangeProps: ["data"],
+    notifyOnChangeProps: ["data", "isPending"],
     select: selectRelayConnectionStates,
   })
+  const connectionStates = connectionQuery.data ?? noRelayConnectionStates
   const showOwnerAvatars = useMediaQuery("(min-width: 1280px)")
   const { data: ownerProfileIds = noOwnerProfileIds } = useQuery({
     ...relayOwnerMinecraftProfilesQueryOptions(),
@@ -502,8 +522,13 @@ const FilteredRelayTable = React.memo(function FilteredRelayTable({
     [connectionStates]
   )
   const tableItems = React.useMemo(
-    () => projectRelayTableItems(result.data, relayStatuses),
-    [relayStatuses, result.data]
+    () =>
+      projectRelayTableItems(
+        result.data,
+        relayStatuses,
+        connectionQuery.isPending ? "checking" : "unknown"
+      ),
+    [connectionQuery.isPending, relayStatuses, result.data]
   )
   const retry = React.useCallback(() => {
     forkPromise(() =>
@@ -643,7 +668,7 @@ function RelayTable({
   const definition = React.useMemo(() => {
     const columns = relayTableColumnHelper.columns([
       relayTableColumnHelper.accessor(
-        (relay) => relayStatusPresentation(relay).label,
+        (relay) => relayStatusView(relay).label,
         {
           id: "status",
           header: () => <span className="sr-only sm:not-sr-only">Status</span>,
@@ -678,10 +703,7 @@ function RelayTable({
                 id: relay.id,
                 kind: "relay",
                 relayId: relay.id,
-                relayStatus:
-                  relay.relayStatus === "paused"
-                    ? undefined
-                    : relay.relayStatus,
+                relayStatus: relay.relayStatus,
                 source: "registry",
               }}
               meta={
@@ -1171,7 +1193,7 @@ const RelayStatus = React.memo(function RelayStatus({
 }: {
   relay: RelayStatusInput
 }) {
-  const status = relayStatusPresentation(relay)
+  const status = relayStatusView(relay)
   const indicator = (
     <span
       aria-label={status.label}
@@ -1198,30 +1220,23 @@ const RelayStatus = React.memo(function RelayStatus({
   )
 })
 
-function relayStatusPresentation(relay: RelayStatusInput) {
-  return !relay.enabled
-    ? {
-        label: "Paused",
-        dot: "bg-sky-400",
-        text: "text-sky-300",
-      }
-    : relay.relayStatus === "unreachable"
-      ? {
-          label: "Unreachable",
-          dot: "bg-destructive",
-          text: "text-destructive",
-        }
-      : relay.relayStatus === "connected"
-        ? {
-            label: "Online",
-            dot: "bg-emerald-400",
-            text: "text-emerald-300",
-          }
-        : {
-            label: "Offline",
-            dot: "bg-muted-foreground/50",
-            text: "text-muted-foreground",
-          }
+function relayStatusView(relay: RelayStatusInput) {
+  const status = relayIdentityStatusPresentation(relay)
+  return { ...status, ...relayStatusToneClasses[status.tone] }
+}
+
+const relayStatusToneClasses: Record<
+  InstanceStatusPresentation["tone"],
+  { dot: string; text: string }
+> = {
+  danger: { dot: "bg-destructive", text: "text-destructive" },
+  info: { dot: "bg-sky-400", text: "text-sky-300" },
+  neutral: {
+    dot: "bg-muted-foreground/50",
+    text: "text-muted-foreground",
+  },
+  success: { dot: "bg-emerald-400", text: "text-emerald-300" },
+  warning: { dot: "bg-amber-400", text: "text-amber-300" },
 }
 
 function EmptyRelayTable({

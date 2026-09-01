@@ -200,10 +200,22 @@ export function selectRelayConfigured(connection: RelayConnection): boolean {
 export function selectRelayConnected(relayId: string) {
   return (connection: RelayConnection): boolean =>
     connection.status === "connected" &&
-    (connection.relays.some(
-      (relay) => relay.id === relayId && relay.status === "connected"
-    ) ||
-      (connection.relays.length === 0 && connection.relay?.id === relayId))
+    relayConnectionReachability(connection, relayId) === "connected"
+}
+
+export function relayConnectionReachability(
+  connection: RelayConnection,
+  relayId: string
+): "connected" | "unreachable" | undefined {
+  const relays = connection.relays ?? []
+  const status = relays.find((relay) => relay.id === relayId)?.status
+  if (status === "connected" || status === "unreachable") return status
+  if (relays.length > 0 || connection.relay?.id !== relayId) {
+    return undefined
+  }
+  return connection.status === "connected" || connection.status === "unreachable"
+    ? connection.status
+    : undefined
 }
 
 export function selectInstanceWorkspaceInstance(identifier: string) {
