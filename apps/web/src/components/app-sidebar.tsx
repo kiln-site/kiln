@@ -54,6 +54,7 @@ import {
   RouteCommandMenuProvider,
   RouteCommandMenuTrigger,
 } from "@/components/route-command-menu"
+import { IdentityName } from "@/components/identity-name"
 import { InstanceName } from "@/components/instance-name"
 import { CurrentUserAvatar } from "@/components/user-avatar"
 import { authClient } from "@/lib/auth-client"
@@ -1144,10 +1145,13 @@ function ExpandedAccountRow({
         preload="intent"
         className="flex min-w-0 flex-1 items-center gap-2 text-sidebar-foreground transition-colors hover:text-sidebar-accent-foreground focus-visible:ring-2 focus-visible:ring-sidebar-ring/45 focus-visible:outline-none"
       >
-        <CurrentUserAvatar name={user.name} />
-        <span className="min-w-0 flex-1 truncate text-xs font-semibold">
-          {user.name}
-        </span>
+        <IdentityName
+          className="flex-1 gap-2"
+          icon={<CurrentUserAvatar name={user.name} />}
+          iconClassName="size-6 rounded-none border-0 bg-transparent"
+          name={user.name}
+          nameClassName="text-inherit"
+        />
       </Link>
       <SettingsIconButton tooltipHidden={isMobile} />
       <SignOutButton
