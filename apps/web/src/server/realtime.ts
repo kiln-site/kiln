@@ -63,7 +63,11 @@ export async function openAuthorizedRealtimeStream(input: {
   let validatingSession: Promise<void> | null = null
   let queuedEvents = 0
   let pendingRecovery:
-    | (RealtimeCursor & { clear: boolean; hearth: boolean })
+    | (RealtimeCursor & {
+        authorization: boolean
+        clear: boolean
+        hearth: boolean
+      })
     | null = null
   let processing = Promise.resolve()
   let unsubscribe: () => void = () => undefined
@@ -90,6 +94,7 @@ export async function openAuthorizedRealtimeStream(input: {
           clear: recovery.clear,
           epoch: recovery.epoch,
           hearth: recovery.hearth,
+          ...(recovery.authorization ? { authorization: true } : {}),
           sequence: recovery.sequence,
           type: "reset",
         }),
@@ -102,17 +107,19 @@ export async function openAuthorizedRealtimeStream(input: {
   const enqueueReset = (
     cursor: RealtimeCursor = allocateRealtimeCursor(),
     clear = false,
-    hearth = false
+    hearth = false,
+    authorization = false
   ) => {
     pendingRecovery =
       pendingRecovery?.epoch === cursor.epoch
         ? {
             clear: pendingRecovery.clear || clear,
+            authorization: pendingRecovery.authorization || authorization,
             epoch: cursor.epoch,
             hearth: pendingRecovery.hearth || hearth,
             sequence: Math.max(pendingRecovery.sequence, cursor.sequence),
           }
-        : { ...cursor, clear, hearth }
+        : { ...cursor, authorization, clear, hearth }
     flushRecovery()
   }
   const enqueue = (event: RealtimeClientEvent) => {
@@ -120,7 +127,8 @@ export async function openAuthorizedRealtimeStream(input: {
       enqueueReset(
         event,
         pendingRecovery.clear,
-        pendingRecovery.hearth || realtimeEventRefreshesHearth(event)
+        pendingRecovery.hearth || realtimeEventRefreshesHearth(event),
+        pendingRecovery.authorization
       )
       return
     }
@@ -140,7 +148,7 @@ export async function openAuthorizedRealtimeStream(input: {
       // the database is unavailable, closing the stream prevents later Relay
       // events from being projected through the stale policy; EventSource will
       // reconnect and rebuild it from scratch.
-      enqueueReset(event, true, true)
+      enqueueReset(event, false, true, true)
       const refreshedPolicy = await recoverPromise(
         () => loadRealtimeAccessPolicy(input.user),
         (cause) => {

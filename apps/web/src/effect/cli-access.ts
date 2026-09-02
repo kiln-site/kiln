@@ -14,6 +14,10 @@ import { Database } from "@/effect/database"
 import { CliAccessError } from "@/effect/errors"
 import type { AuthenticatedUser } from "@/lib/auth-session"
 import { databaseTable } from "@/lib/database-config"
+import {
+  advanceAuthorizationRevisionEffect,
+  enabledRelayTargetsEffect,
+} from "@/lib/authorization-revision"
 import { betterAuthSecrets, cliDefaultAccessDays } from "@/lib/environment"
 import type { PlatformRole } from "@/lib/permissions"
 
@@ -535,15 +539,36 @@ export const revokeCliCredentialEffect = Effect.fn("cli.credentials.revoke")(
                 JSON.stringify({ credentialId: input.credentialId }),
               ]
             )
+            const targets = yield* enabledRelayTargetsEffect(transaction, {
+              kind: "login_session",
+              loginSessionId: `cli:${input.credentialId}`,
+            })
+            const change = yield* advanceAuthorizationRevisionEffect(
+              transaction,
+              {
+                targets,
+                userId: input.user.id,
+              }
+            )
+            return { affectedRows: updated.affectedRows, change }
           }
-          return updated.affectedRows
+          return { affectedRows: updated.affectedRows, change: null }
         })
     )
-    if (result !== 1) {
+    if (result.affectedRows !== 1) {
       return yield* CliAccessError.make({
         code: "not_found",
         message: "The CLI credential was not found or is already unlinked.",
         retryable: false,
+      })
+    }
+    if (result.change) {
+      yield* Effect.promise(async () => {
+        const { wakeAuthorizationDelivery } =
+          await import("@/lib/authorization-delivery")
+        for (const relayId of result.change.relayIds) {
+          wakeAuthorizationDelivery(relayId)
+        }
       })
     }
     return { revoked: true as const }

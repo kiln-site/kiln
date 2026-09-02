@@ -15,7 +15,10 @@ const fakes = vi.hoisted(() => ({
   relayBrowserMetadata: vi.fn(),
   loadRelay: vi.fn(),
   relayRpc: vi.fn(),
+  refreshUser: vi.fn(),
   requirePermissions: vi.fn(),
+  revisions: vi.fn(),
+  features: new Set<string>(),
   span: { setAttribute: vi.fn() },
 }))
 
@@ -25,16 +28,23 @@ vi.mock("@sentry/tanstackstart-react", () => ({
 }))
 
 vi.mock("@/lib/access-control", () => ({
+  refreshRelayAuthorizationUserEffect: fakes.refreshUser,
   requireRelayPermissionsEffect: fakes.requirePermissions,
 }))
 
 vi.mock("@/lib/environment", () => ({
+  browserCapabilityMinimumVersion: () => 1,
   kilnPublicUrl: () => new URL("https://hearth.example.com"),
 }))
 
 vi.mock("@/lib/relay-connection", () => ({
   relayConnectionBrowserMetadata: fakes.relayBrowserMetadata,
+  relayConnectionFeatures: () => fakes.features,
   relayRpc: fakes.relayRpc,
+}))
+
+vi.mock("@/lib/authorization-revision", () => ({
+  readAuthorizationRevisionEffect: fakes.revisions,
 }))
 
 vi.mock("@/lib/relay-registry", () => ({
@@ -49,6 +59,7 @@ import type {
   RelayIssuanceMaterial,
 } from "@/lib/relay-registry"
 import {
+  issueBrowserCapabilitiesForRequest,
   issueConsoleCapabilityForRequest,
   prepareConsoleCapabilityForUser,
 } from "@/server/relay-capability-service"
@@ -72,6 +83,7 @@ const relay = {
   enabled: true,
   hostname: "relay.example.com",
   id: "relay-one",
+  issuerGeneration: 1,
   lastConnectedAt: null,
   lastError: null,
   managedEmberCount: 1,
@@ -124,12 +136,17 @@ beforeEach(() => {
   vi.clearAllMocks()
   fakes.loadRelay.mockReturnValue(Effect.succeed(material))
   fakes.requirePermissions.mockReturnValue(Effect.void)
+  fakes.refreshUser.mockImplementation(({ user: current }) =>
+    Effect.succeed({ revision: 7, user: current })
+  )
+  fakes.revisions.mockReturnValue(Effect.succeed(7))
   fakes.decryptCredentials.mockReturnValue(Effect.succeed(credentials))
   fakes.relayBrowserMetadata.mockReturnValue(null)
   fakes.relayRpc.mockResolvedValue({
     browserOrigin: "https://relay-live.example.com",
     mode: "none",
   })
+  fakes.features.clear()
 })
 
 describe("Relay capability issuance orchestration", () => {
@@ -172,7 +189,7 @@ describe("Relay capability issuance orchestration", () => {
     expect(fakes.relayRpc).not.toHaveBeenCalled()
   })
 
-  it("authorizes once before parallel signer and live-route work", async () => {
+  it("authorizes before preparation and again immediately before signing", async () => {
     let authorized = false
     fakes.requirePermissions.mockImplementation(() =>
       Effect.sync(() => {
@@ -201,7 +218,7 @@ describe("Relay capability issuance orchestration", () => {
       write: true,
     })
 
-    expect(fakes.requirePermissions).toHaveBeenCalledOnce()
+    expect(fakes.requirePermissions).toHaveBeenCalledTimes(2)
     expect(fakes.requirePermissions).toHaveBeenCalledWith({
       instanceId: "instance-one",
       permissions: ["instance.console.read", "instance.console.write"],
@@ -244,6 +261,7 @@ describe("Relay capability issuance orchestration", () => {
 
   it("does not resolve browser metadata for the Hearth proxy", async () => {
     const prepared = await prepareConsoleCapabilityForUser({
+      credentialId: "credential-one",
       instanceId: "instance-one",
       publicKeyJwk,
       relayId: "relay-one",
@@ -262,6 +280,66 @@ describe("Relay capability issuance orchestration", () => {
       browserOrigin: "https://relay.example.com",
       proxyMode: "none",
     })
+  })
+
+  it("issues a session-bound short mutation capability only after v2 negotiation", async () => {
+    fakes.features.add("browser-capability-v2")
+    fakes.features.add("browser-lease-renewal-v1")
+
+    const issued = await issueBrowserCapabilitiesForRequest({
+      authenticate: () => Promise.resolve({ sessionId: "session-one", user }),
+      instanceId: "instance-one",
+      publicKeyJwk,
+      relayId: "relay-one",
+      requests: [{ kind: "console", optInV2: true, write: true }],
+    })
+
+    expect(issued.capabilities[0]).toMatchObject({
+      kind: "console",
+      version: 2,
+    })
+    const payload = decodeCapabilityPayload(issued.capabilities[0]!.capability)
+    expect(payload).toMatchObject({
+      authorizationRevision: 7,
+      issuerGeneration: 1,
+      loginSessionId: "session-one",
+      operation: "console",
+      version: 2,
+    })
+    expect(Number(payload.expiresAt) - Number(payload.issuedAt)).toBe(30_000)
+  })
+
+  it("re-authorizes when the revision changes during capability issuance", async () => {
+    fakes.features.add("browser-capability-v2")
+    fakes.features.add("browser-lease-renewal-v1")
+    fakes.refreshUser
+      .mockImplementationOnce(({ user: current }) =>
+        Effect.succeed({ revision: 7, user: current })
+      )
+      .mockImplementationOnce(({ user: current }) =>
+        Effect.succeed({ revision: 8, user: current })
+      )
+      .mockImplementationOnce(({ user: current }) =>
+        Effect.succeed({ revision: 8, user: current })
+      )
+    fakes.revisions
+      .mockReturnValueOnce(Effect.succeed(8))
+      .mockReturnValueOnce(Effect.succeed(8))
+      .mockReturnValueOnce(Effect.succeed(8))
+
+    const issued = await issueBrowserCapabilitiesForRequest({
+      authenticate: () => Promise.resolve({ sessionId: "session-one", user }),
+      instanceId: "instance-one",
+      publicKeyJwk,
+      relayId: "relay-one",
+      requests: [{ kind: "console", optInV2: true, write: true }],
+    })
+
+    expect(fakes.refreshUser).toHaveBeenCalledTimes(3)
+    expect(fakes.requirePermissions).toHaveBeenCalledTimes(3)
+    expect(
+      decodeCapabilityPayload(issued.capabilities[0]!.capability)
+    ).toMatchObject({ authorizationRevision: 8 })
   })
 })
 

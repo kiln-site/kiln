@@ -6,7 +6,12 @@ const relayCapability = vi.hoisted(() => ({
 }))
 
 vi.mock("@/server/relay-capability", () => ({
-  issueConsoleCapability: relayCapability.issue,
+  issueBrowserCapabilities: (...arguments_: Array<unknown>) =>
+    relayCapability
+      .issue(...arguments_)
+      .then((capability: ConsoleCapability) => ({
+        capabilities: [{ ...capability, kind: "console", version: 1 }],
+      })),
 }))
 
 import {
@@ -422,6 +427,40 @@ describe("Relay console connection setup", () => {
 })
 
 describe("Relay console socket inbox", () => {
+  it("routes operation replies outside the bounded console queue", async () => {
+    const socket = new FakeWebSocket()
+    const result = await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const inbox = yield* createSocketInbox(socket as unknown as WebSocket)
+          vi.stubGlobal("crypto", {
+            ...globalThis.crypto,
+            randomUUID: () => "request-one",
+          })
+          const request = inbox.request(
+            socket as unknown as WebSocket,
+            "instance-one",
+            "console.complete",
+            { cursor: 0, input: "" }
+          )
+          socket.dispatchEvent(
+            new MessageEvent("message", {
+              data: JSON.stringify({
+                payload: { suggestions: [] },
+                requestId: "request-one",
+                type: "operation.result",
+              }),
+            })
+          )
+          const payload = yield* Effect.promise(() => request)
+          return { payload, queued: Queue.sizeUnsafe(inbox.messages) }
+        })
+      )
+    )
+
+    expect(result).toEqual({ payload: { suggestions: [] }, queued: 0 })
+  })
+
   it("retains a terminal error after queued messages are consumed", async () => {
     const socket = new FakeWebSocket()
     const result = await Effect.runPromise(
@@ -438,8 +477,8 @@ describe("Relay console socket inbox", () => {
           Object.assign(close, { code: 1006, reason: "Relay disconnected" })
           socket.dispatchEvent(close)
 
-          const message = yield* Queue.take(inbox.messages)
-          const terminal = yield* Queue.take(inbox.messages).pipe(
+          const message = yield* inbox.take
+          const terminal = yield* inbox.take.pipe(
             Effect.match({
               onFailure: (cause) => cause,
               onSuccess: () => new Error("Expected the inbox to fail"),

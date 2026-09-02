@@ -4,7 +4,7 @@ import { createHmac, randomBytes, randomUUID } from "node:crypto"
 import { mkdir } from "node:fs/promises"
 import { hostname } from "node:os"
 import * as Sentry from "@sentry/node"
-import { Effect, Semaphore } from "effect"
+import { Effect, Schema, Semaphore } from "effect"
 
 import {
   backupTaskIdSchema,
@@ -49,6 +49,8 @@ import {
   relayRotateDatabaseCredentialsSchema,
   relayUpdateInstanceStartupSchema,
   relayBootstrapDiscoveryTranscript,
+  RelayBrowserAuthorizationReviseSchema,
+  relayBrowserAuthorizationReviseMaxItems,
   relayScheduleProjectionSchema,
 } from "@workspace/contracts"
 import type {
@@ -598,6 +600,7 @@ const controlSocket = attachControlSocket({
     snapshotHub.subscribe(({ snapshot }) => listener(snapshot), false),
 })
 const browserSocket = attachBrowserSocket({
+  config,
   docker,
   filesystem,
   identity: relayIdentity,
@@ -1218,6 +1221,49 @@ async function executeControlRequest(
         scheduleClientRevocation(clientId)
       }
       return { clientId, revoked }
+    }
+    case "browser.authorization.revise": {
+      const revision = Schema.decodeUnknownSync(
+        RelayBrowserAuthorizationReviseSchema
+      )(request.payload)
+      if (
+        revision.items.length > relayBrowserAuthorizationReviseMaxItems ||
+        (revision.items.length === 0 &&
+          revision.minimumIssuerGeneration === undefined) ||
+        (revision.minimumIssuerGeneration !== undefined &&
+          (!Number.isSafeInteger(revision.minimumIssuerGeneration) ||
+            revision.minimumIssuerGeneration < 0)) ||
+        revision.items.some(
+          (item) =>
+            !Number.isSafeInteger(item.minimumRevision) ||
+            item.minimumRevision < 0 ||
+            item.subject.length === 0 ||
+            item.subject.length > 240 ||
+            (item.scope.kind === "instance" &&
+              (item.scope.instanceId.length === 0 ||
+                item.scope.instanceId.length > 240)) ||
+            (item.scope.kind === "login_session" &&
+              (item.scope.loginSessionId.length === 0 ||
+                item.scope.loginSessionId.length > 240))
+        )
+      ) {
+        throw new Error("Browser authorization revision is invalid")
+      }
+      const result = await runRelayEffect(
+        "relay.browser.authorization.revise",
+        startup.state.reviseBrowserAuthorization(
+          client.id,
+          revision.items,
+          revision.minimumIssuerGeneration,
+          Date.now()
+        )
+      )
+      browserSocket.reviseAuthorization(
+        client.id,
+        result.items,
+        result.issuerGeneration
+      )
+      return result
     }
     case "brick.catalog":
       return bricks.catalog()

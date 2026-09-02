@@ -6,7 +6,9 @@ import { Effect } from "effect"
 
 import { hearthStreamHandler } from "./app-server-handler"
 import { disposeAppRuntime } from "./effect/runtime"
+import { forkPromise } from "./effect/promise"
 import { scheduleBackupCopyProcessing } from "./lib/backup-copy"
+import { wakePendingAuthorizationDelivery } from "./lib/authorization-delivery"
 import { scheduleInstancePostProvisionProcessing } from "./lib/instance-post-provision"
 import { scheduleTailscaleCleanupProcessing } from "./lib/tailscale-cleanup.server"
 import {
@@ -53,6 +55,11 @@ await Effect.runPromise(
 scheduleBackupCopyProcessing()
 scheduleInstancePostProvisionProcessing()
 scheduleTailscaleCleanupProcessing()
+forkPromise(wakePendingAuthorizationDelivery, (cause) => {
+  Sentry.captureException(cause, {
+    tags: { "kiln.operation": "authorization.delivery.recover" },
+  })
+})
 
 const handleStartRequest = createStartHandler(hearthStreamHandler)
 

@@ -14,7 +14,7 @@ import {
 } from "@/lib/query-options"
 import {
   selectInstanceRelayConnected,
-  selectInstanceRuntime,
+  selectInstanceConsoleRuntime,
   selectRelayBrowserOrigin,
   selectRelayConsoleTransport,
 } from "@/lib/relay-selectors"
@@ -25,11 +25,13 @@ const emptyTailscaleStacks: Array<TailscaleStackOverview> = []
 
 export function ConsoleStreamController({
   instanceId,
+  canWrite,
   loadTiming,
   relayId,
   streamStore,
 }: {
   instanceId: string
+  canWrite: boolean
   loadTiming?: ConsoleLoadTiming
   relayId: string
   streamStore: ConsoleStreamStore
@@ -38,7 +40,7 @@ export function ConsoleStreamController({
   const browserOrigin = useRelayBrowserOrigin(relayId)
   const consoleTransport = useRelayConsoleTransport(relayId)
   const selectRuntime = React.useMemo(
-    () => selectInstanceRuntime(instanceId, relayId),
+    () => selectInstanceConsoleRuntime(instanceId, relayId),
     [instanceId, relayId]
   )
   const { data: runtime } = useQuery({
@@ -52,7 +54,8 @@ export function ConsoleStreamController({
     browserOrigin,
     consoleTransport,
     runtime,
-    loadTiming
+    loadTiming,
+    canWrite
   )
   const effectiveSnapshot = React.useMemo(
     () =>
@@ -110,7 +113,7 @@ function TailscaleConsoleStreamSource({
   streamStore: ConsoleAggregateStreamStore
 }) {
   const selectRuntime = React.useMemo(
-    () => selectInstanceRuntime(instanceId, relayId),
+    () => selectInstanceConsoleRuntime(instanceId, relayId),
     [instanceId, relayId]
   )
   const selectConnected = React.useMemo(

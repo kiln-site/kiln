@@ -3,6 +3,10 @@ import type { RowDataPacket } from "mysql2/promise"
 
 import { Database } from "@/effect/database"
 import { databaseTable } from "@/lib/database-config"
+import {
+  advanceAuthorizationRevisionEffect,
+  enabledRelayTargetsEffect,
+} from "@/lib/authorization-revision"
 
 interface AccountSessionRow extends RowDataPacket {
   created_at: Date
@@ -61,12 +65,23 @@ export const listAccountSessionsEffect = Effect.fn("auth.sessions.list")(
 export const revokeAccountSessionEffect = Effect.fn("auth.sessions.revoke")(
   function* (userId: string, sessionId: string) {
     const database = yield* Database
-    yield* database.execute(
-      "auth.sessions.revoke",
-      `DELETE FROM ${databaseTable("session")}
-        WHERE id = ?
-          AND userId = ?`,
-      [sessionId, userId]
+    return yield* database.transaction("auth.sessions.revoke", (transaction) =>
+      Effect.gen(function* () {
+        const result = yield* transaction.execute(
+          `DELETE FROM ${databaseTable("session")}
+              WHERE id = ? AND userId = ?`,
+          [sessionId, userId]
+        )
+        if (result.affectedRows === 0) return null
+        const targets = yield* enabledRelayTargetsEffect(transaction, {
+          kind: "login_session",
+          loginSessionId: sessionId,
+        })
+        return yield* advanceAuthorizationRevisionEffect(transaction, {
+          targets,
+          userId,
+        })
+      })
     )
   }
 )

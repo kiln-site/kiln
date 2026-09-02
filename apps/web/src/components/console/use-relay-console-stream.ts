@@ -33,7 +33,7 @@ import {
 } from "@/lib/relay-console-stream"
 import type { ConsoleLoadTiming } from "@/lib/console-performance"
 import { queryKeys } from "@/lib/query-options"
-import type { InstanceRuntime } from "@/lib/relay-selectors"
+import type { ConsoleInstanceRuntime } from "@/lib/relay-selectors"
 
 export function useRelayConsoleStream(
   relayId: string,
@@ -41,8 +41,9 @@ export function useRelayConsoleStream(
   relayConnected: boolean,
   browserOrigin: string | null,
   consoleTransport: "direct" | "hearth" | null,
-  runtime: InstanceRuntime | null | undefined,
-  loadTiming?: ConsoleLoadTiming
+  runtime: ConsoleInstanceRuntime | null | undefined,
+  loadTiming?: ConsoleLoadTiming,
+  canWrite = false
 ) {
   const queryClient = useQueryClient()
   const hasEverBeenLiveRef = React.useRef(false)
@@ -380,7 +381,8 @@ export function useRelayConsoleStream(
             instanceId,
             browserOrigin,
             consoleTransport,
-            loadTiming
+            loadTiming,
+            canWrite
           ).pipe(
             Stream.runForEach((event) =>
               Effect.sync(() => {
@@ -538,6 +540,7 @@ export function useRelayConsoleStream(
     }
   }, [
     browserOrigin,
+    canWrite,
     consoleTransport,
     instanceId,
     loadTiming,
@@ -551,7 +554,7 @@ export function useRelayConsoleStream(
 
 function consoleMatchesRuntime(
   consoleData: RelayConsole | null,
-  runtime: InstanceRuntime | null | undefined
+  runtime: ConsoleInstanceRuntime | null | undefined
 ): boolean {
   if (!consoleData) return false
   const expectedStartedAt = lifecycleEventTime(runtime?.lifecycle, "started")

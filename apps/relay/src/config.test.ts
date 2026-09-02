@@ -46,11 +46,80 @@ describe("loadConfig", () => {
     expect(config.sftpDevAuthentication).toBe(true)
     expect(config.mclogsApiUrl).toBe("https://api.mclo.gs/1/log")
     expect(config.backupTimeoutMs).toBe(60 * 60_000)
+    expect(config.browserLimits).toEqual({
+      fileReplayEntries: 65_536,
+      outboxBytes: 2 * 1024 * 1024,
+      outboxMessages: 256,
+      pendingFileAuthentications: 16,
+      pendingHandshakes: 64,
+      pendingHandshakesPerIp: 16,
+      sessions: 512,
+      sessionsPerInstance: 256,
+      sessionsPerUser: 64,
+      sessionsPerUserInstance: 16,
+      sublimitsEnforced: true,
+    })
     expect(config.runtimeRecovery).toEqual({
       initialDelayMs: 5_000,
       maxRetries: 2,
       stabilityMs: 300_000,
     })
+  })
+
+  it("validates the browser session limit hierarchy", () => {
+    expect(() =>
+      loadConfig({
+        KILN_RELAY_BROWSER_SESSIONS_MAX: "8",
+        KILN_RELAY_BROWSER_SESSIONS_PER_INSTANCE_MAX: "9",
+        NODE_ENV: "development",
+      })
+    ).toThrow(
+      "KILN_RELAY_BROWSER_SESSIONS_PER_INSTANCE_MAX must be an integer from 1 to 8"
+    )
+    expect(() =>
+      loadConfig({
+        KILN_RELAY_BROWSER_PENDING_HANDSHAKES_MAX: "4",
+        KILN_RELAY_BROWSER_PENDING_HANDSHAKES_PER_IP_MAX: "5",
+        NODE_ENV: "development",
+      })
+    ).toThrow(
+      "KILN_RELAY_BROWSER_PENDING_HANDSHAKES_PER_IP_MAX must be an integer from 1 to 4"
+    )
+    const proxy = loadConfig({
+      KILN_RELAY_BROWSER_SUBLIMITS_ENFORCE: "true",
+      KILN_RELAY_PROXY: "traefik",
+      NODE_ENV: "development",
+    })
+    // Identity sublimits can be enforced behind a proxy, but Relay does not
+    // trust forwarded addresses for the pending per-IP sublimit.
+    expect(proxy.browserLimits.sublimitsEnforced).toBe(true)
+    expect(proxy.proxyMode).toBe("traefik")
+  })
+
+  it("rejects invalid browser limit environment values", () => {
+    const integerLimits = [
+      "KILN_RELAY_BROWSER_FILE_REPLAYS_MAX",
+      "KILN_RELAY_BROWSER_OUTBOX_BYTES_MAX",
+      "KILN_RELAY_BROWSER_OUTBOX_MESSAGES_MAX",
+      "KILN_RELAY_BROWSER_PENDING_FILE_AUTH_MAX",
+      "KILN_RELAY_BROWSER_PENDING_HANDSHAKES_MAX",
+      "KILN_RELAY_BROWSER_PENDING_HANDSHAKES_PER_IP_MAX",
+      "KILN_RELAY_BROWSER_SESSIONS_MAX",
+      "KILN_RELAY_BROWSER_SESSIONS_PER_INSTANCE_MAX",
+      "KILN_RELAY_BROWSER_SESSIONS_PER_USER_MAX",
+      "KILN_RELAY_BROWSER_SESSIONS_PER_USER_INSTANCE_MAX",
+    ] as const
+    for (const name of integerLimits) {
+      expect(() =>
+        loadConfig({ [name]: "not-an-integer", NODE_ENV: "development" })
+      ).toThrow(name)
+    }
+    expect(() =>
+      loadConfig({
+        KILN_RELAY_BROWSER_SUBLIMITS_ENFORCE: "sometimes",
+        NODE_ENV: "development",
+      })
+    ).toThrow("Expected true or false")
   })
 
   it("configures the backup timeout in minutes", () => {
