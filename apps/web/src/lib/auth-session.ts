@@ -20,7 +20,7 @@ export interface AuthenticatedUser {
 }
 
 export interface AuthenticatedRealtimeIdentity {
-  sessionId: string | null
+  sessionId: string
   user: AuthenticatedUser
 }
 
@@ -43,7 +43,7 @@ export async function getAuthenticatedRealtimeIdentityFromHeaders(
 ): Promise<AuthenticatedRealtimeIdentity | null> {
   if (hasDevelopmentBypass(headers)) {
     return {
-      sessionId: null,
+      sessionId: `development:${developmentBypassUserId}`,
       user: {
         email: "developer@kiln.local",
         emailVerified: true,

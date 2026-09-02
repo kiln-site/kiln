@@ -58,6 +58,19 @@ export interface RelayConfig {
   brickCatalogUrl: string
   bootstrapToken: string | null
   browserOrigin: string
+  browserLimits: {
+    fileReplayEntries: number
+    outboxBytes: number
+    outboxMessages: number
+    pendingFileAuthentications: number
+    pendingHandshakes: number
+    pendingHandshakesPerIp: number
+    sessions: number
+    sessionsPerInstance: number
+    sessionsPerUser: number
+    sessionsPerUserInstance: number
+    sublimitsEnforced: boolean
+  }
   canProvisionInstances: boolean
   coolifyPublicOrigin: string | null
   composeFile: string
@@ -184,6 +197,7 @@ export function loadConfig(
         : proxyMode === "coolify"
           ? (coolifyPublicOrigin ?? `https://${formatUrlHost(advertisedHost)}`)
           : directBrowserOrigin,
+    browserLimits: relayBrowserLimits(environment),
     canProvisionInstances: booleanEnvironment(
       environment.KILN_RELAY_ALLOW_PROVISIONING,
       true
@@ -251,6 +265,90 @@ export function loadConfig(
     tlsMode,
     traefikAcmeEmail: environment.KILN_RELAY_ACME_EMAIL?.trim() || null,
     traefikImage: traefikImage(environment),
+  }
+}
+
+function relayBrowserLimits(environment: NodeJS.ProcessEnv) {
+  const sessions = integerEnvironment(
+    environment,
+    "KILN_RELAY_BROWSER_SESSIONS_MAX",
+    512,
+    1,
+    100_000
+  )
+  const sessionsPerInstance = integerEnvironment(
+    environment,
+    "KILN_RELAY_BROWSER_SESSIONS_PER_INSTANCE_MAX",
+    256,
+    1,
+    sessions
+  )
+  const sessionsPerUser = integerEnvironment(
+    environment,
+    "KILN_RELAY_BROWSER_SESSIONS_PER_USER_MAX",
+    64,
+    1,
+    sessions
+  )
+  const sessionsPerUserInstance = integerEnvironment(
+    environment,
+    "KILN_RELAY_BROWSER_SESSIONS_PER_USER_INSTANCE_MAX",
+    16,
+    1,
+    Math.min(sessionsPerInstance, sessionsPerUser)
+  )
+  const pendingHandshakes = integerEnvironment(
+    environment,
+    "KILN_RELAY_BROWSER_PENDING_HANDSHAKES_MAX",
+    64,
+    1,
+    10_000
+  )
+  return {
+    fileReplayEntries: integerEnvironment(
+      environment,
+      "KILN_RELAY_BROWSER_FILE_REPLAYS_MAX",
+      65_536,
+      1,
+      1_000_000
+    ),
+    outboxBytes: integerEnvironment(
+      environment,
+      "KILN_RELAY_BROWSER_OUTBOX_BYTES_MAX",
+      2 * 1024 * 1024,
+      64 * 1024,
+      64 * 1024 * 1024
+    ),
+    outboxMessages: integerEnvironment(
+      environment,
+      "KILN_RELAY_BROWSER_OUTBOX_MESSAGES_MAX",
+      256,
+      8,
+      16_384
+    ),
+    pendingFileAuthentications: integerEnvironment(
+      environment,
+      "KILN_RELAY_BROWSER_PENDING_FILE_AUTH_MAX",
+      16,
+      1,
+      1_024
+    ),
+    pendingHandshakes,
+    pendingHandshakesPerIp: integerEnvironment(
+      environment,
+      "KILN_RELAY_BROWSER_PENDING_HANDSHAKES_PER_IP_MAX",
+      16,
+      1,
+      pendingHandshakes
+    ),
+    sessions,
+    sessionsPerInstance,
+    sessionsPerUser,
+    sessionsPerUserInstance,
+    sublimitsEnforced: booleanEnvironment(
+      environment.KILN_RELAY_BROWSER_SUBLIMITS_ENFORCE,
+      true
+    ),
   }
 }
 

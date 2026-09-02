@@ -4765,6 +4765,18 @@ export function traefikDynamicConfiguration(
       "        - websecure",
       "      service: kiln-relay",
       "      tls:",
+      "        certResolver: kiln",
+      "    kiln-relay-browser:",
+      `      rule: ${JSON.stringify(
+        `Host(\`${config.advertisedHost}\`) && Path(\`/v1/browser\`)`
+      )}`,
+      "      priority: 100",
+      "      entryPoints:",
+      "        - websecure",
+      "      service: kiln-relay",
+      "      middlewares:",
+      "        - kiln-relay-browser-admission",
+      "      tls:",
       "        certResolver: kiln"
     )
   }
@@ -4808,6 +4820,18 @@ export function traefikDynamicConfiguration(
   }
 
   lines.push("  middlewares:")
+  if (isTraefikHostname(config.advertisedHost)) {
+    lines.push(
+      "    kiln-relay-browser-admission:",
+      "      rateLimit:",
+      "        average: 2",
+      "        period: 1s",
+      `        burst: ${config.browserLimits.pendingHandshakesPerIp}`,
+      "        sourceCriterion:",
+      "          ipStrategy:",
+      "            ipv6Subnet: 64"
+    )
+  }
   for (const route of routes) {
     if (!route.path || !route.stripPrefix) continue
     const name = traefikRouteName(route.id)

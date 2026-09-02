@@ -1,12 +1,16 @@
 import {
-  relayBrowserProofTranscript,
   relayBrowserProtocol,
   relayResourceStreamEventSchema,
 } from "@workspace/contracts"
+import * as Sentry from "@sentry/tanstackstart-react"
 import type { RelayResourceStreamEvent } from "@workspace/contracts"
-import { Effect, Result, Stream } from "effect"
+import { Effect, Exit, Scope, Stream } from "effect"
 
-import { issueResourceCapability } from "@/server/relay-capability"
+import {
+  maintainRelayBrowserLease,
+  openAuthenticatedRelaySocket,
+} from "@/lib/authenticated-relay-socket"
+import { acquireRelayBrowserCredentials } from "@/lib/relay-browser-credentials"
 import { getRelayInstanceResources } from "@/server/relay"
 
 export const RELAY_RESOURCE_POLL_INTERVAL_MS = 2_000
@@ -16,78 +20,131 @@ export async function* openRelayResourceStream(
   instanceId: string,
   signal: AbortSignal
 ): AsyncGenerator<RelayResourceStreamEvent> {
-  const keys = await crypto.subtle.generateKey(
-    { name: "ECDSA", namedCurve: "P-256" },
-    false,
-    ["sign", "verify"]
-  )
-  const publicKeyJwk = await crypto.subtle.exportKey("jwk", keys.publicKey)
-  const capability = await issueResourceCapability({
-    data: {
-      instanceId,
-      publicKeyJwk: {
-        crv: "P-256",
-        kty: "EC",
-        x: requiredCoordinate(publicKeyJwk.x),
-        y: requiredCoordinate(publicKeyJwk.y),
-      },
+  const credentialLease = acquireRelayBrowserCredentials(relayId, instanceId)
+  const eventObserver = resourceEventObserver()
+  yield* managedAsyncIterable(
+    openRelayResourceStreamWithLease(
       relayId,
+      instanceId,
+      signal,
+      credentialLease,
+      eventObserver
+    ),
+    () => {
+      eventObserver.close()
+      credentialLease.release()
+    }
+  )
+}
+
+async function* openRelayResourceStreamWithLease(
+  relayId: string,
+  instanceId: string,
+  signal: AbortSignal,
+  credentialLease: ReturnType<typeof acquireRelayBrowserCredentials>,
+  eventObserver: ReturnType<typeof resourceEventObserver>
+): AsyncGenerator<RelayResourceStreamEvent> {
+  signal.throwIfAborted()
+  const { keys, publicKeyJwk } = await credentialLease.credentials
+  signal.throwIfAborted()
+  // Resource setup intentionally remains serial: a capability is issued
+  // before opening this separate backpressure-isolated socket.
+  const capability = await Sentry.startSpan(
+    {
+      name: "Issue resource capability",
+      op: "http.resources.capability",
+      attributes: { "kiln.channel": "resources" },
     },
-  })
+    () =>
+      credentialLease.issue({
+        kind: "resources",
+        optInV2: true,
+      })
+  )
+  signal.throwIfAborted()
   if (capability.proxyMode === "hearth") {
-    yield* openHearthResourceStream(relayId, instanceId, signal)
+    for await (const event of openHearthResourceStream(
+      relayId,
+      instanceId,
+      signal
+    )) {
+      eventObserver.observe(event, "hearth")
+      yield event
+    }
     return
   }
-  const relayOrigin = new URL(capability.browserOrigin)
-  relayOrigin.protocol = relayOrigin.protocol === "https:" ? "wss:" : "ws:"
-  relayOrigin.pathname = "/v1/browser"
-  const socket = new WebSocket(relayOrigin, relayBrowserProtocol)
-  const inbox = createSocketInbox(socket, signal)
+  const socketScope = await Effect.runPromise(Scope.make())
+  const opened = await Effect.runPromise(
+    Effect.tryPromise({
+      try: () =>
+        Sentry.startSpan(
+          {
+            name: "Open authenticated resource socket",
+            op: "websocket.resources.connect",
+            attributes: { "kiln.channel": "resources" },
+          },
+          () =>
+            Effect.runPromise(
+              Effect.gen(function* () {
+                const opened = yield* openAuthenticatedRelaySocket({
+                  browserOrigin: capability.browserOrigin,
+                  capability: capability.capability,
+                  channel: "resources",
+                  closeReason: "Resource view closed",
+                  credentials: { keys, publicKeyJwk },
+                  instanceId,
+                  protocols: relayBrowserProtocol,
+                  relayId,
+                })
+                if (capability.version === 2) {
+                  const lease = yield* maintainRelayBrowserLease(
+                    opened,
+                    opened.ready,
+                    {
+                      channel: "resources",
+                      credentials: { keys, publicKeyJwk },
+                      issue: () =>
+                        credentialLease.renew({
+                          kind: "resources",
+                          optInV2: true,
+                        }),
+                      relayId,
+                      write: false,
+                    }
+                  )
+                  yield* Effect.acquireRelease(
+                    Effect.sync(() =>
+                      credentialLease.onAuthorizationChange(() => {
+                        void lease.renewNow()
+                      })
+                    ),
+                    (unsubscribe) => Effect.sync(unsubscribe)
+                  )
+                } else {
+                  yield* Effect.acquireRelease(
+                    Effect.sync(() =>
+                      credentialLease.onAuthorizationChange(() => {
+                        opened.socket.close(
+                          4403,
+                          "Browser authorization changed"
+                        )
+                      })
+                    ),
+                    (unsubscribe) => Effect.sync(unsubscribe)
+                  )
+                }
+                return opened
+              }).pipe(Scope.provide(socketScope)),
+              { signal }
+            )
+        ),
+      catch: asError,
+    }).pipe(Effect.tapError(() => Scope.close(socketScope, Exit.void)))
+  )
+  const { inbox, socket } = opened
 
   const direct = managedAsyncIterable(
     (async function* () {
-      const challenge = await inbox.next()
-      if (
-        challenge.type !== "auth.challenge" ||
-        challenge.relayId !== relayId ||
-        typeof challenge.sessionId !== "string" ||
-        typeof challenge.nonce !== "string" ||
-        typeof challenge.expiresAt !== "number" ||
-        challenge.expiresAt <= Date.now()
-      ) {
-        throw new Error("Relay returned an invalid browser challenge")
-      }
-      const proof = await crypto.subtle.sign(
-        { hash: "SHA-256", name: "ECDSA" },
-        keys.privateKey,
-        new TextEncoder().encode(
-          relayBrowserProofTranscript({
-            capabilityId: capabilityId(capability.capability),
-            expiresAt: challenge.expiresAt,
-            nonce: challenge.nonce,
-            relayId,
-            sessionId: challenge.sessionId,
-          })
-        )
-      )
-      socket.send(
-        JSON.stringify({
-          capability: capability.capability,
-          publicKeyJwk: {
-            crv: "P-256",
-            kty: "EC",
-            x: requiredCoordinate(publicKeyJwk.x),
-            y: requiredCoordinate(publicKeyJwk.y),
-          },
-          signature: bytesToBase64Url(new Uint8Array(proof)),
-          type: "auth",
-          v: 1,
-        })
-      )
-      const ready = await inbox.next()
-      if (ready.type !== "auth.ready" || ready.instanceId !== instanceId) {
-        throw new Error("Relay browser authentication failed")
-      }
       socket.send(
         JSON.stringify({ instanceId, type: "resource.subscribe", v: 1 })
       )
@@ -95,26 +152,75 @@ export async function* openRelayResourceStream(
       for (;;) {
         // Resource samples are ordered; concurrent reads could reorder them.
         // oxlint-disable-next-line react-doctor/async-await-in-loop
-        yield relayResourceStreamEventSchema.parse(await inbox.next())
+        const nextMessage = await Effect.runPromise(inbox.take)
+        yield relayResourceStreamEventSchema.parse(nextMessage)
       }
     })(),
-    () => {
-      inbox.close()
-      socket.close(1000, "Resource view closed")
-    }
+    () => Effect.runPromise(Scope.close(socketScope, Exit.void))
   )
-  yield* Stream.toAsyncIterable(
+  for await (const observed of Stream.toAsyncIterable(
     Stream.fromAsyncIterable(direct, asError).pipe(
+      Stream.map((event) => ({ event, transport: "direct" as const })),
       Stream.catch((cause) =>
         signal.aborted
           ? Stream.fail(cause)
           : Stream.fromAsyncIterable(
               openHearthResourceStream(relayId, instanceId, signal),
               asError
+            ).pipe(
+              Stream.map((event) => ({
+                event,
+                transport: "hearth" as const,
+              }))
             )
       )
     )
-  )
+  )) {
+    eventObserver.observe(observed.event, observed.transport)
+    yield observed.event
+  }
+}
+
+function resourceEventObserver(): {
+  close: () => void
+  observe: (
+    event: RelayResourceStreamEvent,
+    transport: "direct" | "hearth"
+  ) => void
+} {
+  const firstEventSpan = Sentry.startInactiveSpan({
+    name: "Receive first authoritative resource event",
+    op: "stream.resources.first_event",
+    attributes: { "kiln.channel": "resources" },
+  })
+  let pending = true
+  return {
+    close: () => {
+      if (!pending) return
+      pending = false
+      firstEventSpan.setAttribute("kiln.result", "cancelled")
+      firstEventSpan.end()
+    },
+    observe: (event, transport) => {
+      const sampledAt = event.instance.resources?.sampledAt
+      const sampleAge = sampledAt ? Date.now() - Date.parse(sampledAt) : NaN
+      if (Number.isFinite(sampleAge)) {
+        Sentry.metrics.distribution(
+          "relay.resources.sample_age",
+          Math.max(0, sampleAge),
+          {
+            unit: "millisecond",
+            attributes: { "kiln.transport": transport },
+          }
+        )
+      }
+      if (!pending) return
+      pending = false
+      firstEventSpan.setAttribute("kiln.result", "ok")
+      firstEventSpan.setAttribute("kiln.transport", transport)
+      firstEventSpan.end()
+    },
+  }
 }
 
 async function* openHearthResourceStream(
@@ -162,55 +268,6 @@ function waitForPoll(signal: AbortSignal): Promise<void> {
   })
 }
 
-function createSocketInbox(socket: WebSocket, signal: AbortSignal) {
-  const messages: Array<Record<string, unknown>> = []
-  const waiters: Array<{
-    reject: (cause: Error) => void
-    resolve: (value: Record<string, unknown>) => void
-  }> = []
-  const fail = (cause: Error) => {
-    for (const waiter of waiters.splice(0)) waiter.reject(cause)
-  }
-  socket.addEventListener("message", (event) => {
-    Result.try(() => {
-      const value = JSON.parse(String(event.data)) as unknown
-      if (!value || typeof value !== "object" || Array.isArray(value)) {
-        throw new Error("Relay returned an invalid browser message")
-      }
-      const message = Object.fromEntries(Object.entries(value))
-      const waiter = waiters.shift()
-      if (waiter) waiter.resolve(message)
-      else messages.push(message)
-    }).pipe(
-      Result.match({
-        onFailure: (cause) => fail(asError(cause)),
-        onSuccess: () => undefined,
-      })
-    )
-  })
-  socket.addEventListener("error", () =>
-    fail(new Error("Unable to connect to Relay"))
-  )
-  socket.addEventListener("close", (event) =>
-    fail(new Error(event.reason || `Relay connection closed (${event.code})`))
-  )
-  const abort = () => {
-    fail(new Error("Resource stream was cancelled"))
-    socket.close(1000, "Resource stream cancelled")
-  }
-  signal.addEventListener("abort", abort, { once: true })
-  return {
-    close: () => signal.removeEventListener("abort", abort),
-    next: () => {
-      const message = messages.shift()
-      if (message) return Promise.resolve(message)
-      return new Promise<Record<string, unknown>>((resolve, reject) =>
-        waiters.push({ reject, resolve })
-      )
-    },
-  }
-}
-
 function managedAsyncIterable<A>(
   iterable: AsyncIterable<A>,
   cleanup: () => void | Promise<unknown>
@@ -229,35 +286,4 @@ function managedAsyncIterable<A>(
 
 function asError(cause: unknown): Error {
   return cause instanceof Error ? cause : new Error("Invalid Relay message")
-}
-
-function capabilityId(capability: string): string {
-  const encoded = capability.split(".", 1)[0]
-  if (!encoded) throw new Error("Hearth returned an invalid Relay capability")
-  const base64 = encoded.replaceAll("-", "+").replaceAll("_", "/")
-  const value = JSON.parse(
-    atob(base64.padEnd(Math.ceil(base64.length / 4) * 4, "="))
-  ) as unknown
-  if (!value || typeof value !== "object" || !("capabilityId" in value)) {
-    throw new Error("Hearth returned an invalid Relay capability")
-  }
-  const id = Object.fromEntries(Object.entries(value)).capabilityId
-  if (typeof id !== "string") {
-    throw new Error("Hearth returned an invalid Relay capability")
-  }
-  return id
-}
-
-function requiredCoordinate(value: string | undefined): string {
-  if (!value) throw new Error("Browser could not create a resource session key")
-  return value
-}
-
-function bytesToBase64Url(value: Uint8Array): string {
-  let binary = ""
-  for (const byte of value) binary += String.fromCharCode(byte)
-  return btoa(binary)
-    .replaceAll("+", "-")
-    .replaceAll("/", "_")
-    .replace(/=+$/u, "")
 }

@@ -16,6 +16,10 @@ export const relayBrowserMaxFrameBytes = 256 * 1024
 export const relayControlMaxFrameBytes = 1024 * 1024
 export const relayPairingProtocol = "kiln-relay-pair.v1" as const
 export const relayAuthenticationWindowMs = 10_000
+export const relayBrowserCapabilityV2Feature = "browser-capability-v2"
+export const relayBrowserLeaseRenewalV1Feature = "browser-lease-renewal-v1"
+export const relayFileRequestReplayV1Feature = "file-request-replay-v1"
+export const relayBrowserAuthorizationReviseMaxItems = 256
 
 export const relayControlOperations = [
   "relay.snapshot",
@@ -41,6 +45,7 @@ export const relayControlOperations = [
   "relay.clients.list",
   "relay.clients.update",
   "relay.clients.revoke",
+  "browser.authorization.revise",
   "brick.catalog",
   "brick.recipe",
   "database.list",
@@ -204,12 +209,91 @@ export const RelayAuthResponseSchema = Schema.Struct({
 
 export const RelayAuthReadySchema = Schema.Struct({
   actions: Schema.Array(Schema.String),
+  browserIssuerGeneration: Schema.optionalKey(
+    Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))
+  ),
   clientId: Schema.String,
+  features: Schema.optionalKey(Schema.Array(Schema.String)),
   protocol: Schema.Literal(relayControlProtocol),
   relayBuild: Schema.String,
   role: Schema.Literals(["full_access", "read_only", "custom"]),
   type: Schema.Literal("auth.ready"),
   v: Schema.Literal(1),
+})
+
+export const RelayBrowserOperationKindSchema = Schema.Literals([
+  "console",
+  "file",
+  "resources",
+])
+
+export const RelayBrowserCapabilityV1Schema = Schema.Struct({
+  actions: Schema.Array(Schema.String),
+  audience: Schema.String,
+  capabilityId: Schema.String,
+  expiresAt: Schema.Number,
+  instanceId: Schema.String,
+  issuedAt: Schema.Number,
+  issuer: Schema.String,
+  keyThumbprint: Schema.String,
+  origin: Schema.String,
+  path: Schema.NullOr(Schema.String),
+  subject: Schema.String,
+  version: Schema.Literal(1),
+})
+
+export const RelayBrowserCapabilityV2Schema = Schema.Struct({
+  actions: Schema.Array(Schema.String),
+  audience: Schema.String,
+  authorizationRevision: Schema.Number,
+  capabilityId: Schema.String,
+  expiresAt: Schema.Number,
+  instanceId: Schema.String,
+  issuedAt: Schema.Number,
+  issuer: Schema.String,
+  issuerGeneration: Schema.Number,
+  keyThumbprint: Schema.String,
+  loginSessionId: Schema.String,
+  operation: RelayBrowserOperationKindSchema,
+  origin: Schema.String,
+  path: Schema.NullOr(Schema.String),
+  subject: Schema.String,
+  version: Schema.Literal(2),
+})
+
+export const RelayBrowserCapabilitySchema = Schema.Union([
+  RelayBrowserCapabilityV1Schema,
+  RelayBrowserCapabilityV2Schema,
+])
+
+export const RelayBrowserRenewSchema = Schema.Struct({
+  capability: Schema.String,
+  signature: Schema.String,
+  type: Schema.Literal("auth.renew"),
+  v: Schema.Literal(1),
+})
+
+export const RelayBrowserAuthorizationScopeSchema = Schema.Union([
+  Schema.Struct({ kind: Schema.Literal("subject_relay") }),
+  Schema.Struct({
+    instanceId: Schema.String,
+    kind: Schema.Literal("instance"),
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("login_session"),
+    loginSessionId: Schema.String,
+  }),
+])
+
+export const RelayBrowserAuthorizationRevisionSchema = Schema.Struct({
+  minimumRevision: Schema.Number,
+  scope: RelayBrowserAuthorizationScopeSchema,
+  subject: Schema.String,
+})
+
+export const RelayBrowserAuthorizationReviseSchema = Schema.Struct({
+  items: Schema.Array(RelayBrowserAuthorizationRevisionSchema),
+  minimumIssuerGeneration: Schema.optionalKey(Schema.Number),
 })
 
 export const RelayControlRequestSchema = Schema.Struct({
@@ -280,6 +364,20 @@ export const RelayControlServerMessageSchema = Schema.Union([
 export type RelayAuthChallenge = typeof RelayAuthChallengeSchema.Type
 export type RelayAuthResponse = typeof RelayAuthResponseSchema.Type
 export type RelayAuthReady = typeof RelayAuthReadySchema.Type
+export type RelayBrowserCapability = typeof RelayBrowserCapabilitySchema.Type
+export type RelayBrowserCapabilityV1 =
+  typeof RelayBrowserCapabilityV1Schema.Type
+export type RelayBrowserCapabilityV2 =
+  typeof RelayBrowserCapabilityV2Schema.Type
+export type RelayBrowserOperationKind =
+  typeof RelayBrowserOperationKindSchema.Type
+export type RelayBrowserRenew = typeof RelayBrowserRenewSchema.Type
+export type RelayBrowserAuthorizationScope =
+  typeof RelayBrowserAuthorizationScopeSchema.Type
+export type RelayBrowserAuthorizationRevision =
+  typeof RelayBrowserAuthorizationRevisionSchema.Type
+export type RelayBrowserAuthorizationRevise =
+  typeof RelayBrowserAuthorizationReviseSchema.Type
 export type RelayControlRequest = typeof RelayControlRequestSchema.Type
 export type RelayControlCancel = typeof RelayControlCancelSchema.Type
 export type RelayControlResponse = typeof RelayControlResponseSchema.Type

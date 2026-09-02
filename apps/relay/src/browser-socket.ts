@@ -21,6 +21,8 @@ import * as Sentry from "@sentry/node"
 import ZipStream from "zip-stream"
 
 import {
+  RelayBrowserCapabilitySchema,
+  RelayBrowserRenewSchema,
   relayBrowserProofTranscript,
   relayBrowserRequestProofTranscript,
   relayBrowserConsoleProtocol,
@@ -29,6 +31,9 @@ import {
   relayInstanceLifecycleEventTime as lifecycleEventTime,
 } from "@workspace/contracts"
 import type {
+  RelayBrowserAuthorizationRevision,
+  RelayBrowserCapability,
+  RelayBrowserCapabilityV2,
   RelayConsole,
   RelayConsoleLine,
   RelayInstanceLifecycleEvent,
@@ -51,18 +56,25 @@ import {
 import { MAX_TRANSFER_BYTES } from "./files.js"
 import type { ArchiveDownloadEntry, FilesystemDriver } from "./files.js"
 import type { RelayIdentity } from "./effect/identity.js"
-import { forkPromise } from "./effect/promise.js"
+import { ensuringPromise, forkPromise } from "./effect/promise.js"
 import type { RelayClientGrant, RelayStateStore } from "./effect/state.js"
 import type { RelaySnapshotSample } from "./snapshot-hub.js"
+import type { RelayConfig } from "./config.js"
+import { BrowserOutbox, type BrowserOutboxKind } from "./browser-outbox.js"
+import {
+  authorityFromCapability,
+  BrowserSessionRegistry,
+  type BrowserSessionAuthority,
+} from "./browser-session-registry.js"
 import type { Server } from "node:http"
 import type { IncomingMessage, ServerResponse } from "node:http"
 
 const AUTHENTICATION_WINDOW_MS = 10_000
-const MAX_BUFFERED_BYTES = 2 * 1024 * 1024
 const HTTP_PROOF_WINDOW_MS = 30_000
-const MAX_BROWSER_SESSIONS = 512
+const HEARTBEAT_INTERVAL_MS = 15_000
 const MAX_DIRECT_TRANSFERS = 32
 const MAX_DIRECT_TRANSFERS_PER_CLIENT = 8
+const MAX_PENDING_CONSOLE_OPERATIONS_PER_SOCKET = 8
 const MAX_DOWNLOAD_FORM_BYTES = 2 * 1024 * 1024
 const MAX_ARCHIVE_SELECTION_PATHS = 5_000
 const COMPRESSION_SAMPLE_BYTES = 1024 * 1024
@@ -146,25 +158,10 @@ const decodeBrowserConsoleWrite = Schema.decodeUnknownOption(
 const decodeBrowserConsoleComplete = Schema.decodeUnknownOption(
   BrowserConsoleCompleteSchema
 )
-
-const CapabilitySchema = Schema.Struct({
-  actions: Schema.Array(Schema.String),
-  audience: Schema.String,
-  capabilityId: Schema.String,
-  expiresAt: Schema.Number,
-  instanceId: Schema.String,
-  issuedAt: Schema.Number,
-  issuer: Schema.String,
-  keyThumbprint: Schema.String,
-  origin: Schema.String,
-  path: Schema.NullOr(Schema.String),
-  subject: Schema.String,
-  version: Schema.Literal(1),
-})
-
-type BrowserCapability = typeof CapabilitySchema.Type
+const decodeBrowserRenew = Schema.decodeUnknownOption(RelayBrowserRenewSchema)
 
 export interface BrowserSocketOptions {
+  readonly config: Pick<RelayConfig, "browserLimits" | "proxyMode">
   readonly docker: DockerDriver
   readonly filesystem: FilesystemDriver
   readonly identity: RelayIdentity
@@ -183,23 +180,37 @@ export interface BrowserSocketServer {
     response: ServerResponse
   ) => Promise<boolean>
   readonly revokeClient: (clientId: string) => void
+  readonly reviseAuthorization: (
+    issuer: string,
+    items: ReadonlyArray<RelayBrowserAuthorizationRevision>,
+    issuerGeneration: number
+  ) => void
 }
 
 export function attachBrowserSocket(
   options: BrowserSocketOptions
 ): BrowserSocketServer {
   const sockets = new Set<WebSocket>()
-  const socketIssuers = new Map<WebSocket, string>()
-  const requestProofs = new Map<string, number>()
-  const pendingRequestProofs = new Set<string>()
-  const transfers = { active: 0, byClient: new Map<string, number>() }
+  const registry = new BrowserSessionRegistry(options.config.browserLimits)
+  const outboxes = new Map<WebSocket, BrowserOutbox>()
+  const legacyRequestProofs = new Map<string, number>()
+  const pendingLegacyRequestProofs = new Set<string>()
+  const transfers = {
+    active: 0,
+    byClient: new Map<string, number>(),
+    pendingAuthentications: 0,
+  }
   const hubs = new ConsoleHubRegistry(
     options.docker,
-    options.subscribeSnapshots
+    options.subscribeSnapshots,
+    (socket, encoded, kind, action) =>
+      outboxes.get(socket)?.send(encoded, kind, action) ?? false
   )
   const resourceHubs = new ResourceHubRegistry(
     options.docker,
-    options.subscribeSnapshots
+    options.subscribeSnapshots,
+    (socket, encoded, kind, action) =>
+      outboxes.get(socket)?.send(encoded, kind, action) ?? false
   )
   const wss = new WebSocketServer({
     clientTracking: false,
@@ -235,36 +246,75 @@ export function attachBrowserSocket(
   })
 
   wss.on("connection", (socket, request) => {
-    if (sockets.size >= MAX_BROWSER_SESSIONS) {
-      socket.close(1013, "Relay browser session capacity reached")
-      return
-    }
     const origin = request.headers.origin
     if (!origin) {
       socket.close(4403, "Browser origin is required")
       return
     }
+    if (
+      !registry.acquirePending(
+        socket,
+        request.socket.remoteAddress ?? "unknown",
+        options.config.proxyMode === "none"
+      )
+    ) {
+      socket.close(1013, "Relay browser handshake capacity reached")
+      return
+    }
     sockets.add(socket)
+    const outbox = new BrowserOutbox({
+      authorize: (action) => registry.isActive(socket, action),
+      maxBytes: options.config.browserLimits.outboxBytes,
+      maxMessages: options.config.browserLimits.outboxMessages,
+      socket,
+    })
+    outboxes.set(socket, outbox)
     authenticateBrowser(
       socket,
       origin,
       options,
       hubs,
       resourceHubs,
-      (clientId) => {
-        socketIssuers.set(socket, clientId)
-      }
+      registry,
+      outbox
     )
+    socket.on("pong", () => {
+      ;(socket as TrackedWebSocket).kilnAlive = true
+    })
+    ;(socket as TrackedWebSocket).kilnAlive = true
     socket.once("close", () => {
       sockets.delete(socket)
-      socketIssuers.delete(socket)
+      registry.release(socket)
+      outboxes.get(socket)?.close()
+      outboxes.delete(socket)
       hubs.remove(socket)
       resourceHubs.remove(socket)
     })
   })
 
+  const heartbeatFiber = Effect.runFork(
+    Effect.sleep(HEARTBEAT_INTERVAL_MS).pipe(
+      Effect.andThen(
+        Effect.sync(() => {
+          for (const socket of sockets) {
+            const tracked = socket as TrackedWebSocket
+            if (tracked.kilnAlive === false) {
+              socket.terminate()
+              continue
+            }
+            tracked.kilnAlive = false
+            socket.ping()
+          }
+        })
+      ),
+      Effect.forever
+    )
+  )
+
   return {
     close: async () => {
+      heartbeatFiber.interruptUnsafe()
+      registry.close()
       hubs.close()
       resourceHubs.close()
       await closeSockets(sockets, "Relay shutting down")
@@ -275,16 +325,19 @@ export function attachBrowserSocket(
         request,
         response,
         options,
-        pendingRequestProofs,
-        requestProofs,
+        registry,
+        pendingLegacyRequestProofs,
+        legacyRequestProofs,
         transfers
       ),
-    revokeClient: (clientId) => {
-      for (const [socket, issuer] of socketIssuers) {
-        if (issuer === clientId) socket.close(4403, "Capability issuer changed")
-      }
-    },
+    reviseAuthorization: (issuer, items, issuerGeneration) =>
+      registry.revise(issuer, items, issuerGeneration),
+    revokeClient: (clientId) => registry.revokeIssuer(clientId),
   }
+}
+
+interface TrackedWebSocket extends WebSocket {
+  kilnAlive?: boolean
 }
 
 function authenticateBrowser(
@@ -293,7 +346,8 @@ function authenticateBrowser(
   options: BrowserSocketOptions,
   hubs: ConsoleHubRegistry,
   resourceHubs: ResourceHubRegistry,
-  onAuthenticated: (clientId: string) => void
+  registry: BrowserSessionRegistry,
+  outbox: BrowserOutbox
 ): void {
   const challenge = {
     expiresAt: Date.now() + AUTHENTICATION_WINDOW_MS,
@@ -303,8 +357,11 @@ function authenticateBrowser(
     type: "auth.challenge",
     v: 1,
   }
-  send(socket, challenge)
-  let capability: BrowserCapability | null = null
+  socket.send(JSON.stringify(challenge))
+  let authenticationAttempt = false
+  let browserKey: ReturnType<typeof createPublicKey> | null = null
+  let capability: RelayBrowserCapability | null = null
+  let pendingConsoleOperations = 0
   const timer = setTimeout(() => {
     if (!capability) socket.close(4401, "Browser authentication timed out")
   }, AUTHENTICATION_WINDOW_MS)
@@ -321,9 +378,50 @@ function authenticateBrowser(
       return
     }
     if (!capability) {
+      if (authenticationAttempt) {
+        socket.close(4401, "Browser authentication is already in progress")
+        return
+      }
+      authenticationAttempt = true
       forkPromise(
-        () => authenticate(input.value),
+        () =>
+          ensuringPromise(
+            () =>
+              Sentry.startSpan(
+                {
+                  name: "Authenticate browser session",
+                  op: "relay.browser.auth",
+                },
+                () => authenticate(input.value)
+              ),
+            () => {
+              authenticationAttempt = false
+            }
+          ),
         () => socket.close(4401, "Browser authentication failed")
+      )
+      return
+    }
+    const renewal = decodeBrowserRenew(input.value)
+    if (Option.isSome(renewal)) {
+      if (authenticationAttempt || capability.version !== 2) {
+        socket.close(4400, "Browser renewal is not available")
+        return
+      }
+      authenticationAttempt = true
+      forkPromise(
+        () =>
+          ensuringPromise(
+            () =>
+              Sentry.startSpan(
+                { name: "Renew browser lease", op: "relay.browser.renew" },
+                () => renew(renewal.value)
+              ),
+            () => {
+              authenticationAttempt = false
+            }
+          ),
+        () => socket.close(4403, "Browser renewal failed")
       )
       return
     }
@@ -332,7 +430,8 @@ function authenticateBrowser(
       const subscription = consoleSubscription.value
       if (
         subscription.instanceId !== capability.instanceId ||
-        !capability.actions.includes("instance.console.read")
+        (capability.version === 2 && capability.operation !== "console") ||
+        !registry.isActive(socket, "instance.console.read")
       ) {
         socket.close(4403, "Console capability does not allow this instance")
         return
@@ -348,7 +447,8 @@ function authenticateBrowser(
       const subscription = resourceSubscription.value
       if (
         subscription.instanceId !== capability.instanceId ||
-        !capability.actions.includes("instance.read")
+        (capability.version === 2 && capability.operation !== "resources") ||
+        !registry.isActive(socket, "instance.read")
       ) {
         socket.close(4403, "Resource capability does not allow this instance")
         return
@@ -361,12 +461,26 @@ function authenticateBrowser(
       const request = consoleWrite.value
       if (
         request.instanceId !== capability.instanceId ||
-        !capability.actions.includes("instance.console.write")
+        (capability.version === 2 && capability.operation !== "console") ||
+        !registry.isActive(socket, "instance.console.write")
       ) {
         socket.close(4403, "Console capability does not allow writes")
         return
       }
-      void executeConsoleWrite(socket, request, options, capability)
+      executeBoundedConsoleOperation(
+        request.requestId,
+        "console_write_capacity_reached",
+        "Too many console operations are pending",
+        () =>
+          executeConsoleWrite(
+            socket,
+            request,
+            options,
+            capability!,
+            outbox,
+            () => registry.isActive(socket, "instance.console.write")
+          )
+      )
       return
     }
     const consoleCompletion = decodeBrowserConsoleComplete(input.value)
@@ -374,12 +488,25 @@ function authenticateBrowser(
       const request = consoleCompletion.value
       if (
         request.instanceId !== capability.instanceId ||
-        !capability.actions.includes("instance.console.write")
+        (capability.version === 2 && capability.operation !== "console") ||
+        !registry.isActive(socket, "instance.console.write")
       ) {
         socket.close(4403, "Console capability does not allow completion")
         return
       }
-      void executeConsoleCompletion(socket, request, options.docker)
+      executeBoundedConsoleOperation(
+        request.requestId,
+        "console_completion_capacity_reached",
+        "Too many completions are pending",
+        () =>
+          executeConsoleCompletion(
+            socket,
+            request,
+            options.docker,
+            outbox,
+            () => registry.isActive(socket, "instance.console.write")
+          )
+      )
       return
     }
     socket.close(4400, "Invalid browser operation")
@@ -388,6 +515,30 @@ function authenticateBrowser(
   socket.once("close", () => {
     clearTimeout(timer)
   })
+
+  function executeBoundedConsoleOperation(
+    requestId: string,
+    code: string,
+    message: string,
+    operation: () => Promise<void>
+  ): void {
+    if (pendingConsoleOperations >= MAX_PENDING_CONSOLE_OPERATIONS_PER_SOCKET) {
+      outbox.send(
+        JSON.stringify({ code, message, requestId, type: "operation.error" }),
+        "priority",
+        "instance.console.write"
+      )
+      return
+    }
+    pendingConsoleOperations += 1
+    forkPromise(
+      () =>
+        ensuringPromise(operation, () => {
+          pendingConsoleOperations -= 1
+        }),
+      () => undefined
+    )
+  }
 
   async function authenticate(value: unknown): Promise<void> {
     if (Date.now() > challenge.expiresAt || capability) {
@@ -411,7 +562,7 @@ function authenticateBrowser(
     ) {
       throw new Error("Browser key does not match capability")
     }
-    const browserKey = createPublicKey({
+    browserKey = createPublicKey({
       format: "jwk",
       key: auth.publicKeyJwk,
     })
@@ -435,18 +586,142 @@ function authenticateBrowser(
       Buffer.from(auth.signature, "base64url")
     )
     if (!validProof) throw new Error("Browser proof is invalid")
+    const authority = browserAuthority(parsed.payload)
+    const current =
+      parsed.payload.version === 2
+        ? await options.runEffect(
+            options.state.browserAuthority({
+              instanceId: parsed.payload.instanceId,
+              issuer: parsed.payload.issuer,
+              loginSessionId: parsed.payload.loginSessionId,
+              subject: parsed.payload.subject,
+            })
+          )
+        : { issuerGeneration: 0, minimumRevision: 0 }
+    const nextRenewal =
+      parsed.payload.version === 2
+        ? renewalChallenge(parsed.payload.expiresAt)
+        : undefined
+    const admission = registry.activate(
+      socket,
+      authority,
+      challenge.sessionId,
+      current,
+      nextRenewal
+    )
+    if (!admission.accepted) {
+      clearTimeout(timer)
+      socket.close(
+        admission.reason === "capacity" ? 1013 : 4403,
+        admission.reason === "capacity"
+          ? "Relay browser session capacity reached"
+          : "Browser authorization is stale"
+      )
+      return
+    }
     capability = parsed.payload
-    onAuthenticated(client.id)
     clearTimeout(timer)
-    // The short-lived capability limits replay during session establishment.
-    // Once proof-of-possession succeeds, the authenticated socket remains valid
-    // until it disconnects or its issuing Hearth identity is revoked.
-    send(socket, {
-      expiresAt: capability.expiresAt,
-      instanceId: capability.instanceId,
-      type: "auth.ready",
-      v: 1,
-    })
+    outbox.send(
+      JSON.stringify({
+        expiresAt: capability.expiresAt,
+        instanceId: capability.instanceId,
+        ...(nextRenewal
+          ? {
+              renewalNonce: nextRenewal.nonce,
+              renewalNonceExpiresAt: nextRenewal.nonceExpiresAt,
+              sessionId: challenge.sessionId,
+            }
+          : {}),
+        type: "auth.ready",
+        v: 1,
+      }),
+      "priority"
+    )
+  }
+
+  async function renew(
+    value: typeof RelayBrowserRenewSchema.Type
+  ): Promise<void> {
+    if (!browserKey || !capability || capability.version !== 2) {
+      throw new Error("Browser session cannot renew")
+    }
+    const renewal = registry.renewalChallenge(socket)
+    if (!renewal || renewal.nonceExpiresAt <= Date.now()) {
+      throw new Error("Browser renewal challenge expired")
+    }
+    const parsed = decodeCapability(value.capability)
+    if (parsed.payload.version !== 2) {
+      throw new Error("Browser renewal requires capability v2")
+    }
+    const client = await options.runEffect(
+      options.state.findClientById(parsed.payload.issuer)
+    )
+    if (!client) throw new Error("Capability issuer was revoked")
+    validateCapability(
+      parsed,
+      client,
+      origin,
+      options.identity.fingerprint,
+      null
+    )
+    const validProof = verify(
+      "sha256",
+      Buffer.from(
+        relayBrowserProofTranscript(
+          {
+            capabilityId: parsed.payload.capabilityId,
+            expiresAt: renewal.nonceExpiresAt,
+            nonce: renewal.nonce,
+            relayId: options.identity.fingerprint,
+            sessionId: renewal.sessionId,
+          },
+          socket.protocol === relayBrowserConsoleProtocol
+            ? relayBrowserConsoleProtocol
+            : relayBrowserProtocol
+        )
+      ),
+      { dsaEncoding: "ieee-p1363", key: browserKey },
+      Buffer.from(value.signature, "base64url")
+    )
+    if (!validProof) throw new Error("Browser renewal proof is invalid")
+    const current = await options.runEffect(
+      options.state.browserAuthority({
+        instanceId: parsed.payload.instanceId,
+        issuer: parsed.payload.issuer,
+        loginSessionId: parsed.payload.loginSessionId,
+        subject: parsed.payload.subject,
+      })
+    )
+    if (
+      parsed.payload.issuerGeneration !== current.issuerGeneration ||
+      parsed.payload.authorizationRevision < current.minimumRevision
+    ) {
+      throw new Error("Browser authorization is stale")
+    }
+    const next = renewalChallenge(parsed.payload.expiresAt)
+    if (
+      !registry.renew(
+        socket,
+        authorityFromCapability(parsed.payload),
+        next.nonce,
+        next.nonceExpiresAt
+      )
+    ) {
+      throw new Error("Browser renewal changed ownership")
+    }
+    capability = parsed.payload
+    outbox.send(
+      JSON.stringify({
+        actions: parsed.payload.actions,
+        authorizationRevision: parsed.payload.authorizationRevision,
+        expiresAt: parsed.payload.expiresAt,
+        renewalNonce: next.nonce,
+        renewalNonceExpiresAt: next.nonceExpiresAt,
+        type: "auth.renewed",
+        v: 1,
+      }),
+      "priority"
+    )
   }
 }
 
@@ -454,32 +729,47 @@ async function executeConsoleWrite(
   socket: WebSocket,
   request: typeof BrowserConsoleWriteSchema.Type,
   options: BrowserSocketOptions,
-  capability: BrowserCapability
+  capability: RelayBrowserCapability,
+  outbox: BrowserOutbox,
+  authorize: () => boolean
 ): Promise<void> {
   await runBrowser(
-    browserOperation(async () => {
-      const instance = await options.docker.findInstance(request.instanceId)
-      if (!instance) throw new Error("Instance not found")
-      const input = relayConsoleCommandSchema.parse({
-        command: request.command,
-      })
-      await options.docker.sendCommand(instance, input.command)
-      void auditBrowserConsoleWrite(options, capability, instance.id)
-      send(socket, {
-        operation: "console.write",
-        payload: { accepted: true, command: input.command },
-        requestId: request.requestId,
-        type: "operation.result",
-      })
-    }).pipe(
+    timedBrowserOperation(
+      "Execute browser console write",
+      "relay.browser.console.write",
+      async () => {
+        const instance = await options.docker.findInstance(request.instanceId)
+        if (!instance) throw new Error("Instance not found")
+        if (!authorize()) throw new Error("Browser authorization changed")
+        const input = relayConsoleCommandSchema.parse({
+          command: request.command,
+        })
+        await options.docker.sendCommand(instance, input.command)
+        void auditBrowserConsoleWrite(options, capability, instance.id)
+        outbox.send(
+          JSON.stringify({
+            operation: "console.write",
+            payload: { accepted: true, command: input.command },
+            requestId: request.requestId,
+            type: "operation.result",
+          }),
+          "priority",
+          "instance.console.write"
+        )
+      }
+    ).pipe(
       Effect.catch(() =>
         Effect.sync(() => {
-          send(socket, {
-            code: "console_write_failed",
-            message: "Command could not be sent",
-            requestId: request.requestId,
-            type: "operation.error",
-          })
+          outbox.send(
+            JSON.stringify({
+              code: "console_write_failed",
+              message: "Command could not be sent",
+              requestId: request.requestId,
+              type: "operation.error",
+            }),
+            "priority",
+            "instance.console.write"
+          )
         })
       )
     )
@@ -488,7 +778,7 @@ async function executeConsoleWrite(
 
 async function auditBrowserConsoleWrite(
   options: BrowserSocketOptions,
-  capability: BrowserCapability,
+  capability: RelayBrowserCapability,
   instanceId: string
 ): Promise<void> {
   await runBrowser(
@@ -522,33 +812,48 @@ async function auditBrowserConsoleWrite(
 async function executeConsoleCompletion(
   socket: WebSocket,
   request: typeof BrowserConsoleCompleteSchema.Type,
-  docker: DockerDriver
+  docker: DockerDriver,
+  outbox: BrowserOutbox,
+  authorize: () => boolean
 ): Promise<void> {
   await runBrowser(
-    browserOperation(async () => {
-      const instance = await docker.findInstance(request.instanceId)
-      if (!instance) throw new Error("Instance not found")
-      const input = relayConsoleCompletionInputSchema.parse(request)
-      const payload = await docker.completeCommand(
-        instance,
-        input.input,
-        input.cursor
-      )
-      send(socket, {
-        operation: "console.complete",
-        payload,
-        requestId: request.requestId,
-        type: "operation.result",
-      })
-    }).pipe(
+    timedBrowserOperation(
+      "Execute browser console completion",
+      "relay.browser.console.complete",
+      async () => {
+        const instance = await docker.findInstance(request.instanceId)
+        if (!instance) throw new Error("Instance not found")
+        if (!authorize()) throw new Error("Browser authorization changed")
+        const input = relayConsoleCompletionInputSchema.parse(request)
+        const payload = await docker.completeCommand(
+          instance,
+          input.input,
+          input.cursor
+        )
+        outbox.send(
+          JSON.stringify({
+            operation: "console.complete",
+            payload,
+            requestId: request.requestId,
+            type: "operation.result",
+          }),
+          "priority",
+          "instance.console.write"
+        )
+      }
+    ).pipe(
       Effect.catch(() =>
         Effect.sync(() => {
-          send(socket, {
-            code: "console_completion_failed",
-            message: "Completions are unavailable",
-            requestId: request.requestId,
-            type: "operation.error",
-          })
+          outbox.send(
+            JSON.stringify({
+              code: "console_completion_failed",
+              message: "Completions are unavailable",
+              requestId: request.requestId,
+              type: "operation.error",
+            }),
+            "priority",
+            "instance.console.write"
+          )
         })
       )
     )
@@ -557,14 +862,15 @@ async function executeConsoleCompletion(
 
 function decodeCapability(value: string): {
   encoded: string
-  payload: BrowserCapability
+  payload: RelayBrowserCapability
   signature: string
 } {
+  if (value.length > 16_384) throw new Error("Capability is too large")
   const [encoded, signature, extra] = value.split(".")
   if (!encoded || !signature || extra) throw new Error("Invalid capability")
   return {
     encoded,
-    payload: Schema.decodeUnknownSync(CapabilitySchema)(
+    payload: Schema.decodeUnknownSync(RelayBrowserCapabilitySchema)(
       JSON.parse(Buffer.from(encoded, "base64url").toString("utf8")) as unknown
     ),
     signature,
@@ -578,19 +884,19 @@ function validateCapability(
   relayId: string,
   requiredAction: string | null
 ): void {
+  const now = Date.now()
+  const payload = capability.payload
+  if (payload.version === 2) validateCapabilityV2(payload, now)
   if (
-    capability.payload.audience !== relayId ||
-    capability.payload.expiresAt <= Date.now() ||
-    capability.payload.issuedAt > Date.now() + 5_000 ||
-    capability.payload.origin !== origin ||
+    payload.audience !== relayId ||
+    payload.expiresAt <= now ||
+    payload.issuedAt > now + 5_000 ||
+    payload.origin !== origin ||
     !client.origins.includes(origin) ||
-    capability.payload.actions.length === 0 ||
+    payload.actions.length === 0 ||
     (requiredAction !== null && !client.actions.includes(requiredAction)) ||
-    (requiredAction !== null &&
-      !capability.payload.actions.includes(requiredAction)) ||
-    capability.payload.actions.some(
-      (action) => !client.actions.includes(action)
-    ) ||
+    (requiredAction !== null && !payload.actions.includes(requiredAction)) ||
+    payload.actions.some((action) => !client.actions.includes(action)) ||
     !verify(
       null,
       Buffer.from(capability.encoded),
@@ -602,13 +908,86 @@ function validateCapability(
   }
 }
 
+function validateCapabilityV2(
+  capability: RelayBrowserCapabilityV2,
+  now: number
+): void {
+  const allowed =
+    capability.operation === "console"
+      ? new Set(["instance.console.read", "instance.console.write"])
+      : capability.operation === "resources"
+        ? new Set(["instance.read"])
+        : new Set(["instance.files.download", "instance.files.upload"])
+  const writes = capability.actions.some(
+    (action) =>
+      action === "instance.console.write" || action === "instance.files.upload"
+  )
+  const maximumLease = writes ? 30_000 : 60_000
+  if (
+    !Number.isSafeInteger(capability.issuedAt) ||
+    !Number.isSafeInteger(capability.expiresAt) ||
+    !Number.isSafeInteger(capability.authorizationRevision) ||
+    !Number.isSafeInteger(capability.issuerGeneration) ||
+    capability.authorizationRevision < 0 ||
+    capability.issuerGeneration < 0 ||
+    capability.expiresAt <= capability.issuedAt ||
+    capability.expiresAt - capability.issuedAt > maximumLease ||
+    capability.issuedAt > now + 5_000 ||
+    capability.actions.length > allowed.size ||
+    capability.actions.some((action) => !allowed.has(action)) ||
+    new Set(capability.actions).size !== capability.actions.length ||
+    capability.loginSessionId.length === 0 ||
+    capability.loginSessionId.length > 240 ||
+    capability.subject.length === 0 ||
+    capability.subject.length > 240 ||
+    capability.capabilityId.length === 0 ||
+    capability.capabilityId.length > 240 ||
+    (capability.operation === "file") !== (capability.path !== null) ||
+    (capability.path?.length ?? 0) > 2_048
+  ) {
+    throw new Error("Browser capability v2 is invalid")
+  }
+}
+
+function browserAuthority(
+  capability: RelayBrowserCapability
+): BrowserSessionAuthority {
+  if (capability.version === 2) return authorityFromCapability(capability)
+  return {
+    actions: new Set(capability.actions),
+    expiresAt: capability.expiresAt,
+    instanceId: capability.instanceId,
+    issuer: capability.issuer,
+    issuerGeneration: 0,
+    keyThumbprint: capability.keyThumbprint,
+    loginSessionId: null,
+    operation: null,
+    origin: capability.origin,
+    revision: 0,
+    subject: capability.subject,
+    version: 1,
+  }
+}
+
+function renewalChallenge(capabilityExpiresAt: number) {
+  return {
+    nonce: randomBytes(32).toString("base64url"),
+    nonceExpiresAt: capabilityExpiresAt,
+  }
+}
+
 async function handleBrowserFileRequest(
   request: IncomingMessage,
   response: ServerResponse,
   options: BrowserSocketOptions,
-  pendingRequestProofs: Set<string>,
-  requestProofs: Map<string, number>,
-  transfers: { active: number; byClient: Map<string, number> }
+  registry: BrowserSessionRegistry,
+  pendingLegacyRequestProofs: Set<string>,
+  legacyRequestProofs: Map<string, number>,
+  transfers: {
+    active: number
+    byClient: Map<string, number>
+    pendingAuthentications: number
+  }
 ): Promise<boolean> {
   const url = new URL(request.url ?? "/", "http://relay")
   const match = url.pathname.match(/^\/v1\/browser\/files\/([^/]+)$/u)
@@ -659,40 +1038,63 @@ async function handleBrowserFileRequest(
     return true
   }
   const instanceId = decodedInstanceId.success
-  let downloadForm: BrowserDownloadForm | null = null
-  if (method === "POST") {
-    const parsedForm = await runBrowser(
-      browserOperation(() => readBrowserDownloadForm(request)).pipe(
-        Effect.option
-      )
+  if (
+    transfers.pendingAuthentications >=
+    options.config.browserLimits.pendingFileAuthentications
+  ) {
+    browserJson(
+      response,
+      429,
+      { error: "Relay file authentication capacity reached" },
+      origin
     )
-    if (Option.isNone(parsedForm)) {
-      browserJson(
-        response,
-        400,
-        { error: "Download request is invalid" },
-        origin
-      )
-      return true
-    }
-    downloadForm = parsedForm.value
+    return true
   }
-  const path = downloadForm?.path ?? url.searchParams.get("path") ?? ""
-  const authenticated = await runBrowser(
-    browserOperation(() =>
-      authenticateBrowserRequest({
-        instanceId,
-        method,
-        options,
-        origin,
-        path,
-        request,
-        ...(downloadForm ? { credentials: downloadForm.credentials } : {}),
-        pendingRequestProofs,
-        requestProofs,
-      })
-    ).pipe(Effect.option)
+  transfers.pendingAuthentications += 1
+  const attempted = await ensuringPromise(
+    async () => {
+      let downloadForm: BrowserDownloadForm | null = null
+      if (method === "POST") {
+        const parsedForm = await runBrowser(
+          browserOperation(() => readBrowserDownloadForm(request)).pipe(
+            Effect.option
+          )
+        )
+        if (Option.isNone(parsedForm)) return Option.none()
+        downloadForm = parsedForm.value
+      }
+      const path = downloadForm?.path ?? url.searchParams.get("path") ?? ""
+      const authenticated = await runBrowser(
+        timedBrowserOperation(
+          "Authenticate browser file request",
+          "relay.browser.file.auth",
+          () =>
+            authenticateBrowserRequest({
+              instanceId,
+              method,
+              options,
+              origin,
+              path,
+              request,
+              ...(downloadForm
+                ? { credentials: downloadForm.credentials }
+                : {}),
+              pendingLegacyRequestProofs,
+              legacyRequestProofs,
+            })
+        ).pipe(Effect.option)
+      )
+      return Option.some({ authenticated, downloadForm, path })
+    },
+    () => {
+      transfers.pendingAuthentications -= 1
+    }
   )
+  if (Option.isNone(attempted)) {
+    browserJson(response, 400, { error: "Download request is invalid" }, origin)
+    return true
+  }
+  const { authenticated, downloadForm, path } = attempted.value
   if (Option.isNone(authenticated)) {
     browserJson(
       response,
@@ -720,6 +1122,24 @@ async function handleBrowserFileRequest(
   }
   transfers.active += 1
   transfers.byClient.set(clientId, clientTransfers + 1)
+  const transfer = registry.registerTransfer(authentication.authority, () => {
+    if (!request.destroyed) request.destroy()
+    if (!response.destroyed) response.destroy()
+  })
+  if (!transfer.active()) {
+    transfer.release()
+    transfers.active -= 1
+    const remaining = (transfers.byClient.get(clientId) ?? 1) - 1
+    if (remaining > 0) transfers.byClient.set(clientId, remaining)
+    else transfers.byClient.delete(clientId)
+    browserJson(
+      response,
+      403,
+      { error: "Browser authorization changed" },
+      origin
+    )
+    return true
+  }
 
   await runBrowser(
     browserOperation(async () => {
@@ -730,7 +1150,7 @@ async function handleBrowserFileRequest(
       }
       if (method === "PUT") {
         const uploaded = await options.runEffect(
-          options.filesystem.upload(instance, path, request)
+          options.filesystem.upload(instance, path, request, transfer.active)
         )
         void auditBrowserTransfer(
           options,
@@ -902,6 +1322,7 @@ async function handleBrowserFileRequest(
       Effect.ensuring(
         Effect.sync(() => {
           transfers.active -= 1
+          transfer.release()
           const remaining = (transfers.byClient.get(clientId) ?? 1) - 1
           if (remaining > 0) transfers.byClient.set(clientId, remaining)
           else transfers.byClient.delete(clientId)
@@ -920,9 +1341,10 @@ async function authenticateBrowserRequest(input: {
   origin: string
   path: string
   request: IncomingMessage
-  pendingRequestProofs: Set<string>
-  requestProofs: Map<string, number>
+  pendingLegacyRequestProofs: Set<string>
+  legacyRequestProofs: Map<string, number>
 }): Promise<{
+  authority: BrowserSessionAuthority
   capabilityId: string
   clientId: string
   instanceId: string
@@ -958,16 +1380,27 @@ async function authenticateBrowserRequest(input: {
     Buffer.from(nonce, "base64url").length < 16
   )
     throw new Error("Browser proof freshness is invalid")
-  for (const [key, expiresAt] of input.requestProofs) {
-    if (expiresAt <= Date.now()) input.requestProofs.delete(key)
+  for (const [key, expiresAt] of input.legacyRequestProofs) {
+    if (expiresAt <= Date.now()) input.legacyRequestProofs.delete(key)
   }
   const replayKey = `${parsed.payload.capabilityId}:${nonce}`
   if (
-    input.requestProofs.has(replayKey) ||
-    input.pendingRequestProofs.has(replayKey)
+    parsed.payload.version === 1 &&
+    (input.legacyRequestProofs.has(replayKey) ||
+      input.pendingLegacyRequestProofs.has(replayKey))
   )
     throw new Error("Browser proof was replayed")
-  input.pendingRequestProofs.add(replayKey)
+  if (parsed.payload.version === 1) {
+    if (
+      input.legacyRequestProofs.size >=
+        input.options.config.browserLimits.fileReplayEntries ||
+      input.pendingLegacyRequestProofs.size >=
+        input.options.config.browserLimits.fileReplayEntries
+    ) {
+      throw new Error("Browser replay table is full")
+    }
+    input.pendingLegacyRequestProofs.add(replayKey)
+  }
   return runBrowser(
     browserOperation(async () => {
       const client = await input.options.runEffect(
@@ -981,6 +1414,9 @@ async function authenticateBrowserRequest(input: {
         input.options.identity.fingerprint,
         requiredAction
       )
+      if (parsed.payload.version === 2 && parsed.payload.operation !== "file") {
+        throw new Error("Capability is not for file requests")
+      }
       if (
         parsed.payload.instanceId !== input.instanceId ||
         parsed.payload.path !== input.path
@@ -1011,8 +1447,42 @@ async function authenticateBrowserRequest(input: {
         proof
       )
       if (!valid) throw new Error("Browser request proof is invalid")
-      input.requestProofs.set(replayKey, parsed.payload.expiresAt)
+      if (parsed.payload.version === 2) {
+        const authority = await input.options.runEffect(
+          input.options.state.browserAuthority({
+            instanceId: parsed.payload.instanceId,
+            issuer: parsed.payload.issuer,
+            loginSessionId: parsed.payload.loginSessionId,
+            subject: parsed.payload.subject,
+          })
+        )
+        if (
+          parsed.payload.issuerGeneration !== authority.issuerGeneration ||
+          parsed.payload.authorizationRevision < authority.minimumRevision
+        ) {
+          throw new Error("Browser authorization is stale")
+        }
+        const reservation = await input.options.runEffect(
+          input.options.state.reserveBrowserFileReplay({
+            capabilityId: parsed.payload.capabilityId,
+            expiresAt: parsed.payload.expiresAt,
+            maxEntries: input.options.config.browserLimits.fileReplayEntries,
+            nonce,
+            now: Date.now(),
+          })
+        )
+        if (reservation !== "reserved") {
+          throw new Error(
+            reservation === "full"
+              ? "Browser replay table is full"
+              : "Browser proof was replayed"
+          )
+        }
+      } else {
+        input.legacyRequestProofs.set(replayKey, parsed.payload.expiresAt)
+      }
       return {
+        authority: browserAuthority(parsed.payload),
         capabilityId: parsed.payload.capabilityId,
         clientId: client.id,
         instanceId: parsed.payload.instanceId,
@@ -1020,7 +1490,7 @@ async function authenticateBrowserRequest(input: {
       }
     }).pipe(
       Effect.ensuring(
-        Effect.sync(() => input.pendingRequestProofs.delete(replayKey))
+        Effect.sync(() => input.pendingLegacyRequestProofs.delete(replayKey))
       )
     )
   )
@@ -1458,7 +1928,15 @@ export function startConsoleBackfillIfNeeded(
   if (snapshot.truncated) start()
 }
 
+type BrowserDelivery = (
+  socket: WebSocket,
+  encoded: string,
+  kind: BrowserOutboxKind,
+  action?: string
+) => boolean
+
 class ConsoleHubRegistry {
+  readonly #deliver: BrowserDelivery
   readonly #docker: DockerDriver
   readonly #hubs = new Map<string, ConsoleHub>()
   readonly #pendingHubs = new Map<string, Fiber.Fiber<ConsoleHub, Error>>()
@@ -1467,10 +1945,12 @@ class ConsoleHubRegistry {
 
   constructor(
     docker: DockerDriver,
-    subscribeSnapshots: BrowserSocketOptions["subscribeSnapshots"]
+    subscribeSnapshots: BrowserSocketOptions["subscribeSnapshots"],
+    deliver: BrowserDelivery
   ) {
     this.#docker = docker
     this.#subscribeSnapshots = subscribeSnapshots
+    this.#deliver = deliver
   }
 
   subscribe(socket: WebSocket, instanceId: string): Promise<void> {
@@ -1550,6 +2030,7 @@ class ConsoleHubRegistry {
           this.#docker,
           session,
           this.#subscribeSnapshots,
+          this.#deliver,
           () => {
             if (hub.subscriberCount === 0) this.#hubs.delete(instanceId)
           }
@@ -1562,42 +2043,34 @@ class ConsoleHubRegistry {
 }
 
 class ResourceHubRegistry {
+  readonly #deliver: BrowserDelivery
   readonly #docker: DockerDriver
   readonly #historyDelivered = new Set<WebSocket>()
   readonly #subscribeSnapshots: BrowserSocketOptions["subscribeSnapshots"]
   readonly #subscriptions = new Map<WebSocket, string>()
+  #lastSample: RelaySnapshotSample | null = null
   #unsubscribe: (() => void) | null = null
 
   constructor(
     docker: DockerDriver,
-    subscribeSnapshots: BrowserSocketOptions["subscribeSnapshots"]
+    subscribeSnapshots: BrowserSocketOptions["subscribeSnapshots"],
+    deliver: BrowserDelivery
   ) {
     this.#docker = docker
     this.#subscribeSnapshots = subscribeSnapshots
+    this.#deliver = deliver
   }
 
   subscribe(socket: WebSocket, instanceId: string): void {
     this.#subscriptions.set(socket, instanceId)
-    this.#unsubscribe ??= this.#subscribeSnapshots((sample) => {
-      const byId = new Map(
-        sample.snapshot.instances.map((instance) => [instance.id, instance])
-      )
-      for (const [subscriber, subscribedInstanceId] of this.#subscriptions) {
-        const instance = byId.get(subscribedInstanceId)
-        if (instance) {
-          const includeHistory = !this.#historyDelivered.has(subscriber)
-          send(subscriber, {
-            history: includeHistory
-              ? this.#docker.resourceHistory(instance.id)
-              : [],
-            instance,
-            sequence: sample.sequence,
-            type: "resource",
-          })
-          this.#historyDelivered.add(subscriber)
-        }
-      }
-    })
+    if (!this.#unsubscribe) {
+      this.#unsubscribe = this.#subscribeSnapshots((sample) => {
+        this.#lastSample = sample
+        this.#deliverSample(sample)
+      })
+    } else if (this.#lastSample) {
+      this.#deliverSample(this.#lastSample, socket)
+    }
   }
 
   remove(socket: WebSocket): void {
@@ -1614,12 +2087,56 @@ class ResourceHubRegistry {
     this.#unsubscribe = null
     this.#subscriptions.clear()
     this.#historyDelivered.clear()
+    this.#lastSample = null
+  }
+
+  #deliverSample(sample: RelaySnapshotSample, only?: WebSocket): void {
+    const byId = new Map(
+      sample.snapshot.instances.map((instance) => [instance.id, instance])
+    )
+    const groups = new Map<string, Array<WebSocket>>()
+    for (const [subscriber, instanceId] of this.#subscriptions) {
+      if (only && subscriber !== only) continue
+      const sockets = groups.get(instanceId) ?? []
+      sockets.push(subscriber)
+      groups.set(instanceId, sockets)
+    }
+    for (const [instanceId, subscribers] of groups) {
+      const instance = byId.get(instanceId)
+      if (!instance) continue
+      const live = JSON.stringify({
+        history: [],
+        instance,
+        sequence: sample.sequence,
+        type: "resource",
+      })
+      let withHistory: string | null = null
+      for (const subscriber of subscribers) {
+        const first = !this.#historyDelivered.has(subscriber)
+        if (first) {
+          withHistory ??= JSON.stringify({
+            history: this.#docker.resourceHistory(instanceId),
+            instance,
+            sequence: sample.sequence,
+            type: "resource",
+          })
+        }
+        this.#deliver(
+          subscriber,
+          first ? (withHistory ?? live) : live,
+          "resource",
+          "instance.read"
+        )
+        this.#historyDelivered.add(subscriber)
+      }
+    }
   }
 }
 
 class ConsoleHub {
   readonly #backgroundFibers = new Set<Fiber.Fiber<void, never>>()
   readonly #docker: DockerDriver
+  readonly #deliver: BrowserDelivery
   readonly #instanceId: string
   readonly #lineIds = new Set<string>()
   readonly #onEmpty: () => void
@@ -1640,9 +2157,11 @@ class ConsoleHub {
     docker: DockerDriver,
     session: DockerConsoleSession,
     subscribeSnapshots: BrowserSocketOptions["subscribeSnapshots"],
+    deliver: BrowserDelivery,
     onEmpty: () => void
   ) {
     this.#docker = docker
+    this.#deliver = deliver
     this.#instanceId = session.instance.id
     this.#nextSession = session
     this.#onEmpty = onEmpty
@@ -1837,7 +2356,9 @@ class ConsoleHub {
       this.#truncated = true
     }
     const encoded = encodeConsoleLineFrame(line)
-    for (const socket of this.#subscribers) sendEncoded(socket, encoded)
+    for (const socket of this.#subscribers) {
+      this.#deliver(socket, encoded, "console", "instance.console.read")
+    }
   }
 
   #observeSnapshot(sample: RelaySnapshotSample): void {
@@ -1981,13 +2502,23 @@ class ConsoleHub {
     const lifecycle = this.#sessionLifecycle ?? []
     const snapshotStart = Math.max(0, this.#recent.length - 200)
     if (socket.protocol === relayBrowserProtocol) {
-      send(socket, {
-        type: "ready",
-        instanceId: this.#instanceId,
-        lifecycle,
-      })
+      this.#deliver(
+        socket,
+        JSON.stringify({
+          type: "ready",
+          instanceId: this.#instanceId,
+          lifecycle,
+        }),
+        "console",
+        "instance.console.read"
+      )
       for (const line of this.#recent.slice(snapshotStart)) {
-        sendEncoded(socket, encodeConsoleLineFrame(line))
+        this.#deliver(
+          socket,
+          encodeConsoleLineFrame(line),
+          "console",
+          "instance.console.read"
+        )
       }
       return
     }
@@ -1999,12 +2530,17 @@ class ConsoleHub {
       lines: this.#recent.slice(snapshotStart),
       truncated: this.#truncated || snapshotStart > 0,
     })
-    sendEncoded(socket, reset.encoded)
-    send(socket, {
-      type: "ready",
-      instanceId: this.#instanceId,
-      lifecycle,
-    })
+    this.#deliver(socket, reset.encoded, "console", "instance.console.read")
+    this.#deliver(
+      socket,
+      JSON.stringify({
+        type: "ready",
+        instanceId: this.#instanceId,
+        lifecycle,
+      }),
+      "console",
+      "instance.console.read"
+    )
     this.#sendHistory(
       new Set([socket]),
       this.#recent.slice(0, snapshotStart + reset.start)
@@ -2026,7 +2562,9 @@ class ConsoleHub {
       truncated: this.#truncated,
     })
     for (const encoded of frames) {
-      for (const socket of subscribers) sendEncoded(socket, encoded)
+      for (const socket of subscribers) {
+        this.#deliver(socket, encoded, "console", "instance.console.read")
+      }
     }
   }
 }
@@ -2106,19 +2644,6 @@ function timedBrowserOperation<TResult>(
 
 function asError(cause: unknown): Error {
   return cause instanceof Error ? cause : new Error(String(cause))
-}
-
-function send(socket: WebSocket, value: unknown): void {
-  sendEncoded(socket, JSON.stringify(value))
-}
-
-function sendEncoded(socket: WebSocket, value: string): void {
-  if (socket.readyState !== WebSocket.OPEN) return
-  if (socket.bufferedAmount > MAX_BUFFERED_BYTES) {
-    socket.close(1013, "Browser is not consuming console data")
-    return
-  }
-  socket.send(value)
 }
 
 function parseProtocols(value: string | undefined): ReadonlyArray<string> {

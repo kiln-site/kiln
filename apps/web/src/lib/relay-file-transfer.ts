@@ -307,6 +307,7 @@ async function relayFileAuthorization(
       action:
         method === "PUT" ? "instance.files.upload" : "instance.files.download",
       instanceId: input.instanceId,
+      optInV2: true,
       path: input.path,
       publicKeyJwk,
       relayId: input.relayId,

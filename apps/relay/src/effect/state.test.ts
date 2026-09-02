@@ -200,6 +200,100 @@ describe("Relay state", () => {
       })
     )
 
+    it.effect(
+      "persists monotonic browser floors and bounded replay entries",
+      () =>
+        Effect.gen(function* () {
+          const store = yield* RelayStateStore
+          const now = Date.UTC(2026, 0, 4)
+          const first = yield* store.reviseBrowserAuthorization(
+            "browser-issuer",
+            [
+              {
+                minimumRevision: 7,
+                scope: { instanceId: "instance-a", kind: "instance" },
+                subject: "user-a",
+              },
+              {
+                minimumRevision: 9,
+                scope: {
+                  kind: "login_session",
+                  loginSessionId: "session-a",
+                },
+                subject: "user-a",
+              },
+            ],
+            3,
+            now
+          )
+          assert.strictEqual(first.issuerGeneration, 3)
+          assert.strictEqual(
+            (yield* store.browserAuthority({
+              instanceId: "instance-a",
+              issuer: "browser-issuer",
+              loginSessionId: "session-a",
+              subject: "user-a",
+            })).minimumRevision,
+            9
+          )
+          const stale = yield* store.reviseBrowserAuthorization(
+            "browser-issuer",
+            [
+              {
+                minimumRevision: 2,
+                scope: { instanceId: "instance-a", kind: "instance" },
+                subject: "user-a",
+              },
+            ],
+            1,
+            now + 1
+          )
+          assert.strictEqual(stale.issuerGeneration, 3)
+          assert.strictEqual(stale.items[0]?.minimumRevision, 7)
+
+          assert.strictEqual(
+            yield* store.reserveBrowserFileReplay({
+              capabilityId: "capability-a",
+              expiresAt: now + 60_000,
+              maxEntries: 1,
+              nonce: "nonce-a",
+              now,
+            }),
+            "reserved"
+          )
+          assert.strictEqual(
+            yield* store.reserveBrowserFileReplay({
+              capabilityId: "capability-a",
+              expiresAt: now + 60_000,
+              maxEntries: 1,
+              nonce: "nonce-a",
+              now,
+            }),
+            "replayed"
+          )
+          assert.strictEqual(
+            yield* store.reserveBrowserFileReplay({
+              capabilityId: "capability-b",
+              expiresAt: now + 60_000,
+              maxEntries: 1,
+              nonce: "nonce-b",
+              now,
+            }),
+            "full"
+          )
+          assert.strictEqual(
+            yield* store.reserveBrowserFileReplay({
+              capabilityId: "capability-b",
+              expiresAt: now + 120_000,
+              maxEntries: 1,
+              nonce: "nonce-b",
+              now: now + 60_001,
+            }),
+            "reserved"
+          )
+        })
+    )
+
     it.effect("returns bounded security audit history newest first", () =>
       Effect.gen(function* () {
         const store = yield* RelayStateStore

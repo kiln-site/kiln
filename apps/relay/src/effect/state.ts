@@ -14,6 +14,7 @@ import type {
   RelayInstancePendingPrimaryPort,
   RelayInstancePortProtocol,
   RelayInstanceWebRoute,
+  RelayBrowserAuthorizationRevision,
 } from "@workspace/contracts"
 import {
   BACKUP_EXPORT_TTL_MIN_MS,
@@ -81,6 +82,25 @@ export interface RelayAuditInput {
 }
 
 export interface RelayAuditRecord extends RelayAuditInput {}
+
+export interface RelayBrowserAuthorityQuery {
+  readonly instanceId: string
+  readonly issuer: string
+  readonly loginSessionId: string
+  readonly subject: string
+}
+
+export interface RelayBrowserAuthority {
+  readonly issuerGeneration: number
+  readonly minimumRevision: number
+}
+
+export interface RelayBrowserAuthorizationResult {
+  readonly issuerGeneration: number
+  readonly items: ReadonlyArray<RelayBrowserAuthorizationRevision>
+}
+
+export type RelayBrowserFileReplayReservation = "full" | "replayed" | "reserved"
 
 export interface RelayAuditQuery {
   readonly from?: number
@@ -334,6 +354,22 @@ export class RelayStateStore extends Context.Service<
     readonly findClientById: (
       clientId: string
     ) => Effect.Effect<RelayClientRecord | null, RelayStateError>
+    readonly browserAuthority: (
+      query: RelayBrowserAuthorityQuery
+    ) => Effect.Effect<RelayBrowserAuthority, RelayStateError>
+    readonly reviseBrowserAuthorization: (
+      issuer: string,
+      items: ReadonlyArray<RelayBrowserAuthorizationRevision>,
+      minimumIssuerGeneration: number | undefined,
+      now: number
+    ) => Effect.Effect<RelayBrowserAuthorizationResult, RelayStateError>
+    readonly reserveBrowserFileReplay: (input: {
+      readonly capabilityId: string
+      readonly expiresAt: number
+      readonly maxEntries: number
+      readonly nonce: string
+      readonly now: number
+    }) => Effect.Effect<RelayBrowserFileReplayReservation, RelayStateError>
     readonly getMetadata: (
       key: string
     ) => Effect.Effect<string | null, RelayStateError>
@@ -838,6 +874,44 @@ const migrations = SqliteMigrator.fromRecord({
       FROM relay_instance_ready_sessions
     `
     yield* sql`DROP TABLE relay_instance_ready_sessions`
+  }),
+  "14_browser_authorization": Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient
+    yield* sql`
+      CREATE TABLE relay_browser_issuer_generations (
+        issuer TEXT PRIMARY KEY NOT NULL,
+        generation INTEGER NOT NULL CHECK (generation >= 0),
+        updated_at INTEGER NOT NULL
+      ) STRICT
+    `
+    yield* sql`
+      CREATE TABLE relay_browser_authorization_floors (
+        issuer TEXT NOT NULL,
+        subject TEXT NOT NULL,
+        scope_kind TEXT NOT NULL
+          CHECK (scope_kind IN ('subject_relay', 'instance', 'login_session')),
+        scope_id TEXT NOT NULL,
+        minimum_revision INTEGER NOT NULL CHECK (minimum_revision >= 0),
+        updated_at INTEGER NOT NULL,
+        PRIMARY KEY (issuer, subject, scope_kind, scope_id)
+      ) STRICT
+    `
+    yield* sql`
+      CREATE INDEX relay_browser_authorization_floors_updated
+      ON relay_browser_authorization_floors (updated_at)
+    `
+    yield* sql`
+      CREATE TABLE relay_browser_file_replays (
+        capability_id TEXT NOT NULL,
+        nonce TEXT NOT NULL,
+        expires_at INTEGER NOT NULL,
+        PRIMARY KEY (capability_id, nonce)
+      ) STRICT
+    `
+    yield* sql`
+      CREATE INDEX relay_browser_file_replays_expiry
+      ON relay_browser_file_replays (expires_at)
+    `
   }),
 })
 
@@ -1357,6 +1431,13 @@ const makeRelayStateStore = Effect.gen(function* () {
     const decoded = yield* decodeClientRows(rows)
     return decoded[0] ? yield* clientFromRow(decoded[0]) : null
   })
+
+  const browserScopeId = (scope: RelayBrowserAuthorizationRevision["scope"]) =>
+    scope.kind === "instance"
+      ? scope.instanceId
+      : scope.kind === "login_session"
+        ? scope.loginSessionId
+        : ""
 
   return RelayStateStore.of({
     appendAudit: (input) =>
@@ -1998,6 +2079,135 @@ const makeRelayStateStore = Effect.gen(function* () {
       run("find_client_by_public_key", findClientByPublicKey(publicKey)),
     findClientById: (clientId) =>
       run("find_client_by_id", findClientById(clientId)),
+    browserAuthority: (query) =>
+      run(
+        "browser_authority",
+        Effect.gen(function* () {
+          const generations = yield* sql<{ generation: number }>`
+            SELECT generation
+            FROM relay_browser_issuer_generations
+            WHERE issuer = ${query.issuer}
+            LIMIT 1
+          `
+          const floors = yield* sql<{ minimumRevision: number | null }>`
+            SELECT MAX(minimum_revision) AS minimumRevision
+            FROM relay_browser_authorization_floors
+            WHERE issuer = ${query.issuer}
+              AND subject = ${query.subject}
+              AND (
+                (scope_kind = 'subject_relay' AND scope_id = '')
+                OR (scope_kind = 'instance' AND scope_id = ${query.instanceId})
+                OR (
+                  scope_kind = 'login_session'
+                  AND scope_id = ${query.loginSessionId}
+                )
+              )
+          `
+          return {
+            issuerGeneration: generations[0]?.generation ?? 0,
+            minimumRevision: floors[0]?.minimumRevision ?? 0,
+          }
+        })
+      ),
+    reviseBrowserAuthorization: (issuer, items, minimumIssuerGeneration, now) =>
+      run(
+        "revise_browser_authorization",
+        sql.withTransaction(
+          Effect.gen(function* () {
+            if (minimumIssuerGeneration !== undefined) {
+              yield* sql`
+                INSERT INTO relay_browser_issuer_generations (
+                  issuer, generation, updated_at
+                ) VALUES (
+                  ${issuer}, ${minimumIssuerGeneration}, ${now}
+                )
+                ON CONFLICT (issuer) DO UPDATE SET
+                  generation = MAX(generation, excluded.generation),
+                  updated_at = excluded.updated_at
+              `
+            }
+            const persisted: Array<RelayBrowserAuthorizationRevision> = []
+            for (const item of items) {
+              const scopeId = browserScopeId(item.scope)
+              yield* sql`
+                INSERT INTO relay_browser_authorization_floors (
+                  issuer, subject, scope_kind, scope_id,
+                  minimum_revision, updated_at
+                ) VALUES (
+                  ${issuer}, ${item.subject}, ${item.scope.kind}, ${scopeId},
+                  ${item.minimumRevision}, ${now}
+                )
+                ON CONFLICT (issuer, subject, scope_kind, scope_id)
+                DO UPDATE SET
+                  minimum_revision = MAX(
+                    minimum_revision,
+                    excluded.minimum_revision
+                  ),
+                  updated_at = excluded.updated_at
+              `
+              const rows = yield* sql<{ minimumRevision: number }>`
+                SELECT minimum_revision AS minimumRevision
+                FROM relay_browser_authorization_floors
+                WHERE issuer = ${issuer}
+                  AND subject = ${item.subject}
+                  AND scope_kind = ${item.scope.kind}
+                  AND scope_id = ${scopeId}
+                LIMIT 1
+              `
+              persisted.push({
+                minimumRevision:
+                  rows[0]?.minimumRevision ?? item.minimumRevision,
+                scope: item.scope,
+                subject: item.subject,
+              })
+            }
+            const generations = yield* sql<{ generation: number }>`
+              SELECT generation
+              FROM relay_browser_issuer_generations
+              WHERE issuer = ${issuer}
+              LIMIT 1
+            `
+            return {
+              issuerGeneration: generations[0]?.generation ?? 0,
+              items: persisted,
+            }
+          })
+        )
+      ),
+    reserveBrowserFileReplay: (input) =>
+      run(
+        "reserve_browser_file_replay",
+        sql.withTransaction(
+          Effect.gen(function* () {
+            yield* sql`
+              DELETE FROM relay_browser_file_replays
+              WHERE expires_at <= ${input.now}
+            `
+            const replay = yield* sql<{ found: number }>`
+              SELECT 1 AS found
+              FROM relay_browser_file_replays
+              WHERE capability_id = ${input.capabilityId}
+                AND nonce = ${input.nonce}
+              LIMIT 1
+            `
+            if (replay[0]) return "replayed" as const
+            const totals = yield* sql<{ count: number }>`
+              SELECT COUNT(*) AS count FROM relay_browser_file_replays
+            `
+            if ((totals[0]?.count ?? 0) >= input.maxEntries) {
+              return "full" as const
+            }
+            yield* sql`
+              INSERT INTO relay_browser_file_replays (
+                capability_id, nonce, expires_at
+              ) VALUES (
+                ${input.capabilityId}, ${input.nonce}, ${input.expiresAt}
+              )
+            `
+            return "reserved" as const
+          })
+        )
+      ),
     findInvitationById: (invitationId) =>
       run(
         "find_invitation_by_id",

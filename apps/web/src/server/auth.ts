@@ -10,6 +10,17 @@ const getCurrentUser = createServerOnlyFn(async () => {
   return getAuthenticatedUserFromHeaders(getRequestHeaders())
 })
 
+const getCurrentIdentity = createServerOnlyFn(async () => {
+  const [
+    { getRequestHeaders },
+    { getAuthenticatedRealtimeIdentityFromHeaders },
+  ] = await Promise.all([
+    import("@tanstack/react-start/server"),
+    import("@/lib/auth-session"),
+  ])
+  return getAuthenticatedRealtimeIdentityFromHeaders(getRequestHeaders())
+})
+
 const setDevelopmentBypass = createServerOnlyFn(async (enabled: boolean) => {
   const [{ deleteCookie, setCookie }, { DEV_BYPASS_COOKIE }] =
     await Promise.all([
@@ -97,4 +108,10 @@ export const requireAuthenticatedUser = createServerOnlyFn(async () => {
   const user = await getCurrentUser()
   if (!user) throw new Error("Authentication required")
   return user
+})
+
+export const requireAuthenticatedIdentity = createServerOnlyFn(async () => {
+  const identity = await getCurrentIdentity()
+  if (!identity) throw new Error("Authentication required")
+  return identity
 })

@@ -11,6 +11,7 @@ import { AccessGrantedEmail } from "@/emails/access-granted-email"
 import { AccessInvitationEmail } from "@/emails/access-invitation-email"
 import { Database, type DatabaseTransaction } from "@/effect/database"
 import { runAppEffect } from "@/effect/runtime"
+import { forkPromise } from "@/effect/promise"
 import {
   accessGrantRoleChangeError,
   deduplicateEffectiveInstanceGrants,
@@ -26,6 +27,10 @@ import {
 import { auditInstanceCreatorId } from "@/lib/activity"
 import { databasePool } from "@/lib/database"
 import { databaseTable } from "@/lib/database-config"
+import {
+  advanceAuthorizationRevisionEffect,
+  advanceSubjectAcrossEnabledRelaysEffect,
+} from "@/lib/authorization-revision"
 import { emailDeliveryConfig, kilnPublicUrl } from "@/lib/environment"
 import { invitationDestination } from "@/lib/invitation-auth"
 import { accessRoles, isAccessRole, roleHasPermission } from "@/lib/permissions"
@@ -183,6 +188,10 @@ interface ExistingAccessUserRow extends RowDataPacket {
 
 interface AccessUserRoleRow extends RowDataPacket {
   role: string | null
+}
+
+interface AccessSessionRow extends RowDataPacket {
+  id: string
 }
 
 interface InstanceOwnerDirectoryRow extends RowDataPacket {
@@ -651,7 +660,7 @@ export const grantOrInviteAccess = createServerFn({ method: "POST" })
       }
       const ownerAccess =
         requestedOwnerAccess ?? (await canManageOwners(user, relay.id))
-      await runAppEffect(
+      const revisionChange = await runAppEffect(
         "access.grantExistingUser",
         grantExistingUserAccessEffect({
           canManageOwners: ownerAccess,
@@ -665,6 +674,13 @@ export const grantOrInviteAccess = createServerFn({ method: "POST" })
           userId: existingUser.id,
         })
       )
+      if (revisionChange) {
+        const { wakeAuthorizationDelivery } =
+          await import("@/lib/authorization-delivery")
+        for (const relayId of revisionChange.relayIds) {
+          wakeAuthorizationDelivery(relayId)
+        }
+      }
       publishAccessPolicyChange([existingUser.id], false, relay.id)
       const notificationStatus = await runAppEffect(
         "access.notifyExistingUser",
@@ -977,6 +993,20 @@ export const acceptAccessInvitation = createServerFn({ method: "POST" })
                 invitation.invited_by,
               ]
             )
+            if (resourceType !== "database") {
+              yield* advanceAuthorizationRevisionEffect(tx, {
+                targets: [
+                  {
+                    relayId: invitation.relay_id,
+                    scope:
+                      resourceType === "instance"
+                        ? { instanceId: resourceId, kind: "instance" }
+                        : { kind: "subject_relay" },
+                  },
+                ],
+                userId: user.id,
+              })
+            }
             yield* tx.execute(
               `UPDATE ${databaseTable("invitation")} SET accepted_at = CURRENT_TIMESTAMP(3) WHERE id = ?`,
               [invitation.id]
@@ -986,11 +1016,7 @@ export const acceptAccessInvitation = createServerFn({ method: "POST" })
         )
       })
     )
-    publishAccessPolicyChange(
-      [user.id],
-      true,
-      result.relayId ?? undefined
-    )
+    publishAccessPolicyChange([user.id], true, result.relayId ?? undefined)
     return { accepted: result.accepted }
   })
 
@@ -1051,6 +1077,7 @@ export const updateAccessGrant = createServerFn({ method: "POST" })
               `UPDATE ${databaseTable("access_grant")} SET role = ? WHERE id = ? AND relay_id = ?`,
               [data.role, data.id, relay.id]
             )
+            yield* advanceGrantAuthorizationEffect(transaction, relay.id, grant)
             return { updated: true }
           }),
       })
@@ -1108,6 +1135,7 @@ export const removeAccessGrant = createServerFn({ method: "POST" })
               `DELETE FROM ${databaseTable("access_grant")} WHERE id = ? AND relay_id = ?`,
               [data.id, relay.id]
             )
+            yield* advanceGrantAuthorizationEffect(transaction, relay.id, grant)
             return { removed: true }
           }),
       })
@@ -1174,6 +1202,17 @@ export const removeInstanceAccessGrant = createServerFn({ method: "POST" })
                     AND resource_type = 'instance' AND resource_id = ?`,
                 [data.id, relay.id, data.instanceId]
               )
+              if (grant) {
+                yield* advanceAuthorizationRevisionEffect(transaction, {
+                  targets: [
+                    {
+                      relayId: relay.id,
+                      scope: { instanceId: data.instanceId, kind: "instance" },
+                    },
+                  ],
+                  userId: grant.user_id,
+                })
+              }
               return { removed: true }
             })
         )
@@ -1255,6 +1294,18 @@ export const transferInstanceOwnership = createServerFn({ method: "POST" })
                     AND resource_type = 'instance' AND resource_id = ?`,
                 [user.id, data.userId, relay.id, data.instanceId]
               )
+              for (const changedUserId of [ownerId, data.userId]) {
+                if (!changedUserId) continue
+                yield* advanceAuthorizationRevisionEffect(transaction, {
+                  targets: [
+                    {
+                      relayId: relay.id,
+                      scope: { instanceId: data.instanceId, kind: "instance" },
+                    },
+                  ],
+                  userId: changedUserId,
+                })
+              }
               return { transferred: true }
             })
         )
@@ -1490,10 +1541,22 @@ function revokeUserCredentials(
   userId: string
 ) {
   return Effect.gen(function* () {
+    const sessions = yield* transaction.queryRows<AccessSessionRow>(
+      `SELECT id FROM ${databaseTable("session")}
+        WHERE userId = ? FOR UPDATE`,
+      [userId]
+    )
     yield* transaction.execute(
       `DELETE FROM ${databaseTable("session")} WHERE userId = ?`,
       [userId]
     )
+    yield* advanceSubjectAcrossEnabledRelaysEffect(transaction, userId, [
+      { kind: "subject_relay" },
+      ...sessions.map((session) => ({
+        kind: "login_session" as const,
+        loginSessionId: session.id,
+      })),
+    ])
     yield* transaction.execute(
       `UPDATE ${databaseTable("cli_credential")}
           SET revoked_at = CURRENT_TIMESTAMP(3)
@@ -1501,6 +1564,26 @@ function revokeUserCredentials(
       [userId]
     )
   })
+}
+
+function advanceGrantAuthorizationEffect(
+  transaction: DatabaseTransaction,
+  relayId: string,
+  grant: AccessGrantMutationRow
+) {
+  if (grant.resource_type === "database") return Effect.void
+  return advanceAuthorizationRevisionEffect(transaction, {
+    targets: [
+      {
+        relayId,
+        scope:
+          grant.resource_type === "instance"
+            ? { instanceId: grant.resource_id, kind: "instance" as const }
+            : { kind: "subject_relay" as const },
+      },
+    ],
+    userId: grant.user_id,
+  }).pipe(Effect.asVoid)
 }
 
 async function requiredRelay(relayId: string) {
@@ -1548,6 +1631,11 @@ function publishAccessPolicyChange(
     userIds: uniqueUserIds,
   })
   publishAccessCollectionChange(relayId)
+  forkPromise(async () => {
+    const { wakePendingAuthorizationDelivery } =
+      await import("@/lib/authorization-delivery")
+    await wakePendingAuthorizationDelivery()
+  })
 }
 
 function publishAccessCollectionChange(relayId?: string): void {

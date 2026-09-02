@@ -9,6 +9,9 @@ import {
   createRelaySnapshotDelta,
   isAuditedRelayControlOperation,
   relayAuthenticationWindowMs,
+  relayBrowserCapabilityV2Feature,
+  relayBrowserLeaseRenewalV1Feature,
+  relayFileRequestReplayV1Feature,
   relayAuthChallengeTranscript,
   relayAuthResponseTranscript,
   relayControlDeadlineMs,
@@ -36,6 +39,7 @@ import {
 } from "@/lib/relay-control-endpoint"
 import { RelayUnavailableError } from "@/effect/errors"
 import { forkAppEffect, runAppEffect } from "@/effect/runtime"
+import { forkPromise } from "@/effect/promise"
 import type { RelayCredentials } from "@/lib/relay-registry"
 import { resolveSftpAuthorization } from "@/lib/sftp-authorization"
 import { relayControlFailureError } from "@/lib/relay-control-errors"
@@ -128,6 +132,10 @@ export function relayConnectionBrowserMetadata(
   return connections.get(relayId)?.browserMetadata ?? null
 }
 
+export function relayConnectionFeatures(relayId: string): ReadonlySet<string> {
+  return connections.get(relayId)?.features ?? new Set()
+}
+
 export function closeRelayConnection(relayId: string): void {
   const connection = connections.get(relayId)
   connections.delete(relayId)
@@ -155,6 +163,7 @@ class RelayConnection {
   #hasPushedSnapshot = false
   #pushedSnapshot: RelaySnapshot | null = null
   #eventSequence = 0
+  #features = new Set<string>()
   #relay: RelayEndpoint
   #reconnectFiber: Fiber.Fiber<void, unknown> | null = null
   #socket: WebSocket | null = null
@@ -178,6 +187,10 @@ class RelayConnection {
     return relay?.browserOrigin && relay.proxyMode
       ? { browserOrigin: relay.browserOrigin, mode: relay.proxyMode }
       : null
+  }
+
+  get features(): ReadonlySet<string> {
+    return this.#state.status === "authenticated" ? this.#features : new Set()
   }
 
   matches(relay: RelayEndpoint): boolean {
@@ -204,6 +217,11 @@ class RelayConnection {
         const socket = this.#socket
         if (!socket || socket.readyState !== WebSocket.OPEN) {
           return relayConnectionFailure("Relay control socket is not connected")
+        }
+        if (this.#pending.size >= 32) {
+          return relayConnectionFailure(
+            "Relay control request limit reached; retry after pending work completes"
+          )
         }
         const id = randomUUID()
         const duration = Math.min(
@@ -271,6 +289,7 @@ class RelayConnection {
     this.#reconnectFiber = null
     this.#socket?.close(1000, "Hearth connection closed")
     this.#socket = null
+    this.#features.clear()
     this.#abortReverseRequests()
     this.#rejectPending(new Error("Relay connection closed"))
     this.#setState("disconnected", null)
@@ -442,7 +461,52 @@ class RelayConnection {
             return
           }
           this.#attempt = 0
+          this.#features = new Set(message.features ?? [])
           this.#setState("authenticated", null)
+          const synchronizeBrowserAuthorization = () => {
+            if (
+              this.#socket !== activeSocket ||
+              activeSocket.readyState !== WebSocket.OPEN
+            ) {
+              return
+            }
+            forkPromise(
+              async () => {
+                const {
+                  observeRelayIssuerGeneration,
+                  wakeAuthorizationDelivery,
+                } = await import("@/lib/authorization-delivery")
+                if (message.browserIssuerGeneration !== undefined) {
+                  await observeRelayIssuerGeneration(
+                    this.#relay.id,
+                    message.browserIssuerGeneration
+                  )
+                } else {
+                  wakeAuthorizationDelivery(this.#relay.id)
+                }
+              },
+              (cause) => {
+                Sentry.captureException(cause, {
+                  tags: { component: "browser-authorization-sync" },
+                })
+                // A temporary Hearth DB failure must not strand a Relay whose
+                // durable authorization state rolled back. Retry only while
+                // this exact authenticated control socket is still current.
+                if (
+                  this.#socket !== activeSocket ||
+                  activeSocket.readyState !== WebSocket.OPEN
+                ) {
+                  return
+                }
+                const retry = setTimeout(
+                  synchronizeBrowserAuthorization,
+                  1_000 + Math.floor(Math.random() * 2_000)
+                )
+                retry.unref()
+              }
+            )
+          }
+          synchronizeBrowserAuthorization()
           authenticated = true
           if (this.#hasPushedSnapshot) resume(Effect.void)
           return
@@ -574,7 +638,12 @@ class RelayConnection {
     socket.send(
       JSON.stringify({
         clientId: credentials.clientId,
-        features: [relaySnapshotDeltaFeature],
+        features: [
+          relaySnapshotDeltaFeature,
+          relayBrowserCapabilityV2Feature,
+          relayBrowserLeaseRenewalV1Feature,
+          relayFileRequestReplayV1Feature,
+        ],
         signature: sign(
           null,
           Buffer.from(
