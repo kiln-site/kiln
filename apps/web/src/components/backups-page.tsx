@@ -157,16 +157,41 @@ function selectBackupTopology(
   snapshot: Awaited<ReturnType<typeof getRelaySnapshot>>
 ) {
   return {
-    nodes: snapshot.nodes.map(({ relayId }) => ({ relayId })),
-    servers: snapshot.instances.map(({ id, relayId }) => ({ id, relayId })),
+    nodes: snapshot.nodes.map(({ relayId, relayName, relayStatus }) => ({
+      relayId,
+      relayName,
+      relayStatus,
+    })),
+    servers: snapshot.instances.map(
+      ({
+        brickId,
+        brickSource,
+        id,
+        implementation,
+        name,
+        observedState,
+        relayId,
+        relayStatus,
+      }) => ({
+        brickId,
+        brickSource,
+        id,
+        implementation,
+        name,
+        observedState,
+        relayId,
+        relayStatus,
+      })
+    ),
   }
 }
 
 function selectBackupDatabaseTopology(
   databases: Awaited<ReturnType<typeof getManagedDatabaseDirectory>>
 ) {
-  return databases.map(({ id, relayId, supportsImportExport }) => ({
+  return databases.map(({ id, name, relayId, supportsImportExport }) => ({
     id,
+    name,
     relayId,
     supportsImportExport,
   }))
@@ -373,9 +398,14 @@ export const BackupsPage = React.memo(function BackupsPage({
     const instances = new Map<string, InstanceNameInstance>()
     for (const server of topology.servers) {
       instances.set(targetKey("instance", server.relayId, server.id), {
+        brickId: server.brickId,
+        brickSource: server.brickSource,
         id: server.id,
+        implementation: server.implementation,
         kind: "server",
+        observedState: server.observedState,
         relayId: server.relayId,
+        relayStatus: server.relayStatus,
       })
     }
     for (const database of databases) {
@@ -390,9 +420,26 @@ export const BackupsPage = React.memo(function BackupsPage({
         id: relay.relayId,
         kind: "relay",
         relayId: relay.relayId,
+        relayStatus: relay.relayStatus,
       })
     }
     return instances
+  }, [databases, topology.nodes, topology.servers])
+  const targetNames = React.useMemo(() => {
+    const names = new Map<string, string>()
+    for (const server of topology.servers) {
+      names.set(targetKey("instance", server.relayId, server.id), server.name)
+    }
+    for (const database of databases) {
+      names.set(
+        targetKey("database", database.relayId, database.id),
+        database.name
+      )
+    }
+    for (const relay of topology.nodes) {
+      names.set(targetKey("platform", relay.relayId, "kiln"), relay.relayName)
+    }
+    return names
   }, [databases, topology.nodes, topology.servers])
   const availableRelayIds = React.useMemo(
     () =>
@@ -482,6 +529,7 @@ export const BackupsPage = React.memo(function BackupsPage({
           destinations={availabilityDestinations}
           dialogStore={dialogStore}
           targetInstances={targetInstances}
+          targetNames={targetNames}
           nameStore={nameStore}
           searchStore={searchStore}
           selectedServer={selectedServer}
@@ -692,6 +740,7 @@ const BackupDataSurface = React.memo(function BackupDataSurface({
   destinations,
   dialogStore,
   targetInstances,
+  targetNames,
   nameStore,
   searchStore,
   selectedServer,
@@ -706,6 +755,7 @@ const BackupDataSurface = React.memo(function BackupDataSurface({
   destinations: ReadonlyArray<BackupAvailabilityDestination>
   dialogStore: BackupDialogStore
   targetInstances: ReadonlyMap<string, InstanceNameInstance>
+  targetNames: ReadonlyMap<string, string>
   nameStore: BackupNameStore
   searchStore: BackupSearchStore
   selectedServer: ServerPickerOption | null
@@ -831,6 +881,7 @@ const BackupDataSurface = React.memo(function BackupDataSurface({
         destinations={destinations}
         dialogStore={dialogStore}
         targetInstances={targetInstances}
+        targetNames={targetNames}
         nameStore={nameStore}
         onSortChange={changeSort}
         scopeFiltered={Boolean(selectedServer)}
