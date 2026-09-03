@@ -75,6 +75,8 @@ export interface RelayConfig {
   }
   gameHostSource: RelayGameHostSource
   gitRepository: string
+  hearthInternalOrigin: string | null
+  hearthPublicOrigin: string | null
   host: string
   installationId: string | null
   managedLabel: string
@@ -111,6 +113,21 @@ export function loadConfig(
   const proxyMode = relayProxyMode(environment)
   const port = parsePort(environment, "KILN_RELAY_PORT", 4100)
   const coolifyPublicOrigin = relayCoolifyPublicOrigin(environment, port)
+  const hearthPublicOrigin = optionalHearthOrigin(
+    environment.KILN_HEARTH_PUBLIC_URL,
+    "KILN_HEARTH_PUBLIC_URL",
+    "https:"
+  )
+  const hearthInternalOrigin = optionalHearthOrigin(
+    environment.KILN_HEARTH_INTERNAL_URL,
+    "KILN_HEARTH_INTERNAL_URL",
+    "http:"
+  )
+  if (Boolean(hearthPublicOrigin) !== Boolean(hearthInternalOrigin)) {
+    throw new Error(
+      "KILN_HEARTH_PUBLIC_URL and KILN_HEARTH_INTERNAL_URL must be configured together"
+    )
+  }
   if (
     proxyMode === "coolify" &&
     !coolifyPublicOrigin &&
@@ -201,6 +218,8 @@ export function loadConfig(
     gamePortRange: relayGamePortRange(environment),
     gameHostSource,
     gitRepository,
+    hearthInternalOrigin,
+    hearthPublicOrigin,
     host: environment.KILN_RELAY_BIND_HOST?.trim() || "0.0.0.0",
     installationId,
     managedLabel: "kiln.relay.managed=true",
@@ -344,6 +363,36 @@ function parseCoolifyPublicOrigin(raw: string): string {
   ) {
     throw new Error(
       "The Coolify Relay public URL must be an HTTPS origin without credentials, a path, query, or fragment"
+    )
+  }
+  return url.origin
+}
+
+function optionalHearthOrigin(
+  raw: string | undefined,
+  name: "KILN_HEARTH_INTERNAL_URL" | "KILN_HEARTH_PUBLIC_URL",
+  protocol: "http:" | "https:"
+): string | null {
+  const value = raw?.trim()
+  if (!value) return null
+  const description = protocol === "http:" ? "private HTTP" : "HTTPS"
+  const parsed = Result.try(() => new URL(value))
+  if (Result.isFailure(parsed)) {
+    throw new Error(`${name} must be a valid ${description} origin`, {
+      cause: parsed.failure,
+    })
+  }
+  const url = parsed.success
+  if (
+    url.protocol !== protocol ||
+    url.username ||
+    url.password ||
+    url.pathname !== "/" ||
+    url.search ||
+    url.hash
+  ) {
+    throw new Error(
+      `${name} must be a ${description} origin without credentials, a path, query, or fragment`
     )
   }
   return url.origin

@@ -172,6 +172,48 @@ describe("loadConfig", () => {
     expect(config.traefikImage).toBe("traefik:v3.6.6")
   })
 
+  it("configures bundled Traefik Hearth origins", () => {
+    const config = loadConfig({
+      KILN_HEARTH_INTERNAL_URL: " http://hearth:3000 ",
+      KILN_HEARTH_PUBLIC_URL: " https://hearth.example.com ",
+      KILN_RELAY_PROXY: "traefik",
+      NODE_ENV: "production",
+    })
+
+    expect(config.hearthInternalOrigin).toBe("http://hearth:3000")
+    expect(config.hearthPublicOrigin).toBe("https://hearth.example.com")
+  })
+
+  it("requires paired, scheme-constrained Hearth origins", () => {
+    expect(() =>
+      loadConfig({
+        KILN_HEARTH_PUBLIC_URL: "https://hearth.example.com",
+        NODE_ENV: "production",
+      })
+    ).toThrow("must be configured together")
+    expect(() =>
+      loadConfig({
+        KILN_HEARTH_INTERNAL_URL: "https://hearth:3000",
+        KILN_HEARTH_PUBLIC_URL: "https://hearth.example.com",
+        NODE_ENV: "production",
+      })
+    ).toThrow("KILN_HEARTH_INTERNAL_URL must be a private HTTP origin")
+    expect(() =>
+      loadConfig({
+        KILN_HEARTH_INTERNAL_URL: "http://hearth:3000/admin",
+        KILN_HEARTH_PUBLIC_URL: "https://hearth.example.com",
+        NODE_ENV: "production",
+      })
+    ).toThrow("KILN_HEARTH_INTERNAL_URL must be a private HTTP origin")
+    expect(() =>
+      loadConfig({
+        KILN_HEARTH_INTERNAL_URL: "http://hearth:3000",
+        KILN_HEARTH_PUBLIC_URL: "http://hearth.example.com",
+        NODE_ENV: "production",
+      })
+    ).toThrow("KILN_HEARTH_PUBLIC_URL must be a HTTPS origin")
+  })
+
   it("uses Coolify's public HTTPS origin and keeps port 4100 private", () => {
     const config = loadConfig({
       KILN_RELAY_PROXY: "coolify",

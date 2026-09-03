@@ -1,0 +1,12 @@
+services:
+  hearth:
+    networks:
+      default: {}
+      relay-edge:
+        aliases:
+          - hearth
+
+networks:
+  relay-edge:
+    external: true
+    name: kiln-relay-edge

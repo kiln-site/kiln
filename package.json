@@ -21,7 +21,7 @@
     "e2e:docker": "node scripts/e2e-docker.mjs",
     "lint": "vp lint",
     "prepare": "./scripts/prepare-effect.sh",
-    "test": "vp run -r test && node --test scripts/dev-docker-helpers.test.mjs scripts/effect-boundaries.test.mjs scripts/image-source-compatibility.test.mjs scripts/relay-runtime-manifest.test.mjs scripts/migrate-app.test.mjs",
+    "test": "vp run -r test && node --test scripts/dev-docker-helpers.test.mjs scripts/effect-boundaries.test.mjs scripts/image-source-compatibility.test.mjs scripts/installer.test.mjs scripts/migrate-app.test.mjs scripts/relay-runtime-manifest.test.mjs",
     "format": "vp fmt",
     "typecheck": "vp run -r typecheck",
     "doctor": "npx react-doctor@latest"

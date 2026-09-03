@@ -1,0 +1,112 @@
+services:
+  cache:
+    container_name: kiln-cache
+    image: valkey/valkey:9.1.0-alpine
+    restart: unless-stopped
+    command:
+      - /bin/sh
+      - -ec
+      - exec valkey-server --save "" --appendonly no
+    tmpfs:
+      - /data
+    healthcheck:
+      test: ["CMD-SHELL", "valkey-cli ping | grep -q PONG"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  mysql:
+    container_name: kiln-mysql
+    image: mysql:8.4
+    restart: unless-stopped
+    environment:
+      MYSQL_DATABASE: hearth
+      MYSQL_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD is required}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?MYSQL_ROOT_PASSWORD is required}
+      MYSQL_USER: kiln
+    volumes:
+      - hearth-mysql:/var/lib/mysql
+    labels:
+      io.kiln.installation: ${KILN_INSTALLATION_ID:?KILN_INSTALLATION_ID is required}
+      io.kiln.resource: hearth-database
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          'mysqladmin ping -h 127.0.0.1 -u"$${MYSQL_USER}" -p"$${MYSQL_PASSWORD}"',
+        ]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+
+  relay:
+    container_name: kiln-relay
+    image: ghcr.io/kiln-site/relay:latest
+    restart: unless-stopped
+    environment:
+      KILN_INSTALLATION_ID: ${KILN_INSTALLATION_ID:?KILN_INSTALLATION_ID is required}
+      KILN_RELAY_ALLOW_PROVISIONING: ${KILN_RELAY_ALLOW_PROVISIONING:-true}
+      KILN_RELAY_BOOTSTRAP_TOKEN: ${KILN_RELAY_BOOTSTRAP_TOKEN:?KILN_RELAY_BOOTSTRAP_TOKEN is required}
+      KILN_RELAY_HOST: ${KILN_RELAY_HOST:?KILN_RELAY_HOST is required}
+      KILN_RELAY_GAME_HOST: ${KILN_RELAY_GAME_HOST:-}
+      KILN_RELAY_GAME_PORT_RANGE: ${KILN_RELAY_GAME_PORT_RANGE:-30000-39999}
+      KILN_RELAY_PROXY: ${KILN_RELAY_PROXY:?KILN_RELAY_PROXY is required}
+      KILN_RELAY_ACME_EMAIL: ${KILN_RELAY_ACME_EMAIL:-}
+      KILN_RELAY_PORT: ${KILN_RELAY_PORT:-4100}
+      KILN_RELAY_PUBLIC_URL: ${KILN_RELAY_PUBLIC_URL:?KILN_RELAY_PUBLIC_URL is required}
+      KILN_RELAY_SFTP_PORT: ${KILN_RELAY_SFTP_PORT:-2022}
+      KILN_HEARTH_PUBLIC_URL: ${KILN_HEARTH_PUBLIC_URL:-}
+      KILN_HEARTH_INTERNAL_URL: ${KILN_HEARTH_INTERNAL_URL:-}
+      KILN_PLATFORM_BACKUP_KEY: ${KILN_PLATFORM_BACKUP_KEY:?KILN_PLATFORM_BACKUP_KEY is required}
+    ports:
+      - "${KILN_RELAY_PUBLISH_ADDRESS:-127.0.0.1}:${KILN_RELAY_PORT:-4100}:${KILN_RELAY_PORT:-4100}"
+      - "${KILN_RELAY_SFTP_PUBLISH_ADDRESS:-0.0.0.0}:${KILN_RELAY_SFTP_PORT:-2022}:${KILN_RELAY_SFTP_PORT:-2022}"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - relay-data:/data
+    labels:
+      io.kiln.installation: ${KILN_INSTALLATION_ID:?KILN_INSTALLATION_ID is required}
+
+  hearth:
+    container_name: kiln-hearth
+    image: ghcr.io/kiln-site/hearth:latest
+    restart: unless-stopped
+    depends_on:
+      cache:
+        condition: service_healthy
+      mysql:
+        condition: service_healthy
+      relay:
+        condition: service_healthy
+    environment:
+      DB_HOST: mysql
+      DB_PORT: 3306
+      DB_NAME: hearth
+      DB_USERNAME: kiln
+      DB_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD is required}
+      CACHE_HOST: cache
+      CACHE_PORT: 6379
+      KILN_ENVIRONMENT: prod
+      KILN_INSTALLATION_ID: ${KILN_INSTALLATION_ID:?KILN_INSTALLATION_ID is required}
+      KILN_ENABLE_SIGNUPS: ${KILN_ENABLE_SIGNUPS:-false}
+      KILN_RELAY_BOOTSTRAP_TOKEN: ${KILN_RELAY_BOOTSTRAP_TOKEN:?KILN_RELAY_BOOTSTRAP_TOKEN is required}
+      KILN_RELAY_CONTROL_URL: ws://relay:${KILN_RELAY_PORT:-4100}
+      KILN_RELAY_HOST: ${KILN_RELAY_HOST:?KILN_RELAY_HOST is required}
+      KILN_RELAY_PORT: ${KILN_RELAY_PORT:-4100}
+      KILN_RELAY_PUBLIC_URL: ${KILN_RELAY_PUBLIC_URL:?KILN_RELAY_PUBLIC_URL is required}
+      KILN_PLATFORM_BACKUP_KEY: ${KILN_PLATFORM_BACKUP_KEY:?KILN_PLATFORM_BACKUP_KEY is required}
+      KILN_URL: ${KILN_HEARTH_PUBLIC_URL:-https://hearth.invalid}
+      BETTER_AUTH_SECRETS: ${BETTER_AUTH_SECRETS:?BETTER_AUTH_SECRETS is required}
+    extra_hosts:
+      - "${KILN_RELAY_HOST}:host-gateway"
+    ports:
+      - "127.0.0.1:${KILN_HEARTH_PORT:-3000}:3000"
+    labels:
+      io.kiln.installation: ${KILN_INSTALLATION_ID:?KILN_INSTALLATION_ID is required}
+      io.kiln.resource: hearth
+
+volumes:
+  hearth-mysql:
+    name: kiln-hearth-mysql
+  relay-data:
+    name: kiln-relay-data

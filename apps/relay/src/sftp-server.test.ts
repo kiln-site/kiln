@@ -489,6 +489,8 @@ function testConfig(dataDirectory: string): RelayConfig {
     gamePortRange: { end: 39_999, start: 30_000 },
     gameHostSource: "relay",
     gitRepository: "https://github.com/kiln-site/kiln",
+    hearthInternalOrigin: null,
+    hearthPublicOrigin: null,
     host: "127.0.0.1",
     installationId: null,
     managedLabel: "kiln.relay.managed=true",

@@ -1,0 +1,45 @@
+services:
+  relay:
+    networks:
+      default: {}
+      coolify: {}
+    labels:
+      traefik.enable: "true"
+      traefik.docker.network: coolify
+      traefik.http.routers.kiln-relay-http.entrypoints: http
+      traefik.http.routers.kiln-relay-http.middlewares: kiln-relay-redirect
+      traefik.http.routers.kiln-relay-http.rule: Host(`${KILN_RELAY_HOST}`)
+      traefik.http.routers.kiln-relay-http.service: kiln-relay
+      traefik.http.middlewares.kiln-relay-redirect.redirectscheme.scheme: https
+      traefik.http.middlewares.kiln-relay-redirect.redirectscheme.permanent: "true"
+      traefik.http.routers.kiln-relay-https.entrypoints: https
+      traefik.http.routers.kiln-relay-https.rule: Host(`${KILN_RELAY_HOST}`)
+      traefik.http.routers.kiln-relay-https.service: kiln-relay
+      traefik.http.routers.kiln-relay-https.tls: "true"
+      traefik.http.routers.kiln-relay-https.tls.certresolver: letsencrypt
+      traefik.http.services.kiln-relay.loadbalancer.server.port: "${KILN_RELAY_PORT:-4100}"
+
+  hearth:
+    networks:
+      default: {}
+      coolify: {}
+    labels:
+      traefik.enable: "true"
+      traefik.docker.network: coolify
+      traefik.http.routers.kiln-hearth-http.entrypoints: http
+      traefik.http.routers.kiln-hearth-http.middlewares: kiln-hearth-redirect
+      traefik.http.routers.kiln-hearth-http.rule: Host(`${KILN_HEARTH_HOST}`)
+      traefik.http.routers.kiln-hearth-http.service: kiln-hearth
+      traefik.http.middlewares.kiln-hearth-redirect.redirectscheme.scheme: https
+      traefik.http.middlewares.kiln-hearth-redirect.redirectscheme.permanent: "true"
+      traefik.http.routers.kiln-hearth-https.entrypoints: https
+      traefik.http.routers.kiln-hearth-https.rule: Host(`${KILN_HEARTH_HOST}`)
+      traefik.http.routers.kiln-hearth-https.service: kiln-hearth
+      traefik.http.routers.kiln-hearth-https.tls: "true"
+      traefik.http.routers.kiln-hearth-https.tls.certresolver: letsencrypt
+      traefik.http.services.kiln-hearth.loadbalancer.server.port: "3000"
+
+networks:
+  coolify:
+    external: true
+    name: coolify

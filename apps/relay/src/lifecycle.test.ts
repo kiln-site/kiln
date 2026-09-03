@@ -510,6 +510,8 @@ describe("Traefik web routes", () => {
     const staticConfiguration = traefikStaticConfiguration(settings)
     const dynamicConfiguration = traefikDynamicConfiguration(
       loadConfig({
+        KILN_HEARTH_INTERNAL_URL: "http://hearth:3000",
+        KILN_HEARTH_PUBLIC_URL: "https://hearth.example.com",
         KILN_RELAY_HOST: "relay.example.com",
         KILN_RELAY_PROXY: "traefik",
         NODE_ENV: "development",
@@ -522,6 +524,8 @@ describe("Traefik web routes", () => {
     expect(staticConfiguration).toContain("admin@example.com")
     expect(staticConfiguration).not.toContain("docker.sock")
     expect(dynamicConfiguration).toContain("PathPrefix(`/map`)")
+    expect(dynamicConfiguration).toContain("Host(`hearth.example.com`)")
+    expect(dynamicConfiguration).toContain("http://hearth:3000")
     expect(dynamicConfiguration).toContain("http://kiln-relay:4100")
     expect(dynamicConfiguration).toContain("http://kiln-aaaaaaaa:8080")
     expect(dynamicConfiguration).not.toContain("rootCAs:")
@@ -543,6 +547,22 @@ describe("Traefik web routes", () => {
     expect(dynamicConfiguration).toContain(
       "http://hearth-feature-a1b2c3-kiln-aaaaaaaa:8080"
     )
+  })
+
+  it("only publishes the configured Hearth origin in bundled mode", () => {
+    const config = loadConfig({
+      KILN_HEARTH_INTERNAL_URL: "http://hearth:3000",
+      KILN_HEARTH_PUBLIC_URL: "https://hearth.example.com",
+      KILN_RELAY_HOST: "relay.example.com",
+      NODE_ENV: "development",
+    })
+
+    expect(
+      traefikDynamicConfiguration(config, [], {
+        ...settings,
+        mode: "none",
+      })
+    ).not.toContain("kiln-hearth")
   })
 
   it("builds direct Ember labels for a Coolify Traefik edge", () => {

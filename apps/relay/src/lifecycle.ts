@@ -4279,6 +4279,9 @@ export class LifecycleDriver {
             `Docker container ${name} exists but is not owned by this Relay`
           )
         }
+        if (!(await this.#containerRunning(name))) {
+          await command("docker", ["start", name])
+        }
         return
       }
     }
@@ -4753,10 +4756,30 @@ accessLog: {}
 export function traefikDynamicConfiguration(
   config: RelayConfig,
   routes: ReadonlyArray<RelayStoredWebRoute>,
-  _settings: RelayProxySettings
+  settings: RelayProxySettings
 ): string {
   const resources = relayResourceNames(config)
+  const hearth =
+    settings.mode === "traefik" &&
+    config.hearthPublicOrigin &&
+    config.hearthInternalOrigin
+      ? {
+          internalOrigin: config.hearthInternalOrigin,
+          publicOrigin: config.hearthPublicOrigin,
+        }
+      : null
   const lines = ["http:", "  routers:"]
+  if (hearth) {
+    lines.push(
+      "    kiln-hearth:",
+      `      rule: ${JSON.stringify(`Host(\`${new URL(hearth.publicOrigin).hostname}\`)`)}`,
+      "      entryPoints:",
+      "        - websecure",
+      "      service: kiln-hearth",
+      "      tls:",
+      "        certResolver: kiln"
+    )
+  }
   if (isTraefikHostname(config.advertisedHost)) {
     lines.push(
       "    kiln-relay:",
@@ -4789,6 +4812,14 @@ export function traefikDynamicConfiguration(
   }
 
   lines.push("  services:")
+  if (hearth) {
+    lines.push(
+      "    kiln-hearth:",
+      "      loadBalancer:",
+      "        servers:",
+      `          - url: ${JSON.stringify(hearth.internalOrigin)}`
+    )
+  }
   if (isTraefikHostname(config.advertisedHost)) {
     lines.push(
       "    kiln-relay:",

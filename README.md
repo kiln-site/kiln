@@ -19,9 +19,24 @@ ghcr.io/kiln-site/bricks-java:25
 ghcr.io/kiln-site/bricks-steamcmd:latest
 ```
 
-## Configuration
+## Install on Linux
 
-Start from `.env.hearth.example`. These are the values worth setting for a first install:
+Create DNS records for `hearth.example.com` and `relay.example.com`, then run:
+
+```sh
+curl --proto '=https' --tlsv1.2 -fsSL https://kiln.site/install.sh \
+  | sudo KILN_DOMAIN=example.com bash -s -- kiln
+```
+
+Use `hearth` instead of `kiln` for a non-game-server-provisioning local Relay,
+or `relay` to install a standalone Relay and print its pairing URI. Rerunning the command
+repairs and recreates Kiln without replacing saved configuration, database
+data, or Relay data. See [the installation guide](docs/installation.md) for
+custom hostnames and proxy selection.
+
+## Manual configuration
+
+Start from `.env.hearth.example`. These are the values worth setting for a manual install:
 
 ```env
 KILN_URL=https://hearth.example.com
