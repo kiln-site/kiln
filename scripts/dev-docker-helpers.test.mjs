@@ -3,8 +3,17 @@ import test from "node:test"
 
 import {
   developmentRelayName,
+  developmentStackName,
   ensureDockerVolume,
 } from "./dev-docker-helpers.mjs"
+
+test("creates stable development stack names from worktree paths", () => {
+  const name = developmentStackName("/workspace/feature")
+
+  assert.match(name, /^hearth-feature-[a-f0-9]{6}$/u)
+  assert.equal(name, developmentStackName("/workspace/feature"))
+  assert.notEqual(name, developmentStackName("/workspace/other-feature"))
+})
 
 test("creates stable 13-character development Relay names", () => {
   const name = developmentRelayName("/workspace/feature")
