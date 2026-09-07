@@ -59,6 +59,9 @@ export interface ConsoleStreamSnapshot {
 }
 
 export interface ConsoleStreamStore {
+  getRetrySnapshot: () => number
+  retry: () => void
+  subscribeRetry: (listener: () => void) => () => void
   getHasLinesSnapshot: () => boolean
   getSnapshot: () => ConsoleStreamSnapshot
   setSnapshot: (snapshot: ConsoleStreamSnapshot) => void
@@ -75,6 +78,8 @@ export interface ConsoleAggregateStreamStore extends ConsoleStreamStore {
 }
 
 export function createConsoleStreamStore(): ConsoleStreamStore {
+  let retryVersion = 0
+  const retryListeners = new Set<() => void>()
   let snapshot: ConsoleStreamSnapshot = {
     connection: "opening",
     consoleData: null,
@@ -85,6 +90,15 @@ export function createConsoleStreamStore(): ConsoleStreamStore {
   }
   const listeners = new Set<() => void>()
   return {
+    getRetrySnapshot: () => retryVersion,
+    retry: () => {
+      retryVersion += 1
+      for (const listener of retryListeners) listener()
+    },
+    subscribeRetry: (listener) => {
+      retryListeners.add(listener)
+      return () => retryListeners.delete(listener)
+    },
     getHasLinesSnapshot: () => Boolean(snapshot.consoleData?.lines.length),
     getSnapshot: () => snapshot,
     setSnapshot: (nextSnapshot) => {
@@ -292,6 +306,9 @@ export function createConsoleAggregateStreamStore(
       )
     )
     const transportSnapshot = snapshots.find((snapshot) => snapshot.transport)
+    const failures = values.flatMap(({ relay, snapshot }) =>
+      snapshot.error ? [`${relay.name}: ${snapshot.error}`] : []
+    )
     store.setSnapshot({
       connection,
       consoleData:
@@ -306,10 +323,11 @@ export function createConsoleAggregateStreamStore(
               ),
             },
       error:
-        connection === "unavailable"
-          ? (snapshots.find((snapshot) => snapshot.error)?.error ??
-            "No Tailscale nodes are available.")
-          : null,
+        failures.length > 0
+          ? failures.join(" ")
+          : connection === "unavailable"
+            ? "No Tailscale nodes are available."
+            : null,
       loading:
         values.length === 0 ||
         (lines.length === 0 && snapshots.some((snapshot) => snapshot.loading)),

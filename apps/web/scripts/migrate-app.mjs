@@ -27,9 +27,30 @@ try {
   await ensureAccessAssignmentSchema(connection)
   await ensureBackupSchema(connection)
   await ensureScheduleSchema(connection)
+  await ensureAuthorizationSchema(connection)
   console.log("Kiln application tables are up to date")
 } finally {
   await connection.end()
+}
+
+async function ensureAuthorizationSchema(database) {
+  const [columns] = await database.query(
+    `SHOW COLUMNS FROM ${databaseTable("relay")}`
+  )
+  const columnNames = new Set(columns.map((column) => column.Field))
+  if (!columnNames.has("issuer_generation")) {
+    await database.query(
+      `ALTER TABLE ${databaseTable("relay")}
+       ADD issuer_generation BIGINT UNSIGNED NOT NULL DEFAULT 1 AFTER client_actions`
+    )
+  }
+  if (!columnNames.has("acknowledged_issuer_generation")) {
+    await database.query(
+      `ALTER TABLE ${databaseTable("relay")}
+       ADD acknowledged_issuer_generation BIGINT UNSIGNED NOT NULL DEFAULT 0
+       AFTER issuer_generation`
+    )
+  }
 }
 
 async function ensureScheduleSchema(database) {

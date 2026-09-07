@@ -37,6 +37,7 @@ const hearthScopeSchema = z.object({
 
 export const realtimeClientEventSchema = z.discriminatedUnion("type", [
   sequencedEventSchema.extend({
+    authorization: z.boolean().optional(),
     clear: z.boolean(),
     hearth: z.boolean(),
     type: z.literal("reset"),

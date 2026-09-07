@@ -27,7 +27,54 @@ const fileCapabilityInputSchema = browserCapabilityInputSchema.extend({
         !path.split(/[\\/]/u).includes(".."),
       "Invalid relative file path"
     ),
+  optInV2: z.boolean().optional().default(false),
 })
+
+const browserCapabilityBatchSchema = browserCapabilityInputSchema
+  .omit({ write: true })
+  .extend({
+    requests: z
+      .array(
+        z.discriminatedUnion("kind", [
+          z.object({
+            kind: z.literal("console"),
+            optInV2: z.boolean(),
+            write: z.boolean(),
+          }),
+          z.object({
+            kind: z.literal("resources"),
+            optInV2: z.boolean(),
+          }),
+        ])
+      )
+      .min(1)
+      .max(2)
+      .refine(
+        (requests) =>
+          new Set(requests.map((request) => request.kind)).size ===
+          requests.length,
+        "Duplicate browser capability kinds are not allowed"
+      ),
+  })
+
+export const issueBrowserCapabilities = createServerFn({ method: "POST" })
+  .validator(browserCapabilityBatchSchema)
+  .handler(async ({ data }) => {
+    const [
+      { requireAuthenticatedIdentity },
+      { issueBrowserCapabilitiesForRequest },
+    ] = await Promise.all([
+      import("@/server/auth"),
+      import("@/server/relay-capability-service"),
+    ])
+    return issueBrowserCapabilitiesForRequest({
+      authenticate: requireAuthenticatedIdentity,
+      instanceId: data.instanceId,
+      publicKeyJwk: data.publicKeyJwk,
+      relayId: data.relayId,
+      requests: data.requests,
+    })
+  })
 
 export const issueConsoleCapability = createServerFn({ method: "POST" })
   .validator(browserCapabilityInputSchema)
@@ -67,17 +114,20 @@ export const issueResourceCapability = createServerFn({ method: "POST" })
 export const issueFileCapability = createServerFn({ method: "POST" })
   .validator(fileCapabilityInputSchema)
   .handler(async ({ data }) => {
-    const [{ requireAuthenticatedUser }, { issueFileCapabilityForRequest }] =
-      await Promise.all([
-        import("@/server/auth"),
-        import("@/server/relay-capability-service"),
-      ])
+    const [
+      { requireAuthenticatedIdentity },
+      { issueFileCapabilityForRequest },
+    ] = await Promise.all([
+      import("@/server/auth"),
+      import("@/server/relay-capability-service"),
+    ])
     return issueFileCapabilityForRequest({
       action: data.action,
-      authenticate: requireAuthenticatedUser,
+      authenticate: requireAuthenticatedIdentity,
       instanceId: data.instanceId,
       path: data.path,
       publicKeyJwk: data.publicKeyJwk,
       relayId: data.relayId,
+      optInV2: data.optInV2,
     })
   })

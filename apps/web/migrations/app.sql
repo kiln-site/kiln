@@ -12,6 +12,8 @@ CREATE TABLE IF NOT EXISTS kiln_relay (
   client_private_key_ciphertext TEXT NOT NULL,
   client_role ENUM('full_access', 'read_only', 'custom') NOT NULL,
   client_actions JSON NOT NULL,
+  issuer_generation BIGINT UNSIGNED NOT NULL DEFAULT 1,
+  acknowledged_issuer_generation BIGINT UNSIGNED NOT NULL DEFAULT 0,
   enabled BOOLEAN NOT NULL DEFAULT TRUE,
   last_connected_at TIMESTAMP(3) NULL,
   last_error VARCHAR(512) NULL,
@@ -23,6 +25,27 @@ CREATE TABLE IF NOT EXISTS kiln_relay (
   created_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
   updated_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
   UNIQUE KEY kiln_relay_endpoint_unique (hostname, port)
+);
+
+CREATE TABLE IF NOT EXISTS kiln_authorization_subject (
+  user_id VARCHAR(36) NOT NULL PRIMARY KEY,
+  revision BIGINT UNSIGNED NOT NULL DEFAULT 0,
+  updated_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3)
+);
+
+CREATE TABLE IF NOT EXISTS kiln_authorization_delivery (
+  relay_id CHAR(43) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+  subject_id VARCHAR(36) NOT NULL,
+  scope_kind ENUM('instance', 'subject_relay', 'login_session') NOT NULL,
+  scope_id VARCHAR(128) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+  desired_revision BIGINT UNSIGNED NOT NULL,
+  acknowledged_revision BIGINT UNSIGNED NOT NULL DEFAULT 0,
+  updated_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+  PRIMARY KEY (relay_id, subject_id, scope_kind, scope_id),
+  KEY kiln_authorization_delivery_pending_idx
+    (relay_id, acknowledged_revision, desired_revision, updated_at),
+  CONSTRAINT kiln_authorization_delivery_relay_fk
+    FOREIGN KEY (relay_id) REFERENCES kiln_relay (id) ON DELETE CASCADE
 );
 
 CREATE TABLE IF NOT EXISTS kiln_setting (

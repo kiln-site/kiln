@@ -523,6 +523,11 @@ describe("Traefik web routes", () => {
     expect(staticConfiguration).not.toContain("docker.sock")
     expect(dynamicConfiguration).toContain("PathPrefix(`/map`)")
     expect(dynamicConfiguration).toContain("http://kiln-relay:4100")
+    expect(dynamicConfiguration).toContain(
+      "Host(`relay.example.com`) && Path(`/v1/browser`)"
+    )
+    expect(dynamicConfiguration).toContain("kiln-relay-browser-admission")
+    expect(dynamicConfiguration).toContain("burst: 16")
     expect(dynamicConfiguration).toContain("http://kiln-aaaaaaaa:8080")
     expect(dynamicConfiguration).not.toContain("rootCAs:")
     expect(dynamicConfiguration).toContain("stripPrefix:")

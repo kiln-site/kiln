@@ -15,10 +15,13 @@ import {
   relayAuthenticationWindowMs,
   relayAuthChallengeTranscript,
   relayAuthResponseTranscript,
+  relayBrowserCapabilityV2Feature,
+  relayBrowserLeaseRenewalV1Feature,
   relayControlDeadlineMs,
   relayControlMaxFrameBytes,
   relayControlRequestTimeoutMs,
   relayControlProtocol,
+  relayFileRequestReplayV1Feature,
   relaySnapshotDeltaFeature,
   isAuditedRelayControlOperation,
 } from "@workspace/contracts"
@@ -485,7 +488,12 @@ function authenticateSocket(
             currentClient.role,
             currentClient.actions
           )
-          if (!action || !isActionAllowed(actions, action)) {
+          const issuerInternal =
+            request.operation === "browser.authorization.revise"
+          if (
+            !issuerInternal &&
+            (!action || !isActionAllowed(actions, action))
+          ) {
             yield* Effect.sync(() => {
               sendError(
                 socket,
@@ -611,9 +619,25 @@ function authenticateSocket(
           options.state.touchClient(client.id, Date.now(), peerAddress ?? null)
         )
       )
+      const browserAuthorization = yield* promiseOperation(() =>
+        options.runEffect(
+          options.state.reviseBrowserAuthorization(
+            client.id,
+            [],
+            undefined,
+            Date.now()
+          )
+        )
+      )
       const ready: RelayAuthReady = {
         actions: actionsForRole(client.role, client.actions),
+        browserIssuerGeneration: browserAuthorization.issuerGeneration,
         clientId: client.id,
+        features: [
+          relayBrowserCapabilityV2Feature,
+          relayBrowserLeaseRenewalV1Feature,
+          relayFileRequestReplayV1Feature,
+        ],
         protocol: relayControlProtocol,
         relayBuild: relayBuildLabel(),
         role: client.role,
@@ -896,6 +920,8 @@ function actionForRequest(request: RelayControlRequest): RelayAction | null {
       return "relay.clients.update"
     case "relay.clients.revoke":
       return "relay.clients.revoke"
+    case "browser.authorization.revise":
+      return null
     case "brick.catalog":
     case "brick.recipe":
       return "brick.read"

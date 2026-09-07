@@ -1,6 +1,6 @@
 import * as React from "react"
 import { useQueryClient } from "@tanstack/react-query"
-import { Effect, Stream } from "effect"
+import { Effect, Fiber, Queue, Stream } from "effect"
 import type {
   RelayConsole,
   RelayConsoleLine,
@@ -33,7 +33,11 @@ import {
 } from "@/lib/relay-console-stream"
 import type { ConsoleLoadTiming } from "@/lib/console-performance"
 import { queryKeys } from "@/lib/query-options"
-import type { InstanceRuntime } from "@/lib/relay-selectors"
+import type { ConsoleInstanceRuntime } from "@/lib/relay-selectors"
+import {
+  shouldWaitForRelayBrowserAuthorization,
+  relayBrowserAuthorizationChanges,
+} from "@/lib/authenticated-relay-socket"
 
 export function useRelayConsoleStream(
   relayId: string,
@@ -41,11 +45,17 @@ export function useRelayConsoleStream(
   relayConnected: boolean,
   browserOrigin: string | null,
   consoleTransport: "direct" | "hearth" | null,
-  runtime: InstanceRuntime | null | undefined,
-  loadTiming?: ConsoleLoadTiming
+  runtime: ConsoleInstanceRuntime | null | undefined,
+  loadTiming?: ConsoleLoadTiming,
+  canWrite = false,
+  retryVersion = 0
 ) {
   const queryClient = useQueryClient()
   const hasEverBeenLiveRef = React.useRef(false)
+  const lastRetryVersionRef = React.useRef(retryVersion)
+  const previousConnectionRef = React.useRef<Fiber.Fiber<void, unknown> | null>(
+    null
+  )
   const runtimeRef = React.useRef(runtime)
   React.useLayoutEffect(() => {
     runtimeRef.current = runtime
@@ -261,6 +271,9 @@ export function useRelayConsoleStream(
     }
 
     let disposed = false
+    let refreshRoute = retryVersion !== lastRetryVersionRef.current
+    lastRetryVersionRef.current = retryVersion
+    let openingTimer: number | null = null
     let activeTransport: ConsoleStreamSnapshot["transport"] = null
     let flushTimer: number | null = null
     const pending: Array<RelayConsoleLine> = []
@@ -273,12 +286,35 @@ export function useRelayConsoleStream(
         connection: hasEverBeenLiveRef.current ? "reconnecting" : "opening",
         error: null,
         loading: !consoleDataRef.current,
+        transport: null,
+        transportMessage: null,
       })
     )
 
     function commitSnapshot(patch: Partial<ConsoleStreamSnapshot>) {
       if (disposed) return
       setSnapshot((current) => updateConsoleStreamSnapshot(current, patch))
+    }
+
+    function clearOpeningTimeout() {
+      if (openingTimer !== null) window.clearTimeout(openingTimer)
+      openingTimer = null
+    }
+
+    function watchOpening() {
+      clearOpeningTimeout()
+      openingTimer = window.setTimeout(() => {
+        openingTimer = null
+        const error = "The console is taking too long to connect."
+        loadTiming?.markRetryableFailure(new Error(error))
+        commitSnapshot({
+          connection: hasEverBeenLiveRef.current
+            ? "reconnecting"
+            : "unavailable",
+          error,
+          loading: false,
+        })
+      }, 10_000)
     }
 
     function flush() {
@@ -296,6 +332,12 @@ export function useRelayConsoleStream(
         lifecycle: current?.lifecycle ?? [],
         lines: capConsoleLines([...(current?.lines ?? []), ...fresh]),
         truncated: Boolean(current?.truncated) || seen.size > 5_000,
+      }
+      // Renewable sessions can stay open indefinitely. Retain deduplication
+      // for the visible/history window, not every line ever streamed.
+      if (seen.size > 10_016) {
+        seen.clear()
+        for (const line of next.lines) seen.add(line.id)
       }
       consoleDataRef.current = next
       queryClient.setQueryData(
@@ -371,29 +413,48 @@ export function useRelayConsoleStream(
       commitSnapshot({ consoleData: nextConsole })
     }
 
+    const previousConnection = previousConnectionRef.current
     const connectFiber = Effect.runFork(
       Effect.gen(function* () {
+        // Join teardown before a manual retry can acquire a replacement socket.
+        if (previousConnection) yield* Fiber.interrupt(previousConnection)
+        const authorizationChanges = yield* relayBrowserAuthorizationChanges(
+          relayId,
+          instanceId
+        )
+        watchOpening()
         let retryDelay = 400
         while (!disposed) {
           const failure = yield* openRelayConsoleStream(
             relayId,
             instanceId,
-            browserOrigin,
-            consoleTransport,
-            loadTiming
+            refreshRoute ? null : browserOrigin,
+            refreshRoute ? null : consoleTransport,
+            loadTiming,
+            canWrite
           ).pipe(
             Stream.runForEach((event) =>
               Effect.sync(() => {
                 if (disposed) return
-                if (event.type === "transport") {
+                if (event.type === "reconnecting") {
+                  watchOpening()
+                  commitSnapshot({
+                    connection: hasEverBeenLiveRef.current
+                      ? "reconnecting"
+                      : "unavailable",
+                    error: event.message,
+                    loading: false,
+                  })
+                } else if (event.type === "transport") {
                   activeTransport = event.transport
                   loadTiming?.markTransport(event.transport)
                   commitSnapshot({
-                    error: null,
                     transport: event.transport,
                     transportMessage: event.message,
                   })
                 } else if (event.type === "ready") {
+                  refreshRoute = false
+                  clearOpeningTimeout()
                   hasEverBeenLiveRef.current = true
                   const eventStartedAt = lifecycleEventTime(
                     event.lifecycle,
@@ -517,6 +578,7 @@ export function useRelayConsoleStream(
           if (disposed) break
           if (failure === null) continue
           loadTiming?.markRetryableFailure(failure)
+          clearOpeningTimeout()
           commitSnapshot({
             connection: hasEverBeenLiveRef.current
               ? "reconnecting"
@@ -524,13 +586,19 @@ export function useRelayConsoleStream(
             error: consoleConnectionMessage(failure),
             loading: false,
           })
+          if (shouldWaitForRelayBrowserAuthorization(failure)) {
+            yield* Queue.take(authorizationChanges)
+            continue
+          }
           yield* Effect.sleep(retryDelay)
           retryDelay = Math.min(retryDelay * 2, 5_000)
         }
-      })
+      }).pipe(Effect.scoped)
     )
+    previousConnectionRef.current = connectFiber
 
     return () => {
+      clearOpeningTimeout()
       if (flushTimer !== null) window.clearTimeout(flushTimer)
       flush()
       disposed = true
@@ -538,12 +606,14 @@ export function useRelayConsoleStream(
     }
   }, [
     browserOrigin,
+    canWrite,
     consoleTransport,
     instanceId,
     loadTiming,
     queryClient,
     relayConnected,
     relayId,
+    retryVersion,
   ])
 
   return snapshot
@@ -551,7 +621,7 @@ export function useRelayConsoleStream(
 
 function consoleMatchesRuntime(
   consoleData: RelayConsole | null,
-  runtime: InstanceRuntime | null | undefined
+  runtime: ConsoleInstanceRuntime | null | undefined
 ): boolean {
   if (!consoleData) return false
   const expectedStartedAt = lifecycleEventTime(runtime?.lifecycle, "started")

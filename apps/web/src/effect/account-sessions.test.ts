@@ -126,6 +126,21 @@ function accountSessionDatabaseLayer(input: {
         input.statements.push({ sql, values: values ?? [] })
         return input.rows as unknown as ReadonlyArray<TRow>
       }),
-    transaction: () => Effect.die("Unexpected account session transaction"),
+    transaction: (_operation, run) =>
+      run({
+        execute: (sql, values) =>
+          Effect.sync(() => {
+            input.statements.push({ sql, values: values ?? [] })
+            return successfulWrite
+          }),
+        queryRows: <TRow extends RowDataPacket>(
+          sql: string,
+          values?: Array<boolean | Buffer | Date | null | number | string>
+        ) =>
+          Effect.sync(() => {
+            input.statements.push({ sql, values: values ?? [] })
+            return [] as ReadonlyArray<TRow>
+          }),
+      }),
   })
 }

@@ -12,20 +12,29 @@ import {
 import type { RelayConsoleStreamEvent } from "@workspace/contracts"
 import { Effect, Result, Stream } from "effect"
 
-import type { AuthenticatedUser } from "@/lib/auth-session"
+import type {
+  AuthenticatedRealtimeIdentity,
+  AuthenticatedUser,
+} from "@/lib/auth-session"
 import { kilnPublicUrl } from "@/lib/environment"
+import { forkPromise } from "@/effect/promise"
 import { relayControlEndpoint } from "@/lib/relay-connection"
-import { prepareConsoleCapabilityForUser } from "@/server/relay-capability-service"
+import {
+  prepareConsoleCapabilityForIdentity,
+  prepareConsoleCapabilityForUser,
+} from "@/server/relay-capability-service"
 
 const MAX_INBOX_BYTES = 2 * 1024 * 1024
 const MAX_INBOX_MESSAGES = 256
 const AUTHENTICATION_TIMEOUT_MS = 10_000
 
 export async function* openHearthRelayConsoleStream(input: {
+  credentialId?: string
   instanceId: string
   relayId: string
   signal: AbortSignal
-  user: AuthenticatedUser
+  identity?: AuthenticatedRealtimeIdentity
+  user?: AuthenticatedUser
 }): AsyncGenerator<RelayConsoleStreamEvent> {
   if (input.signal.aborted) throw new Error("Console proxy was cancelled")
   const keys = generateKeyPairSync("ec", { namedCurve: "prime256v1" })
@@ -36,13 +45,24 @@ export async function* openHearthRelayConsoleStream(input: {
     x: requiredCoordinate(publicKeyJwk.x),
     y: requiredCoordinate(publicKeyJwk.y),
   }
-  const { capability, relay, relayCaCertificatePem } =
-    await prepareConsoleCapabilityForUser({
-      instanceId: input.instanceId,
-      publicKeyJwk: browserKey,
-      relayId: input.relayId,
-      user: input.user,
-    })
+  if (!input.identity && (!input.user || !input.credentialId)) {
+    throw new Error("Authentication required")
+  }
+  const prepared = input.identity
+    ? await prepareConsoleCapabilityForIdentity({
+        identity: input.identity,
+        instanceId: input.instanceId,
+        publicKeyJwk: browserKey,
+        relayId: input.relayId,
+      })
+    : await prepareConsoleCapabilityForUser({
+        credentialId: input.credentialId!,
+        instanceId: input.instanceId,
+        publicKeyJwk: browserKey,
+        relayId: input.relayId,
+        user: input.user!,
+      })
+  const { capability, relay, relayCaCertificatePem } = prepared
   const control = relayControlEndpoint(relay)
   const protocol = control.useTls ? "wss" : "ws"
   const socket = new WebSocket(
@@ -58,6 +78,87 @@ export async function* openHearthRelayConsoleStream(input: {
     }
   )
   const inbox = createSocketInbox(socket, input.signal)
+  let activeCapability = capability
+  let renewalTimer: ReturnType<typeof setTimeout> | null = null
+
+  const scheduleRenewal = (message: Record<string, unknown>) => {
+    if (activeCapability.version !== 2) return
+    const nonce = message.renewalNonce
+    const nonceExpiresAt = message.renewalNonceExpiresAt
+    const sessionId = message.sessionId
+    if (
+      typeof nonce !== "string" ||
+      typeof nonceExpiresAt !== "number" ||
+      typeof sessionId !== "string"
+    ) {
+      throw new Error("Relay omitted its console renewal challenge")
+    }
+    if (renewalTimer) clearTimeout(renewalTimer)
+    renewalTimer = setTimeout(
+      () => {
+        renewalTimer = null
+        forkPromise(
+          async () => {
+            const renewed = input.identity
+              ? await prepareConsoleCapabilityForIdentity({
+                  identity: input.identity,
+                  instanceId: input.instanceId,
+                  publicKeyJwk: browserKey,
+                  relayId: input.relayId,
+                })
+              : await prepareConsoleCapabilityForUser({
+                  credentialId: input.credentialId!,
+                  instanceId: input.instanceId,
+                  publicKeyJwk: browserKey,
+                  relayId: input.relayId,
+                  user: input.user!,
+                })
+            if (renewed.capability.version !== 2) {
+              throw new Error("Relay console renewal downgraded capability v2")
+            }
+            const proof = sign(
+              "sha256",
+              Buffer.from(
+                relayBrowserProofTranscript(
+                  {
+                    capabilityId: capabilityId(renewed.capability.capability),
+                    expiresAt: nonceExpiresAt,
+                    nonce,
+                    relayId: input.relayId,
+                    sessionId,
+                  },
+                  socket.protocol === relayBrowserConsoleProtocol
+                    ? relayBrowserConsoleProtocol
+                    : relayBrowserProtocol
+                )
+              ),
+              { dsaEncoding: "ieee-p1363", key: keys.privateKey }
+            )
+            if (socket.readyState !== WebSocket.OPEN) return
+            socket.send(
+              JSON.stringify({
+                capability: renewed.capability.capability,
+                signature: proof.toString("base64url"),
+                type: "auth.renew",
+                v: 1,
+              })
+            )
+            activeCapability = renewed.capability
+          },
+          () => {
+            closeSocket(socket, 4403, "Console authorization renewal failed")
+          }
+        )
+      },
+      Math.max(
+        1_000,
+        Math.min(activeCapability.expiresAt, nonceExpiresAt) -
+          Date.now() -
+          10_000
+      )
+    )
+    renewalTimer.unref()
+  }
 
   yield* managedAsyncIterable(
     (async function* () {
@@ -77,7 +178,7 @@ export async function* openHearthRelayConsoleStream(input: {
         Buffer.from(
           relayBrowserProofTranscript(
             {
-              capabilityId: capabilityId(capability.capability),
+              capabilityId: capabilityId(activeCapability.capability),
               expiresAt: challenge.expiresAt,
               nonce: challenge.nonce,
               relayId: input.relayId,
@@ -92,7 +193,7 @@ export async function* openHearthRelayConsoleStream(input: {
       )
       socket.send(
         JSON.stringify({
-          capability: capability.capability,
+          capability: activeCapability.capability,
           publicKeyJwk: browserKey,
           signature: proof.toString("base64url"),
           type: "auth",
@@ -106,6 +207,7 @@ export async function* openHearthRelayConsoleStream(input: {
       ) {
         throw new Error("Relay rejected the Hearth console proxy")
       }
+      if (activeCapability.version === 2) scheduleRenewal(ready)
       socket.send(
         JSON.stringify({
           instanceId: input.instanceId,
@@ -118,10 +220,15 @@ export async function* openHearthRelayConsoleStream(input: {
         // The socket is one ordered stream; concurrent reads could reorder lines.
         // oxlint-disable-next-line react-doctor/async-await-in-loop
         const message = await inbox.next()
+        if (message.type === "auth.renewed") {
+          scheduleRenewal({ ...message, sessionId: challenge.sessionId })
+          continue
+        }
         yield relayConsoleStreamEventSchema.parse(message)
       }
     })(),
     () => {
+      if (renewalTimer) clearTimeout(renewalTimer)
       inbox.close()
       closeSocket(socket, 1000, "Hearth console proxy closed")
     }

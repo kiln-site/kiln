@@ -121,6 +121,15 @@ export function relayKey(): string | null {
   return process.env.KILN_RELAY_KEY?.trim() || null
 }
 
+export function browserCapabilityMinimumVersion(
+  kind: "console" | "file" | "resources"
+): 1 | 2 {
+  const name = `KILN_BROWSER_CAPABILITY_${kind.toUpperCase()}_MIN_VERSION`
+  const value = process.env[name]?.trim() || "1"
+  if (value === "1" || value === "2") return Number(value) as 1 | 2
+  throw new Error(`${name} must be 1 or 2`)
+}
+
 function environmentFlag(name: string, fallback: boolean): boolean {
   const value = process.env[name]?.trim()
   if (!value) return fallback

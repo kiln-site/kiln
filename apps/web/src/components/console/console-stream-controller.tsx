@@ -14,7 +14,7 @@ import {
 } from "@/lib/query-options"
 import {
   selectInstanceRelayConnected,
-  selectInstanceRuntime,
+  selectInstanceConsoleRuntime,
   selectRelayBrowserOrigin,
   selectRelayConsoleTransport,
 } from "@/lib/relay-selectors"
@@ -25,20 +25,27 @@ const emptyTailscaleStacks: Array<TailscaleStackOverview> = []
 
 export function ConsoleStreamController({
   instanceId,
+  canWrite,
   loadTiming,
   relayId,
   streamStore,
 }: {
   instanceId: string
+  canWrite: boolean
   loadTiming?: ConsoleLoadTiming
   relayId: string
   streamStore: ConsoleStreamStore
 }) {
   const relayConnected = useInstanceRelayConnected()
+  const retryVersion = React.useSyncExternalStore(
+    streamStore.subscribeRetry,
+    streamStore.getRetrySnapshot,
+    streamStore.getRetrySnapshot
+  )
   const browserOrigin = useRelayBrowserOrigin(relayId)
   const consoleTransport = useRelayConsoleTransport(relayId)
   const selectRuntime = React.useMemo(
-    () => selectInstanceRuntime(instanceId, relayId),
+    () => selectInstanceConsoleRuntime(instanceId, relayId),
     [instanceId, relayId]
   )
   const { data: runtime } = useQuery({
@@ -52,7 +59,9 @@ export function ConsoleStreamController({
     browserOrigin,
     consoleTransport,
     runtime,
-    loadTiming
+    loadTiming,
+    canWrite,
+    retryVersion
   )
   const effectiveSnapshot = React.useMemo(
     () =>
@@ -109,8 +118,13 @@ function TailscaleConsoleStreamSource({
   relayName: string
   streamStore: ConsoleAggregateStreamStore
 }) {
+  const retryVersion = React.useSyncExternalStore(
+    streamStore.subscribeRetry,
+    streamStore.getRetrySnapshot,
+    streamStore.getRetrySnapshot
+  )
   const selectRuntime = React.useMemo(
-    () => selectInstanceRuntime(instanceId, relayId),
+    () => selectInstanceConsoleRuntime(instanceId, relayId),
     [instanceId, relayId]
   )
   const selectConnected = React.useMemo(
@@ -133,7 +147,10 @@ function TailscaleConsoleStreamSource({
     relayConnected,
     browserOrigin,
     consoleTransport,
-    runtime
+    runtime,
+    undefined,
+    false,
+    retryVersion
   )
   const effectiveSnapshot = React.useMemo(
     () =>

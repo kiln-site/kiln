@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto"
 
+import * as Sentry from "@sentry/tanstackstart-react"
 import { passkey } from "@better-auth/passkey"
 import { betterAuth } from "better-auth"
 import { APIError, createAuthMiddleware } from "better-auth/api"
@@ -9,6 +10,7 @@ import { twoFactor } from "better-auth/plugins/two-factor"
 import { tanstackStartCookies } from "better-auth/tanstack-start"
 import type { RowDataPacket } from "mysql2/promise"
 import { Resend } from "resend"
+import { Effect } from "effect"
 
 import { AuthCodeEmail } from "@/emails/auth-code-email"
 import { databasePool } from "@/lib/database"
@@ -77,11 +79,21 @@ export const auth = betterAuth({
   databaseHooks: {
     session: {
       delete: {
+        before: async (session) => {
+          await recordBetterAuthAuthorizationChange(session.userId, [
+            { kind: "login_session", loginSessionId: session.id },
+          ])
+        },
         after: async (session) => {
           publishRealtimeChange({
             sessionIds: [session.id],
             type: "session.revoked",
           })
+          // A second revision closes capabilities issued after the durable
+          // pre-delete intent but before Better Auth committed the deletion.
+          await recordBetterAuthAuthorizationChange(session.userId, [
+            { kind: "login_session", loginSessionId: session.id },
+          ])
         },
       },
     },
@@ -103,6 +115,23 @@ export const auth = betterAuth({
               ? { ...user, name: parseDisplayName(user.name) }
               : user,
         }),
+        after: async (user) => {
+          await recordBetterAuthAuthorizationChange(user.id, [
+            { kind: "subject_relay" },
+          ])
+        },
+      },
+      delete: {
+        before: async (user) => {
+          await recordBetterAuthAuthorizationChange(user.id, [
+            { kind: "subject_relay" },
+          ])
+        },
+        after: async (user) => {
+          await recordBetterAuthAuthorizationChange(user.id, [
+            { kind: "subject_relay" },
+          ])
+        },
       },
     },
   },
@@ -254,3 +283,30 @@ export const auth = betterAuth({
 export type AuthSession = typeof auth.$Infer.Session
 
 export { publicSignupEnabled }
+
+async function recordBetterAuthAuthorizationChange(
+  userId: string,
+  scopes: ReadonlyArray<
+    | { kind: "login_session"; loginSessionId: string }
+    | { kind: "subject_relay" }
+  >
+): Promise<void> {
+  await Effect.runPromise(
+    Effect.tryPromise({
+      try: async () => {
+        const { recordAuthorizationChange } =
+          await import("@/lib/authorization-delivery")
+        await recordAuthorizationChange({ scopes, userId })
+      },
+      catch: (cause) => cause,
+    }).pipe(
+      Effect.tapError((cause) =>
+        Effect.sync(() => {
+          Sentry.captureException(cause, {
+            tags: { component: "better-auth-authorization-revision" },
+          })
+        })
+      )
+    )
+  )
+}

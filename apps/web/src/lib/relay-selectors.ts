@@ -290,6 +290,28 @@ export function selectInstanceRuntime(instanceId: string, relayId?: string) {
   }
 }
 
+export type ConsoleInstanceRuntime = Omit<InstanceRuntime, "resources">
+
+export function selectInstanceConsoleRuntime(
+  instanceId: string,
+  relayId?: string
+) {
+  return (snapshot: RelayFleetSnapshot): ConsoleInstanceRuntime | null => {
+    const instance = snapshot.instances.find(
+      (item) => item.id === instanceId && (!relayId || item.relayId === relayId)
+    )
+    return instance
+      ? {
+          id: instance.id,
+          lifecycle: instance.lifecycle,
+          observedState: instance.observedState,
+          recovery: instance.recovery,
+          relayId: instance.relayId,
+        }
+      : null
+  }
+}
+
 export function selectInstanceSettings(instanceId: string, relayId?: string) {
   return (snapshot: RelayFleetSnapshot): InstanceSettingsData | null => {
     const instance = snapshot.instances.find(

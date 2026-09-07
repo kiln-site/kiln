@@ -29,6 +29,7 @@ import {
   type RealtimeClientEvent,
 } from "@/lib/realtime-events"
 import { getFreshRelayConnectionState } from "@/server/relay"
+import { notifyRelayBrowserAuthorizationChanged } from "@/lib/relay-browser-credentials"
 
 const maximumBufferedEvents = 256
 const maximumRememberedEvents = 512
@@ -38,12 +39,16 @@ export const RealtimeSync = React.memo(function RealtimeSync() {
   const dbClient = useDbClient()
   const queryClient = useQueryClient()
 
+  // The cleanup closes EventSource and clears every retry/watchdog timer;
+  // async work also observes `closed` before applying results.
+  // oxlint-disable-next-line react-doctor/effect-needs-cleanup
   React.useEffect(() => {
     const instances = getRelayInstancesCollection(dbClient)
     let source: EventSource | null = null
     let closed = false
     let resetRequested = false
     let hearthRefetchRequested = false
+    let authorizationRefreshRequested = false
     let resetting: Promise<void> | null = null
     let recoveryRetry: ReturnType<typeof setTimeout> | null = null
     let recoveryFailures = 0
@@ -184,7 +189,11 @@ export const RealtimeSync = React.memo(function RealtimeSync() {
       return refreshingHearth
     }
 
-    const requestReset = (sequence = 0, refetchHearth = false) => {
+    const requestReset = (
+      sequence = 0,
+      refetchHearth = false,
+      refreshAuthorization = false
+    ) => {
       if (recoveryRetry) {
         clearTimeout(recoveryRetry)
         recoveryRetry = null
@@ -192,6 +201,7 @@ export const RealtimeSync = React.memo(function RealtimeSync() {
       recoveryFloor = Math.max(recoveryFloor, sequence)
       resetRequested = true
       hearthRefetchRequested ||= refetchHearth
+      authorizationRefreshRequested ||= refreshAuthorization
       if (resetting) return
       resetting = ensuringPromise(
         () =>
@@ -200,7 +210,12 @@ export const RealtimeSync = React.memo(function RealtimeSync() {
               while (!closed && resetRequested) {
                 resetRequested = false
                 const shouldRefetchHearth = hearthRefetchRequested
+                const shouldRefreshAuthorization = authorizationRefreshRequested
                 hearthRefetchRequested = false
+                authorizationRefreshRequested = false
+                if (shouldRefreshAuthorization) {
+                  notifyRelayBrowserAuthorizationChanged()
+                }
                 activeRecoveryHearth = shouldRefetchHearth
                 const recoveryEpoch = activeEpoch
                 if (closed) return
@@ -208,6 +223,7 @@ export const RealtimeSync = React.memo(function RealtimeSync() {
                 if (recoveryEpoch !== activeEpoch) continue
                 if (resetRequested) {
                   hearthRefetchRequested ||= shouldRefetchHearth
+                  authorizationRefreshRequested ||= shouldRefreshAuthorization
                   activeRecoveryHearth = false
                   continue
                 }
@@ -215,6 +231,7 @@ export const RealtimeSync = React.memo(function RealtimeSync() {
                 recoveryFailures = 0
                 if (resetRequested) {
                   hearthRefetchRequested ||= shouldRefetchHearth
+                  authorizationRefreshRequested ||= shouldRefreshAuthorization
                   activeRecoveryHearth = false
                   continue
                 }
@@ -305,6 +322,7 @@ export const RealtimeSync = React.memo(function RealtimeSync() {
         recoveryFailures = 0
         resetRequested = false
         hearthRefetchRequested = false
+        authorizationRefreshRequested = false
         bufferedEvents = []
         rememberedEvents.clear()
         rememberedEventOrder.length = 0
@@ -319,7 +337,8 @@ export const RealtimeSync = React.memo(function RealtimeSync() {
         }
         requestReset(
           event.sequence,
-          event.hearth || (epochChanged && !initialEpoch)
+          event.hearth || (epochChanged && !initialEpoch),
+          event.authorization === true
         )
         return
       }

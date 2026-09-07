@@ -16,6 +16,7 @@ import type {
   ConsoleUiStore,
 } from "@/components/console/console-stores"
 import { ConsoleTooltip } from "@/components/console/console-tooltip"
+import { ConsoleRetryButton } from "@/components/console/console-retry-button"
 import type { ConsoleLoadTiming } from "@/lib/console-performance"
 import { redactSensitiveTextWithRanges } from "@/lib/redaction"
 
@@ -118,6 +119,7 @@ export const ConsoleLogViewportController = React.memo(
         consoleData={consoleData}
         filteredLines={filteredLines}
         snapshot={snapshot}
+        streamStore={streamStore}
         uiStore={uiStore}
       />
     )
@@ -138,6 +140,7 @@ interface ConsoleLogViewportProps {
   consoleData: RelayConsole | null
   filteredLines: Array<ConsoleDisplayLine>
   snapshot: ConsoleStreamSnapshot
+  streamStore: ConsoleStreamStore
   uiStore: ConsoleUiStore
 }
 
@@ -146,6 +149,7 @@ function ConsoleLogViewport({
   consoleData,
   filteredLines,
   snapshot,
+  streamStore,
   uiStore,
 }: ConsoleLogViewportProps) {
   const { connection, error, loading, transport } = snapshot
@@ -269,6 +273,7 @@ function ConsoleLogViewport({
         connection={connection}
         hasConsoleData={Boolean(consoleData)}
         transport={transport}
+        error={error}
       />
 
       {loading && !consoleData ? (
@@ -279,15 +284,9 @@ function ConsoleLogViewport({
           </div>
         </div>
       ) : null}
-      {!loading && !consoleData && connection === "unavailable" ? (
+      {!loading && !consoleData && error ? (
         <div className="absolute inset-0 grid place-items-center text-center">
-          <div className="max-w-xs">
-            <WifiOff className="mx-auto size-5 text-amber-300" />
-            <p className="mt-3 text-sm font-semibold">Console unavailable</p>
-            <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
-              {error ?? "The console stream could not be opened."}
-            </p>
-          </div>
+          <ConsoleRetryButton streamStore={streamStore} showLabel />
         </div>
       ) : null}
       {!loading && consoleData && filteredLines.length === 0 ? (
@@ -308,12 +307,18 @@ const ConsoleConnectionNotice = React.memo(function ConsoleConnectionNotice({
   connection,
   hasConsoleData,
   transport,
+  error,
 }: {
   connection: ConsoleStreamSnapshot["connection"]
   hasConsoleData: boolean
   transport: ConsoleStreamSnapshot["transport"]
+  error: string | null
 }) {
   if (!hasConsoleData) return null
+  if (error)
+    return (
+      <ConsoleConnectionNoticeContent message="CONSOLE CONNECTION FAILED" />
+    )
   if (connection === "opening") return <DelayedConsoleOpeningNotice />
   if (connection === "live" && transport !== "hearth") return null
 

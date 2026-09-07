@@ -77,6 +77,18 @@ describe("realtime client events", () => {
     ).toBe(false)
   })
 
+  it("accepts an authorization refresh hint on reset", () => {
+    expect(
+      realtimeClientEventSchema.parse({
+        ...cursor,
+        authorization: true,
+        clear: false,
+        hearth: false,
+        type: "reset",
+      })
+    ).toMatchObject({ authorization: true, type: "reset" })
+  })
+
   it("can recover Relay identity and Hearth queries in one event", () => {
     const identity = realtimeClientEventSchema.parse({
       ...cursor,

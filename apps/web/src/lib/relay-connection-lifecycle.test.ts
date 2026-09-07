@@ -3,12 +3,13 @@ import { once } from "node:events"
 
 import { it as effectIt } from "@effect/vitest"
 import { Effect } from "effect"
-import { afterEach, expect, vi } from "vite-plus/test"
+import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test"
 import { WebSocketServer } from "ws"
 import type { AddressInfo } from "node:net"
 import type { WebSocket } from "ws"
 
 import {
+  relayBrowserCapabilityV2Feature,
   relayAuthChallengeTranscript,
   relayControlProtocol,
 } from "@workspace/contracts"
@@ -25,9 +26,21 @@ vi.mock("@/lib/relay-registry", () => ({
 vi.mock("@/lib/sftp-authorization", () => ({
   resolveSftpAuthorization: vi.fn(),
 }))
+const authorizationFakes = vi.hoisted(() => ({
+  synchronize: vi.fn(),
+  synchronizeMinimum: vi.fn(),
+  wake: vi.fn(),
+}))
+vi.mock("@/lib/authorization-delivery", () => ({
+  synchronizeRelayIssuerGeneration: authorizationFakes.synchronize,
+  synchronizeRelayIssuerGenerationMinimum:
+    authorizationFakes.synchronizeMinimum,
+  wakeAuthorizationDelivery: authorizationFakes.wake,
+}))
 
 import {
   closeRelayConnection,
+  relayBrowserAuthorizationReady,
   relayConnectionBrowserMetadata,
   relayConnectionState,
   relayRpc,
@@ -70,13 +83,19 @@ const pushedSnapshot = {
   },
 } satisfies RelaySnapshot
 
+beforeEach(() => {
+  authorizationFakes.synchronize.mockReset().mockResolvedValue(3)
+  authorizationFakes.synchronizeMinimum.mockReset().mockResolvedValue(4)
+  authorizationFakes.wake.mockReset()
+})
+
 afterEach(() => {
   closeRelayConnection(relayId)
   vi.restoreAllMocks()
 })
 
 effectIt.effect(
-  "authenticates, routes responses, cancels timeouts, and closes cleanly",
+  "authenticates, retries a failed reconnect, routes responses, and closes cleanly",
   () =>
     withRelayServer(
       ({ cancelled, disconnect, endpoint, reconnected, requests }) =>
@@ -124,7 +143,9 @@ effectIt.effect(
             relayRpc(endpoint, "relay.snapshot", {}, 1_000)
           )
           expect(reconnectedSnapshot).toEqual(pushedSnapshot)
-          expect(relayStates).toEqual(["connected", "unreachable", "connected"])
+          expect(relayStates[0]).toBe("connected")
+          expect(relayStates.at(-1)).toBe("connected")
+          expect(relayStates).toContain("unreachable")
 
           const timeout = yield* promiseEffect(() =>
             relayRpc(endpoint, "relay.update.status", { ignored: true }, 20)
@@ -136,11 +157,62 @@ effectIt.effect(
 
           closeRelayConnection(relayId)
           expect(relayConnectionState(relayId).status).toBe("disconnected")
-          expect(relayStates).toEqual(["connected", "unreachable", "connected"])
+          expect(relayStates.at(-1)).toBe("connected")
           unsubscribe()
         })
     )
 )
+
+it("settles failed generation readiness and replaces it for retry", async () => {
+  let rejectSynchronization: (cause: Error) => void = () => undefined
+  authorizationFakes.synchronize
+    .mockImplementationOnce(
+      () =>
+        new Promise<number>((_resolve, reject) => {
+          rejectSynchronization = reject
+        })
+    )
+    .mockResolvedValueOnce(5)
+  vi.spyOn(Math, "random").mockReturnValue(0)
+  const fixture = await setupRelayServer()
+  try {
+    const connecting = relayRpc(fixture.endpoint, "relay.snapshot", {}, 1_000)
+    await vi.waitFor(() =>
+      expect(authorizationFakes.synchronize).toHaveBeenCalledOnce()
+    )
+    const initial = relayBrowserAuthorizationReady(relayId, 3)
+    rejectSynchronization(new Error("generation database unavailable"))
+    await expect(initial).rejects.toThrow("generation database unavailable")
+    await connecting
+
+    await new Promise((resolve) => setTimeout(resolve, 1_050))
+    await expect(relayBrowserAuthorizationReady(relayId, 3)).resolves.toBe(5)
+    expect(authorizationFakes.synchronize).toHaveBeenCalledTimes(2)
+  } finally {
+    closeRelayConnection(relayId)
+    for (const client of fixture.server.clients) client.terminate()
+    await new Promise<void>((resolve) => fixture.server.close(() => resolve()))
+  }
+})
+
+it("advances a newer persisted generation on the same control socket", async () => {
+  const fixture = await setupRelayServer()
+  try {
+    await relayRpc(fixture.endpoint, "relay.snapshot", {}, 1_000)
+    await expect(relayBrowserAuthorizationReady(relayId, 3)).resolves.toBe(3)
+    expect(authorizationFakes.synchronizeMinimum).not.toHaveBeenCalled()
+
+    await expect(relayBrowserAuthorizationReady(relayId, 4)).resolves.toBe(4)
+    expect(authorizationFakes.synchronizeMinimum).toHaveBeenCalledWith(
+      relayId,
+      4
+    )
+  } finally {
+    closeRelayConnection(relayId)
+    for (const client of fixture.server.clients) client.terminate()
+    await new Promise<void>((resolve) => fixture.server.close(() => resolve()))
+  }
+})
 
 interface RelayServerFixture {
   cancelled: Promise<void>
@@ -219,7 +291,11 @@ async function setupRelayServer(): Promise<RelayServerFixture> {
   server.on("connection", (socket) => {
     activeSocket = socket
     connections += 1
-    if (connections === 2) resolveReconnected()
+    if (connections === 2) {
+      socket.close(1013, "Relay is still restarting")
+      return
+    }
+    if (connections === 3) resolveReconnected()
     authenticateRelaySocket(socket, relayKeys.privateKey, requests, () => {
       resolveCancelled()
     })
@@ -272,7 +348,9 @@ function authenticateRelaySocket(
       socket.send(
         JSON.stringify({
           actions: [],
+          browserIssuerGeneration: 3,
           clientId: "hearth-client",
+          features: [relayBrowserCapabilityV2Feature],
           protocol: relayControlProtocol,
           relayBuild: "test",
           role: "full_access",

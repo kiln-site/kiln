@@ -18,6 +18,7 @@ import { z } from "zod"
 
 import {
   relayPairingRequestTranscript,
+  relayBrowserCapabilityV2Feature,
   relayPairingResponseTranscript,
   relayBootstrapDiscoveryTranscript,
   relayBootstrapEnrollmentTranscript,
@@ -35,6 +36,7 @@ import {
 } from "@/lib/relay-pairing-errors"
 import { relayPairingOrigin } from "@/lib/relay-pairing-origin"
 import { relayNameForNewPairing } from "@/lib/relay-names"
+import { requireRelayIssuerRetirement } from "@/lib/relay-issuer-retirement"
 import { CredentialError, ResourceNotFoundError } from "@/effect/errors"
 import { runAppEffect } from "@/effect/runtime"
 import { databasePool } from "@/lib/database"
@@ -59,6 +61,7 @@ export interface PersistedRelay {
   enabled: boolean
   hostname: string
   id: string
+  issuerGeneration: number
   lastConnectedAt: string | null
   lastError: string | null
   managedEmberCount: number | null
@@ -143,6 +146,7 @@ interface RelayRow extends RowDataPacket {
   enabled: number
   hostname: string
   id: string
+  issuer_generation: string | number
   last_connected_at: Date | null
   last_error: string | null
   managed_ember_count: number | null
@@ -225,10 +229,17 @@ export async function listPersistedRelays(): Promise<Array<PersistedRelay>> {
   return runAppEffect("relays.list", listPersistedRelaysEffect())
 }
 
+export async function loadPersistedRelay(
+  id: string
+): Promise<PersistedRelay | null> {
+  const row = await findPersistedRelayRow(id)
+  return row ? toPersistedRelay(row) : null
+}
+
 async function findPersistedRelayRow(id: string): Promise<RelayRow | null> {
   const [rows] = await databasePool.query<Array<RelayRow>>(
     `SELECT id, name, hostname, port, use_tls, browser_origin,
-            client_id, client_role, client_actions, enabled,
+            client_id, client_role, client_actions, issuer_generation, enabled,
             last_connected_at, last_error, managed_ember_count,
             node_arch, node_platform, node_version,
             relay_public_key, relay_ca_certificate,
@@ -246,7 +257,7 @@ export const listPersistedRelaysEffect = Effect.fn("relays.list")(function* () {
   const rows = yield* database.queryRows<RelayRow>(
     "relays_list",
     `SELECT id, name, hostname, port, use_tls, browser_origin,
-            client_id, client_role, client_actions, enabled,
+            client_id, client_role, client_actions, issuer_generation, enabled,
             last_connected_at, last_error, managed_ember_count,
             node_arch, node_platform, node_version,
             relay_public_key, relay_ca_certificate,
@@ -264,7 +275,7 @@ export const loadEnabledRelayForIssuanceEffect = Effect.fn(
   const rows = yield* database.queryRows<RelayRow>(
     "relay_issuance",
     `SELECT id, name, hostname, port, use_tls, browser_origin,
-            client_id, client_role, client_actions, enabled,
+            client_id, client_role, client_actions, issuer_generation, enabled,
             last_connected_at, last_error, managed_ember_count,
             node_arch, node_platform, node_version,
             relay_public_key, relay_ca_certificate,
@@ -847,6 +858,7 @@ export function persistPairedRelayEffect(input: {
                       relay_ca_certificate = ?, client_id = ?,
                       client_public_key = ?, client_private_key_ciphertext = ?,
                       client_role = ?, client_actions = ?, enabled = TRUE,
+                      issuer_generation = issuer_generation + 1,
                       last_error = NULL
                 WHERE id = ?`,
             [
@@ -940,6 +952,11 @@ export async function setPersistedRelayEnabled(
     "relays.setEnabled",
     setPersistedRelayEnabledEffect(id, enabled)
   )
+  if (!enabled) {
+    const { wakeAuthorizationDelivery } =
+      await import("@/lib/authorization-delivery")
+    wakeAuthorizationDelivery(id)
+  }
   publishRelayCollectionChange(id)
   return relay
 }
@@ -949,8 +966,11 @@ export const setPersistedRelayEnabledEffect = Effect.fn("relays.setEnabled")(
     const database = yield* Database
     const result = yield* database.execute(
       "relay_set_enabled",
-      `UPDATE ${databaseTable("relay")} SET enabled = ? WHERE id = ?`,
-      [enabled, id]
+      `UPDATE ${databaseTable("relay")}
+          SET enabled = ?,
+              issuer_generation = issuer_generation + IF(? = FALSE, 1, 0)
+        WHERE id = ?`,
+      [enabled, enabled, id]
     )
     if (result.affectedRows !== 1) {
       return yield* Effect.fail(
@@ -1027,6 +1047,37 @@ export const deletePersistedRelayEffect = Effect.fn("relay.deletePersisted")(
 )
 
 export async function deletePersistedRelay(id: string): Promise<void> {
+  const { relayConnectionFeatures } = await import("@/lib/relay-connection")
+  const supportsRevisionDelivery = relayConnectionFeatures(id).has(
+    relayBrowserCapabilityV2Feature
+  )
+  const [retireResult] = await databasePool.execute<
+    import("mysql2/promise").ResultSetHeader
+  >(
+    `UPDATE ${databaseTable("relay")}
+        SET enabled = FALSE, issuer_generation = issuer_generation + 1
+      WHERE id = ?`,
+    [id]
+  )
+  if (retireResult.affectedRows !== 1) throw new Error("Relay not found")
+  const [retired] = await databasePool.query<
+    Array<{ issuer_generation: string } & RowDataPacket>
+  >(
+    `SELECT CAST(issuer_generation AS CHAR) AS issuer_generation
+       FROM ${databaseTable("relay")} WHERE id = ? LIMIT 1`,
+    [id]
+  )
+  const generationRow = retired[0]
+  if (!generationRow) throw new Error("Relay not found")
+  await requireRelayIssuerRetirement({
+    minimumGeneration: Number(generationRow.issuer_generation),
+    revise: async (minimumGeneration) => {
+      const { reviseRelayIssuerGenerationNow } =
+        await import("@/lib/authorization-delivery")
+      return reviseRelayIssuerGenerationNow(id, minimumGeneration)
+    },
+    supportsRevisionDelivery,
+  })
   await runAppEffect("relay.deletePersisted", deletePersistedRelayEffect(id))
   const { closeRelayConnection } = await import("@/lib/relay-connection")
   closeRelayConnection(id)
@@ -1126,7 +1177,7 @@ export const loadRelayCredentialsEffect = Effect.fn("relays.credentials")(
     const rows = yield* database.queryRows<RelayRow>(
       "relay_credentials",
       `SELECT id, name, hostname, port, use_tls, browser_origin,
-              client_id, client_role, client_actions, enabled,
+              client_id, client_role, client_actions, issuer_generation, enabled,
               last_connected_at, last_error, managed_ember_count,
               node_arch, node_platform, node_version,
               relay_public_key, relay_ca_certificate,
@@ -1378,6 +1429,7 @@ function toPersistedRelay(row: RelayRow): PersistedRelay {
     enabled: Boolean(row.enabled),
     hostname: row.hostname,
     id: row.id,
+    issuerGeneration: Number(row.issuer_generation),
     lastConnectedAt: row.last_connected_at?.toISOString() ?? null,
     lastError: row.last_error,
     managedEmberCount:

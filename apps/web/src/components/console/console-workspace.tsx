@@ -75,6 +75,7 @@ function ConsoleWorkspaceSession({
         />
       ) : (
         <ConsoleStreamController
+          canWrite={canWrite}
           instanceId={instance.id}
           loadTiming={loadTiming}
           relayId={instance.relayId}

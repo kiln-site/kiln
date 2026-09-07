@@ -27,10 +27,17 @@ export const revokeActiveSession = createServerFn({ method: "POST" })
   )
   .handler(async ({ data }) => {
     const user = await requireAuthenticatedUser()
-    await runAppEffect(
+    const revisionChange = await runAppEffect(
       "auth.sessions.revoke",
       revokeAccountSessionEffect(user.id, data.sessionId)
     )
+    if (revisionChange) {
+      const { wakeAuthorizationDelivery } =
+        await import("@/lib/authorization-delivery")
+      for (const relayId of revisionChange.relayIds) {
+        wakeAuthorizationDelivery(relayId)
+      }
+    }
     publishRealtimeChange({
       sessionIds: [data.sessionId],
       type: "session.revoked",

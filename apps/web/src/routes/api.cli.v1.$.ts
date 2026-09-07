@@ -418,6 +418,7 @@ async function streamConsole(
   request.signal.addEventListener("abort", abort, { once: true })
   if (request.signal.aborted) abort()
   const iterator = openHearthRelayConsoleStream({
+    credentialId: principal.credentialId,
     instanceId: input.instanceId,
     relayId: input.relayId,
     signal: lifecycle.signal,
