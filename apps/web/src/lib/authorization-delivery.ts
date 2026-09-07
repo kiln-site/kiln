@@ -7,7 +7,7 @@ import type { RowDataPacket } from "mysql2/promise"
 import { Effect } from "effect"
 import { z } from "zod"
 
-import { Database } from "@/effect/database"
+import { Database, type DatabaseTransaction } from "@/effect/database"
 import { ensuringPromise, recoverPromise } from "@/effect/promise"
 import { runAppEffect } from "@/effect/runtime"
 import { databasePool } from "@/lib/database"
@@ -28,6 +28,11 @@ interface PendingDeliveryRow extends RowDataPacket {
 interface RelayGenerationRow extends RowDataPacket {
   acknowledged_issuer_generation: string
   client_id: string
+  issuer_generation: string
+}
+
+interface IssuerGenerationRow extends RowDataPacket {
+  acknowledged_issuer_generation: string
   issuer_generation: string
 }
 
@@ -62,6 +67,7 @@ const reviseResultSchema = z.object({
     })
   ),
 })
+type ReviseResult = z.infer<typeof reviseResultSchema>
 
 export function wakeAuthorizationDelivery(relayId: string): void {
   const state = workers.get(relayId) ?? {
@@ -127,6 +133,14 @@ export async function observeRelayIssuerGeneration(
   relayId: string,
   observedGeneration: number
 ): Promise<void> {
+  await reconcileRelayIssuerGeneration(relayId, observedGeneration)
+  wakeAuthorizationDelivery(relayId)
+}
+
+async function reconcileRelayIssuerGeneration(
+  relayId: string,
+  observedGeneration: number
+): Promise<void> {
   if (!Number.isSafeInteger(observedGeneration) || observedGeneration < 0) {
     throw new Error("Relay reported an invalid browser issuer generation")
   }
@@ -173,13 +187,51 @@ export async function observeRelayIssuerGeneration(
       )
     }
   )
-  wakeAuthorizationDelivery(relayId)
+}
+
+/**
+ * Reconciles and, only when necessary, synchronously persists the issuer
+ * generation Relay must accept before Hearth can mint v2 capabilities. The
+ * common already-synchronized path performs no control RPC.
+ */
+export async function synchronizeRelayIssuerGeneration(
+  relayId: string,
+  observedGeneration: number
+): Promise<number> {
+  await reconcileRelayIssuerGeneration(relayId, observedGeneration)
+  let generation = await readRelayIssuerGeneration(relayId)
+  if (generation.issuerGeneration > generation.acknowledgedIssuerGeneration) {
+    const synchronized = await reviseRelayIssuerGenerationNow(
+      relayId,
+      generation.issuerGeneration
+    )
+    if (!synchronized) {
+      throw new Error("Relay did not synchronize its browser issuer generation")
+    }
+    generation = await readRelayIssuerGeneration(relayId)
+  }
+  if (generation.issuerGeneration > generation.acknowledgedIssuerGeneration) {
+    throw new Error("Relay browser issuer generation remains pending")
+  }
+  return generation.issuerGeneration
 }
 
 export async function reviseRelayIssuerGenerationNow(
   relayId: string,
   minimumIssuerGeneration: number
 ): Promise<boolean> {
+  return (
+    (await synchronizeRelayIssuerGenerationMinimum(
+      relayId,
+      minimumIssuerGeneration
+    )) !== null
+  )
+}
+
+export async function synchronizeRelayIssuerGenerationMinimum(
+  relayId: string,
+  minimumIssuerGeneration: number
+): Promise<number | null> {
   const [{ relayConnectionFeatures, relayRpc }, relay] = await Promise.all([
     import("@/lib/relay-connection"),
     loadPersistedRelay(relayId),
@@ -188,7 +240,7 @@ export async function reviseRelayIssuerGenerationNow(
     !relay ||
     !relayConnectionFeatures(relayId).has(relayBrowserCapabilityV2Feature)
   ) {
-    return false
+    return null
   }
   const result = reviseResultSchema.parse(
     await relayRpc(
@@ -198,7 +250,7 @@ export async function reviseRelayIssuerGenerationNow(
       5_000
     )
   )
-  if (result.issuerGeneration < minimumIssuerGeneration) return false
+  if (result.issuerGeneration < minimumIssuerGeneration) return null
   await databasePool.execute(
     `UPDATE ${databaseTable("relay")}
         SET issuer_generation = GREATEST(issuer_generation, ?),
@@ -208,7 +260,48 @@ export async function reviseRelayIssuerGenerationNow(
       WHERE id = ?`,
     [result.issuerGeneration, result.issuerGeneration, relayId]
   )
-  return true
+  return result.issuerGeneration
+}
+
+export function acknowledgeAuthorizationDeliveryEffect(
+  connection: DatabaseTransaction,
+  relayId: string,
+  result: ReviseResult
+) {
+  return Effect.gen(function* () {
+    for (const item of result.items) {
+      const [kind, scopeId] = encodeScope(item.scope)
+      yield* connection.execute(
+        `UPDATE ${databaseTable("authorization_delivery")}
+            SET acknowledged_revision = GREATEST(
+              acknowledged_revision,
+              LEAST(?, desired_revision)
+            )
+          WHERE relay_id = ? AND subject_id = ?
+            AND scope_kind = ? AND scope_id = ?`,
+        [item.minimumRevision, relayId, item.subject, kind, scopeId]
+      )
+      // Once Relay has durably acknowledged the current desired floor,
+      // generation rollback protection makes replaying this row unnecessary.
+      // Equality preserves a row advanced concurrently after the batch read.
+      yield* connection.execute(
+        `DELETE FROM ${databaseTable("authorization_delivery")}
+          WHERE relay_id = ? AND subject_id = ?
+            AND scope_kind = ? AND scope_id = ?
+            AND desired_revision = acknowledged_revision`,
+        [relayId, item.subject, kind, scopeId]
+      )
+    }
+    yield* connection.execute(
+      `UPDATE ${databaseTable("relay")}
+          SET issuer_generation = GREATEST(issuer_generation, ?),
+              acknowledged_issuer_generation = GREATEST(
+                acknowledged_issuer_generation, ?
+              )
+        WHERE id = ?`,
+      [result.issuerGeneration, result.issuerGeneration, relayId]
+    )
+  })
 }
 
 async function drain(
@@ -350,35 +443,39 @@ async function deliverBatch(relayId: string): Promise<boolean> {
           yield* database.transaction(
             "authorization.delivery.ack",
             (connection) =>
-              Effect.gen(function* () {
-                for (const item of result.items) {
-                  const [kind, scopeId] = encodeScope(item.scope)
-                  yield* connection.execute(
-                    `UPDATE ${databaseTable("authorization_delivery")}
-                        SET acknowledged_revision = GREATEST(
-                          acknowledged_revision,
-                          LEAST(?, desired_revision)
-                        )
-                      WHERE relay_id = ? AND subject_id = ?
-                        AND scope_kind = ? AND scope_id = ?`,
-                    [item.minimumRevision, relayId, item.subject, kind, scopeId]
-                  )
-                }
-                yield* connection.execute(
-                  `UPDATE ${databaseTable("relay")}
-                      SET issuer_generation = GREATEST(issuer_generation, ?),
-                          acknowledged_issuer_generation = GREATEST(
-                            acknowledged_issuer_generation, ?
-                          )
-                    WHERE id = ?`,
-                  [result.issuerGeneration, result.issuerGeneration, relayId]
-                )
-              })
+              acknowledgeAuthorizationDeliveryEffect(
+                connection,
+                relayId,
+                result
+              )
           )
         })
       )
   )
   return pending.length === relayBrowserAuthorizationReviseMaxItems
+}
+
+async function readRelayIssuerGeneration(relayId: string): Promise<{
+  acknowledgedIssuerGeneration: number
+  issuerGeneration: number
+}> {
+  const [rows] = await databasePool.query<Array<IssuerGenerationRow>>(
+    `SELECT CAST(issuer_generation AS CHAR) AS issuer_generation,
+            CAST(acknowledged_issuer_generation AS CHAR)
+              AS acknowledged_issuer_generation
+       FROM ${databaseTable("relay")}
+      WHERE id = ?
+      LIMIT 1`,
+    [relayId]
+  )
+  const row = rows[0]
+  if (!row) throw new Error("Relay not found")
+  return {
+    acknowledgedIssuerGeneration: safeRevision(
+      row.acknowledged_issuer_generation
+    ),
+    issuerGeneration: safeRevision(row.issuer_generation),
+  }
 }
 
 function safeRevision(value: string): number {

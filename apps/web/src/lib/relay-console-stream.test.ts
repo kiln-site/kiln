@@ -158,7 +158,7 @@ describe("Relay console connection setup", () => {
     })
   })
 
-  it("closes the unauthenticated socket when capability issuance fails", async () => {
+  it("closes the unauthenticated socket without proxying a permission denial", async () => {
     let rejectCapability: (cause: Error) => void = () => undefined
     relayCapability.issue.mockReturnValue(
       new Promise((_resolve, reject) => {
@@ -207,10 +207,7 @@ describe("Relay console connection setup", () => {
     expect(socket?.send).not.toHaveBeenCalled()
     expect(socket?.close).toHaveBeenCalledWith(1000, "Console view closed")
     expect(socket?.listenerCount).toBe(0)
-    expect(fetchFallback).toHaveBeenCalledOnce()
-    expect(socket?.close.mock.invocationCallOrder[0]).toBeLessThan(
-      fetchFallback.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY
-    )
+    expect(fetchFallback).not.toHaveBeenCalled()
   })
 
   it("reopens the direct socket when the speculative attempt fails", async () => {

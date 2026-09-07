@@ -17,6 +17,7 @@ import {
 } from "effect"
 
 import type { RelayBrowserCredentials } from "@/lib/relay-browser-credentials"
+import { relayBrowserAuthorizationSignal } from "@/lib/relay-browser-credentials"
 import type { RelayConsoleOperation } from "@/lib/relay-console-operations"
 
 const AUTHENTICATION_TIMEOUT_MS = 10_000
@@ -28,6 +29,48 @@ const REQUEST_TIMEOUT_MS = 8_000
 const RENEW_RECONNECT_REASON = "Relay lease renewal needs reconnect"
 
 export class RelayBrowserReconnectError extends Error {}
+export class RelayBrowserProtocolError extends Error {}
+export class RelayBrowserSessionReplacedError extends RelayBrowserProtocolError {}
+
+/** These failures must not silently fall back to a different transport. */
+export function isTerminalRelayBrowserFailure(cause: unknown): boolean {
+  return (
+    cause instanceof RelayBrowserProtocolError ||
+    (cause instanceof Error &&
+      (cause.name === "ZodError" || cause.name === "SyntaxError")) ||
+    isAuthorizationFailure(cause)
+  )
+}
+
+/** Only access loss / owner replacement should pause automatic reconnects. */
+export function shouldWaitForRelayBrowserAuthorization(
+  cause: unknown
+): boolean {
+  return (
+    cause instanceof RelayBrowserSessionReplacedError ||
+    isAuthorizationFailure(cause)
+  )
+}
+
+/** Keep a scoped wake-up even after a denied stream releases its credentials. */
+export function relayBrowserAuthorizationChanges(
+  relayId: string,
+  instanceId: string
+) {
+  return Effect.gen(function* () {
+    const changes = yield* Queue.sliding<void>(1)
+    yield* Effect.addFinalizer(() => Queue.shutdown(changes))
+    yield* Effect.acquireRelease(
+      Effect.sync(() =>
+        relayBrowserAuthorizationSignal(relayId, instanceId).subscribe(() => {
+          Queue.offerUnsafe(changes, undefined)
+        })
+      ),
+      (unsubscribe) => Effect.sync(unsubscribe)
+    )
+    return changes
+  })
+}
 
 // Retry only an ambiguous renewal; normal connectivity failures retain the
 // feature fallback, and a replaced owner must never reconnect and evict its heir.
@@ -277,7 +320,9 @@ export function openRelayBrowserSocket(input: {
     ) {
       socket.close(4400, "Invalid Relay challenge")
       return yield* Effect.fail(
-        new Error("Relay returned an invalid browser challenge")
+        new RelayBrowserProtocolError(
+          "Relay returned an invalid browser challenge"
+        )
       )
     }
     return {
@@ -346,7 +391,7 @@ export function authenticateRelayBrowserSocket(
     if (ready.type !== "auth.ready" || ready.instanceId !== input.instanceId) {
       opened.socket.close(4401, "Relay authentication failed")
       return yield* Effect.fail(
-        new Error("Relay browser authentication failed")
+        new RelayBrowserProtocolError("Relay browser authentication failed")
       )
     }
     return ready
@@ -415,11 +460,15 @@ export function createRelayBrowserSocketInbox(
           const serialized = String(event.data)
           const bytes = new TextEncoder().encode(serialized).byteLength
           if (bytes > relayBrowserMaxFrameBytes) {
-            throw new Error("Relay browser frame exceeded the size limit")
+            throw new RelayBrowserProtocolError(
+              "Relay browser frame exceeded the size limit"
+            )
           }
           const value = JSON.parse(serialized) as unknown
           if (!value || typeof value !== "object" || Array.isArray(value)) {
-            throw new Error("Relay returned an invalid browser message")
+            throw new RelayBrowserProtocolError(
+              "Relay returned an invalid browser message"
+            )
           }
           const message = Object.fromEntries(Object.entries(value))
           if (typeof message.type === "string") {
@@ -507,10 +556,16 @@ export function createRelayBrowserSocketInbox(
         fail(
           event.code === 4012 && event.reason === RENEW_RECONNECT_REASON
             ? new RelayBrowserReconnectError(event.reason)
-            : new Error(
-                event.reason ||
-                  `Relay browser connection closed (${event.code})`
-              )
+            : event.code === 1012 && event.reason === "Browser session replaced"
+              ? new RelayBrowserSessionReplacedError(event.reason)
+              : event.code === 4400
+                ? new RelayBrowserProtocolError(
+                    event.reason || "Invalid Relay browser protocol"
+                  )
+                : new Error(
+                    event.reason ||
+                      `Relay browser connection closed (${event.code})`
+                  )
         )
       socket.addEventListener("message", onMessage)
       socket.addEventListener("error", onError)
@@ -693,7 +748,7 @@ function asError(cause: unknown): Error {
     : new Error("Relay browser connection failed")
 }
 
-function isAuthorizationFailure(cause: unknown): boolean {
+export function isAuthorizationFailure(cause: unknown): boolean {
   if (
     cause &&
     typeof cause === "object" &&
@@ -703,7 +758,7 @@ function isAuthorizationFailure(cause: unknown): boolean {
     return true
   }
   const message = cause instanceof Error ? cause.message : String(cause)
-  return /authorization|authori[sz]ed|forbidden|permission|unauthorized|denied|\b40[13]\b/iu.test(
+  return /authentication required|browser authorization changed|no longer authori[sz]ed|unauthori[sz]ed|forbidden|(?:permission|access) denied|do not have permission|\b40[13]\b/iu.test(
     message
   )
 }

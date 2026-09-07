@@ -29,6 +29,7 @@ import {
 } from "@workspace/contracts"
 
 import { RelayStateError } from "./errors.js"
+import { BROWSER_AUTHORIZATION_FLOOR_RETENTION_MS } from "../browser-security.js"
 
 export type RelayClientRole = "custom" | "full_access" | "read_only"
 
@@ -2114,6 +2115,10 @@ const makeRelayStateStore = Effect.gen(function* () {
         "revise_browser_authorization",
         sql.withTransaction(
           Effect.gen(function* () {
+            yield* sql`
+              DELETE FROM relay_browser_authorization_floors
+              WHERE updated_at <= ${now - BROWSER_AUTHORIZATION_FLOOR_RETENTION_MS}
+            `
             if (minimumIssuerGeneration !== undefined) {
               yield* sql`
                 INSERT INTO relay_browser_issuer_generations (

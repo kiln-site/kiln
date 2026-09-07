@@ -8,6 +8,7 @@ import { Effect, Stream } from "effect"
 
 import {
   maintainRelayBrowserLease,
+  isTerminalRelayBrowserFailure,
   openAuthenticatedRelaySocket,
   relayBrowserReconnectSchedule,
 } from "@/lib/authenticated-relay-socket"
@@ -129,12 +130,14 @@ export function openRelayResourceStream(
       // polling starts, and interrupting the consumer interrupts either transport.
       return direct.pipe(
         Stream.retry(relayBrowserReconnectSchedule),
-        Stream.catch(() =>
-          openHearthResourceStream(relayId, instanceId).pipe(
-            Stream.tap((event) =>
-              Effect.sync(() => observer.observe(event, "hearth"))
-            )
-          )
+        Stream.catch((cause) =>
+          isTerminalRelayBrowserFailure(cause)
+            ? Stream.fail(cause)
+            : openHearthResourceStream(relayId, instanceId).pipe(
+                Stream.tap((event) =>
+                  Effect.sync(() => observer.observe(event, "hearth"))
+                )
+              )
         )
       )
     })

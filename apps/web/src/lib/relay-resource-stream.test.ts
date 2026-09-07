@@ -39,6 +39,19 @@ import { RelayBrowserReconnectError } from "./authenticated-relay-socket"
 beforeEach(() => vi.clearAllMocks())
 
 describe("resource stream lifecycle", () => {
+  it("releases credentials without polling or retrying a permission denial", async () => {
+    fakes.open.mockReturnValue(Effect.fail(new Error("Permission denied")))
+    await Effect.runPromise(
+      openRelayResourceStream("relay", "instance").pipe(
+        Stream.runDrain,
+        Effect.result
+      )
+    )
+    expect(fakes.open).toHaveBeenCalledOnce()
+    expect(fakes.release).toHaveBeenCalledOnce()
+    expect(fakes.poll).not.toHaveBeenCalled()
+  })
+
   it("reconnects a lost renewal acknowledgement without switching to polling", async () => {
     fakes.open
       .mockReturnValueOnce(

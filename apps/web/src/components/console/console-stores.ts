@@ -306,6 +306,9 @@ export function createConsoleAggregateStreamStore(
       )
     )
     const transportSnapshot = snapshots.find((snapshot) => snapshot.transport)
+    const failures = values.flatMap(({ relay, snapshot }) =>
+      snapshot.error ? [`${relay.name}: ${snapshot.error}`] : []
+    )
     store.setSnapshot({
       connection,
       consoleData:
@@ -320,10 +323,11 @@ export function createConsoleAggregateStreamStore(
               ),
             },
       error:
-        connection === "unavailable"
-          ? (snapshots.find((snapshot) => snapshot.error)?.error ??
-            "No Tailscale nodes are available.")
-          : null,
+        failures.length > 0
+          ? failures.join(" ")
+          : connection === "unavailable"
+            ? "No Tailscale nodes are available."
+            : null,
       loading:
         values.length === 0 ||
         (lines.length === 0 && snapshots.some((snapshot) => snapshot.loading)),

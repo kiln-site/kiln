@@ -466,6 +466,40 @@ and statistically meaningful median/p95 measurements below; those remain release
 validation work. Existing Sentry setup/authentication/renewal/first-event spans
 and resource sample-age/query-patch metrics are retained for those measurements.
 
+### Final review handoff (2026-09-07)
+
+The final review additionally fixed cold/advanced issuer-generation issuance
+races, capability batching across different permission shapes, abandoned-batch
+cancellation, permanent loss of speculative routing after a manual retry, and
+authorization-denial retry loops. Denied streams wait on an Effect-scoped access
+change signal; malformed streams still reconnect, and replaced owners do not
+evict their replacements. Multi-Relay console failures remain visible even when
+another source is healthy. Separate toolbar warning icons are preserved.
+
+File authentication now has an Effect deadline and bounded canonical proof
+nonces. Acknowledged delivery rows, expired authorization floors, and console
+deduplication history are reclaimed. Floor retention is derived from the lease
+and clock-skew limits enforced at admission. A real HTTP/WebSocket integration
+test covers signed authentication, renewal nonce rotation, and revocation.
+
+Final local checks pass: repository tests (653 Web, 442 Relay with 22 existing
+skips, 70 CLI, plus script/keyring tests), typecheck, lint, production Web build,
+and Effect boundary checks. React Doctor reports 91/100 with no diagnostics.
+An unchanged CLI credential-store test intermittently emitted EPIPE earlier;
+the final two full runs passed without changing that test. Independent reviews
+covered authorization, Relay, and browser lifecycles plus streamed Grok review
+iterations. Preview verified denial pauses and access-change recovery without a
+reload, retaining console output.
+
+Initial connection improvement is an expectation, not a measured release claim:
+sharing proof keys and batching issuance remove duplicate work, but speculative
+console opening already existed. Commands benefit more directly by reusing the
+live socket. The new `hearth.browser.authorization.ready` span separates cold
+generation synchronization from healthy issuance. Repeatable median/p95 and
+production-like load/Traefik validation remain open; the checks below are not
+all claimed complete. Mandatory v2 enforcement remains a post-upgrade rollout
+step, and horizontal Hearth workers remain out of scope.
+
 ### Remaining release checklist
 
 - Deterministic Effect tests cover cancellation during handshake/read/renewal,

@@ -15,6 +15,7 @@ import {
   RelayStateStore,
   scrubBackupTaskInputJson,
 } from "./state.js"
+import { BROWSER_AUTHORIZATION_FLOOR_RETENTION_MS } from "../browser-security.js"
 
 const testDirectory = mkdtempSync(join(tmpdir(), "kiln-relay-state-"))
 const stateDatabase = join(testDirectory, "relay.sqlite")
@@ -250,6 +251,28 @@ describe("Relay state", () => {
           )
           assert.strictEqual(stale.issuerGeneration, 3)
           assert.strictEqual(stale.items[0]?.minimumRevision, 7)
+
+          yield* store.reviseBrowserAuthorization(
+            "browser-issuer",
+            [
+              {
+                minimumRevision: 10,
+                scope: { kind: "subject_relay" },
+                subject: "user-b",
+              },
+            ],
+            undefined,
+            now + BROWSER_AUTHORIZATION_FLOOR_RETENTION_MS + 1
+          )
+          assert.strictEqual(
+            (yield* store.browserAuthority({
+              instanceId: "instance-a",
+              issuer: "browser-issuer",
+              loginSessionId: "session-a",
+              subject: "user-a",
+            })).minimumRevision,
+            0
+          )
 
           assert.strictEqual(
             yield* store.reserveBrowserFileReplay({

@@ -1,6 +1,6 @@
 import * as React from "react"
 import { useQueryClient } from "@tanstack/react-query"
-import { Effect, Fiber, Stream } from "effect"
+import { Effect, Fiber, Queue, Stream } from "effect"
 import type {
   RelayConsole,
   RelayConsoleLine,
@@ -34,6 +34,10 @@ import {
 import type { ConsoleLoadTiming } from "@/lib/console-performance"
 import { queryKeys } from "@/lib/query-options"
 import type { ConsoleInstanceRuntime } from "@/lib/relay-selectors"
+import {
+  shouldWaitForRelayBrowserAuthorization,
+  relayBrowserAuthorizationChanges,
+} from "@/lib/authenticated-relay-socket"
 
 export function useRelayConsoleStream(
   relayId: string,
@@ -48,6 +52,7 @@ export function useRelayConsoleStream(
 ) {
   const queryClient = useQueryClient()
   const hasEverBeenLiveRef = React.useRef(false)
+  const lastRetryVersionRef = React.useRef(retryVersion)
   const previousConnectionRef = React.useRef<Fiber.Fiber<void, unknown> | null>(
     null
   )
@@ -266,6 +271,8 @@ export function useRelayConsoleStream(
     }
 
     let disposed = false
+    let refreshRoute = retryVersion !== lastRetryVersionRef.current
+    lastRetryVersionRef.current = retryVersion
     let openingTimer: number | null = null
     let activeTransport: ConsoleStreamSnapshot["transport"] = null
     let flushTimer: number | null = null
@@ -325,6 +332,12 @@ export function useRelayConsoleStream(
         lifecycle: current?.lifecycle ?? [],
         lines: capConsoleLines([...(current?.lines ?? []), ...fresh]),
         truncated: Boolean(current?.truncated) || seen.size > 5_000,
+      }
+      // Renewable sessions can stay open indefinitely. Retain deduplication
+      // for the visible/history window, not every line ever streamed.
+      if (seen.size > 10_016) {
+        seen.clear()
+        for (const line of next.lines) seen.add(line.id)
       }
       consoleDataRef.current = next
       queryClient.setQueryData(
@@ -405,14 +418,18 @@ export function useRelayConsoleStream(
       Effect.gen(function* () {
         // Join teardown before a manual retry can acquire a replacement socket.
         if (previousConnection) yield* Fiber.interrupt(previousConnection)
+        const authorizationChanges = yield* relayBrowserAuthorizationChanges(
+          relayId,
+          instanceId
+        )
         watchOpening()
         let retryDelay = 400
         while (!disposed) {
           const failure = yield* openRelayConsoleStream(
             relayId,
             instanceId,
-            retryVersion > 0 ? null : browserOrigin,
-            retryVersion > 0 ? null : consoleTransport,
+            refreshRoute ? null : browserOrigin,
+            refreshRoute ? null : consoleTransport,
             loadTiming,
             canWrite
           ).pipe(
@@ -436,6 +453,7 @@ export function useRelayConsoleStream(
                     transportMessage: event.message,
                   })
                 } else if (event.type === "ready") {
+                  refreshRoute = false
                   clearOpeningTimeout()
                   hasEverBeenLiveRef.current = true
                   const eventStartedAt = lifecycleEventTime(
@@ -568,10 +586,14 @@ export function useRelayConsoleStream(
             error: consoleConnectionMessage(failure),
             loading: false,
           })
+          if (shouldWaitForRelayBrowserAuthorization(failure)) {
+            yield* Queue.take(authorizationChanges)
+            continue
+          }
           yield* Effect.sleep(retryDelay)
           retryDelay = Math.min(retryDelay * 2, 5_000)
         }
-      })
+      }).pipe(Effect.scoped)
     )
     previousConnectionRef.current = connectFiber
 

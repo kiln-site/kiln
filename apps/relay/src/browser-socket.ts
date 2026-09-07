@@ -66,6 +66,12 @@ import {
   BrowserSessionRegistry,
   type BrowserSessionAuthority,
 } from "./browser-session-registry.js"
+import {
+  BROWSER_READ_LEASE_MAX_MS,
+  BROWSER_WRITE_LEASE_MAX_MS,
+  BROWSER_ISSUED_AT_SKEW_MS,
+  isCanonicalBrowserFileProofNonce,
+} from "./browser-security.js"
 import type { Server } from "node:http"
 import type { IncomingMessage, ServerResponse } from "node:http"
 
@@ -78,6 +84,7 @@ const MAX_PENDING_CONSOLE_OPERATIONS_PER_SOCKET = 8
 const MAX_DOWNLOAD_FORM_BYTES = 2 * 1024 * 1024
 const MAX_ARCHIVE_SELECTION_PATHS = 5_000
 const COMPRESSION_SAMPLE_BYTES = 1024 * 1024
+const FILE_AUTHENTICATION_TIMEOUT_MS = 30_000
 
 type BrowserFileMethod = "GET" | "HEAD" | "POST" | "PUT"
 
@@ -926,7 +933,9 @@ function validateCapabilityV2(
     (action) =>
       action === "instance.console.write" || action === "instance.files.upload"
   )
-  const maximumLease = writes ? 30_000 : 60_000
+  const maximumLease = writes
+    ? BROWSER_WRITE_LEASE_MAX_MS
+    : BROWSER_READ_LEASE_MAX_MS
   if (
     !Number.isSafeInteger(capability.issuedAt) ||
     !Number.isSafeInteger(capability.expiresAt) ||
@@ -936,7 +945,7 @@ function validateCapabilityV2(
     capability.issuerGeneration < 0 ||
     capability.expiresAt <= capability.issuedAt ||
     capability.expiresAt - capability.issuedAt > maximumLease ||
-    capability.issuedAt > now + 5_000 ||
+    capability.issuedAt > now + BROWSER_ISSUED_AT_SKEW_MS ||
     capability.actions.length > allowed.size ||
     capability.actions.some((action) => !allowed.has(action)) ||
     new Set(capability.actions).size !== capability.actions.length ||
@@ -1058,44 +1067,50 @@ async function handleBrowserFileRequest(
   }
   transfers.pendingAuthentications += 1
   const clientConfiguration = registry.clientConfiguration
-  const attempted = await ensuringPromise(
-    async () => {
-      let downloadForm: BrowserDownloadForm | null = null
-      if (method === "POST") {
-        const parsedForm = await runBrowser(
-          browserOperation(() => readBrowserDownloadForm(request)).pipe(
-            Effect.option
+  const attempted = Option.flatten(
+    await runBrowser(
+      browserFileAuthenticationEffect(request, async () => {
+        let downloadForm: BrowserDownloadForm | null = null
+        if (method === "POST") {
+          const parsedForm = await runBrowser(
+            browserOperation(() => readBrowserDownloadForm(request)).pipe(
+              Effect.option
+            )
           )
+          if (Option.isNone(parsedForm)) return Option.none()
+          downloadForm = parsedForm.value
+        }
+        const path = downloadForm?.path ?? url.searchParams.get("path") ?? ""
+        const authenticated = await runBrowser(
+          timedBrowserOperation(
+            "Authenticate browser file request",
+            "relay.browser.file.auth",
+            () =>
+              authenticateBrowserRequest({
+                instanceId,
+                method,
+                options,
+                origin,
+                path,
+                request,
+                ...(downloadForm
+                  ? { credentials: downloadForm.credentials }
+                  : {}),
+                pendingLegacyRequestProofs,
+                legacyRequestProofs,
+              })
+          ).pipe(Effect.option)
         )
-        if (Option.isNone(parsedForm)) return Option.none()
-        downloadForm = parsedForm.value
-      }
-      const path = downloadForm?.path ?? url.searchParams.get("path") ?? ""
-      const authenticated = await runBrowser(
-        timedBrowserOperation(
-          "Authenticate browser file request",
-          "relay.browser.file.auth",
-          () =>
-            authenticateBrowserRequest({
-              instanceId,
-              method,
-              options,
-              origin,
-              path,
-              request,
-              ...(downloadForm
-                ? { credentials: downloadForm.credentials }
-                : {}),
-              pendingLegacyRequestProofs,
-              legacyRequestProofs,
-            })
-        ).pipe(Effect.option)
+        return Option.some({ authenticated, downloadForm, path })
+      }).pipe(
+        Effect.option,
+        Effect.ensuring(
+          Effect.sync(() => {
+            transfers.pendingAuthentications -= 1
+          })
+        )
       )
-      return Option.some({ authenticated, downloadForm, path })
-    },
-    () => {
-      transfers.pendingAuthentications -= 1
-    }
+    )
   )
   if (Option.isNone(attempted)) {
     browserJson(response, 400, { error: "Download request is invalid" }, origin)
@@ -1392,7 +1407,7 @@ async function authenticateBrowserRequest(input: {
   if (
     !Number.isSafeInteger(requestedAt) ||
     Math.abs(Date.now() - requestedAt) > HTTP_PROOF_WINDOW_MS ||
-    Buffer.from(nonce, "base64url").length < 16
+    !isCanonicalBrowserFileProofNonce(nonce)
   )
     throw new Error("Browser proof freshness is invalid")
   for (const [key, expiresAt] of input.legacyRequestProofs) {
@@ -2648,6 +2663,28 @@ function browserOperation<TResult>(
   run: (signal: AbortSignal) => Promise<TResult>
 ): Effect.Effect<TResult, Error> {
   return Effect.tryPromise({ try: run, catch: asError })
+}
+
+export function browserFileAuthenticationEffect<TResult>(
+  request: IncomingMessage,
+  run: (signal: AbortSignal) => Promise<TResult>,
+  timeoutMs = FILE_AUTHENTICATION_TIMEOUT_MS
+) {
+  return Effect.suspend(() => {
+    let removeAbortListener = () => {}
+    return browserOperation((signal) => {
+      const abortRequest = () => {
+        if (!request.destroyed) request.destroy()
+      }
+      signal.addEventListener("abort", abortRequest, { once: true })
+      removeAbortListener = () =>
+        signal.removeEventListener("abort", abortRequest)
+      return run(signal)
+    }).pipe(
+      Effect.timeout(timeoutMs),
+      Effect.ensuring(Effect.sync(() => removeAbortListener()))
+    )
+  })
 }
 
 function timedBrowserOperation<TResult>(

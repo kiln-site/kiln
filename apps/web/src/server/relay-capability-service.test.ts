@@ -13,6 +13,7 @@ vi.hoisted(() => {
 const fakes = vi.hoisted(() => ({
   decryptCredentials: vi.fn(),
   relayBrowserMetadata: vi.fn(),
+  relayBrowserAuthorizationReady: vi.fn(),
   loadRelay: vi.fn(),
   relayRpc: vi.fn(),
   refreshUser: vi.fn(),
@@ -38,6 +39,7 @@ vi.mock("@/lib/environment", () => ({
 }))
 
 vi.mock("@/lib/relay-connection", () => ({
+  relayBrowserAuthorizationReady: fakes.relayBrowserAuthorizationReady,
   relayConnectionBrowserMetadata: fakes.relayBrowserMetadata,
   relayConnectionFeatures: () => fakes.features,
   relayRpc: fakes.relayRpc,
@@ -142,6 +144,7 @@ beforeEach(() => {
   fakes.revisions.mockReturnValue(Effect.succeed(7))
   fakes.decryptCredentials.mockReturnValue(Effect.succeed(credentials))
   fakes.relayBrowserMetadata.mockReturnValue(null)
+  fakes.relayBrowserAuthorizationReady.mockResolvedValue(1)
   fakes.relayRpc.mockResolvedValue({
     browserOrigin: "https://relay-live.example.com",
     mode: "none",
@@ -307,6 +310,28 @@ describe("Relay capability issuance orchestration", () => {
       version: 2,
     })
     expect(Number(payload.expiresAt) - Number(payload.issuedAt)).toBe(30_000)
+    expect(fakes.relayBrowserAuthorizationReady).toHaveBeenCalledWith(
+      "relay-one",
+      1
+    )
+  })
+
+  it("uses the generation synchronized after stale issuance material was loaded", async () => {
+    fakes.features.add("browser-capability-v2")
+    fakes.features.add("browser-lease-renewal-v1")
+    fakes.relayBrowserAuthorizationReady.mockResolvedValue(4)
+
+    const issued = await issueBrowserCapabilitiesForRequest({
+      authenticate: () => Promise.resolve({ sessionId: "session-one", user }),
+      instanceId: "instance-one",
+      publicKeyJwk,
+      relayId: "relay-one",
+      requests: [{ kind: "console", optInV2: true, write: false }],
+    })
+
+    expect(
+      decodeCapabilityPayload(issued.capabilities[0]!.capability)
+    ).toMatchObject({ issuerGeneration: 4, version: 2 })
   })
 
   it("re-authorizes when the revision changes during capability issuance", async () => {

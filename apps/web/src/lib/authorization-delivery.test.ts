@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test"
+import { Effect } from "effect"
 
 vi.hoisted(() => {
   process.env.DB_HOST ??= "127.0.0.1"
@@ -31,8 +32,10 @@ vi.mock("@/lib/relay-registry", () => ({
 }))
 
 import {
+  acknowledgeAuthorizationDeliveryEffect,
   observeRelayIssuerGeneration,
   reviseRelayIssuerGenerationNow,
+  synchronizeRelayIssuerGeneration,
   wakeAuthorizationDelivery,
 } from "./authorization-delivery"
 
@@ -117,5 +120,88 @@ describe("authorization delivery recovery", () => {
     expect(fakes.execute.mock.calls[1]?.[0]).toContain(
       "issuer_generation = GREATEST(issuer_generation, ?)"
     )
+  })
+
+  it("does not make a control request when issuer generation is synchronized", async () => {
+    fakes.query.mockResolvedValue([
+      [
+        {
+          issuer_generation: "9",
+          acknowledged_issuer_generation: "9",
+        },
+      ],
+    ])
+
+    await expect(
+      synchronizeRelayIssuerGeneration("relay-one", 9)
+    ).resolves.toBe(9)
+
+    expect(fakes.relayRpc).not.toHaveBeenCalled()
+  })
+
+  it("persists a pending issuer generation before reporting readiness", async () => {
+    fakes.query
+      .mockResolvedValueOnce([
+        [
+          {
+            issuer_generation: "4",
+            acknowledged_issuer_generation: "3",
+          },
+        ],
+      ])
+      .mockResolvedValueOnce([
+        [
+          {
+            issuer_generation: "4",
+            acknowledged_issuer_generation: "4",
+          },
+        ],
+      ])
+    fakes.relayRpc.mockResolvedValue({ issuerGeneration: 4, items: [] })
+
+    await expect(
+      synchronizeRelayIssuerGeneration("relay-one", 3)
+    ).resolves.toBe(4)
+
+    expect(fakes.relayRpc).toHaveBeenCalledWith(
+      { id: "relay-one" },
+      "browser.authorization.revise",
+      { items: [], minimumIssuerGeneration: 4 },
+      5_000
+    )
+  })
+
+  it("prunes only a delivery row whose desired revision is acknowledged", async () => {
+    const execute = vi.fn((_sql: string, _values?: ReadonlyArray<unknown>) =>
+      Effect.succeed({ affectedRows: 1 })
+    )
+
+    await Effect.runPromise(
+      acknowledgeAuthorizationDeliveryEffect(
+        { execute } as never,
+        "relay-one",
+        {
+          issuerGeneration: 4,
+          items: [
+            {
+              minimumRevision: 8,
+              scope: { instanceId: "instance-one", kind: "instance" },
+              subject: "user-one",
+            },
+          ],
+        }
+      )
+    )
+
+    expect(execute).toHaveBeenCalledTimes(3)
+    expect(execute.mock.calls[1]?.[0]).toContain(
+      "desired_revision = acknowledged_revision"
+    )
+    expect(execute.mock.calls[1]?.[1]).toEqual([
+      "relay-one",
+      "user-one",
+      "instance",
+      "instance-one",
+    ])
   })
 })

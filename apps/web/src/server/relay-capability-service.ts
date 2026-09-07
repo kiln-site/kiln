@@ -29,6 +29,7 @@ import {
   kilnPublicUrl,
 } from "@/lib/environment"
 import { readAuthorizationRevisionEffect } from "@/lib/authorization-revision"
+import { relayBrowserAuthorizationReady } from "@/lib/relay-connection"
 import {
   decryptRelayIssuanceCredentialsEffect,
   loadEnabledRelayForIssuanceEffect,
@@ -117,18 +118,34 @@ export function issueBrowserCapabilitiesForRequest(input: {
         identity,
       }
       yield* authorizeBrowserCapabilityEffect(authorizationInput)
-      const [credentials, proxy] = yield* Effect.all(
-        [
-          decryptRelayIssuanceCredentialsEffect(material),
-          resolveRelayBrowserMetadataEffect(material.relay),
-        ] as const,
-        { concurrency: 2 }
-      )
       const features = yield* Effect.promise(async () => {
         const { relayConnectionFeatures } =
           await import("@/lib/relay-connection")
         return relayConnectionFeatures(material.relay.id)
       })
+      const versions = new Map(
+        input.requests.map((request) => [
+          request.kind,
+          negotiatedVersion(request.kind, request.optInV2, features),
+        ])
+      )
+      const [credentials, proxy, issuerGeneration] = yield* Effect.all(
+        [
+          decryptRelayIssuanceCredentialsEffect(material),
+          resolveRelayBrowserMetadataEffect(material.relay),
+          [...versions.values()].includes(2)
+            ? relayBrowserAuthorizationReadyEffect(
+                material.relay.id,
+                material.relay.issuerGeneration
+              )
+            : Effect.succeed(material.relay.issuerGeneration),
+        ] as const,
+        { concurrency: 3 }
+      )
+      const synchronizedRelay = {
+        ...material.relay,
+        issuerGeneration,
+      }
       // Metadata/control RPCs and private-key loading can take measurable time.
       // Re-authorize after that work so the revision embedded below is the last
       // externally observed state before the synchronous signing step.
@@ -136,11 +153,7 @@ export function issueBrowserCapabilitiesForRequest(input: {
         yield* authorizeBrowserCapabilityEffect(authorizationInput)
       const capabilities = yield* Effect.all(
         input.requests.map((request) => {
-          const version = negotiatedVersion(
-            request.kind,
-            request.optInV2,
-            features
-          )
+          const version = versions.get(request.kind) ?? 1
           const actions: ReadonlyArray<BrowserAction> =
             request.kind === "resources"
               ? ["instance.read"]
@@ -157,7 +170,7 @@ export function issueBrowserCapabilitiesForRequest(input: {
             path: null,
             proxy,
             publicKeyJwk: input.publicKeyJwk,
-            relay: material.relay,
+            relay: synchronizedRelay,
             subject: identity.user.id,
             version,
           }).pipe(
@@ -376,15 +389,22 @@ const prepareBrowserCapabilityEffect = Effect.fn("relay.capability.prepare")(
 
     // Keep private-key work and Relay control traffic behind stable, freshly
     // checked authorization.
-    const [credentials, proxy] = yield* Effect.all(
+    const [credentials, proxy, issuerGeneration] = yield* Effect.all(
       [
         decryptRelayIssuanceCredentialsEffect(material),
         input.resolveBrowserMetadata
           ? resolveRelayBrowserMetadataEffect(material.relay)
           : Effect.succeed(null),
+        version === 2
+          ? relayBrowserAuthorizationReadyEffect(
+              material.relay.id,
+              material.relay.issuerGeneration
+            )
+          : Effect.succeed(material.relay.issuerGeneration),
       ] as const,
-      { concurrency: 2 }
+      { concurrency: 3 }
     )
+    const synchronizedRelay = { ...material.relay, issuerGeneration }
     // Re-check after all slow/external preparation. Capability construction is
     // synchronous from this point, keeping the authorization-to-sign window as
     // small as the runtime permits.
@@ -400,13 +420,13 @@ const prepareBrowserCapabilityEffect = Effect.fn("relay.capability.prepare")(
       path: input.path,
       proxy,
       publicKeyJwk: input.publicKeyJwk,
-      relay: material.relay,
+      relay: synchronizedRelay,
       subject: user.id,
       version,
     })
     return {
       capability,
-      relay: material.relay,
+      relay: synchronizedRelay,
       relayCaCertificatePem: credentials.caCertificatePem,
     }
   }
@@ -621,6 +641,16 @@ function negotiatedVersion(
     )
   }
   return 1
+}
+
+function relayBrowserAuthorizationReadyEffect(
+  relayId: string,
+  minimumIssuerGeneration: number
+) {
+  return Effect.tryPromise({
+    try: () => relayBrowserAuthorizationReady(relayId, minimumIssuerGeneration),
+    catch: (cause) => cause,
+  }).pipe(Effect.withSpan("hearth.browser.authorization.ready"))
 }
 
 function requiredV2Field<T>(value: T | undefined, name: string): T {

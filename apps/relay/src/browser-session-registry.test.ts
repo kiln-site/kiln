@@ -5,6 +5,7 @@ import {
   BrowserSessionRegistry,
   type BrowserSessionAuthority,
 } from "./browser-session-registry.js"
+import { BROWSER_AUTHORIZATION_FLOOR_RETENTION_MS } from "./browser-security.js"
 
 const limits = {
   fileReplayEntries: 100,
@@ -253,6 +254,31 @@ describe("browser session registry", () => {
       replaced: null,
     })
     registry.close()
+  })
+
+  it("prunes expired in-memory floors and refreshes repeated deliveries", () => {
+    vi.useFakeTimers()
+    try {
+      const registry = new BrowserSessionRegistry(limits)
+      const floor = {
+        minimumRevision: 3,
+        scope: { instanceId: "instance-a", kind: "instance" } as const,
+        subject: "user-a",
+      }
+      registry.revise("hearth-a", [floor], 1)
+      expect(registry.minimumRevision(authority())).toBe(3)
+
+      vi.advanceTimersByTime(BROWSER_AUTHORIZATION_FLOOR_RETENTION_MS - 1)
+      registry.revise("hearth-a", [floor], 1)
+      vi.advanceTimersByTime(2)
+      expect(registry.minimumRevision(authority())).toBe(3)
+
+      vi.advanceTimersByTime(BROWSER_AUTHORIZATION_FLOOR_RETENTION_MS)
+      expect(registry.minimumRevision(authority())).toBe(0)
+      registry.close()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it("expires legacy sessions instead of granting admission for socket life", () => {

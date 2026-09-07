@@ -3,6 +3,8 @@ import { Button } from "@workspace/ui/components/button"
 
 import { ConsoleTooltip } from "./console-tooltip"
 
+const warningIcon = <TriangleAlert className="size-3.5 shrink-0" />
+
 /** A toolbar warning, optionally actionable (for example, retrying a stream). */
 export function ConsoleWarning({
   message,
@@ -13,7 +15,6 @@ export function ConsoleWarning({
   label: string
   action?: { onClick: () => void; text?: string }
 }) {
-  const icon = <TriangleAlert className="size-3.5 shrink-0" />
   return (
     <ConsoleTooltip content={message}>
       {action ? (
@@ -24,7 +25,7 @@ export function ConsoleWarning({
           className="text-amber-300"
           onClick={action.onClick}
         >
-          {icon}
+          {warningIcon}
           {action.text}
         </Button>
       ) : (
@@ -34,7 +35,7 @@ export function ConsoleWarning({
           role="status"
           tabIndex={0}
         >
-          {icon}
+          {warningIcon}
         </span>
       )}
     </ConsoleTooltip>

@@ -24,6 +24,34 @@ it("retries only the connection subscribers without clearing output", () => {
 })
 
 describe("Tailscale console stores", () => {
+  it("keeps partial and reconnecting failures retryable until each source recovers", () => {
+    const store = createConsoleAggregateStreamStore("network-id")
+    const healthy = {
+      ...createConsoleStreamStore().getSnapshot(),
+      connection: "live" as const,
+      loading: false,
+    }
+    const failed = {
+      ...healthy,
+      connection: "reconnecting" as const,
+      error: "Connection failed",
+    }
+    const first = { id: "one", name: "Relay One" }
+    const second = { id: "two", name: "Relay Two" }
+    store.setSourceSnapshot(first.id, first, failed)
+    expect(store.getSnapshot().error).toBe("Relay One: Connection failed")
+    store.setSourceSnapshot(second.id, second, healthy)
+    expect(store.getSnapshot()).toMatchObject({
+      connection: "live",
+      error: "Relay One: Connection failed",
+    })
+    store.setSourceSnapshot(first.id, first, healthy)
+    expect(store.getSnapshot().error).toBeNull()
+    store.setSourceSnapshot(second.id, second, failed)
+    store.removeSource(second.id)
+    expect(store.getSnapshot().error).toBeNull()
+  })
+
   it("combines relay streams without colliding line identities", () => {
     const store = createConsoleAggregateStreamStore("network-id")
     const snapshot = {

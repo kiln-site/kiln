@@ -3,12 +3,13 @@ import { once } from "node:events"
 
 import { it as effectIt } from "@effect/vitest"
 import { Effect } from "effect"
-import { afterEach, expect, vi } from "vite-plus/test"
+import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test"
 import { WebSocketServer } from "ws"
 import type { AddressInfo } from "node:net"
 import type { WebSocket } from "ws"
 
 import {
+  relayBrowserCapabilityV2Feature,
   relayAuthChallengeTranscript,
   relayControlProtocol,
 } from "@workspace/contracts"
@@ -25,9 +26,21 @@ vi.mock("@/lib/relay-registry", () => ({
 vi.mock("@/lib/sftp-authorization", () => ({
   resolveSftpAuthorization: vi.fn(),
 }))
+const authorizationFakes = vi.hoisted(() => ({
+  synchronize: vi.fn(),
+  synchronizeMinimum: vi.fn(),
+  wake: vi.fn(),
+}))
+vi.mock("@/lib/authorization-delivery", () => ({
+  synchronizeRelayIssuerGeneration: authorizationFakes.synchronize,
+  synchronizeRelayIssuerGenerationMinimum:
+    authorizationFakes.synchronizeMinimum,
+  wakeAuthorizationDelivery: authorizationFakes.wake,
+}))
 
 import {
   closeRelayConnection,
+  relayBrowserAuthorizationReady,
   relayConnectionBrowserMetadata,
   relayConnectionState,
   relayRpc,
@@ -69,6 +82,12 @@ const pushedSnapshot = {
     tls: null,
   },
 } satisfies RelaySnapshot
+
+beforeEach(() => {
+  authorizationFakes.synchronize.mockReset().mockResolvedValue(3)
+  authorizationFakes.synchronizeMinimum.mockReset().mockResolvedValue(4)
+  authorizationFakes.wake.mockReset()
+})
 
 afterEach(() => {
   closeRelayConnection(relayId)
@@ -143,6 +162,57 @@ effectIt.effect(
         })
     )
 )
+
+it("settles failed generation readiness and replaces it for retry", async () => {
+  let rejectSynchronization: (cause: Error) => void = () => undefined
+  authorizationFakes.synchronize
+    .mockImplementationOnce(
+      () =>
+        new Promise<number>((_resolve, reject) => {
+          rejectSynchronization = reject
+        })
+    )
+    .mockResolvedValueOnce(5)
+  vi.spyOn(Math, "random").mockReturnValue(0)
+  const fixture = await setupRelayServer()
+  try {
+    const connecting = relayRpc(fixture.endpoint, "relay.snapshot", {}, 1_000)
+    await vi.waitFor(() =>
+      expect(authorizationFakes.synchronize).toHaveBeenCalledOnce()
+    )
+    const initial = relayBrowserAuthorizationReady(relayId, 3)
+    rejectSynchronization(new Error("generation database unavailable"))
+    await expect(initial).rejects.toThrow("generation database unavailable")
+    await connecting
+
+    await new Promise((resolve) => setTimeout(resolve, 1_050))
+    await expect(relayBrowserAuthorizationReady(relayId, 3)).resolves.toBe(5)
+    expect(authorizationFakes.synchronize).toHaveBeenCalledTimes(2)
+  } finally {
+    closeRelayConnection(relayId)
+    for (const client of fixture.server.clients) client.terminate()
+    await new Promise<void>((resolve) => fixture.server.close(() => resolve()))
+  }
+})
+
+it("advances a newer persisted generation on the same control socket", async () => {
+  const fixture = await setupRelayServer()
+  try {
+    await relayRpc(fixture.endpoint, "relay.snapshot", {}, 1_000)
+    await expect(relayBrowserAuthorizationReady(relayId, 3)).resolves.toBe(3)
+    expect(authorizationFakes.synchronizeMinimum).not.toHaveBeenCalled()
+
+    await expect(relayBrowserAuthorizationReady(relayId, 4)).resolves.toBe(4)
+    expect(authorizationFakes.synchronizeMinimum).toHaveBeenCalledWith(
+      relayId,
+      4
+    )
+  } finally {
+    closeRelayConnection(relayId)
+    for (const client of fixture.server.clients) client.terminate()
+    await new Promise<void>((resolve) => fixture.server.close(() => resolve()))
+  }
+})
 
 interface RelayServerFixture {
   cancelled: Promise<void>
@@ -278,7 +348,9 @@ function authenticateRelaySocket(
       socket.send(
         JSON.stringify({
           actions: [],
+          browserIssuerGeneration: 3,
           clientId: "hearth-client",
+          features: [relayBrowserCapabilityV2Feature],
           protocol: relayControlProtocol,
           relayBuild: "test",
           role: "full_access",

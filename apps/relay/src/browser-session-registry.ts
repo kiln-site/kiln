@@ -7,8 +7,10 @@ import type {
 } from "@workspace/contracts"
 
 import type { RelayConfig } from "./config.js"
+import { BROWSER_AUTHORIZATION_FLOOR_RETENTION_MS } from "./browser-security.js"
 
 type BrowserLimits = RelayConfig["browserLimits"]
+const FLOOR_PRUNE_INTERVAL_MS = 30_000
 
 export interface BrowserSessionAuthority {
   readonly actions: ReadonlySet<string>
@@ -42,6 +44,7 @@ interface Transfer extends BrowserSessionAuthority {
 interface FloorState {
   readonly issuer: string
   readonly minimumRevision: number
+  readonly receivedAt: number
   readonly scope: RelayBrowserAuthorizationRevision["scope"]
   readonly subject: string
 }
@@ -55,6 +58,7 @@ export class BrowserSessionRegistry {
   readonly #pending = new Map<WebSocket, string>()
   readonly #pendingByIp = new Map<string, number>()
   readonly #transfers = new Set<Transfer>()
+  #nextFloorPruneAt = 0
 
   constructor(limits: BrowserLimits) {
     this.#limits = limits
@@ -242,8 +246,10 @@ export class BrowserSessionRegistry {
   revise(
     issuer: string,
     items: ReadonlyArray<RelayBrowserAuthorizationRevision>,
-    issuerGeneration: number
+    issuerGeneration: number,
+    now = Date.now()
   ): void {
+    this.#pruneFloors(now)
     this.#issuerGenerations.set(
       issuer,
       Math.max(this.#issuerGenerations.get(issuer) ?? 0, issuerGeneration)
@@ -252,7 +258,9 @@ export class BrowserSessionRegistry {
       const key = floorKey(issuer, item.subject, item.scope)
       const current = this.#floorState.get(key)
       if (!current || item.minimumRevision > current.minimumRevision) {
-        this.#floorState.set(key, { issuer, ...item })
+        this.#floorState.set(key, { issuer, receivedAt: now, ...item })
+      } else {
+        this.#floorState.set(key, { ...current, receivedAt: now })
       }
     }
     for (const [socket, session] of this.#established) {
@@ -313,6 +321,7 @@ export class BrowserSessionRegistry {
   }
 
   minimumRevision(authority: BrowserSessionAuthority): number {
+    this.#pruneFloors(Date.now())
     let minimum = 0
     const scopes: ReadonlyArray<RelayBrowserAuthorizationRevision["scope"]> = [
       { kind: "subject_relay" },
@@ -344,6 +353,15 @@ export class BrowserSessionRegistry {
         (this.#issuerGenerations.get(authority.issuer) ?? 0) &&
       authority.revision >= this.minimumRevision(authority)
     )
+  }
+
+  #pruneFloors(now: number): void {
+    if (now < this.#nextFloorPruneAt) return
+    this.#nextFloorPruneAt = now + FLOOR_PRUNE_INTERVAL_MS
+    const cutoff = now - BROWSER_AUTHORIZATION_FLOOR_RETENTION_MS
+    for (const [key, floor] of this.#floorState) {
+      if (floor.receivedAt <= cutoff) this.#floorState.delete(key)
+    }
   }
 
   #armExpiry(socket: WebSocket, session: ActiveSession): void {

@@ -7,7 +7,11 @@ import {
   useSuspenseQuery,
 } from "@tanstack/react-query"
 import { Link, useParams, useRouterState } from "@tanstack/react-router"
-import { Effect, Stream } from "effect"
+import { Effect, Queue, Stream } from "effect"
+import {
+  shouldWaitForRelayBrowserAuthorization,
+  relayBrowserAuthorizationChanges,
+} from "@/lib/authenticated-relay-socket"
 import type {
   RelayInstanceProvisioning,
   RelayInstanceResources,
@@ -446,6 +450,10 @@ function RelayResourceStreamController({
 
     const connectionFiber = Effect.runFork(
       Effect.gen(function* () {
+        const authorizationChanges = yield* relayBrowserAuthorizationChanges(
+          instance.relayId,
+          instance.id
+        )
         let retryDelay = 500
         for (;;) {
           const failed = yield* Effect.suspend(() => {
@@ -505,10 +513,14 @@ function RelayResourceStreamController({
             )
           }).pipe(
             Effect.match({
-              onFailure: () => true,
-              onSuccess: () => false,
+              onFailure: (cause) => cause,
+              onSuccess: () => null,
             })
           )
+          if (shouldWaitForRelayBrowserAuthorization(failed)) {
+            yield* Queue.take(authorizationChanges)
+            continue
+          }
           if (failed) {
             yield* Effect.sleep(retryDelay)
             retryDelay = Math.min(retryDelay * 2, 5_000)
@@ -516,7 +528,7 @@ function RelayResourceStreamController({
             retryDelay = 500
           }
         }
-      })
+      }).pipe(Effect.scoped)
     )
     return () => {
       connectionFiber.interruptUnsafe()

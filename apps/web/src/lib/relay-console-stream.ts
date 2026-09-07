@@ -12,6 +12,7 @@ import {
 import type { ConsoleLoadTiming } from "@/lib/console-performance"
 import {
   authenticateRelayBrowserSocket,
+  isTerminalRelayBrowserFailure,
   createRelayBrowserSocketInbox,
   maintainRelayBrowserLease,
   openRelayBrowserSocket,
@@ -70,15 +71,17 @@ export function openRelayConsoleStream(
   const openHearth = (fallbackMessage: string | null) =>
     openHearthConsoleStream(relayId, instanceId, fallbackMessage, timing).pipe(
       Stream.catch((cause) =>
-        Stream.fail(
-          new RelayConsoleConnectionError(
-            "hearth_proxy_failed",
-            fallbackMessage === null
-              ? "Hearth can reach this Relay, but its secure console stream could not be opened."
-              : "Hearth can reach this Relay, but neither the secure direct stream nor the Hearth fallback could read the console.",
-            { cause }
-          )
-        )
+        isTerminalRelayBrowserFailure(cause)
+          ? Stream.fail(cause)
+          : Stream.fail(
+              new RelayConsoleConnectionError(
+                "hearth_proxy_failed",
+                fallbackMessage === null
+                  ? "Hearth can reach this Relay, but its secure console stream could not be opened."
+                  : "Hearth can reach this Relay, but neither the secure direct stream nor the Hearth fallback could read the console.",
+                { cause }
+              )
+            )
       )
     )
 
@@ -93,15 +96,17 @@ export function openRelayConsoleStream(
   ).pipe(
     Stream.retry(relayBrowserReconnectSchedule),
     Stream.catch((directFailure) =>
-      openHearth(directFallbackMessage(directFailure)).pipe(
-        Stream.prepend<KilnConsoleStreamEvent>([
-          {
-            type: "reconnecting",
-            message:
-              "The direct console stream failed. Trying to reconnect through Hearth.",
-          },
-        ])
-      )
+      isTerminalRelayBrowserFailure(directFailure)
+        ? Stream.fail(directFailure)
+        : openHearth(directFallbackMessage(directFailure)).pipe(
+            Stream.prepend<KilnConsoleStreamEvent>([
+              {
+                type: "reconnecting",
+                message:
+                  "The direct console stream failed. Trying to reconnect through Hearth.",
+              },
+            ])
+          )
     )
   )
 }
