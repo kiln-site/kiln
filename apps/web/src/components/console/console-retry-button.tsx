@@ -1,9 +1,7 @@
 import * as React from "react"
-import { TriangleAlert } from "lucide-react"
-import { Button } from "@workspace/ui/components/button"
 
 import type { ConsoleStreamStore } from "./console-stores"
-import { ConsoleTooltip } from "./console-tooltip"
+import { ConsoleWarning } from "./console-warning"
 
 export const ConsoleRetryButton = React.memo(function ConsoleRetryButton({
   streamStore,
@@ -23,19 +21,13 @@ export const ConsoleRetryButton = React.memo(function ConsoleRetryButton({
   )
   if (!error) return null
   return (
-    <ConsoleTooltip
-      content={`${error} Retry without reloading the page. Output and filters are kept.`}
-    >
-      <Button
-        aria-label="Retry console connection"
-        variant="ghost"
-        size={showLabel ? "sm" : "icon-sm"}
-        className="text-amber-300"
-        onClick={streamStore.retry}
-      >
-        <TriangleAlert className="size-3.5" />
-        {showLabel ? "Retry" : null}
-      </Button>
-    </ConsoleTooltip>
+    <ConsoleWarning
+      message={`${error} Retry without reloading the page. Output and filters are kept`}
+      label="Retry console connection"
+      action={{
+        onClick: streamStore.retry,
+        text: showLabel ? "Retry" : undefined,
+      }}
+    />
   )
 })

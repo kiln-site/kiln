@@ -4,7 +4,6 @@ import {
   formatRelayInstanceStateReason,
   type RelayInstanceStateReason,
 } from "@workspace/contracts"
-import { TriangleAlert } from "lucide-react"
 
 import {
   ConsoleLevelMenu,
@@ -23,7 +22,7 @@ import {
   ConsoleTimestampButton,
   ConsoleWrapButton,
 } from "@/components/console/console-toolbar-actions"
-import { ConsoleTooltip } from "@/components/console/console-tooltip"
+import { ConsoleWarning } from "@/components/console/console-warning"
 import { ConsoleRetryButton } from "@/components/console/console-retry-button"
 import { relaySnapshotQueryOptions } from "@/lib/query-options"
 import {
@@ -143,15 +142,9 @@ function ConsoleRuntimeReasonContent({
 }) {
   const message = formatRelayInstanceStateReason(reason)
   return (
-    <ConsoleTooltip content={message}>
-      <span
-        aria-label={`Server state reason: ${message}`}
-        className="inline-flex shrink-0 items-center text-amber-300 outline-none"
-        role="status"
-        tabIndex={0}
-      >
-        <TriangleAlert className="size-3.5 shrink-0" />
-      </span>
-    </ConsoleTooltip>
+    <ConsoleWarning
+      message={message}
+      label={`Server state reason: ${message}`}
+    />
   )
 }
