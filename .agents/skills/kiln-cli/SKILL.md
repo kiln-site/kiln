@@ -436,12 +436,3 @@ Interpret the result narrowly:
 When reporting completion, state the operation, server, remote path, local path
 when applicable, and observed result. Call out partial success and roadblocks
 explicitly.
-
-
-### Velocity creation defaults
-
-When creating a Velocity server without an explicit version, Relay selects the
-newest available version, including snapshots, and stores that concrete version.
-Java defaults to 11 before 3.3, 17 for 3.3–3.4, 21 for 3.5–3.x, and 25 for 4.0+.
-Explicit version and Java overrides are preserved. If the version catalog is
-unavailable, creation reports the error; specify a version to bypass the lookup.

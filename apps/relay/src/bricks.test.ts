@@ -5,7 +5,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { pathToFileURL } from "node:url"
 
-import { describe, expect, it, vi } from "vite-plus/test"
+import { describe, expect, it } from "vite-plus/test"
 import { brickRecipeSchema } from "@workspace/contracts"
 
 import { BrickRecipeError } from "./effect/errors.js"
@@ -16,7 +16,6 @@ import {
   readResponseDocument,
   resolveRecipeIconSource,
   resolveBrick,
-  resolveBrickForProvisioning,
 } from "./bricks.js"
 import type { BrickRecipe } from "@workspace/contracts"
 
@@ -362,97 +361,6 @@ describe("Brick recipes", () => {
       expect(imported.metadata.id).toBe("abcdefghijklmnopqrst-extra")
     } finally {
       await rm(directory, { force: true, recursive: true })
-    }
-  })
-})
-
-describe("Velocity provisioning defaults", () => {
-  const velocity = brickRecipeSchema.parse({
-    ...recipe,
-    metadata: { ...recipe.metadata, id: "velocity" },
-    variables: {
-      ...recipe.variables,
-      version: {
-        ...recipe.variables.version,
-        default: "4.0.0",
-        rules: { pattern: "^[0-9]+(?:\\.[0-9]+){1,2}(?:-SNAPSHOT)?$" },
-      },
-      java_version: {
-        ...recipe.variables.java_version,
-        options: undefined,
-        rules: { pattern: "^(?:11|17|21|25)$" },
-      },
-    },
-  })
-
-  it("selects the newest snapshot numerically and resolves its Java image", async () => {
-    const fetchVersions = vi
-      .spyOn(globalThis, "fetch")
-      .mockResolvedValue(
-        Response.json([
-          "3.6.0-SNAPSHOT",
-          "4.1.9",
-          "4.1.10-SNAPSHOT",
-          "4.1.2-SNAPSHOT",
-          "invalid",
-        ])
-      )
-    try {
-      const resolved = await resolveBrickForProvisioning(
-        velocity,
-        {},
-        "velocity.yml"
-      )
-      expect(resolved.values.version).toBe("4.1.10-SNAPSHOT")
-      expect(resolved.image).toBe("registry.example.com/custom/server:25")
-      expect(fetchVersions).toHaveBeenCalledTimes(1)
-    } finally {
-      fetchVersions.mockRestore()
-    }
-  })
-
-  it.each([
-    ["1.1.9", "11"],
-    ["3.1.1", "11"],
-    ["3.2.0-SNAPSHOT", "11"],
-    ["3.3.0-SNAPSHOT", "17"],
-    ["3.4.0", "17"],
-    ["3.5.0", "21"],
-    ["3.6.0-SNAPSHOT", "21"],
-    ["4.0.0", "25"],
-    ["4.1.2-SNAPSHOT", "25"],
-  ])(
-    "keeps pinned %s and selects Java %s without a catalog request",
-    async (version, java) => {
-      const fetchVersions = vi.spyOn(globalThis, "fetch")
-      try {
-        const resolved = await resolveBrickForProvisioning(
-          velocity,
-          { version },
-          "velocity.yml"
-        )
-        expect(resolved.values).toMatchObject({ version, java_version: java })
-        expect(fetchVersions).not.toHaveBeenCalled()
-        expect(
-          resolveBrick(velocity, { version, java_version: "25" }).values
-            .java_version
-        ).toBe("25")
-      } finally {
-        fetchVersions.mockRestore()
-      }
-    }
-  )
-
-  it("fails explicitly when the version catalog is unavailable", async () => {
-    const fetchVersions = vi
-      .spyOn(globalThis, "fetch")
-      .mockResolvedValue(new Response(null, { status: 503 }))
-    try {
-      await expect(
-        resolveBrickForProvisioning(velocity, {}, "velocity.yml")
-      ).rejects.toThrow("HTTP 503")
-    } finally {
-      fetchVersions.mockRestore()
     }
   })
 })
