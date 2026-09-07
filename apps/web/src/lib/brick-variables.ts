@@ -63,6 +63,18 @@ export function defaultBrickVariables(
   )
 }
 
+export function defaultProvisioningBrickVariables(
+  brick: Brick
+): Record<string, BrickVariableValue> {
+  const variables = defaultBrickVariables(brick)
+  // Relay resolves the newest Velocity snapshot and its Java version at creation.
+  if (brick.metadata.id === "velocity") {
+    delete variables.version
+    delete variables.java_version
+  }
+  return variables
+}
+
 export function hydrateBrickVariables(
   brick: Brick,
   stored: Readonly<Record<string, BrickVariableValue>> | null | undefined

@@ -13,6 +13,7 @@ import {
   builtinTailscaleBrick,
   builtinTailscaleBrickSource,
   requiredMinecraftJavaVersion,
+  latestVelocityVersion,
   relayCatalogSchema,
 } from "@workspace/contracts"
 
@@ -225,6 +226,37 @@ function brickSnapshotPath(directory: string, sha256: string): string {
     throw new Error("Brick snapshot checksum is invalid")
   }
   return join(directory, `${sha256}.json`)
+}
+
+// Resolve once at creation, then persist the concrete version with the instance.
+export async function resolveBrickForProvisioning(
+  recipe: BrickRecipe,
+  input: Readonly<Record<string, BrickVariableValue>>,
+  source: string
+): Promise<ResolvedBrick> {
+  if (recipe.metadata.id !== "velocity" || Object.hasOwn(input, "version")) {
+    return resolveBrick(recipe, input, source)
+  }
+  const response = await fetch(
+    "https://mcjarfiles.com/api/get-versions/proxies/velocity",
+    {
+      headers: { Accept: "application/json", "User-Agent": "kiln-relay" },
+      signal: AbortSignal.timeout(15_000),
+    }
+  )
+  if (!response.ok)
+    throw new Error(`Could not load Velocity versions: HTTP ${response.status}`)
+  const versions: unknown = await response.json()
+  if (
+    !Array.isArray(versions) ||
+    !versions.every((version) => typeof version === "string")
+  ) {
+    throw new Error("Velocity version catalog returned an invalid response")
+  }
+  const version = latestVelocityVersion(versions)
+  if (!version)
+    throw new Error("Velocity version catalog contains no supported versions")
+  return resolveBrick(recipe, { ...input, version }, source)
 }
 
 export function resolveBrick(

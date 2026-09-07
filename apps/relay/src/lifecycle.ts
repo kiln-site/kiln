@@ -14,7 +14,7 @@ import { totalmem } from "node:os"
 import { join } from "node:path"
 import { Effect, Fiber, Schedule, Semaphore } from "effect"
 
-import { resolveBrick } from "./bricks.js"
+import { resolveBrick, resolveBrickForProvisioning } from "./bricks.js"
 import { command } from "./command.js"
 import { directoryApparentSizeEffect } from "./disk-usage.js"
 import { recoverPromise, tapPromiseError } from "./effect/promise.js"
@@ -1919,7 +1919,11 @@ export class LifecycleDriver {
     const definition =
       input.recipeDefinition ?? (await this.#bricks.recipe(input.recipe))
     const snapshotSha256 = await this.#bricks.saveSnapshot(definition)
-    const resolved = resolveBrick(definition, input.variables, input.recipe)
+    const resolved = await resolveBrickForProvisioning(
+      definition,
+      input.variables,
+      input.recipe
+    )
     const primaryPort = definition.network.ports.find(
       (port) => port.name === definition.network.primaryPort
     )
@@ -2151,7 +2155,11 @@ export class LifecycleDriver {
       input.recipeDefinition ??
       (await this.#bricks.recipe(input.recipe, input.snapshotSha256))
     const snapshotSha256 = await this.#bricks.saveSnapshot(definition)
-    const resolved = resolveBrick(definition, input.variables, input.recipe)
+    const resolved = await resolveBrickForProvisioning(
+      definition,
+      input.variables,
+      input.recipe
+    )
     const installationMarkerValue =
       resolved.environment[INSTALLATION_MARKER_ENV]
     const installationMarker = installationMarkerName(installationMarkerValue)
