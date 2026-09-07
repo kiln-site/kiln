@@ -24,6 +24,7 @@ import {
   ConsoleWrapButton,
 } from "@/components/console/console-toolbar-actions"
 import { ConsoleTooltip } from "@/components/console/console-tooltip"
+import { ConsoleRetryButton } from "@/components/console/console-retry-button"
 import { relaySnapshotQueryOptions } from "@/lib/query-options"
 import {
   selectInstanceLifecycleStartedAt,
@@ -50,6 +51,7 @@ export const ConsoleToolbar = React.memo(function ConsoleToolbar({
     <div className="flex min-h-14 shrink-0 flex-wrap items-center gap-2 border-b px-3 py-2.5 sm:px-4">
       <ConsoleSearchControl uiStore={uiStore} />
       <ConsoleLevelMenu uiStore={uiStore} />
+      <ConsoleRetryButton streamStore={streamStore} />
       {instance.implementation.toLowerCase() === "tailscale" ? (
         <TailscaleConsoleFilterMenus
           instanceId={instance.id}

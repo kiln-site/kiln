@@ -25,6 +25,7 @@ export type RelayConsoleTransport = "direct" | "hearth"
 
 export type KilnConsoleStreamEvent =
   | RelayConsoleStreamEvent
+  | { type: "reconnecting"; message: string }
   | {
       message: string | null
       transport: RelayConsoleTransport
@@ -92,7 +93,15 @@ export function openRelayConsoleStream(
   ).pipe(
     Stream.retry(relayBrowserReconnectSchedule),
     Stream.catch((directFailure) =>
-      openHearth(directFallbackMessage(directFailure))
+      openHearth(directFallbackMessage(directFailure)).pipe(
+        Stream.prepend<KilnConsoleStreamEvent>([
+          {
+            type: "reconnecting",
+            message:
+              "The direct console stream failed. Trying to reconnect through Hearth.",
+          },
+        ])
+      )
     )
   )
 }

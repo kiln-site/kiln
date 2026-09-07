@@ -1,6 +1,6 @@
 import * as React from "react"
 import { useQueryClient } from "@tanstack/react-query"
-import { Effect, Stream } from "effect"
+import { Effect, Fiber, Stream } from "effect"
 import type {
   RelayConsole,
   RelayConsoleLine,
@@ -43,10 +43,14 @@ export function useRelayConsoleStream(
   consoleTransport: "direct" | "hearth" | null,
   runtime: ConsoleInstanceRuntime | null | undefined,
   loadTiming?: ConsoleLoadTiming,
-  canWrite = false
+  canWrite = false,
+  retryVersion = 0
 ) {
   const queryClient = useQueryClient()
   const hasEverBeenLiveRef = React.useRef(false)
+  const previousConnectionRef = React.useRef<Fiber.Fiber<void, unknown> | null>(
+    null
+  )
   const runtimeRef = React.useRef(runtime)
   React.useLayoutEffect(() => {
     runtimeRef.current = runtime
@@ -262,6 +266,7 @@ export function useRelayConsoleStream(
     }
 
     let disposed = false
+    let openingTimer: number | null = null
     let activeTransport: ConsoleStreamSnapshot["transport"] = null
     let flushTimer: number | null = null
     const pending: Array<RelayConsoleLine> = []
@@ -274,12 +279,35 @@ export function useRelayConsoleStream(
         connection: hasEverBeenLiveRef.current ? "reconnecting" : "opening",
         error: null,
         loading: !consoleDataRef.current,
+        transport: null,
+        transportMessage: null,
       })
     )
 
     function commitSnapshot(patch: Partial<ConsoleStreamSnapshot>) {
       if (disposed) return
       setSnapshot((current) => updateConsoleStreamSnapshot(current, patch))
+    }
+
+    function clearOpeningTimeout() {
+      if (openingTimer !== null) window.clearTimeout(openingTimer)
+      openingTimer = null
+    }
+
+    function watchOpening() {
+      clearOpeningTimeout()
+      openingTimer = window.setTimeout(() => {
+        openingTimer = null
+        const error = "The console is taking too long to connect."
+        loadTiming?.markRetryableFailure(new Error(error))
+        commitSnapshot({
+          connection: hasEverBeenLiveRef.current
+            ? "reconnecting"
+            : "unavailable",
+          error,
+          loading: false,
+        })
+      }, 10_000)
     }
 
     function flush() {
@@ -372,30 +400,43 @@ export function useRelayConsoleStream(
       commitSnapshot({ consoleData: nextConsole })
     }
 
+    const previousConnection = previousConnectionRef.current
     const connectFiber = Effect.runFork(
       Effect.gen(function* () {
+        // Join teardown before a manual retry can acquire a replacement socket.
+        if (previousConnection) yield* Fiber.interrupt(previousConnection)
+        watchOpening()
         let retryDelay = 400
         while (!disposed) {
           const failure = yield* openRelayConsoleStream(
             relayId,
             instanceId,
-            browserOrigin,
-            consoleTransport,
+            retryVersion > 0 ? null : browserOrigin,
+            retryVersion > 0 ? null : consoleTransport,
             loadTiming,
             canWrite
           ).pipe(
             Stream.runForEach((event) =>
               Effect.sync(() => {
                 if (disposed) return
-                if (event.type === "transport") {
+                if (event.type === "reconnecting") {
+                  watchOpening()
+                  commitSnapshot({
+                    connection: hasEverBeenLiveRef.current
+                      ? "reconnecting"
+                      : "unavailable",
+                    error: event.message,
+                    loading: false,
+                  })
+                } else if (event.type === "transport") {
                   activeTransport = event.transport
                   loadTiming?.markTransport(event.transport)
                   commitSnapshot({
-                    error: null,
                     transport: event.transport,
                     transportMessage: event.message,
                   })
                 } else if (event.type === "ready") {
+                  clearOpeningTimeout()
                   hasEverBeenLiveRef.current = true
                   const eventStartedAt = lifecycleEventTime(
                     event.lifecycle,
@@ -519,6 +560,7 @@ export function useRelayConsoleStream(
           if (disposed) break
           if (failure === null) continue
           loadTiming?.markRetryableFailure(failure)
+          clearOpeningTimeout()
           commitSnapshot({
             connection: hasEverBeenLiveRef.current
               ? "reconnecting"
@@ -531,8 +573,10 @@ export function useRelayConsoleStream(
         }
       })
     )
+    previousConnectionRef.current = connectFiber
 
     return () => {
+      clearOpeningTimeout()
       if (flushTimer !== null) window.clearTimeout(flushTimer)
       flush()
       disposed = true
@@ -547,6 +591,7 @@ export function useRelayConsoleStream(
     queryClient,
     relayConnected,
     relayId,
+    retryVersion,
   ])
 
   return snapshot

@@ -1,9 +1,27 @@
-import { describe, expect, it } from "vite-plus/test"
+import { describe, expect, it, vi } from "vite-plus/test"
 
 import {
   createConsoleAggregateStreamStore,
+  createConsoleStreamStore,
   createConsoleUiStore,
 } from "./console-stores"
+
+it("retries only the connection subscribers without clearing output", () => {
+  const store = createConsoleStreamStore()
+  const view = vi.fn()
+  const reconnect = vi.fn()
+  store.subscribe(view)
+  const unsubscribe = store.subscribeRetry(reconnect)
+  const before = store.getSnapshot()
+  store.retry()
+  expect(store.getRetrySnapshot()).toBe(1)
+  expect(reconnect).toHaveBeenCalledOnce()
+  expect(view).not.toHaveBeenCalled()
+  expect(store.getSnapshot()).toBe(before)
+  unsubscribe()
+  store.retry()
+  expect(reconnect).toHaveBeenCalledOnce()
+})
 
 describe("Tailscale console stores", () => {
   it("combines relay streams without colliding line identities", () => {

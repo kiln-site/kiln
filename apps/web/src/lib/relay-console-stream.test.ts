@@ -35,6 +35,20 @@ afterEach(() => {
 })
 
 describe("Relay console connection setup", () => {
+  it("reports a failed direct stream before waiting for the fallback", async () => {
+    vi.stubGlobal("navigator", { onLine: true })
+    const fetchFallback = vi.fn(() => new Promise(() => {}))
+    vi.stubGlobal("fetch", fetchFallback)
+    relayCapability.issue.mockRejectedValue(
+      new Error("Capability service unavailable")
+    )
+    const event = await Effect.runPromise(
+      openRelayConsoleStream("relay", "instance", null).pipe(Stream.runHead)
+    )
+    expect(Option.getOrThrow(event)).toMatchObject({ type: "reconnecting" })
+    expect(fetchFallback).not.toHaveBeenCalled()
+  })
+
   it("opens Hearth immediately when synchronized routing selects it", async () => {
     const fetchStream = vi.fn().mockResolvedValue(
       new Response(

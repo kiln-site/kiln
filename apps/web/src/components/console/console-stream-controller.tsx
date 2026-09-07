@@ -37,6 +37,11 @@ export function ConsoleStreamController({
   streamStore: ConsoleStreamStore
 }) {
   const relayConnected = useInstanceRelayConnected()
+  const retryVersion = React.useSyncExternalStore(
+    streamStore.subscribeRetry,
+    streamStore.getRetrySnapshot,
+    streamStore.getRetrySnapshot
+  )
   const browserOrigin = useRelayBrowserOrigin(relayId)
   const consoleTransport = useRelayConsoleTransport(relayId)
   const selectRuntime = React.useMemo(
@@ -55,7 +60,8 @@ export function ConsoleStreamController({
     consoleTransport,
     runtime,
     loadTiming,
-    canWrite
+    canWrite,
+    retryVersion
   )
   const effectiveSnapshot = React.useMemo(
     () =>
@@ -112,6 +118,11 @@ function TailscaleConsoleStreamSource({
   relayName: string
   streamStore: ConsoleAggregateStreamStore
 }) {
+  const retryVersion = React.useSyncExternalStore(
+    streamStore.subscribeRetry,
+    streamStore.getRetrySnapshot,
+    streamStore.getRetrySnapshot
+  )
   const selectRuntime = React.useMemo(
     () => selectInstanceConsoleRuntime(instanceId, relayId),
     [instanceId, relayId]
@@ -136,7 +147,10 @@ function TailscaleConsoleStreamSource({
     relayConnected,
     browserOrigin,
     consoleTransport,
-    runtime
+    runtime,
+    undefined,
+    false,
+    retryVersion
   )
   const effectiveSnapshot = React.useMemo(
     () =>
