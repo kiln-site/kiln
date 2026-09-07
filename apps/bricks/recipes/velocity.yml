@@ -14,8 +14,8 @@ variables:
     label: Velocity version
     description: Velocity release to install.
     required: true
-    default: "4.0.0"
-    rules: { pattern: "^[0-9]+(?:\\.[0-9]+){1,3}$", maxLength: 32 }
+    default: "4.1.2-SNAPSHOT"
+    rules: { pattern: "^[0-9]+(?:\\.[0-9]+){1,2}(?:-SNAPSHOT)?$", maxLength: 32 }
   memory:
     type: string
     label: Container memory
@@ -26,9 +26,9 @@ variables:
   java_version:
     type: string
     label: Java version
-    description: JDK release used to run the proxy.
+    description: Recommended JDK is selected from the Velocity version; override it when needed.
     required: true
-    default: "21"
+    default: "25"
     rules: { pattern: "^(?:11|17|21|25)$", maxLength: 2 }
   server_jar_file:
     type: string

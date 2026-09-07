@@ -2,10 +2,12 @@ import { describe, expect, it } from "vite-plus/test"
 import {
   brickRecipeSchema,
   requiredMinecraftJavaVersion,
+  latestVelocityVersion,
 } from "@workspace/contracts"
 
 import {
   defaultBrickVariables,
+  defaultProvisioningBrickVariables,
   defaultBrickRuntimeName,
   hydrateBrickVariables,
   missingRequiredBrickVersion,
@@ -93,6 +95,14 @@ describe("Minecraft Java defaults", () => {
   })
 
   it.each([
+    ["velocity", "1.0.10", "11"],
+    ["velocity", "3.2.0-SNAPSHOT", "11"],
+    ["velocity", "3.3.0-SNAPSHOT", "17"],
+    ["velocity", "3.4.0", "17"],
+    ["velocity", "3.5.0", "21"],
+    ["velocity", "4.0.0", "25"],
+    ["velocity", "4.1.2-SNAPSHOT", "25"],
+    ["velocity", "5.0.0", "25"],
     ["paper", "1.16.4", "11"],
     ["paper", "1.17.1", "17"],
     ["paper", "1.21.11", "21"],
@@ -274,4 +284,30 @@ describe("Minecraft Java defaults", () => {
       unavailableMinecraftJavaVersion("paper", paper.variables, "1.16.5", "21")
     ).toBeNull()
   })
+})
+
+it("orders Velocity snapshots numerically and prefers releases at the same version", () => {
+  expect(
+    latestVelocityVersion(["4.1.2-SNAPSHOT", "4.1.10-SNAPSHOT", "4.1.9"])
+  ).toBe("4.1.10-SNAPSHOT")
+  expect(latestVelocityVersion(["4.1.1-SNAPSHOT", "4.1.1"])).toBe("4.1.1")
+  expect(latestVelocityVersion(["invalid", "4.0.0-rc1"])).toBeNull()
+})
+
+it("defers new Velocity defaults to Relay while keeping Startup defaults concrete", () => {
+  const velocity = {
+    ...paper,
+    metadata: { ...paper.metadata, id: "velocity" },
+    source: "velocity.yml",
+  }
+  expect(defaultProvisioningBrickVariables(velocity)).toEqual({})
+  expect(
+    defaultProvisioningBrickVariables({ ...paper, source: "paper.yml" })
+  ).toEqual(defaultBrickVariables({ ...paper, source: "paper.yml" }))
+  expect(
+    hydrateBrickVariables(velocity, { version: "4.1.2-SNAPSHOT" })
+  ).toEqual({ version: "4.1.2-SNAPSHOT", java_version: "25" })
+  expect(
+    hydrateBrickVariables(velocity, { version: "3.4.0", java_version: "21" })
+  ).toEqual({ version: "3.4.0", java_version: "21" })
 })

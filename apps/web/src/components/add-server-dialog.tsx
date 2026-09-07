@@ -30,7 +30,7 @@ import {
 } from "@/components/brick-selector"
 import {
   defaultBrickInstanceName,
-  defaultBrickVariables,
+  defaultProvisioningBrickVariables,
 } from "@/lib/brick-variables"
 import { relayFleetInstance, relayInstanceRouteId } from "@/lib/relay-fleet"
 import type { PersistedRelay } from "@/lib/relay-registry"
@@ -304,7 +304,9 @@ const AddServerConfiguration = React.memo(function AddServerConfiguration({
     const submittedName = formData.get("name")
     const name = typeof submittedName === "string" ? submittedName.trim() : ""
     const variables =
-      selection.kind === "catalog" ? defaultBrickVariables(selection.brick) : {}
+      selection.kind === "catalog"
+        ? defaultProvisioningBrickVariables(selection.brick)
+        : {}
     const provisioningInput = {
       diskLimitBytes: DEFAULT_INSTANCE_DISK_LIMIT_BYTES,
       name: name || selectionName || "New server",

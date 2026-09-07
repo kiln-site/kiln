@@ -1365,7 +1365,10 @@ async function executeControlRequest(
         "relay.instance.provision.prepare",
         provisioningManager.prepare({
           idempotencyKey,
-          input,
+          input:
+            placeholder.brickId === "velocity" && placeholder.variables
+              ? { ...input, variables: placeholder.variables }
+              : input,
           instanceId,
           placeholder,
         })

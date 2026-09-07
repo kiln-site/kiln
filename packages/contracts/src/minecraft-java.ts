@@ -2,9 +2,24 @@ export function requiredMinecraftJavaVersion(
   brickId: string,
   version: string
 ): string | null {
-  const parsed = parseMinecraftVersion(version)
+  const parsed = parseMinecraftVersion(
+    brickId === "velocity" ? version.replace(/-SNAPSHOT$/u, "") : version
+  )
   if (!parsed) return null
   const [major, minor, patch] = parsed
+
+  // Velocity's Java toolchain changed in 3.3 (17), 3.5 (21), and 4.0 (25).
+  // https://github.com/PaperMC/Velocity/commit/8be7ace3f1ef
+  // https://github.com/PaperMC/Velocity/commit/75ecb641596a
+  // https://docs.papermc.io/velocity/faq/#what-version-of-java-does-velocity-require
+  // Older releases run on Java 11, the oldest published Kiln Java Ember.
+  if (brickId === "velocity") {
+    if (major >= 4) return "25"
+    if (major === 3 && minor >= 5) return "21"
+    if (major === 3 && minor >= 3) return "17"
+    if (major >= 1) return "11"
+    return null
+  }
 
   if (brickId === "paper" || brickId === "folia") {
     if (major === 26 && minor >= 1) return "25"
@@ -39,4 +54,26 @@ function parseMinecraftVersion(
   return [major, minor, patch].every(Number.isSafeInteger)
     ? [major, minor, patch]
     : null
+}
+
+export function latestVelocityVersion(
+  versions: ReadonlyArray<string>
+): string | null {
+  const parsed = versions.flatMap((version) => {
+    const value = version.trim()
+    const parts = parseMinecraftVersion(value.replace(/-SNAPSHOT$/u, ""))
+    return parts ? [{ value, parts }] : []
+  })
+  parsed.sort((left, right) => {
+    for (let index = 0; index < 3; index += 1) {
+      const difference = right.parts[index]! - left.parts[index]!
+      if (difference) return difference
+    }
+    // Prefer the finished release when both it and its snapshot are listed.
+    return (
+      Number(left.value.endsWith("-SNAPSHOT")) -
+      Number(right.value.endsWith("-SNAPSHOT"))
+    )
+  })
+  return parsed[0]?.value ?? null
 }
