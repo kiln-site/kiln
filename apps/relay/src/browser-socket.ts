@@ -546,6 +546,7 @@ function authenticateBrowser(
     }
     const auth = Schema.decodeUnknownSync(BrowserAuthSchema)(value)
     const parsed = decodeCapability(auth.capability)
+    const clientConfiguration = registry.clientConfiguration
     const client = await options.runEffect(
       options.state.findClientById(parsed.payload.issuer)
     )
@@ -602,6 +603,9 @@ function authenticateBrowser(
       parsed.payload.version === 2
         ? renewalChallenge(parsed.payload.expiresAt)
         : undefined
+    if (clientConfiguration !== registry.clientConfiguration) {
+      throw new Error("Capability issuer changed during authentication")
+    }
     const admission = registry.activate(
       socket,
       authority,
@@ -961,7 +965,9 @@ function browserAuthority(
     issuerGeneration: 0,
     keyThumbprint: capability.keyThumbprint,
     loginSessionId: null,
-    operation: null,
+    operation: capability.actions.includes("instance.read")
+      ? "resources"
+      : "console",
     origin: capability.origin,
     revision: 0,
     subject: capability.subject,
@@ -1051,6 +1057,7 @@ async function handleBrowserFileRequest(
     return true
   }
   transfers.pendingAuthentications += 1
+  const clientConfiguration = registry.clientConfiguration
   const attempted = await ensuringPromise(
     async () => {
       let downloadForm: BrowserDownloadForm | null = null
@@ -1095,7 +1102,10 @@ async function handleBrowserFileRequest(
     return true
   }
   const { authenticated, downloadForm, path } = attempted.value
-  if (Option.isNone(authenticated)) {
+  if (
+    Option.isNone(authenticated) ||
+    clientConfiguration !== registry.clientConfiguration
+  ) {
     browserJson(
       response,
       401,
@@ -1122,10 +1132,14 @@ async function handleBrowserFileRequest(
   }
   transfers.active += 1
   transfers.byClient.set(clientId, clientTransfers + 1)
-  const transfer = registry.registerTransfer(authentication.authority, () => {
-    if (!request.destroyed) request.destroy()
-    if (!response.destroyed) response.destroy()
-  })
+  const transfer = registry.registerTransfer(
+    authentication.authority,
+    authentication.current,
+    () => {
+      if (!request.destroyed) request.destroy()
+      if (!response.destroyed) response.destroy()
+    }
+  )
   if (!transfer.active()) {
     transfer.release()
     transfers.active -= 1
@@ -1345,6 +1359,7 @@ async function authenticateBrowserRequest(input: {
   legacyRequestProofs: Map<string, number>
 }): Promise<{
   authority: BrowserSessionAuthority
+  current: { issuerGeneration: number; minimumRevision: number }
   capabilityId: string
   clientId: string
   instanceId: string
@@ -1447,6 +1462,7 @@ async function authenticateBrowserRequest(input: {
         proof
       )
       if (!valid) throw new Error("Browser request proof is invalid")
+      let current = { issuerGeneration: 0, minimumRevision: 0 }
       if (parsed.payload.version === 2) {
         const authority = await input.options.runEffect(
           input.options.state.browserAuthority({
@@ -1462,6 +1478,7 @@ async function authenticateBrowserRequest(input: {
         ) {
           throw new Error("Browser authorization is stale")
         }
+        current = authority
         const reservation = await input.options.runEffect(
           input.options.state.reserveBrowserFileReplay({
             capabilityId: parsed.payload.capabilityId,
@@ -1483,6 +1500,7 @@ async function authenticateBrowserRequest(input: {
       }
       return {
         authority: browserAuthority(parsed.payload),
+        current,
         capabilityId: parsed.payload.capabilityId,
         clientId: client.id,
         instanceId: parsed.payload.instanceId,

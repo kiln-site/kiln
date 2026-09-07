@@ -21,7 +21,6 @@ export interface RelayBrowserCredentials {
 }
 
 interface CredentialEntry {
-  active: Map<BrowserCapabilityRequest["kind"], BrowserCapabilityRequest>
   credentials: Promise<RelayBrowserCredentials>
   flushScheduled: boolean
   instanceId: string
@@ -92,7 +91,6 @@ export function acquireRelayBrowserCredentials(
   let entry = credentialsByInstance.get(id)
   if (!entry) {
     entry = {
-      active: new Map(),
       credentials: createCredentials(),
       flushScheduled: false,
       instanceId,
@@ -104,17 +102,13 @@ export function acquireRelayBrowserCredentials(
   }
   entry.references += 1
   let released = false
-  const ownedKinds = new Set<BrowserCapabilityRequest["kind"]>()
-  const activate = (request: BrowserCapabilityRequest) => {
-    ownedKinds.add(request.kind)
-    entry.active.set(request.kind, request)
-  }
+  const issue = (request: BrowserCapabilityRequest) =>
+    released
+      ? Promise.reject(new Error("Relay browser credentials were released"))
+      : issueCapability(entry, request)
   return {
     credentials: entry.credentials,
-    issue: (request) => {
-      activate(request)
-      return issueCapability(entry, request)
-    },
+    issue,
     onAuthorizationChange: (listener) => {
       const listeners = authorizationListeners.get(id) ?? new Set()
       listeners.add(listener)
@@ -129,20 +123,15 @@ export function acquireRelayBrowserCredentials(
       released = true
       const current = credentialsByInstance.get(id)
       if (current !== entry) return
-      for (const kind of ownedKinds) current.active.delete(kind)
       current.references -= 1
       if (current.references === 0) {
         credentialsByInstance.delete(id)
         authorizationVersions.delete(id)
       }
     },
-    renew: (request) => {
-      activate(request)
-      for (const active of entry.active.values()) {
-        enqueueCapability(entry, active)
-      }
-      return issueCapability(entry, request)
-    },
+    // Batch only requested capabilities. Issuing for the other socket without
+    // delivering that token did extra authorization/signing work every renewal.
+    renew: issue,
   }
 }
 
@@ -199,10 +188,14 @@ function flushCapabilities(entry: CredentialEntry): Promise<void> {
           }
         },
         onSuccess: (response) => {
+          const capabilities = new Map(
+            response.capabilities.map((capability) => [
+              capability.kind,
+              capability,
+            ])
+          )
           for (const item of pending) {
-            const capability = response.capabilities.find(
-              (candidate) => candidate.kind === item.request.kind
-            )
+            const capability = capabilities.get(item.request.kind)
             if (capability) {
               for (const waiter of item.waiters) waiter.resolve(capability)
               continue

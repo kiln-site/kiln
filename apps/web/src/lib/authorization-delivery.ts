@@ -316,6 +316,25 @@ async function deliverBatch(relayId: string): Promise<boolean> {
   if (result.issuerGeneration < issuerGeneration) {
     throw new Error("Relay did not persist the requested issuer generation")
   }
+  for (const item of items) {
+    const [kind, scopeId] = encodeScope(item.scope)
+    if (
+      !result.items.some((ack) => {
+        const [ackKind, ackScopeId] = encodeScope(ack.scope)
+        return (
+          ack.subject === item.subject &&
+          ackKind === kind &&
+          ackScopeId === scopeId &&
+          ack.minimumRevision >= item.minimumRevision
+        )
+      })
+    ) {
+      // A partial acknowledgement must retry even when this is the last batch.
+      throw new Error(
+        "Relay did not persist every requested authorization revision"
+      )
+    }
+  }
 
   await Sentry.startSpan(
     {

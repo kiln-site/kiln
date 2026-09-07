@@ -917,6 +917,11 @@ class RelayConnection {
           Effect.sync(() => {
             if (this.#reconnectFiber === reconnecting) {
               this.#reconnectFiber = null
+              // A failed #openEffect tries to reschedule while this fiber is
+              // still registered. Continue only after releasing that guard.
+              if (!this.#closed && this.#state.status !== "authenticated") {
+                this.#scheduleReconnect()
+              }
             }
           })
         )

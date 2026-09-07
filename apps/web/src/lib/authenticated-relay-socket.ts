@@ -5,7 +5,16 @@ import {
   relayBrowserProtocol,
 } from "@workspace/contracts"
 import * as Sentry from "@sentry/tanstackstart-react"
-import { Cause, Effect, Queue, Result, Stream } from "effect"
+import {
+  Cause,
+  Clock,
+  Effect,
+  Exit,
+  Queue,
+  Result,
+  Schedule,
+  Stream,
+} from "effect"
 
 import type { RelayBrowserCredentials } from "@/lib/relay-browser-credentials"
 import type { RelayConsoleOperation } from "@/lib/relay-console-operations"
@@ -16,6 +25,19 @@ const CONSOLE_BYTES_MAX = 4 * 1024 * 1024
 const CONTROL_MESSAGES_MAX = 64
 const PENDING_REQUESTS_MAX = 32
 const REQUEST_TIMEOUT_MS = 8_000
+const RENEW_RECONNECT_REASON = "Relay lease renewal needs reconnect"
+
+export class RelayBrowserReconnectError extends Error {}
+
+// Retry only an ambiguous renewal; normal connectivity failures retain the
+// feature fallback, and a replaced owner must never reconnect and evict its heir.
+export const relayBrowserReconnectSchedule = Schedule.spaced(250).pipe(
+  Schedule.jittered,
+  Schedule.upTo({ times: 2 }),
+  Schedule.while(({ input }) =>
+    Effect.succeed(input instanceof RelayBrowserReconnectError)
+  )
+)
 
 export interface OpenRelayBrowserSocket {
   challenge: {
@@ -40,7 +62,10 @@ export interface RelayBrowserSocketInbox {
   ) => Promise<unknown>
   stream: Stream.Stream<Record<string, unknown>, Error>
   take: Effect.Effect<Record<string, unknown>, Error>
-  waitFor: (type: string) => Promise<Record<string, unknown>>
+  waitFor: (
+    type: string,
+    signal?: AbortSignal
+  ) => Promise<Record<string, unknown>>
 }
 
 export function openAuthenticatedRelaySocket(input: {
@@ -75,130 +100,138 @@ export function maintainRelayBrowserLease(
     write: boolean
   }
 ) {
-  return Effect.acquireRelease(
-    Effect.sync(() => {
-      let closed = false
-      let current = renewalState(ready)
-      let renewing: Promise<void> | null = null
-      let retryCount = 0
-      let timer: ReturnType<typeof setTimeout> | null = null
-
-      const schedule = () => {
-        if (closed || !current) return
-        if (timer) globalThis.clearTimeout(timer)
-        const lead = input.write ? 10_000 : 20_000
-        timer = globalThis.setTimeout(
-          () => void renewNow(),
-          Math.max(0, current.expiresAt - Date.now() - lead)
-        )
-      }
-      const renew = async () =>
-        Sentry.startSpan(
-          {
+  return Effect.gen(function* () {
+    const initial = renewalState(ready)
+    if (!initial)
+      return yield* Effect.fail(
+        new Error("Relay did not provide renewal state")
+      )
+    let current = initial
+    let retryCount = 0
+    let renewalSent = false
+    // One scoped worker serializes scheduled and permission-triggered renewals.
+    // A change arriving during issuance is retained for the next iteration.
+    const wake = yield* Queue.sliding<void>(1)
+    yield* Effect.addFinalizer(() => Queue.shutdown(wake))
+    const renew = Effect.gen(function* () {
+      yield* Effect.acquireRelease(
+        Effect.sync(() =>
+          Sentry.startInactiveSpan({
             name: "Renew Relay browser lease",
             op: "websocket.relay.renew",
             attributes: {
               "kiln.channel": input.channel,
               "kiln.retry_count": retryCount,
             },
-          },
-          async () => {
-            if (!current) throw new Error("Relay did not provide renewal state")
-            const capability = await input.issue()
-            if (capability.version !== 2) {
-              throw new Error("Hearth downgraded an active Relay lease")
-            }
-            const proof = await crypto.subtle.sign(
-              { hash: "SHA-256", name: "ECDSA" },
-              input.credentials.keys.privateKey,
-              new TextEncoder().encode(
-                relayBrowserProofTranscript(
-                  {
-                    capabilityId: capabilityId(capability.capability),
-                    expiresAt: current.renewalNonceExpiresAt,
-                    nonce: current.renewalNonce,
-                    relayId: input.relayId,
-                    sessionId: current.sessionId,
-                  },
-                  opened.socket.protocol === relayBrowserConsoleProtocol
-                    ? relayBrowserConsoleProtocol
-                    : relayBrowserProtocol
-                )
+          })
+        ),
+        (span, exit) =>
+          Effect.sync(() => {
+            const result = Exit.isSuccess(exit)
+              ? "ok"
+              : Exit.hasInterrupts(exit)
+                ? "cancelled"
+                : "error"
+            span.setAttribute("kiln.result", result)
+            if (result === "error")
+              span.setStatus({ code: 2, message: "renewal_failed" })
+            span.end()
+          })
+      )
+      const capability = yield* Effect.tryPromise({
+        try: input.issue,
+        catch: (cause) => cause,
+      }).pipe(Effect.timeout(AUTHENTICATION_TIMEOUT_MS))
+      if (capability.version !== 2)
+        return yield* Effect.fail(
+          new Error("Hearth downgraded an active Relay lease")
+        )
+      const proof = yield* Effect.tryPromise({
+        try: () =>
+          crypto.subtle.sign(
+            { hash: "SHA-256", name: "ECDSA" },
+            input.credentials.keys.privateKey,
+            new TextEncoder().encode(
+              relayBrowserProofTranscript(
+                {
+                  capabilityId: capabilityId(capability.capability),
+                  expiresAt: current.renewalNonceExpiresAt,
+                  nonce: current.renewalNonce,
+                  relayId: input.relayId,
+                  sessionId: current.sessionId,
+                },
+                opened.socket.protocol === relayBrowserConsoleProtocol
+                  ? relayBrowserConsoleProtocol
+                  : relayBrowserProtocol
               )
             )
-            const acknowledgement = opened.inbox.waitFor("auth.renewed")
-            opened.socket.send(
-              JSON.stringify({
-                capability: capability.capability,
-                signature: bytesToBase64Url(new Uint8Array(proof)),
-                type: "auth.renew",
-                v: 1,
-              })
-            )
-            current = renewalState(await acknowledgement, current.sessionId)
-            if (!current)
-              throw new Error("Relay returned invalid renewal state")
-            retryCount = 0
-            schedule()
-          }
+          ),
+        catch: asError,
+      })
+      const acknowledgement = yield* Effect.tryPromise({
+        try: (signal) => {
+          const response = opened.inbox.waitFor("auth.renewed", signal)
+          // Once sent, Relay may have consumed the nonce even if the ack is lost.
+          renewalSent = true
+          opened.socket.send(
+            JSON.stringify({
+              capability: capability.capability,
+              signature: bytesToBase64Url(new Uint8Array(proof)),
+              type: "auth.renew",
+              v: 1,
+            })
+          )
+          return response
+        },
+        catch: asError,
+      })
+      const next = renewalState(acknowledgement, current.sessionId)
+      if (!next)
+        return yield* Effect.fail(
+          new Error("Relay returned invalid renewal state")
         )
-      const retryAfterTransientFailure = () => {
-        if (closed || !current) return
-        retryCount += 1
-        const maximumDelay = Math.min(5_000, 400 * 2 ** (retryCount - 1))
-        const jitteredDelay = maximumDelay * (0.8 + Math.random() * 0.4)
-        const timeUntilExpiry = current.expiresAt - Date.now() - 1_000
-        if (timeUntilExpiry <= 0) {
+      current = next
+    }).pipe(Effect.scoped)
+    yield* Effect.gen(function* () {
+      for (;;) {
+        const now = yield* Clock.currentTimeMillis
+        const remaining = current.expiresAt - now
+        if (remaining <= 0) {
           opened.socket.close(4403, "Relay lease renewal expired")
           return
         }
-        timer = globalThis.setTimeout(
-          () => void renewNow(),
-          Math.min(jitteredDelay, timeUntilExpiry)
-        )
+        const delay =
+          retryCount === 0
+            ? Math.max(0, remaining - (input.write ? 10_000 : 20_000))
+            : Math.min(
+                remaining,
+                Math.min(5_000, 400 * 2 ** Math.min(retryCount - 1, 5)) *
+                  (0.8 + Math.random() * 0.4)
+              )
+        yield* Effect.raceFirst(Queue.take(wake), Effect.sleep(delay))
+        renewalSent = false
+        const outcome = yield* renew.pipe(Effect.result)
+        if (Result.isFailure(outcome)) {
+          if (renewalSent) {
+            opened.socket.close(4012, RENEW_RECONNECT_REASON)
+            return
+          }
+          if (isAuthorizationFailure(outcome.failure)) {
+            opened.socket.close(4403, "Relay browser authorization changed")
+            return
+          }
+          retryCount += 1
+        } else {
+          retryCount = 0
+        }
       }
-      const renewNow = (): Promise<void> => {
-        if (closed) return Promise.resolve()
-        if (renewing) return renewing
-        renewing = Effect.runPromise(
-          Effect.tryPromise({ try: renew, catch: (cause) => cause }).pipe(
-            Effect.catch((cause) =>
-              Effect.sync(() => {
-                // A denied renewal means Hearth no longer authorizes this
-                // lease. Close immediately instead of retaining stale access
-                // until the Relay-side expiry timer catches up.
-                if (isAuthorizationFailure(cause)) {
-                  opened.socket.close(
-                    4403,
-                    "Relay browser authorization changed"
-                  )
-                  return
-                }
-                // Transient failures retain the last authoritative stream and
-                // retry with bounded jitter while the lease is still valid.
-                retryAfterTransientFailure()
-              })
-            ),
-            Effect.ensuring(
-              Effect.sync(() => {
-                renewing = null
-              })
-            )
-          )
-        )
-        return renewing
-      }
-      schedule()
-      return {
-        close: () => {
-          closed = true
-          if (timer) globalThis.clearTimeout(timer)
-        },
-        renewNow,
-      }
-    }),
-    (lease) => Effect.sync(lease.close)
-  )
+    }).pipe(Effect.forkScoped)
+    return {
+      renewNow: () => {
+        Queue.offerUnsafe(wake, undefined)
+      },
+    }
+  })
 }
 
 export function openRelayBrowserSocket(input: {
@@ -339,6 +372,10 @@ export function createRelayBrowserSocketInbox(
       >(channel === "console" ? CONSOLE_MESSAGES_MAX : CONTROL_MESSAGES_MAX)
       let queuedBytes = 0
       let terminal = false
+      let pendingResource: {
+        bytes: number
+        value: Record<string, unknown>
+      } | null = null
       const pending = new Map<
         string,
         {
@@ -373,6 +410,7 @@ export function createRelayBrowserSocketInbox(
         Queue.failCauseUnsafe(messages, Cause.fail(cause))
       }
       const onMessage = (event: MessageEvent) => {
+        if (terminal) return
         Result.try(() => {
           const serialized = String(event.data)
           const bytes = new TextEncoder().encode(serialized).byteLength
@@ -393,6 +431,9 @@ export function createRelayBrowserSocketInbox(
               if (waiters?.length === 0) controlWaiters.delete(message.type)
               return
             }
+            // Renewal acknowledgements are control-only. A timed-out/aborted
+            // waiter must not leak a late acknowledgement into a feature codec.
+            if (message.type === "auth.renewed") return
           }
           const requestId = message.requestId
           if (
@@ -418,17 +459,42 @@ export function createRelayBrowserSocketInbox(
             return
           }
           if (channel === "resources" && message.type === "resource") {
-            while (Queue.sizeUnsafe(messages) > 0) Queue.takeUnsafe(messages)
-            queuedBytes = 0
+            if (pendingResource) {
+              // Retain the first authoritative history and all control frames.
+              // Replacing the whole queue can discard auth.ready during setup.
+              const previousHistory = pendingResource.value.history
+              if (
+                Array.isArray(previousHistory) &&
+                previousHistory.length > 0 &&
+                Array.isArray(message.history) &&
+                message.history.length === 0
+              ) {
+                message.history = previousHistory
+              }
+              const replacementBytes = new TextEncoder().encode(
+                JSON.stringify(message)
+              ).byteLength
+              queuedBytes += replacementBytes - pendingResource.bytes
+              if (queuedBytes > CONSOLE_BYTES_MAX) {
+                socket.close(4013, "resources consumer is too slow")
+                throw new Error("Relay resource queue exceeded its limit")
+              }
+              pendingResource.bytes = replacementBytes
+              pendingResource.value = message
+              return
+            }
           }
+          const queued = { bytes, value: message }
           if (
             queuedBytes + bytes > CONSOLE_BYTES_MAX ||
-            !Queue.offerUnsafe(messages, { bytes, value: message })
+            !Queue.offerUnsafe(messages, queued)
           ) {
-            socket.close(1013, `${channel} consumer is too slow`)
+            socket.close(4013, `${channel} consumer is too slow`)
             throw new Error(`Relay ${channel} queue exceeded its limit`)
           }
           queuedBytes += bytes
+          if (channel === "resources" && message.type === "resource")
+            pendingResource = queued
         }).pipe(
           Result.match({
             onFailure: (cause) => fail(asError(cause)),
@@ -439,9 +505,12 @@ export function createRelayBrowserSocketInbox(
       const onError = () => fail(new Error("Unable to connect to Relay"))
       const onClose = (event: CloseEvent) =>
         fail(
-          new Error(
-            event.reason || `Relay browser connection closed (${event.code})`
-          )
+          event.code === 4012 && event.reason === RENEW_RECONNECT_REASON
+            ? new RelayBrowserReconnectError(event.reason)
+            : new Error(
+                event.reason ||
+                  `Relay browser connection closed (${event.code})`
+              )
         )
       socket.addEventListener("message", onMessage)
       socket.addEventListener("error", onError)
@@ -451,6 +520,7 @@ export function createRelayBrowserSocketInbox(
         bytes: number
         value: Record<string, unknown>
       }) => {
+        if (message === pendingResource) pendingResource = null
         queuedBytes = Math.max(0, queuedBytes - message.bytes)
         return message.value
       }
@@ -489,22 +559,48 @@ export function createRelayBrowserSocketInbox(
           )
         })
       }
-      const waitFor = (type: string): Promise<Record<string, unknown>> =>
+      const waitFor = (
+        type: string,
+        signal?: AbortSignal
+      ): Promise<Record<string, unknown>> =>
         new Promise((resolve, reject) => {
-          const timer = globalThis.setTimeout(() => {
+          if (terminal || signal?.aborted) {
+            reject(new Error("Relay browser session was cancelled"))
+            return
+          }
+          const cleanup = () => {
+            globalThis.clearTimeout(timer)
+            signal?.removeEventListener("abort", onAbort)
+          }
+          const resolveWaiter = (message: Record<string, unknown>) => {
+            cleanup()
+            resolve(message)
+          }
+          const rejectWaiter = (cause: Error) => {
+            cleanup()
+            reject(cause)
+          }
+          const remove = () => {
             const waiters = controlWaiters.get(type)
-            if (waiters) {
-              const index = waiters.findIndex(
-                (candidate) => candidate.resolve === resolve
-              )
-              if (index >= 0) waiters.splice(index, 1)
-              if (waiters.length === 0) controlWaiters.delete(type)
-            }
-            reject(new Error(`Relay ${type} response timed out`))
+            const index =
+              waiters?.findIndex(
+                (candidate) => candidate.resolve === resolveWaiter
+              ) ?? -1
+            if (waiters && index >= 0) waiters.splice(index, 1)
+            if (waiters?.length === 0) controlWaiters.delete(type)
+          }
+          const onAbort = () => {
+            remove()
+            rejectWaiter(new Error("Relay browser session was cancelled"))
+          }
+          const timer = globalThis.setTimeout(() => {
+            remove()
+            rejectWaiter(new Error(`Relay ${type} response timed out`))
           }, AUTHENTICATION_TIMEOUT_MS)
           const waiters = controlWaiters.get(type) ?? []
-          waiters.push({ reject, resolve, timer })
+          waiters.push({ reject: rejectWaiter, resolve: resolveWaiter, timer })
           controlWaiters.set(type, waiters)
+          signal?.addEventListener("abort", onAbort, { once: true })
         })
       return {
         messages,

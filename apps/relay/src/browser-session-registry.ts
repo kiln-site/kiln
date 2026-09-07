@@ -47,6 +47,7 @@ interface FloorState {
 }
 
 export class BrowserSessionRegistry {
+  #clientConfiguration: object = {}
   readonly #established = new Map<WebSocket, ActiveSession>()
   readonly #floorState = new Map<string, FloorState>()
   readonly #issuerGenerations = new Map<string, number>()
@@ -57,6 +58,11 @@ export class BrowserSessionRegistry {
 
   constructor(limits: BrowserLimits) {
     this.#limits = limits
+  }
+
+  /** Invalidates in-flight client lookups on the rare pairing/grant change. */
+  get clientConfiguration(): object {
+    return this.#clientConfiguration
   }
 
   acquirePending(
@@ -90,6 +96,10 @@ export class BrowserSessionRegistry {
         reason: "authorization" | "capacity"
         replaced: WebSocket | null
       } {
+    // A lookup may finish after close/timeout released this pending admission.
+    if (!this.#pending.has(socket) || socket.readyState !== WebSocket.OPEN) {
+      return { accepted: false, reason: "authorization", replaced: null }
+    }
     this.releasePending(socket)
     this.#issuerGenerations.set(
       authority.issuer,
@@ -99,12 +109,13 @@ export class BrowserSessionRegistry {
       )
     )
     if (
-      authority.version === 2 &&
-      (authority.issuerGeneration !== current.issuerGeneration ||
-        authority.issuerGeneration !==
-          (this.#issuerGenerations.get(authority.issuer) ?? 0) ||
-        authority.revision < current.minimumRevision ||
-        authority.revision < this.minimumRevision(authority))
+      authority.expiresAt <= Date.now() ||
+      (authority.version === 2 &&
+        (authority.issuerGeneration !== current.issuerGeneration ||
+          authority.issuerGeneration !==
+            (this.#issuerGenerations.get(authority.issuer) ?? 0) ||
+          authority.revision < current.minimumRevision ||
+          authority.revision < this.minimumRevision(authority)))
     ) {
       return { accepted: false, reason: "authorization", replaced: null }
     }
@@ -145,6 +156,9 @@ export class BrowserSessionRegistry {
     const session = this.#established.get(socket)
     if (
       !session?.active ||
+      socket.readyState !== WebSocket.OPEN ||
+      session.authority.expiresAt <= Date.now() ||
+      authority.expiresAt <= Date.now() ||
       !sameOwner(session.authority, authority) ||
       authority.version !== 2 ||
       authority.issuerGeneration !==
@@ -190,12 +204,38 @@ export class BrowserSessionRegistry {
     return !requiredAction || session.authority.actions.has(requiredAction)
   }
 
-  registerTransfer(authority: BrowserSessionAuthority, abort: () => void) {
-    const transfer: Transfer = { ...authority, abort, active: true }
-    this.#transfers.add(transfer)
+  registerTransfer(
+    authority: BrowserSessionAuthority,
+    current: { issuerGeneration: number; minimumRevision: number },
+    abort: () => void
+  ) {
+    this.#issuerGenerations.set(
+      authority.issuer,
+      Math.max(
+        this.#issuerGenerations.get(authority.issuer) ?? 0,
+        current.issuerGeneration
+      )
+    )
+    const transfer: Transfer = {
+      ...authority,
+      abort,
+      active:
+        authority.expiresAt > Date.now() &&
+        this.#authorityIsCurrent(authority) &&
+        (authority.version === 1 ||
+          (authority.issuerGeneration === current.issuerGeneration &&
+            authority.revision >= current.minimumRevision)),
+    }
+    const release = () => {
+      transfer.active = false
+      this.#transfers.delete(transfer)
+    }
+    if (transfer.active) {
+      this.#transfers.add(transfer)
+    }
     return {
       active: () => transfer.active && this.#authorityIsCurrent(transfer),
-      release: () => this.#transfers.delete(transfer),
+      release,
     }
   }
 
@@ -230,6 +270,7 @@ export class BrowserSessionRegistry {
   }
 
   revokeIssuer(issuer: string): void {
+    this.#clientConfiguration = {}
     for (const [socket, session] of this.#established) {
       if (session.authority.issuer === issuer) {
         this.#deactivate(socket, "Capability issuer changed")
@@ -264,7 +305,10 @@ export class BrowserSessionRegistry {
   close(): void {
     for (const socket of this.#established.keys()) this.release(socket)
     for (const socket of this.#pending.keys()) this.releasePending(socket)
-    for (const transfer of this.#transfers) transfer.abort()
+    for (const transfer of this.#transfers) {
+      transfer.active = false
+      transfer.abort()
+    }
     this.#transfers.clear()
   }
 
@@ -294,7 +338,6 @@ export class BrowserSessionRegistry {
   }
 
   #authorityIsCurrent(authority: BrowserSessionAuthority): boolean {
-    if (authority.expiresAt <= Date.now()) return false
     if (authority.version !== 2) return true
     return (
       authority.issuerGeneration ===
@@ -377,6 +420,7 @@ function sameOwner(
     left.issuer === right.issuer &&
     left.subject === right.subject &&
     left.loginSessionId === right.loginSessionId &&
+    left.origin === right.origin &&
     left.keyThumbprint === right.keyThumbprint &&
     left.instanceId === right.instanceId &&
     left.operation === right.operation

@@ -9,6 +9,7 @@ vi.hoisted(() => {
 
 const fakes = vi.hoisted(() => ({
   execute: vi.fn(),
+  query: vi.fn(),
   features: new Set<string>(),
   relayRpc: vi.fn(),
 }))
@@ -16,7 +17,7 @@ const fakes = vi.hoisted(() => ({
 vi.mock("@/lib/database", () => ({
   databasePool: {
     execute: fakes.execute,
-    query: vi.fn(),
+    query: fakes.query,
   },
 }))
 
@@ -32,6 +33,7 @@ vi.mock("@/lib/relay-registry", () => ({
 import {
   observeRelayIssuerGeneration,
   reviseRelayIssuerGenerationNow,
+  wakeAuthorizationDelivery,
 } from "./authorization-delivery"
 
 describe("authorization delivery recovery", () => {
@@ -41,6 +43,46 @@ describe("authorization delivery recovery", () => {
     fakes.features.add("browser-capability-v2")
     fakes.execute.mockResolvedValue([{ affectedRows: 1 }])
     fakes.relayRpc.mockResolvedValue({ issuerGeneration: 9, items: [] })
+  })
+
+  it("retries an incomplete acknowledgement even for the last batch", async () => {
+    vi.useFakeTimers()
+    try {
+      fakes.query.mockImplementation((sql: string) =>
+        Promise.resolve([
+          sql.includes("scope_kind")
+            ? [
+                {
+                  subject_id: "user",
+                  scope_kind: "subject_relay",
+                  scope_id: "",
+                  desired_revision: "2",
+                },
+              ]
+            : [
+                {
+                  client_id: "client",
+                  issuer_generation: "9",
+                  acknowledged_issuer_generation: "9",
+                },
+              ],
+        ])
+      )
+      wakeAuthorizationDelivery("relay-partial")
+      await vi.waitFor(() =>
+        expect(
+          globalThis.kilnAuthorizationDelivery?.get("relay-partial")?.retry
+        ).toBeTruthy()
+      )
+      expect(fakes.relayRpc).toHaveBeenCalledOnce()
+      await vi.advanceTimersByTimeAsync(3_000)
+      expect(fakes.relayRpc.mock.calls.length).toBeGreaterThanOrEqual(2)
+      expect(fakes.execute).not.toHaveBeenCalled()
+    } finally {
+      vi.clearAllTimers()
+      globalThis.kilnAuthorizationDelivery?.delete("relay-partial")
+      vi.useRealTimers()
+    }
   })
 
   it("raises Hearth's desired generation when Relay is ahead", async () => {

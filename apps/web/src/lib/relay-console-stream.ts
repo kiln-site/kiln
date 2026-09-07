@@ -16,6 +16,7 @@ import {
   maintainRelayBrowserLease,
   openRelayBrowserSocket,
   relayBrowserEndpoint,
+  relayBrowserReconnectSchedule,
 } from "@/lib/authenticated-relay-socket"
 import { acquireRelayBrowserCredentials } from "@/lib/relay-browser-credentials"
 import { registerRelayConsoleOperationClient } from "@/lib/relay-console-operations"
@@ -89,6 +90,7 @@ export function openRelayConsoleStream(
     timing,
     write
   ).pipe(
+    Stream.retry(relayBrowserReconnectSchedule),
     Stream.catch((directFailure) =>
       openHearth(directFallbackMessage(directFailure))
     )

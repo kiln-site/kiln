@@ -76,7 +76,7 @@ afterEach(() => {
 })
 
 effectIt.effect(
-  "authenticates, routes responses, cancels timeouts, and closes cleanly",
+  "authenticates, retries a failed reconnect, routes responses, and closes cleanly",
   () =>
     withRelayServer(
       ({ cancelled, disconnect, endpoint, reconnected, requests }) =>
@@ -124,7 +124,9 @@ effectIt.effect(
             relayRpc(endpoint, "relay.snapshot", {}, 1_000)
           )
           expect(reconnectedSnapshot).toEqual(pushedSnapshot)
-          expect(relayStates).toEqual(["connected", "unreachable", "connected"])
+          expect(relayStates[0]).toBe("connected")
+          expect(relayStates.at(-1)).toBe("connected")
+          expect(relayStates).toContain("unreachable")
 
           const timeout = yield* promiseEffect(() =>
             relayRpc(endpoint, "relay.update.status", { ignored: true }, 20)
@@ -136,7 +138,7 @@ effectIt.effect(
 
           closeRelayConnection(relayId)
           expect(relayConnectionState(relayId).status).toBe("disconnected")
-          expect(relayStates).toEqual(["connected", "unreachable", "connected"])
+          expect(relayStates.at(-1)).toBe("connected")
           unsubscribe()
         })
     )
@@ -219,7 +221,11 @@ async function setupRelayServer(): Promise<RelayServerFixture> {
   server.on("connection", (socket) => {
     activeSocket = socket
     connections += 1
-    if (connections === 2) resolveReconnected()
+    if (connections === 2) {
+      socket.close(1013, "Relay is still restarting")
+      return
+    }
+    if (connections === 3) resolveReconnected()
     authenticateRelaySocket(socket, relayKeys.privateKey, requests, () => {
       resolveCancelled()
     })

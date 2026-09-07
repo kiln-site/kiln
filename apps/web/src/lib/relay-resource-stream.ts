@@ -2,183 +2,143 @@ import {
   relayBrowserProtocol,
   relayResourceStreamEventSchema,
 } from "@workspace/contracts"
-import * as Sentry from "@sentry/tanstackstart-react"
 import type { RelayResourceStreamEvent } from "@workspace/contracts"
-import { Effect, Exit, Scope, Stream } from "effect"
+import * as Sentry from "@sentry/tanstackstart-react"
+import { Effect, Stream } from "effect"
 
 import {
   maintainRelayBrowserLease,
   openAuthenticatedRelaySocket,
+  relayBrowserReconnectSchedule,
 } from "@/lib/authenticated-relay-socket"
 import { acquireRelayBrowserCredentials } from "@/lib/relay-browser-credentials"
 import { getRelayInstanceResources } from "@/server/relay"
 
 export const RELAY_RESOURCE_POLL_INTERVAL_MS = 2_000
 
-export async function* openRelayResourceStream(
+export function openRelayResourceStream(
   relayId: string,
-  instanceId: string,
-  signal: AbortSignal
-): AsyncGenerator<RelayResourceStreamEvent> {
-  const credentialLease = acquireRelayBrowserCredentials(relayId, instanceId)
-  const eventObserver = resourceEventObserver()
-  yield* managedAsyncIterable(
-    openRelayResourceStreamWithLease(
-      relayId,
-      instanceId,
-      signal,
-      credentialLease,
-      eventObserver
-    ),
-    () => {
-      eventObserver.close()
-      credentialLease.release()
-    }
-  )
-}
-
-async function* openRelayResourceStreamWithLease(
-  relayId: string,
-  instanceId: string,
-  signal: AbortSignal,
-  credentialLease: ReturnType<typeof acquireRelayBrowserCredentials>,
-  eventObserver: ReturnType<typeof resourceEventObserver>
-): AsyncGenerator<RelayResourceStreamEvent> {
-  signal.throwIfAborted()
-  const { keys, publicKeyJwk } = await credentialLease.credentials
-  signal.throwIfAborted()
-  // Resource setup intentionally remains serial: a capability is issued
-  // before opening this separate backpressure-isolated socket.
-  const capability = await Sentry.startSpan(
-    {
-      name: "Issue resource capability",
-      op: "http.resources.capability",
-      attributes: { "kiln.channel": "resources" },
-    },
-    () =>
-      credentialLease.issue({
-        kind: "resources",
-        optInV2: true,
-      })
-  )
-  signal.throwIfAborted()
-  if (capability.proxyMode === "hearth") {
-    for await (const event of openHearthResourceStream(
-      relayId,
-      instanceId,
-      signal
-    )) {
-      eventObserver.observe(event, "hearth")
-      yield event
-    }
-    return
-  }
-  const socketScope = await Effect.runPromise(Scope.make())
-  const opened = await Effect.runPromise(
-    Effect.tryPromise({
-      try: () =>
-        Sentry.startSpan(
-          {
-            name: "Open authenticated resource socket",
-            op: "websocket.resources.connect",
-            attributes: { "kiln.channel": "resources" },
-          },
-          () =>
-            Effect.runPromise(
-              Effect.gen(function* () {
-                const opened = yield* openAuthenticatedRelaySocket({
-                  browserOrigin: capability.browserOrigin,
-                  capability: capability.capability,
-                  channel: "resources",
-                  closeReason: "Resource view closed",
-                  credentials: { keys, publicKeyJwk },
-                  instanceId,
-                  protocols: relayBrowserProtocol,
-                  relayId,
+  instanceId: string
+): Stream.Stream<RelayResourceStreamEvent, Error> {
+  return Stream.unwrap(
+    Effect.gen(function* () {
+      const credentials = yield* Effect.acquireRelease(
+        Effect.sync(() => acquireRelayBrowserCredentials(relayId, instanceId)),
+        (lease) => Effect.sync(lease.release)
+      )
+      const observer = yield* Effect.acquireRelease(
+        Effect.sync(resourceEventObserver),
+        (observer) => Effect.sync(observer.close)
+      )
+      const direct = Stream.unwrap(
+        Effect.gen(function* () {
+          const keys = yield* Effect.tryPromise({
+            try: () => credentials.credentials,
+            catch: asError,
+          })
+          const capability = yield* Effect.tryPromise({
+            try: () =>
+              Sentry.startSpan(
+                {
+                  name: "Issue resource capability",
+                  op: "http.resources.capability",
+                  attributes: { "kiln.channel": "resources" },
+                },
+                () => credentials.issue({ kind: "resources", optInV2: true })
+              ),
+            catch: asError,
+          })
+          if (capability.proxyMode === "hearth") {
+            return openHearthResourceStream(relayId, instanceId).pipe(
+              Stream.tap((event) =>
+                Effect.sync(() => observer.observe(event, "hearth"))
+              )
+            )
+          }
+          const span = yield* Effect.acquireRelease(
+            Effect.sync(() =>
+              Sentry.startInactiveSpan({
+                name: "Open authenticated resource socket",
+                op: "websocket.resources.connect",
+                attributes: { "kiln.channel": "resources" },
+              })
+            ),
+            (span) => Effect.sync(() => span.end())
+          )
+          const opened = yield* openAuthenticatedRelaySocket({
+            browserOrigin: capability.browserOrigin,
+            capability: capability.capability,
+            channel: "resources",
+            closeReason: "Resource view closed",
+            credentials: keys,
+            instanceId,
+            protocols: relayBrowserProtocol,
+            relayId,
+          })
+          span.end()
+          if (capability.version === 2) {
+            const lease = yield* maintainRelayBrowserLease(
+              opened,
+              opened.ready,
+              {
+                channel: "resources",
+                credentials: keys,
+                issue: () =>
+                  credentials.renew({ kind: "resources", optInV2: true }),
+                relayId,
+                write: false,
+              }
+            )
+            yield* Effect.acquireRelease(
+              Effect.sync(() =>
+                credentials.onAuthorizationChange(lease.renewNow)
+              ),
+              (unsubscribe) => Effect.sync(unsubscribe)
+            )
+          } else {
+            yield* Effect.acquireRelease(
+              Effect.sync(() =>
+                credentials.onAuthorizationChange(() => {
+                  opened.socket.close(4403, "Browser authorization changed")
                 })
-                if (capability.version === 2) {
-                  const lease = yield* maintainRelayBrowserLease(
-                    opened,
-                    opened.ready,
-                    {
-                      channel: "resources",
-                      credentials: { keys, publicKeyJwk },
-                      issue: () =>
-                        credentialLease.renew({
-                          kind: "resources",
-                          optInV2: true,
-                        }),
-                      relayId,
-                      write: false,
-                    }
-                  )
-                  yield* Effect.acquireRelease(
-                    Effect.sync(() =>
-                      credentialLease.onAuthorizationChange(() => {
-                        void lease.renewNow()
-                      })
-                    ),
-                    (unsubscribe) => Effect.sync(unsubscribe)
-                  )
-                } else {
-                  yield* Effect.acquireRelease(
-                    Effect.sync(() =>
-                      credentialLease.onAuthorizationChange(() => {
-                        opened.socket.close(
-                          4403,
-                          "Browser authorization changed"
-                        )
-                      })
-                    ),
-                    (unsubscribe) => Effect.sync(unsubscribe)
-                  )
-                }
-                return opened
-              }).pipe(Scope.provide(socketScope)),
-              { signal }
+              ),
+              (unsubscribe) => Effect.sync(unsubscribe)
             )
-        ),
-      catch: asError,
-    }).pipe(Effect.tapError(() => Scope.close(socketScope, Exit.void)))
-  )
-  const { inbox, socket } = opened
-
-  const direct = managedAsyncIterable(
-    (async function* () {
-      socket.send(
-        JSON.stringify({ instanceId, type: "resource.subscribe", v: 1 })
-      )
-
-      for (;;) {
-        // Resource samples are ordered; concurrent reads could reorder them.
-        // oxlint-disable-next-line react-doctor/async-await-in-loop
-        const nextMessage = await Effect.runPromise(inbox.take)
-        yield relayResourceStreamEventSchema.parse(nextMessage)
-      }
-    })(),
-    () => Effect.runPromise(Scope.close(socketScope, Exit.void))
-  )
-  for await (const observed of Stream.toAsyncIterable(
-    Stream.fromAsyncIterable(direct, asError).pipe(
-      Stream.map((event) => ({ event, transport: "direct" as const })),
-      Stream.catch((cause) =>
-        signal.aborted
-          ? Stream.fail(cause)
-          : Stream.fromAsyncIterable(
-              openHearthResourceStream(relayId, instanceId, signal),
-              asError
-            ).pipe(
-              Stream.map((event) => ({
-                event,
-                transport: "hearth" as const,
-              }))
+          }
+          yield* Effect.try({
+            try: () =>
+              opened.socket.send(
+                JSON.stringify({ instanceId, type: "resource.subscribe", v: 1 })
+              ),
+            catch: asError,
+          })
+          return opened.inbox.stream.pipe(
+            Stream.mapEffect((message) =>
+              Effect.try({
+                try: () => relayResourceStreamEventSchema.parse(message),
+                catch: asError,
+              })
+            ),
+            Stream.tap((event) =>
+              Effect.sync(() => observer.observe(event, "direct"))
             )
+          )
+        })
       )
-    )
-  )) {
-    eventObserver.observe(observed.event, observed.transport)
-    yield observed.event
-  }
+      // Includes setup failure. Scoped direct resources are released before
+      // polling starts, and interrupting the consumer interrupts either transport.
+      return direct.pipe(
+        Stream.retry(relayBrowserReconnectSchedule),
+        Stream.catch(() =>
+          openHearthResourceStream(relayId, instanceId).pipe(
+            Stream.tap((event) =>
+              Effect.sync(() => observer.observe(event, "hearth"))
+            )
+          )
+        )
+      )
+    })
+  )
 }
 
 function resourceEventObserver(): {
@@ -223,27 +183,39 @@ function resourceEventObserver(): {
   }
 }
 
-async function* openHearthResourceStream(
+function openHearthResourceStream(
   relayId: string,
-  instanceId: string,
-  signal: AbortSignal
-): AsyncGenerator<RelayResourceStreamEvent> {
-  const historyForPoll = warmHistoryOnce()
-  let sequence = Date.now()
-  while (!signal.aborted) {
-    // Polls are deliberately sequential so only one snapshot request is in flight.
-    // oxlint-disable-next-line react-doctor/async-await-in-loop
-    const snapshot = await getRelayInstanceResources({
-      data: { instanceId, relayId },
-    })
-    yield relayResourceStreamEventSchema.parse({
-      history: historyForPoll(snapshot.history),
-      instance: snapshot.instance,
-      sequence: sequence++,
-      type: "resource",
-    })
-    await waitForPoll(signal)
-  }
+  instanceId: string
+): Stream.Stream<RelayResourceStreamEvent, Error> {
+  return Stream.suspend(() => {
+    const historyForPoll = warmHistoryOnce()
+    let sequence = Date.now()
+    let first = true
+    return Stream.fromEffectRepeat(
+      Effect.gen(function* () {
+        if (!first) yield* Effect.sleep(RELAY_RESOURCE_POLL_INTERVAL_MS)
+        first = false
+        const snapshot = yield* Effect.tryPromise({
+          try: (signal) =>
+            getRelayInstanceResources({
+              data: { instanceId, relayId },
+              signal,
+            }),
+          catch: asError,
+        })
+        return yield* Effect.try({
+          try: () =>
+            relayResourceStreamEventSchema.parse({
+              history: historyForPoll(snapshot.history),
+              instance: snapshot.instance,
+              sequence: sequence++,
+              type: "resource",
+            }),
+          catch: asError,
+        })
+      })
+    )
+  })
 }
 
 export function warmHistoryOnce<T>(): (history: Array<T>) => Array<T> {
@@ -253,35 +225,6 @@ export function warmHistoryOnce<T>(): (history: Array<T>) => Array<T> {
     delivered = true
     return history
   }
-}
-
-function waitForPoll(signal: AbortSignal): Promise<void> {
-  if (signal.aborted) return Promise.resolve()
-  return new Promise((resolve) => {
-    const timer = globalThis.setTimeout(done, RELAY_RESOURCE_POLL_INTERVAL_MS)
-    function done() {
-      globalThis.clearTimeout(timer)
-      signal.removeEventListener("abort", done)
-      resolve()
-    }
-    signal.addEventListener("abort", done, { once: true })
-  })
-}
-
-function managedAsyncIterable<A>(
-  iterable: AsyncIterable<A>,
-  cleanup: () => void | Promise<unknown>
-): AsyncIterable<A> {
-  return Stream.toAsyncIterable(
-    Stream.fromAsyncIterable(iterable, asError).pipe(
-      Stream.ensuring(
-        Effect.tryPromise({
-          try: async () => cleanup(),
-          catch: asError,
-        }).pipe(Effect.ignore)
-      )
-    )
-  )
 }
 
 function asError(cause: unknown): Error {

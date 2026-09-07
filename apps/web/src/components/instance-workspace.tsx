@@ -7,7 +7,7 @@ import {
   useSuspenseQuery,
 } from "@tanstack/react-query"
 import { Link, useParams, useRouterState } from "@tanstack/react-router"
-import { Effect } from "effect"
+import { Effect, Stream } from "effect"
 import type {
   RelayInstanceProvisioning,
   RelayInstanceResources,
@@ -442,78 +442,73 @@ function RelayResourceStreamController({
   const queryClient = useQueryClient()
   React.useEffect(() => {
     if (!relayConnected) return
-    const lifecycle = new AbortController()
-    let cancelled = false
     let durableFingerprint: string | null = null
 
     const connectionFiber = Effect.runFork(
       Effect.gen(function* () {
         let retryDelay = 500
-        while (!cancelled) {
-          const failed = yield* Effect.tryPromise({
-            try: async () => {
-              const stream = openRelayResourceStream(
-                instance.relayId,
-                instance.id,
-                lifecycle.signal
-              )
-              let lastSequence = -1
-              for await (const event of stream) {
-                if (cancelled) break
-                if (event.sequence <= lastSequence) continue
-                lastSequence = event.sequence
-                const patchStartedAt = performance.now()
-                resourceHistoryStore(instance.relayId, instance.id).record(
-                  event.history,
-                  event.instance.resources
-                )
-                const streamedInstance = reconcilePendingPowerInstance(
-                  instance.relayId,
-                  event.instance
-                )
-                const { resources: _resources, ...durableInstance } =
-                  streamedInstance
-                const nextFingerprint = JSON.stringify(durableInstance)
-                const durableChanged = nextFingerprint !== durableFingerprint
-                if (durableChanged) {
-                  durableFingerprint = nextFingerprint
-                  queryClient.setQueryData<RelayFleetSnapshot>(
-                    queryKeys.relay.snapshot,
-                    (snapshot) => {
-                      const current = snapshot?.instances.find(
-                        (candidate) =>
-                          candidate.id === streamedInstance.id &&
-                          candidate.relayId === instance.relayId
-                      )
-                      return replaceRelaySnapshotInstance(snapshot, {
-                        ...streamedInstance,
-                        resources: current?.resources ?? null,
-                        relayId: instance.relayId,
-                      })
+        for (;;) {
+          const failed = yield* Effect.suspend(() => {
+            let lastSequence = -1
+            return openRelayResourceStream(instance.relayId, instance.id).pipe(
+              Stream.runForEach((event) =>
+                Effect.sync(() => {
+                  retryDelay = 500
+                  if (event.sequence <= lastSequence) return
+                  lastSequence = event.sequence
+                  const patchStartedAt = performance.now()
+                  resourceHistoryStore(instance.relayId, instance.id).record(
+                    event.history,
+                    event.instance.resources
+                  )
+                  const streamedInstance = reconcilePendingPowerInstance(
+                    instance.relayId,
+                    event.instance
+                  )
+                  const { resources: _resources, ...durableInstance } =
+                    streamedInstance
+                  const nextFingerprint = JSON.stringify(durableInstance)
+                  const durableChanged = nextFingerprint !== durableFingerprint
+                  if (durableChanged) {
+                    durableFingerprint = nextFingerprint
+                    queryClient.setQueryData<RelayFleetSnapshot>(
+                      queryKeys.relay.snapshot,
+                      (snapshot) => {
+                        const current = snapshot?.instances.find(
+                          (candidate) =>
+                            candidate.id === streamedInstance.id &&
+                            candidate.relayId === instance.relayId
+                        )
+                        return replaceRelaySnapshotInstance(snapshot, {
+                          ...streamedInstance,
+                          resources: current?.resources ?? null,
+                          relayId: instance.relayId,
+                        })
+                      }
+                    )
+                  }
+                  Sentry.metrics.distribution(
+                    "relay.resources.query_patch",
+                    performance.now() - patchStartedAt,
+                    {
+                      unit: "millisecond",
+                      attributes: {
+                        "kiln.durable_changed": String(durableChanged),
+                      },
                     }
                   )
-                }
-                Sentry.metrics.distribution(
-                  "relay.resources.query_patch",
-                  performance.now() - patchStartedAt,
-                  {
-                    unit: "millisecond",
-                    attributes: {
-                      "kiln.durable_changed": String(durableChanged),
-                    },
-                  }
-                )
-              }
-              if (!cancelled) throw new Error("Relay resource stream closed")
-            },
-            catch: (cause) => cause,
+                })
+              ),
+              Effect.andThen(
+                Effect.fail(new Error("Relay resource stream closed"))
+              )
+            )
           }).pipe(
             Effect.match({
               onFailure: () => true,
               onSuccess: () => false,
             })
           )
-          if (cancelled) break
           if (failed) {
             yield* Effect.sleep(retryDelay)
             retryDelay = Math.min(retryDelay * 2, 5_000)
@@ -524,8 +519,6 @@ function RelayResourceStreamController({
       })
     )
     return () => {
-      cancelled = true
-      lifecycle.abort()
       connectionFiber.interruptUnsafe()
     }
   }, [instance.id, instance.relayId, queryClient, relayConnected])

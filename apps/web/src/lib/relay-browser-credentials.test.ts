@@ -89,7 +89,7 @@ describe("Relay browser credential coordinator", () => {
     lease.release()
   })
 
-  it("coalesces a renewal into one batch for every active kind", async () => {
+  it("batches simultaneous renewals and never mints unused capabilities", async () => {
     vi.stubGlobal("crypto", {
       subtle: {
         exportKey: vi.fn().mockResolvedValue({
@@ -143,6 +143,13 @@ describe("Relay browser credential coordinator", () => {
           { kind: "console", optInV2: true, write: true },
           { kind: "resources", optInV2: true },
         ],
+      }),
+    })
+    capability.issue.mockClear()
+    await consoleLease.renew({ kind: "console", optInV2: true, write: true })
+    expect(capability.issue).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        requests: [{ kind: "console", optInV2: true, write: true }],
       }),
     })
     consoleLease.release()

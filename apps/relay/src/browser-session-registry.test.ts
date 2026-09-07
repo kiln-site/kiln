@@ -21,6 +21,130 @@ const limits = {
 }
 
 describe("browser session registry", () => {
+  it("invalidates in-flight client lookups when issuer grants change", () => {
+    const registry = new BrowserSessionRegistry(limits)
+    const configuration = registry.clientConfiguration
+    registry.revokeIssuer("hearth-a")
+    expect(registry.clientConfiguration).not.toBe(configuration)
+    registry.close()
+  })
+
+  it("keeps legacy console and resource sessions separate with the same proof key", () => {
+    const registry = new BrowserSessionRegistry({
+      ...limits,
+      sessionsPerInstance: 2,
+      sessionsPerUser: 2,
+      sessionsPerUserInstance: 2,
+    })
+    const consoleSocket = socket()
+    const resourcesSocket = socket()
+    for (const [candidate, operation] of [
+      [consoleSocket, "console"],
+      [resourcesSocket, "resources"],
+    ] as const) {
+      registry.acquirePending(candidate, "192.0.2.1", false)
+      expect(
+        registry.activate(
+          candidate,
+          authority({ version: 1, operation }),
+          operation,
+          { issuerGeneration: 0, minimumRevision: 0 }
+        ).accepted
+      ).toBe(true)
+    }
+    expect(consoleSocket.close).not.toHaveBeenCalled()
+    expect(registry.isActive(consoleSocket)).toBe(true)
+    expect(registry.isActive(resourcesSocket)).toBe(true)
+    registry.close()
+  })
+
+  it("cannot resurrect an admission released while authentication was pending", () => {
+    const registry = new BrowserSessionRegistry(limits)
+    const closed = socket()
+    registry.acquirePending(closed, "192.0.2.1", true)
+    registry.release(closed)
+    expect(
+      registry.activate(closed, authority(), "late", {
+        issuerGeneration: 1,
+        minimumRevision: 0,
+      }).accepted
+    ).toBe(false)
+    expect(registry.isActive(closed)).toBe(false)
+    registry.close()
+  })
+
+  it("admits file-only clients and lets an admitted transfer finish past token expiry", () => {
+    vi.useFakeTimers()
+    try {
+      const registry = new BrowserSessionRegistry(limits)
+      const abort = vi.fn()
+      const transfer = registry.registerTransfer(
+        authority({ operation: "file", expiresAt: Date.now() + 1_000 }),
+        { issuerGeneration: 1, minimumRevision: 0 },
+        abort
+      )
+      expect(transfer.active()).toBe(true)
+      vi.advanceTimersByTime(1_000)
+      expect(transfer.active()).toBe(true)
+      expect(abort).not.toHaveBeenCalled()
+      registry.revise(
+        "hearth-a",
+        [
+          {
+            subject: "user-a",
+            scope: { kind: "subject_relay" },
+            minimumRevision: 2,
+          },
+        ],
+        1
+      )
+      expect(transfer.active()).toBe(false)
+      expect(abort).toHaveBeenCalledOnce()
+      transfer.release()
+      registry.close()
+      expect(abort).toHaveBeenCalledOnce()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it("rejects transfers raced by revocation and releases completed transfers", () => {
+    vi.useFakeTimers()
+    try {
+      const registry = new BrowserSessionRegistry(limits)
+      registry.revise(
+        "hearth-a",
+        [
+          {
+            subject: "user-a",
+            scope: { kind: "subject_relay" },
+            minimumRevision: 2,
+          },
+        ],
+        1
+      )
+      const abort = vi.fn()
+      const stale = registry.registerTransfer(
+        authority({ operation: "file" }),
+        { issuerGeneration: 1, minimumRevision: 0 },
+        abort
+      )
+      expect(stale.active()).toBe(false)
+      const fresh = registry.registerTransfer(
+        authority({ operation: "file", revision: 2 }),
+        { issuerGeneration: 1, minimumRevision: 2 },
+        abort
+      )
+      expect(fresh.active()).toBe(true)
+      fresh.release()
+      vi.advanceTimersByTime(60_000)
+      expect(abort).not.toHaveBeenCalled()
+      registry.close()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it("separates pending limits and atomically replaces the same owner", () => {
     const registry = new BrowserSessionRegistry(limits)
     const first = socket()
@@ -161,7 +285,10 @@ describe("browser session registry", () => {
 })
 
 function socket(): WebSocket & { close: ReturnType<typeof vi.fn> } {
-  return { close: vi.fn() } as unknown as WebSocket & {
+  return {
+    close: vi.fn(),
+    readyState: WebSocket.OPEN,
+  } as unknown as WebSocket & {
     close: ReturnType<typeof vi.fn>
   }
 }

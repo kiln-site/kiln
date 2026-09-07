@@ -129,10 +129,10 @@ control versions are independent. Retain the current claims and require:
 
 Capabilities containing a write action have a maximum 30-second lease and
 renew around 20 seconds; read-only capabilities have a maximum 60-second lease
-and renew around 40 seconds. When the shortest active lease is due, one
-jittered Hearth request refreshes every active capability for that tab/instance
-from one authorization snapshot; initial issuance never waits for a batching
-timer. Relay enforces `0 < expiresAt - issuedAt <= max`, permits `issuedAt` at
+and renew around 40 seconds. Concurrent requests for that tab/instance share a
+microtask batch and one authorization snapshot; initial issuance never waits
+for a batching timer. Each socket requests its own renewal; never issue unused
+capabilities for another socket. Relay enforces `0 < expiresAt - issuedAt <= max`, permits `issuedAt` at
 most five seconds ahead of its own clock, and applies no grace to `expiresAt`.
 An expiry fiber closes the socket at Relay time `expiresAt`.
 Inbound dispatch and the existing per-socket send path also perform a cheap
@@ -434,6 +434,39 @@ about 1.06 seconds. These are diagnostic local baselines, not production SLOs;
 repeatable median and p95 runs remain the release gate.
 
 ## Release gates
+
+### Review validation (2026-09-07)
+
+The implementation review found and fixed cancelled-renewal work escaping its
+scope, resource coalescing dropping control/history frames, late authentication
+resurrecting closed admissions, file-only admission after Relay restart, legacy
+console/resource owner collisions, incomplete revocation acknowledgements, and
+Hearth reconnect retries stopping after a failed retry. Grant changes also
+invalidate client lookups already in flight. Renewal only mints requested
+capabilities; unused companion capabilities are no longer issued.
+The independent streamed review also identified ambiguous renewal retries and
+late acknowledgements reaching data codecs. A sent-but-unacknowledged renewal
+now reacquires a direct session with a bounded Effect retry schedule instead of
+reusing its nonce or silently moving healthy traffic to Hearth; late renewal
+acknowledgements stay out of feature streams.
+Browser fault injection additionally caught server-only close codes in client
+paths. Browser-initiated reconnect/overflow closes use application codes 4012
+and 4013; tests enforce the browser API's permitted close-code range.
+
+T3 Preview on the OrbStack direct edge verified two authenticated console/resource
+sockets, repeated in-place renewal, commands using the existing console socket,
+recovery after a Relay outage without page refresh, and Files retaining only the
+resource socket. Dropping an accepted console renewal acknowledgement in Preview
+caused a direct reconnect (4012) with a fresh authoritative snapshot; the resource
+socket continued streaming uninterrupted. This exercises the direct data path,
+not bundled Traefik itself.
+Unit tests, typecheck, production build, and the React Doctor regression check
+pass. These checks are not a substitute for the multi-user/flood/load scenarios
+and statistically meaningful median/p95 measurements below; those remain release
+validation work. Existing Sentry setup/authentication/renewal/first-event spans
+and resource sample-age/query-patch metrics are retained for those measurements.
+
+### Remaining release checklist
 
 - Deterministic Effect tests cover cancellation during handshake/read/renewal,
   exactly-once cleanup and permit release, retry schedules, expiry, and bounded
