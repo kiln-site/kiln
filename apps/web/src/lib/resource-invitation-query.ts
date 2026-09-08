@@ -9,7 +9,6 @@ export function myInvitationsQueryOptions() {
     queryKey: ["my-resource-invitations"],
     queryFn: () => getMyInvitations(),
     staleTime: 5_000,
-    refetchInterval: 15_000,
   })
 }
 export function invitationInfrastructureHref(

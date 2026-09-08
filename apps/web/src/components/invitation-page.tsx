@@ -189,7 +189,7 @@ export function InvitationPage({
             ) : null}
 
             {user ? (
-              user.email.toLowerCase() === preview.email.toLowerCase() ? (
+              user.id === preview.subjectId ? (
                 <Button
                   className="mt-6 h-11 w-full"
                   disabled={pending}
@@ -238,8 +238,7 @@ export function InvitationPage({
               </Button>
             )}
             <p className="type-meta mt-5 text-center text-muted-foreground">
-              Only the verified address {preview.email} can accept this
-              invitation.
+              Only the invited, verified account can accept this invitation.
             </p>
           </>
         )}

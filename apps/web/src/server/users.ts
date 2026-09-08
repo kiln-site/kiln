@@ -275,12 +275,24 @@ export const requestAccountClaim = createServerFn({ method: "POST" })
   .validator(
     z.object({
       email: z.email().transform((email) => email.trim().toLowerCase()),
+      returnPath: z.string().max(2048).optional(),
     })
   )
   .handler(async ({ data }) => {
     const { requestEmailAccountClaim } = await import("@/lib/account-claims")
-    await requestEmailAccountClaim(data.email)
+    await requestEmailAccountClaim(data.email, data.returnPath)
     return { sent: true }
+  })
+
+export const prepareAccountSignup = createServerFn({ method: "POST" })
+  .validator(
+    z.object({
+      email: z.email().transform((email) => email.trim().toLowerCase()),
+    })
+  )
+  .handler(async ({ data }) => {
+    const { accountNeedsClaim } = await import("@/lib/account-claims")
+    return { claimRequired: await accountNeedsClaim(data.email) }
   })
 
 export const claimAccount = createServerFn({ method: "POST" })

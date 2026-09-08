@@ -123,6 +123,41 @@ describe("effective resource authority", () => {
     ).toBe(0)
   })
 
+  it("filters unsupported Redis and Valkey dump authority from explicit, preset ALL, and owner grants in three queries", async () => {
+    const data = fixture([
+      [
+        { ...row("redis", "database", "redis"), engine: "redis" },
+        { ...row("valkey", "database", "valkey"), engine: "valkey" },
+        { ...row("postgres", "database", "postgres"), engine: "postgres" },
+      ],
+      [
+        selection("redis", "database.dump.export"),
+        selection("redis", "database.read"),
+        {
+          access_id: "valkey",
+          selection_kind: "collection",
+          selection_key: "all",
+        },
+        selection("postgres", "database.dump.export"),
+      ],
+      [{ ...row("owned-redis", "database", "owned-redis"), engine: "redis" }],
+    ])
+    const grants = await Effect.runPromise(
+      loadResourceGrantsEffect("user", "relay").pipe(Effect.provide(data.layer))
+    )
+    expect(data.queries).toHaveLength(3)
+    expect(data.queries[0]).toContain("d.database_id = g.resource_id")
+    for (const id of ["redis", "valkey", "owner:database:owned-redis"]) {
+      const grant = grants.find((grant) => grant.id === id)
+      expect(grant?.permissions).toContain("database.read")
+      expect(grant?.permissions).not.toContain("database.dump.export")
+      expect(grant?.permissions).not.toContain("database.dump.import")
+    }
+    expect(
+      grants.find((grant) => grant.id === "postgres")?.permissions
+    ).toContain("database.dump.export")
+  })
+
   it("deduplicates permissions shared by many live presets before validation", async () => {
     const data = fixture([
       [row("access")],

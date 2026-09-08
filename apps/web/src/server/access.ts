@@ -24,7 +24,6 @@ import {
 import { auditInstanceCreatorId } from "@/lib/activity"
 import { databasePool } from "@/lib/database"
 import { databaseTable } from "@/lib/database-config"
-import { advanceSubjectAcrossEnabledRelaysEffect } from "@/lib/authorization-revision"
 import { emailDeliveryConfig, kilnPublicUrl } from "@/lib/environment"
 import { invitationDestination } from "@/lib/invitation-auth"
 import {
@@ -43,6 +42,8 @@ import {
 } from "@/lib/account-policy"
 import { displayNameFromEmail } from "@/lib/display-name"
 import {
+  acceptPlatformInvitationEffect,
+  cancelPlatformInvitationEffect,
   assignPlatformAccessEffect,
   removePlatformAccessEffect,
   transferInstanceOwnershipEffect,
@@ -81,10 +82,12 @@ const scopedAccessAssignmentSchema = z
 const accessAssignmentSchema = z.discriminatedUnion("accessType", [
   z.object({
     accessType: z.literal("platform_admin"),
+    userId: z.string().min(1).max(36).optional(),
     email: z.email().transform((value) => value.trim().toLowerCase()),
   }),
   z.object({
     accessType: z.literal("relay_creator"),
+    userId: z.string().min(1).max(36).optional(),
     email: z.email().transform((value) => value.trim().toLowerCase()),
   }),
   scopedAccessAssignmentSchema,
@@ -119,6 +122,7 @@ interface InvitationAccessResult {
 interface InvitationRow extends RowDataPacket {
   access_type: z.infer<typeof accessTypeSchema>
   accepted_at: Date | null
+  user_id: string | null
   declined_at: Date | null
   cancelled_at: Date | null
   email: string
@@ -309,7 +313,7 @@ export const getAccessOverview = createServerFn({ method: "GET" }).handler(
       ),
       platformAdmin
         ? databasePool.query<Array<PendingInvitationRow>>(
-            `SELECT id, email, access_type, relay_id, instance_id, database_id,
+            `SELECT id, user_id, email, access_type, relay_id, instance_id, database_id,
                     role, expires_at, created_at
                FROM ${databaseTable("invitation")}
               WHERE access_type <> 'scoped'
@@ -462,7 +466,7 @@ async function relayAccessOverview(
       [relay.id]
     ),
     databasePool.query<Array<PendingInvitationRow>>(
-      `SELECT id, email, access_type, relay_id, instance_id, database_id, role,
+      `SELECT id, user_id, email, access_type, relay_id, instance_id, database_id, role,
               expires_at, created_at
          FROM ${databaseTable("invitation")}
         WHERE relay_id = ?
@@ -480,7 +484,6 @@ async function relayAccessOverview(
            ON auth_user.id = instance_row.owner_id
         WHERE instance_row.relay_id = ?
           AND instance_row.owner_id IS NOT NULL
-          AND grant_row.state = 'active'
         ORDER BY auth_user.name ASC, instance_row.created_at ASC`,
       [relay.id]
     ),
@@ -584,10 +587,17 @@ export const grantOrInviteAccess = createServerFn({ method: "POST" })
         "Only a platform administrator can assign platform access"
       )
     const [existing] = await databasePool.query<Array<ExistingAccessUserRow>>(
-      `SELECT id, name, email, role FROM ${databaseTable("user")} WHERE email = ? LIMIT 1`,
+      `SELECT auth_user.id, auth_user.name, auth_user.email, auth_user.role,
+        (EXISTS (SELECT 1 FROM ${databaseTable("account")} WHERE userId = auth_user.id)
+         OR EXISTS (SELECT 1 FROM ${databaseTable("passkey")} WHERE userId = auth_user.id)) AS has_credentials
+         FROM ${databaseTable("user")} AS auth_user WHERE auth_user.email = ? LIMIT 1`,
       [data.email]
     )
-    if (existing[0]) {
+    if (data.userId && existing[0]?.id !== data.userId)
+      throw new Error(
+        "The account changed. Refresh the user list and try again."
+      )
+    if (existing[0] && (data.userId || existing[0].has_credentials)) {
       await runAppEffect(
         "access.platform.assign",
         assignPlatformAccessEffect({
@@ -645,8 +655,8 @@ export const grantOrInviteAccess = createServerFn({ method: "POST" })
                 new Error("Could not create invited user")
               )
             yield* tx.execute(
-              `UPDATE ${databaseTable("invitation")} SET revoked_at = CURRENT_TIMESTAMP(3), cancelled_at = CURRENT_TIMESTAMP(3) WHERE email = ? AND access_type = ? AND accepted_at IS NULL AND revoked_at IS NULL`,
-              [data.email, data.accessType]
+              `UPDATE ${databaseTable("invitation")} SET revoked_at = CURRENT_TIMESTAMP(3), cancelled_at = CURRENT_TIMESTAMP(3) WHERE user_id = ? AND access_type = ? AND accepted_at IS NULL AND revoked_at IS NULL`,
+              [subject.id, data.accessType]
             )
             yield* tx.execute(
               `INSERT INTO ${databaseTable("invitation")} (id, token_hash, email, user_id, access_type, invited_by, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
@@ -711,22 +721,68 @@ export const grantOrInviteAccess = createServerFn({ method: "POST" })
     } satisfies InvitationAccessResult
   })
 
-export const getInvitationPreview = createServerFn({ method: "GET" })
-  .validator(tokenSchema)
+export const listPendingPlatformInvitations = createServerFn({ method: "GET" })
+  .validator(
+    z.object({
+      offset: z.number().int().min(0).default(0),
+      limit: z.number().int().min(1).max(50).default(10),
+    })
+  )
   .handler(async ({ data }) => {
-    const invitation = await readInvitation(data.token)
+    const user = await requireEligibleResourceUser()
+    if (!isPlatformAdmin(user))
+      throw new Error("Platform administrator required")
+    const [rows] = await databasePool.query<Array<PendingInvitationRow>>(
+      `SELECT invitation.id, invitation.access_type, COALESCE(subject.email, invitation.email) AS email,
+              invitation.created_at, invitation.expires_at
+         FROM ${databaseTable("invitation")} AS invitation
+         LEFT JOIN ${databaseTable("user")} AS subject ON subject.id = invitation.user_id
+        WHERE invitation.relay_id IS NULL AND invitation.access_type <> 'scoped'
+          AND invitation.accepted_at IS NULL AND invitation.revoked_at IS NULL
+          AND invitation.declined_at IS NULL AND invitation.cancelled_at IS NULL
+          AND invitation.expires_at > CURRENT_TIMESTAMP(3)
+        ORDER BY invitation.created_at DESC, invitation.id DESC LIMIT ? OFFSET ?`,
+      [data.limit + 1, data.offset]
+    )
+    return {
+      hasMore: rows.length > data.limit,
+      invitations: rows.slice(0, data.limit).map((row) => ({
+        id: row.id,
+        email: row.email,
+        accessType: row.access_type,
+        createdAt: row.created_at.toISOString(),
+        expiresAt: row.expires_at.toISOString(),
+      })),
+    }
+  })
+
+export const getInvitationPreview = createServerFn({ method: "GET" })
+  .validator(
+    z
+      .object({ token: z.string().min(32).optional(), id: z.uuid().optional() })
+      .refine(
+        (value) => Boolean(value.token || value.id),
+        "An invitation is required"
+      )
+  )
+  .handler(async ({ data }) => {
+    const invitation = await readInvitation(data.token, data.id)
     if (!invitation || !isInvitationPending(invitation)) return null
     const [relay, userLookup] = await Promise.all([
       invitation.relay_id ? relayById(invitation.relay_id) : null,
       databasePool.query<Array<ExistingAccessUserRow>>(
-        `SELECT id FROM ${databaseTable("user")} WHERE email = ? LIMIT 1`,
-        [invitation.email]
+        `SELECT auth_user.id, auth_user.email,
+          (EXISTS (SELECT 1 FROM ${databaseTable("account")} WHERE userId = auth_user.id)
+           OR EXISTS (SELECT 1 FROM ${databaseTable("passkey")} WHERE userId = auth_user.id)) AS has_credentials
+          FROM ${databaseTable("user")} AS auth_user WHERE auth_user.id = ? LIMIT 1`,
+        [invitation.user_id]
       ),
     ])
     return {
       accessType: invitation.access_type,
-      accountExists: userLookup[0].length > 0,
-      email: invitation.email,
+      accountExists: Boolean(userLookup[0][0]?.has_credentials),
+      subjectId: invitation.user_id,
+      email: userLookup[0][0]?.email ?? invitation.email,
       databaseId: invitation.database_id,
       expiresAt: invitation.expires_at.toISOString(),
       instanceId: invitation.instance_id,
@@ -759,75 +815,7 @@ export const acceptAccessInvitation = createServerFn({ method: "POST" })
     }
     await runAppEffect(
       "access.platform.accept",
-      Effect.gen(function* () {
-        const database = yield* Database
-        return yield* database.transaction("access.platform.accept", (tx) =>
-          Effect.gen(function* () {
-            yield* tx.queryRows<PlatformRoleUserRow>(
-              `SELECT * FROM ${databaseTable("user")} WHERE role = 'admin' ORDER BY id FOR UPDATE`
-            )
-            const subjects = yield* tx.queryRows<PlatformRoleUserRow>(
-              `SELECT * FROM ${databaseTable("user")} WHERE id = ? FOR UPDATE`,
-              [user.id]
-            )
-            const subject = subjects[0]
-            if (
-              !subject ||
-              !isAccountEnabled(subject) ||
-              !isAccountVerified(subject)
-            )
-              return yield* Effect.fail(
-                new Error("An enabled, verified account is required")
-              )
-            const rows = yield* tx.queryRows<InvitationRow>(
-              `SELECT * FROM ${databaseTable("invitation")} WHERE token_hash = ? FOR UPDATE`,
-              [hashToken(data.token)]
-            )
-            const current = rows[0]
-            if (
-              !current ||
-              !isInvitationPending(current) ||
-              current.access_type === "scoped"
-            )
-              return yield* Effect.fail(
-                new Error("This invitation is invalid or has expired")
-              )
-            if (current.email.toLowerCase() !== subject.email.toLowerCase())
-              return yield* Effect.fail(
-                new Error("Sign in with the invited account")
-              )
-            const role =
-              current.access_type === "platform_admin"
-                ? "admin"
-                : subject.role === "admin"
-                  ? "admin"
-                  : "relay_creator"
-            yield* tx.execute(
-              `UPDATE ${databaseTable("user")} SET role = ?, updatedAt = CURRENT_TIMESTAMP(3) WHERE id = ?`,
-              [role, user.id]
-            )
-            yield* tx.execute(
-              `UPDATE ${databaseTable("invitation")} SET accepted_at = CURRENT_TIMESTAMP(3), accepted_by = ?, acceptance_method = 'self' WHERE id = ?`,
-              [user.id, current.id]
-            )
-            yield* tx.execute(
-              `INSERT INTO ${databaseTable("auth_audit")} (user_id, event, metadata) VALUES (?, 'platform.invitation.accepted', ?)`,
-              [
-                user.id,
-                JSON.stringify({
-                  actorId: user.id,
-                  invitationId: current.id,
-                  oldRole: subject.role,
-                  role,
-                }),
-              ]
-            )
-            yield* advanceSubjectAcrossEnabledRelaysEffect(tx, user.id, [
-              { kind: "subject_relay" },
-            ])
-          })
-        )
-      })
+      acceptPlatformInvitationEffect(user, hashToken(data.token))
     )
     publishAccessPolicyChange([user.id], true)
     return { accepted: true }
@@ -905,46 +893,7 @@ export const revokeAccessInvitation = createServerFn({ method: "POST" })
       }
       await runAppEffect(
         "access.platform.cancel",
-        Effect.gen(function* () {
-          const database = yield* Database
-          return yield* database.transaction("access.platform.cancel", (tx) =>
-            Effect.gen(function* () {
-              const admins = yield* tx.queryRows<PlatformRoleUserRow>(
-                `SELECT * FROM ${databaseTable("user")} WHERE role = 'admin' ORDER BY id FOR UPDATE`
-              )
-              if (
-                !user.isDevelopmentBypass &&
-                !admins.some(
-                  (admin) =>
-                    admin.id === user.id &&
-                    isAccountEnabled(admin) &&
-                    isAccountVerified(admin)
-                )
-              )
-                return yield* Effect.fail(
-                  new Error("Platform administrator required")
-                )
-              const invitations = yield* tx.queryRows<
-                RowDataPacket & { user_id: string | null }
-              >(
-                `SELECT user_id FROM ${databaseTable("invitation")} WHERE id = ? AND relay_id IS NULL AND accepted_at IS NULL AND revoked_at IS NULL FOR UPDATE`,
-                [data.id]
-              )
-              if (!invitations[0]) return
-              yield* tx.execute(
-                `UPDATE ${databaseTable("invitation")} SET revoked_at = CURRENT_TIMESTAMP(3), cancelled_at = CURRENT_TIMESTAMP(3), cancelled_by = ? WHERE id = ?`,
-                [user.id, data.id]
-              )
-              yield* tx.execute(
-                `INSERT INTO ${databaseTable("auth_audit")} (user_id, event, metadata) VALUES (?, 'platform.invitation.cancelled', ?)`,
-                [
-                  invitations[0].user_id,
-                  JSON.stringify({ actorId: user.id, invitationId: data.id }),
-                ]
-              )
-            })
-          )
-        })
+        cancelPlatformInvitationEffect(user, data.id)
       )
       publishAccessCollectionChange()
       return { revoked: true }
@@ -962,12 +911,15 @@ async function relayById(id: string) {
   return (await listPersistedRelays()).find((relay) => relay.id === id) ?? null
 }
 
-async function readInvitation(token: string): Promise<InvitationRow | null> {
+async function readInvitation(
+  token?: string,
+  id?: string
+): Promise<InvitationRow | null> {
   const [rows] = await databasePool.query<Array<InvitationRow>>(
-    `SELECT id, email, access_type, relay_id, instance_id, database_id, role, invited_by,
+    `SELECT id, user_id, email, access_type, relay_id, instance_id, database_id, role, invited_by,
             expires_at, accepted_at, revoked_at, declined_at, cancelled_at
-       FROM ${databaseTable("invitation")} WHERE token_hash = ? LIMIT 1`,
-    [hashToken(token)]
+       FROM ${databaseTable("invitation")} WHERE ${token ? "token_hash" : "id"} = ? LIMIT 1`,
+    [token ? hashToken(token) : (id ?? "")]
   )
   return rows[0] ?? null
 }

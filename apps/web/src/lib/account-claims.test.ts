@@ -2,7 +2,26 @@ import { Effect, Layer } from "effect"
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test"
 
 import { Database } from "@/effect/database"
-import { redeemAccountClaim } from "@/lib/account-claims"
+import {
+  redeemAccountClaim,
+  requestEmailAccountClaim,
+} from "@/lib/account-claims"
+
+const { sendEmail } = vi.hoisted(() => ({
+  sendEmail: vi.fn(async (_message: { text: string }) => ({ error: null })),
+}))
+vi.mock("resend", () => ({
+  Resend: class {
+    emails = { send: sendEmail }
+  },
+}))
+vi.mock("@/lib/environment", () => ({
+  emailDeliveryConfig: () => ({
+    apiKey: "test-only",
+    from: "kiln@example.test",
+  }),
+  kilnPublicUrl: () => "https://kiln.example.test",
+}))
 
 vi.mock("@/lib/auth", () => ({
   auth: {
@@ -37,6 +56,7 @@ const claim = () => ({
   user_id: "subject",
   proof_method: method,
   created_by: "issuer",
+  created_at: new Date(Date.now() - 120_000),
   consumed_at: consumed ? new Date() : null,
   expires_at: new Date(Date.now() + 60_000),
 })
@@ -58,6 +78,8 @@ const transaction = {
         credential = true
       if (sql.includes("UPDATE") && sql.includes("account_claim"))
         consumed = true
+      if (sql.includes("INSERT INTO") && sql.includes("account_claim"))
+        consumed = false
       return { affectedRows: 1 } as never
     }),
 }
@@ -77,9 +99,56 @@ beforeEach(() => {
   credential = false
   method = "manual"
   writes = []
+  sendEmail.mockClear()
 })
 
 describe("credentialless identity claim", () => {
+  it("emails a verification challenge that preserves the invitation destination across browsers", async () => {
+    method = "email"
+    await requestEmailAccountClaim(
+      "recipient@example.test",
+      "/invite?id=2a226644-998c-449a-b574-971b22a722d3"
+    )
+    expect(sendEmail).toHaveBeenCalledOnce()
+    const link = new URL(
+      sendEmail.mock.calls[0]![0].text.match(/https:\/\/\S+/u)![0]
+    )
+    expect(link.pathname).toBe("/claim")
+    expect(link.searchParams.get("redirect")).toBe(
+      "/invite?id=2a226644-998c-449a-b574-971b22a722d3"
+    )
+    expect(link.searchParams.get("token")).toMatch(/^[a-f\d]{64}$/u)
+    expect(credential).toBe(false)
+    await redeemAccountClaim({
+      ...input,
+      token: link.searchParams.get("token")!,
+    })
+    expect(credential).toBe(true)
+    expect(
+      writes.some((write) => write.sql.includes("emailVerified = TRUE"))
+    ).toBe(true)
+    expect(
+      writes.some(
+        (write) =>
+          write.sql.includes("UPDATE") && write.sql.includes("invitation")
+      )
+    ).toBe(false)
+  })
+  it("cannot redirect an email claim off the platform or replace existing credentials", async () => {
+    method = "email"
+    await requestEmailAccountClaim(
+      "recipient@example.test",
+      "//attacker.example"
+    )
+    const link = new URL(
+      sendEmail.mock.calls[0]![0].text.match(/https:\/\/\S+/u)![0]
+    )
+    expect(link.searchParams.get("redirect")).toBe("/")
+    sendEmail.mockClear()
+    credential = true
+    await requestEmailAccountClaim("recipient@example.test")
+    expect(sendEmail).not.toHaveBeenCalled()
+  })
   it("records the manual issuer without claiming mailbox proof and consumes once", async () => {
     await expect(redeemAccountClaim(input)).resolves.toEqual({
       email: "recipient@example.test",

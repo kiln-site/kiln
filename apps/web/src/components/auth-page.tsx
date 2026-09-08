@@ -1,6 +1,6 @@
 import { ensuringPromise, recoverPromise } from "@/effect/promise"
 import { showToast } from "@workspace/ui/components/sonner"
-import { requestAccountClaim } from "@/server/users"
+import { requestAccountClaim, prepareAccountSignup } from "@/server/users"
 import * as React from "react"
 import { Effect } from "effect"
 import {
@@ -26,7 +26,7 @@ import {
   replacePendingAccountEmail,
 } from "@/server/auth"
 
-type AuthMode = "forgot-password" | "setup" | "sign-in" | "sign-up"
+type AuthMode = "claim" | "forgot-password" | "setup" | "sign-in" | "sign-up"
 type Feedback = { message: string; tone: "error" | "success" }
 type VerificationState = {
   email: string
@@ -41,6 +41,7 @@ export function AuthPage({
   emailDeliveryEnabled = false,
   forgotPassword,
   initialEmail,
+  initialMode,
   lockedEmail,
   setupRequired = false,
   signupEnabled = false,
@@ -52,6 +53,7 @@ export function AuthPage({
   emailDeliveryEnabled?: boolean
   forgotPassword?: boolean
   initialEmail?: string
+  initialMode?: "claim"
   lockedEmail?: string
   setupRequired?: boolean
   signupEnabled?: boolean
@@ -61,11 +63,13 @@ export function AuthPage({
   const [mode, setMode] = React.useState<AuthMode>(
     setupRequired
       ? "setup"
-      : forgotPassword
-        ? "forgot-password"
-        : startWithSignup && signupEnabled
-          ? "sign-up"
-          : "sign-in"
+      : initialMode === "claim"
+        ? "claim"
+        : forgotPassword
+          ? "forgot-password"
+          : startWithSignup && signupEnabled
+            ? "sign-up"
+            : "sign-in"
   )
   const [pending, setPending] = React.useState<string | null>(null)
   const [error, setError] = React.useState<string | null>(null)
@@ -75,6 +79,7 @@ export function AuthPage({
     React.useState<Feedback | null>(null)
   const [recoveryEmail, setRecoveryEmail] = React.useState<string | null>(null)
   const [recoveryComplete, setRecoveryComplete] = React.useState(false)
+  const [claimEmail, setClaimEmail] = React.useState<string | null>(null)
   const [hydrated, setHydrated] = React.useState(false)
 
   React.useEffect(() => setHydrated(true), [])
@@ -97,6 +102,18 @@ export function AuthPage({
             throw new Error(
               "This invitation is only valid for its original email."
             )
+          }
+          if (mode === "claim") {
+            if (!emailDeliveryEnabled) return
+            sessionStorage.setItem(
+              "kiln:claim:return",
+              returnPath(redirectPath)
+            )
+            await requestAccountClaim({
+              data: { email, returnPath: returnPath(redirectPath) },
+            })
+            setClaimEmail(email)
+            return
           }
           if (mode === "forgot-password") {
             const result = await authClient.emailOtp.requestPasswordReset({
@@ -131,13 +148,25 @@ export function AuthPage({
               return
             }
 
+            const onboarding = await prepareAccountSignup({ data: { email } })
+            if (onboarding.claimRequired) {
+              setMode("claim")
+              return
+            }
             const result = await authClient.signUp.email({
               name: displayName,
               email,
               password,
               callbackURL: destination(redirectPath),
             })
-            if (result.error) throw new Error(readAuthError(result.error))
+            if (result.error) {
+              const retry = await prepareAccountSignup({ data: { email } })
+              if (retry.claimRequired) {
+                setMode("claim")
+                return
+              }
+              throw new Error(readAuthError(result.error))
+            }
             if (!emailDeliveryEnabled) {
               await signIn(email, password, redirectPath)
               return
@@ -462,6 +491,19 @@ export function AuthPage({
                 administrator before resource access.
               </p>
             ) : null}
+            {mode === "claim" ? (
+              <p className="mb-5 text-sm text-muted-foreground">
+                {emailDeliveryEnabled
+                  ? "Verify your email, then choose your name and password. Your invitations will still be waiting for you to accept."
+                  : "Email delivery is not configured. Ask a platform administrator to share your account setup link. That link lets you choose your name and password before accepting invitations."}
+              </p>
+            ) : null}
+            {claimEmail ? (
+              <Notice icon={Mail}>
+                Check {claimEmail} for your account setup link. If no email
+                arrives, ask a platform administrator for a manual setup link.
+              </Notice>
+            ) : null}
             {verified ? (
               <Notice icon={Check}>Email verified. You can sign in now.</Notice>
             ) : null}
@@ -503,7 +545,7 @@ export function AuthPage({
                   className="h-11 bg-card/60 read-only:bg-muted/35 read-only:text-foreground/85"
                 />
               </Field>
-              {mode !== "forgot-password" ? (
+              {mode !== "forgot-password" && mode !== "claim" ? (
                 <Field
                   label="Password"
                   htmlFor={mode === "sign-in" ? "password" : "new-password"}
@@ -563,18 +605,28 @@ export function AuthPage({
 
               <Button
                 className="mt-1 h-11 w-full"
-                disabled={!hydrated || pending !== null}
+                disabled={
+                  !hydrated ||
+                  pending !== null ||
+                  (mode === "claim" && !emailDeliveryEnabled)
+                }
               >
                 {pending === mode ? (
                   <LoaderCircle className="animate-spin" />
                 ) : null}
-                {mode === "setup"
-                  ? "Create administrator"
-                  : mode === "sign-in"
-                    ? "Login"
-                    : mode === "sign-up"
-                      ? "Create account"
-                      : "Send recovery code"}
+                {mode === "claim"
+                  ? !emailDeliveryEnabled
+                    ? "Waiting for setup link"
+                    : claimEmail
+                      ? "Resend setup link"
+                      : "Verify email to continue"
+                  : mode === "setup"
+                    ? "Create administrator"
+                    : mode === "sign-in"
+                      ? "Login"
+                      : mode === "sign-up"
+                        ? "Create account"
+                        : "Send recovery code"}
               </Button>
               {emailDeliveryEnabled &&
               (mode === "sign-in" || mode === "sign-up") ? (
@@ -600,7 +652,12 @@ export function AuthPage({
                               "kiln:claim:return",
                               returnPath(redirectPath)
                             )
-                            await requestAccountClaim({ data: { email } })
+                            await requestAccountClaim({
+                              data: {
+                                email,
+                                returnPath: returnPath(redirectPath),
+                              },
+                            })
                             showToast({
                               type: "success",
                               message:
@@ -710,32 +767,41 @@ function AuthHeading({
   mode: AuthMode
   signupEnabled: boolean
 }) {
+  const headings: Record<AuthMode, { title: string; description: string }> = {
+    claim: {
+      title: "Set up your account",
+      description: "You have been invited to Kiln.",
+    },
+    setup: {
+      title: "Set up Kiln",
+      description: "Create the first administrator account.",
+    },
+    "sign-in": {
+      title: lockedEmail ? "Sign in to continue" : "Welcome to Kiln",
+      description: lockedEmail
+        ? "Sign in to your account to continue."
+        : signupEnabled
+          ? "Sign in or create a new account."
+          : "Sign in to your control plane.",
+    },
+    "sign-up": {
+      title: "Create your Kiln account",
+      description: "Choose the email address for your account.",
+    },
+    "forgot-password": {
+      title: "Reset your password",
+      description: "We’ll send a six-digit recovery code.",
+    },
+  }
+  const heading = headings[mode]
   return (
     <div className="mb-8 flex flex-col items-center text-center">
       <HearthMark className="size-11" />
       <h1 className="mt-3 font-heading text-2xl font-semibold tracking-[-0.04em]">
-        {mode === "setup"
-          ? "Set up Kiln"
-          : mode === "sign-in"
-            ? lockedEmail
-              ? "Sign in to continue"
-              : "Welcome to Kiln"
-            : mode === "sign-up"
-              ? "Create your Kiln account"
-              : "Reset your password"}
+        {heading.title}
       </h1>
       <p className="mt-2 text-sm text-muted-foreground">
-        {mode === "setup"
-          ? "Create the first operator account."
-          : mode === "sign-in"
-            ? lockedEmail
-              ? "Sign in with the email this invitation was sent to."
-              : signupEnabled
-                ? "Sign in or create a new account."
-                : "Sign in to your control plane."
-            : mode === "sign-up"
-              ? "Use the email address tied to your invitation."
-              : "We’ll send a six-digit recovery code."}
+        {heading.description}
       </p>
     </div>
   )

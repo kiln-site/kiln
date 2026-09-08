@@ -1,4 +1,8 @@
-import { PendingResourceInvitations } from "@/components/pending-resource-invitations"
+import {
+  PendingResourceInvitations,
+  PendingResourceInvitationBadge,
+  resourceInvitationScopeKey,
+} from "@/components/pending-resource-invitations"
 import * as React from "react"
 import { eq, not } from "@tanstack/db"
 import { useDbClient, useLiveQuery } from "@tanstack/react-db"
@@ -111,11 +115,9 @@ interface ServerDeleteAccess {
 export type ServerSearchStore = DataTableSearchStore
 
 export const ServersPage = React.memo(function ServersPage({
-  canProvision,
   passwordRequired,
   searchStore,
 }: {
-  canProvision: boolean
   passwordRequired: boolean
   searchStore: ServerSearchStore
 }) {
@@ -130,6 +132,13 @@ export const ServersPage = React.memo(function ServersPage({
   const { data: capabilities } = useSuspenseQuery(
     accessCapabilitiesQueryOptions()
   )
+  const canProvision =
+    capabilities.isPlatformAdmin ||
+    capabilities.grants.some(
+      (grant) =>
+        grant.resourceType === "relay" &&
+        grantHasPermission(grant, "instance.create")
+    )
   const deleteAccess = React.useMemo<ServerDeleteAccess>(() => {
     const instances = new Set<string>()
     const relays = new Set<string>()
@@ -304,24 +313,11 @@ const AddServerButton = React.memo(function AddServerButton({
   canProvision: boolean
   dialogStore: AddServerDialogStore
 }) {
-  if (canProvision) {
-    return (
-      <Button type="button" onClick={dialogStore.open}>
-        <Plus /> Add Server
-      </Button>
-    )
-  }
+  if (!canProvision) return null
   return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <Button type="button" disabled>
-          <Plus /> Add Server
-        </Button>
-      </TooltipTrigger>
-      <TooltipContent side="bottom" sideOffset={6}>
-        Server provisioning requires administrator access
-      </TooltipContent>
-    </Tooltip>
+    <Button type="button" onClick={dialogStore.open}>
+      <Plus /> Add Server
+    </Button>
   )
 })
 
@@ -419,6 +415,15 @@ const ServerDataTable = React.memo(function ServerDataTable({
   searchStore: ServerSearchStore
   source: DataTableSource<ServerTableItem>
 }) {
+  const visibleResourceKeys = React.useMemo(
+    () =>
+      new Set(
+        source.rows.map(({ server }) =>
+          resourceInvitationScopeKey(server.relayId, server.id)
+        )
+      ),
+    [source.rows]
+  )
   const [initialTableState] = React.useState(() => ({
     sorting: [{ desc: false, id: "server" }],
   }))
@@ -448,29 +453,38 @@ const ServerDataTable = React.memo(function ServerDataTable({
         cell: ({ row }) => {
           const { routeIdentifier, server } = row.original
           return (
-            <Link
-              to="/server/$serverId/console"
-              params={{ serverId: routeIdentifier }}
-              preload="intent"
-              className="group/server-link flex min-h-14 w-full min-w-0 items-center px-3 outline-none focus-visible:ring-2 focus-visible:ring-ring/40 focus-visible:ring-inset"
-            >
-              <InstanceName
-                instance={{
-                  brickId: server.brickId,
-                  id: server.id,
-                  implementation: server.implementation,
-                  kind: "server",
-                  observedState: server.observedState,
-                  relayId: server.relayId,
-                  relayStatus: server.relayStatus,
-                }}
-                live={false}
-                name={server.name}
-                nameClassName="transition-colors group-hover/server-link:text-primary"
-                meta={`${server.game} · ${server.implementation}`}
-                metaClassName="font-mono"
-              />
-            </Link>
+            <div className="flex min-w-0 flex-col items-start">
+              <Link
+                to="/server/$serverId/console"
+                params={{ serverId: routeIdentifier }}
+                preload="intent"
+                className="group/server-link flex min-h-14 w-full min-w-0 items-center px-3 outline-none focus-visible:ring-2 focus-visible:ring-ring/40 focus-visible:ring-inset"
+              >
+                <InstanceName
+                  instance={{
+                    brickId: server.brickId,
+                    id: server.id,
+                    implementation: server.implementation,
+                    kind: "server",
+                    observedState: server.observedState,
+                    relayId: server.relayId,
+                    relayStatus: server.relayStatus,
+                  }}
+                  live={false}
+                  name={server.name}
+                  nameClassName="transition-colors group-hover/server-link:text-primary"
+                  meta={`${server.game} · ${server.implementation}`}
+                  metaClassName="font-mono"
+                />
+              </Link>
+              <div className="px-3">
+                <PendingResourceInvitationBadge
+                  resourceType="instance"
+                  relayId={server.relayId}
+                  resourceId={server.id}
+                />
+              </div>
+            </div>
           )
         },
         meta: dataTableColumnMeta(
@@ -559,6 +573,7 @@ const ServerDataTable = React.memo(function ServerDataTable({
       leadingBody={
         <PendingResourceInvitations
           resourceType="instance"
+          visibleResourceKeys={visibleResourceKeys}
           searchStore={searchStore}
         />
       }

@@ -1,4 +1,8 @@
-import { PendingResourceInvitations } from "@/components/pending-resource-invitations"
+import {
+  PendingResourceInvitations,
+  PendingResourceInvitationBadge,
+  resourceInvitationScopeKey,
+} from "@/components/pending-resource-invitations"
 import * as React from "react"
 import { useLiveQuery } from "@tanstack/react-db"
 import {
@@ -547,6 +551,15 @@ function RelayTable({
   onEdit: (relayId: string) => void
   onOpenUpdates: (relayId?: string) => void
 }) {
+  const visibleResourceKeys = React.useMemo(
+    () =>
+      new Set(
+        source.rows.map((relay) =>
+          resourceInvitationScopeKey(relay.id, relay.id)
+        )
+      ),
+    [source.rows]
+  )
   const [initialTableState] = React.useState(() => ({
     sorting: [{ desc: false, id: "relay" }],
   }))
@@ -582,26 +595,33 @@ function RelayTable({
         cell: ({ row }) => {
           const relay = row.original
           return (
-            <InstanceName
-              instance={{
-                connected: relay.lastConnectedAt !== null,
-                enabled: relay.enabled,
-                id: relay.id,
-                kind: "relay",
-                lastError: relay.lastError,
-                relayId: relay.id,
-                source: "registry",
-              }}
-              live={false}
-              meta={
-                <span title={relay.id}>
-                  {relay.nodeArch ?? "unknown"} <span aria-hidden>•</span>{" "}
-                  {shortRelayId(relay.id)}
-                </span>
-              }
-              metaClassName="font-mono"
-              name={relay.name}
-            />
+            <div className="flex min-w-0 flex-col items-start gap-1">
+              <InstanceName
+                instance={{
+                  connected: relay.lastConnectedAt !== null,
+                  enabled: relay.enabled,
+                  id: relay.id,
+                  kind: "relay",
+                  lastError: relay.lastError,
+                  relayId: relay.id,
+                  source: "registry",
+                }}
+                live={false}
+                meta={
+                  <span title={relay.id}>
+                    {relay.nodeArch ?? "unknown"} <span aria-hidden>•</span>{" "}
+                    {shortRelayId(relay.id)}
+                  </span>
+                }
+                metaClassName="font-mono"
+                name={relay.name}
+              />
+              <PendingResourceInvitationBadge
+                resourceType="relay"
+                relayId={relay.id}
+                resourceId={relay.id}
+              />
+            </div>
           )
         },
         meta: dataTableColumnMeta({
@@ -721,6 +741,7 @@ function RelayTable({
       leadingBody={
         <PendingResourceInvitations
           resourceType="relay"
+          visibleResourceKeys={visibleResourceKeys}
           searchStore={searchStore}
         />
       }

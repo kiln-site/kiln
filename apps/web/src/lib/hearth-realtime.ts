@@ -37,7 +37,8 @@ const hearthRealtimeQueryScopes = {
     prefix(["access", "instances"]),
     prefix(["resource-access"]),
     prefix(["access-resources"]),
-    prefix(["resource-invitations"]),
+    prefix(["my-resource-invitations"]),
+    prefix(["resource-invitation"]),
     prefix(["users"]),
   ],
   activity: [prefix(["activity"])],
@@ -87,7 +88,8 @@ function queryScopes(
       prefix(["access", "instances", scope.relayId]),
       prefix(["resource-access", scope.relayId]),
       prefix(["access-resources"]),
-      prefix(["resource-invitations"]),
+      prefix(["my-resource-invitations"]),
+      prefix(["resource-invitation"]),
       prefix(["users"]),
     ]
   }

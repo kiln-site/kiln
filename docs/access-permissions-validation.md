@@ -49,7 +49,7 @@ retry state; failed email delivery cannot undo the identity or invitation.
 
 - Full workspace typecheck and production build pass (Hearth, Relay, CLI, contracts).
 - `vp check` passes with two existing array-sort warnings in the runtime-manifest test.
-- Full workspace tests pass: Hearth 693, CLI 70; host Relay 445 pass/22 Docker-only
+- Full workspace tests pass: Hearth 710, CLI 70; host Relay 445 pass/22 Docker-only
   skips. The Relay Docker suite separately passed all 467 tests.
 - Shared contracts suite separately passed all 23 tests.
 - Root migration/environment/boundary tests: 13 pass, two opt-in fixtures skipped
@@ -83,6 +83,13 @@ server, with an administrator, Billy, and Tom as disposable development identiti
   the row while preserving the current page and other server access.
 - Admin-forced acceptance activated Tom's assignment while verification evidence
   remained empty.
+- Revoking direct server access preserved effective Relay access and reported the
+  inherited source. Overlapping pending access uses one inventory row with a review action.
+- Delivered invitation IDs route credential-less recipients to account setup;
+  signup preflight distinguishes reserved, claimed, and new addresses. Email claim
+  tests cover one-time proof and portable, same-origin invitation return links.
+- Platform administrator promotion and demotion work in the user table. Platform
+  invitation creation/cancellation and immutable recipient binding have dedicated checks.
 
 ## Query fixture
 
@@ -108,3 +115,18 @@ to access-ID invitation and owner indexes: invitation lookup fell from scanning
 5,997 attempts to an indexed three-row lookup (1.879 ms to 0.092 ms median).
 The broad directory still materializes/sorts authorized resources for pagination;
 substring search is not an index seek. No speculative distributed cache was added.
+
+## Independent review corrections
+
+The first streamed Cursor Grok 4.6 High Fast review identified four issues. Follow-up
+changes bind platform invitations to immutable user IDs (including reissue/cancel),
+restore platform role and pending-invitation controls, route reserved identities
+through account setup, and remove a dangling SQL alias from the legacy owner query.
+Regression tests cover email reuse by a different user, changed subject email,
+expired/cancelled platform invitations, fresh account eligibility, and email claims.
+
+Additional review cleanup removes the unused role-grant helper, deletes scoped
+presets with their resource, projects Redis/Valkey engine support into effective
+permissions, and corrects realtime invitation query keys. Invitation refresh uses
+the existing stream; resource-access changes target relevant Relays instead of
+invalidating every signed-in user's queries.

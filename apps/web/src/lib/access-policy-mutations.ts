@@ -296,7 +296,7 @@ export async function publishResourceAccessChange(
   for (const relayId of new Set(relayIds)) wakeAuthorizationDelivery(relayId)
   publishRealtimeChange({
     type: "hearth.invalidate",
-    audience: { kind: "authenticated" },
+    audience: { kind: "relays", relayIds: [...new Set(relayIds)] },
     topics: ["access"],
   })
 }

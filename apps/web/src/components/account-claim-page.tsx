@@ -7,8 +7,15 @@ import { showToast } from "@workspace/ui/components/sonner"
 import { HearthMark } from "@/components/hearth-mark"
 import { authClient } from "@/lib/auth-client"
 import { claimAccount } from "@/server/users"
+import { accountReturnPath } from "@/lib/account-return-path"
 
-export function AccountClaimPage({ token }: { token: string }) {
+export function AccountClaimPage({
+  token,
+  redirectPath,
+}: {
+  token: string
+  redirectPath?: string
+}) {
   const [confirmationError, setConfirmationError] = useState<string | null>(
     null
   )
@@ -35,12 +42,10 @@ export function AccountClaimPage({ token }: { token: string }) {
         window.location.assign(`/?email=${encodeURIComponent(result.email)}`)
         return
       }
-      const stored = sessionStorage.getItem("kiln:claim:return") ?? "/"
+      const stored =
+        redirectPath ?? sessionStorage.getItem("kiln:claim:return") ?? "/"
       sessionStorage.removeItem("kiln:claim:return")
-      const destination = new URL(stored, window.location.origin)
-      window.location.assign(
-        destination.origin === window.location.origin ? destination.href : "/"
-      )
+      window.location.assign(accountReturnPath(stored))
     },
   })
   const pending = mutation.isPending

@@ -12,6 +12,7 @@ import {
   type AccountPolicy,
 } from "@/lib/account-policy"
 import { auth } from "@/lib/auth"
+import { accountReturnPath } from "@/lib/account-return-path"
 import { advanceSubjectAcrossEnabledRelaysEffect } from "@/lib/authorization-revision"
 import { databaseTable } from "@/lib/database-config"
 import { parseDisplayName } from "@/lib/display-name"
@@ -47,18 +48,40 @@ export async function issueManualAccountClaim(input: {
   }
 }
 
-export async function requestEmailAccountClaim(email: string): Promise<void> {
+export async function accountNeedsClaim(email: string): Promise<boolean> {
+  return runAppEffect(
+    "account.claim.check",
+    Effect.gen(function* () {
+      const database = yield* Database
+      const rows = yield* database.queryRows<RowDataPacket>(
+        "account.claim.check",
+        `SELECT u.id FROM ${databaseTable("user")} u WHERE u.email = ?
+       AND NOT EXISTS(SELECT 1 FROM ${databaseTable("account")} a WHERE a.userId = u.id)
+       AND NOT EXISTS(SELECT 1 FROM ${databaseTable("passkey")} p WHERE p.userId = u.id) LIMIT 1`,
+        [email]
+      )
+      return rows.length > 0
+    })
+  )
+}
+
+export async function requestEmailAccountClaim(
+  email: string,
+  returnPath?: string
+): Promise<void> {
   const delivery = emailDeliveryConfig()
   if (!delivery) return
   const result = await issueClaim({ email, method: "email", actorId: null })
   if (!result) return
+  const claimUrl = new URL(result.claimUrl)
+  claimUrl.searchParams.set("redirect", accountReturnPath(returnPath))
   const resend = new Resend(delivery.apiKey)
   const response = await resend.emails.send(
     {
       from: delivery.from,
       to: [result.email],
       subject: "Claim your Kiln account",
-      text: `Use this link to verify your email and set up your Kiln account. It expires in 30 minutes.\n\n${result.claimUrl}\n\nIf you did not request this, you can ignore this email.`,
+      text: `Use this link to verify your email and set up your Kiln account. It expires in 30 minutes.\n\n${claimUrl.toString()}\n\nIf you did not request this, you can ignore this email.`,
     },
     { idempotencyKey: `account-claim/${result.id}` }
   )
@@ -195,7 +218,10 @@ export async function redeemAccountClaim(input: {
     })
   )
   // Hash before opening the transaction; hold locks only for the atomic claim.
-  const context = await auth.$context
+  const [context, { wakeAuthorizationDelivery }] = await Promise.all([
+    auth.$context,
+    import("@/lib/authorization-delivery"),
+  ])
   const password = await context.password.hash(input.password)
   const result = await runAppEffect(
     "account.claim.redeem",
@@ -274,8 +300,6 @@ export async function redeemAccountClaim(input: {
       )
     })
   )
-  const { wakeAuthorizationDelivery } =
-    await import("@/lib/authorization-delivery")
   for (const relayId of result.relayIds) wakeAuthorizationDelivery(relayId)
   publishRealtimeChange({
     type: "access.changed",

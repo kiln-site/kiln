@@ -41,17 +41,20 @@ export const PermissionEditor = memo(function PermissionEditor({
       ),
     [selections, scopeType, capabilities]
   )
-  const effective = useMemo(
-    () =>
-      new Set(
-        expandPermissionSelections(
-          selections.filter((selection) => !unsupported.includes(selection)),
-          scopeType,
-          capabilities
-        )
-      ),
-    [selections, unsupported, scopeType, capabilities]
+  const availableSet = useMemo(
+    () => (available ? new Set(available) : undefined),
+    [available]
   )
+  const effective = useMemo(() => {
+    const unsupportedSet = new Set(unsupported)
+    return new Set(
+      expandPermissionSelections(
+        selections.filter((selection) => !unsupportedSet.has(selection)),
+        scopeType,
+        capabilities
+      )
+    )
+  }, [selections, unsupported, scopeType, capabilities])
   function toggle(selection: PermissionSelection) {
     const key = `${selection.kind}:${selection.key}`
     onChange(
@@ -62,9 +65,9 @@ export const PermissionEditor = memo(function PermissionEditor({
   }
   function maySelect(selection: PermissionSelection) {
     return (
-      !available ||
+      !availableSet ||
       expandPermissionSelections([selection], scopeType, capabilities).every(
-        (key) => available.includes(key)
+        (key) => availableSet.has(key)
       )
     )
   }

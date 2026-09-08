@@ -1,6 +1,7 @@
 import { Effect } from "effect"
 import type { RowDataPacket } from "mysql2/promise"
 import {
+  accessPermissionSupported,
   builtinPresetSelections,
   expandPermissionSelections,
   type AccessPermission,
@@ -31,6 +32,7 @@ interface GrantRow extends RowDataPacket {
   resource_type: PermissionScopeType
   resource_id: string
   role: string
+  engine: string | null
 }
 
 interface SelectionRow extends RowDataPacket {
@@ -61,8 +63,10 @@ export const loadResourceGrantsEffect = Effect.fn("access.resolveGrants")(
     ]
     const filter = `g.user_id = ? AND g.state = 'active'${relayId ? " AND g.relay_id = ?" : ""}${scope ? (scope.resourceType === "relay" ? " AND g.resource_type = 'relay'" : " AND (g.resource_type = 'relay' OR (g.resource_type = ? AND g.resource_id = ?))") : ""}`
     const rows = yield* query<GrantRow>(
-      `SELECT g.id, g.relay_id, g.resource_type, g.resource_id, g.role
-         FROM ${databaseTable("access_grant")} g WHERE ${filter}`,
+      `SELECT g.id, g.relay_id, g.resource_type, g.resource_id, g.role, d.engine
+         FROM ${databaseTable("access_grant")} g
+         LEFT JOIN ${databaseTable("database")} d ON g.resource_type = 'database' AND d.relay_id = g.relay_id AND d.database_id = g.resource_id
+         WHERE ${filter}`,
       values
     )
     const selections =
@@ -109,21 +113,21 @@ export const loadResourceGrantsEffect = Effect.fn("access.resolveGrants")(
       resourceId: row.resource_id,
       resourceType: row.resource_type,
       role: "viewer",
-      permissions: expandPermissionSelections(
-        deduplicatePermissionSelections(byAccess.get(row.id) ?? []),
-        row.resource_type
+      permissions: expandResourceGrantPermissions(
+        row,
+        byAccess.get(row.id) ?? []
       ),
       source: "access",
     }))
     // Ownership is authority in its own right, independent of invitations and presets.
     const ownerRows = yield* query<GrantRow>(
-      `SELECT id, id AS relay_id, 'relay' AS resource_type, id AS resource_id, 'owner' AS role
+      `SELECT id, id AS relay_id, 'relay' AS resource_type, id AS resource_id, 'owner' AS role, NULL AS engine
          FROM ${databaseTable("relay")} WHERE created_by = ?${relayId ? " AND id = ?" : ""}
        UNION ALL
-       SELECT instance_id AS id, relay_id, 'instance', instance_id, 'owner'
+       SELECT instance_id AS id, relay_id, 'instance', instance_id, 'owner', NULL
          FROM ${databaseTable("instance")} WHERE owner_id = ?${relayId ? " AND relay_id = ?" : ""}${scope ? " AND instance_id = ?" : ""}
        UNION ALL
-       SELECT database_id AS id, relay_id, 'database', database_id, 'owner'
+       SELECT database_id AS id, relay_id, 'database', database_id, 'owner', engine
          FROM ${databaseTable("database")} WHERE created_by = ?${relayId ? " AND relay_id = ?" : ""}${scope ? " AND database_id = ?" : ""}`,
       [
         userId,
@@ -147,10 +151,9 @@ export const loadResourceGrantsEffect = Effect.fn("access.resolveGrants")(
         resourceId: row.resource_id,
         resourceType: row.resource_type,
         role: "owner",
-        permissions: expandPermissionSelections(
-          [{ kind: "collection", key: "all" }],
-          row.resource_type
-        ),
+        permissions: expandResourceGrantPermissions(row, [
+          { kind: "collection", key: "all" },
+        ]),
         source: "owner",
       })
     }
@@ -158,21 +161,42 @@ export const loadResourceGrantsEffect = Effect.fn("access.resolveGrants")(
   }
 )
 
+function expandResourceGrantPermissions(
+  row: Pick<GrantRow, "resource_type" | "engine">,
+  selections: ReadonlyArray<PermissionSelection>
+): Array<AccessPermission> {
+  const capabilities =
+    row.resource_type === "database"
+      ? ["mysql", "mariadb", "postgres"].includes(row.engine ?? "")
+        ? ["database.logical-backups"]
+        : []
+      : undefined
+  // Persisted assignments can outlive an engine change or contain migrated
+  // legacy bits. Unsupported explicit entries are inactive, not a load error.
+  const supported = deduplicatePermissionSelections(selections).filter(
+    (selection) =>
+      selection.kind === "collection" ||
+      accessPermissionSupported(selection.key, row.resource_type, capabilities)
+  )
+  return expandPermissionSelections(supported, row.resource_type, capabilities)
+}
+
 export function effectiveScopePermissions(
   grants: ReadonlyArray<ResolvedAccessGrant>,
   scope: ResourceScope
 ): Set<AccessPermission> {
-  return new Set(
-    grants
-      .filter(
-        (grant) =>
-          grant.relayId === scope.relayId &&
-          (grant.resourceType === "relay" ||
-            (grant.resourceType === scope.resourceType &&
-              grant.resourceId === scope.resourceId))
-      )
-      .flatMap((grant) => grant.permissions)
-  )
+  const permissions = new Set<AccessPermission>()
+  for (const grant of grants) {
+    if (
+      grant.relayId === scope.relayId &&
+      (grant.resourceType === "relay" ||
+        (grant.resourceType === scope.resourceType &&
+          grant.resourceId === scope.resourceId))
+    ) {
+      for (const permission of grant.permissions) permissions.add(permission)
+    }
+  }
+  return permissions
 }
 
 export function deduplicatePermissionSelections(

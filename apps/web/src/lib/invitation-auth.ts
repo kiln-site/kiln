@@ -19,6 +19,22 @@ export function inviteTokenFromRedirect(
   return token
 }
 
+export function invitationReferenceFromRedirect(
+  redirectPath: string | undefined
+): { token: string } | { id: string } | null {
+  const token = inviteTokenFromRedirect(redirectPath)
+  if (token) return { token }
+  if (!redirectPath?.startsWith("/invite?")) return null
+  const parsed = Result.getOrNull(
+    Result.try(() => new URL(redirectPath, "https://kiln.invalid"))
+  )
+  const id = parsed?.searchParams.get("id")
+  return id &&
+    /^[a-f\d]{8}-[a-f\d]{4}-[a-f\d]{4}-[a-f\d]{4}-[a-f\d]{12}$/iu.test(id)
+    ? { id }
+    : null
+}
+
 export function invitationDestination(invitation: {
   accessType: "platform_admin" | "relay_creator" | "scoped"
   databaseId: string | null

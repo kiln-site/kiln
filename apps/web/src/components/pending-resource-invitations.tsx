@@ -16,9 +16,11 @@ export const PendingResourceInvitations = memo(
   function PendingResourceInvitations({
     resourceType,
     searchStore,
+    visibleResourceKeys,
   }: {
     resourceType: "instance" | "database" | "relay"
     searchStore: DataTableSearchStore
+    visibleResourceKeys: ReadonlySet<string>
   }) {
     const search = useSyncExternalStore(
       searchStore.subscribe,
@@ -46,10 +48,13 @@ export const PendingResourceInvitations = memo(
     const rows =
       query.data?.filter(
         (row) =>
-          !search ||
-          `${row.resourceName} ${row.scope.resourceId} ${row.scope.relayId}`
-            .toLowerCase()
-            .includes(search)
+          !visibleResourceKeys.has(
+            resourceInvitationScopeKey(row.scope.relayId, row.scope.resourceId)
+          ) &&
+          (!search ||
+            `${row.resourceName} ${row.scope.resourceId} ${row.scope.relayId}`
+              .toLowerCase()
+              .includes(search))
       ) ?? []
     const fromSearch = query.data?.find(
       (row) => row.scope.resourceId.toLowerCase() === (routeSearch || search)
@@ -131,3 +136,62 @@ const PendingRow = memo(function PendingRow({
     </tr>
   )
 })
+
+export function resourceInvitationScopeKey(
+  relayId: string,
+  resourceId: string
+): string {
+  return `${relayId}:${resourceId}`
+}
+
+// Only the matching badge subscribes to invitation changes. Inventory rows retain
+// their normal navigation and authority while a second grant awaits acceptance.
+export const PendingResourceInvitationBadge = memo(
+  function PendingResourceInvitationBadge({
+    resourceType,
+    relayId,
+    resourceId,
+  }: {
+    resourceType: "instance" | "database" | "relay"
+    relayId: string
+    resourceId: string
+  }) {
+    const select = useMemo(
+      () => (rows: Array<ResourceInvitation>) =>
+        rows.find(
+          (row) =>
+            row.scope.resourceType === resourceType &&
+            row.scope.relayId === relayId &&
+            row.scope.resourceId === resourceId
+        ),
+      [resourceType, relayId, resourceId]
+    )
+    const { data: invitation } = useQuery({
+      ...myInvitationsQueryOptions(),
+      select,
+    })
+    const [open, setOpen] = useState(false)
+    if (!invitation) return null
+    return (
+      <>
+        <button
+          type="button"
+          className="inline-flex shrink-0 items-center gap-1 rounded border border-amber-500/30 px-1.5 py-0.5 text-xs text-amber-700 hover:bg-amber-500/10 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none dark:text-amber-400"
+          aria-label={`Review pending invitation to ${invitation.resourceName}`}
+          onClick={(event) => {
+            event.stopPropagation()
+            setOpen(true)
+          }}
+        >
+          <Clock3 className="size-3" aria-hidden /> Pending invitation
+        </button>
+        {open ? (
+          <ResourceInvitationDialog
+            invitationId={invitation.id}
+            onClose={() => setOpen(false)}
+          />
+        ) : null}
+      </>
+    )
+  }
+)

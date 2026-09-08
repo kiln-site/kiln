@@ -176,11 +176,11 @@ export function removePlatformAccessEffect(input: {
           yield* transaction.execute(
             `UPDATE ${databaseTable("invitation")}
                 SET revoked_at = CURRENT_TIMESTAMP(3), cancelled_at = CURRENT_TIMESTAMP(3), cancelled_by = ?
-              WHERE email = ?
+              WHERE user_id = ?
                 AND access_type <> 'scoped'
                 AND accepted_at IS NULL
                 AND revoked_at IS NULL`,
-            [input.actingUserId, target.email]
+            [input.actingUserId, target.id]
           )
           yield* advancePlatformAuthorization(
             transaction,
@@ -301,6 +301,148 @@ export function transferInstanceOwnershipEffect(
           }
           return { transferred: true, previousOwnerId: ownerId }
         })
+    )
+  })
+}
+
+interface PlatformInvitationRow extends RowDataPacket {
+  id: string
+  user_id: string | null
+  access_type: "scoped" | "platform_admin" | "relay_creator"
+  accepted_at: Date | null
+  revoked_at: Date | null
+  declined_at: Date | null
+  cancelled_at: Date | null
+  expires_at: Date
+}
+function isPlatformInvitationPending(
+  invitation: PlatformInvitationRow
+): boolean {
+  return (
+    !invitation.accepted_at &&
+    !invitation.revoked_at &&
+    !invitation.declined_at &&
+    !invitation.cancelled_at &&
+    invitation.expires_at.getTime() > Date.now()
+  )
+}
+export function acceptPlatformInvitationEffect(
+  user: AuthenticatedUser,
+  tokenHash: string
+) {
+  return Effect.gen(function* () {
+    const database = yield* Database
+    return yield* database.transaction("access.platform.accept", (tx) =>
+      Effect.gen(function* () {
+        yield* tx.queryRows<PlatformRoleUserRow>(
+          `SELECT * FROM ${databaseTable("user")} WHERE role = 'admin' ORDER BY id FOR UPDATE`
+        )
+        const subjects = yield* tx.queryRows<PlatformRoleUserRow>(
+          `SELECT * FROM ${databaseTable("user")} WHERE id = ? FOR UPDATE`,
+          [user.id]
+        )
+        const subject = subjects[0]
+        if (
+          !subject ||
+          !isAccountEnabled(subject) ||
+          !isAccountVerified(subject)
+        )
+          return yield* Effect.fail(
+            new Error("An enabled, verified account is required")
+          )
+        const rows = yield* tx.queryRows<PlatformInvitationRow>(
+          `SELECT * FROM ${databaseTable("invitation")} WHERE token_hash = ? FOR UPDATE`,
+          [tokenHash]
+        )
+        const current = rows[0]
+        if (
+          !current ||
+          !isPlatformInvitationPending(current) ||
+          current.access_type === "scoped"
+        )
+          return yield* Effect.fail(
+            new Error("This invitation is invalid or has expired")
+          )
+        if (current.user_id !== subject.id)
+          return yield* Effect.fail(
+            new Error("Sign in with the invited account")
+          )
+        const role =
+          current.access_type === "platform_admin"
+            ? "admin"
+            : subject.role === "admin"
+              ? "admin"
+              : "relay_creator"
+        yield* tx.execute(
+          `UPDATE ${databaseTable("user")} SET role = ?, updatedAt = CURRENT_TIMESTAMP(3) WHERE id = ?`,
+          [role, user.id]
+        )
+        yield* tx.execute(
+          `UPDATE ${databaseTable("invitation")} SET accepted_at = CURRENT_TIMESTAMP(3), accepted_by = ?, acceptance_method = 'self' WHERE id = ?`,
+          [user.id, current.id]
+        )
+        yield* tx.execute(
+          `INSERT INTO ${databaseTable("auth_audit")} (user_id, event, metadata) VALUES (?, 'platform.invitation.accepted', ?)`,
+          [
+            user.id,
+            JSON.stringify({
+              actorId: user.id,
+              invitationId: current.id,
+              oldRole: subject.role,
+              role,
+            }),
+          ]
+        )
+        yield* advanceSubjectAcrossEnabledRelaysEffect(tx, user.id, [
+          { kind: "subject_relay" },
+        ])
+      })
+    )
+  })
+}
+export function cancelPlatformInvitationEffect(
+  user: AuthenticatedUser,
+  invitationId: string
+) {
+  return Effect.gen(function* () {
+    const database = yield* Database
+    return yield* database.transaction("access.platform.cancel", (tx) =>
+      Effect.gen(function* () {
+        const admins = yield* tx.queryRows<PlatformRoleUserRow>(
+          `SELECT * FROM ${databaseTable("user")} WHERE role = 'admin' ORDER BY id FOR UPDATE`
+        )
+        if (
+          !user.isDevelopmentBypass &&
+          !admins.some(
+            (admin) =>
+              admin.id === user.id &&
+              isAccountEnabled(admin) &&
+              isAccountVerified(admin)
+          )
+        )
+          return yield* Effect.fail(
+            new Error("Platform administrator required")
+          )
+        const invitations = yield* tx.queryRows<PlatformInvitationRow>(
+          `SELECT * FROM ${databaseTable("invitation")} WHERE id = ? AND relay_id IS NULL AND access_type <> 'scoped' FOR UPDATE`,
+          [invitationId]
+        )
+        if (!invitations[0] || !isPlatformInvitationPending(invitations[0]))
+          return yield* Effect.fail(
+            new Error("This invitation is no longer pending")
+          )
+        yield* tx.execute(
+          `UPDATE ${databaseTable("invitation")} SET revoked_at = CURRENT_TIMESTAMP(3), cancelled_at = CURRENT_TIMESTAMP(3), cancelled_by = ? WHERE id = ?`,
+          [user.id, invitationId]
+        )
+        yield* tx.execute(
+          `INSERT INTO ${databaseTable("auth_audit")} (user_id, event, metadata) VALUES (?, 'platform.invitation.cancelled', ?)`,
+          [
+            invitations[0].user_id,
+            JSON.stringify({ actorId: user.id, invitationId: invitationId }),
+          ]
+        )
+      })
     )
   })
 }

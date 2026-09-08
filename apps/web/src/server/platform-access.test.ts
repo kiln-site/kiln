@@ -199,7 +199,7 @@ describe("platform access changes", () => {
             ({ sql, values }) =>
               sql.includes("kiln_invitation") &&
               sql.includes("access_type <> 'scoped'") &&
-              values[1] === target.email
+              values[1] === target.id
           )
         )
         assert.isFalse(

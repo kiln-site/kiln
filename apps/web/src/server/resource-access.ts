@@ -271,16 +271,20 @@ export const inviteResourceAccess = createServerFn({ method: "POST" })
     const { deliverAccessInvitations } =
       await import("@/lib/access-invitation-delivery")
     await deliverAccessInvitations(
-      result.invitations
-        .filter((item) => !item.existing)
-        .map((item) => ({
-          id: item.id,
-          email: data.email,
-          inviteUrl: item.inviteUrl,
-          resourceName: item.resourceName,
-          scope: item.scope.resourceType,
-          inviterName: user.name,
-        }))
+      result.invitations.flatMap((item) =>
+        item.existing
+          ? []
+          : [
+              {
+                id: item.id,
+                email: data.email,
+                inviteUrl: item.inviteUrl,
+                resourceName: item.resourceName,
+                scope: item.scope.resourceType,
+                inviterName: user.name,
+              },
+            ]
+      )
     )
     return result
   })
@@ -761,28 +765,26 @@ const inheritedPeopleSelectors = new Map(
     return [
       scope,
       {
-        permissions: permissionCatalog
-          .filter(
-            (entry) =>
-              accessPermissionSupported(entry.key, "relay") &&
-              grantsRead({ kind: "permission", key: entry.key })
-          )
-          .map((entry) => entry.key),
-        collections: permissionCollections
-          .filter(
-            (entry) =>
-              entry.scopeTypes.includes("relay") &&
-              grantsRead({ kind: "collection", key: entry.key })
-          )
-          .map((entry) => entry.key),
-        builtins: builtinPermissionPresets
-          .filter((entry) =>
-            expandPermissionSelections(
-              builtinPresetSelections(entry.key, "relay"),
-              "relay"
-            ).includes(`${scope}.read`)
-          )
-          .map((entry) => entry.key),
+        permissions: permissionCatalog.flatMap((entry) =>
+          accessPermissionSupported(entry.key, "relay") &&
+          grantsRead({ kind: "permission", key: entry.key })
+            ? [entry.key]
+            : []
+        ),
+        collections: permissionCollections.flatMap((entry) =>
+          entry.scopeTypes.includes("relay") &&
+          grantsRead({ kind: "collection", key: entry.key })
+            ? [entry.key]
+            : []
+        ),
+        builtins: builtinPermissionPresets.flatMap((entry) =>
+          expandPermissionSelections(
+            builtinPresetSelections(entry.key, "relay"),
+            "relay"
+          ).includes(`${scope}.read`)
+            ? [entry.key]
+            : []
+        ),
       },
     ] as const
   })
@@ -876,14 +878,13 @@ export const getResourceAccess = createServerFn({ method: "GET" })
           ]
         )
       : [[]]
-    const ownAccess = grants
-      .filter(
-        (grant) =>
-          grant.source === "access" &&
-          grant.resourceType === data.resourceType &&
-          grant.resourceId === data.resourceId
-      )
-      .map((grant) => grant.id)
+    const ownAccess = grants.flatMap((grant) =>
+      grant.source === "access" &&
+      grant.resourceType === data.resourceType &&
+      grant.resourceId === data.resourceId
+        ? [grant.id]
+        : []
+    )
     const canReadPresets = permissions.includes("preset.read")
     const [presets] = await databasePool.query<Array<PresetRow>>(
       `SELECT p.*, (SELECT COUNT(*) FROM ${databaseTable("access_preset")} a JOIN ${databaseTable("access_grant")} used ON used.id = a.access_id WHERE a.preset_id = p.id AND used.state <> 'revoked') AS assignment_count FROM ${databaseTable("permission_preset")} p WHERE p.relay_id = ? AND p.resource_type = ? AND p.resource_id = ?${canReadPresets ? "" : ` AND EXISTS (SELECT 1 FROM ${databaseTable("access_preset")} a WHERE a.preset_id = p.id AND a.access_id IN (${ownAccess.length ? ownAccess.map(() => "?").join(",") : "NULL"}))`} ORDER BY p.name, p.id LIMIT 200`,
@@ -952,9 +953,11 @@ export const getResourceAccess = createServerFn({ method: "GET" })
       isPlatformAdmin: admin,
       hasMore: people.length > 100,
       people: people.slice(0, 100).map((person) => {
-        const selections: Array<PermissionSelection> = selected
-          .filter((s) => s.access_id === person.id)
-          .map((s) => ({ kind: s.selection_kind, key: s.selection_key }))
+        const selections: Array<PermissionSelection> = selected.flatMap((s) =>
+          s.access_id === person.id
+            ? [{ kind: s.selection_kind, key: s.selection_key }]
+            : []
+        )
         const assignments = assigned.filter((a) => a.access_id === person.id)
         const presetIds = assignments.flatMap((a) =>
           a.preset_id ? [a.preset_id] : []
@@ -962,11 +965,14 @@ export const getResourceAccess = createServerFn({ method: "GET" })
         const builtinKeys = assignments.flatMap((a) =>
           a.builtin_key ? [a.builtin_key] : []
         )
+        const assignedPresetIds = new Set(presetIds)
         const expanded = [
           ...selections,
-          ...presetSelections
-            .filter((s) => presetIds.includes(s.preset_id))
-            .map((s) => ({ kind: s.selection_kind, key: s.selection_key })),
+          ...presetSelections.flatMap((s) =>
+            assignedPresetIds.has(s.preset_id)
+              ? [{ kind: s.selection_kind, key: s.selection_key }]
+              : []
+          ),
           ...builtinKeys.flatMap((key) =>
             builtinPresetSelections(key, person.resource_type)
           ),
@@ -1005,9 +1011,11 @@ export const getResourceAccess = createServerFn({ method: "GET" })
         assignmentCount: Number(preset.assignment_count),
         createdAt: preset.created_at.toISOString(),
         updatedAt: preset.updated_at.toISOString(),
-        selections: presetSelections
-          .filter((s) => s.preset_id === preset.id)
-          .map((s) => ({ kind: s.selection_kind, key: s.selection_key })),
+        selections: presetSelections.flatMap((s) =>
+          s.preset_id === preset.id
+            ? [{ kind: s.selection_kind, key: s.selection_key }]
+            : []
+        ),
       })),
       defaults: builtinPermissionPresets.map((preset) => ({
         key: preset.key,

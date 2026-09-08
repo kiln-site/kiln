@@ -1,4 +1,8 @@
-import { PendingResourceInvitations } from "@/components/pending-resource-invitations"
+import {
+  PendingResourceInvitations,
+  PendingResourceInvitationBadge,
+  resourceInvitationScopeKey,
+} from "@/components/pending-resource-invitations"
 import * as React from "react"
 import { useDbClient, useLiveQuery } from "@tanstack/react-db"
 import {
@@ -270,9 +274,11 @@ const DatabaseToolbar = React.memo(function DatabaseToolbar({
   return (
     <DataTableToolbar
       actions={
-        <Button disabled={!canCreate} type="button" onClick={onCreate}>
-          <Plus /> Add Database
-        </Button>
+        canCreate ? (
+          <Button type="button" onClick={onCreate}>
+            <Plus /> Add Database
+          </Button>
+        ) : null
       }
       leading={<DatabaseSyncButton relayErrors={relayErrors} />}
       search={{
@@ -382,6 +388,15 @@ const DatabaseTable = React.memo(function DatabaseTable({
     isLoading: result.isLoading,
     retry,
   })
+  const visibleResourceKeys = React.useMemo(
+    () =>
+      new Set(
+        source.rows.map((database) =>
+          resourceInvitationScopeKey(database.relayId, database.id)
+        )
+      ),
+    [source.rows]
+  )
   const [initialTableState] = React.useState(() => ({
     sorting: [{ desc: false, id: "database" }],
   }))
@@ -422,19 +437,26 @@ const DatabaseTable = React.memo(function DatabaseTable({
         cell: ({ row }) => {
           const database = row.original
           return (
-            <InstanceName
-              instance={{
-                id: database.id,
-                inventoryStatus: database.inventoryStatus,
-                kind: "database",
-                observedState: database.observedState,
-                relayId: database.relayId,
-              }}
-              live={false}
-              name={database.name}
-              meta={database.shortId}
-              metaClassName="font-mono"
-            />
+            <div className="flex min-w-0 flex-col items-start gap-1">
+              <InstanceName
+                instance={{
+                  id: database.id,
+                  inventoryStatus: database.inventoryStatus,
+                  kind: "database",
+                  observedState: database.observedState,
+                  relayId: database.relayId,
+                }}
+                live={false}
+                name={database.name}
+                meta={database.shortId}
+                metaClassName="font-mono"
+              />
+              <PendingResourceInvitationBadge
+                resourceType="database"
+                relayId={database.relayId}
+                resourceId={database.id}
+              />
+            </div>
           )
         },
         meta: dataTableColumnMeta({
@@ -501,6 +523,7 @@ const DatabaseTable = React.memo(function DatabaseTable({
       leadingBody={
         <PendingResourceInvitations
           resourceType="database"
+          visibleResourceKeys={visibleResourceKeys}
           searchStore={searchStore}
         />
       }

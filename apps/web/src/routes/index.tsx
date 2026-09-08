@@ -5,7 +5,7 @@ import { z } from "zod"
 
 import { AuthPage } from "@/components/auth-page"
 import { recoverPromise } from "@/effect/promise"
-import { inviteTokenFromRedirect } from "@/lib/invitation-auth"
+import { invitationReferenceFromRedirect } from "@/lib/invitation-auth"
 import { pageTitle } from "@/lib/page-title"
 import {
   accessCapabilitiesQueryOptions,
@@ -31,10 +31,10 @@ export const Route = createFileRoute("/")({
   beforeLoad: async ({ context, search }) => {
     const state = await getAuthState()
     if (!state.user) {
-      const token = inviteTokenFromRedirect(search.redirect)
-      const invitation = token
+      const reference = invitationReferenceFromRedirect(search.redirect)
+      const invitation = reference
         ? await recoverPromise(
-            () => getInvitationPreview({ data: { token } }),
+            () => getInvitationPreview({ data: reference }),
             () => null
           )
         : null
@@ -144,12 +144,12 @@ function LoginRoute() {
       developmentBypassEnabled={developmentBypassEnabled}
       emailDeliveryEnabled={emailDeliveryEnabled}
       initialEmail={invitationEmail ?? search.email}
-      lockedEmail={invitationEmail}
+      lockedEmail={invitationSignup ? invitationEmail : undefined}
+      initialMode={invitationSignup ? "claim" : undefined}
       forgotPassword={Boolean(search.forgot)}
       redirectPath={search.redirect}
       setupRequired={setupRequired}
       signupEnabled={signupEnabled || invitationSignup}
-      startWithSignup={invitationSignup}
       verified={Boolean(search.verified)}
     />
   )
