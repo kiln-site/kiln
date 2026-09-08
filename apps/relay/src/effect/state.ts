@@ -914,6 +914,39 @@ const migrations = SqliteMigrator.fromRecord({
       ON relay_browser_file_replays (expires_at)
     `
   }),
+  "15_granular_file_mutation_actions": Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient
+    // Before action-specific dispatch, write admitted delete and rename through
+    // the shared mutation endpoint. Snapshot those rights once; new policies stay granular.
+    yield* sql`
+      UPDATE relay_clients
+         SET actions_json = json_insert(actions_json, '$[#]', 'instance.files.delete')
+       WHERE role = 'custom'
+         AND EXISTS (SELECT 1 FROM json_each(actions_json) WHERE value = 'instance.files.write')
+         AND NOT EXISTS (SELECT 1 FROM json_each(actions_json) WHERE value = 'instance.files.delete')
+    `
+    yield* sql`
+      UPDATE relay_clients
+         SET actions_json = json_insert(actions_json, '$[#]', 'instance.files.rename')
+       WHERE role = 'custom'
+         AND EXISTS (SELECT 1 FROM json_each(actions_json) WHERE value = 'instance.files.write')
+         AND NOT EXISTS (SELECT 1 FROM json_each(actions_json) WHERE value = 'instance.files.rename')
+    `
+    yield* sql`
+      UPDATE relay_invitations
+         SET actions_json = json_insert(actions_json, '$[#]', 'instance.files.delete')
+       WHERE role = 'custom'
+         AND EXISTS (SELECT 1 FROM json_each(actions_json) WHERE value = 'instance.files.write')
+         AND NOT EXISTS (SELECT 1 FROM json_each(actions_json) WHERE value = 'instance.files.delete')
+    `
+    yield* sql`
+      UPDATE relay_invitations
+         SET actions_json = json_insert(actions_json, '$[#]', 'instance.files.rename')
+       WHERE role = 'custom'
+         AND EXISTS (SELECT 1 FROM json_each(actions_json) WHERE value = 'instance.files.write')
+         AND NOT EXISTS (SELECT 1 FROM json_each(actions_json) WHERE value = 'instance.files.rename')
+    `
+  }),
 })
 
 export function scrubBackupTaskInputJson(inputJson: string): string {

@@ -61,14 +61,14 @@ export const issueBrowserCapabilities = createServerFn({ method: "POST" })
   .validator(browserCapabilityBatchSchema)
   .handler(async ({ data }) => {
     const [
-      { requireAuthenticatedIdentity },
+      { requireEligibleResourceIdentity },
       { issueBrowserCapabilitiesForRequest },
     ] = await Promise.all([
       import("@/server/auth"),
       import("@/server/relay-capability-service"),
     ])
     return issueBrowserCapabilitiesForRequest({
-      authenticate: requireAuthenticatedIdentity,
+      authenticate: requireEligibleResourceIdentity,
       instanceId: data.instanceId,
       publicKeyJwk: data.publicKeyJwk,
       relayId: data.relayId,
@@ -79,13 +79,15 @@ export const issueBrowserCapabilities = createServerFn({ method: "POST" })
 export const issueConsoleCapability = createServerFn({ method: "POST" })
   .validator(browserCapabilityInputSchema)
   .handler(async ({ data }) => {
-    const [{ requireAuthenticatedUser }, { issueConsoleCapabilityForRequest }] =
-      await Promise.all([
-        import("@/server/auth"),
-        import("@/server/relay-capability-service"),
-      ])
+    const [
+      { requireEligibleResourceUser },
+      { issueConsoleCapabilityForRequest },
+    ] = await Promise.all([
+      import("@/server/auth"),
+      import("@/server/relay-capability-service"),
+    ])
     return issueConsoleCapabilityForRequest({
-      authenticate: requireAuthenticatedUser,
+      authenticate: requireEligibleResourceUser,
       instanceId: data.instanceId,
       publicKeyJwk: data.publicKeyJwk,
       relayId: data.relayId,
@@ -97,14 +99,14 @@ export const issueResourceCapability = createServerFn({ method: "POST" })
   .validator(browserCapabilityInputSchema)
   .handler(async ({ data }) => {
     const [
-      { requireAuthenticatedUser },
+      { requireEligibleResourceUser },
       { issueResourceCapabilityForRequest },
     ] = await Promise.all([
       import("@/server/auth"),
       import("@/server/relay-capability-service"),
     ])
     return issueResourceCapabilityForRequest({
-      authenticate: requireAuthenticatedUser,
+      authenticate: requireEligibleResourceUser,
       instanceId: data.instanceId,
       publicKeyJwk: data.publicKeyJwk,
       relayId: data.relayId,
@@ -115,7 +117,7 @@ export const issueFileCapability = createServerFn({ method: "POST" })
   .validator(fileCapabilityInputSchema)
   .handler(async ({ data }) => {
     const [
-      { requireAuthenticatedIdentity },
+      { requireEligibleResourceIdentity },
       { issueFileCapabilityForRequest },
     ] = await Promise.all([
       import("@/server/auth"),
@@ -123,7 +125,7 @@ export const issueFileCapability = createServerFn({ method: "POST" })
     ])
     return issueFileCapabilityForRequest({
       action: data.action,
-      authenticate: requireAuthenticatedIdentity,
+      authenticate: requireEligibleResourceIdentity,
       instanceId: data.instanceId,
       path: data.path,
       publicKeyJwk: data.publicKeyJwk,

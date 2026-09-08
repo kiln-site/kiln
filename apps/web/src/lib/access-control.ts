@@ -1,6 +1,8 @@
 import type { RowDataPacket } from "mysql2/promise"
 import { Effect } from "effect"
 
+import { isAccountEnabled, isAccountVerified } from "@/lib/account-policy"
+import { loadResourceGrantsEffect } from "@/lib/resource-permissions"
 import type { AuthenticatedUser } from "@/lib/auth-session"
 import { databaseTable } from "@/lib/database-config"
 import { Database } from "@/effect/database"
@@ -13,18 +15,9 @@ import type {
   PlatformPermission,
 } from "@/lib/permissions"
 import {
-  isAccessRole,
   platformRoleHasPermission,
-  roleHasPermission,
+  grantHasPermission,
 } from "@/lib/permissions"
-
-interface GrantRow extends RowDataPacket {
-  id: string
-  relay_id: string
-  resource_type: "database" | "instance" | "relay"
-  resource_id: string
-  role: string
-}
 
 interface InstanceOwnerRow extends RowDataPacket {
   owner_id: string | null
@@ -40,8 +33,11 @@ interface DeletedInstanceGrantRow extends RowDataPacket {
 }
 
 interface FreshAuthorizationUserRow extends RowDataPacket {
-  ban_expires: Date | null
-  banned: number | null
+  status: "enabled" | "disabled"
+  statusExpiresAt: Date | null
+  emailVerifiedAt: Date | null
+  manuallyVerifiedAt: Date | null
+  legacyVerificationRecordedAt: Date | null
   revision: string
   role: string | null
   session_id: string | null
@@ -53,6 +49,8 @@ export interface AccessGrant {
   resourceId: string
   resourceType: "database" | "instance" | "relay"
   role: AccessRole
+  permissions?: Array<AccessPermission>
+  source?: "access" | "owner"
 }
 
 export function deduplicateEffectiveInstanceGrants<
@@ -236,32 +234,7 @@ export async function listUserGrants(
   )
 }
 
-export const listUserGrantsEffect = Effect.fn("access.listUserGrants")(
-  function* (userId: string, relayId?: string) {
-    const database = yield* Database
-    const rows = yield* database.queryRows<GrantRow>(
-      "access_grants",
-      `SELECT id, relay_id, resource_type, resource_id, role
-         FROM ${databaseTable("access_grant")}
-        WHERE user_id = ?${relayId ? " AND relay_id = ?" : ""}
-        ORDER BY created_at ASC`,
-      relayId ? [userId, relayId] : [userId]
-    )
-    return rows.flatMap((row) =>
-      isAccessRole(row.role)
-        ? [
-            {
-              id: row.id,
-              relayId: row.relay_id,
-              resourceId: row.resource_id,
-              resourceType: row.resource_type,
-              role: row.role,
-            },
-          ]
-        : []
-    )
-  }
-)
+export const listUserGrantsEffect = loadResourceGrantsEffect
 
 export function isPlatformAdmin(user: AuthenticatedUser): boolean {
   return user.isDevelopmentBypass || user.role === "admin"
@@ -292,7 +265,10 @@ export function hasPlatformPermission(
   permission: PlatformPermission
 ): boolean {
   return (
-    user.isDevelopmentBypass || platformRoleHasPermission(user.role, permission)
+    isAccountEnabled(user) &&
+    isAccountVerified(user) &&
+    (user.isDevelopmentBypass ||
+      platformRoleHasPermission(user.role, permission))
   )
 }
 
@@ -303,10 +279,12 @@ export async function hasRelayPermission(input: {
   databaseId?: string
   instanceId?: string
 }): Promise<boolean> {
+  if (!isAccountEnabled(input.user) || !isAccountVerified(input.user))
+    return false
   if (isPlatformAdmin(input.user)) return true
   const grants = await listUserGrants(input.user.id, input.relayId)
   return grants.some((grant) => {
-    if (!roleHasPermission(grant.role, input.permission)) return false
+    if (!grantHasPermission(grant, input.permission)) return false
     if (grant.resourceType === "relay") return true
     return Boolean(
       (grant.resourceType === "instance" &&
@@ -361,11 +339,29 @@ export const requireRelayPermissionsEffect = Effect.fn(
       message: "At least one permission is required",
     })
   }
+  if (!isAccountEnabled(input.user) || !isAccountVerified(input.user)) {
+    return yield* PermissionDeniedError.make({
+      message: "Your account cannot access resources",
+    })
+  }
   if (isPlatformAdmin(input.user)) return
-  const grants = yield* listUserGrantsEffect(input.user.id, input.relayId)
+  const grants = yield* listUserGrantsEffect(
+    input.user.id,
+    input.relayId,
+    undefined,
+    {
+      relayId: input.relayId,
+      resourceType: input.instanceId
+        ? "instance"
+        : input.databaseId
+          ? "database"
+          : "relay",
+      resourceId: input.instanceId ?? input.databaseId ?? input.relayId,
+    }
+  )
   const allowed = input.permissions.every((permission) =>
     grants.some((grant) => {
-      if (!roleHasPermission(grant.role, permission)) return false
+      if (!grantHasPermission(grant, permission)) return false
       if (grant.resourceType === "relay") return true
       return Boolean(
         (grant.resourceType === "instance" &&
@@ -404,8 +400,9 @@ export const refreshRelayAuthorizationUserEffect = Effect.fn(
   const rows = yield* database.queryRows<FreshAuthorizationUserRow>(
     "access.refreshRelayAuthorizationUser",
     `SELECT auth_user.role,
-            auth_user.banned,
-            auth_user.banExpires AS ban_expires,
+            auth_user.status, auth_user.statusExpiresAt,
+            auth_user.emailVerifiedAt, auth_user.manuallyVerifiedAt,
+            auth_user.legacyVerificationRecordedAt,
             CAST(COALESCE(auth_subject.revision, 0) AS CHAR) AS revision,
             ${
               input.loginSession?.kind === "better_auth"
@@ -438,12 +435,27 @@ export const refreshRelayAuthorizationUserEffect = Effect.fn(
       : [input.user.id]
   )
   const current = rows[0]
-  const activelyBanned =
-    current?.banned === 1 &&
-    (!current.ban_expires || current.ban_expires.getTime() > Date.now())
+  const freshUser = current
+    ? {
+        ...input.user,
+        status:
+          current.status === "disabled" &&
+          (!current.statusExpiresAt ||
+            current.statusExpiresAt.getTime() > Date.now())
+            ? ("disabled" as const)
+            : ("enabled" as const),
+        statusExpiresAt: current.statusExpiresAt?.toISOString() ?? null,
+        emailVerifiedAt: current.emailVerifiedAt?.toISOString() ?? null,
+        manuallyVerifiedAt: current.manuallyVerifiedAt?.toISOString() ?? null,
+        legacyVerificationRecordedAt:
+          current.legacyVerificationRecordedAt?.toISOString() ?? null,
+      }
+    : null
   if (
     !current ||
-    activelyBanned ||
+    !freshUser ||
+    !isAccountEnabled(freshUser) ||
+    !isAccountVerified(freshUser) ||
     (input.loginSession && current.session_id !== input.loginSession.id)
   ) {
     return yield* PermissionDeniedError.make({
@@ -460,7 +472,7 @@ export const refreshRelayAuthorizationUserEffect = Effect.fn(
       new Error("Authorization revision is outside the safe integer range")
     )
   }
-  return { revision, user: { ...input.user, role } }
+  return { revision, user: { ...freshUser, role } }
 })
 
 export async function allowedInstanceIds(
@@ -480,13 +492,15 @@ export const allowedInstanceIdsEffect = Effect.fn("access.allowedInstanceIds")(
     relayId: string,
     instanceIds: Array<string>
   ) {
+    if (!isAccountEnabled(user) || !isAccountVerified(user))
+      return new Set<string>()
     if (isPlatformAdmin(user)) return new Set(instanceIds)
     const grants = yield* listUserGrantsEffect(user.id, relayId)
     if (
       grants.some(
         (grant) =>
           grant.resourceType === "relay" &&
-          roleHasPermission(grant.role, "instance.read")
+          grantHasPermission(grant, "instance.read")
       )
     ) {
       return new Set(instanceIds)
@@ -495,7 +509,7 @@ export const allowedInstanceIdsEffect = Effect.fn("access.allowedInstanceIds")(
     for (const grant of grants) {
       if (
         grant.resourceType === "instance" &&
-        roleHasPermission(grant.role, "instance.read")
+        grantHasPermission(grant, "instance.read")
       ) {
         allowedInstanceIds.add(grant.resourceId)
       }

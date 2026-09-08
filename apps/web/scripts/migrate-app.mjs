@@ -3,6 +3,12 @@ import { readFile } from "node:fs/promises"
 import mysql from "mysql2/promise"
 
 import {
+  ensureAccessModelSchema,
+  backfillAccessModel,
+  projectLegacyDatabasePermissions,
+} from "./migrate-access.mjs"
+
+import {
   databaseConnectionConfig,
   databaseTable,
   databaseTableName,
@@ -19,6 +25,7 @@ const connection = await mysql.createConnection({
 })
 
 try {
+  await connection.query("SET SESSION time_zone = '+00:00'")
   await connection.query(sql)
   await ensureFileActivitySchema(connection)
   await ensureInstanceOwnershipSchema(connection)
@@ -28,6 +35,12 @@ try {
   await ensureBackupSchema(connection)
   await ensureScheduleSchema(connection)
   await ensureAuthorizationSchema(connection)
+  await ensureAccessModelSchema(connection)
+  console.log("Access migration:", await backfillAccessModel(connection))
+  console.log(
+    "Database permission projection:",
+    await projectLegacyDatabasePermissions(connection)
+  )
   console.log("Kiln application tables are up to date")
 } finally {
   await connection.end()

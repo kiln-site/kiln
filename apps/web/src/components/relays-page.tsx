@@ -1,3 +1,4 @@
+import { PendingResourceInvitations } from "@/components/pending-resource-invitations"
 import * as React from "react"
 import { useLiveQuery } from "@tanstack/react-db"
 import {
@@ -316,6 +317,11 @@ const RelayAddButton = React.memo(function RelayAddButton({
 }: {
   onAdd: () => void
 }) {
+  const { data: canAddRelay } = useSuspenseQuery({
+    ...accessCapabilitiesQueryOptions(),
+    select: selectCanAddRelay,
+  })
+  if (!canAddRelay) return null
   return (
     <Button type="button" onClick={onAdd}>
       <Plus /> Add Relay
@@ -712,6 +718,12 @@ function RelayTable({
 
   return (
     <DataTable
+      leadingBody={
+        <PendingResourceInvitations
+          resourceType="relay"
+          searchStore={searchStore}
+        />
+      }
       definition={definition}
       emptyState={({ searchActive }) => (
         <EmptyRelayTable searchActive={searchActive} onAdd={onAdd} />
@@ -1117,10 +1129,14 @@ function EmptyRelayTable({
   searchActive: boolean
   onAdd: () => void
 }) {
+  const { data: canAddRelay } = useSuspenseQuery({
+    ...accessCapabilitiesQueryOptions(),
+    select: selectCanAddRelay,
+  })
   return (
     <DataTableEmptyState
       action={
-        !searchActive ? (
+        !searchActive && canAddRelay ? (
           <Button type="button" size="sm" onClick={onAdd}>
             <Plus /> Add Relay
           </Button>
@@ -1129,7 +1145,9 @@ function EmptyRelayTable({
       description={
         searchActive
           ? "Try a Relay name, ID, host, architecture, version, owner, or status."
-          : "Pair the first Relay to start managing game servers from Hearth."
+          : canAddRelay
+            ? "Pair the first Relay to start managing game servers from Hearth."
+            : "No Relays have been assigned to your account."
       }
       icon={<ServerCog className="size-6 text-muted-foreground/45" />}
       title={searchActive ? "No Relays match your search" : "No saved Relays"}
@@ -2050,4 +2068,13 @@ function relayResumeErrorToastId(relayId: string): string {
 
 function messageFrom(cause: unknown, fallback: string): string {
   return cause instanceof Error ? cause.message : fallback
+}
+
+function selectCanAddRelay(capabilities: {
+  isPlatformAdmin: boolean
+  user: { role: string | null }
+}): boolean {
+  return (
+    capabilities.isPlatformAdmin || capabilities.user.role === "relay_creator"
+  )
 }

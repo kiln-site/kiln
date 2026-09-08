@@ -17,10 +17,11 @@ import {
 } from "@/lib/activity"
 import type { ActivityScope } from "@/lib/activity"
 import { isPlatformAdmin, listUserGrants } from "@/lib/access-control"
+import { requireEligibleAccount } from "@/lib/account-policy"
 import type { AuthenticatedUser } from "@/lib/auth-session"
 import { databasePool } from "@/lib/database"
 import { databaseTable } from "@/lib/database-config"
-import { roleHasPermission } from "@/lib/permissions"
+import { grantHasPermission } from "@/lib/permissions"
 import { listPersistedRelays } from "@/lib/relay-registry"
 
 interface InstanceRow extends RowDataPacket {
@@ -47,6 +48,7 @@ export async function getActivityForUser(
   user: AuthenticatedUser,
   data: { from?: string; limit?: number; to?: string }
 ) {
+  requireEligibleAccount(user)
   const relays = (await listPersistedRelays()).filter((relay) => relay.enabled)
   const platformAdmin = isPlatformAdmin(user)
   const grants = platformAdmin ? [] : await listUserGrants(user.id)
@@ -62,8 +64,7 @@ export async function getActivityForUser(
     }
     const relayGrants = grants.filter(
       (grant) =>
-        grant.relayId === relay.id &&
-        roleHasPermission(grant.role, "instance.read")
+        grant.relayId === relay.id && grantHasPermission(grant, "instance.read")
     )
     const allInstances = relayGrants.some(
       (grant) => grant.resourceType === "relay"

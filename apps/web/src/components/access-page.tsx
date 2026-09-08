@@ -1,2080 +1,1180 @@
-import * as React from "react"
-import {
-  useMutation,
-  useQueryClient,
-  useSuspenseQuery,
-} from "@tanstack/react-query"
-import { Link } from "@tanstack/react-router"
-import { Effect } from "effect"
-import {
-  Activity,
-  ChevronDown,
-  Clock3,
-  Database,
-  ListFilter,
-  LoaderCircle,
-  Network,
-  Plus,
-  RefreshCw,
-  Search,
-  Server,
-  ShieldCheck,
-  Trash2,
-  UserRound,
-  Users,
-  X,
-} from "lucide-react"
-
-import { Badge } from "@workspace/ui/components/badge"
+import { memo, useState, useCallback, useMemo } from "react"
+import { Effect, Result } from "effect"
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
+import type { PermissionSelection } from "@workspace/contracts"
 import { Button } from "@workspace/ui/components/button"
+import { Input } from "@workspace/ui/components/input"
+import { Badge } from "@workspace/ui/components/badge"
 import {
   Dialog,
   DialogContent,
   DialogDescription,
-  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from "@workspace/ui/components/dialog"
-import { Input } from "@workspace/ui/components/input"
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@workspace/ui/components/select"
-import {
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-} from "@workspace/ui/components/popover"
 import { showToast } from "@workspace/ui/components/sonner"
+import { AdminUsers } from "@/components/admin-users"
+import { PermissionEditor } from "@/components/permission-editor"
+import { transferInstanceOwnership } from "@/server/access"
+import { accessCapabilitiesQueryOptions } from "@/lib/query-options"
+import type { ResourceScope } from "@/lib/resource-permissions"
 import {
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from "@workspace/ui/components/tooltip"
+  getAccessResources,
+  getResourceAccess,
+  inviteResourceAccess,
+  updateResourceAccess,
+  savePermissionPreset,
+  deletePermissionPreset,
+  decideResourceInvitation,
+} from "@/server/resource-access"
 
-import {
-  ServerPickerList,
-  serverPickerOptionKey,
-} from "@/components/server-picker-list"
-import type { ServerPickerOption } from "@/components/server-picker-list"
-import {
-  WorkspaceDataTable,
-  WorkspaceTableCell,
-  WorkspaceTableHead,
-  WorkspaceTableHeading,
-  createWorkspaceTableSearchStore,
-  useWorkspaceTableSearchInput,
-} from "@/components/workspace-data-table"
-import type { WorkspaceTableSearchStore } from "@/components/workspace-data-table"
-import type { AccessRole } from "@/lib/permissions"
-import { accessRoleDetails, accessRoles, isAccessRole } from "@/lib/permissions"
-import {
-  accessCapabilitiesQueryOptions,
-  accessOverviewQueryOptions,
-  managedDatabaseDirectoryQueryOptions,
-  queryKeys,
-} from "@/lib/query-options"
-import {
-  getAccessOverview,
-  grantOrInviteAccess,
-  removeAccessGrant,
-  removePlatformAccess,
-  revokeAccessInvitation,
-  updateAccessGrant,
-} from "@/server/access"
-import type { getManagedDatabaseDirectory } from "@/server/databases"
+type ScopeAccess = Awaited<ReturnType<typeof getResourceAccess>>
+type Person = ScopeAccess["people"][number]
+type Preset = ScopeAccess["presets"][number]
+type Resource = Awaited<
+  ReturnType<typeof getAccessResources>
+>["resources"][number]
+const EMPTY_RESOURCES: Array<Resource> = []
+const errorToast = (error: Error) =>
+  showToast({ type: "error", message: error.message })
 
-type AccessOverview = Awaited<ReturnType<typeof getAccessOverview>>
-type AccessGrant = AccessOverview["grants"][number]
-type AccessOwner = AccessOverview["owners"][number]
-type ManagedDatabaseDirectory = Awaited<
-  ReturnType<typeof getManagedDatabaseDirectory>
->
-type AccessType = "platform_admin" | "relay_creator" | "scoped"
-type PlatformAccessType = Exclude<AccessType, "scoped">
-type AccessDirectoryRole = AccessRole | PlatformAccessType
-type AccessDirectoryResourceType =
-  | "database"
-  | "instance"
-  | "platform"
-  | "relay"
-
-interface AccessAssignmentDraft {
-  accessType: AccessType
-  role: AccessRole
-  targetKey: string
-}
-
-interface AccessTarget extends ServerPickerOption {
-  databaseId: string | null
-  instanceId: string | null
-  resourceName: string
-}
-
-interface AccessPageInstance {
-  id: string
-  name: string
-  relayId: string
-}
-
-interface AccessDirectoryRowBase {
-  createdAt: string
-  email: string
-  key: string
-  relayId: string
-  relayName: string
-  resourceId: string
-  resourceName: string
-  resourceType: AccessDirectoryResourceType
-  role: AccessDirectoryRole
-  userId: string
-}
-
-interface ScopedAccessDirectoryRow extends AccessDirectoryRowBase {
-  accessType: "scoped"
-  grant: AccessGrant | null
-  instanceId: string | null
-  instanceOwner: boolean
-  resourceType: "database" | "instance" | "relay"
-  role: AccessRole
-}
-
-interface PlatformAccessDirectoryRow extends AccessDirectoryRowBase {
-  accessType: PlatformAccessType
-  grant: null
-  instanceId: null
-  instanceOwner: false
-  resourceType: "platform"
-  role: PlatformAccessType
-}
-
-type AccessDirectoryRow = PlatformAccessDirectoryRow | ScopedAccessDirectoryRow
-
-interface ScopedRemoveTarget {
-  accessType: "scoped"
-  email: string
-  grantId: string
-  relayId: string
-  resourceName: string
-}
-
-interface PlatformRemoveTarget {
-  accessType: PlatformAccessType
-  email: string
-  userId: string
-}
-
-type RemoveTarget = PlatformRemoveTarget | ScopedRemoveTarget
-
-interface AccessFilters {
-  relayId: string
-  resourceType: "" | AccessDirectoryResourceType
-  role: "" | AccessDirectoryRole
-}
-
-const emptyAccessFilters: AccessFilters = {
-  relayId: "",
-  resourceType: "",
-  role: "",
-}
-
-const invitationExpiryFormatter = new Intl.DateTimeFormat(undefined, {
-  dateStyle: "medium",
-  timeZone: "UTC",
-})
-
-export function AccessPage({
-  instances,
-}: {
-  instances: Array<AccessPageInstance>
-}) {
-  const queryClient = useQueryClient()
-  const { data: overview } = useSuspenseQuery(accessOverviewQueryOptions())
-  const { data: capabilities } = useSuspenseQuery(
-    accessCapabilitiesQueryOptions()
-  )
-  const { data: databases } = useSuspenseQuery(
-    managedDatabaseDirectoryQueryOptions()
-  )
-  const [searchStore] = React.useState(createWorkspaceTableSearchStore)
-  const [addOpen, setAddOpen] = React.useState(false)
-  const [pendingOpen, setPendingOpen] = React.useState(false)
-  const [filters, setFilters] =
-    React.useState<AccessFilters>(emptyAccessFilters)
-  const [removeTarget, setRemoveTarget] = React.useState<RemoveTarget | null>(
-    null
-  )
-  const ownerRelayIds = React.useMemo(
-    () => new Set(overview.ownerRelayIds),
-    [overview.ownerRelayIds]
-  )
-  const targets = React.useMemo(
-    () => accessTargets(overview, instances, databases),
-    [databases, instances, overview]
-  )
-  const rows = React.useMemo(
-    () => accessDirectoryRows(overview, instances, databases),
-    [databases, instances, overview]
-  )
-  const platformAdminIds = overview.platformUsers.flatMap((platformUser) =>
-    platformUser.accessType === "platform_admin" ? [platformUser.id] : []
-  )
-  const solePlatformAdminId =
-    platformAdminIds.length === 1 ? platformAdminIds[0] : undefined
-  const filteredRows = React.useMemo(
-    () =>
-      rows.filter(
-        (row) =>
-          (!filters.relayId || row.relayId === filters.relayId) &&
-          (!filters.resourceType ||
-            row.resourceType === filters.resourceType) &&
-          (!filters.role || row.role === filters.role)
-      ),
-    [filters, rows]
-  )
-  const activeFilterCount =
-    Number(Boolean(filters.relayId)) +
-    Number(Boolean(filters.resourceType)) +
-    Number(Boolean(filters.role))
-  const updateFilters = React.useCallback(
-    (change: Partial<AccessFilters>) =>
-      setFilters((current) => ({ ...current, ...change })),
-    []
-  )
-  const openAddDialog = React.useCallback(() => setAddOpen(true), [])
-  const openPendingDialog = React.useCallback(() => setPendingOpen(true), [])
-  const completeAddUser = React.useCallback(
-    (result: Awaited<ReturnType<typeof grantOrInviteAccess>>) => {
-      setAddOpen(false)
-      showAccessAssignmentToast(result)
-      void invalidateAccessQueries(queryClient)
-    },
-    [queryClient]
-  )
-
-  const updateGrantMutation = useMutation({
-    mutationFn: updateAccessGrant,
-    onSuccess: () => invalidateAccessQueries(queryClient),
+export function AccessPage() {
+  const { data: capabilities } = useQuery(accessCapabilitiesQueryOptions())
+  const [scope, setScope] = useState<Resource | null>(null)
+  const [search, setSearch] = useState("")
+  const [offset, setOffset] = useState(0)
+  const resources = useQuery({
+    queryKey: ["access-resources", search, offset],
+    queryFn: () => getAccessResources({ data: { search, offset } }),
   })
-  const updateGrant = updateGrantMutation.mutateAsync
-  const removeGrantMutation = useMutation({
-    mutationFn: removeAccessGrant,
-    onSuccess: async () => {
-      setRemoveTarget(null)
-      showToast({ message: "Access removed", type: "success" })
-      await invalidateAccessQueries(queryClient)
-    },
-    onError: (cause) =>
-      showToast({
-        message: errorMessage(cause, "Could not remove access"),
-        type: "error",
-      }),
-  })
-  const removePlatformMutation = useMutation({
-    mutationFn: removePlatformAccess,
-    onSuccess: async () => {
-      setRemoveTarget(null)
-      showToast({ message: "Platform access removed", type: "success" })
-      await invalidateAccessQueries(queryClient)
-    },
-    onError: (cause) =>
-      showToast({
-        message: errorMessage(cause, "Could not remove platform access"),
-        type: "error",
-      }),
-  })
-  const revokeInvitationMutation = useMutation({
-    mutationFn: revokeAccessInvitation,
-    onSuccess: async () => {
-      showToast({ message: "Invitation revoked", type: "success" })
-      await invalidateAccessQueries(queryClient)
-    },
-    onError: (cause) =>
-      showToast({
-        message: errorMessage(cause, "Could not revoke invitation"),
-        type: "error",
-      }),
-  })
-
-  const changeRole = React.useCallback(
-    async (grant: AccessGrant, role: AccessRole) => {
-      await Effect.runPromise(
-        Effect.tryPromise({
-          try: () =>
-            updateGrant({
-              data: { id: grant.id, relayId: grant.relayId, role },
-            }),
-          catch: (cause) => cause,
-        }).pipe(
-          Effect.catch((cause) =>
-            Effect.sync(() =>
-              showToast({
-                message: errorMessage(cause, "Could not update access"),
-                type: "error",
-              })
-            )
-          )
-        )
-      )
-    },
-    [updateGrant]
-  )
-  const selectRemoveTarget = React.useCallback((row: AccessDirectoryRow) => {
-    if (row.accessType !== "scoped") {
-      setRemoveTarget({
-        accessType: row.accessType,
-        email: row.email,
-        userId: row.userId,
-      })
-      return
-    }
-    if (!row.grant) return
-    setRemoveTarget({
-      accessType: "scoped",
-      email: row.email,
-      grantId: row.grant.id,
-      relayId: row.relayId,
-      resourceName: row.resourceName,
-    })
-  }, [])
-  const changeRowRole = React.useCallback(
-    (row: AccessDirectoryRow, role: AccessRole) => {
-      if (row.grant) void changeRole(row.grant, role)
-    },
-    [changeRole]
-  )
-
   return (
-    <div className="mx-auto w-full max-w-[90rem] px-3 pt-4 pb-10 sm:px-5">
-      <section
-        data-slot="access-workspace"
-        className="overflow-hidden rounded-xl border bg-card/45 [contain:paint]"
-      >
-        <AccessToolbar
-          activeFilterCount={activeFilterCount}
-          filters={filters}
-          invitationCount={overview.invitations.length}
-          platformAccessVisible={capabilities.isPlatformAdmin}
-          relays={overview.relays}
-          searchStore={searchStore}
-          onAdd={openAddDialog}
-          onFiltersChange={updateFilters}
-          onPending={openPendingDialog}
-        />
-        <AccessDirectoryTable
-          filtersActive={activeFilterCount > 0}
-          ownerRelayIds={ownerRelayIds}
-          solePlatformAdminId={solePlatformAdminId}
-          pendingGrantId={
-            updateGrantMutation.isPending
-              ? updateGrantMutation.variables?.data.id
-              : undefined
-          }
-          rows={filteredRows}
-          searchStore={searchStore}
-          onRemove={selectRemoveTarget}
-          onRoleChange={changeRowRole}
-        />
-      </section>
-
-      {pendingOpen ? (
-        <PendingInvitationsDialog
-          open
-          databases={databases}
-          invitations={overview.invitations}
-          instances={instances}
-          ownerRelayIds={ownerRelayIds}
-          pendingId={
-            revokeInvitationMutation.isPending
-              ? revokeInvitationMutation.variables?.data.id
-              : undefined
-          }
-          onOpenChange={setPendingOpen}
-          onRevoke={(id, relayId) => {
-            revokeInvitationMutation.mutate({ data: { id, relayId } })
+    <div className="mx-auto w-full max-w-7xl space-y-8 p-4 md:p-6">
+      <header>
+        <h1 className="text-2xl font-semibold">Users & access</h1>
+        <p className="mt-1 text-sm text-muted-foreground">
+          Manage accounts, invitations, and the permissions people have on each
+          resource.
+        </p>
+      </header>
+      {capabilities?.user.role === "admin" ||
+      capabilities?.user.isDevelopmentBypass ? (
+        <AdminUsers />
+      ) : null}
+      <section className="space-y-4">
+        <header>
+          <h2 className="text-lg font-semibold">Resource access</h2>
+          <p className="text-sm text-muted-foreground">
+            Presets belong to a resource. Updating one applies to everyone
+            assigned to it.
+          </p>
+        </header>
+        <ResourcePicker
+          resources={resources.data?.resources ?? EMPTY_RESOURCES}
+          selected={scope}
+          onSelect={setScope}
+          onSearch={(value) => {
+            setSearch(value)
+            setOffset(0)
           }}
         />
-      ) : null}
-
-      {addOpen ? (
-        <AddUserDialog
-          open
-          canAssignPlatformAccess={capabilities.isPlatformAdmin}
-          ownerRelayIds={ownerRelayIds}
-          targets={targets}
-          onComplete={completeAddUser}
-          onOpenChange={setAddOpen}
-        />
-      ) : null}
-
-      <RemoveAccessDialog
-        pending={
-          removeGrantMutation.isPending || removePlatformMutation.isPending
-        }
-        target={removeTarget}
-        onConfirm={(target) => {
-          if (target.accessType === "scoped") {
-            removeGrantMutation.mutate({
-              data: { id: target.grantId, relayId: target.relayId },
-            })
-            return
-          }
-          removePlatformMutation.mutate({ data: { userId: target.userId } })
-        }}
-        onOpenChange={(open) => {
-          if (
-            !open &&
-            !removeGrantMutation.isPending &&
-            !removePlatformMutation.isPending
-          ) {
-            setRemoveTarget(null)
-            removeGrantMutation.reset()
-            removePlatformMutation.reset()
-          }
-        }}
-      />
-    </div>
-  )
-}
-
-const AccessToolbar = React.memo(function AccessToolbar({
-  activeFilterCount,
-  filters,
-  invitationCount,
-  platformAccessVisible,
-  relays,
-  searchStore,
-  onAdd,
-  onFiltersChange,
-  onPending,
-}: {
-  activeFilterCount: number
-  filters: AccessFilters
-  invitationCount: number
-  platformAccessVisible: boolean
-  relays: AccessOverview["relays"]
-  searchStore: WorkspaceTableSearchStore
-  onAdd: () => void
-  onFiltersChange: (change: Partial<AccessFilters>) => void
-  onPending: () => void
-}) {
-  const inputRef = React.useRef<HTMLInputElement>(null)
-  useWorkspaceTableSearchInput(inputRef, searchStore)
-
-  return (
-    <div className="flex min-w-0 flex-wrap items-center gap-2 border-b bg-background/25 p-3">
-      <AccessSyncButton />
-
-      <div className="relative min-w-48 flex-1 sm:max-w-md">
-        <Search className="pointer-events-none absolute top-1/2 left-3 size-3.5 -translate-y-1/2 text-muted-foreground" />
-        <Input
-          ref={inputRef}
-          aria-label="Search user access"
-          className="pl-9 text-base md:text-sm"
-          defaultValue={searchStore.getServerSnapshot()}
-          placeholder="Search emails or scopes"
-          type="search"
-          onChange={(event) => searchStore.set(event.currentTarget.value)}
-        />
-      </div>
-
-      <div className="flex min-w-0 items-center gap-2">
-        <AccessFilterSelect
-          ariaLabel="Filter access by role"
-          icon={<UserRound />}
-          value={filters.role}
-          onChange={(role) =>
-            onFiltersChange({ role: accessRoleFilterFromValue(role) })
-          }
-        >
-          <SelectItem value={accessFilterAllValue}>
-            All roles and types
-          </SelectItem>
-          {platformAccessVisible ? (
-            <>
-              <SelectItem value="platform_admin">Platform Admin</SelectItem>
-              <SelectItem value="relay_creator">
-                Bring Your Own Relays
-              </SelectItem>
-            </>
-          ) : null}
-          {accessRoles.map((role) => (
-            <SelectItem key={role} value={role}>
-              {accessRoleDetails[role].label}
-            </SelectItem>
-          ))}
-        </AccessFilterSelect>
-
-        <AccessFilterSelect
-          ariaLabel="Filter access by scope"
-          icon={<ListFilter />}
-          value={filters.resourceType}
-          onChange={(resourceType) =>
-            onFiltersChange({
-              resourceType: accessResourceFilterFromValue(resourceType),
-            })
-          }
-        >
-          <SelectItem value={accessFilterAllValue}>All scopes</SelectItem>
-          {platformAccessVisible ? (
-            <SelectItem value="platform">Platform</SelectItem>
-          ) : null}
-          <SelectItem value="relay">Relays</SelectItem>
-          <SelectItem value="instance">Servers</SelectItem>
-          <SelectItem value="database">Databases</SelectItem>
-        </AccessFilterSelect>
-
-        {relays.length > 1 ? (
-          <AccessFilterSelect
-            ariaLabel="Filter access by Relay"
-            icon={<Network />}
-            value={filters.relayId}
-            onChange={(relayId) => onFiltersChange({ relayId })}
-          >
-            <SelectItem value={accessFilterAllValue}>All Relays</SelectItem>
-            {relays.map((relay) => (
-              <SelectItem key={relay.id} value={relay.id}>
-                {relay.name}
-              </SelectItem>
-            ))}
-          </AccessFilterSelect>
-        ) : null}
-
-        {activeFilterCount > 0 ? (
+        <div className="flex gap-2">
           <Button
-            type="button"
             size="sm"
-            variant="ghost"
-            onClick={() => onFiltersChange(emptyAccessFilters)}
+            variant="outline"
+            disabled={!offset}
+            onClick={() => setOffset(Math.max(0, offset - 50))}
           >
-            <X />
-            Clear {activeFilterCount}
+            Previous resources
           </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={!resources.data?.hasMore}
+            onClick={() => setOffset(offset + 50)}
+          >
+            More resources
+          </Button>
+        </div>
+        {resources.isError ? (
+          <p role="alert" className="text-sm text-destructive">
+            {resources.error.message}
+          </p>
         ) : null}
-      </div>
+        {scope ? (
+          <ResourceAccessPanel key={scope.resourceId} scope={scope} />
+        ) : (
+          <p className="rounded-lg border p-8 text-center text-sm text-muted-foreground">
+            Choose a resource to view its access and presets.
+          </p>
+        )}
+      </section>
+    </div>
+  )
+}
 
-      <div className="ml-auto flex shrink-0 items-center gap-2">
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button
-              type="button"
-              variant="outline"
-              aria-label={`Pending invitations, ${invitationCount}`}
-              onClick={onPending}
-            >
-              <Clock3 />
-              <span className="hidden sm:inline">Pending</span>
-              <Badge
-                variant="outline"
-                className="type-meta h-5 min-w-5 justify-center border-border/80 px-1 font-mono"
-              >
-                {invitationCount}
-              </Badge>
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent side="bottom">Pending invitations</TooltipContent>
-        </Tooltip>
-        <Button type="button" className="shrink-0" onClick={onAdd}>
-          <Plus />
-          <span className="hidden sm:inline">Add user</span>
-          <span className="sm:hidden">Add</span>
-        </Button>
-      </div>
+const ResourcePicker = memo(function ResourcePicker({
+  resources,
+  selected,
+  onSelect,
+  onSearch,
+}: {
+  resources: Array<Resource>
+  selected: Resource | null
+  onSelect: (resource: Resource) => void
+  onSearch: (search: string) => void
+}) {
+  const [draft, setDraft] = useState("")
+  return (
+    <div className="flex flex-wrap gap-2">
+      <form
+        className="flex gap-2"
+        onSubmit={(event) => {
+          event.preventDefault()
+          onSearch(draft)
+        }}
+      >
+        <Input
+          aria-label="Find resources"
+          placeholder="Find a resource…"
+          value={draft}
+          onChange={(event) => setDraft(event.target.value)}
+        />
+        <Button variant="outline">Search</Button>
+      </form>
+      <select
+        aria-label="Resource"
+        className="min-w-64 rounded-md border bg-background p-2 text-sm"
+        value={
+          selected
+            ? JSON.stringify([
+                selected.relayId,
+                selected.resourceType,
+                selected.resourceId,
+              ])
+            : ""
+        }
+        onChange={(event) => {
+          const match = resources.find(
+            (resource) =>
+              JSON.stringify([
+                resource.relayId,
+                resource.resourceType,
+                resource.resourceId,
+              ]) === event.target.value
+          )
+          if (match) onSelect(match)
+        }}
+      >
+        <option value="" disabled>
+          Choose a resource
+        </option>
+        {selected &&
+        !resources.some(
+          (resource) => resource.resourceId === selected.resourceId
+        ) ? (
+          <option
+            value={JSON.stringify([
+              selected.relayId,
+              selected.resourceType,
+              selected.resourceId,
+            ])}
+          >
+            {selected.name}
+          </option>
+        ) : null}
+        {resources.map((resource) => (
+          <option
+            key={`${resource.relayId}:${resource.resourceType}:${resource.resourceId}`}
+            value={JSON.stringify([
+              resource.relayId,
+              resource.resourceType,
+              resource.resourceId,
+            ])}
+          >
+            {resource.name} · {resource.resourceType}
+          </option>
+        ))}
+      </select>
     </div>
   )
 })
 
-const AccessSyncButton = React.memo(function AccessSyncButton() {
-  const queryClient = useQueryClient()
-  const syncMutation = useMutation({
-    mutationFn: () =>
-      queryClient.refetchQueries(
-        { exact: true, queryKey: queryKeys.access.overview },
-        { throwOnError: true }
-      ),
-    onError: (cause) =>
-      showToast({
-        message: errorMessage(cause, "Could not sync access"),
-        type: "error",
-      }),
-  })
-  const syncing = syncMutation.isPending
-
-  return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <Button
-          type="button"
-          size="icon"
-          variant="outline"
-          aria-label="Sync access"
-          aria-busy={syncing}
-          disabled={syncing}
-          onClick={() => syncMutation.mutate()}
-        >
-          <RefreshCw className={syncing ? "animate-spin" : ""} />
-        </Button>
-      </TooltipTrigger>
-      <TooltipContent side="bottom" sideOffset={6}>
-        Sync access
-      </TooltipContent>
-    </Tooltip>
-  )
-})
-
-const accessFilterAllValue = "__all__"
-
-function AccessFilterSelect({
-  ariaLabel,
-  children,
-  icon,
-  onChange,
-  value,
+function ResourcePeopleTable({
+  access,
+  onEdit,
+  onTransfer,
+  onRevoke,
+  onAccept,
+  revoking,
+  accepting,
 }: {
-  ariaLabel: string
-  children: React.ReactNode
-  icon: React.ReactNode
-  onChange: (value: string) => void
-  value: string
+  access: ScopeAccess
+  onEdit: (person: Person) => void
+  onTransfer: (person: Person) => void
+  onRevoke: (person: Person) => void
+  onAccept: (person: Person) => void
+  revoking: boolean
+  accepting: boolean
 }) {
+  const defaultNames = new Map(
+    access.defaults.map((preset) => [preset.key, preset.name])
+  )
+  const presetNames = new Map(
+    access.presets.map((preset) => [preset.id, preset.name])
+  )
   return (
-    <Select
-      value={value || accessFilterAllValue}
-      onValueChange={(nextValue) =>
-        onChange(nextValue === accessFilterAllValue ? "" : nextValue)
-      }
-    >
-      <SelectTrigger
-        aria-label={ariaLabel}
-        className={`h-8 min-w-0 gap-1.5 rounded-none px-2 text-xs hover:border-primary/35 hover:bg-accent/70 [&>svg:last-child]:size-3 ${
-          value ? "border-primary/35 bg-primary/7" : "border-input/90"
-        }`}
-      >
-        <span className="text-muted-foreground [&_svg]:size-3.5">{icon}</span>
-        <SelectValue />
-      </SelectTrigger>
-      <SelectContent className="w-max min-w-(--radix-select-trigger-width)">
-        {children}
-      </SelectContent>
-    </Select>
+    <div className="overflow-x-auto rounded-lg border">
+      <table className="w-full text-left text-sm">
+        <thead className="bg-muted/30">
+          <tr>
+            <th className="p-3">User</th>
+            <th className="p-3">Access</th>
+            <th className="p-3">Presets</th>
+            <th className="p-3">Updated</th>
+            <th className="p-3">Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          {access.people.map((person) => (
+            <tr key={person.id} className="border-t">
+              <td className="p-3">
+                <div>{person.name}</div>
+                <div className="text-xs text-muted-foreground">
+                  {person.email}
+                </div>
+              </td>
+              <td className="p-3">
+                <Badge variant="outline">
+                  {person.state === "pending"
+                    ? person.invitationId
+                      ? "Pending invitation"
+                      : "Invitation ended"
+                    : person.inherited
+                      ? "From Relay"
+                      : "Active"}
+                </Badge>
+              </td>
+              <td className="p-3 text-xs">
+                {[
+                  ...person.builtinKeys.map(
+                    (key) => defaultNames.get(key) ?? key
+                  ),
+                  ...person.presetIds.map(
+                    (id) => presetNames.get(id) ?? "Relay preset"
+                  ),
+                  ...(person.selections.length ? ["Custom permissions"] : []),
+                ].join(", ") || "No selections"}
+              </td>
+              <td className="p-3 text-xs text-muted-foreground">
+                {person.updatedAt
+                  .replace("T", " ")
+                  .replace(/\.\d{3}Z$/, " UTC")}
+              </td>
+              <td className="p-3">
+                <div className="flex flex-wrap gap-2">
+                  {!person.inherited && !person.isOwner && access.canManage ? (
+                    <>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => onEdit(person)}
+                      >
+                        Edit
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        disabled={revoking}
+                        onClick={() => onRevoke(person)}
+                      >
+                        Revoke
+                      </Button>
+                    </>
+                  ) : null}
+                  {access.canTransferOwnership &&
+                  !person.isOwner &&
+                  !person.inherited &&
+                  person.state === "active" ? (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => onTransfer(person)}
+                    >
+                      Transfer ownership
+                    </Button>
+                  ) : null}
+                  {person.invitationId ? (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => {
+                        void Effect.runPromise(
+                          Effect.tryPromise(() =>
+                            navigator.clipboard.writeText(
+                              new URL(
+                                `/invite?id=${encodeURIComponent(person.invitationId!)}`,
+                                window.location.origin
+                              ).toString()
+                            )
+                          ).pipe(
+                            Effect.match({
+                              onSuccess: () =>
+                                showToast({
+                                  type: "success",
+                                  message: "Invitation link copied",
+                                }),
+                              onFailure: () =>
+                                showToast({
+                                  type: "error",
+                                  message: "Could not copy invitation link",
+                                }),
+                            })
+                          )
+                        )
+                      }}
+                    >
+                      Copy invitation link
+                    </Button>
+                  ) : null}
+                  {person.invitationId && access.isPlatformAdmin ? (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      disabled={accepting}
+                      onClick={() => onAccept(person)}
+                    >
+                      Accept for user
+                    </Button>
+                  ) : null}
+                </div>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      {!access.people.length ? (
+        <p className="p-6 text-center text-sm text-muted-foreground">
+          No additional users on this resource.
+        </p>
+      ) : null}
+    </div>
   )
 }
 
-const AccessDirectoryTable = React.memo(function AccessDirectoryTable({
-  filtersActive,
-  ownerRelayIds,
-  pendingGrantId,
-  rows,
-  searchStore,
-  solePlatformAdminId,
-  onRemove,
-  onRoleChange,
+export function ResourceAccessPanel({
+  scope,
 }: {
-  filtersActive: boolean
-  ownerRelayIds: ReadonlySet<string>
-  pendingGrantId?: string
-  rows: Array<AccessDirectoryRow>
-  searchStore: WorkspaceTableSearchStore
-  solePlatformAdminId?: string
-  onRemove: (row: AccessDirectoryRow) => void
-  onRoleChange: (row: AccessDirectoryRow, role: AccessRole) => void
+  scope: ResourceScope & { name?: string }
 }) {
-  const renderRow = React.useCallback(
-    (row: AccessDirectoryRow) => (
-      <AccessDirectoryTableRow
-        ownerRelayIds={ownerRelayIds}
-        pending={row.grant?.id === pendingGrantId}
-        protectedPlatformAdmin={row.userId === solePlatformAdminId}
-        row={row}
-        onRemove={onRemove}
-        onRoleChange={onRoleChange}
-      />
-    ),
-    [onRemove, onRoleChange, ownerRelayIds, pendingGrantId, solePlatformAdminId]
-  )
-  const renderEmpty = React.useCallback(
-    (searchActive: boolean) => (
-      <div className="grid min-h-52 place-items-center px-5 text-center">
-        <div>
-          <Users className="mx-auto size-5 text-muted-foreground" />
-          <p className="mt-3 text-sm font-semibold">
-            {searchActive || filtersActive
-              ? "No matching access"
-              : "No users yet"}
-          </p>
-          <p className="type-support mt-1 text-muted-foreground">
-            {searchActive || filtersActive
-              ? "Try another email, scope, Relay, or role."
-              : "Add a user to grant platform or scoped access."}
-          </p>
-        </div>
-      </div>
-    ),
-    [filtersActive]
-  )
-
-  return (
-    <WorkspaceDataTable
-      getRowKey={accessDirectoryRowKey}
-      getSearchText={accessDirectorySearchText}
-      head={<AccessDirectoryTableHead />}
-      items={rows}
-      renderEmpty={renderEmpty}
-      renderRow={renderRow}
-      searchStore={searchStore}
-    />
-  )
-})
-
-const AccessDirectoryTableHead = React.memo(
-  function AccessDirectoryTableHead() {
-    return (
-      <WorkspaceTableHead>
-        <WorkspaceTableHeading className="w-auto sm:w-[27%]">
-          User
-        </WorkspaceTableHeading>
-        <WorkspaceTableHeading className="w-[34%] sm:w-[28%]">
-          Scope
-        </WorkspaceTableHeading>
-        <WorkspaceTableHeading className="hidden w-[18%] lg:table-cell">
-          Relay
-        </WorkspaceTableHeading>
-        <WorkspaceTableHeading className="w-28 sm:w-32">
-          Role
-        </WorkspaceTableHeading>
-        <WorkspaceTableHeading className="hidden w-24 xl:table-cell">
-          Added
-        </WorkspaceTableHeading>
-        <WorkspaceTableHeading className="w-20 px-1 text-right sm:w-24 sm:px-3">
-          Actions
-        </WorkspaceTableHeading>
-      </WorkspaceTableHead>
-    )
+  const [offset, setOffset] = useState(0),
+    [inviting, setInviting] = useState(false),
+    [editing, setEditing] = useState<Person | null>(null),
+    [preset, setPreset] = useState<Preset | "new" | null>(null)
+  const queryClient = useQueryClient()
+  const [transferTarget, setTransferTarget] = useState<Person | null>(null)
+  const query = useQuery({
+    queryKey: [
+      "resource-access",
+      scope.relayId,
+      scope.resourceType,
+      scope.resourceId,
+      offset,
+    ],
+    queryFn: () => getResourceAccess({ data: { ...scope, offset } }),
+  })
+  const refresh = () => {
+    void queryClient.invalidateQueries({ queryKey: ["resource-access"] })
+    void queryClient.invalidateQueries({ queryKey: ["access"] })
   }
-)
-
-const AccessDirectoryTableRow = React.memo(function AccessDirectoryTableRow({
-  ownerRelayIds,
-  pending,
-  protectedPlatformAdmin,
-  row,
-  onRemove,
-  onRoleChange,
-}: {
-  ownerRelayIds: ReadonlySet<string>
-  pending: boolean
-  protectedPlatformAdmin: boolean
-  row: AccessDirectoryRow
-  onRemove: (row: AccessDirectoryRow) => void
-  onRoleChange: (row: AccessDirectoryRow, role: AccessRole) => void
-}) {
-  if (row.accessType !== "scoped") {
+  const decision = useMutation({
+    mutationFn: decideResourceInvitation,
+    onError: errorToast,
+    onSuccess: () => {
+      refresh()
+      showToast({ type: "success", message: "Invitation updated" })
+    },
+  })
+  const transfer = useMutation({
+    mutationFn: transferInstanceOwnership,
+    onError: errorToast,
+    onSuccess: () => {
+      refresh()
+      setTransferTarget(null)
+      showToast({ type: "success", message: "Ownership transferred" })
+    },
+  })
+  const removePreset = useMutation({
+    mutationFn: deletePermissionPreset,
+    onError: errorToast,
+    onSuccess: () => {
+      refresh()
+      showToast({ type: "success", message: "Preset deleted" })
+    },
+  })
+  const remove = useMutation({
+    mutationFn: updateResourceAccess,
+    onError: errorToast,
+    onSuccess: (result) => {
+      refresh()
+      showToast({
+        type: result.inheritedAccessRemains ? "info" : "success",
+        message: result.inheritedAccessRemains
+          ? "Direct access revoked. Relay access still applies."
+          : "Access revoked",
+      })
+    },
+  })
+  if (query.isPending)
+    return <p className="text-sm text-muted-foreground">Loading access…</p>
+  if (query.isError)
     return (
-      <PlatformAccessDirectoryTableRow
-        protectedAdmin={protectedPlatformAdmin}
-        row={row}
-        onRemove={onRemove}
-      />
+      <p role="alert" className="text-sm text-destructive">
+        {query.error.message}
+      </p>
     )
-  }
-  const ownerActionAllowed =
-    row.role !== "owner" || ownerRelayIds.has(row.relayId)
-  const canRepairOwnerRole =
-    row.instanceOwner &&
-    row.grant !== null &&
-    row.role !== "owner" &&
-    ownerRelayIds.has(row.relayId)
-  const roles: ReadonlyArray<AccessRole> = row.instanceOwner
-    ? canRepairOwnerRole
-      ? [row.role, "owner"]
-      : [row.role]
-    : rolesForRelay(ownerRelayIds, row.relayId, row.role)
-  const roleChangeAllowed =
-    row.grant !== null &&
-    ownerActionAllowed &&
-    (!row.instanceOwner || canRepairOwnerRole)
-  const removeAllowed =
-    row.grant !== null &&
-    ownerActionAllowed &&
-    !row.grant.protectedInstanceOwnerGrant
-  const roleSelect = (
-    <Select
-      disabled={pending || !roleChangeAllowed}
-      value={row.role}
-      onValueChange={(value) => onRoleChange(row, accessRoleFromValue(value))}
-    >
-      <SelectTrigger
-        aria-label={`Role for ${row.email} on ${row.resourceName}`}
-        className="type-control-sm h-8 w-full"
-      >
-        <SelectValue />
-      </SelectTrigger>
-      <SelectContent>
-        {roles.map((role) => (
-          <SelectItem key={role} value={role}>
-            {accessRoleDetails[role].label}
-          </SelectItem>
-        ))}
-      </SelectContent>
-    </Select>
-  )
-
+  const access = query.data
   return (
-    <tr className="group transition-colors hover:bg-accent/25">
-      <WorkspaceTableCell>
-        <div className="flex min-w-0 items-center gap-2.5">
-          <span className="grid size-7 shrink-0 place-items-center rounded-md border border-border/70 bg-background/35 text-muted-foreground">
-            <UserRound className="size-3.5" />
-          </span>
-          <div className="flex min-w-0 items-center gap-1.5">
-            <p className="truncate text-xs font-medium">{row.email}</p>
-          </div>
-        </div>
-      </WorkspaceTableCell>
-      <WorkspaceTableCell>
-        <div className="flex min-w-0 items-center gap-2">
-          <ScopeIcon resourceType={row.resourceType} />
-          <div className="min-w-0">
-            <p className="type-label truncate text-foreground">
-              {row.resourceName}
-            </p>
-            <p className="type-technical-label truncate text-muted-foreground">
-              {row.resourceType === "instance" ? "Server" : row.resourceType}
-              {row.instanceOwner ? " · owner" : ""}
-            </p>
-          </div>
-        </div>
-      </WorkspaceTableCell>
-      <WorkspaceTableCell className="hidden lg:table-cell">
-        <p className="type-meta truncate text-foreground">{row.relayName}</p>
-        <p className="type-meta truncate font-mono text-muted-foreground">
-          {row.relayId}
+    <div className="space-y-6">
+      {access.owner ? (
+        <p className="text-sm text-muted-foreground">
+          Owner: {access.owner.name}
         </p>
-      </WorkspaceTableCell>
-      <WorkspaceTableCell>
-        {row.instanceOwner && !canRepairOwnerRole ? (
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <span
-                aria-label="Why this role cannot be changed"
-                className="block w-full"
-                tabIndex={0}
-              >
-                {roleSelect}
-              </span>
-            </TooltipTrigger>
-            <TooltipContent side="bottom">
-              Transfer ownership before changing this role
-            </TooltipContent>
-          </Tooltip>
-        ) : (
-          roleSelect
-        )}
-      </WorkspaceTableCell>
-      <WorkspaceTableCell className="type-meta hidden font-mono text-muted-foreground xl:table-cell">
-        <HydratedDate value={row.createdAt} />
-      </WorkspaceTableCell>
-      <WorkspaceTableCell className="px-1 sm:px-3">
-        <div className="flex items-center justify-end gap-0.5">
-          {row.instanceId ? (
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button asChild size="icon-sm" variant="ghost">
-                  <Link
-                    aria-label={`View ${row.email} activity`}
-                    search={{ server: row.instanceId, user: row.userId }}
-                    to="/activity"
-                  >
-                    <Activity />
-                  </Link>
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent side="bottom">View activity</TooltipContent>
-            </Tooltip>
+      ) : null}
+      <header className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h3 className="font-semibold">{scope.name ?? "Access"}</h3>
+          {scope.resourceType === "relay" ? (
+            <p className="text-xs text-muted-foreground">
+              Assignments apply to current and future resources on this Relay.
+            </p>
           ) : null}
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <span>
-                <Button
-                  type="button"
-                  size="icon-sm"
-                  variant="ghost"
-                  className="text-muted-foreground hover:text-destructive"
-                  aria-label={`Remove ${row.email} from ${row.resourceName}`}
-                  disabled={pending || !removeAllowed}
-                  onClick={() => onRemove(row)}
-                >
-                  {pending ? (
-                    <LoaderCircle className="animate-spin" />
-                  ) : (
-                    <Trash2 />
-                  )}
-                </Button>
-              </span>
-            </TooltipTrigger>
-            <TooltipContent side="bottom">
-              {row.instanceOwner
-                ? "Transfer ownership before removing"
-                : row.grant
-                  ? "Remove this access only"
-                  : "Owner access is managed by transfer"}
-            </TooltipContent>
-          </Tooltip>
+          {access.authorizationSource === "platform-admin" ? (
+            <p className="text-xs text-muted-foreground">
+              Viewing with platform administrator access.
+            </p>
+          ) : null}
         </div>
-      </WorkspaceTableCell>
-    </tr>
-  )
-})
-
-const PlatformAccessDirectoryTableRow = React.memo(
-  function PlatformAccessDirectoryTableRow({
-    protectedAdmin,
-    row,
-    onRemove,
-  }: {
-    protectedAdmin: boolean
-    row: PlatformAccessDirectoryRow
-    onRemove: (row: AccessDirectoryRow) => void
-  }) {
-    const label =
-      row.accessType === "platform_admin"
-        ? "Platform Admin"
-        : "Bring Your Own Relays"
-
-    return (
-      <tr className="group transition-colors hover:bg-accent/25">
-        <WorkspaceTableCell>
-          <div className="flex min-w-0 items-center gap-2.5">
-            <span className="grid size-7 shrink-0 place-items-center rounded-md border border-primary/25 bg-primary/10 text-primary">
-              <UserRound className="size-3.5" />
-            </span>
-            <p className="truncate text-xs font-medium">{row.email}</p>
-          </div>
-        </WorkspaceTableCell>
-        <WorkspaceTableCell>
-          <div className="flex min-w-0 items-center gap-2">
-            <span className="grid size-7 shrink-0 place-items-center rounded-md border border-primary/25 bg-primary/10 text-primary">
-              <ShieldCheck className="size-3.5" />
-            </span>
-            <div className="min-w-0">
-              <p className="type-label truncate text-foreground">
-                {row.resourceName}
+        {access.canInvite ? (
+          <Button onClick={() => setInviting(true)}>Invite users</Button>
+        ) : null}
+      </header>
+      <ResourcePeopleTable
+        access={access}
+        onEdit={setEditing}
+        onTransfer={setTransferTarget}
+        revoking={remove.isPending}
+        accepting={decision.isPending}
+        onRevoke={(person) =>
+          remove.mutate({
+            data: {
+              ...scope,
+              id: person.id,
+              revision: person.revision,
+              revoke: true,
+              selections: [],
+              presetIds: [],
+              builtinKeys: [],
+            },
+          })
+        }
+        onAccept={(person) =>
+          decision.mutate({
+            data: { id: person.invitationId!, decision: "accept", force: true },
+          })
+        }
+      />
+      <div className="flex gap-2">
+        <Button
+          size="sm"
+          variant="outline"
+          disabled={!offset}
+          onClick={() => setOffset(Math.max(0, offset - 100))}
+        >
+          Previous
+        </Button>
+        <Button
+          size="sm"
+          variant="outline"
+          disabled={!access.hasMore}
+          onClick={() => setOffset(offset + 100)}
+        >
+          Next
+        </Button>
+      </div>
+      <section className="space-y-3">
+        <header className="flex items-center justify-between">
+          <h3 className="font-semibold">Presets</h3>
+          {access.canCreatePreset ? (
+            <Button variant="outline" onClick={() => setPreset("new")}>
+              Create preset
+            </Button>
+          ) : null}
+        </header>
+        <div className="grid gap-3 md:grid-cols-3">
+          {access.defaults.map((preset) => (
+            <article key={preset.key} className="rounded-lg border p-3">
+              <div className="flex items-center justify-between text-sm font-medium">
+                {preset.name}
+                <Badge variant="outline">Kiln default</Badge>
+              </div>
+              <p className="mt-2 text-xs text-muted-foreground">
+                {preset.description}
               </p>
-              <p className="type-technical-label truncate text-muted-foreground">
-                Platform
+            </article>
+          ))}
+        </div>
+        {access.presets.map((preset) => (
+          <div
+            key={preset.id}
+            className="flex items-center justify-between gap-3 rounded-lg border p-3"
+          >
+            <div>
+              <span className="text-sm font-medium">{preset.name}</span>
+              <p className="text-xs text-muted-foreground">
+                {preset.assignmentCount} assignments · Updated{" "}
+                {preset.updatedAt
+                  .replace("T", " ")
+                  .replace(/\.\d{3}Z$/, " UTC")}
               </p>
             </div>
-          </div>
-        </WorkspaceTableCell>
-        <WorkspaceTableCell className="hidden lg:table-cell">
-          <p className="type-meta truncate text-foreground">
-            {row.accessType === "platform_admin" ? "All Relays" : "Own Relays"}
-          </p>
-          <p className="type-meta truncate font-mono text-muted-foreground">
-            —
-          </p>
-        </WorkspaceTableCell>
-        <WorkspaceTableCell>
-          <div className="type-label flex h-8 w-full items-center rounded-md border border-primary/25 bg-primary/10 px-3 text-primary">
-            {label}
-          </div>
-        </WorkspaceTableCell>
-        <WorkspaceTableCell className="type-meta hidden font-mono text-muted-foreground xl:table-cell">
-          <HydratedDate value={row.createdAt} />
-        </WorkspaceTableCell>
-        <WorkspaceTableCell className="px-1 sm:px-3">
-          <div className="flex items-center justify-end">
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <span>
-                  <Button
-                    type="button"
-                    size="icon-sm"
-                    variant="ghost"
-                    className="text-muted-foreground hover:text-destructive"
-                    aria-label={`Remove platform access for ${row.email}`}
-                    disabled={protectedAdmin}
-                    onClick={() => onRemove(row)}
-                  >
-                    <Trash2 />
-                  </Button>
-                </span>
-              </TooltipTrigger>
-              <TooltipContent side="bottom">
-                {protectedAdmin
-                  ? "At least one Platform Admin is required"
-                  : "Remove platform access"}
-              </TooltipContent>
-            </Tooltip>
-          </div>
-        </WorkspaceTableCell>
-      </tr>
-    )
-  }
-)
-
-const AddUserDialog = React.memo(function AddUserDialog({
-  open,
-  canAssignPlatformAccess,
-  ownerRelayIds,
-  targets,
-  onComplete,
-  onOpenChange,
-}: {
-  open: boolean
-  canAssignPlatformAccess: boolean
-  ownerRelayIds: ReadonlySet<string>
-  targets: Array<AccessTarget>
-  onComplete: (result: Awaited<ReturnType<typeof grantOrInviteAccess>>) => void
-  onOpenChange: (open: boolean) => void
-}) {
-  const assignmentRef = React.useRef<AccessAssignmentDraft>({
-    accessType: "scoped",
-    role: "operator",
-    targetKey: targets[0] ? serverPickerOptionKey(targets[0]) : "",
-  })
-  const mutation = useMutation({
-    mutationFn: grantOrInviteAccess,
-    onError: (cause) =>
-      showToast({
-        message: errorMessage(cause, "Could not add user access"),
-        type: "error",
-      }),
-    onSuccess: onComplete,
-  })
-
-  async function submit(event: React.FormEvent<HTMLFormElement>) {
-    event.preventDefault()
-    if (mutation.isPending) return
-    const formData = new FormData(event.currentTarget)
-    const email = formData.get("email")
-    if (typeof email !== "string" || !email) return
-    const assignment = assignmentRef.current
-    const selectedTarget = targets.find(
-      (target) => serverPickerOptionKey(target) === assignment.targetKey
-    )
-    if (assignment.accessType === "scoped" && !selectedTarget) {
-      showToast({ message: "Choose an access scope", type: "error" })
-      return
-    }
-    await Effect.runPromise(
-      Effect.tryPromise({
-        try: () =>
-          mutation.mutateAsync({
-            data:
-              assignment.accessType === "scoped" && selectedTarget
-                ? {
-                    accessType: assignment.accessType,
-                    databaseId: selectedTarget.databaseId,
-                    email,
-                    instanceId: selectedTarget.instanceId,
-                    relayId: selectedTarget.relayId,
-                    resourceName: selectedTarget.resourceName,
-                    role: assignment.role,
+            <div className="flex gap-2">
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => setPreset(preset)}
+              >
+                {access.canManagePresets ? "Edit" : "View"}
+              </Button>
+              {access.canManagePresets ? (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={
+                    preset.assignmentCount > 0 || removePreset.isPending
                   }
-                : assignment.accessType === "platform_admin"
-                  ? { accessType: "platform_admin", email }
-                  : { accessType: "relay_creator", email },
-          }),
-        catch: (cause) => cause,
-      }).pipe(Effect.catch(() => Effect.void))
-    )
-  }
+                  onClick={() =>
+                    removePreset.mutate({
+                      data: {
+                        ...scope,
+                        id: preset.id,
+                        revision: preset.revision,
+                      },
+                    })
+                  }
+                >
+                  Delete
+                </Button>
+              ) : null}
+            </div>
+          </div>
+        ))}
+      </section>
+      {transferTarget ? (
+        <Dialog
+          open
+          onOpenChange={(open) => {
+            if (!open) setTransferTarget(null)
+          }}
+        >
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>Transfer ownership?</DialogTitle>
+              <DialogDescription>
+                {transferTarget.name} will become the only owner of this server.
+                Your remaining access follows your assignments.
+              </DialogDescription>
+            </DialogHeader>
+            <Button
+              variant="destructive"
+              disabled={transfer.isPending}
+              onClick={() =>
+                transfer.mutate({
+                  data: {
+                    relayId: scope.relayId,
+                    instanceId: scope.resourceId,
+                    userId: transferTarget.userId,
+                  },
+                })
+              }
+            >
+              Transfer ownership
+            </Button>
+          </DialogContent>
+        </Dialog>
+      ) : null}
+      {inviting ? (
+        <InviteEditor
+          scope={scope}
+          access={access}
+          onClose={() => setInviting(false)}
+          onSaved={refresh}
+        />
+      ) : null}
+      {editing ? (
+        <AssignmentEditor
+          person={editing}
+          scope={scope}
+          access={access}
+          onClose={() => setEditing(null)}
+          onSaved={refresh}
+        />
+      ) : null}
+      {preset ? (
+        <PresetEditor
+          preset={preset === "new" ? null : preset}
+          scope={scope}
+          access={access}
+          onClose={() => setPreset(null)}
+          onSaved={refresh}
+        />
+      ) : null}
+    </div>
+  )
+}
 
+function PresetSelections({
+  access,
+  presetIds,
+  builtinKeys,
+  onChange,
+}: {
+  access: ScopeAccess
+  presetIds: Array<string>
+  builtinKeys: Array<string>
+  onChange: (presetIds: Array<string>, builtinKeys: Array<string>) => void
+}) {
+  const selectedPresets = new Set(presetIds)
+  const selectedDefaults = new Set(builtinKeys)
+  return (
+    <fieldset className="space-y-2">
+      <legend className="mb-2 text-sm font-medium">Linked presets</legend>
+      <div className="flex flex-wrap gap-4">
+        {access.defaults.map((preset) => (
+          <label key={preset.key} className="flex gap-2 text-sm">
+            <input
+              type="checkbox"
+              className="accent-primary"
+              checked={selectedDefaults.has(preset.key)}
+              onChange={() =>
+                onChange(
+                  presetIds,
+                  selectedDefaults.has(preset.key)
+                    ? builtinKeys.filter((key) => key !== preset.key)
+                    : [...builtinKeys, preset.key]
+                )
+              }
+            />
+            {preset.name}
+          </label>
+        ))}
+        {access.presets.map((preset) => (
+          <label key={preset.id} className="flex gap-2 text-sm">
+            <input
+              type="checkbox"
+              className="accent-primary"
+              checked={selectedPresets.has(preset.id)}
+              onChange={() =>
+                onChange(
+                  selectedPresets.has(preset.id)
+                    ? presetIds.filter((id) => id !== preset.id)
+                    : [...presetIds, preset.id],
+                  builtinKeys
+                )
+              }
+            />
+            {preset.name}
+          </label>
+        ))}
+      </div>
+    </fieldset>
+  )
+}
+
+function AssignmentEditor({
+  person,
+  scope,
+  access,
+  onClose,
+  onSaved,
+}: {
+  person: Person
+  scope: ResourceScope
+  access: ScopeAccess
+  onClose: () => void
+  onSaved: () => void
+}) {
+  const [selections, setSelections] = useState(person.selections),
+    [presetIds, setPresetIds] = useState(person.presetIds),
+    [builtinKeys, setBuiltinKeys] = useState(person.builtinKeys)
+  const save = useMutation({
+    mutationFn: updateResourceAccess,
+    onError: errorToast,
+    onSuccess: () => {
+      onSaved()
+      onClose()
+      showToast({ type: "success", message: "Access updated" })
+    },
+  })
   return (
     <Dialog
-      open={open}
-      onOpenChange={(nextOpen) => {
-        if (!mutation.isPending) onOpenChange(nextOpen)
+      open
+      onOpenChange={(open) => {
+        if (!open) onClose()
       }}
     >
-      <DialogContent
-        className="overflow-visible sm:max-w-xl"
-        showCloseButton={!mutation.isPending}
-      >
+      <DialogContent className="max-h-[90dvh] overflow-y-auto sm:max-w-5xl">
         <DialogHeader>
-          <DialogTitle>Add User</DialogTitle>
-          <DialogDescription className="sr-only">
-            Add a user and choose their access.
+          <DialogTitle>Edit access for {person.name}</DialogTitle>
+          <DialogDescription>
+            Preset changes remain linked. Direct permissions add to those
+            presets.
           </DialogDescription>
         </DialogHeader>
-
-        <form className="space-y-4" onSubmit={(event) => void submit(event)}>
-          <Field label="Email">
-            <Input
-              autoFocus
-              required
-              name="email"
-              type="email"
-              autoComplete="email"
-              placeholder="operator@example.com"
-            />
-          </Field>
-
-          <AccessConfigurationFields
-            assignmentRef={assignmentRef}
-            canAssignPlatformAccess={canAssignPlatformAccess}
-            disabled={mutation.isPending}
-            ownerRelayIds={ownerRelayIds}
-            targets={targets}
-          />
-
-          <DialogFooter>
-            <Button
-              type="button"
-              variant="outline"
-              disabled={mutation.isPending}
-              onClick={() => onOpenChange(false)}
-            >
-              Cancel
-            </Button>
-            <Button type="submit" disabled={mutation.isPending}>
-              {mutation.isPending ? (
-                <LoaderCircle className="animate-spin" />
-              ) : (
-                <Plus />
-              )}
-              Add User
-            </Button>
-          </DialogFooter>
-        </form>
-      </DialogContent>
-    </Dialog>
-  )
-})
-
-const AccessConfigurationFields = React.memo(
-  function AccessConfigurationFields({
-    assignmentRef,
-    canAssignPlatformAccess,
-    disabled,
-    ownerRelayIds,
-    targets,
-  }: {
-    assignmentRef: React.RefObject<AccessAssignmentDraft>
-    canAssignPlatformAccess: boolean
-    disabled: boolean
-    ownerRelayIds: ReadonlySet<string>
-    targets: Array<AccessTarget>
-  }) {
-    const [accessType, setAccessType] = React.useState<AccessType>("scoped")
-    const selectAccessType = React.useCallback(
-      (nextAccessType: AccessType) => {
-        assignmentRef.current.accessType = nextAccessType
-        setAccessType(nextAccessType)
-      },
-      [assignmentRef]
-    )
-
-    return (
-      <>
-        {canAssignPlatformAccess ? (
-          <div className="type-label text-muted-foreground">
-            <span className="mb-1.5 block">Type</span>
-            <AccessTypePicker
-              accessType={accessType}
-              disabled={disabled}
-              onSelect={selectAccessType}
-            />
-          </div>
-        ) : null}
-
-        {accessType === "scoped" ? (
-          <ScopedAccessFields
-            assignmentRef={assignmentRef}
-            ownerRelayIds={ownerRelayIds}
-            targets={targets}
-          />
-        ) : (
-          <PresetAccessField accessType={accessType} />
-        )}
-      </>
-    )
-  }
-)
-
-const PresetAccessField = React.memo(function PresetAccessField({
-  accessType,
-}: {
-  accessType: Exclude<AccessType, "scoped">
-}) {
-  return (
-    <Field label="Access">
-      <div className="type-input flex h-10 w-full items-center rounded-md border border-input/90 bg-input/20 px-3 text-foreground">
-        {accessType === "platform_admin" ? "Hearth + all Relays" : "Own Relays"}
-      </div>
-    </Field>
-  )
-})
-
-interface AccessRoleFieldHandle {
-  setRole: (role: AccessRole) => void
-}
-
-const AccessRoleField = React.memo(
-  React.forwardRef<
-    AccessRoleFieldHandle,
-    {
-      initialRole: AccessRole
-      onRoleChange: (role: AccessRole) => void
-      roles: ReadonlyArray<AccessRole>
-    }
-  >(function AccessRoleField({ initialRole, onRoleChange, roles }, ref) {
-    const [role, setRole] = React.useState(initialRole)
-    React.useImperativeHandle(ref, () => ({ setRole }), [])
-
-    const updateRole = React.useCallback(
-      (value: string) => {
-        const nextRole = accessRoleFromValue(value)
-        setRole(nextRole)
-        onRoleChange(nextRole)
-      },
-      [onRoleChange]
-    )
-
-    return (
-      <Field label="Role">
-        <Select value={role} onValueChange={updateRole}>
-          <SelectTrigger aria-label="Role" className="h-10 w-full px-3 text-xs">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent className="z-[70]">
-            {roles.map((accessRole) => (
-              <SelectItem key={accessRole} value={accessRole}>
-                {accessRoleDetails[accessRole].label}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-      </Field>
-    )
-  })
-)
-
-const AccessScopeField = React.memo(function AccessScopeField({
-  onSelect,
-  selectedTarget,
-  targetKey,
-  targets,
-}: {
-  onSelect: (option: ServerPickerOption) => void
-  selectedTarget: AccessTarget | undefined
-  targetKey: string
-  targets: Array<AccessTarget>
-}) {
-  const [open, setOpen] = React.useState(false)
-  const selectedKeys = React.useMemo(
-    () => new Set(targetKey ? [targetKey] : []),
-    [targetKey]
-  )
-  const selectTarget = React.useCallback(
-    (option: ServerPickerOption) => {
-      onSelect(option)
-      setOpen(false)
-    },
-    [onSelect]
-  )
-
-  return (
-    <Field label="Access">
-      <Popover open={open} onOpenChange={setOpen}>
-        <PopoverTrigger asChild>
-          <Button
-            type="button"
-            variant="outline"
-            className="h-10 w-full justify-between px-3 text-left"
-          >
-            {selectedTarget ? (
-              <span className="flex min-w-0 items-center gap-2.5">
-                <ScopeIcon
-                  resourceType={
-                    selectedTarget.kind === "server"
-                      ? "instance"
-                      : (selectedTarget.kind ?? "relay")
-                  }
-                />
-                <span className="min-w-0 truncate text-xs font-semibold">
-                  {selectedTarget.name}
-                </span>
-              </span>
-            ) : (
-              <span className="text-muted-foreground">Choose scope</span>
-            )}
-            <ChevronDown className="ml-3 size-4 shrink-0 text-muted-foreground" />
-          </Button>
-        </PopoverTrigger>
-        <PopoverContent
-          align="start"
-          className="z-[70] w-[min(34rem,calc(100vw-3rem))] p-1.5"
-        >
-          <ServerPickerList
-            ariaLabel="Access scopes"
-            emptyMessage="No matching Relays, servers, or databases."
-            multiple={false}
-            searchPlaceholder="Search by server, Relay, database, or ID"
-            selectedKeys={selectedKeys}
-            servers={targets}
-            onSelect={selectTarget}
-          />
-        </PopoverContent>
-      </Popover>
-    </Field>
-  )
-})
-
-const ScopedAccessFields = React.memo(function ScopedAccessFields({
-  assignmentRef,
-  ownerRelayIds,
-  targets,
-}: {
-  assignmentRef: React.RefObject<AccessAssignmentDraft>
-  ownerRelayIds: ReadonlySet<string>
-  targets: Array<AccessTarget>
-}) {
-  const [targetKey, setTargetKey] = React.useState(
-    assignmentRef.current.targetKey
-  )
-  const roleFieldRef = React.useRef<AccessRoleFieldHandle>(null)
-  const selectedTarget = targets.find(
-    (target) => serverPickerOptionKey(target) === targetKey
-  )
-  const assignableRoles = React.useMemo(
-    () =>
-      selectedTarget
-        ? rolesForRelay(ownerRelayIds, selectedTarget.relayId)
-        : accessRoles.filter((accessRole) => accessRole !== "owner"),
-    [ownerRelayIds, selectedTarget]
-  )
-  const selectTarget = React.useCallback(
-    (option: ServerPickerOption) => {
-      const nextKey = serverPickerOptionKey(option)
-      const nextTarget = targets.find(
-        (target) => serverPickerOptionKey(target) === nextKey
-      )
-      assignmentRef.current.targetKey = nextKey
-      setTargetKey(nextKey)
-      if (
-        assignmentRef.current.role === "owner" &&
-        nextTarget &&
-        !ownerRelayIds.has(nextTarget.relayId)
-      ) {
-        assignmentRef.current.role = "operator"
-        roleFieldRef.current?.setRole("operator")
-      }
-    },
-    [assignmentRef, ownerRelayIds, targets]
-  )
-  const updateRole = React.useCallback(
-    (role: AccessRole) => {
-      assignmentRef.current.role = role
-    },
-    [assignmentRef]
-  )
-
-  return (
-    <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_9rem]">
-      <AccessScopeField
-        onSelect={selectTarget}
-        selectedTarget={selectedTarget}
-        targetKey={targetKey}
-        targets={targets}
-      />
-      <AccessRoleField
-        ref={roleFieldRef}
-        initialRole={assignmentRef.current.role}
-        onRoleChange={updateRole}
-        roles={assignableRoles}
-      />
-    </div>
-  )
-})
-
-const accessTypeOptions = [
-  {
-    label: "Platform Admin",
-    value: "platform_admin",
-  },
-  {
-    label: "Bring Your Own Relays",
-    value: "relay_creator",
-  },
-  {
-    label: "Scoped Access",
-    value: "scoped",
-  },
-] as const
-
-const AccessTypePicker = React.memo(function AccessTypePicker({
-  accessType,
-  disabled,
-  onSelect,
-}: {
-  accessType: AccessType
-  disabled: boolean
-  onSelect: (accessType: AccessType) => void
-}) {
-  return (
-    <div
-      className="grid grid-cols-3 gap-1 rounded-lg border bg-muted/30 p-1"
-      role="group"
-      aria-label="Access type"
-    >
-      {accessTypeOptions.map((option) => (
-        <AccessTypeOption
-          key={option.value}
-          disabled={disabled}
-          option={option}
-          selected={accessType === option.value}
-          onSelect={onSelect}
+        <PresetSelections
+          access={access}
+          presetIds={presetIds}
+          builtinKeys={builtinKeys}
+          onChange={(ids, keys) => {
+            setPresetIds(ids)
+            setBuiltinKeys(keys)
+          }}
         />
-      ))}
-    </div>
-  )
-})
-
-const AccessTypeOption = React.memo(function AccessTypeOption({
-  disabled,
-  onSelect,
-  option,
-  selected,
-}: {
-  disabled: boolean
-  onSelect: (accessType: AccessType) => void
-  option: (typeof accessTypeOptions)[number]
-  selected: boolean
-}) {
-  return (
-    <button
-      aria-pressed={selected}
-      className={`type-label min-h-10 rounded-md px-2 py-1.5 text-center transition-colors focus-visible:ring-2 focus-visible:ring-ring/40 focus-visible:outline-none ${
-        selected
-          ? "bg-primary/15 text-primary shadow-sm ring-1 ring-primary/35"
-          : "text-muted-foreground hover:bg-background/60 hover:text-foreground"
-      } disabled:pointer-events-none disabled:opacity-45`}
-      disabled={disabled}
-      type="button"
-      onClick={() => onSelect(option.value)}
-    >
-      {option.label}
-    </button>
-  )
-})
-
-function RemoveAccessDialog({
-  pending,
-  target,
-  onConfirm,
-  onOpenChange,
-}: {
-  pending: boolean
-  target: RemoveTarget | null
-  onConfirm: (target: RemoveTarget) => void
-  onOpenChange: (open: boolean) => void
-}) {
-  const platformTarget = target?.accessType !== "scoped" ? target : null
-  return (
-    <Dialog open={target !== null} onOpenChange={onOpenChange}>
-      <DialogContent showCloseButton={!pending}>
-        <DialogHeader>
-          <DialogTitle>
-            {platformTarget ? "Remove platform access?" : "Remove this access?"}
-          </DialogTitle>
-          <DialogDescription>
-            {platformTarget ? (
-              platformTarget.accessType === "platform_admin" ? (
-                <>
-                  {platformTarget.email} will lose access to Hearth and all
-                  Relays. Existing server ownership remains.
-                </>
-              ) : (
-                <>
-                  {platformTarget.email} will no longer be able to add or manage
-                  Relays. Existing scoped access remains.
-                </>
-              )
-            ) : (
-              <>
-                {target?.email ?? "This user"} will lose access to{" "}
-                {target?.accessType === "scoped"
-                  ? target.resourceName
-                  : "this scope"}
-                . Their Kiln account and all other server or Relay access will
-                remain intact.
-              </>
-            )}
-          </DialogDescription>
-        </DialogHeader>
-        <DialogFooter>
-          <Button
-            type="button"
-            variant="outline"
-            disabled={pending}
-            onClick={() => onOpenChange(false)}
-          >
-            Cancel
-          </Button>
-          <Button
-            type="button"
-            variant="destructive"
-            disabled={!target || pending}
-            onClick={() => {
-              if (!target) return
-              onConfirm(target)
-            }}
-          >
-            {pending ? <LoaderCircle className="animate-spin" /> : <Trash2 />}
-            Remove access
-          </Button>
-        </DialogFooter>
+        <PermissionEditor
+          scopeType={scope.resourceType}
+          selections={selections}
+          onChange={setSelections}
+          available={access.permissions}
+          capabilities={access.supportedCapabilities}
+        />
+        <Button
+          disabled={save.isPending}
+          onClick={() =>
+            save.mutate({
+              data: {
+                ...scope,
+                id: person.id,
+                revision: person.revision,
+                selections,
+                presetIds,
+                builtinKeys,
+              },
+            })
+          }
+        >
+          Save access
+        </Button>
       </DialogContent>
     </Dialog>
   )
 }
 
-function PendingInvitationsDialog({
-  databases,
-  invitations,
-  instances,
-  open,
-  ownerRelayIds,
-  pendingId,
-  onOpenChange,
-  onRevoke,
-}: {
-  databases: ManagedDatabaseDirectory
-  invitations: AccessOverview["invitations"]
-  instances: Array<AccessPageInstance>
-  open: boolean
-  ownerRelayIds: ReadonlySet<string>
-  pendingId?: string
-  onOpenChange: (open: boolean) => void
-  onRevoke: (id: string, relayId: string | null) => void
-}) {
-  const titleRef = React.useRef<HTMLHeadingElement>(null)
-  const instanceNames = React.useMemo(
-    () =>
-      new Map(
-        instances.map((instance) => [
-          accessResourceKey(instance.relayId, instance.id),
-          instance.name,
-        ])
-      ),
-    [instances]
-  )
-  const databaseNames = React.useMemo(
-    () =>
-      new Map(
-        databases.map((database) => [
-          accessResourceKey(database.relayId, database.id),
-          database.name,
-        ])
-      ),
-    [databases]
-  )
+interface InviteDraft extends ResourceScope {
+  name?: string
+  selections: Array<PermissionSelection>
+  presetIds: Array<string>
+  builtinKeys: Array<string>
+}
+const scopeKey = (scope: ResourceScope) =>
+  `${scope.relayId}:${scope.resourceType}:${scope.resourceId}`
 
+function InviteEditor({
+  scope,
+  onClose,
+  onSaved,
+}: {
+  scope: ResourceScope & { name?: string }
+  access: ScopeAccess
+  onClose: () => void
+  onSaved: () => void
+}) {
+  const [email, setEmail] = useState("")
+  const [targets, setTargets] = useState<Array<InviteDraft>>([
+    { ...scope, selections: [], presetIds: [], builtinKeys: [] },
+  ])
+  const [search, setSearch] = useState("")
+  const [offset, setOffset] = useState(0)
+  const resources = useQuery({
+    queryKey: ["access-resources", search, offset],
+    queryFn: () => getAccessResources({ data: { search, offset } }),
+  })
+  const invite = useMutation({
+    mutationFn: inviteResourceAccess,
+    onError: errorToast,
+    onSuccess: (result) => {
+      onSaved()
+      const created = result.invitations.filter(
+        (invitation) => !invitation.existing
+      ).length
+      showToast({
+        type: "success",
+        message: `${created} invitation${created === 1 ? "" : "s"} created. Each resource is accepted separately.`,
+      })
+      onClose()
+    },
+  })
+  const changeTarget = useCallback(
+    (target: InviteDraft) =>
+      setTargets((current) =>
+        current.map((item) =>
+          scopeKey(item) === scopeKey(target) ? target : item
+        )
+      ),
+    []
+  )
+  const removeTarget = useCallback(
+    (target: InviteDraft) =>
+      setTargets((current) =>
+        current.filter((item) => scopeKey(item) !== scopeKey(target))
+      ),
+    []
+  )
+  const remainingResources = useMemo(() => {
+    const selected = new Set(targets.map(scopeKey))
+    return (resources.data?.resources ?? EMPTY_RESOURCES).filter(
+      (resource) => !selected.has(scopeKey(resource))
+    )
+  }, [resources.data?.resources, targets])
+  const addTarget = useCallback(
+    (resource: Resource) =>
+      setTargets((current) => [
+        ...current,
+        { ...resource, selections: [], presetIds: [], builtinKeys: [] },
+      ]),
+    []
+  )
+  const searchResources = useCallback((value: string) => {
+    setSearch(value)
+    setOffset(0)
+  }, [])
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent
-        initialFocus={titleRef}
-        className="max-h-[calc(100vh-2rem)] overflow-hidden sm:max-w-4xl"
-      >
+    <Dialog
+      open
+      onOpenChange={(open) => {
+        if (!open) onClose()
+      }}
+    >
+      <DialogContent className="max-h-[90dvh] overflow-y-auto sm:max-w-5xl">
         <DialogHeader>
-          <DialogTitle ref={titleRef} tabIndex={-1}>
-            Pending invitations
-          </DialogTitle>
+          <DialogTitle>Invite to resources</DialogTitle>
           <DialogDescription>
-            Invitations expire after seven days. Accounts are created only after
-            the recipient accepts.
+            The user verifies their account, then accepts each invitation.
+            Existing users also accept.
           </DialogDescription>
         </DialogHeader>
-
-        {invitations.length > 0 ? (
-          <div className="max-h-[min(32rem,60vh)] overflow-auto rounded-lg border">
-            <table className="w-full min-w-[40rem] table-fixed border-collapse text-left">
-              <WorkspaceTableHead>
-                <WorkspaceTableHeading className="w-[31%]">
-                  Email
-                </WorkspaceTableHeading>
-                <WorkspaceTableHeading className="w-[31%]">
-                  Scope
-                </WorkspaceTableHeading>
-                <WorkspaceTableHeading className="w-28">
-                  Role
-                </WorkspaceTableHeading>
-                <WorkspaceTableHeading className="w-28">
-                  Expires
-                </WorkspaceTableHeading>
-                <WorkspaceTableHeading className="w-20 text-right">
-                  Actions
-                </WorkspaceTableHeading>
-              </WorkspaceTableHead>
-              <tbody className="divide-y divide-border/70">
-                {invitations.map((invitation) => {
-                  const instanceName = invitation.instanceId
-                    ? instanceNames.get(
-                        accessResourceKey(
-                          invitation.relayId,
-                          invitation.instanceId
-                        )
-                      )
-                    : undefined
-                  const databaseName = invitation.databaseId
-                    ? databaseNames.get(
-                        accessResourceKey(
-                          invitation.relayId,
-                          invitation.databaseId
-                        )
-                      )
-                    : undefined
-                  const resourceName =
-                    databaseName ?? instanceName ?? invitation.relayName
-                  const platformInvitation = invitation.accessType !== "scoped"
-                  const invitationRole =
-                    invitation.accessType === "platform_admin"
-                      ? "Platform Admin"
-                      : invitation.accessType === "relay_creator"
-                        ? "Bring Your Own Relays"
-                        : invitation.role
-                  return (
-                    <tr key={invitation.id} className="hover:bg-accent/25">
-                      <WorkspaceTableCell>
-                        <p className="truncate text-xs font-medium">
-                          {invitation.email}
-                        </p>
-                      </WorkspaceTableCell>
-                      <WorkspaceTableCell>
-                        <p className="type-meta truncate">{resourceName}</p>
-                        <p className="type-technical-label text-muted-foreground">
-                          {platformInvitation
-                            ? "Platform"
-                            : databaseName
-                              ? "Database"
-                              : instanceName
-                                ? "Server"
-                                : "Relay"}
-                        </p>
-                      </WorkspaceTableCell>
-                      <WorkspaceTableCell>
-                        <Badge
-                          variant="outline"
-                          className="type-meta font-mono capitalize"
-                        >
-                          {invitationRole}
-                        </Badge>
-                      </WorkspaceTableCell>
-                      <WorkspaceTableCell className="type-meta font-mono text-muted-foreground">
-                        <HydratedDate value={invitation.expiresAt} />
-                      </WorkspaceTableCell>
-                      <WorkspaceTableCell>
-                        <div className="flex justify-end">
-                          <Tooltip>
-                            <TooltipTrigger asChild>
-                              <span>
-                                <Button
-                                  type="button"
-                                  size="icon-sm"
-                                  variant="ghost"
-                                  aria-label={`Revoke invitation for ${invitation.email}`}
-                                  disabled={
-                                    pendingId !== undefined ||
-                                    (invitation.role === "owner" &&
-                                      invitation.relayId !== null &&
-                                      !ownerRelayIds.has(invitation.relayId))
-                                  }
-                                  onClick={() =>
-                                    onRevoke(invitation.id, invitation.relayId)
-                                  }
-                                >
-                                  {pendingId === invitation.id ? (
-                                    <LoaderCircle className="animate-spin" />
-                                  ) : (
-                                    <Trash2 />
-                                  )}
-                                </Button>
-                              </span>
-                            </TooltipTrigger>
-                            <TooltipContent side="bottom">
-                              {invitation.role === "owner" &&
-                              invitation.relayId !== null &&
-                              !ownerRelayIds.has(invitation.relayId)
-                                ? "Only a Relay owner can revoke this invitation"
-                                : "Revoke invitation"}
-                            </TooltipContent>
-                          </Tooltip>
-                        </div>
-                      </WorkspaceTableCell>
-                    </tr>
-                  )
-                })}
-              </tbody>
-            </table>
-          </div>
-        ) : (
-          <div className="grid min-h-48 place-items-center rounded-lg border border-dashed bg-muted/10 px-5 text-center">
-            <div>
-              <Clock3 className="mx-auto size-5 text-muted-foreground" />
-              <p className="mt-3 text-sm font-semibold">
-                No pending invitations
-              </p>
-              <p className="type-support mt-1 text-muted-foreground">
-                New invitations will appear here until they are accepted or
-                revoked.
-              </p>
+        <Input
+          type="email"
+          aria-label="Email address"
+          placeholder="person@example.com"
+          value={email}
+          onChange={(event) => setEmail(event.target.value)}
+        />
+        {targets.map((target) => (
+          <InviteTargetEditor
+            key={scopeKey(target)}
+            target={target}
+            onChange={changeTarget}
+            onRemove={removeTarget}
+          />
+        ))}
+        {targets.length < 25 ? (
+          <div className="space-y-2 rounded-lg border p-3">
+            <h3 className="text-sm font-medium">Add another resource</h3>
+            <ResourcePicker
+              resources={remainingResources}
+              selected={null}
+              onSelect={addTarget}
+              onSearch={searchResources}
+            />
+            <div className="flex gap-2">
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={!offset}
+                onClick={() => setOffset(Math.max(0, offset - 50))}
+              >
+                Previous
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={!resources.data?.hasMore}
+                onClick={() => setOffset(offset + 50)}
+              >
+                More resources
+              </Button>
             </div>
           </div>
-        )}
+        ) : null}
+        <Button
+          disabled={
+            invite.isPending ||
+            !email.trim() ||
+            !targets.length ||
+            targets.some(
+              (target) =>
+                !target.selections.length &&
+                !target.presetIds.length &&
+                !target.builtinKeys.length
+            )
+          }
+          onClick={() => invite.mutate({ data: { email, targets } })}
+        >
+          Send invitations
+        </Button>
       </DialogContent>
     </Dialog>
   )
 }
 
-function ScopeIcon({
-  resourceType,
+const InviteTargetEditor = memo(function InviteTargetEditor({
+  target,
+  onChange,
+  onRemove,
 }: {
-  resourceType: "database" | "instance" | "relay"
+  target: InviteDraft
+  onChange: (target: InviteDraft) => void
+  onRemove: (target: InviteDraft) => void
 }) {
-  return (
-    <span className="grid size-7 shrink-0 place-items-center rounded-md border border-border/70 bg-background/35 text-muted-foreground">
-      {resourceType === "relay" ? (
-        <Network className="size-3.5" />
-      ) : resourceType === "database" ? (
-        <Database className="size-3.5" />
-      ) : (
-        <Server className="size-3.5" />
-      )}
-    </span>
-  )
-}
-
-function Field({
-  label,
-  children,
-}: {
-  label: string
-  children: React.ReactNode
-}) {
-  return (
-    <label className="type-label block text-muted-foreground">
-      <span className="mb-1.5 block">{label}</span>
-      {children}
-    </label>
-  )
-}
-
-function HydratedDate({ value }: { value: string }) {
-  return React.useSyncExternalStore(
-    subscribeToBrowserLocale,
-    () => invitationExpiryFormatter.format(new Date(value)),
-    () => "—"
-  )
-}
-
-function accessTargets(
-  overview: AccessOverview,
-  instances: Array<AccessPageInstance>,
-  databases: ManagedDatabaseDirectory
-): Array<AccessTarget> {
-  const instancesByRelay = new Map<string, Array<AccessPageInstance>>()
-  for (const instance of instances) {
-    const relayInstances = instancesByRelay.get(instance.relayId) ?? []
-    relayInstances.push(instance)
-    instancesByRelay.set(instance.relayId, relayInstances)
-  }
-  const databasesByRelay = new Map<
-    string,
-    Array<ManagedDatabaseDirectory[number]>
-  >()
-  for (const database of databases) {
-    const relayDatabases = databasesByRelay.get(database.relayId) ?? []
-    relayDatabases.push(database)
-    databasesByRelay.set(database.relayId, relayDatabases)
-  }
-
-  return overview.relays.flatMap((relay) => [
-    {
-      databaseId: null,
-      description: "Every server and database on this Relay",
-      id: relay.id,
-      instanceId: null,
-      kind: "relay",
-      name: relay.name,
-      relayId: relay.id,
-      relayName: relay.name,
-      resourceName: relay.name,
-    },
-    ...(instancesByRelay.get(relay.id) ?? []).map(
-      (instance) =>
-        ({
-          databaseId: null,
-          description: `${relay.name} · ${instance.id}`,
-          id: instance.id,
-          instanceId: instance.id,
-          kind: "server",
-          name: instance.name,
-          relayId: relay.id,
-          relayName: relay.name,
-          resourceName: instance.name,
-        }) satisfies AccessTarget
-    ),
-    ...(databasesByRelay.get(relay.id) ?? []).map(
-      (database) =>
-        ({
-          databaseId: database.id,
-          description: `${relay.name} · ${database.id}`,
-          id: database.id,
-          instanceId: null,
-          kind: "database",
-          name: database.name,
-          relayId: relay.id,
-          relayName: relay.name,
-          resourceName: database.name,
-        }) satisfies AccessTarget
-    ),
-  ])
-}
-
-function accessDirectoryRows(
-  overview: AccessOverview,
-  instances: Array<AccessPageInstance>,
-  databases: ManagedDatabaseDirectory
-): Array<AccessDirectoryRow> {
-  const instanceNames = new Map(
-    instances.map((instance) => [
-      accessResourceKey(instance.relayId, instance.id),
-      instance.name,
-    ])
-  )
-  const databaseNames = new Map(
-    databases.map((database) => [
-      accessResourceKey(database.relayId, database.id),
-      database.name,
-    ])
-  )
-  const directOwnerKeys = new Set(
-    overview.grants.flatMap((grant) =>
-      grant.resourceType === "instance"
-        ? [`${grant.relayId}:${grant.resourceId}:${grant.userId}`]
-        : []
-    )
-  )
-  const grantRows = overview.grants.map((grant) =>
-    accessGrantDirectoryRow(grant, instanceNames, databaseNames)
-  )
-  const ownerRows = overview.owners.flatMap((owner) =>
-    directOwnerKeys.has(`${owner.relayId}:${owner.instanceId}:${owner.userId}`)
-      ? []
-      : [accessOwnerDirectoryRow(owner, instanceNames)]
-  )
-  const platformRows = overview.platformUsers.map(platformAccessDirectoryRow)
-  return [...platformRows, ...grantRows, ...ownerRows].sort((left, right) =>
-    `${left.email}\u0000${left.resourceName}`.localeCompare(
-      `${right.email}\u0000${right.resourceName}`
-    )
-  )
-}
-
-function accessGrantDirectoryRow(
-  grant: AccessGrant,
-  instanceNames: ReadonlyMap<string, string>,
-  databaseNames: ReadonlyMap<string, string>
-): AccessDirectoryRow {
-  const resourceKey = accessResourceKey(grant.relayId, grant.resourceId)
-  return {
-    accessType: "scoped",
-    createdAt: grant.createdAt,
-    email: grant.email,
-    grant,
-    instanceId: grant.resourceType === "instance" ? grant.resourceId : null,
-    instanceOwner: grant.instanceOwner,
-    key: `grant:${grant.id}`,
-    relayId: grant.relayId,
-    relayName: grant.relayName,
-    resourceId: grant.resourceId,
-    resourceName:
-      grant.resourceType === "relay"
-        ? grant.relayName
-        : (databaseNames.get(resourceKey) ??
-          instanceNames.get(resourceKey) ??
-          grant.resourceId),
-    resourceType: grant.resourceType,
-    role: grant.role,
-    userId: grant.userId,
-  }
-}
-
-function accessOwnerDirectoryRow(
-  owner: AccessOwner,
-  instanceNames: ReadonlyMap<string, string>
-): AccessDirectoryRow {
-  return {
-    accessType: "scoped",
-    createdAt: owner.createdAt,
-    email: owner.email,
-    grant: null,
-    instanceId: owner.instanceId,
-    instanceOwner: true,
-    key: `owner:${owner.relayId}:${owner.instanceId}:${owner.userId}`,
-    relayId: owner.relayId,
-    relayName: owner.relayName,
-    resourceId: owner.instanceId,
-    resourceName:
-      instanceNames.get(accessResourceKey(owner.relayId, owner.instanceId)) ??
-      owner.instanceId,
-    resourceType: "instance",
-    role: "owner",
-    userId: owner.userId,
-  }
-}
-
-function platformAccessDirectoryRow(
-  platformUser: AccessOverview["platformUsers"][number]
-): PlatformAccessDirectoryRow {
-  return {
-    accessType: platformUser.accessType,
-    createdAt: platformUser.createdAt,
-    email: platformUser.email,
-    grant: null,
-    instanceId: null,
-    instanceOwner: false,
-    key: `platform:${platformUser.id}`,
-    relayId: "",
-    relayName: "",
-    resourceId: platformUser.accessType,
-    resourceName:
-      platformUser.accessType === "platform_admin"
-        ? "Hearth + all Relays"
-        : "Own Relays",
-    resourceType: "platform",
-    role: platformUser.accessType,
-    userId: platformUser.id,
-  }
-}
-
-function accessResourceKey(relayId: string, resourceId: string): string {
-  return `${relayId}:${resourceId}`
-}
-
-function accessDirectoryRowKey(row: AccessDirectoryRow): string {
-  return row.key
-}
-
-function accessDirectorySearchText(row: AccessDirectoryRow): string {
-  const roleLabel =
-    row.role === "platform_admin"
-      ? "Platform Admin"
-      : row.role === "relay_creator"
-        ? "Bring Your Own Relays"
-        : accessRoleDetails[row.role].label
-  return `${row.email} ${row.resourceName} ${row.resourceId} ${row.resourceType} ${row.relayName} ${row.relayId} ${roleLabel}`
-}
-
-function showAccessAssignmentToast(
-  result: Awaited<ReturnType<typeof grantOrInviteAccess>>
-): void {
-  if (result.kind === "granted") {
-    const notificationDescription = {
-      disabled: "Email delivery is disabled; no notification was sent.",
-      failed:
-        "Access was granted, but the notification email could not be sent.",
-      sent: "A notification email was sent.",
-    } satisfies Record<typeof result.notificationStatus, string>
-    showToast({
-      description: notificationDescription[result.notificationStatus],
-      message: `${result.email} now has access`,
-      type: "success",
-    })
-    return
-  }
-
-  if (!result.inviteUrl) {
-    showToast({ message: "Invitation sent", type: "success" })
-    return
-  }
-
-  const invitationUrl = result.inviteUrl
-  showToast({
-    action: {
-      label: "Copy link",
-      onClick: () => {
-        void Effect.runPromise(
-          Effect.tryPromise({
-            try: () => navigator.clipboard.writeText(invitationUrl),
-            catch: (cause) => cause,
-          }).pipe(
-            Effect.match({
-              onFailure: () =>
-                showToast({
-                  message: "Could not copy the invitation link",
-                  type: "error",
-                }),
-              onSuccess: () =>
-                showToast({
-                  message: "Invitation link copied",
-                  type: "success",
-                }),
-            })
-          )
-        )
-      },
-    },
-    description: "Email delivery is disabled locally.",
-    duration: Infinity,
-    message: "Invitation created",
-    type: "success",
+  const query = useQuery({
+    queryKey: [
+      "resource-access",
+      target.relayId,
+      target.resourceType,
+      target.resourceId,
+    ],
+    queryFn: () => getResourceAccess({ data: target }),
   })
+  return (
+    <section className="space-y-4 rounded-lg border p-4">
+      <header className="flex items-center justify-between">
+        <div>
+          <h3 className="font-medium">{target.name ?? target.resourceId}</h3>
+          <p className="text-xs text-muted-foreground">
+            {target.resourceType === "relay"
+              ? "Relay · includes current and future resources"
+              : target.resourceType}
+          </p>
+        </div>
+        <Button size="sm" variant="outline" onClick={() => onRemove(target)}>
+          Remove
+        </Button>
+      </header>
+      {query.isPending ? (
+        <p className="text-sm text-muted-foreground">Loading permissions…</p>
+      ) : query.isError ? (
+        <p role="alert" className="text-sm text-destructive">
+          {query.error.message}
+        </p>
+      ) : !query.data.canInvite ? (
+        <p className="text-sm text-muted-foreground">
+          You cannot invite users to this resource.
+        </p>
+      ) : (
+        <>
+          <PresetSelections
+            access={query.data}
+            presetIds={target.presetIds}
+            builtinKeys={target.builtinKeys}
+            onChange={(presetIds, builtinKeys) =>
+              onChange({ ...target, presetIds, builtinKeys })
+            }
+          />
+          <PermissionEditor
+            scopeType={target.resourceType}
+            selections={target.selections}
+            onChange={(selections) => onChange({ ...target, selections })}
+            available={query.data.permissions}
+            capabilities={query.data.supportedCapabilities}
+          />
+        </>
+      )}
+    </section>
+  )
+})
+
+function PresetEditor({
+  preset,
+  scope,
+  access,
+  onClose,
+  onSaved,
+}: {
+  preset: Preset | null
+  scope: ResourceScope
+  access: ScopeAccess
+  onClose: () => void
+  onSaved: () => void
+}) {
+  const [name, setName] = useState(preset?.name ?? ""),
+    [selections, setSelections] = useState<Array<PermissionSelection>>(
+      preset?.selections ?? []
+    )
+  const [source, setSource] = useState<Resource | null>(null)
+  const [sourceSearch, setSourceSearch] = useState("")
+  const [sourceOffset, setSourceOffset] = useState(0)
+  const searchSources = useCallback((value: string) => {
+    setSourceSearch(value)
+    setSourceOffset(0)
+  }, [])
+  const resources = useQuery({
+    queryKey: ["access-resources", sourceSearch, sourceOffset],
+    queryFn: () =>
+      getAccessResources({
+        data: { search: sourceSearch, offset: sourceOffset },
+      }),
+    enabled: !preset,
+  })
+  const sourcePresets = useQuery({
+    queryKey: [
+      "resource-access",
+      source?.relayId,
+      source?.resourceType,
+      source?.resourceId,
+    ],
+    queryFn: () => getResourceAccess({ data: source! }),
+    enabled: Boolean(source),
+  })
+  const editable = preset ? access.canManagePresets : access.canCreatePreset
+  const save = useMutation({
+    mutationFn: savePermissionPreset,
+    onError: errorToast,
+    onSuccess: () => {
+      onSaved()
+      onClose()
+      showToast({
+        type: "success",
+        message: preset
+          ? "Preset updated for all assignments"
+          : "Preset created",
+      })
+    },
+  })
+  function copy(items: Array<PermissionSelection>) {
+    const supported = items.filter((item) =>
+      Result.isSuccess(
+        Result.try(() =>
+          expandForCopy(item, scope.resourceType, access.supportedCapabilities)
+        )
+      )
+    )
+    setSelections(supported)
+    if (supported.length !== items.length)
+      showToast({
+        type: "info",
+        message: "Unsupported permissions were omitted from this copy",
+      })
+  }
+  return (
+    <Dialog
+      open
+      onOpenChange={(open) => {
+        if (!open) onClose()
+      }}
+    >
+      <DialogContent className="max-h-[90dvh] overflow-y-auto sm:max-w-5xl">
+        <DialogHeader>
+          <DialogTitle>{preset ? preset.name : "Create preset"}</DialogTitle>
+          <DialogDescription>
+            {preset
+              ? `Changes apply to ${preset.assignmentCount} assignments on this resource.`
+              : "Copy a template or choose permissions. This creates an independent preset on this resource."}
+          </DialogDescription>
+        </DialogHeader>
+        <Input
+          aria-label="Preset name"
+          placeholder="Preset name"
+          value={name}
+          disabled={!editable}
+          onChange={(event) => setName(event.target.value)}
+        />
+        {!preset ? (
+          <div className="space-y-3">
+            <div className="flex flex-wrap gap-2">
+              {access.defaults.map((entry) => (
+                <Button
+                  key={entry.key}
+                  variant="outline"
+                  size="sm"
+                  onClick={() => copy(entry.selections)}
+                >
+                  Copy {entry.name}
+                </Button>
+              ))}
+            </div>
+            <ResourcePicker
+              resources={resources.data?.resources ?? EMPTY_RESOURCES}
+              selected={source}
+              onSelect={setSource}
+              onSearch={searchSources}
+            />
+            <div className="flex gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={!sourceOffset}
+                onClick={() => setSourceOffset(Math.max(0, sourceOffset - 50))}
+              >
+                Previous
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={!resources.data?.hasMore}
+                onClick={() => setSourceOffset(sourceOffset + 50)}
+              >
+                Next
+              </Button>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {sourcePresets.data?.presets.map((entry) => (
+                <Button
+                  key={entry.id}
+                  variant="outline"
+                  size="sm"
+                  onClick={() => copy(entry.selections)}
+                >
+                  Copy {entry.name}
+                </Button>
+              ))}
+            </div>
+          </div>
+        ) : null}
+        <PermissionEditor
+          scopeType={scope.resourceType}
+          selections={selections}
+          onChange={setSelections}
+          available={access.permissions}
+          capabilities={access.supportedCapabilities}
+          disabled={!editable}
+        />
+        {editable ? (
+          <Button
+            disabled={!name.trim() || save.isPending}
+            onClick={() =>
+              save.mutate({
+                data: {
+                  ...scope,
+                  id: preset?.id,
+                  revision: preset?.revision,
+                  name,
+                  selections,
+                },
+              })
+            }
+          >
+            Save preset
+          </Button>
+        ) : null}
+      </DialogContent>
+    </Dialog>
+  )
 }
 
-function errorMessage(cause: unknown, fallback: string): string {
-  return cause instanceof Error ? cause.message : fallback
-}
-
-function accessRoleFromValue(value: string): AccessRole {
-  return isAccessRole(value) ? value : "viewer"
-}
-
-function accessRoleFilterFromValue(value: string): AccessFilters["role"] {
-  return isAccessRole(value) ||
-    value === "platform_admin" ||
-    value === "relay_creator"
-    ? value
-    : ""
-}
-
-function accessResourceFilterFromValue(
-  value: string
-): AccessFilters["resourceType"] {
-  return value === "database" ||
-    value === "instance" ||
-    value === "platform" ||
-    value === "relay"
-    ? value
-    : ""
-}
-
-function rolesForRelay(
-  ownerRelayIds: ReadonlySet<string>,
-  relayId: string,
-  currentRole?: AccessRole
-): ReadonlyArray<AccessRole> {
-  return ownerRelayIds.has(relayId) || currentRole === "owner"
-    ? accessRoles
-    : accessRoles.filter((role) => role !== "owner")
-}
-
-function subscribeToBrowserLocale(): () => void {
-  return () => undefined
-}
-
-function invalidateAccessQueries(
-  queryClient: ReturnType<typeof useQueryClient>
+import { expandPermissionSelections as expandForCopySelections } from "@workspace/contracts"
+function expandForCopy(
+  selection: PermissionSelection,
+  scope: ResourceScope["resourceType"],
+  capabilities?: ReadonlyArray<string>
 ) {
-  return Promise.all([
-    queryClient.invalidateQueries({ queryKey: queryKeys.access.overview }),
-    queryClient.invalidateQueries({ queryKey: queryKeys.access.capabilities }),
-    queryClient.invalidateQueries({ queryKey: ["access", "instances"] }),
-    queryClient.invalidateQueries({ queryKey: queryKeys.databases.directory }),
-  ])
+  return expandForCopySelections([selection], scope, capabilities)
 }

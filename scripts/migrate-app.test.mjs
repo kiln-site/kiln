@@ -38,3 +38,6 @@ test("migrates prepared-instance ownership reservations", () => {
     /ADD COLUMN provisioning_reserved_until TIMESTAMP\(3\) NULL AFTER owner_id/
   )
 })
+
+// Also exercise the immutable authority snapshot; the database fixture is opt-in.
+import "../apps/web/scripts/migrate-access.test.mjs"

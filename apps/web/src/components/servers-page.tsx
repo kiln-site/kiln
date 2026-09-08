@@ -1,3 +1,4 @@
+import { PendingResourceInvitations } from "@/components/pending-resource-invitations"
 import * as React from "react"
 import { eq, not } from "@tanstack/db"
 import { useDbClient, useLiveQuery } from "@tanstack/react-db"
@@ -72,7 +73,7 @@ import {
   useLiveDataTableSource,
   type DataTableSource,
 } from "@/lib/data-table-source"
-import { roleHasPermission } from "@/lib/permissions"
+import { grantHasPermission } from "@/lib/permissions"
 import { selectRelayConfigured } from "@/lib/relay-selectors"
 import type { ServerListInstance } from "@/lib/relay-selectors"
 
@@ -133,7 +134,7 @@ export const ServersPage = React.memo(function ServersPage({
     const instances = new Set<string>()
     const relays = new Set<string>()
     for (const grant of capabilities.grants) {
-      if (!roleHasPermission(grant.role, "instance.delete")) continue
+      if (!grantHasPermission(grant, "instance.delete")) continue
       if (
         grant.resourceType === "relay" &&
         grant.resourceId === grant.relayId
@@ -555,6 +556,12 @@ const ServerDataTable = React.memo(function ServerDataTable({
   }, [deleteAccess, initialTableState, onDelete])
   return (
     <DataTable
+      leadingBody={
+        <PendingResourceInvitations
+          resourceType="instance"
+          searchStore={searchStore}
+        />
+      }
       definition={definition}
       emptyState={({ searchActive }) => (
         <EmptyServerTable

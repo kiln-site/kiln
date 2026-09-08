@@ -36,7 +36,11 @@ import type {
   RelaySnapshot,
 } from "@workspace/contracts"
 
-import { actionsForRole, isActionAllowed } from "./permissions.js"
+import {
+  actionsForRole,
+  fileMutationAction,
+  isActionAllowed,
+} from "./permissions.js"
 import { relayBuildLabel } from "./build-info.js"
 import { isSourceAllowed } from "./source-policy.js"
 import { createRelaySnapshotDelta } from "./snapshot-delta.js"
@@ -991,9 +995,10 @@ function actionForRequest(request: RelayControlRequest): RelayAction | null {
     case "instance.files.read":
       return "instance.files.read"
     case "instance.files.write":
+      return "instance.files.write"
     case "instance.files.mutate":
     case "instance.files.mutate.result":
-      return "instance.files.write"
+      return fileMutationAction(objectString(request.payload, "operation"))
     case "instance.files.upload-url":
       return "instance.files.upload-url"
     case "instance.console.history":

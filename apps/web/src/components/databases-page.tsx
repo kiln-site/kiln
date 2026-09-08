@@ -1,3 +1,4 @@
+import { PendingResourceInvitations } from "@/components/pending-resource-invitations"
 import * as React from "react"
 import { useDbClient, useLiveQuery } from "@tanstack/react-db"
 import {
@@ -80,7 +81,7 @@ import {
   ServerPickerList,
   serverPickerOptionKey,
 } from "@/components/server-picker-list"
-import { roleHasPermission } from "@/lib/permissions"
+import { grantHasPermission } from "@/lib/permissions"
 import type { AccessPermission } from "@/lib/permissions"
 import {
   createDataTableColumnHelper,
@@ -497,6 +498,12 @@ const DatabaseTable = React.memo(function DatabaseTable({
 
   return (
     <DataTable
+      leadingBody={
+        <PendingResourceInvitations
+          resourceType="database"
+          searchStore={searchStore}
+        />
+      }
       definition={definition}
       emptyState={({ searchActive }) => (
         <EmptyDatabaseTable
@@ -1038,7 +1045,7 @@ function DatabaseNetworkPickerContent({
             capabilities.grants.some(
               (grant) =>
                 grant.relayId === database.relayId &&
-                roleHasPermission(grant.role, "instance.network.write") &&
+                grantHasPermission(grant, "instance.network.write") &&
                 (grant.resourceType === "relay" ||
                   (grant.resourceType === "instance" &&
                     grant.resourceId === instance.id))

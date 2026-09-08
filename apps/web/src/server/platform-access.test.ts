@@ -14,7 +14,7 @@ import { Database } from "@/effect/database"
 import {
   assignPlatformAccessEffect,
   removePlatformAccessEffect,
-} from "@/server/access"
+} from "@/lib/platform-access"
 
 const emptyResult: ResultSetHeader = {
   affectedRows: 1,
@@ -31,11 +31,12 @@ interface TestPlatformUser {
   email: string
   id: string
   role: string
+  status?: "enabled" | "disabled"
 }
 
 describe("platform access changes", () => {
   it.effect(
-    "clears obsolete grants and revokes credentials when promoting an admin",
+    "preserves scoped grants and credentials while revising authority on promotion",
     () => {
       const statements: Array<{ sql: string; values: ReadonlyArray<unknown> }> =
         []
@@ -53,14 +54,17 @@ describe("platform access changes", () => {
           userId: "operator",
         })
 
-        assert.isTrue(
+        assert.isFalse(
           statements.some(({ sql }) => sql.includes("DELETE grant_row"))
         )
-        assert.isTrue(
+        assert.isFalse(
           statements.some(({ sql }) => /DELETE FROM .*session/u.test(sql))
         )
-        assert.isTrue(
+        assert.isFalse(
           statements.some(({ sql }) => sql.includes("kiln_cli_credential"))
+        )
+        assert.isTrue(
+          statements.some(({ sql }) => sql.includes("authorization_subject"))
         )
       }).pipe(Effect.provide(databaseLayer))
     }
@@ -96,6 +100,44 @@ describe("platform access changes", () => {
   })
 
   it.effect(
+    "does not count disabled administrators as a usable replacement",
+    () => {
+      const target = {
+        email: "admin@example.com",
+        id: "admin-one",
+        role: "admin",
+      }
+      const statements: Array<{ sql: string; values: ReadonlyArray<unknown> }> =
+        []
+      const databaseLayer = platformDatabaseLayer({
+        admins: [
+          target,
+          {
+            email: "disabled@example.com",
+            id: "admin-two",
+            role: "admin",
+            status: "disabled",
+          },
+        ],
+        statements,
+        target,
+      })
+      return Effect.gen(function* () {
+        const error = yield* removePlatformAccessEffect({
+          actingUserId: target.id,
+          developmentBypass: false,
+          targetUserId: target.id,
+        }).pipe(Effect.flip)
+        assert.strictEqual(
+          error.message,
+          "At least one Platform Admin is required"
+        )
+        assert.strictEqual(statements.length, 0)
+      }).pipe(Effect.provide(databaseLayer))
+    }
+  )
+
+  it.effect(
     "rechecks the assigning administrator inside the transaction",
     () => {
       const statements: Array<{ sql: string; values: ReadonlyArray<unknown> }> =
@@ -123,49 +165,52 @@ describe("platform access changes", () => {
     }
   )
 
-  it.effect("demotes a platform member and revokes active credentials", () => {
-    const target = {
-      email: "creator@example.com",
-      id: "creator",
-      role: "relay_creator",
-    }
-    const statements: Array<{ sql: string; values: ReadonlyArray<unknown> }> =
-      []
-    const databaseLayer = platformDatabaseLayer({
-      admins: [{ email: "admin@example.com", id: "admin", role: "admin" }],
-      statements,
-      target,
-    })
-
-    return Effect.gen(function* () {
-      yield* removePlatformAccessEffect({
-        actingUserId: "admin",
-        developmentBypass: false,
-        targetUserId: target.id,
+  it.effect(
+    "demotes a platform member while preserving scoped grants and credentials",
+    () => {
+      const target = {
+        email: "creator@example.com",
+        id: "creator",
+        role: "relay_creator",
+      }
+      const statements: Array<{ sql: string; values: ReadonlyArray<unknown> }> =
+        []
+      const databaseLayer = platformDatabaseLayer({
+        admins: [{ email: "admin@example.com", id: "admin", role: "admin" }],
+        statements,
+        target,
       })
 
-      assert.isTrue(
-        statements.some(
-          ({ sql, values }) =>
-            sql.includes("SET role = 'user'") && values[0] === target.id
+      return Effect.gen(function* () {
+        yield* removePlatformAccessEffect({
+          actingUserId: "admin",
+          developmentBypass: false,
+          targetUserId: target.id,
+        })
+
+        assert.isTrue(
+          statements.some(
+            ({ sql, values }) =>
+              sql.includes("SET role = 'user'") && values[0] === target.id
+          )
         )
-      )
-      assert.isTrue(
-        statements.some(
-          ({ sql, values }) =>
-            sql.includes("kiln_invitation") &&
-            sql.includes("access_type <> 'scoped'") &&
-            values[0] === target.email
+        assert.isTrue(
+          statements.some(
+            ({ sql, values }) =>
+              sql.includes("kiln_invitation") &&
+              sql.includes("access_type <> 'scoped'") &&
+              values[1] === target.email
+          )
         )
-      )
-      assert.isTrue(
-        statements.some(({ sql }) => /DELETE FROM .*session/u.test(sql))
-      )
-      assert.isTrue(
-        statements.some(({ sql }) => sql.includes("kiln_cli_credential"))
-      )
-    }).pipe(Effect.provide(databaseLayer))
-  })
+        assert.isFalse(
+          statements.some(({ sql }) => /DELETE FROM .*session/u.test(sql))
+        )
+        assert.isFalse(
+          statements.some(({ sql }) => sql.includes("kiln_cli_credential"))
+        )
+      }).pipe(Effect.provide(databaseLayer))
+    }
+  )
 })
 
 function platformDatabaseLayer(input: {
@@ -186,8 +231,13 @@ function platformDatabaseLayer(input: {
         queryRows: <TRow extends RowDataPacket>(sql: string) =>
           Effect.succeed(
             (sql.includes("WHERE role = 'admin'")
-              ? input.admins
-              : [input.target]) as unknown as ReadonlyArray<TRow>
+              ? input.admins.map((user) => ({
+                  emailVerifiedAt: new Date(0),
+                  ...user,
+                }))
+              : [
+                  { emailVerifiedAt: new Date(0), ...input.target },
+                ]) as unknown as ReadonlyArray<TRow>
           ),
       }),
   })

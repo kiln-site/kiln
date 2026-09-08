@@ -51,7 +51,7 @@ import { relayRpc } from "@/lib/relay-connection"
 import { listPersistedRelays } from "@/lib/relay-registry"
 import { scheduleTargetsWithAvailability } from "@/lib/schedule-target-options"
 import { promiseEffect } from "@/effect/promise"
-import { requireAuthenticatedUser } from "@/server/auth"
+import { requireEligibleResourceUser } from "@/server/auth"
 
 const scheduleWriteSchema = scheduleInputSchema
 
@@ -132,7 +132,7 @@ interface TargetDirectoryRow extends RowDataPacket {
 
 export const getScheduleOptions = createServerFn({ method: "GET" }).handler(
   async () => {
-    const user = await requireAuthenticatedUser()
+    const user = await requireEligibleResourceUser()
     const [grants, availableTargets, referencedTargets, relays] =
       await Promise.all([
         isPlatformAdmin(user) ? Promise.resolve([]) : listUserGrants(user.id),
@@ -204,7 +204,7 @@ export const getScheduleOptions = createServerFn({ method: "GET" }).handler(
 
 export const getSchedules = createServerFn({ method: "GET" }).handler(
   async () => {
-    const user = await requireAuthenticatedUser()
+    const user = await requireEligibleResourceUser()
     const grants = isPlatformAdmin(user) ? [] : await listUserGrants(user.id)
     const schedules = await loadSchedules()
     const visible = schedules.filter(
@@ -225,7 +225,7 @@ export const getSchedules = createServerFn({ method: "GET" }).handler(
 export const createSchedule = createServerFn({ method: "POST" })
   .validator(scheduleWriteSchema)
   .handler(async ({ data }) => {
-    const user = await requireAuthenticatedUser()
+    const user = await requireEligibleResourceUser()
     const grants = isPlatformAdmin(user) ? [] : await listUserGrants(user.id)
     const definition = scheduleDefinitionSchema.parse({
       ...data,
@@ -256,7 +256,7 @@ export const createSchedule = createServerFn({ method: "POST" })
 export const updateSchedule = createServerFn({ method: "POST" })
   .validator(scheduleUpdateSchema)
   .handler(async ({ data }) => {
-    const user = await requireAuthenticatedUser()
+    const user = await requireEligibleResourceUser()
     const grants = isPlatformAdmin(user) ? [] : await listUserGrants(user.id)
     const existing = (await loadSchedules()).find(
       (schedule) => schedule.id === data.id
@@ -317,7 +317,7 @@ export const updateSchedule = createServerFn({ method: "POST" })
 export const deleteSchedule = createServerFn({ method: "POST" })
   .validator(scheduleIdSchema)
   .handler(async ({ data }) => {
-    const user = await requireAuthenticatedUser()
+    const user = await requireEligibleResourceUser()
     const grants = isPlatformAdmin(user) ? [] : await listUserGrants(user.id)
     const schedule = (await loadSchedules()).find(
       (candidate) => candidate.id === data.id
@@ -352,7 +352,7 @@ export const deleteSchedule = createServerFn({ method: "POST" })
 export const runScheduleNow = createServerFn({ method: "POST" })
   .validator(scheduleIdSchema)
   .handler(async ({ data }) => {
-    const user = await requireAuthenticatedUser()
+    const user = await requireEligibleResourceUser()
     const grants = isPlatformAdmin(user) ? [] : await listUserGrants(user.id)
     const schedule = (await loadSchedules()).find(
       (candidate) => candidate.id === data.id

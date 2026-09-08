@@ -7,6 +7,7 @@ import { Effect } from "effect"
 import { hearthStreamHandler } from "./app-server-handler"
 import { disposeAppRuntime } from "./effect/runtime"
 import { forkPromise } from "./effect/promise"
+import { startAccessInvitationDelivery } from "./lib/access-invitation-delivery"
 import { scheduleBackupCopyProcessing } from "./lib/backup-copy"
 import { wakePendingAuthorizationDelivery } from "./lib/authorization-delivery"
 import { scheduleInstancePostProvisionProcessing } from "./lib/instance-post-provision"
@@ -52,6 +53,7 @@ await Effect.runPromise(
   )
 )
 
+startAccessInvitationDelivery()
 scheduleBackupCopyProcessing()
 scheduleInstancePostProvisionProcessing()
 scheduleTailscaleCleanupProcessing()

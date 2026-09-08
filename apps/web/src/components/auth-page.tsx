@@ -1,3 +1,6 @@
+import { ensuringPromise, recoverPromise } from "@/effect/promise"
+import { showToast } from "@workspace/ui/components/sonner"
+import { requestAccountClaim } from "@/server/users"
 import * as React from "react"
 import { Effect } from "effect"
 import {
@@ -281,7 +284,7 @@ export function AuthPage({
           setVerificationFeedback({
             message: emailDeliveryEnabled
               ? "A fresh code is on its way."
-              : "A fresh code was written to the Hearth container logs.",
+              : "Email delivery is unavailable. Ask a platform administrator for manual verification.",
             tone: "success",
           })
         },
@@ -449,9 +452,15 @@ export function AuthPage({
                 No users exist yet. This account becomes the platform
                 administrator.
                 {!emailDeliveryEnabled
-                  ? " Email verification is skipped because email delivery is not configured."
+                  ? " Trusted initial setup records manual verification for this administrator. It does not confirm email ownership."
                   : " We’ll verify the address before signing you in."}
               </div>
+            ) : null}
+            {mode === "sign-up" && !emailDeliveryEnabled ? (
+              <p className="mb-5 text-xs leading-5 text-muted-foreground">
+                New accounts require manual verification by a platform
+                administrator before resource access.
+              </p>
             ) : null}
             {verified ? (
               <Notice icon={Check}>Email verified. You can sign in now.</Notice>
@@ -567,6 +576,54 @@ export function AuthPage({
                       ? "Create account"
                       : "Send recovery code"}
               </Button>
+              {emailDeliveryEnabled &&
+              (mode === "sign-in" || mode === "sign-up") ? (
+                <Button
+                  type="button"
+                  variant="outline"
+                  disabled={pending !== null}
+                  onClick={async (event) => {
+                    const form = event.currentTarget.form
+                    const email = String(
+                      form ? (new FormData(form).get("email") ?? "") : ""
+                    ).trim()
+                    if (!email) {
+                      setError("Enter your email address first")
+                      return
+                    }
+                    setPending("claim")
+                    await ensuringPromise(
+                      () =>
+                        recoverPromise(
+                          async () => {
+                            sessionStorage.setItem(
+                              "kiln:claim:return",
+                              returnPath(redirectPath)
+                            )
+                            await requestAccountClaim({ data: { email } })
+                            showToast({
+                              type: "success",
+                              message:
+                                "If your account is waiting to be claimed, an email is on its way.",
+                            })
+                          },
+                          (cause) => {
+                            setError(
+                              cause instanceof Error
+                                ? cause.message
+                                : "Could not request account claim"
+                            )
+                          }
+                        ),
+                      () => {
+                        setPending(null)
+                      }
+                    )
+                  }}
+                >
+                  Claim an invited account
+                </Button>
+              ) : null}
             </form>
 
             {mode === "sign-in" ? (
@@ -718,7 +775,7 @@ function VerificationPanel({
             ? emailLocked
               ? "Enter the six-digit code we sent to your invited address."
               : "Enter the six-digit code we sent. You can correct the address before requesting another."
-            : "Enter the six-digit code printed in the Hearth container logs."
+            : "Email delivery is unavailable. Ask a platform administrator for manual verification."
         }
       />
       <form className="mt-6 grid gap-4" onSubmit={onSubmit}>
@@ -734,7 +791,8 @@ function VerificationPanel({
             className="h-11 bg-card/60 read-only:bg-muted/35 read-only:text-foreground/85"
           />
           <span className="type-meta text-muted-foreground">
-            Codes expire in 10 minutes · pending accounts expire after 24 hours
+            Codes expire in 10 minutes. Your account and invitations are
+            preserved.
           </span>
         </Field>
         <Field label="Verification code" htmlFor="verification-code">
@@ -818,7 +876,7 @@ function RecoveryPanel({
         description={
           deliveryEnabled
             ? `Enter the code sent to ${email}.`
-            : `Enter the recovery code for ${email} from the Hearth container logs.`
+            : "Email delivery is unavailable. Contact a platform administrator for account recovery."
         }
       />
       {error ? (

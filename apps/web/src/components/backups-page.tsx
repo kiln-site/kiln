@@ -80,7 +80,7 @@ import {
   targetKey,
 } from "@/components/backups/table-row"
 import { BackupToolbar } from "@/components/backups/toolbar"
-import { roleHasPermission } from "@/lib/permissions"
+import { grantHasPermission } from "@/lib/permissions"
 import {
   accessCapabilitiesQueryOptions,
   backupRunsInfiniteQueryOptions,
@@ -2395,7 +2395,7 @@ function canCreateForResource(
   return capabilities.grants.some(
     (grant) =>
       grant.relayId === relayId &&
-      roleHasPermission(grant.role, "backup.create") &&
+      grantHasPermission(grant, "backup.create") &&
       (grant.resourceType === "relay" ||
         (grant.resourceType === resourceType &&
           grant.resourceId === resourceId))

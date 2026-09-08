@@ -99,3 +99,21 @@ export function isActionAllowed(
 ): boolean {
   return grantedActions.includes(action)
 }
+
+/** Mutations share a protocol endpoint, but deleting never follows from edit authority. */
+export function fileMutationAction(
+  operation: string | null
+): RelayAction | null {
+  switch (operation) {
+    case "delete":
+      return "instance.files.delete"
+    case "rename":
+      return "instance.files.rename"
+    case "duplicate":
+    case "archive":
+    case "unarchive":
+      return "instance.files.write"
+    default:
+      return null
+  }
+}

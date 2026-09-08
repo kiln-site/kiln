@@ -94,14 +94,14 @@ describe("backup access", () => {
     ).toBe(true)
   })
 
-  it("keeps creator reads and downloads without granting mutations", () => {
+  it("revokes historical backup reads and downloads when target access is lost", () => {
     const creatorBackup = { ...backup, createdBy: user.id }
     expect(hasBackupPermission(user, [], creatorBackup, "backup.read")).toBe(
-      true
+      false
     )
     expect(
       hasBackupPermission(user, [], creatorBackup, "backup.download")
-    ).toBe(true)
+    ).toBe(false)
     expect(hasBackupPermission(user, [], creatorBackup, "backup.restore")).toBe(
       false
     )

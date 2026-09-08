@@ -1,3 +1,5 @@
+import { firstAccessibleAppHref } from "@/lib/navigation-destinations"
+import { isAccountEnabled, isAccountVerified } from "@/lib/account-policy"
 import { createFileRoute, redirect } from "@tanstack/react-router"
 import { z } from "zod"
 
@@ -5,7 +7,10 @@ import { AuthPage } from "@/components/auth-page"
 import { recoverPromise } from "@/effect/promise"
 import { inviteTokenFromRedirect } from "@/lib/invitation-auth"
 import { pageTitle } from "@/lib/page-title"
-import { relayConnectionQueryOptions } from "@/lib/query-options"
+import {
+  accessCapabilitiesQueryOptions,
+  relayConnectionQueryOptions,
+} from "@/lib/query-options"
 import {
   relayInstanceRouteIdentifier,
   resolveCanonicalRelayInstance,
@@ -40,8 +45,24 @@ export const Route = createFileRoute("/")({
         invitationSignup,
       }
     }
+    if (!isAccountEnabled(state.user) || !isAccountVerified(state.user)) {
+      throw redirect({
+        to: "/account-status",
+        search: { redirect: search.redirect },
+      })
+    }
     if (search.redirect?.startsWith("/")) {
       throw redirect({ href: search.redirect })
+    }
+    const capabilities = await context.queryClient.ensureQueryData(
+      accessCapabilitiesQueryOptions()
+    )
+    if (
+      !capabilities.isPlatformAdmin &&
+      !capabilities.canManageRelays &&
+      capabilities.grants.length === 0
+    ) {
+      throw redirect({ href: firstAccessibleAppHref(capabilities) })
     }
     const [connection, uiPreferences] = await Promise.all([
       context.queryClient.ensureQueryData(
@@ -57,10 +78,7 @@ export const Route = createFileRoute("/")({
       ) {
         throw redirect({ to: "/infra/relays" })
       }
-      throw redirect({
-        to: "/server/$serverId/console",
-        params: { serverId: "unavailable" },
-      })
+      throw redirect({ href: firstAccessibleAppHref(capabilities) })
     }
     const instances = connection.snapshot.instances
     const rememberedResolution = resolveCanonicalRelayInstance(

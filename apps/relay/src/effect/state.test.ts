@@ -1373,3 +1373,79 @@ describe("backup task secret scrubbing", () => {
     )
   })
 })
+
+describe("legacy machine mutation migration", () => {
+  it("snapshots legacy write rights once without broadening newly created policies", async () => {
+    const filename = join(testDirectory, "legacy-mutations.sqlite")
+    const initialize = () =>
+      Effect.runPromise(
+        Effect.gen(function* () {
+          yield* RelayStateStore
+        }).pipe(Effect.provide(makeRelayStateLayer(filename)))
+      )
+    await initialize()
+    const database = new DatabaseSync(filename)
+    try {
+      database.exec("DELETE FROM effect_sql_migrations WHERE migration_id = 15")
+      database
+        .prepare(
+          "INSERT INTO relay_invitations (id, token_hash, role, actions_json, created_at, expires_at) VALUES (?, ?, 'custom', ?, 1, 9999999999999)"
+        )
+        .run(
+          "legacy-invitation",
+          "legacy-token",
+          JSON.stringify(["instance.files.write"])
+        )
+      database
+        .prepare(
+          "INSERT INTO relay_clients (id, name, public_key, role, actions_json, origins_json, created_at, invitation_id) VALUES (?, ?, ?, 'custom', ?, '[]', 1, ?)"
+        )
+        .run(
+          "legacy-client",
+          "Legacy",
+          "legacy-key",
+          JSON.stringify(["instance.files.write"]),
+          "legacy-invitation"
+        )
+    } finally {
+      database.close()
+    }
+    await initialize()
+    const migrated = new DatabaseSync(filename)
+    try {
+      for (const table of ["relay_clients", "relay_invitations"]) {
+        const row = migrated
+          .prepare(`SELECT actions_json FROM ${table}`)
+          .get() as { actions_json: string }
+        assert.deepEqual(JSON.parse(row.actions_json), [
+          "instance.files.write",
+          "instance.files.delete",
+          "instance.files.rename",
+        ])
+      }
+      migrated
+        .prepare(
+          "INSERT INTO relay_invitations (id, token_hash, role, actions_json, created_at, expires_at) VALUES (?, ?, 'custom', ?, 1, 9999999999999)"
+        )
+        .run(
+          "new-invitation",
+          "new-token",
+          JSON.stringify(["instance.files.write"])
+        )
+    } finally {
+      migrated.close()
+    }
+    await initialize()
+    const restarted = new DatabaseSync(filename)
+    try {
+      const row = restarted
+        .prepare(
+          "SELECT actions_json FROM relay_invitations WHERE id = 'new-invitation'"
+        )
+        .get() as { actions_json: string }
+      assert.deepEqual(JSON.parse(row.actions_json), ["instance.files.write"])
+    } finally {
+      restarted.close()
+    }
+  })
+})

@@ -35,6 +35,10 @@ const hearthRealtimeQueryScopes = {
     exact(queryKeys.access.capabilities),
     exact(queryKeys.access.overview),
     prefix(["access", "instances"]),
+    prefix(["resource-access"]),
+    prefix(["access-resources"]),
+    prefix(["resource-invitations"]),
+    prefix(["users"]),
   ],
   activity: [prefix(["activity"])],
   "backup-settings": [prefix(["backups", "policy"])],
@@ -81,6 +85,10 @@ function queryScopes(
       exact(queryKeys.access.capabilities),
       exact(queryKeys.access.overview),
       prefix(["access", "instances", scope.relayId]),
+      prefix(["resource-access", scope.relayId]),
+      prefix(["access-resources"]),
+      prefix(["resource-invitations"]),
+      prefix(["users"]),
     ]
   }
   if (topic === "backup-settings" && scope) {

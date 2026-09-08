@@ -1,3 +1,4 @@
+import { AccountStatusSync } from "@/components/account-status-sync"
 import * as React from "react"
 import { useSuspenseQuery } from "@tanstack/react-query"
 import { useRouter } from "@tanstack/react-router"
@@ -41,6 +42,7 @@ export const AppFrame = React.memo(function AppFrame({
     <SidebarProvider defaultOpen={uiPreferences.sidebarOpen}>
       <AppearanceHydrator appearance={uiPreferences.appearance} />
       <InfraUpdateDialogProvider>
+        <AccountStatusSync />
         <RealtimeSync />
         <RelayConnectionToastMonitor />
         <MobileSidebarNavigationDismiss />

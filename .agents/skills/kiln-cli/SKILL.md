@@ -66,6 +66,20 @@ Use `--profile <name>` on any command to select a saved profile. `KILN_URL`,
 `KILN_TOKEN`, and `KILN_CONFIG` support isolated automation, but prefer the
 user's existing authenticated profile for interactive work.
 
+## Account and resource permissions
+
+CLI credentials retain the account's current resource permissions, including
+linked presets and inherited Relay assignments. New invitations grant nothing
+until accepted. A user must be verified and enabled to run resource commands.
+Disabling an account pauses authority without deleting the saved CLI credential;
+re-enabling resumes it if the credential is still valid. Explicit logout,
+revocation, and expiration still invalidate credentials.
+
+Power commands check the specific action. File writes, deletion, and chmod use
+separate permissions; write includes read. Changing disk limits additionally
+requires limits permission. A read-only CLI credential never gains write access
+from a more permissive preset.
+
 ## Update the CLI
 
 Update the locally installed CLI with:

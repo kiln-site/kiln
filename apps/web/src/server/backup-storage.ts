@@ -37,7 +37,7 @@ import {
   verifyS3BackupCredential,
   type S3BackupCredential,
 } from "@/backups/destinations/s3"
-import { requireAuthenticatedUser } from "@/server/auth"
+import { requireEligibleResourceUser } from "@/server/auth"
 
 const backupStorageIdSchema = z.uuid()
 export const backupStorageInputSchema = z.strictObject({
@@ -65,7 +65,7 @@ export const getBackupStorage = createServerFn({ method: "GET" }).handler(
   async () => {
     const [{ setResponseHeader }, user] = await Promise.all([
       import("@tanstack/react-start/server"),
-      requireAuthenticatedUser(),
+      requireEligibleResourceUser(),
     ])
     setResponseHeader("Cache-Control", "no-store")
     const storage = await runAppEffect(
@@ -83,7 +83,7 @@ export const getBackupStorage = createServerFn({ method: "GET" }).handler(
 export const saveBackupStorage = createServerFn({ method: "POST" })
   .validator(backupStorageInputSchema)
   .handler(async ({ data }) => {
-    const user = await requireAuthenticatedUser()
+    const user = await requireEligibleResourceUser()
     if (
       (data.platform || data.allowPrivateNetwork) &&
       !hasPlatformPermission(user, "platform.backups.manage-storage")
@@ -161,7 +161,7 @@ export const saveBackupStorage = createServerFn({ method: "POST" })
 export const deleteBackupStorage = createServerFn({ method: "POST" })
   .validator(z.strictObject({ id: backupStorageIdSchema }))
   .handler(async ({ data }) => {
-    const user = await requireAuthenticatedUser()
+    const user = await requireEligibleResourceUser()
     const existing = await runAppEffect(
       "backupStorage.loadForDelete",
       loadBackupStorageEffect(data.id)
@@ -184,7 +184,7 @@ export const deleteBackupStorage = createServerFn({ method: "POST" })
 export const setPreferredBackupStorage = createServerFn({ method: "POST" })
   .validator(preferredStorageInputSchema)
   .handler(async ({ data }) => {
-    const user = await requireAuthenticatedUser()
+    const user = await requireEligibleResourceUser()
     const target = await requireBackupPolicyTarget(data, user)
     if (data.storageId) {
       const storage = await runAppEffect(
@@ -217,7 +217,7 @@ export const setPreferredBackupStorage = createServerFn({ method: "POST" })
 
 async function requireBackupPolicyTarget(
   input: { relayId: string; target: BackupTarget },
-  user: Awaited<ReturnType<typeof requireAuthenticatedUser>>
+  user: Awaited<ReturnType<typeof requireEligibleResourceUser>>
 ): Promise<BackupTarget> {
   if (input.target.kind === "platform") {
     if (!isPlatformAdmin(user)) {

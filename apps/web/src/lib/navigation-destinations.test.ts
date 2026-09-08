@@ -5,6 +5,7 @@ import {
   accessibleDestinationsForServer,
   accessibleInfrastructureDestinations,
   canAccessActivity,
+  canAccessInstancePermission,
   destinationsForServer,
   sectionDestinationLabel,
   serverDestinationHref,
@@ -64,6 +65,76 @@ describe("navigation destinations", () => {
     ).toEqual(["console", "files", "network", "info"])
   })
 
+  it("shows Startup for configuration readers and checks each power action independently", () => {
+    const instance = {
+      brickId: "paper",
+      id: "server-one",
+      relayId: "relay-one",
+    }
+    const access: NavigationAccessCapabilities = {
+      ...operatorRelayAccess,
+      grants: [
+        {
+          relayId: instance.relayId,
+          resourceId: instance.id,
+          resourceType: "instance",
+          role: "viewer",
+          permissions: [
+            "instance.read",
+            "instance.configuration.read",
+            "instance.power.start",
+          ],
+        },
+      ],
+    }
+    expect(
+      accessibleDestinationsForServer(instance, access).map(({ id }) => id)
+    ).toContain("startup")
+    expect(
+      canAccessInstancePermission(access, instance, "instance.power.start")
+    ).toBe(true)
+    for (const action of ["stop", "restart", "kill"] as const)
+      expect(
+        canAccessInstancePermission(
+          access,
+          instance,
+          `instance.power.${action}`
+        )
+      ).toBe(false)
+    expect(
+      canAccessInstancePermission(
+        access,
+        instance,
+        "instance.configuration.write"
+      )
+    ).toBe(false)
+  })
+
+  it("does not expose restart or kill through a stop-only selection", () => {
+    const instance = { id: "server-one", relayId: "relay-one" }
+    const access: NavigationAccessCapabilities = {
+      ...operatorRelayAccess,
+      grants: [
+        {
+          relayId: instance.relayId,
+          resourceId: instance.id,
+          resourceType: "instance",
+          role: "admin",
+          permissions: ["instance.power.start", "instance.power.stop"],
+        },
+      ],
+    }
+    expect(
+      canAccessInstancePermission(access, instance, "instance.power.stop")
+    ).toBe(true)
+    expect(
+      canAccessInstancePermission(access, instance, "instance.power.restart")
+    ).toBe(false)
+    expect(
+      canAccessInstancePermission(access, instance, "instance.power.kill")
+    ).toBe(false)
+  })
+
   it("shows only infrastructure destinations matching the grant scope", () => {
     expect(
       accessibleInfrastructureDestinations(databaseViewerAccess).map(
@@ -71,6 +142,32 @@ describe("navigation destinations", () => {
       )
     ).toEqual(["Databases"])
     expect(canAccessActivity(databaseViewerAccess)).toBe(false)
+  })
+
+  it("shows pending infrastructure without granting server operation navigation", () => {
+    const pending: NavigationAccessCapabilities = {
+      canManageAccess: false,
+      canManageRelays: false,
+      isPlatformAdmin: false,
+      grants: [],
+      pendingScopes: [
+        {
+          relayId: "relay-one",
+          resourceType: "instance",
+          resourceId: "server-one",
+          invitationId: "invitation-one",
+        },
+      ],
+    }
+    expect(
+      accessibleInfrastructureDestinations(pending).map(({ label }) => label)
+    ).toEqual(["Servers"])
+    expect(
+      accessibleDestinationsForServer(
+        { brickId: "paper", id: "server-one", relayId: "relay-one" },
+        pending
+      )
+    ).toEqual([])
   })
 
   it("builds encoded server destination URLs", () => {

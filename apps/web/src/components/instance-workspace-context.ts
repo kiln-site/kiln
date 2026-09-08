@@ -3,14 +3,18 @@ import * as React from "react"
 import type { InstanceWorkspaceInstance } from "@/lib/relay-selectors"
 
 export interface InstanceWorkspacePermissions {
+  consoleRead: boolean
   consoleWrite: boolean
   deleteServer: boolean
   filesWrite: boolean
   networkRead: boolean
   networkPublicPortWrite: boolean
   networkWrite: boolean
-  power: boolean
-  settings: boolean
+  powerStart: boolean
+  powerRestart: boolean
+  configurationRead: boolean
+  configurationWrite: boolean
+  limitsWrite: boolean
   shareLogs: boolean
 }
 

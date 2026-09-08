@@ -1,3 +1,7 @@
+import { ResourceInvitationDialog } from "@/components/resource-invitation-dialog"
+import { isAccountEnabled, isAccountVerified } from "@/lib/account-policy"
+import { invitationInfrastructureHref } from "@/lib/resource-invitation-query"
+import { getResourceInvitation } from "@/server/resource-access"
 import { useSuspenseQuery } from "@tanstack/react-query"
 import { createFileRoute, redirect } from "@tanstack/react-router"
 import { z } from "zod"
@@ -12,6 +16,7 @@ import { getInvitationPreview } from "@/server/access"
 import { getAuthState } from "@/server/auth"
 
 const invitationSearchSchema = z.object({
+  id: z.uuid().optional(),
   token: z.preprocess(
     (value) =>
       typeof value === "string" && value.length >= 32 && value.length <= 256
@@ -27,7 +32,47 @@ export const Route = createFileRoute("/invite")({
   beforeLoad: async ({ search }) => {
     const state = await getAuthState()
     const token = search.token
-    if (!token || state.user) return state
+    if (search.id) {
+      if (!state.user)
+        throw redirect({
+          to: "/",
+          search: { redirect: `/invite?id=${encodeURIComponent(search.id)}` },
+        })
+      if (!isAccountEnabled(state.user) || !isAccountVerified(state.user))
+        throw redirect({
+          to: "/account-status",
+          search: { redirect: `/invite?id=${encodeURIComponent(search.id)}` },
+        })
+      const invitation = await getResourceInvitation({
+        data: { id: search.id },
+      })
+      if (invitation.pending)
+        throw redirect({
+          href: invitationInfrastructureHref(invitation),
+          replace: true,
+        })
+      return state
+    }
+    if (!token) return state
+    if (state.user) {
+      if (!isAccountEnabled(state.user) || !isAccountVerified(state.user))
+        throw redirect({
+          to: "/account-status",
+          search: { redirect: invitePath(token) },
+        })
+      const scoped = await recoverPromise(
+        () => getResourceInvitation({ data: { token } }),
+        () => null
+      )
+      if (scoped)
+        throw redirect({
+          href: scoped.pending
+            ? invitationInfrastructureHref(scoped)
+            : `/invite?id=${encodeURIComponent(scoped.id)}`,
+          replace: true,
+        })
+      return state
+    }
     const preview = await recoverPromise(
       () => getInvitationPreview({ data: { token } }),
       () => null
@@ -52,8 +97,15 @@ export const Route = createFileRoute("/invite")({
 })
 
 function InviteRoute() {
-  const { token } = Route.useSearch()
+  const { token, id } = Route.useSearch()
   const { user } = Route.useRouteContext()
+  if (id && user)
+    return (
+      <ResourceInvitationDialog
+        invitationId={id}
+        onClose={() => window.location.assign("/")}
+      />
+    )
   if (!token) {
     return <InvitationPage preview={null} token="" user={user} />
   }

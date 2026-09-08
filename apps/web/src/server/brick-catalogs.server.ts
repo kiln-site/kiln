@@ -15,7 +15,7 @@ import {
 import { kilnBrickCatalogUrl } from "@/lib/environment"
 import { runAppEffect } from "@/effect/runtime"
 import { promiseEffect, recoverPromise } from "@/effect/promise"
-import { requireAuthenticatedUser } from "@/server/auth"
+import { requireEligibleResourceUser } from "@/server/auth"
 import { Effect } from "effect"
 
 const DEFAULT_CATALOG_ID = "default"
@@ -43,7 +43,7 @@ export interface BrickCatalogSummary {
 }
 
 export async function listBrickCatalogsHandler() {
-  const user = await requireAuthenticatedUser()
+  const user = await requireEligibleResourceUser()
   const platformAdmin = isPlatformAdmin(user)
   const [defaultResult, records] = await Promise.all([
     loadDefaultCatalogResult(),
@@ -66,7 +66,7 @@ export async function listBrickCatalogsHandler() {
 export async function getBrickCatalogDetailsHandler(data: {
   catalogId: string
 }) {
-  const user = await requireAuthenticatedUser()
+  const user = await requireEligibleResourceUser()
   if (data.catalogId === DEFAULT_CATALOG_ID) {
     const catalog = await loadDefaultCatalog()
     return {
@@ -94,7 +94,7 @@ export async function getBrickCatalogDetailsHandler(data: {
 }
 
 export async function addBrickCatalogHandler(data: { source: string }) {
-  const user = await requireAuthenticatedUser()
+  const user = await requireEligibleResourceUser()
   if (!hasPlatformPermission(user, "platform.bricks.add-catalog")) {
     throw new Error("Adding catalogs requires Bring your own Relay access")
   }
@@ -117,7 +117,7 @@ export async function addBrickCatalogHandler(data: { source: string }) {
 }
 
 export async function deleteBrickCatalogHandler(data: { catalogId: string }) {
-  const user = await requireAuthenticatedUser()
+  const user = await requireEligibleResourceUser()
   const catalog = await requiredCatalog(data.catalogId)
   if (!isPlatformAdmin(user) && catalog.ownerUserId !== user.id) {
     throw new Error("You do not have access to this catalog")
@@ -136,7 +136,7 @@ export async function setBrickCatalogCommunityHandler(data: {
   catalogId: string
   community: boolean
 }) {
-  const user = await requireAuthenticatedUser()
+  const user = await requireEligibleResourceUser()
   if (!isPlatformAdmin(user)) {
     throw new Error("Only platform admins can publish catalogs")
   }

@@ -80,13 +80,15 @@ describe("platform access roles", () => {
 })
 
 describe("Relay permission requirements", () => {
-  it.effect("loads grants once and requires every requested permission", () => {
+  it.effect("loads one bounded grant batch and requires every requested permission", () => {
     let queryCount = 0
     const databaseLayer = Layer.succeed(Database)({
       execute: () => Effect.die("Unexpected database write"),
       queryRows: <TRow extends RowDataPacket>() =>
         Effect.sync(() => {
           queryCount += 1
+          if (queryCount === 2) return [{ access_id: "grant-one", selection_kind: "permission", selection_key: "instance.console.read" }] as unknown as ReadonlyArray<TRow>
+          if (queryCount === 3) return []
           return [
             {
               id: "grant-one",
@@ -114,17 +116,19 @@ describe("Relay permission requirements", () => {
       if (Result.isFailure(result)) {
         assert.strictEqual(result.failure._tag, "PermissionDeniedError")
       }
-      assert.strictEqual(queryCount, 1)
+      assert.strictEqual(queryCount, 3)
     }).pipe(Effect.provide(databaseLayer))
   })
 
-  it.effect("allows every requested permission from one grant query", () => {
+  it.effect("allows implied permissions from one bounded grant batch", () => {
     let queryCount = 0
     const databaseLayer = Layer.succeed(Database)({
       execute: () => Effect.die("Unexpected database write"),
       queryRows: <TRow extends RowDataPacket>() =>
         Effect.sync(() => {
           queryCount += 1
+          if (queryCount === 2) return [{ access_id: "grant-one", selection_kind: "permission", selection_key: "instance.console.write" }] as unknown as ReadonlyArray<TRow>
+          if (queryCount === 3) return []
           return [
             {
               id: "grant-one",
@@ -146,7 +150,7 @@ describe("Relay permission requirements", () => {
         user: authenticatedUser,
       })
 
-      assert.strictEqual(queryCount, 1)
+      assert.strictEqual(queryCount, 3)
     }).pipe(Effect.provide(databaseLayer))
   })
 

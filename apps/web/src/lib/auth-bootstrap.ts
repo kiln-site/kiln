@@ -6,14 +6,15 @@ import type {
 } from "mysql2/promise"
 import { z } from "zod"
 
+import { Database } from "@/effect/database"
+import { runAppEffect } from "@/effect/runtime"
+import { advanceSubjectAcrossEnabledRelaysEffect } from "@/lib/authorization-revision"
+import { publishRealtimeChange } from "@/lib/realtime-source.server"
+import { isAccountVerified } from "@/lib/account-policy"
 import { auth } from "@/lib/auth"
 import { databasePool } from "@/lib/database"
 import { databaseTable, databaseTablePrefix } from "@/lib/database-config"
-import {
-  displayNameFromEmail,
-  parseDisplayName,
-  resolveDisplayName,
-} from "@/lib/display-name"
+import { displayNameFromEmail, parseDisplayName } from "@/lib/display-name"
 import { emailDeliveryConfig, publicSignupEnabled } from "@/lib/environment"
 
 const emailSchema = z.email().transform((value) => value.trim().toLowerCase())
@@ -26,6 +27,9 @@ interface UserCountRow extends RowDataPacket {
 interface PendingCredentialRow extends RowDataPacket {
   email: string
   emailVerified: number
+  emailVerifiedAt: Date | null
+  manuallyVerifiedAt: Date | null
+  legacyVerificationRecordedAt: Date | null
   id: string
   name: string
   password: string | null
@@ -105,7 +109,8 @@ export async function replacePendingAccountEmail(input: {
     async (connection) => {
       const [rows] = await connection.query<Array<PendingCredentialRow>>(
         `SELECT auth_user.id, auth_user.email, auth_user.emailVerified,
-              auth_user.name,
+              auth_user.emailVerifiedAt, auth_user.manuallyVerifiedAt,
+              auth_user.legacyVerificationRecordedAt, auth_user.name,
               auth_user.role, auth_account.password
          FROM ${databaseTable("user")} AS auth_user
          JOIN ${databaseTable("account")} AS auth_account
@@ -116,10 +121,13 @@ export async function replacePendingAccountEmail(input: {
         [currentEmail]
       )
       const pending = rows.at(0)
-      if (!pending || pending.emailVerified) {
+      if (!pending || isAccountVerified(pending)) {
         throw new Error("This pending account can no longer be changed.")
       }
-      const context = await auth.$context
+      const [context, { wakeAuthorizationDelivery }] = await Promise.all([
+        auth.$context,
+        import("@/lib/authorization-delivery"),
+      ])
       const ownsAccount = Boolean(
         pending.password &&
         (await context.password.verify({
@@ -141,19 +149,102 @@ export async function replacePendingAccountEmail(input: {
       if (existingRows.length)
         throw new Error("That email address is already in use.")
 
-      await context.internalAdapter.deleteUser(pending.id)
-      await createCredentialUser({
-        displayName: resolveDisplayName(pending.name, pending.email),
-        email: nextEmail,
-        password: input.password,
-        role: isInitialAdmin ? "admin" : "user",
-        verified: false,
+      const change = await runAppEffect(
+        "account.pending-email.change",
+        replacePendingAccountEmailEffect({
+          userId: pending.id,
+          currentEmail,
+          nextEmail,
+          passwordHash: pending.password!,
+          role: pending.role,
+        })
+      )
+      for (const relayId of change.relayIds) wakeAuthorizationDelivery(relayId)
+      publishRealtimeChange({
+        type: "access.changed",
+        reauthenticate: true,
+        userIds: [pending.id],
       })
+      if (change.sessionIds.length)
+        publishRealtimeChange({
+          type: "session.revoked",
+          sessionIds: change.sessionIds,
+        })
     }
   )
 
   await sendEmailVerificationCode(nextEmail)
   return { email: nextEmail }
+}
+
+/** Recheck password and verification at the write, after the expensive password proof. */
+export function replacePendingAccountEmailEffect(input: {
+  userId: string
+  currentEmail: string
+  nextEmail: string
+  passwordHash: string
+  role: string | null
+}) {
+  return Effect.gen(function* () {
+    const database = yield* Database
+    return yield* database.transaction("account.pending-email.change", (tx) =>
+      Effect.gen(function* () {
+        const changed = yield* tx.execute(
+          `UPDATE ${databaseTable("user")} u
+           JOIN ${databaseTable("account")} a ON a.userId = u.id AND a.providerId = 'credential'
+            SET u.email = ?, u.emailVerified = FALSE, u.updatedAt = CURRENT_TIMESTAMP(3)
+          WHERE u.id = ? AND u.email = ? AND a.password = ? AND u.role <=> ?
+            AND u.emailVerified = FALSE AND u.emailVerifiedAt IS NULL
+            AND u.manuallyVerifiedAt IS NULL AND u.legacyVerificationRecordedAt IS NULL`,
+          [
+            input.nextEmail,
+            input.userId,
+            input.currentEmail,
+            input.passwordHash,
+            input.role,
+          ]
+        )
+        if (changed.affectedRows !== 1)
+          return yield* Effect.fail(
+            new Error("This pending account can no longer be changed.")
+          )
+        const sessions = yield* tx.queryRows<RowDataPacket & { id: string }>(
+          `SELECT id FROM ${databaseTable("session")} WHERE userId = ? FOR UPDATE`,
+          [input.userId]
+        )
+        const revision = yield* advanceSubjectAcrossEnabledRelaysEffect(
+          tx,
+          input.userId,
+          [
+            { kind: "subject_relay" },
+            ...sessions.map((session) => ({
+              kind: "login_session" as const,
+              loginSessionId: session.id,
+            })),
+          ]
+        )
+        yield* tx.execute(
+          `DELETE FROM ${databaseTable("session")} WHERE userId = ?`,
+          [input.userId]
+        )
+        yield* tx.execute(
+          `INSERT INTO ${databaseTable("auth_audit")} (user_id, event, metadata) VALUES (?, 'account.pending-email.changed', ?)`,
+          [
+            input.userId,
+            JSON.stringify({
+              actorId: input.userId,
+              oldEmail: input.currentEmail,
+              email: input.nextEmail,
+            }),
+          ]
+        )
+        return {
+          ...revision,
+          sessionIds: sessions.map((session) => session.id),
+        }
+      })
+    )
+  })
 }
 
 async function createFirstUser(input: {
@@ -192,7 +283,7 @@ async function createCredentialUser(input: {
       const user = yield* promiseEffect(() =>
         context.internalAdapter.createUser({
           email: input.email,
-          emailVerified: input.verified,
+          emailVerified: false,
           name: input.displayName
             ? parseDisplayName(input.displayName)
             : displayNameFromEmail(input.email),
@@ -210,8 +301,19 @@ async function createCredentialUser(input: {
         )
         yield* promiseEffect(() =>
           databasePool.execute<ResultSetHeader>(
-            `UPDATE ${databaseTable("user")} SET emailVerified = ?, role = ? WHERE id = ?`,
-            [input.verified, input.role, user.id]
+            `UPDATE ${databaseTable("user")}
+                SET emailVerified = FALSE, role = ?, manuallyVerifiedAt = ?,
+                    statusChangedAt = CURRENT_TIMESTAMP(3)
+              WHERE id = ?`,
+            [input.role, input.verified ? new Date() : null, user.id]
+          )
+        )
+        yield* promiseEffect(() =>
+          databasePool.execute(
+            `INSERT INTO ${databaseTable("auth_audit")}
+               (user_id, event, metadata)
+             VALUES (?, 'account.bootstrap', ?)`,
+            [user.id, JSON.stringify({ trustedSetup: input.verified })]
           )
         )
       }).pipe(
