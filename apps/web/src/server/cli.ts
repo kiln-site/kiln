@@ -15,7 +15,7 @@ import {
 } from "@/effect/cli-access"
 import { runAppEffect } from "@/effect/runtime"
 import { cliDefaultAccessDays } from "@/lib/environment"
-import { requireAuthenticatedUser } from "@/server/auth"
+import { requireVerifiedUser, requireEligibleResourceUser } from "@/server/auth"
 
 const userCodeInputSchema = z.object({
   userCode: z.string().min(8).max(12),
@@ -24,7 +24,7 @@ const userCodeInputSchema = z.object({
 export const getCliAuthorizationRequest = createServerFn({ method: "GET" })
   .validator(userCodeInputSchema)
   .handler(async ({ data }) => {
-    await requireAuthenticatedUser()
+    await requireVerifiedUser()
     const inspection = await runAppEffect(
       "cli.device.inspect",
       inspectCliAuthorizationEffect(data.userCode).pipe(
@@ -51,7 +51,7 @@ export const approveCliAuthorization = createServerFn({ method: "POST" })
     })
   )
   .handler(async ({ data }) => {
-    const user = await requireAuthenticatedUser()
+    const user = await requireEligibleResourceUser()
     return runAppEffect(
       "cli.device.approve",
       approveCliAuthorizationEffect({ ...data, user })
@@ -61,7 +61,7 @@ export const approveCliAuthorization = createServerFn({ method: "POST" })
 export const denyCliAuthorization = createServerFn({ method: "POST" })
   .validator(userCodeInputSchema)
   .handler(async ({ data }) => {
-    const user = await requireAuthenticatedUser()
+    const user = await requireVerifiedUser()
     return runAppEffect(
       "cli.device.deny",
       denyCliAuthorizationEffect({ ...data, user })
@@ -70,7 +70,7 @@ export const denyCliAuthorization = createServerFn({ method: "POST" })
 
 export const getCliCredentials = createServerFn({ method: "GET" }).handler(
   async () => {
-    const user = await requireAuthenticatedUser()
+    const user = await requireVerifiedUser()
     return {
       credentials: await runAppEffect(
         "cli.credentials.list",
@@ -84,7 +84,7 @@ export const getCliCredentials = createServerFn({ method: "GET" }).handler(
 export const revokeCliCredential = createServerFn({ method: "POST" })
   .validator(z.object({ credentialId: z.uuid() }))
   .handler(async ({ data }) => {
-    const user = await requireAuthenticatedUser()
+    const user = await requireVerifiedUser()
     return runAppEffect(
       "cli.credentials.revoke",
       revokeCliCredentialEffect({ ...data, user })

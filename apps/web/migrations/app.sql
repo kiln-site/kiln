@@ -99,6 +99,7 @@ CREATE TABLE IF NOT EXISTS kiln_instance (
   created_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
   updated_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
   PRIMARY KEY (relay_id, instance_id),
+  KEY kiln_instance_owner_scope_idx (owner_id, relay_id, instance_id),
   UNIQUE KEY kiln_instance_relay_name_unique (relay_id, display_name),
   CONSTRAINT kiln_instance_relay_fk
     FOREIGN KEY (relay_id) REFERENCES kiln_relay (id) ON DELETE CASCADE
@@ -131,6 +132,7 @@ CREATE TABLE IF NOT EXISTS kiln_database (
   created_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
   updated_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
   UNIQUE KEY kiln_database_relay_name_unique (relay_id, name),
+  KEY kiln_database_owner_scope_idx (created_by, relay_id, database_id),
   KEY kiln_database_relay_idx (relay_id, created_at),
   CONSTRAINT kiln_database_relay_fk
     FOREIGN KEY (relay_id) REFERENCES kiln_relay (id) ON DELETE CASCADE
@@ -281,11 +283,15 @@ CREATE TABLE IF NOT EXISTS kiln_access_grant (
   resource_type ENUM('relay', 'instance', 'database') NOT NULL,
   resource_id VARCHAR(64) NOT NULL,
   role ENUM('owner', 'admin', 'operator', 'viewer') NOT NULL,
+  state ENUM('pending', 'active', 'revoked') NOT NULL DEFAULT 'active',
+  revision BIGINT UNSIGNED NOT NULL DEFAULT 1,
   granted_by VARCHAR(36) NULL,
   created_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
   updated_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
   UNIQUE KEY kiln_access_grant_scope_unique (user_id, relay_id, resource_type, resource_id),
   KEY kiln_access_grant_relay_resource_idx (relay_id, resource_type, resource_id),
+  KEY kiln_access_grant_scope_state_idx (relay_id, resource_type, resource_id, state, user_id),
+  KEY kiln_access_grant_user_state_idx (user_id, state, relay_id),
   KEY kiln_access_grant_user_idx (user_id)
 );
 
@@ -293,6 +299,18 @@ CREATE TABLE IF NOT EXISTS kiln_invitation (
   id CHAR(36) NOT NULL PRIMARY KEY,
   token_hash CHAR(64) NOT NULL,
   email VARCHAR(320) NOT NULL,
+  access_id CHAR(36) NULL,
+  user_id VARCHAR(36) NULL,
+  accepted_by VARCHAR(36) NULL,
+  acceptance_method ENUM('self', 'admin', 'legacy') NULL,
+  declined_at TIMESTAMP(3) NULL,
+  cancelled_at TIMESTAMP(3) NULL,
+  cancelled_by VARCHAR(36) NULL,
+  delivery_status ENUM('pending', 'sent', 'failed', 'not_required', 'legacy') NOT NULL DEFAULT 'pending',
+  delivery_attempts INT UNSIGNED NOT NULL DEFAULT 0,
+  delivery_last_error VARCHAR(512) NULL,
+  delivery_next_attempt_at TIMESTAMP(3) NULL,
+  sent_at TIMESTAMP(3) NULL,
   access_type ENUM('scoped', 'platform_admin', 'relay_creator') NOT NULL DEFAULT 'scoped',
   relay_id CHAR(43) CHARACTER SET ascii COLLATE ascii_bin NULL,
   instance_id VARCHAR(64) NULL,
@@ -303,6 +321,9 @@ CREATE TABLE IF NOT EXISTS kiln_invitation (
   accepted_at TIMESTAMP(3) NULL,
   revoked_at TIMESTAMP(3) NULL,
   created_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  KEY kiln_invitation_user_access_idx (user_id, access_id, expires_at),
+  KEY kiln_invitation_delivery_idx (delivery_status, delivery_next_attempt_at),
+  KEY kiln_invitation_access_expiry_idx (access_id, expires_at),
   UNIQUE KEY kiln_invitation_token_unique (token_hash),
   KEY kiln_invitation_email_pending_idx (email, expires_at),
   KEY kiln_invitation_relay_idx (relay_id, created_at)
@@ -597,4 +618,76 @@ CREATE TABLE IF NOT EXISTS kiln_schedule_run (
   KEY kiln_schedule_run_relay_idx (relay_id, scheduled_at DESC),
   CONSTRAINT kiln_schedule_run_relay_fk
     FOREIGN KEY (relay_id) REFERENCES kiln_relay (id) ON DELETE CASCADE
+);
+
+-- Additive access model. The data migration marker is committed with its backfill.
+CREATE TABLE IF NOT EXISTS kiln_data_migration (
+  id VARCHAR(120) NOT NULL PRIMARY KEY,
+  completed_at TIMESTAMP(3) NULL
+);
+
+CREATE TABLE IF NOT EXISTS kiln_access_selection (
+  access_id CHAR(36) NOT NULL,
+  selection_kind ENUM('permission', 'collection') NOT NULL,
+  selection_key VARCHAR(120) NOT NULL,
+  PRIMARY KEY (access_id, selection_kind, selection_key),
+  CONSTRAINT kiln_access_selection_access_fk FOREIGN KEY (access_id)
+    REFERENCES kiln_access_grant (id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS kiln_permission_preset (
+  id CHAR(36) NOT NULL PRIMARY KEY,
+  relay_id CHAR(43) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+  resource_type ENUM('relay', 'instance', 'database') NOT NULL,
+  resource_id VARCHAR(64) NOT NULL,
+  name VARCHAR(120) NOT NULL,
+  revision BIGINT UNSIGNED NOT NULL DEFAULT 1,
+  created_by VARCHAR(36) NULL,
+  updated_by VARCHAR(36) NULL,
+  created_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  updated_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+  KEY kiln_permission_preset_scope_idx (relay_id, resource_type, resource_id, id),
+  CONSTRAINT kiln_permission_preset_relay_fk FOREIGN KEY (relay_id)
+    REFERENCES kiln_relay (id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS kiln_preset_selection (
+  preset_id CHAR(36) NOT NULL,
+  selection_kind ENUM('permission', 'collection') NOT NULL,
+  selection_key VARCHAR(120) NOT NULL,
+  PRIMARY KEY (preset_id, selection_kind, selection_key),
+  CONSTRAINT kiln_preset_selection_preset_fk FOREIGN KEY (preset_id)
+    REFERENCES kiln_permission_preset (id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS kiln_access_preset (
+  id CHAR(36) NOT NULL PRIMARY KEY,
+  access_id CHAR(36) NOT NULL,
+  preset_id CHAR(36) NULL,
+  builtin_key VARCHAR(120) NULL,
+  granted_by VARCHAR(36) NULL,
+  created_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  UNIQUE KEY kiln_access_preset_custom_unique (access_id, preset_id),
+  UNIQUE KEY kiln_access_preset_builtin_unique (access_id, builtin_key),
+  KEY kiln_access_preset_reverse_idx (preset_id, access_id),
+  CONSTRAINT kiln_access_preset_reference_chk CHECK ((preset_id IS NULL) <> (builtin_key IS NULL)),
+  CONSTRAINT kiln_access_preset_access_fk FOREIGN KEY (access_id)
+    REFERENCES kiln_access_grant (id) ON DELETE CASCADE,
+  CONSTRAINT kiln_access_preset_preset_fk FOREIGN KEY (preset_id)
+    REFERENCES kiln_permission_preset (id) ON DELETE RESTRICT
+);
+
+CREATE TABLE IF NOT EXISTS kiln_account_claim (
+  id CHAR(36) NOT NULL PRIMARY KEY,
+  user_id VARCHAR(36) NOT NULL,
+  token_hash CHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+  proof_method ENUM('email', 'manual') NOT NULL,
+  created_by VARCHAR(36) NULL,
+  expires_at TIMESTAMP(3) NOT NULL,
+  consumed_at TIMESTAMP(3) NULL,
+  created_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  UNIQUE KEY kiln_account_claim_token_unique (token_hash),
+  KEY kiln_account_claim_user_idx (user_id, expires_at),
+  CONSTRAINT kiln_account_claim_user_fk FOREIGN KEY (user_id)
+    REFERENCES kiln_user (id) ON DELETE CASCADE
 );

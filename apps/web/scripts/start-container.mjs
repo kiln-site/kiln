@@ -56,6 +56,7 @@ async function migrateDatabase() {
   if (!connection) throw lastError ?? new Error("Could not connect to MySQL")
 
   try {
+    await connection.query("SET SESSION time_zone = '+00:00'")
     const [tables] = await connection.query(
       `SELECT table_name FROM information_schema.tables
         WHERE table_schema = DATABASE() AND table_name = ?`,

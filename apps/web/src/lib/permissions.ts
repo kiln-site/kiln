@@ -1,3 +1,16 @@
+import {
+  accessPermissions,
+  accessPermissionSupported,
+  expandPermissionSelections,
+  legacyAccessPermissions,
+  type AccessPermission,
+  type PermissionScopeType,
+  type PermissionSelection,
+} from "@workspace/contracts"
+
+export { accessPermissions }
+export type { AccessPermission }
+
 export const platformRoles = ["admin", "relay_creator", "user"] as const
 export type PlatformRole = (typeof platformRoles)[number]
 
@@ -26,49 +39,6 @@ const platformRolePermissions: Record<
 export const accessRoles = ["owner", "admin", "operator", "viewer"] as const
 export type AccessRole = (typeof accessRoles)[number]
 
-export const accessPermissions = [
-  "relay.read",
-  "relay.configure",
-  "relay.delete",
-  "access.invite",
-  "access.manage",
-  "instance.read",
-  "instance.console.read",
-  "instance.console.write",
-  "instance.files.read",
-  "instance.files.write",
-  "instance.delete",
-  "instance.power",
-  "instance.settings",
-  "instance.logs.share",
-  "instance.network.read",
-  "instance.network.write",
-  "instance.network.public-port.write",
-  "instance.sftp.connect",
-  "database.read",
-  "database.create",
-  "database.credentials.read",
-  "database.credentials.rotate",
-  "database.power",
-  "database.delete",
-  "database.network.read",
-  "database.network.write",
-  "database.dump.export",
-  "database.dump.import",
-  "backup.read",
-  "backup.create",
-  "backup.download",
-  "backup.restore",
-  "backup.delete",
-  "schedule.read",
-  "schedule.create",
-  "schedule.execute",
-  "schedule.update",
-  "schedule.delete",
-] as const
-
-export type AccessPermission = (typeof accessPermissions)[number]
-
 export function instancePortsWritePermission(
   ports: ReadonlyArray<{ externalPort?: number; id?: string }>
 ): AccessPermission {
@@ -79,10 +49,15 @@ export function instancePortsWritePermission(
     : "instance.network.write"
 }
 
-const rolePermissions: Record<AccessRole, ReadonlySet<AccessPermission>> = {
-  owner: new Set(accessPermissions),
+const legacyRolePermissions: Record<
+  AccessRole,
+  ReadonlySet<AccessPermission>
+> = {
+  owner: new Set(legacyAccessPermissions),
   admin: new Set(
-    accessPermissions.filter((permission) => permission !== "relay.delete")
+    legacyAccessPermissions.filter(
+      (permission) => permission !== "relay.delete"
+    )
   ),
   operator: new Set([
     "relay.read",
@@ -130,6 +105,50 @@ const rolePermissions: Record<AccessRole, ReadonlySet<AccessPermission>> = {
   ]),
 }
 
+/** Migration snapshots use individual selections, never dynamic ALL. */
+export function legacyRolePermissionSelections(
+  role: AccessRole,
+  scopeType: PermissionScopeType
+): PermissionSelection[] {
+  const permissions = new Set(legacyRolePermissions[role])
+  if (permissions.has("instance.files.write")) {
+    permissions.add("instance.files.delete")
+    permissions.add("instance.files.chmod")
+  }
+  if (permissions.has("access.manage")) permissions.add("preset.manage")
+  return [...permissions].flatMap((key) =>
+    accessPermissionSupported(key, scopeType)
+      ? [{ kind: "permission" as const, key }]
+      : []
+  )
+}
+
+const rolePermissions = new Map<AccessRole, ReadonlySet<AccessPermission>>(
+  accessRoles.map((role) => [
+    role,
+    new Set(
+      expandPermissionSelections(
+        legacyRolePermissionSelections(role, "relay"),
+        "relay"
+      )
+    ),
+  ])
+)
+
+/** Explicit permissions, including an empty list, are authoritative over legacy roles. */
+export function grantHasPermission(
+  grant: { role?: string; permissions?: readonly string[] },
+  permission: AccessPermission
+): boolean {
+  if (Object.hasOwn(grant, "permissions"))
+    return grant.permissions?.includes(permission) ?? false
+  return (
+    grant.role !== undefined &&
+    isAccessRole(grant.role) &&
+    roleHasPermission(grant.role, permission)
+  )
+}
+
 export const accessRoleDetails: Record<
   AccessRole,
   { description: string; label: string }
@@ -158,7 +177,7 @@ export function roleHasPermission(
   role: AccessRole,
   permission: AccessPermission
 ): boolean {
-  return rolePermissions[role].has(permission)
+  return rolePermissions.get(role)?.has(permission) ?? false
 }
 
 export function platformRoleHasPermission(

@@ -32,6 +32,7 @@ export function isActivityType(value: string): value is ActivityType {
 export const activityInstantSchema = z.iso.datetime()
 
 export interface ActivityScope {
+  relayAudit: boolean
   allInstances: boolean
   instanceIds: ReadonlySet<string>
 }
@@ -60,9 +61,12 @@ export function scopeAllowsAudit(
   scope: ActivityScope,
   audit: RelayAuditRecord
 ): boolean {
-  if (scope.allInstances) return true
+  if (scope.relayAudit) return true
   const instanceId = auditInstanceId(audit)
-  return instanceId !== null && scope.instanceIds.has(instanceId)
+  return (
+    instanceId !== null &&
+    (scope.allInstances || scope.instanceIds.has(instanceId))
+  )
 }
 
 export function activityLocalRangeToUtc(

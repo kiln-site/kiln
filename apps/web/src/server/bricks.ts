@@ -19,11 +19,15 @@ import {
 import { z } from "zod"
 
 import {
+  canReadRelayNode,
   hasPlatformPermission,
+  hasRelayPermission,
   isPlatformAdmin,
-  isRelayCreator,
+  listUserGrants,
   requireRelayPermission,
 } from "@/lib/access-control"
+import { grantHasPermission } from "@/lib/permissions"
+import type { AccessGrant } from "@/lib/access-control"
 import type { AuthenticatedUser } from "@/lib/auth-session"
 import { hydrateBrickVariables } from "@/lib/brick-variables"
 import { hydrateBrickIcon } from "@/lib/brick-catalog-source.server"
@@ -47,10 +51,20 @@ import {
   relayJsonEffect,
   writeRelayCache,
 } from "@/lib/relay-client"
-import { requireAuthenticatedUser } from "@/server/auth"
+import { requireEligibleResourceUser } from "@/server/auth"
 import { visibleBrickCatalogs } from "@/server/brick-catalogs.server"
 import { provisionInstanceDomainBestEffort } from "@/server/domains.server"
 import { publishRealtimeChange } from "@/lib/realtime-source.server"
+import {
+  startupPowerPermission,
+  startupResourceLimitsChanged,
+  startupConfigurationChanged,
+} from "@/lib/startup-permissions"
+export {
+  startupPowerPermission,
+  startupResourceLimitsChanged,
+  startupConfigurationChanged,
+} from "@/lib/startup-permissions"
 
 const brickVersionCatalogSchema = z.object({
   type: z.string().regex(/^[a-z0-9-]+$/u),
@@ -93,7 +107,7 @@ export const hearthUpdateInstanceStartupInputSchema =
 
 export const getBrickCatalog = createServerFn({ method: "GET" }).handler(
   async () => {
-    const user = await requireAuthenticatedUser()
+    const user = await requireEligibleResourceUser()
     const canAddCustomBrick = hasPlatformPermission(
       user,
       "platform.bricks.add-custom"
@@ -105,8 +119,9 @@ export const getBrickCatalog = createServerFn({ method: "GET" }).handler(
         )
       : Promise.resolve([])
     const catalogsPromise = visibleBrickCatalogs(user)
+    const grants = isPlatformAdmin(user) ? [] : await listUserGrants(user.id)
     const candidates = (await listPersistedRelays()).filter(
-      (relay) => relay.enabled && canProvisionOnRelay(user, relay)
+      (relay) => relay.enabled && canProvisionOnRelay(user, relay, grants)
     )
     const snapshots = await Promise.allSettled(
       candidates.map((relay) => requestRelay(relay, "/v1/snapshot"))
@@ -140,7 +155,7 @@ export const getBrickCatalog = createServerFn({ method: "GET" }).handler(
 export const getBrickIconPresentations = createServerFn({
   method: "GET",
 }).handler(async () => {
-  const user = await requireAuthenticatedUser()
+  const user = await requireEligibleResourceUser()
   const canUseCustomBricks = hasPlatformPermission(
     user,
     "platform.bricks.add-custom"
@@ -174,7 +189,7 @@ export const getBrickIconPresentations = createServerFn({
 export const getBrickVersions = createServerFn({ method: "GET" })
   .validator(brickVersionCatalogSchema)
   .handler(async ({ data }) => {
-    await requireAuthenticatedUser()
+    await requireEligibleResourceUser()
     return runAppEffect(
       "mcjarfiles.versions",
       listMcJarVersionsEffect(data.type, data.variant)
@@ -184,9 +199,9 @@ export const getBrickVersions = createServerFn({ method: "GET" })
 export const createBrickInstance = createServerFn({ method: "POST" })
   .validator(hearthCreateInstanceInputSchema)
   .handler(async ({ data }) => {
-    const user = await requireAuthenticatedUser()
+    const user = await requireEligibleResourceUser()
     const relay = await requiredRelay(data.relayId)
-    requireRelayProvisionAccess(user, relay)
+    await requireRelayProvisionAccess(user, relay)
     const recipeDefinition = await requiredVisibleRecipeDefinition(
       user,
       data.recipe
@@ -318,12 +333,12 @@ export function claimPreparedProvisioning(input: {
 export const getInstanceRecipe = createServerFn({ method: "GET" })
   .validator(instanceInputSchema)
   .handler(async ({ data }) => {
-    const user = await requireAuthenticatedUser()
+    const user = await requireEligibleResourceUser()
     const relay = await requiredRelay(data.relayId)
     await requireRelayPermission({
       user,
       relayId: relay.id,
-      permission: "instance.read",
+      permission: "instance.configuration.read",
       instanceId: data.instanceId,
     })
     const snapshot = relaySnapshotSchema.parse(
@@ -344,12 +359,12 @@ export const getInstanceRecipe = createServerFn({ method: "GET" })
 export const getInstanceStartup = createServerFn({ method: "GET" })
   .validator(instanceInputSchema)
   .handler(async ({ data }) => {
-    const user = await requireAuthenticatedUser()
+    const user = await requireEligibleResourceUser()
     const relay = await requiredRelay(data.relayId)
     await requireRelayPermission({
       user,
       relayId: relay.id,
-      permission: "instance.settings",
+      permission: "instance.configuration.read",
       instanceId: data.instanceId,
     })
     const snapshot = relaySnapshotSchema.parse(
@@ -372,26 +387,31 @@ export const getInstanceStartup = createServerFn({ method: "GET" })
       (total, candidate) => total + candidate.limits.diskBytes,
       0
     )
+    const grants = isPlatformAdmin(user)
+      ? []
+      : await listUserGrants(user.id, relay.id)
     return {
-      allocation: {
-        memory: {
-          availableBytes: Math.max(
-            snapshot.node.memory.totalBytes - otherMemoryBytes,
-            instance.limits.memoryBytes
-          ),
-          nodeTotalBytes: snapshot.node.memory.totalBytes,
-          nodeUsedBytes: snapshot.node.memory.usedBytes,
-        },
-        storage: {
-          availableBytes: relayDiskAllocationAvailableBytes(
-            snapshot.node.storage.totalBytes,
-            otherDiskBytes,
-            instance.limits.diskBytes
-          ),
-          nodeTotalBytes: snapshot.node.storage.totalBytes,
-          nodeUsedBytes: snapshot.node.storage.usedBytes,
-        },
-      },
+      allocation: canReadRelayNode(user, relay.id, grants)
+        ? {
+            memory: {
+              availableBytes: Math.max(
+                snapshot.node.memory.totalBytes - otherMemoryBytes,
+                instance.limits.memoryBytes
+              ),
+              nodeTotalBytes: snapshot.node.memory.totalBytes,
+              nodeUsedBytes: snapshot.node.memory.usedBytes,
+            },
+            storage: {
+              availableBytes: relayDiskAllocationAvailableBytes(
+                snapshot.node.storage.totalBytes,
+                otherDiskBytes,
+                instance.limits.diskBytes
+              ),
+              nodeTotalBytes: snapshot.node.storage.totalBytes,
+              nodeUsedBytes: snapshot.node.storage.usedBytes,
+            },
+          }
+        : null,
       brick,
       brickSource,
       instance: relayInstanceSchema.parse(instance),
@@ -399,25 +419,115 @@ export const getInstanceStartup = createServerFn({ method: "GET" })
     }
   })
 
+export function startupNetworkChanged(
+  existing: z.infer<typeof relayInstanceSchema>["tailscale"],
+  input: {
+    reinstall?: boolean
+    tailscale?: z.infer<typeof relayInstanceSchema>["tailscale"]
+  }
+): boolean {
+  // Reinstall preserves the applied network configuration. Compare fields,
+  // not JSON order, so a repeated settings object remains a no-op.
+  return (
+    !input.reinstall &&
+    input.tailscale !== undefined &&
+    (input.tailscale.enabled !== existing.enabled ||
+      input.tailscale.subdomain !== existing.subdomain)
+  )
+}
+
 export const updateInstanceStartup = createServerFn({ method: "POST" })
   .validator(hearthUpdateInstanceStartupInputSchema)
   .handler(async ({ data }) => {
-    const user = await requireAuthenticatedUser()
+    const user = await requireEligibleResourceUser()
     const relay = await requiredRelay(data.relayId)
     await requireRelayPermission({
       user,
       relayId: relay.id,
-      permission: "instance.settings",
+      permission: "instance.configuration.read",
       instanceId: data.instanceId,
     })
     const existing = await requiredRelayInstance(relay, data.instanceId)
     const submittedRecipe = data.recipe
-    const recipeDefinition = isBrickSourceChange(
-      existing.brickSource,
-      submittedRecipe
-    )
+    const recipeChanged =
+      !data.reinstall &&
+      isBrickSourceChange(existing.brickSource, submittedRecipe)
+    const recipeDefinition = recipeChanged
       ? await requiredVisibleRecipeDefinition(user, submittedRecipe)
       : null
+    const networkChanged = startupNetworkChanged(existing.tailscale, data)
+    let configurationChanged = Boolean(data.reinstall || recipeChanged)
+    let limitsChanged =
+      !data.reinstall &&
+      data.diskLimitBytes !== undefined &&
+      data.diskLimitBytes !== existing.limits.diskBytes
+    if (!data.reinstall) {
+      const { brick: previousRecipe } = await loadInstanceRecipe(
+        relay,
+        existing
+      )
+      const nextRecipe = recipeDefinition ?? previousRecipe
+      configurationChanged ||= startupConfigurationChanged(
+        previousRecipe,
+        nextRecipe,
+        existing.variables ?? {},
+        data.variables ?? {}
+      )
+      limitsChanged ||= startupResourceLimitsChanged(
+        previousRecipe,
+        nextRecipe,
+        existing.variables ?? {},
+        data.variables ?? {}
+      )
+    }
+    const permissionInput = {
+      user,
+      relayId: relay.id,
+      instanceId: data.instanceId,
+    }
+    if (networkChanged)
+      await requireRelayPermission({
+        ...permissionInput,
+        permission: "instance.network.write",
+      })
+    if (configurationChanged)
+      await requireRelayPermission({
+        ...permissionInput,
+        permission: "instance.configuration.write",
+      })
+    if (limitsChanged)
+      await requireRelayPermission({
+        ...permissionInput,
+        permission: "instance.limits.write",
+      })
+    // Applying unchanged settings still rebuilds the container. A read grant
+    // alone must never authorize this mutation.
+    if (!configurationChanged && !limitsChanged && !networkChanged) {
+      const canConfigure = await hasRelayPermission({
+        ...permissionInput,
+        permission: "instance.configuration.write",
+      })
+      const canChangeLimits =
+        !canConfigure &&
+        (await hasRelayPermission({
+          ...permissionInput,
+          permission: "instance.limits.write",
+        }))
+      await requireRelayPermission({
+        ...permissionInput,
+        permission: canConfigure
+          ? "instance.configuration.write"
+          : canChangeLimits
+            ? "instance.limits.write"
+            : "instance.network.write",
+      })
+    }
+    const powerPermission = startupPowerPermission(existing, data)
+    if (powerPermission)
+      await requireRelayPermission({
+        ...permissionInput,
+        permission: powerPermission,
+      })
     const { recipeDefinition: _untrustedRecipeDefinition, ...trustedData } =
       data
     const input = relayUpdateInstanceStartupSchema.parse({
@@ -503,10 +613,10 @@ function externalRecipeUrl(source: string) {
 export const loadBrickRecipe = createServerFn({ method: "POST" })
   .validator(recipeInputSchema)
   .handler(async ({ data }) => {
-    const user = await requireAuthenticatedUser()
+    const user = await requireEligibleResourceUser()
     requireBrickSourcePermission(user, "platform.bricks.add-custom")
     const relay = await requiredRelay(data.relayId)
-    requireRelayProvisionAccess(user, relay)
+    await requireRelayProvisionAccess(user, relay)
     const { brick } = parseImportedBrickFromRelay(
       await requestRelay(
         relay,
@@ -519,10 +629,10 @@ export const loadBrickRecipe = createServerFn({ method: "POST" })
 export const saveCustomBrick = createServerFn({ method: "POST" })
   .validator(recipeInputSchema)
   .handler(async ({ data }) => {
-    const user = await requireAuthenticatedUser()
+    const user = await requireEligibleResourceUser()
     requireBrickSourcePermission(user, "platform.bricks.add-custom")
     const relay = await requiredRelay(data.relayId)
-    requireRelayProvisionAccess(user, relay)
+    await requireRelayProvisionAccess(user, relay)
 
     const imported = await requestRelay(
       relay,
@@ -554,9 +664,13 @@ export function parseImportedBrickFromRelay(value: unknown): {
 export const configureBrickNetworking = createServerFn({ method: "POST" })
   .validator(networkingInputSchema)
   .handler(async ({ data }) => {
-    const user = await requireAuthenticatedUser()
+    const user = await requireEligibleResourceUser()
     const relay = await requiredRelay(data.relayId)
-    requireRelayProvisionAccess(user, relay)
+    await requireRelayPermission({
+      user,
+      relayId: relay.id,
+      permission: "relay.configure",
+    })
     const input = relayNetworkingSchema.parse(data)
     const networking = relayNetworkingSchema.parse(
       await requestRelay(
@@ -587,21 +701,29 @@ async function requiredRelay(id: string): Promise<PersistedRelay> {
 
 function canProvisionOnRelay(
   user: AuthenticatedUser,
-  relay: PersistedRelay
+  relay: PersistedRelay,
+  grants: readonly AccessGrant[]
 ): boolean {
   return (
     isPlatformAdmin(user) ||
-    (isRelayCreator(user) && relay.createdBy === user.id)
+    grants.some(
+      (grant) =>
+        grant.relayId === relay.id &&
+        grant.resourceType === "relay" &&
+        grantHasPermission(grant, "instance.create")
+    )
   )
 }
 
-function requireRelayProvisionAccess(
+async function requireRelayProvisionAccess(
   user: AuthenticatedUser,
   relay: PersistedRelay
-): void {
-  if (!canProvisionOnRelay(user, relay)) {
-    throw new Error("You can only provision on Relays you created")
-  }
+): Promise<void> {
+  await requireRelayPermission({
+    user,
+    relayId: relay.id,
+    permission: "instance.create",
+  })
 }
 
 function requireBrickSourcePermission(

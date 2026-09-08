@@ -16,6 +16,9 @@ import {
 import { deleteManagedDatabaseRecordEffect } from "@/effect/managed-databases"
 import { runAppEffect } from "@/effect/runtime"
 import { timestampedBackupName } from "@/lib/backup-name"
+import { requireRelayPermission } from "@/lib/access-control"
+import type { AuthenticatedUser } from "@/lib/auth-session"
+import { resolveAuthorizedBackupStorageSelection } from "@/lib/backup-storage-selection.server"
 import { publishBackupChange } from "@/lib/backup-realtime.server"
 import { relayRpc } from "@/lib/relay-connection"
 import type { PersistedRelay } from "@/lib/relay-registry"
@@ -30,6 +33,7 @@ export async function deleteDatabaseWithFinalBackup(input: {
   databaseId: string
   relay: PersistedRelay
   requestedBy: string
+  user: AuthenticatedUser
 }): Promise<void> {
   const deletion = await ensureFinalDatabaseDeletion(input)
   if (deletion.status === "failed") throw finalBackupFailure(deletion)
@@ -93,15 +97,27 @@ export async function processFinalDatabaseDeletions(
   )
 }
 
-async function ensureFinalDatabaseDeletion(input: {
+export async function ensureFinalDatabaseDeletion(input: {
   databaseId: string
   relay: PersistedRelay
   requestedBy: string
+  user: AuthenticatedUser
 }): Promise<FinalDatabaseDeletion> {
   const existing = await finalDatabaseDeletion(input.relay.id, input.databaseId)
-  if (existing?.status !== "failed") {
-    if (existing) return existing
-  } else {
+  if (existing && existing.status !== "failed") return existing
+  await requireRelayPermission({
+    databaseId: input.databaseId,
+    permission: "backup.create",
+    relayId: input.relay.id,
+    user: input.user,
+  })
+  const storageIds = await resolveAuthorizedBackupStorageSelection({
+    relayId: input.relay.id,
+    targetId: input.databaseId,
+    targetKind: "database",
+    user: input.user,
+  })
+  if (existing) {
     await runAppEffect(
       "backups.finalDatabaseDelete.retry",
       clearFailedFinalDatabaseDeletionEffect(input.relay.id, input.databaseId)
@@ -118,6 +134,7 @@ async function ensureFinalDatabaseDeletion(input: {
               createdBy: input.requestedBy,
               name: timestampedBackupName("final"),
               reason: "final_delete",
+              storageIds,
               relayId: input.relay.id,
               requestedMaxBytes: null,
               targetId: input.databaseId,

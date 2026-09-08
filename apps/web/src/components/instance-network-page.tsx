@@ -175,9 +175,10 @@ function WebRoutesNetworkPage({
     },
   })
   const restartPendingRoutes = React.useCallback(() => {
-    if (!permissions.power || !relayConnected || restart.isPending) return
+    if (!permissions.powerRestart || !relayConnected || restart.isPending)
+      return
     restart.mutate()
-  }, [permissions.power, relayConnected, restart])
+  }, [permissions.powerRestart, relayConnected, restart])
 
   const addWebRoute = React.useCallback(
     async (route: RelayInstanceWebRouteInput) => {
@@ -230,7 +231,7 @@ function WebRoutesNetworkPage({
       <div className="mx-auto max-w-4xl space-y-4">
         <ConfiguredRoutesSection
           key={editGamePort ? "edit-game-port" : "network"}
-          canRestart={permissions.power && relayConnected}
+          canRestart={permissions.powerRestart && relayConnected}
           canPublicPortWrite={permissions.networkPublicPortWrite}
           canWrite={permissions.networkWrite}
           editGamePort={editGamePort}

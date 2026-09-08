@@ -2,6 +2,8 @@ import { randomUUID } from "node:crypto"
 
 import type { CliPrincipal } from "@/effect/cli-access"
 import {
+  brickSchema,
+  type BrickRecipe,
   cliActivityResponseSchema,
   cliBackupDownloadRequestSchema,
   cliBackupDownloadResponseSchema,
@@ -45,6 +47,7 @@ import { z } from "zod"
 import { cliRelaySubject, requireCliWrite } from "@/effect/cli-access"
 import {
   listBackupCatalogEffect,
+  getBackupPolicyEffect,
   reserveBackupDeleteEffect,
   reserveBackupExportEffect,
   reserveBackupRestoreEffect,
@@ -72,7 +75,7 @@ import { publishBackupChange } from "@/lib/backup-realtime.server"
 import { signLocalBackupDownload } from "@/backups/destinations/local"
 import { signS3BackupDownload } from "@/backups/destinations/s3"
 import type { AccessPermission } from "@/lib/permissions"
-import { roleHasPermission } from "@/lib/permissions"
+import { grantHasPermission } from "@/lib/permissions"
 import { invalidateRelayCache, relayCachePolicy } from "@/lib/relay-client"
 import { relayRpc } from "@/lib/relay-connection"
 import {
@@ -90,6 +93,11 @@ import { getActivityForUser } from "@/server/activity-data.server"
 import { provisionInstanceDomainBestEffort } from "@/server/domains.server"
 import { visibleBrickCatalogs } from "@/server/brick-catalogs.server"
 import { cliInvalidRequest } from "@/lib/cli-http"
+import {
+  startupConfigurationChanged,
+  startupPowerPermission,
+  startupResourceLimitsChanged,
+} from "@/lib/startup-permissions"
 
 const CLI_RELAY_LONG_OPERATION_TIMEOUT_MS = 180_000
 
@@ -188,7 +196,7 @@ export const listCliRelaysEffect = Effect.fn("cli.api.relays.list")(function* (
     : new Set(
         (yield* listUserGrantsEffect(principal.user.id)).flatMap((grant) =>
           grant.resourceType === "relay" &&
-          roleHasPermission(grant.role, "relay.read")
+          grantHasPermission(grant, "relay.read")
             ? [grant.relayId]
             : []
         )
@@ -328,58 +336,63 @@ export const listCliBackupTargetsEffect = Effect.fn("cli.api.backups.targets")(
     )
     const relayNames = new Map(relays.map((relay) => [relay.id, relay.name]))
     const enabledRelayIds = new Set(
-      relays.filter((relay) => relay.enabled).map((relay) => relay.id)
+      relays.flatMap((relay) => (relay.enabled ? [relay.id] : []))
     )
+    const canCreate = new Set<string>()
+    for (const grant of grants) {
+      if (grantHasPermission(grant, "backup.create"))
+        canCreate.add(
+          JSON.stringify([grant.relayId, grant.resourceType, grant.resourceId])
+        )
+    }
+    const canCreateOnTarget = (
+      relayId: string,
+      type: "instance" | "database",
+      id: string
+    ) =>
+      isPlatformAdmin(principal.user) ||
+      canCreate.has(JSON.stringify([relayId, "relay", relayId])) ||
+      canCreate.has(JSON.stringify([relayId, type, id]))
     const targets = [
-      ...servers.servers
-        .filter(
-          (server) =>
-            isPlatformAdmin(principal.user) ||
-            grants.some(
-              (grant) =>
-                grant.relayId === server.relayId &&
-                roleHasPermission(grant.role, "backup.create") &&
-                (grant.resourceType === "relay" ||
-                  (grant.resourceType === "instance" &&
-                    grant.resourceId === server.instanceId))
-            )
-        )
-        .map((server) => ({
-          kind: "server",
-          name: server.name,
-          reference: server.id,
-          relayName: server.relayName,
-        })),
-      ...records
-        .filter(
-          (record) =>
-            cliDatabaseSupportsLogicalBackups(record) &&
-            enabledRelayIds.has(record.relayId) &&
-            (isPlatformAdmin(principal.user) ||
-              grants.some(
-                (grant) =>
-                  grant.relayId === record.relayId &&
-                  roleHasPermission(grant.role, "backup.create") &&
-                  (grant.resourceType === "relay" ||
-                    (grant.resourceType === "database" &&
-                      grant.resourceId === record.databaseId))
-              ))
-        )
-        .map((record) => ({
-          kind: "database",
-          name: record.name,
-          reference: `${record.relayId}:${record.databaseId}`,
-          relayName: relayNames.get(record.relayId) ?? record.relayId,
-        })),
+      ...servers.servers.flatMap((server) =>
+        canCreateOnTarget(server.relayId, "instance", server.instanceId)
+          ? [
+              {
+                kind: "server",
+                name: server.name,
+                reference: server.id,
+                relayName: server.relayName,
+              },
+            ]
+          : []
+      ),
+      ...records.flatMap((record) =>
+        cliDatabaseSupportsLogicalBackups(record) &&
+        enabledRelayIds.has(record.relayId) &&
+        canCreateOnTarget(record.relayId, "database", record.databaseId)
+          ? [
+              {
+                kind: "database",
+                name: record.name,
+                reference: `${record.relayId}:${record.databaseId}`,
+                relayName: relayNames.get(record.relayId) ?? record.relayId,
+              },
+            ]
+          : []
+      ),
       ...(isPlatformAdmin(principal.user)
-        ? relays
-            .filter((relay) => relay.enabled)
-            .map((relay) => ({
-              kind: "platform",
-              name: "Kiln platform",
-              reference: relay.id,
-              relayName: relay.name,
-            }))
+        ? relays.flatMap((relay) =>
+            relay.enabled
+              ? [
+                  {
+                    kind: "platform",
+                    name: "Kiln platform",
+                    reference: relay.id,
+                    relayName: relay.name,
+                  },
+                ]
+              : []
+          )
         : []),
     ]
     return cliBackupTargetsResponseSchema.parse({ targets })
@@ -389,8 +402,27 @@ export const listCliBackupTargetsEffect = Effect.fn("cli.api.backups.targets")(
 export const createCliBackupEffect = Effect.fn("cli.api.backups.create")(
   function* (principal: CliPrincipal, unknownInput: unknown) {
     yield* requireCliWrite(principal)
-    const input = yield* parseInput(cliCreateBackupRequestSchema, unknownInput)
-    const relay = yield* authorizeCliBackupCreateTarget(principal, input)
+    const requested = yield* parseInput(
+      cliCreateBackupRequestSchema,
+      unknownInput
+    )
+    const relay = yield* authorizeCliBackupCreateTarget(principal, requested)
+    // Pin the policy default before authorizing so a later policy change cannot
+    // redirect a create-only request into a user-controlled destination.
+    const input =
+      requested.targetKind !== "platform" && requested.storageId === undefined
+        ? {
+            ...requested,
+            storageId: (yield* mapCliBackupFailure(
+              getBackupPolicyEffect(
+                requested.relayId,
+                requested.targetKind,
+                requested.targetId
+              ),
+              "Hearth could not load the backup destination policy."
+            )).storageId,
+          }
+        : requested
     yield* validateCliBackupStorage(principal, input)
     const backupId = randomUUID()
     const taskId = randomUUID()
@@ -499,6 +531,25 @@ export const restoreCliBackupEffect = Effect.fn("cli.api.backups.restore")(
         return yield* cliNotFound("The restore target was not found.")
       }
     }
+    // A safety backup can export the live target through its default policy.
+    // Resolve and authorize that destination before either task is reserved.
+    let safetyStorageId: string | null = null
+    if (input.safetyBackup) {
+      safetyStorageId = (yield* mapCliBackupFailure(
+        getBackupPolicyEffect(
+          backup.relayId,
+          backup.targetKind,
+          backup.targetId
+        ),
+        "Hearth could not load the safety backup destination policy."
+      )).storageId
+      yield* validateCliBackupStorage(principal, {
+        relayId: backup.relayId,
+        targetKind: backup.targetKind,
+        targetId: backup.targetId,
+        storageId: safetyStorageId,
+      })
+    }
     const safety = input.safetyBackup
       ? yield* mapCliBackupFailure(
           backup.targetKind === "instance"
@@ -507,6 +558,7 @@ export const restoreCliBackupEffect = Effect.fn("cli.api.backups.restore")(
                 createdBy: principal.user.id,
                 name: `Before restoring ${backup.name}`.slice(0, 120),
                 reason: "pre_restore",
+                storageId: safetyStorageId,
                 relayId: relay.id,
                 requestedMaxBytes: null,
                 targetId: backup.targetId,
@@ -517,6 +569,7 @@ export const restoreCliBackupEffect = Effect.fn("cli.api.backups.restore")(
                 createdBy: principal.user.id,
                 name: `Before restoring ${backup.name}`.slice(0, 120),
                 reason: "pre_restore",
+                storageId: safetyStorageId,
                 relayId: relay.id,
                 requestedMaxBytes: null,
                 targetId: backup.targetId,
@@ -715,11 +768,11 @@ export const createCliServerEffect = Effect.fn("cli.api.servers.create")(
     yield* requireCliWrite(principal)
     const input = yield* parseInput(cliCreateServerRequestSchema, unknownInput)
     const relay = yield* requiredRelay(input.relayId)
-    if (!canCreateCliServer(principal.user, relay)) {
-      return yield* forbidden(
-        "You can only create servers on Relays you manage."
-      )
-    }
+    yield* requireRelayPermissionEffect({
+      user: principal.user,
+      relayId: relay.id,
+      permission: "instance.create",
+    })
     const brick = yield* resolveBrickSource(input.brick, principal)
     const result = yield* relayRpcEffect(
       relay,
@@ -768,10 +821,14 @@ export const updateCliServerStartupEffect = Effect.fn(
     cliUpdateServerStartupRequestSchema,
     unknownInput
   )
+  const hasConfigurationInput =
+    input.brick !== undefined || Object.keys(input.variables).length > 0
   const { instance, relay } = yield* loadAuthorizedInstance(
     principal,
     input,
-    "instance.settings"
+    hasConfigurationInput
+      ? "instance.configuration.read"
+      : "instance.limits.write"
   )
   const brick = input.brick
     ? yield* resolveBrickSource(input.brick, principal)
@@ -779,6 +836,65 @@ export const updateCliServerStartupEffect = Effect.fn(
   const variables = brick
     ? input.variables
     : { ...instance.variables, ...input.variables }
+  let recipeDefinition = brick?.recipeDefinition
+  if (hasConfigurationInput) {
+    if (!instance.brickSource)
+      return yield* cliConflict("This server has no Brick recipe.")
+    const previousRecipe = yield* loadCliStartupRecipeEffect(
+      relay,
+      instance.brickSource,
+      instance.brickSnapshotSha256,
+      principal
+    )
+    const nextRecipe =
+      recipeDefinition ??
+      (brick && brick.source !== instance.brickSource
+        ? yield* loadCliStartupRecipeEffect(
+            relay,
+            brick.source,
+            undefined,
+            principal
+          )
+        : previousRecipe)
+    // Send the recipe we authorized so a mutable custom source cannot change
+    // its resource limits between the permission check and reconfiguration.
+    if (brick) recipeDefinition = nextRecipe
+    const configurationChanged =
+      Boolean(brick) ||
+      startupConfigurationChanged(
+        previousRecipe,
+        nextRecipe,
+        instance.variables ?? {},
+        variables
+      )
+    const limitsChanged =
+      input.diskLimitBytes !== undefined ||
+      startupResourceLimitsChanged(
+        previousRecipe,
+        nextRecipe,
+        instance.variables ?? {},
+        variables
+      )
+    if (configurationChanged)
+      yield* authorizeTarget(principal, input, "instance.configuration.write")
+    if (limitsChanged)
+      yield* authorizeTarget(principal, input, "instance.limits.write")
+    // An unchanged request still rebuilds the container and needs write access.
+    if (!configurationChanged && !limitsChanged)
+      yield* authorizeTarget(
+        principal,
+        input,
+        "instance.configuration.write"
+      ).pipe(
+        Effect.catchTag("CliAccessError", (cause) =>
+          cause.code === "forbidden"
+            ? authorizeTarget(principal, input, "instance.limits.write")
+            : Effect.fail(cause)
+        )
+      )
+  }
+  const powerPermission = startupPowerPermission(instance, input)
+  if (powerPermission) yield* authorizeTarget(principal, input, powerPermission)
   const result = yield* relayRpcEffect(
     relay,
     "instance.startup.write",
@@ -790,9 +906,7 @@ export const updateCliServerStartupEffect = Effect.fn(
       ...(brick
         ? {
             recipe: brick.source,
-            ...(brick.recipeDefinition
-              ? { recipeDefinition: brick.recipeDefinition }
-              : {}),
+            ...(recipeDefinition ? { recipeDefinition } : {}),
           }
         : {}),
       start: input.start,
@@ -823,12 +937,14 @@ export const deleteCliServerEffect = Effect.fn("cli.api.servers.delete")(
       )
     }
     const relay = yield* authorizeTarget(principal, input, "instance.delete")
+    yield* authorizeTarget(principal, input, "backup.create")
     yield* Effect.tryPromise({
       try: () =>
         deleteInstanceWithFinalBackup({
           instanceId: input.instanceId,
           relay,
           requestedBy: principal.user.id,
+          user: principal.user,
         }),
       catch: (cause) => cause,
     })
@@ -912,7 +1028,11 @@ export const performCliPowerActionEffect = Effect.fn("cli.api.power")(
   function* (principal: CliPrincipal, unknownInput: unknown) {
     yield* requireCliWrite(principal)
     const input = yield* parseInput(cliPowerRequestSchema, unknownInput)
-    const relay = yield* authorizeTarget(principal, input, "instance.power")
+    const relay = yield* authorizeTarget(
+      principal,
+      input,
+      `instance.power.${input.action}`
+    )
     const result = yield* relayRpcEffect(
       relay,
       "instance.action",
@@ -1174,7 +1294,13 @@ export function cliDatabaseSupportsLogicalBackups(database: {
 const validateCliBackupStorage = Effect.fn("cli.api.backups.storage.authorize")(
   function* (
     principal: CliPrincipal,
-    input: z.infer<typeof cliCreateBackupRequestSchema>
+    input: {
+      relayId: string
+      storageId?: string | null
+    } & (
+      | { targetKind: "instance" | "database"; targetId: string }
+      | { targetKind: "platform" }
+    )
   ) {
     if (!input.storageId) return
     const storage = yield* mapCliBackupFailure(
@@ -1191,6 +1317,25 @@ const validateCliBackupStorage = Effect.fn("cli.api.backups.storage.authorize")(
           storage.ownerUserId !== principal.user.id)
     ) {
       return yield* forbidden("The backup destination is unavailable.")
+    }
+    // A user-controlled destination exports backup contents outside Kiln.
+    if (storage.ownerUserId !== null && input.targetKind !== "platform") {
+      yield* requireRelayPermissionEffect({
+        user: principal.user,
+        relayId: input.relayId,
+        ...(input.targetKind === "instance"
+          ? { instanceId: input.targetId }
+          : { databaseId: input.targetId }),
+        permission: "backup.download",
+      }).pipe(
+        Effect.catchTag("PermissionDeniedError", (cause) =>
+          CliAccessError.make({
+            code: "forbidden",
+            message: cause.message,
+            retryable: false,
+          })
+        )
+      )
     }
   }
 )
@@ -1407,6 +1552,28 @@ const loadAuthorizedInstance = Effect.fn("cli.api.instance.load")(function* (
   }
   return { instance, relay }
 })
+
+const loadCliStartupRecipeEffect = Effect.fn("cli.api.startup.recipe")(
+  function* (
+    relay: PersistedRelay,
+    source: string,
+    snapshotSha256: string | undefined,
+    principal: CliPrincipal
+  ) {
+    const value = yield* relayRpcEffect(
+      relay,
+      "brick.recipe",
+      { source, ...(snapshotSha256 ? { snapshotSha256 } : {}) },
+      principal
+    )
+    const {
+      source: _source,
+      iconSvg: _iconSvg,
+      ...recipe
+    } = yield* parseInput(brickSchema, value)
+    return recipe satisfies BrickRecipe
+  }
+)
 
 const resolveBrickSource = Effect.fn("cli.api.brick.resolve")(function* (
   brick: string,

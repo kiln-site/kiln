@@ -7,14 +7,19 @@ import {
   listKilnReleasesEffect,
 } from "@/effect/github-releases"
 import { runAppEffect } from "@/effect/runtime"
-import { isPlatformAdmin, isRelayCreator } from "@/lib/access-control"
+import {
+  isPlatformAdmin,
+  listUserGrants,
+  requireRelayPermission,
+} from "@/lib/access-control"
+import { grantHasPermission } from "@/lib/permissions"
 import type { PersistedRelay } from "@/lib/relay-registry"
 import { listPersistedRelays } from "@/lib/relay-registry"
 import {
   updateTargetVersion,
   validateUpdateManifest,
 } from "@/lib/update-manifest"
-import { requireAuthenticatedUser } from "@/server/auth"
+import { requireEligibleResourceUser } from "@/server/auth"
 
 const componentSchema = z.enum(["hearth", "relay"])
 const startUpdateTargetSchema = z.object({
@@ -58,20 +63,24 @@ const getContainerHostname = createServerOnlyFn(async () => {
 })
 
 async function requireUpdateAccess() {
-  const user = await requireAuthenticatedUser()
-  if (!isPlatformAdmin(user) && !isRelayCreator(user)) {
-    throw new Error("Relay creator or platform administrator access required")
-  }
-  return user
+  return requireEligibleResourceUser()
 }
 
 async function updateRelaysForUser(
-  user: Awaited<ReturnType<typeof requireAuthenticatedUser>>
+  user: Awaited<ReturnType<typeof requireEligibleResourceUser>>
 ): Promise<Array<PersistedRelay>> {
   const relays = (await listPersistedRelays()).filter((relay) => relay.enabled)
-  return isPlatformAdmin(user)
-    ? relays
-    : relays.filter((relay) => relay.createdBy === user.id)
+  if (isPlatformAdmin(user)) return relays
+  const grants = await listUserGrants(user.id)
+  const allowed = new Set(
+    grants.flatMap((grant) =>
+      grant.resourceType === "relay" &&
+      grantHasPermission(grant, "relay.update")
+        ? [grant.relayId]
+        : []
+    )
+  )
+  return relays.filter((relay) => allowed.has(relay.id))
 }
 
 export const getUpdateOverview = createServerFn({ method: "GET" }).handler(
@@ -299,6 +308,22 @@ export const startSystemUpdates = createServerFn({ method: "POST" })
         (group) =>
           Effect.tryPromise({
             try: async () => {
+              const currentUser = await requireEligibleResourceUser()
+              if (currentUser.id !== user.id)
+                throw new Error("The authenticated user changed")
+              if (
+                group.targets.some((target) => target.component === "hearth") &&
+                !isPlatformAdmin(currentUser)
+              ) {
+                throw new Error(
+                  "Only a platform administrator can update Hearth"
+                )
+              }
+              await requireRelayPermission({
+                user: currentUser,
+                relayId: group.relay.id,
+                permission: "relay.update",
+              })
               const legacyTarget =
                 group.targets.length === 1 ? group.targets[0] : undefined
               const response = await relayRpc(
@@ -376,7 +401,11 @@ export const getSystemUpdateStatus = createServerFn({ method: "POST" })
       { operationId: data.operationId },
       15_000
     )
-    return result === null ? null : updateOperationSchema.parse(result)
+    if (result === null) return null
+    const operation = updateOperationSchema.parse(result)
+    return operation.component === "hearth" && !isPlatformAdmin(user)
+      ? null
+      : operation
   })
 
 async function selectedRelay(

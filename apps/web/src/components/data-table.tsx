@@ -160,6 +160,7 @@ export function DataTableCompactList<TItem>({
 }
 
 interface DataTableProps<TData extends RowData> {
+  leadingBody?: React.ReactNode
   definition: DataTableDefinition<TData>
   emptyState: React.ReactNode
   source: DataTableSource<TData>
@@ -170,6 +171,7 @@ const dataTableScrollAreaClassName =
   "block min-h-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-y-contain border-b border-border/70"
 
 export function DataTableRenderer<TData extends RowData>({
+  leadingBody,
   definition,
   emptyState,
   source,
@@ -179,6 +181,7 @@ export function DataTableRenderer<TData extends RowData>({
     <Subscribe source={table.atoms.sorting} selector={dataTableSortingResetKey}>
       {(sortingResetKey) => (
         <DataTableRowModel
+          leadingBody={leadingBody}
           definition={definition}
           emptyState={emptyState}
           source={source}
@@ -197,6 +200,7 @@ interface DataTableRowModelProps<
 }
 
 function DataTableRowModel<TData extends RowData>({
+  leadingBody,
   definition,
   emptyState,
   source,
@@ -258,7 +262,9 @@ function DataTableRowModel<TData extends RowData>({
       <table
         aria-colcount={columnCount}
         aria-label={definition.ariaLabel}
-        aria-rowcount={hasBodyState ? 2 : rows.length + 1}
+        aria-rowcount={
+          leadingBody ? undefined : hasBodyState ? 2 : rows.length + 1
+        }
         className="flex h-full min-h-0 w-full min-w-0 border-collapse flex-col overflow-hidden pb-px text-left"
         style={gridStyle}
       >
@@ -267,8 +273,10 @@ function DataTableRowModel<TData extends RowData>({
           scrollbarWidth={scrollbarWidth}
           table={table}
         />
+        {leadingBody}
         {hasBodyState ? (
           <DataTableStateBody
+            empty={source.body.kind === "ready" && rows.length === 0}
             centered={source.body.kind !== "loading"}
             colSpan={columnCount}
             scrollElementRef={scrollElementRef}
@@ -438,18 +446,25 @@ const dataTableVisibilityClasses = {
 } as const
 
 function DataTableStateBody({
+  empty,
   centered,
   children,
   colSpan,
   scrollElementRef,
 }: {
+  empty: boolean
   centered: boolean
   children: React.ReactNode
   colSpan: number
   scrollElementRef: React.RefObject<HTMLTableSectionElement | null>
 }) {
   return (
-    <tbody ref={scrollElementRef} className={dataTableScrollAreaClassName}>
+    <tbody
+      data-slot="data-table-state-body"
+      data-empty={empty || undefined}
+      ref={scrollElementRef}
+      className={dataTableScrollAreaClassName}
+    >
       <tr className={cn("block", centered && "h-full")}>
         <td className={cn("block p-0", centered && "h-full")} colSpan={colSpan}>
           {centered ? (

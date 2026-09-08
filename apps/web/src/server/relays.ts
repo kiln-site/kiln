@@ -12,13 +12,24 @@ import {
 } from "@workspace/contracts"
 import { z } from "zod"
 
-import { isPlatformAdmin, isRelayCreator } from "@/lib/access-control"
+import {
+  isPlatformAdmin,
+  isRelayCreator,
+  listUserGrants,
+  requireRelayPermission,
+} from "@/lib/access-control"
+import {
+  accessPermissions,
+  permissionsForRelayClientPolicy,
+  type AccessPermission,
+} from "@workspace/contracts"
+import { grantHasPermission } from "@/lib/permissions"
 import { runAppEffect } from "@/effect/runtime"
 import { databasePool } from "@/lib/database"
 import { databaseTable } from "@/lib/database-config"
 import { publishRealtimeChange } from "@/lib/realtime-source.server"
 import type { PersistedRelay } from "@/lib/relay-registry"
-import { requireAuthenticatedUser } from "@/server/auth"
+import { requireEligibleResourceUser } from "@/server/auth"
 import { removeRelayThenCleanup } from "@/server/relay-removal"
 
 export interface ManagedRelay extends PersistedRelay {
@@ -85,25 +96,24 @@ const previewPairingSchema = z.object({
 })
 
 async function requireRelayCreationAccess() {
-  const user = await requireAuthenticatedUser()
+  const user = await requireEligibleResourceUser()
   if (!isPlatformAdmin(user) && !isRelayCreator(user)) {
     throw new Error("Relay creator or platform administrator access required")
   }
   return user
 }
 
-async function requireRelayAdministrator(relayId: string) {
-  const user = await requireAuthenticatedUser()
-  if (isPlatformAdmin(user)) return user
-  const relay = (await managedRelays(user, relayId))[0]
-  if (!relay) {
-    throw new Error("You can only manage Relays you created")
-  }
+async function requireRelayAdministrator(
+  relayId: string,
+  permission: AccessPermission = "relay.configure"
+) {
+  const user = await requireEligibleResourceUser()
+  await requireRelayPermission({ user, relayId, permission })
   return user
 }
 
 async function managedRelays(
-  user: Awaited<ReturnType<typeof requireAuthenticatedUser>>,
+  user: Awaited<ReturnType<typeof requireEligibleResourceUser>>,
   relayId?: string
 ): Promise<Array<PersistedRelay>> {
   const { listPersistedRelays } = await import("@/lib/relay-registry")
@@ -111,16 +121,21 @@ async function managedRelays(
   if (isPlatformAdmin(user)) {
     return relayId ? relays.filter((relay) => relay.id === relayId) : relays
   }
-  if (!isRelayCreator(user)) {
-    throw new Error("Relay creator or platform administrator access required")
-  }
+  const grants = await listUserGrants(user.id, relayId)
   return relays.filter(
-    (relay) => relay.createdBy === user.id && (!relayId || relay.id === relayId)
+    (relay) =>
+      (!relayId || relay.id === relayId) &&
+      grants.some(
+        (grant) =>
+          grant.relayId === relay.id &&
+          grant.resourceType === "relay" &&
+          grantHasPermission(grant, "relay.read")
+      )
   )
 }
 
 export const getRelays = createServerFn({ method: "GET" }).handler(async () => {
-  const user = await requireRelayCreationAccess()
+  const user = await requireEligibleResourceUser()
   return attachRelayOwnerNames(await managedRelays(user))
 })
 
@@ -175,7 +190,7 @@ export const updateRelay = createServerFn({ method: "POST" })
 export const checkRelay = createServerFn({ method: "POST" })
   .validator(relayIdSchema)
   .handler(async ({ data }) => {
-    await requireRelayAdministrator(data.id)
+    await requireRelayAdministrator(data.id, "relay.read")
     const { checkPersistedRelay } = await import("@/lib/relay-registry")
     return checkPersistedRelay(data.id)
   })
@@ -183,7 +198,7 @@ export const checkRelay = createServerFn({ method: "POST" })
 export const setRelayEnabled = createServerFn({ method: "POST" })
   .validator(relayEnabledSchema)
   .handler(async ({ data }) => {
-    await requireRelayAdministrator(data.id)
+    await requireRelayAdministrator(data.id, "relay.pause")
     const { setPersistedRelayEnabled } = await import("@/lib/relay-registry")
     return setPersistedRelayEnabled(data.id, data.enabled)
   })
@@ -191,7 +206,7 @@ export const setRelayEnabled = createServerFn({ method: "POST" })
 export const removeRelay = createServerFn({ method: "POST" })
   .validator(removeRelaySchema)
   .handler(async ({ data }) => {
-    await requireRelayAdministrator(data.id)
+    await requireRelayAdministrator(data.id, "relay.delete")
     const { deletePersistedRelay } = await import("@/lib/relay-registry")
     return removeRelayThenCleanup(
       {
@@ -235,24 +250,48 @@ export const previewRelayPairing = createServerFn({ method: "POST" })
 export const getRelayAdministration = createServerFn({ method: "GET" })
   .validator(relayIdSchema)
   .handler(async ({ data }) => {
-    await requireRelayAdministrator(data.id)
+    const user = await requireRelayAdministrator(
+      data.id,
+      "relay.connections.read"
+    )
     const registry = await import("@/lib/relay-registry")
-    return registry.getRelayAdministration(data.id)
+    const administration = await registry.getRelayAdministration(data.id)
+    const grants = isPlatformAdmin(user)
+      ? []
+      : await listUserGrants(user.id, data.id)
+    const canReadAudit =
+      isPlatformAdmin(user) ||
+      grants.some(
+        (grant) =>
+          grant.resourceType === "relay" &&
+          grantHasPermission(grant, "relay.audit.read")
+      )
+    return {
+      ...administration,
+      audits: canReadAudit ? administration.audits : [],
+    }
   })
 
 export const createRelayInvitation = createServerFn({ method: "POST" })
   .validator(pairingRoleSchema)
   .handler(async ({ data }) => {
-    const user = await requireRelayAdministrator(data.relayId)
+    const user = await requireRelayAdministrator(
+      data.relayId,
+      "relay.connections.manage"
+    )
     const { createRelayPairingInvitation } =
       await import("@/lib/relay-registry")
+    await requireMachineClientDelegation(user, data.relayId, data.role)
     return createRelayPairingInvitation(data, user.id)
   })
 
 export const revokeRelayInvitation = createServerFn({ method: "POST" })
   .validator(relayInvitationSchema)
   .handler(async ({ data }) => {
-    const user = await requireRelayAdministrator(data.relayId)
+    const user = await requireRelayAdministrator(
+      data.relayId,
+      "relay.connections.manage"
+    )
     const { revokeRelayPairingInvitation } =
       await import("@/lib/relay-registry")
     return { revoked: await revokeRelayPairingInvitation(data, user.id) }
@@ -261,15 +300,30 @@ export const revokeRelayInvitation = createServerFn({ method: "POST" })
 export const updateRelayClient = createServerFn({ method: "POST" })
   .validator(updateRelayClientSchema)
   .handler(async ({ data }) => {
-    const user = await requireRelayAdministrator(data.relayId)
-    const { updateRelayClientPolicy } = await import("@/lib/relay-registry")
-    return updateRelayClientPolicy(data, user.id)
+    const user = await requireRelayAdministrator(
+      data.relayId,
+      "relay.connections.manage"
+    )
+    const { updateRelayClientPolicy, getRelayAdministration } =
+      await import("@/lib/relay-registry")
+    const actions =
+      data.actions ??
+      (data.role === "custom"
+        ? ((await getRelayAdministration(data.relayId)).clients.find(
+            (client) => client.id === data.clientId
+          )?.actions ?? [])
+        : [])
+    await requireMachineClientDelegation(user, data.relayId, data.role, actions)
+    return updateRelayClientPolicy({ ...data, actions }, user.id)
   })
 
 export const revokeHearthClient = createServerFn({ method: "POST" })
   .validator(relayClientSchema)
   .handler(async ({ data }) => {
-    const user = await requireRelayAdministrator(data.relayId)
+    const user = await requireRelayAdministrator(
+      data.relayId,
+      "relay.connections.manage"
+    )
     const { revokeRelayClient } = await import("@/lib/relay-registry")
     return { revoked: await revokeRelayClient(data, user.id) }
   })
@@ -285,7 +339,7 @@ export const renameRelay = createServerFn({ method: "POST" })
 export const getRelayProxy = createServerFn({ method: "GET" })
   .validator(relayIdSchema)
   .handler(async ({ data }) => {
-    await requireRelayAdministrator(data.id)
+    await requireRelayAdministrator(data.id, "relay.read")
     const [{ listPersistedRelays }, { relayRpc }] = await Promise.all([
       import("@/lib/relay-registry"),
       import("@/lib/relay-connection"),
@@ -326,7 +380,7 @@ export const updateRelayProxy = createServerFn({ method: "POST" })
 export const getRelayTailscale = createServerFn({ method: "GET" })
   .validator(relayIdSchema)
   .handler(async ({ data }) => {
-    await requireRelayAdministrator(data.id)
+    await requireRelayAdministrator(data.id, "relay.configure")
     const [{ listPersistedRelays }, { relayRpc }] = await Promise.all([
       import("@/lib/relay-registry"),
       import("@/lib/relay-connection"),
@@ -400,4 +454,25 @@ function publishRelayTailscaleChange(relayId: string): void {
     topics: ["tailscale"],
     type: "hearth.invalidate",
   })
+}
+
+/** A machine client can operate directly against every child, so delegation uses Relay-wide authority. */
+async function requireMachineClientDelegation(
+  user: Awaited<ReturnType<typeof requireEligibleResourceUser>>,
+  relayId: string,
+  role: "custom" | "full_access" | "read_only",
+  actions: readonly string[] = []
+): Promise<void> {
+  if (isPlatformAdmin(user)) return
+  const grants = await listUserGrants(user.id, relayId)
+  const authority = new Set<AccessPermission>()
+  for (const grant of grants) {
+    if (grant.resourceType !== "relay") continue
+    for (const permission of accessPermissions) {
+      if (grantHasPermission(grant, permission)) authority.add(permission)
+    }
+  }
+  const required = permissionsForRelayClientPolicy(role, actions)
+  if ([...required].some((permission) => !authority.has(permission)))
+    throw new Error("The client policy exceeds your permissions on this Relay")
 }

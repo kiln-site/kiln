@@ -115,3 +115,24 @@ export const requireAuthenticatedIdentity = createServerOnlyFn(async () => {
   if (!identity) throw new Error("Authentication required")
   return identity
 })
+
+export const requireVerifiedUser = createServerOnlyFn(async () => {
+  const user = await requireAuthenticatedUser()
+  const { requireVerifiedAccount } = await import("@/lib/account-policy")
+  requireVerifiedAccount(user)
+  return user
+})
+
+export const requireEligibleResourceUser = createServerOnlyFn(async () => {
+  const user = await requireAuthenticatedUser()
+  const { requireEligibleAccount } = await import("@/lib/account-policy")
+  requireEligibleAccount(user)
+  return user
+})
+
+export const requireEligibleResourceIdentity = createServerOnlyFn(async () => {
+  const identity = await requireAuthenticatedIdentity()
+  const { requireEligibleAccount } = await import("@/lib/account-policy")
+  requireEligibleAccount(identity.user)
+  return identity
+})

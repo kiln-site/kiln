@@ -3,15 +3,19 @@ import { createHash } from "node:crypto"
 import * as Sentry from "@sentry/tanstackstart-react"
 import { passkey } from "@better-auth/passkey"
 import { betterAuth } from "better-auth"
-import { APIError, createAuthMiddleware } from "better-auth/api"
+import {
+  APIError,
+  createAuthMiddleware,
+  getSessionFromCtx,
+} from "better-auth/api"
 import { admin } from "better-auth/plugins/admin"
 import { emailOTP } from "better-auth/plugins/email-otp"
 import { twoFactor } from "better-auth/plugins/two-factor"
 import { tanstackStartCookies } from "better-auth/tanstack-start"
-import type { RowDataPacket } from "mysql2/promise"
 import { Resend } from "resend"
 import { Effect } from "effect"
 
+import { isAccountVerified } from "@/lib/account-policy"
 import { AuthCodeEmail } from "@/emails/auth-code-email"
 import { databasePool } from "@/lib/database"
 import { databaseTable, databaseTableName } from "@/lib/database-config"
@@ -30,21 +34,29 @@ import { publishRealtimeChange } from "@/lib/realtime-source.server"
 const publicUrl = kilnPublicUrl()
 const authUrl = betterAuthUrl()
 const emailDeliveryEnabled = emailDeliveryConfig() !== null
-const UNVERIFIED_ACCOUNT_TTL_MS = 1000 * 60 * 60 * 24
-
-type PendingUser = {
-  createdAt: Date
-  email: string
-  emailVerified: boolean
-  id: string
-}
-
 export const auth = betterAuth({
   appName: "Kiln",
   baseURL: authUrl.origin,
   secrets: betterAuthSecrets(),
   database: databasePool,
-  user: { modelName: databaseTableName("user") },
+  user: {
+    modelName: databaseTableName("user"),
+    additionalFields: {
+      status: { type: "string", defaultValue: "enabled", input: false },
+      statusChangedAt: { type: "date", required: false, input: false },
+      statusChangedBy: { type: "string", required: false, input: false },
+      statusReason: { type: "string", required: false, input: false },
+      statusExpiresAt: { type: "date", required: false, input: false },
+      emailVerifiedAt: { type: "date", required: false, input: false },
+      manuallyVerifiedAt: { type: "date", required: false, input: false },
+      manuallyVerifiedBy: { type: "string", required: false, input: false },
+      legacyVerificationRecordedAt: {
+        type: "date",
+        required: false,
+        input: false,
+      },
+    },
+  },
   session: {
     modelName: databaseTableName("session"),
     expiresIn: 60 * 60 * 24 * 7,
@@ -56,7 +68,7 @@ export const auth = betterAuth({
   emailAndPassword: {
     enabled: true,
     autoSignIn: false,
-    requireEmailVerification: emailDeliveryEnabled,
+    requireEmailVerification: false,
     minPasswordLength: 12,
     maxPasswordLength: 128,
     resetPasswordTokenExpiresIn: 60 * 30,
@@ -102,23 +114,59 @@ export const auth = betterAuth({
         before: async (user) => {
           const name = parseDisplayName(user.name)
           return {
-            data: emailDeliveryEnabled
-              ? { ...user, name }
-              : { ...user, name, emailVerified: true },
+            data: {
+              ...user,
+              name,
+              status: "enabled",
+              statusChangedAt: new Date(),
+            },
           }
         },
       },
       update: {
         before: async (user) => ({
-          data:
-            typeof user.name === "string"
-              ? { ...user, name: parseDisplayName(user.name) }
-              : user,
+          data: {
+            ...user,
+            ...(typeof user.name === "string"
+              ? { name: parseDisplayName(user.name) }
+              : {}),
+            ...(typeof user.email === "string"
+              ? {
+                  emailVerifiedAt: null,
+                  manuallyVerifiedAt: null,
+                  manuallyVerifiedBy: null,
+                  legacyVerificationRecordedAt: null,
+                }
+              : {}),
+            ...(user.emailVerified === true
+              ? { emailVerifiedAt: new Date() }
+              : {}),
+            ...(user.emailVerified === false ? { emailVerifiedAt: null } : {}),
+          },
         }),
-        after: async (user) => {
+        after: async (user, context) => {
           await recordBetterAuthAuthorizationChange(user.id, [
             { kind: "subject_relay" },
           ])
+          if (
+            context &&
+            [
+              "/email-otp/verify-email",
+              "/verify-email",
+              "/email-otp/change-email",
+            ].includes(context.path ?? "")
+          ) {
+            await databasePool.execute(
+              `INSERT INTO ${databaseTable("auth_audit")} (user_id, event, metadata)
+               VALUES (?, 'account.email-verified', ?)`,
+              [user.id, JSON.stringify({ actorId: user.id, email: user.email })]
+            )
+          }
+          publishRealtimeChange({
+            type: "access.changed",
+            reauthenticate: true,
+            userIds: [user.id],
+          })
         },
       },
       delete: {
@@ -152,49 +200,53 @@ export const auth = betterAuth({
   },
   hooks: {
     before: createAuthMiddleware(async (context) => {
-      const cleanupPaths = new Set([
-        "/email-otp/request-password-reset",
-        "/email-otp/send-verification-otp",
-        "/email-otp/verify-email",
+      // Kiln owns administrative policy and preserves disabled users' login
+      // sessions. Better Auth admin endpoints bypass those transactions.
+      if (context.path.startsWith("/admin/")) {
+        throw new APIError("FORBIDDEN", {
+          message: "Use Kiln user management.",
+        })
+      }
+
+      const onboardingPaths = new Set([
+        "/get-session",
+        "/sign-out",
         "/sign-in/email",
         "/sign-up/email",
+        "/verify-email",
+        "/send-verification-email",
+        "/email-otp/send-verification-otp",
+        "/email-otp/verify-email",
+        "/email-otp/request-password-reset",
+        "/email-otp/reset-password",
+        "/request-password-reset",
+        "/reset-password",
       ])
-      if (cleanupPaths.has(context.path)) {
-        const cutoff = new Date(Date.now() - UNVERIFIED_ACCOUNT_TTL_MS)
-        const expiredUsers =
-          await context.context.adapter.findMany<PendingUser>({
-            model: "user",
-            where: [
-              { field: "emailVerified", value: false },
-              { field: "createdAt", value: cutoff, operator: "lt" },
-            ],
-            limit: 100,
+      if (!onboardingPaths.has(context.path)) {
+        const session = await getSessionFromCtx(context)
+        if (
+          session &&
+          !isAccountVerified({
+            emailVerifiedAt:
+              (session.user.emailVerifiedAt as Date | null) ?? null,
+            manuallyVerifiedAt:
+              (session.user.manuallyVerifiedAt as Date | null) ?? null,
+            legacyVerificationRecordedAt:
+              (session.user.legacyVerificationRecordedAt as Date | null) ??
+              null,
           })
-        for (const user of expiredUsers) {
-          await context.context.internalAdapter.deleteUser(user.id)
+        ) {
+          throw new APIError("FORBIDDEN", {
+            message: "Account verification required.",
+          })
         }
       }
 
       if (context.path !== "/sign-up/email") return
 
-      const body = context.body as { email?: unknown }
-      if (typeof body.email !== "string") return
-      if (publicSignupEnabled()) return
-
-      const normalizedEmail = body.email.trim().toLowerCase()
-      const [pendingInvitations] = await databasePool.query<
-        Array<{ id: string } & RowDataPacket>
-      >(
-        `SELECT id
-           FROM ${databaseTable("invitation")}
-          WHERE email = ?
-            AND accepted_at IS NULL
-            AND revoked_at IS NULL
-            AND expires_at > CURRENT_TIMESTAMP(3)
-          LIMIT 1`,
-        [normalizedEmail]
-      )
-      if (!pendingInvitations.length) {
+      // Invited identities already exist and claim credentials separately.
+      // Mailbox history must not permit creation of a different account.
+      if (!publicSignupEnabled()) {
         throw new APIError("FORBIDDEN", {
           message: "New account registration is disabled.",
         })
@@ -221,10 +273,10 @@ export const auth = betterAuth({
       async sendVerificationOTP({ email, otp, type }) {
         const delivery = emailDeliveryConfig()
         if (!delivery) {
-          console.info(
-            `[Kiln auth] ${type} code for ${email.toLowerCase()}: ${otp}`
-          )
-          return
+          throw new APIError("BAD_REQUEST", {
+            message:
+              "Email delivery is unavailable. Ask an administrator to verify your account.",
+          })
         }
 
         const fingerprint = createHash("sha256")

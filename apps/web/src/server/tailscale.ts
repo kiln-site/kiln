@@ -47,7 +47,7 @@ import { relayRpc } from "@/lib/relay-connection"
 import { publishRealtimeChange } from "@/lib/realtime-source.server"
 import type { PersistedRelay } from "@/lib/relay-registry"
 import { listPersistedRelays } from "@/lib/relay-registry"
-import { requireAuthenticatedUser } from "@/server/auth"
+import { requireEligibleResourceUser } from "@/server/auth"
 import {
   applyTailscaleDeploymentPlanEffect,
   type DesiredTailscaleDeployment,
@@ -625,7 +625,7 @@ function publishTailscaleChange(): void {
 }
 
 async function requireTailscaleAdministrator() {
-  const user = await requireAuthenticatedUser()
+  const user = await requireEligibleResourceUser()
   if (!isPlatformAdmin(user)) {
     throw new Error("Platform administrator access required")
   }

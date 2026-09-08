@@ -66,6 +66,27 @@ Use `--profile <name>` on any command to select a saved profile. `KILN_URL`,
 `KILN_TOKEN`, and `KILN_CONFIG` support isolated automation, but prefer the
 user's existing authenticated profile for interactive work.
 
+## Account and resource permissions
+
+CLI credentials retain the account's current resource permissions, including
+linked presets and inherited Relay assignments. New invitations grant nothing
+until accepted. A user must be verified and enabled to run resource commands.
+Disabling an account pauses authority without deleting the saved CLI credential;
+re-enabling resumes it if the credential is still valid. Explicit logout,
+revocation, and expiration still invalidate credentials.
+
+Power commands check the specific action. File writes, deletion, and chmod use
+separate permissions; write includes read. Changing only disk limits requires
+`instance.limits.write`; it does not require configuration-write permission.
+Use `--no-start` on a stopped server when no power permission is granted;
+reconfiguring a running server requires the corresponding stop/restart permission.
+Changing a Brick or non-resource startup variables requires
+`instance.configuration.write`. Resource variables and disk limits require
+`instance.limits.write`; changes affecting both require both permissions.
+Creating a backup (including a restore safety backup) in a user-owned destination
+also requires `backup.download`, because it exports the backup contents. A read-only CLI credential never gains write
+access from a more permissive preset.
+
 ## Update the CLI
 
 Update the locally installed CLI with:

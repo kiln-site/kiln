@@ -1,14 +1,20 @@
 import type { AuthenticatedUser } from "@/lib/auth-session"
 import { accountSessionActiveEffect } from "@/effect/account-sessions"
-import { ensuringPromise, recoverPromise } from "@/effect/promise"
+import {
+  ensuringPromise,
+  recoverPromise,
+  tapPromiseError,
+} from "@/effect/promise"
 import { runAppEffect } from "@/effect/runtime"
 import {
+  canReadRelayNode,
   isPlatformAdmin,
+  refreshRelayAuthorizationUserEffect,
   isRelayCreator,
   listUserGrants,
   visibleRelaysForUser,
 } from "@/lib/access-control"
-import { roleHasPermission } from "@/lib/permissions"
+import { grantHasPermission } from "@/lib/permissions"
 import { hearthAudienceAllows } from "@/lib/hearth-realtime-topics"
 import { relayConnectionState } from "@/lib/relay-connection"
 import {
@@ -20,6 +26,7 @@ import {
 } from "@/lib/realtime-source.server"
 import { relayInstanceRouteId, type RelayReachability } from "@/lib/relay-fleet"
 import { listPersistedRelays, type PersistedRelay } from "@/lib/relay-registry"
+import { projectRelayInstanceOverview } from "@workspace/contracts"
 import type { RelayInstance, RelayNode } from "@workspace/contracts"
 import { Result } from "effect"
 import type {
@@ -45,6 +52,7 @@ interface RealtimeAccessPolicy {
   canManageRelays: boolean
   isPlatformAdmin: boolean
   readableInstances: Map<string, Set<string>>
+  readableNodes: Set<string>
   readableRelays: Set<string>
   relayWideRead: Set<string>
   relays: Map<string, PersistedRelay>
@@ -55,7 +63,8 @@ export async function openAuthorizedRealtimeStream(input: {
   signal: AbortSignal
   user: AuthenticatedUser
 }): Promise<ReadableStream<Uint8Array>> {
-  let policy = await loadRealtimeAccessPolicy(input.user)
+  let policy: RealtimeAccessPolicy
+  const initialPolicy = loadRealtimeAccessPolicy(input.user)
   let closed = false
   let controller: ReadableStreamDefaultController<Uint8Array> | null = null
   let heartbeat: ReturnType<typeof setInterval> | null = null
@@ -69,7 +78,9 @@ export async function openAuthorizedRealtimeStream(input: {
         hearth: boolean
       })
     | null = null
-  let processing = Promise.resolve()
+  let processing = initialPolicy.then((loaded) => {
+    policy = loaded
+  })
   let unsubscribe: () => void = () => undefined
 
   const tryEnqueue = (chunk: Uint8Array, force = false): boolean => {
@@ -310,7 +321,7 @@ export async function openAuthorizedRealtimeStream(input: {
         type: "collections.invalidate",
       })
     }
-    if (event.delta.node) {
+    if (event.delta.node && policy.readableNodes.has(relay.id)) {
       enqueue({
         epoch: event.epoch,
         nodes: [fleetNode(event.delta.node, relay)],
@@ -412,6 +423,17 @@ export async function openAuthorizedRealtimeStream(input: {
     )
   }
 
+  // Subscribe before awaiting database policy reads so changes during startup
+  // are queued and projected only after the initial policy has been replaced.
+  await tapPromiseError(
+    async () => {
+      await Promise.all([initialPolicy, processing])
+      if (closed || input.signal.aborted)
+        throw new Error("Realtime authorization changed during startup")
+    },
+    () => finish(true)
+  )
+
   return new ReadableStream<Uint8Array>(
     {
       start(nextController) {
@@ -442,6 +464,12 @@ export async function openAuthorizedRealtimeStream(input: {
 async function loadRealtimeAccessPolicy(
   user: AuthenticatedUser
 ): Promise<RealtimeAccessPolicy> {
+  user = (
+    await runAppEffect(
+      "realtime.accountPolicy",
+      refreshRelayAuthorizationUserEffect({ user, loginSession: null })
+    )
+  ).user
   const [relays, grants] = await Promise.all([
     listPersistedRelays(),
     isPlatformAdmin(user) ? Promise.resolve([]) : listUserGrants(user.id),
@@ -451,7 +479,7 @@ async function loadRealtimeAccessPolicy(
   const relayWideRead = new Set<string>()
   const readableInstances = new Map<string, Set<string>>()
   for (const grant of grants) {
-    if (!roleHasPermission(grant.role, "instance.read")) continue
+    if (!grantHasPermission(grant, "instance.read")) continue
     if (grant.resourceType === "relay") {
       relayWideRead.add(grant.relayId)
       continue
@@ -468,6 +496,11 @@ async function loadRealtimeAccessPolicy(
     canManageRelays: isPlatformAdmin(user) || isRelayCreator(user),
     isPlatformAdmin: isPlatformAdmin(user),
     readableInstances,
+    readableNodes: new Set(
+      visibleRelays.flatMap((relay) =>
+        canReadRelayNode(user, relay.id, grants) ? [relay.id] : []
+      )
+    ),
     readableRelays,
     relayWideRead,
     relays: new Map(visibleRelays.map((relay) => [relay.id, relay])),
@@ -499,7 +532,7 @@ function fleetInstance(
   relay: PersistedRelay
 ): FleetInstance {
   return {
-    ...instance,
+    ...projectRelayInstanceOverview(instance),
     relayId: relay.id,
     relayName: relay.name,
     relayStatus: reachability(relay.id),

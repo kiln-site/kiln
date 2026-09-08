@@ -5,22 +5,21 @@ import { authenticateCliTokenEffect } from "@/effect/cli-access"
 import { runAppEffect } from "@/effect/runtime"
 import { databasePool } from "@/lib/database"
 import { databaseTable } from "@/lib/database-config"
-import { isAccessRole, roleHasPermission } from "@/lib/permissions"
+import {
+  isAccountEnabled,
+  isAccountVerified,
+  type AccountPolicy,
+} from "@/lib/account-policy"
+import { grantHasPermission } from "@/lib/permissions"
+import { loadResourceGrantsEffect } from "@/lib/resource-permissions"
 
-interface UserRow extends RowDataPacket {
-  banned: number | boolean | null
+interface UserRow extends RowDataPacket, AccountPolicy {
   id: string
   role: string | null
 }
 
 interface InstanceRow extends RowDataPacket {
   instance_id: string
-}
-
-interface GrantRow extends RowDataPacket {
-  resource_id: string
-  resource_type: "instance" | "relay"
-  role: string
 }
 
 export interface SftpAuthorization {
@@ -51,10 +50,8 @@ export async function resolveSftpAuthorization(
     return null
   }
   const linkedCli = cliPrincipal?._tag === "Some" ? cliPrincipal.value : null
-  const user = linkedCli
-    ? { banned: false, id: linkedCli.user.id, role: linkedCli.user.role }
-    : await findUser(normalizedUsername)
-  if (!user || Boolean(user.banned)) return null
+  const user = linkedCli ? linkedCli.user : await findUser(normalizedUsername)
+  if (!user || !isAccountEnabled(user) || !isAccountVerified(user)) return null
 
   const [instances] = await databasePool.query<Array<InstanceRow>>(
     `SELECT instance_id
@@ -66,7 +63,12 @@ export async function resolveSftpAuthorization(
   if (user.role === "admin") {
     return {
       instances: instances.map((instance) => ({
-        actions: sftpFileActions(linkedCli?.mode !== "read_only"),
+        actions: sftpFileActions({
+          read: true,
+          write: linkedCli?.mode !== "read_only",
+          delete: linkedCli?.mode !== "read_only",
+          chmod: linkedCli?.mode !== "read_only",
+        }),
         id: instance.instance_id,
       })),
       userId: user.id,
@@ -74,31 +76,40 @@ export async function resolveSftpAuthorization(
     }
   }
 
-  const [grants] = await databasePool.query<Array<GrantRow>>(
-    `SELECT resource_type, resource_id, role
-       FROM ${databaseTable("access_grant")}
-      WHERE user_id = ? AND relay_id = ?`,
-    [user.id, relayId]
+  const grants = await runAppEffect(
+    "sftp.permissions",
+    loadResourceGrantsEffect(user.id, relayId)
   )
   const instanceIds = new Set(instances.map((instance) => instance.instance_id))
-  const resolved = new Map<string, Set<string>>()
+  const permissions = new Map<string, Set<string>>()
   for (const grant of grants) {
-    if (!isAccessRole(grant.role)) continue
-    if (!roleHasPermission(grant.role, "instance.sftp.connect")) continue
-    const actions = sftpFileActions(
-      linkedCli?.mode !== "read_only" &&
-        roleHasPermission(grant.role, "instance.files.write")
-    )
+    if (grant.resourceType === "database") continue
     const grantedIds =
-      grant.resource_type === "relay"
-        ? instanceIds
-        : new Set([grant.resource_id])
+      grant.resourceType === "relay" ? instanceIds : [grant.resourceId]
     for (const instanceId of grantedIds) {
       if (!instanceIds.has(instanceId)) continue
-      const existing = resolved.get(instanceId) ?? new Set<string>()
-      for (const action of actions) existing.add(action)
-      resolved.set(instanceId, existing)
+      const existing = permissions.get(instanceId) ?? new Set<string>()
+      for (const permission of grant.permissions) existing.add(permission)
+      permissions.set(instanceId, existing)
     }
+  }
+  const resolved = new Map<string, Set<string>>()
+  for (const [instanceId, selected] of permissions) {
+    const grant = { permissions: [...selected] }
+    if (!grantHasPermission(grant, "instance.sftp.connect")) continue
+    const writable = linkedCli?.mode !== "read_only"
+    resolved.set(
+      instanceId,
+      new Set(
+        sftpFileActions({
+          read: grantHasPermission(grant, "instance.files.read"),
+          write: writable && grantHasPermission(grant, "instance.files.write"),
+          delete:
+            writable && grantHasPermission(grant, "instance.files.delete"),
+          chmod: writable && grantHasPermission(grant, "instance.files.chmod"),
+        })
+      )
+    )
   }
   if (resolved.size === 0) return null
   return {
@@ -112,25 +123,32 @@ export async function resolveSftpAuthorization(
 
 async function findUser(username: string): Promise<UserRow | undefined> {
   const [users] = await databasePool.query<Array<UserRow>>(
-    `SELECT id, role, banned
+    `SELECT id, role, status, statusExpiresAt, emailVerifiedAt,
+            manuallyVerifiedAt, legacyVerificationRecordedAt
        FROM ${databaseTable("user")}
-      WHERE LOWER(email) = ?
+      WHERE email = ?
       LIMIT 1`,
     [username]
   )
   return users[0]
 }
 
-function sftpFileActions(writable: boolean): ReadonlyArray<string> {
-  return writable
-    ? [
-        "instance.files.list",
-        "instance.files.read",
-        "instance.files.create",
-        "instance.files.write",
-        "instance.files.delete",
-        "instance.files.rename",
-        "instance.files.chmod",
-      ]
-    : ["instance.files.list", "instance.files.read"]
+export function sftpFileActions(permissions: {
+  read: boolean
+  write: boolean
+  delete: boolean
+  chmod: boolean
+}): ReadonlyArray<string> {
+  return [
+    ...(permissions.read ? ["instance.files.list", "instance.files.read"] : []),
+    ...(permissions.write
+      ? [
+          "instance.files.create",
+          "instance.files.write",
+          "instance.files.rename",
+        ]
+      : []),
+    ...(permissions.delete ? ["instance.files.delete"] : []),
+    ...(permissions.chmod ? ["instance.files.chmod"] : []),
+  ]
 }

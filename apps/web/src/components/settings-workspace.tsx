@@ -9,20 +9,17 @@ import {
   Check,
   Copy,
   Cpu,
-  Crown,
   FileCode2,
   Fingerprint,
   Globe2,
   HardDrive,
   LoaderCircle,
   Network,
-  Pencil,
   Save,
   Server,
   Tags,
   Trash2,
   TriangleAlert,
-  UserRound,
   Users,
 } from "lucide-react"
 
@@ -32,43 +29,30 @@ import {
   Dialog,
   DialogContent,
   DialogDescription,
-  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from "@workspace/ui/components/dialog"
 import { Input } from "@workspace/ui/components/input"
 import { showToast } from "@workspace/ui/components/sonner"
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from "@workspace/ui/components/tooltip"
 import { cn } from "@workspace/ui/lib/utils"
 import { MAXIMUM_INSTANCE_NAME_LENGTH } from "@workspace/contracts"
 
 import { ReadOnlyCodeViewer } from "@/components/read-only-code-viewer"
 import { ServerDeleteDialog } from "@/components/server-delete-dialog"
 import { hostPortAddress } from "@/lib/domain-address"
+import { canAccessActivity } from "@/lib/navigation-destinations"
 import { provisioningFailureDiagnostics } from "@/lib/provisioning-diagnostics"
 import { warmSyntaxCodeEditorModule } from "@/lib/syntax-editor-module-preload"
 import {
+  accessCapabilitiesQueryOptions,
   instanceRecipeQueryOptions,
-  instanceUsersQueryOptions,
-  queryKeys,
 } from "@/lib/query-options"
 import { applyUpdatedInstance } from "@/lib/realtime-client"
 import type {
   InstanceSettingsInstance,
   RelayNodeSummary,
 } from "@/lib/relay-selectors"
-import {
-  removeInstanceAccessGrant,
-  transferInstanceOwnership,
-} from "@/server/access"
-import type { getInstanceUsers } from "@/server/access"
 import { updateInstanceName, uploadToMclogs } from "@/server/relay"
-
-type InstanceUsers = Awaited<ReturnType<typeof getInstanceUsers>>
 
 export function SettingsWorkspace({
   instance,
@@ -83,7 +67,8 @@ export function SettingsWorkspace({
   permissions: {
     deleteServer: boolean
     networkRead: boolean
-    settings: boolean
+    configurationRead: boolean
+    configurationWrite: boolean
     shareLogs: boolean
   }
   onDeleted: () => Promise<void> | void
@@ -93,10 +78,10 @@ export function SettingsWorkspace({
   const {
     deleteServer: canDelete,
     networkRead: canViewNetwork,
-    settings: canRename,
+    configurationWrite: canRename,
     shareLogs: canShare,
   } = permissions
-  const canViewStartup = permissions.settings
+  const canViewStartup = permissions.configurationRead
   const rawAddress =
     instance.publicHost && instance.publicPort
       ? hostPortAddress(instance.publicHost, instance.publicPort)
@@ -658,424 +643,53 @@ function InstanceUsersCard({
 }: {
   instance: InstanceSettingsInstance
 }) {
-  const queryClient = useQueryClient()
-  const usersQuery = useQuery(
-    instanceUsersQueryOptions(instance.relayId, instance.id)
-  )
-  const [permissionsUser, setPermissionsUser] = React.useState<string | null>(
-    null
-  )
-  const [removeTarget, setRemoveTarget] = React.useState<
-    InstanceUsers["users"][number] | null
-  >(null)
-  const [transferTarget, setTransferTarget] = React.useState<
-    InstanceUsers["users"][number] | null
-  >(null)
-  const removeMutation = useMutation({
-    mutationFn: removeInstanceAccessGrant,
-    onSuccess: async () => {
-      setRemoveTarget(null)
-      await Promise.all([
-        queryClient.invalidateQueries({
-          queryKey: queryKeys.access.instanceUsers(
-            instance.relayId,
-            instance.id
-          ),
-        }),
-        queryClient.invalidateQueries({ queryKey: queryKeys.access.overview }),
-        queryClient.invalidateQueries({
-          queryKey: queryKeys.access.capabilities,
-        }),
-      ])
-    },
+  const { data: access } = useQuery({
+    ...accessCapabilitiesQueryOptions(),
+    select: (capabilities) => ({
+      canManageAccess: capabilities.canManageAccess,
+      canViewActivity: canAccessActivity(capabilities),
+    }),
   })
-  const transferMutation = useMutation({
-    mutationFn: transferInstanceOwnership,
-    onSuccess: async () => {
-      setTransferTarget(null)
-      await Promise.all([
-        queryClient.invalidateQueries({
-          queryKey: queryKeys.access.instanceUsers(
-            instance.relayId,
-            instance.id
-          ),
-        }),
-        queryClient.invalidateQueries({ queryKey: queryKeys.access.overview }),
-        queryClient.invalidateQueries({
-          queryKey: queryKeys.access.capabilities,
-        }),
-        queryClient.invalidateQueries({ queryKey: queryKeys.relay.snapshot }),
-      ])
-    },
-  })
-
-  const closeRemoveDialog = (open: boolean) => {
-    if (open || removeMutation.isPending) return
-    setRemoveTarget(null)
-    removeMutation.reset()
-  }
-
-  const closeTransferDialog = (open: boolean) => {
-    if (open || transferMutation.isPending) return
-    setTransferTarget(null)
-    transferMutation.reset()
-  }
+  if (!access?.canManageAccess && !access?.canViewActivity) return null
   return (
-    <InfoCard className="flex h-[26rem] flex-col lg:h-full lg:min-h-[32rem]">
-      <InfoCardHeader
-        icon={<Users />}
-        title="Users"
-        action={
-          usersQuery.data?.canOpenAccessPage ? (
-            <Button asChild size="sm" variant="ghost">
-              <Link to="/access">
-                Manage
+    <InfoCard className="self-start">
+      <InfoCardHeader icon={<Users />} title="Users & access" />
+      <div className="space-y-4 p-4">
+        <p className="text-sm text-muted-foreground">
+          Manage this server’s invitations, presets, and permissions, or review
+          recent activity.
+        </p>
+        <div className="flex flex-wrap gap-2">
+          {access.canManageAccess ? (
+            <Button asChild size="sm" variant="outline">
+              <Link
+                to="/access"
+                search={{
+                  tab: "users",
+                  relayId: instance.relayId,
+                  resourceType: "instance",
+                  resourceId: instance.id,
+                }}
+              >
+                Manage access
                 <ArrowRight />
               </Link>
             </Button>
-          ) : (
-            <Button size="sm" variant="ghost" disabled>
-              Manage
-              <ArrowRight />
-            </Button>
-          )
-        }
-      />
-
-      {usersQuery.isPending ? (
-        <div className="grid min-h-0 flex-1 place-items-center text-muted-foreground">
-          <LoaderCircle className="size-4 animate-spin" />
-        </div>
-      ) : usersQuery.isError ? (
-        <div className="min-h-0 flex-1 px-4 py-6 text-xs text-destructive">
-          User access could not be loaded.
-        </div>
-      ) : (
-        <div className="min-h-0 flex-1 overflow-y-auto">
-          <table className="w-full table-fixed text-left">
-            <thead className="sticky top-0 z-10 bg-background/95 backdrop-blur-sm">
-              <tr className="type-technical-label border-b text-muted-foreground">
-                <th className="px-4 py-2 font-medium">Email</th>
-                <th className="w-40 px-4 py-2 text-right font-medium">
-                  Actions
-                </th>
-              </tr>
-            </thead>
-            <tbody>
-              <AccessUserRow
-                email={usersQuery.data.owner?.email ?? "Unknown owner"}
-                userId={usersQuery.data.owner?.id ?? null}
-                instanceId={instance.id}
-                canManage={usersQuery.data.canManage}
-                onPermissions={() =>
-                  setPermissionsUser(
-                    usersQuery.data.owner?.email ?? "Unknown owner"
-                  )
-                }
-                owner
-              />
-              {usersQuery.data.users.map((user) => (
-                <AccessUserRow
-                  key={user.userId}
-                  email={user.email}
-                  userId={user.userId}
-                  instanceId={instance.id}
-                  canManage={usersQuery.data.canManage}
-                  canTransferOwnership={usersQuery.data.canTransferOwnership}
-                  onPermissions={() => setPermissionsUser(user.email)}
-                  onRemove={() => setRemoveTarget(user)}
-                  onTransferOwnership={() => setTransferTarget(user)}
-                  protectedOwnerGrant={user.role === "owner"}
-                  relayAccess={user.resourceType === "relay"}
-                />
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
-
-      <Dialog
-        open={permissionsUser !== null}
-        onOpenChange={(open) => {
-          if (!open) setPermissionsUser(null)
-        }}
-      >
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Modify permissions</DialogTitle>
-            <DialogDescription>
-              Per-user permission editing for {permissionsUser ?? "this user"}{" "}
-              is coming soon.
-            </DialogDescription>
-          </DialogHeader>
-          <div className="type-technical-label rounded-lg border border-dashed bg-muted/15 px-4 py-6 text-center text-muted-foreground">
-            Coming soon
-          </div>
-        </DialogContent>
-      </Dialog>
-
-      <Dialog open={removeTarget !== null} onOpenChange={closeRemoveDialog}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Remove server access?</DialogTitle>
-            <DialogDescription>
-              {removeTarget?.email ?? "This user"} will no longer be able to
-              access {instance.name}. Their Kiln account and access elsewhere
-              will remain unchanged.
-            </DialogDescription>
-          </DialogHeader>
-          {removeMutation.error ? (
-            <p className="text-xs text-destructive">
-              {removeMutation.error instanceof Error
-                ? removeMutation.error.message
-                : "Could not remove server access"}
-            </p>
           ) : null}
-          <DialogFooter>
-            <Button
-              type="button"
-              variant="outline"
-              disabled={removeMutation.isPending}
-              onClick={() => closeRemoveDialog(false)}
-            >
-              Cancel
+          {access.canViewActivity ? (
+            <Button asChild size="sm" variant="ghost">
+              <Link
+                to="/activity"
+                search={{ relay: instance.relayId, server: instance.id }}
+              >
+                <Activity />
+                View activity
+              </Link>
             </Button>
-            <Button
-              type="button"
-              variant="destructive"
-              disabled={!removeTarget || removeMutation.isPending}
-              onClick={() => {
-                if (!removeTarget) return
-                removeMutation.mutate({
-                  data: {
-                    id: removeTarget.id,
-                    instanceId: instance.id,
-                    relayId: instance.relayId,
-                  },
-                })
-              }}
-            >
-              {removeMutation.isPending ? (
-                <LoaderCircle className="animate-spin" />
-              ) : (
-                <Trash2 />
-              )}
-              Remove access
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      <Dialog open={transferTarget !== null} onOpenChange={closeTransferDialog}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Transfer server ownership?</DialogTitle>
-            <DialogDescription>
-              {transferTarget?.email ?? "This user"} will become the owner of{" "}
-              {instance.name} and receive full server access.
-            </DialogDescription>
-          </DialogHeader>
-          {transferMutation.error ? (
-            <p className="text-xs text-destructive">
-              {transferMutation.error instanceof Error
-                ? transferMutation.error.message
-                : "Could not transfer server ownership"}
-            </p>
           ) : null}
-          <DialogFooter>
-            <Button
-              type="button"
-              variant="outline"
-              disabled={transferMutation.isPending}
-              onClick={() => closeTransferDialog(false)}
-            >
-              Cancel
-            </Button>
-            <Button
-              type="button"
-              disabled={!transferTarget || transferMutation.isPending}
-              onClick={() => {
-                if (!transferTarget) return
-                transferMutation.mutate({
-                  data: {
-                    instanceId: instance.id,
-                    relayId: instance.relayId,
-                    userId: transferTarget.userId,
-                  },
-                })
-              }}
-            >
-              {transferMutation.isPending ? (
-                <LoaderCircle className="animate-spin" />
-              ) : (
-                <Crown />
-              )}
-              Transfer ownership
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+        </div>
+      </div>
     </InfoCard>
-  )
-}
-
-function AccessUserRow({
-  canManage = false,
-  canTransferOwnership = false,
-  email,
-  instanceId,
-  owner = false,
-  onPermissions,
-  onRemove,
-  onTransferOwnership,
-  protectedOwnerGrant = false,
-  relayAccess = false,
-  userId,
-}: {
-  canManage?: boolean
-  canTransferOwnership?: boolean
-  email: string
-  instanceId: string
-  owner?: boolean
-  onPermissions?: () => void
-  onRemove?: () => void
-  onTransferOwnership?: () => void
-  protectedOwnerGrant?: boolean
-  relayAccess?: boolean
-  userId: string | null
-}) {
-  const removalProtected = !relayAccess && (owner || protectedOwnerGrant)
-  const canManageDirectGrant = canManage && !relayAccess
-
-  return (
-    <tr className="border-b last:border-b-0">
-      <td className="px-4 py-3">
-        <div className="flex min-w-0 items-center gap-2">
-          <UserRound className="size-3.5 shrink-0 text-muted-foreground" />
-          <span className="truncate text-xs" title={email}>
-            {email}
-          </span>
-          {owner ? (
-            <Badge
-              variant="outline"
-              className="type-meta border-amber-400/35 bg-amber-400/12 font-mono text-amber-300"
-            >
-              Owner
-            </Badge>
-          ) : null}
-          {relayAccess ? (
-            <Badge
-              variant="outline"
-              className="type-meta font-mono text-muted-foreground"
-              title="Access to every server on this Relay"
-            >
-              Relay
-            </Badge>
-          ) : null}
-        </div>
-      </td>
-      <td className="px-4 py-2">
-        <div className="flex justify-end gap-0.5">
-          {userId ? (
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button asChild size="icon-sm" variant="ghost">
-                  <Link
-                    to="/activity"
-                    search={{ server: instanceId, user: userId }}
-                    aria-label={`View ${email} activity`}
-                  >
-                    <Activity />
-                  </Link>
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent side="bottom">View activity</TooltipContent>
-            </Tooltip>
-          ) : null}
-          {canManageDirectGrant ? (
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  type="button"
-                  size="icon-sm"
-                  variant="ghost"
-                  aria-label={`Modify ${email} permissions`}
-                  onClick={onPermissions}
-                >
-                  <Pencil />
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent side="bottom">Modify permissions</TooltipContent>
-            </Tooltip>
-          ) : null}
-          {removalProtected ? (
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <span>
-                  <Button
-                    type="button"
-                    size="icon-sm"
-                    variant="ghost"
-                    className="text-muted-foreground/35"
-                    aria-label={
-                      owner
-                        ? `${email} cannot be removed while they own the server`
-                        : `${email} cannot be removed while their grant has the owner role`
-                    }
-                    disabled
-                  >
-                    <Trash2 />
-                  </Button>
-                </span>
-              </TooltipTrigger>
-              <TooltipContent side="bottom">
-                {owner
-                  ? "Transfer ownership before removing"
-                  : "Change the owner role before removing"}
-              </TooltipContent>
-            </Tooltip>
-          ) : null}
-          {!removalProtected && canManageDirectGrant ? (
-            <>
-              {canTransferOwnership ? (
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <Button
-                      type="button"
-                      size="icon-sm"
-                      variant="ghost"
-                      className="text-muted-foreground hover:text-amber-300"
-                      aria-label={`Transfer ownership to ${email}`}
-                      onClick={onTransferOwnership}
-                    >
-                      <Crown />
-                    </Button>
-                  </TooltipTrigger>
-                  <TooltipContent side="bottom">
-                    Transfer ownership
-                  </TooltipContent>
-                </Tooltip>
-              ) : null}
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button
-                    type="button"
-                    size="icon-sm"
-                    variant="ghost"
-                    className="text-muted-foreground hover:text-destructive"
-                    aria-label={`Remove ${email}`}
-                    onClick={onRemove}
-                  >
-                    <Trash2 />
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent side="bottom">Remove user</TooltipContent>
-              </Tooltip>
-            </>
-          ) : null}
-        </div>
-      </td>
-    </tr>
   )
 }
 

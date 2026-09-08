@@ -6,6 +6,9 @@ import { Database } from "@/effect/database"
 import type { AuthenticatedUser } from "@/lib/auth-session"
 import {
   accessGrantRoleChangeError,
+  allowedInstanceIdsForUser,
+  canReadRelayNode,
+  type AccessGrant,
   deduplicateEffectiveInstanceGrants,
   deleteInstanceAccessEffect,
   isBlockedInstanceOwnerRoleChange,
@@ -80,51 +83,72 @@ describe("platform access roles", () => {
 })
 
 describe("Relay permission requirements", () => {
-  it.effect("loads grants once and requires every requested permission", () => {
+  it.effect(
+    "loads one bounded grant batch and requires every requested permission",
+    () => {
+      let queryCount = 0
+      const databaseLayer = Layer.succeed(Database)({
+        execute: () => Effect.die("Unexpected database write"),
+        queryRows: <TRow extends RowDataPacket>() =>
+          Effect.sync(() => {
+            queryCount += 1
+            if (queryCount === 2)
+              return [
+                {
+                  access_id: "grant-one",
+                  selection_kind: "permission",
+                  selection_key: "instance.console.read",
+                },
+              ] as unknown as ReadonlyArray<TRow>
+            if (queryCount === 3) return []
+            return [
+              {
+                id: "grant-one",
+                relay_id: "relay-one",
+                resource_type: "instance",
+                resource_id: "instance-one",
+                role: "viewer",
+              },
+            ] as unknown as ReadonlyArray<TRow>
+          }),
+        transaction: () => Effect.die("Unexpected transaction"),
+      })
+
+      return Effect.gen(function* () {
+        const result = yield* Effect.result(
+          requireRelayPermissionsEffect({
+            instanceId: "instance-one",
+            permissions: ["instance.console.read", "instance.console.write"],
+            relayId: "relay-one",
+            user: authenticatedUser,
+          })
+        )
+
+        assert.isTrue(Result.isFailure(result))
+        if (Result.isFailure(result)) {
+          assert.strictEqual(result.failure._tag, "PermissionDeniedError")
+        }
+        assert.strictEqual(queryCount, 3)
+      }).pipe(Effect.provide(databaseLayer))
+    }
+  )
+
+  it.effect("allows implied permissions from one bounded grant batch", () => {
     let queryCount = 0
     const databaseLayer = Layer.succeed(Database)({
       execute: () => Effect.die("Unexpected database write"),
       queryRows: <TRow extends RowDataPacket>() =>
         Effect.sync(() => {
           queryCount += 1
-          return [
-            {
-              id: "grant-one",
-              relay_id: "relay-one",
-              resource_type: "instance",
-              resource_id: "instance-one",
-              role: "viewer",
-            },
-          ] as unknown as ReadonlyArray<TRow>
-        }),
-      transaction: () => Effect.die("Unexpected transaction"),
-    })
-
-    return Effect.gen(function* () {
-      const result = yield* Effect.result(
-        requireRelayPermissionsEffect({
-          instanceId: "instance-one",
-          permissions: ["instance.console.read", "instance.console.write"],
-          relayId: "relay-one",
-          user: authenticatedUser,
-        })
-      )
-
-      assert.isTrue(Result.isFailure(result))
-      if (Result.isFailure(result)) {
-        assert.strictEqual(result.failure._tag, "PermissionDeniedError")
-      }
-      assert.strictEqual(queryCount, 1)
-    }).pipe(Effect.provide(databaseLayer))
-  })
-
-  it.effect("allows every requested permission from one grant query", () => {
-    let queryCount = 0
-    const databaseLayer = Layer.succeed(Database)({
-      execute: () => Effect.die("Unexpected database write"),
-      queryRows: <TRow extends RowDataPacket>() =>
-        Effect.sync(() => {
-          queryCount += 1
+          if (queryCount === 2)
+            return [
+              {
+                access_id: "grant-one",
+                selection_kind: "permission",
+                selection_key: "instance.console.write",
+              },
+            ] as unknown as ReadonlyArray<TRow>
+          if (queryCount === 3) return []
           return [
             {
               id: "grant-one",
@@ -146,7 +170,7 @@ describe("Relay permission requirements", () => {
         user: authenticatedUser,
       })
 
-      assert.strictEqual(queryCount, 1)
+      assert.strictEqual(queryCount, 3)
     }).pipe(Effect.provide(databaseLayer))
   })
 
@@ -334,35 +358,159 @@ describe("instance access cleanup", () => {
     )
   })
 
-  it.effect("removes grants and pending invitations in one transaction", () => {
-    const statements: Array<{
-      sql: string
-      values: ReadonlyArray<unknown>
-    }> = []
-    const databaseLayer = Layer.succeed(Database)({
-      execute: () => Effect.die("Unexpected standalone database write"),
-      queryRows: () => Effect.die("Unexpected database query"),
-      transaction: (_operation, run) =>
-        run({
-          execute: (sql, values) =>
-            Effect.sync(() => {
-              statements.push({ sql, values: values ?? [] })
-              return emptyResult
-            }),
-          queryRows: () => Effect.succeed([]),
-        }),
-    })
+  it.effect(
+    "removes grants, pending invitations, and resource presets in one transaction",
+    () => {
+      const statements: Array<{
+        sql: string
+        values: ReadonlyArray<unknown>
+      }> = []
+      const databaseLayer = Layer.succeed(Database)({
+        execute: () => Effect.die("Unexpected standalone database write"),
+        queryRows: () => Effect.die("Unexpected database query"),
+        transaction: (_operation, run) =>
+          run({
+            execute: (sql, values) =>
+              Effect.sync(() => {
+                statements.push({ sql, values: values ?? [] })
+                return emptyResult
+              }),
+            queryRows: () => Effect.succeed([]),
+          }),
+      })
 
-    return Effect.gen(function* () {
-      yield* deleteInstanceAccessEffect("relay-one", "instance-one")
+      return Effect.gen(function* () {
+        yield* deleteInstanceAccessEffect("relay-one", "instance-one")
 
-      assert.strictEqual(statements.length, 2)
-      assert.include(statements[0]?.sql, "resource_type = 'instance'")
-      assert.deepEqual(statements[0]?.values, ["relay-one", "instance-one"])
-      assert.include(statements[1]?.sql, "accepted_at IS NULL")
-      assert.include(statements[1]?.sql, "revoked_at IS NULL")
-      assert.include(statements[1]?.sql, "expires_at > CURRENT_TIMESTAMP(3)")
-      assert.deepEqual(statements[1]?.values, ["relay-one", "instance-one"])
-    }).pipe(Effect.provide(databaseLayer))
+        assert.strictEqual(statements.length, 3)
+        assert.include(statements[0]?.sql, "resource_type = 'instance'")
+        assert.deepEqual(statements[0]?.values, ["relay-one", "instance-one"])
+        assert.include(statements[1]?.sql, "accepted_at IS NULL")
+        assert.include(statements[1]?.sql, "revoked_at IS NULL")
+        assert.include(statements[1]?.sql, "expires_at > CURRENT_TIMESTAMP(3)")
+        assert.deepEqual(statements[1]?.values, ["relay-one", "instance-one"])
+        assert.include(statements[2]?.sql, "permission_preset")
+        assert.include(statements[2]?.sql, "resource_type = 'instance'")
+        assert.deepEqual(statements[2]?.values, ["relay-one", "instance-one"])
+      }).pipe(Effect.provide(databaseLayer))
+    }
+  )
+})
+
+describe("Relay snapshot visibility", () => {
+  const relayId = "relay-one"
+  const instances = ["instance-one", "instance-two"]
+  const instanceGrant: AccessGrant = {
+    id: "instance-grant",
+    relayId,
+    resourceId: "instance-one",
+    resourceType: "instance",
+    role: "viewer",
+    permissions: ["instance.read"],
+  }
+  const databaseGrant: AccessGrant = {
+    ...instanceGrant,
+    id: "database-grant",
+    resourceId: "database-one",
+    resourceType: "database",
+    permissions: ["database.read"],
+  }
+  const relayInstancesGrant: AccessGrant = {
+    ...instanceGrant,
+    id: "relay-instances-grant",
+    resourceId: relayId,
+    resourceType: "relay",
+  }
+  const relayNodeGrant: AccessGrant = {
+    ...relayInstancesGrant,
+    id: "relay-node-grant",
+    permissions: ["relay.read"],
+  }
+
+  it("keeps child inventory accessible without exposing Relay nodes", () => {
+    for (const [grants, expectedInstances] of [
+      [[instanceGrant], ["instance-one"]],
+      [[databaseGrant], []],
+      [[relayInstancesGrant], instances],
+      [[instanceGrant, databaseGrant], ["instance-one"]],
+    ] satisfies Array<[Array<AccessGrant>, Array<string>]>) {
+      assert.isFalse(canReadRelayNode(authenticatedUser, relayId, grants))
+      assert.deepEqual(
+        [
+          ...allowedInstanceIdsForUser(
+            authenticatedUser,
+            relayId,
+            instances,
+            grants
+          ),
+        ],
+        expectedInstances
+      )
+    }
+  })
+
+  it("requires relay.read on this Relay independently of instance access", () => {
+    assert.isTrue(
+      canReadRelayNode(authenticatedUser, relayId, [relayNodeGrant])
+    )
+    assert.deepEqual(
+      [
+        ...allowedInstanceIdsForUser(authenticatedUser, relayId, instances, [
+          relayNodeGrant,
+        ]),
+      ],
+      []
+    )
+    assert.isTrue(
+      canReadRelayNode(authenticatedUser, relayId, [
+        instanceGrant,
+        relayNodeGrant,
+      ])
+    )
+    assert.deepEqual(
+      [
+        ...allowedInstanceIdsForUser(authenticatedUser, relayId, instances, [
+          instanceGrant,
+          relayNodeGrant,
+        ]),
+      ],
+      ["instance-one"]
+    )
+    assert.isFalse(
+      canReadRelayNode(authenticatedUser, relayId, [
+        { ...relayNodeGrant, relayId: "other-relay" },
+      ])
+    )
+    // Even malformed child grants cannot authorize parent infrastructure.
+    assert.isFalse(
+      canReadRelayNode(authenticatedUser, relayId, [
+        { ...instanceGrant, permissions: ["relay.read"] },
+      ])
+    )
+  })
+
+  it("allows platform admins and development bypass while rejecting disabled users", () => {
+    for (const user of [
+      { ...authenticatedUser, role: "admin" as const },
+      { ...authenticatedUser, isDevelopmentBypass: true },
+    ]) {
+      assert.isTrue(canReadRelayNode(user, relayId, []))
+      assert.deepEqual(
+        [...allowedInstanceIdsForUser(user, relayId, instances, [])],
+        instances
+      )
+    }
+    assert.isFalse(
+      canReadRelayNode({ ...authenticatedUser, status: "disabled" }, relayId, [
+        relayNodeGrant,
+      ])
+    )
+    assert.isFalse(
+      canReadRelayNode(
+        { ...authenticatedUser, role: "relay_creator" },
+        relayId,
+        []
+      )
+    )
   })
 })

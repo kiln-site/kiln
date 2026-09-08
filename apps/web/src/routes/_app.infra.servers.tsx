@@ -12,6 +12,7 @@ import { requireInfrastructureDestinationAccess } from "@/lib/route-access"
 
 export const Route = createFileRoute("/_app/infra/servers")({
   validateSearch: z.object({
+    invitation: z.uuid().optional(),
     search: z.string().max(DATA_TABLE_SEARCH_MAX_LENGTH).optional(),
   }),
   beforeLoad: async ({ context }) => {
@@ -31,11 +32,6 @@ function ServersRoute() {
 
   return (
     <ServersPage
-      canProvision={
-        user.isDevelopmentBypass ||
-        user.role === "admin" ||
-        user.role === "relay_creator"
-      }
       passwordRequired={!isDevelopmentBypassIdentity(user)}
       searchStore={searchStore}
     />

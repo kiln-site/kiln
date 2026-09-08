@@ -22,6 +22,7 @@ interface DataTableViewContext {
 
 interface DataTableViewProps<TData extends RowData & object> {
   children?: (table: DataTableInstance<TData>) => React.ReactNode
+  leadingBody?: React.ReactNode
   definition: DataTableDefinition<TData>
   emptyState:
     | React.ReactNode
@@ -88,6 +89,7 @@ function SearchableDataTableView<TData extends RowData & object>({
 
 function DataTableModel<TData extends RowData & object>({
   children,
+  leadingBody,
   definition,
   emptyState,
   searchActive,
@@ -108,6 +110,7 @@ function DataTableModel<TData extends RowData & object>({
     <>
       {children?.(table)}
       <DataTableRenderer
+        leadingBody={leadingBody}
         definition={definition}
         emptyState={resolvedEmptyState}
         source={source}

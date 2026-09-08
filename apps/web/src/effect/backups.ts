@@ -144,7 +144,11 @@ interface BackupCatalogPageRow extends BackupRow {
 }
 
 export interface BackupCatalogPageInput {
-  allowedRoles: ReadonlyArray<string>
+  allowedScopes: ReadonlyArray<{
+    relayId: string
+    resourceType: "relay" | "instance" | "database"
+    resourceId: string
+  }>
   backupId?: string
   cursor: { id: string; value: number | string | null } | null
   direction: "asc" | "desc"
@@ -1324,28 +1328,39 @@ export const listBackupCatalogPageEffect = Effect.fn("backups.page")(function* (
   const values: Array<boolean | null | number | string> = []
 
   if (!input.isAdmin) {
-    if (input.allowedRoles.length === 0) {
+    if (input.allowedScopes.length === 0) {
       return { hasMore: false, items: [] as Array<BackupCatalogPageRecord> }
     }
-    const roles = input.allowedRoles.map(() => "?").join(", ")
-    clauses.push(`backup.target_kind <> 'platform' AND (
-        backup.created_by = ? OR EXISTS (
-          SELECT 1 FROM ${databaseTable("access_grant")} access_grant
-           WHERE access_grant.user_id = ?
-             AND access_grant.relay_id = backup.relay_id
-             AND access_grant.role IN (${roles})
-             AND (
-               access_grant.resource_type = 'relay'
-               OR (backup.target_kind = 'instance'
-                 AND access_grant.resource_type = 'instance'
-                 AND access_grant.resource_id = backup.target_id)
-               OR (backup.target_kind = 'database'
-                 AND access_grant.resource_type = 'database'
-                 AND access_grant.resource_id = backup.target_id)
-             )
+    const relayScopes = new Set(
+      input.allowedScopes.flatMap((scope) =>
+        scope.resourceType === "relay" ? [scope.relayId] : []
+      )
+    )
+    const scopeClauses: string[] = []
+    const seen = new Set<string>()
+    for (const scope of input.allowedScopes) {
+      if (scope.resourceType !== "relay" && relayScopes.has(scope.relayId))
+        continue
+      const key = JSON.stringify([
+        scope.relayId,
+        scope.resourceType,
+        scope.resourceId,
+      ])
+      if (seen.has(key)) continue
+      seen.add(key)
+      if (scope.resourceType === "relay") {
+        scopeClauses.push("backup.relay_id = ?")
+        values.push(scope.relayId)
+      } else {
+        scopeClauses.push(
+          "(backup.relay_id = ? AND backup.target_kind = ? AND backup.target_id = ?)"
         )
-      )`)
-    values.push(input.userId, input.userId, ...input.allowedRoles)
+        values.push(scope.relayId, scope.resourceType, scope.resourceId)
+      }
+    }
+    clauses.push(
+      `backup.target_kind <> 'platform' AND (${scopeClauses.join(" OR ")})`
+    )
   }
 
   if (input.backupId) {

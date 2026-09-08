@@ -7,11 +7,11 @@ import {
 } from "@/effect/account-sessions"
 import { runAppEffect } from "@/effect/runtime"
 import { publishRealtimeChange } from "@/lib/realtime-source.server"
-import { requireAuthenticatedUser } from "@/server/auth"
+import { requireVerifiedUser } from "@/server/auth"
 
 export const getActiveSessions = createServerFn({ method: "GET" }).handler(
   async () => {
-    const user = await requireAuthenticatedUser()
+    const user = await requireVerifiedUser()
     return runAppEffect(
       "auth.sessions.list",
       listAccountSessionsEffect(user.id)
@@ -26,7 +26,7 @@ export const revokeActiveSession = createServerFn({ method: "POST" })
     })
   )
   .handler(async ({ data }) => {
-    const user = await requireAuthenticatedUser()
+    const user = await requireVerifiedUser()
     const revisionChange = await runAppEffect(
       "auth.sessions.revoke",
       revokeAccountSessionEffect(user.id, data.sessionId)

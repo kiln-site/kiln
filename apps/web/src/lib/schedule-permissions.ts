@@ -8,10 +8,12 @@ import type { AuthenticatedUser } from "@/lib/auth-session"
 import type { AccessGrant } from "@/lib/access-control"
 import { isPlatformAdmin } from "@/lib/access-control"
 import type { AccessPermission } from "@/lib/permissions"
-import { roleHasPermission } from "@/lib/permissions"
+import { grantHasPermission } from "@/lib/permissions"
 
 export function scheduleActionPermission(
-  action: Pick<ScheduleAction, "type">,
+  action: Pick<ScheduleAction, "type"> & {
+    action?: "start" | "stop" | "restart" | "kill"
+  },
   target: Pick<ScheduleTarget, "kind">
 ): AccessPermission | null {
   if (action.type === "wait") return null
@@ -19,7 +21,8 @@ export function scheduleActionPermission(
     return target.kind === "instance" ? "instance.console.write" : null
   }
   if (action.type === "power") {
-    if (target.kind === "instance") return "instance.power"
+    if (target.kind === "instance")
+      return `instance.power.${action.action ?? "start"}`
     if (target.kind === "database") return "database.power"
     return null
   }
@@ -36,7 +39,7 @@ export function hasScheduleTargetPermission(input: {
   return input.grants.some((grant) => {
     if (
       grant.relayId !== input.target.relayId ||
-      !roleHasPermission(grant.role, input.permission)
+      !grantHasPermission(grant, input.permission)
     ) {
       return false
     }

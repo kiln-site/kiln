@@ -1,5 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router"
 
+import { isAccountEnabled, isAccountVerified } from "@/lib/account-policy"
 import { getAuthenticatedRealtimeIdentityFromHeaders } from "@/lib/auth-session"
 import { openAuthorizedRealtimeStream } from "@/server/realtime"
 
@@ -18,6 +19,9 @@ export const Route = createFileRoute("/api/realtime")({
             },
             { status: 401 }
           )
+        }
+        if (!isAccountEnabled(identity.user) || !isAccountVerified(identity.user)) {
+          return Response.json({ code: "account_ineligible", error: "Resource access unavailable." }, { status: 403 })
         }
         const body = await openAuthorizedRealtimeStream({
           sessionId: identity.sessionId,

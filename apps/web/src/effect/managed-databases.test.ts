@@ -142,24 +142,32 @@ describe("managed database persistence", () => {
       })
     )
 
-    it.effect("removes grants, pending invitations, and credentials", () =>
-      Effect.gen(function* () {
-        statements.length = 0
+    it.effect(
+      "removes grants, pending invitations, credentials, and resource presets",
+      () =>
+        Effect.gen(function* () {
+          statements.length = 0
 
-        yield* deleteManagedDatabaseRecordEffect("relay-one", "database-one")
+          yield* deleteManagedDatabaseRecordEffect("relay-one", "database-one")
 
-        assert.strictEqual(statements.length, 3)
-        assert.include(statements[0]?.sql, "database_id = ?")
-        assert.include(statements[0]?.sql, "accepted_at IS NULL")
-        assert.include(statements[0]?.sql, "revoked_at IS NULL")
-        assert.include(statements[0]?.sql, "expires_at > CURRENT_TIMESTAMP(3)")
-        assert.deepEqual(statements[0]?.values, ["relay-one", "database-one"])
-        assert.include(statements[1]?.sql, "database_id = ?")
-        assert.deepEqual(statements[1]?.values, ["relay-one", "database-one"])
-        assert.include(statements[2]?.sql, "DELETE FROM")
-        assert.include(statements[2]?.sql, "resource_type = 'database'")
-        assert.deepEqual(statements[2]?.values, ["relay-one", "database-one"])
-      })
+          assert.strictEqual(statements.length, 4)
+          assert.include(statements[0]?.sql, "database_id = ?")
+          assert.include(statements[0]?.sql, "accepted_at IS NULL")
+          assert.include(statements[0]?.sql, "revoked_at IS NULL")
+          assert.include(
+            statements[0]?.sql,
+            "expires_at > CURRENT_TIMESTAMP(3)"
+          )
+          assert.deepEqual(statements[0]?.values, ["relay-one", "database-one"])
+          assert.include(statements[1]?.sql, "database_id = ?")
+          assert.deepEqual(statements[1]?.values, ["relay-one", "database-one"])
+          assert.include(statements[2]?.sql, "DELETE FROM")
+          assert.include(statements[2]?.sql, "resource_type = 'database'")
+          assert.deepEqual(statements[2]?.values, ["relay-one", "database-one"])
+          assert.include(statements[3]?.sql, "permission_preset")
+          assert.include(statements[3]?.sql, "resource_type = 'database'")
+          assert.deepEqual(statements[3]?.values, ["relay-one", "database-one"])
+        })
     )
   })
 })

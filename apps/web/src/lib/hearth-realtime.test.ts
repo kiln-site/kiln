@@ -27,6 +27,29 @@ const targetSortedBackupRunsKey = queryKeys.backups.runs({
 })
 
 describe("Hearth realtime query refresh", () => {
+  it("refreshes pending invitations and open invitation details on access changes", async () => {
+    for (const scope of [undefined, { relayId: "relay-a" }]) {
+      const client = new QueryClient()
+      client.setQueryData(["my-resource-invitations"], [])
+      client.setQueryData(["platform-invitations", 0], [])
+      client.setQueryData(["resource-invitation", "invite-a"], {
+        pending: true,
+      })
+      client.setQueryData(["unrelated"], {})
+      await refreshHearthRealtimeTopics(client, ["access"], scope)
+      expect(
+        client.getQueryState(["my-resource-invitations"])?.isInvalidated
+      ).toBe(true)
+      expect(
+        client.getQueryState(["resource-invitation", "invite-a"])?.isInvalidated
+      ).toBe(true)
+      expect(
+        client.getQueryState(["platform-invitations", 0])?.isInvalidated
+      ).toBe(true)
+      expect(client.getQueryState(["unrelated"])?.isInvalidated).toBe(false)
+    }
+  })
+
   it("invalidates only the requested domain", async () => {
     const queryClient = new QueryClient()
     queryClient.setQueryData(backupRunsKey, { pageParams: [null], pages: [] })

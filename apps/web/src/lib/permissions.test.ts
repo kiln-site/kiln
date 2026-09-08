@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vite-plus/test"
 
 import {
+  grantHasPermission,
+  legacyRolePermissionSelections,
   instancePortsWritePermission,
   platformRoleHasPermission,
   roleHasPermission,
@@ -127,5 +129,36 @@ describe("schedule permissions", () => {
   it("allows operators, but not viewers, to run schedules", () => {
     expect(roleHasPermission("operator", "schedule.execute")).toBe(true)
     expect(roleHasPermission("viewer", "schedule.execute")).toBe(false)
+  })
+})
+
+describe("explicit grants", () => {
+  it("treats an empty explicit list as authoritative over a legacy owner role", () => {
+    expect(
+      grantHasPermission({ role: "owner", permissions: [] }, "instance.read")
+    ).toBe(false)
+    expect(
+      grantHasPermission(
+        { role: "owner", permissions: undefined },
+        "instance.read"
+      )
+    ).toBe(false)
+    expect(grantHasPermission({ role: "owner" }, "instance.read")).toBe(true)
+  })
+
+  it("preserves split legacy operations without subscribing migration to ALL", () => {
+    expect(roleHasPermission("operator", "instance.files.delete")).toBe(true)
+    expect(roleHasPermission("operator", "instance.power.kill")).toBe(true)
+    expect(roleHasPermission("viewer", "instance.files.delete")).toBe(false)
+    expect(
+      legacyRolePermissionSelections("admin", "instance").every(
+        (entry) => entry.kind === "permission"
+      )
+    ).toBe(true)
+    expect(
+      legacyRolePermissionSelections("admin", "instance").some((entry) =>
+        entry.key.startsWith("relay.")
+      )
+    ).toBe(false)
   })
 })

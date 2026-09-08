@@ -48,8 +48,11 @@ import {
   requireRelayPermission,
 } from "@/lib/access-control"
 import { hasBackupPermission } from "@/lib/backup-access"
-import { roleHasPermission } from "@/lib/permissions"
-import { accessRoles } from "@/lib/permissions"
+import {
+  resolveAuthorizedBackupStorageSelection,
+  resolveBackupStorageSelection,
+} from "@/lib/backup-storage-selection.server"
+import { grantHasPermission } from "@/lib/permissions"
 import { scheduleBackupCopyProcessing } from "@/lib/backup-copy"
 import { selectBackupCopySource } from "@/lib/backup-copy-source"
 import {
@@ -64,7 +67,7 @@ import {
   reconcileRelayBackups,
 } from "@/lib/backup-reconciliation"
 import { listPersistedRelays, type PersistedRelay } from "@/lib/relay-registry"
-import { requireAuthenticatedUser } from "@/server/auth"
+import { requireEligibleResourceUser } from "@/server/auth"
 import type { AuthenticatedUser } from "@/lib/auth-session"
 import {
   backupRunsQueryFingerprint,
@@ -189,7 +192,7 @@ const backupPolicyInputSchema = z.strictObject({
 export const createInstanceBackup = createServerFn({ method: "POST" })
   .validator(instanceBackupInputSchema)
   .handler(async ({ data }) => {
-    const user = await requireAuthenticatedUser()
+    const user = await requireEligibleResourceUser()
     const relay = await requireBackupRelay(data.relayId)
     await requireRelayPermission({
       instanceId: data.instanceId,
@@ -197,6 +200,19 @@ export const createInstanceBackup = createServerFn({ method: "POST" })
       relayId: relay.id,
       user,
     })
+    const storageIds = await resolveBackupStorageSelection({
+      ...data,
+      targetId: data.instanceId,
+      targetKind: "instance",
+    })
+    await validateRequestedStorage({ storageIds }, user.id, false, () =>
+      requireRelayPermission({
+        instanceId: data.instanceId,
+        permission: "backup.download",
+        relayId: relay.id,
+        user,
+      })
+    )
     const snapshot = relaySnapshotSchema.parse(
       await relayRpc(relay, "relay.snapshot", {}, 15_000, user.id)
     )
@@ -205,7 +221,6 @@ export const createInstanceBackup = createServerFn({ method: "POST" })
     ) {
       throw new Error("Server not found on this Relay")
     }
-    await validateRequestedStorage(data, user.id)
 
     const input = await runAppEffect(
       "backups.reserve",
@@ -216,10 +231,7 @@ export const createInstanceBackup = createServerFn({ method: "POST" })
         ...(data.mode === undefined ? {} : { mode: data.mode }),
         relayId: relay.id,
         requestedMaxBytes: data.maxBytes ?? null,
-        ...(data.storageId === undefined ? {} : { storageId: data.storageId }),
-        ...(data.storageIds === undefined
-          ? {}
-          : { storageIds: data.storageIds }),
+        storageIds,
         targetId: data.instanceId,
         taskId: randomUUID(),
       })
@@ -236,7 +248,7 @@ export const createInstanceBackup = createServerFn({ method: "POST" })
 export const createDatabaseBackup = createServerFn({ method: "POST" })
   .validator(databaseBackupInputSchema)
   .handler(async ({ data }) => {
-    const user = await requireAuthenticatedUser()
+    const user = await requireEligibleResourceUser()
     const relay = await requireBackupRelay(data.relayId)
     await requireRelayPermission({
       databaseId: data.databaseId,
@@ -244,6 +256,19 @@ export const createDatabaseBackup = createServerFn({ method: "POST" })
       relayId: relay.id,
       user,
     })
+    const storageIds = await resolveBackupStorageSelection({
+      ...data,
+      targetId: data.databaseId,
+      targetKind: "database",
+    })
+    await validateRequestedStorage({ storageIds }, user.id, false, () =>
+      requireRelayPermission({
+        databaseId: data.databaseId,
+        permission: "backup.download",
+        relayId: relay.id,
+        user,
+      })
+    )
     const records = await runAppEffect(
       "backups.databaseTarget",
       listManagedDatabaseRecordsEffect()
@@ -260,7 +285,6 @@ export const createDatabaseBackup = createServerFn({ method: "POST" })
         `${database.engine} logical backups are not supported yet`
       )
     }
-    await validateRequestedStorage(data, user.id)
     const input = await runAppEffect(
       "backups.reserveDatabase",
       reserveDatabaseBackupEffect({
@@ -269,10 +293,7 @@ export const createDatabaseBackup = createServerFn({ method: "POST" })
         name: data.name,
         relayId: relay.id,
         requestedMaxBytes: data.maxBytes ?? null,
-        ...(data.storageId === undefined ? {} : { storageId: data.storageId }),
-        ...(data.storageIds === undefined
-          ? {}
-          : { storageIds: data.storageIds }),
+        storageIds,
         targetId: data.databaseId,
         taskId: randomUUID(),
       })
@@ -289,7 +310,7 @@ export const createDatabaseBackup = createServerFn({ method: "POST" })
 export const createPlatformBackup = createServerFn({ method: "POST" })
   .validator(platformBackupInputSchema)
   .handler(async ({ data }) => {
-    const user = await requireAuthenticatedUser()
+    const user = await requireEligibleResourceUser()
     if (!isPlatformAdmin(user)) {
       throw new Error("Platform backups require administrator access")
     }
@@ -344,16 +365,18 @@ export const getBackupRunsPage = createServerFn({ method: "GET" })
   .validator(backupRunsQuerySchema)
   .handler(async ({ data }): Promise<BackupRunsPage> => {
     const signal = getRequest().signal
-    const user = await requireAuthenticatedUser()
+    const user = await requireEligibleResourceUser()
     const query = normalizeBackupRunsQuery(data)
     const fingerprint = backupRunsQueryFingerprint(query)
     const cursor = decodeBackupRunCursor(query.cursor, fingerprint, query.sort)
     const page = await runAppEffect(
       "backups.page",
       listBackupCatalogPageEffect({
-        allowedRoles: accessRoles.filter((role) =>
-          roleHasPermission(role, "backup.read")
-        ),
+        allowedScopes: isPlatformAdmin(user)
+          ? []
+          : (await listUserGrants(user.id)).filter((grant) =>
+              grantHasPermission(grant, "backup.read")
+            ),
         cursor,
         direction: query.direction,
         isAdmin: isPlatformAdmin(user),
@@ -385,14 +408,16 @@ export const getBackupRunForQuery = createServerFn({ method: "GET" })
   .validator(backupRunForQuerySchema)
   .handler(async ({ data }): Promise<BackupRun | null> => {
     const signal = getRequest().signal
-    const user = await requireAuthenticatedUser()
+    const user = await requireEligibleResourceUser()
     const query = normalizeBackupRunsQuery({ ...data, cursor: null })
     const page = await runAppEffect(
       "backups.getForQuery",
       listBackupCatalogPageEffect({
-        allowedRoles: accessRoles.filter((role) =>
-          roleHasPermission(role, "backup.read")
-        ),
+        allowedScopes: isPlatformAdmin(user)
+          ? []
+          : (await listUserGrants(user.id)).filter((grant) =>
+              grantHasPermission(grant, "backup.read")
+            ),
         backupId: data.backupId,
         cursor: null,
         direction: query.direction,
@@ -412,21 +437,19 @@ export const getBackupRunForQuery = createServerFn({ method: "GET" })
 
 export const syncBackupRuns = createServerFn({ method: "POST" }).handler(
   async () => {
-    const user = await requireAuthenticatedUser()
+    const user = await requireEligibleResourceUser()
     scheduleBackupCopyProcessing()
     const persistedRelays = await listPersistedRelays()
     const grants = isPlatformAdmin(user) ? [] : await listUserGrants(user.id)
     const readableRelayIds = new Set(
       grants.flatMap((grant) =>
-        roleHasPermission(grant.role, "backup.read") ? [grant.relayId] : []
+        grantHasPermission(grant, "backup.read") ? [grant.relayId] : []
       )
     )
     const relays = persistedRelays.filter(
       (relay) =>
         relay.enabled &&
-        (isPlatformAdmin(user) ||
-          readableRelayIds.has(relay.id) ||
-          relay.createdBy === user.id)
+        (isPlatformAdmin(user) || readableRelayIds.has(relay.id))
     )
     await Promise.allSettled(
       relays.map((relay) => reconcileRelayBackups(relay, user.id))
@@ -450,7 +473,7 @@ function publicBackupRun(item: BackupCatalogPageRecord): BackupRun {
 export const getBackupPolicy = createServerFn({ method: "GET" })
   .validator(backupPolicyInputSchema)
   .handler(async ({ data }) => {
-    const user = await requireAuthenticatedUser()
+    const user = await requireEligibleResourceUser()
     const target = await requireBackupPolicyTarget(data, user)
     return runAppEffect(
       "backups.getPolicy",
@@ -461,7 +484,7 @@ export const getBackupPolicy = createServerFn({ method: "GET" })
 export const cancelBackup = createServerFn({ method: "POST" })
   .validator(backupIdInputSchema)
   .handler(async ({ data }) => {
-    const user = await requireAuthenticatedUser()
+    const user = await requireEligibleResourceUser()
     const backup = await runAppEffect(
       "backups.getForCancel",
       getBackupCatalogRecordEffect(data.backupId)
@@ -504,7 +527,7 @@ export const cancelBackup = createServerFn({ method: "POST" })
 export const deleteBackup = createServerFn({ method: "POST" })
   .validator(backupRemovalInputSchema)
   .handler(async ({ data }) => {
-    const user = await requireAuthenticatedUser()
+    const user = await requireEligibleResourceUser()
     const backup = await runAppEffect(
       "backups.getForDelete",
       getBackupCatalogRecordEffect(data.backupId)
@@ -566,7 +589,7 @@ export const deleteBackup = createServerFn({ method: "POST" })
 export const renameBackup = createServerFn({ method: "POST" })
   .validator(renameBackupInputSchema)
   .handler(async ({ data }) => {
-    const user = await requireAuthenticatedUser()
+    const user = await requireEligibleResourceUser()
     const backup = await runAppEffect(
       "backups.getForRename",
       getBackupCatalogRecordEffect(data.backupId)
@@ -591,14 +614,14 @@ export const renameBackup = createServerFn({ method: "POST" })
 export const copyBackupToDestination = createServerFn({ method: "POST" })
   .validator(copyBackupInputSchema)
   .handler(async ({ data }) => {
-    const user = await requireAuthenticatedUser()
+    const user = await requireEligibleResourceUser()
     const backup = await runAppEffect(
       "backups.getForCopy",
       getBackupCatalogRecordEffect(data.backupId)
     )
     if (!backup) throw new Error("Backup not found")
     const grants = isPlatformAdmin(user) ? [] : await listUserGrants(user.id)
-    if (!hasBackupPermission(user, grants, backup, "backup.create")) {
+    if (!hasBackupPermission(user, grants, backup, "backup.download")) {
       throw new Error("You do not have permission to copy this backup")
     }
     if (backup.artifactKind === "restic_snapshot") {
@@ -639,7 +662,7 @@ export const getBackupDownloadUrl = createServerFn({ method: "POST" })
   .handler(async ({ data }) => {
     const { setResponseHeader } = await import("@tanstack/react-start/server")
     setResponseHeader("Cache-Control", "no-store")
-    const user = await requireAuthenticatedUser()
+    const user = await requireEligibleResourceUser()
     const backup = await runAppEffect(
       "backups.getForDownload",
       getBackupCatalogRecordEffect(data.backupId)
@@ -721,7 +744,7 @@ export const getBackupDownloadUrl = createServerFn({ method: "POST" })
 export const restoreInstanceBackup = createServerFn({ method: "POST" })
   .validator(backupRestoreInputSchema)
   .handler(async ({ data }) => {
-    const user = await requireAuthenticatedUser()
+    const user = await requireEligibleResourceUser()
     const backup = await runAppEffect(
       "backups.getForRestore",
       getBackupCatalogRecordEffect(data.backupId)
@@ -751,6 +774,14 @@ export const restoreInstanceBackup = createServerFn({ method: "POST" })
         user,
       })
     }
+    const safetyStorageIds = data.safetyBackup
+      ? await resolveAuthorizedBackupStorageSelection({
+          relayId: relay.id,
+          targetId: backup.targetId,
+          targetKind: "instance",
+          user,
+        })
+      : undefined
     const snapshot = relaySnapshotSchema.parse(
       await relayRpc(relay, "relay.snapshot", {}, 15_000, user.id)
     )
@@ -773,6 +804,7 @@ export const restoreInstanceBackup = createServerFn({ method: "POST" })
             createdBy: user.id,
             name: `Before restoring ${backup.name}`.slice(0, 120),
             reason: "pre_restore",
+            storageIds: safetyStorageIds,
             relayId: relay.id,
             requestedMaxBytes: null,
             targetId: backup.targetId,
@@ -805,7 +837,7 @@ export const restoreInstanceBackup = createServerFn({ method: "POST" })
 export const restoreDatabaseBackup = createServerFn({ method: "POST" })
   .validator(backupRestoreInputSchema)
   .handler(async ({ data }) => {
-    const user = await requireAuthenticatedUser()
+    const user = await requireEligibleResourceUser()
     const backup = await runAppEffect(
       "backups.getForDatabaseRestore",
       getBackupCatalogRecordEffect(data.backupId)
@@ -832,6 +864,14 @@ export const restoreDatabaseBackup = createServerFn({ method: "POST" })
         user,
       })
     }
+    const safetyStorageIds = data.safetyBackup
+      ? await resolveAuthorizedBackupStorageSelection({
+          relayId: relay.id,
+          targetId: backup.targetId,
+          targetKind: "database",
+          user,
+        })
+      : undefined
     const records = await runAppEffect(
       "backups.databaseRestoreTarget",
       listManagedDatabaseRecordsEffect()
@@ -852,6 +892,7 @@ export const restoreDatabaseBackup = createServerFn({ method: "POST" })
             createdBy: user.id,
             name: `Before restoring ${backup.name}`.slice(0, 120),
             reason: "pre_restore",
+            storageIds: safetyStorageIds,
             relayId: relay.id,
             requestedMaxBytes: null,
             targetId: backup.targetId,
@@ -883,7 +924,7 @@ export const restoreDatabaseBackup = createServerFn({ method: "POST" })
 export const updateBackupLimits = createServerFn({ method: "POST" })
   .validator(backupLimitsInputSchema)
   .handler(async ({ data }) => {
-    const user = await requireAuthenticatedUser()
+    const user = await requireEligibleResourceUser()
     const target = await requireBackupPolicyTarget(data, user)
     if (
       data.scope === "platform" &&
@@ -909,7 +950,7 @@ export const updateBackupLimits = createServerFn({ method: "POST" })
 export const updateBackupExcludes = createServerFn({ method: "POST" })
   .validator(backupExcludesInputSchema)
   .handler(async ({ data }) => {
-    const user = await requireAuthenticatedUser()
+    const user = await requireEligibleResourceUser()
     const target = await requireBackupPolicyTarget(data, user)
     await runAppEffect(
       "backups.updateExcludes",
@@ -1017,7 +1058,8 @@ async function validateRequestedStorage(
     storageIds?: Array<string | null>
   },
   userId: string,
-  platformOnly = false
+  platformOnly = false,
+  requirePersonalStoragePermission?: () => Promise<unknown>
 ): Promise<void> {
   const storageIds =
     input.storageIds ?? (input.storageId === undefined ? [] : [input.storageId])
@@ -1042,6 +1084,9 @@ async function validateRequestedStorage(
               ? "Kiln platform backups require platform-owned destinations"
               : "Backup destination is unavailable"
           )
+        }
+        if (storage.ownerUserId !== null) {
+          await requirePersonalStoragePermission?.()
         }
       })
   )

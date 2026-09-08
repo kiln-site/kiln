@@ -12,6 +12,7 @@ import type { RowDataPacket } from "mysql2/promise"
 import { decryptWithKeyring, encryptWithKeyring } from "../../keyring.mjs"
 import { Database } from "@/effect/database"
 import { CliAccessError } from "@/effect/errors"
+import { isAccountEnabled, isAccountVerified } from "@/lib/account-policy"
 import type { AuthenticatedUser } from "@/lib/auth-session"
 import { databaseTable } from "@/lib/database-config"
 import {
@@ -51,7 +52,11 @@ interface CliCredentialRow extends RowDataPacket {
 }
 
 interface CliPrincipalRow extends CliCredentialRow {
-  banned: number | boolean | null
+  status: "enabled" | "disabled"
+  statusExpiresAt: Date | null
+  emailVerifiedAt: Date | null
+  manuallyVerifiedAt: Date | null
+  legacyVerificationRecordedAt: Date | null
   email: string
   email_verified: number | boolean
   role: string | null
@@ -203,6 +208,13 @@ export const approveCliAuthorizationEffect = Effect.fn("cli.device.approve")(
     user: AuthenticatedUser
     userCode: string
   }) {
+    if (!isAccountEnabled(input.user) || !isAccountVerified(input.user)) {
+      return yield* CliAccessError.make({
+        code: "forbidden",
+        message: "An enabled, verified account is required.",
+        retryable: false,
+      })
+    }
     if (input.user.isDevelopmentBypass) {
       return yield* CliAccessError.make({
         code: "forbidden",
@@ -454,7 +466,9 @@ export const authenticateCliTokenEffect = Effect.fn("cli.token.authenticate")(
               credential.access_mode, credential.expires_at,
               credential.last_used_at, credential.revoked_at,
               credential.created_at, user.email, user.name AS user_name,
-              user.emailVerified AS email_verified, user.role, user.banned,
+              user.emailVerified AS email_verified, user.role, user.status,
+              user.statusExpiresAt, user.emailVerifiedAt, user.manuallyVerifiedAt,
+              user.legacyVerificationRecordedAt,
               user.twoFactorEnabled AS two_factor_enabled
          FROM ${databaseTable("cli_credential")} credential
          JOIN ${databaseTable("user")} user ON user.id = credential.user_id
@@ -465,8 +479,23 @@ export const authenticateCliTokenEffect = Effect.fn("cli.token.authenticate")(
       [digest(accessToken)]
     )
     const credential = rows[0]
-    if (!credential || Boolean(credential.banned)) {
+    if (!credential) {
       return yield* authenticationRequired()
+    }
+    if (
+      !isAccountEnabled(credential) ||
+      !isAccountVerified({
+        ...credential,
+        emailVerified: Boolean(credential.email_verified),
+      })
+    ) {
+      // Deny resource use without revoking the stored credential. Re-enabling
+      // the account restores access from its current assignments.
+      return yield* CliAccessError.make({
+        code: "forbidden",
+        message: "An enabled, verified account is required.",
+        retryable: false,
+      })
     }
     yield* database.execute(
       "cli.token.touch",
@@ -480,6 +509,13 @@ export const authenticateCliTokenEffect = Effect.fn("cli.token.authenticate")(
       credentialId: credential.id,
       mode: credential.access_mode,
       user: {
+        status: isAccountEnabled(credential) ? "enabled" : "disabled",
+        statusExpiresAt: credential.statusExpiresAt?.toISOString() ?? null,
+        emailVerifiedAt: credential.emailVerifiedAt?.toISOString() ?? null,
+        manuallyVerifiedAt:
+          credential.manuallyVerifiedAt?.toISOString() ?? null,
+        legacyVerificationRecordedAt:
+          credential.legacyVerificationRecordedAt?.toISOString() ?? null,
         email: credential.email,
         emailVerified: Boolean(credential.email_verified),
         id: credential.user_id,

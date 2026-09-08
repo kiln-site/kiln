@@ -1,6 +1,7 @@
 import { createServerFn } from "@tanstack/react-start"
 import { Effect } from "effect"
 import {
+  projectRelayInstanceOverview,
   relayFileActivitySchema,
   relayFileContentSchema,
   relayDirectoryPageInputSchema,
@@ -36,7 +37,8 @@ import {
 import { z } from "zod"
 
 import {
-  allowedInstanceIds,
+  allowedInstanceIdsForUser,
+  canReadRelayNode,
   hasPlatformPermission,
   isPlatformAdmin,
   listUserGrants,
@@ -54,7 +56,7 @@ import {
   type AccessPermission,
 } from "@/lib/permissions"
 import type { AuthenticatedUser } from "@/lib/auth-session"
-import { requireAuthenticatedUser } from "@/server/auth"
+import { requireEligibleResourceUser } from "@/server/auth"
 import {
   AuthenticationError,
   ExternalServiceError,
@@ -214,7 +216,7 @@ const relayWarningAt = new Map<string, number>()
 
 export const getRelaySnapshot = createServerFn({ method: "POST" }).handler(
   async () => {
-    const user = await requireAuthenticatedUser()
+    const user = await requireEligibleResourceUser()
     return authorizedFleetSnapshot(user, true)
   }
 )
@@ -222,7 +224,7 @@ export const getRelaySnapshot = createServerFn({ method: "POST" }).handler(
 export const getFreshRelayConnectionState = createServerFn({
   method: "POST",
 }).handler(async () => {
-  const user = await requireAuthenticatedUser()
+  const user = await requireEligibleResourceUser()
   return authorizedRelayConnectionState(user, {
     fallbackOnError: true,
     fresh: true,
@@ -253,7 +255,7 @@ export const getFreshRelayInstance = createServerFn({ method: "POST" })
 
 export const getRelayInstances = createServerFn({ method: "POST" }).handler(
   async () => {
-    const user = await requireAuthenticatedUser()
+    const user = await requireEligibleResourceUser()
     return (await authorizedFleetSnapshot(user, true)).instances
   }
 )
@@ -261,7 +263,7 @@ export const getRelayInstances = createServerFn({ method: "POST" }).handler(
 export const getRelayConnectionState = createServerFn({
   method: "GET",
 }).handler(async () => {
-  const user = await requireAuthenticatedUser()
+  const user = await requireEligibleResourceUser()
   return authorizedRelayConnectionState(user, {
     fallbackOnError: true,
     fresh: false,
@@ -284,7 +286,7 @@ export const updateInstanceName = createServerFn({ method: "POST" })
     await requireRelayPermission({
       user,
       relayId: relay.id,
-      permission: "instance.settings",
+      permission: "instance.configuration.write",
       instanceId: data.instanceId,
     })
     const snapshot = relaySnapshotSchema.parse(
@@ -317,7 +319,7 @@ export const updateInstanceName = createServerFn({ method: "POST" })
       relayId: relay.id,
       type: "instance.upsert",
     })
-    return { ...renamed, relayId: relay.id }
+    return { ...projectRelayInstanceOverview(renamed), relayId: relay.id }
   })
 
 export const deleteInstance = createServerFn({ method: "POST" })
@@ -339,10 +341,17 @@ export const deleteInstance = createServerFn({ method: "POST" })
     await requireAccountPassword(user, data.password)
 
     if (data.createBackup) {
+      await requireRelayPermission({
+        user,
+        relayId: relay.id,
+        instanceId: data.instanceId,
+        permission: "backup.create",
+      })
       await deleteInstanceWithFinalBackup({
         instanceId: data.instanceId,
         relay,
         requestedBy: user.id,
+        user,
         ...(data.storageId === undefined ? {} : { storageId: data.storageId }),
       })
     } else {
@@ -423,7 +432,11 @@ export const getRelayInstanceResources = createServerFn({ method: "GET" })
       data.instanceId,
       data.relayId
     )
-    return relayInstanceResourceSnapshotSchema.parse(value)
+    const snapshot = relayInstanceResourceSnapshotSchema.parse(value)
+    return {
+      ...snapshot,
+      instance: projectRelayInstanceOverview(snapshot.instance),
+    }
   })
 
 export const updateInstanceWebRoutes = createServerFn({ method: "POST" })
@@ -482,7 +495,7 @@ export const updateInstancePorts = createServerFn({ method: "POST" })
       relayId: data.relayId,
       type: "instance.upsert",
     })
-    return { ...instance, relayId: data.relayId }
+    return { ...projectRelayInstanceOverview(instance), relayId: data.relayId }
   })
 
 export const reserveInstancePort = createServerFn({ method: "POST" })
@@ -723,7 +736,10 @@ export const mutateRelayFiles = createServerFn({ method: "POST" })
     await requireRelayPermission({
       user,
       relayId: relay.id,
-      permission: "instance.files.write",
+      permission:
+        data.operation === "delete"
+          ? "instance.files.delete"
+          : "instance.files.write",
       instanceId: data.instanceId,
     })
     const input = relayFileMutationInputSchema.parse(data)
@@ -829,7 +845,7 @@ export const performRelayAction = createServerFn({ method: "POST" })
     await requireRelayPermission({
       user,
       relayId: relay.id,
-      permission: "instance.power",
+      permission: `instance.power.${action}`,
       instanceId,
     })
     const response = await relayFetch(
@@ -852,7 +868,7 @@ export const performRelayAction = createServerFn({ method: "POST" })
       relayId: relay.id,
       type: "instance.upsert",
     })
-    return { ...instance, relayId: relay.id }
+    return { ...projectRelayInstanceOverview(instance), relayId: relay.id }
   })
 
 export const uploadToMclogs = createServerFn({ method: "POST" })
@@ -1073,14 +1089,21 @@ async function authorizeRelaySnapshot(
   relay: RelayEndpoint,
   user: AuthenticatedUser
 ) {
-  const allowed = await allowedInstanceIds(
+  const grants = isPlatformAdmin(user)
+    ? []
+    : await listUserGrants(user.id, relay.id)
+  const allowed = allowedInstanceIdsForUser(
     user,
     relay.id,
-    snapshot.instances.map((instance) => instance.id)
+    snapshot.instances.map((instance) => instance.id),
+    grants
   )
-  const instances = snapshot.instances.filter((item) => allowed.has(item.id))
+  const instances = snapshot.instances.flatMap((item) =>
+    allowed.has(item.id) ? [projectRelayInstanceOverview(item)] : []
+  )
   return {
     ...snapshot,
+    node: canReadRelayNode(user, relay.id, grants) ? snapshot.node : null,
     instances,
   }
 }
@@ -1166,7 +1189,7 @@ async function authorize(
 async function instanceRelayAccess(relayId: string) {
   const user = await Effect.runPromise(
     Effect.tryPromise({
-      try: requireAuthenticatedUser,
+      try: requireEligibleResourceUser,
       catch: (cause) =>
         AuthenticationError.make({
           message: "Authentication required",
@@ -1299,7 +1322,7 @@ async function mergeRelaySnapshots(
   )
   return {
     nodes: entries.flatMap(({ relay, snapshot, status }) =>
-      snapshot
+      snapshot?.node
         ? [
             {
               ...snapshot.node,

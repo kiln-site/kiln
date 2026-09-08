@@ -1,3 +1,8 @@
+import {
+  PendingResourceInvitations,
+  PendingResourceInvitationBadge,
+  resourceInvitationScopeKey,
+} from "@/components/pending-resource-invitations"
 import * as React from "react"
 import { useLiveQuery } from "@tanstack/react-db"
 import {
@@ -316,6 +321,11 @@ const RelayAddButton = React.memo(function RelayAddButton({
 }: {
   onAdd: () => void
 }) {
+  const { data: canAddRelay } = useSuspenseQuery({
+    ...accessCapabilitiesQueryOptions(),
+    select: selectCanAddRelay,
+  })
+  if (!canAddRelay) return null
   return (
     <Button type="button" onClick={onAdd}>
       <Plus /> Add Relay
@@ -541,6 +551,15 @@ function RelayTable({
   onEdit: (relayId: string) => void
   onOpenUpdates: (relayId?: string) => void
 }) {
+  const visibleResourceKeys = React.useMemo(
+    () =>
+      new Set(
+        source.rows.map((relay) =>
+          resourceInvitationScopeKey(relay.id, relay.id)
+        )
+      ),
+    [source.rows]
+  )
   const [initialTableState] = React.useState(() => ({
     sorting: [{ desc: false, id: "relay" }],
   }))
@@ -576,26 +595,34 @@ function RelayTable({
         cell: ({ row }) => {
           const relay = row.original
           return (
-            <InstanceName
-              instance={{
-                connected: relay.lastConnectedAt !== null,
-                enabled: relay.enabled,
-                id: relay.id,
-                kind: "relay",
-                lastError: relay.lastError,
-                relayId: relay.id,
-                source: "registry",
-              }}
-              live={false}
-              meta={
-                <span title={relay.id}>
-                  {relay.nodeArch ?? "unknown"} <span aria-hidden>•</span>{" "}
-                  {shortRelayId(relay.id)}
-                </span>
-              }
-              metaClassName="font-mono"
-              name={relay.name}
-            />
+            <div className="flex w-full min-w-0 items-center gap-1">
+              <InstanceName
+                className="min-w-0 flex-1"
+                instance={{
+                  connected: relay.lastConnectedAt !== null,
+                  enabled: relay.enabled,
+                  id: relay.id,
+                  kind: "relay",
+                  lastError: relay.lastError,
+                  relayId: relay.id,
+                  source: "registry",
+                }}
+                live={false}
+                meta={
+                  <span title={relay.id}>
+                    {relay.nodeArch ?? "unknown"} <span aria-hidden>•</span>{" "}
+                    {shortRelayId(relay.id)}
+                  </span>
+                }
+                metaClassName="font-mono"
+                name={relay.name}
+              />
+              <PendingResourceInvitationBadge
+                resourceType="relay"
+                relayId={relay.id}
+                resourceId={relay.id}
+              />
+            </div>
           )
         },
         meta: dataTableColumnMeta({
@@ -712,6 +739,13 @@ function RelayTable({
 
   return (
     <DataTable
+      leadingBody={
+        <PendingResourceInvitations
+          resourceType="relay"
+          visibleResourceKeys={visibleResourceKeys}
+          searchStore={searchStore}
+        />
+      }
       definition={definition}
       emptyState={({ searchActive }) => (
         <EmptyRelayTable searchActive={searchActive} onAdd={onAdd} />
@@ -1117,10 +1151,14 @@ function EmptyRelayTable({
   searchActive: boolean
   onAdd: () => void
 }) {
+  const { data: canAddRelay } = useSuspenseQuery({
+    ...accessCapabilitiesQueryOptions(),
+    select: selectCanAddRelay,
+  })
   return (
     <DataTableEmptyState
       action={
-        !searchActive ? (
+        !searchActive && canAddRelay ? (
           <Button type="button" size="sm" onClick={onAdd}>
             <Plus /> Add Relay
           </Button>
@@ -1129,7 +1167,9 @@ function EmptyRelayTable({
       description={
         searchActive
           ? "Try a Relay name, ID, host, architecture, version, owner, or status."
-          : "Pair the first Relay to start managing game servers from Hearth."
+          : canAddRelay
+            ? "Pair the first Relay to start managing game servers from Hearth."
+            : "No Relays have been assigned to your account."
       }
       icon={<ServerCog className="size-6 text-muted-foreground/45" />}
       title={searchActive ? "No Relays match your search" : "No saved Relays"}
@@ -2050,4 +2090,13 @@ function relayResumeErrorToastId(relayId: string): string {
 
 function messageFrom(cause: unknown, fallback: string): string {
   return cause instanceof Error ? cause.message : fallback
+}
+
+function selectCanAddRelay(capabilities: {
+  isPlatformAdmin: boolean
+  user: { role: string | null }
+}): boolean {
+  return (
+    capabilities.isPlatformAdmin || capabilities.user.role === "relay_creator"
+  )
 }
