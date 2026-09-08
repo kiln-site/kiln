@@ -454,7 +454,6 @@ const PendingPlatformInvitations = memo(function PendingPlatformInvitations() {
     queryKey: ["platform-invitations", offset],
     queryFn: () =>
       listPendingPlatformInvitations({ data: { offset, limit: 10 } }),
-    refetchInterval: 15_000,
   })
   const cancel = useMutation({
     mutationFn: (id: string) =>

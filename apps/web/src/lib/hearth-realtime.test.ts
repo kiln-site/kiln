@@ -31,6 +31,7 @@ describe("Hearth realtime query refresh", () => {
     for (const scope of [undefined, { relayId: "relay-a" }]) {
       const client = new QueryClient()
       client.setQueryData(["my-resource-invitations"], [])
+      client.setQueryData(["platform-invitations", 0], [])
       client.setQueryData(["resource-invitation", "invite-a"], {
         pending: true,
       })
@@ -41,6 +42,9 @@ describe("Hearth realtime query refresh", () => {
       ).toBe(true)
       expect(
         client.getQueryState(["resource-invitation", "invite-a"])?.isInvalidated
+      ).toBe(true)
+      expect(
+        client.getQueryState(["platform-invitations", 0])?.isInvalidated
       ).toBe(true)
       expect(client.getQueryState(["unrelated"])?.isInvalidated).toBe(false)
     }

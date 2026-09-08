@@ -12,7 +12,6 @@ import { admin } from "better-auth/plugins/admin"
 import { emailOTP } from "better-auth/plugins/email-otp"
 import { twoFactor } from "better-auth/plugins/two-factor"
 import { tanstackStartCookies } from "better-auth/tanstack-start"
-import type { RowDataPacket } from "mysql2/promise"
 import { Resend } from "resend"
 import { Effect } from "effect"
 
@@ -245,24 +244,9 @@ export const auth = betterAuth({
 
       if (context.path !== "/sign-up/email") return
 
-      const body = context.body as { email?: unknown }
-      if (typeof body.email !== "string") return
-      if (publicSignupEnabled()) return
-
-      const normalizedEmail = body.email.trim().toLowerCase()
-      const [pendingInvitations] = await databasePool.query<
-        Array<{ id: string } & RowDataPacket>
-      >(
-        `SELECT id
-           FROM ${databaseTable("invitation")}
-          WHERE email = ?
-            AND accepted_at IS NULL
-            AND revoked_at IS NULL
-            AND expires_at > CURRENT_TIMESTAMP(3)
-          LIMIT 1`,
-        [normalizedEmail]
-      )
-      if (!pendingInvitations.length) {
+      // Invited identities already exist and claim credentials separately.
+      // Mailbox history must not permit creation of a different account.
+      if (!publicSignupEnabled()) {
         throw new APIError("FORBIDDEN", {
           message: "New account registration is disabled.",
         })

@@ -130,3 +130,11 @@ presets with their resource, projects Redis/Valkey engine support into effective
 permissions, and corrects realtime invitation query keys. Invitation refresh uses
 the existing stream; resource-access changes target relevant Relays instead of
 invalidating every signed-in user's queries.
+
+The second Grok review approved commit `d38b1429`. Its remaining signup-policy
+observation was also closed: when public signup is disabled, the Better Auth
+signup endpoint rejects new accounts without a historical invitation-email
+exception. Invited identities use claim instead; trusted bootstrap still uses
+its existing guarded internal path. An unauthenticated HTTP check confirmed the
+closed signup response. Platform invitation pages now also refresh through the
+access realtime topic rather than polling.
