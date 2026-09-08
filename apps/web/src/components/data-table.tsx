@@ -276,6 +276,7 @@ function DataTableRowModel<TData extends RowData>({
         {leadingBody}
         {hasBodyState ? (
           <DataTableStateBody
+            empty={source.body.kind === "ready" && rows.length === 0}
             centered={source.body.kind !== "loading"}
             colSpan={columnCount}
             scrollElementRef={scrollElementRef}
@@ -445,11 +446,13 @@ const dataTableVisibilityClasses = {
 } as const
 
 function DataTableStateBody({
+  empty,
   centered,
   children,
   colSpan,
   scrollElementRef,
 }: {
+  empty: boolean
   centered: boolean
   children: React.ReactNode
   colSpan: number
@@ -458,6 +461,7 @@ function DataTableStateBody({
   return (
     <tbody
       data-slot="data-table-state-body"
+      data-empty={empty || undefined}
       ref={scrollElementRef}
       className={dataTableScrollAreaClassName}
     >

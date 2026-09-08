@@ -295,6 +295,15 @@ export const prepareAccountSignup = createServerFn({ method: "POST" })
     return { claimRequired: await accountNeedsClaim(data.email) }
   })
 
+export const getAccountClaimPreview = createServerFn({ method: "POST" })
+  .validator(z.object({ token: z.string().regex(/^[a-f0-9]{64}$/u) }))
+  .handler(async ({ data }) => {
+    const { setResponseHeader } = await import("@tanstack/react-start/server")
+    setResponseHeader("Cache-Control", "no-store")
+    const { previewAccountClaim } = await import("@/lib/account-claims")
+    return previewAccountClaim(data.token)
+  })
+
 export const claimAccount = createServerFn({ method: "POST" })
   .validator(
     z.object({

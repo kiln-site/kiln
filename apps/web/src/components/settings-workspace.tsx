@@ -37,13 +37,16 @@ import { showToast } from "@workspace/ui/components/sonner"
 import { cn } from "@workspace/ui/lib/utils"
 import { MAXIMUM_INSTANCE_NAME_LENGTH } from "@workspace/contracts"
 
-import { ResourceAccessPanel } from "@/components/access-page"
 import { ReadOnlyCodeViewer } from "@/components/read-only-code-viewer"
 import { ServerDeleteDialog } from "@/components/server-delete-dialog"
 import { hostPortAddress } from "@/lib/domain-address"
+import { canAccessActivity } from "@/lib/navigation-destinations"
 import { provisioningFailureDiagnostics } from "@/lib/provisioning-diagnostics"
 import { warmSyntaxCodeEditorModule } from "@/lib/syntax-editor-module-preload"
-import { instanceRecipeQueryOptions } from "@/lib/query-options"
+import {
+  accessCapabilitiesQueryOptions,
+  instanceRecipeQueryOptions,
+} from "@/lib/query-options"
 import { applyUpdatedInstance } from "@/lib/realtime-client"
 import type {
   InstanceSettingsInstance,
@@ -640,42 +643,52 @@ function InstanceUsersCard({
 }: {
   instance: InstanceSettingsInstance
 }) {
-  const [open, setOpen] = React.useState(false)
+  const { data: access } = useQuery({
+    ...accessCapabilitiesQueryOptions(),
+    select: (capabilities) => ({
+      canManageAccess: capabilities.canManageAccess,
+      canViewActivity: canAccessActivity(capabilities),
+    }),
+  })
+  if (!access?.canManageAccess && !access?.canViewActivity) return null
   return (
-    <InfoCard>
-      <InfoCardHeader
-        icon={<Users />}
-        title="Users & access"
-        action={
-          <Button size="sm" variant="outline" onClick={() => setOpen(true)}>
-            Manage access
-          </Button>
-        }
-      />
-      <p className="p-4 text-sm text-muted-foreground">
-        View invitations, assigned presets, and permissions for this server.
-      </p>
-      <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent className="max-h-[90dvh] overflow-y-auto sm:max-w-6xl">
-          <DialogHeader>
-            <DialogTitle>{instance.name} access</DialogTitle>
-            <DialogDescription>
-              Permissions and presets apply to this server. Relay assignments
-              are inherited.
-            </DialogDescription>
-          </DialogHeader>
-          {open ? (
-            <ResourceAccessPanel
-              scope={{
-                relayId: instance.relayId,
-                resourceType: "instance",
-                resourceId: instance.id,
-                name: instance.name,
-              }}
-            />
+    <InfoCard className="self-start">
+      <InfoCardHeader icon={<Users />} title="Users & access" />
+      <div className="space-y-4 p-4">
+        <p className="text-sm text-muted-foreground">
+          Manage this server’s invitations, presets, and permissions, or review
+          recent activity.
+        </p>
+        <div className="flex flex-wrap gap-2">
+          {access.canManageAccess ? (
+            <Button asChild size="sm" variant="outline">
+              <Link
+                to="/access"
+                search={{
+                  tab: "users",
+                  relayId: instance.relayId,
+                  resourceType: "instance",
+                  resourceId: instance.id,
+                }}
+              >
+                Manage access
+                <ArrowRight />
+              </Link>
+            </Button>
           ) : null}
-        </DialogContent>
-      </Dialog>
+          {access.canViewActivity ? (
+            <Button asChild size="sm" variant="ghost">
+              <Link
+                to="/activity"
+                search={{ relay: instance.relayId, server: instance.id }}
+              >
+                <Activity />
+                View activity
+              </Link>
+            </Button>
+          ) : null}
+        </div>
+      </div>
     </InfoCard>
   )
 }

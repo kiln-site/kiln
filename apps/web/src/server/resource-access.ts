@@ -792,7 +792,10 @@ const inheritedPeopleSelectors = new Map(
 
 export const getResourceAccess = createServerFn({ method: "GET" })
   .validator(
-    resourceScopeSchema.extend({ offset: z.number().int().min(0).default(0) })
+    resourceScopeSchema.extend({
+      offset: z.number().int().min(0).default(0),
+      search: z.string().trim().max(256).default(""),
+    })
   )
   .handler(async ({ data }) => {
     if (data.resourceType === "relay" && data.resourceId !== data.relayId)
@@ -860,9 +863,12 @@ export const getResourceAccess = createServerFn({ method: "GET" })
           OR EXISTS (SELECT 1 FROM ${databaseTable("access_preset")} a WHERE a.access_id = g.id AND a.builtin_key IN (?))
         ))`
       : ""
+    const peopleSearch = data.search
+      ? `%${data.search.replace(/[\\%_]/gu, "\\$&")}%`
+      : null
     const [people] = canReadPeople
       ? await databasePool.query<Array<GrantRow>>(
-          `SELECT g.*, u.email, u.name FROM ${databaseTable("access_grant")} g JOIN ${databaseTable("user")} u ON u.id = g.user_id WHERE g.relay_id = ? AND ((g.resource_type = ? AND g.resource_id = ?)${inheritedFilter}) AND g.state <> 'revoked' ORDER BY g.created_at, g.id LIMIT 101 OFFSET ?`,
+          `SELECT g.*, u.email, u.name FROM ${databaseTable("access_grant")} g JOIN ${databaseTable("user")} u ON u.id = g.user_id WHERE g.relay_id = ? AND ((g.resource_type = ? AND g.resource_id = ?)${inheritedFilter}) AND g.state <> 'revoked'${peopleSearch ? " AND (u.email LIKE ? OR u.name LIKE ?)" : ""} ORDER BY g.created_at, g.id LIMIT 101 OFFSET ?`,
           [
             ...scopeValues(data),
             ...(inheritedSelectors
@@ -874,6 +880,7 @@ export const getResourceAccess = createServerFn({ method: "GET" })
                   inheritedSelectors.builtins,
                 ]
               : []),
+            ...(peopleSearch ? [peopleSearch, peopleSearch] : []),
             data.offset,
           ]
         )
@@ -1029,7 +1036,7 @@ export const getResourceAccess = createServerFn({ method: "GET" })
 export const getAccessResources = createServerFn({ method: "GET" })
   .validator(
     z.object({
-      search: z.string().max(120).default(""),
+      search: z.string().max(256).default(""),
       offset: z.number().int().min(0).default(0),
       limit: z.number().int().min(1).max(100).default(50),
     })
@@ -1113,9 +1120,11 @@ export const getAccessResources = createServerFn({ method: "GET" })
     SELECT id AS relay_id, 'relay' AS resource_type, id AS resource_id, name, created_by AS owner_id FROM ${databaseTable("relay")} WHERE enabled = TRUE
     UNION ALL SELECT i.relay_id, 'instance', i.instance_id, COALESCE(i.display_name, i.source_name, i.instance_id), i.owner_id FROM ${databaseTable("instance")} i JOIN ${databaseTable("relay")} r ON r.id = i.relay_id AND r.enabled = TRUE
     UNION ALL SELECT d.relay_id, 'database', d.database_id, d.name, d.created_by FROM ${databaseTable("database")} d JOIN ${databaseTable("relay")} r ON r.id = d.relay_id AND r.enabled = TRUE
-    ) resources WHERE name LIKE ?${accessFilter} ORDER BY name, resource_id LIMIT ? OFFSET ?`,
+    ) resources WHERE (name LIKE ? OR resource_id LIKE ? OR relay_id LIKE ?)${accessFilter} ORDER BY name, resource_id LIMIT ? OFFSET ?`,
       [
-        `%${data.search.replaceAll("%", "\\%").replaceAll("_", "\\_")}%`,
+        ...Array<string>(3).fill(
+          `%${data.search.replace(/[\\%_]/gu, "\\$&")}%`
+        ),
         ...allowedValues,
         data.limit + 1,
         data.offset,

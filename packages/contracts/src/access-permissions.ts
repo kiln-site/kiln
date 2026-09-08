@@ -187,33 +187,248 @@ function blockFor(key: AccessPermission): string {
   return key.split(".").slice(0, -1).join(".")
 }
 
-const labels: Partial<Record<AccessPermission, string>> = {
-  "access.read": "View users",
-  "access.invite": "Invite users",
-  "access.manage": "Manage access",
-  "preset.read": "View presets",
-  "preset.create": "Create or copy presets",
-  "preset.manage": "Manage presets",
-  "instance.read": "View server",
-  "database.read": "View database",
-  "relay.read": "View Relay",
-  "instance.power.start": "Start",
-  "instance.power.stop": "Stop",
-  "instance.power.restart": "Restart",
-  "instance.power.kill": "Force-stop",
-  "instance.files.read": "View and download files",
-  "instance.files.write": "Edit files",
-  "instance.files.delete": "Delete files",
-  "instance.files.chmod": "Change file attributes",
-  "instance.sftp.connect": "Connect using SFTP",
-  "instance.console.read": "View console",
-  "instance.console.write": "Send commands",
-  "instance.configuration.read": "View configuration",
-  "instance.configuration.write": "Manage configuration",
-  "instance.limits.write": "Manage resource limits",
-  "instance.logs.read": "View saved logs",
-  "instance.logs.share": "Share logs",
-  "instance.network.public-port.write": "Assign public ports",
+const permissionCopy: Record<
+  AccessPermission,
+  Pick<PermissionDefinition, "label" | "description">
+> = {
+  "relay.read": {
+    label: "View Relay",
+    description: "See Relay status and basic details.",
+  },
+  "relay.configure": {
+    label: "Configure Relay",
+    description: "Change Relay settings and connection details.",
+  },
+  "relay.delete": {
+    label: "Remove Relay",
+    description: "Remove the Relay from Hearth.",
+  },
+  "access.read": {
+    label: "View users",
+    description: "See who has access and their assigned permissions.",
+  },
+  "access.invite": {
+    label: "Invite users",
+    description: "Invite people to use this resource.",
+  },
+  "access.manage": {
+    label: "Manage access",
+    description: "Change permissions and revoke user access.",
+  },
+  "preset.read": {
+    label: "View presets",
+    description: "See saved permission presets.",
+  },
+  "preset.create": {
+    label: "Create or copy presets",
+    description: "Save reusable permission choices for this resource.",
+  },
+  "preset.manage": {
+    label: "Manage presets",
+    description: "Edit or delete presets. Changes apply to linked assignments.",
+  },
+  "instance.read": {
+    label: "View server",
+    description: "See server status and basic details.",
+  },
+  "instance.create": {
+    label: "Create servers",
+    description: "Provision new servers on this Relay.",
+  },
+  "instance.console.read": {
+    label: "View console",
+    description: "Read live server console output.",
+  },
+  "instance.console.write": {
+    label: "Send commands",
+    description: "Run commands in the server console.",
+  },
+  "instance.files.read": {
+    label: "View and download files",
+    description: "Browse server files and download their contents.",
+  },
+  "instance.files.write": {
+    label: "Edit files",
+    description: "Create, upload, edit, copy, move, and rename server files.",
+  },
+  "instance.files.delete": {
+    label: "Delete files",
+    description: "Remove server files and folders.",
+  },
+  "instance.files.chmod": {
+    label: "Change file permissions",
+    description: "Change which users can read, write, or run server files.",
+  },
+  "instance.sftp.connect": {
+    label: "Connect using SFTP",
+    description:
+      "Browse files with an SFTP client. File changes need the matching file permissions.",
+  },
+  "instance.delete": {
+    label: "Delete server",
+    description: "Permanently remove the server and its data.",
+  },
+  "instance.power": {
+    label: "Control server power",
+    description: "Start, stop, restart, or force stop the server.",
+  },
+  "instance.power.start": {
+    label: "Start server",
+    description: "Start a stopped server.",
+  },
+  "instance.power.stop": {
+    label: "Stop server",
+    description: "Shut down the server gracefully. Also allows starting it.",
+  },
+  "instance.power.restart": {
+    label: "Restart server",
+    description:
+      "Stop and start the server. Also allows starting and stopping it separately.",
+  },
+  "instance.power.kill": {
+    label: "Force stop server",
+    description:
+      "Stop the server immediately. Also allows starting, stopping, and restarting it.",
+  },
+  "instance.settings": {
+    label: "Manage server settings",
+    description: "Change startup configuration and resource limits.",
+  },
+  "instance.configuration.read": {
+    label: "View configuration",
+    description: "See the server’s startup settings and Brick configuration.",
+  },
+  "instance.configuration.write": {
+    label: "Manage configuration",
+    description:
+      "Change startup settings, switch Bricks, and reinstall the server.",
+  },
+  "instance.limits.write": {
+    label: "Manage resource limits",
+    description: "Change the server’s memory and disk limits.",
+  },
+  "instance.logs.read": {
+    label: "View saved logs",
+    description: "Read the server’s saved log files.",
+  },
+  "instance.logs.share": {
+    label: "Share logs",
+    description: "Publish server logs through a shareable link.",
+  },
+  "instance.network.read": {
+    label: "View server network",
+    description: "See the server’s addresses, ports, and routes.",
+  },
+  "instance.network.write": {
+    label: "Manage server network",
+    description: "Change the server’s network settings and routes.",
+  },
+  "instance.network.public-port.write": {
+    label: "Assign public ports",
+    description:
+      "Assign ports that make the server reachable outside its private network.",
+  },
+  "database.read": {
+    label: "View database",
+    description: "See database status and basic details.",
+  },
+  "database.create": {
+    label: "Create databases",
+    description: "Provision new databases on this Relay.",
+  },
+  "database.credentials.read": {
+    label: "View database credentials",
+    description: "Reveal the username and password used to connect.",
+  },
+  "database.credentials.rotate": {
+    label: "Reset database password",
+    description: "Generate a new password for database connections.",
+  },
+  "database.power": {
+    label: "Control database power",
+    description: "Start, stop, or restart the database.",
+  },
+  "database.delete": {
+    label: "Delete database",
+    description: "Permanently remove the database and its data.",
+  },
+  "database.network.read": {
+    label: "View database network",
+    description: "See which servers can connect to the database.",
+  },
+  "database.network.write": {
+    label: "Manage database network",
+    description:
+      "Connect or disconnect servers. Also requires network access for each server.",
+  },
+  "database.dump.export": {
+    label: "Export database data",
+    description: "Download a database dump for migration or safekeeping.",
+  },
+  "database.dump.import": {
+    label: "Import database data",
+    description: "Load a database dump into the database.",
+  },
+  "backup.read": {
+    label: "View backups",
+    description: "See available backups and their status.",
+  },
+  "backup.create": {
+    label: "Create backups",
+    description: "Save a new backup of this resource.",
+  },
+  "backup.download": {
+    label: "Download backups",
+    description: "Download backup files.",
+  },
+  "backup.restore": {
+    label: "Restore backups",
+    description: "Replace current data with a saved backup.",
+  },
+  "backup.delete": {
+    label: "Delete backups",
+    description: "Remove saved backups.",
+  },
+  "schedule.read": {
+    label: "View schedules",
+    description: "See scheduled tasks and their run history.",
+  },
+  "schedule.create": {
+    label: "Create schedules",
+    description: "Set up tasks to run automatically.",
+  },
+  "schedule.execute": {
+    label: "Run schedules",
+    description: "Start a scheduled task immediately.",
+  },
+  "schedule.update": {
+    label: "Edit schedules",
+    description: "Change scheduled tasks and when they run.",
+  },
+  "schedule.delete": {
+    label: "Delete schedules",
+    description: "Remove scheduled tasks.",
+  },
+  "relay.update": {
+    label: "Update Relay",
+    description: "Install a newer version of the Relay software.",
+  },
+  "relay.pause": {
+    label: "Pause or resume Relay",
+    description: "Disable or re-enable Hearth’s connection to this Relay.",
+  },
+  "relay.connections.read": {
+    label: "View Relay connections",
+    description: "See paired clients and pending pairing invitations.",
+  },
+  "relay.connections.manage": {
+    label: "Manage Relay connections",
+    description: "Pair clients, change their access, and revoke connections.",
+  },
+  "relay.audit.read": {
+    label: "View Relay activity",
+    description: "Read the Relay’s activity history.",
+  },
 }
 
 /** Stable IDs are an allowlist, never wildcard patterns. */
@@ -238,16 +453,9 @@ export const permissionCatalog: readonly PermissionDefinition[] = Object.freeze(
       key === "database.create"
     )
       implies.push("relay.read")
-    const label =
-      labels[key] ??
-      key
-        .split(".")
-        .map((part) => part[0].toUpperCase() + part.slice(1))
-        .join(" ")
     return Object.freeze({
       key,
-      label,
-      description: `${label} within the assigned resource scope.`,
+      ...permissionCopy[key],
       block: blockFor(key),
       scopeTypes: scopesFor(key),
       implies: Object.freeze([...new Set(implies)]),

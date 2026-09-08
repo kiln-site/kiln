@@ -595,8 +595,9 @@ function RelayTable({
         cell: ({ row }) => {
           const relay = row.original
           return (
-            <div className="flex min-w-0 flex-col items-start gap-1">
+            <div className="flex w-full min-w-0 items-center gap-1">
               <InstanceName
+                className="min-w-0 flex-1"
                 instance={{
                   connected: relay.lastConnectedAt !== null,
                   enabled: relay.enabled,

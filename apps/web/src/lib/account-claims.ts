@@ -48,6 +48,44 @@ export async function issueManualAccountClaim(input: {
   }
 }
 
+// The opaque claim token is the authority to preview this address. Previewing
+// never consumes the challenge or establishes either kind of verification.
+export async function previewAccountClaim(token: string) {
+  if (!/^[a-f0-9]{64}$/u.test(token)) return null
+  return runAppEffect(
+    "account.claim.preview",
+    Effect.gen(function* () {
+      const database = yield* Database
+      const rows = yield* database.queryRows<
+        RowDataPacket & {
+          email: string
+          consumed_at: Date | null
+          expires_at: Date
+          hasCredential: number
+        }
+      >(
+        "account.claim.preview",
+        `SELECT u.email, c.consumed_at, c.expires_at,
+          (EXISTS(SELECT 1 FROM ${databaseTable("account")} a WHERE a.userId = u.id)
+          OR EXISTS(SELECT 1 FROM ${databaseTable("passkey")} p WHERE p.userId = u.id)) AS hasCredential
+         FROM ${databaseTable("account_claim")} c
+         JOIN ${databaseTable("user")} u ON u.id = c.user_id
+         WHERE c.token_hash = ? LIMIT 1`,
+        [tokenHash(token)]
+      )
+      const claim = rows[0]
+      if (
+        !claim ||
+        claim.consumed_at ||
+        claim.expires_at.getTime() <= Date.now() ||
+        claim.hasCredential
+      )
+        return null
+      return { email: claim.email }
+    })
+  )
+}
+
 export async function accountNeedsClaim(email: string): Promise<boolean> {
   return runAppEffect(
     "account.claim.check",

@@ -6,7 +6,7 @@ import { showToast } from "@workspace/ui/components/sonner"
 
 import { AccountSettingsPage } from "@/components/account-settings-page"
 import { AccountStatusSync } from "@/components/account-status-sync"
-import { HearthMark } from "@/components/hearth-mark"
+import { AuthBrand, AuthPageShell } from "@/components/auth-page-shell"
 import { isAccountVerified } from "@/lib/account-policy"
 import { authClient } from "@/lib/auth-client"
 import type { AuthenticatedUser } from "@/lib/auth-session"
@@ -22,12 +22,12 @@ export function AccountStatusPage({
 }) {
   const verified = isAccountVerified(user)
   return (
-    <main className="min-h-dvh bg-background px-5 py-10">
+    <AuthPageShell wide={verified}>
       <AccountStatusSync restricted resumePath={resumePath} />
-      <div className="mx-auto max-w-2xl">
-        <header className="mb-8 grid gap-4">
-          <HearthMark className="size-10" />
-          <h1 className="text-2xl font-semibold">
+      <div>
+        <header className="mb-8 grid justify-items-center gap-4 text-center">
+          <AuthBrand />
+          <h1 className="font-heading text-2xl font-semibold tracking-[-0.04em]">
             {verified ? "Your account is disabled" : "Verify your account"}
           </h1>
           <p className="text-sm text-muted-foreground">
@@ -65,7 +65,7 @@ export function AccountStatusPage({
           </p>
         )}
       </div>
-    </main>
+    </AuthPageShell>
   )
 }
 function EmailVerification({
@@ -107,12 +107,22 @@ function EmailVerification({
   }
   return (
     <section className="max-w-sm space-y-4">
-      <p className="text-sm">Verification address: {email}</p>
+      <label className="type-control-sm grid gap-1.5 text-foreground">
+        Email
+        <Input
+          type="email"
+          autoComplete="email"
+          value={email}
+          readOnly
+          className="h-11 bg-card/60 read-only:bg-muted/35 read-only:text-foreground/85"
+        />
+      </label>
       <form onSubmit={verify} className="grid gap-3">
-        <label className="grid gap-2 text-sm">
+        <label className="type-control-sm grid gap-1.5 text-foreground">
           Verification code
           <Input
             name="code"
+            className="h-11 bg-card/60 font-mono tracking-[0.28em]"
             inputMode="numeric"
             autoComplete="one-time-code"
             pattern="[0-9]{6}"
@@ -120,10 +130,13 @@ function EmailVerification({
             required
           />
         </label>
-        <Button disabled={pending}>Verify email</Button>
+        <Button className="h-11" disabled={pending}>
+          Verify email
+        </Button>
       </form>
       <Button
         variant="outline"
+        className="h-11 w-full"
         disabled={pending}
         onClick={async () => {
           setPending(true)

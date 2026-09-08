@@ -1,10 +1,53 @@
 import { recoverPromise } from "@/effect/promise"
-import { memo, useState } from "react"
+import { memo, useMemo, useState, useSyncExternalStore } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
+import { EllipsisVertical, Mail, Plus, Users } from "lucide-react"
 import { Button } from "@workspace/ui/components/button"
 import { Input } from "@workspace/ui/components/input"
+import { Badge } from "@workspace/ui/components/badge"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@workspace/ui/components/dialog"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@workspace/ui/components/dropdown-menu"
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@workspace/ui/components/select"
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@workspace/ui/components/tooltip"
 import { showToast } from "@workspace/ui/components/sonner"
-
+import { DataTable } from "@/components/data-table-view"
+import { DataTableEmptyState, DataTableTextCell } from "@/components/data-table"
+import {
+  DataTableToolbar,
+  DataTableWorkspace,
+} from "@/components/data-table-workspace"
+import {
+  createDataTableColumnHelper,
+  dataTableColumnMeta,
+  defineDataTable,
+} from "@/lib/data-table"
+import {
+  createDataTableSearchStore,
+  type DataTableSearchStore,
+} from "@/lib/data-table-search"
+import type { DataTableSource } from "@/lib/data-table-source"
 import {
   issueAccountClaim,
   listUsers,
@@ -12,7 +55,6 @@ import {
   setUserStatus,
   type ManagedUser,
 } from "@/server/users"
-
 import {
   grantOrInviteAccess,
   removePlatformAccess,
@@ -21,84 +63,236 @@ import {
 } from "@/server/access"
 
 const pageSize = 25
-export function AdminUsers() {
-  const [search, setSearch] = useState("")
-  const [draft, setDraft] = useState("")
+const EMPTY_USERS: Array<ManagedUser> = []
+const helper = createDataTableColumnHelper<ManagedUser>()
+const userDefinition = defineDataTable({
+  ariaLabel: "Platform users",
+  columns: helper.columns([
+    helper.accessor("name", {
+      header: "User",
+      enableSorting: false,
+      cell: ({ row }) => (
+        <div className="min-w-0">
+          <div className="flex min-w-0 items-center gap-2">
+            <p className="truncate text-sm font-medium">{row.original.name}</p>
+            <Badge
+              variant="outline"
+              className="h-4 px-1 text-[10px] capitalize sm:hidden"
+            >
+              {row.original.status}
+            </Badge>
+          </div>
+          <p className="truncate text-xs text-muted-foreground">
+            {row.original.email}
+          </p>
+        </div>
+      ),
+      meta: dataTableColumnMeta({ width: "minmax(0,1.5fr)" }),
+    }),
+    helper.accessor("status", {
+      header: "Status",
+      enableSorting: false,
+      cell: ({ row }) => (
+        <div className="min-w-0">
+          <Badge variant="outline" className="capitalize">
+            {row.original.status}
+          </Badge>
+        </div>
+      ),
+      meta: dataTableColumnMeta({ hideBelow: "sm", width: "7rem" }),
+    }),
+    helper.accessor("role", {
+      header: "Platform role",
+      enableSorting: false,
+      cell: ({ row }) => (
+        <DataTableTextCell value={roleLabel(row.original.role)} />
+      ),
+      meta: dataTableColumnMeta({
+        hideBelow: "lg",
+        width: "minmax(10rem,1fr)",
+      }),
+    }),
+    helper.display({
+      id: "verification",
+      header: "Verification",
+      cell: ({ row }) => (
+        <DataTableTextCell
+          value={
+            !row.original.hasCredential
+              ? "Awaiting claim"
+              : verificationLabel(row.original)
+          }
+        />
+      ),
+      meta: dataTableColumnMeta({ hideBelow: "md", width: "minmax(8rem,1fr)" }),
+    }),
+    helper.accessor("createdAt", {
+      header: "Created",
+      enableSorting: false,
+      cell: ({ row }) => (
+        <DataTableTextCell value={date(row.original.createdAt)} />
+      ),
+      meta: dataTableColumnMeta({ hideBelow: "xl", width: "12rem" }),
+    }),
+    helper.display({
+      id: "actions",
+      header: () => <span className="sr-only">Actions</span>,
+      cell: ({ row }) => <UserActions user={row.original} />,
+      meta: dataTableColumnMeta({ width: "3.5rem" }),
+    }),
+  ]),
+  getRowId: (user) => user.id,
+})
+
+export const AdminUsers = memo(function AdminUsers() {
+  const [searchStore] = useState(() => createDataTableSearchStore())
+  return (
+    <DataTableWorkspace
+      toolbar={
+        <DataTableToolbar
+          search={{
+            ariaLabel: "Search users",
+            placeholder: "Search users",
+            store: searchStore,
+          }}
+          actions={<AdminUserToolbarActions />}
+        />
+      }
+    >
+      <UserTable searchStore={searchStore} />
+    </DataTableWorkspace>
+  )
+})
+
+const AdminUserToolbarActions = memo(function AdminUserToolbarActions() {
+  const [dialog, setDialog] = useState<"add" | "invitations" | null>(null)
+  const [pending, setPending] = useState(false)
+  return (
+    <>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Button
+            variant="outline"
+            aria-label="Pending platform invitations"
+            onClick={() => setDialog("invitations")}
+          >
+            <Mail />
+          </Button>
+        </TooltipTrigger>
+        <TooltipContent>Pending platform invitations</TooltipContent>
+      </Tooltip>
+      <Button aria-label="Add user" onClick={() => setDialog("add")}>
+        <Plus />
+        <span className="hidden sm:inline">Add user</span>
+      </Button>
+      <Dialog
+        open={dialog !== null}
+        onOpenChange={(open) => {
+          if (!open && !pending) setDialog(null)
+        }}
+      >
+        <DialogContent className="max-h-[90dvh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>
+              {dialog === "add" ? "Add user" : "Pending platform invitations"}
+            </DialogTitle>
+            <DialogDescription>
+              {dialog === "add"
+                ? "Choose the platform access this user should receive."
+                : "Review or cancel invitations that have not been accepted."}
+            </DialogDescription>
+          </DialogHeader>
+          {dialog === "add" ? (
+            <PlatformInvitationForm onPendingChange={setPending} />
+          ) : dialog === "invitations" ? (
+            <PendingPlatformInvitations onPendingChange={setPending} />
+          ) : null}
+          <DialogFooter>
+            <Button
+              variant="outline"
+              disabled={pending}
+              onClick={() => setDialog(null)}
+            >
+              Close
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </>
+  )
+})
+
+const UserTable = memo(function UserTable({
+  searchStore,
+}: {
+  searchStore: DataTableSearchStore
+}) {
+  const search = useSyncExternalStore(
+    searchStore.subscribe,
+    searchStore.getNormalizedSnapshot,
+    searchStore.getNormalizedServerSnapshot
+  )
+  return <UserTablePage key={search} search={search} />
+})
+function UserTablePage({ search }: { search: string }) {
   const [offset, setOffset] = useState(0)
   const query = useQuery({
     queryKey: ["users", search, offset],
     queryFn: () => listUsers({ data: { search, offset, limit: pageSize } }),
     refetchInterval: 15_000,
   })
+  const source = useMemo<DataTableSource<ManagedUser>>(
+    () => ({
+      rows: query.data?.users ?? EMPTY_USERS,
+      refreshing: query.isFetching && !query.isPending,
+      body: query.isPending
+        ? { kind: "loading" }
+        : query.isError
+          ? {
+              kind: "error",
+              error: query.error,
+              retry: () => {
+                void query.refetch()
+              },
+            }
+          : { kind: "ready" },
+      resetKey: `${search}:${offset}`,
+    }),
+    [
+      query.data,
+      query.isFetching,
+      query.isPending,
+      query.isError,
+      query.error,
+      query.refetch,
+      search,
+      offset,
+    ]
+  )
   return (
-    <section className="space-y-4" aria-labelledby="users-heading">
-      <header className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h2 id="users-heading" className="text-lg font-semibold">
-            Users
-          </h2>
-          <p className="text-sm text-muted-foreground">
-            Account availability and verification are separate from resource
-            access.
-          </p>
-        </div>
-        <form
-          className="flex gap-2"
-          onSubmit={(event) => {
-            event.preventDefault()
-            setSearch(draft)
-            setOffset(0)
-          }}
-        >
-          <Input
-            aria-label="Find users by name or email"
-            placeholder="Name or email"
-            value={draft}
-            onChange={(event) => setDraft(event.target.value)}
+    <>
+      <DataTable
+        definition={userDefinition}
+        source={source}
+        emptyState={
+          <DataTableEmptyState
+            icon={<Users className="size-6 text-muted-foreground/45" />}
+            title={search ? "No users match your search" : "No users"}
+            description={
+              search
+                ? "Try a name or email address."
+                : "Add a user to manage their account and access."
+            }
           />
-          <Button variant="outline">Search</Button>
-        </form>
-      </header>
-      <PlatformInvitationForm />
-      <PendingPlatformInvitations />
-      {query.isError ? (
-        <p role="alert" className="text-sm text-destructive">
-          {query.error.message}
-        </p>
-      ) : null}
-      {query.isPending ? (
-        <p className="text-sm text-muted-foreground">Loading users…</p>
-      ) : null}
-      <div className="overflow-x-auto rounded-lg border">
-        <table className="w-full text-left text-sm">
-          <thead className="bg-muted/30 text-muted-foreground">
-            <tr>
-              <th className="p-3 font-medium">User</th>
-              <th className="p-3 font-medium">Status</th>
-              <th className="p-3 font-medium">Verification</th>
-              <th className="p-3 font-medium">Created</th>
-              <th className="p-3 font-medium">Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            {query.data?.users.map((user) => (
-              <ManagedUserRow key={user.id} user={user} />
-            ))}
-          </tbody>
-        </table>
-        {query.data?.users.length === 0 ? (
-          <p className="p-4 text-sm text-muted-foreground">
-            No matching users.
-          </p>
-        ) : null}
-      </div>
-      <div className="flex items-center justify-between text-xs text-muted-foreground">
+        }
+      />
+      <div className="flex shrink-0 items-center justify-between gap-3 p-3 text-xs text-muted-foreground">
         <span>{query.data?.total ?? 0} users</span>
         <div className="flex gap-2">
           <Button
             variant="outline"
             size="sm"
-            disabled={!offset}
+            disabled={!offset || query.isPending}
             onClick={() => setOffset(Math.max(0, offset - pageSize))}
           >
             Previous
@@ -106,21 +300,70 @@ export function AdminUsers() {
           <Button
             variant="outline"
             size="sm"
-            disabled={!query.data || offset + pageSize >= query.data.total}
+            disabled={
+              !query.data ||
+              offset + pageSize >= query.data.total ||
+              query.isPending
+            }
             onClick={() => setOffset(offset + pageSize)}
           >
             Next
           </Button>
         </div>
       </div>
-    </section>
+    </>
   )
 }
 
-const ManagedUserRow = memo(function ManagedUserRow({
+const UserActions = memo(function UserActions({ user }: { user: ManagedUser }) {
+  const [open, setOpen] = useState(false)
+  const [pending, setPending] = useState(false)
+  return (
+    <div className="flex justify-end px-2">
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            aria-label={`Actions for ${user.email}`}
+          >
+            <EllipsisVertical />
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end">
+          <DropdownMenuItem onSelect={() => setOpen(true)}>
+            Manage user
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
+      <Dialog
+        open={open}
+        onOpenChange={(next) => {
+          if (!pending) setOpen(next)
+        }}
+      >
+        {open ? (
+          <UserManagement
+            user={user}
+            pending={pending}
+            onPendingChange={setPending}
+            onClose={() => setOpen(false)}
+          />
+        ) : null}
+      </Dialog>
+    </div>
+  )
+})
+function UserManagement({
   user,
+  onClose,
+  pending,
+  onPendingChange,
 }: {
+  pending: boolean
+  onPendingChange: (pending: boolean) => void
   user: ManagedUser
+  onClose: () => void
 }) {
   const client = useQueryClient()
   const [claim, setClaim] = useState<{
@@ -128,6 +371,8 @@ const ManagedUserRow = memo(function ManagedUserRow({
     expiresAt: string
   } | null>(null)
   const mutation = useMutation({
+    onMutate: () => onPendingChange(true),
+    onSettled: () => onPendingChange(false),
     mutationFn: async (action: "status" | "verify" | "claim") => {
       if (action === "status")
         await setUserStatus({
@@ -156,57 +401,64 @@ const ManagedUserRow = memo(function ManagedUserRow({
     onError: (cause) => showToast({ type: "error", message: cause.message }),
   })
   return (
-    <tr className="border-t align-top">
-      <td className="p-3">
-        <p className="font-medium">{user.name}</p>
-        <p className="text-xs text-muted-foreground">{user.email}</p>
-        {user.role === "admin" || user.role === "relay_creator" ? (
-          <p className="mt-1 text-xs text-muted-foreground">
-            {user.role === "admin" ? "Platform administrator" : "Relay creator"}
-          </p>
-        ) : null}
-        <PlatformRoleControl key={user.role} user={user} />
-        {!user.hasCredential ? (
-          <p className="mt-1 text-xs text-muted-foreground">
-            Account awaiting claim
-          </p>
-        ) : null}
-      </td>
-      <td className="p-3">
-        <p className="capitalize">{user.status}</p>
-        <p className="mt-1 text-xs text-muted-foreground">
-          {date(user.statusChangedAt)}
-        </p>
-        {user.statusExpiresAt ? (
-          <p className="text-xs text-muted-foreground">
-            Until {date(user.statusExpiresAt)}
-          </p>
-        ) : null}
+    <DialogContent className="max-h-[90dvh] overflow-y-auto">
+      <DialogHeader>
+        <DialogTitle>{user.name}</DialogTitle>
+        <DialogDescription className="break-all">
+          {user.email}
+        </DialogDescription>
+      </DialogHeader>
+      <section className="space-y-3">
+        <h3 className="text-sm font-medium">Account status</h3>
+        <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-2 text-sm">
+          <dt className="text-muted-foreground">Status</dt>
+          <dd className="capitalize">{user.status}</dd>
+          <dt className="text-muted-foreground">Changed</dt>
+          <dd>{date(user.statusChangedAt)}</dd>
+          {user.statusExpiresAt ? (
+            <>
+              <dt className="text-muted-foreground">Until</dt>
+              <dd>{date(user.statusExpiresAt)}</dd>
+            </>
+          ) : null}
+          <dt className="text-muted-foreground">Created</dt>
+          <dd>{date(user.createdAt)}</dd>
+        </dl>
         {user.statusReason ? (
-          <p className="mt-1 max-w-48 text-xs text-muted-foreground">
-            {user.statusReason}
+          <p className="text-sm text-muted-foreground">{user.statusReason}</p>
+        ) : null}
+        <Button
+          variant="outline"
+          disabled={pending}
+          onClick={() => mutation.mutate("status")}
+        >
+          {user.status === "enabled" ? "Disable account" : "Enable account"}
+        </Button>
+      </section>
+      <section className="space-y-3 border-t pt-4">
+        <h3 className="text-sm font-medium">Verification</h3>
+        <p className="text-sm">{verificationLabel(user)}</p>
+        {user.emailVerifiedAt ? (
+          <p className="text-xs text-muted-foreground">
+            Email verified {date(user.emailVerifiedAt)}
           </p>
         ) : null}
-      </td>
-      <UserVerification user={user} />
-      <td className="p-3 text-xs text-muted-foreground">
-        {date(user.createdAt)}
-      </td>
-      <td className="p-3">
+        {user.manuallyVerifiedAt ? (
+          <p className="text-xs text-muted-foreground">
+            Manually verified {date(user.manuallyVerifiedAt)}
+          </p>
+        ) : null}
+        {user.legacyVerificationRecordedAt ? (
+          <p className="text-xs text-muted-foreground">
+            Legacy trust recorded {date(user.legacyVerificationRecordedAt)};
+            original method unknown.
+          </p>
+        ) : null}
         <div className="flex flex-wrap gap-2">
-          <Button
-            variant="outline"
-            size="sm"
-            disabled={mutation.isPending}
-            onClick={() => mutation.mutate("status")}
-          >
-            {user.status === "enabled" ? "Disable" : "Enable"}
-          </Button>
           {!user.manuallyVerifiedAt ? (
             <Button
               variant="outline"
-              size="sm"
-              disabled={mutation.isPending}
+              disabled={pending}
               onClick={() => mutation.mutate("verify")}
             >
               Verify manually
@@ -215,8 +467,7 @@ const ManagedUserRow = memo(function ManagedUserRow({
           {!user.hasCredential ? (
             <Button
               variant="outline"
-              size="sm"
-              disabled={mutation.isPending}
+              disabled={pending}
               onClick={() => mutation.mutate("claim")}
             >
               Issue manual claim
@@ -224,10 +475,10 @@ const ManagedUserRow = memo(function ManagedUserRow({
           ) : null}
         </div>
         {claim ? (
-          <div className="mt-3 max-w-72 space-y-2">
+          <div className="space-y-2">
             <Input
-              aria-label={`Manual claim link for ${user.email}`}
               readOnly
+              aria-label={`Manual claim link for ${user.email}`}
               value={claim.claimUrl}
             />
             <p className="text-xs text-muted-foreground">
@@ -235,37 +486,55 @@ const ManagedUserRow = memo(function ManagedUserRow({
               {date(claim.expiresAt)}.
             </p>
             <Button
-              size="sm"
               variant="outline"
-              onClick={async () => {
-                await recoverPromise(
+              onClick={() =>
+                void recoverPromise(
                   async () => {
                     await navigator.clipboard.writeText(claim.claimUrl)
                     showToast({ type: "success", message: "Claim link copied" })
                   },
-                  () => {
+                  () =>
                     showToast({
                       type: "error",
                       message: "Could not copy the link",
                     })
-                  }
                 )
-              }}
+              }
             >
               Copy link
             </Button>
           </div>
         ) : null}
-      </td>
-    </tr>
+      </section>
+      <section className="space-y-3 border-t pt-4">
+        <h3 className="text-sm font-medium">Platform role</h3>
+        <PlatformRoleControl
+          key={user.role}
+          user={user}
+          pending={pending}
+          onPendingChange={onPendingChange}
+        />
+      </section>
+      <DialogFooter>
+        <Button variant="outline" disabled={pending} onClick={onClose}>
+          Close
+        </Button>
+      </DialogFooter>
+    </DialogContent>
   )
-})
+}
 function date(value: string | null) {
   return value ? `${value.slice(0, 16).replace("T", " ")} UTC` : "—"
 }
-
-function UserVerification({ user }: { user: ManagedUser }) {
-  const verification =
+function roleLabel(role: string | null) {
+  return role === "admin"
+    ? "Platform administrator"
+    : role === "relay_creator"
+      ? "Relay creator"
+      : "None"
+}
+function verificationLabel(user: ManagedUser) {
+  return (
     [
       user.emailVerifiedAt && "Email",
       user.manuallyVerifiedAt && "Manual",
@@ -273,39 +542,25 @@ function UserVerification({ user }: { user: ManagedUser }) {
     ]
       .filter(Boolean)
       .join(" + ") || "Unverified"
-  return (
-    <td className="p-3">
-      <p>{verification}</p>
-      {user.emailVerifiedAt ? (
-        <p className="mt-1 text-xs text-muted-foreground">
-          Email: {date(user.emailVerifiedAt)}
-        </p>
-      ) : null}
-      {user.manuallyVerifiedAt ? (
-        <p className="mt-1 text-xs text-muted-foreground">
-          Manual: {date(user.manuallyVerifiedAt)}
-        </p>
-      ) : null}
-      {user.legacyVerificationRecordedAt ? (
-        <p className="mt-1 text-xs text-muted-foreground">
-          Recorded {date(user.legacyVerificationRecordedAt)}; original method
-          unknown.
-        </p>
-      ) : null}
-    </td>
   )
 }
 
 const PlatformRoleControl = memo(function PlatformRoleControl({
   user,
+  pending,
+  onPendingChange,
 }: {
   user: ManagedUser
+  pending: boolean
+  onPendingChange: (pending: boolean) => void
 }) {
   const client = useQueryClient()
   const initial =
     user.role === "admin" || user.role === "relay_creator" ? user.role : "user"
   const [role, setRole] = useState(initial)
   const mutation = useMutation({
+    onMutate: () => onPendingChange(true),
+    onSettled: () => onPendingChange(false),
     mutationFn: async () => {
       if (role === "user")
         await removePlatformAccess({ data: { userId: user.id } })
@@ -328,21 +583,24 @@ const PlatformRoleControl = memo(function PlatformRoleControl({
   })
   return (
     <div className="mt-2 flex flex-wrap gap-2">
-      <select
-        aria-label={`Platform role for ${user.email}`}
-        className="h-8 rounded-md border bg-background px-2 text-xs"
+      <Select
         value={role}
-        onChange={(event) => setRole(event.target.value as typeof role)}
-        disabled={mutation.isPending}
+        onValueChange={(value) => setRole(value as typeof role)}
+        disabled={pending}
       >
-        <option value="user">No platform role</option>
-        <option value="relay_creator">Relay creator</option>
-        <option value="admin">Platform administrator</option>
-      </select>
+        <SelectTrigger aria-label={`Platform role for ${user.email}`}>
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value="user">No platform role</SelectItem>
+          <SelectItem value="relay_creator">Relay creator</SelectItem>
+          <SelectItem value="admin">Platform administrator</SelectItem>
+        </SelectContent>
+      </Select>
       <Button
         size="sm"
         variant="outline"
-        disabled={mutation.isPending || role === initial}
+        disabled={pending || role === initial}
         onClick={() => mutation.mutate()}
       >
         Save role
@@ -351,7 +609,11 @@ const PlatformRoleControl = memo(function PlatformRoleControl({
   )
 })
 
-const PlatformInvitationForm = memo(function PlatformInvitationForm() {
+const PlatformInvitationForm = memo(function PlatformInvitationForm({
+  onPendingChange,
+}: {
+  onPendingChange: (pending: boolean) => void
+}) {
   const client = useQueryClient()
   const [email, setEmail] = useState("")
   const [accessType, setAccessType] = useState<
@@ -359,6 +621,8 @@ const PlatformInvitationForm = memo(function PlatformInvitationForm() {
   >("relay_creator")
   const [inviteUrl, setInviteUrl] = useState<string | null>(null)
   const mutation = useMutation({
+    onMutate: () => onPendingChange(true),
+    onSettled: () => onPendingChange(false),
     mutationFn: () => grantOrInviteAccess({ data: { email, accessType } }),
     onSuccess: (result) => {
       setInviteUrl(result.inviteUrl)
@@ -376,21 +640,25 @@ const PlatformInvitationForm = memo(function PlatformInvitationForm() {
     onError: (error) => showToast({ type: "error", message: error.message }),
   })
   return (
-    <div className="space-y-3 rounded-lg border p-4">
-      <p className="text-sm font-medium">Grant platform access</p>
+    <div className="space-y-3">
       <p className="text-xs text-muted-foreground">
         Existing accounts receive the selected role. New accounts must verify
         their identity and accept an invitation.
       </p>
       <form
-        className="flex flex-wrap gap-2"
+        className="grid gap-3"
         onSubmit={(event) => {
           event.preventDefault()
-          mutation.mutate()
+          if (!mutation.isPending) mutation.mutate()
         }}
       >
+        <label htmlFor="platform-user-email" className="text-sm font-medium">
+          Email address
+        </label>
         <Input
-          className="w-64"
+          disabled={mutation.isPending}
+          id="platform-user-email"
+          className="w-full"
           type="email"
           required
           aria-label="Platform access email"
@@ -398,19 +666,30 @@ const PlatformInvitationForm = memo(function PlatformInvitationForm() {
           value={email}
           onChange={(event) => setEmail(event.target.value)}
         />
-        <select
-          aria-label="Platform access role"
-          className="h-9 rounded-md border bg-background px-2 text-sm"
+        <label htmlFor="platform-user-role" className="text-sm font-medium">
+          Platform role
+        </label>
+        <Select
           value={accessType}
-          onChange={(event) =>
-            setAccessType(event.target.value as typeof accessType)
-          }
+          onValueChange={(value) => setAccessType(value as typeof accessType)}
+          disabled={mutation.isPending}
         >
-          <option value="relay_creator">Relay creator</option>
-          <option value="platform_admin">Platform administrator</option>
-        </select>
+          <SelectTrigger
+            id="platform-user-role"
+            aria-label="Platform access role"
+            className="w-full"
+          >
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="relay_creator">Relay creator</SelectItem>
+            <SelectItem value="platform_admin">
+              Platform administrator
+            </SelectItem>
+          </SelectContent>
+        </Select>
         <Button disabled={mutation.isPending}>
-          {mutation.isPending ? "Saving…" : "Grant access"}
+          {mutation.isPending ? "Saving…" : "Add user"}
         </Button>
       </form>
       {inviteUrl ? (
@@ -447,7 +726,11 @@ const PlatformInvitationForm = memo(function PlatformInvitationForm() {
   )
 })
 
-const PendingPlatformInvitations = memo(function PendingPlatformInvitations() {
+const PendingPlatformInvitations = memo(function PendingPlatformInvitations({
+  onPendingChange,
+}: {
+  onPendingChange: (pending: boolean) => void
+}) {
   const [offset, setOffset] = useState(0)
   const client = useQueryClient()
   const query = useQuery({
@@ -456,6 +739,8 @@ const PendingPlatformInvitations = memo(function PendingPlatformInvitations() {
       listPendingPlatformInvitations({ data: { offset, limit: 10 } }),
   })
   const cancel = useMutation({
+    onMutate: () => onPendingChange(true),
+    onSettled: () => onPendingChange(false),
     mutationFn: (id: string) =>
       revokeAccessInvitation({ data: { id, relayId: null } }),
     onSuccess: () => {
@@ -466,10 +751,10 @@ const PendingPlatformInvitations = memo(function PendingPlatformInvitations() {
   })
   return (
     <section
-      className="space-y-3 rounded-lg border p-4"
+      className="space-y-3"
       aria-labelledby="platform-invitations-heading"
     >
-      <h3 id="platform-invitations-heading" className="text-sm font-medium">
+      <h3 id="platform-invitations-heading" className="sr-only">
         Pending platform invitations
       </h3>
       {query.isError ? (
@@ -490,7 +775,7 @@ const PendingPlatformInvitations = memo(function PendingPlatformInvitations() {
             className="flex flex-wrap items-center justify-between gap-3 py-3"
           >
             <div>
-              <p className="text-sm">{invitation.email}</p>
+              <p className="text-sm break-all">{invitation.email}</p>
               <p className="text-xs text-muted-foreground">
                 {invitation.accessType === "platform_admin"
                   ? "Platform administrator"

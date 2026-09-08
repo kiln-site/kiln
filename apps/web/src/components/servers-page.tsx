@@ -453,12 +453,12 @@ const ServerDataTable = React.memo(function ServerDataTable({
         cell: ({ row }) => {
           const { routeIdentifier, server } = row.original
           return (
-            <div className="flex min-w-0 flex-col items-start">
+            <div className="flex w-full min-w-0 items-center">
               <Link
                 to="/server/$serverId/console"
                 params={{ serverId: routeIdentifier }}
                 preload="intent"
-                className="group/server-link flex min-h-14 w-full min-w-0 items-center px-3 outline-none focus-visible:ring-2 focus-visible:ring-ring/40 focus-visible:ring-inset"
+                className="group/server-link flex min-h-14 min-w-0 flex-1 items-center px-3 outline-none focus-visible:ring-2 focus-visible:ring-ring/40 focus-visible:ring-inset"
               >
                 <InstanceName
                   instance={{
@@ -477,13 +477,11 @@ const ServerDataTable = React.memo(function ServerDataTable({
                   metaClassName="font-mono"
                 />
               </Link>
-              <div className="px-3">
-                <PendingResourceInvitationBadge
-                  resourceType="instance"
-                  relayId={server.relayId}
-                  resourceId={server.id}
-                />
-              </div>
+              <PendingResourceInvitationBadge
+                resourceType="instance"
+                relayId={server.relayId}
+                resourceId={server.id}
+              />
             </div>
           )
         },

@@ -159,7 +159,7 @@ export function ResourceInvitationDialog({
           </p>
         ) : null}
         {invitation.data ? (
-          <dl className="grid grid-cols-[auto_1fr] gap-x-5 gap-y-2 text-sm">
+          <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-5 gap-y-2 text-sm [&>dd]:min-w-0 [&>dd]:break-words">
             <dt className="text-muted-foreground">Invited by</dt>
             <dd>{invitation.data.inviterName}</dd>
             <dt className="text-muted-foreground">Relay</dt>

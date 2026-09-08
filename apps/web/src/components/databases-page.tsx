@@ -437,8 +437,9 @@ const DatabaseTable = React.memo(function DatabaseTable({
         cell: ({ row }) => {
           const database = row.original
           return (
-            <div className="flex min-w-0 flex-col items-start gap-1">
+            <div className="flex w-full min-w-0 items-center gap-1">
               <InstanceName
+                className="min-w-0 flex-1"
                 instance={{
                   id: database.id,
                   inventoryStatus: database.inventoryStatus,

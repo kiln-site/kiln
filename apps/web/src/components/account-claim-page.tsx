@@ -4,16 +4,18 @@ import { Button } from "@workspace/ui/components/button"
 import { Input } from "@workspace/ui/components/input"
 import { showToast } from "@workspace/ui/components/sonner"
 
-import { HearthMark } from "@/components/hearth-mark"
+import { AuthBrand, AuthPageShell } from "@/components/auth-page-shell"
 import { authClient } from "@/lib/auth-client"
 import { claimAccount } from "@/server/users"
 import { accountReturnPath } from "@/lib/account-return-path"
 
 export function AccountClaimPage({
   token,
+  email,
   redirectPath,
 }: {
   token: string
+  email?: string
   redirectPath?: string
 }) {
   const [confirmationError, setConfirmationError] = useState<string | null>(
@@ -63,65 +65,95 @@ export function AccountClaimPage({
     mutation.mutate({ password, displayName: String(form.get("name") ?? "") })
   }
   return (
-    <main className="grid min-h-dvh place-items-center bg-background p-6">
-      <section className="w-full max-w-sm space-y-5">
-        <HearthMark className="size-10" />
-        <h1 className="text-2xl font-semibold">Claim your account</h1>
-        <p className="text-sm text-muted-foreground">
-          Choose your name and password. Resource invitations remain yours to
-          accept individually.
+    <AuthPageShell>
+      <div className="mb-8 flex flex-col items-center text-center">
+        <AuthBrand />
+        <h1 className="mt-6 font-heading text-2xl font-semibold tracking-[-0.04em]">
+          Claim your account
+        </h1>
+        <p className="mt-2 text-sm text-muted-foreground">
+          Choose your name and password. You can accept your resource
+          invitations after signing in.
         </p>
-        {!token ? (
-          <p role="alert" className="text-sm text-destructive">
-            This claim link is invalid. Request a new link to continue.
-          </p>
-        ) : null}
-        {error ? (
-          <p role="alert" className="text-sm text-destructive">
-            {error}
-          </p>
-        ) : null}
-        <form onSubmit={submit} className="grid gap-4">
-          <label className="grid gap-2 text-sm">
-            Display name
-            <Input
-              name="name"
-              autoComplete="nickname"
-              minLength={1}
-              maxLength={16}
-              required
-            />
-          </label>
-          <label className="grid gap-2 text-sm">
-            Password
-            <Input
-              name="password"
-              type="password"
-              autoComplete="new-password"
-              minLength={12}
-              maxLength={128}
-              required
-            />
-          </label>
-          <label className="grid gap-2 text-sm">
-            Confirm password
-            <Input
-              name="confirmation"
-              type="password"
-              autoComplete="new-password"
-              minLength={12}
-              maxLength={128}
-              required
-            />
-          </label>
-          <Button disabled={pending || !token}>
-            {pending ? "Claiming account…" : "Claim account"}
-          </Button>
-        </form>
-        <a href="/" className="text-sm text-muted-foreground underline">
-          Back to sign in
-        </a>
-      </section>
-    </main>
+      </div>
+      {!email ? (
+        <p
+          role="alert"
+          className="rounded-lg border border-destructive/30 bg-destructive/8 px-3 py-2.5 text-xs leading-5 text-red-300"
+        >
+          This claim link is invalid or expired. Request a new link to continue.
+        </p>
+      ) : (
+        <>
+          {error ? (
+            <p
+              role="alert"
+              className="mb-4 rounded-lg border border-destructive/30 bg-destructive/8 px-3 py-2.5 text-xs leading-5 text-red-300"
+            >
+              {error}
+            </p>
+          ) : null}
+          <form onSubmit={submit} className="grid gap-4">
+            <label className="type-control-sm grid gap-1.5 text-foreground">
+              Email
+              <Input
+                name="email"
+                type="email"
+                autoComplete="email"
+                value={email}
+                readOnly
+                className="h-11 bg-card/60 read-only:bg-muted/35 read-only:text-foreground/85"
+              />
+            </label>
+            <label className="type-control-sm grid gap-1.5 text-foreground">
+              Display name
+              <Input
+                name="name"
+                className="h-11 bg-card/60"
+                autoComplete="nickname"
+                minLength={1}
+                maxLength={16}
+                required
+              />
+            </label>
+            <label className="type-control-sm grid gap-1.5 text-foreground">
+              Password
+              <Input
+                name="password"
+                type="password"
+                className="h-11 bg-card/60 font-mono"
+                placeholder="••••••••••••"
+                autoComplete="new-password"
+                minLength={12}
+                maxLength={128}
+                required
+              />
+            </label>
+            <label className="type-control-sm grid gap-1.5 text-foreground">
+              Confirm password
+              <Input
+                name="confirmation"
+                type="password"
+                className="h-11 bg-card/60 font-mono"
+                placeholder="••••••••••••"
+                autoComplete="new-password"
+                minLength={12}
+                maxLength={128}
+                required
+              />
+            </label>
+            <Button className="mt-1 h-11 w-full" disabled={pending}>
+              {pending ? "Claiming account…" : "Claim account"}
+            </Button>
+          </form>
+        </>
+      )}
+      <a
+        href="/"
+        className="mt-5 block text-center text-xs text-muted-foreground hover:text-foreground"
+      >
+        Back to sign in
+      </a>
+    </AuthPageShell>
   )
 }

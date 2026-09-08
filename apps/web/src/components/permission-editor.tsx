@@ -11,9 +11,12 @@ import {
   type PermissionSelection,
 } from "@workspace/contracts"
 
+const EMPTY_SELECTIONS: ReadonlyArray<PermissionSelection> = []
+
 export const PermissionEditor = memo(function PermissionEditor({
   scopeType,
   selections,
+  inheritedSelections = EMPTY_SELECTIONS,
   onChange,
   available,
   disabled = false,
@@ -21,6 +24,7 @@ export const PermissionEditor = memo(function PermissionEditor({
 }: {
   scopeType: PermissionScopeType
   selections: Array<PermissionSelection>
+  inheritedSelections?: ReadonlyArray<PermissionSelection>
   onChange: (selections: Array<PermissionSelection>) => void
   available?: ReadonlyArray<AccessPermission>
   disabled?: boolean
@@ -29,6 +33,11 @@ export const PermissionEditor = memo(function PermissionEditor({
   const selected = useMemo(
     () => new Set(selections.map((item) => `${item.kind}:${item.key}`)),
     [selections]
+  )
+  const inheritedKeys = useMemo(
+    () =>
+      new Set(inheritedSelections.map((item) => `${item.kind}:${item.key}`)),
+    [inheritedSelections]
   )
   const unsupported = useMemo(
     () =>
@@ -49,12 +58,21 @@ export const PermissionEditor = memo(function PermissionEditor({
     const unsupportedSet = new Set(unsupported)
     return new Set(
       expandPermissionSelections(
-        selections.filter((selection) => !unsupportedSet.has(selection)),
+        [
+          ...selections.filter((selection) => !unsupportedSet.has(selection)),
+          ...inheritedSelections.filter((selection) =>
+            Result.isSuccess(
+              Result.try(() =>
+                expandPermissionSelections([selection], scopeType, capabilities)
+              )
+            )
+          ),
+        ],
         scopeType,
         capabilities
       )
     )
-  }, [selections, unsupported, scopeType, capabilities])
+  }, [selections, inheritedSelections, unsupported, scopeType, capabilities])
   function toggle(selection: PermissionSelection) {
     const key = `${selection.kind}:${selection.key}`
     onChange(
@@ -99,10 +117,14 @@ export const PermissionEditor = memo(function PermissionEditor({
         <input
           type="checkbox"
           className="mt-1 accent-primary"
-          checked={selected.has("collection:all")}
+          checked={
+            selected.has("collection:all") ||
+            inheritedKeys.has("collection:all")
+          }
           disabled={
             !selected.has("collection:all") &&
-            !maySelect({ kind: "collection", key: "all" })
+            (inheritedKeys.has("collection:all") ||
+              !maySelect({ kind: "collection", key: "all" }))
           }
           onChange={() => toggle({ kind: "collection", key: "all" })}
         />
@@ -135,10 +157,16 @@ export const PermissionEditor = memo(function PermissionEditor({
                 <input
                   type="checkbox"
                   className="accent-primary"
-                  checked={selected.has(`collection:${group.key}`)}
+                  checked={
+                    selected.has(`collection:${group.key}`) ||
+                    inheritedKeys.has(`collection:${group.key}`) ||
+                    inheritedKeys.has("collection:all")
+                  }
                   disabled={
                     !selected.has(`collection:${group.key}`) &&
-                    !maySelect(group)
+                    (inheritedKeys.has(`collection:${group.key}`) ||
+                      inheritedKeys.has("collection:all") ||
+                      !maySelect(group))
                   }
                   onChange={() => toggle(group)}
                 />
@@ -182,7 +210,8 @@ export const PermissionEditor = memo(function PermissionEditor({
       <p className="text-xs text-muted-foreground">
         Block checkboxes include future permissions in that block. Selecting
         individual permissions keeps those exact choices. Included permissions
-        follow from your other selections.
+        follow from linked presets and your other selections. Remove the linked
+        preset or collection to change included permissions.
       </p>
     </fieldset>
   )

@@ -138,3 +138,35 @@ exception. Invited identities use claim instead; trusted bootstrap still uses
 its existing guarded internal path. An unauthenticated HTTP check confirmed the
 closed signup response. Platform invitation pages now also refresh through the
 access realtime topic rather than polling.
+
+## UI consistency follow-up
+
+Two independent Astra reviewers audited the full PR against the existing auth,
+Backups, shared table, dialog, and dropdown patterns. Their findings drove the
+Users/Presets tab layout, scoped picker, shared access/preset/platform user tables,
+row action menus, destructive-action confirmations, and direct settings links.
+Pending inventory invitations now suppress only empty states, preserving errors
+and loading feedback, and invitation badges fit the existing fixed-height rows.
+
+Claim and account status pages share the login backdrop. Claim preview exposes
+only the email bound to a valid, unexpired, unconsumed token for an unclaimed
+account, via a no-store POST. Five additional deterministic checks cover invalid,
+expired, consumed, credentialed, and valid preview behavior. The permission editor
+shows linked preset permissions as included without flattening assignments;
+unavailable presets are disabled and template copies omit permissions the actor
+cannot grant. User search runs in SQL before pagination and remains scoped.
+
+Preview validation on the worktree's OrbStack URL covered platform/scoped Users,
+Presets, shared scope selection, search, linked permission display, create-from-
+default and delete-preset confirmation, and issuance/display of a manual claim.
+The claim email is read-only and the logo/wordmark centered on the login backdrop.
+At 390 CSS pixels the claim, Users, and Presets layouts have no horizontal
+page overflow. T3 viewport resizing timed out, so the narrow layout was inspected
+in a same-origin 390px iframe inside the collaborative Preview and removed after
+validation. No local-IP development URL was used.
+
+Checks: web 715 tests, CLI 70 tests, Relay 445 tests (22 existing Docker-only
+host skips); workspace typecheck/build and Effect boundary checks passed. Shared
+contracts checks also passed. React Doctor remains 88/100 with the same 11
+complexity warnings and no new diagnostics. Workspace lint has no errors and the
+two existing script sort-comparator warnings.

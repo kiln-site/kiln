@@ -43,10 +43,13 @@ export const Route = createFileRoute("/invite")({
           to: "/account-status",
           search: { redirect: `/invite?id=${encodeURIComponent(search.id)}` },
         })
-      const invitation = await getResourceInvitation({
-        data: { id: search.id },
-      })
-      if (invitation.pending)
+      const invitation = await recoverPromise(
+        () => getResourceInvitation({ data: { id: search.id! } }),
+        () => null
+      )
+      // Let the invitation dialog show its unavailable/error state and close
+      // action when this account cannot load the invitation.
+      if (invitation?.pending)
         throw redirect({
           href: invitationInfrastructureHref(invitation),
           replace: true,

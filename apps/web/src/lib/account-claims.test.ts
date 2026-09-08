@@ -1,8 +1,10 @@
+import { createHash } from "node:crypto"
 import { Effect, Layer } from "effect"
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test"
 
 import { Database } from "@/effect/database"
 import {
+  previewAccountClaim,
   redeemAccountClaim,
   requestEmailAccountClaim,
 } from "@/lib/account-claims"
@@ -47,6 +49,8 @@ vi.mock("@/lib/realtime-source.server", () => ({
   publishRealtimeChange: vi.fn(),
 }))
 
+let preview: Record<string, unknown> | null = null
+let previewQuery: { sql: string; values: unknown } | null = null
 let consumed = false
 let credential = false
 let method = "manual"
@@ -84,7 +88,18 @@ const transaction = {
     }),
 }
 const layer = Layer.succeed(Database)({
-  queryRows: () => Effect.succeed((consumed ? [] : [{ id: "claim" }]) as never),
+  queryRows: (operation, sql, values) => {
+    if (operation === "account.claim.preview") previewQuery = { sql, values }
+    return Effect.succeed(
+      (operation === "account.claim.preview"
+        ? preview
+          ? [preview]
+          : []
+        : consumed
+          ? []
+          : [{ id: "claim" }]) as never
+    )
+  },
   execute: () => Effect.die("Expected transaction"),
   transaction: (_operation, run) => run(transaction),
 })
@@ -95,6 +110,8 @@ const input = {
 }
 
 beforeEach(() => {
+  preview = null
+  previewQuery = null
   consumed = false
   credential = false
   method = "manual"
@@ -177,6 +194,41 @@ describe("credentialless identity claim", () => {
     await expect(redeemAccountClaim(input)).rejects.toThrow(
       "invalid or expired"
     )
+    expect(writes).toEqual([])
+  })
+})
+
+describe("claim email preview", () => {
+  const valid = () => ({
+    email: "recipient@example.test",
+    consumed_at: null,
+    expires_at: new Date(Date.now() + 60_000),
+    hasCredential: 0,
+  })
+  it("returns only the address without consuming or verifying the claim", async () => {
+    preview = valid()
+    await expect(previewAccountClaim(input.token)).resolves.toEqual({
+      email: "recipient@example.test",
+    })
+    expect(previewQuery?.sql).toContain("WHERE c.token_hash = ?")
+    expect(previewQuery?.values).toEqual([
+      createHash("sha256").update(input.token).digest("hex"),
+    ])
+    expect(writes).toEqual([])
+    expect(credential).toBe(false)
+  })
+  it("does not disclose an address for malformed or missing tokens", async () => {
+    await expect(previewAccountClaim(input.token)).resolves.toBeNull()
+    preview = valid()
+    await expect(previewAccountClaim("invalid")).resolves.toBeNull()
+  })
+  it.each([
+    { consumed_at: new Date() },
+    { expires_at: new Date(0) },
+    { hasCredential: 1 },
+  ])("does not disclose unavailable claims: %o", async (unavailable) => {
+    preview = { ...valid(), ...unavailable }
+    await expect(previewAccountClaim(input.token)).resolves.toBeNull()
     expect(writes).toEqual([])
   })
 })

@@ -2,6 +2,12 @@ import { memo, useMemo, useState, useSyncExternalStore } from "react"
 import { useQuery } from "@tanstack/react-query"
 import { useRouterState } from "@tanstack/react-router"
 import { Clock3 } from "lucide-react"
+import { Button } from "@workspace/ui/components/button"
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@workspace/ui/components/tooltip"
 
 import { ResourceInvitationDialog } from "@/components/resource-invitation-dialog"
 import type { DataTableSearchStore } from "@/lib/data-table-search"
@@ -66,7 +72,7 @@ export const PendingResourceInvitations = memo(
         {rows.length ? (
           <tbody
             aria-label="Pending access"
-            className="block max-h-56 shrink-0 overflow-y-auto border-b border-border/70 [&~[data-slot=data-table-state-body]]:hidden"
+            className="block max-h-56 shrink-0 overflow-y-auto border-b border-border/70 [&~[data-slot=data-table-state-body][data-empty=true]]:hidden"
           >
             {rows.map((invitation) => (
               <PendingRow
@@ -174,17 +180,26 @@ export const PendingResourceInvitationBadge = memo(
     if (!invitation) return null
     return (
       <>
-        <button
-          type="button"
-          className="inline-flex shrink-0 items-center gap-1 rounded border border-amber-500/30 px-1.5 py-0.5 text-xs text-amber-700 hover:bg-amber-500/10 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none dark:text-amber-400"
-          aria-label={`Review pending invitation to ${invitation.resourceName}`}
-          onClick={(event) => {
-            event.stopPropagation()
-            setOpen(true)
-          }}
-        >
-          <Clock3 className="size-3" aria-hidden /> Pending invitation
-        </button>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              type="button"
+              size="icon-sm"
+              variant="ghost"
+              className="shrink-0 text-amber-700 hover:bg-amber-500/10 hover:text-amber-700 dark:text-amber-400 dark:hover:text-amber-400"
+              aria-label={`Review pending invitation to ${invitation.resourceName}`}
+              onClick={(event) => {
+                event.stopPropagation()
+                setOpen(true)
+              }}
+            >
+              <Clock3 aria-hidden />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">
+            Review pending invitation
+          </TooltipContent>
+        </Tooltip>
         {open ? (
           <ResourceInvitationDialog
             invitationId={invitation.id}

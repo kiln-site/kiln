@@ -704,11 +704,11 @@ function StartupSettingsForm({
             ? "Applying…"
             : saved
               ? "Applied"
-              : !canStart
-                ? "Apply"
-                : isRunning
-                  ? "Apply & Restart"
-                  : "Apply & Start"}
+              : isRunning
+                ? "Apply & Restart"
+                : canStart
+                  ? "Apply & Start"
+                  : "Apply"}
         </Button>
       </div>
     </form>
