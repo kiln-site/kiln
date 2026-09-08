@@ -17,6 +17,7 @@
     "dev:docker:logs": "node scripts/dev-docker.mjs logs",
     "dev:docker:refresh": "node scripts/dev-docker.mjs refresh",
     "dev:docker:url": "node scripts/dev-docker.mjs url",
+    "cleanup:merged": "node scripts/post-merge-cleanup.mjs",
     "dev": "vp run -r --parallel dev",
     "e2e:docker": "node scripts/e2e-docker.mjs",
     "lint": "vp lint",

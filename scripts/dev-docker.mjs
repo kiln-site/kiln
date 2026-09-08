@@ -1,10 +1,11 @@
-import { createHash, randomBytes } from "node:crypto"
+import { randomBytes } from "node:crypto"
 import { chmodSync, existsSync, readFileSync, writeFileSync } from "node:fs"
-import { basename, dirname, resolve } from "node:path"
+import { dirname, resolve } from "node:path"
 import { spawnSync } from "node:child_process"
 
 import {
   developmentRelayName,
+  developmentStackName,
   ensureDockerVolume,
 } from "./dev-docker-helpers.mjs"
 
@@ -20,7 +21,7 @@ const commonGitDirectory = resolve(
 )
 const primaryRoot = dirname(commonGitDirectory)
 const primaryWorktree = resolve(worktreeRoot) === resolve(primaryRoot)
-const stack = primaryWorktree ? "hearth" : worktreeStack(worktreeRoot)
+const stack = primaryWorktree ? "hearth" : developmentStackName(worktreeRoot)
 const namespace = primaryWorktree ? "" : stack
 const environmentFile = resolve(primaryRoot, ".env")
 const hearthUrl = `https://hearth.${stack}.orb.local`
@@ -323,20 +324,6 @@ function usableSecret(value) {
 
 function secret(bytes) {
   return randomBytes(bytes).toString("base64url")
-}
-
-function worktreeStack(path) {
-  const slug =
-    basename(path)
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/gu, "-")
-      .replace(/^-+|-+$/gu, "")
-      .slice(0, 30) || "worktree"
-  const hash = createHash("sha256")
-    .update(resolve(path))
-    .digest("hex")
-    .slice(0, 6)
-  return `hearth-${slug}-${hash}`
 }
 
 function git(...arguments_) {
