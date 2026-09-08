@@ -17,6 +17,11 @@ describe("Tailscale server selectors", () => {
     const unsupported = selectTailscaleServers(fleetSnapshot())
 
     expect(supported[0]?.tailscaleSupported).toBe(true)
+    expect(supported[0]).toMatchObject({
+      implementation: "Paper",
+      observedState: "running",
+      relayStatus: "connected",
+    })
     expect(legacy[0]?.tailscaleSupported).toBe(false)
     expect(unsupported[0]?.tailscaleSupported).toBe(false)
   })

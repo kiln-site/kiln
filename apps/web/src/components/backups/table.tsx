@@ -88,6 +88,15 @@ const backupSelectionBlockingOverlaySelector = [
 ].join(",")
 
 const backupTableColumnHelper = createDataTableColumnHelper<Backup>()
+
+function backupTargetIdentityKey(backup: Backup): string {
+  return targetKey(
+    backup.targetKind,
+    backup.relayId,
+    backup.targetKind === "platform" ? "kiln" : backup.targetId
+  )
+}
+
 export const BackupTable = React.memo(function BackupTable({
   availableRelayIds,
   availableTargetKeys,
@@ -96,6 +105,7 @@ export const BackupTable = React.memo(function BackupTable({
   destinations,
   dialogStore,
   targetInstances,
+  targetNames,
   nameStore,
   onSortChange,
   scopeFiltered,
@@ -113,6 +123,7 @@ export const BackupTable = React.memo(function BackupTable({
   destinations: ReadonlyArray<BackupAvailabilityDestination>
   dialogStore: BackupDialogStore
   targetInstances: ReadonlyMap<string, InstanceNameInstance>
+  targetNames: ReadonlyMap<string, string>
   nameStore: BackupNameStore
   onSortChange: (sort: BackupRunSort, direction: BackupRunSortDirection) => void
   scopeFiltered: boolean
@@ -130,40 +141,43 @@ export const BackupTable = React.memo(function BackupTable({
     getServerMobileBackupLayoutSnapshot
   )
   const renderMobileRow = React.useCallback(
-    (backup: Backup) => (
-      <BackupMobileRow
-        key={backup.id}
-        backup={backup}
-        canCreate={canCreate(backup)}
-        currentUserId={currentUserId}
-        destinations={destinations}
-        dialogStore={dialogStore}
-        instance={targetInstances.get(
-          targetKey(
-            backup.targetKind,
-            backup.relayId,
-            backup.targetKind === "platform" ? "kiln" : backup.targetId
-          )
-        )}
-        nameStore={nameStore}
-        relayName={backup.relayId}
-        selectionStore={selectionStore}
-        targetAvailable={
-          backup.targetKind === "platform"
-            ? availableRelayIds.has(backup.relayId)
-            : availableTargetKeys.has(
-                targetKey(backup.targetKind, backup.relayId, backup.targetId)
-              )
-        }
-        targetName={backup.targetId}
-      />
-    ),
+    (backup: Backup) => {
+      const identityKey = backupTargetIdentityKey(backup)
+      const currentName = targetNames.get(identityKey)
+      return (
+        <BackupMobileRow
+          key={backup.id}
+          backup={backup}
+          canCreate={canCreate(backup)}
+          currentUserId={currentUserId}
+          destinations={destinations}
+          dialogStore={dialogStore}
+          instance={targetInstances.get(identityKey)}
+          nameStore={nameStore}
+          relayName={
+            backup.targetKind === "platform"
+              ? (currentName ?? backup.relayId)
+              : backup.relayId
+          }
+          selectionStore={selectionStore}
+          targetAvailable={
+            backup.targetKind === "platform"
+              ? availableRelayIds.has(backup.relayId)
+              : availableTargetKeys.has(
+                  targetKey(backup.targetKind, backup.relayId, backup.targetId)
+                )
+          }
+          targetName={currentName ?? backup.targetId}
+        />
+      )
+    },
     [
       canCreate,
       currentUserId,
       destinations,
       dialogStore,
       targetInstances,
+      targetNames,
       nameStore,
       availableRelayIds,
       availableTargetKeys,
@@ -213,6 +227,7 @@ export const BackupTable = React.memo(function BackupTable({
           destinations={destinations}
           dialogStore={dialogStore}
           targetInstances={targetInstances}
+          targetNames={targetNames}
           nameStore={nameStore}
           onSortChange={onSortChange}
           renderEmpty={renderEmpty}
@@ -237,6 +252,7 @@ const BackupDesktopTable = React.memo(function BackupDesktopTable({
   destinations,
   dialogStore,
   targetInstances,
+  targetNames,
   nameStore,
   onSortChange,
   renderEmpty,
@@ -255,6 +271,7 @@ const BackupDesktopTable = React.memo(function BackupDesktopTable({
   destinations: ReadonlyArray<BackupAvailabilityDestination>
   dialogStore: BackupDialogStore
   targetInstances: ReadonlyMap<string, InstanceNameInstance>
+  targetNames: ReadonlyMap<string, string>
   nameStore: BackupNameStore
   onSortChange: (sort: BackupRunSort, direction: BackupRunSortDirection) => void
   renderEmpty: (searchActive: boolean, filterActive: boolean) => React.ReactNode
@@ -339,10 +356,14 @@ const BackupDesktopTable = React.memo(function BackupDesktopTable({
         sortFn: "text",
         cell: ({ row }) => {
           const backup = row.original
+          const identityKey = backupTargetIdentityKey(backup)
+          const currentName = targetNames.get(identityKey)
           const target = backupTargetPresentation(
             backup,
-            backup.relayId,
-            backup.targetId
+            backup.targetKind === "platform"
+              ? (currentName ?? backup.relayId)
+              : backup.relayId,
+            currentName ?? backup.targetId
           )
           const targetAvailable =
             backup.targetKind === "platform"
@@ -355,13 +376,7 @@ const BackupDesktopTable = React.memo(function BackupDesktopTable({
             <BackupTargetLink
               available={targetAvailable}
               displayId={target.id}
-              instance={targetInstances.get(
-                targetKey(
-                  backup.targetKind,
-                  backup.relayId,
-                  backup.targetKind === "platform" ? "kiln" : backup.targetId
-                )
-              )}
+              instance={targetInstances.get(identityKey)}
               kindLabel={target.kindLabel}
               name={target.name}
               relayId={backup.relayId}
@@ -476,6 +491,7 @@ const BackupDesktopTable = React.memo(function BackupDesktopTable({
     destinations,
     dialogStore,
     targetInstances,
+    targetNames,
     nameStore,
     availableRelayIds,
     availableTargetKeys,
