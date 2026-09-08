@@ -170,3 +170,37 @@ host skips); workspace typecheck/build and Effect boundary checks passed. Shared
 contracts checks also passed. React Doctor remains 88/100 with the same 11
 complexity warnings and no new diagnostics. Workspace lint has no errors and the
 two existing script sort-comparator warnings.
+
+## Permission-boundary audit corrections
+
+All four external audit findings were valid. Backup copying now requires
+`backup.download`, including matching desktop/mobile controls. The same export
+rule applies when creating into user-owned storage, setting that preferred
+destination, taking restore safety/final deletion backups, and configuring or manually
+running a schedule that writes to personal storage. Default backup destinations
+are resolved and pinned before authorization/reservation, so losing download
+permission cannot be bypassed through a previously selected personal bucket.
+Unattended schedules retain their existing execution policy, as scoped earlier.
+
+Relay Activity now distinguishes `relay.audit.read` from inherited
+`instance.read`: the latter permits instance events only. Audit-only Relay
+assignments can navigate to Activity. Initial, refreshed, fallback, and live
+snapshots require `relay.read` before returning node details. Startup settings
+likewise withhold host allocation totals without that permission, preserving
+own-instance quota controls; child inventory and routing remain available. CLI startup updates authorize configuration fields,
+limits (including Brick resource variables), and actual start/stop/restart effects
+independently. Limits-only updates on stopped servers with no start no longer
+require configuration-write permission, while mixed updates require both.
+Web and CLI share the startup permission classifiers.
+
+Added 83 regression tests, including real server-function and SSE boundaries,
+actor lookup isolation, failed-reservation/dispatch guards, default destination
+pinning, and CLI credential/permission combinations. The web suite now passes
+798 tests; workspace CLI/Relay suites, TypeScript, production build, lint, and Effect boundary
+checks pass. Lint retains only the existing script sort-comparator warnings.
+React Doctor reports 86/100 with the same 11 audit-baseline complexity
+diagnostics and unchanged complexity metrics; its historical 88 scan covered
+fewer files. Preview validation confirms the Backups and Startup pages load.
+
+The streamed Cursor Grok 4.6 High Fast review rechecked the full PR and these
+corrections. Its second pass found no remaining merge blockers.

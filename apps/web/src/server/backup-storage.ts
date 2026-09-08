@@ -201,6 +201,16 @@ export const setPreferredBackupStorage = createServerFn({ method: "POST" })
       ) {
         throw new Error("Backup destination is unavailable")
       }
+      if (storage.ownerUserId !== null && target.kind !== "platform") {
+        await requireRelayPermission({
+          ...(target.kind === "database"
+            ? { databaseId: target.id }
+            : { instanceId: target.id }),
+          permission: "backup.download",
+          relayId: data.relayId,
+          user,
+        })
+      }
     }
     await runAppEffect(
       "backupStorage.setPreferred",

@@ -37,7 +37,8 @@ import {
 import { z } from "zod"
 
 import {
-  allowedInstanceIds,
+  allowedInstanceIdsForUser,
+  canReadRelayNode,
   hasPlatformPermission,
   isPlatformAdmin,
   listUserGrants,
@@ -350,6 +351,7 @@ export const deleteInstance = createServerFn({ method: "POST" })
         instanceId: data.instanceId,
         relay,
         requestedBy: user.id,
+        user,
         ...(data.storageId === undefined ? {} : { storageId: data.storageId }),
       })
     } else {
@@ -1087,16 +1089,21 @@ async function authorizeRelaySnapshot(
   relay: RelayEndpoint,
   user: AuthenticatedUser
 ) {
-  const allowed = await allowedInstanceIds(
+  const grants = isPlatformAdmin(user)
+    ? []
+    : await listUserGrants(user.id, relay.id)
+  const allowed = allowedInstanceIdsForUser(
     user,
     relay.id,
-    snapshot.instances.map((instance) => instance.id)
+    snapshot.instances.map((instance) => instance.id),
+    grants
   )
   const instances = snapshot.instances.flatMap((item) =>
     allowed.has(item.id) ? [projectRelayInstanceOverview(item)] : []
   )
   return {
     ...snapshot,
+    node: canReadRelayNode(user, relay.id, grants) ? snapshot.node : null,
     instances,
   }
 }
@@ -1315,7 +1322,7 @@ async function mergeRelaySnapshots(
   )
   return {
     nodes: entries.flatMap(({ relay, snapshot, status }) =>
-      snapshot
+      snapshot?.node
         ? [
             {
               ...snapshot.node,

@@ -7,6 +7,7 @@ import {
 } from "@/effect/promise"
 import { runAppEffect } from "@/effect/runtime"
 import {
+  canReadRelayNode,
   isPlatformAdmin,
   refreshRelayAuthorizationUserEffect,
   isRelayCreator,
@@ -51,6 +52,7 @@ interface RealtimeAccessPolicy {
   canManageRelays: boolean
   isPlatformAdmin: boolean
   readableInstances: Map<string, Set<string>>
+  readableNodes: Set<string>
   readableRelays: Set<string>
   relayWideRead: Set<string>
   relays: Map<string, PersistedRelay>
@@ -319,7 +321,7 @@ export async function openAuthorizedRealtimeStream(input: {
         type: "collections.invalidate",
       })
     }
-    if (event.delta.node) {
+    if (event.delta.node && policy.readableNodes.has(relay.id)) {
       enqueue({
         epoch: event.epoch,
         nodes: [fleetNode(event.delta.node, relay)],
@@ -494,6 +496,11 @@ async function loadRealtimeAccessPolicy(
     canManageRelays: isPlatformAdmin(user) || isRelayCreator(user),
     isPlatformAdmin: isPlatformAdmin(user),
     readableInstances,
+    readableNodes: new Set(
+      visibleRelays.flatMap((relay) =>
+        canReadRelayNode(user, relay.id, grants) ? [relay.id] : []
+      )
+    ),
     readableRelays,
     relayWideRead,
     relays: new Map(visibleRelays.map((relay) => [relay.id, relay])),

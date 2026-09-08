@@ -1,21 +1,22 @@
 import { Effect } from "effect"
-import { relayInstanceSchema } from "@workspace/contracts"
+import { relayInstanceSchema, relayNodeSchema } from "@workspace/contracts"
 import { describe, expect, it, vi } from "vite-plus/test"
+
+import type { AccessGrant } from "@/lib/access-control"
 
 const initialPolicy = vi.hoisted(() => ({
   delay: undefined as Promise<void> | undefined,
+  grants: [] as AccessGrant[],
 }))
 
-vi.mock("@/lib/access-control", () => ({
-  isPlatformAdmin: () => true,
+vi.mock("@/lib/access-control", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/access-control")>()),
   refreshRelayAuthorizationUserEffect: ({ user }: { user: unknown }) =>
     Effect.promise(async () => {
       await initialPolicy.delay
       return { user }
     }),
-  isRelayCreator: () => false,
-  listUserGrants: () => Promise.resolve([]),
-  visibleRelaysForUser: (_user: unknown, relays: unknown) => relays,
+  listUserGrants: () => Promise.resolve(initialPolicy.grants),
 }))
 
 vi.mock("@/effect/runtime", () => ({
@@ -46,7 +47,7 @@ const user = {
   id: "user-one",
   isDevelopmentBypass: false,
   name: "User",
-  role: "user",
+  role: "admin",
   twoFactorEnabled: false,
 } satisfies AuthenticatedUser
 
@@ -144,6 +145,112 @@ describe("authorized realtime stream", () => {
     expect(frame).toContain("https://example.com/brick.yaml")
     expect(instance.variables?.password).toBe("startup-secret")
   })
+
+  it.each([false, true])(
+    "gates snapshot node deltas independently of child instances (relay.read: %s)",
+    async (readNode) => {
+      const instance = relayInstanceSchema.parse({
+        connectAddress: "server.test",
+        containerId: null,
+        desiredState: "running",
+        directory: "a".repeat(40),
+        game: "Minecraft",
+        id: "a".repeat(40),
+        implementation: "Paper",
+        javaVersion: "21",
+        name: "Server",
+        observedState: "running",
+        service: "server",
+        shortId: "aaaaaaaa",
+        status: "running",
+        version: "1.21.11",
+      })
+      const node = relayNodeSchema.parse({
+        id: "node-one",
+        name: "Private node",
+        version: "private-version",
+        platform: "linux",
+        arch: "arm64",
+        cpu: { cores: 8, loadPercent: 30 },
+        memory: { totalBytes: 100, usedBytes: 50 },
+        storage: { totalBytes: 1000, usedBytes: 500 },
+        docker: { available: true, version: "private-docker" },
+        connectedAt: "2026-09-08T12:00:00.000Z",
+      })
+      initialPolicy.grants = [
+        {
+          id: "child",
+          relayId: "relay-one",
+          resourceId: instance.id,
+          resourceType: "instance",
+          role: "viewer",
+          permissions: ["instance.read"],
+        },
+        ...(readNode
+          ? [
+              {
+                id: "node",
+                relayId: "relay-one",
+                resourceId: "relay-one",
+                resourceType: "relay" as const,
+                role: "viewer" as const,
+                permissions: ["relay.read" as const],
+              },
+            ]
+          : []),
+      ]
+      const lifecycle = new AbortController()
+      try {
+        const stream = await openAuthorizedRealtimeStream({
+          sessionId: null,
+          signal: lifecycle.signal,
+          user: { ...user, role: "user" },
+        })
+        const reader = stream.getReader()
+        await reader.read()
+        publishRealtimeChange({
+          type: "relay.snapshot.delta",
+          relayId: "relay-one",
+          directoryChanged: false,
+          delta: {
+            node,
+            instances: [instance, { ...instance, id: "b".repeat(40) }],
+            deletedInstanceIds: [],
+          },
+        })
+        // A later delivered event bounds the read without timers or absent-frame polling.
+        publishRealtimeChange({
+          type: "relay.state",
+          relayId: "relay-one",
+          status: "connected",
+        })
+        const frames: Array<Record<string, unknown>> = []
+        while (true) {
+          const frame = await reader.read()
+          if (frame.done) throw new Error("Stream closed before the marker")
+          const event = decodeEvent(frame.value)
+          if (event.type === "relay.status") break
+          frames.push(event)
+        }
+        expect(frames[0]).toMatchObject({
+          type: "instances.delta",
+          upserted: [{ id: instance.id }],
+        })
+        expect(frames[0]!.upserted as unknown[]).toHaveLength(1)
+        expect(
+          frames.filter((event) => event.type === "nodes.delta")
+        ).toHaveLength(readNode ? 1 : 0)
+        if (readNode)
+          expect(frames[1]).toMatchObject({
+            nodes: [{ ...node, relayId: "relay-one" }],
+          })
+        else expect(JSON.stringify(frames)).not.toContain("private-")
+      } finally {
+        lifecycle.abort()
+        initialPolicy.grants = []
+      }
+    }
+  )
 })
 
 function decodeEvent(frame: Uint8Array): Record<string, unknown> {

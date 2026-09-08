@@ -92,6 +92,7 @@ export const BackupTable = React.memo(function BackupTable({
   availableRelayIds,
   availableTargetKeys,
   canCreate,
+  canDownload,
   currentUserId,
   destinations,
   dialogStore,
@@ -109,6 +110,7 @@ export const BackupTable = React.memo(function BackupTable({
   availableRelayIds: ReadonlySet<string>
   availableTargetKeys: ReadonlySet<string>
   canCreate: (backup: Backup) => boolean
+  canDownload: (backup: Backup) => boolean
   currentUserId: string
   destinations: ReadonlyArray<BackupAvailabilityDestination>
   dialogStore: BackupDialogStore
@@ -135,6 +137,7 @@ export const BackupTable = React.memo(function BackupTable({
         key={backup.id}
         backup={backup}
         canCreate={canCreate(backup)}
+        canDownload={canDownload(backup)}
         currentUserId={currentUserId}
         destinations={destinations}
         dialogStore={dialogStore}
@@ -160,6 +163,7 @@ export const BackupTable = React.memo(function BackupTable({
     ),
     [
       canCreate,
+      canDownload,
       currentUserId,
       destinations,
       dialogStore,
@@ -209,6 +213,7 @@ export const BackupTable = React.memo(function BackupTable({
           availableRelayIds={availableRelayIds}
           availableTargetKeys={availableTargetKeys}
           canCreate={canCreate}
+          canDownload={canDownload}
           currentUserId={currentUserId}
           destinations={destinations}
           dialogStore={dialogStore}
@@ -233,6 +238,7 @@ const BackupDesktopTable = React.memo(function BackupDesktopTable({
   availableRelayIds,
   availableTargetKeys,
   canCreate,
+  canDownload,
   currentUserId,
   destinations,
   dialogStore,
@@ -251,6 +257,7 @@ const BackupDesktopTable = React.memo(function BackupDesktopTable({
   availableRelayIds: ReadonlySet<string>
   availableTargetKeys: ReadonlySet<string>
   canCreate: (backup: Backup) => boolean
+  canDownload: (backup: Backup) => boolean
   currentUserId: string
   destinations: ReadonlyArray<BackupAvailabilityDestination>
   dialogStore: BackupDialogStore
@@ -320,7 +327,7 @@ const BackupDesktopTable = React.memo(function BackupDesktopTable({
                 />
                 <BackupAvailabilityTags
                   backup={backup}
-                  canCopy={canCreateBackup}
+                  canCopy={canDownload(backup)}
                   currentUserId={currentUserId}
                   destinations={destinations}
                 />
@@ -472,6 +479,7 @@ const BackupDesktopTable = React.memo(function BackupDesktopTable({
     })
   }, [
     canCreate,
+    canDownload,
     currentUserId,
     destinations,
     dialogStore,
@@ -717,6 +725,7 @@ function backupTableRowClassName() {
 const BackupMobileRow = React.memo(function BackupMobileRow({
   backup,
   canCreate,
+  canDownload,
   currentUserId,
   destinations,
   dialogStore,
@@ -729,6 +738,7 @@ const BackupMobileRow = React.memo(function BackupMobileRow({
 }: {
   backup: Backup
   canCreate: boolean
+  canDownload: boolean
   currentUserId: string
   destinations: ReadonlyArray<BackupAvailabilityDestination>
   dialogStore: BackupDialogStore
@@ -782,7 +792,7 @@ const BackupMobileRow = React.memo(function BackupMobileRow({
       )}
       <BackupAvailabilityTags
         backup={backup}
-        canCopy={canCreate}
+        canCopy={canDownload}
         currentUserId={currentUserId}
         destinations={destinations}
       />

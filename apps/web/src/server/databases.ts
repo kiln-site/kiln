@@ -585,7 +585,7 @@ export const deleteManagedDatabase = createServerFn({ method: "POST" })
       requestedBy: user.id,
     }
     if (databaseEngineSupportsLogicalBackups(database.engine)) {
-      await deleteDatabaseWithFinalBackup(deletion)
+      await deleteDatabaseWithFinalBackup({ ...deletion, user })
     } else {
       await deleteDatabaseWithoutFinalBackup(deletion)
     }

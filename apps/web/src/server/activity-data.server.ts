@@ -57,25 +57,31 @@ export async function getActivityForUser(
   for (const relay of relays) {
     if (platformAdmin) {
       scopes.set(relay.id, {
+        relayAudit: true,
         allInstances: true,
         instanceIds: new Set(),
       })
       continue
     }
+    const relayAudit = grants.some(
+      (grant) =>
+        grant.relayId === relay.id &&
+        grant.resourceType === "relay" &&
+        grantHasPermission(grant, "relay.audit.read")
+    )
     const relayGrants = grants.filter(
       (grant) =>
         grant.relayId === relay.id && grantHasPermission(grant, "instance.read")
     )
-    const allInstances = relayGrants.some(
-      (grant) => grant.resourceType === "relay"
-    )
+    const allInstances =
+      relayAudit || relayGrants.some((grant) => grant.resourceType === "relay")
     const instanceIds = new Set(
       relayGrants.flatMap((grant) =>
         grant.resourceType === "instance" ? [grant.resourceId] : []
       )
     )
     if (allInstances || instanceIds.size > 0) {
-      scopes.set(relay.id, { allInstances, instanceIds })
+      scopes.set(relay.id, { relayAudit, allInstances, instanceIds })
     }
   }
 
@@ -85,9 +91,9 @@ export async function getActivityForUser(
     limit: Math.min(Math.max(data.limit ?? 2_000, 1), 2_000),
     ...(data.to ? { to: Date.parse(data.to) } : {}),
   }
+  const { relayRpc } = await import("@/lib/relay-connection")
   const results = await Promise.all(
     visibleRelays.map(async (relay) => {
-      const { relayRpc } = await import("@/lib/relay-connection")
       const scope = scopes.get(relay.id)
       const query =
         scope?.allInstances === false

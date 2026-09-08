@@ -391,27 +391,55 @@ export const allowedInstanceIdsEffect = Effect.fn("access.allowedInstanceIds")(
       return new Set<string>()
     if (isPlatformAdmin(user)) return new Set(instanceIds)
     const grants = yield* listUserGrantsEffect(user.id, relayId)
-    if (
-      grants.some(
-        (grant) =>
-          grant.resourceType === "relay" &&
-          grantHasPermission(grant, "instance.read")
-      )
-    ) {
-      return new Set(instanceIds)
-    }
-    const allowedInstanceIds = new Set<string>()
-    for (const grant of grants) {
-      if (
-        grant.resourceType === "instance" &&
-        grantHasPermission(grant, "instance.read")
-      ) {
-        allowedInstanceIds.add(grant.resourceId)
-      }
-    }
-    return allowedInstanceIds
+    return allowedInstanceIdsForUser(user, relayId, instanceIds, grants)
   }
 )
+
+export function canReadRelayNode(
+  user: AuthenticatedUser,
+  relayId: string,
+  grants: ReadonlyArray<AccessGrant>
+): boolean {
+  if (!isAccountEnabled(user) || !isAccountVerified(user)) return false
+  return (
+    isPlatformAdmin(user) ||
+    grants.some(
+      (grant) =>
+        grant.relayId === relayId &&
+        grant.resourceType === "relay" &&
+        grantHasPermission(grant, "relay.read")
+    )
+  )
+}
+
+export function allowedInstanceIdsForUser(
+  user: AuthenticatedUser,
+  relayId: string,
+  instanceIds: Array<string>,
+  grants: ReadonlyArray<AccessGrant>
+): Set<string> {
+  if (!isAccountEnabled(user) || !isAccountVerified(user))
+    return new Set<string>()
+  if (isPlatformAdmin(user)) return new Set(instanceIds)
+  const relayGrants = grants.filter((grant) => grant.relayId === relayId)
+  if (
+    relayGrants.some(
+      (grant) =>
+        grant.resourceType === "relay" &&
+        grantHasPermission(grant, "instance.read")
+    )
+  ) {
+    return new Set(instanceIds)
+  }
+  return new Set(
+    relayGrants.flatMap((grant) =>
+      grant.resourceType === "instance" &&
+      grantHasPermission(grant, "instance.read")
+        ? [grant.resourceId]
+        : []
+    )
+  )
+}
 
 export const deleteInstanceAccessEffect = Effect.fn("access.deleteInstance")(
   function* (relayId: string, instanceId: string) {

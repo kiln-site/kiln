@@ -42,6 +42,33 @@ const databaseViewerAccess = {
 } satisfies NavigationAccessCapabilities
 
 describe("navigation destinations", () => {
+  it.each([
+    ["relay", ["relay.audit.read"], true],
+    ["relay", ["instance.read"], true],
+    ["instance", ["instance.read"], true],
+    ["relay", ["relay.read"], false],
+    ["instance", ["relay.audit.read"], false],
+    ["database", ["database.read"], false],
+  ] as const)(
+    "checks Activity permission and scope for %s with %s",
+    (resourceType, permissions, allowed) => {
+      expect(
+        canAccessActivity({
+          ...operatorRelayAccess,
+          grants: [
+            {
+              relayId: "relay-one",
+              resourceId: "resource-one",
+              resourceType,
+              role: "viewer",
+              permissions: [...permissions],
+            },
+          ],
+        })
+      ).toBe(allowed)
+    }
+  )
+
   it("uses the complete server workspace list for regular servers", () => {
     expect(
       destinationsForServer({ brickId: "paper" }).map(({ id }) => id)

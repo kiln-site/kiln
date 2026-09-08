@@ -48,6 +48,10 @@ import {
   requireRelayPermission,
 } from "@/lib/access-control"
 import { hasBackupPermission } from "@/lib/backup-access"
+import {
+  resolveAuthorizedBackupStorageSelection,
+  resolveBackupStorageSelection,
+} from "@/lib/backup-storage-selection.server"
 import { grantHasPermission } from "@/lib/permissions"
 import { scheduleBackupCopyProcessing } from "@/lib/backup-copy"
 import { selectBackupCopySource } from "@/lib/backup-copy-source"
@@ -196,6 +200,19 @@ export const createInstanceBackup = createServerFn({ method: "POST" })
       relayId: relay.id,
       user,
     })
+    const storageIds = await resolveBackupStorageSelection({
+      ...data,
+      targetId: data.instanceId,
+      targetKind: "instance",
+    })
+    await validateRequestedStorage({ storageIds }, user.id, false, () =>
+      requireRelayPermission({
+        instanceId: data.instanceId,
+        permission: "backup.download",
+        relayId: relay.id,
+        user,
+      })
+    )
     const snapshot = relaySnapshotSchema.parse(
       await relayRpc(relay, "relay.snapshot", {}, 15_000, user.id)
     )
@@ -204,7 +221,6 @@ export const createInstanceBackup = createServerFn({ method: "POST" })
     ) {
       throw new Error("Server not found on this Relay")
     }
-    await validateRequestedStorage(data, user.id)
 
     const input = await runAppEffect(
       "backups.reserve",
@@ -215,10 +231,7 @@ export const createInstanceBackup = createServerFn({ method: "POST" })
         ...(data.mode === undefined ? {} : { mode: data.mode }),
         relayId: relay.id,
         requestedMaxBytes: data.maxBytes ?? null,
-        ...(data.storageId === undefined ? {} : { storageId: data.storageId }),
-        ...(data.storageIds === undefined
-          ? {}
-          : { storageIds: data.storageIds }),
+        storageIds,
         targetId: data.instanceId,
         taskId: randomUUID(),
       })
@@ -243,6 +256,19 @@ export const createDatabaseBackup = createServerFn({ method: "POST" })
       relayId: relay.id,
       user,
     })
+    const storageIds = await resolveBackupStorageSelection({
+      ...data,
+      targetId: data.databaseId,
+      targetKind: "database",
+    })
+    await validateRequestedStorage({ storageIds }, user.id, false, () =>
+      requireRelayPermission({
+        databaseId: data.databaseId,
+        permission: "backup.download",
+        relayId: relay.id,
+        user,
+      })
+    )
     const records = await runAppEffect(
       "backups.databaseTarget",
       listManagedDatabaseRecordsEffect()
@@ -259,7 +285,6 @@ export const createDatabaseBackup = createServerFn({ method: "POST" })
         `${database.engine} logical backups are not supported yet`
       )
     }
-    await validateRequestedStorage(data, user.id)
     const input = await runAppEffect(
       "backups.reserveDatabase",
       reserveDatabaseBackupEffect({
@@ -268,10 +293,7 @@ export const createDatabaseBackup = createServerFn({ method: "POST" })
         name: data.name,
         relayId: relay.id,
         requestedMaxBytes: data.maxBytes ?? null,
-        ...(data.storageId === undefined ? {} : { storageId: data.storageId }),
-        ...(data.storageIds === undefined
-          ? {}
-          : { storageIds: data.storageIds }),
+        storageIds,
         targetId: data.databaseId,
         taskId: randomUUID(),
       })
@@ -599,7 +621,7 @@ export const copyBackupToDestination = createServerFn({ method: "POST" })
     )
     if (!backup) throw new Error("Backup not found")
     const grants = isPlatformAdmin(user) ? [] : await listUserGrants(user.id)
-    if (!hasBackupPermission(user, grants, backup, "backup.create")) {
+    if (!hasBackupPermission(user, grants, backup, "backup.download")) {
       throw new Error("You do not have permission to copy this backup")
     }
     if (backup.artifactKind === "restic_snapshot") {
@@ -752,6 +774,14 @@ export const restoreInstanceBackup = createServerFn({ method: "POST" })
         user,
       })
     }
+    const safetyStorageIds = data.safetyBackup
+      ? await resolveAuthorizedBackupStorageSelection({
+          relayId: relay.id,
+          targetId: backup.targetId,
+          targetKind: "instance",
+          user,
+        })
+      : undefined
     const snapshot = relaySnapshotSchema.parse(
       await relayRpc(relay, "relay.snapshot", {}, 15_000, user.id)
     )
@@ -774,6 +804,7 @@ export const restoreInstanceBackup = createServerFn({ method: "POST" })
             createdBy: user.id,
             name: `Before restoring ${backup.name}`.slice(0, 120),
             reason: "pre_restore",
+            storageIds: safetyStorageIds,
             relayId: relay.id,
             requestedMaxBytes: null,
             targetId: backup.targetId,
@@ -833,6 +864,14 @@ export const restoreDatabaseBackup = createServerFn({ method: "POST" })
         user,
       })
     }
+    const safetyStorageIds = data.safetyBackup
+      ? await resolveAuthorizedBackupStorageSelection({
+          relayId: relay.id,
+          targetId: backup.targetId,
+          targetKind: "database",
+          user,
+        })
+      : undefined
     const records = await runAppEffect(
       "backups.databaseRestoreTarget",
       listManagedDatabaseRecordsEffect()
@@ -853,6 +892,7 @@ export const restoreDatabaseBackup = createServerFn({ method: "POST" })
             createdBy: user.id,
             name: `Before restoring ${backup.name}`.slice(0, 120),
             reason: "pre_restore",
+            storageIds: safetyStorageIds,
             relayId: relay.id,
             requestedMaxBytes: null,
             targetId: backup.targetId,
@@ -1018,7 +1058,8 @@ async function validateRequestedStorage(
     storageIds?: Array<string | null>
   },
   userId: string,
-  platformOnly = false
+  platformOnly = false,
+  requirePersonalStoragePermission?: () => Promise<unknown>
 ): Promise<void> {
   const storageIds =
     input.storageIds ?? (input.storageId === undefined ? [] : [input.storageId])
@@ -1043,6 +1084,9 @@ async function validateRequestedStorage(
               ? "Kiln platform backups require platform-owned destinations"
               : "Backup destination is unavailable"
           )
+        }
+        if (storage.ownerUserId !== null) {
+          await requirePersonalStoragePermission?.()
         }
       })
   )

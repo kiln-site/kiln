@@ -358,10 +358,10 @@ export function canAccessBackups(
 export function canAccessActivity(
   capabilities: NavigationAccessCapabilities
 ): boolean {
-  return hasScopedPermission(capabilities, "instance.read", [
-    "instance",
-    "relay",
-  ])
+  return (
+    hasScopedPermission(capabilities, "relay.audit.read", ["relay"]) ||
+    hasScopedPermission(capabilities, "instance.read", ["instance", "relay"])
+  )
 }
 
 export function firstAccessibleAppHref(

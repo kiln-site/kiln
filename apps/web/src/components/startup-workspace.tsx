@@ -38,7 +38,7 @@ import { BrickVariableField } from "@/components/brick-variable-fields"
 import { MinecraftJavaVersionFields } from "@/components/minecraft-java-version-fields"
 import { BrickIcon } from "@/components/brick-icon"
 import {
-  formatResourceBytes,
+  resourceAllocationError,
   ResourceAllocationCard,
   type StartupResourceAllocation,
 } from "@/components/startup-resource-allocation"
@@ -322,23 +322,13 @@ const StartupForm = React.memo(function StartupForm({
       setError("Enter a valid disk quota in GiB.")
       return
     }
-    if (
-      diskLimitBytes > 0 &&
-      diskLimitBytes > allocation.storage.availableBytes
-    ) {
-      setError(
-        `Disk quota exceeds the ${formatResourceBytes(allocation.storage.availableBytes)} available to this server.`
-      )
-      return
-    }
-    const memoryLimitBytes = resolvedMemoryBytes(view.memoryTemplate, variables)
-    if (
-      memoryLimitBytes !== null &&
-      memoryLimitBytes > allocation.memory.availableBytes
-    ) {
-      setError(
-        `Container memory exceeds the ${formatResourceBytes(allocation.memory.availableBytes)} available to this server.`
-      )
+    const allocationError = resourceAllocationError(
+      allocation,
+      diskLimitBytes,
+      resolvedMemoryBytes(view.memoryTemplate, variables)
+    )
+    if (allocationError) {
+      setError(allocationError)
       return
     }
     submittingRef.current = true

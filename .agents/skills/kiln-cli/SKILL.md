@@ -76,9 +76,16 @@ re-enabling resumes it if the credential is still valid. Explicit logout,
 revocation, and expiration still invalidate credentials.
 
 Power commands check the specific action. File writes, deletion, and chmod use
-separate permissions; write includes read. Changing disk limits additionally
-requires limits permission. A read-only CLI credential never gains write access
-from a more permissive preset.
+separate permissions; write includes read. Changing only disk limits requires
+`instance.limits.write`; it does not require configuration-write permission.
+Use `--no-start` on a stopped server when no power permission is granted;
+reconfiguring a running server requires the corresponding stop/restart permission.
+Changing a Brick or non-resource startup variables requires
+`instance.configuration.write`. Resource variables and disk limits require
+`instance.limits.write`; changes affecting both require both permissions.
+Creating a backup (including a restore safety backup) in a user-owned destination
+also requires `backup.download`, because it exports the backup contents. A read-only CLI credential never gains write
+access from a more permissive preset.
 
 ## Update the CLI
 

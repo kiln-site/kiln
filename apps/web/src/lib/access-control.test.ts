@@ -6,6 +6,9 @@ import { Database } from "@/effect/database"
 import type { AuthenticatedUser } from "@/lib/auth-session"
 import {
   accessGrantRoleChangeError,
+  allowedInstanceIdsForUser,
+  canReadRelayNode,
+  type AccessGrant,
   deduplicateEffectiveInstanceGrants,
   deleteInstanceAccessEffect,
   isBlockedInstanceOwnerRoleChange,
@@ -392,4 +395,122 @@ describe("instance access cleanup", () => {
       }).pipe(Effect.provide(databaseLayer))
     }
   )
+})
+
+describe("Relay snapshot visibility", () => {
+  const relayId = "relay-one"
+  const instances = ["instance-one", "instance-two"]
+  const instanceGrant: AccessGrant = {
+    id: "instance-grant",
+    relayId,
+    resourceId: "instance-one",
+    resourceType: "instance",
+    role: "viewer",
+    permissions: ["instance.read"],
+  }
+  const databaseGrant: AccessGrant = {
+    ...instanceGrant,
+    id: "database-grant",
+    resourceId: "database-one",
+    resourceType: "database",
+    permissions: ["database.read"],
+  }
+  const relayInstancesGrant: AccessGrant = {
+    ...instanceGrant,
+    id: "relay-instances-grant",
+    resourceId: relayId,
+    resourceType: "relay",
+  }
+  const relayNodeGrant: AccessGrant = {
+    ...relayInstancesGrant,
+    id: "relay-node-grant",
+    permissions: ["relay.read"],
+  }
+
+  it("keeps child inventory accessible without exposing Relay nodes", () => {
+    for (const [grants, expectedInstances] of [
+      [[instanceGrant], ["instance-one"]],
+      [[databaseGrant], []],
+      [[relayInstancesGrant], instances],
+      [[instanceGrant, databaseGrant], ["instance-one"]],
+    ] satisfies Array<[Array<AccessGrant>, Array<string>]>) {
+      assert.isFalse(canReadRelayNode(authenticatedUser, relayId, grants))
+      assert.deepEqual(
+        [
+          ...allowedInstanceIdsForUser(
+            authenticatedUser,
+            relayId,
+            instances,
+            grants
+          ),
+        ],
+        expectedInstances
+      )
+    }
+  })
+
+  it("requires relay.read on this Relay independently of instance access", () => {
+    assert.isTrue(
+      canReadRelayNode(authenticatedUser, relayId, [relayNodeGrant])
+    )
+    assert.deepEqual(
+      [
+        ...allowedInstanceIdsForUser(authenticatedUser, relayId, instances, [
+          relayNodeGrant,
+        ]),
+      ],
+      []
+    )
+    assert.isTrue(
+      canReadRelayNode(authenticatedUser, relayId, [
+        instanceGrant,
+        relayNodeGrant,
+      ])
+    )
+    assert.deepEqual(
+      [
+        ...allowedInstanceIdsForUser(authenticatedUser, relayId, instances, [
+          instanceGrant,
+          relayNodeGrant,
+        ]),
+      ],
+      ["instance-one"]
+    )
+    assert.isFalse(
+      canReadRelayNode(authenticatedUser, relayId, [
+        { ...relayNodeGrant, relayId: "other-relay" },
+      ])
+    )
+    // Even malformed child grants cannot authorize parent infrastructure.
+    assert.isFalse(
+      canReadRelayNode(authenticatedUser, relayId, [
+        { ...instanceGrant, permissions: ["relay.read"] },
+      ])
+    )
+  })
+
+  it("allows platform admins and development bypass while rejecting disabled users", () => {
+    for (const user of [
+      { ...authenticatedUser, role: "admin" as const },
+      { ...authenticatedUser, isDevelopmentBypass: true },
+    ]) {
+      assert.isTrue(canReadRelayNode(user, relayId, []))
+      assert.deepEqual(
+        [...allowedInstanceIdsForUser(user, relayId, instances, [])],
+        instances
+      )
+    }
+    assert.isFalse(
+      canReadRelayNode({ ...authenticatedUser, status: "disabled" }, relayId, [
+        relayNodeGrant,
+      ])
+    )
+    assert.isFalse(
+      canReadRelayNode(
+        { ...authenticatedUser, role: "relay_creator" },
+        relayId,
+        []
+      )
+    )
+  })
 })
