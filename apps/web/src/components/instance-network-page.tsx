@@ -77,6 +77,7 @@ import {
   accessCapabilitiesQueryOptions,
   queryKeys,
   replaceRelaySnapshotInstance,
+  relaySnapshotQueryOptions,
 } from "@/lib/query-options"
 import type { RelayFleetSnapshot } from "@/lib/relay-fleet"
 import type { InstanceWorkspaceInstance } from "@/lib/relay-selectors"
@@ -228,6 +229,7 @@ function WebRoutesNetworkPage({
   return (
     <main className="min-h-0 flex-1 overflow-y-auto bg-background/55 p-4 sm:p-6">
       <div className="mx-auto max-w-4xl space-y-4">
+        <DatabaseConnectionWarnings />
         <ConfiguredRoutesSection
           key={editGamePort ? "edit-game-port" : "network"}
           canRestart={permissions.power && relayConnected}
@@ -251,6 +253,42 @@ function WebRoutesNetworkPage({
         ) : null}
       </div>
     </main>
+  )
+}
+
+const noDatabaseWarnings: ReadonlyArray<string> = []
+
+function DatabaseConnectionWarnings() {
+  const instance = useInstanceIdentity()
+  const select = React.useCallback(
+    (snapshot: RelayFleetSnapshot) =>
+      snapshot.instances.find(
+        (server) =>
+          server.id === instance.id && server.relayId === instance.relayId
+      )?.databaseConnectionWarnings ?? noDatabaseWarnings,
+    [instance.id, instance.relayId]
+  )
+  const { data: warnings = noDatabaseWarnings } = useQuery({
+    ...relaySnapshotQueryOptions(),
+    select,
+  })
+  if (warnings.length === 0) return null
+  return (
+    <div
+      role="status"
+      className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-4 text-sm"
+    >
+      <p className="font-medium">Some database connections are unavailable</p>
+      <p className="mt-1 text-muted-foreground">
+        Saved connections are retained and retried on the next start or restart.
+        You can also retry connecting from the Databases page.
+      </p>
+      <ul className="mt-2 list-inside list-disc break-all text-muted-foreground">
+        {warnings.map((warning) => (
+          <li key={warning}>{warning}</li>
+        ))}
+      </ul>
+    </div>
   )
 }
 

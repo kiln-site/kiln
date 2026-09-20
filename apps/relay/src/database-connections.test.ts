@@ -167,8 +167,21 @@ describe("database connection recovery", () => {
     expect(await manager.labels(instanceId)).toEqual(
       databaseConnectionLabels([missing])
     )
-    await expect(manager.reconcile(instanceId, "server")).rejects.toThrow(
-      "network is unavailable"
+    await manager.set(instanceId, databaseId, true)
+    expect(await manager.reconcile(instanceId, "server")).toEqual([
+      {
+        databaseId: missing.databaseId,
+        message: expect.stringContaining("network is unavailable"),
+      },
+    ])
+    expect(commandMock).toHaveBeenCalledWith("docker", [
+      "network",
+      "connect",
+      network,
+      "server",
+    ])
+    expect(await manager.labels(instanceId)).toEqual(
+      databaseConnectionLabels([missing, { databaseId, relayId }])
     )
   })
 
@@ -198,9 +211,12 @@ describe("database connection recovery", () => {
       if (args[1][1] === "connect") throw new Error("Docker unavailable")
       return normal(...args)
     })
-    await expect(manager.reconcile(instanceId, "server")).rejects.toThrow(
-      "Docker unavailable"
-    )
+    expect(await manager.reconcile(instanceId, "server")).toEqual([
+      { databaseId, message: expect.stringContaining("Docker unavailable") },
+    ])
+    commandMock.mockImplementation(normal)
+    expect(await manager.reconcile(instanceId, "server")).toEqual([])
+    expect(manager.issues(instanceId)).toEqual([])
     expect(await manager.labels(instanceId)).toEqual(
       databaseConnectionLabels([{ databaseId, relayId }])
     )
@@ -218,5 +234,79 @@ describe("database connection recovery", () => {
     expect(await manager.labels("f".repeat(40))).toEqual(
       databaseConnectionLabels([])
     )
+  })
+  it("isolates discovery races and failed attachments from healthy connections", async () => {
+    const { manager, attached } = await setup()
+    const healthyId = "c".repeat(40)
+    await manager.set(instanceId, databaseId, true)
+    await manager.set(instanceId, healthyId, true)
+    const normal = commandMock.getMockImplementation()!
+    commandMock.mockImplementation(async (...args) => {
+      const commandArgs = args[1]
+      if (commandArgs[0] === "network" && commandArgs[1] === "ls")
+        return { stdout: "network-id healthy-id vanished-id", stderr: "" }
+      if (commandArgs[0] === "network" && commandArgs[1] === "inspect") {
+        if (commandArgs[2] === "vanished-id")
+          throw new Error("Network not found")
+        if (commandArgs[2] === "healthy-id")
+          return {
+            stdout: JSON.stringify([
+              {
+                Name: "healthy",
+                Labels: {
+                  "kiln.relay.owner": "connection-test",
+                  "kiln.database.id": healthyId,
+                  "kiln.database.network": "healthy",
+                },
+              },
+            ]),
+            stderr: "",
+          }
+      }
+      if (commandArgs[1] === "connect" && commandArgs[2] === network)
+        throw new Error("Network disappeared before connect")
+      return normal(...args)
+    })
+    const issues = await manager.reconcile(instanceId, "server")
+    expect(issues).toHaveLength(2)
+    expect(issues.some((issue) => issue.databaseId === databaseId)).toBe(true)
+    expect(attached.has("healthy")).toBe(true)
+    expect(await manager.labels(instanceId)).toEqual(
+      databaseConnectionLabels([
+        { databaseId, relayId },
+        { databaseId: healthyId, relayId },
+      ])
+    )
+  })
+
+  it("reports discovery failure without rejecting server startup", async () => {
+    const { manager } = await setup()
+    await manager.set(instanceId, databaseId, true)
+    commandMock.mockRejectedValue(new Error("Docker unavailable"))
+    expect(await manager.reconcile(instanceId, "server")).toEqual([
+      {
+        databaseId: null,
+        message: expect.stringContaining("Docker unavailable"),
+      },
+    ])
+    expect(await manager.labels(instanceId)).toEqual(
+      databaseConnectionLabels([{ databaseId, relayId }])
+    )
+  })
+
+  it("recognizes only owned database network names even when the network no longer exists", async () => {
+    const { manager } = await setup()
+    expect(
+      manager.isDatabaseNetwork(`connection-test-kiln-db-${databaseId}-network`)
+    ).toBe(true)
+    expect(
+      manager.isDatabaseNetwork(`foreign-kiln-db-${databaseId}-network`)
+    ).toBe(false)
+    expect(manager.isDatabaseNetwork("connection-test-kiln-minecraft")).toBe(
+      false
+    )
+    expect(
+      manager.isDatabaseNetwork("connection-test-kiln-db-invalid-network")
+    ).toBe(false)
   })
 })

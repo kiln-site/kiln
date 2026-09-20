@@ -8,6 +8,7 @@ import {
   type RelayStateStore,
   type RelayStoredDatabaseConnection,
 } from "./effect/state.js"
+import { recoverPromise } from "./effect/promise.js"
 import { relayOwnsLabels } from "./relay-resources.js"
 
 export const DATABASE_CONNECTION_LABEL_PREFIX = "kiln.instance.databases."
@@ -77,7 +78,30 @@ interface DatabaseNetwork {
   Labels: Record<string, string> | null
 }
 
+export interface DatabaseConnectionIssue {
+  databaseId: string | null
+  message: string
+}
+
 export class DatabaseConnections {
+  readonly #issues = new Map<string, Array<DatabaseConnectionIssue>>()
+
+  issues(instanceId: string): ReadonlyArray<DatabaseConnectionIssue> {
+    return this.#issues.get(instanceId) ?? []
+  }
+
+  // Names are retained in Docker's old container snapshot even after a network
+  // disappears. Leave these exclusively to database reconciliation.
+  isDatabaseNetwork(network: string): boolean {
+    const prefix = this.config.resourceNamespace
+      ? `${this.config.resourceNamespace}-kiln-db-`
+      : "kiln-db-"
+    return (
+      network.startsWith(prefix) &&
+      /^[a-f0-9]{40}-network$/u.test(network.slice(prefix.length))
+    )
+  }
+
   constructor(
     readonly config: RelayConfig,
     readonly state: RelayStateStore["Service"]
@@ -143,6 +167,7 @@ export class DatabaseConnections {
   }
 
   async forgetInstance(instanceId: string): Promise<void> {
+    this.#issues.delete(instanceId)
     await Effect.runPromise(
       this.state.deleteInstanceDatabaseConnections(instanceId)
     )
@@ -152,41 +177,85 @@ export class DatabaseConnections {
     await Effect.runPromise(
       this.state.deleteDatabaseConnections(this.config.nodeId, databaseId)
     )
+    for (const [instanceId, issues] of this.#issues)
+      this.#issues.set(
+        instanceId,
+        issues.filter((issue) => issue.databaseId !== databaseId)
+      )
   }
 
-  async reconcile(instanceId: string, service: string): Promise<void> {
-    const connections = await Effect.runPromise(
-      this.state.listInstanceDatabaseConnections(instanceId)
-    )
-    const networks = await this.#networks()
-    const desired = new Set<string>()
-    for (const connection of connections) {
-      if (connection.relayId !== this.config.nodeId) continue
-      const network = networks.get(connection.databaseId)
-      if (!network)
-        throw new Error(
-          `Database ${connection.databaseId} network is unavailable on this Relay`
+  async reconcile(
+    instanceId: string,
+    service: string
+  ): Promise<Array<DatabaseConnectionIssue>> {
+    const issues: Array<DatabaseConnectionIssue> = []
+    // Database attachments are optional to the container lifecycle. Report
+    // discovery/inspection failures too, without discarding the saved intent.
+    await recoverPromise(
+      async () => {
+        const connections = await Effect.runPromise(
+          this.state.listInstanceDatabaseConnections(instanceId)
         )
-      desired.add(network)
-    }
-    if (networks.size === 0) return
-    const inspected = await command("docker", [
-      "inspect",
-      "--format",
-      "{{json .NetworkSettings.Networks}}",
-      service,
-    ])
-    const attached = JSON.parse(inspected.stdout) as Record<string, unknown>
-    for (const network of networks.values()) {
-      if (desired.has(network) && !Object.hasOwn(attached, network)) {
-        await command("docker", ["network", "connect", network, service])
-      } else if (!desired.has(network) && Object.hasOwn(attached, network)) {
-        await command("docker", ["network", "disconnect", network, service])
+        const networks = await this.#networks(issues)
+        const desired = new Set<string>()
+        for (const connection of connections) {
+          if (connection.relayId !== this.config.nodeId) continue
+          const network = networks.get(connection.databaseId)
+          if (!network) {
+            issues.push({
+              databaseId: connection.databaseId,
+              message: "Database network is unavailable on this Relay",
+            })
+            continue
+          }
+          desired.add(network)
+        }
+        if (networks.size === 0) return
+        const inspected = await command("docker", [
+          "inspect",
+          "--format",
+          "{{json .NetworkSettings.Networks}}",
+          service,
+        ])
+        const attached = JSON.parse(inspected.stdout) as Record<string, unknown>
+        for (const [databaseId, network] of networks) {
+          const connect = desired.has(network)
+          if (connect === Object.hasOwn(attached, network)) continue
+          await recoverPromise(
+            () =>
+              command("docker", [
+                "network",
+                connect ? "connect" : "disconnect",
+                network,
+                service,
+              ]),
+            (cause) => {
+              issues.push({
+                databaseId,
+                message: `Could not ${connect ? "connect" : "disconnect"} database: ${cause instanceof Error ? cause.message : String(cause)}`,
+              })
+            }
+          )
+        }
+      },
+      (cause) => {
+        issues.push({
+          databaseId: null,
+          message: `Could not restore database connections: ${cause instanceof Error ? cause.message : String(cause)}`,
+        })
       }
-    }
+    )
+    this.#issues.set(instanceId, issues)
+    for (const issue of issues)
+      console.warn(
+        `${service}: ${issue.databaseId ?? "databases"}: ${issue.message}`
+      )
+    return issues
   }
 
-  async #networks(): Promise<Map<string, string>> {
+  async #networks(
+    issues?: Array<DatabaseConnectionIssue>
+  ): Promise<Map<string, string>> {
     const listed = await command("docker", [
       "network",
       "ls",
@@ -197,8 +266,26 @@ export class DatabaseConnections {
     ])
     const ids = listed.stdout.trim().split(/\s+/u).filter(Boolean)
     if (ids.length === 0) return new Map()
-    const inspected = await command("docker", ["network", "inspect", ...ids])
-    const networks = JSON.parse(inspected.stdout) as Array<DatabaseNetwork>
+    const inspected = await Promise.all(
+      ids.map((id) =>
+        recoverPromise(
+          async () => {
+            const result = await command("docker", ["network", "inspect", id])
+            return JSON.parse(result.stdout) as Array<DatabaseNetwork>
+          },
+          (cause) => {
+            if (!issues) throw cause
+            issues.push({
+              databaseId: null,
+              message: `Could not inspect database network ${id}`,
+            })
+            return []
+          }
+        )
+      )
+    )
+    const networks = inspected.flat()
+    const ambiguous = new Set<string>()
     const result = new Map<string, string>()
     for (const network of networks) {
       if (!relayOwnsLabels(this.config, network.Labels)) continue
@@ -210,8 +297,18 @@ export class DatabaseConnections {
         network.Labels?.["kiln.database.network"] !== network.Name
       )
         continue
-      if (result.has(id.data))
-        throw new Error(`Multiple networks found for database ${id.data}`)
+      if (ambiguous.has(id.data)) continue
+      if (result.has(id.data)) {
+        if (!issues)
+          throw new Error(`Multiple networks found for database ${id.data}`)
+        issues.push({
+          databaseId: id.data,
+          message: "Multiple database networks found; connection skipped",
+        })
+        ambiguous.add(id.data)
+        result.delete(id.data)
+        continue
+      }
       result.set(id.data, network.Name)
     }
     return result

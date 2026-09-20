@@ -971,6 +971,7 @@ export const relayInstanceSchema = z.object({
   desiredState: relayDesiredStateSchema,
   observedState: relayObservedStateSchema,
   stateReason: relayInstanceStateReasonSchema.nullable().default(null),
+  databaseConnectionWarnings: z.array(z.string()).optional(),
   recovery: relayInstanceRecoverySchema.nullable().default(null),
   lifecycle: z.array(relayInstanceLifecycleEventSchema).default([]),
   containerId: z.string().nullable(),

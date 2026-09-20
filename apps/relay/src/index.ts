@@ -1319,7 +1319,15 @@ async function executeControlRequest(
     case "database.network.write": {
       const input = relayDatabaseNetworkSchema.parse(request.payload)
       return serializeInstanceMutation(input.instanceId, () =>
-        databases.updateNetwork(input)
+        Effect.runPromise(
+          relayOperation(() => databases.updateNetwork(input)).pipe(
+            Effect.ensuring(
+              cleanupOperation("database connection snapshot", () =>
+                snapshotHub.refresh()
+              )
+            )
+          )
+        )
       )
     }
     case "database.dump.export":

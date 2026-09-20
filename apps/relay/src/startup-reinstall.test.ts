@@ -289,9 +289,14 @@ describe("startup reinstall pull ordering", () => {
 })
 
 describe("startup database connections", () => {
-  it.each([false, true])(
-    "restores connections before starting a replacement (reinstall=%s)",
-    async (reinstall) => {
+  it.each([
+    { reinstall: false, unavailable: false },
+    { reinstall: true, unavailable: false },
+    { reinstall: false, unavailable: true },
+    { reinstall: true, unavailable: true },
+  ])(
+    "restores connections without failing replacement (reinstall=$reinstall, unavailable=$unavailable)",
+    async ({ reinstall, unavailable }) => {
       const dataDirectory = await mkdtemp(
         join(tmpdir(), "kiln-startup-databases-")
       )
@@ -322,6 +327,14 @@ describe("startup database connections", () => {
         labels: vi.fn(async () => labels),
         reconcile: vi.fn(async () => {
           calls.push(["restore-databases"])
+          return unavailable
+            ? [
+                {
+                  databaseId: "b".repeat(40),
+                  message: "Database network is unavailable",
+                },
+              ]
+            : []
         }),
       } as unknown as DatabaseConnections
       const docker = {

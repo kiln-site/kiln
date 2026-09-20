@@ -378,8 +378,22 @@ export class DatabaseDriver {
     if (!instance) throw new Error("Server not found on this Relay")
     if (this.connections) {
       await this.connections.set(instance.id, database.id, input.connected)
-      await this.connections.reconcile(instance.id, instance.service)
-      return this.#required(input.databaseId)
+      const issues = await this.connections.reconcile(
+        instance.id,
+        instance.service
+      )
+      const updated = await this.#required(input.databaseId)
+      if (
+        updated.connectedInstanceIds.includes(instance.id) !== input.connected
+      ) {
+        const failure =
+          issues.find((issue) => issue.databaseId === database.id) ??
+          issues.find((issue) => issue.databaseId === null)
+        throw new Error(
+          `${failure?.message ?? "Database connection could not be updated"}. Your server was not stopped. Retry the connection from the database page.`
+        )
+      }
+      return updated
     }
     const labels = await this.#labels(database.id)
     const network = requiredLabel(labels, "kiln.database.network")

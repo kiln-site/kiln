@@ -1,6 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test"
 
-import { databaseEngineSupportsLogicalBackups } from "@workspace/contracts"
+import {
+  databaseEngineSupportsLogicalBackups,
+  type RelayManagedDatabase,
+} from "@workspace/contracts"
 
 import type { command as commandFunction } from "./command.js"
 
@@ -15,6 +18,7 @@ import {
   databaseRecoveryLabels,
 } from "./databases.js"
 import { loadConfig } from "./config.js"
+import type { DatabaseConnections } from "./database-connections.js"
 import { DockerDriver } from "./docker.js"
 
 beforeEach(() => {
@@ -235,4 +239,58 @@ describe("managed database deletion", () => {
       expect.anything()
     )
   })
+})
+
+describe("explicit database connections", () => {
+  it.each(["missing", "unavailable", "healthy"] as const)(
+    "handles a %s target without changing server power",
+    async (target) => {
+      const databaseId = "b".repeat(40)
+      const instanceId = "a".repeat(40)
+      const set = vi.fn(async () => undefined)
+      const reconcile = vi.fn(async () => [
+        {
+          databaseId: target === "unavailable" ? databaseId : null,
+          message: "Network unavailable",
+        },
+      ])
+      const findInstance = vi.fn(async () => ({
+        id: instanceId,
+        service: "server",
+      }))
+      const driver = new DatabaseDriver(
+        loadConfig({ NODE_ENV: "test" }),
+        { findInstance } as unknown as DockerDriver,
+        { set, reconcile } as unknown as DatabaseConnections
+      )
+      const database = {
+        id: databaseId,
+        connectedInstanceIds: [],
+      } as unknown as RelayManagedDatabase
+      vi.spyOn(driver, "list")
+        .mockResolvedValueOnce(target === "missing" ? [] : [database])
+        .mockResolvedValue([
+          {
+            ...database,
+            connectedInstanceIds: target === "healthy" ? [instanceId] : [],
+          },
+        ])
+      const result = driver.updateNetwork({
+        databaseId,
+        instanceId,
+        connected: true,
+      })
+      if (target === "healthy")
+        await expect(result).resolves.toMatchObject({
+          connectedInstanceIds: [instanceId],
+        })
+      else
+        await expect(result).rejects.toThrow(
+          target === "missing" ? "Database not found" : "Retry the connection"
+        )
+      expect(set).toHaveBeenCalledTimes(target === "missing" ? 0 : 1)
+      expect(reconcile).toHaveBeenCalledTimes(target === "missing" ? 0 : 1)
+      expect(commandMock).not.toHaveBeenCalled()
+    }
+  )
 })

@@ -834,6 +834,12 @@ export class DockerDriver {
           recoveryState?.recovery,
           desiredState
         ),
+        databaseConnectionWarnings: this.databaseConnections
+          ?.issues(config.id)
+          .map(
+            (issue) =>
+              `${issue.databaseId ?? "Database connections"}: ${issue.message}`
+          ),
         recovery: recoveryState?.recovery ?? null,
         lifecycle: lifecycleSession?.events ?? [],
         status:
@@ -1212,7 +1218,9 @@ export class DockerDriver {
         replacementCreated = true
         const secondaryNetworks = portConfiguration
           ? Object.keys(current.NetworkSettings?.Networks ?? {}).filter(
-              (network) => network !== primaryNetwork
+              (network) =>
+                network !== primaryNetwork &&
+                !this.databaseConnections?.isDatabaseNetwork(network)
             )
           : edgeNetwork
             ? [edgeNetwork]
