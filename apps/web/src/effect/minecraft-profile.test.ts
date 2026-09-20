@@ -2,10 +2,14 @@ import { assert, describe, it } from "@effect/vitest"
 import { Effect } from "effect"
 import { afterEach, vi } from "vite-plus/test"
 
-import { resolveMinecraftProfileEffect } from "./minecraft-profile"
+import {
+  clearMinecraftProfileCacheForTesting,
+  resolveMinecraftProfileEffect,
+} from "./minecraft-profile"
 
 describe("Minecraft profile lookup", () => {
   afterEach(() => {
+    clearMinecraftProfileCacheForTesting()
     vi.unstubAllGlobals()
   })
 
@@ -41,8 +45,22 @@ describe("Minecraft profile lookup", () => {
       assert.strictEqual(fetchMock.mock.calls.length, 1)
       assert.strictEqual(
         fetchMock.mock.calls[0]?.[0],
-        "https://api.mojang.com/users/profiles/minecraft/Notch"
+        "https://api.mojang.com/users/profiles/minecraft/notch"
       )
+    })
+  })
+
+  it.effect("shares cached profiles across equivalent username casing", () => {
+    const fetchMock = vi.fn(async () =>
+      Response.json({ id: "profile-id", name: "Dinnerbone" })
+    )
+    vi.stubGlobal("fetch", fetchMock)
+
+    return Effect.gen(function* () {
+      yield* resolveMinecraftProfileEffect("Dinnerbone")
+      yield* resolveMinecraftProfileEffect("dinnerbone")
+
+      assert.strictEqual(fetchMock.mock.calls.length, 1)
     })
   })
 

@@ -429,7 +429,6 @@ const DatabaseTable = React.memo(function DatabaseTable({
                 observedState: database.observedState,
                 relayId: database.relayId,
               }}
-              live={false}
               name={database.name}
               meta={database.shortId}
               metaClassName="font-mono"

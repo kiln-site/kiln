@@ -1,8 +1,20 @@
 import type { RelayObservedState } from "@workspace/contracts"
+import type { IdentityStatusPresentation } from "@/components/identity-name"
 
-export interface InstanceStatusPresentation {
-  label: string
-  tone: "danger" | "info" | "neutral" | "success" | "warning"
+export type InstanceStatusPresentation = IdentityStatusPresentation
+
+export type RelayIdentityStatus =
+  | "checking"
+  | "connected"
+  | "paused"
+  | "unknown"
+  | "unreachable"
+
+export interface RelayStatusSource {
+  connected?: boolean
+  enabled?: boolean
+  lastError?: string | null
+  relayStatus?: RelayIdentityStatus
 }
 
 interface InstanceIdentity {
@@ -20,13 +32,9 @@ export type InstanceNameInstance =
       relayStatus?: "connected" | "unreachable"
     })
   | (InstanceIdentity & {
-      connected?: boolean
-      enabled?: boolean
       kind: "relay"
-      lastError?: string | null
-      relayStatus?: "connected" | "unreachable"
       source?: "fleet" | "registry"
-    })
+    } & RelayStatusSource)
   | (InstanceIdentity & {
       inventoryStatus?: "available" | "missing" | "unavailable"
       kind: "database"
@@ -45,14 +53,7 @@ export function instanceStatusPresentation(
       : { label: "Status unavailable", tone: "neutral" }
   }
   if (instance.kind === "relay") {
-    if (instance.enabled === false) return { label: "Paused", tone: "info" }
-    if (instance.lastError || instance.relayStatus === "unreachable") {
-      return { label: "Unreachable", tone: "danger" }
-    }
-    if (instance.connected || instance.relayStatus === "connected") {
-      return { label: "Online", tone: "success" }
-    }
-    return { label: "Offline", tone: "neutral" }
+    return relayStatusPresentation(instance)
   }
   if (instance.inventoryStatus === "missing") {
     return { label: "Missing", tone: "danger" }
@@ -63,6 +64,29 @@ export function instanceStatusPresentation(
   return instance.observedState
     ? observedStatus(instance.observedState)
     : { label: "Status unavailable", tone: "neutral" }
+}
+
+export function relayStatusPresentation(
+  relay: RelayStatusSource
+): InstanceStatusPresentation {
+  if (relay.enabled === false || relay.relayStatus === "paused") {
+    return { label: "Paused", tone: "info" }
+  }
+  if (relay.relayStatus === "checking") {
+    return { label: "Checking", tone: "neutral" }
+  }
+  if (relay.relayStatus === "unreachable") {
+    return { label: "Unreachable", tone: "danger" }
+  }
+  if (relay.relayStatus === "connected") {
+    return { label: "Online", tone: "success" }
+  }
+  if (relay.relayStatus === "unknown") {
+    return { label: "Unknown", tone: "neutral" }
+  }
+  if (relay.lastError) return { label: "Unreachable", tone: "danger" }
+  if (relay.connected) return { label: "Online", tone: "success" }
+  return { label: "Offline", tone: "neutral" }
 }
 
 function observedStatus(state: RelayObservedState): InstanceStatusPresentation {

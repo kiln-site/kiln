@@ -28,7 +28,10 @@ import {
   getManagedDatabaseDirectory,
   getManagedDatabases,
 } from "@/server/databases"
-import { isMinecraftUsername } from "@/lib/minecraft-profile"
+import {
+  isMinecraftUsername,
+  minecraftUsernameKey,
+} from "@/lib/minecraft-profile"
 import { getUiPreferences } from "@/server/preferences"
 import { getMinecraftProfile } from "@/server/minecraft"
 import { reconcilePendingPowerSnapshot } from "@/lib/instance-power-state"
@@ -42,7 +45,11 @@ import {
   getRelaySnapshot,
   getRelayTree,
 } from "@/server/relay"
-import { getRelays, getRelayTailscale } from "@/server/relays"
+import {
+  getRelays,
+  getRelayOwnerMinecraftProfiles,
+  getRelayTailscale,
+} from "@/server/relays"
 import { getTailscaleStacks } from "@/server/tailscale"
 import { getAuthState } from "@/server/auth"
 import { getUpdateOverview } from "@/server/updates"
@@ -73,6 +80,7 @@ export const queryKeys = {
   minecraft: {
     profile: (displayName: string) =>
       ["minecraft", "profile", displayName] as const,
+    relayOwners: ["minecraft", "relay-owner-profiles"] as const,
   },
   access: {
     capabilities: ["access", "capabilities"] as const,
@@ -206,10 +214,23 @@ export function authStateQueryOptions() {
 }
 
 export function minecraftProfileQueryOptions(displayName: string) {
+  const username = minecraftUsernameKey(displayName)
   return queryOptions({
-    queryKey: queryKeys.minecraft.profile(displayName),
-    queryFn: () => getMinecraftProfile(),
+    queryKey: queryKeys.minecraft.profile(username),
+    queryFn: ({ signal }) => getMinecraftProfile({ signal }),
     enabled: isMinecraftUsername(displayName),
+    gcTime: 60 * 60_000,
+    retry: false,
+    staleTime: 60 * 60_000,
+  })
+}
+
+export function relayOwnerMinecraftProfilesQueryOptions() {
+  return queryOptions({
+    queryKey: queryKeys.minecraft.relayOwners,
+    queryFn: ({ signal }) => getRelayOwnerMinecraftProfiles({ signal }),
+    gcTime: 60 * 60_000,
+    retry: false,
     staleTime: 60 * 60_000,
   })
 }

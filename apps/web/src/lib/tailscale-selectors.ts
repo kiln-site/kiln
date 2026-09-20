@@ -4,11 +4,15 @@ import type { FleetRelayInstance, RelayFleetSnapshot } from "@/lib/relay-fleet"
 
 export type TailscaleServer = Pick<
   FleetRelayInstance,
+  | "brickId"
+  | "brickSource"
   | "id"
   | "implementation"
   | "name"
+  | "observedState"
   | "relayId"
   | "relayName"
+  | "relayStatus"
   | "routeId"
   | "shortId"
   | "version"
@@ -33,11 +37,15 @@ export function selectTailscaleServers(
         ? []
         : [
             {
+              brickId: instance.brickId,
+              brickSource: instance.brickSource,
               id: instance.id,
               implementation: instance.implementation,
               name: instance.name,
+              observedState: instance.observedState,
               relayId: instance.relayId,
               relayName: instance.relayName,
+              relayStatus: instance.relayStatus,
               routeId: instance.routeId,
               shortId: instance.shortId,
               version: instance.version,
