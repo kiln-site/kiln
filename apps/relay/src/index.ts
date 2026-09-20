@@ -59,6 +59,7 @@ import type {
   RelayInstance,
 } from "@workspace/contracts"
 
+import { DatabaseConnections } from "./database-connections.js"
 import { BrickCatalog } from "./bricks.js"
 import { BackupDownloadServer } from "./backup-download.js"
 import { BackupManager } from "./backups.js"
@@ -171,16 +172,42 @@ await runRelayEffect(
   "relay.startup.runtimeRecovery",
   runtimeRecovery.initialize()
 )
+const databaseConnections = new DatabaseConnections(config, startupCore.state)
 const docker = new DockerDriver(
   config,
   runtimeRecovery,
   bricks,
-  startupCore.state
+  startupCore.state,
+  databaseConnections
 )
-const databases = new DatabaseDriver(config, docker)
+const databases = new DatabaseDriver(config, docker, databaseConnections)
 const systemUpdates = new SystemUpdateManager(config)
 const filesystem = new FilesystemDriver(config)
-const lifecycle = new LifecycleDriver(config, docker, bricks)
+const lifecycle = new LifecycleDriver(
+  config,
+  docker,
+  bricks,
+  databaseConnections
+)
+const databaseConnectionSnapshots = await docker.databaseConnectionSnapshots()
+await databaseConnections.initialize(databaseConnectionSnapshots)
+for (const snapshot of databaseConnectionSnapshots) {
+  await runRelayEffect(
+    "relay.startup.databaseConnections",
+    Effect.tryPromise(() =>
+      databaseConnections.reconcile(snapshot.instanceId, snapshot.service)
+    ).pipe(
+      Effect.catch((error) =>
+        Effect.sync(() => {
+          console.warn(
+            `Could not restore database connections for ${snapshot.service}:`,
+            error
+          )
+        })
+      )
+    )
+  )
+}
 const startupProxySettings = await lifecycle.proxySettings()
 lifecycle.hydrateProxySettings(startupProxySettings)
 let activeTls = await runRelayEffect("relay.startup.tls", loadRelayTls(config))
@@ -1289,10 +1316,12 @@ async function executeControlRequest(
       return databases.rotateCredentials(
         relayRotateDatabaseCredentialsSchema.parse(request.payload)
       )
-    case "database.network.write":
-      return databases.updateNetwork(
-        relayDatabaseNetworkSchema.parse(request.payload)
+    case "database.network.write": {
+      const input = relayDatabaseNetworkSchema.parse(request.payload)
+      return serializeInstanceMutation(input.instanceId, () =>
+        databases.updateNetwork(input)
       )
+    }
     case "database.dump.export":
       return databases.exportDump(
         relayDatabaseExportSchema.parse(request.payload)

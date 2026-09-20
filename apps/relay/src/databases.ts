@@ -19,6 +19,7 @@ import {
 } from "@workspace/contracts"
 import { Effect, Result } from "effect"
 
+import type { DatabaseConnections } from "./database-connections.js"
 import { command } from "./command.js"
 import type { RelayConfig } from "./config.js"
 import type { DockerDriver } from "./docker.js"
@@ -138,7 +139,11 @@ export class DatabaseDriver {
   readonly #config: RelayConfig
   readonly #docker: DockerDriver
 
-  constructor(config: RelayConfig, docker: DockerDriver) {
+  constructor(
+    config: RelayConfig,
+    docker: DockerDriver,
+    readonly connections: DatabaseConnections | null = null
+  ) {
     this.#config = config
     this.#docker = docker
   }
@@ -300,6 +305,7 @@ export class DatabaseDriver {
       })
     }
     if (network) await ignoreCommand(["network", "rm", network])
+    await this.connections?.forgetDatabase(input.databaseId)
     if (input.deleteData && volume) {
       await command("docker", ["volume", "rm", volume])
     }
@@ -370,6 +376,11 @@ export class DatabaseDriver {
     const database = await this.#required(input.databaseId)
     const instance = await this.#docker.findInstance(input.instanceId)
     if (!instance) throw new Error("Server not found on this Relay")
+    if (this.connections) {
+      await this.connections.set(instance.id, database.id, input.connected)
+      await this.connections.reconcile(instance.id, instance.service)
+      return this.#required(input.databaseId)
+    }
     const labels = await this.#labels(database.id)
     const network = requiredLabel(labels, "kiln.database.network")
     const currentlyConnected = database.connectedInstanceIds.includes(

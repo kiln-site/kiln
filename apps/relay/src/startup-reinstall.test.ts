@@ -20,6 +20,10 @@ import type { BrickCatalog } from "./bricks.js"
 import { loadConfig } from "./config.js"
 import type { DockerDriver } from "./docker.js"
 import {
+  databaseConnectionLabels,
+  type DatabaseConnections,
+} from "./database-connections.js"
+import {
   LifecycleDriver,
   resolveInstanceStartupReconfigure,
 } from "./lifecycle.js"
@@ -282,4 +286,88 @@ describe("startup reinstall pull ordering", () => {
     expect(calls).not.toContain("stop")
     expect(calls).not.toContain("rm")
   })
+})
+
+describe("startup database connections", () => {
+  it.each([false, true])(
+    "restores connections before starting a replacement (reinstall=%s)",
+    async (reinstall) => {
+      const dataDirectory = await mkdtemp(
+        join(tmpdir(), "kiln-startup-databases-")
+      )
+      temporaryDirectories.push(dataDirectory)
+      const existing = instance()
+      await mkdir(join(dataDirectory, "instances", existing.directory), {
+        recursive: true,
+      })
+      const calls: Array<Array<string>> = []
+      commandMock.mockImplementation(
+        async (_executable: string, args: Array<string>) => {
+          calls.push(args)
+          if (args[0] === "network" && args[1] === "inspect")
+            return {
+              stderr: "",
+              stdout: JSON.stringify({
+                "kiln.relay.network": "game",
+                "kiln.relay.owner": "database-test",
+              }),
+            }
+          return { stderr: "", stdout: "[]" }
+        }
+      )
+      const labels = databaseConnectionLabels([
+        { databaseId: "b".repeat(40), relayId: "r".repeat(43) },
+      ])
+      const connections = {
+        labels: vi.fn(async () => labels),
+        reconcile: vi.fn(async () => {
+          calls.push(["restore-databases"])
+        }),
+      } as unknown as DatabaseConnections
+      const docker = {
+        inspectInstances: vi.fn(async () => [existing]),
+        recordProvisionedState: vi.fn(async () => undefined),
+      } as unknown as DockerDriver
+      const lifecycle = new LifecycleDriver(
+        loadConfig({
+          KILN_RELAY_DATA_DIR: dataDirectory,
+          KILN_RELAY_GAME_PORT_RANGE: "32123-32123",
+          KILN_RELAY_PROXY: "hearth",
+          KILN_RELAY_RESOURCE_NAMESPACE: "database-test",
+          NODE_ENV: "test",
+        }),
+        docker,
+        {
+          recipe: async () => recipe,
+          saveSnapshot: async () => "b".repeat(64),
+        } as unknown as BrickCatalog,
+        connections
+      )
+      await lifecycle.reconfigureInstance(
+        existing.id,
+        relayUpdateInstanceStartupSchema.parse(
+          reinstall
+            ? { reinstall: true }
+            : { start: true, variables: appliedVariables }
+        )
+      )
+      const create = calls.find(
+        (args) => args[0] === "container" && args[1] === "create"
+      )!
+      for (const [key, value] of Object.entries(labels))
+        expect(create).toContain(`${key}=${value}`)
+      expect(connections.labels).toHaveBeenCalledWith(existing.id)
+      expect(connections.reconcile).toHaveBeenCalledWith(
+        existing.id,
+        "database-test-kiln-aaaaaaaa"
+      )
+      const restoreIndex = calls.findIndex(
+        (args) => args[0] === "restore-databases"
+      )
+      expect(restoreIndex).toBeGreaterThan(calls.indexOf(create))
+      expect(restoreIndex).toBeLessThan(
+        calls.findIndex((args) => args[0] === "start")
+      )
+    }
+  )
 })

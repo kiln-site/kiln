@@ -114,6 +114,14 @@ export interface RelayStoredWebRoute extends RelayInstanceWebRoute {
   readonly instanceId: string
 }
 
+export interface RelayStoredDatabaseConnection {
+  readonly instanceId: string
+  readonly databaseId: string
+  readonly relayId: string
+}
+
+export const DATABASE_CONNECTION_RECOVERY_KEY = "database_connections_recovered"
+
 export interface RelayStoredInstanceName {
   readonly instanceId: string
   readonly name: string
@@ -336,6 +344,26 @@ const RelayProvisioningJobRowSchema = Schema.Struct({
 export class RelayStateStore extends Context.Service<
   RelayStateStore,
   {
+    readonly listInstanceDatabaseConnections: (
+      instanceId: string
+    ) => Effect.Effect<
+      ReadonlyArray<RelayStoredDatabaseConnection>,
+      RelayStateError
+    >
+    readonly setDatabaseConnection: (
+      connection: RelayStoredDatabaseConnection,
+      connected: boolean
+    ) => Effect.Effect<void, RelayStateError>
+    readonly recoverDatabaseConnections: (
+      connections: ReadonlyArray<RelayStoredDatabaseConnection>
+    ) => Effect.Effect<void, RelayStateError>
+    readonly deleteInstanceDatabaseConnections: (
+      instanceId: string
+    ) => Effect.Effect<void, RelayStateError>
+    readonly deleteDatabaseConnections: (
+      relayId: string,
+      databaseId: string
+    ) => Effect.Effect<void, RelayStateError>
     readonly appendAudit: (
       input: RelayAuditInput
     ) => Effect.Effect<void, RelayStateError>
@@ -914,6 +942,21 @@ const migrations = SqliteMigrator.fromRecord({
       ON relay_browser_file_replays (expires_at)
     `
   }),
+  "15_database_connections": Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient
+    yield* sql`
+      CREATE TABLE relay_database_connections (
+        instance_id TEXT NOT NULL,
+        database_id TEXT NOT NULL,
+        relay_id TEXT NOT NULL,
+        PRIMARY KEY (instance_id, database_id)
+      ) STRICT
+    `
+    yield* sql`
+      CREATE INDEX relay_database_connections_target
+      ON relay_database_connections (relay_id, database_id)
+    `
+  }),
 })
 
 export function scrubBackupTaskInputJson(inputJson: string): string {
@@ -1441,6 +1484,78 @@ const makeRelayStateStore = Effect.gen(function* () {
         : ""
 
   return RelayStateStore.of({
+    listInstanceDatabaseConnections: (instanceId) =>
+      run(
+        "list_instance_database_connections",
+        sql<RelayStoredDatabaseConnection>`
+          SELECT instance_id AS instanceId, database_id AS databaseId,
+                 relay_id AS relayId
+          FROM relay_database_connections WHERE instance_id = ${instanceId}
+          ORDER BY database_id
+        `
+      ),
+    setDatabaseConnection: (connection, connected) =>
+      run(
+        "set_database_connection",
+        connected
+          ? sql`
+              INSERT INTO relay_database_connections (
+                instance_id, database_id, relay_id
+              ) VALUES (
+                ${connection.instanceId}, ${connection.databaseId}, ${connection.relayId}
+              )
+              ON CONFLICT (instance_id, database_id)
+              DO UPDATE SET relay_id = excluded.relay_id
+            `.pipe(Effect.asVoid)
+          : sql`
+              DELETE FROM relay_database_connections
+              WHERE instance_id = ${connection.instanceId}
+                AND database_id = ${connection.databaseId}
+                AND relay_id = ${connection.relayId}
+            `.pipe(Effect.asVoid)
+      ),
+    recoverDatabaseConnections: (connections) =>
+      run(
+        "recover_database_connections",
+        sql.withTransaction(
+          Effect.gen(function* () {
+            const initialized = yield* sql`
+              SELECT value FROM relay_metadata
+              WHERE key = ${DATABASE_CONNECTION_RECOVERY_KEY}
+            `
+            if (initialized.length > 0) return
+            for (const connection of connections) {
+              yield* sql`
+                INSERT INTO relay_database_connections (
+                  instance_id, database_id, relay_id
+                ) VALUES (
+                  ${connection.instanceId}, ${connection.databaseId}, ${connection.relayId}
+                )
+                ON CONFLICT (instance_id, database_id) DO NOTHING
+              `
+            }
+            yield* sql`
+              INSERT INTO relay_metadata (key, value)
+              VALUES (${DATABASE_CONNECTION_RECOVERY_KEY}, '1')
+            `
+          })
+        )
+      ),
+    deleteInstanceDatabaseConnections: (instanceId) =>
+      run(
+        "delete_instance_database_connections",
+        sql`
+          DELETE FROM relay_database_connections WHERE instance_id = ${instanceId}
+        `.pipe(Effect.asVoid)
+      ),
+    deleteDatabaseConnections: (relayId, databaseId) =>
+      run(
+        "delete_database_connections",
+        sql`
+          DELETE FROM relay_database_connections
+          WHERE relay_id = ${relayId} AND database_id = ${databaseId}
+        `.pipe(Effect.asVoid)
+      ),
     appendAudit: (input) =>
       run(
         "append_audit",
