@@ -345,7 +345,7 @@ export const relayInstanceNameSchema = z
     MAXIMUM_INSTANCE_NAME_LENGTH,
     `Names must be ${MAXIMUM_INSTANCE_NAME_LENGTH} characters or fewer`
   )
-export const DEFAULT_INSTANCE_DISK_LIMIT_BYTES = 25 * 1024 ** 3
+export const DEFAULT_INSTANCE_DISK_LIMIT_BYTES = 5 * 1024 ** 3
 export const RELAY_NODE_DISK_RESERVE_BYTES = 10 * 1024 ** 3
 
 const relayDiskLimitBytesSchema = z
