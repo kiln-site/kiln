@@ -40,6 +40,7 @@ export interface EditorSessionStore {
   getDiskConflictSnapshot: () => boolean
   getDirtySnapshot: () => boolean
   getExpectedModifiedAt: () => string
+  getRedactSensitiveSnapshot: () => boolean
   getReviewChangesSnapshot: () => boolean
   getSavedValueSnapshot: () => string
   getSaveErrorSnapshot: () => string | null
@@ -56,6 +57,7 @@ export interface EditorSessionStore {
   setSearchOpen: (open: boolean) => void
   setValue: (value: string) => void
   subscribe: (listener: () => void) => () => void
+  toggleRedactSensitive: () => void
   toggleReviewChanges: () => void
   toggleWrapLines: () => void
 }
@@ -244,6 +246,7 @@ export function createEditorSessionStore(
   let saving = false
   let saveError: string | null = null
   let searchOpen = false
+  let redactSensitive = true
   let reviewChanges = true
   let wrapLines = true
   const listeners = new Set<() => void>()
@@ -263,6 +266,7 @@ export function createEditorSessionStore(
     getDiskConflictSnapshot: () => diskConflict,
     getDirtySnapshot: () => dirty,
     getExpectedModifiedAt: () => expectedModifiedAt,
+    getRedactSensitiveSnapshot: () => redactSensitive,
     getReviewChangesSnapshot: () => reviewChanges,
     getSavedValueSnapshot: () => savedValue,
     getSaveErrorSnapshot: () => saveError,
@@ -316,6 +320,10 @@ export function createEditorSessionStore(
     subscribe: (listener) => {
       listeners.add(listener)
       return () => listeners.delete(listener)
+    },
+    toggleRedactSensitive: () => {
+      redactSensitive = !redactSensitive
+      notify()
     },
     toggleReviewChanges: () => {
       reviewChanges = !reviewChanges
