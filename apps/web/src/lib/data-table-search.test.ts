@@ -1,8 +1,9 @@
-import { describe, expect, it, vi } from "vite-plus/test"
+import { afterEach, describe, expect, it, vi } from "vite-plus/test"
 
 import {
   createDataTableSearchStore,
   filterDataTableRows,
+  replaceDataTableUrlSearch,
 } from "@/lib/data-table-search"
 
 describe("data table search", () => {
@@ -48,5 +49,39 @@ describe("data table search", () => {
         new WeakMap()
       )
     ).toBe(rows)
+  })
+})
+
+describe("replaceDataTableUrlSearch", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    vi.useRealTimers()
+  })
+
+  it("writes the last value once and skips stale pathnames", () => {
+    vi.useFakeTimers()
+    const replaceState = vi.fn()
+    const location = {
+      href: "https://kiln.test/infra/servers",
+      pathname: "/infra/servers",
+    }
+    vi.stubGlobal("History", { prototype: { replaceState } })
+    vi.stubGlobal("window", { history: { state: null }, location })
+
+    replaceDataTableUrlSearch("s")
+    replaceDataTableUrlSearch("su")
+    replaceDataTableUrlSearch("survival")
+    vi.runAllTimers()
+
+    expect(replaceState).toHaveBeenCalledOnce()
+    expect(replaceState.mock.calls[0]?.[2]).toBe(
+      "/infra/servers?search=survival"
+    )
+
+    replaceDataTableUrlSearch("ignored")
+    location.pathname = "/infra/databases"
+    vi.runAllTimers()
+
+    expect(replaceState).toHaveBeenCalledOnce()
   })
 })

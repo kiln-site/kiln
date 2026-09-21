@@ -72,10 +72,15 @@ export const DataTableToolbar = React.memo(function DataTableToolbar({
   const [mobileSearchOpen, setMobileSearchOpen] = React.useState(
     () => search.store.getSnapshot().length > 0
   )
+  const focusOnOpenRef = React.useRef(false)
   useDataTableSearchInput(inputRef, search.store)
 
+  // Only focus when the mobile search button opened the input. Mounting with a
+  // search already in the URL must not steal focus on desktop.
   React.useEffect(() => {
-    if (mobileSearchOpen) inputRef.current?.focus()
+    if (!focusOnOpenRef.current) return
+    focusOnOpenRef.current = false
+    inputRef.current?.focus()
   }, [mobileSearchOpen])
 
   const setSearch = React.useCallback(
@@ -106,7 +111,10 @@ export const DataTableToolbar = React.memo(function DataTableToolbar({
               size="icon"
               type="button"
               variant="outline"
-              onClick={() => setMobileSearchOpen(true)}
+              onClick={() => {
+                focusOnOpenRef.current = true
+                setMobileSearchOpen(true)
+              }}
             >
               <Search />
             </Button>

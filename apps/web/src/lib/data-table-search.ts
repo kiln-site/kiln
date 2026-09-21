@@ -53,22 +53,27 @@ export function useDataTableSearchStore(value: string): DataTableSearchStore {
   return store
 }
 
+const DATA_TABLE_URL_SEARCH_DELAY_MS = 200
+const pendingUrlSearchWrites = new Map<string, ReturnType<typeof setTimeout>>()
+
+// WebKit throws a SecurityError after 100 history writes in 30 seconds, so the
+// URL trails typing instead of tracking it per keystroke. The search store stays
+// immediate; only the address bar is deferred.
 export function replaceDataTableUrlSearch(
   value: string,
   parameter = "search"
 ): void {
-  const url = new URL(window.location.href)
-  if (value.length > 0) url.searchParams.set(parameter, value)
-  else url.searchParams.delete(parameter)
+  const pending = pendingUrlSearchWrites.get(parameter)
+  if (pending !== undefined) clearTimeout(pending)
 
-  // TanStack patches the history instance methods so router consumers update
-  // after navigation. Search typing stays local to the table workspace to avoid
-  // repainting the router's SafeFragment and CatchBoundary tree per keystroke.
-  History.prototype.replaceState.call(
-    window.history,
-    window.history.state,
-    "",
-    `${url.pathname}${url.search}${url.hash}`
+  const pathname = window.location.pathname
+  pendingUrlSearchWrites.set(
+    parameter,
+    setTimeout(() => {
+      pendingUrlSearchWrites.delete(parameter)
+      if (window.location.pathname !== pathname) return
+      writeDataTableUrlSearch(value, parameter)
+    }, DATA_TABLE_URL_SEARCH_DELAY_MS)
   )
 }
 
@@ -118,6 +123,22 @@ function getDataTableSearchText<TData extends object>(
   }
   cache.set(row, searchText)
   return searchText
+}
+
+function writeDataTableUrlSearch(value: string, parameter: string): void {
+  const url = new URL(window.location.href)
+  if (value.length > 0) url.searchParams.set(parameter, value)
+  else url.searchParams.delete(parameter)
+
+  // TanStack patches the history instance methods so router consumers update
+  // after navigation. Search typing stays local to the table workspace to avoid
+  // repainting the router's SafeFragment and CatchBoundary tree per keystroke.
+  History.prototype.replaceState.call(
+    window.history,
+    window.history.state,
+    "",
+    `${url.pathname}${url.search}${url.hash}`
+  )
 }
 
 function normalizeDataTableSearchValue(value: DataTableSearchValue): string {
