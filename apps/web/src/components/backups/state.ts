@@ -1,7 +1,7 @@
 import {
   createWorkspaceTableSearchStore,
   type WorkspaceTableSearchStore,
-} from "@/components/workspace-data-table"
+} from "@/components/workspace-table"
 import type { BackupRun } from "@/lib/backup-runs"
 
 export type Backup = BackupRun

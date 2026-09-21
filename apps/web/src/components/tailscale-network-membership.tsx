@@ -54,12 +54,12 @@ import {
 } from "@workspace/ui/components/tooltip"
 
 import {
-  WorkspaceDataTable,
+  WorkspaceTable,
   WorkspaceTableCell,
   WorkspaceTableHead,
   WorkspaceTableHeading,
-} from "@/components/workspace-data-table"
-import type { WorkspaceTableSearchStore } from "@/components/workspace-data-table"
+} from "@/components/workspace-table"
+import type { WorkspaceTableSearchStore } from "@/components/workspace-table"
 import { InstanceName } from "@/components/instance-name"
 import {
   ServerPickerList,
@@ -524,7 +524,7 @@ const TailscaleMembershipTable = React.memo(function TailscaleMembershipTable({
   )
 
   return (
-    <WorkspaceDataTable
+    <WorkspaceTable
       getRowKey={getRowKey}
       getSearchText={getSearchText}
       head={<MembershipTableHead />}

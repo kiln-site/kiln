@@ -89,14 +89,14 @@ import {
 } from "@workspace/ui/components/tooltip"
 
 import {
-  WorkspaceDataTable,
+  WorkspaceTable,
   WorkspaceTableCell,
   WorkspaceTableHead,
   WorkspaceTableHeading,
   createWorkspaceTableSearchStore,
   useWorkspaceTableSearchInput,
-} from "@/components/workspace-data-table"
-import type { WorkspaceTableSearchStore } from "@/components/workspace-data-table"
+} from "@/components/workspace-table"
+import type { WorkspaceTableSearchStore } from "@/components/workspace-table"
 import {
   ServerPickerList,
   serverPickerOptionKey,
@@ -389,7 +389,7 @@ const ScheduleTable = React.memo(function ScheduleTable({
   )
 
   return (
-    <WorkspaceDataTable
+    <WorkspaceTable
       getRowKey={scheduleRowKey}
       getSearchText={scheduleSearchText}
       head={<ScheduleTableHead />}
@@ -1059,7 +1059,7 @@ const ScheduleHistoryTable = React.memo(function ScheduleHistoryTable({
     [scopeActive]
   )
   return (
-    <WorkspaceDataTable
+    <WorkspaceTable
       getRowKey={historyRowKey}
       getSearchText={historySearchText}
       head={<ScheduleHistoryHead />}
