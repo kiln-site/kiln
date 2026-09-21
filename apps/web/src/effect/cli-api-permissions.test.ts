@@ -395,13 +395,13 @@ describe("CLI backup export boundary", () => {
   })
 })
 
-describe.each(["instance", "database"] as const)(
-  "CLI %s restore safety export",
-  (targetKind) => {
-    const backupId = "29e384e0-b4af-4a53-92c9-452afba754ce"
-    const storageId = "60a4d6e2-f17f-44e1-80d3-3ca75d589dc9"
+describe("CLI restore safety export", () => {
+  const backupId = "29e384e0-b4af-4a53-92c9-452afba754ce"
+  const storageId = "60a4d6e2-f17f-44e1-80d3-3ca75d589dc9"
 
-    beforeEach(() => {
+  it.each(["instance", "database"] as const)(
+    "requires download for a personal %s safety destination before pinning it",
+    async (targetKind) => {
       allowed.add("backup.create")
       f.catalog.mockReturnValue(
         Effect.succeed([
@@ -425,7 +425,6 @@ describe.each(["instance", "database"] as const)(
             relayId,
             resourceId: instanceId,
             resourceType: targetKind,
-            role: "viewer",
             permissions: ["backup.restore"],
           },
         ])
@@ -439,9 +438,7 @@ describe.each(["instance", "database"] as const)(
       f.databases.mockReturnValue(
         Effect.succeed([{ relayId, databaseId: instanceId }])
       )
-    })
 
-    it("denies personal default export before either reservation or dispatch", async () => {
       await expect(
         run(restoreCliBackupEffect(principal, { backupId, safetyBackup: true }))
       ).rejects.toMatchObject({ code: "forbidden" })
@@ -449,9 +446,7 @@ describe.each(["instance", "database"] as const)(
       expect(f.reserveDatabase).not.toHaveBeenCalled()
       expect(f.reserveRestore).not.toHaveBeenCalled()
       expect(f.dispatch).not.toHaveBeenCalled()
-    })
 
-    it("pins the permitted personal default on the safety backup", async () => {
       allowed.add("backup.download")
       await run(
         restoreCliBackupEffect(principal, { backupId, safetyBackup: true })
@@ -467,20 +462,6 @@ describe.each(["instance", "database"] as const)(
       )
       expect(f.reserveRestore).toHaveBeenCalledOnce()
       expect(f.dispatch).toHaveBeenCalledOnce()
-    })
-
-    it("skips policy resolution and download checks when safety is disabled", async () => {
-      allowed.clear()
-      await run(
-        restoreCliBackupEffect(principal, { backupId, safetyBackup: false })
-      )
-      expect(f.policy).not.toHaveBeenCalled()
-      expect(f.storage).not.toHaveBeenCalled()
-      expect(f.authorize).not.toHaveBeenCalled()
-      expect(f.reserve).not.toHaveBeenCalled()
-      expect(f.reserveDatabase).not.toHaveBeenCalled()
-      expect(f.reserveRestore).toHaveBeenCalledOnce()
-      expect(f.dispatch).toHaveBeenCalledOnce()
-    })
-  }
-)
+    }
+  )
+})

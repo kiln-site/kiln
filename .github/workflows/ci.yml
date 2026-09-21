@@ -20,7 +20,7 @@ jobs:
               vp run -r typecheck
               vp check
           - name: Tests
-            command: vp run -r test
+            command: pnpm test
           - name: Build
             command: |
               vp run -r build

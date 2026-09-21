@@ -42,7 +42,7 @@ import {
 import type { AuthenticatedUser } from "@/lib/auth-session"
 import {
   hasScheduleTargetPermission,
-  scheduleActionPermission,
+  scheduleActionOptionPermissions,
   scheduleAuthorizationFailure,
 } from "@/lib/schedule-permissions"
 import { relayRpc } from "@/lib/relay-connection"
@@ -158,10 +158,12 @@ export const getScheduleOptions = createServerFn({ method: "GET" }).handler(
       const permittedActions = (
         ["console_command", "backup", "power", "wait"] as const
       ).filter((type) => {
-        const permission = scheduleActionPermission({ type }, target)
+        const permissions = scheduleActionOptionPermissions(type, target)
         return (
-          permission === null ||
-          hasScheduleTargetPermission({ grants, permission, target, user })
+          permissions.length === 0 ||
+          permissions.some((permission) =>
+            hasScheduleTargetPermission({ grants, permission, target, user })
+          )
         )
       })
       return [

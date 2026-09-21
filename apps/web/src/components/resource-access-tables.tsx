@@ -1,4 +1,11 @@
-import { memo, useMemo, useState, useSyncExternalStore } from "react"
+import {
+  createContext,
+  memo,
+  useContext,
+  useMemo,
+  useState,
+  useSyncExternalStore,
+} from "react"
 import { Link } from "@tanstack/react-router"
 import { EllipsisVertical, Plus, Shield, Users } from "lucide-react"
 import { Button } from "@workspace/ui/components/button"
@@ -22,7 +29,7 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@workspace/ui/components/tooltip"
-import { showToast } from "@workspace/ui/components/sonner"
+import { copyWithToast, utcTimestamp } from "@/components/access-format"
 import { DataTable } from "@/components/data-table-view"
 import { DataTableEmptyState, DataTableTextCell } from "@/components/data-table"
 import {
@@ -40,7 +47,6 @@ import {
   type DataTableSearchStore,
 } from "@/lib/data-table-search"
 import type { DataTableSource } from "@/lib/data-table-source"
-import { recoverPromise } from "@/effect/promise"
 import type { getResourceAccess } from "@/server/resource-access"
 
 export type ScopeAccess = Awaited<ReturnType<typeof getResourceAccess>>
@@ -48,6 +54,12 @@ export type Person = ScopeAccess["people"][number]
 export type Preset = ScopeAccess["presets"][number]
 type DefaultPreset = ScopeAccess["defaults"][number]
 const personHelper = createDataTableColumnHelper<Person>()
+
+// The accept-for-user mutation only disables one dropdown item, so it is read
+// from context instead of a prop: a pending accept must not rebuild the column
+// definitions and re-render every row behind the open menu.
+export const AcceptingInvitationContext = createContext(false)
+
 interface PeopleProps {
   searchStore: DataTableSearchStore
   access?: ScopeAccess
@@ -57,7 +69,6 @@ interface PeopleProps {
   onRevoke: (person: Person) => void
   onAccept: (person: Person) => void
   onInvite: () => void
-  accepting: boolean
 }
 
 export const ResourcePeopleTable = memo(function ResourcePeopleTable({
@@ -69,7 +80,6 @@ export const ResourcePeopleTable = memo(function ResourcePeopleTable({
   onTransfer,
   onRevoke,
   onAccept,
-  accepting,
 }: PeopleProps) {
   const search = useSyncExternalStore(
     searchStore.subscribe,
@@ -150,7 +160,7 @@ export const ResourcePeopleTable = memo(function ResourcePeopleTable({
           header: "Updated",
           sortFn: "text",
           cell: ({ row }) => (
-            <DataTableTextCell value={date(row.original.updatedAt)} />
+            <DataTableTextCell value={utcTimestamp(row.original.updatedAt)} />
           ),
           meta: dataTableColumnMeta({ hideBelow: "xl", width: "12rem" }),
         }),
@@ -165,7 +175,6 @@ export const ResourcePeopleTable = memo(function ResourcePeopleTable({
               onTransfer={onTransfer}
               onRevoke={onRevoke}
               onAccept={onAccept}
-              accepting={accepting}
             />
           ),
           meta: dataTableColumnMeta({ width: "3.5rem" }),
@@ -173,7 +182,7 @@ export const ResourcePeopleTable = memo(function ResourcePeopleTable({
       ]),
       getRowId: (person) => person.id,
     })
-  }, [access, onEdit, onTransfer, onRevoke, onAccept, accepting])
+  }, [access, onEdit, onTransfer, onRevoke, onAccept])
   return (
     <DataTableWorkspace
       toolbar={
@@ -234,10 +243,9 @@ const PersonActions = memo(function PersonActions({
   onTransfer,
   onRevoke,
   onAccept,
-  accepting,
 }: Pick<
   PeopleProps,
-  "access" | "onEdit" | "onTransfer" | "onRevoke" | "onAccept" | "accepting"
+  "access" | "onEdit" | "onTransfer" | "onRevoke" | "onAccept"
 > & { person: Person }) {
   const [viewing, setViewing] = useState(false)
   const canEdit = access?.canManage && !person.inherited && !person.isOwner
@@ -268,7 +276,6 @@ const PersonActions = memo(function PersonActions({
           <PersonInvitationItems
             person={person}
             access={access}
-            accepting={accepting}
             onAccept={onAccept}
           />
           {access?.canTransferOwnership &&
@@ -333,37 +340,25 @@ function PersonActivityItem({
 function PersonInvitationItems({
   person,
   access,
-  accepting,
   onAccept,
-}: Pick<PeopleProps, "access" | "accepting" | "onAccept"> & {
+}: Pick<PeopleProps, "access" | "onAccept"> & {
   person: Person
 }) {
+  const accepting = useContext(AcceptingInvitationContext)
   return (
     <>
       {" "}
       {person.invitationId ? (
         <DropdownMenuItem
-          onSelect={() => {
-            void recoverPromise(
-              async () => {
-                await navigator.clipboard.writeText(
-                  new URL(
-                    `/invite?id=${encodeURIComponent(person.invitationId!)}`,
-                    window.location.origin
-                  ).toString()
-                )
-                showToast({
-                  type: "success",
-                  message: "Invitation link copied",
-                })
-              },
-              () =>
-                showToast({
-                  type: "error",
-                  message: "Could not copy invitation link",
-                })
+          onSelect={() =>
+            copyWithToast(
+              new URL(
+                `/invite?id=${encodeURIComponent(person.invitationId!)}`,
+                window.location.origin
+              ).toString(),
+              "Invitation link"
             )
-          }}
+          }
         >
           Copy invitation link
         </DropdownMenuItem>
@@ -432,14 +427,20 @@ interface PresetRow {
 const presetHelper = createDataTableColumnHelper<PresetRow>()
 interface PresetsProps {
   access?: ScopeAccess
-  source: DataTableSource<Person>
+  error: Error | null
+  loading: boolean
+  refreshing: boolean
+  onRetry: () => void
   onEdit: (preset: Preset) => void
   onDelete: (preset: Preset) => void
   onCreate: () => void
 }
 export const ResourcePresetsTable = memo(function ResourcePresetsTable({
   access,
-  source,
+  error,
+  loading,
+  refreshing,
+  onRetry,
   onEdit,
   onDelete,
   onCreate,
@@ -462,14 +463,22 @@ export const ResourcePresetsTable = memo(function ResourcePresetsTable({
     ],
     [access?.defaults, access?.presets]
   )
+  // Presets load from their own request, so people-table pagination and search
+  // no longer flash this table through a loading state it never entered.
   const presetSource = useMemo<DataTableSource<PresetRow>>(
     () => ({
-      body: source.body,
-      refreshing: source.refreshing,
-      resetKey: source.resetKey,
+      body: loading
+        ? { kind: "loading" }
+        : error
+          ? { kind: "error", error, retry: onRetry }
+          : { kind: "ready" },
+      refreshing,
+      resetKey: access
+        ? `${access.scope.relayId}:${access.scope.resourceId}`
+        : undefined,
       rows,
     }),
-    [source.body, source.refreshing, source.resetKey, rows]
+    [loading, error, onRetry, refreshing, access, rows]
   )
   const definition = useMemo(
     () =>
@@ -526,7 +535,7 @@ export const ResourcePresetsTable = memo(function ResourcePresetsTable({
               <DataTableTextCell
                 value={
                   row.original.custom
-                    ? date(row.original.custom.updatedAt)
+                    ? utcTimestamp(row.original.custom.updatedAt)
                     : "—"
                 }
               />
@@ -676,8 +685,5 @@ function personStatus(person: Person) {
       : person.inherited
         ? "From Relay"
         : "Active"
-}
-function date(value: string) {
-  return `${value.slice(0, 16).replace("T", " ")} UTC`
 }
 function ignoreSelections() {}

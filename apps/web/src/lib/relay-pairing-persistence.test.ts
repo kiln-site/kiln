@@ -37,7 +37,6 @@ const pairedRelay = {
   hostname: "relay.example.com",
   id: "relay-id",
   name: "Relay",
-  ownerGrantId: "grant-id",
   port: 443,
   relayCaCertificate: null,
   relayPublicKey: "relay-public-key",
@@ -45,7 +44,7 @@ const pairedRelay = {
 }
 
 describe("Relay pairing persistence", () => {
-  it.effect("commits a new Relay and creator owner grant together", () => {
+  it.effect("commits a new Relay without a separate owner grant", () => {
     const writes: Array<{ sql: string; values: ReadonlyArray<unknown> }> = []
     const databaseLayer = pairingDatabaseLayer({
       persistedRows: [],
@@ -55,20 +54,14 @@ describe("Relay pairing persistence", () => {
     return Effect.gen(function* () {
       yield* persistPairedRelayEffect(pairedRelay)
 
-      assert.strictEqual(writes.length, 2)
+      // Creator authority derives from relay.created_by; no empty grant row.
+      assert.strictEqual(writes.length, 1)
       assert.match(writes[0]?.sql ?? "", /INSERT INTO .*kiln_relay/u)
-      assert.match(writes[1]?.sql ?? "", /INSERT INTO .*kiln_access_grant/u)
-      assert.deepEqual(writes[1]?.values, [
-        "grant-id",
-        "creator",
-        "relay-id",
-        "relay-id",
-        "creator",
-      ])
+      assert.notMatch(writes[0]?.sql ?? "", /kiln_access_grant/u)
     }).pipe(Effect.provide(databaseLayer))
   })
 
-  it.effect("repairs a creator Relay and restores its owner grant", () => {
+  it.effect("repairs a creator Relay in place", () => {
     const writes: Array<{ sql: string; values: ReadonlyArray<unknown> }> = []
     const databaseLayer = pairingDatabaseLayer({
       persistedRows: [{ created_by: "creator" }],
@@ -81,10 +74,8 @@ describe("Relay pairing persistence", () => {
         expectedExisting: true,
       })
 
-      assert.strictEqual(writes.length, 2)
+      assert.strictEqual(writes.length, 1)
       assert.match(writes[0]?.sql ?? "", /UPDATE .*kiln_relay/u)
-      assert.match(writes[1]?.sql ?? "", /INSERT INTO .*kiln_access_grant/u)
-      assert.include(writes[1]?.sql, "ON DUPLICATE KEY UPDATE")
     }).pipe(Effect.provide(databaseLayer))
   })
 

@@ -138,8 +138,10 @@ export async function replacePendingAccountEmail(input: {
       if (!ownsAccount) throw new Error("The account password did not match.")
 
       const isInitialAdmin = pending.role?.split(",").includes("admin") ?? false
-      if (!isInitialAdmin && !(await signupAllowedForEmail(nextEmail))) {
-        throw new Error("This invitation is only valid for its original email.")
+      // Invited identities already exist under their address, so a pending
+      // account can only move to a genuinely new address when sign-up is open.
+      if (!isInitialAdmin && !publicSignupEnabled()) {
+        throw new Error("New account registration is disabled.")
       }
 
       const [existingRows] = await connection.query<Array<RowDataPacket>>(
@@ -374,18 +376,6 @@ function promiseEffect<TResult>(
   run: () => PromiseLike<TResult>
 ): Effect.Effect<TResult, unknown> {
   return Effect.tryPromise({ try: run, catch: (cause) => cause })
-}
-
-async function signupAllowedForEmail(email: string): Promise<boolean> {
-  if (publicSignupEnabled()) return true
-  const [rows] = await databasePool.query<Array<RowDataPacket>>(
-    `SELECT id FROM ${databaseTable("invitation")}
-      WHERE email = ? AND accepted_at IS NULL AND revoked_at IS NULL
-        AND expires_at > CURRENT_TIMESTAMP(3)
-      LIMIT 1`,
-    [email]
-  )
-  return rows.length > 0
 }
 
 async function sendEmailVerificationCode(email: string): Promise<void> {

@@ -16,10 +16,13 @@ import {
   isPlatformAdmin,
   isRelayCreator,
   listUserGrants,
-  requireRelayPermission,
 } from "@/lib/access-control"
 import {
-  accessPermissions,
+  relayScope,
+  resolveScopeAuthorization,
+  type ScopeAuthorization,
+} from "@/lib/scope-authorization.server"
+import {
   permissionsForRelayClientPolicy,
   type AccessPermission,
 } from "@workspace/contracts"
@@ -103,13 +106,25 @@ async function requireRelayCreationAccess() {
   return user
 }
 
-async function requireRelayAdministrator(
+/** Resolve Relay-wide authority once so later checks stay local to the set. */
+async function authorizeRelayAdministration(
   relayId: string,
   permission: AccessPermission = "relay.configure"
 ) {
   const user = await requireEligibleResourceUser()
-  await requireRelayPermission({ user, relayId, permission })
-  return user
+  const authorization = await resolveScopeAuthorization({
+    scope: relayScope(relayId),
+    user,
+  })
+  authorization.require(permission)
+  return { authorization, user }
+}
+
+async function requireRelayAdministrator(
+  relayId: string,
+  permission: AccessPermission = "relay.configure"
+) {
+  return (await authorizeRelayAdministration(relayId, permission)).user
 }
 
 async function managedRelays(
@@ -250,38 +265,30 @@ export const previewRelayPairing = createServerFn({ method: "POST" })
 export const getRelayAdministration = createServerFn({ method: "GET" })
   .validator(relayIdSchema)
   .handler(async ({ data }) => {
-    const user = await requireRelayAdministrator(
+    const { authorization } = await authorizeRelayAdministration(
       data.id,
       "relay.connections.read"
     )
     const registry = await import("@/lib/relay-registry")
     const administration = await registry.getRelayAdministration(data.id)
-    const grants = isPlatformAdmin(user)
-      ? []
-      : await listUserGrants(user.id, data.id)
-    const canReadAudit =
-      isPlatformAdmin(user) ||
-      grants.some(
-        (grant) =>
-          grant.resourceType === "relay" &&
-          grantHasPermission(grant, "relay.audit.read")
-      )
     return {
       ...administration,
-      audits: canReadAudit ? administration.audits : [],
+      audits: authorization.allows("relay.audit.read")
+        ? administration.audits
+        : [],
     }
   })
 
 export const createRelayInvitation = createServerFn({ method: "POST" })
   .validator(pairingRoleSchema)
   .handler(async ({ data }) => {
-    const user = await requireRelayAdministrator(
+    const { authorization, user } = await authorizeRelayAdministration(
       data.relayId,
       "relay.connections.manage"
     )
     const { createRelayPairingInvitation } =
       await import("@/lib/relay-registry")
-    await requireMachineClientDelegation(user, data.relayId, data.role)
+    requireMachineClientDelegation(authorization, data.role)
     return createRelayPairingInvitation(data, user.id)
   })
 
@@ -300,7 +307,7 @@ export const revokeRelayInvitation = createServerFn({ method: "POST" })
 export const updateRelayClient = createServerFn({ method: "POST" })
   .validator(updateRelayClientSchema)
   .handler(async ({ data }) => {
-    const user = await requireRelayAdministrator(
+    const { authorization, user } = await authorizeRelayAdministration(
       data.relayId,
       "relay.connections.manage"
     )
@@ -313,7 +320,7 @@ export const updateRelayClient = createServerFn({ method: "POST" })
             (client) => client.id === data.clientId
           )?.actions ?? [])
         : [])
-    await requireMachineClientDelegation(user, data.relayId, data.role, actions)
+    requireMachineClientDelegation(authorization, data.role, actions)
     return updateRelayClientPolicy({ ...data, actions }, user.id)
   })
 
@@ -457,22 +464,12 @@ function publishRelayTailscaleChange(relayId: string): void {
 }
 
 /** A machine client can operate directly against every child, so delegation uses Relay-wide authority. */
-async function requireMachineClientDelegation(
-  user: Awaited<ReturnType<typeof requireEligibleResourceUser>>,
-  relayId: string,
+function requireMachineClientDelegation(
+  authorization: ScopeAuthorization,
   role: "custom" | "full_access" | "read_only",
   actions: readonly string[] = []
-): Promise<void> {
-  if (isPlatformAdmin(user)) return
-  const grants = await listUserGrants(user.id, relayId)
-  const authority = new Set<AccessPermission>()
-  for (const grant of grants) {
-    if (grant.resourceType !== "relay") continue
-    for (const permission of accessPermissions) {
-      if (grantHasPermission(grant, permission)) authority.add(permission)
-    }
-  }
+): void {
   const required = permissionsForRelayClientPolicy(role, actions)
-  if ([...required].some((permission) => !authority.has(permission)))
+  if ([...required].some((permission) => !authorization.allows(permission)))
     throw new Error("The client policy exceeds your permissions on this Relay")
 }

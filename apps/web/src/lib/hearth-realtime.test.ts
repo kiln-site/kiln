@@ -157,24 +157,14 @@ describe("Hearth realtime query refresh", () => {
 
   it("refreshes access capabilities but keeps invitation previews out", async () => {
     const queryClient = new QueryClient()
-    const relayAUsers = queryKeys.access.instanceUsers("relay-a", "instance-a")
-    const relayBUsers = queryKeys.access.instanceUsers("relay-b", "instance-b")
     const invitation = queryKeys.access.invitation("token")
-    queryClient.setQueryData(queryKeys.access.overview, {})
     queryClient.setQueryData(queryKeys.access.capabilities, {})
-    queryClient.setQueryData(relayAUsers, [])
-    queryClient.setQueryData(relayBUsers, [])
     queryClient.setQueryData(invitation, {})
 
     await refreshHearthRealtimeTopics(queryClient, ["access"], {
       relayId: "relay-a",
     })
 
-    expect(
-      queryClient.getQueryState(queryKeys.access.overview)?.isInvalidated
-    ).toBe(true)
-    expect(queryClient.getQueryState(relayAUsers)?.isInvalidated).toBe(true)
-    expect(queryClient.getQueryState(relayBUsers)?.isInvalidated).toBe(false)
     expect(
       queryClient.getQueryState(queryKeys.access.capabilities)?.isInvalidated
     ).toBe(true)

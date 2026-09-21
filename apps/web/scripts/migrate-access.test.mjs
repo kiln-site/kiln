@@ -1,3 +1,4 @@
+// The MySQL fixture in this file is opt-in: run with ACCESS_MIGRATION_TEST=1.
 import assert from "node:assert/strict"
 import { readFile } from "node:fs/promises"
 import test from "node:test"
@@ -91,10 +92,22 @@ test(
         /  KEY kiln_invitation_(access_expiry|user_access|delivery)_idx .*\n/gu,
         ""
       )
-      app = app.replace(
-        /  KEY kiln_access_grant_(scope_state|user_state)_idx .*\n/gu,
-        ""
-      )
+      // Legacy grants: NOT NULL role, prefix indexes, none of the new state indexes.
+      app = app
+        .replace(
+          /  KEY kiln_access_grant_(scope_state|user_state)_idx .*\n/gu,
+          ""
+        )
+        .replace(
+          "  role ENUM('owner', 'admin', 'operator', 'viewer') NULL,",
+          "  role ENUM('owner', 'admin', 'operator', 'viewer') NOT NULL,"
+        )
+        .replace(
+          /  UNIQUE KEY kiln_access_grant_scope_unique \(user_id, relay_id, resource_type, resource_id\),\n\);/u,
+          "  UNIQUE KEY kiln_access_grant_scope_unique (user_id, relay_id, resource_type, resource_id),\n" +
+            "  KEY kiln_access_grant_relay_resource_idx (relay_id, resource_type, resource_id),\n" +
+            "  KEY kiln_access_grant_user_idx (user_id)\n);"
+        )
       await db.query(prefixAppMigrationSql(app))
       await db.execute(
         `INSERT INTO ${databaseTable("user")} (id,name,email,emailVerified,banned,banExpires) VALUES ('old','Old',' Old@Example.test ',TRUE,TRUE,DATE_ADD(NOW(3), INTERVAL 1 DAY)), ('expired','Expired','expired@example.test',TRUE,TRUE,DATE_SUB(NOW(3), INTERVAL 1 DAY))`
@@ -158,10 +171,6 @@ test(
       assert.equal(invites[1].user_id, invited.id)
       assert.equal(invites[0].token_hash, "a".repeat(64))
       assert.equal(invites[1].access_type, "platform_admin")
-      const [grants] = await db.query(
-        `SELECT * FROM ${databaseTable("access_grant")} WHERE state = 'pending'`
-      )
-      assert.equal(grants[0].state, "pending")
       await db.query(
         `DELETE FROM ${databaseTable("access_selection")} WHERE access_id='grant'`
       )

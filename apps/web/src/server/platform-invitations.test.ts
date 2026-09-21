@@ -109,26 +109,44 @@ describe("platform invitations", () => {
     it.effect(`rejects ${lifecycle} without a role write`, () => {
       const { writes, layer } = fixture({ lifecycle })
       return Effect.gen(function* () {
-        yield* acceptPlatformInvitationEffect(actor, "hash").pipe(Effect.flip)
+        const error = yield* acceptPlatformInvitationEffect(actor, "hash").pipe(
+          Effect.flip
+        )
+        assert.include(error.message, "invalid or has expired")
         assert.lengthOf(writes, 0)
       }).pipe(Effect.provide(layer))
     })
   it.effect("rechecks disabled recipients before acceptance", () => {
     const { writes, layer } = fixture({ status: "disabled" })
     return Effect.gen(function* () {
-      yield* acceptPlatformInvitationEffect(actor, "hash").pipe(Effect.flip)
+      const error = yield* acceptPlatformInvitationEffect(actor, "hash").pipe(
+        Effect.flip
+      )
+      assert.include(error.message, "enabled, verified account is required")
       assert.lengthOf(writes, 0)
     }).pipe(Effect.provide(layer))
   })
-  for (const options of [
-    { admin: false },
-    { admin: true, status: "disabled" },
-    { admin: true, lifecycle: "expired" },
+  for (const { message, ...options } of [
+    { admin: false, message: "Platform administrator required" },
+    {
+      admin: true,
+      status: "disabled",
+      message: "Platform administrator required",
+    },
+    {
+      admin: true,
+      lifecycle: "expired",
+      message: "This invitation is no longer pending",
+    },
   ])
     it.effect(`refuses cancellation with ${JSON.stringify(options)}`, () => {
       const { writes, layer } = fixture(options)
       return Effect.gen(function* () {
-        yield* cancelPlatformInvitationEffect(actor, "invite").pipe(Effect.flip)
+        const error = yield* cancelPlatformInvitationEffect(
+          actor,
+          "invite"
+        ).pipe(Effect.flip)
+        assert.include(error.message, message)
         assert.lengthOf(writes, 0)
       }).pipe(Effect.provide(layer))
     })

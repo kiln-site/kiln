@@ -66,7 +66,6 @@ import {
   allowedInstanceIdsEffect,
   hasPlatformPermission,
   isPlatformAdmin,
-  isRelayCreator,
   listUserGrantsEffect,
   requireRelayPermissionEffect,
 } from "@/lib/access-control"
@@ -802,16 +801,6 @@ export const createCliServerEffect = Effect.fn("cli.api.servers.create")(
     })
   }
 )
-
-export function canCreateCliServer(
-  user: CliPrincipal["user"],
-  relay: Pick<PersistedRelay, "createdBy">
-): boolean {
-  return (
-    isPlatformAdmin(user) ||
-    (isRelayCreator(user) && relay.createdBy === user.id)
-  )
-}
 
 export const updateCliServerStartupEffect = Effect.fn(
   "cli.api.servers.startup.update"

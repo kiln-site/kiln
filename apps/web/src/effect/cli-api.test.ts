@@ -19,7 +19,6 @@ vi.hoisted(() => {
 })
 
 import {
-  canCreateCliServer,
   cliActivityResponse,
   cliDatabaseSupportsLogicalBackups,
   cliPowerResponse,
@@ -80,29 +79,6 @@ describe("CLI server listing", () => {
         assert.deepEqual(snapshots, [{ id: "healthy-relay" }])
       })
   )
-})
-
-describe("CLI server creation", () => {
-  const user = {
-    email: "creator@example.com",
-    emailVerified: true,
-    id: "creator",
-    isDevelopmentBypass: false,
-    name: "Creator",
-    role: "relay_creator" as const,
-    twoFactorEnabled: false,
-  }
-
-  it("limits Relay creators to Relays they paired", () => {
-    assert.isTrue(canCreateCliServer(user, { createdBy: user.id }))
-    assert.isFalse(canCreateCliServer(user, { createdBy: "another-user" }))
-    assert.isTrue(
-      canCreateCliServer(
-        { ...user, id: "admin", role: "admin" },
-        { createdBy: "another-user" }
-      )
-    )
-  })
 })
 
 describe("CLI SFTP connection", () => {

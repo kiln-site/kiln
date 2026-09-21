@@ -73,7 +73,12 @@ describe("backup access", () => {
       relayId: backup.relayId,
       resourceId: backup.relayId,
       resourceType: "relay",
-      role: "operator",
+      permissions: [
+        "backup.read",
+        "backup.download",
+        "backup.restore",
+        "backup.delete",
+      ],
     }
     const admin: AuthenticatedUser = { ...user, id: "admin", role: "admin" }
 
@@ -116,7 +121,7 @@ describe("backup access", () => {
       relayId: backup.relayId,
       resourceId: backup.targetId,
       resourceType: "instance",
-      role: "operator",
+      permissions: ["backup.restore", "backup.delete"],
     } satisfies AccessGrant
     expect(hasBackupPermission(user, [grant], backup, "backup.restore")).toBe(
       true

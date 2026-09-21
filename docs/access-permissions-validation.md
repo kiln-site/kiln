@@ -99,14 +99,14 @@ Measured on MySQL 8.4.10 in an isolated local Docker database, one client, one R
 active grants. SQL warmed three times, then sampled 30 times; expansion sampled
 separately. These observations exclude HTTP/Effect overhead and are not throughput guarantees.
 
-| Operation | Median | p95 |
-| --- | ---: | ---: |
-| Targeted resource + inherited Relay resolution, three SQL queries | 0.706 ms | 1.094 ms |
-| Targeted in-memory grouping/expansion | 0.068 ms | 1.025 ms |
-| Entire Relay resolution, same three query shapes | 42.158 ms | 135.962 ms |
-| Entire Relay grouping/expansion | 7.259 ms | 9.929 ms |
-| 99 pending scopes | 0.991 ms | 1.221 ms |
-| Authorized directory, first 51 rows | 0.755 ms | 1.343 ms |
+| Operation                                                         |    Median |        p95 |
+| ----------------------------------------------------------------- | --------: | ---------: |
+| Targeted resource + inherited Relay resolution, three SQL queries |  0.706 ms |   1.094 ms |
+| Targeted in-memory grouping/expansion                             |  0.068 ms |   1.025 ms |
+| Entire Relay resolution, same three query shapes                  | 42.158 ms | 135.962 ms |
+| Entire Relay grouping/expansion                                   |  7.259 ms |   9.929 ms |
+| 99 pending scopes                                                 |  0.991 ms |   1.221 ms |
+| Authorized directory, first 51 rows                               |  0.755 ms |   1.343 ms |
 
 Targeted authorization reads only the target and its Relay. Broad inventory reads
 scale with assignments; they are not substituted for each action check. Scoped SQL
@@ -204,3 +204,34 @@ fewer files. Preview validation confirms the Backups and Startup pages load.
 
 The streamed Cursor Grok 4.6 High Fast review rechecked the full PR and these
 corrections. Its second pass found no remaining merge blockers.
+
+## Review follow-ups (2026-09-20)
+
+Changes made after the first review pass; behavior differs from the sections
+above where noted.
+
+- Catalog metadata is declared per permission (block and family) instead of
+  being inferred from key prefixes. Shared permissions (access, presets,
+  backups, schedules) reveal only the target they are assigned to; at Relay
+  scope, backup and schedule permissions additionally reveal child instances
+  and databases, while access and preset permissions do not. Any Relay-scope
+  assignment reveals the Relay itself. Compatibility-only keys
+  (`instance.power`, `instance.settings`) stay valid in stored selections but
+  no longer appear in collections.
+- The legacy `role` column on access grants is nullable and no longer written;
+  resolved grants expose only expanded permissions and a source.
+- New Relays no longer receive an empty owner grant; creator authority comes
+  from the Relay record.
+- Public sign-up while email delivery is unavailable records explicit manual
+  trust with an audit row, since no mailbox proof is possible in that mode.
+- Handlers resolve a user's grants once per request and check permissions
+  locally; the fleet snapshot no longer loads grants per Relay.
+- Unauthenticated claim and sign-up preparation calls are rate limited per
+  client address.
+- Migration: dead (revoked or expired) legacy invitations no longer create
+  users or pending grants, ownership anomalies are persisted to the audit log
+  with identifiers, redundant grant indexes are dropped, and column definitions
+  created by the Better Auth generator are normalized to the schema.
+- The production image now includes the access migration modules. CI runs the
+  root migration tests; the MySQL fixture remains opt-in via
+  `ACCESS_MIGRATION_TEST=1`.

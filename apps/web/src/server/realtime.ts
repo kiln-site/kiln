@@ -493,7 +493,10 @@ async function loadRealtimeAccessPolicy(
     ids.add(grant.resourceId)
   }
   return {
-    canManageRelays: isPlatformAdmin(user) || isRelayCreator(user),
+    canManageRelays:
+      isPlatformAdmin(user) ||
+      isRelayCreator(user) ||
+      grants.some((grant) => grant.resourceType === "relay"),
     isPlatformAdmin: isPlatformAdmin(user),
     readableInstances,
     readableNodes: new Set(

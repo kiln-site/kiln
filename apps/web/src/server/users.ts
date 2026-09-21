@@ -10,6 +10,10 @@ import { advanceSubjectAcrossEnabledRelaysEffect } from "@/lib/authorization-rev
 import { databaseTable } from "@/lib/database-config"
 import { publishRealtimeChange } from "@/lib/realtime-source.server"
 import {
+  assertRequestRateLimit,
+  requestClientAddress,
+} from "@/lib/request-rate-limit"
+import {
   requireAuthenticatedUser,
   requireEligibleResourceUser,
 } from "@/server/auth"
@@ -279,6 +283,9 @@ export const requestAccountClaim = createServerFn({ method: "POST" })
     })
   )
   .handler(async ({ data }) => {
+    const address = await requestClientAddress()
+    assertRequestRateLimit(`account.claim:${address}`, 5, 10 * 60_000)
+    assertRequestRateLimit(`account.claim:${data.email}`, 3, 10 * 60_000)
     const { requestEmailAccountClaim } = await import("@/lib/account-claims")
     await requestEmailAccountClaim(data.email, data.returnPath)
     return { sent: true }
@@ -291,6 +298,9 @@ export const prepareAccountSignup = createServerFn({ method: "POST" })
     })
   )
   .handler(async ({ data }) => {
+    // Sign-up itself reveals whether an address exists; this only bounds probing.
+    const address = await requestClientAddress()
+    assertRequestRateLimit(`account.signup.prepare:${address}`, 20, 10 * 60_000)
     const { accountNeedsClaim } = await import("@/lib/account-claims")
     return { claimRequired: await accountNeedsClaim(data.email) }
   })

@@ -126,7 +126,7 @@ async function findUser(username: string): Promise<UserRow | undefined> {
     `SELECT id, role, status, statusExpiresAt, emailVerifiedAt,
             manuallyVerifiedAt, legacyVerificationRecordedAt
        FROM ${databaseTable("user")}
-      WHERE email = ?
+      WHERE LOWER(email) = ?
       LIMIT 1`,
     [username]
   )

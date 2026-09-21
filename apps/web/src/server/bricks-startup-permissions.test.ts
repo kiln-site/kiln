@@ -117,7 +117,6 @@ describe("Startup node allocation boundary", () => {
           relayId: "relay-a",
           resourceId: instance.id,
           resourceType,
-          role: "viewer",
           permissions: ["instance.configuration.read"],
         },
       ]
@@ -137,7 +136,6 @@ describe("Startup node allocation boundary", () => {
         relayId: "relay-b",
         resourceId: "relay-b",
         resourceType: "relay",
-        role: "viewer",
         permissions: ["relay.read"],
       },
     ]
@@ -160,7 +158,6 @@ describe("Startup node allocation boundary", () => {
             relayId: "relay-a",
             resourceId: "relay-a",
             resourceType: "relay",
-            role: "viewer",
             permissions: ["relay.read"],
           },
         ]

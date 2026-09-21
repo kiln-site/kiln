@@ -25,7 +25,7 @@ import {
   type RelayInstance,
 } from "@workspace/contracts"
 
-import type { AccessPermission, AccessRole } from "@/lib/permissions"
+import type { AccessPermission } from "@/lib/permissions"
 import { grantHasPermission } from "@/lib/permissions"
 
 export type NavigationIcon = ComponentType<{ className?: string }>
@@ -56,8 +56,7 @@ export interface NavigationAccessCapabilities {
     relayId: string
     resourceId: string
     resourceType: "database" | "instance" | "relay"
-    permissions?: readonly AccessPermission[]
-    role: AccessRole
+    permissions: readonly AccessPermission[]
   }>
   isPlatformAdmin: boolean
 }
@@ -298,11 +297,14 @@ export function canAccessInfrastructureDestination(
   destination: (typeof infrastructureDestinations)[number]
 ): boolean {
   if (destination.access === "manage-relays") {
+    // A pending Relay invitation opens only the Relays list, where the
+    // invitation row lives; it does not unlock the rest of the section.
     return (
       capabilities.canManageRelays ||
-      capabilities.pendingScopes?.some(
-        (scope) => scope.resourceType === "relay"
-      ) === true
+      (destination.to === "/infra/relays" &&
+        capabilities.pendingScopes?.some(
+          (scope) => scope.resourceType === "relay"
+        ) === true)
     )
   }
   if (destination.access === "platform-admin") {

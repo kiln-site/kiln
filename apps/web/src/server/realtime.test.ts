@@ -183,7 +183,6 @@ describe("authorized realtime stream", () => {
           relayId: "relay-one",
           resourceId: instance.id,
           resourceType: "instance",
-          role: "viewer",
           permissions: ["instance.read"],
         },
         ...(readNode
@@ -193,7 +192,6 @@ describe("authorized realtime stream", () => {
                 relayId: "relay-one",
                 resourceId: "relay-one",
                 resourceType: "relay" as const,
-                role: "viewer" as const,
                 permissions: ["relay.read" as const],
               },
             ]

@@ -40,7 +40,46 @@ export function requireVerifiedAccount(user: AccountPolicy): void {
   if (!isAccountVerified(user)) throw new Error("Account verification required")
 }
 
+export function isEligibleAccount(user: AccountPolicy): boolean {
+  return isAccountVerified(user) && isAccountEnabled(user)
+}
+
 export function requireEligibleAccount(user: AccountPolicy): void {
   requireVerifiedAccount(user)
   if (!isAccountEnabled(user)) throw new Error("Your account is disabled")
+}
+
+/** Normalizes the persisted status/evidence columns into an AccountPolicy. */
+export function accountPolicyFromRow(
+  row: {
+    status: string | null
+    statusExpiresAt: Date | string | null
+    emailVerifiedAt: Date | string | null
+    manuallyVerifiedAt: Date | string | null
+    legacyVerificationRecordedAt: Date | string | null
+  },
+  now = Date.now()
+): Required<
+  Pick<
+    AccountPolicy,
+    | "status"
+    | "statusExpiresAt"
+    | "emailVerifiedAt"
+    | "manuallyVerifiedAt"
+    | "legacyVerificationRecordedAt"
+  >
+> {
+  const iso = (value: Date | string | null) =>
+    value ? new Date(value).toISOString() : null
+  return {
+    status:
+      row.status === "disabled" &&
+      (!row.statusExpiresAt || new Date(row.statusExpiresAt).getTime() > now)
+        ? "disabled"
+        : "enabled",
+    statusExpiresAt: iso(row.statusExpiresAt),
+    emailVerifiedAt: iso(row.emailVerifiedAt),
+    manuallyVerifiedAt: iso(row.manuallyVerifiedAt),
+    legacyVerificationRecordedAt: iso(row.legacyVerificationRecordedAt),
+  }
 }

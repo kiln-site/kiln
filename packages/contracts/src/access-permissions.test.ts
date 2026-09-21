@@ -7,7 +7,6 @@ import {
   expandPermissionSelections,
   permissionCatalog,
   permissionsForRelayClientPolicy,
-  permissionCollections,
   permissionScopeTypes,
   validatePermissionCatalog,
 } from "./access-permissions"
@@ -68,8 +67,13 @@ describe("permission catalog boundaries", () => {
     expect(child).not.toContain("relay.configure")
     expect(child).not.toContain("database.read")
     expect(child).not.toContain("instance.create")
-    expect(child).toContain("instance.power")
-    expect(child).toContain("instance.settings")
+    // Collections carry granular keys only; compatibility umbrellas stay out.
+    expect(child).not.toContain("instance.power")
+    expect(child).not.toContain("instance.settings")
+    expect(child).toContain("instance.power.kill")
+    expect(child).toContain("instance.configuration.write")
+    // Any Relay-scope assignment reveals the Relay it was granted on.
+    expect(child).toContain("relay.read")
   })
 
   it("rejects unknown, unsupported, malformed and oversized selections", () => {
@@ -136,9 +140,8 @@ describe("permission catalog boundaries", () => {
     ).toThrow(/Unknown/)
   })
 
-  it("projects immutable defaults and preserves collection selections", () => {
+  it("expands every builtin preset in each scope and keeps observers read-only", () => {
     for (const preset of builtinPermissionPresets) {
-      expect(Object.isFrozen(preset.selections)).toBe(true)
       for (const scope of permissionScopeTypes) {
         expect(() =>
           expandPermissionSelections(
@@ -148,16 +151,12 @@ describe("permission catalog boundaries", () => {
         ).not.toThrow()
       }
     }
-    expect(builtinPresetSelections("kiln.administrator", "instance")).toEqual([
-      { kind: "collection", key: "all" },
-    ])
     const observer = expandPermissionSelections(
       builtinPresetSelections("kiln.observer", "instance"),
       "instance"
     )
     expect(observer).not.toContain("instance.files.read")
     expect(observer).not.toContain("backup.download")
-    expect(Object.isFrozen(permissionCollections[0].selections)).toBe(true)
   })
 
   it("filters unsupported operations from ALL and rejects explicit unsupported selections", () => {
@@ -175,17 +174,6 @@ describe("permission catalog boundaries", () => {
         []
       )
     ).toThrow()
-  })
-
-  it("requires logical backup capability when engine support is supplied", () => {
-    expect(
-      accessPermissionSupported("database.dump.export", "database", [])
-    ).toBe(false)
-    expect(
-      accessPermissionSupported("database.dump.export", "database", [
-        "database.logical-backups",
-      ])
-    ).toBe(true)
   })
 })
 

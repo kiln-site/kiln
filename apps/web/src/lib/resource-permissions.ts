@@ -3,15 +3,16 @@ import type { RowDataPacket } from "mysql2/promise"
 import {
   accessPermissionSupported,
   builtinPresetSelections,
+  databaseEngineSupportsLogicalBackups,
   expandPermissionSelections,
   type AccessPermission,
+  type DatabaseEngine,
   type PermissionScopeType,
   type PermissionSelection,
 } from "@workspace/contracts"
 
 import { Database, type DatabaseTransaction } from "@/effect/database"
 import { databaseTable } from "@/lib/database-config"
-import type { AccessRole } from "@/lib/permissions"
 
 export interface ResourceScope {
   relayId: string
@@ -21,7 +22,6 @@ export interface ResourceScope {
 
 export interface ResolvedAccessGrant extends ResourceScope {
   id: string
-  role: AccessRole
   permissions: Array<AccessPermission>
   source: "access" | "owner"
 }
@@ -31,7 +31,6 @@ interface GrantRow extends RowDataPacket {
   relay_id: string
   resource_type: PermissionScopeType
   resource_id: string
-  role: string
   engine: string | null
 }
 
@@ -63,7 +62,7 @@ export const loadResourceGrantsEffect = Effect.fn("access.resolveGrants")(
     ]
     const filter = `g.user_id = ? AND g.state = 'active'${relayId ? " AND g.relay_id = ?" : ""}${scope ? (scope.resourceType === "relay" ? " AND g.resource_type = 'relay'" : " AND (g.resource_type = 'relay' OR (g.resource_type = ? AND g.resource_id = ?))") : ""}`
     const rows = yield* query<GrantRow>(
-      `SELECT g.id, g.relay_id, g.resource_type, g.resource_id, g.role, d.engine
+      `SELECT g.id, g.relay_id, g.resource_type, g.resource_id, d.engine
          FROM ${databaseTable("access_grant")} g
          LEFT JOIN ${databaseTable("database")} d ON g.resource_type = 'database' AND d.relay_id = g.relay_id AND d.database_id = g.resource_id
          WHERE ${filter}`,
@@ -112,7 +111,6 @@ export const loadResourceGrantsEffect = Effect.fn("access.resolveGrants")(
       relayId: row.relay_id,
       resourceId: row.resource_id,
       resourceType: row.resource_type,
-      role: "viewer",
       permissions: expandResourceGrantPermissions(
         row,
         byAccess.get(row.id) ?? []
@@ -121,13 +119,13 @@ export const loadResourceGrantsEffect = Effect.fn("access.resolveGrants")(
     }))
     // Ownership is authority in its own right, independent of invitations and presets.
     const ownerRows = yield* query<GrantRow>(
-      `SELECT id, id AS relay_id, 'relay' AS resource_type, id AS resource_id, 'owner' AS role, NULL AS engine
+      `SELECT id, id AS relay_id, 'relay' AS resource_type, id AS resource_id, NULL AS engine
          FROM ${databaseTable("relay")} WHERE created_by = ?${relayId ? " AND id = ?" : ""}
        UNION ALL
-       SELECT instance_id AS id, relay_id, 'instance', instance_id, 'owner', NULL
+       SELECT instance_id AS id, relay_id, 'instance', instance_id, NULL
          FROM ${databaseTable("instance")} WHERE owner_id = ?${relayId ? " AND relay_id = ?" : ""}${scope ? " AND instance_id = ?" : ""}
        UNION ALL
-       SELECT database_id AS id, relay_id, 'database', database_id, 'owner', engine
+       SELECT database_id AS id, relay_id, 'database', database_id, engine
          FROM ${databaseTable("database")} WHERE created_by = ?${relayId ? " AND relay_id = ?" : ""}${scope ? " AND database_id = ?" : ""}`,
       [
         userId,
@@ -150,7 +148,6 @@ export const loadResourceGrantsEffect = Effect.fn("access.resolveGrants")(
         relayId: row.relay_id,
         resourceId: row.resource_id,
         resourceType: row.resource_type,
-        role: "owner",
         permissions: expandResourceGrantPermissions(row, [
           { kind: "collection", key: "all" },
         ]),
@@ -167,22 +164,36 @@ function expandResourceGrantPermissions(
 ): Array<AccessPermission> {
   const capabilities =
     row.resource_type === "database"
-      ? ["mysql", "mariadb", "postgres"].includes(row.engine ?? "")
-        ? ["database.logical-backups"]
-        : []
+      ? databaseScopeCapabilities(row.engine)
       : undefined
-  // Persisted assignments can outlive an engine change or contain migrated
-  // legacy bits. Unsupported explicit entries are inactive, not a load error.
+  return expandStoredSelections(selections, row.resource_type, capabilities)
+}
+
+/**
+ * Persisted selections can outlive an engine change or carry migrated legacy
+ * keys. Unsupported explicit entries are inactive rather than a load error;
+ * only fresh user input should reject unsupported keys.
+ */
+export function expandStoredSelections(
+  selections: ReadonlyArray<PermissionSelection>,
+  scopeType: PermissionScopeType,
+  capabilities?: ReadonlyArray<string>
+): Array<AccessPermission> {
   const supported = deduplicatePermissionSelections(selections).filter(
     (selection) =>
       selection.kind === "collection" ||
-      accessPermissionSupported(selection.key, row.resource_type, capabilities)
+      accessPermissionSupported(selection.key, scopeType, capabilities)
   )
-  return expandPermissionSelections(supported, row.resource_type, capabilities)
+  return expandPermissionSelections(supported, scopeType, capabilities)
 }
 
 export function effectiveScopePermissions(
-  grants: ReadonlyArray<ResolvedAccessGrant>,
+  grants: ReadonlyArray<
+    Pick<
+      ResolvedAccessGrant,
+      "relayId" | "resourceType" | "resourceId" | "permissions"
+    >
+  >,
   scope: ResourceScope
 ): Set<AccessPermission> {
   const permissions = new Set<AccessPermission>()
@@ -210,4 +221,13 @@ export function deduplicatePermissionSelections(
       ])
     ).values(),
   ]
+}
+
+/** Capability tags an engine supports; server-side support checks stay authoritative. */
+export function databaseScopeCapabilities(
+  engine: string | null | undefined
+): Array<string> {
+  return databaseEngineSupportsLogicalBackups(engine as DatabaseEngine)
+    ? ["database.logical-backups"]
+    : []
 }

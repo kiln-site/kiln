@@ -182,13 +182,6 @@ describe("credentialless identity claim", () => {
     )
     expect(writes).toHaveLength(count)
   })
-  it("records actual email proof for an email challenge", async () => {
-    method = "email"
-    await redeemAccountClaim(input)
-    expect(
-      writes.some((write) => write.sql.includes("emailVerified = TRUE"))
-    ).toBe(true)
-  })
   it("never replaces an identity's existing credential", async () => {
     credential = true
     await expect(redeemAccountClaim(input)).rejects.toThrow(

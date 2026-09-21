@@ -23,8 +23,12 @@ import {
 import { WorkspaceSummaryCard } from "@/components/workspace-summary-card"
 import { DataTableWorkspace } from "@/components/data-table-workspace"
 import {
+  AcceptingInvitationContext,
   ResourcePeopleTable,
   ResourcePresetsTable,
+  type Person,
+  type Preset,
+  type ScopeAccess,
 } from "@/components/resource-access-tables"
 import { useCursorDataTableSource } from "@/lib/data-table-source"
 import {
@@ -42,7 +46,10 @@ import {
   useQueryClient,
   useInfiniteQuery,
 } from "@tanstack/react-query"
-import type { PermissionSelection } from "@workspace/contracts"
+import {
+  expandPermissionSelections,
+  type PermissionSelection,
+} from "@workspace/contracts"
 import { Button } from "@workspace/ui/components/button"
 import { Input } from "@workspace/ui/components/input"
 import { Badge } from "@workspace/ui/components/badge"
@@ -75,9 +82,6 @@ import {
   decideResourceInvitation,
 } from "@/server/resource-access"
 
-type ScopeAccess = Awaited<ReturnType<typeof getResourceAccess>>
-type Person = ScopeAccess["people"][number]
-type Preset = ScopeAccess["presets"][number]
 type Resource = Awaited<
   ReturnType<typeof getAccessResources>
 >["resources"][number]
@@ -126,17 +130,22 @@ export function AccessPage() {
     ]
   )
   const platform = !scope && admin && tab === "users"
-  const select = (resource: Resource | null) => {
-    void navigate({
-      search: {
-        tab,
-        relayId: resource?.relayId,
-        resourceType: resource?.resourceType,
-        resourceId: resource?.resourceId,
-        resourceName: resource?.name,
-      },
-    })
-  }
+  // A fresh closure here defeats the memo on AccessScopeControls, which owns an
+  // infinite resource query and a popover.
+  const select = useCallback(
+    (resource: Resource | null) => {
+      void navigate({
+        search: {
+          tab,
+          relayId: resource?.relayId,
+          resourceType: resource?.resourceType,
+          resourceId: resource?.resourceId,
+          resourceName: resource?.name,
+        },
+      })
+    },
+    [navigate, tab]
+  )
   return (
     <div className="mx-auto flex h-full min-h-[34rem] w-full max-w-[90rem] flex-col px-3 pb-3 sm:px-5 sm:pb-5">
       <nav
@@ -397,7 +406,7 @@ const ResourcePicker = memo(function ResourcePicker({
 })
 
 const personKey = (person: Person) => person.id
-export function ResourceAccessPanel({
+function ResourceAccessPanel({
   scope,
   tab = "users",
 }: {
@@ -439,13 +448,34 @@ export function ResourceAccessPanel({
       }
     },
     getNextPageParam: (last) => last.nextCursor,
+    enabled: tab === "users",
+  })
+  // Presets are scope-level, so they load from their own request instead of
+  // riding the people query's search and pagination state. Only one of the two
+  // runs at a time because only one tab is mounted.
+  const presetsQuery = useQuery({
+    queryKey: [
+      "resource-access",
+      scope.relayId,
+      scope.resourceType,
+      scope.resourceId,
+      "presets",
+    ],
+    queryFn: () => getResourceAccess({ data: { ...scope, offset: 0 } }),
+    enabled: tab === "presets",
   })
   const source = useCursorDataTableSource({
     query,
     resetKey: `${scopeKey(scope)}:${deferredSearch}`,
     getRowKey: personKey,
   })
-  const access = query.data?.pages[0]
+  const access: ScopeAccess | undefined =
+    tab === "presets"
+      ? (presetsQuery.data ?? query.data?.pages[0])
+      : (query.data?.pages[0] ?? presetsQuery.data)
+  const retryPresets = useCallback(() => {
+    void presetsQuery.refetch()
+  }, [presetsQuery.refetch])
   const refresh = useCallback(() => {
     void queryClient.invalidateQueries({ queryKey: ["resource-access"] })
     void queryClient.invalidateQueries({ queryKey: ["access"] })
@@ -506,21 +536,25 @@ export function ResourceAccessPanel({
   return (
     <>
       {tab === "users" ? (
-        <ResourcePeopleTable
-          access={access}
-          searchStore={searchStore}
-          source={source}
-          onEdit={setEditing}
-          onTransfer={setTransferTarget}
-          onRevoke={setRevokeTarget}
-          onAccept={accept}
-          onInvite={invite}
-          accepting={decision.isPending}
-        />
+        <AcceptingInvitationContext.Provider value={decision.isPending}>
+          <ResourcePeopleTable
+            access={access}
+            searchStore={searchStore}
+            source={source}
+            onEdit={setEditing}
+            onTransfer={setTransferTarget}
+            onRevoke={setRevokeTarget}
+            onAccept={accept}
+            onInvite={invite}
+          />
+        </AcceptingInvitationContext.Provider>
       ) : (
         <ResourcePresetsTable
           access={access}
-          source={source}
+          error={presetsQuery.error}
+          loading={presetsQuery.isPending}
+          refreshing={presetsQuery.isFetching && !presetsQuery.isPending}
+          onRetry={retryPresets}
           onEdit={setPreset}
           onDelete={setDeleteTarget}
           onCreate={createPreset}
@@ -655,7 +689,6 @@ export function ResourceAccessPanel({
       {access && inviting ? (
         <InviteEditor
           scope={scope}
-          access={access}
           onClose={() => setInviting(false)}
           onSaved={refresh}
         />
@@ -715,7 +748,7 @@ function PresetSelections({
   const available = new Set(access.permissions)
   function unavailableReason(selections: Array<PermissionSelection>) {
     const result = Result.try(() =>
-      expandForCopySelections(
+      expandPermissionSelections(
         selections,
         scopeType,
         access.supportedCapabilities
@@ -914,7 +947,6 @@ function InviteEditor({
   onSaved,
 }: {
   scope: ResourceScope & { name?: string }
-  access: ScopeAccess
   onClose: () => void
   onSaved: () => void
 }) {
@@ -1222,7 +1254,11 @@ function PresetEditor({
     const available = new Set(access.permissions)
     const supported = items.filter((item) => {
       const expanded = Result.try(() =>
-        expandForCopy(item, scope.resourceType, access.supportedCapabilities)
+        expandPermissionSelections(
+          [item],
+          scope.resourceType,
+          access.supportedCapabilities
+        )
       )
       return (
         Result.isSuccess(expanded) &&
@@ -1337,13 +1373,4 @@ function PresetEditor({
       </DialogContent>
     </Dialog>
   )
-}
-
-import { expandPermissionSelections as expandForCopySelections } from "@workspace/contracts"
-function expandForCopy(
-  selection: PermissionSelection,
-  scope: ResourceScope["resourceType"],
-  capabilities?: ReadonlyArray<string>
-) {
-  return expandForCopySelections([selection], scope, capabilities)
 }

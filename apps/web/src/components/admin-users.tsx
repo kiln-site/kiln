@@ -1,6 +1,10 @@
-import { recoverPromise } from "@/effect/promise"
 import { memo, useMemo, useState, useSyncExternalStore } from "react"
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
+import {
+  keepPreviousData,
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query"
 import { EllipsisVertical, Mail, Plus, Users } from "lucide-react"
 import { Button } from "@workspace/ui/components/button"
 import { Input } from "@workspace/ui/components/input"
@@ -32,6 +36,7 @@ import {
   TooltipTrigger,
 } from "@workspace/ui/components/tooltip"
 import { showToast } from "@workspace/ui/components/sonner"
+import { copyWithToast, utcTimestamp } from "@/components/access-format"
 import { DataTable } from "@/components/data-table-view"
 import { DataTableEmptyState, DataTableTextCell } from "@/components/data-table"
 import {
@@ -130,7 +135,7 @@ const userDefinition = defineDataTable({
       header: "Created",
       enableSorting: false,
       cell: ({ row }) => (
-        <DataTableTextCell value={date(row.original.createdAt)} />
+        <DataTableTextCell value={utcTimestamp(row.original.createdAt)} />
       ),
       meta: dataTableColumnMeta({ hideBelow: "xl", width: "12rem" }),
     }),
@@ -232,14 +237,24 @@ const UserTable = memo(function UserTable({
     searchStore.getNormalizedSnapshot,
     searchStore.getNormalizedServerSnapshot
   )
-  return <UserTablePage key={search} search={search} />
+  return <UserTablePage search={search} />
 })
 function UserTablePage({ search }: { search: string }) {
   const [offset, setOffset] = useState(0)
+  const [page, setPage] = useState(search)
+  // Remounting per keystroke threw away the table model and flashed a skeleton.
+  // Adjusting state during render keeps the mounted rows while resetting the
+  // pagination window the previous search left behind.
+  if (page !== search) {
+    setPage(search)
+    setOffset(0)
+  }
   const query = useQuery({
     queryKey: ["users", search, offset],
     queryFn: () => listUsers({ data: { search, offset, limit: pageSize } }),
-    refetchInterval: 15_000,
+    // The realtime access topic invalidates the users prefix, so this list
+    // stays fresh without a poll.
+    placeholderData: keepPreviousData,
   })
   const source = useMemo<DataTableSource<ManagedUser>>(
     () => ({
@@ -414,15 +429,15 @@ function UserManagement({
           <dt className="text-muted-foreground">Status</dt>
           <dd className="capitalize">{user.status}</dd>
           <dt className="text-muted-foreground">Changed</dt>
-          <dd>{date(user.statusChangedAt)}</dd>
+          <dd>{utcTimestamp(user.statusChangedAt)}</dd>
           {user.statusExpiresAt ? (
             <>
               <dt className="text-muted-foreground">Until</dt>
-              <dd>{date(user.statusExpiresAt)}</dd>
+              <dd>{utcTimestamp(user.statusExpiresAt)}</dd>
             </>
           ) : null}
           <dt className="text-muted-foreground">Created</dt>
-          <dd>{date(user.createdAt)}</dd>
+          <dd>{utcTimestamp(user.createdAt)}</dd>
         </dl>
         {user.statusReason ? (
           <p className="text-sm text-muted-foreground">{user.statusReason}</p>
@@ -440,18 +455,19 @@ function UserManagement({
         <p className="text-sm">{verificationLabel(user)}</p>
         {user.emailVerifiedAt ? (
           <p className="text-xs text-muted-foreground">
-            Email verified {date(user.emailVerifiedAt)}
+            Email verified {utcTimestamp(user.emailVerifiedAt)}
           </p>
         ) : null}
         {user.manuallyVerifiedAt ? (
           <p className="text-xs text-muted-foreground">
-            Manually verified {date(user.manuallyVerifiedAt)}
+            Manually verified {utcTimestamp(user.manuallyVerifiedAt)}
           </p>
         ) : null}
         {user.legacyVerificationRecordedAt ? (
           <p className="text-xs text-muted-foreground">
-            Legacy trust recorded {date(user.legacyVerificationRecordedAt)};
-            original method unknown.
+            Legacy trust recorded{" "}
+            {utcTimestamp(user.legacyVerificationRecordedAt)}; original method
+            unknown.
           </p>
         ) : null}
         <div className="flex flex-wrap gap-2">
@@ -483,23 +499,11 @@ function UserManagement({
             />
             <p className="text-xs text-muted-foreground">
               Redeeming this link verifies the account manually. Expires{" "}
-              {date(claim.expiresAt)}.
+              {utcTimestamp(claim.expiresAt)}.
             </p>
             <Button
               variant="outline"
-              onClick={() =>
-                void recoverPromise(
-                  async () => {
-                    await navigator.clipboard.writeText(claim.claimUrl)
-                    showToast({ type: "success", message: "Claim link copied" })
-                  },
-                  () =>
-                    showToast({
-                      type: "error",
-                      message: "Could not copy the link",
-                    })
-                )
-              }
+              onClick={() => copyWithToast(claim.claimUrl, "Claim link")}
             >
               Copy link
             </Button>
@@ -522,9 +526,6 @@ function UserManagement({
       </DialogFooter>
     </DialogContent>
   )
-}
-function date(value: string | null) {
-  return value ? `${value.slice(0, 16).replace("T", " ")} UTC` : "—"
 }
 function roleLabel(role: string | null) {
   return role === "admin"
@@ -701,22 +702,7 @@ const PlatformInvitationForm = memo(function PlatformInvitationForm({
           />
           <Button
             variant="outline"
-            onClick={() =>
-              void recoverPromise(
-                async () => {
-                  await navigator.clipboard.writeText(inviteUrl)
-                  showToast({
-                    type: "success",
-                    message: "Invitation link copied",
-                  })
-                },
-                () =>
-                  showToast({
-                    type: "error",
-                    message: "Could not copy the link",
-                  })
-              )
-            }
+            onClick={() => copyWithToast(inviteUrl, "Invitation link")}
           >
             Copy invitation
           </Button>
@@ -741,8 +727,7 @@ const PendingPlatformInvitations = memo(function PendingPlatformInvitations({
   const cancel = useMutation({
     onMutate: () => onPendingChange(true),
     onSettled: () => onPendingChange(false),
-    mutationFn: (id: string) =>
-      revokeAccessInvitation({ data: { id, relayId: null } }),
+    mutationFn: (id: string) => revokeAccessInvitation({ data: { id } }),
     onSuccess: () => {
       showToast({ type: "success", message: "Platform invitation cancelled" })
       void client.invalidateQueries({ queryKey: ["platform-invitations"] })
@@ -780,7 +765,7 @@ const PendingPlatformInvitations = memo(function PendingPlatformInvitations({
                 {invitation.accessType === "platform_admin"
                   ? "Platform administrator"
                   : "Relay creator"}{" "}
-                · Expires {date(invitation.expiresAt)}
+                · Expires {utcTimestamp(invitation.expiresAt)}
               </p>
             </div>
             <Button

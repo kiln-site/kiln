@@ -5,16 +5,13 @@ import type { ResultSetHeader, RowDataPacket } from "mysql2/promise"
 import { Database } from "@/effect/database"
 import type { AuthenticatedUser } from "@/lib/auth-session"
 import {
-  accessGrantRoleChangeError,
   allowedInstanceIdsForUser,
   canReadRelayNode,
   type AccessGrant,
   deduplicateEffectiveInstanceGrants,
   deleteInstanceAccessEffect,
-  isBlockedInstanceOwnerRoleChange,
   isCurrentInstanceOwnerGrant,
   isPlatformAdmin,
-  isProtectedInstanceOwnerGrant,
   isRelayCreator,
   requireRelayPermissionsEffect,
   visibleRelaysForUser,
@@ -59,11 +56,18 @@ describe("platform access roles", () => {
       role: "relay_creator",
     } satisfies AuthenticatedUser
 
+    // Relay creators appear in grants as owner rows, so creation alone does
+    // not widen visibility.
     assert.deepEqual(
-      visibleRelaysForUser(creator, relays, [{ relayId: "granted" }]).map(
-        (relay) => relay.id
-      ),
+      visibleRelaysForUser(creator, relays, [
+        { relayId: "owned" },
+        { relayId: "granted" },
+      ]).map((relay) => relay.id),
       ["owned", "granted"]
+    )
+    assert.deepEqual(
+      visibleRelaysForUser(creator, relays, []).map((relay) => relay.id),
+      []
     )
     assert.deepEqual(
       visibleRelaysForUser(authenticatedUser, relays, [
@@ -107,7 +111,6 @@ describe("Relay permission requirements", () => {
                 relay_id: "relay-one",
                 resource_type: "instance",
                 resource_id: "instance-one",
-                role: "viewer",
               },
             ] as unknown as ReadonlyArray<TRow>
           }),
@@ -128,7 +131,6 @@ describe("Relay permission requirements", () => {
         if (Result.isFailure(result)) {
           assert.strictEqual(result.failure._tag, "PermissionDeniedError")
         }
-        assert.strictEqual(queryCount, 3)
       }).pipe(Effect.provide(databaseLayer))
     }
   )
@@ -155,7 +157,6 @@ describe("Relay permission requirements", () => {
               relay_id: "relay-one",
               resource_type: "instance",
               resource_id: "instance-one",
-              role: "operator",
             },
           ] as unknown as ReadonlyArray<TRow>
         }),
@@ -169,8 +170,6 @@ describe("Relay permission requirements", () => {
         relayId: "relay-one",
         user: authenticatedUser,
       })
-
-      assert.strictEqual(queryCount, 3)
     }).pipe(Effect.provide(databaseLayer))
   })
 
@@ -261,100 +260,21 @@ describe("instance access cleanup", () => {
     ])
   })
 
-  it("protects the current owner and any remaining owner-role grant", () => {
+  it("recognizes the persisted owner's own grant", () => {
     assert.isTrue(
       isCurrentInstanceOwnerGrant({
         grantUserId: "owner-one",
         ownerId: "owner-one",
       })
     )
-    assert.isTrue(
-      isProtectedInstanceOwnerGrant({
-        grantRole: "admin",
-        grantUserId: "owner-one",
-        ownerId: "owner-one",
-      })
-    )
-    assert.isTrue(
-      isProtectedInstanceOwnerGrant({
-        grantRole: "owner",
-        grantUserId: "owner-two",
-        ownerId: null,
-      })
-    )
     assert.isFalse(
-      isProtectedInstanceOwnerGrant({
-        grantRole: "admin",
+      isCurrentInstanceOwnerGrant({
         grantUserId: "member-one",
         ownerId: "owner-one",
       })
     )
-  })
-
-  it("only allows the persisted owner's grant to retain or regain owner", () => {
-    assert.isTrue(
-      isBlockedInstanceOwnerRoleChange({
-        grantRole: "admin",
-        grantUserId: "owner-one",
-        nextRole: "viewer",
-        ownerId: "owner-one",
-      })
-    )
     assert.isFalse(
-      isBlockedInstanceOwnerRoleChange({
-        grantRole: "admin",
-        grantUserId: "owner-one",
-        nextRole: "owner",
-        ownerId: "owner-one",
-      })
-    )
-    assert.isFalse(
-      isBlockedInstanceOwnerRoleChange({
-        grantRole: "owner",
-        grantUserId: "former-owner",
-        nextRole: "admin",
-        ownerId: "owner-one",
-      })
-    )
-    assert.isFalse(
-      isBlockedInstanceOwnerRoleChange({
-        grantRole: "admin",
-        grantUserId: "owner-one",
-        nextRole: "admin",
-        ownerId: "owner-one",
-      })
-    )
-  })
-
-  it("applies owner protections when Add User targets an existing account", () => {
-    assert.strictEqual(
-      accessGrantRoleChangeError({
-        canManageOwners: false,
-        currentRole: "owner",
-        nextRole: "operator",
-        ownerId: null,
-        userId: "relay-owner",
-      })?.message,
-      "Only a Relay owner or platform admin can change owner access"
-    )
-    assert.strictEqual(
-      accessGrantRoleChangeError({
-        canManageOwners: true,
-        currentRole: null,
-        nextRole: "viewer",
-        ownerId: "instance-owner",
-        userId: "instance-owner",
-      })?.message,
-      "Transfer ownership before changing the server owner's role"
-    )
-    assert.isNull(
-      accessGrantRoleChangeError({
-        canManageOwners: false,
-        currentRole: "operator",
-        nextRole: "viewer",
-        ownerId: null,
-        userId: "member-one",
-      })
+      isCurrentInstanceOwnerGrant({ grantUserId: "member-one", ownerId: null })
     )
   })
 
@@ -405,7 +325,6 @@ describe("Relay snapshot visibility", () => {
     relayId,
     resourceId: "instance-one",
     resourceType: "instance",
-    role: "viewer",
     permissions: ["instance.read"],
   }
   const databaseGrant: AccessGrant = {

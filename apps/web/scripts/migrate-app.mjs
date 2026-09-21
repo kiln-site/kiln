@@ -36,6 +36,7 @@ try {
   await ensureScheduleSchema(connection)
   await ensureAuthorizationSchema(connection)
   await ensureAccessModelSchema(connection)
+  await ensureAccessGrantLegacySchema(connection)
   console.log("Access migration:", await backfillAccessModel(connection))
   console.log(
     "Database permission projection:",
@@ -460,6 +461,29 @@ async function ensureAccessAssignmentSchema(database) {
   if (invitationChanges.length > 0) {
     await database.query(
       `ALTER TABLE ${databaseTable("invitation")} ${invitationChanges.join(", ")}`
+    )
+  }
+}
+
+// Runs after ensureAccessModelSchema so the superseding composite indexes exist
+// before their left-prefix duplicates are dropped.
+async function ensureAccessGrantLegacySchema(database) {
+  await dropIndexIfColumns(database, "access_grant", "access_grant_user_idx", [
+    "user_id",
+  ])
+  await dropIndexIfColumns(
+    database,
+    "access_grant",
+    "access_grant_relay_resource_idx",
+    ["relay_id", "resource_type", "resource_id"]
+  )
+  const [roleColumns] = await database.query(
+    `SHOW COLUMNS FROM ${databaseTable("access_grant")} LIKE 'role'`
+  )
+  if (roleColumns[0]?.Null === "NO") {
+    await database.query(
+      `ALTER TABLE ${databaseTable("access_grant")}
+       MODIFY role ENUM('owner', 'admin', 'operator', 'viewer') NULL`
     )
   }
 }

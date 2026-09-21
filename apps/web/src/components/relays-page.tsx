@@ -920,7 +920,6 @@ const RelayDeleteButton = React.memo(function RelayDeleteButton({
         queryClient.invalidateQueries({
           queryKey: queryKeys.access.capabilities,
         }),
-        queryClient.invalidateQueries({ queryKey: queryKeys.access.overview }),
       ])
     },
   })
@@ -1218,7 +1217,6 @@ function AddRelayDialog({
         queryClient.invalidateQueries({
           queryKey: queryKeys.access.capabilities,
         }),
-        queryClient.invalidateQueries({ queryKey: queryKeys.access.overview }),
       ])
     },
   })

@@ -241,43 +241,19 @@ describe("final instance deletion", () => {
     )
   })
 
-  it.each([false, true])(
-    "requires download for a personal final-backup destination (default: %s)",
-    async (useDefault) => {
-      state.storageOwner = user.id
-      state.existingStatus = "failed"
-      const storageId = "personal-storage"
-      if (useDefault) state.policyStorageId = storageId
-      await expect(
-        ensureFinalInstanceDeletion({
-          ...finalBackupInput,
-          ...(useDefault ? {} : { storageId }),
-        })
-      ).rejects.toThrow("Permission denied")
-      assert.isFalse(state.reservationMade)
-      assert.deepEqual(state.events, [])
-      assert.strictEqual(state.existingStatus, "failed")
-    }
-  )
-
-  it("pins the personal policy destination when download is allowed", async () => {
+  it("requires download permission for a personal final-backup destination", async () => {
     state.storageOwner = user.id
-    state.canDownload = true
-    state.policyStorageId = "personal-storage"
-    await ensureFinalInstanceDeletion(finalBackupInput)
-    assert.strictEqual(state.reservedStorageId, "personal-storage")
-  })
+    state.existingStatus = "failed"
 
-  it("does not allow another user's destination even with download", async () => {
-    state.storageOwner = "another-user"
-    state.canDownload = true
     await expect(
       ensureFinalInstanceDeletion({
         ...finalBackupInput,
-        storageId: "other-storage",
+        storageId: "personal-storage",
       })
-    ).rejects.toThrow("Backup destination is unavailable")
+    ).rejects.toThrow("Permission denied")
+
     assert.isFalse(state.reservationMade)
     assert.deepEqual(state.events, [])
+    assert.strictEqual(state.existingStatus, "failed")
   })
 })

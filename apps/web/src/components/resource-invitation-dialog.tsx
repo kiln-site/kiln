@@ -1,7 +1,12 @@
 import { useMemo } from "react"
 import { useNavigate } from "@tanstack/react-router"
 import { permissionCatalog } from "@workspace/contracts"
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
+import {
+  useMutation,
+  useQuery,
+  useQueryClient,
+  type QueryClient,
+} from "@tanstack/react-query"
 import { Button } from "@workspace/ui/components/button"
 import {
   Dialog,
@@ -26,6 +31,7 @@ import {
   serverDestinationHref,
 } from "@/lib/navigation-destinations"
 import { relayInstanceRouteIdentifier } from "@/lib/relay-selectors"
+import { utcTimestamp } from "@/components/access-format"
 import {
   myInvitationsQueryOptions,
   type ResourceInvitation,
@@ -55,81 +61,47 @@ export function ResourceInvitationDialog({
       decideResourceInvitation({
         data: { id: invitationId, decision: value, force: false },
       }),
-    onSuccess: async (result) => {
+    onSuccess: (result) => {
       queryClient.setQueryData(
         myInvitationsQueryOptions().queryKey,
         (previous: Array<ResourceInvitation> | undefined) =>
           previous?.filter((item) => item.id !== invitationId)
       )
-      await Promise.all([
-        queryClient.invalidateQueries({
-          queryKey: myInvitationsQueryOptions().queryKey,
-        }),
-        queryClient.invalidateQueries({
-          queryKey: accessCapabilitiesQueryOptions().queryKey,
-        }),
-        queryClient.invalidateQueries({
-          queryKey: ["resource-invitation", invitationId],
-        }),
-      ])
+      onClose()
       showToast({
         type: "success",
         message: result.accepted
           ? "Invitation accepted"
           : "Invitation declined",
       })
-      onClose()
-      if (!result.accepted) return
-      if (result.scope.resourceType === "instance") {
-        await queryClient.invalidateQueries({
-          queryKey: relayConnectionQueryOptions(queryClient).queryKey,
+      // Navigate from whatever the cache already holds. Awaiting a capability
+      // fetch and a full fleet snapshot before moving left the accept button
+      // spinning for the length of a Relay round trip; the refreshed data
+      // lands on the destination page instead.
+      if (result.accepted)
+        void navigate({
+          href: acceptedDestination(queryClient, result.scope),
         })
-        const [capabilities, connection] = await Promise.all([
-          queryClient.fetchQuery(accessCapabilitiesQueryOptions()),
-          queryClient.fetchQuery(relayConnectionQueryOptions(queryClient)),
-        ])
-        const snapshot =
-          connection.status === "connected" ||
-          connection.status === "unreachable"
-            ? connection.snapshot
-            : null
-        const instance = snapshot?.instances.find(
-          (candidate) =>
-            candidate.relayId === result.scope.relayId &&
-            candidate.id === result.scope.resourceId
-        )
-        if (instance) {
-          const destination = accessibleDestinationsForServer(
-            instance,
-            capabilities
-          )[0]
-          const routeId = relayInstanceRouteIdentifier(
-            snapshot!.instances,
-            instance
-          )
-          if (destination && routeId) {
-            await navigate({
-              href: serverDestinationHref(destination, routeId),
-            })
-            return
-          }
-        }
-      }
-      const section =
-        result.scope.resourceType === "database"
-          ? "databases"
-          : result.scope.resourceType === "relay"
-            ? "relays"
-            : "servers"
-      await queryClient.invalidateQueries({
+      void queryClient.invalidateQueries({
+        queryKey: myInvitationsQueryOptions().queryKey,
+      })
+      void queryClient.invalidateQueries({
+        queryKey: accessCapabilitiesQueryOptions().queryKey,
+      })
+      void queryClient.invalidateQueries({
+        queryKey: ["resource-invitation", invitationId],
+      })
+      if (!result.accepted) return
+      void queryClient.invalidateQueries({
         queryKey:
           result.scope.resourceType === "database"
             ? queryKeys.databases.list
             : queryKeys.relays,
       })
-      await navigate({
-        href: `/infra/${section}?search=${encodeURIComponent(result.scope.resourceId)}`,
-      })
+      if (result.scope.resourceType === "instance")
+        void queryClient.invalidateQueries({
+          queryKey: relayConnectionQueryOptions(queryClient).queryKey,
+        })
     },
     onError: (cause) => showToast({ type: "error", message: cause.message }),
   })
@@ -169,9 +141,9 @@ export function ResourceInvitationDialog({
             <dt className="text-muted-foreground">Resource</dt>
             <dd className="capitalize">{invitation.data.scope.resourceType}</dd>
             <dt className="text-muted-foreground">Invited</dt>
-            <dd>{date(invitation.data.createdAt)}</dd>
+            <dd>{utcTimestamp(invitation.data.createdAt)}</dd>
             <dt className="text-muted-foreground">Expires</dt>
-            <dd>{date(invitation.data.expiresAt)}</dd>
+            <dd>{utcTimestamp(invitation.data.expiresAt)}</dd>
           </dl>
         ) : null}
         {invitation.data ? (
@@ -220,6 +192,47 @@ export function ResourceInvitationDialog({
     </Dialog>
   )
 }
-function date(value: string) {
-  return `${value.slice(0, 16).replace("T", " ")} UTC`
+type DecidedScope = Awaited<
+  ReturnType<typeof decideResourceInvitation>
+>["scope"]
+
+// Prefer the server's own workspace when the cached fleet snapshot can already
+// resolve it. Otherwise send the user to the matching inventory list filtered
+// to the resource, which resolves once the invalidated queries settle.
+function acceptedDestination(
+  queryClient: QueryClient,
+  scope: DecidedScope
+): string {
+  if (scope.resourceType === "instance") {
+    const connection = queryClient.getQueryData(
+      relayConnectionQueryOptions(queryClient).queryKey
+    )
+    const capabilities = queryClient.getQueryData(
+      accessCapabilitiesQueryOptions().queryKey
+    )
+    const snapshot =
+      connection?.status === "connected" || connection?.status === "unreachable"
+        ? connection.snapshot
+        : null
+    const instance = snapshot?.instances.find(
+      (candidate) =>
+        candidate.relayId === scope.relayId && candidate.id === scope.resourceId
+    )
+    if (snapshot && instance && capabilities) {
+      const destination = accessibleDestinationsForServer(
+        instance,
+        capabilities
+      )[0]
+      const routeId = relayInstanceRouteIdentifier(snapshot.instances, instance)
+      if (destination && routeId)
+        return serverDestinationHref(destination, routeId)
+    }
+  }
+  const section =
+    scope.resourceType === "database"
+      ? "databases"
+      : scope.resourceType === "relay"
+        ? "relays"
+        : "servers"
+  return `/infra/${section}?search=${encodeURIComponent(scope.resourceId)}`
 }

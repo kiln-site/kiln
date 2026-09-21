@@ -47,7 +47,6 @@ function grant(
     relayId: target.relayId,
     resourceId: target.id,
     resourceType: target.kind,
-    role: "viewer",
     permissions,
   }
 }

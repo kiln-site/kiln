@@ -24,6 +24,8 @@ import {
   loadResourceGrantsEffect,
   deduplicatePermissionSelections,
   effectiveScopePermissions,
+  expandStoredSelections,
+  type ResolvedAccessGrant,
   type ResourceScope,
 } from "@/lib/resource-permissions"
 import {
@@ -172,13 +174,25 @@ export const inviteResourceAccess = createServerFn({ method: "POST" })
             resourceName: string
             existing: boolean
           }> = []
+          // One grant load per Relay for the whole submission, not per target.
+          const actorGrants = new Map<string, ResolvedAccessGrant[]>()
           for (const target of targets) {
             const resource = yield* lockAccessScopeEffect(tx, target)
+            let actorRelayGrants = actorGrants.get(target.relayId)
+            if (!actorRelayGrants) {
+              actorRelayGrants = yield* loadResourceGrantsEffect(
+                actor.id,
+                target.relayId,
+                tx
+              )
+              actorGrants.set(target.relayId, actorRelayGrants)
+            }
             const authority = yield* scopeAuthorityEffect(
               tx,
               actor,
               target,
-              "access.invite"
+              "access.invite",
+              actorRelayGrants
             )
             const proposed = yield* resolveAssignmentEffect(tx, target, target)
             yield* Effect.try({
@@ -214,7 +228,7 @@ export const inviteResourceAccess = createServerFn({ method: "POST" })
             }
             const accessId = existing?.id ?? randomUUID()
             yield* tx.execute(
-              `INSERT INTO ${databaseTable("access_grant")} (id, user_id, relay_id, resource_type, resource_id, role, state, granted_by) VALUES (?, ?, ?, ?, ?, 'viewer', 'pending', ?)
+              `INSERT INTO ${databaseTable("access_grant")} (id, user_id, relay_id, resource_type, resource_id, state, granted_by) VALUES (?, ?, ?, ?, ?, 'pending', ?)
         ON DUPLICATE KEY UPDATE state = 'pending', revision = revision + 1, granted_by = VALUES(granted_by)`,
               [accessId, recipient.id, ...scopeValues(target), actor.id]
             )
@@ -227,8 +241,8 @@ export const inviteResourceAccess = createServerFn({ method: "POST" })
               token = randomBytes(32).toString("base64url"),
               expiresAt = new Date(Date.now() + 7 * 86400000)
             yield* tx.execute(
-              `INSERT INTO ${databaseTable("invitation")} (id, token_hash, email, access_id, user_id, access_type, relay_id, instance_id, database_id, role, invited_by, expires_at, delivery_status)
-        VALUES (?, ?, ?, ?, ?, 'scoped', ?, ?, ?, 'viewer', ?, ?, 'pending')`,
+              `INSERT INTO ${databaseTable("invitation")} (id, token_hash, email, access_id, user_id, access_type, relay_id, instance_id, database_id, invited_by, expires_at, delivery_status)
+        VALUES (?, ?, ?, ?, ?, 'scoped', ?, ?, ?, ?, ?, 'pending')`,
               [
                 id,
                 createHash("sha256").update(token).digest("hex"),
@@ -428,7 +442,9 @@ export const decideResourceInvitation = createServerFn({ method: "POST" })
             `SELECT i.*, g.resource_type, g.resource_id FROM ${databaseTable("invitation")} i JOIN ${databaseTable("access_grant")} g ON g.id = i.access_id WHERE i.id = ? FOR UPDATE`,
             [data.id]
           )
-          const invitation = rows[0]!
+          const invitation = rows[0]
+          if (!invitation)
+            return yield* Effect.fail(new Error("Invitation not found"))
           const admin = actor.isDevelopmentBypass || actor.role === "admin"
           if (data.force && (!admin || data.decision !== "accept"))
             return yield* Effect.fail(
@@ -556,7 +572,11 @@ export const savePermissionPreset = createServerFn({ method: "POST" })
               assertDelegation(
                 authority,
                 proposed,
-                expandPermissionSelections(previous, data.resourceType)
+                expandStoredSelections(
+                  previous,
+                  data.resourceType,
+                  capabilities
+                )
               ),
             catch: (cause) =>
               cause instanceof Error
@@ -699,18 +719,23 @@ export const updateResourceAccess = createServerFn({ method: "POST" })
               `SELECT preset_id, builtin_key FROM ${databaseTable("access_preset")} WHERE access_id = ?`,
               [grant.id]
             )
-            const previous = yield* resolveAssignmentEffect(tx, data, {
-              selections: oldSelections.map((s) => ({
-                kind: s.selection_kind,
-                key: s.selection_key,
-              })),
-              presetIds: oldPresets.flatMap((p) =>
-                p.preset_id ? [p.preset_id] : []
-              ),
-              builtinKeys: oldPresets.flatMap((p) =>
-                p.builtin_key ? [p.builtin_key] : []
-              ),
-            })
+            const previous = yield* resolveAssignmentEffect(
+              tx,
+              data,
+              {
+                selections: oldSelections.map((s) => ({
+                  kind: s.selection_kind,
+                  key: s.selection_key,
+                })),
+                presetIds: oldPresets.flatMap((p) =>
+                  p.preset_id ? [p.preset_id] : []
+                ),
+                builtinKeys: oldPresets.flatMap((p) =>
+                  p.builtin_key ? [p.builtin_key] : []
+                ),
+              },
+              { stored: true }
+            )
             const proposed = yield* resolveAssignmentEffect(tx, data, data)
             yield* Effect.try({
               try: () => assertDelegation(authority, proposed, previous),

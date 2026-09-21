@@ -1,19 +1,22 @@
 import type { RowDataPacket } from "mysql2/promise"
 import { Effect } from "effect"
 
-import { isAccountEnabled, isAccountVerified } from "@/lib/account-policy"
-import { loadResourceGrantsEffect } from "@/lib/resource-permissions"
+import {
+  accountPolicyFromRow,
+  isAccountEnabled,
+  isAccountVerified,
+} from "@/lib/account-policy"
+import {
+  loadResourceGrantsEffect,
+  type ResolvedAccessGrant,
+} from "@/lib/resource-permissions"
 import type { AuthenticatedUser } from "@/lib/auth-session"
 import { databaseTable } from "@/lib/database-config"
 import { Database } from "@/effect/database"
 import { PermissionDeniedError } from "@/effect/errors"
 import { runAppEffect } from "@/effect/runtime"
 import { advanceAuthorizationRevisionEffect } from "@/lib/authorization-revision"
-import type {
-  AccessPermission,
-  AccessRole,
-  PlatformPermission,
-} from "@/lib/permissions"
+import type { AccessPermission, PlatformPermission } from "@/lib/permissions"
 import {
   platformRoleHasPermission,
   grantHasPermission,
@@ -34,14 +37,29 @@ interface FreshAuthorizationUserRow extends RowDataPacket {
   session_id: string | null
 }
 
-export interface AccessGrant {
-  id: string
-  relayId: string
-  resourceId: string
-  resourceType: "database" | "instance" | "relay"
-  role: AccessRole
-  permissions?: Array<AccessPermission>
-  source?: "access" | "owner"
+/** Loaded grants; `source` is informational and optional for callers building grants in memory. */
+export type AccessGrant = Omit<ResolvedAccessGrant, "source"> &
+  Partial<Pick<ResolvedAccessGrant, "source">>
+
+/** Whether a loaded grant set allows a permission at a Relay, instance, or database target. */
+export function grantsAllowPermission(
+  grants: ReadonlyArray<AccessGrant>,
+  permission: AccessPermission,
+  target: { relayId: string; instanceId?: string; databaseId?: string }
+): boolean {
+  return grants.some((grant) => {
+    if (grant.relayId !== target.relayId) return false
+    if (!grantHasPermission(grant, permission)) return false
+    if (grant.resourceType === "relay") return true
+    return Boolean(
+      (grant.resourceType === "instance" &&
+        target.instanceId &&
+        grant.resourceId === target.instanceId) ||
+      (grant.resourceType === "database" &&
+        target.databaseId &&
+        grant.resourceId === target.databaseId)
+    )
+  })
 }
 
 export function deduplicateEffectiveInstanceGrants<
@@ -66,57 +84,6 @@ export function isCurrentInstanceOwnerGrant(input: {
   ownerId: string | null
 }): boolean {
   return input.ownerId !== null && input.ownerId === input.grantUserId
-}
-
-export function isProtectedInstanceOwnerGrant(input: {
-  grantRole: string | null
-  grantUserId: string | null
-  ownerId: string | null
-}): boolean {
-  return input.grantRole === "owner" || isCurrentInstanceOwnerGrant(input)
-}
-
-export function isBlockedInstanceOwnerRoleChange(input: {
-  grantRole: string | null
-  grantUserId: string | null
-  nextRole: string
-  ownerId: string | null
-}): boolean {
-  return (
-    input.nextRole !== input.grantRole &&
-    input.nextRole !== "owner" &&
-    isCurrentInstanceOwnerGrant(input)
-  )
-}
-
-export function accessGrantRoleChangeError(input: {
-  canManageOwners: boolean
-  currentRole: string | null
-  nextRole: string
-  ownerId: string | null
-  userId: string
-}): Error | null {
-  if (
-    (input.currentRole === "owner" || input.nextRole === "owner") &&
-    !input.canManageOwners
-  ) {
-    return new Error(
-      "Only a Relay owner or platform admin can change owner access"
-    )
-  }
-  if (
-    isBlockedInstanceOwnerRoleChange({
-      grantRole: input.currentRole,
-      grantUserId: input.userId,
-      nextRole: input.nextRole,
-      ownerId: input.ownerId,
-    })
-  ) {
-    return new Error(
-      "Transfer ownership before changing the server owner's role"
-    )
-  }
-  return null
 }
 
 export async function listUserGrants(
@@ -146,13 +113,11 @@ export function visibleRelaysForUser<
   relays: ReadonlyArray<TRelay>,
   grants: Iterable<Pick<AccessGrant, "relayId">>
 ): Array<TRelay> {
+  if (!isAccountEnabled(user) || !isAccountVerified(user)) return []
   if (isPlatformAdmin(user)) return [...relays]
+  // Relay creators appear in grants as owner rows; no separate creator clause.
   const grantedRelayIds = new Set(Array.from(grants, (grant) => grant.relayId))
-  return relays.filter(
-    (relay) =>
-      grantedRelayIds.has(relay.id) ||
-      (isRelayCreator(user) && relay.createdBy === user.id)
-  )
+  return relays.filter((relay) => grantedRelayIds.has(relay.id))
 }
 
 export function hasPlatformPermission(
@@ -178,18 +143,7 @@ export async function hasRelayPermission(input: {
     return false
   if (isPlatformAdmin(input.user)) return true
   const grants = await listUserGrants(input.user.id, input.relayId)
-  return grants.some((grant) => {
-    if (!grantHasPermission(grant, input.permission)) return false
-    if (grant.resourceType === "relay") return true
-    return Boolean(
-      (grant.resourceType === "instance" &&
-        input.instanceId &&
-        grant.resourceId === input.instanceId) ||
-      (grant.resourceType === "database" &&
-        input.databaseId &&
-        grant.resourceId === input.databaseId)
-    )
-  })
+  return grantsAllowPermission(grants, input.permission, input)
 }
 
 export async function requireRelayPermission(input: {
@@ -255,18 +209,7 @@ export const requireRelayPermissionsEffect = Effect.fn(
     }
   )
   const allowed = input.permissions.every((permission) =>
-    grants.some((grant) => {
-      if (!grantHasPermission(grant, permission)) return false
-      if (grant.resourceType === "relay") return true
-      return Boolean(
-        (grant.resourceType === "instance" &&
-          input.instanceId &&
-          grant.resourceId === input.instanceId) ||
-        (grant.resourceType === "database" &&
-          input.databaseId &&
-          grant.resourceId === input.databaseId)
-      )
-    })
+    grantsAllowPermission(grants, permission, input)
   )
   if (!allowed) {
     return yield* PermissionDeniedError.make({
@@ -331,20 +274,7 @@ export const refreshRelayAuthorizationUserEffect = Effect.fn(
   )
   const current = rows[0]
   const freshUser = current
-    ? {
-        ...input.user,
-        status:
-          current.status === "disabled" &&
-          (!current.statusExpiresAt ||
-            current.statusExpiresAt.getTime() > Date.now())
-            ? ("disabled" as const)
-            : ("enabled" as const),
-        statusExpiresAt: current.statusExpiresAt?.toISOString() ?? null,
-        emailVerifiedAt: current.emailVerifiedAt?.toISOString() ?? null,
-        manuallyVerifiedAt: current.manuallyVerifiedAt?.toISOString() ?? null,
-        legacyVerificationRecordedAt:
-          current.legacyVerificationRecordedAt?.toISOString() ?? null,
-      }
+    ? { ...input.user, ...accountPolicyFromRow(current) }
     : null
   if (
     !current ||

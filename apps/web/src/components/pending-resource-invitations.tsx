@@ -1,6 +1,6 @@
 import { memo, useMemo, useState, useSyncExternalStore } from "react"
 import { useQuery } from "@tanstack/react-query"
-import { useRouterState } from "@tanstack/react-router"
+import { useRouter, useRouterState } from "@tanstack/react-router"
 import { Clock3 } from "lucide-react"
 import { Button } from "@workspace/ui/components/button"
 import {
@@ -49,6 +49,7 @@ export const PendingResourceInvitations = memo(
           .get("search")
           ?.toLowerCase(),
     })
+    const router = useRouter()
     const [selected, setSelected] = useState<string | null>(null)
     const [dismissed, setDismissed] = useState<string | null>(null)
     const rows =
@@ -62,10 +63,14 @@ export const PendingResourceInvitations = memo(
               .toLowerCase()
               .includes(search))
       ) ?? []
-    const fromSearch = query.data?.find(
-      (row) => row.scope.resourceId.toLowerCase() === (routeSearch || search)
-    )?.id
-    const requested = routeInvitation ?? fromSearch ?? null
+    // Only a deep link opens the dialog. Typing an id into the table's own
+    // search box should filter the list, not pop a modal mid-keystroke.
+    const fromRouteSearch = routeSearch
+      ? query.data?.find(
+          (row) => row.scope.resourceId.toLowerCase() === routeSearch
+        )?.id
+      : undefined
+    const requested = routeInvitation ?? fromRouteSearch ?? null
     const active = selected ?? (requested !== dismissed ? requested : null)
     return (
       <>
@@ -89,6 +94,20 @@ export const PendingResourceInvitations = memo(
             onClose={() => {
               setDismissed(requested)
               setSelected(null)
+              // A decided invitation must not reopen on reload. Read the
+              // location from the router on demand so this body does not
+              // subscribe to every navigation.
+              if (routeInvitation) {
+                const url = new URL(
+                  router.state.location.href,
+                  window.location.origin
+                )
+                url.searchParams.delete("invitation")
+                void router.navigate({
+                  replace: true,
+                  href: `${url.pathname}${url.search}${url.hash}`,
+                })
+              }
             }}
           />
         ) : null}

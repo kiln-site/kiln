@@ -44,7 +44,12 @@ import {
   listUserGrants,
   requireRelayPermission,
   visibleRelaysForUser,
+  type AccessGrant,
 } from "@/lib/access-control"
+import {
+  instanceScope,
+  resolveScopeAuthorization,
+} from "@/lib/scope-authorization.server"
 import {
   listFileActivity,
   recordFileEdited,
@@ -326,12 +331,12 @@ export const deleteInstance = createServerFn({ method: "POST" })
   .validator(deleteInstanceInputSchema)
   .handler(async ({ data }) => {
     const { relay, user } = await instanceRelayAccess(data.relayId)
-    await requireRelayPermission({
+    // Deletion weighs delete and backup authority; resolve the grants once.
+    const authorization = await resolveScopeAuthorization({
+      scope: instanceScope(relay.id, data.instanceId),
       user,
-      relayId: relay.id,
-      permission: "instance.delete",
-      instanceId: data.instanceId,
     })
+    authorization.require("instance.delete")
     if (data.confirmation !== data.instanceId) {
       throw AuthenticationError.make({
         message: "The server ID confirmation did not match.",
@@ -341,12 +346,7 @@ export const deleteInstance = createServerFn({ method: "POST" })
     await requireAccountPassword(user, data.password)
 
     if (data.createBackup) {
-      await requireRelayPermission({
-        user,
-        relayId: relay.id,
-        instanceId: data.instanceId,
-        permission: "backup.create",
-      })
+      authorization.require("backup.create")
       await deleteInstanceWithFinalBackup({
         instanceId: data.instanceId,
         relay,
@@ -1084,14 +1084,12 @@ async function relayFallbackSnapshot(relay: RelayEndpoint) {
   )
 }
 
-async function authorizeRelaySnapshot(
+function authorizeRelaySnapshot(
   snapshot: Awaited<ReturnType<typeof relaySnapshot>>,
   relay: RelayEndpoint,
-  user: AuthenticatedUser
+  user: AuthenticatedUser,
+  grants: ReadonlyArray<AccessGrant>
 ) {
-  const grants = isPlatformAdmin(user)
-    ? []
-    : await listUserGrants(user.id, relay.id)
   const allowed = allowedInstanceIdsForUser(
     user,
     relay.id,
@@ -1111,6 +1109,7 @@ async function authorizeRelaySnapshot(
 async function authorizedRelayEntry(
   relay: PersistedRelay,
   user: AuthenticatedUser,
+  grants: ReadonlyArray<AccessGrant>,
   options: {
     fallbackOnError: boolean
     fresh?: boolean
@@ -1143,18 +1142,13 @@ async function authorizedRelayEntry(
           }))
         )
       }),
-      Effect.flatMap(({ snapshot, status }) =>
-        Effect.tryPromise({
-          try: async () => ({
-            relay,
-            snapshot: snapshot
-              ? await authorizeRelaySnapshot(snapshot, relay, user)
-              : null,
-            status,
-          }),
-          catch: (cause) => cause,
-        })
-      )
+      Effect.map(({ snapshot, status }) => ({
+        relay,
+        snapshot: snapshot
+          ? authorizeRelaySnapshot(snapshot, relay, user, grants)
+          : null,
+        status,
+      }))
     )
   )
 }
@@ -1214,12 +1208,14 @@ async function authorizedFleetSnapshot(
   fallbackOnError: boolean,
   fresh = false
 ): Promise<RelayFleetSnapshot> {
-  const relays = (
-    await authorizedRelays(user, await listPersistedRelays())
-  ).filter((relay) => relay.enabled)
+  const { grants, relays: visibleRelays } = await authorizedRelays(
+    user,
+    await listPersistedRelays()
+  )
+  const relays = visibleRelays.filter((relay) => relay.enabled)
   const entries = await Promise.all(
     relays.map((relay) =>
-      authorizedRelayEntry(relay, user, {
+      authorizedRelayEntry(relay, user, grants, {
         fallbackOnError,
         fresh,
         warnOnUnavailable: false,
@@ -1237,7 +1233,7 @@ async function authorizedRelayConnectionState(
     warnOnUnavailable: boolean
   }
 ) {
-  const configuredRelays = await authorizedRelays(
+  const { grants, relays: configuredRelays } = await authorizedRelays(
     user,
     await listPersistedRelays()
   )
@@ -1262,7 +1258,7 @@ async function authorizedRelayConnectionState(
   }
 
   const entries = await Promise.all(
-    relays.map((relay) => authorizedRelayEntry(relay, user, options))
+    relays.map((relay) => authorizedRelayEntry(relay, user, grants, options))
   )
   const connectedCount = entries.filter(
     (entry) => entry.status === "connected"
@@ -1289,12 +1285,16 @@ async function authorizedRelayConnectionState(
   }
 }
 
+/**
+ * One grant load covers the whole fleet: relay visibility, per-relay instance
+ * filtering, and node readability all read the same resolved set.
+ */
 async function authorizedRelays(
   user: AuthenticatedUser,
   relays: Array<PersistedRelay>
-): Promise<Array<PersistedRelay>> {
+): Promise<{ grants: Array<AccessGrant>; relays: Array<PersistedRelay> }> {
   const grants = isPlatformAdmin(user) ? [] : await listUserGrants(user.id)
-  return visibleRelaysForUser(user, relays, grants)
+  return { grants, relays: visibleRelaysForUser(user, relays, grants) }
 }
 
 async function mergeRelaySnapshots(

@@ -34,6 +34,8 @@ import { publishRealtimeChange } from "@/lib/realtime-source.server"
 const publicUrl = kilnPublicUrl()
 const authUrl = betterAuthUrl()
 const emailDeliveryEnabled = emailDeliveryConfig() !== null
+const signupTrustedWithoutDelivery = () =>
+  !emailDeliveryEnabled && publicSignupEnabled()
 export const auth = betterAuth({
   appName: "Kiln",
   baseURL: authUrl.origin,
@@ -119,8 +121,29 @@ export const auth = betterAuth({
               name,
               status: "enabled",
               statusChangedAt: new Date(),
+              // Without email delivery nobody can prove a mailbox, so an
+              // operator who enables public sign-up is trusting registrants.
+              // Record that as explicit manual trust rather than leaving
+              // self-hosted accounts permanently unverified.
+              ...(signupTrustedWithoutDelivery()
+                ? { manuallyVerifiedAt: new Date(), manuallyVerifiedBy: null }
+                : {}),
             },
           }
+        },
+        after: async (user) => {
+          if (!signupTrustedWithoutDelivery()) return
+          await databasePool.execute(
+            `INSERT INTO ${databaseTable("auth_audit")} (user_id, event, metadata)
+             VALUES (?, 'account.manually-verified', ?)`,
+            [
+              user.id,
+              JSON.stringify({
+                actorId: null,
+                reason: "public-signup-without-email-delivery",
+              }),
+            ]
+          )
         },
       },
       update: {

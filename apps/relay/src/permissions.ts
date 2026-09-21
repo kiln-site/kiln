@@ -1,3 +1,4 @@
+import { relayReadOnlyMachineActions } from "@workspace/contracts"
 import { Schema } from "effect"
 
 import type { RelayClientRole } from "./effect/state.js"
@@ -61,26 +62,9 @@ export type RelayAction = (typeof relayActions)[number]
 
 export const RelayActionSchema = Schema.Literals(relayActions)
 
-const readOnlyActions = new Set<RelayAction>([
-  "relay.read",
-  "relay.audit.read",
-  "relay.pairing.list",
-  "relay.clients.list",
-  "brick.read",
-  "database.read",
-  "database.dump.export",
-  "backup.read",
-  "backup.download",
-  "schedule.read",
-  "instance.read",
-  "instance.console.read",
-  "instance.sftp.connect",
-  "instance.files.list",
-  "instance.files.read",
-  "instance.files.download",
-  "instance.network.read",
-  "instance.logs.read",
-])
+const readOnlyActions: ReadonlySet<string> = new Set(
+  relayReadOnlyMachineActions
+)
 
 export function actionsForRole(
   role: RelayClientRole,

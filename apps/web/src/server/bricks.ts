@@ -21,11 +21,14 @@ import { z } from "zod"
 import {
   canReadRelayNode,
   hasPlatformPermission,
-  hasRelayPermission,
   isPlatformAdmin,
   listUserGrants,
   requireRelayPermission,
 } from "@/lib/access-control"
+import {
+  instanceScope,
+  resolveScopeAuthorization,
+} from "@/lib/scope-authorization.server"
 import { grantHasPermission } from "@/lib/permissions"
 import type { AccessGrant } from "@/lib/access-control"
 import type { AuthenticatedUser } from "@/lib/auth-session"
@@ -441,12 +444,13 @@ export const updateInstanceStartup = createServerFn({ method: "POST" })
   .handler(async ({ data }) => {
     const user = await requireEligibleResourceUser()
     const relay = await requiredRelay(data.relayId)
-    await requireRelayPermission({
+    // Startup weighs read, configuration, limits, network, and power authority.
+    // Resolve the grants once and answer every check from the local set.
+    const authorization = await resolveScopeAuthorization({
+      scope: instanceScope(relay.id, data.instanceId),
       user,
-      relayId: relay.id,
-      permission: "instance.configuration.read",
-      instanceId: data.instanceId,
     })
+    authorization.require("instance.configuration.read")
     const existing = await requiredRelayInstance(relay, data.instanceId)
     const submittedRecipe = data.recipe
     const recipeChanged =
@@ -480,54 +484,23 @@ export const updateInstanceStartup = createServerFn({ method: "POST" })
         data.variables ?? {}
       )
     }
-    const permissionInput = {
-      user,
-      relayId: relay.id,
-      instanceId: data.instanceId,
-    }
-    if (networkChanged)
-      await requireRelayPermission({
-        ...permissionInput,
-        permission: "instance.network.write",
-      })
+    if (networkChanged) authorization.require("instance.network.write")
     if (configurationChanged)
-      await requireRelayPermission({
-        ...permissionInput,
-        permission: "instance.configuration.write",
-      })
-    if (limitsChanged)
-      await requireRelayPermission({
-        ...permissionInput,
-        permission: "instance.limits.write",
-      })
+      authorization.require("instance.configuration.write")
+    if (limitsChanged) authorization.require("instance.limits.write")
     // Applying unchanged settings still rebuilds the container. A read grant
     // alone must never authorize this mutation.
-    if (!configurationChanged && !limitsChanged && !networkChanged) {
-      const canConfigure = await hasRelayPermission({
-        ...permissionInput,
-        permission: "instance.configuration.write",
-      })
-      const canChangeLimits =
-        !canConfigure &&
-        (await hasRelayPermission({
-          ...permissionInput,
-          permission: "instance.limits.write",
-        }))
-      await requireRelayPermission({
-        ...permissionInput,
-        permission: canConfigure
-          ? "instance.configuration.write"
-          : canChangeLimits
-            ? "instance.limits.write"
-            : "instance.network.write",
-      })
+    if (
+      !configurationChanged &&
+      !limitsChanged &&
+      !networkChanged &&
+      !authorization.allows("instance.configuration.write") &&
+      !authorization.allows("instance.limits.write")
+    ) {
+      authorization.require("instance.network.write")
     }
     const powerPermission = startupPowerPermission(existing, data)
-    if (powerPermission)
-      await requireRelayPermission({
-        ...permissionInput,
-        permission: powerPermission,
-      })
+    if (powerPermission) authorization.require(powerPermission)
     const { recipeDefinition: _untrustedRecipeDefinition, ...trustedData } =
       data
     const input = relayUpdateInstanceStartupSchema.parse({

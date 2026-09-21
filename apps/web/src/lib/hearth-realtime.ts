@@ -33,8 +33,6 @@ const prefix = (queryKey: QueryKey): HearthRealtimeQueryScope => ({
 const hearthRealtimeQueryScopes = {
   access: [
     exact(queryKeys.access.capabilities),
-    exact(queryKeys.access.overview),
-    prefix(["access", "instances"]),
     prefix(["resource-access"]),
     prefix(["access-resources"]),
     prefix(["my-resource-invitations"]),
@@ -67,7 +65,6 @@ const hearthRealtimeQueryScopes = {
     exact(queryKeys.schedules.all),
     exact(queryKeys.schedules.options),
     exact(queryKeys.tailscaleStacks),
-    exact(queryKeys.access.overview),
     prefix(["activity"]),
     prefix(["relays", "proxy"]),
   ],
@@ -85,8 +82,6 @@ function queryScopes(
   if (topic === "access" && scope) {
     return [
       exact(queryKeys.access.capabilities),
-      exact(queryKeys.access.overview),
-      prefix(["access", "instances", scope.relayId]),
       prefix(["resource-access", scope.relayId]),
       prefix(["access-resources"]),
       prefix(["my-resource-invitations"]),

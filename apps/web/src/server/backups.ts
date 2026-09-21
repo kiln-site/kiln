@@ -47,6 +47,10 @@ import {
   listUserGrants,
   requireRelayPermission,
 } from "@/lib/access-control"
+import {
+  instanceScope,
+  resolveScopeAuthorization,
+} from "@/lib/scope-authorization.server"
 import { hasBackupPermission } from "@/lib/backup-access"
 import {
   resolveAuthorizedBackupStorageSelection,
@@ -194,24 +198,19 @@ export const createInstanceBackup = createServerFn({ method: "POST" })
   .handler(async ({ data }) => {
     const user = await requireEligibleResourceUser()
     const relay = await requireBackupRelay(data.relayId)
-    await requireRelayPermission({
-      instanceId: data.instanceId,
-      permission: "backup.create",
-      relayId: relay.id,
+    // Create and the personal-destination download rule share one grant load.
+    const authorization = await resolveScopeAuthorization({
+      scope: instanceScope(relay.id, data.instanceId),
       user,
     })
+    authorization.require("backup.create")
     const storageIds = await resolveBackupStorageSelection({
       ...data,
       targetId: data.instanceId,
       targetKind: "instance",
     })
-    await validateRequestedStorage({ storageIds }, user.id, false, () =>
-      requireRelayPermission({
-        instanceId: data.instanceId,
-        permission: "backup.download",
-        relayId: relay.id,
-        user,
-      })
+    await validateRequestedStorage({ storageIds }, user.id, false, async () =>
+      authorization.require("backup.download")
     )
     const snapshot = relaySnapshotSchema.parse(
       await relayRpc(relay, "relay.snapshot", {}, 15_000, user.id)
@@ -250,24 +249,23 @@ export const createDatabaseBackup = createServerFn({ method: "POST" })
   .handler(async ({ data }) => {
     const user = await requireEligibleResourceUser()
     const relay = await requireBackupRelay(data.relayId)
-    await requireRelayPermission({
-      databaseId: data.databaseId,
-      permission: "backup.create",
-      relayId: relay.id,
+    // Create and the personal-destination download rule share one grant load.
+    const authorization = await resolveScopeAuthorization({
+      scope: {
+        relayId: relay.id,
+        resourceId: data.databaseId,
+        resourceType: "database",
+      },
       user,
     })
+    authorization.require("backup.create")
     const storageIds = await resolveBackupStorageSelection({
       ...data,
       targetId: data.databaseId,
       targetKind: "database",
     })
-    await validateRequestedStorage({ storageIds }, user.id, false, () =>
-      requireRelayPermission({
-        databaseId: data.databaseId,
-        permission: "backup.download",
-        relayId: relay.id,
-        user,
-      })
+    await validateRequestedStorage({ storageIds }, user.id, false, async () =>
+      authorization.require("backup.download")
     )
     const records = await runAppEffect(
       "backups.databaseTarget",

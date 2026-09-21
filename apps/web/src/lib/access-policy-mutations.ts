@@ -9,12 +9,19 @@ import {
 } from "@workspace/contracts"
 import { Database, type DatabaseTransaction } from "@/effect/database"
 import type { AuthenticatedUser } from "@/lib/auth-session"
-import { isAccountEnabled, isAccountVerified } from "@/lib/account-policy"
+import {
+  accountPolicyFromRow,
+  isAccountEnabled,
+  isAccountVerified,
+} from "@/lib/account-policy"
 import { databaseTable } from "@/lib/database-config"
 import {
+  databaseScopeCapabilities,
   loadResourceGrantsEffect,
   deduplicatePermissionSelections,
   effectiveScopePermissions,
+  expandStoredSelections,
+  type ResolvedAccessGrant,
   type ResourceScope,
 } from "@/lib/resource-permissions"
 import { advanceAuthorizationRevisionEffect } from "@/lib/authorization-revision"
@@ -65,16 +72,7 @@ export function lockAccessActorEffect(
         row.role === "admin" || row.role === "relay_creator"
           ? row.role
           : "user",
-      status:
-        row.status === "disabled" &&
-        (!row.statusExpiresAt || row.statusExpiresAt.getTime() > Date.now())
-          ? "disabled"
-          : "enabled",
-      statusExpiresAt: row.statusExpiresAt?.toISOString() ?? null,
-      emailVerifiedAt: row.emailVerifiedAt?.toISOString() ?? null,
-      manuallyVerifiedAt: row.manuallyVerifiedAt?.toISOString() ?? null,
-      legacyVerificationRecordedAt:
-        row.legacyVerificationRecordedAt?.toISOString() ?? null,
+      ...accountPolicyFromRow(row),
     }
     if (!isAccountEnabled(actor) || !isAccountVerified(actor))
       return yield* Effect.fail(
@@ -110,11 +108,22 @@ export function lockAccessScopeEffect(
   })
 }
 
+/**
+ * The actor's effective authority at a scope, checked for one management
+ * permission. Pass `grants` (the actor's grants for the scope's Relay, loaded
+ * inside the same transaction) to avoid reloading per target in bulk edits.
+ */
 export function scopeAuthorityEffect(
   transaction: DatabaseTransaction,
   actor: AuthenticatedUser,
   scope: ResourceScope,
-  permission: AccessPermission
+  permission: AccessPermission,
+  grants?: ReadonlyArray<
+    Pick<
+      ResolvedAccessGrant,
+      "relayId" | "resourceType" | "resourceId" | "permissions"
+    >
+  >
 ) {
   return Effect.gen(function* () {
     const permissions =
@@ -126,12 +135,13 @@ export function scopeAuthorityEffect(
             )
           )
         : effectiveScopePermissions(
-            yield* loadResourceGrantsEffect(
-              actor.id,
-              scope.relayId,
-              transaction,
-              scope
-            ),
+            grants ??
+              (yield* loadResourceGrantsEffect(
+                actor.id,
+                scope.relayId,
+                transaction,
+                scope
+              )),
             scope
           )
     if (!permissions.has(permission))
@@ -142,10 +152,12 @@ export function scopeAuthorityEffect(
   })
 }
 
+/** `stored` expands a persisted assignment, tolerating keys the catalog no longer supports here. */
 export function resolveAssignmentEffect(
   transaction: DatabaseTransaction,
   scope: ResourceScope,
-  assignment: AccessAssignment
+  assignment: AccessAssignment,
+  options: { stored?: boolean } = {}
 ) {
   return Effect.gen(function* () {
     const capabilities = yield* scopeCapabilitiesEffect(transaction, scope)
@@ -185,11 +197,13 @@ export function resolveAssignmentEffect(
     }
     return yield* Effect.try({
       try: () =>
-        expandPermissionSelections(
-          deduplicatePermissionSelections(selections),
-          scope.resourceType,
-          capabilities
-        ),
+        options.stored
+          ? expandStoredSelections(selections, scope.resourceType, capabilities)
+          : expandPermissionSelections(
+              deduplicatePermissionSelections(selections),
+              scope.resourceType,
+              capabilities
+            ),
       catch: (cause) =>
         cause instanceof Error
           ? cause
@@ -326,8 +340,6 @@ export function scopeCapabilitiesEffect(
       [scope.relayId, scope.resourceId]
     )
     if (!rows[0]) return yield* Effect.fail(new Error("Resource not found"))
-    return ["mysql", "mariadb", "postgres"].includes(rows[0].engine)
-      ? ["database.logical-backups"]
-      : []
+    return databaseScopeCapabilities(rows[0].engine)
   })
 }

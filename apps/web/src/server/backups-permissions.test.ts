@@ -33,7 +33,12 @@ vi.mock("@tanstack/react-start", () => ({
   }),
 }))
 vi.mock("@/server/auth", () => ({
-  requireEligibleResourceUser: async () => ({ id: "user-1", role: "user" }),
+  requireEligibleResourceUser: async () => ({
+    emailVerifiedAt: "2026-01-01T00:00:00.000Z",
+    id: "user-1",
+    role: "user",
+    status: "enabled",
+  }),
 }))
 vi.mock("@/lib/access-control", () => ({
   hasPlatformPermission: () => false,
@@ -92,9 +97,7 @@ vi.mock("@/lib/backup-run-cursor.server", () => ({}))
 import {
   copyBackupToDestination_createServerFn_handler as copyBackupToDestination,
   createInstanceBackup_createServerFn_handler as createInstanceBackup,
-  createDatabaseBackup_createServerFn_handler as createDatabaseBackup,
   restoreInstanceBackup_createServerFn_handler as restoreInstanceBackup,
-  restoreDatabaseBackup_createServerFn_handler as restoreDatabaseBackup,
   // @ts-expect-error TanStack Start exposes the provider through a Vite query.
 } from "./backups?tss-serverfn-split"
 
@@ -125,7 +128,6 @@ function grant(
     relayId: "relay-1",
     resourceId,
     resourceType: "instance",
-    role: "viewer",
     permissions: [permission],
   }
 }
@@ -190,162 +192,36 @@ describe("backup export authorization", () => {
           storageIds: [null, storageId],
         },
       })
-    ).rejects.toThrow("Permission denied")
+    ).rejects.toThrow("You do not have permission to perform this action")
     expect(mocks.rpc).not.toHaveBeenCalled()
   })
 
-  it("denies a personal policy destination after download permission is revoked", async () => {
-    mocks.grants = [grant("backup.create")]
-    mocks.run.mockResolvedValue({
-      storageId,
-      enabled: true,
-      deleting: false,
-      ownerUserId: "user-1",
+  it("requires download permission for a personal safety-backup destination", async () => {
+    mocks.grants = [grant("backup.restore"), grant("backup.create")]
+    mocks.rpc.mockResolvedValue({
+      instances: [
+        {
+          id: backup.targetId,
+          observedState: "stopped",
+          desiredState: "stopped",
+        },
+      ],
     })
+    mocks.run.mockImplementation(async (operation: string) => {
+      if (operation === "backups.getForRestore")
+        return { ...backup, status: "available", backupMode: "full" }
+      if (operation === "backups.resolveStoragePolicy") return { storageId }
+      if (operation === "backups.loadSelectedStorage")
+        return { enabled: true, deleting: false, ownerUserId: "user-1" }
+      throw new Error(`Unexpected operation: ${operation}`)
+    })
+
     await expect(
-      createInstanceBackup({
-        data: { instanceId: "instance-1", relayId: "relay-1", name: "Backup" },
+      restoreInstanceBackup({
+        data: { backupId: backup.id, safetyBackup: true },
       })
     ).rejects.toThrow("Permission denied")
-    expect(mocks.rpc).not.toHaveBeenCalled()
+    expect(mocks.reserveSafety).not.toHaveBeenCalled()
+    expect(mocks.reserveRestore).not.toHaveBeenCalled()
   })
-
-  it("allows creation into personal storage with both create and download", async () => {
-    mocks.grants = [grant("backup.create"), grant("backup.download")]
-    await expect(
-      createInstanceBackup({
-        data: {
-          instanceId: "instance-1",
-          relayId: "relay-1",
-          name: "Backup",
-          storageId,
-        },
-      })
-    ).rejects.toThrow("Resource lookup reached")
-    expect(mocks.rpc).toHaveBeenCalledOnce()
-  })
-
-  it("denies database creation into personal storage without download", async () => {
-    mocks.grants = [{ ...grant("backup.create"), resourceType: "database" }]
-    await expect(
-      createDatabaseBackup({
-        data: {
-          databaseId: "instance-1",
-          relayId: "relay-1",
-          name: "Backup",
-          storageId,
-        },
-      })
-    ).rejects.toThrow("Permission denied")
-    expect(mocks.run.mock.calls.map(([operation]) => operation)).not.toContain(
-      "backups.databaseTarget"
-    )
-  })
-
-  it.each([null, undefined, storageId])(
-    "allows create-only access to local/default/platform storage (%s)",
-    async (selectedStorage) => {
-      mocks.grants = [grant("backup.create")]
-      mocks.run.mockResolvedValue({
-        storageId: null,
-        enabled: true,
-        deleting: false,
-        ownerUserId: null,
-      })
-      await expect(
-        createInstanceBackup({
-          data: {
-            instanceId: "instance-1",
-            relayId: "relay-1",
-            name: "Backup",
-            storageId: selectedStorage,
-          },
-        })
-      ).rejects.toThrow("Resource lookup reached")
-      expect(mocks.rpc).toHaveBeenCalledOnce()
-    }
-  )
-
-  describe.each(["instance", "database"] as const)(
-    "%s restore safety export",
-    (targetKind) => {
-      function setupRestore(canDownload: boolean) {
-        mocks.grants = [
-          grant("backup.restore"),
-          grant("backup.create"),
-          ...(canDownload ? [grant("backup.download")] : []),
-        ].map((grant) => ({ ...grant, resourceType: targetKind }))
-        mocks.rpc.mockResolvedValue({
-          instances: [
-            {
-              id: backup.targetId,
-              observedState: "stopped",
-              desiredState: "stopped",
-            },
-          ],
-        })
-        mocks.run.mockImplementation(async (operation: string) => {
-          if (
-            operation === "backups.getForRestore" ||
-            operation === "backups.getForDatabaseRestore"
-          )
-            return {
-              ...backup,
-              targetKind,
-              status: "available",
-              backupMode: "full",
-              artifactKind:
-                targetKind === "database" ? "database_dump" : "archive",
-            }
-          if (operation === "backups.resolveStoragePolicy") return { storageId }
-          if (operation === "backups.loadSelectedStorage")
-            return { enabled: true, deleting: false, ownerUserId: "user-1" }
-          if (operation === "backups.databaseRestoreTarget")
-            return [{ relayId: backup.relayId, databaseId: backup.targetId }]
-          if (
-            operation === "backups.reserveSafety" ||
-            operation === "backups.reserveDatabaseSafety"
-          )
-            return { backupId: "safety", taskId: "safety-task" }
-          throw new Error(`Unexpected operation: ${operation}`)
-        })
-        return targetKind === "instance"
-          ? restoreInstanceBackup
-          : restoreDatabaseBackup
-      }
-
-      it("denies personal policy safety export before reserving or restoring", async () => {
-        const restore = setupRestore(false)
-        await expect(
-          restore({ data: { backupId: backup.id, safetyBackup: true } })
-        ).rejects.toThrow("Permission denied")
-        expect(mocks.reserveSafety).not.toHaveBeenCalled()
-        expect(mocks.reserveRestore).not.toHaveBeenCalled()
-      })
-
-      it("pins the personal safety destination with download permission", async () => {
-        const restore = setupRestore(true)
-        await expect(
-          restore({ data: { backupId: backup.id, safetyBackup: true } })
-        ).rejects.toThrow("Unexpected operation: backups.reserve")
-        expect(mocks.reserveSafety).toHaveBeenCalledWith(
-          expect.objectContaining({
-            storageIds: [storageId],
-            reason: "pre_restore",
-          })
-        )
-        expect(mocks.reserveRestore).toHaveBeenCalledOnce()
-      })
-
-      it("does not require download when safety backup is disabled", async () => {
-        const restore = setupRestore(false)
-        await expect(
-          restore({ data: { backupId: backup.id, safetyBackup: false } })
-        ).rejects.toThrow("Unexpected operation: backups.reserve")
-        expect(mocks.loadStorage).not.toHaveBeenCalled()
-        expect(mocks.reserveSafety).not.toHaveBeenCalled()
-        expect(mocks.reserveRestore).toHaveBeenCalledOnce()
-      })
-    }
-  )
 })

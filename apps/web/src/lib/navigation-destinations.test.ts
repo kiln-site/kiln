@@ -21,7 +21,12 @@ const operatorRelayAccess = {
       relayId: "relay-one",
       resourceId: "relay-one",
       resourceType: "relay",
-      role: "operator",
+      permissions: [
+        "instance.read",
+        "instance.console.read",
+        "instance.files.read",
+        "instance.network.read",
+      ],
     },
   ],
   isPlatformAdmin: false,
@@ -35,7 +40,7 @@ const databaseViewerAccess = {
       relayId: "relay-one",
       resourceId: "database-one",
       resourceType: "database",
-      role: "viewer",
+      permissions: ["database.read"],
     },
   ],
   isPlatformAdmin: false,
@@ -60,7 +65,6 @@ describe("navigation destinations", () => {
               relayId: "relay-one",
               resourceId: "resource-one",
               resourceType,
-              role: "viewer",
               permissions: [...permissions],
             },
           ],
@@ -105,11 +109,11 @@ describe("navigation destinations", () => {
           relayId: instance.relayId,
           resourceId: instance.id,
           resourceType: "instance",
-          role: "viewer",
           permissions: [
             "instance.read",
             "instance.configuration.read",
             "instance.power.start",
+            "instance.power.stop",
           ],
         },
       ],
@@ -117,10 +121,15 @@ describe("navigation destinations", () => {
     expect(
       accessibleDestinationsForServer(instance, access).map(({ id }) => id)
     ).toContain("startup")
-    expect(
-      canAccessInstancePermission(access, instance, "instance.power.start")
-    ).toBe(true)
-    for (const action of ["stop", "restart", "kill"] as const)
+    for (const action of ["start", "stop"] as const)
+      expect(
+        canAccessInstancePermission(
+          access,
+          instance,
+          `instance.power.${action}`
+        )
+      ).toBe(true)
+    for (const action of ["restart", "kill"] as const)
       expect(
         canAccessInstancePermission(
           access,
@@ -134,31 +143,6 @@ describe("navigation destinations", () => {
         instance,
         "instance.configuration.write"
       )
-    ).toBe(false)
-  })
-
-  it("does not expose restart or kill through a stop-only selection", () => {
-    const instance = { id: "server-one", relayId: "relay-one" }
-    const access: NavigationAccessCapabilities = {
-      ...operatorRelayAccess,
-      grants: [
-        {
-          relayId: instance.relayId,
-          resourceId: instance.id,
-          resourceType: "instance",
-          role: "admin",
-          permissions: ["instance.power.start", "instance.power.stop"],
-        },
-      ],
-    }
-    expect(
-      canAccessInstancePermission(access, instance, "instance.power.stop")
-    ).toBe(true)
-    expect(
-      canAccessInstancePermission(access, instance, "instance.power.restart")
-    ).toBe(false)
-    expect(
-      canAccessInstancePermission(access, instance, "instance.power.kill")
     ).toBe(false)
   })
 

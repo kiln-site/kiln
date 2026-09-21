@@ -106,13 +106,7 @@ export function AuthPage({
           }
           if (mode === "claim") {
             if (!emailDeliveryEnabled) return
-            sessionStorage.setItem(
-              "kiln:claim:return",
-              returnPath(redirectPath)
-            )
-            await requestAccountClaim({
-              data: { email, returnPath: returnPath(redirectPath) },
-            })
+            await sendAccountClaim(email, redirectPath)
             setClaimEmail(email)
             return
           }
@@ -645,16 +639,7 @@ export function AuthPage({
                     () =>
                       recoverPromise(
                         async () => {
-                          sessionStorage.setItem(
-                            "kiln:claim:return",
-                            returnPath(redirectPath)
-                          )
-                          await requestAccountClaim({
-                            data: {
-                              email,
-                              returnPath: returnPath(redirectPath),
-                            },
-                          })
+                          await sendAccountClaim(email, redirectPath)
                           showToast({
                             type: "success",
                             message:
@@ -1088,6 +1073,14 @@ function Notice({
       {children}
     </div>
   )
+}
+
+async function sendAccountClaim(email: string, redirectPath?: string) {
+  const path = returnPath(redirectPath)
+  // The claim mail lands in a fresh tab, so the return path has to survive in
+  // session storage rather than in this page's state.
+  sessionStorage.setItem("kiln:claim:return", path)
+  await requestAccountClaim({ data: { email, returnPath: path } })
 }
 
 async function signIn(email: string, password: string, redirectPath?: string) {

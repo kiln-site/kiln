@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto"
-import { databaseTable } from "./database-config.mjs"
+import { databaseTable, databaseTableName } from "./database-config.mjs"
 import { legacyAccessPermissions } from "./legacy-access-permissions.mjs"
 
 export const userAdditions = {
@@ -33,17 +33,108 @@ export const invitationAdditions = {
   sent_at: "TIMESTAMP(3) NULL",
 }
 
+// Rows the Better Auth CLI may have created before the expected definition existed:
+// its generator emits additionalFields as `text NOT NULL`, leaving empty strings
+// where the expected definition wants a real default.
+const columnRepairs = {
+  user: {
+    status: (database) =>
+      database.query(
+        `UPDATE ${databaseTable("user")} SET status = 'enabled' WHERE status IS NULL OR TRIM(status) = ''`
+      ),
+  },
+}
+
+const definitionPattern =
+  /^(?<type>.*?)\s+(?<nullability>NOT NULL|NULL)(?:\s+DEFAULT\s+(?<fallback>.+))?$/iu
+
+// MySQL reports enum members without the padding used in our definitions.
+function normalizeColumnType(type) {
+  return type
+    .toLowerCase()
+    .replace(/\s*,\s*/gu, ",")
+    .replace(/\s+/gu, " ")
+    .trim()
+}
+
+function parseColumnDefinition(definition) {
+  const parsed = definitionPattern.exec(definition)?.groups
+  if (!parsed)
+    throw new Error(
+      `Access migration cannot parse column definition: ${definition}`
+    )
+  const fallback = parsed.fallback?.trim() ?? null
+  return {
+    type: normalizeColumnType(parsed.type),
+    nullable: parsed.nullability.toUpperCase() === "NULL",
+    fallback:
+      fallback === null
+        ? null
+        : /^'.*'$/su.test(fallback)
+          ? fallback.slice(1, -1).replaceAll("''", "'")
+          : fallback,
+  }
+}
+
+function columnMatches(column, expected) {
+  const fallback =
+    column.COLUMN_DEFAULT === null ? null : String(column.COLUMN_DEFAULT)
+  return (
+    normalizeColumnType(column.COLUMN_TYPE) === expected.type &&
+    (column.IS_NULLABLE === "YES") === expected.nullable &&
+    fallback === expected.fallback
+  )
+}
+
+// A `text NOT NULL` column backfilled by the generator holds empty strings, which
+// strict mode refuses to convert into a timestamp. Relax the column first and turn
+// those placeholders into the NULL the expected definition wants.
+async function clearBlankStrings(database, table, column, expected) {
+  const current = normalizeColumnType(column.COLUMN_TYPE)
+  if (
+    !expected.nullable ||
+    !/^((tiny|medium|long)?text|(var)?char)/u.test(current)
+  )
+    return
+  if (column.IS_NULLABLE === "NO")
+    await database.query(
+      `ALTER TABLE ${databaseTable(table)} MODIFY COLUMN \`${column.COLUMN_NAME}\` ${column.COLUMN_TYPE} NULL`
+    )
+  await database.query(
+    `UPDATE ${databaseTable(table)} SET \`${column.COLUMN_NAME}\` = NULL WHERE \`${column.COLUMN_NAME}\` = ''`
+  )
+}
+
+// Adds missing columns and realigns columns whose type, nullability or default
+// drifted from the expected definition (the Better Auth generator creates the
+// identity additionalFields as `text NOT NULL`). Idempotent: a matching column
+// is left untouched.
 async function addColumns(database, table, additions) {
-  const [columns] = await database.query(
-    `SHOW COLUMNS FROM ${databaseTable(table)}`
+  const [columns] = await database.execute(
+    `SELECT COLUMN_NAME, COLUMN_TYPE, IS_NULLABLE, COLUMN_DEFAULT
+       FROM information_schema.COLUMNS
+      WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ?`,
+    [databaseTableName(table)]
   )
-  const existing = new Set(columns.map((column) => column.Field))
-  const changes = Object.entries(additions).filter(
-    ([name]) => !existing.has(name)
+  const existing = new Map(
+    columns.map((column) => [column.COLUMN_NAME, column])
   )
+  const changes = []
+  for (const [name, definition] of Object.entries(additions)) {
+    const column = existing.get(name)
+    if (!column) {
+      changes.push(`ADD COLUMN \`${name}\` ${definition}`)
+      continue
+    }
+    const expected = parseColumnDefinition(definition)
+    if (columnMatches(column, expected)) continue
+    await columnRepairs[table]?.[name]?.(database)
+    await clearBlankStrings(database, table, column, expected)
+    changes.push(`MODIFY COLUMN \`${name}\` ${definition}`)
+  }
   if (changes.length)
     await database.query(
-      `ALTER TABLE ${databaseTable(table)} ${changes.map(([name, definition]) => `ADD COLUMN \`${name}\` ${definition}`).join(", ")}`
+      `ALTER TABLE ${databaseTable(table)} ${changes.join(", ")}`
     )
 }
 
@@ -88,6 +179,10 @@ export async function ensureAccessModelSchema(database) {
     }
   }
 }
+
+// Bounded evidence: anomaly reports log and persist at most this many identifiers
+// per resource alongside the full count.
+const ownershipAnomalySampleLimit = 100
 
 // DDL runs separately: MySQL implicitly commits it. The data conversion and marker
 // commit together, so interruption/retry cannot resurrect later access edits.
@@ -142,10 +237,16 @@ export async function backfillAccessModel(database) {
       statusReason = CASE WHEN banned = TRUE THEN banReason ELSE statusReason END,
       statusExpiresAt = CASE WHEN banned = TRUE AND banExpires > CURRENT_TIMESTAMP(3) THEN banExpires ELSE statusExpiresAt END,
       banned = FALSE, banReason = NULL, banExpires = NULL`)
+    // Revoked or lapsed invitations were never accepted: they must not reserve an
+    // identity or leave a pending grant behind. Record them as closed legacy
+    // deliveries only.
+    const [closed] = await database.query(
+      `UPDATE ${databaseTable("invitation")} SET cancelled_at = COALESCE(cancelled_at, revoked_at, expires_at), delivery_status = 'legacy' WHERE accepted_at IS NULL AND (revoked_at IS NOT NULL OR expires_at <= CURRENT_TIMESTAMP(3))`
+    )
     // Reserve identities without credentials. Existing users keep all identity and
     // verification fields; invitations bind once to IDs, never to future email edits.
     const [invitations] = await database.query(
-      `SELECT * FROM ${databaseTable("invitation")} ORDER BY created_at, id`
+      `SELECT * FROM ${databaseTable("invitation")} WHERE accepted_at IS NOT NULL OR (revoked_at IS NULL AND expires_at > CURRENT_TIMESTAMP(3)) ORDER BY created_at, id`
     )
     for (const invitation of invitations) {
       const email = invitation.email.trim().toLowerCase()
@@ -225,18 +326,57 @@ export async function backfillAccessModel(database) {
       (SELECT relay_id, resource_id, MIN(user_id) AS user_id FROM ${databaseTable("access_grant")} WHERE resource_type = 'instance' AND role = 'owner' AND state = 'active' GROUP BY relay_id, resource_id HAVING COUNT(*) = 1) owners
       ON target.relay_id = owners.relay_id AND target.instance_id = owners.resource_id
       SET target.owner_id = owners.user_id WHERE target.owner_id IS NULL`)
-    const [ownerAnomalies] = await database.query(
-      `SELECT COUNT(*) AS count FROM ${databaseTable("instance")} target WHERE target.owner_id IS NULL OR NOT EXISTS (SELECT 1 FROM ${databaseTable("user")} subject WHERE subject.id = target.owner_id) OR EXISTS (SELECT 1 FROM ${databaseTable("access_grant")} grant_row WHERE grant_row.relay_id = target.relay_id AND grant_row.resource_type = 'instance' AND grant_row.resource_id = target.instance_id AND grant_row.role = 'owner' AND grant_row.state = 'active' AND grant_row.user_id <> target.owner_id)`
-    )
-    const ownershipByResource = { instance: Number(ownerAnomalies[0].count) }
-    for (const [table, idColumn] of [
-      ["relay", "id"],
-      ["database", "database_id"],
-    ]) {
-      const [anomalies] = await database.query(
-        `SELECT COUNT(*) AS count FROM ${databaseTable(table)} target WHERE target.created_by IS NULL OR NOT EXISTS (SELECT 1 FROM ${databaseTable("user")} subject WHERE subject.id = target.created_by) OR EXISTS (SELECT 1 FROM ${databaseTable("access_grant")} grant_row WHERE grant_row.resource_type = '${table}' AND grant_row.resource_id = target.${idColumn} AND grant_row.role = 'owner' AND grant_row.state = 'active' AND grant_row.user_id <> target.created_by)`
+    // One-time evidence: the marker stops this rerunning, so record which
+    // resources looked wrong, not just how many.
+    const ownershipChecks = [
+      {
+        resource: "instance",
+        owner: "owner_id",
+        identifier: "CONCAT(target.relay_id, '/', target.instance_id)",
+        scope:
+          "grant_row.relay_id = target.relay_id AND grant_row.resource_id = target.instance_id",
+      },
+      {
+        resource: "relay",
+        owner: "created_by",
+        identifier: "target.id",
+        scope: "grant_row.resource_id = target.id",
+      },
+      {
+        resource: "database",
+        owner: "created_by",
+        identifier: "CONCAT(target.relay_id, '/', target.database_id)",
+        scope: "grant_row.resource_id = target.database_id",
+      },
+    ]
+    const ownershipByResource = {}
+    for (const check of ownershipChecks) {
+      const condition = `target.${check.owner} IS NULL OR NOT EXISTS (SELECT 1 FROM ${databaseTable("user")} subject WHERE subject.id = target.${check.owner}) OR EXISTS (SELECT 1 FROM ${databaseTable("access_grant")} grant_row WHERE grant_row.resource_type = '${check.resource}' AND ${check.scope} AND grant_row.role = 'owner' AND grant_row.state = 'active' AND grant_row.user_id <> target.${check.owner})`
+      const [counts] = await database.query(
+        `SELECT COUNT(*) AS count FROM ${databaseTable(check.resource)} target WHERE ${condition}`
       )
-      ownershipByResource[table] = Number(anomalies[0].count)
+      const total = Number(counts[0].count)
+      const [sample] = await database.query(
+        `SELECT ${check.identifier} AS identifier FROM ${databaseTable(check.resource)} target WHERE ${condition} ORDER BY identifier LIMIT ${ownershipAnomalySampleLimit}`
+      )
+      const identifiers = sample.map((row) => row.identifier)
+      ownershipByResource[check.resource] = total
+      console.log(`Access migration ownership anomalies (${check.resource}):`, {
+        total,
+        sampled: identifiers.length,
+        identifiers,
+      })
+      await database.execute(
+        `INSERT INTO ${databaseTable("auth_audit")} (event, metadata) VALUES ('access.migration.anomaly', CAST(? AS JSON))`,
+        [
+          JSON.stringify({
+            resource: check.resource,
+            total,
+            sampled: identifiers.length,
+            identifiers,
+          }),
+        ]
+      )
     }
     await database.execute(
       `UPDATE ${databaseTable("data_migration")} SET completed_at = CURRENT_TIMESTAMP(3) WHERE id = ?`,
@@ -247,6 +387,7 @@ export async function backfillAccessModel(database) {
       alreadyApplied: false,
       grants: grants.length,
       invitations: invitations.length,
+      closedInvitations: closed.affectedRows,
       ownershipAnomalies: Object.values(ownershipByResource).reduce(
         (total, count) => total + count,
         0

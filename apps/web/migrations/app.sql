@@ -282,17 +282,15 @@ CREATE TABLE IF NOT EXISTS kiln_access_grant (
   relay_id CHAR(43) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
   resource_type ENUM('relay', 'instance', 'database') NOT NULL,
   resource_id VARCHAR(64) NOT NULL,
-  role ENUM('owner', 'admin', 'operator', 'viewer') NOT NULL,
+  role ENUM('owner', 'admin', 'operator', 'viewer') NULL,
   state ENUM('pending', 'active', 'revoked') NOT NULL DEFAULT 'active',
   revision BIGINT UNSIGNED NOT NULL DEFAULT 1,
   granted_by VARCHAR(36) NULL,
   created_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
   updated_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
   UNIQUE KEY kiln_access_grant_scope_unique (user_id, relay_id, resource_type, resource_id),
-  KEY kiln_access_grant_relay_resource_idx (relay_id, resource_type, resource_id),
   KEY kiln_access_grant_scope_state_idx (relay_id, resource_type, resource_id, state, user_id),
-  KEY kiln_access_grant_user_state_idx (user_id, state, relay_id),
-  KEY kiln_access_grant_user_idx (user_id)
+  KEY kiln_access_grant_user_state_idx (user_id, state, relay_id)
 );
 
 CREATE TABLE IF NOT EXISTS kiln_invitation (
