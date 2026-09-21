@@ -8,6 +8,7 @@ import {
   type ColumnDef,
   type Row,
   type RowData,
+  type RowSelectionState,
   type Table,
   type TableOptions,
 } from "@tanstack/react-table"
@@ -96,6 +97,37 @@ export function useDataTable<TData extends RowData>(
     },
     selectNoDataTableState
   )
+}
+
+export type DataTableSelectAllState =
+  | "checked"
+  | "disabled"
+  | "indeterminate"
+  | "unchecked"
+
+/**
+ * Minimal row shape the select-all checkbox needs. Rows are matched against
+ * `rowSelection` by id so the state always reflects the rendered rows.
+ */
+export interface DataTableSelectableRow {
+  id: string
+  getCanSelect: () => boolean
+}
+
+export function dataTableSelectAllState(
+  rows: ReadonlyArray<DataTableSelectableRow>,
+  selection: RowSelectionState
+): DataTableSelectAllState {
+  let selectableCount = 0
+  let selectedCount = 0
+  for (const row of rows) {
+    if (!row.getCanSelect()) continue
+    selectableCount += 1
+    if (selection[row.id]) selectedCount += 1
+  }
+  if (selectableCount === 0) return "disabled"
+  if (selectedCount === 0) return "unchecked"
+  return selectedCount === selectableCount ? "checked" : "indeterminate"
 }
 
 export function dataTableColumnMeta(
