@@ -1,7 +1,7 @@
 import { createServerFn, createServerOnlyFn } from "@tanstack/react-start"
 import { z } from "zod"
 
-const getCurrentUser = createServerOnlyFn(async () => {
+export const getCurrentUser = createServerOnlyFn(async () => {
   const [{ getRequestHeaders }, { getAuthenticatedUserFromHeaders }] =
     await Promise.all([
       import("@tanstack/react-start/server"),
@@ -113,5 +113,26 @@ export const requireAuthenticatedUser = createServerOnlyFn(async () => {
 export const requireAuthenticatedIdentity = createServerOnlyFn(async () => {
   const identity = await getCurrentIdentity()
   if (!identity) throw new Error("Authentication required")
+  return identity
+})
+
+export const requireVerifiedUser = createServerOnlyFn(async () => {
+  const user = await requireAuthenticatedUser()
+  const { requireVerifiedAccount } = await import("@/lib/account-policy")
+  requireVerifiedAccount(user)
+  return user
+})
+
+export const requireEligibleResourceUser = createServerOnlyFn(async () => {
+  const user = await requireAuthenticatedUser()
+  const { requireEligibleAccount } = await import("@/lib/account-policy")
+  requireEligibleAccount(user)
+  return user
+})
+
+export const requireEligibleResourceIdentity = createServerOnlyFn(async () => {
+  const identity = await requireAuthenticatedIdentity()
+  const { requireEligibleAccount } = await import("@/lib/account-policy")
+  requireEligibleAccount(identity.user)
   return identity
 })

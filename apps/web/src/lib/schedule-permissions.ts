@@ -8,10 +8,24 @@ import type { AuthenticatedUser } from "@/lib/auth-session"
 import type { AccessGrant } from "@/lib/access-control"
 import { isPlatformAdmin } from "@/lib/access-control"
 import type { AccessPermission } from "@/lib/permissions"
-import { roleHasPermission } from "@/lib/permissions"
+import { grantHasPermission } from "@/lib/permissions"
+
+type SchedulePowerAction = Extract<ScheduleAction, { type: "power" }>
+
+/** Power actions carry their own sub-permission, so enforcement never guesses one. */
+type ScheduleActionPermissionInput =
+  | Pick<Exclude<ScheduleAction, { type: "power" }>, "type">
+  | Pick<SchedulePowerAction, "action" | "type">
+
+const instancePowerPermissions = [
+  "instance.power.start",
+  "instance.power.stop",
+  "instance.power.restart",
+  "instance.power.kill",
+] as const satisfies ReadonlyArray<AccessPermission>
 
 export function scheduleActionPermission(
-  action: Pick<ScheduleAction, "type">,
+  action: ScheduleActionPermissionInput,
   target: Pick<ScheduleTarget, "kind">
 ): AccessPermission | null {
   if (action.type === "wait") return null
@@ -19,11 +33,28 @@ export function scheduleActionPermission(
     return target.kind === "instance" ? "instance.console.write" : null
   }
   if (action.type === "power") {
-    if (target.kind === "instance") return "instance.power"
+    if (target.kind === "instance") return `instance.power.${action.action}`
     if (target.kind === "database") return "database.power"
     return null
   }
   return "backup.create"
+}
+
+/**
+ * Offering an action only asks whether the caller could schedule it at all.
+ * A power option needs any instance power sub-permission; the enforcement path
+ * still checks the exact action the schedule runs.
+ */
+export function scheduleActionOptionPermissions(
+  type: ScheduleAction["type"],
+  target: Pick<ScheduleTarget, "kind">
+): ReadonlyArray<AccessPermission> {
+  if (type === "power") {
+    if (target.kind === "instance") return instancePowerPermissions
+    return target.kind === "database" ? ["database.power"] : []
+  }
+  const permission = scheduleActionPermission({ type }, target)
+  return permission === null ? [] : [permission]
 }
 
 export function hasScheduleTargetPermission(input: {
@@ -36,7 +67,7 @@ export function hasScheduleTargetPermission(input: {
   return input.grants.some((grant) => {
     if (
       grant.relayId !== input.target.relayId ||
-      !roleHasPermission(grant.role, input.permission)
+      !grantHasPermission(grant, input.permission)
     ) {
       return false
     }

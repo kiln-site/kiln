@@ -6,7 +6,7 @@ import { Input } from "@workspace/ui/components/input"
 export type StartupResourceAllocation = {
   memory: ResourceCapacity
   storage: ResourceCapacity
-}
+} | null
 
 type ResourceCapacity = {
   availableBytes: number
@@ -44,10 +44,13 @@ export const ResourceAllocationCard = React.memo(
           icon={<MemoryStick className="size-3.5" />}
           label="Memory"
           value={formatResourceBytes(configuredMemoryBytes)}
-          availableBytes={allocation.memory.availableBytes}
-          nodeUsedBytes={allocation.memory.nodeUsedBytes}
-          nodeTotalBytes={allocation.memory.nodeTotalBytes}
-          warning={configuredMemoryBytes > allocation.memory.availableBytes}
+          availableBytes={allocation?.memory.availableBytes}
+          nodeUsedBytes={allocation?.memory.nodeUsedBytes}
+          nodeTotalBytes={allocation?.memory.nodeTotalBytes}
+          warning={
+            allocation !== null &&
+            configuredMemoryBytes > allocation.memory.availableBytes
+          }
           input={
             memoryValue !== undefined && onMemoryChange ? (
               <Input
@@ -70,17 +73,23 @@ export const ResourceAllocationCard = React.memo(
               <HardDrive className="size-3.5" />
               Disk quota
             </span>
-            <span className="type-meta font-mono text-muted-foreground">
-              {formatResourceBytes(allocation.storage.availableBytes)}{" "}
-              assignable
-            </span>
+            {allocation && (
+              <span className="type-meta font-mono text-muted-foreground">
+                {formatResourceBytes(allocation.storage.availableBytes)}{" "}
+                assignable
+              </span>
+            )}
           </div>
           <div className="mt-2 flex items-center gap-2">
             <Input
               aria-label="Disk quota in GiB"
               type="number"
               min={0.1}
-              max={bytesToGiB(allocation.storage.availableBytes)}
+              max={
+                allocation
+                  ? bytesToGiB(allocation.storage.availableBytes)
+                  : undefined
+              }
               step={0.1}
               value={diskLimitGiB}
               disabled={disabled}
@@ -91,8 +100,8 @@ export const ResourceAllocationCard = React.memo(
             <span className="type-code text-muted-foreground">GiB</span>
           </div>
           <NodeCapacityBar
-            usedBytes={allocation.storage.nodeUsedBytes}
-            totalBytes={allocation.storage.nodeTotalBytes}
+            usedBytes={allocation?.storage.nodeUsedBytes}
+            totalBytes={allocation?.storage.nodeTotalBytes}
           />
         </div>
       </div>
@@ -113,9 +122,9 @@ function ResourceAllocationPanel({
   icon: React.ReactNode
   label: string
   value: string
-  availableBytes: number
-  nodeUsedBytes: number
-  nodeTotalBytes: number
+  availableBytes?: number
+  nodeUsedBytes?: number
+  nodeTotalBytes?: number
   warning: boolean
   input: React.ReactNode
 }) {
@@ -126,9 +135,11 @@ function ResourceAllocationPanel({
           {icon}
           {label}
         </span>
-        <span className="type-meta font-mono text-muted-foreground">
-          {formatResourceBytes(availableBytes)} assignable
-        </span>
+        {availableBytes !== undefined && (
+          <span className="type-meta font-mono text-muted-foreground">
+            {formatResourceBytes(availableBytes)} assignable
+          </span>
+        )}
       </div>
       {input ? (
         <div className={warning ? "mt-2 [&_input]:text-destructive" : "mt-2"}>
@@ -150,9 +161,10 @@ function NodeCapacityBar({
   usedBytes,
   totalBytes,
 }: {
-  usedBytes: number
-  totalBytes: number
+  usedBytes?: number
+  totalBytes?: number
 }) {
+  if (usedBytes === undefined || totalBytes === undefined) return null
   const percent =
     totalBytes > 0 ? Math.min((usedBytes / totalBytes) * 100, 100) : 0
   return (
@@ -184,4 +196,25 @@ export function formatResourceBytes(bytes: number): string {
   )
   const value = bytes / 1024 ** exponent
   return `${value.toFixed(value >= 10 || exponent === 0 ? 0 : 1)} ${units[exponent]}`
+}
+
+export function resourceAllocationError(
+  allocation: StartupResourceAllocation,
+  diskLimitBytes: number,
+  memoryLimitBytes: number | null
+): string | null {
+  if (allocation === null) return null
+  if (
+    diskLimitBytes > 0 &&
+    diskLimitBytes > allocation.storage.availableBytes
+  ) {
+    return `Disk quota exceeds the ${formatResourceBytes(allocation.storage.availableBytes)} available to this server.`
+  }
+  if (
+    memoryLimitBytes !== null &&
+    memoryLimitBytes > allocation.memory.availableBytes
+  ) {
+    return `Container memory exceeds the ${formatResourceBytes(allocation.memory.availableBytes)} available to this server.`
+  }
+  return null
 }

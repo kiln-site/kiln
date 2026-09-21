@@ -12,6 +12,7 @@ import { requireInfrastructureDestinationAccess } from "@/lib/route-access"
 
 export const Route = createFileRoute("/_app/infra/databases")({
   validateSearch: z.object({
+    invitation: z.uuid().optional(),
     search: z.string().max(DATA_TABLE_SEARCH_MAX_LENGTH).optional(),
   }),
   ssr: false,

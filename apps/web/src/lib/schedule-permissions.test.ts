@@ -29,13 +29,15 @@ const consoleAction: ScheduleAction = {
   type: "console_command",
 }
 
-function grant(role: AccessGrant["role"]): AccessGrant {
+function grant(
+  permissions: NonNullable<AccessGrant["permissions"]>
+): AccessGrant {
   return {
-    id: role,
+    id: "grant",
     relayId: "relay-a",
     resourceId: "server-a",
     resourceType: "instance",
-    role,
+    permissions,
   }
 }
 
@@ -44,7 +46,7 @@ describe("schedule authorization", () => {
     expect(
       scheduleAuthorizationFailure({
         actions: [consoleAction],
-        grants: [grant("operator")],
+        grants: [grant(["schedule.create", "instance.console.write"])],
         schedulePermission: "schedule.create",
         targets: [target],
         user,
@@ -56,7 +58,7 @@ describe("schedule authorization", () => {
     expect(
       scheduleAuthorizationFailure({
         actions: [consoleAction],
-        grants: [grant("viewer")],
+        grants: [grant(["instance.console.write"])],
         schedulePermission: "schedule.update",
         targets: [target],
         user,
@@ -73,7 +75,7 @@ describe("schedule authorization", () => {
     expect(
       scheduleAuthorizationFailure({
         actions: [power],
-        grants: [grant("viewer")],
+        grants: [grant(["schedule.create"])],
         schedulePermission: "schedule.create",
         targets: [target],
         user,
@@ -85,7 +87,7 @@ describe("schedule authorization", () => {
     expect(
       scheduleAuthorizationFailure({
         actions: [consoleAction],
-        grants: [grant("operator")],
+        grants: [grant(["schedule.execute", "instance.console.write"])],
         schedulePermission: "schedule.execute",
         targets: [target],
         user,
@@ -94,7 +96,7 @@ describe("schedule authorization", () => {
     expect(
       scheduleAuthorizationFailure({
         actions: [consoleAction],
-        grants: [grant("viewer")],
+        grants: [grant(["instance.console.write"])],
         schedulePermission: "schedule.execute",
         targets: [target],
         user,

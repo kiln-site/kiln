@@ -27,7 +27,7 @@ export const getUiPreferences = createServerFn({ method: "GET" }).handler(
     const [
       { loadAppearanceOverrideEffect, loadPlatformAppearanceDefaultEffect },
       { runAppEffect },
-      { requireAuthenticatedUser },
+      { requireVerifiedUser },
       { hasPlatformPermission },
       { getRequestHeaders, setCookie, setResponseHeader },
     ] = await Promise.all([
@@ -37,7 +37,7 @@ export const getUiPreferences = createServerFn({ method: "GET" }).handler(
       import("@/lib/access-control"),
       import("@tanstack/react-start/server"),
     ])
-    const user = await requireAuthenticatedUser()
+    const user = await requireVerifiedUser()
     const [appearanceOverride, platformDefault] = await Promise.all([
       runAppEffect(
         "appearancePreferences.load",
@@ -118,7 +118,7 @@ export const updateAppearancePreferences = createServerFn({ method: "POST" })
         savePlatformAppearanceDefaultEffect,
       },
       { runAppEffect },
-      { requireAuthenticatedUser },
+      { requireVerifiedUser },
       { hasPlatformPermission },
       { setCookie, setResponseHeader },
     ] = await Promise.all([
@@ -128,7 +128,7 @@ export const updateAppearancePreferences = createServerFn({ method: "POST" })
       import("@/lib/access-control"),
       import("@tanstack/react-start/server"),
     ])
-    const user = await requireAuthenticatedUser()
+    const user = await requireVerifiedUser()
     const canManageAppearanceDefault = hasPlatformPermission(
       user,
       "platform.appearance.manage-default"

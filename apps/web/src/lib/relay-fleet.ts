@@ -1,3 +1,4 @@
+import { projectRelayInstanceOverview } from "@workspace/contracts"
 import type { RelayInstance, RelayNode } from "@workspace/contracts"
 
 export type RelayReachability = "connected" | "unreachable"
@@ -30,7 +31,7 @@ export function relayFleetInstance(
   relayStatus: RelayReachability = "connected"
 ): FleetRelayInstance {
   return {
-    ...instance,
+    ...projectRelayInstanceOverview(instance),
     relayId: relay.id,
     relayName: relay.name,
     relayStatus,

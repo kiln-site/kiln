@@ -2,12 +2,7 @@ import { infiniteQueryOptions, queryOptions } from "@tanstack/react-query"
 import type { QueryClient } from "@tanstack/react-query"
 import type { BackupTarget, RelayInstance } from "@workspace/contracts"
 
-import {
-  getAccessCapabilities,
-  getAccessOverview,
-  getInstanceUsers,
-  getInvitationPreview,
-} from "@/server/access"
+import { getAccessCapabilities, getInvitationPreview } from "@/server/access"
 import { getActivity } from "@/server/activity"
 import { getBackupPolicy, getBackupRunsPage } from "@/server/backups"
 import { getBackupStorage } from "@/server/backup-storage"
@@ -76,10 +71,7 @@ export const queryKeys = {
   },
   access: {
     capabilities: ["access", "capabilities"] as const,
-    instanceUsers: (relayId: string, instanceId: string) =>
-      ["access", "instances", relayId, instanceId, "users"] as const,
     invitation: (token: string) => ["access", "invitation", token] as const,
-    overview: ["access", "overview"] as const,
   },
   activity: (from?: string, to?: string) => ["activity", { from, to }] as const,
   backups: {
@@ -378,22 +370,6 @@ export function accessCapabilitiesQueryOptions() {
     queryKey: queryKeys.access.capabilities,
     queryFn: () => getAccessCapabilities(),
     staleTime: 30_000,
-  })
-}
-
-export function accessOverviewQueryOptions() {
-  return queryOptions({
-    queryKey: queryKeys.access.overview,
-    queryFn: () => getAccessOverview(),
-    staleTime: 10_000,
-  })
-}
-
-export function instanceUsersQueryOptions(relayId: string, instanceId: string) {
-  return queryOptions({
-    queryKey: queryKeys.access.instanceUsers(relayId, instanceId),
-    queryFn: () => getInstanceUsers({ data: { instanceId, relayId } }),
-    staleTime: 10_000,
   })
 }
 

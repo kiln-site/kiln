@@ -1,3 +1,6 @@
+import type { AccountPolicy } from "@/lib/account-policy"
+import { isAccountEnabled } from "@/lib/account-policy"
+
 import type { AuthSession } from "@/lib/auth"
 
 import { auth } from "@/lib/auth"
@@ -9,7 +12,10 @@ import { platformRoles } from "@/lib/permissions"
 
 export const DEV_BYPASS_COOKIE = "kiln-dev-auth-bypass"
 
-export interface AuthenticatedUser {
+export interface AuthenticatedUser extends AccountPolicy {
+  statusChangedAt?: string | null
+  statusReason?: string | null
+  manuallyVerifiedBy?: string | null
   email: string
   emailVerified: boolean
   id: string
@@ -47,6 +53,10 @@ export async function getAuthenticatedRealtimeIdentityFromHeaders(
       user: {
         email: "developer@kiln.local",
         emailVerified: true,
+        status: "enabled",
+        emailVerifiedAt: new Date(0).toISOString(),
+        manuallyVerifiedAt: null,
+        legacyVerificationRecordedAt: null,
         id: developmentBypassUserId,
         isDevelopmentBypass: true,
         name: "Kiln Developer",
@@ -61,6 +71,21 @@ export async function getAuthenticatedRealtimeIdentityFromHeaders(
   return {
     sessionId: session.session.id,
     user: {
+      status: isAccountEnabled({
+        status: session.user.status === "disabled" ? "disabled" : "enabled",
+        statusExpiresAt: session.user.statusExpiresAt,
+      })
+        ? "enabled"
+        : "disabled",
+      statusExpiresAt: dateString(session.user.statusExpiresAt),
+      statusChangedAt: dateString(session.user.statusChangedAt),
+      statusReason: session.user.statusReason ?? null,
+      emailVerifiedAt: dateString(session.user.emailVerifiedAt),
+      manuallyVerifiedAt: dateString(session.user.manuallyVerifiedAt),
+      manuallyVerifiedBy: session.user.manuallyVerifiedBy ?? null,
+      legacyVerificationRecordedAt: dateString(
+        session.user.legacyVerificationRecordedAt
+      ),
       email: session.user.email,
       emailVerified: session.user.emailVerified,
       id: session.user.id,
@@ -96,4 +121,8 @@ export function hasDevelopmentBypass(headers: Headers): boolean {
   return cookies
     .split(";")
     .some((cookie) => cookie.trim() === `${DEV_BYPASS_COOKIE}=enabled`)
+}
+
+function dateString(value: Date | string | null | undefined): string | null {
+  return value ? new Date(value).toISOString() : null
 }

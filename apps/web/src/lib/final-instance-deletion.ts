@@ -21,6 +21,8 @@ import { runAppEffect } from "@/effect/runtime"
 import { deleteInstanceDomainEffect } from "@/server/domains.server"
 import { finalizeInstanceDeletionEffect } from "@/server/instance-deletion-cleanup"
 import { timestampedBackupName } from "@/lib/backup-name"
+import type { AuthenticatedUser } from "@/lib/auth-session"
+import { resolveAuthorizedBackupStorageSelection } from "@/lib/backup-storage-selection.server"
 import { publishBackupChange } from "@/lib/backup-realtime.server"
 import { relayRpc } from "@/lib/relay-connection"
 import type { PersistedRelay } from "@/lib/relay-registry"
@@ -37,11 +39,18 @@ export async function ensureFinalInstanceDeletion(input: {
   relay: PersistedRelay
   requestedBy: string
   storageId?: string | null
+  user: AuthenticatedUser
 }): Promise<FinalInstanceDeletion> {
   const existing = await finalDeletion(input.relay.id, input.instanceId)
-  if (existing?.status !== "failed") {
-    if (existing) return existing
-  } else {
+  if (existing && existing.status !== "failed") return existing
+  const storageIds = await resolveAuthorizedBackupStorageSelection({
+    relayId: input.relay.id,
+    targetId: input.instanceId,
+    targetKind: "instance",
+    storageId: input.storageId,
+    user: input.user,
+  })
+  if (existing) {
     await runAppEffect(
       "backups.finalDelete.retry",
       clearFailedFinalInstanceDeletionEffect(input.relay.id, input.instanceId)
@@ -60,9 +69,7 @@ export async function ensureFinalInstanceDeletion(input: {
               reason: "final_delete",
               relayId: input.relay.id,
               requestedMaxBytes: null,
-              ...(input.storageId === undefined
-                ? {}
-                : { storageId: input.storageId }),
+              storageIds,
               targetId: input.instanceId,
               taskId: randomUUID(),
             })
@@ -90,6 +97,7 @@ export async function deleteInstanceWithFinalBackup(input: {
   relay: PersistedRelay
   requestedBy: string
   storageId?: string | null
+  user: AuthenticatedUser
 }): Promise<void> {
   const deletion = await ensureFinalInstanceDeletion(input)
   if (deletion.status === "failed") throw finalBackupFailure(deletion)

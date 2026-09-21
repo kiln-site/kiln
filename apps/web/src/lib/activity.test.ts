@@ -72,6 +72,7 @@ describe("activity", () => {
 
   it("never exposes unknown or other-server scope to an instance-only user", () => {
     const scope = {
+      relayAudit: false,
       allInstances: false,
       instanceIds: new Set(["server-a"]),
     }

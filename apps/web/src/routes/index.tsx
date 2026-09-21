@@ -1,11 +1,16 @@
+import { firstAccessibleAppHref } from "@/lib/navigation-destinations"
+import { isAccountEnabled, isAccountVerified } from "@/lib/account-policy"
 import { createFileRoute, redirect } from "@tanstack/react-router"
 import { z } from "zod"
 
 import { AuthPage } from "@/components/auth-page"
 import { recoverPromise } from "@/effect/promise"
-import { inviteTokenFromRedirect } from "@/lib/invitation-auth"
+import { invitationReferenceFromRedirect } from "@/lib/invitation-auth"
 import { pageTitle } from "@/lib/page-title"
-import { relayConnectionQueryOptions } from "@/lib/query-options"
+import {
+  accessCapabilitiesQueryOptions,
+  relayConnectionQueryOptions,
+} from "@/lib/query-options"
 import {
   relayInstanceRouteIdentifier,
   resolveCanonicalRelayInstance,
@@ -26,10 +31,10 @@ export const Route = createFileRoute("/")({
   beforeLoad: async ({ context, search }) => {
     const state = await getAuthState()
     if (!state.user) {
-      const token = inviteTokenFromRedirect(search.redirect)
-      const invitation = token
+      const reference = invitationReferenceFromRedirect(search.redirect)
+      const invitation = reference
         ? await recoverPromise(
-            () => getInvitationPreview({ data: { token } }),
+            () => getInvitationPreview({ data: reference }),
             () => null
           )
         : null
@@ -40,8 +45,24 @@ export const Route = createFileRoute("/")({
         invitationSignup,
       }
     }
+    if (!isAccountEnabled(state.user) || !isAccountVerified(state.user)) {
+      throw redirect({
+        to: "/account-status",
+        search: { redirect: search.redirect },
+      })
+    }
     if (search.redirect?.startsWith("/")) {
       throw redirect({ href: search.redirect })
+    }
+    const capabilities = await context.queryClient.ensureQueryData(
+      accessCapabilitiesQueryOptions()
+    )
+    if (
+      !capabilities.isPlatformAdmin &&
+      !capabilities.canManageRelays &&
+      capabilities.grants.length === 0
+    ) {
+      throw redirect({ href: firstAccessibleAppHref(capabilities) })
     }
     const [connection, uiPreferences] = await Promise.all([
       context.queryClient.ensureQueryData(
@@ -57,10 +78,7 @@ export const Route = createFileRoute("/")({
       ) {
         throw redirect({ to: "/infra/relays" })
       }
-      throw redirect({
-        to: "/server/$serverId/console",
-        params: { serverId: "unavailable" },
-      })
+      throw redirect({ href: firstAccessibleAppHref(capabilities) })
     }
     const instances = connection.snapshot.instances
     const rememberedResolution = resolveCanonicalRelayInstance(
@@ -126,12 +144,12 @@ function LoginRoute() {
       developmentBypassEnabled={developmentBypassEnabled}
       emailDeliveryEnabled={emailDeliveryEnabled}
       initialEmail={invitationEmail ?? search.email}
-      lockedEmail={invitationEmail}
+      lockedEmail={invitationSignup ? invitationEmail : undefined}
+      initialMode={invitationSignup ? "claim" : undefined}
       forgotPassword={Boolean(search.forgot)}
       redirectPath={search.redirect}
       setupRequired={setupRequired}
       signupEnabled={signupEnabled || invitationSignup}
-      startWithSignup={invitationSignup}
       verified={Boolean(search.verified)}
     />
   )

@@ -3,7 +3,7 @@ import type { AccessGrant } from "@/lib/access-control"
 import { isPlatformAdmin } from "@/lib/access-control"
 import type { AuthenticatedUser } from "@/lib/auth-session"
 import type { AccessPermission } from "@/lib/permissions"
-import { roleHasPermission } from "@/lib/permissions"
+import { grantHasPermission } from "@/lib/permissions"
 
 export function hasBackupPermission(
   user: AuthenticatedUser,
@@ -13,16 +13,10 @@ export function hasBackupPermission(
 ): boolean {
   if (isPlatformAdmin(user)) return true
   if (backup.targetKind === "platform") return false
-  if (
-    (permission === "backup.read" || permission === "backup.download") &&
-    backup.createdBy === user.id
-  ) {
-    return true
-  }
   return grants.some(
     (grant) =>
       grant.relayId === backup.relayId &&
-      roleHasPermission(grant.role, permission) &&
+      grantHasPermission(grant, permission) &&
       (grant.resourceType === "relay" ||
         (backup.targetKind === "instance" &&
           grant.resourceType === "instance" &&

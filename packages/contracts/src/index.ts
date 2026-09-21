@@ -14,11 +14,13 @@ import {
   relayTailscaleSubdomainSchema,
 } from "./tailscale.js"
 
+export * from "./access-permissions.js"
 export * from "./relay-protocol.js"
 export * from "./release-version.js"
 export * from "./minecraft-java.js"
 export * from "./cli.js"
 export * from "./instance-limits.js"
+export * from "./instance-overview.js"
 export * from "./instance-lifecycle.js"
 export * from "./instance-state-reason.js"
 export * from "./backups.js"

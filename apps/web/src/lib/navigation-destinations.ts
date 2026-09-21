@@ -25,8 +25,8 @@ import {
   type RelayInstance,
 } from "@workspace/contracts"
 
-import type { AccessPermission, AccessRole } from "@/lib/permissions"
-import { roleHasPermission } from "@/lib/permissions"
+import type { AccessPermission } from "@/lib/permissions"
+import { grantHasPermission } from "@/lib/permissions"
 
 export type NavigationIcon = ComponentType<{ className?: string }>
 
@@ -46,11 +46,17 @@ export type InfrastructureDestinationAccess =
 export interface NavigationAccessCapabilities {
   canManageAccess: boolean
   canManageRelays: boolean
+  pendingScopes?: readonly {
+    relayId: string
+    resourceType: "relay" | "instance" | "database"
+    resourceId: string
+    invitationId: string
+  }[]
   grants: ReadonlyArray<{
     relayId: string
     resourceId: string
     resourceType: "database" | "instance" | "relay"
-    role: AccessRole
+    permissions: readonly AccessPermission[]
   }>
   isPlatformAdmin: boolean
 }
@@ -195,7 +201,7 @@ export const serverDestinations = [
     id: "startup",
     keywords: ["configuration", "variables"],
     label: "Startup",
-    permission: "instance.settings",
+    permission: "instance.configuration.read",
     to: "/server/$serverId/startup",
     workspaces: ["server"],
   },
@@ -271,7 +277,7 @@ export function canAccessInstancePermission(
   return capabilities.grants.some(
     (grant) =>
       grant.relayId === instance.relayId &&
-      roleHasPermission(grant.role, permission) &&
+      grantHasPermission(grant, permission) &&
       ((grant.resourceType === "relay" &&
         grant.resourceId === instance.relayId) ||
         (grant.resourceType === "instance" && grant.resourceId === instance.id))
@@ -291,7 +297,15 @@ export function canAccessInfrastructureDestination(
   destination: (typeof infrastructureDestinations)[number]
 ): boolean {
   if (destination.access === "manage-relays") {
-    return capabilities.canManageRelays
+    // A pending Relay invitation opens only the Relays list, where the
+    // invitation row lives; it does not unlock the rest of the section.
+    return (
+      capabilities.canManageRelays ||
+      (destination.to === "/infra/relays" &&
+        capabilities.pendingScopes?.some(
+          (scope) => scope.resourceType === "relay"
+        ) === true)
+    )
   }
   if (destination.access === "platform-admin") {
     return capabilities.isPlatformAdmin
@@ -299,13 +313,36 @@ export function canAccessInfrastructureDestination(
   if (destination.access === "instance-read") {
     return (
       capabilities.canManageRelays ||
+      capabilities.pendingScopes?.some(
+        (scope) => scope.resourceType === "instance"
+      ) === true ||
       hasScopedPermission(capabilities, "instance.read", ["instance", "relay"])
     )
   }
-  return hasScopedPermission(capabilities, "database.read", [
-    "database",
-    "relay",
-  ])
+  return (
+    capabilities.pendingScopes?.some(
+      (scope) => scope.resourceType === "database"
+    ) === true ||
+    hasScopedPermission(capabilities, "database.read", ["database", "relay"])
+  )
+}
+
+export function canAccessAccessManagement(
+  capabilities: NavigationAccessCapabilities
+): boolean {
+  return (
+    capabilities.canManageAccess ||
+    [
+      "access.read",
+      "access.invite",
+      "access.manage",
+      "preset.read",
+      "preset.create",
+      "preset.manage",
+    ].some((permission) =>
+      hasScopedPermission(capabilities, permission as AccessPermission)
+    )
+  )
 }
 
 export function canAccessAutomations(
@@ -323,10 +360,10 @@ export function canAccessBackups(
 export function canAccessActivity(
   capabilities: NavigationAccessCapabilities
 ): boolean {
-  return hasScopedPermission(capabilities, "instance.read", [
-    "instance",
-    "relay",
-  ])
+  return (
+    hasScopedPermission(capabilities, "relay.audit.read", ["relay"]) ||
+    hasScopedPermission(capabilities, "instance.read", ["instance", "relay"])
+  )
 }
 
 export function firstAccessibleAppHref(
@@ -337,7 +374,7 @@ export function firstAccessibleAppHref(
   if (canAccessAutomations(capabilities)) return "/automations/schedules"
   if (canAccessBackups(capabilities)) return "/backups/runs"
   if (canAccessActivity(capabilities)) return "/activity"
-  if (capabilities.canManageAccess) return "/access"
+  if (canAccessAccessManagement(capabilities)) return "/access"
   return "/settings/account"
 }
 
@@ -353,7 +390,7 @@ function hasScopedPermission(
   return capabilities.grants.some(
     (grant) =>
       (!allowedResourceTypes || allowedResourceTypes.has(grant.resourceType)) &&
-      roleHasPermission(grant.role, permission)
+      grantHasPermission(grant, permission)
   )
 }
 

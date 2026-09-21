@@ -4,7 +4,6 @@ import {
   createPublicKey,
   generateKeyPairSync,
   randomBytes,
-  randomUUID,
   sign,
   timingSafeEqual,
   verify,
@@ -756,7 +755,6 @@ async function pairWithEnvelope(
       hostname: controlEndpoint.hostname,
       id: envelope.relayFingerprint,
       name: initialName,
-      ownerGrantId: randomUUID(),
       port: effectivePort(controlEndpoint),
       relayCaCertificate: envelope.caCertificatePem,
       relayPublicKey: envelope.relayPublicKeyPem,
@@ -814,7 +812,6 @@ export function persistPairedRelayEffect(input: {
   hostname: string
   id: string
   name: string
-  ownerGrantId: string
   port: number
   relayCaCertificate: string | null
   relayPublicKey: string
@@ -900,22 +897,6 @@ export function persistPairedRelayEffect(input: {
               input.clientRole,
               input.clientActions,
               input.createdBy,
-            ]
-          )
-        }
-
-        if (input.creatorUserId) {
-          yield* transaction.execute(
-            `INSERT INTO ${databaseTable("access_grant")}
-                (id, user_id, relay_id, resource_type, resource_id, role, granted_by)
-               VALUES (?, ?, ?, 'relay', ?, 'owner', ?)
-               ON DUPLICATE KEY UPDATE role = 'owner', granted_by = VALUES(granted_by)`,
-            [
-              input.ownerGrantId,
-              input.creatorUserId,
-              input.id,
-              input.id,
-              input.creatorUserId,
             ]
           )
         }

@@ -73,7 +73,12 @@ describe("backup access", () => {
       relayId: backup.relayId,
       resourceId: backup.relayId,
       resourceType: "relay",
-      role: "operator",
+      permissions: [
+        "backup.read",
+        "backup.download",
+        "backup.restore",
+        "backup.delete",
+      ],
     }
     const admin: AuthenticatedUser = { ...user, id: "admin", role: "admin" }
 
@@ -94,14 +99,14 @@ describe("backup access", () => {
     ).toBe(true)
   })
 
-  it("keeps creator reads and downloads without granting mutations", () => {
+  it("revokes historical backup reads and downloads when target access is lost", () => {
     const creatorBackup = { ...backup, createdBy: user.id }
     expect(hasBackupPermission(user, [], creatorBackup, "backup.read")).toBe(
-      true
+      false
     )
     expect(
       hasBackupPermission(user, [], creatorBackup, "backup.download")
-    ).toBe(true)
+    ).toBe(false)
     expect(hasBackupPermission(user, [], creatorBackup, "backup.restore")).toBe(
       false
     )
@@ -116,7 +121,7 @@ describe("backup access", () => {
       relayId: backup.relayId,
       resourceId: backup.targetId,
       resourceType: "instance",
-      role: "operator",
+      permissions: ["backup.restore", "backup.delete"],
     } satisfies AccessGrant
     expect(hasBackupPermission(user, [grant], backup, "backup.restore")).toBe(
       true

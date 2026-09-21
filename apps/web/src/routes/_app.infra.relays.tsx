@@ -1,3 +1,4 @@
+import { z } from "zod"
 import { createFileRoute } from "@tanstack/react-router"
 
 import { RelaysPage } from "@/components/relays-page"
@@ -6,6 +7,10 @@ import { pageTitle } from "@/lib/page-title"
 import { requireInfrastructureDestinationAccess } from "@/lib/route-access"
 
 export const Route = createFileRoute("/_app/infra/relays")({
+  validateSearch: z.object({
+    invitation: z.uuid().optional(),
+    search: z.string().max(160).optional(),
+  }),
   beforeLoad: async ({ context }) => {
     await requireInfrastructureDestinationAccess(
       context.queryClient,

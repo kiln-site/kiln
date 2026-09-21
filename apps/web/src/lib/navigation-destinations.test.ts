@@ -5,6 +5,7 @@ import {
   accessibleDestinationsForServer,
   accessibleInfrastructureDestinations,
   canAccessActivity,
+  canAccessInstancePermission,
   destinationsForServer,
   sectionDestinationLabel,
   serverDestinationHref,
@@ -20,7 +21,12 @@ const operatorRelayAccess = {
       relayId: "relay-one",
       resourceId: "relay-one",
       resourceType: "relay",
-      role: "operator",
+      permissions: [
+        "instance.read",
+        "instance.console.read",
+        "instance.files.read",
+        "instance.network.read",
+      ],
     },
   ],
   isPlatformAdmin: false,
@@ -34,13 +40,39 @@ const databaseViewerAccess = {
       relayId: "relay-one",
       resourceId: "database-one",
       resourceType: "database",
-      role: "viewer",
+      permissions: ["database.read"],
     },
   ],
   isPlatformAdmin: false,
 } satisfies NavigationAccessCapabilities
 
 describe("navigation destinations", () => {
+  it.each([
+    ["relay", ["relay.audit.read"], true],
+    ["relay", ["instance.read"], true],
+    ["instance", ["instance.read"], true],
+    ["relay", ["relay.read"], false],
+    ["instance", ["relay.audit.read"], false],
+    ["database", ["database.read"], false],
+  ] as const)(
+    "checks Activity permission and scope for %s with %s",
+    (resourceType, permissions, allowed) => {
+      expect(
+        canAccessActivity({
+          ...operatorRelayAccess,
+          grants: [
+            {
+              relayId: "relay-one",
+              resourceId: "resource-one",
+              resourceType,
+              permissions: [...permissions],
+            },
+          ],
+        })
+      ).toBe(allowed)
+    }
+  )
+
   it("uses the complete server workspace list for regular servers", () => {
     expect(
       destinationsForServer({ brickId: "paper" }).map(({ id }) => id)
@@ -64,6 +96,56 @@ describe("navigation destinations", () => {
     ).toEqual(["console", "files", "network", "info"])
   })
 
+  it("shows Startup for configuration readers and checks each power action independently", () => {
+    const instance = {
+      brickId: "paper",
+      id: "server-one",
+      relayId: "relay-one",
+    }
+    const access: NavigationAccessCapabilities = {
+      ...operatorRelayAccess,
+      grants: [
+        {
+          relayId: instance.relayId,
+          resourceId: instance.id,
+          resourceType: "instance",
+          permissions: [
+            "instance.read",
+            "instance.configuration.read",
+            "instance.power.start",
+            "instance.power.stop",
+          ],
+        },
+      ],
+    }
+    expect(
+      accessibleDestinationsForServer(instance, access).map(({ id }) => id)
+    ).toContain("startup")
+    for (const action of ["start", "stop"] as const)
+      expect(
+        canAccessInstancePermission(
+          access,
+          instance,
+          `instance.power.${action}`
+        )
+      ).toBe(true)
+    for (const action of ["restart", "kill"] as const)
+      expect(
+        canAccessInstancePermission(
+          access,
+          instance,
+          `instance.power.${action}`
+        )
+      ).toBe(false)
+    expect(
+      canAccessInstancePermission(
+        access,
+        instance,
+        "instance.configuration.write"
+      )
+    ).toBe(false)
+  })
+
   it("shows only infrastructure destinations matching the grant scope", () => {
     expect(
       accessibleInfrastructureDestinations(databaseViewerAccess).map(
@@ -71,6 +153,32 @@ describe("navigation destinations", () => {
       )
     ).toEqual(["Databases"])
     expect(canAccessActivity(databaseViewerAccess)).toBe(false)
+  })
+
+  it("shows pending infrastructure without granting server operation navigation", () => {
+    const pending: NavigationAccessCapabilities = {
+      canManageAccess: false,
+      canManageRelays: false,
+      isPlatformAdmin: false,
+      grants: [],
+      pendingScopes: [
+        {
+          relayId: "relay-one",
+          resourceType: "instance",
+          resourceId: "server-one",
+          invitationId: "invitation-one",
+        },
+      ],
+    }
+    expect(
+      accessibleInfrastructureDestinations(pending).map(({ label }) => label)
+    ).toEqual(["Servers"])
+    expect(
+      accessibleDestinationsForServer(
+        { brickId: "paper", id: "server-one", relayId: "relay-one" },
+        pending
+      )
+    ).toEqual([])
   })
 
   it("builds encoded server destination URLs", () => {

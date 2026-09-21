@@ -21,6 +21,7 @@ import * as Sentry from "@sentry/node"
 import ZipStream from "zip-stream"
 
 import {
+  projectRelayInstanceOverview,
   RelayBrowserCapabilitySchema,
   RelayBrowserRenewSchema,
   relayBrowserProofTranscript,
@@ -2135,8 +2136,9 @@ class ResourceHubRegistry {
       groups.set(instanceId, sockets)
     }
     for (const [instanceId, subscribers] of groups) {
-      const instance = byId.get(instanceId)
-      if (!instance) continue
+      const current = byId.get(instanceId)
+      if (!current) continue
+      const instance = projectRelayInstanceOverview(current)
       const live = JSON.stringify({
         history: [],
         instance,

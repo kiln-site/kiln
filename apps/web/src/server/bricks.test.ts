@@ -18,6 +18,10 @@ import {
   isBrickSourceChange,
   parseImportedBrickFromRelay,
   provisioningInstanceId,
+  startupPowerPermission,
+  startupResourceLimitsChanged,
+  startupConfigurationChanged,
+  startupNetworkChanged,
 } from "@/server/bricks"
 
 const { source, ...recipeDefinition } = builtinTailscaleBrick
@@ -135,5 +139,145 @@ describe("Hearth Brick mutation inputs", () => {
         ])
       )
     }
+  })
+})
+
+describe("Startup granular authority", () => {
+  it("detects network changes independently and treats reordered settings and reinstalls as unchanged", () => {
+    const existing = { enabled: true, subdomain: "games" }
+    expect(
+      startupNetworkChanged(existing, {
+        tailscale: { enabled: false, subdomain: "games" },
+      })
+    ).toBe(true)
+    expect(
+      startupNetworkChanged(existing, {
+        tailscale: { enabled: true, subdomain: "other" },
+      })
+    ).toBe(true)
+    expect(
+      startupNetworkChanged(existing, {
+        tailscale: { subdomain: "games", enabled: true },
+      })
+    ).toBe(false)
+    expect(startupNetworkChanged(existing, {})).toBe(false)
+    expect(
+      startupNetworkChanged(existing, {
+        reinstall: true,
+        tailscale: { enabled: false },
+      })
+    ).toBe(false)
+  })
+
+  it("requires restart for running rebuilds, including reinstalls, and no power for stopped edits", () => {
+    expect(
+      startupPowerPermission(
+        { desiredState: "running", observedState: "running" },
+        { start: true }
+      )
+    ).toBe("instance.power.restart")
+    expect(
+      startupPowerPermission(
+        { desiredState: "running", observedState: "running" },
+        { start: false, reinstall: true }
+      )
+    ).toBe("instance.power.restart")
+    expect(
+      startupPowerPermission(
+        { desiredState: "running", observedState: "running" },
+        { start: false }
+      )
+    ).toBe("instance.power.stop")
+    expect(
+      startupPowerPermission(
+        { desiredState: "stopped", observedState: "stopped" },
+        { start: false }
+      )
+    ).toBeNull()
+    expect(
+      startupPowerPermission(
+        { desiredState: "stopped", observedState: "stopped" },
+        { start: true }
+      )
+    ).toBe("instance.power.start")
+  })
+  it("detects changed resource variables, omitted defaults, and recipe limits without treating unrelated variables as limits", () => {
+    const recipe = {
+      ...recipeDefinition,
+      variables: {
+        memory: {
+          type: "string" as const,
+          sensitive: false,
+          label: "Memory",
+          description: "Memory",
+          default: "1g",
+          required: false,
+        },
+      },
+      runtime: {
+        ...recipeDefinition.runtime,
+        resources: {
+          ...recipeDefinition.runtime.resources,
+          memory: "{{ variables.memory }}",
+        },
+      },
+    }
+    expect(
+      startupConfigurationChanged(
+        recipe,
+        recipe,
+        { memory: "2g" },
+        { memory: "3g" }
+      )
+    ).toBe(false)
+    expect(
+      startupConfigurationChanged(
+        recipe,
+        recipe,
+        { memory: "2g", version: "old" },
+        { memory: "3g", version: "new" }
+      )
+    ).toBe(true)
+    expect(
+      startupConfigurationChanged(
+        recipe,
+        recipe,
+        { memory: "2g", password: "secret" },
+        { memory: "3g" }
+      )
+    ).toBe(true)
+    expect(
+      startupResourceLimitsChanged(
+        recipe,
+        recipe,
+        { memory: "2g" },
+        { memory: "3g" }
+      )
+    ).toBe(true)
+    expect(
+      startupResourceLimitsChanged(recipe, recipe, { memory: "2g" }, {})
+    ).toBe(true)
+    expect(
+      startupResourceLimitsChanged(
+        recipe,
+        recipe,
+        { memory: "1g", other: "old" },
+        { other: "new" }
+      )
+    ).toBe(false)
+    expect(
+      startupResourceLimitsChanged(
+        recipe,
+        {
+          ...recipe,
+          runtime: {
+            ...recipe.runtime,
+            resources: { ...recipe.runtime.resources, memory: "4g" },
+          },
+        },
+        {},
+        {}
+      )
+    ).toBe(true)
   })
 })

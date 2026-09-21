@@ -4,7 +4,7 @@ import { relayIdSchema } from "@workspace/contracts"
 import { Effect, Result } from "effect"
 
 import { openHearthRelayConsoleStream } from "@/server/relay-console-proxy"
-import { requireAuthenticatedIdentity } from "@/server/auth"
+import { requireEligibleResourceIdentity } from "@/server/auth"
 
 const encoder = new TextEncoder()
 
@@ -14,7 +14,7 @@ export const Route = createFileRoute("/api/console/$instanceId")({
       GET: async ({ request }) => {
         const userResult = await Effect.runPromise(
           Effect.tryPromise({
-            try: requireAuthenticatedIdentity,
+            try: requireEligibleResourceIdentity,
             catch: (cause) => cause,
           }).pipe(Effect.option)
         )

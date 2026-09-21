@@ -1,3 +1,8 @@
+import { accessPermissions, type AccessPermission } from "@workspace/contracts"
+
+export { accessPermissions }
+export type { AccessPermission }
+
 export const platformRoles = ["admin", "relay_creator", "user"] as const
 export type PlatformRole = (typeof platformRoles)[number]
 
@@ -23,52 +28,6 @@ const platformRolePermissions: Record<
   user: new Set(),
 }
 
-export const accessRoles = ["owner", "admin", "operator", "viewer"] as const
-export type AccessRole = (typeof accessRoles)[number]
-
-export const accessPermissions = [
-  "relay.read",
-  "relay.configure",
-  "relay.delete",
-  "access.invite",
-  "access.manage",
-  "instance.read",
-  "instance.console.read",
-  "instance.console.write",
-  "instance.files.read",
-  "instance.files.write",
-  "instance.delete",
-  "instance.power",
-  "instance.settings",
-  "instance.logs.share",
-  "instance.network.read",
-  "instance.network.write",
-  "instance.network.public-port.write",
-  "instance.sftp.connect",
-  "database.read",
-  "database.create",
-  "database.credentials.read",
-  "database.credentials.rotate",
-  "database.power",
-  "database.delete",
-  "database.network.read",
-  "database.network.write",
-  "database.dump.export",
-  "database.dump.import",
-  "backup.read",
-  "backup.create",
-  "backup.download",
-  "backup.restore",
-  "backup.delete",
-  "schedule.read",
-  "schedule.create",
-  "schedule.execute",
-  "schedule.update",
-  "schedule.delete",
-] as const
-
-export type AccessPermission = (typeof accessPermissions)[number]
-
 export function instancePortsWritePermission(
   ports: ReadonlyArray<{ externalPort?: number; id?: string }>
 ): AccessPermission {
@@ -79,86 +38,12 @@ export function instancePortsWritePermission(
     : "instance.network.write"
 }
 
-const rolePermissions: Record<AccessRole, ReadonlySet<AccessPermission>> = {
-  owner: new Set(accessPermissions),
-  admin: new Set(
-    accessPermissions.filter((permission) => permission !== "relay.delete")
-  ),
-  operator: new Set([
-    "relay.read",
-    "instance.read",
-    "instance.console.read",
-    "instance.console.write",
-    "instance.files.read",
-    "instance.files.write",
-    "instance.power",
-    "instance.logs.share",
-    "instance.network.read",
-    "instance.network.write",
-    "instance.sftp.connect",
-    "database.read",
-    "database.credentials.read",
-    "database.power",
-    "database.network.read",
-    "database.network.write",
-    "database.dump.export",
-    "database.dump.import",
-    "backup.read",
-    "backup.create",
-    "backup.download",
-    "backup.restore",
-    "backup.delete",
-    "schedule.read",
-    "schedule.create",
-    "schedule.execute",
-    "schedule.update",
-    "schedule.delete",
-  ]),
-  viewer: new Set([
-    "relay.read",
-    "instance.read",
-    "instance.console.read",
-    "instance.files.read",
-    "instance.logs.share",
-    "instance.network.read",
-    "instance.sftp.connect",
-    "database.read",
-    "database.network.read",
-    "backup.read",
-    "backup.download",
-    "schedule.read",
-  ]),
-}
-
-export const accessRoleDetails: Record<
-  AccessRole,
-  { description: string; label: string }
-> = {
-  owner: {
-    label: "Owner",
-    description: "Full control, including access management and Relay removal.",
-  },
-  admin: {
-    label: "Admin",
-    description: "Manage people, Relay settings, and every instance operation.",
-  },
-  operator: {
-    label: "Operator",
-    description:
-      "Operate servers and databases, including power, files, and private networks.",
-  },
-  viewer: {
-    label: "Viewer",
-    description:
-      "Read-only access to assigned servers, databases, consoles, files, and logs.",
-  },
-}
-
-export function roleHasPermission(
-  role: AccessRole,
+/** Resolved grants carry their expanded permissions; an empty list grants nothing. */
+export function grantHasPermission(
+  grant: { permissions: readonly string[] },
   permission: AccessPermission
 ): boolean {
-  return rolePermissions[role].has(permission)
+  return grant.permissions.includes(permission)
 }
 
 export function platformRoleHasPermission(
@@ -166,8 +51,4 @@ export function platformRoleHasPermission(
   permission: PlatformPermission
 ): boolean {
   return platformRolePermissions[role].has(permission)
-}
-
-export function isAccessRole(value: string): value is AccessRole {
-  return accessRoles.includes(value as AccessRole)
 }

@@ -33,8 +33,12 @@ const prefix = (queryKey: QueryKey): HearthRealtimeQueryScope => ({
 const hearthRealtimeQueryScopes = {
   access: [
     exact(queryKeys.access.capabilities),
-    exact(queryKeys.access.overview),
-    prefix(["access", "instances"]),
+    prefix(["resource-access"]),
+    prefix(["access-resources"]),
+    prefix(["my-resource-invitations"]),
+    prefix(["resource-invitation"]),
+    prefix(["platform-invitations"]),
+    prefix(["users"]),
   ],
   activity: [prefix(["activity"])],
   "backup-settings": [prefix(["backups", "policy"])],
@@ -61,7 +65,6 @@ const hearthRealtimeQueryScopes = {
     exact(queryKeys.schedules.all),
     exact(queryKeys.schedules.options),
     exact(queryKeys.tailscaleStacks),
-    exact(queryKeys.access.overview),
     prefix(["activity"]),
     prefix(["relays", "proxy"]),
   ],
@@ -77,10 +80,14 @@ function queryScopes(
   scope: HearthRealtimeScope | undefined
 ): ReadonlyArray<HearthRealtimeQueryScope> {
   if (topic === "access" && scope) {
+    // One Relay's access edit: refresh that Relay's records and what the
+    // viewer can reach, never the platform user or invitation lists.
     return [
       exact(queryKeys.access.capabilities),
-      exact(queryKeys.access.overview),
-      prefix(["access", "instances", scope.relayId]),
+      prefix(["resource-access", scope.relayId]),
+      prefix(["access-resources"]),
+      prefix(["my-resource-invitations"]),
+      prefix(["resource-invitation"]),
     ]
   }
   if (topic === "backup-settings" && scope) {

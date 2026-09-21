@@ -11,6 +11,8 @@
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as AppRouteImport } from './routes/_app'
+import { Route as AccountStatusRouteImport } from './routes/account-status'
+import { Route as ClaimRouteImport } from './routes/claim'
 import { Route as ConsoleRouteImport } from './routes/console'
 import { Route as DiscordRouteImport } from './routes/discord'
 import { Route as FilesRouteImport } from './routes/files'
@@ -32,6 +34,7 @@ import { Route as AppInfraRouteImport } from './routes/_app.infra'
 import { Route as AppOperationsRouteImport } from './routes/_app.operations'
 import { Route as AppServersRouteImport } from './routes/_app.servers'
 import { Route as AppSettingsRouteImport } from './routes/_app.settings'
+import { Route as ApiAccountStatusRouteImport } from './routes/api.account-status'
 import { Route as ApiHealthRouteImport } from './routes/api.health'
 import { Route as ApiRealtimeRouteImport } from './routes/api.realtime'
 import { Route as ApiSentryCheckRouteImport } from './routes/api.sentry-check'
@@ -81,6 +84,16 @@ const IndexRoute = IndexRouteImport.update({
 } as any)
 const AppRoute = AppRouteImport.update({
   id: '/_app',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AccountStatusRoute = AccountStatusRouteImport.update({
+  id: '/account-status',
+  path: '/account-status',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ClaimRoute = ClaimRouteImport.update({
+  id: '/claim',
+  path: '/claim',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ConsoleRoute = ConsoleRouteImport.update({
@@ -187,6 +200,11 @@ const AppSettingsRoute = AppSettingsRouteImport.update({
   id: '/settings',
   path: '/settings',
   getParentRoute: () => AppRoute,
+} as any)
+const ApiAccountStatusRoute = ApiAccountStatusRouteImport.update({
+  id: '/api/account-status',
+  path: '/api/account-status',
+  getParentRoute: () => rootRouteImport,
 } as any)
 const ApiHealthRoute = ApiHealthRouteImport.update({
   id: '/api/health',
@@ -400,6 +418,8 @@ const AppServerServerIdFilesSplatRoute =
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/account-status': typeof AccountStatusRoute
+  '/claim': typeof ClaimRoute
   '/console': typeof ConsoleRoute
   '/discord': typeof DiscordRoute
   '/files': typeof FilesRoute
@@ -421,6 +441,7 @@ export interface FileRoutesByFullPath {
   '/operations': typeof AppOperationsRoute
   '/servers': typeof AppServersRoute
   '/settings': typeof AppSettingsRouteWithChildren
+  '/api/account-status': typeof ApiAccountStatusRoute
   '/api/health': typeof ApiHealthRoute
   '/api/realtime': typeof ApiRealtimeRoute
   '/api/sentry-check': typeof ApiSentryCheckRoute
@@ -465,6 +486,8 @@ export interface FileRoutesByFullPath {
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/account-status': typeof AccountStatusRoute
+  '/claim': typeof ClaimRoute
   '/console': typeof ConsoleRoute
   '/discord': typeof DiscordRoute
   '/files': typeof FilesRoute
@@ -482,6 +505,7 @@ export interface FileRoutesByTo {
   '/activity': typeof AppActivityRoute
   '/operations': typeof AppOperationsRoute
   '/servers': typeof AppServersRoute
+  '/api/account-status': typeof ApiAccountStatusRoute
   '/api/health': typeof ApiHealthRoute
   '/api/realtime': typeof ApiRealtimeRoute
   '/api/sentry-check': typeof ApiSentryCheckRoute
@@ -527,6 +551,8 @@ export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/_app': typeof AppRouteWithChildren
+  '/account-status': typeof AccountStatusRoute
+  '/claim': typeof ClaimRoute
   '/console': typeof ConsoleRoute
   '/discord': typeof DiscordRoute
   '/files': typeof FilesRoute
@@ -548,6 +574,7 @@ export interface FileRoutesById {
   '/_app/operations': typeof AppOperationsRoute
   '/_app/servers': typeof AppServersRoute
   '/_app/settings': typeof AppSettingsRouteWithChildren
+  '/api/account-status': typeof ApiAccountStatusRoute
   '/api/health': typeof ApiHealthRoute
   '/api/realtime': typeof ApiRealtimeRoute
   '/api/sentry-check': typeof ApiSentryCheckRoute
@@ -594,6 +621,8 @@ export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
     | '/'
+    | '/account-status'
+    | '/claim'
     | '/console'
     | '/discord'
     | '/files'
@@ -615,6 +644,7 @@ export interface FileRouteTypes {
     | '/operations'
     | '/servers'
     | '/settings'
+    | '/api/account-status'
     | '/api/health'
     | '/api/realtime'
     | '/api/sentry-check'
@@ -659,6 +689,8 @@ export interface FileRouteTypes {
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
+    | '/account-status'
+    | '/claim'
     | '/console'
     | '/discord'
     | '/files'
@@ -676,6 +708,7 @@ export interface FileRouteTypes {
     | '/activity'
     | '/operations'
     | '/servers'
+    | '/api/account-status'
     | '/api/health'
     | '/api/realtime'
     | '/api/sentry-check'
@@ -720,6 +753,8 @@ export interface FileRouteTypes {
     | '__root__'
     | '/'
     | '/_app'
+    | '/account-status'
+    | '/claim'
     | '/console'
     | '/discord'
     | '/files'
@@ -741,6 +776,7 @@ export interface FileRouteTypes {
     | '/_app/operations'
     | '/_app/servers'
     | '/_app/settings'
+    | '/api/account-status'
     | '/api/health'
     | '/api/realtime'
     | '/api/sentry-check'
@@ -787,6 +823,8 @@ export interface FileRouteTypes {
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   AppRoute: typeof AppRouteWithChildren
+  AccountStatusRoute: typeof AccountStatusRoute
+  ClaimRoute: typeof ClaimRoute
   ConsoleRoute: typeof ConsoleRoute
   DiscordRoute: typeof DiscordRoute
   FilesRoute: typeof FilesRoute
@@ -799,6 +837,7 @@ export interface RootRouteChildren {
   TwitterRoute: typeof TwitterRoute
   TwoFactorRoute: typeof TwoFactorRoute
   XRoute: typeof XRoute
+  ApiAccountStatusRoute: typeof ApiAccountStatusRoute
   ApiHealthRoute: typeof ApiHealthRoute
   ApiRealtimeRoute: typeof ApiRealtimeRoute
   ApiSentryCheckRoute: typeof ApiSentryCheckRoute
@@ -825,6 +864,20 @@ declare module '@tanstack/react-router' {
       path: ''
       fullPath: '/'
       preLoaderRoute: typeof AppRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/account-status': {
+      id: '/account-status'
+      path: '/account-status'
+      fullPath: '/account-status'
+      preLoaderRoute: typeof AccountStatusRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/claim': {
+      id: '/claim'
+      path: '/claim'
+      fullPath: '/claim'
+      preLoaderRoute: typeof ClaimRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/console': {
@@ -973,6 +1026,13 @@ declare module '@tanstack/react-router' {
       fullPath: '/settings'
       preLoaderRoute: typeof AppSettingsRouteImport
       parentRoute: typeof AppRoute
+    }
+    '/api/account-status': {
+      id: '/api/account-status'
+      path: '/api/account-status'
+      fullPath: '/api/account-status'
+      preLoaderRoute: typeof ApiAccountStatusRouteImport
+      parentRoute: typeof rootRouteImport
     }
     '/api/health': {
       id: '/api/health'
@@ -1416,6 +1476,8 @@ const AppRouteWithChildren = AppRoute._addFileChildren(AppRouteChildren)
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   AppRoute: AppRouteWithChildren,
+  AccountStatusRoute: AccountStatusRoute,
+  ClaimRoute: ClaimRoute,
   ConsoleRoute: ConsoleRoute,
   DiscordRoute: DiscordRoute,
   FilesRoute: FilesRoute,
@@ -1428,6 +1490,7 @@ const rootRouteChildren: RootRouteChildren = {
   TwitterRoute: TwitterRoute,
   TwoFactorRoute: TwoFactorRoute,
   XRoute: XRoute,
+  ApiAccountStatusRoute: ApiAccountStatusRoute,
   ApiHealthRoute: ApiHealthRoute,
   ApiRealtimeRoute: ApiRealtimeRoute,
   ApiSentryCheckRoute: ApiSentryCheckRoute,

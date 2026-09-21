@@ -80,7 +80,7 @@ import {
   targetKey,
 } from "@/components/backups/table-row"
 import { BackupToolbar } from "@/components/backups/toolbar"
-import { roleHasPermission } from "@/lib/permissions"
+import { grantHasPermission } from "@/lib/permissions"
 import {
   accessCapabilitiesQueryOptions,
   backupRunsInfiniteQueryOptions,
@@ -397,9 +397,11 @@ export const BackupsPage = React.memo(function BackupsPage({
   const availableRelayIds = React.useMemo(
     () =>
       new Set(
-        [...topology.nodes, ...topology.servers].map((item) => item.relayId)
+        [...topology.nodes, ...topology.servers, ...databases].map(
+          (item) => item.relayId
+        )
       ),
-    [topology.nodes, topology.servers]
+    [databases, topology.nodes, topology.servers]
   )
   const availabilityDestinations = React.useMemo(
     (): Array<BackupAvailabilityDestination> => [
@@ -420,7 +422,7 @@ export const BackupsPage = React.memo(function BackupsPage({
     () =>
       (capabilities.isPlatformAdmin && topology.nodes.length > 0) ||
       topology.servers.some((server) =>
-        canCreateForResource(
+        hasBackupResourcePermission(
           capabilities,
           server.relayId,
           "instance",
@@ -430,7 +432,7 @@ export const BackupsPage = React.memo(function BackupsPage({
       databases.some(
         (database) =>
           database.supportsImportExport &&
-          canCreateForResource(
+          hasBackupResourcePermission(
             capabilities,
             database.relayId,
             "database",
@@ -443,11 +445,24 @@ export const BackupsPage = React.memo(function BackupsPage({
     (backup: Backup) =>
       backup.targetKind === "platform"
         ? capabilities.isPlatformAdmin
-        : canCreateForResource(
+        : hasBackupResourcePermission(
             capabilities,
             backup.relayId,
             backup.targetKind,
             backup.targetId
+          ),
+    [capabilities]
+  )
+  const canDownloadBackup = React.useCallback(
+    (backup: Backup) =>
+      backup.targetKind === "platform"
+        ? capabilities.isPlatformAdmin
+        : hasBackupResourcePermission(
+            capabilities,
+            backup.relayId,
+            backup.targetKind,
+            backup.targetId,
+            "backup.download"
           ),
     [capabilities]
   )
@@ -477,6 +492,7 @@ export const BackupsPage = React.memo(function BackupsPage({
           availableRelayIds={availableRelayIds}
           availableTargetKeys={availableTargetKeys}
           canCreate={canCreateBackup}
+          canDownload={canDownloadBackup}
           currentUserId={capabilities.user.id}
           deleteFeedbackStore={deleteFeedbackStore}
           destinations={availabilityDestinations}
@@ -687,6 +703,7 @@ const BackupDataSurface = React.memo(function BackupDataSurface({
   availableRelayIds,
   availableTargetKeys,
   canCreate,
+  canDownload,
   currentUserId,
   deleteFeedbackStore,
   destinations,
@@ -701,6 +718,7 @@ const BackupDataSurface = React.memo(function BackupDataSurface({
   availableRelayIds: ReadonlySet<string>
   availableTargetKeys: ReadonlySet<string>
   canCreate: (backup: Backup) => boolean
+  canDownload: (backup: Backup) => boolean
   currentUserId: string
   deleteFeedbackStore: BackupDeleteFeedbackStore
   destinations: ReadonlyArray<BackupAvailabilityDestination>
@@ -827,6 +845,7 @@ const BackupDataSurface = React.memo(function BackupDataSurface({
         availableRelayIds={availableRelayIds}
         availableTargetKeys={availableTargetKeys}
         canCreate={canCreate}
+        canDownload={canDownload}
         currentUserId={currentUserId}
         destinations={destinations}
         dialogStore={dialogStore}
@@ -2338,7 +2357,12 @@ function availableCreateTargets({
   const targets: Array<CreateTarget> = []
   for (const server of servers) {
     if (
-      canCreateForResource(capabilities, server.relayId, "instance", server.id)
+      hasBackupResourcePermission(
+        capabilities,
+        server.relayId,
+        "instance",
+        server.id
+      )
     ) {
       targets.push({
         id: server.id,
@@ -2353,7 +2377,7 @@ function availableCreateTargets({
   for (const database of databases) {
     if (!database.supportsImportExport) continue
     if (
-      canCreateForResource(
+      hasBackupResourcePermission(
         capabilities,
         database.relayId,
         "database",
@@ -2385,17 +2409,18 @@ function availableCreateTargets({
   return targets
 }
 
-function canCreateForResource(
+function hasBackupResourcePermission(
   capabilities: Awaited<ReturnType<typeof getAccessCapabilities>>,
   relayId: string,
   resourceType: "database" | "instance",
-  resourceId: string
+  resourceId: string,
+  permission: "backup.create" | "backup.download" = "backup.create"
 ): boolean {
   if (capabilities.isPlatformAdmin) return true
   return capabilities.grants.some(
     (grant) =>
       grant.relayId === relayId &&
-      roleHasPermission(grant.role, "backup.create") &&
+      grantHasPermission(grant, permission) &&
       (grant.resourceType === "relay" ||
         (grant.resourceType === resourceType &&
           grant.resourceId === resourceId))

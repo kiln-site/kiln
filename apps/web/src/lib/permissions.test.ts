@@ -3,7 +3,6 @@ import { describe, expect, it } from "vite-plus/test"
 import {
   instancePortsWritePermission,
   platformRoleHasPermission,
-  roleHasPermission,
 } from "@/lib/permissions"
 
 describe("platform appearance permissions", () => {
@@ -30,18 +29,6 @@ describe("Brick source permissions", () => {
   })
 })
 
-describe("server deletion permissions", () => {
-  it("allows owners and administrators to delete servers", () => {
-    expect(roleHasPermission("owner", "instance.delete")).toBe(true)
-    expect(roleHasPermission("admin", "instance.delete")).toBe(true)
-  })
-
-  it("does not allow operators or viewers to delete servers", () => {
-    expect(roleHasPermission("operator", "instance.delete")).toBe(false)
-    expect(roleHasPermission("viewer", "instance.delete")).toBe(false)
-  })
-})
-
 describe("public port permissions", () => {
   it("reserves public port range overrides for platform administrators", () => {
     expect(
@@ -55,21 +42,6 @@ describe("public port permissions", () => {
         "user",
         "platform.network.override-public-port-range"
       )
-    ).toBe(false)
-  })
-
-  it("limits public port changes to owners and administrators", () => {
-    expect(
-      roleHasPermission("owner", "instance.network.public-port.write")
-    ).toBe(true)
-    expect(
-      roleHasPermission("admin", "instance.network.public-port.write")
-    ).toBe(true)
-    expect(
-      roleHasPermission("operator", "instance.network.public-port.write")
-    ).toBe(false)
-    expect(
-      roleHasPermission("viewer", "instance.network.public-port.write")
     ).toBe(false)
   })
 
@@ -92,21 +64,6 @@ describe("public port permissions", () => {
 })
 
 describe("backup permissions", () => {
-  it("allows operators to manage backups without granting server deletion", () => {
-    expect(roleHasPermission("operator", "backup.create")).toBe(true)
-    expect(roleHasPermission("operator", "backup.restore")).toBe(true)
-    expect(roleHasPermission("operator", "backup.delete")).toBe(true)
-    expect(roleHasPermission("operator", "instance.delete")).toBe(false)
-  })
-
-  it("limits viewers to reading and downloading existing backups", () => {
-    expect(roleHasPermission("viewer", "backup.read")).toBe(true)
-    expect(roleHasPermission("viewer", "backup.download")).toBe(true)
-    expect(roleHasPermission("viewer", "backup.create")).toBe(false)
-    expect(roleHasPermission("viewer", "backup.restore")).toBe(false)
-    expect(roleHasPermission("viewer", "backup.delete")).toBe(false)
-  })
-
   it("reserves platform destinations and caps for platform administrators", () => {
     expect(
       platformRoleHasPermission("admin", "platform.backups.manage-storage")
@@ -120,12 +77,5 @@ describe("backup permissions", () => {
     expect(
       platformRoleHasPermission("user", "platform.backups.manage-limits")
     ).toBe(false)
-  })
-})
-
-describe("schedule permissions", () => {
-  it("allows operators, but not viewers, to run schedules", () => {
-    expect(roleHasPermission("operator", "schedule.execute")).toBe(true)
-    expect(roleHasPermission("viewer", "schedule.execute")).toBe(false)
   })
 })

@@ -3,7 +3,7 @@ import { z } from "zod"
 
 import { activityInstantSchema } from "@/lib/activity"
 import { getActivityForUser } from "@/server/activity-data.server"
-import { requireAuthenticatedUser } from "@/server/auth"
+import { requireEligibleResourceUser } from "@/server/auth"
 
 const activityRangeSchema = z
   .strictObject({
@@ -21,7 +21,7 @@ const activityRangeSchema = z
 export const getActivity = createServerFn({ method: "GET" })
   .validator(activityRangeSchema)
   .handler(async ({ data }) => {
-    const user = await requireAuthenticatedUser()
+    const user = await requireEligibleResourceUser()
     return getActivityForUser(user, data)
   })
 

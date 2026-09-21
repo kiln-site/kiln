@@ -1,3 +1,4 @@
+import { isAccountEnabled, isAccountVerified } from "@/lib/account-policy"
 import { Outlet, createFileRoute, redirect } from "@tanstack/react-router"
 
 import { AppNotFoundPage } from "@/components/app-error-page"
@@ -17,6 +18,12 @@ export const Route = createFileRoute("/_app")({
     if (!user) {
       throw redirect({
         to: "/",
+        search: { redirect: location.href },
+      })
+    }
+    if (!isAccountEnabled(user) || !isAccountVerified(user)) {
+      throw redirect({
+        to: "/account-status",
         search: { redirect: location.href },
       })
     }

@@ -64,7 +64,7 @@ import {
   relayCachePolicy,
   relayJsonEffect,
 } from "@/lib/relay-client"
-import { requireAuthenticatedUser } from "@/server/auth"
+import { requireEligibleResourceUser } from "@/server/auth"
 import {
   generateVanityCandidates,
   managedDomainSrvConfiguration,
@@ -234,7 +234,7 @@ export function resyncDomainInstancesEffect<A, E, R>(
 }
 
 export async function getInstanceDomainHandler(data: InstanceDomainInput) {
-  const user = await requireAuthenticatedUser()
+  const user = await requireEligibleResourceUser()
   await requireRelayPermission({
     instanceId: data.instanceId,
     permission: "instance.network.read",
@@ -1011,7 +1011,7 @@ async function assignedServerNames(
 }
 
 async function requireDomainAdministrator() {
-  const user = await requireAuthenticatedUser()
+  const user = await requireEligibleResourceUser()
   if (!isPlatformAdmin(user)) {
     throw new Error("Platform administrator access required")
   }
@@ -1019,7 +1019,7 @@ async function requireDomainAdministrator() {
 }
 
 async function loadWritableInstance(relayId: string, instanceId: string) {
-  const user = await requireAuthenticatedUser()
+  const user = await requireEligibleResourceUser()
   const relay = await requiredRelay(relayId)
   await requireRelayPermission({
     instanceId,

@@ -36,12 +36,12 @@ import {
   deleteDatabaseWithoutFinalBackup,
   deleteDatabaseWithFinalBackup,
 } from "@/lib/final-database-deletion"
-import { accessPermissions, roleHasPermission } from "@/lib/permissions"
+import { accessPermissions, grantHasPermission } from "@/lib/permissions"
 import type { AccessPermission } from "@/lib/permissions"
 import { publishRealtimeChange } from "@/lib/realtime-source.server"
 import type { PersistedRelay } from "@/lib/relay-registry"
 import { listPersistedRelays } from "@/lib/relay-registry"
-import { requireAuthenticatedUser } from "@/server/auth"
+import { requireEligibleResourceUser } from "@/server/auth"
 
 const createDatabaseInputSchema = z.strictObject({
   engine: databaseEngineSchema,
@@ -110,7 +110,7 @@ type ManagedDatabaseListItem = RelayManagedDatabase & {
 export const getManagedDatabaseDirectory = createServerFn({
   method: "GET",
 }).handler(async () => {
-  const user = await requireAuthenticatedUser()
+  const user = await requireEligibleResourceUser()
   const [persistedRelays, grants, records] = await Promise.all([
     listPersistedRelays(),
     isPlatformAdmin(user) ? Promise.resolve([]) : listUserGrants(user.id),
@@ -149,7 +149,7 @@ export const getManagedDatabaseDirectory = createServerFn({
 
 export const getManagedDatabases = createServerFn({ method: "GET" }).handler(
   async () => {
-    const user = await requireAuthenticatedUser()
+    const user = await requireEligibleResourceUser()
     const relays = (await listPersistedRelays()).filter(
       (relay) => relay.enabled
     )
@@ -319,7 +319,7 @@ export const getManagedDatabases = createServerFn({ method: "GET" }).handler(
 export const getManagedDatabaseCredential = createServerFn({ method: "GET" })
   .validator(databaseInputSchema)
   .handler(async ({ data }) => {
-    const user = await requireAuthenticatedUser()
+    const user = await requireEligibleResourceUser()
     await requireRelayPermission({
       databaseId: data.databaseId,
       permission: "database.credentials.read",
@@ -341,7 +341,7 @@ export const getManagedDatabaseCredential = createServerFn({ method: "GET" })
 export const createManagedDatabase = createServerFn({ method: "POST" })
   .validator(createDatabaseInputSchema)
   .handler(async ({ data }) => {
-    const user = await requireAuthenticatedUser()
+    const user = await requireEligibleResourceUser()
     const relay = await requiredRelay(data.relayId)
     await requireRelayPermission({
       permission: "database.create",
@@ -515,6 +515,11 @@ export const exportManagedDatabase = createServerFn({ method: "POST" })
       "database.dump.export"
     )
     const credential = await requiredCredential(data.relayId, data.databaseId)
+    if (!databaseEngineSupportsLogicalBackups(credential.engine)) {
+      throw new Error(
+        "This database engine does not support data import or export"
+      )
+    }
     return z
       .object({ content: z.string(), fileName: z.string().min(1).max(180) })
       .parse(
@@ -540,6 +545,11 @@ export const importManagedDatabase = createServerFn({ method: "POST" })
       "database.dump.import"
     )
     const credential = await requiredCredential(data.relayId, data.databaseId)
+    if (!databaseEngineSupportsLogicalBackups(credential.engine)) {
+      throw new Error(
+        "This database engine does not support data import or export"
+      )
+    }
     await databaseRpc(
       relay,
       "database.dump.import",
@@ -575,7 +585,7 @@ export const deleteManagedDatabase = createServerFn({ method: "POST" })
       requestedBy: user.id,
     }
     if (databaseEngineSupportsLogicalBackups(database.engine)) {
-      await deleteDatabaseWithFinalBackup(deletion)
+      await deleteDatabaseWithFinalBackup({ ...deletion, user })
     } else {
       await deleteDatabaseWithoutFinalBackup(deletion)
     }
@@ -618,7 +628,7 @@ async function authorizedDatabase(
   data: { databaseId: string; relayId: string },
   permission: AccessPermission
 ) {
-  const user = await requireAuthenticatedUser()
+  const user = await requireEligibleResourceUser()
   const relay = await requiredRelay(data.relayId)
   await requireRelayPermission({
     databaseId: data.databaseId,
@@ -657,7 +667,7 @@ function hasDatabasePermission(
   return grants.some(
     (grant) =>
       grant.relayId === relayId &&
-      roleHasPermission(grant.role, permission) &&
+      grantHasPermission(grant, permission) &&
       (grant.resourceType === "relay" ||
         (grant.resourceType === "database" &&
           databaseId !== undefined &&
@@ -674,7 +684,7 @@ function hasDatabaseRelayVisibility(
   return grants.some(
     (grant) =>
       grant.relayId === relayId &&
-      roleHasPermission(grant.role, "database.read") &&
+      grantHasPermission(grant, "database.read") &&
       (grant.resourceType === "relay" || grant.resourceType === "database")
   )
 }

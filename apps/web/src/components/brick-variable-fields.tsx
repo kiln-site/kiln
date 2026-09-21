@@ -18,12 +18,14 @@ const optionSelectValue = (index: number) => `option:${index}`
 
 export const BrickVariableField = React.memo(function BrickVariableField({
   description,
+  disabled = false,
   name,
   definition,
   value,
   onChange,
 }: {
   description?: string
+  disabled?: boolean
   name: string
   definition: BrickVariable
   value: BrickVariableValue | undefined
@@ -42,6 +44,7 @@ export const BrickVariableField = React.memo(function BrickVariableField({
           </span>
         </span>
         <input
+          disabled={disabled}
           type="checkbox"
           checked={value === true}
           onChange={(event) => onChange(event.target.checked)}
@@ -73,6 +76,7 @@ export const BrickVariableField = React.memo(function BrickVariableField({
       </span>
       {definition.options ? (
         <Select
+          disabled={disabled}
           value={selectValue}
           onValueChange={(nextValue) => {
             if (nextValue === NOT_SET_SELECT_VALUE && !definition.required) {
@@ -119,6 +123,7 @@ export const BrickVariableField = React.memo(function BrickVariableField({
         </Select>
       ) : usesLongStringBrickField(definition) ? (
         <Textarea
+          disabled={disabled}
           aria-labelledby={labelId}
           value={value === undefined ? "" : String(value)}
           onBlur={(event) => onChange(event.currentTarget.value)}
@@ -130,6 +135,7 @@ export const BrickVariableField = React.memo(function BrickVariableField({
         />
       ) : (
         <Input
+          disabled={disabled}
           aria-labelledby={labelId}
           type={
             definition.sensitive

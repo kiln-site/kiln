@@ -1,3 +1,8 @@
+import {
+  myInvitationsQueryOptions,
+  invitationInfrastructureHref,
+} from "@/lib/resource-invitation-query"
+import { relayInstanceRouteId } from "@/lib/relay-fleet"
 import { Outlet, createFileRoute, redirect } from "@tanstack/react-router"
 
 import {
@@ -27,6 +32,25 @@ export const Route = createFileRoute("/_app/server/$serverId")({
       throw redirectToServerList(params.serverId)
     }
     if (resolution.status === "not-found") {
+      const invitations = await context.queryClient.ensureQueryData(
+        myInvitationsQueryOptions()
+      )
+      const matches = invitations.filter(
+        (invitation) =>
+          invitation.scope.resourceType === "instance" &&
+          (invitation.scope.resourceId === params.serverId ||
+            invitation.scope.resourceId.slice(0, 8) === params.serverId ||
+            relayInstanceRouteId(
+              invitation.scope.relayId,
+              invitation.scope.resourceId.slice(0, 8)
+            ) === params.serverId)
+      )
+      if (matches.length === 1)
+        throw redirect({
+          href: invitationInfrastructureHref(matches[0]!),
+          replace: true,
+        })
+
       throw redirect({ to: "/infra/servers", replace: true })
     }
     const instance = resolution.instance

@@ -25,7 +25,13 @@ describe("backup runs page query", () => {
 
       return Effect.gen(function* () {
         const page = yield* listBackupCatalogPageEffect({
-          allowedRoles: ["viewer"],
+          allowedScopes: [
+            {
+              relayId: "relay-a",
+              resourceType: "instance",
+              resourceId: "instance-a",
+            },
+          ],
           cursor: null,
           direction: "desc",
           isAdmin: false,
@@ -42,12 +48,12 @@ describe("backup runs page query", () => {
         const query = queries[0]
         assert.isDefined(query)
         assert.equal(query.operation, "backup_catalog_page")
-        assert.include(query.sql, "access_grant.user_id = ?")
-        assert.include(query.sql, "backup.created_by = ?")
+        assert.include(query.sql, "backup.target_id = ?")
+        assert.notInclude(query.sql, "backup.created_by = ?")
         assert.include(query.sql, "backup.status = 'available'")
         assert.include(query.sql, "LIMIT ?")
         assert.isBelow(
-          query.sql.indexOf("access_grant"),
+          query.sql.indexOf("backup.target_id = ?"),
           query.sql.indexOf("LIMIT ?")
         )
         assert.equal(query.values.at(-1), 51)
@@ -91,7 +97,7 @@ describe("backup runs page query", () => {
       for (const direction of ["asc", "desc"] as const) {
         for (const testCase of cases) {
           yield* listBackupCatalogPageEffect({
-            allowedRoles: [],
+            allowedScopes: [],
             cursor: { id: cursorId, value: testCase.value },
             direction,
             isAdmin: true,
@@ -141,7 +147,7 @@ describe("backup runs page query", () => {
         }
 
         yield* listBackupCatalogPageEffect({
-          allowedRoles: [],
+          allowedScopes: [],
           cursor: { id: cursorId, value: null },
           direction,
           isAdmin: true,

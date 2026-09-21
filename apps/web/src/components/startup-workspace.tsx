@@ -38,7 +38,7 @@ import { BrickVariableField } from "@/components/brick-variable-fields"
 import { MinecraftJavaVersionFields } from "@/components/minecraft-java-version-fields"
 import { BrickIcon } from "@/components/brick-icon"
 import {
-  formatResourceBytes,
+  resourceAllocationError,
   ResourceAllocationCard,
   type StartupResourceAllocation,
 } from "@/components/startup-resource-allocation"
@@ -98,12 +98,40 @@ function brickViewFromBrick(brick: Brick, source = brick.source): BrickView {
   }
 }
 
+interface StartupEditing {
+  canEdit: boolean
+  canEditConfiguration: boolean
+  canEditLimits: boolean
+  canStart: boolean
+  canViewConsole: boolean
+}
+
 export function StartupWorkspace() {
   const instance = useInstanceIdentity()
   const permissions = useInstancePermissions()
   const relayConnected = useInstanceRelayConnected()
   const startupQuery = useQuery(
     instanceStartupQueryOptions(instance.relayId, instance.id)
+  )
+
+  const desiredState = startupQuery.data?.instance.desiredState
+  const observedState = startupQuery.data?.instance.observedState
+  const editing = React.useMemo<StartupEditing>(
+    () => ({
+      canEdit:
+        (permissions.configurationWrite || permissions.limitsWrite) &&
+        relayConnected &&
+        (!(
+          desiredState === "running" ||
+          ["running", "starting", "stopping"].includes(observedState ?? "")
+        ) ||
+          permissions.powerRestart),
+      canEditConfiguration: permissions.configurationWrite,
+      canEditLimits: permissions.limitsWrite,
+      canStart: permissions.powerStart,
+      canViewConsole: permissions.consoleRead,
+    }),
+    [permissions, relayConnected, desiredState, observedState]
   )
 
   if (startupQuery.isPending) {
@@ -134,7 +162,7 @@ export function StartupWorkspace() {
       key={`${instance.relayId}:${instance.id}:${startupQuery.dataUpdatedAt}`}
       brick={startupQuery.data.brick}
       brickSource={startupQuery.data.brickSource}
-      canEdit={permissions.settings && relayConnected}
+      editing={editing}
       allocation={startupQuery.data.allocation}
       initialLimits={startupQuery.data.instance.limits}
       initialVariables={startupQuery.data.variables}
@@ -148,7 +176,7 @@ export function StartupWorkspace() {
 const StartupForm = React.memo(function StartupForm({
   brick: initialBrick,
   brickSource: initialBrickSource,
-  canEdit,
+  editing,
   allocation,
   initialLimits,
   initialVariables,
@@ -158,7 +186,7 @@ const StartupForm = React.memo(function StartupForm({
 }: {
   brick: Brick
   brickSource: string
-  canEdit: boolean
+  editing: StartupEditing
   allocation: StartupResourceAllocation
   initialLimits: RelayInstanceLimits
   initialVariables: Record<string, BrickVariableValue>
@@ -166,6 +194,7 @@ const StartupForm = React.memo(function StartupForm({
   observedState: string
   relayId: string
 }) {
+  const { canEdit, canEditConfiguration, canEditLimits, canStart } = editing
   const navigate = useNavigate()
   const queryClient = useQueryClient()
   const [view, setView] = React.useState(() =>
@@ -183,7 +212,7 @@ const StartupForm = React.memo(function StartupForm({
 
   const catalogQuery = useQuery({
     ...brickCatalogQueryOptions(),
-    enabled: swapOpen && canEdit,
+    enabled: swapOpen && canEdit && canEditConfiguration,
   })
 
   const saveMutation = useMutation({
@@ -293,23 +322,13 @@ const StartupForm = React.memo(function StartupForm({
       setError("Enter a valid disk quota in GiB.")
       return
     }
-    if (
-      diskLimitBytes > 0 &&
-      diskLimitBytes > allocation.storage.availableBytes
-    ) {
-      setError(
-        `Disk quota exceeds the ${formatResourceBytes(allocation.storage.availableBytes)} available to this server.`
-      )
-      return
-    }
-    const memoryLimitBytes = resolvedMemoryBytes(view.memoryTemplate, variables)
-    if (
-      memoryLimitBytes !== null &&
-      memoryLimitBytes > allocation.memory.availableBytes
-    ) {
-      setError(
-        `Container memory exceeds the ${formatResourceBytes(allocation.memory.availableBytes)} available to this server.`
-      )
+    const allocationError = resourceAllocationError(
+      allocation,
+      diskLimitBytes,
+      resolvedMemoryBytes(view.memoryTemplate, variables)
+    )
+    if (allocationError) {
+      setError(allocationError)
       return
     }
     submittingRef.current = true
@@ -319,16 +338,16 @@ const StartupForm = React.memo(function StartupForm({
           saveMutation
             .mutateAsync({
               data: {
-                diskLimitBytes,
+                ...(canEditLimits ? { diskLimitBytes } : {}),
                 instanceId,
                 recipe: view.source,
                 relayId,
-                start: true,
+                start: canStart,
                 variables,
               },
             })
             .then(async () => {
-              if (isRunning) return
+              if (isRunning || !canStart || !editing.canViewConsole) return
               await navigate({
                 to: "/server/$serverId/console",
                 params: { serverId: instanceId },
@@ -353,7 +372,8 @@ const StartupForm = React.memo(function StartupForm({
   }
 
   async function onReinstall() {
-    if (!canEdit || pending || submittingRef.current) return
+    if (!canEdit || !canEditConfiguration || pending || submittingRef.current)
+      return
     setError(null)
     submittingRef.current = true
     await Effect.runPromise(
@@ -410,7 +430,7 @@ const StartupForm = React.memo(function StartupForm({
       <div className="mx-auto max-w-3xl space-y-6 px-5 py-6 sm:px-8 sm:py-8">
         <StartupSettingsForm
           allocation={allocation}
-          canEdit={canEdit}
+          editing={editing}
           configuredMemoryBytes={configuredMemoryBytes}
           diskLimitGiB={diskLimitGiB}
           error={reinstallOpen ? null : error}
@@ -426,7 +446,11 @@ const StartupForm = React.memo(function StartupForm({
           onSubmit={onSubmit}
           onSwap={() => setSwapOpen(true)}
           onVariableChange={(name, value) => {
-            if (!canEdit) return
+            if (
+              !canEdit ||
+              (name === memoryVariable ? !canEditLimits : !canEditConfiguration)
+            )
+              return
             setVariables((current) => {
               const updated = updateBrickVariable(current, name, value)
               return name === "version"
@@ -437,7 +461,7 @@ const StartupForm = React.memo(function StartupForm({
         />
       </div>
 
-      {canEdit ? (
+      {canEdit && canEditConfiguration ? (
         <>
           <StartupBrickSwapDialog
             open={swapOpen}
@@ -473,7 +497,7 @@ const StartupForm = React.memo(function StartupForm({
 
 function StartupSettingsForm({
   allocation,
-  canEdit,
+  editing,
   configuredMemoryBytes,
   diskLimitGiB,
   error,
@@ -491,7 +515,7 @@ function StartupSettingsForm({
   onVariableChange,
 }: {
   allocation: StartupResourceAllocation
-  canEdit: boolean
+  editing: StartupEditing
   configuredMemoryBytes: number
   diskLimitGiB: string
   error: string | null
@@ -511,6 +535,7 @@ function StartupSettingsForm({
     value: BrickVariableValue | undefined
   ) => void
 }) {
+  const { canEdit, canEditConfiguration, canEditLimits, canStart } = editing
   const variableDefinitions = view.variables
   const javaArgsDefinition = variableDefinitions.java_args
   const pairVersionAndJava =
@@ -552,7 +577,7 @@ function StartupSettingsForm({
           allocation={allocation}
           configuredMemoryBytes={configuredMemoryBytes}
           diskLimitGiB={diskLimitGiB}
-          disabled={!canEdit || pending}
+          disabled={!canEdit || !canEditLimits || pending}
           memoryMaxLength={memoryDefinition?.rules?.maxLength}
           memoryPattern={memoryDefinition?.rules?.pattern}
           memoryRequired={memoryDefinition?.required}
@@ -574,7 +599,7 @@ function StartupSettingsForm({
         <div className="overflow-hidden rounded-xl border border-border/75 bg-background/45">
           <BrickSummary
             view={view}
-            canEdit={canEdit}
+            canEdit={canEdit && canEditConfiguration}
             pending={pending}
             onReinstall={onReinstall}
             onSwap={onSwap}
@@ -584,7 +609,7 @@ function StartupSettingsForm({
               {pairVersionAndJava ? (
                 <MinecraftJavaVersionFields
                   brickId={view.id}
-                  disabled={!canEdit || pending}
+                  disabled={!canEdit || !canEditConfiguration || pending}
                   environment={view.environment}
                   javaVersion={
                     typeof variables.java_version === "string"
@@ -609,6 +634,7 @@ function StartupSettingsForm({
               {entries.map(([name, definition]) => (
                 <BrickVariableField
                   key={name}
+                  disabled={!canEdit || !canEditConfiguration || pending}
                   name={name}
                   definition={definition}
                   value={variables[name]}
@@ -623,6 +649,7 @@ function StartupSettingsForm({
                       /^Extra JVM flags\.\s*/u,
                       ""
                     )}
+                    disabled={!canEdit || !canEditConfiguration || pending}
                     name="java_args"
                     definition={javaArgsDefinition}
                     value={variables.java_args}
@@ -649,8 +676,8 @@ function StartupSettingsForm({
       <div className="flex flex-wrap items-center justify-end gap-2">
         {!canEdit ? (
           <p className="type-support mr-auto text-muted-foreground">
-            Connect the Relay and use an account with settings access to change
-            Startup.
+            Changing Startup requires configuration access and a connected
+            Relay. A running server also requires restart permission.
           </p>
         ) : null}
         <Button type="submit" disabled={!canEdit || pending}>
@@ -669,7 +696,9 @@ function StartupSettingsForm({
               ? "Applied"
               : isRunning
                 ? "Apply & Restart"
-                : "Apply & Start"}
+                : canStart
+                  ? "Apply & Start"
+                  : "Apply"}
         </Button>
       </div>
     </form>

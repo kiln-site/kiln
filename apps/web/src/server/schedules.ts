@@ -26,7 +26,6 @@ import { prepareResticRepositoryLocation } from "@/backups/destinations"
 import {
   backupObjectKeyPrefix,
   loadBackupStorageCredentialEffect,
-  loadBackupStorageEffect,
 } from "@/backups/destinations/s3"
 import { ensureBackupRepositoryEffect } from "@/effect/backups"
 import { Database, type DatabaseTransaction } from "@/effect/database"
@@ -36,7 +35,6 @@ import { databaseTable } from "@/lib/database-config"
 import { publishRealtimeChange } from "@/lib/realtime-source.server"
 import { kilnInstallationId } from "@/lib/environment"
 import {
-  hasPlatformPermission,
   isPlatformAdmin,
   listUserGrants,
   type AccessGrant,
@@ -44,14 +42,15 @@ import {
 import type { AuthenticatedUser } from "@/lib/auth-session"
 import {
   hasScheduleTargetPermission,
-  scheduleActionPermission,
+  scheduleActionOptionPermissions,
   scheduleAuthorizationFailure,
 } from "@/lib/schedule-permissions"
 import { relayRpc } from "@/lib/relay-connection"
 import { listPersistedRelays } from "@/lib/relay-registry"
+import { requireScheduleBackupDestinations } from "@/lib/schedule-backup-destinations.server"
 import { scheduleTargetsWithAvailability } from "@/lib/schedule-target-options"
 import { promiseEffect } from "@/effect/promise"
-import { requireAuthenticatedUser } from "@/server/auth"
+import { requireEligibleResourceUser } from "@/server/auth"
 
 const scheduleWriteSchema = scheduleInputSchema
 
@@ -132,7 +131,7 @@ interface TargetDirectoryRow extends RowDataPacket {
 
 export const getScheduleOptions = createServerFn({ method: "GET" }).handler(
   async () => {
-    const user = await requireAuthenticatedUser()
+    const user = await requireEligibleResourceUser()
     const [grants, availableTargets, referencedTargets, relays] =
       await Promise.all([
         isPlatformAdmin(user) ? Promise.resolve([]) : listUserGrants(user.id),
@@ -159,10 +158,12 @@ export const getScheduleOptions = createServerFn({ method: "GET" }).handler(
       const permittedActions = (
         ["console_command", "backup", "power", "wait"] as const
       ).filter((type) => {
-        const permission = scheduleActionPermission({ type }, target)
+        const permissions = scheduleActionOptionPermissions(type, target)
         return (
-          permission === null ||
-          hasScheduleTargetPermission({ grants, permission, target, user })
+          permissions.length === 0 ||
+          permissions.some((permission) =>
+            hasScheduleTargetPermission({ grants, permission, target, user })
+          )
         )
       })
       return [
@@ -204,7 +205,7 @@ export const getScheduleOptions = createServerFn({ method: "GET" }).handler(
 
 export const getSchedules = createServerFn({ method: "GET" }).handler(
   async () => {
-    const user = await requireAuthenticatedUser()
+    const user = await requireEligibleResourceUser()
     const grants = isPlatformAdmin(user) ? [] : await listUserGrants(user.id)
     const schedules = await loadSchedules()
     const visible = schedules.filter(
@@ -225,7 +226,7 @@ export const getSchedules = createServerFn({ method: "GET" }).handler(
 export const createSchedule = createServerFn({ method: "POST" })
   .validator(scheduleWriteSchema)
   .handler(async ({ data }) => {
-    const user = await requireAuthenticatedUser()
+    const user = await requireEligibleResourceUser()
     const grants = isPlatformAdmin(user) ? [] : await listUserGrants(user.id)
     const definition = scheduleDefinitionSchema.parse({
       ...data,
@@ -241,7 +242,12 @@ export const createSchedule = createServerFn({ method: "POST" })
       targets: definition.targets,
       user,
     })
-    await requireScheduleBackupDestinations(definition.actions, user)
+    await requireScheduleBackupDestinations({
+      actions: definition.actions,
+      targets: definition.targets,
+      grants,
+      user,
+    })
     await saveNewSchedule(definition, user.id)
     await deploySchedule(definition, user.id)
     const created = (await loadSchedules()).find(
@@ -256,7 +262,7 @@ export const createSchedule = createServerFn({ method: "POST" })
 export const updateSchedule = createServerFn({ method: "POST" })
   .validator(scheduleUpdateSchema)
   .handler(async ({ data }) => {
-    const user = await requireAuthenticatedUser()
+    const user = await requireEligibleResourceUser()
     const grants = isPlatformAdmin(user) ? [] : await listUserGrants(user.id)
     const existing = (await loadSchedules()).find(
       (schedule) => schedule.id === data.id
@@ -278,7 +284,12 @@ export const updateSchedule = createServerFn({ method: "POST" })
       targets: existing.targets,
       user,
     })
-    await requireScheduleBackupDestinations(existing.actions, user)
+    await requireScheduleBackupDestinations({
+      actions: existing.actions,
+      targets: existing.targets,
+      grants,
+      user,
+    })
     const definition = scheduleDefinitionSchema.parse({
       ...data,
       cron: normalizeScheduleCron(data.cron),
@@ -292,7 +303,12 @@ export const updateSchedule = createServerFn({ method: "POST" })
       targets: definition.targets,
       user,
     })
-    await requireScheduleBackupDestinations(definition.actions, user)
+    await requireScheduleBackupDestinations({
+      actions: definition.actions,
+      targets: definition.targets,
+      grants,
+      user,
+    })
     const previousRelayIds = new Set(
       existing.targets.map((target) => target.relayId)
     )
@@ -317,7 +333,7 @@ export const updateSchedule = createServerFn({ method: "POST" })
 export const deleteSchedule = createServerFn({ method: "POST" })
   .validator(scheduleIdSchema)
   .handler(async ({ data }) => {
-    const user = await requireAuthenticatedUser()
+    const user = await requireEligibleResourceUser()
     const grants = isPlatformAdmin(user) ? [] : await listUserGrants(user.id)
     const schedule = (await loadSchedules()).find(
       (candidate) => candidate.id === data.id
@@ -352,7 +368,7 @@ export const deleteSchedule = createServerFn({ method: "POST" })
 export const runScheduleNow = createServerFn({ method: "POST" })
   .validator(scheduleIdSchema)
   .handler(async ({ data }) => {
-    const user = await requireAuthenticatedUser()
+    const user = await requireEligibleResourceUser()
     const grants = isPlatformAdmin(user) ? [] : await listUserGrants(user.id)
     const schedule = (await loadSchedules()).find(
       (candidate) => candidate.id === data.id
@@ -362,6 +378,13 @@ export const runScheduleNow = createServerFn({ method: "POST" })
       actions: schedule.actions,
       grants,
       schedulePermission: "schedule.execute",
+      targets: schedule.targets,
+      user,
+    })
+    await requireScheduleBackupDestinations({
+      actions: schedule.actions,
+      checkStorageOwnership: false,
+      grants,
       targets: schedule.targets,
       user,
     })
@@ -889,43 +912,6 @@ async function scheduledResticDestination(
     repository: location,
     repositoryPassword: repository.password,
   }
-}
-
-async function requireScheduleBackupDestinations(
-  actions: ReadonlyArray<ScheduleAction>,
-  user: AuthenticatedUser
-) {
-  const backupActions = actions.filter(
-    (action): action is Extract<ScheduleAction, { type: "backup" }> =>
-      action.type === "backup"
-  )
-  const storageIds = [
-    ...new Set(
-      backupActions.flatMap((action) =>
-        action.destination.kind === "storage"
-          ? [action.destination.storageId]
-          : []
-      )
-    ),
-  ]
-  await Promise.all(
-    storageIds.map(async (storageId) => {
-      const storage = await runAppEffect(
-        "schedules.loadBackupStorage",
-        loadBackupStorageEffect(storageId)
-      )
-      if (
-        !storage ||
-        !storage.enabled ||
-        storage.deleting ||
-        (storage.ownerUserId !== null &&
-          storage.ownerUserId !== user.id &&
-          !hasPlatformPermission(user, "platform.backups.manage-storage"))
-      ) {
-        throw new Error("Backup destination is unavailable")
-      }
-    })
-  )
 }
 
 async function removeRelayProjections(
