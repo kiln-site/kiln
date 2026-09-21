@@ -78,6 +78,7 @@ export const PendingResourceInvitations = memo(
           <tbody
             aria-label="Pending access"
             className="block max-h-56 shrink-0 overflow-y-auto border-b border-border/70 [&~[data-slot=data-table-state-body][data-empty=true]]:hidden"
+            role="rowgroup"
           >
             {rows.map((invitation) => (
               <PendingRow
@@ -125,8 +126,14 @@ const PendingRow = memo(function PendingRow({
 }) {
   const type = invitation.scope.resourceType
   return (
-    <tr className="relative grid min-h-14 grid-cols-[var(--data-table-grid-base)] border-b border-border/70 bg-amber-500/[0.025] text-sm hover:bg-muted/20 sm:grid-cols-[var(--data-table-grid-sm)] md:grid-cols-[var(--data-table-grid-md)] lg:grid-cols-[var(--data-table-grid-lg)] xl:grid-cols-[var(--data-table-grid-xl)]">
-      <td className="flex items-center px-2 text-xs text-amber-600 sm:px-3 dark:text-amber-400">
+    <tr
+      className="relative grid min-h-14 grid-cols-[var(--data-table-grid-base)] border-b border-border/70 bg-amber-500/[0.025] text-sm hover:bg-muted/20 sm:grid-cols-[var(--data-table-grid-sm)] md:grid-cols-[var(--data-table-grid-md)] lg:grid-cols-[var(--data-table-grid-lg)] xl:grid-cols-[var(--data-table-grid-xl)]"
+      role="row"
+    >
+      <td
+        className="flex items-center px-2 text-xs text-amber-600 sm:px-3 dark:text-amber-400"
+        role="cell"
+      >
         <button
           type="button"
           onClick={() => onOpen(invitation.id)}
@@ -136,26 +143,39 @@ const PendingRow = memo(function PendingRow({
         <Clock3 className="mr-1 size-3.5" aria-hidden />
         <span className="hidden sm:inline">Pending</span>
       </td>
-      <td className="pointer-events-none flex min-w-0 flex-col justify-center px-3">
+      <td
+        className="pointer-events-none flex min-w-0 flex-col justify-center px-3"
+        role="cell"
+      >
         <span className="truncate font-medium">{invitation.resourceName}</span>
         <span className="truncate text-xs text-muted-foreground">
           Invited {invitation.createdAt.slice(0, 10)}
         </span>
       </td>
-      <td className="pointer-events-none hidden min-w-0 items-center truncate px-3 text-xs text-muted-foreground md:flex">
+      <td
+        className="pointer-events-none hidden min-w-0 items-center truncate px-3 text-xs text-muted-foreground md:flex"
+        role="cell"
+      >
         {type === "instance" ? invitation.relayName : "—"}
       </td>
       <td
         className={`pointer-events-none hidden min-w-0 items-center truncate px-3 text-xs text-muted-foreground ${type === "instance" ? "xl:flex" : type === "database" ? "md:flex" : "lg:flex"}`}
+        role="cell"
       >
         {type === "database" ? invitation.relayName : "—"}
       </td>
       {type === "relay" ? (
-        <td className="pointer-events-none hidden items-center px-3 text-xs text-muted-foreground xl:flex">
+        <td
+          className="pointer-events-none hidden items-center px-3 text-xs text-muted-foreground xl:flex"
+          role="cell"
+        >
           —
         </td>
       ) : null}
-      <td className="pointer-events-none flex items-center justify-end px-3 text-xs font-medium text-primary">
+      <td
+        className="pointer-events-none flex items-center justify-end px-3 text-xs font-medium text-primary"
+        role="cell"
+      >
         Review invitation
       </td>
     </tr>

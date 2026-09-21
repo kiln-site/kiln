@@ -279,6 +279,7 @@ function DataTableRowModel<TData extends RowData>({
             leadingBody ? undefined : hasBodyState ? 2 : rows.length + 1
           }
           className="flex h-full min-h-0 w-full min-w-0 border-collapse flex-col overflow-hidden pb-px text-left"
+          role="table"
           style={gridStyle}
         >
           <MemoizedDataTableHead
@@ -478,9 +479,14 @@ function DataTableStateBody({
       data-empty={empty || undefined}
       ref={scrollElementRef}
       className={dataTableScrollAreaClassName}
+      role="rowgroup"
     >
-      <tr className={cn("block", centered && "h-full")}>
-        <td className={cn("block p-0", centered && "h-full")} colSpan={colSpan}>
+      <tr className={cn("block", centered && "h-full")} role="row">
+        <td
+          className={cn("block p-0", centered && "h-full")}
+          colSpan={colSpan}
+          role="cell"
+        >
           {centered ? (
             <DataTableCenteredState>{children}</DataTableCenteredState>
           ) : (
@@ -630,6 +636,7 @@ function DataTableHead<TData extends RowData>({
   return (
     <thead
       className="z-20 block shrink-0 bg-background/95 shadow-[0_1px_0_var(--border)] backdrop-blur"
+      role="rowgroup"
       style={{ paddingInlineEnd: scrollbarWidth }}
     >
       {table.getHeaderGroups().map((headerGroup) => (
@@ -637,6 +644,7 @@ function DataTableHead<TData extends RowData>({
           key={headerGroup.id}
           aria-rowindex={1}
           className="type-technical-label grid grid-cols-[var(--data-table-grid-base)] bg-muted/20 text-muted-foreground sm:grid-cols-[var(--data-table-grid-sm)] md:grid-cols-[var(--data-table-grid-md)] lg:grid-cols-[var(--data-table-grid-lg)] xl:grid-cols-[var(--data-table-grid-xl)]"
+          role="row"
         >
           {headerGroup.headers.map((header) => (
             <MemoizedDataTableHeaderCell
@@ -745,6 +753,7 @@ function DataTableHeaderCellContent<TData extends RowData>({
         dataTableColumnVisibilityClass(meta?.layout?.hideBelow, "header"),
         meta?.headerClassName
       )}
+      role="columnheader"
       scope="col"
     >
       {header.isPlaceholder ? null : canSort ? (
@@ -755,7 +764,10 @@ function DataTableHeaderCellContent<TData extends RowData>({
           onClick={header.column.getToggleSortingHandler()}
         >
           <span
-            className={cn("truncate uppercase", meta?.headerLabelClassName)}
+            className={cn(
+              "min-w-0 truncate uppercase",
+              meta?.headerLabelClassName
+            )}
           >
             <FlexRender header={header} />
           </span>
@@ -805,7 +817,11 @@ function DataTableBody<TData extends RowData>({
   const showLoadMoreRow = shouldRenderDataTableLoadMore(loadMoreSource)
 
   return (
-    <tbody ref={scrollElementRef} className={dataTableScrollAreaClassName}>
+    <tbody
+      ref={scrollElementRef}
+      className={dataTableScrollAreaClassName}
+      role="rowgroup"
+    >
       {rows.map((row) => (
         <DataTableRowSelectionBoundary
           key={row.id}
@@ -858,13 +874,15 @@ function VirtualDataTableBody<TData extends RowData>({
     <tbody
       ref={scrollElementRef}
       className={cn("relative", dataTableScrollAreaClassName)}
+      role="rowgroup"
     >
       <tr
         aria-hidden="true"
         className="pointer-events-none block w-full"
+        role="presentation"
         style={{ height: rowVirtualizer.getTotalSize() }}
       >
-        <td className="block p-0" />
+        <td className="block p-0" role="presentation" />
       </tr>
       {rowVirtualizer.getVirtualItems().map((virtualRow) => {
         if (
@@ -929,6 +947,7 @@ function DataTableLoadMoreRow({
       aria-hidden={loadMoreSource.state.kind !== "error"}
       className="grid h-12 place-items-center"
       data-index={dataIndex}
+      role="row"
       style={
         virtualStart === undefined
           ? undefined
@@ -941,7 +960,12 @@ function DataTableLoadMoreRow({
             }
       }
     >
-      <td ref={triggerRef} className="col-span-full" colSpan={colSpan}>
+      <td
+        ref={triggerRef}
+        className="col-span-full"
+        colSpan={colSpan}
+        role="cell"
+      >
         <DataTableLoadMoreContent source={loadMoreSource} />
       </td>
     </tr>
@@ -1021,6 +1045,7 @@ function DataTableRow<TData extends RowData>({
       )}
       data-index={dataIndex}
       data-state={isSelected ? "selected" : undefined}
+      role="row"
       style={
         virtualStart === undefined
           ? undefined
@@ -1044,6 +1069,7 @@ function DataTableRow<TData extends RowData>({
             ),
             cell.column.columnDef.meta?.cellClassName
           )}
+          role="cell"
         >
           <FlexRender cell={cell} />
         </td>
