@@ -347,7 +347,7 @@ export const relayInstanceNameSchema = z
     MAXIMUM_INSTANCE_NAME_LENGTH,
     `Names must be ${MAXIMUM_INSTANCE_NAME_LENGTH} characters or fewer`
   )
-export const DEFAULT_INSTANCE_DISK_LIMIT_BYTES = 25 * 1024 ** 3
+export const DEFAULT_INSTANCE_DISK_LIMIT_BYTES = 5 * 1024 ** 3
 export const RELAY_NODE_DISK_RESERVE_BYTES = 10 * 1024 ** 3
 
 const relayDiskLimitBytesSchema = z
@@ -959,6 +959,17 @@ export const relayInstancePortAllocationsSchema = relayInstancePortArraySchema(
   relayInstancePortAllocationSchema
 )
 
+export const relaySavedDatabaseConnectionSchema = z.object({
+  databaseId: databaseIdSchema,
+  relayId: relayIdSchema,
+})
+
+export const relayRemoveDatabaseConnectionSchema = z.object({
+  instanceId: z.string().regex(/^[a-f0-9]{40}$/u),
+  databaseId: databaseIdSchema,
+  databaseRelayId: relayIdSchema,
+})
+
 export const relayInstanceSchema = z.object({
   id: z.string().regex(/^[a-f0-9]{40}$/u),
   shortId: z.string().regex(/^[a-f0-9]{8}$/u),
@@ -973,6 +984,10 @@ export const relayInstanceSchema = z.object({
   desiredState: relayDesiredStateSchema,
   observedState: relayObservedStateSchema,
   stateReason: relayInstanceStateReasonSchema.nullable().default(null),
+  databaseConnectionWarnings: z.array(z.string()).optional(),
+  savedDatabaseConnections: z
+    .array(relaySavedDatabaseConnectionSchema)
+    .optional(),
   recovery: relayInstanceRecoverySchema.nullable().default(null),
   lifecycle: z.array(relayInstanceLifecycleEventSchema).default([]),
   containerId: z.string().nullable(),

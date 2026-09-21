@@ -14,6 +14,7 @@ import { totalmem } from "node:os"
 import { join } from "node:path"
 import { Effect, Fiber, Schedule, Semaphore } from "effect"
 
+import type { DatabaseConnections } from "./database-connections.js"
 import { resolveBrick, resolveBrickForProvisioning } from "./bricks.js"
 import { command } from "./command.js"
 import { directoryApparentSizeEffect } from "./disk-usage.js"
@@ -338,7 +339,12 @@ export class LifecycleDriver {
   readonly #tailscaleFirewallGenerations = new Map<string, string>()
   #webRoutes: ReadonlyArray<RelayStoredWebRoute> = []
 
-  constructor(config: RelayConfig, docker: DockerDriver, bricks: BrickCatalog) {
+  constructor(
+    config: RelayConfig,
+    docker: DockerDriver,
+    bricks: BrickCatalog,
+    readonly databaseConnections: DatabaseConnections | null = null
+  ) {
     this.#bricks = bricks
     this.#config = config
     this.#docker = docker
@@ -2500,6 +2506,13 @@ export class LifecycleDriver {
       if (!hostPort) continue
       arguments_.push("--publish", `${hostPort}:${binding}`)
     }
+    if (this.databaseConnections) {
+      for (const [label, value] of Object.entries(
+        await this.databaseConnections.labels(id)
+      )) {
+        arguments_.push("--label", `${label}=${value}`)
+      }
+    }
     arguments_.push(image)
     arguments_.push(...(definition.runtime.entrypoint?.slice(1) ?? []))
     arguments_.push(...(definition.runtime.command ?? []))
@@ -2519,6 +2532,7 @@ export class LifecycleDriver {
             containerName,
           ])
         }
+        await this.databaseConnections?.reconcile(id, containerName)
         if (input.start) {
           await command("docker", ["start", containerName], {
             timeout: 120_000,

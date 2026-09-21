@@ -8,6 +8,11 @@ import { hostname } from "node:os"
 import { basename, relative, resolve } from "node:path"
 import { Cause, Effect, Option, Queue, Result, Semaphore, Stream } from "effect"
 
+import {
+  DATABASE_CONNECTION_LABEL_PREFIX,
+  type DatabaseConnections,
+  type DatabaseConnectionSnapshot,
+} from "./database-connections.js"
 import { command, commandEffect } from "./command.js"
 import type { CommandResult } from "./command.js"
 import type { BrickCatalog } from "./bricks.js"
@@ -594,7 +599,8 @@ export class DockerDriver {
     config: RelayConfig,
     runtimeRecovery: RuntimeRecoveryManager | null = null,
     bricks: BrickCatalog | null = null,
-    state: RelayStateStore["Service"] | null = null
+    state: RelayStateStore["Service"] | null = null,
+    readonly databaseConnections: DatabaseConnections | null = null
   ) {
     this.#bricks = bricks
     this.#config = config
@@ -828,6 +834,15 @@ export class DockerDriver {
           recoveryState?.recovery,
           desiredState
         ),
+        savedDatabaseConnections: [
+          ...(this.databaseConnections?.saved(config.id) ?? []),
+        ],
+        databaseConnectionWarnings: this.databaseConnections
+          ?.issues(config.id)
+          .map(
+            (issue) =>
+              `${issue.databaseId ?? "Database connections"}: ${issue.message}`
+          ),
         recovery: recoveryState?.recovery ?? null,
         lifecycle: lifecycleSession?.events ?? [],
         status:
@@ -906,7 +921,21 @@ export class DockerDriver {
         ? runEffect(this.#runtimeRecovery.forget(instanceId))
         : Promise.resolve(),
       this.#deleteLifecycleSession(instanceId),
+      this.databaseConnections?.forgetInstance(instanceId) ?? Promise.resolve(),
     ])
+  }
+
+  async databaseConnectionSnapshots(): Promise<
+    Array<DatabaseConnectionSnapshot>
+  > {
+    return (await this.#discover())
+      .filter(({ config }) => config.managedByRelay)
+      .map(({ config, container }) => ({
+        instanceId: config.id,
+        service: config.service,
+        labels: container.Config.Labels ?? {},
+        networks: Object.keys(container.NetworkSettings?.Networks ?? {}),
+      }))
   }
 
   async webRouteLabelSnapshots(): Promise<Array<RelayWebRouteLabelSnapshot>> {
@@ -921,6 +950,12 @@ export class DockerDriver {
     instance: RelayInstanceConfig,
     action: InstancePowerAction
   ): Promise<RelayInstance> {
+    if (
+      instance.managedByRelay &&
+      (action === "start" || action === "restart")
+    ) {
+      await this.databaseConnections?.reconcile(instance.id, instance.service)
+    }
     const discovered = await this.#findDiscovered(instance.id)
     await this.#initializeLifecycleSessions()
     const lifecycleSessionBeforeTransition = this.#lifecycleSessions.get(
@@ -1060,6 +1095,13 @@ export class DockerDriver {
       }
     }
     Object.assign(labels, routeLabels)
+    if (this.databaseConnections) {
+      for (const label of Object.keys(labels)) {
+        if (label.startsWith(DATABASE_CONNECTION_LABEL_PREFIX))
+          delete labels[label]
+      }
+      Object.assign(labels, await this.databaseConnections.labels(instance.id))
+    }
     if (portConfiguration) {
       for (const label of Object.keys(labels)) {
         if (isManagedPortLabel(label)) delete labels[label]
@@ -1179,7 +1221,9 @@ export class DockerDriver {
         replacementCreated = true
         const secondaryNetworks = portConfiguration
           ? Object.keys(current.NetworkSettings?.Networks ?? {}).filter(
-              (network) => network !== primaryNetwork
+              (network) =>
+                network !== primaryNetwork &&
+                !this.databaseConnections?.isDatabaseNetwork(network)
             )
           : edgeNetwork
             ? [edgeNetwork]
@@ -1195,6 +1239,7 @@ export class DockerDriver {
           arguments_.push(network, instance.service)
           await command("docker", arguments_)
         }
+        await this.databaseConnections?.reconcile(instance.id, instance.service)
         if (action !== "stop") {
           await command("docker", ["start", instance.service], {
             timeout: 120_000,

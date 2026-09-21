@@ -93,6 +93,7 @@ export const relayControlOperations = [
   "instance.network.ports.write",
   "instance.network.routes.read",
   "instance.network.routes.write",
+  "instance.network.databases.remove",
   "hearth.tailscale.instance.detach",
   "sftp.authorization.resolve",
 ] as const
@@ -127,6 +128,7 @@ const auditedRelayControlOperations = new Set<RelayControlOperation>([
   "instance.console.write",
   "instance.network.ports.write",
   "instance.network.routes.write",
+  "instance.network.databases.remove",
   "database.create",
   "database.delete",
   "database.action",

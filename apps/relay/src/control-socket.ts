@@ -1017,6 +1017,7 @@ function actionForRequest(request: RelayControlRequest): RelayAction | null {
       return "instance.network.write"
     case "instance.network.routes.read":
       return "instance.network.read"
+    case "instance.network.databases.remove":
     case "instance.network.routes.write":
       return "instance.network.write"
     case "hearth.tailscale.instance.detach":

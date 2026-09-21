@@ -33,13 +33,13 @@ describe("Relay disk quotas", () => {
         configuredLimitBytes: null,
         id,
       })),
-      100 * GIBIBYTE
+      28 * GIBIBYTE
     )
 
     expect(assignments.get("a")).toBe(DEFAULT_INSTANCE_DISK_LIMIT_BYTES)
     expect(assignments.get("b")).toBe(DEFAULT_INSTANCE_DISK_LIMIT_BYTES)
     expect(assignments.get("c")).toBe(DEFAULT_INSTANCE_DISK_LIMIT_BYTES)
-    expect(assignments.get("d")).toBe(15 * GIBIBYTE)
+    expect(assignments.get("d")).toBe(3 * GIBIBYTE)
   })
 
   it("deducts configured quotas before assigning legacy defaults", () => {
@@ -50,22 +50,22 @@ describe("Relay disk quotas", () => {
         { configuredLimitBytes: null, id: "legacy-b" },
         { configuredLimitBytes: null, id: "legacy-c" },
       ],
-      100 * GIBIBYTE
+      52 * GIBIBYTE
     )
 
-    expect(assignments.get("legacy-a")).toBe(25 * GIBIBYTE)
-    expect(assignments.get("legacy-b")).toBe(25 * GIBIBYTE)
-    expect(assignments.get("legacy-c")).toBe(10 * GIBIBYTE)
+    expect(assignments.get("legacy-a")).toBe(5 * GIBIBYTE)
+    expect(assignments.get("legacy-b")).toBe(5 * GIBIBYTE)
+    expect(assignments.get("legacy-c")).toBe(2 * GIBIBYTE)
   })
 
-  it("defaults new requests to 25 GiB and rejects an explicit zero quota", () => {
+  it("defaults new requests to 5 GiB and rejects an explicit zero quota", () => {
     const input = {
       recipe: "https://example.com/brick.yml",
       variables: {},
     }
 
     expect(relayCreateInstanceSchema.parse(input).diskLimitBytes).toBe(
-      DEFAULT_INSTANCE_DISK_LIMIT_BYTES
+      5 * GIBIBYTE
     )
     expect(
       relayCreateInstanceSchema.safeParse({ ...input, diskLimitBytes: 0 })
