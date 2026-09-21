@@ -1386,7 +1386,7 @@ describe("legacy machine mutation migration", () => {
     await initialize()
     const database = new DatabaseSync(filename)
     try {
-      database.exec("DELETE FROM effect_sql_migrations WHERE migration_id = 15")
+      database.exec("DELETE FROM effect_sql_migrations WHERE migration_id = 16")
       database
         .prepare(
           "INSERT INTO relay_invitations (id, token_hash, role, actions_json, created_at, expires_at) VALUES (?, ?, 'custom', ?, 1, 9999999999999)"
