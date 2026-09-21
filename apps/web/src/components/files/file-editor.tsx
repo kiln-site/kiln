@@ -228,7 +228,6 @@ function Editor({
             ariaLabel={`Edit ${formatName(file.path)}`}
             path={file.path}
             disabled={loading}
-            redactSensitive
             readOnly={file.readOnly || !canWrite}
             preferencesStore={preferencesStore}
             searchStore={searchStore}
@@ -439,6 +438,7 @@ function EditorDocument({
   | "onChange"
   | "onSearchOpenChange"
   | "originalValue"
+  | "redactSensitive"
   | "ref"
   | "searchOpen"
   | "searchQuery"
@@ -476,6 +476,11 @@ function EditorDocument({
     sessionStore.getReviewChangesSnapshot,
     sessionStore.getReviewChangesSnapshot
   )
+  const redactSensitive = React.useSyncExternalStore(
+    sessionStore.subscribe,
+    sessionStore.getRedactSensitiveSnapshot,
+    sessionStore.getRedactSensitiveSnapshot
+  )
   const wrapLines = React.useSyncExternalStore(
     sessionStore.subscribe,
     sessionStore.getWrapLinesSnapshot,
@@ -501,6 +506,7 @@ function EditorDocument({
       fontSize={fontSize}
       onSearchOpenChange={sessionStore.setSearchOpen}
       originalValue={originalValue}
+      redactSensitive={redactSensitive}
       searchOpen={searchOpen}
       searchQuery={searchQuery}
       showChanges={showChanges}

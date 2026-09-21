@@ -7,6 +7,8 @@ import {
   Copy,
   Download,
   EllipsisVertical,
+  Eye,
+  EyeOff,
   GitCompareArrows,
   LoaderCircle,
   LockKeyhole,
@@ -352,6 +354,7 @@ function EditorOverflowMenu({
           />
           <EditorCopyActionMenuItem sessionStore={sessionStore} />
           <EditorWrapActionMenuItem sessionStore={sessionStore} />
+          <EditorRedactActionMenuItem sessionStore={sessionStore} />
           <FilePinActionMenuItem
             canWrite={canWrite}
             editorLoading={loading}
@@ -465,6 +468,32 @@ function EditorShareActionMenuItem({
       detail="Copies a shareable link"
       disabled={state === "uploading" || loading}
       onClick={share}
+    />
+  )
+}
+
+function EditorRedactActionMenuItem({
+  sessionStore,
+}: {
+  sessionStore: EditorSessionStore
+}) {
+  const redactSensitive = React.useSyncExternalStore(
+    sessionStore.subscribe,
+    sessionStore.getRedactSensitiveSnapshot,
+    sessionStore.getRedactSensitiveSnapshot
+  )
+
+  return (
+    <FileActionMenuItem
+      active={redactSensitive}
+      icon={redactSensitive ? <Eye /> : <EyeOff />}
+      label={redactSensitive ? "Show IPs" : "Censor IPs"}
+      detail={
+        redactSensitive
+          ? "Reveal IP addresses in the editor"
+          : "Hide IP addresses in the editor"
+      }
+      onClick={sessionStore.toggleRedactSensitive}
     />
   )
 }
@@ -674,6 +703,7 @@ function EditorMobileOverflowMenu({
             path={filePath}
           />
           <EditorWrapActionMenuItem sessionStore={sessionStore} />
+          <EditorRedactActionMenuItem sessionStore={sessionStore} />
           <EditorReviewChangesMenuItem
             fileReadOnly={fileReadOnly}
             labelMode="static"
