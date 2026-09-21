@@ -229,8 +229,8 @@ function DataTableRowModel<TData extends RowData>({
   )
   const bodyState = dataTableBodyState(source.body, emptyState, rows.length)
   const gridStyle = React.useMemo(
-    () => dataTableGridStyle(table),
-    [table, definition.columns]
+    () => dataTableGridStyle(definition.columns),
+    [definition.columns]
   )
 
   React.useLayoutEffect(() => {
@@ -384,23 +384,25 @@ const dataTableBreakpoints: ReadonlyArray<DataTableBreakpoint> = [
 type DataTableGridStyle = React.CSSProperties &
   Record<`--data-table-grid-${DataTableBreakpoint}`, string>
 
+/**
+ * Built from the column definitions rather than `table.getAllLeafColumns()`:
+ * the v9 adapter hands back a new `table` identity every render, while the
+ * column defs are memoized by consumers. This table has no column groups or
+ * visibility feature, so leaf order matches definition order.
+ */
 function dataTableGridStyle<TData extends RowData>(
-  table: DataTableInstance<TData>
+  columns: DataTableDefinition<TData>["columns"]
 ): DataTableGridStyle {
-  const columns = table.getAllLeafColumns()
   const grids = Object.fromEntries(
     dataTableBreakpoints.map((breakpoint) => [
       `--data-table-grid-${breakpoint}`,
       columns
         .filter(
           (column) =>
-            !dataTableColumnIsHidden(
-              column.columnDef.meta?.layout?.hideBelow,
-              breakpoint
-            )
+            !dataTableColumnIsHidden(column.meta?.layout?.hideBelow, breakpoint)
         )
         .map((column) =>
-          dataTableColumnWidth(column.columnDef.meta?.layout?.width, breakpoint)
+          dataTableColumnWidth(column.meta?.layout?.width, breakpoint)
         )
         .join(" "),
     ])

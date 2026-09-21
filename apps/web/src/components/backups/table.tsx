@@ -471,6 +471,7 @@ const BackupDesktopTable = React.memo(function BackupDesktopTable({
       model: {
         enableRowRangeSelection: true,
         enableRowSelection: (row) => backupCanBeRemoved(row.original),
+        enableSortingRemoval: false,
         enableSubRowSelection: false,
         initialState: initialTableState,
         manualSorting: true,
@@ -544,23 +545,29 @@ const BackupDesktopTableStateSync = React.memo(
         onSortChange(next.id as BackupRunSort, next.desc ? "desc" : "asc")
       }
     )
+    // The v9 adapter rebuilds the `table` wrapper every render; the atoms and
+    // API methods underneath are stable, so key the subscriptions on those to
+    // avoid unsubscribing and resubscribing on each render.
+    const { rowSelection: rowSelectionAtom, sorting: sortingAtom } = table.atoms
+    const { setRowSelection } = table
+
     React.useLayoutEffect(() => {
-      const subscription = table.atoms.sorting.subscribe(handleSortingChange)
+      const subscription = sortingAtom.subscribe(handleSortingChange)
       return () => subscription.unsubscribe()
-    }, [table])
+    }, [sortingAtom])
 
     React.useLayoutEffect(() => {
-      const current = table.atoms.rowSelection.get()
+      const current = rowSelectionAtom.get()
       if (backupSelectionMatchesState(selectedBackupIds, current)) return
-      table.setRowSelection(backupRowSelectionState(selectedBackupIds))
-    }, [selectedBackupIds, table])
+      setRowSelection(backupRowSelectionState(selectedBackupIds))
+    }, [rowSelectionAtom, selectedBackupIds, setRowSelection])
 
     React.useLayoutEffect(() => {
-      const subscription = table.atoms.rowSelection.subscribe((selection) => {
+      const subscription = rowSelectionAtom.subscribe((selection) => {
         selectionStore.replace(Object.keys(selection))
       })
       return () => subscription.unsubscribe()
-    }, [selectionStore, table])
+    }, [rowSelectionAtom, selectionStore])
 
     return null
   }

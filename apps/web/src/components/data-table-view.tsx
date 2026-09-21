@@ -108,6 +108,11 @@ function DataTableModel<TData extends RowData & object>({
 
   return (
     <>
+      {/*
+        The v9 adapter returns a new `table` identity on every render, so
+        children that subscribe in effects should depend on `table.store` or
+        `table.atoms.*` (stable) rather than on `table` itself.
+      */}
       {children?.(table)}
       <DataTableRenderer
         leadingBody={leadingBody}
