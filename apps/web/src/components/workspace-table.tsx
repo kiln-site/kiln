@@ -1,3 +1,9 @@
+/**
+ * Legacy non-virtualized workspace table.
+ *
+ * New pages should use `DataTable` from `@/components/data-table-view` with
+ * `DataTableWorkspace`/`DataTableToolbar` from `@/components/data-table-workspace`.
+ */
 import * as React from "react"
 
 import {
@@ -8,7 +14,7 @@ import {
 
 export type WorkspaceTableSearchStore = DataTableSearchStore
 
-interface WorkspaceDataTableProps<T> {
+interface WorkspaceTableProps<T> {
   getRowKey: (item: T) => React.Key
   getSearchText: (item: T) => string
   head: React.ReactNode
@@ -36,7 +42,7 @@ export function useWorkspaceTableSearchInput(
   useDataTableSearchInput(inputRef, store)
 }
 
-export function WorkspaceDataTable<T>({
+export function WorkspaceTable<T>({
   getRowKey,
   getSearchText,
   head,
@@ -44,7 +50,7 @@ export function WorkspaceDataTable<T>({
   renderEmpty,
   renderRow,
   searchStore,
-}: WorkspaceDataTableProps<T>) {
+}: WorkspaceTableProps<T>) {
   const searchableItems = React.useMemo(
     () =>
       items.map((item) => ({

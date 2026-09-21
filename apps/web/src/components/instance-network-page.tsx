@@ -72,7 +72,7 @@ import {
   WorkspaceTableCell,
   WorkspaceTableHead,
   WorkspaceTableHeading,
-} from "@/components/workspace-data-table"
+} from "@/components/workspace-table"
 import {
   accessCapabilitiesQueryOptions,
   queryKeys,

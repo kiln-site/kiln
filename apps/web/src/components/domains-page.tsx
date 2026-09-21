@@ -43,14 +43,14 @@ import {
 } from "@workspace/ui/components/tooltip"
 
 import {
-  WorkspaceDataTable,
+  WorkspaceTable,
   WorkspaceTableCell,
   WorkspaceTableHead,
   WorkspaceTableHeading,
   createWorkspaceTableSearchStore,
   useWorkspaceTableSearchInput,
-} from "@/components/workspace-data-table"
-import type { WorkspaceTableSearchStore } from "@/components/workspace-data-table"
+} from "@/components/workspace-table"
+import type { WorkspaceTableSearchStore } from "@/components/workspace-table"
 import { WorkspaceSummaryCard } from "@/components/workspace-summary-card"
 import {
   defaultDomainBlacklistPatterns,
@@ -301,7 +301,7 @@ const ManagedDomainsTable = React.memo(function ManagedDomainsTable({
   )
 
   return (
-    <WorkspaceDataTable
+    <WorkspaceTable
       getRowKey={managedDomainRowKey}
       getSearchText={managedDomainSearchText}
       head={<ManagedDomainsTableHead />}

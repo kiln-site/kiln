@@ -47,8 +47,8 @@ import { MAXIMUM_INSTANCE_NAME_LENGTH } from "@workspace/contracts"
 import {
   createWorkspaceTableSearchStore,
   useWorkspaceTableSearchInput,
-} from "@/components/workspace-data-table"
-import type { WorkspaceTableSearchStore } from "@/components/workspace-data-table"
+} from "@/components/workspace-table"
+import type { WorkspaceTableSearchStore } from "@/components/workspace-table"
 import {
   TailscaleConnectServersPopover,
   TailscaleConnectedServersTable,
