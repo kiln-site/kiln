@@ -117,16 +117,16 @@ export const loadResourceGrantsEffect = Effect.fn("access.resolveGrants")(
       ),
       source: "access",
     }))
-    // Ownership is authority in its own right, independent of invitations and presets.
+    // Ownership is authority in its own right, independent of invitations and
+    // presets. Relays are owned by their creator and instances by owner_id.
+    // Databases have no owner: their creator acts through Relay-scope grants,
+    // as before this model, so revoking Relay access revokes database access.
     const ownerRows = yield* query<GrantRow>(
       `SELECT id, id AS relay_id, 'relay' AS resource_type, id AS resource_id, NULL AS engine
          FROM ${databaseTable("relay")} WHERE created_by = ?${relayId ? " AND id = ?" : ""}
        UNION ALL
        SELECT instance_id AS id, relay_id, 'instance', instance_id, NULL
-         FROM ${databaseTable("instance")} WHERE owner_id = ?${relayId ? " AND relay_id = ?" : ""}${scope ? " AND instance_id = ?" : ""}
-       UNION ALL
-       SELECT database_id AS id, relay_id, 'database', database_id, engine
-         FROM ${databaseTable("database")} WHERE created_by = ?${relayId ? " AND relay_id = ?" : ""}${scope ? " AND database_id = ?" : ""}`,
+         FROM ${databaseTable("instance")} WHERE owner_id = ?${relayId ? " AND relay_id = ?" : ""}${scope ? " AND instance_id = ?" : ""}`,
       [
         userId,
         ...(relayId ? [relayId] : []),
@@ -134,11 +134,6 @@ export const loadResourceGrantsEffect = Effect.fn("access.resolveGrants")(
         ...(relayId ? [relayId] : []),
         ...(scope
           ? [scope.resourceType === "instance" ? scope.resourceId : ""]
-          : []),
-        userId,
-        ...(relayId ? [relayId] : []),
-        ...(scope
-          ? [scope.resourceType === "database" ? scope.resourceId : ""]
           : []),
       ]
     )

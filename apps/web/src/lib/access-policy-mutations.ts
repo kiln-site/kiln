@@ -100,7 +100,7 @@ export function lockAccessScopeEffect(
     const rows = yield* transaction.queryRows<TargetRow>(
       scope.resourceType === "instance"
         ? `SELECT COALESCE(display_name, source_name) AS name, owner_id FROM ${databaseTable("instance")} WHERE relay_id = ? AND instance_id = ? FOR UPDATE`
-        : `SELECT name, engine, created_by AS owner_id FROM ${databaseTable("database")} WHERE relay_id = ? AND database_id = ? FOR UPDATE`,
+        : `SELECT name, engine, NULL AS owner_id FROM ${databaseTable("database")} WHERE relay_id = ? AND database_id = ? FOR UPDATE`,
       [scope.relayId, scope.resourceId]
     )
     if (!rows[0]) return yield* Effect.fail(new Error("Resource not found"))
@@ -308,9 +308,18 @@ export async function publishResourceAccessChange(
   const { wakeAuthorizationDelivery } =
     await import("@/lib/authorization-delivery")
   for (const relayId of new Set(relayIds)) wakeAuthorizationDelivery(relayId)
+  // Readers of each Relay refresh only that Relay's access records; the
+  // platform user and invitation lists are an administrator concern.
+  for (const relayId of new Set(relayIds))
+    publishRealtimeChange({
+      type: "hearth.invalidate",
+      audience: { kind: "relays", relayIds: [relayId] },
+      scope: { relayId },
+      topics: ["access"],
+    })
   publishRealtimeChange({
     type: "hearth.invalidate",
-    audience: { kind: "relays", relayIds: [...new Set(relayIds)] },
+    audience: { kind: "platform-admins" },
     topics: ["access"],
   })
 }

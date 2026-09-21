@@ -1,7 +1,7 @@
 import { createServerFn, createServerOnlyFn } from "@tanstack/react-start"
 import { z } from "zod"
 
-const getCurrentUser = createServerOnlyFn(async () => {
+export const getCurrentUser = createServerOnlyFn(async () => {
   const [{ getRequestHeaders }, { getAuthenticatedUserFromHeaders }] =
     await Promise.all([
       import("@tanstack/react-start/server"),

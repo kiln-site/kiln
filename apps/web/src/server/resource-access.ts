@@ -21,6 +21,7 @@ import { databasePool } from "@/lib/database"
 import { kilnPublicUrl } from "@/lib/environment"
 import { requireEligibleResourceUser, requireVerifiedUser } from "@/server/auth"
 import {
+  databaseScopeCapabilities,
   loadResourceGrantsEffect,
   deduplicatePermissionSelections,
   effectiveScopePermissions,
@@ -28,6 +29,7 @@ import {
   type ResolvedAccessGrant,
   type ResourceScope,
 } from "@/lib/resource-permissions"
+import { displayNameFromEmail } from "@/lib/display-name"
 import {
   accessPolicyTransaction,
   lockAccessActorEffect,
@@ -59,8 +61,12 @@ const inviteSchema = z.object({
     .min(1)
     .max(25),
 })
-const currentAttempt =
-  "accepted_at IS NULL AND declined_at IS NULL AND revoked_at IS NULL AND expires_at > CURRENT_TIMESTAMP(3)"
+/** SQL predicate for an invitation attempt that can still be accepted. */
+const currentAttemptFor = (alias = "") =>
+  ["accepted_at IS NULL", "declined_at IS NULL", "revoked_at IS NULL"]
+    .map((column) => `${alias}${column}`)
+    .join(" AND ") + ` AND ${alias}expires_at > CURRENT_TIMESTAMP(3)`
+const currentAttempt = currentAttemptFor()
 const scopeValues = (scope: ResourceScope) => [
   scope.relayId,
   scope.resourceType,
@@ -158,7 +164,7 @@ export const inviteResourceAccess = createServerFn({ method: "POST" })
           yield* tx.execute(
             `INSERT INTO ${databaseTable("user")} (id, name, email, emailVerified, status, role, statusChangedAt, createdAt, updatedAt)
       VALUES (?, ?, ?, FALSE, 'enabled', 'user', CURRENT_TIMESTAMP(3), CURRENT_TIMESTAMP(3), CURRENT_TIMESTAMP(3)) ON DUPLICATE KEY UPDATE id = id`,
-            [randomUUID(), data.email.split("@")[0]!, data.email]
+            [randomUUID(), displayNameFromEmail(data.email), data.email]
           )
           const users = yield* tx.queryRows<UserRow>(
             `SELECT id, email, name FROM ${databaseTable("user")} WHERE email = ? FOR UPDATE`,
@@ -340,7 +346,7 @@ export const getMyInvitations = createServerFn({ method: "GET" }).handler(
   async () => {
     const user = await requireEligibleResourceUser()
     const [rows] = await databasePool.query<Array<InvitationRow>>(
-      `${invitationSelect} WHERE i.user_id = ? AND i.access_type = 'scoped' AND i.${currentAttempt.replaceAll(" AND ", " AND i.")} AND g.state = 'pending' AND r.enabled = TRUE ORDER BY i.created_at DESC LIMIT 500`,
+      `${invitationSelect} WHERE i.user_id = ? AND i.access_type = 'scoped' AND ${currentAttemptFor("i.")} AND g.state = 'pending' AND r.enabled = TRUE ORDER BY i.created_at DESC LIMIT 500`,
       [user.id]
     )
     return rows.map(invitationView)
@@ -848,9 +854,7 @@ export const getResourceAccess = createServerFn({ method: "GET" })
         : [[]]
     const supportedCapabilities =
       data.resourceType === "database"
-        ? ["mysql", "mariadb", "postgres"].includes(engines[0]?.engine ?? "")
-          ? ["database.logical-backups"]
-          : []
+        ? databaseScopeCapabilities(engines[0]?.engine)
         : undefined
     const supportedPermissions = permissions.filter((permission) =>
       accessPermissionSupported(

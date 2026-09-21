@@ -80,14 +80,14 @@ function queryScopes(
   scope: HearthRealtimeScope | undefined
 ): ReadonlyArray<HearthRealtimeQueryScope> {
   if (topic === "access" && scope) {
+    // One Relay's access edit: refresh that Relay's records and what the
+    // viewer can reach, never the platform user or invitation lists.
     return [
       exact(queryKeys.access.capabilities),
       prefix(["resource-access", scope.relayId]),
       prefix(["access-resources"]),
       prefix(["my-resource-invitations"]),
       prefix(["resource-invitation"]),
-      prefix(["platform-invitations"]),
-      prefix(["users"]),
     ]
   }
   if (topic === "backup-settings" && scope) {

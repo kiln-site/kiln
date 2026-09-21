@@ -19,20 +19,12 @@ export function isAccountEnabled(
   )
 }
 
+/** Verification follows from recorded evidence only; the Better Auth flag is not proof. */
 export function isAccountVerified(user: AccountPolicy): boolean {
-  if (
+  return Boolean(
     user.emailVerifiedAt ||
     user.manuallyVerifiedAt ||
     user.legacyVerificationRecordedAt
-  )
-    return true
-  // Older in-memory integrations lack evidence fields. Persisted identities
-  // always expose the three fields, including explicit null values.
-  return (
-    user.emailVerifiedAt === undefined &&
-    user.manuallyVerifiedAt === undefined &&
-    user.legacyVerificationRecordedAt === undefined &&
-    user.emailVerified === true
   )
 }
 

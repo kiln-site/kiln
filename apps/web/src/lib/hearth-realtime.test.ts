@@ -43,9 +43,10 @@ describe("Hearth realtime query refresh", () => {
       expect(
         client.getQueryState(["resource-invitation", "invite-a"])?.isInvalidated
       ).toBe(true)
+      // Platform lists refresh only on unscoped (administrator) invalidations.
       expect(
         client.getQueryState(["platform-invitations", 0])?.isInvalidated
-      ).toBe(true)
+      ).toBe(scope === undefined)
       expect(client.getQueryState(["unrelated"])?.isInvalidated).toBe(false)
     }
   })

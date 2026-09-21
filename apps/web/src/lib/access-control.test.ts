@@ -1,6 +1,6 @@
 import { assert, describe, it } from "@effect/vitest"
 import { Effect, Layer, Result } from "effect"
-import type { ResultSetHeader, RowDataPacket } from "mysql2/promise"
+import type { RowDataPacket } from "mysql2/promise"
 
 import { Database } from "@/effect/database"
 import type { AuthenticatedUser } from "@/lib/auth-session"
@@ -8,9 +8,6 @@ import {
   allowedInstanceIdsForUser,
   canReadRelayNode,
   type AccessGrant,
-  deduplicateEffectiveInstanceGrants,
-  deleteInstanceAccessEffect,
-  isCurrentInstanceOwnerGrant,
   isPlatformAdmin,
   isRelayCreator,
   requireRelayPermissionsEffect,
@@ -20,6 +17,7 @@ import {
 const authenticatedUser = {
   email: "user@example.com",
   emailVerified: true,
+  emailVerifiedAt: "2026-01-01T00:00:00.000Z",
   id: "user-one",
   isDevelopmentBypass: false,
   name: "User",
@@ -195,126 +193,6 @@ describe("Relay permission requirements", () => {
       }
     }).pipe(Effect.provide(databaseLayer))
   })
-})
-
-const emptyResult: ResultSetHeader = {
-  affectedRows: 0,
-  changedRows: 0,
-  constructor: { name: "ResultSetHeader" },
-  fieldCount: 0,
-  info: "",
-  insertId: 0,
-  serverStatus: 0,
-  warningStatus: 0,
-}
-
-describe("instance access cleanup", () => {
-  it("shows each user once and prefers a direct instance grant", () => {
-    const grants: Array<{
-      id: string
-      resourceType: "instance" | "relay"
-      userId: string
-    }> = [
-      {
-        id: "direct-one",
-        resourceType: "instance",
-        userId: "user-one",
-      },
-      {
-        id: "relay-two",
-        resourceType: "relay",
-        userId: "user-two",
-      },
-      {
-        id: "relay-one",
-        resourceType: "relay",
-        userId: "user-one",
-      },
-      {
-        id: "direct-two",
-        resourceType: "instance",
-        userId: "user-two",
-      },
-      {
-        id: "relay-three",
-        resourceType: "relay",
-        userId: "user-three",
-      },
-    ]
-    assert.deepEqual(deduplicateEffectiveInstanceGrants(grants), [
-      {
-        id: "direct-one",
-        resourceType: "instance",
-        userId: "user-one",
-      },
-      {
-        id: "direct-two",
-        resourceType: "instance",
-        userId: "user-two",
-      },
-      {
-        id: "relay-three",
-        resourceType: "relay",
-        userId: "user-three",
-      },
-    ])
-  })
-
-  it("recognizes the persisted owner's own grant", () => {
-    assert.isTrue(
-      isCurrentInstanceOwnerGrant({
-        grantUserId: "owner-one",
-        ownerId: "owner-one",
-      })
-    )
-    assert.isFalse(
-      isCurrentInstanceOwnerGrant({
-        grantUserId: "member-one",
-        ownerId: "owner-one",
-      })
-    )
-    assert.isFalse(
-      isCurrentInstanceOwnerGrant({ grantUserId: "member-one", ownerId: null })
-    )
-  })
-
-  it.effect(
-    "removes grants, pending invitations, and resource presets in one transaction",
-    () => {
-      const statements: Array<{
-        sql: string
-        values: ReadonlyArray<unknown>
-      }> = []
-      const databaseLayer = Layer.succeed(Database)({
-        execute: () => Effect.die("Unexpected standalone database write"),
-        queryRows: () => Effect.die("Unexpected database query"),
-        transaction: (_operation, run) =>
-          run({
-            execute: (sql, values) =>
-              Effect.sync(() => {
-                statements.push({ sql, values: values ?? [] })
-                return emptyResult
-              }),
-            queryRows: () => Effect.succeed([]),
-          }),
-      })
-
-      return Effect.gen(function* () {
-        yield* deleteInstanceAccessEffect("relay-one", "instance-one")
-
-        assert.strictEqual(statements.length, 3)
-        assert.include(statements[0]?.sql, "resource_type = 'instance'")
-        assert.deepEqual(statements[0]?.values, ["relay-one", "instance-one"])
-        assert.include(statements[1]?.sql, "accepted_at IS NULL")
-        assert.include(statements[1]?.sql, "revoked_at IS NULL")
-        assert.include(statements[1]?.sql, "expires_at > CURRENT_TIMESTAMP(3)")
-        assert.deepEqual(statements[1]?.values, ["relay-one", "instance-one"])
-        assert.include(statements[2]?.sql, "permission_preset")
-        assert.include(statements[2]?.sql, "resource_type = 'instance'")
-        assert.deepEqual(statements[2]?.values, ["relay-one", "instance-one"])
-      }).pipe(Effect.provide(databaseLayer))
-    }
-  )
 })
 
 describe("Relay snapshot visibility", () => {

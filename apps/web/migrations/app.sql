@@ -132,7 +132,6 @@ CREATE TABLE IF NOT EXISTS kiln_database (
   created_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
   updated_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
   UNIQUE KEY kiln_database_relay_name_unique (relay_id, name),
-  KEY kiln_database_owner_scope_idx (created_by, relay_id, database_id),
   KEY kiln_database_relay_idx (relay_id, created_at),
   CONSTRAINT kiln_database_relay_fk
     FOREIGN KEY (relay_id) REFERENCES kiln_relay (id) ON DELETE CASCADE

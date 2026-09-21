@@ -44,6 +44,7 @@ import { openAuthorizedRealtimeStream } from "./realtime"
 const user = {
   email: "user@example.com",
   emailVerified: true,
+  emailVerifiedAt: "2026-01-01T00:00:00.000Z",
   id: "user-one",
   isDevelopmentBypass: false,
   name: "User",

@@ -363,4 +363,9 @@ async function publishUserChange(
     reauthenticate: true,
     userIds: [userId],
   })
+  publishRealtimeChange({
+    type: "hearth.invalidate",
+    audience: { kind: "platform-admins" },
+    topics: ["access"],
+  })
 }

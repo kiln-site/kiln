@@ -235,3 +235,16 @@ above where noted.
 - The production image now includes the access migration modules. CI runs the
   root migration tests; the MySQL fixture remains opt-in via
   `ACCESS_MIGRATION_TEST=1`.
+- Ownership: Relays are owned by their creator and instances by `owner_id`.
+  Databases have no owner; their creator acts through Relay-scope grants, as
+  before this model, so revoking Relay access also revokes database access.
+  Relay ownership cannot yet be transferred or revoked short of removing the
+  Relay; the prior revocable owner grant is superseded by this rule.
+- Resolving an invitation by ID (rather than by emailed token) requires the
+  recipient's own session or a platform administrator.
+- Scoped access edits invalidate only that Relay's access records for its
+  readers; platform administrators receive a separate invalidation for the
+  user and platform invitation lists, including on account status changes.
+- The migration never creates an identity for an already-accepted invitation
+  whose address no longer matches a user.
+- CI provisions MySQL and runs the access migration fixture on every test job.

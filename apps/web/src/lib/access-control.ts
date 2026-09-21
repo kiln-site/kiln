@@ -62,30 +62,6 @@ export function grantsAllowPermission(
   })
 }
 
-export function deduplicateEffectiveInstanceGrants<
-  TGrant extends {
-    resourceType: "instance" | "relay"
-    userId: string
-  },
->(grants: Iterable<TGrant>): Array<TGrant> {
-  const grantsByUserId = new Map<string, TGrant>()
-  for (const grant of grants) {
-    const existingGrant = grantsByUserId.get(grant.userId)
-    if (existingGrant?.resourceType === "instance") continue
-    if (!existingGrant || grant.resourceType === "instance") {
-      grantsByUserId.set(grant.userId, grant)
-    }
-  }
-  return [...grantsByUserId.values()]
-}
-
-export function isCurrentInstanceOwnerGrant(input: {
-  grantUserId: string | null
-  ownerId: string | null
-}): boolean {
-  return input.ownerId !== null && input.ownerId === input.grantUserId
-}
-
 export async function listUserGrants(
   userId: string,
   relayId?: string
@@ -130,20 +106,6 @@ export function hasPlatformPermission(
     (user.isDevelopmentBypass ||
       platformRoleHasPermission(user.role, permission))
   )
-}
-
-export async function hasRelayPermission(input: {
-  user: AuthenticatedUser
-  relayId: string
-  permission: AccessPermission
-  databaseId?: string
-  instanceId?: string
-}): Promise<boolean> {
-  if (!isAccountEnabled(input.user) || !isAccountVerified(input.user))
-    return false
-  if (isPlatformAdmin(input.user)) return true
-  const grants = await listUserGrants(input.user.id, input.relayId)
-  return grantsAllowPermission(grants, input.permission, input)
 }
 
 export async function requireRelayPermission(input: {

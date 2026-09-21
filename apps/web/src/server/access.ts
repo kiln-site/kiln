@@ -25,7 +25,11 @@ import { grantHasPermission } from "@/lib/permissions"
 import { publishRealtimeChange } from "@/lib/realtime-source.server"
 import type { PersistedRelay } from "@/lib/relay-registry"
 import { listPersistedRelays } from "@/lib/relay-registry"
-import { requireEligibleResourceUser } from "@/server/auth"
+import { getCurrentUser, requireEligibleResourceUser } from "@/server/auth"
+import {
+  instanceScope,
+  resolveScopeAuthorization,
+} from "@/lib/scope-authorization.server"
 import {
   isAccountEnabled,
   isAccountVerified,
@@ -394,6 +398,16 @@ export const getInvitationPreview = createServerFn({ method: "GET" })
   .handler(async ({ data }) => {
     const invitation = await readInvitation(data.token, data.id)
     if (!invitation || !isInvitationPending(invitation)) return null
+    // A token proves receipt of the email. A bare ID does not, so only the
+    // recipient or an administrator may resolve it to an address.
+    if (!data.token) {
+      const viewer = await getCurrentUser()
+      if (
+        !viewer ||
+        (viewer.id !== invitation.user_id && !isPlatformAdmin(viewer))
+      )
+        return null
+    }
     const [relay, userLookup] = await Promise.all([
       invitation.relay_id ? relayById(invitation.relay_id) : null,
       databasePool.query<Array<ExistingAccessUserRow>>(
@@ -473,6 +487,13 @@ export const transferInstanceOwnership = createServerFn({ method: "POST" })
   .handler(async ({ data }) => {
     const user = await requireEligibleResourceUser()
     const relay = await requiredRelay(data.relayId)
+    // Authorize before resolving ownership: that lookup may call the Relay
+    // and backfill owner_id, which no unprivileged caller should trigger.
+    const authorization = await resolveScopeAuthorization({
+      user,
+      scope: instanceScope(relay.id, data.instanceId),
+    })
+    authorization.require("access.manage")
     await instanceOwnerId(relay, data.instanceId)
 
     const result = await runAppEffect(

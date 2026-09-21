@@ -3,7 +3,7 @@ import { isAccountEnabled, isAccountVerified } from "@/lib/account-policy"
 import { invitationInfrastructureHref } from "@/lib/resource-invitation-query"
 import { getResourceInvitation } from "@/server/resource-access"
 import { useSuspenseQuery } from "@tanstack/react-query"
-import { createFileRoute, redirect } from "@tanstack/react-router"
+import { createFileRoute, redirect, useNavigate } from "@tanstack/react-router"
 import { z } from "zod"
 
 import { InvitationPage } from "@/components/invitation-page"
@@ -102,11 +102,12 @@ export const Route = createFileRoute("/invite")({
 function InviteRoute() {
   const { token, id } = Route.useSearch()
   const { user } = Route.useRouteContext()
+  const navigate = useNavigate()
   if (id && user)
     return (
       <ResourceInvitationDialog
         invitationId={id}
-        onClose={() => window.location.assign("/")}
+        onClose={() => void navigate({ to: "/" })}
       />
     )
   if (!token) {

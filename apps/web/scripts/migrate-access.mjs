@@ -255,6 +255,10 @@ export async function backfillAccessModel(database) {
         [email]
       )
       if (!users.length) {
+        // Only a live pending attempt reserves an identity. An accepted
+        // invitation whose address no longer belongs to any user is history;
+        // resurrecting a credential-less account for it would be wrong.
+        if (invitation.accepted_at) continue
         const userId = randomUUID()
         await database.execute(
           `INSERT INTO ${databaseTable("user")} (id, name, email, emailVerified, createdAt, updatedAt, status, statusChangedAt, role) VALUES (?, ?, ?, FALSE, CURRENT_TIMESTAMP(3), CURRENT_TIMESTAMP(3), 'enabled', CURRENT_TIMESTAMP(3), 'user')`,
