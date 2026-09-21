@@ -29,6 +29,7 @@ import {
   relayMclogsUploadResultSchema,
   relayIdSchema,
   relayInstanceSchema,
+  relayRemoveDatabaseConnectionSchema,
   relayControlDeadlineMs,
   relaySaveFileInputSchema,
   relaySnapshotSchema,
@@ -398,6 +399,36 @@ export const completeRelayConsoleCommand = createServerFn({ method: "POST" })
       data.relayId
     )
     return relayConsoleCompletionSchema.parse(value)
+  })
+
+export const removeInstanceDatabaseConnection = createServerFn({
+  method: "POST",
+})
+  .validator(
+    relayRemoveDatabaseConnectionSchema.extend({ relayId: relayIdSchema })
+  )
+  .handler(async ({ data }) => {
+    const value = await relayRequest(
+      `/v1/instances/${encodeURIComponent(data.instanceId)}/database-connections`,
+      {
+        body: JSON.stringify({
+          databaseId: data.databaseId,
+          databaseRelayId: data.databaseRelayId,
+        }),
+        headers: { "Content-Type": "application/json" },
+        method: "DELETE",
+      },
+      "instance.network.write",
+      data.instanceId,
+      data.relayId
+    )
+    publishRealtimeChange({
+      type: "hearth.invalidate",
+      audience: { kind: "relays", relayIds: [data.relayId] },
+      scope: { relayId: data.relayId },
+      topics: ["databases"],
+    })
+    return { ...relayInstanceSchema.parse(value), relayId: data.relayId }
   })
 
 export const getInstanceWebRoutes = createServerFn({ method: "GET" })

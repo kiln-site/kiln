@@ -84,6 +84,7 @@ import type { InstanceWorkspaceInstance } from "@/lib/relay-selectors"
 import {
   getInstanceWebRoutes,
   performRelayAction,
+  removeInstanceDatabaseConnection,
   releaseInstancePort,
   reserveInstancePort,
   updateInstancePorts,
@@ -230,6 +231,7 @@ function WebRoutesNetworkPage({
     <main className="min-h-0 flex-1 overflow-y-auto bg-background/55 p-4 sm:p-6">
       <div className="mx-auto max-w-4xl space-y-4">
         <DatabaseConnectionWarnings />
+        <SavedDatabaseConnections />
         <ConfiguredRoutesSection
           key={editGamePort ? "edit-game-port" : "network"}
           canRestart={permissions.power && relayConnected}
@@ -281,7 +283,8 @@ function DatabaseConnectionWarnings() {
       <p className="font-medium">Some database connections are unavailable</p>
       <p className="mt-1 text-muted-foreground">
         Saved connections are retained and retried on the next start or restart.
-        You can also retry connecting from the Databases page.
+        Retry connecting from the Databases page, or remove the saved connection
+        below.
       </p>
       <ul className="mt-2 list-inside list-disc break-all text-muted-foreground">
         {warnings.map((warning) => (
@@ -289,6 +292,96 @@ function DatabaseConnectionWarnings() {
         ))}
       </ul>
     </div>
+  )
+}
+
+const noSavedDatabaseConnections: NonNullable<
+  RelayFleetSnapshot["instances"][number]["savedDatabaseConnections"]
+> = []
+
+function SavedDatabaseConnections() {
+  const instance = useInstanceIdentity()
+  const permissions = useInstancePermissions()
+  const relayConnected = useInstanceRelayConnected()
+  const queryClient = useQueryClient()
+  const select = React.useCallback(
+    (snapshot: RelayFleetSnapshot) =>
+      snapshot.instances.find(
+        (server) =>
+          server.id === instance.id && server.relayId === instance.relayId
+      )?.savedDatabaseConnections ?? noSavedDatabaseConnections,
+    [instance.id, instance.relayId]
+  )
+  const { data: connections = noSavedDatabaseConnections } = useQuery({
+    ...relaySnapshotQueryOptions(),
+    select,
+  })
+  const remove = useMutation({
+    mutationFn: (connection: (typeof connections)[number]) =>
+      removeInstanceDatabaseConnection({
+        data: {
+          instanceId: instance.id,
+          relayId: instance.relayId,
+          databaseId: connection.databaseId,
+          databaseRelayId: connection.relayId,
+        },
+      }),
+    onSuccess: (updated) => {
+      queryClient.setQueryData<RelayFleetSnapshot>(
+        queryKeys.relay.snapshot,
+        (snapshot) => replaceRelaySnapshotInstance(snapshot, updated)
+      )
+      forkPromise(() =>
+        queryClient.invalidateQueries({ queryKey: queryKeys.databases.list })
+      )
+      showToast({
+        type: "success",
+        message: "Saved database connection removed",
+      })
+    },
+    onError: (error) =>
+      showToast({
+        type: "error",
+        message: `Could not remove the saved database connection: ${error.message}`,
+      }),
+  })
+  if (connections.length === 0) return null
+  return (
+    <section className="rounded-lg border bg-card p-4">
+      <h2 className="text-sm font-medium">Saved database connections</h2>
+      <p className="mt-1 text-sm text-muted-foreground">
+        Removing a connection stops automatic retries and disconnects this
+        server when the network is available. The database is kept.
+      </p>
+      <ul className="mt-3 divide-y">
+        {connections.map((connection) => (
+          <li
+            key={`${connection.relayId}:${connection.databaseId}`}
+            className="flex items-center justify-between gap-4 py-3"
+          >
+            <div className="min-w-0 text-sm">
+              <p className="font-mono break-all">{connection.databaseId}</p>
+              {connection.relayId !== instance.relayId ? (
+                <p className="text-xs break-all text-muted-foreground">
+                  Relay: {connection.relayId}
+                </p>
+              ) : null}
+            </div>
+            {permissions.networkWrite ? (
+              <Button
+                size="sm"
+                variant="outline"
+                aria-label={`Remove saved connection to ${connection.databaseId}`}
+                disabled={!relayConnected || remove.isPending}
+                onClick={() => remove.mutate(connection)}
+              >
+                Remove
+              </Button>
+            ) : null}
+          </li>
+        ))}
+      </ul>
+    </section>
   )
 }
 

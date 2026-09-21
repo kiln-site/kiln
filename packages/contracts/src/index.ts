@@ -957,6 +957,17 @@ export const relayInstancePortAllocationsSchema = relayInstancePortArraySchema(
   relayInstancePortAllocationSchema
 )
 
+export const relaySavedDatabaseConnectionSchema = z.object({
+  databaseId: databaseIdSchema,
+  relayId: relayIdSchema,
+})
+
+export const relayRemoveDatabaseConnectionSchema = z.object({
+  instanceId: z.string().regex(/^[a-f0-9]{40}$/u),
+  databaseId: databaseIdSchema,
+  databaseRelayId: relayIdSchema,
+})
+
 export const relayInstanceSchema = z.object({
   id: z.string().regex(/^[a-f0-9]{40}$/u),
   shortId: z.string().regex(/^[a-f0-9]{8}$/u),
@@ -972,6 +983,9 @@ export const relayInstanceSchema = z.object({
   observedState: relayObservedStateSchema,
   stateReason: relayInstanceStateReasonSchema.nullable().default(null),
   databaseConnectionWarnings: z.array(z.string()).optional(),
+  savedDatabaseConnections: z
+    .array(relaySavedDatabaseConnectionSchema)
+    .optional(),
   recovery: relayInstanceRecoverySchema.nullable().default(null),
   lifecycle: z.array(relayInstanceLifecycleEventSchema).default([]),
   containerId: z.string().nullable(),

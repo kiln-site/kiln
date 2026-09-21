@@ -84,6 +84,12 @@ export interface DatabaseConnectionIssue {
 }
 
 export class DatabaseConnections {
+  readonly #saved = new Map<string, ReadonlyArray<DatabaseReference>>()
+
+  saved(instanceId: string): ReadonlyArray<DatabaseReference> {
+    return this.#saved.get(instanceId) ?? []
+  }
+
   readonly #issues = new Map<string, Array<DatabaseConnectionIssue>>()
 
   issues(instanceId: string): ReadonlyArray<DatabaseConnectionIssue> {
@@ -93,13 +99,17 @@ export class DatabaseConnections {
   // Names are retained in Docker's old container snapshot even after a network
   // disappears. Leave these exclusively to database reconciliation.
   isDatabaseNetwork(network: string): boolean {
+    return this.#databaseIdFromNetwork(network) !== null
+  }
+
+  #databaseIdFromNetwork(network: string): string | null {
     const prefix = this.config.resourceNamespace
       ? `${this.config.resourceNamespace}-kiln-db-`
       : "kiln-db-"
-    return (
-      network.startsWith(prefix) &&
+    return network.startsWith(prefix) &&
       /^[a-f0-9]{40}-network$/u.test(network.slice(prefix.length))
-    )
+      ? network.slice(prefix.length, prefix.length + 40)
+      : null
   }
 
   constructor(
@@ -110,13 +120,37 @@ export class DatabaseConnections {
   async initialize(
     snapshots: ReadonlyArray<DatabaseConnectionSnapshot>
   ): Promise<void> {
+    await this.#recover(snapshots)
+    for (const snapshot of snapshots)
+      this.#saved.set(
+        snapshot.instanceId,
+        await Effect.runPromise(
+          this.state.listInstanceDatabaseConnections(snapshot.instanceId)
+        )
+      )
+  }
+
+  async #recover(
+    snapshots: ReadonlyArray<DatabaseConnectionSnapshot>
+  ): Promise<void> {
     if (
       await Effect.runPromise(
         this.state.getMetadata(DATABASE_CONNECTION_RECOVERY_KEY)
       )
     )
       return
-    const networks = await this.#networks()
+    const issues: Array<DatabaseConnectionIssue> = []
+    const networks = await recoverPromise(
+      () => this.#networks(issues),
+      (cause) => {
+        issues.push({
+          databaseId: null,
+          message: `Database network discovery unavailable during recovery: ${String(cause)}`,
+        })
+        return new Map<string, string>()
+      }
+    )
+    for (const issue of issues) console.warn(issue.message)
     const recovered: Array<RelayStoredDatabaseConnection> = []
     for (const snapshot of snapshots) {
       const decoded = decodeDatabaseConnectionLabels(snapshot.labels)
@@ -132,6 +166,21 @@ export class DatabaseConnections {
       )
       for (const [databaseId, network] of networks) {
         if (snapshot.networks.includes(network))
+          connections.push({ databaseId, relayId: this.config.nodeId })
+      }
+      // Owned network names in the container snapshot carry the full database
+      // ID. Recover these even if a network vanished between ls and inspect.
+      // This makes the import complete without erasing live, unlabeled intent.
+      for (const network of snapshot.networks) {
+        const databaseId = this.#databaseIdFromNetwork(network)
+        if (
+          databaseId &&
+          !connections.some(
+            (connection) =>
+              connection.databaseId === databaseId &&
+              connection.relayId === this.config.nodeId
+          )
+        )
           connections.push({ databaseId, relayId: this.config.nodeId })
       }
       recovered.push(
@@ -155,28 +204,48 @@ export class DatabaseConnections {
   async set(
     instanceId: string,
     databaseId: string,
-    connected: boolean
+    connected: boolean,
+    relayId = this.config.nodeId
   ): Promise<void> {
     // Persist intent first so a failed Docker operation can be retried safely.
     await Effect.runPromise(
       this.state.setDatabaseConnection(
-        { instanceId, databaseId, relayId: this.config.nodeId },
+        { instanceId, databaseId, relayId },
         connected
       )
+    )
+    const remaining = this.saved(instanceId).filter(
+      (connection) =>
+        connection.databaseId !== databaseId ||
+        (!connected && connection.relayId !== relayId)
+    )
+    this.#saved.set(
+      instanceId,
+      connected ? [...remaining, { databaseId, relayId }] : remaining
     )
   }
 
   async forgetInstance(instanceId: string): Promise<void> {
-    this.#issues.delete(instanceId)
     await Effect.runPromise(
       this.state.deleteInstanceDatabaseConnections(instanceId)
     )
+    this.#issues.delete(instanceId)
+    this.#saved.delete(instanceId)
   }
 
   async forgetDatabase(databaseId: string): Promise<void> {
     await Effect.runPromise(
       this.state.deleteDatabaseConnections(this.config.nodeId, databaseId)
     )
+    for (const [instanceId, connections] of this.#saved)
+      this.#saved.set(
+        instanceId,
+        connections.filter(
+          (connection) =>
+            connection.databaseId !== databaseId ||
+            connection.relayId !== this.config.nodeId
+        )
+      )
     for (const [instanceId, issues] of this.#issues)
       this.#issues.set(
         instanceId,
@@ -254,7 +323,7 @@ export class DatabaseConnections {
   }
 
   async #networks(
-    issues?: Array<DatabaseConnectionIssue>
+    issues: Array<DatabaseConnectionIssue>
   ): Promise<Map<string, string>> {
     const listed = await command("docker", [
       "network",
@@ -273,8 +342,7 @@ export class DatabaseConnections {
             const result = await command("docker", ["network", "inspect", id])
             return JSON.parse(result.stdout) as Array<DatabaseNetwork>
           },
-          (cause) => {
-            if (!issues) throw cause
+          () => {
             issues.push({
               databaseId: null,
               message: `Could not inspect database network ${id}`,
@@ -299,8 +367,6 @@ export class DatabaseConnections {
         continue
       if (ambiguous.has(id.data)) continue
       if (result.has(id.data)) {
-        if (!issues)
-          throw new Error(`Multiple networks found for database ${id.data}`)
         issues.push({
           databaseId: id.data,
           message: "Multiple database networks found; connection skipped",

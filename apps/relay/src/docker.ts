@@ -834,6 +834,9 @@ export class DockerDriver {
           recoveryState?.recovery,
           desiredState
         ),
+        savedDatabaseConnections: [
+          ...(this.databaseConnections?.saved(config.id) ?? []),
+        ],
         databaseConnectionWarnings: this.databaseConnections
           ?.issues(config.id)
           .map(

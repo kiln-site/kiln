@@ -172,6 +172,8 @@ export function activityLabelForAudit(audit: RelayAuditRecord): string {
   if (operation === "instance.network.ports.write") {
     return "Updated server port allocations"
   }
+  if (operation === "instance.network.databases.remove")
+    return "Removed a saved database connection"
   if (operation === "instance.network.routes.write") {
     return "Updated server network routes"
   }
@@ -261,10 +263,12 @@ export function activityPermissionForAudit(
     operation === "instance.files.upload-url" ||
     operation === "instance.console.write" ||
     operation === "instance.network.ports.write" ||
-    operation === "instance.network.routes.write"
+    operation === "instance.network.routes.write" ||
+    operation === "instance.network.databases.remove"
   ) {
     return operation === "instance.network.ports.write" ||
-      operation === "instance.network.routes.write"
+      operation === "instance.network.routes.write" ||
+      operation === "instance.network.databases.remove"
       ? "instance.network.write"
       : operation
   }

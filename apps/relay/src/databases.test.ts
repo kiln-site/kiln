@@ -294,3 +294,76 @@ describe("explicit database connections", () => {
     }
   )
 })
+
+describe("database mutation serialization", () => {
+  it("waits for deletion before validating a queued connect, without saving an orphan", async () => {
+    const databaseId = "d".repeat(40)
+    const config = loadConfig({
+      KILN_RELAY_RESOURCE_NAMESPACE: "kiln-test",
+      NODE_ENV: "test",
+    })
+    const network = `kiln-test-kiln-db-${databaseId}-network`
+    let markEntered!: () => void
+    let finishDeletion!: () => void
+    const entered = new Promise<void>((resolve) => {
+      markEntered = resolve
+    })
+    const finish = new Promise<void>((resolve) => {
+      finishDeletion = resolve
+    })
+    const set = vi.fn(async () => undefined)
+    const forgetDatabase = vi.fn(async () => {
+      markEntered()
+      await finish
+    })
+    commandMock.mockImplementation(async (_command, args) => {
+      if (args[0] === "container" && args[1] === "ls")
+        return { stdout: "", stderr: "" }
+      if (args[0] === "network" && args[1] === "inspect")
+        return {
+          stdout: JSON.stringify({
+            "kiln.database.id": databaseId,
+            "kiln.database.network": network,
+            "kiln.relay.owner": "kiln-test",
+            "kiln.resource.kind": "database",
+          }),
+          stderr: "",
+        }
+      if (args[0] === "volume" && args[1] === "inspect")
+        throw new Error("Volume not found")
+      if (args[0] === "network" && args[1] === "rm")
+        return { stdout: "", stderr: "" }
+      throw new Error(`Unexpected command ${args.join(" ")}`)
+    })
+    const driver = new DatabaseDriver(config, new DockerDriver(config), {
+      set,
+      forgetDatabase,
+    } as unknown as DatabaseConnections)
+    const list = vi.spyOn(driver, "list")
+    const deleting = driver.delete({ databaseId, deleteData: false })
+    await entered
+    const connecting = expect(
+      driver.updateNetwork({
+        databaseId,
+        instanceId: "a".repeat(40),
+        connected: true,
+      })
+    ).rejects.toThrow("Database not found")
+    await new Promise<void>((resolve) => setImmediate(resolve))
+    expect(list).toHaveBeenCalledTimes(1)
+    expect(set).not.toHaveBeenCalled()
+    finishDeletion()
+    await deleting
+    await connecting
+    expect(list).toHaveBeenCalledTimes(2)
+    expect(set).not.toHaveBeenCalled()
+    // A failed connect must release its permit for subsequent operations.
+    await expect(
+      driver.updateNetwork({
+        databaseId,
+        instanceId: "a".repeat(40),
+        connected: true,
+      })
+    ).rejects.toThrow("Database not found")
+  })
+})

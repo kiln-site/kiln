@@ -309,4 +309,63 @@ describe("database connection recovery", () => {
       manager.isDatabaseNetwork("connection-test-kiln-db-invalid-network")
     ).toBe(false)
   })
+  it.each(["ls", "inspect"])(
+    "imports live and labeled references when network %s fails",
+    async (step) => {
+      const { manager, state } = await setup()
+      const ownedNetwork = `connection-test-kiln-db-${databaseId}-network`
+      const missing = { databaseId: "e".repeat(40), relayId }
+      const normal = commandMock.getMockImplementation()!
+      commandMock.mockImplementation(async (...args) => {
+        if (args[1][0] === "network" && args[1][1] === step)
+          throw new Error("Network disappeared")
+        return normal(...args)
+      })
+      const snapshot = {
+        instanceId,
+        service: "server",
+        networks: [ownedNetwork, `foreign-kiln-db-${"f".repeat(40)}-network`],
+        labels: databaseConnectionLabels([missing]),
+      }
+      await manager.initialize([snapshot])
+      expect(await manager.labels(instanceId)).toEqual(
+        databaseConnectionLabels([{ databaseId, relayId }, missing])
+      )
+      expect(manager.saved(instanceId)).toHaveLength(2)
+      expect(
+        await Effect.runPromise(
+          state.getMetadata("database_connections_recovered")
+        )
+      ).toBeTruthy()
+      await manager.set(instanceId, databaseId, false)
+      await manager.initialize([snapshot])
+      expect(await manager.labels(instanceId)).toEqual(
+        databaseConnectionLabels([missing])
+      )
+    }
+  )
+
+  it("removes a missing database reference without attaching it, including remote references", async () => {
+    const { manager } = await setup()
+    const remote = { databaseId: "e".repeat(40), relayId: remoteRelayId }
+    await manager.initialize([
+      {
+        instanceId,
+        service: "server",
+        networks: [],
+        labels: databaseConnectionLabels([remote]),
+      },
+    ])
+    await manager.set(instanceId, remote.databaseId, false, relayId)
+    expect(manager.saved(instanceId)).toEqual([expect.objectContaining(remote)])
+    await manager.set(instanceId, remote.databaseId, false, remoteRelayId)
+    expect(await manager.reconcile(instanceId, "server")).toEqual([])
+    expect(manager.saved(instanceId)).toEqual([])
+    expect(await manager.labels(instanceId)).toEqual(
+      databaseConnectionLabels([])
+    )
+    expect(
+      commandMock.mock.calls.some(([, args]) => args[1] === "connect")
+    ).toBe(false)
+  })
 })

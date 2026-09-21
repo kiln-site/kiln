@@ -26,6 +26,7 @@ import {
   relayInstanceActionSchema,
   relayInstanceNameSchema,
   relayInstanceSchema,
+  relayRemoveDatabaseConnectionSchema,
   relayInstancePortLeaseReleaseSchema,
   relayInstancePortLeaseRequestSchema,
   relayInstancePortInputsSchema,
@@ -1829,6 +1830,23 @@ async function executeControlRequest(
         startup.state.listInstanceRoutes(instance.id)
       )
       return lifecycle.webRouteState(instance.id, routes)
+    }
+    case "instance.network.databases.remove": {
+      const input = relayRemoveDatabaseConnectionSchema.parse(payload)
+      return serializeInstanceMutation(input.instanceId, async () => {
+        const instance = await requiredInstance(payload)
+        await databaseConnections.set(
+          instance.id,
+          input.databaseId,
+          false,
+          input.databaseRelayId
+        )
+        await databaseConnections.reconcile(instance.id, instance.service)
+        const snapshot = await snapshotHub.refresh()
+        return snapshot.instances.find(
+          (candidate) => candidate.id === instance.id
+        )
+      })
     }
     case "instance.network.routes.write": {
       return serializeWebRouteMutation(async () => {

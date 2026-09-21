@@ -17,8 +17,9 @@ import {
   databaseEngineSchema,
   relayManagedDatabaseSchema,
 } from "@workspace/contracts"
-import { Effect, Result } from "effect"
+import { Effect, Result, Semaphore } from "effect"
 
+import { promiseEffect } from "./effect/promise.js"
 import type { DatabaseConnections } from "./database-connections.js"
 import { command } from "./command.js"
 import type { RelayConfig } from "./config.js"
@@ -138,6 +139,31 @@ export function databaseRecoveryLabels(
 export class DatabaseDriver {
   readonly #config: RelayConfig
   readonly #docker: DockerDriver
+
+  readonly #mutations = new Map<
+    string,
+    { semaphore: Semaphore.Semaphore; references: number }
+  >()
+
+  #serialize<T>(databaseId: string, run: () => Promise<T>): Promise<T> {
+    let entry = this.#mutations.get(databaseId)
+    if (!entry) {
+      entry = { semaphore: Semaphore.makeUnsafe(1), references: 0 }
+      this.#mutations.set(databaseId, entry)
+    }
+    entry.references += 1
+    const active = entry
+    return Effect.runPromise(
+      active.semaphore.withPermit(promiseEffect(run)).pipe(
+        Effect.ensuring(
+          Effect.sync(() => {
+            active.references -= 1
+            if (active.references === 0) this.#mutations.delete(databaseId)
+          })
+        )
+      )
+    )
+  }
 
   constructor(
     config: RelayConfig,
@@ -263,7 +289,11 @@ export class DatabaseDriver {
     return this.#required(input.databaseId)
   }
 
-  async delete(input: RelayDeleteDatabase) {
+  delete(input: RelayDeleteDatabase) {
+    return this.#serialize(input.databaseId, () => this.#delete(input))
+  }
+
+  async #delete(input: RelayDeleteDatabase) {
     const database = (await this.list()).find(
       (candidate) => candidate.id === input.databaseId
     )
@@ -370,7 +400,13 @@ export class DatabaseDriver {
     return this.#required(input.databaseId)
   }
 
-  async updateNetwork(
+  updateNetwork(input: RelayDatabaseNetwork): Promise<RelayManagedDatabase> {
+    // Hold the database lock across lookup, saving intent, and attachment so a
+    // queued connect cannot recreate a row after deletion has cleared it.
+    return this.#serialize(input.databaseId, () => this.#updateNetwork(input))
+  }
+
+  async #updateNetwork(
     input: RelayDatabaseNetwork
   ): Promise<RelayManagedDatabase> {
     const database = await this.#required(input.databaseId)
