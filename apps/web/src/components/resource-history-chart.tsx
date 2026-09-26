@@ -8,11 +8,17 @@ import { Chart } from "@tanstack/charts/react/core"
 import { scaleLinear } from "@tanstack/charts/scales/linear"
 import { tooltip } from "@tanstack/charts/tooltip"
 
+import { RESOURCE_HISTORY_WINDOW_MS } from "@/lib/resource-history-store"
+
 const NETWORK_SENT_COLOR = "oklch(0.73 0.15 65)"
 const NETWORK_RECEIVED_COLOR = "oklch(0.78 0.11 205)"
 const NODE_STORAGE_COLOR = "oklch(0.72 0.13 75)"
 const RESOURCE_VISUAL_FLOOR_RATIO = 0.06
 const CHART_HEIGHT = 128
+// Oldest retained samples sit left of the plot so rolling updates can shift
+// the trace without exposing an uncovered edge.
+const ROLLING_OVERSCAN_MS = 15_000
+const VISIBLE_WINDOW_MS = RESOURCE_HISTORY_WINDOW_MS - ROLLING_OVERSCAN_MS
 
 const chartRenderer = motion({
   transition: { type: "tween", duration: 700, easing: "ease-out" },
@@ -65,10 +71,10 @@ function formatAgo(timestamp: number, latest: number) {
   return remainder === 0 ? `-${minutes}m` : `-${minutes}m ${remainder}s`
 }
 
-function formatTick(timestamp: number, first: number, latest: number) {
+function formatTick(timestamp: number, start: number, latest: number) {
   if (timestamp >= latest) return "Now"
   const seconds = (latest - timestamp) / 1000
-  return latest - first >= 120_000
+  return latest - start >= 120_000
     ? `-${Math.round(seconds / 60)}m`
     : `-${Math.round(seconds)}s`
 }
@@ -153,8 +159,18 @@ export function ResourceHistoryChart({
     const floor = isNetwork
       ? peak * (RESOURCE_VISUAL_FLOOR_RATIO / 2)
       : yMaximum * RESOURCE_VISUAL_FLOOR_RATIO
-    const first = rows[0]?.timestamp ?? 0
     const latest = rows.at(-1)?.timestamp ?? 0
+    // A full history keeps a constant span so updates roll instead of rescaling.
+    const start =
+      rows.length > 1
+        ? Math.max(rows[0].timestamp, latest - VISIBLE_WINDOW_MS)
+        : latest - 1
+    const tickValues =
+      rows.length === 0
+        ? []
+        : rows.length === 1
+          ? [latest]
+          : [start, (start + latest) / 2, latest]
     const seriesByLine = new Map(
       series.map((entry) => [`${entry.key}-line`, entry])
     )
@@ -169,6 +185,7 @@ export function ResourceHistoryChart({
         key: "timestamp",
         stroke: entry.color,
         strokeWidth: isNetwork ? 1.75 : 1.5,
+        points: rows.length === 1,
       })
       if (isNetwork) return [line]
       return [
@@ -197,24 +214,23 @@ export function ResourceHistoryChart({
       ],
       scales: {
         x: {
-          scale: () =>
-            scaleLinear().domain([first, Math.max(latest, first + 1)]),
+          scale: scaleLinear().domain([start, latest]),
           axis: {
             line: false,
             ticks: {
-              values: [first, (first + latest) / 2, latest],
+              values: tickValues,
               size: 0,
-              format: (value) => formatTick(value, first, latest),
+              format: (value) => formatTick(value, start, latest),
             },
             tickLabels: {
               thin: false,
-              anchor: ({ index }) =>
-                index === 0 ? "start" : index === 2 ? "end" : "middle",
+              anchor: ({ value }) =>
+                value >= latest ? "end" : value <= start ? "start" : "middle",
             },
           },
         },
         y: {
-          scale: () => scaleLinear().domain([0, yMaximum]),
+          scale: scaleLinear().domain([0, yMaximum]),
           grid: { strokeDasharray: "2 4", strokeOpacity: 0.12 },
           axis: false,
         },
