@@ -94,6 +94,7 @@ export function activityTypeForAudit(audit: RelayAuditRecord): ActivityType {
   if (
     audit.event.startsWith("browser.file.") ||
     operation === "instance.files.write" ||
+    operation === "instance.files.database.write" ||
     operation === "instance.files.upload-url"
   ) {
     return "files"
@@ -169,6 +170,9 @@ export function activityLabelForAudit(audit: RelayAuditRecord): string {
       : "Updated server startup settings"
   }
   if (operation === "instance.files.write") return "Saved a server file"
+  if (operation === "instance.files.database.write") {
+    return "Edited a server database"
+  }
   if (operation === "instance.files.upload-url") {
     return "Downloaded a URL to a server"
   }
@@ -255,6 +259,9 @@ export function activityPermissionForAudit(
     return "instance.network.write"
   }
   if (operation === "relay.tailscale.stack.remove") return "instance.delete"
+  if (operation === "instance.files.database.write") {
+    return "instance.files.write"
+  }
   if (
     operation === "relay.pairing.create" ||
     operation === "relay.pairing.revoke" ||

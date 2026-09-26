@@ -33,6 +33,15 @@ import {
   relayRemoveDatabaseConnectionSchema,
   relayControlDeadlineMs,
   relaySaveFileInputSchema,
+  databaseMutateInputSchema,
+  databaseMutateResultSchema,
+  databaseOverviewSchema,
+  databaseQueryInputSchema,
+  databaseQueryResultSchema,
+  databaseRowsInputSchema,
+  databaseRowsSchema,
+  type DatabaseReadRequest,
+  type DatabaseWriteRequest,
   relaySnapshotSchema,
 } from "@workspace/contracts"
 import { z } from "zod"
@@ -154,6 +163,19 @@ const filePathSchema = z
   )
 
 const fileInputSchema = instanceInputSchema.extend({ path: filePathSchema })
+
+const databaseRowsRequestSchema = fileInputSchema.extend({
+  request: databaseRowsInputSchema,
+})
+
+const databaseQueryRequestSchema = fileInputSchema.extend({
+  request: databaseQueryInputSchema,
+  write: z.boolean(),
+})
+
+const databaseMutateRequestSchema = fileInputSchema.extend({
+  request: databaseMutateInputSchema,
+})
 
 const filePinInputSchema = fileInputSchema.extend({ pinned: z.boolean() })
 
@@ -759,6 +781,73 @@ export const saveRelayFile = createServerFn({ method: "POST" })
     )
     return file
   })
+
+async function relayDatabaseRequest(
+  data: z.infer<typeof fileInputSchema>,
+  request: DatabaseReadRequest | DatabaseWriteRequest,
+  write: boolean
+) {
+  const { relay, user } = await instanceRelayAccess(data.relayId)
+  await requireRelayPermission({
+    user,
+    relayId: relay.id,
+    permission: write ? "instance.files.write" : "instance.files.read",
+    instanceId: data.instanceId,
+  })
+  const response = await relayFetch(
+    relay,
+    `/v1/instances/${encodeURIComponent(data.instanceId)}/file-database${write ? "?mode=write" : ""}`,
+    {
+      method: "POST",
+      body: JSON.stringify({ path: data.path, request }),
+    },
+    // The Relay stops database work after 20s; leave room for its reply.
+    25_000,
+    write ? user.id : undefined
+  )
+  const result: unknown = await response.json()
+  if (write) {
+    await recordFileActivityBestEffort(
+      "edit",
+      recordFileEdited(relay.id, data.instanceId, data.path),
+      relay.id,
+      data.instanceId
+    )
+  }
+  return result
+}
+
+export const getRelayDatabaseOverview = createServerFn({ method: "GET" })
+  .validator(fileInputSchema)
+  .handler(async ({ data }) =>
+    databaseOverviewSchema.parse(
+      await relayDatabaseRequest(data, { action: "overview" }, false)
+    )
+  )
+
+export const getRelayDatabaseRows = createServerFn({ method: "POST" })
+  .validator(databaseRowsRequestSchema)
+  .handler(async ({ data }) =>
+    databaseRowsSchema.parse(
+      await relayDatabaseRequest(data, data.request, false)
+    )
+  )
+
+export const runRelayDatabaseQuery = createServerFn({ method: "POST" })
+  .validator(databaseQueryRequestSchema)
+  .handler(async ({ data }) =>
+    databaseQueryResultSchema.parse(
+      await relayDatabaseRequest(data, data.request, data.write)
+    )
+  )
+
+export const mutateRelayDatabase = createServerFn({ method: "POST" })
+  .validator(databaseMutateRequestSchema)
+  .handler(async ({ data }) =>
+    databaseMutateResultSchema.parse(
+      await relayDatabaseRequest(data, data.request, true)
+    )
+  )
 
 export const mutateRelayFiles = createServerFn({ method: "POST" })
   .validator(fileMutationInputSchema)

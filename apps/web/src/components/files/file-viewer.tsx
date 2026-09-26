@@ -27,11 +27,17 @@ import {
   relayFileQueryOptions,
 } from "@/lib/query-options"
 import { forkPromise } from "@/effect/promise"
+import { isDatabaseFilePath } from "@/lib/database-files"
 import type { InstanceWorkspaceInstance } from "@/lib/relay-selectors"
 import { warmSyntaxCodeEditorModule } from "@/lib/syntax-editor-module-preload"
 import { recordRelayFileView } from "@/server/relay"
 
 const activeFileRevisionPollDelayMs = 30_000
+
+const DatabaseViewer = React.lazy(async () => {
+  const module = await import("@/components/files/database/database-viewer")
+  return { default: module.DatabaseViewer }
+})
 
 const UnavailablePreviewToolbar = React.memo(
   function UnavailablePreviewToolbar({
@@ -199,6 +205,15 @@ export function FileViewer({
   const selectedPathIsReadable = Boolean(
     selectedPath && selectedEntry?.kind === "file"
   )
+  // Databases are browsed through the Relay instead of read as text. Files
+  // that only share the extension fall back to the text editor.
+  const [textFallbackPath, setTextFallbackPath] = React.useState<string | null>(
+    null
+  )
+  const selectedPathIsDatabase =
+    selectedPathIsReadable &&
+    isDatabaseFilePath(selectedPath) &&
+    textFallbackPath !== selectedPath
   React.useEffect(() => {
     if (selectedPathIsDirectory && selectedPath !== selectedDirectoryPath) {
       onPathChange(selectedDirectoryPath)
@@ -214,7 +229,8 @@ export function FileViewer({
   }, [selectedPath])
   const fileQuery = useQuery({
     ...relayFileQueryOptions(instance.relayId, instance.id, selectedPath),
-    enabled: selectedPathIsReadable && relayConnected,
+    enabled:
+      selectedPathIsReadable && !selectedPathIsDatabase && relayConnected,
     refetchInterval: activeFileRevisionPollDelayMs,
     refetchIntervalInBackground: false,
     refetchOnReconnect: "always",
@@ -224,7 +240,7 @@ export function FileViewer({
   const loadingFile =
     fileTreeLoading ||
     (Boolean(selectedPath) && relayConnected && entryQuery.isPending) ||
-    (selectedPathIsReadable && fileQuery.isPending)
+    (selectedPathIsReadable && !selectedPathIsDatabase && fileQuery.isPending)
   const routeError =
     selectedPath && entryQuery.isError
       ? queryErrorMessage(
@@ -249,7 +265,9 @@ export function FileViewer({
       !selectedPathIsDirectory
     ) ||
     Boolean(selectedPath && !relayConnected && !selectedEntry && !file) ||
-    (selectedPathIsReadable && !file && (!relayConnected || fileQuery.isError))
+    (selectedPathIsReadable &&
+      !file &&
+      (!relayConnected || (!selectedPathIsDatabase && fileQuery.isError)))
   const activitySyncKey = React.useRef<string | null>(null)
 
   React.useEffect(() => {
@@ -276,7 +294,9 @@ export function FileViewer({
     if (loadingFile) return
     selectionStore.completeNavigation(
       selectedPath,
-      selectedPathIsDirectory || (file && !selectedFileUnavailable)
+      selectedPathIsDirectory ||
+        (selectedPathIsDatabase && relayConnected) ||
+        (file && !selectedFileUnavailable)
         ? "loaded"
         : "unavailable"
     )
@@ -286,8 +306,28 @@ export function FileViewer({
     loadingFile,
     selectedFileUnavailable,
     selectedPath,
+    selectedPathIsDatabase,
     selectedPathIsDirectory,
     selectionStore,
+  ])
+
+  React.useEffect(() => {
+    if (!selectedPathIsDatabase || !relayConnected) return
+    forkPromise(() =>
+      recordRelayFileView({
+        data: {
+          instanceId: instance.id,
+          path: selectedPath,
+          relayId: instance.relayId,
+        },
+      })
+    )
+  }, [
+    instance.id,
+    instance.relayId,
+    relayConnected,
+    selectedPath,
+    selectedPathIsDatabase,
   ])
 
   if (isHome) {
@@ -323,6 +363,33 @@ export function FileViewer({
         treeCollapsed={treeCollapsed}
         uploading={uploading}
       />
+    )
+  }
+
+  if (selectedPathIsDatabase && relayConnected && !loadingFile) {
+    const fallback = (
+      <UnavailablePreview
+        path={selectedPath}
+        pathIsCopyable
+        loading
+        message={null}
+        canShare={canShare}
+        treeCollapsed={treeCollapsed}
+        onTreeExpand={onTreeExpand}
+      />
+    )
+    return (
+      <React.Suspense fallback={fallback}>
+        <DatabaseViewer
+          key={`${instance.id}:${selectedPath}`}
+          canWrite={canWrite}
+          displayPath={selectedPath}
+          instance={instance}
+          treeCollapsed={treeCollapsed}
+          onNotDatabase={() => setTextFallbackPath(selectedPath)}
+          onTreeExpand={onTreeExpand}
+        />
+      </React.Suspense>
     )
   }
 

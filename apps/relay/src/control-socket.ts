@@ -1001,6 +1001,10 @@ function actionForRequest(request: RelayControlRequest): RelayAction | null {
       return fileMutationAction(objectString(request.payload, "operation"))
     case "instance.files.upload-url":
       return "instance.files.upload-url"
+    case "instance.files.database.read":
+      return "instance.files.read"
+    case "instance.files.database.write":
+      return "instance.files.write"
     case "instance.console.history":
       return "instance.console.read"
     case "instance.console.write":

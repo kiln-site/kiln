@@ -28,6 +28,7 @@ export * from "./git-repository.js"
 export * from "./tailscale.js"
 export * from "./schedules.js"
 export * from "./snbt.js"
+export * from "./database-browser.js"
 
 export const relayIdSchema = z.string().regex(/^[A-Za-z\d_-]{43}$/u)
 

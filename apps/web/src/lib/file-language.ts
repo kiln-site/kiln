@@ -6,6 +6,7 @@ export type FileLanguage = {
     | "properties"
     | "shell"
     | "snbt"
+    | "sql"
     | "text"
     | "toml"
     | "valve-keyvalues"
@@ -37,6 +38,7 @@ export function fileLanguageForPath(path: string): FileLanguage {
     return { id: "log", label: "LOG" }
   }
   if (lowerPath.endsWith(".ini")) return { id: "ini", label: "INI" }
+  if (lowerPath.endsWith(".sql")) return { id: "sql", label: "SQL" }
   if (
     lowerPath.endsWith(".sh") ||
     lowerPath.endsWith(".bash") ||

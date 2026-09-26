@@ -997,6 +997,10 @@ export class FilesystemDriver {
     }
   }
 
+  resolveFile(instance: RelayInstanceConfig, requestedPath: string) {
+    return this.#existingFile(instance, requestedPath)
+  }
+
   #existingFile(instance: RelayInstanceConfig, requestedPath: string) {
     return Effect.gen({ self: this }, function* () {
       yield* validateRelativePath(requestedPath)

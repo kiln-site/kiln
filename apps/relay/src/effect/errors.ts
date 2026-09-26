@@ -108,6 +108,19 @@ export class RelayFilesystemError extends Schema.TaggedErrorClass<RelayFilesyste
   }
 }
 
+export class RelayDatabaseBrowserError extends Schema.TaggedErrorClass<RelayDatabaseBrowserError>()(
+  "RelayDatabaseBrowserError",
+  {
+    code: Schema.String,
+    reason: Schema.String,
+    cause: Schema.optional(Schema.Defect()),
+  }
+) {
+  override get message() {
+    return this.reason
+  }
+}
+
 export class RelayBackupError extends Schema.TaggedErrorClass<RelayBackupError>()(
   "RelayBackupError",
   {

@@ -39,6 +39,8 @@ import {
   relayFileMutationInputSchema,
   relayFileSearchPageInputSchema,
   relayFileStatInputSchema,
+  relayFileDatabaseReadInputSchema,
+  relayFileDatabaseWriteInputSchema,
   relayRemoteFileUploadResultSchema,
   relayRemoteFileUploadSchema,
   relaySaveFileInputSchema,
@@ -72,6 +74,7 @@ import {
 } from "./config.js"
 import { attachControlSocket } from "./control-socket.js"
 import { DockerDriver } from "./docker.js"
+import { DatabaseBrowser } from "./database-browser.js"
 import { DatabaseDriver } from "./databases.js"
 import {
   inspectEncryptedPlatformBackup,
@@ -184,6 +187,7 @@ const docker = new DockerDriver(
 const databases = new DatabaseDriver(config, docker, databaseConnections)
 const systemUpdates = new SystemUpdateManager(config)
 const filesystem = new FilesystemDriver(config)
+const databaseBrowser = new DatabaseBrowser(filesystem)
 const lifecycle = new LifecycleDriver(
   config,
   docker,
@@ -1727,6 +1731,20 @@ async function executeControlRequest(
       const input = relayFileMutationInputSchema.parse(payload)
       return serializeInstanceMutation(instance.id, () =>
         runRelayEffect("relay.files.mutate", filesystem.mutate(instance, input))
+      )
+    }
+    case "instance.files.database.read": {
+      const input = relayFileDatabaseReadInputSchema.parse(payload)
+      return runRelayEffect(
+        "relay.files.database.read",
+        databaseBrowser.read(await requiredInstance(input), input)
+      )
+    }
+    case "instance.files.database.write": {
+      const input = relayFileDatabaseWriteInputSchema.parse(payload)
+      return runRelayEffect(
+        "relay.files.database.write",
+        databaseBrowser.write(await requiredInstance(input), input)
       )
     }
     case "instance.console.history":

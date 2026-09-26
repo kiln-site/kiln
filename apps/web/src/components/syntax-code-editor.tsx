@@ -10,6 +10,7 @@ import {
 import { json } from "@codemirror/legacy-modes/mode/javascript"
 import { properties } from "@codemirror/legacy-modes/mode/properties"
 import { shell } from "@codemirror/legacy-modes/mode/shell"
+import { sqlite } from "@codemirror/legacy-modes/mode/sql"
 import { toml } from "@codemirror/legacy-modes/mode/toml"
 import { xml } from "@codemirror/legacy-modes/mode/xml"
 import { yaml } from "@codemirror/legacy-modes/mode/yaml"
@@ -488,6 +489,8 @@ function languageForPath(path: string): Extension {
       return StreamLanguage.define(properties)
     case "shell":
       return StreamLanguage.define(shell)
+    case "sql":
+      return StreamLanguage.define(sqlite)
     case "snbt":
       return snbtExtensions(path)
     case "valve-keyvalues":

@@ -23,7 +23,12 @@ export default defineConfig({
       alwaysBundle: ["@workspace/contracts"],
       onlyBundle: ["cron-parser", "luxon"],
     },
-    entry: ["src/index.ts", "src/updater.ts", "instrument.mjs"],
+    entry: [
+      "src/index.ts",
+      "src/updater.ts",
+      "src/database-browser-worker.ts",
+      "instrument.mjs",
+    ],
     format: "esm",
     minify: true,
     outDir: "dist",
