@@ -90,9 +90,13 @@ export function createDatabaseEditStore() {
       emit()
     },
     discard() {
+      if (edits.size === 0 && deleted.size === 0 && inserted.length === 0) {
+        return
+      }
       edits = new Map()
       deleted = new Map()
-      inserted = []
+      // Keep the empty array stable so the grid does not re-render.
+      if (inserted.length > 0) inserted = []
       emit()
     },
     toChanges(): Array<DatabaseChange> {

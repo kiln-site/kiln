@@ -1,10 +1,6 @@
 import * as React from "react"
 import { useVirtualizer } from "@tanstack/react-virtual"
-import type {
-  DatabaseRowKey,
-  DatabaseSort,
-  DatabaseValue,
-} from "@workspace/contracts"
+import type { DatabaseSort, DatabaseValue } from "@workspace/contracts"
 import {
   ArrowDown,
   ArrowUp,
@@ -31,6 +27,7 @@ import type {
   DatabaseEditStore,
   InsertedRow,
 } from "@/components/files/database/database-edit-store"
+import type { DatabasePageStore } from "@/components/files/database/database-page-store"
 import {
   editableText,
   formatCellValue,
@@ -53,10 +50,7 @@ interface DatabaseGridProps {
   editStore: DatabaseEditStore | null
   emptyMessage: string
   onSortChange?: (sort: DatabaseSort | null) => void
-  rowKeys: ReadonlyArray<DatabaseRowKey> | null
-  rowIds: ReadonlyArray<string> | null
-  rowNumberOffset: number
-  rows: ReadonlyArray<ReadonlyArray<DatabaseValue>>
+  page: DatabasePageStore
   sort?: DatabaseSort | null
 }
 
@@ -111,9 +105,7 @@ interface GridModel {
   columns: ReadonlyArray<DatabaseGridColumn>
   editStore: DatabaseEditStore | null
   inserted: ReadonlyArray<InsertedRow>
-  rowIds: ReadonlyArray<string> | null
-  rowKeys: ReadonlyArray<DatabaseRowKey> | null
-  rows: ReadonlyArray<ReadonlyArray<DatabaseValue>>
+  page: DatabasePageStore
 }
 
 function initialColumnWidths(
@@ -138,16 +130,15 @@ function initialColumnWidths(
   })
 }
 
-export function DatabaseGrid({
+// The shell only re-renders for structural changes (row count, row identity,
+// columns, scrolling). Row data flows from the page store straight to rows.
+export const DatabaseGrid = React.memo(function DatabaseGrid({
   ariaLabel,
   columns,
   editStore,
   emptyMessage,
   onSortChange,
-  rowIds,
-  rowKeys,
-  rowNumberOffset,
-  rows,
+  page,
   sort,
 }: DatabaseGridProps) {
   const scrollerRef = React.useRef<HTMLDivElement>(null)
@@ -159,17 +150,39 @@ export function DatabaseGrid({
     () => editStore?.getInsertedRows() ?? emptyInserted,
     () => emptyInserted
   )
-  const totalRows = rows.length + inserted.length
-  const editable = Boolean(editStore && rowIds && rowKeys)
+  const rowCount = React.useSyncExternalStore(
+    page.subscribe,
+    page.getRowCount,
+    page.getRowCount
+  )
+  const rowIds = React.useSyncExternalStore(
+    page.subscribe,
+    page.getRowIds,
+    page.getRowIds
+  )
+  const rowNumberOffset = React.useSyncExternalStore(
+    page.subscribe,
+    page.getOffset,
+    page.getOffset
+  )
+  const totalRows = rowCount + inserted.length
+  const editable = Boolean(editStore && rowIds)
 
+  // Widths are sized from the first rows once they arrive, then kept.
   const columnSignature = columns.map(({ name }) => name).join("\u0000")
   const [widths, setWidths] = React.useState(() =>
-    initialColumnWidths(columns, rows)
+    initialColumnWidths(columns, page.getPage().rows)
   )
-  const [widthSignature, setWidthSignature] = React.useState(columnSignature)
-  if (widthSignature !== columnSignature) {
-    setWidthSignature(columnSignature)
-    setWidths(initialColumnWidths(columns, rows))
+  const [widthSignature, setWidthSignature] = React.useState(() => ({
+    columns: columnSignature,
+    sampled: rowCount > 0,
+  }))
+  if (
+    widthSignature.columns !== columnSignature ||
+    (!widthSignature.sampled && rowCount > 0)
+  ) {
+    setWidthSignature({ columns: columnSignature, sampled: rowCount > 0 })
+    setWidths(initialColumnWidths(columns, page.getPage().rows))
   }
   widthsRef.current = widths
   const totalWidth =
@@ -191,15 +204,8 @@ export function DatabaseGrid({
     return style as React.CSSProperties
   }, [totalWidth, widths])
 
-  const model = React.useRef<GridModel>({
-    columns,
-    editStore,
-    inserted,
-    rowIds,
-    rowKeys,
-    rows,
-  })
-  model.current = { columns, editStore, inserted, rowIds, rowKeys, rows }
+  const model = React.useRef<GridModel>({ columns, editStore, inserted, page })
+  model.current = { columns, editStore, inserted, page }
 
   const virtualizer = useVirtualizer({
     count: totalRows,
@@ -261,7 +267,7 @@ export function DatabaseGrid({
   const moveTo = React.useCallback(
     (position: GridPosition) => {
       const current = model.current
-      const rowCount = current.rows.length + current.inserted.length
+      const rowCount = current.page.getRowCount() + current.inserted.length
       if (rowCount === 0 || current.columns.length === 0) return
       const next = {
         column: clamp(position.column, 0, current.columns.length - 1),
@@ -286,10 +292,10 @@ export function DatabaseGrid({
     )
     moveTo({
       column: Math.max(column, 0),
-      row: rows.length + inserted.length - 1,
+      row: page.getRowCount() + inserted.length - 1,
     })
     scrollerRef.current?.focus({ preventScroll: true })
-  }, [columns, inserted.length, moveTo, rows.length])
+  }, [columns, inserted.length, moveTo, page])
 
   const beginEdit = React.useCallback(
     (initialText: string | null) => {
@@ -308,6 +314,25 @@ export function DatabaseGrid({
     },
     [selection]
   )
+
+  const cancelEdit = React.useCallback(() => {
+    selection.setEditing(null)
+    scrollerRef.current?.focus({ preventScroll: true })
+  }, [selection])
+
+  const commitAndMove = React.useCallback(
+    (
+      position: GridPosition,
+      value: DatabaseValue,
+      delta: (position: GridPosition) => Partial<GridPosition>
+    ) => {
+      commitEdit(position, value)
+      moveTo({ ...position, ...delta(position) })
+    },
+    [commitEdit, moveTo]
+  )
+
+  const editActiveCell = React.useCallback(() => beginEdit(null), [beginEdit])
 
   function handlePointerDown(event: React.PointerEvent<HTMLDivElement>) {
     const position = cellFromEvent(event)
@@ -444,7 +469,7 @@ export function DatabaseGrid({
             {virtualRows.map((virtualRow) => {
               const index = virtualRow.index
               const insertedRow =
-                index >= rows.length ? inserted[index - rows.length] : null
+                index >= rowCount ? inserted[index - rowCount] : null
               return (
                 <GridRow
                   key={insertedRow?.id ?? rowIds?.[index] ?? index}
@@ -455,10 +480,10 @@ export function DatabaseGrid({
                   label={
                     insertedRow ? "+" : String(rowNumberOffset + index + 1)
                   }
+                  page={insertedRow ? null : page}
                   rowId={insertedRow ? null : (rowIds?.[index] ?? null)}
                   rowIndex={index}
                   top={virtualRow.start + HEADER_HEIGHT}
-                  values={insertedRow ? null : (rows[index] ?? null)}
                 />
               )
             })}
@@ -467,15 +492,9 @@ export function DatabaseGrid({
               model={model}
               selection={selection}
               widthsRef={widthsRef}
-              onCancel={() => {
-                selection.setEditing(null)
-                scrollerRef.current?.focus({ preventScroll: true })
-              }}
+              onCancel={cancelEdit}
               onCommit={commitEdit}
-              onCommitAndMove={(position, value, delta) => {
-                commitEdit(position, value)
-                moveTo({ ...position, ...delta(position) })
-              }}
+              onCommitAndMove={commitAndMove}
             />
           </div>
           {totalRows === 0 ? (
@@ -492,15 +511,15 @@ export function DatabaseGrid({
         editable={editable}
         model={model}
         selection={selection}
-        onEdit={() => beginEdit(null)}
+        onEdit={editActiveCell}
       />
     </ContextMenu>
   )
-}
+})
 
 const emptyInserted: ReadonlyArray<InsertedRow> = []
 
-function GridHeader({
+const GridHeader = React.memo(function GridHeader({
   cellStyles,
   columns,
   onResize,
@@ -608,7 +627,7 @@ function GridHeader({
       })}
     </div>
   )
-}
+})
 
 const GridRow = React.memo(function GridRow({
   cellStyles,
@@ -616,21 +635,28 @@ const GridRow = React.memo(function GridRow({
   editStore,
   inserted,
   label,
+  page,
   rowId,
   rowIndex,
   top,
-  values,
 }: {
   cellStyles: ReadonlyArray<React.CSSProperties>
   columns: ReadonlyArray<DatabaseGridColumn>
   editStore: DatabaseEditStore | null
   inserted: InsertedRow | null
   label: string
+  page: DatabasePageStore | null
   rowId: string | null
   rowIndex: number
   top: number
-  values: ReadonlyArray<DatabaseValue> | null
 }) {
+  // Each row reads only its own data, so a refetch that changes one row
+  // re-renders only that row.
+  const values = React.useSyncExternalStore(
+    page?.subscribe ?? noopSubscribe,
+    () => page?.getRow(rowIndex) ?? null,
+    () => null
+  )
   const deleted = React.useSyncExternalStore(
     rowId && editStore ? editStore.subscribe : noopSubscribe,
     () => (rowId && editStore ? editStore.isRowDeleted(rowId) : false),
@@ -735,7 +761,7 @@ const GridCell = React.memo(function GridCell({
   )
 })
 
-function SelectionOverlay({
+const SelectionOverlay = React.memo(function SelectionOverlay({
   selection,
   widthsRef,
 }: {
@@ -775,9 +801,9 @@ function SelectionOverlay({
       />
     </>
   )
-}
+})
 
-function CellEditor({
+const CellEditor = React.memo(function CellEditor({
   model,
   onCancel,
   onCommit,
@@ -815,7 +841,7 @@ function CellEditor({
       onCommitAndMove={onCommitAndMove}
     />
   )
-}
+})
 
 function ActiveCellEditor({
   initialText,
@@ -905,13 +931,15 @@ function ActiveCellEditor({
   )
 }
 
-function GridContextMenu(props: GridContextMenuProps) {
+const GridContextMenu = React.memo(function GridContextMenu(
+  props: GridContextMenuProps
+) {
   return (
     <ContextMenuContent className="w-56">
       <GridContextMenuItems {...props} />
     </ContextMenuContent>
   )
-}
+})
 
 interface GridContextMenuProps {
   editable: boolean
@@ -935,10 +963,9 @@ function GridContextMenuItems({
   const current = model.current
   const value = cellValue(current, active)
   const row = rowForPosition(current, active)
+  const rowCount = current.page.getRowCount()
   const insertedRow =
-    active.row >= current.rows.length
-      ? current.inserted[active.row - current.rows.length]
-      : null
+    active.row >= rowCount ? current.inserted[active.row - rowCount] : null
   const deleted = row && current.editStore?.isRowDeleted(row.id)
   const cellEditable = editable && canEditCell(current, active)
   const column = current.columns[active.column]
@@ -1020,26 +1047,28 @@ function clamp(value: number, min: number, max: number) {
 function cellValue(model: GridModel, position: GridPosition): DatabaseValue {
   const column = model.columns[position.column]
   if (!column) return null
-  if (position.row >= model.rows.length) {
-    const inserted = model.inserted[position.row - model.rows.length]
+  const { rowIds, rows } = model.page.getPage()
+  if (position.row >= rows.length) {
+    const inserted = model.inserted[position.row - rows.length]
     return inserted?.values[column.name] ?? null
   }
-  const rowId = model.rowIds?.[position.row]
+  const rowId = rowIds?.[position.row]
   const edit = rowId
     ? model.editStore?.getCellEdit(rowId, column.name)
     : undefined
   return edit !== undefined
     ? edit
-    : (model.rows[position.row]?.[position.column] ?? null)
+    : (rows[position.row]?.[position.column] ?? null)
 }
 
 function rowForPosition(
   model: GridModel,
   position: GridPosition
 ): DatabaseEditableRow | null {
-  const id = model.rowIds?.[position.row]
-  const key = model.rowKeys?.[position.row]
-  const values = model.rows[position.row]
+  const { keys, rowIds, rows } = model.page.getPage()
+  const id = rowIds?.[position.row]
+  const key = keys?.[position.row]
+  const values = rows[position.row]
   if (!id || !key || !values) return null
   return {
     id,
@@ -1054,10 +1083,11 @@ function canEditCell(model: GridModel, position: GridPosition) {
   if (!model.editStore) return false
   const column = model.columns[position.column]
   if (!column || column.readOnly) return false
-  if (position.row >= model.rows.length) return true
+  const rows = model.page.getPage().rows
+  if (position.row >= rows.length) return true
   const row = rowForPosition(model, position)
   if (!row || model.editStore.isRowDeleted(row.id)) return false
-  return isValueEditable(model.rows[position.row]?.[position.column] ?? null)
+  return isValueEditable(rows[position.row]?.[position.column] ?? null)
 }
 
 function applyCellValue(
@@ -1067,8 +1097,9 @@ function applyCellValue(
 ) {
   const column = model.columns[position.column]
   if (!column || !model.editStore) return
-  if (position.row >= model.rows.length) {
-    const inserted = model.inserted[position.row - model.rows.length]
+  const rowCount = model.page.getRowCount()
+  if (position.row >= rowCount) {
+    const inserted = model.inserted[position.row - rowCount]
     if (inserted)
       model.editStore.setInsertedCell(inserted.id, column.name, value)
     return

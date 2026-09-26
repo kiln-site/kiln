@@ -1,6 +1,7 @@
 import * as React from "react"
 import {
   keepPreviousData,
+  useIsFetching,
   useMutation,
   useQuery,
   useQueryClient,
@@ -69,9 +70,10 @@ import {
   relayFileDatabaseSource,
 } from "@/components/files/database/database-source"
 import {
-  formatByteSize,
-  rowKeyId,
-} from "@/components/files/database/database-values"
+  createDatabasePageStore,
+  type DatabasePageStore,
+} from "@/components/files/database/database-page-store"
+import { formatByteSize } from "@/components/files/database/database-values"
 import type { InstanceWorkspaceInstance } from "@/lib/relay-selectors"
 import { loadSyntaxCodeEditorModule } from "@/lib/syntax-editor-module-preload"
 
@@ -107,20 +109,20 @@ export function DatabaseViewer({
       }),
     [canWrite, displayPath, instance.id, instance.relayId]
   )
+  // The header only needs to know whether the file is writable; size and
+  // mtime changes after a refetch stay inside the components that show them.
   const overviewQuery = useQuery({
-    queryKey: [...source.queryKey, "overview"],
-    queryFn: source.overview,
-    retry: false,
-    staleTime: 10_000,
+    ...overviewQueryOptions(source),
+    select: selectReadOnly,
   })
-  const overview = overviewQuery.data ?? null
+  const readOnly = overviewQuery.data ?? null
   const notDatabase =
     overviewQuery.isError &&
     overviewQuery.error.message.includes("not a SQLite database")
   React.useEffect(() => {
     if (notDatabase) onNotDatabase()
   }, [notDatabase, onNotDatabase])
-  const writable = canWrite && overview?.readOnly === false
+  const writable = canWrite && readOnly === false
   const liveServer =
     instance.observedState === "running" ||
     instance.observedState === "starting"
@@ -132,13 +134,10 @@ export function DatabaseViewer({
         <div className={fileEditorHeaderContentClassName}>
           <FileToolbarIdentity
             path={displayPath}
-            readOnly={Boolean(overview) && !writable}
+            readOnly={readOnly !== null && !writable}
           />
           <div className="ml-auto flex shrink-0 items-center gap-1">
-            <DatabaseRefreshButton
-              fetching={overviewQuery.isFetching}
-              source={source}
-            />
+            <DatabaseRefreshButton source={source} />
             <EditorDownloadButton
               instance={instance}
               loading={false}
@@ -148,11 +147,10 @@ export function DatabaseViewer({
         </div>
       </div>
 
-      {overview ? (
+      {readOnly !== null ? (
         <DatabaseWorkspace
           key={displayPath}
           liveServer={liveServer}
-          overview={overview}
           source={source}
           writable={writable}
         />
@@ -170,14 +168,35 @@ export function DatabaseViewer({
   )
 }
 
-function DatabaseRefreshButton({
-  fetching,
-  source,
-}: {
-  fetching: boolean
-  source: DatabaseSource
-}) {
+function overviewQueryOptions(source: DatabaseSource) {
+  return {
+    queryKey: [...source.queryKey, "overview"],
+    queryFn: source.overview,
+    retry: false,
+    staleTime: 10_000,
+  }
+}
+
+const selectReadOnly = (overview: DatabaseOverview) => overview.readOnly
+const selectTables = (overview: DatabaseOverview) => overview.tables
+const selectMeta = (overview: DatabaseOverview) =>
+  `SQLite ${overview.engineVersion} · ${formatByteSize(overview.sizeBytes)}`
+const noTables: ReadonlyArray<DatabaseTable> = []
+
+function DatabaseMetaLabel({ source }: { source: DatabaseSource }) {
+  const meta = useQuery({ ...overviewQueryOptions(source), select: selectMeta })
+  return (
+    <p className="type-meta mt-1 truncate px-2 pb-0.5 font-mono text-[0.6875rem] text-muted-foreground/75">
+      {meta.data ?? ""}
+    </p>
+  )
+}
+
+function DatabaseRefreshButton({ source }: { source: DatabaseSource }) {
   const queryClient = useQueryClient()
+  // Row refetches show their own indicator next to the table toolbar.
+  const fetching =
+    useIsFetching({ queryKey: [...source.queryKey, "overview"] }) > 0
   return (
     <EditorTooltip content="Reload database">
       <Button
@@ -212,20 +231,23 @@ function DatabaseUnavailable({ message }: { message: string }) {
 
 function DatabaseWorkspace({
   liveServer,
-  overview,
   source,
   writable,
 }: {
   liveServer: boolean
-  overview: DatabaseOverview
   source: DatabaseSource
   writable: boolean
 }) {
+  // Structurally shared, so a refetch with the same schema keeps this array
+  // and the workspace does not re-render.
+  const tables =
+    useQuery({ ...overviewQueryOptions(source), select: selectTables }).data ??
+    noTables
   const [tableName, setTableName] = React.useState<string | null>(
-    () => overview.tables.find(({ kind }) => kind === "table")?.name ?? null
+    () => tables.find(({ kind }) => kind === "table")?.name ?? null
   )
   const [view, setView] = React.useState<DatabaseView>(
-    overview.tables.length > 0 ? "data" : "sql"
+    tables.length > 0 ? "data" : "sql"
   )
   const [editStore, setEditStore] = React.useState(createDatabaseEditStore)
   const [pendingSwitch, setPendingSwitch] = React.useState<{
@@ -234,9 +256,7 @@ function DatabaseWorkspace({
   } | null>(null)
   const [sql, setSql] = React.useState("")
   const table =
-    overview.tables.find(({ name }) => name === tableName) ??
-    overview.tables[0] ??
-    null
+    tables.find(({ name }) => name === tableName) ?? tables[0] ?? null
 
   function navigate(next: { table: string | null; view: DatabaseView }) {
     const leavingTable = next.table !== table?.name
@@ -252,7 +272,8 @@ function DatabaseWorkspace({
   return (
     <div className="flex min-h-0 flex-1">
       <DatabaseTableList
-        overview={overview}
+        source={source}
+        tables={tables}
         selected={view === "sql" ? null : (table?.name ?? null)}
         sqlActive={view === "sql"}
         onSelect={(name) =>
@@ -262,7 +283,7 @@ function DatabaseWorkspace({
       />
       <div className="flex min-w-0 flex-1 flex-col">
         <MobileTablePicker
-          overview={overview}
+          tables={tables}
           value={view === "sql" ? null : (table?.name ?? null)}
           onSelect={(name) =>
             name === null
@@ -272,7 +293,7 @@ function DatabaseWorkspace({
         />
         {view === "sql" ? (
           <SqlConsole
-            overview={overview}
+            tables={tables}
             source={source}
             sql={sql}
             writable={writable}
@@ -287,7 +308,7 @@ function DatabaseWorkspace({
             table={table}
             view={view}
             writable={writable}
-            onViewChange={(next) => setView(next)}
+            onViewChange={setView}
           />
         ) : (
           <div className="grid flex-1 place-items-center px-6 text-center text-xs text-muted-foreground">
@@ -335,23 +356,23 @@ function DatabaseWorkspace({
 const DatabaseTableList = React.memo(function DatabaseTableList({
   onOpenSql,
   onSelect,
-  overview,
   selected,
+  source,
   sqlActive,
+  tables: allTables,
 }: {
   onOpenSql: () => void
   onSelect: (name: string) => void
-  overview: DatabaseOverview
   selected: string | null
+  source: DatabaseSource
   sqlActive: boolean
+  tables: ReadonlyArray<DatabaseTable>
 }) {
   const [filter, setFilter] = React.useState("")
   const normalized = filter.trim().toLowerCase()
   const visible = normalized
-    ? overview.tables.filter(({ name }) =>
-        name.toLowerCase().includes(normalized)
-      )
-    : overview.tables
+    ? allTables.filter(({ name }) => name.toLowerCase().includes(normalized))
+    : allTables
   const tables = visible.filter(({ kind }) => kind === "table")
   const views = visible.filter(({ kind }) => kind === "view")
 
@@ -361,7 +382,7 @@ const DatabaseTableList = React.memo(function DatabaseTableList({
         <Search className="size-3.5 shrink-0 text-muted-foreground" />
         <input
           value={filter}
-          placeholder={`Filter ${overview.tables.length} tables`}
+          placeholder={`Filter ${allTables.length} tables`}
           aria-label="Filter tables"
           className="h-full min-w-0 flex-1 bg-transparent text-xs outline-none placeholder:text-muted-foreground/70"
           onChange={(event) => setFilter(event.target.value)}
@@ -402,9 +423,7 @@ const DatabaseTableList = React.memo(function DatabaseTableList({
           <Code2 className="size-4" />
           SQL console
         </button>
-        <p className="type-meta mt-1 truncate px-2 pb-0.5 font-mono text-[0.6875rem] text-muted-foreground/75">
-          SQLite {overview.engineVersion} · {formatByteSize(overview.sizeBytes)}
-        </p>
+        <DatabaseMetaLabel source={source} />
       </div>
     </aside>
   )
@@ -412,11 +431,11 @@ const DatabaseTableList = React.memo(function DatabaseTableList({
 
 function MobileTablePicker({
   onSelect,
-  overview,
+  tables,
   value,
 }: {
   onSelect: (name: string | null) => void
-  overview: DatabaseOverview
+  tables: ReadonlyArray<DatabaseTable>
   value: string | null
 }) {
   return (
@@ -427,7 +446,7 @@ function MobileTablePicker({
         className="h-7 min-w-0 flex-1 border border-input/80 bg-input/15 px-2 text-xs outline-none focus:border-primary/45"
         onChange={(event) => onSelect(event.target.value || null)}
       >
-        {overview.tables.map(({ kind, name }) => (
+        {tables.map(({ kind, name }) => (
           <option key={name} value={name}>
             {kind === "view" ? `${name} (view)` : name}
           </option>
@@ -486,7 +505,7 @@ function TableListSection({
   )
 }
 
-function TableView({
+const TableView = React.memo(function TableView({
   editStore,
   liveServer,
   onViewChange,
@@ -519,45 +538,32 @@ function TableView({
   const editable =
     writable && table.kind === "table" && table.rowIdentity !== null
 
-  const rowsQuery = useQuery({
-    queryKey: [
-      ...source.queryKey,
-      "rows",
-      table.name,
-      offset,
-      sort?.column ?? null,
-      sort?.direction ?? null,
-      search,
-    ],
-    queryFn: () =>
-      source.rows({
-        limit: DATABASE_PAGE_SIZE,
-        offset,
-        table: table.name,
-        ...(search ? { search } : {}),
-        ...(sort ? { sort } : {}),
-      }),
-    placeholderData: keepPreviousData,
-    retry: false,
-    staleTime: 5_000,
-  })
-  const page = rowsQuery.data ?? null
-  const rowIds = React.useMemo(
-    () => page?.keys?.map(rowKeyId) ?? null,
-    [page?.keys]
+  const [pageStore] = React.useState(createDatabasePageStore)
+  const rowsQueryKey = React.useMemo(
+    () => [...source.queryKey, "rows", table.name],
+    [source.queryKey, table.name]
   )
+  const status = React.useSyncExternalStore(
+    pageStore.subscribe,
+    pageStore.getStatus,
+    pageStore.getStatus
+  )
+  const error = React.useSyncExternalStore(
+    pageStore.subscribe,
+    pageStore.getError,
+    pageStore.getError
+  )
+  // Rows come from the page store, which uses the same columns in schema
+  // order, so the grid never waits on or re-renders for row data here.
   const columns = React.useMemo<Array<DatabaseGridColumn>>(
     () =>
-      (page?.columns ?? table.columns).map((column) => {
-        const schema = table.columns.find(({ name }) => name === column.name)
-        return {
-          name: column.name,
-          primaryKey: (schema?.primaryKey ?? 0) > 0,
-          readOnly: schema?.generated ?? false,
-          type: column.type,
-        }
-      }),
-    [page?.columns, table.columns]
+      table.columns.map((column) => ({
+        name: column.name,
+        primaryKey: column.primaryKey > 0,
+        readOnly: column.generated,
+        type: column.type || null,
+      })),
+    [table.columns]
   )
 
   return (
@@ -577,9 +583,7 @@ function TableView({
               />
             </label>
             <div className="ml-auto flex shrink-0 items-center gap-1">
-              {rowsQuery.isFetching ? (
-                <LoaderCircle className="size-3.5 animate-spin text-muted-foreground" />
-              ) : null}
+              <FetchingIndicator queryKey={rowsQueryKey} />
               {editable ? (
                 <Button
                   variant="ghost"
@@ -594,11 +598,20 @@ function TableView({
         ) : null}
       </div>
 
+      <RowsQuerySync
+        offset={offset}
+        pageStore={pageStore}
+        queryKey={rowsQueryKey}
+        search={search}
+        sort={sort}
+        source={source}
+        table={table.name}
+      />
       {view === "structure" ? (
         <TableStructure table={table} />
-      ) : rowsQuery.isError && !page ? (
-        <DatabaseUnavailable message={rowsQuery.error.message} />
-      ) : page ? (
+      ) : status === "error" ? (
+        <DatabaseUnavailable message={error ?? "Could not read rows"} />
+      ) : status === "success" ? (
         <DatabaseGrid
           ariaLabel={`${table.name} rows`}
           columns={columns}
@@ -606,10 +619,7 @@ function TableView({
           emptyMessage={
             search ? "No rows match this search." : "This table is empty."
           }
-          rowIds={rowIds}
-          rowKeys={page.keys}
-          rowNumberOffset={page.offset}
-          rows={page.rows}
+          page={pageStore}
           sort={sort}
           onSortChange={changeSort}
         />
@@ -625,7 +635,7 @@ function TableView({
           editable={editable}
           liveServer={liveServer}
           offset={offset}
-          pageRows={page?.rows.length ?? 0}
+          pageStore={pageStore}
           readOnlyReason={
             !writable
               ? null
@@ -635,18 +645,86 @@ function TableView({
                   ? "No primary key; read-only"
                   : null
           }
+          rowsQueryKey={rowsQueryKey}
           source={source}
           table={table}
-          total={page?.total ?? null}
-          totalCapped={page?.totalCapped ?? false}
           onOffsetChange={setOffset}
         />
       ) : null}
     </>
   )
+})
+
+// Keeps the query subscription out of TableView: it renders nothing and only
+// pushes results into the page store, where rows pick up their own changes.
+function RowsQuerySync({
+  offset,
+  pageStore,
+  queryKey,
+  search,
+  sort,
+  source,
+  table,
+}: {
+  offset: number
+  pageStore: DatabasePageStore
+  queryKey: ReadonlyArray<unknown>
+  search: string
+  sort: DatabaseSort | null
+  source: DatabaseSource
+  table: string
+}) {
+  const query = useQuery({
+    queryKey: [
+      ...queryKey,
+      offset,
+      sort?.column ?? null,
+      sort?.direction ?? null,
+      search,
+    ],
+    queryFn: () =>
+      source.rows({
+        limit: DATABASE_PAGE_SIZE,
+        offset,
+        table,
+        ...(search ? { search } : {}),
+        ...(sort ? { sort } : {}),
+      }),
+    placeholderData: keepPreviousData,
+    retry: false,
+    staleTime: 5_000,
+  })
+  const { data, error } = query
+  React.useLayoutEffect(() => {
+    if (data) {
+      pageStore.setPage({
+        error: null,
+        keys: data.keys,
+        offset: data.offset,
+        rows: data.rows,
+        status: "success",
+        total: data.total,
+        totalCapped: data.totalCapped,
+      })
+    } else if (error) {
+      pageStore.setPage({
+        ...pageStore.getPage(),
+        error: error.message,
+        status: "error",
+      })
+    }
+  }, [data, error, pageStore])
+  return null
 }
 
-function ViewTabs({
+function FetchingIndicator({ queryKey }: { queryKey: ReadonlyArray<unknown> }) {
+  const fetching = useIsFetching({ queryKey }) > 0
+  return fetching ? (
+    <LoaderCircle className="size-3.5 animate-spin text-muted-foreground" />
+  ) : null
+}
+
+const ViewTabs = React.memo(function ViewTabs({
   onViewChange,
   view,
 }: {
@@ -679,7 +757,7 @@ function ViewTabs({
       ))}
     </div>
   )
-}
+})
 
 function TableFooter({
   editStore,
@@ -687,25 +765,38 @@ function TableFooter({
   liveServer,
   offset,
   onOffsetChange,
-  pageRows,
+  pageStore,
   readOnlyReason,
+  rowsQueryKey,
   source,
   table,
-  total,
-  totalCapped,
 }: {
   editStore: DatabaseEditStore
   editable: boolean
   liveServer: boolean
   offset: number
   onOffsetChange: (offset: number) => void
-  pageRows: number
+  pageStore: DatabasePageStore
   readOnlyReason: string | null
+  rowsQueryKey: ReadonlyArray<unknown>
   source: DatabaseSource
   table: DatabaseTable
-  total: number | null
-  totalCapped: boolean
 }) {
+  const pageRows = React.useSyncExternalStore(
+    pageStore.subscribe,
+    pageStore.getRowCount,
+    pageStore.getRowCount
+  )
+  const total = React.useSyncExternalStore(
+    pageStore.subscribe,
+    pageStore.getTotal,
+    pageStore.getTotal
+  )
+  const totalCapped = React.useSyncExternalStore(
+    pageStore.subscribe,
+    pageStore.getTotalCapped,
+    pageStore.getTotalCapped
+  )
   const pending = React.useSyncExternalStore(
     editStore.subscribe,
     editStore.getPendingCount,
@@ -720,7 +811,9 @@ function TableFooter({
         message: `Saved changes to ${table.name}`,
         type: "success",
       })
-      await queryClient.invalidateQueries({ queryKey: source.queryKey })
+      // Only this table's rows can have changed; refetched rows are
+      // structurally shared, so just the edited rows re-render.
+      await queryClient.invalidateQueries({ queryKey: rowsQueryKey })
     },
     onError: (error) => showToast({ message: error.message, type: "error" }),
   })
@@ -896,15 +989,15 @@ function TableStructure({ table }: { table: DatabaseTable }) {
 
 function SqlConsole({
   onSqlChange,
-  overview,
   source,
   sql,
+  tables,
   writable,
 }: {
   onSqlChange: (sql: string) => void
-  overview: DatabaseOverview
   source: DatabaseSource
   sql: string
+  tables: ReadonlyArray<DatabaseTable>
   writable: boolean
 }) {
   const queryClient = useQueryClient()
@@ -926,8 +1019,8 @@ function SqlConsole({
     run.mutate(statement)
   }, [run])
 
-  const placeholder = overview.tables[0]
-    ? `SELECT * FROM "${overview.tables[0].name}" LIMIT 100;`
+  const placeholder = tables[0]
+    ? `SELECT * FROM "${tables[0].name}" LIMIT 100;`
     : "SELECT sqlite_version();"
 
   return (
@@ -1026,6 +1119,14 @@ function SqlResult({
     () => result?.columns.map(({ name, type }) => ({ name, type })) ?? [],
     [result?.columns]
   )
+  const page = React.useMemo(
+    () =>
+      createDatabasePageStore({
+        rows: result?.rows ?? [],
+        status: "success",
+      }),
+    [result?.rows]
+  )
   if (error) {
     return (
       <div className="flex min-h-0 flex-1 items-start gap-2 p-3 text-xs text-destructive">
@@ -1057,10 +1158,7 @@ function SqlResult({
           columns={columns}
           editStore={null}
           emptyMessage="The query returned no rows."
-          rowIds={null}
-          rowKeys={null}
-          rowNumberOffset={0}
-          rows={result.rows}
+          page={page}
         />
       ) : (
         <div className="grid flex-1 place-items-center text-xs text-muted-foreground">
