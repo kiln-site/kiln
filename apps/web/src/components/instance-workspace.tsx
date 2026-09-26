@@ -1704,16 +1704,8 @@ function ResourceHistoryPopover({
   historyStore: ResourceHistoryStore
   children: React.ReactElement
 }) {
-  const [replayToken, setReplayToken] = React.useState(0)
-
   return (
-    <HoverCard
-      openDelay={160}
-      closeDelay={100}
-      onOpenChange={(open) => {
-        if (open) setReplayToken((current) => current + 1)
-      }}
-    >
+    <HoverCard openDelay={160} closeDelay={100}>
       <HoverCardTrigger asChild>{children}</HoverCardTrigger>
       <HoverCardContent
         align="center"
@@ -1722,11 +1714,7 @@ function ResourceHistoryPopover({
         collisionPadding={12}
         className="w-[min(20rem,calc(100vw-1.5rem))] border-border/90 bg-popover p-0 shadow-2xl"
       >
-        <ResourceHistoryCard
-          resource={resource}
-          historyStore={historyStore}
-          replayToken={replayToken}
-        />
+        <ResourceHistoryCard resource={resource} historyStore={historyStore} />
       </HoverCardContent>
     </HoverCard>
   )
@@ -1735,22 +1723,19 @@ function ResourceHistoryPopover({
 function ResourceHistoryCard({
   resource,
   historyStore,
-  replayToken,
 }: {
   resource: ResourceItem
   historyStore: ResourceHistoryStore
-  replayToken: number
 }) {
   const history = React.useSyncExternalStore(
     historyStore.subscribe,
     historyStore.getSnapshot,
     historyStore.getSnapshot
   )
-  const now = Date.now()
-  const domainStart = now - RESOURCE_HISTORY_WINDOW_MS
-  const visibleHistory = history.filter(
-    (sample) => sample.timestamp >= domainStart
-  )
+  const visibleHistory = React.useMemo(() => {
+    const domainStart = Date.now() - RESOURCE_HISTORY_WINDOW_MS
+    return history.filter((sample) => sample.timestamp >= domainStart)
+  }, [history])
   const values = visibleHistory
     .map((sample) => sample[resource.id])
     .filter((value): value is number => value !== null)
@@ -1759,13 +1744,17 @@ function ResourceHistoryCard({
     : null
   const peak = values.length ? Math.max(...values) : null
   const latest = visibleHistory.at(-1)
-  const chartData = visibleHistory.map((sample) => ({
-    timestamp: sample.timestamp,
-    value: sample[resource.id],
-    secondary: sample.storageNode,
-    received: sample.networkReceived,
-    sent: sample.networkSent,
-  }))
+  const chartData = React.useMemo(
+    () =>
+      visibleHistory.map((sample) => ({
+        timestamp: sample.timestamp,
+        value: sample[resource.id],
+        secondary: sample.storageNode,
+        received: sample.networkReceived,
+        sent: sample.networkSent,
+      })),
+    [resource.id, visibleHistory]
+  )
 
   return (
     <div className="overflow-hidden rounded-[inherit]">
@@ -1790,10 +1779,7 @@ function ResourceHistoryCard({
             resourceId={resource.id}
             label={resource.label}
             color={resource.chartColor}
-            domainStart={domainStart}
-            domainEnd={now}
             maxValue={resource.chartMax}
-            replayToken={replayToken}
             formatValue={(value) => formatHistoryValue(resource.id, value)}
           />
         </React.Suspense>
