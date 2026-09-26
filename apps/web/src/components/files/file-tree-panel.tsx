@@ -447,6 +447,8 @@ export function FileTreePanel({
     onPathChange,
   })
   const searchTimer = React.useRef<number | null>(null)
+  const searchValue = React.useRef("")
+  const rowClickActive = React.useRef(false)
   const loadingPlaceholderPaths = React.useRef(new Set<string>())
   const { model } = useFileTree({
     preparedInput,
@@ -465,6 +467,20 @@ export function FileTreePanel({
       }
       handlers.onPathChange(selected)
       handlers.onFileSelected()
+    },
+    // Trees closes search on every row click; keep it open so results persist.
+    onSearchChange: (value) => {
+      if (value !== null) {
+        searchValue.current = value
+        return
+      }
+      if (!rowClickActive.current || !searchValue.current) {
+        searchValue.current = ""
+        return
+      }
+      const focusedPath = model.getFocusedPath()
+      model.setSearch(searchValue.current)
+      if (focusedPath) model.focusPath(focusedPath)
     },
     search: false,
     flattenEmptyDirectories: true,
@@ -1180,6 +1196,12 @@ export function FileTreePanel({
           model={model}
           aria-label={`${instance.name} files`}
           className="block size-full min-h-[210px]"
+          onClickCapture={() => {
+            rowClickActive.current = true
+            window.setTimeout(() => {
+              rowClickActive.current = false
+            })
+          }}
           onPointerDownCapture={(event) => {
             const directory = resolveTreeEventDirectory(event.nativeEvent)
             if (directory !== null) void fileIndex.ensureDirectory(directory)
