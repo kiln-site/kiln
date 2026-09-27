@@ -3,6 +3,7 @@ import { resolve } from "node:path"
 
 import { Result } from "effect"
 import { defineConfig, lazyPlugins } from "vite-plus"
+import type { Plugin } from "vite-plus"
 import { sentryTanstackStart } from "@sentry/tanstackstart-react/vite"
 import { devtools } from "@tanstack/devtools-vite"
 import { tanstackStart } from "@tanstack/react-start/plugin/vite"
@@ -17,6 +18,7 @@ const contractsSource = resolve(
   repositoryRoot,
   "packages/contracts/src/index.ts"
 )
+const brandingDirectory = resolve(import.meta.dirname, "src/assets/branding")
 const reactScanProductionShim = resolve(
   import.meta.dirname,
   "node_modules/react-scan/dist/rsc-shim.mjs"
@@ -111,6 +113,7 @@ const config = defineConfig(({ command }) => {
       host: "0.0.0.0",
     },
     plugins: lazyPlugins(() => [
+      webAppManifest(),
       devtools(),
       tailwindcss(),
       tanstackStart(),
@@ -183,6 +186,59 @@ function resolveBuildCommit(): string {
     }),
     () => ""
   )
+}
+
+// Emits /manifest.json with content-hashed icon URLs so installed apps and
+// mobile browsers pick up logo changes instead of keeping a cached icon path.
+function webAppManifest(): Plugin {
+  const icons = [
+    { file: "app-icon-192.png", sizes: "192x192", type: "image/png" },
+    { file: "app-icon-512.png", sizes: "512x512", type: "image/png" },
+  ]
+  const manifest = (iconUrl: (file: string) => string) =>
+    JSON.stringify({
+      short_name: "Kiln",
+      name: "Kiln — Minecraft Control Plane",
+      icons: icons.map(({ file, ...icon }) => ({
+        src: iconUrl(file),
+        ...icon,
+        purpose: "any maskable",
+      })),
+      start_url: "/",
+      display: "standalone",
+      theme_color: "#e9842b",
+      background_color: "#181515",
+    })
+
+  return {
+    name: "kiln:web-app-manifest",
+    configureServer(server) {
+      server.middlewares.use("/manifest.json", (_request, response) => {
+        response.setHeader("Content-Type", "application/json")
+        response.end(manifest((file) => `/src/assets/branding/${file}`))
+      })
+    },
+    generateBundle() {
+      if (this.environment.name !== "client") return
+      const fileNames = new Map(
+        icons.map(({ file }) => [
+          file,
+          this.getFileName(
+            this.emitFile({
+              type: "asset",
+              name: file,
+              source: readFileSync(resolve(brandingDirectory, file)),
+            })
+          ),
+        ])
+      )
+      this.emitFile({
+        type: "asset",
+        fileName: "manifest.json",
+        source: manifest((file) => `/${fileNames.get(file)}`),
+      })
+    },
+  }
 }
 
 function developmentHosts(): Array<string> {

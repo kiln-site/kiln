@@ -3,6 +3,9 @@ import { geistLatin, jetBrainsMonoLatin } from "@workspace/ui/lib/font-assets"
 
 import appCss from "@workspace/ui/globals.css?url"
 
+import appIcon192 from "@/assets/branding/app-icon-192.png?no-inline"
+import faviconSvg from "@/assets/branding/favicon.svg?no-inline"
+
 import { AppErrorPage, AppNotFoundPage } from "@/components/app-error-page"
 import type { AppRouterContext } from "@/lib/query-client"
 import { getPublicRuntimeConfig } from "@/server/runtime-config"
@@ -45,7 +48,7 @@ export const Route = createRootRouteWithContext<AppRouterContext>()({
       },
       {
         rel: "icon",
-        href: "/favicon.svg",
+        href: faviconSvg,
         type: "image/svg+xml",
         sizes: "any",
       },
@@ -56,7 +59,7 @@ export const Route = createRootRouteWithContext<AppRouterContext>()({
       },
       {
         rel: "apple-touch-icon",
-        href: "/apple-touch-icon.png",
+        href: appIcon192,
         sizes: "192x192",
       },
       {
