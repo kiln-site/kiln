@@ -47,6 +47,12 @@ export interface DatabaseGridColumn {
   type: string | null
   primaryKey?: boolean
   readOnly?: boolean
+  // Position of this column's value in each row when some columns are hidden.
+  sourceIndex?: number
+}
+
+function valueIndex(column: DatabaseGridColumn, position: number) {
+  return column.sourceIndex ?? position
 }
 
 interface DatabaseGridProps {
@@ -124,7 +130,10 @@ function initialColumnWidths(
     for (const row of sample) {
       characters = Math.max(
         characters,
-        Math.min(formatCellValue(row[index] ?? null).length, 48)
+        Math.min(
+          formatCellValue(row[valueIndex(column, index)] ?? null).length,
+          48
+        )
       )
     }
     return Math.round(Math.min(Math.max(characters * 7.6 + 26, 88), 360))
@@ -169,11 +178,16 @@ export const DatabaseGrid = React.memo(function DatabaseGrid({
   const totalRows = rowCount + inserted.length
   const editable = Boolean(editStore && rowIds)
 
-  // Widths are sized from the first rows once they arrive, then kept.
+  // Widths are sized from the first rows once they arrive, then remembered
+  // per column so hiding or showing columns keeps manual resizes.
+  const knownWidths = React.useRef(new Map<string, number>())
+  const measureWidths = () =>
+    initialColumnWidths(columns, page.getPage().rows).map(
+      (width, index) =>
+        knownWidths.current.get(columns[index]?.name ?? "") ?? width
+    )
   const columnSignature = columns.map(({ name }) => name).join("\u0000")
-  const [widths, setWidths] = React.useState(() =>
-    initialColumnWidths(columns, page.getPage().rows)
-  )
+  const [widths, setWidths] = React.useState(measureWidths)
   const [widthSignature, setWidthSignature] = React.useState(() => ({
     columns: columnSignature,
     sampled: rowCount > 0,
@@ -183,8 +197,15 @@ export const DatabaseGrid = React.memo(function DatabaseGrid({
     (!widthSignature.sampled && rowCount > 0)
   ) {
     setWidthSignature({ columns: columnSignature, sampled: rowCount > 0 })
-    setWidths(initialColumnWidths(columns, page.getPage().rows))
+    setWidths(measureWidths())
   }
+  React.useEffect(() => {
+    if (!widthSignature.sampled) return
+    widths.forEach((width, index) => {
+      const name = columns[index]?.name
+      if (name !== undefined) knownWidths.current.set(name, width)
+    })
+  }, [columns, widthSignature.sampled, widths])
   widthsRef.current = widths
   const totalWidth =
     GUTTER_WIDTH + widths.reduce((sum, width) => sum + width, 0)
@@ -723,7 +744,7 @@ const GridRow = React.memo(function GridRow({
               ? column.name in inserted.values
                 ? (inserted.values[column.name] ?? null)
                 : undefined
-              : (values?.[columnIndex] ?? null)
+              : (values?.[valueIndex(column, columnIndex)] ?? null)
           }
         />
       ))}
@@ -1084,7 +1105,7 @@ function cellValue(model: GridModel, position: GridPosition): DatabaseValue {
     : undefined
   return edit !== undefined
     ? edit
-    : (rows[position.row]?.[position.column] ?? null)
+    : (rows[position.row]?.[valueIndex(column, position.column)] ?? null)
 }
 
 function rowForPosition(
@@ -1100,7 +1121,10 @@ function rowForPosition(
     id,
     key,
     original: Object.fromEntries(
-      model.columns.map((column, index) => [column.name, values[index] ?? null])
+      model.columns.map((column, index) => [
+        column.name,
+        values[valueIndex(column, index)] ?? null,
+      ])
     ),
   }
 }
@@ -1113,7 +1137,9 @@ function canEditCell(model: GridModel, position: GridPosition) {
   if (position.row >= rows.length) return true
   const row = rowForPosition(model, position)
   if (!row || model.editStore.isRowDeleted(row.id)) return false
-  return isValueEditable(rows[position.row]?.[position.column] ?? null)
+  return isValueEditable(
+    rows[position.row]?.[valueIndex(column, position.column)] ?? null
+  )
 }
 
 function applyCellValue(

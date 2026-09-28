@@ -1,4 +1,5 @@
 import * as React from "react"
+import { createPortal } from "react-dom"
 import { Result } from "effect"
 import {
   keepPreviousData,
@@ -14,6 +15,8 @@ import type {
   DatabaseTable,
 } from "@workspace/contracts"
 import {
+  Check,
+  ChevronDown,
   ChevronLeft,
   ChevronRight,
   ChevronsLeft,
@@ -22,12 +25,14 @@ import {
   Download,
   EllipsisVertical,
   Eye,
+  Funnel,
   KeyRound,
   LoaderCircle,
+  PanelLeftClose,
+  PanelLeftOpen,
   Play,
   Plus,
   RefreshCw,
-  Rows3,
   Save,
   Search,
   Table2,
@@ -92,8 +97,6 @@ const SyntaxCodeEditor = React.lazy(async () => {
   return { default: module.SyntaxCodeEditor }
 })
 
-type DatabaseView = "data" | "structure"
-
 export function DatabaseViewer({
   canWrite,
   displayPath,
@@ -134,6 +137,8 @@ export function DatabaseViewer({
   }, [notDatabase, onNotDatabase])
   const writable = canWrite && readOnly === false
   const [queryOpen, setQueryOpen] = React.useState(false)
+  // The workspace renders its table picker here while the sidebar is hidden.
+  const [headerSlot, setHeaderSlot] = React.useState<HTMLElement | null>(null)
   const liveServer =
     instance.observedState === "running" ||
     instance.observedState === "starting"
@@ -148,6 +153,7 @@ export function DatabaseViewer({
             readOnly={readOnly !== null && !writable}
           />
           <div className="ml-auto flex shrink-0 items-center gap-1">
+            <div ref={setHeaderSlot} className="contents" />
             <DatabaseRefreshButton source={source} />
             {readOnly !== null ? (
               <DatabaseQueryButton
@@ -163,6 +169,7 @@ export function DatabaseViewer({
       {readOnly !== null ? (
         <DatabaseWorkspace
           key={displayPath}
+          headerSlot={headerSlot}
           liveServer={liveServer}
           queryOpen={queryOpen}
           source={source}
@@ -324,12 +331,14 @@ function DatabaseUnavailable({ message }: { message: string }) {
 }
 
 function DatabaseWorkspace({
+  headerSlot,
   liveServer,
   onQueryOpenChange,
   queryOpen,
   source,
   writable,
 }: {
+  headerSlot: HTMLElement | null
   liveServer: boolean
   onQueryOpenChange: (open: boolean) => void
   queryOpen: boolean
@@ -344,54 +353,70 @@ function DatabaseWorkspace({
   const [tableName, setTableName] = React.useState<string | null>(
     () => tables.find(({ kind }) => kind === "table")?.name ?? null
   )
-  const [view, setView] = React.useState<DatabaseView>("data")
+  const [tablesCollapsed, setTablesCollapsed] = useStoredFlag(
+    tablesCollapsedStorageKey
+  )
+  const revealTables = React.useCallback(
+    () => setTablesCollapsed(false),
+    [setTablesCollapsed]
+  )
   // An empty database has nothing to browse, so start in the query console.
   const emptyDatabase = tables.length === 0
   React.useLayoutEffect(() => {
     if (emptyDatabase) onQueryOpenChange(true)
   }, [emptyDatabase, onQueryOpenChange])
   const [editStore, setEditStore] = React.useState(createDatabaseEditStore)
-  const [pendingSwitch, setPendingSwitch] = React.useState<{
-    table: string | null
-    view: DatabaseView
-  } | null>(null)
+  const [pendingSwitch, setPendingSwitch] = React.useState<string | null>(null)
   const [sql, setSql] = React.useState("")
   const table =
     tables.find(({ name }) => name === tableName) ?? tables[0] ?? null
 
-  function navigate(next: { table: string | null; view: DatabaseView }) {
-    const leavingTable = next.table !== table?.name
+  function selectTable(name: string) {
+    const leavingTable = name !== table?.name
     if (leavingTable && editStore.getPendingCount() > 0) {
-      setPendingSwitch(next)
+      setPendingSwitch(name)
       return
     }
     if (leavingTable) setEditStore(createDatabaseEditStore())
-    setTableName(next.table)
-    setView(next.view)
+    setTableName(name)
     onQueryOpenChange(false)
   }
+  const selectedName = queryOpen ? null : (table?.name ?? null)
 
   return (
     <div className="flex min-h-0 flex-1">
-      <DatabaseTableList
-        source={source}
-        tables={tables}
-        selected={queryOpen ? null : (table?.name ?? null)}
-        onSelect={(name) => navigate({ table: name, view })}
-      />
+      {tablesCollapsed ? null : (
+        <DatabaseTableList
+          source={source}
+          tables={tables}
+          selected={selectedName}
+          onCollapse={() => setTablesCollapsed(true)}
+          onSelect={selectTable}
+        />
+      )}
+      {tablesCollapsed && headerSlot
+        ? createPortal(
+            <HeaderTablePicker
+              queryOpen={queryOpen}
+              selected={selectedName}
+              tables={tables}
+              onSelect={selectTable}
+            />,
+            headerSlot
+          )
+        : null}
       <div className="flex min-w-0 flex-1 flex-col">
         <MobileTablePicker
           tables={tables}
-          value={queryOpen ? null : (table?.name ?? null)}
+          value={selectedName}
           onSelect={(name) =>
-            name === null
-              ? onQueryOpenChange(true)
-              : navigate({ table: name, view })
+            name === null ? onQueryOpenChange(true) : selectTable(name)
           }
         />
         {queryOpen ? (
           <SqlConsole
             tables={tables}
+            onRevealTables={tablesCollapsed ? revealTables : null}
             source={source}
             sql={sql}
             writable={writable}
@@ -404,9 +429,8 @@ function DatabaseWorkspace({
             liveServer={liveServer}
             source={source}
             table={table}
-            view={view}
             writable={writable}
-            onViewChange={setView}
+            onRevealTables={tablesCollapsed ? revealTables : null}
           />
         ) : (
           <div className="grid flex-1 place-items-center px-6 text-center text-xs text-muted-foreground">
@@ -437,8 +461,7 @@ function DatabaseWorkspace({
               onClick={() => {
                 if (!pendingSwitch) return
                 setEditStore(createDatabaseEditStore())
-                setTableName(pendingSwitch.table)
-                setView(pendingSwitch.view)
+                setTableName(pendingSwitch)
                 onQueryOpenChange(false)
                 setPendingSwitch(null)
               }}
@@ -453,23 +476,18 @@ function DatabaseWorkspace({
 }
 
 const DatabaseTableList = React.memo(function DatabaseTableList({
+  onCollapse,
   onSelect,
   selected,
   source,
-  tables: allTables,
+  tables,
 }: {
+  onCollapse: () => void
   onSelect: (name: string) => void
   selected: string | null
   source: DatabaseSource
   tables: ReadonlyArray<DatabaseTable>
 }) {
-  const [filter, setFilter] = React.useState("")
-  const normalized = filter.trim().toLowerCase()
-  const visible = normalized
-    ? allTables.filter(({ name }) => name.toLowerCase().includes(normalized))
-    : allTables
-  const tables = visible.filter(({ kind }) => kind === "table")
-  const views = visible.filter(({ kind }) => kind === "view")
   const panelRef = React.useRef<HTMLElement>(null)
 
   return (
@@ -477,38 +495,24 @@ const DatabaseTableList = React.memo(function DatabaseTableList({
       ref={panelRef}
       className="relative hidden w-[var(--database-tables-width,14rem)] shrink-0 flex-col bg-muted/[0.06] md:flex"
     >
-      <div className="flex h-10 shrink-0 items-center gap-2 border-b border-border/70 px-2.5">
-        <Search className="size-3.5 shrink-0 text-muted-foreground" />
-        <input
-          value={filter}
-          placeholder={`Filter ${allTables.length} tables`}
-          aria-label="Filter tables"
-          className="h-full min-w-0 flex-1 bg-transparent text-xs outline-none placeholder:text-muted-foreground/70"
-          onChange={(event) => setFilter(event.target.value)}
-        />
-      </div>
-      <nav
-        className="min-h-0 flex-1 overflow-y-auto py-1.5"
-        aria-label="Tables"
-      >
-        <TableListSection
-          label="Tables"
-          tables={tables}
-          selected={selected}
-          onSelect={onSelect}
-        />
-        <TableListSection
-          label="Views"
-          tables={views}
-          selected={selected}
-          onSelect={onSelect}
-        />
-        {visible.length === 0 ? (
-          <p className="px-3 py-2 text-xs text-muted-foreground">
-            No tables match.
-          </p>
-        ) : null}
-      </nav>
+      <TableListBody
+        className="min-h-0 flex-1"
+        tables={tables}
+        selected={selected}
+        trailing={
+          <EditorTooltip content="Collapse tables">
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              aria-label="Collapse tables"
+              onClick={onCollapse}
+            >
+              <PanelLeftClose className="size-[18px]" />
+            </Button>
+          </EditorTooltip>
+        }
+        onSelect={onSelect}
+      />
       <div className="flex min-h-10 shrink-0 items-center border-t border-border px-1.5 py-1">
         <DatabaseMetaLabel source={source} />
       </div>
@@ -651,6 +655,151 @@ function TablesPanelResizeHandle({
   )
 }
 
+// Filter box plus grouped table/view list, shared by the sidebar and the
+// header picker shown while the sidebar is collapsed.
+function TableListBody({
+  className,
+  onSelect,
+  selected,
+  tables: allTables,
+  trailing,
+}: {
+  className?: string
+  onSelect: (name: string) => void
+  selected: string | null
+  tables: ReadonlyArray<DatabaseTable>
+  trailing?: React.ReactNode
+}) {
+  const [filter, setFilter] = React.useState("")
+  const normalized = filter.trim().toLowerCase()
+  const visible = normalized
+    ? allTables.filter(({ name }) => name.toLowerCase().includes(normalized))
+    : allTables
+  const tables = visible.filter(({ kind }) => kind === "table")
+  const views = visible.filter(({ kind }) => kind === "view")
+  return (
+    <div className={cn("flex flex-col", className)}>
+      <div className="flex h-10 shrink-0 items-center gap-2 border-b border-border/70 pr-1 pl-2.5">
+        <Search className="size-3.5 shrink-0 text-muted-foreground" />
+        <input
+          value={filter}
+          placeholder={`Filter ${allTables.length} tables`}
+          aria-label="Filter tables"
+          className="h-full min-w-0 flex-1 bg-transparent text-xs outline-none placeholder:text-muted-foreground/70"
+          onChange={(event) => setFilter(event.target.value)}
+        />
+        {trailing}
+      </div>
+      <nav
+        className="min-h-0 flex-1 overflow-y-auto py-1.5"
+        aria-label="Tables"
+      >
+        <TableListSection
+          label="Tables"
+          tables={tables}
+          selected={selected}
+          onSelect={onSelect}
+        />
+        <TableListSection
+          label="Views"
+          tables={views}
+          selected={selected}
+          onSelect={onSelect}
+        />
+        {visible.length === 0 ? (
+          <p className="px-3 py-2 text-xs text-muted-foreground">
+            No tables match.
+          </p>
+        ) : null}
+      </nav>
+    </div>
+  )
+}
+
+function HeaderTablePicker({
+  onSelect,
+  queryOpen,
+  selected,
+  tables,
+}: {
+  onSelect: (name: string) => void
+  queryOpen: boolean
+  selected: string | null
+  tables: ReadonlyArray<DatabaseTable>
+}) {
+  const [open, setOpen] = React.useState(false)
+  const current = queryOpen
+    ? undefined
+    : tables.find(({ name }) => name === selected)
+  const Icon = current?.kind === "view" ? Eye : Table2
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <Button
+          variant="outline"
+          size="default"
+          className="hidden max-w-56 gap-1.5 px-2.5 text-xs md:inline-flex"
+          aria-label="Choose table"
+        >
+          <Icon className="size-3.5 shrink-0 text-primary" />
+          <span className="truncate">{current?.name ?? "Tables"}</span>
+          <ChevronDown className="size-3.5 shrink-0 text-muted-foreground" />
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent
+        align="end"
+        side="bottom"
+        sideOffset={7}
+        collisionPadding={8}
+        className="flex h-[min(24rem,70vh)] w-64 flex-col p-0"
+      >
+        <TableListBody
+          className="min-h-0 flex-1"
+          tables={tables}
+          selected={selected}
+          onSelect={(name) => {
+            setOpen(false)
+            onSelect(name)
+          }}
+        />
+      </PopoverContent>
+    </Popover>
+  )
+}
+
+const tablesCollapsedStorageKey = "kiln:database-tables-collapsed"
+
+function useStoredFlag(key: string) {
+  const [value, setValue] = React.useState(() => {
+    const stored = Result.try(() => window.localStorage.getItem(key))
+    return Result.isSuccess(stored) && stored.success === "true"
+  })
+  const update = React.useCallback(
+    (next: boolean) => {
+      setValue(next)
+      Result.try(() => window.localStorage.setItem(key, String(next)))
+    },
+    [key]
+  )
+  return [value, update] as const
+}
+
+function TablesRevealButton({ onClick }: { onClick: () => void }) {
+  return (
+    <EditorTooltip content="Show tables">
+      <Button
+        variant="ghost"
+        size="icon-sm"
+        className="hidden shrink-0 text-primary md:inline-flex"
+        aria-label="Show tables"
+        onClick={onClick}
+      >
+        <PanelLeftOpen className="size-[18px]" />
+      </Button>
+    </EditorTooltip>
+  )
+}
+
 function MobileTablePicker({
   onSelect,
   tables,
@@ -730,18 +879,16 @@ function TableListSection({
 const TableView = React.memo(function TableView({
   editStore,
   liveServer,
-  onViewChange,
+  onRevealTables,
   source,
   table,
-  view,
   writable,
 }: {
   editStore: DatabaseEditStore
   liveServer: boolean
-  onViewChange: (view: DatabaseView) => void
+  onRevealTables: (() => void) | null
   source: DatabaseSource
   table: DatabaseTable
-  view: DatabaseView
   writable: boolean
 }) {
   const [offset, setOffset] = React.useState(0)
@@ -775,49 +922,62 @@ const TableView = React.memo(function TableView({
     pageStore.getError,
     pageStore.getError
   )
-  // Rows come from the page store, which uses the same columns in schema
-  // order, so the grid never waits on or re-renders for row data here.
+  const [hiddenColumns, setHiddenColumns] = React.useState<ReadonlySet<string>>(
+    () => new Set()
+  )
+  // Rows come from the page store in schema order; hidden columns are skipped
+  // by pointing each visible column at its value's original position.
   const columns = React.useMemo<Array<DatabaseGridColumn>>(
     () =>
-      table.columns.map((column) => ({
-        name: column.name,
-        primaryKey: column.primaryKey > 0,
-        readOnly: column.generated,
-        type: column.type || null,
-      })),
-    [table.columns]
+      table.columns.flatMap((column, sourceIndex) =>
+        hiddenColumns.has(column.name)
+          ? []
+          : [
+              {
+                name: column.name,
+                primaryKey: column.primaryKey > 0,
+                readOnly: column.generated,
+                sourceIndex,
+                type: column.type || null,
+              },
+            ]
+      ),
+    [hiddenColumns, table.columns]
   )
 
   return (
     <>
-      <div className="flex h-10 shrink-0 items-center gap-2 border-b border-border/70 px-2">
-        <ViewTabs view={view} onViewChange={onViewChange} />
-        {view === "data" ? (
-          <>
-            <label className="ml-1 flex h-7 min-w-0 flex-1 items-center gap-1.5 border border-input/80 bg-input/15 px-2 focus-within:border-primary/45 sm:max-w-64">
-              <Search className="size-3.5 shrink-0 text-muted-foreground" />
-              <input
-                value={searchText}
-                placeholder={`Search ${table.name}`}
-                aria-label={`Search ${table.name}`}
-                className="h-full min-w-0 flex-1 bg-transparent text-xs outline-none placeholder:text-muted-foreground/70"
-                onChange={(event) => setSearchText(event.target.value)}
-              />
-            </label>
-            <div className="ml-auto flex shrink-0 items-center gap-1">
-              <FetchingIndicator queryKey={rowsQueryKey} />
-              {editable ? (
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => editStore.insertRow()}
-                >
-                  <Plus /> Row
-                </Button>
-              ) : null}
-            </div>
-          </>
+      <div className="flex h-10 shrink-0 items-center gap-1.5 border-b border-border/70 px-2">
+        {onRevealTables ? (
+          <TablesRevealButton onClick={onRevealTables} />
         ) : null}
+        {editable ? (
+          <Button
+            size="sm"
+            className="shrink-0 shadow-none"
+            onClick={() => editStore.insertRow()}
+          >
+            <Plus /> Insert Row
+          </Button>
+        ) : null}
+        <label className="flex h-7 min-w-0 flex-1 items-center gap-1.5 border border-input/80 bg-input/15 px-2 focus-within:border-primary/45 sm:max-w-64">
+          <Search className="size-3.5 shrink-0 text-muted-foreground" />
+          <input
+            value={searchText}
+            placeholder={`Search ${table.name}`}
+            aria-label={`Search ${table.name}`}
+            className="h-full min-w-0 flex-1 bg-transparent text-xs outline-none placeholder:text-muted-foreground/70"
+            onChange={(event) => setSearchText(event.target.value)}
+          />
+        </label>
+        <ColumnVisibilityMenu
+          columns={table.columns}
+          hidden={hiddenColumns}
+          onHiddenChange={setHiddenColumns}
+        />
+        <div className="ml-auto flex shrink-0 items-center gap-1">
+          <FetchingIndicator queryKey={rowsQueryKey} />
+        </div>
       </div>
 
       <RowsQuerySync
@@ -829,9 +989,7 @@ const TableView = React.memo(function TableView({
         source={source}
         table={table.name}
       />
-      {view === "structure" ? (
-        <TableStructure table={table} />
-      ) : status === "error" ? (
+      {status === "error" ? (
         <DatabaseUnavailable message={error ?? "Could not read rows"} />
       ) : status === "success" ? (
         <DatabaseGrid
@@ -851,28 +1009,26 @@ const TableView = React.memo(function TableView({
         </div>
       )}
 
-      {view === "data" ? (
-        <TableFooter
-          editStore={editStore}
-          editable={editable}
-          liveServer={liveServer}
-          offset={offset}
-          pageStore={pageStore}
-          readOnlyReason={
-            !writable
-              ? null
-              : table.kind === "view"
-                ? "Views are read-only"
-                : table.rowIdentity === null
-                  ? "No primary key; read-only"
-                  : null
-          }
-          rowsQueryKey={rowsQueryKey}
-          source={source}
-          table={table}
-          onOffsetChange={setOffset}
-        />
-      ) : null}
+      <TableFooter
+        editStore={editStore}
+        editable={editable}
+        liveServer={liveServer}
+        offset={offset}
+        pageStore={pageStore}
+        readOnlyReason={
+          !writable
+            ? null
+            : table.kind === "view"
+              ? "Views are read-only"
+              : table.rowIdentity === null
+                ? "No primary key; read-only"
+                : null
+        }
+        rowsQueryKey={rowsQueryKey}
+        source={source}
+        table={table}
+        onOffsetChange={setOffset}
+      />
     </>
   )
 })
@@ -946,40 +1102,132 @@ function FetchingIndicator({ queryKey }: { queryKey: ReadonlyArray<unknown> }) {
   ) : null
 }
 
-const ViewTabs = React.memo(function ViewTabs({
-  onViewChange,
-  view,
+function ColumnVisibilityMenu({
+  columns,
+  hidden,
+  onHiddenChange,
 }: {
-  onViewChange: (view: DatabaseView) => void
-  view: DatabaseView
+  columns: ReadonlyArray<DatabaseTable["columns"][number]>
+  hidden: ReadonlySet<string>
+  onHiddenChange: (hidden: ReadonlySet<string>) => void
 }) {
-  const tabs = [
-    { icon: Rows3, label: "Data", value: "data" },
-    { icon: TableProperties, label: "Structure", value: "structure" },
-  ] as const
+  const visibleCount = columns.length - hidden.size
+  function toggle(name: string) {
+    const next = new Set(hidden)
+    if (next.has(name)) next.delete(name)
+    else next.add(name)
+    onHiddenChange(next)
+  }
   return (
-    <div role="tablist" className="flex shrink-0 items-center gap-0.5">
-      {tabs.map(({ icon: Icon, label, value }) => (
-        <button
-          key={value}
-          type="button"
-          role="tab"
-          aria-selected={view === value}
-          className={cn(
-            "flex h-7 items-center gap-1.5 px-2 text-xs font-medium outline-none hover:bg-accent/45 focus-visible:bg-accent/55",
-            view === value
-              ? "bg-accent/60 text-foreground"
-              : "text-muted-foreground"
-          )}
-          onClick={() => onViewChange(value)}
-        >
-          <Icon className="size-3.5" />
-          {label}
-        </button>
-      ))}
-    </div>
+    <Popover>
+      <EditorTooltip
+        content={
+          hidden.size > 0
+            ? `${visibleCount} of ${columns.length} columns shown`
+            : "Choose columns"
+        }
+      >
+        <PopoverTrigger asChild>
+          <Button
+            variant={hidden.size > 0 ? "secondary" : "ghost"}
+            size="icon-sm"
+            className={cn(
+              "relative shrink-0",
+              hidden.size > 0 && "text-primary"
+            )}
+            aria-label="Choose columns"
+          >
+            <Funnel className="size-4" />
+          </Button>
+        </PopoverTrigger>
+      </EditorTooltip>
+      <PopoverContent
+        align="start"
+        side="bottom"
+        sideOffset={7}
+        collisionPadding={8}
+        className="flex max-h-[min(26rem,70vh)] w-60 flex-col p-1"
+      >
+        <div className="flex items-center justify-between px-2 pt-1 pb-1.5">
+          <p className="type-technical-label text-muted-foreground">Columns</p>
+          <button
+            type="button"
+            className="text-xs text-primary outline-none hover:underline focus-visible:underline disabled:pointer-events-none disabled:opacity-40"
+            disabled={hidden.size === 0}
+            onClick={() => onHiddenChange(new Set())}
+          >
+            Show all
+          </button>
+        </div>
+        <div className="min-h-0 overflow-y-auto">
+          {columns.map((column) => {
+            const shown = !hidden.has(column.name)
+            // Keep at least one column visible.
+            const locked = shown && visibleCount === 1
+            return (
+              <button
+                key={column.name}
+                type="button"
+                role="menuitemcheckbox"
+                aria-checked={shown}
+                disabled={locked}
+                className="flex h-8 w-full items-center gap-2 px-2 text-left text-xs outline-none hover:bg-popover-accent/75 focus-visible:bg-popover-accent disabled:opacity-50"
+                onClick={() => toggle(column.name)}
+              >
+                <span
+                  className={cn(
+                    "grid size-4 shrink-0 place-items-center border",
+                    shown
+                      ? "border-primary bg-primary text-primary-foreground"
+                      : "border-input"
+                  )}
+                >
+                  {shown ? <Check className="size-3" /> : null}
+                </span>
+                <span className="min-w-0 flex-1 truncate">{column.name}</span>
+                <span className="type-code truncate text-[0.6875rem] text-muted-foreground uppercase">
+                  {column.type}
+                </span>
+              </button>
+            )
+          })}
+        </div>
+      </PopoverContent>
+    </Popover>
   )
-})
+}
+
+function TableStructureButton({ table }: { table: DatabaseTable }) {
+  const [open, setOpen] = React.useState(false)
+  return (
+    <>
+      <Button
+        variant="ghost"
+        size="sm"
+        className="shrink-0"
+        onClick={() => setOpen(true)}
+      >
+        <TableProperties /> Structure
+      </Button>
+      <Dialog open={open} onOpenChange={setOpen}>
+        <DialogContent className="flex max-h-[80vh] flex-col gap-0 p-0 sm:max-w-3xl">
+          <DialogHeader className="border-b border-border px-4 py-3">
+            <DialogTitle className="flex items-center gap-2">
+              <TableProperties className="size-4 text-primary" />
+              {table.name}
+            </DialogTitle>
+            <DialogDescription>
+              {table.kind === "view" ? "View" : "Table"} structure ·{" "}
+              {table.columns.length}{" "}
+              {table.columns.length === 1 ? "column" : "columns"}
+            </DialogDescription>
+          </DialogHeader>
+          <TableStructure table={table} />
+        </DialogContent>
+      </Dialog>
+    </>
+  )
+}
 
 function TableFooter({
   editStore,
@@ -1146,6 +1394,9 @@ function TableFooter({
           </Button>
         </div>
       ) : null}
+      <div className={cn("flex items-center", pending === 0 && "ml-auto")}>
+        <TableStructureButton table={table} />
+      </div>
     </div>
   )
 }
@@ -1206,12 +1457,14 @@ function TableStructure({ table }: { table: DatabaseTable }) {
 }
 
 function SqlConsole({
+  onRevealTables,
   onSqlChange,
   source,
   sql,
   tables,
   writable,
 }: {
+  onRevealTables: (() => void) | null
   onSqlChange: (sql: string) => void
   source: DatabaseSource
   sql: string
@@ -1244,6 +1497,9 @@ function SqlConsole({
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="flex h-10 shrink-0 items-center gap-2 border-b border-border/70 px-2">
+        {onRevealTables ? (
+          <TablesRevealButton onClick={onRevealTables} />
+        ) : null}
         <span className="flex items-center gap-1.5 px-1 text-xs font-medium">
           <Code2 className="size-3.5 text-primary" /> Query
         </span>
