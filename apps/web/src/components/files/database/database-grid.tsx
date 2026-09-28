@@ -209,11 +209,16 @@ export const DatabaseGrid = React.memo(function DatabaseGrid({
   widthsRef.current = widths
   const totalWidth =
     GUTTER_WIDTH + widths.reduce((sum, width) => sum + width, 0)
+  // The last column takes up any room left of the viewport so the grid never
+  // ends in an empty filler column.
   const cellStyles = React.useMemo(
     () =>
-      columns.map((_, index) => ({
-        width: `var(--db-col-${index})`,
-      })),
+      columns.map(
+        (_, index): React.CSSProperties => ({
+          flexGrow: index === columns.length - 1 ? 1 : undefined,
+          width: `var(--db-col-${index})`,
+        })
+      ),
     [columns]
   )
   const canvasStyle = React.useMemo(() => {
@@ -562,8 +567,12 @@ const GridHeader = React.memo(function GridHeader({
     event.preventDefault()
     event.stopPropagation()
     const startX = event.clientX
-    const startWidth = widthsRef.current[index] ?? 120
     const target = event.currentTarget as HTMLElement
+    // Measured, since a stretched last column is wider than its set width.
+    const startWidth =
+      target.parentElement?.getBoundingClientRect().width ??
+      widthsRef.current[index] ??
+      120
     target.setPointerCapture(event.pointerId)
     const move = (moveEvent: PointerEvent) =>
       onResize(index, startWidth + moveEvent.clientX - startX)
@@ -642,7 +651,11 @@ const GridHeader = React.memo(function GridHeader({
               role="separator"
               aria-orientation="vertical"
               aria-label={`Resize ${column.name}`}
-              className="absolute inset-y-0 -right-1 z-10 w-2 cursor-col-resize touch-none after:absolute after:inset-y-1.5 after:left-[3px] after:w-0.5 after:bg-primary/60 after:opacity-0 after:transition-opacity hover:after:opacity-100"
+              className={cn(
+                "absolute inset-y-0 z-10 w-2 cursor-col-resize touch-none after:absolute after:inset-y-1.5 after:left-[3px] after:w-0.5 after:bg-primary/60 after:opacity-0 after:transition-opacity hover:after:opacity-100",
+                // The last grip stays inside the grid so it adds no overflow.
+                index === columns.length - 1 ? "right-0" : "-right-1"
+              )}
               onPointerDown={(event) => startResize(index, event)}
             />
           </div>
@@ -829,6 +842,7 @@ const SelectionOverlay = React.memo(function SelectionOverlay({
   const left = columnLeft(widthsRef.current, active.column)
   const width = widthsRef.current[active.column] ?? 0
   const top = HEADER_HEIGHT + active.row * ROW_HEIGHT
+  const stretched = isLastColumn(widthsRef.current, active.column)
   return (
     <>
       <div
@@ -843,7 +857,7 @@ const SelectionOverlay = React.memo(function SelectionOverlay({
           height: ROW_HEIGHT,
           left,
           top: top - 1,
-          width: width + 1,
+          ...(stretched ? { right: 0 } : { width: width + 1 }),
         }}
       />
     </>
@@ -930,6 +944,7 @@ function ActiveCellEditor({
   const lines = Math.min(text.split("\n").length, 8)
   const left = columnLeft(widthsRef.current, position.column)
   const width = Math.max(widthsRef.current[position.column] ?? 0, 220)
+  const stretched = isLastColumn(widthsRef.current, position.column)
   const value = () => parseEditedText(text, current, column ?? undefined)
 
   return (
@@ -944,7 +959,7 @@ function ActiveCellEditor({
         left,
         minHeight: ROW_HEIGHT,
         top: HEADER_HEIGHT + position.row * ROW_HEIGHT - 1,
-        width,
+        ...(stretched ? { minWidth: 220, right: 0 } : { width }),
       }}
       onChange={(event) => setText(event.target.value)}
       onBlur={() => {
@@ -1085,6 +1100,11 @@ function columnLeft(widths: ReadonlyArray<number>, column: number) {
   let left = GUTTER_WIDTH
   for (let index = 0; index < column; index += 1) left += widths[index] ?? 0
   return left
+}
+
+// The last column stretches to fill the grid, so overlays anchor to its edge.
+function isLastColumn(widths: ReadonlyArray<number>, column: number) {
+  return column === widths.length - 1
 }
 
 function clamp(value: number, min: number, max: number) {
