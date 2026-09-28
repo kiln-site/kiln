@@ -651,7 +651,7 @@ function ColumnTooltip({ column }: { column: DatabaseGridColumn }) {
 // Alternate rows get a faint lift. It is an opaque mix so the sticky row
 // number gutter can share it without content showing through.
 const stripedRowClassName =
-  "bg-[color-mix(in_oklch,var(--card),var(--foreground)_2.5%)]"
+  "bg-[color-mix(in_oklch,var(--card),var(--foreground)_4.5%)]"
 
 const GridRow = React.memo(function GridRow({
   cellStyles,
