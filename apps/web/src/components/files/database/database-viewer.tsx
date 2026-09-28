@@ -197,7 +197,7 @@ const noTables: ReadonlyArray<DatabaseTable> = []
 function DatabaseMetaLabel({ source }: { source: DatabaseSource }) {
   const meta = useQuery({ ...overviewQueryOptions(source), select: selectMeta })
   return (
-    <p className="type-meta mt-1 truncate px-2 pb-0.5 font-mono text-[0.6875rem] text-muted-foreground/75">
+    <p className="type-meta min-w-0 truncate px-2 font-mono text-[0.6875rem] text-muted-foreground/75">
       {meta.data ?? ""}
     </p>
   )
@@ -451,7 +451,7 @@ const DatabaseTableList = React.memo(function DatabaseTableList({
           </p>
         ) : null}
       </nav>
-      <div className="shrink-0 border-t border-border/70 px-1.5 pt-1 pb-1.5">
+      <div className="flex min-h-10 shrink-0 items-center border-t border-border px-1.5 py-1">
         <DatabaseMetaLabel source={source} />
       </div>
       {/* Same edge as the file tree: a hairline the resize handle overlaps. */}
