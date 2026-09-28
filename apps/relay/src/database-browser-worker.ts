@@ -9,6 +9,7 @@ import { Result } from "effect"
 
 import {
   DatabaseBrowserError,
+  jobFromControl,
   openSqliteDatabase,
   sqliteMutate,
   sqliteOverview,
@@ -17,49 +18,50 @@ import {
 } from "./database-browser-sqlite.js"
 
 export interface DatabaseWorkerRequest {
-  id: number
+  // Shared with the Relay; see database-browser-control.ts.
+  control: Int32Array
   path: string
   readOnly: boolean
   request: DatabaseReadRequest | DatabaseWriteRequest
 }
 
 export type DatabaseWorkerResponse =
-  | { id: number; ok: true; result: unknown }
-  | { code: string; id: number; message: string; ok: false }
+  | { ok: true; result: unknown }
+  | { code: string; message: string; ok: false }
 
 // SQLite calls are synchronous, so they run here instead of blocking the
-// Relay event loop. The parent terminates this worker when a query overruns.
+// Relay event loop. A worker runs one job at a time and always answers, even
+// after the Relay cancels it, so the Relay knows when it is free again.
 parentPort?.on("message", (message: DatabaseWorkerRequest) => {
   parentPort?.postMessage(handle(message))
 })
 
 function handle({
-  id,
+  control,
   path,
   readOnly,
   request,
 }: DatabaseWorkerRequest): DatabaseWorkerResponse {
-  const outcome = Result.try(() =>
-    withDatabase(path, readOnly, (database) => {
+  const job = jobFromControl(control)
+  const outcome = Result.try(() => {
+    job.checkpoint()
+    return withDatabase(path, readOnly, (database) => {
       switch (request.action) {
         case "overview":
           return sqliteOverview(database)
         case "rows":
-          return sqliteRows(database, request)
+          return sqliteRows(database, request, job)
         case "query":
-          return sqliteQuery(database, request)
+          return sqliteQuery(database, request, { job, writable: !readOnly })
         case "mutate":
-          return sqliteMutate(database, request)
+          return sqliteMutate(database, request, job)
       }
     })
-  )
-  if (Result.isSuccess(outcome)) {
-    return { id, ok: true, result: outcome.success }
-  }
+  })
+  if (Result.isSuccess(outcome)) return { ok: true, result: outcome.success }
   const error = outcome.failure
   return {
     code: error instanceof DatabaseBrowserError ? error.code : "sqlite_error",
-    id,
     message: sqliteErrorMessage(error),
     ok: false,
   }

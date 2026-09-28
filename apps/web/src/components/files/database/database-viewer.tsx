@@ -1316,9 +1316,13 @@ function TableFooter({
   )
   const queryClient = useQueryClient()
   const save = useMutation({
-    mutationFn: () => source.mutate(table.name, editStore.toChanges()),
+    mutationFn: () => {
+      editStore.setLocked(true)
+      return source.mutate(table.name, editStore.toChanges())
+    },
     onSuccess: async () => {
       editStore.discard()
+      editStore.setLocked(false)
       showToast({
         message: `Saved changes to ${table.name}`,
         type: "success",
@@ -1327,7 +1331,10 @@ function TableFooter({
       // structurally shared, so just the edited rows re-render.
       await queryClient.invalidateQueries({ queryKey: rowsQueryKey })
     },
-    onError: (error) => showToast({ message: error.message, type: "error" }),
+    onError: (error) => {
+      editStore.setLocked(false)
+      showToast({ message: error.message, type: "error" })
+    },
   })
 
   React.useEffect(() => {

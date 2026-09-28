@@ -8,9 +8,14 @@ import type {
   RelayFileDatabaseReadInput,
   RelayFileDatabaseWriteInput,
 } from "@workspace/contracts"
-import { Effect } from "effect"
+import { Deferred, Effect, Pool, Scope } from "effect"
 
 import type { RelayInstanceConfig } from "./config.js"
+import {
+  cancelJob,
+  createJobControl,
+  isJobCancelled,
+} from "./database-browser-control.js"
 import type {
   DatabaseWorkerRequest,
   DatabaseWorkerResponse,
@@ -19,8 +24,8 @@ import { RelayDatabaseBrowserError } from "./effect/errors.js"
 import { promiseEffect } from "./effect/promise.js"
 import type { FilesystemDriver } from "./files.js"
 
-const WORKER_TIMEOUT_MS = 20_000
-const WORKER_IDLE_MS = 30_000
+const WORKER_TIMEOUT = "20 seconds"
+const WORKER_IDLE = "30 seconds"
 const MAX_ACTIVE_WORKERS = 4
 const SQLITE_HEADER = Buffer.from("SQLite format 3\0", "latin1")
 const SQLITE_SIDECARS = ["-journal", "-wal", "-shm"] as const
@@ -64,9 +69,7 @@ export class DatabaseBrowser {
           })
         )
       }
-      const result = yield* databaseOperation("execute", () =>
-        this.#workers.run({ path, readOnly, request })
-      )
+      const result = yield* this.#workers.run({ path, readOnly, request })
       if (request.action !== "overview") return result
       const metadata = yield* databaseOperation("stat", () => stat(path))
       return {
@@ -157,95 +160,111 @@ function databaseError(code: string, reason: string) {
   return RelayDatabaseBrowserError.make({ code, reason })
 }
 
-type PoolRequest = Omit<DatabaseWorkerRequest, "id">
+type PoolRequest = Omit<DatabaseWorkerRequest, "control">
 
+// Workers come from an Effect Pool: at most MAX_ACTIVE_WORKERS run at once,
+// further requests wait for one, and idle workers are kept briefly for reuse.
 class DatabaseWorkerPool {
-  #active = 0
-  #idle: { timer: NodeJS.Timeout; worker: Worker } | null = null
-  #nextId = 0
-  readonly #queue: Array<() => void> = []
+  // The pool lives as long as the Relay, so its scope is never closed.
+  readonly #pool = Effect.runSync(
+    Effect.cached(
+      Pool.makeWithTTL({
+        acquire: Effect.acquireRelease(
+          Effect.sync(() => {
+            const worker = spawnWorker()
+            // A parked worker must not keep the process alive on its own.
+            worker.unref()
+            return worker
+          }),
+          (worker) =>
+            promiseEffect(() => worker.terminate()).pipe(Effect.ignore)
+        ),
+        min: 0,
+        max: MAX_ACTIVE_WORKERS,
+        timeToLive: WORKER_IDLE,
+        timeToLiveStrategy: "usage",
+      }).pipe(Scope.provide(Scope.makeUnsafe()))
+    )
+  )
 
   run(request: PoolRequest) {
-    return new Promise<unknown>((resolve, reject) => {
-      const start = () => {
-        this.#active += 1
-        const worker = this.#takeWorker()
-        const id = ++this.#nextId
-        let settled = false
-        const finish = (reuse: boolean) => {
-          settled = true
-          clearTimeout(timer)
-          worker.off("message", onMessage)
-          worker.off("error", onError)
-          worker.off("exit", onExit)
-          if (reuse) this.#park(worker)
-          else void worker.terminate()
-          this.#active -= 1
-          this.#queue.shift()?.()
-        }
-        const onMessage = (message: DatabaseWorkerResponse) => {
-          if (settled || message.id !== id) return
-          finish(true)
-          if (message.ok) resolve(message.result)
-          else reject(databaseError(message.code, message.message))
-        }
-        const onError = (error: Error) => {
-          if (settled) return
-          finish(false)
-          reject(error)
-        }
-        const onExit = () => {
-          if (settled) return
-          finish(false)
-          reject(databaseError("worker_exit", "The database worker stopped"))
-        }
-        // Terminating stops JavaScript between rows; a single long SQLite
-        // step finishes on its own thread without holding up the Relay.
-        const timer = setTimeout(() => {
-          if (settled) return
-          finish(false)
-          reject(
-            databaseError(
-              "timeout",
-              `The database operation took longer than ${WORKER_TIMEOUT_MS / 1000}s and was stopped`
-            )
+    const pool = this.#pool
+    return Effect.gen(function* () {
+      const control = createJobControl()
+      const reply = yield* Deferred.make<unknown, RelayDatabaseBrowserError>()
+      // The job keeps its worker until the worker answers, even after the
+      // caller stops waiting, so a busy worker is never counted as free.
+      yield* Effect.gen(function* () {
+        const workers = yield* pool
+        const worker = yield* Pool.get(workers)
+        if (isJobCancelled(control)) return undefined
+        const response = yield* exchange(worker, { ...request, control }).pipe(
+          Effect.tapError(() => Pool.invalidate(workers, worker))
+        )
+        if (!response.ok) {
+          return yield* Effect.fail(
+            databaseError(response.code, response.message)
           )
-        }, WORKER_TIMEOUT_MS)
-        worker.on("message", onMessage)
-        worker.once("error", onError)
-        worker.once("exit", onExit)
-        worker.postMessage({ ...request, id } satisfies DatabaseWorkerRequest)
-      }
-      if (this.#active < MAX_ACTIVE_WORKERS) start()
-      else this.#queue.push(start)
+        }
+        return response.result
+      }).pipe(
+        Effect.scoped,
+        Effect.exit,
+        Effect.flatMap((exit) => Deferred.done(reply, exit)),
+        Effect.forkDetach
+      )
+      return yield* Deferred.await(reply).pipe(
+        Effect.timeoutOrElse({
+          duration: WORKER_TIMEOUT,
+          // A job that already started committing is left to finish, so the
+          // caller learns whether the write landed.
+          orElse: () =>
+            cancelJob(control)
+              ? Effect.fail(
+                  databaseError(
+                    "timeout",
+                    `The database operation took longer than ${WORKER_TIMEOUT} and was cancelled. Nothing was saved.`
+                  )
+                )
+              : Deferred.await(reply),
+        }),
+        Effect.onInterrupt(() => Effect.sync(() => cancelJob(control)))
+      )
     })
   }
+}
 
-  #takeWorker() {
-    if (this.#idle) {
-      const { timer, worker } = this.#idle
-      clearTimeout(timer)
-      this.#idle = null
-      worker.ref()
-      return worker
+function exchange(worker: Worker, message: DatabaseWorkerRequest) {
+  return Effect.callback<DatabaseWorkerResponse, RelayDatabaseBrowserError>(
+    (resume) => {
+      const settle = (
+        effect: Effect.Effect<DatabaseWorkerResponse, RelayDatabaseBrowserError>
+      ) => {
+        detach()
+        resume(effect)
+      }
+      const onMessage = (response: DatabaseWorkerResponse) =>
+        settle(Effect.succeed(response))
+      const onError = (error: Error) =>
+        settle(Effect.fail(databaseError("worker_failed", error.message)))
+      const onExit = () =>
+        settle(
+          Effect.fail(
+            databaseError("worker_exit", "The database worker stopped")
+          )
+        )
+      const detach = () => {
+        worker.off("message", onMessage)
+        worker.off("error", onError)
+        worker.off("exit", onExit)
+      }
+      worker.on("message", onMessage)
+      worker.on("error", onError)
+      worker.on("exit", onExit)
+      worker.postMessage(message)
+      return Effect.sync(detach)
     }
-    return spawnWorker()
-  }
-
-  #park(worker: Worker) {
-    if (this.#idle) {
-      void worker.terminate()
-      return
-    }
-    worker.unref()
-    const timer = setTimeout(() => {
-      if (this.#idle?.worker !== worker) return
-      this.#idle = null
-      void worker.terminate()
-    }, WORKER_IDLE_MS)
-    timer.unref()
-    this.#idle = { timer, worker }
-  }
+  )
 }
 
 function spawnWorker() {

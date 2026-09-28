@@ -4,7 +4,9 @@ import { join } from "node:path"
 
 import { assert, describe, it } from "@effect/vitest"
 
+import { cancelJob, createJobControl } from "./database-browser-control.js"
 import {
+  jobFromControl,
   openSqliteDatabase,
   splitSqlStatements,
   sqliteMutate,
@@ -51,25 +53,35 @@ describe("SQLite database browser", () => {
     withDatabase((path) => {
       const database = openSqliteDatabase(path, false)
       try {
-        assert.throws(() =>
-          sqliteMutate(database, {
-            action: "mutate",
+        const [alex, steve] =
+          sqliteRows(database, {
+            action: "rows",
+            limit: 10,
+            offset: 0,
             table: "players",
-            changes: [
-              {
-                kind: "update",
-                key: { uuid: "a" },
-                original: { name: "Alex" },
-                values: { name: "Alexa" },
-              },
-              {
-                kind: "update",
-                key: { uuid: "b" },
-                original: { name: "Herobrine" },
-                values: { name: "Notch" },
-              },
-            ],
-          })
+          }).keys ?? []
+        assert.deepStrictEqual(alex, { rowid: 1, uuid: "a" })
+        assert.throws(
+          () =>
+            sqliteMutate(database, {
+              action: "mutate",
+              table: "players",
+              changes: [
+                {
+                  kind: "update",
+                  key: alex ?? {},
+                  original: { name: "Alex" },
+                  values: { name: "Alexa" },
+                },
+                {
+                  kind: "update",
+                  key: steve ?? {},
+                  original: { name: "Herobrine" },
+                  values: { name: "Notch" },
+                },
+              ],
+            }),
+          /no longer matches/u
         )
         const rows = sqliteRows(database, {
           action: "rows",
@@ -113,6 +125,75 @@ describe("SQLite database browser", () => {
           }).total,
           1
         )
+      } finally {
+        database.close()
+      }
+    })
+  })
+
+  it("changes one row even when primary keys repeat as NULL", () => {
+    withDatabase((path) => {
+      const database = openSqliteDatabase(path, false)
+      try {
+        database.exec(
+          "INSERT INTO players VALUES (NULL, 'x', 1), (NULL, 'y', 2)"
+        )
+        const page = sqliteRows(database, {
+          action: "rows",
+          limit: 10,
+          offset: 0,
+          table: "players",
+        })
+        const nullKey = page.keys?.find((key) => key.uuid === null)
+        assert.deepStrictEqual(
+          sqliteMutate(database, {
+            action: "mutate",
+            table: "players",
+            changes: [{ kind: "delete", key: nullKey ?? {} }],
+          }),
+          { applied: 1 }
+        )
+      } finally {
+        database.close()
+      }
+    })
+  })
+
+  it("never commits a cancelled job", () => {
+    withDatabase((path) => {
+      const database = openSqliteDatabase(path, false)
+      try {
+        const control = createJobControl()
+        const job = jobFromControl(control)
+        // Cancel as the Relay would on timeout, after the work but before
+        // the commit claim.
+        const cancelMidway = {
+          checkpoint: job.checkpoint,
+          claimCommit() {
+            cancelJob(control)
+            job.claimCommit()
+          },
+        }
+        assert.throws(
+          () =>
+            sqliteQuery(
+              database,
+              {
+                action: "query",
+                maxRows: 10,
+                sql: "UPDATE players SET balance = 0; DELETE FROM log",
+              },
+              { job: cancelMidway, writable: true }
+            ),
+          /cancelled/u
+        )
+        const read = (sql: string) =>
+          sqliteQuery(database, { action: "query", maxRows: 10, sql }).rows
+        assert.deepStrictEqual(
+          read("SELECT balance FROM players ORDER BY uuid"),
+          [[10.5], [3]]
+        )
+        assert.deepStrictEqual(read("SELECT count(*) FROM log"), [[2]])
       } finally {
         database.close()
       }

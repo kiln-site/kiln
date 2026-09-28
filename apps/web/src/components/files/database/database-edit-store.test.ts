@@ -27,11 +27,38 @@ describe("database edit store", () => {
     ])
   })
 
+  it("keeps each edit's original value across refetches", () => {
+    const store = createDatabaseEditStore()
+    store.setCell(row, "balance", 12)
+    // Someone else changes the balance to 11 and the page refetches.
+    const refetched = { ...row, original: { ...row.original, balance: 11 } }
+    store.setCell(refetched, "name", "Alexa")
+
+    expect(store.toChanges()).toEqual([
+      {
+        kind: "update",
+        key: { uuid: "a" },
+        original: { balance: 10, name: "Alex" },
+        values: { balance: 12, name: "Alexa" },
+      },
+    ])
+  })
+
+  it("holds staging while a save is in flight", () => {
+    const store = createDatabaseEditStore()
+    store.setLocked(true)
+    store.setCell(row, "name", "Alexa")
+    store.toggleDeleted(row)
+
+    expect(store.insertRow()).toBeNull()
+    expect(store.getPendingCount()).toBe(0)
+  })
+
   it("sends deletes instead of edits for deleted rows", () => {
     const store = createDatabaseEditStore()
     store.setCell(row, "name", "Alexa")
     store.toggleDeleted(row)
-    const inserted = store.insertRow()
+    const inserted = store.insertRow() ?? ""
     store.setInsertedCell(inserted, "name", "Steve")
 
     expect(store.toChanges()).toEqual([

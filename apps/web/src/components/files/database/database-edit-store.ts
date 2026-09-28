@@ -14,6 +14,8 @@ export interface DatabaseEditableRow {
 
 interface RowEdit {
   key: DatabaseRowKey
+  // The value each edited column had when it was first edited. A refetch
+  // must not move these, or the save would stop detecting concurrent writes.
   original: Record<string, DatabaseValue>
   values: Record<string, DatabaseValue>
 }
@@ -32,6 +34,9 @@ export function createDatabaseEditStore() {
   let inserted: ReadonlyArray<InsertedRow> = []
   let pendingCount = 0
   let nextInsertId = 0
+  // Set while a save is in flight. The save clears the store when it lands,
+  // so anything staged meanwhile would be lost; staging waits instead.
+  let locked = false
 
   function emit() {
     let count = deleted.size + inserted.length
@@ -54,38 +59,50 @@ export function createDatabaseEditStore() {
       return values && column in values ? values[column] : undefined
     },
     isRowDeleted: (rowId: string) => deleted.has(rowId),
+    isLocked: () => locked,
+    setLocked(next: boolean) {
+      locked = next
+    },
     setCell(row: DatabaseEditableRow, column: string, value: DatabaseValue) {
+      if (locked) return
       const current = edits.get(row.id)
       const values = { ...current?.values }
-      if (valuesEqual(row.original[column] ?? null, value)) {
+      const original = { ...current?.original }
+      if (!(column in original)) original[column] = row.original[column] ?? null
+      if (valuesEqual(original[column] ?? null, value)) {
         delete values[column]
+        delete original[column]
       } else {
         values[column] = value
       }
       edits = new Map(edits)
       if (Object.keys(values).length === 0) edits.delete(row.id)
-      else edits.set(row.id, { key: row.key, original: row.original, values })
+      else edits.set(row.id, { key: row.key, original, values })
       emit()
     },
     toggleDeleted(row: DatabaseEditableRow) {
+      if (locked) return
       deleted = new Map(deleted)
       if (deleted.has(row.id)) deleted.delete(row.id)
       else deleted.set(row.id, row.key)
       emit()
     },
     insertRow() {
+      if (locked) return null
       const id = `new:${nextInsertId++}`
       inserted = [...inserted, { id, values: {} }]
       emit()
       return id
     },
     setInsertedCell(id: string, column: string, value: DatabaseValue) {
+      if (locked) return
       inserted = inserted.map((row) =>
         row.id === id ? { id, values: { ...row.values, [column]: value } } : row
       )
       emit()
     },
     removeInsertedRow(id: string) {
+      if (locked) return
       inserted = inserted.filter((row) => row.id !== id)
       emit()
     },
@@ -106,12 +123,7 @@ export function createDatabaseEditStore() {
         changes.push({
           kind: "update",
           key: edit.key,
-          original: Object.fromEntries(
-            Object.keys(edit.values).map((column) => [
-              column,
-              edit.original[column] ?? null,
-            ])
-          ),
+          original: edit.original,
           values: edit.values,
         })
       }

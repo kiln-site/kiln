@@ -328,6 +328,8 @@ export const DatabaseGrid = React.memo(function DatabaseGrid({
     (initialText: string | null) => {
       const active = selection.getActive()
       if (!active || !canEditCell(model.current, active)) return
+      // Edits wait while a save is in flight; see the edit store's lock.
+      if (model.current.editStore?.isLocked()) return
       selection.setEditing({ initialText })
     },
     [selection]
@@ -360,11 +362,14 @@ export const DatabaseGrid = React.memo(function DatabaseGrid({
   )
 
   const editActiveCell = React.useCallback(() => beginEdit(null), [beginEdit])
+  // Commits the open cell editor, if any; set by the editor while mounted.
+  const flushEditRef = React.useRef<(() => void) | null>(null)
 
   function handlePointerDown(event: React.PointerEvent<HTMLDivElement>) {
     const position = cellFromEvent(event)
     if (!position) return
     if (event.button === 0 || event.button === 2) {
+      flushEditRef.current?.()
       selection.setActive(position)
     }
   }
@@ -372,6 +377,7 @@ export const DatabaseGrid = React.memo(function DatabaseGrid({
   function handleDoubleClick(event: React.MouseEvent<HTMLDivElement>) {
     const position = cellFromEvent(event)
     if (!position) return
+    flushEditRef.current?.()
     selection.setActive(position)
     beginEdit(null)
   }
@@ -516,6 +522,7 @@ export const DatabaseGrid = React.memo(function DatabaseGrid({
             })}
             <SelectionOverlay selection={selection} widthsRef={widthsRef} />
             <CellEditor
+              flushRef={flushEditRef}
               model={model}
               selection={selection}
               widthsRef={widthsRef}
@@ -865,6 +872,7 @@ const SelectionOverlay = React.memo(function SelectionOverlay({
 })
 
 const CellEditor = React.memo(function CellEditor({
+  flushRef,
   model,
   onCancel,
   onCommit,
@@ -872,6 +880,7 @@ const CellEditor = React.memo(function CellEditor({
   selection,
   widthsRef,
 }: {
+  flushRef: React.RefObject<(() => void) | null>
   model: React.RefObject<GridModel>
   onCancel: () => void
   onCommit: (position: GridPosition, value: DatabaseValue) => void
@@ -893,6 +902,7 @@ const CellEditor = React.memo(function CellEditor({
   return (
     <ActiveCellEditor
       key={`${active.row}:${active.column}`}
+      flushRef={flushRef}
       initialText={editing.initialText}
       model={model}
       position={active}
@@ -905,6 +915,7 @@ const CellEditor = React.memo(function CellEditor({
 })
 
 function ActiveCellEditor({
+  flushRef,
   initialText,
   model,
   onCancel,
@@ -913,6 +924,7 @@ function ActiveCellEditor({
   position,
   widthsRef,
 }: {
+  flushRef: React.RefObject<(() => void) | null>
   initialText: string | null
   model: React.RefObject<GridModel>
   onCancel: () => void
@@ -946,6 +958,23 @@ function ActiveCellEditor({
   const width = Math.max(widthsRef.current[position.column] ?? 0, 220)
   const stretched = isLastColumn(widthsRef.current, position.column)
   const value = () => parseEditedText(text, current, column ?? undefined)
+  const commit = () => {
+    if (settled.current) return
+    settled.current = true
+    onCommit(position, value())
+  }
+
+  // Selecting another cell unmounts this editor before it would blur, so the
+  // grid flushes it first instead of dropping the typed value.
+  React.useLayoutEffect(() => {
+    flushRef.current = commit
+  })
+  React.useLayoutEffect(
+    () => () => {
+      flushRef.current = null
+    },
+    [flushRef]
+  )
 
   return (
     <textarea
@@ -962,11 +991,7 @@ function ActiveCellEditor({
         ...(stretched ? { minWidth: 220, right: 0 } : { width }),
       }}
       onChange={(event) => setText(event.target.value)}
-      onBlur={() => {
-        if (settled.current) return
-        settled.current = true
-        onCommit(position, value())
-      }}
+      onBlur={commit}
       onKeyDown={(event) => {
         event.stopPropagation()
         if (event.key === "Escape") {

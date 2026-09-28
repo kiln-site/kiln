@@ -18,8 +18,11 @@ import type {
 } from "@workspace/contracts"
 import { DATABASE_BROWSER_COUNT_CAP } from "@workspace/contracts"
 
+import { claimJobCommit, isJobCancelled } from "./database-browser-control.js"
+
 const BUSY_TIMEOUT_MS = 3_000
 const BLOB_PREVIEW_BYTES = 1_024
+const CANCEL_CHECK_ROWS = 256
 const ROWID_ALIASES = ["rowid", "_rowid_", "oid"] as const
 // Stable sqlite3.h authorizer codes; @types/node 22 does not declare them yet.
 const SQLITE_OK = 0
@@ -39,6 +42,36 @@ export class DatabaseBrowserError extends Error {
   ) {
     super(message)
   }
+}
+
+// The Relay's hold on a running job. Work checks it between steps so a
+// cancelled job stops early, and a commit only happens after claiming it.
+export interface DatabaseJob {
+  checkpoint(): void
+  claimCommit(): void
+}
+
+export const unattendedJob: DatabaseJob = {
+  checkpoint() {},
+  claimCommit() {},
+}
+
+export function jobFromControl(control: Int32Array): DatabaseJob {
+  return {
+    checkpoint() {
+      if (isJobCancelled(control)) throw cancelledError()
+    },
+    claimCommit() {
+      if (!claimJobCommit(control)) throw cancelledError()
+    },
+  }
+}
+
+function cancelledError() {
+  return new DatabaseBrowserError(
+    "cancelled",
+    "The operation was cancelled, so nothing was saved"
+  )
 }
 
 export function openSqliteDatabase(path: string, readOnly: boolean) {
@@ -78,7 +111,8 @@ export function sqliteOverview(
 
 export function sqliteRows(
   database: DatabaseSync,
-  input: DatabaseRowsInput
+  input: DatabaseRowsInput,
+  job: DatabaseJob = unattendedJob
 ): DatabaseRows {
   const table = requireTable(database, input.table)
   const columns = table.columns
@@ -122,28 +156,27 @@ export function sqliteRows(
     input.offset
   ) as unknown as Array<Array<unknown>>
 
+  job.checkpoint()
   const counted = database
     .prepare(`SELECT count(*) AS total FROM (SELECT 1 ${from} LIMIT ?)`)
     .get(...searchParameters, DATABASE_BROWSER_COUNT_CAP + 1)
   const total = Number(counted?.total ?? 0)
 
-  const primaryKey = primaryKeyColumns(columns)
-  const keys: Array<DatabaseRowKey> | null =
-    table.rowIdentity === "rowid"
-      ? raw.map((row) => ({ rowid: encodeValue(row[0], Infinity) }))
-      : table.rowIdentity === "primary-key"
-        ? raw.map((row) =>
-            Object.fromEntries(
-              primaryKey.map((column) => [
-                column.name,
-                encodeValue(
-                  row[columns.indexOf(column) + (rowIdAlias ? 1 : 0)],
-                  Infinity
-                ),
-              ])
-            )
-          )
-        : null
+  const keyColumns = keyGuardColumns(table)
+  const keys: Array<DatabaseRowKey> | null = table.rowIdentity
+    ? raw.map((row) => ({
+        ...(rowIdAlias ? { rowid: encodeValue(row[0], Infinity) } : {}),
+        ...Object.fromEntries(
+          keyColumns.map((column) => [
+            column.name,
+            encodeValue(
+              row[columns.indexOf(column) + (rowIdAlias ? 1 : 0)],
+              Infinity
+            ),
+          ])
+        ),
+      }))
+    : null
 
   return {
     columns: columns.map(({ name, type }) => ({ name, type: type || null })),
@@ -161,42 +194,76 @@ export function sqliteRows(
 
 export function sqliteQuery(
   database: DatabaseSync,
-  input: DatabaseQueryInput
+  input: DatabaseQueryInput,
+  options: { job?: DatabaseJob; writable?: boolean } = {}
 ): DatabaseQueryResult {
+  const job = options.job ?? unattendedJob
   const statements = splitSqlStatements(input.sql)
   if (statements.length === 0) {
     throw new DatabaseBrowserError("empty_query", "The query is empty")
   }
+  if (statements.some((sql) => TRANSACTION_CONTROL.test(sql))) {
+    throw new DatabaseBrowserError(
+      "transaction_control",
+      "Each run is already a single transaction, so BEGIN, COMMIT, and ROLLBACK aren't needed"
+    )
+  }
   const started = performance.now()
-  let changes: number | null = null
-  let result: Omit<DatabaseQueryResult, "changes" | "durationMs"> = {
-    columns: [],
-    rows: [],
-    truncated: false,
-  }
-
-  for (const sql of statements) {
-    const statement = database.prepare(sql)
-    const columns = statement.columns()
-    if (columns.length === 0) {
-      const outcome = statement.run()
-      changes = (changes ?? 0) + Number(outcome.changes)
-      result = { columns: [], rows: [], truncated: false }
-      continue
+  const run = () => {
+    let changes: number | null = null
+    let result: Omit<DatabaseQueryResult, "changes" | "durationMs"> = {
+      columns: [],
+      rows: [],
+      truncated: false,
     }
-    result = readStatement(statement, columns, input.maxRows)
+    for (const sql of statements) {
+      job.checkpoint()
+      const statement = database.prepare(sql)
+      const columns = statement.columns()
+      if (columns.length === 0) {
+        const outcome = statement.run()
+        changes = (changes ?? 0) + Number(outcome.changes)
+        result = { columns: [], rows: [], truncated: false }
+        continue
+      }
+      result = readStatement(statement, columns, input.maxRows, job)
+    }
+    return { ...result, changes }
   }
 
+  // Writes run as one transaction so a cancelled or failed script leaves the
+  // database untouched instead of half applied.
+  const result = options.writable ? inTransaction(database, job, run) : run()
   return {
     ...result,
-    changes,
     durationMs: Math.round((performance.now() - started) * 100) / 100,
   }
 }
 
+const TRANSACTION_CONTROL =
+  /^(?:\s|--[^\n]*|\/\*[\s\S]*?\*\/)*(?:BEGIN|COMMIT|END|ROLLBACK)\b/iu
+
+function inTransaction<TResult>(
+  database: DatabaseSync,
+  job: DatabaseJob,
+  run: () => TResult
+): TResult {
+  database.exec("BEGIN IMMEDIATE")
+  const outcome = Result.try(() => {
+    const result = run()
+    job.claimCommit()
+    database.exec("COMMIT")
+    return result
+  })
+  if (Result.isSuccess(outcome)) return outcome.success
+  if (database.isTransaction) database.exec("ROLLBACK")
+  throw outcome.failure
+}
+
 export function sqliteMutate(
   database: DatabaseSync,
-  input: DatabaseMutateInput
+  input: DatabaseMutateInput,
+  job: DatabaseJob = unattendedJob
 ): DatabaseMutateResult {
   const table = requireTable(database, input.table)
   if (table.kind !== "table" || !table.rowIdentity) {
@@ -209,10 +276,11 @@ export function sqliteMutate(
     table.columns.filter(({ generated }) => !generated).map(({ name }) => name)
   )
 
-  database.exec("BEGIN IMMEDIATE")
-  const outcome = Result.try(() => {
-    let applied = 0
+  // All changes land together or not at all.
+  const applied = inTransaction(database, job, () => {
+    let total = 0
     for (const [index, change] of input.changes.entries()) {
+      job.checkpoint()
       const changed = applyChange(database, table, writable, change)
       if (changed === 0 && change.kind !== "insert") {
         throw new DatabaseBrowserError(
@@ -220,17 +288,17 @@ export function sqliteMutate(
           `Change ${index + 1} no longer matches its row. It was edited or deleted since the table was loaded; refresh and try again.`
         )
       }
-      applied += changed
+      if (changed > 1) {
+        throw new DatabaseBrowserError(
+          "ambiguous_row",
+          `Change ${index + 1} matches more than one row, so nothing was saved.`
+        )
+      }
+      total += changed
     }
-    return applied
+    return total
   })
-  // All changes land together or not at all.
-  if (Result.isFailure(outcome)) {
-    if (database.isTransaction) database.exec("ROLLBACK")
-    throw outcome.failure
-  }
-  database.exec("COMMIT")
-  return { applied: outcome.success }
+  return { applied }
 }
 
 function applyChange(
@@ -304,38 +372,51 @@ function writableEntries(
   return entries
 }
 
+// Rows are addressed by rowid when the table has one; the primary key rides
+// along as a guard so a VACUUM that renumbers rowids fails the change instead
+// of hitting another row. WITHOUT ROWID tables use their (NOT NULL) key.
 function keyCondition(table: DatabaseTable, key: DatabaseRowKey) {
-  if (table.rowIdentity === "rowid") {
-    if (!("rowid" in key)) {
-      throw new DatabaseBrowserError("invalid_key", "Row key is missing rowid")
-    }
-    return {
-      parameters: [decodeValue(key.rowid ?? null)],
-      sql: `${unshadowedRowIdAlias(table.columns)} = ?`,
-    }
-  }
-  const primaryKey = primaryKeyColumns(table.columns)
+  const guards = keyGuardColumns(table)
+  const byRowid = table.rowIdentity === "rowid"
   if (
-    primaryKey.length !== Object.keys(key).length ||
-    primaryKey.some(({ name }) => !(name in key))
+    (byRowid && !("rowid" in key)) ||
+    Object.keys(key).length !== guards.length + (byRowid ? 1 : 0) ||
+    guards.some(({ name }) => !(name in key))
   ) {
     throw new DatabaseBrowserError(
       "invalid_key",
-      "Row key does not match the table's primary key"
+      "Row key does not match the table's row identity"
     )
   }
-  return {
-    parameters: primaryKey.map(({ name }) => decodeValue(key[name] ?? null)),
-    sql: primaryKey
-      .map(({ name }) => `${quoteIdentifier(name)} IS ?`)
-      .join(" AND "),
+  const conditions = guards.map(({ name }) => ({
+    parameter: decodeValue(key[name] ?? null),
+    sql: `${quoteIdentifier(name)} IS ?`,
+  }))
+  if (byRowid) {
+    conditions.unshift({
+      parameter: decodeValue(key.rowid ?? null),
+      sql: `${unshadowedRowIdAlias(table.columns)} = ?`,
+    })
   }
+  return {
+    parameters: conditions.map(({ parameter }) => parameter),
+    sql: conditions.map(({ sql }) => sql).join(" AND "),
+  }
+}
+
+// A primary key column literally named "rowid" would collide with the rowid
+// entry of the key; it already shadows the alias, so it is left out.
+function keyGuardColumns(table: DatabaseTable) {
+  return primaryKeyColumns(table.columns).filter(
+    ({ name }) => table.rowIdentity !== "rowid" || name !== "rowid"
+  )
 }
 
 function readStatement(
   statement: StatementSync,
   columns: ReturnType<StatementSync["columns"]>,
-  maxRows: number
+  maxRows: number,
+  job: DatabaseJob
 ) {
   statement.setReadBigInts(true)
   statement.setReturnArrays(true)
@@ -347,6 +428,7 @@ function readStatement(
       break
     }
     rows.push(row.map((value) => encodeValue(value, BLOB_PREVIEW_BYTES)))
+    if (rows.length % CANCEL_CHECK_ROWS === 0) job.checkpoint()
   }
   return {
     columns: columns.map(({ name, type }) => ({ name, type: type ?? null })),
@@ -399,13 +481,19 @@ function listTables(database: DatabaseSync): Array<DatabaseTable> {
         })
       )
     const kind = entry.type === "view" ? "view" : "table"
+    // Prefer rowid: outside WITHOUT ROWID tables SQLite lets primary key
+    // columns hold NULL, and NULL keys are not unique. The key fallback is
+    // still guarded, since a change that matches several rows is refused.
+    const names = new Set(columns.map(({ name }) => name.toLowerCase()))
+    const hasRowid =
+      entry.wr === 0 && ROWID_ALIASES.some((alias) => !names.has(alias))
     const rowIdentity =
       entry.type !== "table"
         ? null
-        : columns.some(({ primaryKey }) => primaryKey > 0)
-          ? "primary-key"
-          : entry.wr === 0
-            ? "rowid"
+        : hasRowid
+          ? "rowid"
+          : columns.some(({ primaryKey }) => primaryKey > 0)
+            ? "primary-key"
             : null
     return { columns, kind, name: entry.name, rowIdentity, sql: entry.sql }
   })
@@ -426,11 +514,12 @@ function primaryKeyColumns(columns: ReadonlyArray<DatabaseColumn>) {
 }
 
 function defaultOrder(table: DatabaseTable, rowIdAlias: string | null) {
-  if (rowIdAlias) return `ORDER BY ${rowIdAlias}`
-  const primaryKey = primaryKeyColumns(table.columns)
-  return primaryKey.length > 0
-    ? `ORDER BY ${primaryKey.map(({ name }) => quoteIdentifier(name)).join(", ")}`
-    : ""
+  // rowid breaks ties, since NULL primary keys can repeat.
+  const order = primaryKeyColumns(table.columns).map(({ name }) =>
+    quoteIdentifier(name)
+  )
+  if (rowIdAlias) order.push(rowIdAlias)
+  return order.length > 0 ? `ORDER BY ${order.join(", ")}` : ""
 }
 
 function unshadowedRowIdAlias(columns: ReadonlyArray<DatabaseColumn>) {
