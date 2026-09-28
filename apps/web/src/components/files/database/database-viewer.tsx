@@ -1584,11 +1584,6 @@ function SqlConsole({
         }}
       >
         <div className="size-full overflow-hidden">
-          {sql ? null : (
-            <span className="type-code pointer-events-none absolute top-[5px] left-12 z-10 text-[0.8125rem] text-muted-foreground/45">
-              {placeholder}
-            </span>
-          )}
           <React.Suspense
             fallback={
               <div className="grid h-full place-items-center">
@@ -1604,6 +1599,7 @@ function SqlConsole({
               onSearchOpenChange={ignoreSearchOpenChange}
               originalValue=""
               path="query.sql"
+              placeholder={placeholder}
               redactSensitive={false}
               readOnly={false}
               searchOpen={false}

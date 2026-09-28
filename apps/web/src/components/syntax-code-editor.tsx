@@ -39,6 +39,7 @@ import {
   gutter,
   keymap,
   lineNumbers,
+  placeholder as placeholderText,
 } from "@codemirror/view"
 import type { DecorationSet, Panel, ViewUpdate } from "@codemirror/view"
 import { tags } from "@lezer/highlight"
@@ -169,6 +170,9 @@ const kilnEditorTheme = EditorView.theme(
       caretColor: "var(--primary)",
     },
     ".cm-line": { paddingLeft: "16px" },
+    ".cm-placeholder": {
+      color: "color-mix(in hsl, var(--muted-foreground) 45%, transparent)",
+    },
     ".cm-selectionBackground, &.cm-focused .cm-selectionBackground, ::selection":
       {
         backgroundColor:
@@ -528,6 +532,10 @@ export type SyntaxCodeEditorHandle = {
   findPrevious: () => boolean
 }
 
+function placeholderFor(text: string): Extension {
+  return text ? placeholderText(text) : []
+}
+
 type SyntaxCodeEditorProps = {
   ariaLabel: string
   disabled: boolean
@@ -536,6 +544,7 @@ type SyntaxCodeEditorProps = {
   onSearchOpenChange: (open: boolean) => void
   originalValue: string
   path: string
+  placeholder?: string
   redactSensitive: boolean
   readOnly: boolean
   searchOpen: boolean
@@ -557,6 +566,7 @@ export const SyntaxCodeEditor = React.forwardRef<
     onSearchOpenChange,
     originalValue,
     path,
+    placeholder = "",
     redactSensitive,
     readOnly,
     searchOpen,
@@ -578,6 +588,7 @@ export const SyntaxCodeEditor = React.forwardRef<
   const initialDisabled = React.useRef(disabled)
   const initialFontSize = React.useRef(fontSize)
   const initialPath = React.useRef(path)
+  const initialPlaceholder = React.useRef(placeholder)
   const initialReadOnly = React.useRef(readOnly)
   const initialRedactSensitive = React.useRef(redactSensitive)
   const initialWrapLines = React.useRef(wrapLines)
@@ -587,6 +598,7 @@ export const SyntaxCodeEditor = React.forwardRef<
   const [indentation] = React.useState(() => new Compartment())
   const [languageMode] = React.useState(() => new Compartment())
   const [mergeReview] = React.useState(() => new Compartment())
+  const [placeholderMode] = React.useState(() => new Compartment())
   const [redaction] = React.useState(() => new Compartment())
   const [textScale] = React.useState(() => new Compartment())
   const [wrapping] = React.useState(() => new Compartment())
@@ -648,6 +660,7 @@ export const SyntaxCodeEditor = React.forwardRef<
               ? createMergeReview(initialOriginalValue.current)
               : mergeGutterSpacer
           ),
+          placeholderMode.of(placeholderFor(initialPlaceholder.current)),
           redaction.of(
             initialRedactSensitive.current ? redactSensitiveExtension : []
           ),
@@ -678,6 +691,7 @@ export const SyntaxCodeEditor = React.forwardRef<
     indentation,
     languageMode,
     mergeReview,
+    placeholderMode,
     redaction,
     textScale,
     wrapping,
@@ -738,6 +752,12 @@ export const SyntaxCodeEditor = React.forwardRef<
       ),
     })
   }, [redactSensitive, redaction])
+
+  React.useLayoutEffect(() => {
+    view.current?.dispatch({
+      effects: placeholderMode.reconfigure(placeholderFor(placeholder)),
+    })
+  }, [placeholder, placeholderMode])
 
   React.useLayoutEffect(() => {
     view.current?.dispatch({
