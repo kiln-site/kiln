@@ -521,66 +521,102 @@ const DatabaseTableList = React.memo(function DatabaseTableList({
         aria-hidden="true"
         className="pointer-events-none absolute inset-y-0 right-0 z-30 w-px bg-border/80"
       />
-      <TablesPanelResizeHandle panelRef={panelRef} />
+      <DatabasePanelResizeHandle panelRef={panelRef} size={tablesPanelSize} />
     </aside>
   )
 })
 
-const tablesPanelWidthStorageKey = "kiln:database-tables-width"
-const tablesPanelDefaultWidth = 224
-const tablesPanelMinWidth = 160
-const tablesPanelMaxWidth = 440
-
-function clampTablesPanelWidth(width: number, panel: HTMLElement | null) {
-  const workspace = panel?.parentElement?.getBoundingClientRect().width
-  const maximum = workspace
-    ? Math.max(
-        tablesPanelMinWidth,
-        Math.min(tablesPanelMaxWidth, Math.floor(workspace * 0.4))
-      )
-    : tablesPanelMaxWidth
-  return Math.min(maximum, Math.max(tablesPanelMinWidth, Math.round(width)))
+interface PanelSize {
+  defaultSize: number
+  label: string
+  // Upper bound for the current layout, given the panel being resized.
+  maxSize: (panel: HTMLElement) => number
+  minSize: number
+  storageKey: string
+  variable: string
 }
 
-// Mirrors the file tree resize: widths are written straight to a CSS
+const tablesPanelSize: PanelSize = {
+  defaultSize: 224,
+  label: "Resize tables",
+  maxSize: (panel) => {
+    const workspace = panel.parentElement?.getBoundingClientRect().width
+    return workspace ? Math.min(440, Math.floor(workspace * 0.4)) : 440
+  },
+  minSize: 160,
+  storageKey: "kiln:database-tables-width",
+  variable: "--database-tables-width",
+}
+
+// Results keep at least this much room below the editor.
+const queryResultsMinHeight = 120
+const queryEditorSize: PanelSize = {
+  defaultSize: 176,
+  label: "Resize query results",
+  maxSize: (panel) => {
+    const parent = panel.parentElement?.getBoundingClientRect()
+    return parent
+      ? parent.bottom -
+          panel.getBoundingClientRect().top -
+          queryResultsMinHeight
+      : Number.POSITIVE_INFINITY
+  },
+  minSize: 72,
+  storageKey: "kiln:database-query-height",
+  variable: "--database-query-height",
+}
+
+// Mirrors the file tree resize: sizes are written straight to a CSS
 // variable during the drag so nothing re-renders, then saved on release.
-function TablesPanelResizeHandle({
+// "vertical" resizes a panel's width from its right edge, "horizontal" its
+// height from its bottom edge.
+function DatabasePanelResizeHandle({
+  orientation = "vertical",
   panelRef,
+  size,
 }: {
+  orientation?: "horizontal" | "vertical"
   panelRef: React.RefObject<HTMLElement | null>
+  size: PanelSize
 }) {
+  const vertical = orientation === "vertical"
   const handleRef = React.useRef<HTMLDivElement>(null)
-  const width = React.useRef(tablesPanelDefaultWidth)
+  const current = React.useRef(size.defaultSize)
   const session = React.useRef<{
     pointerId: number
-    startWidth: number
-    startX: number
+    start: number
+    startSize: number
   } | null>(null)
   const frame = React.useRef<number | null>(null)
 
   const apply = React.useCallback(
     (next: number) => {
       const panel = panelRef.current
-      width.current = clampTablesPanelWidth(next, panel)
-      panel?.style.setProperty("--database-tables-width", `${width.current}px`)
-      handleRef.current?.setAttribute("aria-valuenow", String(width.current))
-      return width.current
+      const maximum = panel
+        ? Math.max(size.minSize, size.maxSize(panel))
+        : Number.POSITIVE_INFINITY
+      current.current = Math.round(
+        Math.min(maximum, Math.max(size.minSize, next))
+      )
+      panel?.style.setProperty(size.variable, `${current.current}px`)
+      handleRef.current?.setAttribute("aria-valuenow", String(current.current))
+      return current.current
     },
-    [panelRef]
+    [panelRef, size]
   )
   const persist = (value: number) => {
     Result.try(() =>
-      window.localStorage.setItem(tablesPanelWidthStorageKey, String(value))
+      window.localStorage.setItem(size.storageKey, String(value))
     )
   }
 
   React.useLayoutEffect(() => {
     const stored = Result.try(() =>
-      Number(window.localStorage.getItem(tablesPanelWidthStorageKey))
+      Number(window.localStorage.getItem(size.storageKey))
     )
     const saved = Result.isSuccess(stored) ? stored.success : 0
-    apply(saved > 0 ? saved : tablesPanelDefaultWidth)
-  }, [apply])
+    apply(saved > 0 ? saved : size.defaultSize)
+  }, [apply, size])
 
   function finish(pointerId?: number) {
     if (pointerId !== undefined && session.current?.pointerId !== pointerId) {
@@ -593,24 +629,25 @@ function TablesPanelResizeHandle({
     session.current = null
     document.documentElement.style.removeProperty("user-select")
     handleRef.current?.removeAttribute("data-resizing")
-    persist(width.current)
+    persist(current.current)
   }
 
   return (
     <PanelResizeHandle
       ref={handleRef}
-      aria-label="Resize tables"
-      aria-valuemin={tablesPanelMinWidth}
-      aria-valuemax={tablesPanelMaxWidth}
-      aria-valuenow={tablesPanelDefaultWidth}
+      orientation={orientation}
+      aria-label={size.label}
+      aria-valuemin={size.minSize}
+      aria-valuenow={size.defaultSize}
       className="flex"
       onPointerDown={(event) => {
         if (event.button !== 0 || !panelRef.current) return
         event.preventDefault()
+        const rect = panelRef.current.getBoundingClientRect()
         session.current = {
           pointerId: event.pointerId,
-          startWidth: panelRef.current.getBoundingClientRect().width,
-          startX: event.clientX,
+          start: vertical ? event.clientX : event.clientY,
+          startSize: vertical ? rect.width : rect.height,
         }
         document.documentElement.style.userSelect = "none"
         event.currentTarget.dataset.resizing = "true"
@@ -619,7 +656,10 @@ function TablesPanelResizeHandle({
       onPointerMove={(event) => {
         const active = session.current
         if (!active || active.pointerId !== event.pointerId) return
-        const next = active.startWidth + event.clientX - active.startX
+        const next =
+          active.startSize +
+          (vertical ? event.clientX : event.clientY) -
+          active.start
         if (frame.current !== null) window.cancelAnimationFrame(frame.current)
         frame.current = window.requestAnimationFrame(() => {
           frame.current = null
@@ -633,19 +673,21 @@ function TablesPanelResizeHandle({
       }}
       onDoubleClick={(event) => {
         event.preventDefault()
-        persist(apply(tablesPanelDefaultWidth))
+        persist(apply(size.defaultSize))
       }}
       onKeyDown={(event) => {
         const step = event.shiftKey ? 32 : 16
+        const shrink = vertical ? "ArrowLeft" : "ArrowUp"
+        const grow = vertical ? "ArrowRight" : "ArrowDown"
         const next =
-          event.key === "ArrowLeft"
-            ? width.current - step
-            : event.key === "ArrowRight"
-              ? width.current + step
+          event.key === shrink
+            ? current.current - step
+            : event.key === grow
+              ? current.current + step
               : event.key === "Home"
-                ? tablesPanelMinWidth
+                ? size.minSize
                 : event.key === "End"
-                  ? tablesPanelMaxWidth
+                  ? Number.POSITIVE_INFINITY
                   : null
         if (next === null) return
         event.preventDefault()
@@ -1475,6 +1517,7 @@ function SqlConsole({
   const [allowWrites, setAllowWrites] = React.useState(false)
   const sqlRef = React.useRef(sql)
   sqlRef.current = sql
+  const editorRef = React.useRef<HTMLDivElement>(null)
   const run = useMutation({
     mutationFn: (statement: string) =>
       source.query(statement, writable && allowWrites),
@@ -1530,7 +1573,8 @@ function SqlConsole({
         </div>
       </div>
       <div
-        className="relative h-44 shrink-0 overflow-hidden border-b border-border"
+        ref={editorRef}
+        className="relative h-[var(--database-query-height,11rem)] max-h-[calc(100%-10rem)] shrink-0"
         onKeyDownCapture={(event) => {
           if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
             event.preventDefault()
@@ -1539,35 +1583,42 @@ function SqlConsole({
           }
         }}
       >
-        {sql ? null : (
-          <span className="type-code pointer-events-none absolute top-[5px] left-12 z-10 text-[0.8125rem] text-muted-foreground/45">
-            {placeholder}
-          </span>
-        )}
-        <React.Suspense
-          fallback={
-            <div className="grid h-full place-items-center">
-              <LoaderCircle className="size-4 animate-spin text-muted-foreground" />
-            </div>
-          }
-        >
-          <SyntaxCodeEditor
-            ariaLabel="SQL query"
-            disabled={false}
-            fontSize={13}
-            onChange={onSqlChange}
-            onSearchOpenChange={ignoreSearchOpenChange}
-            originalValue=""
-            path="query.sql"
-            redactSensitive={false}
-            readOnly={false}
-            searchOpen={false}
-            searchQuery=""
-            showChanges={false}
-            value={sql}
-            wrapLines
-          />
-        </React.Suspense>
+        <div className="size-full overflow-hidden">
+          {sql ? null : (
+            <span className="type-code pointer-events-none absolute top-[5px] left-12 z-10 text-[0.8125rem] text-muted-foreground/45">
+              {placeholder}
+            </span>
+          )}
+          <React.Suspense
+            fallback={
+              <div className="grid h-full place-items-center">
+                <LoaderCircle className="size-4 animate-spin text-muted-foreground" />
+              </div>
+            }
+          >
+            <SyntaxCodeEditor
+              ariaLabel="SQL query"
+              disabled={false}
+              fontSize={13}
+              onChange={onSqlChange}
+              onSearchOpenChange={ignoreSearchOpenChange}
+              originalValue=""
+              path="query.sql"
+              redactSensitive={false}
+              readOnly={false}
+              searchOpen={false}
+              searchQuery=""
+              showChanges={false}
+              value={sql}
+              wrapLines
+            />
+          </React.Suspense>
+        </div>
+        <DatabasePanelResizeHandle
+          orientation="horizontal"
+          panelRef={editorRef}
+          size={queryEditorSize}
+        />
       </div>
       <SqlResult
         error={run.error}
