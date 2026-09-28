@@ -1,9 +1,11 @@
+import type { DatabaseSync } from "node:sqlite"
 import { parentPort } from "node:worker_threads"
 
 import type {
   DatabaseReadRequest,
   DatabaseWriteRequest,
 } from "@workspace/contracts"
+import { Result } from "effect"
 
 import {
   DatabaseBrowserError,
@@ -37,30 +39,43 @@ function handle({
   readOnly,
   request,
 }: DatabaseWorkerRequest): DatabaseWorkerResponse {
-  try {
-    const database = openSqliteDatabase(path, readOnly)
-    try {
+  const outcome = Result.try(() =>
+    withDatabase(path, readOnly, (database) => {
       switch (request.action) {
         case "overview":
-          return { id, ok: true, result: sqliteOverview(database) }
+          return sqliteOverview(database)
         case "rows":
-          return { id, ok: true, result: sqliteRows(database, request) }
+          return sqliteRows(database, request)
         case "query":
-          return { id, ok: true, result: sqliteQuery(database, request) }
+          return sqliteQuery(database, request)
         case "mutate":
-          return { id, ok: true, result: sqliteMutate(database, request) }
+          return sqliteMutate(database, request)
       }
-    } finally {
-      database.close()
-    }
-  } catch (error) {
-    return {
-      code: error instanceof DatabaseBrowserError ? error.code : "sqlite_error",
-      id,
-      message: sqliteErrorMessage(error),
-      ok: false,
-    }
+    })
+  )
+  if (Result.isSuccess(outcome)) {
+    return { id, ok: true, result: outcome.success }
   }
+  const error = outcome.failure
+  return {
+    code: error instanceof DatabaseBrowserError ? error.code : "sqlite_error",
+    id,
+    message: sqliteErrorMessage(error),
+    ok: false,
+  }
+}
+
+// Every request gets its own connection, closed even when the work throws.
+function withDatabase<TResult>(
+  path: string,
+  readOnly: boolean,
+  use: (database: DatabaseSync) => TResult
+) {
+  const database = openSqliteDatabase(path, readOnly)
+  const outcome = Result.try(() => use(database))
+  database.close()
+  if (Result.isFailure(outcome)) throw outcome.failure
+  return outcome.success
 }
 
 function sqliteErrorMessage(error: unknown) {

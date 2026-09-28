@@ -1,5 +1,7 @@
 import { DatabaseSync, type StatementSync } from "node:sqlite"
 
+import { Result } from "effect"
+
 import type {
   DatabaseChange,
   DatabaseColumn,
@@ -208,7 +210,7 @@ export function sqliteMutate(
   )
 
   database.exec("BEGIN IMMEDIATE")
-  try {
+  const outcome = Result.try(() => {
     let applied = 0
     for (const [index, change] of input.changes.entries()) {
       const changed = applyChange(database, table, writable, change)
@@ -220,12 +222,15 @@ export function sqliteMutate(
       }
       applied += changed
     }
-    database.exec("COMMIT")
-    return { applied }
-  } catch (error) {
+    return applied
+  })
+  // All changes land together or not at all.
+  if (Result.isFailure(outcome)) {
     if (database.isTransaction) database.exec("ROLLBACK")
-    throw error
+    throw outcome.failure
   }
+  database.exec("COMMIT")
+  return { applied: outcome.success }
 }
 
 function applyChange(

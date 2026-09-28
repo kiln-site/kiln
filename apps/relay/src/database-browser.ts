@@ -16,6 +16,7 @@ import type {
   DatabaseWorkerResponse,
 } from "./database-browser-worker.js"
 import { RelayDatabaseBrowserError } from "./effect/errors.js"
+import { promiseEffect } from "./effect/promise.js"
 import type { FilesystemDriver } from "./files.js"
 
 const WORKER_TIMEOUT_MS = 20_000
@@ -48,12 +49,12 @@ export class DatabaseBrowser {
   ) {
     return Effect.gen({ self: this }, function* () {
       const path = yield* this.#filesystem.resolveFile(instance, requestedPath)
-      yield* databaseOperation("inspect", () => assertSqliteFile(path))
-      const writable = yield* Effect.promise(() =>
-        access(path, fsConstants.W_OK).then(
-          () => true,
-          () => false
-        )
+      yield* assertSqliteFile(path)
+      const writable = yield* promiseEffect(() =>
+        access(path, fsConstants.W_OK)
+      ).pipe(
+        Effect.map(() => true),
+        Effect.catch(() => Effect.succeed(false))
       )
       if (!readOnly && !writable) {
         return yield* Effect.fail(
@@ -78,38 +79,58 @@ export class DatabaseBrowser {
   }
 }
 
-async function assertSqliteFile(path: string) {
-  const handle = await open(path, "r")
-  try {
-    const header = Buffer.alloc(SQLITE_HEADER.byteLength)
-    const { bytesRead } = await handle.read(header, 0, header.byteLength, 0)
-    if (bytesRead === 0) return
-    if (header.subarray(0, 4).toString("latin1") === "H:2,") {
-      throw databaseError(
-        "unsupported_engine",
-        "H2 databases can't be browsed yet. Download the file to inspect it locally."
-      )
+function assertSqliteFile(path: string) {
+  return Effect.gen(function* () {
+    const header = yield* Effect.acquireUseRelease(
+      databaseOperation("inspect.open", () => open(path, "r")),
+      (handle) =>
+        databaseOperation("inspect.read", async () => {
+          const buffer = Buffer.alloc(SQLITE_HEADER.byteLength)
+          const { bytesRead } = await handle.read(
+            buffer,
+            0,
+            buffer.byteLength,
+            0
+          )
+          return buffer.subarray(0, bytesRead)
+        }),
+      (handle) =>
+        promiseEffect(() => handle.close()).pipe(
+          Effect.catch(() => Effect.void)
+        )
+    )
+    // An empty file is a valid, empty SQLite database.
+    if (header.byteLength > 0) {
+      if (header.subarray(0, 4).toString("latin1") === "H:2,") {
+        return yield* Effect.fail(
+          databaseError(
+            "unsupported_engine",
+            "H2 databases can't be browsed yet. Download the file to inspect it locally."
+          )
+        )
+      }
+      if (!header.equals(SQLITE_HEADER)) {
+        return yield* Effect.fail(
+          databaseError("not_a_database", "This file is not a SQLite database")
+        )
+      }
     }
-    if (bytesRead < header.byteLength || !header.equals(SQLITE_HEADER)) {
-      throw databaseError(
-        "not_a_database",
-        "This file is not a SQLite database"
-      )
+    // SQLite opens journals by name next to the database. A symlinked journal
+    // would let a query write through to a file outside the instance.
+    for (const suffix of SQLITE_SIDECARS) {
+      const metadata = yield* promiseEffect(() =>
+        lstat(`${path}${suffix}`)
+      ).pipe(Effect.catch(() => Effect.succeed(null)))
+      if (metadata && !metadata.isFile()) {
+        return yield* Effect.fail(
+          databaseError(
+            "unsafe_journal",
+            `Refusing to open the database because ${suffix.slice(1)} is not a regular file`
+          )
+        )
+      }
     }
-  } finally {
-    await handle.close()
-  }
-  // SQLite opens journals by name next to the database. A symlinked journal
-  // would let a query write through to a file outside the instance.
-  for (const suffix of SQLITE_SIDECARS) {
-    const metadata = await lstat(`${path}${suffix}`).catch(() => null)
-    if (metadata && !metadata.isFile()) {
-      throw databaseError(
-        "unsafe_journal",
-        `Refusing to open the database because ${suffix.slice(1)} is not a regular file`
-      )
-    }
-  }
+  })
 }
 
 function databaseOperation<TResult>(
