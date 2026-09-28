@@ -1,6 +1,9 @@
 import { DatabaseSync, type StatementSync } from "node:sqlite"
 
-import { Result } from "effect"
+// Worker-side modules import only what the worker needs: each database worker
+// is its own process, so the full effect barrel or runtime contracts would be
+// loaded again per worker.
+import * as Result from "effect/Result"
 
 import type {
   DatabaseChange,
@@ -16,13 +19,11 @@ import type {
   DatabaseTable,
   DatabaseValue,
 } from "@workspace/contracts"
-import { DATABASE_BROWSER_COUNT_CAP } from "@workspace/contracts"
 
-import { claimJobCommit, isJobCancelled } from "./database-browser-control.js"
-
+// Counting stops here so huge tables stay fast; results say when it was hit.
+const DATABASE_BROWSER_COUNT_CAP = 100_000
 const BUSY_TIMEOUT_MS = 3_000
 const BLOB_PREVIEW_BYTES = 1_024
-const CANCEL_CHECK_ROWS = 256
 const ROWID_ALIASES = ["rowid", "_rowid_", "oid"] as const
 // Stable sqlite3.h authorizer codes; @types/node 22 does not declare them yet.
 const SQLITE_OK = 0
@@ -44,35 +45,13 @@ export class DatabaseBrowserError extends Error {
   }
 }
 
-// The Relay's hold on a running job. Work checks it between steps so a
-// cancelled job stops early, and a commit only happens after claiming it.
+// The Relay may stop a job at any point until the job claims its commit;
+// after that the commit is allowed to finish, so its outcome is known.
 export interface DatabaseJob {
-  checkpoint(): void
   claimCommit(): void
 }
 
-export const unattendedJob: DatabaseJob = {
-  checkpoint() {},
-  claimCommit() {},
-}
-
-export function jobFromControl(control: Int32Array): DatabaseJob {
-  return {
-    checkpoint() {
-      if (isJobCancelled(control)) throw cancelledError()
-    },
-    claimCommit() {
-      if (!claimJobCommit(control)) throw cancelledError()
-    },
-  }
-}
-
-function cancelledError() {
-  return new DatabaseBrowserError(
-    "cancelled",
-    "The operation was cancelled, so nothing was saved"
-  )
-}
+export const unattendedJob: DatabaseJob = { claimCommit() {} }
 
 export function openSqliteDatabase(path: string, readOnly: boolean) {
   const database = new DatabaseSync(path, {
@@ -111,8 +90,7 @@ export function sqliteOverview(
 
 export function sqliteRows(
   database: DatabaseSync,
-  input: DatabaseRowsInput,
-  job: DatabaseJob = unattendedJob
+  input: DatabaseRowsInput
 ): DatabaseRows {
   const table = requireTable(database, input.table)
   const columns = table.columns
@@ -156,7 +134,6 @@ export function sqliteRows(
     input.offset
   ) as unknown as Array<Array<unknown>>
 
-  job.checkpoint()
   const counted = database
     .prepare(`SELECT count(*) AS total FROM (SELECT 1 ${from} LIMIT ?)`)
     .get(...searchParameters, DATABASE_BROWSER_COUNT_CAP + 1)
@@ -217,7 +194,6 @@ export function sqliteQuery(
       truncated: false,
     }
     for (const sql of statements) {
-      job.checkpoint()
       const statement = database.prepare(sql)
       const columns = statement.columns()
       if (columns.length === 0) {
@@ -226,7 +202,7 @@ export function sqliteQuery(
         result = { columns: [], rows: [], truncated: false }
         continue
       }
-      result = readStatement(statement, columns, input.maxRows, job)
+      result = readStatement(statement, columns, input.maxRows)
     }
     return { ...result, changes }
   }
@@ -280,7 +256,6 @@ export function sqliteMutate(
   const applied = inTransaction(database, job, () => {
     let total = 0
     for (const [index, change] of input.changes.entries()) {
-      job.checkpoint()
       const changed = applyChange(database, table, writable, change)
       if (changed === 0 && change.kind !== "insert") {
         throw new DatabaseBrowserError(
@@ -415,8 +390,7 @@ function keyGuardColumns(table: DatabaseTable) {
 function readStatement(
   statement: StatementSync,
   columns: ReturnType<StatementSync["columns"]>,
-  maxRows: number,
-  job: DatabaseJob
+  maxRows: number
 ) {
   statement.setReadBigInts(true)
   statement.setReturnArrays(true)
@@ -428,7 +402,6 @@ function readStatement(
       break
     }
     rows.push(row.map((value) => encodeValue(value, BLOB_PREVIEW_BYTES)))
-    if (rows.length % CANCEL_CHECK_ROWS === 0) job.checkpoint()
   }
   return {
     columns: columns.map(({ name, type }) => ({ name, type: type ?? null })),
@@ -631,7 +604,7 @@ export function splitSqlStatements(sql: string) {
       flushWord()
       const trigger =
         words[0] === "CREATE" && words.slice(1, 4).includes("TRIGGER")
-      if (!trigger || words.at(-1) === "END") {
+      if (!trigger || closesTriggerBody(words)) {
         const statement = sql.slice(start, index).trim()
         if (statement && words.length > 0) statements.push(statement)
         start = index + 1
@@ -651,6 +624,18 @@ export function splitSqlStatements(sql: string) {
   const tail = sql.slice(start).trim()
   if (tail && words.length > 0) statements.push(tail)
   return statements
+}
+
+// A trigger body ends at the END that closes its BEGIN, not one that closes
+// a CASE expression inside it.
+function closesTriggerBody(words: ReadonlyArray<string>) {
+  let openCases = 0
+  for (const word of words) {
+    if (word === "CASE") openCases += 1
+    else if (word === "END" && openCases > 0) openCases -= 1
+    else if (word === "END") return true
+  }
+  return false
 }
 
 function skipQuoted(sql: string, index: number, quote: string) {

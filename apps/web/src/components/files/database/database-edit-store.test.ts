@@ -73,6 +73,9 @@ describe("database edit store", () => {
     expect(parseEditedText("9007199254740993", 1, { type: "BIGINT" })).toEqual({
       $bigint: "9007199254740993",
     })
+    expect(parseEditedText("9007199254740995", 1, { type: "NUMERIC" })).toEqual(
+      { $bigint: "9007199254740995" }
+    )
     expect(parseEditedText("", null, { type: "TEXT" })).toBeNull()
     expect(parseEditedText("007", "x", { type: "TEXT" })).toBe("007")
   })

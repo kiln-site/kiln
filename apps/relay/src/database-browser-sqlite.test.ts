@@ -4,9 +4,8 @@ import { join } from "node:path"
 
 import { assert, describe, it } from "@effect/vitest"
 
-import { cancelJob, createJobControl } from "./database-browser-control.js"
 import {
-  jobFromControl,
+  DatabaseBrowserError,
   openSqliteDatabase,
   splitSqlStatements,
   sqliteMutate,
@@ -38,13 +37,13 @@ describe("SQLite database browser", () => {
       splitSqlStatements(`
         SELECT ';' AS "a;b"; -- trailing ; comment
         /* ; */ CREATE TRIGGER t AFTER INSERT ON x BEGIN
-          UPDATE y SET z = 1; DELETE FROM y;
+          UPDATE y SET z = CASE WHEN z THEN 1 ELSE 2 END; DELETE FROM y;
         END;
         ;
       `),
       [
         `SELECT ';' AS "a;b"`,
-        `-- trailing ; comment\n        /* ; */ CREATE TRIGGER t AFTER INSERT ON x BEGIN\n          UPDATE y SET z = 1; DELETE FROM y;\n        END`,
+        `-- trailing ; comment\n        /* ; */ CREATE TRIGGER t AFTER INSERT ON x BEGIN\n          UPDATE y SET z = CASE WHEN z THEN 1 ELSE 2 END; DELETE FROM y;\n        END`,
       ]
     )
   })
@@ -163,15 +162,10 @@ describe("SQLite database browser", () => {
     withDatabase((path) => {
       const database = openSqliteDatabase(path, false)
       try {
-        const control = createJobControl()
-        const job = jobFromControl(control)
-        // Cancel as the Relay would on timeout, after the work but before
-        // the commit claim.
-        const cancelMidway = {
-          checkpoint: job.checkpoint,
+        // The Relay refuses the commit, as it would after a timeout.
+        const refused = {
           claimCommit() {
-            cancelJob(control)
-            job.claimCommit()
+            throw new DatabaseBrowserError("cancelled", "cancelled")
           },
         }
         assert.throws(
@@ -183,7 +177,7 @@ describe("SQLite database browser", () => {
                 maxRows: 10,
                 sql: "UPDATE players SET balance = 0; DELETE FROM log",
               },
-              { job: cancelMidway, writable: true }
+              { job: refused, writable: true }
             ),
           /cancelled/u
         )

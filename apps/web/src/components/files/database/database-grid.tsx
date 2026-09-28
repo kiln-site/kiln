@@ -336,8 +336,10 @@ export const DatabaseGrid = React.memo(function DatabaseGrid({
   )
 
   const commitEdit = React.useCallback(
-    (position: GridPosition, value: DatabaseValue) => {
-      applyCellValue(model.current, position, value)
+    (target: CellTarget | null, value: DatabaseValue) => {
+      if (target && model.current.editStore) {
+        applyToTarget(model.current.editStore, target, value)
+      }
       selection.setEditing(null)
       scrollerRef.current?.focus({ preventScroll: true })
     },
@@ -351,11 +353,12 @@ export const DatabaseGrid = React.memo(function DatabaseGrid({
 
   const commitAndMove = React.useCallback(
     (
+      target: CellTarget | null,
       position: GridPosition,
       value: DatabaseValue,
       delta: (position: GridPosition) => Partial<GridPosition>
     ) => {
-      commitEdit(position, value)
+      commitEdit(target, value)
       moveTo({ ...position, ...delta(position) })
     },
     [commitEdit, moveTo]
@@ -883,8 +886,9 @@ const CellEditor = React.memo(function CellEditor({
   flushRef: React.RefObject<(() => void) | null>
   model: React.RefObject<GridModel>
   onCancel: () => void
-  onCommit: (position: GridPosition, value: DatabaseValue) => void
+  onCommit: (target: CellTarget | null, value: DatabaseValue) => void
   onCommitAndMove: (
+    target: CellTarget | null,
     position: GridPosition,
     value: DatabaseValue,
     delta: (position: GridPosition) => Partial<GridPosition>
@@ -928,8 +932,9 @@ function ActiveCellEditor({
   initialText: string | null
   model: React.RefObject<GridModel>
   onCancel: () => void
-  onCommit: (position: GridPosition, value: DatabaseValue) => void
+  onCommit: (target: CellTarget | null, value: DatabaseValue) => void
   onCommitAndMove: (
+    target: CellTarget | null,
     position: GridPosition,
     value: DatabaseValue,
     delta: (position: GridPosition) => Partial<GridPosition>
@@ -937,8 +942,14 @@ function ActiveCellEditor({
   position: GridPosition
   widthsRef: React.RefObject<Array<number>>
 }) {
-  const current = cellValue(model.current, position)
-  const column = model.current.columns[position.column]
+  // The row, column, and value are captured when editing starts, so a
+  // refetch that shifts rows meanwhile cannot redirect the edit.
+  const [start] = React.useState(() => ({
+    column: model.current.columns[position.column],
+    target: cellTarget(model.current, position),
+    value: cellValue(model.current, position),
+  }))
+  const { column, target, value: current } = start
   const [text, setText] = React.useState(
     () => initialText ?? editableText(current)
   )
@@ -961,7 +972,7 @@ function ActiveCellEditor({
   const commit = () => {
     if (settled.current) return
     settled.current = true
-    onCommit(position, value())
+    onCommit(target, value())
   }
 
   // Selecting another cell unmounts this editor before it would blur, so the
@@ -1003,13 +1014,15 @@ function ActiveCellEditor({
         if (event.key === "Enter" && !event.shiftKey && !event.altKey) {
           event.preventDefault()
           settled.current = true
-          onCommitAndMove(position, value(), (cell) => ({ row: cell.row + 1 }))
+          onCommitAndMove(target, position, value(), (cell) => ({
+            row: cell.row + 1,
+          }))
           return
         }
         if (event.key === "Tab") {
           event.preventDefault()
           settled.current = true
-          onCommitAndMove(position, value(), (cell) => ({
+          onCommitAndMove(target, position, value(), (cell) => ({
             column: cell.column + (event.shiftKey ? -1 : 1),
           }))
         }
@@ -1187,22 +1200,43 @@ function canEditCell(model: GridModel, position: GridPosition) {
   )
 }
 
+// Where a cell edit lands: a loaded row (with the values it had) or a staged
+// insert. Resolved from the current page, so hold on to it across refetches.
+type CellTarget =
+  | { column: string; row: DatabaseEditableRow }
+  | { column: string; insertedId: string }
+
+function cellTarget(
+  model: GridModel,
+  position: GridPosition
+): CellTarget | null {
+  const column = model.columns[position.column]
+  if (!column) return null
+  const rowCount = model.page.getRowCount()
+  if (position.row >= rowCount) {
+    const inserted = model.inserted[position.row - rowCount]
+    return inserted ? { column: column.name, insertedId: inserted.id } : null
+  }
+  const row = rowForPosition(model, position)
+  return row ? { column: column.name, row } : null
+}
+
+function applyToTarget(
+  editStore: DatabaseEditStore,
+  target: CellTarget,
+  value: DatabaseValue
+) {
+  if ("row" in target) editStore.setCell(target.row, target.column, value)
+  else editStore.setInsertedCell(target.insertedId, target.column, value)
+}
+
 function applyCellValue(
   model: GridModel,
   position: GridPosition,
   value: DatabaseValue
 ) {
-  const column = model.columns[position.column]
-  if (!column || !model.editStore) return
-  const rowCount = model.page.getRowCount()
-  if (position.row >= rowCount) {
-    const inserted = model.inserted[position.row - rowCount]
-    if (inserted)
-      model.editStore.setInsertedCell(inserted.id, column.name, value)
-    return
-  }
-  const row = rowForPosition(model, position)
-  if (row) model.editStore.setCell(row, column.name, value)
+  const target = cellTarget(model, position)
+  if (target && model.editStore) applyToTarget(model.editStore, target, value)
 }
 
 function rowObject(model: GridModel, rowIndex: number) {

@@ -330,6 +330,26 @@ function DatabaseUnavailable({ message }: { message: string }) {
   )
 }
 
+// Staged changes outlive the viewer while any are pending, so opening another
+// file or page and coming back keeps them. Only unloading the page can lose
+// them, and the browser asks before that happens.
+interface DatabaseDraft {
+  editStore: DatabaseEditStore
+  tableName: string
+}
+const drafts = new Map<string, DatabaseDraft>()
+
+function keepDraft(key: string, draft: DatabaseDraft | null) {
+  if (draft) drafts.set(key, draft)
+  else drafts.delete(key)
+  if (drafts.size > 0) window.addEventListener("beforeunload", warnBeforeUnload)
+  else window.removeEventListener("beforeunload", warnBeforeUnload)
+}
+
+function warnBeforeUnload(event: BeforeUnloadEvent) {
+  event.preventDefault()
+}
+
 function DatabaseWorkspace({
   headerSlot,
   liveServer,
@@ -350,8 +370,13 @@ function DatabaseWorkspace({
   const tables =
     useQuery({ ...overviewQueryOptions(source), select: selectTables }).data ??
     noTables
+  const draftKey = JSON.stringify(source.queryKey)
+  const [draft] = React.useState(() => drafts.get(draftKey))
   const [tableName, setTableName] = React.useState<string | null>(
-    () => tables.find(({ kind }) => kind === "table")?.name ?? null
+    () =>
+      draft?.tableName ??
+      tables.find(({ kind }) => kind === "table")?.name ??
+      null
   )
   const [tablesCollapsed, setTablesCollapsed] = useStoredFlag(
     tablesCollapsedStorageKey
@@ -365,8 +390,24 @@ function DatabaseWorkspace({
   React.useLayoutEffect(() => {
     if (emptyDatabase) onQueryOpenChange(true)
   }, [emptyDatabase, onQueryOpenChange])
-  const [editStore, setEditStore] = React.useState(createDatabaseEditStore)
+  const [editStore, setEditStore] = React.useState(
+    () => draft?.editStore ?? createDatabaseEditStore()
+  )
   const [pendingSwitch, setPendingSwitch] = React.useState<string | null>(null)
+  React.useEffect(() => {
+    const sync = () =>
+      keepDraft(
+        draftKey,
+        editStore.getPendingCount() > 0 && tableName
+          ? { editStore, tableName }
+          : null
+      )
+    sync()
+    const unsubscribe = editStore.subscribe(sync)
+    return () => {
+      unsubscribe()
+    }
+  }, [draftKey, editStore, tableName])
   const [sql, setSql] = React.useState("")
   const table =
     tables.find(({ name }) => name === tableName) ?? tables[0] ?? null

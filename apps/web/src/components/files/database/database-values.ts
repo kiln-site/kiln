@@ -62,9 +62,20 @@ export function parseEditedText(
 ): DatabaseValue {
   if (editableText(previous) === text) return previous
   const affinity = columnAffinity(column?.type ?? "")
-  if (affinity === "integer" && /^-?\d+$/u.test(text.trim())) {
-    const parsed = Number(text.trim())
-    return Number.isSafeInteger(parsed) ? parsed : { $bigint: text.trim() }
+  const trimmed = text.trim()
+  // INTEGER and NUMERIC affinity both store whole numbers as exact 64-bit
+  // integers, so they must not round-trip through a double. Anything wider
+  // goes as text for SQLite to convert under its affinity rules.
+  if (
+    (affinity === "integer" || affinity === "numeric") &&
+    /^-?\d+$/u.test(trimmed)
+  ) {
+    const parsed = Number(trimmed)
+    if (Number.isSafeInteger(parsed)) return parsed
+    const exact = BigInt(trimmed)
+    return exact >= INT64_MIN && exact <= INT64_MAX
+      ? { $bigint: exact.toString() }
+      : trimmed
   }
   if (
     (affinity === "real" || affinity === "numeric" || affinity === "integer") &&
@@ -75,6 +86,9 @@ export function parseEditedText(
   }
   return text
 }
+
+const INT64_MIN = -(2n ** 63n)
+const INT64_MAX = 2n ** 63n - 1n
 
 function columnAffinity(type: string) {
   const upper = type.toUpperCase()

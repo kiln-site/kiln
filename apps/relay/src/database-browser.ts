@@ -1,6 +1,8 @@
+import { type ChildProcess, fork } from "node:child_process"
 import { constants as fsConstants } from "node:fs"
 import { access, lstat, open, stat } from "node:fs/promises"
-import { Worker } from "node:worker_threads"
+import type { Duplex } from "node:stream"
+import { fileURLToPath } from "node:url"
 
 import type {
   DatabaseReadRequest,
@@ -12,10 +14,10 @@ import { Deferred, Effect, Pool, Scope } from "effect"
 
 import type { RelayInstanceConfig } from "./config.js"
 import {
-  cancelJob,
-  createJobControl,
-  isJobCancelled,
-} from "./database-browser-control.js"
+  COMMIT_CHANNEL_FD,
+  COMMIT_GRANTED,
+  COMMIT_REQUEST,
+} from "./database-browser-protocol.js"
 import type {
   DatabaseWorkerRequest,
   DatabaseWorkerResponse,
@@ -160,8 +162,6 @@ function databaseError(code: string, reason: string) {
   return RelayDatabaseBrowserError.make({ code, reason })
 }
 
-type PoolRequest = Omit<DatabaseWorkerRequest, "control">
-
 // Workers come from an Effect Pool: at most MAX_ACTIVE_WORKERS run at once,
 // further requests wait for one, and idle workers are kept briefly for reuse.
 class DatabaseWorkerPool {
@@ -169,16 +169,7 @@ class DatabaseWorkerPool {
   readonly #pool = Effect.runSync(
     Effect.cached(
       Pool.makeWithTTL({
-        acquire: Effect.acquireRelease(
-          Effect.sync(() => {
-            const worker = spawnWorker()
-            // A parked worker must not keep the process alive on its own.
-            worker.unref()
-            return worker
-          }),
-          (worker) =>
-            promiseEffect(() => worker.terminate()).pipe(Effect.ignore)
-        ),
+        acquire: Effect.acquireRelease(Effect.sync(spawnWorker), stopWorker),
         min: 0,
         max: MAX_ACTIVE_WORKERS,
         timeToLive: WORKER_IDLE,
@@ -187,18 +178,20 @@ class DatabaseWorkerPool {
     )
   )
 
-  run(request: PoolRequest) {
+  run(request: DatabaseWorkerRequest) {
     const pool = this.#pool
     return Effect.gen(function* () {
-      const control = createJobControl()
+      const job: DatabaseJobState = { stage: "queued", worker: null }
       const reply = yield* Deferred.make<unknown, RelayDatabaseBrowserError>()
-      // The job keeps its worker until the worker answers, even after the
-      // caller stops waiting, so a busy worker is never counted as free.
+      // The job holds its worker until the worker answers or dies, so the
+      // pool never counts a busy worker as free.
       yield* Effect.gen(function* () {
         const workers = yield* pool
         const worker = yield* Pool.get(workers)
-        if (isJobCancelled(control)) return undefined
-        const response = yield* exchange(worker, { ...request, control }).pipe(
+        if (job.stage === "cancelled") return undefined
+        job.stage = "running"
+        job.worker = worker
+        const response = yield* exchange(worker, request, job).pipe(
           Effect.tapError(() => Pool.invalidate(workers, worker))
         )
         if (!response.ok) {
@@ -216,32 +209,57 @@ class DatabaseWorkerPool {
       return yield* Deferred.await(reply).pipe(
         Effect.timeoutOrElse({
           duration: WORKER_TIMEOUT,
-          // A job that already started committing is left to finish, so the
-          // caller learns whether the write landed.
           orElse: () =>
-            cancelJob(control)
+            cancelJob(job)
               ? Effect.fail(
                   databaseError(
                     "timeout",
-                    `The database operation took longer than ${WORKER_TIMEOUT} and was cancelled. Nothing was saved.`
+                    `The database operation took longer than ${WORKER_TIMEOUT} and was stopped. Nothing was saved.`
                   )
                 )
               : Deferred.await(reply),
         }),
-        Effect.onInterrupt(() => Effect.sync(() => cancelJob(control)))
+        Effect.onInterrupt(() => Effect.sync(() => cancelJob(job)))
       )
     })
   }
 }
 
-function exchange(worker: Worker, message: DatabaseWorkerRequest) {
+interface DatabaseJobState {
+  stage: "queued" | "running" | "committing" | "cancelled"
+  worker: ChildProcess | null
+}
+
+// Stops a job by killing its worker, which ends even a SQLite step that
+// never returns and rolls back its transaction. A job whose commit was
+// already granted is left to finish instead; returns false in that case.
+function cancelJob(job: DatabaseJobState) {
+  if (job.stage === "committing") return false
+  job.stage = "cancelled"
+  job.worker?.kill("SIGKILL")
+  return true
+}
+
+function exchange(
+  worker: ChildProcess,
+  message: DatabaseWorkerRequest,
+  job: DatabaseJobState
+) {
   return Effect.callback<DatabaseWorkerResponse, RelayDatabaseBrowserError>(
     (resume) => {
+      const commitChannel = worker.stdio[COMMIT_CHANNEL_FD] as Duplex
       const settle = (
         effect: Effect.Effect<DatabaseWorkerResponse, RelayDatabaseBrowserError>
       ) => {
         detach()
         resume(effect)
+      }
+      // Granting is decided here on the Relay's single thread, so it can
+      // never interleave with cancelJob.
+      const onCommitRequest = (data: Buffer) => {
+        if (job.stage !== "running" || !data.includes(COMMIT_REQUEST)) return
+        job.stage = "committing"
+        commitChannel.write(COMMIT_GRANTED)
       }
       const onMessage = (response: DatabaseWorkerResponse) =>
         settle(Effect.succeed(response))
@@ -254,29 +272,49 @@ function exchange(worker: Worker, message: DatabaseWorkerRequest) {
           )
         )
       const detach = () => {
+        commitChannel.off("data", onCommitRequest)
         worker.off("message", onMessage)
         worker.off("error", onError)
         worker.off("exit", onExit)
       }
+      commitChannel.on("data", onCommitRequest)
       worker.on("message", onMessage)
       worker.on("error", onError)
       worker.on("exit", onExit)
-      worker.postMessage(message)
+      worker.send(message)
       return Effect.sync(detach)
     }
   )
 }
 
 function spawnWorker() {
-  if (!import.meta.url.endsWith(".ts")) {
-    return new Worker(new URL("./database-browser-worker.mjs", import.meta.url))
-  }
-  // tsx does not install its resolver inside worker threads, so development
-  // registers it before importing the TypeScript entry.
-  const entry = new URL("./database-browser-worker.ts", import.meta.url)
-  const tsx = import.meta.resolve("tsx/esm/api")
-  return new Worker(
-    `import(${JSON.stringify(tsx)}).then((tsx) => { tsx.register(); return import(${JSON.stringify(entry.href)}) })`,
-    { eval: true }
+  const development = import.meta.url.endsWith(".ts")
+  const entry = new URL(
+    development
+      ? "./database-browser-worker.ts"
+      : "./database-browser-worker.mjs",
+    import.meta.url
   )
+  return fork(fileURLToPath(entry), [], {
+    // Production workers skip the Relay's own preloads (Sentry); development
+    // keeps tsx's loader so the TypeScript entry can run.
+    execArgv: [
+      ...(development
+        ? process.execArgv.filter((flag) => !flag.startsWith("--inspect"))
+        : []),
+      "--disable-warning=ExperimentalWarning",
+    ],
+    serialization: "advanced",
+    stdio: ["ignore", "inherit", "inherit", "pipe", "ipc"],
+  })
+}
+
+function stopWorker(worker: ChildProcess) {
+  if (worker.exitCode !== null || worker.signalCode !== null) {
+    return Effect.void
+  }
+  return Effect.callback<void>((resume) => {
+    worker.once("exit", () => resume(Effect.void))
+    worker.kill()
+  })
 }

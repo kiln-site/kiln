@@ -9,7 +9,6 @@ export const databaseBrowserEngineSchema = z.enum(["sqlite"])
 export const DATABASE_BROWSER_MAX_PAGE_ROWS = 500
 export const DATABASE_BROWSER_MAX_QUERY_ROWS = 1_000
 export const DATABASE_BROWSER_MAX_CHANGES = 500
-export const DATABASE_BROWSER_COUNT_CAP = 100_000
 
 const identifierSchema = z
   .string()
