@@ -19,6 +19,8 @@ import {
   ChevronsLeft,
   Code2,
   Database,
+  Download,
+  EllipsisVertical,
   Eye,
   KeyRound,
   LoaderCircle,
@@ -43,6 +45,11 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@workspace/ui/components/dialog"
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@workspace/ui/components/popover"
 import { showToast } from "@workspace/ui/components/sonner"
 import { Switch } from "@workspace/ui/components/switch"
 import { cn } from "@workspace/ui/lib/utils"
@@ -50,7 +57,8 @@ import { cn } from "@workspace/ui/lib/utils"
 import { FileWorkspaceLoadingState } from "@/components/file-tree-loading-panel"
 import { PanelResizeHandle } from "@/components/panel-resize-handle"
 import { EditorTooltip } from "@/components/files/editor-tooltip"
-import { EditorDownloadButton } from "@/components/files/file-editor-toolbar-actions"
+import { FileActionMenuItem } from "@/components/files/file-actions"
+import { FileDownloadDialog } from "@/components/files/file-download-dialog"
 import {
   fileEditorHeaderClassName,
   fileEditorHeaderContentClassName,
@@ -140,18 +148,14 @@ export function DatabaseViewer({
             readOnly={readOnly !== null && !writable}
           />
           <div className="ml-auto flex shrink-0 items-center gap-1">
+            <DatabaseRefreshButton source={source} />
             {readOnly !== null ? (
               <DatabaseQueryButton
                 open={queryOpen}
                 onOpenChange={setQueryOpen}
               />
             ) : null}
-            <DatabaseRefreshButton source={source} />
-            <EditorDownloadButton
-              instance={instance}
-              loading={false}
-              path={displayPath}
-            />
+            <DatabaseOverflowMenu instance={instance} path={displayPath} />
           </div>
         </div>
       </div>
@@ -225,6 +229,60 @@ function DatabaseQueryButton({
         Query
       </Button>
     </EditorTooltip>
+  )
+}
+
+function DatabaseOverflowMenu({
+  instance,
+  path,
+}: {
+  instance: InstanceWorkspaceInstance
+  path: string
+}) {
+  const [open, setOpen] = React.useState(false)
+  const [downloadOpen, setDownloadOpen] = React.useState(false)
+  return (
+    <>
+      <Popover open={open} onOpenChange={setOpen}>
+        <PopoverTrigger asChild>
+          <Button
+            variant={open ? "secondary" : "ghost"}
+            size="icon"
+            aria-label="More database actions"
+            aria-expanded={open}
+            title="More database actions"
+          >
+            <EllipsisVertical className="size-[18px]" />
+          </Button>
+        </PopoverTrigger>
+        <PopoverContent
+          align="end"
+          side="bottom"
+          sideOffset={7}
+          collisionPadding={8}
+          className="w-[min(17rem,calc(100vw-1rem))] p-1"
+        >
+          <p className="type-technical-label px-2 pt-1 pb-1.5 text-muted-foreground">
+            Database actions
+          </p>
+          <FileActionMenuItem
+            icon={<Download />}
+            label="Download"
+            detail="Preview size and compression"
+            onClick={() => {
+              setOpen(false)
+              setDownloadOpen(true)
+            }}
+          />
+        </PopoverContent>
+      </Popover>
+      <FileDownloadDialog
+        instance={instance}
+        open={downloadOpen}
+        path={path}
+        onOpenChange={setDownloadOpen}
+      />
+    </>
   )
 }
 
