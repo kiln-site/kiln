@@ -6,7 +6,6 @@ import {
   FilePlus,
   FolderPlus,
   FolderTree,
-  GripVertical,
   House,
   LoaderCircle,
   Network,
@@ -34,6 +33,7 @@ import type { InstanceWorkspaceInstance } from "@/lib/relay-selectors"
 import { EditorTooltip } from "@/components/files/editor-tooltip"
 import { FileActionsMenu } from "@/components/files/file-actions-menu"
 import { selectedUploadFiles } from "@/components/files/file-upload-selection"
+import { PanelResizeHandle } from "@/components/panel-resize-handle"
 import {
   directoryPath,
   fileTreeParentDirectoryPaths,
@@ -1272,16 +1272,13 @@ export function FileTreePanel({
         className="pointer-events-none absolute inset-y-0 right-0 z-30 hidden w-px bg-border/80 md:block"
       />
 
-      <div
+      <PanelResizeHandle
         ref={resizeHandleRef}
-        role="separator"
-        tabIndex={0}
         aria-label="Resize file tree"
-        aria-orientation="vertical"
         aria-valuemin={fileTreeMinWidth}
         aria-valuemax={fileTreeMaxWidth}
         aria-valuenow={currentWidth.current}
-        className={`${collapsed ? "md:hidden" : "md:flex"} group absolute inset-y-0 -right-1 z-40 hidden w-2.5 cursor-col-resize touch-none items-center justify-center outline-none`}
+        className={`${collapsed ? "md:hidden" : "md:flex"} hidden`}
         onPointerDown={handleResizePointerDown}
         onPointerMove={handleResizePointerMove}
         onPointerUp={handleResizePointerEnd}
@@ -1294,12 +1291,7 @@ export function FileTreePanel({
           persistFileTreeWidth(applyFileTreeWidth(defaultFileTreeWidth()))
         }}
         onKeyDown={handleResizeKeyDown}
-      >
-        <span className="absolute inset-y-0 left-1/2 w-px -translate-x-1/2 bg-border/80 transition-colors group-hover:bg-primary/55 group-focus-visible:bg-primary/75 group-data-[resizing=true]:bg-primary" />
-        <span className="relative grid h-9 w-2.5 place-items-center overflow-hidden border border-primary/35 bg-background text-primary opacity-0 shadow-[0_0_14px_color-mix(in_oklch,var(--primary),transparent_70%)] transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100 group-data-[resizing=true]:opacity-100">
-          <GripVertical className="size-2" />
-        </span>
-      </div>
+      />
     </aside>
   )
 }

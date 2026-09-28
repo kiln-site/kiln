@@ -1,4 +1,5 @@
 import * as React from "react"
+import { Result } from "effect"
 import {
   keepPreviousData,
   useIsFetching,
@@ -47,6 +48,7 @@ import { Switch } from "@workspace/ui/components/switch"
 import { cn } from "@workspace/ui/lib/utils"
 
 import { FileWorkspaceLoadingState } from "@/components/file-tree-loading-panel"
+import { PanelResizeHandle } from "@/components/panel-resize-handle"
 import { EditorTooltip } from "@/components/files/editor-tooltip"
 import { EditorDownloadButton } from "@/components/files/file-editor-toolbar-actions"
 import {
@@ -375,9 +377,13 @@ const DatabaseTableList = React.memo(function DatabaseTableList({
     : allTables
   const tables = visible.filter(({ kind }) => kind === "table")
   const views = visible.filter(({ kind }) => kind === "view")
+  const panelRef = React.useRef<HTMLElement>(null)
 
   return (
-    <aside className="hidden w-52 shrink-0 flex-col border-r border-border bg-muted/[0.06] md:flex xl:w-60">
+    <aside
+      ref={panelRef}
+      className="relative hidden w-[var(--database-tables-width,14rem)] shrink-0 flex-col border-r border-border bg-muted/[0.06] md:flex"
+    >
       <div className="flex h-10 shrink-0 items-center gap-2 border-b border-border/70 px-2.5">
         <Search className="size-3.5 shrink-0 text-muted-foreground" />
         <input
@@ -425,9 +431,139 @@ const DatabaseTableList = React.memo(function DatabaseTableList({
         </button>
         <DatabaseMetaLabel source={source} />
       </div>
+      <TablesPanelResizeHandle panelRef={panelRef} />
     </aside>
   )
 })
+
+const tablesPanelWidthStorageKey = "kiln:database-tables-width"
+const tablesPanelDefaultWidth = 224
+const tablesPanelMinWidth = 160
+const tablesPanelMaxWidth = 440
+
+function clampTablesPanelWidth(width: number, panel: HTMLElement | null) {
+  const workspace = panel?.parentElement?.getBoundingClientRect().width
+  const maximum = workspace
+    ? Math.max(
+        tablesPanelMinWidth,
+        Math.min(tablesPanelMaxWidth, Math.floor(workspace * 0.4))
+      )
+    : tablesPanelMaxWidth
+  return Math.min(maximum, Math.max(tablesPanelMinWidth, Math.round(width)))
+}
+
+// Mirrors the file tree resize: widths are written straight to a CSS
+// variable during the drag so nothing re-renders, then saved on release.
+function TablesPanelResizeHandle({
+  panelRef,
+}: {
+  panelRef: React.RefObject<HTMLElement | null>
+}) {
+  const handleRef = React.useRef<HTMLDivElement>(null)
+  const width = React.useRef(tablesPanelDefaultWidth)
+  const session = React.useRef<{
+    pointerId: number
+    startWidth: number
+    startX: number
+  } | null>(null)
+  const frame = React.useRef<number | null>(null)
+
+  const apply = React.useCallback(
+    (next: number) => {
+      const panel = panelRef.current
+      width.current = clampTablesPanelWidth(next, panel)
+      panel?.style.setProperty("--database-tables-width", `${width.current}px`)
+      handleRef.current?.setAttribute("aria-valuenow", String(width.current))
+      return width.current
+    },
+    [panelRef]
+  )
+  const persist = (value: number) => {
+    Result.try(() =>
+      window.localStorage.setItem(tablesPanelWidthStorageKey, String(value))
+    )
+  }
+
+  React.useLayoutEffect(() => {
+    const stored = Result.try(() =>
+      Number(window.localStorage.getItem(tablesPanelWidthStorageKey))
+    )
+    const saved = Result.isSuccess(stored) ? stored.success : 0
+    apply(saved > 0 ? saved : tablesPanelDefaultWidth)
+  }, [apply])
+
+  function finish(pointerId?: number) {
+    if (pointerId !== undefined && session.current?.pointerId !== pointerId) {
+      return
+    }
+    if (frame.current !== null) {
+      window.cancelAnimationFrame(frame.current)
+      frame.current = null
+    }
+    session.current = null
+    document.documentElement.style.removeProperty("user-select")
+    handleRef.current?.removeAttribute("data-resizing")
+    persist(width.current)
+  }
+
+  return (
+    <PanelResizeHandle
+      ref={handleRef}
+      aria-label="Resize tables"
+      aria-valuemin={tablesPanelMinWidth}
+      aria-valuemax={tablesPanelMaxWidth}
+      aria-valuenow={tablesPanelDefaultWidth}
+      className="flex"
+      onPointerDown={(event) => {
+        if (event.button !== 0 || !panelRef.current) return
+        event.preventDefault()
+        session.current = {
+          pointerId: event.pointerId,
+          startWidth: panelRef.current.getBoundingClientRect().width,
+          startX: event.clientX,
+        }
+        document.documentElement.style.userSelect = "none"
+        event.currentTarget.dataset.resizing = "true"
+        Result.try(() => event.currentTarget.setPointerCapture(event.pointerId))
+      }}
+      onPointerMove={(event) => {
+        const active = session.current
+        if (!active || active.pointerId !== event.pointerId) return
+        const next = active.startWidth + event.clientX - active.startX
+        if (frame.current !== null) window.cancelAnimationFrame(frame.current)
+        frame.current = window.requestAnimationFrame(() => {
+          frame.current = null
+          apply(next)
+        })
+      }}
+      onPointerUp={(event) => finish(event.pointerId)}
+      onPointerCancel={(event) => finish(event.pointerId)}
+      onLostPointerCapture={() => {
+        if (session.current) finish()
+      }}
+      onDoubleClick={(event) => {
+        event.preventDefault()
+        persist(apply(tablesPanelDefaultWidth))
+      }}
+      onKeyDown={(event) => {
+        const step = event.shiftKey ? 32 : 16
+        const next =
+          event.key === "ArrowLeft"
+            ? width.current - step
+            : event.key === "ArrowRight"
+              ? width.current + step
+              : event.key === "Home"
+                ? tablesPanelMinWidth
+                : event.key === "End"
+                  ? tablesPanelMaxWidth
+                  : null
+        if (next === null) return
+        event.preventDefault()
+        persist(apply(next))
+      }}
+    />
+  )
+}
 
 function MobileTablePicker({
   onSelect,

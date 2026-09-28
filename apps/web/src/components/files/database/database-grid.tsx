@@ -19,6 +19,11 @@ import {
   ContextMenuSeparator,
   ContextMenuTrigger,
 } from "@workspace/ui/components/context-menu"
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@workspace/ui/components/tooltip"
 import { cn } from "@workspace/ui/lib/utils"
 
 import { copyToClipboard } from "@/components/files/file-viewer-toolbar"
@@ -114,12 +119,8 @@ function initialColumnWidths(
 ) {
   const sample = rows.slice(0, 50)
   return columns.map((column, index) => {
-    // Header: key icon, name, and type label share the cell.
-    let characters =
-      column.name.length +
-      (column.type?.length ?? 0) * 0.8 +
-      (column.primaryKey ? 2 : 0) +
-      2
+    // Header: key icon, name, and sort arrow share the cell.
+    let characters = column.name.length + (column.primaryKey ? 2 : 0) + 3
     for (const row of sample) {
       characters = Math.max(
         characters,
@@ -583,38 +584,39 @@ const GridHeader = React.memo(function GridHeader({
             className="group/header relative flex shrink-0 items-center border-r border-border/70 bg-card"
             style={cellStyles[index]}
           >
-            <button
-              type="button"
-              className="flex h-full min-w-0 flex-1 items-center gap-1.5 px-2.5 text-left outline-none focus-visible:bg-accent/50 enabled:hover:bg-accent/40 disabled:cursor-default"
-              disabled={!onSortChange}
-              title={`${column.name}${column.type ? ` · ${column.type}` : ""}`}
-              onClick={() =>
-                onSortChange?.(
-                  sorted === null
-                    ? { column: column.name, direction: "asc" }
-                    : sorted === "asc"
-                      ? { column: column.name, direction: "desc" }
-                      : null
-                )
-              }
-            >
-              {column.primaryKey ? (
-                <KeyRound className="size-3 shrink-0 text-primary" />
-              ) : null}
-              <span className="truncate text-xs font-semibold text-foreground">
-                {column.name}
-              </span>
-              {column.type ? (
-                <span className="type-meta truncate font-mono text-[0.6875rem] text-muted-foreground/70 uppercase">
-                  {column.type}
-                </span>
-              ) : null}
-              {sorted === "asc" ? (
-                <ArrowUp className="ml-auto size-3.5 shrink-0 text-primary" />
-              ) : sorted === "desc" ? (
-                <ArrowDown className="ml-auto size-3.5 shrink-0 text-primary" />
-              ) : null}
-            </button>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
+                  type="button"
+                  className="flex h-full min-w-0 flex-1 items-center gap-1.5 px-2.5 text-left outline-none focus-visible:bg-accent/50 enabled:hover:bg-accent/40 disabled:cursor-default"
+                  disabled={!onSortChange}
+                  onClick={() =>
+                    onSortChange?.(
+                      sorted === null
+                        ? { column: column.name, direction: "asc" }
+                        : sorted === "asc"
+                          ? { column: column.name, direction: "desc" }
+                          : null
+                    )
+                  }
+                >
+                  {column.primaryKey ? (
+                    <KeyRound className="size-3 shrink-0 text-primary" />
+                  ) : null}
+                  <span className="truncate text-xs font-semibold text-foreground">
+                    {column.name}
+                  </span>
+                  {sorted === "asc" ? (
+                    <ArrowUp className="ml-auto size-3.5 shrink-0 text-primary" />
+                  ) : sorted === "desc" ? (
+                    <ArrowDown className="ml-auto size-3.5 shrink-0 text-primary" />
+                  ) : null}
+                </button>
+              </TooltipTrigger>
+              <TooltipContent side="bottom" sideOffset={6}>
+                <ColumnTooltip column={column} />
+              </TooltipContent>
+            </Tooltip>
             <div
               role="separator"
               aria-orientation="vertical"
@@ -628,6 +630,28 @@ const GridHeader = React.memo(function GridHeader({
     </div>
   )
 })
+
+function ColumnTooltip({ column }: { column: DatabaseGridColumn }) {
+  const traits = [
+    column.primaryKey ? "Primary key" : null,
+    column.readOnly ? "Generated" : null,
+  ].filter(Boolean)
+  return (
+    <span className="flex flex-col gap-0.5">
+      <span className="font-mono uppercase">
+        {column.type || "No declared type"}
+      </span>
+      {traits.length > 0 ? (
+        <span className="opacity-70">{traits.join(" · ")}</span>
+      ) : null}
+    </span>
+  )
+}
+
+// Alternate rows get a faint lift. It is an opaque mix so the sticky row
+// number gutter can share it without content showing through.
+const stripedRowClassName =
+  "bg-[color-mix(in_oklch,var(--card),var(--foreground)_2.5%)]"
 
 const GridRow = React.memo(function GridRow({
   cellStyles,
@@ -668,6 +692,7 @@ const GridRow = React.memo(function GridRow({
       aria-rowindex={rowIndex + 2}
       className={cn(
         "absolute top-0 left-0 flex w-full border-b border-border/45",
+        rowIndex % 2 === 1 && stripedRowClassName,
         inserted && "bg-emerald-500/[0.07]",
         deleted && "bg-destructive/[0.08] text-muted-foreground line-through"
       )}
@@ -676,6 +701,7 @@ const GridRow = React.memo(function GridRow({
       <div
         className={cn(
           "type-code sticky left-0 z-10 flex shrink-0 items-center justify-end border-r border-border bg-card pr-2.5 text-[0.6875rem] text-muted-foreground/65 tabular-nums",
+          rowIndex % 2 === 1 && stripedRowClassName,
           inserted && "text-emerald-500",
           deleted && "text-destructive"
         )}
