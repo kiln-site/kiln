@@ -581,7 +581,7 @@ const GridHeader = React.memo(function GridHeader({
                   ? "descending"
                   : "none"
             }
-            className="group/header relative flex shrink-0 items-center border-r border-border/70 bg-card"
+            className="group/header relative flex shrink-0 items-center border-r border-border bg-card"
             style={cellStyles[index]}
           >
             <Tooltip>
@@ -766,7 +766,7 @@ const GridCell = React.memo(function GridCell({
       data-row={rowIndex}
       data-column={columnIndex}
       className={cn(
-        "type-code flex shrink-0 items-center overflow-hidden border-r border-border/35 px-2.5 text-[0.8125rem] leading-none whitespace-nowrap select-none",
+        "type-code flex shrink-0 items-center overflow-hidden border-r border-border px-2.5 text-[0.8125rem] leading-none whitespace-nowrap select-none",
         numeric && "justify-end tabular-nums",
         edited && "bg-primary/12 text-primary"
       )}

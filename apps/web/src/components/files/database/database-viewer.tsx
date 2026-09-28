@@ -84,7 +84,7 @@ const SyntaxCodeEditor = React.lazy(async () => {
   return { default: module.SyntaxCodeEditor }
 })
 
-type DatabaseView = "data" | "structure" | "sql"
+type DatabaseView = "data" | "structure"
 
 export function DatabaseViewer({
   canWrite,
@@ -125,6 +125,7 @@ export function DatabaseViewer({
     if (notDatabase) onNotDatabase()
   }, [notDatabase, onNotDatabase])
   const writable = canWrite && readOnly === false
+  const [queryOpen, setQueryOpen] = React.useState(false)
   const liveServer =
     instance.observedState === "running" ||
     instance.observedState === "starting"
@@ -139,6 +140,12 @@ export function DatabaseViewer({
             readOnly={readOnly !== null && !writable}
           />
           <div className="ml-auto flex shrink-0 items-center gap-1">
+            {readOnly !== null ? (
+              <DatabaseQueryButton
+                open={queryOpen}
+                onOpenChange={setQueryOpen}
+              />
+            ) : null}
             <DatabaseRefreshButton source={source} />
             <EditorDownloadButton
               instance={instance}
@@ -153,8 +160,10 @@ export function DatabaseViewer({
         <DatabaseWorkspace
           key={displayPath}
           liveServer={liveServer}
+          queryOpen={queryOpen}
           source={source}
           writable={writable}
+          onQueryOpenChange={setQueryOpen}
         />
       ) : overviewQuery.isError ? (
         <DatabaseUnavailable message={overviewQuery.error.message} />
@@ -191,6 +200,31 @@ function DatabaseMetaLabel({ source }: { source: DatabaseSource }) {
     <p className="type-meta mt-1 truncate px-2 pb-0.5 font-mono text-[0.6875rem] text-muted-foreground/75">
       {meta.data ?? ""}
     </p>
+  )
+}
+
+function DatabaseQueryButton({
+  onOpenChange,
+  open,
+}: {
+  onOpenChange: (open: boolean) => void
+  open: boolean
+}) {
+  return (
+    <EditorTooltip content={open ? "Close query" : "Run a SQL query"}>
+      <Button
+        size="default"
+        aria-pressed={open}
+        className={cn(
+          "gap-1.5 px-2.5 text-xs shadow-none",
+          open && "ring-2 ring-primary/40 ring-offset-2 ring-offset-card"
+        )}
+        onClick={() => onOpenChange(!open)}
+      >
+        <Code2 className="size-[17px]" />
+        Query
+      </Button>
+    </EditorTooltip>
   )
 }
 
@@ -233,10 +267,14 @@ function DatabaseUnavailable({ message }: { message: string }) {
 
 function DatabaseWorkspace({
   liveServer,
+  onQueryOpenChange,
+  queryOpen,
   source,
   writable,
 }: {
   liveServer: boolean
+  onQueryOpenChange: (open: boolean) => void
+  queryOpen: boolean
   source: DatabaseSource
   writable: boolean
 }) {
@@ -248,9 +286,12 @@ function DatabaseWorkspace({
   const [tableName, setTableName] = React.useState<string | null>(
     () => tables.find(({ kind }) => kind === "table")?.name ?? null
   )
-  const [view, setView] = React.useState<DatabaseView>(
-    tables.length > 0 ? "data" : "sql"
-  )
+  const [view, setView] = React.useState<DatabaseView>("data")
+  // An empty database has nothing to browse, so start in the query console.
+  const emptyDatabase = tables.length === 0
+  React.useLayoutEffect(() => {
+    if (emptyDatabase) onQueryOpenChange(true)
+  }, [emptyDatabase, onQueryOpenChange])
   const [editStore, setEditStore] = React.useState(createDatabaseEditStore)
   const [pendingSwitch, setPendingSwitch] = React.useState<{
     table: string | null
@@ -269,6 +310,7 @@ function DatabaseWorkspace({
     if (leavingTable) setEditStore(createDatabaseEditStore())
     setTableName(next.table)
     setView(next.view)
+    onQueryOpenChange(false)
   }
 
   return (
@@ -276,24 +318,20 @@ function DatabaseWorkspace({
       <DatabaseTableList
         source={source}
         tables={tables}
-        selected={view === "sql" ? null : (table?.name ?? null)}
-        sqlActive={view === "sql"}
-        onSelect={(name) =>
-          navigate({ table: name, view: view === "sql" ? "data" : view })
-        }
-        onOpenSql={() => navigate({ table: table?.name ?? null, view: "sql" })}
+        selected={queryOpen ? null : (table?.name ?? null)}
+        onSelect={(name) => navigate({ table: name, view })}
       />
       <div className="flex min-w-0 flex-1 flex-col">
         <MobileTablePicker
           tables={tables}
-          value={view === "sql" ? null : (table?.name ?? null)}
+          value={queryOpen ? null : (table?.name ?? null)}
           onSelect={(name) =>
             name === null
-              ? navigate({ table: table?.name ?? null, view: "sql" })
-              : navigate({ table: name, view: view === "sql" ? "data" : view })
+              ? onQueryOpenChange(true)
+              : navigate({ table: name, view })
           }
         />
-        {view === "sql" ? (
+        {queryOpen ? (
           <SqlConsole
             tables={tables}
             source={source}
@@ -314,7 +352,7 @@ function DatabaseWorkspace({
           />
         ) : (
           <div className="grid flex-1 place-items-center px-6 text-center text-xs text-muted-foreground">
-            This database has no tables yet. Use the SQL console to create one.
+            This database has no tables yet. Use Query to create one.
           </div>
         )}
       </div>
@@ -343,6 +381,7 @@ function DatabaseWorkspace({
                 setEditStore(createDatabaseEditStore())
                 setTableName(pendingSwitch.table)
                 setView(pendingSwitch.view)
+                onQueryOpenChange(false)
                 setPendingSwitch(null)
               }}
             >
@@ -356,18 +395,14 @@ function DatabaseWorkspace({
 }
 
 const DatabaseTableList = React.memo(function DatabaseTableList({
-  onOpenSql,
   onSelect,
   selected,
   source,
-  sqlActive,
   tables: allTables,
 }: {
-  onOpenSql: () => void
   onSelect: (name: string) => void
   selected: string | null
   source: DatabaseSource
-  sqlActive: boolean
   tables: ReadonlyArray<DatabaseTable>
 }) {
   const [filter, setFilter] = React.useState("")
@@ -416,19 +451,7 @@ const DatabaseTableList = React.memo(function DatabaseTableList({
           </p>
         ) : null}
       </nav>
-      <div className="shrink-0 border-t border-border/70 p-1.5">
-        <button
-          type="button"
-          aria-pressed={sqlActive}
-          className={cn(
-            "flex h-8 w-full items-center gap-2 px-2 text-xs font-medium outline-none hover:bg-accent/50 focus-visible:bg-accent/60",
-            sqlActive ? "bg-primary/12 text-primary" : "text-foreground/85"
-          )}
-          onClick={onOpenSql}
-        >
-          <Code2 className="size-4" />
-          SQL console
-        </button>
+      <div className="shrink-0 border-t border-border/70 px-1.5 pt-1 pb-1.5">
         <DatabaseMetaLabel source={source} />
       </div>
       <TablesPanelResizeHandle panelRef={panelRef} />
@@ -587,7 +610,7 @@ function MobileTablePicker({
             {kind === "view" ? `${name} (view)` : name}
           </option>
         ))}
-        <option value="">SQL console</option>
+        <option value="">Query</option>
       </select>
     </div>
   )
@@ -1059,10 +1082,6 @@ function TableFooter({
             Save
           </Button>
         </div>
-      ) : editable ? (
-        <span className="type-meta ml-auto hidden text-muted-foreground/75 lg:inline">
-          Double-click a cell to edit · Right-click for more
-        </span>
       ) : null}
     </div>
   )
@@ -1163,7 +1182,7 @@ function SqlConsole({
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="flex h-10 shrink-0 items-center gap-2 border-b border-border/70 px-2">
         <span className="flex items-center gap-1.5 px-1 text-xs font-medium">
-          <Code2 className="size-3.5 text-primary" /> SQL console
+          <Code2 className="size-3.5 text-primary" /> Query
         </span>
         <div className="ml-auto flex items-center gap-3">
           {writable ? (
