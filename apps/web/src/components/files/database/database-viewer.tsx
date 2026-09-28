@@ -417,7 +417,7 @@ const DatabaseTableList = React.memo(function DatabaseTableList({
   return (
     <aside
       ref={panelRef}
-      className="relative hidden w-[var(--database-tables-width,14rem)] shrink-0 flex-col border-r border-border bg-muted/[0.06] md:flex"
+      className="relative hidden w-[var(--database-tables-width,14rem)] shrink-0 flex-col bg-muted/[0.06] md:flex"
     >
       <div className="flex h-10 shrink-0 items-center gap-2 border-b border-border/70 px-2.5">
         <Search className="size-3.5 shrink-0 text-muted-foreground" />
@@ -454,6 +454,11 @@ const DatabaseTableList = React.memo(function DatabaseTableList({
       <div className="shrink-0 border-t border-border/70 px-1.5 pt-1 pb-1.5">
         <DatabaseMetaLabel source={source} />
       </div>
+      {/* Same edge as the file tree: a hairline the resize handle overlaps. */}
+      <span
+        aria-hidden="true"
+        className="pointer-events-none absolute inset-y-0 right-0 z-30 w-px bg-border/80"
+      />
       <TablesPanelResizeHandle panelRef={panelRef} />
     </aside>
   )
