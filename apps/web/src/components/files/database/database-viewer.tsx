@@ -1419,7 +1419,6 @@ function TableFooter({
   >([])
   const save = useMutation({
     mutationFn: async () => {
-      editStore.setLocked(true)
       const batch = editStore.toBatch()
       const result = await source.mutate(editStore.table, batch.changes)
       return { batch, result }
@@ -1454,6 +1453,19 @@ function TableFooter({
       showToast({ message: error.message, type: "error" })
     },
   })
+  const saving = React.useSyncExternalStore(
+    editStore.subscribe,
+    editStore.isLocked,
+    editStore.isLocked
+  )
+  // The edit store's lock, not this component's mutation state, decides
+  // whether a save is running: opening Query remounts this view mid-save.
+  const submitSave = save.mutate
+  const startSave = React.useCallback(() => {
+    if (editStore.isLocked() || editStore.getPendingCount() === 0) return
+    editStore.setLocked(true)
+    submitSave()
+  }, [editStore, submitSave])
   // Resolving a conflict saves whatever is still staged, which is what the
   // user asked for when they pressed Save.
   const resolveConflicts = (keepMine: boolean) => {
@@ -1462,7 +1474,7 @@ function TableFooter({
       else editStore.drop([rowId])
     }
     setConflicts([])
-    if (editStore.getPendingCount() > 0) save.mutate()
+    startSave()
   }
 
   React.useEffect(() => {
@@ -1478,11 +1490,11 @@ function TableFooter({
         return
       }
       event.preventDefault()
-      if (editStore.getPendingCount() > 0 && !save.isPending) save.mutate()
+      startSave()
     }
     window.addEventListener("keydown", handleSaveShortcut)
     return () => window.removeEventListener("keydown", handleSaveShortcut)
-  }, [editStore, editable, save])
+  }, [editable, startSave])
 
   const first = pageRows === 0 ? 0 : offset + 1
   const last = offset + pageRows
@@ -1551,22 +1563,18 @@ function TableFooter({
           <Button
             variant="outline"
             size="sm"
-            disabled={save.isPending}
+            disabled={saving}
             onClick={() => editStore.discard()}
           >
             <Undo2 /> Discard
           </Button>
           <Button
             size="sm"
-            disabled={save.isPending}
+            disabled={saving}
             aria-keyshortcuts="Control+S Meta+S"
-            onClick={() => save.mutate()}
+            onClick={startSave}
           >
-            {save.isPending ? (
-              <LoaderCircle className="animate-spin" />
-            ) : (
-              <Save />
-            )}
+            {saving ? <LoaderCircle className="animate-spin" /> : <Save />}
             Save
           </Button>
         </div>

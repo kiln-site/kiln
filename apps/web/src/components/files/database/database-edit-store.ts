@@ -105,8 +105,12 @@ export function createDatabaseEditStore(table: string) {
     },
     isRowDeleted: (rowId: string) => pending.get(rowId)?.deleted ?? false,
     isLocked: () => locked,
+    // Also the "saving" state the UI shows. It lives here, not in a
+    // component, so views that remount mid-save still see it.
     setLocked(next: boolean) {
+      if (locked === next) return
       locked = next
+      emit()
     },
     setCell(row: DatabaseEditableRow, column: string, value: DatabaseValue) {
       if (locked) return
