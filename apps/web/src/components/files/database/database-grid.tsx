@@ -67,7 +67,11 @@ interface DatabaseGridProps {
 
 const ROW_HEIGHT = 30
 const HEADER_HEIGHT = 34
-const GUTTER_WIDTH = 60
+// The row number gutter fits the longest number shown. Row numbers use
+// JetBrains Mono at 0.6875rem, whose digits are 0.6em wide.
+const GUTTER_DIGIT = "0.4125rem"
+const GUTTER_PADDING = "1.375rem"
+const gutterStyle: React.CSSProperties = { width: "var(--db-gutter)" }
 const MIN_COLUMN_WIDTH = 64
 const MAX_COLUMN_WIDTH = 1_200
 const noopSubscribe = () => () => {}
@@ -207,8 +211,8 @@ export const DatabaseGrid = React.memo(function DatabaseGrid({
     })
   }, [columns, widthSignature.sampled, widths])
   widthsRef.current = widths
-  const totalWidth =
-    GUTTER_WIDTH + widths.reduce((sum, width) => sum + width, 0)
+  const totalWidth = widths.reduce((sum, width) => sum + width, 0)
+  const gutterDigits = Math.max(2, String(rowNumberOffset + totalRows).length)
   // The last column takes up any room left of the viewport so the grid never
   // ends in an empty filler column.
   const cellStyles = React.useMemo(
@@ -223,13 +227,14 @@ export const DatabaseGrid = React.memo(function DatabaseGrid({
   )
   const canvasStyle = React.useMemo(() => {
     const style: Record<string, string> = {
-      width: `${totalWidth}px`,
+      "--db-gutter": `calc(${gutterDigits} * ${GUTTER_DIGIT} + ${GUTTER_PADDING})`,
+      width: `calc(var(--db-gutter) + ${totalWidth}px)`,
     }
     widths.forEach((width, index) => {
       style[`--db-col-${index}`] = `${width}px`
     })
     return style as React.CSSProperties
-  }, [totalWidth, widths])
+  }, [gutterDigits, totalWidth, widths])
 
   const model = React.useRef<GridModel>({ columns, editStore, inserted, page })
   model.current = { columns, editStore, inserted, page }
@@ -265,7 +270,7 @@ export const DatabaseGrid = React.memo(function DatabaseGrid({
         // Dragging updates CSS variables directly; React state is written once
         // the pointer is released so rows never re-render mid-drag.
         canvas.style.setProperty(`--db-col-${index}`, `${next}px`)
-        canvas.style.width = `${GUTTER_WIDTH + widthsRef.current.reduce((sum, value) => sum + value, 0)}px`
+        canvas.style.width = `calc(var(--db-gutter) + ${widthsRef.current.reduce((sum, value) => sum + value, 0)}px)`
       }
       selection.bumpLayout()
     },
@@ -280,10 +285,13 @@ export const DatabaseGrid = React.memo(function DatabaseGrid({
       virtualizer.scrollToIndex(position.row, { align: "auto" })
       const scroller = scrollerRef.current
       if (!scroller) return
-      const left = columnLeft(widthsRef.current, position.column)
+      const gutter =
+        scroller.querySelector<HTMLElement>("[data-grid-gutter]")
+          ?.offsetWidth ?? 0
+      const left = gutter + columnOffset(widthsRef.current, position.column)
       const right = left + (widthsRef.current[position.column] ?? 0)
-      if (left - GUTTER_WIDTH < scroller.scrollLeft) {
-        scroller.scrollLeft = left - GUTTER_WIDTH
+      if (left - gutter < scroller.scrollLeft) {
+        scroller.scrollLeft = left - gutter
       } else if (right > scroller.scrollLeft + scroller.clientWidth) {
         scroller.scrollLeft = right - scroller.clientWidth
       }
@@ -600,12 +608,15 @@ const GridHeader = React.memo(function GridHeader({
   return (
     <div
       role="row"
-      className="sticky top-0 z-20 flex border-b border-border bg-muted/40 backdrop-blur-sm"
+      // Opaque and uncomposited so it snaps to the same device pixels as the
+      // rows; the strip above covers any rounding gap at the scroller's edge.
+      className="sticky top-0 z-20 flex border-b border-border bg-card before:pointer-events-none before:absolute before:inset-x-0 before:-top-1 before:h-1 before:bg-card"
       style={{ height: HEADER_HEIGHT }}
     >
       <div
+        data-grid-gutter
         className="sticky left-0 z-10 shrink-0 border-r border-border bg-card"
-        style={{ width: GUTTER_WIDTH }}
+        style={gutterStyle}
         aria-hidden="true"
       />
       {columns.map((column, index) => {
@@ -749,7 +760,7 @@ const GridRow = React.memo(function GridRow({
           inserted && "text-emerald-500",
           deleted && "text-destructive"
         )}
-        style={{ width: GUTTER_WIDTH }}
+        style={gutterStyle}
       >
         {label}
       </div>
@@ -1134,10 +1145,15 @@ function cellFromEvent(event: React.SyntheticEvent): GridPosition | null {
   }
 }
 
+function columnOffset(widths: ReadonlyArray<number>, column: number) {
+  let offset = 0
+  for (let index = 0; index < column; index += 1) offset += widths[index] ?? 0
+  return offset
+}
+
+// Canvas position of a column's left edge, past the row number gutter.
 function columnLeft(widths: ReadonlyArray<number>, column: number) {
-  let left = GUTTER_WIDTH
-  for (let index = 0; index < column; index += 1) left += widths[index] ?? 0
-  return left
+  return `calc(var(--db-gutter) + ${columnOffset(widths, column)}px)`
 }
 
 // The last column stretches to fill the grid, so overlays anchor to its edge.
