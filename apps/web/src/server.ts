@@ -5,6 +5,7 @@ import { createServerEntry } from "@tanstack/react-start/server-entry"
 import { Effect } from "effect"
 
 import { hearthStreamHandler } from "./app-server-handler"
+import { migrateDatabase } from "./effect/migrations"
 import { disposeAppRuntime } from "./effect/runtime"
 import { forkPromise } from "./effect/promise"
 import { startAccessInvitationDelivery } from "./lib/access-invitation-delivery"
@@ -16,6 +17,8 @@ import {
   initializeRelayFromEnvironment,
   maintainPersistedRelayConnections,
 } from "./lib/relay-registry"
+
+await migrateDatabase()
 
 await Effect.runPromise(
   Effect.tryPromise({
