@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto"
-import { Effect } from "effect"
+import { Clock, Effect } from "effect"
 import type { RowDataPacket } from "mysql2/promise"
 import {
   builtinPresetSelections,
@@ -234,6 +234,7 @@ export function writeAccessAssignmentEffect(
   actorId: string
 ) {
   return Effect.gen(function* () {
+    const now = yield* Clock.currentTimeMillis
     yield* transaction.execute(
       `DELETE FROM ${databaseTable("access_selection")} WHERE access_id = ?`,
       [accessId]
@@ -252,14 +253,14 @@ export function writeAccessAssignmentEffect(
     }
     for (const id of new Set(assignment.presetIds)) {
       yield* transaction.execute(
-        `INSERT INTO ${databaseTable("access_preset")} (id, access_id, preset_id, granted_by) VALUES (?, ?, ?, ?)`,
-        [randomUUID(), accessId, id, actorId]
+        `INSERT INTO ${databaseTable("access_preset")} (id, access_id, preset_id, granted_by, created_at) VALUES (?, ?, ?, ?, ?)`,
+        [randomUUID(), accessId, id, actorId, now]
       )
     }
     for (const key of new Set(assignment.builtinKeys)) {
       yield* transaction.execute(
-        `INSERT INTO ${databaseTable("access_preset")} (id, access_id, builtin_key, granted_by) VALUES (?, ?, ?, ?)`,
-        [randomUUID(), accessId, key, actorId]
+        `INSERT INTO ${databaseTable("access_preset")} (id, access_id, builtin_key, granted_by, created_at) VALUES (?, ?, ?, ?, ?)`,
+        [randomUUID(), accessId, key, actorId, now]
       )
     }
   })
@@ -271,10 +272,13 @@ export function auditAccessEffect(
   event: string,
   metadata: Record<string, unknown>
 ) {
-  return transaction.execute(
-    `INSERT INTO ${databaseTable("auth_audit")} (user_id, event, metadata) VALUES (?, ?, ?)`,
-    [actorId, event, JSON.stringify(metadata)]
-  )
+  return Effect.gen(function* () {
+    const now = yield* Clock.currentTimeMillis
+    return yield* transaction.execute(
+      `INSERT INTO ${databaseTable("auth_audit")} (user_id, event, metadata, created_at) VALUES (?, ?, ?, ?)`,
+      [actorId, event, JSON.stringify(metadata), now]
+    )
+  })
 }
 
 export function advanceScopeAccessEffect(

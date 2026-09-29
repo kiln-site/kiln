@@ -39,7 +39,7 @@ describe("Relay capability issuance lookup", () => {
               client_private_key_ciphertext: "encrypted-private-key",
               client_public_key: "client-public-key",
               client_role: "full_access",
-              created_at: new Date("2026-01-01T00:00:00.000Z"),
+              created_at: Date.parse("2026-01-01T00:00:00.000Z"),
               created_by: "user-one",
               enabled: 1,
               hostname: "relay.example.com",

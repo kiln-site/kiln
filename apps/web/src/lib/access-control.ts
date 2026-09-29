@@ -1,5 +1,5 @@
 import type { RowDataPacket } from "mysql2/promise"
-import { Effect } from "effect"
+import { Clock, Effect } from "effect"
 
 import {
   accountPolicyFromRow,
@@ -197,6 +197,7 @@ export const refreshRelayAuthorizationUserEffect = Effect.fn(
 }) {
   if (input.user.isDevelopmentBypass) return { revision: 0, user: input.user }
   const database = yield* Database
+  const now = yield* Clock.currentTimeMillis
   const rows = yield* database.queryRows<FreshAuthorizationUserRow>(
     "access.refreshRelayAuthorizationUser",
     `SELECT auth_user.role,
@@ -210,7 +211,7 @@ export const refreshRelayAuthorizationUserEffect = Effect.fn(
                      FROM ${databaseTable("session")} AS auth_session
                     WHERE auth_session.id = ?
                       AND auth_session.userId = auth_user.id
-                      AND auth_session.expiresAt > CURRENT_TIMESTAMP(3)
+                      AND auth_session.expiresAt > ?
                     LIMIT 1)`
                 : input.loginSession?.kind === "cli_credential"
                   ? `(SELECT cli_credential.id
@@ -220,7 +221,7 @@ export const refreshRelayAuthorizationUserEffect = Effect.fn(
                         AND cli_credential.revoked_at IS NULL
                         AND (
                           cli_credential.expires_at IS NULL OR
-                          cli_credential.expires_at > CURRENT_TIMESTAMP(3)
+                          cli_credential.expires_at > ?
                         )
                       LIMIT 1)`
                   : "NULL"
@@ -231,7 +232,11 @@ export const refreshRelayAuthorizationUserEffect = Effect.fn(
       WHERE auth_user.id = ?
       LIMIT 1`,
     input.loginSession
-      ? [input.loginSession.id, input.user.id]
+      ? [
+          input.loginSession.id,
+          input.loginSession.kind === "better_auth" ? new Date(now) : now,
+          input.user.id,
+        ]
       : [input.user.id]
   )
   const current = rows[0]
@@ -340,6 +345,7 @@ export const deleteInstanceAccessEffect = Effect.fn("access.deleteInstance")(
       "access.deleteInstance",
       (transaction) =>
         Effect.gen(function* () {
+          const now = yield* Clock.currentTimeMillis
           const grants = yield* transaction.queryRows<DeletedInstanceGrantRow>(
             `SELECT user_id
              FROM ${databaseTable("access_grant")}
@@ -357,8 +363,8 @@ export const deleteInstanceAccessEffect = Effect.fn("access.deleteInstance")(
         WHERE relay_id = ? AND instance_id = ?
           AND accepted_at IS NULL
           AND revoked_at IS NULL
-          AND expires_at > CURRENT_TIMESTAMP(3)`,
-            [relayId, instanceId]
+          AND expires_at > ?`,
+            [relayId, instanceId, now]
           )
           yield* transaction.execute(
             `DELETE FROM ${databaseTable("permission_preset")}

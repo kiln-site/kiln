@@ -88,26 +88,26 @@ interface InvitationAccessResult {
 
 interface InvitationRow extends RowDataPacket {
   access_type: z.infer<typeof accessTypeSchema>
-  accepted_at: Date | null
+  accepted_at: number | null
   user_id: string | null
-  declined_at: Date | null
-  cancelled_at: Date | null
+  declined_at: number | null
+  cancelled_at: number | null
   email: string
-  expires_at: Date
+  expires_at: number
   id: string
   database_id: string | null
   instance_id: string | null
   invited_by: string
   relay_id: string | null
-  revoked_at: Date | null
+  revoked_at: number | null
   role: string | null
 }
 
 interface PendingInvitationRow extends RowDataPacket {
   access_type: z.infer<typeof accessTypeSchema>
-  created_at: Date
+  created_at: number
   email: string
-  expires_at: Date
+  expires_at: number
   id: string
   database_id: string | null
   instance_id: string | null
@@ -157,8 +157,8 @@ export const getAccessCapabilities = createServerFn({ method: "GET" }).handler(
            JOIN ${databaseTable("relay")} r ON r.id = g.relay_id AND r.enabled = TRUE
           WHERE g.user_id = ? AND g.state = 'pending' AND i.access_type = 'scoped'
             AND i.accepted_at IS NULL AND i.revoked_at IS NULL AND i.declined_at IS NULL
-            AND i.cancelled_at IS NULL AND i.expires_at > CURRENT_TIMESTAMP(3)`,
-      [user.id]
+            AND i.cancelled_at IS NULL AND i.expires_at > ?`,
+      [user.id, Date.now()]
     )
     return {
       pendingScopes: pendingRows.map((row) => ({
@@ -247,7 +247,8 @@ export const grantOrInviteAccess = createServerFn({ method: "POST" })
     }
     const id = randomUUID()
     const token = randomBytes(32).toString("base64url")
-    const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000)
+    const now = Date.now()
+    const expiresAt = now + 7 * 24 * 60 * 60 * 1000
     await runAppEffect(
       "access.platform.invite",
       Effect.gen(function* () {
@@ -271,9 +272,16 @@ export const grantOrInviteAccess = createServerFn({ method: "POST" })
               )
             yield* tx.execute(
               `INSERT INTO ${databaseTable("user")} (id, email, name, emailVerified, role, status, statusChangedAt, createdAt, updatedAt)
-          VALUES (?, ?, ?, FALSE, 'user', 'enabled', CURRENT_TIMESTAMP(3), CURRENT_TIMESTAMP(3), CURRENT_TIMESTAMP(3))
+          VALUES (?, ?, ?, FALSE, 'user', 'enabled', ?, ?, ?)
           ON DUPLICATE KEY UPDATE id = id`,
-              [randomUUID(), data.email, displayNameFromEmail(data.email)]
+              [
+                randomUUID(),
+                data.email,
+                displayNameFromEmail(data.email),
+                new Date(now),
+                new Date(now),
+                new Date(now),
+              ]
             )
             const subjects = yield* tx.queryRows<ExistingAccessUserRow>(
               `SELECT id FROM ${databaseTable("user")} WHERE email = ? FOR UPDATE`,
@@ -285,11 +293,11 @@ export const grantOrInviteAccess = createServerFn({ method: "POST" })
                 new Error("Could not create invited user")
               )
             yield* tx.execute(
-              `UPDATE ${databaseTable("invitation")} SET revoked_at = CURRENT_TIMESTAMP(3), cancelled_at = CURRENT_TIMESTAMP(3) WHERE user_id = ? AND access_type = ? AND accepted_at IS NULL AND revoked_at IS NULL`,
-              [subject.id, data.accessType]
+              `UPDATE ${databaseTable("invitation")} SET revoked_at = ?, cancelled_at = ? WHERE user_id = ? AND access_type = ? AND accepted_at IS NULL AND revoked_at IS NULL`,
+              [now, now, subject.id, data.accessType]
             )
             yield* tx.execute(
-              `INSERT INTO ${databaseTable("invitation")} (id, token_hash, email, user_id, access_type, invited_by, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+              `INSERT INTO ${databaseTable("invitation")} (id, token_hash, email, user_id, access_type, invited_by, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
               [
                 id,
                 hashToken(token),
@@ -298,10 +306,11 @@ export const grantOrInviteAccess = createServerFn({ method: "POST" })
                 data.accessType,
                 user.id,
                 expiresAt,
+                now,
               ]
             )
             yield* tx.execute(
-              `INSERT INTO ${databaseTable("auth_audit")} (user_id, event, metadata) VALUES (?, 'platform.invitation.created', ?)`,
+              `INSERT INTO ${databaseTable("auth_audit")} (user_id, event, metadata, created_at) VALUES (?, 'platform.invitation.created', ?, ?)`,
               [
                 subject.id,
                 JSON.stringify({
@@ -309,6 +318,7 @@ export const grantOrInviteAccess = createServerFn({ method: "POST" })
                   invitationId: id,
                   accessType: data.accessType,
                 }),
+                now,
               ]
             )
           })
@@ -344,7 +354,7 @@ export const grantOrInviteAccess = createServerFn({ method: "POST" })
     }
     publishAccessCollectionChange()
     return {
-      expiresAt: expiresAt.toISOString(),
+      expiresAt: new Date(expiresAt).toISOString(),
       id,
       inviteUrl: inviteUrl.toString(),
       kind: "invitation",
@@ -370,9 +380,9 @@ export const listPendingPlatformInvitations = createServerFn({ method: "GET" })
         WHERE invitation.relay_id IS NULL AND invitation.access_type <> 'scoped'
           AND invitation.accepted_at IS NULL AND invitation.revoked_at IS NULL
           AND invitation.declined_at IS NULL AND invitation.cancelled_at IS NULL
-          AND invitation.expires_at > CURRENT_TIMESTAMP(3)
+          AND invitation.expires_at > ?
         ORDER BY invitation.created_at DESC, invitation.id DESC LIMIT ? OFFSET ?`,
-      [data.limit + 1, data.offset]
+      [Date.now(), data.limit + 1, data.offset]
     )
     return {
       hasMore: rows.length > data.limit,
@@ -380,8 +390,8 @@ export const listPendingPlatformInvitations = createServerFn({ method: "GET" })
         id: row.id,
         email: row.email,
         accessType: row.access_type,
-        createdAt: row.created_at.toISOString(),
-        expiresAt: row.expires_at.toISOString(),
+        createdAt: new Date(row.created_at).toISOString(),
+        expiresAt: new Date(row.expires_at).toISOString(),
       })),
     }
   })
@@ -424,7 +434,7 @@ export const getInvitationPreview = createServerFn({ method: "GET" })
       subjectId: invitation.user_id,
       email: userLookup[0][0]?.email ?? invitation.email,
       databaseId: invitation.database_id,
-      expiresAt: invitation.expires_at.toISOString(),
+      expiresAt: new Date(invitation.expires_at).toISOString(),
       instanceId: invitation.instance_id,
       relayName:
         invitation.access_type === "platform_admin"
@@ -556,7 +566,7 @@ function isInvitationPending(invitation: InvitationRow): boolean {
     !invitation.revoked_at &&
     !invitation.declined_at &&
     !invitation.cancelled_at &&
-    invitation.expires_at.getTime() > Date.now()
+    invitation.expires_at > Date.now()
   )
 }
 
@@ -614,12 +624,14 @@ async function instanceOwnerId(
   const initialOwnerId = await instanceInitialOwnerId(relay, instanceId)
   if (!initialOwnerId) return null
 
+  const now = Date.now()
   await databasePool.execute(
     `INSERT INTO ${databaseTable("instance")}
-       (relay_id, instance_id, display_name, owner_id)
-     VALUES (?, ?, NULL, ?)
-     ON DUPLICATE KEY UPDATE owner_id = COALESCE(owner_id, VALUES(owner_id))`,
-    [relay.id, instanceId, initialOwnerId]
+       (relay_id, instance_id, display_name, owner_id, created_at, updated_at)
+     VALUES (?, ?, NULL, ?, ?, ?)
+     ON DUPLICATE KEY UPDATE owner_id = COALESCE(owner_id, VALUES(owner_id)),
+       updated_at = VALUES(updated_at)`,
+    [relay.id, instanceId, initialOwnerId, now, now]
   )
   const [resolvedRows] = await databasePool.query<Array<InstanceOwnerRow>>(
     `SELECT owner_id FROM ${databaseTable("instance")}

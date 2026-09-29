@@ -5,7 +5,7 @@ import {
   relayTailscaleStackSchema,
   type RelayTailscaleStack,
 } from "@workspace/contracts"
-import { Effect } from "effect"
+import { Clock, Effect } from "effect"
 
 import { Database, type DatabaseTransaction } from "@/effect/database"
 import { databaseTable } from "@/lib/database-config"
@@ -46,10 +46,11 @@ export const observeTailscaleDeploymentsEffect = Effect.fn(
 )(function* (deployments: ReadonlyArray<PersistedTailscaleDeployment>) {
   if (deployments.length === 0) return
   const database = yield* Database
+  const now = yield* Clock.currentTimeMillis
   yield* database.transaction("tailscaleCleanup.observeDeployments", (tx) =>
     Effect.forEach(
       deployments,
-      (deployment) => upsertDeployment(tx, deployment),
+      (deployment) => upsertDeployment(tx, deployment, now),
       {
         discard: true,
       }
@@ -65,6 +66,7 @@ export const reconcileTailscaleDeploymentsEffect = Effect.fn(
   removedRelayIds: ReadonlyArray<string>
 ) {
   const database = yield* Database
+  const now = yield* Clock.currentTimeMillis
   yield* database.transaction("tailscaleCleanup.reconcileDeployments", (tx) =>
     Effect.gen(function* () {
       if (removedRelayIds.length > 0) {
@@ -77,7 +79,7 @@ export const reconcileTailscaleDeploymentsEffect = Effect.fn(
       }
       yield* Effect.forEach(
         deployments,
-        (deployment) => upsertDeployment(tx, deployment),
+        (deployment) => upsertDeployment(tx, deployment, now),
         { discard: true }
       )
     })
@@ -92,22 +94,24 @@ export const requestTailscaleNetworkCleanupEffect = Effect.fn(
   deployments: ReadonlyArray<PersistedTailscaleDeployment>
 ) {
   const database = yield* Database
+  const now = yield* Clock.currentTimeMillis
   yield* database.transaction("tailscaleCleanup.request", (tx) =>
     Effect.gen(function* () {
       yield* Effect.forEach(
         deployments,
-        (deployment) => upsertDeployment(tx, deployment),
+        (deployment) => upsertDeployment(tx, deployment, now),
         { discard: true }
       )
       yield* tx.execute(
         `UPDATE ${databaseTable("tailscale_network")}
-            SET deletion_requested_at = COALESCE(deletion_requested_at, CURRENT_TIMESTAMP(3)),
+            SET deletion_requested_at = COALESCE(deletion_requested_at, ?),
                 deletion_requested_by = COALESCE(deletion_requested_by, ?),
                 cleanup_attempts = 0,
-                cleanup_next_attempt_at = CURRENT_TIMESTAMP(3),
-                cleanup_last_error = NULL
+                cleanup_next_attempt_at = ?,
+                cleanup_last_error = NULL,
+                updated_at = ?
           WHERE id = ?`,
-        [requestedBy, networkId]
+        [now, requestedBy, now, now, networkId]
       )
     })
   )
@@ -117,6 +121,7 @@ export const loadPendingTailscaleCleanupsEffect = Effect.fn(
   "tailscaleCleanup.loadPending"
 )(function* (limit = 10) {
   const database = yield* Database
+  const now = yield* Clock.currentTimeMillis
   const rows = yield* database.queryRows<DeploymentRow>(
     "tailscaleCleanup.loadPending",
     `SELECT deployment.network_id, deployment.relay_id,
@@ -127,10 +132,10 @@ export const loadPendingTailscaleCleanupsEffect = Effect.fn(
        JOIN ${databaseTable("tailscale_network")} network
          ON network.id = deployment.network_id
       WHERE network.deletion_requested_at IS NOT NULL
-        AND deployment.cleanup_next_attempt_at <= CURRENT_TIMESTAMP(3)
+        AND deployment.cleanup_next_attempt_at <= ?
       ORDER BY deployment.cleanup_next_attempt_at, deployment.updated_at
       LIMIT ?`,
-    [limit]
+    [now, limit]
   )
   const cleanups = yield* Effect.forEach(rows, (row) =>
     Effect.try({
@@ -174,6 +179,7 @@ export const completeTailscaleCleanupEffect = Effect.fn(
   "tailscaleCleanup.complete"
 )(function* (networkId: string, relayId: string) {
   const database = yield* Database
+  const now = yield* Clock.currentTimeMillis
   yield* database.transaction("tailscaleCleanup.complete", (tx) =>
     Effect.gen(function* () {
       yield* tx.execute(
@@ -184,8 +190,9 @@ export const completeTailscaleCleanupEffect = Effect.fn(
       yield* tx.execute(
         `UPDATE ${databaseTable("tailscale_network")} network
             SET network.cleanup_attempts = 0,
-                network.cleanup_next_attempt_at = CURRENT_TIMESTAMP(3),
-                network.cleanup_last_error = NULL
+                network.cleanup_next_attempt_at = ?,
+                network.cleanup_last_error = NULL,
+                network.updated_at = ?
           WHERE network.id = ?
             AND network.deletion_requested_at IS NOT NULL
             AND NOT EXISTS (
@@ -193,7 +200,7 @@ export const completeTailscaleCleanupEffect = Effect.fn(
                 FROM ${databaseTable("tailscale_network_deployment")} deployment
                WHERE deployment.network_id = network.id
             )`,
-        [networkId]
+        [now, now, networkId]
       )
     })
   )
@@ -208,23 +215,27 @@ export const deferTailscaleCleanupEffect = Effect.fn("tailscaleCleanup.defer")(
     error: string
   ) {
     const database = yield* Database
+    const now = yield* Clock.currentTimeMillis
+    const nextAttemptAt = now + delaySeconds * 1000
     yield* database.transaction("tailscaleCleanup.defer", (tx) =>
       Effect.gen(function* () {
         yield* tx.execute(
           `UPDATE ${databaseTable("tailscale_network_deployment")}
             SET cleanup_attempts = ?,
-                cleanup_next_attempt_at = TIMESTAMPADD(SECOND, ?, CURRENT_TIMESTAMP(3)),
-                cleanup_last_error = ?
+                cleanup_next_attempt_at = ?,
+                cleanup_last_error = ?,
+                updated_at = ?
           WHERE network_id = ? AND relay_id = ?`,
-          [attempts, delaySeconds, error, networkId, relayId]
+          [attempts, nextAttemptAt, error, now, networkId, relayId]
         )
         yield* tx.execute(
           `UPDATE ${databaseTable("tailscale_network")}
             SET cleanup_attempts = cleanup_attempts + 1,
-                cleanup_next_attempt_at = TIMESTAMPADD(SECOND, ?, CURRENT_TIMESTAMP(3)),
-                cleanup_last_error = ?
+                cleanup_next_attempt_at = ?,
+                cleanup_last_error = ?,
+                updated_at = ?
           WHERE id = ?`,
-          [delaySeconds, error, networkId]
+          [nextAttemptAt, error, now, networkId]
         )
       })
     )
@@ -235,29 +246,41 @@ export const recordTailscaleCleanupFinalizationFailureEffect = Effect.fn(
   "tailscaleCleanup.finalizationFailure"
 )(function* (networkId: string, delaySeconds: number, error: string) {
   const database = yield* Database
+  const now = yield* Clock.currentTimeMillis
   yield* database.execute(
     "tailscaleCleanup.finalizationFailure",
     `UPDATE ${databaseTable("tailscale_network")}
         SET cleanup_attempts = cleanup_attempts + 1,
-            cleanup_next_attempt_at = TIMESTAMPADD(SECOND, ?, CURRENT_TIMESTAMP(3)),
-            cleanup_last_error = ?
+            cleanup_next_attempt_at = ?,
+            cleanup_last_error = ?,
+            updated_at = ?
       WHERE id = ?`,
-    [delaySeconds, error, networkId]
+    [now + delaySeconds * 1000, error, now, networkId]
   )
 })
 
 function upsertDeployment(
   tx: DatabaseTransaction,
-  deployment: PersistedTailscaleDeployment
+  deployment: PersistedTailscaleDeployment,
+  now: number
 ) {
   return tx.execute(
     `INSERT INTO ${databaseTable("tailscale_network_deployment")}
-       (network_id, relay_id, deployment)
-     VALUES (?, ?, ?)
+       (network_id, relay_id, deployment, cleanup_next_attempt_at,
+        observed_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?)
      ON DUPLICATE KEY UPDATE
        deployment = VALUES(deployment),
-       observed_at = CURRENT_TIMESTAMP(3)`,
-    [deployment.id, deployment.relayId, JSON.stringify(deployment)]
+       observed_at = VALUES(observed_at),
+       updated_at = VALUES(updated_at)`,
+    [
+      deployment.id,
+      deployment.relayId,
+      JSON.stringify(deployment),
+      now,
+      now,
+      now,
+    ]
   )
 }
 

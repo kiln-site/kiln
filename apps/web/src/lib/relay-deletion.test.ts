@@ -1,5 +1,6 @@
 import { assert, describe, it } from "@effect/vitest"
 import { Effect, Layer } from "effect"
+import * as TestClock from "effect/testing/TestClock"
 import type { ResultSetHeader } from "mysql2/promise"
 import { vi } from "vite-plus/test"
 
@@ -43,6 +44,7 @@ describe("Relay deletion", () => {
     })
 
     return Effect.gen(function* () {
+      yield* TestClock.setTime(1_000)
       yield* deletePersistedRelayEffect("relay-one")
 
       assert.strictEqual(statements.length, 5)
@@ -58,9 +60,9 @@ describe("Relay deletion", () => {
       assert.deepEqual(
         statements.map(({ values }) => values),
         [
+          [1_000, "relay-one"],
           ["relay-one"],
-          ["relay-one"],
-          ["relay-one", "relay-one"],
+          ["relay-one", 1_000, 1_000, "relay-one"],
           ["relay-one"],
           ["relay-one"],
         ]

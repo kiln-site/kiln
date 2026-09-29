@@ -388,10 +388,10 @@ function storageCredentialRow(deleting: boolean, ciphertext?: string) {
     ...storageIdentityRow(deleting),
     access_key_id_ciphertext: ciphertext ?? "enc:AKIAEXAMPLE",
     allow_private_network: 1,
-    created_at_ms: Date.parse("2026-01-01T00:00:00.000Z"),
+    created_at: Date.parse("2026-01-01T00:00:00.000Z"),
     enabled: 1,
     last_error: null,
-    last_verified_at_ms: null,
+    last_verified_at: null,
     name: "minio",
     secret_access_key_ciphertext: ciphertext ?? "enc:s3-secret",
   }

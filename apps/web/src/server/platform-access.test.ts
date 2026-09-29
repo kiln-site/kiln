@@ -191,7 +191,7 @@ describe("platform access changes", () => {
         assert.isTrue(
           statements.some(
             ({ sql, values }) =>
-              sql.includes("SET role = 'user'") && values[0] === target.id
+              sql.includes("SET role = 'user'") && values[1] === target.id
           )
         )
         assert.isTrue(
@@ -199,7 +199,7 @@ describe("platform access changes", () => {
             ({ sql, values }) =>
               sql.includes("kiln_invitation") &&
               sql.includes("access_type <> 'scoped'") &&
-              values[1] === target.id
+              values[3] === target.id
           )
         )
         assert.isFalse(

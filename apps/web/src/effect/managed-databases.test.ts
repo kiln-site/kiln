@@ -1,5 +1,6 @@
 import { assert, describe, layer } from "@effect/vitest"
 import { Effect, Layer } from "effect"
+import * as TestClock from "effect/testing/TestClock"
 import type { ResultSetHeader, RowDataPacket } from "mysql2/promise"
 
 import { Database } from "./database"
@@ -147,6 +148,7 @@ describe("managed database persistence", () => {
       () =>
         Effect.gen(function* () {
           statements.length = 0
+          yield* TestClock.setTime(1_000)
 
           yield* deleteManagedDatabaseRecordEffect("relay-one", "database-one")
 
@@ -154,11 +156,12 @@ describe("managed database persistence", () => {
           assert.include(statements[0]?.sql, "database_id = ?")
           assert.include(statements[0]?.sql, "accepted_at IS NULL")
           assert.include(statements[0]?.sql, "revoked_at IS NULL")
-          assert.include(
-            statements[0]?.sql,
-            "expires_at > CURRENT_TIMESTAMP(3)"
-          )
-          assert.deepEqual(statements[0]?.values, ["relay-one", "database-one"])
+          assert.include(statements[0]?.sql, "expires_at > ?")
+          assert.deepEqual(statements[0]?.values, [
+            "relay-one",
+            "database-one",
+            1_000,
+          ])
           assert.include(statements[1]?.sql, "database_id = ?")
           assert.deepEqual(statements[1]?.values, ["relay-one", "database-one"])
           assert.include(statements[2]?.sql, "DELETE FROM")
