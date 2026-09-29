@@ -12,7 +12,7 @@ jobs:
     name: ${{ matrix.name }}
     runs-on: ubuntu-24.04
     services:
-      # Backs the opt-in MySQL access migration fixture; unit tests ignore it.
+      # Backs the opt-in MySQL migration test; unit tests ignore it.
       mysql:
         image: mysql:8.4
         env:
@@ -37,14 +37,13 @@ jobs:
             # Mirrors the root "test" script; the runner has vp but not pnpm.
             command: |
               vp run -r test
-              ACCESS_MIGRATION_TEST=1 DB_HOST=127.0.0.1 DB_PORT=3306 \
-                DB_NAME=kiln_migration_test DB_USERNAME=root DB_PASSWORD=root \
-                node --test scripts/dev-docker-helpers.test.mjs \
-                  scripts/effect-boundaries.test.mjs \
-                  scripts/image-source-compatibility.test.mjs \
-                  scripts/relay-runtime-manifest.test.mjs \
-                  scripts/migrate-app.test.mjs \
-                  apps/web/scripts/migrate-access.test.mjs
+              (cd apps/web && MYSQL_MIGRATION_TEST=1 DB_HOST=127.0.0.1 \
+                DB_PORT=3306 DB_NAME=kiln_migration_test DB_USERNAME=root \
+                DB_PASSWORD=root vp test run src/effect/migrations.test.ts)
+              node --test scripts/dev-docker-helpers.test.mjs \
+                scripts/effect-boundaries.test.mjs \
+                scripts/image-source-compatibility.test.mjs \
+                scripts/relay-runtime-manifest.test.mjs
           - name: Build
             command: |
               vp run -r build
