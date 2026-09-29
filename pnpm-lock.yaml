@@ -215,6 +215,9 @@ importers:
       '@codemirror/view':
         specifier: ^6.43.6
         version: 6.43.6
+      '@effect/sql-mysql2':
+        specifier: 4.0.0-rc.118
+        version: 4.0.0-rc.118(@types/node@22.19.19)(effect@4.0.0-rc.118)
       '@lezer/highlight':
         specifier: ^1.2.3
         version: 1.2.3
@@ -294,7 +297,7 @@ importers:
         specifier: ^12.42.2
         version: 12.42.2(react-dom@19.2.6(react@19.2.6))(react@19.2.6)
       mysql2:
-        specifier: ^3.22.6
+        specifier: ^3.24.4
         version: 3.24.4(@types/node@22.19.19)
       react:
         specifier: ^19.2.6
@@ -911,6 +914,11 @@ packages:
 
   '@dotenvx/primitives@0.8.0':
     resolution: {integrity: sha512-VYJy0uhFm9zTJ1TxBaW/pA8bjbOM/OttaNMwZ1RHG4JKyRG7DhSdiqD1ipQoAyoD22olUtxbP78W9xY3Wd11bg==}
+
+  '@effect/sql-mysql2@4.0.0-rc.118':
+    resolution: {integrity: sha512-ai1ipYyerwuc1HcJyXsYa0ZA6huCsHUmpGITZqSDkDv/k+F8HTcY8mzjTYoaydpxZQx716BZOL6DwS9DPCDdEA==}
+    peerDependencies:
+      effect: ^4.0.0-rc.118
 
   '@effect/sql-sqlite-node@4.0.0-rc.118':
     resolution: {integrity: sha512-O+TswiXTeP1/9I7GaCalMWWGXrbalzZkFdkXoO/x/3uDdfnYSi3/lkcOvmfFJnmaQPvOR4wG2CkZSdf9n88A4w==}
@@ -7457,6 +7465,13 @@ snapshots:
       yocto-spinner: 1.2.1
 
   '@dotenvx/primitives@0.8.0': {}
+
+  '@effect/sql-mysql2@4.0.0-rc.118(@types/node@22.19.19)(effect@4.0.0-rc.118)':
+    dependencies:
+      effect: 4.0.0-rc.118
+      mysql2: 3.24.4(@types/node@22.19.19)
+    transitivePeerDependencies:
+      - '@types/node'
 
   '@effect/sql-sqlite-node@4.0.0-rc.118(effect@4.0.0-rc.118)':
     dependencies:

@@ -17,7 +17,7 @@ jobs:
     name: ${{ matrix.name }}
     runs-on: ubuntu-24.04
     services:
-      # Backs the opt-in MySQL access migration fixture; unit tests ignore it.
+      # Backs the opt-in MySQL migration test; unit tests ignore it.
       mysql:
         image: ${{ matrix.name == 'Tests' && 'mysql:8.4' || '' }}
         env:
@@ -41,7 +41,7 @@ jobs:
           - name: Tests
             # Root "test" script: every package's test task plus scripts/ tests.
             command: |
-              ACCESS_MIGRATION_TEST=1 DB_HOST=127.0.0.1 DB_PORT=3306 \
+              MYSQL_MIGRATION_TEST=1 DB_HOST=127.0.0.1 DB_PORT=3306 \
                 DB_NAME=kiln_migration_test DB_USERNAME=root DB_PASSWORD=root \
                 vp run test
           - name: Build

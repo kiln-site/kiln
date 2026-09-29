@@ -5,8 +5,7 @@
   "scripts": {
     "build": "vp run -r build",
     "db:down": "docker compose down",
-    "db:migrate": "pnpm --filter web db:migrate",
-    "db:reset": "docker compose down -v && docker compose up -d --wait mysql && pnpm db:migrate",
+    "db:reset": "docker compose down -v && docker compose up -d --wait mysql",
     "db:up": "docker compose up -d mysql",
     "dev:setup": "node scripts/dev-docker.mjs setup",
     "dev:docker": "node scripts/dev-docker.mjs start",
