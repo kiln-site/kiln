@@ -299,36 +299,63 @@ function applyChange(
   }
 
   const key = keyCondition(table, change.key)
+  const guards = changeGuards(table, change)
+  const where = [
+    key.sql,
+    ...guards.map(([name]) => `${quoteIdentifier(name)} IS ?`),
+  ].join(" AND ")
+  const whereParameters = [
+    ...key.parameters,
+    ...guards.map(([, value]) => decodeValue(value)),
+  ]
   if (change.kind === "delete") {
     return Number(
       database
-        .prepare(`DELETE FROM ${tableName} WHERE ${key.sql}`)
-        .run(...key.parameters).changes
+        .prepare(`DELETE FROM ${tableName} WHERE ${where}`)
+        .run(...whereParameters).changes
     )
   }
 
   const entries = writableEntries(change.values, writable)
   if (entries.length === 0) return 1
-  const guards = Object.entries(change.original).filter(
-    ([name, value]) =>
-      table.columns.some((column) => column.name === name) &&
-      !isTruncatedBlob(value)
-  )
   const statement = database.prepare(
     `UPDATE ${tableName} SET ${entries
       .map(([name]) => `${quoteIdentifier(name)} = ?`)
-      .join(", ")} WHERE ${[
-      key.sql,
-      ...guards.map(([name]) => `${quoteIdentifier(name)} IS ?`),
-    ].join(" AND ")}`
+      .join(", ")} WHERE ${where}`
   )
   return Number(
     statement.run(
       ...entries.map(([, value]) => decodeValue(value)),
-      ...key.parameters,
-      ...guards.map(([, value]) => decodeValue(value))
+      ...whereParameters
     ).changes
   )
+}
+
+// A change only applies to a row that still holds the values the client
+// loaded. A non-NULL primary key pins the row down, so an update there checks
+// just the columns it edits and tolerates unrelated concurrent writes.
+// Without one, the rowid is the only identity and a VACUUM can renumber it,
+// so the whole row is checked; deletes always check the whole row.
+function changeGuards(
+  table: DatabaseTable,
+  change: Extract<DatabaseChange, { kind: "update" | "delete" }>
+) {
+  const keyColumns = keyGuardColumns(table)
+  const pinned =
+    keyColumns.length > 0 &&
+    keyColumns.every(({ name }) => (change.key[name] ?? null) !== null)
+  const names =
+    change.kind === "update" && pinned
+      ? Object.keys(change.values)
+      : Object.keys(change.original)
+  return names.flatMap((name): Array<[string, DatabaseValue]> => {
+    const value = change.original[name]
+    return value !== undefined &&
+      table.columns.some((column) => column.name === name) &&
+      !isTruncatedBlob(value)
+      ? [[name, value]]
+      : []
+  })
 }
 
 function writableEntries(

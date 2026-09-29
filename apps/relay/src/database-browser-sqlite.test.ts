@@ -1,6 +1,7 @@
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
+import { DatabaseSync } from "node:sqlite"
 
 import { assert, describe, it } from "@effect/vitest"
 
@@ -98,10 +99,18 @@ describe("SQLite database browser", () => {
     })
   })
 
-  it("addresses keyless tables by rowid", () => {
+  it("guards keyless rows against rowids renumbered by VACUUM", () => {
     withDatabase((path) => {
       const database = openSqliteDatabase(path, false)
       try {
+        database.exec("INSERT INTO log VALUES ('third')")
+        const messages = () =>
+          sqliteRows(database, {
+            action: "rows",
+            limit: 10,
+            offset: 0,
+            table: "log",
+          }).rows.map(([message]) => message)
         const page = sqliteRows(database, {
           action: "rows",
           limit: 10,
@@ -110,20 +119,27 @@ describe("SQLite database browser", () => {
           table: "log",
         })
         assert.deepStrictEqual(page.keys, [{ rowid: 2 }])
-        sqliteMutate(database, {
-          action: "mutate",
-          table: "log",
-          changes: [{ kind: "delete", key: { rowid: 2 } }],
-        })
-        assert.strictEqual(
-          sqliteRows(database, {
-            action: "rows",
-            limit: 10,
-            offset: 0,
+        // Another program removes "first" and vacuums, so "third" now holds
+        // rowid 2.
+        const other = new DatabaseSync(path)
+        other.exec("DELETE FROM log WHERE message = 'first'; VACUUM")
+        other.close()
+        const deleteSecond = (rowid: number) =>
+          sqliteMutate(database, {
+            action: "mutate",
             table: "log",
-          }).total,
-          1
-        )
+            changes: [
+              {
+                kind: "delete",
+                key: { rowid },
+                original: { message: "second" },
+              },
+            ],
+          })
+        assert.throws(() => deleteSecond(2), /no longer matches/u)
+        assert.deepStrictEqual(messages(), ["second", "third"])
+        assert.deepStrictEqual(deleteSecond(1), { applied: 1 })
+        assert.deepStrictEqual(messages(), ["third"])
       } finally {
         database.close()
       }
@@ -148,7 +164,13 @@ describe("SQLite database browser", () => {
           sqliteMutate(database, {
             action: "mutate",
             table: "players",
-            changes: [{ kind: "delete", key: nullKey ?? {} }],
+            changes: [
+              {
+                kind: "delete",
+                key: nullKey ?? {},
+                original: { balance: 1, name: "x", uuid: null },
+              },
+            ],
           }),
           { applied: 1 }
         )

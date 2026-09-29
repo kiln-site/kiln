@@ -21,7 +21,7 @@ describe("database edit store", () => {
       {
         kind: "update",
         key: { uuid: "a" },
-        original: { name: "Alex" },
+        original: { balance: 10, name: "Alex", uuid: "a" },
         values: { name: "Alexa" },
       },
     ])
@@ -38,7 +38,8 @@ describe("database edit store", () => {
       {
         kind: "update",
         key: { uuid: "a" },
-        original: { balance: 10, name: "Alex" },
+        // Edited columns keep what was first seen; the rest is the latest row.
+        original: { balance: 10, name: "Alex", uuid: "a" },
         values: { balance: 12, name: "Alexa" },
       },
     ])
@@ -62,7 +63,7 @@ describe("database edit store", () => {
     store.setInsertedCell(inserted, "name", "Steve")
 
     expect(store.toChanges()).toEqual([
-      { kind: "delete", key: { uuid: "a" } },
+      { kind: "delete", key: { uuid: "a" }, original: row.original },
       { kind: "insert", values: { name: "Steve" } },
     ])
   })

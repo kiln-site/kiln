@@ -17,7 +17,15 @@ interface RowEdit {
   // The value each edited column had when it was first edited. A refetch
   // must not move these, or the save would stop detecting concurrent writes.
   original: Record<string, DatabaseValue>
+  // The whole row as last seen, so the Relay can recognize rows that have
+  // no primary key to identify them.
+  seen: Record<string, DatabaseValue>
   values: Record<string, DatabaseValue>
+}
+
+interface RowDelete {
+  key: DatabaseRowKey
+  original: Record<string, DatabaseValue>
 }
 
 export interface InsertedRow {
@@ -32,7 +40,7 @@ export interface InsertedRow {
 export function createDatabaseEditStore(table: string) {
   const listeners = new Set<() => void>()
   let edits = new Map<string, RowEdit>()
-  let deleted = new Map<string, DatabaseRowKey>()
+  let deleted = new Map<string, RowDelete>()
   let inserted: ReadonlyArray<InsertedRow> = []
   let pendingCount = 0
   let nextInsertId = 0
@@ -80,14 +88,21 @@ export function createDatabaseEditStore(table: string) {
       }
       edits = new Map(edits)
       if (Object.keys(values).length === 0) edits.delete(row.id)
-      else edits.set(row.id, { key: row.key, original, values })
+      else {
+        edits.set(row.id, {
+          key: row.key,
+          original,
+          seen: row.original,
+          values,
+        })
+      }
       emit()
     },
     toggleDeleted(row: DatabaseEditableRow) {
       if (locked) return
       deleted = new Map(deleted)
       if (deleted.has(row.id)) deleted.delete(row.id)
-      else deleted.set(row.id, row.key)
+      else deleted.set(row.id, { key: row.key, original: row.original })
       emit()
     },
     insertRow() {
@@ -126,11 +141,13 @@ export function createDatabaseEditStore(table: string) {
         changes.push({
           kind: "update",
           key: edit.key,
-          original: edit.original,
+          original: { ...edit.seen, ...edit.original },
           values: edit.values,
         })
       }
-      for (const key of deleted.values()) changes.push({ kind: "delete", key })
+      for (const { key, original } of deleted.values()) {
+        changes.push({ kind: "delete", key, original })
+      }
       for (const row of inserted) {
         changes.push({ kind: "insert", values: row.values })
       }
