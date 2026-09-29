@@ -18,6 +18,10 @@ export default defineConfig({
       "import.meta.env.KILN_VERSION": JSON.stringify(buildVersion),
     },
     deps: {
+      // tsdown <0.23 compatibility: resolve external dependency subpaths.
+      // Remove to preserve subpath imports as written (the new default).
+      // https://tsdown.dev/options/dependencies#deps-resolvedepsubpath
+      resolveDepSubpath: true,
       // Bundle the workspace contract while production dependencies stay in
       // the separately cached runtime layer.
       alwaysBundle: ["@workspace/contracts"],
@@ -41,13 +45,15 @@ export default defineConfig({
       build: {
         command: "vp pack",
         dependsOn: [{ task: "build", from: "dependencies" }],
-        env: [
-          "COMMIT_SHA",
-          "GITHUB_SHA",
-          "KILN_BUILD_SHA",
-          "KILN_VERSION",
-          "SOURCE_COMMIT",
-        ],
+        cache: {
+          env: [
+            "COMMIT_SHA",
+            "GITHUB_SHA",
+            "KILN_BUILD_SHA",
+            "KILN_VERSION",
+            "SOURCE_COMMIT",
+          ],
+        },
       },
       test: {
         command: "vp test run",

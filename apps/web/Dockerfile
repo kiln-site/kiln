@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.10
 
-ARG VITE_PLUS_VERSION=0.2.5
+ARG VITE_PLUS_VERSION=1.0.0
 
 FROM ghcr.io/voidzero-dev/vite-plus:${VITE_PLUS_VERSION} AS build
 

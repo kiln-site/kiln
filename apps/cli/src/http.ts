@@ -124,7 +124,7 @@ function requestEffect<TValue, TError, TRequirements>(
     Effect.sync(() => requestAbortScope(requestInit.signal, timeoutMs)),
     (abortScope) =>
       Effect.tryPromise({
-        try: (_) =>
+        try: () =>
           fetch(url, {
             ...requestInit,
             signal: abortScope.signal,
@@ -251,7 +251,7 @@ function requestAbortScope(
 
 function decodeResponseJson(response: Response) {
   return Effect.tryPromise({
-    try: (_) => response.json(),
+    try: () => response.json(),
     catch: (cause) =>
       commandError({
         cause,

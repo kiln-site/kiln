@@ -1,6 +1,6 @@
 import { SqliteClient, SqliteMigrator } from "@effect/sql-sqlite-node"
 import { Context, Effect, Layer, Result, Schema } from "effect"
-import * as SqlClient from "effect/unstable/sql/SqlClient"
+import * as SqlClient from "effect/sql/SqlClient"
 import type {
   BackupTaskInput,
   BackupTaskPhase,

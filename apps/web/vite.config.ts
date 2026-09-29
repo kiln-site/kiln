@@ -43,15 +43,17 @@ const config = defineConfig(({ command }) => {
             "vp pack",
           ],
           dependsOn: [{ task: "build", from: "dependencies" }],
-          env: [
-            "COMMIT_SHA",
-            "GITHUB_SHA",
-            "KILN_BUILD_SHA",
-            "KILN_VERSION",
-            "SENTRY_AUTH_TOKEN",
-            "SENTRY_SOURCEMAPS",
-            "SOURCE_COMMIT",
-          ],
+          cache: {
+            env: [
+              "COMMIT_SHA",
+              "GITHUB_SHA",
+              "KILN_BUILD_SHA",
+              "KILN_VERSION",
+              "SENTRY_AUTH_TOKEN",
+              "SENTRY_SOURCEMAPS",
+              "SOURCE_COMMIT",
+            ],
+          },
         },
         test: {
           command: ["vp test run", "node --test keyring.test.mjs"],
@@ -66,6 +68,10 @@ const config = defineConfig(({ command }) => {
     pack: {
       clean: false,
       deps: {
+        // tsdown <0.23 compatibility: resolve external dependency subpaths.
+        // Remove to preserve subpath imports as written (the new default).
+        // https://tsdown.dev/options/dependencies#deps-resolvedepsubpath
+        resolveDepSubpath: true,
         alwaysBundle: [
           "@opentelemetry/api",
           "@opentelemetry/core",

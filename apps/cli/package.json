@@ -17,17 +17,18 @@
   },
   "dependencies": {
     "@workspace/contracts": "workspace:*",
-    "effect": "4.0.0-rc.112",
+    "effect": "4.0.0-rc.118",
     "ssh2": "1.17.0",
     "zod": "^4.4.3"
   },
   "devDependencies": {
-    "@effect/vitest": "4.0.0-rc.112",
+    "@effect/vitest": "4.0.0-rc.118",
     "@types/node": "^22",
     "@types/ssh2": "1.15.5",
     "bun": "1.2.18",
     "typescript": "^6",
-    "vite-plus": "catalog:"
+    "vite-plus": "catalog:",
+    "vitest": "catalog:"
   },
   "engines": {
     "node": ">=20"

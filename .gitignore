@@ -15,6 +15,7 @@ __unconfig*
 todos.json
 artifacts/
 coverage/
+.vitest/
 *.log
 
 # turbo

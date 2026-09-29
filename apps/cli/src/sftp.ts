@@ -100,7 +100,7 @@ function withSftp<TResult>(
 }
 
 function connectEffect(session: KilnSession, connection: CliSftpResponse) {
-  return Effect.callback<Client, ReturnType<typeof sftpError>>((resume, _) => {
+  return Effect.callback<Client, ReturnType<typeof sftpError>>((resume) => {
     const client = new Client()
     let settled = false
     const ready = () => {
@@ -147,7 +147,7 @@ function connectEffect(session: KilnSession, connection: CliSftpResponse) {
 
 function openSftpEffect(client: Client) {
   return Effect.callback<SFTPWrapper, ReturnType<typeof sftpError>>(
-    (resume, _) => {
+    (resume) => {
       client.sftp((cause, sftp) =>
         cause
           ? resume(Effect.fail(sftpError("open session", cause)))
@@ -161,7 +161,7 @@ function sftpOperation(
   operation: string,
   run: (done: (cause?: Error | null) => void) => void
 ) {
-  return Effect.callback<void, ReturnType<typeof sftpError>>((resume, _) => {
+  return Effect.callback<void, ReturnType<typeof sftpError>>((resume) => {
     run((cause) =>
       cause
         ? resume(Effect.fail(sftpError(operation, cause)))
