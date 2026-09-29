@@ -19,6 +19,9 @@ catalog:
   vitest: 5.0.1
   vite-plus: 1.0.0
 overrides:
+  # Web and Relay pin the OpenTelemetry API; a second copy splits vitest into
+  # two instances, and @effect/vitest then loses the current suite.
+  "@opentelemetry/api": 1.9.0
   vite@*: "catalog:"
   vitest@*: "catalog:"
 peerDependencyRules:
