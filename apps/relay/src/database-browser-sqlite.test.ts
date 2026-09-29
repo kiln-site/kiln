@@ -60,7 +60,8 @@ describe("SQLite database browser", () => {
             offset: 0,
             table: "players",
           }).keys ?? []
-        assert.deepStrictEqual(alex, { rowid: 1, uuid: "a" })
+        assert.deepStrictEqual(alex, { rowid: 1 })
+        // The second change conflicts, so the first one is rolled back too.
         assert.throws(
           () =>
             sqliteMutate(database, {
@@ -70,18 +71,35 @@ describe("SQLite database browser", () => {
                 {
                   kind: "update",
                   key: alex ?? {},
-                  original: { name: "Alex" },
+                  original: { balance: 10.5, name: "Alex", uuid: "a" },
                   values: { name: "Alexa" },
                 },
                 {
                   kind: "update",
                   key: steve ?? {},
-                  original: { name: "Herobrine" },
+                  original: { balance: 3, name: "Herobrine", uuid: "b" },
                   values: { name: "Notch" },
                 },
               ],
             }),
           /no longer matches/u
+        )
+        // A change whose loaded row is incomplete (say, a hidden column was
+        // left out) is refused rather than checked partially.
+        assert.throws(
+          () =>
+            sqliteMutate(database, {
+              action: "mutate",
+              table: "players",
+              changes: [
+                {
+                  kind: "delete",
+                  key: alex ?? {},
+                  original: { name: "Alex", uuid: "a" },
+                },
+              ],
+            }),
+          /missing the original value of balance/u
         )
         const rows = sqliteRows(database, {
           action: "rows",
@@ -159,7 +177,10 @@ describe("SQLite database browser", () => {
           offset: 0,
           table: "players",
         })
-        const nullKey = page.keys?.find((key) => key.uuid === null)
+        const index = page.rows.findIndex(
+          ([uuid, name]) => uuid === null && name === "x"
+        )
+        const nullKey = page.keys?.[index]
         assert.deepStrictEqual(
           sqliteMutate(database, {
             action: "mutate",
@@ -174,6 +195,45 @@ describe("SQLite database browser", () => {
           }),
           { applied: 1 }
         )
+      } finally {
+        database.close()
+      }
+    })
+  })
+
+  it("checks truncated blobs by size and previewed prefix", () => {
+    withDatabase((path) => {
+      const database = openSqliteDatabase(path, false)
+      try {
+        const bytes = Buffer.alloc(4096, 7)
+        database.exec("CREATE TABLE files (data BLOB)")
+        database.prepare("INSERT INTO files VALUES (?)").run(bytes)
+        const page = sqliteRows(database, {
+          action: "rows",
+          limit: 10,
+          offset: 0,
+          table: "files",
+        })
+        const [key] = page.keys ?? []
+        const deleteLoaded = () =>
+          sqliteMutate(database, {
+            action: "mutate",
+            table: "files",
+            changes: [
+              {
+                kind: "delete",
+                key: key ?? {},
+                original: { data: page.rows[0]?.[0] ?? null },
+              },
+            ],
+          })
+        // Same prefix, different length: not the loaded value.
+        database
+          .prepare("UPDATE files SET data = ?")
+          .run(Buffer.concat([bytes, Buffer.from([1])]))
+        assert.throws(deleteLoaded, /no longer matches/u)
+        database.prepare("UPDATE files SET data = ?").run(bytes)
+        assert.deepStrictEqual(deleteLoaded(), { applied: 1 })
       } finally {
         database.close()
       }

@@ -9,23 +9,18 @@ import { valuesEqual } from "@/components/files/database/database-values"
 export interface DatabaseEditableRow {
   id: string
   key: DatabaseRowKey
+  // Every column of the row as loaded, whatever the grid shows.
   original: Record<string, DatabaseValue>
 }
 
-interface RowEdit {
+// One loaded row with staged changes. The key and original are captured when
+// the first change is staged and never move until Save or Discard: refetches
+// update what the grid shows, not what the save checks against.
+interface PendingRow {
+  deleted: boolean
   key: DatabaseRowKey
-  // The value each edited column had when it was first edited. A refetch
-  // must not move these, or the save would stop detecting concurrent writes.
-  original: Record<string, DatabaseValue>
-  // The whole row as last seen, so the Relay can recognize rows that have
-  // no primary key to identify them.
-  seen: Record<string, DatabaseValue>
-  values: Record<string, DatabaseValue>
-}
-
-interface RowDelete {
-  key: DatabaseRowKey
-  original: Record<string, DatabaseValue>
+  original: Readonly<Record<string, DatabaseValue>>
+  values: Readonly<Record<string, DatabaseValue>>
 }
 
 export interface InsertedRow {
@@ -39,8 +34,7 @@ export interface InsertedRow {
 // ever be saved to that table, whatever the viewer shows meanwhile.
 export function createDatabaseEditStore(table: string) {
   const listeners = new Set<() => void>()
-  let edits = new Map<string, RowEdit>()
-  let deleted = new Map<string, RowDelete>()
+  let pending = new Map<string, PendingRow>()
   let inserted: ReadonlyArray<InsertedRow> = []
   let pendingCount = 0
   let nextInsertId = 0
@@ -49,12 +43,32 @@ export function createDatabaseEditStore(table: string) {
   let locked = false
 
   function emit() {
-    let count = deleted.size + inserted.length
-    for (const [id, edit] of edits) {
-      if (!deleted.has(id)) count += Object.keys(edit.values).length
+    let count = inserted.length
+    for (const row of pending.values()) {
+      count += row.deleted ? 1 : Object.keys(row.values).length
     }
     pendingCount = count
     for (const listener of listeners) listener()
+  }
+
+  function stage(
+    row: DatabaseEditableRow,
+    change: (current: PendingRow) => PendingRow
+  ) {
+    const current = pending.get(row.id) ?? {
+      deleted: false,
+      key: row.key,
+      original: row.original,
+      values: {},
+    }
+    const next = change(current)
+    pending = new Map(pending)
+    if (!next.deleted && Object.keys(next.values).length === 0) {
+      pending.delete(row.id)
+    } else {
+      pending.set(row.id, next)
+    }
+    emit()
   }
 
   return {
@@ -66,44 +80,30 @@ export function createDatabaseEditStore(table: string) {
     getPendingCount: () => pendingCount,
     getInsertedRows: () => inserted,
     getCellEdit(rowId: string, column: string): DatabaseValue | undefined {
-      const values = edits.get(rowId)?.values
+      const values = pending.get(rowId)?.values
       return values && column in values ? values[column] : undefined
     },
-    isRowDeleted: (rowId: string) => deleted.has(rowId),
+    isRowDeleted: (rowId: string) => pending.get(rowId)?.deleted ?? false,
     isLocked: () => locked,
     setLocked(next: boolean) {
       locked = next
     },
     setCell(row: DatabaseEditableRow, column: string, value: DatabaseValue) {
       if (locked) return
-      const current = edits.get(row.id)
-      const values = { ...current?.values }
-      const original = { ...current?.original }
-      if (!(column in original)) original[column] = row.original[column] ?? null
-      if (valuesEqual(original[column] ?? null, value)) {
-        delete values[column]
-        delete original[column]
-      } else {
-        values[column] = value
-      }
-      edits = new Map(edits)
-      if (Object.keys(values).length === 0) edits.delete(row.id)
-      else {
-        edits.set(row.id, {
-          key: row.key,
-          original,
-          seen: row.original,
-          values,
-        })
-      }
-      emit()
+      stage(row, (current) => {
+        const values = { ...current.values }
+        // Typing a value back to what was loaded drops the edit.
+        if (valuesEqual(current.original[column] ?? null, value)) {
+          delete values[column]
+        } else {
+          values[column] = value
+        }
+        return { ...current, values }
+      })
     },
     toggleDeleted(row: DatabaseEditableRow) {
       if (locked) return
-      deleted = new Map(deleted)
-      if (deleted.has(row.id)) deleted.delete(row.id)
-      else deleted.set(row.id, { key: row.key, original: row.original })
-      emit()
+      stage(row, (current) => ({ ...current, deleted: !current.deleted }))
     },
     insertRow() {
       if (locked) return null
@@ -125,28 +125,20 @@ export function createDatabaseEditStore(table: string) {
       emit()
     },
     discard() {
-      if (edits.size === 0 && deleted.size === 0 && inserted.length === 0) {
-        return
-      }
-      edits = new Map()
-      deleted = new Map()
+      if (pending.size === 0 && inserted.length === 0) return
+      pending = new Map()
       // Keep the empty array stable so the grid does not re-render.
       if (inserted.length > 0) inserted = []
       emit()
     },
     toChanges(): Array<DatabaseChange> {
       const changes: Array<DatabaseChange> = []
-      for (const [id, edit] of edits) {
-        if (deleted.has(id)) continue
-        changes.push({
-          kind: "update",
-          key: edit.key,
-          original: { ...edit.seen, ...edit.original },
-          values: edit.values,
-        })
-      }
-      for (const { key, original } of deleted.values()) {
-        changes.push({ kind: "delete", key, original })
+      for (const { deleted, key, original, values } of pending.values()) {
+        changes.push(
+          deleted
+            ? { kind: "delete", key, original }
+            : { kind: "update", key, original, values }
+        )
       }
       for (const row of inserted) {
         changes.push({ kind: "insert", values: row.values })

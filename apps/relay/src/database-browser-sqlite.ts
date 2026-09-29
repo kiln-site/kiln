@@ -139,21 +139,20 @@ export function sqliteRows(
     .get(...searchParameters, DATABASE_BROWSER_COUNT_CAP + 1)
   const total = Number(counted?.total ?? 0)
 
-  const keyColumns = keyGuardColumns(table)
-  const keys: Array<DatabaseRowKey> | null = table.rowIdentity
-    ? raw.map((row) => ({
-        ...(rowIdAlias ? { rowid: encodeValue(row[0], Infinity) } : {}),
-        ...Object.fromEntries(
-          keyColumns.map((column) => [
-            column.name,
-            encodeValue(
-              row[columns.indexOf(column) + (rowIdAlias ? 1 : 0)],
-              Infinity
-            ),
-          ])
-        ),
-      }))
-    : null
+  const primaryKey = primaryKeyColumns(columns)
+  const keys: Array<DatabaseRowKey> | null =
+    table.rowIdentity === "rowid"
+      ? raw.map((row) => ({ rowid: encodeValue(row[0], Infinity) }))
+      : table.rowIdentity === "primary-key"
+        ? raw.map((row) =>
+            Object.fromEntries(
+              primaryKey.map((column) => [
+                column.name,
+                encodeValue(row[columns.indexOf(column)], Infinity),
+              ])
+            )
+          )
+        : null
 
   return {
     columns: columns.map(({ name, type }) => ({ name, type: type || null })),
@@ -260,7 +259,7 @@ export function sqliteMutate(
       if (changed === 0 && change.kind !== "insert") {
         throw new DatabaseBrowserError(
           "row_changed",
-          `Change ${index + 1} no longer matches its row. It was edited or deleted since the table was loaded; refresh and try again.`
+          `Change ${index + 1} no longer matches its row: it was edited, moved, or deleted since it was loaded. Nothing was saved; discard your changes to start from the current data.`
         )
       }
       if (changed > 1) {
@@ -298,16 +297,13 @@ function applyChange(
     )
   }
 
+  // Every update and delete finds its row by key and applies only while the
+  // row still holds the values the client loaded, so a row that changed or
+  // moved (a VACUUM can renumber rowids) is reported instead of overwritten.
   const key = keyCondition(table, change.key)
-  const guards = changeGuards(table, change)
-  const where = [
-    key.sql,
-    ...guards.map(([name]) => `${quoteIdentifier(name)} IS ?`),
-  ].join(" AND ")
-  const whereParameters = [
-    ...key.parameters,
-    ...guards.map(([, value]) => decodeValue(value)),
-  ]
+  const unchanged = originalCondition(table, change.original)
+  const where = `${key.sql} AND ${unchanged.sql}`
+  const whereParameters = [...key.parameters, ...unchanged.parameters]
   if (change.kind === "delete") {
     return Number(
       database
@@ -317,7 +313,9 @@ function applyChange(
   }
 
   const entries = writableEntries(change.values, writable)
-  if (entries.length === 0) return 1
+  if (entries.length === 0) {
+    throw new DatabaseBrowserError("invalid_change", "The update is empty")
+  }
   const statement = database.prepare(
     `UPDATE ${tableName} SET ${entries
       .map(([name]) => `${quoteIdentifier(name)} = ?`)
@@ -331,31 +329,36 @@ function applyChange(
   )
 }
 
-// A change only applies to a row that still holds the values the client
-// loaded. A non-NULL primary key pins the row down, so an update there checks
-// just the columns it edits and tolerates unrelated concurrent writes.
-// Without one, the rowid is the only identity and a VACUUM can renumber it,
-// so the whole row is checked; deletes always check the whole row.
-function changeGuards(
+// The loaded row must be complete: a missing column would silently weaken
+// the check. Truncated blob previews are the one partial comparison; they
+// match on byte length and the previewed prefix, not the full value.
+function originalCondition(
   table: DatabaseTable,
-  change: Extract<DatabaseChange, { kind: "update" | "delete" }>
+  original: Record<string, DatabaseValue>
 ) {
-  const keyColumns = keyGuardColumns(table)
-  const pinned =
-    keyColumns.length > 0 &&
-    keyColumns.every(({ name }) => (change.key[name] ?? null) !== null)
-  const names =
-    change.kind === "update" && pinned
-      ? Object.keys(change.values)
-      : Object.keys(change.original)
-  return names.flatMap((name): Array<[string, DatabaseValue]> => {
-    const value = change.original[name]
-    return value !== undefined &&
-      table.columns.some((column) => column.name === name) &&
-      !isTruncatedBlob(value)
-      ? [[name, value]]
-      : []
-  })
+  const sql: Array<string> = []
+  const parameters: Array<ReturnType<typeof decodeValue>> = []
+  for (const { name } of table.columns) {
+    if (!(name in original)) {
+      throw new DatabaseBrowserError(
+        "invalid_change",
+        `The change is missing the original value of ${name}`
+      )
+    }
+    const value = original[name] ?? null
+    const column = quoteIdentifier(name)
+    if (isTruncatedBlob(value)) {
+      const preview = Buffer.from(value.$blob, "base64")
+      sql.push(
+        `(typeof(${column}) = 'blob' AND length(${column}) = ? AND substr(${column}, 1, ?) = ?)`
+      )
+      parameters.push(value.size, preview.length, preview)
+      continue
+    }
+    sql.push(`${column} IS ?`)
+    parameters.push(decodeValue(value))
+  }
+  return { parameters, sql: sql.join(" AND ") || "1" }
 }
 
 function writableEntries(
@@ -374,44 +377,32 @@ function writableEntries(
   return entries
 }
 
-// Rows are addressed by rowid when the table has one; the primary key rides
-// along as a guard so a VACUUM that renumbers rowids fails the change instead
-// of hitting another row. WITHOUT ROWID tables use their (NOT NULL) key.
+// Rows are found by rowid when the table has one, otherwise (WITHOUT ROWID)
+// by primary key. The key only locates the row; the loaded values confirm it.
 function keyCondition(table: DatabaseTable, key: DatabaseRowKey) {
-  const guards = keyGuardColumns(table)
-  const byRowid = table.rowIdentity === "rowid"
+  const names =
+    table.rowIdentity === "rowid"
+      ? ["rowid"]
+      : primaryKeyColumns(table.columns).map(({ name }) => name)
   if (
-    (byRowid && !("rowid" in key)) ||
-    Object.keys(key).length !== guards.length + (byRowid ? 1 : 0) ||
-    guards.some(({ name }) => !(name in key))
+    Object.keys(key).length !== names.length ||
+    names.some((name) => !(name in key))
   ) {
     throw new DatabaseBrowserError(
       "invalid_key",
       "Row key does not match the table's row identity"
     )
   }
-  const conditions = guards.map(({ name }) => ({
-    parameter: decodeValue(key[name] ?? null),
-    sql: `${quoteIdentifier(name)} IS ?`,
-  }))
-  if (byRowid) {
-    conditions.unshift({
-      parameter: decodeValue(key.rowid ?? null),
+  if (table.rowIdentity === "rowid") {
+    return {
+      parameters: [decodeValue(key.rowid ?? null)],
       sql: `${unshadowedRowIdAlias(table.columns)} = ?`,
-    })
+    }
   }
   return {
-    parameters: conditions.map(({ parameter }) => parameter),
-    sql: conditions.map(({ sql }) => sql).join(" AND "),
+    parameters: names.map((name) => decodeValue(key[name] ?? null)),
+    sql: names.map((name) => `${quoteIdentifier(name)} IS ?`).join(" AND "),
   }
-}
-
-// A primary key column literally named "rowid" would collide with the rowid
-// entry of the key; it already shadows the alias, so it is left out.
-function keyGuardColumns(table: DatabaseTable) {
-  return primaryKeyColumns(table.columns).filter(
-    ({ name }) => table.rowIdentity !== "rowid" || name !== "rowid"
-  )
 }
 
 function readStatement(
@@ -482,8 +473,8 @@ function listTables(database: DatabaseSync): Array<DatabaseTable> {
       )
     const kind = entry.type === "view" ? "view" : "table"
     // Prefer rowid: outside WITHOUT ROWID tables SQLite lets primary key
-    // columns hold NULL, and NULL keys are not unique. The key fallback is
-    // still guarded, since a change that matches several rows is refused.
+    // columns hold NULL, and NULL keys are not unique. Either way a change
+    // must match exactly one row, or the batch is rolled back.
     const names = new Set(columns.map(({ name }) => name.toLowerCase()))
     const hasRowid =
       entry.wr === 0 && ROWID_ALIASES.some((alias) => !names.has(alias))
@@ -581,7 +572,9 @@ export function decodeValue(value: DatabaseValue) {
   return Buffer.from(value.$blob, "base64")
 }
 
-function isTruncatedBlob(value: DatabaseValue) {
+function isTruncatedBlob(
+  value: DatabaseValue
+): value is Extract<DatabaseValue, { $blob: string }> {
   return typeof value === "object" && value !== null && "$blob" in value
     ? value.truncated
     : false

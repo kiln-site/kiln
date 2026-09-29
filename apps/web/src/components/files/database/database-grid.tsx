@@ -1073,7 +1073,7 @@ function GridContextMenuItems({
   }
   const current = model.current
   const value = cellValue(current, active)
-  const row = rowForPosition(current, active)
+  const row = current.page.getRowSnapshot(active.row)
   const rowCount = current.page.getRowCount()
   const insertedRow =
     active.row >= rowCount ? current.inserted[active.row - rowCount] : null
@@ -1182,34 +1182,13 @@ function cellValue(model: GridModel, position: GridPosition): DatabaseValue {
     : (rows[position.row]?.[valueIndex(column, position.column)] ?? null)
 }
 
-function rowForPosition(
-  model: GridModel,
-  position: GridPosition
-): DatabaseEditableRow | null {
-  const { keys, rowIds, rows } = model.page.getPage()
-  const id = rowIds?.[position.row]
-  const key = keys?.[position.row]
-  const values = rows[position.row]
-  if (!id || !key || !values) return null
-  return {
-    id,
-    key,
-    original: Object.fromEntries(
-      model.columns.map((column, index) => [
-        column.name,
-        values[valueIndex(column, index)] ?? null,
-      ])
-    ),
-  }
-}
-
 function canEditCell(model: GridModel, position: GridPosition) {
   if (!model.editStore) return false
   const column = model.columns[position.column]
   if (!column || column.readOnly) return false
   const rows = model.page.getPage().rows
   if (position.row >= rows.length) return true
-  const row = rowForPosition(model, position)
+  const row = model.page.getRowSnapshot(position.row)
   if (!row || model.editStore.isRowDeleted(row.id)) return false
   return isValueEditable(
     rows[position.row]?.[valueIndex(column, position.column)] ?? null
@@ -1233,7 +1212,7 @@ function cellTarget(
     const inserted = model.inserted[position.row - rowCount]
     return inserted ? { column: column.name, insertedId: inserted.id } : null
   }
-  const row = rowForPosition(model, position)
+  const row = model.page.getRowSnapshot(position.row)
   return row ? { column: column.name, row } : null
 }
 

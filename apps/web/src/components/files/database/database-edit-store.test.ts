@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vite-plus/test"
 
 import { createDatabaseEditStore } from "@/components/files/database/database-edit-store"
+import { createDatabasePageStore } from "@/components/files/database/database-page-store"
 import { parseEditedText } from "@/components/files/database/database-values"
 
 const row = {
@@ -10,7 +11,7 @@ const row = {
 }
 
 describe("database edit store", () => {
-  it("guards updates with the loaded values and drops edits that revert", () => {
+  it("stages changes against the whole loaded row and drops reverted edits", () => {
     const store = createDatabaseEditStore("players")
     store.setCell(row, "name", "Alexa")
     store.setCell(row, "balance", 12)
@@ -27,7 +28,7 @@ describe("database edit store", () => {
     ])
   })
 
-  it("keeps each edit's original value across refetches", () => {
+  it("keeps the first snapshot when the row refetches", () => {
     const store = createDatabaseEditStore("players")
     store.setCell(row, "balance", 12)
     // Someone else changes the balance to 11 and the page refetches.
@@ -38,8 +39,7 @@ describe("database edit store", () => {
       {
         kind: "update",
         key: { uuid: "a" },
-        // Edited columns keep what was first seen; the rest is the latest row.
-        original: { balance: 10, name: "Alex", uuid: "a" },
+        original: row.original,
         values: { balance: 12, name: "Alexa" },
       },
     ])
@@ -66,6 +66,20 @@ describe("database edit store", () => {
       { kind: "delete", key: { uuid: "a" }, original: row.original },
       { kind: "insert", values: { name: "Steve" } },
     ])
+  })
+
+  it("snapshots every column of a row, not just the visible ones", () => {
+    const page = createDatabasePageStore({
+      columns: ["uuid", "name", "balance"],
+      keys: [{ rowid: 1 }],
+      rows: [["a", "Alex", 10]],
+    })
+
+    expect(page.getRowSnapshot(0)?.original).toEqual({
+      balance: 10,
+      name: "Alex",
+      uuid: "a",
+    })
   })
 
   it("keeps untouched values typed and converts numeric input", () => {

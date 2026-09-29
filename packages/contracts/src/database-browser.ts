@@ -135,8 +135,8 @@ export const databaseChangeSchema = z.discriminatedUnion("kind", [
     .object({
       kind: z.literal("update"),
       key: databaseRowKeySchema,
-      // The row as the client loaded it; the Relay only changes a row that
-      // still matches (see the Relay's change guards).
+      // Every column of the row as the client loaded it. The change only
+      // applies while the row still holds these values.
       original: z.record(identifierSchema, databaseValueSchema),
       values: z.record(identifierSchema, databaseValueSchema),
     })
@@ -151,6 +151,7 @@ export const databaseChangeSchema = z.discriminatedUnion("kind", [
     .object({
       kind: z.literal("delete"),
       key: databaseRowKeySchema,
+      // Same as for updates.
       original: z.record(identifierSchema, databaseValueSchema),
     })
     .strict(),

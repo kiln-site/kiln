@@ -1,10 +1,13 @@
 import type { DatabaseRowKey, DatabaseValue } from "@workspace/contracts"
 
+import type { DatabaseEditableRow } from "@/components/files/database/database-edit-store"
 import { rowKeyId } from "@/components/files/database/database-values"
 
 export type DatabasePageStatus = "error" | "pending" | "success"
 
 export interface DatabasePage {
+  // Every column, in row value order. What the grid shows is its own concern.
+  columns: ReadonlyArray<string>
   error: string | null
   keys: ReadonlyArray<DatabaseRowKey> | null
   offset: number
@@ -16,6 +19,7 @@ export interface DatabasePage {
 }
 
 const emptyPage: DatabasePage = {
+  columns: [],
   error: null,
   keys: null,
   offset: 0,
@@ -49,6 +53,20 @@ export function createDatabasePageStore(initial?: Partial<DatabasePage>) {
     getRowCount: () => page.rows.length,
     getRowId: (index: number) => page.rowIds?.[index] ?? null,
     getRowIds: () => page.rowIds,
+    // A loaded row as a pending change needs it: its key and every value.
+    getRowSnapshot(index: number): DatabaseEditableRow | null {
+      const id = page.rowIds?.[index]
+      const key = page.keys?.[index]
+      const values = page.rows[index]
+      if (!id || !key || !values) return null
+      return {
+        id,
+        key,
+        original: Object.fromEntries(
+          page.columns.map((name, column) => [name, values[column] ?? null])
+        ),
+      }
+    },
     getStatus: () => page.status,
     getTotal: () => page.total,
     getTotalCapped: () => page.totalCapped,

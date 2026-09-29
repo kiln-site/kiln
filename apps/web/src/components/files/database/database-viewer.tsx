@@ -1212,6 +1212,7 @@ function RowsQuerySync({
   React.useLayoutEffect(() => {
     if (data) {
       pageStore.setPage({
+        columns: data.columns.map(({ name }) => name),
         error: null,
         keys: data.keys,
         offset: data.offset,
