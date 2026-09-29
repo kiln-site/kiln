@@ -27,7 +27,9 @@ export interface InsertedRow {
 
 // Staged grid changes live outside React so an edit re-renders only the
 // cells that subscribe to it, not the whole virtualized grid.
-export function createDatabaseEditStore() {
+// A store belongs to one table for its whole life, so its changes can only
+// ever be saved to that table, whatever the viewer shows meanwhile.
+export function createDatabaseEditStore(table: string) {
   const listeners = new Set<() => void>()
   let edits = new Map<string, RowEdit>()
   let deleted = new Map<string, DatabaseRowKey>()
@@ -48,6 +50,7 @@ export function createDatabaseEditStore() {
   }
 
   return {
+    table,
     subscribe(listener: () => void) {
       listeners.add(listener)
       return () => listeners.delete(listener)

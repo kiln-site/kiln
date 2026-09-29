@@ -330,6 +330,37 @@ function DatabaseUnavailable({ message }: { message: string }) {
   )
 }
 
+function MissingTableNotice({
+  onDiscard,
+  table,
+}: {
+  onDiscard: () => void
+  table: string
+}) {
+  return (
+    <div className="grid flex-1 place-items-center px-6 text-center">
+      <div className="max-w-sm">
+        <div className="mx-auto mb-4 grid size-11 place-items-center rounded-xl border bg-muted/20 text-muted-foreground">
+          <Table2 className="size-5" />
+        </div>
+        <p className="text-sm font-semibold">{table} no longer exists</p>
+        <p className="mt-1.5 text-xs leading-relaxed text-muted-foreground">
+          It was dropped or renamed outside this view, so its unsaved changes
+          can&apos;t be saved.
+        </p>
+        <Button
+          variant="outline"
+          size="sm"
+          className="mt-4"
+          onClick={onDiscard}
+        >
+          Discard changes
+        </Button>
+      </div>
+    </div>
+  )
+}
+
 // Staged changes outlive the viewer while any are pending, so opening another
 // file or page and coming back keeps them. Only unloading the page can lose
 // them, and the browser asks before that happens.
@@ -391,15 +422,20 @@ function DatabaseWorkspace({
     if (emptyDatabase) onQueryOpenChange(true)
   }, [emptyDatabase, onQueryOpenChange])
   const [editStore, setEditStore] = React.useState(
-    () => draft?.editStore ?? createDatabaseEditStore()
+    () => draft?.editStore ?? createDatabaseEditStore(tableName ?? "")
+  )
+  const hasPending = React.useSyncExternalStore(
+    editStore.subscribe,
+    () => editStore.getPendingCount() > 0,
+    () => false
   )
   const [pendingSwitch, setPendingSwitch] = React.useState<string | null>(null)
   React.useEffect(() => {
     const sync = () =>
       keepDraft(
         draftKey,
-        editStore.getPendingCount() > 0 && tableName
-          ? { editStore, tableName }
+        editStore.getPendingCount() > 0
+          ? { editStore, tableName: editStore.table }
           : null
       )
     sync()
@@ -407,22 +443,35 @@ function DatabaseWorkspace({
     return () => {
       unsubscribe()
     }
-  }, [draftKey, editStore, tableName])
+  }, [draftKey, editStore])
   const [sql, setSql] = React.useState("")
-  const table =
-    tables.find(({ name }) => name === tableName) ?? tables[0] ?? null
+  const fallbackTable =
+    tables.find(({ kind }) => kind === "table") ?? tables[0] ?? null
+  const selectedTable = tables.find(({ name }) => name === tableName) ?? null
+  // A schema refresh can drop or rename the selected table. Its unsaved
+  // changes stay bound to it and are never moved to the next table shown.
+  const missingTable = !selectedTable && hasPending ? editStore.table : null
+  const table = selectedTable ?? (missingTable ? null : fallbackTable)
+  if (table && !hasPending && editStore.table !== table.name) {
+    setEditStore(createDatabaseEditStore(table.name))
+    setTableName(table.name)
+  }
+
+  function openTable(name: string | null) {
+    setEditStore(createDatabaseEditStore(name ?? ""))
+    setTableName(name)
+  }
 
   function selectTable(name: string) {
-    const leavingTable = name !== table?.name
+    const leavingTable = name !== editStore.table
     if (leavingTable && editStore.getPendingCount() > 0) {
       setPendingSwitch(name)
       return
     }
-    if (leavingTable) setEditStore(createDatabaseEditStore())
-    setTableName(name)
+    if (leavingTable) openTable(name)
     onQueryOpenChange(false)
   }
-  const selectedName = queryOpen ? null : (table?.name ?? null)
+  const selectedName = queryOpen ? null : (table?.name ?? missingTable)
 
   return (
     <div className="flex min-h-0 flex-1">
@@ -463,6 +512,11 @@ function DatabaseWorkspace({
             writable={writable}
             onSqlChange={setSql}
           />
+        ) : missingTable ? (
+          <MissingTableNotice
+            table={missingTable}
+            onDiscard={() => openTable(fallbackTable?.name ?? null)}
+          />
         ) : table ? (
           <TableView
             key={table.name}
@@ -489,7 +543,7 @@ function DatabaseWorkspace({
           <DialogHeader>
             <DialogTitle>Discard unsaved changes?</DialogTitle>
             <DialogDescription>
-              {table?.name} has changes that have not been saved to the
+              {editStore.table} has changes that have not been saved to the
               database.
             </DialogDescription>
           </DialogHeader>
@@ -501,8 +555,7 @@ function DatabaseWorkspace({
               variant="destructive"
               onClick={() => {
                 if (!pendingSwitch) return
-                setEditStore(createDatabaseEditStore())
-                setTableName(pendingSwitch)
+                openTable(pendingSwitch)
                 onQueryOpenChange(false)
                 setPendingSwitch(null)
               }}
@@ -1359,13 +1412,13 @@ function TableFooter({
   const save = useMutation({
     mutationFn: () => {
       editStore.setLocked(true)
-      return source.mutate(table.name, editStore.toChanges())
+      return source.mutate(editStore.table, editStore.toChanges())
     },
     onSuccess: async () => {
       editStore.discard()
       editStore.setLocked(false)
       showToast({
-        message: `Saved changes to ${table.name}`,
+        message: `Saved changes to ${editStore.table}`,
         type: "success",
       })
       // Only this table's rows can have changed; refetched rows are

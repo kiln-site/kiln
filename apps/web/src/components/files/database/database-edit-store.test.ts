@@ -11,7 +11,7 @@ const row = {
 
 describe("database edit store", () => {
   it("guards updates with the loaded values and drops edits that revert", () => {
-    const store = createDatabaseEditStore()
+    const store = createDatabaseEditStore("players")
     store.setCell(row, "name", "Alexa")
     store.setCell(row, "balance", 12)
     store.setCell(row, "balance", 10)
@@ -28,7 +28,7 @@ describe("database edit store", () => {
   })
 
   it("keeps each edit's original value across refetches", () => {
-    const store = createDatabaseEditStore()
+    const store = createDatabaseEditStore("players")
     store.setCell(row, "balance", 12)
     // Someone else changes the balance to 11 and the page refetches.
     const refetched = { ...row, original: { ...row.original, balance: 11 } }
@@ -45,7 +45,7 @@ describe("database edit store", () => {
   })
 
   it("holds staging while a save is in flight", () => {
-    const store = createDatabaseEditStore()
+    const store = createDatabaseEditStore("players")
     store.setLocked(true)
     store.setCell(row, "name", "Alexa")
     store.toggleDeleted(row)
@@ -55,7 +55,7 @@ describe("database edit store", () => {
   })
 
   it("sends deletes instead of edits for deleted rows", () => {
-    const store = createDatabaseEditStore()
+    const store = createDatabaseEditStore("players")
     store.setCell(row, "name", "Alexa")
     store.toggleDeleted(row)
     const inserted = store.insertRow() ?? ""
