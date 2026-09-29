@@ -1,5 +1,5 @@
 import type { RowDataPacket } from "mysql2/promise"
-import { Effect } from "effect"
+import { Clock, Effect } from "effect"
 
 import type { DatabaseEngine } from "@workspace/contracts"
 import {
@@ -16,7 +16,7 @@ import { betterAuthSecrets } from "@/lib/environment"
 const DATABASE_PASSWORD_PURPOSE = "kiln-managed-database-password"
 
 interface ManagedDatabaseRow extends RowDataPacket {
-  created_at: Date
+  created_at: number
   created_by: string
   database_id: string
   database_name: string
@@ -121,13 +121,14 @@ export const createManagedDatabaseRecordEffect = Effect.fn(
   username: string
 }) {
   const database = yield* Database
+  const now = yield* Clock.currentTimeMillis
   const ciphertext = yield* encryptPassword(input.password)
   yield* database.execute(
     "managed_databases_create",
     `INSERT INTO ${databaseTable("database")}
       (database_id, relay_id, name, engine, database_name, username,
-       password_ciphertext, created_by)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+       password_ciphertext, created_by, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       input.databaseId,
       input.relayId,
@@ -137,6 +138,8 @@ export const createManagedDatabaseRecordEffect = Effect.fn(
       input.username,
       ciphertext,
       input.createdBy,
+      now,
+      now,
     ]
   )
 })
@@ -159,12 +162,13 @@ export const loadManagedDatabaseCredentialEffect = Effect.fn(
   const decrypted = yield* decryptPassword(row.password_ciphertext)
   if (decrypted.needsRotation) {
     const rotated = yield* encryptPassword(decrypted.plaintext)
+    const now = yield* Clock.currentTimeMillis
     yield* database.execute(
       "managed_database_credential_reencrypt",
       `UPDATE ${databaseTable("database")}
-          SET password_ciphertext = ?
+          SET password_ciphertext = ?, updated_at = ?
         WHERE relay_id = ? AND database_id = ? AND password_ciphertext = ?`,
-      [rotated, relayId, databaseId, row.password_ciphertext]
+      [rotated, now, relayId, databaseId, row.password_ciphertext]
     )
   }
   return {
@@ -178,13 +182,14 @@ export const rotateManagedDatabaseCredentialEffect = Effect.fn(
   "managedDatabases.rotateCredential"
 )(function* (relayId: string, databaseId: string, password: string) {
   const database = yield* Database
+  const now = yield* Clock.currentTimeMillis
   const ciphertext = yield* encryptPassword(password)
   const result = yield* database.execute(
     "managed_database_credential_rotate",
     `UPDATE ${databaseTable("database")}
-        SET password_ciphertext = ?
+        SET password_ciphertext = ?, updated_at = ?
       WHERE relay_id = ? AND database_id = ?`,
-    [ciphertext, relayId, databaseId]
+    [ciphertext, now, relayId, databaseId]
   )
   if (result.affectedRows !== 1) {
     return yield* Effect.fail(new Error("Database record not found"))
@@ -195,6 +200,7 @@ export const deleteManagedDatabaseRecordEffect = Effect.fn(
   "managedDatabases.delete"
 )(function* (relayId: string, databaseId: string) {
   const database = yield* Database
+  const now = yield* Clock.currentTimeMillis
   yield* database.transaction("managed_database_delete", (transaction) =>
     Effect.gen(function* () {
       yield* transaction.execute(
@@ -202,8 +208,8 @@ export const deleteManagedDatabaseRecordEffect = Effect.fn(
           WHERE relay_id = ? AND database_id = ?
             AND accepted_at IS NULL
             AND revoked_at IS NULL
-            AND expires_at > CURRENT_TIMESTAMP(3)`,
-        [relayId, databaseId]
+            AND expires_at > ?`,
+        [relayId, databaseId, now]
       )
       yield* transaction.execute(
         `DELETE FROM ${databaseTable("database")}
@@ -226,7 +232,7 @@ export const deleteManagedDatabaseRecordEffect = Effect.fn(
 
 function toRecord(row: ManagedDatabaseRow): ManagedDatabaseRecord {
   return {
-    createdAt: row.created_at.toISOString(),
+    createdAt: new Date(row.created_at).toISOString(),
     createdBy: row.created_by,
     databaseId: row.database_id,
     databaseName: row.database_name,

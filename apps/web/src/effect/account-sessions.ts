@@ -1,4 +1,4 @@
-import { Effect } from "effect"
+import { Clock, Effect } from "effect"
 import type { RowDataPacket } from "mysql2/promise"
 
 import { Database } from "@/effect/database"
@@ -32,6 +32,7 @@ export interface AccountSessionSummary {
 export const listAccountSessionsEffect = Effect.fn("auth.sessions.list")(
   function* (userId: string) {
     const database = yield* Database
+    const now = yield* Clock.currentTimeMillis
     const rows = yield* database.queryRows<AccountSessionRow>(
       "auth.sessions.list",
       `SELECT id,
@@ -42,9 +43,9 @@ export const listAccountSessionsEffect = Effect.fn("auth.sessions.list")(
               userAgent AS user_agent
          FROM ${databaseTable("session")}
         WHERE userId = ?
-          AND expiresAt > CURRENT_TIMESTAMP(3)
+          AND expiresAt > ?
         ORDER BY createdAt DESC`,
-      [userId]
+      [userId, new Date(now)]
     )
 
     const sessions: Array<AccountSessionSummary> = []
@@ -90,15 +91,16 @@ export const accountSessionActiveEffect = Effect.fn(
   "auth.sessions.realtimeValidate"
 )(function* (userId: string, sessionId: string) {
   const database = yield* Database
+  const now = yield* Clock.currentTimeMillis
   const rows = yield* database.queryRows<ActiveSessionRow>(
     "auth.sessions.realtimeValidate",
     `SELECT id
        FROM ${databaseTable("session")}
       WHERE id = ?
         AND userId = ?
-        AND expiresAt > CURRENT_TIMESTAMP(3)
+        AND expiresAt > ?
       LIMIT 1`,
-    [sessionId, userId]
+    [sessionId, userId, new Date(now)]
   )
   return rows[0]?.id === sessionId
 })

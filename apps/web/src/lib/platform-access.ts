@@ -1,4 +1,4 @@
-import { Effect } from "effect"
+import { Clock, Effect } from "effect"
 import type { RowDataPacket } from "mysql2/promise"
 
 import { Database, type DatabaseTransaction } from "@/effect/database"
@@ -90,9 +90,10 @@ export function assignPlatformAccessEffect(input: {
 
           const platformRole =
             input.accessType === "platform_admin" ? "admin" : "relay_creator"
+          const now = yield* Clock.currentTimeMillis
           yield* transaction.execute(
-            `UPDATE ${databaseTable("user")} SET role = ?, updatedAt = CURRENT_TIMESTAMP(3) WHERE id = ?`,
-            [platformRole, input.userId]
+            `UPDATE ${databaseTable("user")} SET role = ?, updatedAt = ? WHERE id = ?`,
+            [platformRole, new Date(now), input.userId]
           )
           if (target.role !== platformRole) {
             yield* advancePlatformAuthorization(
@@ -169,18 +170,19 @@ export function removePlatformAccessEffect(input: {
             )
           }
 
+          const now = yield* Clock.currentTimeMillis
           yield* transaction.execute(
-            `UPDATE ${databaseTable("user")} SET role = 'user', updatedAt = CURRENT_TIMESTAMP(3) WHERE id = ?`,
-            [target.id]
+            `UPDATE ${databaseTable("user")} SET role = 'user', updatedAt = ? WHERE id = ?`,
+            [new Date(now), target.id]
           )
           yield* transaction.execute(
             `UPDATE ${databaseTable("invitation")}
-                SET revoked_at = CURRENT_TIMESTAMP(3), cancelled_at = CURRENT_TIMESTAMP(3), cancelled_by = ?
+                SET revoked_at = ?, cancelled_at = ?, cancelled_by = ?
               WHERE user_id = ?
                 AND access_type <> 'scoped'
                 AND accepted_at IS NULL
                 AND revoked_at IS NULL`,
-            [input.actingUserId, target.id]
+            [now, now, input.actingUserId, target.id]
           )
           yield* advancePlatformAuthorization(
             transaction,
@@ -203,9 +205,10 @@ function advancePlatformAuthorization(
   role: string
 ) {
   return Effect.gen(function* () {
+    const now = yield* Clock.currentTimeMillis
     yield* transaction.execute(
-      `INSERT INTO ${databaseTable("auth_audit")} (user_id, event, metadata) VALUES (?, 'platform.role.changed', ?)`,
-      [userId, JSON.stringify({ actorId, oldRole, role })]
+      `INSERT INTO ${databaseTable("auth_audit")} (user_id, event, metadata, created_at) VALUES (?, 'platform.role.changed', ?, ?)`,
+      [userId, JSON.stringify({ actorId, oldRole, role }), now]
     )
     yield* advanceSubjectAcrossEnabledRelaysEffect(transaction, userId, [
       { kind: "subject_relay" },
@@ -268,15 +271,16 @@ export function transferInstanceOwnershipEffect(
               )
             )
 
+          const now = yield* Clock.currentTimeMillis
           yield* transaction.execute(
             `INSERT INTO ${databaseTable("instance")}
-                   (relay_id, instance_id, display_name, owner_id)
-                 VALUES (?, ?, NULL, ?)
-                 ON DUPLICATE KEY UPDATE owner_id = VALUES(owner_id)`,
-            [data.relayId, data.instanceId, data.userId]
+                   (relay_id, instance_id, display_name, owner_id, created_at, updated_at)
+                 VALUES (?, ?, NULL, ?, ?, ?)
+                 ON DUPLICATE KEY UPDATE owner_id = VALUES(owner_id), updated_at = VALUES(updated_at)`,
+            [data.relayId, data.instanceId, data.userId, now, now]
           )
           yield* transaction.execute(
-            `INSERT INTO ${databaseTable("auth_audit")} (user_id, event, metadata) VALUES (?, 'instance.ownership.transferred', ?)`,
+            `INSERT INTO ${databaseTable("auth_audit")} (user_id, event, metadata, created_at) VALUES (?, 'instance.ownership.transferred', ?, ?)`,
             [
               data.userId,
               JSON.stringify({
@@ -285,6 +289,7 @@ export function transferInstanceOwnershipEffect(
                 relayId: data.relayId,
                 instanceId: data.instanceId,
               }),
+              now,
             ]
           )
           for (const changedUserId of [ownerId, data.userId]) {
@@ -309,21 +314,22 @@ interface PlatformInvitationRow extends RowDataPacket {
   id: string
   user_id: string | null
   access_type: "scoped" | "platform_admin" | "relay_creator"
-  accepted_at: Date | null
-  revoked_at: Date | null
-  declined_at: Date | null
-  cancelled_at: Date | null
-  expires_at: Date
+  accepted_at: number | null
+  revoked_at: number | null
+  declined_at: number | null
+  cancelled_at: number | null
+  expires_at: number
 }
 function isPlatformInvitationPending(
-  invitation: PlatformInvitationRow
+  invitation: PlatformInvitationRow,
+  now: number
 ): boolean {
   return (
     !invitation.accepted_at &&
     !invitation.revoked_at &&
     !invitation.declined_at &&
     !invitation.cancelled_at &&
-    invitation.expires_at.getTime() > Date.now()
+    invitation.expires_at > now
   )
 }
 export function acceptPlatformInvitationEffect(
@@ -334,6 +340,7 @@ export function acceptPlatformInvitationEffect(
     const database = yield* Database
     return yield* database.transaction("access.platform.accept", (tx) =>
       Effect.gen(function* () {
+        const now = yield* Clock.currentTimeMillis
         yield* tx.queryRows<PlatformRoleUserRow>(
           `SELECT * FROM ${databaseTable("user")} WHERE role = 'admin' ORDER BY id FOR UPDATE`
         )
@@ -357,7 +364,7 @@ export function acceptPlatformInvitationEffect(
         const current = rows[0]
         if (
           !current ||
-          !isPlatformInvitationPending(current) ||
+          !isPlatformInvitationPending(current, now) ||
           current.access_type === "scoped"
         )
           return yield* Effect.fail(
@@ -374,15 +381,15 @@ export function acceptPlatformInvitationEffect(
               ? "admin"
               : "relay_creator"
         yield* tx.execute(
-          `UPDATE ${databaseTable("user")} SET role = ?, updatedAt = CURRENT_TIMESTAMP(3) WHERE id = ?`,
-          [role, user.id]
+          `UPDATE ${databaseTable("user")} SET role = ?, updatedAt = ? WHERE id = ?`,
+          [role, new Date(now), user.id]
         )
         yield* tx.execute(
-          `UPDATE ${databaseTable("invitation")} SET accepted_at = CURRENT_TIMESTAMP(3), accepted_by = ?, acceptance_method = 'self' WHERE id = ?`,
-          [user.id, current.id]
+          `UPDATE ${databaseTable("invitation")} SET accepted_at = ?, accepted_by = ?, acceptance_method = 'self' WHERE id = ?`,
+          [now, user.id, current.id]
         )
         yield* tx.execute(
-          `INSERT INTO ${databaseTable("auth_audit")} (user_id, event, metadata) VALUES (?, 'platform.invitation.accepted', ?)`,
+          `INSERT INTO ${databaseTable("auth_audit")} (user_id, event, metadata, created_at) VALUES (?, 'platform.invitation.accepted', ?, ?)`,
           [
             user.id,
             JSON.stringify({
@@ -391,6 +398,7 @@ export function acceptPlatformInvitationEffect(
               oldRole: subject.role,
               role,
             }),
+            now,
           ]
         )
         yield* advanceSubjectAcrossEnabledRelaysEffect(tx, user.id, [
@@ -408,6 +416,7 @@ export function cancelPlatformInvitationEffect(
     const database = yield* Database
     return yield* database.transaction("access.platform.cancel", (tx) =>
       Effect.gen(function* () {
+        const now = yield* Clock.currentTimeMillis
         const admins = yield* tx.queryRows<PlatformRoleUserRow>(
           `SELECT * FROM ${databaseTable("user")} WHERE role = 'admin' ORDER BY id FOR UPDATE`
         )
@@ -427,19 +436,23 @@ export function cancelPlatformInvitationEffect(
           `SELECT * FROM ${databaseTable("invitation")} WHERE id = ? AND relay_id IS NULL AND access_type <> 'scoped' FOR UPDATE`,
           [invitationId]
         )
-        if (!invitations[0] || !isPlatformInvitationPending(invitations[0]))
+        if (
+          !invitations[0] ||
+          !isPlatformInvitationPending(invitations[0], now)
+        )
           return yield* Effect.fail(
             new Error("This invitation is no longer pending")
           )
         yield* tx.execute(
-          `UPDATE ${databaseTable("invitation")} SET revoked_at = CURRENT_TIMESTAMP(3), cancelled_at = CURRENT_TIMESTAMP(3), cancelled_by = ? WHERE id = ?`,
-          [user.id, invitationId]
+          `UPDATE ${databaseTable("invitation")} SET revoked_at = ?, cancelled_at = ?, cancelled_by = ? WHERE id = ?`,
+          [now, now, user.id, invitationId]
         )
         yield* tx.execute(
-          `INSERT INTO ${databaseTable("auth_audit")} (user_id, event, metadata) VALUES (?, 'platform.invitation.cancelled', ?)`,
+          `INSERT INTO ${databaseTable("auth_audit")} (user_id, event, metadata, created_at) VALUES (?, 'platform.invitation.cancelled', ?, ?)`,
           [
             invitations[0].user_id,
             JSON.stringify({ actorId: user.id, invitationId: invitationId }),
+            now,
           ]
         )
       })

@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto"
 
 import { createServerFn } from "@tanstack/react-start"
-import { Data, Effect, Result } from "effect"
+import { Clock, Data, Effect, Result } from "effect"
 import type { ResultSetHeader, RowDataPacket } from "mysql2/promise"
 import { z } from "zod"
 
@@ -69,7 +69,7 @@ class ScheduleRevisionConflictError extends Data.TaggedError(
 )<{ readonly message: string }> {}
 
 interface ScheduleRow extends RowDataPacket {
-  created_at: Date
+  created_at: number
   created_by: string
   cron_expression: string
   enabled: number
@@ -77,7 +77,7 @@ interface ScheduleRow extends RowDataPacket {
   name: string
   revision: number
   timezone: string
-  updated_at: Date
+  updated_at: number
 }
 
 interface ScheduleActionRow extends RowDataPacket {
@@ -100,7 +100,7 @@ interface ScheduleDeploymentRow extends RowDataPacket {
   acknowledged_revision: number | null
   desired_revision: number
   last_error: string | null
-  next_run_at: Date | null
+  next_run_at: number | null
   relay_id: string
   schedule_id: string
   status: "applied" | "error" | "pending"
@@ -347,11 +347,12 @@ export const deleteSchedule = createServerFn({ method: "POST" })
       user,
     })
     const revision = schedule.revision + 1
+    const now = Date.now()
     await databasePool.execute(
       `UPDATE ${databaseTable("schedule")}
-          SET enabled = FALSE, revision = ?, deleted_at = CURRENT_TIMESTAMP(3)
+          SET enabled = FALSE, revision = ?, deleted_at = ?, updated_at = ?
         WHERE id = ? AND deleted_at IS NULL`,
-      [revision, schedule.id]
+      [revision, now, now, schedule.id]
     )
     publishScheduleCollectionChange(
       schedule.targets.map((target) => target.relayId)
@@ -425,7 +426,9 @@ export const runScheduleNow = createServerFn({ method: "POST" })
         }
         const imported = await Effect.runPromise(
           Effect.result(
-            promiseEffect(() => importScheduleRun(relayId, started.success))
+            promiseEffect(() =>
+              importScheduleRun(relayId, started.success, Date.now())
+            )
           )
         )
         if (Result.isFailure(imported)) {
@@ -539,12 +542,14 @@ async function saveNewSchedule(
     "schedules.create",
     Effect.gen(function* () {
       const database = yield* Database
+      const now = yield* Clock.currentTimeMillis
       yield* database.transaction("schedules.create", (transaction) =>
         Effect.gen(function* () {
           yield* transaction.execute(
             `INSERT INTO ${databaseTable("schedule")}
-               (id, name, cron_expression, timezone, enabled, revision, created_by)
-             VALUES (?, ?, ?, ?, ?, ?, ?)`,
+               (id, name, cron_expression, timezone, enabled, revision, created_by,
+                created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             [
               schedule.id,
               schedule.name,
@@ -553,9 +558,11 @@ async function saveNewSchedule(
               schedule.enabled,
               schedule.revision,
               createdBy,
+              now,
+              now,
             ]
           )
-          yield* insertScheduleParts(transaction, schedule)
+          yield* insertScheduleParts(transaction, schedule, now)
         })
       )
     })
@@ -570,12 +577,13 @@ async function replaceSchedule(
     "schedules.update",
     Effect.gen(function* () {
       const database = yield* Database
+      const now = yield* Clock.currentTimeMillis
       yield* database.transaction("schedules.update", (transaction) =>
         Effect.gen(function* () {
           const result = yield* transaction.execute(
             `UPDATE ${databaseTable("schedule")}
                 SET name = ?, cron_expression = ?, timezone = ?, enabled = ?,
-                    revision = ?
+                    revision = ?, updated_at = ?
               WHERE id = ? AND revision = ? AND deleted_at IS NULL`,
             [
               schedule.name,
@@ -583,6 +591,7 @@ async function replaceSchedule(
               schedule.timezone,
               schedule.enabled,
               schedule.revision,
+              now,
               schedule.id,
               expectedRevision,
             ]
@@ -601,7 +610,7 @@ async function replaceSchedule(
             `DELETE FROM ${databaseTable("schedule_target")} WHERE schedule_id = ?`,
             [schedule.id]
           )
-          yield* insertScheduleParts(transaction, schedule)
+          yield* insertScheduleParts(transaction, schedule, now)
         })
       )
     })
@@ -610,23 +619,32 @@ async function replaceSchedule(
 
 function insertScheduleParts(
   transaction: DatabaseTransaction,
-  schedule: ScheduleDefinition
+  schedule: ScheduleDefinition,
+  now: number
 ) {
   return Effect.gen(function* () {
     for (const [position, action] of schedule.actions.entries()) {
       yield* transaction.execute(
         `INSERT INTO ${databaseTable("schedule_action")}
-           (id, schedule_id, position, action_type, action_config)
-         VALUES (?, ?, ?, ?, ?)`,
-        [action.id, schedule.id, position, action.type, JSON.stringify(action)]
+           (id, schedule_id, position, action_type, action_config, created_at)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+        [
+          action.id,
+          schedule.id,
+          position,
+          action.type,
+          JSON.stringify(action),
+          now,
+        ]
       )
     }
     for (const target of schedule.targets) {
       yield* transaction.execute(
         `INSERT INTO ${databaseTable("schedule_target")}
-           (schedule_id, relay_id, target_kind, target_id, target_name)
-         VALUES (?, ?, ?, ?, ?)`,
-        [schedule.id, target.relayId, target.kind, target.id, target.name]
+           (schedule_id, relay_id, target_kind, target_id, target_name,
+            created_at)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+        [schedule.id, target.relayId, target.kind, target.id, target.name, now]
       )
     }
   })
@@ -691,14 +709,17 @@ async function loadSchedules() {
     })
     return {
       ...definition,
-      createdAt: row.created_at.toISOString(),
+      createdAt: new Date(row.created_at).toISOString(),
       createdBy: row.created_by,
       deployments: (deploymentsBySchedule.get(row.id) ?? []).map(
         (deployment) => ({
           acknowledgedRevision: deployment.acknowledged_revision,
           desiredRevision: deployment.desired_revision,
           lastError: deployment.last_error,
-          nextRunAt: deployment.next_run_at?.toISOString() ?? null,
+          nextRunAt:
+            deployment.next_run_at === null
+              ? null
+              : new Date(deployment.next_run_at).toISOString(),
           relayId: deployment.relay_id,
           status: deployment.status,
         })
@@ -707,7 +728,7 @@ async function loadSchedules() {
         const parsed = scheduleRunSchema.safeParse(jsonValue(run.run_json))
         return parsed.success ? [{ ...parsed.data, relayId: run.relay_id }] : []
       }),
-      updatedAt: row.updated_at.toISOString(),
+      updatedAt: new Date(row.updated_at).toISOString(),
     }
   })
 }
@@ -781,11 +802,11 @@ async function deployScheduleToRelay(
         await databasePool.execute(
           `UPDATE ${databaseTable("schedule_deployment")}
           SET status = IF(? >= desired_revision, 'applied', status),
-              next_run_at = IF(? >= desired_revision,
-                FROM_UNIXTIME(? / 1000), next_run_at),
+              next_run_at = IF(? >= desired_revision, ?, next_run_at),
               last_error = IF(? >= desired_revision, NULL, last_error),
               acknowledged_revision = GREATEST(
-                COALESCE(acknowledged_revision, 0), ?)
+                COALESCE(acknowledged_revision, 0), ?),
+              updated_at = ?
         WHERE schedule_id = ? AND relay_id = ?`,
           [
             result.acknowledgedRevision,
@@ -793,6 +814,7 @@ async function deployScheduleToRelay(
             result.nextRunAt,
             result.acknowledgedRevision,
             result.acknowledgedRevision,
+            Date.now(),
             schedule.id,
             relayId,
           ]
@@ -1139,14 +1161,24 @@ async function importRelayScheduleOverview(
       overview.runs.map((run) => run.id)
     ),
   ])
+  const now = Date.now()
   let changed = false
   for (const deployment of overview.deployments) {
+    // updated_at is assigned first so it compares against the stored row and
+    // only moves when something changes, keeping affectedRows meaningful.
     const [result] = await databasePool.execute<ResultSetHeader>(
       `INSERT INTO ${databaseTable("schedule_deployment")}
          (schedule_id, relay_id, desired_revision, acknowledged_revision,
-          status, next_run_at, last_error)
-       VALUES (?, ?, ?, ?, 'applied', FROM_UNIXTIME(? / 1000), NULL)
+          status, next_run_at, last_error, created_at, updated_at)
+       VALUES (?, ?, ?, ?, 'applied', ?, NULL, ?, ?)
        ON DUPLICATE KEY UPDATE
+         updated_at = IF(
+           VALUES(acknowledged_revision) > COALESCE(acknowledged_revision, 0)
+             OR (VALUES(acknowledged_revision) >= desired_revision
+               AND NOT (status <=> 'applied'
+                 AND next_run_at <=> VALUES(next_run_at)
+                 AND last_error IS NULL)),
+           VALUES(updated_at), updated_at),
          status = IF(VALUES(acknowledged_revision) >= desired_revision,
            'applied', status),
          next_run_at = IF(VALUES(acknowledged_revision) >= desired_revision,
@@ -1162,13 +1194,15 @@ async function importRelayScheduleOverview(
         deployment.acknowledgedRevision,
         deployment.acknowledgedRevision,
         deployment.nextRunAt,
+        now,
+        now,
       ]
     )
     changed ||=
       !storedDeploymentIds.has(deployment.scheduleId) || result.affectedRows > 1
   }
   for (const run of overview.runs) {
-    const result = await importScheduleRun(relayId, run)
+    const result = await importScheduleRun(relayId, run, now)
     changed ||= !storedRunIds.has(run.id) || result.affectedRows > 1
   }
   if (changed) publishScheduleCollectionChange([relayId])
@@ -1202,12 +1236,22 @@ function publishScheduleCollectionChange(relayIds: Iterable<string>): void {
   })
 }
 
-async function importScheduleRun(relayId: string, run: ScheduleRun) {
+async function importScheduleRun(
+  relayId: string,
+  run: ScheduleRun,
+  now: number
+) {
+  // updated_at is assigned first so an unchanged run is not reported as changed.
   const [result] = await databasePool.execute<ResultSetHeader>(
     `INSERT INTO ${databaseTable("schedule_run")}
-       (id, schedule_id, relay_id, scheduled_at, status, run_json)
-     VALUES (?, ?, ?, FROM_UNIXTIME(? / 1000), ?, ?)
-     ON DUPLICATE KEY UPDATE status = VALUES(status),
+       (id, schedule_id, relay_id, scheduled_at, status, run_json,
+        created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+     ON DUPLICATE KEY UPDATE
+       updated_at = IF(status <=> VALUES(status)
+           AND run_json <=> VALUES(run_json),
+         updated_at, VALUES(updated_at)),
+       status = VALUES(status),
        run_json = VALUES(run_json)`,
     [
       run.id,
@@ -1216,6 +1260,8 @@ async function importScheduleRun(relayId: string, run: ScheduleRun) {
       run.scheduledAt,
       run.status,
       JSON.stringify(run),
+      now,
+      now,
     ]
   )
   return result
@@ -1227,18 +1273,21 @@ async function upsertDeployment(
   revision: number,
   status: "pending"
 ) {
+  const now = Date.now()
   await databasePool.execute(
     `INSERT INTO ${databaseTable("schedule_deployment")}
-       (schedule_id, relay_id, desired_revision, status)
-     VALUES (?, ?, ?, ?)
+       (schedule_id, relay_id, desired_revision, status, created_at,
+        updated_at)
+     VALUES (?, ?, ?, ?, ?, ?)
      ON DUPLICATE KEY UPDATE
        status = IF(VALUES(desired_revision) >= desired_revision,
          VALUES(status), status),
        last_error = IF(VALUES(desired_revision) >= desired_revision,
          NULL, last_error),
        desired_revision = GREATEST(desired_revision,
-         VALUES(desired_revision))`,
-    [scheduleId, relayId, revision, status]
+         VALUES(desired_revision)),
+       updated_at = VALUES(updated_at)`,
+    [scheduleId, relayId, revision, status, now, now]
   )
 }
 
@@ -1248,18 +1297,21 @@ async function deploymentError(
   revision: number,
   error: string
 ) {
+  const now = Date.now()
   await databasePool.execute(
     `INSERT INTO ${databaseTable("schedule_deployment")}
-       (schedule_id, relay_id, desired_revision, status, last_error)
-     VALUES (?, ?, ?, 'error', ?)
+       (schedule_id, relay_id, desired_revision, status, last_error,
+        created_at, updated_at)
+     VALUES (?, ?, ?, 'error', ?, ?, ?)
      ON DUPLICATE KEY UPDATE
        status = IF(VALUES(desired_revision) >= desired_revision,
          'error', status),
        last_error = IF(VALUES(desired_revision) >= desired_revision,
          VALUES(last_error), last_error),
        desired_revision = GREATEST(desired_revision,
-         VALUES(desired_revision))`,
-    [scheduleId, relayId, revision, error.slice(0, 2_000)]
+         VALUES(desired_revision)),
+       updated_at = VALUES(updated_at)`,
+    [scheduleId, relayId, revision, error.slice(0, 2_000), now, now]
   )
 }
 

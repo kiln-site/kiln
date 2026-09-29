@@ -64,6 +64,7 @@ describe("authorization revisions", () => {
       "instance",
       "instance-one",
       9,
+      expect.any(Number),
     ])
   })
 })

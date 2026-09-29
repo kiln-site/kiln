@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto"
 
 import { brickSchema, type Brick } from "@workspace/contracts"
-import { Effect, Result } from "effect"
+import { Clock, Effect, Result } from "effect"
 import type { RowDataPacket } from "mysql2/promise"
 
 import { Database } from "@/effect/database"
@@ -36,17 +36,27 @@ export const saveCustomBrickEffect = Effect.fn("customBricks.save")(function* (
   brick: Brick
 ) {
   const database = yield* Database
+  const now = yield* Clock.currentTimeMillis
   const sourceHash = createHash("sha256").update(brick.source).digest("hex")
   yield* database.execute(
     "customBricks.save",
     `INSERT INTO ${databaseTable("custom_brick")}
-         (id, owner_user_id, source_hash, source, recipe)
-       VALUES (?, ?, ?, ?, ?)
+         (id, owner_user_id, source_hash, source, recipe, created_at,
+          updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)
        ON DUPLICATE KEY UPDATE
          source = VALUES(source),
          recipe = VALUES(recipe),
-         updated_at = CURRENT_TIMESTAMP(3)`,
-    [randomUUID(), userId, sourceHash, brick.source, JSON.stringify(brick)]
+         updated_at = VALUES(updated_at)`,
+    [
+      randomUUID(),
+      userId,
+      sourceHash,
+      brick.source,
+      JSON.stringify(brick),
+      now,
+      now,
+    ]
   )
   return brick
 })

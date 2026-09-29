@@ -50,16 +50,16 @@ export async function deliverAccessInvitations(
         if (error)
           throw new Error(error.message || "Invitation delivery failed")
         await databasePool.execute(
-          `UPDATE ${databaseTable("invitation")} SET delivery_status = 'sent', sent_at = CURRENT_TIMESTAMP(3), delivery_attempts = delivery_attempts + 1, delivery_last_error = NULL, delivery_next_attempt_at = NULL WHERE id = ?`,
-          [invitation.id]
+          `UPDATE ${databaseTable("invitation")} SET delivery_status = 'sent', sent_at = ?, delivery_attempts = delivery_attempts + 1, delivery_last_error = NULL, delivery_next_attempt_at = NULL WHERE id = ?`,
+          [Date.now(), invitation.id]
         )
       }).pipe(
         Effect.catch(() =>
           Effect.tryPromise(async () => {
             // A failed email cannot undo access or identity. Persist retry state without tokens/provider payloads.
             await databasePool.execute(
-              `UPDATE ${databaseTable("invitation")} SET delivery_status = 'failed', delivery_attempts = delivery_attempts + 1, delivery_last_error = 'Email delivery failed', delivery_next_attempt_at = DATE_ADD(CURRENT_TIMESTAMP(3), INTERVAL 5 MINUTE) WHERE id = ?`,
-              [invitation.id]
+              `UPDATE ${databaseTable("invitation")} SET delivery_status = 'failed', delivery_attempts = delivery_attempts + 1, delivery_last_error = 'Email delivery failed', delivery_next_attempt_at = ? WHERE id = ?`,
+              [Date.now() + 5 * 60_000, invitation.id]
             )
           })
         )
@@ -83,17 +83,19 @@ export function startAccessInvitationDelivery() {
         resource_name: string
         resource_type: InvitationDelivery["scope"]
       }
-      const [rows] = await databasePool.query<
-        Array<PendingRow>
-      >(`SELECT i.id, i.email, u.name AS inviter_name, COALESCE(s.display_name, s.source_name, d.name, r.name) AS resource_name, g.resource_type
+      const now = Date.now()
+      const [rows] = await databasePool.query<Array<PendingRow>>(
+        `SELECT i.id, i.email, u.name AS inviter_name, COALESCE(s.display_name, s.source_name, d.name, r.name) AS resource_name, g.resource_type
       FROM ${databaseTable("invitation")} i JOIN ${databaseTable("access_grant")} g ON g.id = i.access_id
       JOIN ${databaseTable("relay")} r ON r.id = i.relay_id
       LEFT JOIN ${databaseTable("user")} u ON u.id = i.invited_by
       LEFT JOIN ${databaseTable("instance")} s ON s.relay_id = i.relay_id AND s.instance_id = i.instance_id
       LEFT JOIN ${databaseTable("database")} d ON d.database_id = i.database_id
-      WHERE i.delivery_status IN ('pending', 'failed') AND (i.delivery_next_attempt_at IS NULL OR i.delivery_next_attempt_at <= CURRENT_TIMESTAMP(3))
-      AND i.accepted_at IS NULL AND i.declined_at IS NULL AND i.revoked_at IS NULL AND i.expires_at > CURRENT_TIMESTAMP(3)
-      ORDER BY i.created_at LIMIT 25`)
+      WHERE i.delivery_status IN ('pending', 'failed') AND (i.delivery_next_attempt_at IS NULL OR i.delivery_next_attempt_at <= ?)
+      AND i.accepted_at IS NULL AND i.declined_at IS NULL AND i.revoked_at IS NULL AND i.expires_at > ?
+      ORDER BY i.created_at LIMIT 25`,
+        [now, now]
+      )
       await deliverAccessInvitations(
         rows.map((row) => ({
           id: row.id,

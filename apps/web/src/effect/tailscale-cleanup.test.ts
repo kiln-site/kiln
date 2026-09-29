@@ -1,5 +1,6 @@
 import { assert, describe, it } from "@effect/vitest"
 import { Effect, Layer } from "effect"
+import * as TestClock from "effect/testing/TestClock"
 import type { ResultSetHeader } from "mysql2/promise"
 
 import { Database } from "@/effect/database"
@@ -22,6 +23,8 @@ const emptyResult: ResultSetHeader = {
   serverStatus: 0,
   warningStatus: 0,
 }
+
+const now = 1_700_000_000_000
 
 const statements: Array<{
   sql: string
@@ -55,6 +58,7 @@ describe("Tailscale cleanup retries", () => {
   it.effect("keeps previously observed offline Relays queued", () =>
     Effect.gen(function* () {
       statements.length = 0
+      yield* TestClock.setTime(now)
 
       yield* requestTailscaleNetworkCleanupEffect(
         "a".repeat(40),
@@ -65,7 +69,14 @@ describe("Tailscale cleanup retries", () => {
       assert.strictEqual(statements.length, 1)
       assert.include(statements[0]?.sql, "deletion_requested_at")
       assert.notInclude(statements[0]?.sql, "DELETE")
-      assert.deepEqual(statements[0]?.values, ["user-one", "a".repeat(40)])
+      assert.notInclude(statements[0]?.sql, "CURRENT_TIMESTAMP")
+      assert.deepEqual(statements[0]?.values, [
+        now,
+        "user-one",
+        now,
+        now,
+        "a".repeat(40),
+      ])
     }).pipe(Effect.provide(databaseLayer))
   )
 
@@ -93,6 +104,7 @@ describe("Tailscale cleanup retries", () => {
   it.effect("defers corrupt rows without blocking valid cleanup jobs", () =>
     Effect.gen(function* () {
       statements.length = 0
+      yield* TestClock.setTime(now)
       const networkId = "a".repeat(40)
       const corruptRelayId = "b".repeat(43)
       const validRelayId = "c".repeat(43)
@@ -123,6 +135,8 @@ describe("Tailscale cleanup retries", () => {
       assert.strictEqual(batch.cleanups[0]?.deployment.relayId, validRelayId)
       assert.strictEqual(batch.deferredCorruptRows, 1)
       assert.strictEqual(statements.length, 2)
+      // Attempt 3 backs off 8 seconds from the current clock.
+      assert.strictEqual(statements[0]?.values[1], now + 8_000)
       assert.include(
         String(statements[0]?.values[2]),
         "Stored Tailscale cleanup data is invalid"
@@ -136,6 +150,7 @@ describe("Tailscale cleanup retries", () => {
     () =>
       Effect.gen(function* () {
         statements.length = 0
+        yield* TestClock.setTime(now)
         const networkId = "a".repeat(40)
         const relayId = "b".repeat(43)
 
@@ -146,10 +161,10 @@ describe("Tailscale cleanup retries", () => {
         assert.deepEqual(statements[0]?.values, [networkId, relayId])
         assert.include(statements[1]?.sql, "cleanup_next_attempt_at")
         assert.include(statements[1]?.sql, "cleanup_attempts = 0")
-        assert.include(statements[1]?.sql, "CURRENT_TIMESTAMP(3)")
+        assert.notInclude(statements[1]?.sql, "CURRENT_TIMESTAMP")
         assert.include(statements[1]?.sql, "cleanup_last_error = NULL")
         assert.include(statements[1]?.sql, "NOT EXISTS")
-        assert.deepEqual(statements[1]?.values, [networkId])
+        assert.deepEqual(statements[1]?.values, [now, now, networkId])
       }).pipe(Effect.provide(databaseLayer))
   )
 })

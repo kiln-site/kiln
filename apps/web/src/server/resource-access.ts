@@ -1,6 +1,6 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto"
 import { createServerFn } from "@tanstack/react-start"
-import { Effect } from "effect"
+import { Clock, Effect } from "effect"
 import type { RowDataPacket } from "mysql2/promise"
 import { z } from "zod"
 import {
@@ -61,11 +61,11 @@ const inviteSchema = z.object({
     .min(1)
     .max(25),
 })
-/** SQL predicate for an invitation attempt that can still be accepted. */
+/** SQL predicate for an invitation attempt that can still be accepted; binds now. */
 const currentAttemptFor = (alias = "") =>
   ["accepted_at IS NULL", "declined_at IS NULL", "revoked_at IS NULL"]
     .map((column) => `${alias}${column}`)
-    .join(" AND ") + ` AND ${alias}expires_at > CURRENT_TIMESTAMP(3)`
+    .join(" AND ") + ` AND ${alias}expires_at > ?`
 const currentAttempt = currentAttemptFor()
 const scopeValues = (scope: ResourceScope) => [
   scope.relayId,
@@ -96,8 +96,8 @@ interface GrantRow extends RowDataPacket {
   resource_id: string
   email: string
   name: string
-  created_at: Date
-  updated_at: Date
+  created_at: number
+  updated_at: number
 }
 interface SelectionRow extends RowDataPacket {
   selection_kind: "permission" | "collection"
@@ -110,8 +110,8 @@ interface PresetRow extends RowDataPacket {
   relay_id: string
   resource_type: ResourceScope["resourceType"]
   resource_id: string
-  created_at: Date
-  updated_at: Date
+  created_at: number
+  updated_at: number
   assignment_count: number
 }
 interface AssignmentRow extends RowDataPacket {
@@ -127,13 +127,13 @@ interface InvitationRow extends RowDataPacket {
   resource_type: ResourceScope["resourceType"]
   resource_id: string
   invited_by: string
-  accepted_at: Date | null
+  accepted_at: number | null
   accepted_by: string | null
   acceptance_method: string | null
-  declined_at: Date | null
-  revoked_at: Date | null
-  expires_at: Date
-  created_at: Date
+  declined_at: number | null
+  revoked_at: number | null
+  expires_at: number
+  created_at: number
   resource_name: string | null
   inviter_name: string | null
   relay_name: string | null
@@ -160,11 +160,19 @@ export const inviteResourceAccess = createServerFn({ method: "POST" })
       accessPolicyTransaction("access.invite", (tx) =>
         Effect.gen(function* () {
           const actor = yield* lockAccessActorEffect(tx, user)
+          const now = yield* Clock.currentTimeMillis
           // Reserve the same identity for concurrent invitations; never replace credentials or trust.
           yield* tx.execute(
             `INSERT INTO ${databaseTable("user")} (id, name, email, emailVerified, status, role, statusChangedAt, createdAt, updatedAt)
-      VALUES (?, ?, ?, FALSE, 'enabled', 'user', CURRENT_TIMESTAMP(3), CURRENT_TIMESTAMP(3), CURRENT_TIMESTAMP(3)) ON DUPLICATE KEY UPDATE id = id`,
-            [randomUUID(), displayNameFromEmail(data.email), data.email]
+      VALUES (?, ?, ?, FALSE, 'enabled', 'user', ?, ?, ?) ON DUPLICATE KEY UPDATE id = id`,
+            [
+              randomUUID(),
+              displayNameFromEmail(data.email),
+              data.email,
+              new Date(now),
+              new Date(now),
+              new Date(now),
+            ]
           )
           const users = yield* tx.queryRows<UserRow>(
             `SELECT id, email, name FROM ${databaseTable("user")} WHERE email = ? FOR UPDATE`,
@@ -234,21 +242,28 @@ export const inviteResourceAccess = createServerFn({ method: "POST" })
             }
             const accessId = existing?.id ?? randomUUID()
             yield* tx.execute(
-              `INSERT INTO ${databaseTable("access_grant")} (id, user_id, relay_id, resource_type, resource_id, state, granted_by) VALUES (?, ?, ?, ?, ?, 'pending', ?)
-        ON DUPLICATE KEY UPDATE state = 'pending', revision = revision + 1, granted_by = VALUES(granted_by)`,
-              [accessId, recipient.id, ...scopeValues(target), actor.id]
+              `INSERT INTO ${databaseTable("access_grant")} (id, user_id, relay_id, resource_type, resource_id, state, granted_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 'pending', ?, ?, ?)
+        ON DUPLICATE KEY UPDATE state = 'pending', revision = revision + 1, granted_by = VALUES(granted_by), updated_at = VALUES(updated_at)`,
+              [
+                accessId,
+                recipient.id,
+                ...scopeValues(target),
+                actor.id,
+                now,
+                now,
+              ]
             )
             yield* writeAccessAssignmentEffect(tx, accessId, target, actor.id)
             yield* tx.execute(
-              `UPDATE ${databaseTable("invitation")} SET revoked_at = CURRENT_TIMESTAMP(3), cancelled_at = CURRENT_TIMESTAMP(3), cancelled_by = ? WHERE access_id = ? AND accepted_at IS NULL AND declined_at IS NULL AND revoked_at IS NULL`,
-              [actor.id, accessId]
+              `UPDATE ${databaseTable("invitation")} SET revoked_at = ?, cancelled_at = ?, cancelled_by = ? WHERE access_id = ? AND accepted_at IS NULL AND declined_at IS NULL AND revoked_at IS NULL`,
+              [now, now, actor.id, accessId]
             )
             const id = randomUUID(),
               token = randomBytes(32).toString("base64url"),
-              expiresAt = new Date(Date.now() + 7 * 86400000)
+              expiresAt = now + 7 * 86400000
             yield* tx.execute(
-              `INSERT INTO ${databaseTable("invitation")} (id, token_hash, email, access_id, user_id, access_type, relay_id, instance_id, database_id, invited_by, expires_at, delivery_status)
-        VALUES (?, ?, ?, ?, ?, 'scoped', ?, ?, ?, ?, ?, 'pending')`,
+              `INSERT INTO ${databaseTable("invitation")} (id, token_hash, email, access_id, user_id, access_type, relay_id, instance_id, database_id, invited_by, expires_at, delivery_status, created_at)
+        VALUES (?, ?, ?, ?, ?, 'scoped', ?, ?, ?, ?, ?, 'pending', ?)`,
               [
                 id,
                 createHash("sha256").update(token).digest("hex"),
@@ -260,6 +275,7 @@ export const inviteResourceAccess = createServerFn({ method: "POST" })
                 target.resourceType === "database" ? target.resourceId : null,
                 actor.id,
                 expiresAt,
+                now,
               ]
             )
             yield* auditAccessEffect(tx, actor.id, "access.invited", {
@@ -275,7 +291,7 @@ export const inviteResourceAccess = createServerFn({ method: "POST" })
               accessId,
               scope: target,
               inviteUrl: url.toString(),
-              expiresAt: expiresAt.toISOString(),
+              expiresAt: new Date(expiresAt).toISOString(),
               resourceName: resource.name ?? target.resourceId,
               existing: false,
             })
@@ -309,6 +325,8 @@ export const inviteResourceAccess = createServerFn({ method: "POST" })
     return result
   })
 
+const iso = (value: number | null) =>
+  value === null ? null : new Date(value).toISOString()
 const invitationSelect = `SELECT i.*, g.resource_type, g.resource_id, COALESCE(s.display_name, s.source_name, d.name, r.name) AS resource_name, u.name AS inviter_name, r.name AS relay_name
   FROM ${databaseTable("invitation")} i
   LEFT JOIN ${databaseTable("user")} u ON u.id = i.invited_by
@@ -326,19 +344,19 @@ function invitationView(row: InvitationRow) {
     resourceName: row.resource_name ?? row.resource_id,
     inviterName: row.inviter_name ?? "Kiln",
     relayName: row.relay_name ?? "Relay",
-    createdAt: row.created_at.toISOString(),
-    expiresAt: row.expires_at.toISOString(),
-    acceptedAt: row.accepted_at?.toISOString() ?? null,
+    createdAt: new Date(row.created_at).toISOString(),
+    expiresAt: new Date(row.expires_at).toISOString(),
+    acceptedAt: iso(row.accepted_at),
     acceptedBy: row.accepted_by,
     acceptanceMethod: row.acceptance_method,
-    declinedAt: row.declined_at?.toISOString() ?? null,
-    revokedAt: row.revoked_at?.toISOString() ?? null,
+    declinedAt: iso(row.declined_at),
+    revokedAt: iso(row.revoked_at),
     deliveryStatus: row.delivery_status,
     pending:
       !row.accepted_at &&
       !row.declined_at &&
       !row.revoked_at &&
-      row.expires_at.getTime() > Date.now(),
+      row.expires_at > Date.now(),
   }
 }
 
@@ -347,7 +365,7 @@ export const getMyInvitations = createServerFn({ method: "GET" }).handler(
     const user = await requireEligibleResourceUser()
     const [rows] = await databasePool.query<Array<InvitationRow>>(
       `${invitationSelect} WHERE i.user_id = ? AND i.access_type = 'scoped' AND ${currentAttemptFor("i.")} AND g.state = 'pending' AND r.enabled = TRUE ORDER BY i.created_at DESC LIMIT 500`,
-      [user.id]
+      [user.id, Date.now()]
     )
     return rows.map(invitationView)
   }
@@ -444,6 +462,7 @@ export const decideResourceInvitation = createServerFn({ method: "POST" })
         Effect.gen(function* () {
           const actor = yield* lockAccessActorEffect(tx, user)
           yield* lockAccessScopeEffect(tx, scope)
+          const now = yield* Clock.currentTimeMillis
           const rows = yield* tx.queryRows<InvitationRow>(
             `SELECT i.*, g.resource_type, g.resource_id FROM ${databaseTable("invitation")} i JOIN ${databaseTable("access_grant")} g ON g.id = i.access_id WHERE i.id = ? FOR UPDATE`,
             [data.id]
@@ -470,27 +489,29 @@ export const decideResourceInvitation = createServerFn({ method: "POST" })
             invitation.accepted_at ||
             invitation.declined_at ||
             invitation.revoked_at ||
-            invitation.expires_at.getTime() <= Date.now()
+            invitation.expires_at <= now
           )
             return yield* Effect.fail(
               new Error("This invitation is no longer pending")
             )
           if (data.decision === "accept") {
             yield* tx.execute(
-              `UPDATE ${databaseTable("invitation")} SET accepted_at = CURRENT_TIMESTAMP(3), accepted_by = ?, acceptance_method = ? WHERE id = ?`,
-              [actor.id, data.force ? "admin" : "self", data.id]
+              `UPDATE ${databaseTable("invitation")} SET accepted_at = ?, accepted_by = ?, acceptance_method = ? WHERE id = ?`,
+              [now, actor.id, data.force ? "admin" : "self", data.id]
             )
             yield* tx.execute(
-              `UPDATE ${databaseTable("access_grant")} SET state = 'active', revision = revision + 1 WHERE id = ? AND state = 'pending'`,
-              [invitation.access_id]
+              `UPDATE ${databaseTable("access_grant")} SET state = 'active', revision = revision + 1, updated_at = ? WHERE id = ? AND state = 'pending'`,
+              [now, invitation.access_id]
             )
             yield* advanceScopeAccessEffect(tx, invitation.user_id, scope)
           } else {
             yield* tx.execute(
               data.decision === "decline"
-                ? `UPDATE ${databaseTable("invitation")} SET declined_at = CURRENT_TIMESTAMP(3) WHERE id = ?`
-                : `UPDATE ${databaseTable("invitation")} SET revoked_at = CURRENT_TIMESTAMP(3), cancelled_at = CURRENT_TIMESTAMP(3), cancelled_by = ? WHERE id = ?`,
-              data.decision === "decline" ? [data.id] : [actor.id, data.id]
+                ? `UPDATE ${databaseTable("invitation")} SET declined_at = ? WHERE id = ?`
+                : `UPDATE ${databaseTable("invitation")} SET revoked_at = ?, cancelled_at = ?, cancelled_by = ? WHERE id = ?`,
+              data.decision === "decline"
+                ? [now, data.id]
+                : [now, now, actor.id, data.id]
             )
           }
           yield* auditAccessEffect(
@@ -590,15 +611,24 @@ export const savePermissionPreset = createServerFn({ method: "POST" })
                 : new Error("You cannot grant the selected permissions"),
           })
           const id = data.id ?? randomUUID()
+          const now = yield* Clock.currentTimeMillis
           if (data.id)
             yield* tx.execute(
-              `UPDATE ${databaseTable("permission_preset")} SET name = ?, revision = revision + 1, updated_by = ? WHERE id = ?`,
-              [data.name, actor.id, id]
+              `UPDATE ${databaseTable("permission_preset")} SET name = ?, revision = revision + 1, updated_by = ?, updated_at = ? WHERE id = ?`,
+              [data.name, actor.id, now, id]
             )
           else
             yield* tx.execute(
-              `INSERT INTO ${databaseTable("permission_preset")} (id, relay_id, resource_type, resource_id, name, created_by, updated_by) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-              [id, ...scopeValues(data), data.name, actor.id, actor.id]
+              `INSERT INTO ${databaseTable("permission_preset")} (id, relay_id, resource_type, resource_id, name, created_by, updated_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+              [
+                id,
+                ...scopeValues(data),
+                data.name,
+                actor.id,
+                actor.id,
+                now,
+                now,
+              ]
             )
           yield* tx.execute(
             `DELETE FROM ${databaseTable("preset_selection")} WHERE preset_id = ?`,
@@ -696,6 +726,7 @@ export const updateResourceAccess = createServerFn({ method: "POST" })
         Effect.gen(function* () {
           const actor = yield* lockAccessActorEffect(tx, user),
             resource = yield* lockAccessScopeEffect(tx, data)
+          const now = yield* Clock.currentTimeMillis
           const authority = yield* scopeAuthorityEffect(
             tx,
             actor,
@@ -753,13 +784,13 @@ export const updateResourceAccess = createServerFn({ method: "POST" })
             yield* writeAccessAssignmentEffect(tx, grant.id, data, actor.id)
           } else {
             yield* tx.execute(
-              `UPDATE ${databaseTable("invitation")} SET revoked_at = CURRENT_TIMESTAMP(3), cancelled_at = CURRENT_TIMESTAMP(3), cancelled_by = ? WHERE access_id = ? AND accepted_at IS NULL AND declined_at IS NULL AND revoked_at IS NULL`,
-              [actor.id, grant.id]
+              `UPDATE ${databaseTable("invitation")} SET revoked_at = ?, cancelled_at = ?, cancelled_by = ? WHERE access_id = ? AND accepted_at IS NULL AND declined_at IS NULL AND revoked_at IS NULL`,
+              [now, now, actor.id, grant.id]
             )
           }
           yield* tx.execute(
-            `UPDATE ${databaseTable("access_grant")} SET state = ?, revision = revision + 1 WHERE id = ?`,
-            [data.revoke ? "revoked" : grant.state, grant.id]
+            `UPDATE ${databaseTable("access_grant")} SET state = ?, revision = revision + 1, updated_at = ? WHERE id = ?`,
+            [data.revoke ? "revoked" : grant.state, now, grant.id]
           )
           yield* advanceScopeAccessEffect(tx, grant.user_id, data)
           yield* auditAccessEffect(
@@ -956,7 +987,7 @@ export const getResourceAccess = createServerFn({ method: "GET" })
     const [attempts] = ids.length
       ? await databasePool.query<Array<InvitationRow>>(
           `SELECT * FROM ${databaseTable("invitation")} WHERE access_id IN (?) AND ${currentAttempt} ORDER BY created_at DESC`,
-          [ids]
+          [ids, Date.now()]
         )
       : [[]]
     return {
@@ -1035,9 +1066,9 @@ export const getResourceAccess = createServerFn({ method: "GET" })
             person.resource_type
           ),
           invitationId: invitation?.id ?? null,
-          invitationExpiresAt: invitation?.expires_at.toISOString() ?? null,
-          createdAt: person.created_at.toISOString(),
-          updatedAt: person.updated_at.toISOString(),
+          invitationExpiresAt: iso(invitation?.expires_at ?? null),
+          createdAt: new Date(person.created_at).toISOString(),
+          updatedAt: new Date(person.updated_at).toISOString(),
         }
       }),
       presets: presets.map((preset) => ({
@@ -1045,8 +1076,8 @@ export const getResourceAccess = createServerFn({ method: "GET" })
         name: preset.name,
         revision: Number(preset.revision),
         assignmentCount: Number(preset.assignment_count),
-        createdAt: preset.created_at.toISOString(),
-        updatedAt: preset.updated_at.toISOString(),
+        createdAt: new Date(preset.created_at).toISOString(),
+        updatedAt: new Date(preset.updated_at).toISOString(),
         selections: presetSelections.flatMap((s) =>
           s.preset_id === preset.id
             ? [{ kind: s.selection_kind, key: s.selection_key }]

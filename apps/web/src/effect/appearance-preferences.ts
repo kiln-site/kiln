@@ -1,5 +1,5 @@
 import type { RowDataPacket } from "mysql2/promise"
-import { Effect, Option, Schema } from "effect"
+import { Clock, Effect, Option, Schema } from "effect"
 
 import { Database } from "@/effect/database"
 import type {
@@ -76,13 +76,15 @@ export const saveAppearanceOverrideEffect = Effect.fn(
   "appearancePreferences.save"
 )(function* (id: string, userId: string, preferences: AppearanceOverride) {
   const database = yield* Database
+  const now = yield* Clock.currentTimeMillis
   yield* database.execute(
     "appearancePreferences.save",
     `INSERT INTO ${databaseTable("setting")}
-       (id, user_id, setting_key, setting_value)
-     VALUES (?, ?, ?, ?)
-     ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value)`,
-    [id, userId, appearanceSettingKey, JSON.stringify(preferences)]
+       (id, user_id, setting_key, setting_value, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?)
+     ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value),
+                             updated_at = VALUES(updated_at)`,
+    [id, userId, appearanceSettingKey, JSON.stringify(preferences), now, now]
   )
 })
 
@@ -98,16 +100,20 @@ export const savePlatformAppearanceDefaultEffect = Effect.fn(
     )
     return
   }
+  const now = yield* Clock.currentTimeMillis
   yield* database.execute(
     "appearancePreferences.savePlatformDefault",
     `INSERT INTO ${databaseTable("setting")}
-       (id, user_id, setting_key, setting_value)
-     VALUES (?, NULL, ?, ?)
-     ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value)`,
+       (id, user_id, setting_key, setting_value, created_at, updated_at)
+     VALUES (?, NULL, ?, ?, ?, ?)
+     ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value),
+                             updated_at = VALUES(updated_at)`,
     [
       platformAppearanceDefaultId,
       platformAppearanceDefaultSettingKey,
       JSON.stringify(preferences),
+      now,
+      now,
     ]
   )
 })
