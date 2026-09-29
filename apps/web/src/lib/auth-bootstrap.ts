@@ -1,4 +1,4 @@
-import { Effect } from "effect"
+import { Clock, Effect } from "effect"
 import type {
   PoolConnection,
   ResultSetHeader,
@@ -189,17 +189,19 @@ export function replacePendingAccountEmailEffect(input: {
 }) {
   return Effect.gen(function* () {
     const database = yield* Database
+    const now = yield* Clock.currentTimeMillis
     return yield* database.transaction("account.pending-email.change", (tx) =>
       Effect.gen(function* () {
         const changed = yield* tx.execute(
           `UPDATE ${databaseTable("user")} u
            JOIN ${databaseTable("account")} a ON a.userId = u.id AND a.providerId = 'credential'
-            SET u.email = ?, u.emailVerified = FALSE, u.updatedAt = CURRENT_TIMESTAMP(3)
+            SET u.email = ?, u.emailVerified = FALSE, u.updatedAt = ?
           WHERE u.id = ? AND u.email = ? AND a.password = ? AND u.role <=> ?
             AND u.emailVerified = FALSE AND u.emailVerifiedAt IS NULL
             AND u.manuallyVerifiedAt IS NULL AND u.legacyVerificationRecordedAt IS NULL`,
           [
             input.nextEmail,
+            new Date(now),
             input.userId,
             input.currentEmail,
             input.passwordHash,
@@ -230,7 +232,7 @@ export function replacePendingAccountEmailEffect(input: {
           [input.userId]
         )
         yield* tx.execute(
-          `INSERT INTO ${databaseTable("auth_audit")} (user_id, event, metadata) VALUES (?, 'account.pending-email.changed', ?)`,
+          `INSERT INTO ${databaseTable("auth_audit")} (user_id, event, metadata, created_at) VALUES (?, 'account.pending-email.changed', ?, ?)`,
           [
             input.userId,
             JSON.stringify({
@@ -238,6 +240,7 @@ export function replacePendingAccountEmailEffect(input: {
               oldEmail: input.currentEmail,
               email: input.nextEmail,
             }),
+            now,
           ]
         )
         return {
@@ -293,6 +296,7 @@ async function createCredentialUser(input: {
         })
       )
       yield* Effect.gen(function* () {
+        const now = yield* Clock.currentTimeMillis
         yield* promiseEffect(() =>
           context.internalAdapter.linkAccount({
             accountId: user.id,
@@ -305,17 +309,22 @@ async function createCredentialUser(input: {
           databasePool.execute<ResultSetHeader>(
             `UPDATE ${databaseTable("user")}
                 SET emailVerified = FALSE, role = ?, manuallyVerifiedAt = ?,
-                    statusChangedAt = CURRENT_TIMESTAMP(3)
+                    statusChangedAt = ?
               WHERE id = ?`,
-            [input.role, input.verified ? new Date() : null, user.id]
+            [
+              input.role,
+              input.verified ? new Date(now) : null,
+              new Date(now),
+              user.id,
+            ]
           )
         )
         yield* promiseEffect(() =>
           databasePool.execute(
             `INSERT INTO ${databaseTable("auth_audit")}
-               (user_id, event, metadata)
-             VALUES (?, 'account.bootstrap', ?)`,
-            [user.id, JSON.stringify({ trustedSetup: input.verified })]
+               (user_id, event, metadata, created_at)
+             VALUES (?, 'account.bootstrap', ?, ?)`,
+            [user.id, JSON.stringify({ trustedSetup: input.verified }), now]
           )
         )
       }).pipe(

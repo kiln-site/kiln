@@ -34,11 +34,11 @@ function fixture(
     user_id: options.subjectId === undefined ? actor.id : options.subjectId,
     email: "old@example.com",
     access_type: "platform_admin",
-    expires_at: new Date(Date.now() + 60_000),
+    expires_at: Date.now() + 60_000,
     ...(options.lifecycle === "expired"
-      ? { expires_at: new Date(0) }
+      ? { expires_at: 0 }
       : options.lifecycle
-        ? { [options.lifecycle]: new Date() }
+        ? { [options.lifecycle]: Date.now() }
         : {}),
   }
   const layer = Layer.succeed(Database)({

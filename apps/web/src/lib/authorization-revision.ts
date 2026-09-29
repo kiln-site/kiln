@@ -1,5 +1,5 @@
 import type { RowDataPacket } from "mysql2/promise"
-import { Effect } from "effect"
+import { Clock, Effect } from "effect"
 
 import type { DatabaseTransaction } from "@/effect/database"
 import { Database } from "@/effect/database"
@@ -52,11 +52,12 @@ export function advanceAuthorizationRevisionEffect(
   }
 ) {
   return Effect.gen(function* () {
+    const now = yield* Clock.currentTimeMillis
     yield* transaction.execute(
-      `INSERT INTO ${databaseTable("authorization_subject")} (user_id, revision)
-       VALUES (?, 0)
+      `INSERT INTO ${databaseTable("authorization_subject")} (user_id, revision, updated_at)
+       VALUES (?, 0, ?)
        ON DUPLICATE KEY UPDATE user_id = VALUES(user_id)`,
-      [input.userId]
+      [input.userId, now]
     )
     const rows = yield* transaction.queryRows<RevisionRow>(
       `SELECT CAST(revision AS CHAR) AS revision
@@ -74,9 +75,9 @@ export function advanceAuthorizationRevisionEffect(
     }
     yield* transaction.execute(
       `UPDATE ${databaseTable("authorization_subject")}
-          SET revision = ?
+          SET revision = ?, updated_at = ?
         WHERE user_id = ?`,
-      [revision, input.userId]
+      [revision, now, input.userId]
     )
 
     const targets = deduplicateTargets(input.targets)
@@ -84,11 +85,12 @@ export function advanceAuthorizationRevisionEffect(
       const [scopeKind, scopeId] = encodeScope(target.scope)
       yield* transaction.execute(
         `INSERT INTO ${databaseTable("authorization_delivery")}
-           (relay_id, subject_id, scope_kind, scope_id, desired_revision)
-         VALUES (?, ?, ?, ?, ?)
+           (relay_id, subject_id, scope_kind, scope_id, desired_revision, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?)
          ON DUPLICATE KEY UPDATE
-           desired_revision = GREATEST(desired_revision, VALUES(desired_revision))`,
-        [target.relayId, input.userId, scopeKind, scopeId, revision]
+           desired_revision = GREATEST(desired_revision, VALUES(desired_revision)),
+           updated_at = VALUES(updated_at)`,
+        [target.relayId, input.userId, scopeKind, scopeId, revision, now]
       )
     }
     return {

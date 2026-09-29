@@ -1,5 +1,6 @@
 import { assert, describe, it } from "@effect/vitest"
 import { Effect, Layer } from "effect"
+import * as TestClock from "effect/testing/TestClock"
 import type { ResultSetHeader } from "mysql2/promise"
 
 import { Database } from "@/effect/database"
@@ -43,6 +44,7 @@ describe("instance registry sync", () => {
     })
 
     return Effect.gen(function* () {
+      yield* TestClock.setTime(1_000)
       yield* registerPreparedInstanceEffect(
         "relay-one",
         { id: "instance-one", name: "Survival" },
@@ -57,6 +59,15 @@ describe("instance registry sync", () => {
         "instance-one",
         "Survival",
         "user-one",
+        1_000,
+        1_000,
+      ])
+      assert.deepEqual(statements[1]?.values, [
+        "relay-one",
+        "instance-one",
+        1_000,
+        1_000,
+        1_000,
       ])
     }).pipe(Effect.provide(databaseLayer))
   })
@@ -79,6 +90,7 @@ describe("instance registry sync", () => {
       })
 
       return Effect.gen(function* () {
+        yield* TestClock.setTime(1_000)
         yield* reservePreparedInstanceEffect(
           "relay-one",
           { id: "instance-one" },
@@ -86,7 +98,14 @@ describe("instance registry sync", () => {
         )
 
         assert.include(statements[0]?.sql ?? "", "provisioning_reserved_until")
-        assert.include(statements[0]?.sql ?? "", "INTERVAL 2 MINUTE")
+        assert.deepEqual(statements[0]?.values, [
+          "relay-one",
+          "instance-one",
+          "user-one",
+          1_000 + 2 * 60_000,
+          1_000,
+          1_000,
+        ])
       }).pipe(Effect.provide(databaseLayer))
     }
   )
@@ -107,6 +126,7 @@ describe("instance registry sync", () => {
     })
 
     return Effect.gen(function* () {
+      yield* TestClock.setTime(1_000)
       yield* backfillInstanceSourceNamesEffect("relay-one", [
         { id: "instance-one", name: "Survival" },
       ])
@@ -121,6 +141,8 @@ describe("instance registry sync", () => {
         "relay-one",
         "instance-one",
         "Survival",
+        1_000,
+        1_000,
       ])
     }).pipe(Effect.provide(databaseLayer))
   })
@@ -141,6 +163,7 @@ describe("instance registry sync", () => {
     })
 
     return Effect.gen(function* () {
+      yield* TestClock.setTime(1_000)
       yield* updateInstanceSourceNameEffect("relay-one", {
         id: "instance-one",
         name: "Creative",
@@ -151,6 +174,7 @@ describe("instance registry sync", () => {
       assert.notInclude(statements[0]?.sql ?? "", "DELETE FROM")
       assert.deepEqual(statements[0]?.values, [
         "Creative",
+        1_000,
         "relay-one",
         "instance-one",
       ])
@@ -177,6 +201,7 @@ describe("instance registry sync", () => {
     })
 
     return Effect.gen(function* () {
+      yield* TestClock.setTime(1_000)
       yield* syncInstanceRegistryEffect("relay-one", [
         { id: "instance-one", name: "Survival" },
         { id: "instance-two", name: "Survival" },
@@ -185,19 +210,29 @@ describe("instance registry sync", () => {
       const insert = statements[0]
       assert.isDefined(insert)
       assert.include(insert.sql, "display_name, source_name")
-      assert.include(insert.sql, "(?, ?, NULL, ?), (?, ?, NULL, ?)")
+      assert.include(insert.sql, "(?, ?, NULL, ?, ?, ?), (?, ?, NULL, ?, ?, ?)")
       assert.notInclude(insert.sql, "display_name = VALUES(display_name)")
       assert.include(insert.sql, "source_name = VALUES(source_name)")
       const prune = statements[1]
       assert.isDefined(prune)
-      assert.include(prune.sql, "provisioning_reserved_until")
+      assert.include(prune.sql, "provisioning_reserved_until <= ?")
+      assert.deepEqual(prune.values, [
+        "relay-one",
+        "instance-one",
+        "instance-two",
+        1_000,
+      ])
       assert.deepEqual(insert.values, [
         "relay-one",
         "instance-one",
         "Survival",
+        1_000,
+        1_000,
         "relay-one",
         "instance-two",
         "Survival",
+        1_000,
+        1_000,
       ])
     }).pipe(Effect.provide(databaseLayer))
   })

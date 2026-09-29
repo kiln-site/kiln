@@ -1,5 +1,5 @@
 import type { RowDataPacket } from "mysql2/promise"
-import { Effect } from "effect"
+import { Clock, Effect } from "effect"
 
 import type { BackupArtifactKind } from "@workspace/contracts"
 
@@ -26,13 +26,13 @@ export interface BackupDownloadShare {
 
 interface BackupDownloadShareRow extends RowDataPacket {
   artifact_kind: BackupArtifactKind
-  backup_created_at: Date
+  backup_created_at: number
   backup_id: string
   backup_name: string
   bytes: number | string | null
   checksum_sha256: string | null
   download_url_ciphertext: string
-  expires_at: Date
+  expires_at: number
   filename: string
   shared_by: string
   source_name: string
@@ -48,6 +48,7 @@ export const createBackupDownloadShareEffect = Effect.fn(
   }
 ) {
   const database = yield* Database
+  const now = yield* Clock.currentTimeMillis
   const ciphertext = yield* Effect.try({
     try: () =>
       encryptWithKeyring(
@@ -60,15 +61,16 @@ export const createBackupDownloadShareEffect = Effect.fn(
   yield* database.execute(
     "backup_download_shares_cleanup",
     `DELETE FROM ${databaseTable("backup_download_share")}
-      WHERE expires_at <= CURRENT_TIMESTAMP(3)`
+      WHERE expires_at <= ?`,
+    [now]
   )
   yield* database.execute(
     "backup_download_shares_create",
     `INSERT INTO ${databaseTable("backup_download_share")}
       (token_hash, download_url_ciphertext, backup_id, backup_name, filename,
        bytes, checksum_sha256, artifact_kind, target_kind, target_id,
-       source_name, shared_by, backup_created_at, expires_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       source_name, shared_by, backup_created_at, expires_at, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       input.tokenHash,
       ciphertext,
@@ -82,8 +84,9 @@ export const createBackupDownloadShareEffect = Effect.fn(
       input.targetId,
       input.sourceName,
       input.sharedBy,
-      new Date(input.createdAt),
-      new Date(input.expiresAt),
+      Date.parse(input.createdAt),
+      Date.parse(input.expiresAt),
+      now,
     ]
   )
 })
@@ -92,15 +95,16 @@ export const loadBackupDownloadShareEffect = Effect.fn(
   "backups.downloadShares.load"
 )(function* (tokenHash: string) {
   const database = yield* Database
+  const now = yield* Clock.currentTimeMillis
   const rows = yield* database.queryRows<BackupDownloadShareRow>(
     "backup_download_shares_load",
     `SELECT download_url_ciphertext, backup_id, backup_name, filename, bytes,
             checksum_sha256, artifact_kind, target_kind, target_id,
             source_name, shared_by, backup_created_at, expires_at
        FROM ${databaseTable("backup_download_share")}
-      WHERE token_hash = ? AND expires_at > CURRENT_TIMESTAMP(3)
+      WHERE token_hash = ? AND expires_at > ?
       LIMIT 1`,
-    [tokenHash]
+    [tokenHash, now]
   )
   const row = rows.at(0)
   if (!row) return null
@@ -119,9 +123,9 @@ export const loadBackupDownloadShareEffect = Effect.fn(
     backupName: row.backup_name,
     bytes: databaseNumber(row.bytes),
     checksumSha256: row.checksum_sha256,
-    createdAt: row.backup_created_at.toISOString(),
+    createdAt: new Date(row.backup_created_at).toISOString(),
     downloadUrl: decrypted.plaintext,
-    expiresAt: row.expires_at.toISOString(),
+    expiresAt: new Date(row.expires_at).toISOString(),
     filename: row.filename,
     sharedBy: row.shared_by,
     sourceName: row.source_name,

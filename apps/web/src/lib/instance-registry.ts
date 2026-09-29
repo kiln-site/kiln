@@ -1,5 +1,5 @@
 import type { RelayInstance } from "@workspace/contracts"
-import { Effect } from "effect"
+import { Clock, Effect } from "effect"
 
 import { Database } from "@/effect/database"
 import { runAppEffect } from "@/effect/runtime"
@@ -65,17 +65,18 @@ export const reservePreparedInstanceEffect = Effect.fn(
   ownerId: string
 ) {
   const database = yield* Database
+  const now = yield* Clock.currentTimeMillis
   yield* database.execute(
     "instances.registry.reservePrepared",
     `INSERT INTO ${databaseTable("instance")}
        (relay_id, instance_id, display_name, owner_id,
-        provisioning_reserved_until)
-     VALUES (?, ?, NULL, ?, DATE_ADD(CURRENT_TIMESTAMP(3), INTERVAL 2 MINUTE))
+        provisioning_reserved_until, created_at, updated_at)
+     VALUES (?, ?, NULL, ?, ?, ?, ?)
      ON DUPLICATE KEY UPDATE
        owner_id = COALESCE(owner_id, VALUES(owner_id)),
        provisioning_reserved_until = VALUES(provisioning_reserved_until),
-       updated_at = CURRENT_TIMESTAMP(3)`,
-    [relayId, instance.id, ownerId]
+       updated_at = VALUES(updated_at)`,
+    [relayId, instance.id, ownerId, now + 2 * 60_000, now, now]
   )
 })
 
@@ -87,27 +88,30 @@ export const registerPreparedInstanceEffect = Effect.fn(
   ownerId: string
 ) {
   const database = yield* Database
+  const now = yield* Clock.currentTimeMillis
   yield* database.transaction("instances.registry.registerPrepared", (tx) =>
     Effect.gen(function* () {
       yield* tx.execute(
         `INSERT INTO ${databaseTable("instance")}
-           (relay_id, instance_id, display_name, source_name, owner_id)
-         VALUES (?, ?, NULL, ?, ?)
+           (relay_id, instance_id, display_name, source_name, owner_id,
+            created_at, updated_at)
+         VALUES (?, ?, NULL, ?, ?, ?, ?)
          ON DUPLICATE KEY UPDATE
            source_name = VALUES(source_name),
            owner_id = COALESCE(owner_id, VALUES(owner_id)),
            provisioning_reserved_until = NULL,
-           updated_at = CURRENT_TIMESTAMP(3)`,
-        [relayId, instance.id, instance.name.slice(0, 255), ownerId]
+           updated_at = VALUES(updated_at)`,
+        [relayId, instance.id, instance.name.slice(0, 255), ownerId, now, now]
       )
       yield* tx.execute(
         `INSERT INTO ${databaseTable("instance_post_provision")}
-           (relay_id, instance_id)
-         VALUES (?, ?)
+           (relay_id, instance_id, next_attempt_at, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?)
          ON DUPLICATE KEY UPDATE
-           next_attempt_at = CURRENT_TIMESTAMP(3),
-           last_error = NULL`,
-        [relayId, instance.id]
+           next_attempt_at = VALUES(next_attempt_at),
+           last_error = NULL,
+           updated_at = VALUES(updated_at)`,
+        [relayId, instance.id, now, now, now]
       )
     })
   )
@@ -136,36 +140,38 @@ export const backfillInstanceSourceNamesEffect = Effect.fn(
 ) {
   if (instances.length === 0) return
   const database = yield* Database
-  const values = instances.map(() => "(?, ?, NULL, ?)").join(", ")
+  const now = yield* Clock.currentTimeMillis
+  const values = instances.map(() => "(?, ?, NULL, ?, ?, ?)").join(", ")
   yield* database.execute(
     "instances.registry.backfillSourceNames",
     `INSERT INTO ${databaseTable("instance")}
-       (relay_id, instance_id, display_name, source_name)
+       (relay_id, instance_id, display_name, source_name, created_at,
+        updated_at)
      VALUES ${values}
      ON DUPLICATE KEY UPDATE
-       updated_at = IF(source_name IS NULL, CURRENT_TIMESTAMP(3), updated_at),
+       updated_at = IF(source_name IS NULL, VALUES(updated_at), updated_at),
        source_name = COALESCE(source_name, VALUES(source_name))`,
     instances.flatMap((instance) => [
       relayId,
       instance.id,
       instance.name.slice(0, 255),
+      now,
+      now,
     ])
   )
 })
 
 export const updateInstanceSourceNameEffect = Effect.fn(
   "instances.registry.updateSourceName"
-)(function* (
-  relayId: string,
-  instance: Pick<RelayInstance, "id" | "name">
-) {
+)(function* (relayId: string, instance: Pick<RelayInstance, "id" | "name">) {
   const database = yield* Database
+  const now = yield* Clock.currentTimeMillis
   yield* database.execute(
     "instances.registry.updateSourceName",
     `UPDATE ${databaseTable("instance")}
-       SET source_name = ?, updated_at = CURRENT_TIMESTAMP(3)
+       SET source_name = ?, updated_at = ?
      WHERE relay_id = ? AND instance_id = ?`,
-    [instance.name.slice(0, 255), relayId, instance.id]
+    [instance.name.slice(0, 255), now, relayId, instance.id]
   )
 })
 
@@ -175,21 +181,25 @@ export const syncInstanceRegistryEffect = Effect.fn("instances.registry.sync")(
     instances: ReadonlyArray<Pick<RelayInstance, "id" | "name">>
   ) {
     const database = yield* Database
+    const now = yield* Clock.currentTimeMillis
     yield* database.transaction("instances.registry.sync", (transaction) =>
       Effect.gen(function* () {
         if (instances.length) {
-          const values = instances.map(() => "(?, ?, NULL, ?)").join(", ")
+          const values = instances.map(() => "(?, ?, NULL, ?, ?, ?)").join(", ")
           yield* transaction.execute(
             `INSERT INTO ${databaseTable("instance")}
-              (relay_id, instance_id, display_name, source_name)
+              (relay_id, instance_id, display_name, source_name, created_at,
+               updated_at)
          VALUES ${values}
          ON DUPLICATE KEY UPDATE
            source_name = VALUES(source_name),
-           updated_at = CURRENT_TIMESTAMP(3)`,
+           updated_at = VALUES(updated_at)`,
             instances.flatMap((instance) => [
               relayId,
               instance.id,
               instance.name.slice(0, 255),
+              now,
+              now,
             ])
           )
           const placeholders = instances.map(() => "?").join(", ")
@@ -199,9 +209,9 @@ export const syncInstanceRegistryEffect = Effect.fn("instances.registry.sync")(
             AND instance_id NOT IN (${placeholders})
             AND (
               provisioning_reserved_until IS NULL
-              OR provisioning_reserved_until <= CURRENT_TIMESTAMP(3)
+              OR provisioning_reserved_until <= ?
             )`,
-            [relayId, ...instances.map((instance) => instance.id)]
+            [relayId, ...instances.map((instance) => instance.id), now]
           )
           return
         }
@@ -210,9 +220,9 @@ export const syncInstanceRegistryEffect = Effect.fn("instances.registry.sync")(
             WHERE relay_id = ?
               AND (
                 provisioning_reserved_until IS NULL
-                OR provisioning_reserved_until <= CURRENT_TIMESTAMP(3)
+                OR provisioning_reserved_until <= ?
               )`,
-          [relayId]
+          [relayId, now]
         )
       })
     )

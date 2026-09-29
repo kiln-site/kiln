@@ -2,7 +2,7 @@ import { createHash, randomUUID } from "node:crypto"
 
 import { relayCatalogSchema } from "@workspace/contracts"
 import type { RelayCatalog } from "@workspace/contracts"
-import { Effect, Result } from "effect"
+import { Clock, Effect, Result } from "effect"
 import type { RowDataPacket } from "mysql2/promise"
 
 import { Database } from "@/effect/database"
@@ -15,14 +15,14 @@ interface CatalogRow extends RowDataPacket {
   owner_email: string | null
   owner_name: string | null
   owner_user_id: string
-  published_at: Date | null
+  published_at: number | null
   published_by: string | null
   revision_sha: string | null
   revision_url: string | null
   snapshot: unknown
   snapshot_sha256: string
   source: string
-  updated_at: Date
+  updated_at: number
   visibility: "community" | "personal"
 }
 
@@ -102,13 +102,12 @@ export const saveBrickCatalogEffect = Effect.fn("brickCatalogs.save")(
     source: string
   }) {
     const database = yield* Database
+    const now = yield* Clock.currentTimeMillis
     const sourceHash = createHash("sha256").update(input.source).digest("hex")
     const id = randomUUID()
     return yield* database.transaction("brickCatalogs.save", (transaction) =>
       Effect.gen(function* () {
-        yield* transaction.queryRows<
-          RowDataPacket & { id: string }
-        >(
+        yield* transaction.queryRows<RowDataPacket & { id: string }>(
           `SELECT id FROM ${databaseTable("user")}
             WHERE id = ? LIMIT 1 FOR UPDATE`,
           [input.ownerUserId]
@@ -157,14 +156,15 @@ export const saveBrickCatalogEffect = Effect.fn("brickCatalogs.save")(
         yield* transaction.execute(
           `INSERT INTO ${databaseTable("brick_catalog")}
              (id, owner_user_id, source_hash, source, snapshot,
-              snapshot_sha256, revision_sha, revision_url)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+              snapshot_sha256, revision_sha, revision_url, created_at,
+              updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
            ON DUPLICATE KEY UPDATE
              snapshot = VALUES(snapshot),
              snapshot_sha256 = VALUES(snapshot_sha256),
              revision_sha = VALUES(revision_sha),
              revision_url = VALUES(revision_url),
-             updated_at = CURRENT_TIMESTAMP(3)`,
+             updated_at = VALUES(updated_at)`,
           [
             id,
             input.ownerUserId,
@@ -174,6 +174,8 @@ export const saveBrickCatalogEffect = Effect.fn("brickCatalogs.save")(
             input.snapshotSha256,
             input.revisionSha,
             input.revisionUrl,
+            now,
+            now,
           ]
         )
         return current?.id ?? id
@@ -190,16 +192,18 @@ export const setBrickCatalogVisibilityEffect = Effect.fn(
   publishedBy: string
 }) {
   const database = yield* Database
+  const now = yield* Clock.currentTimeMillis
   const result = yield* database.execute(
     "brickCatalogs.setVisibility",
     `UPDATE ${databaseTable("brick_catalog")}
         SET visibility = ?,
             published_by = ?,
-            published_at = ?
+            published_at = ?,
+            updated_at = ?
       WHERE id = ?`,
     input.community
-      ? ["community", input.publishedBy, new Date(), input.catalogId]
-      : ["personal", null, null, input.catalogId]
+      ? ["community", input.publishedBy, now, now, input.catalogId]
+      : ["personal", null, null, now, input.catalogId]
   )
   return result.affectedRows > 0
 })
@@ -247,7 +251,10 @@ function decodeCatalogRow(row: CatalogRow) {
     ownerEmail: row.owner_email,
     ownerName: row.owner_name,
     ownerUserId: row.owner_user_id,
-    publishedAt: row.published_at?.toISOString() ?? null,
+    publishedAt:
+      row.published_at === null
+        ? null
+        : new Date(row.published_at).toISOString(),
     publishedBy: row.published_by,
     revisionSha: row.revision_sha,
     revisionUrl: row.revision_url,
@@ -255,7 +262,7 @@ function decodeCatalogRow(row: CatalogRow) {
     snapshotSha256: row.snapshot_sha256,
     source: row.source,
     statusError: snapshot.success ? null : "Stored catalog snapshot is invalid",
-    updatedAt: row.updated_at.toISOString(),
+    updatedAt: new Date(row.updated_at).toISOString(),
     visibility: row.visibility,
   } satisfies BrickCatalogRecord
   if (!snapshot.success) {

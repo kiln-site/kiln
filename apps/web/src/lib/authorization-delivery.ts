@@ -4,7 +4,7 @@ import {
   relayBrowserCapabilityV2Feature,
 } from "@workspace/contracts"
 import type { RowDataPacket } from "mysql2/promise"
-import { Effect } from "effect"
+import { Clock, Effect } from "effect"
 import { z } from "zod"
 
 import { Database, type DatabaseTransaction } from "@/effect/database"
@@ -150,19 +150,22 @@ async function reconcileRelayIssuerGeneration(
       op: "db.authorization.generation.reconcile",
     },
     async () => {
+      const now = Date.now()
       // The acknowledgement predicate makes the rollback increment idempotent
       // across concurrent/repeated control handshakes. Once an increment is
       // pending, later observations only retain the lower acknowledgement.
       await databasePool.execute(
         `UPDATE ${databaseTable("relay")}
             SET issuer_generation = issuer_generation + 1,
-                acknowledged_issuer_generation = ?
+                acknowledged_issuer_generation = ?,
+                updated_at = ?
           WHERE id = ?
             AND ? < issuer_generation
             AND acknowledged_issuer_generation >= issuer_generation
             AND issuer_generation < ?`,
         [
           observedGeneration,
+          now,
           relayId,
           observedGeneration,
           Number.MAX_SAFE_INTEGER,
@@ -175,13 +178,15 @@ async function reconcileRelayIssuerGeneration(
                   ? >= issuer_generation,
                   ?,
                   LEAST(acknowledged_issuer_generation, ?)
-                )
+                ),
+                updated_at = ?
           WHERE id = ?`,
         [
           observedGeneration,
           observedGeneration,
           observedGeneration,
           observedGeneration,
+          now,
           relayId,
         ]
       )
@@ -256,9 +261,10 @@ export async function synchronizeRelayIssuerGenerationMinimum(
         SET issuer_generation = GREATEST(issuer_generation, ?),
             acknowledged_issuer_generation = GREATEST(
               acknowledged_issuer_generation, ?
-            )
+            ),
+            updated_at = ?
       WHERE id = ?`,
-    [result.issuerGeneration, result.issuerGeneration, relayId]
+    [result.issuerGeneration, result.issuerGeneration, Date.now(), relayId]
   )
   return result.issuerGeneration
 }
@@ -269,6 +275,7 @@ export function acknowledgeAuthorizationDeliveryEffect(
   result: ReviseResult
 ) {
   return Effect.gen(function* () {
+    const now = yield* Clock.currentTimeMillis
     for (const item of result.items) {
       const [kind, scopeId] = encodeScope(item.scope)
       yield* connection.execute(
@@ -276,10 +283,11 @@ export function acknowledgeAuthorizationDeliveryEffect(
             SET acknowledged_revision = GREATEST(
               acknowledged_revision,
               LEAST(?, desired_revision)
-            )
+            ),
+            updated_at = ?
           WHERE relay_id = ? AND subject_id = ?
             AND scope_kind = ? AND scope_id = ?`,
-        [item.minimumRevision, relayId, item.subject, kind, scopeId]
+        [item.minimumRevision, now, relayId, item.subject, kind, scopeId]
       )
       // Once Relay has durably acknowledged the current desired floor,
       // generation rollback protection makes replaying this row unnecessary.
@@ -297,9 +305,10 @@ export function acknowledgeAuthorizationDeliveryEffect(
           SET issuer_generation = GREATEST(issuer_generation, ?),
               acknowledged_issuer_generation = GREATEST(
                 acknowledged_issuer_generation, ?
-              )
+              ),
+              updated_at = ?
         WHERE id = ?`,
-      [result.issuerGeneration, result.issuerGeneration, relayId]
+      [result.issuerGeneration, result.issuerGeneration, now, relayId]
     )
   })
 }

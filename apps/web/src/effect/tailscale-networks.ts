@@ -1,5 +1,5 @@
 import type { RowDataPacket } from "mysql2/promise"
-import { Effect, Option, Schema } from "effect"
+import { Clock, Effect, Option, Schema } from "effect"
 import { z } from "zod"
 
 import {
@@ -55,16 +55,16 @@ export interface TailscaleNetworkCleanup {
 interface TailscaleNetworkRow extends RowDataPacket {
   cleanup_attempts: number
   cleanup_last_error: string | null
-  cleanup_next_attempt_at: Date | string | null
+  cleanup_next_attempt_at: number | null
   cleanup_pending_relays: number | string
-  deletion_requested_at: Date | string | null
+  deletion_requested_at: number | null
   domain: string
   id: string
   name: string
   oauth_client_id: string | null
   oauth_client_secret_ciphertext: string | null
   oauth_last_error: string | null
-  oauth_last_synced_at: Date | string | null
+  oauth_last_synced_at: number | null
   oauth_scopes: unknown
   oauth_tags: unknown
 }
@@ -104,12 +104,13 @@ export const createTailscaleNetworkDefinitionEffect = Effect.fn(
 ) {
   const database = yield* Database
   const ciphertext = yield* encryptTailscaleClientSecretEffect(clientSecret)
+  const now = yield* Clock.currentTimeMillis
   yield* database.execute(
     "tailscaleNetworks.create",
     `INSERT INTO ${databaseTable("tailscale_network")}
        (id, name, domain, oauth_client_id, oauth_client_secret_ciphertext,
-        oauth_scopes, oauth_tags)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        oauth_scopes, oauth_tags, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       definition.id,
       definition.name,
@@ -118,6 +119,8 @@ export const createTailscaleNetworkDefinitionEffect = Effect.fn(
       ciphertext,
       JSON.stringify(credential.scopes),
       JSON.stringify(credential.tags),
+      now,
+      now,
     ]
   )
 })
@@ -126,6 +129,7 @@ export const saveTailscaleNetworkDefinitionEffect = Effect.fn(
   "tailscaleNetworks.save"
 )(function* (definition: TailscaleNetworkDefinition) {
   const database = yield* Database
+  const now = yield* Clock.currentTimeMillis
   yield* database.transaction("tailscaleNetworks.save", (transaction) =>
     Effect.gen(function* () {
       const existing = yield* transaction.queryRows<RowDataPacket>(
@@ -139,16 +143,17 @@ export const saveTailscaleNetworkDefinitionEffect = Effect.fn(
       if (existing.length > 0) {
         yield* transaction.execute(
           `UPDATE ${databaseTable("tailscale_network")}
-            SET name = ?, domain = ?
+            SET name = ?, domain = ?, updated_at = ?
           WHERE id = ?`,
-          [definition.name, definition.domain, definition.id]
+          [definition.name, definition.domain, now, definition.id]
         )
         return
       }
       yield* transaction.execute(
-        `INSERT INTO ${databaseTable("tailscale_network")} (id, name, domain)
-       VALUES (?, ?, ?)`,
-        [definition.id, definition.name, definition.domain]
+        `INSERT INTO ${databaseTable("tailscale_network")}
+         (id, name, domain, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?)`,
+        [definition.id, definition.name, definition.domain, now, now]
       )
     })
   )
@@ -163,6 +168,7 @@ export const saveTailscaleNetworkIntegrationEffect = Effect.fn(
 ) {
   const database = yield* Database
   const ciphertext = yield* encryptTailscaleClientSecretEffect(clientSecret)
+  const now = yield* Clock.currentTimeMillis
   const result = yield* database.execute(
     "tailscaleNetworks.integration.save",
     `UPDATE ${databaseTable("tailscale_network")}
@@ -171,13 +177,15 @@ export const saveTailscaleNetworkIntegrationEffect = Effect.fn(
             oauth_scopes = ?,
             oauth_tags = ?,
             oauth_last_synced_at = NULL,
-            oauth_last_error = NULL
+            oauth_last_error = NULL,
+            updated_at = ?
       WHERE id = ?`,
     [
       credential.clientId,
       ciphertext,
       JSON.stringify(credential.scopes),
       JSON.stringify(credential.tags),
+      now,
       id,
     ]
   )
@@ -238,12 +246,13 @@ export const loadTailscaleNetworkCredentialEffect = Effect.fn(
           cause,
         }),
     })
+    const now = yield* Clock.currentTimeMillis
     yield* database.execute(
       "tailscaleNetworks.integration.rotate",
       `UPDATE ${databaseTable("tailscale_network")}
-          SET oauth_client_secret_ciphertext = ?
+          SET oauth_client_secret_ciphertext = ?, updated_at = ?
         WHERE id = ? AND oauth_client_secret_ciphertext = ?`,
-      [rotated, id, ciphertext]
+      [rotated, now, id, ciphertext]
     )
   }
   return {
@@ -258,23 +267,25 @@ export const recordTailscaleNetworkSyncEffect = Effect.fn(
   "tailscaleNetworks.integration.recordSync"
 )(function* (id: string, error: string | null) {
   const database = yield* Database
+  const now = yield* Clock.currentTimeMillis
   if (error) {
     yield* database.execute(
       "tailscaleNetworks.integration.recordSyncError",
       `UPDATE ${databaseTable("tailscale_network")}
-          SET oauth_last_error = ?
+          SET oauth_last_error = ?, updated_at = ?
         WHERE id = ?`,
-      [error.slice(0, 512), id]
+      [error.slice(0, 512), now, id]
     )
     return
   }
   yield* database.execute(
     "tailscaleNetworks.integration.recordSyncSuccess",
     `UPDATE ${databaseTable("tailscale_network")}
-        SET oauth_last_synced_at = CURRENT_TIMESTAMP(3),
-            oauth_last_error = NULL
+        SET oauth_last_synced_at = ?,
+            oauth_last_error = NULL,
+            updated_at = ?
       WHERE id = ?`,
-    [id]
+    [now, now, id]
   )
 })
 
@@ -344,8 +355,8 @@ function decodeJson(value: unknown): unknown {
   return Option.getOrNull(decodeJsonString(value))
 }
 
-function timestamp(value: Date | string | null): string | null {
+function timestamp(value: number | null): string | null {
   if (value === null) return null
-  const date = value instanceof Date ? value : new Date(value)
+  const date = new Date(Number(value))
   return Number.isNaN(date.valueOf()) ? null : date.toISOString()
 }

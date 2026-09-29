@@ -60,9 +60,9 @@ const claim = () => ({
   user_id: "subject",
   proof_method: method,
   created_by: "issuer",
-  created_at: new Date(Date.now() - 120_000),
-  consumed_at: consumed ? new Date() : null,
-  expires_at: new Date(Date.now() + 60_000),
+  created_at: Date.now() - 120_000,
+  consumed_at: consumed ? Date.now() : null,
+  expires_at: Date.now() + 60_000,
 })
 const transaction = {
   queryRows: (sql: string) =>
@@ -173,7 +173,13 @@ describe("credentialless identity claim", () => {
     const userUpdate = writes.find((write) =>
       write.sql.includes("manuallyVerifiedAt")
     )
-    expect(userUpdate?.values).toEqual(["Recipient", "issuer", "subject"])
+    expect(userUpdate?.values).toEqual([
+      "Recipient",
+      expect.any(Date),
+      "issuer",
+      expect.any(Date),
+      "subject",
+    ])
     expect(userUpdate?.sql).not.toContain("emailVerified = TRUE")
     expect(credential).toBe(true)
     const count = writes.length
@@ -195,7 +201,7 @@ describe("claim email preview", () => {
   const valid = () => ({
     email: "recipient@example.test",
     consumed_at: null,
-    expires_at: new Date(Date.now() + 60_000),
+    expires_at: Date.now() + 60_000,
     hasCredential: 0,
   })
   it("returns only the address without consuming or verifying the claim", async () => {
@@ -216,8 +222,8 @@ describe("claim email preview", () => {
     await expect(previewAccountClaim("invalid")).resolves.toBeNull()
   })
   it.each([
-    { consumed_at: new Date() },
-    { expires_at: new Date(0) },
+    { consumed_at: Date.now() },
+    { expires_at: 0 },
     { hasCredential: 1 },
   ])("does not disclose unavailable claims: %o", async (unavailable) => {
     preview = { ...valid(), ...unavailable }

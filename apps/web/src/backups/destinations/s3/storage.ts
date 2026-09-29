@@ -1,5 +1,5 @@
 import type { RowDataPacket } from "mysql2/promise"
-import { Effect, Result } from "effect"
+import { Clock, Effect, Result } from "effect"
 
 import { decryptWithKeyring, encryptWithKeyring } from "../../../../keyring.mjs"
 import { Database } from "@/effect/database"
@@ -14,14 +14,14 @@ import {
 interface BackupStoragePublicRow extends RowDataPacket {
   allow_private_network: boolean | number
   bucket: string
-  created_at_ms: number | string
+  created_at: number
   deleting: boolean | number
   enabled: boolean | number
   endpoint: string
   force_path_style: boolean | number
   id: string
   last_error: string | null
-  last_verified_at_ms: number | string | null
+  last_verified_at: number | null
   name: string
   object_prefix: string
   owner_user_id: string | null
@@ -128,16 +128,19 @@ export const loadBackupStorageCredentialEffect = Effect.fn(
       storageId,
       "secret-access-key"
     )
+    const now = yield* Clock.currentTimeMillis
     yield* database.execute(
       "backup_storage_rotate_credentials",
       `UPDATE ${databaseTable("backup_storage")}
-          SET access_key_id_ciphertext = ?, secret_access_key_ciphertext = ?
+          SET access_key_id_ciphertext = ?, secret_access_key_ciphertext = ?,
+              updated_at = ?
         WHERE id = ?
           AND access_key_id_ciphertext = ?
           AND secret_access_key_ciphertext = ?`,
       [
         encryptedAccessKey,
         encryptedSecretKey,
+        now,
         storageId,
         row.access_key_id_ciphertext,
         row.secret_access_key_ciphertext,
@@ -177,6 +180,7 @@ export const saveBackupStorageEffect = Effect.fn("backupStorage.save")(
       input.id,
       "secret-access-key"
     )
+    const now = yield* Clock.currentTimeMillis
     yield* database.transaction("backup_storage_save", (transaction) =>
       Effect.gen(function* () {
         const existingRows =
@@ -273,9 +277,9 @@ export const saveBackupStorageEffect = Effect.fn("backupStorage.save")(
                     object_prefix = ?, force_path_style = ?,
                     allow_private_network = ?, access_key_id_ciphertext = ?,
                     secret_access_key_ciphertext = ?, enabled = ?,
-                    last_verified_at = CURRENT_TIMESTAMP(3), last_error = NULL
+                    last_verified_at = ?, last_error = NULL, updated_at = ?
               WHERE id = ?`,
-            [...values, input.id]
+            [...values, now, now, input.id]
           )
           return
         }
@@ -283,9 +287,10 @@ export const saveBackupStorageEffect = Effect.fn("backupStorage.save")(
           `INSERT INTO ${databaseTable("backup_storage")}
             (id, owner_user_id, name, endpoint, region, bucket, object_prefix,
              force_path_style, allow_private_network, access_key_id_ciphertext,
-             secret_access_key_ciphertext, enabled, last_verified_at, last_error)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP(3), NULL)`,
-          [input.id, input.ownerUserId, ...values]
+             secret_access_key_ciphertext, enabled, last_verified_at, last_error,
+             created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)`,
+          [input.id, input.ownerUserId, ...values, now, now, now]
         )
       })
     )
@@ -301,13 +306,15 @@ export const setBackupPolicyStorageEffect = Effect.fn(
   targetKind: "database" | "instance" | "platform"
 }) {
   const database = yield* Database
+  const now = yield* Clock.currentTimeMillis
   yield* database.transaction("backup_storage_set_policy", (transaction) =>
     Effect.gen(function* () {
       yield* transaction.execute(
         `INSERT IGNORE INTO ${databaseTable("backup_policy")}
-          (relay_id, target_kind, target_id, exclude_patterns)
-         VALUES (?, ?, ?, JSON_ARRAY())`,
-        [input.relayId, input.targetKind, input.targetId]
+          (relay_id, target_kind, target_id, exclude_patterns, created_at,
+           updated_at)
+         VALUES (?, ?, ?, JSON_ARRAY(), ?, ?)`,
+        [input.relayId, input.targetKind, input.targetId, now, now]
       )
       yield* transaction.queryRows<RowDataPacket>(
         `SELECT relay_id
@@ -344,9 +351,15 @@ export const setBackupPolicyStorageEffect = Effect.fn(
       }
       yield* transaction.execute(
         `UPDATE ${databaseTable("backup_policy")}
-            SET storage_id = ?
+            SET storage_id = ?, updated_at = ?
           WHERE relay_id = ? AND target_kind = ? AND target_id = ?`,
-        [input.storageId, input.relayId, input.targetKind, input.targetId]
+        [
+          input.storageId,
+          now,
+          input.relayId,
+          input.targetKind,
+          input.targetId,
+        ]
       )
     })
   )
@@ -355,6 +368,7 @@ export const setBackupPolicyStorageEffect = Effect.fn(
 export const deleteBackupStorageEffect = Effect.fn("backupStorage.delete")(
   function* (storageId: string) {
     const database = yield* Database
+    const now = yield* Clock.currentTimeMillis
     const marked = yield* Effect.result(
       database.transaction("backup_storage_delete_mark", (transaction) =>
         Effect.gen(function* () {
@@ -435,16 +449,16 @@ export const deleteBackupStorageEffect = Effect.fn("backupStorage.delete")(
             }
             yield* transaction.execute(
               `UPDATE ${databaseTable("backup_storage")}
-                  SET deleting = TRUE
+                  SET deleting = TRUE, updated_at = ?
                 WHERE id = ?`,
-              [storageId]
+              [now, storageId]
             )
           }
           yield* transaction.execute(
             `UPDATE ${databaseTable("backup_policy")}
-                SET storage_id = NULL
+                SET storage_id = NULL, updated_at = ?
               WHERE storage_id = ?`,
-            [storageId]
+            [now, storageId]
           )
           return {
             ...toRecord(existing),
@@ -462,9 +476,9 @@ export const deleteBackupStorageEffect = Effect.fn("backupStorage.delete")(
       yield* database.execute(
         "backup_storage_delete_mark_error",
         `UPDATE ${databaseTable("backup_storage")}
-            SET last_error = ?
+            SET last_error = ?, updated_at = ?
           WHERE id = ? AND deleting = TRUE`,
-        [message, storageId]
+        [message, now, storageId]
       )
       return yield* marked.failure
     }
@@ -493,9 +507,9 @@ export const deleteBackupStorageEffect = Effect.fn("backupStorage.delete")(
       yield* database.execute(
         "backup_storage_delete_purge_error",
         `UPDATE ${databaseTable("backup_storage")}
-            SET last_error = ?
+            SET last_error = ?, updated_at = ?
           WHERE id = ?`,
-        [message, storageId]
+        [message, now, storageId]
       )
       return yield* purged.failure
     }
@@ -520,15 +534,15 @@ export const deleteBackupStorageEffect = Effect.fn("backupStorage.delete")(
           `UPDATE ${databaseTable("backup")} backup
              JOIN ${databaseTable("backup_repository")} repository
                ON repository.id = backup.repository_id
-              SET backup.repository_id = NULL
+              SET backup.repository_id = NULL, backup.updated_at = ?
             WHERE repository.storage_id = ? AND backup.status = 'deleted'`,
-          [storageId]
+          [now, storageId]
         )
         yield* transaction.execute(
           `UPDATE ${databaseTable("backup_artifact")}
-              SET storage_id = NULL
+              SET storage_id = NULL, updated_at = ?
             WHERE storage_id = ? AND status = 'deleted'`,
-          [storageId]
+          [now, storageId]
         )
         yield* transaction.execute(
           `DELETE FROM ${databaseTable("backup_repository")}
@@ -537,15 +551,15 @@ export const deleteBackupStorageEffect = Effect.fn("backupStorage.delete")(
         )
         yield* transaction.execute(
           `UPDATE ${databaseTable("backup_policy")}
-              SET storage_id = NULL
+              SET storage_id = NULL, updated_at = ?
             WHERE storage_id = ?`,
-          [storageId]
+          [now, storageId]
         )
         yield* transaction.execute(
           `UPDATE ${databaseTable("backup")}
-              SET storage_id = NULL
+              SET storage_id = NULL, updated_at = ?
             WHERE storage_id = ? AND status = 'deleted'`,
-          [storageId]
+          [now, storageId]
         )
         yield* transaction.execute(
           `DELETE FROM ${databaseTable("backup_storage")} WHERE id = ?`,
@@ -559,22 +573,20 @@ export const deleteBackupStorageEffect = Effect.fn("backupStorage.delete")(
 const backupStoragePublicSelect = `SELECT id, owner_user_id, name, endpoint,
        region, bucket, object_prefix, force_path_style, allow_private_network,
        enabled, deleting,
-       ROUND(UNIX_TIMESTAMP(last_verified_at) * 1000) AS last_verified_at_ms,
-       last_error, ROUND(UNIX_TIMESTAMP(created_at) * 1000) AS created_at_ms
+       last_verified_at, last_error, created_at
   FROM ${databaseTable("backup_storage")}`
 
 const backupStorageSelect = `SELECT id, owner_user_id, name, endpoint, region,
        bucket, object_prefix, force_path_style, allow_private_network,
        access_key_id_ciphertext, secret_access_key_ciphertext, enabled, deleting,
-       ROUND(UNIX_TIMESTAMP(last_verified_at) * 1000) AS last_verified_at_ms,
-       last_error, ROUND(UNIX_TIMESTAMP(created_at) * 1000) AS created_at_ms
+       last_verified_at, last_error, created_at
   FROM ${databaseTable("backup_storage")}`
 
 function toRecord(row: BackupStoragePublicRow): BackupStorageRecord {
   return {
     allowPrivateNetwork: Boolean(row.allow_private_network),
     bucket: row.bucket,
-    createdAt: timestampIso(row.created_at_ms, "storage created at"),
+    createdAt: timestampIso(row.created_at, "storage created at"),
     deleting: Boolean(row.deleting),
     enabled: Boolean(row.enabled),
     endpoint: row.endpoint,
@@ -582,9 +594,9 @@ function toRecord(row: BackupStoragePublicRow): BackupStorageRecord {
     id: row.id,
     lastError: row.last_error,
     lastVerifiedAt:
-      row.last_verified_at_ms === null
+      row.last_verified_at === null
         ? null
-        : timestampIso(row.last_verified_at_ms, "storage verified at"),
+        : timestampIso(row.last_verified_at, "storage verified at"),
     name: row.name,
     objectPrefix: row.object_prefix,
     ownerUserId: row.owner_user_id,
@@ -639,10 +651,9 @@ function credentialPurpose(
   return `kiln-backup-storage:${storageId}:${field}`
 }
 
-function timestampIso(value: number | string, label: string): string {
-  const parsed = Number(value)
-  if (!Number.isSafeInteger(parsed) || parsed < 0) {
+function timestampIso(value: number, label: string): string {
+  if (!Number.isSafeInteger(value) || value < 0) {
     throw new Error(`${label} is invalid`)
   }
-  return new Date(parsed).toISOString()
+  return new Date(value).toISOString()
 }

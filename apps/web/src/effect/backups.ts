@@ -1,6 +1,6 @@
 import { randomBytes, randomUUID } from "node:crypto"
 import type { RowDataPacket } from "mysql2/promise"
-import { Effect } from "effect"
+import { Clock, Effect } from "effect"
 
 import type {
   BackupCreateTaskInput,
@@ -41,6 +41,8 @@ import {
 import { loadBackupStorageCredentialEffect } from "@/backups/destinations/s3"
 
 const RESTIC_REPOSITORY_PASSWORD_PURPOSE = "kiln-restic-repository-password"
+// Running copy tasks untouched this long are treated as abandoned.
+const BACKUP_COPY_STALE_MS = 15 * 60 * 1000
 
 interface BackupPolicyRow extends RowDataPacket {
   admin_quantity_limit: number | null
@@ -109,9 +111,9 @@ interface BackupRow extends RowDataPacket {
   backup_mode: "full" | "incremental"
   bytes: number | string | null
   checksum_sha256: string | null
-  completed_at_ms: number | string | null
+  completed_at_ms: number | null
   created_by: string | null
-  created_at_ms: number | string
+  created_at_ms: number
   filename: string | null
   id: string
   name: string
@@ -132,9 +134,9 @@ interface BackupRow extends RowDataPacket {
   task_id: string
   task_kind: "create" | "delete" | "export" | "restore"
   task_phase: BackupTaskPhase | null
-  task_started_at_ms: number | string | null
+  task_started_at_ms: number | null
   task_status: "cancelled" | "failed" | "queued" | "running" | "succeeded"
-  task_updated_at_ms: number | string
+  task_updated_at_ms: number
   warnings: unknown
 }
 
@@ -187,7 +189,7 @@ interface DispatchableBackupRow extends RowDataPacket {
   storage_id: string | null
   target_id: string
   target_kind: BackupRow["target_kind"]
-  task_created_at_ms: number | string
+  task_created_at_ms: number
   task_id: string
   task_kind: "create" | "delete" | "export" | "restore"
 }
@@ -383,17 +385,21 @@ const reserveBackupCreateEffect = Effect.fn("backups.reserveCreate")(
     taskId: string
   }) {
     const database = yield* Database
+    const now = yield* Clock.currentTimeMillis
     return yield* database.transaction("backup_reserve", (transaction) =>
       Effect.gen(function* () {
         yield* transaction.execute(
           `INSERT IGNORE INTO ${databaseTable("backup_policy")}
-            (relay_id, target_kind, target_id, exclude_patterns)
-           VALUES (?, ?, ?, ?)`,
+            (relay_id, target_kind, target_id, exclude_patterns, created_at,
+             updated_at)
+           VALUES (?, ?, ?, ?, ?, ?)`,
           [
             input.relayId,
             input.targetKind,
             input.targetId,
             JSON.stringify(input.exclude),
+            now,
+            now,
           ]
         )
         const policies = yield* transaction.queryRows<BackupPolicyRow>(
@@ -525,6 +531,7 @@ const reserveBackupCreateEffect = Effect.fn("backups.reserveCreate")(
               ? (lockedStorage.get(primaryArtifact.storageId)?.object_prefix ??
                 "")
               : "",
+            now,
             relayId: input.relayId,
             storageId: primaryArtifact.storageId,
             targetId: input.targetId,
@@ -608,9 +615,9 @@ const reserveBackupCreateEffect = Effect.fn("backups.reserveCreate")(
           `INSERT INTO ${databaseTable("backup")}
             (id, relay_id, target_kind, target_id, storage_id, artifact_kind,
              backup_mode, reason, status, name, object_key, repository_id,
-             warnings, created_by)
+             warnings, created_by, created_at, updated_at)
            VALUES (?, ?, ?, ?, ?, ?, ?, ?,
-                   'queued', ?, ?, ?, JSON_ARRAY(), ?)`,
+                   'queued', ?, ?, ?, JSON_ARRAY(), ?, ?, ?)`,
           [
             input.backupId,
             input.relayId,
@@ -624,13 +631,16 @@ const reserveBackupCreateEffect = Effect.fn("backups.reserveCreate")(
             primaryArtifact.objectKey,
             repositoryId,
             input.createdBy,
+            now,
+            now,
           ]
         )
         for (const artifact of artifacts) {
           yield* transaction.execute(
             `INSERT INTO ${databaseTable("backup_artifact")}
-              (id, backup_id, destination_key, storage_id, status, object_key)
-             VALUES (?, ?, ?, ?, 'queued', ?)`,
+              (id, backup_id, destination_key, storage_id, status, object_key,
+               created_at, updated_at)
+             VALUES (?, ?, ?, ?, 'queued', ?, ?, ?)`,
             [
               artifact.artifactId,
               input.backupId,
@@ -639,14 +649,24 @@ const reserveBackupCreateEffect = Effect.fn("backups.reserveCreate")(
                 : (artifact.storageId ?? "local"),
               artifact.storageId,
               artifact.objectKey,
+              now,
+              now,
             ]
           )
         }
         yield* transaction.execute(
           `INSERT INTO ${databaseTable("backup_task")}
-            (id, backup_id, task_kind, status, reserved_bytes, requested_by)
-           VALUES (?, ?, 'create', 'queued', ?, ?)`,
-          [input.taskId, input.backupId, reservation.maxBytes, input.createdBy]
+            (id, backup_id, task_kind, status, reserved_bytes, requested_by,
+             created_at, updated_at)
+           VALUES (?, ?, 'create', 'queued', ?, ?, ?, ?)`,
+          [
+            input.taskId,
+            input.backupId,
+            reservation.maxBytes,
+            input.createdBy,
+            now,
+            now,
+          ]
         )
         if (
           input.reason === "final_delete" &&
@@ -654,9 +674,17 @@ const reserveBackupCreateEffect = Effect.fn("backups.reserveCreate")(
         ) {
           yield* transaction.execute(
             `INSERT INTO ${databaseTable("backup_final_delete")}
-              (relay_id, target_id, backup_id, requested_by, status)
-             VALUES (?, ?, ?, ?, 'backing_up')`,
-            [input.relayId, input.targetId, input.backupId, input.createdBy]
+              (relay_id, target_id, backup_id, requested_by, status,
+               created_at, updated_at)
+             VALUES (?, ?, ?, ?, 'backing_up', ?, ?)`,
+            [
+              input.relayId,
+              input.targetId,
+              input.backupId,
+              input.createdBy,
+              now,
+              now,
+            ]
           )
         }
         if (
@@ -665,9 +693,17 @@ const reserveBackupCreateEffect = Effect.fn("backups.reserveCreate")(
         ) {
           yield* transaction.execute(
             `INSERT INTO ${databaseTable("backup_final_database_delete")}
-              (relay_id, target_id, backup_id, requested_by, status)
-             VALUES (?, ?, ?, ?, 'backing_up')`,
-            [input.relayId, input.targetId, input.backupId, input.createdBy]
+              (relay_id, target_id, backup_id, requested_by, status,
+               created_at, updated_at)
+             VALUES (?, ?, ?, ?, 'backing_up', ?, ?)`,
+            [
+              input.relayId,
+              input.targetId,
+              input.backupId,
+              input.createdBy,
+              now,
+              now,
+            ]
           )
         }
         return {
@@ -754,7 +790,8 @@ export const reservePlatformBackupEffect = Effect.fn("backups.reservePlatform")(
 const adoptScheduledBackupTask = Effect.fnUntraced(function* (
   transaction: DatabaseTransaction,
   relayId: string,
-  task: RelayBackupTask
+  task: RelayBackupTask,
+  now: number
 ) {
   if (
     task.kind !== "create" ||
@@ -788,9 +825,9 @@ const adoptScheduledBackupTask = Effect.fnUntraced(function* (
     `INSERT IGNORE INTO ${databaseTable("backup")}
       (id, relay_id, target_kind, target_id, storage_id, artifact_kind,
        backup_mode, reason, status, name, object_key, repository_id,
-       warnings, created_by, created_at)
+       warnings, created_by, created_at, updated_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, 'scheduled', 'queued', ?, ?, ?,
-             JSON_ARRAY(), NULL, FROM_UNIXTIME(? / 1000))`,
+             JSON_ARRAY(), NULL, ?, ?)`,
     [
       input.backupId,
       relayId,
@@ -803,13 +840,14 @@ const adoptScheduledBackupTask = Effect.fnUntraced(function* (
       objectKey,
       repositoryId,
       task.createdAt,
+      now,
     ]
   )
   yield* transaction.execute(
     `INSERT IGNORE INTO ${databaseTable("backup_artifact")}
       (id, backup_id, destination_key, storage_id, status, object_key,
-       created_at)
-     VALUES (?, ?, ?, ?, 'queued', ?, FROM_UNIXTIME(? / 1000))`,
+       created_at, updated_at)
+     VALUES (?, ?, ?, ?, 'queued', ?, ?, ?)`,
     [
       artifactId,
       input.backupId,
@@ -817,20 +855,22 @@ const adoptScheduledBackupTask = Effect.fnUntraced(function* (
       catalog.storageId,
       objectKey,
       task.createdAt,
+      now,
     ]
   )
   yield* transaction.execute(
     `INSERT IGNORE INTO ${databaseTable("backup_task")}
       (id, backup_id, task_kind, status, reserved_bytes, requested_by,
-       created_at)
-     VALUES (?, ?, 'create', 'queued', ?, NULL, FROM_UNIXTIME(? / 1000))`,
-    [input.taskId, input.backupId, input.maxBytes, task.createdAt]
+       created_at, updated_at)
+     VALUES (?, ?, 'create', 'queued', ?, NULL, ?, ?)`,
+    [input.taskId, input.backupId, input.maxBytes, task.createdAt, now]
   )
 })
 
 export const reconcileBackupTaskEffect = Effect.fn("backups.reconcile")(
   function* (task: RelayBackupTask, relayId?: string) {
     const database = yield* Database
+    const now = yield* Clock.currentTimeMillis
     let changed = false
     yield* database.transaction("backup_reconcile", (transaction) =>
       Effect.gen(function* () {
@@ -846,7 +886,7 @@ export const reconcileBackupTaskEffect = Effect.fn("backups.reconcile")(
         )
         let knownTask = knownTasks[0]
         if (!knownTask && relayId) {
-          yield* adoptScheduledBackupTask(transaction, relayId, task)
+          yield* adoptScheduledBackupTask(transaction, relayId, task, now)
           changed = true
           const adoptedTasks = yield* transaction.queryRows<KnownBackupTaskRow>(
             `SELECT task.id, task.status, task.bytes_completed,
@@ -884,9 +924,8 @@ export const reconcileBackupTaskEffect = Effect.fn("backups.reconcile")(
           `UPDATE ${databaseTable("backup_task")}
               SET status = ?, bytes_completed = ?, bytes_total = ?,
                   phase = ?, current_artifact_id = ?, current_path = ?, error = ?,
-                  started_at = FROM_UNIXTIME(? / 1000),
-                  finished_at = FROM_UNIXTIME(? / 1000),
-                  relay_updated_at_ms = ?
+                  started_at = ?, finished_at = ?, relay_updated_at_ms = ?,
+                  updated_at = ?
             WHERE id = ? AND backup_id = ?`,
           [
             task.status,
@@ -899,6 +938,7 @@ export const reconcileBackupTaskEffect = Effect.fn("backups.reconcile")(
             task.startedAt,
             task.finishedAt,
             task.updatedAt,
+            now,
             task.taskId,
             task.backupId,
           ]
@@ -912,22 +952,22 @@ export const reconcileBackupTaskEffect = Effect.fn("backups.reconcile")(
           if (active) {
             yield* transaction.execute(
               `UPDATE ${databaseTable("backup")}
-                  SET status = 'deleting'
+                  SET status = 'deleting', updated_at = ?
                 WHERE id = ?`,
-              [task.backupId]
+              [now, task.backupId]
             )
             yield* transaction.execute(
               `UPDATE ${databaseTable("backup_artifact")}
-                  SET status = 'available'
+                  SET status = 'available', updated_at = ?
                 WHERE backup_id = ? AND status = 'deleting'`,
-              [task.backupId]
+              [now, task.backupId]
             )
             if (task.currentArtifactId) {
               yield* transaction.execute(
                 `UPDATE ${databaseTable("backup_artifact")}
-                    SET status = 'deleting', error = NULL
+                    SET status = 'deleting', error = NULL, updated_at = ?
                   WHERE id = ? AND backup_id = ? AND status <> 'deleted'`,
-                [task.currentArtifactId, task.backupId]
+                [now, task.currentArtifactId, task.backupId]
               )
             }
             for (const outcome of outcomes) {
@@ -937,13 +977,15 @@ export const reconcileBackupTaskEffect = Effect.fn("backups.reconcile")(
                 `UPDATE ${databaseTable("backup_artifact")}
                     SET status = ?, error = ?,
                         deleted_at = CASE WHEN ? = 'deleted'
-                          THEN FROM_UNIXTIME(? / 1000) ELSE NULL END
+                          THEN ? ELSE NULL END,
+                        updated_at = ?
                   WHERE id = ? AND backup_id = ?`,
                 [
                   artifactStatus,
                   outcome.error,
                   artifactStatus,
                   task.updatedAt,
+                  now,
                   outcome.artifactId,
                   task.backupId,
                 ]
@@ -953,9 +995,9 @@ export const reconcileBackupTaskEffect = Effect.fn("backups.reconcile")(
             if (outcomes.length === 0) {
               yield* transaction.execute(
                 `UPDATE ${databaseTable("backup_artifact")}
-                    SET status = 'deleted', deleted_at = FROM_UNIXTIME(? / 1000)
+                    SET status = 'deleted', deleted_at = ?, updated_at = ?
                   WHERE backup_id = ?`,
-                [task.finishedAt ?? Date.now(), task.backupId]
+                [task.finishedAt ?? now, now, task.backupId]
               )
             } else {
               for (const outcome of outcomes) {
@@ -965,13 +1007,15 @@ export const reconcileBackupTaskEffect = Effect.fn("backups.reconcile")(
                   `UPDATE ${databaseTable("backup_artifact")}
                       SET status = ?, error = ?,
                           deleted_at = CASE WHEN ? = 'deleted'
-                            THEN FROM_UNIXTIME(? / 1000) ELSE NULL END
+                            THEN ? ELSE NULL END,
+                          updated_at = ?
                   WHERE id = ? AND backup_id = ?`,
                   [
                     artifactStatus,
                     outcome.error,
                     artifactStatus,
-                    task.finishedAt ?? Date.now(),
+                    task.finishedAt ?? now,
+                    now,
                     outcome.artifactId,
                     task.backupId,
                   ]
@@ -987,27 +1031,29 @@ export const reconcileBackupTaskEffect = Effect.fn("backups.reconcile")(
               `UPDATE ${databaseTable("backup")}
                   SET status = ?,
                       deleted_at = CASE WHEN ? = 'deleted'
-                        THEN FROM_UNIXTIME(? / 1000) ELSE NULL END
+                        THEN ? ELSE NULL END,
+                      updated_at = ?
                 WHERE id = ?`,
               [
                 remaining[0] ? "available" : "deleted",
                 remaining[0] ? "available" : "deleted",
-                task.finishedAt ?? Date.now(),
+                task.finishedAt ?? now,
+                now,
                 task.backupId,
               ]
             )
           } else if (task.status === "failed" || task.status === "cancelled") {
             yield* transaction.execute(
               `UPDATE ${databaseTable("backup")}
-                  SET status = 'available'
+                  SET status = 'available', updated_at = ?
                 WHERE id = ?`,
-              [task.backupId]
+              [now, task.backupId]
             )
             yield* transaction.execute(
               `UPDATE ${databaseTable("backup_artifact")}
-                  SET status = 'available', error = ?
+                  SET status = 'available', error = ?, updated_at = ?
                 WHERE backup_id = ? AND status = 'deleting'`,
-              [task.error, task.backupId]
+              [task.error, now, task.backupId]
             )
           }
           return
@@ -1022,16 +1068,16 @@ export const reconcileBackupTaskEffect = Effect.fn("backups.reconcile")(
         if (task.status === "queued" || task.status === "running") {
           yield* transaction.execute(
             `UPDATE ${databaseTable("backup")}
-                SET status = ?,
-                    started_at = COALESCE(started_at, FROM_UNIXTIME(? / 1000))
+                SET status = ?, started_at = COALESCE(started_at, ?),
+                    updated_at = ?
               WHERE id = ?`,
-            [task.status, task.startedAt, task.backupId]
+            [task.status, task.startedAt, now, task.backupId]
           )
           yield* transaction.execute(
             `UPDATE ${databaseTable("backup_artifact")}
-                SET status = ?
+                SET status = ?, updated_at = ?
               WHERE backup_id = ? AND status IN ('queued', 'running')`,
-            [task.status, task.backupId]
+            [task.status, now, task.backupId]
           )
           return
         }
@@ -1056,14 +1102,15 @@ export const reconcileBackupTaskEffect = Effect.fn("backups.reconcile")(
             yield* transaction.execute(
               `UPDATE ${databaseTable("backup_artifact")}
                   SET status = 'available', filename = ?, bytes = ?,
-                      checksum_sha256 = ?, error = NULL,
-                      completed_at = FROM_UNIXTIME(? / 1000)
+                      checksum_sha256 = ?, error = NULL, completed_at = ?,
+                      updated_at = ?
                 WHERE backup_id = ?`,
               [
                 filename,
                 task.result.bytes,
                 checksum,
-                task.finishedAt ?? Date.now(),
+                task.finishedAt ?? now,
+                now,
                 task.backupId,
               ]
             )
@@ -1074,7 +1121,7 @@ export const reconcileBackupTaskEffect = Effect.fn("backups.reconcile")(
                     SET status = ?, filename = ?,
                         bytes = CASE WHEN ? = 'available' THEN ? ELSE NULL END,
                         checksum_sha256 = CASE WHEN ? = 'available' THEN ? ELSE NULL END,
-                        error = ?, completed_at = FROM_UNIXTIME(? / 1000)
+                        error = ?, completed_at = ?, updated_at = ?
                   WHERE id = ? AND backup_id = ?`,
                 [
                   outcome.status,
@@ -1084,7 +1131,8 @@ export const reconcileBackupTaskEffect = Effect.fn("backups.reconcile")(
                   outcome.status,
                   checksum,
                   outcome.error,
-                  task.finishedAt ?? Date.now(),
+                  task.finishedAt ?? now,
+                  now,
                   outcome.artifactId,
                   task.backupId,
                 ]
@@ -1100,7 +1148,7 @@ export const reconcileBackupTaskEffect = Effect.fn("backups.reconcile")(
             `UPDATE ${databaseTable("backup")}
                 SET status = ?, filename = ?, bytes = ?,
                     checksum_sha256 = ?, restic_snapshot_id = ?, warnings = ?,
-                    completed_at = FROM_UNIXTIME(? / 1000)
+                    completed_at = ?, updated_at = ?
               WHERE id = ?`,
             [
               available[0] ? "available" : "failed",
@@ -1109,7 +1157,8 @@ export const reconcileBackupTaskEffect = Effect.fn("backups.reconcile")(
               checksum,
               snapshotId,
               JSON.stringify(task.result.warnings),
-              task.finishedAt ?? Date.now(),
+              task.finishedAt ?? now,
+              now,
               task.backupId,
             ]
           )
@@ -1118,17 +1167,16 @@ export const reconcileBackupTaskEffect = Effect.fn("backups.reconcile")(
         if (task.status === "failed" || task.status === "cancelled") {
           yield* transaction.execute(
             `UPDATE ${databaseTable("backup")}
-                SET status = 'failed',
-                    completed_at = FROM_UNIXTIME(? / 1000)
+                SET status = 'failed', completed_at = ?, updated_at = ?
               WHERE id = ?`,
-            [task.finishedAt ?? Date.now(), task.backupId]
+            [task.finishedAt ?? now, now, task.backupId]
           )
           yield* transaction.execute(
             `UPDATE ${databaseTable("backup_artifact")}
-                SET status = 'failed', error = ?,
-                    completed_at = FROM_UNIXTIME(? / 1000)
+                SET status = 'failed', error = ?, completed_at = ?,
+                    updated_at = ?
               WHERE backup_id = ? AND status IN ('queued', 'running')`,
-            [task.error, task.finishedAt ?? Date.now(), task.backupId]
+            [task.error, task.finishedAt ?? now, now, task.backupId]
           )
         }
       })
@@ -1142,15 +1190,15 @@ const backupCatalogColumns = `backup.id, backup.relay_id, backup.target_kind, ba
             backup.status, backup.name, backup.filename, backup.bytes,
             backup.checksum_sha256, backup.restic_snapshot_id, backup.warnings,
             backup.created_by, backup.storage_id, backup.object_key,
-            ROUND(UNIX_TIMESTAMP(backup.completed_at) * 1000) AS completed_at_ms,
-            ROUND(UNIX_TIMESTAMP(backup.created_at) * 1000) AS created_at_ms,
+            backup.completed_at AS completed_at_ms,
+            backup.created_at AS created_at_ms,
             task.id AS task_id, task.task_kind AS task_kind,
             task.status AS task_status, task.bytes_completed AS task_bytes_completed,
             task.bytes_total AS task_bytes_total, task.phase AS task_phase,
             task.current_artifact_id AS task_current_artifact_id,
             task.current_path AS task_current_path, task.error AS task_error,
-            ROUND(UNIX_TIMESTAMP(task.started_at) * 1000) AS task_started_at_ms,
-            ROUND(UNIX_TIMESTAMP(task.updated_at) * 1000) AS task_updated_at_ms`
+            task.started_at AS task_started_at_ms,
+            task.updated_at AS task_updated_at_ms`
 
 const latestBackupTaskJoin = `JOIN ${databaseTable("backup_task")} task ON task.id = (
          SELECT latest.id
@@ -1405,7 +1453,6 @@ export const listBackupCatalogPageEffect = Effect.fn("backups.page")(function* (
     clauses.push(
       backupCatalogCursorClause(
         order.sql,
-        input.sort,
         input.direction,
         input.cursor.value
       )
@@ -1509,18 +1556,13 @@ function backupCatalogOrder(sort: BackupCatalogPageInput["sort"]): {
   if (sort === "size") {
     return { selectSql: backupDisplayBytesSql, sql: backupDisplayBytesSql }
   }
-  // backup.created_at is TIMESTAMP(3), so this is the exact stored value. Keep
-  // the raw column in ORDER BY and the seek predicate so the default path uses
-  // the (created_at, id) index.
-  return {
-    selectSql: "ROUND(UNIX_TIMESTAMP(backup.created_at) * 1000)",
-    sql: "backup.created_at",
-  }
+  // backup.created_at stores epoch milliseconds, so the raw column is both the
+  // cursor value and the seek predicate, keeping the (created_at, id) index.
+  return { selectSql: "backup.created_at", sql: "backup.created_at" }
 }
 
 function backupCatalogCursorClause(
   orderSql: string,
-  sort: BackupCatalogPageInput["sort"],
   direction: BackupCatalogPageInput["direction"],
   cursorValue: number | string | null
 ): string {
@@ -1528,9 +1570,8 @@ function backupCatalogCursorClause(
   if (cursorValue === null) {
     return `${orderSql} IS NULL AND backup.id ${operator} ?`
   }
-  const cursorSql = sort === "createdAt" ? "FROM_UNIXTIME(? / 1000)" : "?"
-  return `(${orderSql} ${operator} ${cursorSql}
-    OR (${orderSql} = ${cursorSql} AND backup.id ${operator} ?)
+  return `(${orderSql} ${operator} ?
+    OR (${orderSql} = ? AND backup.id ${operator} ?)
     ${orderSql === backupDisplayBytesSql ? `OR ${orderSql} IS NULL` : ""})`
 }
 
@@ -1546,6 +1587,7 @@ export const listDispatchableBackupTasksEffect = Effect.fn(
   "backups.dispatchable"
 )(function* (relayId: string) {
   const database = yield* Database
+  const now = yield* Clock.currentTimeMillis
   yield* database.execute(
     "backup_dependency_failures",
     `UPDATE ${databaseTable("backup_task")} dependent
@@ -1553,10 +1595,12 @@ export const listDispatchableBackupTasksEffect = Effect.fn(
          ON dependency.id = dependent.depends_on_task_id
         SET dependent.status = 'failed',
             dependent.error = 'The pre-restore safety backup did not complete',
-            dependent.finished_at = CURRENT_TIMESTAMP(3)
+            dependent.finished_at = ?,
+            dependent.updated_at = ?
       WHERE dependent.status = 'queued'
         AND dependent.task_kind = 'restore'
-        AND dependency.status IN ('failed', 'cancelled')`
+        AND dependency.status IN ('failed', 'cancelled')`,
+    [now, now]
   )
   const rows = yield* database.queryRows<DispatchableBackupRow>(
     "backup_dispatchable_list",
@@ -1573,7 +1617,7 @@ export const listDispatchableBackupTasksEffect = Effect.fn(
                LIMIT 1
             ) AS create_task_id,
             task.id AS task_id, task.task_kind, task.reserved_bytes,
-            ROUND(UNIX_TIMESTAMP(task.created_at) * 1000) AS task_created_at_ms,
+            task.created_at AS task_created_at_ms,
             backup.storage_id, backup.object_key,
             COALESCE(policy.exclude_patterns, JSON_ARRAY()) AS exclude_patterns
        FROM ${databaseTable("backup")} backup
@@ -1724,6 +1768,7 @@ export const reserveBackupRestoreEffect = Effect.fn("backups.reserveRestore")(
     taskId: string
   }) {
     const database = yield* Database
+    const now = yield* Clock.currentTimeMillis
     return yield* database.transaction(
       "backup_reserve_restore",
       (transaction) =>
@@ -1847,13 +1892,16 @@ export const reserveBackupRestoreEffect = Effect.fn("backups.reserveRestore")(
           }
           yield* transaction.execute(
             `INSERT INTO ${databaseTable("backup_task")}
-              (id, backup_id, task_kind, status, depends_on_task_id, requested_by)
-             VALUES (?, ?, 'restore', 'queued', ?, ?)`,
+              (id, backup_id, task_kind, status, depends_on_task_id, requested_by,
+               created_at, updated_at)
+             VALUES (?, ?, 'restore', 'queued', ?, ?, ?, ?)`,
             [
               input.taskId,
               input.backupId,
               input.dependsOnTaskId,
               input.requestedBy,
+              now,
+              now,
             ]
           )
           return {
@@ -1879,6 +1927,7 @@ export const reserveBackupRestoreEffect = Effect.fn("backups.reserveRestore")(
 export const reserveBackupDeleteEffect = Effect.fn("backups.reserveDelete")(
   function* (input: { backupId: string; requestedBy: string; taskId: string }) {
     const database = yield* Database
+    const now = yield* Clock.currentTimeMillis
     return yield* database.transaction("backup_reserve_delete", (transaction) =>
       Effect.gen(function* () {
         const rows = yield* transaction.queryRows<BackupRow>(
@@ -1919,15 +1968,16 @@ export const reserveBackupDeleteEffect = Effect.fn("backups.reserveDelete")(
         })
         yield* transaction.execute(
           `UPDATE ${databaseTable("backup")}
-              SET status = 'deleting'
+              SET status = 'deleting', updated_at = ?
             WHERE id = ?`,
-          [input.backupId]
+          [now, input.backupId]
         )
         yield* transaction.execute(
           `INSERT INTO ${databaseTable("backup_task")}
-            (id, backup_id, task_kind, status, requested_by)
-           VALUES (?, ?, 'delete', 'queued', ?)`,
-          [input.taskId, input.backupId, input.requestedBy]
+            (id, backup_id, task_kind, status, requested_by, created_at,
+             updated_at)
+           VALUES (?, ?, 'delete', 'queued', ?, ?, ?)`,
+          [input.taskId, input.backupId, input.requestedBy, now, now]
         )
         const createTask = backup.restic_snapshot_id
           ? null
@@ -2110,6 +2160,7 @@ export const reserveBackupExportEffect = Effect.fn("backups.reserveExport")(
     ttlMs: number
   }) {
     const database = yield* Database
+    const now = yield* Clock.currentTimeMillis
     const ttlMs = clampBackupExportTtlMs(input.ttlMs)
     return yield* database.transaction("backup_reserve_export", (transaction) =>
       Effect.gen(function* () {
@@ -2142,16 +2193,15 @@ export const reserveBackupExportEffect = Effect.fn("backups.reserveExport")(
         const filename = backupArtifactFilename(backup.id, "restic_snapshot")
         const existing = yield* transaction.queryRows<
           {
-            created_at_ms: number | string
-            finished_at_ms: number | string | null
+            created_at: number
+            finished_at: number | null
             id: string
             reserved_bytes: number | string | null
             status: BackupRow["task_status"]
           } & RowDataPacket
         >(
-          `SELECT task.id, task.status, task.reserved_bytes,
-                  ROUND(UNIX_TIMESTAMP(task.created_at) * 1000) AS created_at_ms,
-                  ROUND(UNIX_TIMESTAMP(task.finished_at) * 1000) AS finished_at_ms
+          `SELECT task.id, task.status, task.reserved_bytes, task.created_at,
+                  task.finished_at
              FROM ${databaseTable("backup_task")} task
             WHERE task.backup_id = ? AND task.task_kind = 'export'
             ORDER BY task.created_at DESC, task.id DESC
@@ -2182,17 +2232,11 @@ export const reserveBackupExportEffect = Effect.fn("backups.reserveExport")(
             nullableDatabaseNumber(latest.reserved_bytes, "export ttl") ??
               BACKUP_EXPORT_TTL_MIN_MS
           )
-          const completedAt = nullableDatabaseNumber(
-            latest.finished_at_ms,
-            "export finished at"
-          )
           const expiresAt =
-            (completedAt ??
-              safeDatabaseNumber(latest.created_at_ms, "export task time")) +
-            storedTtl
+            (latest.finished_at ?? latest.created_at) + storedTtl
           if (
             canReuseBackupExport({
-              remainingMs: expiresAt - Date.now(),
+              remainingMs: expiresAt - now,
               requestedTtlMs: ttlMs,
               requireFullTtl: input.requireFullTtl !== false,
             })
@@ -2235,10 +2279,11 @@ export const reserveBackupExportEffect = Effect.fn("backups.reserveExport")(
         yield* pruneOlderExportTasks(input.taskId)
         yield* transaction.execute(
           `INSERT INTO ${databaseTable("backup_task")}
-            (id, backup_id, task_kind, status, reserved_bytes, requested_by)
-           VALUES (?, ?, 'export', 'queued', ?, ?)`,
+            (id, backup_id, task_kind, status, reserved_bytes, requested_by,
+             created_at, updated_at)
+           VALUES (?, ?, 'export', 'queued', ?, ?, ?, ?)`,
           // reserved_bytes holds the export TTL in milliseconds, not a byte count.
-          [input.taskId, input.backupId, ttlMs, input.requestedBy]
+          [input.taskId, input.backupId, ttlMs, input.requestedBy, now, now]
         )
         return {
           dispatch: dispatchFor(input.taskId),
@@ -2263,6 +2308,7 @@ export const ensureBackupRepositoryEffect = Effect.fn(
   targetId: string
 }) {
   const database = yield* Database
+  const now = yield* Clock.currentTimeMillis
   return yield* database.transaction(
     "backup_repository_ensure",
     (transaction) =>
@@ -2284,6 +2330,7 @@ export const ensureBackupRepositoryEffect = Effect.fn(
         }
         const repository = yield* loadOrCreateBackupRepository(transaction, {
           destinationObjectPrefix: storage?.object_prefix ?? "",
+          now,
           relayId: input.relayId,
           storageId: input.storageId,
           targetId: input.targetId,
@@ -2365,34 +2412,36 @@ export const purgeInstanceBackupRepositoriesEffect = Effect.fn(
     }
     yield* deleteS3BackupPrefix(credential, repository.object_prefix)
   }
+  const now = yield* Clock.currentTimeMillis
   yield* database.transaction(
     "backup_purge_instance_repositories",
     (transaction) =>
       Effect.gen(function* () {
         yield* transaction.execute(
           `UPDATE ${databaseTable("backup")}
-              SET status = 'deleted',
-                  completed_at = COALESCE(completed_at, CURRENT_TIMESTAMP(3))
+              SET status = 'deleted', completed_at = COALESCE(completed_at, ?),
+                  updated_at = ?
             WHERE relay_id = ? AND target_kind = 'instance' AND target_id = ?
               AND backup_mode = 'incremental' AND status <> 'deleted'`,
-          [relayId, targetId]
+          [now, now, relayId, targetId]
         )
         yield* transaction.execute(
           `UPDATE ${databaseTable("backup_artifact")} artifact
              JOIN ${databaseTable("backup")} backup ON backup.id = artifact.backup_id
               SET artifact.status = 'deleted',
-                  artifact.deleted_at = COALESCE(artifact.deleted_at, CURRENT_TIMESTAMP(3))
+                  artifact.deleted_at = COALESCE(artifact.deleted_at, ?),
+                  artifact.updated_at = ?
             WHERE backup.relay_id = ? AND backup.target_kind = 'instance'
               AND backup.target_id = ? AND backup.backup_mode = 'incremental'
               AND artifact.status <> 'deleted'`,
-          [relayId, targetId]
+          [now, now, relayId, targetId]
         )
         yield* transaction.execute(
           `UPDATE ${databaseTable("backup")}
-            SET repository_id = NULL
+            SET repository_id = NULL, updated_at = ?
           WHERE relay_id = ? AND target_kind = 'instance' AND target_id = ?
             AND status = 'deleted'`,
-          [relayId, targetId]
+          [now, relayId, targetId]
         )
         yield* transaction.execute(
           `DELETE FROM ${databaseTable("backup_repository")}
@@ -2416,6 +2465,7 @@ export const reserveBackupCopyEffect = Effect.fn("backups.reserveCopy")(
     targetKind: BackupRow["target_kind"]
   }) {
     const database = yield* Database
+    const now = yield* Clock.currentTimeMillis
     return yield* database.transaction("backup_copy_reserve", (transaction) =>
       Effect.gen(function* () {
         yield* refuseIfFinalDeletionInProgress(transaction, {
@@ -2519,16 +2569,17 @@ export const reserveBackupCopyEffect = Effect.fn("backups.reserveCopy")(
           yield* transaction.execute(
             `UPDATE ${databaseTable("backup_artifact")}
                 SET status = 'queued', object_key = ?, filename = ?,
-                    error = NULL, completed_at = NULL, deleted_at = NULL
+                    error = NULL, completed_at = NULL, deleted_at = NULL,
+                    updated_at = ?
               WHERE id = ?`,
-            [objectKey, input.filename, artifactId]
+            [objectKey, input.filename, now, artifactId]
           )
         } else {
           yield* transaction.execute(
             `INSERT INTO ${databaseTable("backup_artifact")}
               (id, backup_id, destination_key, storage_id, status, filename,
-               object_key)
-             VALUES (?, ?, ?, ?, 'queued', ?, ?)`,
+               object_key, created_at, updated_at)
+             VALUES (?, ?, ?, ?, 'queued', ?, ?, ?, ?)`,
             [
               artifactId,
               input.backupId,
@@ -2536,6 +2587,8 @@ export const reserveBackupCopyEffect = Effect.fn("backups.reserveCopy")(
               input.storageId,
               input.filename,
               objectKey,
+              now,
+              now,
             ]
           )
         }
@@ -2543,18 +2596,21 @@ export const reserveBackupCopyEffect = Effect.fn("backups.reserveCopy")(
         yield* transaction.execute(
           `INSERT INTO ${databaseTable("backup_copy_task")}
             (id, backup_id, source_artifact_id, destination_artifact_id,
-             status, requested_by)
-           VALUES (?, ?, ?, ?, 'queued', ?)
+             status, requested_by, created_at, updated_at)
+           VALUES (?, ?, ?, ?, 'queued', ?, ?, ?)
            ON DUPLICATE KEY UPDATE
              id = VALUES(id), source_artifact_id = VALUES(source_artifact_id),
              status = 'queued', requested_by = VALUES(requested_by),
-             error = NULL, started_at = NULL, finished_at = NULL`,
+             error = NULL, started_at = NULL, finished_at = NULL,
+             updated_at = VALUES(updated_at)`,
           [
             taskId,
             input.backupId,
             input.sourceArtifactId,
             artifactId,
             input.requestedBy,
+            now,
+            now,
           ]
         )
         return { artifactId, objectKey, taskId }
@@ -2567,13 +2623,15 @@ export const listRunnableBackupCopyTaskIdsEffect = Effect.fn(
   "backups.listRunnableCopies"
 )(function* () {
   const database = yield* Database
+  const now = yield* Clock.currentTimeMillis
   const rows = yield* database.queryRows<{ id: string } & RowDataPacket>(
     "backup_copy_runnable_list",
     `SELECT id
        FROM ${databaseTable("backup_copy_task")}
       WHERE status = 'queued'
-         OR (status = 'running' AND updated_at < CURRENT_TIMESTAMP(3) - INTERVAL 15 MINUTE)
-      ORDER BY created_at ASC, id ASC`
+         OR (status = 'running' AND updated_at < ?)
+      ORDER BY created_at ASC, id ASC`,
+    [now - BACKUP_COPY_STALE_MS]
   )
   return rows.map((row) => row.id)
 })
@@ -2581,6 +2639,7 @@ export const listRunnableBackupCopyTaskIdsEffect = Effect.fn(
 export const claimBackupCopyTaskEffect = Effect.fn("backups.claimCopy")(
   function* (taskId: string) {
     const database = yield* Database
+    const now = yield* Clock.currentTimeMillis
     return yield* database.transaction("backup_copy_claim", (transaction) =>
       Effect.gen(function* () {
         const task = (yield* transaction.queryRows<BackupCopyTaskRow>(
@@ -2605,27 +2664,27 @@ export const claimBackupCopyTaskEffect = Effect.fn("backups.claimCopy")(
               WHERE task.id = ?
                 AND (task.status = 'queued'
                   OR (task.status = 'running'
-                    AND task.updated_at < CURRENT_TIMESTAMP(3) - INTERVAL 15 MINUTE))
+                    AND task.updated_at < ?))
                 AND source.status = 'available'
                 AND destination.storage_id IS NOT NULL
                 AND destination.object_key IS NOT NULL
               LIMIT 1
               FOR UPDATE`,
-          [taskId]
+          [taskId, now - BACKUP_COPY_STALE_MS]
         ))[0]
         if (!task) return null
         yield* transaction.execute(
           `UPDATE ${databaseTable("backup_copy_task")}
-              SET status = 'running', error = NULL,
-                  started_at = CURRENT_TIMESTAMP(3), finished_at = NULL
+              SET status = 'running', error = NULL, started_at = ?,
+                  finished_at = NULL, updated_at = ?
             WHERE id = ?`,
-          [task.task_id]
+          [now, now, task.task_id]
         )
         yield* transaction.execute(
           `UPDATE ${databaseTable("backup_artifact")}
-              SET status = 'running', error = NULL
+              SET status = 'running', error = NULL, updated_at = ?
             WHERE id = ?`,
-          [task.destination_artifact_id]
+          [now, task.destination_artifact_id]
         )
         return {
           artifactKind: task.artifact_kind,
@@ -2666,12 +2725,13 @@ export const completeBackupCopyTaskEffect = Effect.fn("backups.completeCopy")(
     taskId: string
   }) {
     const database = yield* Database
+    const now = yield* Clock.currentTimeMillis
     yield* database.transaction("backup_copy_complete", (transaction) =>
       Effect.gen(function* () {
         yield* transaction.execute(
           `UPDATE ${databaseTable("backup_artifact")}
               SET status = ?, filename = ?, bytes = ?, checksum_sha256 = ?,
-                  error = ?, completed_at = FROM_UNIXTIME(? / 1000)
+                  error = ?, completed_at = ?, updated_at = ?
             WHERE id = ? AND backup_id = ?`,
           [
             input.ok ? "available" : "failed",
@@ -2679,16 +2739,23 @@ export const completeBackupCopyTaskEffect = Effect.fn("backups.completeCopy")(
             input.ok ? input.bytes : null,
             input.ok ? input.checksumSha256 : null,
             input.error,
-            Date.now(),
+            now,
+            now,
             input.artifactId,
             input.backupId,
           ]
         )
         yield* transaction.execute(
           `UPDATE ${databaseTable("backup_copy_task")}
-              SET status = ?, error = ?, finished_at = CURRENT_TIMESTAMP(3)
+              SET status = ?, error = ?, finished_at = ?, updated_at = ?
             WHERE id = ?`,
-          [input.ok ? "succeeded" : "failed", input.error, input.taskId]
+          [
+            input.ok ? "succeeded" : "failed",
+            input.error,
+            now,
+            now,
+            input.taskId,
+          ]
         )
       })
     )
@@ -2698,12 +2765,13 @@ export const completeBackupCopyTaskEffect = Effect.fn("backups.completeCopy")(
 export const renameBackupEffect = Effect.fn("backups.rename")(
   function* (input: { backupId: string; name: string }) {
     const database = yield* Database
+    const now = yield* Clock.currentTimeMillis
     const result = yield* database.execute(
       "backup_rename",
       `UPDATE ${databaseTable("backup")}
-        SET name = ?
+        SET name = ?, updated_at = ?
       WHERE id = ? AND status <> 'deleted'`,
-      [input.name, input.backupId]
+      [input.name, now, input.backupId]
     )
     return result.affectedRows > 0
   }
@@ -2719,6 +2787,7 @@ export const updateBackupLimitsEffect = Effect.fn("backups.updateLimits")(
     targetKind: BackupTargetKind
   }) {
     const database = yield* Database
+    const now = yield* Clock.currentTimeMillis
     const quantityColumn = input.admin
       ? "admin_quantity_limit"
       : "quantity_limit"
@@ -2729,17 +2798,20 @@ export const updateBackupLimitsEffect = Effect.fn("backups.updateLimits")(
       "backup_limits_update",
       `INSERT INTO ${databaseTable("backup_policy")}
         (relay_id, target_kind, target_id, exclude_patterns,
-         ${quantityColumn}, ${sizeColumn})
-       VALUES (?, ?, ?, JSON_ARRAY(), ?, ?)
+         ${quantityColumn}, ${sizeColumn}, created_at, updated_at)
+       VALUES (?, ?, ?, JSON_ARRAY(), ?, ?, ?, ?)
        ON DUPLICATE KEY UPDATE
          ${quantityColumn} = VALUES(${quantityColumn}),
-         ${sizeColumn} = VALUES(${sizeColumn})`,
+         ${sizeColumn} = VALUES(${sizeColumn}),
+         updated_at = VALUES(updated_at)`,
       [
         input.relayId,
         input.targetKind,
         input.targetId,
         input.quantityLimit,
         input.sizeLimitBytes,
+        now,
+        now,
       ]
     )
   }
@@ -2785,17 +2857,22 @@ export const updateBackupExcludesEffect = Effect.fn("backups.updateExcludes")(
     targetKind: BackupTargetKind
   }) {
     const database = yield* Database
+    const now = yield* Clock.currentTimeMillis
     yield* database.execute(
       "backup_excludes_update",
       `INSERT INTO ${databaseTable("backup_policy")}
-        (relay_id, target_kind, target_id, exclude_patterns)
-       VALUES (?, ?, ?, ?)
-       ON DUPLICATE KEY UPDATE exclude_patterns = VALUES(exclude_patterns)`,
+        (relay_id, target_kind, target_id, exclude_patterns, created_at,
+         updated_at)
+       VALUES (?, ?, ?, ?, ?, ?)
+       ON DUPLICATE KEY UPDATE exclude_patterns = VALUES(exclude_patterns),
+         updated_at = VALUES(updated_at)`,
       [
         input.relayId,
         input.targetKind,
         input.targetId,
         JSON.stringify(input.exclude),
+        now,
+        now,
       ]
     )
   }
@@ -2853,14 +2930,22 @@ export const updateFinalInstanceDeletionEffect = Effect.fn(
   targetId: string
 }) {
   const database = yield* Database
+  const now = yield* Clock.currentTimeMillis
   const placeholders = input.from.map(() => "?").join(", ")
   const result = yield* database.execute(
     "backup_final_delete_update",
     `UPDATE ${databaseTable("backup_final_delete")}
-        SET status = ?, error = ?
+        SET status = ?, error = ?, updated_at = ?
       WHERE relay_id = ? AND target_id = ?
         AND status IN (${placeholders})`,
-    [input.status, input.error, input.relayId, input.targetId, ...input.from]
+    [
+      input.status,
+      input.error,
+      now,
+      input.relayId,
+      input.targetId,
+      ...input.from,
+    ]
   )
   return result.affectedRows > 0
 })
@@ -2917,14 +3002,22 @@ export const updateFinalDatabaseDeletionEffect = Effect.fn(
   targetId: string
 }) {
   const database = yield* Database
+  const now = yield* Clock.currentTimeMillis
   const placeholders = input.from.map(() => "?").join(", ")
   const result = yield* database.execute(
     "backup_final_database_delete_update",
     `UPDATE ${databaseTable("backup_final_database_delete")}
-        SET status = ?, error = ?
+        SET status = ?, error = ?, updated_at = ?
       WHERE relay_id = ? AND target_id = ?
         AND status IN (${placeholders})`,
-    [input.status, input.error, input.relayId, input.targetId, ...input.from]
+    [
+      input.status,
+      input.error,
+      now,
+      input.relayId,
+      input.targetId,
+      ...input.from,
+    ]
   )
   return result.affectedRows > 0
 })
@@ -3163,6 +3256,7 @@ const loadOrCreateBackupRepository = Effect.fnUntraced(function* (
   transaction: DatabaseTransaction,
   input: {
     destinationObjectPrefix: string
+    now: number
     relayId: string
     storageId: string | null
     targetId: string
@@ -3211,8 +3305,8 @@ const loadOrCreateBackupRepository = Effect.fnUntraced(function* (
   yield* transaction.execute(
     `INSERT INTO ${databaseTable("backup_repository")}
         (id, relay_id, target_kind, target_id, storage_id, storage_key,
-         object_prefix, password_ciphertext)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+         object_prefix, password_ciphertext, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       id,
       input.relayId,
@@ -3222,6 +3316,7 @@ const loadOrCreateBackupRepository = Effect.fnUntraced(function* (
       storageKey,
       objectPrefix,
       ciphertext,
+      input.now,
     ]
   )
   return { id, objectPrefix, password, storageId: input.storageId }
