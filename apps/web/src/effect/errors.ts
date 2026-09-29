@@ -1,6 +1,6 @@
 import { Schema } from "effect"
 
-export class DatabaseError extends Schema.TaggedErrorClass<DatabaseError>()(
+export class DatabaseError extends Schema.TaggedError<DatabaseError>()(
   "DatabaseError",
   {
     operation: Schema.String,
@@ -12,7 +12,7 @@ export class DatabaseError extends Schema.TaggedErrorClass<DatabaseError>()(
   }
 }
 
-export class FilePinLimitError extends Schema.TaggedErrorClass<FilePinLimitError>()(
+export class FilePinLimitError extends Schema.TaggedError<FilePinLimitError>()(
   "FilePinLimitError",
   { limit: Schema.Number }
 ) {
@@ -21,7 +21,7 @@ export class FilePinLimitError extends Schema.TaggedErrorClass<FilePinLimitError
   }
 }
 
-export class BackupLimitError extends Schema.TaggedErrorClass<BackupLimitError>()(
+export class BackupLimitError extends Schema.TaggedError<BackupLimitError>()(
   "BackupLimitError",
   {
     kind: Schema.Literals(["quantity", "size"]),
@@ -36,7 +36,7 @@ export class BackupLimitError extends Schema.TaggedErrorClass<BackupLimitError>(
   }
 }
 
-export class BackupStorageError extends Schema.TaggedErrorClass<BackupStorageError>()(
+export class BackupStorageError extends Schema.TaggedError<BackupStorageError>()(
   "BackupStorageError",
   {
     code: Schema.String,
@@ -50,7 +50,7 @@ export class BackupStorageError extends Schema.TaggedErrorClass<BackupStorageErr
   }
 }
 
-export class CacheError extends Schema.TaggedErrorClass<CacheError>()(
+export class CacheError extends Schema.TaggedError<CacheError>()(
   "CacheError",
   {
     operation: Schema.String,
@@ -62,7 +62,7 @@ export class CacheError extends Schema.TaggedErrorClass<CacheError>()(
   }
 }
 
-export class CredentialError extends Schema.TaggedErrorClass<CredentialError>()(
+export class CredentialError extends Schema.TaggedError<CredentialError>()(
   "CredentialError",
   {
     operation: Schema.String,
@@ -74,7 +74,7 @@ export class CredentialError extends Schema.TaggedErrorClass<CredentialError>()(
   }
 }
 
-export class CliAccessError extends Schema.TaggedErrorClass<CliAccessError>()(
+export class CliAccessError extends Schema.TaggedError<CliAccessError>()(
   "CliAccessError",
   {
     code: Schema.Literals([
@@ -102,7 +102,7 @@ export class CliAccessError extends Schema.TaggedErrorClass<CliAccessError>()(
   }
 ) {}
 
-export class AuthenticationError extends Schema.TaggedErrorClass<AuthenticationError>()(
+export class AuthenticationError extends Schema.TaggedError<AuthenticationError>()(
   "AuthenticationError",
   {
     message: Schema.String,
@@ -110,7 +110,7 @@ export class AuthenticationError extends Schema.TaggedErrorClass<AuthenticationE
   }
 ) {}
 
-export class RelayUnavailableError extends Schema.TaggedErrorClass<RelayUnavailableError>()(
+export class RelayUnavailableError extends Schema.TaggedError<RelayUnavailableError>()(
   "RelayUnavailableError",
   {
     message: Schema.String,
@@ -121,7 +121,7 @@ export class RelayUnavailableError extends Schema.TaggedErrorClass<RelayUnavaila
   }
 ) {}
 
-export class RelayResponseError extends Schema.TaggedErrorClass<RelayResponseError>()(
+export class RelayResponseError extends Schema.TaggedError<RelayResponseError>()(
   "RelayResponseError",
   {
     message: Schema.String,
@@ -130,12 +130,12 @@ export class RelayResponseError extends Schema.TaggedErrorClass<RelayResponseErr
   }
 ) {}
 
-export class PermissionDeniedError extends Schema.TaggedErrorClass<PermissionDeniedError>()(
+export class PermissionDeniedError extends Schema.TaggedError<PermissionDeniedError>()(
   "PermissionDeniedError",
   { message: Schema.String }
 ) {}
 
-export class ResourceNotFoundError extends Schema.TaggedErrorClass<ResourceNotFoundError>()(
+export class ResourceNotFoundError extends Schema.TaggedError<ResourceNotFoundError>()(
   "ResourceNotFoundError",
   {
     resource: Schema.String,
@@ -143,7 +143,7 @@ export class ResourceNotFoundError extends Schema.TaggedErrorClass<ResourceNotFo
   }
 ) {}
 
-export class ExternalServiceError extends Schema.TaggedErrorClass<ExternalServiceError>()(
+export class ExternalServiceError extends Schema.TaggedError<ExternalServiceError>()(
   "ExternalServiceError",
   {
     service: Schema.String,
@@ -152,7 +152,7 @@ export class ExternalServiceError extends Schema.TaggedErrorClass<ExternalServic
   }
 ) {}
 
-export class TailscaleOrchestrationError extends Schema.TaggedErrorClass<TailscaleOrchestrationError>()(
+export class TailscaleOrchestrationError extends Schema.TaggedError<TailscaleOrchestrationError>()(
   "TailscaleOrchestrationError",
   {
     phase: Schema.Literals([

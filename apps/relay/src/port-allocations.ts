@@ -16,7 +16,7 @@ export const PRIMARY_PORT_LABEL = "kiln.brick.primary-port"
 const LEGACY_INSTANCE_PORT_ALLOCATIONS_LABEL = "kiln.instance.ports"
 const LEGACY_PRIMARY_PORT_PROTOCOL_LABEL = "kiln.brick.primary-port-protocol"
 const decodeJsonOption = Schema.decodeUnknownOption(
-  Schema.UnknownFromJsonString
+  Schema.fromJsonString(Schema.Unknown)
 )
 
 type PortBindings = Readonly<

@@ -64,7 +64,7 @@ async function collectTypeScriptFiles(directory) {
         directory
       )
       if (entry.isDirectory()) {
-        if (entry.name === "node_modules" || entry.name === ".repos") return []
+        if (entry.name === "node_modules") return []
         return collectTypeScriptFiles(location)
       }
       return isProductionTypeScript(entry.name) ? [location] : []

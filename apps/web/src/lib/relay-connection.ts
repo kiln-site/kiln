@@ -1143,7 +1143,7 @@ const decodeRelayControlMessage = (
   text: string
 ): Option.Option<typeof RelayControlServerMessageSchema.Type> =>
   Option.flatMap(
-    Schema.decodeUnknownOption(Schema.UnknownFromJsonString)(text),
+    Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Unknown))(text),
     Schema.decodeUnknownOption(RelayControlServerMessageSchema)
   )
 

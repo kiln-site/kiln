@@ -1,6 +1,6 @@
 import { Schema } from "effect"
 
-export class CommandError extends Schema.TaggedErrorClass<CommandError>()(
+export class CommandError extends Schema.TaggedError<CommandError>()(
   "CommandError",
   {
     executable: Schema.String,
@@ -9,7 +9,7 @@ export class CommandError extends Schema.TaggedErrorClass<CommandError>()(
   }
 ) {}
 
-export class RelayOperationError extends Schema.TaggedErrorClass<RelayOperationError>()(
+export class RelayOperationError extends Schema.TaggedError<RelayOperationError>()(
   "RelayOperationError",
   {
     operation: Schema.String,
@@ -21,7 +21,7 @@ export class RelayOperationError extends Schema.TaggedErrorClass<RelayOperationE
   }
 }
 
-export class MclogsUploadError extends Schema.TaggedErrorClass<MclogsUploadError>()(
+export class MclogsUploadError extends Schema.TaggedError<MclogsUploadError>()(
   "MclogsUploadError",
   {
     reason: Schema.String,
@@ -33,7 +33,7 @@ export class MclogsUploadError extends Schema.TaggedErrorClass<MclogsUploadError
   }
 }
 
-export class BrickRecipeError extends Schema.TaggedErrorClass<BrickRecipeError>()(
+export class BrickRecipeError extends Schema.TaggedError<BrickRecipeError>()(
   "BrickRecipeError",
   {
     code: Schema.String,
@@ -46,7 +46,7 @@ export class BrickRecipeError extends Schema.TaggedErrorClass<BrickRecipeError>(
   }
 }
 
-export class RelayStateError extends Schema.TaggedErrorClass<RelayStateError>()(
+export class RelayStateError extends Schema.TaggedError<RelayStateError>()(
   "RelayStateError",
   {
     operation: Schema.String,
@@ -58,7 +58,7 @@ export class RelayStateError extends Schema.TaggedErrorClass<RelayStateError>()(
   }
 }
 
-export class RelayIdentityError extends Schema.TaggedErrorClass<RelayIdentityError>()(
+export class RelayIdentityError extends Schema.TaggedError<RelayIdentityError>()(
   "RelayIdentityError",
   {
     operation: Schema.String,
@@ -70,7 +70,7 @@ export class RelayIdentityError extends Schema.TaggedErrorClass<RelayIdentityErr
   }
 }
 
-export class RelayTlsError extends Schema.TaggedErrorClass<RelayTlsError>()(
+export class RelayTlsError extends Schema.TaggedError<RelayTlsError>()(
   "RelayTlsError",
   {
     operation: Schema.String,
@@ -82,7 +82,7 @@ export class RelayTlsError extends Schema.TaggedErrorClass<RelayTlsError>()(
   }
 }
 
-export class RelayPairingError extends Schema.TaggedErrorClass<RelayPairingError>()(
+export class RelayPairingError extends Schema.TaggedError<RelayPairingError>()(
   "RelayPairingError",
   {
     code: Schema.String,
@@ -94,7 +94,7 @@ export class RelayPairingError extends Schema.TaggedErrorClass<RelayPairingError
   }
 }
 
-export class RelayFilesystemError extends Schema.TaggedErrorClass<RelayFilesystemError>()(
+export class RelayFilesystemError extends Schema.TaggedError<RelayFilesystemError>()(
   "RelayFilesystemError",
   {
     code: Schema.String,
@@ -108,7 +108,7 @@ export class RelayFilesystemError extends Schema.TaggedErrorClass<RelayFilesyste
   }
 }
 
-export class RelayDatabaseBrowserError extends Schema.TaggedErrorClass<RelayDatabaseBrowserError>()(
+export class RelayDatabaseBrowserError extends Schema.TaggedError<RelayDatabaseBrowserError>()(
   "RelayDatabaseBrowserError",
   {
     code: Schema.String,
@@ -121,7 +121,7 @@ export class RelayDatabaseBrowserError extends Schema.TaggedErrorClass<RelayData
   }
 }
 
-export class RelayBackupError extends Schema.TaggedErrorClass<RelayBackupError>()(
+export class RelayBackupError extends Schema.TaggedError<RelayBackupError>()(
   "RelayBackupError",
   {
     code: Schema.String,
@@ -136,7 +136,7 @@ export class RelayBackupError extends Schema.TaggedErrorClass<RelayBackupError>(
   }
 }
 
-export class RelayRemoteFileError extends Schema.TaggedErrorClass<RelayRemoteFileError>()(
+export class RelayRemoteFileError extends Schema.TaggedError<RelayRemoteFileError>()(
   "RelayRemoteFileError",
   {
     code: Schema.String,
@@ -150,7 +150,7 @@ export class RelayRemoteFileError extends Schema.TaggedErrorClass<RelayRemoteFil
   }
 }
 
-export class RelayPortAllocationError extends Schema.TaggedErrorClass<RelayPortAllocationError>()(
+export class RelayPortAllocationError extends Schema.TaggedError<RelayPortAllocationError>()(
   "RelayPortAllocationError",
   {
     code: Schema.String,
@@ -164,7 +164,7 @@ export class RelayPortAllocationError extends Schema.TaggedErrorClass<RelayPortA
   }
 }
 
-export class RelaySystemUpdateError extends Schema.TaggedErrorClass<RelaySystemUpdateError>()(
+export class RelaySystemUpdateError extends Schema.TaggedError<RelaySystemUpdateError>()(
   "RelaySystemUpdateError",
   {
     phase: Schema.String,

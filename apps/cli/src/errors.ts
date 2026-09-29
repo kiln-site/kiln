@@ -1,6 +1,6 @@
 import { Schema } from "effect"
 
-export class CliCommandError extends Schema.TaggedErrorClass<CliCommandError>()(
+export class CliCommandError extends Schema.TaggedError<CliCommandError>()(
   "CliCommandError",
   {
     code: Schema.String,

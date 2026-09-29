@@ -21,7 +21,7 @@ Before editing files for a substantial task:
 
 ## Work
 
-- Use Vite+ (`vp`) and existing Effect patterns; never edit `.repos/effect`.
+- Use Vite+ (`vp`) and existing Effect patterns.
 - Keep `.agents/skills/kiln-cli/SKILL.md` in sync with CLI changes.
 - Add only critical deterministic tests; prefer browser validation during
   development.
@@ -33,13 +33,22 @@ Before editing files for a substantial task:
   the OrbStack URL printed by `pnpm dev:docker`; never use a local IP for
   development or validation.
 
+## Learning more about Effect
+
+This repository uses the Effect Typescript library.
+
+Before writing any Effect code, first read `node_modules/effect/AGENTS.md`
+**completely**, and follow the links in the file when required.
+
+If you need to learn more about particular Effect apis and concepts that the
+guide doesn't cover, search through the source code in `node_modules/effect/src`.
+
 ## Setup
 
 Run once per clone from `main`:
 
 ```sh
 vp install --frozen-lockfile
-pnpm prepare
 pnpm dev:setup
 ```
 

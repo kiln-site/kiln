@@ -23,5 +23,5 @@ coverage/
 # typescript
 *.tsbuildinfo
 
-# Effect source used by the local Effect development skill
-.repos/effect
+# Legacy local Effect clone, replaced by node_modules/effect. Safe to delete.
+.repos/

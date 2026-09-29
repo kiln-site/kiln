@@ -48,7 +48,7 @@ const TailscaleSplitDnsSchema = Schema.Record(
   Schema.Array(Schema.String)
 )
 
-class TailscaleRoutePendingError extends Schema.TaggedErrorClass<TailscaleRoutePendingError>()(
+class TailscaleRoutePendingError extends Schema.TaggedError<TailscaleRoutePendingError>()(
   "TailscaleRoutePendingError",
   {
     message: Schema.String,
