@@ -162,11 +162,7 @@ export const baselineTables: ReadonlyArray<BaselineTable> = [
   },
   {
     name: "access_selection",
-    columns: [
-      "access_id",
-      "selection_kind",
-      "selection_key",
-    ],
+    columns: ["access_id", "selection_kind", "selection_key"],
     create: `CREATE TABLE IF NOT EXISTS \`kiln_access_selection\` (
   \`access_id\` char(36) NOT NULL,
   \`selection_kind\` enum('permission','collection') NOT NULL,
@@ -337,11 +333,7 @@ export const baselineTables: ReadonlyArray<BaselineTable> = [
   },
   {
     name: "authorization_subject",
-    columns: [
-      "user_id",
-      "revision",
-      "updated_at",
-    ],
+    columns: ["user_id", "revision", "updated_at"],
     create: `CREATE TABLE IF NOT EXISTS \`kiln_authorization_subject\` (
   \`user_id\` varchar(36) NOT NULL,
   \`revision\` bigint unsigned NOT NULL DEFAULT '0',
@@ -868,10 +860,7 @@ export const baselineTables: ReadonlyArray<BaselineTable> = [
   },
   {
     name: "data_migration",
-    columns: [
-      "id",
-      "completed_at",
-    ],
+    columns: ["id", "completed_at"],
     create: `CREATE TABLE IF NOT EXISTS \`kiln_data_migration\` (
   \`id\` varchar(120) NOT NULL,
   \`completed_at\` timestamp(3) NULL DEFAULT NULL,
@@ -1163,11 +1152,7 @@ export const baselineTables: ReadonlyArray<BaselineTable> = [
   },
   {
     name: "preset_selection",
-    columns: [
-      "preset_id",
-      "selection_kind",
-      "selection_key",
-    ],
+    columns: ["preset_id", "selection_kind", "selection_key"],
     create: `CREATE TABLE IF NOT EXISTS \`kiln_preset_selection\` (
   \`preset_id\` char(36) NOT NULL,
   \`selection_kind\` enum('permission','collection') NOT NULL,
@@ -1178,12 +1163,7 @@ export const baselineTables: ReadonlyArray<BaselineTable> = [
   },
   {
     name: "rateLimit",
-    columns: [
-      "id",
-      "key",
-      "count",
-      "lastRequest",
-    ],
+    columns: ["id", "key", "count", "lastRequest"],
     create: `CREATE TABLE IF NOT EXISTS \`kiln_rateLimit\` (
   \`id\` varchar(36) NOT NULL,
   \`key\` varchar(255) NOT NULL,

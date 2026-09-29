@@ -6,6 +6,7 @@ import { Effect, Exit, Redacted } from "effect"
 import { SqlClient } from "effect/sql"
 
 import { migrations } from "@/migrations"
+import { baseline } from "@/migrations/0001_baseline"
 import { baselineTables } from "@/migrations/baseline-schema"
 
 import { applyMigrations } from "./migrations"
@@ -50,36 +51,87 @@ describe("database migrations", () => {
       return rows.map((row) => row.id)
     })
 
+    const columnTypes = Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient
+      return yield* sql<{ dataType: string; count: number }>`
+        SELECT data_type AS dataType, COUNT(*) AS count
+        FROM information_schema.columns
+        WHERE table_schema = DATABASE()
+          AND data_type IN ('timestamp', 'datetime', 'decimal')
+        GROUP BY data_type
+      `
+    })
+
     it.effect.skipIf(!enabled)(
-      "creates the baseline once and recognizes existing installs",
+      "creates the schema once and recognizes existing installs",
       () =>
         Effect.gen(function* () {
           const sql = yield* SqlClient.SqlClient
           yield* dropAllTables
           yield* applyMigrations(migrations)
           const [{ count }] = yield* sql<{ count: number }>`
-          SELECT COUNT(*) AS count FROM information_schema.tables
-          WHERE table_schema = DATABASE()
-        `
+            SELECT COUNT(*) AS count FROM information_schema.tables
+            WHERE table_schema = DATABASE()
+          `
           expect(count).toBe(baselineTables.length + 1)
-          expect(yield* ledger).toEqual([1])
+          expect(yield* ledger).toEqual([1, 2])
+          // Only better-auth keeps dates, as DATETIME.
+          expect(yield* columnTypes).toEqual([
+            { dataType: "datetime", count: 20 },
+          ])
 
           yield* applyMigrations(migrations)
-          expect(yield* ledger).toEqual([1])
-
-          // An install from the last legacy release has the tables, no ledger.
-          yield* sql`DROP TABLE kiln_schema_migration`
-          yield* applyMigrations(migrations)
-          expect(yield* ledger).toEqual([1])
+          expect(yield* ledger).toEqual([1, 2])
 
           // A schema that differs is refused and left unrecorded.
+          yield* dropAllTables
+          yield* applyMigrations([baseline])
           yield* sql`DROP TABLE kiln_schema_migration`
           yield* sql`ALTER TABLE kiln_setting ADD COLUMN unexpected INT NULL`
           const exit = yield* Effect.exit(applyMigrations(migrations))
           expect(Exit.isFailure(exit)).toBe(true)
           expect(String(exit)).toContain("kiln_setting")
           expect(yield* ledger).toEqual([])
-        })
+        }),
+      // Rebuilding every table with a time column takes a while.
+      120_000
+    )
+
+    it.effect.skipIf(!enabled)(
+      "upgrades the latest legacy install to epoch milliseconds",
+      () =>
+        Effect.gen(function* () {
+          const sql = yield* SqlClient.SqlClient
+          yield* dropAllTables
+          yield* applyMigrations([baseline])
+          // A legacy install has no ledger and wrote times through a
+          // non-UTC session.
+          yield* sql`DROP TABLE kiln_schema_migration`
+          yield* sql.withTransaction(
+            Effect.gen(function* () {
+              yield* sql`SET time_zone = 'America/New_York'`
+              yield* sql`
+                INSERT INTO kiln_setting
+                  (id, setting_key, setting_value, created_at)
+                VALUES ('a', 'k', '{}', FROM_UNIXTIME(1790673560.833))
+              `
+            })
+          )
+
+          yield* applyMigrations(migrations)
+          const [row] = yield* sql<{ createdAt: number; updatedAt: number }>`
+            SELECT created_at AS createdAt, updated_at AS updatedAt
+            FROM kiln_setting WHERE id = 'a'
+          `
+          expect(Number(row.createdAt)).toBe(1790673560833)
+          expect(Number(row.updatedAt)).toBeGreaterThan(1_700_000_000_000)
+          expect(yield* ledger).toEqual([1, 2])
+          expect(yield* columnTypes).toEqual([
+            { dataType: "datetime", count: 20 },
+          ])
+        }),
+      // Rebuilding every table with a time column takes a while.
+      120_000
     )
   })
 })
