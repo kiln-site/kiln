@@ -88,6 +88,10 @@ import {
   createDatabasePageStore,
   type DatabasePageStore,
 } from "@/components/files/database/database-page-store"
+import {
+  DatabaseConflictDialog,
+  type DatabaseSaveConflict,
+} from "@/components/files/database/database-conflict-dialog"
 import { formatByteSize } from "@/components/files/database/database-values"
 import type { InstanceWorkspaceInstance } from "@/lib/relay-selectors"
 import { loadSyntaxCodeEditorModule } from "@/lib/syntax-editor-module-preload"
@@ -1410,14 +1414,33 @@ function TableFooter({
     editStore.getPendingCount
   )
   const queryClient = useQueryClient()
+  const [conflicts, setConflicts] = React.useState<
+    ReadonlyArray<DatabaseSaveConflict>
+  >([])
   const save = useMutation({
-    mutationFn: () => {
+    mutationFn: async () => {
       editStore.setLocked(true)
-      return source.mutate(editStore.table, editStore.toChanges())
+      const batch = editStore.toBatch()
+      const result = await source.mutate(editStore.table, batch.changes)
+      return { batch, result }
     },
-    onSuccess: async () => {
-      editStore.discard()
+    onSuccess: async ({ batch, result }) => {
       editStore.setLocked(false)
+      if (result.conflicts.length > 0) {
+        setConflicts(
+          result.conflicts.flatMap(({ change: index, current }) => {
+            const change = batch.changes[index]
+            const rowId = batch.rowIds[index]
+            return change && rowId && change.kind !== "insert"
+              ? [{ change, current, rowId }]
+              : []
+          })
+        )
+        // The grid shows the current data under the staged edits meanwhile.
+        await queryClient.invalidateQueries({ queryKey: rowsQueryKey })
+        return
+      }
+      editStore.discard()
       showToast({
         message: `Saved changes to ${editStore.table}`,
         type: "success",
@@ -1431,6 +1454,16 @@ function TableFooter({
       showToast({ message: error.message, type: "error" })
     },
   })
+  // Resolving a conflict saves whatever is still staged, which is what the
+  // user asked for when they pressed Save.
+  const resolveConflicts = (keepMine: boolean) => {
+    for (const { current, rowId } of conflicts) {
+      if (keepMine && current) editStore.rebase(rowId, current)
+      else editStore.drop([rowId])
+    }
+    setConflicts([])
+    if (editStore.getPendingCount() > 0) save.mutate()
+  }
 
   React.useEffect(() => {
     if (!editable) return
@@ -1541,6 +1574,13 @@ function TableFooter({
       <div className={cn("flex items-center", pending === 0 && "ml-auto")}>
         <TableStructureButton table={table} />
       </div>
+      <DatabaseConflictDialog
+        conflicts={conflicts}
+        table={table}
+        onCancel={() => setConflicts([])}
+        onUseCurrent={() => resolveConflicts(false)}
+        onKeepMine={() => resolveConflicts(true)}
+      />
     </div>
   )
 }

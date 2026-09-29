@@ -51,6 +51,26 @@ export function createDatabaseEditStore(table: string) {
     for (const listener of listeners) listener()
   }
 
+  // Changes in save order, with the row each came from (null for inserts),
+  // so results that refer to a change by position map back to rows.
+  function toBatch() {
+    const changes: Array<DatabaseChange> = []
+    const rowIds: Array<string | null> = []
+    for (const [id, { deleted, key, original, values }] of pending) {
+      changes.push(
+        deleted
+          ? { kind: "delete", key, original }
+          : { kind: "update", key, original, values }
+      )
+      rowIds.push(id)
+    }
+    for (const row of inserted) {
+      changes.push({ kind: "insert", values: row.values })
+      rowIds.push(null)
+    }
+    return { changes, rowIds }
+  }
+
   function stage(
     row: DatabaseEditableRow,
     change: (current: PendingRow) => PendingRow
@@ -131,19 +151,30 @@ export function createDatabaseEditStore(table: string) {
       if (inserted.length > 0) inserted = []
       emit()
     },
-    toChanges(): Array<DatabaseChange> {
-      const changes: Array<DatabaseChange> = []
-      for (const { deleted, key, original, values } of pending.values()) {
-        changes.push(
-          deleted
-            ? { kind: "delete", key, original }
-            : { kind: "update", key, original, values }
+    toBatch,
+    toChanges: () => toBatch().changes,
+    // After a conflict, the user chose to keep their change: it is restaged
+    // against the row as it is now. Edits that now match drop out.
+    rebase(rowId: string, current: Record<string, DatabaseValue>) {
+      const row = pending.get(rowId)
+      if (!row) return
+      const values = Object.fromEntries(
+        Object.entries(row.values).filter(
+          ([column, value]) => !valuesEqual(current[column] ?? null, value)
         )
+      )
+      pending = new Map(pending)
+      if (!row.deleted && Object.keys(values).length === 0) {
+        pending.delete(rowId)
+      } else {
+        pending.set(rowId, { ...row, original: current, values })
       }
-      for (const row of inserted) {
-        changes.push({ kind: "insert", values: row.values })
-      }
-      return changes
+      emit()
+    },
+    drop(rowIds: Iterable<string>) {
+      pending = new Map(pending)
+      for (const id of rowIds) pending.delete(id)
+      emit()
     },
   }
 }

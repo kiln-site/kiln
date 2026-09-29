@@ -214,7 +214,7 @@ class DatabaseWorkerPool {
               ? Effect.fail(
                   databaseError(
                     "timeout",
-                    `The database operation took longer than ${WORKER_TIMEOUT} and was stopped. Nothing was saved.`
+                    `This took longer than ${WORKER_TIMEOUT}, so it was stopped. Nothing was saved.`
                   )
                 )
               : Deferred.await(reply),

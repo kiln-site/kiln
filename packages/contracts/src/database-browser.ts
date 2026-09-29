@@ -168,9 +168,21 @@ export const databaseMutateInputSchema = z
   })
   .strict()
 
+// A staged change whose row no longer holds the values it was staged against.
+export const databaseConflictSchema = z
+  .object({
+    // Position of the change in the submitted batch.
+    change: z.number().int().nonnegative(),
+    // The row as it is now, or null when it no longer exists.
+    current: z.record(identifierSchema, databaseValueSchema).nullable(),
+  })
+  .strict()
+
+// With any conflicts, nothing is applied: the batch is all or nothing.
 export const databaseMutateResultSchema = z
   .object({
     applied: z.number().int().nonnegative(),
+    conflicts: z.array(databaseConflictSchema),
   })
   .strict()
 
@@ -217,6 +229,7 @@ export type DatabaseQueryInput = z.infer<typeof databaseQueryInputSchema>
 export type DatabaseQueryResult = z.infer<typeof databaseQueryResultSchema>
 export type DatabaseChange = z.infer<typeof databaseChangeSchema>
 export type DatabaseMutateInput = z.infer<typeof databaseMutateInputSchema>
+export type DatabaseConflict = z.infer<typeof databaseConflictSchema>
 export type DatabaseMutateResult = z.infer<typeof databaseMutateResultSchema>
 export type DatabaseReadRequest = z.infer<typeof databaseReadRequestSchema>
 export type DatabaseWriteRequest = z.infer<typeof databaseWriteRequestSchema>

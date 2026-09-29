@@ -68,6 +68,29 @@ describe("database edit store", () => {
     ])
   })
 
+  it("restages a kept change onto the current row after a conflict", () => {
+    const store = createDatabaseEditStore("players")
+    const steve = { ...row, id: "steve", key: { uuid: "b" } }
+    store.setCell(row, "name", "Alexa")
+    store.setCell(steve, "name", "Steven")
+    // Someone else changed Alex's balance; the user keeps their edit.
+    const current = { ...row.original, balance: 11 }
+    store.rebase("alex", current)
+    // Someone else already renamed Steve the same way; nothing is left.
+    store.rebase("steve", { ...steve.original, name: "Steven" })
+
+    expect(store.toChanges()).toEqual([
+      {
+        kind: "update",
+        key: { uuid: "a" },
+        original: current,
+        values: { name: "Alexa" },
+      },
+    ])
+    store.drop(["alex"])
+    expect(store.getPendingCount()).toBe(0)
+  })
+
   it("snapshots every column of a row, not just the visible ones", () => {
     const page = createDatabasePageStore({
       columns: ["uuid", "name", "balance"],

@@ -7,6 +7,7 @@ import * as Result from "effect/Result"
 
 import type {
   DatabaseChange,
+  DatabaseConflict,
   DatabaseColumn,
   DatabaseMutateInput,
   DatabaseMutateResult,
@@ -221,11 +222,16 @@ const TRANSACTION_CONTROL =
 function inTransaction<TResult>(
   database: DatabaseSync,
   job: DatabaseJob,
-  run: () => TResult
+  run: () => TResult,
+  shouldCommit: (result: TResult) => boolean = () => true
 ): TResult {
   database.exec("BEGIN IMMEDIATE")
   const outcome = Result.try(() => {
     const result = run()
+    if (!shouldCommit(result)) {
+      database.exec("ROLLBACK")
+      return result
+    }
     job.claimCommit()
     database.exec("COMMIT")
     return result
@@ -251,28 +257,63 @@ export function sqliteMutate(
     table.columns.filter(({ generated }) => !generated).map(({ name }) => name)
   )
 
-  // All changes land together or not at all.
-  const applied = inTransaction(database, job, () => {
-    let total = 0
-    for (const [index, change] of input.changes.entries()) {
-      const changed = applyChange(database, table, writable, change)
-      if (changed === 0 && change.kind !== "insert") {
-        throw new DatabaseBrowserError(
-          "row_changed",
-          `Change ${index + 1} no longer matches its row: it was edited, moved, or deleted since it was loaded. Nothing was saved; discard your changes to start from the current data.`
-        )
+  // All changes land together or not at all. A conflict doesn't stop the
+  // pass, so the client learns about every conflicting row at once.
+  return inTransaction(
+    database,
+    job,
+    (): DatabaseMutateResult => {
+      let applied = 0
+      const conflicts: Array<DatabaseConflict> = []
+      for (const [index, change] of input.changes.entries()) {
+        const changed = applyChange(database, table, writable, change)
+        if (changed === 0 && change.kind !== "insert") {
+          conflicts.push({
+            change: index,
+            current: currentRow(database, table, change.key),
+          })
+          continue
+        }
+        if (changed > 1) {
+          throw new DatabaseBrowserError(
+            "ambiguous_row",
+            "A change matched more than one row, so nothing was saved."
+          )
+        }
+        applied += changed
       }
-      if (changed > 1) {
-        throw new DatabaseBrowserError(
-          "ambiguous_row",
-          `Change ${index + 1} matches more than one row, so nothing was saved.`
-        )
-      }
-      total += changed
-    }
-    return total
-  })
-  return { applied }
+      return conflicts.length > 0
+        ? { applied: 0, conflicts }
+        : { applied, conflicts }
+    },
+    ({ conflicts }) => conflicts.length === 0
+  )
+}
+
+function currentRow(
+  database: DatabaseSync,
+  table: DatabaseTable,
+  key: DatabaseRowKey
+) {
+  const locator = keyCondition(table, key)
+  const statement = database.prepare(
+    `SELECT ${table.columns
+      .map(({ name }) => quoteIdentifier(name))
+      .join(", ")} FROM ${quoteIdentifier(table.name)} WHERE ${locator.sql}`
+  )
+  statement.setReadBigInts(true)
+  statement.setReturnArrays(true)
+  const row = statement.get(...locator.parameters) as unknown as
+    | Array<unknown>
+    | undefined
+  return row
+    ? Object.fromEntries(
+        table.columns.map(({ name }, index) => [
+          name,
+          encodeValue(row[index], BLOB_PREVIEW_BYTES),
+        ])
+      )
+    : null
 }
 
 function applyChange(

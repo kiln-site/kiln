@@ -61,28 +61,36 @@ describe("SQLite database browser", () => {
             table: "players",
           }).keys ?? []
         assert.deepStrictEqual(alex, { rowid: 1 })
-        // The second change conflicts, so the first one is rolled back too.
-        assert.throws(
-          () =>
-            sqliteMutate(database, {
-              action: "mutate",
-              table: "players",
-              changes: [
-                {
-                  kind: "update",
-                  key: alex ?? {},
-                  original: { balance: 10.5, name: "Alex", uuid: "a" },
-                  values: { name: "Alexa" },
-                },
-                {
-                  kind: "update",
-                  key: steve ?? {},
-                  original: { balance: 3, name: "Herobrine", uuid: "b" },
-                  values: { name: "Notch" },
-                },
-              ],
-            }),
-          /no longer matches/u
+        // The second change conflicts, so the first one is rolled back too,
+        // and the conflict reports the row as it is now.
+        assert.deepStrictEqual(
+          sqliteMutate(database, {
+            action: "mutate",
+            table: "players",
+            changes: [
+              {
+                kind: "update",
+                key: alex ?? {},
+                original: { balance: 10.5, name: "Alex", uuid: "a" },
+                values: { name: "Alexa" },
+              },
+              {
+                kind: "update",
+                key: steve ?? {},
+                original: { balance: 3, name: "Herobrine", uuid: "b" },
+                values: { name: "Notch" },
+              },
+            ],
+          }),
+          {
+            applied: 0,
+            conflicts: [
+              {
+                change: 1,
+                current: { balance: 3, name: "Steve", uuid: "b" },
+              },
+            ],
+          }
         )
         // A change whose loaded row is incomplete (say, a hidden column was
         // left out) is refused rather than checked partially.
@@ -154,9 +162,12 @@ describe("SQLite database browser", () => {
               },
             ],
           })
-        assert.throws(() => deleteSecond(2), /no longer matches/u)
+        assert.deepStrictEqual(deleteSecond(2), {
+          applied: 0,
+          conflicts: [{ change: 0, current: { message: "third" } }],
+        })
         assert.deepStrictEqual(messages(), ["second", "third"])
-        assert.deepStrictEqual(deleteSecond(1), { applied: 1 })
+        assert.deepStrictEqual(deleteSecond(1), { applied: 1, conflicts: [] })
         assert.deepStrictEqual(messages(), ["third"])
       } finally {
         database.close()
@@ -193,7 +204,7 @@ describe("SQLite database browser", () => {
               },
             ],
           }),
-          { applied: 1 }
+          { applied: 1, conflicts: [] }
         )
       } finally {
         database.close()
@@ -231,9 +242,9 @@ describe("SQLite database browser", () => {
         database
           .prepare("UPDATE files SET data = ?")
           .run(Buffer.concat([bytes, Buffer.from([1])]))
-        assert.throws(deleteLoaded, /no longer matches/u)
+        assert.strictEqual(deleteLoaded().conflicts.length, 1)
         database.prepare("UPDATE files SET data = ?").run(bytes)
-        assert.deepStrictEqual(deleteLoaded(), { applied: 1 })
+        assert.deepStrictEqual(deleteLoaded(), { applied: 1, conflicts: [] })
       } finally {
         database.close()
       }
