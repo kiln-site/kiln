@@ -114,6 +114,17 @@ jobs:
             ${{ inputs.tags }}
           labels: |
             ${{ inputs.source_label && format('org.opencontainers.image.source={0}', inputs.source_label) || '' }}
+            ${{ inputs.version && format('org.opencontainers.image.version={0}', inputs.version) || '' }}
+
+      - name: Verify release version label
+        if: inputs.version != ''
+        env:
+          EXPECTED_VERSION: ${{ inputs.version }}
+          METADATA: ${{ steps.metadata.outputs.json }}
+        run: |
+          # The updater validates this label against the release manifest.
+          jq --exit-status --arg version "$EXPECTED_VERSION" \
+            '.labels["org.opencontainers.image.version"] == $version' <<< "$METADATA"
 
       - name: Prepare Sentry source maps
         if: inputs.publish && inputs.prepare_sentry_source_maps && matrix.architecture == 'amd64'
