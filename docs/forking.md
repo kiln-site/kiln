@@ -13,18 +13,18 @@ workflow. Custom application changes can still cause ordinary merge conflicts.
 
 Under **Settings → Secrets and variables → Actions → Variables**, configure:
 
-| Variable             | Purpose                                                                                                  | Kiln upstream value                |
-| -------------------- | -------------------------------------------------------------------------------------------------------- | ---------------------------------- |
-| `PUBLISH_IMAGES`     | Set to `true` to publish releases and images. Unset means checks/builds only.                            | `true`                             |
-| `RELEASE_LINE`       | Independent major.minor.patch version for new nightlies; required when publishing is enabled.            | `0.1.0` initially                  |
-| `NPM_PACKAGE`        | npm package you own. Setting this enables CLI publishing after app releases.                             | `kiln-cli`                         |
-| `CLI_DEFAULT_URL`    | Optional default panel URL embedded in the CLI. Fork builds without this require a URL or saved profile. | `https://kiln.site`                |
-| `BUILD_RUNNER_AMD64` | Optional runner label for push-triggered image builds.                                                   | `blacksmith-4vcpu-ubuntu-2404`     |
-| `BUILD_RUNNER_ARM64` | Optional ARM64 runner label for push-triggered image builds.                                             | `blacksmith-4vcpu-ubuntu-2404-arm` |
-| `SENTRY_DSN`         | Optional server telemetry DSN baked into published images.                                               | Your server DSN                    |
-| `VITE_SENTRY_DSN`    | Optional browser telemetry DSN baked into Hearth.                                                        | Your browser DSN                   |
-| `SENTRY_ORG`         | Optional source-map upload organization.                                                                 | `quartzdev`                        |
-| `SENTRY_PROJECT`     | Optional source-map upload project.                                                                      | `kiln`                             |
+| Variable               | Purpose                                                                                                  | Kiln upstream value                |
+| ---------------------- | -------------------------------------------------------------------------------------------------------- | ---------------------------------- |
+| `PUBLISH_IMAGES`       | Set to `true` to publish releases and images. Unset means checks/builds only.                            | `true`                             |
+| `INITIAL_RELEASE_LINE` | Optional starting version before the first stable promotion; defaults to `0.1.0`.                        | Leave unset                        |
+| `NPM_PACKAGE`          | npm package you own. Setting this enables CLI publishing after app releases.                             | `kiln-cli`                         |
+| `CLI_DEFAULT_URL`      | Optional default panel URL embedded in the CLI. Fork builds without this require a URL or saved profile. | `https://kiln.site`                |
+| `BUILD_RUNNER_AMD64`   | Optional runner label for push-triggered image builds.                                                   | `blacksmith-4vcpu-ubuntu-2404`     |
+| `BUILD_RUNNER_ARM64`   | Optional ARM64 runner label for push-triggered image builds.                                             | `blacksmith-4vcpu-ubuntu-2404-arm` |
+| `SENTRY_DSN`           | Optional server telemetry DSN baked into published images.                                               | Your server DSN                    |
+| `VITE_SENTRY_DSN`      | Optional browser telemetry DSN baked into Hearth.                                                        | Your browser DSN                   |
+| `SENTRY_ORG`           | Optional source-map upload organization.                                                                 | `quartzdev`                        |
+| `SENTRY_PROJECT`       | Optional source-map upload project.                                                                      | `kiln`                             |
 
 Source-map uploads also require the `SENTRY_AUTH_TOKEN` Actions **secret**. Both
 organization and project must be set to prepare/upload maps. Sentry upload
@@ -137,17 +137,24 @@ scoped to the existing URL/profile system.
   builds run in parallel, but a discoverable release and rolling tags are only
   published after checks succeed. Failed validation may leave untagged build
   digests, never a new installable release.
-- Nightly versions use `RELEASE_LINE` plus the commit's UTC timestamp. Display
+- Nightly versions use the next line recorded in the latest stable release plus
+  the commit's UTC timestamp. Before the first stable, `INITIAL_RELEASE_LINE`
+  optionally overrides the `0.1.0` default. Display
   numbers use the workflow run number; they no longer reset at each release line.
 - CLI publication follows the exact app release tag. It no longer publishes
   independently while the corresponding app build might still fail. As before,
   both nightly and stable CLI publications use npm's `latest` tag.
-- Stable promotion accepts just the newest nightly in the chosen release line.
+- Stable promotion accepts the newest nightly in the chosen release line and a
+  `next_release` version, just like the previous promotion form.
   It reuses image digests, verifies provenance metadata in the release manifest,
   and does not rebuild app images or write commits to `main`.
-- After promotion, set `RELEASE_LINE` in repository settings to the next desired
-  version. Do this before the next merge if it should start the new line. Leaving
-  it unchanged continues nightlies on that line without changing the stable tag.
+- Promotion records `nextReleaseLine` in the stable release manifest. Subsequent
+  nightlies automatically use that line; no repository-settings change or extra
+  token is required. Retry a promotion with the same `next_release` value.
+- When migrating a repository whose latest stable manifest lacks this field,
+  the next line defaults to its next patch version. `INITIAL_RELEASE_LINE` can
+  select a higher starting version once; after promotion, release metadata takes
+  precedence over that bootstrap setting.
 - Retrying a release preserves published image digests. A retry can finish
   rolling-tag updates after a partial failure. Use **Publish CLI** with the exact
   release tag to retry npm separately.
@@ -165,7 +172,7 @@ Merge or rebase upstream normally. Keep upstream's workflows, Dockerfiles, and
 release scripts. Your repository variables, npm trust configuration, GHCR packages,
 GitHub release history, and deployment `.env` are independent of that merge.
 `release.json` is a shared local-development fallback; CI never updates it and
-publishing uses the repository's `RELEASE_LINE` instead.
+publishing reads that repository's stable release metadata instead.
 
 Public fork distribution tests cover version continuity, image/provenance
 boundaries, catalog image mapping, CLI login precedence, and fork update planning.

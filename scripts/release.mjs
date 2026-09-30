@@ -31,21 +31,48 @@ const output = (name, value) => {
     appendFileSync(process.env.GITHUB_OUTPUT, `${name}=${value}\n`)
 }
 
-export function releaseConfiguration(environment, timestamp) {
+const stableVersionPattern = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/u
+
+export function validateNextReleaseLine(version, nextReleaseLine) {
+  if (
+    typeof nextReleaseLine !== "string" ||
+    !stableVersionPattern.test(nextReleaseLine) ||
+    compareKilnReleaseVersions(nextReleaseLine, version) !== 1
+  )
+    throw new Error(
+      "The next release must be a major.minor.patch version newer than the promoted release"
+    )
+  return nextReleaseLine
+}
+
+export function resolveReleaseLine(initialLine, latestStable) {
+  if (latestStable?.nextReleaseLine !== undefined) {
+    return validateNextReleaseLine(
+      latestStable.version,
+      latestStable.nextReleaseLine
+    )
+  }
+  const initial = initialLine?.trim() || "0.1.0"
+  if (!stableVersionPattern.test(initial))
+    throw new Error("INITIAL_RELEASE_LINE must be major.minor.patch")
+  if (!latestStable) return initial
+  // Bootstrap repositories whose existing stable manifests predate this field.
+  if (!stableVersionPattern.test(latestStable.version))
+    throw new Error("Invalid stable release version")
+  if (compareKilnReleaseVersions(initial, latestStable.version) === 1)
+    return initial
+  const [major, minor, patch] = latestStable.version.split(".").map(Number)
+  return `${major}.${minor}.${patch + 1}`
+}
+
+export function releaseConfiguration(environment, timestamp, latestStable) {
   const repository = resolveKilnGitRepository(
     environment.GITHUB_REPOSITORY || environment.KILN_GIT_REPO
   )
-  if (
-    environment.PUBLISH_IMAGES === "true" &&
-    !environment.KILN_RELEASE_LINE?.trim()
-  ) {
-    throw new Error(
-      "Set the RELEASE_LINE repository variable before enabling publishing"
-    )
-  }
-  const line = environment.KILN_RELEASE_LINE?.trim() || "0.1.0"
-  if (!/^\d+\.\d+\.\d+$/u.test(line))
-    throw new Error("RELEASE_LINE must be major.minor.patch")
+  const line = resolveReleaseLine(
+    environment.KILN_INITIAL_RELEASE_LINE,
+    latestStable
+  )
   const date = new Date(timestamp)
   if (Number.isNaN(date.getTime()))
     throw new Error("Invalid source commit timestamp")
@@ -172,6 +199,11 @@ function publishRelease(manifest, existing, title, repository) {
       "existing-manifest.json",
     ])
     const previous = JSON.parse(readFileSync("existing-manifest.json", "utf8"))
+    if (previous.nextReleaseLine !== manifest.nextReleaseLine) {
+      throw new Error(
+        "This stable release already records a different next release line; retry with the original next_release input"
+      )
+    }
     if (
       previous.commit !== manifest.commit ||
       JSON.stringify(previous.components) !==
@@ -317,6 +349,10 @@ async function stable() {
   )
     throw new Error("Invalid nightly version")
   const version = nightlyVersion.split("-nightly.")[0]
+  const nextReleaseLine = validateNextReleaseLine(
+    version,
+    process.env.NEXT_RELEASE
+  )
   const repository = resolveKilnGitRepository(process.env.GITHUB_REPOSITORY)
   const published = releases()
   const selected = published.find(
@@ -360,6 +396,7 @@ async function stable() {
     ...manifest,
     version,
     channel: "stable",
+    nextReleaseLine,
     publishedAt: new Date().toISOString(),
   }
   reserveTag(`v${version}`, manifest.commit)
@@ -380,9 +417,30 @@ if (
 ) {
   switch (process.argv[2]) {
     case "config": {
+      const latest = releases().find((release) => !release.prerelease)
+      const latestStable = latest
+        ? JSON.parse(
+            run("gh", [
+              "release",
+              "download",
+              latest.tag_name,
+              "--pattern",
+              "release-manifest.json",
+              "--output",
+              "-",
+            ])
+          )
+        : undefined
+      if (latestStable)
+        validateReleaseManifest(
+          latestStable,
+          resolveKilnGitRepository(process.env.GITHUB_REPOSITORY),
+          latest.tag_name.slice(1)
+        )
       const config = releaseConfiguration(
         process.env,
-        run("git", ["show", "-s", "--format=%cI", "HEAD"])
+        run("git", ["show", "-s", "--format=%cI", "HEAD"]),
+        latestStable
       )
       for (const [name, value] of Object.entries(config)) output(name, value)
       break

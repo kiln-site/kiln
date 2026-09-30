@@ -6,8 +6,10 @@ Releases is the release index and GHCR is the only image source.
 
 ## Versions and channels
 
-- The active publishing line comes from the `RELEASE_LINE` repository variable.
-  `release.json` is only a local-development fallback; any major version is supported.
+- The active publishing line comes from `nextReleaseLine` in the latest stable
+  release manifest. Before the first stable, it defaults to `0.1.0`, optionally
+  overridden once with `INITIAL_RELEASE_LINE`. `release.json` is only a
+  local-development fallback; any major version is supported.
 - Every successful push to `main` reserves a
   `<major>.<minor>.<patch>-nightly.<YYYYMMDD>.<HHMMSS>` version from the source commit's UTC
   timestamp.
@@ -16,9 +18,10 @@ Releases is the release index and GHCR is the only image source.
   images, update comparisons, and links use the timestamp version.
 - Nightlies are GitHub prereleases. A stable release promotes a selected
   nightly without rebuilding its images.
-- After stable promotion, maintainers set `RELEASE_LINE` to the next desired
-  line in repository settings. The workflow never commits release bookkeeping.
-  Display aliases use the workflow run number and no longer reset.
+- Stable promotion asks for `next_release` and records it in the published
+  manifest. Future nightlies advance automatically without editing repository
+  settings or committing release bookkeeping. Display aliases use the workflow
+  run number and no longer reset.
 
 Published image tags:
 
@@ -101,11 +104,19 @@ requests.
 With `PUBLISH_IMAGES=true`, default-branch pushes publish through
 `nightly-release.yml` after code checks pass. Promote the newest nightly in its
 release line through `stable-release.yml`, supplying the nightly version without
-`v`. Then change `RELEASE_LINE` in repository settings when ready for the next line.
+`v`, and `next_release` (for example, promote `0.1.0-nightly.20260930.120000`
+with `next_release=0.2.0`). The next merge then publishes `0.2.0-nightly.<timestamp>`.
+The selected next version must be newer than the promoted stable version.
 
 Promotion reuses the nightly's exact image digests and creates a stable tag at its
 source commit. CLI publishing follows the resulting app release tag. Retries do
-not rewrite already published image digests. No workflow writes to `main`.
+not rewrite already published image digests or the recorded next release line;
+use the original inputs when retrying. No workflow writes to `main`, and the
+normal `GITHUB_TOKEN` is sufficient.
+
+Existing stable manifests without `nextReleaseLine` bootstrap to the next patch
+version, or a higher `INITIAL_RELEASE_LINE` if configured. Once a stable release
+records the next line, that metadata takes precedence over the bootstrap setting.
 
 See [forking and publishing](forking.md) for repository settings, package identity,
 GHCR visibility, npm trust, and the changes from the previous release workflow.

@@ -1,7 +1,12 @@
 import assert from "node:assert/strict"
 import test from "node:test"
 
-import { releaseConfiguration, validateReleaseManifest } from "./release.mjs"
+import {
+  releaseConfiguration,
+  resolveReleaseLine,
+  validateNextReleaseLine,
+  validateReleaseManifest,
+} from "./release.mjs"
 import {
   kilnCliPackageName,
   kilnDefaultEmberImage,
@@ -17,7 +22,7 @@ const repository = "https://github.com/example/fork"
 test("a fork keeps its identity and version line after an upstream merge", () => {
   const env = {
     GITHUB_REPOSITORY: "example/fork",
-    KILN_RELEASE_LINE: "1.2.0",
+    KILN_INITIAL_RELEASE_LINE: "1.2.0",
     PUBLISH_IMAGES: "true",
   }
   const first = releaseConfiguration(env, "2026-09-29T12:13:14Z")
@@ -30,8 +35,12 @@ test("a fork keeps its identity and version line after an upstream merge", () =>
   assert.ok(isKilnReleaseVersion(merged.version))
   assert.equal(compareKilnReleaseVersions(merged.version, first.version), 1)
   assert.throws(
-    () => releaseConfiguration({ ...env, KILN_RELEASE_LINE: "" }, "2026-09-29"),
-    /RELEASE_LINE/u
+    () =>
+      releaseConfiguration(
+        { ...env, KILN_INITIAL_RELEASE_LINE: "bad" },
+        "2026-09-29"
+      ),
+    /INITIAL_RELEASE_LINE/u
   )
 })
 
@@ -126,5 +135,56 @@ test("default fork catalog selects fork Embers without rewriting third-party ima
   assert.equal(
     kilnDefaultEmberImage("custom/java:21", repository),
     "custom/java:21"
+  )
+})
+
+test("stable promotion advances nightlies without changing repository settings", () => {
+  const env = {
+    GITHUB_REPOSITORY: "example/fork",
+    KILN_INITIAL_RELEASE_LINE: "0.1.0",
+  }
+  const stable = { version: "0.1.0", nextReleaseLine: "0.3.0" }
+  assert.equal(
+    releaseConfiguration(env, "2026-09-30T13:14:15Z", stable).version,
+    "0.3.0-nightly.20260930.131415"
+  )
+  // Upstream files and stale bootstrap settings cannot override published state.
+  assert.equal(resolveReleaseLine("9.0.0", stable), "0.3.0")
+  assert.equal(
+    resolveReleaseLine(undefined, {
+      version: "0.3.0",
+      nextReleaseLine: "1.0.0",
+    }),
+    "1.0.0"
+  )
+})
+
+test("new forks and legacy stable releases bootstrap without recurring configuration", () => {
+  assert.equal(resolveReleaseLine(undefined), "0.1.0")
+  assert.equal(resolveReleaseLine("1.0.0"), "1.0.0")
+  assert.equal(resolveReleaseLine(undefined, { version: "0.1.0" }), "0.1.1")
+  assert.equal(resolveReleaseLine("0.2.0", { version: "0.1.0" }), "0.2.0")
+})
+
+test("promotion refuses invalid or backwards next versions", () => {
+  for (const next of [
+    undefined,
+    "",
+    "0.1.0",
+    "0.0.9",
+    "0.2.0-nightly.1",
+    "01.0.0",
+    "nope",
+  ]) {
+    assert.throws(() => validateNextReleaseLine("0.1.0", next), /next release/u)
+  }
+  assert.equal(validateNextReleaseLine("0.1.0", "0.1.1"), "0.1.1")
+  assert.throws(
+    () =>
+      resolveReleaseLine("0.3.0", {
+        version: "0.2.0",
+        nextReleaseLine: "0.1.0",
+      }),
+    /next release/u
   )
 })

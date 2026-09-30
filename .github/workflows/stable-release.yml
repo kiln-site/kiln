@@ -7,6 +7,10 @@ on:
         description: Nightly version to promote, without the leading v
         required: true
         type: string
+      next_release:
+        description: Next stable version for future nightlies (for example 0.2.0)
+        required: true
+        type: string
 
 concurrency:
   group: kiln-release-line
@@ -40,6 +44,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           NIGHTLY: ${{ inputs.nightly }}
+          NEXT_RELEASE: ${{ inputs.next_release }}
         run: node scripts/release.mjs stable
 
   cli:
