@@ -1,3 +1,4 @@
+// CI imports this module directly before installing dependencies. Keep it package-free.
 export const DEFAULT_KILN_GIT_REPO = "https://github.com/kiln-site/kiln"
 export const LEGACY_KILN_GIT_REPO = "https://github.com/kiln-site/hearth"
 

@@ -1,3 +1,4 @@
+// CI imports this module directly before installing dependencies. Keep it package-free.
 export type KilnReleaseVersionOrder = -1 | 0 | 1
 
 type ParsedKilnReleaseVersion = {

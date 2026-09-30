@@ -18,6 +18,7 @@ export default defineConfig({
   run: {
     tasks: {
       build: "vp pack",
+      test: "vp test run",
       typecheck: "tsc --noEmit",
     },
   },

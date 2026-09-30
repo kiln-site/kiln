@@ -101,7 +101,7 @@ requests.
 
 ## Release operations
 
-With `PUBLISH_IMAGES=true`, default-branch pushes publish through
+With `PUBLISH_IMAGES=true`, pushes to `main` publish through
 `nightly-release.yml` after code checks pass. Promote the newest nightly in its
 release line through `stable-release.yml`, supplying the nightly version without
 `v`, and `next_release` (for example, promote `0.1.0-nightly.20260930.120000`

@@ -2,25 +2,29 @@ name: Nightly release
 
 on:
   push:
+    branches: [main]
   workflow_dispatch:
 
 concurrency:
   group: kiln-release-line
   cancel-in-progress: false
+  # Preserve pending promotions and main releases when more runs arrive.
+  queue: max
 
 permissions:
   contents: write
   packages: write
-  id-token: write
 
 jobs:
   code:
-    if: github.ref_name == github.event.repository.default_branch
+    if: github.ref == 'refs/heads/main'
     uses: ./.github/workflows/ci.yml
 
   config:
-    if: github.ref_name == github.event.repository.default_branch && vars.PUBLISH_IMAGES == 'true'
+    if: github.ref == 'refs/heads/main' && vars.PUBLISH_IMAGES == 'true'
     uses: ./.github/workflows/release-config.yml
+    with:
+      resolve_release_line: true
 
   images:
     needs: config
@@ -124,8 +128,10 @@ jobs:
         run: node scripts/release.mjs nightly
 
   cli:
+    permissions:
+      contents: read
+      id-token: write
     needs: release
-    if: vars.NPM_PACKAGE != ''
     uses: ./.github/workflows/publish-cli.yml
     with:
       tag: ${{ needs.release.outputs.tag }}

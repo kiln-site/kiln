@@ -60,7 +60,7 @@ canonical spelling.
 
 1. Enable Actions in the fork and set the variables above.
 2. Run **Ember images** manually once to seed the runtime images.
-3. Run **Nightly release** on the default branch (normally `main`).
+3. Run **Nightly release** on `main`.
 4. Make each new GHCR package **public** and grant the repository Actions access
    if it was previously created elsewhere. Repository visibility does not make
    packages public. The nightly release deliberately fails before publication
@@ -132,8 +132,9 @@ scoped to the existing URL/profile system.
 
 - Open and update PRs normally. **Code checks** runs directly on PRs; **Container
   images** validates both architectures without logging in or writing to GHCR.
-  Ember changes also run their existing recipe/image checks.
-- Default-branch pushes run the same code checks. With publishing enabled, image
+  Ember changes also run their existing recipe/image checks. PR and Ember
+  configuration does not fetch release history or manifests.
+- Pushes to `main` run the same code checks. With publishing enabled, image
   builds run in parallel, but a discoverable release and rolling tags are only
   published after checks succeed. Failed validation may leave untagged build
   digests, never a new installable release.
@@ -148,6 +149,8 @@ scoped to the existing URL/profile system.
   `next_release` version, just like the previous promotion form.
   It reuses image digests, verifies provenance metadata in the release manifest,
   and does not rebuild app images or write commits to `main`.
+- Nightly and stable runs share a queue (up to 100 pending runs), so later
+  pushes do not replace a waiting promotion. Run both workflows from `main`.
 - Promotion records `nextReleaseLine` in the stable release manifest. Subsequent
   nightlies automatically use that line; no repository-settings change or extra
   token is required. Retry a promotion with the same `next_release` value.
@@ -172,7 +175,8 @@ Merge or rebase upstream normally. Keep upstream's workflows, Dockerfiles, and
 release scripts. Your repository variables, npm trust configuration, GHCR packages,
 GitHub release history, and deployment `.env` are independent of that merge.
 `release.json` is a shared local-development fallback; CI never updates it and
-publishing reads that repository's stable release metadata instead.
+publishing reads that repository's stable release metadata instead. Its version
+is intentionally not kept in sync with published releases.
 
 Public fork distribution tests cover version continuity, image/provenance
 boundaries, catalog image mapping, CLI login precedence, and fork update planning.

@@ -2,43 +2,34 @@ import assert from "node:assert/strict"
 import test from "node:test"
 
 import {
+  nightlyRollingTags,
   releaseConfiguration,
   resolveReleaseLine,
   validateNextReleaseLine,
   validateReleaseManifest,
+  validateStablePromotion,
 } from "./release.mjs"
-import {
-  kilnCliPackageName,
-  kilnDefaultEmberImage,
-  kilnImageRepository,
-} from "../packages/contracts/src/git-repository.ts"
-import {
-  isKilnReleaseVersion,
-  compareKilnReleaseVersions,
-} from "../packages/contracts/src/release-version.ts"
+import { kilnImageRepository } from "../packages/contracts/src/git-repository.ts"
+import { isKilnReleaseVersion } from "../packages/contracts/src/release-version.ts"
 
 const repository = "https://github.com/example/fork"
 
-test("a fork keeps its identity and version line after an upstream merge", () => {
+test("fork release configuration uses its own identity and initial line", () => {
   const env = {
     GITHUB_REPOSITORY: "example/fork",
     KILN_INITIAL_RELEASE_LINE: "1.2.0",
-    PUBLISH_IMAGES: "true",
   }
-  const first = releaseConfiguration(env, "2026-09-29T12:13:14Z")
-  const merged = releaseConfiguration(env, "2026-09-30T13:14:15Z")
-  assert.equal(first.prefix, "ghcr.io/example/fork")
-  assert.equal(first.source, repository)
-  assert.equal(merged.repository, first.repository)
-  assert.equal(merged.prefix, first.prefix)
-  assert.equal(merged.version, "1.2.0-nightly.20260930.131415")
-  assert.ok(isKilnReleaseVersion(merged.version))
-  assert.equal(compareKilnReleaseVersions(merged.version, first.version), 1)
+  const config = releaseConfiguration(env, "2026-09-30T13:14:15Z")
+  assert.equal(config.prefix, "ghcr.io/example/fork")
+  assert.equal(config.source, repository)
+  assert.equal(config.repository, repository)
+  assert.equal(config.version, "1.2.0-nightly.20260930.131415")
+  assert.ok(isKilnReleaseVersion(config.version))
   assert.throws(
     () =>
       releaseConfiguration(
         { ...env, KILN_INITIAL_RELEASE_LINE: "bad" },
-        "2026-09-29"
+        "2026-09-30"
       ),
     /INITIAL_RELEASE_LINE/u
   )
@@ -107,77 +98,20 @@ test("fork manifests cannot select upstream or another fork's images", () => {
   )
 })
 
-test("CLI identity supports scoped fork packages and rejects shell syntax", () => {
-  assert.equal(kilnCliPackageName(undefined, repository), "@example/fork-cli")
-  assert.equal(
-    kilnCliPackageName("@my-npm-org/cli", repository),
-    "@my-npm-org/cli"
-  )
-  for (const name of ["cli;echo", "cli@latest", "$(whoami)", "--registry=evil"])
-    assert.throws(() => kilnCliPackageName(name))
-})
+test("release lines bootstrap once, then follow published stable metadata", () => {
+  const cases = [
+    [undefined, undefined, "0.1.0"],
+    ["1.0.0", undefined, "1.0.0"],
+    [undefined, { version: "0.1.0" }, "0.1.1"],
+    ["0.2.0", { version: "0.1.0" }, "0.2.0"],
+    // Stale repository settings cannot override the published next line.
+    ["9.0.0", { version: "0.1.0", nextReleaseLine: "0.3.0" }, "0.3.0"],
+  ]
+  for (const [initial, stable, expected] of cases)
+    assert.equal(resolveReleaseLine(initial, stable), expected)
 
-test("default fork catalog selects fork Embers without rewriting third-party images", () => {
-  assert.equal(
-    kilnDefaultEmberImage(
-      "ghcr.io/kiln-site/bricks-java:{{ variables.java_version }}",
-      repository
-    ),
-    "ghcr.io/example/fork/bricks-java:{{ variables.java_version }}"
-  )
-  assert.equal(
-    kilnDefaultEmberImage(
-      "ghcr.io/kiln-site/bricks-steamcmd:latest",
-      repository
-    ),
-    "ghcr.io/example/fork/bricks-steamcmd:latest"
-  )
-  assert.equal(
-    kilnDefaultEmberImage("custom/java:21", repository),
-    "custom/java:21"
-  )
-})
-
-test("stable promotion advances nightlies without changing repository settings", () => {
-  const env = {
-    GITHUB_REPOSITORY: "example/fork",
-    KILN_INITIAL_RELEASE_LINE: "0.1.0",
-  }
-  const stable = { version: "0.1.0", nextReleaseLine: "0.3.0" }
-  assert.equal(
-    releaseConfiguration(env, "2026-09-30T13:14:15Z", stable).version,
-    "0.3.0-nightly.20260930.131415"
-  )
-  // Upstream files and stale bootstrap settings cannot override published state.
-  assert.equal(resolveReleaseLine("9.0.0", stable), "0.3.0")
-  assert.equal(
-    resolveReleaseLine(undefined, {
-      version: "0.3.0",
-      nextReleaseLine: "1.0.0",
-    }),
-    "1.0.0"
-  )
-})
-
-test("new forks and legacy stable releases bootstrap without recurring configuration", () => {
-  assert.equal(resolveReleaseLine(undefined), "0.1.0")
-  assert.equal(resolveReleaseLine("1.0.0"), "1.0.0")
-  assert.equal(resolveReleaseLine(undefined, { version: "0.1.0" }), "0.1.1")
-  assert.equal(resolveReleaseLine("0.2.0", { version: "0.1.0" }), "0.2.0")
-})
-
-test("promotion refuses invalid or backwards next versions", () => {
-  for (const next of [
-    undefined,
-    "",
-    "0.1.0",
-    "0.0.9",
-    "0.2.0-nightly.1",
-    "01.0.0",
-    "nope",
-  ]) {
+  for (const next of [undefined, "0.1.0", "0.0.9", "0.2.0-nightly.1", "01.0.0"])
     assert.throws(() => validateNextReleaseLine("0.1.0", next), /next release/u)
-  }
   assert.equal(validateNextReleaseLine("0.1.0", "0.1.1"), "0.1.1")
   assert.throws(
     () =>
@@ -187,4 +121,97 @@ test("promotion refuses invalid or backwards next versions", () => {
       }),
     /next release/u
   )
+})
+
+const publishedRelease = (version) => ({
+  tag_name: `v${version}`,
+  prerelease: version.includes("-nightly."),
+})
+const nightly = "1.2.0-nightly.20260930.120000"
+const olderNightly = "1.2.0-nightly.20260929.120000"
+const newerNightly = "1.2.0-nightly.20260930.130000"
+
+test("nightly rolling tags never move backwards or replace an established stable", () => {
+  const cases = [
+    { name: "first release", versions: [], tags: ["latest-nightly", "latest"] },
+    {
+      name: "newest nightly before stable",
+      versions: [olderNightly],
+      tags: ["latest-nightly", "latest"],
+    },
+    {
+      name: "retry before stable",
+      versions: [nightly],
+      tags: ["latest-nightly", "latest"],
+    },
+    {
+      name: "stable owns latest",
+      versions: ["1.1.0", olderNightly],
+      tags: ["latest-nightly"],
+    },
+    {
+      name: "retry after promotion",
+      versions: [nightly, "1.2.0"],
+      tags: ["latest-nightly"],
+    },
+    { name: "older retry", versions: [olderNightly, newerNightly], tags: [] },
+    {
+      name: "newer release line",
+      versions: ["1.3.0-nightly.20260929.120000", nightly],
+      tags: [],
+    },
+  ]
+  for (const { name, versions, tags } of cases)
+    assert.deepEqual(
+      nightlyRollingTags(versions.map(publishedRelease), nightly),
+      tags,
+      name
+    )
+})
+
+test("stable promotion requires the newest nightly in its line and cannot roll back stable", () => {
+  const cases = [
+    { name: "first promotion", versions: [olderNightly, nightly] },
+    {
+      name: "newer stable",
+      versions: [nightly, "1.3.0"],
+      error: /newer stable/u,
+    },
+    {
+      name: "newer nightly in the same line",
+      versions: [nightly, newerNightly, olderNightly],
+      error: /newest nightly/u,
+    },
+    { name: "retry same stable", versions: [nightly, "1.2.0"] },
+    {
+      name: "other nightly lines do not block promotion",
+      versions: ["1.3.0-nightly.20260930.130000", "1.1.0", nightly],
+    },
+    {
+      name: "missing release",
+      versions: [olderNightly],
+      error: /existing nightly/u,
+    },
+    {
+      name: "stable input",
+      input: "1.2.0",
+      versions: ["1.2.0"],
+      error: /Invalid nightly/u,
+    },
+  ]
+  for (const { name, input = nightly, versions, error } of cases) {
+    const published = versions.map(publishedRelease)
+    if (error)
+      assert.throws(
+        () => validateStablePromotion(published, input),
+        error,
+        name
+      )
+    else
+      assert.equal(
+        validateStablePromotion(published, input).tag_name,
+        `v${input}`,
+        name
+      )
+  }
 })

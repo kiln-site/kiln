@@ -158,7 +158,8 @@ jobs:
           platforms: linux/${{ matrix.architecture }}
           outputs: ${{ inputs.publish && format('type=image,name={0},push-by-digest=true,name-canonical=true,push=true', inputs.image) || '' }}
           labels: ${{ steps.metadata.outputs.labels }}
-          # GitHub scopes PR caches and enforces write access without registry credentials.
+          # Main must populate its own cache: it cannot restore PR-scoped entries.
+          # Keep intermediate dependency stages for subsequent main and PR builds.
           cache-from: type=gha,scope=${{ inputs.cache_scope }}-${{ matrix.architecture }}
           cache-to: type=gha,scope=${{ inputs.cache_scope }}-${{ matrix.architecture }},mode=max
           provenance: ${{ inputs.publish && inputs.publish_provenance || 'false' }}
@@ -205,7 +206,6 @@ jobs:
       digest: ${{ steps.manifest.outputs.digest }}
     steps:
       - name: Log in to GitHub Container Registry
-        if: inputs.publish
         uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4.4.0
         with:
           registry: ghcr.io

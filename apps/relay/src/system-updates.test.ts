@@ -188,16 +188,14 @@ describe("release image versions", () => {
           docker.run
         )
 
+        const forkImage = targetImage.replace(
+          "ghcr.io/kiln-site",
+          docker.currentImagePrefix
+        )
         const operation = yield* manager.start({
-          helperImage: targetImage.replace(
-            "ghcr.io/kiln-site",
-            docker.currentImagePrefix
-          ),
+          helperImage: forkImage,
           targetContainer: "kiln-relay",
-          targetImage: targetImage.replace(
-            "ghcr.io/kiln-site",
-            docker.currentImagePrefix
-          ),
+          targetImage: forkImage,
           version: "0.1.0",
         })
 

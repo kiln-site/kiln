@@ -15,15 +15,16 @@ on:
 concurrency:
   group: kiln-release-line
   cancel-in-progress: false
+  # Preserve pending promotions and main releases when more runs arrive.
+  queue: max
 
 permissions:
   contents: write
   packages: write
-  id-token: write
 
 jobs:
   promote:
-    if: github.ref_name == github.event.repository.default_branch && vars.PUBLISH_IMAGES == 'true'
+    if: github.ref == 'refs/heads/main' && vars.PUBLISH_IMAGES == 'true'
     runs-on: ubuntu-24.04
     outputs:
       tag: ${{ steps.release.outputs.tag }}
@@ -48,8 +49,10 @@ jobs:
         run: node scripts/release.mjs stable
 
   cli:
+    permissions:
+      contents: read
+      id-token: write
     needs: promote
-    if: vars.NPM_PACKAGE != ''
     uses: ./.github/workflows/publish-cli.yml
     with:
       tag: ${{ needs.promote.outputs.tag }}

@@ -1,4 +1,4 @@
-import { execFileSync } from "node:child_process"
+import { execFile, execFileSync } from "node:child_process"
 import { createHash } from "node:crypto"
 import {
   appendFileSync,
@@ -8,6 +8,7 @@ import {
 } from "node:fs"
 import { resolve } from "node:path"
 import { pathToFileURL } from "node:url"
+import { promisify } from "node:util"
 
 import {
   kilnImagePrefix,
@@ -19,6 +20,15 @@ import {
   isKilnReleaseVersion,
   compareKilnReleaseVersions,
 } from "../packages/contracts/src/release-version.ts"
+
+const execFileAsync = promisify(execFile)
+const runAsync = async (file, args) => {
+  const { stdout } = await execFileAsync(file, args, {
+    encoding: "buffer",
+    maxBuffer: 16 * 1024 * 1024,
+  })
+  return stdout
+}
 
 const run = (file, args) =>
   execFileSync(file, args, {
@@ -120,6 +130,88 @@ export function validateReleaseManifest(manifest, repository, version) {
   }
 }
 
+export function nightlyRollingTags(published, version) {
+  if (
+    published.some(
+      (release) =>
+        release.prerelease &&
+        compareKilnReleaseVersions(release.tag_name.slice(1), version) > 0
+    )
+  )
+    return []
+  return published.some((release) => !release.prerelease)
+    ? ["latest-nightly"]
+    : ["latest-nightly", "latest"]
+}
+
+export function validateStablePromotion(published, nightlyVersion) {
+  if (
+    !isKilnReleaseVersion(nightlyVersion) ||
+    !/-nightly\.\d{8}\.\d{6}$/u.test(nightlyVersion)
+  )
+    throw new Error("Invalid nightly version")
+  const version = nightlyVersion.split("-nightly.")[0]
+  const selected = published.find(
+    (release) => release.tag_name === `v${nightlyVersion}`
+  )
+  if (!selected?.prerelease)
+    throw new Error("Select an existing nightly release")
+  if (
+    published.some(
+      (release) =>
+        !release.prerelease &&
+        compareKilnReleaseVersions(release.tag_name.slice(1), version) > 0
+    )
+  )
+    throw new Error("A newer stable release already exists")
+  if (
+    published.some(
+      (release) =>
+        release.prerelease &&
+        release.tag_name.startsWith(`v${version}-nightly.`) &&
+        compareKilnReleaseVersions(release.tag_name.slice(1), nightlyVersion) >
+          0
+    )
+  )
+    throw new Error("Promote the newest nightly in this release line")
+  return selected
+}
+
+async function latestStableManifest() {
+  let latest
+  try {
+    latest = JSON.parse(
+      await runAsync("gh", [
+        "api",
+        `repos/${process.env.GITHUB_REPOSITORY}/releases/latest`,
+      ])
+    )
+  } catch (error) {
+    // A new fork has no stable release yet. Authentication/network errors still fail.
+    if (error.stderr?.toString().includes("(HTTP 404)")) return undefined
+    throw error
+  }
+  if (latest.draft || latest.prerelease)
+    throw new Error("Expected a published stable release")
+  const manifest = JSON.parse(
+    await runAsync("gh", [
+      "release",
+      "download",
+      latest.tag_name,
+      "--pattern",
+      "release-manifest.json",
+      "--output",
+      "-",
+    ])
+  )
+  validateReleaseManifest(
+    manifest,
+    resolveKilnGitRepository(process.env.GITHUB_REPOSITORY),
+    latest.tag_name.slice(1)
+  )
+  return manifest
+}
+
 function releases() {
   return JSON.parse(
     run("gh", [
@@ -133,9 +225,6 @@ function releases() {
     .filter(
       (release) =>
         !release.draft && isKilnReleaseVersion(release.tag_name?.slice(1))
-    )
-    .sort((a, b) =>
-      compareKilnReleaseVersions(b.tag_name.slice(1), a.tag_name.slice(1))
     )
 }
 
@@ -151,7 +240,7 @@ function reserveTag(tag, commit) {
 }
 
 function tagImage(reference, targets) {
-  run("docker", [
+  return runAsync("docker", [
     "buildx",
     "imagetools",
     "create",
@@ -275,7 +364,7 @@ async function nightly() {
             throw new Error(`Missing ${component}/${arch} digest`)
           return `${image}@sha256:${files[0]}`
         })
-        run("docker", [
+        await runAsync("docker", [
           "buildx",
           "imagetools",
           "create",
@@ -286,7 +375,7 @@ async function nightly() {
           ...sources,
         ])
         // Do not trim the raw bytes: the registry digest covers the exact document.
-        const raw = execFileSync("docker", [
+        const raw = await runAsync("docker", [
           "buildx",
           "imagetools",
           "inspect",
@@ -322,58 +411,30 @@ async function nightly() {
       repository
     )
   }
-  if (
-    !published.some(
-      (release) =>
-        release.prerelease &&
-        compareKilnReleaseVersions(release.tag_name.slice(1), version) > 0
+  const rollingTags = nightlyRollingTags(published, version)
+  if (rollingTags.length > 0) {
+    await Promise.all(
+      Object.values(manifest.components).map(({ image, digest }) =>
+        tagImage(
+          `${image}@${digest}`,
+          rollingTags.map((tag) => `${image}:${tag}`)
+        )
+      )
     )
-  ) {
-    for (const { image, digest } of Object.values(manifest.components)) {
-      tagImage(`${image}@${digest}`, [
-        `${image}:latest-nightly`,
-        ...(!published.some((release) => !release.prerelease)
-          ? [`${image}:latest`]
-          : []),
-      ])
-    }
   }
   output("tag", tag)
 }
 
 async function stable() {
   const nightlyVersion = process.env.NIGHTLY
-  if (
-    !isKilnReleaseVersion(nightlyVersion) ||
-    !/-nightly\.\d{8}\.\d{6}$/u.test(nightlyVersion)
-  )
-    throw new Error("Invalid nightly version")
+  const published = releases()
+  const selected = validateStablePromotion(published, nightlyVersion)
   const version = nightlyVersion.split("-nightly.")[0]
   const nextReleaseLine = validateNextReleaseLine(
     version,
     process.env.NEXT_RELEASE
   )
   const repository = resolveKilnGitRepository(process.env.GITHUB_REPOSITORY)
-  const published = releases()
-  const selected = published.find(
-    (release) => release.tag_name === `v${nightlyVersion}`
-  )
-  if (!selected?.prerelease)
-    throw new Error("Select an existing nightly release")
-  if (
-    published.some(
-      (release) =>
-        !release.prerelease &&
-        compareKilnReleaseVersions(release.tag_name.slice(1), version) > 0
-    )
-  )
-    throw new Error("A newer stable release already exists")
-  const newest = published.find(
-    (release) =>
-      release.prerelease && release.tag_name.startsWith(`v${version}-nightly.`)
-  )
-  if (newest?.tag_name !== selected.tag_name)
-    throw new Error("Promote the newest nightly in this release line")
   run("gh", [
     "release",
     "download",
@@ -390,8 +451,11 @@ async function stable() {
     run("git", ["rev-list", "-n", "1", selected.tag_name]) !== manifest.commit
   )
     throw new Error("Nightly tag and manifest disagree")
-  for (const { image, digest } of Object.values(manifest.components))
-    await assertPublicManifest(image, digest)
+  await Promise.all(
+    Object.values(manifest.components).map(({ image, digest }) =>
+      assertPublicManifest(image, digest)
+    )
+  )
   const promoted = {
     ...manifest,
     version,
@@ -406,8 +470,11 @@ async function stable() {
     `v${version}`,
     repository
   )
-  for (const { image, digest } of Object.values(manifest.components))
-    tagImage(`${image}@${digest}`, [`${image}:${version}`, `${image}:latest`])
+  await Promise.all(
+    Object.values(manifest.components).map(({ image, digest }) =>
+      tagImage(`${image}@${digest}`, [`${image}:${version}`, `${image}:latest`])
+    )
+  )
   output("tag", `v${version}`)
 }
 
@@ -417,26 +484,10 @@ if (
 ) {
   switch (process.argv[2]) {
     case "config": {
-      const latest = releases().find((release) => !release.prerelease)
-      const latestStable = latest
-        ? JSON.parse(
-            run("gh", [
-              "release",
-              "download",
-              latest.tag_name,
-              "--pattern",
-              "release-manifest.json",
-              "--output",
-              "-",
-            ])
-          )
-        : undefined
-      if (latestStable)
-        validateReleaseManifest(
-          latestStable,
-          resolveKilnGitRepository(process.env.GITHUB_REPOSITORY),
-          latest.tag_name.slice(1)
-        )
+      const latestStable =
+        process.env.KILN_RESOLVE_RELEASE_LINE === "true"
+          ? await latestStableManifest()
+          : undefined
       const config = releaseConfiguration(
         process.env,
         run("git", ["show", "-s", "--format=%cI", "HEAD"]),
