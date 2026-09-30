@@ -12,7 +12,7 @@ import {
   hydrateBrickCatalogIcons,
   loadBrickCatalogSource,
 } from "@/lib/brick-catalog-source.server"
-import { kilnBrickCatalogUrl } from "@/lib/environment"
+import { kilnBrickCatalogUrl, kilnGitRepository } from "@/lib/environment"
 import { runAppEffect } from "@/effect/runtime"
 import { promiseEffect, recoverPromise } from "@/effect/promise"
 import { requireEligibleResourceUser } from "@/server/auth"
@@ -274,7 +274,12 @@ async function loadDefaultCatalog() {
   }
   return Effect.runPromise(
     promiseEffect(() =>
-      loadBrickCatalogSource(kilnBrickCatalogUrl(), { allowFile: true })
+      loadBrickCatalogSource(kilnBrickCatalogUrl(), {
+        allowFile: true,
+        distributionRepository: process.env.KILN_BRICKS_CATALOG_URL?.trim()
+          ? undefined
+          : kilnGitRepository(),
+      })
     ).pipe(
       Effect.tap((value) =>
         Effect.sync(() => {

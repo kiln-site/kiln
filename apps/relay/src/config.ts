@@ -173,7 +173,9 @@ export function loadConfig(
     advertisedHost,
     directPublicPort
   )
-  const gitRepository = resolveKilnGitRepository(environment.KILN_GIT_REPO)
+  const gitRepository = resolveKilnGitRepository(
+    environment.KILN_GIT_REPO || environment.KILN_DEFAULT_GIT_REPO
+  )
   // Hearth owns active catalogs. Preserve only the old local file URL so
   // already-provisioned file-backed instances can be read during upgrades.
   const legacyFileCatalogUrl = Result.getOrNull(

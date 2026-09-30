@@ -28,7 +28,9 @@ export function kilnEnvironment(): KilnEnvironment {
 }
 
 export function kilnGitRepository(): string {
-  return resolveKilnGitRepository(process.env.KILN_GIT_REPO)
+  return resolveKilnGitRepository(
+    process.env.KILN_GIT_REPO || process.env.KILN_DEFAULT_GIT_REPO
+  )
 }
 
 export function kilnBrickCatalogUrl(): string {

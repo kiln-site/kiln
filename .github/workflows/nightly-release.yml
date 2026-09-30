@@ -8,73 +8,59 @@ on:
 concurrency:
   group: kiln-release-line
   cancel-in-progress: false
+  # Preserve pending promotions and main releases when more runs arrive.
+  queue: max
 
 permissions:
   contents: write
   packages: write
 
 jobs:
-  hearth_arm:
-    name: Hearth arm64 image
+  code:
+    if: github.ref == 'refs/heads/main'
+    uses: ./.github/workflows/ci.yml
+
+  config:
+    if: github.ref == 'refs/heads/main' && vars.PUBLISH_IMAGES == 'true'
+    uses: ./.github/workflows/release-config.yml
+    with:
+      resolve_release_line: true
+
+  images:
+    needs: config
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - component: hearth
+            dockerfile: apps/web/Dockerfile
+          - component: relay
+            dockerfile: apps/relay/Dockerfile
     uses: ./.github/workflows/reusable-image.yml
     with:
-      name: Hearth
-      image: ghcr.io/kiln-site/hearth
-      dockerfile: apps/web/Dockerfile
-      cache_scope: hearth
-      architectures: '["arm64"]'
+      name: ${{ matrix.component }}
+      image: ${{ needs.config.outputs.prefix }}/${{ matrix.component }}
+      dockerfile: ${{ matrix.dockerfile }}
+      cache_scope: ${{ matrix.component }}
+      version: ${{ needs.config.outputs.version }}
+      source_label: ${{ needs.config.outputs.source }}
+      publish: true
+      publish_manifest: false
+      prepare_sentry_source_maps: ${{ matrix.component == 'hearth' && vars.SENTRY_ORG != '' && vars.SENTRY_PROJECT != '' }}
       build_args: |
         SOURCE_COMMIT=${{ github.sha }}
-        VITE_SENTRY_DSN=${{ vars.VITE_SENTRY_DSN || 'https://9516d942af12672a1ff5aa7f181f7217@o4511745768226816.ingest.us.sentry.io/4511745775501312' }}
+        KILN_GIT_REPO=${{ needs.config.outputs.repository }}
+        KILN_IMAGE_SOURCE=${{ needs.config.outputs.source }}
+        SENTRY_DSN=${{ vars.SENTRY_DSN }}
+        VITE_SENTRY_DSN=${{ vars.VITE_SENTRY_DSN }}
         VITE_SENTRY_REPLAYS_SESSION_SAMPLE_RATE=${{ vars.VITE_SENTRY_REPLAYS_SESSION_SAMPLE_RATE || '0.05' }}
         VITE_SENTRY_TRACES_SAMPLE_RATE=${{ vars.VITE_SENTRY_TRACES_SAMPLE_RATE || '0.05' }}
-      tags: |
-        type=sha,prefix=sha-
-      source_label: https://github.com/kiln-site/hearth
-      nightly_version: true
-      publish_manifest: false
-
-  hearth_amd:
-    name: Hearth amd64 image
-    uses: ./.github/workflows/reusable-image.yml
-    with:
-      name: Hearth
-      image: ghcr.io/kiln-site/hearth
-      dockerfile: apps/web/Dockerfile
-      cache_scope: hearth
-      architectures: '["amd64"]'
-      build_args: |
-        SOURCE_COMMIT=${{ github.sha }}
-        SENTRY_SOURCEMAPS=prepare
-        VITE_SENTRY_DSN=${{ vars.VITE_SENTRY_DSN || 'https://9516d942af12672a1ff5aa7f181f7217@o4511745768226816.ingest.us.sentry.io/4511745775501312' }}
-        VITE_SENTRY_REPLAYS_SESSION_SAMPLE_RATE=${{ vars.VITE_SENTRY_REPLAYS_SESSION_SAMPLE_RATE || '0.05' }}
-        VITE_SENTRY_TRACES_SAMPLE_RATE=${{ vars.VITE_SENTRY_TRACES_SAMPLE_RATE || '0.05' }}
-      tags: |
-        type=sha,prefix=sha-
-      source_label: https://github.com/kiln-site/hearth
-      nightly_version: true
-      publish_manifest: false
-      prepare_sentry_source_maps: true
-
-  relay:
-    name: Relay image
-    uses: ./.github/workflows/reusable-image.yml
-    with:
-      name: Relay
-      image: ghcr.io/kiln-site/relay
-      dockerfile: apps/relay/Dockerfile
-      cache_scope: relay
-      build_args: |
-        SOURCE_COMMIT=${{ github.sha }}
-      tags: |
-        type=sha,prefix=sha-
-      source_label: https://github.com/kiln-site/hearth
-      nightly_version: true
-      publish_manifest: false
+        SENTRY_SOURCEMAPS=${{ matrix.component == 'hearth' && vars.SENTRY_ORG != '' && vars.SENTRY_PROJECT != '' && 'prepare' || '' }}
 
   sentry:
     name: Publish Sentry source maps
-    needs: hearth_amd
+    needs: images
+    if: vars.SENTRY_ORG != '' && vars.SENTRY_PROJECT != ''
     runs-on: ubuntu-24.04
     steps:
       - name: Download prepared source maps
@@ -101,8 +87,8 @@ jobs:
         continue-on-error: true
         env:
           SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
-          SENTRY_ORG: quartzdev
-          SENTRY_PROJECT: kiln
+          SENTRY_ORG: ${{ vars.SENTRY_ORG }}
+          SENTRY_PROJECT: ${{ vars.SENTRY_PROJECT }}
         run: |
           /tmp/sentry-cli releases new \
             --project "$SENTRY_PROJECT" \
@@ -114,192 +100,38 @@ jobs:
           /tmp/sentry-cli releases finalize "$GITHUB_SHA"
 
   release:
-    name: Publish nightly release
-    needs: [hearth_arm, hearth_amd, relay]
+    needs: [code, config, images]
     runs-on: ubuntu-24.04
+    outputs:
+      tag: ${{ steps.release.outputs.tag }}
     steps:
-      - name: Check out repository
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           fetch-depth: 0
-
-      - name: Log in to GitHub Container Registry
-        uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4.4.0
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.1.0
+        with:
+          node-version-file: .node-version
+      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+      - uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4.4.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Resolve nightly version
-        id: version
-        env:
-          RUN_NUMBER: ${{ github.run_number }}
-        run: |
-          release_line="$(jq -er '.releaseLine' release.json)"
-          run_offset="$(jq -er '.nightlyRunOffset' release.json)"
-          nightly_number="$((RUN_NUMBER - run_offset))"
-          test "$nightly_number" -gt 0
-          commit_timestamp="$(git show -s --format=%cI "$GITHUB_SHA")"
-          timestamp="$(date -u -d "$commit_timestamp" +%Y%m%d.%H%M%S)"
-          tag="v${release_line}-nightly.${timestamp}"
-          echo "tag=$tag" >> "$GITHUB_OUTPUT"
-          echo "version=${tag#v}" >> "$GITHUB_OUTPUT"
-          echo "display_name=v${release_line} Nightly #${nightly_number}" >> "$GITHUB_OUTPUT"
-
-      - name: Reserve version tag
-        env:
-          COMMIT_SHA: ${{ github.sha }}
-          TAG: ${{ steps.version.outputs.tag }}
-        run: |
-          git fetch --force --tags origin
-          if git rev-parse --verify --quiet "refs/tags/$TAG" >/dev/null; then
-            test "$(git rev-list -n 1 "$TAG")" = "$COMMIT_SHA"
-          else
-            git tag "$TAG" "$COMMIT_SHA"
-            git push origin "refs/tags/$TAG"
-          fi
-
-      - name: Download image digests
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           pattern: digests-*
           path: /tmp/digests
-
-      - name: Publish and verify image manifests
-        id: manifests
-        env:
-          COMMIT_SHA: ${{ github.sha }}
-          VERSION: ${{ steps.version.outputs.version }}
-        run: |
-          shopt -s nullglob
-
-          publish_manifest() {
-            component="$1"
-            image="$2"
-            digest_files=(/tmp/digests/digests-"$component"-*/*)
-            test "${#digest_files[@]}" -eq 2
-
-            sources=()
-            for digest_file in "${digest_files[@]}"; do
-              sources+=("$image@sha256:$(basename "$digest_file")")
-            done
-
-            docker buildx imagetools create \
-              --tag "$image:$VERSION" \
-              --tag "$image:sha-${COMMIT_SHA:0:7}" \
-              "${sources[@]}"
-
-            raw_manifest="$(mktemp)"
-            docker buildx imagetools inspect "$image:$VERSION" --raw > "$raw_manifest"
-            digest="sha256:$(sha256sum "$raw_manifest" | awk '{print $1}')"
-            test "${#digest}" -eq 71
-            echo "$digest" > "/tmp/${component}-manifest-digest"
-          }
-
-          publish_manifest hearth ghcr.io/kiln-site/hearth &
-          hearth_pid="$!"
-          publish_manifest relay ghcr.io/kiln-site/relay &
-          relay_pid="$!"
-          wait "$hearth_pid"
-          wait "$relay_pid"
-
-          echo "hearth_digest=$(< /tmp/hearth-manifest-digest)" >> "$GITHUB_OUTPUT"
-          echo "relay_digest=$(< /tmp/relay-manifest-digest)" >> "$GITHUB_OUTPUT"
-
-      - name: Create release manifest
-        env:
-          COMMIT_SHA: ${{ github.sha }}
-          HEARTH_DIGEST: ${{ steps.manifests.outputs.hearth_digest }}
-          RELAY_DIGEST: ${{ steps.manifests.outputs.relay_digest }}
-          VERSION: ${{ steps.version.outputs.version }}
-        run: |
-          jq -n \
-            --arg version "$VERSION" \
-            --arg commit "$COMMIT_SHA" \
-            --arg publishedAt "$(date -u +%FT%TZ)" \
-            --arg hearthDigest "$HEARTH_DIGEST" \
-            --arg relayDigest "$RELAY_DIGEST" \
-            '{
-              schemaVersion: 1,
-              version: $version,
-              imageVersion: $version,
-              channel: "nightly",
-              commit: $commit,
-              publishedAt: $publishedAt,
-              components: {
-                hearth: { image: "ghcr.io/kiln-site/hearth", digest: $hearthDigest },
-                relay: { image: "ghcr.io/kiln-site/relay", digest: $relayDigest }
-              },
-              compatibility: { relayProtocol: 3 }
-            }' > release-manifest.json
-
-      - name: Publish prerelease
-        env:
-          COMMIT_SHA: ${{ github.sha }}
-          DISPLAY_NAME: ${{ steps.version.outputs.display_name }}
-          GH_TOKEN: ${{ github.token }}
-          TAG: ${{ steps.version.outputs.tag }}
-        run: |
-          if gh release view "$TAG" >/dev/null 2>&1; then
-            # A manual dispatch can revisit the same commit-derived tag with a
-            # newer run number. Keep its published display alias immutable.
-            gh release upload "$TAG" release-manifest.json --clobber
-          else
-            gh release create "$TAG" release-manifest.json \
-              --prerelease \
-              --latest=false \
-              --target "$COMMIT_SHA" \
-              --verify-tag \
-              --generate-notes \
-              --title "$DISPLAY_NAME"
-          fi
-
-      - name: Check whether this is the newest published nightly
-        id: newest
+      - id: release
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ steps.version.outputs.tag }}
-        run: |
-          newest="$(gh release list --limit 100 --json isPrerelease,tagName \
-            --jq '.[] | select(.isPrerelease) | .tagName' \
-            | grep -E '^v0\.[0-9]+\.[0-9]+-nightly\.[0-9]{8}\.[0-9]{6}$' \
-            | sort -V \
-            | tail -n 1)"
-          if test "$newest" = "$TAG"; then
-            echo "advance=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "advance=false" >> "$GITHUB_OUTPUT"
-          fi
+          KILN_VERSION: ${{ needs.config.outputs.version }}
+        run: node scripts/release.mjs nightly
 
-      - name: Advance rolling tags
-        if: steps.newest.outputs.advance == 'true'
-        env:
-          HEARTH_DIGEST: ${{ steps.manifests.outputs.hearth_digest }}
-          RELAY_DIGEST: ${{ steps.manifests.outputs.relay_digest }}
-        run: |
-          pids=()
-
-          docker buildx imagetools create \
-            --tag ghcr.io/kiln-site/hearth:latest-nightly \
-            "ghcr.io/kiln-site/hearth@$HEARTH_DIGEST" &
-          pids+=("$!")
-          docker buildx imagetools create \
-            --tag ghcr.io/kiln-site/relay:latest-nightly \
-            "ghcr.io/kiln-site/relay@$RELAY_DIGEST" &
-          pids+=("$!")
-
-          release_line="$(jq -er '.releaseLine' release.json)"
-          if ! git ls-remote --exit-code --tags origin "refs/tags/v$release_line" >/dev/null 2>&1; then
-            docker buildx imagetools create \
-              --tag ghcr.io/kiln-site/hearth:latest \
-              "ghcr.io/kiln-site/hearth@$HEARTH_DIGEST" &
-            pids+=("$!")
-            docker buildx imagetools create \
-              --tag ghcr.io/kiln-site/relay:latest \
-              "ghcr.io/kiln-site/relay@$RELAY_DIGEST" &
-            pids+=("$!")
-          fi
-
-          for pid in "${pids[@]}"; do
-            wait "$pid"
-          done
+  cli:
+    permissions:
+      contents: read
+      id-token: write
+    needs: release
+    uses: ./.github/workflows/publish-cli.yml
+    with:
+      tag: ${{ needs.release.outputs.tag }}

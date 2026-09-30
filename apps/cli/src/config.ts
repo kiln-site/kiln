@@ -19,7 +19,8 @@ import {
 } from "./credential-store.js"
 import { commandError } from "./errors.js"
 
-export const DEFAULT_KILN_URL = "https://kiln.site"
+export { cliDefaultUrl as DEFAULT_KILN_URL } from "./distribution.js"
+import { cliDefaultUrl as DEFAULT_KILN_URL } from "./distribution.js"
 
 const tokenSchema = z.string().startsWith("kiln_cli_")
 
@@ -144,6 +145,28 @@ export const loadConfigEffect = Effect.fn("cli.config.load")(function* (
     })
   }
   return legacy.data
+})
+
+export const resolveLoginTargetEffect = Effect.fn(
+  "cli.config.resolveLoginTarget"
+)(function* (
+  input: { profile?: string; url?: string },
+  options: ConfigOptions = {}
+) {
+  const config = yield* loadConfigEffect(options)
+  const profile = input.profile || config.activeProfile || "default"
+  const url =
+    input.url ||
+    (options.environment ?? process.env).KILN_URL?.trim() ||
+    config.profiles[profile]?.url ||
+    DEFAULT_KILN_URL
+  if (!url)
+    return yield* commandError({
+      code: "invalid_url",
+      exitCode: 2,
+      message: "Provide your panel URL: kiln login https://hearth.example.com",
+    })
+  return { profile, url: normalizeKilnUrl(url) }
 })
 
 export const resolveSessionEffect = Effect.fn("cli.config.resolveSession")(

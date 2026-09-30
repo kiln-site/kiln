@@ -28,7 +28,7 @@ kiln update
 
 The updater reuses pnpm or Bun when it can identify that package manager as the
 owner of the installed CLI. Otherwise, and whenever that update fails, it uses
-`npm install --global kiln-cli@latest`. This updates only the local Kiln CLI,
+`npm install --global <distribution-package>@latest` (`kiln-cli` for official builds). This updates only the local Kiln CLI,
 not Hearth or any Relay.
 
 ## Install the agent skill
@@ -62,7 +62,7 @@ kiln login
 kiln login https://hearth.example.com --name workstation --no-open
 ```
 
-The first form targets `https://kiln.site`. The command opens a browser and
+Login honors `KILN_URL` and the selected saved profile before the build's default URL. Official builds default to `https://kiln.site`; fork builds can set their own default. The command opens a browser and
 waits while you approve the sign-in. Self-hosted Hearth installations are
 selected with the positional URL or `--url`. Named profiles are available
 through `--profile`.
@@ -125,3 +125,5 @@ files, but cannot create or delete servers, change startup settings, power
 servers, send console commands, modify files, or upload.
 
 Run `kiln help` for the complete command reference.
+
+Fork maintainers: see [distribution publishing](../../docs/forking.md).

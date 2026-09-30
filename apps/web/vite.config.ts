@@ -50,6 +50,11 @@ const config = defineConfig(({ command }) => {
               "KILN_BUILD_SHA",
               "KILN_VERSION",
               "SENTRY_AUTH_TOKEN",
+              "SENTRY_ORG",
+              "SENTRY_PROJECT",
+              "VITE_SENTRY_DSN",
+              "VITE_SENTRY_REPLAYS_SESSION_SAMPLE_RATE",
+              "VITE_SENTRY_TRACES_SAMPLE_RATE",
               "SENTRY_SOURCEMAPS",
               "SOURCE_COMMIT",
             ],
@@ -126,8 +131,8 @@ const config = defineConfig(({ command }) => {
       ...(configureSentry
         ? [
             sentryTanstackStart({
-              org: "quartzdev",
-              project: "kiln",
+              org: process.env.SENTRY_ORG,
+              project: process.env.SENTRY_PROJECT,
               authToken: sentryAuthToken,
               sourcemaps:
                 sentrySourceMaps === "prepare"

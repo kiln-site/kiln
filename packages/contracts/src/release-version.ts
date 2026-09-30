@@ -1,3 +1,4 @@
+// CI imports this module directly before installing dependencies. Keep it package-free.
 export type KilnReleaseVersionOrder = -1 | 0 | 1
 
 type ParsedKilnReleaseVersion = {
@@ -16,7 +17,7 @@ type ParsedKilnReleaseVersion = {
 }
 
 const kilnReleaseVersionPattern =
-  /^(0)\.(\d+)\.(\d+)(?:-nightly\.(?:(\d{8})\.(\d{6})|(\d+)))?$/u
+  /^(\d+)\.(\d+)\.(\d+)(?:-nightly\.(?:(\d{8})\.(\d{6})|(\d+)))?$/u
 const nightlyVersionSuffixPattern = /-nightly\.(?:\d{8}\.\d{6}|\d+)$/u
 
 export function isKilnReleaseVersion(

@@ -1,4 +1,8 @@
-import { LEGACY_KILN_GIT_REPO } from "@workspace/contracts"
+import {
+  LEGACY_KILN_GIT_REPO,
+  DEFAULT_KILN_GIT_REPO,
+  kilnImageRepository,
+} from "@workspace/contracts"
 
 // Official images retain the pre-rename source label until older Relays that
 // require this exact value have had a compatibility release available.
@@ -55,10 +59,11 @@ export function kilnComponent(value: string | undefined): KilnComponent | null {
 
 export function managedImageChannel(
   image: string,
-  component: KilnComponent
+  component: KilnComponent,
+  repository = DEFAULT_KILN_GIT_REPO
 ): string | null {
-  const stable = `ghcr.io/kiln-site/${component}:latest`
-  const nightly = `ghcr.io/kiln-site/${component}:latest-nightly`
+  const stable = `${kilnImageRepository(component, repository)}:latest`
+  const nightly = `${kilnImageRepository(component, repository)}:latest-nightly`
   return image === stable || image === nightly ? image : null
 }
 

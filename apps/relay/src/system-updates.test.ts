@@ -55,6 +55,8 @@ const hearthContainer = {
 class FakeCommand {
   readonly calls: Array<Array<string>> = []
   currentVersion = "0.1.0-nightly.1"
+  currentImagePrefix = "ghcr.io/kiln-site"
+  currentImageSource = KILN_IMAGE_SOURCE
   imageSource = KILN_IMAGE_SOURCE
   imageVersion = "0.1.0-nightly.18"
   helperRunning = true
@@ -108,8 +110,10 @@ class FakeCommand {
             ...relayContainer,
             Config: {
               ...relayContainer.Config,
+              Image: `${this.currentImagePrefix}/relay:latest`,
               Labels: {
                 ...relayContainer.Config.Labels,
+                "org.opencontainers.image.source": this.currentImageSource,
                 "org.opencontainers.image.version": this.currentVersion,
               },
             },
@@ -177,15 +181,21 @@ describe("release image versions", () => {
       Effect.gen(function* () {
         const docker = new FakeCommand()
         docker.imageSource = "https://github.com/example/kiln-fork"
+        docker.currentImageSource = docker.imageSource
+        docker.currentImagePrefix = "ghcr.io/example/kiln-fork"
         const manager = new SystemUpdateManager(
           { dataDirectory, gitRepository: docker.imageSource },
           docker.run
         )
 
+        const forkImage = targetImage.replace(
+          "ghcr.io/kiln-site",
+          docker.currentImagePrefix
+        )
         const operation = yield* manager.start({
-          helperImage: targetImage,
+          helperImage: forkImage,
           targetContainer: "kiln-relay",
-          targetImage,
+          targetImage: forkImage,
           version: "0.1.0",
         })
 

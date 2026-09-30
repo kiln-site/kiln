@@ -25,7 +25,11 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  config:
+    uses: ./.github/workflows/release-config.yml
+
   java:
+    needs: config
     name: Java ${{ matrix.version }} Ember
     strategy:
       fail-fast: false
@@ -34,23 +38,29 @@ jobs:
     uses: ./.github/workflows/reusable-image.yml
     with:
       name: Java ${{ matrix.version }} Ember
-      image: ghcr.io/kiln-site/bricks-java
+      image: ${{ needs.config.outputs.prefix }}/bricks-java
       dockerfile: apps/bricks/embers/java/Dockerfile
       cache_scope: ember-java-${{ matrix.version }}
-      build_args: JAVA_VERSION=${{ matrix.version }}
+      build_args: |
+        JAVA_VERSION=${{ matrix.version }}
+        KILN_GIT_REPO=${{ needs.config.outputs.repository }}
       tags: type=raw,value=${{ matrix.version }}
+      publish: ${{ github.event_name != 'pull_request' && vars.PUBLISH_IMAGES == 'true' }}
       publish_provenance: mode=max
       publish_sbom: true
 
   steamcmd:
+    needs: config
     name: SteamCMD Ember
     uses: ./.github/workflows/reusable-image.yml
     with:
       name: SteamCMD Ember
-      image: ghcr.io/kiln-site/bricks-steamcmd
+      image: ${{ needs.config.outputs.prefix }}/bricks-steamcmd
       dockerfile: apps/bricks/embers/steamcmd/Dockerfile
+      build_args: KILN_GIT_REPO=${{ needs.config.outputs.repository }}
       cache_scope: ember-steamcmd
       architectures: '["amd64"]'
       tags: type=raw,value=latest
+      publish: ${{ github.event_name != 'pull_request' && vars.PUBLISH_IMAGES == 'true' }}
       publish_provenance: mode=max
       publish_sbom: true

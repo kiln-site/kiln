@@ -4,6 +4,8 @@ import { basename, dirname, join, parse, resolve } from "node:path"
 
 import { Effect, Result } from "effect"
 
+import { cliPackageName } from "./distribution.js"
+
 import { commandError } from "./errors.js"
 import { writeLine } from "./output.js"
 
@@ -115,9 +117,9 @@ function updateArguments(
   packageManager: CliPackageManager
 ): ReadonlyArray<string> {
   if (packageManager === "pnpm") {
-    return ["add", "--global", "kiln-cli@latest"]
+    return ["add", "--global", `${cliPackageName}@latest`]
   }
-  return ["install", "--global", "kiln-cli@latest"]
+  return ["install", "--global", `${cliPackageName}@latest`]
 }
 
 function detectPackageManagerOrNpm(
@@ -150,7 +152,7 @@ function ancestorOwnsPnpmPackage(
     const nodeModulesPath = join(currentPath, "node_modules")
     if (
       filesystem.exists(join(nodeModulesPath, ".modules.yaml")) &&
-      canonicalPath(join(nodeModulesPath, "kiln-cli"), filesystem) ===
+      canonicalPath(join(nodeModulesPath, cliPackageName), filesystem) ===
         canonicalPackageRoot
     ) {
       return true
