@@ -1,0 +1,35 @@
+name: Release configuration
+
+on:
+  workflow_call:
+    outputs:
+      repository:
+        value: ${{ jobs.config.outputs.repository }}
+      prefix:
+        value: ${{ jobs.config.outputs.prefix }}
+      source:
+        value: ${{ jobs.config.outputs.source }}
+      version:
+        value: ${{ jobs.config.outputs.version }}
+
+permissions:
+  contents: read
+
+jobs:
+  config:
+    runs-on: ubuntu-24.04
+    outputs:
+      repository: ${{ steps.config.outputs.repository }}
+      prefix: ${{ steps.config.outputs.prefix }}
+      source: ${{ steps.config.outputs.source }}
+      version: ${{ steps.config.outputs.version }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.1.0
+        with:
+          node-version-file: .node-version
+      - id: config
+        env:
+          PUBLISH_IMAGES: ${{ vars.PUBLISH_IMAGES }}
+          KILN_RELEASE_LINE: ${{ vars.RELEASE_LINE }}
+        run: node scripts/release.mjs config

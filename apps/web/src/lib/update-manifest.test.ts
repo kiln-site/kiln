@@ -96,9 +96,7 @@ describe("update manifest validation", () => {
         "0.1.0-nightly.2",
         "relay"
       )
-    ).toThrow(
-      `requires Relay protocol ${relayControlProtocolVersion - 1}`
-    )
+    ).toThrow(`requires Relay protocol ${relayControlProtocolVersion - 1}`)
   })
 
   it("allows a Hearth-first update across a protocol transition", () => {
@@ -114,5 +112,38 @@ describe("update manifest validation", () => {
         "hearth"
       )
     ).not.toThrow()
+  })
+})
+
+describe("fork update boundaries", () => {
+  it("accepts the fork and rejects a release from another distribution", () => {
+    const repository = "https://github.com/example/fork"
+    const fork = {
+      ...manifest,
+      components: {
+        hearth: {
+          ...manifest.components.hearth,
+          image: "ghcr.io/example/fork/hearth",
+        },
+        relay: {
+          ...manifest.components.relay,
+          image: "ghcr.io/example/fork/relay",
+        },
+      },
+    }
+    expect(() =>
+      validateUpdateManifest(fork, fork.version, "relay", repository)
+    ).not.toThrow()
+    expect(() =>
+      validateUpdateManifest(manifest, manifest.version, "relay", repository)
+    ).toThrow("unexpected image")
+    expect(() =>
+      validateUpdateManifest(
+        fork,
+        fork.version,
+        "relay",
+        "https://github.com/other/fork"
+      )
+    ).toThrow("unexpected image")
   })
 })

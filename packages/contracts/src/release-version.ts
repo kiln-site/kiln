@@ -16,7 +16,7 @@ type ParsedKilnReleaseVersion = {
 }
 
 const kilnReleaseVersionPattern =
-  /^(0)\.(\d+)\.(\d+)(?:-nightly\.(?:(\d{8})\.(\d{6})|(\d+)))?$/u
+  /^(\d+)\.(\d+)\.(\d+)(?:-nightly\.(?:(\d{8})\.(\d{6})|(\d+)))?$/u
 const nightlyVersionSuffixPattern = /-nightly\.(?:\d{8}\.\d{6}|\d+)$/u
 
 export function isKilnReleaseVersion(

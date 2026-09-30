@@ -7,6 +7,7 @@ import { Effect, Fiber } from "effect"
 
 import {
   loadConfigEffect,
+  resolveLoginTargetEffect,
   removeSessionEffect,
   resolveSessionEffect,
   saveSessionEffect,
@@ -573,3 +574,46 @@ async function configFixture() {
     path,
   }
 }
+
+it("login uses the selected profile and honors KILN_URL and an explicit URL", async () => {
+  const fixture = await configFixture()
+  try {
+    const options = fixture.options([memoryCredentialManager()])
+    await Effect.runPromise(
+      saveSessionEffect(
+        {
+          profile: "fork",
+          token: "kiln_cli_test",
+          url: "https://fork.example.com",
+        },
+        options
+      )
+    )
+    expect(
+      await Effect.runPromise(resolveLoginTargetEffect({}, options))
+    ).toEqual({ profile: "fork", url: "https://fork.example.com" })
+    const environment = {
+      ...options.environment,
+      KILN_URL: "https://env.example.com",
+    }
+    expect(
+      (
+        await Effect.runPromise(
+          resolveLoginTargetEffect({}, { ...options, environment })
+        )
+      ).url
+    ).toBe("https://env.example.com")
+    expect(
+      (
+        await Effect.runPromise(
+          resolveLoginTargetEffect(
+            { url: "https://explicit.example.com" },
+            { ...options, environment }
+          )
+        )
+      ).url
+    ).toBe("https://explicit.example.com")
+  } finally {
+    await fixture.cleanup()
+  }
+})

@@ -55,8 +55,9 @@ kiln login
 kiln login https://hearth.example.com --profile staging --name workstation
 ```
 
-`kiln login` targets `https://kiln.site` by default and normally opens a
-browser. Add `--no-open` when the environment cannot launch one. Do not start a
+`kiln login` uses an explicit URL, `KILN_URL`, the selected saved profile, then
+the distribution's default URL, and normally opens a browser. Official builds
+default to `https://kiln.site`; forks without a default require a panel URL. Add `--no-open` when the environment cannot launch one. Do not start a
 new login when an authenticated profile already targets the requested Hearth.
 `kiln logout` revokes the credential before removing both the saved profile and
 its system credential. If native credential deletion fails, the CLI reports a
@@ -95,7 +96,8 @@ Update the locally installed CLI with:
 kiln update
 ```
 
-This reinstalls `kiln-cli@latest` globally through pnpm or Bun when the CLI can
+This reinstalls the distribution's embedded npm package at `latest` (`kiln-cli`
+for official builds) globally through pnpm or Bun when the CLI can
 identify that installer, with npm as the default and fallback. It updates only
 the CLI executable; it does not update Hearth, Relays, or managed servers, and
 it does not require authentication.

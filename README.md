@@ -19,6 +19,11 @@ ghcr.io/kiln-site/bricks-java:25
 ghcr.io/kiln-site/bricks-steamcmd:latest
 ```
 
+## Forking and publishing
+
+See [Publishing an independent distribution](docs/forking.md) for repository settings,
+CLI publishing, self-updates, and merging upstream without workflow patches.
+
 ## Configuration
 
 Start from `.env.hearth.example`. These are the values worth setting for a first install:

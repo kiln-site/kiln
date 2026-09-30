@@ -38,7 +38,7 @@ it("allows an isolated test build for the npm bootstrap", async () => {
 })
 
 it("rejects versions outside Kiln's release format", async () => {
-  const repositoryRoot = await fixture({ releaseLine: "1.0.0" })
+  const repositoryRoot = await fixture({ releaseLine: "1.0.0-invalid" })
   await assert.rejects(
     resolveCliVersion({ repositoryRoot, environment: {} }),
     /Invalid Kiln CLI version/u

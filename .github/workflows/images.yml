@@ -13,40 +13,42 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  code:
-    name: Code checks
-    uses: ./.github/workflows/ci.yml
+  config:
+    uses: ./.github/workflows/release-config.yml
 
   images:
+    needs: config
     name: ${{ matrix.name }} image
     strategy:
       fail-fast: false
       matrix:
         include:
           - name: Hearth
-            image: ghcr.io/kiln-site/hearth
+            image: hearth
             dockerfile: apps/web/Dockerfile
             cache_scope: hearth
             build_args: |
               SOURCE_COMMIT=${{ github.sha }}
-              KILN_VERSION=0.1.0-pr.${{ github.event.pull_request.number || github.run_number }}
-              VITE_SENTRY_DSN=${{ vars.VITE_SENTRY_DSN || 'https://9516d942af12672a1ff5aa7f181f7217@o4511745768226816.ingest.us.sentry.io/4511745775501312' }}
+              VITE_SENTRY_DSN=${{ vars.VITE_SENTRY_DSN }}
               VITE_SENTRY_REPLAYS_SESSION_SAMPLE_RATE=${{ vars.VITE_SENTRY_REPLAYS_SESSION_SAMPLE_RATE || '0.05' }}
               VITE_SENTRY_TRACES_SAMPLE_RATE=${{ vars.VITE_SENTRY_TRACES_SAMPLE_RATE || '0.05' }}
           - name: Relay
-            image: ghcr.io/kiln-site/relay
+            image: relay
             dockerfile: apps/relay/Dockerfile
             cache_scope: relay
             build_args: |
               SOURCE_COMMIT=${{ github.sha }}
-              KILN_VERSION=0.1.0-pr.${{ github.event.pull_request.number || github.run_number }}
     uses: ./.github/workflows/reusable-image.yml
     with:
       name: ${{ matrix.name }}
-      image: ${{ matrix.image }}
+      image: ${{ needs.config.outputs.prefix }}/${{ matrix.image }}
       dockerfile: ${{ matrix.dockerfile }}
       cache_scope: ${{ matrix.cache_scope }}
-      build_args: ${{ matrix.build_args }}
-      source_label: https://github.com/kiln-site/hearth
+      build_args: |
+        ${{ matrix.build_args }}
+        KILN_GIT_REPO=${{ needs.config.outputs.repository }}
+        KILN_IMAGE_SOURCE=${{ needs.config.outputs.source }}
+      version: ${{ needs.config.outputs.version }}
+      source_label: ${{ needs.config.outputs.source }}
       tags: |
         type=sha,prefix=sha-

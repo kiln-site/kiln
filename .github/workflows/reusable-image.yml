@@ -49,11 +49,14 @@ on:
         required: false
         type: boolean
         default: true
-      nightly_version:
-        description: Derive KILN_VERSION and a version tag from release.json and the source commit timestamp
-        required: false
+      publish:
+        description: Publish images and manifests (validation builds never write to GHCR)
         type: boolean
         default: false
+      version:
+        description: Version embedded in the image
+        type: string
+        default: ""
       prepare_sentry_source_maps:
         description: Export source maps from the exact amd64 image build
         required: false
@@ -76,9 +79,11 @@ permissions:
 jobs:
   build:
     name: ${{ inputs.name }}${{ matrix.architecture == 'arm64' && ' · arm64' || '' }}
-    # Public-repository runners keep PRs and manual builds free. Blacksmith is
-    # reserved for the latency-sensitive image builds triggered by main.
-    runs-on: ${{ github.event_name == 'push' && (matrix.architecture == 'arm64' && 'blacksmith-4vcpu-ubuntu-2404-arm' || 'blacksmith-4vcpu-ubuntu-2404') || (matrix.architecture == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04') }}
+    # Repository variables opt push builds into a preferred runner provider.
+    runs-on: >-
+      ${{ matrix.architecture == 'arm64'
+          && (github.event_name == 'push' && vars.BUILD_RUNNER_ARM64 || 'ubuntu-24.04-arm')
+          || (github.event_name == 'push' && vars.BUILD_RUNNER_AMD64 || 'ubuntu-24.04') }}
     timeout-minutes: 20
     strategy:
       fail-fast: false
@@ -88,19 +93,11 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
-      - name: Resolve nightly version
-        if: inputs.nightly_version
-        id: nightly
-        run: |
-          release_line="$(jq -er '.releaseLine' release.json)"
-          commit_timestamp="$(git show -s --format=%cI "$GITHUB_SHA")"
-          timestamp="$(date -u -d "$commit_timestamp" +%Y%m%d.%H%M%S)"
-          echo "version=${release_line}-nightly.${timestamp}" >> "$GITHUB_OUTPUT"
-
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
 
       - name: Log in to GitHub Container Registry
+        if: inputs.publish
         uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4.4.0
         with:
           registry: ghcr.io
@@ -115,12 +112,11 @@ jobs:
           flavor: latest=false
           tags: |
             ${{ inputs.tags }}
-            ${{ inputs.nightly_version && format('type=raw,value={0}', steps.nightly.outputs.version) || '' }}
           labels: |
             ${{ inputs.source_label && format('org.opencontainers.image.source={0}', inputs.source_label) || '' }}
 
       - name: Prepare Sentry source maps
-        if: github.event_name != 'pull_request' && inputs.prepare_sentry_source_maps && matrix.architecture == 'amd64'
+        if: inputs.publish && inputs.prepare_sentry_source_maps && matrix.architecture == 'amd64'
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         env:
           DOCKER_BUILD_RECORD_UPLOAD: false
@@ -130,14 +126,14 @@ jobs:
           target: sentry-source-maps
           build-args: |
             ${{ inputs.build_args }}
-            ${{ inputs.nightly_version && format('KILN_VERSION={0}', steps.nightly.outputs.version) || '' }}
+            KILN_VERSION=${{ inputs.version }}
           platforms: linux/${{ matrix.architecture }}
           outputs: type=local,dest=/tmp/sentry-source-maps
-          cache-from: type=registry,ref=ghcr.io/kiln-site/${{ inputs.cache_scope }}-build-cache:${{ matrix.architecture }}
+          cache-from: type=gha,scope=${{ inputs.cache_scope }}-${{ matrix.architecture }}
           provenance: false
           sbom: false
 
-      - name: Build${{ github.event_name != 'pull_request' && ' and publish' || '' }} image
+      - name: Build${{ inputs.publish && ' and publish' || '' }} image
         id: build
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         env:
@@ -147,19 +143,18 @@ jobs:
           file: ${{ inputs.dockerfile }}
           build-args: |
             ${{ inputs.build_args }}
-            ${{ inputs.nightly_version && format('KILN_VERSION={0}', steps.nightly.outputs.version) || '' }}
+            KILN_VERSION=${{ inputs.version }}
           platforms: linux/${{ matrix.architecture }}
-          outputs: ${{ github.event_name != 'pull_request' && format('type=image,name={0},push-by-digest=true,name-canonical=true,push=true', inputs.image) || '' }}
+          outputs: ${{ inputs.publish && format('type=image,name={0},push-by-digest=true,name-canonical=true,push=true', inputs.image) || '' }}
           labels: ${{ steps.metadata.outputs.labels }}
-          # PRs refresh the shared dependency cache. Main only imports it so
-          # publishing is not delayed by a remote cache export.
-          cache-from: type=registry,ref=ghcr.io/kiln-site/${{ inputs.cache_scope }}-build-cache:${{ matrix.architecture }}
-          cache-to: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && format('type=registry,ref=ghcr.io/kiln-site/{0}-build-cache:{1},mode=max,oci-mediatypes=true,image-manifest=true,compression=zstd', inputs.cache_scope, matrix.architecture) || '' }}
-          provenance: ${{ github.event_name != 'pull_request' && inputs.publish_provenance || 'false' }}
-          sbom: ${{ github.event_name != 'pull_request' && inputs.publish_sbom }}
+          # GitHub scopes PR caches and enforces write access without registry credentials.
+          cache-from: type=gha,scope=${{ inputs.cache_scope }}-${{ matrix.architecture }}
+          cache-to: type=gha,scope=${{ inputs.cache_scope }}-${{ matrix.architecture }},mode=max
+          provenance: ${{ inputs.publish && inputs.publish_provenance || 'false' }}
+          sbom: ${{ inputs.publish && inputs.publish_sbom }}
 
       - name: Export image digest
-        if: github.event_name != 'pull_request'
+        if: inputs.publish
         env:
           DIGEST: ${{ steps.build.outputs.digest }}
         run: |
@@ -168,7 +163,7 @@ jobs:
           touch "/tmp/digests/${DIGEST#sha256:}"
 
       - name: Upload image digest
-        if: github.event_name != 'pull_request'
+        if: inputs.publish
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: digests-${{ inputs.cache_scope }}-${{ matrix.architecture }}
@@ -177,7 +172,7 @@ jobs:
           retention-days: 1
 
       - name: Upload prepared Sentry source maps
-        if: github.event_name != 'pull_request' && inputs.prepare_sentry_source_maps && matrix.architecture == 'amd64'
+        if: inputs.publish && inputs.prepare_sentry_source_maps && matrix.architecture == 'amd64'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: nightly-sentry-source-maps
@@ -191,7 +186,7 @@ jobs:
 
   publish:
     name: Publish ${{ inputs.name }} manifest
-    if: github.event_name != 'pull_request' && inputs.publish_manifest
+    if: inputs.publish && inputs.publish_manifest
     needs: build
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -199,6 +194,7 @@ jobs:
       digest: ${{ steps.manifest.outputs.digest }}
     steps:
       - name: Log in to GitHub Container Registry
+        if: inputs.publish
         uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4.4.0
         with:
           registry: ghcr.io

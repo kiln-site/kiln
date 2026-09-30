@@ -165,7 +165,7 @@ function releaseVersionAliases(
   version: string
 ): ReadonlyArray<string> {
   if (!isKilnNightlyVersion(version)) return []
-  const match = /^v(0\.\d+\.\d+) Nightly #([1-9]\d*)$/u.exec(releaseName)
+  const match = /^v(\d+\.\d+\.\d+) Nightly #([1-9]\d*)$/u.exec(releaseName)
   if (!match || match[1] !== kilnReleaseVersionCore(version)) return []
   return [`${match[1]}-nightly.${match[2]}`]
 }

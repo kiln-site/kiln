@@ -9,7 +9,11 @@ import {
 } from "node:fs/promises"
 import { join } from "node:path"
 
-import { resolveKilnGitRepository } from "../../../packages/contracts/src/git-repository.ts"
+import {
+  DEFAULT_KILN_GIT_REPO,
+  kilnCliPackageName,
+  resolveKilnGitRepository,
+} from "../../../packages/contracts/src/git-repository.ts"
 import { resolveCliVersion } from "./version.mjs"
 
 const root = join(import.meta.dir, "..")
@@ -18,6 +22,15 @@ const dist = join(root, "dist")
 const npmDist = join(dist, "npm")
 const version = await resolveCliVersion({ repositoryRoot })
 const gitRepository = resolveKilnGitRepository(process.env.KILN_GIT_REPO)
+const packageName = kilnCliPackageName(
+  process.env.KILN_CLI_PACKAGE,
+  gitRepository
+)
+const defaultUrl =
+  process.env.KILN_CLI_DEFAULT_URL?.trim() ||
+  (gitRepository === DEFAULT_KILN_GIT_REPO ? "https://kiln.site" : "")
+if (defaultUrl && !/^https?:\/\//u.test(defaultUrl))
+  throw new Error("KILN_CLI_DEFAULT_URL must be an HTTP(S) URL")
 const npmOnly = process.argv.includes("--npm-only")
 
 await rm(dist, { force: true, recursive: true })
@@ -56,6 +69,8 @@ async function buildNpmPackage() {
     target: "node",
     define: {
       "process.env.KILN_VERSION": JSON.stringify(version),
+      "process.env.KILN_CLI_PACKAGE": JSON.stringify(packageName),
+      "process.env.KILN_CLI_DEFAULT_URL": JSON.stringify(defaultUrl),
     },
   })
   if (!result.success) {
@@ -113,6 +128,10 @@ function buildBunExecutable(outfile) {
     "--sourcemap=linked",
     "--define",
     `process.env.KILN_VERSION=${JSON.stringify(version)}`,
+    "--define",
+    `process.env.KILN_CLI_PACKAGE=${JSON.stringify(packageName)}`,
+    "--define",
+    `process.env.KILN_CLI_DEFAULT_URL=${JSON.stringify(defaultUrl)}`,
     "--compile",
   ])
 
@@ -123,7 +142,7 @@ function buildBunExecutable(outfile) {
 
 function publishedManifest() {
   return {
-    name: "kiln-cli",
+    name: packageName,
     version,
     description:
       "Command-line access to Kiln and self-hosted Hearth instances.",
@@ -135,7 +154,7 @@ function publishedManifest() {
       url: `git+${gitRepository}.git`,
       directory: "apps/cli",
     },
-    homepage: "https://kiln.site",
+    homepage: defaultUrl || gitRepository,
     bugs: `${gitRepository}/issues`,
     license: "SEE LICENSE IN LICENSE",
     keywords: ["kiln", "hearth", "server", "cli"],

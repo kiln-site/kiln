@@ -1,8 +1,13 @@
 name: Code checks
 
 on:
+  pull_request:
   workflow_call:
   workflow_dispatch:
+
+concurrency:
+  group: checks-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -14,7 +19,7 @@ jobs:
     services:
       # Backs the opt-in MySQL access migration fixture; unit tests ignore it.
       mysql:
-        image: mysql:8.4
+        image: ${{ matrix.name == 'Tests' && 'mysql:8.4' || '' }}
         env:
           MYSQL_ROOT_PASSWORD: root
           MYSQL_DATABASE: kiln_migration_test
@@ -34,17 +39,10 @@ jobs:
               vp run -r typecheck
               vp check
           - name: Tests
-            # Mirrors the root "test" script; the runner has vp but not pnpm.
             command: |
-              vp run -r test
               ACCESS_MIGRATION_TEST=1 DB_HOST=127.0.0.1 DB_PORT=3306 \
                 DB_NAME=kiln_migration_test DB_USERNAME=root DB_PASSWORD=root \
-                node --test scripts/dev-docker-helpers.test.mjs \
-                  scripts/effect-boundaries.test.mjs \
-                  scripts/image-source-compatibility.test.mjs \
-                  scripts/relay-runtime-manifest.test.mjs \
-                  scripts/migrate-app.test.mjs \
-                  apps/web/scripts/migrate-access.test.mjs
+                vp run -r test
           - name: Build
             command: |
               vp run -r build

@@ -9,6 +9,7 @@ import { fileURLToPath } from "node:url"
 
 import {
   brickIdExceedsRecommendedLength,
+  kilnDefaultEmberImage,
   brickCatalogDocumentSchema,
   brickRecipeSchema,
   relayCatalogSchema,
@@ -63,7 +64,11 @@ interface ResolvedCatalogSource {
 
 export async function loadBrickCatalogSource(
   input: string,
-  options: { allowFile?: boolean; timeoutMs?: number } = {}
+  options: {
+    allowFile?: boolean
+    timeoutMs?: number
+    distributionRepository?: string
+  } = {}
 ): Promise<LoadedBrickCatalog> {
   const deadline = AbortSignal.timeout(
     options.timeoutMs ?? CATALOG_LOAD_TIMEOUT_MS
@@ -100,6 +105,12 @@ export async function loadBrickCatalogSource(
           source
         )
       )
+      if (options.distributionRepository) {
+        parsedRecipe.runtime.image = kilnDefaultEmberImage(
+          parsedRecipe.runtime.image,
+          options.distributionRepository
+        )
+      }
       const recipe = resolveRecipeIconSource(
         parsedRecipe,
         source,

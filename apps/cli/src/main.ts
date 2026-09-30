@@ -42,7 +42,7 @@ import { z } from "zod"
 
 import { parseArguments, type CliArguments } from "./args.js"
 import {
-  normalizeKilnUrl,
+  resolveLoginTargetEffect,
   removeSessionEffect,
   resolveSessionEffect,
   saveSessionEffect,
@@ -574,19 +574,10 @@ const loginEffect = Effect.fn("cli.login")(function* (
   args: CliArguments,
   positionalUrl?: string
 ) {
-  const url = yield* Effect.try({
-    try: () => normalizeKilnUrl(args.url || positionalUrl || "kiln.site"),
-    catch: (cause) =>
-      cause instanceof CliCommandError
-        ? cause
-        : commandError({
-            cause,
-            code: "invalid_url",
-            exitCode: 2,
-            message: "The Kiln URL is invalid.",
-          }),
+  const { url, profile } = yield* resolveLoginTargetEffect({
+    profile: args.profile,
+    url: args.url || positionalUrl,
   })
-  const profile = args.profile || "default"
   const name = args.name?.trim() || `${hostname()} (${platform()}/${arch()})`
   const device = yield* publicJsonEffect(
     url,

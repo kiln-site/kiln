@@ -40,9 +40,12 @@ FROM restic/restic:0.19.1 AS restic
 
 FROM gcr.io/distroless/nodejs24-debian12 AS runtime
 
-ENV KILN_GIT_REPO=https://github.com/kiln-site/kiln
+ARG KILN_GIT_REPO=https://github.com/kiln-site/kiln
+ENV KILN_GIT_REPO=$KILN_GIT_REPO
+ENV KILN_DEFAULT_GIT_REPO=$KILN_GIT_REPO
 ENV NODE_ENV=production
-ENV SENTRY_DSN=https://9516d942af12672a1ff5aa7f181f7217@o4511745768226816.ingest.us.sentry.io/4511745775501312
+ARG SENTRY_DSN
+ENV SENTRY_DSN=$SENTRY_DSN
 ENV SENTRY_TRACES_SAMPLE_RATE=0.05
 WORKDIR /app
 
@@ -60,7 +63,8 @@ ARG SOURCE_COMMIT
 
 # Keep the legacy source label until older Relays have received the
 # repository-rename compatibility check.
-LABEL org.opencontainers.image.source="https://github.com/kiln-site/hearth" \
+ARG KILN_IMAGE_SOURCE=https://github.com/kiln-site/hearth
+LABEL org.opencontainers.image.source="${KILN_IMAGE_SOURCE}" \
   org.opencontainers.image.version="${KILN_VERSION}" \
   org.opencontainers.image.revision="${SOURCE_COMMIT}" \
   io.kiln.component="relay"

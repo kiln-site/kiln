@@ -49,10 +49,14 @@ services:
       - "127.0.0.1:3306:3306"
 
   relay:
-    image: ghcr.io/kiln-site/relay:latest
+    image: ${KILN_IMAGE_PREFIX:-ghcr.io/kiln-site}/relay:${KILN_IMAGE_TAG:-latest}
     build:
       context: .
       dockerfile: apps/relay/Dockerfile
+      args:
+        KILN_GIT_REPO: ${KILN_GIT_REPO:-https://github.com/kiln-site/kiln}
+        KILN_IMAGE_SOURCE: ${KILN_GIT_REPO:-https://github.com/kiln-site/hearth}
+        SENTRY_DSN: ${SENTRY_DSN:-}
     restart: unless-stopped
     environment:
       KILN_GIT_REPO: ${KILN_GIT_REPO:-}
@@ -92,7 +96,7 @@ services:
       KILN_RELAY_TLS_CERT_FILE: ${KILN_RELAY_TLS_CERT_FILE:-}
       KILN_RELAY_TLS_KEY_FILE: ${KILN_RELAY_TLS_KEY_FILE:-}
       MCLOGS_API_URL: ${MCLOGS_API_URL:-}
-      SENTRY_DSN: ${SENTRY_DSN-https://9516d942af12672a1ff5aa7f181f7217@o4511745768226816.ingest.us.sentry.io/4511745775501312}
+      SENTRY_DSN: ${SENTRY_DSN:-}
       SENTRY_ENVIRONMENT: ${SENTRY_ENVIRONMENT:-}
       SENTRY_RELEASE: ${SENTRY_RELEASE:-}
       SENTRY_TRACES_SAMPLE_RATE: ${SENTRY_TRACES_SAMPLE_RATE:-0.05}
@@ -106,12 +110,15 @@ services:
       io.kiln.installation: ${KILN_INSTALLATION_ID:-}
 
   hearth:
-    image: ghcr.io/kiln-site/hearth:latest
+    image: ${KILN_IMAGE_PREFIX:-ghcr.io/kiln-site}/hearth:${KILN_IMAGE_TAG:-latest}
     build:
       context: .
       dockerfile: apps/web/Dockerfile
       args:
-        VITE_SENTRY_DSN: ${VITE_SENTRY_DSN-https://9516d942af12672a1ff5aa7f181f7217@o4511745768226816.ingest.us.sentry.io/4511745775501312}
+        KILN_GIT_REPO: ${KILN_GIT_REPO:-https://github.com/kiln-site/kiln}
+        KILN_IMAGE_SOURCE: ${KILN_GIT_REPO:-https://github.com/kiln-site/hearth}
+        SENTRY_DSN: ${SENTRY_DSN:-}
+        VITE_SENTRY_DSN: ${VITE_SENTRY_DSN:-}
         VITE_SENTRY_REPLAYS_SESSION_SAMPLE_RATE: ${VITE_SENTRY_REPLAYS_SESSION_SAMPLE_RATE:-0.05}
         VITE_SENTRY_TRACES_SAMPLE_RATE: ${VITE_SENTRY_TRACES_SAMPLE_RATE:-0.05}
     restart: unless-stopped
@@ -157,7 +164,7 @@ services:
       RESEND_API_KEY: ${RESEND_API_KEY:-}
       RESEND_FROM_EMAIL: ${RESEND_FROM_EMAIL:-}
       MCLOGS_API_URL: ${MCLOGS_API_URL:-}
-      SENTRY_DSN: ${SENTRY_DSN-https://9516d942af12672a1ff5aa7f181f7217@o4511745768226816.ingest.us.sentry.io/4511745775501312}
+      SENTRY_DSN: ${SENTRY_DSN:-}
       SENTRY_ENVIRONMENT: ${SENTRY_ENVIRONMENT:-}
       SENTRY_RELEASE: ${SENTRY_RELEASE:-}
       SENTRY_TRACES_SAMPLE_RATE: ${SENTRY_TRACES_SAMPLE_RATE:-0.05}
