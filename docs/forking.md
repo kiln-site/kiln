@@ -17,7 +17,7 @@ Under **Settings → Secrets and variables → Actions → Variables**, configur
 | ---------------------- | -------------------------------------------------------------------------------------------------------- | ---------------------------------- |
 | `PUBLISH_IMAGES`       | Set to `true` to publish releases and images. Unset means checks/builds only.                            | `true`                             |
 | `INITIAL_RELEASE_LINE` | Optional starting version before the first stable promotion; defaults to `0.1.0`.                        | Leave unset                        |
-| `NPM_PACKAGE`          | npm package you own. Setting this enables CLI publishing after app releases.                             | `kiln-cli`                         |
+| `NPM_PACKAGE`          | npm package you own. Enables npm publishing; CLI release downloads are always attached.                 | `kiln-cli`                         |
 | `CLI_DEFAULT_URL`      | Optional default panel URL embedded in the CLI. Fork builds without this require a URL or saved profile. | `https://kiln.site`                |
 | `BUILD_RUNNER_AMD64`   | Optional runner label for push-triggered image builds.                                                   | `blacksmith-4vcpu-ubuntu-2404`     |
 | `BUILD_RUNNER_ARM64`   | Optional ARM64 runner label for push-triggered image builds.                                             | `blacksmith-4vcpu-ubuntu-2404-arm` |
@@ -167,7 +167,7 @@ scoped to the existing URL/profile system.
   precedence over that bootstrap setting.
 - Retrying a release preserves published image digests. A retry can finish
   rolling-tag updates after a partial failure. Use **Publish CLI** with the exact
-  release tag to retry npm separately.
+  release tag to retry CLI release downloads and npm separately.
 - Nightly configuration resolves the version only on the initial attempt. For
   downstream failures, use **Re-run failed jobs** to reuse the successful
   configuration job's outputs. Full nightly reruns, or rerunning configuration

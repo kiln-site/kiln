@@ -47,8 +47,12 @@ kiln --version
 kiln whoami
 ```
 
-If the binary is missing, report that before suggesting installation. If
-authentication is missing, use the appropriate login flow:
+If the binary is missing, report that before suggesting installation. GitHub
+releases include standalone archives for Linux/macOS (x64 and ARM64) and Windows
+(x64), plus an npm package tarball. Extract `kiln` or `kiln.exe` onto `PATH` for
+an installation without Node.js or Bun; update it by replacing the executable
+from a newer release. `kiln update` updates package-manager installations.
+If authentication is missing, use the appropriate login flow:
 
 ```sh
 kiln login
