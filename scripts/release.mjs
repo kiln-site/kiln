@@ -2,11 +2,12 @@ import { execFile, execFileSync } from "node:child_process"
 import { createHash } from "node:crypto"
 import {
   appendFileSync,
+  mkdirSync,
   readFileSync,
   readdirSync,
   writeFileSync,
 } from "node:fs"
-import { resolve } from "node:path"
+import { dirname, resolve } from "node:path"
 import { pathToFileURL } from "node:url"
 import { promisify } from "node:util"
 
@@ -97,6 +98,68 @@ export function releaseConfiguration(environment, timestamp, latestStable) {
     source: kilnImageSource(repository),
     version: `${line}-nightly.${stamp}`,
   }
+}
+
+export async function workflowReleaseConfiguration(
+  environment,
+  timestamp,
+  loadLatestStable = latestStableManifest
+) {
+  if (environment.KILN_RESOLVE_RELEASE_LINE !== "true")
+    return releaseConfiguration(environment, timestamp)
+
+  const path = environment.KILN_RELEASE_CONFIG
+  const runId = environment.GITHUB_RUN_ID
+  const commit = environment.GITHUB_SHA
+  if (!path || !runId || !commit)
+    throw new Error(
+      "Nightly configuration requires an artifact path, run ID, and commit"
+    )
+
+  if (environment.GITHUB_RUN_ATTEMPT !== "1") {
+    // Never consult today's release line when retrying an older checkout.
+    let saved
+    try {
+      saved = JSON.parse(readFileSync(path, "utf8"))
+    } catch (cause) {
+      throw new Error(
+        "Cannot retry without the original nightly release configuration. Restore this run's artifact or start a new Nightly release run from main.",
+        { cause }
+      )
+    }
+    if (
+      saved?.runId !== runId ||
+      saved.commit !== commit ||
+      !isKilnReleaseVersion(saved.config?.version) ||
+      !saved.config.version.includes("-nightly.")
+    )
+      throw new Error("Saved nightly configuration does not match this run")
+    const expected = releaseConfiguration(
+      {
+        ...environment,
+        KILN_INITIAL_RELEASE_LINE: saved.config.version.split("-nightly.")[0],
+      },
+      timestamp
+    )
+    if (
+      Object.entries(expected).some(
+        ([key, value]) => saved.config[key] !== value
+      )
+    )
+      throw new Error(
+        "Saved nightly configuration does not match this checkout"
+      )
+    return expected
+  }
+
+  const config = releaseConfiguration(
+    environment,
+    timestamp,
+    await loadLatestStable()
+  )
+  mkdirSync(dirname(path), { recursive: true })
+  writeFileSync(path, `${JSON.stringify({ runId, commit, config }, null, 2)}\n`)
+  return config
 }
 
 export function validateReleaseManifest(manifest, repository, version) {
@@ -484,14 +547,9 @@ if (
 ) {
   switch (process.argv[2]) {
     case "config": {
-      const latestStable =
-        process.env.KILN_RESOLVE_RELEASE_LINE === "true"
-          ? await latestStableManifest()
-          : undefined
-      const config = releaseConfiguration(
+      const config = await workflowReleaseConfiguration(
         process.env,
-        run("git", ["show", "-s", "--format=%cI", "HEAD"]),
-        latestStable
+        run("git", ["show", "-s", "--format=%cI", "HEAD"])
       )
       for (const [name, value] of Object.entries(config)) output(name, value)
       break

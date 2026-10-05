@@ -1,4 +1,7 @@
 import assert from "node:assert/strict"
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
 import test from "node:test"
 
 import {
@@ -8,6 +11,7 @@ import {
   validateNextReleaseLine,
   validateReleaseManifest,
   validateStablePromotion,
+  workflowReleaseConfiguration,
 } from "./release.mjs"
 import { kilnImageRepository } from "../packages/contracts/src/git-repository.ts"
 import { isKilnReleaseVersion } from "../packages/contracts/src/release-version.ts"
@@ -130,6 +134,103 @@ const publishedRelease = (version) => ({
 const nightly = "1.2.0-nightly.20260930.120000"
 const olderNightly = "1.2.0-nightly.20260929.120000"
 const newerNightly = "1.2.0-nightly.20260930.130000"
+
+test("a nightly retry keeps its original version across stable promotion", async (t) => {
+  const directory = mkdtempSync(join(tmpdir(), "kiln-release-config-"))
+  t.after(() => rmSync(directory, { recursive: true, force: true }))
+  const environment = {
+    GITHUB_REPOSITORY: "example/fork",
+    GITHUB_RUN_ID: "123",
+    GITHUB_RUN_ATTEMPT: "1",
+    GITHUB_SHA: "a".repeat(40),
+    KILN_INITIAL_RELEASE_LINE: "1.2.0",
+    KILN_RESOLVE_RELEASE_LINE: "true",
+    KILN_RELEASE_CONFIG: join(directory, "release-config.json"),
+  }
+  const timestamp = "2026-09-30T12:00:00Z"
+  let stable
+  let requests = 0
+  const loadStable = async () => {
+    requests++
+    return stable
+  }
+  const original = await workflowReleaseConfiguration(
+    environment,
+    timestamp,
+    loadStable
+  )
+  assert.equal(original.version, nightly)
+  const artifact = readFileSync(environment.KILN_RELEASE_CONFIG, "utf8")
+  const published = [nightly, newerNightly].map(publishedRelease)
+  validateStablePromotion(published, newerNightly)
+  stable = { version: "1.2.0", nextReleaseLine: "1.3.0" }
+  published.push(publishedRelease(stable.version))
+
+  const retry = await workflowReleaseConfiguration(
+    {
+      ...environment,
+      GITHUB_RUN_ATTEMPT: "2",
+      KILN_INITIAL_RELEASE_LINE: "9.0.0",
+    },
+    timestamp,
+    loadStable
+  )
+  assert.deepEqual(retry, original)
+  assert.equal(requests, 1, "retries must not query the current release line")
+  assert.equal(readFileSync(environment.KILN_RELEASE_CONFIG, "utf8"), artifact)
+  assert.deepEqual(nightlyRollingTags(published, retry.version), [])
+
+  const next = await workflowReleaseConfiguration(
+    {
+      ...environment,
+      GITHUB_RUN_ID: "124",
+      KILN_RELEASE_CONFIG: join(directory, "next.json"),
+    },
+    "2026-09-30T14:00:00Z",
+    loadStable
+  )
+  assert.equal(next.version, "1.3.0-nightly.20260930.140000")
+  assert.equal(requests, 2)
+})
+
+test("retry configuration fails closed if the original artifact is missing or mismatched", async (t) => {
+  const directory = mkdtempSync(join(tmpdir(), "kiln-release-config-"))
+  t.after(() => rmSync(directory, { recursive: true, force: true }))
+  const environment = {
+    GITHUB_REPOSITORY: "example/fork",
+    GITHUB_RUN_ID: "123",
+    GITHUB_RUN_ATTEMPT: "2",
+    GITHUB_SHA: "a".repeat(40),
+    KILN_RESOLVE_RELEASE_LINE: "true",
+    KILN_RELEASE_CONFIG: join(directory, "release-config.json"),
+  }
+  const timestamp = "2026-09-30T12:00:00Z"
+  const resolve = () =>
+    workflowReleaseConfiguration(environment, timestamp, () => {
+      assert.fail("retry must not resolve a replacement version")
+    })
+  await assert.rejects(
+    resolve,
+    /without the original nightly release configuration/u
+  )
+  const saved = {
+    runId: environment.GITHUB_RUN_ID,
+    commit: environment.GITHUB_SHA,
+    config: releaseConfiguration(environment, timestamp),
+  }
+  for (const invalid of [
+    { ...saved, runId: "456" },
+    { ...saved, commit: "b".repeat(40) },
+    { ...saved, config: { ...saved.config, prefix: "ghcr.io/another/fork" } },
+    {
+      ...saved,
+      config: { ...saved.config, version: "0.1.0-nightly.20260929.120000" },
+    },
+  ]) {
+    writeFileSync(environment.KILN_RELEASE_CONFIG, JSON.stringify(invalid))
+    await assert.rejects(resolve, /Saved nightly configuration does not match/u)
+  }
+})
 
 test("nightly rolling tags never move backwards or replace an established stable", () => {
   const cases = [

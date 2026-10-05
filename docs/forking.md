@@ -161,6 +161,11 @@ scoped to the existing URL/profile system.
 - Retrying a release preserves published image digests. A retry can finish
   rolling-tag updates after a partial failure. Use **Publish CLI** with the exact
   release tag to retry npm separately.
+- Nightly configuration is saved as a workflow-run artifact before image builds
+  start. Retries reuse that version even after a stable promotion advances the
+  release line. If the original configuration is missing (including a failure
+  before it was saved), the retry stops; start a new **Nightly release** run from
+  `main` instead. Keep the configuration artifact when cleaning up run artifacts.
 - Required PR check names are now `Static checks`, `Tests`, and `Build`, rather
   than the nested code-check job names under Container images. Update rulesets
   referencing the old names. Image-check job names remain separate.
