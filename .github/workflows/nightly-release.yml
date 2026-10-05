@@ -57,6 +57,13 @@ jobs:
         VITE_SENTRY_TRACES_SAMPLE_RATE=${{ vars.VITE_SENTRY_TRACES_SAMPLE_RATE || '0.05' }}
         SENTRY_SOURCEMAPS=${{ matrix.component == 'hearth' && vars.SENTRY_ORG != '' && vars.SENTRY_PROJECT != '' && 'prepare' || '' }}
 
+  cli_build:
+    needs: config
+    uses: ./.github/workflows/build-cli.yml
+    with:
+      ref: ${{ github.sha }}
+      version: ${{ needs.config.outputs.version }}
+
   sentry:
     name: Publish Sentry source maps
     needs: images
@@ -131,7 +138,8 @@ jobs:
     permissions:
       contents: write
       id-token: write
-    needs: release
+    needs: [release, cli_build]
     uses: ./.github/workflows/publish-cli.yml
     with:
       tag: ${{ needs.release.outputs.tag }}
+      prepared_sha: ${{ github.sha }}

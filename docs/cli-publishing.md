@@ -1,8 +1,12 @@
 # CLI publishing
 
-CLI publication follows the exact app tag after **Nightly release** or
-**Stable release** succeeds. Every platform compiles once. The same signed binary
-is copied into its GitHub archive, its raw update asset, and its npm package.
+CLI publication follows the exact app tag after the nightly app release or
+stable promotion succeeds. Nightly CLI builds run alongside container builds
+using the resolved version and source commit; publication verifies that commit
+against the release tag before consuming the prepared artifacts. Stable releases
+and manual retries build from the existing tag through the same build workflow.
+Every platform compiles once. The same signed binary is copied into its GitHub
+archive, its raw update asset, and its npm package.
 
 Release assets include:
 
@@ -23,7 +27,9 @@ by GitHub's release API before installing them.
 `-linux-x64`, `-linux-arm64`, `-darwin-x64`, `-darwin-arm64`, `-windows-x64`.
 Each platform package includes only that platform's executable and declares
 npm `os`/`cpu` constraints. All six package names need npm publishing access and
-trusted-publisher configuration. Publish platform packages before the launcher.
+trusted-publisher configuration. Platform packages publish concurrently. All five
+must succeed or already exist before the launcher publishes; a failed upload
+blocks the launcher after the other in-flight uploads finish.
 
 The launcher copies its platform binary into its own `native/` directory, never
 hard-linking it to the package-manager store. A postinstall script prepares it;
