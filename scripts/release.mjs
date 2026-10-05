@@ -14,7 +14,6 @@ import {
   kilnImagePrefix,
   kilnImageRepository,
   kilnImageSource,
-  kilnGitRepositorySlug,
   resolveKilnGitRepository,
 } from "../packages/contracts/src/git-repository.ts"
 import {
@@ -100,116 +99,19 @@ export function releaseConfiguration(environment, timestamp, latestStable) {
   }
 }
 
-function githubRunConfigurationStore(environment) {
-  const base = `repos/${kilnGitRepositorySlug(environment.GITHUB_REPOSITORY)}/git`
-  const tag = `nightly-run/${environment.GITHUB_RUN_ID}`
-  return {
-    async read() {
-      const ref = JSON.parse(
-        await runAsync("gh", ["api", `${base}/ref/tags/${tag}`])
-      )
-      if (ref.object?.type !== "tag")
-        throw new Error("Expected an annotated nightly run tag")
-      const record = JSON.parse(
-        await runAsync("gh", ["api", `${base}/tags/${ref.object.sha}`])
-      )
-      if (
-        record.tag !== tag ||
-        record.object?.type !== "commit" ||
-        record.object.sha !== environment.GITHUB_SHA
-      )
-        throw new Error("Nightly run tag does not match this checkout")
-      return JSON.parse(record.message)
-    },
-    async create(saved) {
-      const record = JSON.parse(
-        await runAsync("gh", [
-          "api",
-          `${base}/tags`,
-          "--method",
-          "POST",
-          "-f",
-          `tag=${tag}`,
-          "-f",
-          `object=${saved.commit}`,
-          "-f",
-          "type=commit",
-          "-f",
-          `message=${JSON.stringify(saved)}`,
-        ])
-      )
-      // Create only: never update/force an existing run's configuration.
-      await runAsync("gh", [
-        "api",
-        `${base}/refs`,
-        "--method",
-        "POST",
-        "-f",
-        `ref=refs/tags/${tag}`,
-        "-f",
-        `sha=${record.sha}`,
-      ])
-    },
-  }
-}
-
 export async function workflowReleaseConfiguration(
   environment,
   timestamp,
-  loadLatestStable = latestStableManifest,
-  store = githubRunConfigurationStore(environment)
+  loadLatestStable = latestStableManifest
 ) {
   if (environment.KILN_RESOLVE_RELEASE_LINE !== "true")
     return releaseConfiguration(environment, timestamp)
 
-  const runId = environment.GITHUB_RUN_ID
-  const commit = environment.GITHUB_SHA
-  if (!/^\d+$/u.test(runId ?? "") || !/^[a-f0-9]{40}$/u.test(commit ?? ""))
-    throw new Error("Nightly configuration requires a run ID and commit")
+  // A rerun must never resolve a new release line for an old checkout.
+  if (environment.GITHUB_RUN_ATTEMPT !== "1")
+    throw new Error("Start a new Nightly release from main.")
 
-  if (environment.GITHUB_RUN_ATTEMPT !== "1") {
-    // Never consult today's release line when retrying an older checkout.
-    let saved
-    try {
-      saved = await store.read()
-    } catch (cause) {
-      throw new Error(
-        "Cannot load the original nightly release configuration. Check access to the nightly-run tag; if it is missing, start a new Nightly release run from main.",
-        { cause }
-      )
-    }
-    if (
-      saved?.runId !== runId ||
-      saved.commit !== commit ||
-      !isKilnReleaseVersion(saved.config?.version) ||
-      !saved.config.version.includes("-nightly.")
-    )
-      throw new Error("Saved nightly configuration does not match this run")
-    const expected = releaseConfiguration(
-      {
-        ...environment,
-        KILN_INITIAL_RELEASE_LINE: saved.config.version.split("-nightly.")[0],
-      },
-      timestamp
-    )
-    if (
-      Object.entries(expected).some(
-        ([key, value]) => saved.config[key] !== value
-      )
-    )
-      throw new Error(
-        "Saved nightly configuration does not match this checkout"
-      )
-    return expected
-  }
-
-  const config = releaseConfiguration(
-    environment,
-    timestamp,
-    await loadLatestStable()
-  )
-  await store.create({ runId, commit, config })
-  return config
+  return releaseConfiguration(environment, timestamp, await loadLatestStable())
 }
 
 export function validateReleaseManifest(manifest, repository, version) {

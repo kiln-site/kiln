@@ -132,118 +132,35 @@ const nightly = "1.2.0-nightly.20260930.120000"
 const olderNightly = "1.2.0-nightly.20260929.120000"
 const newerNightly = "1.2.0-nightly.20260930.130000"
 
-test("a nightly retry keeps its original version across stable promotion", async () => {
-  const records = new Map()
-  const store = (runId) => ({
-    read: async () => structuredClone(records.get(runId)),
-    create: async (record) => {
-      assert.ok(!records.has(runId), "must not overwrite durable metadata")
-      records.set(runId, structuredClone(record))
-    },
-  })
+test("nightly configuration reruns fail before resolving a release line", async () => {
   const environment = {
     GITHUB_REPOSITORY: "example/fork",
-    GITHUB_RUN_ID: "123",
-    GITHUB_RUN_ATTEMPT: "1",
-    GITHUB_SHA: "a".repeat(40),
-    KILN_INITIAL_RELEASE_LINE: "1.2.0",
     KILN_RESOLVE_RELEASE_LINE: "true",
+    GITHUB_RUN_ATTEMPT: "1",
   }
   const timestamp = "2026-09-30T12:00:00Z"
-  let stable
-  let requests = 0
-  const loadStable = async () => {
-    requests++
-    return stable
-  }
-  const original = await workflowReleaseConfiguration(
+  const first = await workflowReleaseConfiguration(
     environment,
     timestamp,
-    loadStable,
-    store(environment.GITHUB_RUN_ID)
+    async () => ({
+      version: "1.2.0",
+      nextReleaseLine: "1.3.0",
+    })
   )
-  assert.equal(original.version, nightly)
-  const saved = structuredClone(records.get(environment.GITHUB_RUN_ID))
-  const published = [nightly, newerNightly].map(publishedRelease)
-  validateStablePromotion(published, newerNightly)
-  stable = { version: "1.2.0", nextReleaseLine: "1.3.0" }
-  published.push(publishedRelease(stable.version))
+  assert.equal(first.version, "1.3.0-nightly.20260930.120000")
 
-  const retry = await workflowReleaseConfiguration(
-    {
-      ...environment,
-      GITHUB_RUN_ATTEMPT: "2",
-      KILN_INITIAL_RELEASE_LINE: "9.0.0",
-    },
-    timestamp,
-    loadStable,
-    store(environment.GITHUB_RUN_ID)
-  )
-  assert.deepEqual(retry, original)
-  assert.equal(requests, 1, "retries must not query the current release line")
-  assert.deepEqual(records.get(environment.GITHUB_RUN_ID), saved)
-  assert.deepEqual(nightlyRollingTags(published, retry.version), [])
-
-  const next = await workflowReleaseConfiguration(
-    {
-      ...environment,
-      GITHUB_RUN_ID: "124",
-    },
-    "2026-09-30T14:00:00Z",
-    loadStable,
-    store("124")
-  )
-  assert.equal(next.version, "1.3.0-nightly.20260930.140000")
-  assert.equal(requests, 2)
-})
-
-test("retry configuration fails closed if durable metadata is missing or mismatched", async () => {
-  let record
-  const store = {
-    read: async () => {
-      if (!record) throw new Error("Missing run tag")
-      return record
-    },
-    create: async () => assert.fail("must not replace missing retry metadata"),
-  }
-  const environment = {
-    GITHUB_REPOSITORY: "example/fork",
-    GITHUB_RUN_ID: "123",
-    GITHUB_RUN_ATTEMPT: "2",
-    GITHUB_SHA: "a".repeat(40),
-    KILN_RESOLVE_RELEASE_LINE: "true",
-  }
-  const timestamp = "2026-09-30T12:00:00Z"
-  const resolve = () =>
-    workflowReleaseConfiguration(
-      environment,
-      timestamp,
-      () => {
-        assert.fail("retry must not resolve a replacement version")
-      },
-      store
-    )
+  const retry = { ...environment, GITHUB_RUN_ATTEMPT: "2" }
+  const unexpectedRead = () => assert.fail("must not read release state")
   await assert.rejects(
-    resolve,
-    /Cannot load the original nightly release configuration/u
+    workflowReleaseConfiguration(retry, timestamp, unexpectedRead),
+    /Start a new Nightly release from main/u
   )
-  const saved = {
-    runId: environment.GITHUB_RUN_ID,
-    commit: environment.GITHUB_SHA,
-    config: releaseConfiguration(environment, timestamp),
-  }
-  for (const invalid of [
-    { ...saved, runId: "456" },
-    { ...saved, commit: "b".repeat(40) },
-    { ...saved, config: { ...saved.config, prefix: "ghcr.io/another/fork" } },
-    {
-      ...saved,
-      config: { ...saved.config, version: "0.1.0-nightly.20260929.120000" },
-    },
-  ]) {
-    record = invalid
-    await assert.rejects(resolve, /Saved nightly configuration does not match/u)
-  }
+  // PR and Ember configuration can still be rerun without reading release state.
+  await workflowReleaseConfiguration(
+    { ...retry, KILN_RESOLVE_RELEASE_LINE: "false" },
+    timestamp,
+    unexpectedRead
+  )
 })
 
 test("nightly rolling tags never move backwards or replace an established stable", () => {

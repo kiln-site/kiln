@@ -161,14 +161,12 @@ scoped to the existing URL/profile system.
 - Retrying a release preserves published image digests. A retry can finish
   rolling-tag updates after a partial failure. Use **Publish CLI** with the exact
   release tag to retry npm separately.
-- Before image builds start, nightly configuration is saved in an annotated Git
-  tag, `nightly-run/<GitHub run ID>`, pointing to the source commit. Both full and
-  partial reruns reuse that record, even after a stable promotion advances the
-  release line. These metadata tags are never overwritten and are not releases.
-  Keep them when cleaning up tags. If a record is missing (including a failure
-  before it was saved), the retry stops; start a new **Nightly release** run from
-  `main` instead. Forks with tag rulesets must allow the release workflow to
-  create `nightly-run/*` tags using its existing `contents: write` permission.
+- Nightly configuration resolves the version only on the initial attempt. For
+  downstream failures, use **Re-run failed jobs** to reuse the successful
+  configuration job's outputs. Full nightly reruns, or rerunning configuration
+  itself, stop with **Start a new Nightly release from main.** Start a fresh
+  workflow run from `main` in those cases. No run metadata or permanent run tags
+  are stored.
 - Required PR check names are now `Static checks`, `Tests`, and `Build`, rather
   than the nested code-check job names under Container images. Update rulesets
   referencing the old names. Image-check job names remain separate.

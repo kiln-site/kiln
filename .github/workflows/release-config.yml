@@ -2,6 +2,11 @@ name: Release configuration
 
 on:
   workflow_call:
+    inputs:
+      resolve_release_line:
+        description: Read published state only when preparing an app release
+        type: boolean
+        default: false
     outputs:
       repository:
         value: ${{ jobs.config.outputs.repository }}
@@ -24,11 +29,18 @@ jobs:
       source: ${{ steps.config.outputs.source }}
       version: ${{ steps.config.outputs.version }}
     steps:
+      - name: Reject nightly configuration reruns
+        if: inputs.resolve_release_line && github.run_attempt != 1
+        run: |
+          echo "::error::Start a new Nightly release from main."
+          exit 1
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.1.0
         with:
           node-version-file: .node-version
       - id: config
         env:
+          KILN_RESOLVE_RELEASE_LINE: ${{ inputs.resolve_release_line }}
+          GH_TOKEN: ${{ github.token }}
           KILN_INITIAL_RELEASE_LINE: ${{ vars.INITIAL_RELEASE_LINE }}
         run: node scripts/release.mjs config
