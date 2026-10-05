@@ -6,7 +6,11 @@ try {
   const child = spawn(installBinary(), process.argv.slice(2), {
     stdio: "inherit",
   })
-  const forward = (signal) => child.kill(signal)
+  // Windows delivers Ctrl+C to the child itself, and child.kill() there is a
+  // hard kill that would skip its cleanup. This launcher only has to stay alive.
+  const forward = (signal) => {
+    if (process.platform !== "win32") child.kill(signal)
+  }
   const onInterrupt = () => forward("SIGINT")
   const onTerminate = () => forward("SIGTERM")
   process.on("SIGINT", onInterrupt)

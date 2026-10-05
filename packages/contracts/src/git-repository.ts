@@ -106,7 +106,6 @@ export function kilnCliPackageName(
     (resolved === DEFAULT_KILN_GIT_REPO
       ? "kiln-cli"
       : `@${kilnGitRepositorySlug(resolved).toLowerCase()}-cli`)
-  // Also keeps the Windows updater's cmd.exe arguments free of shell metacharacters.
   if (
     name.length > 214 ||
     !/^(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$/u.test(name)

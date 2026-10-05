@@ -7,6 +7,7 @@ import {
   readdir,
   rm,
   symlink,
+  utimes,
   writeFile,
 } from "node:fs/promises"
 import { tmpdir } from "node:os"
@@ -201,6 +202,18 @@ describe("CLI GitHub updates", () => {
       assert.equal(input.requests.length, 1)
       assert.equal(await readFile(target, "utf8"), "old binary")
       assert.include(await readdir(directory), "kiln.update-lock")
+    })
+  })
+
+  it("reclaims the lock left behind by a killed update", async () => {
+    await fixture(async (directory, target) => {
+      await writeFile(`${target}.update-lock`, "")
+      const lastHour = new Date(Date.now() - 60 * 60 * 1000)
+      await utimes(`${target}.update-lock`, lastHour, lastHour)
+      const result = await Effect.runPromise(updateCliEffect(options(target)))
+      assert.deepEqual(result, { updated: true, version: "1.1.0" })
+      assert.equal(await readFile(target, "utf8"), "new binary")
+      assert.deepEqual(await readdir(directory), ["kiln"])
     })
   })
 

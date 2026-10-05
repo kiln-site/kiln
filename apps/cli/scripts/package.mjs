@@ -36,7 +36,7 @@ export async function packageMain() {
     ...publishedManifest(),
     bin: { kiln: "kiln.cjs" },
     engines: { node: ">=20" },
-    files: ["kiln.cjs", "install.cjs", "skills"],
+    files: ["kiln.cjs", "install.cjs", "skills", "COMMERCIAL_LICENSE.md"],
     scripts: { postinstall: "node install.cjs" },
     optionalDependencies: Object.fromEntries(
       platforms.map((entry) => [`${packageName}-${entry.name}`, version])
@@ -65,7 +65,7 @@ export async function packagePlatform() {
     name: `${packageName}-${platform.name}`,
     os: [platform.os],
     cpu: [platform.cpu],
-    files: ["bin"],
+    files: ["bin", "COMMERCIAL_LICENSE.md"],
   })
   await mkdir(join(directory, "bin"))
   await copyFile(join(dist, binaryName), join(directory, "bin", binaryName))

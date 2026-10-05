@@ -25,6 +25,8 @@ import { CliCommandError, commandError } from "./errors.js"
 
 const execFileAsync = promisify(execFile)
 const maximumBinarySize = 256 * 1024 * 1024
+// Longer than any update can run, so only a killed update's lock is reclaimed.
+const staleLockAge = 15 * 60 * 1000
 const releaseSchema = Schema.Struct({
   tag_name: Schema.String,
   draft: Schema.Boolean,
@@ -88,7 +90,7 @@ export const updateCliEffect = Effect.fn("cli.update")(function* (
 
   // Lock the actual executable, including when invoked through a symlink.
   return yield* Effect.acquireUseRelease(
-    updateOperation(() => open(`${target}.update-lock`, "wx", 0o600)),
+    updateOperation(() => acquireLock(`${target}.update-lock`)),
     () =>
       Effect.acquireUseRelease(
         updateOperation(() => mkdtemp(join(dirname(target), ".kiln-update-"))),
@@ -113,12 +115,13 @@ export const updateCliEffect = Effect.fn("cli.update")(function* (
             return { updated: true, version }
           }),
         (directory) =>
-          Effect.promise(() =>
+          // Cleanup is best-effort: it must not fail an update that already succeeded.
+          Effect.tryPromise(() =>
             rm(directory, { recursive: true, force: true })
           ).pipe(Effect.ignore)
       ),
     (lock) =>
-      Effect.promise(async () => {
+      Effect.tryPromise(async () => {
         await lock.close()
         await rm(`${target}.update-lock`, { force: true })
       }).pipe(Effect.ignore)
@@ -137,6 +140,18 @@ function updateError(cause: unknown): CliCommandError {
     message:
       "Could not update the Kiln CLI. Check the error below, installation-directory permissions, and whether another update is running.",
   })
+}
+
+async function acquireLock(path: string) {
+  try {
+    return await open(path, "wx", 0o600)
+  } catch (cause) {
+    // A killed update cannot release its lock; it must not block updates forever.
+    const lock = await stat(path).catch(() => undefined)
+    if (!lock || Date.now() - lock.mtimeMs < staleLockAge) throw cause
+    await rm(path, { force: true })
+    return open(path, "wx", 0o600)
+  }
 }
 
 async function findRelease(

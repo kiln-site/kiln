@@ -4,11 +4,16 @@ import { dist, packageName, platforms, version } from "./distribution.mjs"
 
 function publish(name, source) {
   try {
-    execFileSync("npm", ["view", `${name}@${version}`, "version"], {
-      stdio: "pipe",
-    })
-    console.log(`${name}@${version} is already published.`)
-    return
+    const published = execFileSync(
+      "npm",
+      ["view", `${name}@${version}`, "version"],
+      { encoding: "utf8", stdio: "pipe" }
+    )
+    // Older npm versions exit successfully, printing nothing, for an unpublished version.
+    if (published.trim() === version) {
+      console.log(`${name}@${version} is already published.`)
+      return
+    }
   } catch {
     // npm publish still rejects network/authentication failures and immutable versions.
   }
