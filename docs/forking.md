@@ -131,9 +131,16 @@ scoped to the existing URL/profile system.
 ## Everyday PR and release workflow
 
 - Open and update PRs normally. **Code checks** runs directly on PRs; **Container
-  images** validates both architectures without logging in or writing to GHCR.
-  Ember changes also run their existing recipe/image checks. PR and Ember
+  images** validates both architectures without publishing release images.
+  With `PUBLISH_IMAGES=true`, PRs from the same repository log in to GHCR and
+  refresh its build caches. Fork PRs and Dependabot PRs do not log in or upload
+  caches. Ember changes also run their existing recipe/image checks. PR and Ember
   configuration does not fetch release history or manifests.
+- Build caches use the image namespace, for example
+  `ghcr.io/example/my-panel/hearth-build-cache:amd64`. Kiln keeps its existing
+  `ghcr.io/kiln-site/hearth-build-cache:amd64` location. Release builds reuse these
+  caches without uploading them. A missing cache does not prevent a build; make
+  cache packages public if external PRs should be able to reuse them anonymously.
 - Pushes to `main` run the same code checks. With publishing enabled, image
   builds run in parallel, but a discoverable release and rolling tags are only
   published after checks succeed. Failed validation may leave untagged build

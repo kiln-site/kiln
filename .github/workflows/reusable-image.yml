@@ -50,7 +50,7 @@ on:
         type: boolean
         default: true
       publish:
-        description: Publish images and manifests (validation builds never write to GHCR)
+        description: Publish release images and manifests
         type: boolean
         default: false
       version:
@@ -93,11 +93,26 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
+      - name: Resolve build cache
+        id: cache
+        env:
+          IMAGE: ${{ inputs.image }}
+          CACHE_SCOPE: ${{ inputs.cache_scope }}
+          ARCHITECTURE: ${{ matrix.architecture }}
+          WRITE_CACHE: >-
+            ${{ vars.PUBLISH_IMAGES == 'true'
+                && github.event_name == 'pull_request'
+                && github.event.pull_request.head.repo.full_name == github.repository
+                && github.actor != 'dependabot[bot]' }}
+        run: |
+          echo "ref=${IMAGE%/*}/${CACHE_SCOPE}-build-cache:${ARCHITECTURE}" >> "$GITHUB_OUTPUT"
+          echo "write=$WRITE_CACHE" >> "$GITHUB_OUTPUT"
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
 
       - name: Log in to GitHub Container Registry
-        if: inputs.publish
+        if: inputs.publish || steps.cache.outputs.write == 'true'
         uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4.4.0
         with:
           registry: ghcr.io
@@ -140,7 +155,7 @@ jobs:
             KILN_VERSION=${{ inputs.version }}
           platforms: linux/${{ matrix.architecture }}
           outputs: type=local,dest=/tmp/sentry-source-maps
-          cache-from: type=gha,scope=${{ inputs.cache_scope }}-${{ matrix.architecture }}
+          cache-from: type=registry,ref=${{ steps.cache.outputs.ref }}
           provenance: false
           sbom: false
 
@@ -158,10 +173,10 @@ jobs:
           platforms: linux/${{ matrix.architecture }}
           outputs: ${{ inputs.publish && format('type=image,name={0},push-by-digest=true,name-canonical=true,push=true', inputs.image) || '' }}
           labels: ${{ steps.metadata.outputs.labels }}
-          # Main must populate its own cache: it cannot restore PR-scoped entries.
-          # Keep intermediate dependency stages for subsequent main and PR builds.
-          cache-from: type=gha,scope=${{ inputs.cache_scope }}-${{ matrix.architecture }}
-          cache-to: type=gha,scope=${{ inputs.cache_scope }}-${{ matrix.architecture }},mode=max
+          # Same-repository PRs refresh the shared cache. Release builds only
+          # import it so publishing does not wait for a cache upload.
+          cache-from: type=registry,ref=${{ steps.cache.outputs.ref }}
+          cache-to: ${{ steps.cache.outputs.write == 'true' && format('type=registry,ref={0},mode=max,oci-mediatypes=true,image-manifest=true,compression=zstd', steps.cache.outputs.ref) || '' }}
           provenance: ${{ inputs.publish && inputs.publish_provenance || 'false' }}
           sbom: ${{ inputs.publish && inputs.publish_sbom }}
 
