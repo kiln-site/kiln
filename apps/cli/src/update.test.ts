@@ -5,6 +5,7 @@ import { join, resolve } from "node:path"
 import {
   cliUpdateCommand,
   detectCliPackageManager,
+  isStandaloneCliBinary,
   updateCliEffect,
   type CliUpdateCommand,
 } from "./update.js"
@@ -87,6 +88,34 @@ describe("CLI update", () => {
       assert.strictEqual(failure.message, "npm could not update the Kiln CLI.")
     })
   )
+
+  it.effect("points standalone binaries at GitHub releases", () =>
+    Effect.gen(function* () {
+      const received: Array<CliUpdateCommand> = []
+
+      const failure = yield* updateCliEffect({
+        isStandaloneBinary: () => true,
+        runUpdate: async (command) => {
+          received.push(command)
+        },
+      }).pipe(Effect.flip)
+
+      assert.deepStrictEqual(received, [])
+      assert.strictEqual(failure.code, "cli_update_standalone")
+      assert.include(
+        failure.message,
+        "https://github.com/kiln-site/kiln/releases"
+      )
+    })
+  )
+
+  it("detects standalone binaries by Bun's embedded entrypoint", () => {
+    assert.isTrue(isStandaloneCliBinary("/$bunfs/root/kiln"))
+    assert.isTrue(isStandaloneCliBinary("B:\\~BUN\\root\\kiln.exe"))
+    assert.isFalse(
+      isStandaloneCliBinary("/usr/local/lib/node_modules/kiln-cli/kiln.mjs")
+    )
+  })
 
   it("detects a pnpm-owned global installation", () => {
     const globalRoot = resolve("test-global")

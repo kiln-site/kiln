@@ -4,7 +4,7 @@ import { basename, dirname, join, parse, resolve } from "node:path"
 
 import { Effect, Result } from "effect"
 
-import { cliPackageName } from "./distribution.js"
+import { cliPackageName, cliReleasesUrl } from "./distribution.js"
 
 import { commandError } from "./errors.js"
 import { writeLine } from "./output.js"
@@ -35,6 +35,7 @@ export interface CliPackageManagerDetection {
 
 export interface CliUpdateOptions {
   detectPackageManager?: () => CliPackageManager
+  isStandaloneBinary?: () => boolean
   platform?: NodeJS.Platform
   reportFallback?: (packageManager: Exclude<CliPackageManager, "npm">) => void
   runUpdate?: CliUpdateRunner
@@ -48,6 +49,15 @@ const nodeFileSystem: DetectionFileSystem = {
 export const updateCliEffect = Effect.fn("cli.update")(function* (
   options: CliUpdateOptions = {}
 ) {
+  const isStandaloneBinary =
+    options.isStandaloneBinary ?? (() => isStandaloneCliBinary())
+  if (yield* Effect.sync(isStandaloneBinary)) {
+    return yield* commandError({
+      code: "cli_update_standalone",
+      message: `This Kiln CLI is a standalone binary, so it cannot update itself. Download a newer release from ${cliReleasesUrl()} and replace ${process.execPath}.`,
+    })
+  }
+
   const detectPackageManager =
     options.detectPackageManager ?? detectCliPackageManager
   const packageManager = yield* Effect.sync(() =>
@@ -87,6 +97,18 @@ export function detectCliPackageManager(
   if (isPnpmManagedInstall(packageRoot, filesystem)) return "pnpm"
   if (isBunManagedInstall(entrypointPath, environment)) return "bun"
   return "npm"
+}
+
+// `bun build --compile` serves the bundled entrypoint from its embedded
+// filesystem: /$bunfs/root/ on Unix and B:\~BUN\root\ on Windows.
+export function isStandaloneCliBinary(
+  entrypointPath: string = process.argv[1] ?? ""
+): boolean {
+  const normalizedPath = entrypointPath.replaceAll("\\", "/").toLowerCase()
+  return (
+    normalizedPath.startsWith("/$bunfs/") ||
+    normalizedPath.startsWith("b:/~bun/")
+  )
 }
 
 export function cliUpdateCommand(

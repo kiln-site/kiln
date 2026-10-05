@@ -52,6 +52,8 @@ releases include standalone archives for Linux/macOS (x64 and ARM64) and Windows
 (x64), plus an npm package tarball. Extract `kiln` or `kiln.exe` onto `PATH` for
 an installation without Node.js or Bun; update it by replacing the executable
 from a newer release. `kiln update` updates package-manager installations.
+macOS binaries are not notarized: download with `curl`, or run
+`xattr -d com.apple.quarantine kiln` after extracting a browser download.
 If authentication is missing, use the appropriate login flow:
 
 ```sh
@@ -104,7 +106,10 @@ This reinstalls the distribution's embedded npm package at `latest` (`kiln-cli`
 for official builds) globally through pnpm or Bun when the CLI can
 identify that installer, with npm as the default and fallback. It updates only
 the CLI executable; it does not update Hearth, Relays, or managed servers, and
-it does not require authentication.
+it does not require authentication. A standalone binary cannot update itself:
+`kiln update` fails with `cli_update_standalone` and links the distribution's
+GitHub releases, where the user downloads a newer archive and replaces the
+executable.
 
 ## Resolve a server
 
