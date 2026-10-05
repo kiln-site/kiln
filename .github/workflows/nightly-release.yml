@@ -129,7 +129,7 @@ jobs:
 
   cli:
     permissions:
-      contents: read
+      contents: write
       id-token: write
     needs: release
     uses: ./.github/workflows/publish-cli.yml

@@ -50,7 +50,7 @@ jobs:
 
   cli:
     permissions:
-      contents: read
+      contents: write
       id-token: write
     needs: promote
     uses: ./.github/workflows/publish-cli.yml

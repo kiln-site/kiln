@@ -19,13 +19,14 @@ concurrency:
 
 permissions:
   contents: read
-  id-token: write
 
 jobs:
-  publish:
-    name: Publish CLI package
-    if: vars.NPM_PACKAGE != ''
+  release:
+    name: Resolve CLI release
     runs-on: ubuntu-24.04
+    outputs:
+      tag: ${{ steps.release.outputs.source_ref }}
+      version: ${{ steps.release.outputs.version }}
     steps:
       - name: Check out repository
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -43,10 +44,18 @@ jobs:
           echo "source_ref=$REQUESTED_TAG" >> "$GITHUB_OUTPUT"
           echo "version=${REQUESTED_TAG#v}" >> "$GITHUB_OUTPUT"
 
+  publish:
+    name: Publish CLI package
+    needs: release
+    permissions:
+      contents: write
+      id-token: write
+    runs-on: ubuntu-24.04
+    steps:
       - name: Check out release source
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
-          ref: ${{ steps.release.outputs.source_ref }}
+          ref: ${{ needs.release.outputs.tag }}
 
       - name: Set up Vite+
         uses: voidzero-dev/setup-vp@250f29ce396baf5e8f24498e17c0dfdebabc26eb # v1.15.0
@@ -58,6 +67,7 @@ jobs:
               args: ["--frozen-lockfile"]
 
       - name: Configure npm trusted publishing
+        if: vars.NPM_PACKAGE != ''
         uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.1.0
         with:
           node-version-file: .node-version
@@ -66,7 +76,7 @@ jobs:
 
       - name: Build npm package
         env:
-          KILN_VERSION: ${{ steps.release.outputs.version }}
+          KILN_VERSION: ${{ needs.release.outputs.version }}
           KILN_GIT_REPO: https://github.com/${{ github.repository }}
           KILN_CLI_PACKAGE: ${{ vars.NPM_PACKAGE }}
           KILN_CLI_DEFAULT_URL: ${{ vars.CLI_DEFAULT_URL }}
@@ -79,10 +89,20 @@ jobs:
             apps/cli/dist/npm/skills/kiln-cli
           npm pack --dry-run ./apps/cli/dist/npm
 
+      - name: Pack and upload npm tarball
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.release.outputs.tag }}
+        run: |
+          mkdir -p apps/cli/dist/assets
+          npm pack ./apps/cli/dist/npm --pack-destination apps/cli/dist/assets
+          gh release upload "$RELEASE_TAG" apps/cli/dist/assets/*.tgz --clobber
+
       - name: Check whether the version already exists
+        if: vars.NPM_PACKAGE != ''
         id: published
         env:
-          VERSION: ${{ steps.release.outputs.version }}
+          VERSION: ${{ needs.release.outputs.version }}
           PACKAGE: ${{ vars.NPM_PACKAGE }}
         run: |
           if npm view "$PACKAGE@$VERSION" version >/dev/null 2>&1; then
@@ -92,5 +112,90 @@ jobs:
           fi
 
       - name: Publish package
-        if: steps.published.outputs.exists != 'true'
+        if: vars.NPM_PACKAGE != '' && steps.published.outputs.exists != 'true'
         run: npm publish ./apps/cli/dist/npm --access public --tag latest
+
+  binaries:
+    name: CLI binary (${{ matrix.platform }})
+    needs: release
+    permissions:
+      contents: write
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux-x64
+            runner: ubuntu-24.04
+            binary: kiln
+            archive: tar.gz
+          - platform: linux-arm64
+            runner: ubuntu-24.04-arm
+            binary: kiln
+            archive: tar.gz
+          - platform: darwin-x64
+            runner: macos-15-intel
+            binary: kiln
+            archive: tar.gz
+          - platform: darwin-arm64
+            runner: macos-15
+            binary: kiln
+            archive: tar.gz
+          - platform: windows-x64
+            runner: windows-2025
+            binary: kiln.exe
+            archive: zip
+    defaults:
+      run:
+        shell: bash
+    env:
+      RELEASE_TAG: ${{ needs.release.outputs.tag }}
+      KILN_VERSION: ${{ needs.release.outputs.version }}
+      BINARY: ${{ matrix.binary }}
+      ASSET: kiln-${{ needs.release.outputs.tag }}-${{ matrix.platform }}.${{ matrix.archive }}
+    steps:
+      - name: Check out release source
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ needs.release.outputs.tag }}
+
+      - name: Set up Vite+
+        uses: voidzero-dev/setup-vp@250f29ce396baf5e8f24498e17c0dfdebabc26eb # v1.15.0
+        with:
+          cache: false
+          node-version-file: .node-version
+          run-install: |
+            - cwd: .
+              args: ["--frozen-lockfile"]
+
+      - name: Build CLI binary
+        env:
+          KILN_GIT_REPO: https://github.com/${{ github.repository }}
+          KILN_CLI_PACKAGE: ${{ vars.NPM_PACKAGE }}
+          KILN_CLI_DEFAULT_URL: ${{ vars.CLI_DEFAULT_URL }}
+        run: vp run -F kiln-cli build
+
+      - name: Verify CLI binary
+        run: |
+          test "$("./apps/cli/dist/$BINARY" --version)" = "kiln $KILN_VERSION"
+          "./apps/cli/dist/$BINARY" --help
+
+      - name: Package Linux and macOS binaries
+        if: runner.os != 'Windows'
+        run: |
+          mkdir -p apps/cli/dist/assets
+          tar -czf "apps/cli/dist/assets/$ASSET" \
+            -C apps/cli/dist "$BINARY" \
+            -C npm README.md LICENSE COMMERCIAL_LICENSE.md
+
+      - name: Package Windows binary
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force apps/cli/dist/assets
+          Compress-Archive -Path "apps/cli/dist/$env:BINARY", apps/cli/dist/npm/README.md, apps/cli/dist/npm/LICENSE, apps/cli/dist/npm/COMMERCIAL_LICENSE.md -DestinationPath "apps/cli/dist/assets/$env:ASSET"
+
+      - name: Upload binary archive
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "$RELEASE_TAG" "apps/cli/dist/assets/$ASSET" --clobber

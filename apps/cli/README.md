@@ -20,6 +20,23 @@ npm install --global kiln-cli
 kiln login
 ```
 
+For a standalone installation, download the archive for your OS and architecture
+from your distribution's GitHub release: Linux and macOS use `.tar.gz` (x64 or
+ARM64), and Windows uses `.zip` (x64). Extract `kiln` or `kiln.exe` into a directory
+on your `PATH`. These binaries do not require Node.js or Bun. To update a
+standalone installation, replace the executable from a newer release;
+`kiln update` only updates package-manager installations.
+
+The macOS binaries are not notarized, so macOS refuses to open one extracted
+from a browser download. Download with `curl` instead, or clear the quarantine
+flag after extracting:
+
+```sh
+curl -fsSL <archive-url> | tar -xz kiln
+# or, for a browser download:
+xattr -d com.apple.quarantine kiln
+```
+
 Update an existing global CLI installation with:
 
 ```sh

@@ -71,6 +71,7 @@ async function buildNpmPackage() {
       "process.env.KILN_VERSION": JSON.stringify(version),
       "process.env.KILN_CLI_PACKAGE": JSON.stringify(packageName),
       "process.env.KILN_CLI_DEFAULT_URL": JSON.stringify(defaultUrl),
+      "process.env.KILN_GIT_REPO": JSON.stringify(gitRepository),
     },
   })
   if (!result.success) {
@@ -132,6 +133,8 @@ function buildBunExecutable(outfile) {
     `process.env.KILN_CLI_PACKAGE=${JSON.stringify(packageName)}`,
     "--define",
     `process.env.KILN_CLI_DEFAULT_URL=${JSON.stringify(defaultUrl)}`,
+    "--define",
+    `process.env.KILN_GIT_REPO=${JSON.stringify(gitRepository)}`,
     "--compile",
   ])
 
