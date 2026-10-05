@@ -45,8 +45,8 @@ jobs:
           echo "version=${REQUESTED_TAG#v}" >> "$GITHUB_OUTPUT"
 
   publish:
-    name: Publish CLI package
-    needs: release
+    name: Publish CLI packages
+    needs: [release, binaries]
     permissions:
       contents: write
       id-token: write
@@ -57,22 +57,19 @@ jobs:
         with:
           ref: ${{ needs.release.outputs.tag }}
 
-      - name: Set up Vite+
-        uses: voidzero-dev/setup-vp@250f29ce396baf5e8f24498e17c0dfdebabc26eb # v1.15.0
-        with:
-          cache: false
-          node-version-file: .node-version
-          run-install: |
-            - cwd: .
-              args: ["--frozen-lockfile"]
-
       - name: Configure npm trusted publishing
-        if: vars.NPM_PACKAGE != ''
         uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.1.0
         with:
           node-version-file: .node-version
           registry-url: https://registry.npmjs.org
           package-manager-cache: false
+
+      - name: Download native npm packages
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: cli-npm-*
+          merge-multiple: true
+          path: apps/cli/dist/platform-packages
 
       - name: Build npm package
         env:
@@ -80,7 +77,7 @@ jobs:
           KILN_GIT_REPO: https://github.com/${{ github.repository }}
           KILN_CLI_PACKAGE: ${{ vars.NPM_PACKAGE }}
           KILN_CLI_DEFAULT_URL: ${{ vars.CLI_DEFAULT_URL }}
-        run: vp run -F kiln-cli build:npm
+        run: node apps/cli/scripts/package.mjs
 
       - name: Verify package contents
         run: |
@@ -98,22 +95,13 @@ jobs:
           npm pack ./apps/cli/dist/npm --pack-destination apps/cli/dist/assets
           gh release upload "$RELEASE_TAG" apps/cli/dist/assets/*.tgz --clobber
 
-      - name: Check whether the version already exists
+      - name: Publish native packages and launcher
         if: vars.NPM_PACKAGE != ''
-        id: published
         env:
-          VERSION: ${{ needs.release.outputs.version }}
-          PACKAGE: ${{ vars.NPM_PACKAGE }}
-        run: |
-          if npm view "$PACKAGE@$VERSION" version >/dev/null 2>&1; then
-            echo "exists=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "exists=false" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Publish package
-        if: vars.NPM_PACKAGE != '' && steps.published.outputs.exists != 'true'
-        run: npm publish ./apps/cli/dist/npm --access public --tag latest
+          KILN_VERSION: ${{ needs.release.outputs.version }}
+          KILN_GIT_REPO: https://github.com/${{ github.repository }}
+          KILN_CLI_PACKAGE: ${{ vars.NPM_PACKAGE }}
+        run: node apps/cli/scripts/publish.mjs
 
   binaries:
     name: CLI binary (${{ matrix.platform }})
@@ -162,18 +150,19 @@ jobs:
       - name: Set up Vite+
         uses: voidzero-dev/setup-vp@250f29ce396baf5e8f24498e17c0dfdebabc26eb # v1.15.0
         with:
-          cache: false
+          cache: true
           node-version-file: .node-version
           run-install: |
             - cwd: .
-              args: ["--frozen-lockfile"]
+              args: ["--frozen-lockfile", "--filter", "kiln-cli..."]
 
       - name: Build CLI binary
         env:
           KILN_GIT_REPO: https://github.com/${{ github.repository }}
           KILN_CLI_PACKAGE: ${{ vars.NPM_PACKAGE }}
           KILN_CLI_DEFAULT_URL: ${{ vars.CLI_DEFAULT_URL }}
-        run: vp run -F kiln-cli build
+        # Execute the CLI script without loading configs for uninstalled workspaces.
+        run: vp exec -F kiln-cli -- bun run build
 
       - name: Verify CLI binary
         run: |
@@ -195,7 +184,23 @@ jobs:
           New-Item -ItemType Directory -Force apps/cli/dist/assets
           Compress-Archive -Path "apps/cli/dist/$env:BINARY", apps/cli/dist/npm/README.md, apps/cli/dist/npm/LICENSE, apps/cli/dist/npm/COMMERCIAL_LICENSE.md -DestinationPath "apps/cli/dist/assets/$env:ASSET"
 
-      - name: Upload binary archive
+      - name: Prepare shared binary and native npm package
+        env:
+          PLATFORM: ${{ matrix.platform }}
+        run: |
+          extension=""
+          if [ "$RUNNER_OS" = "Windows" ]; then extension=".exe"; fi
+          cp "apps/cli/dist/$BINARY" "apps/cli/dist/assets/kiln-$RELEASE_TAG-$PLATFORM$extension"
+          npm pack ./apps/cli/dist/npm-platform --pack-destination apps/cli/dist/assets
+
+      - name: Save native npm package for publishing
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: cli-npm-${{ matrix.platform }}
+          path: apps/cli/dist/assets/*.tgz
+          if-no-files-found: error
+
+      - name: Upload CLI release assets
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release upload "$RELEASE_TAG" "apps/cli/dist/assets/$ASSET" --clobber
+        run: gh release upload "$RELEASE_TAG" apps/cli/dist/assets/* --clobber

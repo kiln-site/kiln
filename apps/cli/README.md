@@ -13,7 +13,10 @@ npx kiln-cli login
 ```
 
 Or install it globally. The npm package is named `kiln-cli`; both installation
-methods expose the `kiln` command.
+methods expose the `kiln` command. npm installs the native binary for your OS and
+architecture through an optional platform package. A small Node.js launcher starts
+that binary; the CLI itself runs on its bundled Bun runtime. Keep optional
+dependencies enabled. Installation also works when lifecycle scripts are disabled.
 
 ```sh
 npm install --global kiln-cli
@@ -23,9 +26,8 @@ kiln login
 For a standalone installation, download the archive for your OS and architecture
 from your distribution's GitHub release: Linux and macOS use `.tar.gz` (x64 or
 ARM64), and Windows uses `.zip` (x64). Extract `kiln` or `kiln.exe` into a directory
-on your `PATH`. These binaries do not require Node.js or Bun. To update a
-standalone installation, replace the executable from a newer release;
-`kiln update` only updates package-manager installations.
+on your `PATH`. These binaries do not require Node.js or Bun. Both npm and
+standalone installations support `kiln update`.
 
 The macOS binaries are not notarized, so macOS refuses to open one extracted
 from a browser download. Download with `curl` instead, or clear the quarantine
@@ -43,10 +45,21 @@ Update an existing global CLI installation with:
 kiln update
 ```
 
-The updater reuses pnpm or Bun when it can identify that package manager as the
-owner of the installed CLI. Otherwise, and whenever that update fails, it uses
-`npm install --global <distribution-package>@latest` (`kiln-cli` for official builds). This updates only the local Kiln CLI,
-not Hearth or any Relay.
+The updater downloads the matching binary from the GitHub repository embedded
+in your build. Stable installations stay on stable releases; nightly installations
+stay on nightlies. It verifies GitHub's SHA-256 digest, size, and the executable's
+version before replacing the installed binary. It never runs npm, pnpm, or Bun.
+The installation directory must be writable. This updates only the CLI, not
+Hearth or any Relay, and does not require a Kiln login.
+
+For npm installations, the updater replaces a private copy inside the CLI package,
+leaving the platform package unchanged. You can still use
+`npm install --global kiln-cli@latest` (or your distribution's package) to install
+from npm again. npm's recorded package version changes only when npm installs a
+package; `kiln --version` reports the executable's actual version.
+
+On Windows, the running executable is moved to a `.old` file until a later update
+can remove it. An interrupted download leaves the current executable in place.
 
 ## Install the agent skill
 
@@ -70,7 +83,10 @@ pnpm --filter kiln-cli build
 
 Bun compiles the app into `dist/kiln`; Bun does not need to be installed on
 the machine running that executable. Local macOS builds are ad-hoc signed with
-the JavaScript runtime entitlements required by Bun.
+the JavaScript runtime entitlements required by Bun. Set `KILN_GIT_REPO` at build
+time to your GitHub repository URL (or `owner/repository`) to embed the update
+source. Release workflows set this to their own repository automatically; runtime
+environment variables cannot redirect a published binary's updates.
 
 ## Authenticate
 

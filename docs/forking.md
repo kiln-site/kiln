@@ -97,22 +97,28 @@ catalog. Existing server image selections are not automatically rewritten.
 
 Choose an available npm name, such as `@your-npm-org/my-panel-cli`. Your npm scope
 can differ from your GitHub owner. The generated package records the fork's
-repository and embeds its package name and optional default panel URL. The binary
-is still named `kiln`, so install one distribution globally at a time.
+repository and optional default panel URL. Native binaries embed this repository
+as their update source. The command is still named `kiln`, so install one
+distribution globally at a time.
 
-Bootstrap the new npm package once using your own npm login:
+Bootstrap the launcher and five platform package names once using your own npm
+login. Platform package names append `-linux-x64`, `-linux-arm64`, `-darwin-x64`,
+`-darwin-arm64`, and `-windows-x64` to your chosen package name. On each supported
+platform, build and publish its package (or publish the matching platform tarball
+from a GitHub release):
 
 ```sh
 KILN_GIT_REPO=https://github.com/example/my-panel \
 KILN_CLI_PACKAGE=@your-npm-org/my-panel-cli \
 KILN_VERSION=1.0.0-test.20260930.000000 \
-  vp run -F kiln-cli build:npm
-npm pack --dry-run ./apps/cli/dist/npm
+  vp run -F kiln-cli build
+npm publish ./apps/cli/dist/npm-platform --access public --tag test
+# After all five platform packages exist at that version:
 npm publish ./apps/cli/dist/npm --access public --tag test
 ```
 
-On npm, configure GitHub trusted publishers for your owner/repository and these
-workflow filenames, allowing `npm publish`:
+On npm, configure GitHub trusted publishers on **all six packages** for your
+owner/repository and these workflow filenames, allowing `npm publish`:
 
 - `nightly-release.yml` for continuous releases;
 - `stable-release.yml` for stable promotions;
@@ -122,8 +128,12 @@ npm validates the **calling** workflow when using a reusable workflow. Keep the
 existing `publish-cli.yml` publisher on Kiln and add the other two; no npm token is
 needed in GitHub. See [npm trusted publishing](https://docs.npmjs.com/trusted-publishers/).
 
-Install with `npm install --global @your-npm-org/my-panel-cli`. `kiln update`
-reinstalls that same package, never `kiln-cli`. Login uses an explicit URL,
+Install with `npm install --global @your-npm-org/my-panel-cli`, with optional
+dependencies enabled. `kiln update` downloads the matching native executable from
+your fork's GitHub releases, preserving the stable/nightly channel; it never
+invokes a package manager. `npm install --global @your-npm-org/my-panel-cli@latest`
+continues to install from npm. Set `KILN_GIT_REPO` for local builds; release workflows
+set it to their own repository automatically. Login uses an explicit URL,
 `KILN_URL`, the selected saved profile, then the build's default URL. Forks with
 no default get an instruction to supply their panel URL. Credentials remain
 scoped to the existing URL/profile system.

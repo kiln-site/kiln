@@ -8,11 +8,12 @@
   },
   "scripts": {
     "build": "bun scripts/build.mjs",
-    "build:npm": "bun scripts/build.mjs --npm-only",
+    "build:npm": "node scripts/package.mjs",
     "dev": "bun src/main.ts",
     "format": "vp fmt \"src/**/*.ts\"",
     "lint": "vp lint src",
     "test": "vp test run",
+    "test:native": "bun scripts/native-e2e.mjs",
     "test:credential-store": "pnpm build && node scripts/credential-store-e2e.mjs"
   },
   "dependencies": {

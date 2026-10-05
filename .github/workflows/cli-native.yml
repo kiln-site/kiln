@@ -1,0 +1,42 @@
+name: Native CLI checks
+
+on:
+  pull_request:
+    paths:
+      - apps/cli/**
+      - packages/contracts/**
+      - .github/workflows/cli-native.yml
+      - .github/workflows/publish-cli.yml
+      - pnpm-lock.yaml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cli-native-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  native:
+    name: Native CLI (${{ matrix.runner }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-24.04, ubuntu-24.04-arm, macos-15, macos-15-intel, windows-2025]
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: voidzero-dev/setup-vp@250f29ce396baf5e8f24498e17c0dfdebabc26eb # v1.15.0
+        with:
+          cache: true
+          node-version-file: .node-version
+          run-install: |
+            - cwd: .
+              args: ["--frozen-lockfile", "--filter", "kiln-cli..."]
+      - name: Build and exercise native installs and updates
+        shell: bash
+        run: |
+          # Execute package scripts without loading configs for uninstalled workspaces.
+          vp exec -F kiln-cli -- bun run build
+          vp exec -F kiln-cli -- bun run test:native
