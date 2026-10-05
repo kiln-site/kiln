@@ -205,13 +205,13 @@ describe("CLI GitHub updates", () => {
   })
 
   it("rolls back the Windows executable if the replacement cannot be moved", async () => {
-    await fixture(async (_, target) => {
-      try {
-        await replaceBinary(`${target}.missing`, target, "win32")
-      } catch {
-        /* Expected. */
-      }
+    await fixture(async (directory, target) => {
+      const error = await Effect.runPromise(
+        replaceBinary(`${target}.missing`, target, "win32").pipe(Effect.flip)
+      )
+      assert.equal(error.code, "cli_update_failed")
       assert.equal(await readFile(target, "utf8"), "old binary")
+      assert.deepEqual(await readdir(directory), ["kiln"])
     })
   })
 

@@ -98,8 +98,8 @@ export const updateCliEffect = Effect.fn("cli.update")(function* (
               directory,
               platform === "win32" ? "kiln.exe" : "kiln"
             )
+            yield* downloadBinary(asset, staged, fetcher)
             yield* updateOperation(async (signal) => {
-              await downloadBinary(asset, staged, fetcher, signal)
               signal.throwIfAborted()
               const original = await stat(target)
               await chmod(staged, original.mode & 0o777)
@@ -109,10 +109,7 @@ export const updateCliEffect = Effect.fn("cli.update")(function* (
                 signal
               )
             })
-            // Cancellation must not leave the Windows two-rename transaction halfway through.
-            yield* updateOperation(() =>
-              replaceBinary(staged, target, platform)
-            ).pipe(Effect.uninterruptible)
+            yield* replaceBinary(staged, target, platform)
             return { updated: true, version }
           }),
         (directory) =>
@@ -235,75 +232,81 @@ function selectBinary(
   return asset
 }
 
-async function downloadBinary(
+const downloadBinary = Effect.fn("cli.update.downloadBinary")(function* (
   asset: Asset,
   destination: string,
-  fetcher: typeof globalThis.fetch,
-  signal: AbortSignal
+  fetcher: typeof globalThis.fetch
 ) {
-  const downloadSignal = AbortSignal.any([signal, AbortSignal.timeout(300_000)])
-  const response = await fetcher(asset.browser_download_url, {
-    signal: downloadSignal,
-  })
-  if (!response.ok || !response.body)
-    throw new Error(`CLI download failed (HTTP ${response.status}).`)
-  const digest = createHash("sha256")
-  downloadSignal.throwIfAborted()
-  const file = await open(destination, "wx", 0o700)
-  let bytes = 0
-  try {
-    for await (const chunk of response.body) {
-      downloadSignal.throwIfAborted()
-      bytes += chunk.byteLength
-      if (bytes > asset.size)
-        throw new Error("CLI download exceeded its expected size.")
-      digest.update(chunk)
-      let offset = 0
-      while (offset < chunk.byteLength) {
-        const result = await file.write(
-          chunk,
-          offset,
-          chunk.byteLength - offset
-        )
-        if (!result.bytesWritten) throw new Error("CLI download write stalled.")
-        offset += result.bytesWritten
-      }
-    }
-    if (
-      bytes !== asset.size ||
-      `sha256:${digest.digest("hex")}` !== asset.digest
-    ) {
-      throw new Error(
-        "CLI download failed its SHA-256 or size check; the installed binary was not changed."
-      )
-    }
-    await file.sync()
-  } finally {
-    await file.close()
-  }
-}
+  yield* Effect.acquireUseRelease(
+    updateOperation(() => open(destination, "wx", 0o700)),
+    (file) =>
+      updateOperation(async (signal) => {
+        const downloadSignal = AbortSignal.any([
+          signal,
+          AbortSignal.timeout(300_000),
+        ])
+        const response = await fetcher(asset.browser_download_url, {
+          signal: downloadSignal,
+        })
+        if (!response.ok || !response.body)
+          throw new Error(`CLI download failed (HTTP ${response.status}).`)
+        const digest = createHash("sha256")
+        let bytes = 0
+        for await (const chunk of response.body) {
+          downloadSignal.throwIfAborted()
+          bytes += chunk.byteLength
+          if (bytes > asset.size)
+            throw new Error("CLI download exceeded its expected size.")
+          digest.update(chunk)
+          let offset = 0
+          while (offset < chunk.byteLength) {
+            const result = await file.write(
+              chunk,
+              offset,
+              chunk.byteLength - offset
+            )
+            if (!result.bytesWritten)
+              throw new Error("CLI download write stalled.")
+            offset += result.bytesWritten
+          }
+        }
+        if (
+          bytes !== asset.size ||
+          `sha256:${digest.digest("hex")}` !== asset.digest
+        ) {
+          throw new Error(
+            "CLI download failed its SHA-256 or size check; the installed binary was not changed."
+          )
+        }
+        await file.sync()
+      }),
+    (file) => updateOperation(() => file.close())
+  )
+})
 
-export async function replaceBinary(
-  staged: string,
-  target: string,
-  platform: NodeJS.Platform
-) {
-  if (platform !== "win32") {
-    await rename(staged, target)
-    return
-  }
-  // Windows can move the running image aside, but cannot overwrite/delete it.
-  // Keep it until the next update, when the previous process has exited.
-  const backup = `${target}.old`
-  await rm(backup, { force: true })
-  await rename(target, backup)
-  try {
-    await rename(staged, target)
-  } catch (cause) {
-    await rename(backup, target)
-    throw cause
-  }
-}
+export const replaceBinary = Effect.fn("cli.update.replaceBinary")(
+  function* (staged: string, target: string, platform: NodeJS.Platform) {
+    if (platform !== "win32") {
+      yield* updateOperation(() => rename(staged, target))
+      return
+    }
+    // Windows can move the running image aside, but cannot overwrite/delete it.
+    // Keep it until the next update, when the previous process has exited.
+    const backup = `${target}.old`
+    yield* updateOperation(() => rm(backup, { force: true }))
+    yield* updateOperation(() => rename(target, backup))
+    yield* updateOperation(() => rename(staged, target)).pipe(
+      Effect.catch((cause) =>
+        Effect.gen(function* () {
+          yield* updateOperation(() => rename(backup, target))
+          return yield* cause
+        })
+      )
+    )
+  },
+  // Cancellation must not leave the Windows two-rename transaction halfway through.
+  Effect.uninterruptible
+)
 
 export function isStandaloneCliBinary(
   entrypointPath: string = process.argv[1] ?? ""
