@@ -17,10 +17,10 @@ Under **Settings → Secrets and variables → Actions → Variables**, configur
 | ---------------------- | -------------------------------------------------------------------------------------------------------- | ---------------------------------- |
 | `PUBLISH_IMAGES`       | Set to `true` to publish releases and images. Unset means checks/builds only.                            | `true`                             |
 | `INITIAL_RELEASE_LINE` | Optional starting version before the first stable promotion; defaults to `0.1.0`.                        | Leave unset                        |
-| `NPM_PACKAGE`          | npm package you own. Enables npm publishing; CLI release downloads are always attached.                 | `kiln-cli`                         |
+| `NPM_PACKAGE`          | npm package you own. Enables npm publishing; CLI release downloads are always attached.                  | `kiln-cli`                         |
 | `CLI_DEFAULT_URL`      | Optional default panel URL embedded in the CLI. Fork builds without this require a URL or saved profile. | `https://kiln.site`                |
-| `BUILD_RUNNER_AMD64`   | Optional runner label for push-triggered image builds.                                                   | `blacksmith-4vcpu-ubuntu-2404`     |
-| `BUILD_RUNNER_ARM64`   | Optional ARM64 runner label for push-triggered image builds.                                             | `blacksmith-4vcpu-ubuntu-2404-arm` |
+| `BUILD_RUNNER_AMD64`   | Optional Linux x64 runner label for push-triggered image builds and all native CLI checks/builds.        | `blacksmith-4vcpu-ubuntu-2404`     |
+| `BUILD_RUNNER_ARM64`   | Optional Linux ARM64 runner label for push-triggered image builds and all native CLI checks/builds.      | `blacksmith-4vcpu-ubuntu-2404-arm` |
 | `SENTRY_DSN`           | Optional server telemetry DSN baked into published images.                                               | Your server DSN                    |
 | `VITE_SENTRY_DSN`      | Optional browser telemetry DSN baked into Hearth.                                                        | Your browser DSN                   |
 | `SENTRY_ORG`           | Optional source-map upload organization.                                                                 | `quartzdev`                        |
@@ -34,8 +34,10 @@ Compose's `SENTRY_DSN` defaults to empty, so set it in `.env` to enable server
 telemetry. Browser telemetry requires an image rebuild to change.
 
 Normal GitHub `ubuntu-24.04` / `ubuntu-24.04-arm` runners are the default.
-PRs, manual runs, and scheduled builds retain GitHub runners even when custom
-push runners are configured. npm publishing always uses a GitHub-hosted runner.
+Image PRs, manual image runs, and scheduled image builds retain GitHub runners.
+Linux native CLI checks and release builds use the configured runners for every
+trigger, including PRs and manual retries. macOS and Windows CLI jobs retain their
+platform-specific GitHub runners. npm publishing uses a GitHub-hosted runner.
 
 Workflows request `contents: write`, `packages: write`, and, for npm, `id-token:
 write` where needed. Organization policies must permit those permissions.

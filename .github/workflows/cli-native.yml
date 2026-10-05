@@ -22,7 +22,10 @@ concurrency:
 jobs:
   native:
     name: Native CLI (${{ matrix.runner }})
-    runs-on: ${{ matrix.runner }}
+    runs-on: >-
+      ${{ (matrix.runner == 'ubuntu-24.04' && vars.BUILD_RUNNER_AMD64)
+          || (matrix.runner == 'ubuntu-24.04-arm' && vars.BUILD_RUNNER_ARM64)
+          || matrix.runner }}
     strategy:
       fail-fast: false
       matrix:
