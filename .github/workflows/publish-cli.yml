@@ -161,7 +161,8 @@ jobs:
           KILN_GIT_REPO: https://github.com/${{ github.repository }}
           KILN_CLI_PACKAGE: ${{ vars.NPM_PACKAGE }}
           KILN_CLI_DEFAULT_URL: ${{ vars.CLI_DEFAULT_URL }}
-        run: vp run -F kiln-cli build
+        # Execute the CLI script without loading configs for uninstalled workspaces.
+        run: vp exec -F kiln-cli -- bun run build
 
       - name: Verify CLI binary
         run: |
