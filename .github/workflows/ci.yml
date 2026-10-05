@@ -39,10 +39,12 @@ jobs:
               vp run -r typecheck
               vp check
           - name: Tests
+            # Runs the root "test" script so repo-level node:test suites stay
+            # in CI; vp tasks filter env, so the MySQL vars only reach those.
             command: |
               ACCESS_MIGRATION_TEST=1 DB_HOST=127.0.0.1 DB_PORT=3306 \
                 DB_NAME=kiln_migration_test DB_USERNAME=root DB_PASSWORD=root \
-                vp run -r test
+                vp run test
           - name: Build
             command: |
               vp run -r build
