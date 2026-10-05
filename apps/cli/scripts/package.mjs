@@ -1,6 +1,7 @@
 import { chmod, cp, copyFile, mkdir, rm, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import { fileURLToPath } from "node:url"
+import { npmRegistryVersion } from "./version.mjs"
 import {
   binaryName,
   dist,
@@ -39,7 +40,10 @@ export async function packageMain() {
     files: ["kiln.cjs", "install.cjs", "skills", "COMMERCIAL_LICENSE.md"],
     scripts: { postinstall: "node install.cjs" },
     optionalDependencies: Object.fromEntries(
-      platforms.map((entry) => [`${packageName}-${entry.name}`, version])
+      platforms.map((entry) => [
+        `${packageName}-${entry.name}`,
+        npmRegistryVersion(version),
+      ])
     ),
   })
   await Promise.all([

@@ -9,8 +9,9 @@ function publish(name, source) {
       ["view", `${name}@${version}`, "version"],
       { encoding: "utf8", stdio: "pipe" }
     )
-    // Older npm versions exit successfully, printing nothing, for an unpublished version.
-    if (published.trim() === version) {
+    // Older npm versions exit successfully, printing nothing, for an unpublished
+    // version. The printed version can differ from ours by registry normalization.
+    if (published.trim()) {
       console.log(`${name}@${version} is already published.`)
       return
     }
