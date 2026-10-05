@@ -6,6 +6,8 @@ on:
       - apps/cli/**
       - packages/contracts/**
       - .github/workflows/cli-native.yml
+      - .github/workflows/build-cli.yml
+      - .github/workflows/nightly-release.yml
       - .github/workflows/publish-cli.yml
       - pnpm-lock.yaml
   workflow_dispatch:
@@ -24,7 +26,14 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        runner: [ubuntu-24.04, ubuntu-24.04-arm, macos-15, macos-15-intel, windows-2025]
+        runner:
+          [
+            ubuntu-24.04,
+            ubuntu-24.04-arm,
+            macos-15,
+            macos-15-intel,
+            windows-2025,
+          ]
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - uses: voidzero-dev/setup-vp@250f29ce396baf5e8f24498e17c0dfdebabc26eb # v1.15.0

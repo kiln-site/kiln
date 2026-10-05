@@ -1,0 +1,115 @@
+name: Build CLI release assets
+
+on:
+  workflow_call:
+    inputs:
+      ref:
+        description: Exact source commit or release tag to build
+        required: true
+        type: string
+      version:
+        description: Kiln version embedded in every release asset
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  binaries:
+    name: CLI binary (${{ matrix.platform }})
+    permissions:
+      contents: read
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux-x64
+            runner: ubuntu-24.04
+            binary: kiln
+            archive: tar.gz
+          - platform: linux-arm64
+            runner: ubuntu-24.04-arm
+            binary: kiln
+            archive: tar.gz
+          - platform: darwin-x64
+            runner: macos-15-intel
+            binary: kiln
+            archive: tar.gz
+          - platform: darwin-arm64
+            runner: macos-15
+            binary: kiln
+            archive: tar.gz
+          - platform: windows-x64
+            runner: windows-2025
+            binary: kiln.exe
+            archive: zip
+    defaults:
+      run:
+        shell: bash
+    env:
+      RELEASE_TAG: v${{ inputs.version }}
+      KILN_VERSION: ${{ inputs.version }}
+      BINARY: ${{ matrix.binary }}
+      ASSET: kiln-v${{ inputs.version }}-${{ matrix.platform }}.${{ matrix.archive }}
+    steps:
+      - name: Check out release source
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ inputs.ref }}
+
+      - name: Set up Vite+
+        uses: voidzero-dev/setup-vp@250f29ce396baf5e8f24498e17c0dfdebabc26eb # v1.15.0
+        with:
+          cache: true
+          node-version-file: .node-version
+          run-install: |
+            - cwd: .
+              args: ["--frozen-lockfile", "--filter", "kiln-cli..."]
+
+      - name: Build CLI binary
+        env:
+          KILN_GIT_REPO: https://github.com/${{ github.repository }}
+          KILN_CLI_PACKAGE: ${{ vars.NPM_PACKAGE }}
+          KILN_CLI_DEFAULT_URL: ${{ vars.CLI_DEFAULT_URL }}
+        # Execute the CLI script without loading configs for uninstalled workspaces.
+        run: vp exec -F kiln-cli -- bun run build
+
+      - name: Verify CLI binary
+        run: |
+          test "$("./apps/cli/dist/$BINARY" --version)" = "kiln $KILN_VERSION"
+          "./apps/cli/dist/$BINARY" --help
+
+      - name: Package Linux and macOS binaries
+        if: runner.os != 'Windows'
+        run: |
+          mkdir -p apps/cli/dist/assets
+          tar -czf "apps/cli/dist/assets/$ASSET" \
+            -C apps/cli/dist "$BINARY" \
+            -C npm README.md LICENSE COMMERCIAL_LICENSE.md
+
+      - name: Package Windows binary
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force apps/cli/dist/assets
+          Compress-Archive -Path "apps/cli/dist/$env:BINARY", apps/cli/dist/npm/README.md, apps/cli/dist/npm/LICENSE, apps/cli/dist/npm/COMMERCIAL_LICENSE.md -DestinationPath "apps/cli/dist/assets/$env:ASSET"
+
+      - name: Prepare shared binary and native npm package
+        env:
+          PLATFORM: ${{ matrix.platform }}
+        run: |
+          extension=""
+          if [ "$RUNNER_OS" = "Windows" ]; then extension=".exe"; fi
+          cp "apps/cli/dist/$BINARY" "apps/cli/dist/assets/kiln-$RELEASE_TAG-$PLATFORM$extension"
+          npm pack ./apps/cli/dist/npm-platform --pack-destination apps/cli/dist/assets
+
+      - name: Save CLI release assets
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: cli-assets-${{ matrix.platform }}
+          path: apps/cli/dist/assets/*
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 0

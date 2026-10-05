@@ -6,6 +6,10 @@ on:
       tag:
         required: true
         type: string
+      prepared_sha:
+        description: Source commit of CLI assets already built in this run
+        type: string
+        default: ""
   workflow_dispatch:
     inputs:
       tag:
@@ -38,15 +42,24 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           REQUESTED_TAG: ${{ inputs.tag }}
+          PREPARED_SHA: ${{ inputs.prepared_sha }}
         run: |
           printf '%s\n' "$REQUESTED_TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-nightly\.[0-9]{8}\.[0-9]{6})?$'
           gh release view "$REQUESTED_TAG" >/dev/null
+          if [ -n "$PREPARED_SHA" ]; then
+            test "$(git rev-list -n 1 "refs/tags/$REQUESTED_TAG")" = "$PREPARED_SHA"
+          fi
           echo "source_ref=$REQUESTED_TAG" >> "$GITHUB_OUTPUT"
           echo "version=${REQUESTED_TAG#v}" >> "$GITHUB_OUTPUT"
 
   publish:
     name: Publish CLI packages
     needs: [release, binaries]
+    # Nightlies supply assets from the parallel build; stable/manual runs build here.
+    if: >-
+      ${{ !cancelled() && needs.release.result == 'success'
+          && (needs.binaries.result == 'success'
+              || (inputs.prepared_sha != '' && needs.binaries.result == 'skipped')) }}
     permissions:
       contents: write
       id-token: write
@@ -64,12 +77,17 @@ jobs:
           registry-url: https://registry.npmjs.org
           package-manager-cache: false
 
-      - name: Download native npm packages
+      - name: Download CLI release assets
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          pattern: cli-npm-*
+          pattern: cli-assets-*
           merge-multiple: true
-          path: apps/cli/dist/platform-packages
+          path: apps/cli/dist/assets
+
+      - name: Prepare native npm packages for publishing
+        run: |
+          mkdir -p apps/cli/dist/platform-packages
+          cp apps/cli/dist/assets/*.tgz apps/cli/dist/platform-packages/
 
       - name: Build npm package
         env:
@@ -86,14 +104,14 @@ jobs:
             apps/cli/dist/npm/skills/kiln-cli
           npm pack --dry-run ./apps/cli/dist/npm
 
-      - name: Pack and upload npm tarball
+      - name: Pack launcher and upload CLI release assets
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ needs.release.outputs.tag }}
         run: |
           mkdir -p apps/cli/dist/assets
           npm pack ./apps/cli/dist/npm --pack-destination apps/cli/dist/assets
-          gh release upload "$RELEASE_TAG" apps/cli/dist/assets/*.tgz --clobber
+          gh release upload "$RELEASE_TAG" apps/cli/dist/assets/* --clobber
 
       - name: Publish native packages and launcher
         if: vars.NPM_PACKAGE != ''
@@ -104,103 +122,9 @@ jobs:
         run: node apps/cli/scripts/publish.mjs
 
   binaries:
-    name: CLI binary (${{ matrix.platform }})
+    if: inputs.prepared_sha == ''
     needs: release
-    permissions:
-      contents: write
-    runs-on: ${{ matrix.runner }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - platform: linux-x64
-            runner: ubuntu-24.04
-            binary: kiln
-            archive: tar.gz
-          - platform: linux-arm64
-            runner: ubuntu-24.04-arm
-            binary: kiln
-            archive: tar.gz
-          - platform: darwin-x64
-            runner: macos-15-intel
-            binary: kiln
-            archive: tar.gz
-          - platform: darwin-arm64
-            runner: macos-15
-            binary: kiln
-            archive: tar.gz
-          - platform: windows-x64
-            runner: windows-2025
-            binary: kiln.exe
-            archive: zip
-    defaults:
-      run:
-        shell: bash
-    env:
-      RELEASE_TAG: ${{ needs.release.outputs.tag }}
-      KILN_VERSION: ${{ needs.release.outputs.version }}
-      BINARY: ${{ matrix.binary }}
-      ASSET: kiln-${{ needs.release.outputs.tag }}-${{ matrix.platform }}.${{ matrix.archive }}
-    steps:
-      - name: Check out release source
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          ref: ${{ needs.release.outputs.tag }}
-
-      - name: Set up Vite+
-        uses: voidzero-dev/setup-vp@250f29ce396baf5e8f24498e17c0dfdebabc26eb # v1.15.0
-        with:
-          cache: true
-          node-version-file: .node-version
-          run-install: |
-            - cwd: .
-              args: ["--frozen-lockfile", "--filter", "kiln-cli..."]
-
-      - name: Build CLI binary
-        env:
-          KILN_GIT_REPO: https://github.com/${{ github.repository }}
-          KILN_CLI_PACKAGE: ${{ vars.NPM_PACKAGE }}
-          KILN_CLI_DEFAULT_URL: ${{ vars.CLI_DEFAULT_URL }}
-        # Execute the CLI script without loading configs for uninstalled workspaces.
-        run: vp exec -F kiln-cli -- bun run build
-
-      - name: Verify CLI binary
-        run: |
-          test "$("./apps/cli/dist/$BINARY" --version)" = "kiln $KILN_VERSION"
-          "./apps/cli/dist/$BINARY" --help
-
-      - name: Package Linux and macOS binaries
-        if: runner.os != 'Windows'
-        run: |
-          mkdir -p apps/cli/dist/assets
-          tar -czf "apps/cli/dist/assets/$ASSET" \
-            -C apps/cli/dist "$BINARY" \
-            -C npm README.md LICENSE COMMERCIAL_LICENSE.md
-
-      - name: Package Windows binary
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          New-Item -ItemType Directory -Force apps/cli/dist/assets
-          Compress-Archive -Path "apps/cli/dist/$env:BINARY", apps/cli/dist/npm/README.md, apps/cli/dist/npm/LICENSE, apps/cli/dist/npm/COMMERCIAL_LICENSE.md -DestinationPath "apps/cli/dist/assets/$env:ASSET"
-
-      - name: Prepare shared binary and native npm package
-        env:
-          PLATFORM: ${{ matrix.platform }}
-        run: |
-          extension=""
-          if [ "$RUNNER_OS" = "Windows" ]; then extension=".exe"; fi
-          cp "apps/cli/dist/$BINARY" "apps/cli/dist/assets/kiln-$RELEASE_TAG-$PLATFORM$extension"
-          npm pack ./apps/cli/dist/npm-platform --pack-destination apps/cli/dist/assets
-
-      - name: Save native npm package for publishing
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: cli-npm-${{ matrix.platform }}
-          path: apps/cli/dist/assets/*.tgz
-          if-no-files-found: error
-
-      - name: Upload CLI release assets
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: gh release upload "$RELEASE_TAG" apps/cli/dist/assets/* --clobber
+    uses: ./.github/workflows/build-cli.yml
+    with:
+      ref: ${{ needs.release.outputs.tag }}
+      version: ${{ needs.release.outputs.version }}
