@@ -1,7 +1,4 @@
 import assert from "node:assert/strict"
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
-import { tmpdir } from "node:os"
-import { join } from "node:path"
 import test from "node:test"
 
 import {
@@ -135,9 +132,15 @@ const nightly = "1.2.0-nightly.20260930.120000"
 const olderNightly = "1.2.0-nightly.20260929.120000"
 const newerNightly = "1.2.0-nightly.20260930.130000"
 
-test("a nightly retry keeps its original version across stable promotion", async (t) => {
-  const directory = mkdtempSync(join(tmpdir(), "kiln-release-config-"))
-  t.after(() => rmSync(directory, { recursive: true, force: true }))
+test("a nightly retry keeps its original version across stable promotion", async () => {
+  const records = new Map()
+  const store = (runId) => ({
+    read: async () => structuredClone(records.get(runId)),
+    create: async (record) => {
+      assert.ok(!records.has(runId), "must not overwrite durable metadata")
+      records.set(runId, structuredClone(record))
+    },
+  })
   const environment = {
     GITHUB_REPOSITORY: "example/fork",
     GITHUB_RUN_ID: "123",
@@ -145,7 +148,6 @@ test("a nightly retry keeps its original version across stable promotion", async
     GITHUB_SHA: "a".repeat(40),
     KILN_INITIAL_RELEASE_LINE: "1.2.0",
     KILN_RESOLVE_RELEASE_LINE: "true",
-    KILN_RELEASE_CONFIG: join(directory, "release-config.json"),
   }
   const timestamp = "2026-09-30T12:00:00Z"
   let stable
@@ -157,10 +159,11 @@ test("a nightly retry keeps its original version across stable promotion", async
   const original = await workflowReleaseConfiguration(
     environment,
     timestamp,
-    loadStable
+    loadStable,
+    store(environment.GITHUB_RUN_ID)
   )
   assert.equal(original.version, nightly)
-  const artifact = readFileSync(environment.KILN_RELEASE_CONFIG, "utf8")
+  const saved = structuredClone(records.get(environment.GITHUB_RUN_ID))
   const published = [nightly, newerNightly].map(publishedRelease)
   validateStablePromotion(published, newerNightly)
   stable = { version: "1.2.0", nextReleaseLine: "1.3.0" }
@@ -173,45 +176,56 @@ test("a nightly retry keeps its original version across stable promotion", async
       KILN_INITIAL_RELEASE_LINE: "9.0.0",
     },
     timestamp,
-    loadStable
+    loadStable,
+    store(environment.GITHUB_RUN_ID)
   )
   assert.deepEqual(retry, original)
   assert.equal(requests, 1, "retries must not query the current release line")
-  assert.equal(readFileSync(environment.KILN_RELEASE_CONFIG, "utf8"), artifact)
+  assert.deepEqual(records.get(environment.GITHUB_RUN_ID), saved)
   assert.deepEqual(nightlyRollingTags(published, retry.version), [])
 
   const next = await workflowReleaseConfiguration(
     {
       ...environment,
       GITHUB_RUN_ID: "124",
-      KILN_RELEASE_CONFIG: join(directory, "next.json"),
     },
     "2026-09-30T14:00:00Z",
-    loadStable
+    loadStable,
+    store("124")
   )
   assert.equal(next.version, "1.3.0-nightly.20260930.140000")
   assert.equal(requests, 2)
 })
 
-test("retry configuration fails closed if the original artifact is missing or mismatched", async (t) => {
-  const directory = mkdtempSync(join(tmpdir(), "kiln-release-config-"))
-  t.after(() => rmSync(directory, { recursive: true, force: true }))
+test("retry configuration fails closed if durable metadata is missing or mismatched", async () => {
+  let record
+  const store = {
+    read: async () => {
+      if (!record) throw new Error("Missing run tag")
+      return record
+    },
+    create: async () => assert.fail("must not replace missing retry metadata"),
+  }
   const environment = {
     GITHUB_REPOSITORY: "example/fork",
     GITHUB_RUN_ID: "123",
     GITHUB_RUN_ATTEMPT: "2",
     GITHUB_SHA: "a".repeat(40),
     KILN_RESOLVE_RELEASE_LINE: "true",
-    KILN_RELEASE_CONFIG: join(directory, "release-config.json"),
   }
   const timestamp = "2026-09-30T12:00:00Z"
   const resolve = () =>
-    workflowReleaseConfiguration(environment, timestamp, () => {
-      assert.fail("retry must not resolve a replacement version")
-    })
+    workflowReleaseConfiguration(
+      environment,
+      timestamp,
+      () => {
+        assert.fail("retry must not resolve a replacement version")
+      },
+      store
+    )
   await assert.rejects(
     resolve,
-    /without the original nightly release configuration/u
+    /Cannot load the original nightly release configuration/u
   )
   const saved = {
     runId: environment.GITHUB_RUN_ID,
@@ -227,7 +241,7 @@ test("retry configuration fails closed if the original artifact is missing or mi
       config: { ...saved.config, version: "0.1.0-nightly.20260929.120000" },
     },
   ]) {
-    writeFileSync(environment.KILN_RELEASE_CONFIG, JSON.stringify(invalid))
+    record = invalid
     await assert.rejects(resolve, /Saved nightly configuration does not match/u)
   }
 })

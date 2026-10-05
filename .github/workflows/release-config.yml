@@ -2,11 +2,6 @@ name: Release configuration
 
 on:
   workflow_call:
-    inputs:
-      resolve_release_line:
-        description: Read published state only when preparing an app release
-        type: boolean
-        default: false
     outputs:
       repository:
         value: ${{ jobs.config.outputs.repository }}
@@ -33,31 +28,7 @@ jobs:
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.1.0
         with:
           node-version-file: .node-version
-      - name: Restore original nightly configuration (required on retries)
-        id: restore
-        if: inputs.resolve_release_line && github.run_attempt != 1
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: nightly-release-config-${{ github.run_id }}
-          path: ${{ runner.temp }}/nightly-release-config
-      - name: Explain unavailable retry configuration
-        if: failure() && steps.restore.outcome == 'failure'
-        run: |
-          echo "::error::Cannot restore this run's original nightly configuration. Start a new Nightly release run from main; retries cannot select a new release line."
-          exit 1
       - id: config
         env:
-          KILN_RESOLVE_RELEASE_LINE: ${{ inputs.resolve_release_line }}
-          KILN_RELEASE_CONFIG: ${{ runner.temp }}/nightly-release-config/release-config.json
-          GH_TOKEN: ${{ github.token }}
           KILN_INITIAL_RELEASE_LINE: ${{ vars.INITIAL_RELEASE_LINE }}
         run: node scripts/release.mjs config
-      # Dependent builds cannot start until this job successfully saves the version.
-      - name: Pin nightly configuration to this workflow run
-        if: inputs.resolve_release_line && github.run_attempt == 1
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: nightly-release-config-${{ github.run_id }}
-          path: ${{ runner.temp }}/nightly-release-config/release-config.json
-          if-no-files-found: error
-          retention-days: 90

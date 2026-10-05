@@ -22,9 +22,26 @@ jobs:
 
   config:
     if: github.ref == 'refs/heads/main' && vars.PUBLISH_IMAGES == 'true'
-    uses: ./.github/workflows/release-config.yml
-    with:
-      resolve_release_line: true
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    outputs:
+      repository: ${{ steps.config.outputs.repository }}
+      prefix: ${{ steps.config.outputs.prefix }}
+      source: ${{ steps.config.outputs.source }}
+      version: ${{ steps.config.outputs.version }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.1.0
+        with:
+          node-version-file: .node-version
+      # Save durable run metadata before dependent image builds can start.
+      - id: config
+        env:
+          KILN_RESOLVE_RELEASE_LINE: "true"
+          GH_TOKEN: ${{ github.token }}
+          KILN_INITIAL_RELEASE_LINE: ${{ vars.INITIAL_RELEASE_LINE }}
+        run: node scripts/release.mjs config
 
   images:
     needs: config

@@ -2,12 +2,11 @@ import { execFile, execFileSync } from "node:child_process"
 import { createHash } from "node:crypto"
 import {
   appendFileSync,
-  mkdirSync,
   readFileSync,
   readdirSync,
   writeFileSync,
 } from "node:fs"
-import { dirname, resolve } from "node:path"
+import { resolve } from "node:path"
 import { pathToFileURL } from "node:url"
 import { promisify } from "node:util"
 
@@ -15,6 +14,7 @@ import {
   kilnImagePrefix,
   kilnImageRepository,
   kilnImageSource,
+  kilnGitRepositorySlug,
   resolveKilnGitRepository,
 } from "../packages/contracts/src/git-repository.ts"
 import {
@@ -100,30 +100,81 @@ export function releaseConfiguration(environment, timestamp, latestStable) {
   }
 }
 
+function githubRunConfigurationStore(environment) {
+  const base = `repos/${kilnGitRepositorySlug(environment.GITHUB_REPOSITORY)}/git`
+  const tag = `nightly-run/${environment.GITHUB_RUN_ID}`
+  return {
+    async read() {
+      const ref = JSON.parse(
+        await runAsync("gh", ["api", `${base}/ref/tags/${tag}`])
+      )
+      if (ref.object?.type !== "tag")
+        throw new Error("Expected an annotated nightly run tag")
+      const record = JSON.parse(
+        await runAsync("gh", ["api", `${base}/tags/${ref.object.sha}`])
+      )
+      if (
+        record.tag !== tag ||
+        record.object?.type !== "commit" ||
+        record.object.sha !== environment.GITHUB_SHA
+      )
+        throw new Error("Nightly run tag does not match this checkout")
+      return JSON.parse(record.message)
+    },
+    async create(saved) {
+      const record = JSON.parse(
+        await runAsync("gh", [
+          "api",
+          `${base}/tags`,
+          "--method",
+          "POST",
+          "-f",
+          `tag=${tag}`,
+          "-f",
+          `object=${saved.commit}`,
+          "-f",
+          "type=commit",
+          "-f",
+          `message=${JSON.stringify(saved)}`,
+        ])
+      )
+      // Create only: never update/force an existing run's configuration.
+      await runAsync("gh", [
+        "api",
+        `${base}/refs`,
+        "--method",
+        "POST",
+        "-f",
+        `ref=refs/tags/${tag}`,
+        "-f",
+        `sha=${record.sha}`,
+      ])
+    },
+  }
+}
+
 export async function workflowReleaseConfiguration(
   environment,
   timestamp,
-  loadLatestStable = latestStableManifest
+  loadLatestStable = latestStableManifest,
+  store = githubRunConfigurationStore(environment)
 ) {
   if (environment.KILN_RESOLVE_RELEASE_LINE !== "true")
     return releaseConfiguration(environment, timestamp)
 
-  const path = environment.KILN_RELEASE_CONFIG
   const runId = environment.GITHUB_RUN_ID
   const commit = environment.GITHUB_SHA
-  if (!path || !runId || !commit)
-    throw new Error(
-      "Nightly configuration requires an artifact path, run ID, and commit"
-    )
+  if (!/^\d+$/u.test(runId ?? "") || !/^[a-f0-9]{40}$/u.test(commit ?? ""))
+    throw new Error("Nightly configuration requires a run ID and commit")
 
   if (environment.GITHUB_RUN_ATTEMPT !== "1") {
     // Never consult today's release line when retrying an older checkout.
     let saved
     try {
-      saved = JSON.parse(readFileSync(path, "utf8"))
+      saved = await store.read()
     } catch (cause) {
       throw new Error(
-        "Cannot retry without the original nightly release configuration. Restore this run's artifact or start a new Nightly release run from main.",
+        "Cannot load the original nightly release configuration. Check access to the nightly-run tag; if it is missing, start a new Nightly release run from main.",
         { cause }
       )
     }
@@ -157,8 +208,7 @@ export async function workflowReleaseConfiguration(
     timestamp,
     await loadLatestStable()
   )
-  mkdirSync(dirname(path), { recursive: true })
-  writeFileSync(path, `${JSON.stringify({ runId, commit, config }, null, 2)}\n`)
+  await store.create({ runId, commit, config })
   return config
 }
 
