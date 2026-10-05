@@ -12,7 +12,7 @@ import {
 import { dirname, join } from "node:path"
 import { promisify } from "node:util"
 
-import { Effect, Schema } from "effect"
+import { Clock, Effect, Schema } from "effect"
 import {
   compareKilnReleaseVersions,
   isKilnNightlyVersion,
@@ -90,7 +90,7 @@ export const updateCliEffect = Effect.fn("cli.update")(function* (
 
   // Lock the actual executable, including when invoked through a symlink.
   return yield* Effect.acquireUseRelease(
-    updateOperation(() => acquireLock(`${target}.update-lock`)),
+    acquireLock(`${target}.update-lock`),
     () =>
       Effect.acquireUseRelease(
         updateOperation(() => mkdtemp(join(dirname(target), ".kiln-update-"))),
@@ -142,17 +142,25 @@ function updateError(cause: unknown): CliCommandError {
   })
 }
 
-async function acquireLock(path: string) {
-  try {
-    return await open(path, "wx", 0o600)
-  } catch (cause) {
-    // A killed update cannot release its lock; it must not block updates forever.
-    const lock = await stat(path).catch(() => undefined)
-    if (!lock || Date.now() - lock.mtimeMs < staleLockAge) throw cause
-    await rm(path, { force: true })
-    return open(path, "wx", 0o600)
-  }
-}
+const acquireLock = Effect.fn("cli.update.acquireLock")(function* (
+  path: string
+) {
+  const create = updateOperation(() => open(path, "wx", 0o600))
+  return yield* create.pipe(
+    Effect.catch((cause) =>
+      Effect.gen(function* () {
+        // A killed update cannot release its lock; it must not block updates forever.
+        const lock = yield* updateOperation(() => stat(path)).pipe(
+          Effect.mapError(() => cause)
+        )
+        const now = yield* Clock.currentTimeMillis
+        if (now - lock.mtimeMs < staleLockAge) return yield* cause
+        yield* updateOperation(() => rm(path, { force: true }))
+        return yield* create
+      })
+    )
+  )
+})
 
 async function findRelease(
   repository: string,
