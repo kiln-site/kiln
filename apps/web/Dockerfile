@@ -74,12 +74,7 @@ LABEL org.opencontainers.image.source="${KILN_IMAGE_SOURCE}" \
 
 COPY --from=runtime-deps --chown=65532:65532 /runtime/node_modules ./node_modules
 COPY --from=runtime-build --chown=65532:65532 /source/apps/web/dist ./dist
-COPY --from=runtime-build --chown=65532:65532 /source/apps/web/migrations ./migrations
 COPY --from=runtime-build --chown=65532:65532 \
-  /source/apps/web/scripts/database-config.mjs \
-  /source/apps/web/scripts/legacy-access-permissions.mjs \
-  /source/apps/web/scripts/migrate-access.mjs \
-  /source/apps/web/scripts/migrate-app.mjs \
   /source/apps/web/scripts/serve.mjs \
   /source/apps/web/scripts/start-container.mjs \
   ./scripts/

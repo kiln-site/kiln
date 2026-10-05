@@ -591,7 +591,7 @@ describe("instance port lifecycle", () => {
         yield* lifecycle.releaseInstancePortEffect(first.id, released.id)
 
         vi.useRealTimers()
-        const [failures, concurrent] = yield* Effect.partition(
+        const [concurrent, failures] = yield* Effect.partition(
           [first.id, second.id],
           (instanceId) =>
             lifecycle.reserveInstancePortEffect(instanceId, {

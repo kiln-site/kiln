@@ -64,8 +64,8 @@ const config = defineConfig(({ command }) => {
           command: "vp test run",
           dependsOn: [{ task: "build", from: "dependencies" }],
           cache: {
-            // Opt-in MySQL access migration fixture.
-            env: ["ACCESS_MIGRATION_TEST", "DB_*"],
+            // Opt-in MySQL migration test.
+            env: ["MYSQL_MIGRATION_TEST", "DB_*"],
           },
         },
         typecheck: {

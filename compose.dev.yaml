@@ -103,7 +103,6 @@ services:
         if [ ! -f packages/contracts/dist/index.js ] || [ packages/contracts/src/index.ts -nt packages/contracts/dist/index.js ]; then
           pnpm --filter @workspace/contracts exec vp pack
         fi
-        pnpm --filter web db:migrate
         exec pnpm --filter web dev --host 0.0.0.0
     healthcheck:
       test:

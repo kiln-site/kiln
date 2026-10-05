@@ -12,6 +12,14 @@ export class DatabaseError extends Schema.TaggedError<DatabaseError>()(
   }
 }
 
+export class MigrationError extends Schema.TaggedError<MigrationError>()(
+  "MigrationError",
+  {
+    message: Schema.String,
+    cause: Schema.optional(Schema.Defect()),
+  }
+) {}
+
 export class FilePinLimitError extends Schema.TaggedError<FilePinLimitError>()(
   "FilePinLimitError",
   { limit: Schema.Number }
@@ -50,13 +58,10 @@ export class BackupStorageError extends Schema.TaggedError<BackupStorageError>()
   }
 }
 
-export class CacheError extends Schema.TaggedError<CacheError>()(
-  "CacheError",
-  {
-    operation: Schema.String,
-    cause: Schema.Defect(),
-  }
-) {
+export class CacheError extends Schema.TaggedError<CacheError>()("CacheError", {
+  operation: Schema.String,
+  cause: Schema.Defect(),
+}) {
   override get message() {
     return `Cache operation ${this.operation} failed`
   }

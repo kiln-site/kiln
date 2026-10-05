@@ -5,8 +5,7 @@
   "scripts": {
     "build": "vp run -r build",
     "db:down": "docker compose down",
-    "db:migrate": "pnpm --filter web db:migrate",
-    "db:reset": "docker compose down -v && docker compose up -d --wait mysql && pnpm db:migrate",
+    "db:reset": "docker compose down -v && docker compose up -d --wait mysql",
     "db:up": "docker compose up -d mysql",
     "dev:setup": "node scripts/dev-docker.mjs setup",
     "dev:docker": "node scripts/dev-docker.mjs start",
@@ -26,7 +25,7 @@
     "doctor": "npx react-doctor@latest"
   },
   "devDependencies": {
-    "effect": "4.0.0-rc.118",
+    "effect": "4.0.1",
     "typescript": "^6",
     "vite": "catalog:",
     "vite-plus": "catalog:"

@@ -211,7 +211,7 @@ export async function resyncDomainAssignmentsHandler() {
   const instances = snapshots.flatMap(({ relay, snapshot }) =>
     snapshot.instances.map((instance) => ({ ...instance, relayId: relay.id }))
   )
-  const [failures] = await runAppEffect(
+  const [, failures] = await runAppEffect(
     "domains.instances.resync",
     resyncDomainInstancesEffect(instances, provisionInstanceDomainEffect)
   )
