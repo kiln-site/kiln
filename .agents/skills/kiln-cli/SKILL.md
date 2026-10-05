@@ -50,8 +50,9 @@ kiln whoami
 If the binary is missing, report that before suggesting installation. GitHub
 releases include standalone archives for Linux/macOS (x64 and ARM64) and Windows
 (x64), plus an npm package tarball. Extract `kiln` or `kiln.exe` onto `PATH` for
-an installation without Node.js or Bun; update it by replacing the executable
-from a newer release. `kiln update` updates package-manager installations.
+an installation without Node.js or Bun. npm installs the same native binaries
+through platform packages and a small Node.js launcher. Keep optional dependencies
+enabled. `kiln update` works for both installation methods.
 macOS binaries are not notarized: download with `curl`, or run
 `xattr -d com.apple.quarantine kiln` after extracting a browser download.
 If authentication is missing, use the appropriate login flow:
@@ -102,14 +103,17 @@ Update the locally installed CLI with:
 kiln update
 ```
 
-This reinstalls the distribution's embedded npm package at `latest` (`kiln-cli`
-for official builds) globally through pnpm or Bun when the CLI can
-identify that installer, with npm as the default and fallback. It updates only
-the CLI executable; it does not update Hearth, Relays, or managed servers, and
-it does not require authentication. A standalone binary cannot update itself:
-`kiln update` fails with `cli_update_standalone` and links the distribution's
-GitHub releases, where the user downloads a newer archive and replaces the
-executable.
+This downloads a native binary from the distribution's build-time GitHub
+repository, preserving the installed stable/nightly channel. It verifies the
+asset's SHA-256 digest, size, and version before replacing the executable. It never
+invokes a package manager and does not require authentication. The installation
+directory must be writable. It updates only the CLI, not Hearth, Relays, or servers.
+
+npm users can also reinstall through their package manager. `kiln --version` is
+the executable version; npm's package metadata is unchanged by a GitHub update.
+Missing release assets can mean publication is still running; retry after the
+CLI release jobs finish. Failed downloads preserve the current executable.
+Windows retains the previous running executable as `.old` until a later update.
 
 ## Resolve a server
 

@@ -1,106 +1,310 @@
-import { spawn } from "node:child_process"
-import { existsSync, realpathSync } from "node:fs"
-import { basename, dirname, join, parse, resolve } from "node:path"
+import { execFile } from "node:child_process"
+import { createHash } from "node:crypto"
+import {
+  chmod,
+  mkdtemp,
+  open,
+  realpath,
+  rename,
+  rm,
+  stat,
+} from "node:fs/promises"
+import { dirname, join } from "node:path"
+import { promisify } from "node:util"
 
-import { Effect, Result } from "effect"
+import { Effect, Schema } from "effect"
+import {
+  compareKilnReleaseVersions,
+  isKilnNightlyVersion,
+  isKilnReleaseVersion,
+  kilnGitRepositoryApiUrl,
+} from "@workspace/contracts"
 
-import { cliPackageName, cliReleasesUrl } from "./distribution.js"
+import { cliGitRepository, cliVersion } from "./distribution.js"
+import { CliCommandError, commandError } from "./errors.js"
 
-import { commandError } from "./errors.js"
-import { writeLine } from "./output.js"
-
-export type CliPackageManager = "bun" | "npm" | "pnpm"
-
-export interface CliUpdateCommand {
-  arguments: ReadonlyArray<string>
-  executable: string
-  packageManager: CliPackageManager
-}
-
-export type CliUpdateRunner = (
-  command: CliUpdateCommand,
-  signal: AbortSignal
-) => Promise<void>
-
-interface DetectionFileSystem {
-  exists(path: string): boolean
-  realpath(path: string): string
-}
-
-export interface CliPackageManagerDetection {
-  entrypointPath?: string
-  environment?: NodeJS.ProcessEnv
-  filesystem?: DetectionFileSystem
-}
+const execFileAsync = promisify(execFile)
+const maximumBinarySize = 256 * 1024 * 1024
+const releaseSchema = Schema.Struct({
+  tag_name: Schema.String,
+  draft: Schema.Boolean,
+  prerelease: Schema.Boolean,
+  assets: Schema.Array(
+    Schema.Struct({
+      name: Schema.String,
+      size: Schema.Number,
+      digest: Schema.optional(Schema.NullOr(Schema.String)),
+      browser_download_url: Schema.String,
+    })
+  ),
+})
+type Release = typeof releaseSchema.Type
+type Asset = Release["assets"][number]
 
 export interface CliUpdateOptions {
-  detectPackageManager?: () => CliPackageManager
-  isStandaloneBinary?: () => boolean
+  currentVersion?: string
+  repository?: string
+  executablePath?: string
   platform?: NodeJS.Platform
-  reportFallback?: (packageManager: Exclude<CliPackageManager, "npm">) => void
-  runUpdate?: CliUpdateRunner
-}
-
-const nodeFileSystem: DetectionFileSystem = {
-  exists: existsSync,
-  realpath: (path) => realpathSync(path),
+  arch?: string
+  isStandaloneBinary?: () => boolean
+  fetch?: typeof globalThis.fetch
+  verifyBinary?: (
+    path: string,
+    version: string,
+    signal: AbortSignal
+  ) => Promise<void>
 }
 
 export const updateCliEffect = Effect.fn("cli.update")(function* (
   options: CliUpdateOptions = {}
 ) {
-  const isStandaloneBinary =
-    options.isStandaloneBinary ?? (() => isStandaloneCliBinary())
-  if (yield* Effect.sync(isStandaloneBinary)) {
+  if (!(options.isStandaloneBinary ?? isStandaloneCliBinary)()) {
     return yield* commandError({
-      code: "cli_update_standalone",
-      message: `This Kiln CLI is a standalone binary, so it cannot update itself. Download a newer release from ${cliReleasesUrl()} and replace ${process.execPath}.`,
+      code: "cli_update_development",
+      message:
+        "Run kiln update from an installed CLI binary, not the source checkout.",
     })
   }
-
-  const detectPackageManager =
-    options.detectPackageManager ?? detectCliPackageManager
-  const packageManager = yield* Effect.sync(() =>
-    detectPackageManagerOrNpm(detectPackageManager)
-  )
+  const currentVersion = options.currentVersion ?? cliVersion
   const platform = options.platform ?? process.platform
-  const reportFallback = options.reportFallback ?? writeFallbackMessage
-  const runUpdate = options.runUpdate ?? runCliUpdate
-
-  if (packageManager === "npm") {
-    yield* runUpdateEffect(cliUpdateCommand("npm", platform), runUpdate)
-    return
+  const arch = options.arch ?? process.arch
+  const repository = options.repository ?? cliGitRepository
+  const fetcher = options.fetch ?? globalThis.fetch
+  const release = yield* updateOperation((signal) =>
+    findRelease(repository, currentVersion, fetcher, signal)
+  )
+  const version = release.tag_name.slice(1)
+  if (compareKilnReleaseVersions(version, currentVersion) !== 1) {
+    return { updated: false, version: currentVersion }
   }
+  const asset = yield* Effect.try({
+    try: () => selectBinary(release, repository, platform, arch),
+    catch: updateError,
+  })
+  const target = yield* updateOperation(() =>
+    realpath(options.executablePath ?? process.execPath)
+  )
 
-  yield* runUpdateEffect(
-    cliUpdateCommand(packageManager, platform),
-    runUpdate
-  ).pipe(
-    Effect.catch(() =>
-      Effect.gen(function* () {
-        yield* Effect.sync(() => reportFallback(packageManager))
-        yield* runUpdateEffect(cliUpdateCommand("npm", platform), runUpdate)
-      })
-    )
+  // Lock the actual executable, including when invoked through a symlink.
+  return yield* Effect.acquireUseRelease(
+    updateOperation(() => open(`${target}.update-lock`, "wx", 0o600)),
+    () =>
+      Effect.acquireUseRelease(
+        updateOperation(() => mkdtemp(join(dirname(target), ".kiln-update-"))),
+        (directory) =>
+          Effect.gen(function* () {
+            const staged = join(
+              directory,
+              platform === "win32" ? "kiln.exe" : "kiln"
+            )
+            yield* updateOperation(async (signal) => {
+              await downloadBinary(asset, staged, fetcher, signal)
+              signal.throwIfAborted()
+              const original = await stat(target)
+              await chmod(staged, original.mode & 0o777)
+              await (options.verifyBinary ?? verifyBinary)(
+                staged,
+                version,
+                signal
+              )
+            })
+            // Cancellation must not leave the Windows two-rename transaction halfway through.
+            yield* updateOperation(() =>
+              replaceBinary(staged, target, platform)
+            ).pipe(Effect.uninterruptible)
+            return { updated: true, version }
+          }),
+        (directory) =>
+          Effect.promise(() =>
+            rm(directory, { recursive: true, force: true })
+          ).pipe(Effect.ignore)
+      ),
+    (lock) =>
+      Effect.promise(async () => {
+        await lock.close()
+        await rm(`${target}.update-lock`, { force: true })
+      }).pipe(Effect.ignore)
   )
 })
 
-export function detectCliPackageManager(
-  options: CliPackageManagerDetection = {}
-): CliPackageManager {
-  const entrypointPath =
-    options.entrypointPath ?? process.argv[1] ?? process.execPath
-  const environment = options.environment ?? process.env
-  const filesystem = options.filesystem ?? nodeFileSystem
-  const packageRoot = dirname(resolve(entrypointPath))
-
-  if (isPnpmManagedInstall(packageRoot, filesystem)) return "pnpm"
-  if (isBunManagedInstall(entrypointPath, environment)) return "bun"
-  return "npm"
+function updateOperation<A>(operation: (signal: AbortSignal) => Promise<A>) {
+  return Effect.tryPromise({ try: operation, catch: updateError })
 }
 
-// `bun build --compile` serves the bundled entrypoint from its embedded
-// filesystem: /$bunfs/root/ on Unix and B:\~BUN\root\ on Windows.
+function updateError(cause: unknown): CliCommandError {
+  if (cause instanceof CliCommandError) return cause
+  return commandError({
+    cause,
+    code: "cli_update_failed",
+    message:
+      "Could not update the Kiln CLI. Check the error below, installation-directory permissions, and whether another update is running.",
+  })
+}
+
+async function findRelease(
+  repository: string,
+  currentVersion: string,
+  fetcher: typeof globalThis.fetch,
+  signal: AbortSignal
+): Promise<Release> {
+  if (!isKilnReleaseVersion(currentVersion)) {
+    throw new Error(
+      `Cannot select an update channel for version ${currentVersion}.`
+    )
+  }
+  const nightly = isKilnNightlyVersion(currentVersion)
+  const url = kilnGitRepositoryApiUrl(
+    repository,
+    nightly ? "releases?per_page=100" : "releases/latest"
+  )
+  const response = await fetcher(url, {
+    headers: {
+      Accept: "application/vnd.github+json",
+      "User-Agent": "kiln-cli",
+    },
+    signal: AbortSignal.any([signal, AbortSignal.timeout(30_000)]),
+  })
+  if (!response.ok)
+    throw new Error(`GitHub release lookup failed (HTTP ${response.status}).`)
+  const body: unknown = await response.json()
+  const releases = nightly
+    ? Schema.decodeUnknownSync(Schema.Array(releaseSchema))(body)
+    : [Schema.decodeUnknownSync(releaseSchema)(body)]
+  const selected = releases
+    .filter((release) => {
+      const version = release.tag_name.slice(1)
+      return (
+        !release.draft &&
+        release.tag_name.startsWith("v") &&
+        isKilnReleaseVersion(version) &&
+        release.prerelease === nightly &&
+        isKilnNightlyVersion(version) === nightly
+      )
+    })
+    .sort(
+      (a, b) =>
+        compareKilnReleaseVersions(b.tag_name.slice(1), a.tag_name.slice(1)) ??
+        0
+    )[0]
+  if (!selected)
+    throw new Error(
+      `No ${nightly ? "nightly" : "stable"} CLI release is available.`
+    )
+  return selected
+}
+
+function selectBinary(
+  release: Release,
+  repository: string,
+  platform: string,
+  arch: string
+): Asset {
+  const os = platform === "win32" ? "windows" : platform
+  if (
+    !(arch === "x64" || arch === "arm64") ||
+    !["linux", "darwin", "windows"].includes(os) ||
+    (os === "windows" && arch !== "x64")
+  ) {
+    throw new Error(`No CLI binary is published for ${platform}/${arch}.`)
+  }
+  const name = `kiln-${release.tag_name}-${os}-${arch}${os === "windows" ? ".exe" : ""}`
+  const asset = release.assets.find((candidate) => candidate.name === name)
+  if (!asset)
+    throw new Error(
+      `Release ${release.tag_name} does not have ${name} yet. Try again after its CLI build finishes.`
+    )
+  if (!asset.digest || !/^sha256:[a-f\d]{64}$/u.test(asset.digest)) {
+    throw new Error(
+      "GitHub did not provide a SHA-256 digest for the CLI binary."
+    )
+  }
+  if (
+    !Number.isSafeInteger(asset.size) ||
+    asset.size <= 0 ||
+    asset.size > maximumBinarySize
+  ) {
+    throw new Error("The CLI binary has an invalid download size.")
+  }
+  const expectedUrl = `${repository}/releases/download/${release.tag_name}/${name}`
+  if (asset.browser_download_url !== expectedUrl) {
+    throw new Error(
+      "The CLI asset does not belong to this distribution's release."
+    )
+  }
+  return asset
+}
+
+async function downloadBinary(
+  asset: Asset,
+  destination: string,
+  fetcher: typeof globalThis.fetch,
+  signal: AbortSignal
+) {
+  const downloadSignal = AbortSignal.any([signal, AbortSignal.timeout(300_000)])
+  const response = await fetcher(asset.browser_download_url, {
+    signal: downloadSignal,
+  })
+  if (!response.ok || !response.body)
+    throw new Error(`CLI download failed (HTTP ${response.status}).`)
+  const digest = createHash("sha256")
+  downloadSignal.throwIfAborted()
+  const file = await open(destination, "wx", 0o700)
+  let bytes = 0
+  try {
+    for await (const chunk of response.body) {
+      downloadSignal.throwIfAborted()
+      bytes += chunk.byteLength
+      if (bytes > asset.size)
+        throw new Error("CLI download exceeded its expected size.")
+      digest.update(chunk)
+      let offset = 0
+      while (offset < chunk.byteLength) {
+        const result = await file.write(
+          chunk,
+          offset,
+          chunk.byteLength - offset
+        )
+        if (!result.bytesWritten) throw new Error("CLI download write stalled.")
+        offset += result.bytesWritten
+      }
+    }
+    if (
+      bytes !== asset.size ||
+      `sha256:${digest.digest("hex")}` !== asset.digest
+    ) {
+      throw new Error(
+        "CLI download failed its SHA-256 or size check; the installed binary was not changed."
+      )
+    }
+    await file.sync()
+  } finally {
+    await file.close()
+  }
+}
+
+export async function replaceBinary(
+  staged: string,
+  target: string,
+  platform: NodeJS.Platform
+) {
+  if (platform !== "win32") {
+    await rename(staged, target)
+    return
+  }
+  // Windows can move the running image aside, but cannot overwrite/delete it.
+  // Keep it until the next update, when the previous process has exited.
+  const backup = `${target}.old`
+  await rm(backup, { force: true })
+  await rename(target, backup)
+  try {
+    await rename(staged, target)
+  } catch (cause) {
+    await rename(backup, target)
+    throw cause
+  }
+}
+
 export function isStandaloneCliBinary(
   entrypointPath: string = process.argv[1] ?? ""
 ): boolean {
@@ -111,145 +315,17 @@ export function isStandaloneCliBinary(
   )
 }
 
-export function cliUpdateCommand(
-  packageManager: CliPackageManager,
-  platform: NodeJS.Platform = process.platform
-): CliUpdateCommand {
-  const arguments_ = updateArguments(packageManager)
-  if (platform === "win32") {
-    return {
-      arguments: [
-        "/d",
-        "/s",
-        "/c",
-        `${packageManager} ${arguments_.join(" ")}`,
-      ],
-      executable: "cmd.exe",
-      packageManager,
-    }
-  }
-  return {
-    arguments: arguments_,
-    executable: packageManager,
-    packageManager,
-  }
-}
-
-function updateArguments(
-  packageManager: CliPackageManager
-): ReadonlyArray<string> {
-  if (packageManager === "pnpm") {
-    return ["add", "--global", `${cliPackageName}@latest`]
-  }
-  return ["install", "--global", `${cliPackageName}@latest`]
-}
-
-function detectPackageManagerOrNpm(
-  detectPackageManager: () => CliPackageManager
-): CliPackageManager {
-  return Result.try(detectPackageManager).pipe(
-    Result.getOrElse((): CliPackageManager => "npm")
-  )
-}
-
-function isPnpmManagedInstall(
-  packageRoot: string,
-  filesystem: DetectionFileSystem
-): boolean {
-  const canonicalPackageRoot = canonicalPath(packageRoot, filesystem)
-  return [packageRoot, canonicalPackageRoot].some((startPath) =>
-    ancestorOwnsPnpmPackage(startPath, canonicalPackageRoot, filesystem)
-  )
-}
-
-function ancestorOwnsPnpmPackage(
-  startPath: string,
-  canonicalPackageRoot: string,
-  filesystem: DetectionFileSystem
-): boolean {
-  let currentPath = resolve(startPath)
-  const rootPath = parse(currentPath).root
-
-  while (true) {
-    const nodeModulesPath = join(currentPath, "node_modules")
-    if (
-      filesystem.exists(join(nodeModulesPath, ".modules.yaml")) &&
-      canonicalPath(join(nodeModulesPath, cliPackageName), filesystem) ===
-        canonicalPackageRoot
-    ) {
-      return true
-    }
-    if (currentPath === rootPath) return false
-    currentPath = dirname(currentPath)
-  }
-}
-
-function canonicalPath(path: string, filesystem: DetectionFileSystem): string {
-  return Result.try(() => resolve(filesystem.realpath(path))).pipe(
-    Result.getOrElse(() => resolve(path))
-  )
-}
-
-function isBunManagedInstall(
-  entrypointPath: string,
-  environment: NodeJS.ProcessEnv
-): boolean {
-  const normalizedPath = entrypointPath.replaceAll("\\", "/").toLowerCase()
-  const userAgent = environment.npm_config_user_agent?.toLowerCase()
-  const npmExecPath = environment.npm_execpath
-  return (
-    userAgent?.startsWith("bun/") === true ||
-    (npmExecPath !== undefined &&
-      basename(npmExecPath).toLowerCase().startsWith("bun")) ||
-    normalizedPath.includes("/.bun/install/global/")
-  )
-}
-
-function runUpdateEffect(
-  command: CliUpdateCommand,
-  runUpdate: CliUpdateRunner
-) {
-  return Effect.tryPromise({
-    try: (signal) => runUpdate(command, signal),
-    catch: (cause) =>
-      commandError({
-        cause,
-        code: "cli_update_failed",
-        message: `${command.packageManager} could not update the Kiln CLI.`,
-      }),
-  })
-}
-
-function writeFallbackMessage(
-  packageManager: Exclude<CliPackageManager, "npm">
-): void {
-  writeLine(
-    `${packageManager} could not update the Kiln CLI; retrying with npm.`
-  )
-}
-
-function runCliUpdate(
-  command: CliUpdateCommand,
+async function verifyBinary(
+  path: string,
+  version: string,
   signal: AbortSignal
-): Promise<void> {
-  return new Promise((resolvePromise, rejectPromise) => {
-    const child = spawn(command.executable, command.arguments, {
-      signal,
-      stdio: "inherit",
-    })
-    child.once("error", rejectPromise)
-    child.once("exit", (code, signal) => {
-      if (code === 0) {
-        resolvePromise()
-        return
-      }
-      rejectPromise(
-        new Error(
-          signal
-            ? `${command.packageManager} was terminated by ${signal}.`
-            : `${command.packageManager} exited with code ${code ?? "unknown"}.`
-        )
-      )
-    })
+) {
+  const { stdout } = await execFileAsync(path, ["--version"], {
+    signal,
+    timeout: 15_000,
+    windowsHide: true,
   })
+  if (stdout.trim() !== `kiln ${version}`) {
+    throw new Error("The downloaded binary reports an unexpected version.")
+  }
 }
