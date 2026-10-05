@@ -10,11 +10,11 @@ import {
   rm,
   writeFile,
 } from "node:fs/promises"
-import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { binaryName, dist, platform, root, version } from "./distribution.mjs"
 
-const directory = await mkdtemp(join(tmpdir(), "kiln-native-e2e-"))
+// Bun's final compile rename cannot cross Windows drives; keep fixtures on the build volume.
+const directory = await mkdtemp(join(dist, "native-e2e-"))
 const node = execFileSync("node", ["-p", "process.execPath"], {
   encoding: "utf8",
 }).trim()
