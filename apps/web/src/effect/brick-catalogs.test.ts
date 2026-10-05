@@ -82,9 +82,9 @@ describe("Brick catalog persistence", () => {
           execute: () => Effect.succeed(emptyResult),
           queryRows: <TRow extends RowDataPacket>(sql: string) => {
             if (sql.includes("COUNT(*)")) {
-              return Effect.succeed(
-                [{ total: 0 }] as unknown as ReadonlyArray<TRow>
-              )
+              return Effect.succeed([
+                { total: 0 },
+              ] as unknown as ReadonlyArray<TRow>)
             }
             return Effect.succeed([] as unknown as ReadonlyArray<TRow>)
           },
@@ -120,7 +120,7 @@ describe("Brick catalog persistence", () => {
             snapshot: "not-json",
             snapshot_sha256: "b".repeat(64),
             source: "https://example.com/catalog.yml",
-            updated_at: new Date(),
+            updated_at: Date.UTC(2026, 8, 29),
             visibility: "personal",
           },
         ] as unknown as ReadonlyArray<TRow>),

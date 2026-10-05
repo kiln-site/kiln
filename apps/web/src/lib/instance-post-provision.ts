@@ -1,6 +1,6 @@
 import type { RowDataPacket } from "mysql2/promise"
 import { relaySnapshotSchema } from "@workspace/contracts"
-import { Effect } from "effect"
+import { Clock, Effect } from "effect"
 
 import { Database } from "@/effect/database"
 import { promiseEffect } from "@/effect/promise"
@@ -40,13 +40,15 @@ async function processInstancePostProvisionJobs(): Promise<void> {
     "instances.postProvision.list",
     Effect.gen(function* () {
       const database = yield* Database
+      const now = yield* Clock.currentTimeMillis
       return yield* database.queryRows<PostProvisionRow>(
         "instances.postProvision.list",
         `SELECT relay_id, instance_id, attempts
            FROM ${databaseTable("instance_post_provision")}
-          WHERE next_attempt_at <= CURRENT_TIMESTAMP(3)
+          WHERE next_attempt_at <= ?
           ORDER BY next_attempt_at ASC, created_at ASC
-          LIMIT 10`
+          LIMIT 10`,
+        [now]
       )
     })
   )
@@ -122,12 +124,14 @@ async function postpone(row: PostProvisionRow, delaySeconds: number) {
     "instances.postProvision.postpone",
     Effect.gen(function* () {
       const database = yield* Database
+      const now = yield* Clock.currentTimeMillis
       yield* database.execute(
         "instances.postProvision.postpone",
         `UPDATE ${databaseTable("instance_post_provision")}
-            SET next_attempt_at = TIMESTAMPADD(SECOND, ?, CURRENT_TIMESTAMP(3))
+            SET next_attempt_at = ?,
+                updated_at = ?
           WHERE relay_id = ? AND instance_id = ?`,
-        [delaySeconds, row.relay_id, row.instance_id]
+        [now + delaySeconds * 1000, now, row.relay_id, row.instance_id]
       )
     })
   )
@@ -143,14 +147,23 @@ async function defer(row: PostProvisionRow, cause: unknown): Promise<void> {
     "instances.postProvision.defer",
     Effect.gen(function* () {
       const database = yield* Database
+      const now = yield* Clock.currentTimeMillis
       yield* database.execute(
         "instances.postProvision.defer",
         `UPDATE ${databaseTable("instance_post_provision")}
             SET attempts = ?,
-                next_attempt_at = TIMESTAMPADD(SECOND, ?, CURRENT_TIMESTAMP(3)),
-                last_error = ?
+                next_attempt_at = ?,
+                last_error = ?,
+                updated_at = ?
           WHERE relay_id = ? AND instance_id = ?`,
-        [attempts, delaySeconds, message, row.relay_id, row.instance_id]
+        [
+          attempts,
+          now + delaySeconds * 1000,
+          message,
+          now,
+          row.relay_id,
+          row.instance_id,
+        ]
       )
     })
   )

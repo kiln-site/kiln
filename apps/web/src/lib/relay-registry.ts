@@ -12,7 +12,7 @@ import { request as httpRequest } from "node:http"
 import { request as httpsRequest } from "node:https"
 import { TLSSocket } from "node:tls"
 import type { RowDataPacket } from "mysql2/promise"
-import { Effect, Result } from "effect"
+import { Clock, Effect, Result } from "effect"
 import { z } from "zod"
 
 import {
@@ -140,13 +140,13 @@ interface RelayRow extends RowDataPacket {
   client_private_key_ciphertext: string
   client_public_key: string
   client_role: "custom" | "full_access" | "read_only"
-  created_at: Date
+  created_at: number
   created_by: string | null
   enabled: number
   hostname: string
   id: string
   issuer_generation: string | number
-  last_connected_at: Date | null
+  last_connected_at: number | null
   last_error: string | null
   managed_ember_count: number | null
   name: string
@@ -446,9 +446,9 @@ export async function updateRelayClientPolicy(
   if (response.updated && input.clientId === relay.clientId) {
     await databasePool.execute(
       `UPDATE ${databaseTable("relay")}
-          SET client_role = ?, client_actions = ?
+          SET client_role = ?, client_actions = ?, updated_at = ?
         WHERE id = ?`,
-      [response.role, JSON.stringify(response.actions), relay.id]
+      [response.role, JSON.stringify(response.actions), Date.now(), relay.id]
     )
   }
   return response
@@ -502,8 +502,8 @@ export async function renamePersistedRelay(
       )
     )
   await databasePool.execute(
-    `UPDATE ${databaseTable("relay")} SET name = ? WHERE id = ?`,
-    [renamed.name, relay.id]
+    `UPDATE ${databaseTable("relay")} SET name = ?, updated_at = ? WHERE id = ?`,
+    [renamed.name, Date.now(), relay.id]
   )
   const updated = await requiredPersistedRelay(relay.id)
   publishRelayCollectionChange(relay.id)
@@ -822,6 +822,7 @@ export function persistPairedRelayEffect(input: {
       return yield* Effect.fail(new Error("Invalid Relay creator ownership"))
     }
     const database = yield* Database
+    const now = yield* Clock.currentTimeMillis
     return yield* database.transaction("relay.pairing.persist", (transaction) =>
       Effect.gen(function* () {
         const persistedRows =
@@ -856,7 +857,7 @@ export function persistPairedRelayEffect(input: {
                       client_public_key = ?, client_private_key_ciphertext = ?,
                       client_role = ?, client_actions = ?, enabled = TRUE,
                       issuer_generation = issuer_generation + 1,
-                      last_error = NULL
+                      last_error = NULL, updated_at = ?
                 WHERE id = ?`,
             [
               input.name,
@@ -871,6 +872,7 @@ export function persistPairedRelayEffect(input: {
               input.clientPrivateKeyCiphertext,
               input.clientRole,
               input.clientActions,
+              now,
               input.id,
             ]
           )
@@ -880,8 +882,9 @@ export function persistPairedRelayEffect(input: {
                 id, name, hostname, port, use_tls, browser_origin,
                 relay_public_key, relay_ca_certificate,
                 client_id, client_public_key, client_private_key_ciphertext,
-                client_role, client_actions, enabled, created_by
-              ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, TRUE, ?)`,
+                client_role, client_actions, enabled, created_by,
+                created_at, updated_at
+              ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, TRUE, ?, ?, ?)`,
             [
               input.id,
               input.name,
@@ -897,6 +900,8 @@ export function persistPairedRelayEffect(input: {
               input.clientRole,
               input.clientActions,
               input.createdBy,
+              now,
+              now,
             ]
           )
         }
@@ -915,9 +920,9 @@ export async function updatePersistedRelay(input: {
     import("mysql2/promise").ResultSetHeader
   >(
     `UPDATE ${databaseTable("relay")}
-        SET hostname = ?, port = ?, use_tls = ?
+        SET hostname = ?, port = ?, use_tls = ?, updated_at = ?
       WHERE id = ?`,
-    [input.hostname, input.port, input.useTls, input.id]
+    [input.hostname, input.port, input.useTls, Date.now(), input.id]
   )
   if (result.affectedRows !== 1) throw new Error("Relay not found")
   const relay = await inspectPersistedRelay(input.id)
@@ -945,13 +950,15 @@ export async function setPersistedRelayEnabled(
 export const setPersistedRelayEnabledEffect = Effect.fn("relays.setEnabled")(
   function* (id: string, enabled: boolean) {
     const database = yield* Database
+    const now = yield* Clock.currentTimeMillis
     const result = yield* database.execute(
       "relay_set_enabled",
       `UPDATE ${databaseTable("relay")}
           SET enabled = ?,
-              issuer_generation = issuer_generation + IF(? = FALSE, 1, 0)
+              issuer_generation = issuer_generation + IF(? = FALSE, 1, 0),
+              updated_at = ?
         WHERE id = ?`,
-      [enabled, enabled, id]
+      [enabled, enabled, now, id]
     )
     if (result.affectedRows !== 1) {
       return yield* Effect.fail(
@@ -979,15 +986,16 @@ export const setPersistedRelayEnabledEffect = Effect.fn("relays.setEnabled")(
 export const deletePersistedRelayEffect = Effect.fn("relay.deletePersisted")(
   function* (id: string) {
     const database = yield* Database
+    const now = yield* Clock.currentTimeMillis
     yield* database.transaction("relay.deletePersisted", (transaction) =>
       Effect.gen(function* () {
         yield* transaction.execute(
           `UPDATE ${databaseTable("invitation")}
-              SET revoked_at = CURRENT_TIMESTAMP(3)
+              SET revoked_at = ?
             WHERE relay_id = ?
               AND accepted_at IS NULL
               AND revoked_at IS NULL`,
-          [id]
+          [now, id]
         )
         yield* transaction.execute(
           `DELETE FROM ${databaseTable("access_grant")} WHERE relay_id = ?`,
@@ -999,8 +1007,9 @@ export const deletePersistedRelayEffect = Effect.fn("relay.deletePersisted")(
                ON target.network_id = network.id
               AND target.relay_id = ?
               SET network.cleanup_attempts = 0,
-                  network.cleanup_next_attempt_at = CURRENT_TIMESTAMP(3),
-                  network.cleanup_last_error = NULL
+                  network.cleanup_next_attempt_at = ?,
+                  network.cleanup_last_error = NULL,
+                  network.updated_at = ?
             WHERE network.deletion_requested_at IS NOT NULL
               AND NOT EXISTS (
                 SELECT 1
@@ -1008,7 +1017,7 @@ export const deletePersistedRelayEffect = Effect.fn("relay.deletePersisted")(
                  WHERE remaining.network_id = network.id
                    AND remaining.relay_id <> ?
               )`,
-          [id, id]
+          [id, now, now, id]
         )
         yield* transaction.execute(
           `DELETE FROM ${databaseTable("tailscale_network_deployment")}
@@ -1036,9 +1045,10 @@ export async function deletePersistedRelay(id: string): Promise<void> {
     import("mysql2/promise").ResultSetHeader
   >(
     `UPDATE ${databaseTable("relay")}
-        SET enabled = FALSE, issuer_generation = issuer_generation + 1
+        SET enabled = FALSE, issuer_generation = issuer_generation + 1,
+            updated_at = ?
       WHERE id = ?`,
-    [id]
+    [Date.now(), id]
   )
   if (retireResult.affectedRows !== 1) throw new Error("Relay not found")
   const [retired] = await databasePool.query<
@@ -1083,19 +1093,21 @@ async function inspectPersistedRelay(id: string): Promise<PersistedRelay> {
       const snapshot = relaySnapshotSchema.parse(
         await relayRpc(relay, "relay.snapshot", {}, 5_000)
       )
+      const now = Date.now()
       await databasePool.execute(
         `UPDATE ${databaseTable("relay")}
           SET last_connected_at = ?, last_error = NULL,
               managed_ember_count = ?, node_arch = ?,
-              node_platform = ?, node_version = ?
+              node_platform = ?, node_version = ?, updated_at = ?
         WHERE id = ?`,
         [
-          new Date(),
+          now,
           snapshot.instances.filter((instance) => instance.managedByRelay)
             .length,
           snapshot.node.arch,
           snapshot.node.platform,
           snapshot.node.version,
+          now,
           id,
         ]
       )
@@ -1104,8 +1116,10 @@ async function inspectPersistedRelay(id: string): Promise<PersistedRelay> {
         error = cause instanceof Error ? cause.message : "Could not reach Relay"
         return registryOperation(() =>
           databasePool.execute(
-            `UPDATE ${databaseTable("relay")} SET last_error = ? WHERE id = ?`,
-            [(error ?? "Could not reach Relay").slice(0, 512), id]
+            `UPDATE ${databaseTable("relay")}
+                SET last_error = ?, updated_at = ?
+              WHERE id = ?`,
+            [(error ?? "Could not reach Relay").slice(0, 512), Date.now(), id]
           )
         ).pipe(Effect.asVoid)
       })
@@ -1196,12 +1210,18 @@ const decryptRelayCredentialsEffect = Effect.fn("relays.credentials.decrypt")(
             cause,
           }),
       })
+      const now = yield* Clock.currentTimeMillis
       yield* database.execute(
         "rotate_relay_private_key",
         `UPDATE ${databaseTable("relay")}
-          SET client_private_key_ciphertext = ?
+          SET client_private_key_ciphertext = ?, updated_at = ?
         WHERE id = ? AND client_private_key_ciphertext = ?`,
-        [rotated, credentials.relayId, credentials.clientPrivateKeyCiphertext]
+        [
+          rotated,
+          now,
+          credentials.relayId,
+          credentials.clientPrivateKeyCiphertext,
+        ]
       )
     }
     return {
@@ -1405,13 +1425,16 @@ function toPersistedRelay(row: RelayRow): PersistedRelay {
       ),
     browserOrigin: row.browser_origin,
     clientId: row.client_id,
-    createdAt: row.created_at.toISOString(),
+    createdAt: new Date(row.created_at).toISOString(),
     createdBy: row.created_by,
     enabled: Boolean(row.enabled),
     hostname: row.hostname,
     id: row.id,
     issuerGeneration: Number(row.issuer_generation),
-    lastConnectedAt: row.last_connected_at?.toISOString() ?? null,
+    lastConnectedAt:
+      row.last_connected_at === null
+        ? null
+        : new Date(row.last_connected_at).toISOString(),
     lastError: row.last_error,
     managedEmberCount:
       row.managed_ember_count === null ? null : Number(row.managed_ember_count),

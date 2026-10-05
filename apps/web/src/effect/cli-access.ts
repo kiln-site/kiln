@@ -6,7 +6,7 @@ import type {
   CliDeviceCodeResponse,
   CliDeviceTokenResponse,
 } from "@workspace/contracts"
-import { Effect } from "effect"
+import { Clock, Effect } from "effect"
 import type { RowDataPacket } from "mysql2/promise"
 
 import { decryptWithKeyring, encryptWithKeyring } from "../../keyring.mjs"
@@ -29,12 +29,12 @@ const TOKEN_ENCRYPTION_PURPOSE = "cli-device-access-token"
 
 interface CliDeviceRow extends RowDataPacket {
   access_mode: CliAccessMode | null
-  authorized_at: Date | null
+  authorized_at: number | null
   client_name: string
-  credential_expires_at: Date | null
+  credential_expires_at: number | null
   credential_id: string | null
-  expires_at: Date
-  last_polled_at: Date | null
+  expires_at: number
+  last_polled_at: number | null
   status: "approved" | "denied" | "pending"
   token_ciphertext: string | null
   user_id: string | null
@@ -42,12 +42,12 @@ interface CliDeviceRow extends RowDataPacket {
 
 interface CliCredentialRow extends RowDataPacket {
   access_mode: CliAccessMode
-  created_at: Date
-  expires_at: Date | null
+  created_at: number
+  expires_at: number | null
   id: string
-  last_used_at: Date | null
+  last_used_at: number | null
   name: string
-  revoked_at: Date | null
+  revoked_at: number | null
   user_id: string
 }
 
@@ -99,14 +99,15 @@ export const issueCliDeviceCodeEffect = Effect.fn("cli.device.issue")(
     userAgent: string | null
   }) {
     const database = yield* Database
+    const now = yield* Clock.currentTimeMillis
     const recent = yield* database.queryRows<{ total: number } & RowDataPacket>(
       "cli.device.rateLimit",
       `SELECT COUNT(*) AS total
          FROM ${databaseTable("auth_audit")}
         WHERE event = 'cli.device.requested'
           AND ip_address <=> ?
-          AND created_at >= DATE_SUB(CURRENT_TIMESTAMP(3), INTERVAL 1 MINUTE)`,
-      [input.ipAddress]
+          AND created_at >= ?`,
+      [input.ipAddress, now - 60_000]
     )
     if (Number(recent[0]?.total ?? 0) >= 10) {
       return yield* CliAccessError.make({
@@ -118,34 +119,37 @@ export const issueCliDeviceCodeEffect = Effect.fn("cli.device.issue")(
 
     const deviceCode = randomBytes(32).toString("base64url")
     const userCode = generateUserCode()
-    const expiresAt = new Date(Date.now() + DEVICE_CODE_TTL_MS)
+    const expiresAt = now + DEVICE_CODE_TTL_MS
     yield* database.transaction("cli.device.issue", (transaction) =>
       Effect.gen(function* () {
         yield* transaction.execute(
           `DELETE FROM ${databaseTable("cli_device")}
-            WHERE expires_at < DATE_SUB(CURRENT_TIMESTAMP(3), INTERVAL 1 DAY)`,
-          []
+            WHERE expires_at < ?`,
+          [now - 24 * 60 * 60_000]
         )
         yield* transaction.execute(
           `INSERT INTO ${databaseTable("cli_device")}
-             (id, device_code_hash, user_code_hash, client_name, expires_at)
-           VALUES (?, ?, ?, ?, ?)`,
+             (id, device_code_hash, user_code_hash, client_name, expires_at,
+              created_at)
+           VALUES (?, ?, ?, ?, ?, ?)`,
           [
             randomUUID(),
             digest(deviceCode),
             digest(normalizeUserCode(userCode)),
             input.name,
             expiresAt,
+            now,
           ]
         )
         yield* transaction.execute(
           `INSERT INTO ${databaseTable("auth_audit")}
-             (user_id, event, ip_address, user_agent, metadata)
-           VALUES (NULL, 'cli.device.requested', ?, ?, ?)`,
+             (user_id, event, ip_address, user_agent, metadata, created_at)
+           VALUES (NULL, 'cli.device.requested', ?, ?, ?, ?)`,
           [
             input.ipAddress,
             input.userAgent,
             JSON.stringify({ name: input.name }),
+            now,
           ]
         )
       })
@@ -156,7 +160,7 @@ export const issueCliDeviceCodeEffect = Effect.fn("cli.device.issue")(
     verificationUriComplete.searchParams.set("code", userCode)
     return {
       deviceCode,
-      expiresAt: expiresAt.toISOString(),
+      expiresAt: new Date(expiresAt).toISOString(),
       interval: DEVICE_POLL_INTERVAL_SECONDS,
       userCode,
       verificationUri: verificationUri.toString(),
@@ -183,7 +187,8 @@ export const inspectCliAuthorizationEffect = Effect.fn("cli.device.inspect")(
       [digest(normalized)]
     )
     const request = rows[0]
-    if (!request || request.expires_at.getTime() <= Date.now()) {
+    const now = yield* Clock.currentTimeMillis
+    if (!request || request.expires_at <= now) {
       return yield* invalidGrant("The CLI authorization code has expired.")
     }
     if (request.status !== "pending") {
@@ -194,7 +199,7 @@ export const inspectCliAuthorizationEffect = Effect.fn("cli.device.inspect")(
       })
     }
     return {
-      expiresAt: request.expires_at.toISOString(),
+      expiresAt: new Date(request.expires_at).toISOString(),
       name: request.client_name,
       userCode: formatUserCode(normalized),
     } satisfies CliAuthorizationRequest
@@ -237,7 +242,8 @@ export const approveCliAuthorizationEffect = Effect.fn("cli.device.approve")(
     const database = yield* Database
     const credentialId = randomUUID()
     const accessToken = `kiln_cli_${randomBytes(32).toString("base64url")}`
-    const credentialExpiresAt = expirationForDuration(input.duration)
+    const now = yield* Clock.currentTimeMillis
+    const credentialExpiresAt = expirationForDuration(input.duration, now)
     yield* database.transaction("cli.device.approve", (transaction) =>
       Effect.gen(function* () {
         const rows = yield* transaction.queryRows<CliDeviceRow>(
@@ -251,7 +257,7 @@ export const approveCliAuthorizationEffect = Effect.fn("cli.device.approve")(
           [digest(normalized)]
         )
         const request = rows[0]
-        if (!request || request.expires_at.getTime() <= Date.now()) {
+        if (!request || request.expires_at <= now) {
           return yield* invalidGrant("The CLI authorization code has expired.")
         }
         if (request.status !== "pending") {
@@ -264,8 +270,8 @@ export const approveCliAuthorizationEffect = Effect.fn("cli.device.approve")(
 
         yield* transaction.execute(
           `INSERT INTO ${databaseTable("cli_credential")}
-           (id, user_id, name, token_hash, access_mode, expires_at)
-         VALUES (?, ?, ?, ?, ?, ?)`,
+           (id, user_id, name, token_hash, access_mode, expires_at, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
           [
             credentialId,
             input.user.id,
@@ -273,13 +279,14 @@ export const approveCliAuthorizationEffect = Effect.fn("cli.device.approve")(
             digest(accessToken),
             input.mode,
             credentialExpiresAt,
+            now,
           ]
         )
         yield* transaction.execute(
           `UPDATE ${databaseTable("cli_device")}
             SET status = 'approved', user_id = ?, credential_id = ?,
                 token_ciphertext = ?, access_mode = ?,
-                credential_expires_at = ?, authorized_at = CURRENT_TIMESTAMP(3)
+                credential_expires_at = ?, authorized_at = ?
           WHERE user_code_hash = ?`,
           [
             input.user.id,
@@ -291,13 +298,14 @@ export const approveCliAuthorizationEffect = Effect.fn("cli.device.approve")(
             ),
             input.mode,
             credentialExpiresAt,
+            now,
             digest(normalized),
           ]
         )
         yield* transaction.execute(
           `INSERT INTO ${databaseTable("auth_audit")}
-           (user_id, event, metadata)
-         VALUES (?, 'cli.credential.created', ?)`,
+           (user_id, event, metadata, created_at)
+         VALUES (?, 'cli.credential.created', ?, ?)`,
           [
             input.user.id,
             JSON.stringify({
@@ -306,6 +314,7 @@ export const approveCliAuthorizationEffect = Effect.fn("cli.device.approve")(
               mode: input.mode,
               name: request.client_name,
             }),
+            now,
           ]
         )
       })
@@ -328,14 +337,15 @@ export const denyCliAuthorizationEffect = Effect.fn("cli.device.deny")(
       return yield* invalidGrant("The CLI authorization code is invalid.")
     }
     const database = yield* Database
+    const now = yield* Clock.currentTimeMillis
     const result = yield* database.execute(
       "cli.device.deny",
       `UPDATE ${databaseTable("cli_device")}
-          SET status = 'denied', user_id = ?, authorized_at = CURRENT_TIMESTAMP(3)
+          SET status = 'denied', user_id = ?, authorized_at = ?
         WHERE user_code_hash = ?
           AND status = 'pending'
-          AND expires_at > CURRENT_TIMESTAMP(3)`,
-      [input.user.id, digest(normalized)]
+          AND expires_at > ?`,
+      [input.user.id, now, digest(normalized), now]
     )
     if (result.affectedRows !== 1) {
       return yield* invalidGrant(
@@ -362,7 +372,8 @@ export const pollCliDeviceTokenEffect = Effect.fn("cli.device.poll")(function* (
   )
   const request = rows[0]
   if (!request) return yield* invalidGrant("The device code is invalid.")
-  if (request.expires_at.getTime() <= Date.now()) {
+  const now = yield* Clock.currentTimeMillis
+  if (request.expires_at <= now) {
     return yield* CliAccessError.make({
       code: "expired_token",
       message: "The CLI authorization request expired.",
@@ -370,9 +381,8 @@ export const pollCliDeviceTokenEffect = Effect.fn("cli.device.poll")(function* (
     })
   }
   if (
-    request.last_polled_at &&
-    Date.now() - request.last_polled_at.getTime() <
-      DEVICE_POLL_INTERVAL_SECONDS * 1_000 - 250
+    request.last_polled_at !== null &&
+    now - request.last_polled_at < DEVICE_POLL_INTERVAL_SECONDS * 1_000 - 250
   ) {
     return yield* CliAccessError.make({
       code: "slow_down",
@@ -383,9 +393,9 @@ export const pollCliDeviceTokenEffect = Effect.fn("cli.device.poll")(function* (
   yield* database.execute(
     "cli.device.touch",
     `UPDATE ${databaseTable("cli_device")}
-          SET last_polled_at = CURRENT_TIMESTAMP(3)
+          SET last_polled_at = ?
         WHERE device_code_hash = ?`,
-    [digest(deviceCode)]
+    [now, digest(deviceCode)]
   )
   if (request.status === "pending") {
     return yield* CliAccessError.make({
@@ -445,7 +455,7 @@ export const pollCliDeviceTokenEffect = Effect.fn("cli.device.poll")(function* (
   return {
     accessToken,
     credential: {
-      expiresAt: request.credential_expires_at?.toISOString() ?? null,
+      expiresAt: isoOrNull(request.credential_expires_at),
       id: request.credential_id,
       mode: request.access_mode,
       name: request.client_name,
@@ -460,6 +470,7 @@ export const authenticateCliTokenEffect = Effect.fn("cli.token.authenticate")(
       return yield* authenticationRequired()
     }
     const database = yield* Database
+    const now = yield* Clock.currentTimeMillis
     const rows = yield* database.queryRows<CliPrincipalRow>(
       "cli.token.authenticate",
       `SELECT credential.id, credential.user_id, credential.name,
@@ -474,9 +485,9 @@ export const authenticateCliTokenEffect = Effect.fn("cli.token.authenticate")(
          JOIN ${databaseTable("user")} user ON user.id = credential.user_id
         WHERE credential.token_hash = ?
           AND credential.revoked_at IS NULL
-          AND (credential.expires_at IS NULL OR credential.expires_at > CURRENT_TIMESTAMP(3))
+          AND (credential.expires_at IS NULL OR credential.expires_at > ?)
         LIMIT 1`,
-      [digest(accessToken)]
+      [digest(accessToken), now]
     )
     const credential = rows[0]
     if (!credential) {
@@ -500,10 +511,10 @@ export const authenticateCliTokenEffect = Effect.fn("cli.token.authenticate")(
     yield* database.execute(
       "cli.token.touch",
       `UPDATE ${databaseTable("cli_credential")}
-          SET last_used_at = CURRENT_TIMESTAMP(3)
+          SET last_used_at = ?
         WHERE id = ?
-          AND (last_used_at IS NULL OR last_used_at < DATE_SUB(CURRENT_TIMESTAMP(3), INTERVAL 5 MINUTE))`,
-      [credential.id]
+          AND (last_used_at IS NULL OR last_used_at < ?)`,
+      [now, credential.id, now - 5 * 60_000]
     )
     return {
       credentialId: credential.id,
@@ -541,7 +552,8 @@ export const listCliCredentialsEffect = Effect.fn("cli.credentials.list")(
         ORDER BY created_at DESC`,
       [user.id]
     )
-    return rows.map(cliCredentialSummary)
+    const now = yield* Clock.currentTimeMillis
+    return rows.map((row) => cliCredentialSummary(row, now))
   }
 )
 
@@ -555,24 +567,26 @@ export const revokeCliCredentialEffect = Effect.fn("cli.credentials.revoke")(
       })
     }
     const database = yield* Database
+    const now = yield* Clock.currentTimeMillis
     const result = yield* database.transaction(
       "cli.credentials.revoke",
       (transaction) =>
         Effect.gen(function* () {
           const updated = yield* transaction.execute(
             `UPDATE ${databaseTable("cli_credential")}
-                SET revoked_at = CURRENT_TIMESTAMP(3)
+                SET revoked_at = ?
               WHERE id = ? AND user_id = ? AND revoked_at IS NULL`,
-            [input.credentialId, input.user.id]
+            [now, input.credentialId, input.user.id]
           )
           if (updated.affectedRows === 1) {
             yield* transaction.execute(
               `INSERT INTO ${databaseTable("auth_audit")}
-                 (user_id, event, metadata)
-               VALUES (?, 'cli.credential.revoked', ?)`,
+                 (user_id, event, metadata, created_at)
+               VALUES (?, 'cli.credential.revoked', ?, ?)`,
               [
                 input.user.id,
                 JSON.stringify({ credentialId: input.credentialId }),
+                now,
               ]
             )
             const targets = yield* enabledRelayTargetsEffect(transaction, {
@@ -634,22 +648,32 @@ export function bearerToken(headers: Headers): string | null {
   return match?.[1] ?? null
 }
 
-function cliCredentialSummary(row: CliCredentialRow): CliCredentialSummary {
+function cliCredentialSummary(
+  row: CliCredentialRow,
+  now: number
+): CliCredentialSummary {
   return {
     active:
       row.revoked_at === null &&
-      (row.expires_at === null || row.expires_at.getTime() > Date.now()),
-    createdAt: row.created_at.toISOString(),
-    expiresAt: row.expires_at?.toISOString() ?? null,
+      (row.expires_at === null || row.expires_at > now),
+    createdAt: new Date(row.created_at).toISOString(),
+    expiresAt: isoOrNull(row.expires_at),
     id: row.id,
-    lastUsedAt: row.last_used_at?.toISOString() ?? null,
+    lastUsedAt: isoOrNull(row.last_used_at),
     mode: row.access_mode,
     name: row.name,
-    revokedAt: row.revoked_at?.toISOString() ?? null,
+    revokedAt: isoOrNull(row.revoked_at),
   }
 }
 
-function expirationForDuration(duration: CliAccessDuration): Date | null {
+function isoOrNull(value: number | null): string | null {
+  return value === null ? null : new Date(value).toISOString()
+}
+
+function expirationForDuration(
+  duration: CliAccessDuration,
+  now: number
+): number | null {
   if (duration === "indefinite") return null
   const durationMs =
     duration === "1h"
@@ -659,7 +683,7 @@ function expirationForDuration(duration: CliAccessDuration): Date | null {
         : duration === "1w"
           ? 7 * 24 * 60 * 60_000
           : cliDefaultAccessDays() * 24 * 60 * 60_000
-  return new Date(Date.now() + durationMs)
+  return now + durationMs
 }
 
 function digest(value: string): string {

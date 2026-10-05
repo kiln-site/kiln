@@ -97,7 +97,12 @@ describe("authorization delivery recovery", () => {
     expect(fakes.execute.mock.calls[0]?.[0]).toContain(
       "issuer_generation = GREATEST(issuer_generation, ?)"
     )
-    expect(fakes.execute.mock.calls[0]?.[1]).toEqual([9, 9, "relay-one"])
+    expect(fakes.execute.mock.calls[0]?.[1]).toEqual([
+      9,
+      9,
+      expect.any(Number),
+      "relay-one",
+    ])
   })
 
   it("turns a reported generation rollback into a durable pending advance", async () => {
@@ -113,6 +118,7 @@ describe("authorization delivery recovery", () => {
     )
     expect(fakes.execute.mock.calls[0]?.[1]).toEqual([
       3,
+      expect.any(Number),
       "relay-one",
       3,
       Number.MAX_SAFE_INTEGER,

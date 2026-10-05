@@ -41,8 +41,11 @@ describe("account sessions", () => {
           ["session-own"]
         )
         assert.isFalse("token" in sessions[0]!)
-        assert.match(statements[0]!.sql, /WHERE userId = \?/u)
-        assert.deepStrictEqual(statements[0]!.values, ["user-one"])
+        assert.match(
+          statements[0]!.sql,
+          /WHERE userId = \?\s+AND expiresAt > \?/u
+        )
+        assert.deepStrictEqual(statements[0]!.values, ["user-one", new Date(0)])
       }).pipe(Effect.provide(databaseLayer))
     }
   )
@@ -80,11 +83,12 @@ describe("account sessions", () => {
         assert.isTrue(active)
         assert.match(
           statements[0]!.sql,
-          /WHERE id = \?\s+AND userId = \?\s+AND expiresAt > CURRENT_TIMESTAMP/u
+          /WHERE id = \?\s+AND userId = \?\s+AND expiresAt > \?/u
         )
         assert.deepStrictEqual(statements[0]!.values, [
           "session-own",
           "user-one",
+          new Date(0),
         ])
       }).pipe(Effect.provide(databaseLayer))
     }

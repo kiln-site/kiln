@@ -5,7 +5,7 @@ import {
   type RelayFileActivity,
 } from "@workspace/contracts"
 import type { RowDataPacket } from "mysql2/promise"
-import { Effect } from "effect"
+import { Clock, Effect } from "effect"
 
 import { Database } from "@/effect/database"
 import { FilePinLimitError } from "@/effect/errors"
@@ -19,8 +19,8 @@ interface FileActivityRow extends RowDataPacket {
   instance_id: string
   path: string
   pinned: boolean | number
-  last_viewed_at_ms: number | string
-  last_edited_at_ms: number | string | null
+  last_viewed_at: number
+  last_edited_at: number | null
 }
 
 interface PinnedFilePathRow extends RowDataPacket {
@@ -42,11 +42,11 @@ function activityFromRows(
       instanceId: row.instance_id,
       path: row.path,
       pinned: Boolean(row.pinned),
-      lastViewedAt: new Date(Number(row.last_viewed_at_ms)).toISOString(),
+      lastViewedAt: new Date(row.last_viewed_at).toISOString(),
       lastEditedAt:
-        row.last_edited_at_ms === null
+        row.last_edited_at === null
           ? null
-          : new Date(Number(row.last_edited_at_ms)).toISOString(),
+          : new Date(row.last_edited_at).toISOString(),
     })),
   })
 }
@@ -58,9 +58,7 @@ export const listFileActivityEffect = Effect.fn("files.activity.list")(
       [
         database.queryRows<FileActivityRow>(
           "file_activity_pinned",
-          `SELECT instance_id, path, pinned,
-                  CAST(UNIX_TIMESTAMP(last_viewed_at) * 1000 AS UNSIGNED) AS last_viewed_at_ms,
-                  CAST(UNIX_TIMESTAMP(last_edited_at) * 1000 AS UNSIGNED) AS last_edited_at_ms
+          `SELECT instance_id, path, pinned, last_viewed_at, last_edited_at
              FROM ${databaseTable("file_activity")}
             WHERE relay_id = ? AND instance_id = ? AND pinned = TRUE
             ORDER BY GREATEST(last_viewed_at, COALESCE(last_edited_at, last_viewed_at)) DESC
@@ -69,9 +67,7 @@ export const listFileActivityEffect = Effect.fn("files.activity.list")(
         ),
         database.queryRows<FileActivityRow>(
           "file_activity_recent",
-          `SELECT instance_id, path, pinned,
-                  CAST(UNIX_TIMESTAMP(last_viewed_at) * 1000 AS UNSIGNED) AS last_viewed_at_ms,
-                  CAST(UNIX_TIMESTAMP(last_edited_at) * 1000 AS UNSIGNED) AS last_edited_at_ms
+          `SELECT instance_id, path, pinned, last_viewed_at, last_edited_at
              FROM ${databaseTable("file_activity")}
             WHERE relay_id = ? AND instance_id = ? AND pinned = FALSE
             ORDER BY GREATEST(last_viewed_at, COALESCE(last_edited_at, last_viewed_at)) DESC
@@ -86,49 +82,55 @@ export const listFileActivityEffect = Effect.fn("files.activity.list")(
 )
 
 const ensureActivityInstanceEffect = Effect.fn("files.activity.ensureInstance")(
-  function* (relayId: string, instanceId: string) {
+  function* (relayId: string, instanceId: string, now: number) {
     const database = yield* Database
     yield* database.execute(
       "file_activity_ensure_instance",
       `INSERT IGNORE INTO ${databaseTable("instance")}
-         (relay_id, instance_id, display_name)
-       VALUES (?, ?, NULL)`,
-      [relayId, instanceId]
+         (relay_id, instance_id, display_name, created_at, updated_at)
+       VALUES (?, ?, NULL, ?, ?)`,
+      [relayId, instanceId, now, now]
     )
   }
 )
 
 const recordFileViewedEffect = Effect.fn("files.activity.recordView")(
   function* (relayId: string, instanceId: string, path: string) {
-    yield* ensureActivityInstanceEffect(relayId, instanceId)
+    const now = yield* Clock.currentTimeMillis
+    yield* ensureActivityInstanceEffect(relayId, instanceId, now)
     const database = yield* Database
     yield* database.execute(
       "file_activity_record_view",
       `INSERT INTO ${databaseTable("file_activity")}
-         (relay_id, instance_id, path_hash, path, last_viewed_at)
-       VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP(3))
+         (relay_id, instance_id, path_hash, path, last_viewed_at, created_at,
+          updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)
        ON DUPLICATE KEY UPDATE
          path = VALUES(path),
-         last_viewed_at = CURRENT_TIMESTAMP(3)`,
-      [relayId, instanceId, pathHash(path), path]
+         last_viewed_at = VALUES(last_viewed_at),
+         updated_at = VALUES(updated_at)`,
+      [relayId, instanceId, pathHash(path), path, now, now, now]
     )
   }
 )
 
 const recordFileEditedEffect = Effect.fn("files.activity.recordEdit")(
   function* (relayId: string, instanceId: string, path: string) {
-    yield* ensureActivityInstanceEffect(relayId, instanceId)
+    const now = yield* Clock.currentTimeMillis
+    yield* ensureActivityInstanceEffect(relayId, instanceId, now)
     const database = yield* Database
     yield* database.execute(
       "file_activity_record_edit",
       `INSERT INTO ${databaseTable("file_activity")}
-         (relay_id, instance_id, path_hash, path, last_viewed_at, last_edited_at)
-       VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP(3), CURRENT_TIMESTAMP(3))
+         (relay_id, instance_id, path_hash, path, last_viewed_at, last_edited_at,
+          created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
        ON DUPLICATE KEY UPDATE
          path = VALUES(path),
-         last_viewed_at = CURRENT_TIMESTAMP(3),
-         last_edited_at = CURRENT_TIMESTAMP(3)`,
-      [relayId, instanceId, pathHash(path), path]
+         last_viewed_at = VALUES(last_viewed_at),
+         last_edited_at = VALUES(last_edited_at),
+         updated_at = VALUES(updated_at)`,
+      [relayId, instanceId, pathHash(path), path, now, now, now, now]
     )
   }
 )
@@ -142,7 +144,8 @@ const setFilePinnedEffect = Effect.fn("files.activity.setPinned")(function* (
 ) {
   const database = yield* Database
   const hash = pathHash(path)
-  yield* ensureActivityInstanceEffect(relayId, instanceId)
+  const now = yield* Clock.currentTimeMillis
+  yield* ensureActivityInstanceEffect(relayId, instanceId, now)
   const updated = yield* database.transaction(
     "file_activity_set_pinned",
     (transaction) =>
@@ -184,12 +187,14 @@ const setFilePinnedEffect = Effect.fn("files.activity.setPinned")(function* (
         }
         yield* transaction.execute(
           `INSERT INTO ${databaseTable("file_activity")}
-           (relay_id, instance_id, path_hash, path, pinned, last_viewed_at)
-         VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP(3))
+           (relay_id, instance_id, path_hash, path, pinned, last_viewed_at,
+            created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
          ON DUPLICATE KEY UPDATE
            path = VALUES(path),
-           pinned = VALUES(pinned)`,
-          [relayId, instanceId, hash, path, pinned]
+           pinned = VALUES(pinned),
+           updated_at = VALUES(updated_at)`,
+          [relayId, instanceId, hash, path, pinned, now, now, now]
         )
         return true
       })

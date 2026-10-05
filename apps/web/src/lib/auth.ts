@@ -115,18 +115,19 @@ export const auth = betterAuth({
       create: {
         before: async (user) => {
           const name = parseDisplayName(user.name)
+          const now = new Date()
           return {
             data: {
               ...user,
               name,
               status: "enabled",
-              statusChangedAt: new Date(),
+              statusChangedAt: now,
               // Without email delivery nobody can prove a mailbox, so an
               // operator who enables public sign-up is trusting registrants.
               // Record that as explicit manual trust rather than leaving
               // self-hosted accounts permanently unverified.
               ...(signupTrustedWithoutDelivery()
-                ? { manuallyVerifiedAt: new Date(), manuallyVerifiedBy: null }
+                ? { manuallyVerifiedAt: now, manuallyVerifiedBy: null }
                 : {}),
             },
           }
@@ -134,14 +135,15 @@ export const auth = betterAuth({
         after: async (user) => {
           if (!signupTrustedWithoutDelivery()) return
           await databasePool.execute(
-            `INSERT INTO ${databaseTable("auth_audit")} (user_id, event, metadata)
-             VALUES (?, 'account.manually-verified', ?)`,
+            `INSERT INTO ${databaseTable("auth_audit")} (user_id, event, metadata, created_at)
+             VALUES (?, 'account.manually-verified', ?, ?)`,
             [
               user.id,
               JSON.stringify({
                 actorId: null,
                 reason: "public-signup-without-email-delivery",
               }),
+              Date.now(),
             ]
           )
         },
@@ -180,9 +182,13 @@ export const auth = betterAuth({
             ].includes(context.path ?? "")
           ) {
             await databasePool.execute(
-              `INSERT INTO ${databaseTable("auth_audit")} (user_id, event, metadata)
-               VALUES (?, 'account.email-verified', ?)`,
-              [user.id, JSON.stringify({ actorId: user.id, email: user.email })]
+              `INSERT INTO ${databaseTable("auth_audit")} (user_id, event, metadata, created_at)
+               VALUES (?, 'account.email-verified', ?, ?)`,
+              [
+                user.id,
+                JSON.stringify({ actorId: user.id, email: user.email }),
+                Date.now(),
+              ]
             )
           }
           publishRealtimeChange({

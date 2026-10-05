@@ -1,4 +1,11 @@
-import { describe, expect, it, vi } from "vite-plus/test"
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vite-plus/test"
 import { Effect, Layer } from "effect"
 import type { ResultSetHeader, RowDataPacket } from "mysql2/promise"
 import type { RelayBackupTask } from "@workspace/contracts"
@@ -21,6 +28,17 @@ import {
   updateBackupLimitsEffect,
 } from "@/effect/backups"
 import { deleteS3BackupPrefix } from "@/backups/destinations/s3"
+
+// Effect's default Clock reads Date.now(), so pin it for exact write values.
+const now = Date.UTC(2026, 8, 1)
+
+beforeEach(() => {
+  vi.useFakeTimers({ now, toFake: ["Date"] })
+})
+
+afterEach(() => {
+  vi.useRealTimers()
+})
 
 vi.mock("../../keyring.mjs", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../keyring.mjs")>()
@@ -632,8 +650,8 @@ describe("backup policies", () => {
     })
     expect(queryValues).toEqual(["relay-one", "database", "database-one"])
     expect(writes).toEqual([
-      ["relay-one", "database", "database-one", 6, 2_048],
-      ["relay-one", "platform", "kiln.dev", '["cache/**"]'],
+      ["relay-one", "database", "database-one", 6, 2_048, now, now],
+      ["relay-one", "platform", "kiln.dev", '["cache/**"]', now, now],
     ])
   })
 })
@@ -797,6 +815,7 @@ describe("backup reconciliation", () => {
       null,
       null,
       task.createdAt,
+      now,
     ])
     expect(
       writes.some(
@@ -1048,12 +1067,17 @@ describe("backup reconciliation", () => {
       sql.includes("backup_artifact")
     )
     expect(artifactWrites).toHaveLength(3)
-    expect(artifactWrites[1]?.values).toEqual([currentArtifactId, "backup-one"])
+    expect(artifactWrites[1]?.values).toEqual([
+      now,
+      currentArtifactId,
+      "backup-one",
+    ])
     expect(artifactWrites[2]?.values).toEqual([
       "deleted",
       null,
       "deleted",
       200,
+      now,
       deletedArtifactId,
       "backup-one",
     ])
@@ -1144,14 +1168,14 @@ function finalDeletionPurgeDatabase(input: {
               access_key_id_ciphertext: "enc:AKIAEXAMPLE",
               allow_private_network: 1,
               bucket: "kiln-backups",
-              created_at_ms: Date.parse("2026-01-01T00:00:00.000Z"),
+              created_at: Date.parse("2026-01-01T00:00:00.000Z"),
               deleting: 0,
               enabled: 1,
               endpoint: "https://s3.example.com",
               force_path_style: 1,
               id: "storage-one",
               last_error: null,
-              last_verified_at_ms: null,
+              last_verified_at: null,
               name: "s3",
               object_prefix: "team",
               owner_user_id: null,
@@ -1199,6 +1223,7 @@ describe("backup rename", () => {
     expect(executed[0]?.sql).toContain("SET name = ?")
     expect(executed[0]?.values).toEqual([
       "Weekly world",
+      now,
       "11111111-1111-1111-1111-111111111111",
     ])
   })
@@ -1294,6 +1319,8 @@ describe("backup copy reservation", () => {
       input.sourceArtifactId,
       reserved.artifactId,
       input.requestedBy,
+      now,
+      now,
     ])
   })
 })

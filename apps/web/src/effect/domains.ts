@@ -1,5 +1,5 @@
 import type { RowDataPacket } from "mysql2/promise"
-import { Effect, Option, Schema } from "effect"
+import { Clock, Effect, Option, Schema } from "effect"
 
 import { Database } from "@/effect/database"
 import { CredentialError, ResourceNotFoundError } from "@/effect/errors"
@@ -56,7 +56,7 @@ interface DomainIntegrationRow extends RowDataPacket {
   enabled: boolean | number
   id: string
   last_error: string | null
-  last_verified_at: Date | string | null
+  last_verified_at: number | null
   provider: "cloudflare"
   zone_id: string
   zone_name: string
@@ -133,12 +133,13 @@ export const loadCloudflareIntegrationCredentialEffect = Effect.fn(
   })
   if (decrypted.needsRotation) {
     const rotated = yield* encryptApiToken(decrypted.plaintext)
+    const now = yield* Clock.currentTimeMillis
     yield* database.execute(
       "domains.integration.rotateCredential",
       `UPDATE ${databaseTable("domain_integration")}
-          SET api_token_ciphertext = ?
+          SET api_token_ciphertext = ?, updated_at = ?
         WHERE id = ? AND api_token_ciphertext = ?`,
-      [rotated, CLOUDFLARE_INTEGRATION_ID, ciphertext]
+      [rotated, now, CLOUDFLARE_INTEGRATION_ID, ciphertext]
     )
   }
   return {
@@ -159,12 +160,14 @@ export const saveCloudflareIntegrationEffect = Effect.fn(
 }) {
   const database = yield* Database
   const ciphertext = yield* encryptApiToken(input.apiToken)
+  const now = yield* Clock.currentTimeMillis
   yield* database.execute(
     "domains.integration.save",
     `INSERT INTO ${databaseTable("domain_integration")}
        (id, provider, domain, zone_id, zone_name, api_token_ciphertext,
-        blacklist_patterns, enabled, last_verified_at, last_error)
-     VALUES (?, 'cloudflare', ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP(3), NULL)
+        blacklist_patterns, enabled, last_verified_at, last_error,
+        created_at, updated_at)
+     VALUES (?, 'cloudflare', ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)
      ON DUPLICATE KEY UPDATE
        domain = VALUES(domain),
        zone_id = VALUES(zone_id),
@@ -172,8 +175,9 @@ export const saveCloudflareIntegrationEffect = Effect.fn(
        api_token_ciphertext = VALUES(api_token_ciphertext),
        blacklist_patterns = VALUES(blacklist_patterns),
        enabled = VALUES(enabled),
-       last_verified_at = CURRENT_TIMESTAMP(3),
-       last_error = NULL`,
+       last_verified_at = VALUES(last_verified_at),
+       last_error = NULL,
+       updated_at = VALUES(updated_at)`,
     [
       CLOUDFLARE_INTEGRATION_ID,
       input.domain,
@@ -182,6 +186,9 @@ export const saveCloudflareIntegrationEffect = Effect.fn(
       ciphertext,
       JSON.stringify(input.blacklistPatterns),
       input.enabled,
+      now,
+      now,
+      now,
     ]
   )
 })
@@ -295,13 +302,14 @@ export const reserveInstanceDomainAssignmentEffect = Effect.fn(
   vanityLabel: string
 }) {
   const database = yield* Database
+  const now = yield* Clock.currentTimeMillis
   yield* database.execute(
     "domains.assignment.reserve",
     `INSERT INTO ${databaseTable("instance_domain")}
        (relay_id, instance_id, integration_id, vanity_label, domain,
         public_host, public_port, supports_srv, srv_service, srv_protocol,
-        status, last_error)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', NULL)
+        status, last_error, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', NULL, ?, ?)
      ON DUPLICATE KEY UPDATE
        integration_id = VALUES(integration_id),
        vanity_label = VALUES(vanity_label),
@@ -312,7 +320,8 @@ export const reserveInstanceDomainAssignmentEffect = Effect.fn(
        srv_service = VALUES(srv_service),
        srv_protocol = VALUES(srv_protocol),
        status = 'pending',
-       last_error = NULL`,
+       last_error = NULL,
+       updated_at = VALUES(updated_at)`,
     [
       input.relayId,
       input.instanceId,
@@ -324,6 +333,8 @@ export const reserveInstanceDomainAssignmentEffect = Effect.fn(
       input.supportsSrv,
       input.srvService,
       input.srvProtocol,
+      now,
+      now,
     ]
   )
 })
@@ -338,6 +349,7 @@ export const activateInstanceDomainAssignmentEffect = Effect.fn(
   srvRecordId: string | null
 }) {
   const database = yield* Database
+  const now = yield* Clock.currentTimeMillis
   yield* database.execute(
     "domains.assignment.activate",
     `UPDATE ${databaseTable("instance_domain")}
@@ -345,12 +357,14 @@ export const activateInstanceDomainAssignmentEffect = Effect.fn(
             address_record_type = ?,
             srv_record_id = ?,
             status = 'active',
-            last_error = NULL
+            last_error = NULL,
+            updated_at = ?
       WHERE relay_id = ? AND instance_id = ?`,
     [
       input.addressRecordId,
       input.addressRecordType,
       input.srvRecordId,
+      now,
       input.relayId,
       input.instanceId,
     ]
@@ -365,12 +379,14 @@ export const updateInstanceDomainLabelEffect = Effect.fn(
   vanityLabel: string
 }) {
   const database = yield* Database
+  const now = yield* Clock.currentTimeMillis
   yield* database.execute(
     "domains.assignment.updateLabel",
     `UPDATE ${databaseTable("instance_domain")}
-        SET vanity_label = ?, status = 'active', last_error = NULL
+        SET vanity_label = ?, status = 'active', last_error = NULL,
+            updated_at = ?
       WHERE relay_id = ? AND instance_id = ?`,
-    [input.vanityLabel, input.relayId, input.instanceId]
+    [input.vanityLabel, now, input.relayId, input.instanceId]
   )
 })
 
@@ -388,6 +404,7 @@ export const updateInstanceDomainEndpointEffect = Effect.fn(
   supportsSrv: boolean
 }) {
   const database = yield* Database
+  const now = yield* Clock.currentTimeMillis
   yield* database.execute(
     "domains.assignment.updateEndpoint",
     `UPDATE ${databaseTable("instance_domain")}
@@ -399,7 +416,8 @@ export const updateInstanceDomainEndpointEffect = Effect.fn(
             srv_protocol = ?,
             srv_record_id = ?,
             status = 'active',
-            last_error = NULL
+            last_error = NULL,
+            updated_at = ?
       WHERE relay_id = ? AND instance_id = ?`,
     [
       input.publicHost,
@@ -409,6 +427,7 @@ export const updateInstanceDomainEndpointEffect = Effect.fn(
       input.srvService,
       input.srvProtocol,
       input.srvRecordId,
+      now,
       input.relayId,
       input.instanceId,
     ]
@@ -424,16 +443,19 @@ export const updateInstanceDomainAddressRecordEffect = Effect.fn(
   relayId: string
 }) {
   const database = yield* Database
+  const now = yield* Clock.currentTimeMillis
   yield* database.execute(
     "domains.assignment.updateAddressRecord",
     `UPDATE ${databaseTable("instance_domain")}
         SET address_record_id = ?,
             address_record_type = ?,
-            last_error = NULL
+            last_error = NULL,
+            updated_at = ?
       WHERE relay_id = ? AND instance_id = ?`,
     [
       input.addressRecordId,
       input.addressRecordType,
+      now,
       input.relayId,
       input.instanceId,
     ]
@@ -444,12 +466,13 @@ export const recordInstanceDomainSyncErrorEffect = Effect.fn(
   "domains.assignment.recordSyncError"
 )(function* (relayId: string, instanceId: string, message: string) {
   const database = yield* Database
+  const now = yield* Clock.currentTimeMillis
   yield* database.execute(
     "domains.assignment.recordSyncError",
     `UPDATE ${databaseTable("instance_domain")}
-        SET last_error = ?
+        SET last_error = ?, updated_at = ?
       WHERE relay_id = ? AND instance_id = ?`,
-    [message.slice(0, 512), relayId, instanceId]
+    [message.slice(0, 512), now, relayId, instanceId]
   )
 })
 
@@ -457,12 +480,13 @@ export const recordInstanceDomainErrorEffect = Effect.fn(
   "domains.assignment.recordError"
 )(function* (relayId: string, instanceId: string, message: string) {
   const database = yield* Database
+  const now = yield* Clock.currentTimeMillis
   yield* database.execute(
     "domains.assignment.recordError",
     `UPDATE ${databaseTable("instance_domain")}
-        SET status = 'error', last_error = ?
+        SET status = 'error', last_error = ?, updated_at = ?
       WHERE relay_id = ? AND instance_id = ?`,
-    [message.slice(0, 512), relayId, instanceId]
+    [message.slice(0, 512), now, relayId, instanceId]
   )
 })
 
@@ -517,9 +541,9 @@ function decodeJson(value: unknown): unknown {
   return Option.getOrNull(decodeJsonString(value))
 }
 
-function timestamp(value: Date | string | null): string | null {
+function timestamp(value: number | null): string | null {
   if (value === null) return null
-  const date = value instanceof Date ? value : new Date(value)
+  const date = new Date(Number(value))
   return Number.isNaN(date.valueOf()) ? null : date.toISOString()
 }
 

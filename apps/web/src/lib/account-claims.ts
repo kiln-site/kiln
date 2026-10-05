@@ -1,6 +1,6 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto"
 
-import { Effect } from "effect"
+import { Clock, Effect } from "effect"
 import type { RowDataPacket } from "mysql2/promise"
 import { Resend } from "resend"
 
@@ -28,9 +28,9 @@ interface ClaimRow extends RowDataPacket {
   user_id: string
   proof_method: "email" | "manual"
   created_by: string | null
-  created_at: Date
-  expires_at: Date
-  consumed_at: Date | null
+  created_at: number
+  expires_at: number
+  consumed_at: number | null
 }
 const CLAIM_LIFETIME_MS = 30 * 60 * 1000
 
@@ -59,8 +59,8 @@ export async function previewAccountClaim(token: string) {
       const rows = yield* database.queryRows<
         RowDataPacket & {
           email: string
-          consumed_at: Date | null
-          expires_at: Date
+          consumed_at: number | null
+          expires_at: number
           hasCredential: number
         }
       >(
@@ -77,7 +77,7 @@ export async function previewAccountClaim(token: string) {
       if (
         !claim ||
         claim.consumed_at ||
-        claim.expires_at.getTime() <= Date.now() ||
+        claim.expires_at <= (yield* Clock.currentTimeMillis) ||
         claim.hasCredential
       )
         return null
@@ -136,7 +136,8 @@ async function issueClaim(input: {
 }) {
   const token = randomBytes(32).toString("hex")
   const id = randomUUID()
-  const expiresAt = new Date(Date.now() + CLAIM_LIFETIME_MS)
+  const now = Date.now()
+  const expiresAt = now + CLAIM_LIFETIME_MS
   const subject = await runAppEffect(
     "account.claim.issue",
     Effect.gen(function* () {
@@ -177,20 +178,20 @@ async function issueClaim(input: {
           if (
             input.method === "email" &&
             existing[0] &&
-            (existing[0].created_at.getTime() > Date.now() - 60_000 ||
+            (existing[0].created_at > now - 60_000 ||
               (existing[0].proof_method === "manual" &&
                 !existing[0].consumed_at &&
-                existing[0].expires_at.getTime() > Date.now()))
+                existing[0].expires_at > now))
           )
             return null
           // Never expose an earlier token again. Reissue invalidates all previous
           // attempts without removing their audit records.
           yield* transaction.execute(
-            `UPDATE ${databaseTable("account_claim")} SET consumed_at = CURRENT_TIMESTAMP(3) WHERE user_id = ? AND consumed_at IS NULL`,
-            [user.id]
+            `UPDATE ${databaseTable("account_claim")} SET consumed_at = ? WHERE user_id = ? AND consumed_at IS NULL`,
+            [now, user.id]
           )
           yield* transaction.execute(
-            `INSERT INTO ${databaseTable("account_claim")} (id, user_id, token_hash, proof_method, created_by, expires_at) VALUES (?, ?, ?, ?, ?, ?)`,
+            `INSERT INTO ${databaseTable("account_claim")} (id, user_id, token_hash, proof_method, created_by, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
             [
               id,
               user.id,
@@ -198,10 +199,11 @@ async function issueClaim(input: {
               input.method,
               input.actorId,
               expiresAt,
+              now,
             ]
           )
           yield* transaction.execute(
-            `INSERT INTO ${databaseTable("auth_audit")} (user_id, event, metadata) VALUES (?, 'account.claim.issued', ?)`,
+            `INSERT INTO ${databaseTable("auth_audit")} (user_id, event, metadata, created_at) VALUES (?, 'account.claim.issued', ?, ?)`,
             [
               user.id,
               JSON.stringify({
@@ -209,6 +211,7 @@ async function issueClaim(input: {
                 claimId: id,
                 method: input.method,
               }),
+              now,
             ]
           )
           return user
@@ -224,7 +227,7 @@ async function issueClaim(input: {
     token,
     email: subject.email,
     claimUrl: url.toString(),
-    expiresAt: expiresAt.toISOString(),
+    expiresAt: new Date(expiresAt).toISOString(),
   }
 }
 
@@ -243,11 +246,12 @@ export async function redeemAccountClaim(input: {
     "account.claim.preflight",
     Effect.gen(function* () {
       const database = yield* Database
+      const now = yield* Clock.currentTimeMillis
       const rows = yield* database.queryRows<ClaimRow>(
         "account.claim.preflight",
         `SELECT id FROM ${databaseTable("account_claim")} WHERE token_hash = ?
-        AND consumed_at IS NULL AND expires_at > CURRENT_TIMESTAMP(3) LIMIT 1`,
-        [tokenHash(input.token)]
+        AND consumed_at IS NULL AND expires_at > ? LIMIT 1`,
+        [tokenHash(input.token), now]
       )
       if (!rows[0])
         return yield* Effect.fail(
@@ -269,6 +273,7 @@ export async function redeemAccountClaim(input: {
         "account.claim.redeem",
         (transaction) =>
           Effect.gen(function* () {
+            const now = yield* Clock.currentTimeMillis
             const attempts = yield* transaction.queryRows<ClaimRow>(
               `SELECT * FROM ${databaseTable("account_claim")} WHERE token_hash = ?`,
               [tokenHash(input.token)]
@@ -288,11 +293,12 @@ export async function redeemAccountClaim(input: {
             )
             const claim = claims[0]
             const user = users[0]
+            const nowDate = new Date(now)
             if (
               !user ||
               !claim ||
               claim.consumed_at ||
-              claim.expires_at.getTime() <= Date.now() ||
+              claim.expires_at <= now ||
               (yield* hasCredentials(transaction, user.id))
             ) {
               return yield* Effect.fail(
@@ -301,23 +307,23 @@ export async function redeemAccountClaim(input: {
             }
             yield* transaction.execute(
               `INSERT INTO ${databaseTable("account")} (id, accountId, providerId, userId, password, createdAt, updatedAt)
-         VALUES (?, ?, 'credential', ?, ?, CURRENT_TIMESTAMP(3), CURRENT_TIMESTAMP(3))`,
-              [randomUUID(), user.id, user.id, password]
+         VALUES (?, ?, 'credential', ?, ?, ?, ?)`,
+              [randomUUID(), user.id, user.id, password, nowDate, nowDate]
             )
             yield* transaction.execute(
               claim.proof_method === "email"
-                ? `UPDATE ${databaseTable("user")} SET name = ?, emailVerified = TRUE, emailVerifiedAt = CURRENT_TIMESTAMP(3), updatedAt = CURRENT_TIMESTAMP(3) WHERE id = ?`
-                : `UPDATE ${databaseTable("user")} SET name = ?, manuallyVerifiedAt = CURRENT_TIMESTAMP(3), manuallyVerifiedBy = ?, updatedAt = CURRENT_TIMESTAMP(3) WHERE id = ?`,
+                ? `UPDATE ${databaseTable("user")} SET name = ?, emailVerified = TRUE, emailVerifiedAt = ?, updatedAt = ? WHERE id = ?`
+                : `UPDATE ${databaseTable("user")} SET name = ?, manuallyVerifiedAt = ?, manuallyVerifiedBy = ?, updatedAt = ? WHERE id = ?`,
               claim.proof_method === "email"
-                ? [name, user.id]
-                : [name, claim.created_by, user.id]
+                ? [name, nowDate, nowDate, user.id]
+                : [name, nowDate, claim.created_by, nowDate, user.id]
             )
             yield* transaction.execute(
-              `UPDATE ${databaseTable("account_claim")} SET consumed_at = CURRENT_TIMESTAMP(3) WHERE user_id = ? AND consumed_at IS NULL`,
-              [user.id]
+              `UPDATE ${databaseTable("account_claim")} SET consumed_at = ? WHERE user_id = ? AND consumed_at IS NULL`,
+              [now, user.id]
             )
             yield* transaction.execute(
-              `INSERT INTO ${databaseTable("auth_audit")} (user_id, event, metadata) VALUES (?, 'account.claim.redeemed', ?)`,
+              `INSERT INTO ${databaseTable("auth_audit")} (user_id, event, metadata, created_at) VALUES (?, 'account.claim.redeemed', ?, ?)`,
               [
                 user.id,
                 JSON.stringify({
@@ -326,6 +332,7 @@ export async function redeemAccountClaim(input: {
                   claimId: claim.id,
                   method: claim.proof_method,
                 }),
+                now,
               ]
             )
             const revision = yield* advanceSubjectAcrossEnabledRelaysEffect(

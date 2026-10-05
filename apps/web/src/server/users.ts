@@ -1,5 +1,5 @@
 import { createServerFn } from "@tanstack/react-start"
-import { Effect } from "effect"
+import { Clock, Effect } from "effect"
 import type { RowDataPacket } from "mysql2/promise"
 import { z } from "zod"
 
@@ -80,7 +80,7 @@ export const listUsers = createServerFn({ method: "GET" })
     if (actor.role !== "admin")
       throw new Error("Platform administrator required")
     const clauses: string[] = []
-    const values: Array<string | number> = []
+    const values: Array<string | number | Date> = []
     if (data.search) {
       clauses.push("(u.email LIKE ? OR u.name LIKE ?)")
       const search = `%${data.search.replace(/[\\%_]/gu, "\\$&")}%`
@@ -89,9 +89,10 @@ export const listUsers = createServerFn({ method: "GET" })
     if (data.status) {
       clauses.push(
         data.status === "disabled"
-          ? "(u.status = 'disabled' AND (u.statusExpiresAt IS NULL OR u.statusExpiresAt > CURRENT_TIMESTAMP(3)))"
-          : "(u.status = 'enabled' OR u.statusExpiresAt <= CURRENT_TIMESTAMP(3))"
+          ? "(u.status = 'disabled' AND (u.statusExpiresAt IS NULL OR u.statusExpiresAt > ?))"
+          : "(u.status = 'enabled' OR u.statusExpiresAt <= ?)"
       )
+      values.push(new Date())
     }
     const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : ""
     return runAppEffect(
@@ -175,13 +176,21 @@ export const setUserStatus = createServerFn({ method: "POST" })
             }
             if (subject.status === data.status && !subject.statusExpiresAt)
               return null
+            const now = yield* Clock.currentTimeMillis
             yield* transaction.execute(
-              `UPDATE ${databaseTable("user")} SET status = ?, statusChangedAt = CURRENT_TIMESTAMP(3),
-             statusChangedBy = ?, statusReason = ?, statusExpiresAt = NULL, updatedAt = CURRENT_TIMESTAMP(3) WHERE id = ?`,
-              [data.status, actor.id, data.reason || null, subject.id]
+              `UPDATE ${databaseTable("user")} SET status = ?, statusChangedAt = ?,
+             statusChangedBy = ?, statusReason = ?, statusExpiresAt = NULL, updatedAt = ? WHERE id = ?`,
+              [
+                data.status,
+                new Date(now),
+                actor.id,
+                data.reason || null,
+                new Date(now),
+                subject.id,
+              ]
             )
             yield* transaction.execute(
-              `INSERT INTO ${databaseTable("auth_audit")} (user_id, event, metadata) VALUES (?, 'account.status.changed', ?)`,
+              `INSERT INTO ${databaseTable("auth_audit")} (user_id, event, metadata, created_at) VALUES (?, 'account.status.changed', ?, ?)`,
               [
                 subject.id,
                 JSON.stringify({
@@ -190,6 +199,7 @@ export const setUserStatus = createServerFn({ method: "POST" })
                   status: data.status,
                   reason: data.reason ?? null,
                 }),
+                now,
               ]
             )
             return yield* advanceSubjectAcrossEnabledRelaysEffect(
@@ -239,14 +249,15 @@ export const manuallyVerifyUser = createServerFn({ method: "POST" })
             )
             if (!rows[0]) return yield* Effect.fail(new Error("User not found"))
             if (rows[0].manuallyVerifiedAt) return null
+            const now = yield* Clock.currentTimeMillis
             yield* transaction.execute(
-              `UPDATE ${databaseTable("user")} SET manuallyVerifiedAt = CURRENT_TIMESTAMP(3),
-             manuallyVerifiedBy = ?, updatedAt = CURRENT_TIMESTAMP(3) WHERE id = ?`,
-              [actor.id, data.userId]
+              `UPDATE ${databaseTable("user")} SET manuallyVerifiedAt = ?,
+             manuallyVerifiedBy = ?, updatedAt = ? WHERE id = ?`,
+              [new Date(now), actor.id, new Date(now), data.userId]
             )
             yield* transaction.execute(
-              `INSERT INTO ${databaseTable("auth_audit")} (user_id, event, metadata) VALUES (?, 'account.manually-verified', ?)`,
-              [data.userId, JSON.stringify({ actorId: actor.id })]
+              `INSERT INTO ${databaseTable("auth_audit")} (user_id, event, metadata, created_at) VALUES (?, 'account.manually-verified', ?, ?)`,
+              [data.userId, JSON.stringify({ actorId: actor.id }), now]
             )
             return yield* advanceSubjectAcrossEnabledRelaysEffect(
               transaction,
