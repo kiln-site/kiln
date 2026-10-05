@@ -61,8 +61,12 @@ const config = defineConfig(({ command }) => {
           },
         },
         test: {
-          command: ["vp test run", "node --test keyring.test.mjs"],
+          command: "vp test run",
           dependsOn: [{ task: "build", from: "dependencies" }],
+          cache: {
+            // Opt-in MySQL access migration fixture.
+            env: ["ACCESS_MIGRATION_TEST", "DB_*"],
+          },
         },
         typecheck: {
           command: "tsc --noEmit",
@@ -146,7 +150,12 @@ const config = defineConfig(({ command }) => {
       viteReact(),
     ]),
     test: {
-      include: ["src/**/*.test.ts", "src/**/*.test.tsx"],
+      include: [
+        "src/**/*.test.ts",
+        "src/**/*.test.tsx",
+        "scripts/**/*.test.mjs",
+        "keyring.test.mjs",
+      ],
     },
   }
 })

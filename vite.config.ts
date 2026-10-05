@@ -22,6 +22,10 @@ export default defineConfig({
     },
     options: { typeAware: true, typeCheck: false },
   },
+  test: {
+    // Repository tooling tests; workspace packages run their own via `vp run -r test`.
+    include: ["scripts/**/*.test.mjs"],
+  },
   fmt: {
     endOfLine: "lf",
     semi: false,

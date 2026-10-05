@@ -1,7 +1,7 @@
 // The MySQL fixture in this file is opt-in: run with ACCESS_MIGRATION_TEST=1.
 import assert from "node:assert/strict"
 import { readFile } from "node:fs/promises"
-import test from "node:test"
+import { test } from "vite-plus/test"
 import {
   databaseConnectionConfig,
   databaseTable,
@@ -48,9 +48,8 @@ test("legacy permissions are frozen explicit selections and preserve split opera
   assert.ok(!legacyAccessPermissions("admin", "relay").includes("relay.delete"))
 })
 
-test(
+test.skipIf(process.env.ACCESS_MIGRATION_TEST !== "1")(
   "MySQL migration preserves identities, evidence, timed status and reruns without restoring grants",
-  { skip: process.env.ACCESS_MIGRATION_TEST !== "1" },
   async () => {
     const { default: mysql } = await import("mysql2/promise")
     // Caller must provision an isolated database and explicitly opt into this fixture.
@@ -242,5 +241,6 @@ test(
     } finally {
       await db.end()
     }
-  }
+  },
+  30_000
 )

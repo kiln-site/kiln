@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import { readdir, readFile } from "node:fs/promises"
 import { relative } from "node:path"
-import test from "node:test"
+import { test } from "vite-plus/test"
 import { fileURLToPath } from "node:url"
 
 import ts from "typescript"
