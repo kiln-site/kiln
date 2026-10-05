@@ -79,6 +79,19 @@ describe("database migrations", () => {
           expect(Exit.isFailure(exit)).toBe(true)
           expect(String(exit)).toContain("kiln_setting")
           expect(yield* ledger).toEqual([])
+
+          // So is one whose columns match by name but not by definition, such
+          // as an enum missing a value the legacy scripts added.
+          yield* sql`ALTER TABLE kiln_setting DROP COLUMN unexpected`
+          yield* sql`
+            ALTER TABLE kiln_schedule_run MODIFY status
+              ENUM('succeeded','partial','failed','noop','interrupted','missed')
+              NOT NULL
+          `
+          const definitionExit = yield* Effect.exit(applyMigrations(migrations))
+          expect(Exit.isFailure(definitionExit)).toBe(true)
+          expect(String(definitionExit)).toContain("kiln_schedule_run (status)")
+          expect(yield* ledger).toEqual([])
         }),
       // Creating 47 tables outlasts the default timeout under a full run.
       120_000

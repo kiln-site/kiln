@@ -6,27 +6,12 @@
 export interface BaselineTable {
   // Table name without the prefix.
   readonly name: string
-  // Every column, used to confirm an existing install matches this schema.
-  readonly columns: ReadonlyArray<string>
   readonly create: string
 }
 
 export const baselineTables: ReadonlyArray<BaselineTable> = [
   {
     name: "access_grant",
-    columns: [
-      "id",
-      "user_id",
-      "relay_id",
-      "resource_type",
-      "resource_id",
-      "role",
-      "state",
-      "revision",
-      "granted_by",
-      "created_at",
-      "updated_at",
-    ],
     create: `CREATE TABLE IF NOT EXISTS \`kiln_access_grant\` (
   \`id\` char(36) NOT NULL,
   \`user_id\` varchar(36) NOT NULL,
@@ -47,33 +32,6 @@ export const baselineTables: ReadonlyArray<BaselineTable> = [
   },
   {
     name: "relay",
-    columns: [
-      "id",
-      "name",
-      "hostname",
-      "port",
-      "use_tls",
-      "browser_origin",
-      "relay_public_key",
-      "relay_ca_certificate",
-      "client_id",
-      "client_public_key",
-      "client_private_key_ciphertext",
-      "client_role",
-      "client_actions",
-      "issuer_generation",
-      "acknowledged_issuer_generation",
-      "enabled",
-      "last_connected_at",
-      "last_error",
-      "managed_ember_count",
-      "node_arch",
-      "node_platform",
-      "node_version",
-      "created_by",
-      "created_at",
-      "updated_at",
-    ],
     create: `CREATE TABLE IF NOT EXISTS \`kiln_relay\` (
   \`id\` char(43) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
   \`name\` varchar(120) NOT NULL,
@@ -106,18 +64,6 @@ export const baselineTables: ReadonlyArray<BaselineTable> = [
   },
   {
     name: "permission_preset",
-    columns: [
-      "id",
-      "relay_id",
-      "resource_type",
-      "resource_id",
-      "name",
-      "revision",
-      "created_by",
-      "updated_by",
-      "created_at",
-      "updated_at",
-    ],
     create: `CREATE TABLE IF NOT EXISTS \`kiln_permission_preset\` (
   \`id\` char(36) NOT NULL,
   \`relay_id\` char(43) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
@@ -136,14 +82,6 @@ export const baselineTables: ReadonlyArray<BaselineTable> = [
   },
   {
     name: "access_preset",
-    columns: [
-      "id",
-      "access_id",
-      "preset_id",
-      "builtin_key",
-      "granted_by",
-      "created_at",
-    ],
     create: `CREATE TABLE IF NOT EXISTS \`kiln_access_preset\` (
   \`id\` char(36) NOT NULL,
   \`access_id\` char(36) NOT NULL,
@@ -162,11 +100,6 @@ export const baselineTables: ReadonlyArray<BaselineTable> = [
   },
   {
     name: "access_selection",
-    columns: [
-      "access_id",
-      "selection_kind",
-      "selection_key",
-    ],
     create: `CREATE TABLE IF NOT EXISTS \`kiln_access_selection\` (
   \`access_id\` char(36) NOT NULL,
   \`selection_kind\` enum('permission','collection') NOT NULL,
@@ -177,21 +110,6 @@ export const baselineTables: ReadonlyArray<BaselineTable> = [
   },
   {
     name: "account",
-    columns: [
-      "id",
-      "accountId",
-      "providerId",
-      "userId",
-      "accessToken",
-      "refreshToken",
-      "idToken",
-      "accessTokenExpiresAt",
-      "refreshTokenExpiresAt",
-      "scope",
-      "password",
-      "createdAt",
-      "updatedAt",
-    ],
     create: `CREATE TABLE IF NOT EXISTS \`kiln_account\` (
   \`id\` varchar(36) NOT NULL,
   \`accountId\` text NOT NULL,
@@ -212,29 +130,6 @@ export const baselineTables: ReadonlyArray<BaselineTable> = [
   },
   {
     name: "user",
-    columns: [
-      "id",
-      "name",
-      "email",
-      "emailVerified",
-      "image",
-      "createdAt",
-      "updatedAt",
-      "role",
-      "banned",
-      "banReason",
-      "banExpires",
-      "twoFactorEnabled",
-      "status",
-      "statusChangedAt",
-      "statusChangedBy",
-      "statusReason",
-      "statusExpiresAt",
-      "emailVerifiedAt",
-      "manuallyVerifiedAt",
-      "manuallyVerifiedBy",
-      "legacyVerificationRecordedAt",
-    ],
     create: `CREATE TABLE IF NOT EXISTS \`kiln_user\` (
   \`id\` varchar(36) NOT NULL,
   \`name\` varchar(255) NOT NULL,
@@ -263,16 +158,6 @@ export const baselineTables: ReadonlyArray<BaselineTable> = [
   },
   {
     name: "account_claim",
-    columns: [
-      "id",
-      "user_id",
-      "token_hash",
-      "proof_method",
-      "created_by",
-      "expires_at",
-      "consumed_at",
-      "created_at",
-    ],
     create: `CREATE TABLE IF NOT EXISTS \`kiln_account_claim\` (
   \`id\` char(36) NOT NULL,
   \`user_id\` varchar(36) NOT NULL,
@@ -290,15 +175,6 @@ export const baselineTables: ReadonlyArray<BaselineTable> = [
   },
   {
     name: "auth_audit",
-    columns: [
-      "id",
-      "user_id",
-      "event",
-      "ip_address",
-      "user_agent",
-      "metadata",
-      "created_at",
-    ],
     create: `CREATE TABLE IF NOT EXISTS \`kiln_auth_audit\` (
   \`id\` bigint unsigned NOT NULL AUTO_INCREMENT,
   \`user_id\` varchar(36) DEFAULT NULL,
@@ -313,15 +189,6 @@ export const baselineTables: ReadonlyArray<BaselineTable> = [
   },
   {
     name: "authorization_delivery",
-    columns: [
-      "relay_id",
-      "subject_id",
-      "scope_kind",
-      "scope_id",
-      "desired_revision",
-      "acknowledged_revision",
-      "updated_at",
-    ],
     create: `CREATE TABLE IF NOT EXISTS \`kiln_authorization_delivery\` (
   \`relay_id\` char(43) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
   \`subject_id\` varchar(36) NOT NULL,
@@ -337,11 +204,6 @@ export const baselineTables: ReadonlyArray<BaselineTable> = [
   },
   {
     name: "authorization_subject",
-    columns: [
-      "user_id",
-      "revision",
-      "updated_at",
-    ],
     create: `CREATE TABLE IF NOT EXISTS \`kiln_authorization_subject\` (
   \`user_id\` varchar(36) NOT NULL,
   \`revision\` bigint unsigned NOT NULL DEFAULT '0',
@@ -351,25 +213,6 @@ export const baselineTables: ReadonlyArray<BaselineTable> = [
   },
   {
     name: "backup_storage",
-    columns: [
-      "id",
-      "owner_user_id",
-      "name",
-      "endpoint",
-      "region",
-      "bucket",
-      "object_prefix",
-      "force_path_style",
-      "allow_private_network",
-      "access_key_id_ciphertext",
-      "secret_access_key_ciphertext",
-      "enabled",
-      "deleting",
-      "last_verified_at",
-      "last_error",
-      "created_at",
-      "updated_at",
-    ],
     create: `CREATE TABLE IF NOT EXISTS \`kiln_backup_storage\` (
   \`id\` char(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
   \`owner_user_id\` varchar(36) DEFAULT NULL,
@@ -395,17 +238,6 @@ export const baselineTables: ReadonlyArray<BaselineTable> = [
   },
   {
     name: "backup_repository",
-    columns: [
-      "id",
-      "relay_id",
-      "target_kind",
-      "target_id",
-      "storage_id",
-      "storage_key",
-      "object_prefix",
-      "password_ciphertext",
-      "created_at",
-    ],
     create: `CREATE TABLE IF NOT EXISTS \`kiln_backup_repository\` (
   \`id\` char(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
   \`relay_id\` char(43) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
@@ -425,31 +257,6 @@ export const baselineTables: ReadonlyArray<BaselineTable> = [
   },
   {
     name: "backup",
-    columns: [
-      "id",
-      "relay_id",
-      "target_kind",
-      "target_id",
-      "storage_id",
-      "artifact_kind",
-      "backup_mode",
-      "reason",
-      "status",
-      "name",
-      "filename",
-      "object_key",
-      "bytes",
-      "checksum_sha256",
-      "restic_snapshot_id",
-      "repository_id",
-      "warnings",
-      "created_by",
-      "started_at",
-      "completed_at",
-      "deleted_at",
-      "created_at",
-      "updated_at",
-    ],
     create: `CREATE TABLE IF NOT EXISTS \`kiln_backup\` (
   \`id\` char(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
   \`relay_id\` char(43) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
@@ -486,22 +293,6 @@ export const baselineTables: ReadonlyArray<BaselineTable> = [
   },
   {
     name: "backup_artifact",
-    columns: [
-      "id",
-      "backup_id",
-      "destination_key",
-      "storage_id",
-      "status",
-      "filename",
-      "object_key",
-      "bytes",
-      "checksum_sha256",
-      "error",
-      "completed_at",
-      "deleted_at",
-      "created_at",
-      "updated_at",
-    ],
     create: `CREATE TABLE IF NOT EXISTS \`kiln_backup_artifact\` (
   \`id\` char(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
   \`backup_id\` char(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
@@ -527,19 +318,6 @@ export const baselineTables: ReadonlyArray<BaselineTable> = [
   },
   {
     name: "backup_copy_task",
-    columns: [
-      "id",
-      "backup_id",
-      "source_artifact_id",
-      "destination_artifact_id",
-      "status",
-      "requested_by",
-      "error",
-      "started_at",
-      "finished_at",
-      "created_at",
-      "updated_at",
-    ],
     create: `CREATE TABLE IF NOT EXISTS \`kiln_backup_copy_task\` (
   \`id\` char(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
   \`backup_id\` char(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
@@ -564,23 +342,6 @@ export const baselineTables: ReadonlyArray<BaselineTable> = [
   },
   {
     name: "backup_download_share",
-    columns: [
-      "token_hash",
-      "download_url_ciphertext",
-      "backup_id",
-      "backup_name",
-      "filename",
-      "bytes",
-      "checksum_sha256",
-      "artifact_kind",
-      "target_kind",
-      "target_id",
-      "source_name",
-      "shared_by",
-      "backup_created_at",
-      "expires_at",
-      "created_at",
-    ],
     create: `CREATE TABLE IF NOT EXISTS \`kiln_backup_download_share\` (
   \`token_hash\` char(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
   \`download_url_ciphertext\` text NOT NULL,
@@ -603,16 +364,6 @@ export const baselineTables: ReadonlyArray<BaselineTable> = [
   },
   {
     name: "backup_final_database_delete",
-    columns: [
-      "relay_id",
-      "target_id",
-      "backup_id",
-      "requested_by",
-      "status",
-      "error",
-      "created_at",
-      "updated_at",
-    ],
     create: `CREATE TABLE IF NOT EXISTS \`kiln_backup_final_database_delete\` (
   \`relay_id\` char(43) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
   \`target_id\` varchar(120) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
@@ -630,16 +381,6 @@ export const baselineTables: ReadonlyArray<BaselineTable> = [
   },
   {
     name: "backup_final_delete",
-    columns: [
-      "relay_id",
-      "target_id",
-      "backup_id",
-      "requested_by",
-      "status",
-      "error",
-      "created_at",
-      "updated_at",
-    ],
     create: `CREATE TABLE IF NOT EXISTS \`kiln_backup_final_delete\` (
   \`relay_id\` char(43) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
   \`target_id\` varchar(120) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
@@ -657,19 +398,6 @@ export const baselineTables: ReadonlyArray<BaselineTable> = [
   },
   {
     name: "backup_policy",
-    columns: [
-      "relay_id",
-      "target_kind",
-      "target_id",
-      "storage_id",
-      "exclude_patterns",
-      "quantity_limit",
-      "size_limit_bytes",
-      "admin_quantity_limit",
-      "admin_size_limit_bytes",
-      "created_at",
-      "updated_at",
-    ],
     create: `CREATE TABLE IF NOT EXISTS \`kiln_backup_policy\` (
   \`relay_id\` char(43) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
   \`target_kind\` enum('instance','database','platform') NOT NULL,
@@ -689,26 +417,6 @@ export const baselineTables: ReadonlyArray<BaselineTable> = [
   },
   {
     name: "backup_task",
-    columns: [
-      "id",
-      "backup_id",
-      "task_kind",
-      "status",
-      "bytes_completed",
-      "bytes_total",
-      "phase",
-      "current_artifact_id",
-      "current_path",
-      "reserved_bytes",
-      "relay_updated_at_ms",
-      "depends_on_task_id",
-      "error",
-      "requested_by",
-      "started_at",
-      "finished_at",
-      "created_at",
-      "updated_at",
-    ],
     create: `CREATE TABLE IF NOT EXISTS \`kiln_backup_task\` (
   \`id\` char(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
   \`backup_id\` char(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
@@ -737,21 +445,6 @@ export const baselineTables: ReadonlyArray<BaselineTable> = [
   },
   {
     name: "brick_catalog",
-    columns: [
-      "id",
-      "owner_user_id",
-      "source_hash",
-      "source",
-      "snapshot",
-      "snapshot_sha256",
-      "revision_sha",
-      "revision_url",
-      "visibility",
-      "published_by",
-      "published_at",
-      "created_at",
-      "updated_at",
-    ],
     create: `CREATE TABLE IF NOT EXISTS \`kiln_brick_catalog\` (
   \`id\` char(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
   \`owner_user_id\` varchar(36) NOT NULL,
@@ -774,17 +467,6 @@ export const baselineTables: ReadonlyArray<BaselineTable> = [
   },
   {
     name: "cli_credential",
-    columns: [
-      "id",
-      "user_id",
-      "name",
-      "token_hash",
-      "access_mode",
-      "expires_at",
-      "last_used_at",
-      "revoked_at",
-      "created_at",
-    ],
     create: `CREATE TABLE IF NOT EXISTS \`kiln_cli_credential\` (
   \`id\` char(36) NOT NULL,
   \`user_id\` varchar(36) NOT NULL,
@@ -803,22 +485,6 @@ export const baselineTables: ReadonlyArray<BaselineTable> = [
   },
   {
     name: "cli_device",
-    columns: [
-      "id",
-      "device_code_hash",
-      "user_code_hash",
-      "client_name",
-      "status",
-      "user_id",
-      "credential_id",
-      "token_ciphertext",
-      "access_mode",
-      "credential_expires_at",
-      "last_polled_at",
-      "authorized_at",
-      "expires_at",
-      "created_at",
-    ],
     create: `CREATE TABLE IF NOT EXISTS \`kiln_cli_device\` (
   \`id\` char(36) NOT NULL,
   \`device_code_hash\` char(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
@@ -844,15 +510,6 @@ export const baselineTables: ReadonlyArray<BaselineTable> = [
   },
   {
     name: "custom_brick",
-    columns: [
-      "id",
-      "owner_user_id",
-      "source_hash",
-      "source",
-      "recipe",
-      "created_at",
-      "updated_at",
-    ],
     create: `CREATE TABLE IF NOT EXISTS \`kiln_custom_brick\` (
   \`id\` char(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
   \`owner_user_id\` varchar(36) NOT NULL,
@@ -868,10 +525,6 @@ export const baselineTables: ReadonlyArray<BaselineTable> = [
   },
   {
     name: "data_migration",
-    columns: [
-      "id",
-      "completed_at",
-    ],
     create: `CREATE TABLE IF NOT EXISTS \`kiln_data_migration\` (
   \`id\` varchar(120) NOT NULL,
   \`completed_at\` timestamp(3) NULL DEFAULT NULL,
@@ -880,18 +533,6 @@ export const baselineTables: ReadonlyArray<BaselineTable> = [
   },
   {
     name: "database",
-    columns: [
-      "database_id",
-      "relay_id",
-      "name",
-      "engine",
-      "database_name",
-      "username",
-      "password_ciphertext",
-      "created_by",
-      "created_at",
-      "updated_at",
-    ],
     create: `CREATE TABLE IF NOT EXISTS \`kiln_database\` (
   \`database_id\` char(40) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
   \`relay_id\` char(43) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
@@ -912,20 +553,6 @@ export const baselineTables: ReadonlyArray<BaselineTable> = [
   },
   {
     name: "domain_integration",
-    columns: [
-      "id",
-      "provider",
-      "domain",
-      "zone_id",
-      "zone_name",
-      "api_token_ciphertext",
-      "blacklist_patterns",
-      "enabled",
-      "last_verified_at",
-      "last_error",
-      "created_at",
-      "updated_at",
-    ],
     create: `CREATE TABLE IF NOT EXISTS \`kiln_domain_integration\` (
   \`id\` varchar(32) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
   \`provider\` enum('cloudflare') NOT NULL,
@@ -944,16 +571,6 @@ export const baselineTables: ReadonlyArray<BaselineTable> = [
   },
   {
     name: "instance",
-    columns: [
-      "relay_id",
-      "instance_id",
-      "display_name",
-      "source_name",
-      "owner_id",
-      "provisioning_reserved_until",
-      "created_at",
-      "updated_at",
-    ],
     create: `CREATE TABLE IF NOT EXISTS \`kiln_instance\` (
   \`relay_id\` char(43) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
   \`instance_id\` char(40) NOT NULL,
@@ -971,17 +588,6 @@ export const baselineTables: ReadonlyArray<BaselineTable> = [
   },
   {
     name: "file_activity",
-    columns: [
-      "relay_id",
-      "instance_id",
-      "path_hash",
-      "path",
-      "pinned",
-      "last_viewed_at",
-      "last_edited_at",
-      "created_at",
-      "updated_at",
-    ],
     create: `CREATE TABLE IF NOT EXISTS \`kiln_file_activity\` (
   \`relay_id\` char(43) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
   \`instance_id\` char(40) NOT NULL,
@@ -999,25 +605,6 @@ export const baselineTables: ReadonlyArray<BaselineTable> = [
   },
   {
     name: "instance_domain",
-    columns: [
-      "relay_id",
-      "instance_id",
-      "integration_id",
-      "vanity_label",
-      "domain",
-      "public_host",
-      "public_port",
-      "supports_srv",
-      "srv_service",
-      "srv_protocol",
-      "address_record_id",
-      "address_record_type",
-      "srv_record_id",
-      "status",
-      "last_error",
-      "created_at",
-      "updated_at",
-    ],
     create: `CREATE TABLE IF NOT EXISTS \`kiln_instance_domain\` (
   \`relay_id\` char(43) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
   \`instance_id\` char(40) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
@@ -1043,15 +630,6 @@ export const baselineTables: ReadonlyArray<BaselineTable> = [
   },
   {
     name: "instance_post_provision",
-    columns: [
-      "relay_id",
-      "instance_id",
-      "attempts",
-      "next_attempt_at",
-      "last_error",
-      "created_at",
-      "updated_at",
-    ],
     create: `CREATE TABLE IF NOT EXISTS \`kiln_instance_post_provision\` (
   \`relay_id\` char(43) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
   \`instance_id\` char(40) NOT NULL,
@@ -1067,33 +645,6 @@ export const baselineTables: ReadonlyArray<BaselineTable> = [
   },
   {
     name: "invitation",
-    columns: [
-      "id",
-      "token_hash",
-      "email",
-      "access_id",
-      "user_id",
-      "accepted_by",
-      "acceptance_method",
-      "declined_at",
-      "cancelled_at",
-      "cancelled_by",
-      "delivery_status",
-      "delivery_attempts",
-      "delivery_last_error",
-      "delivery_next_attempt_at",
-      "sent_at",
-      "access_type",
-      "relay_id",
-      "instance_id",
-      "database_id",
-      "role",
-      "invited_by",
-      "expires_at",
-      "accepted_at",
-      "revoked_at",
-      "created_at",
-    ],
     create: `CREATE TABLE IF NOT EXISTS \`kiln_invitation\` (
   \`id\` char(36) NOT NULL,
   \`token_hash\` char(64) NOT NULL,
@@ -1131,19 +682,6 @@ export const baselineTables: ReadonlyArray<BaselineTable> = [
   },
   {
     name: "passkey",
-    columns: [
-      "id",
-      "name",
-      "publicKey",
-      "userId",
-      "credentialID",
-      "counter",
-      "deviceType",
-      "backedUp",
-      "transports",
-      "createdAt",
-      "aaguid",
-    ],
     create: `CREATE TABLE IF NOT EXISTS \`kiln_passkey\` (
   \`id\` varchar(36) NOT NULL,
   \`name\` text,
@@ -1163,11 +701,6 @@ export const baselineTables: ReadonlyArray<BaselineTable> = [
   },
   {
     name: "preset_selection",
-    columns: [
-      "preset_id",
-      "selection_kind",
-      "selection_key",
-    ],
     create: `CREATE TABLE IF NOT EXISTS \`kiln_preset_selection\` (
   \`preset_id\` char(36) NOT NULL,
   \`selection_kind\` enum('permission','collection') NOT NULL,
@@ -1178,12 +711,6 @@ export const baselineTables: ReadonlyArray<BaselineTable> = [
   },
   {
     name: "rateLimit",
-    columns: [
-      "id",
-      "key",
-      "count",
-      "lastRequest",
-    ],
     create: `CREATE TABLE IF NOT EXISTS \`kiln_rateLimit\` (
   \`id\` varchar(36) NOT NULL,
   \`key\` varchar(255) NOT NULL,
@@ -1195,18 +722,6 @@ export const baselineTables: ReadonlyArray<BaselineTable> = [
   },
   {
     name: "schedule",
-    columns: [
-      "id",
-      "name",
-      "cron_expression",
-      "timezone",
-      "enabled",
-      "revision",
-      "created_by",
-      "deleted_at",
-      "created_at",
-      "updated_at",
-    ],
     create: `CREATE TABLE IF NOT EXISTS \`kiln_schedule\` (
   \`id\` char(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
   \`name\` varchar(120) NOT NULL,
@@ -1225,14 +740,6 @@ export const baselineTables: ReadonlyArray<BaselineTable> = [
   },
   {
     name: "schedule_action",
-    columns: [
-      "id",
-      "schedule_id",
-      "position",
-      "action_type",
-      "action_config",
-      "created_at",
-    ],
     create: `CREATE TABLE IF NOT EXISTS \`kiln_schedule_action\` (
   \`id\` char(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
   \`schedule_id\` char(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
@@ -1247,17 +754,6 @@ export const baselineTables: ReadonlyArray<BaselineTable> = [
   },
   {
     name: "schedule_deployment",
-    columns: [
-      "schedule_id",
-      "relay_id",
-      "desired_revision",
-      "acknowledged_revision",
-      "status",
-      "next_run_at",
-      "last_error",
-      "created_at",
-      "updated_at",
-    ],
     create: `CREATE TABLE IF NOT EXISTS \`kiln_schedule_deployment\` (
   \`schedule_id\` char(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
   \`relay_id\` char(43) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
@@ -1277,16 +773,6 @@ export const baselineTables: ReadonlyArray<BaselineTable> = [
   },
   {
     name: "schedule_run",
-    columns: [
-      "id",
-      "schedule_id",
-      "relay_id",
-      "scheduled_at",
-      "status",
-      "run_json",
-      "created_at",
-      "updated_at",
-    ],
     create: `CREATE TABLE IF NOT EXISTS \`kiln_schedule_run\` (
   \`id\` char(32) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
   \`schedule_id\` char(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
@@ -1304,14 +790,6 @@ export const baselineTables: ReadonlyArray<BaselineTable> = [
   },
   {
     name: "schedule_target",
-    columns: [
-      "schedule_id",
-      "relay_id",
-      "target_kind",
-      "target_id",
-      "target_name",
-      "created_at",
-    ],
     create: `CREATE TABLE IF NOT EXISTS \`kiln_schedule_target\` (
   \`schedule_id\` char(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
   \`relay_id\` char(43) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
@@ -1327,17 +805,6 @@ export const baselineTables: ReadonlyArray<BaselineTable> = [
   },
   {
     name: "session",
-    columns: [
-      "id",
-      "expiresAt",
-      "token",
-      "createdAt",
-      "updatedAt",
-      "ipAddress",
-      "userAgent",
-      "userId",
-      "impersonatedBy",
-    ],
     create: `CREATE TABLE IF NOT EXISTS \`kiln_session\` (
   \`id\` varchar(36) NOT NULL,
   \`expiresAt\` timestamp(3) NOT NULL,
@@ -1355,14 +822,6 @@ export const baselineTables: ReadonlyArray<BaselineTable> = [
   },
   {
     name: "setting",
-    columns: [
-      "id",
-      "user_id",
-      "setting_key",
-      "setting_value",
-      "created_at",
-      "updated_at",
-    ],
     create: `CREATE TABLE IF NOT EXISTS \`kiln_setting\` (
   \`id\` char(36) NOT NULL,
   \`user_id\` varchar(36) DEFAULT NULL,
@@ -1376,24 +835,6 @@ export const baselineTables: ReadonlyArray<BaselineTable> = [
   },
   {
     name: "tailscale_network",
-    columns: [
-      "id",
-      "name",
-      "domain",
-      "oauth_client_id",
-      "oauth_client_secret_ciphertext",
-      "oauth_scopes",
-      "oauth_tags",
-      "oauth_last_synced_at",
-      "oauth_last_error",
-      "deletion_requested_at",
-      "deletion_requested_by",
-      "cleanup_attempts",
-      "cleanup_next_attempt_at",
-      "cleanup_last_error",
-      "created_at",
-      "updated_at",
-    ],
     create: `CREATE TABLE IF NOT EXISTS \`kiln_tailscale_network\` (
   \`id\` char(40) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
   \`name\` varchar(32) NOT NULL,
@@ -1417,16 +858,6 @@ export const baselineTables: ReadonlyArray<BaselineTable> = [
   },
   {
     name: "tailscale_network_deployment",
-    columns: [
-      "network_id",
-      "relay_id",
-      "deployment",
-      "cleanup_attempts",
-      "cleanup_next_attempt_at",
-      "cleanup_last_error",
-      "observed_at",
-      "updated_at",
-    ],
     create: `CREATE TABLE IF NOT EXISTS \`kiln_tailscale_network_deployment\` (
   \`network_id\` char(40) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
   \`relay_id\` char(43) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
@@ -1443,15 +874,6 @@ export const baselineTables: ReadonlyArray<BaselineTable> = [
   },
   {
     name: "twoFactor",
-    columns: [
-      "id",
-      "secret",
-      "backupCodes",
-      "userId",
-      "verified",
-      "failedVerificationCount",
-      "lockedUntil",
-    ],
     create: `CREATE TABLE IF NOT EXISTS \`kiln_twoFactor\` (
   \`id\` varchar(36) NOT NULL,
   \`secret\` varchar(255) NOT NULL,
@@ -1467,14 +889,6 @@ export const baselineTables: ReadonlyArray<BaselineTable> = [
   },
   {
     name: "verification",
-    columns: [
-      "id",
-      "identifier",
-      "value",
-      "expiresAt",
-      "createdAt",
-      "updatedAt",
-    ],
     create: `CREATE TABLE IF NOT EXISTS \`kiln_verification\` (
   \`id\` varchar(36) NOT NULL,
   \`identifier\` varchar(255) NOT NULL,
