@@ -31,8 +31,8 @@ importers:
   .:
     devDependencies:
       effect:
-        specifier: 4.0.0-rc.118
-        version: 4.0.0-rc.118
+        specifier: 4.0.1
+        version: 4.0.1
       typescript:
         specifier: ^6
         version: 6.0.3
@@ -61,8 +61,8 @@ importers:
         specifier: workspace:*
         version: link:../../packages/contracts
       effect:
-        specifier: 4.0.0-rc.118
-        version: 4.0.0-rc.118
+        specifier: 4.0.1
+        version: 4.0.1
       ssh2:
         specifier: 1.17.0
         version: 1.17.0
@@ -71,8 +71,8 @@ importers:
         version: 4.4.3
     devDependencies:
       '@effect/vitest':
-        specifier: 4.0.0-rc.118
-        version: 4.0.0-rc.118(effect@4.0.0-rc.118)(vitest@5.0.1)
+        specifier: 4.0.1
+        version: 4.0.1(effect@4.0.1)(vitest@5.0.1)
       '@types/node':
         specifier: ^22
         version: 22.19.19
@@ -95,8 +95,8 @@ importers:
   apps/relay:
     dependencies:
       '@effect/sql-sqlite-node':
-        specifier: 4.0.0-rc.118
-        version: 4.0.0-rc.118(effect@4.0.0-rc.118)
+        specifier: 4.0.1
+        version: 4.0.1(effect@4.0.1)
       '@opentelemetry/api':
         specifier: 1.9.0
         version: 1.9.0
@@ -113,8 +113,8 @@ importers:
         specifier: workspace:*
         version: link:../../packages/contracts
       effect:
-        specifier: 4.0.0-rc.118
-        version: 4.0.0-rc.118
+        specifier: 4.0.1
+        version: 4.0.1
       minimatch:
         specifier: 10.2.5
         version: 10.2.5
@@ -144,8 +144,8 @@ importers:
         version: 4.4.3
     devDependencies:
       '@effect/vitest':
-        specifier: 4.0.0-rc.118
-        version: 4.0.0-rc.118(effect@4.0.0-rc.118)(vitest@5.0.1)
+        specifier: 4.0.1
+        version: 4.0.1(effect@4.0.1)(vitest@5.0.1)
       '@types/node':
         specifier: ^22
         version: 22.19.19
@@ -216,8 +216,8 @@ importers:
         specifier: ^6.43.6
         version: 6.43.6
       '@effect/sql-mysql2':
-        specifier: 4.0.0-rc.118
-        version: 4.0.0-rc.118(@types/node@22.19.19)(effect@4.0.0-rc.118)
+        specifier: 4.0.1
+        version: 4.0.1(@types/node@22.19.19)(effect@4.0.1)
       '@lezer/highlight':
         specifier: ^1.2.3
         version: 1.2.3
@@ -288,8 +288,8 @@ importers:
         specifier: ^3.24.0
         version: 3.24.0
       effect:
-        specifier: 4.0.0-rc.118
-        version: 4.0.0-rc.118
+        specifier: 4.0.1
+        version: 4.0.1
       lucide-react:
         specifier: ^1.24.0
         version: 1.24.0(react@19.2.6)
@@ -331,8 +331,8 @@ importers:
         version: 4.4.3
     devDependencies:
       '@effect/vitest':
-        specifier: 4.0.0-rc.118
-        version: 4.0.0-rc.118(effect@4.0.0-rc.118)(vitest@5.0.1)
+        specifier: 4.0.1
+        version: 4.0.1(effect@4.0.1)(vitest@5.0.1)
       '@tailwindcss/vite':
         specifier: ^4
         version: 4.3.0(@voidzero-dev/vite-plus-core@1.0.0(@types/node@22.19.19)(esbuild@0.27.7)(jiti@2.7.0)(tsx@4.21.0)(typescript@6.0.3)(yaml@2.9.0))
@@ -382,8 +382,8 @@ importers:
         specifier: 5.10.0
         version: 5.10.0
       effect:
-        specifier: 4.0.0-rc.118
-        version: 4.0.0-rc.118
+        specifier: 4.0.1
+        version: 4.0.1
       zod:
         specifier: ^4.4.3
         version: 4.4.3
@@ -915,20 +915,20 @@ packages:
   '@dotenvx/primitives@0.8.0':
     resolution: {integrity: sha512-VYJy0uhFm9zTJ1TxBaW/pA8bjbOM/OttaNMwZ1RHG4JKyRG7DhSdiqD1ipQoAyoD22olUtxbP78W9xY3Wd11bg==}
 
-  '@effect/sql-mysql2@4.0.0-rc.118':
-    resolution: {integrity: sha512-ai1ipYyerwuc1HcJyXsYa0ZA6huCsHUmpGITZqSDkDv/k+F8HTcY8mzjTYoaydpxZQx716BZOL6DwS9DPCDdEA==}
+  '@effect/sql-mysql2@4.0.1':
+    resolution: {integrity: sha512-qE6XARXkSAKVPtRPsIhAW1EkiFmWWMIIo7/UWpPyYCNE3DFUMRbq+q/BHtGLulRp5fGQziguu1LzbaXKzlTfMQ==}
     peerDependencies:
-      effect: ^4.0.0-rc.118
+      effect: ^4.0.1
 
-  '@effect/sql-sqlite-node@4.0.0-rc.118':
-    resolution: {integrity: sha512-O+TswiXTeP1/9I7GaCalMWWGXrbalzZkFdkXoO/x/3uDdfnYSi3/lkcOvmfFJnmaQPvOR4wG2CkZSdf9n88A4w==}
+  '@effect/sql-sqlite-node@4.0.1':
+    resolution: {integrity: sha512-VBlNvfFRxyyiu1viNygxA0ZVGZcpxBHA3+QLobaLQSXgAP0submgo98IzioWTHzdZUc9Xodi7ICci5ehhbD2fQ==}
     peerDependencies:
-      effect: ^4.0.0-rc.118
+      effect: ^4.0.1
 
-  '@effect/vitest@4.0.0-rc.118':
-    resolution: {integrity: sha512-O0CPgtFVhkB+pyFtjP4up2XF4uVWsPgUmlv4hMjq8ARLOPKYix+uu3AUFIUKRHjzzQpx+JPce6KPhD6Flkrfag==}
+  '@effect/vitest@4.0.1':
+    resolution: {integrity: sha512-DbY9kf/018zBxRIX7rJwBnPVPzSarnUpcshm0vfYPFiDkSa7AFrXTh2BlDNUbrdrmqcIOBhVZ7GkEtxf8WiQrg==}
     peerDependencies:
-      effect: ^4.0.0-rc.118
+      effect: ^4.0.1
       vitest: 5.0.1
 
   '@emnapi/core@1.11.2':
@@ -4790,8 +4790,8 @@ packages:
   ee-first@1.1.1:
     resolution: {integrity: sha512-WMwm9LhRUo+WUaRN+vRuETqG89IgZphVSNkdFgeb6sS/E4OrDIN7t48CAewSHXc6C8lefD8KKfr5vY61brQlow==}
 
-  effect@4.0.0-rc.118:
-    resolution: {integrity: sha512-hxhpCd+swzrtu9lnyPpEFre2ODQzJ9qxgyL1oHIEY8NKnW4PxTbM1XzplMZXiAsLD62HO+KJc41Nqxr9T791ZQ==}
+  effect@4.0.1:
+    resolution: {integrity: sha512-b1VlQG9g8fwxE5QnIZuPoOP/0MsqHJSRKxUijjoM80E5q95FXrX5yWtY5XI8G+GJsBQAVSDbLS458z9a++uVvw==}
 
   electron-to-chromium@1.5.362:
     resolution: {integrity: sha512-PUY2DrLvkjkUuWqq+KPL2iWshrJsZOcIojzRQ7eXFacc9dWga7MGMJAa15VbiejSZB1PAXaRLAiKgruHP8LB1w==}
@@ -5783,8 +5783,8 @@ packages:
       vite-plus:
         optional: true
 
-  oxlint-plugin-react-doctor@0.9.14:
-    resolution: {integrity: sha512-YGdwFmQXGQulT63SnVD9JI1hV2EwGnZHrgSlUMQaOkvnhYA200QwDeb7DfVT8UBt34lBvbkjtz8VRFJugHjsRQ==}
+  oxlint-plugin-react-doctor@0.9.16:
+    resolution: {integrity: sha512-CCmccua6irEeMXHKkD9KB92We2dZLGN4S6juGb4NkDgfKFbBz/Rpk9Bfwf7EC3TEVspagyY0pMnCVdfiv9n2xw==}
     engines: {node: ^20.19.0 || >=22.13.0}
 
   oxlint-tsgolint@7.0.2003:
@@ -6053,8 +6053,8 @@ packages:
       '@types/react':
         optional: true
 
-  react-doctor@0.9.14:
-    resolution: {integrity: sha512-JzOwAY/hoSxHa4Siyqgfxr/KCNak0SB9pSTseFVStFHAnWS+XxR6RsWU6Q5Ho+J5Jmyb9LZRXc6ZK5jt3cfcQQ==}
+  react-doctor@0.9.16:
+    resolution: {integrity: sha512-3mfplMpTbTqlooxXFDuuaooe2Mk8aHgjH0cb4ioMvBMTIM9F7RzhYMBiWe2ktgpgtdZ8ZXbFVK90aosMqtoTDw==}
     engines: {node: ^20.19.0 || >=22.13.0}
     hasBin: true
 
@@ -7466,20 +7466,20 @@ snapshots:
 
   '@dotenvx/primitives@0.8.0': {}
 
-  '@effect/sql-mysql2@4.0.0-rc.118(@types/node@22.19.19)(effect@4.0.0-rc.118)':
+  '@effect/sql-mysql2@4.0.1(@types/node@22.19.19)(effect@4.0.1)':
     dependencies:
-      effect: 4.0.0-rc.118
+      effect: 4.0.1
       mysql2: 3.24.4(@types/node@22.19.19)
     transitivePeerDependencies:
       - '@types/node'
 
-  '@effect/sql-sqlite-node@4.0.0-rc.118(effect@4.0.0-rc.118)':
+  '@effect/sql-sqlite-node@4.0.1(effect@4.0.1)':
     dependencies:
-      effect: 4.0.0-rc.118
+      effect: 4.0.1
 
-  '@effect/vitest@4.0.0-rc.118(effect@4.0.0-rc.118)(vitest@5.0.1)':
+  '@effect/vitest@4.0.1(effect@4.0.1)(vitest@5.0.1)':
     dependencies:
-      effect: 4.0.0-rc.118
+      effect: 4.0.1
       vitest: 5.0.1(@opentelemetry/api@1.9.0)(@types/node@22.19.19)(@vitest/browser-preview@5.0.1)(@vitest/ui@5.0.1(vitest@5.0.1))(esbuild@0.27.7)(jiti@2.7.0)(tsx@4.21.0)(typescript@6.0.3)(yaml@2.9.0)
 
   '@emnapi/core@1.11.2':
@@ -11119,7 +11119,7 @@ snapshots:
 
   ee-first@1.1.1: {}
 
-  effect@4.0.0-rc.118: {}
+  effect@4.0.1: {}
 
   electron-to-chromium@1.5.362: {}
 
@@ -12106,7 +12106,7 @@ snapshots:
       '@oxfmt/binding-win32-x64-msvc': 0.70.0
       vite-plus: 1.0.0(@opentelemetry/api@1.9.0)(@types/node@22.19.19)(@vitest/ui@5.0.1(vitest@5.0.1))(esbuild@0.27.7)(jiti@2.7.0)(tsx@4.21.0)(typescript@6.0.3)(yaml@2.9.0)
 
-  oxlint-plugin-react-doctor@0.9.14:
+  oxlint-plugin-react-doctor@0.9.16:
     dependencies:
       '@shaderfrog/glsl-parser': 7.0.1
       '@typescript-eslint/types': 8.67.0
@@ -12451,7 +12451,7 @@ snapshots:
     optionalDependencies:
       '@types/react': 19.2.15
 
-  react-doctor@0.9.14(@opentelemetry/core@2.9.0(@opentelemetry/api@1.9.0))(oxlint-tsgolint@7.0.2003)(react@19.2.6)(vite-plus@1.0.0(@opentelemetry/api@1.9.0)(@types/node@22.19.19)(@vitest/ui@5.0.1(vitest@5.0.1))(esbuild@0.27.7)(jiti@2.7.0)(tsx@4.21.0)(typescript@6.0.3)(yaml@2.9.0)):
+  react-doctor@0.9.16(@opentelemetry/core@2.9.0(@opentelemetry/api@1.9.0))(oxlint-tsgolint@7.0.2003)(react@19.2.6)(vite-plus@1.0.0(@opentelemetry/api@1.9.0)(@types/node@22.19.19)(@vitest/ui@5.0.1(vitest@5.0.1))(esbuild@0.27.7)(jiti@2.7.0)(tsx@4.21.0)(typescript@6.0.3)(yaml@2.9.0)):
     dependencies:
       '@astrojs/compiler': 4.0.0
       '@sentry/node': 10.70.0(@opentelemetry/core@2.9.0(@opentelemetry/api@1.9.0))
@@ -12466,7 +12466,7 @@ snapshots:
       oxc-parser: 0.148.0
       oxc-resolver: 11.24.2
       oxlint: 1.81.0(oxlint-tsgolint@7.0.2003)(vite-plus@1.0.0(@opentelemetry/api@1.9.0)(@types/node@22.19.19)(@vitest/ui@5.0.1(vitest@5.0.1))(esbuild@0.27.7)(jiti@2.7.0)(tsx@4.21.0)(typescript@6.0.3)(yaml@2.9.0))
-      oxlint-plugin-react-doctor: 0.9.14
+      oxlint-plugin-react-doctor: 0.9.16
       playwright-core: 1.63.0
       prompts: 2.4.2
       typescript: 5.9.3
@@ -12534,7 +12534,7 @@ snapshots:
       preact: 10.29.7(preact-render-to-string@6.6.5)
       prompts: 2.4.2
       react: 19.2.6
-      react-doctor: 0.9.14(@opentelemetry/core@2.9.0(@opentelemetry/api@1.9.0))(oxlint-tsgolint@7.0.2003)(react@19.2.6)(vite-plus@1.0.0(@opentelemetry/api@1.9.0)(@types/node@22.19.19)(@vitest/ui@5.0.1(vitest@5.0.1))(esbuild@0.27.7)(jiti@2.7.0)(tsx@4.21.0)(typescript@6.0.3)(yaml@2.9.0))
+      react-doctor: 0.9.16(@opentelemetry/core@2.9.0(@opentelemetry/api@1.9.0))(oxlint-tsgolint@7.0.2003)(react@19.2.6)(vite-plus@1.0.0(@opentelemetry/api@1.9.0)(@types/node@22.19.19)(@vitest/ui@5.0.1(vitest@5.0.1))(esbuild@0.27.7)(jiti@2.7.0)(tsx@4.21.0)(typescript@6.0.3)(yaml@2.9.0))
       react-dom: 19.2.6(react@19.2.6)
       react-grab: 0.2.0(react@19.2.6)
     optionalDependencies:

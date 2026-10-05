@@ -25,7 +25,7 @@
     "doctor": "npx react-doctor@latest"
   },
   "devDependencies": {
-    "effect": "4.0.0-rc.118",
+    "effect": "4.0.1",
     "typescript": "^6",
     "vite": "catalog:",
     "vite-plus": "catalog:"

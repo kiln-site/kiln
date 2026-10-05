@@ -32,7 +32,7 @@ describe("domain assignment resync", () => {
       const visited: Array<number> = []
       let active = 0
       let maximumActive = 0
-      const [failures, successes] = yield* resyncDomainInstancesEffect(
+      const [successes, failures] = yield* resyncDomainInstancesEffect(
         [1, 2, 3],
         (value) =>
           Effect.gen(function* () {

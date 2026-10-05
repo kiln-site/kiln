@@ -17,12 +17,12 @@
   },
   "dependencies": {
     "@workspace/contracts": "workspace:*",
-    "effect": "4.0.0-rc.118",
+    "effect": "4.0.1",
     "ssh2": "1.17.0",
     "zod": "^4.4.3"
   },
   "devDependencies": {
-    "@effect/vitest": "4.0.0-rc.118",
+    "@effect/vitest": "4.0.1",
     "@types/node": "^22",
     "@types/ssh2": "1.15.5",
     "bun": "1.2.18",

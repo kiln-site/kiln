@@ -138,7 +138,7 @@ export const synchronizeInstanceDeletionDnsEffect = Effect.fn(
     const tasks = plans.flatMap((plan) =>
       plan.targets.map((deployment) => ({ deployment, records: plan.records }))
     )
-    const [failures] = yield* Effect.partition(
+    const [, failures] = yield* Effect.partition(
       tasks,
       ({ deployment, records }) =>
         syncDnsEffect(operations, deployment, records, "rollback").pipe(
@@ -203,7 +203,7 @@ export const synchronizeInstanceDeletionDnsEffect = Effect.fn(
           ),
         { concurrency: "unbounded" }
       ).pipe(
-        Effect.flatMap(([rollbackFailures]) =>
+        Effect.flatMap(([, rollbackFailures]) =>
           orchestrationFailure(
             "prepare",
             `Could not prepare Tailscale DNS for server deletion: ${errorMessage(
@@ -307,7 +307,7 @@ export const applyTailscaleDeploymentPlanEffect = Effect.fn(
         enabled ? [{ address, hostname }] : []
       )
     )
-    const [dnsFailures, synchronizedDeployments] = yield* Effect.partition(
+    const [synchronizedDeployments, dnsFailures] = yield* Effect.partition(
       applied,
       (deployment) => syncDnsEffect(operations, deployment, records, "dns"),
       { concurrency: "unbounded" }
@@ -362,7 +362,7 @@ export const applyTailscaleDeploymentPlanEffect = Effect.fn(
   // Cleanup starts only after the desired state is durable. It is retried and
   // reported separately because rolling back here would disagree with the
   // already-finalized database and Tailscale control plane.
-  const [cleanupFailures] = yield* Effect.partition(
+  const [, cleanupFailures] = yield* Effect.partition(
     preparedRemovals,
     (deployment) =>
       promiseOperation("cleanup", () =>
@@ -395,7 +395,7 @@ const rollbackTailscaleDeploymentPlanEffect = Effect.fn(
   )
 
   const removalRollbacks = [...preparedRemovals].reverse()
-  const [removalFailures] = yield* Effect.partition(
+  const [, removalFailures] = yield* Effect.partition(
     removalRollbacks,
     (deployment) =>
       promiseOperation("rollback", () =>
@@ -407,7 +407,7 @@ const rollbackTailscaleDeploymentPlanEffect = Effect.fn(
   )
 
   const rollbackDeployments = [...applied].reverse()
-  const [deploymentFailures] = yield* Effect.partition(
+  const [, deploymentFailures] = yield* Effect.partition(
     rollbackDeployments,
     (deployment) => {
       const previous = previousByRelay.get(deployment.relayId)
@@ -447,7 +447,7 @@ const rollbackTailscaleDeploymentPlanEffect = Effect.fn(
       enabled ? [{ address, hostname }] : []
     )
   )
-  const [dnsFailures] = yield* Effect.partition(
+  const [, dnsFailures] = yield* Effect.partition(
     current,
     (deployment) =>
       syncDnsEffect(operations, deployment, records, "rollback").pipe(
