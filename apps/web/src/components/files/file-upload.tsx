@@ -2,7 +2,6 @@ import * as React from "react"
 import { Effect } from "effect"
 import { Upload } from "lucide-react"
 
-import { Progress } from "@workspace/ui/components/progress"
 import { dismissToast, showToast } from "@workspace/ui/components/sonner"
 
 import {
@@ -23,28 +22,43 @@ export type UploadFiles = (
   directory: string
 ) => Promise<void>
 
-function UploadProgressDescription({
-  completed,
-  total,
-  directory,
+function UploadProgressIcon({
+  fileName,
+  progress,
 }: {
-  completed: number
-  total: number
-  directory: string
+  fileName: string
+  progress: number
 }) {
-  const progress = total ? Math.round((completed / total) * 100) : 0
   return (
-    <div className="mt-1.5 space-y-2">
-      <div className="type-code flex items-center justify-between gap-4 text-muted-foreground">
-        <span className="truncate">
-          /data/{normalizeDirectoryPath(directory)}
-        </span>
-        <span className="shrink-0">
-          {completed}/{total}
-        </span>
-      </div>
-      <Progress value={progress} aria-label={`Upload ${progress}% complete`} />
-    </div>
+    <svg
+      className="size-6 -rotate-90"
+      viewBox="0 0 24 24"
+      fill="none"
+      role="progressbar"
+      aria-label={`Uploading ${fileName}`}
+      aria-valuemin={0}
+      aria-valuemax={100}
+      aria-valuenow={progress}
+    >
+      <circle
+        cx="12"
+        cy="12"
+        r="9"
+        stroke="currentColor"
+        strokeWidth="2"
+        opacity="0.2"
+      />
+      <circle
+        cx="12"
+        cy="12"
+        r="9"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+        pathLength="100"
+        strokeDasharray={`${progress} 100`}
+      />
+    </svg>
   )
 }
 
@@ -73,67 +87,119 @@ export function useFileUploadAction({
       setUploading(true)
       let completed = 0
       let uploaded = 0
-      const toastId = showToast({
-        type: "loading",
-        message:
-          files.length === 1
-            ? "Uploading file"
-            : `Uploading ${files.length} files`,
-        description: (
-          <UploadProgressDescription
-            completed={completed}
-            total={files.length}
-            directory={directory}
-          />
-        ),
-        duration: Number.POSITIVE_INFINITY,
-      })
+      let failedCount = 0
+      let uploadedBytes = 0
+      const totalBytes = files.reduce(
+        (total, upload) => total + Math.max(upload.file.size, 1),
+        0
+      )
+      const active = new Map<number, { upload: UploadFile; loaded: number }>()
+      let toastId: number | string | undefined
+      let progressTimer: ReturnType<typeof setTimeout> | undefined
+
+      function updateToast() {
+        clearTimeout(progressTimer)
+        progressTimer = undefined
+        const current = active.values().next().value
+        const upload = current?.upload ?? files[completed]
+        if (!upload) return
+        const fileProgress = upload.file.size
+          ? Math.floor(((current?.loaded ?? 0) / upload.file.size) * 100)
+          : 0
+        const totalProgress = Math.min(
+          99,
+          Math.floor((uploadedBytes / totalBytes) * 100)
+        )
+        toastId = showToast({
+          id: toastId,
+          type: "loading",
+          closeButton: false,
+          dismissible: false,
+          className: "file-upload-toast",
+          message: (
+            <div className="flex items-center justify-between gap-3 tabular-nums">
+              <span>
+                Uploading{" "}
+                <span className="text-muted-foreground">
+                  {uploaded}/{files.length}
+                </span>
+              </span>
+              <span className="shrink-0">{totalProgress}%</span>
+            </div>
+          ),
+          description: (
+            <div className="flex items-center justify-between gap-3">
+              <span
+                className="min-w-0 truncate"
+                title={joinFilePath(directory, upload.path)}
+              >
+                {upload.file.name}
+              </span>
+              {failedCount > 0 && (
+                <span className="shrink-0 text-destructive">
+                  {failedCount} failed
+                </span>
+              )}
+            </div>
+          ),
+          icon: (
+            <UploadProgressIcon
+              fileName={upload.file.name}
+              progress={fileProgress}
+            />
+          ),
+          duration: Number.POSITIVE_INFINITY,
+        })
+      }
+      updateToast()
 
       await Effect.runPromise(
         Effect.forEach(
           files,
-          (upload) =>
-            Effect.tryPromise({
-              try: () =>
-                uploadRelayFile({
-                  file: upload.file,
-                  instanceId: instance.id,
-                  path: joinFilePath(directory, upload.path),
-                  relayId: instance.relayId,
-                }),
-              catch: (cause) => cause,
-            }).pipe(
-              Effect.match({
-                onFailure: (cause) => ({ cause, uploaded: false as const }),
-                onSuccess: () => ({ cause: null, uploaded: true as const }),
-              }),
-              Effect.tap((result) =>
-                Effect.sync(() => {
-                  completed += 1
-                  if (result.uploaded) uploaded += 1
-                  showToast({
-                    id: toastId,
-                    type: "loading",
-                    message:
-                      files.length === 1
-                        ? "Uploading file"
-                        : `Uploading ${files.length} files`,
-                    description: (
-                      <UploadProgressDescription
-                        completed={completed}
-                        total={files.length}
-                        directory={directory}
-                      />
-                    ),
-                    duration: Number.POSITIVE_INFINITY,
-                  })
+          (upload, index) =>
+            Effect.gen(function* () {
+              const current = { upload, loaded: 0 }
+              active.set(index, current)
+              updateToast()
+              const result = yield* Effect.tryPromise({
+                try: () =>
+                  uploadRelayFile({
+                    file: upload.file,
+                    instanceId: instance.id,
+                    path: joinFilePath(directory, upload.path),
+                    relayId: instance.relayId,
+                    onProgress: (loaded) => {
+                      if (!active.has(index)) return
+                      uploadedBytes += loaded - current.loaded
+                      current.loaded = loaded
+                      // Keep progress updates inside Sonner and cap them at 10 per second.
+                      progressTimer ??= setTimeout(updateToast, 100)
+                    },
+                  }),
+                catch: (cause) => cause,
+              }).pipe(
+                Effect.match({
+                  onFailure: (cause) => ({ cause, uploaded: false as const }),
+                  onSuccess: () => ({ cause: null, uploaded: true as const }),
                 })
               )
-            ),
+              completed += 1
+              if (result.uploaded) {
+                uploaded += 1
+                uploadedBytes += Math.max(upload.file.size, 1) - current.loaded
+              } else {
+                failedCount += 1
+                uploadedBytes -= current.loaded
+              }
+              active.delete(index)
+              if (completed < files.length) updateToast()
+              return result
+            }),
           { concurrency: 3 }
         ).pipe(
           Effect.tap((results) =>
             Effect.sync(() => {
+              clearTimeout(progressTimer)
               dismissToast(toastId)
               const failed = results.find((result) => !result.uploaded)
               showToast({
@@ -154,7 +220,13 @@ export function useFileUploadAction({
               if (uploaded) onRefresh()
             })
           ),
-          Effect.ensuring(Effect.sync(() => setUploading(false)))
+          Effect.ensuring(
+            Effect.sync(() => {
+              clearTimeout(progressTimer)
+              dismissToast(toastId)
+              setUploading(false)
+            })
+          )
         )
       )
     },
