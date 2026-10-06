@@ -226,6 +226,30 @@ function treeMoveDestination(path: string, directory: string): string {
   return `${directory}${path.slice(directoryPath(path).length)}`
 }
 
+// Listings held during a move still describe the old location.
+function rebaseIndexEvent(
+  event: FileIndexPathEvent,
+  from: string,
+  to: string
+): FileIndexPathEvent | null {
+  if (event.type === "directory-pagination") {
+    return movedFilePath(event.directory, from, to) === null ? event : null
+  }
+  if (event.type === "remove") {
+    return {
+      ...event,
+      paths: event.paths.map((path) => movedFilePath(path, from, to) ?? path),
+    }
+  }
+  return {
+    ...event,
+    entries: event.entries.map((entry) => {
+      const path = movedFilePath(entry.path, from, to)
+      return path === null ? entry : { ...entry, path }
+    }),
+  }
+}
+
 // Trees selects the dragged row; put the tree back on the open path afterwards.
 function restoreTreeSelection(
   model: ReturnType<typeof useFileTree>["model"],
@@ -584,7 +608,10 @@ export function FileTreePanel({
   const treeDragPath = React.useRef<string | null>(null)
   const treeDragDirectory = React.useRef("")
   const queuedIndexEvents = React.useRef<Array<FileIndexPathEvent>>([])
-  const flushIndexEvents = React.useRef(() => {})
+  const flushIndexEvents = React.useRef(
+    (_move?: { from: string; to: string }) => {}
+  )
+  const pendingTreeMove = React.useRef(false)
   const moveHandlers = React.useRef({ canWrite, move: actions.move })
   const { model } = useFileTree({
     preparedInput,
@@ -639,7 +666,7 @@ export function FileTreePanel({
           treeDragDirectory.current = directory
           void fileIndex.ensureDirectory(directory)
         }
-        return path !== undefined && canMoveTreeItem(path, directory)
+        return path !== undefined && canDropTreeItem(path, directory)
       },
       onDropComplete: ({ draggedPaths: [path], target }) => {
         if (path) void moveTreeItem(path, treeDropDirectory(target))
@@ -700,16 +727,26 @@ export function FileTreePanel({
     [canWrite, onUploadFiles]
   )
 
+  // Trees moves into an existing folder of the same name; never offer that drop.
+  function canDropTreeItem(path: string, directory: string) {
+    return (
+      canMoveTreeItem(path, directory) &&
+      !model.getItem(treeMoveDestination(path, directory))
+    )
+  }
+
   // Trees cancels a drag on any path mutation, so index updates wait for drag end.
   function endTreeDrag() {
     treeDragPath.current = null
     // The moved row may unmount, so its dragend never reaches the panel.
     handleTreeDragEnd()
-    flushIndexEvents.current()
+    if (!pendingTreeMove.current) flushIndexEvents.current()
   }
 
   async function moveTreeItem(from: string, directory: string) {
     const to = treeMoveDestination(from, directory)
+    // Hold listings until the move settles so the rollback sees the optimistic tree.
+    pendingTreeMove.current = true
     // Pagination placeholders belong to the old directory listing.
     const placeholders = [...loadingPlaceholderPaths.current].filter(
       (path) => movedFilePath(path, from, to) !== null
@@ -724,7 +761,12 @@ export function FileTreePanel({
     )
     endTreeDrag()
     restoreTreeSelection(model, selectionStore.getSnapshot())
-    if (await moveHandlers.current.move(from, to)) return
+    const moved = await moveHandlers.current.move(from, to)
+    pendingTreeMove.current = false
+    if (moved) {
+      flushIndexEvents.current({ from, to })
+      return
+    }
     if (model.getItem(to) && !model.getItem(from)) model.move(to, from)
     for (const path of placeholders) loadingPlaceholderPaths.current.add(path)
     // Restore listed entries the optimistic row was covering at the destination.
@@ -736,6 +778,7 @@ export function FileTreePanel({
         .filter((path) => !model.getItem(path))
         .map((path) => ({ path, type: "add" as const }))
     )
+    flushIndexEvents.current()
   }
 
   function clearTreeDropTarget() {
@@ -775,7 +818,7 @@ export function FileTreePanel({
     const path = treeDragPath.current
     const directory = resolveTreeDropDirectory(event)
     const valid =
-      path !== null && directory !== null && canMoveTreeItem(path, directory)
+      path !== null && directory !== null && canDropTreeItem(path, directory)
     const treeHost = panelRef.current?.querySelector<HTMLElement>(
       "file-tree-container"
     )
@@ -1025,7 +1068,10 @@ export function FileTreePanel({
       if (treeDragPath.current === null) return
       const treeHost = model.getFileTreeContainer()
       if (treeHost && event.composedPath().includes(treeHost)) return
+      // Editable targets accept text drops by default, so cancel and refuse it.
       event.stopPropagation()
+      event.preventDefault()
+      if (event.dataTransfer) event.dataTransfer.dropEffect = "none"
       treeHost?.removeAttribute("data-external-file-drop-root")
       if (panelRef.current) panelRef.current.dataset.fileDropActive = "false"
     }
@@ -1096,12 +1142,16 @@ export function FileTreePanel({
       model.scrollToPath(selectedPath, { focus: false, offset: "nearest" })
     }
     const unsubscribe = fileIndex.subscribePaths((event) => {
-      if (treeDragPath.current === null) applyIndexEvent(event)
-      else queuedIndexEvents.current.push(event)
-    })
-    flushIndexEvents.current = () => {
-      for (const event of queuedIndexEvents.current.splice(0)) {
+      if (treeDragPath.current === null && !pendingTreeMove.current) {
         applyIndexEvent(event)
+      } else queuedIndexEvents.current.push(event)
+    })
+    flushIndexEvents.current = (move) => {
+      for (const event of queuedIndexEvents.current.splice(0)) {
+        const rebased = move
+          ? rebaseIndexEvent(event, move.from, move.to)
+          : event
+        if (rebased) applyIndexEvent(rebased)
       }
     }
     fileIndex
