@@ -765,6 +765,17 @@ export function FileTreePanel({
     pendingTreeMove.current = false
     if (moved) {
       flushIndexEvents.current({ from, to })
+      // Old-path pagination was dropped; reload open folders at their new paths.
+      const selectedPath = selectionStore.getSnapshot()
+      for (const path of new Set([from, ...fileIndex.getPaths()])) {
+        const directory = movedFilePath(path, from, to)
+        if (!directory?.endsWith("/")) continue
+        const item = model.getItem(directory)
+        const open = item && "isExpanded" in item && item.isExpanded()
+        if (open || selectedPath.startsWith(directory)) {
+          void fileIndex.ensureDirectory(directory)
+        }
+      }
       return
     }
     if (model.getItem(to) && !model.getItem(from)) model.move(to, from)
