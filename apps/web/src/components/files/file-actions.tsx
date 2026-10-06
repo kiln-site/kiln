@@ -36,6 +36,7 @@ import { mutateRelayFiles } from "@/server/relay"
 type FileActionDialogState =
   | { kind: "archive"; paths: ReadonlyArray<string> }
   | { kind: "delete"; paths: ReadonlyArray<string> }
+  | { kind: "move"; path: string; destination: string }
   | { kind: "rename"; path: string }
   | null
 
@@ -58,6 +59,7 @@ export function useFileActions({
 }) {
   const [dialog, setDialog] = React.useState<FileActionDialogState>(null)
   const [downloadPath, setDownloadPath] = React.useState<string | null>(null)
+  const settleMove = React.useRef<((moved: boolean) => void) | null>(null)
   const mutation = useMutation({
     mutationFn: (input: RelayFileMutationInput) =>
       mutateRelayFiles({
@@ -126,24 +128,24 @@ export function useFileActions({
     [runMutation]
   )
 
+  // Resolves once the move is confirmed and applied, or false when cancelled.
   const move = React.useCallback(
-    async (path: string, destination: string) => {
-      if (!canWrite) return false
-      const moved = await runMutation(
-        { operation: "rename", path, destination },
-        "Item moved"
-      )
-      if (!moved) return false
-      const selectedPath = movedFilePath(
-        selectionStore.getSnapshot(),
-        path,
-        destination
-      )
-      if (selectedPath !== null) onPathChange(selectedPath)
-      return true
+    (path: string, destination: string) => {
+      if (!canWrite) return Promise.resolve(false)
+      settleMove.current?.(false)
+      return new Promise<boolean>((resolve) => {
+        settleMove.current = resolve
+        setDialog({ kind: "move", path, destination })
+      })
     },
-    [canWrite, onPathChange, runMutation, selectionStore]
+    [canWrite]
   )
+
+  const closeDialog = React.useCallback(() => {
+    settleMove.current?.(false)
+    settleMove.current = null
+    setDialog(null)
+  }, [])
 
   const archiveMutation = useMutation({
     mutationFn: ({
@@ -245,6 +247,29 @@ export function useFileActions({
 
   async function submitDialog(value?: string) {
     if (!dialog) return
+    if (dialog.kind === "move") {
+      const settle = settleMove.current
+      settleMove.current = null
+      const moved = await runMutation(
+        {
+          operation: "rename",
+          path: dialog.path,
+          destination: dialog.destination,
+        },
+        "Item moved"
+      )
+      if (moved) {
+        const selectedPath = movedFilePath(
+          selectionStore.getSnapshot(),
+          dialog.path,
+          dialog.destination
+        )
+        if (selectedPath !== null) onPathChange(selectedPath)
+      }
+      setDialog(null)
+      settle?.(Boolean(moved))
+      return
+    }
     if (dialog.kind === "delete") {
       const result = await runMutation(
         { operation: "delete", paths: [...dialog.paths] },
@@ -293,6 +318,7 @@ export function useFileActions({
       request,
       move,
     } satisfies FileActionsController,
+    closeDialog,
     dialog,
     downloadPath,
     setDialog,
@@ -322,6 +348,43 @@ export function FileActionDialogHost({
         : ""
   const [value, setValue] = React.useState(initialValue)
   if (!dialog) return null
+  if (dialog.kind === "move") {
+    return (
+      <Dialog open onOpenChange={onOpenChange}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>
+              Move {dialog.path.endsWith("/") ? "folder" : "file"}?
+            </DialogTitle>
+            <DialogDescription>
+              {formatName(dialog.path)} will be moved to a new location.
+            </DialogDescription>
+          </DialogHeader>
+          <dl className="type-code grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1.5">
+            <dt className="text-muted-foreground">From</dt>
+            <dd className="truncate">/data/{dialog.path}</dd>
+            <dt className="text-muted-foreground">To</dt>
+            <dd className="truncate text-primary">
+              /data/{dialog.destination}
+            </dd>
+          </dl>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              disabled={busy}
+              onClick={() => onOpenChange(false)}
+            >
+              Cancel
+            </Button>
+            <Button autoFocus disabled={busy} onClick={() => void onSubmit()}>
+              {busy ? <LoaderCircle className="animate-spin" /> : null}
+              Move
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    )
+  }
   const title =
     dialog.kind === "rename"
       ? "Rename item"
