@@ -1,5 +1,8 @@
+import { assert, describe, it } from "@effect/vitest"
+import { relayInstanceSchema } from "@workspace/contracts"
 import { Effect, Fiber, Stream } from "effect"
-import { beforeEach, describe, expect, it, vi } from "vite-plus/test"
+import * as TestClock from "effect/testing/TestClock"
+import { beforeEach, vi } from "vite-plus/test"
 
 const fakes = vi.hoisted(() => ({
   open: vi.fn(),
@@ -30,100 +33,162 @@ vi.mock("@/lib/relay-browser-credentials", () => ({
   }),
 }))
 
-import {
-  openRelayResourceStream,
-  warmHistoryOnce,
-} from "./relay-resource-stream"
+import { openRelayResourceStream } from "./relay-resource-stream"
 import { RelayBrowserReconnectError } from "./authenticated-relay-socket"
 
 beforeEach(() => vi.clearAllMocks())
 
+// Credential and poll promises settle outside virtual time, so advance the
+// TestClock in small steps until the expected outcome has happened.
+const advanceUntil = (done: () => boolean) =>
+  Effect.gen(function* () {
+    for (let step = 0; step < 100 && !done(); step++) {
+      yield* TestClock.adjust(100)
+    }
+    assert.isTrue(done())
+  })
+
+const silentSocket = () =>
+  Effect.acquireRelease(
+    Effect.succeed({
+      ready: {},
+      socket: { send: fakes.send },
+      inbox: { stream: Stream.never },
+    }),
+    () => Effect.sync(fakes.close)
+  )
+
+const sample = {
+  sampledAt: "2026-10-05T00:00:00.000Z",
+  cpu: { percent: 5 },
+  memory: { totalBytes: 100, usedBytes: 10, percent: 10 },
+  storage: { totalBytes: 100, usedBytes: 10, percent: 10 },
+}
+const instance = relayInstanceSchema.parse({
+  id: "a".repeat(40),
+  shortId: "a".repeat(8),
+  name: "Resources",
+  game: "Minecraft",
+  implementation: "Paper",
+  version: "1.21.11",
+  javaVersion: "21",
+  connectAddress: "resources.test",
+  service: "resources",
+  directory: "/srv/resources",
+  desiredState: "running",
+  observedState: "running",
+  containerId: "container",
+  status: "Running",
+})
+
 describe("resource stream lifecycle", () => {
-  it("releases credentials without polling or retrying a permission denial", async () => {
-    fakes.open.mockReturnValue(Effect.fail(new Error("Permission denied")))
-    await Effect.runPromise(
-      openRelayResourceStream("relay", "instance").pipe(
-        Stream.runDrain,
-        Effect.result
-      )
-    )
-    expect(fakes.open).toHaveBeenCalledOnce()
-    expect(fakes.release).toHaveBeenCalledOnce()
-    expect(fakes.poll).not.toHaveBeenCalled()
-  })
+  it.effect(
+    "releases credentials without polling or retrying a permission denial",
+    () =>
+      Effect.gen(function* () {
+        fakes.open.mockReturnValue(Effect.fail(new Error("Permission denied")))
 
-  it("reconnects a lost renewal acknowledgement without switching to polling", async () => {
-    fakes.open
-      .mockReturnValueOnce(
-        Effect.fail(new RelayBrowserReconnectError("ack lost"))
-      )
-      .mockImplementation(() =>
-        Effect.acquireRelease(
-          Effect.succeed({
-            ready: {},
-            socket: { send: fakes.send },
-            inbox: { stream: Stream.never },
-          }),
-          () => Effect.sync(fakes.close)
+        const result = yield* openRelayResourceStream("relay", "instance").pipe(
+          Stream.runDrain,
+          Effect.result
         )
-      )
-    const fiber = Effect.runFork(
-      openRelayResourceStream("relay", "instance").pipe(Stream.runDrain)
-    )
-    await vi.waitFor(() => expect(fakes.send).toHaveBeenCalledOnce())
-    await Effect.runPromise(Fiber.interrupt(fiber))
-    expect(fakes.open).toHaveBeenCalledTimes(2)
-    expect(fakes.poll).not.toHaveBeenCalled()
-    expect(fakes.close).toHaveBeenCalledOnce()
-    expect(fakes.release).toHaveBeenCalledOnce()
-  })
 
-  it("releases a silent socket immediately on consumer interruption", async () => {
-    fakes.open.mockImplementation(() =>
-      Effect.acquireRelease(
-        Effect.succeed({
-          ready: {},
-          socket: { send: fakes.send },
-          inbox: { stream: Stream.never },
-        }),
-        () => Effect.sync(fakes.close)
-      )
-    )
-    const fiber = Effect.runFork(
-      openRelayResourceStream("relay", "instance").pipe(Stream.runDrain)
-    )
-    await vi.waitFor(() => expect(fakes.send).toHaveBeenCalledOnce())
-    await Effect.runPromise(Fiber.interrupt(fiber))
-    expect(fakes.close).toHaveBeenCalledOnce()
-    expect(fakes.release).toHaveBeenCalledOnce()
-    expect(fakes.poll).not.toHaveBeenCalled()
-  })
+        assert.strictEqual(result._tag, "Failure")
+        assert.strictEqual(fakes.open.mock.calls.length, 1)
+        assert.strictEqual(fakes.release.mock.calls.length, 1)
+        assert.strictEqual(fakes.poll.mock.calls.length, 0)
+      })
+  )
 
-  it("falls back on direct setup failure and aborts an in-flight poll on teardown", async () => {
-    fakes.open.mockReturnValue(
-      Effect.fail(new Error("Direct endpoint unavailable"))
-    )
-    let pollSignal: AbortSignal | undefined
-    fakes.poll.mockImplementation(({ signal }: { signal: AbortSignal }) => {
-      pollSignal = signal
-      return new Promise(() => {})
-    })
-    const fiber = Effect.runFork(
-      openRelayResourceStream("relay", "instance").pipe(Stream.runDrain)
-    )
-    await vi.waitFor(() => expect(fakes.poll).toHaveBeenCalledOnce())
-    await Effect.runPromise(Fiber.interrupt(fiber))
-    expect(pollSignal?.aborted).toBe(true)
-    expect(fakes.release).toHaveBeenCalledOnce()
-  })
+  it.effect(
+    "reconnects a lost renewal acknowledgement without switching to polling",
+    () =>
+      Effect.gen(function* () {
+        fakes.open
+          .mockReturnValueOnce(
+            Effect.fail(new RelayBrowserReconnectError("ack lost"))
+          )
+          .mockImplementation(silentSocket)
+
+        const fiber = yield* openRelayResourceStream("relay", "instance").pipe(
+          Stream.runDrain,
+          Effect.forkChild
+        )
+        yield* advanceUntil(() => fakes.send.mock.calls.length === 1)
+        yield* Fiber.interrupt(fiber)
+
+        assert.strictEqual(fakes.open.mock.calls.length, 2)
+        assert.strictEqual(fakes.poll.mock.calls.length, 0)
+        assert.strictEqual(fakes.close.mock.calls.length, 1)
+        assert.strictEqual(fakes.release.mock.calls.length, 1)
+      })
+  )
+
+  it.effect(
+    "releases a silent socket immediately on consumer interruption",
+    () =>
+      Effect.gen(function* () {
+        fakes.open.mockImplementation(silentSocket)
+
+        const fiber = yield* openRelayResourceStream("relay", "instance").pipe(
+          Stream.runDrain,
+          Effect.forkChild
+        )
+        yield* advanceUntil(() => fakes.send.mock.calls.length === 1)
+        yield* Fiber.interrupt(fiber)
+
+        assert.strictEqual(fakes.close.mock.calls.length, 1)
+        assert.strictEqual(fakes.release.mock.calls.length, 1)
+        assert.strictEqual(fakes.poll.mock.calls.length, 0)
+      })
+  )
+
+  it.effect(
+    "falls back on direct setup failure and aborts an in-flight poll on teardown",
+    () =>
+      Effect.gen(function* () {
+        fakes.open.mockReturnValue(
+          Effect.fail(new Error("Direct endpoint unavailable"))
+        )
+        let pollSignal: AbortSignal | undefined
+        fakes.poll.mockImplementation(({ signal }: { signal: AbortSignal }) => {
+          pollSignal = signal
+          return new Promise(() => {})
+        })
+
+        const fiber = yield* openRelayResourceStream("relay", "instance").pipe(
+          Stream.runDrain,
+          Effect.forkChild
+        )
+        yield* advanceUntil(() => pollSignal !== undefined)
+        yield* Fiber.interrupt(fiber)
+
+        assert.isTrue(pollSignal?.aborted)
+        assert.strictEqual(fakes.release.mock.calls.length, 1)
+      })
+  )
 })
 
 describe("Hearth resource polling", () => {
-  it("delivers warm history only with the first poll", () => {
-    const historyForPoll = warmHistoryOnce<number>()
+  it.effect("delivers warm history only with the first poll", () =>
+    Effect.gen(function* () {
+      fakes.open.mockReturnValue(
+        Effect.fail(new Error("Direct endpoint unavailable"))
+      )
+      fakes.poll.mockResolvedValue({ history: [sample, sample], instance })
 
-    expect(historyForPoll([1, 2, 3])).toEqual([1, 2, 3])
-    expect(historyForPoll([1, 2, 3, 4])).toEqual([])
-    expect(historyForPoll([5])).toEqual([])
-  })
+      const fiber = yield* openRelayResourceStream("relay", "instance").pipe(
+        Stream.take(2),
+        Stream.runCollect,
+        Effect.forkChild
+      )
+      yield* advanceUntil(() => fiber.pollUnsafe() !== undefined)
+      const events = yield* Fiber.join(fiber)
+
+      assert.deepStrictEqual(
+        events.map((event) => event.history.length),
+        [2, 0]
+      )
+    })
+  )
 })

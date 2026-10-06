@@ -1,108 +1,101 @@
-import { afterEach, assert, describe, it, vi } from "@effect/vitest"
-import { Effect, Layer } from "effect"
+import { afterEach, assert, layer } from "@effect/vitest"
+import { Effect } from "effect"
+import { vi } from "vite-plus/test"
 
-import { Database } from "@/effect/database"
 import { requireAccountPasswordEffect } from "@/lib/auth-password"
+import { TestDatabase, describeMysql, resetDatabase } from "@/test/database"
+import { insertRows, insertUser } from "@/test/seed"
 
-function testDatabase() {
-  const state = { queries: 0 }
-  const layer = Layer.succeed(Database)({
-    execute: () => Effect.die("Unexpected database write"),
-    queryRows: () =>
-      Effect.sync(() => {
-        state.queries += 1
-        return []
-      }),
-    transaction: () => Effect.die("Unexpected database transaction"),
+// Better Auth only supplies the password verifier here.
+vi.mock("@/lib/auth", () => ({
+  auth: {
+    $context: Promise.resolve({
+      password: {
+        verify: async (input: { hash: string; password: string }) =>
+          input.hash === `hashed:${input.password}`,
+      },
+    }),
+  },
+}))
+
+const bypass = { id: "kiln-development-bypass", isDevelopmentBypass: true }
+
+const seedAccount = Effect.gen(function* () {
+  yield* resetDatabase
+  yield* insertUser("persisted-account")
+  yield* insertRows("account", {
+    id: "credential",
+    accountId: "persisted-account",
+    providerId: "credential",
+    userId: "persisted-account",
+    password: "hashed:correct horse battery",
+    createdAt: new Date(0),
+    updatedAt: new Date(0),
   })
-  return { layer, state }
-}
+})
 
-describe("account password confirmation", () => {
+const rejected = (
+  user: { id: string; isDevelopmentBypass: boolean },
+  password: string
+) =>
+  Effect.map(
+    Effect.flip(requireAccountPasswordEffect(user, password)),
+    (failure) => failure._tag
+  )
+
+describeMysql("account password confirmation", () => {
   afterEach(() => vi.unstubAllEnvs())
 
-  it.effect(
-    "accepts an empty password for the development bypass in dev",
-    () => {
-      vi.stubEnv("KILN_ENVIRONMENT", "dev")
-      const database = testDatabase()
-      return Effect.gen(function* () {
-        yield* requireAccountPasswordEffect(
-          {
-            id: "kiln-development-bypass",
-            isDevelopmentBypass: true,
-          },
-          ""
-        )
-        assert.strictEqual(database.state.queries, 0)
-      }).pipe(Effect.provide(database.layer))
-    }
-  )
+  layer(TestDatabase)((it) => {
+    it.effect(
+      "accepts only an empty password for the development bypass in dev",
+      () =>
+        Effect.gen(function* () {
+          vi.stubEnv("KILN_ENVIRONMENT", "dev")
+          yield* resetDatabase
+          yield* requireAccountPasswordEffect(bypass, "")
+          assert.strictEqual(
+            yield* rejected(bypass, "password"),
+            "AuthenticationError"
+          )
+        })
+    )
 
-  it.effect("rejects passwords for the development bypass", () => {
-    vi.stubEnv("KILN_ENVIRONMENT", "dev")
-    const database = testDatabase()
-    return Effect.gen(function* () {
-      const failure = yield* requireAccountPasswordEffect(
-        {
-          id: "kiln-development-bypass",
-          isDevelopmentBypass: true,
-        },
-        "password"
-      ).pipe(Effect.flip)
-      assert.strictEqual(failure._tag, "AuthenticationError")
-      assert.strictEqual(database.state.queries, 0)
-    }).pipe(Effect.provide(database.layer))
-  })
+    it.effect("does not accept an empty password outside development", () =>
+      Effect.gen(function* () {
+        vi.stubEnv("KILN_ENVIRONMENT", "prod")
+        yield* resetDatabase
+        assert.strictEqual(yield* rejected(bypass, ""), "AuthenticationError")
+      })
+    )
 
-  it.effect("does not accept an empty password for persisted accounts", () => {
-    vi.stubEnv("KILN_ENVIRONMENT", "dev")
-    const database = testDatabase()
-    return Effect.gen(function* () {
-      const failure = yield* requireAccountPasswordEffect(
-        {
-          id: "persisted-account",
-          isDevelopmentBypass: false,
-        },
-        ""
-      ).pipe(Effect.flip)
-      assert.strictEqual(failure._tag, "AuthenticationError")
-      assert.strictEqual(database.state.queries, 1)
-    }).pipe(Effect.provide(database.layer))
-  })
+    it.effect(
+      "checks persisted accounts and other dev identities against their credential",
+      () =>
+        Effect.gen(function* () {
+          vi.stubEnv("KILN_ENVIRONMENT", "dev")
+          yield* seedAccount
+          const persisted = {
+            id: "persisted-account",
+            isDevelopmentBypass: false,
+          }
 
-  it.effect(
-    "does not accept an empty password for another dev identity",
-    () => {
-      vi.stubEnv("KILN_ENVIRONMENT", "dev")
-      const database = testDatabase()
-      return Effect.gen(function* () {
-        const failure = yield* requireAccountPasswordEffect(
-          {
-            id: "another-development-user",
-            isDevelopmentBypass: true,
-          },
-          ""
-        ).pipe(Effect.flip)
-        assert.strictEqual(failure._tag, "AuthenticationError")
-        assert.strictEqual(database.state.queries, 1)
-      }).pipe(Effect.provide(database.layer))
-    }
-  )
-
-  it.effect("does not accept an empty password outside development", () => {
-    vi.stubEnv("KILN_ENVIRONMENT", "prod")
-    const database = testDatabase()
-    return Effect.gen(function* () {
-      const failure = yield* requireAccountPasswordEffect(
-        {
-          id: "kiln-development-bypass",
-          isDevelopmentBypass: true,
-        },
-        ""
-      ).pipe(Effect.flip)
-      assert.strictEqual(failure._tag, "AuthenticationError")
-      assert.strictEqual(database.state.queries, 0)
-    }).pipe(Effect.provide(database.layer))
+          yield* requireAccountPasswordEffect(
+            persisted,
+            "correct horse battery"
+          )
+          for (const [user, password] of [
+            [persisted, ""],
+            [persisted, "wrong password"],
+            [{ ...persisted, isDevelopmentBypass: true }, ""],
+            [{ id: "no-credential", isDevelopmentBypass: true }, ""],
+          ] as const) {
+            assert.strictEqual(
+              yield* rejected(user, password),
+              "AuthenticationError"
+            )
+          }
+        })
+    )
   })
 })

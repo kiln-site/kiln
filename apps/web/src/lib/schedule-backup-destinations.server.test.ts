@@ -1,25 +1,27 @@
-import { beforeEach, describe, expect, it, vi } from "vite-plus/test"
+import { expect, layer } from "@effect/vitest"
+import { Effect } from "effect"
 import {
   scheduleBackupActionSchema,
   scheduleTargetKey,
   type ScheduleTarget,
 } from "@workspace/contracts"
+
 import type { AccessGrant } from "@/lib/access-control"
 import type { AuthenticatedUser } from "@/lib/auth-session"
 import { requireScheduleBackupDestinations } from "@/lib/schedule-backup-destinations.server"
+import { TestDatabase, describeMysql, resetDatabase } from "@/test/database"
+import { insertRows } from "@/test/seed"
 
-const mocks = vi.hoisted(() => ({ storage: vi.fn() }))
-vi.mock("@/backups/destinations/s3", () => ({
-  loadBackupStorageEffect: (id: string) => id,
-}))
-vi.mock("@/effect/runtime", () => ({
-  runAppEffect: (_name: string, id: string) => mocks.storage(id),
-}))
-vi.mock("@/lib/access-control", () => ({
-  isPlatformAdmin: (user: AuthenticatedUser) => user.role === "admin",
-  hasPlatformPermission: (user: AuthenticatedUser) => user.role === "admin",
-}))
-const user = { id: "user", role: "user" } as AuthenticatedUser
+const user = {
+  id: "user",
+  role: "user",
+  email: "user@example.test",
+  emailVerified: true,
+  emailVerifiedAt: "2026-01-01T00:00:00.000Z",
+  isDevelopmentBypass: false,
+  name: "User",
+  twoFactorEnabled: false,
+} satisfies AuthenticatedUser
 const storageId = "a01d9771-607d-4c22-b492-fb49c36a8a32"
 const target: ScheduleTarget = {
   id: "server-a",
@@ -57,105 +59,138 @@ const input = {
   user,
 }
 
-beforeEach(() => {
-  vi.clearAllMocks()
-  mocks.storage.mockResolvedValue({
-    ownerUserId: user.id,
-    enabled: true,
-    deleting: false,
-  })
-})
-
-describe("scheduled backup export authorization", () => {
-  it("rejects create-only permission for personal storage", async () => {
-    await expect(requireScheduleBackupDestinations(input)).rejects.toThrow(
-      "backup.download"
-    )
-  })
-  it("allows export permission on the target and platform admins", async () => {
-    await expect(
-      requireScheduleBackupDestinations({
-        ...input,
-        grants: [grant(target, ["backup.download"])],
-      })
-    ).resolves.toBeUndefined()
-    await expect(
-      requireScheduleBackupDestinations({
-        ...input,
-        user: { ...user, role: "admin" },
-      })
-    ).resolves.toBeUndefined()
-  })
-  it("requires export permission independently on every applicable target", async () => {
-    await expect(
-      requireScheduleBackupDestinations({
-        ...input,
-        targets: [target, otherTarget],
-        grants: [grant(target, ["backup.download"])],
-      })
-    ).rejects.toThrow("Database B")
-  })
-  it("honors action target selection and does not require export on unrelated targets", async () => {
-    await expect(
-      requireScheduleBackupDestinations({
-        ...input,
-        actions: [{ ...action, targetKeys: [scheduleTargetKey(target)] }],
-        targets: [target, otherTarget],
-        grants: [grant(target, ["backup.download"])],
-      })
-    ).resolves.toBeUndefined()
-  })
-  it("does not use backup policy defaults for omitted destinations", async () => {
-    const local = scheduleBackupActionSchema.parse({
+const seedStorage = (ownerUserId: string | null) =>
+  Effect.gen(function* () {
+    yield* resetDatabase
+    yield* insertRows("backup_storage", {
       id: storageId,
-      type: "backup",
+      owner_user_id: ownerUserId,
+      name: "storage",
+      endpoint: "https://s3.example.test",
+      region: "us-east-1",
+      bucket: "backups",
+      access_key_id_ciphertext: "ciphertext",
+      secret_access_key_ciphertext: "ciphertext",
+      created_at: 0,
+      updated_at: 0,
     })
-    await expect(
-      requireScheduleBackupDestinations({ ...input, actions: [local] })
-    ).resolves.toBeUndefined()
-    expect(mocks.storage).not.toHaveBeenCalled()
   })
-  it("permits shared platform storage without export permission", async () => {
-    mocks.storage.mockResolvedValue({
-      ownerUserId: null,
-      enabled: true,
-      deleting: false,
-    })
-    await expect(
-      requireScheduleBackupDestinations(input)
-    ).resolves.toBeUndefined()
-  })
-  it("prevents assigning another user's storage during creation or editing", async () => {
-    mocks.storage.mockResolvedValue({
-      ownerUserId: "other-user",
-      enabled: true,
-      deleting: false,
-    })
-    await expect(
-      requireScheduleBackupDestinations({
-        ...input,
-        grants: [grant(target, ["backup.download"])],
+
+const authorize = (
+  overrides: Partial<Parameters<typeof requireScheduleBackupDestinations>[0]>
+) =>
+  Effect.tryPromise(() =>
+    requireScheduleBackupDestinations({ ...input, ...overrides })
+  )
+
+const failure = (effect: ReturnType<typeof authorize>) =>
+  Effect.map(Effect.flip(effect), (error) => String(error.cause))
+
+// "Personal storage requires backup.download" itself is covered by
+// backup-storage-selection.server.test.ts.
+describeMysql("scheduled backup export authorization", () => {
+  layer(TestDatabase)((it) => {
+    it.effect(
+      "allows export permission on the target and platform admins",
+      () =>
+        Effect.gen(function* () {
+          yield* seedStorage(user.id)
+          yield* authorize({ grants: [grant(target, ["backup.download"])] })
+          yield* authorize({ user: { ...user, role: "admin" } })
+        })
+    )
+
+    it.effect(
+      "requires export permission independently on every applicable target",
+      () =>
+        Effect.gen(function* () {
+          yield* seedStorage(user.id)
+          expect(
+            yield* failure(
+              authorize({
+                targets: [target, otherTarget],
+                grants: [grant(target, ["backup.download"])],
+              })
+            )
+          ).toContain("Database B")
+        })
+    )
+
+    it.effect(
+      "honors action target selection and does not require export on unrelated targets",
+      () =>
+        Effect.gen(function* () {
+          yield* seedStorage(user.id)
+          yield* authorize({
+            actions: [{ ...action, targetKeys: [scheduleTargetKey(target)] }],
+            targets: [target, otherTarget],
+            grants: [grant(target, ["backup.download"])],
+          })
+        })
+    )
+
+    it.effect(
+      "does not use backup policy defaults for omitted destinations",
+      () =>
+        Effect.gen(function* () {
+          yield* seedStorage("other-user")
+          yield* insertRows("backup_policy", {
+            relay_id: target.relayId,
+            target_kind: "instance",
+            target_id: target.id,
+            storage_id: storageId,
+            exclude_patterns: "[]",
+            created_at: 0,
+            updated_at: 0,
+          })
+          const local = scheduleBackupActionSchema.parse({
+            id: storageId,
+            type: "backup",
+          })
+          yield* authorize({ actions: [local] })
+        })
+    )
+
+    it.effect("permits shared platform storage without export permission", () =>
+      Effect.gen(function* () {
+        yield* seedStorage(null)
+        yield* authorize({})
       })
-    ).rejects.toThrow("unavailable")
-  })
-  it("requires export for manual execution while retaining the approved destination's owner", async () => {
-    mocks.storage.mockResolvedValue({
-      ownerUserId: "other-user",
-      enabled: true,
-      deleting: false,
-    })
-    await expect(
-      requireScheduleBackupDestinations({
-        ...input,
-        checkStorageOwnership: false,
-      })
-    ).rejects.toThrow("backup.download")
-    await expect(
-      requireScheduleBackupDestinations({
-        ...input,
-        checkStorageOwnership: false,
-        grants: [grant(target, ["backup.download"])],
-      })
-    ).resolves.toBeUndefined()
+    )
+
+    it.effect(
+      "prevents assigning another user's or a missing storage during creation or editing",
+      () =>
+        Effect.gen(function* () {
+          yield* seedStorage("other-user")
+          expect(
+            yield* failure(
+              authorize({ grants: [grant(target, ["backup.download"])] })
+            )
+          ).toContain("unavailable")
+
+          yield* resetDatabase
+          expect(
+            yield* failure(
+              authorize({ grants: [grant(target, ["backup.download"])] })
+            )
+          ).toContain("unavailable")
+        })
+    )
+
+    it.effect(
+      "requires export for manual execution while retaining the approved destination's owner",
+      () =>
+        Effect.gen(function* () {
+          yield* seedStorage("other-user")
+          expect(
+            yield* failure(authorize({ checkStorageOwnership: false }))
+          ).toContain("backup.download")
+          yield* authorize({
+            checkStorageOwnership: false,
+            grants: [grant(target, ["backup.download"])],
+          })
+        })
+    )
   })
 })

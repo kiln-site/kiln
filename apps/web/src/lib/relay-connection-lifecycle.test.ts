@@ -83,7 +83,11 @@ const pushedSnapshot = {
   },
 } satisfies RelaySnapshot
 
+// Fake only timeouts: Effect's scheduler (setImmediate) and the real ws/ed25519
+// handshake keep running, while reconnect backoff, request deadlines, and the
+// readiness retry wait for virtual time.
 beforeEach(() => {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] })
   authorizationFakes.synchronize.mockReset().mockResolvedValue(3)
   authorizationFakes.synchronizeMinimum.mockReset().mockResolvedValue(4)
   authorizationFakes.wake.mockReset()
@@ -91,6 +95,7 @@ beforeEach(() => {
 
 afterEach(() => {
   closeRelayConnection(relayId)
+  vi.useRealTimers()
   vi.restoreAllMocks()
 })
 
@@ -136,9 +141,8 @@ effectIt.effect(
           )
           expect(activityEvents).toEqual(["activity"])
 
-          vi.spyOn(Math, "random").mockReturnValue(0)
           disconnect()
-          yield* Effect.promise(() => reconnected)
+          yield* Effect.promise(() => advanceTimersUntil(reconnected))
           const reconnectedSnapshot = yield* promiseEffect(() =>
             relayRpc(endpoint, "relay.snapshot", {}, 1_000)
           )
@@ -148,10 +152,12 @@ effectIt.effect(
           expect(relayStates).toContain("unreachable")
 
           const timeout = yield* promiseEffect(() =>
-            relayRpc(endpoint, "relay.update.status", { ignored: true }, 20)
+            advanceTimersUntil(
+              relayRpc(endpoint, "relay.update.status", { ignored: true }, 500)
+            )
           ).pipe(Effect.flip)
           expect(timeout.message).toContain(
-            "Relay request timed out after 20ms"
+            "Relay request timed out after 500ms"
           )
           yield* Effect.promise(() => cancelled)
 
@@ -165,29 +171,31 @@ effectIt.effect(
 
 it("settles failed generation readiness and replaces it for retry", async () => {
   let rejectSynchronization: (cause: Error) => void = () => undefined
+  let markSynchronizationStarted: () => void = () => undefined
+  const synchronizationStarted = new Promise<void>((resolve) => {
+    markSynchronizationStarted = resolve
+  })
   authorizationFakes.synchronize
-    .mockImplementationOnce(
-      () =>
-        new Promise<number>((_resolve, reject) => {
-          rejectSynchronization = reject
-        })
-    )
+    .mockImplementationOnce(() => {
+      markSynchronizationStarted()
+      return new Promise<number>((_resolve, reject) => {
+        rejectSynchronization = reject
+      })
+    })
     .mockResolvedValueOnce(5)
-  vi.spyOn(Math, "random").mockReturnValue(0)
   const fixture = await setupRelayServer()
   try {
     const connecting = relayRpc(fixture.endpoint, "relay.snapshot", {}, 1_000)
-    await vi.waitFor(() =>
-      expect(authorizationFakes.synchronize).toHaveBeenCalledOnce()
-    )
+    await synchronizationStarted
     const initial = relayBrowserAuthorizationReady(relayId, 3)
     rejectSynchronization(new Error("generation database unavailable"))
     await expect(initial).rejects.toThrow("generation database unavailable")
     await connecting
 
-    await new Promise((resolve) => setTimeout(resolve, 1_050))
-    await expect(relayBrowserAuthorizationReady(relayId, 3)).resolves.toBe(5)
-    expect(authorizationFakes.synchronize).toHaveBeenCalledTimes(2)
+    const retried = relayBrowserAuthorizationReady(relayId, 3)
+    // The retry is jittered within 1-3 s.
+    await vi.advanceTimersByTimeAsync(3_000)
+    await expect(retried).resolves.toBe(5)
   } finally {
     closeRelayConnection(relayId)
     for (const client of fixture.server.clients) client.terminate()
@@ -387,6 +395,26 @@ function authenticateRelaySocket(
       })
     )
   })
+}
+
+// Advance virtual time in small steps, yielding a real event-loop turn between
+// steps so socket I/O triggered by fired timers can land, until the promise
+// settles.
+async function advanceTimersUntil<TResult>(
+  promise: Promise<TResult>
+): Promise<TResult> {
+  let settled = false
+  const settle = () => {
+    settled = true
+  }
+  promise.then(settle, settle)
+  while (!settled) {
+    // oxlint-disable-next-line react-doctor/async-await-in-loop -- each step must observe the I/O of the previous one
+    await vi.advanceTimersByTimeAsync(100)
+    // oxlint-disable-next-line react-doctor/async-await-in-loop -- see above
+    await new Promise<void>((resolve) => setImmediate(resolve))
+  }
+  return promise
 }
 
 function promiseEffect<TResult>(run: () => Promise<TResult>) {

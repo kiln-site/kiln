@@ -1,70 +1,152 @@
-import { describe, expect, it } from "vite-plus/test"
+import { expect, layer } from "@effect/vitest"
 import { Effect } from "effect"
-import type { ResultSetHeader, RowDataPacket } from "mysql2/promise"
 
-import type { DatabaseTransaction } from "@/effect/database"
-import { advanceAuthorizationRevisionEffect } from "./authorization-revision"
+import { Database } from "@/effect/database"
+import { TestDatabase, describeMysql, resetDatabase } from "@/test/database"
+import { insertRelay, insertRows, selectRows } from "@/test/seed"
 
-const successfulWrite = {
-  affectedRows: 1,
-  changedRows: 0,
-  fieldCount: 0,
-  info: "",
-  insertId: 0,
-  serverStatus: 0,
-  warningStatus: 0,
-} as ResultSetHeader
+import {
+  advanceAuthorizationRevisionEffect,
+  advanceSubjectAcrossEnabledRelaysEffect,
+  type AuthorizationDeliveryTarget,
+  type AuthorizationScope,
+} from "./authorization-revision"
 
-describe("authorization revisions", () => {
-  it("locks and advances the subject before coalescing delivery intent", async () => {
-    const statements: Array<{ sql: string; values: ReadonlyArray<unknown> }> =
-      []
-    const transaction: DatabaseTransaction = {
-      execute: (sql, values) =>
-        Effect.sync(() => {
-          statements.push({ sql, values: values ?? [] })
-          return successfulWrite
-        }),
-      queryRows: <TRow extends RowDataPacket>(
-        sql: string,
-        values?: Array<boolean | Buffer | Date | null | number | string>
-      ) =>
-        Effect.sync(() => {
-          statements.push({ sql, values: values ?? [] })
-          return [{ revision: "8" }] as unknown as ReadonlyArray<TRow>
-        }),
-    }
+interface DeliveryRow {
+  relay_id: string
+  scope_kind: string
+  scope_id: string
+  desired_revision: number
+  acknowledged_revision: number
+}
 
-    const change = await Effect.runPromise(
+const advance = (targets: ReadonlyArray<AuthorizationDeliveryTarget>) =>
+  Effect.gen(function* () {
+    const database = yield* Database
+    return yield* database.transaction("test", (transaction) =>
       advanceAuthorizationRevisionEffect(transaction, {
-        targets: [
-          {
-            relayId: "relay-one",
-            scope: { instanceId: "instance-one", kind: "instance" },
-          },
-          {
-            relayId: "relay-one",
-            scope: { instanceId: "instance-one", kind: "instance" },
-          },
-        ],
+        targets,
         userId: "user-one",
       })
     )
+  })
 
-    expect(change).toEqual({ relayIds: ["relay-one"], revision: 9 })
-    expect(statements.map((statement) => statement.sql)).toEqual([
-      expect.stringContaining("authorization_subject"),
-      expect.stringContaining("FOR UPDATE"),
-      expect.stringContaining("SET revision = ?"),
-      expect.stringContaining("GREATEST(desired_revision"),
-    ])
-    expect(statements[3]!.values).toEqual([
-      "relay-one",
-      "user-one",
-      "instance",
-      "instance-one",
-      9,
-      expect.any(Number),
-    ])
+const subjectRevision = Effect.map(
+  selectRows<{ revision: number }>("authorization_subject"),
+  (rows) => rows.map((row) => Number(row.revision))
+)
+
+const deliveries = Effect.map(
+  selectRows<DeliveryRow>("authorization_delivery"),
+  (rows) =>
+    rows
+      .map((row) => ({
+        relayId: row.relay_id,
+        scope: `${row.scope_kind}:${row.scope_id}`,
+        desired: Number(row.desired_revision),
+        acknowledged: Number(row.acknowledged_revision),
+      }))
+      .sort((a, b) =>
+        `${a.relayId}${a.scope}`.localeCompare(`${b.relayId}${b.scope}`)
+      )
+)
+
+const instanceTarget = {
+  relayId: "relay-one",
+  scope: { instanceId: "instance-one", kind: "instance" },
+} satisfies AuthorizationDeliveryTarget
+
+describeMysql("authorization revisions", () => {
+  layer(TestDatabase)((it) => {
+    it.effect(
+      "advances the subject and raises coalesced delivery intent without losing acknowledgements",
+      () =>
+        Effect.gen(function* () {
+          yield* resetDatabase
+          yield* insertRelay("relay-one")
+          yield* insertRows("authorization_subject", {
+            user_id: "user-one",
+            revision: 8,
+            updated_at: 0,
+          })
+          yield* insertRows("authorization_delivery", {
+            relay_id: "relay-one",
+            subject_id: "user-one",
+            scope_kind: "instance",
+            scope_id: "instance-one",
+            desired_revision: 5,
+            acknowledged_revision: 3,
+            updated_at: 0,
+          })
+
+          const change = yield* advance([instanceTarget, instanceTarget])
+
+          expect(change).toEqual({ relayIds: ["relay-one"], revision: 9 })
+          expect(yield* subjectRevision).toEqual([9])
+          expect(yield* deliveries).toEqual([
+            {
+              relayId: "relay-one",
+              scope: "instance:instance-one",
+              desired: 9,
+              acknowledged: 3,
+            },
+          ])
+        })
+    )
+
+    it.effect("serializes concurrent first advances of one subject", () =>
+      Effect.gen(function* () {
+        yield* resetDatabase
+        yield* insertRelay("relay-one")
+
+        const changes = yield* Effect.all(
+          Array.from({ length: 6 }, () => advance([instanceTarget])),
+          { concurrency: "unbounded" }
+        )
+
+        expect(
+          changes.map((change) => change.revision).sort((a, b) => a - b)
+        ).toEqual([1, 2, 3, 4, 5, 6])
+        expect(yield* subjectRevision).toEqual([6])
+        expect((yield* deliveries).map((row) => row.desired)).toEqual([6])
+      })
+    )
+
+    it.effect("targets only enabled Relays", () =>
+      Effect.gen(function* () {
+        yield* resetDatabase
+        yield* insertRelay("enabled-relay")
+        yield* insertRelay("paused-relay", { enabled: false })
+        const scopes: Array<AuthorizationScope> = [
+          { kind: "subject_relay" },
+          { kind: "login_session", loginSessionId: "session-one" },
+        ]
+
+        const database = yield* Database
+        const change = yield* database.transaction("test", (transaction) =>
+          advanceSubjectAcrossEnabledRelaysEffect(
+            transaction,
+            "user-one",
+            scopes
+          )
+        )
+
+        expect(change).toEqual({ relayIds: ["enabled-relay"], revision: 1 })
+        expect(yield* deliveries).toEqual([
+          {
+            relayId: "enabled-relay",
+            scope: "login_session:session-one",
+            desired: 1,
+            acknowledged: 0,
+          },
+          {
+            relayId: "enabled-relay",
+            scope: "subject_relay:",
+            desired: 1,
+            acknowledged: 0,
+          },
+        ])
+      })
+    )
   })
 })

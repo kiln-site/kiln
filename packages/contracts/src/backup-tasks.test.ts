@@ -7,7 +7,7 @@ import {
   omitBackupSecrets,
   redactBackupTaskInput,
   resticRepositoryLocationSchema,
-} from "@workspace/contracts"
+} from "./backups.js"
 
 const backupId = "11111111-1111-4111-8111-111111111111"
 const taskId = "22222222-2222-4222-8222-222222222222"
@@ -26,8 +26,8 @@ const s3Repository = {
   secretAccessKey: "s3-secret",
 }
 
-describe("restic backup contracts", () => {
-  it("defaults omitted restic repositories to local", () => {
+describe("Relay backup task inputs", () => {
+  it("reads restic tasks from Hearth versions that predate repository locations", () => {
     expect(
       backupCreateTaskInputSchema.parse({
         artifactKind: "restic_snapshot",
@@ -52,50 +52,36 @@ describe("restic backup contracts", () => {
     ).toEqual({ kind: "local" })
   })
 
-  it("accepts native restic S3 repository locations", () => {
-    expect(resticRepositoryLocationSchema.parse(s3Repository)).toMatchObject({
-      bucket: "kiln-backups",
-      kind: "s3",
-      repositoryPrefix: s3Repository.repositoryPrefix,
-    })
-    expect(() =>
-      resticRepositoryLocationSchema.parse({
-        ...s3Repository,
-        endpoint: "http://minio:9000",
-      })
-    ).toThrow()
-    expect(() =>
-      resticRepositoryLocationSchema.parse({
-        ...s3Repository,
-        endpoint: "https://minio:0",
-      })
-    ).toThrow()
-    expect(() =>
-      resticRepositoryLocationSchema.parse({
-        ...s3Repository,
-        repositoryPrefix: "../escape",
-      })
-    ).toThrow()
+  it("rejects S3 repositories with plaintext endpoints, invalid ports, or escaping prefixes", () => {
+    expect(resticRepositoryLocationSchema.safeParse(s3Repository).success).toBe(
+      true
+    )
+    for (const unsafe of [
+      { endpoint: "http://minio:9000" },
+      { endpoint: "https://minio:0" },
+      { repositoryPrefix: "../escape" },
+    ]) {
+      expect(
+        resticRepositoryLocationSchema.safeParse({ ...s3Repository, ...unsafe })
+          .success
+      ).toBe(false)
+    }
   })
 
-  it("requires exactly one of snapshotId or createTaskId on restic deletes", () => {
+  it("requires restic deletes to name exactly one snapshot selector", () => {
     const base = {
       backupId,
       destination: { kind: "restic" as const },
       target,
       taskId,
     }
-    expect(() => backupDeleteTaskInputSchema.parse(base)).toThrow()
-    expect(() =>
-      backupDeleteTaskInputSchema.parse({
+    expect(backupDeleteTaskInputSchema.safeParse(base).success).toBe(false)
+    expect(
+      backupDeleteTaskInputSchema.safeParse({
         ...base,
-        destination: {
-          kind: "restic",
-          createTaskId,
-          snapshotId: "abcdef12",
-        },
-      })
-    ).toThrow()
+        destination: { kind: "restic", createTaskId, snapshotId: "abcdef12" },
+      }).success
+    ).toBe(false)
     expect(
       backupDeleteTaskInputSchema.parse({
         ...base,
@@ -110,7 +96,7 @@ describe("restic backup contracts", () => {
     ).toMatchObject({ createTaskId })
   })
 
-  it("strips repository passwords and S3 keys from task input", () => {
+  it("strips repository passwords and S3 keys from restic task input", () => {
     const redacted = redactBackupTaskInput({
       artifactKind: "restic_snapshot",
       backupId,
@@ -127,21 +113,10 @@ describe("restic backup contracts", () => {
       target,
       taskId,
     })
-    expect(redacted.kind).toBe("create")
-    if (redacted.kind !== "create" || redacted.destination.kind !== "restic") {
-      throw new Error("expected restic create input")
-    }
-    expect(redacted.destination.repositoryPassword).toBeUndefined()
-    expect(
-      redacted.destination.repository.kind === "s3"
-        ? redacted.destination.repository.accessKeyId
-        : "present"
-    ).toBeUndefined()
-    expect(
-      redacted.destination.repository.kind === "s3"
-        ? redacted.destination.repository.secretAccessKey
-        : "present"
-    ).toBeUndefined()
+
+    expect(JSON.stringify(redacted)).not.toMatch(
+      /repo-secret|AKIAEXAMPLE|s3-secret/u
+    )
     expect(
       omitBackupSecrets({
         accessKeyId: "AKIAEXAMPLE",
@@ -151,7 +126,7 @@ describe("restic backup contracts", () => {
     ).toEqual({ nested: { value: 1 } })
   })
 
-  it("redacts scheduled full-upload credentials", () => {
+  it("strips S3 keys from full-upload task input", () => {
     const redacted = redactBackupTaskInput({
       artifactKind: "archive",
       backupId,
@@ -175,11 +150,6 @@ describe("restic backup contracts", () => {
       taskId,
     })
 
-    expect(redacted.kind).toBe("create")
-    if (redacted.kind !== "create" || redacted.destination.kind !== "s3") {
-      throw new Error("expected S3 create input")
-    }
-    expect(redacted.destination).not.toHaveProperty("accessKeyId")
-    expect(redacted.destination).not.toHaveProperty("secretAccessKey")
+    expect(JSON.stringify(redacted)).not.toMatch(/AKIAEXAMPLE|s3-secret/u)
   })
 })

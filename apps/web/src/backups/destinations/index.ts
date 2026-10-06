@@ -19,7 +19,6 @@ import type { BackupCatalogRecord } from "@/effect/backups"
 import type { PersistedRelay } from "@/lib/relay-registry"
 
 export * from "./types"
-export { resolveBackupRelayForOperation } from "./relay"
 
 export const backupDestinations = {
   local: localBackupDestination,

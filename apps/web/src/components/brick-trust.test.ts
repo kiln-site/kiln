@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vite-plus/test"
 
-import { isVerifiedBrick } from "./brick-selector"
 import { brickRecipeSchema, type Brick } from "@workspace/contracts"
+
+import { isVerifiedBrick } from "./brick-trust"
 
 const repository = "kiln-site/kiln"
 
@@ -25,6 +26,17 @@ describe("Brick catalog trust badges", () => {
         repository
       )
     ).toBe(false)
+  })
+
+  it("does not trust lookalike hosts, other repositories, or other branches", () => {
+    for (const source of [
+      `https://raw.githubusercontent.com.evil.test/${repository}/main/apps/bricks/recipes/paper.yml`,
+      "https://raw.githubusercontent.com/kiln-site/kiln-fork/main/apps/bricks/recipes/paper.yml",
+      `https://raw.githubusercontent.com/${repository}/attacker-branch/apps/bricks/recipes/paper.yml`,
+      `https://raw.githubusercontent.com/${repository}/main/uploads/paper.yml`,
+    ]) {
+      expect(isVerifiedBrick(brick(source, "Kiln"), repository)).toBe(false)
+    }
   })
 })
 

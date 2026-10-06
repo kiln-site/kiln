@@ -221,7 +221,7 @@ function openHearthResourceStream(
   })
 }
 
-export function warmHistoryOnce<T>(): (history: Array<T>) => Array<T> {
+function warmHistoryOnce<T>(): (history: Array<T>) => Array<T> {
   let delivered = false
   return (history) => {
     if (delivered) return []

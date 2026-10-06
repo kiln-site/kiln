@@ -1,9 +1,6 @@
-import { assert, describe, it } from "@effect/vitest"
-import { Effect, Layer } from "effect"
-import * as TestClock from "effect/testing/TestClock"
-import type { ResultSetHeader } from "mysql2/promise"
-
-import { Database } from "@/effect/database"
+import { assert, describe, it, layer } from "@effect/vitest"
+import { Effect } from "effect"
+import { TestClock } from "effect/testing"
 
 import {
   completeTailscaleCleanupEffect,
@@ -11,41 +8,63 @@ import {
   reconcileTailscaleDeploymentsEffect,
   requestTailscaleNetworkCleanupEffect,
   tailscaleCleanupRetryDelaySeconds,
-} from "./tailscale-cleanup"
-
-const emptyResult: ResultSetHeader = {
-  affectedRows: 1,
-  changedRows: 1,
-  constructor: { name: "ResultSetHeader" },
-  fieldCount: 0,
-  info: "",
-  insertId: 0,
-  serverStatus: 0,
-  warningStatus: 0,
-}
+} from "@/effect/tailscale-cleanup"
+import { TestDatabase, describeMysql, resetDatabase } from "@/test/database"
+import { insertRows, selectRows } from "@/test/seed"
 
 const now = 1_700_000_000_000
+const networkId = "a".repeat(40)
+const relayB = "b".repeat(43)
+const relayC = "c".repeat(43)
 
-const statements: Array<{
-  sql: string
-  values: ReadonlyArray<unknown>
-}> = []
-let pendingRows: Array<Record<string, unknown>> = []
+interface NetworkRow {
+  cleanup_attempts: number
+  cleanup_last_error: string | null
+  cleanup_next_attempt_at: number | null
+  deletion_requested_at: number | null
+  deletion_requested_by: string | null
+}
 
-const databaseLayer = Layer.succeed(Database)({
-  execute: () => Effect.die("Unexpected standalone database write"),
-  queryRows: <TRow>() =>
-    Effect.succeed(pendingRows as unknown as ReadonlyArray<TRow>),
-  transaction: (_operation, run) =>
-    run({
-      execute: (sql, values) =>
-        Effect.sync(() => {
-          statements.push({ sql, values: values ?? [] })
-          return emptyResult
-        }),
-      queryRows: () => Effect.die("Unexpected transaction query"),
-    }),
-})
+interface DeploymentRow {
+  cleanup_attempts: number
+  cleanup_last_error: string | null
+  cleanup_next_attempt_at: number
+  relay_id: string
+}
+
+const insertNetwork = (row: Record<string, string | number | null> = {}) =>
+  insertRows("tailscale_network", {
+    id: networkId,
+    name: "Private Network",
+    domain: "private.test",
+    created_at: now - 60_000,
+    updated_at: now - 60_000,
+    ...row,
+  })
+
+const insertDeployment = (
+  relayId: string,
+  row: Record<string, string | number | null> = {}
+) =>
+  insertRows("tailscale_network_deployment", {
+    network_id: networkId,
+    relay_id: relayId,
+    deployment: JSON.stringify(persistedDeployment(relayId)),
+    cleanup_next_attempt_at: now - 1_000,
+    observed_at: now - 60_000,
+    updated_at: now - 60_000,
+    ...row,
+  })
+
+const network = Effect.map(
+  selectRows<NetworkRow>("tailscale_network"),
+  (rows) => rows[0]
+)
+
+const deployments = Effect.map(
+  selectRows<DeploymentRow>("tailscale_network_deployment"),
+  (rows) => new Map(rows.map((row) => [row.relay_id, row]))
+)
 
 describe("Tailscale cleanup retries", () => {
   it("backs off quickly and caps retries at five minutes", () => {
@@ -54,122 +73,138 @@ describe("Tailscale cleanup retries", () => {
       [2, 4, 8, 256, 300, 300]
     )
   })
-
-  it.effect("keeps previously observed offline Relays queued", () =>
-    Effect.gen(function* () {
-      statements.length = 0
-      yield* TestClock.setTime(now)
-
-      yield* requestTailscaleNetworkCleanupEffect(
-        "a".repeat(40),
-        "user-one",
-        []
-      )
-
-      assert.strictEqual(statements.length, 1)
-      assert.include(statements[0]?.sql, "deletion_requested_at")
-      assert.notInclude(statements[0]?.sql, "DELETE")
-      assert.notInclude(statements[0]?.sql, "CURRENT_TIMESTAMP")
-      assert.deepEqual(statements[0]?.values, [
-        now,
-        "user-one",
-        now,
-        now,
-        "a".repeat(40),
-      ])
-    }).pipe(Effect.provide(databaseLayer))
-  )
-
-  it.effect("only removes Relay snapshots explicitly removed by the save", () =>
-    Effect.gen(function* () {
-      statements.length = 0
-      const networkId = "a".repeat(40)
-      const removedRelayId = "b".repeat(43)
-
-      yield* reconcileTailscaleDeploymentsEffect(networkId, [], [])
-      assert.strictEqual(statements.length, 0)
-
-      yield* reconcileTailscaleDeploymentsEffect(
-        networkId,
-        [],
-        [removedRelayId]
-      )
-      assert.strictEqual(statements.length, 1)
-      assert.include(statements[0]?.sql, "relay_id IN (?)")
-      assert.notInclude(statements[0]?.sql, "NOT IN")
-      assert.deepEqual(statements[0]?.values, [networkId, removedRelayId])
-    }).pipe(Effect.provide(databaseLayer))
-  )
-
-  it.effect("defers corrupt rows without blocking valid cleanup jobs", () =>
-    Effect.gen(function* () {
-      statements.length = 0
-      yield* TestClock.setTime(now)
-      const networkId = "a".repeat(40)
-      const corruptRelayId = "b".repeat(43)
-      const validRelayId = "c".repeat(43)
-      pendingRows = [
-        {
-          cleanup_attempts: 2,
-          cleanup_last_error: null,
-          deployment: "{not json",
-          network_id: networkId,
-          relay_id: corruptRelayId,
-          requested_by: "user-one",
-        },
-        {
-          cleanup_attempts: 0,
-          cleanup_last_error: null,
-          deployment: JSON.stringify(
-            persistedDeployment(networkId, validRelayId)
-          ),
-          network_id: networkId,
-          relay_id: validRelayId,
-          requested_by: "user-one",
-        },
-      ]
-
-      const batch = yield* loadPendingTailscaleCleanupsEffect()
-
-      assert.strictEqual(batch.cleanups.length, 1)
-      assert.strictEqual(batch.cleanups[0]?.deployment.relayId, validRelayId)
-      assert.strictEqual(batch.deferredCorruptRows, 1)
-      assert.strictEqual(statements.length, 2)
-      // Attempt 3 backs off 8 seconds from the current clock.
-      assert.strictEqual(statements[0]?.values[1], now + 8_000)
-      assert.include(
-        String(statements[0]?.values[2]),
-        "Stored Tailscale cleanup data is invalid"
-      )
-      pendingRows = []
-    }).pipe(Effect.provide(databaseLayer))
-  )
-
-  it.effect(
-    "clears Relay retry state after completing the last deployment",
-    () =>
-      Effect.gen(function* () {
-        statements.length = 0
-        yield* TestClock.setTime(now)
-        const networkId = "a".repeat(40)
-        const relayId = "b".repeat(43)
-
-        yield* completeTailscaleCleanupEffect(networkId, relayId)
-
-        assert.strictEqual(statements.length, 2)
-        assert.include(statements[0]?.sql, "DELETE FROM")
-        assert.deepEqual(statements[0]?.values, [networkId, relayId])
-        assert.include(statements[1]?.sql, "cleanup_next_attempt_at")
-        assert.include(statements[1]?.sql, "cleanup_attempts = 0")
-        assert.notInclude(statements[1]?.sql, "CURRENT_TIMESTAMP")
-        assert.include(statements[1]?.sql, "cleanup_last_error = NULL")
-        assert.include(statements[1]?.sql, "NOT EXISTS")
-        assert.deepEqual(statements[1]?.values, [now, now, networkId])
-      }).pipe(Effect.provide(databaseLayer))
-  )
 })
 
-function persistedDeployment(networkId: string, relayId: string) {
+describeMysql("Tailscale cleanup persistence", () => {
+  layer(TestDatabase)((it) => {
+    it.effect(
+      "queues previously observed Relays and keeps the first request",
+      () =>
+        Effect.gen(function* () {
+          yield* resetDatabase
+          yield* TestClock.setTime(now)
+          yield* insertNetwork({
+            cleanup_attempts: 4,
+            cleanup_last_error: "old",
+          })
+          yield* insertDeployment(relayB)
+
+          yield* requestTailscaleNetworkCleanupEffect(networkId, "user-one", [])
+          yield* TestClock.adjust(5_000)
+          yield* requestTailscaleNetworkCleanupEffect(networkId, "user-two", [])
+
+          const requested = yield* network
+          assert.strictEqual(Number(requested?.deletion_requested_at), now)
+          assert.strictEqual(requested?.deletion_requested_by, "user-one")
+          assert.strictEqual(requested?.cleanup_attempts, 0)
+          assert.strictEqual(
+            Number(requested?.cleanup_next_attempt_at),
+            now + 5_000
+          )
+          assert.isNull(requested?.cleanup_last_error)
+
+          const batch = yield* loadPendingTailscaleCleanupsEffect()
+          assert.deepStrictEqual(
+            batch.cleanups.map((cleanup) => [
+              cleanup.deployment.relayId,
+              cleanup.requestedBy,
+            ]),
+            [[relayB, "user-one"]]
+          )
+        })
+    )
+
+    it.effect(
+      "only removes Relay snapshots explicitly removed by the save",
+      () =>
+        Effect.gen(function* () {
+          yield* resetDatabase
+          yield* TestClock.setTime(now)
+          yield* insertNetwork()
+          yield* insertDeployment(relayB)
+          yield* insertDeployment(relayC)
+
+          yield* reconcileTailscaleDeploymentsEffect(networkId, [], [])
+          assert.sameMembers([...(yield* deployments).keys()], [relayB, relayC])
+
+          yield* reconcileTailscaleDeploymentsEffect(networkId, [], [relayB])
+          assert.sameMembers([...(yield* deployments).keys()], [relayC])
+        })
+    )
+
+    it.effect("defers corrupt rows without blocking valid cleanup jobs", () =>
+      Effect.gen(function* () {
+        yield* resetDatabase
+        yield* TestClock.setTime(now)
+        yield* insertNetwork({
+          deletion_requested_at: now - 60_000,
+          deletion_requested_by: "user-one",
+        })
+        yield* insertDeployment(relayB, {
+          cleanup_attempts: 2,
+          deployment: JSON.stringify({ not: "a deployment" }),
+        })
+        yield* insertDeployment(relayC)
+
+        const batch = yield* loadPendingTailscaleCleanupsEffect()
+
+        assert.deepStrictEqual(
+          batch.cleanups.map((cleanup) => cleanup.deployment.relayId),
+          [relayC]
+        )
+        assert.strictEqual(batch.deferredCorruptRows, 1)
+        const corrupt = (yield* deployments).get(relayB)
+        assert.strictEqual(corrupt?.cleanup_attempts, 3)
+        // Attempt 3 backs off 8 seconds from the current clock.
+        assert.strictEqual(
+          Number(corrupt?.cleanup_next_attempt_at),
+          now + 8_000
+        )
+        assert.isNotNull(corrupt?.cleanup_last_error)
+
+        const retried = yield* loadPendingTailscaleCleanupsEffect()
+        assert.deepStrictEqual(
+          retried.cleanups.map((cleanup) => cleanup.deployment.relayId),
+          [relayC]
+        )
+        assert.strictEqual(retried.deferredCorruptRows, 0)
+      })
+    )
+
+    it.effect(
+      "clears network retry state after the last deployment completes",
+      () =>
+        Effect.gen(function* () {
+          yield* resetDatabase
+          yield* TestClock.setTime(now)
+          yield* insertNetwork({
+            cleanup_attempts: 3,
+            cleanup_last_error: "Relay offline",
+            cleanup_next_attempt_at: now + 60_000,
+            deletion_requested_at: now - 60_000,
+            deletion_requested_by: "user-one",
+          })
+          yield* insertDeployment(relayB)
+          yield* insertDeployment(relayC)
+
+          yield* completeTailscaleCleanupEffect(networkId, relayB)
+
+          assert.sameMembers([...(yield* deployments).keys()], [relayC])
+          assert.strictEqual((yield* network)?.cleanup_attempts, 3)
+
+          yield* completeTailscaleCleanupEffect(networkId, relayC)
+
+          assert.strictEqual((yield* deployments).size, 0)
+          const cleared = yield* network
+          assert.strictEqual(cleared?.cleanup_attempts, 0)
+          assert.isNull(cleared?.cleanup_last_error)
+          assert.strictEqual(Number(cleared?.cleanup_next_attempt_at), now)
+        })
+    )
+  })
+})
+
+function persistedDeployment(relayId: string) {
   return {
     bindings: [],
     components: {

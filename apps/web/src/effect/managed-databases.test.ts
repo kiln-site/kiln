@@ -1,175 +1,222 @@
-import { assert, describe, layer } from "@effect/vitest"
-import { Effect, Layer } from "effect"
-import * as TestClock from "effect/testing/TestClock"
-import type { ResultSetHeader, RowDataPacket } from "mysql2/promise"
+import { assert, layer } from "@effect/vitest"
+import { Effect } from "effect"
+import { TestClock } from "effect/testing"
 
-import { Database } from "./database"
 import {
   deleteManagedDatabaseRecordEffect,
   listManagedDatabaseDirectoryEffect,
   listManagedDatabaseRecordsEffect,
   managedDatabaseNameExistsEffect,
-} from "./managed-databases"
+} from "@/effect/managed-databases"
+import { TestDatabase, describeMysql, resetDatabase } from "@/test/database"
+import { insertGrant, insertRelay, insertRows, selectRows } from "@/test/seed"
 
-const emptyResult: ResultSetHeader = {
-  affectedRows: 0,
-  changedRows: 0,
-  constructor: { name: "ResultSetHeader" },
-  fieldCount: 0,
-  info: "",
-  insertId: 0,
-  serverStatus: 0,
-  warningStatus: 0,
-}
+const now = Date.UTC(2026, 8, 1)
+const relayOne = "r".repeat(43)
+const relayTwo = "s".repeat(43)
 
-const statements: Array<{
-  sql: string
-  values: ReadonlyArray<unknown>
-}> = []
-const queries: Array<{
-  operation: string
-  sql: string
-  values: ReadonlyArray<unknown>
-}> = []
-const directoryRows: Array<{
-  database_id: string
-  engine: string
-  name: string
-  relay_id: string
-}> = []
+const insertManagedDatabase = (
+  relayId: string,
+  databaseId: string,
+  name: string,
+  engine = "postgres"
+) =>
+  insertRows("database", {
+    database_id: databaseId,
+    relay_id: relayId,
+    name,
+    engine,
+    database_name: `db_${databaseId}`,
+    username: `user_${databaseId}`,
+    password_ciphertext: "password-ciphertext",
+    created_by: "user-one",
+    created_at: now,
+    updated_at: now,
+  })
 
-const databaseLayer = Layer.succeed(Database)({
-  execute: () => Effect.die("Unexpected standalone database write"),
-  queryRows: <TRow extends RowDataPacket>(
-    operation: string,
-    sql: string,
-    values?: Array<boolean | Buffer | Date | null | number | string>
-  ) =>
-    Effect.sync(() => {
-      queries.push({ operation, sql, values: values ?? [] })
-      return (operation === "managed_databases_directory"
-        ? directoryRows
-        : []) as unknown as ReadonlyArray<TRow>
-    }),
-  transaction: (_operation, run) =>
-    run({
-      execute: (sql, values) =>
-        Effect.sync(() => {
-          statements.push({ sql, values: values ?? [] })
-          return emptyResult
-        }),
-      queryRows: () => Effect.succeed([]),
-    }),
-})
+const insertInvitation = (
+  id: string,
+  databaseId: string,
+  row: Record<string, number | null> = {}
+) =>
+  insertRows("invitation", {
+    id,
+    token_hash: id.padEnd(64, "0"),
+    email: `${id}@example.test`,
+    relay_id: relayOne,
+    database_id: databaseId,
+    invited_by: "user-one",
+    expires_at: now + 60_000,
+    created_at: now,
+    ...row,
+  })
 
-describe("managed database persistence", () => {
-  layer(databaseLayer)((it) => {
-    it.effect("lists metadata without loading encrypted passwords", () =>
+const insertPreset = (id: string, resourceId: string) =>
+  insertRows("permission_preset", {
+    id,
+    relay_id: relayOne,
+    resource_type: "database",
+    resource_id: resourceId,
+    name: id,
+    created_at: now,
+    updated_at: now,
+  })
+
+describeMysql("managed database persistence", () => {
+  layer(TestDatabase)((it) => {
+    it.effect("lists metadata without credentials", () =>
       Effect.gen(function* () {
-        queries.length = 0
+        yield* resetDatabase
+        yield* insertRelay(relayOne)
+        yield* insertManagedDatabase(relayOne, "redis-id", "Redis", "redis")
+        yield* insertManagedDatabase(relayOne, "postgres-id", "Postgres")
 
-        yield* listManagedDatabaseRecordsEffect()
+        const records = yield* listManagedDatabaseRecordsEffect()
 
-        assert.strictEqual(queries.length, 1)
-        assert.notInclude(queries[0]?.sql, "password_ciphertext")
-        assert.notInclude(queries[0]?.sql, "username")
+        assert.deepStrictEqual(records, [
+          {
+            createdAt: new Date(now).toISOString(),
+            createdBy: "user-one",
+            databaseId: "postgres-id",
+            databaseName: "db_postgres-id",
+            engine: "postgres",
+            name: "Postgres",
+            relayId: relayOne,
+          },
+          {
+            createdAt: new Date(now).toISOString(),
+            createdBy: "user-one",
+            databaseId: "redis-id",
+            databaseName: "db_redis-id",
+            engine: "redis",
+            name: "Redis",
+            relayId: relayOne,
+          },
+        ])
+      })
+    )
+
+    it.effect("lists the navigation directory with import support", () =>
+      Effect.gen(function* () {
+        yield* resetDatabase
+        yield* insertRelay(relayOne)
+        yield* insertManagedDatabase(relayOne, "valkey-id", "Valkey", "valkey")
+        yield* insertManagedDatabase(relayOne, "redis-id", "Redis", "redis")
+        yield* insertManagedDatabase(relayOne, "postgres-id", "Postgres")
+
+        const directory = yield* listManagedDatabaseDirectoryEffect()
+
+        assert.deepStrictEqual(directory, [
+          {
+            databaseId: "postgres-id",
+            name: "Postgres",
+            relayId: relayOne,
+            supportsImportExport: true,
+          },
+          {
+            databaseId: "redis-id",
+            name: "Redis",
+            relayId: relayOne,
+            supportsImportExport: false,
+          },
+          {
+            databaseId: "valkey-id",
+            name: "Valkey",
+            relayId: relayOne,
+            supportsImportExport: false,
+          },
+        ])
+      })
+    )
+
+    it.effect("checks names within one Relay", () =>
+      Effect.gen(function* () {
+        yield* resetDatabase
+        yield* insertRelay(relayOne)
+        yield* insertRelay(relayTwo)
+        yield* insertManagedDatabase(relayOne, "primary-id", "Primary")
+
+        assert.isTrue(
+          yield* managedDatabaseNameExistsEffect(relayOne, "Primary")
+        )
+        assert.isFalse(
+          yield* managedDatabaseNameExistsEffect(relayOne, "Other")
+        )
+        assert.isFalse(
+          yield* managedDatabaseNameExistsEffect(relayTwo, "Primary")
+        )
       })
     )
 
     it.effect(
-      "loads only the fields needed by global database navigation",
+      "removes the database with its grants, pending invitations, and presets",
       () =>
         Effect.gen(function* () {
-          queries.length = 0
-          directoryRows.splice(
-            0,
-            directoryRows.length,
-            {
-              database_id: "postgres-id",
-              engine: "postgres",
-              name: "Postgres",
-              relay_id: "relay-one",
-            },
-            {
-              database_id: "redis-id",
-              engine: "redis",
-              name: "Redis",
-              relay_id: "relay-one",
-            },
-            {
-              database_id: "valkey-id",
-              engine: "valkey",
-              name: "Valkey",
-              relay_id: "relay-one",
-            }
+          yield* resetDatabase
+          yield* TestClock.setTime(now)
+          yield* insertRelay(relayOne)
+          yield* insertManagedDatabase(relayOne, "database-one", "One")
+          yield* insertManagedDatabase(relayOne, "database-two", "Two")
+          yield* insertGrant({
+            id: "grant-one",
+            relayId: relayOne,
+            resourceId: "database-one",
+            resourceType: "database",
+            userId: "user-one",
+          })
+          yield* insertGrant({
+            id: "grant-two",
+            relayId: relayOne,
+            resourceId: "database-two",
+            resourceType: "database",
+            userId: "user-one",
+          })
+          yield* insertGrant({
+            id: "grant-instance",
+            relayId: relayOne,
+            resourceId: "database-one",
+            resourceType: "instance",
+            userId: "user-one",
+          })
+          yield* insertInvitation("pending", "database-one")
+          yield* insertInvitation("accepted", "database-one", {
+            accepted_at: now - 1_000,
+          })
+          yield* insertInvitation("revoked", "database-one", {
+            revoked_at: now - 1_000,
+          })
+          yield* insertInvitation("expired", "database-one", {
+            expires_at: now,
+          })
+          yield* insertInvitation("other-database", "database-two")
+          yield* insertPreset("preset-one", "database-one")
+          yield* insertPreset("preset-two", "database-two")
+
+          yield* deleteManagedDatabaseRecordEffect(relayOne, "database-one")
+
+          const ids = <T extends Record<string, unknown>>(
+            rows: ReadonlyArray<T>,
+            key: keyof T
+          ) => rows.map((row) => row[key])
+          assert.sameMembers(
+            ids(
+              yield* selectRows<{ database_id: string }>("database"),
+              "database_id"
+            ),
+            ["database-two"]
           )
-
-          const directory = yield* listManagedDatabaseDirectoryEffect()
-
-          assert.strictEqual(queries.length, 1)
-          assert.include(queries[0]?.sql, "database_id, relay_id, name")
-          assert.include(queries[0]?.sql, "engine")
-          assert.notInclude(queries[0]?.sql, "password_ciphertext")
-          assert.deepEqual(
-            directory.map(({ name, supportsImportExport }) => ({
-              name,
-              supportsImportExport,
-            })),
-            [
-              { name: "Postgres", supportsImportExport: true },
-              { name: "Redis", supportsImportExport: false },
-              { name: "Valkey", supportsImportExport: false },
-            ]
+          assert.sameMembers(
+            ids(yield* selectRows<{ id: string }>("access_grant"), "id"),
+            ["grant-two", "grant-instance"]
           )
-        })
-    )
-
-    it.effect("checks a Relay-scoped name before provisioning", () =>
-      Effect.gen(function* () {
-        queries.length = 0
-
-        const exists = yield* managedDatabaseNameExistsEffect(
-          "relay-one",
-          "Primary"
-        )
-
-        assert.isFalse(exists)
-        assert.strictEqual(
-          queries[0]?.operation,
-          "managed_database_name_exists"
-        )
-        assert.include(queries[0]?.sql, "WHERE relay_id = ? AND name = ?")
-        assert.deepEqual(queries[0]?.values, ["relay-one", "Primary"])
-      })
-    )
-
-    it.effect(
-      "removes grants, pending invitations, credentials, and resource presets",
-      () =>
-        Effect.gen(function* () {
-          statements.length = 0
-          yield* TestClock.setTime(1_000)
-
-          yield* deleteManagedDatabaseRecordEffect("relay-one", "database-one")
-
-          assert.strictEqual(statements.length, 4)
-          assert.include(statements[0]?.sql, "database_id = ?")
-          assert.include(statements[0]?.sql, "accepted_at IS NULL")
-          assert.include(statements[0]?.sql, "revoked_at IS NULL")
-          assert.include(statements[0]?.sql, "expires_at > ?")
-          assert.deepEqual(statements[0]?.values, [
-            "relay-one",
-            "database-one",
-            1_000,
-          ])
-          assert.include(statements[1]?.sql, "database_id = ?")
-          assert.deepEqual(statements[1]?.values, ["relay-one", "database-one"])
-          assert.include(statements[2]?.sql, "DELETE FROM")
-          assert.include(statements[2]?.sql, "resource_type = 'database'")
-          assert.deepEqual(statements[2]?.values, ["relay-one", "database-one"])
-          assert.include(statements[3]?.sql, "permission_preset")
-          assert.include(statements[3]?.sql, "resource_type = 'database'")
-          assert.deepEqual(statements[3]?.values, ["relay-one", "database-one"])
+          assert.sameMembers(
+            ids(yield* selectRows<{ id: string }>("invitation"), "id"),
+            ["accepted", "revoked", "expired", "other-database"]
+          )
+          assert.sameMembers(
+            ids(yield* selectRows<{ id: string }>("permission_preset"), "id"),
+            ["preset-two"]
+          )
         })
     )
   })

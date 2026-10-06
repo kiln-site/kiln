@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vite-plus/test"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test"
 
 const capability = vi.hoisted(() => ({ issue: vi.fn() }))
 
@@ -7,32 +7,58 @@ vi.mock("@/server/relay-capability", () => ({
 }))
 
 import {
-  acquireRelayBrowserCredentials,
+  acquireRelayBrowserCredentials as acquireLease,
   notifyRelayBrowserAuthorizationChanged,
   relayBrowserAuthorizationSignal,
 } from "./relay-browser-credentials"
 
+// The coordinator is a module singleton; release every lease and listener even
+// when an assertion fails so later cases start from an empty registry.
+const cleanups: Array<() => void> = []
+
+function acquireRelayBrowserCredentials(relayId: string, instanceId: string) {
+  const lease = acquireLease(relayId, instanceId)
+  cleanups.push(lease.release)
+  return lease
+}
+
+function subscribe(
+  signal: ReturnType<typeof relayBrowserAuthorizationSignal>,
+  listener: () => void
+) {
+  const unsubscribe = signal.subscribe(listener)
+  cleanups.push(unsubscribe)
+  return unsubscribe
+}
+
+/** Key generation is real WebCrypto in production; a resolved fake keeps
+ * issuance on microtasks so `flush` deterministically reaches the server. */
+beforeEach(() => {
+  vi.stubGlobal("crypto", {
+    subtle: {
+      exportKey: vi.fn().mockResolvedValue({
+        crv: "P-256",
+        kty: "EC",
+        x: "x".repeat(43),
+        y: "y".repeat(43),
+      }),
+      generateKey: vi.fn().mockResolvedValue({ privateKey: {}, publicKey: {} }),
+    },
+  })
+})
+
 afterEach(() => {
+  for (const cleanup of cleanups.splice(0).reverse()) cleanup()
   capability.issue.mockReset()
   vi.unstubAllGlobals()
 })
 
+function flush(): Promise<void> {
+  return new Promise((resolve) => setImmediate(resolve))
+}
+
 describe("Relay browser credential coordinator", () => {
   it("batches active console and resource kinds onto one proof key", async () => {
-    vi.stubGlobal("crypto", {
-      subtle: {
-        exportKey: vi.fn().mockResolvedValue({
-          crv: "P-256",
-          kty: "EC",
-          x: "x".repeat(43),
-          y: "y".repeat(43),
-        }),
-        generateKey: vi.fn().mockResolvedValue({
-          privateKey: {},
-          publicKey: {},
-        }),
-      },
-    })
     capability.issue.mockImplementation(
       async ({ data }: { data: { requests: Array<{ kind: string }> } }) => ({
         capabilities: data.requests.map(({ kind }) => ({
@@ -73,39 +99,21 @@ describe("Relay browser credential coordinator", () => {
     )
     expect(consoleCapability.kind).toBe("console")
     expect(resourceCapability.kind).toBe("resources")
-    consoleLease.release()
-    resourceLease.release()
   })
 
   it("notifies only active route-instance subscribers", () => {
-    const lease = acquireRelayBrowserCredentials("relay-one", "instance-one")
+    acquireRelayBrowserCredentials("relay-one", "instance-one")
     const signal = relayBrowserAuthorizationSignal("relay-one", "instance-one")
     const listener = vi.fn()
-    const unsubscribe = signal.subscribe(listener)
+    subscribe(signal, listener)
 
     notifyRelayBrowserAuthorizationChanged()
 
     expect(listener).toHaveBeenCalledOnce()
     expect(signal.getSnapshot()).toBe(1)
-    unsubscribe()
-    lease.release()
   })
 
   it("batches simultaneous renewals and never mints unused capabilities", async () => {
-    vi.stubGlobal("crypto", {
-      subtle: {
-        exportKey: vi.fn().mockResolvedValue({
-          crv: "P-256",
-          kty: "EC",
-          x: "x".repeat(43),
-          y: "y".repeat(43),
-        }),
-        generateKey: vi.fn().mockResolvedValue({
-          privateKey: {},
-          publicKey: {},
-        }),
-      },
-    })
     capability.issue.mockImplementation(
       async ({ data }: { data: { requests: Array<{ kind: string }> } }) => ({
         capabilities: data.requests.map(({ kind }) => ({
@@ -158,25 +166,9 @@ describe("Relay browser credential coordinator", () => {
         }),
       })
     )
-    consoleLease.release()
-    resourceLease.release()
   })
 
   it("separates same-kind requests with different authority shapes", async () => {
-    vi.stubGlobal("crypto", {
-      subtle: {
-        exportKey: vi.fn().mockResolvedValue({
-          crv: "P-256",
-          kty: "EC",
-          x: "x".repeat(43),
-          y: "y".repeat(43),
-        }),
-        generateKey: vi.fn().mockResolvedValue({
-          privateKey: {},
-          publicKey: {},
-        }),
-      },
-    })
     capability.issue.mockImplementation(
       async ({
         data,
@@ -227,25 +219,9 @@ describe("Relay browser credential coordinator", () => {
     )
     expect(readCapability.capability).toBe("read.signature")
     expect(writeCapability.capability).toBe("writable.signature")
-    readLease.release()
-    writeLease.release()
   })
 
   it("does not block a late resource request on slow console issuance", async () => {
-    vi.stubGlobal("crypto", {
-      subtle: {
-        exportKey: vi.fn().mockResolvedValue({
-          crv: "P-256",
-          kty: "EC",
-          x: "x".repeat(43),
-          y: "y".repeat(43),
-        }),
-        generateKey: vi.fn().mockResolvedValue({
-          privateKey: {},
-          publicKey: {},
-        }),
-      },
-    })
     let resolveConsole!: (value: { capabilities: Array<never> }) => void
     capability.issue.mockImplementation(
       ({ data }: { data: { requests: Array<{ kind: string }> } }) =>
@@ -280,7 +256,8 @@ describe("Relay browser credential coordinator", () => {
       optInV2: true,
       write: true,
     })
-    await vi.waitFor(() => expect(capability.issue).toHaveBeenCalledOnce())
+    await flush()
+    expect(capability.issue).toHaveBeenCalledOnce()
 
     const resourceIssue = resourceLease.issue({
       kind: "resources",
@@ -294,24 +271,9 @@ describe("Relay browser credential coordinator", () => {
     consoleLease.release()
     await expect(consoleIssue).rejects.toThrow("credentials were released")
     resolveConsole({ capabilities: [] })
-    resourceLease.release()
   })
 
   it("deduplicates an identical request while issuance is in flight", async () => {
-    vi.stubGlobal("crypto", {
-      subtle: {
-        exportKey: vi.fn().mockResolvedValue({
-          crv: "P-256",
-          kty: "EC",
-          x: "x".repeat(43),
-          y: "y".repeat(43),
-        }),
-        generateKey: vi.fn().mockResolvedValue({
-          privateKey: {},
-          publicKey: {},
-        }),
-      },
-    })
     let resolveIssuance!: (value: {
       capabilities: Array<{
         browserOrigin: string
@@ -338,7 +300,8 @@ describe("Relay browser credential coordinator", () => {
     )
     const request = { kind: "console", optInV2: true, write: true } as const
     const first = firstLease.issue(request)
-    await vi.waitFor(() => expect(capability.issue).toHaveBeenCalledOnce())
+    await flush()
+    expect(capability.issue).toHaveBeenCalledOnce()
 
     const second = secondLease.issue(request)
     resolveIssuance({
@@ -360,25 +323,9 @@ describe("Relay browser credential coordinator", () => {
       expect.objectContaining({ capability: "shared.signature" }),
     ])
     expect(capability.issue).toHaveBeenCalledOnce()
-    firstLease.release()
-    secondLease.release()
   })
 
   it("aborts an in-flight issuance after its last owning lease releases", async () => {
-    vi.stubGlobal("crypto", {
-      subtle: {
-        exportKey: vi.fn().mockResolvedValue({
-          crv: "P-256",
-          kty: "EC",
-          x: "x".repeat(43),
-          y: "y".repeat(43),
-        }),
-        generateKey: vi.fn().mockResolvedValue({
-          privateKey: {},
-          publicKey: {},
-        }),
-      },
-    })
     let issuanceSignal: AbortSignal | undefined
     capability.issue.mockImplementation(
       ({ signal }: { signal: AbortSignal }) =>
@@ -398,7 +345,8 @@ describe("Relay browser credential coordinator", () => {
       write: true,
     })
     const rejected = expect(issued).rejects.toThrow("credentials were released")
-    await vi.waitFor(() => expect(issuanceSignal).toBeDefined())
+    await flush()
+    expect(issuanceSignal).toBeDefined()
 
     lease.release()
 
@@ -408,20 +356,6 @@ describe("Relay browser credential coordinator", () => {
   })
 
   it("queues a new owner behind an aborted in-flight batch", async () => {
-    vi.stubGlobal("crypto", {
-      subtle: {
-        exportKey: vi.fn().mockResolvedValue({
-          crv: "P-256",
-          kty: "EC",
-          x: "x".repeat(43),
-          y: "y".repeat(43),
-        }),
-        generateKey: vi.fn().mockResolvedValue({
-          privateKey: {},
-          publicKey: {},
-        }),
-      },
-    })
     let firstSignal: AbortSignal | undefined
     capability.issue
       .mockImplementationOnce(
@@ -458,7 +392,8 @@ describe("Relay browser credential coordinator", () => {
     const rejected = expect(abandonedIssue).rejects.toThrow(
       "credentials were released"
     )
-    await vi.waitFor(() => expect(firstSignal).toBeDefined())
+    await flush()
+    expect(firstSignal).toBeDefined()
     abandoned.release()
 
     const replacement = keeper.issue(request)
@@ -469,14 +404,13 @@ describe("Relay browser credential coordinator", () => {
     )
     expect(firstSignal?.aborted).toBe(true)
     expect(capability.issue).toHaveBeenCalledTimes(2)
-    keeper.release()
   })
 
   it("retains the authorization signal while a retry waits without credentials", () => {
     const lease = acquireRelayBrowserCredentials("relay-one", "instance-one")
     const signal = relayBrowserAuthorizationSignal("relay-one", "instance-one")
     const listener = vi.fn()
-    const unsubscribe = signal.subscribe(listener)
+    const unsubscribe = subscribe(signal, listener)
     lease.release()
 
     notifyRelayBrowserAuthorizationChanged()

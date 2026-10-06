@@ -33,9 +33,8 @@ import {
   mapPairingHttpResponse,
   mapPairingTransportError,
 } from "@/lib/relay-pairing-errors"
-import { relayPairingOrigin } from "@/lib/relay-pairing-origin"
+import { relayPairingOrigin } from "@/lib/relay-control-endpoint"
 import { relayNameForNewPairing } from "@/lib/relay-names"
-import { requireRelayIssuerRetirement } from "@/lib/relay-issuer-retirement"
 import { CredentialError, ResourceNotFoundError } from "@/effect/errors"
 import { runAppEffect } from "@/effect/runtime"
 import { databasePool } from "@/lib/database"
@@ -1060,15 +1059,21 @@ export async function deletePersistedRelay(id: string): Promise<void> {
   )
   const generationRow = retired[0]
   if (!generationRow) throw new Error("Relay not found")
-  await requireRelayIssuerRetirement({
-    minimumGeneration: Number(generationRow.issuer_generation),
-    revise: async (minimumGeneration) => {
-      const { reviseRelayIssuerGenerationNow } =
-        await import("@/lib/authorization-delivery")
-      return reviseRelayIssuerGenerationNow(id, minimumGeneration)
-    },
-    supportsRevisionDelivery,
-  })
+  if (supportsRevisionDelivery) {
+    const minimumGeneration = Number(generationRow.issuer_generation)
+    if (!Number.isSafeInteger(minimumGeneration)) {
+      throw new Error(
+        "Relay issuer generation is outside the safe integer range"
+      )
+    }
+    const { reviseRelayIssuerGenerationNow } =
+      await import("@/lib/authorization-delivery")
+    if (!(await reviseRelayIssuerGenerationNow(id, minimumGeneration))) {
+      throw new Error(
+        "Relay did not acknowledge browser issuer retirement; it was paused and was not deleted"
+      )
+    }
+  }
   await runAppEffect("relay.deletePersisted", deletePersistedRelayEffect(id))
   const { closeRelayConnection } = await import("@/lib/relay-connection")
   closeRelayConnection(id)

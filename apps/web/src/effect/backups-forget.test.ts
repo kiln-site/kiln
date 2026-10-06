@@ -1,203 +1,266 @@
-import { assert, describe, it } from "@effect/vitest"
-import { Effect, Layer } from "effect"
-import type { ResultSetHeader, RowDataPacket } from "mysql2/promise"
-import { vi } from "vite-plus/test"
+import { assert, layer } from "@effect/vitest"
+import { Effect } from "effect"
 
-vi.hoisted(() => {
-  process.env.DB_HOST ??= "127.0.0.1"
-  process.env.DB_NAME ??= "test"
-  process.env.DB_PASSWORD ??= "test"
-  process.env.DB_USERNAME ??= "test"
-})
-
-import { Database, type DatabaseTransaction } from "@/effect/database"
 import { forgetBackupEffect, forgetRelayBackupsEffect } from "@/effect/backups"
+import { TestDatabase, describeMysql, resetDatabase } from "@/test/database"
+import { insertBackup, insertRelay, insertRows, selectRows } from "@/test/seed"
 
-const removedResult: ResultSetHeader = {
-  affectedRows: 1,
-  changedRows: 0,
-  constructor: { name: "ResultSetHeader" },
-  fieldCount: 0,
-  info: "",
-  insertId: 0,
-  serverStatus: 0,
-  warningStatus: 0,
-}
+const at = 1_767_225_600_000
 
-describe("backup forgetting", () => {
-  it.effect("forgets one backup without reserving Relay deletion work", () => {
-    const statements: Array<{ sql: string; values: ReadonlyArray<unknown> }> =
-      []
-    const queries: Array<{ sql: string; values: ReadonlyArray<unknown> }> = []
+const insertRepository = (id: string, relayId: string, targetId: string) =>
+  insertRows("backup_repository", {
+    id,
+    relay_id: relayId,
+    target_kind: "instance",
+    target_id: targetId,
+    password_ciphertext: "repository-password",
+    created_at: at,
+  })
 
-    return Effect.gen(function* () {
-      const forgotten = yield* forgetBackupEffect("backup-one")
+const insertPolicy = (relayId: string, targetId: string) =>
+  insertRows("backup_policy", {
+    relay_id: relayId,
+    target_kind: "instance",
+    target_id: targetId,
+    exclude_patterns: "[]",
+    created_at: at,
+    updated_at: at,
+  })
 
-      assert.strictEqual(forgotten, "forgotten")
-      assert.deepEqual(
-        statements.map(({ sql }) => deletedTable(sql)),
-        [
-          "kiln_backup_download_share",
-          "kiln_backup_final_database_delete",
-          "kiln_backup_final_delete",
-          "kiln_backup",
-          "kiln_backup_repository",
-          "kiln_backup_policy",
-        ]
-      )
-      assert.deepEqual(
-        statements.map(({ values }) => values),
-        [
-          ["backup-one"],
-          ["backup-one"],
-          ["backup-one"],
-          ["backup-one"],
-          ["repository-one", "repository-one"],
-          [
-            "relay-one",
-            "instance",
-            "instance-one",
-            "relay-one",
-            "instance",
-            "instance-one",
-          ],
-        ]
-      )
-      assert.lengthOf(queries, 2)
-      assert.include(queries[0]?.sql ?? "", "FOR UPDATE")
-      assert.deepEqual(queries[0]?.values, ["backup-one"])
-      assert.include(queries[1]?.sql ?? "", "kiln_relay")
-      assert.include(queries[1]?.sql ?? "", "FOR UPDATE")
-      assert.deepEqual(queries[1]?.values, ["relay-one"])
-      const cleanupSql = statements.slice(-2).map(({ sql }) => sql)
-      assert.isTrue(cleanupSql.every((sql) => sql.includes("NOT EXISTS")))
-      assert.notInclude(
-        statements.map(({ sql }) => sql).join("\n"),
-        "backup_task"
-      )
-    }).pipe(
-      Effect.provide(
-        databaseLayer(statements, queries, [
-          {
-            relay_id: "relay-one",
-            repository_id: "repository-one",
+// A backup with the rows that hang off it: an artifact, a finished task, a
+// download share, and a final-deletion record that blocks its removal.
+const insertBackupWithDependents = (
+  id: string,
+  row: { relay_id: string; target_id: string; repository_id: string | null }
+) =>
+  Effect.gen(function* () {
+    yield* insertBackup(id, row)
+    yield* insertRows("backup_artifact", {
+      id: `${id}-artifact`,
+      backup_id: id,
+      destination_key: "local",
+      status: "available",
+      created_at: at,
+      updated_at: at,
+    })
+    yield* insertRows("backup_task", {
+      id: `${id}-task`,
+      backup_id: id,
+      task_kind: "create",
+      status: "succeeded",
+      created_at: at,
+      updated_at: at,
+    })
+    yield* insertRows("backup_download_share", {
+      token_hash: id.padEnd(64, "0"),
+      download_url_ciphertext: "url",
+      backup_id: id,
+      backup_name: id,
+      filename: `${id}.zip`,
+      artifact_kind: "archive",
+      target_kind: "instance",
+      target_id: row.target_id,
+      source_name: row.target_id,
+      shared_by: "user-one",
+      backup_created_at: at,
+      expires_at: at,
+      created_at: at,
+    })
+    yield* insertRows("backup_final_delete", {
+      relay_id: row.relay_id,
+      target_id: row.target_id,
+      backup_id: id,
+      requested_by: "user-one",
+      status: "failed",
+      created_at: at,
+      updated_at: at,
+    })
+  })
+
+const ids = (table: string) =>
+  selectRows<{ id: string }>(table).pipe(
+    Effect.map((rows) => rows.map((row) => row.id).sort())
+  )
+
+const backupIdsIn = (table: string) =>
+  selectRows<{ backup_id: string }>(table).pipe(
+    Effect.map((rows) => rows.map((row) => row.backup_id).sort())
+  )
+
+const policyTargets = selectRows<{ relay_id: string; target_id: string }>(
+  "backup_policy"
+).pipe(
+  Effect.map((rows) =>
+    rows.map((row) => `${row.relay_id}/${row.target_id}`).sort()
+  )
+)
+
+describeMysql("backup forgetting", () => {
+  layer(TestDatabase)((it) => {
+    it.effect(
+      "forgets one backup and only the metadata nothing else uses",
+      () =>
+        Effect.gen(function* () {
+          yield* resetDatabase
+          // backup-one is alone in its repository and target; backup-two and
+          // backup-three share theirs.
+          yield* insertRepository(
+            "repository-one",
+            "relay-gone",
+            "instance-one"
+          )
+          yield* insertRepository(
+            "repository-two",
+            "relay-gone",
+            "instance-two"
+          )
+          yield* insertPolicy("relay-gone", "instance-one")
+          yield* insertPolicy("relay-gone", "instance-two")
+          yield* insertBackupWithDependents("backup-one", {
+            relay_id: "relay-gone",
             target_id: "instance-one",
-            target_kind: "instance",
-          },
-        ])
-      )
+            repository_id: "repository-one",
+          })
+          yield* insertBackup("backup-two", {
+            relay_id: "relay-gone",
+            target_id: "instance-two",
+            repository_id: "repository-two",
+          })
+          yield* insertBackupWithDependents("backup-three", {
+            relay_id: "relay-gone",
+            target_id: "instance-two",
+            repository_id: "repository-two",
+          })
+
+          assert.strictEqual(
+            yield* forgetBackupEffect("backup-one"),
+            "forgotten"
+          )
+          assert.strictEqual(
+            yield* forgetBackupEffect("backup-three"),
+            "forgotten"
+          )
+
+          assert.deepStrictEqual(yield* ids("backup"), ["backup-two"])
+          assert.deepStrictEqual(yield* ids("backup_repository"), [
+            "repository-two",
+          ])
+          assert.deepStrictEqual(yield* policyTargets, [
+            "relay-gone/instance-two",
+          ])
+          for (const table of [
+            "backup_artifact",
+            "backup_task",
+            "backup_download_share",
+            "backup_final_delete",
+          ]) {
+            assert.deepStrictEqual(yield* backupIdsIn(table), [], table)
+          }
+        })
     )
-  })
 
-  it.effect("does not remove metadata when the backup is missing", () => {
-    const statements: Array<{ sql: string; values: ReadonlyArray<unknown> }> =
-      []
+    it.effect("leaves everything in place when the backup is missing", () =>
+      Effect.gen(function* () {
+        yield* resetDatabase
+        yield* insertRepository("repository-one", "relay-gone", "instance-one")
+        yield* insertPolicy("relay-gone", "instance-one")
+        yield* insertBackupWithDependents("backup-one", {
+          relay_id: "relay-gone",
+          target_id: "instance-one",
+          repository_id: "repository-one",
+        })
 
-    return Effect.gen(function* () {
-      const forgotten = yield* forgetBackupEffect("missing-backup")
-
-      assert.strictEqual(forgotten, "not_found")
-      assert.isEmpty(statements)
-    }).pipe(Effect.provide(databaseLayer(statements)))
-  })
-
-  it.effect("rejects forget when the Relay is present under lock", () => {
-    const statements: Array<{ sql: string; values: ReadonlyArray<unknown> }> =
-      []
-    const queries: Array<{ sql: string; values: ReadonlyArray<unknown> }> = []
-
-    return Effect.gen(function* () {
-      const forgotten = yield* forgetBackupEffect("backup-one")
-
-      assert.strictEqual(forgotten, "relay_present")
-      assert.isEmpty(statements)
-      assert.lengthOf(queries, 2)
-      assert.include(queries[1]?.sql ?? "", "kiln_relay")
-      assert.include(queries[1]?.sql ?? "", "FOR UPDATE")
-    }).pipe(
-      Effect.provide(
-        databaseLayer(
-          statements,
-          queries,
-          [
-            {
-              relay_id: "relay-one",
-              repository_id: "repository-one",
-              target_id: "instance-one",
-              target_kind: "instance",
-            },
-          ],
-          [{ id: "relay-one" }]
+        assert.strictEqual(
+          yield* forgetBackupEffect("missing-backup"),
+          "not_found"
         )
-      )
+
+        assert.deepStrictEqual(yield* ids("backup"), ["backup-one"])
+        assert.deepStrictEqual(yield* ids("backup_repository"), [
+          "repository-one",
+        ])
+        assert.deepStrictEqual(yield* policyTargets, [
+          "relay-gone/instance-one",
+        ])
+      })
     )
-  })
 
-  it.effect("forgets all Relay backup state without deleting artifacts", () => {
-    const statements: Array<{ sql: string; values: ReadonlyArray<unknown> }> =
-      []
+    it.effect("refuses to forget a backup whose Relay is still paired", () =>
+      Effect.gen(function* () {
+        yield* resetDatabase
+        yield* insertRelay("relay-one")
+        yield* insertRepository("repository-one", "relay-one", "instance-one")
+        yield* insertPolicy("relay-one", "instance-one")
+        yield* insertBackupWithDependents("backup-one", {
+          relay_id: "relay-one",
+          target_id: "instance-one",
+          repository_id: "repository-one",
+        })
 
-    return Effect.gen(function* () {
-      const forgotten = yield* forgetRelayBackupsEffect("relay-one")
+        assert.strictEqual(
+          yield* forgetBackupEffect("backup-one"),
+          "relay_present"
+        )
 
-      assert.strictEqual(forgotten, 1)
-      assert.deepEqual(
-        statements.map(({ sql }) => deletedTable(sql)),
-        [
-          "kiln_backup_download_share",
-          "kiln_backup_final_database_delete",
-          "kiln_backup_final_delete",
-          "kiln_backup",
-          "kiln_backup_policy",
-          "kiln_backup_repository",
-        ]
-      )
-      assert.deepEqual(
-        statements.map(({ values }) => values),
-        Array.from({ length: 6 }, () => ["relay-one"])
-      )
-      assert.notInclude(
-        statements.map(({ sql }) => sql).join("\n"),
-        "backup_task"
-      )
-    }).pipe(Effect.provide(databaseLayer(statements)))
+        assert.deepStrictEqual(yield* ids("backup"), ["backup-one"])
+        assert.deepStrictEqual(yield* ids("backup_artifact"), [
+          "backup-one-artifact",
+        ])
+        assert.deepStrictEqual(yield* backupIdsIn("backup_final_delete"), [
+          "backup-one",
+        ])
+        assert.deepStrictEqual(yield* ids("backup_repository"), [
+          "repository-one",
+        ])
+        assert.deepStrictEqual(yield* policyTargets, ["relay-one/instance-one"])
+      })
+    )
+
+    it.effect("forgets every backup of a removed Relay and nothing else", () =>
+      Effect.gen(function* () {
+        yield* resetDatabase
+        for (const relayId of ["relay-gone", "relay-kept"]) {
+          yield* insertRepository(`${relayId}-repo`, relayId, "instance-one")
+          yield* insertPolicy(relayId, "instance-one")
+        }
+        yield* insertBackupWithDependents("backup-one", {
+          relay_id: "relay-gone",
+          target_id: "instance-one",
+          repository_id: "relay-gone-repo",
+        })
+        yield* insertBackup("backup-two", {
+          relay_id: "relay-gone",
+          target_id: "instance-two",
+          repository_id: null,
+        })
+        yield* insertBackupWithDependents("backup-kept", {
+          relay_id: "relay-kept",
+          target_id: "instance-one",
+          repository_id: "relay-kept-repo",
+        })
+
+        assert.strictEqual(yield* forgetRelayBackupsEffect("relay-gone"), 2)
+
+        assert.deepStrictEqual(yield* ids("backup"), ["backup-kept"])
+        assert.deepStrictEqual(yield* ids("backup_repository"), [
+          "relay-kept-repo",
+        ])
+        assert.deepStrictEqual(yield* policyTargets, [
+          "relay-kept/instance-one",
+        ])
+        for (const table of [
+          "backup_artifact",
+          "backup_task",
+          "backup_download_share",
+          "backup_final_delete",
+        ]) {
+          assert.deepStrictEqual(
+            yield* backupIdsIn(table),
+            ["backup-kept"],
+            table
+          )
+        }
+      })
+    )
   })
 })
-
-function databaseLayer(
-  statements: Array<{ sql: string; values: ReadonlyArray<unknown> }>,
-  queries: Array<{ sql: string; values: ReadonlyArray<unknown> }> = [],
-  backupRows: ReadonlyArray<{
-    relay_id: string
-    repository_id: string | null
-    target_id: string
-    target_kind: "database" | "instance" | "platform"
-  }> = [],
-  relayRows: ReadonlyArray<{ id: string }> = []
-) {
-  return Layer.succeed(Database)({
-    execute: () => Effect.die("Unexpected standalone database write"),
-    queryRows: () => Effect.die("Unexpected standalone database query"),
-    transaction: (_operation, run) =>
-      run({
-        execute: (sql, values) =>
-          Effect.sync(() => {
-            statements.push({ sql, values: values ?? [] })
-            return removedResult
-          }),
-        queryRows: <TRow extends RowDataPacket>(
-          sql: string,
-          values?: Parameters<DatabaseTransaction["queryRows"]>[1]
-        ) =>
-          Effect.sync(() => {
-            queries.push({ sql, values: values ?? [] })
-            const rows = sql.includes("kiln_relay") ? relayRows : backupRows
-            return [...rows] as unknown as ReadonlyArray<TRow>
-          }),
-      }),
-  })
-}
-
-function deletedTable(sql: string): string {
-  return /DELETE FROM\s+`?(kiln_[a-z_]+)`?/.exec(sql)?.[1] ?? "unknown"
-}

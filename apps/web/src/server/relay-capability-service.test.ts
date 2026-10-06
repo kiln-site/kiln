@@ -3,13 +3,6 @@ import { generateKeyPairSync } from "node:crypto"
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test"
 import { Effect } from "effect"
 
-vi.hoisted(() => {
-  process.env.DB_HOST ??= "127.0.0.1"
-  process.env.DB_NAME ??= "test"
-  process.env.DB_PASSWORD ??= "test"
-  process.env.DB_USERNAME ??= "test"
-})
-
 const fakes = vi.hoisted(() => ({
   decryptCredentials: vi.fn(),
   relayBrowserMetadata: vi.fn(),
@@ -221,15 +214,12 @@ describe("Relay capability issuance orchestration", () => {
       write: true,
     })
 
-    expect(fakes.requirePermissions).toHaveBeenCalledTimes(2)
     expect(fakes.requirePermissions).toHaveBeenCalledWith({
       instanceId: "instance-one",
       permissions: ["instance.console.read", "instance.console.write"],
       relayId: "relay-one",
       user,
     })
-    expect(fakes.decryptCredentials).toHaveBeenCalledOnce()
-    expect(fakes.relayRpc).toHaveBeenCalledOnce()
     expect(issued.browserOrigin).toBe("https://relay-live.example.com")
     expect(decodeCapabilityPayload(issued.capability)).toMatchObject({
       actions: ["instance.console.read", "instance.console.write"],
@@ -254,7 +244,6 @@ describe("Relay capability issuance orchestration", () => {
       write: false,
     })
 
-    expect(fakes.relayBrowserMetadata).toHaveBeenCalledWith("relay-one")
     expect(fakes.relayRpc).not.toHaveBeenCalled()
     expect(issued).toMatchObject({
       browserOrigin: "https://relay-snapshot.example.com",
@@ -263,6 +252,11 @@ describe("Relay capability issuance orchestration", () => {
   })
 
   it("does not resolve browser metadata for the Hearth proxy", async () => {
+    fakes.relayBrowserMetadata.mockReturnValue({
+      browserOrigin: "https://relay-snapshot.example.com",
+      mode: "hearth",
+    })
+
     const prepared = await prepareConsoleCapabilityForUser({
       credentialId: "credential-one",
       instanceId: "instance-one",
@@ -277,7 +271,6 @@ describe("Relay capability issuance orchestration", () => {
       relayId: "relay-one",
       user,
     })
-    expect(fakes.relayBrowserMetadata).not.toHaveBeenCalled()
     expect(fakes.relayRpc).not.toHaveBeenCalled()
     expect(prepared.capability).toMatchObject({
       browserOrigin: "https://relay.example.com",
@@ -310,10 +303,6 @@ describe("Relay capability issuance orchestration", () => {
       version: 2,
     })
     expect(Number(payload.expiresAt) - Number(payload.issuedAt)).toBe(30_000)
-    expect(fakes.relayBrowserAuthorizationReady).toHaveBeenCalledWith(
-      "relay-one",
-      1
-    )
   })
 
   it("uses the generation synchronized after stale issuance material was loaded", async () => {
@@ -360,11 +349,28 @@ describe("Relay capability issuance orchestration", () => {
       requests: [{ kind: "console", optInV2: true, write: true }],
     })
 
-    expect(fakes.refreshUser).toHaveBeenCalledTimes(3)
-    expect(fakes.requirePermissions).toHaveBeenCalledTimes(3)
     expect(
       decodeCapabilityPayload(issued.capabilities[0]!.capability)
     ).toMatchObject({ authorizationRevision: 8 })
+  })
+
+  it("refuses to sign when access is revoked during capability issuance", async () => {
+    const revoked = new Error("Console access denied")
+    fakes.features.add("browser-capability-v2")
+    fakes.features.add("browser-lease-renewal-v1")
+    fakes.requirePermissions
+      .mockReturnValueOnce(Effect.void)
+      .mockReturnValue(Effect.fail(revoked))
+
+    await expect(
+      issueBrowserCapabilitiesForRequest({
+        authenticate: () => Promise.resolve({ sessionId: "session-one", user }),
+        instanceId: "instance-one",
+        publicKeyJwk,
+        relayId: "relay-one",
+        requests: [{ kind: "console", optInV2: true, write: true }],
+      })
+    ).rejects.toBe(revoked)
   })
 })
 

@@ -1,6 +1,5 @@
 import { assert, describe, it } from "@effect/vitest"
 import { Effect } from "effect"
-import { vi } from "vite-plus/test"
 import {
   cliBrickReferenceSchema,
   cliBackupDownloadResponseSchema,
@@ -10,13 +9,6 @@ import {
   cliServerInfoResponseSchema,
   relayInstanceSchema,
 } from "@workspace/contracts"
-
-vi.hoisted(() => {
-  process.env.DB_HOST ??= "127.0.0.1"
-  process.env.DB_NAME ??= "test"
-  process.env.DB_PASSWORD ??= "test"
-  process.env.DB_USERNAME ??= "test"
-})
 
 import {
   cliActivityResponse,

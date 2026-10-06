@@ -44,6 +44,7 @@ import {
 import { cn } from "@workspace/ui/lib/utils"
 
 import { BrickIcon } from "@/components/brick-icon"
+import { isVerifiedBrick } from "@/components/brick-trust"
 import { useKilnGitRepositorySlug } from "@/lib/git-repository"
 import {
   brickCatalogDetailsQueryOptions,
@@ -89,28 +90,6 @@ const SORT_OPTIONS: ReadonlyArray<{ id: BrickSort; label: string }> = [
 ]
 
 const EMPTY_BRICKS: Array<Brick> = []
-
-export function isVerifiedBrick(
-  brick: Brick,
-  gitRepositorySlug: string
-): boolean {
-  return Result.getOrElse(
-    Result.try(() => {
-      const url = new URL(brick.source)
-      const [owner, repository, reference, ...path] = url.pathname
-        .split("/")
-        .filter(Boolean)
-      return (
-        url.hostname.toLowerCase() === "raw.githubusercontent.com" &&
-        `${owner}/${repository}`.toLowerCase() ===
-          gitRepositorySlug.toLowerCase() &&
-        (reference === "main" || /^[a-f0-9]{40}$/u.test(reference ?? "")) &&
-        path.join("/").startsWith("apps/bricks/")
-      )
-    }),
-    () => false
-  )
-}
 
 function brickCategory(brick: Brick): Exclude<BrickCategoryId, "all"> {
   const tags = new Set(

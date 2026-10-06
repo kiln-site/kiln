@@ -29,7 +29,7 @@ export interface ApplyRealtimeEventInput {
   ) => Promise<void>
 }
 
-export function applyRealtimeEvent(input: ApplyRealtimeEventInput): void {
+function applyRealtimeEvent(input: ApplyRealtimeEventInput): void {
   const { event, instances, queryClient, refreshTopics } = input
   if (event.type === "collections.invalidate") {
     void (
@@ -149,7 +149,7 @@ export function applyRealtimeEventSafely(
   )
 }
 
-export function applyRealtimeSnapshotEvent(
+function applyRealtimeSnapshotEvent(
   snapshot: RelayFleetSnapshot | undefined,
   event: Exclude<RealtimeClientEvent, { type: "relay.invalidate" | "reset" }>
 ): RelayFleetSnapshot | undefined {
@@ -186,7 +186,7 @@ export function applyRealtimeSnapshotEvent(
   }
 }
 
-export function applyRealtimeInstancesEvent(
+function applyRealtimeInstancesEvent(
   instances: ReadonlyArray<FleetInstance>,
   event: Extract<RealtimeClientEvent, { type: "instances.delta" }>
 ): Array<FleetInstance> {
@@ -446,7 +446,7 @@ function realtimeInstanceIdentityChanged(
   )
 }
 
-export function mergeRealtimeInstance(
+function mergeRealtimeInstance(
   current: FleetInstance | undefined,
   updated: FleetInstance
 ): FleetInstance {

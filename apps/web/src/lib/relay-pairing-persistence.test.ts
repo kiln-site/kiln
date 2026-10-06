@@ -1,34 +1,16 @@
-import { assert, describe, it } from "@effect/vitest"
-import { Effect, Layer } from "effect"
-import type { ResultSetHeader, RowDataPacket } from "mysql2/promise"
-import { vi } from "vite-plus/test"
+import { assert, layer } from "@effect/vitest"
+import { Effect } from "effect"
 
-vi.hoisted(() => {
-  process.env.DB_HOST ??= "127.0.0.1"
-  process.env.DB_NAME ??= "test"
-  process.env.DB_PASSWORD ??= "test"
-  process.env.DB_USERNAME ??= "test"
-})
-
-import { Database } from "@/effect/database"
+import { loadResourceGrantsEffect } from "@/lib/resource-permissions"
 import { persistPairedRelayEffect } from "@/lib/relay-registry"
-
-const emptyResult: ResultSetHeader = {
-  affectedRows: 1,
-  changedRows: 0,
-  constructor: { name: "ResultSetHeader" },
-  fieldCount: 0,
-  info: "",
-  insertId: 0,
-  serverStatus: 0,
-  warningStatus: 0,
-}
+import { TestDatabase, describeMysql, resetDatabase } from "@/test/database"
+import { insertRelay, selectRows } from "@/test/seed"
 
 const pairedRelay = {
   browserOrigin: "https://relay.example.com",
   clientActions: "[]",
   clientId: "client-id",
-  clientPrivateKeyCiphertext: "ciphertext",
+  clientPrivateKeyCiphertext: "new-ciphertext",
   clientPublicKey: "client-public-key",
   clientRole: "full_access" as const,
   createdBy: "creator",
@@ -43,100 +25,128 @@ const pairedRelay = {
   useTls: true,
 }
 
-describe("Relay pairing persistence", () => {
-  it.effect("commits a new Relay without a separate owner grant", () => {
-    const writes: Array<{ sql: string; values: ReadonlyArray<unknown> }> = []
-    const databaseLayer = pairingDatabaseLayer({
-      persistedRows: [],
-      writes,
-    })
+interface RelayRow {
+  created_by: string | null
+  client_private_key_ciphertext: string
+  enabled: number
+  issuer_generation: number
+}
 
-    return Effect.gen(function* () {
-      yield* persistPairedRelayEffect(pairedRelay)
+const relayRows = Effect.map(selectRows<RelayRow>("relay"), (rows) =>
+  rows.map((row) => ({
+    createdBy: row.created_by,
+    ciphertext: row.client_private_key_ciphertext,
+    enabled: Boolean(row.enabled),
+    issuerGeneration: Number(row.issuer_generation),
+  }))
+)
 
-      // Creator authority derives from relay.created_by; no empty grant row.
-      assert.strictEqual(writes.length, 1)
-      assert.match(writes[0]?.sql ?? "", /INSERT INTO .*kiln_relay/u)
-      assert.notMatch(writes[0]?.sql ?? "", /kiln_access_grant/u)
-    }).pipe(Effect.provide(databaseLayer))
+const existingRelay = (createdBy: string) =>
+  insertRelay("relay-id", {
+    created_by: createdBy,
+    client_private_key_ciphertext: "old-ciphertext",
+    enabled: false,
+    issuer_generation: 3,
   })
 
-  it.effect("repairs a creator Relay in place", () => {
-    const writes: Array<{ sql: string; values: ReadonlyArray<unknown> }> = []
-    const databaseLayer = pairingDatabaseLayer({
-      persistedRows: [{ created_by: "creator" }],
-      writes,
-    })
+const unchanged = (createdBy: string) => [
+  {
+    createdBy,
+    ciphertext: "old-ciphertext",
+    enabled: false,
+    issuerGeneration: 3,
+  },
+]
 
-    return Effect.gen(function* () {
-      yield* persistPairedRelayEffect({
-        ...pairedRelay,
-        expectedExisting: true,
+describeMysql("Relay pairing persistence", () => {
+  layer(TestDatabase)((it) => {
+    it.effect(
+      "commits a new Relay whose creator holds authority without a grant row",
+      () =>
+        Effect.gen(function* () {
+          yield* resetDatabase
+
+          yield* persistPairedRelayEffect(pairedRelay)
+
+          assert.deepEqual(yield* relayRows, [
+            {
+              createdBy: "creator",
+              ciphertext: "new-ciphertext",
+              enabled: true,
+              issuerGeneration: 1,
+            },
+          ])
+          assert.deepEqual(yield* selectRows("access_grant"), [])
+          const grants = yield* loadResourceGrantsEffect("creator", "relay-id")
+          assert.deepEqual(
+            grants.map((grant) => [grant.source, grant.resourceType]),
+            [["owner", "relay"]]
+          )
+        })
+    )
+
+    it.effect("repairs a creator's Relay in place and rotates its issuer", () =>
+      Effect.gen(function* () {
+        yield* resetDatabase
+        yield* existingRelay("creator")
+
+        yield* persistPairedRelayEffect({
+          ...pairedRelay,
+          expectedExisting: true,
+        })
+
+        assert.deepEqual(yield* relayRows, [
+          {
+            createdBy: "creator",
+            ciphertext: "new-ciphertext",
+            enabled: true,
+            issuerGeneration: 4,
+          },
+        ])
       })
+    )
 
-      assert.strictEqual(writes.length, 1)
-      assert.match(writes[0]?.sql ?? "", /UPDATE .*kiln_relay/u)
-    }).pipe(Effect.provide(databaseLayer))
-  })
+    it.effect("rejects a repair when committed ownership differs", () =>
+      Effect.gen(function* () {
+        yield* resetDatabase
+        yield* existingRelay("another-user")
 
-  it.effect("rejects a creator repair when committed ownership differs", () => {
-    const writes: Array<{ sql: string; values: ReadonlyArray<unknown> }> = []
-    const databaseLayer = pairingDatabaseLayer({
-      persistedRows: [{ created_by: "another-user" }],
-      writes,
-    })
+        const error = yield* Effect.flip(
+          persistPairedRelayEffect({ ...pairedRelay, expectedExisting: true })
+        )
 
-    return Effect.gen(function* () {
-      const error = yield* persistPairedRelayEffect({
-        ...pairedRelay,
-        expectedExisting: true,
-      }).pipe(Effect.flip)
+        assert.strictEqual(
+          error.message,
+          "You can only manage Relays you created"
+        )
+        assert.deepEqual(yield* relayRows, unchanged("another-user"))
+      })
+    )
 
-      assert.strictEqual(
-        error.message,
-        "You can only manage Relays you created"
-      )
-      assert.strictEqual(writes.length, 0)
-    }).pipe(Effect.provide(databaseLayer))
-  })
+    it.effect("rejects pairing when committed Relay state changed", () =>
+      Effect.gen(function* () {
+        yield* resetDatabase
+        yield* existingRelay("creator")
 
-  it.effect("rejects pairing when committed Relay state changed", () => {
-    const writes: Array<{ sql: string; values: ReadonlyArray<unknown> }> = []
-    const databaseLayer = pairingDatabaseLayer({
-      persistedRows: [{ created_by: "creator" }],
-      writes,
-    })
+        const replaced = yield* Effect.flip(
+          persistPairedRelayEffect(pairedRelay)
+        )
+        assert.strictEqual(
+          replaced.message,
+          "Relay pairing state changed. Try again."
+        )
+        assert.deepEqual(yield* relayRows, unchanged("creator"))
 
-    return Effect.gen(function* () {
-      const error = yield* persistPairedRelayEffect(pairedRelay).pipe(
-        Effect.flip
-      )
-
-      assert.strictEqual(
-        error.message,
-        "Relay pairing state changed. Try again."
-      )
-      assert.strictEqual(writes.length, 0)
-    }).pipe(Effect.provide(databaseLayer))
+        yield* resetDatabase
+        const vanished = yield* Effect.flip(
+          persistPairedRelayEffect({ ...pairedRelay, expectedExisting: true })
+        )
+        assert.strictEqual(
+          vanished.message,
+          "Relay pairing state changed. Try again."
+        )
+        assert.deepEqual(yield* relayRows, [])
+      })
+    )
   })
 })
-
-function pairingDatabaseLayer(input: {
-  persistedRows: ReadonlyArray<{ created_by: string | null }>
-  writes: Array<{ sql: string; values: ReadonlyArray<unknown> }>
-}) {
-  return Layer.succeed(Database)({
-    execute: () => Effect.die("Unexpected standalone database write"),
-    queryRows: () => Effect.die("Unexpected standalone database query"),
-    transaction: (_operation, run) =>
-      run({
-        execute: (sql, values) =>
-          Effect.sync(() => {
-            input.writes.push({ sql, values: values ?? [] })
-            return emptyResult
-          }),
-        queryRows: <TRow extends RowDataPacket>() =>
-          Effect.succeed(input.persistedRows as unknown as ReadonlyArray<TRow>),
-      }),
-  })
-}

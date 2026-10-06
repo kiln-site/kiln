@@ -64,8 +64,8 @@ const config = defineConfig(({ command }) => {
           command: "vp test run",
           dependsOn: [{ task: "build", from: "dependencies" }],
           cache: {
-            // Opt-in MySQL migration test.
-            env: ["MYSQL_MIGRATION_TEST", "DB_*"],
+            // Opt-in real-MySQL suites, see src/test/database.ts.
+            env: ["KILN_TEST_MYSQL", "DB_*"],
           },
         },
         typecheck: {
@@ -156,6 +156,10 @@ const config = defineConfig(({ command }) => {
         "scripts/**/*.test.mjs",
         "keyring.test.mjs",
       ],
+      setupFiles: ["src/test/setup.ts"],
+      // Creating and migrating a fresh per-worker MySQL database takes longer
+      // than the default hook timeout.
+      hookTimeout: 60_000,
     },
   }
 })

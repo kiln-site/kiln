@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vite-plus/test"
 
-import { filterRoutes } from "@/components/route-command-menu"
+import { filterRoutes } from "@/components/route-command-filter"
 
 describe("route command filtering", () => {
   it("rejects weak scattered-character matches", () => {

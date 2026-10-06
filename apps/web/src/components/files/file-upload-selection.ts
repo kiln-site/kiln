@@ -6,7 +6,7 @@ export interface UploadFile {
 export const maxFolderUploadFiles = 5_000
 const maxFolderUploadEntries = 10_000
 
-export function fileUploadRelativePath(file: {
+function fileUploadRelativePath(file: {
   name: string
   webkitRelativePath: string
 }): string {
@@ -68,7 +68,7 @@ function readDroppedDirectory(
   })
 }
 
-export async function collectDroppedEntries(
+async function collectDroppedEntries(
   entries: ReadonlyArray<FileSystemEntry>
 ): Promise<Array<UploadFile>> {
   if (entries.length > maxFolderUploadEntries) {

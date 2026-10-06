@@ -1,15 +1,28 @@
-import { QueryClient, type InfiniteData } from "@tanstack/react-query"
-import { describe, expect, it, vi } from "vite-plus/test"
+import {
+  InfiniteQueryObserver,
+  QueryClient,
+  type InfiniteData,
+} from "@tanstack/react-query"
+import { afterEach, describe, expect, it, vi } from "vite-plus/test"
+
+const server = vi.hoisted(() => ({ getBackupRunsPage: vi.fn() }))
+
+vi.mock("@/server/backups", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/server/backups")>()),
+  getBackupRunsPage: server.getBackupRunsPage,
+}))
 
 import type { BackupRun, BackupRunsPage } from "@/lib/backup-runs"
 import {
-  commitRefreshedBackupRunsFirstPage,
-  mergeRefreshedBackupRunsFirstPage,
   patchBackupRunsData,
+  refreshActiveBackupRunsFirstPages,
 } from "@/lib/backup-runs-cache"
+import { backupRunsInfiniteQueryOptions } from "@/lib/query-options"
 
 const firstId = "7ff61850-2e5e-4238-b960-755b743a246a"
 const secondId = "ab145091-0f4d-44cc-a30b-b8b3ee21b36f"
+const thirdId = "c3a9e2d4-5b1f-4c8e-9a7d-2f6b8e0c1d3a"
+const replacementId = "84924518-b4c4-4fc0-a8fd-ee9a6b451f85"
 
 describe("backup runs realtime cache patches", () => {
   it("uses no-op and reset for absent membership", () => {
@@ -82,18 +95,62 @@ describe("backup runs realtime cache patches", () => {
 })
 
 describe("backup runs background first-page refresh", () => {
-  it("keeps the loaded cache untouched when reconciliation changed nothing", () => {
+  type RunsData = InfiniteData<BackupRunsPage, string | null>
+
+  const openObservers: Array<() => void> = []
+
+  afterEach(() => {
+    openObservers.splice(0).forEach((unsubscribe) => unsubscribe())
+    server.getBackupRunsPage.mockReset()
+  })
+
+  // A mounted backups table showing `current`, fetched through the same query
+  // options the page uses.
+  function mountedRuns(current: RunsData) {
+    const queryClient = new QueryClient()
+    const options = backupRunsInfiniteQueryOptions({
+      direction: "desc",
+      search: "",
+      sort: "createdAt",
+    })
+    queryClient.setQueryData(options.queryKey, current)
+    const observer = new InfiniteQueryObserver(queryClient, options)
+    openObservers.push(observer.subscribe(() => undefined))
+    return {
+      data: () => queryClient.getQueryData<RunsData>(options.queryKey),
+      observer,
+      refresh: () => refreshActiveBackupRunsFirstPages(queryClient),
+    }
+  }
+
+  // Answers first-page requests with `firstPage` and holds later pages until
+  // the returned function releases them.
+  function serveFirstPage(firstPage: BackupRunsPage) {
+    let releaseNextPage!: (page: BackupRunsPage) => void
+    const nextPage = new Promise<BackupRunsPage>((resolve) => {
+      releaseNextPage = resolve
+    })
+    server.getBackupRunsPage.mockImplementation(
+      ({ data }: { data: { cursor: string | null } }) =>
+        data.cursor === null ? Promise.resolve(firstPage) : nextPage
+    )
+    return releaseNextPage
+  }
+
+  it("keeps the loaded cache untouched when reconciliation changed nothing", async () => {
     const current = infiniteData([
       [backupRun(firstId, 20)],
       [backupRun(secondId, 10)],
     ])
+    const runs = mountedRuns(current)
+    serveFirstPage(structuredClone(current.pages[0]!))
 
-    expect(mergeRefreshedBackupRunsFirstPage(current, current.pages[0]!)).toBe(
-      current
-    )
+    await runs.refresh()
+
+    expect(runs.data()).toBe(current)
   })
 
-  it("updates stable first-page rows without discarding later pages", () => {
+  it("updates stable first-page rows without discarding later pages", async () => {
     const current = infiniteData([
       [backupRun(firstId, 20)],
       [backupRun(secondId, 10)],
@@ -102,89 +159,75 @@ describe("backup runs background first-page refresh", () => {
       ...current.pages[0]!,
       items: [{ ...current.pages[0]!.items[0]!, taskBytesCompleted: 5 }],
     }
+    const runs = mountedRuns(current)
+    serveFirstPage(refreshed)
 
-    const result = mergeRefreshedBackupRunsFirstPage(current, refreshed)
+    await runs.refresh()
 
-    expect(result.pages).toHaveLength(2)
-    expect(result.pages[0]).toEqual(refreshed)
-    expect(result.pages[1]).toBe(current.pages[1])
+    expect(runs.data()?.pages).toHaveLength(2)
+    expect(runs.data()?.pages[0]).toEqual(refreshed)
+    expect(runs.data()?.pages[1]).toBe(current.pages[1])
   })
 
-  it("resets an invalid cursor chain when first-page membership changes", () => {
+  it("resets an invalid cursor chain when first-page membership changes", async () => {
     const current = infiniteData([
       [backupRun(firstId, 20)],
       [backupRun(secondId, 10)],
     ])
-    const replacementId = "84924518-b4c4-4fc0-a8fd-ee9a6b451f85"
     const refreshed = {
       items: [backupRun(replacementId, 30)],
       nextCursor: "replacement-page-2",
     }
+    const runs = mountedRuns(current)
+    serveFirstPage(refreshed)
 
-    expect(mergeRefreshedBackupRunsFirstPage(current, refreshed)).toEqual({
-      pageParams: [null],
-      pages: [refreshed],
-    })
+    await runs.refresh()
+
+    expect(runs.data()).toEqual({ pageParams: [null], pages: [refreshed] })
   })
 
-  it("cancels an in-flight page load before replacing a changed cursor chain", async () => {
-    const queryClient = new QueryClient()
-    const queryKey = ["backups", "runs", "test"] as const
+  it("drops a page still loading from a replaced cursor chain", async () => {
     const current = infiniteData([
       [backupRun(firstId, 20)],
       [backupRun(secondId, 10)],
     ])
+    current.pages[1]!.nextCursor = "page-2"
     const refreshed = {
-      items: [
-        backupRun("84924518-b4c4-4fc0-a8fd-ee9a6b451f85", 30),
-      ],
+      items: [backupRun(replacementId, 30)],
       nextCursor: "replacement-page-2",
     }
-    queryClient.setQueryData(queryKey, current)
-    const cancel = vi.spyOn(queryClient, "cancelQueries")
+    const runs = mountedRuns(current)
+    const releaseNextPage = serveFirstPage(refreshed)
+    const loadingNextPage = runs.observer.fetchNextPage()
 
-    await commitRefreshedBackupRunsFirstPage(
-      queryClient,
-      queryKey,
-      refreshed
-    )
+    await runs.refresh()
+    releaseNextPage({ items: [backupRun(thirdId, 5)], nextCursor: null })
+    await loadingNextPage
 
-    expect(cancel).toHaveBeenCalledWith(
-      { exact: true, queryKey },
-      { silent: true }
-    )
-    expect(queryClient.getQueryData(queryKey)).toEqual({
-      pageParams: [null],
-      pages: [refreshed],
-    })
+    expect(runs.data()).toEqual({ pageParams: [null], pages: [refreshed] })
   })
 
-  it("does not cancel a compatible in-flight next page", async () => {
-    const queryClient = new QueryClient()
-    const queryKey = ["backups", "runs", "test"] as const
+  it("keeps a page still loading when the first page boundary is unchanged", async () => {
     const current = infiniteData([
       [backupRun(firstId, 20)],
       [backupRun(secondId, 10)],
     ])
+    current.pages[1]!.nextCursor = "page-2"
     const refreshed = {
       ...current.pages[0]!,
       items: [{ ...current.pages[0]!.items[0]!, taskBytesCompleted: 5 }],
     }
-    queryClient.setQueryData(queryKey, current)
-    const cancel = vi.spyOn(queryClient, "cancelQueries")
+    const runs = mountedRuns(current)
+    const releaseNextPage = serveFirstPage(refreshed)
+    const loadingNextPage = runs.observer.fetchNextPage()
 
-    await commitRefreshedBackupRunsFirstPage(
-      queryClient,
-      queryKey,
-      refreshed
-    )
+    await runs.refresh()
+    releaseNextPage({ items: [backupRun(thirdId, 5)], nextCursor: null })
+    await loadingNextPage
 
-    expect(cancel).not.toHaveBeenCalled()
     expect(
-      queryClient.getQueryData<InfiniteData<BackupRunsPage, string | null>>(
-        queryKey
-      )?.pages
-    ).toHaveLength(2)
+      runs.data()?.pages.flatMap((page) => page.items.map(({ id }) => id))
+    ).toEqual([firstId, secondId, thirdId])
   })
 })
 

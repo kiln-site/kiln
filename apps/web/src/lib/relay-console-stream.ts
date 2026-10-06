@@ -13,7 +13,6 @@ import type { ConsoleLoadTiming } from "@/lib/console-performance"
 import {
   authenticateRelayBrowserSocket,
   isTerminalRelayBrowserFailure,
-  createRelayBrowserSocketInbox,
   maintainRelayBrowserLease,
   openRelayBrowserSocket,
   relayBrowserEndpoint,
@@ -459,10 +458,6 @@ function directFallbackMessage(cause: Error): string {
     cause.code === "direct_secure_channel_failed"
     ? "Secure direct connection unavailable. Streaming through Hearth."
     : "Direct Relay stream interrupted. Streaming through Hearth."
-}
-
-export function createSocketInbox(socket: WebSocket) {
-  return createRelayBrowserSocketInbox(socket, "console")
 }
 
 function asError(cause: unknown): Error {

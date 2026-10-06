@@ -1,89 +1,110 @@
-import { describe, expect, it } from "vite-plus/test"
+import { afterEach, describe, expect, it, vi } from "vite-plus/test"
+
+const relayServer = vi.hoisted(() => ({
+  connection: vi.fn(),
+  snapshot: vi.fn(),
+}))
+
+vi.mock("@/server/relay", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/server/relay")>()),
+  getRelayConnectionState: relayServer.connection,
+  getRelaySnapshot: relayServer.snapshot,
+}))
 
 import { createAppClients } from "./query-client"
 import {
-  connectionWithCanonicalSnapshot,
   queryKeys,
-  snapshotWithCanonicalState,
+  relayConnectionQueryOptions,
+  relaySnapshotQueryOptions,
   type RelayConnection,
 } from "./query-options"
 import type { RelayFleetSnapshot } from "./relay-fleet"
 
+const clients: Array<ReturnType<typeof createAppClients>> = []
+
+function appClients() {
+  const created = createAppClients()
+  clients.push(created)
+  return created
+}
+
+afterEach(async () => {
+  relayServer.connection.mockReset()
+  relayServer.snapshot.mockReset()
+  await Promise.all(clients.splice(0).map(({ dbClient }) => dbClient.cleanup()))
+})
+
 describe("app data clients", () => {
   it("never lets a connection refetch overwrite newer live fleet state", async () => {
-    const clients = createAppClients()
+    const { queryClient } = appClients()
     const live: RelayFleetSnapshot = { instances: [], nodes: [] }
     const cached: RelayFleetSnapshot = { instances: [], nodes: [] }
-    clients.queryClient.setQueryData(queryKeys.relay.snapshot, live)
-    clients.queryClient.setQueryData(queryKeys.relay.instances, live.instances)
-
-    const current = {
-      snapshot: live,
-      status: "connected",
-    } as RelayConnection
-    const fetched = {
-      snapshot: cached,
-      status: "connected",
-    } as RelayConnection
-    clients.queryClient.setQueryData(queryKeys.relay.connection, current)
-
-    const resolved = connectionWithCanonicalSnapshot(
-      clients.queryClient,
-      fetched as Extract<RelayConnection, { status: "connected" }>
-    )
-
-    expect(clients.queryClient.getQueryData(queryKeys.relay.snapshot)).toBe(
-      live
-    )
-    expect(clients.queryClient.getQueryData(queryKeys.relay.instances)).toBe(
-      live.instances
-    )
-    expect(resolved.snapshot).toBe(live)
-    await clients.dbClient.cleanup()
-  })
-
-  it("never lets a snapshot refetch overwrite newer live fleet state", async () => {
-    const clients = createAppClients()
-    const live: RelayFleetSnapshot = { instances: [], nodes: [] }
-    const fetched: RelayFleetSnapshot = { instances: [], nodes: [] }
-    clients.queryClient.setQueryData(queryKeys.relay.snapshot, live)
-    clients.queryClient.setQueryData(queryKeys.relay.connection, {
+    queryClient.setQueryData(queryKeys.relay.snapshot, live)
+    queryClient.setQueryData(queryKeys.relay.instances, live.instances)
+    queryClient.setQueryData(queryKeys.relay.connection, {
       snapshot: live,
       status: "connected",
     } as RelayConnection)
+    relayServer.connection.mockResolvedValue({
+      snapshot: cached,
+      status: "connected",
+    })
 
-    const resolved = snapshotWithCanonicalState(clients.queryClient, fetched)
+    const resolved = await queryClient.fetchQuery({
+      ...relayConnectionQueryOptions(queryClient),
+      staleTime: 0,
+    })
 
-    expect(resolved).toBe(live)
-    expect(clients.queryClient.getQueryData(queryKeys.relay.instances)).toBe(
+    expect(queryClient.getQueryData(queryKeys.relay.snapshot)).toBe(live)
+    expect(queryClient.getQueryData(queryKeys.relay.instances)).toBe(
       live.instances
     )
-    await clients.dbClient.cleanup()
+    expect(resolved.status === "connected" && resolved.snapshot).toBe(live)
+  })
+
+  it("never lets a snapshot refetch overwrite newer live fleet state", async () => {
+    const { queryClient } = appClients()
+    const live: RelayFleetSnapshot = { instances: [], nodes: [] }
+    const fetched: RelayFleetSnapshot = { instances: [], nodes: [] }
+    queryClient.setQueryData(queryKeys.relay.snapshot, live)
+    queryClient.setQueryData(queryKeys.relay.connection, {
+      snapshot: live,
+      status: "connected",
+    } as RelayConnection)
+    relayServer.snapshot.mockResolvedValue(fetched)
+
+    const resolved = await queryClient.fetchQuery({
+      ...relaySnapshotQueryOptions(),
+      staleTime: 0,
+    })
+
+    expect(resolved).toBe(live)
+    expect(queryClient.getQueryData(queryKeys.relay.instances)).toBe(
+      live.instances
+    )
   })
 
   it("keeps unreachable connection and fleet caches on one snapshot", async () => {
-    const clients = createAppClients()
+    const { queryClient } = appClients()
     const fallback: RelayFleetSnapshot = { instances: [], nodes: [] }
-    const connection = {
+    relayServer.connection.mockResolvedValue({
       message: "Relay unavailable",
       relay: { id: "relay-a", name: "Relay A" },
       relays: [{ id: "relay-a", name: "Relay A", status: "unreachable" }],
       snapshot: fallback,
       status: "unreachable",
-    } as Extract<RelayConnection, { status: "unreachable" }>
+    })
 
-    const resolved = connectionWithCanonicalSnapshot(
-      clients.queryClient,
-      connection
+    const resolved = await queryClient.fetchQuery(
+      relayConnectionQueryOptions(queryClient)
     )
 
-    expect(resolved.snapshot).toBe(fallback)
-    expect(clients.queryClient.getQueryData(queryKeys.relay.snapshot)).toBe(
+    expect(resolved.status === "unreachable" && resolved.snapshot).toBe(
       fallback
     )
-    expect(clients.queryClient.getQueryData(queryKeys.relay.instances)).toBe(
+    expect(queryClient.getQueryData(queryKeys.relay.snapshot)).toBe(fallback)
+    expect(queryClient.getQueryData(queryKeys.relay.instances)).toBe(
       fallback.instances
     )
-    await clients.dbClient.cleanup()
   })
 })

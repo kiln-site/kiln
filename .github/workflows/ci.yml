@@ -17,12 +17,12 @@ jobs:
     name: ${{ matrix.name }}
     runs-on: ubuntu-24.04
     services:
-      # Backs the opt-in MySQL migration test; unit tests ignore it.
+      # Backs the real-MySQL suites (apps/web/src/test/database.ts).
       mysql:
         image: ${{ matrix.name == 'Tests' && 'mysql:8.4' || '' }}
         env:
           MYSQL_ROOT_PASSWORD: root
-          MYSQL_DATABASE: kiln_migration_test
+          MYSQL_DATABASE: kiln_test
         ports:
           - 3306:3306
         options: >-
@@ -41,8 +41,8 @@ jobs:
           - name: Tests
             # Root "test" script: every package's test task plus scripts/ tests.
             command: |
-              MYSQL_MIGRATION_TEST=1 DB_HOST=127.0.0.1 DB_PORT=3306 \
-                DB_NAME=kiln_migration_test DB_USERNAME=root DB_PASSWORD=root \
+              KILN_TEST_MYSQL=1 DB_HOST=127.0.0.1 DB_PORT=3306 \
+                DB_NAME=kiln_test DB_USERNAME=root DB_PASSWORD=root \
                 vp run test
           - name: Build
             command: |
