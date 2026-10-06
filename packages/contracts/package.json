@@ -8,9 +8,9 @@
     "lint": "vp lint src"
   },
   "dependencies": {
-    "cron-parser": "5.10.0",
+    "cron-parser": "5.10.1",
     "effect": "4.0.1",
-    "zod": "^4.4.3"
+    "zod": "^4.6.5"
   },
   "devDependencies": {
     "typescript": "^6",
