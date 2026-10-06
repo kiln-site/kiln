@@ -220,7 +220,7 @@ function useFileDirectory(
     sizeBatches,
     complete: !query.hasNextPage && !!query.data,
     error: query.error,
-    loading: query.isFetching,
+    loading: query.isPending || query.isFetchingNextPage,
   }
 }
 

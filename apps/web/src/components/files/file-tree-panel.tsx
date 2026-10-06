@@ -286,8 +286,12 @@ function FileTreeSearchInput({
     results.isFetching,
     value,
   ])
-  const searching = !!value && (value !== debouncedQuery || results.isFetching)
-  const searchComplete = !results.isError && !results.hasNextPage
+  const searching =
+    !!value &&
+    (value !== debouncedQuery ||
+      results.isFetching ||
+      (!results.isError && (results.isPending || results.hasNextPage)))
+  const searchComplete = results.isSuccess && !results.hasNextPage
 
   return (
     <label className="flex h-full min-w-0 flex-1 items-center">
@@ -327,7 +331,7 @@ function FileTreeSearchInput({
           }
         }}
       />
-      {search.value && !searching && !searchComplete ? (
+      {value && !searching && !searchComplete ? (
         <span
           role="status"
           aria-label="Search could not finish; results may be incomplete"
@@ -356,7 +360,9 @@ function FileTreeRefreshButton({
         ...queryKeys.relay.tree(fileIndex.relayId, fileIndex.instanceId),
         "directory",
       ],
-      predicate: (query) => query.state.data !== undefined,
+      predicate: (query) =>
+        query.state.data !== undefined &&
+        !query.state.fetchMeta?.fetchMore?.direction,
     }) > 0
   return (
     <Tooltip>

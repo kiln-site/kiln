@@ -51,6 +51,29 @@ afterEach(() => {
 })
 
 describe("Files query cache", () => {
+  it("recovers failed tree loads without hiding Query's error state and can retry", async () => {
+    const { queryClient, index } = setup()
+    const release = index.subscribePaths(vi.fn())
+    const directoryOptions = index.directoryOptions.bind(index)
+    vi.spyOn(index, "directoryOptions").mockImplementation((directory) => ({
+      ...directoryOptions(directory),
+      retry: false,
+    }))
+    const failure = new Error("Relay unavailable")
+    relay.getRelayDirectoryPage.mockRejectedValueOnce(failure)
+    await expect(index.ensureDirectory("world/")).resolves.toBeUndefined()
+    expect(
+      queryClient.getQueryState(index.directoryOptions("world/").queryKey)
+    ).toMatchObject({ status: "error", error: failure })
+    expect(index.getPaths()).toEqual([])
+
+    relay.getRelayDirectoryPage.mockResolvedValueOnce(
+      page([entry("world/level.dat")], "world/")
+    )
+    await index.ensureDirectory("world/")
+    expect(index.getPaths()).toEqual(["world/level.dat"])
+    release()
+  })
   it("refreshes an initially empty root after tree effects replay", async () => {
     const { queryClient, index } = setup()
     relay.getRelayDirectoryPage.mockResolvedValueOnce(page([]))

@@ -5,8 +5,10 @@ import {
   type QueryClient,
 } from "@tanstack/react-query"
 import type { RelayDirectoryPage, RelayFileEntry } from "@workspace/contracts"
+import { Effect } from "effect"
 
 import { directoryPageEntries } from "@/components/files/file-query-options"
+import { promiseEffect } from "@/effect/promise"
 import { queryKeys, relayDirectoryQueryOptions } from "@/lib/query-options"
 
 const loadingDelayMs = 160
@@ -116,9 +118,13 @@ export class FileTreeIndex {
   async ensureDirectory(directory: string): Promise<void> {
     this.#treeDirectories.add(directory)
     if (this.#listeners.size) this.#observeDirectory(directory)
-    await this.queryClient
-      .ensureInfiniteQueryData(this.directoryOptions(directory))
-      .catch(() => undefined)
+    await Effect.runPromise(
+      promiseEffect(() =>
+        this.queryClient.ensureInfiniteQueryData(
+          this.directoryOptions(directory)
+        )
+      ).pipe(Effect.result)
+    )
   }
 
   async loadMoreDirectory(directory: string): Promise<void> {
