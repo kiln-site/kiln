@@ -41,7 +41,7 @@ function AppRouteViewport({ children }: { children: React.ReactNode }) {
   const routeFrame = useRouterState({
     select: (state) =>
       state.matches.some(
-        (match) => match.status === "notFound" || match.globalNotFound
+        (match) => match.status === "notFound" || match._notFound
       )
         ? "not-found"
         : globalSectionFromRouteId(state.matches.at(-1)?.routeId),

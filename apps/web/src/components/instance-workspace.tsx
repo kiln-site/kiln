@@ -792,7 +792,7 @@ function InstanceRouteTitle() {
       if (
         state.matches.at(-1)?.routeId === "/_app/server/$serverId/$" ||
         state.matches.some(
-          (match) => match.status === "notFound" || match.globalNotFound
+          (match) => match.status === "notFound" || match._notFound
         )
       ) {
         return "Not found"
