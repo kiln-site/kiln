@@ -4,12 +4,15 @@ import { Deferred, Effect, Fiber, Layer, Stream } from "effect"
 import { Reactivity } from "effect/reactivity"
 import { SqlClient } from "effect/sql"
 import type { Connection } from "effect/sql/SqlConnection"
+import { SqlError, UnknownError } from "effect/sql/SqlError"
 
 import { Database, makeDatabase } from "@/effect/database"
+import { DatabaseError } from "@/effect/errors"
 
 const state = {
   statements: [] as Array<string>,
   released: 0,
+  failCommit: false,
   // Holds the next prepared statement open until the test finishes it.
   gate: undefined as
     | { started: Deferred.Deferred<void>; finish: Deferred.Deferred<void> }
@@ -36,7 +39,22 @@ const connection: Connection = {
       return { affectedRows: 1 }
     }),
   executeStream: () => Stream.die("unused"),
-  executeUnprepared: (sql) => record(sql, []),
+  executeUnprepared: (sql) =>
+    sql === "COMMIT" && state.failCommit
+      ? record(sql, []).pipe(
+          Effect.andThen(
+            Effect.fail(
+              new SqlError({
+                reason: new UnknownError({
+                  cause: new Error("commit failed"),
+                  message: "commit failed",
+                  operation: "execute",
+                }),
+              })
+            )
+          )
+        )
+      : record(sql, []),
   executeValues: (sql) => record(sql, []),
   executeValuesUnprepared: (sql) => record(sql, []),
 }
@@ -58,6 +76,7 @@ describe("Database transactions", () => {
   beforeEach(() => {
     state.statements = []
     state.released = 0
+    state.failCommit = false
     state.gate = undefined
   })
 
@@ -95,6 +114,22 @@ describe("Database transactions", () => {
           assert.deepStrictEqual(state.statements, ["BEGIN", "ROLLBACK"])
           assert.strictEqual(state.released, 1)
         })
+    )
+
+    it.effect("reports a failed commit as a database error", () =>
+      Effect.gen(function* () {
+        state.failCommit = true
+        const service = yield* Database
+        const failure = yield* service
+          .transaction("database.test.commit", (transaction) =>
+            transaction.execute("UPDATE kiln_test SET value = 1")
+          )
+          .pipe(Effect.flip)
+
+        assert.instanceOf(failure, DatabaseError)
+        assert.strictEqual(failure.operation, "database.test.commit")
+        assert.strictEqual(state.released, 1)
+      })
     )
 
     it.effect("rolls back and releases the connection when interrupted", () =>

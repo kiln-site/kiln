@@ -7,6 +7,7 @@ import {
   Exit,
   Layer,
   Redacted,
+  Scope,
   ScopedCache,
 } from "effect"
 import { Reactivity } from "effect/reactivity"
@@ -76,19 +77,20 @@ const globalDatabase = globalThis as typeof globalThis & {
 
 export const DatabaseLive = Layer.effect(Database)(
   Effect.gen(function* () {
-    // Development program reloads rebuild the app runtime without disposing
-    // the old one, so they share its MySQL pool, like `@/lib/database`.
-    const client =
-      globalDatabase.kilnDatabaseClient ?? (yield* makeDatabaseClient)
-    if (process.env.NODE_ENV !== "production") {
-      globalDatabase.kilnDatabaseClient = client
-    }
-    return makeDatabase(client)
+    if (!import.meta.hot) return makeDatabase(yield* makeDatabaseClient)
+    // Vite program reloads rebuild the app runtime without disposing the old
+    // one, so development keeps one pool for the process, like
+    // `@/lib/database`.
+    globalDatabase.kilnDatabaseClient ??= yield* makeDatabaseClient.pipe(
+      Scope.provide(Scope.makeUnsafe())
+    )
+    return makeDatabase(globalDatabase.kilnDatabaseClient)
   })
 ).pipe(Layer.provide(Reactivity.layer))
 
 // Connects on the first query, so effects that never touch MySQL don't wait
-// on it. A failed connection isn't cached; the next query tries again.
+// on it. A failed connection is retried after a second; MysqlClient doesn't
+// end a pool whose first probe fails, so retries stay spaced out.
 const makeDatabaseClient = Effect.gen(function* () {
   const reactivity = yield* Reactivity.Reactivity
   const clients = yield* ScopedCache.makeWith({
@@ -98,7 +100,7 @@ const makeDatabaseClient = Effect.gen(function* () {
       ),
     capacity: 1,
     timeToLive: (exit) =>
-      Exit.isSuccess(exit) ? Duration.infinity : Duration.zero,
+      Exit.isSuccess(exit) ? Duration.infinity : Duration.seconds(1),
   })
   return ScopedCache.get(clients, "mysql")
 })
@@ -172,6 +174,13 @@ export function makeDatabase(
               isSqlError(error)
                 ? DatabaseError.make({ operation, cause: error })
                 : error
+            ),
+            // Effect SQL turns COMMIT and ROLLBACK failures into defects.
+            // Keep them typed so callers can handle them like any query.
+            Effect.catchDefect((defect) =>
+              isSqlError(defect)
+                ? Effect.fail(DatabaseError.make({ operation, cause: defect }))
+                : Effect.die(defect)
             )
           )
       ).pipe(Effect.withSpan(`db.${operation}`)),
