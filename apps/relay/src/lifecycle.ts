@@ -89,7 +89,7 @@ import {
 
 const OWNED_LABEL = "kiln.relay.owned=true"
 const TAILSCALE_IMAGE = "tailscale/tailscale:stable"
-const COREDNS_IMAGE = "coredns/coredns:1.14.2"
+const COREDNS_IMAGE = "coredns/coredns:1.14.7"
 const TAILSCALE_STACK_DISK_BYTES = 128 * 1024 * 1024
 const TAILSCALE_STACK_MEMORY_BYTES = 64 * 1024 * 1024
 const TAILSCALE_STACK_FORWARD_CHAIN = "KILN-TAILSCALE"
@@ -3002,7 +3002,7 @@ export class LifecycleDriver {
       `KILN_NODE_ADDRESS=${networking.address}`,
       "--volume",
       `${join(hostInfrastructure, "coredns", "Corefile")}:/etc/coredns/Corefile:ro`,
-      "coredns/coredns:1.14.2",
+      "coredns/coredns:1.14.7",
       "-conf",
       "/etc/coredns/Corefile",
     ])
@@ -3392,7 +3392,7 @@ export class LifecycleDriver {
       `KILN_NODE_ADDRESS=${address}`,
       "--volume",
       `${join(hostInfrastructure, "coredns", "Corefile")}:/etc/coredns/Corefile:ro`,
-      "coredns/coredns:1.14.2",
+      "coredns/coredns:1.14.7",
       "-conf",
       "/etc/coredns/Corefile",
     ])

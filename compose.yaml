@@ -1,6 +1,6 @@
 services:
   cache:
-    image: ${CACHE_IMAGE:-valkey/valkey:9.1.0-alpine}
+    image: ${CACHE_IMAGE:-valkey/valkey:9.1.2-alpine}
     restart: unless-stopped
     command:
       - /bin/sh
@@ -82,7 +82,7 @@ services:
       KILN_RELAY_BROWSER_FILE_REPLAYS_MAX: ${KILN_RELAY_BROWSER_FILE_REPLAYS_MAX:-65536}
       KILN_RELAY_NAME: ${KILN_RELAY_NAME:-}
       KILN_RELAY_PROXY: ${KILN_RELAY_PROXY:-none}
-      KILN_RELAY_TRAEFIK_IMAGE: ${KILN_RELAY_TRAEFIK_IMAGE:-traefik:v3.6.6}
+      KILN_RELAY_TRAEFIK_IMAGE: ${KILN_RELAY_TRAEFIK_IMAGE:-traefik:v3.7.13}
       KILN_RELAY_ACME_EMAIL: ${KILN_RELAY_ACME_EMAIL:-}
       KILN_RELAY_PORT: ${KILN_RELAY_PORT:-4100}
       KILN_RELAY_PUBLIC_PORT: ${KILN_RELAY_PUBLIC_PORT:-}

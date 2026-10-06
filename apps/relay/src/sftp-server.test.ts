@@ -528,7 +528,7 @@ function testConfig(dataDirectory: string): RelayConfig {
     tlsKeyPath: null,
     tlsMode: "development",
     traefikAcmeEmail: null,
-    traefikImage: "traefik:v3.6.6",
+    traefikImage: "traefik:v3.7.13",
   }
 }
 
