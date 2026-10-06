@@ -11,7 +11,7 @@ import {
   Tailwind,
   Text,
   pixelBasedPreset,
-} from "@react-email/components"
+} from "react-email"
 
 export interface AccessInvitationEmailProps {
   inviteUrl: string
