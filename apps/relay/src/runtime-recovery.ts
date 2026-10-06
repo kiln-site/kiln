@@ -1,5 +1,5 @@
 import * as Sentry from "@sentry/node"
-import { Effect, Semaphore } from "effect"
+import { Clock, Effect, Semaphore } from "effect"
 import type {
   RelayDesiredState,
   RelayInstanceRecovery,
@@ -40,38 +40,18 @@ export interface RuntimeRecoverySnapshot {
   readonly recovery: RelayInstanceRecovery | null
 }
 
-export type RuntimeRecoveryStart = (
-  service: string
-) => Effect.Effect<void, unknown>
-
-export type RuntimeRecoveryStop = (
-  service: string
-) => Effect.Effect<void, unknown>
-
 export class RuntimeRecoveryManager {
   readonly #activeStops = new Map<string, symbol>()
   readonly #config: RelayConfig["runtimeRecovery"]
   readonly #activeStarts = new Map<string, symbol>()
   readonly #locks = new Map<string, Semaphore.Semaphore>()
-  readonly #now: () => number
   readonly #records = new Map<string, RelayRuntimeRecoveryRecord>()
   readonly #reportedStopFailures = new Set<string>()
-  readonly #startContainer: RuntimeRecoveryStart
   readonly #state: RelayStateStore["Service"]
-  readonly #stopContainer: RuntimeRecoveryStop
 
-  constructor(
-    config: RelayConfig,
-    state: RelayStateStore["Service"],
-    startContainer: RuntimeRecoveryStart = defaultStartContainer,
-    now: () => number = Date.now,
-    stopContainer: RuntimeRecoveryStop = defaultStopContainer
-  ) {
+  constructor(config: RelayConfig, state: RelayStateStore["Service"]) {
     this.#config = config.runtimeRecovery
-    this.#now = now
-    this.#startContainer = startContainer
     this.#state = state
-    this.#stopContainer = stopContainer
   }
 
   initialize(): Effect.Effect<void, unknown> {
@@ -91,17 +71,19 @@ export class RuntimeRecoveryManager {
   }
 
   reconcile(
-    observations: ReadonlyArray<RuntimeRecoveryObservation>,
-    now = Date.now()
+    observations: ReadonlyArray<RuntimeRecoveryObservation>
   ): Effect.Effect<ReadonlyMap<string, RuntimeRecoverySnapshot>, unknown> {
-    return Effect.forEach(
-      observations,
-      (observation) =>
-        this.#lock(observation.instanceId).withPermit(
-          this.#reconcileObservation(observation, now)
-        ),
-      { concurrency: "unbounded" }
-    ).pipe(
+    return Clock.currentTimeMillis.pipe(
+      Effect.flatMap((now) =>
+        Effect.forEach(
+          observations,
+          (observation) =>
+            this.#lock(observation.instanceId).withPermit(
+              this.#reconcileObservation(observation, now)
+            ),
+          { concurrency: "unbounded" }
+        )
+      ),
       Effect.map(
         (entries) =>
           new Map(
@@ -114,26 +96,27 @@ export class RuntimeRecoveryManager {
 
   recordProvisioned(
     instanceId: string,
-    desiredState: RelayDesiredState,
-    now = Date.now()
+    desiredState: RelayDesiredState
   ): Effect.Effect<void, unknown> {
     return this.#lock(instanceId)
       .withPermit(
-        this.#persist(
-          initialRecoveryRecord(instanceId, desiredState, now)
-        ).pipe(Effect.asVoid)
+        Clock.currentTimeMillis.pipe(
+          Effect.flatMap((now) =>
+            this.#persist(initialRecoveryRecord(instanceId, desiredState, now))
+          ),
+          Effect.asVoid
+        )
       )
       .pipe(Effect.withSpan("relay.runtimeRecovery.recordProvisioned"))
   }
 
   recordPowerAction(
     instanceId: string,
-    action: InstancePowerAction,
-    now = Date.now()
+    action: InstancePowerAction
   ): Effect.Effect<RelayRuntimeRecoveryRecord | null, unknown> {
     return this.#lock(instanceId)
       .withPermit(
-        Effect.suspend(() => {
+        Effect.flatMap(Clock.currentTimeMillis, (now) => {
           const previous = this.#records.get(instanceId) ?? null
           const desiredState: RelayDesiredState =
             action === "stop" || action === "kill" ? "stopped" : "running"
@@ -226,8 +209,8 @@ export class RuntimeRecoveryManager {
       if (existing.desiredState === "stopped") {
         const enforceStoppedIntent =
           observation.running && existing.stopPending
-          ? this.#scheduleCompensatingStop(observation)
-          : Effect.void
+            ? this.#scheduleCompensatingStop(observation)
+            : Effect.void
         const stopPending = observation.running ? existing.stopPending : false
         if (
           existing.phase === "idle" &&
@@ -497,7 +480,7 @@ export class RuntimeRecoveryManager {
     requestedAt: number,
     token: symbol
   ): Effect.Effect<void, never> {
-    return this.#startContainer(observation.service).pipe(
+    return startContainer(observation.service).pipe(
       Effect.tap(() =>
         Effect.logInfo("Docker accepted the server recovery start", {
           instanceId: observation.instanceId,
@@ -505,12 +488,7 @@ export class RuntimeRecoveryManager {
       ),
       Effect.matchEffect({
         onFailure: (cause) =>
-          this.#recordRestartFailure(
-            observation,
-            requestedAt,
-            token,
-            cause
-          ),
+          this.#recordRestartFailure(observation, requestedAt, token, cause),
         onSuccess: () => this.#enforceDesiredStateAfterStart(observation),
       }),
       Effect.withSpan("relay.runtimeRecovery.restartWorker", {
@@ -544,7 +522,7 @@ export class RuntimeRecoveryManager {
     cause: unknown
   ): Effect.Effect<void, unknown> {
     return this.#lock(observation.instanceId).withPermit(
-      Effect.suspend(() => {
+      Effect.flatMap(Clock.currentTimeMillis, (now) => {
         const current = this.#records.get(observation.instanceId)
         if (
           !current ||
@@ -555,12 +533,9 @@ export class RuntimeRecoveryManager {
         ) {
           return Effect.void
         }
-        return this.#recordStartFailure(
-          current,
-          observation,
-          cause,
-          this.#now()
-        ).pipe(Effect.asVoid)
+        return this.#recordStartFailure(current, observation, cause, now).pipe(
+          Effect.asVoid
+        )
       })
     )
   }
@@ -569,13 +544,13 @@ export class RuntimeRecoveryManager {
     observation: RuntimeRecoveryObservation
   ): Effect.Effect<void, unknown> {
     return this.#lock(observation.instanceId).withPermit(
-      Effect.suspend(() => {
+      Effect.flatMap(Clock.currentTimeMillis, (now) => {
         const current = this.#records.get(observation.instanceId)
         if (!current || current.desiredState !== "stopped") return Effect.void
         return this.#persist({
           ...current,
           stopPending: true,
-          updatedAt: this.#now(),
+          updatedAt: now,
         }).pipe(
           Effect.tap(() =>
             Effect.sync(() => {
@@ -619,13 +594,14 @@ export class RuntimeRecoveryManager {
           () =>
             this.#activeStops.get(observation.instanceId) === token &&
             this.#records.get(observation.instanceId)?.stopPending === true &&
-            this.#records.get(observation.instanceId)?.desiredState === "stopped"
+            this.#records.get(observation.instanceId)?.desiredState ===
+              "stopped"
         )
       )
       .pipe(
         Effect.flatMap((shouldStop) =>
           shouldStop
-            ? this.#stopContainer(observation.service).pipe(
+            ? stopContainer(observation.service).pipe(
                 Effect.tap(() =>
                   Effect.sync(() => {
                     this.#reportedStopFailures.delete(observation.instanceId)
@@ -816,24 +792,19 @@ export class RuntimeRecoveryManager {
   }
 }
 
-const defaultStartContainer: RuntimeRecoveryStart = (service) =>
+const startContainer = (service: string): Effect.Effect<void, unknown> =>
   commandEffect("docker", ["start", service], { timeout: 120_000 }).pipe(
     Effect.asVoid
   )
 
-const defaultStopContainer: RuntimeRecoveryStop = (service) =>
+const stopContainer = (service: string): Effect.Effect<void, unknown> =>
   commandEffect(
     "docker",
-    [
-      "stop",
-      "--time",
-      String(INSTANCE_STOP_TIMEOUT_SECONDS),
-      service,
-    ],
+    ["stop", "--time", String(INSTANCE_STOP_TIMEOUT_SECONDS), service],
     { timeout: (INSTANCE_STOP_TIMEOUT_SECONDS + 15) * 1_000 }
   ).pipe(Effect.asVoid)
 
-export function retryDelayMs(attempt: number, initialDelayMs: number): number {
+function retryDelayMs(attempt: number, initialDelayMs: number): number {
   if (initialDelayMs === 0) return 0
   return Math.min(
     initialDelayMs * 3 ** Math.max(attempt - 1, 0),

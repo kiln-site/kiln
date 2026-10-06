@@ -38,22 +38,3 @@ export function relayFleetInstance(
     routeId: relayInstanceRouteId(relay.id, instance.shortId),
   }
 }
-
-export function addRelayInstanceToSnapshot(
-  snapshot: RelayFleetSnapshot | undefined,
-  instance: RelayInstance,
-  relay: { id: string; name: string }
-): RelayFleetSnapshot | undefined {
-  if (!snapshot) return snapshot
-
-  const relayInstance = relayFleetInstance(instance, relay)
-  const existingIndex = snapshot.instances.findIndex(
-    (item) => item.id === instance.id && item.relayId === relay.id
-  )
-  if (existingIndex !== -1) return snapshot
-
-  return {
-    ...snapshot,
-    instances: [relayInstance, ...snapshot.instances],
-  }
-}

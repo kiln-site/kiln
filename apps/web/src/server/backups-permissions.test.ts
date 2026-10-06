@@ -1,227 +1,380 @@
-import { beforeEach, describe, expect, it, vi } from "vite-plus/test"
+import { randomUUID } from "node:crypto"
 
-import type { AccessGrant } from "@/lib/access-control"
-import { grantHasPermission } from "@/lib/permissions"
+import { assert, layer } from "@effect/vitest"
+import {
+  builtinTailscaleBrick,
+  relayInstanceSchema,
+  relaySnapshotSchema,
+} from "@workspace/contracts"
+import { Effect } from "effect"
+import { afterAll, vi } from "vite-plus/test"
 
-const mocks = vi.hoisted(() => ({
-  grants: [] as AccessGrant[],
-  loadStorage: vi.fn(),
-  publish: vi.fn(),
-  reserveCopy: vi.fn(),
-  reserveSafety: vi.fn(),
-  reserveRestore: vi.fn(),
-  rpc: vi.fn(),
-  run: vi.fn(),
-  scheduleCopy: vi.fn(),
-}))
+import { disposeAppRuntime } from "@/effect/runtime"
+import type { AuthenticatedUser } from "@/lib/auth-session"
+import type { AccessPermission } from "@/lib/permissions"
+import {
+  copyBackupToDestinationHandler,
+  createInstanceBackupHandler,
+  restoreInstanceBackupHandler,
+} from "@/server/backups.server"
+import { TestDatabase, describeMysql, resetDatabase } from "@/test/database"
+import {
+  insertBackup,
+  insertBackupStorage,
+  insertGrant,
+  insertRelay,
+  insertRows,
+  selectRows,
+} from "@/test/seed"
 
-vi.mock("@workspace/contracts", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@workspace/contracts")>()),
-  relaySnapshotSchema: { parse: (value: unknown) => value },
-}))
-
-vi.mock("@tanstack/react-start", () => ({
-  createServerFn: () => ({
-    handler: (handler: unknown, serverHandler?: unknown) => ({
-      __executeServer: serverHandler ?? handler,
-    }),
-    validator: () => ({
-      handler: (handler: unknown, serverHandler?: unknown) => ({
-        __executeServer: serverHandler ?? handler,
-      }),
-    }),
-  }),
-}))
-vi.mock("@/server/auth", () => ({
-  requireEligibleResourceUser: async () => ({
-    emailVerifiedAt: "2026-01-01T00:00:00.000Z",
-    id: "user-1",
-    role: "user",
-    status: "enabled",
-  }),
-}))
-vi.mock("@/lib/access-control", () => ({
-  hasPlatformPermission: () => false,
-  isPlatformAdmin: () => false,
-  listUserGrants: async () => mocks.grants,
-  requireRelayPermission: async (input: {
-    databaseId?: string
-    instanceId?: string
-    permission: Parameters<typeof grantHasPermission>[1]
-    relayId: string
-  }) => {
-    if (
-      !mocks.grants.some(
-        (grant) =>
-          grant.relayId === input.relayId &&
-          grant.resourceId === (input.instanceId ?? input.databaseId) &&
-          grantHasPermission(grant, input.permission)
-      )
-    )
-      throw new Error("Permission denied")
+// The Relay is the only network boundary these handlers cross: it answers
+// snapshots and is offline for everything else, so dispatch never succeeds.
+const relay = vi.hoisted(() => ({ snapshot: undefined as unknown }))
+vi.mock("@/lib/relay-connection", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/relay-connection")>()),
+  relayRpc: async (_relay: unknown, operation: string) => {
+    if (operation === "relay.snapshot") return relay.snapshot
+    throw new Error("Relay is offline")
   },
 }))
-vi.mock("@/effect/runtime", () => ({ runAppEffect: mocks.run }))
-vi.mock("@/effect/backups", () => ({
-  getBackupCatalogRecordEffect: () => "getBackup",
-  getBackupPolicyEffect: () => "getPolicy",
-  reserveBackupCopyEffect: mocks.reserveCopy,
-  reserveInstanceBackupEffect: mocks.reserveSafety,
-  reserveDatabaseBackupEffect: mocks.reserveSafety,
-  reserveBackupRestoreEffect: mocks.reserveRestore,
-}))
-vi.mock("@/backups/destinations/s3", () => ({
-  loadBackupStorageEffect: mocks.loadStorage,
-}))
+// Queued copies are streamed to S3 by a background worker; these tests stop
+// at the queue.
 vi.mock("@/lib/backup-copy", () => ({
-  scheduleBackupCopyProcessing: mocks.scheduleCopy,
+  scheduleBackupCopyProcessing: () => undefined,
 }))
-vi.mock("@/lib/backup-realtime.server", () => ({
-  publishBackupChange: mocks.publish,
-}))
-vi.mock("@/lib/relay-registry", () => ({
-  listPersistedRelays: async () => [{ id: "relay-1", enabled: true }],
-}))
-vi.mock("@/lib/relay-connection", () => ({ relayRpc: mocks.rpc }))
-vi.mock("@/lib/backup-reconciliation", () => ({}))
-vi.mock("@/backups/destinations", () => ({}))
-vi.mock("@/backups/destinations/local", () => ({}))
-vi.mock("@/lib/environment", () => ({}))
-vi.mock("@/effect/backup-download-shares", () => ({}))
-vi.mock("@/effect/managed-databases", () => ({
-  listManagedDatabaseRecordsEffect: () => "records",
-}))
-vi.mock("@/lib/backup-run-cursor.server", () => ({}))
 
-// Load the server provider so the test exercises handlers instead of RPC stubs.
-import {
-  copyBackupToDestination_createServerFn_handler as copyBackupToDestination,
-  createInstanceBackup_createServerFn_handler as createInstanceBackup,
-  restoreInstanceBackup_createServerFn_handler as restoreInstanceBackup,
-  // @ts-expect-error TanStack Start exposes the provider through a Vite query.
-} from "./backups?tss-serverfn-split"
+afterAll(() => disposeAppRuntime())
 
-const backup = {
-  id: "15e6df81-575f-421d-a666-e3eaabaafc3b",
-  relayId: "relay-1",
-  targetKind: "instance",
-  targetId: "instance-1",
-  artifactKind: "archive",
-  filename: "backup.zip",
-  artifacts: [
-    {
-      id: "source-artifact",
-      status: "available",
-      storageId: null,
-      filename: "backup.zip",
-    },
-  ],
-}
-const storageId = "730ae31f-a620-43f3-93fd-d259b58f6614"
+const at = Date.UTC(2026, 0, 1)
+const relayId = "r".repeat(43)
+const instanceId = "a".repeat(40)
+const siblingId = "b".repeat(40)
 
-function grant(
-  permission: "backup.create" | "backup.download" | "backup.restore",
-  resourceId = "instance-1"
-): AccessGrant {
-  return {
-    id: "grant",
-    relayId: "relay-1",
-    resourceId,
-    resourceType: "instance",
-    permissions: [permission],
-  }
+const user: AuthenticatedUser = {
+  email: "member@example.test",
+  emailVerified: true,
+  emailVerifiedAt: new Date(at).toISOString(),
+  id: "member",
+  isDevelopmentBypass: false,
+  name: "Member",
+  role: "user",
+  status: "enabled",
+  twoFactorEnabled: false,
 }
 
-beforeEach(() => {
-  vi.clearAllMocks()
-  mocks.grants = []
-  mocks.run.mockImplementation(async (operation: string) => {
-    if (operation === "backups.getForCopy") return backup
-    if (operation === "backups.resolveStoragePolicy") return { storageId: null }
-    if (operation === "backups.loadSelectedStorage")
-      return { enabled: true, deleting: false, ownerUserId: "user-1" }
-    if (operation === "backups.reserveCopy") return { taskId: "copy-task" }
-    throw new Error(`Unexpected operation: ${operation}`)
-  })
-  mocks.rpc.mockRejectedValue(new Error("Resource lookup reached"))
+const instance = relayInstanceSchema.parse({
+  id: instanceId,
+  shortId: instanceId.slice(0, 8),
+  name: "Survival",
+  service: "server",
+  directory: "/data/server",
+  containerId: "container",
+  desiredState: "stopped",
+  observedState: "stopped",
+  status: "stopped",
+  game: "Minecraft",
+  implementation: "paper",
+  javaVersion: "21",
+  version: "1.21",
+  connectAddress: "play.example.test:25565",
+  brickSource: builtinTailscaleBrick.source,
+  variables: {},
+  limits: { diskBytes: 1024 ** 3, memoryBytes: 1024 ** 3 },
 })
 
-describe("backup export authorization", () => {
-  it("denies create-only copy before loading a destination or queuing work", async () => {
-    mocks.grants = [grant("backup.create")]
-    await expect(
-      copyBackupToDestination({ data: { backupId: backup.id, storageId } })
-    ).rejects.toThrow("permission to copy")
-    expect(mocks.loadStorage).not.toHaveBeenCalled()
-    expect(mocks.reserveCopy).not.toHaveBeenCalled()
-    expect(mocks.scheduleCopy).not.toHaveBeenCalled()
+relay.snapshot = relaySnapshotSchema.parse({
+  instances: [instance],
+  node: {
+    id: relayId,
+    name: "Relay",
+    version: "test",
+    platform: "linux",
+    arch: "arm64",
+    connectedAt: new Date(at).toISOString(),
+    cpu: { cores: 4, loadPercent: 0 },
+    memory: { totalBytes: 8 * 1024 ** 3, usedBytes: 0 },
+    storage: { totalBytes: 20 * 1024 ** 3, usedBytes: 0 },
+    docker: { available: true, version: "test" },
+  },
+})
+
+const grant = (
+  resourceId: string,
+  permissions: ReadonlyArray<AccessPermission>
+) =>
+  Effect.gen(function* () {
+    const id = randomUUID()
+    yield* insertGrant({
+      id,
+      userId: user.id,
+      relayId,
+      resourceType: "instance",
+      resourceId,
+    })
+    yield* insertRows(
+      "access_selection",
+      permissions.map((permission) => ({
+        access_id: id,
+        selection_kind: "permission",
+        selection_key: permission,
+      }))
+    )
   })
 
-  it("allows a target download grant to queue a copy without create permission", async () => {
-    mocks.grants = [grant("backup.download")]
-    await expect(
-      copyBackupToDestination({ data: { backupId: backup.id, storageId } })
-    ).resolves.toEqual({ copied: false, queued: true, taskId: "copy-task" })
-    expect(mocks.reserveCopy).toHaveBeenCalledWith(
-      expect.objectContaining({
-        backupId: backup.id,
-        storageId,
-        requestedBy: "user-1",
+// A finished archive of the instance, kept on the Relay's disk.
+const archive = {
+  filename: "survival.zip",
+  bytes: 1024,
+  checksum_sha256: "0".repeat(64),
+}
+const seedBackup = Effect.gen(function* () {
+  const backupId = randomUUID()
+  yield* insertBackup(backupId, {
+    relay_id: relayId,
+    target_id: instanceId,
+    ...archive,
+  })
+  yield* insertRows("backup_artifact", {
+    id: randomUUID(),
+    backup_id: backupId,
+    destination_key: "local",
+    status: "available",
+    ...archive,
+    created_at: at,
+    updated_at: at,
+  })
+  yield* insertRows("backup_task", {
+    id: randomUUID(),
+    backup_id: backupId,
+    task_kind: "create",
+    status: "succeeded",
+    created_at: at,
+    updated_at: at,
+  })
+  return backupId
+})
+
+const seed = Effect.gen(function* () {
+  yield* resetDatabase
+  yield* insertRelay(relayId)
+  const teamStorageId = randomUUID()
+  const personalStorageId = randomUUID()
+  yield* insertBackupStorage(teamStorageId)
+  yield* insertBackupStorage(personalStorageId, { owner_user_id: user.id })
+  return { personalStorageId, teamStorageId }
+})
+
+const rejection = (run: () => Promise<unknown>) =>
+  Effect.tryPromise({ try: run, catch: (error) => error as Error }).pipe(
+    Effect.flip,
+    Effect.map((error) => error.message)
+  )
+
+const count = (table: string) =>
+  selectRows(table).pipe(Effect.map((rows) => rows.length))
+
+const restoreTasks = selectRows<{ task_kind: string }>("backup_task").pipe(
+  Effect.map((tasks) => tasks.filter((task) => task.task_kind === "restore"))
+)
+
+describeMysql("backup authorization", () => {
+  layer(TestDatabase)((it) => {
+    it.effect("copying a backup needs download, not create", () =>
+      Effect.gen(function* () {
+        const { teamStorageId } = yield* seed
+        const backupId = yield* seedBackup
+        yield* grant(instanceId, ["backup.create", "backup.read"])
+
+        const message = yield* rejection(() =>
+          copyBackupToDestinationHandler(user, {
+            backupId,
+            storageId: teamStorageId,
+          })
+        )
+
+        assert.include(message, "permission to copy")
+        assert.strictEqual(yield* count("backup_copy_task"), 0)
       })
     )
-    expect(mocks.scheduleCopy).toHaveBeenCalledOnce()
-  })
 
-  it("does not allow a sibling download grant to export the backup", async () => {
-    mocks.grants = [grant("backup.download", "instance-2")]
-    await expect(
-      copyBackupToDestination({ data: { backupId: backup.id, storageId } })
-    ).rejects.toThrow("permission to copy")
-    expect(mocks.loadStorage).not.toHaveBeenCalled()
-    expect(mocks.reserveCopy).not.toHaveBeenCalled()
-  })
+    it.effect("a download grant on the backup's server queues a copy", () =>
+      Effect.gen(function* () {
+        const { teamStorageId } = yield* seed
+        const backupId = yield* seedBackup
+        yield* grant(instanceId, ["backup.download"])
 
-  it("requires download permission when creating directly into personal storage", async () => {
-    mocks.grants = [grant("backup.create")]
-    await expect(
-      createInstanceBackup({
-        data: {
-          instanceId: "instance-1",
-          relayId: "relay-1",
-          name: "Backup",
-          storageIds: [null, storageId],
-        },
+        const result = yield* Effect.promise(() =>
+          copyBackupToDestinationHandler(user, {
+            backupId,
+            storageId: teamStorageId,
+          })
+        )
+
+        const tasks = yield* selectRows<{
+          id: string
+          backup_id: string
+          requested_by: string
+        }>("backup_copy_task")
+        assert.deepStrictEqual(
+          tasks.map((task) => [task.id, task.backup_id, task.requested_by]),
+          [[result.taskId, backupId, user.id]]
+        )
       })
-    ).rejects.toThrow("You do not have permission to perform this action")
-    expect(mocks.rpc).not.toHaveBeenCalled()
-  })
+    )
 
-  it("requires download permission for a personal safety-backup destination", async () => {
-    mocks.grants = [grant("backup.restore"), grant("backup.create")]
-    mocks.rpc.mockResolvedValue({
-      instances: [
-        {
-          id: backup.targetId,
-          observedState: "stopped",
-          desiredState: "stopped",
-        },
-      ],
-    })
-    mocks.run.mockImplementation(async (operation: string) => {
-      if (operation === "backups.getForRestore")
-        return { ...backup, status: "available", backupMode: "full" }
-      if (operation === "backups.resolveStoragePolicy") return { storageId }
-      if (operation === "backups.loadSelectedStorage")
-        return { enabled: true, deleting: false, ownerUserId: "user-1" }
-      throw new Error(`Unexpected operation: ${operation}`)
-    })
+    it.effect("a download grant on another server cannot copy the backup", () =>
+      Effect.gen(function* () {
+        const { teamStorageId } = yield* seed
+        const backupId = yield* seedBackup
+        yield* grant(siblingId, ["backup.download"])
 
-    await expect(
-      restoreInstanceBackup({
-        data: { backupId: backup.id, safetyBackup: true },
+        const message = yield* rejection(() =>
+          copyBackupToDestinationHandler(user, {
+            backupId,
+            storageId: teamStorageId,
+          })
+        )
+
+        assert.include(message, "permission to copy")
+        assert.strictEqual(yield* count("backup_copy_task"), 0)
       })
-    ).rejects.toThrow("Permission denied")
-    expect(mocks.reserveSafety).not.toHaveBeenCalled()
-    expect(mocks.reserveRestore).not.toHaveBeenCalled()
+    )
+
+    it.effect("creating into personal storage also needs download", () =>
+      Effect.gen(function* () {
+        const { personalStorageId } = yield* seed
+        yield* grant(instanceId, ["backup.create"])
+
+        const message = yield* rejection(() =>
+          createInstanceBackupHandler(user, {
+            instanceId,
+            name: "Before update",
+            relayId,
+            storageIds: [null, personalStorageId],
+          })
+        )
+
+        assert.include(message, "do not have permission")
+        assert.strictEqual(yield* count("backup"), 0)
+      })
+    )
+
+    it.effect("create and download together create into personal storage", () =>
+      Effect.gen(function* () {
+        const { personalStorageId } = yield* seed
+        yield* grant(instanceId, ["backup.create", "backup.download"])
+
+        const { backup } = yield* Effect.promise(() =>
+          createInstanceBackupHandler(user, {
+            instanceId,
+            mode: "full",
+            name: "Before update",
+            relayId,
+            storageIds: [null, personalStorageId],
+          })
+        )
+
+        const backups = yield* selectRows<{ id: string; target_id: string }>(
+          "backup"
+        )
+        assert.deepStrictEqual(
+          backups.map((row) => [row.id, row.target_id]),
+          [[backup.id, instanceId]]
+        )
+        const artifacts = yield* selectRows<{ storage_id: string | null }>(
+          "backup_artifact"
+        )
+        assert.sameMembers(
+          artifacts.map((artifact) => artifact.storage_id),
+          [null, personalStorageId]
+        )
+      })
+    )
+
+    it.effect(
+      "a safety backup into personal storage needs download before restoring",
+      () =>
+        Effect.gen(function* () {
+          const { personalStorageId } = yield* seed
+          const backupId = yield* seedBackup
+          yield* insertRows("backup_policy", {
+            relay_id: relayId,
+            target_kind: "instance",
+            target_id: instanceId,
+            storage_id: personalStorageId,
+            exclude_patterns: "[]",
+            created_at: at,
+            updated_at: at,
+          })
+          yield* grant(instanceId, ["backup.restore", "backup.create"])
+
+          const message = yield* rejection(() =>
+            restoreInstanceBackupHandler(user, {
+              backupId,
+              safetyBackup: true,
+            })
+          )
+
+          assert.include(message, "do not have permission")
+          assert.strictEqual(yield* count("backup"), 1)
+          assert.deepStrictEqual(yield* restoreTasks, [])
+        })
+    )
+
+    it.effect("a safety backup needs create before restoring", () =>
+      Effect.gen(function* () {
+        yield* seed
+        const backupId = yield* seedBackup
+        yield* grant(instanceId, ["backup.restore"])
+
+        const message = yield* rejection(() =>
+          restoreInstanceBackupHandler(user, { backupId, safetyBackup: true })
+        )
+
+        assert.include(message, "do not have permission")
+        assert.strictEqual(yield* count("backup"), 1)
+        assert.deepStrictEqual(yield* restoreTasks, [])
+      })
+    )
+
+    it.effect("restore queues the safety backup ahead of the restore", () =>
+      Effect.gen(function* () {
+        const { personalStorageId } = yield* seed
+        const backupId = yield* seedBackup
+        yield* insertRows("backup_policy", {
+          relay_id: relayId,
+          target_kind: "instance",
+          target_id: instanceId,
+          storage_id: personalStorageId,
+          exclude_patterns: "[]",
+          created_at: at,
+          updated_at: at,
+        })
+        yield* grant(instanceId, [
+          "backup.restore",
+          "backup.create",
+          "backup.download",
+        ])
+
+        const result = yield* Effect.promise(() =>
+          restoreInstanceBackupHandler(user, { backupId, safetyBackup: true })
+        )
+
+        const tasks = yield* selectRows<{
+          id: string
+          backup_id: string
+          task_kind: string
+          depends_on_task_id: string | null
+        }>("backup_task")
+        const restore = tasks.find((task) => task.id === result.restoreTaskId)
+        const safety = tasks.find(
+          (task) => task.backup_id === result.safetyBackupId
+        )
+        assert.strictEqual(restore?.backup_id, backupId)
+        assert.strictEqual(restore?.task_kind, "restore")
+        assert.strictEqual(safety?.task_kind, "create")
+        assert.strictEqual(restore?.depends_on_task_id, safety?.id)
+      })
+    )
   })
 })

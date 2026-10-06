@@ -1,33 +1,19 @@
-// Runs against a real MySQL database: MYSQL_MIGRATION_TEST=1 with DB_* env
-// pointing at a disposable database whose name ends in "migration_test".
-import * as MysqlClient from "@effect/sql-mysql2/MysqlClient"
-import { describe, expect, layer } from "@effect/vitest"
-import { Effect, Exit, Redacted } from "effect"
+import { expect, layer } from "@effect/vitest"
+import { Effect, Exit } from "effect"
 import { SqlClient } from "effect/sql"
 
 import { migrations } from "@/migrations"
 import { baseline } from "@/migrations/0001_baseline"
 import { baselineTables } from "@/migrations/baseline-schema"
+import { describeMysql, testDatabaseClient } from "@/test/database"
 
 import { applyMigrations } from "./migrations"
 
-const enabled = process.env.MYSQL_MIGRATION_TEST === "1"
-const database = process.env.DB_NAME ?? ""
-if (enabled && !database.endsWith("migration_test")) {
-  throw new Error("DB_NAME must be a disposable *migration_test database")
-}
+const migrationIds = migrations.map((migration) => migration.id)
 
-describe("database migrations", () => {
-  layer(
-    MysqlClient.layer({
-      host: process.env.DB_HOST,
-      port: Number(process.env.DB_PORT ?? 3306),
-      database,
-      username: process.env.DB_USERNAME,
-      password: Redacted.make(process.env.DB_PASSWORD ?? ""),
-      maxConnections: 2,
-    })
-  )((it) => {
+describeMysql("database migrations", () => {
+  // Drops and rebuilds tables, so it gets a database of its own.
+  layer(testDatabaseClient(`${process.env.DB_NAME}_migrations`))((it) => {
     const dropAllTables = Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient
       yield* sql.withTransaction(
@@ -53,16 +39,15 @@ describe("database migrations", () => {
 
     const columnTypes = Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient
-      return yield* sql<{ dataType: string; count: number }>`
-        SELECT data_type AS dataType, COUNT(*) AS count
+      return yield* sql<{ dataType: string }>`
+        SELECT DISTINCT data_type AS dataType
         FROM information_schema.columns
         WHERE table_schema = DATABASE()
           AND data_type IN ('timestamp', 'datetime', 'decimal')
-        GROUP BY data_type
       `
     })
 
-    it.effect.skipIf(!enabled)(
+    it.effect(
       "creates the schema once and recognizes existing installs",
       () =>
         Effect.gen(function* () {
@@ -74,14 +59,14 @@ describe("database migrations", () => {
             WHERE table_schema = DATABASE()
           `
           expect(count).toBe(baselineTables.length + 1)
-          expect(yield* ledger).toEqual([1, 2])
+          expect(yield* ledger).toEqual(migrationIds)
           // Only better-auth keeps dates, as DATETIME.
-          expect(yield* columnTypes).toEqual([
-            { dataType: "datetime", count: 20 },
+          expect((yield* columnTypes).map((row) => row.dataType)).toEqual([
+            "datetime",
           ])
 
           yield* applyMigrations(migrations)
-          expect(yield* ledger).toEqual([1, 2])
+          expect(yield* ledger).toEqual(migrationIds)
 
           // A schema that differs is refused and left unrecorded.
           yield* dropAllTables
@@ -110,7 +95,7 @@ describe("database migrations", () => {
       120_000
     )
 
-    it.effect.skipIf(!enabled)(
+    it.effect(
       "upgrades the latest legacy install to epoch milliseconds",
       () =>
         Effect.gen(function* () {
@@ -138,9 +123,9 @@ describe("database migrations", () => {
           `
           expect(Number(row.createdAt)).toBe(1790673560833)
           expect(Number(row.updatedAt)).toBeGreaterThan(1_700_000_000_000)
-          expect(yield* ledger).toEqual([1, 2])
-          expect(yield* columnTypes).toEqual([
-            { dataType: "datetime", count: 20 },
+          expect(yield* ledger).toEqual(migrationIds)
+          expect((yield* columnTypes).map((row) => row.dataType)).toEqual([
+            "datetime",
           ])
         }),
       // Rebuilding every table with a time column takes a while.

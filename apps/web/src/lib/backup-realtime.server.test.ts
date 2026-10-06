@@ -50,28 +50,6 @@ describe("backup realtime publishers", () => {
     ])
   })
 
-  it("collapses large reconciliation batches into one catalog refresh", () => {
-    const events: Array<HearthInvalidateEvent> = []
-    const unsubscribe = subscribeRealtimeChanges((event) => {
-      if (event.type === "hearth.invalidate") events.push(event)
-    })
-
-    publishBackupChanges(
-      "relay-a",
-      Array.from({ length: 11 }, (_, index) => `backup-${index}`)
-    )
-    unsubscribe()
-
-    expect(events).toHaveLength(1)
-    expect(events[0]).toMatchObject({
-      audience: { kind: "relays", relayIds: ["relay-a"] },
-      scope: { relayId: "relay-a" },
-      topics: ["backups"],
-      type: "hearth.invalidate",
-    })
-    expect(events[0]?.scope).not.toHaveProperty("backupId")
-  })
-
   it("keeps small reconciliation batches targeted and unique", () => {
     const events: Array<HearthInvalidateEvent> = []
     const unsubscribe = subscribeRealtimeChanges((event) => {

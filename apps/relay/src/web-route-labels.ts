@@ -47,7 +47,7 @@ export function webRouteRecoveryLabels(
   )
 }
 
-export function decodeWebRouteRecoveryLabels(
+function decodeWebRouteRecoveryLabels(
   labels: Readonly<Record<string, string | undefined>>
 ): {
   readonly routes: RelayInstanceWebRoutes

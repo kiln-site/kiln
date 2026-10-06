@@ -1,93 +1,156 @@
-import { Schema } from "effect"
+import { Option, Schema } from "effect"
 import { describe, expect, it } from "vite-plus/test"
 
 import {
   RelayAuthReadySchema,
-  RelayBrowserCapabilitySchema,
+  RelayControlClientMessageSchema,
+  RelayControlServerMessageSchema,
   relayBrowserCapabilityV2Feature,
-  relayBrowserLeaseRenewalV1Feature,
   relayControlProtocol,
-  relayFileRequestReplayV1Feature,
 } from "./relay-protocol.js"
 
-const LegacyRelayAuthReadySchema = Schema.Struct({
-  actions: Schema.Array(Schema.String),
-  clientId: Schema.String,
-  protocol: Schema.Literal(relayControlProtocol),
-  relayBuild: Schema.String,
-  role: Schema.Literals(["full_access", "read_only", "custom"]),
-  type: Schema.Literal("auth.ready"),
-  v: Schema.Literal(1),
-})
+// Decode exactly as Hearth (server messages) and Relay (client messages) do.
+const decodeServerMessage = Schema.decodeUnknownOption(
+  RelayControlServerMessageSchema
+)
+const decodeClientMessage = Schema.decodeUnknownOption(
+  RelayControlClientMessageSchema
+)
 
-describe("Relay browser protocol compatibility", () => {
-  it("lets a pre-feature ready decoder accept advertised features", () => {
-    const ready = {
-      actions: ["relay.read"],
-      browserIssuerGeneration: 4,
-      clientId: "hearth-a",
-      features: [
-        relayBrowserCapabilityV2Feature,
-        relayBrowserLeaseRenewalV1Feature,
-        relayFileRequestReplayV1Feature,
-      ],
-      protocol: relayControlProtocol,
-      relayBuild: "test",
-      role: "read_only" as const,
-      type: "auth.ready" as const,
-      v: 1 as const,
+const authReady = {
+  actions: ["relay.read"],
+  browserIssuerGeneration: 4,
+  clientId: "hearth-a",
+  features: [relayBrowserCapabilityV2Feature],
+  protocol: relayControlProtocol,
+  relayBuild: "test",
+  role: "read_only",
+  type: "auth.ready",
+  v: 1,
+} as const
+const request = {
+  deadline: 1_000,
+  id: "request-1",
+  operation: "relay.snapshot",
+  payload: { any: "thing" },
+  subject: "user-1",
+  timeoutMs: 500,
+  type: "request",
+  v: 1,
+} as const
+const cancel = { id: "c", replyTo: "request-1", type: "cancel", v: 1 } as const
+const response = {
+  id: "r",
+  payload: null,
+  replyTo: "request-1",
+  type: "response",
+  v: 1,
+} as const
+const error = {
+  code: "failed",
+  id: "e",
+  message: "Failed",
+  replyTo: null,
+  retryable: false,
+  type: "error",
+  v: 1,
+} as const
+
+const serverMessages = [
+  {
+    expiresAt: 1,
+    nonce: "n",
+    relayId: "relay",
+    sessionId: "s",
+    signature: "sig",
+    type: "auth.challenge",
+    v: 1,
+  },
+  authReady,
+  cancel,
+  response,
+  error,
+  {
+    event: "relay.snapshot",
+    id: "ev",
+    payload: {},
+    seq: 1,
+    type: "event",
+    v: 1,
+  },
+  request,
+] as const
+const clientMessages = [
+  {
+    clientId: "hearth-a",
+    features: [relayBrowserCapabilityV2Feature],
+    signature: "sig",
+    type: "auth.response",
+    v: 1,
+  },
+  request,
+  cancel,
+  response,
+  error,
+] as const
+
+describe("Relay control protocol compatibility", () => {
+  it("decodes every message from a newer peer that adds fields", () => {
+    const newer = { addedByNewerPeer: { nested: true }, futureFlag: 1 }
+    for (const message of serverMessages) {
+      expect(
+        decodeServerMessage({ ...message, ...newer }),
+        message.type
+      ).toEqual(Option.some(message))
     }
-    expect(
-      Schema.decodeUnknownSync(RelayAuthReadySchema)(ready).features
-    ).toEqual(ready.features)
-    expect(
-      Schema.decodeUnknownSync(RelayAuthReadySchema)(ready)
-        .browserIssuerGeneration
-    ).toBe(4)
-    expect(
-      Schema.decodeUnknownSync(LegacyRelayAuthReadySchema)(ready)
-    ).not.toHaveProperty("features")
-    expect(
-      Schema.decodeUnknownSync(LegacyRelayAuthReadySchema)(ready)
-    ).not.toHaveProperty("browserIssuerGeneration")
+    for (const message of clientMessages) {
+      expect(
+        decodeClientMessage({ ...message, ...newer }),
+        message.type
+      ).toEqual(Option.some(message))
+    }
+  })
 
+  it("decodes messages from an older peer without later optional fields", () => {
+    const {
+      browserIssuerGeneration: _generation,
+      features: _features,
+      ...legacyReady
+    } = authReady
+    const {
+      subject: _subject,
+      timeoutMs: _timeoutMs,
+      ...legacyRequest
+    } = request
+    const { features: _responseFeatures, ...legacyAuthResponse } =
+      clientMessages[0]
+
+    expect(decodeServerMessage(legacyReady)).toEqual(Option.some(legacyReady))
+    expect(decodeServerMessage(legacyRequest)).toEqual(
+      Option.some(legacyRequest)
+    )
+    expect(decodeClientMessage(legacyRequest)).toEqual(
+      Option.some(legacyRequest)
+    )
+    expect(decodeClientMessage(legacyAuthResponse)).toEqual(
+      Option.some(legacyAuthResponse)
+    )
+  })
+
+  it("rejects browser issuer generations that cannot order revocations", () => {
     for (const browserIssuerGeneration of [
       -1,
       1.5,
       Number.MAX_SAFE_INTEGER + 1,
     ]) {
-      expect(() =>
-        Schema.decodeUnknownSync(RelayAuthReadySchema)({
-          ...ready,
-          browserIssuerGeneration,
-        })
-      ).toThrow()
-    }
-  })
-
-  it("keeps capability version independent from browser subprotocol versions", () => {
-    const capability = Schema.decodeUnknownSync(RelayBrowserCapabilitySchema)({
-      actions: ["instance.console.read"],
-      audience: "relay-a",
-      authorizationRevision: 12,
-      capabilityId: "capability-a",
-      expiresAt: 60_000,
-      instanceId: "instance-a",
-      issuedAt: 1,
-      issuer: "hearth-a",
-      issuerGeneration: 3,
-      keyThumbprint: "thumbprint-a",
-      loginSessionId: "session-a",
-      operation: "console",
-      origin: "https://hearth.test",
-      path: null,
-      subject: "user-a",
-      version: 2,
-    })
-    expect(capability.version).toBe(2)
-    if (capability.version === 2) {
-      expect(capability.operation).toBe("console")
-      expect(capability.authorizationRevision).toBe(12)
+      expect(
+        Option.isNone(
+          Schema.decodeUnknownOption(RelayAuthReadySchema)({
+            ...authReady,
+            browserIssuerGeneration,
+          })
+        )
+      ).toBe(true)
     }
   })
 })

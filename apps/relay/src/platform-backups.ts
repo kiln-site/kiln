@@ -47,7 +47,7 @@ export async function createEncryptedPlatformBackup(
   input: BackupCreateTaskInput,
   destination: string,
   progress: { completed: number; total: number },
-  signal: AbortSignal = new AbortController().signal
+  signal: AbortSignal
 ): Promise<BackupArchiveCreateTaskResult> {
   signal.throwIfAborted()
   const installationId = requiredInstallationId(config, input.target.id)
@@ -138,7 +138,7 @@ export async function createEncryptedPlatformBackup(
   }
 }
 
-export function parsePlatformHeader(header: Buffer): {
+function parsePlatformHeader(header: Buffer): {
   initializationVector: Buffer
   manifestLength: number
   salt: Buffer
@@ -162,10 +162,7 @@ export function parsePlatformHeader(header: Buffer): {
   }
 }
 
-export function derivePlatformKey(
-  recoveryKey: string,
-  salt: Buffer
-): Promise<Buffer> {
+function derivePlatformKey(recoveryKey: string, salt: Buffer): Promise<Buffer> {
   return new Promise((resolveKey, rejectKey) => {
     scrypt(recoveryKey, salt, 32, (error, key) => {
       if (error) rejectKey(error)

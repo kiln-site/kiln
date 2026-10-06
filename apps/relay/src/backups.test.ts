@@ -1,498 +1,105 @@
-import { createHash, randomBytes } from "node:crypto"
-import { createWriteStream, existsSync, mkdtempSync, rmSync } from "node:fs"
-import { mkdir, readFile, readdir, symlink, writeFile } from "node:fs/promises"
+import { createHash } from "node:crypto"
+import {
+  chmodSync,
+  createWriteStream,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  watch,
+  writeFileSync,
+} from "node:fs"
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  readdir,
+  rm,
+  symlink,
+  truncate,
+  writeFile,
+} from "node:fs/promises"
+import { createServer } from "node:net"
 import { tmpdir } from "node:os"
-import { join, resolve } from "node:path"
-import { afterAll, assert, describe, it, layer } from "@effect/vitest"
-import { Effect, Fiber } from "effect"
+import { delimiter, join, resolve } from "node:path"
+import { afterAll, assert, beforeAll, describe, it } from "@effect/vitest"
+import { Effect, Exit, Fiber, type Scope } from "effect"
 import { TestClock } from "effect/testing"
 import { openPromise } from "yauzl"
 import ZipStream from "zip-stream"
 
 import type {
   BackupArchiveCreateTaskResult,
-  BackupArchiveManifest,
   BackupCreateTaskInput,
-  BackupCreateTaskResult,
-  BackupDeleteTaskInput,
-  BackupRestoreTaskInput,
-  BackupTaskPhase,
-  BackupTaskResult,
+  BackupTaskInput,
+  RelayBackupTask,
 } from "@workspace/contracts"
 import {
   backupArchiveManifestSchema,
   brickRecipeSchema,
-  relayBackupTaskSchema,
 } from "@workspace/contracts"
 
-import {
-  BackupManager,
-  backupPathIsExcluded,
-  createPortableInstanceBackup,
-  deleteBackupArtifacts,
-  removeBackupExport,
-  reuseValidExport,
-  storeCreatedBackup,
-} from "./backups.js"
-import type { ResticDriver } from "./restic.js"
 import {
   recoverInterruptedRestores,
   restorePortableInstanceBackup,
 } from "./backup-restore.js"
-import { loadConfig, type RelayInstanceConfig } from "./config.js"
+import { BackupManager } from "./backups.js"
+import {
+  backupArchivePath,
+  resticRepositoryPath,
+} from "./backups/destinations/index.js"
 import { BrickCatalog, brickSnapshotDirectory } from "./bricks.js"
+import type { RelayConfig, RelayInstanceConfig } from "./config.js"
 import { makeRelayStateLayer, RelayStateStore } from "./effect/state.js"
+import { testInstance, testRelayConfig } from "./test/fixtures.js"
 
-const testDirectory = mkdtempSync(join(tmpdir(), "kiln-backups-"))
+// Restic is faked at its process boundary: a stateful `restic` executable first
+// on PATH keeps each repository's snapshots and stored data in `repos.json`.
+const fakeRestic = mkdtempSync(join(tmpdir(), "kiln-fake-restic-"))
+const originalPath = process.env.PATH
 
-afterAll(() => {
-  rmSync(testDirectory, { force: true, recursive: true })
+beforeAll(() => {
+  const bin = join(fakeRestic, "bin")
+  mkdirSync(bin)
+  writeFileSync(join(bin, "restic"), fakeResticScript(fakeRestic))
+  chmodSync(join(bin, "restic"), 0o755)
+  process.env.PATH = `${bin}${delimiter}${originalPath ?? ""}`
 })
 
-describe("Relay backups", () => {
-  it("keeps v1 archive manifests readable", () => {
-    assert.isTrue(
-      backupArchiveManifestSchema.safeParse({
-        artifactKind: "archive",
-        backupId: "00000000-0000-4000-8000-000000000001",
-        createdAt: "2026-08-20T12:00:00.000Z",
-        formatVersion: 1,
-        mode: "full",
-        target: { id: "instance-1", kind: "instance" },
-      }).success
-    )
-  })
+afterAll(() => {
+  process.env.PATH = originalPath
+  rmSync(fakeRestic, { force: true, recursive: true })
+})
 
-  it("rejects inconsistent task envelopes and result kinds", () => {
-    const input = backupInput(4)
-    const task = {
-      backupId: input.backupId,
-      bytesCompleted: 1,
-      bytesTotal: 1,
-      createdAt: 1,
-      currentArtifactId: null,
-      currentPath: null,
-      error: null,
-      finishedAt: 2,
-      input,
-      inputRefreshRequired: false,
-      kind: "create" as const,
-      phase: null,
-      result: backupResult(0),
-      startedAt: 1,
-      status: "succeeded" as const,
-      taskId: input.taskId,
-      updatedAt: 2,
-    }
-    assert.isTrue(relayBackupTaskSchema.safeParse(task).success)
-    const legacyTask = structuredClone(task)
-    Reflect.deleteProperty(legacyTask, "currentArtifactId")
-    Reflect.deleteProperty(legacyTask, "currentPath")
-    Reflect.deleteProperty(legacyTask, "phase")
-    const parsedLegacyTask = relayBackupTaskSchema.parse(legacyTask)
-    assert.strictEqual(parsedLegacyTask.currentArtifactId, null)
-    assert.strictEqual(parsedLegacyTask.currentPath, null)
-    assert.strictEqual(parsedLegacyTask.phase, null)
-    assert.isFalse(
-      relayBackupTaskSchema.safeParse({
-        ...task,
-        backupId: backupInput(5).backupId,
-      }).success
-    )
-    assert.isFalse(
-      relayBackupTaskSchema.safeParse({
-        ...task,
-        result: { warnings: [] },
-      }).success
-    )
-  })
-
-  it.effect("keeps completed upload progress through finalizing", () =>
-    Effect.gen(function* () {
-      const localArtifactId = "30000000-0000-4000-8000-000000000001"
-      const remoteArtifactId = "30000000-0000-4000-8000-000000000002"
-      const input = {
-        ...backupInput(12),
-        destination: { artifactId: localArtifactId, kind: "local" },
-        replicas: [
-          {
-            allowPrivateNetwork: false,
-            artifactId: remoteArtifactId,
-            headers: {},
-            kind: "s3",
-            objectKey: "backups/test.zip",
-            uploadUrl: "https://example.com/backups/test.zip",
-          },
-        ],
-      } satisfies BackupCreateTaskInput & { kind: "create" }
-      const result = backupResult(12)
-      const progress = {
-        completed: 0,
-        currentArtifactId: null,
-        currentPath: null,
-        phase: "uploading",
-        total: 0,
-      } satisfies Parameters<typeof storeCreatedBackup>[3]
-
-      const stored = yield* storeCreatedBackup(
-        testConfig(testDirectory),
-        input,
-        result,
-        progress,
-        new AbortController().signal,
-        (_config, _input, uploaded, _signal, onChunk) => {
-          onChunk(1)
-          onChunk(uploaded.bytes - 1)
-          return Effect.succeed(uploaded)
-        }
-      )
-
-      assert.strictEqual(progress.completed, result.bytes)
-      assert.strictEqual(progress.currentArtifactId, remoteArtifactId)
-      assert.strictEqual(progress.phase, "finalizing")
-      assert.strictEqual(progress.total, result.bytes)
-      assert.deepStrictEqual(stored.artifacts, [
-        {
-          artifactId: localArtifactId,
-          error: null,
-          status: "available",
-        },
-        {
-          artifactId: remoteArtifactId,
-          error: null,
-          status: "available",
-        },
-      ])
-    })
-  )
-
-  it.effect("reports deletion progress for each artifact", () =>
-    Effect.gen(function* () {
-      const localArtifactId = "31000000-0000-4000-8000-000000000001"
-      const remoteArtifactId = "31000000-0000-4000-8000-000000000002"
-      const input = {
-        backupId: "31000000-0000-4000-8000-000000000003",
-        destination: { artifactId: localArtifactId, kind: "local" },
-        kind: "delete",
-        replicas: [
-          {
-            allowPrivateNetwork: false,
-            artifactId: remoteArtifactId,
-            deleteUrl: "https://example.com/backups/test.zip",
-            headers: {},
-            kind: "s3",
-            objectKey: "backups/test.zip",
-          },
-        ],
-        target: { id: "instance-1", kind: "instance" },
-        taskId: "31000000-0000-4000-8000-000000000004",
-      } satisfies BackupDeleteTaskInput & { kind: "delete" }
-      const snapshots: Array<{
-        currentArtifactId: string | null
-        result: Exclude<BackupTaskResult, BackupCreateTaskResult>
-      }> = []
-
-      const result = yield* deleteBackupArtifacts(
-        testConfig(testDirectory),
-        input,
-        (currentArtifactId, progress) => {
-          snapshots.push({
-            currentArtifactId,
-            result: structuredClone(progress),
-          })
-          return Effect.succeed(true)
-        },
-        () => Effect.succeed({ warnings: [] })
-      )
-
-      assert.deepStrictEqual(
-        snapshots.map(({ currentArtifactId, result: progress }) => ({
-          currentArtifactId,
-          outcomes: progress.artifacts ?? [],
-        })),
-        [
-          { currentArtifactId: localArtifactId, outcomes: [] },
-          {
-            currentArtifactId: localArtifactId,
-            outcomes: [
-              { artifactId: localArtifactId, error: null, status: "deleted" },
-            ],
-          },
-          {
-            currentArtifactId: remoteArtifactId,
-            outcomes: [
-              { artifactId: localArtifactId, error: null, status: "deleted" },
-            ],
-          },
-          {
-            currentArtifactId: remoteArtifactId,
-            outcomes: [
-              { artifactId: localArtifactId, error: null, status: "deleted" },
-              {
-                artifactId: remoteArtifactId,
-                error: null,
-                status: "deleted",
-              },
-            ],
-          },
-        ]
-      )
-      assert.deepStrictEqual(result, snapshots.at(-1)?.result)
-    })
-  )
-
-  layer(makeRelayStateLayer(join(testDirectory, "relay.sqlite")))((it) => {
-    it.effect("runs durable tasks through one Relay-wide worker", () =>
-      Effect.gen(function* () {
-        let active = 0
-        let maxActive = 0
-        const executionOrder: Array<number> = []
-        let call = 0
-        const manager = yield* BackupManager.make({
-          config: loadConfig({
-            KILN_RELAY_DATA_DIR: testDirectory,
-            KILN_RELAY_HOST: "relay.test",
-            NODE_ENV: "test",
-          }),
-          createArchive: async () => {
-            const index = call
-            call += 1
-            active += 1
-            maxActive = Math.max(maxActive, active)
-            executionOrder.push(index)
-            await new Promise((resolveDelay) => setTimeout(resolveDelay, 25))
-            active -= 1
-            return backupResult(index)
-          },
-          findInstance: async () => testInstance(),
-          isInstanceStopped: async () => true,
-        })
-        const first = backupInput(1)
-        const second = backupInput(2)
-        yield* manager.enqueue(first)
-        yield* manager.enqueue(second)
-        yield* manager.runPending()
-
-        assert.deepStrictEqual(executionOrder, [0, 1])
-        assert.strictEqual(maxActive, 1)
-        assert.deepStrictEqual(
-          (yield* manager.list()).map((task) => task.status),
-          ["succeeded", "succeeded"]
-        )
-      })
-    )
-
-    it.effect("cancels a running create task and aborts its archive work", () =>
-      Effect.gen(function* () {
-        let started: (() => void) | undefined
-        const archiveStarted = new Promise<void>((resolveStarted) => {
-          started = resolveStarted
-        })
-        const manager = yield* BackupManager.make({
-          config: loadConfig({
-            KILN_RELAY_DATA_DIR: testDirectory,
-            KILN_RELAY_HOST: "relay.test",
-            NODE_ENV: "test",
-          }),
-          createArchive: (_input, _instance, _progress, signal) =>
-            new Promise((_resolveArchive, rejectArchive) => {
-              signal.addEventListener(
-                "abort",
-                () => rejectArchive(signal.reason),
-                { once: true }
-              )
-              started?.()
-            }),
-          findInstance: async () => testInstance(),
-          isInstanceStopped: async () => true,
-        })
-        const input = backupInput(9)
-        yield* manager.enqueue(input)
-        const worker = yield* Effect.forkChild(manager.runPending())
-        yield* Effect.promise(() => archiveStarted)
-
-        const cancelled = yield* manager.cancel(input.taskId)
-        yield* Fiber.join(worker)
-
-        assert.strictEqual(cancelled?.status, "cancelled")
-        assert.strictEqual(
-          (yield* manager.get(input.taskId))?.error,
-          "Cancelled by user"
-        )
-      })
-    )
-
-    it.effect("automatically cancels a create task at the backup timeout", () =>
-      Effect.gen(function* () {
-        let started: (() => void) | undefined
-        const archiveStarted = new Promise<void>((resolveStarted) => {
-          started = resolveStarted
-        })
-        const manager = yield* BackupManager.make({
-          config: {
-            ...loadConfig({
-              KILN_RELAY_DATA_DIR: testDirectory,
-              KILN_RELAY_HOST: "relay.test",
-              NODE_ENV: "test",
-            }),
-            backupTimeoutMs: 10,
-          },
-          createArchive: (_input, _instance, _progress, signal) =>
-            new Promise((_resolveArchive, rejectArchive) => {
-              signal.addEventListener(
-                "abort",
-                () => rejectArchive(signal.reason),
-                { once: true }
-              )
-              started?.()
-            }),
-          findInstance: async () => testInstance(),
-          isInstanceStopped: async () => true,
-        })
-        const input = backupInput(12)
-        yield* manager.enqueue(input)
-        const worker = yield* Effect.forkChild(manager.runPending())
-        yield* Effect.promise(() => archiveStarted)
-
-        yield* TestClock.adjust("10 millis")
-        yield* Fiber.join(worker)
-
-        const cancelled = yield* manager.get(input.taskId)
-        assert.strictEqual(cancelled?.status, "cancelled")
-        assert.strictEqual(
-          cancelled?.error,
-          "Cancelled after reaching the configured backup timeout"
-        )
-      })
-    )
-
-    it.effect("cancels a queued create task before archive work starts", () =>
-      Effect.gen(function* () {
-        let archiveCalls = 0
-        const manager = yield* BackupManager.make({
-          config: loadConfig({
-            KILN_RELAY_DATA_DIR: testDirectory,
-            KILN_RELAY_HOST: "relay.test",
-            NODE_ENV: "test",
-          }),
-          createArchive: async () => {
-            archiveCalls += 1
-            return backupResult(11)
-          },
-          findInstance: async () => testInstance(),
-          isInstanceStopped: async () => true,
-        })
-        const input = backupInput(11)
-        yield* manager.enqueue(input)
-
-        const cancelled = yield* manager.cancel(input.taskId)
-        yield* manager.runPending()
-
-        assert.strictEqual(cancelled?.status, "cancelled")
-        assert.strictEqual(archiveCalls, 0)
-        assert.strictEqual(
-          (yield* manager.get(input.taskId))?.error,
-          "Cancelled by user"
-        )
-      })
-    )
-
-    it.effect("includes persisted web routes in managed archives", () =>
-      Effect.gen(function* () {
-        const config = testConfig(join(testDirectory, "managed-manifest"))
-        const root = resolve(config.rootDirectory, "instance-1")
-        yield* Effect.promise(() => mkdir(root, { recursive: true }))
-        yield* Effect.promise(() =>
-          writeFile(resolve(root, "server.txt"), "data")
-        )
-        const state = yield* RelayStateStore
-        const route = {
-          hostname: "map.kiln.test",
-          id: "a11ce000",
-          name: "Map",
-          path: null,
-          stripPrefix: true,
-          targetPort: 8_123,
-        }
-        yield* state.replaceInstanceRoutes("instance-1", [route])
-        const manager = yield* BackupManager.make({
-          config,
-          findInstance: async () => testInstance(),
-          isInstanceStopped: async () => true,
-        })
-        const input = backupInput(13)
-        yield* manager.enqueue(input)
-        yield* manager.runPending()
-
-        assert.strictEqual(
-          (yield* manager.get(input.taskId))?.status,
-          "succeeded"
-        )
-        const manifest = yield* Effect.promise(() =>
-          readArchiveManifest(
-            resolve(config.dataDirectory, "backups", `${input.backupId}.zip`)
-          )
-        )
-        assert.strictEqual(manifest.formatVersion, 3)
-        if (manifest.formatVersion === 3) {
-          assert.deepStrictEqual(manifest.server.network.webRoutes, [route])
-        }
-        yield* state.replaceInstanceRoutes("instance-1", [])
-      })
-    )
-  })
-
-  it.effect("creates an atomic, checksummed archive with safe exclusions", () =>
-    Effect.acquireUseRelease(
-      Effect.promise(() =>
-        import("node:fs/promises").then(({ mkdtemp }) =>
-          mkdtemp(resolve(tmpdir(), "kiln-backup-archive-"))
-        )
-      ),
-      (directory) =>
+describe("Relay archive backups", () => {
+  it.effect(
+    "creates a checksummed archive with server metadata and safe exclusions",
+    () =>
+      withRelay("kiln-backup-archive-", ({ config, root }) =>
         Effect.gen(function* () {
-          const config = loadConfig({
-            KILN_RELAY_DATA_DIR: directory,
-            KILN_RELAY_HOST: "relay.test",
-            NODE_ENV: "test",
+          yield* Effect.promise(async () => {
+            await mkdir(resolve(root, "world"), { recursive: true })
+            await mkdir(resolve(root, "logs"), { recursive: true })
+            await writeFile(resolve(root, "world", "level.dat"), "level")
+            await writeFile(resolve(root, "session.lock"), "lock")
+            await writeFile(resolve(root, "logs", "debug.log"), "debug")
+            await symlink("level.dat", resolve(root, "world", "latest"))
           })
-          const root = resolve(directory, "instances", "instance-1")
-          yield* Effect.promise(() =>
-            mkdir(resolve(root, "world"), { recursive: true })
-          )
-          yield* Effect.promise(() =>
-            writeFile(resolve(root, "world", "level.dat"), "level")
-          )
-          yield* Effect.promise(() =>
-            writeFile(resolve(root, "session.lock"), "lock")
-          )
-          yield* Effect.promise(() =>
-            symlink("level.dat", resolve(root, "world", "latest"))
-          )
-
-          const progress: {
-            completed: number
-            currentArtifactId: string | null
-            currentPath: string | null
-            phase: BackupTaskPhase
-            total: number
-          } = {
-            completed: 0,
-            currentArtifactId: null,
-            currentPath: null,
-            phase: "preparing",
-            total: 0,
-          }
-          const input = backupInput(3)
-          yield* Effect.promise(() =>
-            mkdir(resolve(directory, "backups"), { recursive: true })
-          )
-          yield* Effect.promise(() =>
-            writeFile(
-              resolve(directory, "backups", `.${input.backupId}.stale.partial`),
+          const input = { ...backupInput(3), exclude: ["logs/**"] }
+          yield* Effect.promise(async () => {
+            await mkdir(resolve(config.dataDirectory, "backups"), {
+              recursive: true,
+            })
+            await writeFile(
+              resolve(
+                config.dataDirectory,
+                "backups",
+                `.${input.backupId}.stale.partial`
+              ),
               "stale"
             )
-          )
+          })
           const snapshotRecipe = testBrickRecipe()
           const snapshotSha256 = yield* Effect.promise(() =>
             new BrickCatalog(
@@ -500,8 +107,7 @@ describe("Relay backups", () => {
               config.dataDirectory
             ).saveSnapshot(snapshotRecipe)
           )
-          const instance: RelayInstanceConfig = {
-            ...testInstance(),
+          const instance = testInstance({
             brickConsoleStopCommands: ["stop"],
             brickFormat: "kiln.brick/v1",
             brickId: "paper",
@@ -530,7 +136,7 @@ describe("Relay backups", () => {
             publicPort: 25_565,
             tailscale: { enabled: true, subdomain: "survival" },
             variables: { memory: "4G", online_mode: false },
-          }
+          })
           const webRoutes = [
             {
               hostname: "map.kiln.test",
@@ -541,33 +147,27 @@ describe("Relay backups", () => {
               targetPort: 8_123,
             },
           ]
-          const result = yield* Effect.promise(() =>
-            createPortableInstanceBackup(
-              config,
-              input,
-              instance,
-              progress,
-              undefined,
-              webRoutes
-            )
-          )
-          assert.strictEqual(
-            result.filename,
-            `backup-${input.backupId.slice(0, 8)}.zip`
-          )
-          const archivePath = resolve(
-            directory,
-            "backups",
-            `${input.backupId}.zip`
-          )
+          const state = yield* RelayStateStore
+          yield* state.replaceInstanceRoutes(instance.id, webRoutes)
+          const manager = yield* backupManager(config, async () => instance)
+
+          const task = yield* runTask(manager, input)
+
+          assert.strictEqual(task.status, "succeeded")
+          const result = archiveResult(task)
+          const archivePath = backupArchivePath(config, input.backupId)
           const archive = yield* Effect.promise(() => readFile(archivePath))
           assert.strictEqual(result.bytes, archive.byteLength)
-          assert.strictEqual(
-            result.checksumSha256,
-            createHash("sha256").update(archive).digest("hex")
-          )
-          const manifest = yield* Effect.promise(() =>
-            readArchiveManifest(archivePath)
+          assert.strictEqual(result.checksumSha256, sha256(archive))
+          const contents = yield* Effect.promise(() => readArchive(archivePath))
+          assert.deepStrictEqual([...contents.keys()].sort(), [
+            ".kiln-backup/manifest.json",
+            "world/level.dat",
+          ])
+          const manifest = backupArchiveManifestSchema.parse(
+            JSON.parse(
+              contents.get(".kiln-backup/manifest.json") ?? ""
+            ) as unknown
           )
           assert.strictEqual(manifest.formatVersion, 3)
           if (manifest.formatVersion === 3) {
@@ -604,733 +204,944 @@ describe("Relay backups", () => {
               version: "1.21.8",
             })
           }
-          assert.strictEqual(progress.completed, 5)
-          assert.deepStrictEqual(
-            (yield* Effect.promise(() =>
-              readdir(resolve(directory, "backups"))
-            )).filter((name) => name.endsWith(".partial")),
-            []
-          )
-          assert.include(result.warnings[0] ?? "", "world/latest")
-          assert.isTrue(
-            backupPathIsExcluded("session.lock", false, ["session.lock"])
-          )
-          assert.isTrue(
-            backupPathIsExcluded("logs/debug.log", false, ["logs/**"])
-          )
-          assert.isFalse(
-            backupPathIsExcluded("world/level.dat", false, ["logs/**"])
-          )
-        }),
-      (directory) =>
-        Effect.sync(() => rmSync(directory, { force: true, recursive: true }))
+          assert.deepStrictEqual(yield* partialFiles(config), [])
+        })
+      )
+  )
+
+  it.effect("runs queued create tasks to completion", () =>
+    withRelay("kiln-backup-queue-", ({ config, root }) =>
+      Effect.gen(function* () {
+        yield* Effect.promise(() =>
+          writeFile(resolve(root, "server.txt"), "data")
+        )
+        const manager = yield* backupManager(config)
+        const first = backupInput(1)
+        const second = backupInput(2)
+        yield* manager.enqueue(first)
+        yield* manager.enqueue(second)
+        yield* manager.runPending()
+
+        assert.deepStrictEqual(
+          (yield* manager.list()).map((task) => task.status),
+          ["succeeded", "succeeded"]
+        )
+        assert.isTrue(existsSync(backupArchivePath(config, first.backupId)))
+        assert.isTrue(existsSync(backupArchivePath(config, second.backupId)))
+      })
     )
   )
 
-  it.effect("absorbs late stream errors after archive cancellation", () =>
-    Effect.acquireUseRelease(
-      temporaryDirectory("kiln-backup-cancel-"),
-      (directory) =>
-        Effect.promise(async () => {
-          const config = testConfig(directory)
-          const root = resolve(directory, "instances", "instance-1")
-          await mkdir(root, { recursive: true })
-          await writeFile(
-            resolve(root, "large.bin"),
-            randomBytes(8 * 1024 * 1024)
-          )
-          const controller = new AbortController()
-          const progress = {
-            completed: 0,
-            currentArtifactId: null,
-            currentPath: null,
-            phase: "preparing" as const,
-            total: 0,
-          }
-          const input = backupInput(10)
-          const archiveRejected = createPortableInstanceBackup(
-            config,
-            input,
-            testInstance(),
-            progress,
-            controller.signal
-          ).then(
-            () => false,
-            () => true
-          )
-          while (progress.completed === 0) {
-            await new Promise<void>((resolveTurn) => setImmediate(resolveTurn))
-          }
+  it.effect("cancels a queued create task before archive work starts", () =>
+    withRelay("kiln-backup-queued-cancel-", ({ config }) =>
+      Effect.gen(function* () {
+        const manager = yield* backupManager(config)
+        const input = backupInput(11)
+        yield* manager.enqueue(input)
 
-          controller.abort()
-          assert.isTrue(await archiveRejected)
-          await new Promise<void>((resolveTurn) => setImmediate(resolveTurn))
+        const cancelled = yield* manager.cancel(input.taskId)
+        yield* manager.runPending()
 
-          assert.isFalse(
-            existsSync(resolve(directory, "backups", `${input.backupId}.zip`))
-          )
-        }),
-      removeTemporaryDirectory
+        assert.strictEqual(cancelled?.status, "cancelled")
+        assert.strictEqual(
+          (yield* manager.get(input.taskId))?.status,
+          "cancelled"
+        )
+        assert.isFalse(existsSync(backupArchivePath(config, input.backupId)))
+      })
     )
   )
 
-  it.effect("restores a verified archive through a staged directory swap", () =>
-    Effect.acquireUseRelease(
-      temporaryDirectory("kiln-backup-restore-"),
-      (directory) =>
+  it.effect("cancels a running create task and leaves no archive", () =>
+    withRelay("kiln-backup-running-cancel-", ({ config, root }) =>
+      Effect.gen(function* () {
+        yield* Effect.promise(() =>
+          writeFile(resolve(root, "server.txt"), "data")
+        )
+        const lookup = gate()
+        const release = gate()
+        const manager = yield* backupManager(config, async () => {
+          lookup.open()
+          await release.opened
+          return testInstance()
+        })
+        const input = backupInput(9)
+        yield* manager.enqueue(input)
+        const worker = yield* Effect.forkChild(manager.runPending())
+        yield* Effect.promise(() => lookup.opened)
+
+        const cancelled = yield* manager.cancel(input.taskId)
+        release.open()
+        yield* Fiber.join(worker)
+
+        assert.strictEqual(cancelled?.status, "cancelled")
+        assert.strictEqual(
+          (yield* manager.get(input.taskId))?.status,
+          "cancelled"
+        )
+        assert.isFalse(existsSync(backupArchivePath(config, input.backupId)))
+      })
+    )
+  )
+
+  it.effect("cancels a create task when it reaches the backup timeout", () =>
+    withRelay("kiln-backup-timeout-", ({ config, root }) =>
+      Effect.gen(function* () {
+        yield* Effect.promise(() =>
+          writeFile(resolve(root, "server.txt"), "data")
+        )
+        const lookup = gate()
+        const release = gate()
+        const manager = yield* backupManager(
+          { ...config, backupTimeoutMs: 10 },
+          async () => {
+            lookup.open()
+            await release.opened
+            return testInstance()
+          }
+        )
+        const input = backupInput(12)
+        yield* manager.enqueue(input)
+        const worker = yield* Effect.forkChild(manager.runPending())
+        yield* Effect.promise(() => lookup.opened)
+
+        yield* TestClock.adjust("10 millis")
+        release.open()
+        yield* Fiber.join(worker)
+
+        const task = yield* manager.get(input.taskId)
+        assert.strictEqual(task?.status, "cancelled")
+        assert.include(task?.error ?? "", "timeout")
+        assert.isFalse(existsSync(backupArchivePath(config, input.backupId)))
+      })
+    )
+  )
+
+  it.effect(
+    "aborts an archive mid-stream when cancelled and leaves nothing behind",
+    () =>
+      withRelay("kiln-backup-stream-cancel-", ({ config, root }) =>
         Effect.gen(function* () {
-          const config = testConfig(directory)
-          const root = resolve(directory, "instances", "instance-1")
-          yield* Effect.promise(() => mkdir(root, { recursive: true }))
-          yield* Effect.promise(() =>
-            writeFile(resolve(root, "server.txt"), "old")
+          // A sparse file takes seconds to archive without using disk space.
+          yield* Effect.promise(async () => {
+            await writeFile(resolve(root, "world.bin"), "")
+            await truncate(resolve(root, "world.bin"), 2 * 1024 ** 3)
+          })
+          const backups = resolve(config.dataDirectory, "backups")
+          yield* Effect.promise(() => mkdir(backups, { recursive: true }))
+          const archiving = gate()
+          const watcher = watch(backups, (_event, name) => {
+            if (name?.endsWith(".partial")) archiving.open()
+          })
+          yield* Effect.addFinalizer(() => Effect.sync(() => watcher.close()))
+          const manager = yield* backupManager(config)
+          const input = backupInput(10)
+          yield* manager.enqueue(input)
+          const worker = yield* Effect.forkChild(manager.runPending())
+          yield* Effect.promise(() => archiving.opened)
+
+          yield* manager.cancel(input.taskId)
+          yield* Fiber.join(worker)
+
+          assert.strictEqual(
+            (yield* manager.get(input.taskId))?.status,
+            "cancelled"
           )
-          const subdomain = `${"a".repeat(60)}.${"b".repeat(59)}`
-          const instance: RelayInstanceConfig = {
-            ...testInstance(),
-            brickSource: "https://kiln.test/bricks/paper.yml",
-            brickSnapshotSha256: yield* Effect.promise(() =>
-              new BrickCatalog(
-                config.brickCatalogUrl,
-                config.dataDirectory
-              ).saveSnapshot(testBrickRecipe())
-            ),
-            tailscale: { enabled: true, subdomain },
-          }
-          const input = backupInput(6)
-          const created = yield* Effect.promise(() =>
-            createPortableInstanceBackup(config, input, instance, {
-              completed: 0,
-              currentArtifactId: null,
-              currentPath: null,
-              phase: "preparing",
-              total: 0,
-            })
-          )
-          yield* Effect.sync(() =>
-            rmSync(brickSnapshotDirectory(config.dataDirectory), {
-              force: true,
+          assert.isFalse(existsSync(backupArchivePath(config, input.backupId)))
+          assert.deepStrictEqual(yield* partialFiles(config), [])
+        })
+      )
+  )
+
+  it.effect("keeps the local archive when a replica upload fails", () =>
+    withRelay("kiln-backup-replica-", ({ config, root }) =>
+      Effect.gen(function* () {
+        yield* Effect.promise(() =>
+          writeFile(resolve(root, "server.txt"), "data")
+        )
+        const localArtifactId = "30000000-0000-4000-8000-000000000001"
+        const remoteArtifactId = "30000000-0000-4000-8000-000000000002"
+        const input = {
+          ...backupInput(12),
+          destination: { artifactId: localArtifactId, kind: "local" },
+          replicas: [
+            {
+              allowPrivateNetwork: true,
+              artifactId: remoteArtifactId,
+              headers: {},
+              kind: "s3",
+              objectKey: "backups/test.zip",
+              uploadUrl: unreachableStorageUrl,
+            },
+          ],
+        } satisfies BackupCreateTaskInput & { kind: "create" }
+        const manager = yield* backupManager(config)
+
+        const task = yield* runTask(manager, input)
+
+        assert.strictEqual(task.status, "succeeded")
+        const artifacts = archiveResult(task).artifacts ?? []
+        assert.deepStrictEqual(
+          artifacts.map(({ artifactId, status }) => ({ artifactId, status })),
+          [
+            { artifactId: localArtifactId, status: "available" },
+            { artifactId: remoteArtifactId, status: "failed" },
+          ]
+        )
+        assert.isString(artifacts[1]?.error)
+        assert.isTrue(existsSync(backupArchivePath(config, input.backupId)))
+      })
+    )
+  )
+
+  it.effect(
+    "deletes the local artifact and reports every artifact outcome",
+    () =>
+      withRelay("kiln-backup-delete-", ({ config }) =>
+        Effect.gen(function* () {
+          const localArtifactId = "31000000-0000-4000-8000-000000000001"
+          const remoteArtifactId = "31000000-0000-4000-8000-000000000002"
+          const backupId = "31000000-0000-4000-8000-000000000003"
+          const archivePath = backupArchivePath(config, backupId)
+          yield* Effect.promise(async () => {
+            await mkdir(resolve(config.dataDirectory, "backups"), {
               recursive: true,
             })
-          )
-          yield* Effect.promise(() =>
-            Promise.all([
-              writeFile(resolve(root, "server.txt"), "new"),
-              writeFile(resolve(root, "extra.txt"), "remove"),
-            ])
-          )
-          const restore: BackupRestoreTaskInput & { kind: "restore" } = {
-            backupId: input.backupId,
-            kind: "restore",
-            source: {
-              bytes: created.bytes,
-              checksumSha256: created.checksumSha256,
-              kind: "local",
-            },
+            await writeFile(archivePath, "zip")
+          })
+          const manager = yield* backupManager(config)
+
+          const task = yield* runTask(manager, {
+            backupId,
+            destination: { artifactId: localArtifactId, kind: "local" },
+            kind: "delete",
+            replicas: [
+              {
+                allowPrivateNetwork: true,
+                artifactId: remoteArtifactId,
+                deleteUrl: unreachableStorageUrl,
+                headers: {},
+                kind: "s3",
+                objectKey: "backups/test.zip",
+              },
+            ],
             target: { id: "instance-1", kind: "instance" },
-            taskId: "20000000-0000-4000-8000-000000000006",
-          }
-          const result = yield* Effect.promise(() =>
-            restorePortableInstanceBackup(config, restore, instance)
-          )
-          assert.deepStrictEqual(result.warnings, [])
-          assert.strictEqual(
-            yield* Effect.promise(() =>
-              readFile(resolve(root, "server.txt"), "utf8")
-            ),
-            "old"
-          )
-          const restored = yield* Effect.promise(() => readdir(root))
-          assert.notInclude(restored, "extra.txt")
-          assert.notInclude(restored, ".kiln-backup")
+            taskId: "31000000-0000-4000-8000-000000000004",
+          })
+
+          assert.strictEqual(task.status, "succeeded")
+          const artifacts =
+            task.result && "artifacts" in task.result
+              ? task.result.artifacts
+              : []
           assert.deepStrictEqual(
-            yield* Effect.promise(() =>
-              new BrickCatalog(
-                config.brickCatalogUrl,
-                config.dataDirectory
-              ).recipe(instance.brickSource ?? "", instance.brickSnapshotSha256)
-            ),
-            testBrickRecipe()
+            (artifacts ?? []).map(({ artifactId, status }) => ({
+              artifactId,
+              status,
+            })),
+            [
+              { artifactId: localArtifactId, status: "deleted" },
+              { artifactId: remoteArtifactId, status: "failed" },
+            ]
           )
-        }),
-      removeTemporaryDirectory
+          assert.isFalse(existsSync(archivePath))
+        })
+      )
+  )
+})
+
+describe("Relay archive restores", () => {
+  it.effect("restores a verified archive through a staged directory swap", () =>
+    withRelay("kiln-backup-restore-", ({ config, root }) =>
+      Effect.gen(function* () {
+        yield* Effect.promise(() =>
+          writeFile(resolve(root, "server.txt"), "old")
+        )
+        const subdomain = `${"a".repeat(60)}.${"b".repeat(59)}`
+        const instance = testInstance({
+          brickSource: "https://kiln.test/bricks/paper.yml",
+          brickSnapshotSha256: yield* Effect.promise(() =>
+            new BrickCatalog(
+              config.brickCatalogUrl,
+              config.dataDirectory
+            ).saveSnapshot(testBrickRecipe())
+          ),
+          tailscale: { enabled: true, subdomain },
+        })
+        const manager = yield* backupManager(config, async () => instance)
+        const input = backupInput(6)
+        const created = archiveResult(yield* runTask(manager, input))
+        yield* Effect.sync(() =>
+          rmSync(brickSnapshotDirectory(config.dataDirectory), {
+            force: true,
+            recursive: true,
+          })
+        )
+        yield* Effect.promise(() =>
+          Promise.all([
+            writeFile(resolve(root, "server.txt"), "new"),
+            writeFile(resolve(root, "extra.txt"), "remove"),
+          ])
+        )
+
+        const restored = yield* runTask(manager, {
+          backupId: input.backupId,
+          kind: "restore",
+          source: {
+            bytes: created.bytes,
+            checksumSha256: created.checksumSha256,
+            kind: "local",
+          },
+          target: { id: "instance-1", kind: "instance" },
+          taskId: "20000000-0000-4000-8000-000000000006",
+        })
+
+        assert.strictEqual(restored.status, "succeeded")
+        assert.deepStrictEqual(restored.result, { warnings: [] })
+        assert.strictEqual(
+          yield* Effect.promise(() =>
+            readFile(resolve(root, "server.txt"), "utf8")
+          ),
+          "old"
+        )
+        const entries = yield* Effect.promise(() => readdir(root))
+        assert.notInclude(entries, "extra.txt")
+        assert.notInclude(entries, ".kiln-backup")
+        assert.deepStrictEqual(
+          yield* Effect.promise(() =>
+            new BrickCatalog(
+              config.brickCatalogUrl,
+              config.dataDirectory
+            ).recipe(instance.brickSource ?? "", instance.brickSnapshotSha256)
+          ),
+          testBrickRecipe()
+        )
+      })
     )
   )
 
   it.effect("finishes a journaled directory swap after Relay restart", () =>
-    Effect.acquireUseRelease(
-      temporaryDirectory("kiln-backup-recovery-"),
-      (directory) =>
-        Effect.gen(function* () {
-          const config = testConfig(directory)
-          const taskId = "20000000-0000-4000-8000-000000000007"
-          const parent = resolve(directory, "instances")
-          const staging = resolve(parent, `.instance-1.kiln-restore-${taskId}`)
-          const rollback = resolve(
-            parent,
-            `.instance-1.kiln-rollback-${taskId}`
-          )
-          const journals = resolve(directory, "restores")
-          yield* Effect.promise(() =>
-            Promise.all([
-              mkdir(staging, { recursive: true }),
-              mkdir(rollback, { recursive: true }),
-              mkdir(journals, { recursive: true }),
-            ])
-          )
-          yield* Effect.promise(() =>
-            Promise.all([
-              writeFile(resolve(staging, "server.txt"), "restored"),
-              writeFile(resolve(rollback, "server.txt"), "original"),
-              writeFile(
-                resolve(journals, `${taskId}.json`),
-                JSON.stringify({
-                  instanceDirectory: "instance-1",
-                  phase: "moved_original",
-                  taskId,
-                  version: 1,
-                })
-              ),
-            ])
-          )
-          assert.deepStrictEqual(
-            yield* Effect.promise(() => recoverInterruptedRestores(config)),
-            [taskId]
-          )
-          assert.strictEqual(
-            yield* Effect.promise(() =>
-              readFile(resolve(parent, "instance-1", "server.txt"), "utf8")
-            ),
-            "restored"
-          )
-          assert.notInclude(
-            yield* Effect.promise(() => readdir(parent)),
-            `.instance-1.kiln-rollback-${taskId}`
-          )
-        }),
-      removeTemporaryDirectory
-    )
+    Effect.gen(function* () {
+      const directory = yield* scratchDirectory("kiln-backup-recovery-")
+      const config = testRelayConfig(directory)
+      const taskId = "20000000-0000-4000-8000-000000000007"
+      const parent = resolve(directory, "instances")
+      const staging = resolve(parent, `.instance-1.kiln-restore-${taskId}`)
+      const rollback = resolve(parent, `.instance-1.kiln-rollback-${taskId}`)
+      const journals = resolve(directory, "restores")
+      yield* Effect.promise(async () => {
+        await Promise.all([
+          mkdir(staging, { recursive: true }),
+          mkdir(rollback, { recursive: true }),
+          mkdir(journals, { recursive: true }),
+        ])
+        await Promise.all([
+          writeFile(resolve(staging, "server.txt"), "restored"),
+          writeFile(resolve(rollback, "server.txt"), "original"),
+          writeFile(
+            resolve(journals, `${taskId}.json`),
+            JSON.stringify({
+              instanceDirectory: "instance-1",
+              phase: "moved_original",
+              taskId,
+              version: 1,
+            })
+          ),
+        ])
+      })
+
+      assert.deepStrictEqual(
+        yield* Effect.promise(() => recoverInterruptedRestores(config)),
+        [taskId]
+      )
+      assert.strictEqual(
+        yield* Effect.promise(() =>
+          readFile(resolve(parent, "instance-1", "server.txt"), "utf8")
+        ),
+        "restored"
+      )
+      assert.notInclude(
+        yield* Effect.promise(() => readdir(parent)),
+        `.instance-1.kiln-rollback-${taskId}`
+      )
+    })
   )
 
   it.effect("rejects archive paths that escape the restore staging root", () =>
-    Effect.acquireUseRelease(
-      temporaryDirectory("kiln-backup-traversal-"),
-      (directory) =>
-        Effect.gen(function* () {
-          const config = testConfig(directory)
-          const root = resolve(directory, "instances", "instance-1")
-          const input = backupInput(8)
-          const archivePath = resolve(
-            directory,
-            "backups",
-            `${input.backupId}.zip`
+    Effect.gen(function* () {
+      const directory = yield* scratchDirectory("kiln-backup-traversal-")
+      const config = testRelayConfig(directory)
+      const input = backupInput(8)
+      const archivePath = backupArchivePath(config, input.backupId)
+      yield* Effect.promise(async () => {
+        await Promise.all([
+          mkdir(resolve(config.rootDirectory, "instance-1"), {
+            recursive: true,
+          }),
+          mkdir(resolve(directory, "backups"), { recursive: true }),
+        ])
+        await writeTestArchive(archivePath, "safe123.txt")
+        await replaceArchiveEntryName(archivePath, "safe123.txt", "../evil.txt")
+      })
+      const archive = yield* Effect.promise(() => readFile(archivePath))
+
+      const restored = yield* Effect.exit(
+        Effect.tryPromise(() =>
+          restorePortableInstanceBackup(
+            config,
+            {
+              backupId: input.backupId,
+              kind: "restore",
+              source: {
+                bytes: archive.byteLength,
+                checksumSha256: sha256(archive),
+                kind: "local",
+              },
+              target: input.target,
+              taskId: "20000000-0000-4000-8000-000000000008",
+            },
+            testInstance()
           )
-          yield* Effect.promise(() =>
-            Promise.all([
-              mkdir(root, { recursive: true }),
-              mkdir(resolve(directory, "backups"), { recursive: true }),
-            ])
-          )
-          yield* Effect.promise(() =>
-            writeTestArchive(archivePath, "safe123.txt")
-          )
-          yield* Effect.promise(() =>
-            replaceArchiveEntryName(archivePath, "safe123.txt", "../evil.txt")
-          )
-          const archive = yield* Effect.promise(() => readFile(archivePath))
-          const failed = yield* Effect.promise(async () => {
-            try {
-              await restorePortableInstanceBackup(
-                config,
-                {
-                  backupId: input.backupId,
-                  kind: "restore",
-                  source: {
-                    bytes: archive.byteLength,
-                    checksumSha256: createHash("sha256")
-                      .update(archive)
-                      .digest("hex"),
-                    kind: "local",
-                  },
-                  target: input.target,
-                  taskId: "20000000-0000-4000-8000-000000000008",
-                },
-                testInstance()
-              )
-              return false
-            } catch {
-              return true
-            }
-          })
-          assert.isTrue(failed)
-          assert.isFalse(existsSync(resolve(directory, "evil.txt")))
-        }),
-      removeTemporaryDirectory
-    )
+        )
+      )
+
+      assert.isTrue(Exit.isFailure(restored))
+      assert.isFalse(existsSync(resolve(directory, "evil.txt")))
+      assert.isFalse(existsSync(resolve(config.rootDirectory, "evil.txt")))
+    })
   )
 })
 
-describe("restic backup limits and exports", () => {
-  it("refreshes the on-disk export expiry when a zip is reused", async () => {
-    const directory = join(testDirectory, "export-reuse")
-    await mkdir(directory, { recursive: true })
-    const backupId = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
-    const destination = join(directory, `${backupId}.zip`)
-    const marker = join(directory, `.${backupId}.zip.expires`)
-    await writeFile(destination, "zip")
-    await writeFile(marker, `${Date.now() + 30_000}\n`)
-    const later = Date.now() + 120_000
-    const reused = await reuseValidExport(destination, later)
-    assert.strictEqual(reused?.expiresAt, later)
-    assert.strictEqual(Number((await readFile(marker, "utf8")).trim()), later)
-  })
+describe("Relay restic backups", () => {
+  it.effect("records an incremental snapshot in the repository", () =>
+    withRelay("kiln-restic-create-", ({ config }) =>
+      Effect.gen(function* () {
+        useResticScenario({ backup: { outcome: "complete", totalBytes: 10 } })
+        const manager = yield* backupManager(config)
+        const input = resticCreateInput(100)
 
-  it("removes the export zip and expiry marker for a forgotten backup", async () => {
-    const directory = join(testDirectory, "export-cleanup")
-    const config = testConfig(directory)
-    const backupId = "bbbbbbbb-cccc-4ddd-8eee-ffffffffffff"
-    await mkdir(join(config.dataDirectory, "exports"), { recursive: true })
-    const zip = join(config.dataDirectory, "exports", `${backupId}.zip`)
-    const marker = join(
-      config.dataDirectory,
-      "exports",
-      `.${backupId}.zip.expires`
+        const task = yield* runTask(manager, input)
+
+        assert.strictEqual(task.status, "succeeded")
+        const repository = resticRepository(localRepository(config))
+        assert.strictEqual(repository.snapshots.length, 1)
+        assert.include(
+          repository.snapshots[0]?.tags ?? [],
+          `task:${input.taskId}`
+        )
+        assert.deepInclude(task.result ?? {}, {
+          snapshotId: repository.snapshots[0]?.id,
+        })
+      })
     )
-    await writeFile(zip, "zip")
-    await writeFile(marker, "1\n")
-    await removeBackupExport(config, backupId)
-    assert.isFalse(existsSync(zip))
-    assert.isFalse(existsSync(marker))
-  })
+  )
 
-  layer(makeRelayStateLayer(join(testDirectory, "restic-relay.sqlite")))(
-    (it) => {
-      it.effect("forgets an over-limit snapshot after backup summary", () =>
+  it.effect.each([
+    {
+      name: "the snapshot summary exceeds the size limit",
+      maxBytes: 100,
+      scenario: { backup: { outcome: "complete", totalBytes: 500 } },
+      seedTaskSnapshot: false,
+    },
+    {
+      name: "a reused task snapshot exceeds the size limit",
+      maxBytes: 100,
+      scenario: {},
+      seedTaskSnapshot: true,
+    },
+    {
+      name: "progress exceeds the size limit after the snapshot was committed",
+      maxBytes: 100,
+      scenario: { backup: { outcome: "stall", totalBytes: 500 } },
+      seedTaskSnapshot: false,
+    },
+    {
+      name: "restic fails after committing the snapshot",
+      maxBytes: null,
+      scenario: { backup: { outcome: "fail", totalBytes: 10 } },
+      seedTaskSnapshot: false,
+    },
+  ] satisfies Array<{
+    maxBytes: number | null
+    name: string
+    scenario: ResticScenario
+    seedTaskSnapshot: boolean
+  }>)(
+    "leaves no snapshot behind when $name",
+    ({ maxBytes, scenario, seedTaskSnapshot }) =>
+      withRelay("kiln-restic-orphan-", ({ config }) =>
         Effect.gen(function* () {
-          const forgotten: Array<string> = []
-          let pruned = 0
-          const config = testConfig(join(testDirectory, "over-limit-summary"))
-          yield* Effect.promise(() =>
-            mkdir(join(config.rootDirectory, "instance-1"), { recursive: true })
-          )
-          const manager = yield* BackupManager.make({
-            config,
-            findInstance: async () => testInstance(),
-            isInstanceStopped: async () => true,
-            restic: mockRestic({
-              backup: async () => ({
-                snapshotId: "oversize01",
-                totalBytesProcessed: 500,
-              }),
-              forget: async ({ snapshotId }) => {
-                forgotten.push(snapshotId)
+          useResticScenario(scenario)
+          const input = resticCreateInput(maxBytes)
+          if (seedTaskSnapshot) {
+            seedResticRepository(localRepository(config), [
+              {
+                id: "reused001",
+                tags: [`task:${input.taskId}`],
+                totalSize: 500,
               },
-              prune: async () => {
-                pruned += 1
-              },
-            }),
+            ])
+          }
+          const manager = yield* backupManager(config)
+
+          const task = yield* runTask(manager, input)
+
+          assert.strictEqual(task.status, "failed")
+          assert.deepStrictEqual(resticRepository(localRepository(config)), {
+            data: [],
+            initialized: true,
+            snapshots: [],
           })
-          const input = resticCreateInput("over-limit-summary", 100)
-          yield* manager.enqueue(input)
-          yield* manager.runPending()
-          const task = yield* manager.get(input.taskId)
-          assert.strictEqual(task?.status, "failed")
-          assert.include(task?.error ?? "", "exceeds")
-          assert.deepStrictEqual(forgotten, ["oversize01"])
-          assert.strictEqual(pruned, 1)
         })
       )
+  )
 
-      it.effect("cleans the restic cache after an incremental backup", () =>
+  it.effect(
+    "forgets a snapshot that completes after its create was cancelled",
+    () =>
+      withRelay("kiln-restic-cancelled-", ({ config }) =>
         Effect.gen(function* () {
-          let cleaned = 0
-          const config = testConfig(join(testDirectory, "cache-after-backup"))
-          yield* Effect.promise(() =>
-            mkdir(join(config.rootDirectory, "instance-1"), { recursive: true })
+          useResticScenario({
+            backup: { outcome: "finishOnCancel", totalBytes: 10 },
+          })
+          const committed = gate()
+          const server = createServer(() => committed.open())
+          yield* Effect.acquireRelease(
+            Effect.promise(
+              () =>
+                new Promise<void>((resolveListen) =>
+                  server.listen(join(fakeRestic, "events.sock"), resolveListen)
+                )
+            ),
+            () =>
+              Effect.promise(
+                () =>
+                  new Promise<void>((resolveClose) =>
+                    server.close(() => resolveClose())
+                  )
+              )
           )
-          const manager = yield* BackupManager.make({
-            config,
-            findInstance: async () => testInstance(),
-            isInstanceStopped: async () => true,
-            restic: mockRestic({
-              backup: async () => ({
-                snapshotId: "a1b2c3d4e5",
-                totalBytesProcessed: 10,
-              }),
-              cacheCleanup: async () => {
-                cleaned += 1
-              },
-            }),
-          })
-          const input = resticCreateInput("cache-after-backup", 100)
+          const manager = yield* backupManager(config)
+          const input = resticCreateInput(100)
           yield* manager.enqueue(input)
-          yield* manager.runPending()
-          const task = yield* manager.get(input.taskId)
-          assert.strictEqual(task?.status, "succeeded")
-          assert.strictEqual(cleaned, 1)
-        })
-      )
+          const worker = yield* Effect.forkChild(manager.runPending())
+          yield* Effect.promise(() => committed.opened)
 
-      it.effect(
-        "forgets a snapshot that completes after its create was cancelled",
-        () =>
-          Effect.gen(function* () {
-            const forgotten: Array<string> = []
-            let forgetSignal: AbortSignal | undefined
-            let manager: BackupManager | undefined
-            let pruned = 0
-            let pruneSignal: AbortSignal | undefined
-            const config = testConfig(
-              join(testDirectory, "cancelled-after-restic-summary")
-            )
-            yield* Effect.promise(() =>
-              mkdir(join(config.rootDirectory, "instance-1"), {
-                recursive: true,
-              })
-            )
-            const input = resticCreateInput(
-              "cancelled-after-restic-summary",
-              100
-            )
-            manager = yield* BackupManager.make({
-              config,
-              findInstance: async () => testInstance(),
-              isInstanceStopped: async () => true,
-              restic: mockRestic({
-                backup: async () => {
-                  if (!manager) throw new Error("manager was not initialized")
-                  await Effect.runPromise(manager.cancel(input.taskId))
-                  return {
-                    snapshotId: "cancelled01",
-                    totalBytesProcessed: 10,
-                  }
-                },
-                forget: async ({ signal, snapshotId }) => {
-                  forgetSignal = signal
-                  forgotten.push(snapshotId)
-                },
-                prune: async ({ signal }) => {
-                  pruneSignal = signal
-                  pruned += 1
-                },
-              }),
-            })
+          yield* manager.cancel(input.taskId)
+          yield* Fiber.join(worker)
 
-            yield* manager.enqueue(input)
-            yield* manager.runPending()
-
-            const task = yield* manager.get(input.taskId)
-            assert.strictEqual(task?.status, "cancelled")
-            assert.deepStrictEqual(forgotten, ["cancelled01"])
-            assert.strictEqual(pruned, 1)
-            assert.notStrictEqual(forgetSignal, pruneSignal)
-          })
-      )
-
-      it.effect(
-        "forgets a task-tagged snapshot when backup aborts after commit",
-        () =>
-          Effect.gen(function* () {
-            const forgotten: Array<string> = []
-            let pruned = 0
-            let snapshotLists = 0
-            const config = testConfig(
-              join(testDirectory, "aborted-after-restic-commit")
-            )
-            yield* Effect.promise(() =>
-              mkdir(join(config.rootDirectory, "instance-1"), {
-                recursive: true,
-              })
-            )
-            const manager = yield* BackupManager.make({
-              config,
-              findInstance: async () => testInstance(),
-              isInstanceStopped: async () => true,
-              restic: mockRestic({
-                backup: async () => {
-                  throw new Error("restic aborted while streams were draining")
-                },
-                forget: async ({ snapshotId }) => {
-                  forgotten.push(snapshotId)
-                },
-                prune: async () => {
-                  pruned += 1
-                },
-                snapshotsByTag: async () => {
-                  snapshotLists += 1
-                  return snapshotLists === 1 ? [] : [{ id: "committed01" }]
-                },
-              }),
-            })
-            const input = resticCreateInput("aborted-after-restic-commit", 100)
-            input.maxBytes = null
-
-            yield* manager.enqueue(input)
-            yield* manager.runPending()
-
-            const task = yield* manager.get(input.taskId)
-            assert.strictEqual(task?.status, "failed")
-            assert.deepStrictEqual(forgotten, ["committed01"])
-            assert.strictEqual(pruned, 1)
-          })
-      )
-
-      it.effect("cleans the restic cache after exporting a snapshot", () =>
-        Effect.gen(function* () {
-          let cleaned = 0
-          const config = testConfig(join(testDirectory, "cache-after-export"))
-          const backupId = "22000000-0000-4000-8000-000000000001"
-          const repository = {
-            accessKeyId: "AKIAEXAMPLE",
-            allowPrivateNetwork: true,
-            bucket: "kiln-backups",
-            endpoint: "https://s3.example.com",
-            forcePathStyle: true,
-            kind: "s3" as const,
-            region: "us-east-1",
-            repositoryPrefix: "team/repo",
-            secretAccessKey: "s3-secret",
-          }
-          const manager = yield* BackupManager.make({
-            config,
-            findInstance: async () => testInstance(),
-            isInstanceStopped: async () => true,
-            restic: mockRestic({
-              cacheCleanup: async () => {
-                cleaned += 1
-              },
-              dumpZip: async ({ destination }) => {
-                await writeFile(destination, "zip")
-                return { bytes: 3, checksumSha256: "a".repeat(64) }
-              },
-              stats: async () => ({ totalSize: 3 }),
-            }),
-          })
-          const input = {
-            backupId,
-            kind: "export" as const,
-            repository,
-            repositoryPassword: "secret",
-            snapshotId: "abcdef12",
-            target: { id: "instance-1", kind: "instance" as const },
-            taskId: "22000000-0000-4000-8000-000000000011",
-            ttlMs: 60_000,
-          }
-          yield* manager.enqueue(input)
-          yield* manager.runPending()
           assert.strictEqual(
             (yield* manager.get(input.taskId))?.status,
-            "succeeded"
+            "cancelled"
           )
-          assert.strictEqual(cleaned, 1)
+          assert.deepStrictEqual(resticRepository(localRepository(config)), {
+            data: [],
+            initialized: true,
+            snapshots: [],
+          })
         })
       )
+  )
 
-      it.effect(
-        "forgets a reused over-limit snapshot instead of succeeding",
-        () =>
-          Effect.gen(function* () {
-            const forgotten: Array<string> = []
-            let pruned = 0
-            const manager = yield* BackupManager.make({
-              config: testConfig(join(testDirectory, "over-limit-reuse")),
-              findInstance: async () => testInstance(),
-              isInstanceStopped: async () => true,
-              restic: mockRestic({
-                snapshotsByTag: async () => [{ id: "reused001" }],
-                stats: async () => ({ totalSize: 500 }),
-                forget: async ({ snapshotId }) => {
-                  forgotten.push(snapshotId)
-                },
-                prune: async () => {
-                  pruned += 1
-                },
-              }),
-            })
-            const input = resticCreateInput("over-limit-reuse", 100)
-            yield* manager.enqueue(input)
-            yield* manager.runPending()
-            const task = yield* manager.get(input.taskId)
-            assert.strictEqual(task?.status, "failed")
-            assert.deepStrictEqual(forgotten, ["reused001"])
-            assert.strictEqual(pruned, 1)
-          })
-      )
-
-      it.effect(
-        "forgets a snapshot committed before an over-limit progress abort",
-        () =>
-          Effect.gen(function* () {
-            const forgotten: Array<string> = []
-            let pruned = 0
-            const manager = yield* BackupManager.make({
-              config: testConfig(join(testDirectory, "over-limit-progress")),
-              findInstance: async () => testInstance(),
-              isInstanceStopped: async () => true,
-              restic: mockRestic({
-                backup: async ({ onProgress }) => {
-                  onProgress?.({ bytesCompleted: 50, bytesTotal: 500 })
-                  throw new Error("restic aborted")
-                },
-                snapshotsByTag: async () => [{ id: "progress1" }],
-                stats: async () => ({ totalSize: 500 }),
-                forget: async ({ snapshotId }) => {
-                  forgotten.push(snapshotId)
-                },
-                prune: async () => {
-                  pruned += 1
-                },
-              }),
-            })
-            const input = resticCreateInput("over-limit-progress", 100)
-            yield* manager.enqueue(input)
-            yield* manager.runPending()
-            const task = yield* manager.get(input.taskId)
-            assert.strictEqual(task?.status, "failed")
-            assert.deepStrictEqual(forgotten, ["progress1"])
-            assert.strictEqual(pruned, 1)
-          })
-      )
-
-      it.effect(
-        "removes staged exports when forgetting a restic snapshot",
-        () =>
-          Effect.gen(function* () {
-            const directory = join(testDirectory, "forget-export")
-            const config = testConfig(directory)
-            const backupId = "cccccccc-dddd-4eee-8fff-000000000001"
-            yield* Effect.promise(() =>
-              mkdir(join(config.dataDirectory, "exports"), { recursive: true })
-            )
-            const zip = join(config.dataDirectory, "exports", `${backupId}.zip`)
-            yield* Effect.promise(() => writeFile(zip, "zip"))
-            const manager = yield* BackupManager.make({
-              config,
-              findInstance: async () => testInstance(),
-              isInstanceStopped: async () => true,
-              restic: mockRestic({
-                forget: async () => undefined,
-                prune: async () => undefined,
-              }),
-            })
-            yield* manager.enqueue({
-              backupId,
-              destination: {
-                kind: "restic",
-                repository: { kind: "local" },
-                repositoryPassword: "secret",
-                snapshotId: "deadbeef",
-              },
-              kind: "delete",
-              target: { id: "instance-1", kind: "instance" },
-              taskId: "10000000-0000-4000-8000-000000000099",
-            })
-            yield* manager.runPending()
-            assert.isFalse(existsSync(zip))
-          })
-      )
-
-      it.effect("prunes before completing a restic delete", () =>
+  it.effect(
+    "exports a snapshot and extends the staged zip while it is valid",
+    () =>
+      withRelay("kiln-restic-export-", ({ config }) =>
         Effect.gen(function* () {
-          const config = testConfig(join(testDirectory, "synchronous-prune"))
-          const taskId = "10000000-0000-4000-8000-000000000097"
-          let manager: BackupManager | undefined
-          manager = yield* BackupManager.make({
-            config,
-            findInstance: async () => testInstance(),
-            isInstanceStopped: async () => true,
-            restic: mockRestic({
-              forget: async () => undefined,
-              prune: async () => {
-                if (!manager) throw new Error("manager was not initialized")
-                const task = await Effect.runPromise(manager.get(taskId))
-                assert.strictEqual(task?.status, "running")
-              },
-            }),
-          })
-          yield* manager.enqueue({
-            backupId: "cccccccc-dddd-4eee-8fff-000000000002",
-            destination: {
-              kind: "restic",
+          useResticScenario({})
+          const backupId = "22000000-0000-4000-8000-000000000001"
+          seedResticRepository(localRepository(config), [
+            { id: "abcdef12", tags: [], totalSize: 3 },
+          ])
+          const manager = yield* backupManager(config)
+          const exportInput = (taskSuffix: string, ttlMs: number) =>
+            ({
+              backupId,
+              kind: "export",
               repository: { kind: "local" },
               repositoryPassword: "secret",
-              snapshotId: "deadbeef",
-            },
-            kind: "delete",
-            target: { id: "instance-1", kind: "instance" },
-            taskId,
-          })
-          yield* manager.runPending()
-          assert.strictEqual((yield* manager.get(taskId))?.status, "succeeded")
-        })
-      )
+              snapshotId: "abcdef12",
+              target: { id: "instance-1", kind: "instance" },
+              taskId: `22000000-0000-4000-8000-0000000000${taskSuffix}`,
+              ttlMs,
+            }) satisfies BackupTaskInput
 
-      it.effect("forgets snapshots tagged with a failed create task", () =>
-        Effect.gen(function* () {
-          const forgotten: Array<string> = []
-          const tags: Array<string> = []
-          let prunedRepository: unknown
-          const s3Repository = {
-            accessKeyId: "AKIAEXAMPLE",
-            allowPrivateNetwork: true,
-            bucket: "kiln-backups",
-            endpoint: "https://s3.example.com",
-            forcePathStyle: true,
-            kind: "s3" as const,
-            region: "us-east-1",
-            repositoryPrefix: "team/repo",
-            secretAccessKey: "s3-secret",
-          }
-          const manager = yield* BackupManager.make({
-            config: testConfig(join(testDirectory, "forget-tag")),
-            findInstance: async () => testInstance(),
-            isInstanceStopped: async () => true,
-            restic: mockRestic({
-              snapshotsByTag: async ({ tag }) => {
-                tags.push(tag)
-                return [{ id: "tagged001" }]
-              },
-              forget: async ({ snapshotId }) => {
-                forgotten.push(snapshotId)
-              },
-              prune: async ({ location }) => {
-                prunedRepository = location
-              },
-            }),
-          })
-          const createTaskId = "10000000-0000-4000-8000-000000000088"
-          yield* manager.enqueue({
-            backupId: "dddddddd-eeee-4fff-8000-000000000001",
-            destination: {
-              createTaskId,
-              kind: "restic",
-              repository: s3Repository,
-              repositoryPassword: "secret",
-            },
-            kind: "delete",
-            target: { id: "instance-1", kind: "instance" },
-            taskId: "10000000-0000-4000-8000-000000000098",
-          })
-          yield* manager.runPending()
-          assert.deepStrictEqual(tags, [`task:${createTaskId}`])
-          assert.deepStrictEqual(forgotten, ["tagged001"])
-          assert.deepStrictEqual(prunedRepository, s3Repository)
+          const first = yield* runTask(manager, exportInput("11", 60_000))
+          const second = yield* runTask(manager, exportInput("12", 120_000))
+
+          assert.strictEqual(first.status, "succeeded")
+          assert.strictEqual(second.status, "succeeded")
+          const zip = resolve(
+            config.dataDirectory,
+            "exports",
+            `${backupId}.zip`
+          )
+          const staged = yield* Effect.promise(() => readFile(zip))
+          const firstResult = exportResult(first)
+          const secondResult = exportResult(second)
+          assert.strictEqual(firstResult.bytes, staged.byteLength)
+          assert.strictEqual(firstResult.checksumSha256, sha256(staged))
+          assert.strictEqual(secondResult.checksumSha256, sha256(staged))
+          assert.isAbove(secondResult.expiresAt, firstResult.expiresAt)
+          const marker = resolve(
+            config.dataDirectory,
+            "exports",
+            `.${backupId}.zip.expires`
+          )
+          assert.strictEqual(
+            Number(
+              (yield* Effect.promise(() => readFile(marker, "utf8"))).trim()
+            ),
+            secondResult.expiresAt
+          )
         })
       )
-    }
+  )
+
+  it.effect("prunes a forgotten snapshot and removes its staged export", () =>
+    withRelay("kiln-restic-forget-", ({ config }) =>
+      Effect.gen(function* () {
+        useResticScenario({})
+        const backupId = "cccccccc-dddd-4eee-8fff-000000000001"
+        const taskId = "10000000-0000-4000-8000-000000000099"
+        seedResticRepository(localRepository(config), [
+          { id: "deadbeef", tags: [], totalSize: 3 },
+          { id: "keep0001", tags: [], totalSize: 3 },
+        ])
+        const exports = resolve(config.dataDirectory, "exports")
+        const staged = [
+          resolve(exports, `${backupId}.zip`),
+          resolve(exports, `.${backupId}.zip.expires`),
+          resolve(exports, `.${backupId}.${taskId}.partial`),
+        ]
+        yield* Effect.promise(async () => {
+          await mkdir(exports, { recursive: true })
+          await Promise.all(staged.map((path) => writeFile(path, "staged")))
+        })
+        const manager = yield* backupManager(config)
+
+        const task = yield* runTask(manager, {
+          backupId,
+          destination: {
+            kind: "restic",
+            repository: { kind: "local" },
+            repositoryPassword: "secret",
+            snapshotId: "deadbeef",
+          },
+          kind: "delete",
+          target: { id: "instance-1", kind: "instance" },
+          taskId,
+        })
+
+        assert.strictEqual(task.status, "succeeded")
+        const repository = resticRepository(localRepository(config))
+        assert.deepStrictEqual(
+          repository.snapshots.map((snapshot) => snapshot.id),
+          ["keep0001"]
+        )
+        assert.deepStrictEqual(repository.data, ["keep0001"])
+        for (const path of staged) assert.isFalse(existsSync(path))
+      })
+    )
+  )
+
+  it.effect("forgets every snapshot tagged with a failed create task", () =>
+    withRelay("kiln-restic-forget-tag-", ({ config }) =>
+      Effect.gen(function* () {
+        useResticScenario({})
+        const createTaskId = "10000000-0000-4000-8000-000000000088"
+        const repository = {
+          accessKeyId: "AKIAEXAMPLE",
+          allowPrivateNetwork: true,
+          bucket: "kiln-backups",
+          endpoint: "https://s3.example.com",
+          forcePathStyle: true,
+          kind: "s3" as const,
+          region: "us-east-1",
+          repositoryPrefix: "team/repo",
+          secretAccessKey: "s3-secret",
+        }
+        const remote = "s3:https://s3.example.com/kiln-backups/team/repo"
+        seedResticRepository(remote, [
+          { id: "tagged001", tags: [`task:${createTaskId}`], totalSize: 3 },
+          { id: "other0001", tags: ["task:another"], totalSize: 3 },
+        ])
+        const manager = yield* backupManager(config)
+
+        const task = yield* runTask(manager, {
+          backupId: "dddddddd-eeee-4fff-8000-000000000001",
+          destination: {
+            createTaskId,
+            kind: "restic",
+            repository,
+            repositoryPassword: "secret",
+          },
+          kind: "delete",
+          target: { id: "instance-1", kind: "instance" },
+          taskId: "10000000-0000-4000-8000-000000000098",
+        })
+
+        assert.strictEqual(task.status, "succeeded")
+        const stored = resticRepository(remote)
+        assert.deepStrictEqual(
+          stored.snapshots.map((snapshot) => snapshot.id),
+          ["other0001"]
+        )
+        assert.deepStrictEqual(stored.data, ["other0001"])
+      })
+    )
   )
 })
 
-function resticCreateInput(
-  label: string,
-  maxBytes: number
-): BackupCreateTaskInput & {
+const unreachableStorageUrl = "https://127.0.0.1:1/backups/test.zip"
+
+type ResticScenario = {
+  backup?: {
+    outcome: "complete" | "fail" | "finishOnCancel" | "stall"
+    totalBytes: number
+  }
+}
+
+type ResticSnapshot = { id: string; tags: Array<string>; totalSize: number }
+
+type ResticRepositoryState = {
+  data: Array<string>
+  initialized: boolean
+  snapshots: Array<ResticSnapshot>
+}
+
+function useResticScenario(scenario: ResticScenario): void {
+  writeFileSync(join(fakeRestic, "scenario.json"), JSON.stringify(scenario))
+}
+
+function readResticRepositories(): Record<string, ResticRepositoryState> {
+  return existsSync(join(fakeRestic, "repos.json"))
+    ? (JSON.parse(
+        readFileSync(join(fakeRestic, "repos.json"), "utf8")
+      ) as Record<string, ResticRepositoryState>)
+    : {}
+}
+
+function resticRepository(repository: string): ResticRepositoryState {
+  const state = readResticRepositories()[repository]
+  assert.isDefined(state, `restic repository ${repository} was never used`)
+  return state!
+}
+
+function seedResticRepository(
+  repository: string,
+  snapshots: Array<ResticSnapshot>
+): void {
+  writeFileSync(
+    join(fakeRestic, "repos.json"),
+    JSON.stringify({
+      ...readResticRepositories(),
+      [repository]: {
+        data: snapshots.map((snapshot) => snapshot.id),
+        initialized: true,
+        snapshots,
+      },
+    })
+  )
+}
+
+function localRepository(config: RelayConfig): string {
+  return resticRepositoryPath(config, "instance-1")
+}
+
+function fakeResticScript(control: string): string {
+  return `#!${process.execPath}
+const { randomBytes } = require("node:crypto")
+const fs = require("node:fs")
+const net = require("node:net")
+const path = require("node:path")
+
+const control = ${JSON.stringify(control)}
+const reposFile = path.join(control, "repos.json")
+const read = (file, fallback) => {
+  try { return JSON.parse(fs.readFileSync(file, "utf8")) } catch { return fallback }
+}
+const repos = read(reposFile, {})
+const scenario = read(path.join(control, "scenario.json"), {})
+const key = process.env.RESTIC_REPOSITORY
+const repo = repos[key] ?? { data: [], initialized: false, snapshots: [] }
+const save = () => {
+  repos[key] = repo
+  fs.writeFileSync(reposFile, JSON.stringify(repos))
+}
+const print = (value) => fs.writeSync(1, JSON.stringify(value) + "\\n")
+const fail = (message, code = 1) => {
+  fs.writeSync(2, message + "\\n")
+  process.exit(code)
+}
+const args = []
+const argv = process.argv.slice(2)
+for (let index = 0; index < argv.length; index += 1) {
+  if (argv[index] === "--no-cache") continue
+  if (argv[index] === "-o") { index += 1; continue }
+  args.push(argv[index])
+}
+const flags = (name) => args.flatMap((arg, index) => arg === name ? [args[index + 1]] : [])
+const find = (id) => repo.snapshots.find((snapshot) => snapshot.id === id)
+const requireSnapshot = (id) => find(id) ?? fail('no matching ID found for prefix "' + id + '"')
+
+switch (args[0]) {
+  case "unlock":
+  case "cache":
+    process.exit(0)
+  case "cat":
+    if (!repo.initialized) fail("Fatal: repository does not exist", 10)
+    process.exit(0)
+  case "init":
+    repo.initialized = true
+    save()
+    process.exit(0)
+  case "snapshots": {
+    const tag = flags("--tag")[0]
+    print(repo.snapshots.filter((snapshot) => snapshot.tags.includes(tag)))
+    process.exit(0)
+  }
+  case "stats":
+    print({ total_size: requireSnapshot(args.at(-1)).totalSize })
+    process.exit(0)
+  case "forget":
+    requireSnapshot(args[1])
+    repo.snapshots = repo.snapshots.filter((snapshot) => snapshot.id !== args[1])
+    save()
+    process.exit(0)
+  case "prune":
+    repo.data = repo.data.filter((id) => find(id))
+    save()
+    process.exit(0)
+  case "dump":
+    fs.writeSync(1, "zip:" + requireSnapshot(args[3].split(":")[0]).id)
+    process.exit(0)
+  case "backup":
+    backup()
+    break
+  default:
+    fail("fake restic does not support " + args[0])
+}
+
+function backup() {
+  const plan = scenario.backup ?? { outcome: "complete", totalBytes: 10 }
+  const id = randomBytes(4).toString("hex")
+  repo.snapshots.push({ id, tags: flags("--tag"), totalSize: plan.totalBytes })
+  repo.data.push(id)
+  save()
+  const summary = { message_type: "summary", snapshot_id: id, total_bytes_processed: plan.totalBytes }
+  switch (plan.outcome) {
+    case "complete":
+      print(summary)
+      process.exit(0)
+    case "fail":
+      fail("restic aborted while streams were draining")
+    case "stall":
+      print({ message_type: "status", bytes_done: 0, total_bytes: plan.totalBytes })
+      setInterval(() => undefined, 1 << 30)
+      break
+    case "finishOnCancel":
+      // Finish the snapshot as the Relay terminates the process.
+      process.on("SIGTERM", () => {
+        print(summary)
+        process.exit(0)
+      })
+      net.connect(path.join(control, "events.sock")).on("error", () => undefined)
+      setInterval(() => undefined, 1 << 30)
+      break
+  }
+}
+`
+}
+
+function withRelay<A, E>(
+  prefix: string,
+  body: (context: {
+    config: RelayConfig
+    root: string
+  }) => Effect.Effect<A, E, RelayStateStore | Scope.Scope>
+) {
+  return Effect.gen(function* () {
+    const directory = yield* scratchDirectory(prefix)
+    const config = testRelayConfig(directory)
+    const root = resolve(config.rootDirectory, "instance-1")
+    yield* Effect.promise(() => mkdir(root, { recursive: true }))
+    return yield* body({ config, root }).pipe(
+      Effect.provide(makeRelayStateLayer(join(directory, "relay.sqlite")))
+    )
+  })
+}
+
+function scratchDirectory(prefix: string) {
+  return Effect.acquireRelease(
+    Effect.promise(() => mkdtemp(join(tmpdir(), prefix))),
+    (directory) =>
+      Effect.promise(() => rm(directory, { force: true, recursive: true }))
+  )
+}
+
+function backupManager(
+  config: RelayConfig,
+  findInstance: () => Promise<RelayInstanceConfig | null> = async () =>
+    testInstance()
+) {
+  return BackupManager.make({
+    config,
+    findInstance,
+    isInstanceStopped: async () => true,
+  })
+}
+
+function runTask(manager: BackupManager, input: BackupTaskInput) {
+  return Effect.gen(function* () {
+    yield* manager.enqueue(input)
+    yield* manager.runPending()
+    const task = yield* manager.get(input.taskId)
+    assert.isNotNull(task)
+    return task!
+  })
+}
+
+function archiveResult(task: RelayBackupTask): BackupArchiveCreateTaskResult {
+  const result = task.result
+  assert.isTrue(
+    result !== null && "filename" in result && !("expiresAt" in result)
+  )
+  return result as BackupArchiveCreateTaskResult
+}
+
+function exportResult(task: RelayBackupTask) {
+  const result = task.result
+  assert.isTrue(result !== null && "expiresAt" in result)
+  return result as Extract<RelayBackupTask["result"], { expiresAt: number }>
+}
+
+function partialFiles(config: RelayConfig) {
+  return Effect.promise(async () =>
+    (await readdir(resolve(config.dataDirectory, "backups"))).filter((name) =>
+      name.endsWith(".partial")
+    )
+  )
+}
+
+function gate() {
+  let open = () => undefined as void
+  const opened = new Promise<void>((resolveGate) => {
+    open = resolveGate
+  })
+  return { open: () => open(), opened }
+}
+
+function sha256(contents: Buffer): string {
+  return createHash("sha256").update(contents).digest("hex")
+}
+
+function resticCreateInput(maxBytes: number | null): BackupCreateTaskInput & {
   kind: "create"
 } {
-  const suffix = createHash("sha256").update(label).digest("hex").slice(0, 12)
   return {
     artifactKind: "restic_snapshot",
-    backupId: `00000000-0000-4000-8000-${suffix}`,
+    backupId: "00000000-0000-4000-8000-0000000000aa",
     destination: {
       kind: "restic",
       repository: { kind: "local" },
@@ -1342,47 +1153,8 @@ function resticCreateInput(
     mode: "incremental",
     reason: "manual",
     target: { id: "instance-1", kind: "instance" },
-    taskId: `10000000-0000-4000-8000-${suffix}`,
+    taskId: "10000000-0000-4000-8000-0000000000aa",
   }
-}
-
-function mockRestic(overrides: Partial<ResticDriver>): ResticDriver {
-  const unexpected = async () => {
-    throw new Error("unexpected restic call")
-  }
-  return {
-    backup: unexpected,
-    cacheCleanup: async () => undefined,
-    catConfig: async () => "exists",
-    dumpZip: unexpected,
-    forget: unexpected,
-    init: unexpected,
-    prune: unexpected,
-    restore: unexpected,
-    snapshotsByTag: async () => [],
-    stats: async () => ({ totalSize: 0 }),
-    ...overrides,
-  }
-}
-
-function temporaryDirectory(prefix: string) {
-  return Effect.promise(() =>
-    import("node:fs/promises").then(({ mkdtemp }) =>
-      mkdtemp(resolve(tmpdir(), prefix))
-    )
-  )
-}
-
-function removeTemporaryDirectory(directory: string) {
-  return Effect.sync(() => rmSync(directory, { force: true, recursive: true }))
-}
-
-function testConfig(directory: string) {
-  return loadConfig({
-    KILN_RELAY_DATA_DIR: directory,
-    KILN_RELAY_HOST: "relay.test",
-    NODE_ENV: "test",
-  })
 }
 
 function testBrickRecipe() {
@@ -1427,24 +1199,20 @@ function writeTestArchive(path: string, name: string): Promise<void> {
   })
 }
 
-async function readArchiveManifest(
-  path: string
-): Promise<BackupArchiveManifest> {
+async function readArchive(path: string): Promise<Map<string, string>> {
   const archive = await openPromise(path)
+  const contents = new Map<string, string>()
   try {
     for await (const entry of archive.eachEntry()) {
-      if (entry.fileName !== ".kiln-backup/manifest.json") continue
       const chunks: Array<Buffer> = []
       const source = await archive.openReadStreamPromise(entry)
       for await (const chunk of source) chunks.push(Buffer.from(chunk))
-      return backupArchiveManifestSchema.parse(
-        JSON.parse(Buffer.concat(chunks).toString("utf8")) as unknown
-      )
+      contents.set(entry.fileName, Buffer.concat(chunks).toString("utf8"))
     }
   } finally {
     archive.close()
   }
-  throw new Error("Backup archive did not contain a manifest")
+  return contents
 }
 
 async function replaceArchiveEntryName(
@@ -1481,33 +1249,5 @@ function backupInput(
     reason: "manual",
     target: { id: "instance-1", kind: "instance" },
     taskId: `10000000-0000-4000-8000-${suffix}`,
-  }
-}
-
-function backupResult(index: number): BackupArchiveCreateTaskResult {
-  return {
-    bytes: index + 1,
-    checksumSha256: String(index).repeat(64),
-    filename: `backup-${index}.zip`,
-    warnings: [],
-  }
-}
-
-function testInstance(): RelayInstanceConfig {
-  return {
-    connectAddress: "relay.test",
-    directory: "instance-1",
-    game: "minecraft",
-    id: "instance-1",
-    implementation: "paper",
-    javaVersion: "21",
-    limits: { diskBytes: 0, memoryBytes: 0 },
-    managedByRelay: true,
-    name: "Instance One",
-    ports: [],
-    service: "kiln-instance-1",
-    shortId: "instance-1",
-    tailscale: { enabled: false },
-    version: "1.21.8",
   }
 }

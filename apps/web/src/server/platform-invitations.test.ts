@@ -1,153 +1,177 @@
-import { assert, describe, it } from "@effect/vitest"
-import { Effect, Layer } from "effect"
-import type { ResultSetHeader, RowDataPacket } from "mysql2/promise"
-import { vi } from "vite-plus/test"
-vi.hoisted(() => {
-  process.env.DB_HOST ??= "127.0.0.1"
-  process.env.DB_NAME ??= "test"
-  process.env.DB_PASSWORD ??= "test"
-  process.env.DB_USERNAME ??= "test"
-})
-import { Database } from "@/effect/database"
+import { assert, layer } from "@effect/vitest"
+import { Effect } from "effect"
+import { TestClock } from "effect/testing"
+
 import type { AuthenticatedUser } from "@/lib/auth-session"
 import {
   acceptPlatformInvitationEffect,
   cancelPlatformInvitationEffect,
 } from "@/lib/platform-access"
+import { TestDatabase, describeMysql, resetDatabase } from "@/test/database"
+import { insertRows, insertUser, selectRows } from "@/test/seed"
+
+const now = Date.UTC(2026, 7, 23, 12)
+const tokenHash = "a".repeat(64)
+
+// The session still carries the address the account had when it signed in.
 const actor = {
-  id: "original",
+  id: "invitee",
   email: "changed@example.com",
   role: "user",
   isDevelopmentBypass: false,
 } as AuthenticatedUser
-function fixture(
+
+const seed = (
   options: {
-    subjectId?: string | null
-    status?: string
-    lifecycle?: string
-    admin?: boolean
+    actorRole?: string
+    actorStatus?: string
+    invitation?: Record<string, string | number | null>
   } = {}
-) {
-  const writes: string[] = []
-  const invitation = {
-    id: "invite",
-    user_id: options.subjectId === undefined ? actor.id : options.subjectId,
-    email: "old@example.com",
-    access_type: "platform_admin",
-    expires_at: Date.now() + 60_000,
-    ...(options.lifecycle === "expired"
-      ? { expires_at: 0 }
-      : options.lifecycle
-        ? { [options.lifecycle]: Date.now() }
-        : {}),
-  }
-  const layer = Layer.succeed(Database)({
-    execute: () => Effect.die("Standalone write"),
-    queryRows: () => Effect.die("Standalone query"),
-    transaction: (_operation, run) =>
-      run({
-        execute: (sql) =>
-          Effect.sync(() => {
-            writes.push(sql)
-            return { affectedRows: 1 } as ResultSetHeader
-          }),
-        queryRows: <T extends RowDataPacket>(sql: string) =>
-          Effect.succeed(
-            (sql.includes("WHERE role = 'admin'")
-              ? options.admin
-                ? [
-                    {
-                      ...actor,
-                      role: "admin",
-                      emailVerifiedAt: new Date(0),
-                      status: options.status ?? "enabled",
-                    },
-                  ]
-                : []
-              : sql.includes("invitation")
-                ? [invitation]
-                : sql.includes("WHERE id = ?")
-                  ? [
-                      {
-                        ...actor,
-                        emailVerifiedAt: new Date(0),
-                        status: options.status ?? "enabled",
-                      },
-                    ]
-                  : []) as unknown as ReadonlyArray<T>
-          ),
-      }),
-  })
-  return { writes, layer }
-}
-describe("platform invitations", () => {
-  for (const subjectId of ["another-account", null])
-    it.effect(`rejects a different or unbound subject (${subjectId})`, () => {
-      const { writes, layer } = fixture({ subjectId })
-      return Effect.gen(function* () {
-        const error = yield* acceptPlatformInvitationEffect(actor, "hash").pipe(
-          Effect.flip
-        )
-        assert.include(error.message, "invited account")
-        assert.lengthOf(writes, 0)
-      }).pipe(Effect.provide(layer))
+) =>
+  Effect.gen(function* () {
+    yield* resetDatabase
+    yield* TestClock.setTime(now)
+    yield* insertUser(actor.id, {
+      email: actor.email,
+      role: options.actorRole ?? "user",
+      status: options.actorStatus ?? "enabled",
+      emailVerifiedAt: new Date(now - 60_000),
     })
-  it.effect("accepts the bound identity after an email change", () => {
-    const { writes, layer } = fixture()
-    return Effect.gen(function* () {
-      yield* acceptPlatformInvitationEffect(actor, "hash")
-      assert.isTrue(writes.some((sql) => sql.includes("accepted_by")))
-    }).pipe(Effect.provide(layer))
-  })
-  for (const lifecycle of [
-    "expired",
-    "accepted_at",
-    "revoked_at",
-    "declined_at",
-    "cancelled_at",
-  ])
-    it.effect(`rejects ${lifecycle} without a role write`, () => {
-      const { writes, layer } = fixture({ lifecycle })
-      return Effect.gen(function* () {
-        const error = yield* acceptPlatformInvitationEffect(actor, "hash").pipe(
-          Effect.flip
-        )
-        assert.include(error.message, "invalid or has expired")
-        assert.lengthOf(writes, 0)
-      }).pipe(Effect.provide(layer))
+    yield* insertUser("another-account", {
+      emailVerifiedAt: new Date(now - 60_000),
     })
-  it.effect("rechecks disabled recipients before acceptance", () => {
-    const { writes, layer } = fixture({ status: "disabled" })
-    return Effect.gen(function* () {
-      const error = yield* acceptPlatformInvitationEffect(actor, "hash").pipe(
-        Effect.flip
+    yield* insertRows("invitation", {
+      id: "invite",
+      token_hash: tokenHash,
+      email: "old@example.com",
+      user_id: actor.id,
+      access_type: "platform_admin",
+      invited_by: "another-account",
+      expires_at: now + 60_000,
+      created_at: now - 60_000,
+      ...options.invitation,
+    })
+  })
+
+const actorRole = Effect.map(
+  selectRows<{ id: string; role: string | null }>("user"),
+  (users) => users.find((user) => user.id === actor.id)?.role
+)
+
+const invitationState = Effect.map(
+  selectRows<{
+    accepted_at: number | null
+    accepted_by: string | null
+    revoked_at: number | null
+  }>("invitation"),
+  ([invitation]) => ({
+    accepted: invitation?.accepted_at != null,
+    acceptedBy: invitation?.accepted_by ?? null,
+    revoked: invitation?.revoked_at != null,
+  })
+)
+
+const untouched = { accepted: false, acceptedBy: null, revoked: false }
+
+describeMysql("platform invitations", () => {
+  layer(TestDatabase)((it) => {
+    for (const subjectId of ["another-account", null])
+      it.effect(`rejects a different or unbound subject (${subjectId})`, () =>
+        Effect.gen(function* () {
+          yield* seed({ invitation: { user_id: subjectId } })
+
+          const error = yield* acceptPlatformInvitationEffect(
+            actor,
+            tokenHash
+          ).pipe(Effect.flip)
+
+          assert.include(error.message, "invited account")
+          assert.strictEqual(yield* actorRole, "user")
+          assert.deepEqual(yield* invitationState, untouched)
+        })
       )
-      assert.include(error.message, "enabled, verified account is required")
-      assert.lengthOf(writes, 0)
-    }).pipe(Effect.provide(layer))
-  })
-  for (const { message, ...options } of [
-    { admin: false, message: "Platform administrator required" },
-    {
-      admin: true,
-      status: "disabled",
-      message: "Platform administrator required",
-    },
-    {
-      admin: true,
-      lifecycle: "expired",
-      message: "This invitation is no longer pending",
-    },
-  ])
-    it.effect(`refuses cancellation with ${JSON.stringify(options)}`, () => {
-      const { writes, layer } = fixture(options)
-      return Effect.gen(function* () {
-        const error = yield* cancelPlatformInvitationEffect(
+
+    it.effect("accepts the bound identity after an email change", () =>
+      Effect.gen(function* () {
+        yield* seed()
+
+        yield* acceptPlatformInvitationEffect(actor, tokenHash)
+
+        assert.strictEqual(yield* actorRole, "admin")
+        assert.deepEqual(yield* invitationState, {
+          accepted: true,
+          acceptedBy: actor.id,
+          revoked: false,
+        })
+      })
+    )
+
+    for (const [lifecycle, invitation] of [
+      ["expired", { expires_at: now }],
+      ["accepted", { accepted_at: now - 1 }],
+      ["revoked", { revoked_at: now - 1 }],
+      ["declined", { declined_at: now - 1 }],
+      ["cancelled", { cancelled_at: now - 1 }],
+    ] as const)
+      it.effect(`rejects a ${lifecycle} invitation without a role change`, () =>
+        Effect.gen(function* () {
+          yield* seed({ invitation })
+
+          const error = yield* acceptPlatformInvitationEffect(
+            actor,
+            tokenHash
+          ).pipe(Effect.flip)
+
+          assert.include(error.message, "invalid or has expired")
+          assert.strictEqual(yield* actorRole, "user")
+        })
+      )
+
+    it.effect("rechecks disabled recipients before acceptance", () =>
+      Effect.gen(function* () {
+        yield* seed({ actorStatus: "disabled" })
+
+        const error = yield* acceptPlatformInvitationEffect(
           actor,
-          "invite"
+          tokenHash
         ).pipe(Effect.flip)
-        assert.include(error.message, message)
-        assert.lengthOf(writes, 0)
-      }).pipe(Effect.provide(layer))
-    })
+
+        assert.include(error.message, "enabled, verified account is required")
+        assert.strictEqual(yield* actorRole, "user")
+        assert.deepEqual(yield* invitationState, untouched)
+      })
+    )
+
+    for (const { label, message, ...options } of [
+      {
+        label: "a non-administrator",
+        message: "Platform administrator required",
+      },
+      {
+        label: "a disabled administrator",
+        actorRole: "admin",
+        actorStatus: "disabled",
+        message: "Platform administrator required",
+      },
+      {
+        label: "an expired invitation",
+        actorRole: "admin",
+        invitation: { expires_at: now },
+        message: "no longer pending",
+      },
+    ])
+      it.effect(`refuses cancellation by ${label}`, () =>
+        Effect.gen(function* () {
+          yield* seed(options)
+
+          const error = yield* cancelPlatformInvitationEffect(
+            actor,
+            "invite"
+          ).pipe(Effect.flip)
+
+          assert.include(error.message, message)
+          assert.deepEqual(yield* invitationState, untouched)
+        })
+      )
+  })
 })

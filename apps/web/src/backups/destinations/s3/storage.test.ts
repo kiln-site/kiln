@@ -1,398 +1,296 @@
-import { describe, expect, it, vi } from "vite-plus/test"
-import { Effect, Layer } from "effect"
-import type { ResultSetHeader, RowDataPacket } from "mysql2/promise"
+import { assert, layer } from "@effect/vitest"
+import { Effect } from "effect"
+import { SqlClient } from "effect/sql"
+import { TestClock } from "effect/testing"
+import { vi } from "vite-plus/test"
 
-import { Database } from "@/effect/database"
 import {
   deleteBackupStorageEffect,
-  listBackupStorageEffect,
+  saveBackupStorageEffect,
   setBackupPolicyStorageEffect,
 } from "@/backups/destinations/s3"
-import { BackupStorageError } from "@/effect/errors"
+import { BackupStorageError, CredentialError } from "@/effect/errors"
+import { databaseTableName } from "@/lib/database-config"
+import { TestDatabase, describeMysql, resetDatabase } from "@/test/database"
+import { insertBackup, insertRows, selectRows } from "@/test/seed"
+
 import { deleteS3BackupPrefix } from "./client"
 
-vi.mock("../../../../keyring.mjs", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("../../../../keyring.mjs")>()
-  return {
-    ...actual,
-    decryptWithKeyring: (encoded: string) => {
-      if (encoded.includes("FAILDECRYPT")) {
-        throw new Error("keyring unavailable")
-      }
-      return {
-        needsRotation: false,
-        plaintext: encoded.startsWith("enc:") ? encoded.slice(4) : encoded,
-        version: 1,
-      }
-    },
-    encryptWithKeyring: (plaintext: string) => `enc:${plaintext}`,
-  }
-})
-
-vi.mock("@/lib/environment", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@/lib/environment")>()
-  return {
-    ...actual,
-    betterAuthSecrets: () => [{ version: 1, value: "x".repeat(32) }],
-  }
-})
-
+// S3 itself is the boundary: prefix purges are recorded instead of sent.
 vi.mock("./client", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./client")>()
-  return {
-    ...actual,
-    deleteS3BackupPrefix: vi.fn(() => Effect.void),
-  }
+  return { ...actual, deleteS3BackupPrefix: vi.fn(() => Effect.void) }
 })
 
-const emptyResult: ResultSetHeader = {
-  affectedRows: 0,
-  changedRows: 0,
-  constructor: { name: "ResultSetHeader" },
-  fieldCount: 0,
-  info: "",
-  insertId: 0,
-  serverStatus: 0,
-  warningStatus: 0,
-}
+vi.stubEnv("BETTER_AUTH_SECRETS", `1:${"x".repeat(32)}`)
 
+const now = Date.UTC(2026, 0, 1)
 const storageId = "11111111-1111-4111-8111-111111111111"
 const repositoryPrefix =
   "team/kiln/kiln.dev/relay-one/restic/instance/instance-one/repo-one"
 
-describe("backup storage deletion", () => {
-  it("lists destinations that are still deleting", async () => {
-    let listSql = ""
-    await Effect.runPromise(
-      listBackupStorageEffect().pipe(
-        Effect.provide(
-          Layer.succeed(Database)({
-            execute: () => Effect.succeed(emptyResult),
-            queryRows: (_operation, sql) =>
-              Effect.sync(() => {
-                listSql = sql
-                return []
-              }),
-            transaction: (_operation, run) =>
-              run({
-                execute: () => Effect.succeed(emptyResult),
-                queryRows: () => Effect.succeed([]),
-              }),
-          })
-        )
-      )
-    )
-    expect(listSql).toContain("FROM")
-    expect(listSql).not.toContain("deleting = FALSE")
-  })
+interface StorageRow {
+  deleting: number
+  last_error: string | null
+}
 
-  it("refuses destinations that still have cataloged backups", async () => {
-    await expect(
-      Effect.runPromise(
-        deleteBackupStorageEffect(storageId).pipe(
-          Effect.provide(
-            storageDeleteDatabase({
-              deleting: false,
-              references: 1,
-            })
-          )
-        )
-      )
-    ).rejects.toThrow("still contains cataloged backups")
-    expect(vi.mocked(deleteS3BackupPrefix)).not.toHaveBeenCalled()
-  })
+const purge = vi.mocked(deleteS3BackupPrefix)
 
-  it("refuses destinations that still have replica artifacts", async () => {
-    const queries: Array<string> = []
-    await expect(
-      Effect.runPromise(
-        deleteBackupStorageEffect(storageId).pipe(
-          Effect.provide(
-            storageDeleteDatabase({
-              deleting: false,
-              queries,
-              references: 1,
-            })
-          )
-        )
-      )
-    ).rejects.toThrow("still contains cataloged backups")
-    expect(
-      queries.some(
-        (sql) =>
-          sql.includes("backup_artifact") && sql.includes("reference_count")
-      )
-    ).toBe(true)
-    expect(vi.mocked(deleteS3BackupPrefix)).not.toHaveBeenCalled()
-  })
-
-  it("refuses destinations used by an active final server deletion", async () => {
-    const queries: Array<string> = []
-    await expect(
-      Effect.runPromise(
-        deleteBackupStorageEffect(storageId).pipe(
-          Effect.provide(
-            storageDeleteDatabase({
-              deleting: false,
-              finalDeletion: true,
-              queries,
-              references: 0,
-            })
-          )
-        )
-      )
-    ).rejects.toThrow("being permanently deleted")
-    expect(
-      queries.find((sql) => sql.includes("backup_final_delete"))
-    ).toContain("FOR UPDATE")
-    expect(vi.mocked(deleteS3BackupPrefix)).not.toHaveBeenCalled()
-  })
-
-  it("does not mark deleting when destination credentials cannot be decrypted", async () => {
-    const writes: Array<{ sql: string; values?: ReadonlyArray<unknown> }> = []
-    await expect(
-      Effect.runPromise(
-        deleteBackupStorageEffect(storageId).pipe(
-          Effect.provide(
-            storageDeleteDatabase({
-              ciphertext: "enc:FAILDECRYPT",
-              deleting: false,
-              references: 0,
-              writes,
-            })
-          )
-        )
-      )
-    ).rejects.toThrow(
-      "Credential operation decrypt_backup_storage_credential failed"
-    )
-    expect(
-      writes.some((write) => write.sql.includes("SET deleting = TRUE"))
-    ).toBe(false)
-  })
-
-  it("locks backup policies before storage during destination delete", async () => {
-    const queries: Array<string> = []
-    vi.mocked(deleteS3BackupPrefix).mockReturnValue(Effect.void)
-    await Effect.runPromise(
-      deleteBackupStorageEffect(storageId).pipe(
-        Effect.provide(
-          storageDeleteDatabase({
-            deleting: true,
-            queries,
-            references: 0,
-          })
-        )
-      )
-    )
-    const policyLock = queries.findIndex(
-      (sql) => sql.includes("backup_policy") && sql.includes("FOR UPDATE")
-    )
-    const storageLock = queries.findIndex(
-      (sql) => sql.includes("backup_storage") && sql.includes("FOR UPDATE")
-    )
-    expect(policyLock).toBeGreaterThanOrEqual(0)
-    expect(storageLock).toBeGreaterThan(policyLock)
-  })
-
-  it("keeps deleting after a prefix purge failure", async () => {
-    vi.mocked(deleteS3BackupPrefix).mockReturnValueOnce(
-      Effect.fail(
-        BackupStorageError.make({
-          code: "s3_request_failed",
-          operation: "storage.deletePrefix",
-          reason: "The S3-compatible storage request failed",
-        })
-      )
-    )
-    const writes: Array<{ sql: string; values?: ReadonlyArray<unknown> }> = []
-    await expect(
-      Effect.runPromise(
-        deleteBackupStorageEffect(storageId).pipe(
-          Effect.provide(
-            storageDeleteDatabase({
-              deleting: false,
-              references: 0,
-              writes,
-            })
-          )
-        )
-      )
-    ).rejects.toThrow("S3-compatible storage request failed")
-    expect(writes.some((write) => write.sql.includes("deleting = TRUE"))).toBe(
-      true
-    )
-    expect(
-      writes.some(
-        (write) =>
-          write.sql.includes("backup_policy") &&
-          write.sql.includes("storage_id = NULL")
-      )
-    ).toBe(true)
-    expect(writes.some((write) => write.sql.includes("last_error"))).toBe(true)
-    expect(
-      writes.some(
-        (write) =>
-          write.sql.includes("DELETE FROM") &&
-          write.sql.includes("backup_storage")
-      )
-    ).toBe(false)
-  })
-
-  it("purges restic prefixes then removes the destination", async () => {
-    vi.mocked(deleteS3BackupPrefix).mockReturnValue(Effect.void)
-    const writes: Array<{ sql: string; values?: ReadonlyArray<unknown> }> = []
-    await Effect.runPromise(
-      deleteBackupStorageEffect(storageId).pipe(
-        Effect.provide(
-          storageDeleteDatabase({
-            deleting: true,
-            references: 0,
-            writes,
-          })
-        )
-      )
-    )
-    expect(vi.mocked(deleteS3BackupPrefix)).toHaveBeenCalledWith(
-      expect.objectContaining({
-        accessKeyId: "AKIAEXAMPLE",
-        bucket: "kiln-backups",
-      }),
-      repositoryPrefix
-    )
-    expect(
-      writes.some(
-        (write) =>
-          write.sql.includes("DELETE FROM") &&
-          write.sql.includes("backup_repository")
-      )
-    ).toBe(true)
-    expect(
-      writes.some(
-        (write) =>
-          write.sql.includes("DELETE FROM") &&
-          write.sql.includes("backup_storage")
-      )
-    ).toBe(true)
+// A destination saved through production code, so its credentials are
+// really encrypted.
+const seedStorage = Effect.gen(function* () {
+  yield* resetDatabase
+  yield* TestClock.setTime(now)
+  purge.mockClear()
+  purge.mockImplementation(() => Effect.void)
+  yield* saveBackupStorageEffect({
+    accessKeyId: "AKIAEXAMPLE",
+    allowPrivateNetwork: true,
+    bucket: "kiln-backups",
+    enabled: true,
+    endpoint: "https://s3.example.com",
+    forcePathStyle: true,
+    id: storageId,
+    name: "minio",
+    objectPrefix: "team",
+    ownerUserId: null,
+    region: "us-east-1",
+    secretAccessKey: "s3-secret",
   })
 })
 
-describe("backup storage policy", () => {
-  it("locks the policy before rejecting a deleting destination", async () => {
-    const queries: Array<string> = []
-    const databaseLayer = Layer.succeed(Database)({
-      execute: () => Effect.die("Unexpected standalone database write"),
-      queryRows: () => Effect.die("Unexpected standalone database query"),
-      transaction: (_operation, run) =>
-        run({
-          execute: () => Effect.succeed(emptyResult),
-          queryRows: <TRow extends RowDataPacket>(sql: string) =>
-            Effect.sync(() => {
-              queries.push(sql)
-              return (sql.includes("backup_storage")
-                ? [{ deleting: 1, enabled: 1 }]
-                : []) as unknown as ReadonlyArray<TRow>
-            }),
-        }),
-    })
+const insertRepository = (id: string, row: Record<string, string> = {}) =>
+  insertRows("backup_repository", {
+    id,
+    relay_id: "relay-one",
+    target_kind: "instance",
+    target_id: "instance-one",
+    storage_id: storageId,
+    storage_key: storageId,
+    object_prefix: repositoryPrefix,
+    password_ciphertext: "repository-password",
+    created_at: now,
+    ...row,
+  })
 
-    await expect(
-      Effect.runPromise(
-        setBackupPolicyStorageEffect({
+const insertPolicy = (targetId: string, storage: string | null) =>
+  insertRows("backup_policy", {
+    relay_id: "relay-one",
+    target_kind: "instance",
+    target_id: targetId,
+    storage_id: storage,
+    exclude_patterns: "[]",
+    created_at: now,
+    updated_at: now,
+  })
+
+const storageRow = Effect.map(
+  selectRows<StorageRow>("backup_storage"),
+  (rows) => rows[0]
+)
+
+const policyStorage = Effect.map(
+  selectRows<{ storage_id: string | null }>("backup_policy"),
+  (rows) => rows.map((row) => row.storage_id)
+)
+
+function assertStorageError(
+  failure: unknown,
+  code: BackupStorageError["code"]
+) {
+  assert.instanceOf(failure, BackupStorageError)
+  assert.strictEqual((failure as BackupStorageError).code, code)
+}
+
+describeMysql("backup storage deletion", () => {
+  layer(TestDatabase)((it) => {
+    it.effect("refuses destinations that still hold cataloged backups", () =>
+      Effect.gen(function* () {
+        yield* seedStorage
+        yield* insertBackup("backup-one", { storage_id: storageId })
+
+        const failure = yield* Effect.flip(deleteBackupStorageEffect(storageId))
+
+        assertStorageError(failure, "storage_in_use")
+        assert.strictEqual((yield* storageRow)?.deleting, 0)
+        assert.strictEqual(purge.mock.calls.length, 0)
+      })
+    )
+
+    it.effect("refuses destinations that still hold replica artifacts", () =>
+      Effect.gen(function* () {
+        yield* seedStorage
+        yield* insertBackup("local-backup")
+        yield* insertRows("backup_artifact", {
+          id: "artifact-one",
+          backup_id: "local-backup",
+          destination_key: storageId,
+          storage_id: storageId,
+          status: "available",
+          created_at: now,
+          updated_at: now,
+        })
+
+        const failure = yield* Effect.flip(deleteBackupStorageEffect(storageId))
+
+        assertStorageError(failure, "storage_in_use")
+        assert.strictEqual((yield* storageRow)?.deleting, 0)
+        assert.strictEqual(purge.mock.calls.length, 0)
+      })
+    )
+
+    it.effect(
+      "refuses destinations used by an active final server deletion",
+      () =>
+        Effect.gen(function* () {
+          yield* seedStorage
+          yield* insertRepository("repo-one")
+          yield* insertBackup("final-backup")
+          yield* insertRows("backup_final_delete", {
+            relay_id: "relay-one",
+            target_id: "instance-one",
+            backup_id: "final-backup",
+            requested_by: "user-one",
+            status: "deleting",
+            created_at: now,
+            updated_at: now,
+          })
+
+          const failure = yield* Effect.flip(
+            deleteBackupStorageEffect(storageId)
+          )
+
+          assertStorageError(failure, "storage_in_use")
+          assert.strictEqual((yield* storageRow)?.deleting, 0)
+          assert.lengthOf(yield* selectRows("backup_repository"), 1)
+          assert.strictEqual(purge.mock.calls.length, 0)
+        })
+    )
+
+    it.effect(
+      "does not start deleting when credentials cannot be decrypted",
+      () =>
+        Effect.gen(function* () {
+          yield* seedStorage
+          const sql = yield* SqlClient.SqlClient
+          yield* sql`UPDATE ${sql(databaseTableName("backup_storage"))}
+          SET access_key_id_ciphertext = ${"not-a-ciphertext"}`
+
+          const failure = yield* Effect.flip(
+            deleteBackupStorageEffect(storageId)
+          )
+
+          assert.instanceOf(failure, CredentialError)
+          assert.strictEqual((yield* storageRow)?.deleting, 0)
+          assert.strictEqual(purge.mock.calls.length, 0)
+        })
+    )
+
+    it.effect(
+      "keeps the destination marked deleting after a purge failure",
+      () =>
+        Effect.gen(function* () {
+          yield* seedStorage
+          yield* insertRepository("repo-one")
+          yield* insertPolicy("instance-one", storageId)
+          purge.mockReturnValueOnce(
+            Effect.fail(
+              BackupStorageError.make({
+                code: "s3_request_failed",
+                operation: "storage.deletePrefix",
+                reason: "The S3-compatible storage request failed",
+              })
+            )
+          )
+
+          const failure = yield* Effect.flip(
+            deleteBackupStorageEffect(storageId)
+          )
+
+          assertStorageError(failure, "s3_request_failed")
+          const storage = yield* storageRow
+          assert.strictEqual(storage?.deleting, 1)
+          assert.isNotNull(storage?.last_error)
+          assert.lengthOf(yield* selectRows("backup_repository"), 1)
+          assert.deepStrictEqual(yield* policyStorage, [null])
+        })
+    )
+
+    it.effect("purges restic prefixes, then removes the destination", () =>
+      Effect.gen(function* () {
+        yield* seedStorage
+        yield* insertRepository("repo-one")
+        yield* insertPolicy("instance-one", storageId)
+        yield* insertBackup("deleted-backup", {
+          repository_id: "repo-one",
+          status: "deleted",
+          storage_id: storageId,
+        })
+
+        yield* deleteBackupStorageEffect(storageId)
+
+        assert.deepStrictEqual(
+          purge.mock.calls.map(([credential, prefix]) => [
+            credential.accessKeyId,
+            credential.secretAccessKey,
+            credential.bucket,
+            prefix,
+          ]),
+          [["AKIAEXAMPLE", "s3-secret", "kiln-backups", repositoryPrefix]]
+        )
+        assert.lengthOf(yield* selectRows("backup_storage"), 0)
+        assert.lengthOf(yield* selectRows("backup_repository"), 0)
+        assert.deepStrictEqual(yield* policyStorage, [null])
+        const backups = yield* selectRows<{
+          repository_id: string | null
+          storage_id: string | null
+        }>("backup")
+        assert.deepStrictEqual(
+          backups.map((row) => [row.repository_id, row.storage_id]),
+          [[null, null]]
+        )
+      })
+    )
+  })
+})
+
+describeMysql("backup storage policy", () => {
+  layer(TestDatabase)((it) => {
+    it.effect("assigns an available destination", () =>
+      Effect.gen(function* () {
+        yield* seedStorage
+
+        yield* setBackupPolicyStorageEffect({
           relayId: "relay-one",
           storageId,
           targetId: "instance-one",
           targetKind: "instance",
-        }).pipe(Effect.provide(databaseLayer))
-      )
-    ).rejects.toThrow("unavailable")
-    expect(queries[0]).toContain("backup_policy")
-    expect(queries[0]).toContain("FOR UPDATE")
-    expect(queries[1]).toContain("backup_storage")
-    expect(queries[1]).toContain("FOR UPDATE")
+        })
+
+        assert.deepStrictEqual(yield* policyStorage, [storageId])
+      })
+    )
+
+    it.effect("rejects a destination that is being deleted", () =>
+      Effect.gen(function* () {
+        yield* seedStorage
+        yield* insertPolicy("instance-one", null)
+        const sql = yield* SqlClient.SqlClient
+        yield* sql`UPDATE ${sql(databaseTableName("backup_storage"))}
+          SET deleting = TRUE`
+
+        const failure = yield* Effect.flip(
+          setBackupPolicyStorageEffect({
+            relayId: "relay-one",
+            storageId,
+            targetId: "instance-one",
+            targetKind: "instance",
+          })
+        )
+
+        assertStorageError(failure, "storage_unavailable")
+        assert.deepStrictEqual(yield* policyStorage, [null])
+      })
+    )
   })
 })
-
-function storageDeleteDatabase(input: {
-  ciphertext?: string
-  deleting: boolean
-  finalDeletion?: boolean
-  queries?: Array<string>
-  references: number
-  writes?: Array<{ sql: string; values?: ReadonlyArray<unknown> }>
-}) {
-  const writes = input.writes ?? []
-  const queries = input.queries ?? []
-  return Layer.succeed(Database)({
-    execute: (_operation, sql, values) =>
-      Effect.sync(() => {
-        writes.push({ sql, values })
-        return emptyResult
-      }),
-    queryRows: <TRow extends RowDataPacket>(operation: string) =>
-      Effect.sync(() => {
-        if (operation === "backup_storage_delete_repositories") {
-          return [
-            { id: "repo-one", object_prefix: repositoryPrefix },
-          ] as unknown as ReadonlyArray<TRow>
-        }
-        throw new Error(`Unexpected query ${operation}`)
-      }),
-    transaction: (_operation, run) =>
-      run({
-        execute: (sql, values) =>
-          Effect.sync(() => {
-            writes.push({ sql, values })
-            return emptyResult
-          }),
-        queryRows: <TRow extends RowDataPacket>(sql: string) =>
-          Effect.sync(() => {
-            queries.push(sql)
-            if (sql.includes("backup_final_delete")) {
-              return (input.finalDeletion
-                ? [{ backup_id: "final-backup" }]
-                : []) as unknown as ReadonlyArray<TRow>
-            }
-            if (sql.includes("reference_count")) {
-              return [
-                { reference_count: input.references },
-              ] as unknown as ReadonlyArray<TRow>
-            }
-            if (sql.includes("backup_policy")) {
-              return [] as unknown as ReadonlyArray<TRow>
-            }
-            return [
-              storageCredentialRow(input.deleting, input.ciphertext),
-            ] as unknown as ReadonlyArray<TRow>
-          }),
-      }),
-  })
-}
-
-function storageIdentityRow(deleting: boolean) {
-  return {
-    bucket: "kiln-backups",
-    deleting: deleting ? 1 : 0,
-    endpoint: "https://s3.example.com",
-    force_path_style: 1,
-    id: storageId,
-    object_prefix: "team",
-    owner_user_id: null,
-    region: "us-east-1",
-  }
-}
-
-function storageCredentialRow(deleting: boolean, ciphertext?: string) {
-  return {
-    ...storageIdentityRow(deleting),
-    access_key_id_ciphertext: ciphertext ?? "enc:AKIAEXAMPLE",
-    allow_private_network: 1,
-    created_at: Date.parse("2026-01-01T00:00:00.000Z"),
-    enabled: 1,
-    last_error: null,
-    last_verified_at: null,
-    name: "minio",
-    secret_access_key_ciphertext: ciphertext ?? "enc:s3-secret",
-  }
-}

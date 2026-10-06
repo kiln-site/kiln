@@ -1,11 +1,21 @@
 import assert from "node:assert/strict"
-import { mkdtemp, writeFile } from "node:fs/promises"
+import { mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 
-import { it } from "vite-plus/test"
+import { afterEach, it } from "vite-plus/test"
 
 import { npmRegistryVersion, resolveCliVersion } from "./version.mjs"
+
+const fixtures = []
+
+afterEach(async () => {
+  await Promise.all(
+    fixtures
+      .splice(0)
+      .map((directory) => rm(directory, { force: true, recursive: true }))
+  )
+})
 
 it("uses the app release line for local builds", async () => {
   const repositoryRoot = await fixture({ releaseLine: "0.3.0" })
@@ -59,6 +69,7 @@ it("depends on platform packages by the version the registry stores", () => {
 
 async function fixture(release) {
   const repositoryRoot = await mkdtemp(join(tmpdir(), "kiln-cli-version-"))
+  fixtures.push(repositoryRoot)
   await writeFile(join(repositoryRoot, "release.json"), JSON.stringify(release))
   return repositoryRoot
 }

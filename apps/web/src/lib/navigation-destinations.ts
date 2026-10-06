@@ -232,7 +232,7 @@ type AccessibleServer = NavigableServer & {
   relayId: string
 }
 
-export function destinationsForServer(
+function destinationsForServer(
   instance: NavigableServer
 ): ReadonlyArray<ServerDestination> {
   const workspace =

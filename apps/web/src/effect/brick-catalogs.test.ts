@@ -1,141 +1,109 @@
-import { assert, describe, layer } from "@effect/vitest"
+import { assert, layer } from "@effect/vitest"
 import type { RelayCatalog } from "@workspace/contracts"
-import { Effect, Layer } from "effect"
-import type { ResultSetHeader, RowDataPacket } from "mysql2/promise"
+import { Effect, Result } from "effect"
+import { TestClock } from "effect/testing"
 
 import {
+  PERSONAL_CATALOG_LIMIT,
   listBrickCatalogsEffect,
   saveBrickCatalogEffect,
 } from "@/effect/brick-catalogs"
-import { Database } from "@/effect/database"
+import { TestDatabase, describeMysql, resetDatabase } from "@/test/database"
+import { insertRows, insertUser, selectRows } from "@/test/seed"
 
-const emptyResult: ResultSetHeader = {
-  affectedRows: 1,
-  changedRows: 0,
-  constructor: { name: "ResultSetHeader" },
-  fieldCount: 0,
-  info: "",
-  insertId: 0,
-  serverStatus: 0,
-  warningStatus: 0,
-}
+const now = Date.UTC(2026, 8, 29)
 
 const snapshot: RelayCatalog = {
   bricks: [],
   format: "kiln.catalog/v1",
 }
 
-describe("Brick catalog persistence", () => {
-  const transactionQueries: Array<string> = []
-  const databaseLayer = Layer.succeed(Database)({
-    execute: () => Effect.succeed(emptyResult),
-    queryRows: <TRow extends RowDataPacket>() =>
-      Effect.succeed([] as unknown as ReadonlyArray<TRow>),
-    transaction: (_operation, run) =>
-      run({
-        execute: () => Effect.succeed(emptyResult),
-        queryRows: <TRow extends RowDataPacket>(sql: string) =>
-          Effect.sync(() => {
-            transactionQueries.push(sql)
-            if (sql.includes("SELECT id FROM") && sql.includes("user")) {
-              return [{ id: "user-one" }] as unknown as ReadonlyArray<TRow>
-            }
-            if (sql.includes("COUNT(*)")) {
-              return [{ total: 0 }] as unknown as ReadonlyArray<TRow>
-            }
-            return [] as unknown as ReadonlyArray<TRow>
-          }),
-      }),
+const save = (source: string) =>
+  saveBrickCatalogEffect({
+    ownerUserId: "user-one",
+    revisionSha: null,
+    revisionUrl: null,
+    snapshot,
+    snapshotSha256: "a".repeat(64),
+    source,
   })
 
-  layer(databaseLayer)((it) => {
-    it.effect("locks the owner before enforcing the personal limit", () =>
+const insertCatalog = (id: string, row: Record<string, string | number>) =>
+  insertRows("brick_catalog", {
+    id,
+    owner_user_id: "user-one",
+    source_hash: id.padEnd(64, "0"),
+    source: `https://example.com/${id}.yml`,
+    snapshot: JSON.stringify(snapshot),
+    snapshot_sha256: "b".repeat(64),
+    created_at: now,
+    updated_at: now,
+    ...row,
+  })
+
+describeMysql("Brick catalog persistence", () => {
+  layer(TestDatabase)((it) => {
+    it.effect("holds the personal limit when saves race", () =>
       Effect.gen(function* () {
-        transactionQueries.length = 0
+        yield* resetDatabase
+        yield* TestClock.setTime(now)
+        yield* insertUser("user-one")
+        for (let index = 1; index < PERSONAL_CATALOG_LIMIT; index++) {
+          yield* save(`https://example.com/catalog-${index}.yml`)
+        }
 
-        yield* saveBrickCatalogEffect({
-          ownerUserId: "user-one",
-          revisionSha: null,
-          revisionUrl: null,
-          snapshot,
-          snapshotSha256: "a".repeat(64),
-          source: "https://example.com/catalog.yml",
-        })
+        const results = yield* Effect.all(
+          [
+            Effect.result(save("https://example.com/racer-a.yml")),
+            Effect.result(save("https://example.com/racer-b.yml")),
+          ],
+          { concurrency: "unbounded" }
+        )
 
-        assert.include(transactionQueries[0] ?? "", "FOR UPDATE")
-        assert.include(transactionQueries[0] ?? "", "user")
-        assert.isBelow(
-          transactionQueries.findIndex((sql) => sql.includes("user")),
-          transactionQueries.findIndex((sql) => sql.includes("COUNT(*)"))
+        assert.strictEqual(results.filter(Result.isSuccess).length, 1)
+        assert.lengthOf(
+          yield* selectRows("brick_catalog"),
+          PERSONAL_CATALOG_LIMIT
         )
       })
     )
-  })
 
-  layer(
-    Layer.succeed(Database)({
-      execute: () => Effect.succeed(emptyResult),
-      queryRows: <TRow extends RowDataPacket>() =>
-        Effect.succeed([] as unknown as ReadonlyArray<TRow>),
-      transaction: (_operation, run) =>
-        run({
-          execute: () => Effect.succeed(emptyResult),
-          queryRows: <TRow extends RowDataPacket>(sql: string) => {
-            if (sql.includes("COUNT(*)")) {
-              return Effect.succeed([
-                { total: 0 },
-              ] as unknown as ReadonlyArray<TRow>)
-            }
-            return Effect.succeed([] as unknown as ReadonlyArray<TRow>)
-          },
-        }),
-    })
-  )((it) => {
-    it.effect("allows the virtual development owner to save a catalog", () =>
-      saveBrickCatalogEffect({
-        ownerUserId: "kiln-development-bypass",
-        revisionSha: null,
-        revisionUrl: null,
-        snapshot,
-        snapshotSha256: "a".repeat(64),
-        source: "https://example.com/catalog.yml",
-      }).pipe(Effect.asVoid)
-    )
-  })
-
-  layer(
-    Layer.succeed(Database)({
-      execute: () => Effect.succeed(emptyResult),
-      queryRows: <TRow extends RowDataPacket>() =>
-        Effect.succeed([
-          {
-            id: "invalid-catalog",
-            owner_email: null,
-            owner_name: null,
-            owner_user_id: "user-one",
-            published_at: null,
-            published_by: null,
-            revision_sha: null,
-            revision_url: null,
-            snapshot: "not-json",
-            snapshot_sha256: "b".repeat(64),
-            source: "https://example.com/catalog.yml",
-            updated_at: Date.UTC(2026, 8, 29),
-            visibility: "personal",
-          },
-        ] as unknown as ReadonlyArray<TRow>),
-      transaction: () => Effect.die("Unexpected database transaction"),
-    })
-  )((it) => {
-    it.effect("surfaces an invalid snapshot without failing the listing", () =>
+    it.effect("updates an existing source at the limit", () =>
       Effect.gen(function* () {
-        const records = yield* listBrickCatalogsEffect("user-one", false)
-        assert.strictEqual(records.length, 1)
-        assert.isNull(records[0]?.snapshot)
-        assert.strictEqual(
-          records[0]?.statusError,
-          "Stored catalog snapshot is invalid"
+        yield* resetDatabase
+        yield* TestClock.setTime(now)
+        const ids: Array<string> = []
+        for (let index = 0; index < PERSONAL_CATALOG_LIMIT; index++) {
+          ids.push(yield* save(`https://example.com/catalog-${index}.yml`))
+        }
+
+        const extra = yield* Effect.result(save("https://example.com/new.yml"))
+        const resaved = yield* save("https://example.com/catalog-0.yml")
+
+        assert.isTrue(Result.isFailure(extra))
+        assert.strictEqual(resaved, ids[0])
+        assert.lengthOf(
+          yield* selectRows("brick_catalog"),
+          PERSONAL_CATALOG_LIMIT
         )
+      })
+    )
+
+    it.effect("lists an invalid stored snapshot without failing", () =>
+      Effect.gen(function* () {
+        yield* resetDatabase
+        yield* insertCatalog("valid-catalog", {})
+        yield* insertCatalog("invalid-catalog", {
+          snapshot: JSON.stringify({ format: "unknown" }),
+        })
+
+        const records = yield* listBrickCatalogsEffect("user-one", false)
+
+        const byId = new Map(records.map((record) => [record.id, record]))
+        assert.deepEqual(byId.get("valid-catalog")?.snapshot, snapshot)
+        assert.isNull(byId.get("valid-catalog")?.statusError)
+        assert.isNull(byId.get("invalid-catalog")?.snapshot)
+        assert.isNotNull(byId.get("invalid-catalog")?.statusError)
       })
     )
   })

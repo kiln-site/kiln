@@ -32,6 +32,7 @@ import {
   relayInstancePortInputsSchema,
   relayInstanceWebRouteInputsSchema,
   relayNetworkingSchema,
+  relayProxyBrowserMetadataSchema,
   relayProxyReadInputSchema,
   relayProxySettingsSchema,
   relayDirectoryPageInputSchema,
@@ -110,7 +111,6 @@ import type {
 import { loadRelayTls } from "./effect/tls.js"
 import { applyStoredInstanceNames } from "./instance-names.js"
 import { normalizedRoute } from "./route-label.js"
-import { readRelayProxy } from "./proxy-read.js"
 import { uploadConsoleLogToMclogs } from "./mclogs.js"
 import { closeRelayServer } from "./shutdown.js"
 import { attachSftpServer } from "./sftp-server.js"
@@ -910,9 +910,7 @@ function shutdownRelay(signal: NodeJS.Signals): Promise<void> {
         ],
         { concurrency: 3, discard: true }
       )
-      const result = yield* relayOperation(() =>
-        closeRelayServer(server, new Set())
-      ).pipe(
+      const result = yield* relayOperation(() => closeRelayServer(server)).pipe(
         Effect.catch((cause) =>
           Effect.sync(() => {
             console.error("Relay server shutdown failed", cause)
@@ -1132,12 +1130,16 @@ async function executeControlRequest(
     case "relay.proxy.read": {
       const settings = await lifecycle.proxySettings()
       const input = relayProxyReadInputSchema.parse(request.payload)
-      return readRelayProxy({
-        browserOrigin: config.browserOrigin,
-        includeDiagnostics: input.includeDiagnostics,
-        loadDiagnostics: () => lifecycle.proxyDiagnostics(settings),
+      if (!input.includeDiagnostics) {
+        return relayProxyBrowserMetadataSchema.parse({
+          browserOrigin: config.browserOrigin,
+          mode: settings.mode,
+        })
+      }
+      return {
+        diagnostics: await lifecycle.proxyDiagnostics(settings),
         settings,
-      })
+      }
     }
     case "relay.proxy.write": {
       const settings = relayProxySettingsSchema.parse(request.payload)

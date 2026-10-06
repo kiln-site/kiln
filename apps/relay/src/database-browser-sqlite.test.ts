@@ -8,7 +8,6 @@ import { assert, describe, it } from "@effect/vitest"
 import {
   DatabaseBrowserError,
   openSqliteDatabase,
-  splitSqlStatements,
   sqliteMutate,
   sqliteQuery,
   sqliteRows,
@@ -33,20 +32,45 @@ function withDatabase(run: (path: string) => void) {
 }
 
 describe("SQLite database browser", () => {
-  it("splits scripts without breaking quotes, comments, or triggers", () => {
-    assert.deepStrictEqual(
-      splitSqlStatements(`
-        SELECT ';' AS "a;b"; -- trailing ; comment
-        /* ; */ CREATE TRIGGER t AFTER INSERT ON x BEGIN
-          UPDATE y SET z = CASE WHEN z THEN 1 ELSE 2 END; DELETE FROM y;
-        END;
-        ;
-      `),
-      [
-        `SELECT ';' AS "a;b"`,
-        `-- trailing ; comment\n        /* ; */ CREATE TRIGGER t AFTER INSERT ON x BEGIN\n          UPDATE y SET z = CASE WHEN z THEN 1 ELSE 2 END; DELETE FROM y;\n        END`,
-      ]
-    )
+  it("runs scripts without breaking quotes, comments, or triggers", () => {
+    withDatabase((path) => {
+      const database = openSqliteDatabase(path, false)
+      try {
+        const result = sqliteQuery(
+          database,
+          {
+            action: "query",
+            maxRows: 10,
+            sql: `
+              CREATE TABLE counter (value INTEGER); INSERT INTO counter VALUES (0);
+              -- trailing ; comment
+              /* ; */ CREATE TRIGGER count_player AFTER INSERT ON players BEGIN
+                UPDATE counter SET value = CASE WHEN value THEN 1 ELSE 2 END; DELETE FROM log;
+              END;
+              ;
+              INSERT INTO players VALUES ('c', 'Notch', 0);
+              SELECT ';' AS "a;b";
+            `,
+          },
+          { writable: true }
+        )
+
+        assert.deepStrictEqual(
+          result.columns.map((column) => column.name),
+          ["a;b"]
+        )
+        assert.deepStrictEqual(
+          database.prepare("SELECT value FROM counter").get(),
+          { value: 2 }
+        )
+        assert.deepStrictEqual(
+          database.prepare("SELECT count(*) AS count FROM log").get(),
+          { count: 0 }
+        )
+      } finally {
+        database.close()
+      }
+    })
   })
 
   it("rejects stale edits and keeps the transaction atomic", () => {

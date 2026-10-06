@@ -23,7 +23,6 @@ import {
 import { Effect, Semaphore } from "effect"
 
 import { command } from "./command.js"
-import type { CommandOptions, CommandResult } from "./command.js"
 import { RelaySystemUpdateError } from "./effect/errors.js"
 import {
   KILN_INSTALLATION_LABEL,
@@ -34,12 +33,6 @@ import {
 
 const STALE_UPDATE_MS = 10 * 60_000
 const ORPHAN_LOCK_MS = 30_000
-
-type RunCommand = (
-  executable: string,
-  arguments_: Array<string>,
-  options?: CommandOptions
-) => Promise<CommandResult>
 
 interface ContainerInspect {
   Config: {
@@ -92,28 +85,23 @@ interface SystemUpdateTargetInput {
 
 export class SystemUpdateManager {
   readonly #batchSemaphore = Semaphore.makeUnsafe(1)
-  readonly #command: RunCommand
   readonly #installationId: string | null
   readonly #gitRepository: string
   readonly #operationsDirectory: string
   #activeBatch: { id: string } | null = null
 
-  constructor(
-    config: {
-      dataDirectory: string
-      gitRepository?: string
-      installationId?: string | null
-    },
-    runCommand: RunCommand = command
-  ) {
-    this.#command = runCommand
+  constructor(config: {
+    dataDirectory: string
+    gitRepository?: string
+    installationId?: string | null
+  }) {
     this.#gitRepository = config.gitRepository ?? DEFAULT_KILN_GIT_REPO
     this.#installationId = config.installationId ?? null
     this.#operationsDirectory = join(config.dataDirectory, "updates")
   }
 
   inspect(container: string) {
-    return inspectContainerEffect(container, this.#command).pipe(
+    return inspectContainerEffect(container).pipe(
       Effect.map((inspected) =>
         updateEligibility(inspected, this.#installationId, this.#gitRepository)
       ),
@@ -152,7 +140,6 @@ export class SystemUpdateManager {
     },
     signal?: AbortSignal
   ) {
-    const runCommand = this.#command
     const installationId = this.#installationId
     const gitRepository = this.#gitRepository
     const operationsDirectory = this.#operationsDirectory
@@ -191,8 +178,7 @@ export class SystemUpdateManager {
               batchId,
               startedAt,
               installationId,
-              gitRepository,
-              runCommand
+              gitRepository
             ),
           { concurrency: "unbounded" }
         )
@@ -224,7 +210,6 @@ export class SystemUpdateManager {
                 image,
                 component,
                 gitRepository,
-                runCommand,
                 signal
               ).pipe(Effect.map((inspected) => ({ image, inspected }))),
             { concurrency: "unbounded" }
@@ -247,8 +232,7 @@ export class SystemUpdateManager {
 
           const volumesFrom =
             prepared.find(({ operation }) => operation.component === "relay")
-              ?.container ??
-            (yield* inspectContainerEffect(hostname(), runCommand))
+              ?.container ?? (yield* inspectContainerEffect(hostname()))
           const volumesFromLabels = volumesFrom.Config.Labels ?? {}
           if (
             kilnComponent(volumesFromLabels["io.kiln.component"]) !== "relay" ||
@@ -279,12 +263,11 @@ export class SystemUpdateManager {
           yield* ensureNotAbortedEffect(signal)
 
           const helperState = activeBatch
-            ? yield* helperStateEffect(runCommand, batchId)
+            ? yield* helperStateEffect(batchId)
             : "stopped"
           if (helperState !== "running") {
-            yield* cleanupHelperEffect(runCommand, batchId)
+            yield* cleanupHelperEffect(batchId)
             yield* launchBatchHelperEffect(
-              runCommand,
               {
                 batchId,
                 helperImage: input.helperImage,
@@ -339,7 +322,7 @@ export class SystemUpdateManager {
   #runningBatchEffect() {
     const active = this.#activeBatch
     if (!active) return Effect.succeed<UpdateBatch | null>(null)
-    return helperStateEffect(this.#command, active.id).pipe(
+    return helperStateEffect(active.id).pipe(
       Effect.flatMap((state) =>
         state === "running"
           ? readBatchEffect(this.#operationsDirectory, active.id)
@@ -353,7 +336,6 @@ export class SystemUpdateManager {
 
   status(id: string) {
     const operationsDirectory = this.#operationsDirectory
-    const runCommand = this.#command
     return Effect.gen(function* () {
       if (!/^[0-9a-f-]{36}$/u.test(id)) return null
       const operation = yield* readOperationEffect(operationsDirectory, id)
@@ -363,7 +345,7 @@ export class SystemUpdateManager {
       if (
         operation.status === "running" &&
         operationIsStale(operation) &&
-        (yield* helperStateEffect(runCommand, helperId)) === "stopped"
+        (yield* helperStateEffect(helperId)) === "stopped"
       ) {
         const failed: UpdateOperation = {
           ...operation,
@@ -378,7 +360,7 @@ export class SystemUpdateManager {
           operation.targetContainer,
           operation.id
         )
-        yield* cleanupHelperEffect(runCommand, helperId)
+        yield* cleanupHelperEffect(helperId)
         return failed
       }
 
@@ -391,11 +373,10 @@ export class SystemUpdateManager {
         if (operation.batchId) {
           yield* cleanupCompletedBatchEffect(
             operationsDirectory,
-            operation.batchId,
-            runCommand
+            operation.batchId
           )
         } else {
-          yield* cleanupHelperEffect(runCommand, id)
+          yield* cleanupHelperEffect(id)
         }
       }
       return operation
@@ -414,17 +395,13 @@ const prepareUpdateEffect = Effect.fn("relay.systemUpdates.prepare")(function* (
   batchId: string,
   startedAt: string,
   installationId: string | null,
-  gitRepository: string,
-  runCommand: RunCommand
+  gitRepository: string
 ) {
   const targetComponent = releaseImageComponent(
     input.targetImage,
     gitRepository
   )
-  const container = yield* inspectContainerEffect(
-    input.targetContainer,
-    runCommand
-  )
+  const container = yield* inspectContainerEffect(input.targetContainer)
   const eligibility = updateEligibility(
     container,
     installationId,
@@ -570,7 +547,6 @@ function failQueuedOperationsEffect(
 }
 
 function launchBatchHelperEffect(
-  runCommand: RunCommand,
   input: {
     batchId: string
     helperImage: string
@@ -580,7 +556,7 @@ function launchBatchHelperEffect(
   signal?: AbortSignal
 ): Effect.Effect<void, RelaySystemUpdateError> {
   return systemUpdateOperation("start.launchHelper", () =>
-    runCommand(
+    command(
       "docker",
       [
         "run",
@@ -663,8 +639,7 @@ function writeBatchEffect(
 
 function cleanupCompletedBatchEffect(
   directory: string,
-  batchId: string,
-  runCommand: RunCommand
+  batchId: string
 ): Effect.Effect<void, RelaySystemUpdateError> {
   return Effect.gen(function* () {
     const batch = yield* readBatchEffect(directory, batchId)
@@ -679,8 +654,8 @@ function cleanupCompletedBatchEffect(
     ) {
       return
     }
-    if ((yield* helperStateEffect(runCommand, batchId)) !== "running") {
-      yield* cleanupHelperEffect(runCommand, batchId)
+    if ((yield* helperStateEffect(batchId)) !== "running") {
+      yield* cleanupHelperEffect(batchId)
     }
   })
 }
@@ -702,7 +677,7 @@ function isDefiniteReleaseDowngrade(
   return compareKilnReleaseVersions(requestedVersion, currentVersion) === -1
 }
 
-export function imageVersionMatchesRelease(
+function imageVersionMatchesRelease(
   imageVersion: string | undefined,
   releaseVersion: string
 ): boolean {
@@ -768,8 +743,7 @@ function updateEligibility(
 }
 
 function inspectContainerEffect(
-  container: string,
-  runCommand: RunCommand
+  container: string
 ): Effect.Effect<ContainerInspect, RelaySystemUpdateError> {
   if (!/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$/u.test(container)) {
     return systemUpdateFailure(
@@ -777,18 +751,18 @@ function inspectContainerEffect(
       "Invalid Docker container identifier"
     )
   }
-  return inspectContainerDirectEffect(container, runCommand).pipe(
+  return inspectContainerDirectEffect(container).pipe(
     Effect.catch((directCause) =>
       Effect.gen(function* () {
         const listed = yield* systemUpdateOperation(
           "inspect.listContainers",
-          () => runCommand("docker", ["ps", "--quiet"])
+          () => command("docker", ["ps", "--quiet"])
         )
         const identifiers = listed.stdout.split(/\s+/u).filter(Boolean)
         if (identifiers.length === 0) return yield* Effect.fail(directCause)
         const result = yield* systemUpdateOperation(
           "inspect.inspectCandidates",
-          () => runCommand("docker", ["inspect", ...identifiers])
+          () => command("docker", ["inspect", ...identifiers])
         )
         const inspected = yield* decodeJsonArrayEffect(
           "inspect.decodeCandidates",
@@ -812,13 +786,12 @@ function inspectContainerEffect(
 }
 
 function inspectContainerDirectEffect(
-  container: string,
-  runCommand: RunCommand
+  container: string
 ): Effect.Effect<ContainerInspect, RelaySystemUpdateError> {
   return Effect.gen(function* () {
     const result = yield* systemUpdateOperation(
       "inspect.inspectContainer",
-      () => runCommand("docker", ["inspect", container])
+      () => command("docker", ["inspect", container])
     )
     const inspected = (yield* decodeJsonArrayEffect(
       "inspect.decodeContainer",
@@ -839,20 +812,19 @@ function pullAndVerifyImageEffect(
   image: string,
   expectedComponent: KilnComponent,
   gitRepository: string,
-  runCommand: RunCommand,
   signal?: AbortSignal
 ): Effect.Effect<ImageInspect, RelaySystemUpdateError> {
   return Effect.gen(function* () {
     yield* ensureNotAbortedEffect(signal)
     yield* systemUpdateOperation("start.pullImage", () =>
-      runCommand("docker", ["pull", image], {
+      command("docker", ["pull", image], {
         signal,
         timeout: 10 * 60_000,
       })
     )
     yield* ensureNotAbortedEffect(signal)
     const result = yield* systemUpdateOperation("start.inspectImage", () =>
-      runCommand("docker", ["image", "inspect", image], { signal })
+      command("docker", ["image", "inspect", image], { signal })
     )
     const inspected = (yield* decodeJsonArrayEffect(
       "start.decodeImage",
@@ -1007,13 +979,12 @@ function targetLockPath(directory: string, targetContainer: string): string {
 }
 
 function helperStateEffect(
-  runCommand: RunCommand,
   id: string
 ): Effect.Effect<"running" | "stopped" | "unknown", RelaySystemUpdateError> {
   const helperName = `kiln-updater-${id}`
   return Effect.gen(function* () {
     const result = yield* systemUpdateOperation("status.inspectHelper", () =>
-      runCommand("docker", ["inspect", helperName])
+      command("docker", ["inspect", helperName])
     )
     const inspected = (yield* decodeJsonArrayEffect(
       "status.decodeHelper",
@@ -1024,7 +995,7 @@ function helperStateEffect(
   }).pipe(
     Effect.catch(() =>
       systemUpdateOperation("status.findHelper", () =>
-        runCommand("docker", [
+        command("docker", [
           "ps",
           "--all",
           "--quiet",
@@ -1039,12 +1010,9 @@ function helperStateEffect(
   )
 }
 
-function cleanupHelperEffect(
-  runCommand: RunCommand,
-  id: string
-): Effect.Effect<void> {
+function cleanupHelperEffect(id: string): Effect.Effect<void> {
   return systemUpdateOperation("helper.cleanup", () =>
-    runCommand("docker", ["rm", "--force", `kiln-updater-${id}`])
+    command("docker", ["rm", "--force", `kiln-updater-${id}`])
   ).pipe(
     Effect.asVoid,
     Effect.catch((cause) =>

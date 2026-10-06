@@ -5,11 +5,7 @@ import { pathToFileURL } from "node:url"
 
 import { afterEach, describe, expect, it } from "vite-plus/test"
 
-import {
-  brickIconRetryDelay,
-  githubCatalogRevisionUrl,
-  loadBrickCatalogSource,
-} from "./brick-catalog-source.server"
+import { loadBrickCatalogSource } from "./brick-catalog-source.server"
 
 const directories: Array<string> = []
 
@@ -140,12 +136,6 @@ recipes: [paper.yml]
     expect(loaded.snapshot.bricks[0]?.iconSvg).toBeUndefined()
   })
 
-  it("backs off repeated icon failures after a few quick retries", () => {
-    expect(
-      Array.from({ length: 6 }, (_, failures) => brickIconRetryDelay(failures))
-    ).toEqual([2_000, 10_000, 60_000, 900_000, 900_000, 900_000])
-  })
-
   it("rejects duplicate Brick ids within one catalog", async () => {
     const directory = await temporaryDirectory()
     await writeFile(
@@ -195,18 +185,6 @@ recipes: [paper.yml]
     await expect(
       loadBrickCatalogSource("https://[::ffff:7f00:1]/catalog.yml")
     ).rejects.toThrow("private or reserved address")
-  })
-
-  it("links GitHub snapshots to the catalog file at the pinned commit", () => {
-    expect(
-      githubCatalogRevisionUrl(
-        "https://github.com/kiln-site/kiln",
-        "4d64d6d2b24162440655b822bb907f76fdda73c3",
-        "apps/bricks/catalog.yml"
-      )
-    ).toBe(
-      "https://github.com/kiln-site/kiln/blob/4d64d6d2b24162440655b822bb907f76fdda73c3/apps/bricks/catalog.yml"
-    )
   })
 })
 

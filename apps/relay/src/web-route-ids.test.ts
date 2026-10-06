@@ -1,8 +1,24 @@
-import { describe, expect, it } from "vite-plus/test"
+import { describe, expect, it, vi } from "vite-plus/test"
 
 import { assignRelayWebRouteIds } from "./web-route-ids.js"
 
+const randomBytes = vi.hoisted(() => ({ queue: [] as Array<string> }))
+
+// Route IDs come from crypto randomness; queue specific values to force a
+// collision and fall back to real randomness otherwise.
+vi.mock("node:crypto", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:crypto")>()
+  return {
+    ...actual,
+    randomBytes: (size: number) => {
+      const next = randomBytes.queue.shift()
+      return next ? Buffer.from(next, "hex") : actual.randomBytes(size)
+    },
+  }
+})
+
 const instanceId = "a".repeat(40)
+const otherInstanceId = "b".repeat(40)
 const route = {
   hostname: "map.example.com",
   name: "Live Map",
@@ -10,56 +26,33 @@ const route = {
   stripPrefix: true,
   targetPort: 8_100,
 }
+const otherInstanceRoute = {
+  ...route,
+  id: "deadbeef",
+  instanceId: otherInstanceId,
+}
 
 describe("Relay web route IDs", () => {
-  it("allocates short IDs and retries Relay-local collisions", () => {
-    const candidates = ["deadbeef", "cafebabe"]
-    const configured = [
-      {
-        ...route,
-        id: "deadbeef",
-        instanceId: "b".repeat(40),
-      },
-    ]
+  it("allocates a new ID when the generated one is taken on the Relay", () => {
+    randomBytes.queue.push("deadbeef", "cafebabe")
 
     const [assigned] = assignRelayWebRouteIds(
       instanceId,
       [route],
-      configured,
-      () => candidates.shift() ?? "facefeed"
+      [otherInstanceRoute]
     )
 
     expect(assigned?.id).toBe("cafebabe")
   })
 
-  it("allows the same short ID on a different Relay", () => {
-    const [first] = assignRelayWebRouteIds(
-      instanceId,
-      [route],
-      [],
-      () => "decafbad"
-    )
-    const [second] = assignRelayWebRouteIds(instanceId, [route], [], () =>
-      "decafbad"
-    )
-
-    expect(first?.id).toBe("decafbad")
-    expect(second?.id).toBe("decafbad")
-  })
-
   it("rejects a route ID owned by another instance on the Relay", () => {
+    const claimed = { ...route, id: "deadbeef" }
+
     expect(() =>
-      assignRelayWebRouteIds(
-        instanceId,
-        [{ ...route, id: "deadbeef" }],
-        [
-          {
-            ...route,
-            id: "deadbeef",
-            instanceId: "b".repeat(40),
-          },
-        ]
-      )
-    ).toThrow("Another Ember already uses web route ID deadbeef")
+      assignRelayWebRouteIds(instanceId, [claimed], [otherInstanceRoute])
+    ).toThrow()
+    expect(
+      assignRelayWebRouteIds(otherInstanceId, [claimed], [otherInstanceRoute])
+    ).toEqual([claimed])
   })
 })

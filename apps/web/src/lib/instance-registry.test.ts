@@ -1,9 +1,7 @@
-import { assert, describe, it } from "@effect/vitest"
-import { Effect, Layer } from "effect"
+import { assert, layer } from "@effect/vitest"
+import { Effect } from "effect"
 import * as TestClock from "effect/testing/TestClock"
-import type { ResultSetHeader } from "mysql2/promise"
 
-import { Database } from "@/effect/database"
 import {
   backfillInstanceSourceNamesEffect,
   registerPreparedInstanceEffect,
@@ -11,229 +9,175 @@ import {
   syncInstanceRegistryEffect,
   updateInstanceSourceNameEffect,
 } from "@/lib/instance-registry"
+import { TestDatabase, describeMysql, resetDatabase } from "@/test/database"
+import { insertInstance, insertRelay, selectRows } from "@/test/seed"
 
-const emptyResult: ResultSetHeader = {
-  affectedRows: 0,
-  changedRows: 0,
-  constructor: { name: "ResultSetHeader" },
-  fieldCount: 0,
-  info: "",
-  insertId: 0,
-  serverStatus: 0,
-  warningStatus: 0,
+interface InstanceRow {
+  instance_id: string
+  display_name: string | null
+  source_name: string | null
+  owner_id: string | null
+  provisioning_reserved_until: number | null
 }
 
-describe("instance registry sync", () => {
-  it.effect("registers a newly created instance and its source name", () => {
-    const statements: Array<{
-      sql: string
-      values: ReadonlyArray<unknown>
-    }> = []
-    const databaseLayer = Layer.succeed(Database)({
-      execute: () => Effect.die("Unexpected standalone database write"),
-      queryRows: () => Effect.die("Unexpected database query"),
-      transaction: (_operation, run) =>
-        run({
-          execute: (sql, values) =>
-            Effect.sync(() => {
-              statements.push({ sql, values: values ?? [] })
-              return emptyResult
-            }),
-          queryRows: () => Effect.die("Unexpected transaction query"),
-        }),
-    })
-
-    return Effect.gen(function* () {
-      yield* TestClock.setTime(1_000)
-      yield* registerPreparedInstanceEffect(
-        "relay-one",
-        { id: "instance-one", name: "Survival" },
-        "user-one"
-      )
-
-      assert.lengthOf(statements, 2)
-      assert.include(statements[0]?.sql ?? "", "owner_id")
-      assert.include(statements[0]?.sql ?? "", "source_name")
-      assert.deepEqual(statements[0]?.values, [
-        "relay-one",
-        "instance-one",
-        "Survival",
-        "user-one",
-        1_000,
-        1_000,
-      ])
-      assert.deepEqual(statements[1]?.values, [
-        "relay-one",
-        "instance-one",
-        1_000,
-        1_000,
-        1_000,
-      ])
-    }).pipe(Effect.provide(databaseLayer))
-  })
-
-  it.effect(
-    "protects a prepared owner reservation from snapshot pruning",
-    () => {
-      const statements: Array<{
-        sql: string
-        values: ReadonlyArray<unknown>
-      }> = []
-      const databaseLayer = Layer.succeed(Database)({
-        execute: (_operation, sql, values) =>
-          Effect.sync(() => {
-            statements.push({ sql, values: values ?? [] })
-            return emptyResult
-          }),
-        queryRows: () => Effect.die("Unexpected database query"),
-        transaction: () => Effect.die("Unexpected transaction"),
-      })
-
-      return Effect.gen(function* () {
-        yield* TestClock.setTime(1_000)
-        yield* reservePreparedInstanceEffect(
-          "relay-one",
-          { id: "instance-one" },
-          "user-one"
-        )
-
-        assert.include(statements[0]?.sql ?? "", "provisioning_reserved_until")
-        assert.deepEqual(statements[0]?.values, [
-          "relay-one",
-          "instance-one",
-          "user-one",
-          1_000 + 2 * 60_000,
-          1_000,
-          1_000,
-        ])
-      }).pipe(Effect.provide(databaseLayer))
-    }
+const instances = Effect.map(selectRows<InstanceRow>("instance"), (rows) =>
+  Object.fromEntries(
+    rows.map((row) => [
+      row.instance_id,
+      {
+        displayName: row.display_name,
+        sourceName: row.source_name,
+        ownerId: row.owner_id,
+        reserved: row.provisioning_reserved_until !== null,
+      },
+    ])
   )
+)
 
-  it.effect("only fills missing names from a cached snapshot", () => {
-    const statements: Array<{
-      sql: string
-      values: ReadonlyArray<unknown>
-    }> = []
-    const databaseLayer = Layer.succeed(Database)({
-      execute: (_operation, sql, values) =>
-        Effect.sync(() => {
-          statements.push({ sql, values: values ?? [] })
-          return emptyResult
-        }),
-      queryRows: () => Effect.die("Unexpected database query"),
-      transaction: () => Effect.die("Unexpected transaction"),
-    })
+const seedRelay = Effect.gen(function* () {
+  yield* resetDatabase
+  yield* insertRelay("relay-one")
+  yield* TestClock.setTime(1_000)
+})
 
-    return Effect.gen(function* () {
-      yield* TestClock.setTime(1_000)
-      yield* backfillInstanceSourceNamesEffect("relay-one", [
-        { id: "instance-one", name: "Survival" },
-      ])
+describeMysql("instance registry", () => {
+  layer(TestDatabase)((it) => {
+    it.effect(
+      "registers a prepared instance for its first owner and queues post-provisioning",
+      () =>
+        Effect.gen(function* () {
+          yield* seedRelay
+          yield* reservePreparedInstanceEffect(
+            "relay-one",
+            { id: "instance-one" },
+            "user-one"
+          )
+          yield* registerPreparedInstanceEffect(
+            "relay-one",
+            { id: "instance-one", name: "Survival" },
+            "user-one"
+          )
+          // A later registration never takes ownership away.
+          yield* registerPreparedInstanceEffect(
+            "relay-one",
+            { id: "instance-one", name: "Survival" },
+            "user-two"
+          )
 
-      assert.lengthOf(statements, 1)
-      assert.include(
-        statements[0]?.sql ?? "",
-        "source_name = COALESCE(source_name, VALUES(source_name))"
-      )
-      assert.notInclude(statements[0]?.sql ?? "", "DELETE FROM")
-      assert.deepEqual(statements[0]?.values, [
-        "relay-one",
-        "instance-one",
-        "Survival",
-        1_000,
-        1_000,
-      ])
-    }).pipe(Effect.provide(databaseLayer))
-  })
+          assert.deepEqual(yield* instances, {
+            "instance-one": {
+              displayName: null,
+              sourceName: "Survival",
+              ownerId: "user-one",
+              reserved: false,
+            },
+          })
+          const queued = yield* selectRows<{ instance_id: string }>(
+            "instance_post_provision"
+          )
+          assert.deepEqual(
+            queued.map((row) => row.instance_id),
+            ["instance-one"]
+          )
+        })
+    )
 
-  it.effect("updates only the renamed instance source name", () => {
-    const statements: Array<{
-      sql: string
-      values: ReadonlyArray<unknown>
-    }> = []
-    const databaseLayer = Layer.succeed(Database)({
-      execute: (_operation, sql, values) =>
-        Effect.sync(() => {
-          statements.push({ sql, values: values ?? [] })
-          return emptyResult
-        }),
-      queryRows: () => Effect.die("Unexpected database query"),
-      transaction: () => Effect.die("Unexpected transaction"),
-    })
+    it.effect(
+      "prunes instances missing from a snapshot unless their owner reservation is live",
+      () =>
+        Effect.gen(function* () {
+          yield* seedRelay
+          yield* insertInstance("relay-one", "gone")
+          yield* reservePreparedInstanceEffect(
+            "relay-one",
+            { id: "provisioning" },
+            "user-one"
+          )
 
-    return Effect.gen(function* () {
-      yield* TestClock.setTime(1_000)
-      yield* updateInstanceSourceNameEffect("relay-one", {
-        id: "instance-one",
-        name: "Creative",
-      })
+          yield* syncInstanceRegistryEffect("relay-one", [
+            { id: "running", name: "Running" },
+          ])
+          assert.deepEqual(Object.keys(yield* instances).sort(), [
+            "provisioning",
+            "running",
+          ])
+          assert.strictEqual(
+            (yield* instances).provisioning?.ownerId,
+            "user-one"
+          )
 
-      assert.lengthOf(statements, 1)
-      assert.include(statements[0]?.sql ?? "", "UPDATE")
-      assert.notInclude(statements[0]?.sql ?? "", "DELETE FROM")
-      assert.deepEqual(statements[0]?.values, [
-        "Creative",
-        1_000,
-        "relay-one",
-        "instance-one",
-      ])
-    }).pipe(Effect.provide(databaseLayer))
-  })
+          yield* TestClock.adjust(2 * 60_000)
+          yield* syncInstanceRegistryEffect("relay-one", [])
+          assert.deepEqual(yield* instances, {})
+        })
+    )
 
-  it.effect("stores Relay names outside the unique display-name key", () => {
-    const statements: Array<{
-      sql: string
-      values: ReadonlyArray<unknown>
-    }> = []
-    const databaseLayer = Layer.succeed(Database)({
-      execute: () => Effect.die("Unexpected standalone database write"),
-      queryRows: () => Effect.die("Unexpected database query"),
-      transaction: (_operation, run) =>
-        run({
-          execute: (sql, values) =>
-            Effect.sync(() => {
-              statements.push({ sql, values: values ?? [] })
-              return emptyResult
-            }),
-          queryRows: () => Effect.die("Unexpected transaction query"),
-        }),
-    })
+    it.effect(
+      "stores Relay names outside the unique display name and keeps local fields",
+      () =>
+        Effect.gen(function* () {
+          yield* seedRelay
+          yield* insertInstance("relay-one", "instance-one", {
+            display_name: "Lobby",
+            source_name: "Old",
+            owner_id: "user-one",
+          })
+          yield* insertInstance("relay-one", "removed")
 
-    return Effect.gen(function* () {
-      yield* TestClock.setTime(1_000)
-      yield* syncInstanceRegistryEffect("relay-one", [
-        { id: "instance-one", name: "Survival" },
-        { id: "instance-two", name: "Survival" },
-      ])
+          yield* syncInstanceRegistryEffect("relay-one", [
+            { id: "instance-one", name: "Survival" },
+            { id: "instance-two", name: "Survival" },
+          ])
 
-      const insert = statements[0]
-      assert.isDefined(insert)
-      assert.include(insert.sql, "display_name, source_name")
-      assert.include(insert.sql, "(?, ?, NULL, ?, ?, ?), (?, ?, NULL, ?, ?, ?)")
-      assert.notInclude(insert.sql, "display_name = VALUES(display_name)")
-      assert.include(insert.sql, "source_name = VALUES(source_name)")
-      const prune = statements[1]
-      assert.isDefined(prune)
-      assert.include(prune.sql, "provisioning_reserved_until <= ?")
-      assert.deepEqual(prune.values, [
-        "relay-one",
-        "instance-one",
-        "instance-two",
-        1_000,
-      ])
-      assert.deepEqual(insert.values, [
-        "relay-one",
-        "instance-one",
-        "Survival",
-        1_000,
-        1_000,
-        "relay-one",
-        "instance-two",
-        "Survival",
-        1_000,
-        1_000,
-      ])
-    }).pipe(Effect.provide(databaseLayer))
+          assert.deepEqual(yield* instances, {
+            "instance-one": {
+              displayName: "Lobby",
+              sourceName: "Survival",
+              ownerId: "user-one",
+              reserved: false,
+            },
+            "instance-two": {
+              displayName: null,
+              sourceName: "Survival",
+              ownerId: null,
+              reserved: false,
+            },
+          })
+        })
+    )
+
+    it.effect(
+      "backfills only missing names and renames only the named instance",
+      () =>
+        Effect.gen(function* () {
+          yield* seedRelay
+          yield* insertInstance("relay-one", "named", { source_name: "Kept" })
+          yield* insertInstance("relay-one", "unnamed")
+          yield* insertInstance("relay-one", "bystander", {
+            source_name: "Bystander",
+          })
+
+          yield* backfillInstanceSourceNamesEffect("relay-one", [
+            { id: "named", name: "Cached" },
+            { id: "unnamed", name: "Cached" },
+          ])
+          yield* updateInstanceSourceNameEffect("relay-one", {
+            id: "bystander",
+            name: "Renamed",
+          })
+
+          const names = Object.fromEntries(
+            Object.entries(yield* instances).map(([id, row]) => [
+              id,
+              row.sourceName,
+            ])
+          )
+          assert.deepEqual(names, {
+            bystander: "Renamed",
+            named: "Kept",
+            unnamed: "Cached",
+          })
+        })
+    )
   })
 })

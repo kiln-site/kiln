@@ -355,7 +355,7 @@ function applyRecommendedMinecraftJava(
   values.java_version = javaVersion
 }
 
-export function interpolateTemplate(
+function interpolateTemplate(
   template: string,
   recipe: BrickRecipe,
   values: Readonly<Record<string, BrickVariableValue>>,
@@ -588,7 +588,7 @@ function readHttpsDocument(
     )
   }
   const literal = source.hostname.replace(/^\[|\]$/gu, "")
-  if (isIP(literal) !== 0 && !isPublicRecipeAddress(literal)) {
+  if (isIP(literal) !== 0 && !isPublicRemoteAddress(literal)) {
     return Promise.reject(
       recipeError(
         "blocked_recipe_address",
@@ -704,7 +704,7 @@ function discardResponse(response: IncomingMessage): void {
   response.resume()
 }
 
-export function readResponseDocument(
+function readResponseDocument(
   response: IncomingMessage,
   source: string
 ): Promise<string> {
@@ -757,10 +757,6 @@ export function readResponseDocument(
       resolveDocument(content)
     })
   })
-}
-
-export function isPublicRecipeAddress(address: string): boolean {
-  return isPublicRemoteAddress(address)
 }
 
 function validateLocalSource(source: URL, configuredCatalog: URL): void {

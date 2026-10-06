@@ -1,14 +1,24 @@
-import { Effect, Layer } from "effect"
-import { Database } from "@/effect/database"
-import { describe, expect, it } from "vite-plus/test"
+import { assert, layer } from "@effect/vitest"
+import { Effect } from "effect"
+import { SqlClient } from "effect/sql"
+import { TestClock } from "effect/testing"
+import { describe, expect, it, vi } from "vite-plus/test"
 
 import {
+  approveCliAuthorizationEffect,
   authenticateCliTokenEffect,
-  cliPlatformRole,
   cliRelaySubject,
+  issueCliDeviceCodeEffect,
+  pollCliDeviceTokenEffect,
   requireCliWrite,
   type CliPrincipal,
 } from "@/effect/cli-access"
+import { CliAccessError } from "@/effect/errors"
+import { databaseTableName } from "@/lib/database-config"
+import { TestDatabase, describeMysql, resetDatabase } from "@/test/database"
+import { insertUser, selectRows } from "@/test/seed"
+
+vi.stubEnv("BETTER_AUTH_SECRETS", `1:${"x".repeat(32)}`)
 
 const principal: CliPrincipal = {
   credentialId: "12345678-1234-4123-8123-123456789abc",
@@ -48,57 +58,81 @@ describe("CLI access enforcement", () => {
       "cli/12345678-1234-4123-8123-123456789abc/user-123"
     )
   })
-
-  it("preserves Bring Your Own Relays authorization", () => {
-    expect(cliPlatformRole("relay_creator")).toBe("relay_creator")
-    expect(cliPlatformRole("unexpected-role")).toBe("user")
-  })
 })
 
-describe("CLI identity eligibility", () => {
-  it("preserves the credential while disabled and resumes after enabling", async () => {
-    const state = { status: "disabled", writes: [] as string[] }
-    const layer = Layer.succeed(Database)({
-      queryRows: () =>
-        Effect.succeed([
-          {
-            id: principal.credentialId,
-            user_id: principal.user.id,
-            access_mode: "full_access",
-            email: principal.user.email,
-            email_verified: false,
-            role: "user",
-            user_name: "Agent",
-            status: state.status,
-            statusExpiresAt: null,
-            emailVerifiedAt: null,
-            manuallyVerifiedAt: new Date("2026-09-08T00:00:00Z"),
-            legacyVerificationRecordedAt: null,
-          },
-        ] as never),
-      execute: (_operation, sql) =>
-        Effect.sync(() => {
-          state.writes.push(sql)
-          return { affectedRows: 1 } as never
-        }),
-      transaction: () =>
-        Effect.die("Credential authentication must not mutate account state"),
-    })
-    const disabled = await Effect.runPromise(
-      authenticateCliTokenEffect("kiln_cli_test").pipe(
-        Effect.provide(layer),
-        Effect.flip
-      )
+const now = Date.UTC(2026, 8, 9)
+const manuallyVerifiedAt = new Date("2026-09-08T00:00:00Z")
+
+// Links a CLI through the device flow the way `kiln login` does.
+const linkCli = Effect.gen(function* () {
+  const device = yield* issueCliDeviceCodeEffect({
+    baseUrl: new URL("https://hearth.example.test"),
+    ipAddress: null,
+    name: "Agent CLI",
+    userAgent: null,
+  })
+  const { credentialId } = yield* approveCliAuthorizationEffect({
+    duration: "1d",
+    mode: "full_access",
+    user: {
+      ...principal.user,
+      emailVerified: false,
+      manuallyVerifiedAt: manuallyVerifiedAt.toISOString(),
+    },
+    userCode: device.userCode,
+  })
+  const { accessToken } = yield* pollCliDeviceTokenEffect(device.deviceCode)
+  return { accessToken, credentialId }
+})
+
+const setUserStatus = (status: "enabled" | "disabled") =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient
+    yield* sql`UPDATE ${sql(databaseTableName("user"))} SET status = ${status} WHERE id = ${principal.user.id}`
+  })
+
+describeMysql("CLI identity eligibility", () => {
+  layer(TestDatabase)((it) => {
+    it.effect(
+      "preserves the credential while disabled and resumes after enabling",
+      () =>
+        Effect.gen(function* () {
+          yield* resetDatabase
+          yield* TestClock.setTime(now)
+          yield* insertUser(principal.user.id, {
+            emailVerified: false,
+            manuallyVerifiedAt,
+          })
+          const { accessToken, credentialId } = yield* linkCli
+          yield* setUserStatus("disabled")
+
+          const disabled = yield* authenticateCliTokenEffect(accessToken).pipe(
+            Effect.flip
+          )
+
+          assert.instanceOf(disabled, CliAccessError)
+          assert.strictEqual((disabled as CliAccessError).code, "forbidden")
+          const [stored] = yield* selectRows<{
+            id: string
+            last_used_at: number | null
+            revoked_at: number | null
+          }>("cli_credential")
+          assert.deepInclude(stored, {
+            id: credentialId,
+            last_used_at: null,
+            revoked_at: null,
+          })
+
+          yield* setUserStatus("enabled")
+          const resumed = yield* authenticateCliTokenEffect(accessToken)
+
+          assert.strictEqual(resumed.credentialId, credentialId)
+          assert.isFalse(resumed.user.emailVerified)
+          const [used] = yield* selectRows<{ last_used_at: number | null }>(
+            "cli_credential"
+          )
+          assert.strictEqual(Number(used?.last_used_at), now)
+        })
     )
-    expect(disabled).toMatchObject({ code: "forbidden" })
-    expect(state.writes).toEqual([])
-    state.status = "enabled"
-    const resumed = await Effect.runPromise(
-      authenticateCliTokenEffect("kiln_cli_test").pipe(Effect.provide(layer))
-    )
-    expect(resumed.credentialId).toBe(principal.credentialId)
-    expect(resumed.user.emailVerified).toBe(false)
-    expect(state.writes).toHaveLength(1)
-    expect(state.writes[0]).toContain("last_used_at")
   })
 })

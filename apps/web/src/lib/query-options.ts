@@ -303,7 +303,7 @@ export async function fetchRelaySnapshot(
   )
 }
 
-export function snapshotWithCanonicalState(
+function snapshotWithCanonicalState(
   queryClient: QueryClient,
   fetched: RelayFleetSnapshot
 ): RelayFleetSnapshot {
@@ -326,7 +326,7 @@ export function snapshotWithCanonicalState(
   return snapshot
 }
 
-export function connectionWithCanonicalSnapshot(
+function connectionWithCanonicalSnapshot(
   queryClient: QueryClient,
   connection: Extract<RelayConnection, { status: "connected" | "unreachable" }>
 ): Extract<RelayConnection, { status: "connected" | "unreachable" }> {

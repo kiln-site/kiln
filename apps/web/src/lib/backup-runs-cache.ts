@@ -96,7 +96,7 @@ async function refreshBackupRunsFirstPage(
   )
 }
 
-export async function commitRefreshedBackupRunsFirstPage(
+async function commitRefreshedBackupRunsFirstPage(
   queryClient: QueryClient,
   queryKey: QueryKey,
   firstPage: BackupRunsPage,
@@ -116,7 +116,7 @@ export async function commitRefreshedBackupRunsFirstPage(
   )
 }
 
-export function mergeRefreshedBackupRunsFirstPage(
+function mergeRefreshedBackupRunsFirstPage(
   current: InfiniteData<BackupRunsPage, string | null> | undefined,
   firstPage: BackupRunsPage
 ): InfiniteData<BackupRunsPage, string | null> {

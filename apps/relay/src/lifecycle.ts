@@ -82,18 +82,34 @@ import {
 import type { RelayStoredWebRoute } from "./effect/state.js"
 import { RelayPortAllocationError } from "./effect/errors.js"
 import {
-  WEB_ROUTE_LABEL_PREFIX,
-  WEB_ROUTE_REVISION_LABEL,
-  webRouteRecoveryLabels,
-} from "./web-route-labels.js"
+  activeTailscaleStackBindings,
+  allocateTailscaleStackSubnet,
+  assignTailscaleBindingAddresses,
+  coreDnsConfiguration,
+  tailscaleCoreDnsConfiguration,
+  tailscaleStackCoreDnsConfiguration,
+  tailscaleStackCoreDnsRecords,
+  tailscaleStackFirewallIsCurrent,
+  tailscaleStackFirewallRules,
+  tailscaleStackServiceAddress,
+  tailscaleStackWithoutInstance,
+  TAILSCALE_STACK_FORWARD_CHAIN,
+} from "./private-network.js"
+import {
+  discoverExternalTraefikContainer,
+  recoveryRouteLabels,
+  routeLabelsRequireRestart,
+  traefikDynamicConfiguration,
+  traefikRouteLabels,
+  traefikStaticConfiguration,
+  type TraefikLabelProfile,
+} from "./traefik.js"
 
 const OWNED_LABEL = "kiln.relay.owned=true"
 const TAILSCALE_IMAGE = "tailscale/tailscale:stable"
 const COREDNS_IMAGE = "coredns/coredns:1.14.7"
 const TAILSCALE_STACK_DISK_BYTES = 128 * 1024 * 1024
 const TAILSCALE_STACK_MEMORY_BYTES = 64 * 1024 * 1024
-const TAILSCALE_STACK_FORWARD_CHAIN = "KILN-TAILSCALE"
-const TAILSCALE_STACK_SUBNET_COUNT = 64 * 256
 const PORT_LEASE_TTL_MS = 2 * 60_000
 
 interface PortLeaseRecord {
@@ -153,7 +169,7 @@ function optionalWhenMissing<A>() {
     )
 }
 
-export function nextManagedGamePort(input: {
+function nextManagedGamePort(input: {
   end: number
   instanceId: string
   start: number
@@ -170,48 +186,7 @@ export function nextManagedGamePort(input: {
   throw new Error(`No game ports are available in ${input.start}-${input.end}`)
 }
 
-export function tailscaleStackFirewallRules(
-  bindings: ReadonlyArray<
-    Pick<RelayTailscaleStackConfig["bindings"][number], "address">
-  >
-): Array<Array<string>> {
-  return [
-    ...bindings.map(({ address }) => [
-      "-A",
-      TAILSCALE_STACK_FORWARD_CHAIN,
-      "-d",
-      `${address}/32`,
-      "-j",
-      // Continue through Tailscale's own forwarding chain so it can mark the
-      // packet for masquerading. ACCEPT here would bypass that return path.
-      "RETURN",
-    ]),
-    ["-A", TAILSCALE_STACK_FORWARD_CHAIN, "-j", "DROP"],
-  ]
-}
-
-export function tailscaleStackFirewallIsCurrent(
-  hookExists: boolean,
-  specification: string,
-  bindings: ReadonlyArray<
-    Pick<RelayTailscaleStackConfig["bindings"][number], "address">
-  >
-): boolean {
-  if (!hookExists) return false
-  const current = specification
-    .split("\n")
-    .map((line) => line.trim())
-    .filter((line) => line.startsWith(`-A ${TAILSCALE_STACK_FORWARD_CHAIN} `))
-  const expected = tailscaleStackFirewallRules(bindings).map((rule) =>
-    rule.join(" ")
-  )
-  return (
-    current.length === expected.length &&
-    current.every((line, index) => line === expected[index])
-  )
-}
-
-export function tailscaleStackPendingRemoval(
+function tailscaleStackPendingRemoval(
   config: RelayTailscaleStackConfig,
   snapshot: RelayTailscaleStack
 ): RelayTailscaleStack {
@@ -266,7 +241,7 @@ function formatAllocationBytes(bytes: number): string {
   return `${gibibytes.toFixed(gibibytes >= 10 ? 0 : 1)} GiB`
 }
 
-export function resolveInstanceStartupReconfigure(
+function resolveInstanceStartupReconfigure(
   existing: RelayInstance,
   input: RelayUpdateInstanceStartup
 ): {
@@ -343,7 +318,7 @@ export class LifecycleDriver {
     config: RelayConfig,
     docker: DockerDriver,
     bricks: BrickCatalog,
-    readonly databaseConnections: DatabaseConnections | null = null
+    readonly databaseConnections: DatabaseConnections
   ) {
     this.#bricks = bricks
     this.#config = config
@@ -2506,12 +2481,10 @@ export class LifecycleDriver {
       if (!hostPort) continue
       arguments_.push("--publish", `${hostPort}:${binding}`)
     }
-    if (this.databaseConnections) {
-      for (const [label, value] of Object.entries(
-        await this.databaseConnections.labels(id)
-      )) {
-        arguments_.push("--label", `${label}=${value}`)
-      }
+    for (const [label, value] of Object.entries(
+      await this.databaseConnections.labels(id)
+    )) {
+      arguments_.push("--label", `${label}=${value}`)
     }
     arguments_.push(image)
     arguments_.push(...(definition.runtime.entrypoint?.slice(1) ?? []))
@@ -2532,7 +2505,7 @@ export class LifecycleDriver {
             containerName,
           ])
         }
-        await this.databaseConnections?.reconcile(id, containerName)
+        await this.databaseConnections.reconcile(id, containerName)
         if (input.start) {
           await command("docker", ["start", containerName], {
             timeout: 120_000,
@@ -4419,10 +4392,6 @@ export class LifecycleDriver {
   }
 }
 
-function escapeRegex(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")
-}
-
 async function ensureProtectedFile(path: string): Promise<void> {
   await runLifecycle(
     lifecycleOperation(() =>
@@ -4434,95 +4403,6 @@ async function ensureProtectedFile(path: string): Promise<void> {
     )
   )
   await chmod(path, 0o600)
-}
-
-type LifecycleCommand = (
-  executable: string,
-  arguments_: Array<string>
-) => Promise<{ stderr: string; stdout: string }>
-
-export async function discoverExternalTraefikContainer(
-  input: {
-    edgeNetwork: string
-    resourceNamespace: string | null
-    settings: RelayProxySettings
-  },
-  runCommand: LifecycleCommand = command
-): Promise<string | null> {
-  if (input.settings.mode === "coolify") {
-    return firstTraefikContainer(["coolify-proxy"], runCommand)
-  }
-  if (input.resourceNamespace) {
-    const attached = await recoverPromise(
-      () =>
-        runCommand("docker", [
-          "network",
-          "inspect",
-          "--format",
-          "{{range .Containers}}{{println .Name}}{{end}}",
-          input.edgeNetwork,
-        ]),
-      () => ({ stderr: "", stdout: "" })
-    )
-    return firstTraefikContainer(containerNames(attached.stdout), runCommand)
-  }
-
-  const candidates = ["coolify-proxy"]
-  const ports = await Promise.all(
-    [80, 443].map((port) =>
-      recoverPromise(
-        () =>
-          runCommand("docker", [
-            "ps",
-            "--filter",
-            `publish=${port}`,
-            "--format",
-            "{{.Names}}",
-          ]),
-        () => ({ stderr: "", stdout: "" })
-      )
-    )
-  )
-  for (const result of ports) {
-    candidates.push(...containerNames(result.stdout))
-  }
-  return firstTraefikContainer(Array.from(new Set(candidates)), runCommand)
-}
-
-async function firstTraefikContainer(
-  names: ReadonlyArray<string>,
-  runCommand: LifecycleCommand
-): Promise<string | null> {
-  for (const name of names) {
-    const inspected = await recoverPromise(
-      async () =>
-        (
-          await runCommand("docker", [
-            "inspect",
-            "--format",
-            "{{.State.Running}} {{.Config.Image}}",
-            name,
-          ])
-        ).stdout
-          .trim()
-          .toLowerCase(),
-      () => ""
-    )
-    if (
-      inspected.startsWith("true traefik:") ||
-      inspected.startsWith("true traefik@")
-    ) {
-      return name
-    }
-  }
-  return null
-}
-
-function containerNames(output: string): Array<string> {
-  return output
-    .split("\n")
-    .map((value) => value.trim())
-    .filter(Boolean)
 }
 
 async function containerUsesNetwork(
@@ -4623,259 +4503,6 @@ async function disconnectNetwork(name: string, network: string): Promise<void> {
   await command("docker", ["network", "disconnect", "--force", network, name])
 }
 
-export interface TraefikLabelProfile {
-  certificateResolver: string
-  httpEntryPoint: string
-  httpsEntryPoint: string
-}
-
-export function traefikRouteLabels(
-  routes: ReadonlyArray<RelayInstanceWebRoute>,
-  profile: TraefikLabelProfile,
-  edgeNetwork = "kiln-edge"
-): Record<string, string> {
-  const labels: Record<string, string> = {
-    ...webRouteRecoveryLabels(routes),
-    "traefik.enable": routes.length > 0 ? "true" : "false",
-  }
-  if (routes.length > 0) labels["traefik.docker.network"] = edgeNetwork
-
-  for (const route of routes) {
-    const name = traefikRouteName(route.id)
-    const httpRouter = `${name}-http`
-    const httpsRouter = `${name}-https`
-    const rule = route.path
-      ? `Host(\`${route.hostname}\`) && PathPrefix(\`${route.path}\`)`
-      : `Host(\`${route.hostname}\`)`
-    labels[`traefik.http.routers.${httpRouter}.entrypoints`] =
-      profile.httpEntryPoint
-    labels[`traefik.http.routers.${httpRouter}.middlewares`] =
-      `${name}-redirect`
-    labels[`traefik.http.routers.${httpRouter}.priority`] = String(
-      route.path ? 100 + route.path.length : 10
-    )
-    labels[`traefik.http.routers.${httpRouter}.rule`] = rule
-    labels[`traefik.http.routers.${httpRouter}.service`] = name
-    labels[`traefik.http.middlewares.${name}-redirect.redirectscheme.scheme`] =
-      "https"
-    labels[
-      `traefik.http.middlewares.${name}-redirect.redirectscheme.permanent`
-    ] = "true"
-    labels[`traefik.http.routers.${httpsRouter}.entrypoints`] =
-      profile.httpsEntryPoint
-    labels[`traefik.http.routers.${httpsRouter}.priority`] = String(
-      route.path ? 100 + route.path.length : 10
-    )
-    labels[`traefik.http.routers.${httpsRouter}.rule`] = rule
-    labels[`traefik.http.routers.${httpsRouter}.service`] = name
-    labels[`traefik.http.routers.${httpsRouter}.tls`] = "true"
-    labels[`traefik.http.routers.${httpsRouter}.tls.certresolver`] =
-      profile.certificateResolver
-    labels[`traefik.http.services.${name}.loadbalancer.server.port`] = String(
-      route.targetPort
-    )
-    if (route.path && route.stripPrefix) {
-      labels[`traefik.http.routers.${httpsRouter}.middlewares`] =
-        `${name}-strip`
-      labels[`traefik.http.middlewares.${name}-strip.stripprefix.prefixes`] =
-        route.path
-    }
-  }
-
-  return withWebRouteRevision(labels)
-}
-
-export function recoveryRouteLabels(
-  routes: ReadonlyArray<RelayInstanceWebRoute>
-): Record<string, string> {
-  return withWebRouteRevision({
-    ...webRouteRecoveryLabels(routes),
-    "traefik.enable": "false",
-  })
-}
-
-export function routeLabelsRequireRestart(
-  current: Readonly<Record<string, string>>,
-  routes: ReadonlyArray<RelayInstanceWebRoute>,
-  desired: Readonly<Record<string, string>>
-): boolean {
-  if (routes.length > 0) {
-    return (
-      current[WEB_ROUTE_REVISION_LABEL] !== desired[WEB_ROUTE_REVISION_LABEL]
-    )
-  }
-  const hasManagedRouteLabels =
-    current[WEB_ROUTE_REVISION_LABEL] !== undefined ||
-    current["traefik.enable"] === "true" ||
-    Object.keys(current).some(
-      (label) =>
-        label.startsWith("traefik.http.") ||
-        (label.startsWith(WEB_ROUTE_LABEL_PREFIX) &&
-          label !== WEB_ROUTE_REVISION_LABEL)
-    )
-  return (
-    hasManagedRouteLabels &&
-    current[WEB_ROUTE_REVISION_LABEL] !== desired[WEB_ROUTE_REVISION_LABEL]
-  )
-}
-
-function withWebRouteRevision(
-  labels: Readonly<Record<string, string>>
-): Record<string, string> {
-  return {
-    ...labels,
-    [WEB_ROUTE_REVISION_LABEL]: createHash("sha256")
-      .update(
-        JSON.stringify(
-          Object.entries(labels).sort(([a], [b]) => a.localeCompare(b))
-        )
-      )
-      .digest("hex"),
-  }
-}
-
-export function traefikStaticConfiguration(
-  settings: RelayProxySettings
-): string {
-  const email = settings.acmeEmail
-    ? `      email: ${JSON.stringify(settings.acmeEmail)}\n`
-    : ""
-  return `entryPoints:
-  web:
-    address: ":80"
-    http:
-      redirections:
-        entryPoint:
-          to: websecure
-          scheme: https
-          permanent: true
-  websecure:
-    address: ":443"
-
-providers:
-  file:
-    directory: /etc/traefik/dynamic
-    watch: true
-
-certificatesResolvers:
-  kiln:
-    acme:
-${email}      storage: /var/lib/traefik/acme.json
-      httpChallenge:
-        entryPoint: web
-
-api:
-  dashboard: false
-log:
-  level: INFO
-accessLog: {}
-`
-}
-
-export function traefikDynamicConfiguration(
-  config: RelayConfig,
-  routes: ReadonlyArray<RelayStoredWebRoute>,
-  _settings: RelayProxySettings
-): string {
-  const resources = relayResourceNames(config)
-  const lines = ["http:", "  routers:"]
-  if (isTraefikHostname(config.advertisedHost)) {
-    lines.push(
-      "    kiln-relay:",
-      `      rule: ${JSON.stringify(`Host(\`${config.advertisedHost}\`)`)}`,
-      "      entryPoints:",
-      "        - websecure",
-      "      service: kiln-relay",
-      "      tls:",
-      "        certResolver: kiln",
-      "    kiln-relay-browser:",
-      `      rule: ${JSON.stringify(
-        `Host(\`${config.advertisedHost}\`) && Path(\`/v1/browser\`)`
-      )}`,
-      "      priority: 100",
-      "      entryPoints:",
-      "        - websecure",
-      "      service: kiln-relay",
-      "      middlewares:",
-      "        - kiln-relay-browser-admission",
-      "      tls:",
-      "        certResolver: kiln"
-    )
-  }
-  for (const route of routes) {
-    const name = traefikRouteName(route.id)
-    const rule = route.path
-      ? `Host(\`${route.hostname}\`) && PathPrefix(\`${route.path}\`)`
-      : `Host(\`${route.hostname}\`)`
-    lines.push(
-      `    ${name}:`,
-      `      rule: ${JSON.stringify(rule)}`,
-      `      priority: ${route.path ? 100 + route.path.length : 10}`,
-      "      entryPoints:",
-      "        - websecure",
-      `      service: ${name}`,
-      "      tls:",
-      "        certResolver: kiln"
-    )
-    if (route.path && route.stripPrefix) {
-      lines.push("      middlewares:", `        - ${name}-strip`)
-    }
-  }
-
-  lines.push("  services:")
-  if (isTraefikHostname(config.advertisedHost)) {
-    lines.push(
-      "    kiln-relay:",
-      "      loadBalancer:",
-      "        servers:",
-      `          - url: ${JSON.stringify(`http://${resources.relayEdgeAlias}:${config.port}`)}`
-    )
-  }
-  for (const route of routes) {
-    const name = traefikRouteName(route.id)
-    lines.push(
-      `    ${name}:`,
-      "      loadBalancer:",
-      "        servers:",
-      `          - url: ${JSON.stringify(`http://${resources.instanceContainer(route.instanceId)}:${route.targetPort}`)}`
-    )
-  }
-
-  lines.push("  middlewares:")
-  if (isTraefikHostname(config.advertisedHost)) {
-    lines.push(
-      "    kiln-relay-browser-admission:",
-      "      rateLimit:",
-      "        average: 2",
-      "        period: 1s",
-      `        burst: ${config.browserLimits.pendingHandshakesPerIp}`,
-      "        sourceCriterion:",
-      "          ipStrategy:",
-      "            ipv6Subnet: 64"
-    )
-  }
-  for (const route of routes) {
-    if (!route.path || !route.stripPrefix) continue
-    const name = traefikRouteName(route.id)
-    lines.push(
-      `    ${name}-strip:`,
-      "      stripPrefix:",
-      "        prefixes:",
-      `          - ${JSON.stringify(route.path)}`
-    )
-  }
-  lines.push("")
-  return `${lines.join("\n")}\n`
-}
-
-function traefikRouteName(id: string): string {
-  return `kiln-route-${id.replaceAll("-", "")}`
-}
-
-function isTraefikHostname(value: string): boolean {
-  return /^[A-Za-z0-9.:[\]-]+$/u.test(value)
-}
-
 function formatPublicHost(hostname: string): string {
   return hostname.includes(":") && !hostname.startsWith("[")
     ? `[${hostname}]`
@@ -4916,192 +4543,4 @@ function hasErrorCode(cause: unknown, code: string): boolean {
     "code" in cause &&
     cause.code === code
   )
-}
-
-export function coreDnsHostnamePattern(
-  domain: string,
-  hostnames: ReadonlyArray<string>
-): string {
-  const suffix = `.${domain}`
-  const names = Array.from(
-    new Set(
-      hostnames
-        .map((hostname) => hostname.toLowerCase().replace(/\.$/u, ""))
-        .filter((hostname) => hostname.endsWith(suffix))
-    )
-  ).sort()
-  return names.length === 0
-    ? "^$"
-    : `(?i)^(?:${names.map(escapeRegex).join("|")})[.]$`
-}
-
-export function coreDnsConfiguration(
-  networking: RelayNetworking,
-  hostnames: ReadonlyArray<string>
-): string {
-  const pattern = coreDnsHostnamePattern(networking.domain, hostnames)
-  return `${networking.domain}:${networking.dnsPort} {\n    errors\n    template IN A {\n        match "${pattern}"\n        answer "{{ .Name }} 60 IN A {$KILN_NODE_ADDRESS}"\n    }\n    template IN AAAA {\n        match "${pattern}"\n        rcode NOERROR\n    }\n}\n`
-}
-
-export function tailscaleCoreDnsConfiguration(
-  settings: RelayTailscaleSettings,
-  address: string,
-  hostnames: ReadonlyArray<string>
-): string {
-  const pattern = coreDnsHostnamePattern(settings.domain, hostnames)
-  return `${settings.domain}:${settings.dnsPort} {\n    bind ${address}\n    errors\n    template IN A {\n        match "${pattern}"\n        answer "{{ .Name }} 60 IN A ${address}"\n    }\n    template IN AAAA {\n        match "${pattern}"\n        rcode NOERROR\n    }\n}\n`
-}
-
-export function tailscaleStackSubnet(stackId: string, nodeId: string): string {
-  return allocateTailscaleStackSubnet(stackId, nodeId, new Set())
-}
-
-export function allocateTailscaleStackSubnet(
-  stackId: string,
-  nodeId: string,
-  reserved: ReadonlySet<string>
-): string {
-  const digest = createHash("sha256").update(`${stackId}:${nodeId}`).digest()
-  const start =
-    (((digest[0] ?? 0) << 8) | (digest[1] ?? 0)) % TAILSCALE_STACK_SUBNET_COUNT
-  const stepSeed = ((digest[2] ?? 0) << 8) | (digest[3] ?? 0)
-  const step = (stepSeed % (TAILSCALE_STACK_SUBNET_COUNT / 2)) * 2 + 1
-  for (let offset = 0; offset < TAILSCALE_STACK_SUBNET_COUNT; offset += 1) {
-    const index = (start + offset * step) % TAILSCALE_STACK_SUBNET_COUNT
-    const subnet = `10.${128 + Math.floor(index / 256)}.${index % 256}.0/24`
-    if (!reserved.has(subnet)) return subnet
-  }
-  throw new Error("No private Tailscale subnets remain on this Relay")
-}
-
-export function tailscaleStackServiceAddress(subnet: string): string {
-  const prefix = subnet.replace(/\.0\/24$/u, "")
-  if (prefix === subnet) throw new Error(`Invalid Tailscale subnet ${subnet}`)
-  return `${prefix}.2`
-}
-
-export function allocateTailscaleBindingAddress(
-  subnet: string,
-  reserved: Set<string>
-): string {
-  const prefix = subnet.replace(/\.0\/24$/u, "")
-  if (prefix === subnet) throw new Error(`Invalid Tailscale subnet ${subnet}`)
-  for (let host = 10; host <= 254; host += 1) {
-    const address = `${prefix}.${host}`
-    if (reserved.has(address)) continue
-    reserved.add(address)
-    return address
-  }
-  throw new Error(
-    `Tailscale subnet ${subnet} has no available server addresses`
-  )
-}
-
-export function assignTailscaleBindingAddresses(
-  subnet: string,
-  existing: ReadonlyArray<{
-    address: string
-    enabled?: boolean
-    hostname: string
-    instanceId: string
-  }>,
-  desired: ReadonlyArray<{
-    enabled?: boolean
-    hostname: string
-    instanceId: string
-  }>
-): Array<{
-  address: string
-  enabled: boolean
-  hostname: string
-  instanceId: string
-}> {
-  const desiredInstanceIds = new Set(
-    desired.map(({ instanceId }) => instanceId)
-  )
-  const previousByInstance = new Map(
-    existing.map((binding) => [binding.instanceId, binding])
-  )
-  const reserved = new Set(
-    existing
-      .filter(({ instanceId }) => desiredInstanceIds.has(instanceId))
-      .map(({ address }) => address)
-  )
-
-  return desired.map((binding) => {
-    const previous = previousByInstance.get(binding.instanceId)
-    return {
-      ...binding,
-      address:
-        previous?.address ?? allocateTailscaleBindingAddress(subnet, reserved),
-      enabled: binding.enabled ?? true,
-    }
-  })
-}
-
-function activeTailscaleStackBindings<TBinding extends { enabled: boolean }>(
-  bindings: ReadonlyArray<TBinding>
-): Array<TBinding> {
-  return bindings.filter((binding) => binding.enabled)
-}
-
-export function tailscaleStackWithoutInstance(
-  config: RelayTailscaleStackConfig,
-  records: ReadonlyArray<{ address: string; hostname: string }>,
-  instanceId: string
-): {
-  config: RelayTailscaleStackConfig
-  records: Array<{ address: string; hostname: string }>
-} {
-  const removedAddresses = new Set(
-    config.bindings
-      .filter((binding) => binding.instanceId === instanceId)
-      .map(({ address }) => address)
-  )
-  return {
-    config: relayTailscaleStackConfigSchema.parse({
-      ...config,
-      bindings: config.bindings.filter(
-        (binding) => binding.instanceId !== instanceId
-      ),
-    }),
-    records: records.filter((record) => !removedAddresses.has(record.address)),
-  }
-}
-
-export function tailscaleStackCoreDnsConfiguration(
-  domain: string,
-  records: ReadonlyArray<{ address: string; hostname: string }>
-): string {
-  const entries = [...records]
-    .sort((left, right) => left.hostname.localeCompare(right.hostname))
-    .map(
-      ({ address, hostname }) =>
-        `        ${address} ${hostname.replace(/\.$/u, "")}.${domain}`
-    )
-    .join("\n")
-  return `${domain}:53 {\n    errors\n    cache 30\n    hosts {\n${entries}${entries ? "\n" : ""}        ttl 60\n    }\n}\n`
-}
-
-export function tailscaleStackCoreDnsRecords(
-  domain: string,
-  configuration: string
-): Array<{ address: string; hostname: string }> {
-  const suffix = `.${domain}`
-  const records = configuration
-    .split("\n")
-    .map((line) => line.trim().split(/\s+/u))
-    .flatMap(([address, name]) => {
-      if (!address || !name || !name.endsWith(suffix)) return []
-      return [
-        {
-          address,
-          hostname: name.slice(0, -suffix.length),
-        },
-      ]
-    })
-  return relayTailscaleStackDnsSchema.parse({
-    id: "0".repeat(40),
-    records,
-  }).records
 }

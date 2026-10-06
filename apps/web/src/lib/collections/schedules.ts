@@ -5,7 +5,7 @@ import { queryCollectionOptions } from "@tanstack/query-db-collection"
 import { queryKeys } from "@/lib/query-options"
 import { getSchedules } from "@/server/schedules"
 
-export type HearthSchedule = Awaited<ReturnType<typeof getSchedules>>[number]
+type HearthSchedule = Awaited<ReturnType<typeof getSchedules>>[number]
 
 export const schedulesCollectionOptions = collectionOptions(
   "hearth-schedules",

@@ -1,150 +1,91 @@
-import { assert, describe, it } from "@effect/vitest"
-import { Effect, Layer } from "effect"
-import type { ResultSetHeader, RowDataPacket } from "mysql2/promise"
+import { assert, layer } from "@effect/vitest"
+import { Effect } from "effect"
+import { TestClock } from "effect/testing"
 
 import {
   accountSessionActiveEffect,
   listAccountSessionsEffect,
   revokeAccountSessionEffect,
 } from "@/effect/account-sessions"
-import { Database } from "@/effect/database"
+import { TestDatabase, describeMysql, resetDatabase } from "@/test/database"
+import { insertRows, selectRows } from "@/test/seed"
 
-const successfulWrite: ResultSetHeader = {
-  affectedRows: 1,
-  changedRows: 0,
-  constructor: { name: "ResultSetHeader" },
-  fieldCount: 0,
-  info: "",
-  insertId: 0,
-  serverStatus: 0,
-  warningStatus: 0,
-}
+const now = Date.UTC(2026, 7, 23, 12)
 
-describe("account sessions", () => {
-  it.effect(
-    "returns only the authenticated user's non-secret session data",
-    () => {
-      const statements: Array<Statement> = []
-      const databaseLayer = accountSessionDatabaseLayer({
-        rows: [
-          sessionRow("session-own", "user-one"),
-          sessionRow("session-foreign", "user-two"),
-        ],
-        statements,
-      })
-
-      return Effect.gen(function* () {
-        const sessions = yield* listAccountSessionsEffect("user-one")
-
-        assert.deepStrictEqual(
-          sessions.map((session) => session.id),
-          ["session-own"]
-        )
-        assert.isFalse("token" in sessions[0]!)
-        assert.match(
-          statements[0]!.sql,
-          /WHERE userId = \?\s+AND expiresAt > \?/u
-        )
-        assert.deepStrictEqual(statements[0]!.values, ["user-one", new Date(0)])
-      }).pipe(Effect.provide(databaseLayer))
-    }
-  )
-
-  it.effect("scopes revocation to the authenticated user", () => {
-    const statements: Array<Statement> = []
-    const databaseLayer = accountSessionDatabaseLayer({ rows: [], statements })
-
-    return Effect.gen(function* () {
-      yield* revokeAccountSessionEffect("user-one", "session-target")
-
-      assert.match(statements[0]!.sql, /WHERE id = \?\s+AND userId = \?/u)
-      assert.deepStrictEqual(statements[0]!.values, [
-        "session-target",
-        "user-one",
-      ])
-    }).pipe(Effect.provide(databaseLayer))
+const insertSession = (id: string, userId: string, expiresAt: number) =>
+  insertRows("session", {
+    id,
+    token: `token-${id}`,
+    userId,
+    expiresAt: new Date(expiresAt),
+    createdAt: new Date(now - 60_000),
+    updatedAt: new Date(now - 60_000),
+    ipAddress: "203.0.113.1",
+    userAgent: "Kiln test browser",
   })
 
-  it.effect(
-    "validates a live stream against its exact unexpired session",
-    () => {
-      const statements: Array<Statement> = []
-      const databaseLayer = accountSessionDatabaseLayer({
-        rows: [sessionRow("session-own", "user-one")],
-        statements,
-      })
-
-      return Effect.gen(function* () {
-        const active = yield* accountSessionActiveEffect(
-          "user-one",
-          "session-own"
-        )
-
-        assert.isTrue(active)
-        assert.match(
-          statements[0]!.sql,
-          /WHERE id = \?\s+AND userId = \?\s+AND expiresAt > \?/u
-        )
-        assert.deepStrictEqual(statements[0]!.values, [
-          "session-own",
-          "user-one",
-          new Date(0),
-        ])
-      }).pipe(Effect.provide(databaseLayer))
-    }
-  )
+const seedSessions = Effect.gen(function* () {
+  yield* resetDatabase
+  yield* TestClock.setTime(now)
+  yield* insertSession("session-own", "user-one", now + 60_000)
+  yield* insertSession("session-expired", "user-one", now - 1)
+  yield* insertSession("session-foreign", "user-two", now + 60_000)
 })
 
-interface Statement {
-  sql: string
-  values: ReadonlyArray<unknown>
-}
+describeMysql("account sessions", () => {
+  layer(TestDatabase)((it) => {
+    it.effect("lists only the user's unexpired sessions without secrets", () =>
+      Effect.gen(function* () {
+        yield* seedSessions
 
-function sessionRow(id: string, userId: string) {
-  return {
-    created_at: new Date("2026-08-23T12:00:00.000Z"),
-    expires_at: new Date("2026-08-30T12:00:00.000Z"),
-    id,
-    ip_address: "203.0.113.1",
-    user_agent: "Kiln test browser",
-    user_id: userId,
-  }
-}
+        const sessions = yield* listAccountSessionsEffect("user-one")
 
-function accountSessionDatabaseLayer(input: {
-  rows: ReadonlyArray<ReturnType<typeof sessionRow>>
-  statements: Array<Statement>
-}) {
-  return Layer.succeed(Database)({
-    execute: (_operation, sql, values) =>
-      Effect.sync(() => {
-        input.statements.push({ sql, values: values ?? [] })
-        return successfulWrite
-      }),
-    queryRows: <TRow extends RowDataPacket>(
-      _operation: string,
-      sql: string,
-      values?: Array<boolean | Buffer | Date | null | number | string>
-    ) =>
-      Effect.sync(() => {
-        input.statements.push({ sql, values: values ?? [] })
-        return input.rows as unknown as ReadonlyArray<TRow>
-      }),
-    transaction: (_operation, run) =>
-      run({
-        execute: (sql, values) =>
-          Effect.sync(() => {
-            input.statements.push({ sql, values: values ?? [] })
-            return successfulWrite
-          }),
-        queryRows: <TRow extends RowDataPacket>(
-          sql: string,
-          values?: Array<boolean | Buffer | Date | null | number | string>
-        ) =>
-          Effect.sync(() => {
-            input.statements.push({ sql, values: values ?? [] })
-            return [] as ReadonlyArray<TRow>
-          }),
-      }),
+        assert.deepStrictEqual(sessions, [
+          {
+            createdAt: new Date(now - 60_000).toISOString(),
+            expiresAt: new Date(now + 60_000).toISOString(),
+            id: "session-own",
+            ipAddress: "203.0.113.1",
+            userAgent: "Kiln test browser",
+          },
+        ])
+      })
+    )
+
+    it.effect("revokes only the user's own session", () =>
+      Effect.gen(function* () {
+        yield* seedSessions
+
+        const foreign = yield* revokeAccountSessionEffect(
+          "user-one",
+          "session-foreign"
+        )
+        const own = yield* revokeAccountSessionEffect("user-one", "session-own")
+
+        assert.isNull(foreign)
+        assert.isNotNull(own)
+        const remaining = yield* selectRows<{ id: string }>("session")
+        assert.sameMembers(
+          remaining.map((row) => row.id),
+          ["session-expired", "session-foreign"]
+        )
+      })
+    )
+
+    it.effect("treats only the user's exact unexpired session as active", () =>
+      Effect.gen(function* () {
+        yield* seedSessions
+
+        assert.isTrue(
+          yield* accountSessionActiveEffect("user-one", "session-own")
+        )
+        assert.isFalse(
+          yield* accountSessionActiveEffect("user-one", "session-expired")
+        )
+        assert.isFalse(
+          yield* accountSessionActiveEffect("user-one", "session-foreign")
+        )
+      })
+    )
   })
-}
+})

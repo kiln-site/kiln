@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto"
 import { spawn, type ChildProcess } from "node:child_process"
 import { createWriteStream } from "node:fs"
-import { lstat, mkdir, opendir, rename, rm } from "node:fs/promises"
+import { lstat, mkdir, opendir, rm } from "node:fs/promises"
 import { dirname, relative, resolve, sep } from "node:path"
 import { Transform } from "node:stream"
 import { pipeline } from "node:stream/promises"
@@ -65,7 +65,7 @@ export type ResticSpawn = (
   }
 ) => ChildProcess
 
-export { resticDriverLocation, resticRepositoryPath, resticRepositoryString }
+export { resticDriverLocation, resticRepositoryPath }
 export type { ResticDriverLocation }
 
 export type ResticDriver = {
@@ -185,12 +185,12 @@ export function translateExcludePatterns(
   return { excludes, warnings }
 }
 
-export function isUnsupportedExcludePattern(pattern: string): boolean {
+function isUnsupportedExcludePattern(pattern: string): boolean {
   if (pattern.includes("[") || pattern.includes("{")) return true
   return /\?\(|\*\(|\+\(|@\(|!\(/u.test(pattern)
 }
 
-export function parseResticJsonLine(line: string): unknown {
+function parseResticJsonLine(line: string): unknown {
   const trimmed = line.trim()
   if (!trimmed) return null
   return Result.getOrElse(
@@ -199,9 +199,7 @@ export function parseResticJsonLine(line: string): unknown {
   )
 }
 
-export function progressFromResticStatus(
-  value: unknown
-): ResticProgress | null {
+function progressFromResticStatus(value: unknown): ResticProgress | null {
   if (!isRecord(value) || value.message_type !== "status") return null
   const bytesDone = integerField(value, "bytes_done")
   const totalBytes = integerField(value, "total_bytes")
@@ -212,9 +210,7 @@ export function progressFromResticStatus(
   }
 }
 
-export function summaryFromResticJson(
-  value: unknown
-): ResticSnapshotSummary | null {
+function summaryFromResticJson(value: unknown): ResticSnapshotSummary | null {
   if (!isRecord(value) || value.message_type !== "summary") return null
   const snapshotId = stringField(value, "snapshot_id")
   const totalBytesProcessed = integerField(value, "total_bytes_processed")
@@ -223,16 +219,11 @@ export function summaryFromResticJson(
 }
 
 export function createResticDriver(options?: {
-  binary?: string
   cacheDirectory?: string
   spawn?: ResticSpawn
-  terminateTimeoutMs?: number
 }): ResticDriver {
-  const binary = options?.binary ?? RESTIC_BINARY
   const spawnRestic = options?.spawn ?? defaultSpawn
   const cacheDirectory = options?.cacheDirectory
-  const terminateTimeoutMs =
-    options?.terminateTimeoutMs ?? RESTIC_TERMINATE_TIMEOUT_MS
   const run = (
     args: ReadonlyArray<string>,
     input: {
@@ -249,16 +240,15 @@ export function createResticDriver(options?: {
     const execute = async () => {
       if (input.mutating && input.location.kind === "s3") {
         await retryResticOperation(() =>
-          spawnResticCommand(spawnRestic, binary, ["unlock"], {
+          spawnResticCommand(spawnRestic, ["unlock"], {
             cacheDirectory,
             location: input.location,
             password: input.password,
             signal: input.signal,
-            terminateTimeoutMs,
           })
         )
       }
-      return spawnResticCommand(spawnRestic, binary, args, {
+      return spawnResticCommand(spawnRestic, args, {
         cacheDirectory,
         cwd: input.cwd,
         location: input.location,
@@ -266,7 +256,6 @@ export function createResticDriver(options?: {
         password: input.password,
         signal: input.signal,
         stdoutPipe: input.stdoutPipe,
-        terminateTimeoutMs,
       })
     }
     return input.retryable ? retryResticOperation(execute) : execute()
@@ -546,7 +535,6 @@ type SpawnedRestic = {
 
 async function spawnResticCommand(
   spawnRestic: ResticSpawn,
-  binary: string,
   args: ReadonlyArray<string>,
   input: {
     cacheDirectory?: string
@@ -556,11 +544,10 @@ async function spawnResticCommand(
     password: string
     signal: AbortSignal
     stdoutPipe?: (stdout: NodeJS.ReadableStream) => Promise<void>
-    terminateTimeoutMs: number
   }
 ): Promise<SpawnedRestic> {
   if (input.location.kind !== "s3") {
-    return spawnResticOnce(spawnRestic, binary, args, input)
+    return spawnResticOnce(spawnRestic, args, input)
   }
   const token = resticS3ProxyToken()
   return withResticS3Proxy(
@@ -570,14 +557,12 @@ async function spawnResticCommand(
       endpointPort: resticDestinationEndpointPort(input.location) ?? 443,
       token,
     },
-    (proxyUrl) =>
-      spawnResticOnce(spawnRestic, binary, args, { ...input, proxyUrl })
+    (proxyUrl) => spawnResticOnce(spawnRestic, args, { ...input, proxyUrl })
   )
 }
 
 async function spawnResticOnce(
   spawnRestic: ResticSpawn,
-  binary: string,
   args: ReadonlyArray<string>,
   input: {
     cacheDirectory?: string
@@ -588,7 +573,6 @@ async function spawnResticOnce(
     proxyUrl?: string
     signal: AbortSignal
     stdoutPipe?: (stdout: NodeJS.ReadableStream) => Promise<void>
-    terminateTimeoutMs: number
   }
 ): Promise<SpawnedRestic> {
   input.signal.throwIfAborted()
@@ -597,7 +581,7 @@ async function spawnResticOnce(
   }
   const env = resticSpawnEnv(input)
   const child = spawnRestic(
-    binary,
+    RESTIC_BINARY,
     [...resticGlobalArgs(input.location), ...args],
     {
       cwd: input.cwd,
@@ -630,12 +614,7 @@ async function spawnResticOnce(
   })
   let termination: Promise<void> | null = null
   const terminate = () => {
-    termination ??= terminateResticChild(
-      child,
-      waitForExit,
-      () => exited,
-      input.terminateTimeoutMs
-    )
+    termination ??= terminateResticChild(child, waitForExit, () => exited)
     return termination
   }
   let resolveAborted: (cause: unknown) => void = () => undefined
@@ -734,8 +713,7 @@ async function spawnResticOnce(
 async function terminateResticChild(
   child: ChildProcess,
   waitForExit: Promise<number>,
-  hasExited: () => boolean,
-  timeoutMs: number
+  hasExited: () => boolean
 ): Promise<void> {
   if (hasExited()) return
   child.kill("SIGTERM")
@@ -744,7 +722,7 @@ async function terminateResticChild(
       Effect.tryPromise({
         try: () => waitForExit,
         catch: (cause) => cause,
-      }).pipe(Effect.timeout(`${timeoutMs} millis`))
+      }).pipe(Effect.timeout(`${RESTIC_TERMINATE_TIMEOUT_MS} millis`))
     )
   )
   if (hasExited() || Result.isSuccess(first)) return
@@ -754,7 +732,7 @@ async function terminateResticChild(
       Effect.tryPromise({
         try: () => waitForExit,
         catch: (cause) => cause,
-      }).pipe(Effect.timeout(`${timeoutMs} millis`))
+      }).pipe(Effect.timeout(`${RESTIC_TERMINATE_TIMEOUT_MS} millis`))
     )
   )
 }
@@ -936,11 +914,4 @@ function safeByteSum(total: number, value: number): number {
     )
   }
   return sum
-}
-
-export async function replaceFileAtomically(
-  source: string,
-  destination: string
-): Promise<void> {
-  await rename(source, destination)
 }

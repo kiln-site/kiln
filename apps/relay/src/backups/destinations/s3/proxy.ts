@@ -1,7 +1,6 @@
 import { randomBytes } from "node:crypto"
 import { lookup as dnsLookup } from "node:dns"
 import { connect, createServer, isIP, type Server, type Socket } from "node:net"
-import type { LookupFunction } from "node:net"
 
 import { Effect, Result } from "effect"
 
@@ -13,7 +12,7 @@ import {
 const MAX_CONNECT_HEADER_BYTES = 8_192
 const MAX_CONNECT_ADDRESSES = 8
 const AWS_SUFFIXES = [".amazonaws.com.cn", ".amazonaws.com"] as const
-const DEFAULT_CONNECT_TIMEOUT_MS = 10_000
+const CONNECT_TIMEOUT_MS = 10_000
 const PROXY_CLOSE_TIMEOUT_MS = 2_000
 
 type ResticS3Proxy = {
@@ -29,9 +28,7 @@ type ResticS3ProxyState = {
 export type ResticS3ProxyOptions = {
   allowPrivateNetwork: boolean
   allowedHosts: ReadonlySet<string>
-  connectTimeoutMs?: number
   endpointPort: number
-  lookup?: LookupFunction
   token: string
 }
 
@@ -57,7 +54,7 @@ export function resticS3ProxyAllowedHosts(input: {
   return hosts
 }
 
-export function parseResticS3ConnectTarget(authority: string): {
+function parseResticS3ConnectTarget(authority: string): {
   hostname: string
   port: number
 } | null {
@@ -95,7 +92,7 @@ export function parseResticS3ConnectTarget(authority: string): {
   return { hostname, port }
 }
 
-export function parseResticS3ConnectRequest(
+function parseResticS3ConnectRequest(
   raw: string,
   options: Pick<ResticS3ProxyOptions, "endpointPort" | "token">
 ): { hostname: string; port: number } | null {
@@ -194,9 +191,8 @@ function handleConnectClient(
 ): Promise<void> {
   return Effect.runPromise(
     Effect.gen(function* () {
-      const timeoutMs = options.connectTimeoutMs ?? DEFAULT_CONNECT_TIMEOUT_MS
       const raw = yield* Effect.tryPromise({
-        try: () => readHttpHead(client, timeoutMs),
+        try: () => readHttpHead(client, CONNECT_TIMEOUT_MS),
         catch: (cause) =>
           cause instanceof Error
             ? cause
@@ -215,7 +211,7 @@ function handleConnectClient(
         return
       }
       const addresses = yield* Effect.promise(() =>
-        resolveConnectAddresses(target.hostname, options, timeoutMs)
+        resolveConnectAddresses(target.hostname, options, CONNECT_TIMEOUT_MS)
       )
       if (addresses.length === 0) {
         rejectConnect(client)
@@ -224,7 +220,7 @@ function handleConnectClient(
       const upstream = yield* connectFirstUpstream(
         addresses,
         target.port,
-        timeoutMs
+        CONNECT_TIMEOUT_MS
       )
       if (state.closing || client.destroyed) {
         upstream.destroy()
@@ -316,9 +312,7 @@ function resolveConnectAddresses(
   options: ResticS3ProxyOptions,
   timeoutMs: number
 ): Promise<Array<string>> {
-  const lookup =
-    options.lookup ??
-    (options.allowPrivateNetwork ? dnsLookup : secureRemoteLookup)
+  const lookup = options.allowPrivateNetwork ? dnsLookup : secureRemoteLookup
   return new Promise((resolve) => {
     let settled = false
     const finish = (addresses: Array<string>) => {

@@ -65,7 +65,10 @@ async function collectTypeScriptFiles(directory) {
       )
       if (entry.isDirectory()) {
         if (
-          ["node_modules", "dist", ".tanstack", ".output"].includes(entry.name)
+          // `test/` holds shared test fakes and fixtures, not production code.
+          ["node_modules", "dist", ".tanstack", ".output", "test"].includes(
+            entry.name
+          )
         )
           return []
         return collectTypeScriptFiles(location)

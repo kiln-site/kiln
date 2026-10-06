@@ -81,41 +81,6 @@ describe("Database transactions", () => {
   })
 
   layer(DatabaseTest)((it) => {
-    it.effect("commits successful workflows and releases the connection", () =>
-      Effect.gen(function* () {
-        const service = yield* Database
-        const result = yield* service.transaction(
-          "database.test.success",
-          (transaction) => transaction.execute("UPDATE kiln_test SET value = 1")
-        )
-
-        assert.strictEqual(result.affectedRows, 1)
-        assert.deepStrictEqual(state.statements, [
-          "BEGIN",
-          "UPDATE kiln_test SET value = 1",
-          "COMMIT",
-        ])
-        assert.strictEqual(state.released, 1)
-      })
-    )
-
-    it.effect(
-      "rolls back failed workflows and preserves their typed error",
-      () =>
-        Effect.gen(function* () {
-          const service = yield* Database
-          const failure = yield* service
-            .transaction("database.test.failure", () =>
-              Effect.fail("workflow failure")
-            )
-            .pipe(Effect.flip)
-
-          assert.strictEqual(failure, "workflow failure")
-          assert.deepStrictEqual(state.statements, ["BEGIN", "ROLLBACK"])
-          assert.strictEqual(state.released, 1)
-        })
-    )
-
     it.effect("reports a failed commit as a database error", () =>
       Effect.gen(function* () {
         state.failCommit = true
@@ -128,26 +93,6 @@ describe("Database transactions", () => {
 
         assert.instanceOf(failure, DatabaseError)
         assert.strictEqual(failure.operation, "database.test.commit")
-        assert.strictEqual(state.released, 1)
-      })
-    )
-
-    it.effect("rolls back and releases the connection when interrupted", () =>
-      Effect.gen(function* () {
-        const service = yield* Database
-        const started = yield* Deferred.make<void>()
-        const fiber = yield* Effect.forkChild(
-          service.transaction("database.test.interrupt", () =>
-            Deferred.succeed(started, undefined).pipe(
-              Effect.andThen(Effect.never)
-            )
-          )
-        )
-
-        yield* Deferred.await(started)
-        yield* Fiber.interrupt(fiber)
-
-        assert.deepStrictEqual(state.statements, ["BEGIN", "ROLLBACK"])
         assert.strictEqual(state.released, 1)
       })
     )

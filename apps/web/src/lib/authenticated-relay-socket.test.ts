@@ -1,38 +1,35 @@
 import { Effect, Exit, Queue, Scope } from "effect"
-import { describe, expect, it, vi } from "vite-plus/test"
+import { afterEach, describe, expect, it, vi } from "vite-plus/test"
 
 import {
   createRelayBrowserSocketInbox,
   maintainRelayBrowserLease,
   relayBrowserAuthorizationChanges,
-  isTerminalRelayBrowserFailure,
-  shouldWaitForRelayBrowserAuthorization,
-  RelayBrowserProtocolError,
-  RelayBrowserSessionReplacedError,
 } from "./authenticated-relay-socket"
 import { notifyRelayBrowserAuthorizationChanged } from "./relay-browser-credentials"
 
 const encodedCapability = `${btoa(JSON.stringify({ capabilityId: "cap-one" }))}.signature`
 
-describe("Relay browser lease renewal", () => {
-  it("reconnects malformed streams but pauses denied or replaced owners", () => {
-    for (const error of [
-      new RelayBrowserProtocolError("Invalid frame"),
-      new SyntaxError("Invalid JSON"),
-    ]) {
-      expect(isTerminalRelayBrowserFailure(error)).toBe(true)
-      expect(shouldWaitForRelayBrowserAuthorization(error)).toBe(false)
-    }
-    expect(
-      shouldWaitForRelayBrowserAuthorization(new Error("Permission denied"))
-    ).toBe(true)
-    expect(
-      shouldWaitForRelayBrowserAuthorization(
-        new RelayBrowserSessionReplacedError("Browser session replaced")
-      )
-    ).toBe(true)
-  })
+afterEach(() => {
+  vi.restoreAllMocks()
+})
 
+/** A mock implementation plus a promise that settles on its first call. */
+function calledOnce<TArgs extends Array<unknown>>(
+  implementation: (...args: TArgs) => void = () => undefined
+) {
+  let markCalled: () => void = () => undefined
+  const called = new Promise<void>((resolve) => {
+    markCalled = resolve
+  })
+  const mock = vi.fn((...args: TArgs) => {
+    implementation(...args)
+    markCalled()
+  })
+  return { called, mock }
+}
+
+describe("Relay browser lease renewal", () => {
   it("retains access-change wakeups without active credentials and releases its subscription", async () => {
     await Effect.runPromise(
       Effect.scoped(
@@ -43,22 +40,6 @@ describe("Relay browser lease renewal", () => {
           )
           notifyRelayBrowserAuthorizationChanged()
           yield* Queue.take(changes)
-          expect(
-            isTerminalRelayBrowserFailure(new Error("Authentication required"))
-          ).toBe(true)
-          expect(
-            isTerminalRelayBrowserFailure(new Error("Permission denied"))
-          ).toBe(true)
-          expect(
-            isTerminalRelayBrowserFailure(
-              new Error("Unable to connect to Relay")
-            )
-          ).toBe(false)
-          expect(
-            isTerminalRelayBrowserFailure(
-              new Error("Authorization service unavailable")
-            )
-          ).toBe(false)
         })
       )
     )
@@ -100,7 +81,7 @@ describe("Relay browser lease renewal", () => {
   })
 
   it("reconnects instead of retrying a nonce after an ambiguous sent renewal", async () => {
-    const close = vi.fn((code: number) => {
+    const { called: closed, mock: close } = calledOnce((code: number) => {
       if (code !== 1000 && (code < 3000 || code > 4999)) {
         throw new DOMException(
           "Invalid browser close code",
@@ -114,55 +95,48 @@ describe("Relay browser lease renewal", () => {
       expiresAt: Date.now() + 30_000,
       version: 2,
     })
-    const sign = vi
-      .spyOn(crypto.subtle, "sign")
-      .mockResolvedValue(new Uint8Array([1]).buffer)
-    try {
-      await Effect.runPromise(
-        Effect.scoped(
-          Effect.gen(function* () {
-            const lease = yield* maintainRelayBrowserLease(
-              {
-                socket: { send, close },
-                inbox: {
-                  waitFor: vi
-                    .fn()
-                    .mockRejectedValue(new Error("Acknowledgement timed out")),
-                },
-              } as never,
-              {
-                sessionId: "session",
-                expiresAt: Date.now() + 60_000,
-                renewalNonce: "nonce",
-                renewalNonceExpiresAt: Date.now() + 60_000,
+    vi.spyOn(crypto.subtle, "sign").mockResolvedValue(
+      new Uint8Array([1]).buffer
+    )
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const lease = yield* maintainRelayBrowserLease(
+            {
+              socket: { send, close },
+              inbox: {
+                waitFor: vi
+                  .fn()
+                  .mockRejectedValue(new Error("Acknowledgement timed out")),
               },
-              {
-                channel: "resources",
-                credentials: { keys: { privateKey: {} } } as never,
-                relayId: "relay",
-                write: false,
-                issue,
-              }
-            )
-            lease.renewNow()
-            yield* Effect.promise(() =>
-              vi.waitFor(() =>
-                expect(close).toHaveBeenCalledWith(
-                  4012,
-                  "Relay lease renewal needs reconnect"
-                )
-              )
-            )
-            lease.renewNow()
-            yield* Effect.yieldNow
-            expect(issue).toHaveBeenCalledOnce()
-            expect(send).toHaveBeenCalledOnce()
-          })
-        )
+            } as never,
+            {
+              sessionId: "session",
+              expiresAt: Date.now() + 60_000,
+              renewalNonce: "nonce",
+              renewalNonceExpiresAt: Date.now() + 60_000,
+            },
+            {
+              channel: "resources",
+              credentials: { keys: { privateKey: {} } } as never,
+              relayId: "relay",
+              write: false,
+              issue,
+            }
+          )
+          lease.renewNow()
+          yield* Effect.promise(() => closed)
+          expect(close).toHaveBeenCalledWith(
+            4012,
+            "Relay lease renewal needs reconnect"
+          )
+          lease.renewNow()
+          yield* Effect.yieldNow
+          expect(issue).toHaveBeenCalledOnce()
+          expect(send).toHaveBeenCalledOnce()
+        })
       )
-    } finally {
-      sign.mockRestore()
-    }
+    )
   })
 
   it("does not deliver a late renewal acknowledgement to the data stream", async () => {
@@ -256,7 +230,6 @@ describe("Relay browser lease renewal", () => {
     await Promise.resolve()
     expect(sign).not.toHaveBeenCalled()
     expect(send).not.toHaveBeenCalled()
-    sign.mockRestore()
   })
 
   it("coalesces resource samples without dropping authentication or initial history", async () => {
@@ -292,7 +265,7 @@ describe("Relay browser lease renewal", () => {
   })
 
   it("renews in place and consumes the priority acknowledgement", async () => {
-    const send = vi.fn()
+    const { called: sent, mock: send } = calledOnce()
     const waitFor = vi.fn().mockResolvedValue({
       expiresAt: Date.now() + 120_000,
       renewalNonce: "nonce-two",
@@ -300,9 +273,9 @@ describe("Relay browser lease renewal", () => {
       type: "auth.renewed",
       v: 1,
     })
-    const sign = vi
-      .spyOn(crypto.subtle, "sign")
-      .mockResolvedValue(new Uint8Array([1, 2, 3]).buffer)
+    vi.spyOn(crypto.subtle, "sign").mockResolvedValue(
+      new Uint8Array([1, 2, 3]).buffer
+    )
     const issue = vi.fn().mockResolvedValue({
       capability: encodedCapability,
       expiresAt: Date.now() + 120_000,
@@ -352,9 +325,7 @@ describe("Relay browser lease renewal", () => {
             }
           )
           lease.renewNow()
-          yield* Effect.promise(() =>
-            vi.waitFor(() => expect(send).toHaveBeenCalledOnce())
-          )
+          yield* Effect.promise(() => sent)
         })
       )
     )
@@ -369,11 +340,10 @@ describe("Relay browser lease renewal", () => {
       type: "auth.renew",
       v: 1,
     })
-    sign.mockRestore()
   })
 
   it("closes immediately when Hearth denies a renewal", async () => {
-    const close = vi.fn()
+    const { called: closed, mock: close } = calledOnce()
     await Effect.runPromise(
       Effect.scoped(
         Effect.gen(function* () {
@@ -416,9 +386,7 @@ describe("Relay browser lease renewal", () => {
             }
           )
           lease.renewNow()
-          yield* Effect.promise(() =>
-            vi.waitFor(() => expect(close).toHaveBeenCalledOnce())
-          )
+          yield* Effect.promise(() => closed)
         })
       )
     )

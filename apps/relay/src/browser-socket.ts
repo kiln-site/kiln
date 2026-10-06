@@ -1955,13 +1955,6 @@ function safeBrowserError(cause: unknown): string {
     : "File transfer failed"
 }
 
-export function startConsoleBackfillIfNeeded(
-  snapshot: Pick<RelayConsole, "truncated">,
-  start: () => void
-): void {
-  if (snapshot.truncated) start()
-}
-
 type BrowserDelivery = (
   socket: WebSocket,
   encoded: string,
@@ -2317,12 +2310,12 @@ class ConsoleHub {
               }
               if (this.#backfillStartedAt !== startedAt) {
                 this.#backfillStartedAt = startedAt
-                startConsoleBackfillIfNeeded(snapshot, () => {
+                if (snapshot.truncated) {
                   this.#forkBackground(
                     this.#backfillEffect(session, startedAt),
                     "browser.console.backfill"
                   )
-                })
+                }
               }
             })
           ),
@@ -2455,12 +2448,12 @@ class ConsoleHub {
               }
               this.#replaceSession(snapshot)
               this.#backfillStartedAt = startedAt
-              startConsoleBackfillIfNeeded(snapshot, () => {
+              if (snapshot.truncated) {
                 this.#forkBackground(
                   this.#backfillEffect(session, startedAt),
                   "browser.console.backfill"
                 )
-              })
+              }
             })
           )
         )
@@ -2667,10 +2660,9 @@ function browserOperation<TResult>(
   return Effect.tryPromise({ try: run, catch: asError })
 }
 
-export function browserFileAuthenticationEffect<TResult>(
+function browserFileAuthenticationEffect<TResult>(
   request: IncomingMessage,
-  run: (signal: AbortSignal) => Promise<TResult>,
-  timeoutMs = FILE_AUTHENTICATION_TIMEOUT_MS
+  run: (signal: AbortSignal) => Promise<TResult>
 ) {
   return Effect.suspend(() => {
     let removeAbortListener = () => {}
@@ -2683,7 +2675,7 @@ export function browserFileAuthenticationEffect<TResult>(
         signal.removeEventListener("abort", abortRequest)
       return run(signal)
     }).pipe(
-      Effect.timeout(timeoutMs),
+      Effect.timeout(FILE_AUTHENTICATION_TIMEOUT_MS),
       Effect.ensuring(Effect.sync(() => removeAbortListener()))
     )
   })

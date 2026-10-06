@@ -143,31 +143,3 @@ export function backupRunScopesEqual(
     left.targetId === right.targetId
   )
 }
-
-export function compareBackupRunOrderKeys(
-  left: BackupRunOrderKey,
-  right: BackupRunOrderKey,
-  direction: BackupRunSortDirection
-): number {
-  if (left.value === null && right.value !== null) return 1
-  if (left.value !== null && right.value === null) return -1
-  const valueComparison = compareNullableOrderValues(left.value, right.value)
-  if (valueComparison !== 0) {
-    return direction === "asc" ? valueComparison : -valueComparison
-  }
-  return direction === "asc"
-    ? left.id.localeCompare(right.id)
-    : right.id.localeCompare(left.id)
-}
-
-function compareNullableOrderValues(
-  left: BackupRunOrderKey["value"],
-  right: BackupRunOrderKey["value"]
-): number {
-  if (left === null) return right === null ? 0 : 1
-  if (right === null) return -1
-  if (typeof left === "number" && typeof right === "number") {
-    return left - right
-  }
-  return String(left).localeCompare(String(right))
-}

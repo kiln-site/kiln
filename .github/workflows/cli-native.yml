@@ -52,3 +52,31 @@ jobs:
           # Execute package scripts without loading configs for uninstalled workspaces.
           vp exec -F kiln-cli -- bun run build
           vp exec -F kiln-cli -- bun run test:native
+      # The only check against the real Keychain / Credential Manager. Linux has
+      # no native credential manager, so the CLI uses its file fallback there.
+      - name: Use a temporary unlocked keychain
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          # Isolate the test from the runner's login keychain and avoid
+          # unlock prompts; the CLI stores into the default keychain.
+          password="$(openssl rand -hex 16)"
+          security create-keychain -p "$password" kiln-cli-e2e.keychain
+          security set-keychain-settings kiln-cli-e2e.keychain
+          security unlock-keychain -p "$password" kiln-cli-e2e.keychain
+          # Keep the existing search list (runner keychain paths have no spaces).
+          # shellcheck disable=SC2046
+          security list-keychains -d user -s kiln-cli-e2e.keychain \
+            $(security list-keychains -d user | tr -d '"')
+          security default-keychain -d user -s kiln-cli-e2e.keychain
+      - name: Store, read, and delete a credential in the system store
+        if: runner.os == 'macOS' || runner.os == 'Windows'
+        shell: bash
+        # The binary was built above; test:credential-store would rebuild it.
+        run: vp exec -F kiln-cli -- node scripts/credential-store-e2e.mjs
+      - name: Remove the temporary keychain
+        if: always() && runner.os == 'macOS'
+        shell: bash
+        run: |
+          security default-keychain -d user -s login.keychain || true
+          security delete-keychain kiln-cli-e2e.keychain || true

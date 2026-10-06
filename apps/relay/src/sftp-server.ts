@@ -36,8 +36,6 @@ const DIRECTORY_MODE = fsConstants.S_IFDIR | 0o755
 const { Server, utils } = ssh2
 const { OPEN_MODE, STATUS_CODE } = utils.sftp
 
-type HostKeyGenerator = () => Buffer | string
-
 interface SftpGrant {
   actions: ReadonlyArray<string>
   id: string
@@ -300,15 +298,12 @@ function fingerprintHostKey(hostKey: Buffer): string {
   return `SHA256:${digest}`
 }
 
-export function generateSftpHostKey(
-  generateCandidate: HostKeyGenerator = () =>
-    utils.generateKeyPairSync("ed25519").private
-): Buffer {
+function generateSftpHostKey(): Buffer {
   let lastError: Error | null = null
   for (let attempt = 0; attempt < HOST_KEY_GENERATION_ATTEMPTS; attempt += 1) {
     // ssh2 1.17 can serialize an Ed25519 public key as 31 bytes when its
     // first byte is zero, so validate each candidate before it reaches disk.
-    const candidate = Buffer.from(generateCandidate())
+    const candidate = Buffer.from(utils.generateKeyPairSync("ed25519").private)
     lastError = hostKeyParseError(candidate)
     if (!lastError) return candidate
   }
@@ -1168,7 +1163,7 @@ function safeEqual(input: string, expected: string): boolean {
   return inputBuffer.length === expectedBuffer.length && contentsMatch
 }
 
-export function resolveSftpAuthentication(
+function resolveSftpAuthentication(
   password: string,
   developmentAuthentication: boolean
 ): { credential: string | undefined } | null {

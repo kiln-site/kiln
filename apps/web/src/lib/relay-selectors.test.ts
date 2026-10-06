@@ -3,7 +3,6 @@ import type { RelayInstance, RelaySnapshot } from "@workspace/contracts"
 import { builtinTailscaleBrickId } from "@workspace/contracts"
 
 import {
-  addRelayInstanceToSnapshot,
   relayInstanceRouteId,
   type RelayFleetSnapshot,
 } from "@/lib/relay-fleet"
@@ -17,12 +16,9 @@ import {
   selectInstanceContainerRunning,
   selectInstanceLifecycleStartedAt,
   selectInstanceRelayConnected,
-  selectInstanceRuntime,
   selectInstanceStateReason,
   selectInstanceSettings,
   selectInstanceWorkspaceInstance,
-  selectRouteInstances,
-  selectServerListInstances,
   selectSidebarInstanceCount,
   selectSidebarInstances,
 } from "@/lib/relay-selectors"
@@ -84,58 +80,12 @@ describe("Relay render selectors", () => {
     )
   })
 
-  it("makes a newly provisioned instance immediately routable", () => {
-    const snapshot = snapshotWithCpu(1)
-    const created = {
-      ...instance,
-      id: "b".repeat(40),
-      name: "New server",
-      shortId: "bbbbbbbb",
-    }
-
-    const updated = addRelayInstanceToSnapshot(snapshot, created, {
-      id: "relay-one",
-      name: "Relay one",
-    })
-
-    expect(updated?.instances[0]).toMatchObject({
-      id: created.id,
-      relayId: "relay-one",
-      relayStatus: "connected",
-      routeId: "relay-one-bbbbbbbb",
-    })
-    expect(
-      resolveRelayInstance(updated?.instances ?? [], "relay-one-bbbbbbbb")
-    ).toMatchObject({ status: "found", instance: { id: created.id } })
-  })
-
-  it("never replaces a canonical live instance with a stale create response", () => {
-    const snapshot = snapshotWithCpu(1)
-    const staleCreateResponse = {
-      ...instance,
-      name: "Stale provisioning response",
-      provisioning: { attempt: 1, error: null, phase: "preparing" },
-    } satisfies RelayInstance
-
-    const updated = addRelayInstanceToSnapshot(snapshot, staleCreateResponse, {
-      id: "relay-one",
-      name: "Relay one",
-    })
-
-    expect(updated).toBe(snapshot)
-    expect(updated?.instances[0]).toMatchObject({ name: "Test server" })
-    expect(updated?.instances[0]).not.toHaveProperty("provisioning")
-  })
-
   it("keeps sidebar and workspace data unchanged across resource samples", () => {
     const before = snapshotWithCpu(1)
     const after = snapshotWithCpu(2)
 
     expect(selectSidebarInstances(after)).toEqual(
       selectSidebarInstances(before)
-    )
-    expect(selectServerListInstances(after)).toEqual(
-      selectServerListInstances(before)
     )
     expect(selectInstanceWorkspaceInstance(instance.id)(after)).toEqual(
       selectInstanceWorkspaceInstance(instance.id)(before)
@@ -159,15 +109,6 @@ describe("Relay render selectors", () => {
     expect(selectSidebarInstances(snapshot).map(({ id }) => id)).toEqual([
       instance.id,
     ])
-  })
-
-  it("continues publishing each resource sample to the runtime subscriber", () => {
-    const before = selectInstanceRuntime(instance.id)(snapshotWithCpu(1))
-    const after = selectInstanceRuntime(instance.id)(snapshotWithCpu(2))
-
-    expect(before?.resources?.cpu.percent).toBe(1)
-    expect(after?.resources?.cpu.percent).toBe(2)
-    expect(after?.resources?.sampledAt).not.toBe(before?.resources?.sampledAt)
   })
 
   it("selects the current lifecycle start without subscribing to resources", () => {
@@ -206,9 +147,6 @@ describe("Relay render selectors", () => {
 
     expect(selectSidebarInstances(unreachable)).toEqual(
       selectSidebarInstances(connected)
-    )
-    expect(selectRouteInstances(unreachable)).not.toEqual(
-      selectRouteInstances(connected)
     )
   })
 

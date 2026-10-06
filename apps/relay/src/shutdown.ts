@@ -1,18 +1,16 @@
 import type { Server } from "node:http"
 import { Effect } from "effect"
 
-export type RelayShutdownResult = "forced" | "graceful"
+type RelayShutdownResult = "forced" | "graceful"
 
-export function closeRelayServer(
-  server: Server,
-  activeStreamControllers: ReadonlySet<AbortController>,
-  timeoutMs = 10_000
-): Promise<RelayShutdownResult> {
+const shutdownDeadlineMs = 10_000
+
+export function closeRelayServer(server: Server): Promise<RelayShutdownResult> {
   const graceful = Effect.callback<RelayShutdownResult>((resume) => {
     server.close(() => resume(Effect.succeed("graceful")))
     server.closeIdleConnections()
   })
-  const forced = Effect.sleep(timeoutMs).pipe(
+  const forced = Effect.sleep(shutdownDeadlineMs).pipe(
     Effect.andThen(
       Effect.sync(() => {
         server.closeAllConnections()
@@ -20,9 +18,5 @@ export function closeRelayServer(
       })
     )
   )
-  return Effect.runPromise(
-    Effect.sync(() => {
-      for (const controller of activeStreamControllers) controller.abort()
-    }).pipe(Effect.andThen(Effect.raceFirst(graceful, forced)))
-  )
+  return Effect.runPromise(Effect.raceFirst(graceful, forced))
 }

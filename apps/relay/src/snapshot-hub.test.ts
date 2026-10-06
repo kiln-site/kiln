@@ -1,113 +1,116 @@
+import { setImmediate as yieldToEventLoop } from "node:timers/promises"
+
 import type { RelaySnapshot } from "@workspace/contracts"
-import { describe, expect, it } from "vite-plus/test"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test"
 
 import { RelaySnapshotHub } from "./snapshot-hub.js"
 
+beforeEach(() => {
+  // Freeze time so the sample cache and resample timer only move on demand.
+  vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] })
+})
+
+afterEach(() => {
+  vi.useRealTimers()
+})
+
 describe("Relay snapshot hub", () => {
   it("coalesces concurrent samples and replays one shared result", async () => {
-    let loads = 0
-    let finishLoad: ((snapshot: RelaySnapshot) => void) | undefined
-    const snapshot = { instances: [] } as unknown as RelaySnapshot
-    const hub = new RelaySnapshotHub(
-      () =>
-        new Promise<RelaySnapshot>((resolve) => {
-          loads += 1
-          finishLoad = resolve
-        }),
-      60_000
-    )
+    let releaseLoad: () => void = () => undefined
+    const loadReleased = new Promise<void>((resolve) => {
+      releaseLoad = resolve
+    })
+    // Every load produces a distinct object, so identity shows sharing.
+    const hub = new RelaySnapshotHub(async () => {
+      await loadReleased
+      return emptySnapshot()
+    })
 
     const first = hub.read()
     const second = hub.read()
-    expect(loads).toBe(1)
-    finishLoad?.(snapshot)
-    await expect(first).resolves.toBe(snapshot)
-    await expect(second).resolves.toBe(snapshot)
+    releaseLoad()
+    const shared = await first
+    expect(await second).toBe(shared)
 
     const samples: Array<RelaySnapshot> = []
     const unsubscribe = hub.subscribe((sample) => samples.push(sample.snapshot))
-    expect(samples).toEqual([snapshot])
-    expect(await hub.read()).toBe(snapshot)
-    expect(loads).toBe(1)
+    expect(samples).toEqual([shared])
+    expect(await hub.read()).toBe(shared)
 
     unsubscribe()
     hub.close()
   })
 
-  it("forces a fresh sample after a mutation", async () => {
-    let current = { instances: [] } as unknown as RelaySnapshot
-    const hub = new RelaySnapshotHub(() => Promise.resolve(current), 60_000)
+  it("forces a fresh sample to readers and subscribers after a mutation", async () => {
+    let current = emptySnapshot()
+    const hub = new RelaySnapshotHub(() => Promise.resolve(current))
+    const delivered: Array<RelaySnapshot> = []
+    const unsubscribe = hub.subscribe((sample) =>
+      delivered.push(sample.snapshot)
+    )
 
-    expect(await hub.read()).toBe(current)
-    current = {
-      instances: [{ id: "instance-a", name: "Renamed" }],
-    } as unknown as RelaySnapshot
+    const initial = await hub.read()
+    current = { ...emptySnapshot(), instances: [] }
+    expect(await hub.read()).toBe(initial)
 
-    expect(await hub.read()).not.toBe(current)
     expect(await hub.refresh()).toBe(current)
+    expect(delivered.at(-1)).toBe(current)
     expect(await hub.read()).toBe(current)
+
+    unsubscribe()
     hub.close()
   })
 
   it("refreshes after an in-flight sample fails", async () => {
     const recovered = emptySnapshot()
-    let loads = 0
-    let failSample: ((cause: Error) => void) | undefined
+    let failSample: (cause: Error) => void = () => undefined
+    let failed = false
     const hub = new RelaySnapshotHub(() => {
-      loads += 1
-      return loads === 1
-        ? new Promise<RelaySnapshot>((_resolve, reject) => {
-            failSample = reject
-          })
-        : Promise.resolve(recovered)
-    }, 60_000)
+      if (failed) return Promise.resolve(recovered)
+      failed = true
+      return new Promise<RelaySnapshot>((_resolve, reject) => {
+        failSample = reject
+      })
+    })
 
     const failedSample = hub.read()
     const refresh = hub.refresh()
-    failSample?.(new Error("Sample failed"))
+    failSample(new Error("Sample failed"))
 
     await expect(failedSample).rejects.toThrow("Sample failed")
     await expect(refresh).resolves.toBe(recovered)
-    expect(loads).toBe(2)
     hub.close()
   })
 
   it("isolates subscribers and interrupts in-flight delivery when closed", async () => {
-    let finishLoad: ((snapshot: RelaySnapshot) => void) | undefined
-    const snapshot = { instances: [] } as unknown as RelaySnapshot
+    const snapshot = emptySnapshot()
     const delivered: Array<RelaySnapshot> = []
-    const hub = new RelaySnapshotHub(
-      () =>
-        new Promise<RelaySnapshot>((resolve) => {
-          finishLoad = resolve
-        }),
-      60_000
-    )
+    const hub = new RelaySnapshotHub(() => Promise.resolve(snapshot))
 
     hub.subscribe(() => {
       throw new Error("subscriber failed")
     })
     hub.subscribe((sample) => delivered.push(sample.snapshot))
-    finishLoad?.(snapshot)
     expect(await hub.read()).toBe(snapshot)
     expect(delivered).toEqual([snapshot])
+    hub.close()
 
+    let finishLoad: (snapshot: RelaySnapshot) => void = () => undefined
     const closingHub = new RelaySnapshotHub(
       () =>
         new Promise<RelaySnapshot>((resolve) => {
           finishLoad = resolve
-        }),
-      60_000
+        })
     )
-    closingHub.subscribe((sample) => delivered.push(sample.snapshot))
+    const closingDelivered: Array<RelaySnapshot> = []
+    closingHub.subscribe((sample) => closingDelivered.push(sample.snapshot))
     closingHub.close()
-    finishLoad?.(snapshot)
-    await Promise.resolve()
-    expect(delivered).toEqual([snapshot])
-    expect(() => closingHub.subscribe(() => undefined)).toThrow(
-      "Relay snapshot hub is closed"
-    )
-    hub.close()
+    finishLoad(emptySnapshot())
+    for (let turn = 0; turn < 5; turn += 1) await yieldToEventLoop()
+
+    expect(closingDelivered).toEqual([])
+    expect(() => closingHub.subscribe(() => undefined)).toThrow()
+    await expect(closingHub.read()).rejects.toThrow()
   })
 })
 

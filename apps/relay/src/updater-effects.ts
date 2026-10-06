@@ -2,12 +2,11 @@ import { Effect, Schedule } from "effect"
 
 import { RelaySystemUpdateError } from "./effect/errors.js"
 
-const waitForBatchJoin = Effect.sleep("2500 millis")
+const batchJoinWait = "2500 millis"
 
 export const drainUpdateBatchEffect = Effect.fn("relay.updater.drainBatch")(
   function* (
-    processPending: () => Effect.Effect<boolean, RelaySystemUpdateError>,
-    waitForJoin: Effect.Effect<void> = waitForBatchJoin
+    processPending: () => Effect.Effect<boolean, RelaySystemUpdateError>
   ) {
     let idleChecks = 0
     while (true) {
@@ -18,7 +17,7 @@ export const drainUpdateBatchEffect = Effect.fn("relay.updater.drainBatch")(
       }
       if (idleChecks >= 2) return
       idleChecks += 1
-      yield* waitForJoin
+      yield* Effect.sleep(batchJoinWait)
     }
   }
 )

@@ -8,14 +8,11 @@ export interface AccountPolicy {
   legacyVerificationRecordedAt?: string | Date | null
 }
 
-export function isAccountEnabled(
-  user: AccountPolicy,
-  now = Date.now()
-): boolean {
+export function isAccountEnabled(user: AccountPolicy): boolean {
   return (
     user.status !== "disabled" ||
     (user.statusExpiresAt != null &&
-      new Date(user.statusExpiresAt).getTime() <= now)
+      new Date(user.statusExpiresAt).getTime() <= Date.now())
   )
 }
 
@@ -42,16 +39,13 @@ export function requireEligibleAccount(user: AccountPolicy): void {
 }
 
 /** Normalizes the persisted status/evidence columns into an AccountPolicy. */
-export function accountPolicyFromRow(
-  row: {
-    status: string | null
-    statusExpiresAt: Date | string | null
-    emailVerifiedAt: Date | string | null
-    manuallyVerifiedAt: Date | string | null
-    legacyVerificationRecordedAt: Date | string | null
-  },
-  now = Date.now()
-): Required<
+export function accountPolicyFromRow(row: {
+  status: string | null
+  statusExpiresAt: Date | string | null
+  emailVerifiedAt: Date | string | null
+  manuallyVerifiedAt: Date | string | null
+  legacyVerificationRecordedAt: Date | string | null
+}): Required<
   Pick<
     AccountPolicy,
     | "status"
@@ -66,7 +60,8 @@ export function accountPolicyFromRow(
   return {
     status:
       row.status === "disabled" &&
-      (!row.statusExpiresAt || new Date(row.statusExpiresAt).getTime() > now)
+      (!row.statusExpiresAt ||
+        new Date(row.statusExpiresAt).getTime() > Date.now())
         ? "disabled"
         : "enabled",
     statusExpiresAt: iso(row.statusExpiresAt),

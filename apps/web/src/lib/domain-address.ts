@@ -1,4 +1,4 @@
-export interface ManagedDomainAddress {
+interface ManagedDomainAddress {
   domain: string
   publicPort: number
   srvRecordId: string | null

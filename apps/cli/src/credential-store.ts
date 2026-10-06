@@ -35,16 +35,16 @@ export type CredentialCommandRunner = (
 ) => Promise<CredentialCommandResult>
 
 export function credentialManagersForPlatform(
-  platform: NodeJS.Platform = process.platform,
-  run: CredentialCommandRunner = runCredentialCommand
+  platform: NodeJS.Platform,
+  run: CredentialCommandRunner
 ): ReadonlyArray<CredentialManager> {
   if (platform === "darwin") return [macosKeychainCredentialManager(run)]
   if (platform === "win32") return [windowsCredentialManager(run)]
   return []
 }
 
-export function macosKeychainCredentialManager(
-  run: CredentialCommandRunner = runCredentialCommand
+function macosKeychainCredentialManager(
+  run: CredentialCommandRunner
 ): CredentialManager {
   const command = (
     operation: "delete" | "get" | "set",
@@ -86,8 +86,8 @@ export function macosKeychainCredentialManager(
   }
 }
 
-export function windowsCredentialManager(
-  run: CredentialCommandRunner = runCredentialCommand
+function windowsCredentialManager(
+  run: CredentialCommandRunner
 ): CredentialManager {
   const target = (account: string) => `${KILN_CREDENTIAL_SERVICE}:${account}`
   return {

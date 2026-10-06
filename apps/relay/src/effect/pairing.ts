@@ -218,7 +218,7 @@ export const pairHearth = Effect.fn("RelayPairing.pairHearth")(
       catch: (cause) =>
         RelayPairingError.make({ code: "invalid_client_key", cause }),
     })
-    const transcript = pairingRequestTranscript(input.request)
+    const transcript = relayPairingRequestTranscript(input.request)
     const signatureValid = yield* Effect.try({
       try: () =>
         verify(
@@ -339,7 +339,7 @@ const signPairingResponse = Effect.fn("RelayPairing.signResponse")(
       try: () =>
         sign(
           null,
-          Buffer.from(pairingResponseTranscript(responseWithoutSignature)),
+          Buffer.from(relayPairingResponseTranscript(responseWithoutSignature)),
           input.identity.privateKeyPem
         ).toString("base64url"),
       catch: (cause) =>
@@ -348,16 +348,6 @@ const signPairingResponse = Effect.fn("RelayPairing.signResponse")(
     return { ...responseWithoutSignature, signature } satisfies PairingResponse
   }
 )
-
-export function pairingRequestTranscript(request: PairingRequest): string {
-  return relayPairingRequestTranscript(request)
-}
-
-export function pairingResponseTranscript(
-  response: Omit<PairingResponse, "signature">
-): string {
-  return relayPairingResponseTranscript(response)
-}
 
 export function encodePairingUri(envelope: PairingEnvelope): string {
   const payload = Buffer.from(JSON.stringify(envelope)).toString("base64url")

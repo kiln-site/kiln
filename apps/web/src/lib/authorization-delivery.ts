@@ -129,14 +129,6 @@ export async function wakePendingAuthorizationDelivery(): Promise<void> {
  * delivery worker push the new floor. A Relay that is ahead is authoritative
  * for its locally persisted generation and Hearth catches up.
  */
-export async function observeRelayIssuerGeneration(
-  relayId: string,
-  observedGeneration: number
-): Promise<void> {
-  await reconcileRelayIssuerGeneration(relayId, observedGeneration)
-  wakeAuthorizationDelivery(relayId)
-}
-
 async function reconcileRelayIssuerGeneration(
   relayId: string,
   observedGeneration: number

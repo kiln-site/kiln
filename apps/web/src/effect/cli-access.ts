@@ -87,7 +87,7 @@ export interface CliAuthorizationRequest {
   userCode: string
 }
 
-export function cliPlatformRole(role: string | null): PlatformRole {
+function cliPlatformRole(role: string | null): PlatformRole {
   return role === "admin" || role === "relay_creator" ? role : "user"
 }
 

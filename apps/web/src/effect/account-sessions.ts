@@ -14,7 +14,6 @@ interface AccountSessionRow extends RowDataPacket {
   id: string
   ip_address: string | null
   user_agent: string | null
-  user_id: string
 }
 
 interface ActiveSessionRow extends RowDataPacket {
@@ -36,7 +35,6 @@ export const listAccountSessionsEffect = Effect.fn("auth.sessions.list")(
     const rows = yield* database.queryRows<AccountSessionRow>(
       "auth.sessions.list",
       `SELECT id,
-              userId AS user_id,
               createdAt AS created_at,
               expiresAt AS expires_at,
               ipAddress AS ip_address,
@@ -48,18 +46,13 @@ export const listAccountSessionsEffect = Effect.fn("auth.sessions.list")(
       [userId, new Date(now)]
     )
 
-    const sessions: Array<AccountSessionSummary> = []
-    for (const row of rows) {
-      if (row.user_id !== userId) continue
-      sessions.push({
-        createdAt: row.created_at.toISOString(),
-        expiresAt: row.expires_at.toISOString(),
-        id: row.id,
-        ipAddress: row.ip_address,
-        userAgent: row.user_agent,
-      })
-    }
-    return sessions
+    return rows.map((row): AccountSessionSummary => ({
+      createdAt: row.created_at.toISOString(),
+      expiresAt: row.expires_at.toISOString(),
+      id: row.id,
+      ipAddress: row.ip_address,
+      userAgent: row.user_agent,
+    }))
   }
 )
 

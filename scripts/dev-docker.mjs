@@ -3,11 +3,6 @@ import { chmodSync, existsSync, readFileSync, writeFileSync } from "node:fs"
 import { basename, dirname, resolve } from "node:path"
 import { spawnSync } from "node:child_process"
 
-import {
-  developmentRelayName,
-  ensureDockerVolume,
-} from "./dev-docker-helpers.mjs"
-
 const command = process.argv[2] ?? "start"
 const initialDirectory = process.cwd()
 const worktreeRoot = captureAt(initialDirectory, "git", [
@@ -48,7 +43,7 @@ const composeEnvironment = {
   KILN_INSTALLATION_ID: stack,
   KILN_RELAY_GAME_HOST: process.env.KILN_RELAY_GAME_HOST?.trim() || "localhost",
   KILN_RELAY_HOST: `relay.${stack}.orb.local`,
-  KILN_RELAY_NAME: developmentRelayName(worktreeRoot),
+  KILN_RELAY_NAME: `D001-${createHash("sha256").update(resolve(worktreeRoot)).digest("hex").slice(0, 8)}`,
   KILN_RELAY_PROXY: "none",
   KILN_RELAY_PUBLIC_PORT: "443",
   KILN_RELAY_RESOURCE_NAMESPACE: namespace,
@@ -82,6 +77,23 @@ switch (command) {
     break
   case "url":
     console.log(hearthUrl)
+    break
+  case "test":
+    // Web tests, including the real-MySQL suites, against this stack's MySQL.
+    run(
+      "pnpm",
+      ["exec", "vp", "test", "run", ...process.argv.slice(3)],
+      {
+        ...process.env,
+        KILN_TEST_MYSQL: "1",
+        DB_HOST: `mysql.${stack}.orb.local`,
+        DB_PORT: "3306",
+        DB_NAME: process.env.KILN_TEST_DB_NAME ?? "kiln_test",
+        DB_USERNAME: "root",
+        DB_PASSWORD: "kiln-root",
+      },
+      resolve(worktreeRoot, "apps/web")
+    )
     break
   case "list":
     run("docker", ["compose", "ls"], process.env)
@@ -150,21 +162,25 @@ function destroyNamespacedNetworks() {
 }
 
 function ensureSharedStore() {
-  try {
-    ensureDockerVolume("kiln-dev-pnpm-store", (arguments_) =>
-      spawnSync("docker", arguments_, {
-        cwd: worktreeRoot,
-        encoding: "utf8",
-        env: process.env,
-      })
-    )
-  } catch (cause) {
-    fail(
-      cause instanceof Error
-        ? cause.message
-        : "Could not create the shared pnpm Docker volume."
-    )
-  }
+  const volume = "kiln-dev-pnpm-store"
+  const docker = (arguments_) =>
+    spawnSync("docker", arguments_, {
+      cwd: worktreeRoot,
+      encoding: "utf8",
+      env: process.env,
+    })
+  const inspect = () => docker(["volume", "inspect", volume])
+  if (inspect().status === 0) return
+
+  // Another worktree can create the shared volume at the same time.
+  const created = docker(["volume", "create", volume])
+  if (created.status === 0 || inspect().status === 0) return
+  const detail = created.stderr?.trim()
+  fail(
+    detail
+      ? `Could not create Docker volume ${volume}: ${detail}`
+      : `Could not create Docker volume ${volume}.`
+  )
 }
 
 function refresh() {
@@ -365,9 +381,9 @@ function captureAt(
   return result.stdout.trim()
 }
 
-function run(executable, arguments_, environment) {
+function run(executable, arguments_, environment, cwd = worktreeRoot) {
   const result = spawnSync(executable, arguments_, {
-    cwd: worktreeRoot,
+    cwd,
     env: environment,
     stdio: "inherit",
   })

@@ -10,7 +10,7 @@ import type {
 import { Database } from "@/effect/database"
 import { BackupStorageError } from "@/effect/errors"
 
-export const FULL_BACKUP_DESTINATION_OPERATIONS = [
+const FULL_BACKUP_DESTINATION_OPERATIONS = [
   "check",
   "delete",
   "download",
@@ -19,7 +19,7 @@ export const FULL_BACKUP_DESTINATION_OPERATIONS = [
   "save",
 ] as const
 
-export const RESTIC_DESTINATION_OPERATIONS = [
+const RESTIC_DESTINATION_OPERATIONS = [
   "backup",
   "check",
   "delete",

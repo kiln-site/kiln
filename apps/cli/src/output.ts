@@ -10,12 +10,12 @@ export function writeText(value: string): void {
   process.stdout.write(value)
 }
 
-export interface RenderedCliError {
+interface RenderedCliError {
   exitCode: number
   output: string
 }
 
-export function renderErrorCause(
+function renderErrorCause(
   cause: Cause.Cause<CliCommandError>
 ): RenderedCliError {
   if (Cause.hasInterruptsOnly(cause)) return { exitCode: 130, output: "" }
@@ -100,7 +100,7 @@ function uniqueDetails(details: Array<string>): Array<string> {
   return [...new Set(details.filter(Boolean))]
 }
 
-export function renderTable(
+function renderTable(
   headings: ReadonlyArray<string>,
   rows: ReadonlyArray<ReadonlyArray<string>>
 ): string {

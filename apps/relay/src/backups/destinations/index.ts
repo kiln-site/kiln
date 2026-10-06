@@ -26,7 +26,6 @@ export {
   backupDirectoryPath,
   resticRepositoryPath,
 } from "./local/index.js"
-export { MAX_S3_SINGLE_PUT_BYTES } from "./s3/index.js"
 export type {
   BackupDestinationDriver,
   BackupDestinationKind,

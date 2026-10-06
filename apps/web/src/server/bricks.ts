@@ -6,7 +6,6 @@ import {
   brickIdExceedsRecommendedLength,
   brickSchema,
   brickSourceSchema,
-  brickVariableValuesSchema,
   relayCreateInstanceSchema,
   relayInstanceNameSchema,
   relayInstanceSchema,
@@ -14,12 +13,10 @@ import {
   relayNetworkingSchema,
   relaySnapshotSchema,
   relayUpdateInstanceStartupSchema,
-  relayDiskAllocationAvailableBytes,
 } from "@workspace/contracts"
 import { z } from "zod"
 
 import {
-  canReadRelayNode,
   hasPlatformPermission,
   isPlatformAdmin,
   listUserGrants,
@@ -32,7 +29,6 @@ import {
 import { grantHasPermission } from "@/lib/permissions"
 import type { AccessGrant } from "@/lib/access-control"
 import type { AuthenticatedUser } from "@/lib/auth-session"
-import { hydrateBrickVariables } from "@/lib/brick-variables"
 import { hydrateBrickIcon } from "@/lib/brick-catalog-source.server"
 import {
   listCustomBricksEffect,
@@ -51,11 +47,16 @@ import {
 import {
   invalidateRelayCache,
   relayCachePolicy,
-  relayJsonEffect,
   writeRelayCache,
 } from "@/lib/relay-client"
 import { requireEligibleResourceUser } from "@/server/auth"
 import { visibleBrickCatalogs } from "@/server/brick-catalogs.server"
+import {
+  getInstanceStartupHandler,
+  loadInstanceRecipe,
+  requestRelay,
+  requiredRelay,
+} from "@/server/bricks.server"
 import { provisionInstanceDomainBestEffort } from "@/server/domains.server"
 import { publishRealtimeChange } from "@/lib/realtime-source.server"
 import {
@@ -361,66 +362,9 @@ export const getInstanceRecipe = createServerFn({ method: "GET" })
 
 export const getInstanceStartup = createServerFn({ method: "GET" })
   .validator(instanceInputSchema)
-  .handler(async ({ data }) => {
-    const user = await requireEligibleResourceUser()
-    const relay = await requiredRelay(data.relayId)
-    await requireRelayPermission({
-      user,
-      relayId: relay.id,
-      permission: "instance.configuration.read",
-      instanceId: data.instanceId,
-    })
-    const snapshot = relaySnapshotSchema.parse(
-      await requestRelay(relay, "/v1/snapshot")
-    )
-    const instance = snapshot.instances.find(
-      (candidate) => candidate.id === data.instanceId
-    )
-    if (!instance) throw new Error("Instance not found")
-    const { brick, brickSource } = await loadInstanceRecipe(relay, instance)
-    const variables = hydrateBrickVariables(brick, instance.variables)
-    const otherInstances = snapshot.instances.filter(
-      (candidate) => candidate.id !== instance.id
-    )
-    const otherMemoryBytes = otherInstances.reduce(
-      (total, candidate) => total + candidate.limits.memoryBytes,
-      0
-    )
-    const otherDiskBytes = otherInstances.reduce(
-      (total, candidate) => total + candidate.limits.diskBytes,
-      0
-    )
-    const grants = isPlatformAdmin(user)
-      ? []
-      : await listUserGrants(user.id, relay.id)
-    return {
-      allocation: canReadRelayNode(user, relay.id, grants)
-        ? {
-            memory: {
-              availableBytes: Math.max(
-                snapshot.node.memory.totalBytes - otherMemoryBytes,
-                instance.limits.memoryBytes
-              ),
-              nodeTotalBytes: snapshot.node.memory.totalBytes,
-              nodeUsedBytes: snapshot.node.memory.usedBytes,
-            },
-            storage: {
-              availableBytes: relayDiskAllocationAvailableBytes(
-                snapshot.node.storage.totalBytes,
-                otherDiskBytes,
-                instance.limits.diskBytes
-              ),
-              nodeTotalBytes: snapshot.node.storage.totalBytes,
-              nodeUsedBytes: snapshot.node.storage.usedBytes,
-            },
-          }
-        : null,
-      brick,
-      brickSource,
-      instance: relayInstanceSchema.parse(instance),
-      variables: brickVariableValuesSchema.parse(variables),
-    }
-  })
+  .handler(async ({ data }) =>
+    getInstanceStartupHandler(await requireEligibleResourceUser(), data)
+  )
 
 export function startupNetworkChanged(
   existing: z.infer<typeof relayInstanceSchema>["tailscale"],
@@ -532,29 +476,6 @@ export const updateInstanceStartup = createServerFn({ method: "POST" })
     return instance
   })
 
-async function loadInstanceRecipe(
-  relay: PersistedRelay,
-  instance: z.infer<typeof relayInstanceSchema>
-) {
-  let brickSource = instance.brickSource
-  if (!brickSource) {
-    throw new Error("This server has no Brick recipe")
-  }
-  const brick = await hydrateBrickIcon(
-    brickSchema.parse(
-      await requestRelay(
-        relay,
-        `/v1/bricks/recipe?source=${encodeURIComponent(brickSource)}${
-          instance.brickSnapshotSha256
-            ? `&snapshotSha256=${encodeURIComponent(instance.brickSnapshotSha256)}`
-            : ""
-        }`
-      )
-    )
-  )
-  return { brick, brickSource }
-}
-
 function recipePreview(brick: z.infer<typeof brickSchema>) {
   const { iconSvg: _iconSvg, ...recipe } = brick
   return {
@@ -664,14 +585,6 @@ export const configureBrickNetworking = createServerFn({ method: "POST" })
     return networking
   })
 
-async function requiredRelay(id: string): Promise<PersistedRelay> {
-  const relay = (await listPersistedRelays()).find(
-    (item) => item.enabled && item.id === id
-  )
-  if (!relay) throw new Error("Relay not found")
-  return relay
-}
-
 function canProvisionOnRelay(
   user: AuthenticatedUser,
   relay: PersistedRelay,
@@ -765,17 +678,4 @@ async function requiredRelayInstance(
   )
   if (!instance) throw new Error("Instance not found")
   return instance
-}
-
-async function requestRelay(
-  relay: PersistedRelay,
-  path: string,
-  init?: RequestInit,
-  timeout = 15_000,
-  subject?: string
-): Promise<unknown> {
-  return runAppEffect(
-    "relay.json",
-    relayJsonEffect(relay, path, (input) => input, init, timeout, subject)
-  )
 }

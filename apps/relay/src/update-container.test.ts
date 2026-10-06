@@ -64,26 +64,92 @@ const targetImage: ImageInspect = {
   },
 }
 
+interface FakeContainer {
+  readonly config: unknown
+  readonly id: string
+  readonly networks: Record<string, Array<string>>
+  running: boolean
+}
+
+const channelReference = "ghcr.io/kiln-site/hearth:latest-nightly"
+const targetDigest = `ghcr.io/kiln-site/hearth@sha256:${"c".repeat(64)}`
+const replacement = {
+  backupName: "hearth-backup",
+  targetContainer: "hearth",
+  targetImage: targetDigest,
+  targetReference: channelReference,
+  targetVersion: "0.1.0-nightly.2",
+}
+const ignorePhase = () => Effect.void
+
+/** A small stateful Docker daemon: named containers plus image tags. */
 class FakeDocker implements ContainerUpdateDocker {
-  readonly commands: Array<Array<string>> = []
-  createdConfiguration: unknown = null
+  readonly containers = new Map<string, FakeContainer>()
+  readonly tags = new Map<string, string>()
   failCommand: string | null = null
   failHealthCheck = false
 
-  constructor(readonly current: ContainerInspect = currentContainer) {}
+  constructor(readonly current: ContainerInspect = currentContainer) {
+    this.containers.set("hearth", {
+      config: current.Config,
+      id: current.Id,
+      networks: {},
+      running: true,
+    })
+    this.tags.set(channelReference, current.Image)
+  }
 
   async command(
     arguments_: Array<string>
   ): Promise<{ stderr: string; stdout: string }> {
-    this.commands.push(arguments_)
     if (arguments_.join(" ") === this.failCommand) {
       throw new Error(`command failed: ${this.failCommand}`)
+    }
+    const [subcommand, ...rest] = arguments_
+    const name = rest.at(-1) ?? ""
+    if (subcommand === "image" && rest[0] === "tag") {
+      this.tags.set(rest[2] ?? "", rest[1] ?? "")
+    } else if (subcommand === "stop") {
+      this.#container(name).running = false
+    } else if (subcommand === "start") {
+      this.#container(name).running = true
+    } else if (subcommand === "rm") {
+      this.containers.delete(name)
+    } else if (subcommand === "rename") {
+      const [from = "", to = ""] = rest
+      const container = this.#container(from)
+      if (this.containers.has(to)) throw new Error(`${to} already exists`)
+      this.containers.delete(from)
+      this.containers.set(to, container)
+    } else if (subcommand === "network" && rest[0] === "connect") {
+      const aliases = rest.filter((_, index) => rest[index - 1] === "--alias")
+      this.#container(name).networks[rest.at(-2) ?? ""] = aliases
+    } else {
+      throw new Error(`Unexpected docker ${arguments_.join(" ")}`)
     }
     return { stderr: "", stdout: "" }
   }
 
-  async createContainer(_name: string, configuration: unknown): Promise<void> {
-    this.createdConfiguration = configuration
+  async createContainer(name: string, configuration: unknown): Promise<void> {
+    if (this.containers.has(name)) throw new Error(`${name} already exists`)
+    const endpoints = (
+      configuration as {
+        NetworkingConfig: {
+          EndpointsConfig: Record<string, { Aliases: Array<string> }>
+        }
+      }
+    ).NetworkingConfig.EndpointsConfig
+    this.containers.set(name, {
+      config: configuration,
+      id: "replacement",
+      networks: Object.fromEntries(
+        Object.entries(endpoints).map(([network, { Aliases }]) => [
+          network,
+          Aliases,
+        ])
+      ),
+      running: false,
+    })
   }
 
   async inspectContainer(): Promise<ContainerInspect> {
@@ -94,10 +160,16 @@ class FakeDocker implements ContainerUpdateDocker {
     return targetImage
   }
 
-  async waitUntilHealthy(): Promise<void> {
-    if (this.failHealthCheck) {
+  async waitUntilHealthy(name: string): Promise<void> {
+    if (this.failHealthCheck || !this.#container(name).running) {
       throw new Error("unhealthy")
     }
+  }
+
+  #container(name: string): FakeContainer {
+    const container = this.containers.get(name)
+    if (!container) throw new Error(`No such container: ${name}`)
+    return container
   }
 }
 
@@ -131,20 +203,20 @@ describe("container replacement", () => {
       Effect.gen(function* () {
         const docker = new FakeDocker()
 
-        yield* replaceContainerEffect(
-          {
-            backupName: "hearth-backup",
-            targetContainer: "hearth",
-            targetImage: `ghcr.io/kiln-site/hearth@sha256:${"c".repeat(64)}`,
-            targetReference: "ghcr.io/kiln-site/hearth:latest-nightly",
-            targetVersion: "0.1.0-nightly.2",
-          },
-          docker
-        )
+        yield* replaceContainerEffect(replacement, docker, ignorePhase)
 
-        expect(docker.createdConfiguration).toEqual(
+        const replaced = docker.containers.get("hearth")
+        expect(replaced).toMatchObject({
+          id: "replacement",
+          networks: {
+            edge: ["hearth-edge", "hearth"],
+            kiln: ["hearth"],
+          },
+          running: true,
+        })
+        expect(replaced?.config).toEqual(
           expect.objectContaining({
-            Image: "ghcr.io/kiln-site/hearth:latest-nightly",
+            Image: channelReference,
             Healthcheck: {
               Interval: 5_000_000_000,
               Test: ["CMD", "new-healthcheck"],
@@ -158,30 +230,11 @@ describe("container replacement", () => {
             },
           })
         )
-        expect(docker.createdConfiguration).not.toHaveProperty("Cmd")
-        expect(docker.createdConfiguration).not.toHaveProperty("Entrypoint")
-        expect(docker.createdConfiguration).not.toHaveProperty("Hostname")
-        expect(docker.commands[0]).toEqual([
-          "image",
-          "tag",
-          `ghcr.io/kiln-site/hearth@sha256:${"c".repeat(64)}`,
-          "ghcr.io/kiln-site/hearth:latest-nightly",
-        ])
-        expect(docker.commands).toContainEqual([
-          "network",
-          "connect",
-          "--alias",
-          "hearth-edge",
-          "--alias",
-          "hearth",
-          "edge",
-          "hearth",
-        ])
-        expect(docker.commands.at(-1)).toEqual([
-          "rm",
-          "--force",
-          "hearth-backup",
-        ])
+        expect(replaced?.config).not.toHaveProperty("Cmd")
+        expect(replaced?.config).not.toHaveProperty("Entrypoint")
+        expect(replaced?.config).not.toHaveProperty("Hostname")
+        expect(docker.containers.has("hearth-backup")).toBe(false)
+        expect(docker.tags.get(channelReference)).toBe(targetDigest)
       })
   )
 
@@ -189,19 +242,10 @@ describe("container replacement", () => {
     Effect.gen(function* () {
       const phases: Array<string> = []
 
-      yield* replaceContainerEffect(
-        {
-          backupName: "hearth-backup",
-          targetContainer: "hearth",
-          targetImage: `ghcr.io/kiln-site/hearth@sha256:${"c".repeat(64)}`,
-          targetReference: "ghcr.io/kiln-site/hearth:latest-nightly",
-          targetVersion: "0.1.0-nightly.2",
-        },
-        new FakeDocker(),
-        (phase) =>
-          Effect.sync(() => {
-            phases.push(phase)
-          })
+      yield* replaceContainerEffect(replacement, new FakeDocker(), (phase) =>
+        Effect.sync(() => {
+          phases.push(phase)
+        })
       )
 
       expect(phases).toEqual([
@@ -228,18 +272,9 @@ describe("container replacement", () => {
         },
       })
 
-      yield* replaceContainerEffect(
-        {
-          backupName: "hearth-backup",
-          targetContainer: "hearth",
-          targetImage: `ghcr.io/kiln-site/hearth@sha256:${"c".repeat(64)}`,
-          targetReference: "ghcr.io/kiln-site/hearth:latest-nightly",
-          targetVersion: "0.1.0-nightly.2",
-        },
-        docker
-      )
+      yield* replaceContainerEffect(replacement, docker, ignorePhase)
 
-      expect(docker.createdConfiguration).toEqual(
+      expect(docker.containers.get("hearth")?.config).toEqual(
         expect.objectContaining({ Hostname: "hearth.internal" })
       )
     })
@@ -253,16 +288,15 @@ describe("container replacement", () => {
 
         yield* replaceContainerEffect(
           {
-            backupName: "hearth-backup",
-            targetContainer: "hearth",
-            targetImage: `ghcr.io/kiln-site/hearth@sha256:${"c".repeat(64)}`,
+            ...replacement,
             targetReference: "ghcr.io/kiln-site/hearth:latest",
             targetVersion: "0.1.0",
           },
-          docker
+          docker,
+          ignorePhase
         )
 
-        expect(docker.createdConfiguration).toEqual(
+        expect(docker.containers.get("hearth")?.config).toEqual(
           expect.objectContaining({
             Labels: expect.objectContaining({
               "org.opencontainers.image.version": "0.1.0",
@@ -280,31 +314,19 @@ describe("container replacement", () => {
         docker.failHealthCheck = true
 
         const failure = yield* replaceContainerEffect(
-          {
-            backupName: "hearth-backup",
-            targetContainer: "hearth",
-            targetImage: `ghcr.io/kiln-site/hearth@sha256:${"c".repeat(64)}`,
-            targetReference: "ghcr.io/kiln-site/hearth:latest-nightly",
-            targetVersion: "0.1.0-nightly.2",
-          },
-          docker
+          replacement,
+          docker,
+          ignorePhase
         ).pipe(Effect.flip)
 
-        expect(failure.message).toContain("unhealthy")
         expect(failure.phase).toBe("replace")
-        expect(docker.commands).toContainEqual(["rm", "--force", "hearth"])
-        expect(docker.commands).toContainEqual([
-          "rename",
-          "hearth-backup",
-          "hearth",
-        ])
-        expect(docker.commands).toContainEqual(["start", "hearth"])
-        expect(docker.commands.at(-1)).toEqual([
-          "image",
-          "tag",
-          "sha256:old-image",
-          "ghcr.io/kiln-site/hearth:latest-nightly",
-        ])
+        expect(failure.rollbackFailures).toEqual([])
+        expect(docker.containers.get("hearth")).toMatchObject({
+          id: currentContainerId,
+          running: true,
+        })
+        expect(docker.containers.has("hearth-backup")).toBe(false)
+        expect(docker.tags.get(channelReference)).toBe("sha256:old-image")
       })
   )
 
@@ -317,30 +339,18 @@ describe("container replacement", () => {
         docker.failCommand = "rm --force hearth"
 
         const failure = yield* replaceContainerEffect(
-          {
-            backupName: "hearth-backup",
-            targetContainer: "hearth",
-            targetImage: `ghcr.io/kiln-site/hearth@sha256:${"c".repeat(64)}`,
-            targetReference: "ghcr.io/kiln-site/hearth:latest-nightly",
-            targetVersion: "0.1.0-nightly.2",
-          },
-          docker
+          replacement,
+          docker,
+          ignorePhase
         ).pipe(Effect.flip)
 
-        expect(failure.rollbackFailures).toHaveLength(1)
-        expect(failure.message).toContain("command failed: rm --force hearth")
-        expect(docker.commands).toContainEqual([
-          "rename",
-          "hearth-backup",
-          "hearth",
-        ])
-        expect(docker.commands).toContainEqual(["start", "hearth"])
-        expect(docker.commands.at(-1)).toEqual([
-          "image",
-          "tag",
-          "sha256:old-image",
-          "ghcr.io/kiln-site/hearth:latest-nightly",
-        ])
+        expect(failure.rollbackFailures.length).toBeGreaterThan(0)
+        // The old container is kept for manual recovery and the channel tag
+        // is still restored after the earlier rollback step failed.
+        expect(docker.containers.get("hearth-backup")?.id).toBe(
+          currentContainerId
+        )
+        expect(docker.tags.get(channelReference)).toBe("sha256:old-image")
       })
   )
 })

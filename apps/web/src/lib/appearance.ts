@@ -1,7 +1,7 @@
 import { Option, Result, Schema } from "effect"
 
 export const appearanceCacheCookieName = "kiln_appearance"
-export const stableDefaultAccentColor = "#f97316"
+const stableDefaultAccentColor = "#f97316"
 export const maximumCustomAccentColors = 3
 
 const appearanceCacheMaxAge = 60 * 60 * 24 * 365
@@ -29,7 +29,7 @@ export type AccentHsl = {
   saturation: number
 }
 
-export const defaultAccentColor = stableDefaultAccentColor
+const defaultAccentColor = stableDefaultAccentColor
 export const defaultColorScheme: ColorScheme = "dark"
 
 export const defaultAppearance: AppearancePreferences = {
@@ -37,7 +37,7 @@ export const defaultAppearance: AppearancePreferences = {
   colorScheme: defaultColorScheme,
 }
 
-export function parseAccentColor(color: string): AccentHsl | null {
+function parseAccentColor(color: string): AccentHsl | null {
   if (!hexColorPattern.test(color)) return null
 
   const red = Number.parseInt(color.slice(1, 3), 16) / 255
@@ -149,7 +149,7 @@ export function resolveAppearance(
   }
 }
 
-export function resolveColorScheme(
+function resolveColorScheme(
   colorScheme: ColorScheme,
   prefersDark = systemPrefersDark()
 ): ResolvedColorScheme {

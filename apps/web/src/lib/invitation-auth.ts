@@ -6,7 +6,7 @@ export function invitePath(token: string): string {
   return `/invite?token=${encodeURIComponent(token)}`
 }
 
-export function inviteTokenFromRedirect(
+function inviteTokenFromRedirect(
   redirectPath: string | undefined
 ): string | null {
   if (!redirectPath?.startsWith("/invite?")) return null

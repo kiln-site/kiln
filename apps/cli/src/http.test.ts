@@ -1,14 +1,10 @@
 import { assert, describe, it } from "@effect/vitest"
-import { Deferred, Effect, Fiber } from "effect"
-import { afterEach, vi } from "vite-plus/test"
+import { Cause, Effect, Exit, Fiber } from "effect"
+import { afterEach, beforeEach, vi } from "vite-plus/test"
 import { z } from "zod"
 
 import type { KilnSession } from "./config.js"
-import {
-  apiJsonEffect,
-  apiResponseEffect,
-  CLI_LONG_OPERATION_TIMEOUT_MS,
-} from "./http.js"
+import { apiJsonEffect, apiResponseEffect } from "./http.js"
 
 const session: KilnSession = {
   profile: "test",
@@ -16,229 +12,196 @@ const session: KilnSession = {
   url: "https://kiln.example.test",
 }
 
+const okSchema = z.object({ ok: z.boolean() })
+
+// Fakes the network boundary. Without `respond`, the request hangs until it is
+// aborted.
+function stubFetch(
+  respond?: (signal: AbortSignal) => Response | Promise<Response>
+) {
+  let markStarted: (signal: AbortSignal) => void = () => undefined
+  const started = new Promise<AbortSignal>((resolve) => {
+    markStarted = resolve
+  })
+  vi.stubGlobal("fetch", async (_url: string, init?: RequestInit) => {
+    const signal = init?.signal
+    if (!signal) throw new Error("Every CLI request must be abortable")
+    markStarted(signal)
+    if (respond) return respond(signal)
+    return await new Promise<Response>((_resolve, reject) => {
+      signal.addEventListener("abort", () => reject(signal.reason), {
+        once: true,
+      })
+    })
+  })
+  return started
+}
+
+// A JSON body that stalls after its headers and errors when aborted, like a
+// real fetch body.
+function stalledBody(signal: AbortSignal) {
+  return new Response(
+    new ReadableStream<Uint8Array>({
+      start(controller) {
+        signal.addEventListener(
+          "abort",
+          () => controller.error(signal.reason),
+          { once: true }
+        )
+      },
+    }),
+    { headers: { "Content-Type": "application/json" } }
+  )
+}
+
+function failureCode<A, E extends { code: string }>(exit: Exit.Exit<A, E>) {
+  if (Exit.isSuccess(exit)) return "success"
+  const error = Cause.squash(exit.cause) as Partial<E>
+  return error.code ?? "defect"
+}
+
 describe("CLI HTTP requests", () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] })
+  })
+
   afterEach(() => {
-    vi.restoreAllMocks()
+    vi.useRealTimers()
     vi.unstubAllGlobals()
   })
 
-  it.effect("keeps followed log streams free of an operation deadline", () => {
-    const fetchMock = vi.fn(
-      async (_input: RequestInfo | URL, _init?: RequestInit) => new Response()
+  it("aborts the request when its deadline passes", async () => {
+    const started = stubFetch()
+    const result = Effect.runPromiseExit(
+      apiResponseEffect(
+        session,
+        "/api/cli/v1/power",
+        { timeoutMs: 1_000 },
+        () => Effect.void
+      )
     )
-    vi.stubGlobal("fetch", fetchMock)
+    const signal = await started
 
-    return Effect.gen(function* () {
-      yield* apiResponseEffect(
+    vi.advanceTimersByTime(999)
+    assert.isFalse(signal.aborted)
+    vi.advanceTimersByTime(1)
+    assert.isTrue(signal.aborted)
+    assert.strictEqual(failureCode(await result), "network_error")
+  })
+
+  it("keeps the deadline active while decoding a response body", async () => {
+    const started = stubFetch(stalledBody)
+    const result = Effect.runPromiseExit(
+      apiJsonEffect(session, "/api/cli/v1/stalled", okSchema, {
+        timeoutMs: 1_000,
+      })
+    )
+    const signal = await started
+
+    vi.advanceTimersByTime(1_000)
+    assert.isTrue(signal.aborted)
+    assert.strictEqual(failureCode(await result), "invalid_response")
+  })
+
+  it("aborts the request when the caller cancels", async () => {
+    const caller = new AbortController()
+    const started = stubFetch()
+    const result = Effect.runPromiseExit(
+      apiResponseEffect(
+        session,
+        "/api/cli/v1/power",
+        { signal: caller.signal, timeoutMs: null },
+        () => Effect.void
+      )
+    )
+    const signal = await started
+
+    caller.abort(new DOMException("caller stopped", "AbortError"))
+    assert.isTrue(signal.aborted)
+    assert.strictEqual(failureCode(await result), "network_error")
+  })
+
+  it("aborts the request when the Effect is interrupted", async () => {
+    const started = stubFetch()
+    const fiber = Effect.runFork(
+      apiResponseEffect(
         session,
         "/api/cli/v1/logs",
-        {
-          timeoutMs: null,
-        },
-        (response) => Effect.succeed(response)
+        { timeoutMs: null },
+        () => Effect.void
       )
+    )
+    const signal = await started
 
-      const [, init] = fetchMock.mock.calls[0] ?? []
-      assert.instanceOf(init?.signal, AbortSignal)
-      assert.isFalse(init?.signal?.aborted ?? true)
-    })
+    await Effect.runPromise(Fiber.interrupt(fiber))
+    assert.isTrue(signal.aborted)
   })
 
-  it.effect("combines caller cancellation with the operation deadline", () => {
+  it("releases the caller signal and deadline once the request finishes", async () => {
     const caller = new AbortController()
-    const addEventListener = vi.spyOn(caller.signal, "addEventListener")
-    const removeEventListener = vi.spyOn(caller.signal, "removeEventListener")
-    const scheduleTimeout = vi.spyOn(globalThis, "setTimeout")
-    const cancelTimeout = vi.spyOn(globalThis, "clearTimeout")
-    let requestSignal: AbortSignal | undefined
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(
-        async (_input: RequestInfo | URL, init?: RequestInit) =>
-          await new Promise<Response>((_resolve, reject) => {
-            requestSignal = init?.signal ?? undefined
-            if (requestSignal?.aborted) {
-              reject(requestSignal.reason)
-              return
-            }
-            requestSignal?.addEventListener(
-              "abort",
-              () => reject(requestSignal?.reason),
-              { once: true }
-            )
-          })
-      )
-    )
+    const started = stubFetch(async () => Response.json({ ok: true }))
 
-    return Effect.gen(function* () {
-      const fiber = yield* Effect.forkChild(
-        apiResponseEffect(
-          session,
-          "/api/cli/v1/power",
-          {
-            signal: caller.signal,
-            timeoutMs: CLI_LONG_OPERATION_TIMEOUT_MS,
-          },
-          (response) => Effect.succeed(response)
-        ).pipe(Effect.exit)
-      )
-      yield* Effect.yieldNow
-
-      assert.notStrictEqual(requestSignal, caller.signal)
-      assert.isTrue(
-        scheduleTimeout.mock.calls.some(
-          ([, delay]) => delay === CLI_LONG_OPERATION_TIMEOUT_MS
-        )
-      )
-      caller.abort(new DOMException("caller stopped", "AbortError"))
-      yield* Fiber.join(fiber)
-
-      assert.isTrue(requestSignal?.aborted ?? false)
-      assert.isAbove(addEventListener.mock.calls.length, 0)
-      assert.isAbove(removeEventListener.mock.calls.length, 0)
-      assert.isAbove(cancelTimeout.mock.calls.length, 0)
-      assert.isAbove(CLI_LONG_OPERATION_TIMEOUT_MS, 180_000)
-    })
-  })
-
-  it.effect("aborts fetch when the Effect is interrupted", () => {
-    let requestSignal: AbortSignal | undefined
-
-    return Effect.gen(function* () {
-      const started = yield* Deferred.make<void>()
-      vi.stubGlobal(
-        "fetch",
-        vi.fn(
-          async (_input: RequestInfo | URL, init?: RequestInit) =>
-            await new Promise<Response>((_resolve, reject) => {
-              requestSignal = init?.signal ?? undefined
-              Effect.runFork(Deferred.succeed(started, undefined))
-              requestSignal?.addEventListener(
-                "abort",
-                () => reject(requestSignal?.reason),
-                { once: true }
-              )
-            })
-        )
-      )
-      const fiber = yield* Effect.forkChild(
-        apiResponseEffect(
-          session,
-          "/api/cli/v1/logs",
-          {
-            timeoutMs: null,
-          },
-          (response) => Effect.succeed(response)
-        )
-      )
-      yield* Deferred.await(started)
-      yield* Fiber.interrupt(fiber)
-
-      assert.isTrue(requestSignal?.aborted ?? false)
-    })
-  })
-
-  it.effect("keeps the deadline active while decoding a response body", () => {
-    let requestSignal: AbortSignal | undefined
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
-        requestSignal = init?.signal ?? undefined
-        const body = new ReadableStream<Uint8Array>({
-          start() {
-            // Hold the headers open while the JSON body remains stalled.
-          },
-        })
-        return new Response(body, {
-          headers: { "Content-Type": "application/json" },
-        })
+    const body = await Effect.runPromise(
+      apiJsonEffect(session, "/api/cli/v1/whoami", okSchema, {
+        signal: caller.signal,
       })
     )
+    const signal = await started
 
-    return Effect.gen(function* () {
-      const fiber = yield* Effect.forkChild(
-        apiJsonEffect(
-          session,
-          "/api/cli/v1/stalled",
-          z.object({ ok: z.boolean() })
-        )
-      )
-      yield* Effect.yieldNow
-      yield* Fiber.interrupt(fiber)
-      assert.isTrue(requestSignal?.aborted ?? false)
-    })
+    assert.deepStrictEqual(body, { ok: true })
+    // A pending deadline timer would keep the CLI process alive after output.
+    assert.strictEqual(vi.getTimerCount(), 0)
+    caller.abort()
+    assert.isFalse(signal.aborted)
   })
 
-  it.effect("preserves structured Relay console failure details", () => {
+  it("preserves structured Relay failure details", async () => {
     const requestId = "3df56ba5-b2c1-45ee-bab7-386fbb9223c7"
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(
-        async () =>
-          new Response(
-            JSON.stringify({
-              error: {
-                cause: "Survival is not running",
-                code: "relay_operation_failed",
-                message: "Relay could not send the console command.",
-                requestId,
-                retryable: false,
-              },
-            }),
-            {
-              headers: { "Content-Type": "application/json" },
-              status: 502,
-            }
-          )
+    void stubFetch(async () =>
+      Response.json(
+        {
+          error: {
+            cause: "Survival is not running",
+            code: "relay_operation_failed",
+            message: "Relay could not send the console command.",
+            requestId,
+            retryable: false,
+          },
+        },
+        { status: 502 }
       )
     )
 
-    return Effect.gen(function* () {
-      const error = yield* apiJsonEffect(
-        session,
-        "/api/cli/v1/console",
-        z.object({ accepted: z.boolean() })
-      ).pipe(Effect.flip)
+    const error = await Effect.runPromise(
+      apiJsonEffect(session, "/api/cli/v1/console", okSchema).pipe(Effect.flip)
+    )
 
-      assert.strictEqual(error.code, "relay_operation_failed")
-      assert.strictEqual(
-        error.message,
-        "Relay could not send the console command."
-      )
-      assert.strictEqual(error.requestId, requestId)
-      assert.instanceOf(error.cause, Error)
-      assert.strictEqual(error.cause.message, "Survival is not running")
-      assert.isFalse(error.retryable)
-    })
+    assert.strictEqual(error.code, "relay_operation_failed")
+    assert.strictEqual(
+      error.message,
+      "Relay could not send the console command."
+    )
+    assert.strictEqual(error.requestId, requestId)
+    assert.instanceOf(error.cause, Error)
+    assert.strictEqual(error.cause.message, "Survival is not running")
+    assert.isFalse(error.retryable)
   })
 
-  it.effect(
-    "identifies a 502 without Kiln error details as a proxy path",
-    () => {
-      vi.stubGlobal(
-        "fetch",
-        vi.fn(
-          async () =>
-            new Response("Bad Gateway", {
-              headers: { "Content-Type": "text/plain" },
-              status: 502,
-            })
-        )
-      )
+  it("treats a 502 without Kiln error details as a retryable proxy failure", async () => {
+    void stubFetch(
+      async () =>
+        new Response("Bad Gateway", {
+          headers: { "Content-Type": "text/plain" },
+          status: 502,
+        })
+    )
 
-      return Effect.gen(function* () {
-        const error = yield* apiJsonEffect(
-          session,
-          "/api/cli/v1/console",
-          z.object({ accepted: z.boolean() })
-        ).pipe(Effect.flip)
+    const error = await Effect.runPromise(
+      apiJsonEffect(session, "/api/cli/v1/console", okSchema).pipe(Effect.flip)
+    )
 
-        assert.strictEqual(error.code, "http_502")
-        assert.strictEqual(error.message, "The request returned HTTP 502.")
-        assert.instanceOf(error.cause, Error)
-        assert.include(error.cause.message, "Hearth's proxy")
-        assert.isTrue(error.retryable)
-      })
-    }
-  )
+    assert.strictEqual(error.code, "http_502")
+    assert.instanceOf(error.cause, Error)
+    assert.isTrue(error.retryable)
+  })
 })

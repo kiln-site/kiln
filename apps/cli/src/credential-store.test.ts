@@ -2,147 +2,147 @@ import { assert, describe, it } from "@effect/vitest"
 
 import {
   credentialManagersForPlatform,
-  macosKeychainCredentialManager,
   runCredentialCommand,
-  windowsCredentialManager,
   type CredentialCommand,
   type CredentialCommandResult,
+  type CredentialManager,
 } from "./credential-store.js"
 
-const success = (stdout = ""): CredentialCommandResult => ({
-  exitCode: 0,
+const result = (exitCode: number, stdout = ""): CredentialCommandResult => ({
+  exitCode,
   stderr: "",
   stdout,
 })
 
+// Stateful stand-in for the OS credential store at the child-process boundary.
+function fakeCredentialStore(platform: "darwin" | "win32") {
+  const entries = new Map<string, string>()
+  const commands: Array<CredentialCommand> = []
+  const run = async (
+    command: CredentialCommand
+  ): Promise<CredentialCommandResult> => {
+    commands.push(command)
+    const input = JSON.parse(command.input ?? "{}")
+    if (platform === "darwin") {
+      const key = `${input.service}:${input.account}`
+      if (input.operation === "set") {
+        entries.set(key, input.password)
+        return result(0, '{"stored":true}\n')
+      }
+      if (input.operation === "get") {
+        return result(
+          0,
+          `${JSON.stringify({ password: entries.get(key) ?? null })}\n`
+        )
+      }
+      return result(0, `${JSON.stringify({ deleted: entries.delete(key) })}\n`)
+    }
+    const script = command.arguments.at(-1) ?? ""
+    if (script.includes("::CredWrite(")) {
+      entries.set(input.target, input.password)
+      return result(0)
+    }
+    if (script.includes("::CredRead(")) {
+      const password = entries.get(input.target)
+      return password === undefined ? result(44) : result(0, password)
+    }
+    return entries.delete(input.target) ? result(0) : result(44)
+  }
+  const [manager] = credentialManagersForPlatform(platform, run)
+  return { commands, manager: manager as CredentialManager }
+}
+
 describe("CLI credential managers", () => {
-  it("selects only the native manager for supported desktop platforms", () => {
+  it("keeps the manager ids that saved configs reference", () => {
+    const run = async () => result(0)
     assert.deepStrictEqual(
-      credentialManagersForPlatform("darwin", async () => success()).map(
-        (manager) => manager.id
-      ),
+      credentialManagersForPlatform("darwin", run).map(({ id }) => id),
       ["macos-keychain-v1"]
     )
     assert.deepStrictEqual(
-      credentialManagersForPlatform("win32", async () => success()).map(
-        (manager) => manager.id
-      ),
+      credentialManagersForPlatform("win32", run).map(({ id }) => id),
       ["windows-credential-manager-v1"]
     )
-    assert.deepStrictEqual(
-      credentialManagersForPlatform("linux", async () => success()),
-      []
-    )
+    assert.deepStrictEqual(credentialManagersForPlatform("linux", run), [])
   })
 
-  it("passes macOS secrets through stdin instead of process arguments", async () => {
-    const commands: Array<CredentialCommand> = []
-    const manager = macosKeychainCredentialManager(async (command) => {
-      commands.push(command)
-      return success()
+  for (const platform of ["darwin", "win32"] as const) {
+    it(`${platform}: passes secrets through stdin instead of process arguments`, async () => {
+      const { commands, manager } = fakeCredentialStore(platform)
+
+      await manager.setPassword("profile-account", "kiln_cli_secret")
+
+      assert.strictEqual(commands.length, 1)
+      const [command] = commands
+      // An absolute system path cannot be hijacked through PATH.
+      assert.match(
+        command?.executable ?? "",
+        platform === "darwin"
+          ? /^\/usr\/bin\/osascript$/u
+          : /\\System32\\WindowsPowerShell\\v1\.0\\powershell\.exe$/u
+      )
+      for (const argument of command?.arguments ?? []) {
+        assert.notInclude(argument, "kiln_cli_secret")
+        assert.notInclude(argument, "profile-account")
+      }
+      assert.include(command?.input ?? "", "kiln_cli_secret")
     })
 
-    await manager.setPassword("profile-account", "kiln_cli_secret")
+    it(`${platform}: stores, reads, and deletes credentials and treats missing ones as absent`, async () => {
+      const { manager } = fakeCredentialStore(platform)
 
-    assert.strictEqual(commands.length, 1)
-    assert.strictEqual(commands[0]?.executable, "/usr/bin/osascript")
-    assert.notInclude(commands[0]?.arguments, "kiln_cli_secret")
-    assert.notInclude(commands[0]?.arguments, "profile-account")
-    assert.deepStrictEqual(commands[0]?.arguments.slice(0, 3), [
-      "-l",
-      "JavaScript",
-      "-e",
-    ])
-    assert.include(
-      commands[0]?.arguments[3] ?? "",
-      'ObjC.bindFunction("SecItemAdd"'
-    )
-    assert.include(
-      commands[0]?.arguments[3] ?? "",
-      "$.SecItemUpdate(query, updates)"
-    )
-    assert.deepStrictEqual(JSON.parse(commands[0]?.input ?? ""), {
-      account: "profile-account",
-      operation: "set",
-      password: "kiln_cli_secret",
-      service: "site.kiln.cli",
-    })
-  })
-
-  it("reads and deletes macOS Keychain credentials", async () => {
-    const commands: Array<CredentialCommand> = []
-    const results = [
-      success('{"password":"kiln_cli_secret"}\n'),
-      success('{"deleted":true}\n'),
-    ]
-    const manager = macosKeychainCredentialManager(async (command) => {
-      commands.push(command)
-      return results.shift() ?? success()
+      assert.isNull(await manager.getPassword("profile-account"))
+      await manager.setPassword("profile-account", "kiln_cli_secret")
+      assert.strictEqual(
+        await manager.getPassword("profile-account"),
+        "kiln_cli_secret"
+      )
+      assert.isTrue(await manager.deletePassword("profile-account"))
+      assert.isNull(await manager.getPassword("profile-account"))
+      assert.isFalse(await manager.deletePassword("profile-account"))
     })
 
-    assert.strictEqual(
-      await manager.getPassword("profile-account"),
-      "kiln_cli_secret"
-    )
-    assert.isTrue(await manager.deletePassword("profile-account"))
-    assert.strictEqual(JSON.parse(commands[0]?.input ?? "").operation, "get")
-    assert.strictEqual(JSON.parse(commands[1]?.input ?? "").operation, "delete")
-  })
+    it(`${platform}: fails instead of reporting success when the store errors`, async () => {
+      const [manager] = credentialManagersForPlatform(platform, async () =>
+        result(1)
+      )
+      if (!manager) throw new Error("Expected a native credential manager")
 
-  it("treats missing native credentials as absent", async () => {
-    const missing = async (): Promise<CredentialCommandResult> => ({
-      exitCode: 44,
-      stderr: "not found",
-      stdout: "",
+      for (const operation of [
+        () => manager.setPassword("profile-account", "kiln_cli_secret"),
+        () => manager.getPassword("profile-account"),
+        () => manager.deletePassword("profile-account"),
+      ]) {
+        const outcome = await operation().then(
+          () => "resolved",
+          () => "rejected"
+        )
+        assert.strictEqual(outcome, "rejected")
+      }
     })
+  }
 
-    assert.isNull(
-      await macosKeychainCredentialManager(async () =>
-        success('{"password":null}\n')
-      ).getPassword("missing")
-    )
-    assert.isFalse(
-      await windowsCredentialManager(missing).deletePassword("missing")
-    )
-  })
-
-  it("passes Windows secrets through stdin instead of process arguments", async () => {
-    const commands: Array<CredentialCommand> = []
-    const manager = windowsCredentialManager(async (command) => {
-      commands.push(command)
-      return success()
-    })
-
-    await manager.setPassword("profile-account", "kiln_cli_secret")
-
-    assert.strictEqual(commands.length, 1)
-    assert.match(
-      commands[0]?.executable ?? "",
-      /\\System32\\WindowsPowerShell\\v1\.0\\powershell\.exe$/u
-    )
-    assert.notInclude(commands[0]?.arguments, "kiln_cli_secret")
-    assert.notInclude(commands[0]?.arguments, "site.kiln.cli:profile-account")
-    assert.deepStrictEqual(JSON.parse(commands[0]?.input ?? ""), {
-      account: "profile-account",
-      password: "kiln_cli_secret",
-      target: "site.kiln.cli:profile-account",
-    })
-  })
-
-  it("waits for inherited command output to close", async () => {
-    const delayedOutput = [
+  it("waits for output from processes that outlive the command", async () => {
+    // The helper writes only after the command's own process has exited and
+    // been reaped, so resolving on "exit" instead of "close" loses the output.
+    const lateWriter = [
+      `const parent = Number(process.argv[1])`,
+      `const alive = () => { try { process.kill(parent, 0); return true } catch { return false } }`,
+      `const wait = () => alive() ? setTimeout(wait, 5) : process.stdout.write("complete")`,
+      `wait()`,
+    ].join(";")
+    const command = [
       `const { spawn } = require("node:child_process")`,
-      `const child = spawn(process.execPath, ["-e", "setTimeout(() => process.stdout.write('complete'), 25)"], { stdio: ["ignore", process.stdout, "ignore"] })`,
-      `child.unref()`,
+      `spawn(process.execPath, ["-e", ${JSON.stringify(lateWriter)}, String(process.pid)], { stdio: ["ignore", process.stdout, "ignore"] }).unref()`,
     ].join(";")
 
-    const result = await runCredentialCommand({
-      arguments: ["-e", delayedOutput],
+    const output = await runCredentialCommand({
+      arguments: ["-e", command],
       executable: process.execPath,
     })
 
-    assert.strictEqual(result.exitCode, 0)
-    assert.strictEqual(result.stdout, "complete")
+    assert.strictEqual(output.exitCode, 0)
+    assert.strictEqual(output.stdout, "complete")
   })
 
   it("passes command input through stdin without user interaction", async () => {
@@ -150,16 +150,16 @@ describe("CLI credential managers", () => {
       `process.stdin.setEncoding("utf8")`,
       `let input = ""`,
       `process.stdin.on("data", (chunk) => { input += chunk })`,
-      `process.stdin.on("end", () => process.stdout.write(String(input.length)))`,
+      `process.stdin.on("end", () => process.stdout.write(input))`,
     ].join(";")
 
-    const result = await runCredentialCommand({
+    const output = await runCredentialCommand({
       arguments: ["-e", readInput],
       executable: process.execPath,
       input: "credential-data",
     })
 
-    assert.strictEqual(result.exitCode, 0)
-    assert.strictEqual(result.stdout, "15")
+    assert.strictEqual(output.exitCode, 0)
+    assert.strictEqual(output.stdout, "credential-data")
   })
 })

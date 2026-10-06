@@ -1,6 +1,4 @@
 import {
-  backupArtifactFilename,
-  type BackupArtifactKind,
   type BackupTaskKind,
   type BackupTaskPhase,
   type BackupTaskStatus,
@@ -22,12 +20,6 @@ type BackupTaskFeedbackPresentation = BackupUploadPhasePresentation & {
   taskError: string | null
   taskKind: BackupTaskKind | null
   taskStatus: BackupTaskStatus | null
-}
-
-type BackupFilenamePresentation = BackupUploadPhasePresentation & {
-  artifactKind: BackupArtifactKind
-  filename: string | null
-  id: string
 }
 
 type BackupDeleteProgressPresentation = {
@@ -93,19 +85,6 @@ export function backupShowsPrimaryTaskFeedback(
   return !backupShowsUploadArtifact(backup)
 }
 
-export function backupDisplayFilename(
-  backup: BackupFilenamePresentation
-): string {
-  if (backup.filename) return backup.filename
-  if (backup.artifactKind === "restic_snapshot") {
-    return backupArtifactFilename(backup.id, backup.artifactKind)
-  }
-  if (backupShowsUploadArtifact(backup)) {
-    return backupArtifactFilename(backup.id, backup.artifactKind)
-  }
-  return backup.id
-}
-
 export function backupDisplayBytes(
   backup: BackupProgressPresentation
 ): number | null {
@@ -140,7 +119,7 @@ export function backupTaskUploadProgressPercent(
   )
 }
 
-export function backupShowsUploadArtifact(
+function backupShowsUploadArtifact(
   backup: BackupUploadPhasePresentation
 ): boolean {
   return (

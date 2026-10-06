@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vite-plus/test"
 
 import {
-  exactSourceCidr,
   isPublicRemoteAddress,
   isSourceAllowed,
   normalizeSourceCidrs,
@@ -23,7 +22,6 @@ describe("Relay source policy", () => {
   })
 
   it("handles IPv4-mapped peers and fails closed without a peer", () => {
-    expect(exactSourceCidr("::ffff:127.0.0.1")).toBe("127.0.0.1/32")
     expect(isSourceAllowed("::ffff:127.0.0.1", ["127.0.0.0/8"])).toBe(true)
     expect(isSourceAllowed(undefined, ["127.0.0.0/8"])).toBe(false)
     expect(isSourceAllowed(undefined, [])).toBe(true)

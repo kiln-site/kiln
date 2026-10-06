@@ -76,10 +76,10 @@ export function replaceContainerEffect(
     targetVersion: string
   },
   docker: ContainerUpdateDocker,
-  onPhase?: (phase: string) => Effect.Effect<void>
+  onPhase: (phase: string) => Effect.Effect<void>
 ) {
   return Effect.gen(function* () {
-    if (onPhase) yield* onPhase("replace.inspectContainer")
+    yield* onPhase("replace.inspectContainer")
     const [current, target] = yield* Effect.all(
       [
         updateOperation("replace.inspectContainer", () =>
@@ -108,7 +108,7 @@ export function replaceContainerEffect(
     let replacementCreated = false
     let backupRenamed = false
     yield* Effect.gen(function* () {
-      if (onPhase) yield* onPhase("replace.tagTarget")
+      yield* onPhase("replace.tagTarget")
       yield* updateOperation("replace.tagTarget", () =>
         docker.command([
           "image",
@@ -117,11 +117,11 @@ export function replaceContainerEffect(
           input.targetReference,
         ])
       )
-      if (onPhase) yield* onPhase("replace.stopCurrent")
+      yield* onPhase("replace.stopCurrent")
       yield* updateOperation("replace.stopCurrent", () =>
         docker.command(["stop", "--time", "30", input.targetContainer], 45_000)
       )
-      if (onPhase) yield* onPhase("replace.renameCurrent")
+      yield* onPhase("replace.renameCurrent")
       yield* updateOperation("replace.renameCurrent", () =>
         docker.command(["rename", input.targetContainer, input.backupName])
       )
@@ -137,7 +137,7 @@ export function replaceContainerEffect(
         delete preservedConfig.Hostname
       }
       const targetHealthcheck = target.Config?.Healthcheck
-      if (onPhase) yield* onPhase("replace.createTarget")
+      yield* onPhase("replace.createTarget")
       yield* updateOperation("replace.createTarget", () =>
         docker.createContainer(input.targetContainer, {
           ...preservedConfig,
@@ -168,7 +168,7 @@ export function replaceContainerEffect(
       )
       replacementCreated = true
 
-      if (networkNames.length > 1 && onPhase) {
+      if (networkNames.length > 1) {
         yield* onPhase("replace.connectNetwork")
       }
       yield* Effect.forEach(
@@ -189,15 +189,15 @@ export function replaceContainerEffect(
         { discard: true }
       )
 
-      if (onPhase) yield* onPhase("replace.startTarget")
+      yield* onPhase("replace.startTarget")
       yield* updateOperation("replace.startTarget", () =>
         docker.command(["start", input.targetContainer], 120_000)
       )
-      if (onPhase) yield* onPhase("replace.waitUntilHealthy")
+      yield* onPhase("replace.waitUntilHealthy")
       yield* updateOperation("replace.waitUntilHealthy", () =>
         docker.waitUntilHealthy(input.targetContainer)
       )
-      if (onPhase) yield* onPhase("replace.removeBackup")
+      yield* onPhase("replace.removeBackup")
       yield* updateOperation("replace.removeBackup", () =>
         docker.command(["rm", "--force", input.backupName], 90_000)
       )

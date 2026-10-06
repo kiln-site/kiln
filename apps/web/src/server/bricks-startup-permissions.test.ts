@@ -1,58 +1,51 @@
-import { beforeEach, describe, expect, it, vi } from "vite-plus/test"
+import { randomUUID } from "node:crypto"
+
+import { assert, layer } from "@effect/vitest"
 import {
   builtinTailscaleBrick,
   relayInstanceSchema,
   relaySnapshotSchema,
 } from "@workspace/contracts"
-import type { AccessGrant } from "@/lib/access-control"
+import { Effect } from "effect"
+import { afterAll, vi } from "vite-plus/test"
+
+import { disposeAppRuntime } from "@/effect/runtime"
 import type { AuthenticatedUser } from "@/lib/auth-session"
-const mocks = vi.hoisted(() => {
-  Object.assign(process.env, {
-    DB_HOST: "127.0.0.1",
-    DB_NAME: "test",
-    DB_PASSWORD: "test",
-    DB_USERNAME: "test",
-  })
-  return {
-    grants: [] as AccessGrant[],
-    user: {} as AuthenticatedUser,
-    rpc: vi.fn(),
-  }
-})
-vi.mock("@tanstack/react-start", () => ({
-  createServerFn: () => ({
-    validator: () => ({
-      handler: (handler: unknown, serverHandler?: unknown) => ({
-        __executeServer: serverHandler ?? handler,
-      }),
-    }),
-    handler: (handler: unknown, serverHandler?: unknown) => ({
-      __executeServer: serverHandler ?? handler,
-    }),
-  }),
+import type { AccessPermission } from "@/lib/permissions"
+import { getInstanceStartupHandler } from "@/server/bricks.server"
+import { TestDatabase, describeMysql, resetDatabase } from "@/test/database"
+import { insertGrant, insertRelay, insertRows } from "@/test/seed"
+
+// The Relay is the only network boundary: it reports its node and servers and
+// serves the server's Brick recipe.
+const relay = vi.hoisted(() => ({ snapshot: undefined as unknown }))
+vi.mock("@/lib/relay-connection", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/relay-connection")>()),
+  relayRpc: async (_relay: unknown, operation: string) => {
+    if (operation === "relay.snapshot") return relay.snapshot
+    if (operation === "brick.recipe") return builtinTailscaleBrick
+    throw new Error(`Unexpected Relay operation ${operation}`)
+  },
 }))
-vi.mock("@/server/auth", () => ({
-  requireEligibleResourceUser: async () => mocks.user,
-}))
-vi.mock("@/lib/access-control", async (original) => ({
-  ...(await original<typeof import("@/lib/access-control")>()),
-  listUserGrants: async () => mocks.grants,
-  requireRelayPermission: vi.fn().mockResolvedValue(undefined),
-}))
-vi.mock("@/lib/relay-registry", () => ({
-  listPersistedRelays: async () => [{ id: "relay-a", enabled: true }],
-}))
-vi.mock("@/lib/brick-catalog-source.server", () => ({
-  hydrateBrickIcon: async (brick: unknown) => brick,
-}))
-vi.mock("@/effect/runtime", () => ({
-  runAppEffect: (_name: string, input: unknown) => mocks.rpc(input),
-}))
-vi.mock("@/lib/relay-client", () => ({
-  relayJsonEffect: (_relay: unknown, path: string) => path,
-}))
-// @ts-expect-error TanStack's server split exposes the handler for boundary tests.
-import { getInstanceStartup_createServerFn_handler as getInstanceStartup } from "./bricks?tss-serverfn-split"
+
+afterAll(() => disposeAppRuntime())
+
+const at = Date.UTC(2026, 0, 1)
+const relayId = "r".repeat(43)
+const otherRelayId = "s".repeat(43)
+
+const member: AuthenticatedUser = {
+  email: "member@example.test",
+  emailVerified: true,
+  emailVerifiedAt: new Date(at).toISOString(),
+  id: "member",
+  isDevelopmentBypass: false,
+  name: "Member",
+  role: "user",
+  status: "enabled",
+  twoFactorEnabled: false,
+}
+
 const instance = relayInstanceSchema.parse({
   id: "a".repeat(40),
   shortId: "aaaaaaaa",
@@ -72,7 +65,8 @@ const instance = relayInstanceSchema.parse({
   variables: {},
   limits: { diskBytes: 1024 ** 3, memoryBytes: 1024 ** 3 },
 })
-const snapshot = relaySnapshotSchema.parse({
+
+relay.snapshot = relaySnapshotSchema.parse({
   instances: [
     instance,
     {
@@ -82,94 +76,114 @@ const snapshot = relaySnapshotSchema.parse({
     },
   ],
   node: {
-    id: "relay-a",
+    id: relayId,
     name: "Relay",
     version: "test",
     platform: "linux",
     arch: "arm64",
-    connectedAt: "2026-01-01T00:00:00.000Z",
+    connectedAt: new Date(at).toISOString(),
     cpu: { cores: 4, loadPercent: 0 },
     memory: { totalBytes: 8 * 1024 ** 3, usedBytes: 3 * 1024 ** 3 },
     storage: { totalBytes: 20 * 1024 ** 3, usedBytes: 4 * 1024 ** 3 },
     docker: { available: true, version: "test" },
   },
 })
-beforeEach(() => {
-  mocks.grants = []
-  mocks.user = {
-    id: "user",
-    role: "user",
-    emailVerified: true,
-    emailVerifiedAt: "2026-01-01T00:00:00Z",
-    status: "enabled",
-  } as AuthenticatedUser
-  mocks.rpc.mockImplementation(async (path: string) =>
-    path === "/v1/snapshot" ? snapshot : builtinTailscaleBrick
-  )
-})
-describe("Startup node allocation boundary", () => {
-  it.each(["instance", "database", "relay"] as const)(
-    "withholds host allocation without relay.read on a %s grant",
-    async (resourceType) => {
-      mocks.grants = [
-        {
-          id: "grant",
-          relayId: "relay-a",
-          resourceId: instance.id,
-          resourceType,
-          permissions: ["instance.configuration.read"],
-        },
-      ]
-      const result = await getInstanceStartup({
-        data: { relayId: "relay-a", instanceId: instance.id },
-      })
-      expect(result.allocation).toBeNull()
-      expect(result.instance.limits).toEqual(instance.limits)
-      expect(result.brick).toEqual(builtinTailscaleBrick)
-      expect(result.variables).toBeDefined()
-    }
-  )
-  it("does not reuse node permission from another Relay", async () => {
-    mocks.grants = [
-      {
-        id: "grant",
-        relayId: "relay-b",
-        resourceId: "relay-b",
-        resourceType: "relay",
-        permissions: ["relay.read"],
-      },
-    ]
-    expect(
-      (
-        await getInstanceStartup({
-          data: { relayId: "relay-a", instanceId: instance.id },
-        })
-      ).allocation
-    ).toBeNull()
+
+const grant = (
+  target: { relayId: string; resourceType: "relay" | "instance" },
+  permissions: ReadonlyArray<AccessPermission>
+) =>
+  Effect.gen(function* () {
+    const id = randomUUID()
+    yield* insertGrant({
+      id,
+      userId: member.id,
+      relayId: target.relayId,
+      resourceType: target.resourceType,
+      resourceId:
+        target.resourceType === "relay" ? target.relayId : instance.id,
+    })
+    yield* insertRows(
+      "access_selection",
+      permissions.map((permission) => ({
+        access_id: id,
+        selection_kind: "permission",
+        selection_key: permission,
+      }))
+    )
   })
-  it.each([false, true])(
-    "preserves host allocation for node readers or admin=%s",
-    async (admin) => {
-      if (admin) mocks.user.role = "admin"
-      else
-        mocks.grants = [
-          {
-            id: "grant",
-            relayId: "relay-a",
-            resourceId: "relay-a",
-            resourceType: "relay",
-            permissions: ["relay.read"],
-          },
-        ]
-      const result = await getInstanceStartup({
-        data: { relayId: "relay-a", instanceId: instance.id },
-      })
-      expect(result.allocation.memory).toEqual({
-        availableBytes: 6 * 1024 ** 3,
-        nodeTotalBytes: 8 * 1024 ** 3,
-        nodeUsedBytes: 3 * 1024 ** 3,
-      })
-      expect(result.allocation.storage.nodeTotalBytes).toBe(20 * 1024 ** 3)
-    }
+
+const seed = Effect.gen(function* () {
+  yield* resetDatabase
+  yield* insertRelay(relayId)
+  yield* insertRelay(otherRelayId)
+})
+
+const startup = (user: AuthenticatedUser) =>
+  Effect.promise(() =>
+    getInstanceStartupHandler(user, { relayId, instanceId: instance.id })
   )
+
+describeMysql("startup host allocation", () => {
+  layer(TestDatabase)((it) => {
+    // Any Relay-wide grant implies relay.read, so only a server grant can
+    // read startup settings without it.
+    it.effect("withholds host allocation from a server-only grant", () =>
+      Effect.gen(function* () {
+        yield* seed
+        yield* grant({ relayId, resourceType: "instance" }, [
+          "instance.configuration.read",
+        ])
+
+        const result = yield* startup(member)
+
+        assert.isNull(result.allocation)
+        assert.deepStrictEqual(result.instance.limits, instance.limits)
+        assert.strictEqual(result.brick.source, builtinTailscaleBrick.source)
+      })
+    )
+
+    it.effect("does not reuse relay.read from another Relay", () =>
+      Effect.gen(function* () {
+        yield* seed
+        yield* grant({ relayId, resourceType: "instance" }, [
+          "instance.configuration.read",
+        ])
+        yield* grant({ relayId: otherRelayId, resourceType: "relay" }, [
+          "relay.read",
+        ])
+
+        assert.isNull((yield* startup(member)).allocation)
+      })
+    )
+
+    it.effect.each([
+      { name: "a relay.read grant", admin: false },
+      { name: "an administrator", admin: true },
+    ])("shows host allocation to $name", ({ admin }) =>
+      Effect.gen(function* () {
+        yield* seed
+        if (!admin) {
+          yield* grant({ relayId, resourceType: "relay" }, [
+            "relay.read",
+            "instance.configuration.read",
+          ])
+        }
+
+        const result = yield* startup(
+          admin ? { ...member, role: "admin" } : member
+        )
+
+        assert.deepStrictEqual(result.allocation?.memory, {
+          availableBytes: 6 * 1024 ** 3,
+          nodeTotalBytes: 8 * 1024 ** 3,
+          nodeUsedBytes: 3 * 1024 ** 3,
+        })
+        assert.strictEqual(
+          result.allocation?.storage.nodeTotalBytes,
+          20 * 1024 ** 3
+        )
+      })
+    )
+  })
 })

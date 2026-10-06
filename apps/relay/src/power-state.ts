@@ -5,7 +5,7 @@ import type {
   RelayObservedState,
 } from "@workspace/contracts"
 
-export const INSTANCE_STARTUP_STABILITY_MS = 15_000
+const INSTANCE_STARTUP_STABILITY_MS = 15_000
 export const INSTANCE_STARTUP_READINESS_TIMEOUT_MS = 120_000
 export const INSTANCE_STOP_TIMEOUT_SECONDS = 60
 

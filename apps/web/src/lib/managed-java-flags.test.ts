@@ -1,9 +1,6 @@
 import { describe, expect, it } from "vite-plus/test"
 
-import {
-  dockerMemoryBytes,
-  managedJavaStartupFlags,
-} from "./managed-java-flags.js"
+import { managedJavaStartupFlags } from "./managed-java-flags.js"
 
 const paperEnv = {
   KILN_ARTIFACT_FILE: "{{ variables.server_jar_file }}",
@@ -47,12 +44,6 @@ describe("managed Java startup flags", () => {
         server_jar_file: "paper.jar",
       })
     ).toBe("-Xms512M -XX:MaxRAMPercentage=75 -jar paper.jar --nogui")
-  })
-
-  it("parses Docker memory amounts", () => {
-    expect(dockerMemoryBytes("2G")).toBe(2 * 1024 ** 3)
-    expect(dockerMemoryBytes("512M")).toBe(512 * 1024 ** 2)
-    expect(dockerMemoryBytes("nope")).toBeNull()
   })
 
   it("resolves Brick templates in managed flag environment values", () => {

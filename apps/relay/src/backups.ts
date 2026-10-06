@@ -120,16 +120,8 @@ type ArchiveEntry = {
   size: number
 }
 
-type CreateArchive = (
-  input: BackupCreateTaskInput,
-  instance: RelayInstanceConfig,
-  progress: BackupProgress,
-  signal: AbortSignal
-) => Promise<BackupArchiveCreateTaskResult>
-
 export class BackupManager {
   readonly #config: RelayConfig
-  readonly #createArchive: CreateArchive
   readonly #findInstance: (
     instanceId: string
   ) => Promise<RelayInstanceConfig | null>
@@ -142,7 +134,6 @@ export class BackupManager {
 
   private constructor(options: {
     config: RelayConfig
-    createArchive: CreateArchive
     findInstance: (instanceId: string) => Promise<RelayInstanceConfig | null>
     isInstanceStopped: (instanceId: string) => Promise<boolean>
     databases: DatabaseDriver | null
@@ -150,7 +141,6 @@ export class BackupManager {
     state: RelayStateStore["Service"]
     wake: Queue.Queue<void>
   }) {
-    this.#createArchive = options.createArchive
     this.#config = options.config
     this.#findInstance = options.findInstance
     this.#isInstanceStopped = options.isInstanceStopped
@@ -162,40 +152,25 @@ export class BackupManager {
 
   static make(options: {
     config: RelayConfig
-    createArchive?: CreateArchive
     findInstance: (instanceId: string) => Promise<RelayInstanceConfig | null>
     isInstanceStopped: (instanceId: string) => Promise<boolean>
     databases?: DatabaseDriver
-    restic?: ResticDriver
   }) {
     return Effect.gen(function* () {
       const state = yield* RelayStateStore
       const wake = yield* Queue.unbounded<void>()
       const manager = new BackupManager({
         config: options.config,
-        createArchive:
-          options.createArchive ??
-          (async (input, instance, progress, signal) =>
-            createPortableInstanceBackup(
-              options.config,
-              input,
-              instance,
-              progress,
-              signal,
-              await Effect.runPromise(state.listInstanceRoutes(instance.id))
-            )),
         findInstance: options.findInstance,
         isInstanceStopped: options.isInstanceStopped,
         databases: options.databases ?? null,
-        restic:
-          options.restic ??
-          createResticDriver({
-            cacheDirectory: resolve(
-              options.config.dataDirectory,
-              "restic",
-              "cache"
-            ),
-          }),
+        restic: createResticDriver({
+          cacheDirectory: resolve(
+            options.config.dataDirectory,
+            "restic",
+            "cache"
+          ),
+        }),
         state,
         wake,
       })
@@ -904,7 +879,15 @@ export class BackupManager {
         )
       )
       const result = yield* Effect.tryPromise({
-        try: () => this.#createArchive(input, instance, progress, createSignal),
+        try: async () =>
+          createPortableInstanceBackup(
+            this.#config,
+            input,
+            instance,
+            progress,
+            createSignal,
+            await Effect.runPromise(this.#state.listInstanceRoutes(instance.id))
+          ),
         catch: (cause) =>
           cause instanceof RelayBackupError
             ? cause
@@ -950,13 +933,13 @@ export class BackupManager {
   }
 }
 
-export async function createPortableInstanceBackup(
+async function createPortableInstanceBackup(
   config: RelayConfig,
   input: BackupCreateTaskInput,
   instance: RelayInstanceConfig,
   progress: BackupProgress,
-  signal: AbortSignal = new AbortController().signal,
-  webRoutes: ReadonlyArray<RelayInstanceWebRoute> = []
+  signal: AbortSignal,
+  webRoutes: ReadonlyArray<RelayInstanceWebRoute>
 ): Promise<BackupArchiveCreateTaskResult> {
   signal.throwIfAborted()
   const configuredRoot = await realpath(config.rootDirectory)
@@ -1125,13 +1108,12 @@ async function instanceBackupManifest(
   }
 }
 
-export function storeCreatedBackup(
+function storeCreatedBackup(
   config: RelayConfig,
   input: BackupCreateTaskInput,
   result: BackupArchiveCreateTaskResult,
   progress: BackupProgress,
-  signal: AbortSignal,
-  uploadArtifact: typeof uploadBackupArtifact = uploadBackupArtifact
+  signal: AbortSignal
 ) {
   return Effect.gen(function* () {
     progress.phase = "uploading"
@@ -1150,7 +1132,7 @@ export function storeCreatedBackup(
       progress.currentArtifactId = destination.artifactId ?? null
       const uploaded = yield* Effect.result(
         destination.kind === "s3"
-          ? uploadArtifact(
+          ? uploadBackupArtifact(
               config,
               { ...input, destination },
               result,
@@ -1239,7 +1221,7 @@ function uploadBackupArtifact(
   })
 }
 
-export function deleteBackupArtifacts(
+function deleteBackupArtifacts(
   config: RelayConfig,
   input: BackupDeleteTaskInput & { kind: "delete" },
   updateProgress: (
@@ -1247,8 +1229,7 @@ export function deleteBackupArtifacts(
     result: BackupOperationTaskResult
   ) => ReturnType<
     RelayStateStore["Service"]["updateBackupTaskOperationProgress"]
-  >,
-  deleteArtifact: typeof deleteBackupArtifact = deleteBackupArtifact
+  >
 ) {
   return Effect.gen(function* () {
     const outcomes: Array<{
@@ -1270,7 +1251,7 @@ export function deleteBackupArtifacts(
         )
       }
       const deleted = yield* Effect.result(
-        deleteArtifact(config, { ...input, destination })
+        deleteBackupArtifact(config, { ...input, destination })
       )
       if (!destination.artifactId) {
         if (Result.isFailure(deleted)) {
@@ -1361,10 +1342,8 @@ export async function removeResticRepository(
   })
 }
 
-export async function sweepExpiredBackupExports(
-  config: RelayConfig,
-  now = Date.now()
-): Promise<void> {
+async function sweepExpiredBackupExports(config: RelayConfig): Promise<void> {
+  const now = Date.now()
   const directory = backupExportDirectoryPath(config)
   await mkdir(directory, { recursive: true, mode: 0o700 })
   for await (const entry of await opendir(directory)) {
@@ -2188,7 +2167,7 @@ function runResticExport(
   })
 }
 
-export async function removeBackupExport(
+async function removeBackupExport(
   config: RelayConfig,
   backupId: string
 ): Promise<void> {
@@ -2219,7 +2198,7 @@ function backupExportExpiryPath(config: RelayConfig, backupId: string): string {
   return resolve(backupExportDirectoryPath(config), `.${backupId}.zip.expires`)
 }
 
-export async function reuseValidExport(
+async function reuseValidExport(
   destination: string,
   expiresAt: number
 ): Promise<BackupExportTaskResult | null> {
@@ -2616,7 +2595,7 @@ function writeBackupArchive(
   })
 }
 
-export function backupPathIsExcluded(
+function backupPathIsExcluded(
   path: string,
   directory: boolean,
   patterns: ReadonlyArray<string>

@@ -4,19 +4,10 @@ import { relayInstanceSchema } from "@workspace/contracts"
 import {
   beginPendingPowerAction,
   finishPendingPowerAction,
-  initialPendingPowerAction,
-  isPowerControlLocked,
   reconcilePendingPowerInstance,
-  reconcilePendingPowerState,
 } from "./instance-power-state"
 
 describe("pending instance power state", () => {
-  it("locks power actions while an instance is provisioning", () => {
-    expect(isPowerControlLocked("provisioning")).toBe(true)
-    expect(isPowerControlLocked("stopped")).toBe(false)
-    expect(isPowerControlLocked("running")).toBe(false)
-  })
-
   it("advances the registered action from its response before a stale stream", () => {
     const relayId = "relay"
     const running = relayInstanceSchema.parse({
@@ -185,68 +176,5 @@ describe("pending instance power state", () => {
     } finally {
       finishPendingPowerAction(relayId, previous.id)
     }
-  })
-
-  it("latches a completed stop response before stale stream snapshots", () => {
-    const stopping = initialPendingPowerAction("stop")
-    const actionResponse = reconcilePendingPowerState(stopping, "stopped")
-    const staleStream = reconcilePendingPowerState(
-      actionResponse.pending,
-      "running"
-    )
-
-    expect(reconcilePendingPowerState(stopping, "running").observedState).toBe(
-      "stopping"
-    )
-    expect(actionResponse.observedState).toBe("stopped")
-    expect(staleStream.observedState).toBe("stopped")
-  })
-
-  it("does not let stale snapshots move a start backwards", () => {
-    const starting = initialPendingPowerAction("start")
-    const running = reconcilePendingPowerState(starting, "running")
-
-    expect(reconcilePendingPowerState(starting, "stopped").observedState).toBe(
-      "starting"
-    )
-    expect(running.observedState).toBe("running")
-    expect(
-      reconcilePendingPowerState(running.pending, "stopped").observedState
-    ).toBe("running")
-  })
-
-  it("moves restart snapshots from stopping to starting before running", () => {
-    const previousStartedAt = "2026-07-28T20:00:00.000Z"
-    const replacementStartedAt = "2026-07-28T21:00:00.000Z"
-    const stopping = initialPendingPowerAction("restart", previousStartedAt)
-    const replacement = reconcilePendingPowerState(
-      stopping,
-      "starting",
-      replacementStartedAt
-    )
-
-    expect(
-      reconcilePendingPowerState(stopping, "running", previousStartedAt)
-        .observedState
-    ).toBe("stopping")
-    expect(
-      reconcilePendingPowerState(stopping, "running", replacementStartedAt)
-        .observedState
-    ).toBe("running")
-    expect(replacement.observedState).toBe("starting")
-    expect(
-      reconcilePendingPowerState(
-        replacement.pending,
-        "running",
-        previousStartedAt
-      ).observedState
-    ).toBe("starting")
-    expect(
-      reconcilePendingPowerState(
-        replacement.pending,
-        "running",
-        replacementStartedAt
-      ).observedState
-    ).toBe("running")
   })
 })

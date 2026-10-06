@@ -104,7 +104,7 @@ function randomIndex(maximum: number): number {
   return Math.floor(Math.random() * maximum)
 }
 
-export function defaultSrvService(game: string): string {
+function defaultSrvService(game: string): string {
   const normalized = game
     .trim()
     .toLowerCase()

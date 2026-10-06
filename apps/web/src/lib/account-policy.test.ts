@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vite-plus/test"
+import { afterEach, describe, expect, it, vi } from "vite-plus/test"
 
 import {
   isAccountEnabled,
@@ -14,6 +14,10 @@ const unverified = {
   manuallyVerifiedAt: null,
   legacyVerificationRecordedAt: null,
 }
+
+afterEach(() => {
+  vi.useRealTimers()
+})
 
 describe("account eligibility", () => {
   it("does not mistake the integration flag for current verification evidence", () => {
@@ -52,10 +56,10 @@ describe("account eligibility", () => {
       statusExpiresAt: "2026-09-08T00:00:00Z",
     }
     const expiry = Date.parse(user.statusExpiresAt)
-    expect(isAccountEnabled(user, expiry - 1)).toBe(false)
-    expect(isAccountEnabled(user, expiry)).toBe(true)
-    expect(isAccountEnabled({ ...user, statusExpiresAt: null }, expiry)).toBe(
-      false
-    )
+    vi.useFakeTimers({ now: expiry - 1 })
+    expect(isAccountEnabled(user)).toBe(false)
+    vi.setSystemTime(expiry)
+    expect(isAccountEnabled(user)).toBe(true)
+    expect(isAccountEnabled({ ...user, statusExpiresAt: null })).toBe(false)
   })
 })

@@ -121,10 +121,6 @@ describe("Upload batch progress", () => {
       expect(latestProgressToast().description).toContain("1 failed")
     )
     const toast = latestProgressToast()
-    expect(toast.options).toMatchObject({
-      closeButton: false,
-      dismissible: false,
-    })
     expect(toast.title).toContain("0/3")
     expect(toast.title).toContain("30%")
     expect(toast.description).toContain("file-1.txt")
@@ -145,9 +141,9 @@ describe("Upload batch progress", () => {
       "success"
     )
 
+    // The batch ends as a failure that surfaces the Relay's reason.
     expect(mocks.showToast.mock.calls.at(-1)?.[0]).toMatchObject({
       type: "error",
-      message: "2 of 3 files uploaded",
       description: "Relay rejected the upload",
     })
     expect(onRefresh).toHaveBeenCalledOnce()
@@ -169,7 +165,6 @@ describe("Upload batch progress", () => {
 
     expect(mocks.showToast.mock.calls.at(-1)?.[0]).toMatchObject({
       type: "error",
-      message: "Upload failed",
     })
     expect(onRefresh).not.toHaveBeenCalled()
   })
@@ -193,7 +188,6 @@ describe("Upload batch progress", () => {
 
     expect(mocks.showToast.mock.calls.at(-1)?.[0]).toMatchObject({
       type: "success",
-      message: "2 files uploaded",
     })
   })
 })

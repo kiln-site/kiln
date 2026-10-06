@@ -1,6 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vite-plus/test"
 import { QueryClient, QueryObserver } from "@tanstack/react-query"
-import type { RelayDirectoryPage, RelayFileEntry } from "@workspace/contracts"
+import {
+  relayDirectorySizesInputSchema,
+  type RelayDirectoryPage,
+  type RelayFileEntry,
+} from "@workspace/contracts"
 
 const relay = vi.hoisted(() => ({
   getRelayDirectoryPage: vi.fn(),
@@ -48,26 +52,25 @@ function page(
 afterEach(() => {
   for (const client of clients.splice(0)) client.clear()
   vi.resetAllMocks()
+  vi.useRealTimers()
 })
 
 describe("Files query cache", () => {
   it("recovers failed tree loads without hiding Query's error state and can retry", async () => {
+    vi.useFakeTimers()
     const { queryClient, index } = setup()
     const release = index.subscribePaths(vi.fn())
-    const directoryOptions = index.directoryOptions.bind(index)
-    vi.spyOn(index, "directoryOptions").mockImplementation((directory) => ({
-      ...directoryOptions(directory),
-      retry: false,
-    }))
     const failure = new Error("Relay unavailable")
-    relay.getRelayDirectoryPage.mockRejectedValueOnce(failure)
-    await expect(index.ensureDirectory("world/")).resolves.toBeUndefined()
+    relay.getRelayDirectoryPage.mockRejectedValue(failure)
+    const loading = index.ensureDirectory("world/")
+    await vi.runAllTimersAsync()
+    await expect(loading).resolves.toBeUndefined()
     expect(
       queryClient.getQueryState(index.directoryOptions("world/").queryKey)
     ).toMatchObject({ status: "error", error: failure })
     expect(index.getPaths()).toEqual([])
 
-    relay.getRelayDirectoryPage.mockResolvedValueOnce(
+    relay.getRelayDirectoryPage.mockResolvedValue(
       page([entry("world/level.dat")], "world/")
     )
     await index.ensureDirectory("world/")
@@ -91,7 +94,6 @@ describe("Files query cache", () => {
       type: "add",
       entries: [entry("server.properties")],
     })
-    expect(relay.getRelayDirectoryPage).toHaveBeenCalledTimes(2)
     releaseReplayed()
   })
   it("shares directory requests and refreshes cursor pages without keeping deleted paths", async () => {
@@ -219,7 +221,7 @@ describe("Files query cache", () => {
     expect(listener).not.toHaveBeenCalled()
     release()
   })
-  it("bounds pending size polling, resets on refresh, and batches within the Relay limit", async () => {
+  it("stops polling sizes that never finish, resumes after refresh, and batches within the Relay limit", async () => {
     const { queryClient } = setup()
     const paths = ["pending/"]
     const options = relayDirectorySizesQueryOptions(
@@ -234,24 +236,35 @@ describe("Files query cache", () => {
       sizes: {},
     })
     const query = new QueryObserver(queryClient, options).getCurrentQuery()
-    for (let attempt = 0; attempt <= 30; attempt++)
-      await queryClient.fetchQuery({ ...options, staleTime: 0 })
-    expect(
+    const polling = () =>
       typeof options.refetchInterval === "function" &&
-        options.refetchInterval(query)
-    ).toBe(false)
+      options.refetchInterval(query) !== false
+    await queryClient.fetchQuery(options)
+    expect(polling()).toBe(true)
+    let attempts = 0
+    while (polling() && attempts++ < 1_000)
+      await queryClient.fetchQuery({ ...options, staleTime: 0 })
+    expect(polling()).toBe(false)
+
     await queryClient.invalidateQueries({
       queryKey: options.queryKey,
       refetchType: "none",
     })
     await queryClient.fetchQuery(options)
-    expect(
-      typeof options.refetchInterval === "function" &&
-        options.refetchInterval(query)
-    ).toBe(1_000)
-    const batches = directorySizeBatches(
-      Array.from({ length: 257 }, (_, index) => entry(`directory-${index}/`))
+    expect(polling()).toBe(true)
+
+    const directories = Array.from({ length: 300 }, (_, index) =>
+      entry(`directory-${index}/`)
     )
-    expect(batches.map((batch) => batch.length)).toEqual([128, 128, 1])
+    const batches = directorySizeBatches(directories)
+    for (const batch of batches) {
+      expect(
+        relayDirectorySizesInputSchema.safeParse({
+          instanceId: "a".repeat(40),
+          paths: batch,
+        }).success
+      ).toBe(true)
+    }
+    expect(batches.flat()).toHaveLength(directories.length)
   })
 })

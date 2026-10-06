@@ -1,23 +1,24 @@
-import { Effect, Layer } from "effect"
-import type { RowDataPacket } from "mysql2/promise"
-import { describe, expect, it, vi } from "vite-plus/test"
+import { assert, layer } from "@effect/vitest"
+import { Effect } from "effect"
+import { TestClock } from "effect/testing"
 
-import { Database } from "@/effect/database"
 import type { AuthenticatedUser } from "@/lib/auth-session"
 import { transferInstanceOwnershipEffect } from "@/lib/platform-access"
+import { TestDatabase, describeMysql, resetDatabase } from "@/test/database"
+import {
+  insertGrant,
+  insertInstance,
+  insertRelay,
+  insertUser,
+  selectRows,
+} from "@/test/seed"
 
-vi.hoisted(() => {
-  process.env.DB_HOST ??= "127.0.0.1"
-  process.env.DB_NAME ??= "test"
-  process.env.DB_PASSWORD ??= "test"
-  process.env.DB_USERNAME ??= "test"
-})
-vi.mock("@/lib/authorization-revision", () => ({
-  advanceAuthorizationRevisionEffect: () => Effect.void,
-  advanceSubjectAcrossEnabledRelaysEffect: () =>
-    Effect.succeed({ relayIds: [] }),
-}))
+const now = Date.UTC(2026, 8, 9)
+const relayId = "r".repeat(43)
+const instanceId = "a".repeat(40)
+const input = { relayId, instanceId, userId: "recipient" }
 
+// The session still says Platform Admin and enabled; the database is current.
 const actor: AuthenticatedUser = {
   id: "actor",
   email: "actor@example.test",
@@ -31,108 +32,137 @@ const actor: AuthenticatedUser = {
   isDevelopmentBypass: false,
   twoFactorEnabled: false,
 }
-const actorRow = {
-  role: "user",
-  status: "enabled",
-  statusExpiresAt: null,
-  emailVerifiedAt: null,
-  manuallyVerifiedAt: new Date("2026-09-08T00:00:00Z"),
-  legacyVerificationRecordedAt: null,
-}
-const input = { relayId: "relay", instanceId: "server", userId: "recipient" }
-function fixture(rows: ReadonlyArray<ReadonlyArray<unknown>>) {
-  let index = 0
-  const reads: string[] = [],
-    writes: string[] = []
-  const layer = Layer.succeed(Database)({
-    execute: () => Effect.die("Expected transaction"),
-    queryRows: () => Effect.die("Expected transaction"),
-    transaction: (_operation, run) =>
-      run({
-        execute: (sql) =>
-          Effect.sync(() => {
-            writes.push(sql)
-            return { affectedRows: 1 } as never
-          }),
-        queryRows: <T extends RowDataPacket>(sql: string) =>
-          Effect.sync(() => {
-            reads.push(sql)
-            if (index >= rows.length) throw new Error("Unexpected query")
-            return rows[index++] as ReadonlyArray<T>
-          }),
-      }),
-  })
-  return { layer, reads, writes }
-}
 
-describe("ownership transfer fresh authority", () => {
-  it("rejects a disabled actor despite an earlier eligible session", async () => {
-    const data = fixture([[{ ...actorRow, status: "disabled" }]])
-    await expect(
-      Effect.runPromise(
-        transferInstanceOwnershipEffect(actor, input).pipe(
-          Effect.provide(data.layer)
-        )
-      )
-    ).rejects.toThrow("cannot manage resource access")
-    expect(data.writes).toEqual([])
-  })
-  it("discards an old elapsed disable expiry when the account is now indefinitely disabled", async () => {
-    const data = fixture([
-      [{ ...actorRow, status: "disabled", statusExpiresAt: null }],
-    ])
-    await expect(
-      Effect.runPromise(
-        transferInstanceOwnershipEffect(
-          { ...actor, statusExpiresAt: "2000-01-01T00:00:00Z" },
-          input
-        ).pipe(Effect.provide(data.layer))
-      )
-    ).rejects.toThrow("cannot manage resource access")
-    expect(data.reads).toHaveLength(1)
-    expect(data.writes).toEqual([])
+const seed = (options: {
+  actor?: Record<string, string | Date | null>
+  ownerId: string
+  recipientGrant?: "active" | "pending"
+}) =>
+  Effect.gen(function* () {
+    yield* resetDatabase
+    yield* TestClock.setTime(now)
+    const verified = { manuallyVerifiedAt: new Date("2026-09-08T00:00:00Z") }
+    yield* insertUser("actor", { role: "user", ...verified, ...options.actor })
+    yield* insertUser("owner", verified)
+    yield* insertUser("recipient", verified)
+    yield* insertRelay(relayId, { created_by: "someone" })
+    yield* insertInstance(relayId, instanceId, { owner_id: options.ownerId })
+    yield* insertGrant({
+      userId: "recipient",
+      relayId,
+      resourceType: "instance",
+      resourceId: instanceId,
+      role: "viewer",
+      state: options.recipientGrant ?? "active",
+    })
   })
 
-  it("rejects a demoted administrator who does not currently own the instance", async () => {
-    const data = fixture([
-      [actorRow],
-      [{ name: "Relay", owner_id: "someone" }],
-      [{ name: "Server", owner_id: "owner" }],
-    ])
-    await expect(
-      Effect.runPromise(
-        transferInstanceOwnershipEffect(actor, input).pipe(
-          Effect.provide(data.layer)
-        )
-      )
-    ).rejects.toThrow("Only the server owner")
-    expect(data.writes).toEqual([])
-    expect(data.reads[0]).toContain("user")
-    expect(data.reads[1]).toContain("relay")
-    expect(data.reads[2]).toContain("instance")
-    expect(data.reads.every((sql) => sql.includes("FOR UPDATE"))).toBe(true)
-  })
-  it("locks actor then Relay then instance before transferring current owner authority", async () => {
-    const data = fixture([
-      [actorRow],
-      [{ name: "Relay", owner_id: "someone" }],
-      [{ name: "Server", owner_id: actor.id }],
-      [{ ...actorRow, id: "recipient" }],
-      [{ user_id: "recipient" }],
-    ])
-    const result = await Effect.runPromise(
-      transferInstanceOwnershipEffect(actor, input).pipe(
-        Effect.provide(data.layer)
-      )
+const instanceOwner = Effect.map(
+  selectRows<{ owner_id: string | null }>("instance"),
+  ([instance]) => instance?.owner_id
+)
+
+describeMysql("ownership transfer fresh authority", () => {
+  layer(TestDatabase)((it) => {
+    it.effect(
+      "rejects a disabled actor despite an earlier eligible session",
+      () =>
+        Effect.gen(function* () {
+          yield* seed({ actor: { status: "disabled" }, ownerId: "actor" })
+
+          const error = yield* transferInstanceOwnershipEffect(
+            actor,
+            input
+          ).pipe(Effect.flip)
+
+          assert.include(error.message, "cannot manage resource access")
+          assert.strictEqual(yield* instanceOwner, "actor")
+        })
     )
-    expect(result).toEqual({ transferred: true, previousOwnerId: actor.id })
-    expect(data.reads[0]).toContain("user")
-    expect(data.reads[1]).toContain("relay")
-    expect(data.reads[2]).toContain("instance")
-    expect(data.reads[4]).toContain("state = 'active'")
-    expect(
-      data.writes.some((sql) => sql.includes("ownership.transferred"))
-    ).toBe(true)
-    expect(data.writes.some((sql) => sql.includes("access_grant"))).toBe(false)
+
+    it.effect(
+      "discards an old elapsed disable expiry when the account is now indefinitely disabled",
+      () =>
+        Effect.gen(function* () {
+          yield* seed({
+            actor: { status: "disabled", statusExpiresAt: null },
+            ownerId: "actor",
+          })
+
+          const error = yield* transferInstanceOwnershipEffect(
+            { ...actor, statusExpiresAt: "2000-01-01T00:00:00Z" },
+            input
+          ).pipe(Effect.flip)
+
+          assert.include(error.message, "cannot manage resource access")
+          assert.strictEqual(yield* instanceOwner, "actor")
+        })
+    )
+
+    it.effect(
+      "rejects a demoted administrator who does not currently own the instance",
+      () =>
+        Effect.gen(function* () {
+          yield* seed({ ownerId: "owner" })
+
+          const error = yield* transferInstanceOwnershipEffect(
+            actor,
+            input
+          ).pipe(Effect.flip)
+
+          assert.include(error.message, "Only the server owner")
+          assert.strictEqual(yield* instanceOwner, "owner")
+        })
+    )
+
+    it.effect("requires the new owner to hold active server access", () =>
+      Effect.gen(function* () {
+        yield* seed({ ownerId: "actor", recipientGrant: "pending" })
+
+        const error = yield* transferInstanceOwnershipEffect(actor, input).pipe(
+          Effect.flip
+        )
+
+        assert.include(error.message, "active server access")
+        assert.strictEqual(yield* instanceOwner, "actor")
+      })
+    )
+
+    it.effect(
+      "transfers from the current owner and revises both users' authority",
+      () =>
+        Effect.gen(function* () {
+          yield* seed({ ownerId: "actor" })
+
+          const result = yield* transferInstanceOwnershipEffect(actor, input)
+
+          assert.deepEqual(result, {
+            transferred: true,
+            previousOwnerId: "actor",
+          })
+          assert.strictEqual(yield* instanceOwner, "recipient")
+          const grants = yield* selectRows<{ user_id: string; state: string }>(
+            "access_grant"
+          )
+          assert.deepEqual(
+            grants.map(({ user_id, state }) => [user_id, state]),
+            [["recipient", "active"]]
+          )
+          const deliveries = yield* selectRows<{
+            subject_id: string
+            scope_id: string
+          }>("authorization_delivery")
+          assert.sameDeepMembers(
+            deliveries.map(({ subject_id, scope_id }) => [
+              subject_id,
+              scope_id,
+            ]),
+            [
+              ["actor", instanceId],
+              ["recipient", instanceId],
+            ]
+          )
+        })
+    )
   })
 })

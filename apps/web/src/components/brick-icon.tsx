@@ -69,7 +69,7 @@ export const BrickIcon = React.memo(function BrickIcon({
   )
 })
 
-export function deterministicBrickColor(id: string): string {
+function deterministicBrickColor(id: string): string {
   let hash = 2_166_136_261
   for (const character of id.trim().toLowerCase()) {
     hash ^= character.codePointAt(0) ?? 0

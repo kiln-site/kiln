@@ -213,7 +213,7 @@ export function replaceDataTableRows<TSourceItem, TNextItem>(
   return { ...source, rows }
 }
 
-export function resolveCursorDataTableBodyState({
+function resolveCursorDataTableBodyState({
   error,
   hasData,
   isError,
@@ -228,7 +228,7 @@ export function resolveCursorDataTableBodyState({
   return { kind: "ready" }
 }
 
-export function resolveLiveDataTableBodyState({
+function resolveLiveDataTableBodyState({
   error,
   isError,
   isLoading,
@@ -241,7 +241,7 @@ export function resolveLiveDataTableBodyState({
   return { kind: "ready" }
 }
 
-export function resolveCursorDataTableLoadMoreState({
+function resolveCursorDataTableLoadMoreState({
   error,
   isFetchNextPageError,
   isFetchingNextPage,

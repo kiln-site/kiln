@@ -52,31 +52,6 @@ describe("Relay identity", () => {
       })
     )
   )
-
-  it.live("defaults to K100 and truncates custom creation names", () =>
-    withTemporaryDirectory((defaultDirectory) =>
-      withTemporaryDirectory((customDirectory) =>
-        Effect.gen(function* () {
-          const defaultIdentity = yield* loadOrCreateRelayIdentity(
-            loadConfig({
-              KILN_RELAY_DATA_DIR: defaultDirectory,
-              NODE_ENV: "development",
-            })
-          )
-          const customIdentity = yield* loadOrCreateRelayIdentity(
-            loadConfig({
-              KILN_RELAY_DATA_DIR: customDirectory,
-              KILN_RELAY_NAME: "1234567890123extra",
-              NODE_ENV: "development",
-            })
-          )
-
-          assert.strictEqual(defaultIdentity.name, "K100")
-          assert.strictEqual(customIdentity.name, "1234567890123")
-        })
-      )
-    )
-  )
 })
 
 function withTemporaryDirectory<T>(

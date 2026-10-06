@@ -23,7 +23,7 @@ Before editing files for a substantial task:
 
 - Use Vite+ (`vp`) and existing Effect patterns.
 - Keep `.agents/skills/kiln-cli/SKILL.md` in sync with CLI changes.
-- Add only critical deterministic tests; prefer browser validation during
+- Follow the Testing rules below; prefer browser validation during
   development.
 - This project uses Sentry.io for errors, traces, session replays, and more. Review the
   `sentry-cli` skill when debugging.
@@ -32,6 +32,51 @@ Before editing files for a substantial task:
 - For user-visible or runtime work, use T3 Code's collaborative Preview against
   the OrbStack URL printed by `pnpm dev:docker`; never use a local IP for
   development or validation.
+
+## Testing
+
+Tests exist to catch breakage that is expensive and hard to notice by hand.
+Add or keep a test only when it protects one of:
+
+- Security boundaries: authentication, permissions, credentials and secrets,
+  path traversal, SSRF, parsing untrusted input.
+- Data loss: backups, restores, file writes, migrations, deletion ordering.
+- Formats other versions depend on: the Relay protocol, Docker labels, on-disk
+  and backup formats, CLI config, release manifests.
+- Non-trivial state machines and concurrency: power state, crash recovery,
+  reconnects, races, cancellation.
+- A regression you just fixed.
+
+Don't write tests that:
+
+- Assert copy, labels, constants, defaults, CSS classes, or one row of a
+  lookup table.
+- Re-test a library (Effect, zod, TanStack, React) or what the type system
+  already guarantees.
+- Assert SQL text, command arguments, call order, call counts, timeouts, or
+  internal state. Assert the outcome a caller or user would see.
+- Mock the module under test, or mock so much that the test only checks the
+  mocks.
+
+How to write them:
+
+- Test through the module's real entry points. Don't export a helper, add an
+  optional parameter, make a dependency nullable, or extract a module only so
+  a test can reach it. If a pure piece deserves direct tests, give it its own
+  module with real callers.
+- When a test must replace an external system (network, child process, Docker,
+  clock), swap the Effect service or Layer that production already uses for
+  it, or fake it at that single boundary.
+- Web code that touches MySQL runs against a real database with
+  `apps/web/src/test/database.ts`; assert rows and results. CI runs these
+  suites; locally run `pnpm dev:docker:test` against the dev stack's MySQL.
+- Relay code that drives Docker uses the stateful fake in
+  `apps/relay/src/test/docker.ts`; assert the resulting container state.
+- Control time with Effect's `TestClock` or `vi.useFakeTimers`, never real
+  sleeps. Keep tests independent of each other and of run order.
+- Every server function must authenticate and every mutating CLI endpoint
+  must refuse read-only links; `apps/web/src/server/auth-coverage.test.ts`
+  enforces both. Intentional exceptions go in its allowlists with a reason.
 
 ## Learning more about Effect
 

@@ -26,7 +26,7 @@ export interface DatabaseConnectionSnapshot {
   networks: ReadonlyArray<string>
 }
 
-export function databaseConnectionLabels(
+function databaseConnectionLabels(
   connections: ReadonlyArray<DatabaseReference>
 ): Record<string, string> {
   return {
@@ -42,7 +42,7 @@ export function databaseConnectionLabels(
   }
 }
 
-export function decodeDatabaseConnectionLabels(
+function decodeDatabaseConnectionLabels(
   labels: Readonly<Record<string, string | undefined>>
 ) {
   const connections: Array<DatabaseReference> = []

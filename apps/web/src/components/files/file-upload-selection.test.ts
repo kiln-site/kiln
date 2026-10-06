@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vite-plus/test"
 
 import {
-  collectDroppedEntries,
-  fileUploadRelativePath,
+  droppedUploadFiles,
+  selectedUploadFiles,
 } from "@/components/files/file-upload-selection"
 
 class TestFileSystem implements FileSystem {
@@ -75,26 +75,41 @@ class TestDirectoryEntry extends TestEntry implements FileSystemDirectoryEntry {
   getFile(): void {}
 }
 
+// A file picked through a directory input, which reports its relative path.
+function pickedFile(webkitRelativePath: string): File {
+  return Object.defineProperty(
+    new File([""], "config.yml"),
+    "webkitRelativePath",
+    {
+      value: webkitRelativePath,
+    }
+  )
+}
+
+// The browser's drop payload for `entries`.
+function dropOf(entries: ReadonlyArray<FileSystemEntry>): DataTransfer {
+  return {
+    files: [],
+    items: entries.map((entry) => ({
+      kind: "file",
+      webkitGetAsEntry: () => entry,
+    })),
+  } as unknown as DataTransfer
+}
+
 describe("file upload selection", () => {
   it("preserves safe paths supplied by directory inputs", () => {
     expect(
-      fileUploadRelativePath({
-        name: "config.yml",
-        webkitRelativePath: "pack/config/config.yml",
-      })
-    ).toBe("pack/config/config.yml")
-    expect(
-      fileUploadRelativePath({
-        name: "config.yml",
-        webkitRelativePath: "pack/overrides/config.yml",
-      })
-    ).toBe("pack/overrides/config.yml")
-    expect(
-      fileUploadRelativePath({
-        name: "config.yml",
-        webkitRelativePath: "../config.yml",
-      })
-    ).toBe("config.yml")
+      selectedUploadFiles([
+        pickedFile("pack/config/config.yml"),
+        pickedFile("pack/overrides/config.yml"),
+        pickedFile("../config.yml"),
+      ]).map(({ path }) => path)
+    ).toEqual([
+      "pack/config/config.yml",
+      "pack/overrides/config.yml",
+      "config.yml",
+    ])
   })
 
   it("recursively enumerates every directory reader batch", async () => {
@@ -114,7 +129,7 @@ describe("file upload selection", () => {
     )
     const pack = new TestDirectoryEntry("pack", [[config]], filesystem)
 
-    const uploads = await collectDroppedEntries([pack])
+    const uploads = await droppedUploadFiles(dropOf([pack]))
 
     expect(uploads.map(({ path }) => path)).toEqual([
       "pack/config/server.yml",

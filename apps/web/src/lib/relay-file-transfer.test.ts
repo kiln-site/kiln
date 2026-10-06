@@ -1,3 +1,4 @@
+import { relayBrowserRequestProofTranscript } from "@workspace/contracts"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test"
 
 const capability = vi.hoisted(() => ({ issue: vi.fn(), save: vi.fn() }))
@@ -12,49 +13,53 @@ import {
   uploadRelayFile,
 } from "./relay-file-transfer"
 
-beforeEach(() => {
-  const payload = btoa(
-    JSON.stringify({
-      capabilityId: "capability-one",
-      expiresAt: Date.now() + 30_000,
-    })
-  )
-    .replaceAll("+", "-")
-    .replaceAll("/", "_")
-    .replace(/=+$/u, "")
-  capability.issue.mockResolvedValue({
-    browserOrigin: "https://relay.example.com",
-    capability: `${payload}.signature`,
-    expiresAt: Date.now() + 30_000,
-    proxyMode: "none",
-    relayId: "relay-one",
-    version: 2,
-  })
-})
-
 afterEach(() => {
   capability.issue.mockReset()
   capability.save.mockReset()
   vi.unstubAllGlobals()
 })
 
-describe("Relay file capability negotiation", () => {
-  it("opts into v2 without changing the request proof transport", async () => {
+function issueCapability(expiresAt = Date.now() + 30_000) {
+  const payload = base64Url(
+    new TextEncoder().encode(
+      JSON.stringify({ capabilityId: "capability-one", expiresAt })
+    )
+  )
+  const issued = `${payload}.signature`
+  capability.issue.mockResolvedValue({
+    browserOrigin: "https://relay.example.com",
+    capability: issued,
+    expiresAt,
+    proxyMode: "none",
+    relayId: "relay-one",
+    version: 2,
+  })
+  return issued
+}
+
+describe("Relay file transfer requests", () => {
+  it("carries a verifiable X-Kiln proof and reads the Relay's X-Kiln size headers", async () => {
+    const expiresAt = Date.now() + 30_000
+    const issuedCapability = issueCapability(expiresAt)
     const controller = new AbortController()
+    const requests: Array<{ init: RequestInit; url: string }> = []
     vi.stubGlobal(
       "fetch",
-      vi.fn().mockResolvedValue(
-        new Response(null, {
-          headers: {
-            "Content-Length": "4096",
-            "Last-Modified": "Wed, 02 Sep 2026 00:00:00 GMT",
-            "X-Kiln-Download-Max-Size": "8192",
-            "X-Kiln-Gzip-Size-Estimate": "2048",
-            "X-Kiln-Zip-Size-Estimate": "1024",
-          },
-          status: 200,
-        })
-      )
+      vi.fn((url: URL, init: RequestInit) => {
+        requests.push({ init, url: url.toString() })
+        return Promise.resolve(
+          new Response(null, {
+            headers: {
+              "Content-Length": "4096",
+              "Last-Modified": "Wed, 02 Sep 2026 00:00:00 GMT",
+              "X-Kiln-Download-Max-Size": "8192",
+              "X-Kiln-Gzip-Size-Estimate": "2048",
+              "X-Kiln-Zip-Size-Estimate": "1024",
+            },
+            status: 200,
+          })
+        )
+      })
     )
 
     const preview = await inspectRelayFileDownload({
@@ -64,22 +69,50 @@ describe("Relay file capability negotiation", () => {
       signal: controller.signal,
     })
 
-    expect(fetch).toHaveBeenCalledWith(
-      expect.any(URL),
-      expect.objectContaining({ signal: controller.signal })
-    )
-    expect(capability.issue).toHaveBeenCalledWith({
-      data: expect.objectContaining({
-        action: "instance.files.download",
-        optInV2: true,
-      }),
-    })
     expect(preview).toMatchObject({
       gzipSizeEstimate: 2048,
       maxSize: 8192,
       size: 4096,
       zipSizeEstimate: 1024,
     })
+    expect(requests).toHaveLength(1)
+    const [request] = requests
+    expect(request?.url).toBe(
+      "https://relay.example.com/v1/browser/files/instance-one?path=%2Fserver%2Fworld.zip"
+    )
+    expect(request?.init.method).toBe("HEAD")
+    expect(request?.init.signal).toBe(controller.signal)
+    const headers = request?.init.headers as Record<string, string>
+    expect(headers.Authorization).toBe(`Kiln ${issuedCapability}`)
+
+    // The Relay verifies this exact transcript against the advertised key.
+    const publicKey = await crypto.subtle.importKey(
+      "jwk",
+      JSON.parse(
+        new TextDecoder().decode(fromBase64Url(headers["X-Kiln-Public-Key"]))
+      ) as JsonWebKey,
+      { name: "ECDSA", namedCurve: "P-256" },
+      false,
+      ["verify"]
+    )
+    const verified = await crypto.subtle.verify(
+      { hash: "SHA-256", name: "ECDSA" },
+      publicKey,
+      fromBase64Url(headers["X-Kiln-Proof"]),
+      new TextEncoder().encode(
+        relayBrowserRequestProofTranscript({
+          capabilityId: "capability-one",
+          expiresAt,
+          instanceId: "instance-one",
+          method: "HEAD",
+          nonce: headers["X-Kiln-Nonce"] ?? "",
+          path: "/server/world.zip",
+          relayId: "relay-one",
+          requestedAt: Number(headers["X-Kiln-Requested-At"]),
+        })
+      )
+    )
+    expect(verified).toBe(true)
   })
 })
 
@@ -113,6 +146,10 @@ function mockUploadRequest() {
 }
 
 describe("Relay upload progress", () => {
+  beforeEach(() => {
+    issueCapability()
+  })
+
   const input = {
     instanceId: "instance-one",
     path: "upload.txt",
@@ -132,13 +169,17 @@ describe("Relay upload progress", () => {
       )
     )
     expect(request.send).toHaveBeenCalledWith(file)
-    expect(request.setRequestHeader.mock.calls.map(([name]) => name)).toEqual([
-      "Authorization",
-      "X-Kiln-Nonce",
-      "X-Kiln-Proof",
-      "X-Kiln-Public-Key",
-      "X-Kiln-Requested-At",
-    ])
+    expect(
+      new Set(request.setRequestHeader.mock.calls.map(([name]) => name))
+    ).toEqual(
+      new Set([
+        "Authorization",
+        "X-Kiln-Nonce",
+        "X-Kiln-Proof",
+        "X-Kiln-Public-Key",
+        "X-Kiln-Requested-At",
+      ])
+    )
     expect(onProgress.mock.calls).toEqual([[2], [4]])
     expect(result.size).toBe(4)
   })
@@ -182,3 +223,11 @@ describe("Relay upload progress", () => {
     })
   })
 })
+
+function base64Url(bytes: Uint8Array): string {
+  return Buffer.from(bytes).toString("base64url")
+}
+
+function fromBase64Url(value: string | undefined): Uint8Array<ArrayBuffer> {
+  return new Uint8Array(Buffer.from(value ?? "", "base64url"))
+}

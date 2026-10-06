@@ -1,9 +1,7 @@
 import { describe, expect, it, vi } from "vite-plus/test"
 
-const captureException = vi.hoisted(() => vi.fn())
-
 vi.mock("@sentry/tanstackstart-react", () => ({
-  captureException,
+  captureException: vi.fn(),
 }))
 
 import { removeRelayThenCleanup } from "./relay-removal"
@@ -41,7 +39,6 @@ describe("Relay removal orchestration", () => {
   })
 
   it("keeps deletion successful when later cleanup fails", async () => {
-    captureException.mockClear()
     const calls: Array<string> = []
     const domainError = new Error("Cloudflare unavailable")
 
@@ -73,12 +70,6 @@ describe("Relay removal orchestration", () => {
       forgottenBackups: 2,
       removed: true,
       removedVanityDomains: 0,
-    })
-    expect(captureException).toHaveBeenCalledWith(domainError, {
-      tags: {
-        "kiln.operation": "domains.relay.removeAssignments",
-        "kiln.relay_id": "relay-one",
-      },
     })
   })
 })

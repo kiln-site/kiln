@@ -623,7 +623,7 @@ function isTruncatedBlob(
 
 // node:sqlite prepares only the first statement of a string, so scripts are
 // split here. Quotes, comments, and trigger bodies keep their semicolons.
-export function splitSqlStatements(sql: string) {
+function splitSqlStatements(sql: string) {
   const statements: Array<string> = []
   let start = 0
   let index = 0
