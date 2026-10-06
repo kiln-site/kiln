@@ -9,6 +9,7 @@ import {
   EllipsisVertical,
   FileIcon,
   Folder,
+  FolderInput,
   Trash2,
 } from "lucide-react"
 import { createPortal } from "react-dom"
@@ -169,6 +170,14 @@ function FileActionMenuItems({
         icon={<ALargeSmall />}
         label="Rename"
         onSelect={request("rename")}
+      />
+      <FileActionMenuItem
+        surface={surface}
+        close={close}
+        disabled={!controller.canWrite || paths.length !== 1}
+        icon={<FolderInput />}
+        label="Move"
+        onSelect={request("move")}
       />
       <FileActionMenuItem
         surface={surface}

@@ -14,6 +14,11 @@ import {
   DialogTitle,
 } from "@workspace/ui/components/dialog"
 import { Input } from "@workspace/ui/components/input"
+import {
+  InputGroup,
+  InputGroupAddon,
+  InputGroupInput,
+} from "@workspace/ui/components/input-group"
 import { dismissToast, showToast } from "@workspace/ui/components/sonner"
 
 import {
@@ -21,6 +26,7 @@ import {
   isUnarchiveSupportedPath,
   joinFilePath,
   movedFilePath,
+  normalizeDirectoryPath,
   unarchiveDestinationPath,
   type FileActionsController,
   type FileWorkspaceAction,
@@ -37,11 +43,25 @@ type FileActionDialogState =
   | { kind: "archive"; paths: ReadonlyArray<string> }
   | { kind: "delete"; paths: ReadonlyArray<string> }
   | { kind: "move"; path: string; destination: string }
+  | { kind: "move-to"; path: string }
   | { kind: "rename"; path: string }
   | null
 
 function formatName(path: string) {
   return path.split("/").filter(Boolean).at(-1) ?? path
+}
+
+// The input sits after a fixed `/data/`, so drop that prefix from pasted paths.
+function withoutDataPrefix(value: string) {
+  return value.replace(/^\/+(?:data(?:\/+|$))?/u, "")
+}
+
+function moveTargetDirectory(value: string): string | null {
+  const directory = normalizeDirectoryPath(
+    withoutDataPrefix(value.trim().replace(/[\\/]+/gu, "/"))
+  )
+  const segments = directory.split("/")
+  return segments.includes(".") || segments.includes("..") ? null : directory
 }
 
 export function useFileActions({
@@ -205,8 +225,11 @@ export function useFileActions({
         return
       }
       if (!canWrite) return
-      if (action === "rename" && paths.length === 1) {
-        setDialog({ kind: "rename", path: paths[0] ?? "" })
+      if ((action === "rename" || action === "move") && paths.length === 1) {
+        setDialog({
+          kind: action === "move" ? "move-to" : "rename",
+          path: paths[0] ?? "",
+        })
         return
       }
       if (action === "archive") {
@@ -268,6 +291,43 @@ export function useFileActions({
       }
       setDialog(null)
       settle?.(Boolean(moved))
+      return
+    }
+    if (dialog.kind === "move-to") {
+      const directory = moveTargetDirectory(value ?? "")
+      if (directory === null) {
+        showToast({
+          type: "error",
+          message: "Enter a valid folder path",
+          description: "Folder paths cannot contain . or .. segments.",
+        })
+        return
+      }
+      const destination = `${directory}${dialog.path.slice(directoryPath(dialog.path).length)}`
+      if (destination === dialog.path) {
+        setDialog(null)
+        return
+      }
+      if (dialog.path.endsWith("/") && destination.startsWith(dialog.path)) {
+        showToast({
+          type: "error",
+          message: "Cannot move a folder into itself",
+        })
+        return
+      }
+      const result = await runMutation(
+        { operation: "rename", path: dialog.path, destination },
+        "Item moved"
+      )
+      if (result) {
+        const selectedPath = movedFilePath(
+          selectionStore.getSnapshot(),
+          dialog.path,
+          destination
+        )
+        if (selectedPath !== null) onPathChange(selectedPath)
+        setDialog(null)
+      }
       return
     }
     if (dialog.kind === "delete") {
@@ -341,13 +401,18 @@ export function FileActionDialogHost({
   const initialValue =
     dialog?.kind === "rename"
       ? formatName(dialog.path)
-      : dialog?.kind === "archive"
-        ? dialog.paths.length === 1
-          ? `${formatName(dialog.paths[0] ?? "archive")}.zip`
-          : "selected-files.zip"
-        : ""
+      : dialog?.kind === "move-to"
+        ? directoryPath(dialog.path)
+        : dialog?.kind === "archive"
+          ? dialog.paths.length === 1
+            ? `${formatName(dialog.paths[0] ?? "archive")}.zip`
+            : "selected-files.zip"
+          : ""
   const [value, setValue] = React.useState(initialValue)
   if (!dialog) return null
+  // An empty move destination is the /data root.
+  const missingValue =
+    (dialog.kind === "rename" || dialog.kind === "archive") && !value.trim()
   if (dialog.kind === "move") {
     return (
       <Dialog open onOpenChange={onOpenChange}>
@@ -385,9 +450,11 @@ export function FileActionDialogHost({
   const title =
     dialog.kind === "rename"
       ? "Rename item"
-      : dialog.kind === "archive"
-        ? "Create archive"
-        : `Delete ${dialog.paths.length === 1 ? "item" : `${dialog.paths.length} items`}?`
+      : dialog.kind === "move-to"
+        ? `Move ${formatName(dialog.path)}`
+        : dialog.kind === "archive"
+          ? "Create archive"
+          : `Delete ${dialog.paths.length === 1 ? "item" : `${dialog.paths.length} items`}?`
 
   return (
     <Dialog open onOpenChange={onOpenChange}>
@@ -399,10 +466,36 @@ export function FileActionDialogHost({
               ? "This permanently removes the selected files from the server."
               : dialog.kind === "archive"
                 ? "The ZIP archive will be created in the current directory."
-                : `Choose a new name for ${formatName(dialog.path)}.`}
+                : dialog.kind === "move-to"
+                  ? "Enter the folder to move this item into."
+                  : `Choose a new name for ${formatName(dialog.path)}.`}
           </DialogDescription>
         </DialogHeader>
-        {dialog.kind !== "delete" ? (
+        {dialog.kind === "move-to" ? (
+          <InputGroup>
+            <InputGroupAddon className="font-mono text-xs">
+              /data/
+            </InputGroupAddon>
+            <InputGroupInput
+              autoFocus
+              autoComplete="off"
+              spellCheck={false}
+              className="font-mono text-sm"
+              value={value}
+              aria-label="Destination folder in /data"
+              onFocus={(event) => event.currentTarget.select()}
+              onChange={(event) =>
+                setValue(withoutDataPrefix(event.target.value))
+              }
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  event.preventDefault()
+                  void onSubmit(value)
+                }
+              }}
+            />
+          </InputGroup>
+        ) : dialog.kind !== "delete" ? (
           <Input
             autoFocus
             value={value}
@@ -426,7 +519,7 @@ export function FileActionDialogHost({
           </Button>
           <Button
             variant={dialog.kind === "delete" ? "destructive" : "default"}
-            disabled={busy || (dialog.kind !== "delete" && !value.trim())}
+            disabled={busy || missingValue}
             onClick={() => void onSubmit(value)}
           >
             {busy ? <LoaderCircle className="animate-spin" /> : null}
@@ -434,7 +527,9 @@ export function FileActionDialogHost({
               ? "Delete"
               : dialog.kind === "archive"
                 ? "Create archive"
-                : "Rename"}
+                : dialog.kind === "move-to"
+                  ? "Move"
+                  : "Rename"}
           </Button>
         </DialogFooter>
       </DialogContent>
