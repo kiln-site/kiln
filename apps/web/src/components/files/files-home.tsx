@@ -11,7 +11,7 @@ import {
   type UploadFiles,
   useFileDropTarget,
 } from "@/components/files/file-upload"
-import type { ProgressiveFileIndex } from "@/components/files/progressive-file-index"
+import type { FileTreeIndex } from "@/components/files/file-tree-index"
 import { shortRelativeFileTime } from "@/components/files/file-time"
 import {
   fileEditorHeaderClassName,
@@ -134,7 +134,7 @@ export function FilesHome({
   actions,
 }: {
   instance: InstanceWorkspaceInstance
-  fileIndex: ProgressiveFileIndex
+  fileIndex: FileTreeIndex
   fileTreeLoading: boolean
   fileTreeError: string | null
   fileTreeRetrying: boolean

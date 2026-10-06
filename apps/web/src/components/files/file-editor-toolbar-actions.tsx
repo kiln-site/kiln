@@ -47,7 +47,7 @@ import { EditorTooltip } from "@/components/files/editor-tooltip"
 import {
   mclogsShareLabel,
   mclogsShareTooltip,
-  useMclogsShareAction,
+  type MclogsShareState,
 } from "@/components/use-mclogs-share-action"
 import {
   type EditorSessionStore,
@@ -73,19 +73,36 @@ function useEditorShareAction({
   path: string
   sessionStore: EditorSessionStore
 }) {
-  return useMclogsShareAction(async () => {
-    const result = await uploadToMclogs({
-      data: {
-        content: redactSensitiveText(sessionStore.getValue()),
-        instanceId: instance.id,
-        relayId: instance.relayId,
-        path,
-        implementation: instance.implementation,
-        version: instance.version,
-      },
-    })
-    await copyToClipboard(result.url)
+  // Sharing creates a link on mclo.gs without changing cached Relay files.
+  // oxlint-disable-next-line react-doctor/query-mutation-missing-invalidation
+  const mutation = useMutation({
+    mutationFn: async () => {
+      const result = await uploadToMclogs({
+        data: {
+          content: redactSensitiveText(sessionStore.getValue()),
+          instanceId: instance.id,
+          relayId: instance.relayId,
+          path,
+          implementation: instance.implementation,
+          version: instance.version,
+        },
+      })
+      await copyToClipboard(result.url)
+    },
   })
+  React.useEffect(() => {
+    if (!mutation.isSuccess && !mutation.isError) return
+    const timer = window.setTimeout(() => mutation.reset(), 2_800)
+    return () => window.clearTimeout(timer)
+  }, [mutation.isError, mutation.isSuccess, mutation.reset])
+  const state: MclogsShareState = mutation.isPending
+    ? "uploading"
+    : mutation.isSuccess
+      ? "copied"
+      : mutation.isError
+        ? "error"
+        : "idle"
+  return { share: () => mutation.mutate(), state }
 }
 
 function EditorShareButton({
@@ -587,12 +604,15 @@ function EditorDownloadActionMenuItem({
         disabled={loading}
         onClick={() => setOpen(true)}
       />
-      <FileDownloadDialog
-        instance={instance}
-        open={open}
-        path={path}
-        onOpenChange={setOpen}
-      />
+      {open ? (
+        <FileDownloadDialog
+          key={`${instance.id}:${path}`}
+          instance={instance}
+          open
+          path={path}
+          onOpenChange={setOpen}
+        />
+      ) : null}
     </>
   )
 }
@@ -621,12 +641,15 @@ export function EditorDownloadButton({
           <Download className="size-[17px]" />
         </Button>
       </EditorTooltip>
-      <FileDownloadDialog
-        instance={instance}
-        open={open}
-        path={path}
-        onOpenChange={setOpen}
-      />
+      {open ? (
+        <FileDownloadDialog
+          key={`${instance.id}:${path}`}
+          instance={instance}
+          open
+          path={path}
+          onOpenChange={setOpen}
+        />
+      ) : null}
     </>
   )
 }

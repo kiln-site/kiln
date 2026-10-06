@@ -1,4 +1,5 @@
 import { renderToStaticMarkup } from "react-dom/server"
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test"
 
 import type { ShowToastOptions } from "@workspace/ui/components/sonner"
@@ -12,18 +13,15 @@ const mocks = vi.hoisted(() => ({
   dismissToast: vi.fn(),
 }))
 
-vi.mock("react", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("react")>()),
-  useState: () => [false, vi.fn()],
-  useCallback: (callback: unknown) => callback,
-}))
 vi.mock("@/lib/relay-file-transfer", () => ({ uploadRelayFile: mocks.upload }))
 vi.mock("@workspace/ui/components/sonner", () => ({
   showToast: mocks.showToast,
   dismissToast: mocks.dismissToast,
 }))
 
-import { useFileUploadAction } from "./file-upload"
+import { useFileUploadAction, type UploadFiles } from "./file-upload"
+
+let queryClient: QueryClient
 
 const pending = new Map<
   string,
@@ -35,6 +33,7 @@ const pending = new Map<
 >()
 
 beforeEach(() => {
+  queryClient = new QueryClient()
   mocks.upload.mockImplementation(
     ({
       file,
@@ -50,6 +49,7 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  queryClient.clear()
   pending.clear()
   vi.clearAllMocks()
 })
@@ -73,14 +73,25 @@ function latestProgressToast() {
 
 function startUploads(sizes: ReadonlyArray<number>) {
   const onRefresh = vi.fn()
-  const { uploadFiles } = useFileUploadAction({
-    canWrite: true,
-    instance: {
-      id: "instance-one",
-      relayId: "relay-one",
-    } as InstanceWorkspaceInstance,
-    onRefresh,
-  })
+  let uploadFiles: UploadFiles | undefined
+  function UploadHarness() {
+    const action = useFileUploadAction({
+      canWrite: true,
+      instance: {
+        id: "instance-one",
+        relayId: "relay-one",
+      } as InstanceWorkspaceInstance,
+      onRefresh,
+    })
+    uploadFiles = action.uploadFiles
+    return null
+  }
+  renderToStaticMarkup(
+    <QueryClientProvider client={queryClient}>
+      <UploadHarness />
+    </QueryClientProvider>
+  )
+  if (!uploadFiles) throw new Error("Upload hook was not rendered")
   const finished = uploadFiles(
     sizes.map((size, index) => ({
       file: new File([new Uint8Array(size)], `file-${index}.txt`),
@@ -95,6 +106,9 @@ describe("Upload batch progress", () => {
   it("removes failed bytes without shrinking the batch total or counting failures as uploads", async () => {
     const { finished, onRefresh } = startUploads([100, 300, 100])
     await vi.waitFor(() => expect(pending.size).toBe(3))
+    expect(queryClient.getMutationCache().getAll()[0]?.state.status).toBe(
+      "pending"
+    )
     const failed = pending.get("file-0.txt")!
     const second = pending.get("file-1.txt")!
     const third = pending.get("file-2.txt")!
@@ -126,6 +140,10 @@ describe("Upload batch progress", () => {
     await vi.waitFor(() => expect(latestProgressToast().title).toContain("70%"))
     third.resolve()
     await finished
+
+    expect(queryClient.getMutationCache().getAll()[0]?.state.status).toBe(
+      "success"
+    )
 
     expect(mocks.showToast.mock.calls.at(-1)?.[0]).toMatchObject({
       type: "error",

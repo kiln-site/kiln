@@ -1,4 +1,6 @@
 import * as React from "react"
+import { useMutation, useQuery } from "@tanstack/react-query"
+import { queryKeys } from "@/lib/query-options"
 import { Effect } from "effect"
 import {
   Archive,
@@ -48,11 +50,6 @@ import {
 import type { RelayFileDownloadPreview } from "@/lib/relay-file-transfer"
 import type { InstanceWorkspaceInstance } from "@/lib/relay-selectors"
 
-type PreviewState =
-  | { status: "loading" }
-  | { message: string; status: "error" }
-  | { preview: RelayFileDownloadPreview; status: "ready" }
-
 interface FileDownloadDialogProps {
   instance: InstanceWorkspaceInstance
   onOpenChange: (open: boolean) => void
@@ -70,108 +67,103 @@ export const FileDownloadDialog = React.memo(function FileDownloadDialog({
     () => readFileDownloadPreferences(),
     [open, path]
   )
-  const [previewState, setPreviewState] = React.useState<PreviewState>({
-    status: "loading",
-  })
-  const [archiveFormat, setArchiveFormat] =
-    React.useState<FileArchiveFormat>("zip")
-  const [compressed, setCompressed] = React.useState(true)
-  const [downloadBaseName, setDownloadBaseName] = React.useState("")
-  const [downloading, setDownloading] = React.useState(false)
-  const [downloadError, setDownloadError] = React.useState<string | null>(null)
+  const [archiveFormat, setArchiveFormat] = React.useState<FileArchiveFormat>(
+    preferences.archiveFormat
+  )
+  const [compressed, setCompressed] = React.useState(
+    preferences.compressByDefault
+  )
+  const [downloadBaseName, setDownloadBaseName] = React.useState(
+    () => path.split("/").filter(Boolean).at(-1) || "download"
+  )
   const [skipDialog, setSkipDialog] = React.useState(false)
   const automaticDownload = React.useRef<string | null>(null)
   const compressionId = React.useId()
   const skipDialogId = React.useId()
-
+  const previewQuery = useQuery({
+    queryKey: [
+      ...queryKeys.relay.tree(instance.relayId, instance.id).slice(0, -1),
+      "download-preview",
+      path,
+    ],
+    queryFn: ({ signal }) =>
+      inspectRelayFileDownload({
+        instanceId: instance.id,
+        path,
+        relayId: instance.relayId,
+        signal,
+      }),
+    enabled: open && preferences.confirmBeforeDownload,
+    staleTime: 0,
+    retry: false,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
+  })
+  const download = useMutation({
+    mutationFn: ({
+      archiveFormat,
+      compressed,
+      name,
+      automatic,
+    }: {
+      archiveFormat: FileArchiveFormat
+      compressed: boolean
+      name: string
+      automatic: boolean
+      skipDialog?: boolean
+    }) =>
+      Effect.runPromise(
+        startRelayDownload({
+          archiveFormat,
+          compressed,
+          instanceId: instance.id,
+          name,
+          path,
+          preflight: automatic,
+          relayId: instance.relayId,
+        })
+      ),
+    onSuccess: (_, variables) => {
+      if (variables.skipDialog)
+        writeFileDownloadPreferences({ confirmBeforeDownload: false })
+      onOpenChange(false)
+      showDownloadRequestedToast(variables.name)
+    },
+    onError: (cause, variables) => {
+      if (!variables.automatic) return
+      onOpenChange(false)
+      showToast({
+        type: "error",
+        message: "Download could not start",
+        description: downloadErrorMessage(cause),
+      })
+    },
+  })
   React.useEffect(() => {
     if (!open) {
       automaticDownload.current = null
       return
     }
-
-    const sourceName = path.split("/").filter(Boolean).at(-1) || "download"
-    if (!preferences.confirmBeforeDownload) {
-      const automaticKey = `${instance.id}:${path}`
-      if (automaticDownload.current === automaticKey) return
-      automaticDownload.current = automaticKey
-      const useCompression = preferences.compressByDefault
-      const name = fileDownloadName(
-        sourceName,
-        useCompression,
+    if (preferences.confirmBeforeDownload) return
+    const key = `${instance.id}:${path}`
+    if (automaticDownload.current === key) return
+    automaticDownload.current = key
+    download.mutate({
+      archiveFormat: preferences.archiveFormat,
+      compressed: preferences.compressByDefault,
+      name: fileDownloadName(
+        path.split("/").filter(Boolean).at(-1) || "download",
+        preferences.compressByDefault,
         preferences.archiveFormat
-      )
-      setDownloading(true)
-      void Effect.runPromise(
-        startRelayDownload({
-          archiveFormat: preferences.archiveFormat,
-          compressed: useCompression,
-          instanceId: instance.id,
-          name,
-          path,
-          preflight: true,
-          relayId: instance.relayId,
-        }).pipe(
-          Effect.match({
-            onFailure: (cause) => {
-              setDownloading(false)
-              onOpenChange(false)
-              showToast({
-                type: "error",
-                message: "Download could not start",
-                description: downloadErrorMessage(cause),
-              })
-            },
-            onSuccess: () => {
-              setDownloading(false)
-              onOpenChange(false)
-              showDownloadRequestedToast(name)
-            },
-          })
-        )
-      )
-      return
-    }
-
-    let active = true
-    setPreviewState({ status: "loading" })
-    setArchiveFormat(preferences.archiveFormat)
-    setCompressed(preferences.compressByDefault)
-    setDownloading(false)
-    setDownloadError(null)
-    setSkipDialog(false)
-    void Effect.runPromise(
-      Effect.tryPromise({
-        try: () =>
-          inspectRelayFileDownload({
-            instanceId: instance.id,
-            path,
-            relayId: instance.relayId,
-          }),
-        catch: (cause) => cause,
-      }).pipe(
-        Effect.match({
-          onFailure: (cause) => {
-            if (!active) return
-            setPreviewState({
-              message: downloadErrorMessage(cause),
-              status: "error",
-            })
-          },
-          onSuccess: (preview) => {
-            if (!active) return
-            setDownloadBaseName(preview.name)
-            setPreviewState({ preview, status: "ready" })
-          },
-        })
-      )
-    )
-    return () => {
-      active = false
-    }
-  }, [instance.id, instance.relayId, onOpenChange, open, path, preferences])
-
-  const preview = previewState.status === "ready" ? previewState.preview : null
+      ),
+      automatic: true,
+    })
+  }, [download.mutate, instance.id, open, path, preferences])
+  const preview = previewQuery.data ?? null
+  const downloading = download.isPending
+  const downloadError = download.error
+    ? downloadErrorMessage(download.error)
+    : null
   const archiveSuffix = compressed
     ? fileDownloadArchiveSuffix(archiveFormat)
     : ""
@@ -197,64 +189,41 @@ export const FileDownloadDialog = React.memo(function FileDownloadDialog({
         )
       : 0
 
-  const changeCompression = React.useCallback((nextCompressed: boolean) => {
-    setCompressed(nextCompressed)
-    setDownloadError(null)
-  }, [])
+  const changeCompression = React.useCallback(
+    (nextCompressed: boolean) => {
+      setCompressed(nextCompressed)
+      download.reset()
+    },
+    [download.reset]
+  )
 
-  const changeArchiveFormat = React.useCallback((value: string) => {
-    const nextFormat: FileArchiveFormat = value === "gzip" ? "gzip" : "zip"
-    setArchiveFormat(nextFormat)
-    setDownloadError(null)
-  }, [])
+  const changeArchiveFormat = React.useCallback(
+    (value: string) => {
+      const nextFormat: FileArchiveFormat = value === "gzip" ? "gzip" : "zip"
+      setArchiveFormat(nextFormat)
+      download.reset()
+    },
+    [download.reset]
+  )
 
-  const changeDownloadBaseName = React.useCallback((name: string) => {
-    setDownloadBaseName(name)
-    setDownloadError(null)
-  }, [])
+  const changeDownloadBaseName = React.useCallback(
+    (name: string) => {
+      setDownloadBaseName(name)
+      download.reset()
+    },
+    [download.reset]
+  )
 
-  const startDownload = React.useCallback(async () => {
+  const startDownload = () => {
     if (!preview || invalidName || downloading) return
-    setDownloading(true)
-    setDownloadError(null)
-    await Effect.runPromise(
-      startRelayDownload({
-        archiveFormat,
-        compressed,
-        instanceId: instance.id,
-        name: downloadName,
-        path,
-        relayId: instance.relayId,
-      }).pipe(
-        Effect.match({
-          onFailure: (cause) => {
-            setDownloading(false)
-            setDownloadError(downloadErrorMessage(cause))
-          },
-          onSuccess: () => {
-            setDownloading(false)
-            if (skipDialog) {
-              writeFileDownloadPreferences({ confirmBeforeDownload: false })
-            }
-            onOpenChange(false)
-            showDownloadRequestedToast(downloadName)
-          },
-        })
-      )
-    )
-  }, [
-    archiveFormat,
-    compressed,
-    downloadName,
-    downloading,
-    instance.id,
-    instance.relayId,
-    invalidName,
-    onOpenChange,
-    path,
-    preview,
-    skipDialog,
-  ])
+    download.mutate({
+      archiveFormat,
+      compressed,
+      name: downloadName,
+      automatic: false,
+      skipDialog,
+    })
+  }
 
   if (open && !preferences.confirmBeforeDownload) return null
 
@@ -278,7 +247,7 @@ export const FileDownloadDialog = React.memo(function FileDownloadDialog({
           </div>
         </DialogHeader>
 
-        {previewState.status === "loading" ? (
+        {previewQuery.isPending ? (
           <div className="grid min-h-40 place-items-center px-5 py-8 text-center">
             <div>
               <LoaderCircle className="mx-auto size-5 animate-spin text-primary" />
@@ -288,17 +257,17 @@ export const FileDownloadDialog = React.memo(function FileDownloadDialog({
               </p>
             </div>
           </div>
-        ) : previewState.status === "error" ? (
+        ) : previewQuery.isError ? (
           <div className="grid min-h-40 place-items-center px-5 py-8 text-center">
             <div className="max-w-sm">
               <TriangleAlert className="mx-auto size-5 text-destructive" />
               <p className="mt-3 text-xs font-semibold">Download unavailable</p>
               <p className="type-support mt-1 text-muted-foreground">
-                {previewState.message}
+                {downloadErrorMessage(previewQuery.error)}
               </p>
             </div>
           </div>
-        ) : (
+        ) : preview ? (
           <DownloadOptions
             archiveFormat={archiveFormat}
             archiveSuffix={archiveSuffix}
@@ -313,12 +282,12 @@ export const FileDownloadDialog = React.memo(function FileDownloadDialog({
             onDownloadBaseNameChange={changeDownloadBaseName}
             onSkipDialogChange={setSkipDialog}
             outputSize={outputSize}
-            preview={previewState.preview}
+            preview={preview}
             savings={savings}
             skipDialog={skipDialog}
             skipDialogId={skipDialogId}
           />
-        )}
+        ) : null}
 
         <DialogFooter className="m-0 rounded-none px-4 py-3">
           <Button

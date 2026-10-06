@@ -57,7 +57,6 @@ export function useFileActions({
 }) {
   const [dialog, setDialog] = React.useState<FileActionDialogState>(null)
   const [downloadPath, setDownloadPath] = React.useState<string | null>(null)
-  const [downloadPending, setDownloadPending] = React.useState(false)
   const mutation = useMutation({
     mutationFn: (input: RelayFileMutationInput) =>
       mutateRelayFiles({
@@ -126,49 +125,47 @@ export function useFileActions({
     [runMutation]
   )
 
-  const downloadArchive = React.useCallback(
-    async (paths: ReadonlyArray<string>, requestedName: string) => {
-      const toastId = showToast({
+  const archiveMutation = useMutation({
+    mutationFn: ({
+      paths,
+      requestedName,
+    }: {
+      paths: ReadonlyArray<string>
+      requestedName: string
+    }) =>
+      downloadRelayArchive({
+        instanceId: instance.id,
+        name: requestedName.endsWith(".zip")
+          ? requestedName
+          : `${requestedName}.zip`,
+        paths,
+        relayId: instance.relayId,
+      }),
+    onMutate: () =>
+      showToast({
         type: "loading",
         message: "Preparing download",
         duration: Number.POSITIVE_INFINITY,
-      })
-      setDownloadPending(true)
-      await Effect.runPromise(
-        Effect.tryPromise({
-          try: () =>
-            downloadRelayArchive({
-              instanceId: instance.id,
-              name: requestedName.endsWith(".zip")
-                ? requestedName
-                : `${requestedName}.zip`,
-              paths,
-              relayId: instance.relayId,
-            }),
-          catch: (cause) => cause,
-        }).pipe(
-          Effect.match({
-            onFailure: (cause) => {
-              dismissToast(toastId)
-              showToast({
-                type: "error",
-                message: "Download failed",
-                description:
-                  cause instanceof Error
-                    ? cause.message
-                    : "The Relay could not prepare this download.",
-              })
-            },
-            onSuccess: () => {
-              dismissToast(toastId)
-              showToast({ type: "success", message: "Download started" })
-            },
-          }),
-          Effect.ensuring(Effect.sync(() => setDownloadPending(false)))
-        )
-      )
+      }),
+    onSuccess: () =>
+      showToast({ type: "success", message: "Download started" }),
+    onError: (cause) =>
+      showToast({
+        type: "error",
+        message: "Download failed",
+        description:
+          cause instanceof Error
+            ? cause.message
+            : "The Relay could not prepare this download.",
+      }),
+    onSettled: (_, __, ___, toastId) => {
+      if (toastId !== undefined) dismissToast(toastId)
     },
-    [instance.id, instance.relayId]
+  })
+  const downloadArchive = React.useCallback(
+    (paths: ReadonlyArray<string>, requestedName: string) =>
+      archiveMutation.mutate({ paths, requestedName }),
+    [archiveMutation.mutate]
   )
 
   const request = React.useCallback(
@@ -271,7 +268,7 @@ export function useFileActions({
 
   return {
     controller: {
-      busy: mutation.isPending || downloadPending,
+      busy: mutation.isPending || archiveMutation.isPending,
       canWrite,
       request,
     } satisfies FileActionsController,

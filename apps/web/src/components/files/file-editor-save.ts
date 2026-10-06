@@ -4,7 +4,12 @@ import { Effect } from "effect"
 import type { RelayFileContent } from "@workspace/contracts"
 
 import type { EditorSessionStore } from "@/components/files/file-workspace-stores"
-import { queryKeys } from "@/lib/query-options"
+import { directoryPath } from "@/components/files/file-tree-utils"
+import {
+  queryKeys,
+  relayDirectoryQueryOptions,
+  relayFileEntryQueryOptions,
+} from "@/lib/query-options"
 import type { InstanceWorkspaceInstance } from "@/lib/relay-selectors"
 import { snbtDiagnosticForEditor } from "@/lib/snbt-validation"
 import { saveRelayFile } from "@/server/relay"
@@ -110,12 +115,38 @@ export function useFileSaveAction(
         ),
         nextFile
       )
-      await queryClient.invalidateQueries({
-        queryKey: queryKeys.fileActivity(
-          variables.data.relayId,
-          variables.data.instanceId
-        ),
-      })
+      await Promise.all([
+        queryClient.invalidateQueries({
+          queryKey: queryKeys.fileActivity(
+            variables.data.relayId,
+            variables.data.instanceId
+          ),
+        }),
+        queryClient.invalidateQueries({
+          queryKey: relayFileEntryQueryOptions(
+            variables.data.relayId,
+            variables.data.instanceId,
+            variables.data.path
+          ).queryKey,
+        }),
+        queryClient.invalidateQueries({
+          queryKey: relayDirectoryQueryOptions(
+            variables.data.relayId,
+            variables.data.instanceId,
+            directoryPath(variables.data.path)
+          ).queryKey,
+          refetchType: "all",
+        }),
+        queryClient.invalidateQueries({
+          queryKey: [
+            ...queryKeys.relay.tree(
+              variables.data.relayId,
+              variables.data.instanceId
+            ),
+            "sizes",
+          ],
+        }),
+      ])
     },
   })
   const saveFile = saveMutation.mutateAsync

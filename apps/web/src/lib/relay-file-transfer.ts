@@ -11,6 +11,7 @@ const HEARTH_FILE_FALLBACK_LIMIT = 2 * 1024 * 1024
 class DirectRelayTransferError extends Error {}
 
 interface FileTransferInput {
+  signal?: AbortSignal
   instanceId: string
   path: string
   relayId: string
@@ -284,6 +285,7 @@ async function relayFileRequest(
             headers: authorization.headers,
             method,
             mode: "cors",
+            signal: input.signal,
           })
     ).pipe(
       Effect.mapError(

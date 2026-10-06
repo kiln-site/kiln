@@ -1,6 +1,6 @@
 import * as React from "react"
 import { prepareFileTreeInput } from "@pierre/trees"
-import { useQuery, useQueryClient } from "@tanstack/react-query"
+import { useInfiniteQuery, useQueryClient } from "@tanstack/react-query"
 import { useRouter } from "@tanstack/react-router"
 
 import {
@@ -21,7 +21,8 @@ import {
 } from "@/components/files/file-workspace-stores"
 import { useFileUploadAction } from "@/components/files/file-upload"
 import { FileViewer, queryErrorMessage } from "@/components/files/file-viewer"
-import { ProgressiveFileIndex } from "@/components/files/progressive-file-index"
+import { refreshFileQueries } from "@/components/files/file-query-options"
+import { FileTreeIndex } from "@/components/files/file-tree-index"
 import { relayRootDirectoryQueryOptions } from "@/lib/query-options"
 import type { InstanceWorkspaceInstance } from "@/lib/relay-selectors"
 import {
@@ -158,13 +159,13 @@ const StableFileWorkspaceSurface = React.memo(function FileWorkspaceSurface({
   const handledTreeEntry = React.useRef(false)
   const openingTreeForRouteEntry = openTreeOnEntry && !handledTreeEntry.current
   const displayedTreeCollapsed = treeCollapsed && !openingTreeForRouteEntry
-  const rootDirectoryQuery = useQuery(
+  const rootDirectoryQuery = useInfiniteQuery(
     relayRootDirectoryQueryOptions(instance.relayId, instance.id)
   )
   const [fileIndex] = React.useState(
     () =>
-      new ProgressiveFileIndex({
-        initialRoot: rootDirectoryQuery.data ?? null,
+      new FileTreeIndex({
+        queryClient,
         instanceId: instance.id,
         relayId: instance.relayId,
       })
@@ -175,21 +176,12 @@ const StableFileWorkspaceSurface = React.memo(function FileWorkspaceSurface({
     "Could not load files"
   )
   const initialTreePaths = React.useMemo(
-    () => rootDirectoryQuery.data?.entries.map((entry) => entry.path) ?? [],
+    () =>
+      rootDirectoryQuery.data?.pages.flatMap((page) =>
+        page.entries.map((entry) => entry.path)
+      ) ?? [],
     [rootDirectoryQuery.data]
   )
-
-  React.useLayoutEffect(() => {
-    if (rootDirectoryQuery.data) {
-      fileIndex.hydrateRoot(rootDirectoryQuery.data)
-    }
-  }, [fileIndex, rootDirectoryQuery.data])
-
-  React.useEffect(() => {
-    if (treeReady) fileIndex.start()
-  }, [fileIndex, treeReady])
-
-  React.useEffect(() => fileIndex.retain(), [fileIndex])
 
   React.useEffect(() => {
     preferencesStore.hydrate()
@@ -251,22 +243,8 @@ const StableFileWorkspaceSurface = React.memo(function FileWorkspaceSurface({
   }, [rootDirectoryQuery.refetch])
 
   const handleRefresh = React.useCallback(() => {
-    if (rootDirectoryQuery.isError) retryRootDirectory()
-    fileIndex.refresh()
-    void queryClient.invalidateQueries({
-      exact: true,
-      queryKey: relayRootDirectoryQueryOptions(instance.relayId, instance.id)
-        .queryKey,
-      refetchType: "none",
-    })
-  }, [
-    fileIndex,
-    instance.id,
-    instance.relayId,
-    queryClient,
-    retryRootDirectory,
-    rootDirectoryQuery.isError,
-  ])
+    void refreshFileQueries(queryClient, instance.relayId, instance.id)
+  }, [instance.id, instance.relayId, queryClient])
   const uploads = useFileUploadAction({
     canWrite: canWrite && relayConnected,
     instance,
@@ -331,7 +309,7 @@ const StableFileWorkspaceSurface = React.memo(function FileWorkspaceSurface({
           canWrite={canWrite && relayConnected}
           fileTreeError={rootDirectoryError}
           fileTreeLoading={rootDirectoryQuery.isPending}
-          fileTreeRetrying={rootDirectoryQuery.isFetching}
+          fileTreeRetrying={!treeReady && rootDirectoryQuery.isFetching}
           fileIndex={fileIndex}
           instance={instance}
           onPathChange={onPathChange}
@@ -363,6 +341,7 @@ const StableFileWorkspaceSurface = React.memo(function FileWorkspaceSurface({
       />
       {fileActions.downloadPath ? (
         <FileDownloadDialog
+          key={fileActions.downloadPath}
           instance={instance}
           open
           path={fileActions.downloadPath}

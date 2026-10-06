@@ -524,24 +524,38 @@ export function relayTreeQueryOptions(relayId: string, instanceId: string) {
   })
 }
 
-export function relayRootDirectoryQueryOptions(
+export function relayDirectoryQueryOptions(
   relayId: string,
-  instanceId: string
+  instanceId: string,
+  directory = ""
 ) {
-  return queryOptions({
+  const path = directory.replace(/^\/+|\/+$/gu, "")
+  return infiniteQueryOptions({
     queryKey: [
       ...queryKeys.relay.tree(relayId, instanceId),
       "directory",
-      "root",
+      path ? `${path}/` : "",
     ] as const,
-    queryFn: () =>
-      getRelayDirectoryPage({ data: { instanceId, path: "", relayId } }),
+    initialPageParam: undefined as string | undefined,
+    queryFn: ({ pageParam, signal }) =>
+      getRelayDirectoryPage({
+        data: { instanceId, path, relayId, cursor: pageParam },
+        signal,
+      }),
+    getNextPageParam: (page) => page.cursor ?? undefined,
     retry: 3,
     retryDelay: (attempt) => Math.min(500 * 2 ** attempt, 2_000),
     refetchOnReconnect: false,
     refetchOnWindowFocus: false,
     staleTime: 15_000,
   })
+}
+
+export function relayRootDirectoryQueryOptions(
+  relayId: string,
+  instanceId: string
+) {
+  return relayDirectoryQueryOptions(relayId, instanceId)
 }
 
 export function relayFileQueryOptions(
@@ -551,7 +565,8 @@ export function relayFileQueryOptions(
 ) {
   return queryOptions({
     queryKey: queryKeys.relay.file(relayId, instanceId, path),
-    queryFn: () => getRelayFile({ data: { instanceId, path, relayId } }),
+    queryFn: ({ signal }) =>
+      getRelayFile({ data: { instanceId, path, relayId }, signal }),
     staleTime: 15_000,
   })
 }
@@ -563,7 +578,8 @@ export function relayFileEntryQueryOptions(
 ) {
   return queryOptions({
     queryKey: [...queryKeys.relay.file(relayId, instanceId, path), "stat"],
-    queryFn: () => getRelayFileEntry({ data: { instanceId, path, relayId } }),
+    queryFn: ({ signal }) =>
+      getRelayFileEntry({ data: { instanceId, path, relayId }, signal }),
     retry: false,
     staleTime: 15_000,
   })
@@ -575,7 +591,8 @@ export function relayFileActivityQueryOptions(
 ) {
   return queryOptions({
     queryKey: queryKeys.fileActivity(relayId, instanceId),
-    queryFn: () => getRelayFileActivity({ data: { instanceId, relayId } }),
+    queryFn: ({ signal }) =>
+      getRelayFileActivity({ data: { instanceId, relayId }, signal }),
     staleTime: 15_000,
   })
 }
