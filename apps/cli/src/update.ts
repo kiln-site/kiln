@@ -12,7 +12,7 @@ import {
 import { dirname, join } from "node:path"
 import { promisify } from "node:util"
 
-import { Clock, Effect, Schema } from "effect"
+import { Clock, Context, Effect, Schema } from "effect"
 import {
   compareKilnReleaseVersions,
   isKilnNightlyVersion,
@@ -43,38 +43,43 @@ const releaseSchema = Schema.Struct({
 type Release = typeof releaseSchema.Type
 type Asset = Release["assets"][number]
 
-export interface CliUpdateOptions {
-  currentVersion?: string
-  repository?: string
-  executablePath?: string
-  platform?: NodeJS.Platform
-  arch?: string
-  isStandaloneBinary?: () => boolean
-  fetch?: typeof globalThis.fetch
-  verifyBinary?: (
-    path: string,
-    version: string,
-    signal: AbortSignal
-  ) => Promise<void>
-}
+// The running installation that `kiln update` replaces.
+export const CliInstallation = Context.Reference<{
+  readonly arch: string
+  readonly currentVersion: string
+  readonly executablePath: string
+  readonly platform: NodeJS.Platform
+  readonly repository: string
+  readonly standalone: boolean
+}>("kiln-cli/update/CliInstallation", {
+  defaultValue: () => ({
+    arch: process.arch,
+    currentVersion: cliVersion,
+    executablePath: process.execPath,
+    platform: process.platform,
+    repository: cliGitRepository,
+    standalone: isStandaloneCliBinary(process.argv[1] ?? ""),
+  }),
+})
 
-export const updateCliEffect = Effect.fn("cli.update")(function* (
-  options: CliUpdateOptions = {}
-) {
-  if (!(options.isStandaloneBinary ?? isStandaloneCliBinary)()) {
+export const updateCliEffect = Effect.fn("cli.update")(function* () {
+  const {
+    arch,
+    currentVersion,
+    executablePath,
+    platform,
+    repository,
+    standalone,
+  } = yield* CliInstallation
+  if (!standalone) {
     return yield* commandError({
       code: "cli_update_development",
       message:
         "Run kiln update from an installed CLI binary, not the source checkout.",
     })
   }
-  const currentVersion = options.currentVersion ?? cliVersion
-  const platform = options.platform ?? process.platform
-  const arch = options.arch ?? process.arch
-  const repository = options.repository ?? cliGitRepository
-  const fetcher = options.fetch ?? globalThis.fetch
   const release = yield* updateOperation((signal) =>
-    findRelease(repository, currentVersion, fetcher, signal)
+    findRelease(repository, currentVersion, signal)
   )
   const version = release.tag_name.slice(1)
   if (compareKilnReleaseVersions(version, currentVersion) !== 1) {
@@ -84,9 +89,7 @@ export const updateCliEffect = Effect.fn("cli.update")(function* (
     try: () => selectBinary(release, repository, platform, arch),
     catch: updateError,
   })
-  const target = yield* updateOperation(() =>
-    realpath(options.executablePath ?? process.execPath)
-  )
+  const target = yield* updateOperation(() => realpath(executablePath))
 
   // Lock the actual executable, including when invoked through a symlink.
   return yield* Effect.acquireUseRelease(
@@ -100,16 +103,12 @@ export const updateCliEffect = Effect.fn("cli.update")(function* (
               directory,
               platform === "win32" ? "kiln.exe" : "kiln"
             )
-            yield* downloadBinary(asset, staged, fetcher)
+            yield* downloadBinary(asset, staged)
             yield* updateOperation(async (signal) => {
               signal.throwIfAborted()
               const original = await stat(target)
               await chmod(staged, original.mode & 0o777)
-              await (options.verifyBinary ?? verifyBinary)(
-                staged,
-                version,
-                signal
-              )
+              await verifyBinary(staged, version, signal)
             })
             yield* replaceBinary(staged, target, platform)
             return { updated: true, version }
@@ -165,7 +164,6 @@ const acquireLock = Effect.fn("cli.update.acquireLock")(function* (
 async function findRelease(
   repository: string,
   currentVersion: string,
-  fetcher: typeof globalThis.fetch,
   signal: AbortSignal
 ): Promise<Release> {
   if (!isKilnReleaseVersion(currentVersion)) {
@@ -178,7 +176,7 @@ async function findRelease(
     repository,
     nightly ? "releases?per_page=100" : "releases/latest"
   )
-  const response = await fetcher(url, {
+  const response = await fetch(url, {
     headers: {
       Accept: "application/vnd.github+json",
       "User-Agent": "kiln-cli",
@@ -257,8 +255,7 @@ function selectBinary(
 
 const downloadBinary = Effect.fn("cli.update.downloadBinary")(function* (
   asset: Asset,
-  destination: string,
-  fetcher: typeof globalThis.fetch
+  destination: string
 ) {
   yield* Effect.acquireUseRelease(
     updateOperation(() => open(destination, "wx", 0o700)),
@@ -268,7 +265,7 @@ const downloadBinary = Effect.fn("cli.update.downloadBinary")(function* (
           signal,
           AbortSignal.timeout(300_000),
         ])
-        const response = await fetcher(asset.browser_download_url, {
+        const response = await fetch(asset.browser_download_url, {
           signal: downloadSignal,
         })
         if (!response.ok || !response.body)
@@ -307,7 +304,7 @@ const downloadBinary = Effect.fn("cli.update.downloadBinary")(function* (
   )
 })
 
-export const replaceBinary = Effect.fn("cli.update.replaceBinary")(
+const replaceBinary = Effect.fn("cli.update.replaceBinary")(
   function* (staged: string, target: string, platform: NodeJS.Platform) {
     if (platform !== "win32") {
       yield* updateOperation(() => rename(staged, target))
@@ -331,9 +328,7 @@ export const replaceBinary = Effect.fn("cli.update.replaceBinary")(
   Effect.uninterruptible
 )
 
-export function isStandaloneCliBinary(
-  entrypointPath: string = process.argv[1] ?? ""
-): boolean {
+function isStandaloneCliBinary(entrypointPath: string): boolean {
   const normalizedPath = entrypointPath.replaceAll("\\", "/").toLowerCase()
   return (
     normalizedPath.startsWith("/$bunfs/") ||

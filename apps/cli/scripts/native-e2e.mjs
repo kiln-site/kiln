@@ -60,7 +60,7 @@ if (process.argv[2] === "--version") {
 } else {
   const bytes = readFileSync(process.env.KILN_TEST_NEXT)
   const name = "kiln-v1.1.0-${platform.name}${process.platform === "win32" ? ".exe" : ""}"
-  const result = await Effect.runPromise(updateCliEffect({ fetch: async (url) => {
+  globalThis.fetch = async (url) => {
     if (String(url).startsWith("https://api.github.com/")) {
       if (String(url) !== "https://api.github.com/repos/example/native-fixture/releases/latest") throw new Error("Wrong source repository: " + url)
       return Response.json({ tag_name: "v1.1.0", draft: false, prerelease: false,
@@ -68,7 +68,8 @@ if (process.argv[2] === "--version") {
           browser_download_url: cliGitRepository + "/releases/download/v1.1.0/" + name }] })
     }
     return new Response(bytes)
-  }}))
+  }
+  const result = await Effect.runPromise(updateCliEffect())
   console.log(JSON.stringify(result))
 }
 `

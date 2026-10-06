@@ -1,6 +1,13 @@
 import { expect, test } from "vite-plus/test"
 
-import { kilnCliPackageName, kilnDefaultEmberImage } from "./git-repository"
+import {
+  DEFAULT_KILN_GIT_REPO,
+  LEGACY_KILN_GIT_REPO,
+  isKilnGitRepositorySource,
+  kilnCliPackageName,
+  kilnDefaultEmberImage,
+  kilnImageSource,
+} from "./git-repository"
 
 const repository = "https://github.com/example/fork"
 
@@ -34,5 +41,23 @@ test("default fork catalog selects fork Embers without rewriting third-party ima
   ).toBe("ghcr.io/example/fork/bricks-steamcmd:latest")
   expect(kilnDefaultEmberImage("custom/java:21", repository)).toBe(
     "custom/java:21"
+  )
+})
+
+test("official releases retain the image source label older Relays require", () => {
+  expect(kilnImageSource(DEFAULT_KILN_GIT_REPO)).toBe(LEGACY_KILN_GIT_REPO)
+  expect(
+    isKilnGitRepositorySource(LEGACY_KILN_GIT_REPO, DEFAULT_KILN_GIT_REPO)
+  ).toBe(true)
+})
+
+test("a fork accepts its own image provenance but never upstream's", () => {
+  expect(kilnImageSource(repository)).toBe(repository)
+  expect(isKilnGitRepositorySource(repository, repository)).toBe(true)
+  expect(isKilnGitRepositorySource(LEGACY_KILN_GIT_REPO, repository)).toBe(
+    false
+  )
+  expect(isKilnGitRepositorySource(DEFAULT_KILN_GIT_REPO, repository)).toBe(
+    false
   )
 })

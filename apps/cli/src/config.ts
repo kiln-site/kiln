@@ -10,11 +10,12 @@ import {
 import { homedir } from "node:os"
 import { dirname, join, resolve } from "node:path"
 
-import { Effect } from "effect"
+import { Context, Effect } from "effect"
 import { z } from "zod"
 
 import {
   credentialManagersForPlatform,
+  runCredentialCommand,
   type CredentialManager,
 } from "./credential-store.js"
 import { commandError } from "./errors.js"
@@ -78,11 +79,13 @@ export interface KilnSession {
   url: string
 }
 
-export interface ConfigOptions {
-  credentialManagers?: ReadonlyArray<CredentialManager>
-  environment?: NodeJS.ProcessEnv
-  homeDirectory?: string
-}
+// The OS credential store is the CLI's single secret-storage boundary.
+export const CredentialManagers = Context.Reference<
+  ReadonlyArray<CredentialManager>
+>("kiln-cli/config/CredentialManagers", {
+  defaultValue: () =>
+    credentialManagersForPlatform(process.platform, runCredentialCommand),
+})
 
 export type SavedSession =
   | {
@@ -103,10 +106,8 @@ const emptyConfig: KilnConfig = {
   version: 2,
 }
 
-export const loadConfigEffect = Effect.fn("cli.config.load")(function* (
-  options: ConfigOptions = {}
-) {
-  const path = configPath(options)
+const loadConfigEffect = Effect.fn("cli.config.load")(function* () {
+  const path = configPath()
   const encoded = yield* Effect.tryPromise({
     try: () => readFile(path, "utf8"),
     catch: (cause) => cause,
@@ -149,15 +150,12 @@ export const loadConfigEffect = Effect.fn("cli.config.load")(function* (
 
 export const resolveLoginTargetEffect = Effect.fn(
   "cli.config.resolveLoginTarget"
-)(function* (
-  input: { profile?: string; url?: string },
-  options: ConfigOptions = {}
-) {
-  const config = yield* loadConfigEffect(options)
+)(function* (input: { profile?: string; url?: string }) {
+  const config = yield* loadConfigEffect()
   const profile = input.profile || config.activeProfile || "default"
   const url =
     input.url ||
-    (options.environment ?? process.env).KILN_URL?.trim() ||
+    process.env.KILN_URL?.trim() ||
     config.profiles[profile]?.url ||
     DEFAULT_KILN_URL
   if (!url)
@@ -170,19 +168,16 @@ export const resolveLoginTargetEffect = Effect.fn(
 })
 
 export const resolveSessionEffect = Effect.fn("cli.config.resolveSession")(
-  function* (
-    input: {
-      migrateStoredCredential?: boolean
-      profile?: string
-      token?: string
-      url?: string
-    },
-    options: ConfigOptions = {}
-  ) {
-    const config = yield* loadConfigEffect(options)
+  function* (input: {
+    migrateStoredCredential?: boolean
+    profile?: string
+    token?: string
+    url?: string
+  }) {
+    const config = yield* loadConfigEffect()
     const profile = input.profile || config.activeProfile || "default"
     const stored = config.profiles[profile]
-    const environment = options.environment ?? process.env
+    const environment = process.env
     const url = normalizeKilnUrl(
       input.url ||
         environment.KILN_URL?.trim() ||
@@ -199,7 +194,7 @@ export const resolveSessionEffect = Effect.fn("cli.config.resolveSession")(
       if (legacyStored) {
         token = legacyStored.token
         if (input.migrateStoredCredential !== false) {
-          yield* migrateCredentialForUseEffect(config, profile, options).pipe(
+          yield* migrateCredentialForUseEffect(config, profile).pipe(
             Effect.catch(() => Effect.void)
           )
         }
@@ -209,12 +204,12 @@ export const resolveSessionEffect = Effect.fn("cli.config.resolveSession")(
       if (currentStored?.credential.kind === "legacy-file") {
         token = currentStored.credential.token
         if (input.migrateStoredCredential !== false) {
-          yield* migrateCredentialForUseEffect(config, profile, options).pipe(
+          yield* migrateCredentialForUseEffect(config, profile).pipe(
             Effect.catch(() => Effect.void)
           )
         }
       } else if (currentStored) {
-        token = yield* loadCredentialEffect(currentStored.credential, options)
+        token = yield* loadCredentialEffect(currentStored.credential)
       }
     }
     if (!token) {
@@ -229,46 +224,38 @@ export const resolveSessionEffect = Effect.fn("cli.config.resolveSession")(
 )
 
 export const saveSessionEffect = Effect.fn("cli.config.saveSession")(function* (
-  session: KilnSession,
-  options: ConfigOptions = {}
+  session: KilnSession
 ) {
-  const storedConfig = yield* loadConfigEffect(options)
+  const storedConfig = yield* loadConfigEffect()
   const config = toCurrentConfig(storedConfig)
   const existing = config.profiles[session.profile]?.credential
   const account =
     existing && existing.kind === "external"
       ? existing.account
-      : credentialAccount(configPath(options), session.profile)
+      : credentialAccount(configPath(), session.profile)
   const saved = yield* saveCredentialEffect(
     account,
     session.token,
-    options,
     "allow-on-failure"
   )
   if (storedConfig.version === 1 && saved.credential.kind === "file") {
-    yield* writeConfigEffect(
-      {
-        activeProfile: session.profile,
-        profiles: {
-          ...storedConfig.profiles,
-          [session.profile]: { token: session.token, url: session.url },
-        },
-        version: 1,
+    yield* writeConfigEffect({
+      activeProfile: session.profile,
+      profiles: {
+        ...storedConfig.profiles,
+        [session.profile]: { token: session.token, url: session.url },
       },
-      options
-    )
+      version: 1,
+    })
   } else {
-    yield* writeConfigEffect(
-      {
-        activeProfile: session.profile,
-        profiles: {
-          ...config.profiles,
-          [session.profile]: { credential: saved.credential, url: session.url },
-        },
-        version: 2,
+    yield* writeConfigEffect({
+      activeProfile: session.profile,
+      profiles: {
+        ...config.profiles,
+        [session.profile]: { credential: saved.credential, url: session.url },
       },
-      options
-    )
+      version: 2,
+    })
   }
   if (
     existing &&
@@ -276,14 +263,14 @@ export const saveSessionEffect = Effect.fn("cli.config.saveSession")(function* (
     (saved.credential.kind === "file" ||
       existing.manager !== saved.credential.manager)
   ) {
-    yield* deleteExternalCredentialEffect(existing, options).pipe(Effect.ignore)
+    yield* deleteExternalCredentialEffect(existing).pipe(Effect.ignore)
   }
   return saved.summary
 })
 
 export const removeSessionEffect = Effect.fn("cli.config.removeSession")(
-  function* (profileName?: string, options: ConfigOptions = {}) {
-    const storedConfig = yield* loadConfigEffect(options)
+  function* (profileName?: string) {
+    const storedConfig = yield* loadConfigEffect()
     const profile = profileName || storedConfig.activeProfile || "default"
     const removed = storedConfig.profiles[profile]
     if (!removed) {
@@ -292,23 +279,19 @@ export const removeSessionEffect = Effect.fn("cli.config.removeSession")(
     const profiles = Object.fromEntries(
       Object.entries(storedConfig.profiles).filter(([name]) => name !== profile)
     )
-    yield* writeConfigEffect(
-      {
-        activeProfile:
-          storedConfig.activeProfile === profile
-            ? "default"
-            : storedConfig.activeProfile,
-        profiles,
-        version: storedConfig.version,
-      },
-      options
-    )
+    yield* writeConfigEffect({
+      activeProfile:
+        storedConfig.activeProfile === profile
+          ? "default"
+          : storedConfig.activeProfile,
+      profiles,
+      version: storedConfig.version,
+    })
     const credentialRemoved =
       "credential" in removed && removed.credential.kind === "external"
-        ? yield* deleteExternalCredentialEffect(
-            removed.credential,
-            options
-          ).pipe(Effect.catch(() => Effect.succeed(false)))
+        ? yield* deleteExternalCredentialEffect(removed.credential).pipe(
+            Effect.catch(() => Effect.succeed(false))
+          )
         : true
     return {
       credentialRemoved,
@@ -343,17 +326,15 @@ export function normalizeKilnUrl(input: string): string {
 
 function migrateCredentialForUseEffect(
   storedConfig: StoredKilnConfig,
-  profile: string,
-  options: ConfigOptions
+  profile: string
 ) {
   return Effect.gen(function* () {
     const config = toCurrentConfig(storedConfig)
     const stored = config.profiles[profile]
     if (!stored || stored.credential.kind !== "legacy-file") return
     const saved = yield* saveCredentialEffect(
-      credentialAccount(configPath(options), profile),
+      credentialAccount(configPath(), profile),
       stored.credential.token,
-      options,
       "unavailable-only"
     )
     const migrated: KilnConfig = {
@@ -363,7 +344,7 @@ function migrateCredentialForUseEffect(
         [profile]: { credential: saved.credential, url: stored.url },
       },
     }
-    yield* writeConfigEffect(migrated, options)
+    yield* writeConfigEffect(migrated)
   })
 }
 
@@ -383,24 +364,21 @@ function toCurrentConfig(config: StoredKilnConfig): KilnConfig {
   }
 }
 
-function loadCredentialEffect(
-  credential: KilnCredential,
-  options: ConfigOptions
+const loadCredentialEffect = Effect.fnUntraced(function* (
+  credential: KilnCredential
 ) {
-  if (credential.kind !== "external") return Effect.succeed(credential.token)
-  const manager = credentialManagers(options).find(
+  if (credential.kind !== "external") return credential.token
+  const manager = (yield* CredentialManagers).find(
     (candidate) => candidate.id === credential.manager
   )
   if (!manager) {
-    return Effect.fail(
-      commandError({
-        code: "credential_manager_unavailable",
-        exitCode: 3,
-        message: `The saved credential requires ${credential.manager}, which is unavailable on this system.`,
-      })
-    )
+    return yield* commandError({
+      code: "credential_manager_unavailable",
+      exitCode: 3,
+      message: `The saved credential requires ${credential.manager}, which is unavailable on this system.`,
+    })
   }
-  return Effect.tryPromise({
+  return yield* Effect.tryPromise({
     try: (signal) => manager.getPassword(credential.account, signal),
     catch: (cause) =>
       commandError({
@@ -422,16 +400,15 @@ function loadCredentialEffect(
           )
     )
   )
-}
+})
 
 function saveCredentialEffect(
   account: string,
   token: string,
-  options: ConfigOptions,
   fallbackPolicy: CredentialFallbackPolicy
 ) {
   return Effect.gen(function* () {
-    const managers = credentialManagers(options)
+    const managers = yield* CredentialManagers
     let lastFailure: unknown
     for (const manager of managers) {
       const stored = yield* Effect.tryPromise((signal) =>
@@ -483,24 +460,17 @@ function saveCredentialEffect(
   })
 }
 
-function deleteExternalCredentialEffect(
-  credential: z.infer<typeof externalCredentialSchema>,
-  options: ConfigOptions
+const deleteExternalCredentialEffect = Effect.fnUntraced(function* (
+  credential: z.infer<typeof externalCredentialSchema>
 ) {
-  const manager = credentialManagers(options).find(
+  const manager = (yield* CredentialManagers).find(
     (candidate) => candidate.id === credential.manager
   )
-  if (!manager) return Effect.succeed(false)
-  return Effect.tryPromise((signal) =>
+  if (!manager) return false
+  return yield* Effect.tryPromise((signal) =>
     manager.deletePassword(credential.account, signal)
   )
-}
-
-function credentialManagers(
-  options: ConfigOptions
-): ReadonlyArray<CredentialManager> {
-  return options.credentialManagers ?? credentialManagersForPlatform()
-}
+})
 
 function credentialAccount(path: string, profile: string): string {
   const digest = createHash("sha256")
@@ -511,18 +481,15 @@ function credentialAccount(path: string, profile: string): string {
   return `profile-${digest}`
 }
 
-function configPath(options: ConfigOptions): string {
-  const environment = options.environment ?? process.env
-  const configured = environment.KILN_CONFIG?.trim()
+function configPath(): string {
+  const configured = process.env.KILN_CONFIG?.trim()
   if (configured) return configured
-  const base =
-    environment.XDG_CONFIG_HOME?.trim() ||
-    join(options.homeDirectory ?? homedir(), ".config")
+  const base = process.env.XDG_CONFIG_HOME?.trim() || join(homedir(), ".config")
   return join(base, "kiln", "config.json")
 }
 
-function writeConfigEffect(config: StoredKilnConfig, options: ConfigOptions) {
-  const path = configPath(options)
+function writeConfigEffect(config: StoredKilnConfig) {
+  const path = configPath()
   const temporary = `${path}.tmp-${process.pid}`
   return Effect.tryPromise({
     try: async () => {

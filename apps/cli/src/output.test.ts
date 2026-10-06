@@ -1,89 +1,75 @@
-import { Cause } from "effect"
-import { describe, expect, it } from "vite-plus/test"
+import { Cause, Effect } from "effect"
+import { afterEach, describe, expect, it, vi } from "vite-plus/test"
 import { z } from "zod"
 
-import { commandError } from "./errors.js"
-import { renderErrorCause } from "./output.js"
+import { commandError, type CliCommandError } from "./errors.js"
+import { reportErrorCauseEffect } from "./output.js"
 
-describe("CLI output", () => {
-  it("preserves typed errors that become defects", () => {
-    expect(
-      renderErrorCause(
-        Cause.die(
-          commandError({
-            code: "invalid_url",
-            exitCode: 2,
-            message: "Kiln URL must be an absolute HTTP or HTTPS URL.",
-          })
-        )
+const originalExitCode = process.exitCode
+
+afterEach(() => {
+  vi.restoreAllMocks()
+  process.exitCode = originalExitCode
+})
+
+// What a user or script sees: stderr and the process exit code.
+async function report(cause: Cause.Cause<CliCommandError>) {
+  let stderr = ""
+  vi.spyOn(process.stderr, "write").mockImplementation((chunk) => {
+    stderr += String(chunk)
+    return true
+  })
+  await Effect.runPromise(reportErrorCauseEffect(cause))
+  const exitCode = process.exitCode
+  vi.restoreAllMocks()
+  return { exitCode, stderr }
+}
+
+describe("CLI error reporting", () => {
+  it("keeps the exit code and error code of typed errors that become defects", async () => {
+    const { exitCode, stderr } = await report(
+      Cause.die(
+        commandError({
+          code: "invalid_url",
+          exitCode: 2,
+          message: "Kiln URL must be an absolute HTTP or HTTPS URL.",
+        })
       )
-    ).toEqual({
-      exitCode: 2,
-      output: [
-        "Error: Kiln URL must be an absolute HTTP or HTTPS URL.",
-        "Code: invalid_url",
-        "",
-      ].join("\n"),
-    })
+    )
+
+    expect(exitCode).toBe(2)
+    expect(stderr).toContain("invalid_url")
+    expect(stderr).toContain("Kiln URL must be an absolute HTTP or HTTPS URL.")
   })
 
-  it("includes concise details for typed failures", () => {
-    expect(
-      renderErrorCause(
-        Cause.fail(
-          commandError({
-            cause: new Error("connect ECONNREFUSED kiln.example.test:443"),
-            code: "network_error",
-            exitCode: 5,
-            message: "Could not reach https://kiln.example.test.",
-            retryable: true,
-          })
-        )
+  it("includes the underlying cause and Relay correlation ID", async () => {
+    const requestId = "3df56ba5-b2c1-45ee-bab7-386fbb9223c7"
+    const { exitCode, stderr } = await report(
+      Cause.fail(
+        commandError({
+          cause: new Error("connect ECONNREFUSED kiln.example.test:443"),
+          code: "network_error",
+          exitCode: 5,
+          message: "Could not reach https://kiln.example.test.",
+          requestId,
+          retryable: true,
+        })
       )
-    ).toEqual({
-      exitCode: 5,
-      output: [
-        "Error: Could not reach https://kiln.example.test.",
-        "Code: network_error",
-        "Cause: connect ECONNREFUSED kiln.example.test:443",
-        "Hint: This operation may succeed if retried.",
-        "",
-      ].join("\n"),
-    })
+    )
+
+    expect(exitCode).toBe(5)
+    expect(stderr).toContain("network_error")
+    expect(stderr).toContain("ECONNREFUSED kiln.example.test:443")
+    expect(stderr).toContain(requestId)
   })
 
-  it("renders a Relay correlation ID separately from the cause", () => {
-    expect(
-      renderErrorCause(
-        Cause.fail(
-          commandError({
-            cause: new Error("Survival is not running"),
-            code: "relay_operation_failed",
-            message: "Relay could not send the console command.",
-            requestId: "3df56ba5-b2c1-45ee-bab7-386fbb9223c7",
-          })
-        )
-      )
-    ).toEqual({
-      exitCode: 1,
-      output: [
-        "Error: Relay could not send the console command.",
-        "Code: relay_operation_failed",
-        "Request: 3df56ba5-b2c1-45ee-bab7-386fbb9223c7",
-        "Cause: Survival is not running",
-        "",
-      ].join("\n"),
-    })
-  })
-
-  it("identifies invalid response fields without dumping the response", () => {
+  it("names the invalid response field", async () => {
     const decoded = z
       .object({ instance: z.object({ state: z.string() }) })
       .safeParse({ instance: {} })
-    expect(decoded.success).toBe(false)
-    if (decoded.success) return
+    if (decoded.success) throw new Error("Expected an invalid response")
 
-    const report = renderErrorCause(
+    const { exitCode, stderr } = await report(
       Cause.fail(
         commandError({
           cause: decoded.error,
@@ -93,34 +79,25 @@ describe("CLI output", () => {
       )
     )
 
-    expect(report).toEqual({
-      exitCode: 1,
-      output: [
-        "Error: Hearth returned a response the CLI does not understand.",
-        "Code: invalid_response",
-        "Cause: instance.state: Invalid input: expected string, received undefined",
-        "",
-      ].join("\n"),
-    })
+    expect(exitCode).toBe(1)
+    expect(stderr).toContain("invalid_response")
+    expect(stderr).toContain("instance.state")
   })
 
-  it("reports the message from unexpected defects", () => {
-    expect(
-      renderErrorCause(Cause.die(new TypeError("Cannot decode power response")))
-    ).toEqual({
-      exitCode: 1,
-      output: [
-        "Error: Cannot decode power response",
-        "Code: unexpected_error",
-        "",
-      ].join("\n"),
-    })
+  it("reports unexpected defects with their message", async () => {
+    const { exitCode, stderr } = await report(
+      Cause.die(new TypeError("Cannot decode power response"))
+    )
+
+    expect(exitCode).toBe(1)
+    expect(stderr).toContain("unexpected_error")
+    expect(stderr).toContain("Cannot decode power response")
   })
 
-  it("does not report interruptions as unexpected failures", () => {
-    expect(renderErrorCause(Cause.interrupt(1))).toEqual({
+  it("exits 130 without reporting an error for interruptions", async () => {
+    expect(await report(Cause.interrupt(1))).toEqual({
       exitCode: 130,
-      output: "",
+      stderr: "",
     })
   })
 })

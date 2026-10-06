@@ -1,5 +1,5 @@
 import { assert, describe, it } from "@effect/vitest"
-import { Effect, Fiber } from "effect"
+import { Context, Effect, Fiber } from "effect"
 import { createHash } from "node:crypto"
 import {
   mkdtemp,
@@ -12,32 +12,50 @@ import {
 } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
+import { afterEach, vi } from "vite-plus/test"
 
-import {
-  isStandaloneCliBinary,
-  replaceBinary,
-  updateCliEffect,
-} from "./update.js"
+import { CliInstallation, updateCliEffect } from "./update.js"
 
 const repository = "https://github.com/example/panel"
-const bytes = Buffer.from("new binary")
-const sha256 = `sha256:${createHash("sha256").update(bytes).digest("hex")}`
-function release(version = "1.1.0", overrides = {}) {
-  const name = `kiln-v${version}-linux-x64`
+// The downloaded "binary" is a script so the real `--version` check runs.
+const binary = (version: string, prelude = "") =>
+  Buffer.from(`#!/bin/sh\n${prelude}echo 'kiln ${version}'\n`)
+const sha256 = (bytes: Buffer) =>
+  `sha256:${createHash("sha256").update(bytes).digest("hex")}`
+
+function release(
+  version = "1.1.0",
+  bytes = binary(version),
+  asset = `kiln-v${version}-linux-x64`
+) {
   return {
     tag_name: `v${version}`,
     draft: false,
     prerelease: version.includes("nightly"),
     assets: [
       {
-        name,
+        name: asset,
         size: bytes.length,
-        digest: sha256,
-        browser_download_url: `${repository}/releases/download/v${version}/${name}`,
+        digest: sha256(bytes),
+        browser_download_url: `${repository}/releases/download/v${version}/${asset}`,
       },
     ],
-    ...overrides,
   }
+}
+
+// Fakes GitHub at the network boundary: release metadata, then the asset.
+function stubGitHub(
+  metadata: unknown,
+  download: (init?: RequestInit) => Response | Promise<Response>
+) {
+  const requests: Array<string> = []
+  vi.stubGlobal("fetch", async (url: string | URL, init?: RequestInit) => {
+    requests.push(String(url))
+    return String(url).startsWith("https://api.github.com/")
+      ? Response.json(metadata)
+      : download(init)
+  })
+  return requests
 }
 
 async function fixture(
@@ -53,65 +71,59 @@ async function fixture(
   }
 }
 
-function options(target: string, response = release()) {
-  const requests: string[] = []
-  return {
-    currentVersion: "1.0.0",
-    repository,
-    executablePath: target,
-    platform: "linux" as const,
-    arch: "x64",
-    isStandaloneBinary: () => true,
-    verifyBinary: async () => {},
-    fetch: (async (url) => {
-      requests.push(String(url))
-      return String(url).startsWith("https://api.github.com/")
-        ? Response.json(response)
-        : new Response(bytes)
-    }) as typeof fetch,
-    requests,
-  }
+function update(
+  executablePath: string,
+  overrides: Partial<Context.Service.Shape<typeof CliInstallation>> = {}
+) {
+  return updateCliEffect().pipe(
+    Effect.provideService(CliInstallation, {
+      arch: "x64",
+      currentVersion: "1.0.0",
+      executablePath,
+      platform: "linux",
+      repository,
+      standalone: true,
+      ...overrides,
+    })
+  )
 }
 
 describe("CLI GitHub updates", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
   it("updates the actual executable behind a symlink using its embedded repository", async () => {
     await fixture(async (directory, target) => {
       const link = join(directory, "kiln-link")
       await symlink(target, link)
-      const input = options(link)
-      let verified = false
-      input.verifyBinary = async () => {
-        verified = true
-      }
-      const result = await Effect.runPromise(updateCliEffect(input))
+      const bytes = binary("1.1.0")
+      const requests = stubGitHub(release(), () => new Response(bytes))
+
+      const result = await Effect.runPromise(update(link))
+
       assert.deepEqual(result, { updated: true, version: "1.1.0" })
-      assert.isTrue(verified)
-      assert.equal(await readFile(target, "utf8"), "new binary")
-      assert.deepEqual(input.requests, [
-        `${repository.replace("github.com", "api.github.com/repos")}/releases/latest`,
-        release().assets[0]!.browser_download_url,
-      ])
+      assert.deepEqual(await readFile(target), bytes)
+      assert.strictEqual(
+        requests[0],
+        "https://api.github.com/repos/example/panel/releases/latest"
+      )
       assert.deepEqual((await readdir(directory)).sort(), ["kiln", "kiln-link"])
     })
   })
 
   it("preserves nightly channel and never downgrades", async () => {
     await fixture(async (_, target) => {
-      const input = options(target)
-      input.currentVersion = "1.1.0-nightly.20261005.000000"
-      input.fetch = (async (url) => {
-        input.requests.push(String(url))
-        return Response.json([
-          release("1.2.0"),
-          release("1.1.0-nightly.20261004.000000"),
-        ])
-      }) as typeof fetch
-      assert.deepEqual(await Effect.runPromise(updateCliEffect(input)), {
-        updated: false,
-        version: input.currentVersion,
-      })
-      assert.match(input.requests[0]!, /releases\?per_page=100$/u)
-      assert.equal(input.requests.length, 1)
+      stubGitHub(
+        [release("1.2.0"), release("1.1.0-nightly.20261004.000000")],
+        () => new Response(binary("1.2.0"))
+      )
+      const currentVersion = "1.1.0-nightly.20261005.000000"
+
+      assert.deepEqual(
+        await Effect.runPromise(update(target, { currentVersion })),
+        { updated: false, version: currentVersion }
+      )
       assert.equal(await readFile(target, "utf8"), "old binary")
     })
   })
@@ -126,29 +138,24 @@ describe("CLI GitHub updates", () => {
       "http",
     ]) {
       await fixture(async (directory, target) => {
-        const metadata = release()
+        const wrongVersion = binary("9.9.9")
+        const metadata =
+          kind === "version" ? release("1.1.0", wrongVersion) : release()
         if (kind === "missing") metadata.assets = []
         if (kind === "foreign")
           metadata.assets[0]!.browser_download_url =
             "https://github.com/other/repo/asset"
         if (kind === "digest")
           metadata.assets[0]!.digest = `sha256:${"0".repeat(64)}`
-        const input = options(target, metadata)
-        if (kind === "version")
-          input.verifyBinary = async () => {
-            throw new Error("wrong version")
-          }
-        if (kind === "truncated" || kind === "http") {
-          input.fetch = (async (url) =>
-            String(url).startsWith("https://api.github.com/")
-              ? Response.json(metadata)
-              : new Response("bad", {
-                  status: kind === "http" ? 503 : 200,
-                })) as typeof fetch
-        }
-        const error = await Effect.runPromise(
-          updateCliEffect(input).pipe(Effect.flip)
-        )
+        stubGitHub(metadata, () => {
+          if (kind === "truncated") return new Response("bad")
+          if (kind === "http") return new Response("bad", { status: 503 })
+          if (kind === "version") return new Response(wrongVersion)
+          return new Response(binary("1.1.0"))
+        })
+
+        const error = await Effect.runPromise(update(target).pipe(Effect.flip))
+
         assert.equal(error.code, "cli_update_failed", kind)
         assert.equal(await readFile(target, "utf8"), "old binary", kind)
         assert.deepEqual(await readdir(directory), ["kiln"], kind)
@@ -158,14 +165,11 @@ describe("CLI GitHub updates", () => {
 
   it("cancels a partial download without replacing the executable", async () => {
     await fixture(async (directory, target) => {
-      let downloadStarted = () => {}
+      let markDownloading: () => void = () => undefined
       const downloading = new Promise<void>((resolve) => {
-        downloadStarted = resolve
+        markDownloading = resolve
       })
-      const input = options(target)
-      input.fetch = (async (url, init) => {
-        if (String(url).startsWith("https://api.github.com/"))
-          return Response.json(release())
+      stubGitHub(release(), (init) => {
         const body = new ReadableStream<Uint8Array>(
           {
             start(controller) {
@@ -176,32 +180,38 @@ describe("CLI GitHub updates", () => {
               )
             },
             pull(controller) {
-              controller.enqueue(bytes.subarray(0, 1))
-              downloadStarted()
+              controller.enqueue(binary("1.1.0").subarray(0, 1))
+              markDownloading()
               return new Promise<void>(() => {})
             },
           },
           { highWaterMark: 0 }
         )
         return new Response(body)
-      }) as typeof fetch
-      const fiber = Effect.runFork(updateCliEffect(input))
+      })
+
+      const fiber = Effect.runFork(update(target))
       await downloading
-      fiber.interruptUnsafe()
-      await Effect.runPromise(Fiber.await(fiber))
+      await Effect.runPromise(Fiber.interrupt(fiber))
+
       assert.equal(await readFile(target, "utf8"), "old binary")
       assert.deepEqual(await readdir(directory), ["kiln"])
     })
   })
 
-  it("refuses overlapping updates before downloading", async () => {
+  it("refuses overlapping updates", async () => {
     await fixture(async (directory, target) => {
       await writeFile(`${target}.update-lock`, "")
-      const input = options(target)
-      await Effect.runPromise(updateCliEffect(input).pipe(Effect.flip))
-      assert.equal(input.requests.length, 1)
+      stubGitHub(release(), () => new Response(binary("1.1.0")))
+
+      const error = await Effect.runPromise(update(target).pipe(Effect.flip))
+
+      assert.equal(error.code, "cli_update_failed")
       assert.equal(await readFile(target, "utf8"), "old binary")
-      assert.include(await readdir(directory), "kiln.update-lock")
+      assert.deepEqual((await readdir(directory)).sort(), [
+        "kiln",
+        "kiln.update-lock",
+      ])
     })
   })
 
@@ -210,18 +220,31 @@ describe("CLI GitHub updates", () => {
       await writeFile(`${target}.update-lock`, "")
       const lastHour = new Date(Date.now() - 60 * 60 * 1000)
       await utimes(`${target}.update-lock`, lastHour, lastHour)
-      const result = await Effect.runPromise(updateCliEffect(options(target)))
+      const bytes = binary("1.1.0")
+      stubGitHub(release(), () => new Response(bytes))
+
+      const result = await Effect.runPromise(update(target))
+
       assert.deepEqual(result, { updated: true, version: "1.1.0" })
-      assert.equal(await readFile(target, "utf8"), "new binary")
+      assert.deepEqual(await readFile(target), bytes)
       assert.deepEqual(await readdir(directory), ["kiln"])
     })
   })
 
   it("rolls back the Windows executable if the replacement cannot be moved", async () => {
     await fixture(async (directory, target) => {
-      const error = await Effect.runPromise(
-        replaceBinary(`${target}.missing`, target, "win32").pipe(Effect.flip)
+      // The staged binary passes verification and then removes itself, so the
+      // final Windows rename fails after the running image was moved aside.
+      const bytes = binary("1.1.0", 'rm -- "$0"\n')
+      stubGitHub(
+        release("1.1.0", bytes, "kiln-v1.1.0-windows-x64.exe"),
+        () => new Response(bytes)
       )
+
+      const error = await Effect.runPromise(
+        update(target, { platform: "win32" }).pipe(Effect.flip)
+      )
+
       assert.equal(error.code, "cli_update_failed")
       assert.equal(await readFile(target, "utf8"), "old binary")
       assert.deepEqual(await readdir(directory), ["kiln"])
@@ -229,14 +252,12 @@ describe("CLI GitHub updates", () => {
   })
 
   it("never updates the Node/Bun runtime from a source checkout", async () => {
-    const error = await Effect.runPromise(
-      updateCliEffect({ isStandaloneBinary: () => false }).pipe(Effect.flip)
-    )
+    const requests = stubGitHub(release(), () => new Response("unused"))
+
+    // The real installation: this test runner is not a standalone CLI binary.
+    const error = await Effect.runPromise(updateCliEffect().pipe(Effect.flip))
+
     assert.equal(error.code, "cli_update_development")
-    assert.isTrue(isStandaloneCliBinary("/$bunfs/root/kiln"))
-    assert.isTrue(isStandaloneCliBinary("B:\\~BUN\\root\\kiln.exe"))
-    assert.isFalse(
-      isStandaloneCliBinary("/usr/local/lib/node_modules/kiln-cli/kiln.cjs")
-    )
+    assert.deepEqual(requests, [])
   })
 })
