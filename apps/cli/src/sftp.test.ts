@@ -22,11 +22,23 @@ const session: KilnSession = {
   url: "https://kiln.example.test",
 }
 
-const hostKey = utils.generateKeyPairSync("ed25519")
-const parsedHostKey = utils.parseKey(hostKey.public)
-if (parsedHostKey instanceof Error) throw parsedHostKey
+// ssh2 sometimes serializes an Ed25519 key it cannot parse back, so retry
+// until both halves parse, as the Relay does for its own host key.
+const hostKey = (() => {
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    const candidate = utils.generateKeyPairSync("ed25519")
+    const parsed = utils.parseKey(candidate.private)
+    if (
+      !(parsed instanceof Error) &&
+      !(utils.parseKey(candidate.public) instanceof Error)
+    ) {
+      return { ...candidate, publicSSH: parsed.getPublicSSH() }
+    }
+  }
+  throw new Error("Could not generate a valid Ed25519 test host key")
+})()
 const hostKeyFingerprint = `SHA256:${createHash("sha256")
-  .update(parsedHostKey.getPublicSSH())
+  .update(hostKey.publicSSH)
   .digest("base64")}`
 
 interface RelaySftpOptions {

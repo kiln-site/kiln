@@ -67,6 +67,61 @@ describe("API authentication", () => {
     expect(stale).toEqual([])
   })
 
+  it(
+    "does not count a guard that is only imported",
+    { timeout: 60_000 },
+    () => {
+      const fixture = resolve(webRoot, "src/server/auth-coverage-fixture.ts")
+      const fixtureProgram = loadProgram({
+        [fixture]: `
+        import { createServerFn } from "@tanstack/react-start"
+        import { requireVerifiedUser as staticGuard } from "@/server/auth"
+
+        export const destructured = createServerFn({ method: "POST" }).handler(
+          async () => {
+            const { requireVerifiedUser } = await import("@/server/auth")
+            return null
+          }
+        )
+        export const renamed = createServerFn({ method: "POST" }).handler(
+          async () => {
+            const { requireVerifiedUser: guard } = await import("@/server/auth")
+            return null
+          }
+        )
+        export const staticOnly = createServerFn({ method: "POST" }).handler(
+          async () => null
+        )
+        export const called = createServerFn({ method: "POST" }).handler(
+          async () => {
+            const { requireVerifiedUser } = await import("@/server/auth")
+            return requireVerifiedUser()
+          }
+        )
+        export const calledStatic = createServerFn({ method: "POST" }).handler(
+          async () => staticGuard()
+        )
+      `,
+      })
+      const reaches = reachabilityChecker(
+        fixtureProgram.checker,
+        isSessionCheck
+      )
+      const results = Object.fromEntries(
+        serverFunctionHandlers(fixtureProgram.program)
+          .filter(({ id }) => id.startsWith("auth-coverage-fixture.ts:"))
+          .map(({ id, handler }) => [id.split(":")[1], reaches(handler)])
+      )
+      expect(results).toEqual({
+        destructured: false,
+        renamed: false,
+        staticOnly: false,
+        called: true,
+        calledStatic: true,
+      })
+    }
+  )
+
   // Read-only CLI links must not change anything, so every Effect the CLI
   // API runs for POST, PUT, PATCH, or DELETE must reach `requireCliWrite`.
   it("refuses read-only CLI links on mutating endpoints", () => {
@@ -84,7 +139,7 @@ describe("API authentication", () => {
   })
 })
 
-function loadProgram() {
+function loadProgram(virtualFiles: Record<string, string> = {}) {
   const configPath = resolve(webRoot, "tsconfig.json")
   const config = ts.getParsedCommandLineOfConfigFile(
     configPath,
@@ -99,11 +154,23 @@ function loadProgram() {
     }
   )
   if (!config) throw new Error("Could not read apps/web/tsconfig.json")
+  const host = ts.createCompilerHost(config.options)
+  const { fileExists, getSourceFile, readFile } = host
+  host.fileExists = (file) => file in virtualFiles || fileExists(file)
+  host.readFile = (file) => virtualFiles[file] ?? readFile(file)
+  host.getSourceFile = (file, language, ...rest) =>
+    file in virtualFiles
+      ? ts.createSourceFile(file, virtualFiles[file], language, true)
+      : getSourceFile(file, language, ...rest)
+  const virtualNames = Object.keys(virtualFiles)
   const program = ts.createProgram({
-    rootNames: config.fileNames.filter(
-      (file) => file.includes("/src/") && !/\.test\.tsx?$/.test(file)
-    ),
+    rootNames: virtualNames.length
+      ? virtualNames
+      : config.fileNames.filter(
+          (file) => file.includes("/src/") && !/\.test\.tsx?$/.test(file)
+        ),
     options: config.options,
+    host,
   })
   return { program, checker: program.getTypeChecker() }
 }
@@ -238,20 +305,9 @@ function reachabilityChecker(
   }
 
   const declarationsOf = (identifier: ts.Identifier): Array<ts.Node> => {
-    const parent = identifier.parent
-    // Only follow references, not the names being declared.
-    if (
-      (ts.isVariableDeclaration(parent) ||
-        ts.isFunctionDeclaration(parent) ||
-        ts.isParameter(parent) ||
-        ts.isPropertyAssignment(parent)) &&
-      parent.name === identifier
-    ) {
-      return []
-    }
-    if (ts.isPropertyAccessExpression(parent) && parent.name === identifier) {
-      return []
-    }
+    // Only follow references. A guard that is destructured or imported but
+    // never used must not count as reaching it.
+    if (isDeclarationName(identifier)) return []
     let symbol = checker.getSymbolAtLocation(identifier)
     if (!symbol) return []
     if (symbol.flags & ts.SymbolFlags.Alias)
@@ -332,6 +388,29 @@ function isSessionCheck(declaration: ts.Node) {
     ts.isIdentifier(declaration.name) &&
     sessionChecks.has(declaration.name.text)
   )
+}
+
+function isDeclarationName(identifier: ts.Identifier) {
+  const parent = identifier.parent
+  if (
+    ts.isBindingElement(parent) ||
+    ts.isImportSpecifier(parent) ||
+    ts.isExportSpecifier(parent)
+  ) {
+    return parent.name === identifier || parent.propertyName === identifier
+  }
+  if (
+    ts.isVariableDeclaration(parent) ||
+    ts.isFunctionDeclaration(parent) ||
+    ts.isParameter(parent) ||
+    ts.isPropertyAssignment(parent) ||
+    ts.isImportClause(parent) ||
+    ts.isNamespaceImport(parent) ||
+    ts.isPropertyAccessExpression(parent)
+  ) {
+    return parent.name === identifier
+  }
+  return false
 }
 
 function isCliWriteCheck(declaration: ts.Node) {
