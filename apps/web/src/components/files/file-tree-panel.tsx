@@ -3,10 +3,11 @@ import { useInfiniteQuery, useIsFetching } from "@tanstack/react-query"
 import { relayFileSearchQueryOptions } from "@/components/files/file-query-options"
 import { queryKeys } from "@/lib/query-options"
 import { Result } from "effect"
-import type { FileTreePreparedInput } from "@pierre/trees"
+import type { FileTreeDropTarget, FileTreePreparedInput } from "@pierre/trees"
 import { FileTree, useFileTree, useFileTreeSearch } from "@pierre/trees/react"
 import {
   FilePlus,
+  FolderInput,
   FolderPlus,
   FolderTree,
   House,
@@ -22,6 +23,7 @@ import {
 } from "lucide-react"
 
 import { Button } from "@workspace/ui/components/button"
+import { showToast } from "@workspace/ui/components/sonner"
 import {
   Popover,
   PopoverContent,
@@ -42,6 +44,7 @@ import {
   fileTreeParentDirectoryPaths,
   folderInputAttributes,
   hasDraggedFiles,
+  movedFilePath,
   normalizeDirectoryPath,
   uploadDroppedFiles,
 } from "@/components/files/file-tree-utils"
@@ -50,7 +53,10 @@ import type {
   UploadFiles,
 } from "@/components/files/file-tree-utils"
 import type { FileSelectionStore } from "@/components/files/file-workspace-stores"
-import type { FileTreeIndex } from "@/components/files/file-tree-index"
+import type {
+  FileIndexPathEvent,
+  FileTreeIndex,
+} from "@/components/files/file-tree-index"
 
 const fileTreeWidthCookieName = "file_tree_width"
 const fileTreeCookieMaxAge = 60 * 60 * 24 * 7
@@ -132,7 +138,9 @@ const fileTreeLayoutCss = `
     }
   }
 
-  [data-item-path][data-external-file-drop-target="true"] {
+  [data-item-path][data-external-file-drop-target="true"],
+  [data-item-path][data-item-drag-target="true"],
+  [data-item-path]:has([data-item-flattened-subitem-drag-target="true"]) {
     background: color-mix(in oklch, var(--primary) 22%, var(--card)) !important;
     color: var(--foreground) !important;
     outline: 1px solid color-mix(in oklch, var(--primary) 72%, transparent);
@@ -140,16 +148,20 @@ const fileTreeLayoutCss = `
     box-shadow: inset 0 0 0 1px color-mix(in oklch, var(--primary) 16%, transparent), 0 0 12px color-mix(in oklch, var(--primary) 10%, transparent);
   }
 
-  [data-item-path][data-external-file-drop-target="true"] [data-item-section="icon"] {
+  [data-item-path][data-external-file-drop-target="true"] [data-item-section="icon"],
+  [data-item-path][data-item-drag-target="true"] [data-item-section="icon"],
+  [data-item-path]:has([data-item-flattened-subitem-drag-target="true"]) [data-item-section="icon"] {
     color: var(--primary) !important;
   }
 
-  [data-external-file-drop-segment="true"] {
+  [data-external-file-drop-segment="true"],
+  [data-item-flattened-subitem-drag-target="true"] {
     border-radius: 2px;
     background: color-mix(in oklch, var(--primary) 24%, transparent);
     box-shadow: 0 0 0 1px color-mix(in oklch, var(--primary) 48%, transparent);
     color: var(--foreground);
     font-weight: 600;
+    text-decoration: none;
   }
 
   :host([data-external-file-drop-root="true"]) [data-file-tree-virtualized-wrapper="true"] {
@@ -170,7 +182,7 @@ function defaultFileTreeWidth() {
   return window.innerWidth >= 1280 ? 304 : 280
 }
 
-function resolveTreeDropDirectory(event: React.DragEvent): string {
+function resolveTreeDropDirectory(event: React.DragEvent): string | null {
   for (const target of event.nativeEvent.composedPath()) {
     if (!(target instanceof HTMLElement)) continue
     const flattened = target.dataset.itemFlattenedSubitem
@@ -181,7 +193,7 @@ function resolveTreeDropDirectory(event: React.DragEvent): string {
       ? normalizeDirectoryPath(path)
       : directoryPath(path)
   }
-  return ""
+  return null
 }
 
 function resolveTreeEventDirectory(event: Event): string | null {
@@ -195,6 +207,36 @@ function resolveTreeEventDirectory(event: Event): string | null {
     }
   }
   return null
+}
+
+function treeDropDirectory(target: FileTreeDropTarget): string {
+  return target.kind === "root"
+    ? ""
+    : normalizeDirectoryPath(target.directoryPath ?? "")
+}
+
+function canMoveTreeItem(path: string, directory: string): boolean {
+  return (
+    directoryPath(path) !== directory &&
+    !(path.endsWith("/") && directory.startsWith(path))
+  )
+}
+
+function treeMoveDestination(path: string, directory: string): string {
+  return `${directory}${path.slice(directoryPath(path).length)}`
+}
+
+// Trees selects the dragged row; put the tree back on the open path afterwards.
+function restoreTreeSelection(
+  model: ReturnType<typeof useFileTree>["model"],
+  selectedPath: string
+) {
+  // A moved open file keeps its remapped row until the Relay confirms the move.
+  if (selectedPath && !model.getItem(selectedPath)) return
+  for (const path of model.getSelectedPaths()) {
+    if (path !== selectedPath) model.getItem(path)?.deselect()
+  }
+  if (selectedPath) model.getItem(selectedPath)?.select()
 }
 
 function FilesHomeButton({
@@ -539,12 +581,18 @@ export function FileTreePanel({
   const searchValue = React.useRef("")
   const rowClickActive = React.useRef(false)
   const loadingPlaceholderPaths = React.useRef(new Set<string>())
+  const treeDragPath = React.useRef<string | null>(null)
+  const treeDragDirectory = React.useRef("")
+  const queuedIndexEvents = React.useRef<Array<FileIndexPathEvent>>([])
+  const flushIndexEvents = React.useRef(() => {})
+  const moveHandlers = React.useRef({ canWrite, move: actions.move })
   const { model } = useFileTree({
     preparedInput,
     initialExpansion: "closed",
     initialExpandedPaths,
     initialSelectedPaths: initialPath ? [initialPath] : [],
     onSelectionChange: (paths) => {
+      if (treeDragPath.current !== null) return
       const selected = paths.at(-1)
       const handlers = selectionHandlers.current
       if (
@@ -570,6 +618,41 @@ export function FileTreePanel({
       const focusedPath = model.getFocusedPath()
       model.setSearch(searchValue.current)
       if (focusedPath) model.focusPath(focusedPath)
+    },
+    dragAndDrop: {
+      canDrag: (paths) => {
+        const [path] = paths
+        treeDragDirectory.current = ""
+        treeDragPath.current =
+          paths.length === 1 &&
+          path !== undefined &&
+          moveHandlers.current.canWrite &&
+          !loadingPlaceholderPaths.current.has(path)
+            ? path
+            : null
+        return treeDragPath.current !== null
+      },
+      canDrop: ({ draggedPaths: [path], target }) => {
+        const directory = treeDropDirectory(target)
+        // Trees opens hovered folders itself; load their lazy listing to match.
+        if (directory && directory !== treeDragDirectory.current) {
+          treeDragDirectory.current = directory
+          void fileIndex.ensureDirectory(directory)
+        }
+        return path !== undefined && canMoveTreeItem(path, directory)
+      },
+      onDropComplete: ({ draggedPaths: [path], target }) => {
+        if (path) void moveTreeItem(path, treeDropDirectory(target))
+      },
+      onDropError: (error) => {
+        endTreeDrag()
+        restoreTreeSelection(model, selectionStore.getSnapshot())
+        showToast({
+          type: "error",
+          message: "Could not move item",
+          description: error,
+        })
+      },
     },
     search: false,
     flattenEmptyDirectories: true,
@@ -605,6 +688,7 @@ export function FileTreePanel({
   const dropDirectory = React.useRef("")
   const dropExpandDirectory = React.useRef("")
   const dropExpandTimer = React.useRef<number | null>(null)
+  const dropActionLabelRef = React.useRef<HTMLSpanElement>(null)
   const dropPathLabelRef = React.useRef<HTMLSpanElement>(null)
 
   const handleFilesSelected = React.useCallback(
@@ -615,6 +699,44 @@ export function FileTreePanel({
     },
     [canWrite, onUploadFiles]
   )
+
+  // Trees cancels a drag on any path mutation, so index updates wait for drag end.
+  function endTreeDrag() {
+    treeDragPath.current = null
+    // The moved row may unmount, so its dragend never reaches the panel.
+    handleTreeDragEnd()
+    flushIndexEvents.current()
+  }
+
+  async function moveTreeItem(from: string, directory: string) {
+    const to = treeMoveDestination(from, directory)
+    // Pagination placeholders belong to the old directory listing.
+    const placeholders = [...loadingPlaceholderPaths.current].filter(
+      (path) => movedFilePath(path, from, to) !== null
+    )
+    for (const path of placeholders)
+      loadingPlaceholderPaths.current.delete(path)
+    model.batch(
+      placeholders.map((path) => ({
+        path: movedFilePath(path, from, to) ?? path,
+        type: "remove" as const,
+      }))
+    )
+    endTreeDrag()
+    restoreTreeSelection(model, selectionStore.getSnapshot())
+    if (await moveHandlers.current.move(from, to)) return
+    if (model.getItem(to) && !model.getItem(from)) model.move(to, from)
+    for (const path of placeholders) loadingPlaceholderPaths.current.add(path)
+    // Restore listed entries the optimistic row was covering at the destination.
+    const covered = fileIndex
+      .getPaths()
+      .filter((path) => movedFilePath(path, to, to) !== null)
+    model.batch(
+      [...placeholders, ...covered]
+        .filter((path) => !model.getItem(path))
+        .map((path) => ({ path, type: "add" as const }))
+    )
+  }
 
   function clearTreeDropTarget() {
     activeDropElement.current?.removeAttribute("data-external-file-drop-target")
@@ -632,6 +754,49 @@ export function FileTreePanel({
       dropExpandTimer.current = null
     }
     if (panelRef.current) panelRef.current.dataset.fileDropActive = "false"
+  }
+
+  function showDropLabel(mode: "move" | "upload", directory: string) {
+    const panel = panelRef.current
+    if (!panel) return
+    panel.dataset.fileDropActive = "true"
+    panel.dataset.fileDropMode = mode
+    if (dropActionLabelRef.current) {
+      dropActionLabelRef.current.textContent =
+        mode === "move" ? "Move to" : "Upload to"
+    }
+    if (dropPathLabelRef.current) {
+      dropPathLabelRef.current.textContent = `/data/${directory}`
+    }
+  }
+
+  // Trees draws the target row itself; mirror its target in the drop label.
+  function showTreeMoveTarget(event: React.DragEvent) {
+    const path = treeDragPath.current
+    const directory = resolveTreeDropDirectory(event)
+    const valid =
+      path !== null && directory !== null && canMoveTreeItem(path, directory)
+    const treeHost = panelRef.current?.querySelector<HTMLElement>(
+      "file-tree-container"
+    )
+    activeTreeHost.current = treeHost ?? null
+    if (valid && directory === "") {
+      treeHost?.setAttribute("data-external-file-drop-root", "true")
+    } else {
+      treeHost?.removeAttribute("data-external-file-drop-root")
+    }
+    if (!valid) {
+      if (panelRef.current) panelRef.current.dataset.fileDropActive = "false"
+      return
+    }
+    if (
+      directory === dropDirectory.current &&
+      panelRef.current?.dataset.fileDropActive === "true"
+    ) {
+      return
+    }
+    dropDirectory.current = directory
+    showDropLabel("move", directory)
   }
 
   function scheduleTreeDropExpansion(directory: string) {
@@ -658,7 +823,7 @@ export function FileTreePanel({
   }
 
   function showTreeDropTarget(event: React.DragEvent) {
-    const directory = resolveTreeDropDirectory(event)
+    const directory = resolveTreeDropDirectory(event) ?? ""
     dropDirectory.current = directory
     activeDropElement.current?.removeAttribute("data-external-file-drop-target")
     activeDropSegment.current?.removeAttribute(
@@ -707,13 +872,15 @@ export function FileTreePanel({
       break
     }
     scheduleTreeDropExpansion(directory)
-    if (panelRef.current) panelRef.current.dataset.fileDropActive = "true"
-    if (dropPathLabelRef.current) {
-      dropPathLabelRef.current.textContent = `/data/${directory}`
-    }
+    showDropLabel("upload", directory)
   }
 
   function handleTreeDragEnter(event: React.DragEvent) {
+    if (treeDragPath.current !== null) {
+      dragDepth.current += 1
+      showTreeMoveTarget(event)
+      return
+    }
     if (!canWrite || !hasDraggedFiles(event)) return
     event.preventDefault()
     dragDepth.current += 1
@@ -721,6 +888,10 @@ export function FileTreePanel({
   }
 
   function handleTreeDragOver(event: React.DragEvent) {
+    if (treeDragPath.current !== null) {
+      showTreeMoveTarget(event)
+      return
+    }
     if (!canWrite || !hasDraggedFiles(event)) return
     event.preventDefault()
     event.dataTransfer.dropEffect = "copy"
@@ -728,12 +899,26 @@ export function FileTreePanel({
   }
 
   function handleTreeDragLeave(event: React.DragEvent) {
-    if (!canWrite || !hasDraggedFiles(event)) return
+    if (
+      treeDragPath.current === null &&
+      (!canWrite || !hasDraggedFiles(event))
+    ) {
+      return
+    }
     dragDepth.current = Math.max(0, dragDepth.current - 1)
     if (dragDepth.current === 0) clearTreeDropTarget()
   }
 
+  function handleTreeDragEnd() {
+    dragDepth.current = 0
+    clearTreeDropTarget()
+  }
+
   function handleTreeDrop(event: React.DragEvent) {
+    if (treeDragPath.current !== null) {
+      handleTreeDragEnd()
+      return
+    }
     if (!canWrite || !hasDraggedFiles(event)) return
     event.preventDefault()
     const directory = dropDirectory.current
@@ -823,6 +1008,42 @@ export function FileTreePanel({
   }, [onFileSelected, onPathChange])
 
   React.useLayoutEffect(() => {
+    moveHandlers.current = { canWrite, move: actions.move }
+  }, [actions.move, canWrite])
+
+  React.useEffect(() => {
+    // Trees reports drops but not cancelled drags, so settle selection on drag end.
+    const finishTreeDrag = () => {
+      if (treeDragPath.current === null) return
+      treeDragPath.current = null
+      flushIndexEvents.current()
+      restoreTreeSelection(model, selectionStore.getSnapshot())
+    }
+    const finishTouchDrag = () => window.setTimeout(finishTreeDrag)
+    // Rows carry their path as text; keep it out of editors and inputs.
+    const blockOutsideTreeDrop = (event: DragEvent) => {
+      if (treeDragPath.current === null) return
+      const treeHost = model.getFileTreeContainer()
+      if (treeHost && event.composedPath().includes(treeHost)) return
+      event.stopPropagation()
+      treeHost?.removeAttribute("data-external-file-drop-root")
+      if (panelRef.current) panelRef.current.dataset.fileDropActive = "false"
+    }
+    window.addEventListener("dragend", finishTreeDrag)
+    window.addEventListener("touchend", finishTouchDrag)
+    window.addEventListener("touchcancel", finishTouchDrag)
+    window.addEventListener("dragover", blockOutsideTreeDrop, true)
+    window.addEventListener("drop", blockOutsideTreeDrop, true)
+    return () => {
+      window.removeEventListener("dragend", finishTreeDrag)
+      window.removeEventListener("touchend", finishTouchDrag)
+      window.removeEventListener("touchcancel", finishTouchDrag)
+      window.removeEventListener("dragover", blockOutsideTreeDrop, true)
+      window.removeEventListener("drop", blockOutsideTreeDrop, true)
+    }
+  }, [model, selectionStore])
+
+  React.useLayoutEffect(() => {
     const applyTreeLoadingState = (directory: string, loading: boolean) => {
       const path = fileTreeLoadingPath(directory)
       if (loading) {
@@ -834,7 +1055,7 @@ export function FileTreePanel({
       if (!loadingPlaceholderPaths.current.delete(path)) return
       if (model.getItem(path)) model.batch([{ path, type: "remove" }])
     }
-    const unsubscribe = fileIndex.subscribePaths((event) => {
+    const applyIndexEvent = (event: FileIndexPathEvent) => {
       if (event.type === "remove") {
         model.batch(
           event.paths
@@ -873,11 +1094,24 @@ export function FileTreePanel({
       }
       selected.select()
       model.scrollToPath(selectedPath, { focus: false, offset: "nearest" })
+    }
+    const unsubscribe = fileIndex.subscribePaths((event) => {
+      if (treeDragPath.current === null) applyIndexEvent(event)
+      else queuedIndexEvents.current.push(event)
     })
+    flushIndexEvents.current = () => {
+      for (const event of queuedIndexEvents.current.splice(0)) {
+        applyIndexEvent(event)
+      }
+    }
     fileIndex
       .getTreePendingDirectories()
       .forEach((directory) => applyTreeLoadingState(directory, true))
-    return unsubscribe
+    return () => {
+      unsubscribe()
+      queuedIndexEvents.current = []
+      flushIndexEvents.current = () => {}
+    }
   }, [fileIndex, model, selectionStore])
 
   React.useEffect(() => {
@@ -1073,6 +1307,7 @@ export function FileTreePanel({
       onDragOver={handleTreeDragOver}
       onDragLeave={handleTreeDragLeave}
       onDrop={handleTreeDrop}
+      onDragEnd={handleTreeDragEnd}
       onTransitionEnd={(event) => {
         if (event.currentTarget !== event.target) return
         if (
@@ -1287,8 +1522,11 @@ export function FileTreePanel({
       </div>
 
       <div className="pointer-events-none absolute right-2 bottom-12 left-2 z-50 hidden items-center gap-2 border border-primary/35 bg-popover/95 px-3 py-2 text-xs shadow-xl backdrop-blur-sm group-data-[file-drop-active=true]/tree-drop:flex md:bottom-2">
-        <Upload className="size-4 shrink-0 text-primary" />
-        <span className="min-w-0 flex-1 truncate">Upload to</span>
+        <Upload className="size-4 shrink-0 text-primary group-data-[file-drop-mode=move]/tree-drop:hidden" />
+        <FolderInput className="hidden size-4 shrink-0 text-primary group-data-[file-drop-mode=move]/tree-drop:block" />
+        <span ref={dropActionLabelRef} className="min-w-0 flex-1 truncate">
+          Upload to
+        </span>
         <span
           ref={dropPathLabelRef}
           className="type-code max-w-[65%] truncate text-primary"

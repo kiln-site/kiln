@@ -20,6 +20,7 @@ import {
   directoryPath,
   isUnarchiveSupportedPath,
   joinFilePath,
+  movedFilePath,
   unarchiveDestinationPath,
   type FileActionsController,
   type FileWorkspaceAction,
@@ -123,6 +124,25 @@ export function useFileActions({
       return Boolean(result)
     },
     [runMutation]
+  )
+
+  const move = React.useCallback(
+    async (path: string, destination: string) => {
+      if (!canWrite) return false
+      const moved = await runMutation(
+        { operation: "rename", path, destination },
+        "Item moved"
+      )
+      if (!moved) return false
+      const selectedPath = movedFilePath(
+        selectionStore.getSnapshot(),
+        path,
+        destination
+      )
+      if (selectedPath !== null) onPathChange(selectedPath)
+      return true
+    },
+    [canWrite, onPathChange, runMutation, selectionStore]
   )
 
   const archiveMutation = useMutation({
@@ -271,6 +291,7 @@ export function useFileActions({
       busy: mutation.isPending || archiveMutation.isPending,
       canWrite,
       request,
+      move,
     } satisfies FileActionsController,
     dialog,
     downloadPath,
