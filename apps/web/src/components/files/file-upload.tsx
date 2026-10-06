@@ -87,6 +87,7 @@ export function useFileUploadAction({
       setUploading(true)
       let completed = 0
       let uploaded = 0
+      let failedCount = 0
       let uploadedBytes = 0
       const totalBytes = files.reduce(
         (total, upload) => total + Math.max(upload.file.size, 1),
@@ -112,6 +113,8 @@ export function useFileUploadAction({
         toastId = showToast({
           id: toastId,
           type: "loading",
+          closeButton: false,
+          dismissible: false,
           className: "file-upload-toast",
           message: (
             <div className="flex items-center justify-between gap-3 tabular-nums">
@@ -125,11 +128,18 @@ export function useFileUploadAction({
             </div>
           ),
           description: (
-            <div
-              className="truncate"
-              title={joinFilePath(directory, upload.path)}
-            >
-              {upload.path}
+            <div className="flex items-center justify-between gap-3">
+              <span
+                className="truncate"
+                title={joinFilePath(directory, upload.path)}
+              >
+                {upload.path}
+              </span>
+              {failedCount > 0 && (
+                <span className="shrink-0 text-destructive">
+                  {failedCount} failed
+                </span>
+              )}
             </div>
           ),
           icon: (
@@ -159,6 +169,7 @@ export function useFileUploadAction({
                     path: joinFilePath(directory, upload.path),
                     relayId: instance.relayId,
                     onProgress: (loaded) => {
+                      if (!active.has(index)) return
                       uploadedBytes += loaded - current.loaded
                       current.loaded = loaded
                       // Keep progress updates inside Sonner and cap them at 10 per second.
@@ -176,6 +187,9 @@ export function useFileUploadAction({
               if (result.uploaded) {
                 uploaded += 1
                 uploadedBytes += Math.max(upload.file.size, 1) - current.loaded
+              } else {
+                failedCount += 1
+                uploadedBytes -= current.loaded
               }
               active.delete(index)
               if (completed < files.length) updateToast()
