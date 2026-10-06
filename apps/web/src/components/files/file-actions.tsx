@@ -356,9 +356,6 @@ export function FileActionDialogHost({
             <DialogTitle>
               Move {dialog.path.endsWith("/") ? "folder" : "file"}?
             </DialogTitle>
-            <DialogDescription>
-              {formatName(dialog.path)} will be moved to a new location.
-            </DialogDescription>
           </DialogHeader>
           <dl className="type-code grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1.5">
             <dt className="text-muted-foreground">From</dt>
