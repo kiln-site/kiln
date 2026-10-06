@@ -286,14 +286,17 @@ async function createCredentialUser(input: {
         context.password.hash(input.password)
       )
       const user = yield* promiseEffect(() =>
-        context.internalAdapter.createUser({
-          email: input.email,
-          emailVerified: false,
-          name: input.displayName
-            ? parseDisplayName(input.displayName)
-            : displayNameFromEmail(input.email),
-          role: input.role,
-        })
+        context.internalAdapter.createUser(
+          {
+            email: input.email,
+            emailVerified: false,
+            name: input.displayName
+              ? parseDisplayName(input.displayName)
+              : displayNameFromEmail(input.email),
+            role: input.role,
+          },
+          { method: "email-password" }
+        )
       )
       yield* Effect.gen(function* () {
         const now = yield* Clock.currentTimeMillis

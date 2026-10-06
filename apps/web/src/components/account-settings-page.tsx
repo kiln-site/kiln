@@ -639,7 +639,7 @@ function TwoFactorCard() {
     event.preventDefault()
     setPending("enable")
     const result = await recoverPromise(
-      () => authClient.twoFactor.enable({ password }),
+      () => authClient.twoFactor.enable({ password, method: "totp" }),
       (cause) => failedAuthResult(cause, "Could not begin 2FA setup")
     )
     setPending(null)
@@ -650,7 +650,7 @@ function TwoFactorCard() {
       })
       return
     }
-    if (!result.data) {
+    if (!result.data || result.data.method !== "totp") {
       showToast({ message: "Could not begin 2FA setup", type: "error" })
       return
     }
