@@ -10,7 +10,7 @@ import {
   Tailwind,
   Text,
   pixelBasedPreset,
-} from "@react-email/components"
+} from "react-email"
 
 export interface AuthCodeEmailProps {
   code: string
