@@ -1,5 +1,5 @@
 import * as React from "react"
-import { useQuery } from "@tanstack/react-query"
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { HardDriveDownload } from "lucide-react"
 
 import { FileWorkspaceLoadingState } from "@/components/file-tree-loading-panel"
@@ -15,7 +15,7 @@ import type {
   FileSelectionStore,
 } from "@/components/files/file-workspace-stores"
 import type { UploadFiles } from "@/components/files/file-upload"
-import type { ProgressiveFileIndex } from "@/components/files/progressive-file-index"
+import type { FileTreeIndex } from "@/components/files/file-tree-index"
 import {
   fileEditorHeaderClassName,
   fileEditorHeaderContentClassName,
@@ -23,10 +23,10 @@ import {
   FileTreeRevealButton,
 } from "@/components/files/file-viewer-toolbar"
 import {
+  queryKeys,
   relayFileEntryQueryOptions,
   relayFileQueryOptions,
 } from "@/lib/query-options"
-import { forkPromise } from "@/effect/promise"
 import { isDatabaseFilePath } from "@/lib/database-files"
 import type { InstanceWorkspaceInstance } from "@/lib/relay-selectors"
 import { warmSyntaxCodeEditorModule } from "@/lib/syntax-editor-module-preload"
@@ -151,7 +151,7 @@ interface FileViewerProps {
   fileTreeError: string | null
   fileTreeLoading: boolean
   fileTreeRetrying: boolean
-  fileIndex: ProgressiveFileIndex
+  fileIndex: FileTreeIndex
   instance: InstanceWorkspaceInstance
   onPathChange: (path: string) => void
   onRetryFileTree: () => void
@@ -268,24 +268,6 @@ export function FileViewer({
     (selectedPathIsReadable &&
       !file &&
       (!relayConnected || (!selectedPathIsDatabase && fileQuery.isError)))
-  const activitySyncKey = React.useRef<string | null>(null)
-
-  React.useEffect(() => {
-    if (!fileQuery.data || fileQuery.data.path !== selectedPath) return
-    const nextKey = `${fileQuery.data.path}:${fileQuery.data.modifiedAt}`
-    if (activitySyncKey.current === nextKey) return
-    activitySyncKey.current = nextKey
-    forkPromise(() =>
-      recordRelayFileView({
-        data: {
-          instanceId: instance.id,
-          path: fileQuery.data.path,
-          relayId: instance.relayId,
-        },
-      })
-    )
-  }, [fileQuery.data, instance.id, instance.relayId, selectedPath])
-
   React.useEffect(() => {
     if (isHome) {
       selectionStore.completeNavigation(selectedPath, "loaded")
@@ -309,25 +291,6 @@ export function FileViewer({
     selectedPathIsDatabase,
     selectedPathIsDirectory,
     selectionStore,
-  ])
-
-  React.useEffect(() => {
-    if (!selectedPathIsDatabase || !relayConnected) return
-    forkPromise(() =>
-      recordRelayFileView({
-        data: {
-          instanceId: instance.id,
-          path: selectedPath,
-          relayId: instance.relayId,
-        },
-      })
-    )
-  }, [
-    instance.id,
-    instance.relayId,
-    relayConnected,
-    selectedPath,
-    selectedPathIsDatabase,
   ])
 
   if (isHome) {
@@ -379,36 +342,54 @@ export function FileViewer({
       />
     )
     return (
-      <React.Suspense fallback={fallback}>
-        <DatabaseViewer
+      <>
+        <FileViewActivityRecorder
           key={`${instance.id}:${selectedPath}`}
-          canWrite={canWrite}
-          displayPath={selectedPath}
           instance={instance}
-          treeCollapsed={treeCollapsed}
-          onNotDatabase={() => setTextFallbackPath(selectedPath)}
-          onTreeExpand={onTreeExpand}
+          path={selectedPath}
+          revision="database"
+          enabled={relayConnected}
         />
-      </React.Suspense>
+        <React.Suspense fallback={fallback}>
+          <DatabaseViewer
+            key={`${instance.id}:${selectedPath}`}
+            canWrite={canWrite}
+            displayPath={selectedPath}
+            instance={instance}
+            treeCollapsed={treeCollapsed}
+            onNotDatabase={() => setTextFallbackPath(selectedPath)}
+            onTreeExpand={onTreeExpand}
+          />
+        </React.Suspense>
+      </>
     )
   }
 
   if (file && !selectedFileUnavailable && !loadingFile) {
     return (
-      <FileEditor
-        key={`${file.instanceId}:${file.path}`}
-        canShare={canShare}
-        canWrite={canWrite}
-        file={file}
-        displayPath={selectedPath}
-        instance={instance}
-        loading={fileQuery.isPending}
-        error={error}
-        preferencesStore={preferencesStore}
-        treeCollapsed={treeCollapsed}
-        onTreeExpand={onTreeExpand}
-        onUploadFiles={onUploadFiles}
-      />
+      <>
+        <FileViewActivityRecorder
+          key={`${instance.id}:${file.path}`}
+          instance={instance}
+          path={file.path}
+          revision={String(file.modifiedAt)}
+          enabled={relayConnected}
+        />
+        <FileEditor
+          key={`${file.instanceId}:${file.path}`}
+          canShare={canShare}
+          canWrite={canWrite}
+          file={file}
+          displayPath={selectedPath}
+          instance={instance}
+          loading={fileQuery.isPending}
+          error={error}
+          preferencesStore={preferencesStore}
+          treeCollapsed={treeCollapsed}
+          onTreeExpand={onTreeExpand}
+          onUploadFiles={onUploadFiles}
+        />
+      </>
     )
   }
 
@@ -423,6 +404,36 @@ export function FileViewer({
       onTreeExpand={onTreeExpand}
     />
   )
+}
+
+function FileViewActivityRecorder({
+  instance,
+  path,
+  revision,
+  enabled,
+}: {
+  instance: InstanceWorkspaceInstance
+  path: string
+  revision: string
+  enabled: boolean
+}) {
+  const queryClient = useQueryClient()
+  const lastRecorded = React.useRef<string | null>(null)
+  const mutation = useMutation({
+    mutationFn: recordRelayFileView,
+    onSuccess: () =>
+      queryClient.invalidateQueries({
+        queryKey: queryKeys.fileActivity(instance.relayId, instance.id),
+      }),
+  })
+  React.useEffect(() => {
+    if (!enabled || lastRecorded.current === revision) return
+    lastRecorded.current = revision
+    mutation.mutate({
+      data: { instanceId: instance.id, relayId: instance.relayId, path },
+    })
+  }, [enabled, instance.id, instance.relayId, mutation.mutate, path, revision])
+  return null
 }
 
 export function queryErrorMessage(error: Error | null, fallback: string) {

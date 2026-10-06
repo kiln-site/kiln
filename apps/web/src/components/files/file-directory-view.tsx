@@ -1,4 +1,5 @@
 import * as React from "react"
+import { useInfiniteQuery, useQueries, useQuery } from "@tanstack/react-query"
 import type { RelayFileEntry } from "@workspace/contracts"
 import {
   ArrowDownUp,
@@ -32,17 +33,18 @@ import {
   type FileActionsController,
   directoryPath,
   folderInputAttributes,
-  normalizeDirectoryPath,
 } from "@/components/files/file-tree-utils"
 import {
   FileDropOverlay,
   type UploadFiles,
   useFileDropTarget,
 } from "@/components/files/file-upload"
+import type { FileTreeIndex } from "@/components/files/file-tree-index"
 import {
-  type FileDirectorySnapshot,
-  ProgressiveFileIndex,
-} from "@/components/files/progressive-file-index"
+  directoryPageEntries,
+  directorySizeBatches,
+  relayDirectorySizesQueryOptions,
+} from "@/components/files/file-query-options"
 import { shortRelativeFileTime } from "@/components/files/file-time"
 import {
   fileEditorHeaderClassName,
@@ -121,25 +123,41 @@ function FileModifiedAtTime({ modifiedAt }: { modifiedAt: number }) {
   )
 }
 
+const emptyEntries: ReadonlyArray<RelayFileEntry> = []
+const noSizes = () => null
+const selectSizes = (data: { sizes: Record<string, number> }) => data.sizes
+const combineSizes = (
+  results: ReadonlyArray<{ data?: Record<string, number> | null }>
+): Record<string, number> =>
+  Object.assign({}, ...results.map((result) => result.data))
+
 const DirectorySizeCell = React.memo(function DirectorySizeCell({
   fileIndex,
   path,
+  paths,
 }: {
-  fileIndex: ProgressiveFileIndex
+  fileIndex: FileTreeIndex
   path: string
+  paths: ReadonlyArray<string>
 }) {
-  const subscribe = React.useCallback(
-    (listener: () => void) => fileIndex.subscribeDirectorySize(path, listener),
-    [fileIndex, path]
-  )
-  const getSnapshot = React.useCallback(
-    () => fileIndex.getDirectorySize(path),
-    [fileIndex, path]
-  )
-  const size = React.useSyncExternalStore(subscribe, getSnapshot, getSnapshot)
+  const { data: size } = useQuery({
+    ...relayDirectorySizesQueryOptions(
+      fileIndex.queryClient,
+      fileIndex.relayId,
+      fileIndex.instanceId,
+      paths
+    ),
+    enabled: false,
+    refetchInterval: false,
+    notifyOnChangeProps: ["data"],
+    select: React.useCallback(
+      (data: { sizes: Record<string, number> }) => data.sizes[path] ?? null,
+      [path]
+    ),
+  })
   return (
     <span className="type-code text-muted-foreground">
-      {formatFileSize(size)}
+      {formatFileSize(size ?? null)}
     </span>
   )
 })
@@ -147,12 +165,20 @@ const DirectorySizeCell = React.memo(function DirectorySizeCell({
 function FileSizeCell({
   entry,
   fileIndex,
+  sizeBatches,
 }: {
   entry: DirectoryEntry
-  fileIndex: ProgressiveFileIndex
+  fileIndex: FileTreeIndex
+  sizeBatches: Array<ReadonlyArray<string>>
 }) {
   if (entry.kind === "directory") {
-    return <DirectorySizeCell fileIndex={fileIndex} path={entry.path} />
+    return (
+      <DirectorySizeCell
+        fileIndex={fileIndex}
+        path={entry.path}
+        paths={sizeBatches.find((batch) => batch.includes(entry.path)) ?? []}
+      />
+    )
   }
   return (
     <span className="type-code text-muted-foreground">
@@ -162,29 +188,40 @@ function FileSizeCell({
 }
 
 function useFileDirectory(
-  fileIndex: ProgressiveFileIndex,
+  fileIndex: FileTreeIndex,
   directory: string,
   enabled = true
-): FileDirectorySnapshot {
-  const normalized = normalizeDirectoryPath(directory)
-  const subscribe = React.useCallback(
-    (listener: () => void) =>
-      fileIndex.subscribeDirectory(normalized, listener),
-    [fileIndex, normalized]
+) {
+  const query = useInfiniteQuery({
+    ...fileIndex.directoryOptions(directory),
+    enabled,
+    select: directoryPageEntries,
+  })
+  const entries = query.data ?? emptyEntries
+  const sizeBatches = React.useMemo(
+    () => directorySizeBatches(entries),
+    [entries]
   )
-  const getSnapshot = React.useCallback(
-    () => fileIndex.getDirectorySnapshot(normalized),
-    [fileIndex, normalized]
-  )
-  const snapshot = React.useSyncExternalStore(
-    subscribe,
-    getSnapshot,
-    getSnapshot
-  )
-  React.useEffect(() => {
-    if (enabled) void fileIndex.ensureDirectory(normalized)
-  }, [enabled, fileIndex, normalized])
-  return snapshot
+  // Poll without subscribing the directory list to size updates. Each size cell selects its own value.
+  useQueries({
+    queries: sizeBatches.map((paths) => ({
+      ...relayDirectorySizesQueryOptions(
+        fileIndex.queryClient,
+        fileIndex.relayId,
+        fileIndex.instanceId,
+        paths
+      ),
+      enabled,
+      notifyOnChangeProps: [] as const,
+    })),
+  })
+  return {
+    entries,
+    sizeBatches,
+    complete: !query.hasNextPage && !!query.data,
+    error: query.error,
+    loading: query.isPending || query.isFetchingNextPage,
+  }
 }
 
 function directoryEntries(
@@ -199,22 +236,38 @@ function directoryEntries(
 function directoryEntrySortNumber(
   entry: DirectoryEntry,
   sortKey: Exclude<DirectorySortKey, "name">,
-  fileIndex: ProgressiveFileIndex
+  sizes: Record<string, number>
 ) {
   const value =
     sortKey === "size" && entry.kind === "directory"
-      ? fileIndex.getDirectorySize(entry.path)
+      ? sizes[entry.path]
       : entry[sortKey]
   return value ?? -1
 }
 
 function useSortedDirectoryEntries(
   entries: Array<DirectoryEntry>,
-  fileIndex: ProgressiveFileIndex
+  fileIndex: FileTreeIndex,
+  sizeBatches: Array<ReadonlyArray<string>>
 ) {
   const [sortKey, setSortKey] = React.useState<DirectorySortKey>("name")
   const [sortDirection, setSortDirection] =
     React.useState<DirectorySortDirection>("ascending")
+  const sizes = useQueries({
+    queries: sizeBatches.map((paths) => ({
+      ...relayDirectorySizesQueryOptions(
+        fileIndex.queryClient,
+        fileIndex.relayId,
+        fileIndex.instanceId,
+        paths
+      ),
+      enabled: false,
+      refetchInterval: false,
+      notifyOnChangeProps: ["data"] as const,
+      select: sortKey === "size" ? selectSizes : noSizes,
+    })),
+    combine: combineSizes,
+  })
   const sortedEntries = React.useMemo(() => {
     const direction = sortDirection === "ascending" ? 1 : -1
     return [...entries].sort((left, right) => {
@@ -225,13 +278,13 @@ function useSortedDirectoryEntries(
               numeric: true,
               sensitivity: "base",
             })
-          : directoryEntrySortNumber(left, sortKey, fileIndex) -
-            directoryEntrySortNumber(right, sortKey, fileIndex)
+          : directoryEntrySortNumber(left, sortKey, sizes) -
+            directoryEntrySortNumber(right, sortKey, sizes)
       return comparison === 0
         ? left.name.localeCompare(right.name, undefined, { numeric: true })
         : comparison * direction
     })
-  }, [entries, fileIndex, sortDirection, sortKey])
+  }, [entries, sizes, sortDirection, sortKey])
 
   const toggleSort = React.useCallback(
     (nextKey: DirectorySortKey) => {
@@ -315,7 +368,7 @@ export function RootDirectoryList({
 }: {
   actions: FileActionsController
   enabled: boolean
-  fileIndex: ProgressiveFileIndex
+  fileIndex: FileTreeIndex
   loadError: string | null
   onOpen: (path: string) => void
   onRetry: () => void
@@ -327,7 +380,7 @@ export function RootDirectoryList({
     [directory.entries]
   )
   const { sortDirection, sortedEntries, sortKey, toggleSort } =
-    useSortedDirectoryEntries(entries, fileIndex)
+    useSortedDirectoryEntries(entries, fileIndex, directory.sizeBatches)
   const loadMore = React.useCallback(
     () => fileIndex.loadMoreDirectory(""),
     [fileIndex]
@@ -446,7 +499,11 @@ export function RootDirectoryList({
                 )}
                 <span className="truncate">{entry.name}</span>
               </button>
-              <FileSizeCell entry={entry} fileIndex={fileIndex} />
+              <FileSizeCell
+                entry={entry}
+                fileIndex={fileIndex}
+                sizeBatches={directory.sizeBatches}
+              />
               <FileModifiedAtTime modifiedAt={entry.modifiedAt} />
               <FileActionsMenu
                 surface="dropdown"
@@ -527,7 +584,7 @@ function DirectoryViewContent({
 }: {
   actions: FileActionsController
   canWrite: boolean
-  fileIndex: ProgressiveFileIndex
+  fileIndex: FileTreeIndex
   onOpen: (path: string) => void
   onTreeExpand: () => void
   onUploadFiles: UploadFiles
@@ -541,7 +598,7 @@ function DirectoryViewContent({
     [directory.entries]
   )
   const { sortDirection, sortedEntries, sortKey, toggleSort } =
-    useSortedDirectoryEntries(entries, fileIndex)
+    useSortedDirectoryEntries(entries, fileIndex, directory.sizeBatches)
   const loadMore = React.useCallback(
     () => fileIndex.loadMoreDirectory(path),
     [fileIndex, path]
@@ -750,7 +807,11 @@ function DirectoryViewContent({
                   )}
                   <span className="truncate">{entry.name}</span>
                 </button>
-                <FileSizeCell entry={entry} fileIndex={fileIndex} />
+                <FileSizeCell
+                  entry={entry}
+                  fileIndex={fileIndex}
+                  sizeBatches={directory.sizeBatches}
+                />
                 <FileModifiedAtTime modifiedAt={entry.modifiedAt} />
                 <FileActionsMenu
                   surface="dropdown"

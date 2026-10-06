@@ -1,4 +1,5 @@
 import * as React from "react"
+import { useMutation } from "@tanstack/react-query"
 import { Effect } from "effect"
 import { Upload } from "lucide-react"
 
@@ -71,10 +72,14 @@ export function useFileUploadAction({
   instance: InstanceWorkspaceInstance
   onRefresh: () => void
 }): { uploadFiles: UploadFiles; uploading: boolean } {
-  const [uploading, setUploading] = React.useState(false)
-
-  const uploadFiles = React.useCallback<UploadFiles>(
-    async (files, directory) => {
+  const mutation = useMutation({
+    mutationFn: async ({
+      files,
+      directory,
+    }: {
+      files: ReadonlyArray<UploadFile>
+      directory: string
+    }) => {
       if (!files.length || !canWrite) return
       if (files.length > maxFolderUploadFiles) {
         showToast({
@@ -84,7 +89,6 @@ export function useFileUploadAction({
         })
         return
       }
-      setUploading(true)
       let completed = 0
       let uploaded = 0
       let failedCount = 0
@@ -224,16 +228,17 @@ export function useFileUploadAction({
             Effect.sync(() => {
               clearTimeout(progressTimer)
               dismissToast(toastId)
-              setUploading(false)
             })
           )
         )
       )
     },
-    [canWrite, instance.id, instance.relayId, onRefresh]
+  })
+  const uploadFiles = React.useCallback<UploadFiles>(
+    (files, directory) => mutation.mutateAsync({ files, directory }),
+    [mutation.mutateAsync]
   )
-
-  return { uploadFiles, uploading }
+  return { uploadFiles, uploading: mutation.isPending }
 }
 
 export function useFileDropTarget({

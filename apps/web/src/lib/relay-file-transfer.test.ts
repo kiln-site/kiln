@@ -40,6 +40,7 @@ afterEach(() => {
 
 describe("Relay file capability negotiation", () => {
   it("opts into v2 without changing the request proof transport", async () => {
+    const controller = new AbortController()
     vi.stubGlobal(
       "fetch",
       vi.fn().mockResolvedValue(
@@ -60,8 +61,13 @@ describe("Relay file capability negotiation", () => {
       instanceId: "instance-one",
       path: "/server/world.zip",
       relayId: "relay-one",
+      signal: controller.signal,
     })
 
+    expect(fetch).toHaveBeenCalledWith(
+      expect.any(URL),
+      expect.objectContaining({ signal: controller.signal })
+    )
     expect(capability.issue).toHaveBeenCalledWith({
       data: expect.objectContaining({
         action: "instance.files.download",

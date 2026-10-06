@@ -59,7 +59,7 @@ export const Route = createFileRoute("/_app/server/$serverId/files")({
 
     // FileWorkspace observes these same query keys and reuses the in-flight work.
     void Promise.all([
-      context.queryClient.prefetchQuery(
+      context.queryClient.prefetchInfiniteQuery(
         relayRootDirectoryQueryOptions(instance.relayId, instance.id)
       ),
       context.queryClient.prefetchQuery(

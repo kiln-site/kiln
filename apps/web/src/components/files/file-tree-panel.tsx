@@ -1,4 +1,7 @@
 import * as React from "react"
+import { useInfiniteQuery, useIsFetching } from "@tanstack/react-query"
+import { relayFileSearchQueryOptions } from "@/components/files/file-query-options"
+import { queryKeys } from "@/lib/query-options"
 import { Result } from "effect"
 import type { FileTreePreparedInput } from "@pierre/trees"
 import { FileTree, useFileTree, useFileTreeSearch } from "@pierre/trees/react"
@@ -47,7 +50,7 @@ import type {
   UploadFiles,
 } from "@/components/files/file-tree-utils"
 import type { FileSelectionStore } from "@/components/files/file-workspace-stores"
-import type { ProgressiveFileIndex } from "@/components/files/progressive-file-index"
+import type { FileTreeIndex } from "@/components/files/file-tree-index"
 
 const fileTreeWidthCookieName = "file_tree_width"
 const fileTreeCookieMaxAge = 60 * 60 * 24 * 7
@@ -234,20 +237,61 @@ function FileTreeHomeButton({
 
 function FileTreeSearchInput({
   model,
-  onSearchQueryChange,
+  fileIndex,
+  enabled,
   onMobileOpenChange,
   onMobileClose,
-  searchComplete,
-  searching,
 }: {
   model: ReturnType<typeof useFileTree>["model"]
-  onSearchQueryChange: (query: string) => void
+  fileIndex: FileTreeIndex
+  enabled: boolean
   onMobileOpenChange: (open: boolean) => void
   onMobileClose: () => void
-  searchComplete: boolean
-  searching: boolean
 }) {
   const search = useFileTreeSearch(model)
+  const value = search.value?.trim() ?? ""
+  const [debouncedQuery, setDebouncedQuery] = React.useState(value)
+  React.useEffect(() => {
+    const timer = window.setTimeout(() => setDebouncedQuery(value), 120)
+    return () => window.clearTimeout(timer)
+  }, [value])
+  const results = useInfiniteQuery({
+    ...relayFileSearchQueryOptions(
+      fileIndex.relayId,
+      fileIndex.instanceId,
+      debouncedQuery
+    ),
+    enabled: enabled && !!value && value === debouncedQuery,
+  })
+  React.useEffect(() => {
+    if (value !== debouncedQuery || !value || !results.data) return
+    fileIndex.addEntries(results.data.pages.flatMap((page) => page.entries))
+  }, [debouncedQuery, fileIndex, results.data, value])
+  React.useEffect(() => {
+    if (
+      enabled &&
+      value === debouncedQuery &&
+      value &&
+      results.hasNextPage &&
+      !results.isFetching &&
+      !results.isError
+    )
+      void results.fetchNextPage()
+  }, [
+    debouncedQuery,
+    enabled,
+    results.fetchNextPage,
+    results.hasNextPage,
+    results.isError,
+    results.isFetching,
+    value,
+  ])
+  const searching =
+    !!value &&
+    (value !== debouncedQuery ||
+      results.isFetching ||
+      (!results.isError && (results.isPending || results.hasNextPage)))
+  const searchComplete = results.isSuccess && !results.hasNextPage
 
   return (
     <label className="flex h-full min-w-0 flex-1 items-center">
@@ -267,7 +311,6 @@ function FileTreeSearchInput({
           const value = event.target.value
           if (value) search.setValue(value)
           else search.close()
-          onSearchQueryChange(value)
         }}
         onFocus={() => {
           if (window.matchMedia("(max-width: 767px)").matches) {
@@ -288,7 +331,7 @@ function FileTreeSearchInput({
           }
         }}
       />
-      {search.value && !searching && !searchComplete ? (
+      {value && !searching && !searchComplete ? (
         <span
           role="status"
           aria-label="Search could not finish; results may be incomplete"
@@ -299,6 +342,53 @@ function FileTreeSearchInput({
         </span>
       ) : null}
     </label>
+  )
+}
+
+function FileTreeRefreshButton({
+  fileIndex,
+  disabled,
+  onRefresh,
+}: {
+  fileIndex: FileTreeIndex
+  disabled: boolean
+  onRefresh: () => void
+}) {
+  const refreshing =
+    useIsFetching({
+      queryKey: [
+        ...queryKeys.relay.tree(fileIndex.relayId, fileIndex.instanceId),
+        "directory",
+      ],
+      predicate: (query) =>
+        query.state.data !== undefined &&
+        !query.state.fetchMeta?.fetchMore?.direction,
+    }) > 0
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span className="inline-flex">
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            aria-label={refreshing ? "Refreshing files" : "Refresh files"}
+            disabled={disabled || refreshing}
+            onClick={onRefresh}
+          >
+            <RefreshCw
+              className={`size-[18px]${refreshing ? " animate-spin" : ""}`}
+            />
+          </Button>
+        </span>
+      </TooltipTrigger>
+      <TooltipContent side="bottom" sideOffset={6}>
+        {refreshing
+          ? "Refreshing Files"
+          : disabled
+            ? "Relay disconnected"
+            : "Refresh Files"}
+      </TooltipContent>
+    </Tooltip>
   )
 }
 
@@ -415,7 +505,7 @@ export function FileTreePanel({
   actions,
 }: {
   instance: InstanceWorkspaceInstance
-  fileIndex: ProgressiveFileIndex
+  fileIndex: FileTreeIndex
   preparedInput: FileTreePreparedInput
   selectionStore: FileSelectionStore
   refreshDisabled: boolean
@@ -446,7 +536,6 @@ export function FileTreePanel({
     onFileSelected,
     onPathChange,
   })
-  const searchTimer = React.useRef<number | null>(null)
   const searchValue = React.useRef("")
   const rowClickActive = React.useRef(false)
   const loadingPlaceholderPaths = React.useRef(new Set<string>())
@@ -489,18 +578,6 @@ export function FileTreePanel({
     composition: { contextMenu: { enabled: true, triggerMode: "both" } },
     unsafeCSS: fileTreeLayoutCss,
   })
-  const getIndexStatus = React.useCallback(
-    () => fileIndex.getStatusSnapshot(),
-    [fileIndex]
-  )
-  const indexStatus = React.useSyncExternalStore(
-    React.useCallback(
-      (listener) => fileIndex.subscribeStatus(listener),
-      [fileIndex]
-    ),
-    getIndexStatus,
-    getIndexStatus
-  )
   const [mobileContentVisible, setMobileContentVisible] =
     React.useState(mobileOpen)
   const mobileBrowseButtonRef = React.useRef<HTMLButtonElement>(null)
@@ -758,13 +835,12 @@ export function FileTreePanel({
       if (model.getItem(path)) model.batch([{ path, type: "remove" }])
     }
     const unsubscribe = fileIndex.subscribePaths((event) => {
-      if (event.type === "reset") {
-        loadingPlaceholderPaths.current.clear()
-        model.resetPaths([], {
-          initialExpandedPaths: fileTreeParentDirectoryPaths(
-            selectionStore.getSnapshot()
-          ),
-        })
+      if (event.type === "remove") {
+        model.batch(
+          event.paths
+            .filter((path) => model.getItem(path))
+            .map((path) => ({ path, type: "remove" }))
+        )
         return
       }
       if (event.type === "directory-pagination") {
@@ -871,22 +947,6 @@ export function FileTreePanel({
     }
   }, [fileIndex, model])
 
-  const handleSearchQueryChange = React.useCallback(
-    (query: string) => {
-      if (searchTimer.current !== null) window.clearTimeout(searchTimer.current)
-      searchTimer.current = null
-      if (!query.trim()) {
-        fileIndex.search("")
-        return
-      }
-      searchTimer.current = window.setTimeout(() => {
-        searchTimer.current = null
-        fileIndex.search(query)
-      }, 120)
-    },
-    [fileIndex]
-  )
-
   React.useLayoutEffect(() => {
     if (mobileOpen) {
       setMobileContentVisible(true)
@@ -935,7 +995,6 @@ export function FileTreePanel({
       if (dropExpandTimer.current !== null) {
         window.clearTimeout(dropExpandTimer.current)
       }
-      if (searchTimer.current !== null) window.clearTimeout(searchTimer.current)
       if (resizeSession.current) restoreDocumentAfterResize()
     },
     []
@@ -1073,11 +1132,10 @@ export function FileTreePanel({
         </Button>
         <FileTreeSearchInput
           model={model}
-          onSearchQueryChange={handleSearchQueryChange}
+          fileIndex={fileIndex}
+          enabled={!refreshDisabled}
           onMobileOpenChange={onMobileOpenChange}
           onMobileClose={closeMobileFileBrowser}
-          searchComplete={indexStatus.searchComplete}
-          searching={indexStatus.searching}
         />
         <div className="flex shrink-0 items-center gap-0.5">
           <Popover>
@@ -1136,39 +1194,11 @@ export function FileTreePanel({
               <FileActionPreview icon={<Network />} label="Connect with SFTP" />
             </PopoverContent>
           </Popover>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              {indexStatus.refreshing ? (
-                <span className="inline-flex">
-                  <Button
-                    variant="ghost"
-                    size="icon-sm"
-                    aria-label="Refreshing files"
-                    disabled
-                  >
-                    <RefreshCw className="size-[18px] animate-spin" />
-                  </Button>
-                </span>
-              ) : (
-                <Button
-                  variant="ghost"
-                  size="icon-sm"
-                  aria-label="Refresh files"
-                  disabled={refreshDisabled}
-                  onClick={onRefresh}
-                >
-                  <RefreshCw className="size-[18px]" />
-                </Button>
-              )}
-            </TooltipTrigger>
-            <TooltipContent side="bottom" sideOffset={6}>
-              {indexStatus.refreshing
-                ? "Refreshing Files"
-                : refreshDisabled
-                  ? "Relay disconnected"
-                  : "Refresh Files"}
-            </TooltipContent>
-          </Tooltip>
+          <FileTreeRefreshButton
+            fileIndex={fileIndex}
+            disabled={refreshDisabled}
+            onRefresh={onRefresh}
+          />
           <Tooltip>
             <TooltipTrigger asChild>
               <Button
