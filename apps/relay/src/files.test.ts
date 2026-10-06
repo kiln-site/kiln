@@ -901,6 +901,73 @@ describeLinux("Relay direct file transfers", () => {
     )
   )
 
+  it.effect("moves entries into folders that do not exist yet", () =>
+    withSetup(({ driver, instance, root }) =>
+      Effect.gen(function* () {
+        yield* fromPromise(() =>
+          writeFile(resolve(root, "world", "level.dat"), "level")
+        )
+        yield* driver.mutate(instance, {
+          operation: "rename",
+          path: "world/level.dat",
+          destination: "configs/new/level.dat",
+        })
+        yield* driver.mutate(instance, {
+          operation: "rename",
+          path: "world/",
+          destination: "archive/2026/world/",
+        })
+
+        assert.strictEqual(
+          yield* fromPromise(() =>
+            readFile(resolve(root, "configs", "new", "level.dat"), "utf8")
+          ),
+          "level"
+        )
+        const tree = yield* driver.tree(instance)
+        assert.include(tree.paths, "archive/2026/world/")
+        assert.notInclude(tree.paths, "world/")
+      })
+    )
+  )
+
+  it.effect("refuses move destinations through symlinks or into itself", () =>
+    withSetup(({ directory, driver, instance, root }) =>
+      Effect.gen(function* () {
+        const outside = resolve(directory, "outside")
+        yield* fromPromise(() => mkdir(outside))
+        yield* fromPromise(() => symlink(outside, resolve(root, "linked")))
+        yield* fromPromise(() =>
+          writeFile(resolve(root, "world", "level.dat"), "level")
+        )
+
+        const escape = yield* driver
+          .mutate(instance, {
+            operation: "rename",
+            path: "world/level.dat",
+            destination: "linked/nested/level.dat",
+          })
+          .pipe(Effect.flip)
+        assert.instanceOf(escape, RelayFilesystemError)
+        assert.strictEqual(escape.code, "not_a_directory")
+        assert.isEmpty(yield* fromPromise(() => readdir(outside)))
+
+        const nested = yield* driver
+          .mutate(instance, {
+            operation: "rename",
+            path: "world/",
+            destination: "world/inner/world/",
+          })
+          .pipe(Effect.flip)
+        assert.instanceOf(nested, RelayFilesystemError)
+        assert.deepEqual(
+          yield* fromPromise(() => readdir(resolve(root, "world"))),
+          ["level.dat"]
+        )
+      })
+    )
+  )
+
   it.effect("closes downloads and removes failed upload temporaries", () =>
     withSetup(({ driver, instance, root }) =>
       Effect.gen(function* () {
