@@ -130,10 +130,10 @@ export function useFileUploadAction({
           description: (
             <div className="flex items-center justify-between gap-3">
               <span
-                className="truncate"
+                className="min-w-0 truncate"
                 title={joinFilePath(directory, upload.path)}
               >
-                {upload.path}
+                {upload.file.name}
               </span>
               {failedCount > 0 && (
                 <span className="shrink-0 text-destructive">
@@ -144,7 +144,7 @@ export function useFileUploadAction({
           ),
           icon: (
             <UploadProgressIcon
-              fileName={upload.path}
+              fileName={upload.file.name}
               progress={fileProgress}
             />
           ),
