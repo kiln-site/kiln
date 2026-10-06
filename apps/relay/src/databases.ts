@@ -1,5 +1,4 @@
 import { createHash, randomBytes } from "node:crypto"
-import { spawn } from "node:child_process"
 
 import type {
   DatabaseEngine,
@@ -21,7 +20,7 @@ import { Effect, Result, Semaphore } from "effect"
 
 import { promiseEffect } from "./effect/promise.js"
 import type { DatabaseConnections } from "./database-connections.js"
-import { command } from "./command.js"
+import { command, commandWithInput } from "./command.js"
 import type { RelayConfig } from "./config.js"
 import type { DockerDriver } from "./docker.js"
 import { relayOwnerLabel, relayOwnsLabels } from "./relay-resources.js"
@@ -101,7 +100,7 @@ interface AttachedContainerInspect {
   Name: string
 }
 
-export function databaseRecoveryLabels(
+function databaseRecoveryLabels(
   config: Pick<RelayConfig, "resourceNamespace">,
   input: Pick<RelayCreateDatabase, "databaseName" | "engine" | "id" | "name">,
   createdAt: string
@@ -161,7 +160,7 @@ export class DatabaseDriver {
   constructor(
     config: RelayConfig,
     docker: DockerDriver,
-    readonly connections: DatabaseConnections | null = null
+    readonly connections: DatabaseConnections
   ) {
     this.#config = config
     this.#docker = docker
@@ -328,7 +327,7 @@ export class DatabaseDriver {
       })
     }
     if (network) await ignoreCommand(["network", "rm", network])
-    await this.connections?.forgetDatabase(input.databaseId)
+    await this.connections.forgetDatabase(input.databaseId)
     if (input.deleteData && volume) {
       await command("docker", ["volume", "rm", volume])
     }
@@ -405,41 +404,23 @@ export class DatabaseDriver {
     const database = await this.#required(input.databaseId)
     const instance = await this.#docker.findInstance(input.instanceId)
     if (!instance) throw new Error("Server not found on this Relay")
-    if (this.connections) {
-      await this.connections.set(instance.id, database.id, input.connected)
-      const issues = await this.connections.reconcile(
-        instance.id,
-        instance.service
-      )
-      const updated = await this.#required(input.databaseId)
-      if (
-        updated.connectedInstanceIds.includes(instance.id) !== input.connected
-      ) {
-        const failure =
-          issues.find((issue) => issue.databaseId === database.id) ??
-          issues.find((issue) => issue.databaseId === null)
-        throw new Error(
-          `${failure?.message ?? "Database connection could not be updated"}. Your server was not stopped. Retry the connection from the database page.`
-        )
-      }
-      return updated
-    }
-    const labels = await this.#labels(database.id)
-    const network = requiredLabel(labels, "kiln.database.network")
-    const currentlyConnected = database.connectedInstanceIds.includes(
-      input.instanceId
+    await this.connections.set(instance.id, database.id, input.connected)
+    const issues = await this.connections.reconcile(
+      instance.id,
+      instance.service
     )
-    if (input.connected && !currentlyConnected) {
-      await command("docker", ["network", "connect", network, instance.service])
-    } else if (!input.connected && currentlyConnected) {
-      await command("docker", [
-        "network",
-        "disconnect",
-        network,
-        instance.service,
-      ])
+    const updated = await this.#required(input.databaseId)
+    if (
+      updated.connectedInstanceIds.includes(instance.id) !== input.connected
+    ) {
+      const failure =
+        issues.find((issue) => issue.databaseId === database.id) ??
+        issues.find((issue) => issue.databaseId === null)
+      throw new Error(
+        `${failure?.message ?? "Database connection could not be updated"}. Your server was not stopped. Retry the connection from the database page.`
+      )
     }
-    return this.#required(input.databaseId)
+    return updated
   }
 
   async exportDump(input: RelayDatabaseExport) {
@@ -787,7 +768,7 @@ function databaseClientArguments(
   ]
 }
 
-export function databaseAclLoadArguments(
+function databaseAclLoadArguments(
   engine: "redis" | "valkey",
   container: string,
   username: string,
@@ -919,46 +900,8 @@ function runProcess(
   input: string | undefined,
   timeoutMs: number
 ): Promise<{ stderr: string; stdout: string }> {
-  return new Promise((resolve, reject) => {
-    const child = spawn(executable, arguments_, {
-      stdio: ["pipe", "pipe", "pipe"],
-    })
-    const stdout: Array<Buffer> = []
-    const stderr: Array<Buffer> = []
-    let outputBytes = 0
-    const timeout = setTimeout(() => {
-      child.kill("SIGKILL")
-      reject(new Error(`${executable} timed out`))
-    }, timeoutMs)
-    const collect = (target: Array<Buffer>) => (chunk: Buffer) => {
-      outputBytes += chunk.length
-      if (outputBytes > MAX_DUMP_BYTES + 64 * 1024) {
-        child.kill("SIGKILL")
-        reject(new Error("Database transfer exceeded the current size limit"))
-        return
-      }
-      target.push(chunk)
-    }
-    child.stdout.on("data", collect(stdout))
-    child.stderr.on("data", collect(stderr))
-    child.once("error", (cause) => {
-      clearTimeout(timeout)
-      reject(cause)
-    })
-    child.once("close", (code) => {
-      clearTimeout(timeout)
-      const result = {
-        stderr: Buffer.concat(stderr).toString("utf8"),
-        stdout: Buffer.concat(stdout).toString("utf8"),
-      }
-      if (code === 0) resolve(result)
-      else
-        reject(
-          new Error(
-            result.stderr.trim() || `${executable} exited with code ${code}`
-          )
-        )
-    })
-    child.stdin.end(input)
+  return commandWithInput(executable, arguments_, input, {
+    maxOutputBytes: MAX_DUMP_BYTES + 64 * 1024,
+    timeoutMs,
   })
 }

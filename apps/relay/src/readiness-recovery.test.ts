@@ -1,334 +1,135 @@
-import { mkdir, mkdtemp, rm } from "node:fs/promises"
-import { tmpdir } from "node:os"
-import { join } from "node:path"
-
-import { afterEach, describe, expect, it, vi } from "vite-plus/test"
 import { Effect } from "effect"
+import { describe, expect, it, vi } from "vite-plus/test"
 
-const commandMock = vi.hoisted(() => vi.fn())
+vi.mock("./command.js", () => import("./test/docker.js"))
 
-vi.mock("./command.js", () => ({ command: commandMock }))
+import { fakeDocker } from "./test/docker.js"
+import { relayHarness, serverRecipe, type RelayHarness } from "./test/relay.js"
 
-import { loadConfig } from "./config.js"
-import type { BrickCatalog } from "./bricks.js"
-import { DockerDriver, MAX_CONSOLE_HISTORY_LINES } from "./docker.js"
-import type {
-  RelayStateStore,
-  RelayStoredLifecycleSession,
-} from "./effect/state.js"
+const id = "a".repeat(40)
 
-const temporaryDirectories: Array<string> = []
-
-afterEach(async () => {
-  commandMock.mockReset()
-  await Promise.all(
-    temporaryDirectories
-      .splice(0)
-      .map((directory) => rm(directory, { force: true, recursive: true }))
+/** A server whose Brick declares readiness only in its recipe (legacy labels). */
+async function legacyServer(
+  harness: RelayHarness,
+  readinessLogs: Array<string> | undefined,
+  seed: { logs: Array<{ text: string; time: string }>; startedAt: string }
+) {
+  const recipe = serverRecipe(
+    readinessLogs ? { readiness: { logs: readinessLogs } } : {}
   )
-})
+  const source = await harness.publishRecipe(recipe)
+  const snapshot = await harness.bricks.saveSnapshot(recipe)
+  return harness.seedServer({
+    id,
+    labels: {
+      "kiln.brick.snapshot-sha256": snapshot,
+      "kiln.brick.source": source,
+    },
+    running: true,
+    ...seed,
+  })
+}
+
+const storedLifecycle = (harness: RelayHarness) =>
+  Effect.runPromise(harness.state.listLifecycleSessions()).then(
+    (sessions) => sessions.find((session) => session.instanceId === id)?.events
+  )
 
 describe("rediscovered startup readiness", () => {
-  it("recovers and persists a ready event beyond the recent console tail", async () => {
-    const dataDirectory = await mkdtemp(join(tmpdir(), "kiln-readiness-"))
-    temporaryDirectories.push(dataDirectory)
-    const config = loadConfig({
-      KILN_RELAY_DATA_DIR: dataDirectory,
-      KILN_RELAY_RESOURCE_NAMESPACE: "readiness-test",
-      NODE_ENV: "test",
-    })
-    const id = "a".repeat(40)
-    const serverDirectory = join(config.rootDirectory, id)
-    await mkdir(serverDirectory, { recursive: true })
-
+  it("recovers a ready event older than the console tail and keeps it across restarts and exits", async () => {
+    const harness = await relayHarness()
     const startedAt = "2026-08-21T20:39:57.000Z"
     const readyAt = "2026-08-21T20:40:19.000Z"
-    const lines = [
-      `${readyAt} Done (21.758s)! For help, type "help"`,
-      ...Array.from({ length: MAX_CONSOLE_HISTORY_LINES + 1 }, (_, index) => {
-        const timestamp = new Date(
-          Date.parse(readyAt) + index + 1
-        ).toISOString()
-        return `${timestamp} later output ${index}`
-      }),
-    ]
-    const container = {
-      Config: {
-        Image: "kiln-ember:test",
-        Labels: {
-          "kiln.brick.snapshot-sha256": "b".repeat(64),
-          "kiln.brick.source": "https://bricks.example.test/paper.yml",
-          "kiln.instance.directory": id,
-          "kiln.instance.disk-bytes": String(1024 * 1024 * 1024),
-          "kiln.instance.memory-bytes": String(1024 * 1024 * 1024),
-          "kiln.instance.mount": "/server",
-          "kiln.relay.managed": "true",
-          "kiln.relay.owner": "readiness-test",
-          "kiln.relay.owned": "true",
-          "kiln.server.id": id,
+    const container = await legacyServer(harness, [")! For help, type "], {
+      logs: [
+        {
+          text: '\u001b[32mDone (21.758s)! For help, type "help"\u001b[0m',
+          time: readyAt,
         },
-        Tty: false,
-      },
-      HostConfig: {
-        Memory: 1024 * 1024 * 1024,
-        PortBindings: {},
-        RestartPolicy: { Name: "no" },
-      },
-      Id: "container-id",
-      Mounts: [{ Destination: "/server", RW: true, Source: serverDirectory }],
-      Name: "/readiness-test-kiln-aaaaaaaa",
-      NetworkSettings: { Networks: {}, Ports: {} },
-      State: {
-        ExitCode: 0,
-        FinishedAt: "0001-01-01T00:00:00Z",
-        OOMKilled: false,
-        Restarting: false,
-        Running: true,
-        StartedAt: startedAt,
-        Status: "running",
-      },
-    }
-    const storedLifecycleSessions = new Map<
-      string,
-      RelayStoredLifecycleSession
-    >()
-    const recipeMock = vi.fn(async () => ({
-      readiness: { logs: [")! For help, type "] },
-    }))
-    const bricks = { recipe: recipeMock } as unknown as BrickCatalog
-    const state = {
-      deleteLifecycleSession: (instanceId: string) =>
-        Effect.sync(() => {
-          storedLifecycleSessions.delete(instanceId)
-        }),
-      listLifecycleSessions: () =>
-        Effect.succeed([...storedLifecycleSessions.values()]),
-      setLifecycleSession: (session: RelayStoredLifecycleSession) =>
-        Effect.sync(() => {
-          storedLifecycleSessions.set(session.instanceId, session)
-        }),
-    } as unknown as RelayStateStore["Service"]
+        // Push the ready line well beyond the recent console history.
+        ...Array.from({ length: 6_000 }, (_, index) => ({
+          text: `later output ${index}`,
+          time: new Date(Date.parse(readyAt) + index + 1).toISOString(),
+        })),
+      ],
+      startedAt,
+    })
+    const ready = [
+      { state: "started", time: startedAt },
+      { state: "ready", time: readyAt },
+    ]
 
-    commandMock.mockImplementation(
-      async (
-        _executable: string,
-        arguments_: Array<string>
-      ): Promise<{ stderr: string; stdout: string }> => {
-        if (arguments_[0] === "container" && arguments_[1] === "ls") {
-          return { stderr: "", stdout: `${container.Id}\n` }
-        }
-        if (arguments_[0] === "inspect") {
-          return { stderr: "", stdout: JSON.stringify([container]) }
-        }
-        if (arguments_[0] === "logs") {
-          const tailIndex = arguments_.indexOf("--tail")
-          const selected =
-            tailIndex === -1
-              ? lines
-              : lines.slice(-Number(arguments_[tailIndex + 1]))
-          return { stderr: "", stdout: selected.join("\n") }
-        }
-        return { stderr: "", stdout: "" }
-      }
-    )
+    const [instance] = await harness.docker.inspectInstances()
 
-    const [instance] = await new DockerDriver(
-      config,
-      null,
-      bricks,
-      state
-    ).inspectInstances()
+    expect(instance).toMatchObject({ lifecycle: ready, observedState: "running" })
+    expect(await storedLifecycle(harness)).toEqual(ready)
 
-    expect(instance?.observedState).toBe("running")
+    // After a Relay restart the session comes from state, even once Docker
+    // has rotated the startup logs away.
+    container.logs = []
+    const [afterRelayRestart] = await (
+      await harness.restart()
+    ).docker.inspectInstances()
+    expect(afterRelayRestart).toMatchObject({
+      lifecycle: ready,
+      observedState: "running",
+    })
+
+    const restarted = await harness.restart()
+    const config = await restarted.docker.findInstance(id)
+    if (!config) throw new Error("Server was not discovered")
+    const afterServerStop = await restarted.docker.runAction(config, "stop")
+    expect(afterServerStop.observedState).toBe("stopped")
+    expect(afterServerStop.lifecycle.slice(0, 2)).toEqual(ready)
+    expect(afterServerStop.lifecycle.at(-1)).toEqual({
+      state: "stopped",
+      time: container.state.finishedAt,
+    })
+    // Stored events are ordered by time only; a same-millisecond stop may
+    // come back in either order.
+    const stored = await storedLifecycle(harness)
+    expect(stored).toHaveLength(afterServerStop.lifecycle.length)
+    expect(stored).toEqual(expect.arrayContaining(afterServerStop.lifecycle))
+  })
+
+  it("recovers readiness for a session that crashed before Relay saw it", async () => {
+    const harness = await relayHarness()
+    const startedAt = "2026-08-22T00:00:00.000Z"
+    const readyAt = "2026-08-22T00:00:20.000Z"
+    const failedAt = "2026-08-22T00:12:30.000Z"
+    const container = await legacyServer(harness, [")! For help, type "], {
+      logs: [{ text: 'Done (20.000s)! For help, type "help"', time: readyAt }],
+      startedAt,
+    })
+    fakeDocker.exit(container.name, { exitCode: 137, oomKilled: true })
+    container.state.finishedAt = failedAt
+
+    const [instance] = await harness.docker.inspectInstances()
+
+    expect(instance?.observedState).toBe("failed")
     expect(instance?.lifecycle).toEqual([
       { state: "started", time: startedAt },
       { state: "ready", time: readyAt },
-    ])
-    expect(storedLifecycleSessions.get(id)).toEqual({
-      events: [
-        { state: "started", time: startedAt },
-        { state: "ready", time: readyAt },
-      ],
-      instanceId: id,
-    })
-    expect(recipeMock).toHaveBeenCalledWith(
-      "https://bricks.example.test/paper.yml",
-      "b".repeat(64)
-    )
-    expect(commandMock).toHaveBeenCalledWith(
-      "docker",
-      [
-        "logs",
-        "--timestamps",
-        "--since",
-        startedAt,
-        "--until",
-        "2026-08-21T20:41:57.000Z",
-        container.Id,
-      ],
-      { timeout: 15_000 }
-    )
-
-    const logCallsBeforeRestart = commandMock.mock.calls.filter(
-      ([, arguments_]) => arguments_[0] === "logs"
-    ).length
-    const [afterRelayRestart] = await new DockerDriver(
-      config,
-      null,
-      bricks,
-      state
-    ).inspectInstances()
-
-    expect(afterRelayRestart?.observedState).toBe("running")
-    expect(afterRelayRestart?.lifecycle).toEqual(instance?.lifecycle)
-    expect(recipeMock).toHaveBeenCalledTimes(1)
-    expect(
-      commandMock.mock.calls.filter(
-        ([, arguments_]) => arguments_[0] === "logs"
-      )
-    ).toHaveLength(logCallsBeforeRestart)
-
-    const stoppedAt = "2026-08-21T23:50:14.000Z"
-    container.State.FinishedAt = stoppedAt
-    container.State.Running = false
-    container.State.Status = "exited"
-    const [afterServerStop] = await new DockerDriver(
-      config,
-      null,
-      bricks,
-      state
-    ).inspectInstances()
-
-    expect(afterServerStop?.observedState).toBe("stopped")
-    expect(afterServerStop?.lifecycle).toEqual([
-      { state: "started", time: startedAt },
-      { state: "ready", time: readyAt },
-      { state: "stopped", time: stoppedAt },
-    ])
-    expect(storedLifecycleSessions.get(id)?.events).toEqual(
-      afterServerStop?.lifecycle
-    )
-
-    const crashedStartedAt = "2026-08-22T00:00:00.000Z"
-    const crashedReadyAt = "2026-08-22T00:00:20.000Z"
-    const failedAt = "2026-08-22T00:12:30.000Z"
-    storedLifecycleSessions.delete(id)
-    lines.splice(
-      0,
-      lines.length,
-      `${crashedReadyAt} Done (20.000s)! For help, type "help"`
-    )
-    container.State.ExitCode = 137
-    container.State.FinishedAt = failedAt
-    container.State.OOMKilled = true
-    container.State.StartedAt = crashedStartedAt
-    const [afterCrash] = await new DockerDriver(
-      config,
-      null,
-      bricks,
-      state
-    ).inspectInstances()
-
-    expect(afterCrash?.observedState).toBe("failed")
-    expect(afterCrash?.lifecycle).toEqual([
-      { state: "started", time: crashedStartedAt },
-      { state: "ready", time: crashedReadyAt },
       { state: "failed", time: failedAt },
     ])
   })
 
-  it("safely retains a legacy session when its Brick has no ready log", async () => {
-    const dataDirectory = await mkdtemp(join(tmpdir(), "kiln-readiness-"))
-    temporaryDirectories.push(dataDirectory)
-    const config = loadConfig({
-      KILN_RELAY_DATA_DIR: dataDirectory,
-      KILN_RELAY_RESOURCE_NAMESPACE: "no-readiness-test",
-      NODE_ENV: "test",
-    })
-    const id = "c".repeat(40)
-    const serverDirectory = join(config.rootDirectory, id)
-    await mkdir(serverDirectory, { recursive: true })
+  it("keeps readiness unknown for a legacy session whose Brick has no ready log", async () => {
+    const harness = await relayHarness()
     const startedAt = "2026-08-21T20:39:57.000Z"
-    const container = {
-      Config: {
-        Image: "kiln-ember:test",
-        Labels: {
-          "kiln.brick.snapshot-sha256": "d".repeat(64),
-          "kiln.brick.source": "https://bricks.example.test/custom.yml",
-          "kiln.instance.directory": id,
-          "kiln.instance.disk-bytes": String(1024 * 1024 * 1024),
-          "kiln.instance.memory-bytes": String(1024 * 1024 * 1024),
-          "kiln.instance.mount": "/server",
-          "kiln.relay.managed": "true",
-          "kiln.relay.owner": "no-readiness-test",
-          "kiln.relay.owned": "true",
-          "kiln.server.id": id,
-        },
-        Tty: false,
-      },
-      HostConfig: {
-        Memory: 1024 * 1024 * 1024,
-        PortBindings: {},
-        RestartPolicy: { Name: "no" },
-      },
-      Id: "container-without-readiness",
-      Mounts: [{ Destination: "/server", RW: true, Source: serverDirectory }],
-      Name: "/no-readiness-test-kiln-cccccccc",
-      NetworkSettings: { Networks: {}, Ports: {} },
-      State: {
-        ExitCode: 0,
-        FinishedAt: "0001-01-01T00:00:00Z",
-        OOMKilled: false,
-        Restarting: false,
-        Running: true,
-        StartedAt: startedAt,
-        Status: "running",
-      },
-    }
-    const stored = new Map<string, RelayStoredLifecycleSession>()
-    const recipeMock = vi.fn(async () => ({}))
-    const state = {
-      deleteLifecycleSession: (instanceId: string) =>
-        Effect.sync(() => {
-          stored.delete(instanceId)
-        }),
-      listLifecycleSessions: () => Effect.succeed([...stored.values()]),
-      setLifecycleSession: (session: RelayStoredLifecycleSession) =>
-        Effect.sync(() => {
-          stored.set(session.instanceId, session)
-        }),
-    } as unknown as RelayStateStore["Service"]
-    commandMock.mockImplementation(
-      async (
-        _executable: string,
-        arguments_: Array<string>
-      ): Promise<{ stderr: string; stdout: string }> => {
-        if (arguments_[0] === "container" && arguments_[1] === "ls") {
-          return { stderr: "", stdout: `${container.Id}\n` }
-        }
-        if (arguments_[0] === "inspect") {
-          return { stderr: "", stdout: JSON.stringify([container]) }
-        }
-        return { stderr: "", stdout: "" }
-      }
-    )
+    await legacyServer(harness, undefined, {
+      logs: [{ text: 'Done (21.758s)! For help, type "help"', time: startedAt }],
+      startedAt,
+    })
 
-    const [instance] = await new DockerDriver(
-      config,
-      null,
-      { recipe: recipeMock } as unknown as BrickCatalog,
-      state
-    ).inspectInstances()
+    const [instance] = await harness.docker.inspectInstances()
 
     expect(instance).toMatchObject({
       lifecycle: [{ state: "started", time: startedAt }],
       observedState: "running",
     })
-    expect(stored.get(id)?.events).toEqual([
+    expect(await storedLifecycle(harness)).toEqual([
       { state: "started", time: startedAt },
     ])
-    expect(
-      commandMock.mock.calls.some(([, arguments_]) => arguments_[0] === "logs")
-    ).toBe(false)
   })
 })

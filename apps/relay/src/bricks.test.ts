@@ -1,6 +1,4 @@
-import { IncomingMessage } from "node:http"
 import { mkdtemp, rm, writeFile } from "node:fs/promises"
-import { Socket } from "node:net"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { pathToFileURL } from "node:url"
@@ -11,9 +9,6 @@ import { brickRecipeSchema } from "@workspace/contracts"
 import { BrickRecipeError } from "./effect/errors.js"
 import {
   BrickCatalog,
-  interpolateTemplate,
-  isPublicRecipeAddress,
-  readResponseDocument,
   resolveRecipeIconSource,
   resolveBrick,
 } from "./bricks.js"
@@ -142,11 +137,6 @@ describe("Brick recipes", () => {
     })
     expect(java25.image).toBe("registry.example.com/custom/server:25")
     expect(java25.runtimeName).toBe("Java 25")
-    expect(
-      interpolateTemplate("{{ variables.version }}.{{ brick.id }}", recipe, {
-        version: "2.0",
-      })
-    ).toBe("2.0.example")
   })
 
   it("derives the Java Ember from Minecraft unless explicitly overridden", () => {
@@ -189,34 +179,34 @@ describe("Brick recipes", () => {
   })
 
   it("rejects expressions because templates are not executable", () => {
-    expect(() =>
-      interpolateTemplate("{{ variables.version.toString() }}", recipe, {})
-    ).toThrow(/Unsupported template expression/u)
+    const executable = brickRecipeSchema.parse({
+      ...recipe,
+      runtime: {
+        ...recipe.runtime,
+        environment: { VERSION: "{{ variables.version.toString() }}" },
+      },
+    })
+
+    expect(() => resolveBrick(executable, {})).toThrow(
+      expect.objectContaining({ code: "invalid_template" })
+    )
   })
 
-  it("blocks private and reserved recipe network addresses", () => {
-    expect(isPublicRecipeAddress("8.8.8.8")).toBe(true)
-    expect(isPublicRecipeAddress("2606:4700:4700::1111")).toBe(true)
-    expect(isPublicRecipeAddress("127.0.0.1")).toBe(false)
-    expect(isPublicRecipeAddress("10.42.0.1")).toBe(false)
-    expect(isPublicRecipeAddress("169.254.169.254")).toBe(false)
-    expect(isPublicRecipeAddress("::1")).toBe(false)
-    expect(isPublicRecipeAddress("::ffff:7f00:1")).toBe(false)
-  })
-
-  it("turns response stream errors into typed recipe failures", async () => {
-    const response = new IncomingMessage(new Socket())
-    const document = readResponseDocument(
-      response,
-      "https://example.com/recipe.yml"
+  it.each([
+    "https://127.0.0.1/recipe.yml",
+    "https://10.42.0.1/recipe.yml",
+    "https://169.254.169.254/latest/meta-data",
+    "https://[::1]/recipe.yml",
+    "https://[::ffff:7f00:1]/recipe.yml",
+    "https://localhost/recipe.yml",
+  ])("refuses to fetch a recipe from private address %s", async (source) => {
+    const catalog = new BrickCatalog(
+      "https://catalog.example/catalog.yml",
+      join(tmpdir(), "kiln-unused-brick-data")
     )
 
-    response.emit("error", new Error("socket reset during response"))
-
-    await expect(document).rejects.toMatchObject({
-      code: "recipe_fetch_failed",
-      source: "https://example.com/recipe.yml",
-      reason: "socket reset during response",
+    await expect(catalog.recipe(source)).rejects.toMatchObject({
+      code: "blocked_recipe_address",
     })
   })
 

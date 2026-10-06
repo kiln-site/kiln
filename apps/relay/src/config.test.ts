@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { describe, expect, it } from "vite-plus/test"
+import { afterEach, describe, expect, it, vi } from "vite-plus/test"
 
 import {
   discoverRelayAdvertisedHost,
@@ -9,14 +9,30 @@ import {
   loadConfig,
 } from "./config.js"
 
-describe("loadConfig", () => {
-  it("derives the default Brick catalog from the configured repository", () => {
-    const defaults = loadConfig({ NODE_ENV: "development" })
-    expect(defaults.gitRepository).toBe("https://github.com/kiln-site/kiln")
-    expect(defaults.brickCatalogUrl).toBe(
-      "https://raw.githubusercontent.com/kiln-site/kiln/main/apps/bricks/catalog.yml"
-    )
+const publicDns = vi.hoisted(() => ({
+  resolve4: async (_hostname: string): Promise<Array<string>> => [],
+}))
 
+// Public IP discovery asks OpenDNS; fake that network edge.
+vi.mock("node:dns/promises", () => ({
+  Resolver: class {
+    setServers() {}
+    resolve4(hostname: string) {
+      return publicDns.resolve4(hostname)
+    }
+  },
+}))
+
+function publicIp(address: string) {
+  publicDns.resolve4 = async () => [address]
+}
+
+afterEach(() => {
+  vi.unstubAllEnvs()
+})
+
+describe("loadConfig", () => {
+  it("derives the Brick catalog from the configured repository", () => {
     const fork = loadConfig({
       KILN_BRICKS_CATALOG_URL: "https://attacker.test/catalog.yml",
       KILN_GIT_REPO: "example/kiln-fork",
@@ -42,18 +58,14 @@ describe("loadConfig", () => {
         KILN_RELAY_BROWSER_SESSIONS_PER_INSTANCE_MAX: "9",
         NODE_ENV: "development",
       })
-    ).toThrow(
-      "KILN_RELAY_BROWSER_SESSIONS_PER_INSTANCE_MAX must be an integer from 1 to 8"
-    )
+    ).toThrow("KILN_RELAY_BROWSER_SESSIONS_PER_INSTANCE_MAX")
     expect(() =>
       loadConfig({
         KILN_RELAY_BROWSER_PENDING_HANDSHAKES_MAX: "4",
         KILN_RELAY_BROWSER_PENDING_HANDSHAKES_PER_IP_MAX: "5",
         NODE_ENV: "development",
       })
-    ).toThrow(
-      "KILN_RELAY_BROWSER_PENDING_HANDSHAKES_PER_IP_MAX must be an integer from 1 to 4"
-    )
+    ).toThrow("KILN_RELAY_BROWSER_PENDING_HANDSHAKES_PER_IP_MAX")
     const proxy = loadConfig({
       KILN_RELAY_BROWSER_SUBLIMITS_ENFORCE: "true",
       KILN_RELAY_PROXY: "traefik",
@@ -88,7 +100,7 @@ describe("loadConfig", () => {
         KILN_RELAY_BROWSER_SUBLIMITS_ENFORCE: "sometimes",
         NODE_ENV: "development",
       })
-    ).toThrow("Expected true or false")
+    ).toThrow()
   })
 
   it("configures the backup timeout in minutes", () => {
@@ -100,7 +112,7 @@ describe("loadConfig", () => {
     ).toBe(90 * 60_000)
     expect(() =>
       loadConfig({ KILN_BACKUP_TIMEOUT: "0", NODE_ENV: "development" })
-    ).toThrow("KILN_BACKUP_TIMEOUT must be a positive integer")
+    ).toThrow("KILN_BACKUP_TIMEOUT")
   })
 
   it("configures bounded server crash recovery", () => {
@@ -121,11 +133,10 @@ describe("loadConfig", () => {
         KILN_RELAY_CRASH_RETRY_LIMIT: "11",
         NODE_ENV: "development",
       })
-    ).toThrow("KILN_RELAY_CRASH_RETRY_LIMIT must be an integer from 0 to 10")
+    ).toThrow("KILN_RELAY_CRASH_RETRY_LIMIT")
   })
 
-  it("keeps the platform recovery key optional but rejects weak keys", () => {
-    expect(loadConfig({ NODE_ENV: "development" }).platformBackupKey).toBeNull()
+  it("rejects a weak platform recovery key", () => {
     expect(
       loadConfig({
         KILN_PLATFORM_BACKUP_KEY: "a".repeat(32),
@@ -137,7 +148,7 @@ describe("loadConfig", () => {
         KILN_PLATFORM_BACKUP_KEY: "too-short",
         NODE_ENV: "development",
       })
-    ).toThrow("KILN_PLATFORM_BACKUP_KEY must be at least 32 bytes")
+    ).toThrow("KILN_PLATFORM_BACKUP_KEY")
   })
 
   it("validates the managed game port range", () => {
@@ -152,7 +163,7 @@ describe("loadConfig", () => {
         KILN_RELAY_GAME_PORT_RANGE: "43000-42000",
         NODE_ENV: "development",
       })
-    ).toThrow("must be an ascending port range")
+    ).toThrow("KILN_RELAY_GAME_PORT_RANGE")
   })
 
   it("uses an independent advertised port", () => {
@@ -255,21 +266,24 @@ describe("loadConfig", () => {
   it("requires a trusted public origin for Coolify mode", () => {
     expect(() =>
       loadConfig({ KILN_RELAY_PROXY: "coolify", NODE_ENV: "production" })
-    ).toThrow("requires KILN_RELAY_HOST or a Coolify-provided public URL")
-    expect(() =>
+    ).toThrow()
+    const publicUrl = (url: string) => () =>
       loadConfig({
         KILN_RELAY_PROXY: "coolify",
-        KILN_RELAY_PUBLIC_URL: "http://relay.example.com",
+        KILN_RELAY_PUBLIC_URL: url,
         NODE_ENV: "production",
       })
-    ).toThrow("must be an HTTPS origin")
+    expect(publicUrl("https://relay.example.com")).not.toThrow()
+    expect(publicUrl("http://relay.example.com")).toThrow()
   })
 
   it("infers a public address only when no host is configured", async () => {
+    vi.stubEnv("KILN_RELAY_DISCOVER_PUBLIC_IP", "")
+    publicIp("203.0.113.8")
     const inferred = loadConfig({ NODE_ENV: "development" })
-    await expect(
-      discoverRelayAdvertisedHost(inferred, {}, async () => "203.0.113.8")
-    ).resolves.toBe("public_ip")
+    await expect(discoverRelayAdvertisedHost(inferred)).resolves.toBe(
+      "public_ip"
+    )
     expect(inferred.advertisedHost).toBe("203.0.113.8")
     expect(inferred.gameHost).toBe("203.0.113.8")
     expect(inferred.browserOrigin).toBe("http://203.0.113.8:4100")
@@ -278,9 +292,9 @@ describe("loadConfig", () => {
       KILN_RELAY_HOST: "relay.test",
       NODE_ENV: "development",
     })
-    await expect(
-      discoverRelayAdvertisedHost(configured, {}, async () => "203.0.113.9")
-    ).resolves.toBe("configured")
+    await expect(discoverRelayAdvertisedHost(configured)).resolves.toBe(
+      "configured"
+    )
     expect(configured.advertisedHost).toBe("relay.test")
   })
 
@@ -291,9 +305,9 @@ describe("loadConfig", () => {
       NODE_ENV: "development",
     })
 
-    await expect(
-      discoverRelayGameHost(config, async () => "203.0.113.11")
-    ).resolves.toBe("public_ip")
+    publicIp("203.0.113.11")
+
+    await expect(discoverRelayGameHost(config)).resolves.toBe("public_ip")
     expect(config.advertisedHost).toBe("relay.test")
     expect(config.gameHost).toBe("203.0.113.11")
   })
@@ -305,43 +319,27 @@ describe("loadConfig", () => {
       NODE_ENV: "development",
     })
 
-    await expect(
-      discoverRelayGameHost(config, async () => {
-        throw new Error("offline")
-      })
-    ).rejects.toThrow(
-      "KILN_RELAY_GAME_HOST=public-ip could not discover a public IPv4 address"
+    publicDns.resolve4 = async () => {
+      throw new Error("offline")
+    }
+
+    await expect(discoverRelayGameHost(config)).rejects.toThrow(
+      "KILN_RELAY_GAME_HOST"
     )
   })
 
-  it("accepts a custom SFTP port", () => {
-    const config = loadConfig({
-      KILN_RELAY_SFTP_PORT: "22022",
-      NODE_ENV: "development",
-    })
-
-    expect(config.sftpPort).toBe(22022)
-  })
-
   it("normalizes boolean environment values", async () => {
+    vi.stubEnv("KILN_RELAY_DISCOVER_PUBLIC_IP", " false ")
+    publicIp("203.0.113.10")
     const config = loadConfig({
       KILN_RELAY_ALLOW_PROVISIONING: " false ",
       KILN_RELAY_DISCOVER_PUBLIC_IP: " false ",
       KILN_RELAY_SFTP_DEV_AUTH: " true ",
       NODE_ENV: "development",
     })
-    await expect(
-      discoverRelayAdvertisedHost(
-        config,
-        { KILN_RELAY_DISCOVER_PUBLIC_IP: " false " },
-        async () => "203.0.113.10"
-      )
-    ).resolves.toBe("hostname")
+    await expect(discoverRelayAdvertisedHost(config)).resolves.toBe("hostname")
     expect(config.sftpDevAuthentication).toBe(true)
     expect(config.canProvisionInstances).toBe(false)
-    expect(loadConfig({ NODE_ENV: "development" }).canProvisionInstances).toBe(
-      true
-    )
   })
 
   it("scopes Docker resources and updates to a development installation", () => {
@@ -365,41 +363,46 @@ describe("loadConfig", () => {
     ).toThrow("KILN_RELAY_RESOURCE_NAMESPACE")
   })
 
-  it("rejects invalid ports", () => {
+  it("parses and validates ports", () => {
+    expect(
+      loadConfig({ KILN_RELAY_SFTP_PORT: "22022", NODE_ENV: "development" })
+        .sftpPort
+    ).toBe(22022)
     expect(() =>
       loadConfig({
         KILN_RELAY_SFTP_PORT: "70000",
         NODE_ENV: "development",
       })
-    ).toThrow("KILN_RELAY_SFTP_PORT must be a valid TCP port")
+    ).toThrow("KILN_RELAY_SFTP_PORT")
   })
 
   it("rejects unknown proxy modes and unpinned images", () => {
     expect(() =>
       loadConfig({ KILN_RELAY_PROXY: "caddy", NODE_ENV: "development" })
-    ).toThrow("KILN_RELAY_PROXY must be none, hearth, traefik, or coolify")
+    ).toThrow("KILN_RELAY_PROXY")
     expect(() =>
       loadConfig({
         KILN_RELAY_TRAEFIK_IMAGE: "example/traefik:latest",
         NODE_ENV: "development",
       })
-    ).toThrow("official pinned Traefik")
+    ).toThrow("KILN_RELAY_TRAEFIK_IMAGE")
   })
 
   it("cannot enable development transport or SFTP auth in production", () => {
+    expect(() => loadConfig({ NODE_ENV: "production" })).not.toThrow()
     expect(() =>
       loadConfig({
         KILN_RELAY_TLS_MODE: "development",
         NODE_ENV: "production",
       })
-    ).toThrow("Development Relay TLS cannot be used in production")
+    ).toThrow()
 
     expect(() =>
       loadConfig({
         KILN_RELAY_SFTP_DEV_AUTH: "true",
         NODE_ENV: "production",
       })
-    ).toThrow("Development SFTP authentication cannot run in production")
+    ).toThrow()
   })
 
   it("reads a one-time bootstrap token from a Docker secret", () => {

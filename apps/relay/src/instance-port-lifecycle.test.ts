@@ -1,94 +1,68 @@
-import { mkdir, mkdtemp, rm } from "node:fs/promises"
-import { tmpdir } from "node:os"
-import { join } from "node:path"
+import { Effect, Exit } from "effect"
+import { describe, expect, it, vi } from "vite-plus/test"
 
-import { it as effectIt } from "@effect/vitest"
-import { Effect } from "effect"
-import { afterEach, describe, expect, it, vi } from "vite-plus/test"
-import {
-  relayInstanceSchema,
-  type RelayInstance,
-  type RelayInstancePortAllocation,
-} from "@workspace/contracts"
+vi.mock("./command.js", () => import("./test/docker.js"))
 
-const commandMock = vi.hoisted(() => vi.fn())
+import { fakeDocker } from "./test/docker.js"
+import { relayHarness, type RelayHarness } from "./test/relay.js"
 
-vi.mock("./command.js", () => ({ command: commandMock }))
+const first = "a".repeat(40)
+const second = "b".repeat(40)
 
-import type { BrickCatalog } from "./bricks.js"
-import { loadConfig } from "./config.js"
-import type { DockerDriver } from "./docker.js"
-import { LifecycleDriver } from "./lifecycle.js"
+function serverContainer(harness: RelayHarness, id: string) {
+  const container = fakeDocker.container(harness.resources.instanceContainer(id))
+  if (!container) throw new Error(`Server ${id} has no container`)
+  return container
+}
 
-const temporaryDirectories: Array<string> = []
+async function serverConfig(harness: RelayHarness, id: string) {
+  const instance = await harness.docker.findInstance(id)
+  if (!instance) throw new Error(`Server ${id} was not discovered`)
+  return instance
+}
 
-afterEach(async () => {
-  vi.useRealTimers()
-  commandMock.mockReset()
-  await Promise.all(
-    temporaryDirectories
-      .splice(0)
-      .map((directory) => rm(directory, { force: true, recursive: true }))
-  )
-})
+/** A foreign, non-Kiln container publishing `port` on the host. */
+function occupyHostPort(port: number, protocol: "tcp" | "udp") {
+  return fakeDocker.addContainer({
+    name: `voice-${port}-${protocol}`,
+    portBindings: {
+      [`${port}/${protocol}`]: [{ HostIp: "", HostPort: String(port) }],
+    },
+    running: true,
+  })
+}
 
 describe("instance port lifecycle", () => {
-  it("bootstraps a missing primary allocation from a primary port input", async () => {
-    const dataDirectory = await mkdtemp(join(tmpdir(), "kiln-primary-port-"))
-    temporaryDirectories.push(dataDirectory)
-    const config = loadConfig({
-      KILN_RELAY_DATA_DIR: dataDirectory,
-      KILN_RELAY_GAME_PORT_RANGE: "32123-32123",
-      KILN_RELAY_PROXY: "hearth",
-      KILN_RELAY_RESOURCE_NAMESPACE: "primary-port-test",
-      NODE_ENV: "test",
+  it("assigns each new server a free public port until the range is exhausted", async () => {
+    const harness = await relayHarness({
+      KILN_RELAY_GAME_PORT_RANGE: "32123-32124",
     })
-    const instance = relayInstanceSchema.parse({
-      brickNetworkMode: "direct",
-      connectAddress: "legacy.test",
-      containerId: "legacy-container",
-      desiredState: "stopped",
-      directory: "a".repeat(40),
-      game: "Minecraft",
-      id: "a".repeat(40),
-      implementation: "Paper",
-      javaVersion: "21",
-      managedByRelay: true,
-      name: "Legacy server",
-      observedState: "stopped",
-      publicHost: "legacy.test",
-      service: "kiln-legacy",
-      shortId: "aaaaaaaa",
-      startedAt: null,
-      status: "created",
-      version: "1.21.11",
-    })
-    const primary = {
-      externalPort: 32_123,
-      id: "primary",
-      internalPort: 25_570,
-      kind: "primary",
-      name: "Default Server",
-      protocol: "tcp",
-    } satisfies RelayInstancePortAllocation
-    const recreateOwnedInstance = vi.fn(
-      async (): Promise<RelayInstance> => ({
-        ...instance,
-        connectAddress: "legacy.test:32123",
-        ports: [primary],
-        publicPort: 32_123,
-      })
-    )
-    const docker = {
-      inspectInstances: vi.fn(async () => [instance]),
-      publishedHostPorts: vi.fn(async () => []),
-      recreateOwnedInstance,
-    } as unknown as DockerDriver
-    commandMock.mockRejectedValue(new Error("container not found"))
-    const lifecycle = new LifecycleDriver(config, docker, {} as BrickCatalog)
 
-    const updated = await lifecycle.updateInstancePorts(
-      instance.id,
+    const one = await harness.createServer({ id: first })
+    const two = await harness.createServer({ id: second })
+
+    expect(
+      new Set([one.publicPort, two.publicPort])
+    ).toEqual(new Set([32_123, 32_124]))
+    expect(serverContainer(harness, first).portBindings).toEqual({
+      "25565/tcp": [{ HostIp: "", HostPort: String(one.publicPort) }],
+    })
+    await expect(
+      harness.createServer({ id: "c".repeat(40) })
+    ).rejects.toThrow("No game ports are available")
+    expect(
+      fakeDocker.container(harness.resources.instanceContainer("c".repeat(40)))
+    ).toBeUndefined()
+  })
+
+  it("bootstraps a missing primary allocation on a legacy server", async () => {
+    const harness = await relayHarness({
+      KILN_RELAY_GAME_PORT_RANGE: "32123-32123",
+    })
+    await harness.seedServer({ id: first })
+
+    const updated = await harness.lifecycle.updateInstancePorts(
+      first,
       [
         {
           id: "primary",
@@ -100,361 +74,79 @@ describe("instance port lifecycle", () => {
       []
     )
 
-    expect(updated.ports).toEqual([primary])
-    expect(recreateOwnedInstance).toHaveBeenCalledWith(
-      instance,
+    expect(updated.ports).toEqual([
       {
-        "kiln.relay.web-routes.revision":
-          "809b57ac6cc136a5e7bb9babc8418a73d2cfafcb6cfb1e1697214c164a001631",
-        "traefik.enable": "false",
-      },
-      null,
-      "stop",
-      {
-        bindings: {
-          "25570/tcp": [{ HostIp: "", HostPort: "32123" }],
-        },
-        labels: {
-          "kiln.brick.primary-port": "25570/tcp",
-          "kiln.traefik.service.port": "25570",
-        },
-      }
-    )
-  })
-
-  it("updates an existing allocation protocol when the added binding is available", async () => {
-    const dataDirectory = await mkdtemp(join(tmpdir(), "kiln-port-protocol-"))
-    temporaryDirectories.push(dataDirectory)
-    const config = loadConfig({
-      KILN_RELAY_DATA_DIR: dataDirectory,
-      KILN_RELAY_GAME_PORT_RANGE: "32123-32123",
-      KILN_RELAY_PROXY: "hearth",
-      KILN_RELAY_RESOURCE_NAMESPACE: "port-protocol-test",
-      NODE_ENV: "test",
-    })
-    const primary = {
-      externalPort: 32_123,
-      id: "primary",
-      internalPort: 25_565,
-      kind: "primary",
-      name: "Default Server",
-      protocol: "tcp",
-    } satisfies RelayInstancePortAllocation
-    const instance = relayInstanceSchema.parse({
-      brickNetworkMode: "direct",
-      connectAddress: "protocol.test:32123",
-      containerId: "protocol-container",
-      desiredState: "stopped",
-      directory: "e".repeat(40),
-      game: "Minecraft",
-      id: "e".repeat(40),
-      implementation: "Paper",
-      javaVersion: "21",
-      managedByRelay: true,
-      name: "Protocol server",
-      observedState: "stopped",
-      ports: [primary],
-      publicHost: "protocol.test",
-      publicPort: 32_123,
-      service: "kiln-protocol",
-      shortId: "eeeeeeee",
-      startedAt: null,
-      status: "created",
-      version: "1.21.11",
-    })
-    const updatedPrimary = {
-      ...primary,
-      protocol: "both",
-    } satisfies RelayInstancePortAllocation
-    const recreateOwnedInstance = vi.fn(
-      async (): Promise<RelayInstance> => ({
-        ...instance,
-        ports: [updatedPrimary],
-      })
-    )
-    const publishedHostPorts = vi.fn(async () => new Set<number>())
-    const docker = {
-      inspectInstances: vi.fn(async () => [instance]),
-      publishedHostPorts,
-      recreateOwnedInstance,
-    } as unknown as DockerDriver
-    commandMock.mockRejectedValue(new Error("container not found"))
-    const lifecycle = new LifecycleDriver(config, docker, {} as BrickCatalog)
-
-    const updated = await lifecycle.updateInstancePorts(
-      instance.id,
-      [
-        {
-          id: "primary",
-          internalPort: 25_565,
-          name: "Default Server",
-          protocol: "both",
-        },
-      ],
-      []
-    )
-
-    expect(updated.ports).toEqual([updatedPrimary])
-    expect(publishedHostPorts).toHaveBeenCalledWith("udp", {
-      end: 32_123,
-      start: 32_123,
-    })
-    expect(recreateOwnedInstance).toHaveBeenCalledWith(
-      instance,
-      expect.any(Object),
-      null,
-      "stop",
-      {
-        bindings: {
-          "25565/tcp": [{ HostIp: "", HostPort: "32123" }],
-          "25565/udp": [{ HostIp: "", HostPort: "32123" }],
-        },
-        labels: {
-          "kiln.brick.primary-port": "25565",
-          "kiln.traefik.service.port": "25565",
-        },
-      }
-    )
-  })
-
-  it("updates the public port of an existing primary allocation from a lease", async () => {
-    const dataDirectory = await mkdtemp(
-      join(tmpdir(), "kiln-primary-public-port-")
-    )
-    temporaryDirectories.push(dataDirectory)
-    const config = loadConfig({
-      KILN_RELAY_DATA_DIR: dataDirectory,
-      KILN_RELAY_GAME_PORT_RANGE: "32124-32124",
-      KILN_RELAY_PROXY: "hearth",
-      KILN_RELAY_RESOURCE_NAMESPACE: "primary-public-port-test",
-      NODE_ENV: "test",
-    })
-    const primary = {
-      externalPort: 32_123,
-      id: "primary",
-      internalPort: 25_565,
-      kind: "primary",
-      name: "Default Server",
-      protocol: "tcp",
-    } satisfies RelayInstancePortAllocation
-    const instance = relayInstanceSchema.parse({
-      brickNetworkMode: "direct",
-      connectAddress: "public-port.test:32123",
-      containerId: "public-port-container",
-      desiredState: "stopped",
-      directory: "f".repeat(40),
-      game: "Minecraft",
-      id: "f".repeat(40),
-      implementation: "Paper",
-      javaVersion: "21",
-      managedByRelay: true,
-      name: "Public port server",
-      observedState: "stopped",
-      ports: [primary],
-      publicHost: "public-port.test",
-      publicPort: 32_123,
-      service: "kiln-public-port",
-      shortId: "ffffffff",
-      startedAt: null,
-      status: "created",
-      version: "1.21.11",
-    })
-    const updatedPrimary = { ...primary, externalPort: 32_124 }
-    const recreateOwnedInstance = vi.fn(
-      async (): Promise<RelayInstance> => ({
-        ...instance,
-        connectAddress: "public-port.test:32124",
-        ports: [updatedPrimary],
-        publicPort: 32_124,
-      })
-    )
-    const docker = {
-      inspectInstances: vi.fn(async () => [instance]),
-      publishedHostPorts: vi.fn(async () => new Set<number>()),
-      recreateOwnedInstance,
-    } as unknown as DockerDriver
-    commandMock.mockRejectedValue(new Error("container not found"))
-    const lifecycle = new LifecycleDriver(config, docker, {} as BrickCatalog)
-    const lease = await Effect.runPromise(
-      lifecycle.reserveInstancePortEffect(instance.id, {
-        externalPort: 32_124,
+        externalPort: 32_123,
+        id: "primary",
+        internalPort: 25_570,
+        kind: "primary",
+        name: "Default Server",
         protocol: "tcp",
-      })
-    )
-    expect(lease.externalPort).toBe(32_124)
-
-    const updated = await lifecycle.updateInstancePorts(
-      instance.id,
-      [
-        {
-          externalPort: lease.externalPort,
-          id: "primary",
-          internalPort: 25_565,
-          leaseId: lease.id,
-          name: "Default Server",
-          protocol: "tcp",
-        },
-      ],
-      []
-    )
-
-    expect(updated.ports).toEqual([updatedPrimary])
-    expect(recreateOwnedInstance).toHaveBeenCalledWith(
-      instance,
-      expect.any(Object),
-      null,
-      "stop",
-      {
-        bindings: {
-          "25565/tcp": [{ HostIp: "", HostPort: "32124" }],
-        },
-        labels: {
-          "kiln.brick.primary-port": "25565/tcp",
-          "kiln.traefik.service.port": "25565",
-        },
-      }
-    )
+      },
+    ])
+    const container = serverContainer(harness, first)
+    expect(container.portBindings).toEqual({
+      "25570/tcp": [{ HostIp: "", HostPort: "32123" }],
+    })
+    expect(container.labels["kiln.brick.primary-port"]).toBe("25570/tcp")
+    expect(container.state.running).toBe(false)
+    // The replacement keeps the server's data mount and leaves no backup.
+    expect(container.mounts).toEqual([
+      expect.objectContaining({ destination: "/server", type: "bind" }),
+    ])
+    expect(fakeDocker.containers.size).toBe(1)
   })
 
-  effectIt.effect(
-    "allows an explicit public port outside the configured range only with an override",
-    () =>
-      Effect.gen(function* () {
-        const dataDirectory = yield* Effect.tryPromise(() =>
-          mkdtemp(join(tmpdir(), "kiln-public-port-range-override-"))
-        )
-        temporaryDirectories.push(dataDirectory)
-        const config = loadConfig({
-          KILN_RELAY_DATA_DIR: dataDirectory,
-          KILN_RELAY_GAME_PORT_RANGE: "32124-32124",
-          KILN_RELAY_PROXY: "hearth",
-          KILN_RELAY_RESOURCE_NAMESPACE: "public-port-range-override-test",
-          NODE_ENV: "test",
-        })
-        const instance = relayInstanceSchema.parse({
-          brickNetworkMode: "direct",
-          connectAddress: "port-range-override.test:32123",
-          containerId: "port-range-override-container",
-          desiredState: "stopped",
-          directory: "e".repeat(40),
-          game: "Minecraft",
-          id: "e".repeat(40),
-          implementation: "Paper",
-          javaVersion: "21",
-          managedByRelay: true,
-          name: "Port range override server",
-          observedState: "stopped",
-          publicHost: "port-range-override.test",
-          publicPort: 32_123,
-          service: "kiln-port-range-override",
-          shortId: "eeeeeeee",
-          startedAt: null,
-          status: "created",
-          version: "1.21.11",
-        })
-        const docker = {
-          inspectInstances: vi.fn(async () => [instance]),
-          publishedHostPorts: vi.fn(async () => new Set<number>()),
-        } as unknown as DockerDriver
-        const lifecycle = new LifecycleDriver(
-          config,
-          docker,
-          {} as BrickCatalog
-        )
-
-        const denied = yield* lifecycle
-          .reserveInstancePortEffect(instance.id, {
-            externalPort: 8_211,
-            protocol: "tcp",
-          })
-          .pipe(Effect.flip)
-        expect(denied.message).toContain(
-          "Public port must be between 32124 and 32124"
-        )
-
-        const lease = yield* lifecycle.reserveInstancePortEffect(instance.id, {
-          externalPort: 8_211,
-          overridePortRange: true,
-          protocol: "tcp",
-        })
-        expect(lease.externalPort).toBe(8_211)
-      })
-  )
-
-  it("reserves added protocols on a replacement public port", async () => {
-    const dataDirectory = await mkdtemp(
-      join(tmpdir(), "kiln-primary-port-protocol-")
-    )
-    temporaryDirectories.push(dataDirectory)
-    const config = loadConfig({
-      KILN_RELAY_DATA_DIR: dataDirectory,
-      KILN_RELAY_GAME_PORT_RANGE: "32124-32124",
-      KILN_RELAY_PROXY: "hearth",
-      KILN_RELAY_RESOURCE_NAMESPACE: "primary-port-protocol-test",
-      NODE_ENV: "test",
+  it("adds a protocol to an existing allocation only when its host binding is free", async () => {
+    const harness = await relayHarness({
+      KILN_RELAY_GAME_PORT_RANGE: "32123-32123",
     })
-    const primary = {
-      externalPort: 32_123,
-      id: "primary",
-      internalPort: 25_565,
-      kind: "primary",
-      name: "Default Server",
-      protocol: "tcp",
-    } satisfies RelayInstancePortAllocation
-    const instance = relayInstanceSchema.parse({
-      brickNetworkMode: "direct",
-      connectAddress: "port-protocol.test:32123",
-      containerId: "port-protocol-container",
-      desiredState: "stopped",
-      directory: "1".repeat(40),
-      game: "Minecraft",
-      id: "1".repeat(40),
-      implementation: "Paper",
-      javaVersion: "21",
-      managedByRelay: true,
-      name: "Port and protocol server",
-      observedState: "stopped",
-      ports: [primary],
-      publicHost: "port-protocol.test",
-      publicPort: 32_123,
-      service: "kiln-port-protocol",
-      shortId: "11111111",
-      startedAt: null,
-      status: "created",
-      version: "1.21.11",
+    await harness.createServer({ id: first })
+    const voice = occupyHostPort(32_123, "udp")
+    const before = structuredClone(serverContainer(harness, first).portBindings)
+    const both = [
+      {
+        id: "primary",
+        internalPort: 25_565,
+        name: "Default Server",
+        protocol: "both" as const,
+      },
+    ]
+
+    await expect(
+      harness.lifecycle.updateInstancePorts(first, both, [])
+    ).rejects.toThrow("already in use")
+    expect(serverContainer(harness, first).portBindings).toEqual(before)
+
+    fakeDocker.removeContainer(voice.name)
+    const updated = await harness.lifecycle.updateInstancePorts(first, both, [])
+
+    expect(updated.ports).toMatchObject([
+      { externalPort: 32_123, id: "primary", protocol: "both" },
+    ])
+    expect(serverContainer(harness, first).portBindings).toEqual({
+      "25565/tcp": [{ HostIp: "", HostPort: "32123" }],
+      "25565/udp": [{ HostIp: "", HostPort: "32123" }],
     })
-    const updatedPrimary = {
-      ...primary,
-      externalPort: 32_124,
-      protocol: "both",
-    } satisfies RelayInstancePortAllocation
-    const recreateOwnedInstance = vi.fn(
-      async (): Promise<RelayInstance> => ({
-        ...instance,
-        connectAddress: "port-protocol.test:32124",
-        ports: [updatedPrimary],
-        publicPort: 32_124,
-      })
-    )
-    const publishedHostPorts = vi.fn(async (protocol: "tcp" | "udp") =>
-      protocol === "udp" ? new Set([32_123]) : new Set<number>()
-    )
-    const docker = {
-      inspectInstances: vi.fn(async () => [instance]),
-      publishedHostPorts,
-      recreateOwnedInstance,
-    } as unknown as DockerDriver
-    commandMock.mockRejectedValue(new Error("container not found"))
-    const lifecycle = new LifecycleDriver(config, docker, {} as BrickCatalog)
+  })
+
+  it("moves a primary allocation to a leased port while adding a protocol", async () => {
+    const harness = await relayHarness({
+      KILN_RELAY_GAME_PORT_RANGE: "32123-32123",
+    })
+    await harness.createServer({ id: first })
+    harness.config.gamePortRange = { end: 32_124, start: 32_124 }
+    // The old port's UDP side is taken; only the new port must be free.
+    occupyHostPort(32_123, "udp")
+
     const lease = await Effect.runPromise(
-      lifecycle.reserveInstancePortEffect(instance.id, {
+      harness.lifecycle.reserveInstancePortEffect(first, {
         externalPort: 32_124,
         protocol: "both",
       })
     )
-
-    const updated = await lifecycle.updateInstancePorts(
-      instance.id,
+    const updated = await harness.lifecycle.updateInstancePorts(
+      first,
       [
         {
           externalPort: lease.externalPort,
@@ -468,204 +160,102 @@ describe("instance port lifecycle", () => {
       []
     )
 
-    expect(updated.ports).toEqual([updatedPrimary])
-    expect(publishedHostPorts).toHaveBeenCalledTimes(2)
-    expect(publishedHostPorts).toHaveBeenNthCalledWith(1, "tcp", {
-      end: 32_124,
-      start: 32_124,
+    expect(updated.publicPort).toBe(32_124)
+    expect(serverContainer(harness, first).portBindings).toEqual({
+      "25565/tcp": [{ HostIp: "", HostPort: "32124" }],
+      "25565/udp": [{ HostIp: "", HostPort: "32124" }],
     })
-    expect(publishedHostPorts).toHaveBeenNthCalledWith(2, "udp", {
-      end: 32_124,
-      start: 32_124,
-    })
-    expect(recreateOwnedInstance).toHaveBeenCalledWith(
-      instance,
-      expect.any(Object),
-      null,
-      "stop",
-      {
-        bindings: {
-          "25565/tcp": [{ HostIp: "", HostPort: "32124" }],
-          "25565/udp": [{ HostIp: "", HostPort: "32124" }],
-        },
-        labels: {
-          "kiln.brick.primary-port": "25565",
-          "kiln.traefik.service.port": "25565",
-        },
-      }
-    )
   })
 
-  effectIt.effect(
-    "reclaims abandoned port leases and releases closed ones",
-    () =>
-      Effect.gen(function* () {
-        vi.useFakeTimers()
-        vi.setSystemTime(new Date("2026-07-30T12:00:00.000Z"))
-        const dataDirectory = yield* Effect.tryPromise(() =>
-          mkdtemp(join(tmpdir(), "kiln-port-lease-"))
-        )
-        temporaryDirectories.push(dataDirectory)
-        const config = loadConfig({
-          KILN_RELAY_DATA_DIR: dataDirectory,
-          KILN_RELAY_GAME_PORT_RANGE: "32125-32125",
-          KILN_RELAY_PROXY: "hearth",
-          KILN_RELAY_RESOURCE_NAMESPACE: "port-lease-test",
-          NODE_ENV: "test",
-        })
-        const first = relayInstanceSchema.parse({
-          brickNetworkMode: "direct",
-          connectAddress: "first.test",
-          containerId: "first-container",
-          desiredState: "stopped",
-          directory: "c".repeat(40),
-          game: "Minecraft",
-          id: "c".repeat(40),
-          implementation: "Paper",
-          javaVersion: "21",
-          managedByRelay: true,
-          name: "First server",
-          observedState: "stopped",
-          publicHost: "first.test",
-          service: "kiln-first",
-          shortId: "cccccccc",
-          startedAt: null,
-          status: "created",
-          version: "1.21.11",
-        })
-        const second = relayInstanceSchema.parse({
-          ...first,
-          connectAddress: "second.test",
-          containerId: "second-container",
-          directory: "d".repeat(40),
-          id: "d".repeat(40),
-          name: "Second server",
-          publicHost: "second.test",
-          service: "kiln-second",
-          shortId: "dddddddd",
-        })
-        const docker = {
-          inspectInstances: vi.fn(async () => [first, second]),
-          publishedHostPorts: vi.fn(async () => []),
-        } as unknown as DockerDriver
-        const lifecycle = new LifecycleDriver(
-          config,
-          docker,
-          {} as BrickCatalog
-        )
-
-        const abandoned = yield* lifecycle.reserveInstancePortEffect(first.id, {
-          protocol: "tcp",
-        })
-        expect(abandoned.externalPort).toBe(32_125)
-        const renewalFailure = yield* lifecycle
-          .reserveInstancePortEffect(first.id, {
-            externalPort: 32_126,
-            leaseId: abandoned.id,
-            protocol: "tcp",
-          })
-          .pipe(Effect.flip)
-        expect(renewalFailure.code).toBe("allocation_failed")
-        const unavailable = yield* lifecycle
-          .reserveInstancePortEffect(second.id, { protocol: "tcp" })
-          .pipe(Effect.flip)
-        expect(unavailable.message).toContain("No game ports are available")
-
-        yield* Effect.tryPromise(() => vi.advanceTimersByTimeAsync(120_001))
-        const reclaimed = yield* lifecycle.reserveInstancePortEffect(
-          second.id,
-          { protocol: "tcp" }
-        )
-        expect(reclaimed.externalPort).toBe(32_125)
-
-        yield* lifecycle.releaseInstancePortEffect(second.id, reclaimed.id)
-        const released = yield* lifecycle.reserveInstancePortEffect(first.id, {
-          protocol: "tcp",
-        })
-        expect(released.externalPort).toBe(32_125)
-
-        const ownershipFailure = yield* lifecycle
-          .releaseInstancePortEffect(second.id, released.id)
-          .pipe(Effect.flip)
-        expect(ownershipFailure.code).toBe("lease_owner_mismatch")
-        yield* lifecycle.releaseInstancePortEffect(first.id, released.id)
-
-        vi.useRealTimers()
-        const [concurrent, failures] = yield* Effect.partition(
-          [first.id, second.id],
-          (instanceId) =>
-            lifecycle.reserveInstancePortEffect(instanceId, {
-              protocol: "tcp",
-            }),
-          { concurrency: "unbounded" }
-        )
-        expect(failures).toHaveLength(1)
-        expect(concurrent).toHaveLength(1)
-        expect(concurrent[0]?.externalPort).toBe(32_125)
-      })
-  )
-
-  it("stages a missing primary port without requiring a free public port", async () => {
-    const dataDirectory = await mkdtemp(join(tmpdir(), "kiln-primary-port-"))
-    temporaryDirectories.push(dataDirectory)
-    const config = loadConfig({
-      KILN_RELAY_DATA_DIR: dataDirectory,
+  it("allows an explicit public port outside the configured range only with an override", async () => {
+    const harness = await relayHarness({
       KILN_RELAY_GAME_PORT_RANGE: "32124-32124",
-      KILN_RELAY_PROXY: "hearth",
-      KILN_RELAY_RESOURCE_NAMESPACE: "pending-primary-port-test",
-      NODE_ENV: "test",
     })
-    const instance = relayInstanceSchema.parse({
-      brickNetworkMode: "direct",
-      connectAddress: "legacy.test",
-      containerId: "legacy-container",
-      desiredState: "running",
-      directory: "b".repeat(40),
-      game: "Minecraft",
-      id: "b".repeat(40),
-      implementation: "Paper",
-      javaVersion: "21",
-      managedByRelay: true,
-      name: "Running legacy server",
-      observedState: "running",
-      publicHost: "legacy.test",
-      service: "kiln-running-legacy",
-      shortId: "bbbbbbbb",
-      startedAt: new Date().toISOString(),
-      status: "running",
-      version: "1.21.11",
-    })
-    await mkdir(join(config.rootDirectory, instance.directory), {
-      recursive: true,
-    })
-    const primary = {
-      externalPort: 32_124,
-      id: "primary",
-      internalPort: 24_454,
-      kind: "primary",
-      name: "Default Server",
-      protocol: "tcp",
-    } satisfies RelayInstancePortAllocation
-    const recreateOwnedInstance = vi.fn(
-      async (): Promise<RelayInstance> => ({
-        ...instance,
-        connectAddress: "legacy.test:32124",
-        ports: [primary],
-        publicPort: 32_124,
+    await harness.seedServer({ id: first })
+
+    const denied = await Effect.runPromiseExit(
+      harness.lifecycle.reserveInstancePortEffect(first, {
+        externalPort: 8_211,
+        protocol: "tcp",
       })
     )
-    const publishedHostPorts = vi.fn(async () => new Set([32_124]))
-    const docker = {
-      inspectInstances: vi.fn(async () => [instance]),
-      publishedHostPorts,
-      recreateOwnedInstance,
-      runAction: vi.fn(),
-    } as unknown as DockerDriver
-    commandMock.mockRejectedValue(new Error("container not found"))
-    const lifecycle = new LifecycleDriver(config, docker, {} as BrickCatalog)
+    const lease = await Effect.runPromise(
+      harness.lifecycle.reserveInstancePortEffect(first, {
+        externalPort: 8_211,
+        overridePortRange: true,
+        protocol: "tcp",
+      })
+    )
 
-    const staged = await lifecycle.updateInstancePorts(
-      instance.id,
+    expect(Exit.isFailure(denied)).toBe(true)
+    expect(lease.externalPort).toBe(8_211)
+  })
+
+  it("expires abandoned leases, enforces lease ownership, and lets one concurrent reservation win", async () => {
+    vi.useFakeTimers({ now: Date.parse("2026-07-30T12:00:00.000Z"), toFake: ["Date"] })
+    try {
+      const harness = await relayHarness({
+        KILN_RELAY_GAME_PORT_RANGE: "32125-32125",
+      })
+      await harness.seedServer({ id: first })
+      await harness.seedServer({ id: second })
+      const reserve = (instanceId: string, leaseId?: string, externalPort?: number) =>
+        Effect.runPromiseExit(
+          harness.lifecycle.reserveInstancePortEffect(instanceId, {
+            externalPort,
+            leaseId,
+            protocol: "tcp",
+          })
+        )
+      const release = (instanceId: string, leaseId: string) =>
+        Effect.runPromiseExit(
+          harness.lifecycle.releaseInstancePortEffect(instanceId, leaseId)
+        )
+      const lease = (exit: Exit.Exit<{ externalPort: number; id: string }, unknown>) => {
+        if (Exit.isFailure(exit)) throw new Error("Expected a port lease")
+        return exit.value
+      }
+      const failureCode = (exit: Exit.Exit<unknown, { code: string }>) =>
+        Exit.isFailure(exit)
+          ? exit.cause.reasons.find((reason) => reason._tag === "Fail")?.error.code
+          : undefined
+
+      const abandoned = lease(await reserve(first))
+      expect(abandoned.externalPort).toBe(32_125)
+      // A failed renewal must not release the port it already holds.
+      expect(failureCode(await reserve(first, abandoned.id, 32_126))).toBe(
+        "allocation_failed"
+      )
+      expect(Exit.isFailure(await reserve(second))).toBe(true)
+
+      vi.setSystemTime(Date.parse("2026-07-30T12:02:00.001Z"))
+      const reclaimed = lease(await reserve(second))
+      expect(reclaimed.externalPort).toBe(32_125)
+
+      expect(Exit.isSuccess(await release(second, reclaimed.id))).toBe(true)
+      const released = lease(await reserve(first))
+      expect(released.externalPort).toBe(32_125)
+      expect(failureCode(await release(second, released.id))).toBe(
+        "lease_owner_mismatch"
+      )
+      expect(Exit.isSuccess(await release(first, released.id))).toBe(true)
+
+      const outcomes = await Promise.all([reserve(first), reserve(second)])
+      expect(outcomes.filter(Exit.isSuccess)).toHaveLength(1)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it("stages a missing primary port and applies it on the next restart", async () => {
+    const harness = await relayHarness({
+      KILN_RELAY_GAME_PORT_RANGE: "32124-32124",
+    })
+    await harness.seedServer({ id: first, running: true })
+    const occupant = occupyHostPort(32_124, "tcp")
+
+    const staged = await harness.lifecycle.updateInstancePorts(
+      first,
       [
         {
           id: "primary",
@@ -684,36 +274,21 @@ describe("instance port lifecycle", () => {
       protocol: "tcp",
     })
     expect(staged.ports).toEqual([])
-    expect(recreateOwnedInstance).not.toHaveBeenCalled()
-    expect(publishedHostPorts).not.toHaveBeenCalled()
+    expect(serverContainer(harness, first).portBindings).toEqual({})
 
-    publishedHostPorts.mockResolvedValue(new Set())
-    const updated = await lifecycle.runInstanceAction(
-      instance,
+    fakeDocker.removeContainer(occupant.name)
+    const updated = await harness.lifecycle.runInstanceAction(
+      await serverConfig(harness, first),
       "restart",
       [],
       staged.pendingPrimaryPort
     )
 
-    expect(updated.ports).toEqual([primary])
-    expect(recreateOwnedInstance).toHaveBeenCalledWith(
-      instance,
-      {
-        "kiln.relay.web-routes.revision":
-          "809b57ac6cc136a5e7bb9babc8418a73d2cfafcb6cfb1e1697214c164a001631",
-        "traefik.enable": "false",
-      },
-      null,
-      "restart",
-      {
-        bindings: {
-          "24454/tcp": [{ HostIp: "", HostPort: "32124" }],
-        },
-        labels: {
-          "kiln.brick.primary-port": "24454/tcp",
-          "kiln.traefik.service.port": "24454",
-        },
-      }
-    )
+    expect(updated.publicPort).toBe(32_124)
+    const container = serverContainer(harness, first)
+    expect(container.portBindings).toEqual({
+      "24454/tcp": [{ HostIp: "", HostPort: "32124" }],
+    })
+    expect(container.state.running).toBe(true)
   })
 })

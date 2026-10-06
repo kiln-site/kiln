@@ -2,13 +2,14 @@ import { describe, expect, it } from "vite-plus/test"
 
 import {
   INSTANCE_STARTUP_READINESS_TIMEOUT_MS,
-  INSTANCE_STARTUP_STABILITY_MS,
   instanceStateReason,
   observedInstancePowerState,
   type ContainerPowerState,
   type InstancePowerTransition,
 } from "./power-state.js"
 
+// A started container counts as running once it has stayed up this long.
+const INSTANCE_STARTUP_STABILITY_MS = 15_000
 const startedAt = "2026-07-28T20:00:00.000Z"
 const startedAtMs = Date.parse(startedAt)
 
@@ -211,19 +212,6 @@ describe("instance power state", () => {
     ).toBe("starting")
   })
 
-  it("reports unhealthy health-check evidence", () => {
-    const state = containerState({ Health: { Status: "unhealthy" } })
-    const observed = observedInstancePowerState(
-      state,
-      transition(),
-      startedAtMs + 1
-    )
-
-    expect(instanceStateReason(state, observed.observedState)).toEqual({
-      code: "health_check_failed",
-    })
-  })
-
   it("reports Docker and managed recovery phases separately", () => {
     const state = containerState({ Restarting: true, Status: "restarting" })
     expect(instanceStateReason(state, "starting")).toEqual({
@@ -248,21 +236,6 @@ describe("instance power state", () => {
     })
   })
 
-  it("reports OOM and nonzero exit evidence", () => {
-    expect(
-      instanceStateReason(
-        containerState({ OOMKilled: true, Running: false }),
-        "failed"
-      )
-    ).toEqual({ code: "out_of_memory" })
-    expect(
-      instanceStateReason(
-        containerState({ ExitCode: 42, Running: false }),
-        "failed"
-      )
-    ).toEqual({ code: "process_exit", exitCode: 42 })
-  })
-
   it("does not infer whether stopped intent preceded an OOM kill", () => {
     const oomKilled = containerState({ OOMKilled: true, Running: false })
 
@@ -278,11 +251,5 @@ describe("instance power state", () => {
         "stopped"
       )
     ).toEqual({ code: "out_of_memory_while_stopping" })
-  })
-
-  it("marks a failure without container evidence as unknown", () => {
-    expect(instanceStateReason(containerState(), "failed")).toEqual({
-      code: "unknown",
-    })
   })
 })

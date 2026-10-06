@@ -522,7 +522,7 @@ function authenticateSocket(
                 )
             )
           )
-          if (isAuditedOperation(request.operation)) {
+          if (isAuditedRelayControlOperation(request.operation)) {
             Effect.runFork(
               promiseOperation(() =>
                 options.runEffect(
@@ -769,11 +769,7 @@ function reverseRequestCancellationGraceMs(
   return 1_000
 }
 
-export function isAuditedOperation(operation: RelayControlOperation): boolean {
-  return isAuditedRelayControlOperation(operation)
-}
-
-export function auditDetailsForRequest(
+function auditDetailsForRequest(
   request: RelayControlRequest,
   result: unknown
 ): Readonly<Record<string, unknown>> {
@@ -856,7 +852,7 @@ function closeClientSockets(
   }
 }
 
-export function authenticationVerifier(options: {
+function authenticationVerifier(options: {
   readonly challenge: Omit<RelayAuthChallenge, "signature">
   readonly client: RelayClientGrant
   readonly signature: string
@@ -1108,7 +1104,7 @@ function sendError(
   send(socket, error)
 }
 
-export function relayControlErrorMessage(cause: unknown): string {
+function relayControlErrorMessage(cause: unknown): string {
   if (!cause || typeof cause !== "object" || !("message" in cause)) {
     return "Relay operation failed"
   }

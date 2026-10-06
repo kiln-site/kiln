@@ -376,10 +376,7 @@ async function readManifest(zip: ZipFile, entry: Entry) {
 export async function materializeBackupArtifact(
   config: RelayConfig,
   input: BackupRestoreTaskInput,
-  destination = resolve(
-    restoreDirectoryPath(config),
-    `${input.taskId}.artifact`
-  )
+  destination: string
 ): Promise<string> {
   await mkdir(restoreDirectoryPath(config), { mode: 0o700, recursive: true })
   if (input.source.kind === "restic") {
@@ -480,7 +477,7 @@ async function downloadRestoreArtifact(
   return destination
 }
 
-export async function verifyBackupArtifact(
+async function verifyBackupArtifact(
   path: string,
   expectedBytes: number,
   expectedChecksum: string

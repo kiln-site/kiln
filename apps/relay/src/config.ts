@@ -455,7 +455,8 @@ function effectiveUrlPort(url: URL): number {
 }
 
 function traefikImage(environment: NodeJS.ProcessEnv): string {
-  const value = environment.KILN_RELAY_TRAEFIK_IMAGE?.trim() || "traefik:v3.7.13"
+  const value =
+    environment.KILN_RELAY_TRAEFIK_IMAGE?.trim() || "traefik:v3.7.13"
   if (!/^traefik(?:@sha256:[a-f0-9]{64}|:[A-Za-z0-9._-]+)$/u.test(value)) {
     throw new Error(
       "KILN_RELAY_TRAEFIK_IMAGE must use an official pinned Traefik tag or digest"
@@ -466,16 +467,12 @@ function traefikImage(environment: NodeJS.ProcessEnv): string {
 
 export const discoverRelayAdvertisedHostEffect = Effect.fn(
   "RelayConfig.discoverAdvertisedHost"
-)(function* (
-  config: RelayConfig,
-  environment: NodeJS.ProcessEnv = process.env,
-  discover: () => Promise<string> = discoverPublicIp
-) {
+)(function* (config: RelayConfig) {
   if (!config.advertisedHostInferred) return "configured"
-  if (!booleanEnvironment(environment.KILN_RELAY_DISCOVER_PUBLIC_IP, true)) {
+  if (!booleanEnvironment(process.env.KILN_RELAY_DISCOVER_PUBLIC_IP, true)) {
     return "hostname"
   }
-  const address = yield* discoverAddress(discover).pipe(
+  const address = yield* discoverAddress().pipe(
     Effect.catch(() => Effect.succeed(null))
   )
   if (!address) return "hostname"
@@ -498,28 +495,21 @@ export const discoverRelayAdvertisedHostEffect = Effect.fn(
 })
 
 export function discoverRelayAdvertisedHost(
-  config: RelayConfig,
-  environment: NodeJS.ProcessEnv = process.env,
-  discover: () => Promise<string> = discoverPublicIp
+  config: RelayConfig
 ): Promise<"configured" | "hostname" | "public_ip"> {
-  return Effect.runPromise(
-    discoverRelayAdvertisedHostEffect(config, environment, discover)
-  )
+  return Effect.runPromise(discoverRelayAdvertisedHostEffect(config))
 }
 
 export const discoverRelayGameHostEffect = Effect.fn(
   "RelayConfig.discoverGameHost"
-)(function* (
-  config: RelayConfig,
-  discover: () => Promise<string> = discoverPublicIp
-) {
+)(function* (config: RelayConfig) {
   if (config.gameHostSource === "relay") {
     config.gameHost = config.advertisedHost
     return "relay"
   }
   if (config.gameHostSource === "configured") return "configured"
 
-  const address = yield* discoverAddress(discover).pipe(
+  const address = yield* discoverAddress().pipe(
     Effect.filterOrFail(
       (value) => value.length > 0,
       () => new Error("Public DNS returned no address")
@@ -538,10 +528,9 @@ export const discoverRelayGameHostEffect = Effect.fn(
 })
 
 export function discoverRelayGameHost(
-  config: RelayConfig,
-  discover: () => Promise<string> = discoverPublicIp
+  config: RelayConfig
 ): Promise<RelayGameHostSource> {
-  return Effect.runPromise(discoverRelayGameHostEffect(config, discover))
+  return Effect.runPromise(discoverRelayGameHostEffect(config))
 }
 
 function relayBrowserOrigin(
@@ -554,9 +543,9 @@ function relayBrowserOrigin(
   return `${scheme}://${formatUrlHost(advertisedHost)}${publicPort === defaultPort ? "" : `:${publicPort}`}`
 }
 
-function discoverAddress(discover: () => Promise<string>) {
+function discoverAddress() {
   return Effect.tryPromise({
-    try: discover,
+    try: discoverPublicIp,
     catch: (cause) => cause,
   }).pipe(Effect.timeout("2 seconds"))
 }

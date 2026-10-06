@@ -11,9 +11,9 @@ vi.mock("./disk-usage.js", () => ({
   directoryApparentSizeEffect: directorySizeEffect,
 }))
 
-import { loadConfig } from "./config.js"
 import { FilesystemDriver } from "./files.js"
 import type { RelayInstanceConfig } from "./config.js"
+import { testInstance, testRelayConfig } from "./test/fixtures.js"
 
 describe("Relay directory size invalidation", () => {
   it.effect("restarts an in-flight scan after a file write", () =>
@@ -52,7 +52,7 @@ describe("Relay directory size invalidation", () => {
 
         // The invalidation itself must arrange the replacement. Waiting for a
         // later browser poll here would reproduce the stale-scan delay.
-        yield* Deferred.await(secondStarted).pipe(Effect.timeout("1 second"))
+        yield* Deferred.await(secondStarted)
         yield* Deferred.succeed(secondResult, 6)
         yield* Effect.yieldNow
 
@@ -62,30 +62,32 @@ describe("Relay directory size invalidation", () => {
         })
         assert.deepEqual(completed.pending, [])
         assert.strictEqual(completed.sizes["world/"], 6)
-        assert.strictEqual(directorySizeEffect.mock.calls.length, 2)
       })
     )
   )
 
-  it.effect("drops a queued stale scan when invalidated", () =>
+  it.effect("never reports a size from a scan queued before a write", () =>
     withSetup(({ driver, instance, root }) =>
       Effect.gen(function* () {
-        const activeResult = yield* Deferred.make<number>()
-        const queuedStarted = yield* Deferred.make<string>()
-        const queuedResult = yield* Deferred.make<number>()
-        let invocation = 0
-        directorySizeEffect.mockImplementation((absolute: string) => {
-          invocation += 1
-          if (invocation <= 4) return Deferred.await(activeResult)
-          if (invocation === 5) {
-            return Deferred.succeed(queuedStarted, absolute).pipe(
-              Effect.andThen(Deferred.await(queuedResult))
-            )
-          }
-          return Effect.succeed(2)
+        const staleResult = yield* Deferred.make<number>()
+        const freshStarted = yield* Deferred.make<void>()
+        const freshResult = yield* Deferred.make<number>()
+        let written = false
+        const queuedPath = yield* fromPromise(async () => {
+          await mkdir(resolve(root, "queued"), { recursive: true })
+          return realpath(resolve(root, "queued"))
         })
+        // Hold every scan started before the write so later paths stay
+        // queued behind them, however many scans run at once.
+        directorySizeEffect.mockImplementation((absolute: string) =>
+          written && absolute === queuedPath
+            ? Deferred.succeed(freshStarted, undefined).pipe(
+                Effect.andThen(Deferred.await(freshResult))
+              )
+            : Deferred.await(staleResult)
+        )
 
-        const paths = ["one/", "two/", "three/", "four/", "queued/"]
+        const paths = Array.from({ length: 16 }, (_, index) => `dir-${index}/`)
         yield* fromPromise(() =>
           Promise.all(
             paths.map((path) => mkdir(resolve(root, path), { recursive: true }))
@@ -96,29 +98,28 @@ describe("Relay directory size invalidation", () => {
         )
         const initial = yield* driver.directorySizes(instance, {
           instanceId: instance.id,
-          paths,
+          paths: [...paths, "queued/"],
         })
-        assert.deepEqual(initial.pending, paths)
-        assert.strictEqual(directorySizeEffect.mock.calls.length, 4)
+        assert.deepEqual(initial.pending, [...paths, "queued/"])
 
         yield* driver.write(instance, "world/level.dat", {
           content: "levels",
         })
+        written = true
         const replacement = yield* driver.directorySizes(instance, {
           instanceId: instance.id,
           paths: ["queued/"],
         })
         assert.deepEqual(replacement.pending, ["queued/"])
 
-        yield* Deferred.succeed(activeResult, 1)
-        const startedPath = yield* Deferred.await(queuedStarted).pipe(
-          Effect.timeout("1 second")
-        )
-        const queuedPath = yield* fromPromise(() =>
-          realpath(resolve(root, "queued"))
-        )
-        assert.strictEqual(startedPath, queuedPath)
-        yield* Deferred.succeed(queuedResult, 9)
+        yield* Deferred.succeed(staleResult, 1)
+        yield* Deferred.await(freshStarted)
+        const beforeFresh = yield* driver.directorySizes(instance, {
+          instanceId: instance.id,
+          paths: ["queued/"],
+        })
+        assert.deepEqual(beforeFresh.sizes, {})
+        yield* Deferred.succeed(freshResult, 9)
         yield* Effect.yieldNow
 
         const completed = yield* driver.directorySizes(instance, {
@@ -148,13 +149,8 @@ function withSetup<TResult>(
         yield* fromPromise(() =>
           mkdir(resolve(root, "world"), { recursive: true })
         )
-        const config = loadConfig({
-          KILN_RELAY_DATA_DIR: directory,
-          KILN_RELAY_HOST: "relay.test",
-          NODE_ENV: "development",
-        })
         return yield* use({
-          driver: new FilesystemDriver(config),
+          driver: new FilesystemDriver(testRelayConfig(directory)),
           instance: testInstance(),
           root,
         })
@@ -171,23 +167,4 @@ function fromPromise<TResult>(run: () => Promise<TResult>) {
     try: run,
     catch: (cause) => cause,
   })
-}
-
-function testInstance(): RelayInstanceConfig {
-  return {
-    connectAddress: "localhost",
-    directory: "instance-1",
-    game: "Minecraft",
-    id: "instance-1",
-    implementation: "Paper",
-    javaVersion: "21",
-    limits: { diskBytes: 0, memoryBytes: 0 },
-    managedByRelay: true,
-    name: "Test Instance",
-    ports: [],
-    service: "test",
-    shortId: "instance",
-    tailscale: { enabled: false },
-    version: "1.21.11",
-  }
 }

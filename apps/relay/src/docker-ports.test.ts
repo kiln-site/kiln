@@ -1,208 +1,128 @@
-import { beforeEach, describe, expect, it, vi } from "vite-plus/test"
+import { describe, expect, it, vi } from "vite-plus/test"
 
-const commandMock = vi.hoisted(() => vi.fn())
+vi.mock("./command.js", () => import("./test/docker.js"))
 
-vi.mock("./command.js", () => ({
-  command: commandMock,
-  commandEffect: vi.fn(),
-}))
+import { fakeDocker } from "./test/docker.js"
+import { relayHarness, type RelayHarness } from "./test/relay.js"
 
-import {
-  containerPortListening,
-  dockerPublishedHostPortsFromListing,
-  dockerPublishedPort,
-  instanceConnectAddress,
-  instancePublicHost,
-  normalizedBrickNetworkMode,
-  procNetTcpHasListener,
-  publicConnectAddress,
-} from "./docker.js"
+const id = "a".repeat(40)
 
-describe("Docker public game ports", () => {
-  it("normalizes legacy Minecraft proxy instances as Minecraft backends", () => {
-    expect(normalizedBrickNetworkMode("minecraft-proxy")).toBe(
-      "minecraft-backend"
-    )
-    expect(normalizedBrickNetworkMode("minecraft-backend")).toBe(
-      "minecraft-backend"
-    )
-    expect(normalizedBrickNetworkMode("direct")).toBe("direct")
-    expect(normalizedBrickNetworkMode("unknown")).toBeUndefined()
+const publishedServer = (
+  harness: RelayHarness,
+  overrides: Parameters<RelayHarness["seedServer"]>[0] = { id }
+) =>
+  harness.seedServer({
+    portBindings: { "25565/tcp": [{ HostIp: "", HostPort: "49172" }] },
+    ...overrides,
+    labels: { "kiln.brick.primary-port": "25565/tcp", ...overrides.labels },
   })
 
-  it("discovers Docker's assigned primary host port", () => {
-    expect(
-      dockerPublishedPort(
-        {
-          "25565/tcp": [
-            { HostIp: "0.0.0.0", HostPort: "49172" },
-            { HostIp: "::", HostPort: "49172" },
-          ],
-        },
-        25_565,
-        "tcp"
-      )
-    ).toBe(49_172)
+async function discovered(harness: RelayHarness) {
+  const [instance] = await harness.docker.inspectInstances()
+  if (!instance) throw new Error("No server was discovered")
+  return instance
+}
+
+describe("server connect addresses", () => {
+  it.each([
+    ["games.example.com", "games.example.com:49172"],
+    ["203.0.113.5", "203.0.113.5:49172"],
+    ["2001:db8::5", "[2001:db8::5]:49172"],
+  ])("publishes the game host %s with the assigned port", async (host, address) => {
+    const harness = await relayHarness({ KILN_RELAY_GAME_HOST: host })
+    await publishedServer(harness)
+
+    expect(await discovered(harness)).toMatchObject({
+      connectAddress: address,
+      publicPort: 49_172,
+    })
   })
 
-  it("ignores missing and invalid bindings", () => {
-    expect(dockerPublishedPort({}, 25_565, "tcp")).toBeUndefined()
-    expect(
-      dockerPublishedPort(
-        { "25565/tcp": [{ HostPort: "not-a-port" }] },
-        25_565,
-        "tcp"
-      )
-    ).toBeUndefined()
+  it("uses the Relay's live game host ahead of a stale container label", async () => {
+    const harness = await relayHarness({ KILN_RELAY_GAME_HOST: "203.0.113.6" })
+    await publishedServer(harness, {
+      id,
+      labels: { "kiln.instance.public-host": "203.0.113.4" },
+    })
+
+    expect(await discovered(harness)).toMatchObject({
+      connectAddress: "203.0.113.6:49172",
+      publicHost: "203.0.113.6",
+    })
   })
 
-  it("collects published ports from Docker's compact container listing", () => {
-    const listing = [
-      "0.0.0.0:30000->25565/tcp, [::]:30000->25565/tcp",
-      "127.0.0.1:30001-30003->19132-19134/udp",
-      "8080/tcp, 9000/udp",
-      "",
-    ].join("\n")
+  it("prefers the Tailscale hostname when Tailscale is enabled", async () => {
+    const harness = await relayHarness({ KILN_RELAY_GAME_HOST: "games.example.com" })
+    await publishedServer(harness, {
+      id,
+      labels: {
+        "kiln.instance.hostname": "paper.kiln.test",
+        "kiln.instance.tailscale-enabled": "true",
+        "kiln.instance.tailscale-subdomain": "paper",
+      },
+    })
 
-    expect([...dockerPublishedHostPortsFromListing(listing, "tcp")]).toEqual([
-      30_000,
-    ])
-    expect([...dockerPublishedHostPortsFromListing(listing, "udp")]).toEqual([
-      30_001, 30_002, 30_003,
-    ])
+    expect((await discovered(harness)).connectAddress).toBe("paper.kiln.test")
   })
 
-  it("scales with compact port bindings instead of container metadata", () => {
-    const listing = Array.from(
-      { length: 5_000 },
-      (_, index) => `0.0.0.0:${30_000 + (index % 1_000)}->25565/tcp`
-    ).join("\n")
+  it("reports no public port for a server without a published primary port", async () => {
+    const harness = await relayHarness({ KILN_RELAY_GAME_HOST: "games.example.com" })
+    await harness.seedServer({ id })
 
-    const ports = dockerPublishedHostPortsFromListing(listing, "tcp")
+    const instance = await discovered(harness)
 
-    expect(ports.size).toBe(1_000)
-    expect(ports.has(30_000)).toBe(true)
-    expect(ports.has(30_999)).toBe(true)
+    expect(instance.publicPort).toBeUndefined()
+    expect(instance.connectAddress).not.toContain("games.example.com")
   })
 
-  it("formats IPv4, hostnames, and IPv6 connect addresses", () => {
-    expect(publicConnectAddress("relay.example.com", 49_172)).toBe(
-      "relay.example.com:49172"
-    )
-    expect(publicConnectAddress("203.0.113.5", 49_172)).toBe(
-      "203.0.113.5:49172"
-    )
-    expect(publicConnectAddress("2001:db8::5", 49_172)).toBe(
-      "[2001:db8::5]:49172"
-    )
-  })
+  it("recovers legacy Minecraft proxy servers as Minecraft backends", async () => {
+    const harness = await relayHarness()
+    await publishedServer(harness, {
+      id,
+      labels: { "kiln.brick.network-mode": "minecraft-proxy" },
+    })
 
-  it("resolves game addresses without the legacy generated hostname", () => {
-    expect(
-      instanceConnectAddress({
-        gameHost: "games.example.com",
-        publicPort: 49_172,
-        relayHost: "relay.example.com",
-      })
-    ).toBe("games.example.com:49172")
-    expect(
-      instanceConnectAddress({
-        discoveredPublicIp: "203.0.113.5",
-        publicPort: 49_172,
-        relayHost: "relay.example.com",
-      })
-    ).toBe("203.0.113.5:49172")
-    expect(
-      instanceConnectAddress({
-        publicPort: 49_172,
-        relayHost: "relay.example.com",
-      })
-    ).toBe("relay.example.com:49172")
+    expect((await discovered(harness)).brickNetworkMode).toBe("minecraft-backend")
   })
+})
 
-  it("uses the Relay's live game host ahead of a stale container label", () => {
-    expect(
-      instancePublicHost({
-        discoveredPublicIp: "203.0.113.5",
-        gameHost: "203.0.113.6",
-        instanceHost: "203.0.113.4",
-        relayHost: "relay.example.com",
-      })
-    ).toBe("203.0.113.6")
-  })
+describe("host port usage", () => {
+  it("reports host ports other containers publish in a range", async () => {
+    const harness = await relayHarness()
+    fakeDocker.addContainer({
+      name: "voice",
+      portBindings: { "30001/udp": [{ HostIp: "", HostPort: "30001" }] },
+      running: true,
+    })
+    fakeDocker.addContainer({
+      name: "stopped",
+      portBindings: { "30002/udp": [{ HostIp: "", HostPort: "30002" }] },
+    })
 
-  it("always prefers Tailscale and reports an unavailable endpoint", () => {
-    expect(
-      instanceConnectAddress({
-        gameHost: "games.example.com",
-        publicPort: 49_172,
-        relayHost: "relay.example.com",
-        tailscaleHost: "paper.kiln.test",
-      })
-    ).toBe("paper.kiln.test")
-    expect(instanceConnectAddress({})).toBe(
-      "Error: Relay did not report a published game port"
-    )
-    expect(instanceConnectAddress({ relayHost: "relay.example.com" })).toBe(
-      "Error: Relay did not report a published game port"
-    )
+    const ports = await harness.docker.publishedHostPorts("udp", {
+      end: 30_010,
+      start: 30_000,
+    })
+
+    expect([...ports]).toEqual([30_001])
   })
 })
 
 describe("container port readiness", () => {
-  beforeEach(() => {
-    commandMock.mockReset()
-  })
-
-  it("recognizes listening IPv4 and IPv6 sockets", () => {
-    const procNetTcp = [
-      "sl local_address rem_address st tx_queue rx_queue tr tm->when retrnsmt",
-      "0: 00000000:63DD 00000000:0000 0A 00000000:00000000",
-      "1: 00000000000000000000000000000000:9C40 00000000000000000000000000000000:0000 0A 00000000:00000000",
-    ].join("\n")
-
-    expect(procNetTcpHasListener(procNetTcp, 25_565)).toBe(true)
-    expect(procNetTcpHasListener(procNetTcp, 40_000)).toBe(true)
-    expect(procNetTcpHasListener(procNetTcp, 25_566)).toBe(false)
-  })
-
-  it("ignores connected sockets on the target port", () => {
-    expect(
-      procNetTcpHasListener(
-        "0: 0100007F:63DD 0100007F:C001 01 00000000:00000000",
-        25_565
-      )
-    ).toBe(false)
-  })
-
-  it("accepts an IPv4 listener without requiring /proc/net/tcp6", async () => {
-    commandMock.mockResolvedValueOnce({
-      stderr: "",
-      stdout: "0: 00000000:63DD 00000000:0000 0A 00000000:00000000",
-    })
-
-    await expect(containerPortListening("container-id", 25_565)).resolves.toBe(
-      true
-    )
-    expect(commandMock).toHaveBeenCalledOnce()
-    expect(commandMock).toHaveBeenCalledWith(
-      "docker",
-      ["exec", "container-id", "cat", "/proc/net/tcp"],
-      { timeout: 2_000 }
-    )
-  })
-
-  it("returns an IPv4 result when /proc/net/tcp6 is absent", async () => {
-    commandMock
-      .mockResolvedValueOnce({
-        stderr: "",
-        stdout:
-          "sl local_address rem_address st tx_queue rx_queue tr tm->when retrnsmt",
+  it.each([
+    { listening: true, observedState: "running" },
+    { listening: false, observedState: "starting" },
+  ])(
+    "treats a freshly started server as ready only once its game port listens (listening=$listening)",
+    async ({ listening, observedState }) => {
+      const harness = await relayHarness()
+      await publishedServer(harness, {
+        id,
+        listeningPorts: listening ? [25_565] : [],
+        running: true,
       })
-      .mockRejectedValueOnce(new Error("/proc/net/tcp6 is absent"))
 
-    await expect(containerPortListening("container-id", 25_565)).resolves.toBe(
-      false
-    )
-  })
+      expect((await discovered(harness)).observedState).toBe(observedState)
+    }
+  )
 })

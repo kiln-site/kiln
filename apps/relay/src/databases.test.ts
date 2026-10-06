@@ -1,339 +1,238 @@
-import { beforeEach, describe, expect, it, vi } from "vite-plus/test"
+import { createHash } from "node:crypto"
 
 import {
-  databaseEngineSupportsLogicalBackups,
-  type RelayManagedDatabase,
+  relayCreateDatabaseSchema,
+  type DatabaseEngine,
 } from "@workspace/contracts"
+import { Effect } from "effect"
+import { describe, expect, it, vi } from "vite-plus/test"
 
-import type { command as commandFunction } from "./command.js"
+vi.mock("./command.js", () => import("./test/docker.js"))
 
-const commandMock = vi.hoisted(() => vi.fn<typeof commandFunction>())
+import { fakeDocker } from "./test/docker.js"
+import { relayHarness, TEST_NAMESPACE, type RelayHarness } from "./test/relay.js"
 
-vi.mock("./command.js", () => ({ command: commandMock }))
+const serverId = "a".repeat(40)
+const password = "correct-horse-battery-staple-1"
+const nextPassword = "correct-horse-battery-staple-2"
 
-import {
-  DatabaseDriver,
-  databaseAclLoadArguments,
-  databaseRecoveryLabels,
-} from "./databases.js"
-import { loadConfig } from "./config.js"
-import type { DatabaseConnections } from "./database-connections.js"
-import { DockerDriver } from "./docker.js"
+function createDatabase(
+  harness: RelayHarness,
+  id: string,
+  engine: DatabaseEngine = "postgres"
+) {
+  return harness.databases.create(
+    relayCreateDatabaseSchema.parse({
+      databaseName: "kiln_app",
+      engine,
+      id,
+      name: "Main database",
+      password,
+      username: "kiln_user",
+    })
+  )
+}
 
-beforeEach(() => {
-  commandMock.mockReset()
-})
+function databaseContainer(id: string) {
+  const container = fakeDocker.container(`${TEST_NAMESPACE}-kiln-db-${id}-database`)
+  if (!container) throw new Error(`Database ${id} has no container`)
+  return container
+}
+
+const networkOf = (id: string) => `${TEST_NAMESPACE}-kiln-db-${id}-network`
+const volumeOf = (id: string) => `${TEST_NAMESPACE}-kiln-db-${id}-data`
 
 describe("managed database recovery metadata", () => {
-  it("only enables logical backups for SQL engines", () => {
-    expect(databaseEngineSupportsLogicalBackups("mysql")).toBe(true)
-    expect(databaseEngineSupportsLogicalBackups("mariadb")).toBe(true)
-    expect(databaseEngineSupportsLogicalBackups("postgres")).toBe(true)
-    expect(databaseEngineSupportsLogicalBackups("redis")).toBe(false)
-    expect(databaseEngineSupportsLogicalBackups("valkey")).toBe(false)
-  })
+  it("labels databases for recovery without putting credentials in labels", async () => {
+    const harness = await relayHarness()
+    const id = "d".repeat(40)
 
-  it("writes recoverable ownership labels without credentials", () => {
-    const labels = databaseRecoveryLabels(
-      { resourceNamespace: "kiln-test" },
-      {
-        databaseName: "kiln_app",
-        engine: "postgres",
-        id: "a".repeat(40),
-        name: "Main database",
-      },
-      "2026-08-06T12:00:00.000Z"
-    )
+    await createDatabase(harness, id)
 
-    expect(labels).toMatchObject({
-      "kiln.database.database-name": "kiln_app",
+    const container = databaseContainer(id)
+    expect(container.labels).toMatchObject({
       "kiln.database.engine": "postgres",
-      "kiln.database.hostname": `database-${"a".repeat(40)}`,
-      "kiln.database.id": "a".repeat(40),
-      "kiln.database.image": "postgres:17",
-      "kiln.database.name": "Main database",
-      "kiln.relay.managed": "true",
-      "kiln.relay.owner": "kiln-test",
-      "kiln.relay.owned": "true",
+      "kiln.database.id": id,
+      "kiln.database.network": networkOf(id),
+      "kiln.database.volume": volumeOf(id),
+      "kiln.relay.owner": TEST_NAMESPACE,
       "kiln.resource.kind": "database",
     })
-    expect(Object.keys(labels).join(" ")).not.toMatch(
-      /password|username|secret/u
-    )
+    const labelText = JSON.stringify(container.labels)
+    expect(labelText).not.toContain(password)
+    expect(labelText).not.toMatch(/password|secret|kiln_user/iu)
+    expect(container.env.POSTGRES_PASSWORD).toBe(password)
+    // A fresh Relay recovers the database from Docker alone.
+    const [recovered] = await (await harness.restart()).databases.list()
+    expect(recovered).toMatchObject({ engine: "postgres", id, observedState: "running" })
   })
 
-  it("does not collide resources when database ids share a short prefix", () => {
-    const first = databaseRecoveryLabels(
-      { resourceNamespace: "kiln-test" },
-      {
-        databaseName: "kiln_first",
-        engine: "postgres",
-        id: `${"a".repeat(8)}${"b".repeat(32)}`,
-        name: "First database",
-      },
-      "2026-08-06T12:00:00.000Z"
-    )
-    const second = databaseRecoveryLabels(
-      { resourceNamespace: "kiln-test" },
-      {
-        databaseName: "kiln_second",
-        engine: "postgres",
-        id: `${"a".repeat(8)}${"c".repeat(32)}`,
-        name: "Second database",
-      },
-      "2026-08-06T12:00:00.000Z"
-    )
+  it("gives databases that share an id prefix separate resources", async () => {
+    const harness = await relayHarness()
+    const first = `${"a".repeat(8)}${"b".repeat(32)}`
+    const second = `${"a".repeat(8)}${"c".repeat(32)}`
 
-    expect(first["kiln.database.hostname"]).not.toBe(
-      second["kiln.database.hostname"]
+    const created = [
+      await createDatabase(harness, first),
+      await createDatabase(harness, second),
+    ]
+
+    expect(new Set(created.map((database) => database.hostname)).size).toBe(2)
+    expect([...fakeDocker.networks.keys()]).toEqual(
+      expect.arrayContaining([networkOf(first), networkOf(second)])
     )
-    expect(first["kiln.database.network"]).not.toBe(
-      second["kiln.database.network"]
-    )
-    expect(first["kiln.database.volume"]).not.toBe(
-      second["kiln.database.volume"]
-    )
+    expect([...fakeDocker.volumes.keys()]).toEqual([volumeOf(first), volumeOf(second)])
   })
 })
 
 describe("managed database credential rotation", () => {
-  const credentialRotationCases: ReadonlyArray<
-    readonly ["redis" | "valkey", string, string]
-  > = [
-    ["redis", "REDISCLI_AUTH", "redis-cli"],
-    ["valkey", "VALKEYCLI_AUTH", "valkey-cli"],
-  ]
+  it.each([
+    ["redis", "REDISCLI_AUTH"],
+    ["valkey", "VALKEYCLI_AUTH"],
+  ] as const)(
+    "rotates %s credentials without exposing passwords to process arguments",
+    async (engine, environmentName) => {
+      const harness = await relayHarness()
+      const id = "e".repeat(40)
+      await createDatabase(harness, id, engine)
 
-  it.each(credentialRotationCases)(
-    "passes %s authentication through the client environment",
-    (engine, environmentName, client) => {
-      const arguments_ = databaseAclLoadArguments(
-        engine,
-        "container-id",
-        "kiln_user",
-        "current-password"
-      )
+      await harness.databases.rotateCredentials({
+        currentPassword: password,
+        databaseId: id,
+        nextPassword,
+        username: "kiln_user",
+      })
 
-      expect(arguments_).toContain(`${environmentName}=current-password`)
-      expect(arguments_).toContain(client)
-      expect(arguments_).not.toContain("-a")
-      expect(arguments_).not.toContain("current-password")
+      const acl = fakeDocker.volumes.get(volumeOf(id))?.files.get("users.acl")
+      expect(acl).toContain(createHash("sha256").update(nextPassword).digest("hex"))
+      expect(acl).not.toContain(nextPassword)
+      const processes = databaseContainer(id).processes
+      expect(processes).toHaveLength(1)
+      expect(processes[0]?.env).toEqual({ [environmentName]: password })
+      expect(processes[0]?.argv.join(" ")).not.toContain(password)
     }
   )
 })
 
 describe("managed database deletion", () => {
   it("removes owned network and volume resources without a container", async () => {
-    const databaseId = "d".repeat(40)
-    const config = loadConfig({
-      KILN_RELAY_ALLOW_PROVISIONING: "true",
-      KILN_RELAY_RESOURCE_NAMESPACE: "kiln-test",
-      NODE_ENV: "test",
+    const harness = await relayHarness()
+    const id = "d".repeat(40)
+    const labels = {
+      "kiln.database.id": id,
+      "kiln.relay.owner": TEST_NAMESPACE,
+      "kiln.resource.kind": "database",
+    }
+    fakeDocker.addNetwork({
+      internal: true,
+      labels: { ...labels, "kiln.database.network": networkOf(id) },
+      name: networkOf(id),
     })
-    const network = `kiln-test-kiln-db-${databaseId}-network`
-    const volume = `kiln-test-kiln-db-${databaseId}-data`
-    commandMock.mockImplementation(async (_executable, arguments_) => {
-      if (arguments_[0] === "container" && arguments_[1] === "ls") {
-        return {
-          stderr: "",
-          stdout: arguments_.includes(`network=${network}`)
-            ? "server-container\n"
-            : "",
-        }
-      }
-      if (arguments_[0] === "inspect" && arguments_[1] === "server-container") {
-        return {
-          stderr: "",
-          stdout: JSON.stringify([
-            {
-              Config: { Labels: {} },
-              Id: "server-container",
-              Name: "/game-server",
-            },
-          ]),
-        }
-      }
-      if (arguments_[0] === "network" && arguments_[1] === "inspect") {
-        if (arguments_.at(-1) !== network) throw new Error("Network not found")
-        return {
-          stderr: "",
-          stdout: JSON.stringify({
-            "kiln.database.id": databaseId,
-            "kiln.database.network": network,
-            "kiln.relay.owner": "kiln-test",
-            "kiln.resource.kind": "database",
-          }),
-        }
-      }
-      if (arguments_[0] === "volume" && arguments_[1] === "inspect") {
-        if (arguments_.at(-1) !== volume) throw new Error("Volume not found")
-        return {
-          stderr: "",
-          stdout: JSON.stringify({
-            "kiln.database.id": databaseId,
-            "kiln.database.volume": volume,
-            "kiln.relay.owner": "kiln-test",
-            "kiln.resource.kind": "database",
-          }),
-        }
-      }
-      if (
-        (arguments_[0] === "network" && arguments_[1] === "rm") ||
-        (arguments_[0] === "volume" && arguments_[1] === "rm")
-      ) {
-        return { stderr: "", stdout: "" }
-      }
-      throw new Error(`Unexpected Docker arguments: ${arguments_.join(" ")}`)
+    fakeDocker.addVolume({
+      labels: { ...labels, "kiln.database.volume": volumeOf(id) },
+      name: volumeOf(id),
     })
-    const driver = new DatabaseDriver(config, new DockerDriver(config))
+    const server = await harness.seedServer({ id: serverId, running: true })
+    fakeDocker.connect(server.name, networkOf(id))
 
     await expect(
-      driver.delete({ databaseId, deleteData: true })
-    ).resolves.toEqual({ databaseId, deleted: true })
+      harness.databases.delete({ databaseId: id, deleteData: true })
+    ).resolves.toEqual({ databaseId: id, deleted: true })
 
-    expect(commandMock).toHaveBeenCalledWith("docker", [
-      "network",
-      "disconnect",
-      "--force",
-      network,
-      "game-server",
-    ])
-    expect(commandMock).toHaveBeenCalledWith("docker", [
-      "network",
-      "rm",
-      network,
-    ])
-    expect(commandMock).toHaveBeenCalledWith("docker", ["volume", "rm", volume])
-    expect(commandMock).not.toHaveBeenCalledWith(
-      "docker",
-      expect.arrayContaining(["rm", "--force"]),
-      expect.anything()
-    )
+    expect(fakeDocker.networks.has(networkOf(id))).toBe(false)
+    expect(fakeDocker.volumes.has(volumeOf(id))).toBe(false)
+    expect(server.networks.has(networkOf(id))).toBe(false)
+    expect(server.state.running).toBe(true)
   })
 })
 
 describe("explicit database connections", () => {
-  it.each(["missing", "unavailable", "healthy"] as const)(
-    "handles a %s target without changing server power",
-    async (target) => {
-      const databaseId = "b".repeat(40)
-      const instanceId = "a".repeat(40)
-      const set = vi.fn(async () => undefined)
-      const reconcile = vi.fn(async () => [
-        {
-          databaseId: target === "unavailable" ? databaseId : null,
-          message: "Network unavailable",
-        },
-      ])
-      const findInstance = vi.fn(async () => ({
-        id: instanceId,
-        service: "server",
-      }))
-      const driver = new DatabaseDriver(
-        loadConfig({ NODE_ENV: "test" }),
-        { findInstance } as unknown as DockerDriver,
-        { set, reconcile } as unknown as DatabaseConnections
-      )
-      const database = {
-        id: databaseId,
-        connectedInstanceIds: [],
-      } as unknown as RelayManagedDatabase
-      vi.spyOn(driver, "list")
-        .mockResolvedValueOnce(target === "missing" ? [] : [database])
-        .mockResolvedValue([
-          {
-            ...database,
-            connectedInstanceIds: target === "healthy" ? [instanceId] : [],
-          },
-        ])
-      const result = driver.updateNetwork({
-        databaseId,
-        instanceId,
+  it("attaches a running server to a healthy database without restarting it", async () => {
+    const harness = await relayHarness()
+    const id = "b".repeat(40)
+    await createDatabase(harness, id)
+    const server = await harness.seedServer({ id: serverId, running: true })
+    const startedAt = server.state.startedAt
+
+    const updated = await harness.databases.updateNetwork({
+      connected: true,
+      databaseId: id,
+      instanceId: serverId,
+    })
+
+    expect(updated.connectedInstanceIds).toEqual([serverId])
+    expect(server.networks.has(networkOf(id))).toBe(true)
+    expect(server.state).toMatchObject({ running: true, startedAt })
+  })
+
+  it("reports an unavailable database network without touching the server", async () => {
+    const harness = await relayHarness()
+    const id = "b".repeat(40)
+    await createDatabase(harness, id)
+    const server = await harness.seedServer({ id: serverId, running: true })
+    // The network vanished outside Relay.
+    databaseContainer(id).networks.delete(networkOf(id))
+    fakeDocker.networks.delete(networkOf(id))
+
+    await expect(
+      harness.databases.updateNetwork({
         connected: true,
+        databaseId: id,
+        instanceId: serverId,
       })
-      if (target === "healthy")
-        await expect(result).resolves.toMatchObject({
-          connectedInstanceIds: [instanceId],
-        })
-      else
-        await expect(result).rejects.toThrow(
-          target === "missing" ? "Database not found" : "Retry the connection"
-        )
-      expect(set).toHaveBeenCalledTimes(target === "missing" ? 0 : 1)
-      expect(reconcile).toHaveBeenCalledTimes(target === "missing" ? 0 : 1)
-      expect(commandMock).not.toHaveBeenCalled()
-    }
-  )
+    ).rejects.toThrow("Retry the connection")
+    expect(server.state.running).toBe(true)
+  })
+
+  it("refuses to connect a missing database and saves no intent", async () => {
+    const harness = await relayHarness()
+    await harness.seedServer({ id: serverId, running: true })
+
+    await expect(
+      harness.databases.updateNetwork({
+        connected: true,
+        databaseId: "b".repeat(40),
+        instanceId: serverId,
+      })
+    ).rejects.toThrow("Database not found")
+    expect(
+      await Effect.runPromise(harness.state.listInstanceDatabaseConnections(serverId))
+    ).toEqual([])
+  })
 })
 
 describe("database mutation serialization", () => {
-  it("waits for deletion before validating a queued connect, without saving an orphan", async () => {
-    const databaseId = "d".repeat(40)
-    const config = loadConfig({
-      KILN_RELAY_RESOURCE_NAMESPACE: "kiln-test",
-      NODE_ENV: "test",
+  it("runs a connect queued behind deletion after it, without saving an orphan", async () => {
+    const harness = await relayHarness()
+    const id = "d".repeat(40)
+    await createDatabase(harness, id)
+    const server = await harness.seedServer({ id: serverId, running: true })
+    const removal = fakeDocker.hold({
+      command: "rm",
+      target: databaseContainer(id).id,
     })
-    const network = `kiln-test-kiln-db-${databaseId}-network`
-    let markEntered!: () => void
-    let finishDeletion!: () => void
-    const entered = new Promise<void>((resolve) => {
-      markEntered = resolve
+
+    const deleting = harness.databases.delete({ databaseId: id, deleteData: true })
+    await removal.reached
+    const connecting = harness.databases.updateNetwork({
+      connected: true,
+      databaseId: id,
+      instanceId: serverId,
     })
-    const finish = new Promise<void>((resolve) => {
-      finishDeletion = resolve
-    })
-    const set = vi.fn(async () => undefined)
-    const forgetDatabase = vi.fn(async () => {
-      markEntered()
-      await finish
-    })
-    commandMock.mockImplementation(async (_command, args) => {
-      if (args[0] === "container" && args[1] === "ls")
-        return { stdout: "", stderr: "" }
-      if (args[0] === "network" && args[1] === "inspect")
-        return {
-          stdout: JSON.stringify({
-            "kiln.database.id": databaseId,
-            "kiln.database.network": network,
-            "kiln.relay.owner": "kiln-test",
-            "kiln.resource.kind": "database",
-          }),
-          stderr: "",
-        }
-      if (args[0] === "volume" && args[1] === "inspect")
-        throw new Error("Volume not found")
-      if (args[0] === "network" && args[1] === "rm")
-        return { stdout: "", stderr: "" }
-      throw new Error(`Unexpected command ${args.join(" ")}`)
-    })
-    const driver = new DatabaseDriver(config, new DockerDriver(config), {
-      set,
-      forgetDatabase,
-    } as unknown as DatabaseConnections)
-    const list = vi.spyOn(driver, "list")
-    const deleting = driver.delete({ databaseId, deleteData: false })
-    await entered
-    const connecting = expect(
-      driver.updateNetwork({
-        databaseId,
-        instanceId: "a".repeat(40),
-        connected: true,
-      })
-    ).rejects.toThrow("Database not found")
-    await new Promise<void>((resolve) => setImmediate(resolve))
-    expect(list).toHaveBeenCalledTimes(1)
-    expect(set).not.toHaveBeenCalled()
-    finishDeletion()
-    await deleting
-    await connecting
-    expect(list).toHaveBeenCalledTimes(2)
-    expect(set).not.toHaveBeenCalled()
-    // A failed connect must release its permit for subsequent operations.
+    removal.release()
+
+    await expect(deleting).resolves.toMatchObject({ deleted: true })
+    await expect(connecting).rejects.toThrow("Database not found")
+    expect(
+      await Effect.runPromise(harness.state.listInstanceDatabaseConnections(serverId))
+    ).toEqual([])
+    expect([...server.networks.keys()]).toEqual([harness.resources.gameNetwork])
+    // The failed connect released its lock for later operations.
     await expect(
-      driver.updateNetwork({
-        databaseId,
-        instanceId: "a".repeat(40),
+      harness.databases.updateNetwork({
         connected: true,
+        databaseId: id,
+        instanceId: serverId,
       })
     ).rejects.toThrow("Database not found")
   })

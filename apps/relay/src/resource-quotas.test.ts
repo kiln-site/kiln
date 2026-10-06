@@ -2,11 +2,10 @@ import {
   DEFAULT_INSTANCE_DISK_LIMIT_BYTES,
   MINIMUM_INSTANCE_DISK_LIMIT_BYTES,
   relayDiskAllocationAvailableBytes,
-  relayInstanceLimitsSchema,
 } from "@workspace/contracts"
 import { describe, expect, it } from "vite-plus/test"
 
-import { legacyDiskLimitAssignments } from "./docker.js"
+import { legacyDiskLimitAssignments } from "./resource-quotas.js"
 
 const GIBIBYTE = 1024 ** 3
 
@@ -49,12 +48,6 @@ describe("Relay disk quotas", () => {
     )
 
     expect(assignments.get("legacy")).toBe(DEFAULT_INSTANCE_DISK_LIMIT_BYTES)
-    expect(
-      relayInstanceLimitsSchema.parse({
-        diskBytes: 0,
-        memoryBytes: 0,
-      }).diskBytes
-    ).toBe(DEFAULT_INSTANCE_DISK_LIMIT_BYTES)
   })
 
   it("uses the default instead of assigning below the positive quota floor", () => {

@@ -1,290 +1,107 @@
-import { mkdir, mkdtemp, rm } from "node:fs/promises"
-import { tmpdir } from "node:os"
-import { join } from "node:path"
-
-import { afterEach, describe, expect, it, vi } from "vite-plus/test"
 import {
-  brickRecipeSchema,
-  relayInstanceSchema,
+  relayCreateDatabaseSchema,
   relayUpdateInstanceStartupSchema,
-  type BrickRecipe,
-  type RelayInstance,
-  type RelayInstancePortAllocation,
 } from "@workspace/contracts"
+import { describe, expect, it, vi } from "vite-plus/test"
 
-const commandMock = vi.hoisted(() => vi.fn())
+vi.mock("./command.js", () => import("./test/docker.js"))
 
-vi.mock("./command.js", () => ({ command: commandMock }))
-
-import type { BrickCatalog } from "./bricks.js"
-import { loadConfig } from "./config.js"
-import type { DockerDriver } from "./docker.js"
+import { fakeDocker } from "./test/docker.js"
 import {
-  databaseConnectionLabels,
-  type DatabaseConnections,
-} from "./database-connections.js"
-import {
-  LifecycleDriver,
-  resolveInstanceStartupReconfigure,
-} from "./lifecycle.js"
+  relayHarness,
+  serverRecipe,
+  type RelayHarness,
+} from "./test/relay.js"
 
-const recipeSource = "https://example.com/example.yml"
-const recipe: BrickRecipe = brickRecipeSchema.parse({
-  format: "kiln.brick/v1",
-  metadata: {
-    id: "example",
-    name: "Example",
-    description: "A test Brick recipe.",
-    game: "Example Game",
-    author: "Kiln",
-  },
-  variables: {
-    version: {
-      type: "string",
-      label: "Version",
-      description: "Release to install.",
-      required: true,
-      default: "1.2.3",
-      rules: { pattern: "^[0-9.]+$" },
-    },
-    memory: {
-      type: "string",
-      label: "Memory",
-      description: "Memory allocation.",
-      required: true,
-      default: "2G",
-      options: ["2G", "4G"],
-    },
-    java_version: {
-      type: "string",
-      label: "Java version",
-      description: "JDK release used to run the server.",
-      required: true,
-      default: "21",
-      options: ["21", "25"],
-    },
-  },
-  runtime: {
-    image: "registry.example.com/custom/server:{{ variables.java_version }}",
-    name: "Java {{ variables.java_version }}",
-    environment: {
-      VERSION: "{{ variables.version }}",
-    },
-    resources: {
-      memory: "{{ variables.memory }}",
-      memoryReservation: "{{ variables.memory }}",
-      pids: 128,
-    },
-    storage: { mount: "/server" },
-  },
-  network: {
-    mode: "direct",
-    primaryPort: "game",
-    hostname: "{{ brick.id }}",
-    ports: [{ name: "game", container: 7777, protocol: "udp" }],
-  },
-})
+const id = "a".repeat(40)
+const GIBIBYTE = 1024 ** 3
 
-const primaryPort = {
-  externalPort: 32_123,
-  id: "primary",
-  internalPort: 7777,
-  kind: "primary",
-  name: "Game",
-  protocol: "udp",
-} satisfies RelayInstancePortAllocation
-
-const appliedVariables = {
-  java_version: "21",
-  memory: "2G",
-  version: "1.2.3",
+function serverContainer(harness: RelayHarness) {
+  const container = fakeDocker.container(harness.resources.instanceContainer(id))
+  if (!container) throw new Error("The server has no container")
+  return container
 }
 
-const temporaryDirectories: Array<string> = []
-
-afterEach(async () => {
-  commandMock.mockReset()
-  await Promise.all(
-    temporaryDirectories
-      .splice(0)
-      .map((directory) => rm(directory, { force: true, recursive: true }))
+const reconfigure = (harness: RelayHarness, input: unknown) =>
+  harness.lifecycle.reconfigureInstance(
+    id,
+    relayUpdateInstanceStartupSchema.parse(input)
   )
-})
 
-function instance(overrides: Partial<RelayInstance> = {}): RelayInstance {
-  return relayInstanceSchema.parse({
-    brickNetworkMode: "direct",
-    brickSource: recipeSource,
-    connectAddress: "example.test:32123",
-    containerId: "example-container",
-    desiredState: "running",
-    directory: "a".repeat(40),
-    game: "Example Game",
-    id: "a".repeat(40),
-    implementation: "Example",
-    javaVersion: "21",
-    limits: {
-      diskBytes: 25 * 1024 ** 3,
-      memoryBytes: 2 * 1024 ** 3,
-    },
-    managedByRelay: true,
-    name: "Example server",
-    observedState: "running",
-    ports: [primaryPort],
-    publicHost: "example.test",
-    publicPort: 32_123,
-    service: "kiln-example",
-    shortId: "aaaaaaaa",
-    startedAt: null,
-    status: "running",
-    variables: appliedVariables,
-    version: "1.2.3",
-    ...overrides,
-  })
-}
-
-describe("startup reinstall resolution", () => {
-  const snapshotSha256 = "b".repeat(64)
-
-  it("ignores stale client Brick, variables, limits, and start on reinstall", () => {
-    const resolved = resolveInstanceStartupReconfigure(
-      instance({
-        brickSnapshotSha256: snapshotSha256,
-        observedState: "running",
-      }),
-      relayUpdateInstanceStartupSchema.parse({
-        diskLimitBytes: 40 * 1024 ** 3,
-        recipe: "https://example.com/other.yml",
-        reinstall: true,
-        start: false,
-        variables: {
-          java_version: "25",
-          memory: "4G",
-          version: "9.9.9",
-        },
-      })
-    )
-
-    expect(resolved).toEqual({
-      diskLimitBytes: 25 * 1024 ** 3,
-      forcePull: true,
-      recipe: recipeSource,
-      snapshotSha256,
+describe("startup reinstall", () => {
+  it("reinstalls the applied Brick, variables, and quota, ignoring stale client fields", async () => {
+    const harness = await relayHarness()
+    const created = await harness.createServer({
+      id,
       start: true,
-      tailscale: { enabled: false },
-      variables: appliedVariables,
+      variables: { version: "1.2.3" },
     })
-  })
 
-  it("starts after reinstall when the desired state is running", () => {
-    const resolved = resolveInstanceStartupReconfigure(
-      instance({ desiredState: "running", observedState: "failed" }),
-      relayUpdateInstanceStartupSchema.parse({
-        reinstall: true,
-        start: false,
-      })
-    )
-
-    expect(resolved.start).toBe(true)
-  })
-
-  it("keeps a stopped server stopped even when the client asks to start", () => {
-    const resolved = resolveInstanceStartupReconfigure(
-      instance({ desiredState: "stopped", observedState: "stopped" }),
-      relayUpdateInstanceStartupSchema.parse({
-        reinstall: true,
-        start: true,
-      })
-    )
-
-    expect(resolved.start).toBe(false)
-    expect(resolved.forcePull).toBe(true)
-  })
-
-  it("still applies client startup patches when reinstall is omitted", () => {
-    const resolved = resolveInstanceStartupReconfigure(
-      instance({ observedState: "stopped" }),
-      relayUpdateInstanceStartupSchema.parse({
-        recipe: "https://example.com/other.yml",
-        start: true,
-        variables: {
-          java_version: "25",
-          memory: "4G",
-          version: "1.2.3",
-        },
-      })
-    )
-
-    expect(resolved).toMatchObject({
-      forcePull: false,
+    const reinstalled = await reconfigure(harness, {
+      diskLimitBytes: 2 * GIBIBYTE,
       recipe: "https://example.com/other.yml",
-      start: true,
-      variables: {
-        java_version: "25",
-        memory: "4G",
-        version: "1.2.3",
+      reinstall: true,
+      start: false,
+      variables: { version: "9.9.9" },
+    })
+
+    expect(reinstalled).toMatchObject({
+      brickSource: created.brickSource,
+      limits: { diskBytes: GIBIBYTE },
+      variables: { version: "1.2.3" },
+    })
+    const container = serverContainer(harness)
+    expect(container.image).toBe("registry.example.com/example/server:1.2.3")
+    expect(container.state.running).toBe(true)
+  })
+
+  it("keeps a stopped server stopped even when the client asks to start", async () => {
+    const harness = await relayHarness()
+    await harness.createServer({ id, start: false })
+
+    await reconfigure(harness, { reinstall: true, start: true })
+
+    expect(serverContainer(harness).state.running).toBe(false)
+  })
+
+  it("applies client startup changes when not reinstalling", async () => {
+    const harness = await relayHarness()
+    await harness.createServer({ id, start: false })
+    const next = serverRecipe({
+      metadata: { ...serverRecipe().metadata, id: "example-next" },
+      runtime: {
+        ...serverRecipe().runtime,
+        image: "registry.example.com/next/server:{{ variables.version }}",
       },
     })
-    expect(resolved.snapshotSha256).toBeUndefined()
-  })
 
-  it("reuses the stored snapshot when the submitted source is unchanged", () => {
-    const resolved = resolveInstanceStartupReconfigure(
-      instance({ brickSnapshotSha256: snapshotSha256 }),
-      relayUpdateInstanceStartupSchema.parse({
-        recipe: recipeSource,
-        start: true,
-        variables: appliedVariables,
-      })
-    )
-
-    expect(resolved.snapshotSha256).toBe(snapshotSha256)
-  })
-})
-
-describe("startup reinstall pull ordering", () => {
-  it("pulls the Ember image before deleting the existing container", async () => {
-    const dataDirectory = await mkdtemp(join(tmpdir(), "kiln-reinstall-pull-"))
-    temporaryDirectories.push(dataDirectory)
-    const existing = instance()
-    await mkdir(join(dataDirectory, "instances", existing.directory), {
-      recursive: true,
+    const updated = await reconfigure(harness, {
+      recipe: await harness.publishRecipe(next),
+      start: true,
+      variables: { version: "2.0.0" },
     })
-    const calls: Array<string> = []
-    commandMock.mockImplementation(
-      async (_executable: string, args: Array<string>) => {
-        calls.push(args[0] ?? "")
-        if (args[0] === "pull") {
-          throw new Error("registry timeout")
-        }
-        return { stderr: "", stdout: "" }
-      }
-    )
-    const docker = {
-      inspectInstances: vi.fn(async () => [existing]),
-    } as unknown as DockerDriver
-    const lifecycle = new LifecycleDriver(
-      loadConfig({
-        KILN_RELAY_DATA_DIR: dataDirectory,
-        KILN_RELAY_GAME_PORT_RANGE: "32123-32123",
-        KILN_RELAY_PROXY: "hearth",
-        KILN_RELAY_RESOURCE_NAMESPACE: "reinstall-pull-test",
-        NODE_ENV: "test",
-      }),
-      docker,
-      { recipe: async () => recipe } as unknown as BrickCatalog
-    )
+
+    expect(updated).toMatchObject({
+      brickId: "example-next",
+      variables: { version: "2.0.0" },
+    })
+    const container = serverContainer(harness)
+    expect(container.image).toBe("registry.example.com/next/server:2.0.0")
+    expect(container.state.running).toBe(true)
+  })
+
+  it("keeps the existing server when the replacement image cannot be pulled", async () => {
+    const harness = await relayHarness()
+    await harness.createServer({ id, start: true })
+    const before = serverContainer(harness)
+    fakeDocker.unreachableImages.add("registry.example.com/example/server:1.2.3")
 
     await expect(
-      lifecycle.reconfigureInstance(
-        existing.id,
-        relayUpdateInstanceStartupSchema.parse({ reinstall: true })
-      )
+      reconfigure(harness, { reinstall: true })
     ).rejects.toThrow("registry timeout")
 
-    expect(calls[0]).toBe("pull")
-    expect(calls).not.toContain("stop")
-    expect(calls).not.toContain("rm")
+    expect(serverContainer(harness)).toBe(before)
+    expect(before.state.running).toBe(true)
   })
 })
 
@@ -295,91 +112,42 @@ describe("startup database connections", () => {
     { reinstall: false, unavailable: true },
     { reinstall: true, unavailable: true },
   ])(
-    "restores connections without failing replacement (reinstall=$reinstall, unavailable=$unavailable)",
+    "restores connections without failing the replacement (reinstall=$reinstall, unavailable=$unavailable)",
     async ({ reinstall, unavailable }) => {
-      const dataDirectory = await mkdtemp(
-        join(tmpdir(), "kiln-startup-databases-")
-      )
-      temporaryDirectories.push(dataDirectory)
-      const existing = instance()
-      await mkdir(join(dataDirectory, "instances", existing.directory), {
-        recursive: true,
-      })
-      const calls: Array<Array<string>> = []
-      commandMock.mockImplementation(
-        async (_executable: string, args: Array<string>) => {
-          calls.push(args)
-          if (args[0] === "network" && args[1] === "inspect")
-            return {
-              stderr: "",
-              stdout: JSON.stringify({
-                "kiln.relay.network": "game",
-                "kiln.relay.owner": "database-test",
-              }),
-            }
-          return { stderr: "", stdout: "[]" }
-        }
-      )
-      const labels = databaseConnectionLabels([
-        { databaseId: "b".repeat(40), relayId: "r".repeat(43) },
-      ])
-      const connections = {
-        labels: vi.fn(async () => labels),
-        reconcile: vi.fn(async () => {
-          calls.push(["restore-databases"])
-          return unavailable
-            ? [
-                {
-                  databaseId: "b".repeat(40),
-                  message: "Database network is unavailable",
-                },
-              ]
-            : []
-        }),
-      } as unknown as DatabaseConnections
-      const docker = {
-        inspectInstances: vi.fn(async () => [existing]),
-        recordProvisionedState: vi.fn(async () => undefined),
-      } as unknown as DockerDriver
-      const lifecycle = new LifecycleDriver(
-        loadConfig({
-          KILN_RELAY_DATA_DIR: dataDirectory,
-          KILN_RELAY_GAME_PORT_RANGE: "32123-32123",
-          KILN_RELAY_PROXY: "hearth",
-          KILN_RELAY_RESOURCE_NAMESPACE: "database-test",
-          NODE_ENV: "test",
-        }),
-        docker,
-        {
-          recipe: async () => recipe,
-          saveSnapshot: async () => "b".repeat(64),
-        } as unknown as BrickCatalog,
-        connections
-      )
-      await lifecycle.reconfigureInstance(
-        existing.id,
-        relayUpdateInstanceStartupSchema.parse(
-          reinstall
-            ? { reinstall: true }
-            : { start: true, variables: appliedVariables }
+      const harness = await relayHarness()
+      harness.config.nodeId = "r".repeat(43)
+      const databaseId = "b".repeat(40)
+      await harness.createServer({ id, start: true })
+      if (!unavailable) {
+        await harness.databases.create(
+          relayCreateDatabaseSchema.parse({
+            databaseName: "kiln_app",
+            engine: "postgres",
+            id: databaseId,
+            name: "Main database",
+            password: "correct-horse-battery-staple-1",
+            username: "kiln_user",
+          })
         )
+      }
+      await harness.databaseConnections.set(id, databaseId, true)
+
+      const replaced = await reconfigure(
+        harness,
+        reinstall ? { reinstall: true } : { start: true, variables: {} }
       )
-      const create = calls.find(
-        (args) => args[0] === "container" && args[1] === "create"
-      )!
-      for (const [key, value] of Object.entries(labels))
-        expect(create).toContain(`${key}=${value}`)
-      expect(connections.labels).toHaveBeenCalledWith(existing.id)
-      expect(connections.reconcile).toHaveBeenCalledWith(
-        existing.id,
-        "database-test-kiln-aaaaaaaa"
-      )
-      const restoreIndex = calls.findIndex(
-        (args) => args[0] === "restore-databases"
-      )
-      expect(restoreIndex).toBeGreaterThan(calls.indexOf(create))
-      expect(restoreIndex).toBeLessThan(
-        calls.findIndex((args) => args[0] === "start")
+
+      const container = serverContainer(harness)
+      expect(container.state.running).toBe(true)
+      expect(container.labels).toMatchObject({
+        [`kiln.instance.databases.${databaseId}`]: harness.config.nodeId,
+        "kiln.instance.databases.version": "1",
+      })
+      expect(
+        container.networks.has(`kiln-test-kiln-db-${databaseId}-network`)
+      ).toBe(!unavailable)
+      expect(replaced.databaseConnectionWarnings ?? []).toHaveLength(
+        unavailable ? 1 : 0
       )
     }
   )

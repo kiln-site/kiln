@@ -4,12 +4,9 @@ import { resolve } from "node:path"
 import ssh2 from "ssh2"
 import { describe, expect, it, onTestFinished } from "vite-plus/test"
 
-import type { RelayConfig, RelayInstanceConfig } from "./config.js"
-import {
-  attachSftpServer,
-  generateSftpHostKey,
-  resolveSftpAuthentication,
-} from "./sftp-server.js"
+import type { RelayConfig } from "./config.js"
+import { attachSftpServer } from "./sftp-server.js"
+import { testInstance, testRelayConfig } from "./test/fixtures.js"
 
 const describeLinux = process.platform === "linux" ? describe : describe.skip
 const malformedLeadingZeroHostKey =
@@ -31,109 +28,111 @@ const allowFileAccess = async () => [
   "instance.files.chmod",
 ]
 
-describe("Relay SFTP host key", () => {
-  it("retries when ssh2 generates a malformed leading-zero Ed25519 key", () => {
-    const validHostKey = generateSftpHostKey()
-    let attempts = 0
-    const generated = generateSftpHostKey(() => {
-      attempts += 1
-      return attempts === 1 ? malformedLeadingZeroHostKey : validHostKey
-    })
-
-    expect(attempts).toBe(2)
-    expect(generated).toEqual(validHostKey)
-  })
-})
-
-describe("Relay SFTP authentication", () => {
-  it("reserves credential-free authorization for the development password", () => {
-    expect(resolveSftpAuthentication("", false)).toBeNull()
-    expect(resolveSftpAuthentication("", true)).toBeNull()
-    expect(resolveSftpAuthentication("kiln_cli_secret", false)).toEqual({
-      credential: "kiln_cli_secret",
-    })
-    expect(resolveSftpAuthentication("dev123", true)).toEqual({
-      credential: undefined,
-    })
-  })
-})
-
 describeLinux("Relay SFTP server", () => {
-  it("forwards production passwords to Hearth as CLI credentials", async () => {
-    const dataDirectory = await temporaryDirectory()
-    await mkdir(resolve(dataDirectory, "instances"), { recursive: true })
-    const requests: Array<{ operation: string; payload: unknown }> = []
-    const server = await attachSftpServer({
-      clientActions: allowFileAccess,
-      config: {
-        ...testConfig(dataDirectory),
-        sftpDevAuthentication: false,
-      },
-      control: {
-        requestClients: async (operation, payload) => {
-          requests.push({ operation, payload })
-          return [
-            {
-              clientId: "hearth-test",
-              payload: {
-                instances: [
-                  {
-                    actions: ["instance.files.list"],
-                    id: "a".repeat(40),
-                  },
-                ],
-                userId: "user-test",
-                username: "user@example.test",
+  it.each([
+    {
+      credential: "kiln_cli_secret",
+      developmentAuthentication: false,
+      password: "kiln_cli_secret",
+    },
+    {
+      credential: "dev123",
+      developmentAuthentication: false,
+      password: "dev123",
+    },
+    {
+      credential: "kiln_cli_secret",
+      developmentAuthentication: true,
+      password: "kiln_cli_secret",
+    },
+    {
+      credential: undefined,
+      developmentAuthentication: true,
+      password: "dev123",
+    },
+  ])(
+    "forwards $password to Hearth as credential $credential (development auth: $developmentAuthentication)",
+    async ({ credential, developmentAuthentication, password }) => {
+      const dataDirectory = await temporaryDirectory()
+      await mkdir(resolve(dataDirectory, "instances"), { recursive: true })
+      const requests: Array<{ operation: string; payload: unknown }> = []
+      const server = await attachSftpServer({
+        clientActions: allowFileAccess,
+        config: {
+          ...testConfig(dataDirectory),
+          sftpDevAuthentication: developmentAuthentication,
+        },
+        control: {
+          requestClients: async (operation, payload) => {
+            requests.push({ operation, payload })
+            return [
+              {
+                clientId: "hearth-test",
+                payload: {
+                  instances: [
+                    {
+                      actions: ["instance.files.list"],
+                      id: "a".repeat(40),
+                    },
+                  ],
+                  userId: "user-test",
+                  username: "user@example.test",
+                },
               },
-            },
-          ]
+            ]
+          },
         },
-      },
-      docker: { findInstance: async () => null },
-    })
-
-    const client = await connect(server.port, "kiln_cli_secret")
-    try {
-      expect(requests[0]).toEqual({
-        operation: "sftp.authorization.resolve",
-        payload: {
-          credential: "kiln_cli_secret",
-          username: "user@example.test",
-        },
+        docker: { findInstance: async () => null },
       })
-    } finally {
-      client.end()
-      await server.close()
-    }
-  })
 
-  it("rejects empty production passwords without contacting Hearth", async () => {
-    const dataDirectory = await temporaryDirectory()
-    await mkdir(resolve(dataDirectory, "instances"), { recursive: true })
-    const requests: Array<unknown> = []
-    const server = await attachSftpServer({
-      clientActions: allowFileAccess,
-      config: {
-        ...testConfig(dataDirectory),
-        sftpDevAuthentication: false,
-      },
-      control: {
-        requestClients: async (_operation, payload) => {
-          requests.push(payload)
-          return []
-        },
-      },
-      docker: { findInstance: async () => null },
-    })
-    try {
-      await expect(connect(server.port, "")).rejects.toThrow(
-        "All configured authentication methods failed"
-      )
-      expect(requests).toEqual([])
-    } finally {
-      await server.close()
+      const client = await connect(server.port, password)
+      try {
+        expect(requests).toEqual([
+          {
+            operation: "sftp.authorization.resolve",
+            payload: {
+              ...(credential === undefined ? {} : { credential }),
+              username: "user@example.test",
+            },
+          },
+        ])
+      } finally {
+        client.end()
+        await server.close()
+      }
     }
-  })
+  )
+
+  it.each([false, true])(
+    "rejects empty passwords without contacting Hearth (development auth: %s)",
+    async (developmentAuthentication) => {
+      const dataDirectory = await temporaryDirectory()
+      await mkdir(resolve(dataDirectory, "instances"), { recursive: true })
+      const requests: Array<unknown> = []
+      const server = await attachSftpServer({
+        clientActions: allowFileAccess,
+        config: {
+          ...testConfig(dataDirectory),
+          sftpDevAuthentication: developmentAuthentication,
+        },
+        control: {
+          requestClients: async (_operation, payload) => {
+            requests.push(payload)
+            return []
+          },
+        },
+        docker: { findInstance: async () => null },
+      })
+      try {
+        await expect(connect(server.port, "")).rejects.toThrow(
+          "All configured authentication methods failed"
+        )
+        expect(requests).toEqual([])
+      } finally {
+        await server.close()
+      }
+    }
+  )
 
   it("exposes authorized instances, transfers files, and rejects SSH commands", async () => {
     const dataDirectory = await temporaryDirectory()
@@ -142,7 +141,7 @@ describeLinux("Relay SFTP server", () => {
     const instanceDirectory = resolve(rootDirectory, instanceId)
     await mkdir(instanceDirectory, { recursive: true })
     await writeFile(resolve(instanceDirectory, "existing.txt"), "existing")
-    const instance = testInstance(instanceId)
+    const instance = testInstance({ id: instanceId })
     const server = await attachSftpServer({
       clientActions: allowFileAccess,
       config: testConfig(dataDirectory),
@@ -324,7 +323,7 @@ describeLinux("Relay SFTP server", () => {
       },
       docker: {
         findInstance: async (id) =>
-          id === instanceId ? testInstance(instanceId) : null,
+          id === instanceId ? testInstance({ id: instanceId }) : null,
       },
     })
     const client = await connect(server.port, "dev123")
@@ -469,84 +468,9 @@ function execute(client: ssh2.Client, command: string): Promise<void> {
 
 function testConfig(dataDirectory: string): RelayConfig {
   return {
-    advertisedHost: "127.0.0.1",
-    advertisedHostInferred: false,
-    backupTimeoutMs: 60 * 60_000,
-    bootstrapToken: null,
-    brickCatalogUrl: "https://example.test/catalog.yml",
-    browserLimits: {
-      fileReplayEntries: 65_536,
-      outboxBytes: 2 * 1024 * 1024,
-      outboxMessages: 256,
-      pendingFileAuthentications: 16,
-      pendingHandshakes: 64,
-      pendingHandshakesPerIp: 16,
-      sessions: 512,
-      sessionsPerInstance: 256,
-      sessionsPerUser: 64,
-      sessionsPerUserInstance: 16,
-      sublimitsEnforced: false,
-    },
-    browserOrigin: "https://127.0.0.1:4100",
-    canProvisionInstances: true,
-    coolifyPublicOrigin: null,
-    composeFile: resolve(dataDirectory, "instances", "compose.yaml"),
-    connectDomain: "test",
-    connectPort: 25_565,
-    dataDirectory,
-    directBrowserOrigin: "https://127.0.0.1:4100",
-    directPublicPort: 4100,
-    discoveredPublicIp: null,
-    dockerSocket: "/var/run/docker.sock",
-    gameHost: "127.0.0.1",
-    gamePortRange: { end: 39_999, start: 30_000 },
-    gameHostSource: "relay",
-    gitRepository: "https://github.com/kiln-site/kiln",
+    ...testRelayConfig(dataDirectory),
     host: "127.0.0.1",
-    installationId: null,
-    managedLabel: "kiln.relay.managed=true",
-    mclogsApiUrl: "https://api.mclo.gs/1/log",
-    nodeId: "test",
-    nodeName: "Test Relay",
-    port: 4100,
-    platformBackupKey: null,
-    publicPort: 4100,
-    projectDirectory: resolve(dataDirectory, "instances"),
-    projectName: "test",
-    proxyMode: "none",
-    resourceNamespace: null,
-    rootDirectory: resolve(dataDirectory, "instances"),
-    runtimeRecovery: {
-      initialDelayMs: 5_000,
-      maxRetries: 2,
-      stabilityMs: 300_000,
-    },
-    serverIdLabel: "kiln.server.id",
     sftpDevAuthentication: true,
     sftpPort: 0,
-    tlsCertificatePath: null,
-    tlsKeyPath: null,
-    tlsMode: "development",
-    traefikAcmeEmail: null,
-    traefikImage: "traefik:v3.7.13",
-  }
-}
-
-function testInstance(id: string): RelayInstanceConfig {
-  return {
-    connectAddress: "localhost",
-    directory: id,
-    game: "Minecraft",
-    id,
-    implementation: "Paper",
-    javaVersion: "21",
-    limits: { diskBytes: 0, memoryBytes: 0 },
-    managedByRelay: true,
-    name: "Test Instance",
-    ports: [],
-    service: "test",
-    shortId: id.slice(0, 8),
-    tailscale: { enabled: false },
-    version: "1.21.11",
   }
 }

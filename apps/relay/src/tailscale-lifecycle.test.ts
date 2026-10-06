@@ -1,238 +1,169 @@
-import { access, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
-import { tmpdir } from "node:os"
+import { access, mkdir, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 
-import { afterEach, describe, expect, it, vi } from "vite-plus/test"
 import {
   builtinTailscaleBrickId,
   relayTailscaleStackApplySchema,
   relayTailscaleStackConfigSchema,
   relayTailscaleStackSchema,
+  type RelayTailscaleStackConfig,
 } from "@workspace/contracts"
+import { describe, expect, it, vi } from "vite-plus/test"
 
-const commandMock = vi.hoisted(() => vi.fn())
+vi.mock("./command.js", () => import("./test/docker.js"))
 
-vi.mock("./command.js", () => ({ command: commandMock }))
+import type { RelayInstanceConfig } from "./config.js"
+import { fakeDocker } from "./test/docker.js"
+import { relayHarness, TEST_NAMESPACE, type RelayHarness } from "./test/relay.js"
 
-import { BrickCatalog } from "./bricks.js"
-import { loadConfig, type RelayInstanceConfig } from "./config.js"
-import { DockerDriver } from "./docker.js"
-import { LifecycleDriver } from "./lifecycle.js"
+const owner = { "kiln.relay.owner": TEST_NAMESPACE }
 
-const temporaryDirectories: Array<string> = []
+function stackConfig(
+  id: string,
+  overrides: Partial<RelayTailscaleStackConfig> = {}
+): RelayTailscaleStackConfig {
+  return relayTailscaleStackConfigSchema.parse({
+    bindings: [],
+    domain: "test",
+    hostname: "private-network",
+    id,
+    name: "Private Network",
+    subnet: "10.165.55.0/24",
+    ...overrides,
+  })
+}
 
-afterEach(async () => {
-  commandMock.mockReset()
-  await Promise.all(
-    temporaryDirectories
-      .splice(0)
-      .map((directory) => rm(directory, { force: true, recursive: true }))
+/** Writes a stack that Relay already prepared for removal. */
+async function preparedRemoval(
+  harness: RelayHarness,
+  config: RelayTailscaleStackConfig,
+  snapshot?: unknown
+) {
+  const directory = join(harness.config.rootDirectory, config.id)
+  await mkdir(directory, { recursive: true })
+  await writeFile(join(directory, "stack.json"), JSON.stringify(config))
+  await writeFile(join(directory, ".removing"), "prepared\n")
+  if (snapshot) {
+    await writeFile(
+      join(directory, ".removing-stack.json"),
+      JSON.stringify(snapshot)
+    )
+  }
+  return directory
+}
+
+function stackContainer(harness: RelayHarness, id: string, running: boolean) {
+  const name = harness.resources.tailscaleStackContainer(id)
+  fakeDocker.tailscale.machines.set(name, {
+    ipv4: "100.64.0.9",
+    loggedIn: true,
+  })
+  return fakeDocker.addContainer({
+    image: "tailscale/tailscale:stable",
+    labels: owner,
+    name,
+    running,
+  })
+}
+
+const exists = (path: string) =>
+  access(path).then(
+    () => true,
+    () => false
   )
-})
 
-describe("Tailscale pending removal recovery", () => {
-  it("commits cleanup when the prepared Tailscale container is already stopped", async () => {
-    const dataDirectory = await mkdtemp(
-      join(tmpdir(), "kiln-tailscale-prepared-")
-    )
-    temporaryDirectories.push(dataDirectory)
-    const config = loadConfig({
-      KILN_RELAY_DATA_DIR: dataDirectory,
-      KILN_RELAY_RESOURCE_NAMESPACE: "prepared-removal-test",
-      NODE_ENV: "test",
-    })
+describe("Tailscale stack removal", () => {
+  it("starts a stopped stack container to log its machine out before cleanup", async () => {
+    const harness = await relayHarness()
     const id = "f".repeat(40)
-    const stackDirectory = join(config.rootDirectory, id)
-    const stackConfig = relayTailscaleStackConfigSchema.parse({
-      bindings: [],
-      domain: "test",
-      hostname: "private-network",
-      id,
-      name: "Private Network",
-      subnet: "10.165.54.0/24",
+    const directory = await preparedRemoval(harness, stackConfig(id))
+    const container = stackContainer(harness, id, false)
+    fakeDocker.addNetwork({
+      labels: { ...owner, "kiln.relay.network": `tailscale:${id}` },
+      name: harness.resources.tailscaleStackNetwork(id),
     })
-    await mkdir(stackDirectory, { recursive: true })
-    await Promise.all([
-      writeFile(
-        join(stackDirectory, "stack.json"),
-        `${JSON.stringify(stackConfig)}\n`
-      ),
-      writeFile(join(stackDirectory, ".removing"), "prepared\n"),
-    ])
 
-    const container = "prepared-removal-test-kiln-ts-ffffffff"
-    let containerPresent = true
-    commandMock.mockImplementation(
-      async (_executable: string, arguments_: Array<string>) => {
-        const name = arguments_.at(-1)
-        if (arguments_[0] === "container" && arguments_[1] === "inspect") {
-          if (name !== container || !containerPresent) {
-            throw new Error("container not found")
-          }
-          if (arguments_[3] === "{{.State.Running}}") {
-            return { stderr: "", stdout: "false\n" }
-          }
-          if (arguments_[3] === "{{.Id}}") {
-            return { stderr: "", stdout: "container-id\n" }
-          }
-          return {
-            stderr: "",
-            stdout: JSON.stringify({
-              "kiln.relay.owner": "prepared-removal-test",
-            }),
-          }
-        }
-        if (arguments_[0] === "stop") {
-          throw new Error(`container ${container} is not running`)
-        }
-        if (arguments_[0] === "rm") containerPresent = false
-        if (arguments_[0] === "network" && arguments_[1] === "inspect") {
-          return {
-            stderr: "",
-            stdout: JSON.stringify({
-              "kiln.relay.owner": "prepared-removal-test",
-            }),
-          }
-        }
-        return { stderr: "", stdout: "" }
-      }
+    await harness.lifecycle.removeTailscaleStack(id)
+
+    expect(fakeDocker.tailscale.machines.get(container.name)?.loggedIn).toBe(
+      false
     )
-
-    const lifecycle = new LifecycleDriver(
-      config,
-      new DockerDriver(config),
-      new BrickCatalog(config.brickCatalogUrl, config.dataDirectory)
-    )
-
-    await lifecycle.removeTailscaleStack(id)
-
-    expect(commandMock).not.toHaveBeenCalledWith(
-      "docker",
-      ["stop", "--time", "10", container],
-      expect.anything()
-    )
-    expect(commandMock).toHaveBeenCalledWith("docker", ["start", container], {
-      timeout: 30_000,
-    })
-    await expect(access(stackDirectory)).rejects.toMatchObject({
-      code: "ENOENT",
-    })
+    expect(fakeDocker.container(container.name)).toBeUndefined()
+    expect(
+      fakeDocker.networks.has(harness.resources.tailscaleStackNetwork(id))
+    ).toBe(false)
+    expect(await exists(directory)).toBe(false)
   })
 
-  it("rejects revival while a failed removal remains retryable", async () => {
-    const dataDirectory = await mkdtemp(
-      join(tmpdir(), "kiln-tailscale-removal-")
-    )
-    temporaryDirectories.push(dataDirectory)
-    const config = loadConfig({
-      KILN_RELAY_DATA_DIR: dataDirectory,
-      KILN_RELAY_RESOURCE_NAMESPACE: "pending-removal-test",
-      NODE_ENV: "test",
-    })
+  it("keeps a failed removal pending and refuses to revive the stack until cleanup finishes", async () => {
+    const harness = await relayHarness()
     const id = "a".repeat(40)
-    const stackDirectory = join(config.rootDirectory, id)
-    const stackConfig = relayTailscaleStackConfigSchema.parse({
-      bindings: [],
-      domain: "test",
-      hostname: "private-network",
-      id,
-      name: "Private Network",
-      subnet: "10.165.55.0/24",
-    })
-    const snapshot = relayTailscaleStackSchema.parse({
-      ...stackConfig,
-      components: {
-        coreDnsRunning: false,
-        tailscaleRunning: false,
-      },
-      instance: {
-        brickId: builtinTailscaleBrickId,
-        connectAddress: "private-network.test",
-        containerId: "docker-container-id",
-        desiredState: "stopped",
-        directory: id,
-        game: "Networking",
-        id,
-        implementation: "Tailscale",
-        javaVersion: "Tailscale + CoreDNS",
-        managedByRelay: true,
-        name: "Private Network",
-        observedState: "stopped",
-        service: "pending-removal-test-kiln-ts-aaaaaaaa",
-        shortId: id.slice(0, 8),
-        startedAt: null,
-        status: "Exited (0)",
-        version: "stable",
-      },
-      status: {
-        connected: false,
-        ipv4Address: null,
-        ipv6Address: null,
-        message: "Tailscale is stopped",
-      },
-    })
-    await mkdir(stackDirectory, { recursive: true })
-    await Promise.all([
-      writeFile(
-        join(stackDirectory, "stack.json"),
-        `${JSON.stringify(stackConfig)}\n`
-      ),
-      writeFile(join(stackDirectory, ".removing"), "prepared\n"),
-      writeFile(
-        join(stackDirectory, ".removing-stack.json"),
-        `${JSON.stringify(snapshot)}\n`
-      ),
-    ])
-
-    let networkRemoveAttempts = 0
-    commandMock.mockImplementation(
-      async (_executable: string, arguments_: Array<string>) => {
-        if (arguments_[0] === "container" && arguments_[1] === "inspect") {
-          throw new Error("container not found")
-        }
-        if (arguments_[0] === "network" && arguments_[1] === "inspect") {
-          return {
-            stderr: "",
-            stdout: JSON.stringify({
-              "kiln.relay.owner": "pending-removal-test",
-            }),
-          }
-        }
-        if (arguments_[0] === "network" && arguments_[1] === "rm") {
-          networkRemoveAttempts += 1
-          if (networkRemoveAttempts === 1) {
-            throw new Error("bridge is still in use")
-          }
-        }
-        return { stderr: "", stdout: "" }
-      }
-    )
-
-    const lifecycle = new LifecycleDriver(
+    const config = stackConfig(id)
+    const service = harness.resources.tailscaleStackContainer(id)
+    const directory = await preparedRemoval(
+      harness,
       config,
-      new DockerDriver(config),
-      new BrickCatalog(config.brickCatalogUrl, config.dataDirectory)
+      relayTailscaleStackSchema.parse({
+        ...config,
+        components: { coreDnsRunning: false, tailscaleRunning: false },
+        instance: {
+          brickId: builtinTailscaleBrickId,
+          connectAddress: "private-network.test",
+          containerId: "docker-container-id",
+          desiredState: "stopped",
+          directory: id,
+          game: "Networking",
+          id,
+          implementation: "Tailscale",
+          javaVersion: "Tailscale + CoreDNS",
+          managedByRelay: true,
+          name: "Private Network",
+          observedState: "stopped",
+          service,
+          shortId: id.slice(0, 8),
+          status: "Exited (0)",
+          version: "stable",
+        },
+        status: {
+          connected: false,
+          ipv4Address: null,
+          ipv6Address: null,
+          message: "Tailscale is stopped",
+        },
+      })
     )
-
-    await expect(lifecycle.removeTailscaleStack(id)).rejects.toThrow(
-      "bridge is still in use"
-    )
-    const commandCallsAfterCleanupFailure = commandMock.mock.calls.length
-    expect((await lifecycle.tailscaleStacks())[0]?.status.message).toBe(
-      "Removal pending"
-    )
-
-    const apply = relayTailscaleStackApplySchema.parse({
-      bindings: [],
-      domain: "test",
-      hostname: "private-network",
-      id,
-      name: "Private Network",
+    const network = harness.resources.tailscaleStackNetwork(id)
+    fakeDocker.addNetwork({
+      labels: { ...owner, "kiln.relay.network": `tailscale:${id}` },
+      name: network,
     })
-    await expect(lifecycle.applyTailscaleStack(apply)).rejects.toThrow(
-      "removal cleanup is pending"
-    )
+    // Something outside the stack is still attached, so Docker refuses rm.
+    fakeDocker.addContainer({ name: "debug-shell", networks: [network] })
 
+    await expect(harness.lifecycle.removeTailscaleStack(id)).rejects.toThrow(
+      "active endpoints"
+    )
+    const [pending] = await harness.lifecycle.tailscaleStacks()
+    expect(pending).toMatchObject({
+      bindings: config.bindings,
+      components: { coreDnsRunning: false, tailscaleRunning: false },
+      id,
+      instance: { containerId: null, observedState: "stopped" },
+      status: { connected: false },
+    })
+
+    const dockerBefore = structuredClone([...fakeDocker.containers.keys()])
+    await expect(
+      harness.lifecycle.applyTailscaleStack(
+        relayTailscaleStackApplySchema.parse({
+          bindings: [],
+          domain: "test",
+          hostname: "private-network",
+          id,
+          name: "Private Network",
+        })
+      )
+    ).rejects.toThrow("removal cleanup is pending")
     const instance: RelayInstanceConfig = {
       brickId: builtinTailscaleBrickId,
       connectAddress: "private-network.test",
@@ -241,116 +172,53 @@ describe("Tailscale pending removal recovery", () => {
       id,
       implementation: "Tailscale",
       javaVersion: "Tailscale + CoreDNS",
-      limits: {
-        diskBytes: 128 * 1024 * 1024,
-        memoryBytes: 64 * 1024 * 1024,
-      },
+      limits: { diskBytes: 128 * 1024 ** 2, memoryBytes: 64 * 1024 ** 2 },
       managedByRelay: true,
       name: "Private Network",
       ports: [],
-      service: "pending-removal-test-kiln-ts-aaaaaaaa",
+      service,
       shortId: id.slice(0, 8),
       tailscale: { enabled: false },
       version: "stable",
     }
-    await expect(
-      lifecycle.runInstanceAction(instance, "start", [])
-    ).rejects.toThrow("removal cleanup is pending")
-    await expect(
-      lifecycle.runInstanceAction(instance, "restart", [])
-    ).rejects.toThrow("removal cleanup is pending")
-    expect(commandMock).toHaveBeenCalledTimes(commandCallsAfterCleanupFailure)
+    for (const action of ["start", "restart"] as const) {
+      await expect(
+        harness.lifecycle.runInstanceAction(instance, action, [])
+      ).rejects.toThrow("removal cleanup is pending")
+    }
+    expect([...fakeDocker.containers.keys()]).toEqual(dockerBefore)
+    expect(fakeDocker.container(service)).toBeUndefined()
 
-    await lifecycle.removeTailscaleStack(id)
+    fakeDocker.removeContainer("debug-shell")
+    await harness.lifecycle.removeTailscaleStack(id)
 
-    expect(networkRemoveAttempts).toBe(2)
-    await expect(access(stackDirectory)).rejects.toMatchObject({
-      code: "ENOENT",
-    })
+    expect(fakeDocker.networks.has(network)).toBe(false)
+    expect(await exists(directory)).toBe(false)
   })
 
-  it("preserves authenticated state when logout fails and retries cleanup", async () => {
-    const dataDirectory = await mkdtemp(
-      join(tmpdir(), "kiln-tailscale-logout-")
-    )
-    temporaryDirectories.push(dataDirectory)
-    const config = loadConfig({
-      KILN_RELAY_DATA_DIR: dataDirectory,
-      KILN_RELAY_RESOURCE_NAMESPACE: "logout-test",
-      NODE_ENV: "test",
-    })
+  it("preserves the machine identity when logout fails and logs out on retry", async () => {
+    const harness = await relayHarness()
     const id = "b".repeat(40)
-    const stackDirectory = join(config.rootDirectory, id)
-    const stackConfig = relayTailscaleStackConfigSchema.parse({
-      bindings: [],
-      domain: "test",
-      hostname: "private-network",
-      id,
-      name: "Private Network",
-      subnet: "10.165.56.0/24",
+    const directory = await preparedRemoval(harness, stackConfig(id))
+    const container = stackContainer(harness, id, true)
+    fakeDocker.addNetwork({
+      labels: { ...owner, "kiln.relay.network": `tailscale:${id}` },
+      name: harness.resources.tailscaleStackNetwork(id),
     })
-    await mkdir(stackDirectory, { recursive: true })
-    await Promise.all([
-      writeFile(
-        join(stackDirectory, "stack.json"),
-        `${JSON.stringify(stackConfig)}\n`
-      ),
-      writeFile(join(stackDirectory, ".removing"), "prepared\n"),
-    ])
+    fakeDocker.tailscale.controlPlaneReachable = false
 
-    const container = "logout-test-kiln-ts-bbbbbbbb"
-    let logoutAttempts = 0
-    let containerPresent = true
-    commandMock.mockImplementation(
-      async (_executable: string, arguments_: Array<string>) => {
-        const name = arguments_.at(-1)
-        if (arguments_[0] === "container" && arguments_[1] === "inspect") {
-          if (name !== container || !containerPresent) {
-            throw new Error("container not found")
-          }
-          return {
-            stderr: "",
-            stdout:
-              arguments_[3] === "{{.Id}}"
-                ? "container-id\n"
-                : JSON.stringify({ "kiln.relay.owner": "logout-test" }),
-          }
-        }
-        if (
-          arguments_[0] === "exec" &&
-          arguments_.includes("logout") &&
-          logoutAttempts++ < 3
-        ) {
-          throw new Error("control plane unavailable")
-        }
-        if (arguments_[0] === "network" && arguments_[1] === "inspect") {
-          return {
-            stderr: "",
-            stdout: JSON.stringify({
-              "kiln.relay.owner": "logout-test",
-              "kiln.relay.network": `tailscale:${id}`,
-            }),
-          }
-        }
-        if (arguments_[0] === "run") containerPresent = true
-        return { stderr: "", stdout: "" }
-      }
-    )
-    const lifecycle = new LifecycleDriver(
-      config,
-      new DockerDriver(config),
-      new BrickCatalog(config.brickCatalogUrl, config.dataDirectory)
-    )
-
-    await expect(lifecycle.removeTailscaleStack(id)).rejects.toThrow(
+    await expect(harness.lifecycle.removeTailscaleStack(id)).rejects.toThrow(
       "local identity was preserved for retry"
     )
-    await expect(access(join(stackDirectory, ".removing"))).resolves.toBe(
-      undefined
+    expect(await exists(join(directory, ".removing"))).toBe(true)
+    expect(fakeDocker.tailscale.machines.get(container.name)?.loggedIn).toBe(
+      true
     )
-    containerPresent = false
+
+    // The container is gone before the retry, but its identity remains on disk.
+    fakeDocker.removeContainer(container.name)
     const stateDirectory = join(
-      config.dataDirectory,
+      harness.config.dataDirectory,
       "infrastructure",
       "tailscale-stacks",
       id,
@@ -358,109 +226,90 @@ describe("Tailscale pending removal recovery", () => {
     )
     await mkdir(stateDirectory, { recursive: true })
     await writeFile(join(stateDirectory, "tailscaled.state"), "{}\n")
+    fakeDocker.tailscale.controlPlaneReachable = true
 
-    await lifecycle.removeTailscaleStack(id)
+    await harness.lifecycle.removeTailscaleStack(id)
 
-    expect(logoutAttempts).toBe(4)
-    expect(
-      commandMock.mock.calls.some(
-        ([, arguments_]) =>
-          arguments_[0] === "run" && arguments_.includes(container)
+    expect(fakeDocker.tailscale.machines.get(container.name)?.loggedIn).toBe(
+      false
+    )
+    expect(fakeDocker.container(container.name)).toBeUndefined()
+    expect(await exists(directory)).toBe(false)
+  })
+})
+
+describe("Tailscale stack forwarding", () => {
+  const bound = "10.165.57.10"
+
+  async function runningStack(harness: RelayHarness) {
+    const id = "c".repeat(40)
+    const directory = join(harness.config.rootDirectory, id)
+    await mkdir(directory, { recursive: true })
+    await writeFile(
+      join(directory, "stack.json"),
+      JSON.stringify(
+        stackConfig(id, {
+          bindings: [
+            {
+              address: bound,
+              enabled: true,
+              hostname: "paper",
+              instanceId: "d".repeat(40),
+            },
+            {
+              address: "10.165.57.11",
+              enabled: false,
+              hostname: "paused",
+              instanceId: "e".repeat(40),
+            },
+          ],
+          subnet: "10.165.57.0/24",
+        })
       )
-    ).toBe(true)
-    await expect(access(stackDirectory)).rejects.toMatchObject({
-      code: "ENOENT",
-    })
+    )
+    return stackContainer(harness, id, true)
+  }
+
+  const allowlist = [
+    `-A KILN-TAILSCALE -d ${bound}/32 -j RETURN`,
+    "-A KILN-TAILSCALE -j DROP",
+  ]
+
+  it("installs an allowlist for enabled servers that drops all other forwarded traffic", async () => {
+    const harness = await relayHarness()
+    const container = await runningStack(harness)
+
+    await harness.lifecycle.reconcileTailscaleStackFirewalls()
+
+    expect(container.firewall.get("KILN-TAILSCALE")).toEqual(allowlist)
+    expect(container.firewall.get("FORWARD")).toEqual([
+      "-A FORWARD -i tailscale0 -j KILN-TAILSCALE",
+    ])
   })
 
-  it("restores forwarding rules for a running stack and then stays idle", async () => {
-    const dataDirectory = await mkdtemp(
-      join(tmpdir(), "kiln-tailscale-firewall-")
-    )
-    temporaryDirectories.push(dataDirectory)
-    const config = loadConfig({
-      KILN_RELAY_DATA_DIR: dataDirectory,
-      KILN_RELAY_RESOURCE_NAMESPACE: "firewall-test",
-      NODE_ENV: "test",
-    })
-    const id = "c".repeat(40)
-    const stackDirectory = join(config.rootDirectory, id)
-    const stackConfig = relayTailscaleStackConfigSchema.parse({
-      bindings: [
-        {
-          address: "10.165.57.10",
-          hostname: "paper",
-          instanceId: "d".repeat(40),
-        },
-      ],
-      domain: "test",
-      hostname: "private-network",
-      id,
-      name: "Private Network",
-      subnet: "10.165.57.0/24",
-    })
-    await mkdir(stackDirectory, { recursive: true })
-    await writeFile(
-      join(stackDirectory, "stack.json"),
-      `${JSON.stringify(stackConfig)}\n`
-    )
-    let current = false
-    commandMock.mockImplementation(
-      async (_executable: string, arguments_: Array<string>) => {
-        if (
-          arguments_[0] === "container" &&
-          arguments_[1] === "inspect" &&
-          arguments_[3] === "{{.Id}}|{{.State.StartedAt}}|{{.State.Running}}"
-        ) {
-          return {
-            stderr: "",
-            stdout: "container-id|2026-07-28T18:00:00Z|true\n",
-          }
-        }
-        if (arguments_[0] === "exec" && arguments_.includes("-C")) {
-          if (!current) throw new Error("rule missing")
-          return { stderr: "", stdout: "" }
-        }
-        if (arguments_[0] === "exec" && arguments_.includes("-S")) {
-          if (!current) throw new Error("chain missing")
-          return {
-            stderr: "",
-            stdout: [
-              "-N KILN-TAILSCALE",
-              "-A KILN-TAILSCALE -d 10.165.57.10/32 -j RETURN",
-              "-A KILN-TAILSCALE -j DROP",
-            ].join("\n"),
-          }
-        }
-        return { stderr: "", stdout: "" }
-      }
-    )
-    const lifecycle = new LifecycleDriver(
-      config,
-      new DockerDriver(config),
-      new BrickCatalog(config.brickCatalogUrl, config.dataDirectory)
-    )
+  it("repairs an incomplete allowlist", async () => {
+    const harness = await relayHarness()
+    const container = await runningStack(harness)
+    container.firewall.set("FORWARD", [
+      "-A FORWARD -i tailscale0 -j KILN-TAILSCALE",
+    ])
+    container.firewall.set("KILN-TAILSCALE", ["-A KILN-TAILSCALE -j DROP"])
 
-    await lifecycle.reconcileTailscaleStackFirewalls()
-    const mutationsAfterRepair = commandMock.mock.calls.filter(
-      ([, arguments_]) =>
-        arguments_[0] === "exec" &&
-        (arguments_.includes("-I") ||
-          arguments_.includes("-F") ||
-          arguments_.includes("-A"))
-    ).length
-    current = true
-    await lifecycle.reconcileTailscaleStackFirewalls()
+    await harness.lifecycle.reconcileTailscaleStackFirewalls()
 
-    expect(mutationsAfterRepair).toBeGreaterThan(0)
-    expect(
-      commandMock.mock.calls.filter(
-        ([, arguments_]) =>
-          arguments_[0] === "exec" &&
-          (arguments_.includes("-I") ||
-            arguments_.includes("-F") ||
-            arguments_.includes("-A"))
-      )
-    ).toHaveLength(mutationsAfterRepair)
+    expect(container.firewall.get("KILN-TAILSCALE")).toEqual(allowlist)
+    expect(container.firewall.get("FORWARD")).toHaveLength(1)
+  })
+
+  it("restores the allowlist after the stack container restarts", async () => {
+    const harness = await relayHarness()
+    const container = await runningStack(harness)
+    await harness.lifecycle.reconcileTailscaleStackFirewalls()
+
+    fakeDocker.restartProcess(container.name)
+    expect(container.firewall.get("KILN-TAILSCALE")).toBeUndefined()
+    await harness.lifecycle.reconcileTailscaleStackFirewalls()
+
+    expect(container.firewall.get("KILN-TAILSCALE")).toEqual(allowlist)
   })
 })

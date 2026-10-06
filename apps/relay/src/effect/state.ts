@@ -992,7 +992,7 @@ const migrations = SqliteMigrator.fromRecord({
   }),
 })
 
-export function scrubBackupTaskInputJson(inputJson: string): string {
+function scrubBackupTaskInputJson(inputJson: string): string {
   return Result.getOrElse(
     Result.try(() => {
       const parsed = JSON.parse(inputJson) as unknown

@@ -1,4 +1,4 @@
-import { execFile } from "node:child_process"
+import { execFile, spawn } from "node:child_process"
 import { promisify } from "node:util"
 import { Effect } from "effect"
 
@@ -57,3 +57,57 @@ export const commandEffect = Effect.fn("command.execute")(function* (
 
   return { stderr: result.stderr, stdout: result.stdout }
 })
+
+/**
+ * Runs a process with `input` written to stdin, killing it once its combined
+ * output exceeds `maxOutputBytes` or it runs longer than `timeoutMs`.
+ */
+export function commandWithInput(
+  executable: string,
+  arguments_: ReadonlyArray<string>,
+  input: string | undefined,
+  options: { maxOutputBytes: number; timeoutMs: number }
+): Promise<CommandResult> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(executable, arguments_, {
+      stdio: ["pipe", "pipe", "pipe"],
+    })
+    const stdout: Array<Buffer> = []
+    const stderr: Array<Buffer> = []
+    let outputBytes = 0
+    const timeout = setTimeout(() => {
+      child.kill("SIGKILL")
+      reject(new Error(`${executable} timed out`))
+    }, options.timeoutMs)
+    const collect = (target: Array<Buffer>) => (chunk: Buffer) => {
+      outputBytes += chunk.length
+      if (outputBytes > options.maxOutputBytes) {
+        child.kill("SIGKILL")
+        reject(new Error("Database transfer exceeded the current size limit"))
+        return
+      }
+      target.push(chunk)
+    }
+    child.stdout.on("data", collect(stdout))
+    child.stderr.on("data", collect(stderr))
+    child.once("error", (cause) => {
+      clearTimeout(timeout)
+      reject(cause)
+    })
+    child.once("close", (code) => {
+      clearTimeout(timeout)
+      const result = {
+        stderr: Buffer.concat(stderr).toString("utf8"),
+        stdout: Buffer.concat(stdout).toString("utf8"),
+      }
+      if (code === 0) resolve(result)
+      else
+        reject(
+          new Error(
+            result.stderr.trim() || `${executable} exited with code ${code}`
+          )
+        )
+    })
+    child.stdin.end(input)
+  })
+}

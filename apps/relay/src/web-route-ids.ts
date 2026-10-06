@@ -13,8 +13,7 @@ const ROUTE_ID_ATTEMPTS = 32
 export function assignRelayWebRouteIds(
   instanceId: string,
   routes: ReadonlyArray<RelayInstanceWebRouteInput>,
-  configuredRoutes: ReadonlyArray<RelayStoredWebRoute>,
-  generateId: () => string = randomRouteId
+  configuredRoutes: ReadonlyArray<RelayStoredWebRoute>
 ): Array<RelayInstanceWebRoute> {
   const owners = new Map(
     configuredRoutes.map((route) => [route.id, route.instanceId])
@@ -23,7 +22,7 @@ export function assignRelayWebRouteIds(
   const claimed = new Set<string>()
 
   return routes.map((route) => {
-    const id = route.id ?? availableRouteId(used, generateId)
+    const id = route.id ?? availableRouteId(used)
     const owner = owners.get(id)
     if (owner && owner !== instanceId) {
       throw new Error(`Another Ember already uses web route ID ${id}`)
@@ -37,12 +36,9 @@ export function assignRelayWebRouteIds(
   })
 }
 
-function availableRouteId(
-  used: ReadonlySet<string>,
-  generateId: () => string
-): string {
+function availableRouteId(used: ReadonlySet<string>): string {
   for (let attempt = 0; attempt < ROUTE_ID_ATTEMPTS; attempt += 1) {
-    const id = relayInstanceWebRouteShortIdSchema.parse(generateId())
+    const id = relayInstanceWebRouteShortIdSchema.parse(randomRouteId())
     if (!used.has(id)) return id
   }
   throw new Error("Relay could not allocate a unique web route ID")

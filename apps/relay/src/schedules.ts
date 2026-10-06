@@ -81,8 +81,6 @@ class ScheduledBackupWaitError extends Data.TaggedError(
 }> {}
 
 export interface ScheduleManagerOptions {
-  readonly backupPollIntervalMs?: number
-  readonly backupWaitTimeoutMs?: number
   readonly enqueueBackup: (input: BackupTaskInput) => Promise<RelayBackupTask>
   readonly findInstance: (instanceId: string) => Promise<object | null>
   readonly forkEffect?: (
@@ -107,33 +105,21 @@ export interface ScheduleManagerOptions {
     command: string
   ) => Promise<void>
   readonly stateDirectory: string
-  readonly tickIntervalMs?: number
-  readonly tickRetryBaseMs?: number
 }
 
 export class ScheduleManager {
   readonly #activeTargets = new Set<string>()
-  readonly #backupPollIntervalMs: number
-  readonly #backupWaitTimeoutMs: number
   readonly #occurrenceFibers = new Set<Fiber.Fiber<void, unknown>>()
   readonly #options: ScheduleManagerOptions
   readonly #semaphore = Semaphore.makeUnsafe(1)
   readonly #statePath: string
-  readonly #tickIntervalMs: number
-  readonly #tickRetryBaseMs: number
   #lastHeartbeatPersistedAt = 0
   #state: PersistedState
 
   private constructor(options: ScheduleManagerOptions, state: PersistedState) {
-    this.#backupPollIntervalMs =
-      options.backupPollIntervalMs ?? scheduledBackupPollIntervalMs
-    this.#backupWaitTimeoutMs =
-      options.backupWaitTimeoutMs ?? scheduledBackupWaitTimeoutMs
     this.#options = options
     this.#state = state
     this.#statePath = resolve(options.stateDirectory, "schedules.json")
-    this.#tickIntervalMs = options.tickIntervalMs ?? scheduleTickIntervalMs
-    this.#tickRetryBaseMs = options.tickRetryBaseMs ?? scheduleTickRetryBaseMs
   }
 
   static async make(options: ScheduleManagerOptions) {
@@ -155,9 +141,9 @@ export class ScheduleManager {
           })
       ),
       Effect.retry({
-        schedule: Schedule.exponential(`${this.#tickRetryBaseMs} millis`).pipe(
-          Schedule.jittered
-        ),
+        schedule: Schedule.exponential(
+          `${scheduleTickRetryBaseMs} millis`
+        ).pipe(Schedule.jittered),
         times: 3,
       }),
       Effect.catchTag("ScheduleTickError", (failure) =>
@@ -169,7 +155,7 @@ export class ScheduleManager {
           )
         )
       ),
-      Effect.andThen(Effect.sleep(`${this.#tickIntervalMs} millis`)),
+      Effect.andThen(Effect.sleep(`${scheduleTickIntervalMs} millis`)),
       Effect.forever
     )
   }
@@ -838,13 +824,11 @@ export class ScheduleManager {
   }
 
   #waitForBackup(initial: RelayBackupTask) {
-    const pollIntervalMs = this.#backupPollIntervalMs
-    const waitTimeoutMs = this.#backupWaitTimeoutMs
     const getBackup = this.#options.getBackup
     const poll = Effect.gen(function* () {
       let task: RelayBackupTask | null = initial
       while (task.status === "queued" || task.status === "running") {
-        yield* Effect.sleep(`${pollIntervalMs} millis`)
+        yield* Effect.sleep(`${scheduledBackupPollIntervalMs} millis`)
         task = yield* Effect.tryPromise({
           try: () => getBackup(initial.taskId),
           catch: (cause) =>
@@ -870,7 +854,7 @@ export class ScheduleManager {
     })
     return poll.pipe(
       Effect.timeoutOrElse({
-        duration: `${waitTimeoutMs} millis`,
+        duration: `${scheduledBackupWaitTimeoutMs} millis`,
         orElse: () =>
           Effect.fail(
             new ScheduledBackupWaitError({

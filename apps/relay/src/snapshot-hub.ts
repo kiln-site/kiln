@@ -8,8 +8,9 @@ export interface RelaySnapshotSample {
 
 type SnapshotListener = (sample: RelaySnapshotSample) => void
 
+const sampleIntervalMs = 2_000
+
 export class RelaySnapshotHub {
-  readonly #intervalMs: number
   readonly #listeners = new Set<SnapshotListener>()
   readonly #load: () => Promise<RelaySnapshot>
   #closed = false
@@ -18,13 +19,12 @@ export class RelaySnapshotHub {
   #scheduleFiber: Fiber.Fiber<void, never> | null = null
   #sequence = 0
 
-  constructor(load: () => Promise<RelaySnapshot>, intervalMs = 2_000) {
-    this.#intervalMs = intervalMs
+  constructor(load: () => Promise<RelaySnapshot>) {
     this.#load = load
   }
 
   read(): Promise<RelaySnapshot> {
-    if (this.#last && Date.now() - this.#last.sampledAt < this.#intervalMs) {
+    if (this.#last && Date.now() - this.#last.sampledAt < sampleIntervalMs) {
       return Promise.resolve(this.#last.snapshot)
     }
     return Effect.runPromise(
@@ -118,7 +118,7 @@ export class RelaySnapshotHub {
     }
     let scheduleFiber: Fiber.Fiber<void, never>
     scheduleFiber = Effect.runFork(
-      Effect.sleep(this.#intervalMs).pipe(
+      Effect.sleep(sampleIntervalMs).pipe(
         Effect.tap(() =>
           Effect.sync(() => {
             if (this.#scheduleFiber === scheduleFiber) {

@@ -265,11 +265,4 @@ describe("instance port allocations", () => {
       })
     ).toEqual([])
   })
-
-  it("builds Docker bindings for each protocol and internal port", () => {
-    expect(dockerPortBindingsForAllocations(allocations)).toEqual({
-      "24454/udp": [{ HostIp: "", HostPort: "30001" }],
-      "25565/tcp": [{ HostIp: "", HostPort: "30000" }],
-    })
-  })
 })

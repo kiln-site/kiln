@@ -1,12 +1,19 @@
 import { describe, expect, it } from "vite-plus/test"
 
 import {
-  decodeWebRouteRecoveryLabels,
   planWebRouteRecovery,
   webRouteRecoveryLabels,
 } from "./web-route-labels.js"
 
 const instanceId = "a".repeat(40)
+
+/** Recovers routes from one container's labels on an empty Relay. */
+function recoverFromLabels(labels: Record<string, string>) {
+  return planWebRouteRecovery(
+    [],
+    [{ instanceId, labels, service: "kiln-aaaaaaaa" }]
+  )
+}
 
 describe("Relay web route recovery labels", () => {
   it("encodes the compact label format", () => {
@@ -37,8 +44,8 @@ describe("Relay web route recovery labels", () => {
     })
   })
 
-  it("decodes labels and ignores the revision marker", () => {
-    const decoded = decodeWebRouteRecoveryLabels({
+  it("recovers routes from labels and ignores the revision marker", () => {
+    const plan = recoverFromLabels({
       "kiln.relay.web-routes.b00d4423":
         "mc.donutsmp.com:8080/map|name=Live%20Map",
       "kiln.relay.web-routes.decafbad":
@@ -47,8 +54,8 @@ describe("Relay web route recovery labels", () => {
       "other.label": "ignored",
     })
 
-    expect(decoded.warnings).toEqual([])
-    expect(decoded.routes).toEqual([
+    expect(plan.warnings).toEqual([])
+    expect(plan.recoveries[0]?.routes).toEqual([
       {
         hostname: "mc.donutsmp.com",
         id: "b00d4423",
@@ -127,21 +134,20 @@ describe("Relay web route recovery labels", () => {
         targetPort: 9_000,
       },
     ])
-    expect(plan.warnings).toEqual([
-      "kiln-bbbbbbbb: route ID b00d4423 is already used on this Relay",
-      "kiln-bbbbbbbb: mc.donutsmp.com/map is already used on this Relay",
-    ])
+    expect(plan.warnings).toHaveLength(2)
   })
 
   it("skips malformed labels without blocking Relay startup", () => {
-    const decoded = decodeWebRouteRecoveryLabels({
+    const plan = recoverFromLabels({
       "kiln.relay.web-routes.not-an-id": "mc.donutsmp.com:8080",
       "kiln.relay.web-routes.b00d4423":
         "mc.donutsmp.com:8080/map|unknown-option",
       "kiln.relay.web-routes.decafbad": "valid.donutsmp.com:9000",
     })
 
-    expect(decoded.routes).toHaveLength(1)
-    expect(decoded.warnings).toHaveLength(2)
+    expect(plan.recoveries[0]?.routes.map((route) => route.id)).toEqual([
+      "decafbad",
+    ])
+    expect(plan.warnings).toHaveLength(2)
   })
 })

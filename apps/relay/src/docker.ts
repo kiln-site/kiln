@@ -27,9 +27,7 @@ import type {
   BrickVariableValue,
   RelayConsole,
   RelayConsoleCompletion,
-  RelayConsoleLevel,
   RelayConsoleLine,
-  RelayConsoleSegment,
   RelayDesiredState,
   RelayInstanceRecovery,
   RelayInstance,
@@ -44,8 +42,6 @@ import {
   brickReadinessSchema,
   brickVariableValuesSchema,
   DEFAULT_INSTANCE_DISK_LIMIT_BYTES,
-  MINIMUM_INSTANCE_DISK_LIMIT_BYTES,
-  relayDiskAllocationAvailableBytes,
   relayInstanceLifecycleEventTime as lifecycleEventTime,
   relayInstanceTailscaleSchema,
 } from "@workspace/contracts"
@@ -73,6 +69,18 @@ import {
   type InstancePowerTransition,
   type ObservedInstancePowerState,
 } from "./power-state.js"
+import {
+  matchingReadyLogLine,
+  parseConsoleCompletion,
+  parseConsoleLine,
+  parseConsoleOutput,
+  type ParsedConsoleLine,
+} from "./console-parsing.js"
+import {
+  dockerPublishedHostPortsFromListing,
+  procNetTcpHasListener,
+} from "./docker-port-parsing.js"
+import { legacyDiskLimitAssignments } from "./resource-quotas.js"
 import { WEB_ROUTE_LABEL_PREFIX } from "./web-route-labels.js"
 import type { RelayWebRouteLabelSnapshot } from "./web-route-labels.js"
 import type { RuntimeRecoveryManager } from "./runtime-recovery.js"
@@ -337,58 +345,13 @@ function isLoopbackAddress(host: string): boolean {
   )
 }
 
-export function dockerPublishedPort(
-  bindings: DockerPortBindings | undefined,
-  containerPort: number | undefined,
-  protocol: "tcp" | "udp" | undefined
-): number | undefined {
-  if (!containerPort || !protocol) return undefined
-  const candidates = bindings?.[`${containerPort}/${protocol}`] ?? []
-  for (const candidate of candidates) {
-    const port = Number(candidate.HostPort)
-    if (Number.isInteger(port) && port >= 1 && port <= 65_535) return port
-  }
-  return undefined
-}
-
-export function dockerPublishedHostPortsFromListing(
-  listing: string,
-  protocol: "tcp" | "udp"
-): Set<number> {
-  const ports = new Set<number>()
-  for (const line of listing.split("\n")) {
-    for (const rawEntry of line.split(",")) {
-      const entry = rawEntry.trim()
-      const arrow = entry.indexOf("->")
-      if (arrow < 0 || !entry.slice(arrow + 2).endsWith(`/${protocol}`)) {
-        continue
-      }
-      const match = /(?:^|:)(\d+)(?:-(\d+))?$/u.exec(entry.slice(0, arrow))
-      if (!match?.[1]) continue
-      const start = Number(match[1])
-      const end = Number(match[2] ?? match[1])
-      if (
-        !Number.isInteger(start) ||
-        !Number.isInteger(end) ||
-        start < 1 ||
-        end > 65_535 ||
-        end < start
-      ) {
-        continue
-      }
-      for (let port = start; port <= end; port += 1) ports.add(port)
-    }
-  }
-  return ports
-}
-
-export function publicConnectAddress(host: string, port: number): string {
+function publicConnectAddress(host: string, port: number): string {
   const formattedHost =
     host.includes(":") && !host.startsWith("[") ? `[${host}]` : host
   return `${formattedHost}:${port}`
 }
 
-export function instancePublicHost(input: {
+function instancePublicHost(input: {
   discoveredPublicIp?: string | null
   gameHost: string
   instanceHost?: string
@@ -402,7 +365,7 @@ export function instancePublicHost(input: {
   )
 }
 
-export function instanceConnectAddress(input: {
+function instanceConnectAddress(input: {
   discoveredPublicIp?: string | null
   gameHost?: string
   publicPort?: number
@@ -439,28 +402,6 @@ interface InstanceReadiness {
   readyAt?: string
 }
 
-// Docker TTY logs contain ANSI/control bytes. Cursor-editing frames are removed,
-// while SGR color and emphasis are retained as safe, structured segments.
-/* eslint-disable no-control-regex */
-const ANSI_PATTERN = new RegExp(
-  "\\u001b(?:\\[[0-?]*[ -/]*[@-~]|\\][^\\u0007]*(?:\\u0007|\\u001b\\\\)|[=>])",
-  "gu"
-)
-const CONTROL_PATTERN = new RegExp(
-  "[\\u0000-\\u0008\\u000b\\u000c\\u000e-\\u001f\\u007f]",
-  "gu"
-)
-const TERMINAL_EDIT_PATTERN = new RegExp(
-  "(?:\\u0008|\\u001b\\[[0-?]*[ -/]*[ABCDEFGHJKSTfhl])",
-  "u"
-)
-const MINECRAFT_STYLE_PATTERN = /§x(?:§[\da-f]){6}|§[0-9a-fk-or]/giu
-const MINECRAFT_LOG_PREFIX_PATTERN =
-  /\[\d{2}:\d{2}:\d{2} (?:INFO|WARN(?:ING)?|ERROR|FATAL|SEVERE|DEBUG|TRACE)\]:/iu
-const CURL_PROGRESS_HEADER_PATTERN =
-  /^\s*%\s+Total\s+%\s+Received\s+%\s+Xferd\s+Average\s+Speed\s+Time\s+Time\s+Time\s+Current\s*$/iu
-const CURL_PROGRESS_ROW_PATTERN =
-  /^\s*\d+\s+\S+\s+\d+\s+\S+\s+\d+\s+\S+\s+\S+\s+\S+\s+(?:--:--:--|\d+:\d{2}:\d{2})\s+(?:--:--:--|\d+:\d{2}:\d{2})\s+(?:--:--:--|\d+:\d{2}:\d{2})\s+\S+\s*$/u
 const CONSOLE_TTY_COLUMNS = 120
 const CONSOLE_TTY_ROWS = 40
 const MAX_SHARED_CONSOLE_BYTES = 10 * 1024 * 1024
@@ -468,51 +409,6 @@ export const MAX_CONSOLE_HISTORY_LINES = 5_000
 const STARTUP_READINESS_LOG_LINES = 1_000
 const RESOURCE_HISTORY_WINDOW_MS = 6 * 60_000
 const DISK_USAGE_REFRESH_MS = 60_000
-/* eslint-enable no-control-regex */
-
-export function legacyDiskLimitAssignments(
-  instances: ReadonlyArray<{
-    configuredLimitBytes: number | null
-    id: string
-  }>,
-  nodeTotalBytes: number
-): ReadonlyMap<string, number> {
-  const assignments = new Map(
-    instances.flatMap(({ configuredLimitBytes, id }) =>
-      configuredLimitBytes === null || configuredLimitBytes === 0
-        ? []
-        : [[id, configuredLimitBytes] as const]
-    )
-  )
-  const configuredBytes = [...assignments.values()].reduce(
-    (total, limitBytes) => total + limitBytes,
-    0
-  )
-  let remainingBytes = relayDiskAllocationAvailableBytes(
-    nodeTotalBytes,
-    configuredBytes
-  )
-  const legacyInstances = instances
-    .filter(
-      ({ configuredLimitBytes }) =>
-        configuredLimitBytes === null || configuredLimitBytes === 0
-    )
-    .sort((left, right) => left.id.localeCompare(right.id))
-
-  for (const { id } of legacyInstances) {
-    const remainingLimitBytes = Math.min(
-      DEFAULT_INSTANCE_DISK_LIMIT_BYTES,
-      remainingBytes
-    )
-    const limitBytes =
-      remainingLimitBytes >= MINIMUM_INSTANCE_DISK_LIMIT_BYTES
-        ? remainingLimitBytes
-        : DEFAULT_INSTANCE_DISK_LIMIT_BYTES
-    assignments.set(id, limitBytes)
-    remainingBytes = Math.max(remainingBytes - limitBytes, 0)
-  }
-  return assignments
-}
 
 function diskQuotaExceeded(
   usedBytes: number,
@@ -531,7 +427,7 @@ function initialDiskUsageCacheEntry(): DiskUsageCacheEntry {
 }
 
 export class DockerDriver {
-  readonly #bricks: BrickCatalog | null
+  readonly #bricks: BrickCatalog
   readonly #brickReadinessCache = new Map<string, BrickReadiness | null>()
   readonly #config: RelayConfig
   readonly #resources: RelayResourceNames
@@ -541,7 +437,7 @@ export class DockerDriver {
   readonly #consoleSizePending = new Map<string, Promise<void>>()
   readonly #diskUsageCache = new Map<string, DiskUsageCacheEntry>()
   readonly #powerTransitions = new Map<string, InstancePowerTransition>()
-  readonly #runtimeRecovery: RuntimeRecoveryManager | null
+  readonly #runtimeRecovery: RuntimeRecoveryManager
   readonly #lifecycleSessions = new Map<string, RelayStoredLifecycleSession>()
   #lifecycleSessionsInitialization: Promise<void> | null = null
   readonly #diskUsageSemaphore = Semaphore.makeUnsafe(1)
@@ -549,14 +445,14 @@ export class DockerDriver {
   #relaySftpPublication: Promise<RelaySftpPublication> | undefined
   readonly #resourceCache = new Map<string, ResourceCacheEntry>()
   readonly #resourceHistory = new Map<string, Array<RelayInstanceResources>>()
-  readonly #state: RelayStateStore["Service"] | null
+  readonly #state: RelayStateStore["Service"]
 
   constructor(
     config: RelayConfig,
-    runtimeRecovery: RuntimeRecoveryManager | null = null,
-    bricks: BrickCatalog | null = null,
-    state: RelayStateStore["Service"] | null = null,
-    readonly databaseConnections: DatabaseConnections | null = null
+    runtimeRecovery: RuntimeRecoveryManager,
+    bricks: BrickCatalog,
+    state: RelayStateStore["Service"],
+    readonly databaseConnections: DatabaseConnections
   ) {
     this.#bricks = bricks
     this.#config = config
@@ -680,50 +576,44 @@ export class DockerDriver {
       })
     )
 
-    const runtimeRecoveries = this.#runtimeRecovery
-      ? await runEffect(
-          this.#runtimeRecovery.reconcile(
-            discovered.map(({ config, container }) => {
-              const marker = installationMarkerName(
-                container.Config.Labels?.[INSTALLATION_MARKER_LABEL]
-              )
-              const transition = this.#powerTransitions.get(config.id)
-              const ready =
-                observedInstancePowerState(
-                  container.State,
-                  transition,
-                  now,
-                  readiness.get(config.id)
-                ).observedState === "running"
-              return {
-                dockerRestartConfigured:
-                  container.HostConfig?.RestartPolicy?.Name !== undefined &&
-                  container.HostConfig.RestartPolicy.Name !== "no",
-                exitCode: container.State.ExitCode,
-                finishedAt: container.State.FinishedAt,
-                installationReady:
-                  !marker ||
-                  existsSync(
-                    resolve(
-                      this.#config.rootDirectory,
-                      config.directory,
-                      marker
-                    )
-                  ),
-                instanceId: config.id,
-                managedByRelay: config.managedByRelay,
-                oomKilled: container.State.OOMKilled,
-                ready,
-                restarting: container.State.Restarting,
-                running: container.State.Running,
-                service: config.service,
-                startedAt: container.State.StartedAt,
-                transitionActive: transition !== undefined,
-              }
-            })
+    const runtimeRecoveries = await runEffect(
+      this.#runtimeRecovery.reconcile(
+        discovered.map(({ config, container }) => {
+          const marker = installationMarkerName(
+            container.Config.Labels?.[INSTALLATION_MARKER_LABEL]
           )
-        )
-      : new Map()
+          const transition = this.#powerTransitions.get(config.id)
+          const ready =
+            observedInstancePowerState(
+              container.State,
+              transition,
+              now,
+              readiness.get(config.id)
+            ).observedState === "running"
+          return {
+            dockerRestartConfigured:
+              container.HostConfig?.RestartPolicy?.Name !== undefined &&
+              container.HostConfig.RestartPolicy.Name !== "no",
+            exitCode: container.State.ExitCode,
+            finishedAt: container.State.FinishedAt,
+            installationReady:
+              !marker ||
+              existsSync(
+                resolve(this.#config.rootDirectory, config.directory, marker)
+              ),
+            instanceId: config.id,
+            managedByRelay: config.managedByRelay,
+            oomKilled: container.State.OOMKilled,
+            ready,
+            restarting: container.State.Restarting,
+            running: container.State.Running,
+            service: config.service,
+            startedAt: container.State.StartedAt,
+            transitionActive: transition !== undefined,
+          }
+        })
+      )
+    )
 
     const instances = discovered.map(({ config, container }) => {
       const transition = this.#powerTransitions.get(config.id)
@@ -791,10 +681,10 @@ export class DockerDriver {
           desiredState
         ),
         savedDatabaseConnections: [
-          ...(this.databaseConnections?.saved(config.id) ?? []),
+          ...this.databaseConnections.saved(config.id),
         ],
         databaseConnectionWarnings: this.databaseConnections
-          ?.issues(config.id)
+          .issues(config.id)
           .map(
             (issue) =>
               `${issue.databaseId ?? "Database connections"}: ${issue.message}`
@@ -864,7 +754,6 @@ export class DockerDriver {
     instanceId: string,
     desiredState: RelayDesiredState
   ): Promise<void> {
-    if (!this.#runtimeRecovery) return
     await runEffect(
       this.#runtimeRecovery.recordProvisioned(instanceId, desiredState)
     )
@@ -873,11 +762,9 @@ export class DockerDriver {
   async forgetRecoveryState(instanceId: string): Promise<void> {
     this.#lifecycleSessions.delete(instanceId)
     await Promise.all([
-      this.#runtimeRecovery
-        ? runEffect(this.#runtimeRecovery.forget(instanceId))
-        : Promise.resolve(),
+      runEffect(this.#runtimeRecovery.forget(instanceId)),
       this.#deleteLifecycleSession(instanceId),
-      this.databaseConnections?.forgetInstance(instanceId) ?? Promise.resolve(),
+      this.databaseConnections.forgetInstance(instanceId),
     ])
   }
 
@@ -910,19 +797,18 @@ export class DockerDriver {
       instance.managedByRelay &&
       (action === "start" || action === "restart")
     ) {
-      await this.databaseConnections?.reconcile(instance.id, instance.service)
+      await this.databaseConnections.reconcile(instance.id, instance.service)
     }
     const discovered = await this.#findDiscovered(instance.id)
     await this.#initializeLifecycleSessions()
     const lifecycleSessionBeforeTransition = this.#lifecycleSessions.get(
       instance.id
     )
-    const previousRecovery =
-      instance.managedByRelay && this.#runtimeRecovery
-        ? await runEffect(
-            this.#runtimeRecovery.recordPowerAction(instance.id, action)
-          )
-        : null
+    const previousRecovery = instance.managedByRelay
+      ? await runEffect(
+          this.#runtimeRecovery.recordPowerAction(instance.id, action)
+        )
+      : null
     const transition: InstancePowerTransition = {
       action,
       commandCompleted: false,
@@ -988,7 +874,7 @@ export class DockerDriver {
                   this.#powerTransitions.delete(instance.id)
                 }
               }),
-              instance.managedByRelay && this.#runtimeRecovery
+              instance.managedByRelay
                 ? this.#runtimeRecovery
                     .restore(instance.id, previousRecovery)
                     .pipe(Effect.ignore)
@@ -1051,13 +937,11 @@ export class DockerDriver {
       }
     }
     Object.assign(labels, routeLabels)
-    if (this.databaseConnections) {
-      for (const label of Object.keys(labels)) {
-        if (label.startsWith(DATABASE_CONNECTION_LABEL_PREFIX))
-          delete labels[label]
-      }
-      Object.assign(labels, await this.databaseConnections.labels(instance.id))
+    for (const label of Object.keys(labels)) {
+      if (label.startsWith(DATABASE_CONNECTION_LABEL_PREFIX))
+        delete labels[label]
     }
+    Object.assign(labels, await this.databaseConnections.labels(instance.id))
     if (portConfiguration) {
       for (const label of Object.keys(labels)) {
         if (isManagedPortLabel(label)) delete labels[label]
@@ -1091,9 +975,9 @@ export class DockerDriver {
         ? current.HostConfig.PortBindings
         : portConfiguration.bindings
     const runtimeRecovery = this.#runtimeRecovery
-    const previousRecovery = runtimeRecovery
-      ? await runEffect(runtimeRecovery.recordPowerAction(instance.id, action))
-      : null
+    const previousRecovery = await runEffect(
+      runtimeRecovery.recordPowerAction(instance.id, action)
+    )
     const transition: InstancePowerTransition = {
       action,
       commandCompleted: false,
@@ -1130,10 +1014,8 @@ export class DockerDriver {
                 }
               }),
               runtimeRecovery
-                ? runtimeRecovery
-                    .restore(instance.id, previousRecovery)
-                    .pipe(Effect.ignore)
-                : Effect.void,
+                .restore(instance.id, previousRecovery)
+                .pipe(Effect.ignore),
             ],
             { discard: true }
           )
@@ -1179,7 +1061,7 @@ export class DockerDriver {
           ? Object.keys(current.NetworkSettings?.Networks ?? {}).filter(
               (network) =>
                 network !== primaryNetwork &&
-                !this.databaseConnections?.isDatabaseNetwork(network)
+                !this.databaseConnections.isDatabaseNetwork(network)
             )
           : edgeNetwork
             ? [edgeNetwork]
@@ -1195,7 +1077,7 @@ export class DockerDriver {
           arguments_.push(network, instance.service)
           await command("docker", arguments_)
         }
-        await this.databaseConnections?.reconcile(instance.id, instance.service)
+        await this.databaseConnections.reconcile(instance.id, instance.service)
         if (action !== "stop") {
           await command("docker", ["start", instance.service], {
             timeout: 120_000,
@@ -1226,11 +1108,9 @@ export class DockerDriver {
               ).pipe(Effect.ignore)
             }
             yield* Effect.sync(clearTransition)
-            if (runtimeRecovery) {
-              yield* runtimeRecovery
-                .restore(instance.id, previousRecovery)
-                .pipe(Effect.ignore)
-            }
+            yield* runtimeRecovery
+              .restore(instance.id, previousRecovery)
+              .pipe(Effect.ignore)
             return yield* Effect.fail(
               new Error(
                 `Kiln could not ${portConfiguration ? "apply port allocations to" : "apply web routes to"} ${instance.name}; the previous container was restored.`,
@@ -1529,12 +1409,11 @@ export class DockerDriver {
   ): Promise<void> {
     const stopCommands = await this.#consoleStopCommands(instance)
     const intentionalStop = isIntentionalServerStopCommand(stopCommands, input)
-    const previousRecovery =
-      intentionalStop && this.#runtimeRecovery
-        ? await runEffect(
-            this.#runtimeRecovery.recordPowerAction(instance.id, "stop")
-          )
-        : null
+    const previousRecovery = intentionalStop
+      ? await runEffect(
+          this.#runtimeRecovery.recordPowerAction(instance.id, "stop")
+        )
+      : null
     await runEffect(
       promiseEffect(() =>
         this.#withConsoleLock(instance.id, async () => {
@@ -1546,7 +1425,7 @@ export class DockerDriver {
         })
       ).pipe(
         Effect.onError(() =>
-          intentionalStop && this.#runtimeRecovery
+          intentionalStop
             ? this.#runtimeRecovery
                 .restore(instance.id, previousRecovery)
                 .pipe(Effect.ignore)
@@ -1564,11 +1443,9 @@ export class DockerDriver {
       resolveConsoleStopCommands({
         configured: instance.brickConsoleStopCommands,
         instanceId: instance.id,
-        load: bricks
-          ? async (source) =>
-              (await bricks.recipe(source, instance.brickSnapshotSha256))
-                .console?.stopCommands ?? []
-          : null,
+        load: async (source) =>
+          (await bricks.recipe(source, instance.brickSnapshotSha256)).console
+            ?.stopCommands ?? [],
         source: instance.brickSource,
       })
     )
@@ -1961,7 +1838,6 @@ export class DockerDriver {
   }
 
   async #initializeLifecycleSessions(): Promise<void> {
-    if (!this.#state) return
     this.#lifecycleSessionsInitialization ??= runEffect(
       this.#state.listLifecycleSessions()
     ).then((sessions) => {
@@ -1975,7 +1851,6 @@ export class DockerDriver {
   #persistLifecycleSession(
     session: RelayStoredLifecycleSession
   ): Promise<void> {
-    if (!this.#state) return Promise.resolve()
     return runEffect(this.#state.setLifecycleSession(session))
   }
 
@@ -2013,9 +1888,7 @@ export class DockerDriver {
   }
 
   #deleteLifecycleSession(instanceId: string): Promise<void> {
-    return this.#state
-      ? runEffect(this.#state.deleteLifecycleSession(instanceId))
-      : Promise.resolve()
+    return runEffect(this.#state.deleteLifecycleSession(instanceId))
   }
 
   async #brickReadiness(
@@ -2026,7 +1899,7 @@ export class DockerDriver {
     if (cached !== undefined) return cached ?? undefined
     const bricks = this.#bricks
     const source = instance.brickSource
-    if (!bricks || !source) {
+    if (!source) {
       this.#brickReadinessCache.set(instance.id, null)
       return undefined
     }
@@ -2684,7 +2557,7 @@ export class DockerDriver {
   }
 }
 
-export function normalizedBrickNetworkMode(
+function normalizedBrickNetworkMode(
   mode: string | undefined
 ): RelayInstanceConfig["brickNetworkMode"] {
   if (mode === "minecraft-proxy") return "minecraft-backend"
@@ -2721,7 +2594,7 @@ function tcpPortOpen(host: string, port: number): Promise<boolean> {
   })
 }
 
-export async function containerPortListening(
+async function containerPortListening(
   containerId: string,
   port: number
 ): Promise<boolean | undefined> {
@@ -2790,19 +2663,6 @@ async function minecraftStatusReadyInContainer(
       Effect.catch(() => Effect.succeed(undefined))
     )
   )
-}
-
-export function procNetTcpHasListener(output: string, port: number): boolean {
-  const expectedPort = port.toString(16).toUpperCase().padStart(4, "0")
-  return output.split("\n").some((line) => {
-    const fields = line.trim().split(/\s+/u)
-    const localAddress = fields[1]
-    const state = fields[3]
-    return (
-      state === "0A" &&
-      localAddress?.slice(localAddress.lastIndexOf(":") + 1) === expectedPort
-    )
-  })
 }
 
 function minecraftStatusReady(host: string, port: number): Promise<boolean> {
@@ -2903,22 +2763,14 @@ function roundPercent(value: number): number {
   return Math.round(Math.max(value, 0) * 10) / 10
 }
 
-export interface ParsedConsoleLine {
-  level: RelayConsoleLevel
-  segments?: Array<RelayConsoleSegment>
-  service?: "coredns" | "tailscale"
-  text: string
-  timestamp: string | null
-}
-
-export interface ConsoleStopCommandsInput {
+interface ConsoleStopCommandsInput {
   readonly configured: ReadonlyArray<string> | undefined
   readonly instanceId: string
-  readonly load: ((source: string) => Promise<ReadonlyArray<string>>) | null
+  readonly load: (source: string) => Promise<ReadonlyArray<string>>
   readonly source: string | undefined
 }
 
-export const resolveConsoleStopCommands = Effect.fn(
+const resolveConsoleStopCommands = Effect.fn(
   "relay.console.resolveStopCommands"
 )(function* ({
   configured,
@@ -2928,7 +2780,7 @@ export const resolveConsoleStopCommands = Effect.fn(
 }: ConsoleStopCommandsInput) {
   yield* Effect.annotateCurrentSpan({ "kiln.instance_id": instanceId })
   if (configured && configured.length > 0) return configured
-  if (!load || !source) return []
+  if (!source) return []
   return yield* promiseEffect(() => load(source)).pipe(
     Effect.withSpan("relay.console.loadRecipeStopCommands", {
       attributes: {
@@ -2946,10 +2798,10 @@ export const resolveConsoleStopCommands = Effect.fn(
   )
 })
 
-export function observedSessionReadyAt(
+function observedSessionReadyAt(
   detectedReadyAt: string | undefined,
   observedDuringStartup: boolean,
-  now = Date.now()
+  now: number
 ): string | null {
   if (detectedReadyAt) return detectedReadyAt
   // A rediscovered session has no trustworthy historical probe time. Keep it
@@ -3068,9 +2920,7 @@ function addLifecycleEvent(
     : [...events, { state, time }]
 }
 
-function historicalReadinessLogArguments(
-  startedAt: string
-): Array<string> {
+function historicalReadinessLogArguments(startedAt: string): Array<string> {
   const since = dockerLogSinceArguments(startedAt)
   const parsed = Date.parse(startedAt)
   if (since.length === 0 || !Number.isFinite(parsed)) {
@@ -3083,9 +2933,9 @@ function historicalReadinessLogArguments(
   ]
 }
 
-export type InstanceReadinessProbe = "historical" | "live"
+type InstanceReadinessProbe = "historical" | "live"
 
-export function instanceReadinessProbe({
+function instanceReadinessProbe({
   hasHealthCheck,
   hasLogReadiness,
   running,
@@ -3120,85 +2970,6 @@ export function instanceReadinessProbe({
   return hasLogReadiness ? "historical" : null
 }
 
-export function matchingReadyLogLine(
-  lines: ReadonlyArray<ParsedConsoleLine>,
-  fragments: ReadonlyArray<string>
-): ParsedConsoleLine | undefined {
-  return lines.find((line) =>
-    fragments.some((fragment) => line.text.includes(fragment))
-  )
-}
-
-export function parseConsoleLine(value: string): ParsedConsoleLine | null {
-  if (isTerminalOnlyConsoleFrame(value)) return null
-  const normalized = stripConsoleFormatting(value)
-  const match = normalized.match(/^(\d{4}-\d{2}-\d{2}T\S+Z)\s(.*)$/u)
-  const timestamp = match?.[1] ?? null
-  const text = (match?.[2] ?? normalized)
-    .replace(/(?:>\.\.\.\.|…)+/gu, "")
-    .replace(CONTROL_PATTERN, "")
-    .trim()
-    .replace(/^[>=]+\s*(?=\[\d{2}:\d{2}:\d{2})/u, "")
-  if (!text || text === "list") return null
-
-  let level: RelayConsoleLevel = "info"
-  if (/\b(?:ERROR|FATAL|SEVERE)\b/iu.test(text)) level = "error"
-  else if (/\bWARN(?:ING)?\b/iu.test(text)) level = "warn"
-  else if (/\bDEBUG\b/iu.test(text)) level = "debug"
-  else if (/\bTRACE\b/iu.test(text)) level = "trace"
-
-  const rawText = value.replace(/^\d{4}-\d{2}-\d{2}T\S+Z\s/u, "")
-  const segments = styledConsoleSegments(rawText, text)
-  return {
-    timestamp,
-    text,
-    level,
-    ...(segments ? { segments } : {}),
-  }
-}
-
-function isTerminalOnlyConsoleFrame(value: string): boolean {
-  const normalized = stripConsoleFormatting(value)
-  const withoutTimestamp = normalized.replace(/^\d{4}-\d{2}-\d{2}T\S+Z\s*/u, "")
-  if (
-    CURL_PROGRESS_HEADER_PATTERN.test(withoutTimestamp) ||
-    CURL_PROGRESS_ROW_PATTERN.test(withoutTimestamp)
-  ) {
-    return true
-  }
-  if (MINECRAFT_LOG_PREFIX_PATTERN.test(normalized)) return false
-  const terminalText = normalized
-    .replace(/^\d{4}-\d{2}-\d{2}T\S+Z\s*/u, "")
-    .trimStart()
-  if (/^>\s*/u.test(terminalText)) return true
-  if (TERMINAL_EDIT_PATTERN.test(value)) return true
-
-  const ansiSequenceCount = value.match(ANSI_PATTERN)?.length ?? 0
-  if (ansiSequenceCount >= 4 && /\S+\s{2,}\S+/u.test(normalized)) return true
-
-  const terminalColumns = normalized
-    .replace(/^\d{4}-\d{2}-\d{2}T\S+Z\s*/u, "")
-    .trim()
-    .split(/\s{2,}/u)
-  return (
-    terminalColumns.length >= 2 &&
-    terminalColumns.every((column) => /^[a-z0-9_:.?+/-]+$/iu.test(column))
-  )
-}
-
-function parseConsoleOutput(result: {
-  stdout: string
-  stderr: string
-}): Array<ParsedConsoleLine> {
-  return [result.stdout, result.stderr]
-    .flatMap((output) => output.split("\n"))
-    .map(parseConsoleLine)
-    .filter((line): line is ParsedConsoleLine => line !== null)
-    .sort((left, right) =>
-      (left.timestamp ?? "").localeCompare(right.timestamp ?? "")
-    )
-}
-
 function prefixConsoleLine(
   line: ParsedConsoleLine,
   component: ConsoleTarget["component"]
@@ -3219,220 +2990,11 @@ function compareConsoleLines(
   return (left.timestamp ?? "").localeCompare(right.timestamp ?? "")
 }
 
-interface ConsoleStyle {
-  bold: boolean
-  color: string | undefined
-  italic: boolean
-  underline: boolean
-}
-
 export interface DockerConsoleLog {
   content: string
   instanceId: string
   path: "console.log"
   size: number
-}
-
-const ANSI_COLORS = [
-  "#1f2937",
-  "#dc2626",
-  "#16a34a",
-  "#ca8a04",
-  "#2563eb",
-  "#c026d3",
-  "#0891b2",
-  "#d1d5db",
-  "#6b7280",
-  "#f87171",
-  "#4ade80",
-  "#facc15",
-  "#60a5fa",
-  "#e879f9",
-  "#22d3ee",
-  "#f9fafb",
-]
-
-const MINECRAFT_COLORS: Readonly<Record<string, string>> = {
-  "0": "#000000",
-  "1": "#0000aa",
-  "2": "#00aa00",
-  "3": "#00aaaa",
-  "4": "#aa0000",
-  "5": "#aa00aa",
-  "6": "#ffaa00",
-  "7": "#aaaaaa",
-  "8": "#555555",
-  "9": "#5555ff",
-  a: "#55ff55",
-  b: "#55ffff",
-  c: "#ff5555",
-  d: "#ff55ff",
-  e: "#ffff55",
-  f: "#ffffff",
-}
-
-function styledConsoleSegments(
-  value: string,
-  expectedText: string
-): Array<RelayConsoleSegment> | undefined {
-  const tokenPattern = new RegExp(
-    `${String.fromCodePoint(27)}\\[([\\d;:]*)m|§x((?:§[\\da-f]){6})|§([0-9a-fk-or])`,
-    "giu"
-  )
-  const segments: Array<RelayConsoleSegment> = []
-  const style: ConsoleStyle = {
-    bold: false,
-    color: undefined,
-    italic: false,
-    underline: false,
-  }
-  let offset = 0
-  let styled = false
-
-  const append = (text: string) => {
-    const visible = text.replace(CONTROL_PATTERN, "").replace(/\r/gu, "")
-    if (!visible) return
-    const segment: RelayConsoleSegment = {
-      text: visible,
-      ...(style.color ? { color: style.color } : {}),
-      ...(style.bold ? { bold: true } : {}),
-      ...(style.italic ? { italic: true } : {}),
-      ...(style.underline ? { underline: true } : {}),
-    }
-    const previous = segments.at(-1)
-    if (
-      previous &&
-      previous.color === segment.color &&
-      previous.bold === segment.bold &&
-      previous.italic === segment.italic &&
-      previous.underline === segment.underline
-    ) {
-      previous.text += segment.text
-    } else {
-      segments.push(segment)
-    }
-  }
-
-  for (const match of value.matchAll(tokenPattern)) {
-    append(value.slice(offset, match.index))
-    offset = match.index + match[0].length
-    styled = true
-    if (match[3]) applyMinecraftStyle(match[3].toLowerCase(), style)
-    else if (match[2]) applyMinecraftHexStyle(match[2], style)
-    else applyAnsiStyle(match[1] ?? "", style)
-  }
-  append(value.slice(offset))
-  if (!styled) return undefined
-
-  const plain = segments.map((segment) => segment.text).join("")
-  const start = plain.indexOf(expectedText)
-  if (start < 0) return undefined
-  return sliceConsoleSegments(segments, start, expectedText.length)
-}
-
-function applyMinecraftHexStyle(value: string, style: ConsoleStyle): void {
-  resetConsoleStyle(style)
-  style.color = `#${value.replaceAll("§", "")}`
-}
-
-function applyMinecraftStyle(code: string, style: ConsoleStyle): void {
-  const color = MINECRAFT_COLORS[code]
-  if (color) {
-    resetConsoleStyle(style)
-    style.color = color
-    return
-  }
-  if (code === "l") style.bold = true
-  else if (code === "m") style.underline = true
-  else if (code === "n") style.underline = true
-  else if (code === "o") style.italic = true
-  else if (code === "r") resetConsoleStyle(style)
-}
-
-function applyAnsiStyle(value: string, style: ConsoleStyle): void {
-  const parameters = (value ? value.split(/[;:]/u) : ["0"]).map(Number)
-  for (let index = 0; index < parameters.length; index++) {
-    const code = parameters[index] ?? 0
-    if (code === 0) resetConsoleStyle(style)
-    else if (code === 1) style.bold = true
-    else if (code === 3) style.italic = true
-    else if (code === 4) style.underline = true
-    else if (code === 22) style.bold = false
-    else if (code === 23) style.italic = false
-    else if (code === 24) style.underline = false
-    else if (code >= 30 && code <= 37) style.color = ANSI_COLORS[code - 30]
-    else if (code >= 90 && code <= 97) style.color = ANSI_COLORS[code - 82]
-    else if (code === 39) style.color = undefined
-    else if (code === 38 && parameters[index + 1] === 5) {
-      const paletteIndex = parameters[index + 2]
-      if (paletteIndex !== undefined) style.color = ansi256Color(paletteIndex)
-      index += 2
-    } else if (code === 38 && parameters[index + 1] === 2) {
-      const red = parameters[index + 2]
-      const green = parameters[index + 3]
-      const blue = parameters[index + 4]
-      if (red !== undefined && green !== undefined && blue !== undefined) {
-        style.color = rgbHex(red, green, blue)
-      }
-      index += 4
-    }
-  }
-}
-
-function resetConsoleStyle(style: ConsoleStyle): void {
-  style.bold = false
-  style.color = undefined
-  style.italic = false
-  style.underline = false
-}
-
-function ansi256Color(index: number): string {
-  const bounded = Math.max(0, Math.min(255, Math.trunc(index)))
-  if (bounded < 16) return ANSI_COLORS[bounded] ?? "#f9fafb"
-  if (bounded >= 232) {
-    const gray = 8 + (bounded - 232) * 10
-    return rgbHex(gray, gray, gray)
-  }
-  const cube = bounded - 16
-  const red = Math.floor(cube / 36)
-  const green = Math.floor((cube % 36) / 6)
-  const blue = cube % 6
-  const channel = (value: number) => (value === 0 ? 0 : 55 + value * 40)
-  return rgbHex(channel(red), channel(green), channel(blue))
-}
-
-function rgbHex(red: number, green: number, blue: number): string {
-  return `#${[red, green, blue]
-    .map((value) =>
-      Math.max(0, Math.min(255, Math.trunc(value)))
-        .toString(16)
-        .padStart(2, "0")
-    )
-    .join("")}`
-}
-
-function sliceConsoleSegments(
-  segments: ReadonlyArray<RelayConsoleSegment>,
-  start: number,
-  length: number
-): Array<RelayConsoleSegment> {
-  const sliced: Array<RelayConsoleSegment> = []
-  const end = start + length
-  let offset = 0
-  for (const segment of segments) {
-    const segmentEnd = offset + segment.text.length
-    const overlapStart = Math.max(start, offset)
-    const overlapEnd = Math.min(end, segmentEnd)
-    if (overlapStart < overlapEnd) {
-      sliced.push({
-        ...segment,
-        text: segment.text.slice(overlapStart - offset, overlapEnd - offset),
-      })
-    }
-    offset = segmentEnd
-    if (offset >= end) break
-  }
-  return sliced
 }
 
 function consoleStartedAt(container: DockerInspect): string | null {
@@ -3454,102 +3016,6 @@ function dockerLogSinceArguments(startedAt: string): Array<string> {
   return Number.isFinite(timestamp) && timestamp > 0
     ? ["--since", startedAt]
     : []
-}
-
-function parseConsoleCompletion(
-  prefix: string,
-  output: string
-): Pick<RelayConsoleCompletion, "completedPrefix" | "suggestions"> {
-  if (output.includes("\n")) {
-    const suggestions = output
-      .split(/\r*\n/gu)
-      .slice(1)
-      .flatMap((line) =>
-        stripAnsi(line)
-          .replace(CONTROL_PATTERN, "")
-          .trim()
-          .split(/\s{2,}/gu)
-      )
-      .map((suggestion) => suggestion.trim())
-      .filter(
-        (suggestion) =>
-          suggestion.length > 0 &&
-          suggestion !== prefix &&
-          !MINECRAFT_LOG_PREFIX_PATTERN.test(suggestion)
-      )
-      .filter(
-        (suggestion, index, values) => values.indexOf(suggestion) === index
-      )
-      .slice(0, 100)
-    return { completedPrefix: null, suggestions }
-  }
-
-  if (output.includes("\u0007")) {
-    return { completedPrefix: null, suggestions: [] }
-  }
-
-  const rendered = renderTerminalLine(output).trimEnd()
-  const afterLastBackspace = stripAnsi(
-    output.slice(output.lastIndexOf("\b") + 1)
-  )
-    .replace(CONTROL_PATTERN, "")
-    .trim()
-  const tokenStart = Math.max(prefix.lastIndexOf(" ") + 1, 0)
-  const typedToken = prefix.slice(tokenStart)
-  const completedToken =
-    afterLastBackspace.startsWith(typedToken) &&
-    afterLastBackspace !== typedToken
-      ? `${prefix.slice(0, tokenStart)}${afterLastBackspace}`
-      : null
-  const completedPrefix =
-    completedToken ??
-    (afterLastBackspace.startsWith(prefix) && afterLastBackspace !== prefix
-      ? afterLastBackspace
-      : rendered.startsWith(prefix) && rendered !== prefix
-        ? rendered
-        : null)
-  return { completedPrefix, suggestions: [] }
-}
-
-function renderTerminalLine(value: string): string {
-  const visible = value.replace(ANSI_PATTERN, "")
-  const cells: Array<string> = []
-  let cursor = 0
-  for (const character of visible) {
-    if (character === "\r") {
-      cursor = 0
-      continue
-    }
-    if (character === "\b") {
-      cursor = Math.max(0, cursor - 1)
-      continue
-    }
-    if (character === "\n") {
-      cells.length = 0
-      cursor = 0
-      continue
-    }
-    const codePoint = character.charCodeAt(0)
-    if (
-      codePoint <= 8 ||
-      (codePoint >= 11 && codePoint <= 12) ||
-      (codePoint >= 14 && codePoint <= 31) ||
-      codePoint === 127
-    ) {
-      continue
-    }
-    cells[cursor] = character
-    cursor += 1
-  }
-  return cells.join("")
-}
-
-function stripAnsi(value: string): string {
-  return value.replace(ANSI_PATTERN, "").replace(/\r/gu, "")
-}
-
-function stripConsoleFormatting(value: string): string {
-  return stripAnsi(value).replace(MINECRAFT_STYLE_PATTERN, "")
 }
 
 function titleCase(value: string): string {

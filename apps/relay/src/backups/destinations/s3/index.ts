@@ -25,9 +25,7 @@ import {
   type ResticS3DriverLocation,
 } from "../types.js"
 
-export { withResticS3Proxy } from "./proxy.js"
-
-export const MAX_S3_SINGLE_PUT_BYTES = 5 * 1024 ** 3
+const MAX_S3_SINGLE_PUT_BYTES = 5 * 1024 ** 3
 const BACKUP_TRANSFER_IDLE_TIMEOUT_MS = 30_000
 
 export function s3ResticDriverLocation(

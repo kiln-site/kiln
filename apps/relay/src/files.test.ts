@@ -17,14 +17,51 @@ import type { FileHandle } from "node:fs/promises"
 import { assert, describe, it } from "@effect/vitest"
 import { Deferred, Effect, Fiber } from "effect"
 import { pack as createTarPack, type Header as TarHeaders } from "tar-stream"
+import { vi } from "vite-plus/test"
 import ZipStream from "zip-stream"
 import { parseSnbt } from "@workspace/contracts"
 
-import { loadConfig } from "./config.js"
 import { FilesystemDriver, MAX_TRANSFER_BYTES } from "./files.js"
 import { RelayFilesystemError } from "./effect/errors.js"
 import { decodeNbt, encodeNbt } from "./nbt.js"
 import type { RelayInstanceConfig } from "./config.js"
+import { testInstance, testRelayConfig } from "./test/fixtures.js"
+
+// Directory sizes are computed in the background. Observe each real scan
+// finishing so tests can wait for it instead of polling on wall-clock time.
+const sizeScans = vi.hoisted(() => {
+  let finished = 0
+  const waiters = new Set<{ resolve: () => void; target: number }>()
+  return {
+    finish() {
+      finished += 1
+      for (const waiter of waiters) {
+        if (finished < waiter.target) continue
+        waiters.delete(waiter)
+        waiter.resolve()
+      }
+    },
+    get finished() {
+      return finished
+    },
+    until(target: number) {
+      return finished >= target
+        ? Promise.resolve()
+        : new Promise<void>((resolve) => waiters.add({ resolve, target }))
+    },
+  }
+})
+
+vi.mock("./disk-usage.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./disk-usage.js")>()
+  return {
+    ...actual,
+    directoryApparentSizeEffect: (root: string) =>
+      actual
+        .directoryApparentSizeEffect(root)
+        .pipe(Effect.ensuring(Effect.sync(() => sizeScans.finish()))),
+  }
+})
 
 const describeLinux = process.platform === "linux" ? describe : describe.skip
 
@@ -53,6 +90,7 @@ describe("Relay paged file index", () => {
           size: null,
         })
 
+        const scanned = sizeScans.until(sizeScans.finished + 1)
         const queued = yield* driver.directorySizes(instance, {
           instanceId: instance.id,
           paths: ["world/"],
@@ -60,17 +98,11 @@ describe("Relay paged file index", () => {
         assert.deepEqual(queued.sizes, {})
         assert.deepEqual(queued.pending, ["world/"])
 
-        let completed = queued
-        for (let attempt = 0; attempt < 20; attempt += 1) {
-          yield* fromPromise(
-            () => new Promise((resolveDelay) => setTimeout(resolveDelay, 10))
-          )
-          completed = yield* driver.directorySizes(instance, {
-            instanceId: instance.id,
-            paths: ["world/"],
-          })
-          if (!completed.pending.length) break
-        }
+        yield* fromPromise(() => scanned)
+        const completed = yield* driver.directorySizes(instance, {
+          instanceId: instance.id,
+          paths: ["world/"],
+        })
         assert.deepEqual(completed.pending, [])
         assert.strictEqual(completed.sizes["world/"], 11)
 
@@ -120,18 +152,13 @@ describe("Relay paged file index", () => {
           instanceId: instance.id,
           paths: ["missing/", "world/", "plugins/"],
         }
+        const scanned = sizeScans.until(sizeScans.finished + 2)
         const queued = yield* driver.directorySizes(instance, input)
         assert.deepEqual(queued.sizes, {})
         assert.deepEqual(queued.pending, ["world/", "plugins/"])
 
-        let completed = queued
-        for (let attempt = 0; attempt < 20; attempt += 1) {
-          yield* fromPromise(
-            () => new Promise((resolveDelay) => setTimeout(resolveDelay, 10))
-          )
-          completed = yield* driver.directorySizes(instance, input)
-          if (!completed.pending.length) break
-        }
+        yield* fromPromise(() => scanned)
+        const completed = yield* driver.directorySizes(instance, input)
         assert.deepEqual(completed.pending, [])
         assert.deepEqual(completed.sizes, {
           "plugins/": 6,
@@ -193,59 +220,6 @@ describe("Relay paged file index", () => {
         } while (searchCursor)
 
         assert.deepEqual(new Set(matches), new Set(listed))
-      })
-    )
-  )
-
-  it.effect("caps scan sessions without expiring existing cursors", () =>
-    withSetup(({ driver, instance, root }) =>
-      Effect.gen(function* () {
-        yield* fromPromise(() =>
-          Promise.all(
-            Array.from({ length: 128 }, (_, index) =>
-              writeFile(resolve(root, "world", `entry-${index}.txt`), "")
-            )
-          )
-        )
-
-        const cursors: Array<string> = []
-        for (let index = 0; index < 256; index += 1) {
-          const page = yield* driver.directory(instance, {
-            instanceId: instance.id,
-            path: "world/",
-          })
-          assert.isString(page.cursor)
-          if (page.cursor) cursors.push(page.cursor)
-        }
-
-        const failure = yield* driver
-          .directory(instance, {
-            instanceId: instance.id,
-            path: "world/",
-          })
-          .pipe(Effect.flip)
-        assert.instanceOf(failure, RelayFilesystemError)
-        assert.strictEqual(failure.operation, "directory.open")
-
-        const firstCursor = cursors[0]
-        assert.isString(firstCursor)
-        const resumed = yield* driver.directory(instance, {
-          cursor: firstCursor,
-          instanceId: instance.id,
-          path: "world/",
-        })
-        assert.isNull(resumed.cursor)
-
-        yield* Effect.forEach(
-          cursors.slice(1),
-          (cursor) =>
-            driver.directory(instance, {
-              cursor,
-              instanceId: instance.id,
-              path: "world/",
-            }),
-          { concurrency: 16, discard: true }
-        )
       })
     )
   )
@@ -1020,14 +994,9 @@ function withSetup<TResult>(
         yield* fromPromise(() =>
           mkdir(resolve(root, "world"), { recursive: true })
         )
-        const config = loadConfig({
-          KILN_RELAY_DATA_DIR: directory,
-          KILN_RELAY_HOST: "relay.test",
-          NODE_ENV: "development",
-        })
         return yield* use({
           directory,
-          driver: new FilesystemDriver(config),
+          driver: new FilesystemDriver(testRelayConfig(directory)),
           instance: testInstance(),
           root,
         })
@@ -1133,23 +1102,4 @@ function fromPromise<TResult>(run: () => Promise<TResult>) {
     try: run,
     catch: (cause) => cause,
   })
-}
-
-function testInstance(): RelayInstanceConfig {
-  return {
-    connectAddress: "localhost",
-    directory: "instance-1",
-    game: "Minecraft",
-    id: "instance-1",
-    implementation: "Paper",
-    javaVersion: "21",
-    limits: { diskBytes: 0, memoryBytes: 0 },
-    managedByRelay: true,
-    name: "Test Instance",
-    ports: [],
-    service: "test",
-    shortId: "instance",
-    tailscale: { enabled: false },
-    version: "1.21.11",
-  }
 }

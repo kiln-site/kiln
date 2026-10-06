@@ -1,24 +1,21 @@
+import { createHash } from "node:crypto"
 import { EventEmitter } from "node:events"
 import { existsSync, mkdtempSync, rmSync } from "node:fs"
-import { mkdir, symlink, writeFile } from "node:fs/promises"
-import { rejects } from "node:assert/strict"
+import { mkdir, readFile, symlink, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { PassThrough } from "node:stream"
-import { afterAll, assert, describe, it } from "@effect/vitest"
+
+import { afterAll, afterEach, describe, expect, it, vi } from "vite-plus/test"
 
 import {
   createResticDriver,
-  isUnsupportedExcludePattern,
-  parseResticJsonLine,
-  progressFromResticStatus,
   resticDriverLocation,
-  resticRepositoryString,
-  summaryFromResticJson,
+  resticSnapshotSelector,
   translateExcludePatterns,
   validateStagingTree,
-  resticSnapshotSelector,
   type ResticDriverLocation,
+  type ResticProgress,
   type ResticSpawn,
 } from "./restic.js"
 import { RelayBackupError } from "./effect/errors.js"
@@ -35,36 +32,22 @@ const s3Location: ResticDriverLocation = {
   repositoryPrefix: "team/kiln/relay/restic/instance/srv/repo",
   secretAccessKey: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
 }
+const localLocation: ResticDriverLocation = {
+  kind: "local",
+  path: join(testDirectory, "repo"),
+}
+
+afterEach(() => {
+  vi.useRealTimers()
+  vi.unstubAllEnvs()
+})
 
 afterAll(() => {
   rmSync(testDirectory, { force: true, recursive: true })
 })
 
-describe("restic JSON parsing", () => {
-  it("reads status and summary lines", () => {
-    assert.deepStrictEqual(
-      progressFromResticStatus(
-        parseResticJsonLine(
-          '{"message_type":"status","bytes_done":10,"total_bytes":40}'
-        )
-      ),
-      { bytesCompleted: 10, bytesTotal: 40 }
-    )
-    assert.deepStrictEqual(
-      summaryFromResticJson(
-        parseResticJsonLine(
-          '{"message_type":"summary","snapshot_id":"abc12345","total_bytes_processed":40}'
-        )
-      ),
-      { snapshotId: "abc12345", totalBytesProcessed: 40 }
-    )
-    assert.isNull(parseResticJsonLine("not-json"))
-    assert.isNull(progressFromResticStatus({ message_type: "verbose_status" }))
-  })
-})
-
 describe("restic exclude translation", () => {
-  it("translates the supported subset and warns on unsupported patterns", () => {
+  it("translates the supported subset and skips unsupported patterns", () => {
     const translated = translateExcludePatterns([
       "# comment",
       "",
@@ -74,290 +57,302 @@ describe("restic exclude translation", () => {
       "!keep.txt",
       "cache[0-9]",
       "build/{tmp,out}",
+      "*.@(log|tmp)",
     ])
-    assert.deepStrictEqual(translated.excludes, [
+    expect(translated.excludes).toEqual([
       ".DS_Store",
       "**/.DS_Store",
       "logs/**",
       "*.pid",
       "**/*.pid",
     ])
-    assert.include(translated.warnings[0] ?? "", "negation")
-    assert.include(translated.warnings[1] ?? "", "cache[0-9]")
-    assert.include(translated.warnings[2] ?? "", "build/{tmp,out}")
-    assert.isTrue(isUnsupportedExcludePattern("!(foo)"))
-    assert.isFalse(isUnsupportedExcludePattern("world/**"))
+    expect(translated.warnings).toHaveLength(4)
+    for (const pattern of [
+      "!keep.txt",
+      "cache[0-9]",
+      "build/{tmp,out}",
+      "*.@(log|tmp)",
+    ]) {
+      expect(
+        translated.warnings.some((warning) => warning.includes(pattern))
+      ).toBe(true)
+    }
   })
 })
 
 describe("restic driver", () => {
-  it("passes --no-cache instead of an empty RESTIC_CACHE_DIR", async () => {
-    let args: Array<string> | undefined
-    let env: NodeJS.ProcessEnv | undefined
-    const spawn: ResticSpawn = (_command, received, options) => {
-      args = [...received]
-      env = options.env
-      const stdout = new PassThrough()
-      const stderr = new PassThrough()
-      const child = new EventEmitter() as ReturnType<ResticSpawn>
-      child.stdout = stdout
-      child.stderr = stderr
-      child.stdin = new PassThrough()
-      child.kill = () => true
+  it("reports backup progress and the snapshot from restic's JSON stream", async () => {
+    const { spawn } = fakeRestic((restic) => {
       queueMicrotask(() => {
-        stdout.end()
-        stderr.end()
-        child.emit("close", 0)
+        restic.stdout.write('{"message_type":"status","bytes_do')
+        restic.stdout.write('ne":10,"total_bytes":40}\nnot-json\n')
+        restic.stdout.write('{"message_type":"verbose_status"}\n')
+        restic.finish(0, {
+          stdout:
+            '{"message_type":"summary","snapshot_id":"abc12345","total_bytes_processed":40}',
+        })
       })
-      return child
-    }
-    const driver = createResticDriver({ spawn })
-    await driver.catConfig({
-      password: "secret",
-      location: { kind: "local", path: join(testDirectory, "repo") },
-      signal: new AbortController().signal,
     })
-    assert.strictEqual(args?.[0], "--no-cache")
-    assert.isUndefined(env?.RESTIC_CACHE_DIR)
+    const progress: Array<ResticProgress> = []
+    const summary = await createResticDriver({ spawn }).backup({
+      cwd: testDirectory,
+      excludes: [],
+      location: localLocation,
+      onProgress: (next) => progress.push(next),
+      password: "secret",
+      path: "instance",
+      signal: new AbortController().signal,
+      tags: ["task:1"],
+    })
+    expect(summary).toEqual({ snapshotId: "abc12345", totalBytesProcessed: 40 })
+    expect(progress).toEqual([{ bytesCompleted: 10, bytesTotal: 40 }])
   })
 
-  it("kills restic when the command promise rejects while the process is running", async () => {
-    let killed: string | undefined
-    const spawn: ResticSpawn = () => {
-      const stdout = new PassThrough()
-      const stderr = new PassThrough()
-      const child = new EventEmitter() as ReturnType<ResticSpawn>
-      child.stdout = stdout
-      child.stderr = stderr
-      child.stdin = new PassThrough()
-      child.kill = (signal) => {
-        killed = String(signal ?? "SIGTERM")
-        queueMicrotask(() => {
-          stdout.end()
-          stderr.end()
-          child.emit("close", 1)
-        })
-        return true
-      }
+  it("fails a backup that exits cleanly without reporting a snapshot", async () => {
+    const { spawn } = fakeRestic((restic) => restic.respond({ exitCode: 0 }))
+    await expect(
+      createResticDriver({ spawn }).backup({
+        cwd: testDirectory,
+        excludes: [],
+        location: localLocation,
+        password: "secret",
+        path: "instance",
+        signal: new AbortController().signal,
+        tags: ["task:1"],
+      })
+    ).rejects.toMatchObject({ code: "restic_backup_summary_missing" })
+  })
+
+  it("kills restic when the command promise rejects while the restic is running", async () => {
+    const { processes, spawn } = fakeRestic((restic) => {
+      restic.onSignal = () => restic.finish(1)
       queueMicrotask(() => {
-        stdout.write(
+        restic.stdout.write(
           '{"message_type":"status","bytes_done":10,"total_bytes":99}\n'
         )
       })
-      return child
-    }
-    const driver = createResticDriver({ spawn })
-    let thrown = false
-    try {
-      await driver.backup({
+    })
+    await expect(
+      createResticDriver({ spawn }).backup({
         cwd: testDirectory,
         excludes: [],
+        location: localLocation,
         onProgress: () => {
           throw new Error("too large")
         },
         password: "secret",
         path: "instance",
-        location: { kind: "local", path: join(testDirectory, "repo") },
         signal: new AbortController().signal,
         tags: ["task:1"],
       })
-    } catch {
-      thrown = true
-    }
-    assert.isTrue(thrown)
-    assert.strictEqual(killed, "SIGTERM")
+    ).rejects.toThrow("too large")
+    expect(processes[0]?.signals).toContain("SIGTERM")
+    expect(processes[0]?.exited).toBe(true)
   })
 
   it("kills restic when abort wins the spawn-to-listener race", async () => {
     const abort = new AbortController()
-    let killed: string | undefined
-    const spawn: ResticSpawn = () => {
+    const { processes, spawn } = fakeRestic((restic) => {
       abort.abort()
-      const stdout = new PassThrough()
-      const stderr = new PassThrough()
-      const child = new EventEmitter() as ReturnType<ResticSpawn>
-      child.stdout = stdout
-      child.stderr = stderr
-      child.stdin = new PassThrough()
-      child.kill = (signal) => {
-        killed = String(signal ?? "SIGTERM")
-        queueMicrotask(() => {
-          stdout.end()
-          stderr.end()
-          child.emit("close", 1)
-        })
-        return true
-      }
-      return child
-    }
-    const driver = createResticDriver({ spawn })
-
-    await rejects(
-      driver.catConfig({
+      restic.onSignal = () => restic.finish(1)
+    })
+    await expect(
+      createResticDriver({ spawn }).catConfig({
         location: s3Location,
         password: "secret",
         signal: abort.signal,
-      }),
-      RelayBackupError
-    )
-    assert.strictEqual(killed, "SIGTERM")
+      })
+    ).rejects.toMatchObject({ code: "restic_command_aborted" })
+    expect(processes[0]?.signals).toContain("SIGTERM")
+    expect(processes[0]?.exited).toBe(true)
   })
 
-  it("escalates an ignored abort to SIGKILL", async () => {
+  it("force-kills restic when it ignores cancellation", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] })
     const abort = new AbortController()
-    const signals: Array<string> = []
-    const spawn: ResticSpawn = () => {
+    const { processes, spawn } = fakeRestic((restic) => {
       abort.abort()
-      const stdout = new PassThrough()
-      const stderr = new PassThrough()
-      const child = new EventEmitter() as ReturnType<ResticSpawn>
-      child.stdout = stdout
-      child.stderr = stderr
-      child.stdin = new PassThrough()
-      child.kill = (signal) => {
-        const received = String(signal ?? "SIGTERM")
-        signals.push(received)
-        if (received === "SIGKILL") {
-          queueMicrotask(() => {
-            stdout.end()
-            stderr.end()
-            child.emit("close", 1)
-          })
-        }
-        return true
+      restic.onSignal = (signal) => {
+        if (signal === "SIGKILL") restic.finish(1)
       }
-      return child
-    }
-    const driver = createResticDriver({ spawn, terminateTimeoutMs: 10 })
-
-    await rejects(
-      driver.catConfig({
-        location: s3Location,
-        password: "secret",
-        signal: abort.signal,
-      }),
-      RelayBackupError
-    )
-    assert.deepStrictEqual(signals, ["SIGTERM", "SIGKILL"])
+    })
+    const cancelled = createResticDriver({ spawn }).catConfig({
+      location: localLocation,
+      password: "secret",
+      signal: abort.signal,
+    })
+    await advanceUntilSettled(cancelled)
+    await expect(cancelled).rejects.toMatchObject({
+      code: "restic_command_aborted",
+    })
+    expect(processes[0]?.signals).toContain("SIGKILL")
+    expect(processes[0]?.exited).toBe(true)
   })
 
   it("does not wait for restic streams to reach EOF after abort", async () => {
     const abort = new AbortController()
-    let stdout: PassThrough | undefined
-    let stderr: PassThrough | undefined
-    const spawn: ResticSpawn = () => {
+    const { processes, spawn } = fakeRestic((restic) => {
       abort.abort()
-      stdout = new PassThrough()
-      stderr = new PassThrough()
-      const child = new EventEmitter() as ReturnType<ResticSpawn>
-      child.stdout = stdout
-      child.stderr = stderr
-      child.stdin = new PassThrough()
-      child.kill = () => {
-        queueMicrotask(() => child.emit("close", 1))
-        return true
-      }
-      return child
+      restic.onSignal = () => restic.exit(1)
+    })
+    try {
+      await expect(
+        createResticDriver({ spawn }).catConfig({
+          location: s3Location,
+          password: "secret",
+          signal: abort.signal,
+        })
+      ).rejects.toMatchObject({ code: "restic_command_aborted" })
+    } finally {
+      processes[0]?.stdout.end()
+      processes[0]?.stderr.end()
     }
-    const driver = createResticDriver({ spawn, terminateTimeoutMs: 10 })
-
-    await rejects(
-      driver.catConfig({
-        location: s3Location,
-        password: "secret",
-        signal: abort.signal,
-      }),
-      RelayBackupError
-    )
-    stdout?.end()
-    stderr?.end()
   })
 
   it("reports abort when it arrives after a successful child exit", async () => {
     const abort = new AbortController()
-    let killed = 0
-    let stdout: PassThrough | undefined
-    let stderr: PassThrough | undefined
-    const spawn: ResticSpawn = () => {
-      stdout = new PassThrough()
-      stderr = new PassThrough()
-      const child = new EventEmitter() as ReturnType<ResticSpawn>
-      child.stdout = stdout
-      child.stderr = stderr
-      child.stdin = new PassThrough()
-      child.kill = () => {
-        killed += 1
-        return true
-      }
+    const { processes, spawn } = fakeRestic((restic) => {
       queueMicrotask(() => {
-        stdout?.write("{}")
-        child.emit("close", 0)
+        restic.stdout.write("{}")
+        restic.exit(0)
         abort.abort()
       })
-      return child
+    })
+    try {
+      await expect(
+        createResticDriver({ spawn }).catConfig({
+          location: s3Location,
+          password: "secret",
+          signal: abort.signal,
+        })
+      ).rejects.toMatchObject({ code: "restic_command_aborted" })
+      expect(processes[0]?.signals).toEqual([])
+    } finally {
+      processes[0]?.stdout.end()
+      processes[0]?.stderr.end()
     }
-    const driver = createResticDriver({ spawn, terminateTimeoutMs: 10 })
-
-    await rejects(
-      driver.catConfig({
-        location: s3Location,
-        password: "secret",
-        signal: abort.signal,
-      }),
-      RelayBackupError
-    )
-    assert.strictEqual(killed, 0)
-    stdout?.end()
-    stderr?.end()
   })
 
-  it("reuses a snapshot tagged with the task id", async () => {
-    const spawn = fakeResticSpawn([
-      {
-        match: (args) => args.includes("cat"),
-        stdout: "{}",
-      },
-      {
-        match: (args) => args.includes("--tag") && args.includes("task:task-1"),
-        stdout: JSON.stringify([{ id: "abcdef12" }]),
-      },
-      {
-        match: (args) => args.includes("stats"),
-        stdout: JSON.stringify({ total_size: 2048 }),
-      },
-    ])
+  it("finds a snapshot by tag and reads its restore size", async () => {
+    const { spawn } = fakeRestic((restic) => {
+      if (restic.command === "snapshots" && restic.args.includes("task:1")) {
+        restic.respond({ stdout: JSON.stringify([{ id: "abcdef12" }]) })
+      } else if (restic.command === "stats") {
+        restic.respond({ stdout: JSON.stringify({ total_size: 2048 }) })
+      } else {
+        restic.respond({ stdout: "[]" })
+      }
+    })
     const driver = createResticDriver({ spawn })
     const snapshots = await driver.snapshotsByTag({
+      location: localLocation,
       password: "secret",
-      location: { kind: "local", path: join(testDirectory, "repo") },
       signal: new AbortController().signal,
-      tag: "task:task-1",
+      tag: "task:1",
     })
-    assert.deepStrictEqual(snapshots, [{ id: "abcdef12" }])
+    expect(snapshots).toEqual([{ id: "abcdef12" }])
     const stats = await driver.stats({
+      location: localLocation,
       password: "secret",
-      location: { kind: "local", path: join(testDirectory, "repo") },
       signal: new AbortController().signal,
       snapshotId: "abcdef12",
     })
-    assert.strictEqual(stats.totalSize, 2048)
+    expect(stats.totalSize).toBe(2048)
   })
 
   it("treats a missing snapshot as a successful forget", async () => {
-    const spawn = fakeResticSpawn([
-      {
+    const { spawn } = fakeRestic((restic) =>
+      restic.respond({
         exitCode: 1,
-        match: (args) => args.includes("forget"),
         stderr: 'Fatal: no matching ID found for sequence "deadbeef"',
-      },
-    ])
-    const driver = createResticDriver({ spawn })
-    await driver.forget({
-      password: "secret",
-      location: { kind: "local", path: join(testDirectory, "repo") },
-      signal: new AbortController().signal,
-      snapshotId: "deadbeef",
+      })
+    )
+    await expect(
+      createResticDriver({ spawn }).forget({
+        location: localLocation,
+        password: "secret",
+        signal: new AbortController().signal,
+        snapshotId: "deadbeef",
+      })
+    ).resolves.toBeUndefined()
+  })
+
+  it("exports the instance directory of a snapshot as a zip", async () => {
+    const archive = Buffer.from("PK\u0003\u0004fake-zip-body")
+    const selector = resticSnapshotSelector(
+      "abcdef12",
+      "/data/instances/server-one"
+    )
+    const { spawn } = fakeRestic((restic) => {
+      const dumpsInstanceRoot =
+        restic.command === "dump" &&
+        restic.args.includes(selector) &&
+        restic.args.at(-1) === "/"
+      restic.respond(
+        dumpsInstanceRoot
+          ? { stdout: archive }
+          : { exitCode: 1, stderr: "Fatal: path not found in snapshot" }
+      )
     })
+    const destination = join(testDirectory, "exports", "export.zip")
+    const exported = await createResticDriver({ spawn }).dumpZip({
+      destination,
+      location: localLocation,
+      password: "secret",
+      selector,
+      signal: new AbortController().signal,
+    })
+    expect(await readFile(destination)).toEqual(archive)
+    expect(exported).toEqual({
+      bytes: archive.byteLength,
+      checksumSha256: createHash("sha256").update(archive).digest("hex"),
+    })
+  })
+
+  it("treats restic exit 10 as a missing repository and 12 as a wrong password", async () => {
+    const missing = fakeRestic((restic) =>
+      restic.respond({
+        exitCode: 10,
+        stderr: "Fatal: repository does not exist",
+      })
+    )
+    await expect(
+      createResticDriver({ spawn: missing.spawn }).catConfig({
+        location: localLocation,
+        password: "secret",
+        signal: new AbortController().signal,
+      })
+    ).resolves.toBe("missing")
+
+    const wrongPassword = fakeRestic((restic) =>
+      restic.respond({ exitCode: 12, stderr: "Fatal: wrong password" })
+    )
+    await expect(
+      createResticDriver({ spawn: wrongPassword.spawn }).catConfig({
+        location: localLocation,
+        password: "secret",
+        signal: new AbortController().signal,
+      })
+    ).rejects.toMatchObject({ code: "restic_wrong_password" })
+  })
+
+  it("runs local repositories without S3 credentials, proxy, or shared cache", async () => {
+    vi.stubEnv("HTTPS_PROXY", "http://evil.example:8080")
+    vi.stubEnv("AWS_ACCESS_KEY_ID", "leaked-key")
+    const cacheDirectory = join(testDirectory, "local-cache")
+    const { processes, spawn } = fakeRestic((restic) => restic.respond({}))
+    await createResticDriver({ cacheDirectory, spawn }).catConfig({
+      location: localLocation,
+      password: "repo-secret",
+      signal: new AbortController().signal,
+    })
+    const env = processes[0]?.env ?? {}
+    expect(env.RESTIC_REPOSITORY).toBe(join(testDirectory, "repo"))
+    expect(env.RESTIC_PASSWORD).toBe("repo-secret")
+    expect(env.RESTIC_CACHE_DIR).toBeUndefined()
+    expect(env.HTTPS_PROXY).toBeUndefined()
+    expect(env.AWS_ACCESS_KEY_ID).toBeUndefined()
+    expect(existsSync(cacheDirectory)).toBe(false)
   })
 })
 
@@ -367,9 +362,7 @@ describe("restic staging validation", () => {
     await mkdir(join(valid, "world"), { recursive: true })
     await writeFile(join(valid, "world", "level.dat"), "ok")
     const checked = await validateStagingTree(valid, { diskBytes: 10_000 })
-    assert.strictEqual(checked.entries, 2)
-    assert.strictEqual(checked.logicalBytes, 2)
-    assert.deepStrictEqual(checked.warnings, [])
+    expect(checked).toEqual({ entries: 2, logicalBytes: 2, warnings: [] })
   })
 
   it("drops symlinks with a warning instead of failing the restore", async () => {
@@ -378,73 +371,17 @@ describe("restic staging validation", () => {
     await writeFile(join(staging, "world", "level.dat"), "ok")
     await symlink("/etc/passwd", join(staging, "link"))
     const checked = await validateStagingTree(staging, { diskBytes: 10_000 })
-    assert.strictEqual(checked.logicalBytes, 2)
-    assert.strictEqual(checked.warnings.length, 1)
-    assert.include(checked.warnings[0] ?? "", "link")
-    assert.isFalse(existsSync(join(staging, "link")))
-    assert.isTrue(existsSync(join(staging, "world", "level.dat")))
-  })
-})
-
-describe("restic path layout", () => {
-  it("dumps the snapshot subfolder as a zip rooted at /", async () => {
-    let dumpArgs: Array<string> | undefined
-    const spawn: ResticSpawn = (_command, args) => {
-      dumpArgs = [...args]
-      const stdout = new PassThrough()
-      const stderr = new PassThrough()
-      const child = new EventEmitter() as ReturnType<ResticSpawn>
-      child.stdout = stdout
-      child.stderr = stderr
-      child.stdin = new PassThrough()
-      child.kill = () => true
-      queueMicrotask(() => {
-        stdout.end()
-        stderr.end()
-        child.emit("close", 0)
-      })
-      return child
-    }
-    const driver = createResticDriver({ spawn })
-    const destination = join(testDirectory, "export.zip")
-    await driver.dumpZip({
-      destination,
-      password: "secret",
-      location: { kind: "local", path: join(testDirectory, "repo") },
-      selector: resticSnapshotSelector(
-        "abcdef12",
-        "/data/instances/server-one"
-      ),
-      signal: new AbortController().signal,
-    })
-    assert.deepStrictEqual(dumpArgs, [
-      "--no-cache",
-      "dump",
-      "-a",
-      "zip",
-      "abcdef12:/data/instances/server-one",
-      "/",
-    ])
+    expect(checked.logicalBytes).toBe(2)
+    expect(checked.warnings).toHaveLength(1)
+    expect(checked.warnings[0]).toContain("link")
+    expect(existsSync(join(staging, "link"))).toBe(false)
+    expect(existsSync(join(staging, "world", "level.dat"))).toBe(true)
   })
 })
 
 describe("restic S3 driver", () => {
-  it("builds an s3 repository URL from the stored prefix", () => {
-    assert.strictEqual(
-      resticRepositoryString(s3Location),
-      "s3:https://s3.example.com/kiln-backups/team/kiln/relay/restic/instance/srv/repo"
-    )
-    assert.deepStrictEqual(
-      resticDriverLocation({ dataDirectory: "/data" } as never, "instance-1", {
-        ...s3Location,
-        kind: "s3",
-      }),
-      s3Location
-    )
-  })
-
   it("fails like a missing password when S3 credentials are absent", () => {
-    try {
+    expect(() =>
       resticDriverLocation({ dataDirectory: "/data" } as never, "instance-1", {
         allowPrivateNetwork: false,
         bucket: "kiln-backups",
@@ -454,157 +391,103 @@ describe("restic S3 driver", () => {
         region: "us-east-1",
         repositoryPrefix: "team/repo",
       })
-      assert.fail("expected missing credentials")
-    } catch (cause) {
-      assert.isTrue(cause instanceof RelayBackupError)
-      assert.strictEqual(
-        cause instanceof RelayBackupError ? cause.code : null,
-        "repository_credentials_missing"
-      )
-    }
+    ).toThrow(
+      expect.objectContaining({ code: "repository_credentials_missing" })
+    )
   })
 
-  it("sanitizes the restic environment and pins S3 options", async () => {
-    const previousSession = process.env.AWS_SESSION_TOKEN
-    const previousProxy = process.env.HTTPS_PROXY
-    process.env.AWS_SESSION_TOKEN = "leaked-session"
-    process.env.HTTPS_PROXY = "http://evil.example:8080"
-    const calls: Array<{
-      args: Array<string>
-      env: NodeJS.ProcessEnv
-    }> = []
-    try {
-      const spawn: ResticSpawn = (_command, received, options) => {
-        calls.push({ args: [...received], env: { ...options.env } })
-        return succeedingChild()
-      }
-      const driver = createResticDriver({
-        cacheDirectory: join(testDirectory, "restic-cache"),
-        spawn,
-      })
-      await driver.catConfig({
-        location: s3Location,
-        password: "repo-secret",
-        signal: new AbortController().signal,
-      })
-    } finally {
-      if (previousSession === undefined) delete process.env.AWS_SESSION_TOKEN
-      else process.env.AWS_SESSION_TOKEN = previousSession
-      if (previousProxy === undefined) delete process.env.HTTPS_PROXY
-      else process.env.HTTPS_PROXY = previousProxy
-    }
-    const call = calls[0]
-    assert.isDefined(call)
-    if (!call) return
-    assert.deepStrictEqual(call.args.slice(0, 4), [
-      "-o",
-      "s3.region=us-east-1",
-      "-o",
-      "s3.bucket-lookup=path",
-    ])
-    assert.strictEqual(call.env.AWS_SESSION_TOKEN, undefined)
-    assert.strictEqual(
-      call.env.AWS_SECRET_ACCESS_KEY,
-      s3Location.secretAccessKey
-    )
-    assert.strictEqual(call.env.RESTIC_PASSWORD, "repo-secret")
-    assert.strictEqual(
-      call.env.RESTIC_REPOSITORY,
-      resticRepositoryString(s3Location)
-    )
-    assert.strictEqual(
-      call.env.RESTIC_CACHE_DIR,
-      join(testDirectory, "restic-cache")
-    )
-    assert.match(
-      call.env.HTTPS_PROXY ?? "",
-      /^http:\/\/user:[^@]+@127\.0\.0\.1:\d+$/u
-    )
-    assert.isUndefined(call.env.HTTP_PROXY)
-  })
-
-  it("treats restic exit 10 as a missing repository and 12 as a wrong password", async () => {
-    const driver = createResticDriver({
-      spawn: fakeResticSpawn([
-        {
-          exitCode: 10,
-          match: (args) => args.includes("cat"),
-          stderr: "Fatal: repository does not exist",
-        },
-      ]),
-    })
-    const missing = await driver.catConfig({
-      location: { kind: "local", path: join(testDirectory, "repo") },
-      password: "secret",
+  it("sanitizes the restic environment and keeps secrets out of argv", async () => {
+    vi.stubEnv("AWS_SESSION_TOKEN", "leaked-session")
+    vi.stubEnv("HTTPS_PROXY", "http://evil.example:8080")
+    vi.stubEnv("HTTP_PROXY", "http://evil.example:8080")
+    const cacheDirectory = join(testDirectory, "restic-cache")
+    const { processes, spawn } = fakeRestic((restic) => restic.respond({}))
+    await createResticDriver({ cacheDirectory, spawn }).catConfig({
+      location: s3Location,
+      password: "repo-secret",
       signal: new AbortController().signal,
     })
-    assert.strictEqual(missing, "missing")
-
-    const wrongPassword = createResticDriver({
-      spawn: fakeResticSpawn([
-        {
-          exitCode: 12,
-          match: (args) => args.includes("cat"),
-          stderr: "Fatal: wrong password",
-        },
-      ]),
-    })
-    try {
-      await wrongPassword.catConfig({
-        location: { kind: "local", path: join(testDirectory, "repo") },
-        password: "secret",
-        signal: new AbortController().signal,
-      })
-      assert.fail("expected wrong password")
-    } catch (cause) {
-      assert.isTrue(cause instanceof RelayBackupError)
-      assert.strictEqual(
-        cause instanceof RelayBackupError ? cause.code : null,
-        "restic_wrong_password"
-      )
+    const call = processes[0]
+    expect(call).toBeDefined()
+    if (!call) return
+    expect(call.env.AWS_SESSION_TOKEN).toBeUndefined()
+    expect(call.env.HTTP_PROXY).toBeUndefined()
+    expect(call.env.HTTPS_PROXY).toMatch(
+      /^http:\/\/user:[^@]+@127\.0\.0\.1:\d+$/u
+    )
+    expect(call.env.AWS_ACCESS_KEY_ID).toBe(s3Location.accessKeyId)
+    expect(call.env.AWS_SECRET_ACCESS_KEY).toBe(s3Location.secretAccessKey)
+    expect(call.env.RESTIC_PASSWORD).toBe("repo-secret")
+    expect(call.env.RESTIC_REPOSITORY).toBe(
+      "s3:https://s3.example.com/kiln-backups/team/kiln/relay/restic/instance/srv/repo"
+    )
+    expect(call.env.RESTIC_CACHE_DIR).toBe(cacheDirectory)
+    expect(existsSync(cacheDirectory)).toBe(true)
+    const argv = call.args.join(" ")
+    for (const secret of [
+      "repo-secret",
+      s3Location.accessKeyId,
+      s3Location.secretAccessKey,
+    ]) {
+      expect(argv).not.toContain(secret)
     }
   })
 
-  it("unlocks S3 repositories before mutating commands but not before init", async () => {
-    const commands: Array<string> = []
-    const spawn: ResticSpawn = (_command, args) => {
-      const command = args.includes("unlock")
-        ? "unlock"
-        : args.includes("init")
-          ? "init"
-          : args.includes("forget")
-            ? "forget"
-            : args.join(" ")
-      commands.push(command)
-      return succeedingChild()
-    }
+  it("clears stale S3 locks before mutating commands without breaking init", async () => {
+    const repository = { initialized: false, locked: false }
+    const { spawn } = fakeRestic((restic) => {
+      if (restic.command === "init") {
+        repository.initialized = true
+        restic.respond({})
+        return
+      }
+      if (!repository.initialized) {
+        restic.respond({
+          exitCode: 10,
+          stderr: "Fatal: repository does not exist",
+        })
+        return
+      }
+      if (restic.command === "unlock") {
+        repository.locked = false
+        restic.respond({})
+        return
+      }
+      restic.respond(
+        repository.locked
+          ? {
+              exitCode: 11,
+              stderr: "Fatal: unable to create lock: repository is locked",
+            }
+          : {}
+      )
+    })
     const driver = createResticDriver({ spawn })
     const signal = new AbortController().signal
     await driver.init({ location: s3Location, password: "secret", signal })
-    assert.deepStrictEqual(commands, ["init"])
-    commands.length = 0
-    await driver.forget({
-      location: s3Location,
-      password: "secret",
-      signal,
-      snapshotId: "deadbeef",
-    })
-    assert.deepStrictEqual(commands, ["unlock", "forget"])
+    expect(repository.initialized).toBe(true)
+
+    repository.locked = true
+    await expect(
+      driver.forget({
+        location: s3Location,
+        password: "secret",
+        signal,
+        snapshotId: "deadbeef",
+      })
+    ).resolves.toBeUndefined()
   })
 
   it("redacts repository secrets from restic stderr", async () => {
-    const driver = createResticDriver({
-      spawn: fakeResticSpawn([
-        {
-          exitCode: 1,
-          match: (args) => args.includes("backup"),
-          stderr:
-            "Fatal: could not use AKIAEXAMPLE or wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY with repo-secret",
-        },
-      ]),
-    })
-    try {
-      await driver.backup({
+    const { spawn } = fakeRestic((restic) =>
+      restic.respond({
+        exitCode: 1,
+        stderr:
+          "Fatal: could not use AKIAEXAMPLE or wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY with repo-secret",
+      })
+    )
+    const failure = await createResticDriver({ spawn })
+      .backup({
         cwd: testDirectory,
         excludes: [],
         location: s3Location,
@@ -613,79 +496,126 @@ describe("restic S3 driver", () => {
         signal: new AbortController().signal,
         tags: ["task:1"],
       })
-      assert.fail("expected backup failure")
-    } catch (cause) {
-      assert.isTrue(cause instanceof RelayBackupError)
-      const reason = cause instanceof RelayBackupError ? cause.reason : ""
-      assert.isFalse(reason.includes("AKIAEXAMPLE"))
-      assert.isFalse(
-        reason.includes("wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY")
+      .then(
+        () => null,
+        (cause: unknown) => cause
       )
-      assert.isFalse(reason.includes("repo-secret"))
-      assert.include(reason, "[redacted]")
-    }
+    expect(failure).toBeInstanceOf(RelayBackupError)
+    const reason = failure instanceof RelayBackupError ? failure.reason : ""
+    expect(reason).not.toContain("AKIAEXAMPLE")
+    expect(reason).not.toContain("wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY")
+    expect(reason).not.toContain("repo-secret")
+    expect(reason).toContain("[redacted]")
   })
 
   it("reports S3 cache cleanup failures to its caller", async () => {
-    const driver = createResticDriver({
-      spawn: fakeResticSpawn([
-        {
-          exitCode: 1,
-          match: (args) => args.includes("cache"),
-          stderr: "cache cleanup failed",
-        },
-      ]),
-    })
-    await rejects(
-      driver.cacheCleanup({
+    const { spawn } = fakeRestic((restic) =>
+      restic.respond({ exitCode: 1, stderr: "cache cleanup failed" })
+    )
+    await expect(
+      createResticDriver({ spawn }).cacheCleanup({
         location: s3Location,
         password: "secret",
         signal: new AbortController().signal,
-      }),
-      RelayBackupError
-    )
+      })
+    ).rejects.toBeInstanceOf(RelayBackupError)
   })
 })
 
-function succeedingChild(): ReturnType<ResticSpawn> {
-  const stdout = new PassThrough()
-  const stderr = new PassThrough()
-  const child = new EventEmitter() as ReturnType<ResticSpawn>
-  child.stdout = stdout
-  child.stderr = stderr
-  child.stdin = new PassThrough()
-  child.kill = () => true
-  queueMicrotask(() => {
-    stdout.end()
-    stderr.end()
-    child.emit("close", 0)
-  })
-  return child
+/** A fake restic restic at the child-restic boundary. */
+class FakeResticProcess {
+  readonly child: ReturnType<ResticSpawn>
+  readonly command: string | undefined
+  readonly signals: Array<string> = []
+  readonly stderr = new PassThrough()
+  readonly stdout = new PassThrough()
+  exited = false
+  onSignal: (signal: string) => void = () => undefined
+
+  constructor(
+    readonly args: ReadonlyArray<string>,
+    readonly env: NodeJS.ProcessEnv
+  ) {
+    this.command = resticSubcommand(args)
+    this.child = Object.assign(new EventEmitter(), {
+      kill: (signal?: NodeJS.Signals | number) => {
+        const received = String(signal ?? "SIGTERM")
+        this.signals.push(received)
+        queueMicrotask(() => this.onSignal(received))
+        return true
+      },
+      stderr: this.stderr,
+      stdin: new PassThrough(),
+      stdout: this.stdout,
+    }) as unknown as ReturnType<ResticSpawn>
+  }
+
+  /** Emits the exit event without closing stdio. */
+  exit(code: number): void {
+    if (this.exited) return
+    this.exited = true
+    this.child.emit("close", code)
+  }
+
+  /** Closes stdio with optional final output, then exits. */
+  finish(code: number, output: { stderr?: string; stdout?: string } = {}) {
+    this.stdout.end(output.stdout ?? "")
+    this.stderr.end(output.stderr ?? "")
+    this.exit(code)
+  }
+
+  respond(output: {
+    exitCode?: number
+    stderr?: string
+    stdout?: string | Buffer
+  }): void {
+    queueMicrotask(() => {
+      this.stdout.end(output.stdout ?? "")
+      this.stderr.end(output.stderr ?? "")
+      this.exit(output.exitCode ?? 0)
+    })
+  }
 }
 
-function fakeResticSpawn(
-  responses: Array<{
-    exitCode?: number
-    match: (args: ReadonlyArray<string>) => boolean
-    stderr?: string
-    stdout?: string
-  }>
-): ResticSpawn {
-  return (_command, args, options) => {
-    const response = responses.find((candidate) => candidate.match(args))
-    const stdout = new PassThrough()
-    const stderr = new PassThrough()
-    const child = new EventEmitter() as ReturnType<ResticSpawn>
-    child.stdout = stdout
-    child.stderr = stderr
-    child.stdin = new PassThrough()
-    child.kill = () => true
-    queueMicrotask(() => {
-      stdout.end(response?.stdout ?? "")
-      stderr.end(response?.stderr ?? "")
-      child.emit("close", response?.exitCode ?? 0)
-    })
-    void options
-    return child
+function fakeRestic(behaviour: (restic: FakeResticProcess) => void): {
+  processes: Array<FakeResticProcess>
+  spawn: ResticSpawn
+} {
+  const processes: Array<FakeResticProcess> = []
+  return {
+    processes,
+    spawn: (_command, args, options) => {
+      const restic = new FakeResticProcess([...args], { ...options.env })
+      processes.push(restic)
+      behaviour(restic)
+      return restic.child
+    },
+  }
+}
+
+function resticSubcommand(args: ReadonlyArray<string>): string | undefined {
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index] ?? ""
+    if (arg === "-o") {
+      index += 1
+      continue
+    }
+    if (!arg.startsWith("-")) return arg
+  }
+  return undefined
+}
+
+async function advanceUntilSettled(promise: Promise<unknown>): Promise<void> {
+  let settled = false
+  promise.then(
+    () => {
+      settled = true
+    },
+    () => {
+      settled = true
+    }
+  )
+  for (let step = 0; step < 120 && !settled; step += 1) {
+    await vi.advanceTimersByTimeAsync(1_000)
   }
 }

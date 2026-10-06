@@ -20,34 +20,23 @@ function replacementFailure(rollbackFailures: ReadonlyArray<string>) {
 describe("updater batch draining", () => {
   effectIt.effect("processes a batch joined during the final idle wait", () =>
     Effect.gen(function* () {
-      const events: Array<string> = []
-      let processed = false
-      let waits = 0
-
-      yield* drainUpdateBatchEffect(
-        () =>
-          Effect.sync(() => {
-            events.push("check")
-            if (waits !== 2 || processed) return false
-            processed = true
-            events.push("process")
-            return true
-          }),
+      let pendingBatches = 0
+      let processedBatches = 0
+      const drain = yield* drainUpdateBatchEffect(() =>
         Effect.sync(() => {
-          waits += 1
-          events.push("wait")
+          if (pendingBatches === 0) return false
+          pendingBatches -= 1
+          processedBatches += 1
+          return true
         })
-      )
+      ).pipe(Effect.forkChild)
 
-      expect(processed).toBe(true)
-      expect(events.slice(0, 5)).toEqual([
-        "check",
-        "wait",
-        "check",
-        "wait",
-        "check",
-      ])
-      expect(events).toContain("process")
+      yield* TestClock.adjust("2500 millis")
+      pendingBatches += 1
+      yield* TestClock.adjust("10 seconds")
+      yield* Fiber.join(drain)
+
+      expect(processedBatches).toBe(1)
     })
   )
 })
