@@ -64,6 +64,7 @@ export class ProgressiveFileIndex {
   readonly #treeLoadingTimers = new Map<string, ReturnType<typeof setTimeout>>()
   #disposed = false
   #epoch = 0
+  #retainers = 0
   #searchGeneration = 0
   #status = initialStatus
 
@@ -90,6 +91,17 @@ export class ProgressiveFileIndex {
     if (this.#disposed || normalizeDirectoryPath(page.directory)) return
     if (this.#directories.has("")) return
     this.#applyDirectoryPage(page)
+  }
+
+  retain(): () => void {
+    this.#retainers += 1
+    return () => {
+      this.#retainers -= 1
+      // React replays effects with the same index; dispose only after a real unmount.
+      queueMicrotask(() => {
+        if (this.#retainers === 0) this.dispose()
+      })
+    }
   }
 
   dispose(): void {

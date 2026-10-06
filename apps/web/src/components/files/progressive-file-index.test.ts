@@ -15,6 +15,85 @@ afterEach(() => {
 })
 
 describe("ProgressiveFileIndex", () => {
+  it("refreshes an initially empty root after its owner replays effects", async () => {
+    const index = new ProgressiveFileIndex({
+      initialRoot: {
+        cursor: null,
+        directory: "",
+        entries: [],
+        instanceId: "instance-1",
+      },
+      instanceId: "instance-1",
+      relayId: "relay-1",
+    })
+    const release = index.retain()
+    index.start()
+    release()
+    const releaseReplayed = index.retain()
+    index.start()
+    await Promise.resolve()
+
+    const entry = {
+      kind: "file" as const,
+      modifiedAt: 1,
+      path: "server.properties",
+      size: 42,
+    }
+    relay.getRelayDirectoryPage.mockResolvedValueOnce({
+      cursor: null,
+      directory: "",
+      entries: [entry],
+      instanceId: "instance-1",
+    })
+    const pathListener = vi.fn()
+    index.subscribePaths(pathListener)
+
+    index.refresh()
+    await vi.waitFor(() => expect(index.getPaths()).toEqual([entry.path]))
+
+    expect(relay.getRelayDirectoryPage).toHaveBeenCalledTimes(1)
+    expect(index.getDirectorySnapshot("").entries).toEqual([entry])
+    expect(pathListener).toHaveBeenCalledWith({ entries: [entry], type: "add" })
+
+    releaseReplayed()
+    await Promise.resolve()
+    index.refresh()
+    expect(relay.getRelayDirectoryPage).toHaveBeenCalledTimes(1)
+  })
+
+  it("ignores an in-flight directory response after its owner unmounts", async () => {
+    let resolvePage: ((value: unknown) => void) | undefined
+    relay.getRelayDirectoryPage.mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolvePage = resolve
+      })
+    )
+    const index = new ProgressiveFileIndex({
+      initialRoot: null,
+      instanceId: "instance-1",
+      relayId: "relay-1",
+    })
+    const release = index.retain()
+    const pathListener = vi.fn()
+    index.subscribePaths(pathListener)
+    const load = index.ensureDirectory("")
+
+    release()
+    await Promise.resolve()
+    resolvePage?.({
+      cursor: null,
+      directory: "",
+      entries: [
+        { kind: "file", modifiedAt: 1, path: "server.properties", size: 42 },
+      ],
+      instanceId: "instance-1",
+    })
+    await load
+
+    expect(index.getPaths()).toEqual([])
+    expect(pathListener).not.toHaveBeenCalled()
+  })
+
   it("fills sizes while notifying only the affected size cell", async () => {
     let resolveSizes:
       | ((value: {

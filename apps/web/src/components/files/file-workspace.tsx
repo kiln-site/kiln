@@ -189,7 +189,7 @@ const StableFileWorkspaceSurface = React.memo(function FileWorkspaceSurface({
     if (treeReady) fileIndex.start()
   }, [fileIndex, treeReady])
 
-  React.useEffect(() => () => fileIndex.dispose(), [fileIndex])
+  React.useEffect(() => fileIndex.retain(), [fileIndex])
 
   React.useEffect(() => {
     preferencesStore.hydrate()
