@@ -16,7 +16,7 @@ import { gzipSync, gunzipSync } from "node:zlib"
 import type { FileHandle } from "node:fs/promises"
 import { assert, describe, it } from "@effect/vitest"
 import { Deferred, Effect, Fiber } from "effect"
-import { pack as createTarPack, type Headers as TarHeaders } from "tar-stream"
+import { pack as createTarPack, type Header as TarHeaders } from "tar-stream"
 import ZipStream from "zip-stream"
 import { parseSnbt } from "@workspace/contracts"
 
