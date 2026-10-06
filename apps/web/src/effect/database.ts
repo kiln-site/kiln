@@ -175,8 +175,8 @@ export function makeDatabase(
                 ? DatabaseError.make({ operation, cause: error })
                 : error
             ),
-            // Effect SQL turns COMMIT and ROLLBACK failures into defects.
-            // Keep them typed so callers can handle them like any query.
+            // Effect SQL turns a failed COMMIT into a defect. Keep it typed
+            // so callers can handle it like any query.
             Effect.catchDefect((defect) =>
               isSqlError(defect)
                 ? Effect.fail(DatabaseError.make({ operation, cause: defect }))
