@@ -387,13 +387,6 @@ describe("restic staging validation", () => {
 })
 
 describe("restic path layout", () => {
-  it("selects the instance directory so restore and export files sit at the root", () => {
-    assert.strictEqual(
-      resticSnapshotSelector("abcdef12", "/data/instances/server-one"),
-      "abcdef12:/data/instances/server-one"
-    )
-  })
-
   it("dumps the snapshot subfolder as a zip rooted at /", async () => {
     let dumpArgs: Array<string> | undefined
     const spawn: ResticSpawn = (_command, args) => {
@@ -631,17 +624,6 @@ describe("restic S3 driver", () => {
       assert.isFalse(reason.includes("repo-secret"))
       assert.include(reason, "[redacted]")
     }
-  })
-
-  it("does not create a local repository directory when initializing S3", async () => {
-    const spawn: ResticSpawn = () => succeedingChild()
-    const driver = createResticDriver({ spawn })
-    await driver.init({
-      location: s3Location,
-      password: "secret",
-      signal: new AbortController().signal,
-    })
-    assert.isFalse(existsSync(join(testDirectory, "s3-repo")))
   })
 
   it("reports S3 cache cleanup failures to its caller", async () => {

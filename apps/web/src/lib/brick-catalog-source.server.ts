@@ -40,7 +40,7 @@ interface BrickIconCacheEntry {
 
 const brickIconCache = new Map<string, BrickIconCacheEntry>()
 
-export function brickIconRetryDelay(failures: number): number {
+function brickIconRetryDelay(failures: number): number {
   return ICON_RETRY_DELAYS_MS[
     Math.min(Math.max(0, failures), ICON_RETRY_DELAYS_MS.length - 1)
   ]!
@@ -433,7 +433,7 @@ async function pinGithubCatalog(
   }
 }
 
-export function githubCatalogRevisionUrl(
+function githubCatalogRevisionUrl(
   repository: string,
   sha: string,
   path: string

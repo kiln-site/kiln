@@ -213,7 +213,9 @@ export async function resyncDomainAssignmentsHandler() {
   )
   const [, failures] = await runAppEffect(
     "domains.instances.resync",
-    resyncDomainInstancesEffect(instances, provisionInstanceDomainEffect)
+    Effect.partition(instances, provisionInstanceDomainEffect, {
+      concurrency: 1,
+    })
   )
   if (failures.length > 0) {
     const reason = failures[0]
@@ -224,13 +226,6 @@ export async function resyncDomainAssignmentsHandler() {
     )
   }
   return { syncedServerCount: instances.length }
-}
-
-export function resyncDomainInstancesEffect<A, E, R>(
-  instances: Iterable<A>,
-  provision: (instance: A) => Effect.Effect<unknown, E, R>
-) {
-  return Effect.partition(instances, provision, { concurrency: 1 })
 }
 
 export async function getInstanceDomainHandler(data: InstanceDomainInput) {

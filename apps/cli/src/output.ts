@@ -100,7 +100,7 @@ function uniqueDetails(details: Array<string>): Array<string> {
   return [...new Set(details.filter(Boolean))]
 }
 
-export function renderTable(
+function renderTable(
   headings: ReadonlyArray<string>,
   rows: ReadonlyArray<ReadonlyArray<string>>
 ): string {

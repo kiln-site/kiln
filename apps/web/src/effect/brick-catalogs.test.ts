@@ -76,37 +76,6 @@ describe("Brick catalog persistence", () => {
     Layer.succeed(Database)({
       execute: () => Effect.succeed(emptyResult),
       queryRows: <TRow extends RowDataPacket>() =>
-        Effect.succeed([] as unknown as ReadonlyArray<TRow>),
-      transaction: (_operation, run) =>
-        run({
-          execute: () => Effect.succeed(emptyResult),
-          queryRows: <TRow extends RowDataPacket>(sql: string) => {
-            if (sql.includes("COUNT(*)")) {
-              return Effect.succeed([
-                { total: 0 },
-              ] as unknown as ReadonlyArray<TRow>)
-            }
-            return Effect.succeed([] as unknown as ReadonlyArray<TRow>)
-          },
-        }),
-    })
-  )((it) => {
-    it.effect("allows the virtual development owner to save a catalog", () =>
-      saveBrickCatalogEffect({
-        ownerUserId: "kiln-development-bypass",
-        revisionSha: null,
-        revisionUrl: null,
-        snapshot,
-        snapshotSha256: "a".repeat(64),
-        source: "https://example.com/catalog.yml",
-      }).pipe(Effect.asVoid)
-    )
-  })
-
-  layer(
-    Layer.succeed(Database)({
-      execute: () => Effect.succeed(emptyResult),
-      queryRows: <TRow extends RowDataPacket>() =>
         Effect.succeed([
           {
             id: "invalid-catalog",

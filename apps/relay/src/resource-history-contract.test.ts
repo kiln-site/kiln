@@ -52,32 +52,6 @@ const resource = relayInstanceResourcesSchema.parse({
 })
 
 describe("Relay resource history contract", () => {
-  it("keeps non-disk metrics while instance folder usage is unknown", () => {
-    const pendingDisk = relayInstanceResourcesSchema.parse({
-      ...resource,
-      storage: {
-        ...resource.storage,
-        percent: null,
-        usedBytes: null,
-      },
-    })
-
-    expect(pendingDisk.cpu.percent).toBe(125.5)
-    expect(pendingDisk.memory.percent).toBe(50)
-    expect(pendingDisk.network?.receivedBytesPerSecond).toBe(456)
-    expect(pendingDisk.storage.usedBytes).toBeNull()
-    expect(pendingDisk.storage.percent).toBeNull()
-    expect(pendingDisk.storage.nodePercent).toBe(40)
-    expect(
-      relayResourceStreamEventSchema.safeParse({
-        history: [pendingDisk],
-        instance: { ...instance, resources: pendingDisk },
-        sequence: 1,
-        type: "resource",
-      }).success
-    ).toBe(true)
-  })
-
   it("accepts a six-minute history within the browser frame limit", () => {
     const history = Array.from(
       { length: relayResourceHistoryMaxSamples },

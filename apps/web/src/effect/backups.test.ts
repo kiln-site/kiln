@@ -1,11 +1,4 @@
-import {
-  afterEach,
-  beforeEach,
-  describe,
-  expect,
-  it,
-  vi,
-} from "vite-plus/test"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test"
 import { Effect, Layer } from "effect"
 import type { ResultSetHeader, RowDataPacket } from "mysql2/promise"
 import type { RelayBackupTask } from "@workspace/contracts"
@@ -19,7 +12,6 @@ import {
   effectiveBackupLimit,
   getBackupPolicyEffect,
   purgeInstanceBackupRepositoriesEffect,
-  renameBackupEffect,
   reserveBackupCopyEffect,
   reserveInstanceBackupEffect,
   reconcileBackupTaskEffect,
@@ -1197,37 +1189,6 @@ function finalDeletionPurgeDatabase(input: {
       }),
   })
 }
-
-describe("backup rename", () => {
-  it("updates the backup name", async () => {
-    const executed: Array<{ sql: string; values?: ReadonlyArray<unknown> }> = []
-    const databaseLayer = Layer.succeed(Database)({
-      execute: (_operation, sql, values) =>
-        Effect.sync(() => {
-          executed.push({ sql, values })
-          return { ...emptyResult, affectedRows: 1 }
-        }),
-      queryRows: () => Effect.die("Unexpected query"),
-      transaction: () => Effect.die("Unexpected transaction"),
-    })
-
-    const renamed = await Effect.runPromise(
-      renameBackupEffect({
-        backupId: "11111111-1111-1111-1111-111111111111",
-        name: "Weekly world",
-      }).pipe(Effect.provide(databaseLayer))
-    )
-
-    expect(renamed).toBe(true)
-    expect(executed).toHaveLength(1)
-    expect(executed[0]?.sql).toContain("SET name = ?")
-    expect(executed[0]?.values).toEqual([
-      "Weekly world",
-      now,
-      "11111111-1111-1111-1111-111111111111",
-    ])
-  })
-})
 
 describe("backup copy reservation", () => {
   const input = {

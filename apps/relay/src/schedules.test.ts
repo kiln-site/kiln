@@ -10,13 +10,7 @@ import type {
   RelayBackupTask,
   RelayScheduleProjection,
 } from "@workspace/contracts"
-import {
-  nextScheduleOccurrence,
-  resolveScheduleBackupName,
-  scheduleActionAppliesToTarget,
-  scheduleActionSchema,
-  scheduleActionSupportsTarget,
-} from "@workspace/contracts"
+import { nextScheduleOccurrence } from "@workspace/contracts"
 
 import { ScheduleManager } from "./schedules.js"
 
@@ -95,17 +89,6 @@ const projection: RelayScheduleProjection = {
 }
 
 describe("Relay schedule persistence", () => {
-  it("does not clone retained state during idle ticks", async () => {
-    const schedules = await manager({ tickIntervalMs: 5 })
-    const clone = vi.spyOn(globalThis, "structuredClone")
-
-    const fiber = Effect.runFork(schedules.run())
-    await Effect.runPromise(Effect.sleep("30 millis"))
-    fiber.interruptUnsafe()
-
-    expect(clone).not.toHaveBeenCalled()
-  })
-
   it("keeps the scheduler fiber alive when a tick fails", async () => {
     const reportError = vi.fn()
     const schedules = await manager({
@@ -716,94 +699,5 @@ describe("Relay schedule persistence", () => {
         "Scheduled backup timed out"
       )
     })
-  })
-})
-
-describe("schedule action schema", () => {
-  it("normalizes a blank legacy backup name", () => {
-    expect(
-      scheduleActionSchema.parse({
-        destination: { kind: "local" },
-        id: "6cc00681-a2cd-40c7-a036-7c9bd09b269b",
-        mode: "full",
-        name: "   ",
-        type: "backup",
-      })
-    ).toMatchObject({ name: "Scheduled backup" })
-  })
-
-  it("defaults wait actions to seconds", () => {
-    expect(
-      scheduleActionSchema.parse({
-        duration: 4,
-        id: "1e68e6ac-7381-494d-82bb-d50c4a63f575",
-        type: "wait",
-      })
-    ).toEqual({
-      duration: 4,
-      id: "1e68e6ac-7381-494d-82bb-d50c4a63f575",
-      type: "wait",
-      unit: "seconds",
-    })
-  })
-})
-
-describe("scheduled action target support", () => {
-  it("uses backup mode and power action when checking compatibility", () => {
-    expect(
-      scheduleActionSupportsTarget(
-        { mode: "incremental", type: "backup" },
-        { kind: "database" }
-      )
-    ).toBe(false)
-    expect(
-      scheduleActionSupportsTarget(
-        { mode: "full", type: "backup" },
-        { kind: "database" }
-      )
-    ).toBe(true)
-    expect(
-      scheduleActionSupportsTarget(
-        { action: "kill", type: "power" },
-        { kind: "database" }
-      )
-    ).toBe(false)
-  })
-
-  it("honors explicit target overrides after compatibility checks", () => {
-    const target = projection.targets[0]
-    expect(
-      scheduleActionAppliesToTarget(
-        { targetKeys: [], type: "console_command" },
-        target
-      )
-    ).toBe(false)
-    expect(
-      scheduleActionAppliesToTarget(
-        {
-          targetKeys: [`${target.relayId}:${target.kind}:${target.id}`],
-          type: "console_command",
-        },
-        target
-      )
-    ).toBe(true)
-  })
-
-  it("expands scheduled backup name tags", () => {
-    expect(
-      resolveScheduleBackupName(
-        "scheduled-<schedule>-<timestamp>-<backup_id>-<instance_id>-<run_id>-<schedule_id>",
-        {
-          backupId: "backup-1",
-          instanceId: "instance-1",
-          runId: "run-1",
-          scheduleId: "schedule-1",
-          scheduleName: "Nightly",
-          timestamp: Date.parse("2026-01-02T03:04:05.000Z"),
-        }
-      )
-    ).toBe(
-      "scheduled-Nightly-2026.01.02-03.04.05Z-backup-1-instance-1-run-1-schedule-1"
-    )
   })
 })

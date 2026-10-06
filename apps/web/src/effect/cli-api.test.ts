@@ -20,39 +20,12 @@ vi.hoisted(() => {
 
 import {
   cliActivityResponse,
-  cliDatabaseSupportsLogicalBackups,
   cliPowerResponse,
   cliSftpConnectionResponse,
-  cliSftpUnavailableMessage,
-  cliConsoleRelayFailure,
   collectAvailableCliRelaySnapshotsEffect,
-  relayRemoteUploadInput,
   safeCliBrickSource,
 } from "@/effect/cli-api"
-import { CliAccessError, RelayUnavailableError } from "@/effect/errors"
-
-describe("CLI console failures", () => {
-  it("keeps the Relay cause and correlation ID concise", () => {
-    const requestId = "3df56ba5-b2c1-45ee-bab7-386fbb9223c7"
-    const error = cliConsoleRelayFailure(
-      RelayUnavailableError.make({
-        code: "operation_failed",
-        message: "Survival is not running",
-        requestId,
-        retryable: false,
-      })
-    )
-
-    assert.strictEqual(error.code, "relay_operation_failed")
-    assert.strictEqual(
-      error.message,
-      "Relay could not send the console command."
-    )
-    assert.strictEqual(error.detail, "Survival is not running")
-    assert.strictEqual(error.requestId, requestId)
-    assert.isFalse(error.retryable)
-  })
-})
+import { CliAccessError } from "@/effect/errors"
 
 describe("CLI server listing", () => {
   it.effect(
@@ -103,61 +76,6 @@ describe("CLI SFTP connection", () => {
       username: "operator@example.com",
     })
   })
-
-  it("explains a proven missing Docker publication concisely", () => {
-    assert.strictEqual(
-      cliSftpUnavailableMessage({
-        developmentAuthentication: false,
-        host: "relay.example.com",
-        hostKeyFingerprint: "SHA256:relay-fingerprint",
-        port: 2022,
-        publication: "not_published",
-      }),
-      "Relay SFTP port 2022/tcp is not published by Docker. Publish the port and retry."
-    )
-  })
-
-  it("keeps a loopback-only publication connectable for a local CLI", () => {
-    assert.isNull(
-      cliSftpUnavailableMessage({
-        developmentAuthentication: false,
-        host: "127.0.0.1",
-        hostKeyFingerprint: "SHA256:relay-fingerprint",
-        port: 32_022,
-        publication: "loopback_only",
-      })
-    )
-    const response = cliSftpConnectionResponse(
-      {
-        developmentAuthentication: false,
-        host: "127.0.0.1",
-        hostKeyFingerprint: "SHA256:relay-fingerprint",
-        port: 32_022,
-        publication: "loopback_only",
-      },
-      "bedf06fe944ceb0a573a14da5a38703068a00e5a",
-      "operator@example.com"
-    )
-    assert.deepEqual(response, {
-      host: "127.0.0.1",
-      hostKeyFingerprint: "SHA256:relay-fingerprint",
-      port: 32_022,
-      root: "/bedf06fe944ceb0a573a14da5a38703068a00e5a",
-      username: "operator@example.com",
-    })
-  })
-
-  it("keeps standalone and rootless Relay SFTP usable when publication is unknown", () => {
-    assert.isNull(
-      cliSftpUnavailableMessage({
-        developmentAuthentication: false,
-        host: "relay.example.com",
-        hostKeyFingerprint: "SHA256:relay-fingerprint",
-        port: 2022,
-        publication: "unknown",
-      })
-    )
-  })
 })
 
 describe("CLI response and URL boundaries", () => {
@@ -194,12 +112,6 @@ describe("CLI response and URL boundaries", () => {
     })
   })
 
-  it("only offers databases with logical backup support", () => {
-    assert.isTrue(cliDatabaseSupportsLogicalBackups({ engine: "postgres" }))
-    assert.isFalse(cliDatabaseSupportsLogicalBackups({ engine: "redis" }))
-    assert.isFalse(cliDatabaseSupportsLogicalBackups({ engine: "valkey" }))
-  })
-
   it("removes Hearth-only fields before returning activity", () => {
     const response = cliActivityResponse(
       [
@@ -220,21 +132,6 @@ describe("CLI response and URL boundaries", () => {
     )
 
     assert.notProperty(response.entries[0] ?? {}, "rawEvent")
-  })
-
-  it("removes Hearth routing fields from Relay upload payloads", () => {
-    const input = relayRemoteUploadInput({
-      instanceId: "a".repeat(40),
-      path: "plugins/example.jar",
-      relayId: "r".repeat(43),
-      url: "https://example.com/example.jar",
-    })
-
-    assert.deepEqual(input, {
-      instanceId: "a".repeat(40),
-      path: "plugins/example.jar",
-      url: "https://example.com/example.jar",
-    })
   })
 
   it("rejects insecure URLs and paths that escape the server root", () => {

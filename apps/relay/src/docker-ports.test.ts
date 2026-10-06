@@ -9,10 +9,8 @@ vi.mock("./command.js", () => ({
 
 import {
   containerPortListening,
-  dockerPublishedHostPorts,
   dockerPublishedHostPortsFromListing,
   dockerPublishedPort,
-  dockerPublishedPrimaryPort,
   instanceConnectAddress,
   instancePublicHost,
   normalizedBrickNetworkMode,
@@ -56,55 +54,6 @@ describe("Docker public game ports", () => {
         "tcp"
       )
     ).toBeUndefined()
-  })
-
-  it("recovers the protocol from an unambiguous legacy binding", () => {
-    expect(
-      dockerPublishedPrimaryPort(
-        {
-          "25565/tcp": [
-            { HostIp: "0.0.0.0", HostPort: "30000" },
-            { HostIp: "::", HostPort: "30000" },
-          ],
-        },
-        25_565,
-        undefined
-      )
-    ).toEqual({ port: 30_000, protocol: "tcp" })
-    expect(
-      dockerPublishedPrimaryPort(
-        {
-          "25565/tcp": [{ HostPort: "30000" }],
-          "25565/udp": [{ HostPort: "30001" }],
-        },
-        25_565,
-        undefined
-      )
-    ).toBeUndefined()
-    expect(
-      dockerPublishedPrimaryPort(
-        {
-          "19132/tcp": [{ HostPort: "30132" }],
-          "19132/udp": [{ HostPort: "30132" }],
-        },
-        19_132,
-        undefined
-      )
-    ).toEqual({ port: 30_132, protocol: "both" })
-  })
-
-  it("collects host ports for the requested protocol across all bindings", () => {
-    const bindings = {
-      "19132/udp": [{ HostIp: "0.0.0.0", HostPort: "30001" }],
-      "25565/tcp": [
-        { HostIp: "0.0.0.0", HostPort: "30000" },
-        { HostIp: "::", HostPort: "30000" },
-      ],
-      "8080/tcp": [{ HostPort: "not-a-port" }],
-    }
-
-    expect([...dockerPublishedHostPorts(bindings, "tcp")]).toEqual([30_000])
-    expect([...dockerPublishedHostPorts(bindings, "udp")]).toEqual([30_001])
   })
 
   it("collects published ports from Docker's compact container listing", () => {

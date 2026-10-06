@@ -116,7 +116,6 @@ export function resticS3EndpointPort(endpoint: string): number {
 }
 
 export const s3BackupDestination = defineBackupDestination({
-  capabilities: { full: true, restic: true },
   deleteFullBackup: ({ destination }) =>
     Effect.tryPromise({
       try: () =>

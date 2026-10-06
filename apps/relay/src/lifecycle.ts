@@ -4952,10 +4952,6 @@ export function tailscaleCoreDnsConfiguration(
   return `${settings.domain}:${settings.dnsPort} {\n    bind ${address}\n    errors\n    template IN A {\n        match "${pattern}"\n        answer "{{ .Name }} 60 IN A ${address}"\n    }\n    template IN AAAA {\n        match "${pattern}"\n        rcode NOERROR\n    }\n}\n`
 }
 
-export function tailscaleStackSubnet(stackId: string, nodeId: string): string {
-  return allocateTailscaleStackSubnet(stackId, nodeId, new Set())
-}
-
 export function allocateTailscaleStackSubnet(
   stackId: string,
   nodeId: string,
@@ -4974,7 +4970,7 @@ export function allocateTailscaleStackSubnet(
   throw new Error("No private Tailscale subnets remain on this Relay")
 }
 
-export function tailscaleStackServiceAddress(subnet: string): string {
+function tailscaleStackServiceAddress(subnet: string): string {
   const prefix = subnet.replace(/\.0\/24$/u, "")
   if (prefix === subnet) throw new Error(`Invalid Tailscale subnet ${subnet}`)
   return `${prefix}.2`

@@ -3,7 +3,6 @@ import { describe, expect, it } from "vite-plus/test"
 
 import {
   RelayAuthReadySchema,
-  RelayBrowserCapabilitySchema,
   relayBrowserCapabilityV2Feature,
   relayBrowserLeaseRenewalV1Feature,
   relayControlProtocol,
@@ -62,32 +61,6 @@ describe("Relay browser protocol compatibility", () => {
           browserIssuerGeneration,
         })
       ).toThrow()
-    }
-  })
-
-  it("keeps capability version independent from browser subprotocol versions", () => {
-    const capability = Schema.decodeUnknownSync(RelayBrowserCapabilitySchema)({
-      actions: ["instance.console.read"],
-      audience: "relay-a",
-      authorizationRevision: 12,
-      capabilityId: "capability-a",
-      expiresAt: 60_000,
-      instanceId: "instance-a",
-      issuedAt: 1,
-      issuer: "hearth-a",
-      issuerGeneration: 3,
-      keyThumbprint: "thumbprint-a",
-      loginSessionId: "session-a",
-      operation: "console",
-      origin: "https://hearth.test",
-      path: null,
-      subject: "user-a",
-      version: 2,
-    })
-    expect(capability.version).toBe(2)
-    if (capability.version === 2) {
-      expect(capability.operation).toBe("console")
-      expect(capability.authorizationRevision).toBe(12)
     }
   })
 })

@@ -101,13 +101,6 @@ interface AttachedContainerInspect {
   Name: string
 }
 
-export function databaseEngineSpec(engine: DatabaseEngine) {
-  return {
-    ...engineSpecs[engine],
-    supportsImportExport: databaseEngineSupportsLogicalBackups(engine),
-  }
-}
-
 export function databaseRecoveryLabels(
   config: Pick<RelayConfig, "resourceNamespace">,
   input: Pick<RelayCreateDatabase, "databaseName" | "engine" | "id" | "name">,

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vite-plus/test"
 
-import { catalogDisplayName, isVerifiedBrick } from "./brick-selector"
+import { isVerifiedBrick } from "./brick-selector"
 import { brickRecipeSchema, type Brick } from "@workspace/contracts"
 
 const repository = "kiln-site/kiln"
@@ -25,47 +25,6 @@ describe("Brick catalog trust badges", () => {
         repository
       )
     ).toBe(false)
-  })
-})
-
-describe("Brick catalog names", () => {
-  it("uses the catalog name when one is provided", () => {
-    expect(
-      catalogDisplayName({
-        isDefault: false,
-        name: "Cool Bricks",
-        source: "https://github.com/cool-user/cool-bricks",
-      })
-    ).toBe("Cool Bricks")
-  })
-
-  it("names the default catalog Kiln", () => {
-    expect(
-      catalogDisplayName({
-        isDefault: true,
-        source:
-          "https://raw.githubusercontent.com/kiln-site/kiln/main/apps/bricks/catalog.yml",
-      })
-    ).toBe("Kiln")
-  })
-
-  it("uses the owner and repository for GitHub catalogs", () => {
-    expect(
-      catalogDisplayName({
-        isDefault: false,
-        source:
-          "https://raw.githubusercontent.com/cool-user/cool-bricks/abc123/catalog.yml",
-      })
-    ).toBe("cool-user/cool-bricks")
-  })
-
-  it("uses only the hostname for other catalogs", () => {
-    expect(
-      catalogDisplayName({
-        isDefault: false,
-        source: "https://coolbricks.com/catalogs/minecraft.yml",
-      })
-    ).toBe("coolbricks.com")
   })
 })
 

@@ -1,7 +1,7 @@
 import type { Server } from "node:http"
 import { Effect } from "effect"
 
-export type RelayShutdownResult = "forced" | "graceful"
+type RelayShutdownResult = "forced" | "graceful"
 
 export function closeRelayServer(
   server: Server,

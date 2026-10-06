@@ -79,37 +79,6 @@ describe("Relay SFTP publication", () => {
     })
   )
 
-  it("serializes publication through the Relay snapshot contract", () => {
-    const snapshot = relaySnapshotSchema.parse(
-      JSON.parse(
-        JSON.stringify({
-          instances: [],
-          node: testNode,
-          relay: {
-            id: "r".repeat(43),
-            name: "Test Relay",
-            sftp: {
-              developmentAuthentication: false,
-              host: "relay.example.com",
-              hostKeyFingerprint: "SHA256:relay-fingerprint",
-              port: 32_022,
-              publication: "published",
-            },
-            tls: null,
-          },
-        })
-      )
-    )
-
-    assert.deepEqual(snapshot.relay?.sftp, {
-      developmentAuthentication: false,
-      host: "relay.example.com",
-      hostKeyFingerprint: "SHA256:relay-fingerprint",
-      port: 32_022,
-      publication: "published",
-    })
-  })
-
   it("treats snapshots from older Relays as unknown", () => {
     const snapshot = relaySnapshotSchema.parse({
       instances: [],

@@ -23,41 +23,7 @@ import {
   deleteManagedDomainAssignmentEffect,
   loadManagedDomainAddressesEffect,
   removeRelayManagedDomainsEffect,
-  resyncDomainInstancesEffect,
 } from "./domains.server"
-
-describe("domain assignment resync", () => {
-  it.effect("serializes provisioning and collects partial failures", () =>
-    Effect.gen(function* () {
-      const visited: Array<number> = []
-      let active = 0
-      let maximumActive = 0
-      const [successes, failures] = yield* resyncDomainInstancesEffect(
-        [1, 2, 3],
-        (value) =>
-          Effect.gen(function* () {
-            active += 1
-            maximumActive = Math.max(maximumActive, active)
-            visited.push(value)
-            yield* Effect.yieldNow
-            if (value === 2) return yield* Effect.fail("failed-2")
-            return value
-          }).pipe(
-            Effect.ensuring(
-              Effect.sync(() => {
-                active -= 1
-              })
-            )
-          )
-      )
-
-      assert.deepEqual(visited, [1, 2, 3])
-      assert.strictEqual(maximumActive, 1)
-      assert.deepEqual(failures, ["failed-2"])
-      assert.deepEqual(successes, [1, 3])
-    })
-  )
-})
 
 describe("managed domain address cache", () => {
   it.effect("shares an empty assignment result across Relay polls", () => {

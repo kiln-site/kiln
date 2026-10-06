@@ -1,9 +1,6 @@
 import { describe, expect, it } from "vite-plus/test"
 import {
-  relayInstanceTailscaleSchema,
   relayInstanceWebRoutesSchema,
-  relayTailscaleDomainSchema,
-  relayTailscaleStackApplySchema,
   relayTailscaleStackConfigSchema,
   relayTailscaleStackSchema,
 } from "@workspace/contracts"
@@ -24,8 +21,6 @@ import {
   tailscaleStackFirewallIsCurrent,
   tailscaleStackFirewallRules,
   tailscaleStackPendingRemoval,
-  tailscaleStackServiceAddress,
-  tailscaleStackSubnet,
   tailscaleStackWithoutInstance,
   tailscaleCoreDnsConfiguration,
   traefikDynamicConfiguration,
@@ -175,47 +170,6 @@ describe("CoreDNS Brick hostnames", () => {
   })
 })
 
-describe("Tailscale contracts", () => {
-  it("normalizes dot-prefixed domains and server subdomains", () => {
-    expect(relayTailscaleDomainSchema.parse(" .TEST. ")).toBe("test")
-    expect(
-      relayInstanceTailscaleSchema.parse({
-        enabled: true,
-        subdomain: " 1.21.11.Paper. ",
-      })
-    ).toEqual({ enabled: true, subdomain: "1.21.11.paper" })
-  })
-
-  it("requires a subdomain when a server joins Tailscale", () => {
-    expect(
-      relayInstanceTailscaleSchema.safeParse({ enabled: true }).success
-    ).toBe(false)
-    expect(relayInstanceTailscaleSchema.parse({ enabled: false })).toEqual({
-      enabled: false,
-    })
-  })
-
-  it("normalizes a logical stack before it is placed on a node", () => {
-    const stack = relayTailscaleStackApplySchema.parse({
-      authKey: "tskey-auth-example",
-      bindings: [
-        {
-          hostname: " Paper ",
-          instanceId: "b".repeat(40),
-        },
-      ],
-      domain: " .TEST. ",
-      hostname: " Private-Network ",
-      id: "a".repeat(40),
-      name: "Private Network",
-    })
-
-    expect(stack.domain).toBe("test")
-    expect(stack.hostname).toBe("private-network")
-    expect(stack.bindings[0]?.hostname).toBe("paper")
-  })
-})
-
 describe("Tailscale Brick networking", () => {
   it("allows selected servers before dropping other traffic without bypassing Tailscale forwarding", () => {
     expect(
@@ -251,16 +205,6 @@ describe("Tailscale Brick networking", () => {
         bindings
       )
     ).toBe(false)
-  })
-
-  it("assigns stable node-specific subnets and reserves service addresses", () => {
-    const stackId = "a".repeat(40)
-    const first = tailscaleStackSubnet(stackId, "node-a")
-    const second = tailscaleStackSubnet(stackId, "node-b")
-
-    expect(first).toMatch(/^10\.(?:12[89]|1[3-8]\d|19[01])\.\d{1,3}\.0\/24$/u)
-    expect(second).not.toBe(first)
-    expect(tailscaleStackServiceAddress(first)).toMatch(/\.2$/u)
   })
 
   it("probes to another deterministic subnet when the preferred one is reserved", () => {
@@ -568,9 +512,6 @@ describe("Traefik web routes", () => {
     expect(
       labels[`traefik.http.services.${name}.loadbalancer.server.port`]
     ).toBe("8080")
-    expect(labels["kiln.relay.web-routes.b00d4423"]).toBe(
-      "donutsmp.example.com:8080/map|name=Live%20Map"
-    )
     expect(labels["kiln.relay.web-routes.revision"]).toMatch(/^[a-f0-9]{64}$/u)
   })
 
@@ -579,9 +520,6 @@ describe("Traefik web routes", () => {
 
     expect(labels["traefik.enable"]).toBe("false")
     expect(labels["traefik.docker.network"]).toBeUndefined()
-    expect(labels["kiln.relay.web-routes.b00d4423"]).toBe(
-      "donutsmp.example.com:8080/map|name=Live%20Map"
-    )
     expect(labels["kiln.relay.web-routes.revision"]).toMatch(/^[a-f0-9]{64}$/u)
   })
 

@@ -10,8 +10,6 @@ import {
   relayAuthResponseTranscript,
   relayBrowserCapabilityV2Feature,
   relayBrowserLeaseRenewalV1Feature,
-  relayControlDeadlineMs,
-  relayControlRequestTimeoutMs,
   relayControlProtocol,
   relayFileRequestReplayV1Feature,
   relaySnapshotDeltaFeature,
@@ -27,65 +25,12 @@ import {
   auditDetailsForRequest,
   isAuditedOperation,
   relayControlErrorMessage,
-  relayControlFailureTags,
 } from "./control-socket.js"
 import { fingerprint } from "./effect/identity.js"
 import { RelayStateStore } from "./effect/state.js"
 import type { RelayAuditInput, RelayClientRecord } from "./effect/state.js"
 
-describe("Relay control timeouts", () => {
-  it("prefers relative timeouts and clamps them to the operation maximum", () => {
-    const request: RelayControlRequest = {
-      deadline: 1,
-      id: "request",
-      operation: "relay.update.apply",
-      payload: {},
-      timeoutMs: relayControlDeadlineMs("relay.update.apply") + 60_000,
-      type: "request",
-      v: 1,
-    }
-
-    expect(relayControlRequestTimeoutMs(request, 10_000_000)).toBe(
-      relayControlDeadlineMs("relay.update.apply")
-    )
-    expect(relayControlDeadlineMs("instance.delete")).toBeGreaterThan(
-      relayControlDeadlineMs("hearth.tailscale.instance.detach") + 135_000
-    )
-    expect(relayControlDeadlineMs("instance.action")).toBeGreaterThan(75_000)
-    expect(relayControlDeadlineMs("instance.files.upload-url")).toBe(360_000)
-    expect(
-      relayControlRequestTimeoutMs({ ...request, timeoutMs: 0 }, 10_000_000)
-    ).toBeNull()
-    expect(
-      relayControlRequestTimeoutMs(
-        {
-          deadline: 15_000,
-          id: "legacy-request",
-          operation: "relay.snapshot",
-          payload: {},
-          type: "request",
-          v: 1,
-        },
-        10_000
-      )
-    ).toBe(5_000)
-  })
-})
-
 describe("Relay control errors", () => {
-  it("correlates application failure telemetry with the request", () => {
-    expect(
-      relayControlFailureTags({
-        id: "3df56ba5-b2c1-45ee-bab7-386fbb9223c7",
-        operation: "instance.console.write",
-      })
-    ).toEqual({
-      "kiln.operation": "instance.console.write",
-      "kiln.request_id": "3df56ba5-b2c1-45ee-bab7-386fbb9223c7",
-      "kiln.transport": "control-socket",
-    })
-  })
-
   it("returns a safe final command detail when the full message is too long", () => {
     const command = `docker network create ${"hearth-feature-".repeat(16)}`
     expect(

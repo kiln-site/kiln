@@ -33,7 +33,6 @@ vi.mock("@/lib/relay-registry", () => ({
 
 import {
   acknowledgeAuthorizationDeliveryEffect,
-  observeRelayIssuerGeneration,
   reviseRelayIssuerGenerationNow,
   synchronizeRelayIssuerGeneration,
   wakeAuthorizationDelivery,
@@ -103,29 +102,6 @@ describe("authorization delivery recovery", () => {
       expect.any(Number),
       "relay-one",
     ])
-  })
-
-  it("turns a reported generation rollback into a durable pending advance", async () => {
-    // Keep this unit focused on reconciliation SQL; delivery has its own worker
-    // coverage and is intentionally asynchronous.
-    fakes.features.clear()
-
-    await observeRelayIssuerGeneration("relay-one", 3)
-
-    expect(fakes.execute).toHaveBeenCalledTimes(2)
-    expect(fakes.execute.mock.calls[0]?.[0]).toContain(
-      "acknowledged_issuer_generation >= issuer_generation"
-    )
-    expect(fakes.execute.mock.calls[0]?.[1]).toEqual([
-      3,
-      expect.any(Number),
-      "relay-one",
-      3,
-      Number.MAX_SAFE_INTEGER,
-    ])
-    expect(fakes.execute.mock.calls[1]?.[0]).toContain(
-      "issuer_generation = GREATEST(issuer_generation, ?)"
-    )
   })
 
   it("does not make a control request when issuer generation is synchronized", async () => {

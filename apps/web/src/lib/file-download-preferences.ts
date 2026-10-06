@@ -9,7 +9,7 @@ export interface FileDownloadPreferences {
   previewBackupDownloads: boolean
 }
 
-export const defaultFileDownloadPreferences: FileDownloadPreferences = {
+const defaultFileDownloadPreferences: FileDownloadPreferences = {
   archiveFormat: "zip",
   compressByDefault: true,
   confirmBeforeDownload: true,
@@ -89,7 +89,7 @@ export function subscribeFileDownloadPreferences(
   }
 }
 
-export function normalizeFileDownloadPreferences(
+function normalizeFileDownloadPreferences(
   value: unknown
 ): FileDownloadPreferences {
   if (!value || typeof value !== "object") {

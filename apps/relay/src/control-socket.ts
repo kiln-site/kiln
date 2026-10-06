@@ -1124,7 +1124,7 @@ export function relayControlErrorMessage(cause: unknown): string {
   return detail && detail.length <= 240 ? detail : "Relay operation failed"
 }
 
-export function relayControlFailureTags(
+function relayControlFailureTags(
   request: Pick<RelayControlRequest, "id" | "operation">
 ) {
   return {

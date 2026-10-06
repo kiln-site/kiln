@@ -35,7 +35,6 @@ import type {
   RelayInstance,
   RelayInstanceLifecycleEvent,
   RelayInstanceLifecycleState,
-  RelayInstancePortProtocol,
   RelayInstanceResources,
   RelaySftpPublicationStatus,
 } from "@workspace/contracts"
@@ -201,11 +200,6 @@ export type DockerPortBindings = Record<
   Array<{ HostIp?: string; HostPort?: string }> | null | undefined
 >
 
-export interface DockerPublishedPort {
-  port: number
-  protocol: RelayInstancePortProtocol
-}
-
 export interface DockerPortConfiguration {
   bindings: DockerPortBindings
   labels: Readonly<Record<string, string>>
@@ -355,44 +349,6 @@ export function dockerPublishedPort(
     if (Number.isInteger(port) && port >= 1 && port <= 65_535) return port
   }
   return undefined
-}
-
-export function dockerPublishedPrimaryPort(
-  bindings: DockerPortBindings | undefined,
-  containerPort: number | undefined,
-  protocol: RelayInstancePortProtocol | undefined
-): DockerPublishedPort | undefined {
-  const protocols: ReadonlyArray<"tcp" | "udp"> =
-    protocol === "both" || protocol === undefined ? ["tcp", "udp"] : [protocol]
-  const matches = protocols.flatMap((candidate) => {
-    const port = dockerPublishedPort(bindings, containerPort, candidate)
-    return port ? [{ port, protocol: candidate }] : []
-  })
-  if (
-    matches.length === 2 &&
-    matches[0]?.port === matches[1]?.port &&
-    (protocol === "both" || protocol === undefined)
-  ) {
-    return { port: matches[0].port, protocol: "both" }
-  }
-  return matches.length === 1 ? matches[0] : undefined
-}
-
-export function dockerPublishedHostPorts(
-  bindings: DockerPortBindings | undefined,
-  protocol: "tcp" | "udp"
-): Set<number> {
-  const ports = new Set<number>()
-  for (const [containerPort, candidates] of Object.entries(bindings ?? {})) {
-    if (!containerPort.endsWith(`/${protocol}`)) continue
-    for (const candidate of candidates ?? []) {
-      const port = Number(candidate.HostPort)
-      if (Number.isInteger(port) && port >= 1 && port <= 65_535) {
-        ports.add(port)
-      }
-    }
-  }
-  return ports
 }
 
 export function dockerPublishedHostPortsFromListing(
@@ -558,7 +514,7 @@ export function legacyDiskLimitAssignments(
   return assignments
 }
 
-export function diskQuotaExceeded(
+function diskQuotaExceeded(
   usedBytes: number,
   limitBytes: number,
   running: boolean
@@ -566,7 +522,7 @@ export function diskQuotaExceeded(
   return running && usedBytes > limitBytes
 }
 
-export function initialDiskUsageCacheEntry(): DiskUsageCacheEntry {
+function initialDiskUsageCacheEntry(): DiskUsageCacheEntry {
   return {
     lastAttempt: 0,
     pending: false,
@@ -3112,7 +3068,7 @@ function addLifecycleEvent(
     : [...events, { state, time }]
 }
 
-export function historicalReadinessLogArguments(
+function historicalReadinessLogArguments(
   startedAt: string
 ): Array<string> {
   const since = dockerLogSinceArguments(startedAt)
@@ -3493,7 +3449,7 @@ function consoleFinishedAt(container: DockerInspect): string | null {
     : null
 }
 
-export function dockerLogSinceArguments(startedAt: string): Array<string> {
+function dockerLogSinceArguments(startedAt: string): Array<string> {
   const timestamp = Date.parse(startedAt)
   return Number.isFinite(timestamp) && timestamp > 0
     ? ["--since", startedAt]
@@ -3658,7 +3614,7 @@ function recoveryStatus(
   return `Restarting in ${seconds}s (${recovery.attempt}/${recovery.maxAttempts})`
 }
 
-export function isIntentionalServerStopCommand(
+function isIntentionalServerStopCommand(
   stopCommands: ReadonlyArray<string>,
   input: string
 ): boolean {

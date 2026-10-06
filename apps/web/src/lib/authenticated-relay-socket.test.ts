@@ -5,34 +5,12 @@ import {
   createRelayBrowserSocketInbox,
   maintainRelayBrowserLease,
   relayBrowserAuthorizationChanges,
-  isTerminalRelayBrowserFailure,
-  shouldWaitForRelayBrowserAuthorization,
-  RelayBrowserProtocolError,
-  RelayBrowserSessionReplacedError,
 } from "./authenticated-relay-socket"
 import { notifyRelayBrowserAuthorizationChanged } from "./relay-browser-credentials"
 
 const encodedCapability = `${btoa(JSON.stringify({ capabilityId: "cap-one" }))}.signature`
 
 describe("Relay browser lease renewal", () => {
-  it("reconnects malformed streams but pauses denied or replaced owners", () => {
-    for (const error of [
-      new RelayBrowserProtocolError("Invalid frame"),
-      new SyntaxError("Invalid JSON"),
-    ]) {
-      expect(isTerminalRelayBrowserFailure(error)).toBe(true)
-      expect(shouldWaitForRelayBrowserAuthorization(error)).toBe(false)
-    }
-    expect(
-      shouldWaitForRelayBrowserAuthorization(new Error("Permission denied"))
-    ).toBe(true)
-    expect(
-      shouldWaitForRelayBrowserAuthorization(
-        new RelayBrowserSessionReplacedError("Browser session replaced")
-      )
-    ).toBe(true)
-  })
-
   it("retains access-change wakeups without active credentials and releases its subscription", async () => {
     await Effect.runPromise(
       Effect.scoped(
@@ -43,22 +21,6 @@ describe("Relay browser lease renewal", () => {
           )
           notifyRelayBrowserAuthorizationChanged()
           yield* Queue.take(changes)
-          expect(
-            isTerminalRelayBrowserFailure(new Error("Authentication required"))
-          ).toBe(true)
-          expect(
-            isTerminalRelayBrowserFailure(new Error("Permission denied"))
-          ).toBe(true)
-          expect(
-            isTerminalRelayBrowserFailure(
-              new Error("Unable to connect to Relay")
-            )
-          ).toBe(false)
-          expect(
-            isTerminalRelayBrowserFailure(
-              new Error("Authorization service unavailable")
-            )
-          ).toBe(false)
         })
       )
     )

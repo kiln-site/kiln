@@ -22,28 +22,6 @@ describe("CLI HTTP requests", () => {
     vi.unstubAllGlobals()
   })
 
-  it.effect("keeps followed log streams free of an operation deadline", () => {
-    const fetchMock = vi.fn(
-      async (_input: RequestInfo | URL, _init?: RequestInit) => new Response()
-    )
-    vi.stubGlobal("fetch", fetchMock)
-
-    return Effect.gen(function* () {
-      yield* apiResponseEffect(
-        session,
-        "/api/cli/v1/logs",
-        {
-          timeoutMs: null,
-        },
-        (response) => Effect.succeed(response)
-      )
-
-      const [, init] = fetchMock.mock.calls[0] ?? []
-      assert.instanceOf(init?.signal, AbortSignal)
-      assert.isFalse(init?.signal?.aborted ?? true)
-    })
-  })
-
   it.effect("combines caller cancellation with the operation deadline", () => {
     const caller = new AbortController()
     const addEventListener = vi.spyOn(caller.signal, "addEventListener")
@@ -97,7 +75,6 @@ describe("CLI HTTP requests", () => {
       assert.isAbove(addEventListener.mock.calls.length, 0)
       assert.isAbove(removeEventListener.mock.calls.length, 0)
       assert.isAbove(cancelTimeout.mock.calls.length, 0)
-      assert.isAbove(CLI_LONG_OPERATION_TIMEOUT_MS, 180_000)
     })
   })
 

@@ -49,7 +49,6 @@ export function localResticGlobalArgs(): Array<string> {
 }
 
 export const localBackupDestination = defineBackupDestination({
-  capabilities: { full: true, restic: true },
   deleteFullBackup: ({ backupId, config }) =>
     promiseEffect(() =>
       rm(backupArchivePath(config, backupId), { force: true })

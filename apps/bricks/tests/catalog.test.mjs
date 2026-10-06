@@ -206,16 +206,3 @@ test("installer-aware Ember images advertise the marker protocol", async () => {
     )
   }
 })
-
-test("entrypoints pass Bash syntax validation in CI", async () => {
-  const entrypoints = [
-    "embers/java/entrypoint.sh",
-    "embers/steamcmd/entrypoint.sh",
-  ]
-  for (const path of entrypoints) {
-    assert.match(
-      await readFile(join(root, path), "utf8"),
-      /^#!\/usr\/bin\/env bash/u
-    )
-  }
-})

@@ -7,7 +7,6 @@ import {
   canAccessActivity,
   canAccessInstancePermission,
   destinationsForServer,
-  sectionDestinationLabel,
   serverDestinationHref,
   serverDestinations,
 } from "@/lib/navigation-destinations"
@@ -193,13 +192,5 @@ describe("navigation destinations", () => {
     expect(serverDestinationHref(console!, "relay one/server")).toBe(
       "/server/relay%20one%2Fserver/console"
     )
-  })
-
-  it("resolves section titles from the shared destinations", () => {
-    expect(sectionDestinationLabel("infra", "/infra/tailscale/network")).toBe(
-      "Tailscale"
-    )
-    expect(sectionDestinationLabel("settings", "/settings/files")).toBe("Files")
-    expect(sectionDestinationLabel("automations", "/activity")).toBeNull()
   })
 })

@@ -38,10 +38,6 @@ export type ResticDriverLocation =
 export type BackupDestinationDriver<
   TKind extends BackupDestinationKind = BackupDestinationKind,
 > = {
-  capabilities: {
-    full: true
-    restic: true
-  }
   kind: TKind
   maximumFullBackupBytes: number | null
   retainsFullBackupLocally: boolean

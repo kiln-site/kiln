@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vite-plus/test"
 
 import {
-  invitationDestination,
   invitePath,
   inviteTokenFromRedirect,
   invitationReferenceFromRedirect,
@@ -29,43 +28,5 @@ describe("invitation auth helpers", () => {
     expect(inviteTokenFromRedirect(`/?redirect=${path}`)).toBeNull()
     expect(inviteTokenFromRedirect("/invite?token=short")).toBeNull()
     expect(inviteTokenFromRedirect("/invite?://")).toBeNull()
-  })
-
-  it("sends accepted invitations to the invited resource", () => {
-    expect(
-      invitationDestination({
-        accessType: "platform_admin",
-        databaseId: null,
-        instanceId: null,
-      })
-    ).toBe("/infra/relays")
-    expect(
-      invitationDestination({
-        accessType: "relay_creator",
-        databaseId: null,
-        instanceId: null,
-      })
-    ).toBe("/infra/relays")
-    expect(
-      invitationDestination({
-        accessType: "scoped",
-        databaseId: null,
-        instanceId: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-      })
-    ).toBe("/server/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/console")
-    expect(
-      invitationDestination({
-        accessType: "scoped",
-        databaseId: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-        instanceId: null,
-      })
-    ).toBe("/infra/databases?search=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
-    expect(
-      invitationDestination({
-        accessType: "scoped",
-        databaseId: null,
-        instanceId: null,
-      })
-    ).toBe("/infra/servers")
   })
 })

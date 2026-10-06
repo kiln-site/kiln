@@ -111,13 +111,6 @@ export function normalizeSourceCidrs(value: unknown): ReadonlyArray<string> {
   return [...new Set(value.map(normalizeSourceCidr))]
 }
 
-export function exactSourceCidr(address: string): string {
-  const normalized = normalizePeerAddress(address)
-  const family = isIP(normalized)
-  if (!family) throw new Error("Observed source address is invalid")
-  return `${normalized}/${family === 4 ? 32 : 128}`
-}
-
 export function isSourceAllowed(
   address: string | undefined,
   sourceCidrs: ReadonlyArray<string>

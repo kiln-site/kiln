@@ -30,10 +30,6 @@ const instance = relayInstanceSchema.parse({
 })
 
 describe("instance mutation snapshots", () => {
-  it("defaults state reasons for snapshots from older Relays", () => {
-    expect(instance.stateReason).toBeNull()
-  })
-
   it("retains a missing instance as provisioning while it is replaced", () => {
     const instances = retainProvisioningInstances([], [instance])
 

@@ -40,14 +40,6 @@ export function updateBrickVariable(
   return updated
 }
 
-export function missingRequiredBrickVersion(
-  definition: Brick["variables"][string] | undefined,
-  submitted: unknown
-): boolean {
-  if (!definition?.required || definition.default !== undefined) return false
-  return typeof submitted !== "string" || submitted.trim() === ""
-}
-
 export function defaultBrickVariables(
   brick: Brick
 ): Record<string, BrickVariableValue> {
@@ -94,7 +86,7 @@ export function hydrateBrickVariables(
 
 const PUBLISHED_JAVA_EMBERS = ["11", "17", "21", "25"] as const
 
-export function supportedJavaVersions(
+function supportedJavaVersions(
   definition: Brick["variables"][string]
 ): Array<string> {
   if (definition.type !== "string") return []
@@ -245,7 +237,7 @@ function compareNumericVersions(left: string, right: string): number {
   return rightParts.length - leftParts.length
 }
 
-export function interpolateBrickTemplate(
+function interpolateBrickTemplate(
   template: string,
   values: Readonly<Record<string, BrickVariableValue>>,
   brick?: { id: string; name?: string }
@@ -280,13 +272,5 @@ export function interpolateBrickEnvironment(
       name,
       interpolateBrickTemplate(value, values, brick),
     ])
-  )
-}
-
-export function defaultBrickRuntimeName(brick: Brick): string {
-  return interpolateBrickTemplate(
-    brick.runtime.name,
-    defaultBrickVariables(brick),
-    { id: brick.metadata.id, name: brick.metadata.name }
   )
 }

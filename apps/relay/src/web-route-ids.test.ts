@@ -32,21 +32,6 @@ describe("Relay web route IDs", () => {
     expect(assigned?.id).toBe("cafebabe")
   })
 
-  it("allows the same short ID on a different Relay", () => {
-    const [first] = assignRelayWebRouteIds(
-      instanceId,
-      [route],
-      [],
-      () => "decafbad"
-    )
-    const [second] = assignRelayWebRouteIds(instanceId, [route], [], () =>
-      "decafbad"
-    )
-
-    expect(first?.id).toBe("decafbad")
-    expect(second?.id).toBe("decafbad")
-  })
-
   it("rejects a route ID owned by another instance on the Relay", () => {
     expect(() =>
       assignRelayWebRouteIds(

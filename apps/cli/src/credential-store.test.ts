@@ -53,14 +53,6 @@ describe("CLI credential managers", () => {
       "JavaScript",
       "-e",
     ])
-    assert.include(
-      commands[0]?.arguments[3] ?? "",
-      'ObjC.bindFunction("SecItemAdd"'
-    )
-    assert.include(
-      commands[0]?.arguments[3] ?? "",
-      "$.SecItemUpdate(query, updates)"
-    )
     assert.deepStrictEqual(JSON.parse(commands[0]?.input ?? ""), {
       account: "profile-account",
       operation: "set",

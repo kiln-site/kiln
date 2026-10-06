@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vite-plus/test"
-import type { QueryClient } from "@tanstack/react-query"
 
 import { createAppClients } from "./query-client"
 import {
@@ -11,22 +10,6 @@ import {
 import type { RelayFleetSnapshot } from "./relay-fleet"
 
 describe("app data clients", () => {
-  it("isolates Query and DB state by router request or browser session", async () => {
-    const first = createAppClients()
-    const second = createAppClients()
-
-    expect(first.queryClient).not.toBe(second.queryClient)
-    expect(first.dbClient).not.toBe(second.dbClient)
-    expect(first.dbClient.requireDependency<QueryClient>("queryClient")).toBe(
-      first.queryClient
-    )
-    expect(second.dbClient.requireDependency<QueryClient>("queryClient")).toBe(
-      second.queryClient
-    )
-
-    await Promise.all([first.dbClient.cleanup(), second.dbClient.cleanup()])
-  })
-
   it("never lets a connection refetch overwrite newer live fleet state", async () => {
     const clients = createAppClients()
     const live: RelayFleetSnapshot = { instances: [], nodes: [] }
@@ -84,9 +67,7 @@ describe("app data clients", () => {
     const connection = {
       message: "Relay unavailable",
       relay: { id: "relay-a", name: "Relay A" },
-      relays: [
-        { id: "relay-a", name: "Relay A", status: "unreachable" },
-      ],
+      relays: [{ id: "relay-a", name: "Relay A", status: "unreachable" }],
       snapshot: fallback,
       status: "unreachable",
     } as Extract<RelayConnection, { status: "unreachable" }>

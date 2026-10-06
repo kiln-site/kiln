@@ -1159,7 +1159,7 @@ function catalogMutationError(cause: unknown): void {
   })
 }
 
-export function catalogDisplayName(catalog: {
+function catalogDisplayName(catalog: {
   isDefault: boolean
   name?: string | null
   source: string

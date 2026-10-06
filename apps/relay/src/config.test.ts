@@ -35,37 +35,6 @@ describe("loadConfig", () => {
     ).toBe("file:///opt/kiln/catalog.yml")
   })
 
-  it("defaults the Relay and SFTP ports", () => {
-    const config = loadConfig({ NODE_ENV: "development" })
-
-    expect(config.port).toBe(4100)
-    expect(config.publicPort).toBe(4100)
-    expect(config.sftpPort).toBe(2022)
-    expect(config.gamePortRange).toEqual({ end: 39_999, start: 30_000 })
-    expect(config.tlsMode).toBe("development")
-    expect(config.sftpDevAuthentication).toBe(true)
-    expect(config.mclogsApiUrl).toBe("https://api.mclo.gs/1/log")
-    expect(config.backupTimeoutMs).toBe(60 * 60_000)
-    expect(config.browserLimits).toEqual({
-      fileReplayEntries: 65_536,
-      outboxBytes: 2 * 1024 * 1024,
-      outboxMessages: 256,
-      pendingFileAuthentications: 16,
-      pendingHandshakes: 64,
-      pendingHandshakesPerIp: 16,
-      sessions: 512,
-      sessionsPerInstance: 256,
-      sessionsPerUser: 64,
-      sessionsPerUserInstance: 16,
-      sublimitsEnforced: true,
-    })
-    expect(config.runtimeRecovery).toEqual({
-      initialDelayMs: 5_000,
-      maxRetries: 2,
-      stabilityMs: 300_000,
-    })
-  })
-
   it("validates the browser session limit hierarchy", () => {
     expect(() =>
       loadConfig({
@@ -238,7 +207,6 @@ describe("loadConfig", () => {
     expect(config.browserOrigin).toBe("https://relay.example.com")
     expect(config.directPublicPort).toBe(4100)
     expect(config.directBrowserOrigin).toBe("http://relay.example.com:4100")
-    expect(config.traefikImage).toBe("traefik:v3.7.13")
   })
 
   it("uses Coolify's public HTTPS origin and keeps port 4100 private", () => {

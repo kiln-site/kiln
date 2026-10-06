@@ -75,7 +75,7 @@ export function reconcilePendingPowerSnapshot(
   return changed ? { ...snapshot, instances } : snapshot
 }
 
-export function initialPendingPowerAction(
+function initialPendingPowerAction(
   action: ServerAction,
   initialStartedAt: string | null = null
 ): PendingPowerAction {
@@ -87,7 +87,7 @@ export function initialPendingPowerAction(
   }
 }
 
-export function reconcilePendingPowerState(
+function reconcilePendingPowerState(
   pending: PendingPowerAction,
   incoming: RelayObservedState,
   incomingStartedAt: string | null = null

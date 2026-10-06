@@ -1,9 +1,6 @@
 import { describe, expect, it } from "vite-plus/test"
 
 import {
-  dockerLogSinceArguments,
-  historicalReadinessLogArguments,
-  isIntentionalServerStopCommand,
   matchingReadyLogLine,
   observedSessionReadyAt,
   parseConsoleLine,
@@ -11,25 +8,6 @@ import {
 } from "./docker.js"
 
 describe("Docker console parsing", () => {
-  it("limits every log target to its current container session", () => {
-    expect(dockerLogSinceArguments("2026-07-25T17:59:03.000000000Z")).toEqual([
-      "--since",
-      "2026-07-25T17:59:03.000000000Z",
-    ])
-    expect(dockerLogSinceArguments("0001-01-01T00:00:00Z")).toEqual([])
-  })
-
-  it("recovers readiness from the startup window instead of a recent log tail", () => {
-    expect(
-      historicalReadinessLogArguments("2026-07-25T17:59:03.000000000Z")
-    ).toEqual([
-      "--since",
-      "2026-07-25T17:59:03.000000000Z",
-      "--until",
-      "2026-07-25T18:01:03.000Z",
-    ])
-  })
-
   it("retains safe ANSI styling while keeping searchable plain text", () => {
     expect(
       parseConsoleLine(
@@ -171,14 +149,5 @@ describe("Docker console parsing", () => {
     expect(
       parseConsoleLine(`2026-07-25T17:59:03.000000000Z ${line}`)
     ).toBeNull()
-  })
-
-  it("recognizes only exact recipe-declared console stop commands", () => {
-    const stopCommands = ["stop", "/stop"]
-    expect(isIntentionalServerStopCommand(stopCommands, "stop")).toBe(true)
-    expect(isIntentionalServerStopCommand(stopCommands, " /stop ")).toBe(true)
-    expect(isIntentionalServerStopCommand(stopCommands, "/STOP")).toBe(false)
-    expect(isIntentionalServerStopCommand(stopCommands, "stop now")).toBe(false)
-    expect(isIntentionalServerStopCommand([], "stop")).toBe(false)
   })
 })
