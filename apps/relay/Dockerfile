@@ -34,7 +34,7 @@ ENV SOURCE_COMMIT=$SOURCE_COMMIT
 ENV KILN_VERSION=$KILN_VERSION
 RUN vp run relay#build
 
-FROM docker:29.6.2-cli AS docker-cli
+FROM docker:29.8.2-cli AS docker-cli
 
 FROM restic/restic:0.19.1 AS restic
 

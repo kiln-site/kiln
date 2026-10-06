@@ -238,7 +238,7 @@ describe("loadConfig", () => {
     expect(config.browserOrigin).toBe("https://relay.example.com")
     expect(config.directPublicPort).toBe(4100)
     expect(config.directBrowserOrigin).toBe("http://relay.example.com:4100")
-    expect(config.traefikImage).toBe("traefik:v3.6.6")
+    expect(config.traefikImage).toBe("traefik:v3.7.13")
   })
 
   it("uses Coolify's public HTTPS origin and keeps port 4100 private", () => {

@@ -455,7 +455,7 @@ function effectiveUrlPort(url: URL): number {
 }
 
 function traefikImage(environment: NodeJS.ProcessEnv): string {
-  const value = environment.KILN_RELAY_TRAEFIK_IMAGE?.trim() || "traefik:v3.6.6"
+  const value = environment.KILN_RELAY_TRAEFIK_IMAGE?.trim() || "traefik:v3.7.13"
   if (!/^traefik(?:@sha256:[a-f0-9]{64}|:[A-Za-z0-9._-]+)$/u.test(value)) {
     throw new Error(
       "KILN_RELAY_TRAEFIK_IMAGE must use an official pinned Traefik tag or digest"

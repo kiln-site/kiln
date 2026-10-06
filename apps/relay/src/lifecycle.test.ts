@@ -73,7 +73,7 @@ describe("external Traefik discovery", () => {
           settings: {
             acmeEmail: null,
             mode,
-            traefikImage: "traefik:v3.6.6",
+            traefikImage: "traefik:v3.7.13",
           },
         },
         async (_executable, arguments_) => {
@@ -89,7 +89,7 @@ describe("external Traefik discovery", () => {
             stderr: "",
             stdout:
               name === "manual-traefik"
-                ? "true traefik:v3.6.6\n"
+                ? "true traefik:v3.7.13\n"
                 : "true ghcr.io/kiln-site/ember:latest\n",
           }
         }
@@ -109,7 +109,7 @@ describe("external Traefik discovery", () => {
         settings: {
           acmeEmail: null,
           mode: "none",
-          traefikImage: "traefik:v3.6.6",
+          traefikImage: "traefik:v3.7.13",
         },
       },
       async (_executable, arguments_) => {
@@ -123,7 +123,7 @@ describe("external Traefik discovery", () => {
         return {
           stderr: "",
           stdout:
-            arguments_.at(-1) === "host-traefik" ? "true traefik:v3.6.6\n" : "",
+            arguments_.at(-1) === "host-traefik" ? "true traefik:v3.7.13\n" : "",
         }
       }
     )
@@ -494,7 +494,7 @@ describe("Traefik web routes", () => {
   const settings = {
     acmeEmail: "admin@example.com",
     mode: "traefik" as const,
-    traefikImage: "traefik:v3.6.6",
+    traefikImage: "traefik:v3.7.13",
   }
   const route = {
     hostname: "donutsmp.example.com",
