@@ -528,6 +528,18 @@ html {
 }
 
 .kiln-toaster[data-sonner-toaster]
+  [data-sonner-toast][data-styled="true"].file-upload-toast {
+  padding-block: 0.5rem;
+}
+
+.kiln-toaster[data-sonner-toaster]
+  [data-sonner-toast][data-styled="true"].file-upload-toast
+  [data-icon] {
+  border: 0;
+  background: transparent;
+}
+
+.kiln-toaster[data-sonner-toaster]
   [data-sonner-toast][data-styled="true"]
   [data-button] {
   height: 1.625rem;
