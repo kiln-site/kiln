@@ -41,8 +41,8 @@ import { Effect, Result, Stream } from "effect"
 import { openPromise, type Entry, type ZipFile } from "yauzl"
 import {
   extract as createTarExtractor,
-  type Entry as TarEntry,
-  type Headers as TarHeaders,
+  type ExtractEvents,
+  type Header as TarHeaders,
 } from "tar-stream"
 import ZipStream from "zip-stream"
 
@@ -1907,6 +1907,8 @@ async function extractZipArchive(
   )
 }
 
+type TarEntry = ExtractEvents["entry"][1]
+
 interface TarArchiveEntry {
   kind: "directory" | "file"
   mode: number
@@ -2136,6 +2138,12 @@ async function writeTarEntryToFile(
   let position = 0
   for await (const chunk of entry) {
     if (signal.aborted) throw archiveExtractionCancelled()
+    if (!(chunk instanceof Uint8Array)) {
+      throw archiveExtractionError(
+        "invalid_archive_entry",
+        "The archive entry contains non-binary data"
+      )
+    }
     const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
     let offset = 0
     while (offset < buffer.length) {
