@@ -18,14 +18,16 @@ const notFoundStatus = {
 }
 
 interface AppErrorPageProps {
-  error: Error
+  error: unknown
   reset: () => void
 }
 
 export function AppErrorPage({ error, reset }: AppErrorPageProps) {
   React.useEffect(() => {
-    if (reportedErrors.has(error)) return
-    reportedErrors.add(error)
+    if (error instanceof Error) {
+      if (reportedErrors.has(error)) return
+      reportedErrors.add(error)
+    }
     Sentry.captureException(error)
   }, [error])
 
@@ -52,7 +54,13 @@ export function AppErrorPage({ error, reset }: AppErrorPageProps) {
           </Button>
         </>
       }
-      detail={import.meta.env.DEV ? error.message : undefined}
+      detail={
+        import.meta.env.DEV
+          ? error instanceof Error
+            ? error.message
+            : String(error)
+          : undefined
+      }
     />
   )
 }
