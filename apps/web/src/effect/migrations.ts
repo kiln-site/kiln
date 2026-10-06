@@ -1,14 +1,12 @@
 import * as MysqlClient from "@effect/sql-mysql2/MysqlClient"
-import { Clock, Effect, Redacted, Schedule } from "effect"
+import { Clock, Effect, Schedule } from "effect"
 import { SqlClient } from "effect/sql"
 import { isSqlError } from "effect/sql/SqlError"
 
-import {
-  databaseConnectionConfig,
-  databaseTableName,
-} from "@/lib/database-config"
+import { databaseTableName } from "@/lib/database-config"
 import { migrations } from "@/migrations"
 
+import { databaseClientConfig } from "./database"
 import { MigrationError } from "./errors"
 
 export interface Migration {
@@ -24,20 +22,9 @@ export interface Migration {
 // would leave marked as applied after a failure, so Kiln records each
 // migration only once it finishes.
 export function migrateDatabase(): Promise<void> {
-  const config = databaseConnectionConfig()
   return Effect.runPromise(
     applyMigrations(migrations).pipe(
-      Effect.provide(
-        MysqlClient.layer({
-          host: config.host,
-          port: config.port,
-          database: config.database,
-          username: config.user,
-          password: Redacted.make(config.password),
-          maxConnections: 2,
-          poolConfig: { connectTimeout: 2_000, timezone: "Z" },
-        })
-      ),
+      Effect.provide(MysqlClient.layer(databaseClientConfig(2))),
       // MySQL can still be starting alongside Hearth.
       Effect.retry({
         schedule: Schedule.spaced("2 seconds"),
