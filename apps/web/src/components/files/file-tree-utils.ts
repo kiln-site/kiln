@@ -73,6 +73,7 @@ export type FileWorkspaceAction =
   | "delete"
   | "download"
   | "duplicate"
+  | "move"
   | "rename"
   | "unarchive"
 

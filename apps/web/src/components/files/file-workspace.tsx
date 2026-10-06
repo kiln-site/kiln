@@ -326,8 +326,7 @@ const StableFileWorkspaceSurface = React.memo(function FileWorkspaceSurface({
       </div>
       <FileActionDialogHost
         key={
-          fileActions.dialog?.kind === "rename" ||
-          fileActions.dialog?.kind === "move"
+          fileActions.dialog && "path" in fileActions.dialog
             ? `${fileActions.dialog.kind}:${fileActions.dialog.path}`
             : fileActions.dialog
               ? `${fileActions.dialog.kind}:${fileActions.dialog.paths.join("|")}`
