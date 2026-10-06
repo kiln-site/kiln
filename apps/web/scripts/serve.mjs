@@ -2,8 +2,8 @@ import { fileURLToPath } from "node:url"
 
 import { Cause, Effect } from "effect"
 import { serve } from "srvx/node"
-import { log } from "srvx/log"
-import { serveStatic } from "srvx/static"
+import { loggerMiddleware } from "srvx/log"
+import { staticMiddleware } from "srvx/static"
 
 const HEALTH_PATH = "/api/health"
 const SERVER_FN_PATH = "/_serverFn/"
@@ -11,7 +11,7 @@ const QUIET_REQUEST_PURPOSE_HEADER = "x-kiln-request-purpose"
 const RELAY_POLL_PURPOSE = "relay-poll"
 const appModule = await import("../dist/server/server.js")
 const app = appModule.default
-const logRequest = log()
+const logRequest = loggerMiddleware()
 
 if (!app || typeof app.fetch !== "function") {
   throw new Error("Kiln's production server handler could not be loaded")
@@ -34,7 +34,7 @@ const server = serve({
   middleware: [
     logUnlessSuccessfulQuietRequest,
     cacheImmutableAssets,
-    serveStatic({
+    staticMiddleware({
       dir: fileURLToPath(new URL("../dist/client", import.meta.url)),
     }),
     ...(app.middleware ?? []),
