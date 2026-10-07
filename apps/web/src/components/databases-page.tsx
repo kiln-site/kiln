@@ -82,9 +82,9 @@ import { InstanceName } from "@/components/instance-name"
 import { instanceStatusPresentation } from "@/components/instance-name-presentation"
 import { getManagedDatabasesCollection } from "@/lib/collections/managed-databases"
 import {
-  ServerPickerList,
-  serverPickerOptionKey,
-} from "@/components/server-picker-list"
+  InstancePickerContent,
+  type InstancePickerItem,
+} from "@/components/instance-picker"
 import { grantHasPermission } from "@/lib/permissions"
 import type { AccessPermission } from "@/lib/permissions"
 import {
@@ -1041,7 +1041,7 @@ const DatabaseNetworkPicker = React.memo(function DatabaseNetworkPicker({
       </Tooltip>
       <PopoverContent
         align="end"
-        className="w-[min(32rem,calc(100vw-2rem))] p-1.5"
+        className="w-[min(32rem,calc(100vw-2rem))] overflow-hidden p-0"
       >
         {open ? <DatabaseNetworkPickerContent database={database} /> : null}
       </PopoverContent>
@@ -1077,11 +1077,20 @@ function DatabaseNetworkPickerContent({
           return canWrite
             ? [
                 {
-                  id: instance.id,
+                  identity: {
+                    brickId: instance.brickId,
+                    brickSource: instance.brickSource,
+                    id: instance.id,
+                    implementation: instance.implementation,
+                    kind: "server",
+                    observedState: instance.observedState,
+                    relayId: instance.relayId,
+                  },
+                  key: `${instance.relayId}:${instance.id}`,
+                  meta: `${instance.implementation} ${instance.version} · ${instance.shortId}`,
                   name: instance.name,
-                  relayId: instance.relayId,
-                  relayName: instance.relayName,
-                },
+                  searchText: `${instance.id} ${instance.relayName}`,
+                } satisfies InstancePickerItem,
               ]
             : []
         })
@@ -1114,27 +1123,26 @@ function DatabaseNetworkPickerContent({
     onError: (error) => showOperationError("Network update failed", error),
   })
   const pendingKey = update.isPending
-    ? serverPickerOptionKey({
-        id: update.variables.instanceId,
-        name: "",
-        relayId: database.relayId,
-        relayName: "",
-      })
+    ? `${database.relayId}:${update.variables.instanceId}`
     : undefined
+  const toggleServer = React.useCallback(
+    (item: InstancePickerItem) =>
+      update.mutate({
+        connected: !selectedKeys.has(item.key),
+        instanceId: item.identity.id,
+      }),
+    [selectedKeys, update]
+  )
 
   return (
-    <ServerPickerList
-      ariaLabel={`Servers available to ${database.name}`}
+    <InstancePickerContent
+      multiple
+      ariaLabel="Servers"
       emptyMessage={`No connectable servers are hosted on ${database.relayName}.`}
+      items={servers}
       pendingKey={pendingKey}
       selectedKeys={selectedKeys}
-      servers={servers}
-      onSelect={(server) =>
-        update.mutate({
-          connected: !selectedKeys.has(serverPickerOptionKey(server)),
-          instanceId: server.id,
-        })
-      }
+      onSelect={toggleServer}
     />
   )
 }

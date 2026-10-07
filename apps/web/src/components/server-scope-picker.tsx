@@ -15,15 +15,52 @@ import {
 } from "@workspace/ui/components/tooltip"
 
 import {
-  ServerPickerList,
-  serverPickerOptionKey,
-  type ServerPickerOption,
-} from "@/components/server-picker-list"
+  InstancePickerContent,
+  type InstancePickerGroup,
+  type InstancePickerItem,
+} from "@/components/instance-picker"
 import { WorkspaceSummaryCard } from "@/components/workspace-summary-card"
 
+/** A scope target: one server, database, or Relay. */
+export interface ServerPickerOption {
+  description?: string
+  disabled?: boolean
+  id: string
+  kind?: "database" | "relay" | "server"
+  name: string
+  relayId: string
+  relayName: string
+}
+
+export const serverPickerOptionKey = (server: ServerPickerOption) =>
+  server.kind
+    ? `${server.kind}:${server.relayId}:${server.id}`
+    : `${server.relayId}:${server.id}`
+
+type ScopeKind = NonNullable<ServerPickerOption["kind"]>
+
+const scopeKindPresentation: Record<
+  ScopeKind,
+  { Icon: typeof Server; label: string; one: string; other: string }
+> = {
+  database: {
+    Icon: Database,
+    label: "All databases",
+    one: "database",
+    other: "databases",
+  },
+  relay: { Icon: Network, label: "All Relays", one: "Relay", other: "Relays" },
+  server: {
+    Icon: Server,
+    label: "All servers",
+    one: "server",
+    other: "servers",
+  },
+}
+
 export const ServerScopePicker = React.memo(function ServerScopePicker({
-  allDescription = "Every accessible instance",
   allLabel = "All servers",
+  allowAll = true,
   ariaLabel = "Accessible servers",
   changeLabel = "Change server",
   chooseLabel = "Choose server",
@@ -31,12 +68,15 @@ export const ServerScopePicker = React.memo(function ServerScopePicker({
   manageSettingsControl,
   manageSettingsTooltip,
   onSelect,
+  onSelectKind,
+  selectedKind = null,
   selectedRelayName,
   selectedServer,
   servers,
 }: {
-  allDescription?: string
   allLabel?: string
+  /** Offers "All instances", which selects `null`. */
+  allowAll?: boolean
   ariaLabel?: string
   changeLabel?: string
   chooseLabel?: string
@@ -44,30 +84,67 @@ export const ServerScopePicker = React.memo(function ServerScopePicker({
   manageSettingsControl?: React.ReactNode
   manageSettingsTooltip?: string
   onSelect: (server: ServerPickerOption | null) => void
+  /** Enables whole-type scopes such as "All databases". */
+  onSelectKind?: (kind: ScopeKind) => void
+  selectedKind?: ScopeKind | null
   selectedRelayName?: string
   selectedServer: ServerPickerOption | null
   servers: ReadonlyArray<ServerPickerOption>
 }) {
   const [pickerOpen, setPickerOpen] = React.useState(false)
+  const optionsByKey = React.useMemo(
+    () =>
+      new Map(servers.map((server) => [serverPickerOptionKey(server), server])),
+    [servers]
+  )
+  const items = React.useMemo(
+    () => servers.map(serverScopePickerItem),
+    [servers]
+  )
   const selectedKeys = React.useMemo(
     () =>
       new Set(selectedServer ? [serverPickerOptionKey(selectedServer)] : []),
     [selectedServer]
   )
+  const selectedGroups = React.useMemo(
+    (): ReadonlySet<InstancePickerGroup> =>
+      selectedServer ? new Set() : new Set([selectedKind ?? "all"]),
+    [selectedKind, selectedServer]
+  )
   const selectServer = React.useCallback(
-    (server: ServerPickerOption) => {
+    (item: InstancePickerItem) => {
+      const server = optionsByKey.get(item.key)
+      if (!server) return
       onSelect(server)
       setPickerOpen(false)
     },
-    [onSelect]
+    [onSelect, optionsByKey]
   )
+  const selectGroup = React.useCallback(
+    (group: InstancePickerGroup) => {
+      if (group === "all") onSelect(null)
+      else onSelectKind?.(group)
+      setPickerOpen(false)
+    },
+    [onSelect, onSelectKind]
+  )
+  const kindScope =
+    selectedServer === null && selectedKind
+      ? scopeKindPresentation[selectedKind]
+      : null
+  const kindCount = selectedKind
+    ? servers.filter((server) => (server.kind ?? "server") === selectedKind)
+        .length
+    : 0
   const selectionMetadata = selectedServer
     ? selectedServer.id
-    : `${servers.length} accessible ${servers.length === 1 ? "instance" : "instances"}`
+    : kindScope
+      ? `${kindCount} accessible ${kindCount === 1 ? kindScope.one : kindScope.other}, including new ones`
+      : `${servers.length} accessible ${servers.length === 1 ? "instance" : "instances"}`
   const ScopeIcon =
-    selectedServer?.kind === "database"
+    (selectedServer?.kind ?? selectedKind) === "database"
       ? Database
-      : selectedServer?.kind === "relay"
+      : (selectedServer?.kind ?? selectedKind) === "relay"
         ? Network
         : Server
 
@@ -95,13 +172,13 @@ export const ServerScopePicker = React.memo(function ServerScopePicker({
                   className="shrink-0"
                 >
                   <ArrowLeftRight />
-                  {selectedServer ? changeLabel : chooseLabel}
+                  {selectedServer || kindScope ? changeLabel : chooseLabel}
                 </Button>
               </PopoverTrigger>
             </div>
           }
           icon={<ScopeIcon className="size-5" />}
-          title={selectedServer?.name ?? allLabel}
+          title={selectedServer?.name ?? kindScope?.label ?? allLabel}
           titleAccessory={
             <Badge variant="outline" className="type-meta font-mono">
               {selectedServer?.kind === "relay"
@@ -118,26 +195,44 @@ export const ServerScopePicker = React.memo(function ServerScopePicker({
         </WorkspaceSummaryCard>
         <PopoverContent
           align="end"
-          className="w-[min(32rem,calc(100vw-2rem))] p-1.5"
+          className="w-[min(32rem,calc(100vw-2rem))] overflow-hidden p-0"
         >
-          <ServerPickerList
-            allOption={{
-              description: allDescription,
-              label: allLabel,
-              selected: selectedServer === null,
-              onSelect: () => {
-                onSelect(null)
-                setPickerOpen(false)
-              },
-            }}
+          <InstancePickerContent
             ariaLabel={ariaLabel}
             emptyMessage={emptyMessage}
+            includeAllGroup={allowAll}
+            includeKindGroups={onSelectKind !== undefined}
+            items={items}
+            selectedGroups={selectedGroups}
             selectedKeys={selectedKeys}
-            servers={servers}
             onSelect={selectServer}
+            onSelectGroup={allowAll || onSelectKind ? selectGroup : undefined}
           />
         </PopoverContent>
       </Popover>
     </div>
   )
 })
+
+function serverScopePickerItem(server: ServerPickerOption): InstancePickerItem {
+  const kind = server.kind ?? "server"
+  return {
+    disabled: server.disabled,
+    identity:
+      kind === "relay"
+        ? {
+            id: server.relayId,
+            kind,
+            relayId: server.relayId,
+            source: "fleet",
+          }
+        : { id: server.id, kind, relayId: server.relayId },
+    key: serverPickerOptionKey(server),
+    meta:
+      kind === "relay"
+        ? server.relayId.slice(0, 8)
+        : `${server.relayName} · ${server.id.slice(0, 8)}`,
+    name: server.name,
+    searchText: `${server.id} ${server.relayName} ${server.relayId}`,
+  }
+}

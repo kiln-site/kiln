@@ -126,6 +126,27 @@ describeMysql("backup runs page", () => {
           }),
           []
         )
+        // A whole-kind scope also stays inside the grants.
+        assert.sameMembers(
+          yield* pageIds({
+            isAdmin: false,
+            allowedScopes,
+            scope: { kind: "instance" },
+          }),
+          ["a-inst-a", "b-inst"]
+        )
+        assert.deepStrictEqual(
+          yield* pageIds({
+            isAdmin: false,
+            allowedScopes,
+            scope: { kind: "platform" },
+          }),
+          []
+        )
+        assert.sameMembers(
+          yield* pageIds({ isAdmin: true, scope: { kind: "platform" } }),
+          ["a-platform", "b-platform"]
+        )
         assert.sameMembers(yield* pageIds({ isAdmin: true }), [
           "a-inst-a",
           "a-inst-b",
