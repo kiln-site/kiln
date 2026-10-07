@@ -11,15 +11,14 @@ import {
   RadioTower,
   Search,
   Server as ServerIcon,
+  Star,
 } from "lucide-react"
 
 import {
   DropdownMenu,
   DropdownMenuCheckboxItem,
   DropdownMenuContent,
-  DropdownMenuGroup,
   DropdownMenuItem,
-  DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@workspace/ui/components/dropdown-menu"
@@ -30,8 +29,8 @@ import { InstanceName } from "@/components/instance-name"
 import {
   availableInstancePickerFilters,
   defaultInstancePickerFilterIdsSnapshot,
+  favoriteInstancePickerFilter,
   filterInstancePickerItems,
-  instancePickerFilterGroups,
   instancePickerFilterIdsFromSnapshot,
   instancePickerFilterIdsSnapshot,
   subscribeInstancePickerFilterIds,
@@ -62,31 +61,21 @@ interface InstancePickerContentProps {
   /** Called after the footer link navigates, usually to close the popover. */
   onNavigate?: () => void
   onSelect: (item: InstancePickerItem) => void
-  /** Enables "Select all" controls in multi-select pickers. */
+  /** Enables the "Select all" bar in multi-select pickers. */
   onSelectMany?: (keys: ReadonlyArray<string>, selected: boolean) => void
   selectedKeys: ReadonlySet<string>
   /** Shows a "View all" footer that follows the active type filter. */
   viewAll?: boolean
 }
 
-type InstancePickerRow =
-  | {
-      kind: InstancePickerKind
-      label: string
-      type: "header"
-    }
-  | { item: InstancePickerItem; type: "item" }
-
-const kindLabels: Record<InstancePickerKind, string> = {
-  database: "Databases",
-  relay: "Relays",
-  server: "Servers",
+const kindPresentation: Record<
+  InstancePickerKind,
+  { Icon: typeof ServerIcon; label: string; plural: string }
+> = {
+  database: { Icon: Database, label: "Database", plural: "databases" },
+  relay: { Icon: RadioTower, label: "Relay", plural: "Relays" },
+  server: { Icon: ServerIcon, label: "Server", plural: "servers" },
 }
-const kindOrder: ReadonlyArray<InstancePickerKind> = [
-  "server",
-  "database",
-  "relay",
-]
 
 export const InstancePickerContent = React.memo(function InstancePickerContent({
   allOption,
@@ -108,10 +97,20 @@ export const InstancePickerContent = React.memo(function InstancePickerContent({
     () => availableInstancePickerFilters(items),
     [items]
   )
+  const typeFilters = React.useMemo(
+    () => availableFilters.filter((filter) => filter.group === "type"),
+    [availableFilters]
+  )
   const activeFilters = React.useMemo(
     () => availableFilters.filter((filter) => filterIds.includes(filter.id)),
     [availableFilters, filterIds]
   )
+  const activeTypeFilters = React.useMemo(
+    () => activeFilters.filter((filter) => filter.group === "type"),
+    [activeFilters]
+  )
+  const favoritesOnly = activeFilters.includes(favoriteInstancePickerFilter)
+  const showKind = typeFilters.length > 0
   const query = search.trim().toLocaleLowerCase()
   const visibleItems = React.useMemo(() => {
     const filtered = filterInstancePickerItems(items, activeFilters)
@@ -119,16 +118,9 @@ export const InstancePickerContent = React.memo(function InstancePickerContent({
       ? filtered.filter((item) => matchesInstancePickerSearch(item, query))
       : filtered
   }, [activeFilters, items, query])
-  const rows = React.useMemo(
-    () => instancePickerRows(visibleItems),
+  const selectableIndexes = React.useMemo(
+    () => visibleItems.flatMap((item, index) => (item.disabled ? [] : [index])),
     [visibleItems]
-  )
-  const itemRowIndexes = React.useMemo(
-    () =>
-      rows.flatMap((row, index) =>
-        row.type === "item" && !row.item.disabled ? [index] : []
-      ),
-    [rows]
   )
   const toggleFilter = React.useCallback(
     (filterId: string, checked: boolean) => {
@@ -140,40 +132,49 @@ export const InstancePickerContent = React.memo(function InstancePickerContent({
     },
     [filterIds, setFilterIds]
   )
+  const toggleFavorites = React.useCallback(
+    () => toggleFilter(favoriteInstancePickerFilter.id, !favoritesOnly),
+    [favoritesOnly, toggleFilter]
+  )
+  const showAllTypes = React.useCallback(
+    () =>
+      setFilterIds(
+        filterIds.filter(
+          (id) => !typeFilters.some((filter) => filter.id === id)
+        )
+      ),
+    [filterIds, setFilterIds, typeFilters]
+  )
   const clearFilters = React.useCallback(() => setFilterIds([]), [setFilterIds])
   const showAllOption = allOption !== undefined && query.length === 0
-  const activeRowIndex =
-    activeIndex >= 0 && activeIndex < rows.length ? activeIndex : -1
+  const activeItemIndex =
+    activeIndex >= 0 && activeIndex < visibleItems.length ? activeIndex : -1
 
   const scrollElementRef = React.useRef<HTMLDivElement>(null)
   const rowVirtualizer = useVirtualizer({
-    count: rows.length,
-    estimateSize: (index) => (rows[index]?.type === "header" ? 28 : 46),
-    getItemKey: (index) => {
-      const row = rows[index]
-      if (!row) return index
-      return row.type === "header" ? `header:${row.kind}` : row.item.key
-    },
+    count: visibleItems.length,
+    estimateSize: () => 46,
+    getItemKey: (index) => visibleItems[index]?.key ?? index,
     getScrollElement: () => scrollElementRef.current,
     overscan: 4,
   })
 
   const moveActive = React.useCallback(
     (direction: 1 | -1) => {
-      if (itemRowIndexes.length === 0) return
-      const position = itemRowIndexes.indexOf(activeRowIndex)
+      if (selectableIndexes.length === 0) return
+      const position = selectableIndexes.indexOf(activeItemIndex)
       const next =
         position === -1
           ? direction === 1
             ? 0
-            : itemRowIndexes.length - 1
-          : (position + direction + itemRowIndexes.length) %
-            itemRowIndexes.length
-      const rowIndex = itemRowIndexes[next] ?? -1
-      setActiveIndex(rowIndex)
-      if (rowIndex >= 0) rowVirtualizer.scrollToIndex(rowIndex)
+            : selectableIndexes.length - 1
+          : (position + direction + selectableIndexes.length) %
+            selectableIndexes.length
+      const index = selectableIndexes[next] ?? -1
+      setActiveIndex(index)
+      if (index >= 0) rowVirtualizer.scrollToIndex(index)
     },
-    [activeRowIndex, itemRowIndexes, rowVirtualizer]
+    [activeItemIndex, rowVirtualizer, selectableIndexes]
   )
   const handleSearchKeyDown = React.useCallback(
     (event: React.KeyboardEvent<HTMLInputElement>) => {
@@ -184,14 +185,21 @@ export const InstancePickerContent = React.memo(function InstancePickerContent({
       }
       if (event.key !== "Enter") return
       // Without an arrow-key selection, Enter picks the first search result.
-      const row =
-        rows[activeRowIndex] ??
-        (query ? rows[itemRowIndexes[0] ?? -1] : undefined)
-      if (row?.type !== "item" || row.item.disabled) return
+      const item =
+        visibleItems[activeItemIndex] ??
+        (query ? visibleItems[selectableIndexes[0] ?? -1] : undefined)
+      if (!item || item.disabled) return
       event.preventDefault()
-      onSelect(row.item)
+      onSelect(item)
     },
-    [activeRowIndex, itemRowIndexes, moveActive, onSelect, query, rows]
+    [
+      activeItemIndex,
+      moveActive,
+      onSelect,
+      query,
+      selectableIndexes,
+      visibleItems,
+    ]
   )
   const handleSearchChange = React.useCallback(
     (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -205,9 +213,11 @@ export const InstancePickerContent = React.memo(function InstancePickerContent({
     () => visibleItems.flatMap((item) => (item.disabled ? [] : [item.key])),
     [visibleItems]
   )
-  const showBulkBar = multiple && onSelectMany !== undefined
-  const showHeaderBulk = showBulkBar && rows[0]?.type === "header"
-  const activeOption = rows[activeRowIndex]
+  const activeKind =
+    activeTypeFilters.length === 1
+      ? (activeTypeFilters[0]?.id as InstancePickerKind)
+      : undefined
+  const activeItem = visibleItems[activeItemIndex]
 
   return (
     <>
@@ -225,8 +235,8 @@ export const InstancePickerContent = React.memo(function InstancePickerContent({
             aria-controls={listId}
             aria-expanded="true"
             aria-activedescendant={
-              activeOption?.type === "item"
-                ? instancePickerOptionId(listId, activeOption.item.key)
+              activeItem
+                ? instancePickerOptionId(listId, activeItem.key)
                 : undefined
             }
             value={search}
@@ -237,21 +247,30 @@ export const InstancePickerContent = React.memo(function InstancePickerContent({
             className="h-8 bg-input/14 pr-2 pl-8 text-sm"
           />
         </div>
-        {availableFilters.length > 0 ? (
-          <InstancePickerFilterMenu
-            activeFilters={activeFilters}
-            availableFilters={availableFilters}
-            items={items}
-            onClear={clearFilters}
+        <InstancePickerToolButton
+          active={favoritesOnly}
+          label="Show favorites only"
+          onClick={toggleFavorites}
+        >
+          <Star
+            className={cn("size-3.5", favoritesOnly && "fill-current")}
+            aria-hidden="true"
+          />
+        </InstancePickerToolButton>
+        {typeFilters.length > 0 ? (
+          <InstancePickerTypeMenu
+            activeFilters={activeTypeFilters}
+            filters={typeFilters}
+            onShowAll={showAllTypes}
             onToggle={toggleFilter}
           />
         ) : null}
       </div>
-      {showBulkBar ? (
+      {multiple && onSelectMany ? (
         <InstancePickerBulkBar
           itemKeys={selectableVisibleKeys}
+          kind={activeKind}
           selectedKeys={selectedKeys}
-          totalCount={items.length}
           onSelectMany={onSelectMany}
         />
       ) : null}
@@ -260,7 +279,7 @@ export const InstancePickerContent = React.memo(function InstancePickerContent({
           <InstancePickerAllRow option={allOption} />
         </div>
       ) : null}
-      {rows.length > 0 ? (
+      {visibleItems.length > 0 ? (
         <div
           ref={scrollElementRef}
           id={listId}
@@ -274,42 +293,29 @@ export const InstancePickerContent = React.memo(function InstancePickerContent({
             style={{ height: `${rowVirtualizer.getTotalSize()}px` }}
           >
             {rowVirtualizer.getVirtualItems().map((virtualRow) => {
-              const row = rows[virtualRow.index]
-              if (!row) return null
-              const next = rows[virtualRow.index + 1]
+              const item = visibleItems[virtualRow.index]
+              if (!item) return null
               return (
                 <div
                   key={virtualRow.key}
                   ref={rowVirtualizer.measureElement}
                   className={cn(
-                    "absolute top-0 left-0 w-full",
-                    row.type === "item" && next?.type === "item"
-                      ? "border-b border-border/50 pb-0.5"
-                      : row.type === "item"
-                        ? "pb-0.5"
-                        : ""
+                    "absolute top-0 left-0 w-full pb-0.5",
+                    virtualRow.index < visibleItems.length - 1 &&
+                      "border-b border-border/50"
                   )}
                   data-index={virtualRow.index}
                   style={{ transform: `translateY(${virtualRow.start}px)` }}
                 >
-                  {row.type === "header" ? (
-                    <InstancePickerGroupHeader
-                      groupKind={row.kind}
-                      items={visibleItems}
-                      label={row.label}
-                      selectedKeys={selectedKeys}
-                      onSelectMany={showHeaderBulk ? onSelectMany : undefined}
-                    />
-                  ) : (
-                    <InstancePickerRowButton
-                      active={virtualRow.index === activeRowIndex}
-                      id={instancePickerOptionId(listId, row.item.key)}
-                      item={row.item}
-                      multiple={multiple}
-                      selected={selectedKeys.has(row.item.key)}
-                      onSelect={onSelect}
-                    />
-                  )}
+                  <InstancePickerRowButton
+                    active={virtualRow.index === activeItemIndex}
+                    id={instancePickerOptionId(listId, item.key)}
+                    item={item}
+                    multiple={multiple}
+                    selected={selectedKeys.has(item.key)}
+                    showKind={showKind}
+                    onSelect={onSelect}
+                  />
                 </div>
               )
             })}
@@ -317,15 +323,16 @@ export const InstancePickerContent = React.memo(function InstancePickerContent({
         </div>
       ) : (
         <InstancePickerEmptyState
+          favoritesOnly={favoritesOnly}
           filtered={activeFilters.length > 0 && items.length > 0}
           message={items.length === 0 ? emptyMessage : undefined}
           searching={query.length > 0}
-          onClearFilters={clearFilters}
+          onClearFilters={favoritesOnly ? toggleFavorites : clearFilters}
         />
       )}
       {viewAll ? (
         <InstancePickerViewAll
-          activeFilters={activeFilters}
+          activeKind={activeKind}
           items={items}
           search={search.trim()}
           onNavigate={onNavigate}
@@ -365,28 +372,6 @@ function useInstancePickerFilterIds() {
   return { filterIds, setFilterIds }
 }
 
-function instancePickerRows(
-  items: ReadonlyArray<InstancePickerItem>
-): Array<InstancePickerRow> {
-  const groups = new Map<InstancePickerKind, Array<InstancePickerItem>>()
-  for (const item of items) {
-    const group = groups.get(item.identity.kind)
-    if (group) group.push(item)
-    else groups.set(item.identity.kind, [item])
-  }
-  if (groups.size < 2) {
-    return items.map((item) => ({ item, type: "item" }))
-  }
-  const rows: Array<InstancePickerRow> = []
-  for (const kind of kindOrder) {
-    const group = groups.get(kind)
-    if (!group) continue
-    rows.push({ kind, label: kindLabels[kind], type: "header" })
-    for (const item of group) rows.push({ item, type: "item" })
-  }
-  return rows
-}
-
 function matchesInstancePickerSearch(
   item: InstancePickerItem,
   query: string
@@ -400,33 +385,47 @@ function instancePickerOptionId(listId: string, key: string) {
   return `${listId}-${key.replace(/[^\w-]/g, "_")}`
 }
 
-const InstancePickerFilterMenu = React.memo(function InstancePickerFilterMenu({
+const toolButtonClassName =
+  "relative grid size-8 shrink-0 place-items-center rounded-md border border-border/70 text-muted-foreground transition-colors outline-none hover:bg-muted/55 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/40 data-[state=open]:bg-muted/55 data-[state=open]:text-foreground"
+const activeToolButtonClassName = "border-primary/45 bg-primary/8 text-primary"
+
+const InstancePickerToolButton = React.memo(function InstancePickerToolButton({
+  active,
+  children,
+  label,
+  onClick,
+}: {
+  active: boolean
+  children: React.ReactNode
+  label: string
+  onClick: () => void
+}) {
+  return (
+    <button
+      type="button"
+      aria-label={label}
+      aria-pressed={active}
+      title={label}
+      className={cn(toolButtonClassName, active && activeToolButtonClassName)}
+      onClick={onClick}
+    >
+      {children}
+    </button>
+  )
+})
+
+const InstancePickerTypeMenu = React.memo(function InstancePickerTypeMenu({
   activeFilters,
-  availableFilters,
-  items,
-  onClear,
+  filters,
+  onShowAll,
   onToggle,
 }: {
   activeFilters: ReadonlyArray<InstancePickerFilter>
-  availableFilters: ReadonlyArray<InstancePickerFilter>
-  items: ReadonlyArray<InstancePickerItem>
-  onClear: () => void
+  filters: ReadonlyArray<InstancePickerFilter>
+  onShowAll: () => void
   onToggle: (filterId: string, checked: boolean) => void
 }) {
-  const activeCount = activeFilters.length
-  const counts = React.useMemo(
-    () =>
-      new Map(
-        availableFilters.map((filter) => [
-          filter.id,
-          items.reduce(
-            (count, item) => (filter.matches(item) ? count + 1 : count),
-            0
-          ),
-        ])
-      ),
-    [availableFilters, items]
-  )
+  const filtered = activeFilters.length > 0
 
   return (
     <DropdownMenu modal={false}>
@@ -434,71 +433,50 @@ const InstancePickerFilterMenu = React.memo(function InstancePickerFilterMenu({
         <button
           type="button"
           aria-label={
-            activeCount > 0
-              ? `Filter instances, ${activeCount} active`
-              : "Filter instances"
+            filtered
+              ? `Filter by type, showing ${activeFilters
+                  .map((filter) => filter.label.toLocaleLowerCase())
+                  .join(" and ")}`
+              : "Filter by type"
           }
+          title="Filter by type"
           className={cn(
-            "relative grid size-8 shrink-0 place-items-center rounded-md border text-muted-foreground transition-colors outline-none hover:bg-muted/55 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/40 data-[state=open]:bg-muted/55 data-[state=open]:text-foreground",
-            activeCount > 0
-              ? "border-primary/45 bg-primary/8 text-foreground"
-              : "border-border/70"
+            toolButtonClassName,
+            filtered && activeToolButtonClassName
           )}
         >
           <ListFilter className="size-3.5" aria-hidden="true" />
-          {activeCount > 0 ? (
-            <span className="absolute -top-1.5 -right-1.5 grid h-4 min-w-4 place-items-center rounded-full bg-primary px-1 text-[0.625rem] leading-none font-semibold text-primary-foreground">
-              {activeCount}
-            </span>
-          ) : null}
         </button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="z-[80] w-48">
-        {instancePickerFilterGroups.map((group, index) => {
-          const filters = availableFilters.filter(
-            (filter) => filter.group === group.id
-          )
-          if (filters.length === 0) return null
+      <DropdownMenuContent align="end" className="z-[80] w-44 p-1">
+        {filters.map((filter) => {
+          const { Icon } = kindPresentation[filter.id as InstancePickerKind]
           return (
-            <React.Fragment key={group.id}>
-              {index > 0 &&
-              availableFilters.some(
-                (filter) =>
-                  filter.group === instancePickerFilterGroups[index - 1]?.id
-              ) ? (
-                <DropdownMenuSeparator />
-              ) : null}
-              <DropdownMenuGroup>
-                <DropdownMenuLabel className="type-technical-label text-muted-foreground">
-                  {group.label}
-                </DropdownMenuLabel>
-                {filters.map((filter) => (
-                  <DropdownMenuCheckboxItem
-                    key={filter.id}
-                    checked={activeFilters.includes(filter)}
-                    onCheckedChange={(checked) =>
-                      onToggle(filter.id, checked === true)
-                    }
-                    onSelect={(event) => event.preventDefault()}
-                  >
-                    <span className="flex-1">{filter.label}</span>
-                    <span className="type-meta font-mono text-muted-foreground">
-                      {counts.get(filter.id) ?? 0}
-                    </span>
-                  </DropdownMenuCheckboxItem>
-                ))}
-              </DropdownMenuGroup>
-            </React.Fragment>
+            <DropdownMenuCheckboxItem
+              key={filter.id}
+              checked={activeFilters.includes(filter)}
+              className="gap-2 py-1.5"
+              onCheckedChange={(checked) =>
+                onToggle(filter.id, checked === true)
+              }
+              onSelect={(event) => event.preventDefault()}
+            >
+              <Icon
+                className="size-3.5 text-muted-foreground"
+                aria-hidden="true"
+              />
+              {filter.label}
+            </DropdownMenuCheckboxItem>
           )
         })}
-        {activeCount > 0 ? (
+        {filtered ? (
           <>
             <DropdownMenuSeparator />
             <DropdownMenuItem
-              className="text-muted-foreground"
-              onSelect={onClear}
+              className="py-1.5 text-muted-foreground"
+              onSelect={onShowAll}
             >
-              Clear filters
+              Show all types
             </DropdownMenuItem>
           </>
         ) : null}
@@ -509,14 +487,14 @@ const InstancePickerFilterMenu = React.memo(function InstancePickerFilterMenu({
 
 const InstancePickerBulkBar = React.memo(function InstancePickerBulkBar({
   itemKeys,
+  kind,
   onSelectMany,
   selectedKeys,
-  totalCount,
 }: {
   itemKeys: ReadonlyArray<string>
+  kind?: InstancePickerKind
   onSelectMany: (keys: ReadonlyArray<string>, selected: boolean) => void
   selectedKeys: ReadonlySet<string>
-  totalCount: number
 }) {
   const selectedVisible = itemKeys.filter((key) => selectedKeys.has(key)).length
   const state =
@@ -527,30 +505,27 @@ const InstancePickerBulkBar = React.memo(function InstancePickerBulkBar({
         : "some"
 
   return (
-    <div className="flex items-center gap-2 border-b border-border/70 px-3.5 py-2">
+    <div className="flex items-center gap-2 border-b border-border/70 px-2 py-1.5">
       <button
         type="button"
         role="checkbox"
         aria-checked={
           state === "all" ? true : state === "some" ? "mixed" : false
         }
-        aria-label="Select all shown instances"
         disabled={itemKeys.length === 0}
-        className="rounded-sm outline-none focus-visible:ring-2 focus-visible:ring-ring/40 disabled:opacity-50"
+        className="type-control-sm flex items-center gap-2 rounded-md px-2 py-1 text-left outline-none hover:bg-popover-accent focus-visible:ring-2 focus-visible:ring-ring/40 disabled:opacity-50"
         onClick={() => onSelectMany(itemKeys, state !== "all")}
       >
         <InstancePickerCheckbox state={state} />
+        Select all {kind ? kindPresentation[kind].plural : "shown"}
       </button>
-      <span className="type-meta text-muted-foreground">
-        <span className="font-semibold text-foreground">
-          {selectedKeys.size}
-        </span>{" "}
-        of {totalCount} selected
+      <span className="type-meta ml-auto text-muted-foreground">
+        {selectedKeys.size} selected
       </span>
       {selectedKeys.size > 0 ? (
         <button
           type="button"
-          className="type-meta ml-auto text-muted-foreground underline-offset-2 outline-none hover:text-foreground hover:underline focus-visible:underline"
+          className="type-meta mr-1.5 text-muted-foreground underline-offset-2 outline-none hover:text-foreground hover:underline focus-visible:underline"
           onClick={() => onSelectMany(Array.from(selectedKeys), false)}
         >
           Clear
@@ -560,50 +535,6 @@ const InstancePickerBulkBar = React.memo(function InstancePickerBulkBar({
   )
 })
 
-const InstancePickerGroupHeader = React.memo(
-  function InstancePickerGroupHeader({
-    groupKind,
-    items,
-    label,
-    onSelectMany,
-    selectedKeys,
-  }: {
-    groupKind: InstancePickerKind
-    items: ReadonlyArray<InstancePickerItem>
-    label: string
-    onSelectMany?: (keys: ReadonlyArray<string>, selected: boolean) => void
-    selectedKeys: ReadonlySet<string>
-  }) {
-    const groupItems = items.filter((item) => item.identity.kind === groupKind)
-    const selectableKeys = groupItems.flatMap((item) =>
-      item.disabled ? [] : [item.key]
-    )
-    const allSelected =
-      selectableKeys.length > 0 &&
-      selectableKeys.every((key) => selectedKeys.has(key))
-
-    return (
-      <div className="flex h-7 items-center justify-between px-2 pt-1.5">
-        <span className="type-technical-label flex items-center gap-1.5 text-muted-foreground">
-          {label}
-          <span className="font-mono tracking-normal opacity-70">
-            {groupItems.length}
-          </span>
-        </span>
-        {onSelectMany && selectableKeys.length > 0 ? (
-          <button
-            type="button"
-            className="type-meta text-muted-foreground underline-offset-2 outline-none hover:text-foreground hover:underline focus-visible:underline"
-            onClick={() => onSelectMany(selectableKeys, !allSelected)}
-          >
-            {allSelected ? "Deselect all" : "Select all"}
-          </button>
-        ) : null}
-      </div>
-    )
-  }
-)
-
 const InstancePickerRowButton = React.memo(function InstancePickerRowButton({
   active,
   id,
@@ -611,6 +542,7 @@ const InstancePickerRowButton = React.memo(function InstancePickerRowButton({
   multiple,
   onSelect,
   selected,
+  showKind,
 }: {
   active: boolean
   id: string
@@ -618,7 +550,10 @@ const InstancePickerRowButton = React.memo(function InstancePickerRowButton({
   multiple: boolean
   onSelect: (item: InstancePickerItem) => void
   selected: boolean
+  showKind: boolean
 }) {
+  const kind = kindPresentation[item.identity.kind]
+
   return (
     <button
       type="button"
@@ -649,6 +584,12 @@ const InstancePickerRowButton = React.memo(function InstancePickerRowButton({
         nameClassName="type-control-sm"
         statusClassName="ring-popover"
       />
+      {showKind ? (
+        <span className="shrink-0 text-muted-foreground/70">
+          <kind.Icon className="size-3.5" aria-hidden="true" />
+          <span className="sr-only">{kind.label}</span>
+        </span>
+      ) : null}
       {selected && !multiple ? (
         <Check className="size-4 shrink-0 text-primary" aria-hidden="true" />
       ) : null}
@@ -711,11 +652,13 @@ const InstancePickerAllRow = React.memo(function InstancePickerAllRow({
 })
 
 function InstancePickerEmptyState({
+  favoritesOnly,
   filtered,
   message,
   onClearFilters,
   searching,
 }: {
+  favoritesOnly: boolean
   filtered: boolean
   message?: string
   onClearFilters: () => void
@@ -727,7 +670,9 @@ function InstancePickerEmptyState({
         {message ??
           (searching
             ? "Nothing matches your search"
-            : "Nothing matches these filters")}
+            : favoritesOnly
+              ? "No favorites yet"
+              : "Nothing matches these filters")}
       </p>
       {filtered ? (
         <button
@@ -735,11 +680,11 @@ function InstancePickerEmptyState({
           className="type-meta mt-1 text-muted-foreground underline underline-offset-2 outline-none hover:text-foreground"
           onClick={onClearFilters}
         >
-          Clear filters
+          {favoritesOnly ? "Show everything" : "Clear filters"}
         </button>
       ) : message === undefined ? (
         <p className="type-meta mt-1 text-muted-foreground">
-          Try a name, version, ID, or status.
+          Try a name, version, or ID.
         </p>
       ) : null}
     </div>
@@ -747,36 +692,25 @@ function InstancePickerEmptyState({
 }
 
 const viewAllDestinations = {
-  database: {
-    Icon: Database,
-    label: "View all databases",
-    to: "/infra/databases",
-  },
-  relay: { Icon: RadioTower, label: "View all Relays", to: "/infra/relays" },
-  server: { Icon: ServerIcon, label: "View all servers", to: "/infra/servers" },
+  database: { label: "View all databases", to: "/infra/databases" },
+  relay: { label: "View all Relays", to: "/infra/relays" },
+  server: { label: "View all servers", to: "/infra/servers" },
 } as const
 
 const InstancePickerViewAll = React.memo(function InstancePickerViewAll({
-  activeFilters,
+  activeKind,
   items,
   onNavigate,
   search,
 }: {
-  activeFilters: ReadonlyArray<InstancePickerFilter>
+  activeKind?: InstancePickerKind
   items: ReadonlyArray<InstancePickerItem>
   onNavigate?: () => void
   search: string
 }) {
-  const activeKinds = activeFilters.flatMap((filter) =>
-    filter.group === "type" ? [filter.id as InstancePickerKind] : []
-  )
-  const kind =
-    activeKinds.length === 1
-      ? activeKinds[0]
-      : kindOrder.find((candidate) =>
-          items.some((item) => item.identity.kind === candidate)
-        )
-  const destination = viewAllDestinations[kind ?? "server"]
+  const kind = activeKind ?? items[0]?.identity.kind ?? "server"
+  const destination = viewAllDestinations[kind]
+  const { Icon } = kindPresentation[kind]
 
   return (
     <div className="border-t border-border/70 p-1.5">
@@ -786,10 +720,7 @@ const InstancePickerViewAll = React.memo(function InstancePickerViewAll({
         onClick={onNavigate}
         className="type-control-sm group flex h-9 w-full items-center gap-2 rounded-md bg-muted/45 px-2.5 text-foreground transition-colors outline-none hover:bg-muted/70 focus-visible:ring-2 focus-visible:ring-ring/40"
       >
-        <destination.Icon
-          className="size-3.5 text-muted-foreground"
-          aria-hidden="true"
-        />
+        <Icon className="size-3.5 text-muted-foreground" aria-hidden="true" />
         <span>{destination.label}</span>
         <ArrowRight
           className="ml-auto size-3.5 text-muted-foreground transition-transform duration-150 group-hover:translate-x-0.5 group-focus-visible:translate-x-0.5"

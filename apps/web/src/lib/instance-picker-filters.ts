@@ -6,17 +6,17 @@ export type InstancePickerKind = InstanceNameInstance["kind"]
 
 export interface InstancePickerItem {
   disabled?: boolean
+  /** Reserved for user favorites; nothing sets it yet. */
+  favorite?: boolean
   identity: InstanceNameInstance
   key: string
   meta: string
   name: string
-  /** Undefined when the caller has no reliable runtime state for the item. */
-  online?: boolean
   /** Extra text matched by search, such as IDs or versions. */
   searchText?: string
 }
 
-export type InstancePickerFilterGroup = "state" | "type"
+export type InstancePickerFilterGroup = "favorite" | "type"
 
 export interface InstancePickerFilter {
   group: InstancePickerFilterGroup
@@ -25,9 +25,16 @@ export interface InstancePickerFilter {
   matches: (item: InstancePickerItem) => boolean
 }
 
+export const favoriteInstancePickerFilter: InstancePickerFilter = {
+  group: "favorite",
+  id: "favorite",
+  label: "Favorites",
+  matches: (item) => item.favorite === true,
+}
+
 /**
- * Every filter the picker can offer. New flags (favorites, tags, …) are added
- * here; the picker only shows a filter when at least one item can match it.
+ * Every filter the picker can offer. New flags are added here; type filters
+ * only appear when a picker mixes instance types.
  */
 export const instancePickerFilters: ReadonlyArray<InstancePickerFilter> = [
   {
@@ -48,20 +55,7 @@ export const instancePickerFilters: ReadonlyArray<InstancePickerFilter> = [
     label: "Relays",
     matches: (item) => item.identity.kind === "relay",
   },
-  {
-    group: "state",
-    id: "online",
-    label: "Online",
-    matches: (item) => item.online === true,
-  },
-]
-
-export const instancePickerFilterGroups: ReadonlyArray<{
-  id: InstancePickerFilterGroup
-  label: string
-}> = [
-  { id: "type", label: "Type" },
-  { id: "state", label: "Show" },
+  favoriteInstancePickerFilter,
 ]
 
 export const defaultInstancePickerFilterIds: ReadonlyArray<string> = ["server"]
@@ -71,18 +65,15 @@ export function availableInstancePickerFilters(
   items: ReadonlyArray<InstancePickerItem>
 ): ReadonlyArray<InstancePickerFilter> {
   const kinds = new Set(items.map((item) => item.identity.kind))
-  const hasRuntimeState = items.some((item) => item.online !== undefined)
-  return instancePickerFilters.filter((filter) => {
-    if (filter.group === "type") {
-      return kinds.size > 1 && items.some(filter.matches)
-    }
-    return hasRuntimeState
-  })
+  return instancePickerFilters.filter(
+    (filter) =>
+      filter.group !== "type" || (kinds.size > 1 && items.some(filter.matches))
+  )
 }
 
 /**
  * Filters combine with OR inside a group and AND across groups, so
- * "Servers + Databases + Online" means running servers or databases.
+ * "Servers + Databases + Favorites" means favorite servers or databases.
  */
 export function filterInstancePickerItems<T extends InstancePickerItem>(
   items: ReadonlyArray<T>,

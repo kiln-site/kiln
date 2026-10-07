@@ -61,15 +61,11 @@ import { clearAppearanceCache } from "@/lib/appearance"
 import {
   accessCapabilitiesQueryOptions,
   managedDatabaseDirectoryQueryOptions,
-  managedDatabasesQueryOptions,
   relayConnectionQueryOptions,
   relaySnapshotQueryOptions,
 } from "@/lib/query-options"
 import { disableDevelopmentBypass } from "@/server/auth"
-import type {
-  getManagedDatabaseDirectory,
-  getManagedDatabases,
-} from "@/server/databases"
+import type { getManagedDatabaseDirectory } from "@/server/databases"
 import type { RelayFleetSnapshot } from "@/lib/relay-fleet"
 import {
   findFirstCanonicalRelayInstance,
@@ -484,12 +480,15 @@ const ServerSelector = React.memo(function ServerSelector({
       if (item.identity.kind === "database") {
         void navigate({
           to: "/infra/databases",
-          search: { search: item.name },
+          search: { search: item.identity.id },
         })
         return
       }
       if (item.identity.kind === "relay") {
-        void navigate({ to: "/infra/relays", search: { search: item.name } })
+        void navigate({
+          to: "/infra/relays",
+          search: { search: item.identity.relayId },
+        })
         return
       }
       const snapshot = queryClient.getQueryData(
@@ -620,50 +619,31 @@ const SidebarInstancePicker = React.memo(function SidebarInstancePicker({
   const showRelays = destinations.some(
     (destination) => destination.to === "/infra/relays"
   )
-  const selectFleetItems = React.useCallback(
-    (snapshot: RelayFleetSnapshot) =>
-      sidebarFleetPickerItems(snapshot, showRelays),
-    [showRelays]
-  )
-  const { data: fleetItems = emptyPickerItems } = useQuery({
+  const { data: serverItems = emptyPickerItems } = useQuery({
     ...relaySnapshotQueryOptions(),
-    select: selectFleetItems,
+    select: selectSidebarServerPickerItems,
   })
-  const { data: databaseDirectory = emptyDatabaseDirectory } = useQuery({
+  const { data: relayItems = emptyPickerItems } = useQuery({
+    ...relaySnapshotQueryOptions(),
+    enabled: showRelays,
+    select: selectSidebarRelayPickerItems,
+  })
+  const { data: databaseItems = emptyPickerItems } = useQuery({
     ...managedDatabaseDirectoryQueryOptions(),
     enabled: showDatabases,
+    select: selectSidebarDatabasePickerItems,
   })
-  // Runtime state comes from the Relay inventory, which only loads when there
-  // is a database to describe.
-  const { data: databaseStates } = useQuery({
-    ...managedDatabasesQueryOptions(),
-    enabled: showDatabases && databaseDirectory.length > 0,
-    select: selectDatabaseStates,
-  })
-  const items = React.useMemo(() => {
-    if (!showDatabases || databaseDirectory.length === 0) return fleetItems
-    const databaseItems = databaseDirectory.map(
-      (database): InstancePickerItem => {
-        const state = databaseStates?.get(`${database.relayId}:${database.id}`)
-        return {
-          identity: {
-            id: database.id,
-            kind: "database",
-            observedState: state?.observedState,
-            relayId: database.relayId,
-          },
-          key: sidebarPickerKey("database", database.relayId, database.id),
-          meta: state
-            ? `${state.engine} · ${state.shortId}`
-            : database.relayName,
-          name: database.name,
-          online: state ? state.observedState === "running" : undefined,
-          searchText: `${database.id} ${database.relayName} ${state?.observedState ?? ""}`,
-        }
-      }
-    )
-    return [...fleetItems, ...databaseItems]
-  }, [databaseDirectory, databaseStates, fleetItems, showDatabases])
+  const items = React.useMemo(
+    () =>
+      databaseItems.length === 0 && relayItems.length === 0
+        ? serverItems
+        : [
+            ...serverItems,
+            ...(showDatabases ? databaseItems : emptyPickerItems),
+            ...(showRelays ? relayItems : emptyPickerItems),
+          ],
+    [databaseItems, relayItems, serverItems, showDatabases, showRelays]
+  )
 
   return (
     <InstancePickerContent
@@ -679,9 +659,6 @@ const SidebarInstancePicker = React.memo(function SidebarInstancePicker({
 })
 
 const emptyPickerItems: Array<InstancePickerItem> = []
-const emptyDatabaseDirectory: Awaited<
-  ReturnType<typeof getManagedDatabaseDirectory>
-> = []
 
 function sidebarPickerKey(
   kind: InstancePickerItem["identity"]["kind"],
@@ -691,61 +668,54 @@ function sidebarPickerKey(
   return `${kind}:${relayId}:${id}`
 }
 
-function sidebarFleetPickerItems(
-  snapshot: RelayFleetSnapshot,
-  includeRelays: boolean
+function selectSidebarServerPickerItems(
+  snapshot: RelayFleetSnapshot
 ): Array<InstancePickerItem> {
-  const items = selectSidebarInstances(snapshot).map(
-    (instance): InstancePickerItem => ({
-      identity: {
-        brickId: instance.brickId,
-        brickSource: instance.brickSource,
-        id: instance.id,
-        implementation: instance.implementation,
-        kind: "server",
-        observedState: instance.observedState,
-        relayId: instance.relayId,
-      },
-      key: sidebarPickerKey("server", instance.relayId, instance.id),
-      meta: `${instance.implementation} ${instance.version} · ${instance.shortId}`,
-      name: instance.name,
-      online: instance.observedState === "running",
-      searchText: `${instance.routeId} ${instance.relayName} ${instance.observedState}`,
-    })
-  )
-  if (!includeRelays) return items
-  for (const node of snapshot.nodes) {
-    items.push({
-      identity: {
-        id: node.relayId,
-        kind: "relay",
-        relayId: node.relayId,
-        relayStatus: node.relayStatus,
-        source: "fleet",
-      },
-      key: sidebarPickerKey("relay", node.relayId, node.relayId),
-      meta: `Relay ${node.version}`,
-      name: node.relayName,
-      online: node.relayStatus === "connected",
-      searchText: node.relayId,
-    })
-  }
-  return items
+  return selectSidebarInstances(snapshot).map((instance) => ({
+    identity: {
+      brickId: instance.brickId,
+      brickSource: instance.brickSource,
+      id: instance.id,
+      implementation: instance.implementation,
+      kind: "server",
+      observedState: instance.observedState,
+      relayId: instance.relayId,
+    },
+    key: sidebarPickerKey("server", instance.relayId, instance.id),
+    meta: `${instance.implementation} ${instance.version} · ${instance.shortId}`,
+    name: instance.name,
+    searchText: `${instance.routeId} ${instance.relayName} ${instance.observedState}`,
+  }))
 }
 
-function selectDatabaseStates(
-  overview: Awaited<ReturnType<typeof getManagedDatabases>>
-) {
-  return new Map(
-    overview.databases.map((database) => [
-      `${database.relayId}:${database.id}`,
-      {
-        engine: database.engine,
-        observedState: database.observedState,
-        shortId: database.shortId,
-      },
-    ])
-  )
+function selectSidebarRelayPickerItems(
+  snapshot: RelayFleetSnapshot
+): Array<InstancePickerItem> {
+  return snapshot.nodes.map((node) => ({
+    identity: {
+      id: node.relayId,
+      kind: "relay",
+      relayId: node.relayId,
+      relayStatus: node.relayStatus,
+      source: "fleet",
+    },
+    key: sidebarPickerKey("relay", node.relayId, node.relayId),
+    meta: `${node.arch} · ${node.version}`,
+    name: node.relayName,
+    searchText: node.relayId,
+  }))
+}
+
+function selectSidebarDatabasePickerItems(
+  databases: Awaited<ReturnType<typeof getManagedDatabaseDirectory>>
+): Array<InstancePickerItem> {
+  return databases.map((database) => ({
+    identity: { id: database.id, kind: "database", relayId: database.relayId },
+    key: sidebarPickerKey("database", database.relayId, database.id),
+    meta: `${database.relayName} · ${database.id.slice(0, 8)}`,
+    name: database.name,
+    searchText: database.id,
+  }))
 }
 
 const InstanceTabNavigation = React.memo(function InstanceTabNavigation({
