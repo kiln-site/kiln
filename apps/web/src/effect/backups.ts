@@ -156,11 +156,14 @@ export interface BackupCatalogPageInput {
   direction: "asc" | "desc"
   isAdmin: boolean
   limit: number
-  scope: {
-    kind: "database" | "instance" | "platform"
-    relayId: string
-    targetId: string
-  } | null
+  scope:
+    | {
+        kind: "database" | "instance" | "platform"
+        relayId: string
+        targetId: string
+      }
+    | { kind: "database" | "instance" | "platform" }
+    | null
   search: string
   sort: "createdAt" | "name" | "size" | "target"
   status: "active" | "available" | "failed" | null
@@ -1416,11 +1419,15 @@ export const listBackupCatalogPageEffect = Effect.fn("backups.page")(function* (
     values.push(input.backupId)
   }
   if (input.scope) {
-    clauses.push("backup.relay_id = ?", "backup.target_kind = ?")
-    values.push(input.scope.relayId, input.scope.kind)
-    if (input.scope.kind !== "platform") {
-      clauses.push("backup.target_id = ?")
-      values.push(input.scope.targetId)
+    clauses.push("backup.target_kind = ?")
+    values.push(input.scope.kind)
+    if ("relayId" in input.scope) {
+      clauses.push("backup.relay_id = ?")
+      values.push(input.scope.relayId)
+      if (input.scope.kind !== "platform") {
+        clauses.push("backup.target_id = ?")
+        values.push(input.scope.targetId)
+      }
     }
   }
   if (input.search) {
@@ -1451,11 +1458,7 @@ export const listBackupCatalogPageEffect = Effect.fn("backups.page")(function* (
   const order = backupCatalogOrder(input.sort)
   if (input.cursor) {
     clauses.push(
-      backupCatalogCursorClause(
-        order.sql,
-        input.direction,
-        input.cursor.value
-      )
+      backupCatalogCursorClause(order.sql, input.direction, input.cursor.value)
     )
     if (input.cursor.value === null) {
       values.push(input.cursor.id)

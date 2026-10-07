@@ -97,7 +97,6 @@ import {
   useWorkspaceTableSearchInput,
 } from "@/components/workspace-table"
 import type { WorkspaceTableSearchStore } from "@/components/workspace-table"
-import { type ServerPickerOption } from "@/components/server-picker-list"
 import {
   BackupConfigurationDialog,
   type BackupConfigurationTarget,
@@ -107,7 +106,10 @@ import {
   InstancePickerContent,
   type InstancePickerItem,
 } from "@/components/instance-picker"
-import { useScheduleScope } from "@/components/schedule-scope"
+import {
+  useScheduleScope,
+  type ScheduleScope,
+} from "@/components/schedule-scope"
 import { forkPromise } from "@/effect/promise"
 import { scheduleBackupDestination } from "@/lib/schedule-backup-configuration"
 import {
@@ -354,7 +356,7 @@ const ScheduleTable = React.memo(function ScheduleTable({
   canCreate: boolean
   optionMap: ReadonlyMap<string, ScheduleOption>
   schedules: Array<Schedule>
-  scope: ServerPickerOption | null
+  scope: ScheduleScope | null
   searchStore: WorkspaceTableSearchStore
   onCreate: () => void
   onDelete: (schedule: Schedule) => void
@@ -437,7 +439,7 @@ const ScheduleTableRow = React.memo(function ScheduleTableRow({
 }: {
   optionMap: ReadonlyMap<string, ScheduleOption>
   schedule: Schedule
-  scope: ServerPickerOption | null
+  scope: ScheduleScope | null
   onDelete: (schedule: Schedule) => void
   onEdit: (schedule: Schedule) => void
   onViewHistory: (schedule: Schedule) => void
@@ -823,14 +825,14 @@ function EmptyScheduleTable({
         {searchActive
           ? "No schedules match your search"
           : scopeActive
-            ? "No schedules for this instance"
+            ? "No schedules in this scope"
             : "No schedules yet"}
       </p>
       <p className="type-support mt-1 max-w-sm text-muted-foreground">
         {searchActive
           ? "Try a schedule name, cron expression, action, or target."
           : scopeActive
-            ? "Choose another instance or create a schedule for this target."
+            ? "Choose another scope or create a schedule for it."
             : "Create Relay-owned automation that keeps running when Hearth is offline."}
       </p>
       {!searchActive && canCreate ? (
@@ -947,7 +949,7 @@ type ScheduleHistoryRun = Schedule["runs"][number] & {
 
 function scheduleHistoryRuns(
   schedules: ReadonlyArray<Schedule>,
-  scope: ServerPickerOption | null,
+  scope: ScheduleScope | null,
   scheduleId: string | undefined
 ): Array<ScheduleHistoryRun> {
   const runs: Array<ScheduleHistoryRun> = []
@@ -1046,12 +1048,12 @@ const ScheduleHistoryTable = React.memo(function ScheduleHistoryTable({
           {searchActive
             ? "No runs match your search"
             : scopeActive
-              ? "No runs for this instance"
+              ? "No runs in this scope"
               : "No schedule runs yet"}
         </p>
         <p className="type-support mt-1 max-w-sm text-muted-foreground">
           {scopeActive && !searchActive
-            ? "Completed and attempted runs for this instance will appear here."
+            ? "Completed and attempted runs in this scope will appear here."
             : "Completed and attempted schedule runs will appear here."}
         </p>
       </div>
@@ -3203,7 +3205,7 @@ function scheduleRowKey(schedule: Schedule) {
 
 function scheduleMatchesScope(
   schedule: Pick<Schedule, "targets">,
-  scope: ServerPickerOption
+  scope: ScheduleScope
 ) {
   return schedule.targets.some((target) =>
     scheduleTargetMatchesScope(target, scope)
@@ -3212,10 +3214,11 @@ function scheduleMatchesScope(
 
 function scheduleTargetMatchesScope(
   target: ScheduleTarget,
-  scope: ServerPickerOption
+  scope: ScheduleScope
 ) {
   const scopeKind = scope.kind ?? "server"
   const kind = scopeKind === "server" ? "instance" : scopeKind
+  if (!("id" in scope)) return target.kind === kind
   return (
     target.kind === kind &&
     target.id === scope.id &&
@@ -3309,7 +3312,7 @@ function scheduleNextRun(schedule: Schedule) {
 
 function scheduleLastRun(
   schedule: Schedule,
-  scope: ServerPickerOption | null
+  scope: ScheduleScope | null
 ): ScheduleRunWithRelay | null {
   let latest: ScheduleRunWithRelay | null = null
   for (const run of schedule.runs) {

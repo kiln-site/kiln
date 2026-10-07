@@ -6,6 +6,7 @@ import {
   ArrowRight,
   Check,
   Database,
+  Layers,
   ListFilter,
   Minus,
   RadioTower,
@@ -43,16 +44,10 @@ import { accessCapabilitiesQueryOptions } from "@/lib/query-options"
 
 export type { InstancePickerItem } from "@/lib/instance-picker-filters"
 
-interface InstancePickerAllOption {
-  description: string
-  label: string
-  onSelect: () => void
-  selected: boolean
-}
+/** A whole type of instance, including ones added later. */
+export type InstancePickerGroup = "all" | InstancePickerKind
 
 interface InstancePickerContentProps {
-  /** Pinned "no scope" row for single-select pickers. Hidden while searching. */
-  allOption?: InstancePickerAllOption
   ariaLabel?: string
   emptyMessage?: string
   items: ReadonlyArray<InstancePickerItem>
@@ -61,8 +56,18 @@ interface InstancePickerContentProps {
   /** Called after the footer link navigates, usually to close the popover. */
   onNavigate?: () => void
   onSelect: (item: InstancePickerItem) => void
+  /**
+   * Enables the split "All servers | All databases | All Relays" row. Unlike
+   * selecting every row, a group also covers instances added later.
+   */
+  onSelectGroup?: (group: InstancePickerGroup) => void
   /** Enables the "Select all" bar in multi-select pickers. */
   onSelectMany?: (keys: ReadonlyArray<string>, selected: boolean) => void
+  /** Adds an "All instances" segment to the group row. */
+  includeAllGroup?: boolean
+  /** Adds "All servers", "All databases", and "All Relays" segments. */
+  includeKindGroups?: boolean
+  selectedGroups?: ReadonlySet<InstancePickerGroup>
   selectedKeys: ReadonlySet<string>
   /** Shows a "View all" footer that follows the active type filter. */
   viewAll?: boolean
@@ -77,15 +82,26 @@ const kindPresentation: Record<
   server: { Icon: ServerIcon, label: "Server", plural: "servers" },
 }
 
+const kindOrder: ReadonlyArray<InstancePickerKind> = [
+  "server",
+  "database",
+  "relay",
+]
+const emptyGroups: ReadonlySet<InstancePickerGroup> = new Set()
+const emptyGroupList: ReadonlyArray<InstancePickerGroup> = []
+
 export const InstancePickerContent = React.memo(function InstancePickerContent({
-  allOption,
   ariaLabel = "Instances",
   emptyMessage = "No instances found",
+  includeAllGroup = false,
+  includeKindGroups = true,
   items,
   multiple = false,
   onNavigate,
   onSelect,
+  onSelectGroup,
   onSelectMany,
+  selectedGroups = emptyGroups,
   selectedKeys,
   viewAll = false,
 }: InstancePickerContentProps) {
@@ -146,7 +162,15 @@ export const InstancePickerContent = React.memo(function InstancePickerContent({
     [filterIds, setFilterIds, typeFilters]
   )
   const clearFilters = React.useCallback(() => setFilterIds([]), [setFilterIds])
-  const showAllOption = allOption !== undefined && query.length === 0
+  const groups = React.useMemo(() => {
+    if (!onSelectGroup) return emptyGroupList
+    const kinds = includeKindGroups
+      ? kindOrder.filter((kind) =>
+          items.some((item) => item.identity.kind === kind)
+        )
+      : []
+    return includeAllGroup ? (["all", ...kinds] as const) : kinds
+  }, [includeAllGroup, includeKindGroups, items, onSelectGroup])
   const activeItemIndex =
     activeIndex >= 0 && activeIndex < visibleItems.length ? activeIndex : -1
 
@@ -274,10 +298,12 @@ export const InstancePickerContent = React.memo(function InstancePickerContent({
           onSelectMany={onSelectMany}
         />
       ) : null}
-      {showAllOption ? (
-        <div className="border-b border-border/50 p-1.5">
-          <InstancePickerAllRow option={allOption} />
-        </div>
+      {onSelectGroup && groups.length > 0 && query.length === 0 ? (
+        <InstancePickerGroupRow
+          groups={groups}
+          selectedGroups={selectedGroups}
+          onSelect={onSelectGroup}
+        />
       ) : null}
       {visibleItems.length > 0 ? (
         <div
@@ -616,32 +642,54 @@ function InstancePickerCheckbox({ state }: { state: "all" | "none" | "some" }) {
   )
 }
 
-const InstancePickerAllRow = React.memo(function InstancePickerAllRow({
-  option,
+const groupPresentation: Record<
+  InstancePickerGroup,
+  { Icon: typeof ServerIcon; label: string }
+> = {
+  all: { Icon: Layers, label: "All instances" },
+  database: { Icon: Database, label: "All databases" },
+  relay: { Icon: RadioTower, label: "All Relays" },
+  server: { Icon: ServerIcon, label: "All servers" },
+}
+
+const InstancePickerGroupRow = React.memo(function InstancePickerGroupRow({
+  groups,
+  onSelect,
+  selectedGroups,
 }: {
-  option: InstancePickerAllOption
+  groups: ReadonlyArray<InstancePickerGroup>
+  onSelect: (group: InstancePickerGroup) => void
+  selectedGroups: ReadonlySet<InstancePickerGroup>
 }) {
   return (
-    <button
-      type="button"
-      aria-pressed={option.selected}
-      className={cn(
-        "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left transition-colors duration-100 outline-none hover:bg-popover-accent hover:text-popover-accent-foreground focus-visible:bg-popover-accent focus-visible:ring-2 focus-visible:ring-ring/35",
-        option.selected &&
-          "bg-primary/8 shadow-[inset_0_0_0_1px_color-mix(in_oklab,var(--primary)_35%,transparent)]"
-      )}
-      onClick={option.onSelect}
-    >
-      <span className="grid size-8 shrink-0 place-items-center rounded-md bg-muted/55 text-muted-foreground">
-        <ServerIcon className="size-4" aria-hidden="true" />
-      </span>
-      <span className="min-w-0 flex-1">
-        <span className="type-control-sm block truncate">{option.label}</span>
-        <span className="type-meta block truncate text-muted-foreground">
-          {option.description}
-        </span>
-      </span>
-    </button>
+    <div className="border-b border-border/70 p-1.5">
+      <div
+        role="group"
+        aria-label="Whole instance types"
+        className="flex divide-x divide-border/70 overflow-hidden rounded-md border border-border/70 bg-muted/25"
+      >
+        {groups.map((group) => {
+          const { Icon, label } = groupPresentation[group]
+          const selected = selectedGroups.has(group)
+          return (
+            <button
+              key={group}
+              type="button"
+              aria-pressed={selected}
+              className={cn(
+                "type-control-sm flex h-9 min-w-0 flex-1 items-center justify-center gap-1.5 px-2 text-muted-foreground transition-colors duration-100 outline-none hover:bg-popover-accent hover:text-popover-accent-foreground focus-visible:bg-popover-accent focus-visible:text-popover-accent-foreground",
+                selected &&
+                  "bg-primary/8 text-foreground shadow-[inset_0_0_0_1px_color-mix(in_oklab,var(--primary)_35%,transparent)]"
+              )}
+              onClick={() => onSelect(group)}
+            >
+              <Icon className="size-3.5 shrink-0" aria-hidden="true" />
+              <span className="truncate">{label}</span>
+            </button>
+          )
+        })}
+      </div>
+    </div>
   )
 })
 

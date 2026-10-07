@@ -4,7 +4,11 @@ import { Link, Outlet, useNavigate, useSearch } from "@tanstack/react-router"
 
 import type { ServerPickerOption } from "@/components/server-picker-list"
 import { ServerScopePicker } from "@/components/server-scope-picker"
-import { ScheduleScopeContext } from "@/components/schedule-scope"
+import {
+  ScheduleScopeContext,
+  type ScheduleScope,
+  type ScheduleScopeKind,
+} from "@/components/schedule-scope"
 import { automationDestinations } from "@/lib/navigation-destinations"
 import {
   relaySnapshotQueryOptions,
@@ -57,6 +61,26 @@ export const AutomationsShell = React.memo(function AutomationsShell({
       ) ?? null,
     [kind, options, relay, target]
   )
+  const selectedKind = kind && !target ? kind : null
+  const scope = React.useMemo(
+    (): ScheduleScope | null =>
+      selected ?? (selectedKind ? { kind: selectedKind } : null),
+    [selected, selectedKind]
+  )
+  const selectKind = React.useCallback(
+    (nextKind: ScheduleScopeKind) => {
+      void navigate({
+        replace: true,
+        search: (previous) => ({
+          ...previous,
+          kind: nextKind,
+          relay: undefined,
+          target: undefined,
+        }),
+      })
+    },
+    [navigate]
+  )
   const selectScope = React.useCallback(
     (option: ServerPickerOption | null) => {
       void navigate({
@@ -73,19 +97,20 @@ export const AutomationsShell = React.memo(function AutomationsShell({
   )
 
   return (
-    <ScheduleScopeContext.Provider value={selected}>
+    <ScheduleScopeContext.Provider value={scope}>
       <div className="min-h-full bg-background">
         <header className="mx-auto w-full max-w-[90rem] px-3 pt-3 sm:px-5">
           <ServerScopePicker
-            allDescription="Every accessible server, database, and Relay"
             allLabel="All instances"
             ariaLabel="Accessible schedule targets"
             changeLabel="Change instance"
             chooseLabel="Choose instance"
             emptyMessage="No accessible schedule targets found."
+            selectedKind={selectedKind}
             selectedServer={selected}
             servers={options}
             onSelect={selectScope}
+            onSelectKind={selectKind}
           />
           <AutomationsNavigation />
         </header>

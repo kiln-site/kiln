@@ -121,7 +121,11 @@ import {
   replaceDataTableRows,
   useCursorDataTableSource,
 } from "@/lib/data-table-source"
-import type { BackupRunSort, BackupRunSortDirection } from "@/lib/backup-runs"
+import type {
+  BackupRunScope,
+  BackupRunSort,
+  BackupRunSortDirection,
+} from "@/lib/backup-runs"
 import {
   refreshActiveBackupRunsFirstPages,
   resetActiveBackupRunsToFirstPage,
@@ -359,6 +363,7 @@ export const BackupsPage = React.memo(function BackupsPage({
         }
       : null
   }, [databases, filters.kind, filters.relay, filters.server, topology])
+  const selectedKind = filters.kind && !filters.server ? filters.kind : null
   const availableTargetKeys = React.useMemo(() => {
     const keys = new Set<string>()
     for (const server of topology.servers) {
@@ -500,6 +505,7 @@ export const BackupsPage = React.memo(function BackupsPage({
           targetInstances={targetInstances}
           nameStore={nameStore}
           searchStore={searchStore}
+          selectedKind={selectedKind}
           selectedServer={selectedServer}
           selectionStore={selectionStore}
           statusFilterStore={statusFilterStore}
@@ -610,18 +616,25 @@ const BackupScopeControls = React.memo(function BackupScopeControls({
     },
     [onFiltersChange]
   )
+  const selectKind = React.useCallback(
+    (kind: NonNullable<BackupFilters["kind"]>) => {
+      onFiltersChange({ kind, relay: undefined, server: undefined })
+    },
+    [onFiltersChange]
+  )
 
   return (
     <>
       <ServerScopePicker
-        allDescription="Every accessible server, database, and Relay"
         allLabel="All instances"
         ariaLabel="Accessible instances"
         changeLabel="Change instance"
         chooseLabel="Choose instance"
         emptyMessage="No accessible instances found."
+        selectedKind={filters.kind && !filters.server ? filters.kind : null}
         selectedServer={selectedServer}
         servers={scopeOptions}
+        onSelectKind={selectKind}
         manageSettingsControl={
           canManageSelectedTarget && selectedServer ? (
             <Button asChild size="icon-sm" variant="outline">
@@ -711,6 +724,7 @@ const BackupDataSurface = React.memo(function BackupDataSurface({
   targetInstances,
   nameStore,
   searchStore,
+  selectedKind,
   selectedServer,
   selectionStore,
   statusFilterStore,
@@ -726,6 +740,7 @@ const BackupDataSurface = React.memo(function BackupDataSurface({
   targetInstances: ReadonlyMap<string, InstanceNameInstance>
   nameStore: BackupNameStore
   searchStore: BackupSearchStore
+  selectedKind: BackupFilters["kind"] | null
   selectedServer: ServerPickerOption | null
   selectionStore: BackupSelectionStore
   statusFilterStore: BackupStatusFilterStore
@@ -749,22 +764,16 @@ const BackupDataSurface = React.memo(function BackupDataSurface({
     const timer = window.setTimeout(() => setDebouncedSearch(search), 250)
     return () => window.clearTimeout(timer)
   }, [search])
-  const scope = React.useMemo(
-    () =>
-      selectedServer
-        ? {
-            kind:
-              selectedServer.kind === "database"
-                ? ("database" as const)
-                : selectedServer.kind === "relay"
-                  ? ("platform" as const)
-                  : ("instance" as const),
-            relayId: selectedServer.relayId,
-            targetId: selectedServer.id,
-          }
-        : null,
-    [selectedServer]
-  )
+  const scope = React.useMemo((): BackupRunScope | null => {
+    if (selectedServer) {
+      return {
+        kind: backupRunTargetKind(selectedServer.kind),
+        relayId: selectedServer.relayId,
+        targetId: selectedServer.id,
+      }
+    }
+    return selectedKind ? { kind: backupRunTargetKind(selectedKind) } : null
+  }, [selectedKind, selectedServer])
   const queryInput = React.useMemo(
     () => ({
       cursor: null,
@@ -852,7 +861,7 @@ const BackupDataSurface = React.memo(function BackupDataSurface({
         targetInstances={targetInstances}
         nameStore={nameStore}
         onSortChange={changeSort}
-        scopeFiltered={Boolean(selectedServer)}
+        scopeFiltered={scope !== null}
         searchStore={searchStore}
         selectionStore={selectionStore}
         sort={sorting.sort}
@@ -1343,8 +1352,8 @@ export const BackupSettingsPage = React.memo(function BackupSettingsPage({
   return (
     <div className="mx-auto w-full max-w-[90rem] px-3 pb-10 sm:px-5">
       <ServerScopePicker
-        allDescription="Select a target to edit its backup policy"
         allLabel="No instance selected"
+        allowAll={false}
         ariaLabel="Configurable backup targets"
         changeLabel="Change instance"
         chooseLabel="Choose instance"
@@ -2460,4 +2469,12 @@ function excludeLines(value: string): Array<string> {
     .split("\n")
     .map((line) => line.trim())
     .filter(Boolean)
+}
+
+function backupRunTargetKind(
+  kind: ServerPickerOption["kind"]
+): BackupRunScope["kind"] {
+  if (kind === "database") return "database"
+  if (kind === "relay") return "platform"
+  return "instance"
 }

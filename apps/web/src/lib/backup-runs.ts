@@ -8,11 +8,17 @@ export type BackupRunSort = (typeof backupRunSorts)[number]
 export type BackupRunSortDirection = "asc" | "desc"
 export type BackupRunStatus = "active" | "available" | "failed"
 
-export const backupRunScopeSchema = z.strictObject({
-  kind: z.enum(["database", "instance", "platform"]),
-  relayId: z.string().min(1).max(43),
-  targetId: z.string().min(1).max(120),
-})
+const backupRunTargetKindSchema = z.enum(["database", "instance", "platform"])
+
+/** One backup target, or every target of a kind, including future ones. */
+export const backupRunScopeSchema = z.union([
+  z.strictObject({
+    kind: backupRunTargetKindSchema,
+    relayId: z.string().min(1).max(43),
+    targetId: z.string().min(1).max(120),
+  }),
+  z.strictObject({ kind: backupRunTargetKindSchema }),
+])
 
 export const backupRunsQuerySchema = z.strictObject({
   cursor: z.string().min(1).max(2_048).nullable().optional(),
@@ -139,7 +145,9 @@ export function backupRunScopesEqual(
   if (!left || !right) return left == null && right == null
   return (
     left.kind === right.kind &&
-    left.relayId === right.relayId &&
-    left.targetId === right.targetId
+    ("relayId" in left ? left.relayId : null) ===
+      ("relayId" in right ? right.relayId : null) &&
+    ("targetId" in left ? left.targetId : null) ===
+      ("targetId" in right ? right.targetId : null)
   )
 }
