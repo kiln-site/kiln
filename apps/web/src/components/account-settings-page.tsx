@@ -108,11 +108,7 @@ export function AccountSettingsPage({ user }: { user: AuthenticatedUser }) {
       >
         <ProfileCard user={user} />
         <div className="grid items-stretch gap-4 lg:grid-cols-2">
-          <SettingsPanel
-            icon={<KeyRound />}
-            title="Sign-in"
-            description="Your password and the second factor Kiln asks for at sign-in."
-          >
+          <SettingsPanel icon={<KeyRound />} title="Sign-in">
             <PasswordRow />
             <TwoFactorRow />
           </SettingsPanel>
@@ -129,7 +125,6 @@ function ProfileCard({ user }: { user: AuthenticatedUser }) {
   const session = authClient.useSession()
   const [displayName, setDisplayName] = React.useState(user.name)
   const email = session.data?.user.email ?? user.email
-  const role = platformRoleLabel(user.role)
 
   return (
     <section
@@ -145,10 +140,7 @@ function ProfileCard({ user }: { user: AuthenticatedUser }) {
             fallbackClassName="text-base"
           />
           <div className="min-w-0">
-            <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-              <h2 className="type-section-title break-words">{displayName}</h2>
-              {role ? <StatusPill tone="primary">{role}</StatusPill> : null}
-            </div>
+            <h2 className="type-section-title break-words">{displayName}</h2>
             <div className="mt-1.5 min-w-0">
               <RedactedEmail value={email} />
             </div>
@@ -162,102 +154,7 @@ function ProfileCard({ user }: { user: AuthenticatedUser }) {
           <EmailAddressAction currentEmail={email} />
         </div>
       </div>
-      {user.isDevelopmentBypass ? null : <AccountOverview />}
     </section>
-  )
-}
-
-function AccountOverview() {
-  return (
-    // Every item draws its right and bottom edge; the negative margins let the
-    // card clip the outer ones so the grid reflows without edge cases.
-    <dl className="-mr-px -mb-px grid grid-cols-2 border-t bg-background/25 sm:grid-cols-4">
-      <TwoFactorOverview />
-      <PasskeysOverview />
-      <SessionsOverview />
-      <CliOverview />
-    </dl>
-  )
-}
-
-function OverviewItem({
-  label,
-  tone,
-  value,
-}: {
-  label: string
-  tone: StatusTone
-  value: React.ReactNode
-}) {
-  return (
-    <div className="min-w-0 border-r border-b px-4 py-3 sm:px-5">
-      <dt className="type-technical-label text-muted-foreground">{label}</dt>
-      <dd className="mt-1 flex items-center gap-2 text-sm font-medium">
-        <span
-          aria-hidden="true"
-          className={cn("size-1.5 shrink-0 rounded-full", statusDotClass[tone])}
-        />
-        {value}
-      </dd>
-    </div>
-  )
-}
-
-function TwoFactorOverview() {
-  const session = authClient.useSession()
-  const enabled = Boolean(
-    Reflect.get(session.data?.user ?? {}, "twoFactorEnabled")
-  )
-  return (
-    <OverviewItem
-      label="Authenticator"
-      tone={enabled ? "success" : "warning"}
-      value={enabled ? "Enabled" : "Not set up"}
-    />
-  )
-}
-
-function PasskeysOverview() {
-  const passkeys = authClient.useListPasskeys()
-  const count = passkeys.data?.length ?? 0
-  return (
-    <OverviewItem
-      label="Passkeys"
-      tone={count ? "success" : "muted"}
-      value={count ? `${count} registered` : "None"}
-    />
-  )
-}
-
-function SessionsOverview() {
-  const sessions = useQuery({
-    queryKey: activeSessionsQueryKey,
-    queryFn: () => getActiveSessions(),
-  })
-  const count = sessions.data?.length ?? 0
-  return (
-    <OverviewItem
-      label="Sessions"
-      tone={count > 1 ? "primary" : "muted"}
-      value={sessions.isPending ? "—" : `${count} active`}
-    />
-  )
-}
-
-function CliOverview() {
-  const linked = useQuery({
-    queryKey: linkedCliQueryKey,
-    queryFn: () => getCliCredentials(),
-  })
-  const count =
-    linked.data?.credentials.filter((credential) => credential.active).length ??
-    0
-  return (
-    <OverviewItem
-      label="Linked CLIs"
-      tone={count ? "primary" : "muted"}
-      value={linked.isPending ? "—" : `${count} active`}
-    />
   )
 }
 
@@ -687,10 +584,7 @@ function PasswordRow() {
   }
 
   return (
-    <SettingsRow
-      label="Password"
-      description="Changing it signs out every other session."
-    >
+    <SettingsRow label="Password">
       <Button
         type="button"
         variant="outline"
@@ -877,15 +771,10 @@ function TwoFactorRow() {
   }
 
   return (
-    <SettingsRow
-      label="Authenticator app"
-      description="Six-digit codes from an app like 1Password, Authy, or Google Authenticator."
-    >
-      {twoFactorEnabled ? (
-        <StatusPill tone="success">Enabled</StatusPill>
-      ) : (
-        <StatusPill tone="warning">Not set up</StatusPill>
-      )}
+    <SettingsRow label="Authenticator app">
+      <span className="text-xs text-muted-foreground">
+        {twoFactorEnabled ? "Enabled" : "Not set up"}
+      </span>
       <Button
         type="button"
         variant="outline"
@@ -1139,23 +1028,19 @@ function PasskeysPanel() {
     <SettingsPanel
       icon={<Fingerprint />}
       title="Passkeys"
-      description="Sign in with your fingerprint, face, or a security key."
       action={<AddPasskeyButton onClick={() => setOpen(true)} />}
     >
       {passkeys.data?.length ? (
         <ul className="divide-y">
           {passkeys.data.map((passkey) => (
             <li key={passkey.id} className="flex items-center gap-3 px-4 py-3">
-              <span className="grid size-9 shrink-0 place-items-center rounded-lg border bg-background/60 text-primary">
-                <Fingerprint className="size-4" />
-              </span>
+              <Fingerprint className="size-4 shrink-0 text-muted-foreground" />
               <span className="min-w-0 flex-1">
                 <span className="block text-sm font-medium break-words">
                   {passkey.name || "Unnamed passkey"}
                 </span>
                 <span className="type-meta mt-0.5 block text-muted-foreground">
-                  {describePasskeyType(passkey.deviceType)} · Added{" "}
-                  {formatDate(passkey.createdAt)}
+                  Added {formatDate(passkey.createdAt)}
                 </span>
               </span>
               <Button
@@ -1243,7 +1128,6 @@ function DisabledPasskeysPanel() {
     <SettingsPanel
       icon={<Fingerprint />}
       title="Passkeys"
-      description="Sign in with your fingerprint, face, or a security key."
       action={<AddPasskeyButton />}
     >
       <PasskeysEmptyState />
@@ -1262,8 +1146,7 @@ function AddPasskeyButton({ onClick }: { onClick?: () => void }) {
 function PasskeysEmptyState() {
   return (
     <SettingsEmptyState icon={<Fingerprint />}>
-      <p>No passkeys yet.</p>
-      <p>Add one to sign in without typing your password.</p>
+      <p>No passkeys</p>
     </SettingsEmptyState>
   )
 }
@@ -1279,8 +1162,6 @@ function CliCredentialsPanel({ enabled }: { enabled: boolean }) {
     enabled,
     queryFn: () => getCliCredentials(),
   })
-  const active =
-    linked.data?.credentials.filter((credential) => credential.active) ?? []
 
   async function unlink(credentialId: string) {
     setPendingId(credentialId)
@@ -1304,18 +1185,10 @@ function CliCredentialsPanel({ enabled }: { enabled: boolean }) {
   }
 
   return (
-    <SettingsPanel
-      icon={<Terminal />}
-      title="Linked CLIs"
-      description={
-        enabled
-          ? `${active.length} active · Full access expires after ${linked.data?.defaultAccessDays ?? 30} days by default.`
-          : "No persisted CLIs for the development identity."
-      }
-    >
+    <SettingsPanel icon={<Terminal />} title="Linked CLIs">
       {!enabled ? (
         <SettingsEmptyState icon={<Terminal />}>
-          <p>Sign in with an account to link a CLI.</p>
+          <p>No CLIs linked</p>
         </SettingsEmptyState>
       ) : linked.isPending ? (
         <PanelLoading label="Loading CLIs" />
@@ -1328,7 +1201,7 @@ function CliCredentialsPanel({ enabled }: { enabled: boolean }) {
         <div>
           <TableHeader
             columns={cliColumns}
-            labels={["CLI", "Status", "Last used", "Expires"]}
+            labels={["Name", "Access", "Last used", "Expires"]}
           />
           <ul className="divide-y">
             {linked.data.credentials.map((credential) => (
@@ -1336,20 +1209,16 @@ function CliCredentialsPanel({ enabled }: { enabled: boolean }) {
                 <TablePrimaryCell
                   icon={<Terminal />}
                   title={credential.name}
-                  detail={
-                    credential.mode === "read_only"
-                      ? "Read-only"
-                      : "Full access"
+                  accessory={
+                    credential.active ? null : (
+                      <StatusPill tone="muted">
+                        {credential.revokedAt ? "Unlinked" : "Expired"}
+                      </StatusPill>
+                    )
                   }
                 />
-                <TableCell label="Status">
-                  {credential.active ? (
-                    <StatusPill tone="success">Active</StatusPill>
-                  ) : (
-                    <StatusPill tone="muted">
-                      {credential.revokedAt ? "Unlinked" : "Expired"}
-                    </StatusPill>
-                  )}
+                <TableCell label="Access">
+                  {credential.mode === "read_only" ? "Read-only" : "Full"}
                 </TableCell>
                 <TableCell label="Last used">
                   {formatDate(credential.lastUsedAt)}
@@ -1382,9 +1251,9 @@ function CliCredentialsPanel({ enabled }: { enabled: boolean }) {
         </div>
       ) : (
         <SettingsEmptyState icon={<Terminal />}>
-          <p>No CLIs linked yet.</p>
           <p>
-            Run <code className="font-mono text-foreground">kiln login</code> to
+            No CLIs linked. Run{" "}
+            <code className="font-mono text-foreground">kiln login</code> to
             connect one.
           </p>
         </SettingsEmptyState>
@@ -1479,11 +1348,6 @@ function SessionsPanel({ enabled }: { enabled: boolean }) {
     <SettingsPanel
       icon={<MonitorSmartphone />}
       title="Active sessions"
-      description={
-        enabled
-          ? `${sessions.data?.length ?? 0} active · Browsers and devices currently signed in to your account.`
-          : "No persisted sessions for the development identity."
-      }
       action={
         <Button
           type="button"
@@ -1498,7 +1362,7 @@ function SessionsPanel({ enabled }: { enabled: boolean }) {
     >
       {!enabled ? (
         <SettingsEmptyState icon={<MonitorSmartphone />}>
-          <p>No persisted sessions for the development identity.</p>
+          <p>No active sessions</p>
         </SettingsEmptyState>
       ) : sessions.isPending ? (
         <PanelLoading label="Loading sessions" />
@@ -1531,7 +1395,7 @@ function SessionsPanel({ enabled }: { enabled: boolean }) {
         </div>
       ) : (
         <SettingsEmptyState icon={<MonitorSmartphone />}>
-          <p>No active sessions found.</p>
+          <p>No active sessions</p>
         </SettingsEmptyState>
       )}
 
@@ -1595,9 +1459,8 @@ const SessionRow = React.memo(function SessionRow({
         icon={<DeviceIcon />}
         title={`${device.browser} on ${device.platform}`}
         accessory={
-          current ? <StatusPill tone="success">This browser</StatusPill> : null
+          current ? <StatusPill tone="success">Current</StatusPill> : null
         }
-        detail={device.mobile ? "Mobile" : "Desktop"}
       />
       <TableCell label="IP address">
         <span className="font-mono break-all">
@@ -1686,13 +1549,13 @@ function TablePrimaryCell({
   title,
 }: {
   accessory?: React.ReactNode
-  detail: React.ReactNode
+  detail?: React.ReactNode
   icon: React.ReactNode
   title: string
 }) {
   return (
     <div className="flex min-w-0 items-center gap-3 max-md:mb-1">
-      <span className="grid size-9 shrink-0 place-items-center rounded-lg border bg-background/60 text-primary [&_svg]:size-4">
+      <span className="shrink-0 text-muted-foreground [&_svg]:size-4">
         {icon}
       </span>
       <span className="min-w-0">
@@ -1700,9 +1563,11 @@ function TablePrimaryCell({
           <span className="text-sm font-medium break-words">{title}</span>
           {accessory}
         </span>
-        <span className="type-meta mt-0.5 block text-muted-foreground">
-          {detail}
-        </span>
+        {detail ? (
+          <span className="type-meta mt-0.5 block text-muted-foreground">
+            {detail}
+          </span>
+        ) : null}
       </span>
     </div>
   )
@@ -1766,20 +1631,11 @@ function PanelError({
   )
 }
 
-type StatusTone = "muted" | "primary" | "success" | "warning"
+type StatusTone = "muted" | "success"
 
 const statusPillClass: Record<StatusTone, string> = {
   muted: "border-border bg-background/50 text-muted-foreground",
-  primary: "border-primary/25 bg-primary/8 text-primary",
   success: "border-emerald-500/25 bg-emerald-500/8 text-emerald-500",
-  warning: "border-amber-500/25 bg-amber-500/8 text-amber-500",
-}
-
-const statusDotClass: Record<StatusTone, string> = {
-  muted: "bg-muted-foreground/60",
-  primary: "bg-primary",
-  success: "bg-emerald-500",
-  warning: "bg-amber-500",
 }
 
 function StatusPill({
@@ -1868,18 +1724,6 @@ function readTotpSecret(uri: string): string {
 function recoverUrl(value: string): URL | null {
   if (!URL.canParse(value)) return null
   return new URL(value)
-}
-
-function platformRoleLabel(role: AuthenticatedUser["role"]): string | null {
-  if (role === "admin") return "Administrator"
-  if (role === "relay_creator") return "Relay creator"
-  return null
-}
-
-function describePasskeyType(deviceType?: string | null): string {
-  if (deviceType === "multiDevice") return "Synced passkey"
-  if (deviceType === "singleDevice") return "Device-bound passkey"
-  return "Passkey"
 }
 
 function formatDate(value?: Date | string | null): string {

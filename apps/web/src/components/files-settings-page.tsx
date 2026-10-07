@@ -38,15 +38,8 @@ export const FilesSettingsPage = React.memo(function FilesSettingsPage() {
 
   return (
     <SettingsPage className="lg:grid-cols-2 lg:items-start">
-      <SettingsPanel
-        icon={<Download />}
-        title="Downloads"
-        description="What happens when you download files and backups."
-      >
-        <SettingsRow
-          label="Download dialog"
-          description="Review the file name, size, and compression before downloading."
-        >
+      <SettingsPanel icon={<Download />} title="Downloads">
+        <SettingsRow label="Download dialog">
           <Switch
             aria-label="Show download dialog"
             checked={preferences.confirmBeforeDownload}
@@ -56,10 +49,7 @@ export const FilesSettingsPage = React.memo(function FilesSettingsPage() {
           />
         </SettingsRow>
 
-        <SettingsRow
-          label="Backup link preview"
-          description="Open shared backup links on a Hearth preview page before downloading."
-        >
+        <SettingsRow label="Backup link preview">
           <Switch
             aria-label="Show backup link preview"
             checked={preferences.previewBackupDownloads}
@@ -70,15 +60,8 @@ export const FilesSettingsPage = React.memo(function FilesSettingsPage() {
         </SettingsRow>
       </SettingsPanel>
 
-      <SettingsPanel
-        icon={<FileArchive />}
-        title="Compression"
-        description="Package files into a single archive before they download."
-      >
-        <SettingsRow
-          label="Compress by default"
-          description="Package files before downloading to reduce transfer size."
-        >
+      <SettingsPanel icon={<FileArchive />} title="Compression">
+        <SettingsRow label="Compress by default">
           <Switch
             aria-label="Compress files by default"
             checked={preferences.compressByDefault}
@@ -88,10 +71,7 @@ export const FilesSettingsPage = React.memo(function FilesSettingsPage() {
           />
         </SettingsRow>
 
-        <SettingsRow
-          label="Archive format"
-          description="Used whenever download compression is enabled."
-        >
+        <SettingsRow label="Archive format">
           <div className="grid w-80 max-w-full grid-cols-2 gap-1.5">
             <ArchiveFormatButton
               active={preferences.archiveFormat === "zip"}

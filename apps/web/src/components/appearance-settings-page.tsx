@@ -342,21 +342,14 @@ export const AppearanceSettingsPage = React.memo(
 
     return (
       <SettingsPage className="lg:grid-cols-2 lg:items-start">
-        <SettingsPanel
-          icon={<SunMoon />}
-          title="Theme"
-          description="How Kiln looks in this browser and on your other devices."
-        >
+        <SettingsPanel icon={<SunMoon />} title="Theme">
           <ModeControl
             colorScheme={settings.appearance.colorScheme}
             onSelect={settings.updateColorScheme}
           />
 
           {settings.canManageAppearanceDefault ? (
-            <SettingsRow
-              label="Default for new users"
-              description="New accounts start with your mode and accent color."
-            >
+            <SettingsRow label="Default for new users">
               <Switch
                 aria-label="Default for new users"
                 defaultChecked={settings.defaultForNewUsers}
@@ -398,11 +391,7 @@ const AccentColorControl = React.memo(function AccentColorControl({
   onSelect: (color: string) => void
 }) {
   return (
-    <SettingsPanel
-      icon={<Palette />}
-      title="Accent color"
-      description="Highlights active tabs, primary buttons, and focus rings."
-    >
+    <SettingsPanel icon={<Palette />} title="Accent color">
       <div className="flex flex-wrap items-stretch gap-x-4 gap-y-4 px-4 py-5">
         <SwatchGroup label="Default">
           <PresetColorSwatch
@@ -610,10 +599,7 @@ const ModeControl = React.memo(function ModeControl({
   onSelect: (colorScheme: ColorScheme) => void
 }) {
   return (
-    <SettingsRow
-      label="Mode"
-      description="Follow your system, or keep Kiln light or dark."
-    >
+    <SettingsRow label="Mode">
       <div className="grid w-72 max-w-full grid-cols-3 gap-1.5">
         <ModeButton
           active={colorScheme === "dark"}
