@@ -1965,36 +1965,12 @@ const ScheduleTargetSelector = React.memo(function ScheduleTargetSelector({
     () =>
       options.map((option): InstancePickerItem => {
         const key = targetKey(option)
-        const kind =
-          option.kind === "instance"
-            ? "Server"
-            : option.kind === "database"
-              ? "Database"
-              : "Relay"
         return {
+          ...scheduleTargetPickerItem(option),
           // Unavailable targets stay removable so stale schedules can be fixed.
           disabled:
             (!option[permissionKey] || !option.available) &&
             !(selectedTargets.has(key) && !option.available),
-          identity:
-            option.kind === "instance"
-              ? { id: option.id, kind: "server", relayId: option.relayId }
-              : option.kind === "database"
-                ? { id: option.id, kind: "database", relayId: option.relayId }
-                : {
-                    id: option.relayId,
-                    kind: "relay",
-                    relayId: option.relayId,
-                    source: "fleet",
-                  },
-          key,
-          meta: option.available
-            ? option.kind === "relay"
-              ? "Relay"
-              : `${option.relayName} · ${option.id.slice(0, 8)}`
-            : `Unavailable · ${kind} · ${option.relayName}`,
-          name: option.name,
-          searchText: `${kind} ${option.relayName} ${option.id}`,
         }
       }),
     [options, permissionKey, selectedTargets]
@@ -2389,11 +2365,13 @@ const ActionEditor = React.memo(function ActionEditor({
                 eligibleTargets={eligibleTargets}
                 targets={selectedOptions}
                 selectedTargets={selectedActionTargets}
-                onToggle={(targetKeyValue, checked) => {
+                onToggle={(targetKeyValues, checked) => {
                   if (action.type === null) return
                   const next = new Set(actionTargetKeys)
-                  if (checked) next.add(targetKeyValue)
-                  else next.delete(targetKeyValue)
+                  for (const targetKeyValue of targetKeyValues) {
+                    if (checked) next.add(targetKeyValue)
+                    else next.delete(targetKeyValue)
+                  }
                   onChange({ ...action, targetKeys: [...next] })
                 }}
               />
@@ -2462,84 +2440,108 @@ const ActionEditor = React.memo(function ActionEditor({
   )
 })
 
-function ScheduleActionTargetsButton({
-  action,
-  eligibleTargets,
-  onToggle,
-  selectedTargets,
-  targets,
-}: {
-  action: ScheduleAction
-  eligibleTargets: ReadonlyArray<ScheduleOption>
-  onToggle: (targetKey: string, checked: boolean) => void
-  selectedTargets: ReadonlyArray<ScheduleOption>
-  targets: ReadonlyArray<ScheduleOption>
-}) {
-  const [open, setOpen] = React.useState(false)
-  const eligibleKeys = new Set(
-    eligibleTargets.map((target) => targetKey(target))
-  )
-  return (
-    <Popover open={open} onOpenChange={setOpen}>
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <PopoverTrigger asChild>
-            <Button
-              aria-expanded={open}
-              aria-label={`${selectedTargets.length} targets for ${actionLabel(action.type)}`}
-              size="icon-sm"
-              type="button"
-              variant="ghost"
-            >
-              <Server className="size-3.5" />
-            </Button>
-          </PopoverTrigger>
-        </TooltipTrigger>
-        <TooltipContent side="top">
-          {selectedTargets.length} action targets
-        </TooltipContent>
-      </Tooltip>
-      <PopoverContent align="end" className="w-72 p-1.5">
-        <p className="type-meta px-2 py-1.5 text-muted-foreground">
-          Choose which selected targets run this action.
-        </p>
-        <div className="space-y-0.5">
-          {targets.map((target) => {
-            const key = targetKey(target)
-            const eligible = eligibleKeys.has(key)
-            const checked = selectedTargets.some(
-              (selected) => targetKey(selected) === key
-            )
-            return (
-              <button
-                key={key}
-                aria-pressed={checked}
-                className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50"
-                disabled={!eligible}
+const ScheduleActionTargetsButton = React.memo(
+  function ScheduleActionTargetsButton({
+    action,
+    eligibleTargets,
+    onToggle,
+    selectedTargets,
+    targets,
+  }: {
+    action: ScheduleAction
+    eligibleTargets: ReadonlyArray<ScheduleOption>
+    onToggle: (targetKeys: ReadonlyArray<string>, checked: boolean) => void
+    selectedTargets: ReadonlyArray<ScheduleOption>
+    targets: ReadonlyArray<ScheduleOption>
+  }) {
+    const [open, setOpen] = React.useState(false)
+    const items = React.useMemo(() => {
+      const eligibleKeys = new Set(eligibleTargets.map(targetKey))
+      return targets.map((target): InstancePickerItem => ({
+        ...scheduleTargetPickerItem(target),
+        disabled: !eligibleKeys.has(targetKey(target)),
+      }))
+    }, [eligibleTargets, targets])
+    const selectedKeys = React.useMemo(
+      () => new Set(selectedTargets.map(targetKey)),
+      [selectedTargets]
+    )
+    const toggleTarget = React.useCallback(
+      (item: InstancePickerItem) =>
+        onToggle([item.key], !selectedKeys.has(item.key)),
+      [onToggle, selectedKeys]
+    )
+
+    return (
+      <Popover open={open} onOpenChange={setOpen}>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <PopoverTrigger asChild>
+              <Button
+                aria-expanded={open}
+                aria-label={`${selectedTargets.length} targets for ${actionLabel(action.type)}`}
+                size="icon-sm"
                 type="button"
-                onClick={() => onToggle(key, !checked)}
+                variant="ghost"
               >
-                <span
-                  className={`grid size-4 shrink-0 place-items-center rounded-sm border ${checked ? "border-primary bg-primary text-primary-foreground" : "border-input"}`}
-                >
-                  {checked ? <Check className="size-3" /> : null}
-                </span>
-                <span className="min-w-0 flex-1 truncate">{target.name}</span>
-                <span className="type-meta shrink-0 text-muted-foreground">
-                  {target.kind}
-                </span>
-              </button>
-            )
-          })}
-          {targets.length === 0 ? (
-            <p className="px-2 py-2 text-xs text-muted-foreground">
-              No compatible targets selected.
-            </p>
-          ) : null}
-        </div>
-      </PopoverContent>
-    </Popover>
-  )
+                <Server className="size-3.5" />
+              </Button>
+            </PopoverTrigger>
+          </TooltipTrigger>
+          <TooltipContent side="top">
+            {selectedTargets.length} action targets
+          </TooltipContent>
+        </Tooltip>
+        <PopoverContent
+          align="end"
+          className="z-[70] w-[min(28rem,calc(100vw-2rem))] overflow-hidden p-0"
+        >
+          <p className="type-meta border-b border-border/70 px-3.5 py-2 text-muted-foreground">
+            Choose which of this schedule&apos;s targets run this action.
+          </p>
+          <InstancePickerContent
+            multiple
+            ariaLabel="Action targets"
+            emptyMessage="No compatible targets selected."
+            items={items}
+            selectedKeys={selectedKeys}
+            onSelect={toggleTarget}
+            onSelectMany={onToggle}
+          />
+        </PopoverContent>
+      </Popover>
+    )
+  }
+)
+
+function scheduleTargetPickerItem(option: ScheduleOption): InstancePickerItem {
+  const kind =
+    option.kind === "instance"
+      ? "Server"
+      : option.kind === "database"
+        ? "Database"
+        : "Relay"
+  return {
+    identity:
+      option.kind === "instance"
+        ? { id: option.id, kind: "server", relayId: option.relayId }
+        : option.kind === "database"
+          ? { id: option.id, kind: "database", relayId: option.relayId }
+          : {
+              id: option.relayId,
+              kind: "relay",
+              relayId: option.relayId,
+              source: "fleet",
+            },
+    key: targetKey(option),
+    meta: option.available
+      ? option.kind === "relay"
+        ? "Relay"
+        : `${option.relayName} · ${option.id.slice(0, 8)}`
+      : `Unavailable · ${kind} · ${option.relayName}`,
+    name: option.name,
+    searchText: `${kind} ${option.relayName} ${option.id}`,
+  }
 }
 
 function scheduleBackupTarget(
