@@ -4,17 +4,13 @@ import {
   useQueryClient,
   useSuspenseQuery,
 } from "@tanstack/react-query"
-import { useVirtualizer } from "@tanstack/react-virtual"
 import {
-  ArrowRight,
   CalendarClock,
-  Check,
   ChevronsUpDown,
   Database,
   ListTodo,
   LoaderCircle,
   LogOut,
-  Search,
   Server as ServerIcon,
   Settings,
   UserRoundCog,
@@ -27,7 +23,6 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@workspace/ui/components/popover"
-import { Input } from "@workspace/ui/components/input"
 import {
   Sidebar,
   SidebarContent,
@@ -56,16 +51,26 @@ import {
   RouteCommandMenuTrigger,
 } from "@/components/route-command-menu"
 import { InstanceName } from "@/components/instance-name"
+import {
+  InstancePickerContent,
+  type InstancePickerItem,
+} from "@/components/instance-picker"
 import { authClient } from "@/lib/auth-client"
 import type { AuthenticatedUser } from "@/lib/auth-session"
 import { clearAppearanceCache } from "@/lib/appearance"
 import {
   accessCapabilitiesQueryOptions,
   managedDatabaseDirectoryQueryOptions,
+  managedDatabasesQueryOptions,
   relayConnectionQueryOptions,
   relaySnapshotQueryOptions,
 } from "@/lib/query-options"
 import { disableDevelopmentBypass } from "@/server/auth"
+import type {
+  getManagedDatabaseDirectory,
+  getManagedDatabases,
+} from "@/server/databases"
+import type { RelayFleetSnapshot } from "@/lib/relay-fleet"
 import {
   findFirstCanonicalRelayInstance,
   relayInstanceRouteIdentifier,
@@ -433,6 +438,7 @@ const InstanceNavigation = React.memo(function InstanceNavigation({
       <SidebarGroupContent>
         <SidebarMenu>
           <ServerSelector
+            capabilities={capabilities}
             instance={instance}
             instances={instances}
             navigateToTab={navigateToTab}
@@ -454,10 +460,12 @@ function ambiguousServerHref(shortId: string) {
 }
 
 const ServerSelector = React.memo(function ServerSelector({
+  capabilities,
   instance,
   instances,
   navigateToTab,
 }: {
+  capabilities: NavigationAccessCapabilities
   instance: SidebarInstance | null
   instances: Array<SidebarInstance>
   navigateToTab: (tab: InstanceTab, serverId: string) => void
@@ -469,28 +477,35 @@ const ServerSelector = React.memo(function ServerSelector({
   const handleOpenChange = React.useCallback((nextOpen: boolean) => {
     setOpen(nextOpen)
   }, [])
+  const closePicker = React.useCallback(() => setOpen(false), [])
   const selectInstance = React.useCallback(
-    (routeId: string) => {
+    (item: InstancePickerItem) => {
       handleOpenChange(false)
+      if (item.identity.kind === "database") {
+        void navigate({
+          to: "/infra/databases",
+          search: { search: item.name },
+        })
+        return
+      }
+      if (item.identity.kind === "relay") {
+        void navigate({ to: "/infra/relays", search: { search: item.name } })
+        return
+      }
       const snapshot = queryClient.getQueryData(
         relaySnapshotQueryOptions().queryKey
       )
       if (!snapshot) return
       const instances = selectSidebarInstances(snapshot)
-      const resolution = resolveCanonicalRelayInstance(instances, routeId)
-      if (resolution.status === "ambiguous") {
-        void navigate({ href: ambiguousServerHref(routeId) })
-        return
-      }
-      if (resolution.status === "not-found") return
-      const routeIdentifier = relayInstanceRouteIdentifier(
-        instances,
-        resolution.instance
+      const selected = instances.find(
+        (candidate) =>
+          candidate.id === item.identity.id &&
+          candidate.relayId === item.identity.relayId
       )
+      if (!selected) return
+      const routeIdentifier = relayInstanceRouteIdentifier(instances, selected)
       if (!routeIdentifier) {
-        void navigate({
-          href: ambiguousServerHref(resolution.instance.shortId),
-        })
+        void navigate({ href: ambiguousServerHref(selected.shortId) })
         return
       }
 
@@ -500,6 +515,15 @@ const ServerSelector = React.memo(function ServerSelector({
       )
     },
     [handleOpenChange, navigate, navigateToTab, queryClient]
+  )
+  const selectedKeys = React.useMemo(
+    () =>
+      new Set(
+        instance
+          ? [sidebarPickerKey("server", instance.relayId, instance.id)]
+          : []
+      ),
+    [instance]
   )
 
   return (
@@ -560,308 +584,169 @@ const ServerSelector = React.memo(function ServerSelector({
           </SidebarMenuButton>
         </PopoverTrigger>
         <PopoverContent
-          aria-label="Managed servers"
+          aria-label="Instances"
           side={isMobile ? "bottom" : "right"}
           align="start"
           sideOffset={6}
           className="w-72 max-w-[calc(100vw-1rem)] overflow-hidden p-0"
         >
-          <ServerSelectorSearch
-            activeInstanceId={instance?.id}
-            activeRelayId={instance?.relayId}
-            instances={instances}
+          <SidebarInstancePicker
+            capabilities={capabilities}
+            selectedKeys={selectedKeys}
+            onNavigate={closePicker}
             onSelect={selectInstance}
           />
-          <div className="border-t border-border/70 p-1.5">
-            <Link
-              to="/infra/servers"
-              onClick={() => handleOpenChange(false)}
-              className="type-control-sm group flex h-9 w-full items-center gap-2 rounded-md bg-muted/45 px-2.5 text-foreground transition-colors outline-none hover:bg-muted/70 focus-visible:ring-2 focus-visible:ring-ring/40"
-            >
-              <ServerIcon
-                className="size-3.5 text-muted-foreground"
-                aria-hidden="true"
-              />
-              <span>View all servers</span>
-              <ArrowRight
-                className="ml-auto size-3.5 text-muted-foreground transition-transform duration-150 group-hover:translate-x-0.5 group-focus-visible:translate-x-0.5"
-                aria-hidden="true"
-              />
-            </Link>
-          </div>
         </PopoverContent>
       </Popover>
     </SidebarMenuItem>
   )
 })
 
-const ServerSelectorSearch = React.memo(function ServerSelectorSearch({
-  activeInstanceId,
-  activeRelayId,
-  instances,
+const SidebarInstancePicker = React.memo(function SidebarInstancePicker({
+  capabilities,
+  onNavigate,
   onSelect,
+  selectedKeys,
 }: {
-  activeInstanceId: string | undefined
-  activeRelayId: string | undefined
-  instances: Array<SidebarInstance>
-  onSelect: (routeId: string) => void
+  capabilities: NavigationAccessCapabilities
+  onNavigate: () => void
+  onSelect: (item: InstancePickerItem) => void
+  selectedKeys: ReadonlySet<string>
 }) {
-  const [search, setSearch] = React.useState("")
+  const destinations = accessibleInfrastructureDestinations(capabilities)
+  const showDatabases = destinations.some(
+    (destination) => destination.to === "/infra/databases"
+  )
+  const showRelays = destinations.some(
+    (destination) => destination.to === "/infra/relays"
+  )
+  const selectFleetItems = React.useCallback(
+    (snapshot: RelayFleetSnapshot) =>
+      sidebarFleetPickerItems(snapshot, showRelays),
+    [showRelays]
+  )
+  const { data: fleetItems = emptyPickerItems } = useQuery({
+    ...relaySnapshotQueryOptions(),
+    select: selectFleetItems,
+  })
+  const { data: databaseDirectory = emptyDatabaseDirectory } = useQuery({
+    ...managedDatabaseDirectoryQueryOptions(),
+    enabled: showDatabases,
+  })
+  // Runtime state comes from the Relay inventory, which only loads when there
+  // is a database to describe.
+  const { data: databaseStates } = useQuery({
+    ...managedDatabasesQueryOptions(),
+    enabled: showDatabases && databaseDirectory.length > 0,
+    select: selectDatabaseStates,
+  })
+  const items = React.useMemo(() => {
+    if (!showDatabases || databaseDirectory.length === 0) return fleetItems
+    const databaseItems = databaseDirectory.map(
+      (database): InstancePickerItem => {
+        const state = databaseStates?.get(`${database.relayId}:${database.id}`)
+        return {
+          identity: {
+            id: database.id,
+            kind: "database",
+            observedState: state?.observedState,
+            relayId: database.relayId,
+          },
+          key: sidebarPickerKey("database", database.relayId, database.id),
+          meta: state
+            ? `${state.engine} · ${state.shortId}`
+            : database.relayName,
+          name: database.name,
+          online: state ? state.observedState === "running" : undefined,
+          searchText: `${database.id} ${database.relayName} ${state?.observedState ?? ""}`,
+        }
+      }
+    )
+    return [...fleetItems, ...databaseItems]
+  }, [databaseDirectory, databaseStates, fleetItems, showDatabases])
 
   return (
-    <>
-      <ServerSelectorSearchField value={search} onValueChange={setSearch} />
-      <ServerSelectorResults
-        activeInstanceId={activeInstanceId}
-        activeRelayId={activeRelayId}
-        instances={instances}
-        onSelect={onSelect}
-        search={search}
-      />
-    </>
-  )
-})
-
-const ServerSelectorSearchField = React.memo(
-  function ServerSelectorSearchField({
-    value,
-    onValueChange,
-  }: {
-    value: string
-    onValueChange: (value: string) => void
-  }) {
-    return (
-      <div className="border-b border-border/70 p-2">
-        <div className="relative">
-          <Search
-            className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-muted-foreground"
-            aria-hidden="true"
-          />
-          <Input
-            autoFocus
-            type="search"
-            value={value}
-            onChange={(event) => onValueChange(event.currentTarget.value)}
-            placeholder="Search servers"
-            aria-label="Search servers"
-            className="h-8 bg-input/14 pr-2 pl-8 text-sm"
-          />
-        </div>
-      </div>
-    )
-  }
-)
-
-interface ServerSelectorResultsProps {
-  activeInstanceId: string | undefined
-  activeRelayId: string | undefined
-  instances: Array<SidebarInstance>
-  onSelect: (routeId: string) => void
-  search: string
-}
-
-const ServerSelectorResults = React.memo(function ServerSelectorResults({
-  activeInstanceId,
-  activeRelayId,
-  instances,
-  onSelect,
-  search,
-}: ServerSelectorResultsProps) {
-  const query = normalizeServerSearch(search)
-  const filteredInstances = React.useMemo(() => {
-    if (!query) return instances
-    return instances.filter((item) =>
-      matchesNormalizedServerSearch(item, query)
-    )
-  }, [instances, query])
-
-  return filteredInstances.length > 0 ? (
-    <VirtualizedServerSelectorResults
-      key={query}
-      activeInstanceId={activeInstanceId}
-      activeRelayId={activeRelayId}
-      instances={filteredInstances}
+    <InstancePickerContent
+      ariaLabel="Instances"
+      emptyMessage="No managed instances"
+      items={items}
+      selectedKeys={selectedKeys}
+      viewAll
+      onNavigate={onNavigate}
       onSelect={onSelect}
     />
-  ) : (
-    <div className="px-4 py-6 text-center">
-      <p className="type-control-sm">
-        {instances.length === 0
-          ? "No managed servers"
-          : "No servers match your search"}
-      </p>
-      <p className="type-meta mt-1 text-muted-foreground">
-        {instances.length === 0
-          ? "Servers will appear here once they are provisioned."
-          : "Try a name, version, ID, or status."}
-      </p>
-    </div>
-  )
-}, serverSelectorResultsAreEqual)
-
-const VirtualizedServerSelectorResults = React.memo(
-  function VirtualizedServerSelectorResults({
-    activeInstanceId,
-    activeRelayId,
-    instances,
-    onSelect,
-  }: {
-    activeInstanceId: string | undefined
-    activeRelayId: string | undefined
-    instances: Array<SidebarInstance>
-    onSelect: (routeId: string) => void
-  }) {
-    const scrollElementRef = React.useRef<HTMLDivElement>(null)
-    const getScrollElement = React.useCallback(
-      () => scrollElementRef.current,
-      []
-    )
-    const getItemKey = React.useCallback(
-      (index: number) => {
-        const item = instances[index]
-        return item ? `${item.relayId}:${item.id}` : index
-      },
-      [instances]
-    )
-    const rowVirtualizer = useVirtualizer({
-      count: instances.length,
-      estimateSize: estimateServerSelectorRowSize,
-      gap: serverSelectorRowGap,
-      getItemKey,
-      getScrollElement,
-      overscan: 3,
-    })
-
-    return (
-      <div
-        ref={scrollElementRef}
-        className="max-h-64 overflow-y-auto overscroll-contain p-1.5"
-      >
-        <div
-          className="relative w-full"
-          style={{ height: `${rowVirtualizer.getTotalSize()}px` }}
-        >
-          {rowVirtualizer.getVirtualItems().map((virtualRow) => {
-            const item = instances[virtualRow.index]
-            if (!item) return null
-            return (
-              <div
-                key={virtualRow.key}
-                ref={rowVirtualizer.measureElement}
-                className={`absolute top-0 left-0 w-full pb-0.5 ${virtualRow.index < instances.length - 1 ? "border-b border-border/50" : ""}`}
-                data-index={virtualRow.index}
-                style={{ top: virtualRow.start }}
-              >
-                <ServerSelectorItem
-                  active={
-                    item.id === activeInstanceId &&
-                    item.relayId === activeRelayId
-                  }
-                  item={item}
-                  onSelect={onSelect}
-                />
-              </div>
-            )
-          })}
-        </div>
-      </div>
-    )
-  }
-)
-
-const serverSelectorRowGap = 3
-
-function estimateServerSelectorRowSize(): number {
-  return 46
-}
-
-function serverSelectorResultsAreEqual(
-  previous: ServerSelectorResultsProps,
-  next: ServerSelectorResultsProps
-): boolean {
-  if (
-    previous.activeInstanceId !== next.activeInstanceId ||
-    previous.activeRelayId !== next.activeRelayId ||
-    previous.instances !== next.instances ||
-    previous.onSelect !== next.onSelect
-  ) {
-    return false
-  }
-  if (previous.search === next.search) return true
-
-  const previousQuery = normalizeServerSearch(previous.search)
-  const nextQuery = normalizeServerSearch(next.search)
-  return previous.instances.every(
-    (item) =>
-      matchesNormalizedServerSearch(item, previousQuery) ===
-      matchesNormalizedServerSearch(item, nextQuery)
-  )
-}
-
-function normalizeServerSearch(search: string): string {
-  return search.trim().toLocaleLowerCase()
-}
-
-function matchesNormalizedServerSearch(
-  item: SidebarInstance,
-  query: string
-): boolean {
-  if (!query) return true
-
-  return [
-    item.name,
-    item.implementation,
-    item.version,
-    item.shortId,
-    item.routeId,
-    item.relayName,
-    item.observedState,
-  ]
-    .join(" ")
-    .toLocaleLowerCase()
-    .includes(query)
-}
-
-const ServerSelectorItem = React.memo(function ServerSelectorItem({
-  active,
-  item,
-  onSelect,
-}: {
-  active: boolean
-  item: SidebarInstance
-  onSelect: (routeId: string) => void
-}) {
-  return (
-    <button
-      type="button"
-      aria-pressed={active}
-      className={`flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left transition-[color,background-color,box-shadow] duration-100 outline-none hover:bg-popover-accent hover:text-popover-accent-foreground focus-visible:bg-popover-accent focus-visible:text-popover-accent-foreground focus-visible:ring-2 focus-visible:ring-ring/35 ${active ? "bg-primary/8 shadow-[inset_0_0_0_1px_color-mix(in_oklab,var(--primary)_14%,transparent)]" : ""}`}
-      onClick={() => onSelect(item.routeId)}
-    >
-      <InstanceName
-        className="min-w-0 flex-1 gap-2"
-        iconClassName="border-0 bg-muted/55"
-        instance={{
-          brickId: item.brickId,
-          brickSource: item.brickSource,
-          id: item.id,
-          implementation: item.implementation,
-          kind: "server",
-          observedState: item.observedState,
-          relayId: item.relayId,
-        }}
-        meta={`${item.implementation} ${item.version} · ${item.shortId}`}
-        metaClassName="font-mono"
-        name={item.name}
-        nameClassName="type-control-sm"
-        statusClassName="ring-popover"
-      />
-      {active ? (
-        <Check className="size-4 shrink-0 text-primary" aria-hidden="true" />
-      ) : null}
-    </button>
   )
 })
+
+const emptyPickerItems: Array<InstancePickerItem> = []
+const emptyDatabaseDirectory: Awaited<
+  ReturnType<typeof getManagedDatabaseDirectory>
+> = []
+
+function sidebarPickerKey(
+  kind: InstancePickerItem["identity"]["kind"],
+  relayId: string,
+  id: string
+) {
+  return `${kind}:${relayId}:${id}`
+}
+
+function sidebarFleetPickerItems(
+  snapshot: RelayFleetSnapshot,
+  includeRelays: boolean
+): Array<InstancePickerItem> {
+  const items = selectSidebarInstances(snapshot).map(
+    (instance): InstancePickerItem => ({
+      identity: {
+        brickId: instance.brickId,
+        brickSource: instance.brickSource,
+        id: instance.id,
+        implementation: instance.implementation,
+        kind: "server",
+        observedState: instance.observedState,
+        relayId: instance.relayId,
+      },
+      key: sidebarPickerKey("server", instance.relayId, instance.id),
+      meta: `${instance.implementation} ${instance.version} · ${instance.shortId}`,
+      name: instance.name,
+      online: instance.observedState === "running",
+      searchText: `${instance.routeId} ${instance.relayName} ${instance.observedState}`,
+    })
+  )
+  if (!includeRelays) return items
+  for (const node of snapshot.nodes) {
+    items.push({
+      identity: {
+        id: node.relayId,
+        kind: "relay",
+        relayId: node.relayId,
+        relayStatus: node.relayStatus,
+        source: "fleet",
+      },
+      key: sidebarPickerKey("relay", node.relayId, node.relayId),
+      meta: `Relay ${node.version}`,
+      name: node.relayName,
+      online: node.relayStatus === "connected",
+      searchText: node.relayId,
+    })
+  }
+  return items
+}
+
+function selectDatabaseStates(
+  overview: Awaited<ReturnType<typeof getManagedDatabases>>
+) {
+  return new Map(
+    overview.databases.map((database) => [
+      `${database.relayId}:${database.id}`,
+      {
+        engine: database.engine,
+        observedState: database.observedState,
+        shortId: database.shortId,
+      },
+    ])
+  )
+}
 
 const InstanceTabNavigation = React.memo(function InstanceTabNavigation({
   capabilities,

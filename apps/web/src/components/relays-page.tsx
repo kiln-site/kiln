@@ -108,7 +108,7 @@ import {
   defineDataTable,
 } from "@/lib/data-table"
 import {
-  createDataTableSearchStore,
+  replaceDataTableUrlSearch,
   type DataTableSearchStore,
 } from "@/lib/data-table-search"
 import {
@@ -208,8 +208,11 @@ interface RelayEditView {
   useTls: boolean
 }
 
-export const RelaysPage = React.memo(function RelaysPage() {
-  const [searchStore] = React.useState(createDataTableSearchStore)
+export const RelaysPage = React.memo(function RelaysPage({
+  searchStore,
+}: {
+  searchStore: DataTableSearchStore
+}) {
   const [dialogStore] = React.useState(createRelayDialogStore)
   const updateDialogStore = useInfraUpdateDialogStore()
   const { data: canReviewUpdates } = useSuspenseQuery({
@@ -309,6 +312,7 @@ const RelayToolbar = React.memo(function RelayToolbar({
         ariaLabel: "Search relays",
         closeMobileWhenEmpty: true,
         id: "relay-search",
+        onValueChange: replaceDataTableUrlSearch,
         placeholder: "Search relays",
         store: searchStore,
       }}

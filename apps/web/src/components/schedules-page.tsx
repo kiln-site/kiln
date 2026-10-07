@@ -97,16 +97,16 @@ import {
   useWorkspaceTableSearchInput,
 } from "@/components/workspace-table"
 import type { WorkspaceTableSearchStore } from "@/components/workspace-table"
-import {
-  ServerPickerList,
-  serverPickerOptionKey,
-  type ServerPickerOption,
-} from "@/components/server-picker-list"
+import { type ServerPickerOption } from "@/components/server-picker-list"
 import {
   BackupConfigurationDialog,
   type BackupConfigurationTarget,
 } from "@/components/backup-configuration-dialog"
 import { BackupIcon } from "@/components/backup-icon"
+import {
+  InstancePickerContent,
+  type InstancePickerItem,
+} from "@/components/instance-picker"
 import { useScheduleScope } from "@/components/schedule-scope"
 import { forkPromise } from "@/effect/promise"
 import { scheduleBackupDestination } from "@/lib/schedule-backup-configuration"
@@ -1959,9 +1959,10 @@ const ScheduleTargetSelector = React.memo(function ScheduleTargetSelector({
   onToggle: (keys: ReadonlyArray<string>, checked: boolean) => void
 }) {
   const [open, setOpen] = React.useState(false)
-  const pickerOptions = React.useMemo(
+  const pickerItems = React.useMemo(
     () =>
-      options.map((option): ServerPickerOption => {
+      options.map((option): InstancePickerItem => {
+        const key = targetKey(option)
         const kind =
           option.kind === "instance"
             ? "Server"
@@ -1969,36 +1970,33 @@ const ScheduleTargetSelector = React.memo(function ScheduleTargetSelector({
               ? "Database"
               : "Relay"
         return {
-          allowDeselectWhenDisabled: !option.available,
-          description: option.available
-            ? option.kind === "relay"
-              ? `Relay · ${option.id}`
-              : `${kind} · ${option.relayName} · ${option.id}`
-            : `Unavailable · ${kind} · ${option.relayName} · ${option.id}`,
-          disabled: !option[permissionKey] || !option.available,
-          id: option.id,
-          kind:
+          // Unavailable targets stay removable so stale schedules can be fixed.
+          disabled:
+            (!option[permissionKey] || !option.available) &&
+            !(selectedTargets.has(key) && !option.available),
+          identity:
             option.kind === "instance"
-              ? "server"
+              ? { id: option.id, kind: "server", relayId: option.relayId }
               : option.kind === "database"
-                ? "database"
-                : "relay",
+                ? { id: option.id, kind: "database", relayId: option.relayId }
+                : {
+                    id: option.relayId,
+                    kind: "relay",
+                    relayId: option.relayId,
+                    source: "fleet",
+                  },
+          key,
+          meta: option.available
+            ? option.kind === "relay"
+              ? "Relay"
+              : `${option.relayName} · ${option.id.slice(0, 8)}`
+            : `Unavailable · ${kind} · ${option.relayName}`,
           name: option.name,
-          relayId: option.relayId,
-          relayName: option.relayName,
+          searchText: `${kind} ${option.relayName} ${option.id}`,
         }
       }),
-    [options, permissionKey]
+    [options, permissionKey, selectedTargets]
   )
-  const selectedPickerKeys = React.useMemo(() => {
-    const keys = new Set<string>()
-    for (const option of pickerOptions) {
-      if (selectedTargets.has(scheduleTargetKey(option))) {
-        keys.add(serverPickerOptionKey(option))
-      }
-    }
-    return keys
-  }, [pickerOptions, selectedTargets])
   const selectedNames = React.useMemo(() => {
     const names: Array<string> = []
     for (const option of options) {
@@ -2007,67 +2005,11 @@ const ScheduleTargetSelector = React.memo(function ScheduleTargetSelector({
     return names
   }, [options, selectedTargets])
   const selectTarget = React.useCallback(
-    (option: ServerPickerOption) => {
-      const key = scheduleTargetKey(option)
-      onToggle([key], !selectedTargets.has(key))
+    (item: InstancePickerItem) => {
+      onToggle([item.key], !selectedTargets.has(item.key))
     },
     [onToggle, selectedTargets]
   )
-  const allOptions = React.useMemo(() => {
-    const selectable = pickerOptions.filter((option) => !option.disabled)
-    const aggregateOption = (
-      label: string,
-      description: string,
-      targets: ReadonlyArray<ServerPickerOption>,
-      kind?: "database" | "relay" | "server"
-    ) => {
-      const keys = targets.map(scheduleTargetKey)
-      const selected = keys.every((key) => selectedTargets.has(key))
-      return {
-        description,
-        kind,
-        label,
-        selected,
-        onSelect: () => onToggle(keys, !selected),
-      }
-    }
-    const servers = selectable.filter((option) => option.kind === "server")
-    const databases = selectable.filter((option) => option.kind === "database")
-    const relays = selectable.filter((option) => option.kind === "relay")
-    return [
-      selectable.length > 0
-        ? aggregateOption(
-            "All Instances",
-            "Every accessible server, database, and Relay",
-            selectable
-          )
-        : null,
-      servers.length > 0
-        ? aggregateOption(
-            "All Servers",
-            "Every accessible server",
-            servers,
-            "server"
-          )
-        : null,
-      databases.length > 0
-        ? aggregateOption(
-            "All Databases",
-            "Every accessible database",
-            databases,
-            "database"
-          )
-        : null,
-      relays.length > 0
-        ? aggregateOption(
-            "All Relays",
-            "Every accessible Relay",
-            relays,
-            "relay"
-          )
-        : null,
-    ].filter((option) => option !== null)
-  }, [onToggle, pickerOptions, selectedTargets])
   return (
     <div>
       {hideHeader ? null : (
@@ -2103,16 +2045,16 @@ const ScheduleTargetSelector = React.memo(function ScheduleTargetSelector({
         </PopoverTrigger>
         <PopoverContent
           align="start"
-          className="z-[70] w-[min(34rem,calc(100vw-2rem))] p-1.5"
+          className="z-[70] w-[min(34rem,calc(100vw-2rem))] overflow-hidden p-0"
         >
-          <ServerPickerList
-            allOptions={allOptions}
+          <InstancePickerContent
             multiple
-            ariaLabel="Schedule targets"
+            ariaLabel="Targets"
             emptyMessage="No accessible schedule targets found."
-            selectedKeys={selectedPickerKeys}
-            servers={pickerOptions}
+            items={pickerItems}
+            selectedKeys={selectedTargets}
             onSelect={selectTarget}
+            onSelectMany={onToggle}
           />
         </PopoverContent>
       </Popover>
@@ -3048,11 +2990,6 @@ function runStatusLabel(status: string) {
 
 function targetKey(target: Pick<ScheduleTarget, "id" | "kind" | "relayId">) {
   return `${target.relayId}:${target.kind}:${target.id}`
-}
-
-function scheduleTargetKey(target: ServerPickerOption) {
-  const kind = target.kind === "server" ? "instance" : target.kind
-  return `${target.relayId}:${kind ?? "instance"}:${target.id}`
 }
 
 function scheduleOptionsWithInstanceNames(
