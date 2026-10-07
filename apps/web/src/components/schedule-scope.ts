@@ -1,6 +1,6 @@
 import * as React from "react"
 
-import type { ServerPickerOption } from "@/components/server-picker-list"
+import type { ServerPickerOption } from "@/components/server-scope-picker"
 
 export type ScheduleScopeKind = NonNullable<ServerPickerOption["kind"]>
 

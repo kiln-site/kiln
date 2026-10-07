@@ -62,10 +62,9 @@ import {
 import type { WorkspaceTableSearchStore } from "@/components/workspace-table"
 import { InstanceName } from "@/components/instance-name"
 import {
-  ServerPickerList,
-  serverPickerOptionKey,
-  type ServerPickerOption,
-} from "@/components/server-picker-list"
+  InstancePickerContent,
+  type InstancePickerItem,
+} from "@/components/instance-picker"
 import { TailscaleRelayUpdateHint } from "@/components/tailscale-relay-update-hint"
 import {
   queryKeys,
@@ -206,16 +205,22 @@ export const TailscaleConnectServersPopover = React.memo(
           : emptyServers,
       [servers, stack]
     )
-    const options = React.useMemo<Array<ServerPickerOption>>(
+    const options = React.useMemo(
       () =>
-        availableServers.map((server) => ({
-          description: `${server.relayName} · ${server.shortId}`,
+        availableServers.map((server): InstancePickerItem => ({
           disabled: !server.tailscaleSupported,
-          id: server.id,
-          kind: "server",
+          identity: {
+            id: server.id,
+            implementation: server.implementation,
+            kind: "server",
+            relayId: server.relayId,
+          },
+          key: `${server.relayId}:${server.id}`,
+          meta: server.tailscaleSupported
+            ? `${server.relayName} · ${server.shortId}`
+            : `${server.relayName} · Relay update needed`,
           name: server.name,
-          relayId: server.relayId,
-          relayName: server.relayName,
+          searchText: `${server.id} ${server.relayName}`,
         })),
       [availableServers]
     )
@@ -231,21 +236,16 @@ export const TailscaleConnectServersPopover = React.memo(
           )
         : undefined
     const pendingKey = pendingBinding
-      ? serverPickerOptionKey({
-          id: pendingBinding.instanceId,
-          name: "",
-          relayId: pendingBinding.relayId,
-          relayName: "",
-          kind: "server",
-        })
+      ? `${pendingBinding.relayId}:${pendingBinding.instanceId}`
       : undefined
 
     const connectServer = React.useCallback(
-      (option: ServerPickerOption) => {
+      (option: InstancePickerItem) => {
         if (!stack) return
         const server = availableServers.find(
           (candidate) =>
-            candidate.id === option.id && candidate.relayId === option.relayId
+            candidate.id === option.identity.id &&
+            candidate.relayId === option.identity.relayId
         )
         if (!server) return
         const hostname = uniqueHostname(stack, server)
@@ -286,23 +286,25 @@ export const TailscaleConnectServersPopover = React.memo(
         </PopoverTrigger>
         <PopoverContent
           align="end"
-          className="w-[min(28rem,calc(100vw-2rem))] p-1.5"
+          className="w-[min(28rem,calc(100vw-2rem))] overflow-hidden p-0"
         >
-          <ServerPickerList
-            ariaLabel="Servers available to connect"
+          <InstancePickerContent
+            ariaLabel="Servers"
             emptyMessage={
               serversPending
                 ? "Loading servers…"
                 : "Every available server is already connected."
             }
+            items={options}
             pendingKey={pendingKey}
-            searchPlaceholder="Search servers"
             selectedKeys={emptyServerKeys}
-            servers={options}
             onSelect={connectServer}
           />
           {save.error ? (
-            <p className="px-2.5 py-2 text-xs text-destructive" role="alert">
+            <p
+              className="border-t border-border/70 px-3.5 py-2 text-xs text-destructive"
+              role="alert"
+            >
               {errorMessage(save.error)}
             </p>
           ) : null}

@@ -2,7 +2,7 @@ import * as React from "react"
 import { useSuspenseQuery } from "@tanstack/react-query"
 import { Link, Outlet, useNavigate, useSearch } from "@tanstack/react-router"
 
-import type { ServerPickerOption } from "@/components/server-picker-list"
+import type { ServerPickerOption } from "@/components/server-scope-picker"
 import { ServerScopePicker } from "@/components/server-scope-picker"
 import {
   ScheduleScopeContext,

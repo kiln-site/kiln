@@ -19,11 +19,23 @@ import {
   type InstancePickerGroup,
   type InstancePickerItem,
 } from "@/components/instance-picker"
-import {
-  serverPickerOptionKey,
-  type ServerPickerOption,
-} from "@/components/server-picker-list"
 import { WorkspaceSummaryCard } from "@/components/workspace-summary-card"
+
+/** A scope target: one server, database, or Relay. */
+export interface ServerPickerOption {
+  description?: string
+  disabled?: boolean
+  id: string
+  kind?: "database" | "relay" | "server"
+  name: string
+  relayId: string
+  relayName: string
+}
+
+export const serverPickerOptionKey = (server: ServerPickerOption) =>
+  server.kind
+    ? `${server.kind}:${server.relayId}:${server.id}`
+    : `${server.relayId}:${server.id}`
 
 type ScopeKind = NonNullable<ServerPickerOption["kind"]>
 

@@ -8,6 +8,7 @@ import {
   Database,
   Layers,
   ListFilter,
+  LoaderCircle,
   Minus,
   RadioTower,
   Search,
@@ -67,6 +68,8 @@ interface InstancePickerContentProps {
   includeAllGroup?: boolean
   /** Adds "All servers", "All databases", and "All Relays" segments. */
   includeKindGroups?: boolean
+  /** Row being saved; shows a spinner and locks every row until it settles. */
+  pendingKey?: string
   selectedGroups?: ReadonlySet<InstancePickerGroup>
   selectedKeys: ReadonlySet<string>
   /** Shows a "View all" footer that follows the active type filter. */
@@ -101,6 +104,7 @@ export const InstancePickerContent = React.memo(function InstancePickerContent({
   onSelect,
   onSelectGroup,
   onSelectMany,
+  pendingKey,
   selectedGroups = emptyGroups,
   selectedKeys,
   viewAll = false,
@@ -212,7 +216,7 @@ export const InstancePickerContent = React.memo(function InstancePickerContent({
       const item =
         visibleItems[activeItemIndex] ??
         (query ? visibleItems[selectableIndexes[0] ?? -1] : undefined)
-      if (!item || item.disabled) return
+      if (!item || item.disabled || pendingKey !== undefined) return
       event.preventDefault()
       onSelect(item)
     },
@@ -220,6 +224,7 @@ export const InstancePickerContent = React.memo(function InstancePickerContent({
       activeItemIndex,
       moveActive,
       onSelect,
+      pendingKey,
       query,
       selectableIndexes,
       visibleItems,
@@ -337,7 +342,9 @@ export const InstancePickerContent = React.memo(function InstancePickerContent({
                     active={virtualRow.index === activeItemIndex}
                     id={instancePickerOptionId(listId, item.key)}
                     item={item}
+                    locked={pendingKey !== undefined}
                     multiple={multiple}
+                    pending={pendingKey === item.key}
                     selected={selectedKeys.has(item.key)}
                     showKind={showKind}
                     onSelect={onSelect}
@@ -565,16 +572,20 @@ const InstancePickerRowButton = React.memo(function InstancePickerRowButton({
   active,
   id,
   item,
+  locked,
   multiple,
   onSelect,
+  pending,
   selected,
   showKind,
 }: {
   active: boolean
   id: string
   item: InstancePickerItem
+  locked: boolean
   multiple: boolean
   onSelect: (item: InstancePickerItem) => void
+  pending: boolean
   selected: boolean
   showKind: boolean
 }) {
@@ -585,9 +596,10 @@ const InstancePickerRowButton = React.memo(function InstancePickerRowButton({
       type="button"
       id={id}
       role="option"
+      aria-busy={pending || undefined}
       aria-selected={selected}
       tabIndex={-1}
-      disabled={item.disabled}
+      disabled={item.disabled || locked}
       className={cn(
         "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left transition-[color,background-color,box-shadow] duration-100 outline-none hover:bg-popover-accent hover:text-popover-accent-foreground focus-visible:bg-popover-accent focus-visible:text-popover-accent-foreground focus-visible:ring-2 focus-visible:ring-ring/35 disabled:cursor-not-allowed disabled:opacity-50",
         active && "bg-popover-accent text-popover-accent-foreground",
@@ -610,7 +622,12 @@ const InstancePickerRowButton = React.memo(function InstancePickerRowButton({
         nameClassName="type-control-sm"
         statusClassName="ring-popover"
       />
-      {showKind ? (
+      {pending ? (
+        <LoaderCircle
+          className="size-3.5 shrink-0 animate-spin text-primary"
+          aria-hidden="true"
+        />
+      ) : showKind ? (
         <span className="shrink-0 text-muted-foreground/70">
           <kind.Icon className="size-3.5" aria-hidden="true" />
           <span className="sr-only">{kind.label}</span>

@@ -47,7 +47,7 @@ import { showToast } from "@workspace/ui/components/sonner"
 import { Switch } from "@workspace/ui/components/switch"
 import { Textarea } from "@workspace/ui/components/textarea"
 import { ServerScopePicker } from "@/components/server-scope-picker"
-import type { ServerPickerOption } from "@/components/server-picker-list"
+import type { ServerPickerOption } from "@/components/server-scope-picker"
 import type { InstanceNameInstance } from "@/components/instance-name"
 import { backupHasReportedDeleteArtifactProgress } from "@/lib/backup-progress-presentation"
 import {
