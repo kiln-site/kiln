@@ -567,7 +567,7 @@ const InstancePickerRowButton = React.memo(function InstancePickerRowButton({
         active && "bg-popover-accent text-popover-accent-foreground",
         selected &&
           !multiple &&
-          "bg-primary/8 shadow-[inset_0_0_0_1px_color-mix(in_oklab,var(--primary)_14%,transparent)]"
+          "bg-primary/8 shadow-[inset_0_0_0_1px_color-mix(in_oklab,var(--primary)_35%,transparent)]"
       )}
       onClick={() => onSelect(item)}
     >
@@ -589,9 +589,6 @@ const InstancePickerRowButton = React.memo(function InstancePickerRowButton({
           <kind.Icon className="size-3.5" aria-hidden="true" />
           <span className="sr-only">{kind.label}</span>
         </span>
-      ) : null}
-      {selected && !multiple ? (
-        <Check className="size-4 shrink-0 text-primary" aria-hidden="true" />
       ) : null}
     </button>
   )
@@ -631,7 +628,7 @@ const InstancePickerAllRow = React.memo(function InstancePickerAllRow({
       className={cn(
         "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left transition-colors duration-100 outline-none hover:bg-popover-accent hover:text-popover-accent-foreground focus-visible:bg-popover-accent focus-visible:ring-2 focus-visible:ring-ring/35",
         option.selected &&
-          "bg-primary/8 shadow-[inset_0_0_0_1px_color-mix(in_oklab,var(--primary)_14%,transparent)]"
+          "bg-primary/8 shadow-[inset_0_0_0_1px_color-mix(in_oklab,var(--primary)_35%,transparent)]"
       )}
       onClick={option.onSelect}
     >
@@ -644,9 +641,6 @@ const InstancePickerAllRow = React.memo(function InstancePickerAllRow({
           {option.description}
         </span>
       </span>
-      {option.selected ? (
-        <Check className="size-4 shrink-0 text-primary" aria-hidden="true" />
-      ) : null}
     </button>
   )
 })
