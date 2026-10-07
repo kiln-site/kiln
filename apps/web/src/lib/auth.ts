@@ -271,6 +271,15 @@ export const auth = betterAuth({
         }
       }
 
+      // Every sign-in asks for the second factor; a remembered browser would
+      // let a stolen password alone get in.
+      if (
+        context.path.startsWith("/two-factor/verify-") &&
+        context.body?.trustDevice
+      ) {
+        return { context: { body: { ...context.body, trustDevice: false } } }
+      }
+
       if (context.path !== "/sign-up/email") return
 
       // Invited identities already exist and claim credentials separately.
@@ -342,7 +351,6 @@ export const auth = betterAuth({
         storeBackupCodes: "encrypted",
       },
       twoFactorCookieMaxAge: 60 * 10,
-      trustDeviceMaxAge: 60 * 60 * 24 * 30,
     }),
     passkey({
       rpID: publicUrl.hostname,

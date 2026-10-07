@@ -10,7 +10,6 @@ import { authClient } from "@/lib/auth-client"
 export function TwoFactorPage() {
   const [method, setMethod] = React.useState<"totp" | "backup">("totp")
   const [code, setCode] = React.useState("")
-  const [trustDevice, setTrustDevice] = React.useState(true)
   const [pending, setPending] = React.useState(false)
   const [error, setError] = React.useState<string | null>(null)
 
@@ -20,8 +19,8 @@ export function TwoFactorPage() {
     setError(null)
     const result =
       method === "totp"
-        ? await authClient.twoFactor.verifyTotp({ code, trustDevice })
-        : await authClient.twoFactor.verifyBackupCode({ code, trustDevice })
+        ? await authClient.twoFactor.verifyTotp({ code })
+        : await authClient.twoFactor.verifyBackupCode({ code })
     setPending(false)
     if (result.error) {
       setError(result.error.message || "That code could not be verified")
@@ -85,16 +84,6 @@ export function TwoFactorPage() {
               required
               autoFocus
             />
-          </label>
-
-          <label className="type-support flex items-center gap-2 text-muted-foreground">
-            <input
-              type="checkbox"
-              checked={trustDevice}
-              onChange={(event) => setTrustDevice(event.target.checked)}
-              className="size-3.5 accent-primary"
-            />
-            Trust this device for 30 days
           </label>
 
           <Button className="h-11" disabled={pending || !code.trim()}>
