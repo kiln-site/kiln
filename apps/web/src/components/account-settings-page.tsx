@@ -1472,7 +1472,7 @@ function AccountListItem({
       </span>
       <div className="min-w-0 flex-1">
         <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-          <span className="text-sm font-medium break-words">{title}</span>
+          <span className="min-w-0 text-sm font-medium break-words">{title}</span>
           {accessory}
         </div>
         <p className="type-meta mt-0.5 break-words text-muted-foreground">
