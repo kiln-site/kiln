@@ -1,11 +1,23 @@
 import * as React from "react"
 import { useQueryClient, useSuspenseQuery } from "@tanstack/react-query"
-import { Check, Monitor, Moon, Pencil, Sun } from "lucide-react"
+import {
+  Check,
+  Monitor,
+  Moon,
+  Palette,
+  Pencil,
+  Sun,
+} from "lucide-react"
 
 import { ColorPicker } from "@workspace/ui/components/color-picker"
 import { Switch } from "@workspace/ui/components/switch"
 import { cn } from "@workspace/ui/lib/utils"
 
+import {
+  SettingsPage,
+  SettingsPanel,
+  SettingsRow,
+} from "@/components/settings-panel"
 import { enqueueAppearancePersistence } from "@/lib/appearance-persistence"
 import { defaultAppearance, saveAppearanceCache } from "@/lib/appearance"
 import type {
@@ -328,8 +340,8 @@ export const AppearanceSettingsPage = React.memo(
     const settings = useAppearanceSettings()
 
     return (
-      <div className="w-full max-w-2xl px-5 pb-12">
-        <section className="border-b">
+      <SettingsPage>
+        <SettingsPanel icon={<Palette />} title="Theme">
           <ModeControl
             colorScheme={settings.appearance.colorScheme}
             onSelect={settings.updateColorScheme}
@@ -346,16 +358,16 @@ export const AppearanceSettingsPage = React.memo(
           />
 
           {settings.canManageAppearanceDefault ? (
-            <SettingRow label="Default for new users">
+            <SettingsRow label="Default for new users">
               <Switch
                 aria-label="Default for new users"
                 defaultChecked={settings.defaultForNewUsers}
                 onCheckedChange={settings.updateDefaultForNewUsers}
               />
-            </SettingRow>
+            </SettingsRow>
           ) : null}
-        </section>
-      </div>
+        </SettingsPanel>
+      </SettingsPage>
     )
   }
 )
@@ -378,8 +390,8 @@ const AccentColorControl = React.memo(function AccentColorControl({
   onSelect: (color: string) => void
 }) {
   return (
-    <SettingRow label="Accent Color">
-      <div className="flex max-w-md flex-wrap items-stretch gap-x-3 gap-y-4">
+    <SettingsRow label="Accent color">
+      <div className="flex flex-wrap items-stretch gap-x-3 gap-y-4 py-1">
         <SwatchGroup label="Default">
           <PresetColorSwatch
             preset={defaultPreset}
@@ -418,7 +430,7 @@ const AccentColorControl = React.memo(function AccentColorControl({
           ))}
         </SwatchGroup>
       </div>
-    </SettingRow>
+    </SettingsRow>
   )
 })
 
@@ -578,21 +590,6 @@ const ColorSwatch = React.forwardRef<HTMLButtonElement, ColorSwatchProps>(
   }
 )
 
-function SettingRow({
-  children,
-  label,
-}: {
-  children: React.ReactNode
-  label: string
-}) {
-  return (
-    <div className="grid gap-3 border-b py-5 last:border-b-0 sm:grid-cols-[9rem_minmax(0,1fr)] sm:items-center">
-      <p className="text-xs font-medium text-foreground">{label}</p>
-      <div className="min-w-0">{children}</div>
-    </div>
-  )
-}
-
 const ModeControl = React.memo(function ModeControl({
   colorScheme,
   onSelect,
@@ -601,8 +598,8 @@ const ModeControl = React.memo(function ModeControl({
   onSelect: (colorScheme: ColorScheme) => void
 }) {
   return (
-    <SettingRow label="Mode">
-      <div className="grid max-w-md grid-cols-3 gap-1.5">
+    <SettingsRow label="Mode">
+      <div className="grid w-72 max-w-full grid-cols-3 gap-1.5">
         <ModeButton
           active={colorScheme === "dark"}
           colorScheme="dark"
@@ -625,7 +622,7 @@ const ModeControl = React.memo(function ModeControl({
           onSelect={onSelect}
         />
       </div>
-    </SettingRow>
+    </SettingsRow>
   )
 })
 

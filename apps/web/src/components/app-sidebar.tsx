@@ -23,11 +23,6 @@ import { Link, useNavigate, useRouterState } from "@tanstack/react-router"
 import { forkPromise } from "@/effect/promise"
 
 import {
-  Avatar,
-  AvatarFallback,
-  AvatarImage,
-} from "@workspace/ui/components/avatar"
-import {
   Popover,
   PopoverContent,
   PopoverTrigger,
@@ -53,6 +48,7 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@workspace/ui/components/tooltip"
+import { AccountAvatar } from "@/components/account-avatar"
 import { HearthMark } from "@/components/hearth-mark"
 import { BackupIcon } from "@/components/backup-icon"
 import {
@@ -63,11 +59,9 @@ import { InstanceName } from "@/components/instance-name"
 import { authClient } from "@/lib/auth-client"
 import type { AuthenticatedUser } from "@/lib/auth-session"
 import { clearAppearanceCache } from "@/lib/appearance"
-import { minecraftHeadUrl } from "@/lib/minecraft-profile"
 import {
   accessCapabilitiesQueryOptions,
   managedDatabaseDirectoryQueryOptions,
-  minecraftProfileQueryOptions,
   relayConnectionQueryOptions,
   relaySnapshotQueryOptions,
 } from "@/lib/query-options"
@@ -1075,29 +1069,6 @@ function AccountNavigation({
   )
 }
 
-const AccountAvatar = React.memo(function AccountAvatar({
-  name,
-}: {
-  name: string
-}) {
-  const { data: profile } = useQuery(minecraftProfileQueryOptions(name))
-
-  return (
-    <Avatar size="sm" className="rounded-none">
-      {profile ? (
-        <AvatarImage
-          src={minecraftHeadUrl(profile.id)}
-          alt=""
-          referrerPolicy="no-referrer"
-        />
-      ) : null}
-      <AvatarFallback className="type-label rounded-none bg-primary/12 font-bold text-primary">
-        {initials(name)}
-      </AvatarFallback>
-    </Avatar>
-  )
-})
-
 function CollapsedAccountMenu({ user }: { user: AuthenticatedUser }) {
   const [open, setOpen] = React.useState(false)
   const [signingOut, setSigningOut] = React.useState(false)
@@ -1268,15 +1239,6 @@ async function signOut(isDevelopmentBypass: boolean) {
   else await authClient.signOut()
   clearAppearanceCache()
   window.location.assign("/")
-}
-
-function initials(name: string): string {
-  return name
-    .split(/\s+/u)
-    .filter(Boolean)
-    .slice(0, 2)
-    .map((part) => part[0].toUpperCase())
-    .join("")
 }
 
 function globalSectionFromPathname(pathname: string): GlobalSection {

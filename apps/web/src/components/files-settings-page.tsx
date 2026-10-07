@@ -1,9 +1,14 @@
 import * as React from "react"
-import { Archive, Check, FileArchive } from "lucide-react"
+import { Archive, Check, Download, FileArchive } from "lucide-react"
 
 import { Switch } from "@workspace/ui/components/switch"
 import { cn } from "@workspace/ui/lib/utils"
 
+import {
+  SettingsPage,
+  SettingsPanel,
+  SettingsRow,
+} from "@/components/settings-panel"
 import {
   defaultFileDownloadPreferencesSnapshot,
   fileDownloadPreferencesFromSnapshot,
@@ -32,12 +37,9 @@ export const FilesSettingsPage = React.memo(function FilesSettingsPage() {
   }, [])
 
   return (
-    <div className="w-full max-w-2xl px-5 pb-12">
-      <section className="border-b">
-        <SettingRow
-          label="Download dialog"
-          description="Review the file name, size, and compression before downloading."
-        >
+    <SettingsPage className="lg:grid-cols-2 lg:items-start">
+      <SettingsPanel icon={<Download />} title="Downloads">
+        <SettingsRow label="Download dialog">
           <Switch
             aria-label="Show download dialog"
             checked={preferences.confirmBeforeDownload}
@@ -45,12 +47,9 @@ export const FilesSettingsPage = React.memo(function FilesSettingsPage() {
               update({ confirmBeforeDownload })
             }
           />
-        </SettingRow>
+        </SettingsRow>
 
-        <SettingRow
-          label="Backup link preview"
-          description="Open shared backup links on a Hearth preview page before downloading."
-        >
+        <SettingsRow label="Backup link preview">
           <Switch
             aria-label="Show backup link preview"
             checked={preferences.previewBackupDownloads}
@@ -58,12 +57,11 @@ export const FilesSettingsPage = React.memo(function FilesSettingsPage() {
               update({ previewBackupDownloads })
             }
           />
-        </SettingRow>
+        </SettingsRow>
+      </SettingsPanel>
 
-        <SettingRow
-          label="Compress by default"
-          description="Package files before downloading to reduce transfer size."
-        >
+      <SettingsPanel icon={<FileArchive />} title="Compression">
+        <SettingsRow label="Compress by default">
           <Switch
             aria-label="Compress files by default"
             checked={preferences.compressByDefault}
@@ -71,13 +69,10 @@ export const FilesSettingsPage = React.memo(function FilesSettingsPage() {
               update({ compressByDefault })
             }
           />
-        </SettingRow>
+        </SettingsRow>
 
-        <SettingRow
-          label="Archive format"
-          description="Used whenever download compression is enabled."
-        >
-          <div className="grid max-w-md grid-cols-2 gap-1.5">
+        <SettingsRow label="Archive format">
+          <div className="grid w-80 max-w-full grid-cols-2 gap-1.5">
             <ArchiveFormatButton
               active={preferences.archiveFormat === "zip"}
               description="Windows-friendly"
@@ -95,9 +90,9 @@ export const FilesSettingsPage = React.memo(function FilesSettingsPage() {
               onSelect={(archiveFormat) => update({ archiveFormat })}
             />
           </div>
-        </SettingRow>
-      </section>
-    </div>
+        </SettingsRow>
+      </SettingsPanel>
+    </SettingsPage>
   )
 })
 
@@ -143,30 +138,3 @@ const ArchiveFormatButton = React.memo(function ArchiveFormatButton({
     </button>
   )
 })
-
-function SettingRow({
-  children,
-  description,
-  label,
-}: {
-  children: React.ReactNode
-  description: string
-  label: string
-}) {
-  return (
-    <div className="grid gap-3 border-b py-5 last:border-b-0 sm:grid-cols-[9rem_minmax(0,1fr)] sm:items-center">
-      <div>
-        <p className="text-xs font-medium text-foreground">{label}</p>
-        <p className="type-meta mt-1 text-muted-foreground sm:hidden">
-          {description}
-        </p>
-      </div>
-      <div className="min-w-0">
-        {children}
-        <p className="type-meta mt-1.5 hidden text-muted-foreground sm:block">
-          {description}
-        </p>
-      </div>
-    </div>
-  )
-}
