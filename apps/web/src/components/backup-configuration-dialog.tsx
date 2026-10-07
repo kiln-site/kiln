@@ -2,6 +2,7 @@ import * as React from "react"
 import {
   Archive,
   Check,
+  ChevronsUpDown,
   Cloud,
   CloudCog,
   HardDrive,
@@ -19,13 +20,16 @@ import {
 } from "@workspace/ui/components/dialog"
 import { Input } from "@workspace/ui/components/input"
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@workspace/ui/components/select"
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@workspace/ui/components/popover"
 
+import {
+  InstancePickerContent,
+  type InstancePickerItem,
+} from "@/components/instance-picker"
+import { InstanceName } from "@/components/instance-name"
 import { timestampedBackupName } from "@/lib/backup-name"
 
 export interface BackupConfigurationTarget {
@@ -217,29 +221,14 @@ export function BackupConfigurationDialog({
             />
           </label>
           {showTarget ? (
-            <label className="block">
+            <div>
               <span className="mb-2 block text-xs font-medium">Target</span>
-              <Select
-                disabled={targets.length === 0}
-                value={targetKeyValue}
-                onValueChange={setTargetKeyValue}
-              >
-                <SelectTrigger
-                  aria-label="Backup target"
-                  className="h-8 w-full [&_[data-slot=select-value]]:min-w-0 [&_[data-slot=select-value]]:flex-1 [&_[data-slot=select-value]]:truncate [&_[data-slot=select-value]]:text-left"
-                >
-                  <SelectValue placeholder="No targets available" />
-                </SelectTrigger>
-                <SelectContent className="w-max max-w-[calc(100vw-2rem)] min-w-(--radix-select-trigger-width)">
-                  {targets.map((option) => (
-                    <SelectItem key={option.key} value={option.key}>
-                      {targetKindLabel(option.kind)} · {option.name} ·{" "}
-                      {option.relayName}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </label>
+              <BackupTargetPicker
+                selected={target}
+                targets={targets}
+                onSelect={setTargetKeyValue}
+              />
+            </div>
           ) : null}
           {showMode ? (
             <BackupModeChoices
@@ -454,8 +443,106 @@ function BackupDestinationChoice({
   )
 }
 
-function targetKindLabel(kind: BackupConfigurationTarget["kind"]): string {
-  if (kind === "instance") return "Server"
-  if (kind === "database") return "Database"
-  return "Relay"
+const BackupTargetPicker = React.memo(function BackupTargetPicker({
+  onSelect,
+  selected,
+  targets,
+}: {
+  onSelect: (key: string) => void
+  selected: BackupConfigurationTarget | undefined
+  targets: ReadonlyArray<BackupConfigurationTarget>
+}) {
+  const [open, setOpen] = React.useState(false)
+  const items = React.useMemo(() => targets.map(backupTargetItem), [targets])
+  const selectedItem = React.useMemo(
+    () => (selected ? backupTargetItem(selected) : null),
+    [selected]
+  )
+  const selectedKeys = React.useMemo(
+    () => new Set(selected ? [selected.key] : []),
+    [selected]
+  )
+  const selectItem = React.useCallback(
+    (item: InstancePickerItem) => {
+      onSelect(item.key)
+      setOpen(false)
+    },
+    [onSelect]
+  )
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <Button
+          type="button"
+          variant="outline"
+          role="combobox"
+          aria-expanded={open}
+          aria-label="Backup target"
+          disabled={targets.length === 0}
+          className="h-auto min-h-10 w-full justify-between gap-3 px-2 py-1.5 font-normal"
+        >
+          {selectedItem ? (
+            <InstanceName
+              className="min-w-0 flex-1 gap-2 text-left"
+              iconClassName="size-7 border-0 bg-muted/55"
+              instance={selectedItem.identity}
+              meta={selectedItem.meta}
+              metaClassName="font-mono"
+              name={selectedItem.name}
+              nameClassName="type-control-sm"
+              statusClassName="ring-background"
+            />
+          ) : (
+            <span className="px-1 text-muted-foreground">
+              No targets available
+            </span>
+          )}
+          <ChevronsUpDown className="size-3.5 shrink-0 text-muted-foreground" />
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent
+        align="start"
+        className="z-[70] w-(--radix-popover-trigger-width) min-w-72 overflow-hidden p-0"
+      >
+        <InstancePickerContent
+          ariaLabel="Backup targets"
+          emptyMessage="No targets available"
+          items={items}
+          selectedKeys={selectedKeys}
+          onSelect={selectItem}
+        />
+      </PopoverContent>
+    </Popover>
+  )
+})
+
+function backupTargetItem(
+  target: BackupConfigurationTarget
+): InstancePickerItem {
+  if (target.kind === "platform") {
+    return {
+      identity: {
+        id: target.relayId,
+        kind: "relay",
+        relayId: target.relayId,
+        source: "fleet",
+      },
+      key: target.key,
+      meta: "Kiln platform",
+      name: target.relayName,
+      searchText: `${target.relayId} platform`,
+    }
+  }
+  return {
+    identity: {
+      id: target.id,
+      kind: target.kind === "instance" ? "server" : "database",
+      relayId: target.relayId,
+    },
+    key: target.key,
+    meta: `${target.relayName} · ${target.id.slice(0, 8)}`,
+    name: target.name,
+    searchText: `${target.id} ${target.relayName}`,
+  }
 }
