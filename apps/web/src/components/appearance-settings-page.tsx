@@ -7,7 +7,6 @@ import {
   Palette,
   Pencil,
   Sun,
-  SunMoon,
 } from "lucide-react"
 
 import { ColorPicker } from "@workspace/ui/components/color-picker"
@@ -341,11 +340,21 @@ export const AppearanceSettingsPage = React.memo(
     const settings = useAppearanceSettings()
 
     return (
-      <SettingsPage className="lg:grid-cols-2 lg:items-start">
-        <SettingsPanel icon={<SunMoon />} title="Theme">
+      <SettingsPage>
+        <SettingsPanel icon={<Palette />} title="Theme">
           <ModeControl
             colorScheme={settings.appearance.colorScheme}
             onSelect={settings.updateColorScheme}
+          />
+
+          <AccentColorControl
+            accentColor={settings.appearance.accentColor}
+            activeCustomIndex={settings.activeCustomIndex}
+            customColors={settings.customColors}
+            onCustomChange={settings.updateCustomColor}
+            onCustomOpenChange={settings.setActiveCustomIndex}
+            onCustomRemove={settings.removeCustomColor}
+            onSelect={settings.updateAccent}
           />
 
           {settings.canManageAppearanceDefault ? (
@@ -358,16 +367,6 @@ export const AppearanceSettingsPage = React.memo(
             </SettingsRow>
           ) : null}
         </SettingsPanel>
-
-        <AccentColorControl
-          accentColor={settings.appearance.accentColor}
-          activeCustomIndex={settings.activeCustomIndex}
-          customColors={settings.customColors}
-          onCustomChange={settings.updateCustomColor}
-          onCustomOpenChange={settings.setActiveCustomIndex}
-          onCustomRemove={settings.removeCustomColor}
-          onSelect={settings.updateAccent}
-        />
       </SettingsPage>
     )
   }
@@ -391,8 +390,8 @@ const AccentColorControl = React.memo(function AccentColorControl({
   onSelect: (color: string) => void
 }) {
   return (
-    <SettingsPanel icon={<Palette />} title="Accent color">
-      <div className="flex flex-wrap items-stretch gap-x-4 gap-y-4 px-4 py-5">
+    <SettingsRow label="Accent color">
+      <div className="flex flex-wrap items-stretch gap-x-3 gap-y-4 py-1">
         <SwatchGroup label="Default">
           <PresetColorSwatch
             preset={defaultPreset}
@@ -431,7 +430,7 @@ const AccentColorControl = React.memo(function AccentColorControl({
           ))}
         </SwatchGroup>
       </div>
-    </SettingsPanel>
+    </SettingsRow>
   )
 })
 

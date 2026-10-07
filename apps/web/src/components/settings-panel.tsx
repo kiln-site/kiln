@@ -10,13 +10,8 @@ export function SettingsPage({
   className?: string
 }) {
   return (
-    <div
-      className={cn(
-        "mx-auto grid w-full max-w-[90rem] gap-4 px-3 pt-4 pb-10 sm:px-5 sm:pt-5",
-        className
-      )}
-    >
-      {children}
+    <div className="mx-auto w-full max-w-[90rem] px-3 pt-4 pb-10 sm:px-5 sm:pt-5">
+      <div className={cn("grid max-w-5xl gap-4", className)}>{children}</div>
     </div>
   )
 }

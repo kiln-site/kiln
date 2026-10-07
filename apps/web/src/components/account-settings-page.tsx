@@ -56,7 +56,9 @@ import type { AccountSessionSummary } from "@/effect/account-sessions"
 
 const accountDateFormatter = new Intl.DateTimeFormat(undefined, {
   dateStyle: "medium",
-  timeStyle: "short",
+})
+const relativeTimeFormatter = new Intl.RelativeTimeFormat(undefined, {
+  numeric: "auto",
 })
 const activeSessionsQueryKey = ["account", "active-sessions"] as const
 const linkedCliQueryKey = ["account", "linked-clis"] as const
@@ -114,8 +116,10 @@ export function AccountSettingsPage({ user }: { user: AuthenticatedUser }) {
           </SettingsPanel>
           {enabled ? <PasskeysPanel /> : <DisabledPasskeysPanel />}
         </div>
-        <SessionsPanel enabled={enabled} />
-        <CliCredentialsPanel enabled={enabled} />
+        <div className="grid items-stretch gap-4 lg:grid-cols-2">
+          <SessionsPanel enabled={enabled} />
+          <CliCredentialsPanel enabled={enabled} />
+        </div>
       </fieldset>
     </SettingsPage>
   )
@@ -1033,33 +1037,30 @@ function PasskeysPanel() {
       {passkeys.data?.length ? (
         <ul className="divide-y">
           {passkeys.data.map((passkey) => (
-            <li key={passkey.id} className="flex items-center gap-3 px-4 py-3">
-              <Fingerprint className="size-4 shrink-0 text-muted-foreground" />
-              <span className="min-w-0 flex-1">
-                <span className="block text-sm font-medium break-words">
-                  {passkey.name || "Unnamed passkey"}
-                </span>
-                <span className="type-meta mt-0.5 block text-muted-foreground">
-                  Added {formatDate(passkey.createdAt)}
-                </span>
-              </span>
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                className="text-muted-foreground hover:text-destructive"
-                aria-label={`Remove ${passkey.name || "passkey"}`}
-                disabled={pending !== null}
-                onClick={() => void deletePasskey(passkey.id)}
-              >
-                {pending === passkey.id ? (
-                  <LoaderCircle className="animate-spin" />
-                ) : (
-                  <Trash2 />
-                )}
-                <span className="max-sm:sr-only">Remove</span>
-              </Button>
-            </li>
+            <AccountListItem
+              key={passkey.id}
+              icon={<Fingerprint />}
+              title={passkey.name || "Unnamed passkey"}
+              meta={`Added ${formatRelative(passkey.createdAt)}`}
+              action={
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="text-muted-foreground hover:text-destructive"
+                  aria-label={`Remove ${passkey.name || "passkey"}`}
+                  disabled={pending !== null}
+                  onClick={() => void deletePasskey(passkey.id)}
+                >
+                  {pending === passkey.id ? (
+                    <LoaderCircle className="animate-spin" />
+                  ) : (
+                    <Trash2 />
+                  )}
+                  Remove
+                </Button>
+              }
+            />
           ))}
         </ul>
       ) : (
@@ -1151,9 +1152,6 @@ function PasskeysEmptyState() {
   )
 }
 
-const cliColumns =
-  "md:grid-cols-[minmax(14rem,1.6fr)_minmax(7rem,0.6fr)_minmax(10.5rem,1fr)_minmax(10.5rem,1fr)_minmax(6.5rem,auto)]"
-
 function CliCredentialsPanel({ enabled }: { enabled: boolean }) {
   const queryClient = useQueryClient()
   const [pendingId, setPendingId] = React.useState<string | null>(null)
@@ -1162,6 +1160,8 @@ function CliCredentialsPanel({ enabled }: { enabled: boolean }) {
     enabled,
     queryFn: () => getCliCredentials(),
   })
+  const active =
+    linked.data?.credentials.filter((credential) => credential.active) ?? []
 
   async function unlink(credentialId: string) {
     setPendingId(credentialId)
@@ -1197,58 +1197,34 @@ function CliCredentialsPanel({ enabled }: { enabled: boolean }) {
           message={authErrorMessage(linked.error, "Could not load linked CLIs")}
           onRetry={() => void linked.refetch()}
         />
-      ) : linked.data?.credentials.length ? (
-        <div>
-          <TableHeader
-            columns={cliColumns}
-            labels={["Name", "Access", "Last used", "Expires"]}
-          />
-          <ul className="divide-y">
-            {linked.data.credentials.map((credential) => (
-              <TableRow key={credential.id} columns={cliColumns}>
-                <TablePrimaryCell
-                  icon={<Terminal />}
-                  title={credential.name}
-                  accessory={
-                    credential.active ? null : (
-                      <StatusPill tone="muted">
-                        {credential.revokedAt ? "Unlinked" : "Expired"}
-                      </StatusPill>
-                    )
-                  }
-                />
-                <TableCell label="Access">
-                  {credential.mode === "read_only" ? "Read-only" : "Full"}
-                </TableCell>
-                <TableCell label="Last used">
-                  {formatDate(credential.lastUsedAt)}
-                </TableCell>
-                <TableCell label="Expires">
-                  {credential.expiresAt
-                    ? formatDate(credential.expiresAt)
-                    : "Never"}
-                </TableCell>
-                <TableAction>
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="sm"
-                    className="text-muted-foreground hover:text-destructive"
-                    disabled={!credential.active || pendingId !== null}
-                    onClick={() => void unlink(credential.id)}
-                  >
-                    {pendingId === credential.id ? (
-                      <LoaderCircle className="animate-spin" />
-                    ) : (
-                      <Trash2 />
-                    )}
-                    Unlink
-                  </Button>
-                </TableAction>
-              </TableRow>
-            ))}
-          </ul>
-        </div>
+      ) : active.length ? (
+        <ul className="divide-y">
+          {active.map((credential) => (
+            <AccountListItem
+              key={credential.id}
+              icon={<Terminal />}
+              title={credential.name}
+              meta={`${credential.mode === "read_only" ? "Read-only" : "Full access"} · ${credential.lastUsedAt ? `Used ${formatRelative(credential.lastUsedAt)}` : "Never used"}`}
+              action={
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="text-muted-foreground hover:text-destructive"
+                  disabled={pendingId !== null}
+                  onClick={() => void unlink(credential.id)}
+                >
+                  {pendingId === credential.id ? (
+                    <LoaderCircle className="animate-spin" />
+                  ) : (
+                    <Trash2 />
+                  )}
+                  Unlink
+                </Button>
+              }
+            />
+          ))}
+        </ul>
       ) : (
         <SettingsEmptyState icon={<Terminal />}>
           <p>
@@ -1261,9 +1237,6 @@ function CliCredentialsPanel({ enabled }: { enabled: boolean }) {
     </SettingsPanel>
   )
 }
-
-const sessionColumns =
-  "md:grid-cols-[minmax(14rem,1.6fr)_minmax(9rem,1fr)_minmax(10.5rem,1fr)_minmax(10.5rem,1fr)_minmax(6.5rem,auto)]"
 
 function SessionsPanel({ enabled }: { enabled: boolean }) {
   const session = authClient.useSession()
@@ -1375,24 +1348,18 @@ function SessionsPanel({ enabled }: { enabled: boolean }) {
           onRetry={() => void sessions.refetch()}
         />
       ) : sessions.data?.length ? (
-        <div>
-          <TableHeader
-            columns={sessionColumns}
-            labels={["Device", "IP address", "Signed in", "Expires"]}
-          />
-          <ul className="divide-y">
-            {sessions.data.map((activeSession) => (
-              <SessionRow
-                key={activeSession.id}
-                activeSession={activeSession}
-                current={activeSession.id === currentSessionId}
-                pending={pendingSessionId === activeSession.id}
-                disabled={pendingSessionId !== null || loggingOut}
-                onRevoke={revokeSession}
-              />
-            ))}
-          </ul>
-        </div>
+        <ul className="divide-y">
+          {sessions.data.map((activeSession) => (
+            <SessionRow
+              key={activeSession.id}
+              activeSession={activeSession}
+              current={activeSession.id === currentSessionId}
+              pending={pendingSessionId === activeSession.id}
+              disabled={pendingSessionId !== null || loggingOut}
+              onRevoke={revokeSession}
+            />
+          ))}
+        </ul>
       ) : (
         <SettingsEmptyState icon={<MonitorSmartphone />}>
           <p>No active sessions</p>
@@ -1454,26 +1421,14 @@ const SessionRow = React.memo(function SessionRow({
   const DeviceIcon = device.mobile ? Smartphone : Laptop
 
   return (
-    <TableRow columns={sessionColumns}>
-      <TablePrimaryCell
-        icon={<DeviceIcon />}
-        title={`${device.browser} on ${device.platform}`}
-        accessory={
-          current ? <StatusPill tone="success">Current</StatusPill> : null
-        }
-      />
-      <TableCell label="IP address">
-        <span className="font-mono break-all">
-          {activeSession.ipAddress || "Unavailable"}
-        </span>
-      </TableCell>
-      <TableCell label="Signed in">
-        {formatDate(activeSession.createdAt)}
-      </TableCell>
-      <TableCell label="Expires">
-        {formatDate(activeSession.expiresAt)}
-      </TableCell>
-      <TableAction>
+    <AccountListItem
+      icon={<DeviceIcon />}
+      title={`${device.browser} on ${device.platform}`}
+      accessory={
+        current ? <StatusPill tone="success">Current</StatusPill> : null
+      }
+      meta={`${activeSession.ipAddress || "Unknown IP"} · Signed in ${formatRelative(activeSession.createdAt)}`}
+      action={
         <Button
           type="button"
           variant="ghost"
@@ -1492,111 +1447,40 @@ const SessionRow = React.memo(function SessionRow({
           )}
           {current ? "Sign out" : "Revoke"}
         </Button>
-      </TableAction>
-    </TableRow>
+      }
+    />
   )
 })
 
-/**
- * Account tables are a column grid from `md` up. Below that each row stacks
- * into a labelled card so nothing has to be truncated.
- */
-function TableHeader({
-  columns,
-  labels,
-}: {
-  columns: string
-  labels: ReadonlyArray<string>
-}) {
-  return (
-    <div
-      aria-hidden="true"
-      className={cn(
-        "type-technical-label hidden gap-x-4 border-b bg-background/25 px-4 py-2.5 text-muted-foreground md:grid",
-        columns
-      )}
-    >
-      {labels.map((label) => (
-        <span key={label}>{label}</span>
-      ))}
-    </div>
-  )
-}
-
-function TableRow({
-  children,
-  columns,
-}: {
-  children: React.ReactNode
-  columns: string
-}) {
-  return (
-    <li
-      className={cn(
-        "grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-4 gap-y-2 px-4 py-3 md:gap-y-0",
-        columns
-      )}
-    >
-      {children}
-    </li>
-  )
-}
-
-function TablePrimaryCell({
+function AccountListItem({
   accessory,
-  detail,
+  action,
   icon,
+  meta,
   title,
 }: {
   accessory?: React.ReactNode
-  detail?: React.ReactNode
+  action: React.ReactNode
   icon: React.ReactNode
+  meta: string
   title: string
 }) {
   return (
-    <div className="flex min-w-0 items-center gap-3 max-md:mb-1">
+    <li className="flex items-center gap-3 px-4 py-3">
       <span className="shrink-0 text-muted-foreground [&_svg]:size-4">
         {icon}
       </span>
-      <span className="min-w-0">
-        <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
+      <div className="min-w-0 flex-1">
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
           <span className="text-sm font-medium break-words">{title}</span>
           {accessory}
-        </span>
-        {detail ? (
-          <span className="type-meta mt-0.5 block text-muted-foreground">
-            {detail}
-          </span>
-        ) : null}
-      </span>
-    </div>
-  )
-}
-
-function TableCell({
-  children,
-  label,
-}: {
-  children: React.ReactNode
-  label: string
-}) {
-  return (
-    <div className="col-span-2 flex min-w-0 items-baseline justify-between gap-4 md:col-span-1 md:block">
-      <span className="type-technical-label shrink-0 text-muted-foreground md:sr-only">
-        {label}
-      </span>
-      <span className="min-w-0 text-right text-xs md:block md:text-left">
-        {children}
-      </span>
-    </div>
-  )
-}
-
-function TableAction({ children }: { children: React.ReactNode }) {
-  return (
-    <div className="col-start-2 row-start-1 justify-self-end md:col-start-auto md:row-start-auto">
-      {children}
-    </div>
+        </div>
+        <p className="type-meta mt-0.5 break-words text-muted-foreground">
+          {meta}
+        </p>
+      </div>
+      <div className="shrink-0">{action}</div>
+    </li>
   )
 }
 
@@ -1726,9 +1610,16 @@ function recoverUrl(value: string): URL | null {
   return new URL(value)
 }
 
-function formatDate(value?: Date | string | null): string {
-  if (!value) return "recently"
-  return accountDateFormatter.format(new Date(value))
+function formatRelative(value: Date | string | number): string {
+  const elapsed = Date.now() - new Date(value).getTime()
+  const minutes = Math.round(elapsed / 60_000)
+  if (minutes < 1) return "just now"
+  if (minutes < 60) return relativeTimeFormatter.format(-minutes, "minute")
+  const hours = Math.round(minutes / 60)
+  if (hours < 24) return relativeTimeFormatter.format(-hours, "hour")
+  const days = Math.round(hours / 24)
+  if (days < 30) return relativeTimeFormatter.format(-days, "day")
+  return `on ${accountDateFormatter.format(new Date(value))}`
 }
 
 function describeUserAgent(userAgent?: string | null): {
