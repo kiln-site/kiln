@@ -4,7 +4,7 @@ import type {
   DatabaseValue,
 } from "@workspace/contracts"
 
-import { valuesEqual } from "@/components/files/database/database-values"
+import { valuesEqual } from "@/components/database-viewer/database-values"
 
 export interface DatabaseEditableRow {
   id: string

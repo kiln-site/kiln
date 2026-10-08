@@ -9,6 +9,10 @@ import {
 import { relayInstanceLifecycleEventSchema } from "./instance-lifecycle.js"
 import { relayInstanceStateReasonSchema } from "./instance-state-reason.js"
 import {
+  databaseReadRequestSchema,
+  databaseWriteRequestSchema,
+} from "./database-browser.js"
+import {
   relayTailscaleDomainSchema,
   relayTailscaleHostnameSchema,
   relayTailscaleSubdomainSchema,
@@ -195,6 +199,17 @@ export const relayDatabaseDumpSchema = z
 
 export const relayDatabaseExportSchema = relayDatabaseDumpSchema.omit({
   content: true,
+})
+
+export const relayDatabaseDataReadSchema = relayDatabaseExportSchema.extend({
+  request: databaseReadRequestSchema,
+})
+
+export const relayDatabaseDataWriteSchema = relayDatabaseExportSchema.extend({
+  // Runs a query in a read-only transaction, guarding against accidental
+  // writes by someone allowed to write.
+  readOnly: z.boolean().optional(),
+  request: databaseWriteRequestSchema,
 })
 
 export const BRICK_INSTANCE_NAME_SUFFIX = " Server"
@@ -1524,6 +1539,13 @@ export function databaseEngineSupportsLogicalBackups(
   return engine === "mysql" || engine === "mariadb" || engine === "postgres"
 }
 
+// SQL engines whose tables the database viewer can browse and edit.
+export function databaseEngineSupportsBrowsing(
+  engine: DatabaseEngine
+): engine is "mariadb" | "mysql" | "postgres" {
+  return engine === "mysql" || engine === "mariadb" || engine === "postgres"
+}
+
 export type RelayManagedDatabase = z.infer<typeof relayManagedDatabaseSchema>
 export type RelayCreateDatabase = z.infer<typeof relayCreateDatabaseSchema>
 export type RelayDatabaseAction = z.infer<typeof relayDatabaseActionSchema>
@@ -1534,6 +1556,10 @@ export type RelayRotateDatabaseCredentials = z.infer<
 export type RelayDatabaseNetwork = z.infer<typeof relayDatabaseNetworkSchema>
 export type RelayDatabaseDump = z.infer<typeof relayDatabaseDumpSchema>
 export type RelayDatabaseExport = z.infer<typeof relayDatabaseExportSchema>
+export type RelayDatabaseDataRead = z.infer<typeof relayDatabaseDataReadSchema>
+export type RelayDatabaseDataWrite = z.infer<
+  typeof relayDatabaseDataWriteSchema
+>
 export type BrickId = z.infer<typeof brickIdSchema>
 export type BrickVariableValue = z.infer<typeof brickVariableValueSchema>
 export type BrickVariable = z.infer<typeof brickVariableSchema>

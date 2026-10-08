@@ -11,6 +11,8 @@
     "@sentry/node": "10.76.0",
     "effect": "4.0.1",
     "minimatch": "10.2.6",
+    "mysql2": "3.24.5",
+    "pg": "8.23.1",
     "reflect-metadata": "0.2.2",
     "ssh2": "1.17.0",
     "tar-stream": "3.2.2",

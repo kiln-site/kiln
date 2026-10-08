@@ -941,6 +941,11 @@ function actionForRequest(request: RelayControlRequest): RelayAction | null {
       return "database.dump.export"
     case "database.dump.import":
       return "database.dump.import"
+    // Reading or editing rows is reading or writing the data a dump carries.
+    case "database.data.read":
+      return "database.dump.export"
+    case "database.data.write":
+      return "database.dump.import"
     case "backup.task.enqueue": {
       const kind = objectString(request.payload, "kind")
       if (kind === "create") return "backup.create"

@@ -77,14 +77,17 @@ export function parseEditedText(
       ? { $bigint: exact.toString() }
       : trimmed
   }
+  // Fractions are only binary floats in float columns. DECIMAL and NUMERIC
+  // columns keep every digit, so their input goes as text for the database
+  // to parse exactly (SQLite's NUMERIC affinity converts it the same way).
   if (
-    (affinity === "real" || affinity === "numeric" || affinity === "integer") &&
-    text.trim() !== "" &&
-    Number.isFinite(Number(text))
+    (affinity === "real" || affinity === "integer") &&
+    trimmed !== "" &&
+    Number.isFinite(Number(trimmed))
   ) {
-    return Number(text)
+    return Number(trimmed)
   }
-  return text
+  return affinity === "numeric" && trimmed !== "" ? trimmed : text
 }
 
 const INT64_MIN = -(2n ** 63n)

@@ -173,6 +173,11 @@ export class DatabaseDriver {
     )
   }
 
+  // The database as Docker reports it, for work that runs inside it.
+  async target(id: string): Promise<RelayManagedDatabase> {
+    return this.#required(id)
+  }
+
   async backupTarget(id: string): Promise<RelayManagedDatabase> {
     const database = await this.#required(id)
     if (!databaseEngineSupportsLogicalBackups(database.engine)) {

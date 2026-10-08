@@ -34,9 +34,9 @@ import { recordRelayFileView } from "@/server/relay"
 
 const activeFileRevisionPollDelayMs = 30_000
 
-const DatabaseViewer = React.lazy(async () => {
-  const module = await import("@/components/files/database/database-viewer")
-  return { default: module.DatabaseViewer }
+const FileDatabaseViewer = React.lazy(async () => {
+  const module = await import("@/components/files/file-database-viewer")
+  return { default: module.FileDatabaseViewer }
 })
 
 const UnavailablePreviewToolbar = React.memo(
@@ -351,7 +351,7 @@ export function FileViewer({
           enabled={relayConnected}
         />
         <React.Suspense fallback={fallback}>
-          <DatabaseViewer
+          <FileDatabaseViewer
             key={`${instance.id}:${selectedPath}`}
             canWrite={canWrite}
             displayPath={selectedPath}

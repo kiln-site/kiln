@@ -22,8 +22,6 @@ import {
   ChevronsLeft,
   Code2,
   Database,
-  Download,
-  EllipsisVertical,
   Eye,
   Funnel,
   KeyRound,
@@ -62,38 +60,32 @@ import { cn } from "@workspace/ui/lib/utils"
 import { FileWorkspaceLoadingState } from "@/components/file-tree-loading-panel"
 import { PanelResizeHandle } from "@/components/panel-resize-handle"
 import { EditorTooltip } from "@/components/files/editor-tooltip"
-import { FileActionMenuItem } from "@/components/files/file-actions"
-import { FileDownloadDialog } from "@/components/files/file-download-dialog"
 import {
   fileEditorHeaderClassName,
   fileEditorHeaderContentClassName,
-  FileToolbarIdentity,
-  FileTreeRevealButton,
 } from "@/components/files/file-viewer-toolbar"
 import {
   createDatabaseEditStore,
   type DatabaseEditStore,
-} from "@/components/files/database/database-edit-store"
+} from "@/components/database-viewer/database-edit-store"
 import {
   DatabaseGrid,
   type DatabaseGridColumn,
-} from "@/components/files/database/database-grid"
+} from "@/components/database-viewer/database-grid"
 import {
   DATABASE_PAGE_SIZE,
   DATABASE_QUERY_MAX_ROWS,
   type DatabaseSource,
-  relayFileDatabaseSource,
-} from "@/components/files/database/database-source"
+} from "@/components/database-viewer/database-source"
 import {
   createDatabasePageStore,
   type DatabasePageStore,
-} from "@/components/files/database/database-page-store"
+} from "@/components/database-viewer/database-page-store"
 import {
   DatabaseConflictDialog,
   type DatabaseSaveConflict,
-} from "@/components/files/database/database-conflict-dialog"
-import { formatByteSize } from "@/components/files/database/database-values"
-import type { InstanceWorkspaceInstance } from "@/lib/relay-selectors"
+} from "@/components/database-viewer/database-conflict-dialog"
+import { formatByteSize } from "@/components/database-viewer/database-values"
 import { loadSyntaxCodeEditorModule } from "@/lib/syntax-editor-module-preload"
 
 const SyntaxCodeEditor = React.lazy(async () => {
@@ -101,80 +93,73 @@ const SyntaxCodeEditor = React.lazy(async () => {
   return { default: module.SyntaxCodeEditor }
 })
 
+export interface DatabaseEditWarning {
+  detail: string
+  label: string
+}
+
+// The viewer only knows its source. Each place that shows a database adds its
+// own header pieces around the shared controls.
 export function DatabaseViewer({
-  canWrite,
-  displayPath,
-  instance,
-  onNotDatabase,
-  onTreeExpand,
-  treeCollapsed,
+  editWarning = null,
+  identity,
+  leading,
+  onUnavailable,
+  source,
+  trailing,
 }: {
-  canWrite: boolean
-  displayPath: string
-  instance: InstanceWorkspaceInstance
-  onNotDatabase: () => void
-  onTreeExpand: () => void
-  treeCollapsed: boolean
+  // Shown next to pending changes, for example while a server holds the file.
+  editWarning?: DatabaseEditWarning | null
+  identity: (state: { readOnly: boolean | null }) => React.ReactNode
+  leading?: React.ReactNode
+  onUnavailable?: (message: string) => void
+  source: DatabaseSource
+  trailing?: React.ReactNode
 }) {
-  const source = React.useMemo(
-    () =>
-      relayFileDatabaseSource({
-        canWrite,
-        instanceId: instance.id,
-        path: displayPath,
-        relayId: instance.relayId,
-      }),
-    [canWrite, displayPath, instance.id, instance.relayId]
-  )
-  // The header only needs to know whether the file is writable; size and
-  // mtime changes after a refetch stay inside the components that show them.
+  // The header only needs to know whether the database is writable; size
+  // and version changes after a refetch stay inside the components showing
+  // them.
   const overviewQuery = useQuery({
     ...overviewQueryOptions(source),
     select: selectReadOnly,
   })
   const readOnly = overviewQuery.data ?? null
-  const notDatabase =
-    overviewQuery.isError &&
-    overviewQuery.error.message.includes("not a SQLite database")
+  const unavailableMessage = overviewQuery.isError
+    ? overviewQuery.error.message
+    : null
   React.useEffect(() => {
-    if (notDatabase) onNotDatabase()
-  }, [notDatabase, onNotDatabase])
-  const writable = canWrite && readOnly === false
+    if (unavailableMessage) onUnavailable?.(unavailableMessage)
+  }, [onUnavailable, unavailableMessage])
+  const writable = source.canWrite && readOnly === false
   const [queryOpen, setQueryOpen] = React.useState(false)
   // The workspace renders its table picker here while the sidebar is hidden.
   const [headerSlot, setHeaderSlot] = React.useState<HTMLElement | null>(null)
-  const liveServer =
-    instance.observedState === "running" ||
-    instance.observedState === "starting"
 
   return (
     <section className="flex min-h-[360px] min-w-0 flex-1 flex-col bg-card">
       <div className={fileEditorHeaderClassName} data-file-toolbar>
-        {treeCollapsed ? <FileTreeRevealButton onClick={onTreeExpand} /> : null}
+        {leading}
         <div className={fileEditorHeaderContentClassName}>
-          <FileToolbarIdentity
-            path={displayPath}
-            readOnly={readOnly !== null && !writable}
-          />
+          {identity({ readOnly: readOnly === null ? null : !writable })}
           <div className="ml-auto flex shrink-0 items-center gap-1">
             <div ref={setHeaderSlot} className="contents" />
             <DatabaseRefreshButton source={source} />
-            {readOnly !== null ? (
+            {readOnly !== null && source.canQuery ? (
               <DatabaseQueryButton
                 open={queryOpen}
                 onOpenChange={setQueryOpen}
               />
             ) : null}
-            <DatabaseOverflowMenu instance={instance} path={displayPath} />
+            {trailing}
           </div>
         </div>
       </div>
 
       {readOnly !== null ? (
         <DatabaseWorkspace
-          key={displayPath}
+          key={JSON.stringify(source.queryKey)}
+          editWarning={editWarning}
           headerSlot={headerSlot}
-          liveServer={liveServer}
           queryOpen={queryOpen}
           source={source}
           writable={writable}
@@ -186,7 +171,7 @@ export function DatabaseViewer({
         <div className="grid min-h-0 flex-1 place-items-center px-6 text-center">
           <FileWorkspaceLoadingState
             title="Opening database"
-            description="Reading tables and columns from the Relay."
+            description="Reading tables and columns."
           />
         </div>
       )}
@@ -206,7 +191,14 @@ function overviewQueryOptions(source: DatabaseSource) {
 const selectReadOnly = (overview: DatabaseOverview) => overview.readOnly
 const selectTables = (overview: DatabaseOverview) => overview.tables
 const selectMeta = (overview: DatabaseOverview) =>
-  `SQLite ${overview.engineVersion} · ${formatByteSize(overview.sizeBytes)}`
+  `${databaseEngineLabels[overview.engine]} ${overview.engineVersion} · ${formatByteSize(overview.sizeBytes)}`
+const selectEngine = (overview: DatabaseOverview) => overview.engine
+const databaseEngineLabels: Record<DatabaseOverview["engine"], string> = {
+  mariadb: "MariaDB",
+  mysql: "MySQL",
+  postgres: "Postgres",
+  sqlite: "SQLite",
+}
 const noTables: ReadonlyArray<DatabaseTable> = []
 
 function DatabaseMetaLabel({ source }: { source: DatabaseSource }) {
@@ -240,60 +232,6 @@ function DatabaseQueryButton({
         Query
       </Button>
     </EditorTooltip>
-  )
-}
-
-function DatabaseOverflowMenu({
-  instance,
-  path,
-}: {
-  instance: InstanceWorkspaceInstance
-  path: string
-}) {
-  const [open, setOpen] = React.useState(false)
-  const [downloadOpen, setDownloadOpen] = React.useState(false)
-  return (
-    <>
-      <Popover open={open} onOpenChange={setOpen}>
-        <PopoverTrigger asChild>
-          <Button
-            variant={open ? "secondary" : "ghost"}
-            size="icon"
-            aria-label="More database actions"
-            aria-expanded={open}
-            title="More database actions"
-          >
-            <EllipsisVertical className="size-[18px]" />
-          </Button>
-        </PopoverTrigger>
-        <PopoverContent
-          align="end"
-          side="bottom"
-          sideOffset={7}
-          collisionPadding={8}
-          className="w-[min(17rem,calc(100vw-1rem))] p-1"
-        >
-          <p className="type-technical-label px-2 pt-1 pb-1.5 text-muted-foreground">
-            Database actions
-          </p>
-          <FileActionMenuItem
-            icon={<Download />}
-            label="Download"
-            detail="Preview size and compression"
-            onClick={() => {
-              setOpen(false)
-              setDownloadOpen(true)
-            }}
-          />
-        </PopoverContent>
-      </Popover>
-      <FileDownloadDialog
-        instance={instance}
-        open={downloadOpen}
-        path={path}
-        onOpenChange={setDownloadOpen}
-      />
-    </>
   )
 }
 
@@ -386,15 +324,15 @@ function warnBeforeUnload(event: BeforeUnloadEvent) {
 }
 
 function DatabaseWorkspace({
+  editWarning,
   headerSlot,
-  liveServer,
   onQueryOpenChange,
   queryOpen,
   source,
   writable,
 }: {
+  editWarning: DatabaseEditWarning | null
   headerSlot: HTMLElement | null
-  liveServer: boolean
   onQueryOpenChange: (open: boolean) => void
   queryOpen: boolean
   source: DatabaseSource
@@ -421,7 +359,7 @@ function DatabaseWorkspace({
     [setTablesCollapsed]
   )
   // An empty database has nothing to browse, so start in the query console.
-  const emptyDatabase = tables.length === 0
+  const emptyDatabase = tables.length === 0 && source.canQuery
   React.useLayoutEffect(() => {
     if (emptyDatabase) onQueryOpenChange(true)
   }, [emptyDatabase, onQueryOpenChange])
@@ -525,7 +463,7 @@ function DatabaseWorkspace({
           <TableView
             key={table.name}
             editStore={editStore}
-            liveServer={liveServer}
+            editWarning={editWarning}
             source={source}
             table={table}
             writable={writable}
@@ -533,7 +471,9 @@ function DatabaseWorkspace({
           />
         ) : (
           <div className="grid flex-1 place-items-center px-6 text-center text-xs text-muted-foreground">
-            This database has no tables yet. Use Query to create one.
+            {source.canQuery
+              ? "This database has no tables yet. Use Query to create one."
+              : "This database has no tables yet."}
           </div>
         )}
       </div>
@@ -1018,14 +958,14 @@ function TableListSection({
 
 const TableView = React.memo(function TableView({
   editStore,
-  liveServer,
+  editWarning,
   onRevealTables,
   source,
   table,
   writable,
 }: {
   editStore: DatabaseEditStore
-  liveServer: boolean
+  editWarning: DatabaseEditWarning | null
   onRevealTables: (() => void) | null
   source: DatabaseSource
   table: DatabaseTable
@@ -1152,7 +1092,7 @@ const TableView = React.memo(function TableView({
       <TableFooter
         editStore={editStore}
         editable={editable}
-        liveServer={liveServer}
+        editWarning={editWarning}
         offset={offset}
         pageStore={pageStore}
         readOnlyReason={
@@ -1373,7 +1313,7 @@ function TableStructureButton({ table }: { table: DatabaseTable }) {
 function TableFooter({
   editStore,
   editable,
-  liveServer,
+  editWarning,
   offset,
   onOffsetChange,
   pageStore,
@@ -1384,7 +1324,7 @@ function TableFooter({
 }: {
   editStore: DatabaseEditStore
   editable: boolean
-  liveServer: boolean
+  editWarning: DatabaseEditWarning | null
   offset: number
   onOffsetChange: (offset: number) => void
   pageStore: DatabasePageStore
@@ -1550,10 +1490,10 @@ function TableFooter({
 
       {pending > 0 ? (
         <div className="ml-auto flex items-center gap-2">
-          {liveServer ? (
-            <EditorTooltip content="Plugins may cache or overwrite rows while the server runs. Stop the server for reliable edits.">
+          {editWarning ? (
+            <EditorTooltip content={editWarning.detail}>
               <span className="type-meta hidden items-center gap-1 text-amber-500 lg:flex">
-                <TriangleAlert className="size-3.5" /> Server running
+                <TriangleAlert className="size-3.5" /> {editWarning.label}
               </span>
             </EditorTooltip>
           ) : null}
@@ -1669,10 +1609,13 @@ function SqlConsole({
   sqlRef.current = sql
   const editorRef = React.useRef<HTMLDivElement>(null)
   const run = useMutation({
-    mutationFn: (statement: string) =>
-      source.query(statement, writable && allowWrites),
-    onSuccess: async (result) => {
-      if (result.changes !== null) {
+    mutationFn: ({ statement, write }: { statement: string; write: boolean }) =>
+      source.query(statement, write),
+    // A write can change data without reporting a count: DDL, and statements
+    // that return rows (RETURNING) report rows instead. So every run that was
+    // allowed to write refreshes the tables and rows shown.
+    onSuccess: async (result, { write }) => {
+      if (write || result.changes !== null) {
         await queryClient.invalidateQueries({ queryKey: source.queryKey })
       }
     },
@@ -1680,12 +1623,13 @@ function SqlConsole({
   const runQuery = React.useCallback(() => {
     const statement = sqlRef.current.trim()
     if (!statement || run.isPending) return
-    run.mutate(statement)
-  }, [run])
+    run.mutate({ statement, write: writable && allowWrites })
+  }, [allowWrites, run, writable])
 
-  const placeholder = tables[0]
-    ? `SELECT * FROM "${tables[0].name}" LIMIT 100;`
-    : "SELECT sqlite_version();"
+  const engine =
+    useQuery({ ...overviewQueryOptions(source), select: selectEngine }).data ??
+    "sqlite"
+  const placeholder = samplePlaceholder(engine, tables[0]?.name)
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -1776,6 +1720,22 @@ function SqlConsole({
 }
 
 const ignoreSearchOpenChange = () => undefined
+
+function samplePlaceholder(
+  engine: DatabaseOverview["engine"],
+  table: string | undefined
+) {
+  if (!table) {
+    return engine === "sqlite"
+      ? "SELECT sqlite_version();"
+      : "SELECT version();"
+  }
+  const quoted =
+    engine === "mysql" || engine === "mariadb"
+      ? `\`${table.replaceAll("`", "``")}\``
+      : `"${table.replaceAll('"', '""')}"`
+  return `SELECT * FROM ${quoted} LIMIT 100;`
+}
 
 function SqlResult({
   error,

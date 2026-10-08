@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vite-plus/test"
 
-import { createDatabaseEditStore } from "@/components/files/database/database-edit-store"
-import { createDatabasePageStore } from "@/components/files/database/database-page-store"
-import { parseEditedText } from "@/components/files/database/database-values"
+import { createDatabaseEditStore } from "@/components/database-viewer/database-edit-store"
+import { createDatabasePageStore } from "@/components/database-viewer/database-page-store"
+import { parseEditedText } from "@/components/database-viewer/database-values"
 
 const row = {
   id: "alex",
