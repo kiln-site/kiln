@@ -4,6 +4,7 @@ import { createRequire } from "node:module"
 import type { Duplex } from "node:stream"
 
 import type {
+  DatabaseTerminalControl,
   DatabaseTerminalEnd,
   DatabaseTerminalEndReason,
   HearthDatabaseTerminalOutput,
@@ -69,6 +70,8 @@ export type PushTerminalOutput = (
 ) => Promise<unknown>
 
 interface Viewer {
+  // Who is in control, as last sent to this viewer.
+  control: DatabaseTerminalControl
   owner: string
   push: PushTerminalOutput
   renewedAt: number
@@ -89,6 +92,8 @@ interface SizeChange extends TerminalSize {
 }
 
 interface TerminalSession {
+  // The attachment in control: it sets the size and is the one typed in.
+  active: string | null
   containerId: string
   databaseId: string
   ending: DatabaseTerminalEndReason | null
@@ -183,7 +188,9 @@ export class DatabaseTerminals {
     // Joining keeps the session's size; the page in use claims it with a
     // resize, so a page reconnecting in the background doesn't take it.
     const snapshot = await serializeScreen(session)
+    const control = controlFor(session, input.attachmentId)
     session.viewers.set(input.attachmentId, {
+      control,
       owner,
       push,
       renewedAt: Date.now(),
@@ -196,6 +203,7 @@ export class DatabaseTerminals {
     this.#flush(session)
     return {
       cols: snapshot.cols,
+      control,
       offset: snapshot.offset,
       previous: session.previous,
       rows: snapshot.rows,
@@ -233,15 +241,24 @@ export class DatabaseTerminals {
     return { accepted: true }
   }
 
-  async resize(
+  // Puts one of the person's pages in control, sized to its window. Every
+  // other page hears that another page is in control.
+  async claim(
     owner: string,
     databaseId: string,
     sessionId: string,
+    attachmentId: string,
     rows: number,
     cols: number
   ) {
-    await this.#resize(this.#current(owner, databaseId, sessionId), rows, cols)
-    return { resized: true }
+    const session = this.#current(owner, databaseId, sessionId)
+    if (session.viewers.get(attachmentId)?.owner !== owner) {
+      throw new Error("This page is no longer attached to the session")
+    }
+    session.active = attachmentId
+    this.#flush(session)
+    await this.#resize(session, rows, cols)
+    return { claimed: true }
   }
 
   #current(owner: string, databaseId: string, sessionId: string) {
@@ -298,6 +315,7 @@ export class DatabaseTerminals {
     const serializer = new HeadlessSerializeAddon()
     screen.loadAddon(serializer)
     const session: TerminalSession = {
+      active: null,
       containerId,
       databaseId: database.id,
       ended: null,
@@ -405,9 +423,12 @@ export class DatabaseTerminals {
       }
       const finished = session.ended !== null
       const size = sizeAt(session, viewer.sentOffset)
-      const resized =
-        size.cols !== viewer.size.cols || size.rows !== viewer.size.rows
-      if (viewer.sentOffset >= end && !finished && !resized) continue
+      const control = controlFor(session, attachmentId)
+      const changed =
+        size.cols !== viewer.size.cols ||
+        size.rows !== viewer.size.rows ||
+        control !== viewer.control
+      if (viewer.sentOffset >= end && !finished && !changed) continue
       // A push never spans a size change, so it's shown at one size.
       const until = Math.min(
         end,
@@ -426,6 +447,7 @@ export class DatabaseTerminals {
               {
                 attachmentId,
                 cols: size.cols,
+                control,
                 data: chunk.toString("base64"),
                 ended: last ? session.ended : null,
                 offset,
@@ -443,6 +465,7 @@ export class DatabaseTerminals {
         }
         viewer.sentOffset = offset
         viewer.size = size
+        viewer.control = control
         this.#flush(session)
       })
     }
@@ -451,6 +474,11 @@ export class DatabaseTerminals {
   #dropViewer(session: TerminalSession, attachmentId: string) {
     if (!session.viewers.delete(attachmentId)) return
     this.#attachments.delete(attachmentId)
+    // Nobody is in control until another page claims it.
+    if (session.active === attachmentId) {
+      session.active = null
+      this.#flush(session)
+    }
     if (session.viewers.size > 0 || session.ending) return
     session.idleTimer = setTimeout(() => {
       forkPromise(() => this.#end(session, "timed-out"))
@@ -645,6 +673,14 @@ function serializeScreen(session: TerminalSession) {
       })
     })
   })
+}
+
+function controlFor(
+  session: TerminalSession,
+  attachmentId: string
+): DatabaseTerminalControl {
+  if (session.active === null) return "none"
+  return session.active === attachmentId ? "self" : "other"
 }
 
 // The size output from `offset` is shown at.

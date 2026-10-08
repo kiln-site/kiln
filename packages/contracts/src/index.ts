@@ -226,6 +226,10 @@ export const databaseTerminalEndReasonSchema = z.enum([
   "failed",
 ])
 
+// Which page sets the session's size and is being typed in: the page the
+// output is for, another of the person's pages, or none yet.
+export const databaseTerminalControlSchema = z.enum(["self", "other", "none"])
+
 export const databaseTerminalEndSchema = z
   .object({
     at: z.string().datetime(),
@@ -248,21 +252,21 @@ export const relayDatabaseTerminalAttachSchema = relayDatabaseExportSchema
   })
   .strict()
 
-export const relayDatabaseTerminalAttachedSchema = z
-  .object({
-    cols: z.number().int(),
-    // The session's output so far, as the screen and scrollback a terminal
-    // shows, ready to write into an empty terminal.
-    snapshot: z.string(),
-    // Byte offset of the output the snapshot covers; pushes continue here.
-    offset: z.number().int().nonnegative(),
-    // How the person's session before this one ended, if the Relay knows.
-    previous: databaseTerminalEndSchema.nullable(),
-    rows: z.number().int(),
-    sessionId: databaseTerminalIdSchema,
-    startedAt: z.string().datetime(),
-  })
-  .strict()
+// Not strict, like the output pushes: a newer Relay may add fields.
+export const relayDatabaseTerminalAttachedSchema = z.object({
+  cols: z.number().int(),
+  control: databaseTerminalControlSchema,
+  // The session's output so far, as the screen and scrollback a terminal
+  // shows, ready to write into an empty terminal.
+  snapshot: z.string(),
+  // Byte offset of the output the snapshot covers; pushes continue here.
+  offset: z.number().int().nonnegative(),
+  // How the person's session before this one ended, if the Relay knows.
+  previous: databaseTerminalEndSchema.nullable(),
+  rows: z.number().int(),
+  sessionId: databaseTerminalIdSchema,
+  startedAt: z.string().datetime(),
+})
 
 export const relayDatabaseTerminalHeartbeatSchema = z
   .object({ attachmentIds: z.array(databaseTerminalIdSchema).max(1_000) })
@@ -287,25 +291,31 @@ export const relayDatabaseTerminalWriteSchema = z
   })
   .strict()
 
-export const relayDatabaseTerminalResizeSchema = z
-  .object({ ...databaseTerminalSessionShape, ...databaseTerminalSizeShape })
+// Makes a page the one in control, sized to its window. The page in control
+// claims again when its window resizes.
+export const relayDatabaseTerminalClaimSchema = z
+  .object({
+    ...databaseTerminalSessionShape,
+    ...databaseTerminalSizeShape,
+    attachmentId: databaseTerminalIdSchema,
+  })
   .strict()
 
 // Relay to Hearth: output for one attachment, in order. `ended` arrives with
-// the session's last output.
-export const hearthDatabaseTerminalOutputSchema = z
-  .object({
-    attachmentId: databaseTerminalIdSchema,
-    // The session's size this output is shown at.
-    cols: z.number().int().min(10).max(500),
-    // Raw terminal bytes, base64 encoded; chunks may split characters.
-    data: z.string(),
-    ended: databaseTerminalEndSchema.nullable(),
-    offset: z.number().int().nonnegative(),
-    rows: z.number().int().min(4).max(300),
-    sessionId: databaseTerminalIdSchema,
-  })
-  .strict()
+// the session's last output. Not strict: a Relay newer than its Hearth may
+// send fields this Hearth doesn't know yet.
+export const hearthDatabaseTerminalOutputSchema = z.object({
+  attachmentId: databaseTerminalIdSchema,
+  // The session's size this output is shown at.
+  cols: z.number().int().min(10).max(500),
+  control: databaseTerminalControlSchema,
+  // Raw terminal bytes, base64 encoded; chunks may split characters.
+  data: z.string(),
+  ended: databaseTerminalEndSchema.nullable(),
+  offset: z.number().int().nonnegative(),
+  rows: z.number().int().min(4).max(300),
+  sessionId: databaseTerminalIdSchema,
+})
 
 export const relayDatabaseDataWriteSchema = relayDatabaseExportSchema.extend({
   // Runs a query in a read-only transaction, guarding against accidental
@@ -1659,6 +1669,9 @@ export type RelayDatabaseNetwork = z.infer<typeof relayDatabaseNetworkSchema>
 export type RelayDatabaseDump = z.infer<typeof relayDatabaseDumpSchema>
 export type RelayDatabaseExport = z.infer<typeof relayDatabaseExportSchema>
 export type RelayDatabaseDataRead = z.infer<typeof relayDatabaseDataReadSchema>
+export type DatabaseTerminalControl = z.infer<
+  typeof databaseTerminalControlSchema
+>
 export type DatabaseTerminalEnd = z.infer<typeof databaseTerminalEndSchema>
 export type DatabaseTerminalEndReason = z.infer<
   typeof databaseTerminalEndReasonSchema

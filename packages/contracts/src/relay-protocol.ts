@@ -62,7 +62,7 @@ export const relayControlOperations = [
   "database.terminal.heartbeat",
   "database.terminal.detach",
   "database.terminal.write",
-  "database.terminal.resize",
+  "database.terminal.claim",
   "backup.task.enqueue",
   "backup.task.cancel",
   "backup.task.get",

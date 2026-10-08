@@ -154,12 +154,20 @@ describe("database terminal sessions", () => {
       cols: 120,
       rows: 40,
     })
+    const otherAttachment = attachmentId(attachments)
     // Joining shows the session as it is rather than resizing it.
     expect(joined).toMatchObject({ cols: 80, rows: 24 })
 
     terminals.write(alice, databaseId, first.sessionId, "before;")
     await vi.waitFor(() => expect(other.output).toContain("before;"))
-    await terminals.resize(alice, databaseId, first.sessionId, 40, 120)
+    await terminals.claim(
+      alice,
+      databaseId,
+      first.sessionId,
+      otherAttachment,
+      40,
+      120
+    )
     terminals.write(alice, databaseId, first.sessionId, "after;")
     await vi.waitFor(() => expect(other.output).toContain("after;"))
 
@@ -172,6 +180,58 @@ describe("database terminal sessions", () => {
     expect(shownAt("before;")).toEqual([{ cols: 80, rows: 24 }])
     expect(shownAt("after;")).toEqual([{ cols: 120, rows: 40 }])
     expect(clientExecs()[0]?.size).toEqual({ cols: 120, rows: 40 })
+  })
+
+  it("puts one of a person's pages in control at a time", async () => {
+    const harness = await relayHarness()
+    const database = await runningDatabase(harness)
+    const terminals = new DatabaseTerminals(harness.config)
+    const laptop = viewer()
+    const session = await attach(terminals, alice, database, laptop)
+    const laptopAttachment = attachmentId(attachments)
+    const phone = viewer()
+    await attach(terminals, alice, database, phone)
+    const phoneAttachment = attachmentId(attachments)
+    const control = (page: ReturnType<typeof viewer>) =>
+      page.pushes.at(-1)?.control
+    const claim = (attachment: string, cols: number) =>
+      terminals.claim(
+        alice,
+        databaseId,
+        session.sessionId,
+        attachment,
+        24,
+        cols
+      )
+
+    await claim(laptopAttachment, 120)
+    await vi.waitFor(() => {
+      expect(control(laptop)).toBe("self")
+      expect(control(phone)).toBe("other")
+    })
+
+    await claim(phoneAttachment, 40)
+    await vi.waitFor(() => {
+      expect(control(phone)).toBe("self")
+      expect(control(laptop)).toBe("other")
+      expect(laptop.pushes.at(-1)?.cols).toBe(40)
+    })
+
+    // The page in control leaving leaves nobody in control.
+    terminals.detach(alice, phoneAttachment)
+    await vi.waitFor(() => expect(control(laptop)).toBe("none"))
+
+    // Someone else's page can't take control of this session.
+    await expect(
+      terminals.claim(
+        mallory,
+        databaseId,
+        session.sessionId,
+        laptopAttachment,
+        24,
+        80
+      )
+    ).rejects.toThrow()
   })
 
   it("keeps each person's session to themselves", async () => {

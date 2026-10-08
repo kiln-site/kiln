@@ -15,7 +15,7 @@ import {
   databaseIdSchema,
   relayDatabaseNameSchema,
   relayIdSchema,
-  relayDatabaseTerminalResizeSchema,
+  relayDatabaseTerminalClaimSchema,
   relayDatabaseTerminalWriteSchema,
   relayManagedDatabaseSchema,
 } from "@workspace/contracts"
@@ -680,16 +680,19 @@ export const writeDatabaseTerminal = createServerFn({ method: "POST" })
     return { accepted: true }
   })
 
-export const resizeDatabaseTerminal = createServerFn({ method: "POST" })
+// Puts this page in control of the person's terminal session, sized to its
+// window.
+export const claimDatabaseTerminal = createServerFn({ method: "POST" })
   .validator(
-    relayDatabaseTerminalResizeSchema.extend({ relayId: relayIdSchema })
+    relayDatabaseTerminalClaimSchema.extend({ relayId: relayIdSchema })
   )
   .handler(async ({ data }) => {
     const { relay, user } = await authorizedDatabase(data, "database.terminal")
     await databaseRpc(
       relay,
-      "database.terminal.resize",
+      "database.terminal.claim",
       {
+        attachmentId: data.attachmentId,
         cols: data.cols,
         databaseId: data.databaseId,
         rows: data.rows,
@@ -698,7 +701,7 @@ export const resizeDatabaseTerminal = createServerFn({ method: "POST" })
       15_000,
       user.id
     )
-    return { resized: true }
+    return { claimed: true }
   })
 
 export const deleteManagedDatabase = createServerFn({ method: "POST" })

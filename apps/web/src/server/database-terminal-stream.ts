@@ -109,6 +109,7 @@ export function openDatabaseTerminalStream(input: {
     // Sent even without data: a resize alone changes how the page shows.
     send({
       cols: output.cols,
+      control: output.control,
       data: output.data,
       offset: output.offset,
       rows: output.rows,
@@ -198,7 +199,12 @@ export function openDatabaseTerminalStream(input: {
       )
     )
     if (closed) return
-    send({ ...session, type: "attached", user: credential.username })
+    send({
+      ...session,
+      attachmentId,
+      type: "attached",
+      user: credential.username,
+    })
     attached = true
     timers.push(
       setInterval(() => send({ type: "ping" }), PING_INTERVAL_MS),

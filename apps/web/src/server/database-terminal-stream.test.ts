@@ -30,6 +30,7 @@ vi.mock("@/server/managed-database-access", () => ({
         deliverDatabaseTerminalOutput("relay-one", {
           attachmentId: payload.attachmentId!,
           cols: 80,
+          control: "none",
           data: "",
           ended: { at: "2026-01-01T00:00:01.000Z", reason: "exited" },
           offset: 0,
@@ -39,6 +40,7 @@ vi.mock("@/server/managed-database-access", () => ({
       }
       return {
         cols: 80,
+        control: "none",
         offset: 0,
         previous: null,
         rows: 24,
@@ -117,6 +119,7 @@ async function openStream() {
     deliverDatabaseTerminalOutput(relay.id, {
       attachmentId,
       cols: 80,
+      control: "none",
       data: Buffer.from(data).toString("base64"),
       ended: null,
       offset: 0,

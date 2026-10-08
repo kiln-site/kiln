@@ -21,7 +21,7 @@ import {
   relayDatabaseTerminalAttachSchema,
   relayDatabaseTerminalDetachSchema,
   relayDatabaseTerminalHeartbeatSchema,
-  relayDatabaseTerminalResizeSchema,
+  relayDatabaseTerminalClaimSchema,
   relayDatabaseTerminalWriteSchema,
   relayDatabaseExportSchema,
   relayDatabaseNetworkSchema,
@@ -1412,12 +1412,13 @@ async function executeControlRequest(
         input.data
       )
     }
-    case "database.terminal.resize": {
-      const input = relayDatabaseTerminalResizeSchema.parse(request.payload)
-      return databaseTerminals.resize(
+    case "database.terminal.claim": {
+      const input = relayDatabaseTerminalClaimSchema.parse(request.payload)
+      return databaseTerminals.claim(
         terminalOwner(client, request),
         input.databaseId,
         input.sessionId,
+        input.attachmentId,
         input.rows,
         input.cols
       )

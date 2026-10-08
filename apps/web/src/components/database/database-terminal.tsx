@@ -6,10 +6,12 @@ import { SearchAddon } from "@xterm/addon-search"
 import { Terminal } from "@xterm/xterm"
 import {
   DATABASE_TERMINAL_WRITE_MAX_CHARACTERS,
+  type DatabaseTerminalControl,
   type DatabaseTerminalEnd,
 } from "@workspace/contracts"
 import { Effect } from "effect"
 import {
+  AppWindow,
   ArrowDown,
   ChevronDown,
   ChevronUp,
@@ -41,7 +43,7 @@ import {
   type DatabaseTerminalStreamRecord,
 } from "@/lib/database-terminal-stream"
 import {
-  resizeDatabaseTerminal,
+  claimDatabaseTerminal,
   writeDatabaseTerminal,
 } from "@/server/databases"
 
@@ -65,19 +67,23 @@ type SessionNotice =
   | { kind: "previous"; ended: DatabaseTerminalEnd }
   | { kind: "relay-restarted" }
 
-// Who the client is signed in as, and since when, for the toolbar.
+// Whether this page is the one in control of the session: it sets the size
+// and is the one typed in. Only one of the person's pages is at a time.
+// "claiming" is this page taking control, until the Relay confirms it.
+type TerminalControl = DatabaseTerminalControl | "claiming"
+
 interface TerminalSize {
   cols: number
   rows: number
 }
 
+// Who the client is signed in as, and since when, for the toolbar.
 interface TerminalSessionInfo {
   startedAt: string
   user: string
 }
 
-const INPUT_FLUSH_MS = 8
-const RESIZE_DEBOUNCE_MS = 150
+const CLAIM_DEBOUNCE_MS = 150
 const RECONNECT_MAX_DELAY_MS = 5_000
 
 // A session notice stays up this long unless dismissed sooner.
@@ -97,12 +103,14 @@ export function DatabaseTerminal({
     kind: "connecting",
   })
   const [notice, setNotice] = React.useState<SessionNotice | null>(null)
+  const [control, setControl] = React.useState<TerminalControl>("none")
   const [session, setSession] = React.useState<TerminalSessionInfo | null>(null)
   const [hasSelection, setHasSelection] = React.useState(false)
   const [atBottom, setAtBottom] = React.useState(true)
   const surface = React.useRef<TerminalSurfaceHandle>(null)
   const events = React.useMemo<TerminalSurfaceEvents>(
     () => ({
+      onControl: setControl,
       onNotice: setNotice,
       onScrolledToBottom: setAtBottom,
       onSelection: setHasSelection,
@@ -126,7 +134,10 @@ export function DatabaseTerminal({
   }, [notice])
 
   return (
-    <section className="flex min-h-0 min-w-0 flex-1 flex-col bg-card">
+    <section
+      data-terminal-frame
+      className="flex min-h-0 min-w-0 flex-1 flex-col bg-card transition-transform duration-150"
+    >
       <div className="flex min-h-14 shrink-0 flex-wrap items-center gap-2 border-b px-3 py-2.5 sm:px-4">
         <TerminalSearch surface={surface} />
         {session ? (
@@ -177,6 +188,7 @@ export function DatabaseTerminal({
           </Button>
         ) : null}
         <TerminalNotice
+          control={control}
           notice={notice}
           status={status}
           onDismissNotice={() => setNotice(null)}
@@ -308,10 +320,12 @@ function RestartSessionButton({
 
 // Floats over the terminal so the screen never shifts under the person.
 function TerminalNotice({
+  control,
   notice,
   onDismissNotice,
   status,
 }: {
+  control: TerminalControl
   notice: SessionNotice | null
   onDismissNotice: () => void
   status: TerminalStatus
@@ -328,7 +342,24 @@ function TerminalNotice({
       />
     )
   }
-  if (!notice || status.kind !== "live") return null
+  if (status.kind !== "live") return null
+  if (control === "claiming") {
+    return <OverlayNotice loading message="RESIZING TO THIS TAB…" tone="info" />
+  }
+  if (control === "other") {
+    return (
+      <OverlayNotice
+        icon={otherTabIcon}
+        message={
+          window.matchMedia("(pointer: coarse)").matches
+            ? "ACTIVE IN ANOTHER TAB · TAP TO USE"
+            : "ACTIVE IN ANOTHER TAB · CLICK TO USE"
+        }
+        tone="info"
+      />
+    )
+  }
+  if (!notice) return null
   return (
     <OverlayNotice
       icon={noticeIcon}
@@ -344,6 +375,7 @@ function TerminalNotice({
 }
 
 const noticeIcon = <Info className="size-3" />
+const otherTabIcon = <AppWindow className="size-3" />
 
 function TerminalOverlay({
   onReconnect,
@@ -449,6 +481,7 @@ function formatStartedAt(value: string) {
 }
 
 interface TerminalSurfaceEvents {
+  onControl: (control: TerminalControl) => void
   onNotice: (notice: SessionNotice | null) => void
   onScrolledToBottom: (atBottom: boolean) => void
   onSelection: (hasSelection: boolean) => void
@@ -494,7 +527,8 @@ const TerminalSurface = React.memo(
         fontFamily:
           getComputedStyle(container).getPropertyValue("--font-mono").trim() ||
           "monospace",
-        fontSize: 13,
+        // 16px on touch screens, so iOS doesn't zoom in when typing.
+        fontSize: window.matchMedia("(pointer: coarse)").matches ? 16 : 13,
         lineHeight: 1.3,
         scrollback: 5_000,
         theme: terminalTheme(container),
@@ -571,27 +605,33 @@ const TerminalSurface = React.memo(
         }
       })
       const typed = terminal.onData((data) => connection.input(data))
-      // The page in use claims the session's size for its window.
-      const claim = () => connection.claimSize()
-      terminal.textarea?.addEventListener("focus", claim)
-      const observer = new ResizeObserver(claim)
+      // Focusing or clicking the terminal puts this page in control (a click
+      // on an already focused terminal fires no focus). While in control,
+      // its window resizing resizes the session.
+      const focused = () => connection.claim()
+      terminal.textarea?.addEventListener("focus", focused)
+      terminal.element?.addEventListener("pointerdown", focused)
+      const observer = new ResizeObserver(() => connection.windowResized())
       observer.observe(container)
+      const keyboard = followKeyboard(terminal, container)
       connection.connect(false)
 
       return () => {
         connection.stop()
         observer.disconnect()
+        keyboard()
         scrolled.dispose()
         selected.dispose()
         typed.dispose()
-        terminal.textarea?.removeEventListener("focus", claim)
+        terminal.textarea?.removeEventListener("focus", focused)
+        terminal.element?.removeEventListener("pointerdown", focused)
         handle.current = null
         terminal.dispose()
       }
     }, [databaseId, events, relayId])
 
     return (
-      <div className="absolute inset-0 overflow-hidden bg-black py-3 pr-2 pl-4 text-foreground">
+      <div className="absolute inset-0 overflow-hidden bg-black py-3 pr-2 pl-4 text-foreground [&_.xterm-helper-textarea]:!text-[16px]">
         <div ref={containerRef} className="size-full" />
       </div>
     )
@@ -614,7 +654,9 @@ class TerminalConnection {
   // goes to any other session.
   #pendingInput = ""
   #pendingSessionId: string | null = null
-  #resizeTimer: ReturnType<typeof setTimeout> | null = null
+  #attachmentId: string | null = null
+  #claimTimer: ReturnType<typeof setTimeout> | null = null
+  #control: TerminalControl = "none"
   // Whether this page asked for the session it is attaching to.
   #restarting = false
   #sessionId: string | null = null
@@ -651,7 +693,7 @@ class TerminalConnection {
     this.#generation += 1
     this.#abort?.abort()
     if (this.#flushTimer) clearTimeout(this.#flushTimer)
-    if (this.#resizeTimer) clearTimeout(this.#resizeTimer)
+    if (this.#claimTimer) clearTimeout(this.#claimTimer)
   }
 
   input(data: string) {
@@ -661,30 +703,54 @@ class TerminalConnection {
       this.#pendingSessionId = this.#sessionId
     }
     this.#pendingInput += data
-    // Typing here takes the size back from another page or device.
-    this.claimSize()
+    // Typing takes control back from another page that took it meanwhile.
+    if (this.#control === "other" || this.#control === "none") this.claim()
+    // Sent right away; keys typed while a write is in flight go together.
     if (!this.#flushTimer) {
-      this.#flushTimer = setTimeout(() => this.#flushInput(), INPUT_FLUSH_MS)
+      this.#flushTimer = setTimeout(() => this.#flushInput(), 0)
     }
   }
 
-  // Sizes the session to this page's window when this is the page in use:
-  // its window has focus and the terminal has it within. Other pages keep
-  // showing it at its size. Only a trigger claims (focus, the window
-  // resizing, typing), never a size arriving, so pages don't trade it back.
-  claimSize() {
+  // Puts this page in control, sized to its window. Every other page then
+  // shows that another tab is active.
+  claim() {
+    const sessionId = this.#sessionId
+    const attachmentId = this.#attachmentId
+    const size = this.#measure()
+    if (!this.#live || !sessionId || !attachmentId || !size) return
     const current = this.#sessionSize
-    if (!this.#live || !current) return
     if (
-      !document.hasFocus() ||
-      document.activeElement !== this.#terminal.textarea
+      this.#control === "self" &&
+      current?.cols === size.cols &&
+      current.rows === size.rows
     ) {
       return
     }
-    const wanted = this.#measure()
-    if (!wanted) return
-    if (wanted.cols === current.cols && wanted.rows === current.rows) return
-    this.resize(wanted.cols, wanted.rows)
+    if (this.#control !== "self") this.#setControl("claiming")
+    if (this.#claimTimer) clearTimeout(this.#claimTimer)
+    this.#claimTimer = setTimeout(() => {
+      this.#claimTimer = null
+      forkPromise(
+        () =>
+          claimDatabaseTerminal({
+            data: { ...this.#target, ...size, attachmentId, sessionId },
+          }),
+        () => {
+          if (this.#control === "claiming") this.#setControl("none")
+        }
+      )
+    }, CLAIM_DEBOUNCE_MS)
+  }
+
+  // The page in control follows its own window.
+  windowResized() {
+    if (this.#control === "self") this.claim()
+  }
+
+  #setControl(control: TerminalControl) {
+    if (this.#control === control) return
+    this.#control = control
+    this.#events.onControl(control)
   }
 
   // Output already written was at the old size, so the resize waits for it.
@@ -693,19 +759,6 @@ class TerminalConnection {
     if (current?.cols === cols && current.rows === rows) return
     this.#sessionSize = { cols, rows }
     this.#terminal.write("", () => this.#terminal.resize(cols, rows))
-  }
-
-  resize(cols: number, rows: number) {
-    if (this.#resizeTimer) clearTimeout(this.#resizeTimer)
-    this.#resizeTimer = setTimeout(() => {
-      const sessionId = this.#sessionId
-      if (!this.#live || !sessionId) return
-      forkPromise(() =>
-        resizeDatabaseTerminal({
-          data: { ...this.#target, cols, rows, sessionId },
-        })
-      )
-    }, RESIZE_DEBOUNCE_MS)
   }
 
   #flushInput() {
@@ -853,6 +906,8 @@ class TerminalConnection {
         this.#terminal.write(record.snapshot)
         this.#offset = record.offset
         this.#sessionId = record.sessionId
+        this.#attachmentId = record.attachmentId
+        this.#setControl(record.control)
         this.#live = true
         if (this.#pendingInput && !this.#flushTimer) {
           this.#flushTimer = setTimeout(() => this.#flushInput(), 0)
@@ -862,13 +917,23 @@ class TerminalConnection {
           user: record.user,
         })
         this.#events.onStatus({ kind: "live" })
-        this.claimSize()
+        // A page opened or brought back in use takes control.
+        if (
+          document.hasFocus() &&
+          document.activeElement === this.#terminal.textarea
+        ) {
+          this.claim()
+        }
         return null
       }
       case "output": {
         // Older than what this page shows already, size included.
         if (record.offset < this.#offset) return null
         this.#applySize(record.cols, record.rows)
+        // While claiming, keep saying so until the Relay confirms it.
+        if (this.#control !== "claiming" || record.control === "self") {
+          this.#setControl(record.control)
+        }
         if (record.offset === this.#offset) return null
         const bytes = decodeBase64(record.data)
         const start = record.offset - bytes.length
@@ -968,6 +1033,58 @@ function decodeBase64(value: string): Uint8Array {
     bytes[index] = binary.charCodeAt(index)
   }
   return bytes
+}
+
+// On phones the on-screen keyboard covers the bottom of the page without
+// resizing it. While the terminal is focused, the whole terminal moves up so
+// the cursor's line sits just above the keyboard; its top may go off screen.
+// Returns a cleanup.
+function followKeyboard(terminal: Terminal, container: HTMLElement) {
+  const viewport = window.visualViewport
+  const frame = container.closest<HTMLElement>("[data-terminal-frame]")
+  if (!viewport || !frame) return () => undefined
+  let shift = 0
+  let frameRequest: number | null = null
+  const place = (next: number) => {
+    if (next === shift) return
+    shift = next
+    frame.style.transform = shift ? `translateY(${-shift}px)` : ""
+  }
+  const update = () => {
+    frameRequest = null
+    const keyboardOpen =
+      viewport.scale < 1.01 && window.innerHeight - viewport.height > 80
+    if (!keyboardOpen || document.activeElement !== terminal.textarea) {
+      place(0)
+      return
+    }
+    const screen = terminal.element?.querySelector(".xterm-screen")
+    if (!screen) return
+    const bounds = screen.getBoundingClientRect()
+    const rowHeight = bounds.height / terminal.rows
+    // Where the cursor's line ends without the current shift.
+    const cursorBottom =
+      bounds.top + shift + (terminal.buffer.active.cursorY + 1) * rowHeight
+    const visibleBottom = viewport.offsetTop + viewport.height - 8
+    place(Math.max(0, Math.round(cursorBottom - visibleBottom)))
+  }
+  const schedule = () => {
+    frameRequest ??= requestAnimationFrame(update)
+  }
+  viewport.addEventListener("resize", schedule)
+  viewport.addEventListener("scroll", schedule)
+  terminal.textarea?.addEventListener("focus", schedule)
+  terminal.textarea?.addEventListener("blur", schedule)
+  const moved = terminal.onCursorMove(schedule)
+  return () => {
+    viewport.removeEventListener("resize", schedule)
+    viewport.removeEventListener("scroll", schedule)
+    terminal.textarea?.removeEventListener("focus", schedule)
+    terminal.textarea?.removeEventListener("blur", schedule)
+    moved.dispose()
+    if (frameRequest !== null) cancelAnimationFrame(frameRequest)
+    frame.style.transform = ""
+  }
 }
 
 // xterm wants concrete colors; the app's are CSS variables in any color
