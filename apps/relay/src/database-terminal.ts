@@ -11,7 +11,7 @@ import type {
 import { Result } from "effect"
 
 import type { RelayConfig } from "./config.js"
-import { forkPromise } from "./effect/promise.js"
+import { forkPromise, recoverPromise } from "./effect/promise.js"
 
 // Terminal output reaches Hearth through long-polled reads on the control
 // connection, which shares a small request budget with everything else.
@@ -221,15 +221,20 @@ export class DatabaseTerminals {
   // Clients left by a Relay that stopped while terminals were open.
   async sweep(databases: ReadonlyArray<RelayManagedDatabase>) {
     await Promise.all(
-      databases.flatMap((database) =>
-        database.containerId && database.observedState === "running"
+      databases.flatMap(({ containerId, observedState }) =>
+        containerId && observedState === "running"
           ? [
-              this.#runDetached(database.containerId, [
-                "sh",
-                "-c",
-                `${HANG_UP_FUNCTION}; for file in "$0"*; do [ -f "$file" ] && hang_up "$file"; done`,
-                PID_FILE_PREFIX,
-              ]).catch(() => undefined),
+              // One unreachable database shouldn't stop the others' sweep.
+              recoverPromise(
+                () =>
+                  this.#runDetached(containerId, [
+                    "sh",
+                    "-c",
+                    `${HANG_UP_FUNCTION}; for file in "$0"*; do [ -f "$file" ] && hang_up "$file"; done`,
+                    PID_FILE_PREFIX,
+                  ]),
+                () => undefined
+              ),
             ]
           : []
       )
