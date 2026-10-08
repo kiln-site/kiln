@@ -126,4 +126,45 @@ describe("database terminals", () => {
       "The terminal session has ended"
     )
   })
+
+  it("hangs up the client when the session closes", async () => {
+    const harness = await relayHarness()
+    const database = await runningDatabase(harness)
+    const terminals = new DatabaseTerminals(harness.config)
+    const { sessionId } = await terminals.open(alice, database, {
+      ...credentials,
+      cols: 80,
+      databaseId,
+      rows: 24,
+    })
+    const [client] = [...fakeDocker.execs.values()]
+
+    terminals.close(alice, sessionId)
+
+    await vi.waitFor(() => expect(client?.running).toBe(false))
+  })
+
+  it("replaces a person's oldest terminal instead of refusing a new one", async () => {
+    const harness = await relayHarness()
+    const database = await runningDatabase(harness)
+    const terminals = new DatabaseTerminals(harness.config)
+    const open = () =>
+      terminals.open(alice, database, {
+        ...credentials,
+        cols: 80,
+        databaseId,
+        rows: 24,
+      })
+    const first = await open()
+    const second = await open()
+    const third = await open()
+
+    expect(() => terminals.write(alice, first.sessionId, "\r")).toThrow(
+      "The terminal session has ended"
+    )
+    terminals.write(alice, second.sessionId, "\r")
+    terminals.write(alice, third.sessionId, "\r")
+    terminals.close(alice, second.sessionId)
+    terminals.close(alice, third.sessionId)
+  })
 })

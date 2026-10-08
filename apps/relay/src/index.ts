@@ -86,6 +86,7 @@ import { DatabaseBrowser } from "./database-browser.js"
 import { DatabaseDriver } from "./databases.js"
 import { browseManagedDatabase } from "./database-sql-browser.js"
 import { DatabaseTerminals } from "./database-terminal.js"
+import { forkPromise } from "./effect/promise.js"
 import {
   inspectEncryptedPlatformBackup,
   restoreEncryptedPlatformBackup,
@@ -195,6 +196,7 @@ const docker = new DockerDriver(
 )
 const databases = new DatabaseDriver(config, docker, databaseConnections)
 const databaseTerminals = new DatabaseTerminals(config)
+forkPromise(async () => databaseTerminals.sweep(await databases.list()))
 const systemUpdates = new SystemUpdateManager(config)
 const filesystem = new FilesystemDriver(config)
 const databaseBrowser = new DatabaseBrowser(filesystem)

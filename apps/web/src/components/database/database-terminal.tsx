@@ -183,13 +183,14 @@ const TerminalSession = React.memo(function TerminalSession({
     const observer = new ResizeObserver(() => fit.fit())
     observer.observe(container)
 
+    // Held outside the fiber: if the page goes away while the session is
+    // still opening, cleanup closes it once the Relay has made it.
+    const opening = openDatabaseTerminal({
+      data: { ...target, cols: terminal.cols, rows: terminal.rows },
+    })
     const session = Effect.runFork(
       Effect.gen(function* () {
-        const opened = yield* Effect.tryPromise(() =>
-          openDatabaseTerminal({
-            data: { ...target, cols: terminal.cols, rows: terminal.rows },
-          })
-        )
+        const opened = yield* Effect.tryPromise(() => opening)
         sessionId = opened.sessionId
         yield* Effect.sync(() => {
           onStatus({ kind: "connected" })
@@ -233,16 +234,14 @@ const TerminalSession = React.memo(function TerminalSession({
       if (flushTimer) clearTimeout(flushTimer)
       if (resizeTimer) clearTimeout(resizeTimer)
       terminal.dispose()
-      const openSession = sessionId
-      if (openSession) {
-        forkPromise(
-          () =>
-            closeDatabaseTerminal({
-              data: { ...target, sessionId: openSession },
-            }),
-          () => undefined
-        )
-      }
+      // Closing is idempotent, so an already ended session is fine too.
+      forkPromise(
+        async () =>
+          closeDatabaseTerminal({
+            data: { ...target, sessionId: (await opening).sessionId },
+          }),
+        () => undefined
+      )
     }
   }, [databaseId, onStatus, relayId])
 

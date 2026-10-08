@@ -11,6 +11,7 @@ import type {
 import { Result } from "effect"
 
 import type { RelayConfig } from "./config.js"
+import { forkPromise } from "./effect/promise.js"
 
 // Terminal output reaches Hearth through long-polled reads on the control
 // connection, which shares a small request budget with everything else.
@@ -21,9 +22,17 @@ const READ_WAIT_MS = 10_000
 const MAX_READ_BYTES = 64 * 1024
 // Output kept for a reader that falls behind; older output is dropped.
 const OUTPUT_HISTORY_BYTES = 256 * 1024
-// A session nobody reads is abandoned: the browser closed or lost Hearth.
-const ABANDONED_AFTER_MS = 45_000
-const REAPER_INTERVAL_MS = 15_000
+// A session nobody reads is abandoned: the browser closed, refreshed, or lost
+// Hearth. Reads arrive at least every READ_WAIT_MS while a page is open.
+const ABANDONED_AFTER_MS = 25_000
+const REAPER_INTERVAL_MS = 5_000
+// Each client records its PID here so the Relay can hang it up: Docker keeps
+// an exec running after its connection closes.
+const PID_FILE_PREFIX = "/tmp/.kiln-terminal-"
+// Hang up first so the client can restore its terminal; psql's readline
+// catches SIGHUP and SIGTERM and may stay, so it is killed after a second.
+const HANG_UP_FUNCTION =
+  'hang_up() { pid=$(cat "$1") && kill -HUP "$pid" 2>/dev/null && sleep 1 && kill -KILL "$pid" 2>/dev/null; rm -f "$1"; }'
 
 interface TerminalSession {
   closed: boolean
@@ -34,6 +43,7 @@ interface TerminalSession {
   history: Buffer
   lastRead: number
   owner: string
+  pidFile: string
   socket: Duplex
   waiters: Set<() => void>
 }
@@ -56,19 +66,24 @@ export class DatabaseTerminals {
     if (!containerId || database.observedState !== "running") {
       throw new Error("Start the database to open its terminal")
     }
+    // A new terminal replaces the person's least recently used one, so a
+    // tab that closed without saying so can't lock them out.
+    const owned = [...this.#sessions.entries()]
+      .filter(([, session]) => session.owner === owner)
+      .sort(([, left], [, right]) => left.lastRead - right.lastRead)
+    for (const [id, session] of owned.slice(
+      0,
+      Math.max(0, owned.length - MAX_SESSIONS_PER_OWNER + 1)
+    )) {
+      this.#end(id, session)
+    }
     if (this.#sessions.size >= MAX_SESSIONS) {
       throw new Error(
         "This Relay has too many open database terminals. Close one and try again."
       )
     }
-    const owned = [...this.#sessions.values()].filter(
-      (session) => session.owner === owner
-    )
-    if (owned.length >= MAX_SESSIONS_PER_OWNER) {
-      throw new Error(
-        "You already have two database terminals open. Close one and try again."
-      )
-    }
+    const sessionId = randomBytes(24).toString("base64url")
+    const pidFile = `${PID_FILE_PREFIX}${sessionId}`
     const client = terminalClient(database, input.username, input.password)
     const created = await this.#dockerJson<{ Id: string }>(
       "POST",
@@ -77,13 +92,18 @@ export class DatabaseTerminals {
         AttachStderr: true,
         AttachStdin: true,
         AttachStdout: true,
-        Cmd: client.command,
+        Cmd: [
+          "sh",
+          "-c",
+          'echo $$ > "$0" && exec "$@"',
+          pidFile,
+          ...client.command,
+        ],
         Env: [...client.environment, "TERM=xterm-256color", "LANG=C.UTF-8"],
         Tty: true,
       }
     )
     const socket = await this.#startExec(created.Id, input.rows, input.cols)
-    const sessionId = randomBytes(24).toString("base64url")
     const session: TerminalSession = {
       closed: false,
       containerId,
@@ -92,6 +112,7 @@ export class DatabaseTerminals {
       historyStart: 0,
       lastRead: Date.now(),
       owner,
+      pidFile,
       socket,
       waiters: new Set(),
     }
@@ -141,7 +162,7 @@ export class DatabaseTerminals {
     const chunk = session.history.subarray(from, from + MAX_READ_BYTES)
     const next = session.historyStart + from + chunk.length
     const drained = next >= session.historyStart + session.history.length
-    if (session.closed && drained) this.#sessions.delete(sessionId)
+    if (session.closed && drained) this.#end(sessionId, session)
     return {
       closed: session.closed && drained,
       cursor: next,
@@ -178,12 +199,54 @@ export class DatabaseTerminals {
   }
 
   #end(sessionId: string, session: TerminalSession) {
+    if (this.#sessions.get(sessionId) !== session) return
     this.#sessions.delete(sessionId)
+    // A client that exited on its own has nothing left to hang up, and its
+    // PID may already belong to another process.
+    const exited = session.closed
     session.closed = true
-    // Closing the TTY hangs up the client inside the container.
     session.socket.destroy()
     wake(session)
     if (this.#sessions.size === 0) this.#stopReaper()
+    forkPromise(() =>
+      this.#runDetached(session.containerId, [
+        "sh",
+        "-c",
+        exited ? 'rm -f "$0"' : `${HANG_UP_FUNCTION}; hang_up "$0"`,
+        session.pidFile,
+      ])
+    )
+  }
+
+  // Clients left by a Relay that stopped while terminals were open.
+  async sweep(databases: ReadonlyArray<RelayManagedDatabase>) {
+    await Promise.all(
+      databases.flatMap((database) =>
+        database.containerId && database.observedState === "running"
+          ? [
+              this.#runDetached(database.containerId, [
+                "sh",
+                "-c",
+                `${HANG_UP_FUNCTION}; for file in "$0"*; do [ -f "$file" ] && hang_up "$file"; done`,
+                PID_FILE_PREFIX,
+              ]).catch(() => undefined),
+            ]
+          : []
+      )
+    )
+  }
+
+  async #runDetached(containerId: string, command: Array<string>) {
+    const created = await this.#dockerJson<{ Id: string }>(
+      "POST",
+      `/containers/${encodeURIComponent(containerId)}/exec`,
+      { AttachStderr: false, AttachStdout: false, Cmd: command }
+    )
+    await this.#dockerJson(
+      "POST",
+      `/exec/${encodeURIComponent(created.Id)}/start`,
+      { Detach: true }
+    )
   }
 
   #startReaper() {

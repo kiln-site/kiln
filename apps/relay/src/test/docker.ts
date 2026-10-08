@@ -1244,6 +1244,17 @@ export class FakeDocker {
       send(201, { Id: exec.id })
       return
     }
+    const execStart = /^\/exec\/([^/]+)\/start$/u.exec(url.pathname)
+    if (request.method === "POST" && execStart) {
+      const exec = this.execs.get(decodeURIComponent(execStart[1] ?? ""))
+      if (!exec) {
+        send(404, { message: "No such exec instance" })
+        return
+      }
+      this.#runDetachedExec(exec)
+      send(200, {})
+      return
+    }
     const execResize = /^\/exec\/([^/]+)\/resize$/u.exec(url.pathname)
     if (request.method === "POST" && execResize) {
       const exec = this.execs.get(decodeURIComponent(execResize[1] ?? ""))
@@ -1412,6 +1423,24 @@ export class FakeDocker {
       this.#execSockets.delete(execId)
     })
     socket.on("error", () => undefined)
+  }
+
+  // Detached execs Relay runs are `sh -c` scripts that hang up clients by
+  // the PID files those clients wrote; model their effect, not the shell.
+  #runDetachedExec(exec: FakeExec) {
+    const [shell, , script = "", pidFile = ""] = exec.cmd
+    if (shell !== "sh" || !script.includes("kill -HUP")) return
+    const sweep = script.includes("for file in")
+    for (const candidate of this.execs.values()) {
+      const candidateFile = candidate.cmd[3] ?? ""
+      if (
+        candidate.running &&
+        candidate.containerId === exec.containerId &&
+        (sweep ? candidateFile.startsWith(pidFile) : candidateFile === pidFile)
+      ) {
+        this.exitExec(candidate.id)
+      }
+    }
   }
 
   /** Ends a running exec the way its process exiting would. */
