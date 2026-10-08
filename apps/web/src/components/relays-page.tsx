@@ -566,15 +566,6 @@ function RelayTable({
   onEdit: (relayId: string) => void
   onOpenUpdates: (relayId?: string) => void
 }) {
-  const visibleResourceKeys = React.useMemo(
-    () =>
-      new Set(
-        source.rows.map((relay) =>
-          resourceInvitationScopeKey(relay.id, relay.id)
-        )
-      ),
-    [source.rows]
-  )
   const [favoritesOnly] = useFavoritesOnly("relays")
   const visibleSource = useFavoritesOnlySource(
     source,
@@ -582,6 +573,15 @@ function RelayTable({
     relayFavorite
   )
   const favoritesFiltered = favoritesOnly && source.rows.length > 0
+  const visibleResourceKeys = React.useMemo(
+    () =>
+      new Set(
+        visibleSource.rows.map((relay) =>
+          resourceInvitationScopeKey(relay.id, relay.id)
+        )
+      ),
+    [visibleSource.rows]
+  )
   const [initialTableState] = React.useState(() => ({
     sorting: [{ desc: false, id: "relay" }],
   }))

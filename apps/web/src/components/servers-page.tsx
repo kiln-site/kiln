@@ -426,15 +426,6 @@ const ServerDataTable = React.memo(function ServerDataTable({
   searchStore: ServerSearchStore
   source: DataTableSource<ServerTableItem>
 }) {
-  const visibleResourceKeys = React.useMemo(
-    () =>
-      new Set(
-        source.rows.map(({ server }) =>
-          resourceInvitationScopeKey(server.relayId, server.id)
-        )
-      ),
-    [source.rows]
-  )
   const [favoritesOnly] = useFavoritesOnly("servers")
   const visibleSource = useFavoritesOnlySource(
     source,
@@ -442,6 +433,15 @@ const ServerDataTable = React.memo(function ServerDataTable({
     serverTableItemFavorite
   )
   const favoritesFiltered = favoritesOnly && source.rows.length > 0
+  const visibleResourceKeys = React.useMemo(
+    () =>
+      new Set(
+        visibleSource.rows.map(({ server }) =>
+          resourceInvitationScopeKey(server.relayId, server.id)
+        )
+      ),
+    [visibleSource.rows]
+  )
   const [initialTableState] = React.useState(() => ({
     sorting: [{ desc: false, id: "server" }],
   }))

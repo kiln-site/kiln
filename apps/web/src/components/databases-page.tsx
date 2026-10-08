@@ -398,15 +398,6 @@ const DatabaseTable = React.memo(function DatabaseTable({
     isLoading: result.isLoading,
     retry,
   })
-  const visibleResourceKeys = React.useMemo(
-    () =>
-      new Set(
-        source.rows.map((database) =>
-          resourceInvitationScopeKey(database.relayId, database.id)
-        )
-      ),
-    [source.rows]
-  )
   const [favoritesOnly] = useFavoritesOnly("databases")
   const visibleSource = useFavoritesOnlySource(
     source,
@@ -414,6 +405,15 @@ const DatabaseTable = React.memo(function DatabaseTable({
     databaseFavorite
   )
   const favoritesFiltered = favoritesOnly && source.rows.length > 0
+  const visibleResourceKeys = React.useMemo(
+    () =>
+      new Set(
+        visibleSource.rows.map((database) =>
+          resourceInvitationScopeKey(database.relayId, database.id)
+        )
+      ),
+    [visibleSource.rows]
+  )
   const [initialTableState] = React.useState(() => ({
     sorting: [{ desc: false, id: "database" }],
   }))

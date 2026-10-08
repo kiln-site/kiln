@@ -288,8 +288,8 @@ export function useFavoritesOnly(
 }
 
 /**
- * Narrows a table source to favorited rows while `favoritesOnly` is on. The
- * table shows its loading state until favorites arrive instead of flashing an
+ * Narrows a table source to favorited rows while `favoritesOnly` is on. Until
+ * favorites load, the table shows their loading or error state rather than an
  * empty favorites view.
  */
 export function useFavoritesOnlySource<TItem>(
@@ -303,14 +303,25 @@ export function useFavoritesOnlySource<TItem>(
       favoritesOnly ? selectFavoriteKeys(favorites) : emptyFavoriteKeys,
     [favoritesOnly]
   )
-  const { data: favoriteKeys = emptyFavoriteKeys, isPending } = useQuery({
+  const {
+    data: favoriteKeys,
+    error,
+    refetch,
+  } = useQuery({
     ...instanceFavoritesQueryOptions(),
     select,
   })
+  const retry = React.useCallback(() => {
+    void refetch()
+  }, [refetch])
   return React.useMemo(() => {
     if (!favoritesOnly) return source
-    if (isPending && source.body.kind === "ready") {
-      return { ...source, body: { kind: "loading" } }
+    if (favoriteKeys === undefined) {
+      if (source.body.kind !== "ready") return source
+      return {
+        ...source,
+        body: error ? { kind: "error", error, retry } : { kind: "loading" },
+      }
     }
     return replaceDataTableRows(
       source,
@@ -318,7 +329,7 @@ export function useFavoritesOnlySource<TItem>(
         favoriteKeys.has(instanceFavoriteKey(getFavorite(item)))
       )
     )
-  }, [favoriteKeys, favoritesOnly, getFavorite, isPending, source])
+  }, [error, favoriteKeys, favoritesOnly, getFavorite, retry, source])
 }
 
 export const FavoritesOnlyButton = React.memo(function FavoritesOnlyButton({
