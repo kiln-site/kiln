@@ -1609,10 +1609,13 @@ function SqlConsole({
   sqlRef.current = sql
   const editorRef = React.useRef<HTMLDivElement>(null)
   const run = useMutation({
-    mutationFn: (statement: string) =>
-      source.query(statement, writable && allowWrites),
-    onSuccess: async (result) => {
-      if (result.changes !== null) {
+    mutationFn: ({ statement, write }: { statement: string; write: boolean }) =>
+      source.query(statement, write),
+    // A write can change data without reporting a count: DDL, and statements
+    // that return rows (RETURNING) report rows instead. So every run that was
+    // allowed to write refreshes the tables and rows shown.
+    onSuccess: async (result, { write }) => {
+      if (write || result.changes !== null) {
         await queryClient.invalidateQueries({ queryKey: source.queryKey })
       }
     },
@@ -1620,8 +1623,8 @@ function SqlConsole({
   const runQuery = React.useCallback(() => {
     const statement = sqlRef.current.trim()
     if (!statement || run.isPending) return
-    run.mutate(statement)
-  }, [run])
+    run.mutate({ statement, write: writable && allowWrites })
+  }, [allowWrites, run, writable])
 
   const engine =
     useQuery({ ...overviewQueryOptions(source), select: selectEngine }).data ??
