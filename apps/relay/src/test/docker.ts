@@ -190,6 +190,11 @@ export class FakeDocker {
   readonly networks = new Map<string, FakeNetwork>()
   readonly volumes = new Map<string, FakeVolume>()
   readonly execs = new Map<string, FakeExec>()
+  /**
+   * What interactive (TTY) execs print as they start. Docker delivers it in
+   * the same packet as its upgrade response, as it can for a fast client.
+   */
+  execGreeting = ""
   /** Local images and their labels. */
   readonly images = new Map<string, Record<string, string>>()
   /** Images whose registry cannot be reached; pulling them fails. */
@@ -240,6 +245,7 @@ export class FakeDocker {
     const unmodelled = this.#unmodelled
     this.containers.clear()
     this.execs.clear()
+    this.execGreeting = ""
     this.networks.clear()
     this.volumes.clear()
     this.images.clear()
@@ -1300,6 +1306,7 @@ export class FakeDocker {
         send(404, { message: `No such container: ${inspect[1]}` })
         return
       }
+      await this.#checkpoint("inspect", target.name)
       send(200, {
         Id: target.id,
         Name: `/${target.name}`,
@@ -1420,7 +1427,7 @@ export class FakeDocker {
     exec.running = true
     this.#execSockets.set(execId, socket)
     socket.write(
-      "HTTP/1.1 101 UPGRADED\r\nContent-Type: application/vnd.docker.raw-stream\r\nConnection: Upgrade\r\nUpgrade: tcp\r\n\r\n"
+      `HTTP/1.1 101 UPGRADED\r\nContent-Type: application/vnd.docker.raw-stream\r\nConnection: Upgrade\r\nUpgrade: tcp\r\n\r\n${exec.tty ? this.execGreeting : ""}`
     )
     // The start options arrive as a body ahead of the TTY stream.
     let options = Buffer.alloc(0)

@@ -251,6 +251,60 @@ describe("database terminal sessions", () => {
     )
   })
 
+  it("shows output the client printed as Docker started it", async () => {
+    const harness = await relayHarness()
+    const database = await runningDatabase(harness)
+    fakeDocker.execGreeting = "kiln_app=# "
+
+    const page = viewer()
+    const session = await attach(
+      new DatabaseTerminals(harness.config),
+      alice,
+      database,
+      page
+    )
+
+    // The page shows it, from the snapshot or the output that follows.
+    await vi.waitFor(() =>
+      expect(session.snapshot + page.output).toContain("kiln_app=# ")
+    )
+  })
+
+  it("keeps a replacement session working when the old one finishes ending late", async () => {
+    const harness = await relayHarness()
+    const database = await runningDatabase(harness)
+    const terminals = new DatabaseTerminals(harness.config)
+    const old = viewer()
+    const first = await attach(terminals, alice, database, old)
+    const inspection = fakeDocker.hold({ command: "inspect" })
+    const cleanups = () =>
+      [...fakeDocker.execs.values()].filter((exec) =>
+        exec.cmd.join(" ").includes("rm -f")
+      ).length
+
+    // The client exits: its socket ends and closes, and the first ending
+    // waits on the container inspection.
+    fakeDocker.exitExec(clientExecs()[0]!.id)
+    await inspection.reached
+    await vi.waitFor(() =>
+      expect(() =>
+        terminals.write(alice, databaseId, first.sessionId, "x")
+      ).toThrow("The terminal session has ended")
+    )
+    const replacing = attach(terminals, alice, database, viewer())
+    const cleanupsBefore = cleanups()
+    inspection.release()
+    const replacement = await replacing
+    // Every ending of the old session has finished.
+    await vi.waitFor(() => expect(cleanups()).toBeGreaterThan(cleanupsBefore))
+    await vi.waitFor(() => expect(old.ended?.reason).toBe("exited"))
+
+    expect(replacement.sessionId).not.toBe(first.sessionId)
+    expect(
+      terminals.write(alice, databaseId, replacement.sessionId, "select 1;")
+    ).toEqual({ accepted: true })
+  })
+
   it("says why a session ended: its client exited, or the database stopped", async () => {
     const harness = await relayHarness()
     const database = await runningDatabase(harness)

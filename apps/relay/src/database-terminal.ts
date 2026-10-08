@@ -81,6 +81,8 @@ interface TerminalSession {
   containerId: string
   databaseId: string
   ending: DatabaseTerminalEndReason | null
+  // Settles once ending has finished; set as soon as it starts.
+  finished: Promise<void> | null
   ended: DatabaseTerminalEnd | null
   execId: string
   // Raw output from `historyStart`, for viewers catching up between pushes.
@@ -149,6 +151,12 @@ export class DatabaseTerminals {
     push: PushTerminalOutput
   ): Promise<RelayDatabaseTerminalAttached> {
     let session = this.#sessions.get(key)
+    // A session already ending is let finish, so its replacement starts
+    // after it is gone.
+    if (session?.finished) {
+      await session.finished
+      session = this.#sessions.get(key)
+    }
     if (session && input.restart) {
       await this.#end(session, "restarted")
       session = undefined
@@ -285,6 +293,7 @@ export class DatabaseTerminals {
       ended: null,
       ending: null,
       execId: created.Id,
+      finished: null,
       history: Buffer.alloc(0),
       historyStart: 0,
       id: sessionId,
@@ -321,22 +330,32 @@ export class DatabaseTerminals {
     return session
   }
 
-  // Ends a session for `reason`, or works out why it ended on its own.
-  async #end(
+  // Ends a session for `reason`, or works out why it ended on its own. Every
+  // caller (the socket's end, close, and error, a restart, a timeout) shares
+  // the first one's ending.
+  #end(session: TerminalSession, reason: DatabaseTerminalEndReason | null) {
+    session.finished ??= this.#finish(session, reason)
+    return session.finished
+  }
+
+  async #finish(
     session: TerminalSession,
     reason: DatabaseTerminalEndReason | null
   ) {
-    if (session.ending || this.#sessions.get(session.key) !== session) return
+    // Claimed before anything is awaited, so the session takes no more input.
+    session.ending = reason ?? "exited"
     // A client that exited on its own has nothing left to hang up, and its
     // PID may already belong to another process.
     const hangUp = reason !== null
-    session.ending =
-      reason ??
-      ((await this.#containerRunning(session)) ? "exited" : "database-stopped")
+    if (reason === null && !(await this.#containerRunning(session))) {
+      session.ending = "database-stopped"
+    }
     session.ended = { at: new Date().toISOString(), reason: session.ending }
     if (session.idleTimer) clearTimeout(session.idleTimer)
     session.socket.destroy()
-    this.#sessions.delete(session.key)
+    if (this.#sessions.get(session.key) === session) {
+      this.#sessions.delete(session.key)
+    }
     this.#endings.set(session.key, session.ended)
     if (this.#endings.size > MAX_REMEMBERED_ENDINGS) {
       const oldest = this.#endings.keys().next().value
@@ -505,8 +524,10 @@ export class DatabaseTerminals {
       const timer = setTimeout(() => {
         started.destroy(new Error("Docker exec did not start in time"))
       }, 10_000)
-      started.on("upgrade", (_response, socket) => {
+      started.on("upgrade", (_response, socket, head) => {
         clearTimeout(timer)
+        // Output that came in the same packet as the upgrade response.
+        if (head.length > 0) socket.unshift(head)
         resolve(socket)
       })
       started.on("response", (response) => {

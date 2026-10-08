@@ -594,7 +594,10 @@ class TerminalConnection {
   #generation = 0
   #live = false
   #offset = 0
+  // Typed input not yet sent, and the session it was typed into. It never
+  // goes to any other session.
   #pendingInput = ""
+  #pendingSessionId: string | null = null
   #resizeTimer: ReturnType<typeof setTimeout> | null = null
   // Whether this page asked for the session it is attaching to.
   #restarting = false
@@ -618,6 +621,7 @@ class TerminalConnection {
     const generation = ++this.#generation
     this.#live = false
     this.#restarting = restart
+    if (restart) this.#pendingInput = ""
     this.#events.onStatus({ kind: "connecting" })
     forkPromise(() => this.#run(generation, restart))
   }
@@ -631,7 +635,11 @@ class TerminalConnection {
   }
 
   input(data: string) {
-    if (!this.#live) return
+    if (!this.#live || !this.#sessionId) return
+    if (this.#pendingSessionId !== this.#sessionId) {
+      this.#pendingInput = ""
+      this.#pendingSessionId = this.#sessionId
+    }
     this.#pendingInput += data
     if (!this.#flushTimer) {
       this.#flushTimer = setTimeout(() => this.#flushInput(), INPUT_FLUSH_MS)
@@ -653,10 +661,14 @@ class TerminalConnection {
 
   #flushInput() {
     this.#flushTimer = null
-    const sessionId = this.#sessionId
-    if (this.#writing || !this.#pendingInput || !sessionId || !this.#live) {
+    const sessionId = this.#pendingSessionId
+    if (this.#writing || !this.#pendingInput || !sessionId) return
+    if (sessionId !== this.#sessionId) {
+      this.#pendingInput = ""
       return
     }
+    // Reattaching to the same session: sent once it is live again.
+    if (!this.#live) return
     const data = inputChunk(this.#pendingInput)
     this.#pendingInput = this.#pendingInput.slice(data.length)
     this.#writing = true
@@ -675,8 +687,10 @@ class TerminalConnection {
           }
         ),
       () => {
+        // A session that was replaced meanwhile already said why it ended.
+        if (sessionId !== this.#sessionId) return
         // The rest would arrive without what failed, so it goes too.
-        this.#pendingInput = ""
+        if (this.#pendingSessionId === sessionId) this.#pendingInput = ""
         showToast({
           message: "Couldn't send your input to the terminal",
           type: "error",
@@ -788,6 +802,9 @@ class TerminalConnection {
         this.#offset = record.offset
         this.#sessionId = record.sessionId
         this.#live = true
+        if (this.#pendingInput && !this.#flushTimer) {
+          this.#flushTimer = setTimeout(() => this.#flushInput(), 0)
+        }
         this.#events.onSession({
           startedAt: record.startedAt,
           user: record.user,
