@@ -382,8 +382,12 @@ function terminalClient(
       }
     case "postgres":
       return {
+        // No pager: when the session hangs up, an orphaned pager is adopted
+        // by the postmaster (PID 1), which restarts the server if it dies by
+        // signal. The terminal keeps its own scrollback instead.
         command: [
           "psql",
+          "--pset=pager=off",
           "--username",
           username,
           "--dbname",
