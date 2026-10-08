@@ -88,6 +88,8 @@ const RECONNECT_MAX_DELAY_MS = 5_000
 
 // A session notice stays up this long unless dismissed sooner.
 const NOTICE_VISIBLE_MS = 10_000
+// How long a tab that took over from another says it's now the active one.
+const ACTIVATED_VISIBLE_MS = 2_500
 
 export function DatabaseTerminal({
   databaseId,
@@ -104,12 +106,14 @@ export function DatabaseTerminal({
   })
   const [notice, setNotice] = React.useState<SessionNotice | null>(null)
   const [control, setControl] = React.useState<TerminalControl>("none")
+  const [activated, setActivated] = React.useState(false)
   const [session, setSession] = React.useState<TerminalSessionInfo | null>(null)
   const [hasSelection, setHasSelection] = React.useState(false)
   const [atBottom, setAtBottom] = React.useState(true)
   const surface = React.useRef<TerminalSurfaceHandle>(null)
   const events = React.useMemo<TerminalSurfaceEvents>(
     () => ({
+      onActivated: () => setActivated(true),
       onControl: setControl,
       onNotice: setNotice,
       onScrolledToBottom: setAtBottom,
@@ -127,6 +131,14 @@ export function DatabaseTerminal({
     setNotice(null)
     surface.current?.connect(false)
   }, [])
+  React.useEffect(() => {
+    if (!activated) return
+    const timer = window.setTimeout(
+      () => setActivated(false),
+      ACTIVATED_VISIBLE_MS
+    )
+    return () => window.clearTimeout(timer)
+  }, [activated])
   React.useEffect(() => {
     if (!notice) return
     const timer = window.setTimeout(() => setNotice(null), NOTICE_VISIBLE_MS)
@@ -188,6 +200,7 @@ export function DatabaseTerminal({
           </Button>
         ) : null}
         <TerminalNotice
+          activated={activated}
           control={control}
           notice={notice}
           status={status}
@@ -320,11 +333,14 @@ function RestartSessionButton({
 
 // Floats over the terminal so the screen never shifts under the person.
 function TerminalNotice({
+  activated,
   control,
   notice,
   onDismissNotice,
   status,
 }: {
+  // This tab just took over from another.
+  activated: boolean
   control: TerminalControl
   notice: SessionNotice | null
   onDismissNotice: () => void
@@ -343,10 +359,17 @@ function TerminalNotice({
     )
   }
   if (status.kind !== "live") return null
-  if (control === "claiming") {
-    return <OverlayNotice loading message="RESIZING TO THIS TAB…" tone="info" />
+  if (control === "self" && activated) {
+    return (
+      <OverlayNotice
+        icon={otherTabIcon}
+        message="THIS TAB IS NOW ACTIVE"
+        tone="info"
+      />
+    )
   }
-  if (control === "other") {
+  // Still active elsewhere until the Relay confirms this tab took over.
+  if (control === "other" || control === "claiming") {
     return (
       <OverlayNotice
         icon={otherTabIcon}
@@ -481,6 +504,8 @@ function formatStartedAt(value: string) {
 }
 
 interface TerminalSurfaceEvents {
+  // This page took control over from another of the person's pages.
+  onActivated: () => void
   onControl: (control: TerminalControl) => void
   onNotice: (notice: SessionNotice | null) => void
   onScrolledToBottom: (atBottom: boolean) => void
@@ -657,6 +682,8 @@ class TerminalConnection {
   #attachmentId: string | null = null
   #claimTimer: ReturnType<typeof setTimeout> | null = null
   #control: TerminalControl = "none"
+  // Claiming control that another of the person's pages had.
+  #takingOver = false
   // Whether this page asked for the session it is attaching to.
   #restarting = false
   #sessionId: string | null = null
@@ -726,6 +753,7 @@ class TerminalConnection {
     ) {
       return
     }
+    if (this.#control === "other") this.#takingOver = true
     if (this.#control !== "self") this.#setControl("claiming")
     if (this.#claimTimer) clearTimeout(this.#claimTimer)
     this.#claimTimer = setTimeout(() => {
@@ -751,6 +779,9 @@ class TerminalConnection {
     if (this.#control === control) return
     this.#control = control
     this.#events.onControl(control)
+    if (control === "claiming") return
+    if (control === "self" && this.#takingOver) this.#events.onActivated()
+    this.#takingOver = false
   }
 
   // Output already written was at the old size, so the resize waits for it.
