@@ -66,10 +66,12 @@ import { Route as AppSettingsFilesRouteImport } from './routes/_app.settings.fil
 import { Route as AppSettingsRelaysRouteImport } from './routes/_app.settings.relays'
 import { Route as ApiAuthSplatRouteImport } from './routes/api.auth.$'
 import { Route as ApiConsoleInstanceIdRouteImport } from './routes/api.console.$instanceId'
+import { Route as ApiDatabaseTerminalDatabaseIdRouteImport } from './routes/api.database-terminal.$databaseId'
 import { Route as AppDbDatabaseIdIndexRouteImport } from './routes/_app/db/$databaseId.index'
 import { Route as AppDbDatabaseIdSplatRouteImport } from './routes/_app/db/$databaseId.$'
 import { Route as AppDbDatabaseIdInfoRouteImport } from './routes/_app/db/$databaseId.info'
 import { Route as AppDbDatabaseIdNetworkRouteImport } from './routes/_app/db/$databaseId.network'
+import { Route as AppDbDatabaseIdTerminalRouteImport } from './routes/_app/db/$databaseId.terminal'
 import { Route as AppDbDatabaseIdViewerRouteImport } from './routes/_app/db/$databaseId.viewer'
 import { Route as AppServerServerIdIndexRouteImport } from './routes/_app/server/$serverId.index'
 import { Route as AppServerServerIdSplatRouteImport } from './routes/_app/server/$serverId.$'
@@ -367,6 +369,12 @@ const ApiConsoleInstanceIdRoute = ApiConsoleInstanceIdRouteImport.update({
   path: '/api/console/$instanceId',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiDatabaseTerminalDatabaseIdRoute =
+  ApiDatabaseTerminalDatabaseIdRouteImport.update({
+    id: '/api/database-terminal/$databaseId',
+    path: '/api/database-terminal/$databaseId',
+    getParentRoute: () => rootRouteImport,
+  } as any)
 const AppDbDatabaseIdIndexRoute = AppDbDatabaseIdIndexRouteImport.update({
   id: '/',
   path: '/',
@@ -385,6 +393,11 @@ const AppDbDatabaseIdInfoRoute = AppDbDatabaseIdInfoRouteImport.update({
 const AppDbDatabaseIdNetworkRoute = AppDbDatabaseIdNetworkRouteImport.update({
   id: '/network',
   path: '/network',
+  getParentRoute: () => AppDbDatabaseIdRoute,
+} as any)
+const AppDbDatabaseIdTerminalRoute = AppDbDatabaseIdTerminalRouteImport.update({
+  id: '/terminal',
+  path: '/terminal',
   getParentRoute: () => AppDbDatabaseIdRoute,
 } as any)
 const AppDbDatabaseIdViewerRoute = AppDbDatabaseIdViewerRouteImport.update({
@@ -505,6 +518,7 @@ export interface FileRoutesByFullPath {
   '/settings/relays': typeof AppSettingsRelaysRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/console/$instanceId': typeof ApiConsoleInstanceIdRoute
+  '/api/database-terminal/$databaseId': typeof ApiDatabaseTerminalDatabaseIdRoute
   '/automations/': typeof AppAutomationsIndexRoute
   '/backups/': typeof AppBackupsIndexRoute
   '/infra/': typeof AppInfraIndexRoute
@@ -512,6 +526,7 @@ export interface FileRoutesByFullPath {
   '/db/$databaseId/$': typeof AppDbDatabaseIdSplatRoute
   '/db/$databaseId/info': typeof AppDbDatabaseIdInfoRoute
   '/db/$databaseId/network': typeof AppDbDatabaseIdNetworkRoute
+  '/db/$databaseId/terminal': typeof AppDbDatabaseIdTerminalRoute
   '/db/$databaseId/viewer': typeof AppDbDatabaseIdViewerRoute
   '/server/$serverId/$': typeof AppServerServerIdSplatRoute
   '/server/$serverId/console': typeof AppServerServerIdConsoleRoute
@@ -573,6 +588,7 @@ export interface FileRoutesByTo {
   '/settings/relays': typeof AppSettingsRelaysRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/console/$instanceId': typeof ApiConsoleInstanceIdRoute
+  '/api/database-terminal/$databaseId': typeof ApiDatabaseTerminalDatabaseIdRoute
   '/automations': typeof AppAutomationsIndexRoute
   '/backups': typeof AppBackupsIndexRoute
   '/infra': typeof AppInfraIndexRoute
@@ -580,6 +596,7 @@ export interface FileRoutesByTo {
   '/db/$databaseId/$': typeof AppDbDatabaseIdSplatRoute
   '/db/$databaseId/info': typeof AppDbDatabaseIdInfoRoute
   '/db/$databaseId/network': typeof AppDbDatabaseIdNetworkRoute
+  '/db/$databaseId/terminal': typeof AppDbDatabaseIdTerminalRoute
   '/db/$databaseId/viewer': typeof AppDbDatabaseIdViewerRoute
   '/server/$serverId/$': typeof AppServerServerIdSplatRoute
   '/server/$serverId/console': typeof AppServerServerIdConsoleRoute
@@ -649,6 +666,7 @@ export interface FileRoutesById {
   '/_app/settings/relays': typeof AppSettingsRelaysRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/console/$instanceId': typeof ApiConsoleInstanceIdRoute
+  '/api/database-terminal/$databaseId': typeof ApiDatabaseTerminalDatabaseIdRoute
   '/_app/automations/': typeof AppAutomationsIndexRoute
   '/_app/backups/': typeof AppBackupsIndexRoute
   '/_app/infra/': typeof AppInfraIndexRoute
@@ -656,6 +674,7 @@ export interface FileRoutesById {
   '/_app/db/$databaseId/$': typeof AppDbDatabaseIdSplatRoute
   '/_app/db/$databaseId/info': typeof AppDbDatabaseIdInfoRoute
   '/_app/db/$databaseId/network': typeof AppDbDatabaseIdNetworkRoute
+  '/_app/db/$databaseId/terminal': typeof AppDbDatabaseIdTerminalRoute
   '/_app/db/$databaseId/viewer': typeof AppDbDatabaseIdViewerRoute
   '/_app/server/$serverId/$': typeof AppServerServerIdSplatRoute
   '/_app/server/$serverId/console': typeof AppServerServerIdConsoleRoute
@@ -725,6 +744,7 @@ export interface FileRouteTypes {
     | '/settings/relays'
     | '/api/auth/$'
     | '/api/console/$instanceId'
+    | '/api/database-terminal/$databaseId'
     | '/automations/'
     | '/backups/'
     | '/infra/'
@@ -732,6 +752,7 @@ export interface FileRouteTypes {
     | '/db/$databaseId/$'
     | '/db/$databaseId/info'
     | '/db/$databaseId/network'
+    | '/db/$databaseId/terminal'
     | '/db/$databaseId/viewer'
     | '/server/$serverId/$'
     | '/server/$serverId/console'
@@ -793,6 +814,7 @@ export interface FileRouteTypes {
     | '/settings/relays'
     | '/api/auth/$'
     | '/api/console/$instanceId'
+    | '/api/database-terminal/$databaseId'
     | '/automations'
     | '/backups'
     | '/infra'
@@ -800,6 +822,7 @@ export interface FileRouteTypes {
     | '/db/$databaseId/$'
     | '/db/$databaseId/info'
     | '/db/$databaseId/network'
+    | '/db/$databaseId/terminal'
     | '/db/$databaseId/viewer'
     | '/server/$serverId/$'
     | '/server/$serverId/console'
@@ -868,6 +891,7 @@ export interface FileRouteTypes {
     | '/_app/settings/relays'
     | '/api/auth/$'
     | '/api/console/$instanceId'
+    | '/api/database-terminal/$databaseId'
     | '/_app/automations/'
     | '/_app/backups/'
     | '/_app/infra/'
@@ -875,6 +899,7 @@ export interface FileRouteTypes {
     | '/_app/db/$databaseId/$'
     | '/_app/db/$databaseId/info'
     | '/_app/db/$databaseId/network'
+    | '/_app/db/$databaseId/terminal'
     | '/_app/db/$databaseId/viewer'
     | '/_app/server/$serverId/$'
     | '/_app/server/$serverId/console'
@@ -915,6 +940,7 @@ export interface RootRouteChildren {
   DownloadsIdRoute: typeof DownloadsIdRoute
   ApiAuthSplatRoute: typeof ApiAuthSplatRoute
   ApiConsoleInstanceIdRoute: typeof ApiConsoleInstanceIdRoute
+  ApiDatabaseTerminalDatabaseIdRoute: typeof ApiDatabaseTerminalDatabaseIdRoute
   ApiCliAuthDeviceRoute: typeof ApiCliAuthDeviceRoute
   ApiCliAuthTokenRoute: typeof ApiCliAuthTokenRoute
   ApiCliV1SplatRoute: typeof ApiCliV1SplatRoute
@@ -1321,6 +1347,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiConsoleInstanceIdRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/database-terminal/$databaseId': {
+      id: '/api/database-terminal/$databaseId'
+      path: '/api/database-terminal/$databaseId'
+      fullPath: '/api/database-terminal/$databaseId'
+      preLoaderRoute: typeof ApiDatabaseTerminalDatabaseIdRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/_app/db/$databaseId/': {
       id: '/_app/db/$databaseId/'
       path: '/'
@@ -1347,6 +1380,13 @@ declare module '@tanstack/react-router' {
       path: '/network'
       fullPath: '/db/$databaseId/network'
       preLoaderRoute: typeof AppDbDatabaseIdNetworkRouteImport
+      parentRoute: typeof AppDbDatabaseIdRoute
+    }
+    '/_app/db/$databaseId/terminal': {
+      id: '/_app/db/$databaseId/terminal'
+      path: '/terminal'
+      fullPath: '/db/$databaseId/terminal'
+      preLoaderRoute: typeof AppDbDatabaseIdTerminalRouteImport
       parentRoute: typeof AppDbDatabaseIdRoute
     }
     '/_app/db/$databaseId/viewer': {
@@ -1524,6 +1564,7 @@ interface AppDbDatabaseIdRouteChildren {
   AppDbDatabaseIdSplatRoute: typeof AppDbDatabaseIdSplatRoute
   AppDbDatabaseIdInfoRoute: typeof AppDbDatabaseIdInfoRoute
   AppDbDatabaseIdNetworkRoute: typeof AppDbDatabaseIdNetworkRoute
+  AppDbDatabaseIdTerminalRoute: typeof AppDbDatabaseIdTerminalRoute
   AppDbDatabaseIdViewerRoute: typeof AppDbDatabaseIdViewerRoute
   AppDbDatabaseIdIndexRoute: typeof AppDbDatabaseIdIndexRoute
 }
@@ -1532,6 +1573,7 @@ const AppDbDatabaseIdRouteChildren: AppDbDatabaseIdRouteChildren = {
   AppDbDatabaseIdSplatRoute: AppDbDatabaseIdSplatRoute,
   AppDbDatabaseIdInfoRoute: AppDbDatabaseIdInfoRoute,
   AppDbDatabaseIdNetworkRoute: AppDbDatabaseIdNetworkRoute,
+  AppDbDatabaseIdTerminalRoute: AppDbDatabaseIdTerminalRoute,
   AppDbDatabaseIdViewerRoute: AppDbDatabaseIdViewerRoute,
   AppDbDatabaseIdIndexRoute: AppDbDatabaseIdIndexRoute,
 }
@@ -1632,6 +1674,7 @@ const rootRouteChildren: RootRouteChildren = {
   DownloadsIdRoute: DownloadsIdRoute,
   ApiAuthSplatRoute: ApiAuthSplatRoute,
   ApiConsoleInstanceIdRoute: ApiConsoleInstanceIdRoute,
+  ApiDatabaseTerminalDatabaseIdRoute: ApiDatabaseTerminalDatabaseIdRoute,
   ApiCliAuthDeviceRoute: ApiCliAuthDeviceRoute,
   ApiCliAuthTokenRoute: ApiCliAuthTokenRoute,
   ApiCliV1SplatRoute: ApiCliV1SplatRoute,

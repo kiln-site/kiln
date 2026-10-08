@@ -18,6 +18,12 @@ import {
   relayDatabaseDumpSchema,
   relayDatabaseDataReadSchema,
   relayDatabaseDataWriteSchema,
+  relayDatabaseTerminalAttachSchema,
+  relayDatabaseTerminalDetachSchema,
+  relayDatabaseTerminalHeartbeatSchema,
+  relayDatabaseTerminalClaimSchema,
+  relayDatabaseTerminalRestartSchema,
+  relayDatabaseTerminalWriteSchema,
   relayDatabaseExportSchema,
   relayDatabaseNetworkSchema,
   relayDeleteDatabaseSchema,
@@ -80,6 +86,8 @@ import { DockerDriver } from "./docker.js"
 import { DatabaseBrowser } from "./database-browser.js"
 import { DatabaseDriver } from "./databases.js"
 import { browseManagedDatabase } from "./database-sql-browser.js"
+import { DatabaseTerminals } from "./database-terminal.js"
+import { forkPromise } from "./effect/promise.js"
 import {
   inspectEncryptedPlatformBackup,
   restoreEncryptedPlatformBackup,
@@ -188,6 +196,8 @@ const docker = new DockerDriver(
   databaseConnections
 )
 const databases = new DatabaseDriver(config, docker, databaseConnections)
+const databaseTerminals = new DatabaseTerminals(config)
+forkPromise(async () => databaseTerminals.sweep(await databases.list()))
 const systemUpdates = new SystemUpdateManager(config)
 const filesystem = new FilesystemDriver(config)
 const databaseBrowser = new DatabaseBrowser(filesystem)
@@ -1024,6 +1034,15 @@ async function relaySnapshot() {
   }
 }
 
+// A terminal belongs to the paired client and the person it acted for, so
+// one Hearth user can't read or type into another's session.
+function terminalOwner(
+  client: RelayClientGrant,
+  request: RelayControlRequest
+): string {
+  return `${client.id}:${request.subject ?? ""}`
+}
+
 async function executeControlRequest(
   request: RelayControlRequest,
   client: RelayClientGrant,
@@ -1358,6 +1377,58 @@ async function executeControlRequest(
           input.request,
           { canWrite: false, readOnly: true }
         )
+      )
+    }
+    case "database.terminal.attach": {
+      const input = relayDatabaseTerminalAttachSchema.parse(request.payload)
+      return databaseTerminals.attach(
+        terminalOwner(client, request),
+        await databases.target(input.databaseId),
+        input,
+        // Output goes back to the Hearth connection that attached.
+        (output, timeoutMs) =>
+          requestHearth("hearth.database.terminal.output", output, timeoutMs)
+      )
+    }
+    case "database.terminal.heartbeat": {
+      const input = relayDatabaseTerminalHeartbeatSchema.parse(request.payload)
+      return databaseTerminals.heartbeat(
+        terminalOwner(client, request),
+        input.attachmentIds
+      )
+    }
+    case "database.terminal.restart": {
+      const input = relayDatabaseTerminalRestartSchema.parse(request.payload)
+      return databaseTerminals.restart(
+        terminalOwner(client, request),
+        input.databaseId
+      )
+    }
+    case "database.terminal.detach": {
+      const input = relayDatabaseTerminalDetachSchema.parse(request.payload)
+      return databaseTerminals.detach(
+        terminalOwner(client, request),
+        input.attachmentId
+      )
+    }
+    case "database.terminal.write": {
+      const input = relayDatabaseTerminalWriteSchema.parse(request.payload)
+      return databaseTerminals.write(
+        terminalOwner(client, request),
+        input.databaseId,
+        input.sessionId,
+        input.data
+      )
+    }
+    case "database.terminal.claim": {
+      const input = relayDatabaseTerminalClaimSchema.parse(request.payload)
+      return databaseTerminals.claim(
+        terminalOwner(client, request),
+        input.databaseId,
+        input.sessionId,
+        input.attachmentId,
+        input.rows,
+        input.cols
       )
     }
     case "database.data.write": {

@@ -62,12 +62,15 @@ export function InfoCardHeader({
 export function CopyMetaRow({
   action,
   copyable = true,
+  display,
   icon: Icon = Globe2,
   label,
   value,
 }: {
   action?: React.ReactNode
   copyable?: boolean
+  // Shown in place of the value, which is still what gets copied.
+  display?: string
   icon?: LucideIcon
   label: string
   value: string
@@ -99,9 +102,9 @@ export function CopyMetaRow({
         </span>
         <span
           className={`mt-0.5 block truncate font-mono text-xs ${copyable ? "text-foreground" : "text-muted-foreground"}`}
-          title={value}
+          title={display ?? value}
         >
-          {value}
+          {display ?? value}
         </span>
       </span>
       {action}

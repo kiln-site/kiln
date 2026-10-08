@@ -946,6 +946,14 @@ function actionForRequest(request: RelayControlRequest): RelayAction | null {
       return "database.dump.export"
     case "database.data.write":
       return "database.dump.import"
+    // A signed-in client can read and change everything a dump carries.
+    case "database.terminal.attach":
+    case "database.terminal.heartbeat":
+    case "database.terminal.detach":
+    case "database.terminal.write":
+    case "database.terminal.claim":
+    case "database.terminal.restart":
+      return "database.dump.import"
     case "backup.task.enqueue": {
       const kind = objectString(request.payload, "kind")
       if (kind === "create") return "backup.create"

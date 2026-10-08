@@ -81,6 +81,17 @@ export interface FakeContainer {
   listeningPorts: Array<number>
 }
 
+/** A process started with `docker exec`; its TTY echoes what it receives. */
+export interface FakeExec {
+  readonly id: string
+  readonly containerId: string
+  readonly cmd: Array<string>
+  readonly env: Record<string, string>
+  readonly tty: boolean
+  size: { cols: number; rows: number } | null
+  running: boolean
+}
+
 export interface FakeNetwork {
   readonly id: string
   readonly name: string
@@ -178,6 +189,12 @@ export class FakeDocker {
   readonly containers = new Map<string, FakeContainer>()
   readonly networks = new Map<string, FakeNetwork>()
   readonly volumes = new Map<string, FakeVolume>()
+  readonly execs = new Map<string, FakeExec>()
+  /**
+   * What interactive (TTY) execs print as they start. Docker delivers it in
+   * the same packet as its upgrade response, as it can for a fast client.
+   */
+  execGreeting = ""
   /** Local images and their labels. */
   readonly images = new Map<string, Record<string, string>>()
   /** Images whose registry cannot be reached; pulling them fails. */
@@ -196,6 +213,7 @@ export class FakeDocker {
   #idleWaiters: Array<() => void> = []
   #lastTimestamp = 0
   #socketPath: string | null = null
+  readonly #execSockets = new Map<string, Duplex>()
 
   /** Starts the Engine API socket (once) and returns its path. */
   async listen(): Promise<string> {
@@ -207,8 +225,10 @@ export class FakeDocker {
     const server = createServer((request, response) => {
       void this.#api(request, response)
     })
-    server.on("upgrade", (request: IncomingMessage, socket: Duplex) =>
-      this.#attach(request, socket)
+    server.on(
+      "upgrade",
+      (request: IncomingMessage, socket: Duplex, head: Buffer) =>
+        this.#attach(request, socket, head)
     )
     await new Promise<void>((resolve) => server.listen(socketPath, resolve))
     server.unref()
@@ -224,6 +244,8 @@ export class FakeDocker {
   reset(): void {
     const unmodelled = this.#unmodelled
     this.containers.clear()
+    this.execs.clear()
+    this.execGreeting = ""
     this.networks.clear()
     this.volumes.clear()
     this.images.clear()
@@ -256,8 +278,7 @@ export class FakeDocker {
     return (
       this.networks.get(reference) ??
       [...this.networks.values()].find(
-        (network) =>
-          reference.length >= 12 && network.id.startsWith(reference)
+        (network) => reference.length >= 12 && network.id.startsWith(reference)
       )
     )
   }
@@ -360,6 +381,7 @@ export class FakeDocker {
     container.state.exitCode = exit.exitCode
     container.state.oomKilled = exit.oomKilled ?? false
     container.state.finishedAt = this.#timestamp()
+    this.#endExecs(container)
   }
 
   /** Simulates Docker or the host restarting the container's process. */
@@ -748,12 +770,12 @@ export class FakeDocker {
       networks:
         parsed.network && !isNetworkMode(parsed.network)
           ? [
-            {
-              aliases: parsed.aliases,
-              ipAddress: parsed.ip,
-              name: parsed.network,
-            },
-          ]
+              {
+                aliases: parsed.aliases,
+                ipAddress: parsed.ip,
+                name: parsed.network,
+              },
+            ]
           : [],
       portBindings: parsed.portBindings,
       restartPolicy: parsed.restartPolicy,
@@ -889,6 +911,16 @@ export class FakeDocker {
     container.state.exitCode = exitCode
     container.state.finishedAt = this.#timestamp()
     container.state.health = undefined
+    this.#endExecs(container)
+  }
+
+  // A container's execs end with it.
+  #endExecs(container: FakeContainer): void {
+    for (const exec of this.execs.values()) {
+      if (exec.running && exec.containerId === container.id) {
+        this.exitExec(exec.id)
+      }
+    }
   }
 
   async #remove(arguments_: Array<string>): Promise<string> {
@@ -998,7 +1030,8 @@ export class FakeDocker {
     const machine = this.tailscale.machines.get(container.name)
     const [subcommand, option] = arguments_
     if (subcommand === "ip") {
-      if (!machine?.loggedIn) throw new DockerFailure("no current Tailscale IPs")
+      if (!machine?.loggedIn)
+        throw new DockerFailure("no current Tailscale IPs")
       return option === "-4" ? `${machine.ipv4}\n` : ""
     }
     if (subcommand === "logout") {
@@ -1143,7 +1176,10 @@ export class FakeDocker {
       const [name = ""] = positional
       await this.#checkpoint("volume create", name)
       if (!this.volumes.has(name)) {
-        this.addVolume({ labels: labelsFrom(values.get("--label") ?? []), name })
+        this.addVolume({
+          labels: labelsFrom(values.get("--label") ?? []),
+          name,
+        })
       }
       return `${name}\n`
     }
@@ -1196,6 +1232,60 @@ export class FakeDocker {
       response.end(JSON.stringify(payload))
     }
     const match = /^\/containers\/([^/]+)\/(resize|stats)$/u.exec(url.pathname)
+    const execCreate = /^\/containers\/([^/]+)\/exec$/u.exec(url.pathname)
+    if (request.method === "POST" && execCreate) {
+      const target = this.container(decodeURIComponent(execCreate[1] ?? ""))
+      if (!target?.state.running) {
+        send(target ? 409 : 404, { message: "Container is not running" })
+        return
+      }
+      const input = JSON.parse(body) as {
+        Cmd?: Array<string>
+        Env?: Array<string>
+        Tty?: boolean
+      }
+      const exec: FakeExec = {
+        cmd: input.Cmd ?? [],
+        containerId: target.id,
+        env: Object.fromEntries(
+          (input.Env ?? []).map(
+            (entry) => splitOnce(entry, "=") as [string, string]
+          )
+        ),
+        id: randomBytes(32).toString("hex"),
+        running: false,
+        size: null,
+        tty: input.Tty ?? false,
+      }
+      this.execs.set(exec.id, exec)
+      send(201, { Id: exec.id })
+      return
+    }
+    const execStart = /^\/exec\/([^/]+)\/start$/u.exec(url.pathname)
+    if (request.method === "POST" && execStart) {
+      const exec = this.execs.get(decodeURIComponent(execStart[1] ?? ""))
+      if (!exec) {
+        send(404, { message: "No such exec instance" })
+        return
+      }
+      this.#runDetachedExec(exec)
+      send(200, {})
+      return
+    }
+    const execResize = /^\/exec\/([^/]+)\/resize$/u.exec(url.pathname)
+    if (request.method === "POST" && execResize) {
+      const exec = this.execs.get(decodeURIComponent(execResize[1] ?? ""))
+      if (!exec?.running) {
+        send(404, { message: "No such exec instance" })
+        return
+      }
+      exec.size = {
+        cols: Number(url.searchParams.get("w")),
+        rows: Number(url.searchParams.get("h")),
+      }
+      send(200, {})
+      return
+    }
     if (request.method === "POST" && url.pathname === "/containers/create") {
       try {
         const name = url.searchParams.get("name") ?? undefined
@@ -1209,7 +1299,28 @@ export class FakeDocker {
       }
       return
     }
-    const container = match ? this.container(decodeURIComponent(match[1] ?? "")) : undefined
+    const inspect = /^\/containers\/([^/]+)\/json$/u.exec(url.pathname)
+    if (request.method === "GET" && inspect) {
+      const target = this.container(decodeURIComponent(inspect[1] ?? ""))
+      if (!target) {
+        send(404, { message: `No such container: ${inspect[1]}` })
+        return
+      }
+      await this.#checkpoint("inspect", target.name)
+      send(200, {
+        Id: target.id,
+        Name: `/${target.name}`,
+        State: {
+          ExitCode: target.state.exitCode,
+          Running: target.state.running,
+          StartedAt: target.state.startedAt,
+        },
+      })
+      return
+    }
+    const container = match
+      ? this.container(decodeURIComponent(match[1] ?? ""))
+      : undefined
     if (!container) {
       send(404, { message: `No such container: ${url.pathname}` })
       return
@@ -1219,7 +1330,11 @@ export class FakeDocker {
       return
     }
     send(200, {
-      cpu_stats: { cpu_usage: { total_usage: 0 }, online_cpus: 1, system_cpu_usage: 0 },
+      cpu_stats: {
+        cpu_usage: { total_usage: 0 },
+        online_cpus: 1,
+        system_cpu_usage: 0,
+      },
       memory_stats: { limit: container.memoryBytes, usage: 0 },
       networks: {},
       precpu_stats: { cpu_usage: { total_usage: 0 }, system_cpu_usage: 0 },
@@ -1241,7 +1356,9 @@ export class FakeDocker {
     return this.#createContainer({
       cmd: body.Cmd ?? [],
       env: Object.fromEntries(
-        (body.Env ?? []).map((entry) => splitOnce(entry, "=") as [string, string])
+        (body.Env ?? []).map(
+          (entry) => splitOnce(entry, "=") as [string, string]
+        )
       ),
       healthCheck: body.Healthcheck !== undefined,
       image: body.Image,
@@ -1272,8 +1389,13 @@ export class FakeDocker {
     })
   }
 
-  #attach(request: IncomingMessage, socket: Duplex): void {
+  #attach(request: IncomingMessage, socket: Duplex, head: Buffer): void {
     const url = new URL(request.url ?? "/", "http://docker")
+    const execStart = /^\/exec\/([^/]+)\/start$/u.exec(url.pathname)?.[1]
+    if (execStart) {
+      this.#startExec(decodeURIComponent(execStart), request, socket, head)
+      return
+    }
     const reference = /^\/containers\/([^/]+)\/attach$/u.exec(url.pathname)?.[1]
     const container = reference
       ? this.container(decodeURIComponent(reference))
@@ -1289,6 +1411,80 @@ export class FakeDocker {
       container.stdin += chunk.toString("utf8")
     })
     socket.on("error", () => undefined)
+  }
+
+  #startExec(
+    execId: string,
+    request: IncomingMessage,
+    socket: Duplex,
+    head: Buffer
+  ) {
+    const exec = this.execs.get(execId)
+    if (!exec || exec.running) {
+      socket.end("HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n")
+      return
+    }
+    exec.running = true
+    this.#execSockets.set(execId, socket)
+    socket.write(
+      `HTTP/1.1 101 UPGRADED\r\nContent-Type: application/vnd.docker.raw-stream\r\nConnection: Upgrade\r\nUpgrade: tcp\r\n\r\n${exec.tty ? this.execGreeting : ""}`
+    )
+    // The start options arrive as a body ahead of the TTY stream.
+    let options = Buffer.alloc(0)
+    let optionsLength = Number(request.headers["content-length"] ?? 0)
+    const receive = (chunk: Buffer) => {
+      if (optionsLength > 0) {
+        const taken = chunk.subarray(0, optionsLength)
+        options = Buffer.concat([options, taken])
+        optionsLength -= taken.length
+        chunk = chunk.subarray(taken.length)
+        if (optionsLength === 0) {
+          const input = JSON.parse(options.toString("utf8") || "{}") as {
+            ConsoleSize?: [number, number]
+          }
+          if (input.ConsoleSize) {
+            exec.size = {
+              cols: input.ConsoleSize[1],
+              rows: input.ConsoleSize[0],
+            }
+          }
+        }
+      }
+      if (chunk.length > 0) socket.write(chunk)
+    }
+    if (head.length > 0) receive(head)
+    socket.on("data", receive)
+    socket.on("close", () => {
+      exec.running = false
+      this.#execSockets.delete(execId)
+    })
+    socket.on("error", () => undefined)
+  }
+
+  // Detached execs Relay runs are `sh -c` scripts that hang up clients by
+  // the PID files those clients wrote; model their effect, not the shell.
+  #runDetachedExec(exec: FakeExec) {
+    const [shell, , script = "", pidFile = ""] = exec.cmd
+    if (shell !== "sh" || !script.includes("kill -HUP")) return
+    const sweep = script.includes("for file in")
+    for (const candidate of this.execs.values()) {
+      const candidateFile = candidate.cmd[3] ?? ""
+      if (
+        candidate.running &&
+        candidate.containerId === exec.containerId &&
+        (sweep ? candidateFile.startsWith(pidFile) : candidateFile === pidFile)
+      ) {
+        this.exitExec(candidate.id)
+      }
+    }
+  }
+
+  /** Ends a running exec the way its process exiting would. */
+  exitExec(execId: string) {
+    const exec = this.execs.get(execId)
+    if (!exec) throw new Error(`No such exec ${execId}`)
+    exec.running = false
+    this.#execSockets.get(execId)?.end()
   }
 
   // ---------------------------------------------------------------- helpers
@@ -1329,7 +1525,8 @@ export function commandEffect(
     catch: (cause) =>
       CommandError.make({
         executable,
-        message: cause instanceof Error ? cause.message : `${executable} failed`,
+        message:
+          cause instanceof Error ? cause.message : `${executable} failed`,
         cause,
       }),
   })
@@ -1428,7 +1625,9 @@ function parseRunArguments(
     const containerPort = parts.at(-1) ?? ""
     const hostPort = parts.at(-2) ?? ""
     const hostIp = parts.length === 3 ? (parts[0] ?? "") : ""
-    const key = containerPort.includes("/") ? containerPort : `${containerPort}/tcp`
+    const key = containerPort.includes("/")
+      ? containerPort
+      : `${containerPort}/tcp`
     portBindings[key] = [
       ...(portBindings[key] ?? []),
       { HostIp: hostIp, HostPort: hostPort },
@@ -1458,7 +1657,8 @@ function parseRunArguments(
           destination: options.target ?? options.destination ?? "",
           readOnly: Object.hasOwn(options, "readonly"),
           source: options.source ?? "",
-          type: options.type === "volume" ? ("volume" as const) : ("bind" as const),
+          type:
+            options.type === "volume" ? ("volume" as const) : ("bind" as const),
         }
       }),
     ],
@@ -1545,7 +1745,10 @@ function portsSummary(container: FakeContainer): string {
       hosts.flatMap((host) =>
         host.HostIp
           ? [`${host.HostIp}:${host.HostPort}->${port}`]
-          : [`0.0.0.0:${host.HostPort}->${port}`, `[::]:${host.HostPort}->${port}`]
+          : [
+              `0.0.0.0:${host.HostPort}->${port}`,
+              `[::]:${host.HostPort}->${port}`,
+            ]
       )
     )
     .join(", ")
@@ -1566,7 +1769,8 @@ function renderTemplate(template: string, root: unknown): string {
         .map((item) =>
           body.replace(
             /\{\{\s*println\s+(\.[\w.]*)\s*\}\}/gu,
-            (_inner, itemPath: string) => `${goString(lookup(item, itemPath))}\n`
+            (_inner, itemPath: string) =>
+              `${goString(lookup(item, itemPath))}\n`
           )
         )
         .join("")
@@ -1582,10 +1786,15 @@ function renderTemplate(template: string, root: unknown): string {
       key: string | undefined,
       path: string | undefined
     ) => {
-      if (json && jsonPath) return JSON.stringify(lookup(root, jsonPath) ?? null)
+      if (json && jsonPath)
+        return JSON.stringify(lookup(root, jsonPath) ?? null)
       if (indexPath && key !== undefined) {
-        const map = lookup(root, indexPath) as Record<string, unknown> | undefined
-        return map && Object.hasOwn(map, key) ? goString(map[key]) : "<no value>"
+        const map = lookup(root, indexPath) as
+          | Record<string, unknown>
+          | undefined
+        return map && Object.hasOwn(map, key)
+          ? goString(map[key])
+          : "<no value>"
       }
       return goString(lookup(root, path ?? "."))
     }
@@ -1622,7 +1831,8 @@ function iptables(
     new DockerFailure("iptables: No chain/target/match by that name.")
   switch (operation) {
     case "-N":
-      if (chains.has(chain)) throw new DockerFailure("iptables: Chain already exists.")
+      if (chains.has(chain))
+        throw new DockerFailure("iptables: Chain already exists.")
       chains.set(chain, [])
       return ""
     case "-S":
@@ -1639,7 +1849,11 @@ function iptables(
     case "-I": {
       if (!rules) throw missing()
       const [position = "1", ...inserted] = rule
-      rules.splice(Number(position) - 1, 0, ["-A", chain, ...inserted].join(" "))
+      rules.splice(
+        Number(position) - 1,
+        0,
+        ["-A", chain, ...inserted].join(" ")
+      )
       return ""
     }
     case "-C":

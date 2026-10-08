@@ -205,6 +205,128 @@ export const relayDatabaseDataReadSchema = relayDatabaseExportSchema.extend({
   request: databaseReadRequestSchema,
 })
 
+// Database terminals live on the Relay: one session per person per database,
+// kept while any Hearth viewer is attached and for an idle timeout after.
+const databaseTerminalIdSchema = z.string().regex(/^[A-Za-z0-9_.-]{22,96}$/u)
+const databaseTerminalSizeShape = {
+  cols: z.number().int().min(10).max(500),
+  rows: z.number().int().min(4).max(300),
+}
+
+export const databaseTerminalEndReasonSchema = z.enum([
+  // The client exited, for example after \q or exit.
+  "exited",
+  // The database container stopped or restarted underneath the client.
+  "database-stopped",
+  // No viewer was attached for the idle timeout.
+  "timed-out",
+  // Someone asked for a fresh session.
+  "restarted",
+  // The client could not be started or its connection failed.
+  "failed",
+])
+
+// Which page sets the session's size and is being typed in: the page the
+// output is for, another of the person's pages, or none yet.
+export const databaseTerminalControlSchema = z.enum(["self", "other", "none"])
+
+export const databaseTerminalEndSchema = z
+  .object({
+    at: z.string().datetime(),
+    reason: databaseTerminalEndReasonSchema,
+  })
+  .strict()
+
+export const relayDatabaseTerminalAttachSchema = relayDatabaseExportSchema
+  .extend({
+    ...databaseTerminalSizeShape,
+    // Chosen by Hearth per viewer; output for it is pushed to Hearth.
+    attachmentId: databaseTerminalIdSchema,
+    idleTimeoutMs: z
+      .number()
+      .int()
+      .min(60_000)
+      .max(24 * 60 * 60_000),
+  })
+  .strict()
+
+// Not strict, like the output pushes: a newer Relay may add fields.
+export const relayDatabaseTerminalAttachedSchema = z.object({
+  cols: z.number().int(),
+  control: databaseTerminalControlSchema,
+  // The session's output so far, as the screen and scrollback a terminal
+  // shows, ready to write into an empty terminal.
+  snapshot: z.string(),
+  // Where in the output pushes continue from. Output the snapshot already
+  // shows ends here, apart from an unfinished escape sequence, which is
+  // pushed again so the page receives it whole.
+  offset: z.number().int().nonnegative(),
+  // How the person's session before this one ended, if the Relay knows.
+  previous: databaseTerminalEndSchema.nullable(),
+  rows: z.number().int(),
+  // The state change the snapshot is in; pushes continue after it.
+  seq: z.number().int().nonnegative(),
+  sessionId: databaseTerminalIdSchema,
+  startedAt: z.string().datetime(),
+})
+
+export const relayDatabaseTerminalHeartbeatSchema = z
+  .object({ attachmentIds: z.array(databaseTerminalIdSchema).max(1_000) })
+  .strict()
+
+export const relayDatabaseTerminalDetachSchema = z
+  .object({ attachmentId: databaseTerminalIdSchema })
+  .strict()
+
+const databaseTerminalSessionShape = {
+  databaseId: databaseIdSchema,
+  sessionId: databaseTerminalIdSchema,
+}
+
+// Ends the person's session on a database; their pages attach to a new one.
+export const relayDatabaseTerminalRestartSchema = z
+  .object({ databaseId: databaseIdSchema })
+  .strict()
+
+// The most input one terminal write carries; pages split larger pastes.
+export const DATABASE_TERMINAL_WRITE_MAX_CHARACTERS = 64 * 1024
+
+export const relayDatabaseTerminalWriteSchema = z
+  .object({
+    ...databaseTerminalSessionShape,
+    data: z.string().min(1).max(DATABASE_TERMINAL_WRITE_MAX_CHARACTERS),
+  })
+  .strict()
+
+// Makes a page the one in control, sized to its window. The page in control
+// claims again when its window resizes.
+export const relayDatabaseTerminalClaimSchema = z
+  .object({
+    ...databaseTerminalSessionShape,
+    ...databaseTerminalSizeShape,
+    attachmentId: databaseTerminalIdSchema,
+  })
+  .strict()
+
+// Relay to Hearth: output for one attachment, in order. `ended` arrives with
+// the session's last output. Not strict: a Relay newer than its Hearth may
+// send fields this Hearth doesn't know yet.
+export const hearthDatabaseTerminalOutputSchema = z.object({
+  attachmentId: databaseTerminalIdSchema,
+  // The session's size this output is shown at.
+  cols: z.number().int().min(10).max(500),
+  control: databaseTerminalControlSchema,
+  // Raw terminal bytes, base64 encoded; chunks may split characters.
+  data: z.string(),
+  ended: databaseTerminalEndSchema.nullable(),
+  offset: z.number().int().nonnegative(),
+  rows: z.number().int().min(4).max(300),
+  // Numbers each change to size and control, in order. A page knows its
+  // claim took effect once it sees the number the claim returned.
+  seq: z.number().int().nonnegative(),
+  sessionId: databaseTerminalIdSchema,
+})
+
 export const relayDatabaseDataWriteSchema = relayDatabaseExportSchema.extend({
   // Runs a query in a read-only transaction, guarding against accidental
   // writes by someone allowed to write.
@@ -1557,6 +1679,22 @@ export type RelayDatabaseNetwork = z.infer<typeof relayDatabaseNetworkSchema>
 export type RelayDatabaseDump = z.infer<typeof relayDatabaseDumpSchema>
 export type RelayDatabaseExport = z.infer<typeof relayDatabaseExportSchema>
 export type RelayDatabaseDataRead = z.infer<typeof relayDatabaseDataReadSchema>
+export type DatabaseTerminalControl = z.infer<
+  typeof databaseTerminalControlSchema
+>
+export type DatabaseTerminalEnd = z.infer<typeof databaseTerminalEndSchema>
+export type DatabaseTerminalEndReason = z.infer<
+  typeof databaseTerminalEndReasonSchema
+>
+export type RelayDatabaseTerminalAttach = z.infer<
+  typeof relayDatabaseTerminalAttachSchema
+>
+export type RelayDatabaseTerminalAttached = z.infer<
+  typeof relayDatabaseTerminalAttachedSchema
+>
+export type HearthDatabaseTerminalOutput = z.infer<
+  typeof hearthDatabaseTerminalOutputSchema
+>
 export type RelayDatabaseDataWrite = z.infer<
   typeof relayDatabaseDataWriteSchema
 >

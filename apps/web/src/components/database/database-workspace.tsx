@@ -205,6 +205,7 @@ function DatabaseRouteTitle() {
         return "Not found"
       }
       const pathname = state.location.pathname
+      if (pathname.endsWith("/terminal")) return "Terminal"
       if (pathname.endsWith("/viewer")) return "Viewer"
       if (pathname.endsWith("/network")) return "Network"
       return "Info"

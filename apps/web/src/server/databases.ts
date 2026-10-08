@@ -15,12 +15,12 @@ import {
   databaseIdSchema,
   relayDatabaseNameSchema,
   relayIdSchema,
+  relayDatabaseTerminalClaimSchema,
+  relayDatabaseTerminalRestartSchema,
+  relayDatabaseTerminalWriteSchema,
   relayManagedDatabaseSchema,
 } from "@workspace/contracts"
-import type {
-  RelayControlOperation,
-  RelayManagedDatabase,
-} from "@workspace/contracts"
+import type { RelayManagedDatabase } from "@workspace/contracts"
 import { Effect, Result } from "effect"
 import { z } from "zod"
 
@@ -47,9 +47,14 @@ import {
 import { accessPermissions, grantHasPermission } from "@/lib/permissions"
 import type { AccessPermission } from "@/lib/permissions"
 import { publishRealtimeChange } from "@/lib/realtime-source.server"
-import type { PersistedRelay } from "@/lib/relay-registry"
 import { listPersistedRelays } from "@/lib/relay-registry"
 import { requireEligibleResourceUser } from "@/server/auth"
+import {
+  authorizedDatabase,
+  databaseRpc,
+  requiredCredential,
+  requiredRelay,
+} from "@/server/managed-database-access"
 
 const createDatabaseInputSchema = z.strictObject({
   engine: databaseEngineSchema,
@@ -653,6 +658,72 @@ async function managedDatabaseDataRequest(
   )
 }
 
+// Typing and window size go to the person's own session; the Relay rejects
+// a session id that isn't theirs or has ended. Output arrives through
+// the terminal stream (routes/api.database-terminal.$databaseId.ts).
+export const writeDatabaseTerminal = createServerFn({ method: "POST" })
+  .validator(
+    relayDatabaseTerminalWriteSchema.extend({ relayId: relayIdSchema })
+  )
+  .handler(async ({ data }) => {
+    const { relay, user } = await authorizedDatabase(data, "database.terminal")
+    await databaseRpc(
+      relay,
+      "database.terminal.write",
+      {
+        data: data.data,
+        databaseId: data.databaseId,
+        sessionId: data.sessionId,
+      },
+      15_000,
+      user.id
+    )
+    return { accepted: true }
+  })
+
+// Puts this page in control of the person's terminal session, sized to its
+// window.
+export const claimDatabaseTerminal = createServerFn({ method: "POST" })
+  .validator(
+    relayDatabaseTerminalClaimSchema.extend({ relayId: relayIdSchema })
+  )
+  .handler(async ({ data }) => {
+    const { relay, user } = await authorizedDatabase(data, "database.terminal")
+    const claimed = await databaseRpc(
+      relay,
+      "database.terminal.claim",
+      {
+        attachmentId: data.attachmentId,
+        cols: data.cols,
+        databaseId: data.databaseId,
+        rows: data.rows,
+        sessionId: data.sessionId,
+      },
+      15_000,
+      user.id
+    )
+    // The state change that put this page in control.
+    return z.object({ seq: z.number().int().nonnegative() }).parse(claimed)
+  })
+
+// Ends the person's terminal session on a database. A POST server function,
+// so it carries the request forgery protection a navigation would not.
+export const restartDatabaseTerminal = createServerFn({ method: "POST" })
+  .validator(
+    relayDatabaseTerminalRestartSchema.extend({ relayId: relayIdSchema })
+  )
+  .handler(async ({ data }) => {
+    const { relay, user } = await authorizedDatabase(data, "database.terminal")
+    await databaseRpc(
+      relay,
+      "database.terminal.restart",
+      { databaseId: data.databaseId },
+      30_000,
+      user.id
+    )
+    return { restarted: true }
+  })
+
 export const deleteManagedDatabase = createServerFn({ method: "POST" })
   .validator(databaseInputSchema)
   .handler(async ({ data }) => {
@@ -712,38 +783,6 @@ function publishDatabaseCredentialChange(
   })
 }
 
-async function authorizedDatabase(
-  data: { databaseId: string; relayId: string },
-  permission: AccessPermission
-) {
-  const user = await requireEligibleResourceUser()
-  const relay = await requiredRelay(data.relayId)
-  await requireRelayPermission({
-    databaseId: data.databaseId,
-    permission,
-    relayId: data.relayId,
-    user,
-  })
-  return { relay, user }
-}
-
-async function requiredCredential(relayId: string, databaseId: string) {
-  const credential = await runAppEffect(
-    "managedDatabases.credential.internal",
-    loadManagedDatabaseCredentialEffect(relayId, databaseId)
-  )
-  if (!credential) throw new Error("Database credentials are unavailable")
-  return credential
-}
-
-async function requiredRelay(id: string): Promise<PersistedRelay> {
-  const relay = (await listPersistedRelays()).find(
-    (candidate) => candidate.enabled && candidate.id === id
-  )
-  if (!relay) throw new Error("Relay not found")
-  return relay
-}
-
 function hasDatabasePermission(
   user: AuthenticatedUser,
   grants: ReadonlyArray<AccessGrant>,
@@ -775,17 +814,6 @@ function hasDatabaseRelayVisibility(
       grantHasPermission(grant, "database.read") &&
       (grant.resourceType === "relay" || grant.resourceType === "database")
   )
-}
-
-async function databaseRpc(
-  relay: PersistedRelay,
-  operation: RelayControlOperation,
-  payload: unknown,
-  timeoutMs: number,
-  subject?: string
-): Promise<unknown> {
-  const { relayRpc } = await import("@/lib/relay-connection")
-  return relayRpc(relay, operation, payload, timeoutMs, subject)
 }
 
 function promiseResult<TResult>(run: () => Promise<TResult>) {

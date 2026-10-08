@@ -80,6 +80,7 @@ export const accessPermissions = [
   "relay.audit.read",
   "database.data.read",
   "database.data.write",
+  "database.terminal",
 ] as const
 export type AccessPermission = (typeof accessPermissions)[number]
 Object.freeze(accessPermissions)
@@ -224,6 +225,7 @@ const permissionPlacement: Record<
   "database.dump.import": ["database.dump", "database"],
   "database.data.read": ["database.data", "database"],
   "database.data.write": ["database.data", "database"],
+  "database.terminal": ["database.terminal", "database"],
 }
 
 const familyScopes: Record<PermissionFamily, readonly PermissionScopeType[]> = {
@@ -446,6 +448,10 @@ const permissionCopy: Record<
     label: "Edit database tables",
     description: "Edit rows and run SQL queries in the viewer.",
   },
+  "database.terminal": {
+    label: "Use database terminal",
+    description: "Open the database's command-line client, signed in.",
+  },
   "backup.read": {
     label: "View backups",
     description: "See available backups and their status.",
@@ -570,6 +576,7 @@ const blockLabels: Record<string, string> = {
   "database.network": "Database networking",
   "database.dump": "Database data",
   "database.data": "Database tables",
+  "database.terminal": "Database terminal",
   "resource.deletion": "Resource deletion",
   "resource.creation": "Resource creation",
   "relay.configuration": "Relay configuration",
