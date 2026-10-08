@@ -952,6 +952,7 @@ function actionForRequest(request: RelayControlRequest): RelayAction | null {
     case "database.terminal.detach":
     case "database.terminal.write":
     case "database.terminal.claim":
+    case "database.terminal.restart":
       return "database.dump.import"
     case "backup.task.enqueue": {
       const kind = objectString(request.payload, "kind")

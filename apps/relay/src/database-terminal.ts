@@ -32,6 +32,8 @@ const OUTPUT_HISTORY_BYTES = 512 * 1024
 // Snapshots travel in one control frame (1 MB), alongside the attach reply.
 const MAX_SNAPSHOT_CHARACTERS = 600_000
 const MAX_PUSH_BYTES = 64 * 1024
+// State changes kept for viewers catching up; one further behind reattaches.
+const MAX_STATE_CHANGES = 256
 const PUSH_TIMEOUT_MS = 10_000
 // Hearth renews each viewer while its page is open; one that stops renewing
 // (Hearth stopped or lost the Relay) is dropped and the idle timeout starts.
@@ -70,30 +72,35 @@ export type PushTerminalOutput = (
 ) => Promise<unknown>
 
 interface Viewer {
-  // Who is in control, as last sent to this viewer.
-  control: DatabaseTerminalControl
   owner: string
   push: PushTerminalOutput
   renewedAt: number
   sending: boolean
-  // Output up to here has been delivered to this viewer, at this size.
+  // Output up to here has been delivered to this viewer.
   sentOffset: number
-  size: TerminalSize
+  // The last state change delivered to this viewer.
+  state: StateChange
 }
 
-interface TerminalSize {
+// What every page shows alongside the output: the session's size and which
+// page is in control (it sets the size and is the one typed in). Changes are
+// numbered in order and each applies at a point in the output, so a page
+// applies every one of them, in order, between the right bytes, even when
+// several share a point.
+interface StateChange {
+  active: string | null
   cols: number
-  rows: number
-}
-
-// The session's size from `offset` in its output on.
-interface SizeChange extends TerminalSize {
   offset: number
+  rows: number
+  seq: number
 }
 
 interface TerminalSession {
-  // The attachment in control: it sets the size and is the one typed in.
-  active: string | null
+  // The state the earliest retained output starts in, then every change
+  // since, oldest first.
+  changes: Array<StateChange>
+  // The last change the screen has applied; snapshots are in this state.
+  appliedSeq: number
   containerId: string
   databaseId: string
   ending: DatabaseTerminalEndReason | null
@@ -108,12 +115,12 @@ interface TerminalSession {
   idleTimeoutMs: number
   idleTimer: ReturnType<typeof setTimeout> | null
   key: string
-  // Output the screen has fully processed; snapshots cover exactly this.
+  // Output the screen has fully processed.
   parsedOffset: number
-  // Every page shows the session at its size. Each change applies from a
-  // point in the output, so pages switch size exactly where it did; the
-  // first entry is the size the earliest retained output was written at.
-  sizes: Array<SizeChange>
+  // Where in the processed output the screen was last between escape
+  // sequences and characters. Snapshots resume output from here, so a
+  // sequence the screen has only partly received reaches a new page whole.
+  resumeOffset: number
   pidFile: string
   previous: DatabaseTerminalEnd | null
   screen: Terminal
@@ -137,8 +144,8 @@ export class DatabaseTerminals {
     this.#config = config
   }
 
-  // Attaches run one at a time per person and database, so pages opening
-  // together share one session and a restart can't race another attach.
+  // Attaches and restarts run one at a time per person and database, so
+  // pages opening together share one session and a restart can't race them.
   attach(
     owner: string,
     database: RelayManagedDatabase,
@@ -146,13 +153,30 @@ export class DatabaseTerminals {
     push: PushTerminalOutput
   ): Promise<RelayDatabaseTerminalAttached> {
     const key = sessionKey(owner, database.id)
+    return this.#exclusive(key, () =>
+      this.#attachNow(key, owner, database, input, push)
+    )
+  }
+
+  // Ends the person's session on this database, if any; their pages then
+  // attach to a new one.
+  restart(owner: string, databaseId: string) {
+    const key = sessionKey(owner, databaseId)
+    return this.#exclusive(key, async () => {
+      const session = this.#sessions.get(key)
+      if (session) await this.#end(session, "restarted")
+      return { restarted: true }
+    })
+  }
+
+  #exclusive<T>(key: string, task: () => Promise<T>): Promise<T> {
     const previous = this.#attaching.get(key) ?? Promise.resolve()
-    const attached = recoverPromise(
+    const result = recoverPromise(
       () => previous,
       () => undefined
-    ).then(() => this.#attachNow(key, owner, database, input, push))
+    ).then(task)
     const settled = recoverPromise(
-      () => attached,
+      () => result,
       () => undefined
     )
     this.#attaching.set(key, settled)
@@ -160,7 +184,7 @@ export class DatabaseTerminals {
       await settled
       if (this.#attaching.get(key) === settled) this.#attaching.delete(key)
     })
-    return attached
+    return result
   }
 
   async #attachNow(
@@ -177,10 +201,6 @@ export class DatabaseTerminals {
       await session.finished
       session = this.#sessions.get(key)
     }
-    if (session && input.restart) {
-      await this.#end(session, "restarted")
-      session = undefined
-    }
     session ??= await this.#start(key, database, input)
     session.idleTimeoutMs = input.idleTimeoutMs
     if (session.idleTimer) clearTimeout(session.idleTimer)
@@ -188,25 +208,27 @@ export class DatabaseTerminals {
     // Joining keeps the session's size; the page in use claims it with a
     // resize, so a page reconnecting in the background doesn't take it.
     const snapshot = await serializeScreen(session)
-    const control = controlFor(session, input.attachmentId)
+    const state =
+      session.changes.find((change) => change.seq === snapshot.seq) ??
+      session.changes[0]!
     session.viewers.set(input.attachmentId, {
-      control,
       owner,
       push,
       renewedAt: Date.now(),
       sending: false,
       sentOffset: snapshot.offset,
-      size: { cols: snapshot.cols, rows: snapshot.rows },
+      state,
     })
     this.#attachments.set(input.attachmentId, session)
     this.#startSweeper()
     this.#flush(session)
     return {
-      cols: snapshot.cols,
-      control,
+      cols: state.cols,
+      control: controlFor(state, input.attachmentId),
       offset: snapshot.offset,
       previous: session.previous,
-      rows: snapshot.rows,
+      rows: state.rows,
+      seq: state.seq,
       sessionId: session.id,
       snapshot: snapshot.content,
       startedAt: session.startedAt,
@@ -255,10 +277,52 @@ export class DatabaseTerminals {
     if (session.viewers.get(attachmentId)?.owner !== owner) {
       throw new Error("This page is no longer attached to the session")
     }
-    session.active = attachmentId
+    const before = session.changes.at(-1)!
+    const seq = this.#change(session, { active: attachmentId, cols, rows })
+    if (before.cols !== cols || before.rows !== rows) {
+      await this.#dockerJson(
+        "POST",
+        `/exec/${encodeURIComponent(session.execId)}/resize?h=${rows}&w=${cols}`
+      )
+    }
+    // Pages know the claim took effect once they see this change.
+    return { claimed: true, seq }
+  }
+
+  // Records a state change at the current end of the output and returns its
+  // number. The screen applies it after the output received so far, as every
+  // page will.
+  #change(
+    session: TerminalSession,
+    patch: Partial<Pick<StateChange, "active" | "cols" | "rows">>
+  ) {
+    const current = session.changes.at(-1)!
+    const next: StateChange = {
+      ...current,
+      ...patch,
+      offset: session.historyStart + session.history.length,
+      seq: current.seq + 1,
+    }
+    if (
+      next.active === current.active &&
+      next.cols === current.cols &&
+      next.rows === current.rows
+    ) {
+      return current.seq
+    }
+    session.changes.push(next)
+    if (session.changes.length > MAX_STATE_CHANGES) session.changes.shift()
+    session.screen.write("", () => {
+      if (
+        session.screen.cols !== next.cols ||
+        session.screen.rows !== next.rows
+      ) {
+        session.screen.resize(next.cols, next.rows)
+      }
+      session.appliedSeq = next.seq
+    })
     this.#flush(session)
-    await this.#resize(session, rows, cols)
-    return { claimed: true }
+    return next.seq
   }
 
   #current(owner: string, databaseId: string, sessionId: string) {
@@ -315,7 +379,16 @@ export class DatabaseTerminals {
     const serializer = new HeadlessSerializeAddon()
     screen.loadAddon(serializer)
     const session: TerminalSession = {
-      active: null,
+      appliedSeq: 0,
+      changes: [
+        {
+          active: null,
+          cols: input.cols,
+          offset: 0,
+          rows: input.rows,
+          seq: 0,
+        },
+      ],
       containerId,
       databaseId: database.id,
       ended: null,
@@ -330,28 +403,32 @@ export class DatabaseTerminals {
       key,
       parsedOffset: 0,
       pidFile,
+      resumeOffset: 0,
       previous: this.#endings.get(key) ?? null,
       screen,
-      sizes: [{ cols: input.cols, offset: 0, rows: input.rows }],
       serializer,
       socket,
       startedAt: new Date().toISOString(),
       viewers: new Map(),
     }
+    const boundary = new SequenceBoundary()
     socket.on("data", (chunk: Buffer) => {
+      const start = session.historyStart + session.history.length
       const history = Buffer.concat([session.history, chunk])
       const overflow = Math.max(0, history.length - OUTPUT_HISTORY_BYTES)
       session.history = history.subarray(overflow)
       session.historyStart += overflow
-      // Size changes before what's retained only matter as its starting size.
+      // Changes before what's retained only matter as its starting state.
       while (
-        session.sizes.length > 1 &&
-        session.sizes[1]!.offset <= session.historyStart
+        session.changes.length > 1 &&
+        session.changes[1]!.offset <= session.historyStart
       ) {
-        session.sizes.shift()
+        session.changes.shift()
       }
+      const resumeOffset = boundary.advance(chunk, start)
       screen.write(chunk, () => {
         session.parsedOffset += chunk.length
+        session.resumeOffset = resumeOffset
       })
       this.#flush(session)
     })
@@ -409,36 +486,38 @@ export class DatabaseTerminals {
     )
   }
 
-  // Sends each viewer the output it hasn't had, one push at a time per viewer.
+  // Sends each viewer the output and state changes it hasn't had, in order,
+  // one push at a time per viewer.
   #flush(session: TerminalSession) {
     const end = session.historyStart + session.history.length
+    const oldest = session.changes[0]!
     for (const [attachmentId, viewer] of session.viewers) {
       if (viewer.sending) continue
-      const behind = viewer.sentOffset < session.historyStart
-      if (behind) {
-        // Too far behind to catch up from raw output; it reattaches for a
-        // fresh snapshot.
+      if (
+        viewer.sentOffset < session.historyStart ||
+        viewer.state.seq < oldest.seq - 1
+      ) {
+        // Too far behind to catch up from what's retained; it reattaches for
+        // a fresh snapshot.
         this.#dropViewer(session, attachmentId)
         continue
       }
       const finished = session.ended !== null
-      const size = sizeAt(session, viewer.sentOffset)
-      const control = controlFor(session, attachmentId)
-      const changed =
-        size.cols !== viewer.size.cols ||
-        size.rows !== viewer.size.rows ||
-        control !== viewer.control
-      if (viewer.sentOffset >= end && !finished && !changed) continue
-      // A push never spans a size change, so it's shown at one size.
-      const until = Math.min(
-        end,
-        viewer.sentOffset + MAX_PUSH_BYTES,
-        nextSizeChange(session, viewer.sentOffset) ?? end
+      const next = session.changes.find(
+        (change) => change.seq > viewer.state.seq
       )
+      // A change due at this point goes on its own, before any more output;
+      // otherwise output runs up to the next change.
+      const due = next !== undefined && next.offset <= viewer.sentOffset
+      const state = due ? next : viewer.state
+      const until = due
+        ? viewer.sentOffset
+        : Math.min(end, viewer.sentOffset + MAX_PUSH_BYTES, next?.offset ?? end)
+      if (!due && until <= viewer.sentOffset && !finished) continue
       const from = viewer.sentOffset - session.historyStart
       const chunk = session.history.subarray(from, until - session.historyStart)
       const offset = viewer.sentOffset + chunk.length
-      const last = finished && offset >= end
+      const last = finished && offset >= end && next === undefined
       viewer.sending = true
       forkPromise(async () => {
         const accepted = await recoverPromise(
@@ -446,12 +525,13 @@ export class DatabaseTerminals {
             viewer.push(
               {
                 attachmentId,
-                cols: size.cols,
-                control,
+                cols: state.cols,
+                control: controlFor(state, attachmentId),
                 data: chunk.toString("base64"),
                 ended: last ? session.ended : null,
                 offset,
-                rows: size.rows,
+                rows: state.rows,
+                seq: state.seq,
                 sessionId: session.id,
               },
               PUSH_TIMEOUT_MS
@@ -464,8 +544,7 @@ export class DatabaseTerminals {
           return
         }
         viewer.sentOffset = offset
-        viewer.size = size
-        viewer.control = control
+        viewer.state = state
         this.#flush(session)
       })
     }
@@ -475,9 +554,8 @@ export class DatabaseTerminals {
     if (!session.viewers.delete(attachmentId)) return
     this.#attachments.delete(attachmentId)
     // Nobody is in control until another page claims it.
-    if (session.active === attachmentId) {
-      session.active = null
-      this.#flush(session)
+    if (session.changes.at(-1)!.active === attachmentId) {
+      this.#change(session, { active: null })
     }
     if (session.viewers.size > 0 || session.ending) return
     session.idleTimer = setTimeout(() => {
@@ -503,21 +581,6 @@ export class DatabaseTerminals {
       }
     }, VIEWER_SWEEP_INTERVAL_MS)
     this.#sweeper.unref()
-  }
-
-  async #resize(session: TerminalSession, rows: number, cols: number) {
-    const current = session.sizes.at(-1)
-    if (current?.cols === cols && current.rows === rows) return
-    // Output received so far was written at the old size; the screen takes
-    // the new one after processing it, as every page will.
-    const offset = session.historyStart + session.history.length
-    session.sizes.push({ cols, offset, rows })
-    session.screen.write("", () => session.screen.resize(cols, rows))
-    this.#flush(session)
-    await this.#dockerJson(
-      "POST",
-      `/exec/${encodeURIComponent(session.execId)}/resize?h=${rows}&w=${cols}`
-    )
   }
 
   async #containerRunning(session: TerminalSession) {
@@ -652,10 +715,9 @@ export class DatabaseTerminals {
 // as much scrollback as fits in one control frame.
 function serializeScreen(session: TerminalSession) {
   return new Promise<{
-    cols: number
     content: string
     offset: number
-    rows: number
+    seq: number
   }>((resolve) => {
     // An empty write runs its callback once earlier output is processed.
     session.screen.write("", () => {
@@ -665,36 +727,93 @@ function serializeScreen(session: TerminalSession) {
         scrollback = Math.floor(scrollback / 2)
         content = session.serializer.serialize({ scrollback })
       }
+      // The output after the resume point had no effect on the screen yet
+      // (an unfinished sequence), so the page receives it again.
       resolve({
-        cols: session.screen.cols,
         content,
-        offset: session.parsedOffset,
-        rows: session.screen.rows,
+        offset:
+          session.resumeOffset >= session.historyStart
+            ? session.resumeOffset
+            : session.parsedOffset,
+        seq: session.appliedSeq,
       })
     })
   })
 }
 
 function controlFor(
-  session: TerminalSession,
+  state: StateChange,
   attachmentId: string
 ): DatabaseTerminalControl {
-  if (session.active === null) return "none"
-  return session.active === attachmentId ? "self" : "other"
+  if (state.active === null) return "none"
+  return state.active === attachmentId ? "self" : "other"
 }
 
-// The size output from `offset` is shown at.
-function sizeAt(session: TerminalSession, offset: number): TerminalSize {
-  let size: TerminalSize = session.sizes[0]!
-  for (const change of session.sizes) {
-    if (change.offset > offset) break
-    size = change
+// Follows output through escape sequences (and multi-byte characters) to
+// find the last point between them, where a fresh terminal can pick up.
+class SequenceBoundary {
+  #state: "ground" | "escape" | "csi" | "string" | "string-escape" = "ground"
+  #utf8 = 0
+  #boundary = 0
+
+  // Returns the last boundary at or before the end of `chunk`, which starts
+  // at `start` in the output.
+  advance(chunk: Buffer, start: number) {
+    for (let index = 0; index < chunk.length; index += 1) {
+      this.#step(chunk[index]!)
+      if (this.#state === "ground" && this.#utf8 === 0) {
+        this.#boundary = start + index + 1
+      }
+    }
+    return this.#boundary
   }
-  return { cols: size.cols, rows: size.rows }
-}
 
-function nextSizeChange(session: TerminalSession, offset: number) {
-  return session.sizes.find((change) => change.offset > offset)?.offset
+  #step(byte: number) {
+    // CAN and SUB cancel any sequence.
+    if (byte === 0x18 || byte === 0x1a) {
+      this.#state = "ground"
+      this.#utf8 = 0
+      return
+    }
+    switch (this.#state) {
+      case "ground":
+        if (this.#utf8 > 0 && (byte & 0xc0) === 0x80) {
+          this.#utf8 -= 1
+          return
+        }
+        this.#utf8 = 0
+        if (byte === 0x1b) this.#state = "escape"
+        else if (byte >= 0xc0 && byte <= 0xdf) this.#utf8 = 1
+        else if (byte >= 0xe0 && byte <= 0xef) this.#utf8 = 2
+        else if (byte >= 0xf0 && byte <= 0xf7) this.#utf8 = 3
+        return
+      case "escape":
+        if (byte === 0x5b) this.#state = "csi"
+        // OSC, DCS, SOS, PM, and APC run until a terminator.
+        else if ([0x5d, 0x50, 0x58, 0x5e, 0x5f].includes(byte)) {
+          this.#state = "string"
+        } else if (byte === 0x1b || (byte >= 0x20 && byte <= 0x2f)) {
+          return
+        } else this.#state = "ground"
+        return
+      case "csi":
+        if (byte === 0x1b) this.#state = "escape"
+        else if (byte >= 0x40 && byte <= 0x7e) this.#state = "ground"
+        return
+      case "string":
+        if (byte === 0x07) this.#state = "ground"
+        else if (byte === 0x1b) this.#state = "string-escape"
+        return
+      case "string-escape":
+        // ESC \ ends the string; anything else starts a new sequence.
+        if (byte === 0x5c) this.#state = "ground"
+        else {
+          this.#state = "escape"
+          this.#step(byte)
+        }
+        return
+    }
+  }
 }
 
 function sessionKey(owner: string, databaseId: string) {

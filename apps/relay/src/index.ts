@@ -22,6 +22,7 @@ import {
   relayDatabaseTerminalDetachSchema,
   relayDatabaseTerminalHeartbeatSchema,
   relayDatabaseTerminalClaimSchema,
+  relayDatabaseTerminalRestartSchema,
   relayDatabaseTerminalWriteSchema,
   relayDatabaseExportSchema,
   relayDatabaseNetworkSchema,
@@ -1394,6 +1395,13 @@ async function executeControlRequest(
       return databaseTerminals.heartbeat(
         terminalOwner(client, request),
         input.attachmentIds
+      )
+    }
+    case "database.terminal.restart": {
+      const input = relayDatabaseTerminalRestartSchema.parse(request.payload)
+      return databaseTerminals.restart(
+        terminalOwner(client, request),
+        input.databaseId
       )
     }
     case "database.terminal.detach": {

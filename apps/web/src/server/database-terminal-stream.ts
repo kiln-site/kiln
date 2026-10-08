@@ -48,7 +48,6 @@ export function openDatabaseTerminalStream(input: {
   databaseId: string
   headers: Headers
   relay: PersistedRelay
-  restart: boolean
   rows: number
   signal: AbortSignal
   user: AuthenticatedUser
@@ -113,6 +112,7 @@ export function openDatabaseTerminalStream(input: {
       data: output.data,
       offset: output.offset,
       rows: output.rows,
+      seq: output.seq,
       type: "output",
     })
     if (output.ended) finish({ ended: output.ended, type: "ended" })
@@ -190,7 +190,6 @@ export function openDatabaseTerminalStream(input: {
           databaseId,
           idleTimeoutMs: databaseTerminalIdleTimeoutMs(),
           password: credential.password,
-          restart: input.restart,
           rows: input.rows,
           username: credential.username,
         },

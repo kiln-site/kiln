@@ -35,6 +35,7 @@ vi.mock("@/server/managed-database-access", () => ({
           ended: { at: "2026-01-01T00:00:01.000Z", reason: "exited" },
           offset: 0,
           rows: 24,
+          seq: 0,
           sessionId: `boot0000.${"s".repeat(24)}`,
         })
       }
@@ -44,6 +45,7 @@ vi.mock("@/server/managed-database-access", () => ({
         offset: 0,
         previous: null,
         rows: 24,
+        seq: 0,
         sessionId: `boot0000.${"s".repeat(24)}`,
         snapshot: "",
         startedAt: "2026-01-01T00:00:00.000Z",
@@ -103,7 +105,6 @@ async function openStream() {
     databaseId: "e".repeat(40),
     headers: new Headers(),
     relay,
-    restart: false,
     rows: 24,
     signal: page.signal,
     user,
@@ -124,6 +125,7 @@ async function openStream() {
       ended: null,
       offset: 0,
       rows: 24,
+      seq: 0,
       sessionId: `boot0000.${"s".repeat(24)}`,
     })
   return { attachmentId, next, output, page }
@@ -140,7 +142,6 @@ describe("database terminal stream", () => {
       databaseId: "e".repeat(40),
       headers: new Headers(),
       relay,
-      restart: false,
       rows: 24,
       signal: new AbortController().signal,
       user,

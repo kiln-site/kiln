@@ -247,8 +247,6 @@ export const relayDatabaseTerminalAttachSchema = relayDatabaseExportSchema
       .int()
       .min(60_000)
       .max(24 * 60 * 60_000),
-    // End the current session and start a fresh one.
-    restart: z.boolean(),
   })
   .strict()
 
@@ -259,11 +257,15 @@ export const relayDatabaseTerminalAttachedSchema = z.object({
   // The session's output so far, as the screen and scrollback a terminal
   // shows, ready to write into an empty terminal.
   snapshot: z.string(),
-  // Byte offset of the output the snapshot covers; pushes continue here.
+  // Where in the output pushes continue from. Output the snapshot already
+  // shows ends here, apart from an unfinished escape sequence, which is
+  // pushed again so the page receives it whole.
   offset: z.number().int().nonnegative(),
   // How the person's session before this one ended, if the Relay knows.
   previous: databaseTerminalEndSchema.nullable(),
   rows: z.number().int(),
+  // The state change the snapshot is in; pushes continue after it.
+  seq: z.number().int().nonnegative(),
   sessionId: databaseTerminalIdSchema,
   startedAt: z.string().datetime(),
 })
@@ -280,6 +282,11 @@ const databaseTerminalSessionShape = {
   databaseId: databaseIdSchema,
   sessionId: databaseTerminalIdSchema,
 }
+
+// Ends the person's session on a database; their pages attach to a new one.
+export const relayDatabaseTerminalRestartSchema = z
+  .object({ databaseId: databaseIdSchema })
+  .strict()
 
 // The most input one terminal write carries; pages split larger pastes.
 export const DATABASE_TERMINAL_WRITE_MAX_CHARACTERS = 64 * 1024
@@ -314,6 +321,9 @@ export const hearthDatabaseTerminalOutputSchema = z.object({
   ended: databaseTerminalEndSchema.nullable(),
   offset: z.number().int().nonnegative(),
   rows: z.number().int().min(4).max(300),
+  // Numbers each change to size and control, in order. A page knows its
+  // claim took effect once it sees the number the claim returned.
+  seq: z.number().int().nonnegative(),
   sessionId: databaseTerminalIdSchema,
 })
 

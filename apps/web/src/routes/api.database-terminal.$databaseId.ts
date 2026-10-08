@@ -9,7 +9,6 @@ const terminalTargetSchema = z.object({
   cols: z.coerce.number().int().min(10).max(500),
   databaseId: databaseIdSchema,
   relayId: relayIdSchema,
-  restart: z.enum(["0", "1"]),
   rows: z.coerce.number().int().min(4).max(300),
 })
 
@@ -77,7 +76,6 @@ export const Route = createFileRoute("/api/database-terminal/$databaseId")({
             databaseId: target.data.databaseId,
             headers: request.headers,
             relay: access.value.relay,
-            restart: target.data.restart === "1",
             rows: target.data.rows,
             signal: request.signal,
             user: access.value.user,

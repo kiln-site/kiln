@@ -16,6 +16,7 @@ import {
   relayDatabaseNameSchema,
   relayIdSchema,
   relayDatabaseTerminalClaimSchema,
+  relayDatabaseTerminalRestartSchema,
   relayDatabaseTerminalWriteSchema,
   relayManagedDatabaseSchema,
 } from "@workspace/contracts"
@@ -688,7 +689,7 @@ export const claimDatabaseTerminal = createServerFn({ method: "POST" })
   )
   .handler(async ({ data }) => {
     const { relay, user } = await authorizedDatabase(data, "database.terminal")
-    await databaseRpc(
+    const claimed = await databaseRpc(
       relay,
       "database.terminal.claim",
       {
@@ -701,7 +702,26 @@ export const claimDatabaseTerminal = createServerFn({ method: "POST" })
       15_000,
       user.id
     )
-    return { claimed: true }
+    // The state change that put this page in control.
+    return z.object({ seq: z.number().int().nonnegative() }).parse(claimed)
+  })
+
+// Ends the person's terminal session on a database. A POST server function,
+// so it carries the request forgery protection a navigation would not.
+export const restartDatabaseTerminal = createServerFn({ method: "POST" })
+  .validator(
+    relayDatabaseTerminalRestartSchema.extend({ relayId: relayIdSchema })
+  )
+  .handler(async ({ data }) => {
+    const { relay, user } = await authorizedDatabase(data, "database.terminal")
+    await databaseRpc(
+      relay,
+      "database.terminal.restart",
+      { databaseId: data.databaseId },
+      30_000,
+      user.id
+    )
+    return { restarted: true }
   })
 
 export const deleteManagedDatabase = createServerFn({ method: "POST" })

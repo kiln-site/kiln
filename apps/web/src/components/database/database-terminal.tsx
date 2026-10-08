@@ -37,13 +37,14 @@ import { showToast } from "@workspace/ui/components/sonner"
 
 import { OverlayNotice } from "@/components/overlay-notice"
 import { WorkspaceToolbarTooltip } from "@/components/workspace-toolbar-tooltip"
-import { ensuringPromise, forkPromise } from "@/effect/promise"
+import { ensuringPromise, forkPromise, recoverPromise } from "@/effect/promise"
 import {
   databaseTerminalStreamUrl,
   type DatabaseTerminalStreamRecord,
 } from "@/lib/database-terminal-stream"
 import {
   claimDatabaseTerminal,
+  restartDatabaseTerminal,
   writeDatabaseTerminal,
 } from "@/server/databases"
 
@@ -681,7 +682,16 @@ class TerminalConnection {
   #pendingSessionId: string | null = null
   #attachmentId: string | null = null
   #claimTimer: ReturnType<typeof setTimeout> | null = null
-  #control: TerminalControl = "none"
+  // This page's claim on control, from the request until the Relay's state
+  // reaches the change it made (`seq`, known once the request returns).
+  // Kept apart from who the Relay last reported in control, so a claim
+  // always settles, whoever ends up in control.
+  #claim: { request: number; seq: number | null } | null = null
+  #claimRequests = 0
+  #reported: DatabaseTerminalControl = "none"
+  // The last state change this page has seen.
+  #seq = 0
+  #shownControl: TerminalControl = "none"
   // Claiming control that another of the person's pages had.
   #takingOver = false
   // Whether this page asked for the session it is attaching to.
@@ -731,7 +741,7 @@ class TerminalConnection {
     }
     this.#pendingInput += data
     // Typing takes control back from another page that took it meanwhile.
-    if (this.#control === "other" || this.#control === "none") this.claim()
+    if (this.#reported !== "self" && !this.#claim) this.claim()
     // Sent right away; keys typed while a write is in flight go together.
     if (!this.#flushTimer) {
       this.#flushTimer = setTimeout(() => this.#flushInput(), 0)
@@ -747,24 +757,34 @@ class TerminalConnection {
     if (!this.#live || !sessionId || !attachmentId || !size) return
     const current = this.#sessionSize
     if (
-      this.#control === "self" &&
+      !this.#claim &&
+      this.#reported === "self" &&
       current?.cols === size.cols &&
       current.rows === size.rows
     ) {
       return
     }
-    if (this.#control === "other") this.#takingOver = true
-    if (this.#control !== "self") this.#setControl("claiming")
+    if (!this.#claim) this.#takingOver = this.#reported === "other"
+    const request = ++this.#claimRequests
+    this.#claim = { request, seq: null }
+    this.#showControl()
     if (this.#claimTimer) clearTimeout(this.#claimTimer)
     this.#claimTimer = setTimeout(() => {
       this.#claimTimer = null
       forkPromise(
-        () =>
-          claimDatabaseTerminal({
+        async () => {
+          const { seq } = await claimDatabaseTerminal({
             data: { ...this.#target, ...size, attachmentId, sessionId },
-          }),
+          })
+          if (this.#claim?.request !== request) return
+          this.#claim.seq = seq
+          this.#settleClaim()
+        },
         () => {
-          if (this.#control === "claiming") this.#setControl("none")
+          if (this.#claim?.request !== request) return
+          this.#claim = null
+          this.#takingOver = false
+          this.#showControl()
         }
       )
     }, CLAIM_DEBOUNCE_MS)
@@ -772,16 +792,33 @@ class TerminalConnection {
 
   // The page in control follows its own window.
   windowResized() {
-    if (this.#control === "self") this.claim()
+    if (this.#reported === "self" && !this.#claim) this.claim()
   }
 
-  #setControl(control: TerminalControl) {
-    if (this.#control === control) return
-    this.#control = control
-    this.#events.onControl(control)
-    if (control === "claiming") return
-    if (control === "self" && this.#takingOver) this.#events.onActivated()
+  // Records who the Relay says is in control as of state change `seq`.
+  #report(control: DatabaseTerminalControl, seq: number) {
+    this.#reported = control
+    this.#seq = seq
+    this.#settleClaim()
+    this.#showControl()
+  }
+
+  #settleClaim() {
+    const claim = this.#claim
+    if (claim?.seq === null || claim === null || this.#seq < claim.seq) return
+    this.#claim = null
+    if (this.#reported === "self" && this.#takingOver) {
+      this.#events.onActivated()
+    }
     this.#takingOver = false
+    this.#showControl()
+  }
+
+  #showControl() {
+    const control: TerminalControl = this.#claim ? "claiming" : this.#reported
+    if (control === this.#shownControl) return
+    this.#shownControl = control
+    this.#events.onControl(control)
   }
 
   // Output already written was at the old size, so the resize waits for it.
@@ -832,18 +869,31 @@ class TerminalConnection {
     )
   }
 
-  async #run(generation: number, restartFirst: boolean) {
-    let restart = restartFirst
+  async #run(generation: number, restart: boolean) {
+    if (restart) {
+      const restarted = await recoverPromise(
+        async () => {
+          await restartDatabaseTerminal({ data: this.#target })
+          return true
+        },
+        () => false
+      )
+      if (generation !== this.#generation) return
+      if (!restarted) {
+        showToast({ message: "Couldn't restart the session", type: "error" })
+      }
+      // The page that restarted takes control of the new session.
+      this.#terminal.focus()
+    }
     let attempt = 0
     while (generation === this.#generation) {
       const outcome = await Effect.runPromise(
-        Effect.tryPromise(() => this.#streamOnce(generation, restart)).pipe(
+        Effect.tryPromise(() => this.#streamOnce(generation)).pipe(
           Effect.catch(() =>
             Effect.succeed<StreamOutcome>({ cause: "hearth", kind: "retry" })
           )
         )
       )
-      restart = false
       if (generation !== this.#generation || outcome.kind === "stop") return
       attempt = outcome.attached ? 1 : attempt + 1
       this.#live = false
@@ -860,10 +910,7 @@ class TerminalConnection {
     }
   }
 
-  async #streamOnce(
-    generation: number,
-    restart: boolean
-  ): Promise<StreamOutcome> {
+  async #streamOnce(generation: number): Promise<StreamOutcome> {
     const abort = new AbortController()
     this.#abort = abort
     const response = await fetch(
@@ -871,7 +918,6 @@ class TerminalConnection {
         ...this.#target,
         // Used only when this starts a session; joining keeps its size.
         cols: this.#measure()?.cols ?? this.#terminal.cols,
-        restart,
         rows: this.#measure()?.rows ?? this.#terminal.rows,
       }),
       { credentials: "same-origin", signal: abort.signal }
@@ -936,9 +982,14 @@ class TerminalConnection {
         this.#terminal.reset()
         this.#terminal.write(record.snapshot)
         this.#offset = record.offset
+        if (this.#sessionId !== record.sessionId) {
+          // A claim on an earlier session can't settle on this one.
+          this.#claim = null
+          this.#takingOver = false
+        }
         this.#sessionId = record.sessionId
         this.#attachmentId = record.attachmentId
-        this.#setControl(record.control)
+        this.#report(record.control, record.seq)
         this.#live = true
         if (this.#pendingInput && !this.#flushTimer) {
           this.#flushTimer = setTimeout(() => this.#flushInput(), 0)
@@ -960,11 +1011,10 @@ class TerminalConnection {
       case "output": {
         // Older than what this page shows already, size included.
         if (record.offset < this.#offset) return null
+        // Size and control changes arrive in order with the output, each
+        // applied between the bytes it happened between.
         this.#applySize(record.cols, record.rows)
-        // While claiming, keep saying so until the Relay confirms it.
-        if (this.#control !== "claiming" || record.control === "self") {
-          this.#setControl(record.control)
-        }
+        this.#report(record.control, record.seq)
         if (record.offset === this.#offset) return null
         const bytes = decodeBase64(record.data)
         const start = record.offset - bytes.length

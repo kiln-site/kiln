@@ -1,8 +1,12 @@
+import { createRequire } from "node:module"
+
 import {
   relayCreateDatabaseSchema,
   type DatabaseTerminalEnd,
   type HearthDatabaseTerminalOutput,
+  type RelayDatabaseTerminalAttached,
 } from "@workspace/contracts"
+import type { ITerminalAddon } from "@xterm/headless"
 import { afterEach, describe, expect, it, vi } from "vite-plus/test"
 
 vi.mock("./command.js", () => import("./test/docker.js"))
@@ -43,10 +47,19 @@ async function runningDatabase(harness: RelayHarness) {
 }
 
 // A Hearth viewer: collects the output and ending pushed to it.
-function viewer(accepting = true) {
+// A Hearth viewer: collects the output and ending pushed to it. A held
+// viewer doesn't answer pushes until released, like a slow page.
+function viewer(accepting = true, options: { held?: boolean } = {}) {
   const pushes: Array<HearthDatabaseTerminalOutput> = []
+  let release = () => {}
+  const released = options.held
+    ? new Promise<void>((resolve) => {
+        release = resolve
+      })
+    : Promise.resolve()
   return {
     pushes,
+    release: () => release(),
     get ended(): DatabaseTerminalEnd | null {
       return pushes.find((push) => push.ended)?.ended ?? null
     },
@@ -57,9 +70,52 @@ function viewer(accepting = true) {
     },
     push: async (output: HearthDatabaseTerminalOutput) => {
       pushes.push(output)
+      await released
       return { accepted: accepting }
     },
   }
+}
+
+// Rebuilds the screen a page shows from its snapshot and the pushes after
+// it, the way the browser does, as escape sequences that redraw it.
+const require = createRequire(import.meta.url)
+const { Terminal } =
+  require("@xterm/headless") as typeof import("@xterm/headless")
+const { SerializeAddon } = require("@xterm/addon-serialize") as {
+  SerializeAddon: new () => ITerminalAddon & {
+    serialize(options?: { scrollback?: number }): string
+  }
+}
+function pageScreen(
+  attached: RelayDatabaseTerminalAttached,
+  pushes: ReadonlyArray<HearthDatabaseTerminalOutput> = []
+) {
+  const screen = new Terminal({
+    allowProposedApi: true,
+    cols: attached.cols,
+    rows: attached.rows,
+    scrollback: 2_000,
+  })
+  const serializer = new SerializeAddon()
+  screen.loadAddon(serializer)
+  screen.write(attached.snapshot)
+  let offset = attached.offset
+  for (const push of pushes) {
+    const { cols, rows } = push
+    screen.write("", () => {
+      if (screen.cols !== cols || screen.rows !== rows) {
+        screen.resize(cols, rows)
+      }
+    })
+    const data = Buffer.from(push.data, "base64")
+    screen.write(
+      data.subarray(Math.max(0, offset - (push.offset - data.length)))
+    )
+    offset = Math.max(offset, push.offset)
+  }
+  return new Promise<string>((resolve) => {
+    screen.write("", () => resolve(serializer.serialize({ scrollback: 2_000 })))
+  })
 }
 
 let attachments = 0
@@ -72,7 +128,7 @@ function attach(
   owner: string,
   database: Awaited<ReturnType<typeof runningDatabase>>,
   watcher: ReturnType<typeof viewer>,
-  options: { cols?: number; restart?: boolean; rows?: number } = {}
+  options: { cols?: number; rows?: number } = {}
 ) {
   attachments += 1
   return terminals.attach(
@@ -84,7 +140,6 @@ function attach(
       cols: options.cols ?? 80,
       databaseId,
       idleTimeoutMs,
-      restart: options.restart ?? false,
       rows: options.rows ?? 24,
     },
     watcher.push
@@ -331,15 +386,83 @@ describe("database terminal sessions", () => {
     const open = viewer()
     const first = await attach(terminals, alice, database, open)
 
-    const second = await attach(terminals, alice, database, viewer(), {
-      restart: true,
-    })
+    await terminals.restart(alice, databaseId)
+    const second = await attach(terminals, alice, database, viewer())
 
     expect(second.sessionId).not.toBe(first.sessionId)
     await vi.waitFor(() => expect(open.ended?.reason).toBe("restarted"))
     await vi.waitFor(() =>
       expect(clientExecs().filter((exec) => exec.running)).toHaveLength(1)
     )
+  })
+
+  it("shows a slow page every resize, even ones with no output between them", async () => {
+    const harness = await relayHarness()
+    const database = await runningDatabase(harness)
+    const terminals = new DatabaseTerminals(harness.config)
+    const slow = viewer(true, { held: true })
+    const slowAttached = await attach(terminals, alice, database, slow)
+    const slowAttachment = attachmentId(attachments)
+    const phone = viewer()
+    await attach(terminals, alice, database, phone)
+    const phoneAttachment = attachmentId(attachments)
+    for (let line = 1; line <= 30; line += 1) {
+      terminals.write(
+        alice,
+        databaseId,
+        slowAttached.sessionId,
+        `line ${line} ${"x".repeat(60)}\r\n`
+      )
+    }
+    // With the cursor back at the top, shrinking the screen drops the lines
+    // below it rather than scrolling them away.
+    terminals.write(alice, databaseId, slowAttached.sessionId, "\u001b[H")
+    await vi.waitFor(() => expect(phone.output).toContain("\u001b[H"))
+
+    // While the slow page is still catching up, the size goes to a small
+    // window and back, with no output in between.
+    const claim = (attachment: string, cols: number, rows: number) =>
+      terminals.claim(
+        alice,
+        databaseId,
+        slowAttached.sessionId,
+        attachment,
+        rows,
+        cols
+      )
+    await claim(phoneAttachment, 40, 4)
+    await claim(slowAttachment, 80, 24)
+    slow.release()
+    await vi.waitFor(() =>
+      expect(slow.pushes.at(-1)).toMatchObject({ cols: 80, control: "self" })
+    )
+
+    const fresh = await attach(terminals, alice, database, viewer())
+    expect(await pageScreen(slowAttached, slow.pushes)).toBe(
+      await pageScreen(fresh)
+    )
+  })
+
+  it("shows a page that opens mid escape sequence the same screen", async () => {
+    const harness = await relayHarness()
+    const database = await runningDatabase(harness)
+    const terminals = new DatabaseTerminals(harness.config)
+    const first = viewer()
+    const firstAttached = await attach(terminals, alice, database, first)
+    const { sessionId } = firstAttached
+
+    // The colour sequence arrives split around the second page opening.
+    terminals.write(alice, databaseId, sessionId, "\u001b[31")
+    await vi.waitFor(() => expect(first.output).toContain("\u001b[31"))
+    const second = viewer()
+    const secondAttached = await attach(terminals, alice, database, second)
+    terminals.write(alice, databaseId, sessionId, "mhello")
+    await vi.waitFor(() => expect(second.output).toContain("hello"))
+
+    const expected = await pageScreen(firstAttached, first.pushes)
+    // "hello" in red, not the sequence's tail printed as text.
+    expect(expected).toContain("\u001b[31mhello")
+    expect(await pageScreen(secondAttached, second.pushes)).toBe(expected)
   })
 
   it("shows output the client printed as Docker started it", async () => {

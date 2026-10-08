@@ -22,6 +22,7 @@ export type DatabaseTerminalStreamRecord =
       data: string
       offset: number
       rows: number
+      seq: number
     }
   // The session ended; the page offers a new one instead of reattaching.
   | { type: "ended"; ended: DatabaseTerminalEnd }
@@ -38,13 +39,11 @@ export function databaseTerminalStreamUrl(input: {
   cols: number
   databaseId: string
   relayId: string
-  restart: boolean
   rows: number
 }) {
   const search = new URLSearchParams({
     cols: String(input.cols),
     relayId: input.relayId,
-    restart: input.restart ? "1" : "0",
     rows: String(input.rows),
   })
   return `/api/database-terminal/${encodeURIComponent(input.databaseId)}?${search}`
