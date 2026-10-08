@@ -196,19 +196,18 @@ type RelayRegistryTableItem = Pick<
 >
 
 type RelayReachability = "connected" | "paused" | "unreachable"
-type RelayDisplayStatus = RelayIdentityStatus
 const noRelayConnectionStates: ReadonlyArray<{
   id: string
   status: RelayReachability
 }> = []
 
 interface RelayTableItem extends RelayRegistryTableItem {
-  relayStatus: RelayDisplayStatus
+  relayStatus: RelayIdentityStatus
 }
 
 const relayTableItemCache = new WeakMap<
   RelayRegistryTableItem,
-  Map<RelayDisplayStatus, RelayTableItem>
+  Map<RelayIdentityStatus, RelayTableItem>
 >()
 
 const relayTableColumnHelper = createDataTableColumnHelper<RelayTableItem>()
@@ -227,10 +226,8 @@ const relayTableSearchFields = [
 interface RelayStatusView {
   enabled: boolean
   lastError: string | null
-  relayStatus: RelayDisplayStatus
+  relayStatus: RelayIdentityStatus
 }
-
-type RelayStatusInput = RelayStatusView
 
 interface RelayPauseView {
   enabled: boolean
@@ -1248,7 +1245,7 @@ const RelayDeleteButton = React.memo(function RelayDeleteButton({
 const RelayStatus = React.memo(function RelayStatus({
   relay,
 }: {
-  relay: RelayStatusInput
+  relay: RelayStatusView
 }) {
   const status = relayStatusView(relay)
   const indicator = (
@@ -1277,7 +1274,7 @@ const RelayStatus = React.memo(function RelayStatus({
   )
 })
 
-function relayStatusView(relay: RelayStatusInput) {
+function relayStatusView(relay: RelayStatusView) {
   const status = relayIdentityStatusPresentation(relay)
   return { ...status, ...relayStatusToneClasses[status.tone] }
 }
