@@ -334,9 +334,23 @@ function SidebarInstanceNavigation({
             readSelectedInstanceRouteId() ??
             initialSelectedInstanceRouteId
         )
+  const showDatabases =
+    relayConfigured &&
+    accessibleInfrastructureDestinations(capabilities).some(
+      (destination) => destination.to === "/infra/databases"
+    )
   const serverNavigation = (
     <SidebarServerNavigation
       capabilities={capabilities}
+      emptyFallback={
+        showDatabases ? (
+          <SidebarDatabaseNavigation
+            capabilities={capabilities}
+            databaseRouteId={null}
+            fallback={null}
+          />
+        ) : null
+      }
       initialSelectedInstanceRouteId={initialSelectedInstanceRouteId}
       relayConfigured={relayConfigured}
     />
@@ -359,17 +373,21 @@ function SidebarDatabaseNavigation({
   fallback,
 }: {
   capabilities: NavigationAccessCapabilities
-  databaseRouteId: string
+  // null selects the first database, for users without servers.
+  databaseRouteId: string | null
   fallback: React.ReactNode
 }) {
   const select = React.useMemo(
     () => (databases: Array<ManagedDatabaseDirectoryEntry>) => {
       const resolution = resolveDatabaseRoute(databases, databaseRouteId)
-      return resolution.status === "found"
-        ? {
-            database: resolution.database,
-            routeId: databaseRouteIdentifier(databases, resolution.database),
-          }
+      const database =
+        resolution.status === "found"
+          ? resolution.database
+          : databaseRouteId === null
+            ? databases[0]
+            : undefined
+      return database
+        ? { database, routeId: databaseRouteIdentifier(databases, database) }
         : null
     },
     [databaseRouteId]
@@ -445,14 +463,17 @@ const DatabaseTabNavigation = React.memo(function DatabaseTabNavigation({
 
 function SidebarServerNavigation({
   capabilities,
+  emptyFallback,
   initialSelectedInstanceRouteId,
   relayConfigured,
 }: {
   capabilities: NavigationAccessCapabilities
+  // Shown once the fleet loads without servers.
+  emptyFallback: React.ReactNode
   initialSelectedInstanceRouteId: string | null
   relayConfigured: boolean
 }) {
-  const { data: instances = emptyInstances } = useQuery({
+  const { data: instances = emptyInstances, isPending } = useQuery({
     ...relaySnapshotQueryOptions(),
     enabled: relayConfigured,
     select: selectSidebarInstances,
@@ -482,7 +503,7 @@ function SidebarServerNavigation({
   const instanceRouteId = instance
     ? (relayInstanceRouteIdentifier(instances, instance) ?? null)
     : null
-  if (instances.length === 0) return null
+  if (instances.length === 0) return isPending ? null : emptyFallback
 
   return (
     <>

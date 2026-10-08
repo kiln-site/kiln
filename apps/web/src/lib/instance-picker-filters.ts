@@ -58,7 +58,8 @@ export const instancePickerFilters: ReadonlyArray<InstancePickerFilter> = [
   favoriteInstancePickerFilter,
 ]
 
-export const defaultInstancePickerFilterIds: ReadonlyArray<string> = ["server"]
+// No type filter shows every instance type.
+export const defaultInstancePickerFilterIds: ReadonlyArray<string> = []
 
 /** Filters worth offering for this set of items. */
 export function availableInstancePickerFilters(
