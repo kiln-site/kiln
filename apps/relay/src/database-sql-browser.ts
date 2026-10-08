@@ -21,11 +21,12 @@ import type {
   RelayManagedDatabase,
 } from "@workspace/contracts"
 import { databaseEngineSupportsBrowsing } from "@workspace/contracts"
-import { Effect } from "effect"
+import { Effect, Result } from "effect"
 import mysql from "mysql2"
 import pg from "pg"
 
 import { RelayDatabaseBrowserError } from "./effect/errors.js"
+import { promiseEffect, recoverPromise } from "./effect/promise.js"
 
 // Managed databases sit on internal Docker networks the Relay is not part of,
 // so the drivers talk to them through a byte pipe opened inside the database
@@ -180,7 +181,10 @@ class PostgresSession implements SqlSession {
   }
 
   async close() {
-    await this.#client.end().catch(() => undefined)
+    await recoverPromise(
+      () => this.#client.end(),
+      () => undefined
+    )
   }
 
   async execute(sql: string, parameters: ReadonlyArray<unknown> = []) {
@@ -312,9 +316,11 @@ class MysqlSession implements SqlSession {
   }
 
   async close() {
-    await new Promise<void>((resolve) =>
-      this.#connection.end(() => resolve())
-    ).catch(() => undefined)
+    await recoverPromise(
+      () =>
+        new Promise<void>((resolve) => this.#connection.end(() => resolve())),
+      () => undefined
+    )
     this.#connection.destroy()
   }
 
@@ -813,34 +819,42 @@ async function mutate(
   // All changes land together or not at all. A conflict doesn't stop the
   // pass, so the client learns about every conflicting row at once.
   await session.execute(session.dialect.begin(false))
-  let committed = false
-  try {
-    let applied = 0
-    const conflicts: Array<DatabaseConflict> = []
-    for (const [index, change] of input.changes.entries()) {
-      const changed = await applyChange(session, table, writable, change)
-      if (changed === 0 && change.kind !== "insert") {
-        conflicts.push({
-          change: index,
-          current: await currentRow(session, table, change.key),
-        })
-        continue
-      }
-      if (changed > 1) {
-        throw browserError(
-          "ambiguous_row",
-          "A change matched more than one row, so nothing was saved."
-        )
-      }
-      applied += changed
-    }
-    if (conflicts.length > 0) return { applied: 0, conflicts }
+  const outcome = await Effect.runPromise(
+    Effect.result(
+      promiseEffect(async (): Promise<DatabaseMutateResult> => {
+        let applied = 0
+        const conflicts: Array<DatabaseConflict> = []
+        for (const [index, change] of input.changes.entries()) {
+          const changed = await applyChange(session, table, writable, change)
+          if (changed === 0 && change.kind !== "insert") {
+            conflicts.push({
+              change: index,
+              current: await currentRow(session, table, change.key),
+            })
+            continue
+          }
+          if (changed > 1) {
+            throw browserError(
+              "ambiguous_row",
+              "A change matched more than one row, so nothing was saved."
+            )
+          }
+          applied += changed
+        }
+        return { applied, conflicts }
+      })
+    )
+  )
+  if (Result.isSuccess(outcome) && outcome.success.conflicts.length === 0) {
     await session.execute("COMMIT")
-    committed = true
-    return { applied, conflicts }
-  } finally {
-    if (!committed) await session.execute("ROLLBACK").catch(() => undefined)
+    return outcome.success
   }
+  await recoverPromise(
+    () => session.execute("ROLLBACK"),
+    () => undefined
+  )
+  if (Result.isFailure(outcome)) throw outcome.failure
+  return { applied: 0, conflicts: outcome.success.conflicts }
 }
 
 async function applyChange(
