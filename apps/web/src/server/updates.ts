@@ -105,23 +105,29 @@ function cachedKilnReleaseNames(): Promise<ReadonlyArray<KilnReleaseName>> {
   if (releaseNamesCache && releaseNamesCache.expiresAt > now) {
     return releaseNamesCache.names
   }
-  const entry = {
+  const entry: NonNullable<typeof releaseNamesCache> = {
     expiresAt: now + releaseNamesTtlMs,
-    names: runAppEffect("updates.release-names", listKilnReleasesEffect()).then(
-      (releases) => {
+    names: Promise.resolve(lastKnownReleaseNames),
+  }
+  entry.names = runAppEffect(
+    "updates.release-names",
+    listKilnReleasesEffect().pipe(
+      Effect.map((releases) => {
         lastKnownReleaseNames = releases.map(({ aliases, name, version }) => ({
           aliases,
           name,
           version,
         }))
         return lastKnownReleaseNames
-      },
-      () => {
-        entry.expiresAt = Date.now() + releaseNamesRetryMs
-        return lastKnownReleaseNames
-      }
-    ),
-  }
+      }),
+      Effect.catchCause(() =>
+        Effect.sync(() => {
+          entry.expiresAt = Date.now() + releaseNamesRetryMs
+          return lastKnownReleaseNames
+        })
+      )
+    )
+  )
   releaseNamesCache = entry
   return entry.names
 }
