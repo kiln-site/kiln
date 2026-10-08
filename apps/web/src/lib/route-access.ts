@@ -2,15 +2,18 @@ import { redirect } from "@tanstack/react-router"
 import type { QueryClient } from "@tanstack/react-query"
 
 import {
+  accessibleDestinationsForDatabase,
   accessibleDestinationsForServer,
   accessibleInfrastructureDestinations,
   canAccessActivity,
   canAccessAutomations,
   canAccessBackups,
   canAccessInfrastructureDestination,
+  databaseDestinationHref,
   firstAccessibleAppHref,
   infrastructureDestinations,
   serverDestinationHref,
+  type DatabaseDestinationId,
   type NavigationAccessCapabilities,
   type ServerDestinationId,
 } from "@/lib/navigation-destinations"
@@ -115,4 +118,44 @@ export async function redirectToFirstAccessibleServerDestination(
     })
   }
   throw redirect({ href: firstAccessibleAppHref(capabilities), replace: true })
+}
+
+type RouteDatabase = Parameters<typeof accessibleDestinationsForDatabase>[0]
+
+export async function requireDatabaseDestinationAccess(
+  queryClient: QueryClient,
+  database: RouteDatabase,
+  destinationId: DatabaseDestinationId,
+  routeId: string
+): Promise<void> {
+  const capabilities = await routeAccessCapabilities(queryClient)
+  const destinations = accessibleDestinationsForDatabase(database, capabilities)
+  if (destinations.some((destination) => destination.id === destinationId)) {
+    return
+  }
+  const fallback = destinations[0]
+  throw redirect({
+    href: fallback
+      ? databaseDestinationHref(fallback, routeId)
+      : firstAccessibleAppHref(capabilities),
+    replace: true,
+  })
+}
+
+export async function redirectToFirstAccessibleDatabaseDestination(
+  queryClient: QueryClient,
+  database: RouteDatabase,
+  routeId: string
+): Promise<never> {
+  const capabilities = await routeAccessCapabilities(queryClient)
+  const destination = accessibleDestinationsForDatabase(
+    database,
+    capabilities
+  )[0]
+  throw redirect({
+    href: destination
+      ? databaseDestinationHref(destination, routeId)
+      : firstAccessibleAppHref(capabilities),
+    replace: true,
+  })
 }

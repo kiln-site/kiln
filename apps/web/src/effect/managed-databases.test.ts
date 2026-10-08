@@ -109,18 +109,21 @@ describeMysql("managed database persistence", () => {
         assert.deepStrictEqual(directory, [
           {
             databaseId: "postgres-id",
+            engine: "postgres",
             name: "Postgres",
             relayId: relayOne,
             supportsImportExport: true,
           },
           {
             databaseId: "redis-id",
+            engine: "redis",
             name: "Redis",
             relayId: relayOne,
             supportsImportExport: false,
           },
           {
             databaseId: "valkey-id",
+            engine: "valkey",
             name: "Valkey",
             relayId: relayOne,
             supportsImportExport: false,

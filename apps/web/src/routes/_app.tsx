@@ -2,9 +2,11 @@ import { isAccountEnabled, isAccountVerified } from "@/lib/account-policy"
 import { Outlet, createFileRoute, redirect } from "@tanstack/react-router"
 
 import { AppNotFoundPage } from "@/components/app-error-page"
+import { databaseRouteIdFromSelection } from "@/lib/database-route"
 import {
   accessCapabilitiesQueryOptions,
   authStateQueryOptions,
+  managedDatabaseDirectoryQueryOptions,
   relayConnectionQueryOptions,
   uiPreferencesQueryOptions,
 } from "@/lib/query-options"
@@ -31,12 +33,19 @@ export const Route = createFileRoute("/_app")({
     return { user }
   },
   loader: async ({ context }) => {
-    await Promise.all([
+    const [, uiPreferences] = await Promise.all([
       context.queryClient.ensureQueryData(
         relayConnectionQueryOptions(context.queryClient)
       ),
       context.queryClient.ensureQueryData(uiPreferencesQueryOptions()),
     ])
+    // The sidebar shows a remembered database from the directory; load it
+    // with the frame so the sidebar does not switch after hydration.
+    if (databaseRouteIdFromSelection(uiPreferences.selectedInstanceRouteId)) {
+      await context.queryClient.ensureQueryData(
+        managedDatabaseDirectoryQueryOptions()
+      )
+    }
   },
   component: AuthenticatedApp,
   notFoundComponent: AppNotFoundPage,

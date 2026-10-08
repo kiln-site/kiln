@@ -65,6 +65,14 @@ import {
   relaySnapshotQueryOptions,
 } from "@/lib/query-options"
 import { disableDevelopmentBypass } from "@/server/auth"
+import { engineLabel } from "@/components/database/database-presentation"
+import {
+  databaseRouteIdFromSelection,
+  databaseRouteIdentifier,
+  databaseSelectionRouteId,
+  resolveDatabaseRoute,
+  type ManagedDatabaseDirectoryEntry,
+} from "@/lib/database-route"
 import type { getManagedDatabaseDirectory } from "@/server/databases"
 import type { RelayFleetSnapshot } from "@/lib/relay-fleet"
 import {
@@ -79,6 +87,7 @@ import type { SidebarInstance } from "@/lib/relay-selectors"
 import { globalSectionFromRouteId } from "@/lib/route-sections"
 import type { GlobalSection } from "@/lib/route-sections"
 import {
+  accessibleDestinationsForDatabase,
   accessibleDestinationsForServer,
   accessibleInfrastructureDestinations,
   canAccessActivity,
@@ -306,6 +315,138 @@ function SidebarInstanceNavigation({
   initialSelectedInstanceRouteId: string | null
   relayConfigured: boolean
 }) {
+  // "server", a database selection ("db:<id>"), or null off instance routes.
+  const routeSelection = useRouterState({
+    select: (state) => {
+      const params = state.matches.at(-1)?.params as
+        | { databaseId?: string; serverId?: string }
+        | undefined
+      if (params?.databaseId) return databaseSelectionRouteId(params.databaseId)
+      return params?.serverId ? "server" : null
+    },
+  })
+  const databaseRouteId =
+    routeSelection === "server"
+      ? null
+      : databaseRouteIdFromSelection(
+          routeSelection ??
+            readSelectedInstanceRouteId() ??
+            initialSelectedInstanceRouteId
+        )
+  const serverNavigation = (
+    <SidebarServerNavigation
+      capabilities={capabilities}
+      initialSelectedInstanceRouteId={initialSelectedInstanceRouteId}
+      relayConfigured={relayConfigured}
+    />
+  )
+
+  return databaseRouteId ? (
+    <SidebarDatabaseNavigation
+      capabilities={capabilities}
+      databaseRouteId={databaseRouteId}
+      fallback={serverNavigation}
+    />
+  ) : (
+    serverNavigation
+  )
+}
+
+function SidebarDatabaseNavigation({
+  capabilities,
+  databaseRouteId,
+  fallback,
+}: {
+  capabilities: NavigationAccessCapabilities
+  databaseRouteId: string
+  fallback: React.ReactNode
+}) {
+  const select = React.useMemo(
+    () => (databases: Array<ManagedDatabaseDirectoryEntry>) => {
+      const resolution = resolveDatabaseRoute(databases, databaseRouteId)
+      return resolution.status === "found"
+        ? {
+            database: resolution.database,
+            routeId: databaseRouteIdentifier(databases, resolution.database),
+          }
+        : null
+    },
+    [databaseRouteId]
+  )
+  const query = useQuery({ ...managedDatabaseDirectoryQueryOptions(), select })
+  if (!query.data) return query.isPending ? null : fallback
+  const { database, routeId } = query.data
+
+  return (
+    <>
+      <RememberSelectedInstance
+        instanceRouteId={databaseSelectionRouteId(routeId)}
+      />
+      <SidebarSeparator />
+      <SidebarGroup>
+        <SidebarGroupLabel className="type-technical-label">
+          Database
+        </SidebarGroupLabel>
+        <SidebarGroupContent>
+          <SidebarMenu>
+            <InstanceSelector
+              capabilities={capabilities}
+              selection={{ kind: "database", database }}
+            />
+            <DatabaseTabNavigation
+              capabilities={capabilities}
+              database={database}
+              routeId={routeId}
+            />
+          </SidebarMenu>
+        </SidebarGroupContent>
+      </SidebarGroup>
+    </>
+  )
+}
+
+const DatabaseTabNavigation = React.memo(function DatabaseTabNavigation({
+  capabilities,
+  database,
+  routeId,
+}: {
+  capabilities: NavigationAccessCapabilities
+  database: ManagedDatabaseDirectoryEntry
+  routeId: string
+}) {
+  return accessibleDestinationsForDatabase(database, capabilities).map(
+    (item) => (
+      <SidebarMenuItem key={item.id}>
+        <SidebarMenuButton asChild tooltip={item.label}>
+          <Link
+            to={
+              item.id === "network"
+                ? "/db/$databaseId/network"
+                : "/db/$databaseId/info"
+            }
+            params={{ databaseId: routeId }}
+            activeOptions={{ exact: true }}
+            activeProps={{ "data-active": true }}
+            preload="intent"
+          >
+            <item.icon />
+            <span>{item.label}</span>
+          </Link>
+        </SidebarMenuButton>
+      </SidebarMenuItem>
+    )
+  )
+})
+
+function SidebarServerNavigation({
+  capabilities,
+  initialSelectedInstanceRouteId,
+  relayConfigured,
+}: {
+  capabilities: NavigationAccessCapabilities
+  initialSelectedInstanceRouteId: string | null
+  relayConfigured: boolean
+}) {
   const { data: instances = emptyInstances } = useQuery({
     ...relaySnapshotQueryOptions(),
     enabled: relayConfigured,
@@ -433,11 +574,14 @@ const InstanceNavigation = React.memo(function InstanceNavigation({
       </SidebarGroupLabel>
       <SidebarGroupContent>
         <SidebarMenu>
-          <ServerSelector
+          <InstanceSelector
             capabilities={capabilities}
-            instance={instance}
-            instances={instances}
             navigateToTab={navigateToTab}
+            selection={
+              instance
+                ? { kind: "server", instance }
+                : { kind: "none", serverCount: instances.length }
+            }
           />
           <InstanceTabNavigation
             capabilities={capabilities}
@@ -455,16 +599,20 @@ function ambiguousServerHref(shortId: string) {
   return `/infra/servers?search=${encodeURIComponent(shortId)}`
 }
 
-const ServerSelector = React.memo(function ServerSelector({
+type InstanceSelection =
+  | { kind: "server"; instance: SidebarInstance }
+  | { kind: "database"; database: ManagedDatabaseDirectoryEntry }
+  | { kind: "none"; serverCount: number }
+
+const InstanceSelector = React.memo(function InstanceSelector({
   capabilities,
-  instance,
-  instances,
   navigateToTab,
+  selection,
 }: {
   capabilities: NavigationAccessCapabilities
-  instance: SidebarInstance | null
-  instances: Array<SidebarInstance>
-  navigateToTab: (tab: InstanceTab, serverId: string) => void
+  // Server tab navigation; database routes navigate here directly.
+  navigateToTab?: (tab: InstanceTab, serverId: string) => void
+  selection: InstanceSelection
 }) {
   const { isMobile } = useSidebar()
   const navigate = useNavigate()
@@ -478,10 +626,20 @@ const ServerSelector = React.memo(function ServerSelector({
     (item: InstancePickerItem) => {
       handleOpenChange(false)
       if (item.identity.kind === "database") {
-        void navigate({
-          to: "/infra/databases",
-          search: { search: item.identity.id },
-        })
+        const databases = queryClient.getQueryData(
+          managedDatabaseDirectoryQueryOptions().queryKey
+        )
+        const routeId = databases
+          ? databaseRouteIdentifier(databases, item.identity)
+          : item.identity.id
+        const tab = databaseTabFromPathname(window.location.pathname)
+        void navigate(
+          tab === "network"
+            ? { to: "/db/$databaseId/network", params: { databaseId: routeId } }
+            : tab === "info"
+              ? { to: "/db/$databaseId/info", params: { databaseId: routeId } }
+              : { to: "/db/$databaseId", params: { databaseId: routeId } }
+        )
         return
       }
       if (item.identity.kind === "relay") {
@@ -508,22 +666,37 @@ const ServerSelector = React.memo(function ServerSelector({
         return
       }
 
-      navigateToTab(
-        instanceTabFromPathname(window.location.pathname) ?? "console",
-        routeIdentifier
-      )
+      const tab = instanceTabFromPathname(window.location.pathname) ?? "console"
+      if (navigateToTab) {
+        navigateToTab(tab, routeIdentifier)
+        return
+      }
+      void navigate({
+        to: "/server/$serverId/console",
+        params: { serverId: routeIdentifier },
+      })
     },
     [handleOpenChange, navigate, navigateToTab, queryClient]
   )
+  const selectedKey =
+    selection.kind === "server"
+      ? sidebarPickerKey(
+          "server",
+          selection.instance.relayId,
+          selection.instance.id
+        )
+      : selection.kind === "database"
+        ? sidebarPickerKey(
+            "database",
+            selection.database.relayId,
+            selection.database.id
+          )
+        : null
   const selectedKeys = React.useMemo(
-    () =>
-      new Set(
-        instance
-          ? [sidebarPickerKey("server", instance.relayId, instance.id)]
-          : []
-      ),
-    [instance]
+    () => new Set(selectedKey ? [selectedKey] : []),
+    [selectedKey]
   )
+  const instance = selection.kind === "server" ? selection.instance : null
 
   return (
     <SidebarMenuItem>
@@ -531,8 +704,14 @@ const ServerSelector = React.memo(function ServerSelector({
         <PopoverTrigger asChild>
           <SidebarMenuButton
             size="lg"
-            tooltip="Switch server"
-            aria-label={instance ? undefined : "Choose a server"}
+            tooltip={
+              selection.kind === "database"
+                ? "Switch database"
+                : "Switch server"
+            }
+            aria-label={
+              selection.kind === "none" ? "Choose a server" : undefined
+            }
             className="mb-1.5 h-auto border border-sidebar-border/75 bg-background/35 px-2 py-2 group-data-[collapsible=icon]:h-[32px]! group-data-[collapsible=icon]:overflow-visible group-data-[collapsible=icon]:bg-black/10 hover:border-sidebar-border hover:bg-sidebar-accent group-data-[collapsible=icon]:hover:bg-black/15 data-[state=open]:border-sidebar-border data-[state=open]:bg-sidebar-accent dark:group-data-[collapsible=icon]:bg-black/25 dark:group-data-[collapsible=icon]:hover:bg-black/35"
           >
             {instance ? (
@@ -560,6 +739,27 @@ const ServerSelector = React.memo(function ServerSelector({
                   textClassName="group-data-[collapsible=icon]:sr-only"
                 />
               </>
+            ) : selection.kind === "database" ? (
+              <>
+                <span className="sr-only">Switch database. </span>
+                <InstanceName
+                  className="min-w-0 flex-1 gap-2 group-data-[collapsible=icon]:gap-0"
+                  iconClassName="border-sidebar-border/70 bg-background/25 text-sidebar-foreground/85 group-data-[collapsible=icon]:absolute group-data-[collapsible=icon]:inset-0 group-data-[collapsible=icon]:size-full group-data-[collapsible=icon]:rounded-none group-data-[collapsible=icon]:border-0 group-data-[collapsible=icon]:bg-transparent"
+                  iconSizeClassName="group-data-[collapsible=icon]:size-5!"
+                  instance={{
+                    id: selection.database.id,
+                    kind: "database",
+                    relayId: selection.database.relayId,
+                  }}
+                  meta={`${engineLabel(selection.database.engine)} · ${selection.database.relayName}`}
+                  metaClassName="text-sidebar-muted-foreground"
+                  name={selection.database.name}
+                  nameClassName="type-control-sm text-sidebar-foreground"
+                  showFavorite={false}
+                  statusClassName="ring-popover"
+                  textClassName="group-data-[collapsible=icon]:sr-only"
+                />
+              </>
             ) : (
               <>
                 <span className="relative grid size-8 shrink-0 place-items-center rounded-md border border-sidebar-border/70 bg-background/25 group-data-[collapsible=icon]:absolute group-data-[collapsible=icon]:inset-0 group-data-[collapsible=icon]:size-full group-data-[collapsible=icon]:rounded-none group-data-[collapsible=icon]:border-0 group-data-[collapsible=icon]:bg-transparent">
@@ -573,7 +773,7 @@ const ServerSelector = React.memo(function ServerSelector({
                     Choose a server
                   </span>
                   <span className="type-meta w-full truncate text-sidebar-muted-foreground">
-                    {instances.length === 0
+                    {selection.kind === "none" && selection.serverCount === 0
                       ? "No managed servers"
                       : "Selection required"}
                   </span>
@@ -1120,4 +1320,9 @@ function instanceTabFromPathname(pathname: string): InstanceTab | null {
   if (/^\/server\/[^/]+\/info\/?$/.test(pathname)) return "info"
   if (/^\/server\/[^/]+\/console\/?$/.test(pathname)) return "console"
   return null
+}
+
+function databaseTabFromPathname(pathname: string): "info" | "network" | null {
+  const match = /^\/db\/[^/]+\/(info|network)\/?$/.exec(pathname)
+  return match ? (match[1] as "info" | "network") : null
 }

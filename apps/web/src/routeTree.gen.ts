@@ -49,6 +49,7 @@ import { Route as AppBackupsIndexRouteImport } from './routes/_app.backups.index
 import { Route as AppBackupsDestinationsRouteImport } from './routes/_app.backups.destinations'
 import { Route as AppBackupsRunsRouteImport } from './routes/_app.backups.runs'
 import { Route as AppBackupsSettingsRouteImport } from './routes/_app.backups.settings'
+import { Route as AppDbDatabaseIdRouteImport } from './routes/_app/db/$databaseId'
 import { Route as AppInfraIndexRouteImport } from './routes/_app.infra.index'
 import { Route as AppInfraDatabasesRouteImport } from './routes/_app.infra.databases'
 import { Route as AppInfraDomainsRouteImport } from './routes/_app.infra.domains'
@@ -65,6 +66,10 @@ import { Route as AppSettingsFilesRouteImport } from './routes/_app.settings.fil
 import { Route as AppSettingsRelaysRouteImport } from './routes/_app.settings.relays'
 import { Route as ApiAuthSplatRouteImport } from './routes/api.auth.$'
 import { Route as ApiConsoleInstanceIdRouteImport } from './routes/api.console.$instanceId'
+import { Route as AppDbDatabaseIdIndexRouteImport } from './routes/_app/db/$databaseId.index'
+import { Route as AppDbDatabaseIdSplatRouteImport } from './routes/_app/db/$databaseId.$'
+import { Route as AppDbDatabaseIdInfoRouteImport } from './routes/_app/db/$databaseId.info'
+import { Route as AppDbDatabaseIdNetworkRouteImport } from './routes/_app/db/$databaseId.network'
 import { Route as AppServerServerIdIndexRouteImport } from './routes/_app/server/$serverId.index'
 import { Route as AppServerServerIdSplatRouteImport } from './routes/_app/server/$serverId.$'
 import { Route as AppServerServerIdConsoleRouteImport } from './routes/_app/server/$serverId.console'
@@ -276,6 +281,11 @@ const AppBackupsSettingsRoute = AppBackupsSettingsRouteImport.update({
   path: '/settings',
   getParentRoute: () => AppBackupsRoute,
 } as any)
+const AppDbDatabaseIdRoute = AppDbDatabaseIdRouteImport.update({
+  id: '/db/$databaseId',
+  path: '/db/$databaseId',
+  getParentRoute: () => AppRoute,
+} as any)
 const AppInfraIndexRoute = AppInfraIndexRouteImport.update({
   id: '/',
   path: '/',
@@ -355,6 +365,26 @@ const ApiConsoleInstanceIdRoute = ApiConsoleInstanceIdRouteImport.update({
   id: '/api/console/$instanceId',
   path: '/api/console/$instanceId',
   getParentRoute: () => rootRouteImport,
+} as any)
+const AppDbDatabaseIdIndexRoute = AppDbDatabaseIdIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => AppDbDatabaseIdRoute,
+} as any)
+const AppDbDatabaseIdSplatRoute = AppDbDatabaseIdSplatRouteImport.update({
+  id: '/$',
+  path: '/$',
+  getParentRoute: () => AppDbDatabaseIdRoute,
+} as any)
+const AppDbDatabaseIdInfoRoute = AppDbDatabaseIdInfoRouteImport.update({
+  id: '/info',
+  path: '/info',
+  getParentRoute: () => AppDbDatabaseIdRoute,
+} as any)
+const AppDbDatabaseIdNetworkRoute = AppDbDatabaseIdNetworkRouteImport.update({
+  id: '/network',
+  path: '/network',
+  getParentRoute: () => AppDbDatabaseIdRoute,
 } as any)
 const AppServerServerIdIndexRoute = AppServerServerIdIndexRouteImport.update({
   id: '/',
@@ -454,6 +484,7 @@ export interface FileRoutesByFullPath {
   '/backups/destinations': typeof AppBackupsDestinationsRoute
   '/backups/runs': typeof AppBackupsRunsRoute
   '/backups/settings': typeof AppBackupsSettingsRoute
+  '/db/$databaseId': typeof AppDbDatabaseIdRouteWithChildren
   '/infra/databases': typeof AppInfraDatabasesRoute
   '/infra/domains': typeof AppInfraDomainsRoute
   '/infra/relays': typeof AppInfraRelaysRoute
@@ -472,6 +503,9 @@ export interface FileRoutesByFullPath {
   '/backups/': typeof AppBackupsIndexRoute
   '/infra/': typeof AppInfraIndexRoute
   '/settings/': typeof AppSettingsIndexRoute
+  '/db/$databaseId/$': typeof AppDbDatabaseIdSplatRoute
+  '/db/$databaseId/info': typeof AppDbDatabaseIdInfoRoute
+  '/db/$databaseId/network': typeof AppDbDatabaseIdNetworkRoute
   '/server/$serverId/$': typeof AppServerServerIdSplatRoute
   '/server/$serverId/console': typeof AppServerServerIdConsoleRoute
   '/server/$serverId/files': typeof AppServerServerIdFilesRouteWithChildren
@@ -481,6 +515,7 @@ export interface FileRoutesByFullPath {
   '/api/cli/auth/device': typeof ApiCliAuthDeviceRoute
   '/api/cli/auth/token': typeof ApiCliAuthTokenRoute
   '/api/cli/v1/$': typeof ApiCliV1SplatRoute
+  '/db/$databaseId/': typeof AppDbDatabaseIdIndexRoute
   '/server/$serverId/': typeof AppServerServerIdIndexRoute
   '/server/$serverId/files/$': typeof AppServerServerIdFilesSplatRoute
 }
@@ -535,6 +570,9 @@ export interface FileRoutesByTo {
   '/backups': typeof AppBackupsIndexRoute
   '/infra': typeof AppInfraIndexRoute
   '/settings': typeof AppSettingsIndexRoute
+  '/db/$databaseId/$': typeof AppDbDatabaseIdSplatRoute
+  '/db/$databaseId/info': typeof AppDbDatabaseIdInfoRoute
+  '/db/$databaseId/network': typeof AppDbDatabaseIdNetworkRoute
   '/server/$serverId/$': typeof AppServerServerIdSplatRoute
   '/server/$serverId/console': typeof AppServerServerIdConsoleRoute
   '/server/$serverId/files': typeof AppServerServerIdFilesRouteWithChildren
@@ -544,6 +582,7 @@ export interface FileRoutesByTo {
   '/api/cli/auth/device': typeof ApiCliAuthDeviceRoute
   '/api/cli/auth/token': typeof ApiCliAuthTokenRoute
   '/api/cli/v1/$': typeof ApiCliV1SplatRoute
+  '/db/$databaseId': typeof AppDbDatabaseIdIndexRoute
   '/server/$serverId': typeof AppServerServerIdIndexRoute
   '/server/$serverId/files/$': typeof AppServerServerIdFilesSplatRoute
 }
@@ -587,6 +626,7 @@ export interface FileRoutesById {
   '/_app/backups/destinations': typeof AppBackupsDestinationsRoute
   '/_app/backups/runs': typeof AppBackupsRunsRoute
   '/_app/backups/settings': typeof AppBackupsSettingsRoute
+  '/_app/db/$databaseId': typeof AppDbDatabaseIdRouteWithChildren
   '/_app/infra/databases': typeof AppInfraDatabasesRoute
   '/_app/infra/domains': typeof AppInfraDomainsRoute
   '/_app/infra/relays': typeof AppInfraRelaysRoute
@@ -605,6 +645,9 @@ export interface FileRoutesById {
   '/_app/backups/': typeof AppBackupsIndexRoute
   '/_app/infra/': typeof AppInfraIndexRoute
   '/_app/settings/': typeof AppSettingsIndexRoute
+  '/_app/db/$databaseId/$': typeof AppDbDatabaseIdSplatRoute
+  '/_app/db/$databaseId/info': typeof AppDbDatabaseIdInfoRoute
+  '/_app/db/$databaseId/network': typeof AppDbDatabaseIdNetworkRoute
   '/_app/server/$serverId/$': typeof AppServerServerIdSplatRoute
   '/_app/server/$serverId/console': typeof AppServerServerIdConsoleRoute
   '/_app/server/$serverId/files': typeof AppServerServerIdFilesRouteWithChildren
@@ -614,6 +657,7 @@ export interface FileRoutesById {
   '/api/cli/auth/device': typeof ApiCliAuthDeviceRoute
   '/api/cli/auth/token': typeof ApiCliAuthTokenRoute
   '/api/cli/v1/$': typeof ApiCliV1SplatRoute
+  '/_app/db/$databaseId/': typeof AppDbDatabaseIdIndexRoute
   '/_app/server/$serverId/': typeof AppServerServerIdIndexRoute
   '/_app/server/$serverId/files/$': typeof AppServerServerIdFilesSplatRoute
 }
@@ -657,6 +701,7 @@ export interface FileRouteTypes {
     | '/backups/destinations'
     | '/backups/runs'
     | '/backups/settings'
+    | '/db/$databaseId'
     | '/infra/databases'
     | '/infra/domains'
     | '/infra/relays'
@@ -675,6 +720,9 @@ export interface FileRouteTypes {
     | '/backups/'
     | '/infra/'
     | '/settings/'
+    | '/db/$databaseId/$'
+    | '/db/$databaseId/info'
+    | '/db/$databaseId/network'
     | '/server/$serverId/$'
     | '/server/$serverId/console'
     | '/server/$serverId/files'
@@ -684,6 +732,7 @@ export interface FileRouteTypes {
     | '/api/cli/auth/device'
     | '/api/cli/auth/token'
     | '/api/cli/v1/$'
+    | '/db/$databaseId/'
     | '/server/$serverId/'
     | '/server/$serverId/files/$'
   fileRoutesByTo: FileRoutesByTo
@@ -738,6 +787,9 @@ export interface FileRouteTypes {
     | '/backups'
     | '/infra'
     | '/settings'
+    | '/db/$databaseId/$'
+    | '/db/$databaseId/info'
+    | '/db/$databaseId/network'
     | '/server/$serverId/$'
     | '/server/$serverId/console'
     | '/server/$serverId/files'
@@ -747,6 +799,7 @@ export interface FileRouteTypes {
     | '/api/cli/auth/device'
     | '/api/cli/auth/token'
     | '/api/cli/v1/$'
+    | '/db/$databaseId'
     | '/server/$serverId'
     | '/server/$serverId/files/$'
   id:
@@ -789,6 +842,7 @@ export interface FileRouteTypes {
     | '/_app/backups/destinations'
     | '/_app/backups/runs'
     | '/_app/backups/settings'
+    | '/_app/db/$databaseId'
     | '/_app/infra/databases'
     | '/_app/infra/domains'
     | '/_app/infra/relays'
@@ -807,6 +861,9 @@ export interface FileRouteTypes {
     | '/_app/backups/'
     | '/_app/infra/'
     | '/_app/settings/'
+    | '/_app/db/$databaseId/$'
+    | '/_app/db/$databaseId/info'
+    | '/_app/db/$databaseId/network'
     | '/_app/server/$serverId/$'
     | '/_app/server/$serverId/console'
     | '/_app/server/$serverId/files'
@@ -816,6 +873,7 @@ export interface FileRouteTypes {
     | '/api/cli/auth/device'
     | '/api/cli/auth/token'
     | '/api/cli/v1/$'
+    | '/_app/db/$databaseId/'
     | '/_app/server/$serverId/'
     | '/_app/server/$serverId/files/$'
   fileRoutesById: FileRoutesById
@@ -1132,6 +1190,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppBackupsSettingsRouteImport
       parentRoute: typeof AppBackupsRoute
     }
+    '/_app/db/$databaseId': {
+      id: '/_app/db/$databaseId'
+      path: '/db/$databaseId'
+      fullPath: '/db/$databaseId'
+      preLoaderRoute: typeof AppDbDatabaseIdRouteImport
+      parentRoute: typeof AppRoute
+    }
     '/_app/infra/': {
       id: '/_app/infra/'
       path: '/'
@@ -1243,6 +1308,34 @@ declare module '@tanstack/react-router' {
       fullPath: '/api/console/$instanceId'
       preLoaderRoute: typeof ApiConsoleInstanceIdRouteImport
       parentRoute: typeof rootRouteImport
+    }
+    '/_app/db/$databaseId/': {
+      id: '/_app/db/$databaseId/'
+      path: '/'
+      fullPath: '/db/$databaseId/'
+      preLoaderRoute: typeof AppDbDatabaseIdIndexRouteImport
+      parentRoute: typeof AppDbDatabaseIdRoute
+    }
+    '/_app/db/$databaseId/$': {
+      id: '/_app/db/$databaseId/$'
+      path: '/$'
+      fullPath: '/db/$databaseId/$'
+      preLoaderRoute: typeof AppDbDatabaseIdSplatRouteImport
+      parentRoute: typeof AppDbDatabaseIdRoute
+    }
+    '/_app/db/$databaseId/info': {
+      id: '/_app/db/$databaseId/info'
+      path: '/info'
+      fullPath: '/db/$databaseId/info'
+      preLoaderRoute: typeof AppDbDatabaseIdInfoRouteImport
+      parentRoute: typeof AppDbDatabaseIdRoute
+    }
+    '/_app/db/$databaseId/network': {
+      id: '/_app/db/$databaseId/network'
+      path: '/network'
+      fullPath: '/db/$databaseId/network'
+      preLoaderRoute: typeof AppDbDatabaseIdNetworkRouteImport
+      parentRoute: typeof AppDbDatabaseIdRoute
     }
     '/_app/server/$serverId/': {
       id: '/_app/server/$serverId/'
@@ -1408,6 +1501,24 @@ const AppSettingsRouteWithChildren = AppSettingsRoute._addFileChildren(
   AppSettingsRouteChildren,
 )
 
+interface AppDbDatabaseIdRouteChildren {
+  AppDbDatabaseIdSplatRoute: typeof AppDbDatabaseIdSplatRoute
+  AppDbDatabaseIdInfoRoute: typeof AppDbDatabaseIdInfoRoute
+  AppDbDatabaseIdNetworkRoute: typeof AppDbDatabaseIdNetworkRoute
+  AppDbDatabaseIdIndexRoute: typeof AppDbDatabaseIdIndexRoute
+}
+
+const AppDbDatabaseIdRouteChildren: AppDbDatabaseIdRouteChildren = {
+  AppDbDatabaseIdSplatRoute: AppDbDatabaseIdSplatRoute,
+  AppDbDatabaseIdInfoRoute: AppDbDatabaseIdInfoRoute,
+  AppDbDatabaseIdNetworkRoute: AppDbDatabaseIdNetworkRoute,
+  AppDbDatabaseIdIndexRoute: AppDbDatabaseIdIndexRoute,
+}
+
+const AppDbDatabaseIdRouteWithChildren = AppDbDatabaseIdRoute._addFileChildren(
+  AppDbDatabaseIdRouteChildren,
+)
+
 interface AppServerServerIdFilesRouteChildren {
   AppServerServerIdFilesSplatRoute: typeof AppServerServerIdFilesSplatRoute
 }
@@ -1455,6 +1566,7 @@ interface AppRouteChildren {
   AppOperationsRoute: typeof AppOperationsRoute
   AppServersRoute: typeof AppServersRoute
   AppSettingsRoute: typeof AppSettingsRouteWithChildren
+  AppDbDatabaseIdRoute: typeof AppDbDatabaseIdRouteWithChildren
   AppServerServerIdRoute: typeof AppServerServerIdRouteWithChildren
 }
 
@@ -1468,6 +1580,7 @@ const AppRouteChildren: AppRouteChildren = {
   AppOperationsRoute: AppOperationsRoute,
   AppServersRoute: AppServersRoute,
   AppSettingsRoute: AppSettingsRouteWithChildren,
+  AppDbDatabaseIdRoute: AppDbDatabaseIdRouteWithChildren,
   AppServerServerIdRoute: AppServerServerIdRouteWithChildren,
 }
 

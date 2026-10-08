@@ -22,6 +22,7 @@ import {
 } from "lucide-react"
 import {
   builtinTailscaleBrickId,
+  type DatabaseEngine,
   type RelayInstance,
 } from "@workspace/contracts"
 
@@ -282,6 +283,79 @@ export function canAccessInstancePermission(
         grant.resourceId === instance.relayId) ||
         (grant.resourceType === "instance" && grant.resourceId === instance.id))
   )
+}
+
+export type DatabaseDestinationId = "info" | "network"
+
+export interface DatabaseDestination extends NavigationDestination {
+  // Engines the destination applies to; every engine when omitted.
+  engines?: ReadonlyArray<DatabaseEngine>
+  id: DatabaseDestinationId
+  permission: AccessPermission
+}
+
+export const databaseDestinations = [
+  {
+    icon: Network,
+    id: "network",
+    keywords: ["servers", "connections"],
+    label: "Network",
+    permission: "database.network.read",
+    to: "/db/$databaseId/network",
+  },
+  {
+    icon: SlidersHorizontal,
+    id: "info",
+    keywords: ["settings", "credentials", "details"],
+    label: "Info",
+    permission: "database.read",
+    to: "/db/$databaseId/info",
+  },
+] as const satisfies ReadonlyArray<DatabaseDestination>
+
+type AccessibleDatabase = {
+  engine: DatabaseEngine
+  id: string
+  relayId: string
+}
+
+export function accessibleDestinationsForDatabase(
+  database: AccessibleDatabase,
+  capabilities: NavigationAccessCapabilities
+): ReadonlyArray<DatabaseDestination> {
+  const destinations: ReadonlyArray<DatabaseDestination> = databaseDestinations
+  return destinations.filter(
+    (destination) =>
+      (!destination.engines || destination.engines.includes(database.engine)) &&
+      canAccessDatabasePermission(
+        capabilities,
+        database,
+        destination.permission
+      )
+  )
+}
+
+export function canAccessDatabasePermission(
+  capabilities: NavigationAccessCapabilities,
+  database: Pick<AccessibleDatabase, "id" | "relayId">,
+  permission: AccessPermission
+): boolean {
+  if (capabilities.isPlatformAdmin) return true
+  return capabilities.grants.some(
+    (grant) =>
+      grant.relayId === database.relayId &&
+      grantHasPermission(grant, permission) &&
+      ((grant.resourceType === "relay" &&
+        grant.resourceId === database.relayId) ||
+        (grant.resourceType === "database" && grant.resourceId === database.id))
+  )
+}
+
+export function databaseDestinationHref(
+  destination: DatabaseDestination,
+  routeId: string
+): string {
+  return destination.to.replace("$databaseId", encodeURIComponent(routeId))
 }
 
 export function accessibleInfrastructureDestinations(
