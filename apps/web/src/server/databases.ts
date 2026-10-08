@@ -15,6 +15,11 @@ import {
   databaseIdSchema,
   relayDatabaseNameSchema,
   relayIdSchema,
+  relayDatabaseTerminalOutputSchema,
+  relayDatabaseTerminalReadSchema,
+  relayDatabaseTerminalResizeSchema,
+  relayDatabaseTerminalSessionSchema,
+  relayDatabaseTerminalWriteSchema,
   relayManagedDatabaseSchema,
 } from "@workspace/contracts"
 import type {
@@ -651,6 +656,93 @@ async function managedDatabaseDataRequest(
     30_000,
     user.id
   )
+}
+
+const databaseTerminalOpenInputSchema = databaseInputSchema.extend(
+  relayDatabaseTerminalResizeSchema.omit({ sessionId: true }).shape
+)
+
+export const openDatabaseTerminal = createServerFn({ method: "POST" })
+  .validator(databaseTerminalOpenInputSchema)
+  .handler(async ({ data }) => {
+    const { relay, user } = await authorizedDatabase(data, "database.terminal")
+    const credential = await requiredCredential(data.relayId, data.databaseId)
+    return z.object({ sessionId: z.string() }).parse(
+      await databaseRpc(
+        relay,
+        "database.terminal.open",
+        {
+          cols: data.cols,
+          databaseId: data.databaseId,
+          password: credential.password,
+          rows: data.rows,
+          username: credential.username,
+        },
+        30_000,
+        user.id
+      )
+    )
+  })
+
+// Waits up to 10s on the Relay for output, so the browser can poll in a loop.
+export const readDatabaseTerminal = createServerFn({ method: "POST" })
+  .validator(databaseInputSchema.extend(relayDatabaseTerminalReadSchema.shape))
+  .handler(async ({ data }) =>
+    relayDatabaseTerminalOutputSchema.parse(
+      await databaseTerminalRequest(data, "database.terminal.read", {
+        cursor: data.cursor,
+        sessionId: data.sessionId,
+      })
+    )
+  )
+
+export const writeDatabaseTerminal = createServerFn({ method: "POST" })
+  .validator(databaseInputSchema.extend(relayDatabaseTerminalWriteSchema.shape))
+  .handler(async ({ data }) => {
+    await databaseTerminalRequest(data, "database.terminal.write", {
+      data: data.data,
+      sessionId: data.sessionId,
+    })
+    return { accepted: true }
+  })
+
+export const resizeDatabaseTerminal = createServerFn({ method: "POST" })
+  .validator(
+    databaseInputSchema.extend(relayDatabaseTerminalResizeSchema.shape)
+  )
+  .handler(async ({ data }) => {
+    await databaseTerminalRequest(data, "database.terminal.resize", {
+      cols: data.cols,
+      rows: data.rows,
+      sessionId: data.sessionId,
+    })
+    return { resized: true }
+  })
+
+export const closeDatabaseTerminal = createServerFn({ method: "POST" })
+  .validator(
+    databaseInputSchema.extend(relayDatabaseTerminalSessionSchema.shape)
+  )
+  .handler(async ({ data }) => {
+    await databaseTerminalRequest(data, "database.terminal.close", {
+      sessionId: data.sessionId,
+    })
+    return { closed: true }
+  })
+
+// Every call re-checks the permission; the Relay also ties each session to
+// the user who opened it.
+async function databaseTerminalRequest(
+  data: { databaseId: string; relayId: string },
+  operation:
+    | "database.terminal.close"
+    | "database.terminal.read"
+    | "database.terminal.resize"
+    | "database.terminal.write",
+  payload: Record<string, unknown>
+) {
+  const { relay, user } = await authorizedDatabase(data, "database.terminal")
+  return databaseRpc(relay, operation, payload, 20_000, user.id)
 }
 
 export const deleteManagedDatabase = createServerFn({ method: "POST" })

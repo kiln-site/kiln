@@ -205,6 +205,48 @@ export const relayDatabaseDataReadSchema = relayDatabaseExportSchema.extend({
   request: databaseReadRequestSchema,
 })
 
+const databaseTerminalSessionIdSchema = z
+  .string()
+  .regex(/^[A-Za-z0-9_-]{22,64}$/u)
+const databaseTerminalSizeShape = {
+  cols: z.number().int().min(10).max(500),
+  rows: z.number().int().min(4).max(300),
+}
+
+export const relayDatabaseTerminalOpenSchema = relayDatabaseExportSchema.extend(
+  databaseTerminalSizeShape
+)
+
+export const relayDatabaseTerminalSessionSchema = z
+  .object({ sessionId: databaseTerminalSessionIdSchema })
+  .strict()
+
+// Output after `cursor`, a byte offset into the session's output.
+export const relayDatabaseTerminalReadSchema =
+  relayDatabaseTerminalSessionSchema.extend({
+    cursor: z.number().int().nonnegative(),
+  })
+
+export const relayDatabaseTerminalWriteSchema =
+  relayDatabaseTerminalSessionSchema.extend({
+    data: z
+      .string()
+      .min(1)
+      .max(64 * 1024),
+  })
+
+export const relayDatabaseTerminalResizeSchema =
+  relayDatabaseTerminalSessionSchema.extend(databaseTerminalSizeShape)
+
+export const relayDatabaseTerminalOutputSchema = z
+  .object({
+    closed: z.boolean(),
+    cursor: z.number().int().nonnegative(),
+    // Raw terminal bytes, base64 encoded; chunks may split characters.
+    data: z.string(),
+  })
+  .strict()
+
 export const relayDatabaseDataWriteSchema = relayDatabaseExportSchema.extend({
   // Runs a query in a read-only transaction, guarding against accidental
   // writes by someone allowed to write.
@@ -1557,6 +1599,12 @@ export type RelayDatabaseNetwork = z.infer<typeof relayDatabaseNetworkSchema>
 export type RelayDatabaseDump = z.infer<typeof relayDatabaseDumpSchema>
 export type RelayDatabaseExport = z.infer<typeof relayDatabaseExportSchema>
 export type RelayDatabaseDataRead = z.infer<typeof relayDatabaseDataReadSchema>
+export type RelayDatabaseTerminalOpen = z.infer<
+  typeof relayDatabaseTerminalOpenSchema
+>
+export type RelayDatabaseTerminalOutput = z.infer<
+  typeof relayDatabaseTerminalOutputSchema
+>
 export type RelayDatabaseDataWrite = z.infer<
   typeof relayDatabaseDataWriteSchema
 >

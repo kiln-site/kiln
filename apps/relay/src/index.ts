@@ -18,6 +18,11 @@ import {
   relayDatabaseDumpSchema,
   relayDatabaseDataReadSchema,
   relayDatabaseDataWriteSchema,
+  relayDatabaseTerminalOpenSchema,
+  relayDatabaseTerminalReadSchema,
+  relayDatabaseTerminalResizeSchema,
+  relayDatabaseTerminalSessionSchema,
+  relayDatabaseTerminalWriteSchema,
   relayDatabaseExportSchema,
   relayDatabaseNetworkSchema,
   relayDeleteDatabaseSchema,
@@ -80,6 +85,7 @@ import { DockerDriver } from "./docker.js"
 import { DatabaseBrowser } from "./database-browser.js"
 import { DatabaseDriver } from "./databases.js"
 import { browseManagedDatabase } from "./database-sql-browser.js"
+import { DatabaseTerminals } from "./database-terminal.js"
 import {
   inspectEncryptedPlatformBackup,
   restoreEncryptedPlatformBackup,
@@ -188,6 +194,7 @@ const docker = new DockerDriver(
   databaseConnections
 )
 const databases = new DatabaseDriver(config, docker, databaseConnections)
+const databaseTerminals = new DatabaseTerminals(config)
 const systemUpdates = new SystemUpdateManager(config)
 const filesystem = new FilesystemDriver(config)
 const databaseBrowser = new DatabaseBrowser(filesystem)
@@ -1024,6 +1031,15 @@ async function relaySnapshot() {
   }
 }
 
+// A terminal belongs to the paired client and the person it acted for, so
+// one Hearth user can't read or type into another's session.
+function terminalOwner(
+  client: RelayClientGrant,
+  request: RelayControlRequest
+): string {
+  return `${client.id}:${request.subject ?? ""}`
+}
+
 async function executeControlRequest(
   request: RelayControlRequest,
   client: RelayClientGrant,
@@ -1358,6 +1374,47 @@ async function executeControlRequest(
           input.request,
           { canWrite: false, readOnly: true }
         )
+      )
+    }
+    case "database.terminal.open": {
+      const input = relayDatabaseTerminalOpenSchema.parse(request.payload)
+      return databaseTerminals.open(
+        terminalOwner(client, request),
+        await databases.target(input.databaseId),
+        input
+      )
+    }
+    case "database.terminal.read": {
+      const input = relayDatabaseTerminalReadSchema.parse(request.payload)
+      return databaseTerminals.read(
+        terminalOwner(client, request),
+        input.sessionId,
+        input.cursor,
+        signal
+      )
+    }
+    case "database.terminal.write": {
+      const input = relayDatabaseTerminalWriteSchema.parse(request.payload)
+      return databaseTerminals.write(
+        terminalOwner(client, request),
+        input.sessionId,
+        input.data
+      )
+    }
+    case "database.terminal.resize": {
+      const input = relayDatabaseTerminalResizeSchema.parse(request.payload)
+      return databaseTerminals.resize(
+        terminalOwner(client, request),
+        input.sessionId,
+        input.rows,
+        input.cols
+      )
+    }
+    case "database.terminal.close": {
+      const input = relayDatabaseTerminalSessionSchema.parse(request.payload)
+      return databaseTerminals.close(
+        terminalOwner(client, request),
+        input.sessionId
       )
     }
     case "database.data.write": {

@@ -421,11 +421,13 @@ const DatabaseTabNavigation = React.memo(function DatabaseTabNavigation({
         <SidebarMenuButton asChild tooltip={item.label}>
           <Link
             to={
-              item.id === "viewer"
-                ? "/db/$databaseId/viewer"
-                : item.id === "network"
-                  ? "/db/$databaseId/network"
-                  : "/db/$databaseId/info"
+              item.id === "terminal"
+                ? "/db/$databaseId/terminal"
+                : item.id === "viewer"
+                  ? "/db/$databaseId/viewer"
+                  : item.id === "network"
+                    ? "/db/$databaseId/network"
+                    : "/db/$databaseId/info"
             }
             params={{ databaseId: routeId }}
             activeOptions={{ exact: true }}
@@ -637,19 +639,27 @@ const InstanceSelector = React.memo(function InstanceSelector({
           : item.identity.id
         const tab = databaseTabFromPathname(window.location.pathname)
         void navigate(
-          tab === "viewer"
-            ? { to: "/db/$databaseId/viewer", params: { databaseId: routeId } }
-            : tab === "network"
+          tab === "terminal"
+            ? {
+                to: "/db/$databaseId/terminal",
+                params: { databaseId: routeId },
+              }
+            : tab === "viewer"
               ? {
-                  to: "/db/$databaseId/network",
+                  to: "/db/$databaseId/viewer",
                   params: { databaseId: routeId },
                 }
-              : tab === "info"
+              : tab === "network"
                 ? {
-                    to: "/db/$databaseId/info",
+                    to: "/db/$databaseId/network",
                     params: { databaseId: routeId },
                   }
-                : { to: "/db/$databaseId", params: { databaseId: routeId } }
+                : tab === "info"
+                  ? {
+                      to: "/db/$databaseId/info",
+                      params: { databaseId: routeId },
+                    }
+                  : { to: "/db/$databaseId", params: { databaseId: routeId } }
         )
         return
       }
@@ -1336,6 +1346,8 @@ function instanceTabFromPathname(pathname: string): InstanceTab | null {
 function databaseTabFromPathname(
   pathname: string
 ): DatabaseDestinationId | null {
-  const match = /^\/db\/[^/]+\/(info|network|viewer)\/?$/.exec(pathname)
+  const match = /^\/db\/[^/]+\/(info|network|terminal|viewer)\/?$/.exec(
+    pathname
+  )
   return match ? (match[1] as DatabaseDestinationId) : null
 }

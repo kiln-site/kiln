@@ -286,7 +286,7 @@ export function canAccessInstancePermission(
   )
 }
 
-export type DatabaseDestinationId = "info" | "network" | "viewer"
+export type DatabaseDestinationId = "info" | "network" | "terminal" | "viewer"
 
 export interface DatabaseDestination extends NavigationDestination {
   // Engines the destination applies to; every engine when omitted.
@@ -296,6 +296,14 @@ export interface DatabaseDestination extends NavigationDestination {
 }
 
 export const databaseDestinations = [
+  {
+    icon: TerminalSquare,
+    id: "terminal",
+    keywords: ["console", "shell", "cli", "psql", "mysql"],
+    label: "Terminal",
+    permission: "database.terminal",
+    to: "/db/$databaseId/terminal",
+  },
   {
     engines: ["mysql", "mariadb", "postgres"],
     icon: Table2,
