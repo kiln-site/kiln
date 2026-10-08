@@ -102,7 +102,10 @@ import {
 import { UserAvatar } from "@/components/account-avatar"
 import { useInfraUpdateDialogStore } from "@/components/infra-update-dialog-provider"
 import { relaysCollectionOptions } from "@/lib/collections/relays"
-import { minecraftUsernameKey } from "@/lib/minecraft-profile"
+import {
+  isMinecraftUsername,
+  minecraftUsernameKey,
+} from "@/lib/minecraft-profile"
 import { pairingFeedbackFrom } from "@/lib/relay-pairing-errors"
 import { canRefetchSystemUpdateOverview } from "@/lib/system-update-presence"
 import { resetActiveBackupRunsToFirstPage } from "@/lib/backup-runs-cache"
@@ -164,6 +167,9 @@ const noOutdatedRelays: ReadonlySet<string> = new Set()
 const noPublicReleases: ReadonlyArray<PublicKilnRelease> = []
 const noReportedRelayVersions: ReadonlyMap<string, string | null> = new Map()
 const noOwnerProfileIds: ReadonlyMap<string, string> = new Map()
+// Owner cells read profiles from context so avatars never rebuild columns.
+const RelayOwnerProfileIdsContext =
+  React.createContext<ReadonlyMap<string, string>>(noOwnerProfileIds)
 const noRelayUpdateSummary = {
   outdatedRelayIds: noOutdatedRelays,
   reportedVersions: noReportedRelayVersions,
@@ -249,6 +255,18 @@ function selectRelayConnectionStates(
   return connection.status === "unconfigured"
     ? noRelayConnectionStates
     : connection.relays.map(({ id, status }) => ({ id, status }))
+}
+
+function relayOwnerNamesKey(
+  relays: ReadonlyArray<RelayRegistryTableItem> | undefined
+): string {
+  const names = new Set<string>()
+  for (const relay of relays ?? []) {
+    if (relay.ownerName && isMinecraftUsername(relay.ownerName)) {
+      names.add(minecraftUsernameKey(relay.ownerName))
+    }
+  }
+  return [...names].sort().join(",")
 }
 
 function selectOwnerProfileIds(
@@ -509,8 +527,12 @@ const FilteredRelayTable = React.memo(function FilteredRelayTable({
     select: selectRelayConnectionStates,
   })
   const connectionStates = connectionQuery.data ?? noRelayConnectionStates
+  const ownerNames = React.useMemo(
+    () => relayOwnerNamesKey(result.data),
+    [result.data]
+  )
   const { data: ownerProfileIds = noOwnerProfileIds } = useQuery({
-    ...relayOwnerMinecraftProfilesQueryOptions(),
+    ...relayOwnerMinecraftProfilesQueryOptions(ownerNames),
     select: selectOwnerProfileIds,
   })
   const relayStatuses = React.useMemo(
@@ -546,17 +568,18 @@ const FilteredRelayTable = React.memo(function FilteredRelayTable({
   })
 
   return (
-    <RelayTable
-      outdatedRelayIds={updateSummary.outdatedRelayIds}
-      ownerProfileIds={ownerProfileIds}
-      reportedVersions={updateSummary.reportedVersions}
-      releases={updateSummary.releases}
-      source={source}
-      searchStore={searchStore}
-      onAdd={onAdd}
-      onEdit={onEdit}
-      onOpenUpdates={onOpenUpdates}
-    />
+    <RelayOwnerProfileIdsContext.Provider value={ownerProfileIds}>
+      <RelayTable
+        outdatedRelayIds={updateSummary.outdatedRelayIds}
+        reportedVersions={updateSummary.reportedVersions}
+        releases={updateSummary.releases}
+        source={source}
+        searchStore={searchStore}
+        onAdd={onAdd}
+        onEdit={onEdit}
+        onOpenUpdates={onOpenUpdates}
+      />
+    </RelayOwnerProfileIdsContext.Provider>
   )
 })
 
@@ -639,7 +662,6 @@ const RelaySyncButton = React.memo(function RelaySyncButton() {
 
 function RelayTable({
   outdatedRelayIds,
-  ownerProfileIds,
   reportedVersions,
   releases,
   searchStore,
@@ -649,7 +671,6 @@ function RelayTable({
   onOpenUpdates,
 }: {
   outdatedRelayIds: ReadonlySet<string>
-  ownerProfileIds: ReadonlyMap<string, string>
   reportedVersions: ReadonlyMap<string, string | null>
   releases: ReadonlyArray<PublicKilnRelease>
   searchStore: DataTableSearchStore
@@ -818,28 +839,12 @@ function RelayTable({
           id: "owner",
           header: "Owner",
           sortFn: "text",
-          cell: ({ row }) => {
-            const relay = row.original
-            return (
-              <IdentityName
-                icon={
-                  relay.ownerName ? (
-                    <UserAvatar
-                      name={relay.ownerName}
-                      profileId={ownerProfileIds.get(
-                        minecraftUsernameKey(relay.ownerName)
-                      )}
-                    />
-                  ) : (
-                    <UserRound className="size-4" aria-hidden="true" />
-                  )
-                }
-                iconClassName="border-0 bg-transparent"
-                meta={relay.ownerEmail}
-                name={relay.ownerName ?? "Unassigned"}
-              />
-            )
-          },
+          cell: ({ row }) => (
+            <RelayOwnerCell
+              ownerEmail={row.original.ownerEmail}
+              ownerName={row.original.ownerName}
+            />
+          ),
           meta: dataTableColumnMeta({
             hideBelow: "xl",
             width: "minmax(11rem,1.25fr)",
@@ -880,7 +885,6 @@ function RelayTable({
     initialTableState,
     onEdit,
     onOpenUpdates,
-    ownerProfileIds,
     outdatedRelayIds,
     releases,
     reportedVersions,
@@ -1239,6 +1243,30 @@ const RelayDeleteButton = React.memo(function RelayDeleteButton({
         </DialogContent>
       </Dialog>
     </>
+  )
+})
+
+const RelayOwnerCell = React.memo(function RelayOwnerCell({
+  ownerEmail,
+  ownerName,
+}: Pick<RelayTableItem, "ownerEmail" | "ownerName">) {
+  const profileIds = React.useContext(RelayOwnerProfileIdsContext)
+  return (
+    <IdentityName
+      icon={
+        ownerName ? (
+          <UserAvatar
+            name={ownerName}
+            profileId={profileIds.get(minecraftUsernameKey(ownerName))}
+          />
+        ) : (
+          <UserRound className="size-4" aria-hidden="true" />
+        )
+      }
+      iconClassName="border-0 bg-transparent"
+      meta={ownerEmail}
+      name={ownerName ?? "Unassigned"}
+    />
   )
 })
 

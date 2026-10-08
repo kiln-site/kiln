@@ -87,7 +87,8 @@ export const queryKeys = {
   minecraft: {
     profile: (displayName: string) =>
       ["minecraft", "profile", displayName] as const,
-    relayOwners: ["minecraft", "relay-owner-profiles"] as const,
+    relayOwners: (ownerNames: string) =>
+      ["minecraft", "relay-owner-profiles", ownerNames] as const,
   },
   access: {
     capabilities: ["access", "capabilities"] as const,
@@ -230,10 +231,12 @@ export function minecraftProfileQueryOptions(displayName: string) {
   })
 }
 
-export function relayOwnerMinecraftProfilesQueryOptions() {
+/** Keyed by the visible owners so pairing or sharing a Relay refetches. */
+export function relayOwnerMinecraftProfilesQueryOptions(ownerNames: string) {
   return queryOptions({
-    queryKey: queryKeys.minecraft.relayOwners,
+    queryKey: queryKeys.minecraft.relayOwners(ownerNames),
     queryFn: ({ signal }) => getRelayOwnerMinecraftProfiles({ signal }),
+    enabled: ownerNames.length > 0,
     gcTime: 60 * 60_000,
     retry: false,
     staleTime: 60 * 60_000,
