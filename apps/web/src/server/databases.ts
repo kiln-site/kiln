@@ -47,6 +47,7 @@ import {
 import { accessPermissions, grantHasPermission } from "@/lib/permissions"
 import type { AccessPermission } from "@/lib/permissions"
 import { publishRealtimeChange } from "@/lib/realtime-source.server"
+import { isRelayUpdating } from "@/lib/relay-connection"
 import { listPersistedRelays } from "@/lib/relay-registry"
 import { requireEligibleResourceUser } from "@/server/auth"
 import {
@@ -324,7 +325,10 @@ export const getManagedDatabases = createServerFn({ method: "GET" }).handler(
       })
     }
     return {
-      databases,
+      databases: databases.map((database) => ({
+        ...database,
+        relayUpdating: isRelayUpdating(database.relayId),
+      })),
       relayErrors,
       relays: readableRelays.map((relay) => ({
         canCreate: hasDatabasePermission(

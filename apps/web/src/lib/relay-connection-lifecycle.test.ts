@@ -39,7 +39,10 @@ vi.mock("@/lib/authorization-delivery", () => ({
 }))
 
 import {
+  clearRelayUpdating,
   closeRelayConnection,
+  isRelayUpdating,
+  markRelayUpdating,
   relayBrowserAuthorizationReady,
   relayConnectionBrowserMetadata,
   relayConnectionState,
@@ -94,6 +97,7 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  clearRelayUpdating(relayId)
   closeRelayConnection(relayId)
   vi.useRealTimers()
   vi.restoreAllMocks()
@@ -168,6 +172,59 @@ effectIt.effect(
         })
     )
 )
+
+effectIt.effect(
+  "reports an updating Relay through its replacement and closes on reconnect",
+  () =>
+    withRelayServer(({ disconnect, endpoint, reconnected }) =>
+      Effect.gen(function* () {
+        const relayStates: Array<string> = []
+        const unsubscribe = subscribeRealtimeChanges((event) => {
+          if (event.type === "relay.state") {
+            relayStates.push(
+              `${event.status}${event.updating ? ":updating" : ""}`
+            )
+          }
+        })
+        yield* promiseEffect(() =>
+          relayRpc(endpoint, "relay.snapshot", {}, 1_000)
+        )
+        markRelayUpdating(relayId)
+        expect(isRelayUpdating(relayId)).toBe(true)
+
+        disconnect()
+        yield* Effect.promise(() => advanceTimersUntil(reconnected))
+        yield* promiseEffect(() =>
+          relayRpc(endpoint, "relay.snapshot", {}, 1_000)
+        )
+
+        expect(isRelayUpdating(relayId)).toBe(false)
+        expect(relayStates[0]).toBe("connected")
+        expect(relayStates[1]).toBe("connected:updating")
+        expect(relayStates).toContain("unreachable:updating")
+        expect(relayStates).not.toContain("unreachable")
+        expect(relayStates.at(-1)).toBe("connected")
+        unsubscribe()
+      })
+    )
+)
+
+it("reports a Relay unreachable once its update window expires", async () => {
+  const relayStates: Array<string> = []
+  const unsubscribe = subscribeRealtimeChanges((event) => {
+    if (event.type === "relay.state" && event.relayId === relayId) {
+      relayStates.push(`${event.status}${event.updating ? ":updating" : ""}`)
+    }
+  })
+  markRelayUpdating(relayId)
+  await vi.advanceTimersByTimeAsync(15 * 60_000 - 1)
+  expect(isRelayUpdating(relayId)).toBe(true)
+
+  await vi.advanceTimersByTimeAsync(1)
+  expect(isRelayUpdating(relayId)).toBe(false)
+  expect(relayStates).toEqual(["unreachable:updating", "unreachable"])
+  unsubscribe()
+})
 
 it("settles failed generation readiness and replaces it for retry", async () => {
   let rejectSynchronization: (cause: Error) => void = () => undefined

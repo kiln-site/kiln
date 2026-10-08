@@ -107,6 +107,7 @@ function LiveServerIdentity(
           name: server.name,
           observedState: server.observedState,
           relayStatus: server.relayStatus,
+          relayUpdating: server.relayUpdating,
         })),
   })
   const live = data?.[0]
@@ -124,6 +125,7 @@ function LiveServerIdentity(
               ...instance,
               observedState: live?.observedState ?? instance.observedState,
               relayStatus: live?.relayStatus ?? instance.relayStatus,
+              relayUpdating: live ? live.relayUpdating : instance.relayUpdating,
             })
       }
     />
@@ -148,6 +150,7 @@ function LiveDatabaseIdentity(
           inventoryStatus: database.inventoryStatus,
           name: database.name,
           observedState: database.observedState,
+          relayUpdating: database.relayUpdating,
         })),
   })
   const live = data?.[0]
@@ -163,6 +166,7 @@ function LiveDatabaseIdentity(
               inventoryStatus:
                 live?.inventoryStatus ?? instance.inventoryStatus,
               observedState: live?.observedState ?? instance.observedState,
+              relayUpdating: live ? live.relayUpdating : instance.relayUpdating,
             })
       }
     />
@@ -218,6 +222,7 @@ function LiveFleetRelayIdentity(
         .select(({ relay }) => ({
           name: relay.relayName,
           relayStatus: relay.relayStatus,
+          relayUpdating: relay.relayUpdating,
         })),
   })
   const live = data?.[0]
@@ -231,6 +236,7 @@ function LiveFleetRelayIdentity(
           : instanceStatusPresentation({
               ...instance,
               relayStatus: live?.relayStatus ?? instance.relayStatus,
+              updating: live ? live.relayUpdating : instance.updating,
             })
       }
     />
@@ -415,14 +421,16 @@ function instancePresentationEqual(
         (previous.connected === next.connected &&
           previous.enabled === next.enabled &&
           previous.lastError === next.lastError &&
-          previous.relayStatus === next.relayStatus))
+          previous.relayStatus === next.relayStatus &&
+          previous.updating === next.updating))
     )
   }
   if (previous.kind === "database" && next.kind === "database") {
     return (
       live ||
       (previous.inventoryStatus === next.inventoryStatus &&
-        previous.observedState === next.observedState)
+        previous.observedState === next.observedState &&
+        previous.relayUpdating === next.relayUpdating)
     )
   }
   if (previous.kind !== "server" || next.kind !== "server") return false
@@ -432,6 +440,7 @@ function instancePresentationEqual(
     previous.implementation === next.implementation &&
     (live ||
       (previous.observedState === next.observedState &&
-        previous.relayStatus === next.relayStatus))
+        previous.relayStatus === next.relayStatus &&
+        previous.relayUpdating === next.relayUpdating))
   )
 }

@@ -80,11 +80,22 @@ interface BrowserAuthorizationReadiness {
   resolve: (issuerGeneration: number) => void
 }
 
+interface RelayUpdateWindow {
+  disconnected: boolean
+  expiry: Fiber.Fiber<void, unknown>
+}
+
 declare global {
   var kilnRelayConnections: Map<string, RelayConnection> | undefined
+  var kilnRelayUpdates: Map<string, RelayUpdateWindow> | undefined
 }
 
 const connections = (globalThis.kilnRelayConnections ??= new Map())
+// An update replaces the Relay container, so its disconnect is expected. The
+// window closes once the replacement authenticates, the operation settles, or
+// the deadline passes and the Relay is reported as unreachable again.
+const relayUpdates = (globalThis.kilnRelayUpdates ??= new Map())
+const RELAY_UPDATE_WINDOW_MS = 15 * 60_000
 
 export async function relayRpc(
   relay: RelayEndpoint,
@@ -123,6 +134,55 @@ export async function relayRpc(
     })
   }
   return result
+}
+
+export function isRelayUpdating(relayId: string): boolean {
+  return relayUpdates.has(relayId)
+}
+
+export function markRelayUpdating(relayId: string): void {
+  relayUpdates.get(relayId)?.expiry.interruptUnsafe()
+  let update: RelayUpdateWindow
+  const expiry = forkAppEffect(
+    "relay.update.window",
+    Effect.sleep(RELAY_UPDATE_WINDOW_MS).pipe(
+      Effect.andThen(Effect.sync(() => closeRelayUpdateWindow(relayId, update)))
+    )
+  )
+  update = {
+    disconnected: relayConnectionState(relayId).status !== "authenticated",
+    expiry,
+  }
+  relayUpdates.set(relayId, update)
+  publishRelayState(relayId)
+}
+
+export function clearRelayUpdating(relayId: string): void {
+  const update = relayUpdates.get(relayId)
+  if (!update) return
+  update.expiry.interruptUnsafe()
+  closeRelayUpdateWindow(relayId, update)
+}
+
+function closeRelayUpdateWindow(
+  relayId: string,
+  update: RelayUpdateWindow
+): void {
+  if (relayUpdates.get(relayId) !== update) return
+  relayUpdates.delete(relayId)
+  publishRelayState(relayId)
+}
+
+function publishRelayState(relayId: string): void {
+  publishRealtimeChange({
+    relayId,
+    status:
+      relayConnectionState(relayId).status === "authenticated"
+        ? "connected"
+        : "unreachable",
+    type: "relay.state",
+    updating: relayUpdates.has(relayId),
+  })
 }
 
 export function relayConnectionState(relayId: string): RelayConnectionState {
@@ -1022,6 +1082,17 @@ class RelayConnection {
     const wasReachable = this.#state.status === "authenticated"
     const isReachable = status === "authenticated"
     this.#state = { lastError, status, updatedAt: Date.now() }
+    const update = relayUpdates.get(this.#relay.id)
+    if (update && connections.get(this.#relay.id) === this) {
+      if (!isReachable) {
+        update.disconnected = true
+      } else if (update.disconnected) {
+        // The replacement Relay is back; its reachability event below also
+        // reports that the update window has closed.
+        update.expiry.interruptUnsafe()
+        relayUpdates.delete(this.#relay.id)
+      }
+    }
     Sentry.addBreadcrumb({
       category: "relay.connection",
       data: { relayId: this.#relay.id },
@@ -1036,6 +1107,7 @@ class RelayConnection {
         relayId: this.#relay.id,
         status: isReachable ? "connected" : "unreachable",
         type: "relay.state",
+        updating: relayUpdates.has(this.#relay.id),
       })
     }
     if (becameAuthenticated) {

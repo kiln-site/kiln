@@ -36,48 +36,19 @@ export const engineBadgeClasses: Record<DatabaseEngine, string> = {
 }
 
 export function databaseStatusPresentation(
-  inventoryStatus: ManagedDatabase["inventoryStatus"],
-  state: ManagedDatabase["observedState"]
+  database: Pick<
+    ManagedDatabase,
+    "inventoryStatus" | "observedState" | "relayUpdating"
+  >
 ) {
-  const status = instanceStatusPresentation({
+  return instanceStatusPresentation({
     id: "status-presentation",
-    inventoryStatus,
+    inventoryStatus: database.inventoryStatus,
     kind: "database",
-    observedState: state,
+    observedState: database.observedState,
     relayId: "status-presentation",
+    relayUpdating: database.relayUpdating,
   })
-  return {
-    dot: databaseStatusToneClasses[status.tone].dot,
-    label: status.label,
-    text: databaseStatusToneClasses[status.tone].text,
-  }
-}
-
-const databaseStatusToneClasses = {
-  danger: { dot: "bg-destructive", text: "text-destructive" },
-  info: { dot: "bg-sky-400", text: "text-sky-300" },
-  neutral: {
-    dot: "bg-muted-foreground",
-    text: "text-muted-foreground",
-  },
-  success: { dot: "bg-emerald-400", text: "text-emerald-300" },
-  warning: { dot: "bg-amber-300", text: "text-amber-200" },
-} as const
-
-export function DatabaseStatus({
-  status,
-}: {
-  status: ReturnType<typeof databaseStatusPresentation>
-}) {
-  return (
-    <span
-      aria-label={status.label}
-      className={`type-label inline-flex items-center gap-1.5 ${status.text}`}
-    >
-      <span className={`size-1.5 rounded-full ${status.dot}`} />
-      <span className="hidden sm:inline">{status.label}</span>
-    </span>
-  )
 }
 
 export function engineLabel(engine: DatabaseEngine): string {

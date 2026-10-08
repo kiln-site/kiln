@@ -107,6 +107,7 @@ import type { PersistedRelay } from "@/lib/relay-registry"
 import { listPersistedRelays } from "@/lib/relay-registry"
 import { resolveMclogsApiUrl } from "@/lib/mclogs"
 import { publishRealtimeChange } from "@/lib/realtime-source.server"
+import { isRelayUpdating } from "@/lib/relay-connection"
 import { updateInstanceSourceName } from "@/lib/instance-registry"
 
 const instanceInputSchema = z.object({
@@ -1430,6 +1431,7 @@ async function mergeRelaySnapshots(
       relayId: relay.id,
       relayName: relay.name,
       relayStatus: status,
+      relayUpdating: isRelayUpdating(relay.id),
     }))
   )
   const routedInstances = instances.map((instance) => ({
@@ -1449,6 +1451,7 @@ async function mergeRelaySnapshots(
               relayId: relay.id,
               relayName: relay.name,
               relayStatus: status,
+              relayUpdating: isRelayUpdating(relay.id),
             },
           ]
         : []
@@ -1491,5 +1494,6 @@ function publicRelayState<TStatus extends RelayReachability | "paused">(entry: {
     id: entry.relay.id,
     name: entry.relay.name,
     status: entry.status,
+    updating: entry.status !== "paused" && isRelayUpdating(entry.relay.id),
   }
 }

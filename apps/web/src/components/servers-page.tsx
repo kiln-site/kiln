@@ -63,6 +63,8 @@ import {
 } from "@/components/data-table-workspace"
 import { DataTable } from "@/components/data-table-view"
 import { InstanceName } from "@/components/instance-name"
+import { instanceStatusPresentation } from "@/components/instance-name-presentation"
+import { StatusIndicator } from "@/components/status-indicator"
 import {
   accessCapabilitiesQueryOptions,
   brickCatalogQueryOptions,
@@ -112,8 +114,7 @@ const serverTableSearchFields = [
   ({ server }: ServerTableItem) => server.connectAddress,
   ({ server }: ServerTableItem) => server.relayId,
   ({ server }: ServerTableItem) => server.relayName,
-  ({ server }: ServerTableItem) => server.relayStatus,
-  ({ server }: ServerTableItem) => server.observedState,
+  ({ server }: ServerTableItem) => serverStatus(server).label,
 ] as const
 
 interface ServerDeleteAccess {
@@ -369,6 +370,7 @@ const FilteredServerTableBoundary = React.memo(
             relayId: instance.relayId,
             relayName: instance.relayName,
             relayStatus: instance.relayStatus,
+            relayUpdating: instance.relayUpdating,
             routeId: instance.routeId,
             shortId: instance.shortId,
             version: instance.version,
@@ -453,9 +455,11 @@ const ServerDataTable = React.memo(function ServerDataTable({
           id: "status",
           header: () => <span className="sr-only sm:not-sr-only">Status</span>,
           sortFn: "text",
-          cell: ({ row }) => <ServerStatus server={row.original.server} />,
+          cell: ({ row }) => (
+            <StatusIndicator status={serverStatus(row.original.server)} />
+          ),
           meta: dataTableColumnMeta(
-            { width: { base: "2.5rem", sm: "6.5rem" } },
+            { width: { base: "2.5rem", sm: "7.5rem" } },
             {
               cellClassName: "px-2 sm:px-3",
               headerClassName: "px-2 sm:px-3",
@@ -504,6 +508,7 @@ const ServerDataTable = React.memo(function ServerDataTable({
                     observedState: server.observedState,
                     relayId: server.relayId,
                     relayStatus: server.relayStatus,
+                    relayUpdating: server.relayUpdating,
                   }}
                   live={false}
                   name={server.name}
@@ -781,27 +786,15 @@ function canDeleteServer(
   )
 }
 
-function ServerStatus({ server }: { server: ServerListInstance }) {
-  const status = serverStatus(server)
-  return (
-    <span
-      aria-label={status.label}
-      className={`type-label inline-flex items-center gap-1.5 ${status.text}`}
-    >
-      <span className={`size-1.5 shrink-0 rounded-full ${status.dot}`} />
-      <span className="hidden sm:inline">{status.label}</span>
-    </span>
-  )
-}
-
 function serverStatus(server: ServerListInstance) {
-  return server.relayStatus === "unreachable"
-    ? {
-        dot: "bg-destructive",
-        label: "Relay unavailable",
-        text: "text-destructive",
-      }
-    : serverStatusTone(server.observedState)
+  return instanceStatusPresentation({
+    id: server.id,
+    kind: "server",
+    observedState: server.observedState,
+    relayId: server.relayId,
+    relayStatus: server.relayStatus,
+    relayUpdating: server.relayUpdating,
+  })
 }
 
 function EmptyServerTable({
@@ -874,40 +867,4 @@ function createServerTableItems(
     serverTableItemCache.set(server, item)
     return item
   })
-}
-
-function serverStatusTone(state: ServerListInstance["observedState"]) {
-  if (state === "running") {
-    return {
-      dot: "bg-emerald-400",
-      label: "Running",
-      text: "text-emerald-300",
-    }
-  }
-  if (state === "failed") {
-    return {
-      dot: "bg-destructive",
-      label: "Failed",
-      text: "text-destructive",
-    }
-  }
-  if (state === "starting" || state === "provisioning") {
-    return {
-      dot: "bg-amber-400",
-      label: state === "starting" ? "Starting" : "Provisioning",
-      text: "text-amber-300",
-    }
-  }
-  if (state === "stopping") {
-    return {
-      dot: "bg-amber-400/70",
-      label: "Stopping",
-      text: "text-amber-300",
-    }
-  }
-  return {
-    dot: "bg-muted-foreground/50",
-    label: "Stopped",
-    text: "text-muted-foreground",
-  }
 }

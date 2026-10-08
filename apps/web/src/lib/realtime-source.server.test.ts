@@ -23,12 +23,14 @@ describe("realtime source", () => {
       relayId: "relay-a",
       status: "connected",
       type: "relay.state",
+      updating: false,
     })
     unsubscribe()
     publishRealtimeChange({
       relayId: "relay-a",
       status: "unreachable",
       type: "relay.state",
+      updating: false,
     })
 
     expect(received).toEqual([first.sequence])

@@ -110,6 +110,14 @@ function applyRealtimeEvent(input: ApplyRealtimeEventInput): void {
     return
   }
   if (event.type === "relay.status") {
+    // Database inventory is fetched through the Relay, so its reachability
+    // and update state come from the same refresh.
+    void (
+      refreshTopics?.(["databases"], { relayId: event.relayId }) ??
+      refreshHearthRealtimeTopics(queryClient, ["databases"], {
+        relayId: event.relayId,
+      })
+    )
     if (!instances.isReady()) {
       const snapshot = queryClient.getQueryData<RelayFleetSnapshot>(
         queryKeys.relay.snapshot
@@ -121,9 +129,8 @@ function applyRealtimeEvent(input: ApplyRealtimeEventInput): void {
       return
     }
     const changed = instances.toArray.flatMap((instance) =>
-      instance.relayId === event.relayId &&
-      instance.relayStatus !== event.status
-        ? [{ ...instance, relayStatus: event.status }]
+      relayStatusChanged(instance, event)
+        ? [withRelayStatus(instance, event)]
         : []
     )
     // Query Collection manual writes commit the collection and its backing
@@ -168,21 +175,42 @@ function applyRealtimeSnapshotEvent(
     return {
       ...snapshot,
       instances: snapshot.instances.map((instance) =>
-        instance.relayId === event.relayId &&
-        instance.relayStatus !== event.status
-          ? { ...instance, relayStatus: event.status }
+        relayStatusChanged(instance, event)
+          ? withRelayStatus(instance, event)
           : instance
       ),
       nodes: snapshot.nodes.map((node) =>
-        node.relayId === event.relayId && node.relayStatus !== event.status
-          ? { ...node, relayStatus: event.status }
-          : node
+        relayStatusChanged(node, event) ? withRelayStatus(node, event) : node
       ),
     }
   }
   return {
     ...snapshot,
     instances: applyRealtimeInstancesEvent(snapshot.instances, event),
+  }
+}
+
+type RelayStatusEvent = Extract<RealtimeClientEvent, { type: "relay.status" }>
+
+function relayStatusChanged(
+  item: { relayId: string; relayStatus: string; relayUpdating?: boolean },
+  event: RelayStatusEvent
+): boolean {
+  return (
+    item.relayId === event.relayId &&
+    (item.relayStatus !== event.status ||
+      (item.relayUpdating ?? false) !== (event.updating ?? false))
+  )
+}
+
+function withRelayStatus<T extends { relayUpdating?: boolean }>(
+  item: T,
+  event: RelayStatusEvent
+): T & { relayStatus: RelayStatusEvent["status"] } {
+  return {
+    ...item,
+    relayStatus: event.status,
+    relayUpdating: event.updating ?? false,
   }
 }
 
@@ -344,7 +372,9 @@ function applyRealtimeRelayStatus(
     return connection
   }
   const relays = connection.relays.map((relay) =>
-    relay.id === event.relayId ? { ...relay, status: event.status } : relay
+    relay.id === event.relayId
+      ? { ...relay, status: event.status, updating: event.updating ?? false }
+      : relay
   )
   return connectionWithRelayStatuses(connection, snapshot, relays)
 }

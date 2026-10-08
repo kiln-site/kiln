@@ -206,7 +206,9 @@ describe("realtime event application", () => {
       clients.queryClient.getQueryData<Array<FleetInstance>>(
         queryKeys.relay.instances
       )
-    ).toEqual([{ ...collectionAlpha, relayStatus: "unreachable" }])
+    ).toEqual([
+      { ...collectionAlpha, relayStatus: "unreachable", relayUpdating: false },
+    ])
   })
 
   it("updates a node without rebuilding instance data", () => {
@@ -259,8 +261,10 @@ describe("realtime event application", () => {
         queryKeys.relay.snapshot
       )
     ).toEqual({
-      instances: [{ ...alpha, relayStatus: "unreachable" }],
-      nodes: [{ ...node, relayStatus: "unreachable" }],
+      instances: [
+        { ...alpha, relayStatus: "unreachable", relayUpdating: false },
+      ],
+      nodes: [{ ...node, relayStatus: "unreachable", relayUpdating: false }],
     })
 
     applyEvent(clients, relayStatus(alpha.relayId, "connected", 2))
@@ -388,6 +392,7 @@ describe("authoritative Relay recovery", () => {
           id: alpha.relayId,
           name: alpha.relayName,
           status: "connected",
+          updating: false,
         },
       ],
       snapshot: snapshot(),
@@ -461,6 +466,7 @@ describe("authoritative Relay recovery", () => {
           id: alpha.relayId,
           name: alpha.relayName,
           status: "connected",
+          updating: false,
         },
       ],
       snapshot: snapshot(),
@@ -506,6 +512,7 @@ describe("authoritative Relay recovery", () => {
           id: alpha.relayId,
           name: alpha.relayName,
           status: "unreachable",
+          updating: false,
         },
       ],
       snapshot: unreachableSnapshot,

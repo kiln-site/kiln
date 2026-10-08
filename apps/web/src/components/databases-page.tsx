@@ -73,7 +73,6 @@ import {
 } from "@/components/database/database-dialogs"
 import { DatabaseNetworkPicker } from "@/components/database/database-network"
 import {
-  DatabaseStatus,
   databaseStatusPresentation,
   engineBadgeClasses,
   engineLabel,
@@ -96,6 +95,7 @@ import {
   DataTableWorkspace,
 } from "@/components/data-table-workspace"
 import { InstanceName } from "@/components/instance-name"
+import { StatusIndicator } from "@/components/status-indicator"
 import { getManagedDatabasesCollection } from "@/lib/collections/managed-databases"
 import type { InstanceFavorite } from "@/lib/instance-favorites"
 import type { AccessPermission } from "@/lib/permissions"
@@ -385,21 +385,14 @@ const DatabaseTable = React.memo(function DatabaseTable({
   const definition = React.useMemo(() => {
     const columns = databaseTableColumnHelper.columns([
       databaseTableColumnHelper.accessor(
-        (database) =>
-          databaseStatusPresentation(
-            database.inventoryStatus,
-            database.observedState
-          ).label,
+        (database) => databaseStatusPresentation(database).label,
         {
           id: "status",
           header: () => <span className="sr-only sm:not-sr-only">Status</span>,
           sortFn: "text",
           cell: ({ row }) => (
-            <DatabaseStatus
-              status={databaseStatusPresentation(
-                row.original.inventoryStatus,
-                row.original.observedState
-              )}
+            <StatusIndicator
+              status={databaseStatusPresentation(row.original)}
             />
           ),
           meta: dataTableColumnMeta(
@@ -453,6 +446,7 @@ const DatabaseTable = React.memo(function DatabaseTable({
                     kind: "database",
                     observedState: database.observedState,
                     relayId: database.relayId,
+                    relayUpdating: database.relayUpdating,
                   }}
                   live={false}
                   name={database.name}

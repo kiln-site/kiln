@@ -37,6 +37,7 @@ export type RealtimeSourceChange =
       relayId: string
       status: "connected" | "unreachable"
       type: "relay.state"
+      updating: boolean
     }
   | {
       directoryChanged?: boolean

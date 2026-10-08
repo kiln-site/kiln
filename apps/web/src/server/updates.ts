@@ -197,8 +197,8 @@ export const startSystemUpdates = createServerFn({ method: "POST" })
     if (!latestRelease) {
       throw new Error("No public Kiln release is available to install")
     }
-    const [manifest, relays, { relayRpc }, hearthContainer] = await Promise.all(
-      [
+    const [manifest, relays, { markRelayUpdating, relayRpc }, hearthContainer] =
+      await Promise.all([
         runAppEffect(
           "updates.manifest",
           kilnReleaseManifestEffect(latestRelease.tag)
@@ -208,8 +208,7 @@ export const startSystemUpdates = createServerFn({ method: "POST" })
         data.targets.some(({ component }) => component === "hearth")
           ? getContainerHostname()
           : Promise.resolve(null),
-      ]
-    )
+      ])
     const prepared = await Effect.runPromise(
       Effect.forEach(
         data.targets,
@@ -349,10 +348,17 @@ export const startSystemUpdates = createServerFn({ method: "POST" })
                 15 * 60_000,
                 user.id
               )
-              return {
-                group,
-                operations: parseUpdateOperations(response),
+              const operations = parseUpdateOperations(response)
+              if (
+                operations.some(
+                  (operation) =>
+                    operation.component === "relay" &&
+                    operation.status === "running"
+                )
+              ) {
+                markRelayUpdating(group.relay.id)
               }
+              return { group, operations }
             },
             catch: (cause) => cause,
           }).pipe(
@@ -390,7 +396,7 @@ export const getSystemUpdateStatus = createServerFn({ method: "POST" })
   .validator(updateStatusSchema)
   .handler(async ({ data }) => {
     const user = await requireUpdateAccess()
-    const [relays, { relayRpc }] = await Promise.all([
+    const [relays, { clearRelayUpdating, relayRpc }] = await Promise.all([
       updateRelaysForUser(user),
       import("@/lib/relay-connection"),
     ])
@@ -403,6 +409,9 @@ export const getSystemUpdateStatus = createServerFn({ method: "POST" })
     )
     if (result === null) return null
     const operation = updateOperationSchema.parse(result)
+    if (operation.component === "relay" && operation.status !== "running") {
+      clearRelayUpdating(relay.id)
+    }
     return operation.component === "hearth" && !isPlatformAdmin(user)
       ? null
       : operation

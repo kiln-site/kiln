@@ -32,12 +32,12 @@ import {
   useDatabaseExport,
 } from "@/components/database/database-dialogs"
 import {
-  DatabaseStatus,
   databaseStatusPresentation,
   engineBadgeClasses,
   engineLabel,
   type ManagedDatabase,
 } from "@/components/database/database-presentation"
+import { StatusIndicator } from "@/components/status-indicator"
 import { useDatabaseWorkspace } from "@/components/database/database-workspace-context"
 import {
   CopyMetaRow,
@@ -141,12 +141,7 @@ export function DatabaseInfoPage() {
             icon={<Network />}
             title="Relay placement"
             action={
-              <DatabaseStatus
-                status={databaseStatusPresentation(
-                  database.inventoryStatus,
-                  database.observedState
-                )}
-              />
+              <StatusIndicator status={databaseStatusPresentation(database)} />
             }
           />
           <div className="grid sm:grid-cols-2 lg:grid-cols-4">
