@@ -687,6 +687,9 @@ class TerminalConnection {
   // Kept apart from who the Relay last reported in control, so a claim
   // always settles, whoever ends up in control.
   #claim: { request: number; seq: number | null } | null = null
+  // The window changed while a claim was pending, so the size it claimed
+  // may be stale.
+  #resizedDuringClaim = false
   #claimRequests = 0
   #reported: DatabaseTerminalControl = "none"
   // The last state change this page has seen.
@@ -784,6 +787,7 @@ class TerminalConnection {
           if (this.#claim?.request !== request) return
           this.#claim = null
           this.#takingOver = false
+          this.#resizedDuringClaim = false
           this.#showControl()
         }
       )
@@ -792,7 +796,8 @@ class TerminalConnection {
 
   // The page in control follows its own window.
   windowResized() {
-    if (this.#reported === "self" && !this.#claim) this.claim()
+    if (this.#claim) this.#resizedDuringClaim = true
+    else if (this.#reported === "self") this.claim()
   }
 
   // Records who the Relay says is in control as of state change `seq`.
@@ -812,6 +817,10 @@ class TerminalConnection {
     }
     this.#takingOver = false
     this.#showControl()
+    // Still in control: catch up with the window's latest size.
+    const resized = this.#resizedDuringClaim
+    this.#resizedDuringClaim = false
+    if (resized && this.#reported === "self") this.claim()
   }
 
   #showControl() {
@@ -986,6 +995,7 @@ class TerminalConnection {
           // A claim on an earlier session can't settle on this one.
           this.#claim = null
           this.#takingOver = false
+          this.#resizedDuringClaim = false
         }
         this.#sessionId = record.sessionId
         this.#attachmentId = record.attachmentId
