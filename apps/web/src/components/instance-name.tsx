@@ -15,6 +15,7 @@ import {
   type InstanceNameInstance,
   type InstanceStatusPresentation,
 } from "@/components/instance-name-presentation"
+import { IdentityName } from "@/components/identity-name"
 import { InstanceFavoriteStar } from "@/components/instance-favorite"
 import { managedDatabasesCollectionOptions } from "@/lib/collections/managed-databases"
 import { relayInstancesCollectionOptions } from "@/lib/collections/relay-instances"
@@ -262,13 +263,9 @@ const InstanceNameView = React.memo(function InstanceNameView({
   status?: InstanceStatusPresentation
 }) {
   return (
-    <span className={cn("flex min-w-0 items-center gap-2.5", className)}>
-      <span
-        className={cn(
-          "relative grid size-8 shrink-0 place-items-center rounded-md border border-border/70 bg-background/35 text-muted-foreground",
-          iconClassName
-        )}
-      >
+    <IdentityName
+      className={className}
+      icon={
         <InstanceIcon
           brickId={brickId}
           brickSource={brickSource}
@@ -276,101 +273,30 @@ const InstanceNameView = React.memo(function InstanceNameView({
           implementation={implementation}
           instance={instance}
         />
-        {status ? (
-          <InstanceStatus
-            className={statusClassName}
-            label={status.label}
-            tone={status.tone}
-          />
-        ) : null}
-      </span>
-      <InstanceText
-        favoriteId={showFavorite === false ? undefined : instance.id}
-        favoriteKind={instance.kind}
-        favoriteRelayId={instance.relayId}
-        meta={meta}
-        metaClassName={metaClassName}
-        name={liveName ?? name}
-        nameAccessory={nameAccessory}
-        nameClassName={nameClassName}
-        textClassName={textClassName}
-      />
-    </span>
-  )
-})
-
-const InstanceText = React.memo(function InstanceText({
-  favoriteId,
-  favoriteKind,
-  favoriteRelayId,
-  meta,
-  metaClassName,
-  name,
-  nameAccessory,
-  nameClassName,
-  textClassName,
-}: {
-  favoriteId?: string
-  favoriteKind: InstanceNameInstance["kind"]
-  favoriteRelayId: string
-} & Pick<
-  InstanceNameProps,
-  | "meta"
-  | "metaClassName"
-  | "name"
-  | "nameAccessory"
-  | "nameClassName"
-  | "textClassName"
->) {
-  return (
-    <span className={cn("min-w-0 flex-1", textClassName)}>
-      <span
-        className={cn(
-          "flex min-w-0 items-center gap-1.5 text-xs font-semibold text-foreground",
-          nameClassName
-        )}
-      >
-        <span className="truncate">{name}</span>
-        {favoriteId ? (
-          <InstanceFavoriteStar
-            id={favoriteId}
-            kind={favoriteKind}
-            relayId={favoriteRelayId}
-          />
-        ) : null}
-        {nameAccessory}
-      </span>
-      {meta ? (
-        <span
-          className={cn(
-            "type-meta block truncate text-muted-foreground",
-            metaClassName
-          )}
-        >
-          {meta}
-        </span>
-      ) : null}
-    </span>
-  )
-})
-
-const InstanceStatus = React.memo(function InstanceStatus({
-  className,
-  label,
-  tone,
-}: InstanceStatusPresentation & { className?: string }) {
-  return (
-    <>
-      <span
-        className={cn(
-          "absolute -right-0.5 -bottom-0.5 size-1.5 rounded-full ring-2 ring-background",
-          statusToneClassName[tone],
-          className
-        )}
-        aria-hidden="true"
-      />
-      <span className="sr-only">Status: {label}</span>
-    </>
+      }
+      iconClassName={iconClassName}
+      meta={meta}
+      metaClassName={metaClassName}
+      name={liveName ?? name}
+      nameAccessory={
+        showFavorite === false ? (
+          nameAccessory
+        ) : (
+          <>
+            <InstanceFavoriteStar
+              id={instance.id}
+              kind={instance.kind}
+              relayId={instance.relayId}
+            />
+            {nameAccessory}
+          </>
+        )
+      }
+      nameClassName={nameClassName}
+      status={status}
+      statusClassName={statusClassName}
+      textClassName={textClassName}
+    />
   )
 })
 
@@ -509,12 +435,3 @@ function instancePresentationEqual(
         previous.relayStatus === next.relayStatus))
   )
 }
-
-const statusToneClassName: Record<InstanceStatusPresentation["tone"], string> =
-  {
-    danger: "bg-destructive",
-    info: "bg-sky-400",
-    neutral: "bg-muted-foreground/45",
-    success: "bg-emerald-400",
-    warning: "bg-amber-400",
-  }
