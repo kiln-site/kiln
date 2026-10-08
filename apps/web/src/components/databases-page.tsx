@@ -439,7 +439,9 @@ const DatabaseTable = React.memo(function DatabaseTable({
             <div className="flex w-full min-w-0 items-center gap-1">
               <Link
                 to="/db/$databaseId"
-                params={{ databaseId: database.shortId }}
+                // The full ID always resolves; the route shortens it when
+                // no other database shares its short ID.
+                params={{ databaseId: database.id }}
                 preload="intent"
                 className="group/database-link flex min-h-14 min-w-0 flex-1 items-center outline-none focus-visible:ring-2 focus-visible:ring-ring/40 focus-visible:ring-inset"
               >
