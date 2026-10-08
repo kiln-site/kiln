@@ -3,6 +3,7 @@ import type { RowDataPacket } from "mysql2/promise"
 import {
   accessPermissionSupported,
   builtinPresetSelections,
+  databaseEngineSupportsBrowsing,
   databaseEngineSupportsLogicalBackups,
   expandPermissionSelections,
   type AccessPermission,
@@ -222,7 +223,12 @@ export function deduplicatePermissionSelections(
 export function databaseScopeCapabilities(
   engine: string | null | undefined
 ): Array<string> {
-  return databaseEngineSupportsLogicalBackups(engine as DatabaseEngine)
-    ? ["database.logical-backups"]
-    : []
+  const capabilities: Array<string> = []
+  if (databaseEngineSupportsLogicalBackups(engine as DatabaseEngine)) {
+    capabilities.push("database.logical-backups")
+  }
+  if (databaseEngineSupportsBrowsing(engine as DatabaseEngine)) {
+    capabilities.push("database.sql")
+  }
+  return capabilities
 }

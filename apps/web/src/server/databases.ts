@@ -2,8 +2,16 @@ import { randomBytes } from "node:crypto"
 
 import { createServerFn } from "@tanstack/react-start"
 import {
+  databaseEngineSupportsBrowsing,
   databaseEngineSupportsLogicalBackups,
   databaseEngineSchema,
+  databaseMutateInputSchema,
+  databaseMutateResultSchema,
+  databaseOverviewSchema,
+  databaseQueryInputSchema,
+  databaseQueryResultSchema,
+  databaseRowsInputSchema,
+  databaseRowsSchema,
   databaseIdSchema,
   relayDatabaseNameSchema,
   relayIdSchema,
@@ -61,6 +69,16 @@ const databaseNetworkInputSchema = databaseInputSchema.extend({
 })
 const databaseImportInputSchema = databaseInputSchema.extend({
   content: z.string().max(700_000),
+})
+const databaseRowsRequestSchema = databaseInputSchema.extend({
+  request: databaseRowsInputSchema,
+})
+const databaseQueryRequestSchema = databaseInputSchema.extend({
+  readOnly: z.boolean(),
+  request: databaseQueryInputSchema,
+})
+const databaseMutateRequestSchema = databaseInputSchema.extend({
+  request: databaseMutateInputSchema,
 })
 
 const databasePermissions = accessPermissions.filter((permission) =>
@@ -566,6 +584,74 @@ export const importManagedDatabase = createServerFn({ method: "POST" })
     )
     return { imported: true }
   })
+
+export const getManagedDatabaseOverview = createServerFn({ method: "GET" })
+  .validator(databaseInputSchema)
+  .handler(async ({ data }) =>
+    databaseOverviewSchema.parse(
+      await managedDatabaseDataRequest(data, "database.data.read", {
+        request: { action: "overview" },
+      })
+    )
+  )
+
+export const getManagedDatabaseRows = createServerFn({ method: "POST" })
+  .validator(databaseRowsRequestSchema)
+  .handler(async ({ data }) =>
+    databaseRowsSchema.parse(
+      await managedDatabaseDataRequest(data, "database.data.read", {
+        request: data.request,
+      })
+    )
+  )
+
+// Running SQL needs write access even with `readOnly`: arbitrary SQL can
+// leave a read-only transaction, so that flag only guards against mistakes.
+export const runManagedDatabaseQuery = createServerFn({ method: "POST" })
+  .validator(databaseQueryRequestSchema)
+  .handler(async ({ data }) =>
+    databaseQueryResultSchema.parse(
+      await managedDatabaseDataRequest(data, "database.data.write", {
+        readOnly: data.readOnly,
+        request: data.request,
+      })
+    )
+  )
+
+export const mutateManagedDatabase = createServerFn({ method: "POST" })
+  .validator(databaseMutateRequestSchema)
+  .handler(async ({ data }) =>
+    databaseMutateResultSchema.parse(
+      await managedDatabaseDataRequest(data, "database.data.write", {
+        request: data.request,
+      })
+    )
+  )
+
+async function managedDatabaseDataRequest(
+  data: { databaseId: string; relayId: string },
+  permission: "database.data.read" | "database.data.write",
+  payload: { readOnly?: boolean; request: unknown }
+): Promise<unknown> {
+  const { relay, user } = await authorizedDatabase(data, permission)
+  const credential = await requiredCredential(data.relayId, data.databaseId)
+  if (!databaseEngineSupportsBrowsing(credential.engine)) {
+    throw new Error("This database engine can't be browsed as tables")
+  }
+  return databaseRpc(
+    relay,
+    permission,
+    {
+      ...payload,
+      databaseId: data.databaseId,
+      password: credential.password,
+      username: credential.username,
+    },
+    // The Relay stops database work after 25s; leave room for its reply.
+    30_000,
+    user.id
+  )
+}
 
 export const deleteManagedDatabase = createServerFn({ method: "POST" })
   .validator(databaseInputSchema)

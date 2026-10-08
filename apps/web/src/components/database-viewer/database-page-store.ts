@@ -1,7 +1,7 @@
 import type { DatabaseRowKey, DatabaseValue } from "@workspace/contracts"
 
-import type { DatabaseEditableRow } from "@/components/files/database/database-edit-store"
-import { rowKeyId } from "@/components/files/database/database-values"
+import type { DatabaseEditableRow } from "@/components/database-viewer/database-edit-store"
+import { rowKeyId } from "@/components/database-viewer/database-values"
 
 export type DatabasePageStatus = "error" | "pending" | "success"
 

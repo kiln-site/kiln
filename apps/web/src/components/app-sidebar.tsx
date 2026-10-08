@@ -94,6 +94,7 @@ import {
   canAccessAutomations,
   canAccessBackups,
   serverDestinations,
+  type DatabaseDestinationId,
   type NavigationAccessCapabilities,
   type ServerDestination,
   type ServerDestinationId,
@@ -420,9 +421,11 @@ const DatabaseTabNavigation = React.memo(function DatabaseTabNavigation({
         <SidebarMenuButton asChild tooltip={item.label}>
           <Link
             to={
-              item.id === "network"
-                ? "/db/$databaseId/network"
-                : "/db/$databaseId/info"
+              item.id === "viewer"
+                ? "/db/$databaseId/viewer"
+                : item.id === "network"
+                  ? "/db/$databaseId/network"
+                  : "/db/$databaseId/info"
             }
             params={{ databaseId: routeId }}
             activeOptions={{ exact: true }}
@@ -634,11 +637,19 @@ const InstanceSelector = React.memo(function InstanceSelector({
           : item.identity.id
         const tab = databaseTabFromPathname(window.location.pathname)
         void navigate(
-          tab === "network"
-            ? { to: "/db/$databaseId/network", params: { databaseId: routeId } }
-            : tab === "info"
-              ? { to: "/db/$databaseId/info", params: { databaseId: routeId } }
-              : { to: "/db/$databaseId", params: { databaseId: routeId } }
+          tab === "viewer"
+            ? { to: "/db/$databaseId/viewer", params: { databaseId: routeId } }
+            : tab === "network"
+              ? {
+                  to: "/db/$databaseId/network",
+                  params: { databaseId: routeId },
+                }
+              : tab === "info"
+                ? {
+                    to: "/db/$databaseId/info",
+                    params: { databaseId: routeId },
+                  }
+                : { to: "/db/$databaseId", params: { databaseId: routeId } }
         )
         return
       }
@@ -1322,7 +1333,9 @@ function instanceTabFromPathname(pathname: string): InstanceTab | null {
   return null
 }
 
-function databaseTabFromPathname(pathname: string): "info" | "network" | null {
-  const match = /^\/db\/[^/]+\/(info|network)\/?$/.exec(pathname)
-  return match ? (match[1] as "info" | "network") : null
+function databaseTabFromPathname(
+  pathname: string
+): DatabaseDestinationId | null {
+  const match = /^\/db\/[^/]+\/(info|network|viewer)\/?$/.exec(pathname)
+  return match ? (match[1] as DatabaseDestinationId) : null
 }

@@ -31,8 +31,8 @@ import type {
   DatabaseEditableRow,
   DatabaseEditStore,
   InsertedRow,
-} from "@/components/files/database/database-edit-store"
-import type { DatabasePageStore } from "@/components/files/database/database-page-store"
+} from "@/components/database-viewer/database-edit-store"
+import type { DatabasePageStore } from "@/components/database-viewer/database-page-store"
 import {
   editableText,
   formatCellValue,
@@ -40,7 +40,7 @@ import {
   isNumericType,
   isValueEditable,
   parseEditedText,
-} from "@/components/files/database/database-values"
+} from "@/components/database-viewer/database-values"
 
 export interface DatabaseGridColumn {
   name: string
@@ -217,12 +217,10 @@ export const DatabaseGrid = React.memo(function DatabaseGrid({
   // ends in an empty filler column.
   const cellStyles = React.useMemo(
     () =>
-      columns.map(
-        (_, index): React.CSSProperties => ({
-          flexGrow: index === columns.length - 1 ? 1 : undefined,
-          width: `var(--db-col-${index})`,
-        })
-      ),
+      columns.map((_, index): React.CSSProperties => ({
+        flexGrow: index === columns.length - 1 ? 1 : undefined,
+        width: `var(--db-col-${index})`,
+      })),
     [columns]
   )
   const canvasStyle = React.useMemo(() => {

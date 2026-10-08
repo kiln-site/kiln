@@ -19,7 +19,7 @@ import { cn } from "@workspace/ui/lib/utils"
 import {
   formatCellValue,
   valuesEqual,
-} from "@/components/files/database/database-values"
+} from "@/components/database-viewer/database-values"
 
 // A staged change the Relay refused because its row changed after loading.
 export interface DatabaseSaveConflict {

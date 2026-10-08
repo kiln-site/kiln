@@ -16,6 +16,8 @@ import {
   relayCreateDatabaseSchema,
   relayDatabaseActionSchema,
   relayDatabaseDumpSchema,
+  relayDatabaseDataReadSchema,
+  relayDatabaseDataWriteSchema,
   relayDatabaseExportSchema,
   relayDatabaseNetworkSchema,
   relayDeleteDatabaseSchema,
@@ -77,6 +79,7 @@ import { attachControlSocket } from "./control-socket.js"
 import { DockerDriver } from "./docker.js"
 import { DatabaseBrowser } from "./database-browser.js"
 import { DatabaseDriver } from "./databases.js"
+import { browseManagedDatabase } from "./database-sql-browser.js"
 import {
   inspectEncryptedPlatformBackup,
   restoreEncryptedPlatformBackup,
@@ -1345,6 +1348,30 @@ async function executeControlRequest(
       return databases.importDump(
         relayDatabaseDumpSchema.parse(request.payload)
       )
+    case "database.data.read": {
+      const input = relayDatabaseDataReadSchema.parse(request.payload)
+      return runRelayEffect(
+        "relay.databases.data.read",
+        browseManagedDatabase(
+          await databases.target(input.databaseId),
+          input,
+          input.request,
+          { canWrite: false, readOnly: true }
+        )
+      )
+    }
+    case "database.data.write": {
+      const input = relayDatabaseDataWriteSchema.parse(request.payload)
+      return runRelayEffect(
+        "relay.databases.data.write",
+        browseManagedDatabase(
+          await databases.target(input.databaseId),
+          input,
+          input.request,
+          { canWrite: true, readOnly: input.readOnly === true }
+        )
+      )
+    }
     case "backup.task.enqueue":
       return runRelayEffect(
         "relay.backups.enqueue",

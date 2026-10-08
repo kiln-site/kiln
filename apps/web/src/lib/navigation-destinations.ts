@@ -16,6 +16,7 @@ import {
   Rocket,
   Server,
   SlidersHorizontal,
+  Table2,
   TerminalSquare,
   Waypoints,
   Wrench,
@@ -285,7 +286,7 @@ export function canAccessInstancePermission(
   )
 }
 
-export type DatabaseDestinationId = "info" | "network"
+export type DatabaseDestinationId = "info" | "network" | "viewer"
 
 export interface DatabaseDestination extends NavigationDestination {
   // Engines the destination applies to; every engine when omitted.
@@ -295,6 +296,15 @@ export interface DatabaseDestination extends NavigationDestination {
 }
 
 export const databaseDestinations = [
+  {
+    engines: ["mysql", "mariadb", "postgres"],
+    icon: Table2,
+    id: "viewer",
+    keywords: ["tables", "rows", "sql", "query"],
+    label: "Viewer",
+    permission: "database.data.read",
+    to: "/db/$databaseId/viewer",
+  },
   {
     icon: Network,
     id: "network",

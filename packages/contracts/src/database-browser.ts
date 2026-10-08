@@ -1,10 +1,14 @@
 import { z } from "zod"
 
-// Engine-agnostic protocol for browsing and editing databases. File-backed
-// SQLite is the first engine; managed MySQL/MariaDB/Postgres and H2 files can
-// implement the same actions later without changing the viewer.
+// Engine-agnostic protocol for browsing and editing databases: file-backed
+// SQLite and managed MySQL/MariaDB/Postgres implement the same actions.
 
-export const databaseBrowserEngineSchema = z.enum(["sqlite"])
+export const databaseBrowserEngineSchema = z.enum([
+  "sqlite",
+  "mysql",
+  "mariadb",
+  "postgres",
+])
 
 export const DATABASE_BROWSER_MAX_PAGE_ROWS = 500
 export const DATABASE_BROWSER_MAX_QUERY_ROWS = 1_000
@@ -69,7 +73,8 @@ export const databaseOverviewSchema = z
   .object({
     engine: databaseBrowserEngineSchema,
     engineVersion: z.string(),
-    modifiedAt: z.string().datetime(),
+    // File databases only; managed databases have no single modified time.
+    modifiedAt: z.string().datetime().nullable(),
     readOnly: z.boolean(),
     sizeBytes: z.number().int().nonnegative(),
     tables: z.array(databaseTableSchema),

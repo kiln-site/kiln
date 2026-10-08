@@ -78,6 +78,8 @@ export const accessPermissions = [
   "relay.connections.read",
   "relay.connections.manage",
   "relay.audit.read",
+  "database.data.read",
+  "database.data.write",
 ] as const
 export type AccessPermission = (typeof accessPermissions)[number]
 Object.freeze(accessPermissions)
@@ -145,6 +147,7 @@ const implicationEdges: Partial<
   "instance.network.public-port.write": ["instance.network.write"],
   "database.credentials.rotate": ["database.credentials.read"],
   "database.network.write": ["database.network.read"],
+  "database.data.write": ["database.data.read"],
   "backup.create": ["backup.read"],
   "backup.download": ["backup.read"],
   "backup.restore": ["backup.read"],
@@ -219,6 +222,8 @@ const permissionPlacement: Record<
   "database.network.write": ["database.network", "database"],
   "database.dump.export": ["database.dump", "database"],
   "database.dump.import": ["database.dump", "database"],
+  "database.data.read": ["database.data", "database"],
+  "database.data.write": ["database.data", "database"],
 }
 
 const familyScopes: Record<PermissionFamily, readonly PermissionScopeType[]> = {
@@ -433,6 +438,14 @@ const permissionCopy: Record<
     label: "Import database data",
     description: "Load a database dump into the database.",
   },
+  "database.data.read": {
+    label: "Browse database tables",
+    description: "View tables, columns, and rows in the viewer.",
+  },
+  "database.data.write": {
+    label: "Edit database tables",
+    description: "Edit rows and run SQL queries in the viewer.",
+  },
   "backup.read": {
     label: "View backups",
     description: "See available backups and their status.",
@@ -510,7 +523,11 @@ export const permissionCatalog: readonly PermissionDefinition[] = Object.freeze(
       scopeTypes: familyScopes[family],
       implies: Object.freeze([...new Set(implies)]),
       supportedCapabilities: Object.freeze(
-        block === "database.dump" ? ["database.logical-backups"] : []
+        block === "database.dump"
+          ? ["database.logical-backups"]
+          : block === "database.data"
+            ? ["database.sql"]
+            : []
       ),
       compatibilityOnly: compatibilityOnlyPermissions.has(key),
     })
@@ -552,6 +569,7 @@ const blockLabels: Record<string, string> = {
   "database.credentials": "Database credentials",
   "database.network": "Database networking",
   "database.dump": "Database data",
+  "database.data": "Database tables",
   "resource.deletion": "Resource deletion",
   "resource.creation": "Resource creation",
   "relay.configuration": "Relay configuration",
