@@ -417,7 +417,9 @@ class ContainerSocket extends Duplex {
         this.#container,
         "bash",
         "-c",
-        'exec 3<>"/dev/tcp/127.0.0.1/$0" || exit 1; cat <&3 & exec cat >&3',
+        // When the Relay side closes, stop the reader too, so the database
+        // sees the connection drop instead of holding it until it times out.
+        'exec 3<>"/dev/tcp/127.0.0.1/$0" || exit 1; cat <&3 & cat >&3; kill $! 2>/dev/null',
         String(this.#port),
       ],
       { stdio: ["pipe", "pipe", "pipe"] }
