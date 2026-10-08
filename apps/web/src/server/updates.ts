@@ -83,6 +83,21 @@ async function updateRelaysForUser(
   return relays.filter((relay) => allowed.has(relay.id))
 }
 
+export const getKilnReleaseNames = createServerFn({ method: "GET" }).handler(
+  async () => {
+    await requireEligibleResourceUser()
+    const releases = await runAppEffect(
+      "updates.release-names",
+      listKilnReleasesEffect()
+    )
+    return releases.map(({ aliases, name, version }) => ({
+      aliases,
+      name,
+      version,
+    }))
+  }
+)
+
 export const getUpdateOverview = createServerFn({ method: "GET" }).handler(
   async () => {
     const user = await requireUpdateAccess()
