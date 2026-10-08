@@ -1,4 +1,8 @@
-import { infiniteQueryOptions, queryOptions } from "@tanstack/react-query"
+import {
+  infiniteQueryOptions,
+  mutationOptions,
+  queryOptions,
+} from "@tanstack/react-query"
 import type { QueryClient } from "@tanstack/react-query"
 import type { BackupTarget, RelayInstance } from "@workspace/contracts"
 
@@ -25,7 +29,14 @@ import {
 } from "@/server/databases"
 import { isMinecraftUsername } from "@/lib/minecraft-profile"
 import { getUiPreferences } from "@/server/preferences"
-import { getInstanceFavorites } from "@/server/instance-favorites"
+import {
+  getInstanceFavorites,
+  setInstanceFavorite,
+} from "@/server/instance-favorites"
+import {
+  instanceFavoriteKey,
+  type InstanceFavorite,
+} from "@/lib/instance-favorites"
 import { getMinecraftProfile } from "@/server/minecraft"
 import { reconcilePendingPowerSnapshot } from "@/lib/instance-power-state"
 import { systemUpdateOverviewRefetchPolicy } from "@/lib/system-update-presence"
@@ -402,6 +413,61 @@ export function instanceFavoritesQueryOptions() {
     queryKey: queryKeys.instanceFavorites,
     queryFn: () => getInstanceFavorites(),
     staleTime: Infinity,
+  })
+}
+
+const setInstanceFavoriteMutationKey = ["instance-favorites", "set"] as const
+
+function withInstanceFavorite(
+  favorites: ReadonlyArray<InstanceFavorite>,
+  favorite: InstanceFavorite,
+  starred: boolean
+): Array<InstanceFavorite> {
+  const key = instanceFavoriteKey(favorite)
+  const rest = favorites.filter(
+    (candidate) => instanceFavoriteKey(candidate) !== key
+  )
+  return starred ? [...rest, favorite] : rest
+}
+
+export function setInstanceFavoriteMutationOptions(
+  queryClient: QueryClient,
+  onFailure: (error: Error) => void
+) {
+  const { queryKey } = instanceFavoritesQueryOptions()
+  return mutationOptions({
+    mutationKey: setInstanceFavoriteMutationKey,
+    mutationFn: (input: { favorite: InstanceFavorite; starred: boolean }) =>
+      setInstanceFavorite({ data: input }),
+    onMutate: async ({ favorite, starred }) => {
+      await queryClient.cancelQueries({ queryKey })
+      const key = instanceFavoriteKey(favorite)
+      const wasStarred =
+        queryClient
+          .getQueryData(queryKey)
+          ?.some((candidate) => instanceFavoriteKey(candidate) === key) ?? false
+      queryClient.setQueryData(queryKey, (current = []) =>
+        withInstanceFavorite(current, favorite, starred)
+      )
+      return { wasStarred }
+    },
+    onError: (error, { favorite }, context) => {
+      // Undo only this favorite; other toggles may have landed meanwhile.
+      if (context) {
+        queryClient.setQueryData(queryKey, (current = []) =>
+          withInstanceFavorite(current, favorite, context.wasStarred)
+        )
+      }
+      onFailure(error)
+    },
+    onSettled: async () => {
+      // Reconcile once the last overlapping toggle settles, so an earlier
+      // refetch can't overwrite a later optimistic change.
+      const pending = queryClient.isMutating({
+        mutationKey: setInstanceFavoriteMutationKey,
+      })
+      if (pending === 1) await queryClient.invalidateQueries({ queryKey })
+    },
   })
 }
 

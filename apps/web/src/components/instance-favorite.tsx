@@ -11,8 +11,10 @@ import {
   instanceFavoriteKey,
   type InstanceFavorite,
 } from "@/lib/instance-favorites"
-import { instanceFavoritesQueryOptions } from "@/lib/query-options"
-import { setInstanceFavorite } from "@/server/instance-favorites"
+import {
+  instanceFavoritesQueryOptions,
+  setInstanceFavoriteMutationOptions,
+} from "@/lib/query-options"
 
 const emptyFavoriteKeys: ReadonlySet<string> = new Set()
 
@@ -47,30 +49,14 @@ export function useIsInstanceFavorite(favorite: InstanceFavorite): boolean {
 
 export function useToggleInstanceFavorite() {
   const queryClient = useQueryClient()
-  const { queryKey } = instanceFavoritesQueryOptions()
-  return useMutation({
-    mutationFn: (input: { favorite: InstanceFavorite; starred: boolean }) =>
-      setInstanceFavorite({ data: input }),
-    onMutate: async ({ favorite, starred }) => {
-      await queryClient.cancelQueries({ queryKey })
-      const previous = queryClient.getQueryData(queryKey)
-      const key = instanceFavoriteKey(favorite)
-      queryClient.setQueryData(queryKey, (current = []) => {
-        const rest = current.filter(
-          (candidate) => instanceFavoriteKey(candidate) !== key
-        )
-        return starred ? [...rest, favorite] : rest
-      })
-      return { previous }
-    },
-    onError: (error, _input, context) => {
-      queryClient.setQueryData(queryKey, context?.previous)
+  return useMutation(
+    setInstanceFavoriteMutationOptions(queryClient, (error) =>
       showToast({
         message: `Could not update favorites: ${error.message}`,
         type: "error",
       })
-    },
-  })
+    )
+  )
 }
 
 /** A yellow star sized to the surrounding text, shown only for favorites. */
