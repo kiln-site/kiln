@@ -74,8 +74,12 @@ import {
 } from "@/components/data-table"
 import { CopyIdentifierMenuItem } from "@/components/copy-identifier-menu-item"
 import {
+  FavoritesOnlyButton,
+  FavoritesOnlyEmptyState,
   InstanceFavoriteMenuItem,
   InstanceFavoriteToggle,
+  useFavoritesOnly,
+  useFavoritesOnlySource,
 } from "@/components/instance-favorite"
 import { DataTable } from "@/components/data-table-view"
 import {
@@ -89,6 +93,7 @@ import {
   InstancePickerContent,
   type InstancePickerItem,
 } from "@/components/instance-picker"
+import type { InstanceFavorite } from "@/lib/instance-favorites"
 import { grantHasPermission } from "@/lib/permissions"
 import type { AccessPermission } from "@/lib/permissions"
 import {
@@ -284,6 +289,7 @@ const DatabaseToolbar = React.memo(function DatabaseToolbar({
           </Button>
         ) : null
       }
+      controls={<FavoritesOnlyButton table="databases" />}
       leading={<DatabaseSyncButton relayErrors={relayErrors} />}
       search={{
         ariaLabel: "Search databases",
@@ -401,6 +407,13 @@ const DatabaseTable = React.memo(function DatabaseTable({
       ),
     [source.rows]
   )
+  const [favoritesOnly] = useFavoritesOnly("databases")
+  const visibleSource = useFavoritesOnlySource(
+    source,
+    favoritesOnly,
+    databaseFavorite
+  )
+  const favoritesFiltered = favoritesOnly && source.rows.length > 0
   const [initialTableState] = React.useState(() => ({
     sorting: [{ desc: false, id: "database" }],
   }))
@@ -551,15 +564,23 @@ const DatabaseTable = React.memo(function DatabaseTable({
         />
       }
       definition={definition}
-      emptyState={({ searchActive }) => (
-        <EmptyDatabaseTable
-          canCreate={canCreate}
-          searchActive={searchActive}
-          onCreate={onCreate}
-        />
-      )}
+      emptyState={({ searchActive }) =>
+        favoritesFiltered ? (
+          <FavoritesOnlyEmptyState
+            icon={<Database className="size-6 text-muted-foreground/45" />}
+            searchActive={searchActive}
+            table="databases"
+          />
+        ) : (
+          <EmptyDatabaseTable
+            canCreate={canCreate}
+            searchActive={searchActive}
+            onCreate={onCreate}
+          />
+        )
+      }
       searchStore={searchStore}
-      source={source}
+      source={visibleSource}
     />
   )
 })
@@ -1429,6 +1450,10 @@ function EmptyDatabaseTable({
 
 function databaseRowKey(database: ManagedDatabase): string {
   return `${database.relayId}:${database.id}`
+}
+
+function databaseFavorite(database: ManagedDatabase): InstanceFavorite {
+  return { id: database.id, kind: "database", relayId: database.relayId }
 }
 
 function engineLabel(engine: DatabaseEngine): string {

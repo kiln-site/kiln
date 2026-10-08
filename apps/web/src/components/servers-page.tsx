@@ -41,8 +41,12 @@ import {
 import type { AddServerDialogStore } from "@/components/add-server-dialog"
 import { CopyIdentifierMenuItem } from "@/components/copy-identifier-menu-item"
 import {
+  FavoritesOnlyButton,
+  FavoritesOnlyEmptyState,
   InstanceFavoriteMenuItem,
   InstanceFavoriteToggle,
+  useFavoritesOnly,
+  useFavoritesOnlySource,
 } from "@/components/instance-favorite"
 import {
   DataTableActionGroup,
@@ -82,6 +86,7 @@ import {
   useLiveDataTableSource,
   type DataTableSource,
 } from "@/lib/data-table-source"
+import type { InstanceFavorite } from "@/lib/instance-favorites"
 import { grantHasPermission } from "@/lib/permissions"
 import { selectRelayConfigured } from "@/lib/relay-selectors"
 import type { ServerListInstance } from "@/lib/relay-selectors"
@@ -188,6 +193,7 @@ export const ServersPage = React.memo(function ServersPage({
                 />
               </>
             }
+            controls={<FavoritesOnlyButton table="servers" />}
             leading={<ServerSyncButton disabled={!relayConfigured} />}
             search={{
               ariaLabel: "Search servers",
@@ -429,6 +435,13 @@ const ServerDataTable = React.memo(function ServerDataTable({
       ),
     [source.rows]
   )
+  const [favoritesOnly] = useFavoritesOnly("servers")
+  const visibleSource = useFavoritesOnlySource(
+    source,
+    favoritesOnly,
+    serverTableItemFavorite
+  )
+  const favoritesFiltered = favoritesOnly && source.rows.length > 0
   const [initialTableState] = React.useState(() => ({
     sorting: [{ desc: false, id: "server" }],
   }))
@@ -599,15 +612,23 @@ const ServerDataTable = React.memo(function ServerDataTable({
         />
       }
       definition={definition}
-      emptyState={({ searchActive }) => (
-        <EmptyServerTable
-          canProvision={canProvision}
-          dialogStore={dialogStore}
-          searchActive={searchActive}
-        />
-      )}
+      emptyState={({ searchActive }) =>
+        favoritesFiltered ? (
+          <FavoritesOnlyEmptyState
+            icon={<Server className="size-6 text-muted-foreground/45" />}
+            searchActive={searchActive}
+            table="servers"
+          />
+        ) : (
+          <EmptyServerTable
+            canProvision={canProvision}
+            dialogStore={dialogStore}
+            searchActive={searchActive}
+          />
+        )
+      }
       searchStore={searchStore}
-      source={source}
+      source={visibleSource}
     />
   )
 })
@@ -824,6 +845,12 @@ function serverRowKey(server: ServerListInstance): string {
 
 function serverTableItemKey(item: ServerTableItem): string {
   return serverRowKey(item.server)
+}
+
+function serverTableItemFavorite({
+  server,
+}: ServerTableItem): InstanceFavorite {
+  return { id: server.id, kind: "server", relayId: server.relayId }
 }
 
 function createServerTableItems(

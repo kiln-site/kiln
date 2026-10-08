@@ -74,8 +74,12 @@ import {
 import { RelayToastTitle } from "@/components/relay-toast-title"
 import { CopyIdentifierMenuItem } from "@/components/copy-identifier-menu-item"
 import {
+  FavoritesOnlyButton,
+  FavoritesOnlyEmptyState,
   InstanceFavoriteMenuItem,
   InstanceFavoriteToggle,
+  useFavoritesOnly,
+  useFavoritesOnlySource,
 } from "@/components/instance-favorite"
 import {
   DataTableActionGroup,
@@ -106,6 +110,7 @@ import {
 } from "@/lib/release-version"
 import type { PublicKilnRelease } from "@/effect/github-releases"
 import { useKilnGitRepository } from "@/lib/git-repository"
+import type { InstanceFavorite } from "@/lib/instance-favorites"
 import type { PersistedRelay } from "@/lib/relay-registry"
 import {
   createDataTableColumnHelper,
@@ -312,6 +317,7 @@ const RelayToolbar = React.memo(function RelayToolbar({
           <RelayAddButton onAdd={onAdd} />
         </>
       }
+      controls={<FavoritesOnlyButton table="relays" />}
       leading={<RelaySyncButton />}
       search={{
         ariaLabel: "Search relays",
@@ -569,6 +575,13 @@ function RelayTable({
       ),
     [source.rows]
   )
+  const [favoritesOnly] = useFavoritesOnly("relays")
+  const visibleSource = useFavoritesOnlySource(
+    source,
+    favoritesOnly,
+    relayFavorite
+  )
+  const favoritesFiltered = favoritesOnly && source.rows.length > 0
   const [initialTableState] = React.useState(() => ({
     sorting: [{ desc: false, id: "relay" }],
   }))
@@ -774,11 +787,19 @@ function RelayTable({
         />
       }
       definition={definition}
-      emptyState={({ searchActive }) => (
-        <EmptyRelayTable searchActive={searchActive} onAdd={onAdd} />
-      )}
+      emptyState={({ searchActive }) =>
+        favoritesFiltered ? (
+          <FavoritesOnlyEmptyState
+            icon={<ServerCog className="size-6 text-muted-foreground/45" />}
+            searchActive={searchActive}
+            table="relays"
+          />
+        ) : (
+          <EmptyRelayTable searchActive={searchActive} onAdd={onAdd} />
+        )
+      }
       searchStore={searchStore}
-      source={source}
+      source={visibleSource}
     />
   )
 }
@@ -1875,6 +1896,10 @@ function selectRelayUpdateSummary(overview: UpdateOverview): {
     reportedVersions,
     releases: overview.releases,
   }
+}
+
+function relayFavorite(relay: RelayTableItem): InstanceFavorite {
+  return { id: relay.id, kind: "relay", relayId: relay.id }
 }
 
 function relayRowKey(relay: RelayTableItem): string {
