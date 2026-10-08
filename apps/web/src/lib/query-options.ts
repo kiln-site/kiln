@@ -544,7 +544,9 @@ export function kilnReleaseNamesQueryOptions() {
     queryKey: queryKeys.releaseNames,
     queryFn: () => getKilnReleaseNames(),
     retry: false,
-    staleTime: 10 * 60_000,
+    // Hearth caches the GitHub lookup, so a short client window only lets a
+    // fallback list recover once the server's retry cooldown passes.
+    staleTime: 60_000,
   })
 }
 
