@@ -49,6 +49,7 @@ import { Input } from "@workspace/ui/components/input"
 import {
   DropdownMenu,
   DropdownMenuContent,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@workspace/ui/components/dropdown-menu"
 import {
@@ -72,6 +73,10 @@ import {
 
 import { RelayToastTitle } from "@/components/relay-toast-title"
 import { CopyIdentifierMenuItem } from "@/components/copy-identifier-menu-item"
+import {
+  InstanceFavoriteMenuItem,
+  InstanceFavoriteToggle,
+} from "@/components/instance-favorite"
 import {
   DataTableActionGroup,
   DataTableEmptyState,
@@ -592,6 +597,23 @@ function RelayTable({
           ),
         }
       ),
+      relayTableColumnHelper.display({
+        id: "favorite",
+        header: () => <span className="sr-only">Favorite</span>,
+        enableSorting: false,
+        cell: ({ row }) => (
+          <InstanceFavoriteToggle
+            id={row.original.id}
+            kind="relay"
+            name={row.original.name}
+            relayId={row.original.id}
+          />
+        ),
+        meta: dataTableColumnMeta(
+          { width: { base: "2.75rem" } },
+          { cellClassName: "px-0.5", headerClassName: "px-0.5" }
+        ),
+      }),
       relayTableColumnHelper.accessor((relay) => relay.name, {
         id: "relay",
         header: "Relay",
@@ -620,6 +642,7 @@ function RelayTable({
                 }
                 metaClassName="font-mono"
                 name={relay.name}
+                showFavorite={false}
               />
               <PendingResourceInvitationBadge
                 resourceType="relay"
@@ -784,6 +807,10 @@ const RelayActions = React.memo(function RelayActions({
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end" className="min-w-44">
+          <InstanceFavoriteMenuItem
+            favorite={{ id: relay.id, kind: "relay", relayId: relay.id }}
+          />
+          <DropdownMenuSeparator />
           <CopyIdentifierMenuItem label="Relay ID" value={relay.id} />
         </DropdownMenuContent>
       </DropdownMenu>

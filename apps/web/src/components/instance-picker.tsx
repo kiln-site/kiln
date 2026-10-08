@@ -27,7 +27,9 @@ import {
 import { Input } from "@workspace/ui/components/input"
 import { cn } from "@workspace/ui/lib/utils"
 
+import { useInstanceFavoriteKeys } from "@/components/instance-favorite"
 import { InstanceName } from "@/components/instance-name"
+import { instanceFavoriteKey } from "@/lib/instance-favorites"
 import {
   availableInstancePickerFilters,
   defaultInstancePickerFilterIdsSnapshot,
@@ -98,7 +100,7 @@ export const InstancePickerContent = React.memo(function InstancePickerContent({
   emptyMessage = "No instances found",
   includeAllGroup = false,
   includeKindGroups = true,
-  items,
+  items: sourceItems,
   multiple = false,
   onNavigate,
   onSelect,
@@ -113,6 +115,18 @@ export const InstancePickerContent = React.memo(function InstancePickerContent({
   const [search, setSearch] = React.useState("")
   const [activeIndex, setActiveIndex] = React.useState(-1)
   const { filterIds, setFilterIds } = useInstancePickerFilterIds()
+  const favoriteKeys = useInstanceFavoriteKeys()
+  const items = React.useMemo(
+    () =>
+      favoriteKeys.size === 0
+        ? sourceItems
+        : sourceItems.map((item) =>
+            favoriteKeys.has(instanceFavoriteKey(item.identity))
+              ? { ...item, favorite: true }
+              : item
+          ),
+    [favoriteKeys, sourceItems]
+  )
   const availableFilters = React.useMemo(
     () => availableInstancePickerFilters(items),
     [items]
@@ -130,6 +144,8 @@ export const InstancePickerContent = React.memo(function InstancePickerContent({
     [activeFilters]
   )
   const favoritesOnly = activeFilters.includes(favoriteInstancePickerFilter)
+  const noFavorites =
+    favoritesOnly && !items.some((item) => item.favorite === true)
   const showKind = typeFilters.length > 0
   const query = search.trim().toLocaleLowerCase()
   const visibleItems = React.useMemo(() => {
@@ -282,7 +298,10 @@ export const InstancePickerContent = React.memo(function InstancePickerContent({
           onClick={toggleFavorites}
         >
           <Star
-            className={cn("size-3.5", favoritesOnly && "fill-current")}
+            className={cn(
+              "size-3.5",
+              favoritesOnly && "fill-amber-400 text-amber-400"
+            )}
             aria-hidden="true"
           />
         </InstancePickerToolButton>
@@ -356,11 +375,11 @@ export const InstancePickerContent = React.memo(function InstancePickerContent({
         </div>
       ) : (
         <InstancePickerEmptyState
-          favoritesOnly={favoritesOnly}
+          favoritesOnly={noFavorites}
           filtered={activeFilters.length > 0 && items.length > 0}
           message={items.length === 0 ? emptyMessage : undefined}
           searching={query.length > 0}
-          onClearFilters={favoritesOnly ? toggleFavorites : clearFilters}
+          onClearFilters={noFavorites ? toggleFavorites : clearFilters}
         />
       )}
       {viewAll ? (

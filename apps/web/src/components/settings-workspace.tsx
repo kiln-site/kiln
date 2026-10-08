@@ -37,6 +37,7 @@ import { showToast } from "@workspace/ui/components/sonner"
 import { cn } from "@workspace/ui/lib/utils"
 import { MAXIMUM_INSTANCE_NAME_LENGTH } from "@workspace/contracts"
 
+import { InstanceFavoriteButton } from "@/components/instance-favorite"
 import { ReadOnlyCodeViewer } from "@/components/read-only-code-viewer"
 import { ServerDeleteDialog } from "@/components/server-delete-dialog"
 import { hostPortAddress } from "@/lib/domain-address"
@@ -112,16 +113,23 @@ export function SettingsWorkspace({
                 icon={<Fingerprint />}
                 title="Identity"
                 action={
-                  <Badge
-                    variant="outline"
-                    className={cn(
-                      "type-meta font-mono",
-                      instance.game.toLowerCase() === "minecraft" &&
-                        "border-emerald-500/35 bg-emerald-500/12 text-emerald-300"
-                    )}
-                  >
-                    {instance.game}
-                  </Badge>
+                  <div className="flex items-center gap-2">
+                    <Badge
+                      variant="outline"
+                      className={cn(
+                        "type-meta font-mono",
+                        instance.game.toLowerCase() === "minecraft" &&
+                          "border-emerald-500/35 bg-emerald-500/12 text-emerald-300"
+                      )}
+                    >
+                      {instance.game}
+                    </Badge>
+                    <InstanceFavoriteButton
+                      id={instance.id}
+                      kind="server"
+                      relayId={instance.relayId}
+                    />
+                  </div>
                 }
               />
               <InstanceNameForm

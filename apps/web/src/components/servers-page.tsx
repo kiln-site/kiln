@@ -24,6 +24,7 @@ import { Button } from "@workspace/ui/components/button"
 import {
   DropdownMenu,
   DropdownMenuContent,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@workspace/ui/components/dropdown-menu"
 import {
@@ -39,6 +40,10 @@ import {
 } from "@/components/add-server-dialog"
 import type { AddServerDialogStore } from "@/components/add-server-dialog"
 import { CopyIdentifierMenuItem } from "@/components/copy-identifier-menu-item"
+import {
+  InstanceFavoriteMenuItem,
+  InstanceFavoriteToggle,
+} from "@/components/instance-favorite"
 import {
   DataTableActionGroup,
   DataTableEmptyState,
@@ -446,6 +451,23 @@ const ServerDataTable = React.memo(function ServerDataTable({
           ),
         }
       ),
+      serverTableColumnHelper.display({
+        id: "favorite",
+        header: () => <span className="sr-only">Favorite</span>,
+        enableSorting: false,
+        cell: ({ row }) => (
+          <InstanceFavoriteToggle
+            id={row.original.server.id}
+            kind="server"
+            name={row.original.server.name}
+            relayId={row.original.server.relayId}
+          />
+        ),
+        meta: dataTableColumnMeta(
+          { width: { base: "2.75rem" } },
+          { cellClassName: "px-0.5", headerClassName: "px-0.5" }
+        ),
+      }),
       serverTableColumnHelper.accessor(({ server }) => server.name, {
         id: "server",
         header: "Server",
@@ -475,6 +497,7 @@ const ServerDataTable = React.memo(function ServerDataTable({
                   nameClassName="transition-colors group-hover/server-link:text-primary"
                   meta={`${server.game} · ${server.implementation}`}
                   metaClassName="font-mono"
+                  showFavorite={false}
                 />
               </Link>
               <PendingResourceInvitationBadge
@@ -656,6 +679,14 @@ const ServerActions = React.memo(function ServerActions({
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end" className="min-w-44">
+          <InstanceFavoriteMenuItem
+            favorite={{
+              id: server.id,
+              kind: "server",
+              relayId: server.relayId,
+            }}
+          />
+          <DropdownMenuSeparator />
           <CopyIdentifierMenuItem label="Server ID" value={server.id} />
           <CopyIdentifierMenuItem label="Relay ID" value={server.relayId} />
         </DropdownMenuContent>

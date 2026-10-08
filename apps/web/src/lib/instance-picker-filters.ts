@@ -6,7 +6,7 @@ export type InstancePickerKind = InstanceNameInstance["kind"]
 
 export interface InstancePickerItem {
   disabled?: boolean
-  /** Reserved for user favorites; nothing sets it yet. */
+  /** Set by the picker from the user's favorites. */
   favorite?: boolean
   identity: InstanceNameInstance
   key: string

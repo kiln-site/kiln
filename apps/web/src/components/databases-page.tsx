@@ -73,6 +73,10 @@ import {
   DataTableTextCell,
 } from "@/components/data-table"
 import { CopyIdentifierMenuItem } from "@/components/copy-identifier-menu-item"
+import {
+  InstanceFavoriteMenuItem,
+  InstanceFavoriteToggle,
+} from "@/components/instance-favorite"
 import { DataTable } from "@/components/data-table-view"
 import {
   DataTableToolbar,
@@ -430,6 +434,23 @@ const DatabaseTable = React.memo(function DatabaseTable({
           ),
         }
       ),
+      databaseTableColumnHelper.display({
+        id: "favorite",
+        header: () => <span className="sr-only">Favorite</span>,
+        enableSorting: false,
+        cell: ({ row }) => (
+          <InstanceFavoriteToggle
+            id={row.original.id}
+            kind="database"
+            name={row.original.name}
+            relayId={row.original.relayId}
+          />
+        ),
+        meta: dataTableColumnMeta(
+          { width: { base: "2.75rem" } },
+          { cellClassName: "px-0.5", headerClassName: "px-0.5" }
+        ),
+      }),
       databaseTableColumnHelper.accessor((database) => database.name, {
         id: "database",
         header: "Database",
@@ -451,6 +472,7 @@ const DatabaseTable = React.memo(function DatabaseTable({
                 name={database.name}
                 meta={database.shortId}
                 metaClassName="font-mono"
+                showFavorite={false}
               />
               <PendingResourceInvitationBadge
                 resourceType="database"
@@ -652,6 +674,14 @@ const DatabaseActions = React.memo(function DatabaseActions({
           <TooltipContent side="bottom">More actions</TooltipContent>
         </Tooltip>
         <DropdownMenuContent align="end" className="min-w-44">
+          <InstanceFavoriteMenuItem
+            favorite={{
+              id: database.id,
+              kind: "database",
+              relayId: database.relayId,
+            }}
+          />
+          <DropdownMenuSeparator />
           {canPower ? (
             <>
               <DropdownMenuItem

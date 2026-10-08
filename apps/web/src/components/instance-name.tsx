@@ -15,6 +15,7 @@ import {
   type InstanceNameInstance,
   type InstanceStatusPresentation,
 } from "@/components/instance-name-presentation"
+import { InstanceFavoriteStar } from "@/components/instance-favorite"
 import { managedDatabasesCollectionOptions } from "@/lib/collections/managed-databases"
 import { relayInstancesCollectionOptions } from "@/lib/collections/relay-instances"
 import { relayNodesCollectionOptions } from "@/lib/collections/relay-nodes"
@@ -34,6 +35,8 @@ interface InstanceNameProps {
   name: string
   nameAccessory?: React.ReactNode
   nameClassName?: string
+  /** Shows a star after the name when the user favorited this instance. */
+  showFavorite?: boolean
   showStatus?: boolean
   statusClassName?: string
   textClassName?: string
@@ -247,6 +250,7 @@ const InstanceNameView = React.memo(function InstanceNameView({
   name,
   nameAccessory,
   nameClassName,
+  showFavorite,
   status,
   statusClassName,
   textClassName,
@@ -281,6 +285,9 @@ const InstanceNameView = React.memo(function InstanceNameView({
         ) : null}
       </span>
       <InstanceText
+        favoriteId={showFavorite === false ? undefined : instance.id}
+        favoriteKind={instance.kind}
+        favoriteRelayId={instance.relayId}
         meta={meta}
         metaClassName={metaClassName}
         name={liveName ?? name}
@@ -293,13 +300,20 @@ const InstanceNameView = React.memo(function InstanceNameView({
 })
 
 const InstanceText = React.memo(function InstanceText({
+  favoriteId,
+  favoriteKind,
+  favoriteRelayId,
   meta,
   metaClassName,
   name,
   nameAccessory,
   nameClassName,
   textClassName,
-}: Pick<
+}: {
+  favoriteId?: string
+  favoriteKind: InstanceNameInstance["kind"]
+  favoriteRelayId: string
+} & Pick<
   InstanceNameProps,
   | "meta"
   | "metaClassName"
@@ -317,6 +331,13 @@ const InstanceText = React.memo(function InstanceText({
         )}
       >
         <span className="truncate">{name}</span>
+        {favoriteId ? (
+          <InstanceFavoriteStar
+            id={favoriteId}
+            kind={favoriteKind}
+            relayId={favoriteRelayId}
+          />
+        ) : null}
         {nameAccessory}
       </span>
       {meta ? (
@@ -437,6 +458,7 @@ function instanceNamePropsEqual(
     previous.name === next.name &&
     previous.nameAccessory === next.nameAccessory &&
     previous.nameClassName === next.nameClassName &&
+    previous.showFavorite === next.showFavorite &&
     previous.showStatus === next.showStatus &&
     previous.statusClassName === next.statusClassName &&
     previous.textClassName === next.textClassName &&
