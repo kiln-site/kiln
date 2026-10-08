@@ -128,7 +128,7 @@ export function openDatabaseTerminalStream(input: {
       )
     )
     if (closed) return
-    send({ ...session, type: "attached" })
+    send({ ...session, type: "attached", user: credential.username })
     attached = true
     for (const output of early.splice(0)) deliver(output)
     timers.push(

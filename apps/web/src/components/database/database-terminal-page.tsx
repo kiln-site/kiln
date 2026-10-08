@@ -1,6 +1,7 @@
 import * as React from "react"
 import { Play } from "lucide-react"
 
+import { DatabaseCredentialsPopover } from "@/components/database/database-credentials-popover"
 import { useDatabaseWorkspace } from "@/components/database/database-workspace-context"
 
 const DatabaseTerminal = React.lazy(async () => {
@@ -35,6 +36,12 @@ export function DatabaseTerminalPage() {
         key={`${database.relayId}:${database.id}`}
         databaseId={database.id}
         relayId={database.relayId}
+        toolbarActions={
+          database.hasCredentials &&
+          database.permissions.includes("database.credentials.read") ? (
+            <DatabaseCredentialsPopover database={database} />
+          ) : null
+        }
       />
     </React.Suspense>
   )

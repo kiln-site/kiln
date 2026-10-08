@@ -5,8 +5,9 @@ import type {
 
 // One line of the database terminal stream (NDJSON) Hearth sends a page.
 export type DatabaseTerminalStreamRecord =
-  // First: the session as it is now. Output records continue after it.
-  | ({ type: "attached" } & RelayDatabaseTerminalAttached)
+  // First: the session as it is now, and the database user its client signed
+  // in as. Output records continue after it.
+  | ({ type: "attached"; user: string } & RelayDatabaseTerminalAttached)
   | { type: "output"; data: string; offset: number }
   // The session ended; the page offers a new one instead of reattaching.
   | { type: "ended"; ended: DatabaseTerminalEnd }

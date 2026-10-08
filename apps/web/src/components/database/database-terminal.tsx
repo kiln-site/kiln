@@ -17,6 +17,7 @@ import {
   Search,
   TerminalSquare,
   TriangleAlert,
+  User,
   X,
 } from "lucide-react"
 
@@ -61,6 +62,12 @@ type SessionNotice =
   | { kind: "previous"; ended: DatabaseTerminalEnd }
   | { kind: "relay-restarted" }
 
+// Who the client is signed in as, and since when, for the toolbar.
+interface TerminalSessionInfo {
+  startedAt: string
+  user: string
+}
+
 const INPUT_FLUSH_MS = 8
 const RESIZE_DEBOUNCE_MS = 150
 const RECONNECT_MAX_DELAY_MS = 5_000
@@ -71,15 +78,18 @@ const NOTICE_VISIBLE_MS = 10_000
 export function DatabaseTerminal({
   databaseId,
   relayId,
+  toolbarActions,
 }: {
   databaseId: string
   relayId: string
+  // Extra toolbar buttons from the page, before the terminal's own.
+  toolbarActions?: React.ReactNode
 }) {
   const [status, setStatus] = React.useState<TerminalStatus>({
     kind: "connecting",
   })
   const [notice, setNotice] = React.useState<SessionNotice | null>(null)
-  const [startedAt, setStartedAt] = React.useState<string | null>(null)
+  const [session, setSession] = React.useState<TerminalSessionInfo | null>(null)
   const [hasSelection, setHasSelection] = React.useState(false)
   const [atBottom, setAtBottom] = React.useState(true)
   const surface = React.useRef<TerminalSurfaceHandle>(null)
@@ -88,7 +98,7 @@ export function DatabaseTerminal({
       onNotice: setNotice,
       onScrolledToBottom: setAtBottom,
       onSelection: setHasSelection,
-      onStartedAt: setStartedAt,
+      onSession: setSession,
       onStatus: setStatus,
     }),
     []
@@ -111,12 +121,17 @@ export function DatabaseTerminal({
     <section className="flex min-h-0 min-w-0 flex-1 flex-col bg-card">
       <div className="flex min-h-14 shrink-0 flex-wrap items-center gap-2 border-b px-3 py-2.5 sm:px-4">
         <TerminalSearch surface={surface} />
-        {startedAt ? (
-          <span className="type-code shrink-0 text-muted-foreground">
-            since {formatStartedAt(startedAt)}
+        {session ? (
+          <span className="type-code flex min-w-0 items-center gap-1.5 text-muted-foreground">
+            <User className="size-3.5 shrink-0" />
+            <span className="truncate text-foreground">{session.user}</span>
+            <span className="shrink-0">
+              · since {formatStartedAt(session.startedAt)}
+            </span>
           </span>
         ) : null}
         <div className="ml-auto flex items-center gap-1.5">
+          {toolbarActions}
           <WorkspaceToolbarTooltip content="Copy selection">
             <Button
               variant="ghost"
@@ -435,7 +450,7 @@ interface TerminalSurfaceEvents {
   onNotice: (notice: SessionNotice | null) => void
   onScrolledToBottom: (atBottom: boolean) => void
   onSelection: (hasSelection: boolean) => void
-  onStartedAt: (startedAt: string) => void
+  onSession: (session: TerminalSessionInfo) => void
   onStatus: (status: TerminalStatus) => void
 }
 
@@ -564,7 +579,7 @@ const TerminalSurface = React.memo(
     }, [databaseId, events, relayId])
 
     return (
-      <div className="absolute inset-0 overflow-hidden bg-background/40 py-2 pl-3 text-foreground">
+      <div className="absolute inset-0 overflow-hidden bg-black py-3 pr-2 pl-4 text-foreground">
         <div ref={containerRef} className="size-full" />
       </div>
     )
@@ -759,7 +774,10 @@ class TerminalConnection {
         this.#offset = record.offset
         this.#sessionId = record.sessionId
         this.#live = true
-        this.#events.onStartedAt(record.startedAt)
+        this.#events.onSession({
+          startedAt: record.startedAt,
+          user: record.user,
+        })
         this.#events.onStatus({ kind: "live" })
         if (
           record.cols !== this.#terminal.cols ||
