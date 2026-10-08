@@ -205,45 +205,102 @@ export const relayDatabaseDataReadSchema = relayDatabaseExportSchema.extend({
   request: databaseReadRequestSchema,
 })
 
-const databaseTerminalSessionIdSchema = z
-  .string()
-  .regex(/^[A-Za-z0-9_-]{22,64}$/u)
+// Database terminals live on the Relay: one session per person per database,
+// kept while any Hearth viewer is attached and for an idle timeout after.
+const databaseTerminalIdSchema = z.string().regex(/^[A-Za-z0-9_.-]{22,96}$/u)
 const databaseTerminalSizeShape = {
   cols: z.number().int().min(10).max(500),
   rows: z.number().int().min(4).max(300),
 }
 
-export const relayDatabaseTerminalOpenSchema = relayDatabaseExportSchema.extend(
-  databaseTerminalSizeShape
-)
+export const databaseTerminalEndReasonSchema = z.enum([
+  // The client exited, for example after \q or exit.
+  "exited",
+  // The database container stopped or restarted underneath the client.
+  "database-stopped",
+  // No viewer was attached for the idle timeout.
+  "timed-out",
+  // Someone asked for a fresh session.
+  "restarted",
+  // The client could not be started or its connection failed.
+  "failed",
+])
 
-export const relayDatabaseTerminalSessionSchema = z
-  .object({ sessionId: databaseTerminalSessionIdSchema })
+export const databaseTerminalEndSchema = z
+  .object({
+    at: z.string().datetime(),
+    reason: databaseTerminalEndReasonSchema,
+  })
   .strict()
 
-// Output after `cursor`, a byte offset into the session's output.
-export const relayDatabaseTerminalReadSchema =
-  relayDatabaseTerminalSessionSchema.extend({
-    cursor: z.number().int().nonnegative(),
+export const relayDatabaseTerminalAttachSchema = relayDatabaseExportSchema
+  .extend({
+    ...databaseTerminalSizeShape,
+    // Chosen by Hearth per viewer; output for it is pushed to Hearth.
+    attachmentId: databaseTerminalIdSchema,
+    idleTimeoutMs: z
+      .number()
+      .int()
+      .min(60_000)
+      .max(24 * 60 * 60_000),
+    // End the current session and start a fresh one.
+    restart: z.boolean(),
   })
+  .strict()
 
-export const relayDatabaseTerminalWriteSchema =
-  relayDatabaseTerminalSessionSchema.extend({
+export const relayDatabaseTerminalAttachedSchema = z
+  .object({
+    cols: z.number().int(),
+    // The session's output so far, as the screen and scrollback a terminal
+    // shows, ready to write into an empty terminal.
+    snapshot: z.string(),
+    // Byte offset of the output the snapshot covers; pushes continue here.
+    offset: z.number().int().nonnegative(),
+    // How the person's session before this one ended, if the Relay knows.
+    previous: databaseTerminalEndSchema.nullable(),
+    rows: z.number().int(),
+    sessionId: databaseTerminalIdSchema,
+    startedAt: z.string().datetime(),
+  })
+  .strict()
+
+export const relayDatabaseTerminalHeartbeatSchema = z
+  .object({ attachmentIds: z.array(databaseTerminalIdSchema).max(1_000) })
+  .strict()
+
+export const relayDatabaseTerminalDetachSchema = z
+  .object({ attachmentId: databaseTerminalIdSchema })
+  .strict()
+
+const databaseTerminalSessionShape = {
+  databaseId: databaseIdSchema,
+  sessionId: databaseTerminalIdSchema,
+}
+
+export const relayDatabaseTerminalWriteSchema = z
+  .object({
+    ...databaseTerminalSessionShape,
     data: z
       .string()
       .min(1)
       .max(64 * 1024),
   })
+  .strict()
 
-export const relayDatabaseTerminalResizeSchema =
-  relayDatabaseTerminalSessionSchema.extend(databaseTerminalSizeShape)
+export const relayDatabaseTerminalResizeSchema = z
+  .object({ ...databaseTerminalSessionShape, ...databaseTerminalSizeShape })
+  .strict()
 
-export const relayDatabaseTerminalOutputSchema = z
+// Relay to Hearth: output for one attachment, in order. `ended` arrives with
+// the session's last output.
+export const hearthDatabaseTerminalOutputSchema = z
   .object({
-    closed: z.boolean(),
-    cursor: z.number().int().nonnegative(),
+    attachmentId: databaseTerminalIdSchema,
     // Raw terminal bytes, base64 encoded; chunks may split characters.
     data: z.string(),
+    ended: databaseTerminalEndSchema.nullable(),
+    offset: z.number().int().nonnegative(),
+    sessionId: databaseTerminalIdSchema,
   })
   .strict()
 
@@ -1599,11 +1656,18 @@ export type RelayDatabaseNetwork = z.infer<typeof relayDatabaseNetworkSchema>
 export type RelayDatabaseDump = z.infer<typeof relayDatabaseDumpSchema>
 export type RelayDatabaseExport = z.infer<typeof relayDatabaseExportSchema>
 export type RelayDatabaseDataRead = z.infer<typeof relayDatabaseDataReadSchema>
-export type RelayDatabaseTerminalOpen = z.infer<
-  typeof relayDatabaseTerminalOpenSchema
+export type DatabaseTerminalEnd = z.infer<typeof databaseTerminalEndSchema>
+export type DatabaseTerminalEndReason = z.infer<
+  typeof databaseTerminalEndReasonSchema
 >
-export type RelayDatabaseTerminalOutput = z.infer<
-  typeof relayDatabaseTerminalOutputSchema
+export type RelayDatabaseTerminalAttach = z.infer<
+  typeof relayDatabaseTerminalAttachSchema
+>
+export type RelayDatabaseTerminalAttached = z.infer<
+  typeof relayDatabaseTerminalAttachedSchema
+>
+export type HearthDatabaseTerminalOutput = z.infer<
+  typeof hearthDatabaseTerminalOutputSchema
 >
 export type RelayDatabaseDataWrite = z.infer<
   typeof relayDatabaseDataWriteSchema

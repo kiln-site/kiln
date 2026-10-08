@@ -2,20 +2,11 @@ import * as React from "react"
 import { Play } from "lucide-react"
 
 import { useDatabaseWorkspace } from "@/components/database/database-workspace-context"
-import type { ManagedDatabase } from "@/components/database/database-presentation"
 
 const DatabaseTerminal = React.lazy(async () => {
   const module = await import("@/components/database/database-terminal")
   return { default: module.DatabaseTerminal }
 })
-
-const terminalClients: Record<ManagedDatabase["engine"], string> = {
-  mariadb: "mariadb",
-  mysql: "mysql",
-  postgres: "psql",
-  redis: "redis-cli",
-  valkey: "valkey-cli",
-}
 
 export function DatabaseTerminalPage() {
   const { database } = useDatabaseWorkspace()
@@ -42,7 +33,6 @@ export function DatabaseTerminalPage() {
     <React.Suspense fallback={<div className="min-h-0 flex-1 bg-card" />}>
       <DatabaseTerminal
         key={`${database.relayId}:${database.id}`}
-        client={`${terminalClients[database.engine]} · ${database.databaseName}`}
         databaseId={database.id}
         relayId={database.relayId}
       />

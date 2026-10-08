@@ -2,255 +2,847 @@ import "@xterm/xterm/css/xterm.css"
 
 import * as React from "react"
 import { FitAddon } from "@xterm/addon-fit"
+import { SearchAddon } from "@xterm/addon-search"
 import { Terminal } from "@xterm/xterm"
+import type { DatabaseTerminalEnd } from "@workspace/contracts"
 import { Effect } from "effect"
-import { LoaderCircle, RotateCw, TerminalSquare } from "lucide-react"
+import {
+  ArrowDown,
+  ChevronDown,
+  ChevronUp,
+  Copy,
+  Info,
+  LoaderCircle,
+  RotateCcw,
+  Search,
+  TerminalSquare,
+  TriangleAlert,
+  X,
+} from "lucide-react"
 
 import { Button } from "@workspace/ui/components/button"
+import { Input } from "@workspace/ui/components/input"
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@workspace/ui/components/popover"
+import { showToast } from "@workspace/ui/components/sonner"
 
+import { OverlayNotice } from "@/components/overlay-notice"
+import { WorkspaceToolbarTooltip } from "@/components/workspace-toolbar-tooltip"
 import { ensuringPromise, forkPromise } from "@/effect/promise"
 import {
-  closeDatabaseTerminal,
-  openDatabaseTerminal,
-  readDatabaseTerminal,
+  databaseTerminalStreamUrl,
+  type DatabaseTerminalStreamRecord,
+} from "@/lib/database-terminal-stream"
+import {
   resizeDatabaseTerminal,
   writeDatabaseTerminal,
 } from "@/server/databases"
 
+// The person's terminal session lives on the Relay and outlives this page.
+// The page shows a recreation of it: a snapshot of the screen when it
+// attaches, then live output. Losing the page, Hearth, or the Relay
+// connection only pauses the view; the session keeps running until it ends or
+// sits unviewed past its idle timeout.
+
 type TerminalStatus =
   | { kind: "connecting" }
-  | { kind: "connected" }
-  | { kind: "ended" }
+  | { kind: "live" }
+  // The session keeps running; the page is reattaching.
+  | { kind: "reconnecting"; cause: "hearth" | "relay" }
+  | { kind: "ended"; ended: DatabaseTerminalEnd }
+  | { kind: "not-running" }
   | { kind: "failed"; message: string }
 
-// Keystrokes typed while a write is in flight go out together, in order.
+// Shown briefly over the terminal when a new session replaced an earlier one.
+type SessionNotice =
+  | { kind: "previous"; ended: DatabaseTerminalEnd }
+  | { kind: "relay-restarted" }
+
 const INPUT_FLUSH_MS = 8
 const RESIZE_DEBOUNCE_MS = 150
+const RECONNECT_MAX_DELAY_MS = 5_000
+
+// A session notice stays up this long unless dismissed sooner.
+const NOTICE_VISIBLE_MS = 10_000
 
 export function DatabaseTerminal({
-  client,
   databaseId,
   relayId,
 }: {
-  // The command-line client the session runs, for the toolbar.
-  client: string
   databaseId: string
   relayId: string
 }) {
-  // Reconnecting remounts the session with a fresh terminal.
-  const [attempt, setAttempt] = React.useState(0)
   const [status, setStatus] = React.useState<TerminalStatus>({
     kind: "connecting",
   })
-  const reconnect = React.useCallback(() => {
-    setStatus({ kind: "connecting" })
-    setAttempt((current) => current + 1)
+  const [notice, setNotice] = React.useState<SessionNotice | null>(null)
+  const [startedAt, setStartedAt] = React.useState<string | null>(null)
+  const [hasSelection, setHasSelection] = React.useState(false)
+  const [atBottom, setAtBottom] = React.useState(true)
+  const surface = React.useRef<TerminalSurfaceHandle>(null)
+  const events = React.useMemo<TerminalSurfaceEvents>(
+    () => ({
+      onNotice: setNotice,
+      onScrolledToBottom: setAtBottom,
+      onSelection: setHasSelection,
+      onStartedAt: setStartedAt,
+      onStatus: setStatus,
+    }),
+    []
+  )
+  const restart = React.useCallback(() => {
+    setNotice(null)
+    surface.current?.connect(true)
   }, [])
+  const reconnect = React.useCallback(() => {
+    setNotice(null)
+    surface.current?.connect(false)
+  }, [])
+  React.useEffect(() => {
+    if (!notice) return
+    const timer = window.setTimeout(() => setNotice(null), NOTICE_VISIBLE_MS)
+    return () => window.clearTimeout(timer)
+  }, [notice])
 
   return (
     <section className="flex min-h-0 min-w-0 flex-1 flex-col bg-card">
-      <div className="flex h-14 shrink-0 items-center gap-3 border-b px-3 md:px-4">
-        <TerminalSquare className="size-5 shrink-0 text-primary" />
-        <div className="min-w-0 flex-1">
-          <p className="truncate text-sm font-semibold">Terminal</p>
-          <p className="type-code truncate text-muted-foreground">{client}</p>
+      <div className="flex min-h-14 shrink-0 flex-wrap items-center gap-2 border-b px-3 py-2.5 sm:px-4">
+        <TerminalSearch surface={surface} />
+        {startedAt ? (
+          <span className="type-code shrink-0 text-muted-foreground">
+            since {formatStartedAt(startedAt)}
+          </span>
+        ) : null}
+        <div className="ml-auto flex items-center gap-1.5">
+          <WorkspaceToolbarTooltip content="Copy selection">
+            <Button
+              variant="ghost"
+              size="icon"
+              className="size-8"
+              aria-label="Copy selection"
+              disabled={!hasSelection}
+              onClick={() => surface.current?.copySelection()}
+            >
+              <Copy className="size-4" />
+            </Button>
+          </WorkspaceToolbarTooltip>
+          <RestartSessionButton
+            disabled={status.kind === "connecting"}
+            onRestart={restart}
+          />
         </div>
-        <TerminalStatusLabel status={status} />
-        {status.kind === "ended" || status.kind === "failed" ? (
-          <Button size="sm" variant="outline" onClick={reconnect}>
-            <RotateCw />
-            Reconnect
+      </div>
+      <div className="relative min-h-0 flex-1">
+        <TerminalSurface
+          ref={surface}
+          databaseId={databaseId}
+          events={events}
+          relayId={relayId}
+        />
+        {!atBottom && status.kind === "live" ? (
+          <Button
+            size="sm"
+            variant="secondary"
+            className="absolute right-4 bottom-4 z-10 gap-1.5 shadow-lg shadow-black/30"
+            onClick={() => surface.current?.scrollToBottom()}
+          >
+            <ArrowDown className="size-3.5" />
+            Jump to latest
           </Button>
         ) : null}
+        <TerminalNotice
+          notice={notice}
+          status={status}
+          onDismissNotice={() => setNotice(null)}
+        />
+        <TerminalOverlay
+          status={status}
+          onReconnect={reconnect}
+          onRestart={restart}
+        />
       </div>
-      {status.kind === "failed" ? (
-        <p className="border-b border-destructive/25 bg-destructive/6 px-4 py-2 text-xs text-destructive">
-          {status.message}
-        </p>
-      ) : null}
-      <TerminalSession
-        key={attempt}
-        databaseId={databaseId}
-        relayId={relayId}
-        onStatus={setStatus}
-      />
     </section>
   )
 }
 
-function TerminalStatusLabel({ status }: { status: TerminalStatus }) {
-  if (status.kind === "connecting") {
-    return (
-      <span className="type-meta flex items-center gap-1.5 text-muted-foreground">
-        <LoaderCircle className="size-3.5 animate-spin" />
-        Connecting
-      </span>
-    )
-  }
-  const [dot, label] =
-    status.kind === "connected"
-      ? ["bg-emerald-400", "Connected"]
-      : status.kind === "ended"
-        ? ["bg-muted-foreground", "Session ended"]
-        : ["bg-destructive", "Disconnected"]
+function TerminalSearch({
+  surface,
+}: {
+  surface: React.RefObject<TerminalSurfaceHandle | null>
+}) {
+  const [query, setQuery] = React.useState("")
   return (
-    <span className="type-meta flex items-center gap-1.5 text-muted-foreground">
-      <span className={`size-1.5 rounded-full ${dot}`} />
-      {label}
-    </span>
+    <div className="relative min-w-[12rem] flex-1 sm:max-w-sm">
+      <Search className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-muted-foreground" />
+      <Input
+        value={query}
+        placeholder="Search terminal"
+        aria-label="Search terminal"
+        className="h-9 border-border/80 bg-background pr-20 pl-8 text-base shadow-none sm:text-xs"
+        onChange={(event) => {
+          setQuery(event.target.value)
+          surface.current?.search(event.target.value, "next", true)
+        }}
+        onKeyDown={(event) => {
+          if (event.key === "Enter") {
+            event.preventDefault()
+            surface.current?.search(
+              query,
+              event.shiftKey ? "previous" : "next",
+              false
+            )
+          }
+          if (event.key === "Escape") {
+            setQuery("")
+            surface.current?.search("", "next", false)
+          }
+        }}
+      />
+      {query ? (
+        <div className="absolute top-1/2 right-1.5 flex -translate-y-1/2 items-center">
+          <button
+            type="button"
+            aria-label="Previous match"
+            className="grid size-6 place-items-center text-muted-foreground hover:text-foreground"
+            onClick={() => surface.current?.search(query, "previous", false)}
+          >
+            <ChevronUp className="size-3.5" />
+          </button>
+          <button
+            type="button"
+            aria-label="Next match"
+            className="grid size-6 place-items-center text-muted-foreground hover:text-foreground"
+            onClick={() => surface.current?.search(query, "next", false)}
+          >
+            <ChevronDown className="size-3.5" />
+          </button>
+          <button
+            type="button"
+            aria-label="Clear terminal search"
+            className="grid size-6 place-items-center text-muted-foreground hover:text-foreground"
+            onClick={() => {
+              setQuery("")
+              surface.current?.search("", "next", false)
+            }}
+          >
+            <X className="size-3.5" />
+          </button>
+        </div>
+      ) : null}
+    </div>
   )
 }
 
-const TerminalSession = React.memo(function TerminalSession({
-  databaseId,
-  onStatus,
-  relayId,
+function RestartSessionButton({
+  disabled,
+  onRestart,
 }: {
-  databaseId: string
-  onStatus: (status: TerminalStatus) => void
-  relayId: string
+  disabled: boolean
+  onRestart: () => void
 }) {
-  const containerRef = React.useRef<HTMLDivElement>(null)
-
-  React.useEffect(() => {
-    const container = containerRef.current
-    if (!container) return
-    const target = { databaseId, relayId }
-    const style = getComputedStyle(container)
-    const terminal = new Terminal({
-      allowTransparency: true,
-      cursorBlink: true,
-      fontFamily: style.getPropertyValue("--font-mono") || "monospace",
-      fontSize: 13,
-      scrollback: 5_000,
-      theme: {
-        background: "#00000000",
-        cursor: style.color,
-        foreground: style.color,
-      },
-    })
-    const fit = new FitAddon()
-    terminal.loadAddon(fit)
-    terminal.open(container)
-    fit.fit()
-    terminal.focus()
-
-    let sessionId: string | null = null
-    let closed = false
-    let pendingInput = ""
-    let writing = false
-    let flushTimer: ReturnType<typeof setTimeout> | null = null
-    let resizeTimer: ReturnType<typeof setTimeout> | null = null
-
-    const flushInput = () => {
-      flushTimer = null
-      if (!sessionId || writing || !pendingInput || closed) return
-      const data = pendingInput
-      pendingInput = ""
-      writing = true
-      forkPromise(
-        () =>
-          ensuringPromise(
-            () =>
-              writeDatabaseTerminal({
-                data: { ...target, data, sessionId: sessionId! },
-              }),
-            () => {
-              writing = false
-              if (pendingInput) flushTimer = setTimeout(flushInput, 0)
-            }
-          ),
-        () => undefined
-      )
-    }
-    const input = terminal.onData((data) => {
-      pendingInput += data
-      if (!flushTimer) flushTimer = setTimeout(flushInput, INPUT_FLUSH_MS)
-    })
-    const resized = terminal.onResize(({ cols, rows }) => {
-      if (resizeTimer) clearTimeout(resizeTimer)
-      resizeTimer = setTimeout(() => {
-        if (!sessionId || closed) return
-        forkPromise(
-          () =>
-            resizeDatabaseTerminal({
-              data: { ...target, cols, rows, sessionId: sessionId! },
-            }),
-          () => undefined
-        )
-      }, RESIZE_DEBOUNCE_MS)
-    })
-    const observer = new ResizeObserver(() => fit.fit())
-    observer.observe(container)
-
-    // Held outside the fiber: if the page goes away while the session is
-    // still opening, cleanup closes it once the Relay has made it.
-    const opening = openDatabaseTerminal({
-      data: { ...target, cols: terminal.cols, rows: terminal.rows },
-    })
-    const session = Effect.runFork(
-      Effect.gen(function* () {
-        const opened = yield* Effect.tryPromise(() => opening)
-        sessionId = opened.sessionId
-        yield* Effect.sync(() => {
-          onStatus({ kind: "connected" })
-          flushInput()
-        })
-        let cursor = 0
-        for (;;) {
-          const output = yield* Effect.tryPromise(() =>
-            readDatabaseTerminal({
-              data: { ...target, cursor, sessionId: opened.sessionId },
-            })
-          )
-          if (output.data) terminal.write(decodeBase64(output.data))
-          cursor = output.cursor
-          if (output.closed) {
-            sessionId = null
-            return yield* Effect.sync(() => onStatus({ kind: "ended" }))
-          }
-        }
-      }).pipe(
-        Effect.catch((cause) =>
-          Effect.sync(() =>
-            onStatus({
-              kind: "failed",
-              message:
-                cause.cause instanceof Error
-                  ? cause.cause.message
-                  : "The terminal connection failed",
-            })
-          )
-        )
-      )
-    )
-
-    return () => {
-      closed = true
-      session.interruptUnsafe()
-      observer.disconnect()
-      input.dispose()
-      resized.dispose()
-      if (flushTimer) clearTimeout(flushTimer)
-      if (resizeTimer) clearTimeout(resizeTimer)
-      terminal.dispose()
-      // Closing is idempotent, so an already ended session is fine too.
-      forkPromise(
-        async () =>
-          closeDatabaseTerminal({
-            data: { ...target, sessionId: (await opening).sessionId },
-          }),
-        () => undefined
-      )
-    }
-  }, [databaseId, onStatus, relayId])
-
+  const [open, setOpen] = React.useState(false)
   return (
-    <div className="min-h-0 flex-1 overflow-hidden bg-background/40 p-2 text-foreground">
-      <div ref={containerRef} className="size-full" />
+    <Popover open={open} onOpenChange={setOpen}>
+      <WorkspaceToolbarTooltip content="Restart session">
+        <PopoverTrigger asChild>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="size-8"
+            aria-label="Restart session"
+            disabled={disabled}
+          >
+            <RotateCcw className="size-4" />
+          </Button>
+        </PopoverTrigger>
+      </WorkspaceToolbarTooltip>
+      <PopoverContent align="end" className="w-72 p-0">
+        <div className="border-b px-3 py-2.5">
+          <p className="text-xs font-semibold">Restart session?</p>
+          <p className="type-support mt-1 text-muted-foreground">
+            This ends the running client, including anything it is doing, and
+            starts a new one. Other open pages switch to it too.
+          </p>
+        </div>
+        <div className="flex justify-end gap-1.5 p-2">
+          <Button variant="ghost" size="sm" onClick={() => setOpen(false)}>
+            Cancel
+          </Button>
+          <Button
+            size="sm"
+            onClick={() => {
+              setOpen(false)
+              onRestart()
+            }}
+          >
+            <RotateCcw />
+            Restart
+          </Button>
+        </div>
+      </PopoverContent>
+    </Popover>
+  )
+}
+
+// Floats over the terminal so the screen never shifts under the person.
+function TerminalNotice({
+  notice,
+  onDismissNotice,
+  status,
+}: {
+  notice: SessionNotice | null
+  onDismissNotice: () => void
+  status: TerminalStatus
+}) {
+  if (status.kind === "reconnecting") {
+    return (
+      <OverlayNotice
+        loading
+        message={
+          status.cause === "relay"
+            ? "CAN'T REACH THE RELAY · SESSION STILL RUNNING · RECONNECTING…"
+            : "LOST HEARTH · SESSION STILL RUNNING · RECONNECTING…"
+        }
+      />
+    )
+  }
+  if (!notice || status.kind !== "live") return null
+  return (
+    <OverlayNotice
+      icon={noticeIcon}
+      message={`NEW SESSION · ${
+        notice.kind === "relay-restarted"
+          ? "THE RELAY RESTARTED"
+          : endedLabel(notice.ended)
+      }`}
+      tone="info"
+      onDismiss={onDismissNotice}
+    />
+  )
+}
+
+const noticeIcon = <Info className="size-3" />
+
+function TerminalOverlay({
+  onReconnect,
+  onRestart,
+  status,
+}: {
+  onReconnect: () => void
+  onRestart: () => void
+  status: TerminalStatus
+}) {
+  if (status.kind === "connecting") {
+    return (
+      <div className="pointer-events-none absolute inset-0 grid place-items-center">
+        <span className="type-meta flex items-center gap-2 text-muted-foreground">
+          <LoaderCircle className="size-3.5 animate-spin" />
+          Opening your session…
+        </span>
+      </div>
+    )
+  }
+  if (
+    status.kind !== "ended" &&
+    status.kind !== "failed" &&
+    status.kind !== "not-running"
+  ) {
+    return null
+  }
+  const [title, detail, action, onAction] =
+    status.kind === "ended"
+      ? [
+          "Session ended",
+          endedDescription(status.ended),
+          "Start new session",
+          onRestart,
+        ]
+      : status.kind === "not-running"
+        ? [
+            "Database isn't running",
+            "Start the database to open its terminal.",
+            "Try again",
+            onReconnect,
+          ]
+        : ["Terminal unavailable", status.message, "Try again", onReconnect]
+  return (
+    <div className="absolute inset-0 z-20 grid place-items-center bg-card/80 px-6 backdrop-blur-[2px]">
+      <div className="max-w-sm text-center">
+        <div className="mx-auto mb-4 grid size-11 place-items-center rounded-xl border bg-muted/20 text-muted-foreground">
+          {status.kind === "ended" ? (
+            <TerminalSquare className="size-5" />
+          ) : (
+            <TriangleAlert className="size-5" />
+          )}
+        </div>
+        <p className="text-sm font-semibold">{title}</p>
+        <p className="mt-1.5 text-xs leading-relaxed text-muted-foreground">
+          {detail}
+        </p>
+        <Button size="sm" className="mt-4" onClick={onAction}>
+          <RotateCcw />
+          {action}
+        </Button>
+      </div>
     </div>
   )
+}
+
+function endedDescription(ended: DatabaseTerminalEnd) {
+  switch (ended.reason) {
+    case "exited":
+      return "The client exited."
+    case "database-stopped":
+      return "The database stopped or restarted, which ended the session."
+    case "timed-out":
+      return "The session ended after a while without an open page."
+    case "restarted":
+      return "The session was restarted."
+    case "failed":
+      return "The client stopped unexpectedly."
+  }
+}
+
+// Why the last session ended, short enough for a notice.
+function endedLabel(ended: DatabaseTerminalEnd) {
+  switch (ended.reason) {
+    case "exited":
+      return "THE CLIENT EXITED"
+    case "database-stopped":
+      return "THE DATABASE STOPPED"
+    case "timed-out":
+      return "THE LAST ONE TIMED OUT"
+    case "restarted":
+      return "RESTARTED"
+    case "failed":
+      return "THE CLIENT STOPPED UNEXPECTEDLY"
+  }
+}
+
+const startedAtFormatter = new Intl.DateTimeFormat(undefined, {
+  hour: "numeric",
+  minute: "2-digit",
 })
+
+function formatStartedAt(value: string) {
+  return startedAtFormatter.format(new Date(value))
+}
+
+interface TerminalSurfaceEvents {
+  onNotice: (notice: SessionNotice | null) => void
+  onScrolledToBottom: (atBottom: boolean) => void
+  onSelection: (hasSelection: boolean) => void
+  onStartedAt: (startedAt: string) => void
+  onStatus: (status: TerminalStatus) => void
+}
+
+interface TerminalSurfaceHandle {
+  connect: (restart: boolean) => void
+  copySelection: () => void
+  scrollToBottom: () => void
+  search: (
+    query: string,
+    direction: "next" | "previous",
+    incremental: boolean
+  ) => void
+}
+
+// Owns the xterm instance and the session connection. Output never passes
+// through React state; only status changes do.
+const TerminalSurface = React.memo(
+  React.forwardRef<
+    TerminalSurfaceHandle,
+    { databaseId: string; events: TerminalSurfaceEvents; relayId: string }
+  >(function TerminalSurface({ databaseId, events, relayId }, ref) {
+    const containerRef = React.useRef<HTMLDivElement>(null)
+    const handle = React.useRef<TerminalSurfaceHandle | null>(null)
+    React.useImperativeHandle(ref, () => ({
+      connect: (restart) => handle.current?.connect(restart),
+      copySelection: () => handle.current?.copySelection(),
+      scrollToBottom: () => handle.current?.scrollToBottom(),
+      search: (query, direction, incremental) =>
+        handle.current?.search(query, direction, incremental),
+    }))
+
+    React.useEffect(() => {
+      const container = containerRef.current
+      if (!container) return
+      const terminal = new Terminal({
+        allowProposedApi: true,
+        cursorBlink: true,
+        cursorStyle: "bar",
+        fontFamily:
+          getComputedStyle(container).getPropertyValue("--font-mono").trim() ||
+          "monospace",
+        fontSize: 13,
+        lineHeight: 1.3,
+        scrollback: 5_000,
+        theme: terminalTheme(container),
+      })
+      const fit = new FitAddon()
+      const search = new SearchAddon()
+      terminal.loadAddon(fit)
+      terminal.loadAddon(search)
+      terminal.open(container)
+      fit.fit()
+      terminal.focus()
+
+      const connection = new TerminalConnection(
+        terminal,
+        { databaseId, relayId },
+        events
+      )
+      handle.current = {
+        connect: (restart) => connection.connect(restart),
+        copySelection: () => {
+          const selection = terminal.getSelection()
+          if (!selection) return
+          forkPromise(
+            async () => {
+              await navigator.clipboard.writeText(selection)
+              showToast({ message: "Copied", type: "success" })
+            },
+            () => showToast({ message: "Could not copy", type: "error" })
+          )
+        },
+        scrollToBottom: () => terminal.scrollToBottom(),
+        search: (query, direction, incremental) => {
+          if (!query) {
+            search.clearDecorations()
+            return
+          }
+          const options = {
+            decorations: {
+              activeMatchColorOverviewRuler: "#f59e0b",
+              matchOverviewRuler: "#f59e0b80",
+            },
+            incremental,
+          }
+          if (direction === "next") search.findNext(query, options)
+          else search.findPrevious(query, options)
+        },
+      }
+
+      let wasAtBottom = true
+      const scrolled = terminal.onScroll(() => {
+        const buffer = terminal.buffer.active
+        const atBottom = buffer.viewportY >= buffer.baseY
+        if (atBottom !== wasAtBottom) {
+          wasAtBottom = atBottom
+          events.onScrolledToBottom(atBottom)
+        }
+      })
+      let hadSelection = false
+      const selected = terminal.onSelectionChange(() => {
+        const has = terminal.hasSelection()
+        if (has !== hadSelection) {
+          hadSelection = has
+          events.onSelection(has)
+        }
+      })
+      const typed = terminal.onData((data) => connection.input(data))
+      const resized = terminal.onResize(({ cols, rows }) =>
+        connection.resize(cols, rows)
+      )
+      const observer = new ResizeObserver(() => fit.fit())
+      observer.observe(container)
+      connection.connect(false)
+
+      return () => {
+        connection.stop()
+        observer.disconnect()
+        scrolled.dispose()
+        selected.dispose()
+        typed.dispose()
+        resized.dispose()
+        handle.current = null
+        terminal.dispose()
+      }
+    }, [databaseId, events, relayId])
+
+    return (
+      <div className="absolute inset-0 overflow-hidden bg-background/40 py-2 pl-3 text-foreground">
+        <div ref={containerRef} className="size-full" />
+      </div>
+    )
+  })
+)
+
+// Keeps the page attached to the session: streams it, writes typing and size
+// back, and reattaches with backoff when the stream drops.
+class TerminalConnection {
+  readonly #events: TerminalSurfaceEvents
+  readonly #target: { databaseId: string; relayId: string }
+  readonly #terminal: Terminal
+  #abort: AbortController | null = null
+  #flushTimer: ReturnType<typeof setTimeout> | null = null
+  #generation = 0
+  #live = false
+  #offset = 0
+  #pendingInput = ""
+  #resizeTimer: ReturnType<typeof setTimeout> | null = null
+  #sessionId: string | null = null
+  #stopped = false
+  #writing = false
+
+  constructor(
+    terminal: Terminal,
+    target: { databaseId: string; relayId: string },
+    events: TerminalSurfaceEvents
+  ) {
+    this.#terminal = terminal
+    this.#target = target
+    this.#events = events
+  }
+
+  connect(restart: boolean) {
+    if (this.#stopped) return
+    this.#abort?.abort()
+    const generation = ++this.#generation
+    this.#live = false
+    this.#events.onStatus({ kind: "connecting" })
+    forkPromise(() => this.#run(generation, restart))
+  }
+
+  stop() {
+    this.#stopped = true
+    this.#generation += 1
+    this.#abort?.abort()
+    if (this.#flushTimer) clearTimeout(this.#flushTimer)
+    if (this.#resizeTimer) clearTimeout(this.#resizeTimer)
+  }
+
+  input(data: string) {
+    if (!this.#live) return
+    this.#pendingInput += data
+    if (!this.#flushTimer) {
+      this.#flushTimer = setTimeout(() => this.#flushInput(), INPUT_FLUSH_MS)
+    }
+  }
+
+  resize(cols: number, rows: number) {
+    if (this.#resizeTimer) clearTimeout(this.#resizeTimer)
+    this.#resizeTimer = setTimeout(() => {
+      const sessionId = this.#sessionId
+      if (!this.#live || !sessionId) return
+      forkPromise(() =>
+        resizeDatabaseTerminal({
+          data: { ...this.#target, cols, rows, sessionId },
+        })
+      )
+    }, RESIZE_DEBOUNCE_MS)
+  }
+
+  #flushInput() {
+    this.#flushTimer = null
+    const sessionId = this.#sessionId
+    if (this.#writing || !this.#pendingInput || !sessionId || !this.#live) {
+      return
+    }
+    const data = this.#pendingInput
+    this.#pendingInput = ""
+    this.#writing = true
+    forkPromise(() =>
+      ensuringPromise(
+        () =>
+          writeDatabaseTerminal({ data: { ...this.#target, data, sessionId } }),
+        () => {
+          this.#writing = false
+          if (this.#pendingInput) {
+            this.#flushTimer = setTimeout(() => this.#flushInput(), 0)
+          }
+        }
+      )
+    )
+  }
+
+  async #run(generation: number, restartFirst: boolean) {
+    let restart = restartFirst
+    let attempt = 0
+    while (generation === this.#generation) {
+      const outcome = await Effect.runPromise(
+        Effect.tryPromise(() => this.#streamOnce(generation, restart)).pipe(
+          Effect.catch(() =>
+            Effect.succeed<StreamOutcome>({ cause: "hearth", kind: "retry" })
+          )
+        )
+      )
+      restart = false
+      if (generation !== this.#generation || outcome.kind === "stop") return
+      attempt = outcome.attached ? 1 : attempt + 1
+      this.#live = false
+      this.#events.onStatus(
+        this.#sessionId && outcome.cause !== "detached"
+          ? { cause: outcome.cause, kind: "reconnecting" }
+          : { kind: "connecting" }
+      )
+      const delay =
+        outcome.cause === "detached"
+          ? 0
+          : Math.min(250 * 2 ** attempt, RECONNECT_MAX_DELAY_MS)
+      await new Promise((resolve) => setTimeout(resolve, delay))
+    }
+  }
+
+  async #streamOnce(
+    generation: number,
+    restart: boolean
+  ): Promise<StreamOutcome> {
+    const abort = new AbortController()
+    this.#abort = abort
+    const response = await fetch(
+      databaseTerminalStreamUrl({
+        ...this.#target,
+        cols: this.#terminal.cols,
+        restart,
+        rows: this.#terminal.rows,
+      }),
+      { credentials: "same-origin", signal: abort.signal }
+    )
+    if (response.status === 401 || response.status === 403) {
+      this.#events.onStatus({
+        kind: "failed",
+        message:
+          response.status === 401
+            ? "Your sign-in expired. Reload the page to sign in again."
+            : "You no longer have access to this database's terminal.",
+      })
+      return { kind: "stop" }
+    }
+    if (!response.ok || !response.body) {
+      return { cause: "hearth", kind: "retry" }
+    }
+    const reader = response.body
+      .pipeThrough(new TextDecoderStream())
+      .getReader()
+    let buffered = ""
+    let attached = false
+    for (;;) {
+      const { done, value } = await reader.read()
+      if (generation !== this.#generation) {
+        abort.abort()
+        return { kind: "stop" }
+      }
+      if (done) return { attached, cause: "hearth", kind: "retry" }
+      buffered += value
+      let newline = buffered.indexOf("\n")
+      while (newline !== -1) {
+        const line = buffered.slice(0, newline)
+        buffered = buffered.slice(newline + 1)
+        newline = buffered.indexOf("\n")
+        if (!line) continue
+        const record = JSON.parse(line) as DatabaseTerminalStreamRecord
+        if (record.type === "attached") attached = true
+        const outcome = this.#handle(record)
+        if (outcome) {
+          abort.abort()
+          return outcome.kind === "retry" ? { ...outcome, attached } : outcome
+        }
+      }
+    }
+  }
+
+  #handle(record: DatabaseTerminalStreamRecord): StreamOutcome | null {
+    switch (record.type) {
+      case "attached": {
+        const previousSession = this.#sessionId
+        if (previousSession !== record.sessionId) {
+          this.#events.onNotice(sessionNotice(previousSession, record))
+        }
+        // Rebuild the screen from the session's own snapshot, so every page
+        // shows the same thing whatever it missed.
+        this.#terminal.reset()
+        this.#terminal.write(record.snapshot)
+        this.#offset = record.offset
+        this.#sessionId = record.sessionId
+        this.#live = true
+        this.#events.onStartedAt(record.startedAt)
+        this.#events.onStatus({ kind: "live" })
+        if (
+          record.cols !== this.#terminal.cols ||
+          record.rows !== this.#terminal.rows
+        ) {
+          this.resize(this.#terminal.cols, this.#terminal.rows)
+        }
+        return null
+      }
+      case "output": {
+        const bytes = decodeBase64(record.data)
+        const start = record.offset - bytes.length
+        if (record.offset <= this.#offset) return null
+        this.#terminal.write(
+          start < this.#offset ? bytes.subarray(this.#offset - start) : bytes
+        )
+        this.#offset = record.offset
+        return null
+      }
+      case "ended":
+        this.#live = false
+        this.#sessionId = null
+        this.#events.onStatus({ ended: record.ended, kind: "ended" })
+        return { kind: "stop" }
+      case "error":
+        if (record.code === "not-running") {
+          this.#live = false
+          this.#events.onStatus({ kind: "not-running" })
+          return { kind: "stop" }
+        }
+        if (record.code === "failed") {
+          this.#live = false
+          this.#events.onStatus({ kind: "failed", message: record.message })
+          return { kind: "stop" }
+        }
+        return {
+          cause: record.code === "relay-unavailable" ? "relay" : "detached",
+          kind: "retry",
+        }
+      case "ping":
+        return null
+    }
+  }
+}
+
+type StreamOutcome =
+  | { kind: "stop" }
+  | {
+      attached?: boolean
+      cause: "detached" | "hearth" | "relay"
+      kind: "retry"
+    }
+
+// A page that opens a session this young says why the last one ended.
+const FRESH_SESSION_MS = 60_000
+
+// What to tell the person when this page sees a new session: why the last one
+// ended, when the Relay knows, or that the Relay restarted under it. A page
+// opening an older session, or one they restarted themselves, needs no note.
+function sessionNotice(
+  previousSession: string | null,
+  attached: Extract<DatabaseTerminalStreamRecord, { type: "attached" }>
+): SessionNotice | null {
+  const witnessed =
+    previousSession !== null ||
+    Date.now() - Date.parse(attached.startedAt) < FRESH_SESSION_MS
+  if (!witnessed) return null
+  if (attached.previous && attached.previous.reason !== "restarted") {
+    return { ended: attached.previous, kind: "previous" }
+  }
+  if (
+    previousSession !== null &&
+    bootOf(previousSession) !== bootOf(attached.sessionId)
+  ) {
+    return { kind: "relay-restarted" }
+  }
+  return null
+}
+
+// Session ids start with the id of the Relay process that runs them.
+function bootOf(sessionId: string) {
+  return sessionId.split(".", 1)[0]
+}
 
 function decodeBase64(value: string): Uint8Array {
   const binary = atob(value)
@@ -259,4 +851,51 @@ function decodeBase64(value: string): Uint8Array {
     bytes[index] = binary.charCodeAt(index)
   }
   return bytes
+}
+
+// xterm wants concrete colors; the app's are CSS variables in any color
+// space, so they are resolved by painting them.
+function terminalTheme(element: HTMLElement) {
+  const canvas = document.createElement("canvas")
+  canvas.width = 1
+  canvas.height = 1
+  const context = canvas.getContext("2d", { willReadFrequently: true })
+  const style = getComputedStyle(element)
+  const resolve = (variable: string, fallback: string) => {
+    const value = style.getPropertyValue(variable).trim()
+    if (!context || !value) return fallback
+    context.clearRect(0, 0, 1, 1)
+    context.fillStyle = fallback
+    context.fillStyle = value
+    context.fillRect(0, 0, 1, 1)
+    const [red, green, blue] = context.getImageData(0, 0, 1, 1).data
+    return `rgb(${red}, ${green}, ${blue})`
+  }
+  const foreground = resolve("--foreground", "#e7e5e4")
+  const primary = resolve("--primary", "#f97316")
+  return {
+    background: "#00000000",
+    black: "#1c1917",
+    blue: "#60a5fa",
+    brightBlack: "#78716c",
+    brightBlue: "#93c5fd",
+    brightCyan: "#67e8f9",
+    brightGreen: "#86efac",
+    brightMagenta: "#f0abfc",
+    brightRed: "#fca5a5",
+    brightWhite: "#fafaf9",
+    brightYellow: "#fde68a",
+    cursor: primary,
+    cursorAccent: "#0c0a09",
+    cyan: "#22d3ee",
+    foreground,
+    green: "#4ade80",
+    magenta: "#e879f9",
+    red: "#f87171",
+    selectionBackground: primary
+      .replace("rgb(", "rgba(")
+      .replace(")", ", 0.3)"),
+    white: "#d6d3d1",
+    yellow: "#facc15",
+  }
 }

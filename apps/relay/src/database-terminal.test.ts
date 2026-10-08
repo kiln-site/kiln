@@ -1,17 +1,33 @@
-import { relayCreateDatabaseSchema } from "@workspace/contracts"
-import { describe, expect, it, vi } from "vite-plus/test"
+import {
+  relayCreateDatabaseSchema,
+  type DatabaseTerminalEnd,
+  type HearthDatabaseTerminalOutput,
+} from "@workspace/contracts"
+import { afterEach, describe, expect, it, vi } from "vite-plus/test"
 
 vi.mock("./command.js", () => import("./test/docker.js"))
 
-import { DatabaseTerminals } from "./database-terminal.js"
+import {
+  DatabaseTerminals,
+  VIEWER_EXPIRES_AFTER_MS,
+} from "./database-terminal.js"
 import { fakeDocker } from "./test/docker.js"
-import { relayHarness, type RelayHarness } from "./test/relay.js"
+import {
+  relayHarness,
+  TEST_NAMESPACE,
+  type RelayHarness,
+} from "./test/relay.js"
 
 const databaseId = "e".repeat(40)
 const password = "correct-horse-battery-staple-1"
 const credentials = { password, username: "kiln_user" }
 const alice = "hearth:alice"
 const mallory = "hearth:mallory"
+const idleTimeoutMs = 15 * 60_000
+
+afterEach(() => {
+  vi.useRealTimers()
+})
 
 async function runningDatabase(harness: RelayHarness) {
   await harness.databases.create(
@@ -26,145 +42,214 @@ async function runningDatabase(harness: RelayHarness) {
   return harness.databases.target(databaseId)
 }
 
-async function readUntil(
-  terminals: DatabaseTerminals,
-  sessionId: string,
-  expected: string
-) {
-  let cursor = 0
-  let output = ""
-  while (!output.includes(expected)) {
-    const read = await terminals.read(
-      alice,
-      sessionId,
-      cursor,
-      new AbortController().signal
-    )
-    output += Buffer.from(read.data, "base64").toString("utf8")
-    cursor = read.cursor
+// A Hearth viewer: collects the output and ending pushed to it.
+function viewer(accepting = true) {
+  const pushes: Array<HearthDatabaseTerminalOutput> = []
+  return {
+    get ended(): DatabaseTerminalEnd | null {
+      return pushes.find((push) => push.ended)?.ended ?? null
+    },
+    get output() {
+      return pushes
+        .map((push) => Buffer.from(push.data, "base64").toString("utf8"))
+        .join("")
+    },
+    push: async (output: HearthDatabaseTerminalOutput) => {
+      pushes.push(output)
+      return { accepted: accepting }
+    },
   }
-  return output
 }
 
-describe("database terminals", () => {
-  it("keeps a session to the user who opened it", async () => {
+let attachments = 0
+function attachmentId(index: number) {
+  return `attachment-${index}-${"x".repeat(24)}`
+}
+
+function attach(
+  terminals: DatabaseTerminals,
+  owner: string,
+  database: Awaited<ReturnType<typeof runningDatabase>>,
+  watcher: ReturnType<typeof viewer>,
+  options: { restart?: boolean } = {}
+) {
+  attachments += 1
+  return terminals.attach(
+    owner,
+    database,
+    {
+      ...credentials,
+      attachmentId: attachmentId(attachments),
+      cols: 80,
+      databaseId,
+      idleTimeoutMs,
+      restart: options.restart ?? false,
+      rows: 24,
+    },
+    watcher.push
+  )
+}
+
+// Under fake timers: runs due timers (the terminal parses output on them) and
+// lets real I/O through until `promise` settles.
+async function settled<T>(promise: Promise<T>) {
+  let done = false
+  const finish = () => {
+    done = true
+  }
+  void promise.then(finish, finish)
+  while (!done) {
+    await vi.advanceTimersByTimeAsync(0)
+    await new Promise((resolve) => setImmediate(resolve))
+  }
+  return promise
+}
+
+function clientExecs() {
+  return [...fakeDocker.execs.values()].filter((exec) => exec.tty)
+}
+
+describe("database terminal sessions", () => {
+  it("keeps one session per person and database that a new page picks up where the last left off", async () => {
     const harness = await relayHarness()
     const database = await runningDatabase(harness)
     const terminals = new DatabaseTerminals(harness.config)
-    const { sessionId } = await terminals.open(alice, database, {
-      ...credentials,
-      cols: 80,
-      databaseId,
-      rows: 24,
-    })
+    const first = viewer()
+    const session = await attach(terminals, alice, database, first)
 
+    terminals.write(alice, databaseId, session.sessionId, "select 1;")
+    await vi.waitFor(() => expect(first.output).toContain("select 1;"))
+
+    const again = await attach(terminals, alice, database, viewer())
+    expect(again.sessionId).toBe(session.sessionId)
+    expect(again.snapshot).toContain("select 1;")
+    expect(clientExecs()).toHaveLength(1)
+  })
+
+  it("keeps each person's session to themselves", async () => {
+    const harness = await relayHarness()
+    const database = await runningDatabase(harness)
+    const terminals = new DatabaseTerminals(harness.config)
+    const aliceSession = await attach(terminals, alice, database, viewer())
+    const aliceAttachment = attachmentId(attachments)
+    const mallorySession = await attach(terminals, mallory, database, viewer())
+
+    expect(mallorySession.sessionId).not.toBe(aliceSession.sessionId)
     expect(() =>
-      terminals.write(mallory, sessionId, "DROP TABLE x;\r")
+      terminals.write(mallory, databaseId, aliceSession.sessionId, "\\q\r")
     ).toThrow("The terminal session has ended")
-    await expect(
-      terminals.read(mallory, sessionId, 0, new AbortController().signal)
-    ).rejects.toThrow("The terminal session has ended")
-    terminals.close(mallory, sessionId)
-
-    terminals.write(alice, sessionId, "select 1;\r")
-    expect(await readUntil(terminals, sessionId, "select 1;")).toBe(
-      "select 1;\r"
-    )
-    terminals.close(alice, sessionId)
+    expect(terminals.heartbeat(mallory, [aliceAttachment]).unknown).toEqual([
+      aliceAttachment,
+    ])
   })
 
-  it("signs the client in without putting the password on its command line", async () => {
+  it("passes the password through the client's environment, not its command line", async () => {
     const harness = await relayHarness()
     const database = await runningDatabase(harness)
-    const terminals = new DatabaseTerminals(harness.config)
-    const { sessionId } = await terminals.open(alice, database, {
-      ...credentials,
-      cols: 80,
-      databaseId,
-      rows: 24,
-    })
-
-    const [exec] = [...fakeDocker.execs.values()]
-    expect(exec?.tty).toBe(true)
-    expect(exec?.cmd.join(" ")).not.toContain(password)
-    expect(exec?.env.PGPASSWORD).toBe(password)
-    terminals.close(alice, sessionId)
-  })
-
-  it("ends the session when the client exits", async () => {
-    const harness = await relayHarness()
-    const database = await runningDatabase(harness)
-    const terminals = new DatabaseTerminals(harness.config)
-    const { sessionId } = await terminals.open(alice, database, {
-      ...credentials,
-      cols: 80,
-      databaseId,
-      rows: 24,
-    })
-    terminals.write(alice, sessionId, "\\q\r")
-    await readUntil(terminals, sessionId, "\\q")
-
-    const [exec] = [...fakeDocker.execs.values()]
-    fakeDocker.exitExec(exec!.id)
-
-    let read = await terminals.read(
+    await attach(
+      new DatabaseTerminals(harness.config),
       alice,
-      sessionId,
-      0,
-      new AbortController().signal
+      database,
+      viewer()
     )
-    while (!read.closed) {
-      read = await terminals.read(
-        alice,
-        sessionId,
-        read.cursor,
-        new AbortController().signal
-      )
-    }
-    expect(read.closed).toBe(true)
-    expect(() => terminals.write(alice, sessionId, "select 1;\r")).toThrow(
-      "The terminal session has ended"
-    )
+
+    const [client] = clientExecs()
+    expect(client?.cmd.join(" ")).not.toContain(password)
+    expect(client?.env.PGPASSWORD).toBe(password)
   })
 
-  it("hangs up the client when the session closes", async () => {
+  it("keeps running while a page is open and times out once none are", async () => {
     const harness = await relayHarness()
     const database = await runningDatabase(harness)
     const terminals = new DatabaseTerminals(harness.config)
-    const { sessionId } = await terminals.open(alice, database, {
-      ...credentials,
-      cols: 80,
-      databaseId,
-      rows: 24,
-    })
-    const [client] = [...fakeDocker.execs.values()]
+    await attach(terminals, alice, database, viewer())
+    const open = attachmentId(attachments)
+    const [client] = clientExecs()
 
-    terminals.close(alice, sessionId)
+    vi.useFakeTimers({ toFake: ["setTimeout", "setInterval", "Date"] })
+    for (let elapsed = 0; elapsed < idleTimeoutMs * 2; elapsed += 30_000) {
+      terminals.heartbeat(alice, [open])
+      await vi.advanceTimersByTimeAsync(30_000)
+    }
+    expect(client?.running).toBe(true)
+
+    terminals.detach(alice, open)
+    await vi.advanceTimersByTimeAsync(idleTimeoutMs)
+    vi.useRealTimers()
+    await vi.waitFor(() => expect(client?.running).toBe(false))
+
+    const next = await attach(terminals, alice, database, viewer())
+    expect(next.previous?.reason).toBe("timed-out")
+  })
+
+  it("stops counting a page that stopped renewing as open", async () => {
+    const harness = await relayHarness()
+    const database = await runningDatabase(harness)
+    const terminals = new DatabaseTerminals(harness.config)
+    vi.useFakeTimers({ toFake: ["setTimeout", "setInterval", "Date"] })
+    await settled(attach(terminals, alice, database, viewer()))
+    const [client] = clientExecs()
+
+    // Expiry is checked periodically, so allow a second expiry window.
+    await vi.advanceTimersByTimeAsync(
+      2 * VIEWER_EXPIRES_AFTER_MS + idleTimeoutMs
+    )
+    vi.useRealTimers()
 
     await vi.waitFor(() => expect(client?.running).toBe(false))
   })
 
-  it("replaces a person's oldest terminal instead of refusing a new one", async () => {
+  it("drops a viewer Hearth no longer has, so the idle timeout starts", async () => {
     const harness = await relayHarness()
     const database = await runningDatabase(harness)
     const terminals = new DatabaseTerminals(harness.config)
-    const open = () =>
-      terminals.open(alice, database, {
-        ...credentials,
-        cols: 80,
-        databaseId,
-        rows: 24,
-      })
-    const first = await open()
-    const second = await open()
-    const third = await open()
+    const gone = viewer(false)
+    vi.useFakeTimers({ toFake: ["setTimeout", "setInterval", "Date"] })
+    const session = await settled(attach(terminals, alice, database, gone))
+    const [client] = clientExecs()
 
-    expect(() => terminals.write(alice, first.sessionId, "\r")).toThrow(
-      "The terminal session has ended"
+    terminals.write(alice, databaseId, session.sessionId, "x")
+    await settled(vi.waitFor(() => expect(gone.output).toBe("x")))
+    await vi.advanceTimersByTimeAsync(idleTimeoutMs)
+    vi.useRealTimers()
+
+    await vi.waitFor(() => expect(client?.running).toBe(false))
+  })
+
+  it("restarts into a new session and tells open pages the old one ended", async () => {
+    const harness = await relayHarness()
+    const database = await runningDatabase(harness)
+    const terminals = new DatabaseTerminals(harness.config)
+    const open = viewer()
+    const first = await attach(terminals, alice, database, open)
+
+    const second = await attach(terminals, alice, database, viewer(), {
+      restart: true,
+    })
+
+    expect(second.sessionId).not.toBe(first.sessionId)
+    await vi.waitFor(() => expect(open.ended?.reason).toBe("restarted"))
+    await vi.waitFor(() =>
+      expect(clientExecs().filter((exec) => exec.running)).toHaveLength(1)
     )
-    terminals.write(alice, second.sessionId, "\r")
-    terminals.write(alice, third.sessionId, "\r")
-    terminals.close(alice, second.sessionId)
-    terminals.close(alice, third.sessionId)
+  })
+
+  it("says why a session ended: its client exited, or the database stopped", async () => {
+    const harness = await relayHarness()
+    const database = await runningDatabase(harness)
+    const terminals = new DatabaseTerminals(harness.config)
+    const exiting = viewer()
+    await attach(terminals, alice, database, exiting)
+    fakeDocker.exitExec(clientExecs()[0]!.id)
+    await vi.waitFor(() => expect(exiting.ended?.reason).toBe("exited"))
+
+    const stopping = viewer()
+    await attach(terminals, alice, database, stopping)
+    fakeDocker.exit(`${TEST_NAMESPACE}-kiln-db-${databaseId}-database`, {
+      exitCode: 0,
+    })
+    await vi.waitFor(() =>
+      expect(stopping.ended?.reason).toBe("database-stopped")
+    )
   })
 })

@@ -18,10 +18,10 @@ import {
   relayDatabaseDumpSchema,
   relayDatabaseDataReadSchema,
   relayDatabaseDataWriteSchema,
-  relayDatabaseTerminalOpenSchema,
-  relayDatabaseTerminalReadSchema,
+  relayDatabaseTerminalAttachSchema,
+  relayDatabaseTerminalDetachSchema,
+  relayDatabaseTerminalHeartbeatSchema,
   relayDatabaseTerminalResizeSchema,
-  relayDatabaseTerminalSessionSchema,
   relayDatabaseTerminalWriteSchema,
   relayDatabaseExportSchema,
   relayDatabaseNetworkSchema,
@@ -1378,27 +1378,36 @@ async function executeControlRequest(
         )
       )
     }
-    case "database.terminal.open": {
-      const input = relayDatabaseTerminalOpenSchema.parse(request.payload)
-      return databaseTerminals.open(
+    case "database.terminal.attach": {
+      const input = relayDatabaseTerminalAttachSchema.parse(request.payload)
+      return databaseTerminals.attach(
         terminalOwner(client, request),
         await databases.target(input.databaseId),
-        input
+        input,
+        // Output goes back to the Hearth connection that attached.
+        (output, timeoutMs) =>
+          requestHearth("hearth.database.terminal.output", output, timeoutMs)
       )
     }
-    case "database.terminal.read": {
-      const input = relayDatabaseTerminalReadSchema.parse(request.payload)
-      return databaseTerminals.read(
+    case "database.terminal.heartbeat": {
+      const input = relayDatabaseTerminalHeartbeatSchema.parse(request.payload)
+      return databaseTerminals.heartbeat(
         terminalOwner(client, request),
-        input.sessionId,
-        input.cursor,
-        signal
+        input.attachmentIds
+      )
+    }
+    case "database.terminal.detach": {
+      const input = relayDatabaseTerminalDetachSchema.parse(request.payload)
+      return databaseTerminals.detach(
+        terminalOwner(client, request),
+        input.attachmentId
       )
     }
     case "database.terminal.write": {
       const input = relayDatabaseTerminalWriteSchema.parse(request.payload)
       return databaseTerminals.write(
         terminalOwner(client, request),
+        input.databaseId,
         input.sessionId,
         input.data
       )
@@ -1407,16 +1416,10 @@ async function executeControlRequest(
       const input = relayDatabaseTerminalResizeSchema.parse(request.payload)
       return databaseTerminals.resize(
         terminalOwner(client, request),
+        input.databaseId,
         input.sessionId,
         input.rows,
         input.cols
-      )
-    }
-    case "database.terminal.close": {
-      const input = relayDatabaseTerminalSessionSchema.parse(request.payload)
-      return databaseTerminals.close(
-        terminalOwner(client, request),
-        input.sessionId
       )
     }
     case "database.data.write": {

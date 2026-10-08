@@ -15,17 +15,11 @@ import {
   databaseIdSchema,
   relayDatabaseNameSchema,
   relayIdSchema,
-  relayDatabaseTerminalOutputSchema,
-  relayDatabaseTerminalReadSchema,
   relayDatabaseTerminalResizeSchema,
-  relayDatabaseTerminalSessionSchema,
   relayDatabaseTerminalWriteSchema,
   relayManagedDatabaseSchema,
 } from "@workspace/contracts"
-import type {
-  RelayControlOperation,
-  RelayManagedDatabase,
-} from "@workspace/contracts"
+import type { RelayManagedDatabase } from "@workspace/contracts"
 import { Effect, Result } from "effect"
 import { z } from "zod"
 
@@ -52,9 +46,14 @@ import {
 import { accessPermissions, grantHasPermission } from "@/lib/permissions"
 import type { AccessPermission } from "@/lib/permissions"
 import { publishRealtimeChange } from "@/lib/realtime-source.server"
-import type { PersistedRelay } from "@/lib/relay-registry"
 import { listPersistedRelays } from "@/lib/relay-registry"
 import { requireEligibleResourceUser } from "@/server/auth"
+import {
+  authorizedDatabase,
+  databaseRpc,
+  requiredCredential,
+  requiredRelay,
+} from "@/server/managed-database-access"
 
 const createDatabaseInputSchema = z.strictObject({
   engine: databaseEngineSchema,
@@ -658,92 +657,49 @@ async function managedDatabaseDataRequest(
   )
 }
 
-const databaseTerminalOpenInputSchema = databaseInputSchema.extend(
-  relayDatabaseTerminalResizeSchema.omit({ sessionId: true }).shape
-)
-
-export const openDatabaseTerminal = createServerFn({ method: "POST" })
-  .validator(databaseTerminalOpenInputSchema)
+// Typing and window size go to the person's own session; the Relay rejects
+// a session id that isn't theirs or has ended. Output arrives through
+// the terminal stream (routes/api.database-terminal.$databaseId.ts).
+export const writeDatabaseTerminal = createServerFn({ method: "POST" })
+  .validator(
+    relayDatabaseTerminalWriteSchema.extend({ relayId: relayIdSchema })
+  )
   .handler(async ({ data }) => {
     const { relay, user } = await authorizedDatabase(data, "database.terminal")
-    const credential = await requiredCredential(data.relayId, data.databaseId)
-    return z.object({ sessionId: z.string() }).parse(
-      await databaseRpc(
-        relay,
-        "database.terminal.open",
-        {
-          cols: data.cols,
-          databaseId: data.databaseId,
-          password: credential.password,
-          rows: data.rows,
-          username: credential.username,
-        },
-        30_000,
-        user.id
-      )
-    )
-  })
-
-// Waits up to 10s on the Relay for output, so the browser can poll in a loop.
-export const readDatabaseTerminal = createServerFn({ method: "POST" })
-  .validator(databaseInputSchema.extend(relayDatabaseTerminalReadSchema.shape))
-  .handler(async ({ data }) =>
-    relayDatabaseTerminalOutputSchema.parse(
-      await databaseTerminalRequest(data, "database.terminal.read", {
-        cursor: data.cursor,
+    await databaseRpc(
+      relay,
+      "database.terminal.write",
+      {
+        data: data.data,
+        databaseId: data.databaseId,
         sessionId: data.sessionId,
-      })
+      },
+      15_000,
+      user.id
     )
-  )
-
-export const writeDatabaseTerminal = createServerFn({ method: "POST" })
-  .validator(databaseInputSchema.extend(relayDatabaseTerminalWriteSchema.shape))
-  .handler(async ({ data }) => {
-    await databaseTerminalRequest(data, "database.terminal.write", {
-      data: data.data,
-      sessionId: data.sessionId,
-    })
     return { accepted: true }
   })
 
 export const resizeDatabaseTerminal = createServerFn({ method: "POST" })
   .validator(
-    databaseInputSchema.extend(relayDatabaseTerminalResizeSchema.shape)
+    relayDatabaseTerminalResizeSchema.extend({ relayId: relayIdSchema })
   )
   .handler(async ({ data }) => {
-    await databaseTerminalRequest(data, "database.terminal.resize", {
-      cols: data.cols,
-      rows: data.rows,
-      sessionId: data.sessionId,
-    })
+    const { relay, user } = await authorizedDatabase(data, "database.terminal")
+    await databaseRpc(
+      relay,
+      "database.terminal.resize",
+      {
+        cols: data.cols,
+        databaseId: data.databaseId,
+        rows: data.rows,
+        sessionId: data.sessionId,
+      },
+      15_000,
+      user.id
+    )
     return { resized: true }
   })
-
-export const closeDatabaseTerminal = createServerFn({ method: "POST" })
-  .validator(
-    databaseInputSchema.extend(relayDatabaseTerminalSessionSchema.shape)
-  )
-  .handler(async ({ data }) => {
-    await databaseTerminalRequest(data, "database.terminal.close", {
-      sessionId: data.sessionId,
-    })
-    return { closed: true }
-  })
-
-// Every call re-checks the permission; the Relay also ties each session to
-// the user who opened it.
-async function databaseTerminalRequest(
-  data: { databaseId: string; relayId: string },
-  operation:
-    | "database.terminal.close"
-    | "database.terminal.read"
-    | "database.terminal.resize"
-    | "database.terminal.write",
-  payload: Record<string, unknown>
-) {
-  const { relay, user } = await authorizedDatabase(data, "database.terminal")
-  return databaseRpc(relay, operation, payload, 20_000, user.id)
-}
 
 export const deleteManagedDatabase = createServerFn({ method: "POST" })
   .validator(databaseInputSchema)
@@ -804,38 +760,6 @@ function publishDatabaseCredentialChange(
   })
 }
 
-async function authorizedDatabase(
-  data: { databaseId: string; relayId: string },
-  permission: AccessPermission
-) {
-  const user = await requireEligibleResourceUser()
-  const relay = await requiredRelay(data.relayId)
-  await requireRelayPermission({
-    databaseId: data.databaseId,
-    permission,
-    relayId: data.relayId,
-    user,
-  })
-  return { relay, user }
-}
-
-async function requiredCredential(relayId: string, databaseId: string) {
-  const credential = await runAppEffect(
-    "managedDatabases.credential.internal",
-    loadManagedDatabaseCredentialEffect(relayId, databaseId)
-  )
-  if (!credential) throw new Error("Database credentials are unavailable")
-  return credential
-}
-
-async function requiredRelay(id: string): Promise<PersistedRelay> {
-  const relay = (await listPersistedRelays()).find(
-    (candidate) => candidate.enabled && candidate.id === id
-  )
-  if (!relay) throw new Error("Relay not found")
-  return relay
-}
-
 function hasDatabasePermission(
   user: AuthenticatedUser,
   grants: ReadonlyArray<AccessGrant>,
@@ -867,17 +791,6 @@ function hasDatabaseRelayVisibility(
       grantHasPermission(grant, "database.read") &&
       (grant.resourceType === "relay" || grant.resourceType === "database")
   )
-}
-
-async function databaseRpc(
-  relay: PersistedRelay,
-  operation: RelayControlOperation,
-  payload: unknown,
-  timeoutMs: number,
-  subject?: string
-): Promise<unknown> {
-  const { relayRpc } = await import("@/lib/relay-connection")
-  return relayRpc(relay, operation, payload, timeoutMs, subject)
 }
 
 function promiseResult<TResult>(run: () => Promise<TResult>) {

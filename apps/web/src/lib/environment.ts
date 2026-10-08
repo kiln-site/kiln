@@ -90,6 +90,20 @@ export function publicSignupEnabled(): boolean {
   return environmentFlag("KILN_ENABLE_SIGNUPS", false)
 }
 
+// How long a database terminal keeps running with no page open to it.
+export function databaseTerminalIdleTimeoutMs(): number {
+  const configured =
+    process.env.KILN_DATABASE_TERMINAL_IDLE_TIMEOUT_MINUTES?.trim()
+  if (!configured) return 15 * 60_000
+  const minutes = Number(configured)
+  if (!Number.isInteger(minutes) || minutes < 1 || minutes > 1_440) {
+    throw new Error(
+      "KILN_DATABASE_TERMINAL_IDLE_TIMEOUT_MINUTES must be an integer from 1 to 1440"
+    )
+  }
+  return minutes * 60_000
+}
+
 export function cliDefaultAccessDays(): number {
   const configured = process.env.KILN_CLI_DEFAULT_ACCESS_DAYS?.trim()
   if (!configured) return 30

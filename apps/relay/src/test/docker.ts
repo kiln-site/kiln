@@ -375,6 +375,7 @@ export class FakeDocker {
     container.state.exitCode = exit.exitCode
     container.state.oomKilled = exit.oomKilled ?? false
     container.state.finishedAt = this.#timestamp()
+    this.#endExecs(container)
   }
 
   /** Simulates Docker or the host restarting the container's process. */
@@ -904,6 +905,16 @@ export class FakeDocker {
     container.state.exitCode = exitCode
     container.state.finishedAt = this.#timestamp()
     container.state.health = undefined
+    this.#endExecs(container)
+  }
+
+  // A container's execs end with it.
+  #endExecs(container: FakeContainer): void {
+    for (const exec of this.execs.values()) {
+      if (exec.running && exec.containerId === container.id) {
+        this.exitExec(exec.id)
+      }
+    }
   }
 
   async #remove(arguments_: Array<string>): Promise<string> {
@@ -1280,6 +1291,24 @@ export class FakeDocker {
           message: cause instanceof Error ? cause.message : String(cause),
         })
       }
+      return
+    }
+    const inspect = /^\/containers\/([^/]+)\/json$/u.exec(url.pathname)
+    if (request.method === "GET" && inspect) {
+      const target = this.container(decodeURIComponent(inspect[1] ?? ""))
+      if (!target) {
+        send(404, { message: `No such container: ${inspect[1]}` })
+        return
+      }
+      send(200, {
+        Id: target.id,
+        Name: `/${target.name}`,
+        State: {
+          ExitCode: target.state.exitCode,
+          Running: target.state.running,
+          StartedAt: target.state.startedAt,
+        },
+      })
       return
     }
     const container = match

@@ -1,31 +1,43 @@
 import { randomBytes } from "node:crypto"
 import { request } from "node:http"
+import { createRequire } from "node:module"
 import type { Duplex } from "node:stream"
 
 import type {
-  RelayDatabaseTerminalOpen,
-  RelayDatabaseTerminalOutput,
+  DatabaseTerminalEnd,
+  DatabaseTerminalEndReason,
+  HearthDatabaseTerminalOutput,
+  RelayDatabaseTerminalAttach,
+  RelayDatabaseTerminalAttached,
   RelayManagedDatabase,
 } from "@workspace/contracts"
-
+import type { ITerminalAddon, Terminal } from "@xterm/headless"
 import { Result } from "effect"
 
 import type { RelayConfig } from "./config.js"
 import { forkPromise, recoverPromise } from "./effect/promise.js"
 
-// Terminal output reaches Hearth through long-polled reads on the control
-// connection, which shares a small request budget with everything else.
-// Capping sessions caps how much of that budget terminals can hold.
-const MAX_SESSIONS = 4
-const MAX_SESSIONS_PER_OWNER = 2
-const READ_WAIT_MS = 10_000
-const MAX_READ_BYTES = 64 * 1024
-// Output kept for a reader that falls behind; older output is dropped.
-const OUTPUT_HISTORY_BYTES = 256 * 1024
-// A session nobody reads is abandoned: the browser closed, refreshed, or lost
-// Hearth. Reads arrive at least every READ_WAIT_MS while a page is open.
-const ABANDONED_AFTER_MS = 25_000
-const REAPER_INTERVAL_MS = 5_000
+// Each person gets one terminal session per database. It belongs to the Relay,
+// so it outlives tabs, devices, and Hearth restarts: Hearth attaches viewers,
+// the Relay pushes their output to Hearth, and a session nobody views ends
+// after its idle timeout. Relay restarts end every session.
+
+// Sessions keep a terminal's memory each, so a Relay holds a bounded number.
+const MAX_SESSIONS = 64
+// Lines a newly attached viewer gets back, and the most raw output kept for a
+// viewer that falls behind before it is sent a fresh snapshot instead.
+const SCROLLBACK_LINES = 2_000
+const OUTPUT_HISTORY_BYTES = 512 * 1024
+// Snapshots travel in one control frame (1 MB), alongside the attach reply.
+const MAX_SNAPSHOT_CHARACTERS = 600_000
+const MAX_PUSH_BYTES = 64 * 1024
+const PUSH_TIMEOUT_MS = 10_000
+// Hearth renews each viewer while its page is open; one that stops renewing
+// (Hearth stopped or lost the Relay) is dropped and the idle timeout starts.
+export const VIEWER_EXPIRES_AFTER_MS = 60_000
+const VIEWER_SWEEP_INTERVAL_MS = 15_000
+// Ended sessions are remembered so the next one can say why the last ended.
+const MAX_REMEMBERED_ENDINGS = 1_000
 // Each client records its PID here so the Relay can hang it up: Docker keeps
 // an exec running after its connection closes.
 const PID_FILE_PREFIX = "/tmp/.kiln-terminal-"
@@ -33,56 +45,182 @@ const PID_FILE_PREFIX = "/tmp/.kiln-terminal-"
 // catches SIGHUP and SIGTERM and may stay, so it is killed after a second.
 const HANG_UP_FUNCTION =
   'hang_up() { pid=$(cat "$1") && kill -HUP "$pid" 2>/dev/null && sleep 1 && kill -KILL "$pid" 2>/dev/null; rm -f "$1"; }'
+// Both packages ship UMD bundles that ESM loaders don't all unwrap the same
+// way, so they load through Node's own CommonJS loader.
+const require = createRequire(import.meta.url)
+const { Terminal: HeadlessTerminal } =
+  require("@xterm/headless") as typeof import("@xterm/headless")
+// Typed here: the addon's own typings import the browser @xterm/xterm,
+// which would bring DOM types into the Relay.
+interface SerializeAddon extends ITerminalAddon {
+  serialize(options?: { scrollback?: number }): string
+}
+const { SerializeAddon: HeadlessSerializeAddon } =
+  require("@xterm/addon-serialize") as {
+    SerializeAddon: new () => SerializeAddon
+  }
+
+// Distinguishes this Relay process's sessions from a previous one's.
+const BOOT_ID = randomBytes(6).toString("base64url")
+
+export type PushTerminalOutput = (
+  output: HearthDatabaseTerminalOutput,
+  timeoutMs: number
+) => Promise<unknown>
+
+interface Viewer {
+  owner: string
+  push: PushTerminalOutput
+  renewedAt: number
+  sending: boolean
+  // Output up to here has been delivered to this viewer.
+  sentOffset: number
+}
 
 interface TerminalSession {
-  closed: boolean
   containerId: string
+  databaseId: string
+  ending: DatabaseTerminalEndReason | null
+  ended: DatabaseTerminalEnd | null
   execId: string
-  // Byte offset of `history[0]` in the session's whole output.
-  historyStart: number
+  // Raw output from `historyStart`, for viewers catching up between pushes.
   history: Buffer
-  lastRead: number
-  owner: string
+  historyStart: number
+  id: string
+  idleTimeoutMs: number
+  idleTimer: ReturnType<typeof setTimeout> | null
+  key: string
+  // Output the screen has fully processed; snapshots cover exactly this.
+  parsedOffset: number
   pidFile: string
+  previous: DatabaseTerminalEnd | null
+  screen: Terminal
+  serializer: SerializeAddon
   socket: Duplex
-  waiters: Set<() => void>
+  startedAt: string
+  viewers: Map<string, Viewer>
 }
 
 export class DatabaseTerminals {
   readonly #config: Pick<RelayConfig, "dockerSocket">
   readonly #sessions = new Map<string, TerminalSession>()
-  #reaper: ReturnType<typeof setInterval> | null = null
+  readonly #attachments = new Map<string, TerminalSession>()
+  readonly #endings = new Map<string, DatabaseTerminalEnd>()
+  #sweeper: ReturnType<typeof setInterval> | null = null
 
   constructor(config: Pick<RelayConfig, "dockerSocket">) {
     this.#config = config
   }
 
-  async open(
+  async attach(
     owner: string,
     database: RelayManagedDatabase,
-    input: RelayDatabaseTerminalOpen
-  ): Promise<{ sessionId: string }> {
+    input: RelayDatabaseTerminalAttach,
+    push: PushTerminalOutput
+  ): Promise<RelayDatabaseTerminalAttached> {
+    const key = sessionKey(owner, database.id)
+    let session = this.#sessions.get(key)
+    if (session && input.restart) {
+      await this.#end(session, "restarted")
+      session = undefined
+    }
+    session ??= await this.#start(key, database, input)
+    session.idleTimeoutMs = input.idleTimeoutMs
+    if (session.idleTimer) clearTimeout(session.idleTimer)
+    session.idleTimer = null
+    // The newest viewer's window decides the size; the screen reflows to it
+    // so its snapshot fits.
+    if (
+      input.cols !== session.screen.cols ||
+      input.rows !== session.screen.rows
+    ) {
+      await this.#resize(session, input.rows, input.cols)
+    }
+    const snapshot = await serializeScreen(session)
+    session.viewers.set(input.attachmentId, {
+      owner,
+      push,
+      renewedAt: Date.now(),
+      sending: false,
+      sentOffset: snapshot.offset,
+    })
+    this.#attachments.set(input.attachmentId, session)
+    this.#startSweeper()
+    this.#flush(session)
+    return {
+      cols: session.screen.cols,
+      offset: snapshot.offset,
+      previous: session.previous,
+      rows: session.screen.rows,
+      sessionId: session.id,
+      snapshot: snapshot.content,
+      startedAt: session.startedAt,
+    }
+  }
+
+  // Returns the attachments the Relay no longer has, so Hearth can reattach.
+  heartbeat(owner: string, attachmentIds: ReadonlyArray<string>) {
+    const now = Date.now()
+    const unknown: Array<string> = []
+    for (const attachmentId of attachmentIds) {
+      const viewer = this.#attachments
+        .get(attachmentId)
+        ?.viewers.get(attachmentId)
+      if (viewer && viewer.owner === owner) viewer.renewedAt = now
+      else unknown.push(attachmentId)
+    }
+    return { unknown }
+  }
+
+  detach(owner: string, attachmentId: string) {
+    const session = this.#attachments.get(attachmentId)
+    if (session?.viewers.get(attachmentId)?.owner === owner) {
+      this.#dropViewer(session, attachmentId)
+    }
+    return { detached: true }
+  }
+
+  write(owner: string, databaseId: string, sessionId: string, data: string) {
+    const session = this.#current(owner, databaseId, sessionId)
+    session.socket.write(data)
+    return { accepted: true }
+  }
+
+  async resize(
+    owner: string,
+    databaseId: string,
+    sessionId: string,
+    rows: number,
+    cols: number
+  ) {
+    await this.#resize(this.#current(owner, databaseId, sessionId), rows, cols)
+    return { resized: true }
+  }
+
+  #current(owner: string, databaseId: string, sessionId: string) {
+    const session = this.#sessions.get(sessionKey(owner, databaseId))
+    // Another person's session is indistinguishable from a missing one.
+    if (!session || session.id !== sessionId || session.ending) {
+      throw new Error("The terminal session has ended")
+    }
+    return session
+  }
+
+  async #start(
+    key: string,
+    database: RelayManagedDatabase,
+    input: RelayDatabaseTerminalAttach
+  ) {
     const containerId = database.containerId
     if (!containerId || database.observedState !== "running") {
       throw new Error("Start the database to open its terminal")
     }
-    // A new terminal replaces the person's least recently used one, so a
-    // tab that closed without saying so can't lock them out.
-    const owned = [...this.#sessions.entries()]
-      .filter(([, session]) => session.owner === owner)
-      .sort(([, left], [, right]) => left.lastRead - right.lastRead)
-    for (const [id, session] of owned.slice(
-      0,
-      Math.max(0, owned.length - MAX_SESSIONS_PER_OWNER + 1)
-    )) {
-      this.#end(id, session)
-    }
     if (this.#sessions.size >= MAX_SESSIONS) {
       throw new Error(
-        "This Relay has too many open database terminals. Close one and try again."
+        "This Relay has too many open database terminals. Try again later."
       )
     }
-    const sessionId = randomBytes(24).toString("base64url")
+    const sessionId = `${BOOT_ID}.${randomBytes(18).toString("base64url")}`
     const pidFile = `${PID_FILE_PREFIX}${sessionId}`
     const client = terminalClient(database, input.username, input.password)
     const created = await this.#dockerJson<{ Id: string }>(
@@ -104,118 +242,181 @@ export class DatabaseTerminals {
       }
     )
     const socket = await this.#startExec(created.Id, input.rows, input.cols)
+    const screen = new HeadlessTerminal({
+      allowProposedApi: true,
+      cols: input.cols,
+      rows: input.rows,
+      scrollback: SCROLLBACK_LINES,
+    })
+    const serializer = new HeadlessSerializeAddon()
+    screen.loadAddon(serializer)
     const session: TerminalSession = {
-      closed: false,
       containerId,
+      databaseId: database.id,
+      ended: null,
+      ending: null,
       execId: created.Id,
       history: Buffer.alloc(0),
       historyStart: 0,
-      lastRead: Date.now(),
-      owner,
+      id: sessionId,
+      idleTimeoutMs: input.idleTimeoutMs,
+      idleTimer: null,
+      key,
+      parsedOffset: 0,
       pidFile,
+      previous: this.#endings.get(key) ?? null,
+      screen,
+      serializer,
       socket,
-      waiters: new Set(),
+      startedAt: new Date().toISOString(),
+      viewers: new Map(),
     }
     socket.on("data", (chunk: Buffer) => {
       const history = Buffer.concat([session.history, chunk])
       const overflow = Math.max(0, history.length - OUTPUT_HISTORY_BYTES)
       session.history = history.subarray(overflow)
       session.historyStart += overflow
-      wake(session)
-    })
-    const end = () => {
-      session.closed = true
-      wake(session)
-    }
-    socket.once("end", end)
-    socket.once("close", end)
-    socket.once("error", end)
-    this.#sessions.set(sessionId, session)
-    this.#startReaper()
-    return { sessionId }
-  }
-
-  async read(
-    owner: string,
-    sessionId: string,
-    cursor: number,
-    signal: AbortSignal
-  ): Promise<RelayDatabaseTerminalOutput> {
-    const session = this.#owned(owner, sessionId)
-    session.lastRead = Date.now()
-    const end = session.historyStart + session.history.length
-    if (cursor >= end && !session.closed) {
-      await new Promise<void>((resolve) => {
-        const done = () => {
-          clearTimeout(timer)
-          signal.removeEventListener("abort", done)
-          session.waiters.delete(done)
-          resolve()
-        }
-        const timer = setTimeout(done, READ_WAIT_MS)
-        signal.addEventListener("abort", done, { once: true })
-        session.waiters.add(done)
+      screen.write(chunk, () => {
+        session.parsedOffset += chunk.length
       })
-      session.lastRead = Date.now()
+      this.#flush(session)
+    })
+    const exited = () => {
+      forkPromise(() => this.#end(session, null))
     }
-    const from = Math.max(cursor, session.historyStart) - session.historyStart
-    const chunk = session.history.subarray(from, from + MAX_READ_BYTES)
-    const next = session.historyStart + from + chunk.length
-    const drained = next >= session.historyStart + session.history.length
-    if (session.closed && drained) this.#end(sessionId, session)
-    return {
-      closed: session.closed && drained,
-      cursor: next,
-      data: chunk.toString("base64"),
-    }
-  }
-
-  write(owner: string, sessionId: string, data: string) {
-    const session = this.#owned(owner, sessionId)
-    if (session.closed) throw new Error("The terminal session has ended")
-    session.socket.write(data)
-    return { accepted: true }
-  }
-
-  async resize(owner: string, sessionId: string, rows: number, cols: number) {
-    const session = this.#owned(owner, sessionId)
-    await this.#resize(session.execId, rows, cols)
-    return { resized: true }
-  }
-
-  close(owner: string, sessionId: string) {
-    const session = this.#sessions.get(sessionId)
-    if (session && session.owner === owner) this.#end(sessionId, session)
-    return { closed: true }
-  }
-
-  #owned(owner: string, sessionId: string) {
-    const session = this.#sessions.get(sessionId)
-    // Another owner's session is indistinguishable from a missing one.
-    if (!session || session.owner !== owner) {
-      throw new Error("The terminal session has ended")
-    }
+    socket.once("end", exited)
+    socket.once("close", exited)
+    socket.once("error", exited)
+    this.#sessions.set(key, session)
+    this.#endings.delete(key)
     return session
   }
 
-  #end(sessionId: string, session: TerminalSession) {
-    if (this.#sessions.get(sessionId) !== session) return
-    this.#sessions.delete(sessionId)
+  // Ends a session for `reason`, or works out why it ended on its own.
+  async #end(
+    session: TerminalSession,
+    reason: DatabaseTerminalEndReason | null
+  ) {
+    if (session.ending || this.#sessions.get(session.key) !== session) return
     // A client that exited on its own has nothing left to hang up, and its
     // PID may already belong to another process.
-    const exited = session.closed
-    session.closed = true
+    const hangUp = reason !== null
+    session.ending =
+      reason ??
+      ((await this.#containerRunning(session)) ? "exited" : "database-stopped")
+    session.ended = { at: new Date().toISOString(), reason: session.ending }
+    if (session.idleTimer) clearTimeout(session.idleTimer)
     session.socket.destroy()
-    wake(session)
-    if (this.#sessions.size === 0) this.#stopReaper()
+    this.#sessions.delete(session.key)
+    this.#endings.set(session.key, session.ended)
+    if (this.#endings.size > MAX_REMEMBERED_ENDINGS) {
+      const oldest = this.#endings.keys().next().value
+      if (oldest !== undefined) this.#endings.delete(oldest)
+    }
+    // Viewers get the remaining output and then the ending.
+    this.#flush(session)
     forkPromise(() =>
       this.#runDetached(session.containerId, [
         "sh",
         "-c",
-        exited ? 'rm -f "$0"' : `${HANG_UP_FUNCTION}; hang_up "$0"`,
+        hangUp ? `${HANG_UP_FUNCTION}; hang_up "$0"` : 'rm -f "$0"',
         session.pidFile,
       ])
     )
+  }
+
+  // Sends each viewer the output it hasn't had, one push at a time per viewer.
+  #flush(session: TerminalSession) {
+    const end = session.historyStart + session.history.length
+    for (const [attachmentId, viewer] of session.viewers) {
+      if (viewer.sending) continue
+      const behind = viewer.sentOffset < session.historyStart
+      if (behind) {
+        // Too far behind to catch up from raw output; it reattaches for a
+        // fresh snapshot.
+        this.#dropViewer(session, attachmentId)
+        continue
+      }
+      const finished = session.ended !== null
+      if (viewer.sentOffset >= end && !finished) continue
+      const from = viewer.sentOffset - session.historyStart
+      const chunk = session.history.subarray(from, from + MAX_PUSH_BYTES)
+      const offset = viewer.sentOffset + chunk.length
+      const last = finished && offset >= end
+      viewer.sending = true
+      forkPromise(async () => {
+        const accepted = await recoverPromise(
+          () =>
+            viewer.push(
+              {
+                attachmentId,
+                data: chunk.toString("base64"),
+                ended: last ? session.ended : null,
+                offset,
+                sessionId: session.id,
+              },
+              PUSH_TIMEOUT_MS
+            ),
+          () => null
+        )
+        viewer.sending = false
+        if (!isAccepted(accepted) || last) {
+          this.#dropViewer(session, attachmentId)
+          return
+        }
+        viewer.sentOffset = offset
+        this.#flush(session)
+      })
+    }
+  }
+
+  #dropViewer(session: TerminalSession, attachmentId: string) {
+    if (!session.viewers.delete(attachmentId)) return
+    this.#attachments.delete(attachmentId)
+    if (session.viewers.size > 0 || session.ending) return
+    session.idleTimer = setTimeout(() => {
+      forkPromise(() => this.#end(session, "timed-out"))
+    }, session.idleTimeoutMs)
+    session.idleTimer.unref()
+  }
+
+  #startSweeper() {
+    if (this.#sweeper) return
+    this.#sweeper = setInterval(() => {
+      const expired = Date.now() - VIEWER_EXPIRES_AFTER_MS
+      for (const session of this.#sessions.values()) {
+        for (const [attachmentId, viewer] of session.viewers) {
+          if (viewer.renewedAt < expired) {
+            this.#dropViewer(session, attachmentId)
+          }
+        }
+      }
+      if (this.#sessions.size === 0 && this.#sweeper) {
+        clearInterval(this.#sweeper)
+        this.#sweeper = null
+      }
+    }, VIEWER_SWEEP_INTERVAL_MS)
+    this.#sweeper.unref()
+  }
+
+  async #resize(session: TerminalSession, rows: number, cols: number) {
+    session.screen.resize(cols, rows)
+    await this.#dockerJson(
+      "POST",
+      `/exec/${encodeURIComponent(session.execId)}/resize?h=${rows}&w=${cols}`
+    )
+  }
+
+  async #containerRunning(session: TerminalSession) {
+    const state = await recoverPromise(
+      () =>
+        this.#dockerJson<{ State?: { Running?: boolean } }>(
+          "GET",
+          `/containers/${encodeURIComponent(session.containerId)}/json`
+        ),
+      () => null
+    )
+    return state?.State?.Running === true
   }
 
   // Clients left by a Relay that stopped while terminals were open.
@@ -252,24 +453,6 @@ export class DatabaseTerminals {
       `/exec/${encodeURIComponent(created.Id)}/start`,
       { Detach: true }
     )
-  }
-
-  #startReaper() {
-    if (this.#reaper) return
-    this.#reaper = setInterval(() => {
-      const now = Date.now()
-      for (const [sessionId, session] of this.#sessions) {
-        if (now - session.lastRead > ABANDONED_AFTER_MS) {
-          this.#end(sessionId, session)
-        }
-      }
-    }, REAPER_INTERVAL_MS)
-    this.#reaper.unref()
-  }
-
-  #stopReaper() {
-    if (this.#reaper) clearInterval(this.#reaper)
-    this.#reaper = null
   }
 
   #startExec(execId: string, rows: number, cols: number) {
@@ -312,13 +495,6 @@ export class DatabaseTerminals {
     })
   }
 
-  async #resize(execId: string, rows: number, cols: number) {
-    await this.#dockerJson(
-      "POST",
-      `/exec/${encodeURIComponent(execId)}/resize?h=${rows}&w=${cols}`
-    )
-  }
-
   #dockerJson<TResult>(method: string, path: string, payload?: unknown) {
     return new Promise<TResult>((resolve, reject) => {
       const body = payload === undefined ? "" : JSON.stringify(payload)
@@ -357,8 +533,33 @@ export class DatabaseTerminals {
   }
 }
 
-function wake(session: TerminalSession) {
-  for (const waiter of session.waiters) waiter()
+// The screen as escape sequences that rebuild it in an empty terminal, with
+// as much scrollback as fits in one control frame.
+function serializeScreen(session: TerminalSession) {
+  return new Promise<{ content: string; offset: number }>((resolve) => {
+    // An empty write runs its callback once earlier output is processed.
+    session.screen.write("", () => {
+      let scrollback = SCROLLBACK_LINES
+      let content = session.serializer.serialize({ scrollback })
+      while (content.length > MAX_SNAPSHOT_CHARACTERS && scrollback > 0) {
+        scrollback = Math.floor(scrollback / 2)
+        content = session.serializer.serialize({ scrollback })
+      }
+      resolve({ content, offset: session.parsedOffset })
+    })
+  })
+}
+
+function sessionKey(owner: string, databaseId: string) {
+  return `${owner}\u0000${databaseId}`
+}
+
+function isAccepted(reply: unknown) {
+  return (
+    typeof reply === "object" &&
+    reply !== null &&
+    (reply as { accepted?: unknown }).accepted === true
+  )
 }
 
 // The engine's own client, signed in as the database's user. Passwords go
