@@ -531,10 +531,6 @@ const FilteredRelayTable = React.memo(function FilteredRelayTable({
     () => relayOwnerNamesKey(result.data),
     [result.data]
   )
-  const { data: ownerProfileIds = noOwnerProfileIds } = useQuery({
-    ...relayOwnerMinecraftProfilesQueryOptions(ownerNames),
-    select: selectOwnerProfileIds,
-  })
   const relayStatuses = React.useMemo(
     () => new Map(connectionStates.map((relay) => [relay.id, relay.status])),
     [connectionStates]
@@ -568,7 +564,7 @@ const FilteredRelayTable = React.memo(function FilteredRelayTable({
   })
 
   return (
-    <RelayOwnerProfileIdsContext.Provider value={ownerProfileIds}>
+    <RelayOwnerProfilesProvider ownerNames={ownerNames}>
       <RelayTable
         outdatedRelayIds={updateSummary.outdatedRelayIds}
         reportedVersions={updateSummary.reportedVersions}
@@ -579,9 +575,28 @@ const FilteredRelayTable = React.memo(function FilteredRelayTable({
         onEdit={onEdit}
         onOpenUpdates={onOpenUpdates}
       />
-    </RelayOwnerProfileIdsContext.Provider>
+    </RelayOwnerProfilesProvider>
   )
 })
+
+/** Owns the avatar query so profile updates only reach owner cells. */
+function RelayOwnerProfilesProvider({
+  children,
+  ownerNames,
+}: {
+  children: React.ReactNode
+  ownerNames: string
+}) {
+  const { data: ownerProfileIds = noOwnerProfileIds } = useQuery({
+    ...relayOwnerMinecraftProfilesQueryOptions(ownerNames),
+    select: selectOwnerProfileIds,
+  })
+  return (
+    <RelayOwnerProfileIdsContext.Provider value={ownerProfileIds}>
+      {children}
+    </RelayOwnerProfileIdsContext.Provider>
+  )
+}
 
 const RelaySyncButton = React.memo(function RelaySyncButton() {
   const queryClient = useQueryClient()
