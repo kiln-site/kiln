@@ -12,6 +12,7 @@ import { startAccessInvitationDelivery } from "./lib/access-invitation-delivery"
 import { scheduleBackupCopyProcessing } from "./lib/backup-copy"
 import { wakePendingAuthorizationDelivery } from "./lib/authorization-delivery"
 import { scheduleInstancePostProvisionProcessing } from "./lib/instance-post-provision"
+import { startKilnUpdateNotifications } from "./lib/kiln-update-notifications"
 import { scheduleTailscaleCleanupProcessing } from "./lib/tailscale-cleanup.server"
 import {
   initializeRelayFromEnvironment,
@@ -60,6 +61,7 @@ startAccessInvitationDelivery()
 scheduleBackupCopyProcessing()
 scheduleInstancePostProvisionProcessing()
 scheduleTailscaleCleanupProcessing()
+startKilnUpdateNotifications()
 forkPromise(wakePendingAuthorizationDelivery, (cause) => {
   Sentry.captureException(cause, {
     tags: { "kiln.operation": "authorization.delivery.recover" },

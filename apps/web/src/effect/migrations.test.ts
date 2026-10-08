@@ -58,8 +58,8 @@ describeMysql("database migrations", () => {
             SELECT COUNT(*) AS count FROM information_schema.tables
             WHERE table_schema = DATABASE()
           `
-          // Baseline, the migration ledger, and instance favorites.
-          expect(count).toBe(baselineTables.length + 2)
+          // Baseline, the migration ledger, instance favorites, and notifications.
+          expect(count).toBe(baselineTables.length + 3)
           expect(yield* ledger).toEqual(migrationIds)
           // Only better-auth keeps dates, as DATETIME.
           expect((yield* columnTypes).map((row) => row.dataType)).toEqual([

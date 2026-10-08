@@ -45,6 +45,11 @@ import {
 } from "@workspace/ui/components/tooltip"
 import { AccountAvatar } from "@/components/account-avatar"
 import { HearthMark } from "@/components/hearth-mark"
+import {
+  NotificationsBellButton,
+  NotificationsMenuItem,
+  UnreadNotificationsIndicator,
+} from "@/components/notifications"
 import { BackupIcon } from "@/components/backup-icon"
 import {
   RouteCommandMenuProvider,
@@ -167,6 +172,7 @@ const AppSidebarView = React.memo(function AppSidebarView({
                   KILN
                 </span>
               </SidebarMenuButton>
+              <HeaderNotificationsBell />
             </SidebarMenuItem>
           </SidebarMenu>
           <RouteCommandMenuTrigger />
@@ -192,6 +198,17 @@ const AppSidebarView = React.memo(function AppSidebarView({
     </RouteCommandMenuProvider>
   )
 })
+
+// Collapsed, notifications live in the account menu instead.
+function HeaderNotificationsBell() {
+  const { isMobile } = useSidebar()
+  return (
+    <NotificationsBellButton
+      className="absolute top-1/2 right-1 -translate-y-1/2 group-data-[collapsible=icon]:hidden"
+      tooltipHidden={isMobile}
+    />
+  )
+}
 
 function InfrastructureNavigation({
   capabilities,
@@ -1171,16 +1188,18 @@ function AccountNavigation({
 function CollapsedAccountMenu({ user }: { user: AuthenticatedUser }) {
   const [open, setOpen] = React.useState(false)
   const [signingOut, setSigningOut] = React.useState(false)
+  const closeMenu = React.useCallback(() => setOpen(false), [])
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
         <button
           type="button"
-          className="grid size-[32px] place-items-center transition-colors hover:bg-sidebar-accent focus-visible:ring-2 focus-visible:ring-sidebar-ring/45 focus-visible:outline-none data-[state=open]:bg-sidebar-accent"
+          className="relative grid size-[32px] place-items-center transition-colors hover:bg-sidebar-accent focus-visible:ring-2 focus-visible:ring-sidebar-ring/45 focus-visible:outline-none data-[state=open]:bg-sidebar-accent"
           aria-label={`Open account menu for ${user.name}`}
         >
           <AccountAvatar name={user.name} />
+          <UnreadNotificationsIndicator />
         </button>
       </PopoverTrigger>
       <PopoverContent
@@ -1193,6 +1212,7 @@ function CollapsedAccountMenu({ user }: { user: AuthenticatedUser }) {
           {user.name}
         </p>
         <div className="-mx-1 mb-1 h-px bg-border" />
+        <NotificationsMenuItem onSelect={closeMenu} />
         <Link
           to="/settings/account"
           preload="intent"

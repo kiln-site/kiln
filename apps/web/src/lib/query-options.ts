@@ -32,6 +32,8 @@ import {
   minecraftUsernameKey,
 } from "@/lib/minecraft-profile"
 import { getUiPreferences } from "@/server/preferences"
+import { getNotifications, markNotificationsRead } from "@/server/notifications"
+import type { KilnNotification } from "@/lib/notifications"
 import {
   getInstanceFavorites,
   setInstanceFavorite,
@@ -156,6 +158,7 @@ export const queryKeys = {
   tailscaleStacks: ["tailscale", "stacks"] as const,
   updates: ["updates", "overview"] as const,
   instanceFavorites: ["instance-favorites"] as const,
+  notifications: ["notifications"] as const,
   uiPreferences: ["ui", "preferences"] as const,
 }
 
@@ -492,6 +495,45 @@ export function setInstanceFavoriteMutationOptions(
       })
       if (pending === 1) await queryClient.invalidateQueries({ queryKey })
     },
+  })
+}
+
+export function notificationsQueryOptions() {
+  return queryOptions({
+    queryKey: queryKeys.notifications,
+    queryFn: () => getNotifications(),
+    staleTime: Infinity,
+  })
+}
+
+export function selectUnreadNotificationCount(
+  notifications: ReadonlyArray<KilnNotification>
+): number {
+  let count = 0
+  for (const notification of notifications) {
+    if (notification.readAt === null) count += 1
+  }
+  return count
+}
+
+export function markNotificationsReadMutationOptions(queryClient: QueryClient) {
+  const { queryKey } = notificationsQueryOptions()
+  return mutationOptions({
+    mutationKey: ["notifications", "mark-read"] as const,
+    mutationFn: (through: number) =>
+      markNotificationsRead({ data: { through } }),
+    onMutate: async (through) => {
+      await queryClient.cancelQueries({ queryKey })
+      const readAt = Date.now()
+      queryClient.setQueryData(queryKey, (current) =>
+        current?.map((notification) =>
+          notification.readAt === null && notification.createdAt <= through
+            ? { ...notification, readAt }
+            : notification
+        )
+      )
+    },
+    onSettled: () => queryClient.invalidateQueries({ queryKey }),
   })
 }
 

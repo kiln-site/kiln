@@ -15,6 +15,10 @@ import {
   relayIdSchema,
   type PermissionSelection,
 } from "@workspace/contracts"
+import {
+  notifyUsersEffect,
+  publishNotificationChange,
+} from "@/effect/notifications"
 import { runAppEffect } from "@/effect/runtime"
 import { databaseTable } from "@/lib/database-config"
 import { databasePool } from "@/lib/database"
@@ -284,6 +288,17 @@ export const inviteResourceAccess = createServerFn({ method: "POST" })
               accessId,
               scope: target,
             })
+            yield* notifyUsersEffect([recipient.id], `access.invited:${id}`, {
+              actorName: user.name,
+              invitationId: id,
+              kind: "access.invited",
+              resource: {
+                id: target.resourceId,
+                name: resource.name ?? target.resourceId,
+                relayId: target.relayId,
+                type: target.resourceType,
+              },
+            })
             const url = new URL("/invite", kilnPublicUrl())
             url.searchParams.set("token", token)
             invitations.push({
@@ -304,6 +319,8 @@ export const inviteResourceAccess = createServerFn({ method: "POST" })
       [result.userId],
       targets.map((target) => target.relayId)
     )
+    if (result.invitations.some((item) => !item.existing))
+      publishNotificationChange([result.userId])
     const { deliverAccessInvitations } =
       await import("@/lib/access-invitation-delivery")
     await deliverAccessInvitations(
@@ -810,11 +827,34 @@ export const updateResourceAccess = createServerFn({ method: "POST" })
                 data
               ).size > 0
             : false
-          return { userId: grant.user_id, inheritedAccessRemains: remaining }
+          // Cancelling a pending invitation or trimming a grant that broader
+          // access still covers takes nothing away from the user.
+          const removed = data.revoke && grant.state === "active" && !remaining
+          if (removed)
+            yield* notifyUsersEffect(
+              [grant.user_id],
+              `access.removed:${grant.id}:${Number(grant.revision) + 1}`,
+              {
+                actorName: user.name,
+                kind: "access.removed",
+                resource: {
+                  id: data.resourceId,
+                  name: resource.name ?? data.resourceId,
+                  relayId: data.relayId,
+                  type: data.resourceType,
+                },
+              }
+            )
+          return {
+            userId: grant.user_id,
+            inheritedAccessRemains: remaining,
+            removed,
+          }
         })
       )
     )
     await publishResourceAccessChange([result.userId], [data.relayId])
+    if (result.removed) publishNotificationChange([result.userId])
     return result
   })
 
