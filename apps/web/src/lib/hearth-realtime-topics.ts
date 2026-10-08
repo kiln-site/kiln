@@ -10,6 +10,7 @@ export const hearthRealtimeTopics = [
   "database-directory",
   "databases",
   "domains",
+  "favorites",
   "file-activity",
   "instance-directory",
   "instance-web-routes",

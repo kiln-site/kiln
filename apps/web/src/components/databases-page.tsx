@@ -73,6 +73,7 @@ import {
   DataTableTextCell,
 } from "@/components/data-table"
 import { CopyIdentifierMenuItem } from "@/components/copy-identifier-menu-item"
+import { InstanceFavoriteMenuItem } from "@/components/instance-favorite"
 import { DataTable } from "@/components/data-table-view"
 import {
   DataTableToolbar,
@@ -652,6 +653,14 @@ const DatabaseActions = React.memo(function DatabaseActions({
           <TooltipContent side="bottom">More actions</TooltipContent>
         </Tooltip>
         <DropdownMenuContent align="end" className="min-w-44">
+          <InstanceFavoriteMenuItem
+            favorite={{
+              id: database.id,
+              kind: "database",
+              relayId: database.relayId,
+            }}
+          />
+          <DropdownMenuSeparator />
           {canPower ? (
             <>
               <DropdownMenuItem

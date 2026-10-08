@@ -51,6 +51,7 @@ const hearthRealtimeQueryScopes = {
   ],
   databases: [exact(queryKeys.databases.list)],
   domains: [prefix(["domains"])],
+  favorites: [exact(queryKeys.instanceFavorites)],
   "file-activity": [prefix(["file-activity"])],
   "instance-directory": [exact(queryKeys.schedules.options)],
   "instance-web-routes": [prefix(["web-routes"])],

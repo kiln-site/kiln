@@ -49,6 +49,7 @@ import { Input } from "@workspace/ui/components/input"
 import {
   DropdownMenu,
   DropdownMenuContent,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@workspace/ui/components/dropdown-menu"
 import {
@@ -72,6 +73,7 @@ import {
 
 import { RelayToastTitle } from "@/components/relay-toast-title"
 import { CopyIdentifierMenuItem } from "@/components/copy-identifier-menu-item"
+import { InstanceFavoriteMenuItem } from "@/components/instance-favorite"
 import {
   DataTableActionGroup,
   DataTableEmptyState,
@@ -784,6 +786,10 @@ const RelayActions = React.memo(function RelayActions({
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end" className="min-w-44">
+          <InstanceFavoriteMenuItem
+            favorite={{ id: relay.id, kind: "relay", relayId: relay.id }}
+          />
+          <DropdownMenuSeparator />
           <CopyIdentifierMenuItem label="Relay ID" value={relay.id} />
         </DropdownMenuContent>
       </DropdownMenu>

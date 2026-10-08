@@ -25,6 +25,7 @@ import {
 } from "@/server/databases"
 import { isMinecraftUsername } from "@/lib/minecraft-profile"
 import { getUiPreferences } from "@/server/preferences"
+import { getInstanceFavorites } from "@/server/instance-favorites"
 import { getMinecraftProfile } from "@/server/minecraft"
 import { reconcilePendingPowerSnapshot } from "@/lib/instance-power-state"
 import { systemUpdateOverviewRefetchPolicy } from "@/lib/system-update-presence"
@@ -134,6 +135,7 @@ export const queryKeys = {
   tailscale: (relayId: string) => ["tailscale", "relays", relayId] as const,
   tailscaleStacks: ["tailscale", "stacks"] as const,
   updates: ["updates", "overview"] as const,
+  instanceFavorites: ["instance-favorites"] as const,
   uiPreferences: ["ui", "preferences"] as const,
 }
 
@@ -392,6 +394,14 @@ export function invitationPreviewQueryOptions(token: string) {
     queryKey: queryKeys.access.invitation(token),
     queryFn: () => getInvitationPreview({ data: { token } }),
     staleTime: 30_000,
+  })
+}
+
+export function instanceFavoritesQueryOptions() {
+  return queryOptions({
+    queryKey: queryKeys.instanceFavorites,
+    queryFn: () => getInstanceFavorites(),
+    staleTime: Infinity,
   })
 }
 

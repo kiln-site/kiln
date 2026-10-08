@@ -555,6 +555,7 @@ const ServerSelector = React.memo(function ServerSelector({
                   metaClassName="text-sidebar-muted-foreground"
                   name={instance.name}
                   nameClassName="type-control-sm text-sidebar-foreground"
+                  showFavorite={false}
                   statusClassName="ring-popover"
                   textClassName="group-data-[collapsible=icon]:sr-only"
                 />

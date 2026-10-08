@@ -24,6 +24,7 @@ import { Button } from "@workspace/ui/components/button"
 import {
   DropdownMenu,
   DropdownMenuContent,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@workspace/ui/components/dropdown-menu"
 import {
@@ -39,6 +40,7 @@ import {
 } from "@/components/add-server-dialog"
 import type { AddServerDialogStore } from "@/components/add-server-dialog"
 import { CopyIdentifierMenuItem } from "@/components/copy-identifier-menu-item"
+import { InstanceFavoriteMenuItem } from "@/components/instance-favorite"
 import {
   DataTableActionGroup,
   DataTableEmptyState,
@@ -656,6 +658,14 @@ const ServerActions = React.memo(function ServerActions({
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end" className="min-w-44">
+          <InstanceFavoriteMenuItem
+            favorite={{
+              id: server.id,
+              kind: "server",
+              relayId: server.relayId,
+            }}
+          />
+          <DropdownMenuSeparator />
           <CopyIdentifierMenuItem label="Server ID" value={server.id} />
           <CopyIdentifierMenuItem label="Relay ID" value={server.relayId} />
         </DropdownMenuContent>
