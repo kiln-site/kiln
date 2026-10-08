@@ -1,7 +1,11 @@
 import { Effect, Schema } from "effect"
 
 import { ExternalServiceError } from "@/effect/errors"
-import { isMinecraftUsername } from "@/lib/minecraft-profile"
+import { readThroughCache } from "@/lib/cache"
+import {
+  isMinecraftUsername,
+  minecraftUsernameKey,
+} from "@/lib/minecraft-profile"
 
 const MinecraftProfileSchema = Schema.Struct({
   id: Schema.String,
@@ -13,15 +17,20 @@ const minecraftProfileHeaders = {
   "User-Agent": "kiln-hearth",
 }
 
+const decodeCachedMinecraftProfile = Schema.decodeUnknownSync(
+  Schema.NullOr(MinecraftProfileSchema)
+)
+
 export type MinecraftProfile = typeof MinecraftProfileSchema.Type
 
 export const resolveMinecraftProfileEffect = Effect.fn(
   "minecraft.profile.resolve"
 )(function* (displayName: string) {
-  const username = displayName.trim()
-  if (!isMinecraftUsername(username)) return null
+  if (!isMinecraftUsername(displayName)) return null
+  // Mojang usernames are case-insensitive, so every casing shares one entry.
+  const username = minecraftUsernameKey(displayName)
 
-  return yield* Effect.tryPromise({
+  const load = Effect.tryPromise({
     try: async () => {
       const response = await fetch(
         `${mojangProfileBaseUrl}/${encodeURIComponent(username)}`,
@@ -48,5 +57,14 @@ export const resolveMinecraftProfileEffect = Effect.fn(
             : "Mojang returned an invalid response",
         service: "Mojang",
       }),
+  })
+  return yield* readThroughCache({
+    decode: decodeCachedMinecraftProfile,
+    load,
+    policy: {
+      key: `minecraft:profile:${username}`,
+      name: "Minecraft profile",
+      ttlMs: 60 * 60_000,
+    },
   })
 })

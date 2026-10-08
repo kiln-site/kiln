@@ -11,24 +11,39 @@ import { cn } from "@workspace/ui/lib/utils"
 import { minecraftHeadUrl } from "@/lib/minecraft-profile"
 import { minecraftProfileQueryOptions } from "@/lib/query-options"
 
-export const AccountAvatar = React.memo(function AccountAvatar({
-  className,
-  fallbackClassName,
-  name,
-  size = "sm",
-}: {
+interface UserAvatarProps {
   className?: string
   fallbackClassName?: string
   name: string
   size?: "default" | "sm" | "lg"
-}) {
-  const { data: profile } = useQuery(minecraftProfileQueryOptions(name))
+}
 
+/** The signed-in user's avatar; resolves their Minecraft head. */
+export const AccountAvatar = React.memo(function AccountAvatar(
+  props: UserAvatarProps
+) {
+  const { data: profile } = useQuery(minecraftProfileQueryOptions(props.name))
+
+  return <UserAvatar {...props} profileId={profile?.id} />
+})
+
+/** Any user's avatar from an already resolved Minecraft profile. */
+export const UserAvatar = React.memo(function UserAvatar({
+  className,
+  fallbackClassName,
+  name,
+  profileId,
+  size = "sm",
+}: UserAvatarProps & { profileId?: string }) {
   return (
-    <Avatar size={size} className={cn("rounded-none", className)}>
-      {profile ? (
+    <Avatar
+      aria-hidden="true"
+      size={size}
+      className={cn("rounded-none", className)}
+    >
+      {profileId ? (
         <AvatarImage
-          src={minecraftHeadUrl(profile.id)}
+          src={minecraftHeadUrl(profileId)}
           alt=""
           referrerPolicy="no-referrer"
           className={size === "lg" ? "[image-rendering:pixelated]" : undefined}
