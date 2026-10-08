@@ -66,6 +66,11 @@ type SessionNotice =
   | { kind: "relay-restarted" }
 
 // Who the client is signed in as, and since when, for the toolbar.
+interface TerminalSize {
+  cols: number
+  rows: number
+}
+
 interface TerminalSessionInfo {
   startedAt: string
   user: string
@@ -502,10 +507,20 @@ const TerminalSurface = React.memo(
       fit.fit()
       terminal.focus()
 
+      // The size this page's window fits, within what the Relay accepts.
+      const measure = () => {
+        const size = fit.proposeDimensions()
+        if (!size || !size.cols || !size.rows) return null
+        return {
+          cols: Math.min(Math.max(size.cols, 10), 500),
+          rows: Math.min(Math.max(size.rows, 4), 300),
+        }
+      }
       const connection = new TerminalConnection(
         terminal,
         { databaseId, relayId },
-        events
+        events,
+        measure
       )
       handle.current = {
         connect: (restart) => connection.connect(restart),
@@ -556,10 +571,10 @@ const TerminalSurface = React.memo(
         }
       })
       const typed = terminal.onData((data) => connection.input(data))
-      const resized = terminal.onResize(({ cols, rows }) =>
-        connection.resize(cols, rows)
-      )
-      const observer = new ResizeObserver(() => fit.fit())
+      // The page in use claims the session's size for its window.
+      const claim = () => connection.claimSize()
+      terminal.textarea?.addEventListener("focus", claim)
+      const observer = new ResizeObserver(claim)
       observer.observe(container)
       connection.connect(false)
 
@@ -569,7 +584,7 @@ const TerminalSurface = React.memo(
         scrolled.dispose()
         selected.dispose()
         typed.dispose()
-        resized.dispose()
+        terminal.textarea?.removeEventListener("focus", claim)
         handle.current = null
         terminal.dispose()
       }
@@ -587,6 +602,7 @@ const TerminalSurface = React.memo(
 // back, and reattaches with backoff when the stream drops.
 class TerminalConnection {
   readonly #events: TerminalSurfaceEvents
+  readonly #measure: () => TerminalSize | null
   readonly #target: { databaseId: string; relayId: string }
   readonly #terminal: Terminal
   #abort: AbortController | null = null
@@ -602,17 +618,21 @@ class TerminalConnection {
   // Whether this page asked for the session it is attaching to.
   #restarting = false
   #sessionId: string | null = null
+  // The session's size, which this page renders at whatever its window.
+  #sessionSize: TerminalSize | null = null
   #stopped = false
   #writing = false
 
   constructor(
     terminal: Terminal,
     target: { databaseId: string; relayId: string },
-    events: TerminalSurfaceEvents
+    events: TerminalSurfaceEvents,
+    measure: () => TerminalSize | null
   ) {
     this.#terminal = terminal
     this.#target = target
     this.#events = events
+    this.#measure = measure
   }
 
   connect(restart: boolean) {
@@ -641,9 +661,38 @@ class TerminalConnection {
       this.#pendingSessionId = this.#sessionId
     }
     this.#pendingInput += data
+    // Typing here takes the size back from another page or device.
+    this.claimSize()
     if (!this.#flushTimer) {
       this.#flushTimer = setTimeout(() => this.#flushInput(), INPUT_FLUSH_MS)
     }
+  }
+
+  // Sizes the session to this page's window when this is the page in use:
+  // its window has focus and the terminal has it within. Other pages keep
+  // showing it at its size. Only a trigger claims (focus, the window
+  // resizing, typing), never a size arriving, so pages don't trade it back.
+  claimSize() {
+    const current = this.#sessionSize
+    if (!this.#live || !current) return
+    if (
+      !document.hasFocus() ||
+      document.activeElement !== this.#terminal.textarea
+    ) {
+      return
+    }
+    const wanted = this.#measure()
+    if (!wanted) return
+    if (wanted.cols === current.cols && wanted.rows === current.rows) return
+    this.resize(wanted.cols, wanted.rows)
+  }
+
+  // Output already written was at the old size, so the resize waits for it.
+  #applySize(cols: number, rows: number) {
+    const current = this.#sessionSize
+    if (current?.cols === cols && current.rows === rows) return
+    this.#sessionSize = { cols, rows }
+    this.#terminal.write("", () => this.#terminal.resize(cols, rows))
   }
 
   resize(cols: number, rows: number) {
@@ -736,9 +785,10 @@ class TerminalConnection {
     const response = await fetch(
       databaseTerminalStreamUrl({
         ...this.#target,
-        cols: this.#terminal.cols,
+        // Used only when this starts a session; joining keeps its size.
+        cols: this.#measure()?.cols ?? this.#terminal.cols,
         restart,
-        rows: this.#terminal.rows,
+        rows: this.#measure()?.rows ?? this.#terminal.rows,
       }),
       { credentials: "same-origin", signal: abort.signal }
     )
@@ -795,8 +845,10 @@ class TerminalConnection {
           )
         }
         this.#restarting = false
-        // Rebuild the screen from the session's own snapshot, so every page
-        // shows the same thing whatever it missed.
+        // Rebuild the screen from the session's own snapshot, at its size, so
+        // every page shows the same thing whatever it missed.
+        this.#sessionSize = { cols: record.cols, rows: record.rows }
+        this.#terminal.resize(record.cols, record.rows)
         this.#terminal.reset()
         this.#terminal.write(record.snapshot)
         this.#offset = record.offset
@@ -810,18 +862,16 @@ class TerminalConnection {
           user: record.user,
         })
         this.#events.onStatus({ kind: "live" })
-        if (
-          record.cols !== this.#terminal.cols ||
-          record.rows !== this.#terminal.rows
-        ) {
-          this.resize(this.#terminal.cols, this.#terminal.rows)
-        }
+        this.claimSize()
         return null
       }
       case "output": {
+        // Older than what this page shows already, size included.
+        if (record.offset < this.#offset) return null
+        this.#applySize(record.cols, record.rows)
+        if (record.offset === this.#offset) return null
         const bytes = decodeBase64(record.data)
         const start = record.offset - bytes.length
-        if (record.offset <= this.#offset) return null
         this.#terminal.write(
           start < this.#offset ? bytes.subarray(this.#offset - start) : bytes
         )

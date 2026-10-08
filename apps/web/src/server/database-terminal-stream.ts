@@ -106,9 +106,14 @@ export function openDatabaseTerminalStream(input: {
       early.push(output)
       return
     }
-    if (output.data) {
-      send({ data: output.data, offset: output.offset, type: "output" })
-    }
+    // Sent even without data: a resize alone changes how the page shows.
+    send({
+      cols: output.cols,
+      data: output.data,
+      offset: output.offset,
+      rows: output.rows,
+      type: "output",
+    })
     if (output.ended) finish({ ended: output.ended, type: "ended" })
   }
   const unregister = registerDatabaseTerminalAttachment(
@@ -195,7 +200,6 @@ export function openDatabaseTerminalStream(input: {
     if (closed) return
     send({ ...session, type: "attached", user: credential.username })
     attached = true
-    for (const output of early.splice(0)) deliver(output)
     timers.push(
       setInterval(() => send({ type: "ping" }), PING_INTERVAL_MS),
       setInterval(() => {
@@ -222,6 +226,8 @@ export function openDatabaseTerminalStream(input: {
         }, fail)
       }, HEARTBEAT_INTERVAL_MS)
     )
+    // After the timers exist, so an ending among these clears them too.
+    for (const output of early.splice(0)) deliver(output)
   }, fail)
 
   return new ReadableStream<Uint8Array>({

@@ -10,6 +10,9 @@ const boundary = vi.hoisted(() => ({
   allowed: true,
   attachmentIds: [] as Array<string>,
   detached: [] as Array<string>,
+  // The session ends while the page is still attaching.
+  endsWhileAttaching: false,
+  renewals: 0,
   signedIn: true,
 }))
 
@@ -21,6 +24,19 @@ vi.mock("@/server/managed-database-access", () => ({
   ) => {
     if (operation === "database.terminal.attach") {
       boundary.attachmentIds.push(payload.attachmentId!)
+      if (boundary.endsWhileAttaching) {
+        const { deliverDatabaseTerminalOutput } =
+          await import("@/server/database-terminal-hub")
+        deliverDatabaseTerminalOutput("relay-one", {
+          attachmentId: payload.attachmentId!,
+          cols: 80,
+          data: "",
+          ended: { at: "2026-01-01T00:00:01.000Z", reason: "exited" },
+          offset: 0,
+          rows: 24,
+          sessionId: `boot0000.${"s".repeat(24)}`,
+        })
+      }
       return {
         cols: 80,
         offset: 0,
@@ -31,6 +47,7 @@ vi.mock("@/server/managed-database-access", () => ({
         startedAt: "2026-01-01T00:00:00.000Z",
       }
     }
+    if (operation === "database.terminal.heartbeat") boundary.renewals += 1
     if (operation === "database.terminal.detach") {
       boundary.detached.push(payload.attachmentId!)
       return { detached: true }
@@ -75,6 +92,7 @@ const relay = { enabled: true, id: "relay-one" } as PersistedRelay
 
 async function openStream() {
   boundary.allowed = true
+  boundary.endsWhileAttaching = false
   boundary.signedIn = true
   const page = new AbortController()
   const reader = openDatabaseTerminalStream({
@@ -98,15 +116,47 @@ async function openStream() {
   const output = (data: string) =>
     deliverDatabaseTerminalOutput(relay.id, {
       attachmentId,
+      cols: 80,
       data: Buffer.from(data).toString("base64"),
       ended: null,
       offset: 0,
+      rows: 24,
       sessionId: `boot0000.${"s".repeat(24)}`,
     })
   return { attachmentId, next, output, page }
 }
 
 describe("database terminal stream", () => {
+  it("stops renewing a session that ended while the page was attaching", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] })
+    boundary.endsWhileAttaching = true
+    boundary.renewals = 0
+    const reader = openDatabaseTerminalStream({
+      authSessionId: "sign-in-one",
+      cols: 80,
+      databaseId: "e".repeat(40),
+      headers: new Headers(),
+      relay,
+      restart: false,
+      rows: 24,
+      signal: new AbortController().signal,
+      user,
+    }).getReader()
+    const decoder = new TextDecoder()
+    const records: Array<DatabaseTerminalStreamRecord> = []
+    for (;;) {
+      const { done, value } = await reader.read()
+      if (done) break
+      records.push(JSON.parse(decoder.decode(value)))
+    }
+
+    await vi.advanceTimersByTimeAsync(5 * 60_000)
+    vi.useRealTimers()
+
+    expect(records.at(-1)).toMatchObject({ type: "ended" })
+    expect(boundary.renewals).toBe(0)
+  })
+
   it("stops sending output once the person loses access to the terminal", async () => {
     const stream = await openStream()
 

@@ -296,10 +296,13 @@ export const relayDatabaseTerminalResizeSchema = z
 export const hearthDatabaseTerminalOutputSchema = z
   .object({
     attachmentId: databaseTerminalIdSchema,
+    // The session's size this output is shown at.
+    cols: z.number().int().min(10).max(500),
     // Raw terminal bytes, base64 encoded; chunks may split characters.
     data: z.string(),
     ended: databaseTerminalEndSchema.nullable(),
     offset: z.number().int().nonnegative(),
+    rows: z.number().int().min(4).max(300),
     sessionId: databaseTerminalIdSchema,
   })
   .strict()

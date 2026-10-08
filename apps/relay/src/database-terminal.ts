@@ -73,8 +73,19 @@ interface Viewer {
   push: PushTerminalOutput
   renewedAt: number
   sending: boolean
-  // Output up to here has been delivered to this viewer.
+  // Output up to here has been delivered to this viewer, at this size.
   sentOffset: number
+  size: TerminalSize
+}
+
+interface TerminalSize {
+  cols: number
+  rows: number
+}
+
+// The session's size from `offset` in its output on.
+interface SizeChange extends TerminalSize {
+  offset: number
 }
 
 interface TerminalSession {
@@ -94,6 +105,10 @@ interface TerminalSession {
   key: string
   // Output the screen has fully processed; snapshots cover exactly this.
   parsedOffset: number
+  // Every page shows the session at its size. Each change applies from a
+  // point in the output, so pages switch size exactly where it did; the
+  // first entry is the size the earliest retained output was written at.
+  sizes: Array<SizeChange>
   pidFile: string
   previous: DatabaseTerminalEnd | null
   screen: Terminal
@@ -165,14 +180,8 @@ export class DatabaseTerminals {
     session.idleTimeoutMs = input.idleTimeoutMs
     if (session.idleTimer) clearTimeout(session.idleTimer)
     session.idleTimer = null
-    // The newest viewer's window decides the size; the screen reflows to it
-    // so its snapshot fits.
-    if (
-      input.cols !== session.screen.cols ||
-      input.rows !== session.screen.rows
-    ) {
-      await this.#resize(session, input.rows, input.cols)
-    }
+    // Joining keeps the session's size; the page in use claims it with a
+    // resize, so a page reconnecting in the background doesn't take it.
     const snapshot = await serializeScreen(session)
     session.viewers.set(input.attachmentId, {
       owner,
@@ -180,15 +189,16 @@ export class DatabaseTerminals {
       renewedAt: Date.now(),
       sending: false,
       sentOffset: snapshot.offset,
+      size: { cols: snapshot.cols, rows: snapshot.rows },
     })
     this.#attachments.set(input.attachmentId, session)
     this.#startSweeper()
     this.#flush(session)
     return {
-      cols: session.screen.cols,
+      cols: snapshot.cols,
       offset: snapshot.offset,
       previous: session.previous,
-      rows: session.screen.rows,
+      rows: snapshot.rows,
       sessionId: session.id,
       snapshot: snapshot.content,
       startedAt: session.startedAt,
@@ -304,6 +314,7 @@ export class DatabaseTerminals {
       pidFile,
       previous: this.#endings.get(key) ?? null,
       screen,
+      sizes: [{ cols: input.cols, offset: 0, rows: input.rows }],
       serializer,
       socket,
       startedAt: new Date().toISOString(),
@@ -314,6 +325,13 @@ export class DatabaseTerminals {
       const overflow = Math.max(0, history.length - OUTPUT_HISTORY_BYTES)
       session.history = history.subarray(overflow)
       session.historyStart += overflow
+      // Size changes before what's retained only matter as its starting size.
+      while (
+        session.sizes.length > 1 &&
+        session.sizes[1]!.offset <= session.historyStart
+      ) {
+        session.sizes.shift()
+      }
       screen.write(chunk, () => {
         session.parsedOffset += chunk.length
       })
@@ -386,9 +404,18 @@ export class DatabaseTerminals {
         continue
       }
       const finished = session.ended !== null
-      if (viewer.sentOffset >= end && !finished) continue
+      const size = sizeAt(session, viewer.sentOffset)
+      const resized =
+        size.cols !== viewer.size.cols || size.rows !== viewer.size.rows
+      if (viewer.sentOffset >= end && !finished && !resized) continue
+      // A push never spans a size change, so it's shown at one size.
+      const until = Math.min(
+        end,
+        viewer.sentOffset + MAX_PUSH_BYTES,
+        nextSizeChange(session, viewer.sentOffset) ?? end
+      )
       const from = viewer.sentOffset - session.historyStart
-      const chunk = session.history.subarray(from, from + MAX_PUSH_BYTES)
+      const chunk = session.history.subarray(from, until - session.historyStart)
       const offset = viewer.sentOffset + chunk.length
       const last = finished && offset >= end
       viewer.sending = true
@@ -398,9 +425,11 @@ export class DatabaseTerminals {
             viewer.push(
               {
                 attachmentId,
+                cols: size.cols,
                 data: chunk.toString("base64"),
                 ended: last ? session.ended : null,
                 offset,
+                rows: size.rows,
                 sessionId: session.id,
               },
               PUSH_TIMEOUT_MS
@@ -413,6 +442,7 @@ export class DatabaseTerminals {
           return
         }
         viewer.sentOffset = offset
+        viewer.size = size
         this.#flush(session)
       })
     }
@@ -448,7 +478,14 @@ export class DatabaseTerminals {
   }
 
   async #resize(session: TerminalSession, rows: number, cols: number) {
-    session.screen.resize(cols, rows)
+    const current = session.sizes.at(-1)
+    if (current?.cols === cols && current.rows === rows) return
+    // Output received so far was written at the old size; the screen takes
+    // the new one after processing it, as every page will.
+    const offset = session.historyStart + session.history.length
+    session.sizes.push({ cols, offset, rows })
+    session.screen.write("", () => session.screen.resize(cols, rows))
+    this.#flush(session)
     await this.#dockerJson(
       "POST",
       `/exec/${encodeURIComponent(session.execId)}/resize?h=${rows}&w=${cols}`
@@ -586,7 +623,12 @@ export class DatabaseTerminals {
 // The screen as escape sequences that rebuild it in an empty terminal, with
 // as much scrollback as fits in one control frame.
 function serializeScreen(session: TerminalSession) {
-  return new Promise<{ content: string; offset: number }>((resolve) => {
+  return new Promise<{
+    cols: number
+    content: string
+    offset: number
+    rows: number
+  }>((resolve) => {
     // An empty write runs its callback once earlier output is processed.
     session.screen.write("", () => {
       let scrollback = SCROLLBACK_LINES
@@ -595,9 +637,28 @@ function serializeScreen(session: TerminalSession) {
         scrollback = Math.floor(scrollback / 2)
         content = session.serializer.serialize({ scrollback })
       }
-      resolve({ content, offset: session.parsedOffset })
+      resolve({
+        cols: session.screen.cols,
+        content,
+        offset: session.parsedOffset,
+        rows: session.screen.rows,
+      })
     })
   })
+}
+
+// The size output from `offset` is shown at.
+function sizeAt(session: TerminalSession, offset: number): TerminalSize {
+  let size: TerminalSize = session.sizes[0]!
+  for (const change of session.sizes) {
+    if (change.offset > offset) break
+    size = change
+  }
+  return { cols: size.cols, rows: size.rows }
+}
+
+function nextSizeChange(session: TerminalSession, offset: number) {
+  return session.sizes.find((change) => change.offset > offset)?.offset
 }
 
 function sessionKey(owner: string, databaseId: string) {

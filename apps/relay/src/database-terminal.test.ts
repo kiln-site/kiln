@@ -46,6 +46,7 @@ async function runningDatabase(harness: RelayHarness) {
 function viewer(accepting = true) {
   const pushes: Array<HearthDatabaseTerminalOutput> = []
   return {
+    pushes,
     get ended(): DatabaseTerminalEnd | null {
       return pushes.find((push) => push.ended)?.ended ?? null
     },
@@ -71,7 +72,7 @@ function attach(
   owner: string,
   database: Awaited<ReturnType<typeof runningDatabase>>,
   watcher: ReturnType<typeof viewer>,
-  options: { restart?: boolean } = {}
+  options: { cols?: number; restart?: boolean; rows?: number } = {}
 ) {
   attachments += 1
   return terminals.attach(
@@ -80,11 +81,11 @@ function attach(
     {
       ...credentials,
       attachmentId: attachmentId(attachments),
-      cols: 80,
+      cols: options.cols ?? 80,
       databaseId,
       idleTimeoutMs,
       restart: options.restart ?? false,
-      rows: 24,
+      rows: options.rows ?? 24,
     },
     watcher.push
   )
@@ -141,6 +142,36 @@ describe("database terminal sessions", () => {
     expect(
       terminals.write(alice, databaseId, first.sessionId, "select 1;")
     ).toEqual({ accepted: true })
+  })
+
+  it("shows every page the session at one size, changing where its output did", async () => {
+    const harness = await relayHarness()
+    const database = await runningDatabase(harness)
+    const terminals = new DatabaseTerminals(harness.config)
+    const first = await attach(terminals, alice, database, viewer())
+    const other = viewer()
+    const joined = await attach(terminals, alice, database, other, {
+      cols: 120,
+      rows: 40,
+    })
+    // Joining shows the session as it is rather than resizing it.
+    expect(joined).toMatchObject({ cols: 80, rows: 24 })
+
+    terminals.write(alice, databaseId, first.sessionId, "before;")
+    await vi.waitFor(() => expect(other.output).toContain("before;"))
+    await terminals.resize(alice, databaseId, first.sessionId, 40, 120)
+    terminals.write(alice, databaseId, first.sessionId, "after;")
+    await vi.waitFor(() => expect(other.output).toContain("after;"))
+
+    const shownAt = (text: string) =>
+      other.pushes
+        .filter((push) =>
+          Buffer.from(push.data, "base64").toString("utf8").includes(text)
+        )
+        .map(({ cols, rows }) => ({ cols, rows }))
+    expect(shownAt("before;")).toEqual([{ cols: 80, rows: 24 }])
+    expect(shownAt("after;")).toEqual([{ cols: 120, rows: 40 }])
+    expect(clientExecs()[0]?.size).toEqual({ cols: 120, rows: 40 })
   })
 
   it("keeps each person's session to themselves", async () => {
