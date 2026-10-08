@@ -85,10 +85,7 @@ export function compareLatestReleaseVersion(
 
 export function findKilnRelease<
   TRelease extends Pick<ReleaseVersionMetadata, "aliases" | "version">,
->(
-  releases: ReadonlyArray<TRelease>,
-  version: string | null
-): TRelease | null {
+>(releases: ReadonlyArray<TRelease>, version: string | null): TRelease | null {
   if (!version) return null
   return (
     releases.find(

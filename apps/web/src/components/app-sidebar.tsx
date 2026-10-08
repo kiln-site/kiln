@@ -959,7 +959,7 @@ function selectSidebarRelayPickerItems(
     key: sidebarPickerKey("relay", node.relayId, node.relayId),
     meta: `${node.arch} · ${kilnReleaseLabel(node.version, releaseNames)}`,
     name: node.relayName,
-    searchText: node.relayId,
+    searchText: `${node.relayId} ${node.version}`,
   }))
 }
 
@@ -971,7 +971,7 @@ function selectSidebarDatabasePickerItems(
     key: sidebarPickerKey("database", database.relayId, database.id),
     meta: `${engineLabel(database.engine)} · ${database.shortId}`,
     name: database.name,
-    searchText: database.id,
+    searchText: `${database.id} ${database.relayName}`,
   }))
 }
 
