@@ -477,8 +477,8 @@ const ServerDataTable = React.memo(function ServerDataTable({
           />
         ),
         meta: dataTableColumnMeta(
-          { width: { base: "2.75rem" } },
-          { cellClassName: "px-0.5", headerClassName: "px-0.5" }
+          { width: { base: "1.75rem" } },
+          { cellClassName: "px-0", headerClassName: "px-0" }
         ),
       }),
       serverTableColumnHelper.accessor(({ server }) => server.name, {

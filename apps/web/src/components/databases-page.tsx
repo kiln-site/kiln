@@ -460,8 +460,8 @@ const DatabaseTable = React.memo(function DatabaseTable({
           />
         ),
         meta: dataTableColumnMeta(
-          { width: { base: "2.75rem" } },
-          { cellClassName: "px-0.5", headerClassName: "px-0.5" }
+          { width: { base: "1.75rem" } },
+          { cellClassName: "px-0", headerClassName: "px-0" }
         ),
       }),
       databaseTableColumnHelper.accessor((database) => database.name, {
