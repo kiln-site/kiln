@@ -21,7 +21,7 @@ import type {
   RelayManagedDatabase,
 } from "@workspace/contracts"
 import { databaseEngineSupportsBrowsing } from "@workspace/contracts"
-import { Effect, Result } from "effect"
+import { Effect, Exit, Result } from "effect"
 import mysql from "mysql2"
 import pg from "pg"
 
@@ -34,6 +34,9 @@ import { promiseEffect, recoverPromise } from "./effect/promise.js"
 // values, parameters, and transactions exact.
 
 const OPERATION_TIMEOUT = "25 seconds"
+// Stopping a timed-out statement takes a second connection; bound it so the
+// caller still gets its answer promptly.
+const ABORT_TIMEOUT = "5 seconds"
 const STATEMENT_TIMEOUT_MS = 20_000
 // Counting stops here so huge tables stay fast; results say when it was hit.
 const COUNT_CAP = 100_000
@@ -88,7 +91,17 @@ export function browseManagedDatabase(
     ),
     (session) =>
       attempt(request.action, () => runRequest(session, request, access)),
-    (session) => Effect.promise(() => session.close())
+    // A graceful close waits for the running statement to finish, so a
+    // timed-out operation is stopped on the server instead.
+    (session, exit) =>
+      Exit.hasInterrupts(exit)
+        ? Effect.promise(() => session.abort()).pipe(
+            Effect.timeoutOrElse({
+              duration: ABORT_TIMEOUT,
+              orElse: () => Effect.void,
+            })
+          )
+        : Effect.promise(() => session.close())
   ).pipe(
     Effect.timeoutOrElse({
       duration: OPERATION_TIMEOUT,
@@ -142,6 +155,8 @@ interface SqlResult {
 
 interface SqlSession {
   readonly dialect: Dialect
+  // Ends the server-side connection and whatever it is running, then closes.
+  abort(): Promise<void>
   close(): Promise<void>
   // One statement with parameters. Values come back encoded for the browser.
   execute(sql: string, parameters?: ReadonlyArray<unknown>): Promise<SqlResult>
@@ -158,10 +173,12 @@ interface SessionTarget extends ManagedDatabaseCredentials {
 class PostgresSession implements SqlSession {
   readonly dialect = postgresDialect
   readonly #client: pg.Client
+  readonly #target: SessionTarget
   readonly #typeNames = new Map<number, string>()
 
-  private constructor(client: pg.Client) {
+  private constructor(client: pg.Client, target: SessionTarget) {
     this.#client = client
+    this.#target = target
   }
 
   static async open(target: SessionTarget) {
@@ -176,8 +193,25 @@ class PostgresSession implements SqlSession {
       types: { getTypeParser: () => (value: string) => value },
       user: target.username,
     })
+    // A dropped connection fails the pending query; without a listener the
+    // client would also rethrow it as an uncaught error and stop the Relay.
+    client.on("error", () => undefined)
     await client.connect()
-    return new PostgresSession(client)
+    return new PostgresSession(client, target)
+  }
+
+  async abort() {
+    const backend = (this.#client as pg.Client & { processID?: number })
+      .processID
+    await recoverPromise(
+      async () => {
+        const side = await PostgresSession.open(this.#target)
+        await side.execute("SELECT pg_terminate_backend($1)", [backend])
+        await side.close()
+      },
+      () => undefined
+    )
+    this.#client.connection.stream.destroy()
   }
 
   async close() {
@@ -283,9 +317,17 @@ class PostgresSession implements SqlSession {
 class MysqlSession implements SqlSession {
   readonly dialect: Dialect
   readonly #connection: mysql.Connection
+  readonly #engine: BrowsableEngine
+  readonly #target: SessionTarget
 
-  private constructor(connection: mysql.Connection, engine: BrowsableEngine) {
+  private constructor(
+    connection: mysql.Connection,
+    engine: BrowsableEngine,
+    target: SessionTarget
+  ) {
     this.#connection = connection
+    this.#engine = engine
+    this.#target = target
     this.dialect = engine === "mariadb" ? mariadbDialect : mysqlDialect
   }
 
@@ -303,16 +345,31 @@ class MysqlSession implements SqlSession {
       supportBigNumbers: true,
       user: target.username,
     })
+    // Same as Postgres: pending queries see the failure themselves.
+    connection.on("error", () => undefined)
     await new Promise<void>((resolve, reject) =>
       connection.connect((error) => (error ? reject(error) : resolve()))
     )
-    const session = new MysqlSession(connection, engine)
+    const session = new MysqlSession(connection, engine, target)
     await session.execute(
       engine === "mariadb"
         ? `SET SESSION max_statement_time = ${STATEMENT_TIMEOUT_MS / 1_000}`
         : `SET SESSION max_execution_time = ${STATEMENT_TIMEOUT_MS}`
     )
     return session
+  }
+
+  async abort() {
+    const thread = this.#connection.threadId
+    await recoverPromise(
+      async () => {
+        const side = await MysqlSession.open(this.#target, this.#engine, false)
+        await side.execute("KILL CONNECTION ?", [thread])
+        await side.close()
+      },
+      () => undefined
+    )
+    this.#connection.destroy()
   }
 
   async close() {
@@ -425,7 +482,10 @@ class ContainerSocket extends Duplex {
         "-c",
         // When the Relay side closes, stop the reader too, so the database
         // sees the connection drop instead of holding it until it times out.
-        'exec 3<>"/dev/tcp/127.0.0.1/$0" || exit 1; cat <&3 & cat >&3; kill $! 2>/dev/null',
+        // bash must reap the reader itself: an orphan is adopted by the
+        // container's PID 1, which in the Postgres image is the postmaster,
+        // and it restarts the server when an unknown child dies by signal.
+        'exec 3<>"/dev/tcp/127.0.0.1/$0" || exit 1; cat <&3 & reader=$!; cat >&3; kill "$reader" 2>/dev/null; wait "$reader"',
         String(this.#port),
       ],
       { stdio: ["pipe", "pipe", "pipe"] }
@@ -981,23 +1041,36 @@ function valueCondition(
     }
     return `${name} = ${parameters.add(bytes)}`
   }
-  if (typeof value === "boolean" || isNativeNumber(column, value)) {
+  // A single-precision value reaches the browser as the double nearest its
+  // printed form, which neither equals the stored float nor prints the same
+  // way. Casting it back to the column's type recovers the stored value.
+  if (
+    isSinglePrecision(dialect, column) &&
+    (typeof value === "number" || typeof value === "string")
+  ) {
+    const parameter = parameters.add(String(value))
+    return postgres
+      ? `${name} = ${parameter}::real`
+      : `${name} = CAST(${parameter} AS FLOAT)`
+  }
+  if (
+    typeof value === "boolean" ||
+    typeof value === "number" ||
+    (typeof value === "object" && "$bigint" in value)
+  ) {
     return `${name} = ${parameters.add(writeValue(value))}`
   }
-  const text = typeof value === "object" ? value.$bigint : String(value)
   return postgres
-    ? `${name}::text = ${parameters.add(text)}`
-    : `BINARY CAST(${name} AS CHAR) = BINARY ${parameters.add(text)}`
+    ? `${name}::text = ${parameters.add(value)}`
+    : `BINARY CAST(${name} AS CHAR) = BINARY ${parameters.add(value)}`
 }
 
-// Single-precision floats print shorter than the double they compare as, so
-// they match by text like everything else.
-function isNativeNumber(column: DatabaseColumn, value: DatabaseValue) {
-  return (
-    (typeof value === "number" ||
-      (typeof value === "object" && value !== null && "$bigint" in value)) &&
-    !/^(?:float(?!8)|real)\b/iu.test(column.type)
-  )
+// Postgres names its 4-byte float "real"; MySQL and MariaDB report "float"
+// (their REAL is a double and reports as "double").
+function isSinglePrecision(dialect: Dialect, column: DatabaseColumn) {
+  return dialect.engine === "postgres"
+    ? /^real\b/iu.test(column.type)
+    : /^float\b/iu.test(column.type)
 }
 
 async function currentRow(
