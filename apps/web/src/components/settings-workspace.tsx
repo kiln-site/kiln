@@ -20,7 +20,6 @@ import {
   Tags,
   Trash2,
   TriangleAlert,
-  Users,
 } from "lucide-react"
 
 import { Badge } from "@workspace/ui/components/badge"
@@ -37,17 +36,21 @@ import { showToast } from "@workspace/ui/components/sonner"
 import { cn } from "@workspace/ui/lib/utils"
 import { MAXIMUM_INSTANCE_NAME_LENGTH } from "@workspace/contracts"
 
+import {
+  CopyMetaRow,
+  DangerZone,
+  InfoCard,
+  InfoCardHeader,
+  MetaRow,
+  ResourceUsersCard,
+} from "@/components/info-card"
 import { InstanceFavoriteButton } from "@/components/instance-favorite"
 import { ReadOnlyCodeViewer } from "@/components/read-only-code-viewer"
 import { ServerDeleteDialog } from "@/components/server-delete-dialog"
 import { hostPortAddress } from "@/lib/domain-address"
-import { canAccessActivity } from "@/lib/navigation-destinations"
 import { provisioningFailureDiagnostics } from "@/lib/provisioning-diagnostics"
 import { warmSyntaxCodeEditorModule } from "@/lib/syntax-editor-module-preload"
-import {
-  accessCapabilitiesQueryOptions,
-  instanceRecipeQueryOptions,
-} from "@/lib/query-options"
+import { instanceRecipeQueryOptions } from "@/lib/query-options"
 import { applyUpdatedInstance } from "@/lib/realtime-client"
 import type {
   InstanceSettingsInstance,
@@ -178,7 +181,13 @@ export function SettingsWorkspace({
             />
           </div>
 
-          <InstanceUsersCard instance={instance} />
+          <ResourceUsersCard
+            activityServerId={instance.id}
+            noun="server"
+            relayId={instance.relayId}
+            resourceId={instance.id}
+            resourceType="instance"
+          />
         </div>
 
         <InfoCard className="mt-4">
@@ -431,100 +440,6 @@ function formatProvisioningPhase(phase: string): string {
   return `${words.charAt(0).toUpperCase()}${words.slice(1)}`
 }
 
-function InfoCard({
-  children,
-  className,
-}: {
-  children: React.ReactNode
-  className?: string
-}) {
-  return (
-    <div
-      className={cn(
-        "min-w-0 overflow-hidden rounded-xl border bg-background/45",
-        className
-      )}
-    >
-      {children}
-    </div>
-  )
-}
-
-function InfoCardHeader({
-  action,
-  icon,
-  title,
-}: {
-  action?: React.ReactNode
-  icon: React.ReactNode
-  title: string
-}) {
-  return (
-    <div className="flex min-h-12 items-center justify-between gap-3 border-b px-4 py-2.5">
-      <div className="flex items-center gap-2 text-primary [&_svg]:size-4">
-        {icon}
-        <h3 className="text-sm font-semibold text-foreground">{title}</h3>
-      </div>
-      {action}
-    </div>
-  )
-}
-
-function CopyMetaRow({
-  copyable = true,
-  label,
-  value,
-}: {
-  copyable?: boolean
-  label: string
-  value: string
-}) {
-  const [copied, setCopied] = React.useState(false)
-  const resetTimer = React.useRef<number | null>(null)
-
-  React.useEffect(
-    () => () => {
-      if (resetTimer.current) window.clearTimeout(resetTimer.current)
-    },
-    []
-  )
-
-  async function copyValue() {
-    if (!copyable) return
-    await navigator.clipboard.writeText(value)
-    setCopied(true)
-    if (resetTimer.current) window.clearTimeout(resetTimer.current)
-    resetTimer.current = window.setTimeout(() => setCopied(false), 1800)
-  }
-
-  return (
-    <div className="flex min-h-16 items-center gap-3 border-b px-4 py-3 last:border-b-0">
-      <Globe2 className="size-3.5 shrink-0 text-muted-foreground" />
-      <span className="min-w-0 flex-1">
-        <span className="type-technical-label block text-muted-foreground">
-          {label}
-        </span>
-        <span
-          className={`mt-0.5 block truncate font-mono text-xs ${copyable ? "text-foreground" : "text-muted-foreground"}`}
-          title={value}
-        >
-          {value}
-        </span>
-      </span>
-      <Button
-        type="button"
-        size="icon-sm"
-        variant="ghost"
-        disabled={!copyable}
-        aria-label={`Copy ${label.toLowerCase()}`}
-        onClick={() => void copyValue()}
-      >
-        {copied ? <Check className="text-emerald-400" /> : <Copy />}
-      </Button>
-    </div>
-  )
-}
-
 function BrickInfoCard({
   canShare,
   canViewStartup,
@@ -646,61 +561,6 @@ function BrickInfoCard({
   )
 }
 
-function InstanceUsersCard({
-  instance,
-}: {
-  instance: InstanceSettingsInstance
-}) {
-  const { data: access } = useQuery({
-    ...accessCapabilitiesQueryOptions(),
-    select: (capabilities) => ({
-      canManageAccess: capabilities.canManageAccess,
-      canViewActivity: canAccessActivity(capabilities),
-    }),
-  })
-  if (!access?.canManageAccess && !access?.canViewActivity) return null
-  return (
-    <InfoCard className="self-start">
-      <InfoCardHeader icon={<Users />} title="Users & access" />
-      <div className="space-y-4 p-4">
-        <p className="text-sm text-muted-foreground">
-          Manage this server’s invitations, presets, and permissions, or review
-          recent activity.
-        </p>
-        <div className="flex flex-wrap gap-2">
-          {access.canManageAccess ? (
-            <Button asChild size="sm" variant="outline">
-              <Link
-                to="/access"
-                search={{
-                  tab: "users",
-                  relayId: instance.relayId,
-                  resourceType: "instance",
-                  resourceId: instance.id,
-                }}
-              >
-                Manage access
-                <ArrowRight />
-              </Link>
-            </Button>
-          ) : null}
-          {access.canViewActivity ? (
-            <Button asChild size="sm" variant="ghost">
-              <Link
-                to="/activity"
-                search={{ relay: instance.relayId, server: instance.id }}
-              >
-                <Activity />
-                View activity
-              </Link>
-            </Button>
-          ) : null}
-        </div>
-      </div>
-    </InfoCard>
-  )
-}
-
 function ServerDangerZone({
   instance,
   onDeleted,
@@ -716,35 +576,27 @@ function ServerDangerZone({
 
   return (
     <>
-      <div className="mt-4 flex flex-col gap-3 rounded-xl border border-destructive/25 bg-destructive/4 px-4 py-3.5 sm:flex-row sm:items-center">
-        <div className="flex min-w-0 flex-1 items-center gap-3">
-          <span className="grid size-8 shrink-0 place-items-center rounded-lg border border-destructive/20 bg-destructive/10 text-destructive">
-            <TriangleAlert className="size-4" />
-          </span>
-          <div className="min-w-0">
-            <p className="type-technical-label text-destructive">Danger zone</p>
-            <h3 className="mt-1 text-sm font-semibold">Delete this server</h3>
-            <p className="type-meta mt-1 font-mono break-all text-muted-foreground">
-              {instance.id}
-            </p>
-          </div>
-        </div>
-        <Button
-          type="button"
-          variant="destructive"
-          className="shrink-0"
-          disabled={!relayConnected}
-          title={
-            relayConnected
-              ? undefined
-              : "Reconnect this server's Relay before deleting"
-          }
-          onClick={() => setOpen(true)}
-        >
-          <Trash2 />
-          Delete server
-        </Button>
-      </div>
+      <DangerZone
+        title="Delete this server"
+        detail={instance.id}
+        action={
+          <Button
+            type="button"
+            variant="destructive"
+            className="shrink-0"
+            disabled={!relayConnected}
+            title={
+              relayConnected
+                ? undefined
+                : "Reconnect this server's Relay before deleting"
+            }
+            onClick={() => setOpen(true)}
+          >
+            <Trash2 />
+            Delete server
+          </Button>
+        }
+      />
       {open ? (
         <ServerDeleteDialog
           open
@@ -882,46 +734,5 @@ function InstanceNameForm({
             : "You do not have permission to rename this server.")}
       </p>
     </form>
-  )
-}
-
-function MetaRow({
-  action,
-  className,
-  icon: Icon,
-  label,
-  value,
-  mono = false,
-  wrap = false,
-}: {
-  action?: React.ReactNode
-  className?: string
-  icon: typeof Server
-  label: string
-  value: string
-  mono?: boolean
-  wrap?: boolean
-}) {
-  return (
-    <div
-      className={cn(
-        "flex min-h-14 items-center gap-3 border-b px-4 py-3 last:border-b-0",
-        className
-      )}
-    >
-      <Icon className="size-3.5 shrink-0 text-muted-foreground" />
-      <span className="min-w-0 flex-1">
-        <span className="type-technical-label block text-muted-foreground">
-          {label}
-        </span>
-        <span
-          className={`mt-0.5 block text-xs ${mono ? "font-mono" : "font-medium"} ${wrap ? "break-all" : "truncate"}`}
-          title={value}
-        >
-          {value}
-        </span>
-      </span>
-      {action}
-    </div>
   )
 }

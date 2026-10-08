@@ -1,3 +1,4 @@
+import { databaseRouteIdFromSelection } from "@/lib/database-route"
 import { firstAccessibleAppHref } from "@/lib/navigation-destinations"
 import { isAccountEnabled, isAccountVerified } from "@/lib/account-policy"
 import { createFileRoute, redirect } from "@tanstack/react-router"
@@ -70,6 +71,15 @@ export const Route = createFileRoute("/")({
       ),
       getUiPreferences(),
     ])
+    const rememberedDatabase = databaseRouteIdFromSelection(
+      uiPreferences.selectedInstanceRouteId
+    )
+    if (rememberedDatabase) {
+      throw redirect({
+        to: "/db/$databaseId",
+        params: { databaseId: rememberedDatabase },
+      })
+    }
     if (connection.status !== "connected") {
       if (
         state.user.isDevelopmentBypass ||

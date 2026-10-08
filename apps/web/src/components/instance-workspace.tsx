@@ -20,13 +20,9 @@ import type {
 import { relayInstanceLifecycleEventTime } from "@workspace/contracts"
 import {
   Check,
-  CircleStop,
   Copy,
-  EllipsisVertical,
   LoaderCircle,
   OctagonX,
-  Play,
-  RotateCw,
   TriangleAlert,
 } from "lucide-react"
 
@@ -37,18 +33,12 @@ import {
   HoverCardTrigger,
 } from "@workspace/ui/components/hover-card"
 import {
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-} from "@workspace/ui/components/popover"
-import {
   Tooltip,
   TooltipContent,
   TooltipTrigger,
 } from "@workspace/ui/components/tooltip"
 import { showToast } from "@workspace/ui/components/sonner"
 
-import { ToolbarSidebarTrigger } from "@/components/global-page-toolbar"
 import {
   FileTreePreferencesContext,
   InstanceIdentityContext,
@@ -60,6 +50,14 @@ import type {
   InstanceWorkspacePermissions,
 } from "@/components/instance-workspace-context"
 import { WorkspaceFrame } from "@/components/workspace-frame"
+import {
+  WorkspaceCopyValueButton,
+  WorkspaceHeader,
+  WorkspaceIdCopyButton,
+  WorkspaceIdentity,
+  WorkspaceMetaSeparator,
+} from "@/components/workspace-header"
+import { WorkspacePowerControls } from "@/components/workspace-power-controls"
 import { canAccessInstancePermission } from "@/lib/navigation-destinations"
 import { provisioningFailureDiagnostics } from "@/lib/provisioning-diagnostics"
 import {
@@ -543,17 +541,13 @@ function InstanceWorkspaceHeader() {
   const instance = useRouteWorkspaceInstance()
 
   return (
-    <header className="shrink-0 border-b bg-background/90 backdrop-blur-xl">
-      <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-3 px-3 py-3 sm:px-5 lg:min-h-20 lg:py-2 xl:grid-cols-[minmax(0,1fr)_36rem_auto] xl:gap-x-3">
-        <div className="col-start-1 row-start-1 flex min-w-0 items-center gap-4">
-          <ToolbarSidebarTrigger />
-          <span className="h-8 w-px shrink-0 bg-border/80" aria-hidden="true" />
-          <InstanceIdentityBoundary error={error} instance={instance} />
-        </div>
-        <LiveResourceMetersBoundary instance={instance} />
+    <WorkspaceHeader
+      identity={<InstanceIdentityBoundary error={error} instance={instance} />}
+      center={<LiveResourceMetersBoundary instance={instance} />}
+      actions={
         <InstancePowerControlsBoundary instance={instance} onError={setError} />
-      </div>
-    </header>
+      }
+    />
   )
 }
 
@@ -646,57 +640,8 @@ const InstancePowerControlsBoundary = React.memo(
   }
 )
 
-function useCopyFeedback(value: string) {
-  const [copied, setCopied] = React.useState(false)
-  const resetTimer = React.useRef<number | null>(null)
-  React.useEffect(
-    () => () => {
-      if (resetTimer.current) window.clearTimeout(resetTimer.current)
-    },
-    []
-  )
-
-  async function copy() {
-    await copyToClipboard(value)
-    setCopied(true)
-    if (resetTimer.current) window.clearTimeout(resetTimer.current)
-    resetTimer.current = window.setTimeout(() => setCopied(false), 1_800)
-  }
-
-  return { copied, copy }
-}
-
-function InstanceIdCopyButton({
-  id,
-  shortId,
-}: {
-  id: string
-  shortId: string
-}) {
-  const { copied, copy } = useCopyFeedback(id)
-
-  return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <button
-          type="button"
-          className={`shrink-0 font-mono transition-colors ${copied ? "text-emerald-400" : "hover:text-foreground"}`}
-          aria-label={`Copy full server ID ${id}`}
-          onClick={copy}
-        >
-          {shortId}
-        </button>
-      </TooltipTrigger>
-      <TooltipContent side="bottom" sideOffset={6}>
-        {copied ? "Full server ID copied" : "Copy full server ID"}
-      </TooltipContent>
-    </Tooltip>
-  )
-}
-
 function InstanceAddressControl({ address }: { address: string }) {
   const { serverId } = useParams({ from: "/_app/server/$serverId" })
-  const { copied, copy } = useCopyFeedback(address)
   const addressError = address.startsWith("Error:") ? address : null
 
   if (addressError) {
@@ -721,28 +666,7 @@ function InstanceAddressControl({ address }: { address: string }) {
     )
   }
 
-  return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <button
-          type="button"
-          className={`flex min-w-0 flex-1 items-center gap-1 truncate font-mono transition-colors ${copied ? "text-emerald-400" : "text-primary/75 hover:text-primary"}`}
-          aria-label={`Copy server address ${address}`}
-          onClick={() => void copy()}
-        >
-          <span className="truncate">{address}</span>
-          {copied ? (
-            <Check className="size-3 shrink-0" />
-          ) : (
-            <Copy className="size-3 shrink-0 opacity-55" />
-          )}
-        </button>
-      </TooltipTrigger>
-      <TooltipContent side="bottom" sideOffset={6}>
-        {copied ? "Address copied" : "Copy server address"}
-      </TooltipContent>
-    </Tooltip>
-  )
+  return <WorkspaceCopyValueButton label="server address" value={address} />
 }
 
 function InstanceIdentity({
@@ -753,36 +677,27 @@ function InstanceIdentity({
   instance: InstanceWorkspaceInstance
 }) {
   return (
-    <div className="@container min-w-0 flex-1">
-      <h1
-        className="flex min-w-0 items-baseline gap-1.5 font-heading tracking-[-0.03em]"
-        title={instance.name}
-      >
-        <span className="min-w-0 truncate text-lg font-semibold text-foreground sm:text-xl">
-          {instance.name}
+    <WorkspaceIdentity
+      error={error}
+      name={instance.name}
+      title={<InstanceRouteTitle />}
+    >
+      <span className="hidden shrink-0 items-center gap-1.5 @[30rem]:inline-flex">
+        <span>
+          {instance.implementation} {instance.version}
         </span>
-        <span className="shrink-0 text-border">/</span>
-        <span className="shrink-0 text-sm font-medium text-muted-foreground sm:text-base">
-          <InstanceRouteTitle />
-        </span>
-      </h1>
-      <div className="type-meta mt-0.5 flex min-w-0 items-center gap-1.5 overflow-hidden whitespace-nowrap text-muted-foreground">
-        <span className="hidden shrink-0 items-center gap-1.5 @[30rem]:inline-flex">
-          <span>
-            {instance.implementation} {instance.version}
-          </span>
-          <span className="text-border">/</span>
-        </span>
-        <span className="hidden shrink-0 items-center gap-1.5 @[40rem]:inline-flex">
-          <InstanceIdCopyButton id={instance.id} shortId={instance.shortId} />
-          <span className="text-border">/</span>
-        </span>
-        <InstanceAddressControl address={instance.connectAddress} />
-      </div>
-      {error ? (
-        <p className="type-meta mt-0.5 truncate text-destructive">{error}</p>
-      ) : null}
-    </div>
+        <WorkspaceMetaSeparator />
+      </span>
+      <span className="hidden shrink-0 items-center gap-1.5 @[40rem]:inline-flex">
+        <WorkspaceIdCopyButton
+          id={instance.id}
+          label="server ID"
+          shortId={instance.shortId}
+        />
+        <WorkspaceMetaSeparator />
+      </span>
+      <InstanceAddressControl address={instance.connectAddress} />
+    </WorkspaceIdentity>
   )
 }
 
@@ -806,196 +721,6 @@ function InstanceRouteTitle() {
     },
   })
   return <>{title}</>
-}
-
-function ServerPowerControls({
-  action,
-  powerPermissions,
-  instance,
-  onAction,
-  relayConnected,
-}: {
-  action: ServerAction | null
-  powerPermissions: Record<ServerAction, boolean>
-  instance: Pick<InstanceWorkspaceInstance, "id" | "name" | "provisioning"> &
-    Pick<InstanceRuntime, "observedState">
-  onAction: (action: ServerAction) => Promise<void>
-  relayConnected: boolean
-}) {
-  const [serverActionsOpen, setServerActionsOpen] = React.useState(false)
-  const [confirmKill, setConfirmKill] = React.useState(false)
-  if (!Object.values(powerPermissions).some(Boolean)) return null
-
-  const isRunning = instance.observedState === "running"
-  const isStarting = instance.observedState === "starting"
-  const isStopping = instance.observedState === "stopping"
-  const isProvisioning =
-    Boolean(instance.provisioning) ||
-    isPowerControlLocked(instance.observedState)
-  const provisioningFailed = instance.provisioning?.phase === "failed"
-  const powerIsOn = isRunning || isStarting
-  const powerIsTransitioning =
-    action === "start" ||
-    action === "stop" ||
-    action === "restart" ||
-    isStopping ||
-    isProvisioning
-  const controlsUnavailable =
-    !relayConnected || action !== null || isProvisioning
-  const startUnavailable =
-    !powerPermissions.start || controlsUnavailable || powerIsOn || isStopping
-  const stopUnavailable =
-    !powerPermissions.stop || controlsUnavailable || !powerIsOn || isStopping
-
-  function runAction(nextAction: ServerAction) {
-    if (!powerPermissions[nextAction]) return
-    setServerActionsOpen(false)
-    setConfirmKill(false)
-    void onAction(nextAction)
-  }
-
-  return (
-    <div className="col-start-2 row-start-1 flex items-center justify-end gap-1.5 xl:col-start-3">
-      <Button
-        variant="outline"
-        size="sm"
-        className={
-          powerIsOn
-            ? "hidden h-9 w-[6.5rem] justify-center gap-1.5 !border-red-500/65 !bg-red-600 px-3 text-xs !text-white shadow-none hover:!border-red-400 hover:!bg-red-500 disabled:!border-red-500/35 disabled:!bg-red-600/45 disabled:!text-white/70 md:inline-flex"
-            : "hidden h-9 w-[6.5rem] justify-center gap-1.5 !border-blue-500/65 !bg-blue-600 px-3 text-xs !text-white shadow-none hover:!border-blue-400 hover:!bg-blue-500 md:inline-flex"
-        }
-        disabled={powerIsOn ? stopUnavailable : startUnavailable}
-        onClick={() => runAction(powerIsOn ? "stop" : "start")}
-      >
-        {powerIsTransitioning ? (
-          <LoaderCircle className="animate-spin" />
-        ) : powerIsOn ? (
-          <CircleStop />
-        ) : (
-          <Play />
-        )}
-        {action === "start"
-          ? "Starting"
-          : action === "stop" || action === "restart" || isStopping
-            ? "Stopping"
-            : isProvisioning
-              ? provisioningFailed
-                ? "Failed"
-                : "Provisioning"
-              : powerIsOn
-                ? "Stop"
-                : "Start"}
-      </Button>
-      <Popover
-        open={serverActionsOpen}
-        onOpenChange={(open) => {
-          setServerActionsOpen(open)
-          if (!open) setConfirmKill(false)
-        }}
-      >
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <PopoverTrigger asChild>
-              <Button
-                variant="outline"
-                size="icon-lg"
-                className="h-9 w-8 bg-card shadow-none"
-                aria-label="Server actions"
-                disabled={controlsUnavailable}
-              >
-                <EllipsisVertical />
-              </Button>
-            </PopoverTrigger>
-          </TooltipTrigger>
-          <TooltipContent side="bottom" sideOffset={6}>
-            Power Options
-          </TooltipContent>
-        </Tooltip>
-        <PopoverContent
-          align="end"
-          sideOffset={7}
-          className="w-[min(17rem,calc(100vw-1.5rem))] p-0"
-        >
-          {confirmKill ? (
-            <>
-              <div className="border-b px-3 py-2.5">
-                <p className="text-xs font-semibold text-foreground">
-                  Kill {instance.name}?
-                </p>
-                <p className="type-support mt-1 text-muted-foreground">
-                  This immediately terminates the container. Unsaved world data
-                  may be lost.
-                </p>
-              </div>
-              <div className="flex justify-end gap-1.5 p-2">
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => setConfirmKill(false)}
-                >
-                  Back
-                </Button>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="!border-red-500/65 !bg-red-600 !text-white hover:!border-red-400 hover:!bg-red-500"
-                  disabled={!powerPermissions.kill || controlsUnavailable}
-                  onClick={() => runAction("kill")}
-                >
-                  <OctagonX />
-                  Kill now
-                </Button>
-              </div>
-            </>
-          ) : (
-            <div className="p-1">
-              <p className="type-technical-label border-b px-2 py-2 text-muted-foreground">
-                Server actions
-              </p>
-              <PowerActionButton
-                description="Power on the server"
-                disabled={startUnavailable}
-                icon={<Play className="size-3.5" />}
-                label="Start"
-                tone="start"
-                onClick={() => runAction("start")}
-              />
-              <PowerActionButton
-                description="Gracefully shut down"
-                disabled={stopUnavailable}
-                icon={<CircleStop className="size-3.5" />}
-                label="Stop"
-                tone="stop"
-                onClick={() => runAction("stop")}
-              />
-              <PowerActionButton
-                description="Gracefully stop and start"
-                disabled={
-                  !powerPermissions.restart || controlsUnavailable || !isRunning
-                }
-                icon={<RotateCw className="size-3.5" />}
-                label="Restart"
-                onClick={() => runAction("restart")}
-              />
-              <PowerActionButton
-                description="Terminate immediately"
-                disabled={
-                  !powerPermissions.kill ||
-                  controlsUnavailable ||
-                  !powerIsOn ||
-                  isStopping
-                }
-                icon={<OctagonX className="size-3.5" />}
-                label="Kill"
-                tone="kill"
-                onClick={() => setConfirmKill(true)}
-              />
-            </div>
-          )}
-        </PopoverContent>
-      </Popover>
-    </div>
-  )
 }
 
 function InstancePowerControls({
@@ -1140,11 +865,12 @@ function InstancePowerControls({
     )
   }
   return (
-    <ServerPowerControls
+    <WorkspacePowerControls
       action={action}
+      killWarning="This immediately terminates the container. Unsaved world data may be lost."
+      noun="server"
       powerPermissions={powerPermissions}
-      instance={{
-        id: instance.id,
+      target={{
         name: instance.name,
         observedState,
         provisioning: instance.provisioning,
@@ -1173,63 +899,6 @@ function updateInstancePowerState(
         : instance
     ),
   }
-}
-
-function PowerActionButton({
-  description,
-  disabled,
-  icon,
-  label,
-  onClick,
-  tone = "default",
-}: {
-  description: string
-  disabled: boolean
-  icon: React.ReactNode
-  label: string
-  onClick: () => void
-  tone?: "default" | "start" | "stop" | "kill"
-}) {
-  const toneClassName = {
-    default: "text-foreground hover:bg-popover-accent/80",
-    start: disabled
-      ? "text-muted-foreground/35"
-      : "text-blue-300 hover:bg-blue-500/10",
-    stop: disabled
-      ? "text-muted-foreground/35"
-      : "text-red-400 hover:bg-red-500/10",
-    kill: "text-red-400 hover:bg-red-500/10",
-  }[tone]
-  const iconClassName = {
-    default: "border-border bg-card text-muted-foreground",
-    start: disabled
-      ? "border-border/55 bg-muted/15"
-      : "border-blue-500/25 bg-blue-500/5",
-    stop: disabled
-      ? "border-border/55 bg-muted/15"
-      : "border-red-500/25 bg-red-500/5",
-    kill: "border-red-500/25 bg-red-500/5",
-  }[tone]
-  return (
-    <button
-      type="button"
-      className={`flex w-full items-center gap-2.5 px-2 py-2 text-left text-xs transition-colors focus-visible:bg-popover-accent focus-visible:outline-none disabled:cursor-default disabled:opacity-35 ${toneClassName}`}
-      disabled={disabled}
-      onClick={onClick}
-    >
-      <span
-        className={`grid size-7 place-items-center border ${iconClassName}`}
-      >
-        {icon}
-      </span>
-      <span>
-        <span className="block font-medium">{label}</span>
-        <span className="type-meta block text-muted-foreground">
-          {description}
-        </span>
-      </span>
-    </button>
-  )
 }
 
 const RESOURCE_STYLES = {
@@ -1992,27 +1661,5 @@ function networkActivityPercent(bytesPerSecond: number): number {
   return Math.min(
     (Math.log10(bytesPerSecond + 1) / Math.log10(10 * 1024 * 1024 + 1)) * 100,
     100
-  )
-}
-
-async function copyToClipboard(value: string) {
-  await Effect.runPromise(
-    Effect.tryPromise({
-      try: () => navigator.clipboard.writeText(value),
-      catch: (cause) => cause,
-    }).pipe(
-      Effect.catch(() =>
-        Effect.sync(() => {
-          const textarea = document.createElement("textarea")
-          textarea.value = value
-          textarea.style.position = "fixed"
-          textarea.style.opacity = "0"
-          document.body.append(textarea)
-          textarea.select()
-          document.execCommand("copy")
-          textarea.remove()
-        })
-      )
-    )
   )
 }

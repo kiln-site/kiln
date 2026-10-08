@@ -86,6 +86,7 @@ export const listManagedDatabaseDirectoryEffect = Effect.fn(
     const engine = databaseEngineSchema.parse(row.engine)
     return {
       databaseId: row.database_id,
+      engine,
       name: row.name,
       relayId: row.relay_id,
       supportsImportExport: databaseEngineSupportsLogicalBackups(engine),
