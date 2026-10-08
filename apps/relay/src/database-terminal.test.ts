@@ -126,6 +126,23 @@ describe("database terminal sessions", () => {
     expect(clientExecs()).toHaveLength(1)
   })
 
+  it("gives pages that open at the same time one shared session", async () => {
+    const harness = await relayHarness()
+    const database = await runningDatabase(harness)
+    const terminals = new DatabaseTerminals(harness.config)
+
+    const [first, second] = await Promise.all([
+      attach(terminals, alice, database, viewer()),
+      attach(terminals, alice, database, viewer()),
+    ])
+
+    expect(second.sessionId).toBe(first.sessionId)
+    expect(clientExecs()).toHaveLength(1)
+    expect(
+      terminals.write(alice, databaseId, first.sessionId, "select 1;")
+    ).toEqual({ accepted: true })
+  })
+
   it("keeps each person's session to themselves", async () => {
     const harness = await relayHarness()
     const database = await runningDatabase(harness)

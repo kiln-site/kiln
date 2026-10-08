@@ -4,7 +4,10 @@ import * as React from "react"
 import { FitAddon } from "@xterm/addon-fit"
 import { SearchAddon } from "@xterm/addon-search"
 import { Terminal } from "@xterm/xterm"
-import type { DatabaseTerminalEnd } from "@workspace/contracts"
+import {
+  DATABASE_TERMINAL_WRITE_MAX_CHARACTERS,
+  type DatabaseTerminalEnd,
+} from "@workspace/contracts"
 import { Effect } from "effect"
 import {
   ArrowDown,
@@ -173,11 +176,7 @@ export function DatabaseTerminal({
           status={status}
           onDismissNotice={() => setNotice(null)}
         />
-        <TerminalOverlay
-          status={status}
-          onReconnect={reconnect}
-          onRestart={restart}
-        />
+        <TerminalOverlay status={status} onReconnect={reconnect} />
       </div>
     </section>
   )
@@ -343,11 +342,9 @@ const noticeIcon = <Info className="size-3" />
 
 function TerminalOverlay({
   onReconnect,
-  onRestart,
   status,
 }: {
   onReconnect: () => void
-  onRestart: () => void
   status: TerminalStatus
 }) {
   if (status.kind === "connecting") {
@@ -373,7 +370,7 @@ function TerminalOverlay({
           "Session ended",
           endedDescription(status.ended),
           "Start new session",
-          onRestart,
+          onReconnect,
         ]
       : status.kind === "not-running"
         ? [
@@ -431,7 +428,7 @@ function endedLabel(ended: DatabaseTerminalEnd) {
     case "timed-out":
       return "THE LAST ONE TIMED OUT"
     case "restarted":
-      return "RESTARTED"
+      return "RESTARTED FROM ANOTHER PAGE"
     case "failed":
       return "THE CLIENT STOPPED UNEXPECTEDLY"
   }
@@ -599,6 +596,8 @@ class TerminalConnection {
   #offset = 0
   #pendingInput = ""
   #resizeTimer: ReturnType<typeof setTimeout> | null = null
+  // Whether this page asked for the session it is attaching to.
+  #restarting = false
   #sessionId: string | null = null
   #stopped = false
   #writing = false
@@ -618,6 +617,7 @@ class TerminalConnection {
     this.#abort?.abort()
     const generation = ++this.#generation
     this.#live = false
+    this.#restarting = restart
     this.#events.onStatus({ kind: "connecting" })
     forkPromise(() => this.#run(generation, restart))
   }
@@ -657,20 +657,31 @@ class TerminalConnection {
     if (this.#writing || !this.#pendingInput || !sessionId || !this.#live) {
       return
     }
-    const data = this.#pendingInput
-    this.#pendingInput = ""
+    const data = inputChunk(this.#pendingInput)
+    this.#pendingInput = this.#pendingInput.slice(data.length)
     this.#writing = true
-    forkPromise(() =>
-      ensuringPromise(
-        () =>
-          writeDatabaseTerminal({ data: { ...this.#target, data, sessionId } }),
-        () => {
-          this.#writing = false
-          if (this.#pendingInput) {
-            this.#flushTimer = setTimeout(() => this.#flushInput(), 0)
+    forkPromise(
+      () =>
+        ensuringPromise(
+          () =>
+            writeDatabaseTerminal({
+              data: { ...this.#target, data, sessionId },
+            }),
+          () => {
+            this.#writing = false
+            if (this.#pendingInput) {
+              this.#flushTimer = setTimeout(() => this.#flushInput(), 0)
+            }
           }
-        }
-      )
+        ),
+      () => {
+        // The rest would arrive without what failed, so it goes too.
+        this.#pendingInput = ""
+        showToast({
+          message: "Couldn't send your input to the terminal",
+          type: "error",
+        })
+      }
     )
   }
 
@@ -765,8 +776,11 @@ class TerminalConnection {
       case "attached": {
         const previousSession = this.#sessionId
         if (previousSession !== record.sessionId) {
-          this.#events.onNotice(sessionNotice(previousSession, record))
+          this.#events.onNotice(
+            sessionNotice(previousSession, record, this.#restarting)
+          )
         }
+        this.#restarting = false
         // Rebuild the screen from the session's own snapshot, so every page
         // shows the same thing whatever it missed.
         this.#terminal.reset()
@@ -799,6 +813,10 @@ class TerminalConnection {
       }
       case "ended":
         this.#live = false
+        // Another page restarted the session: follow it to the new one.
+        if (record.ended.reason === "restarted") {
+          return { cause: "detached", kind: "retry" }
+        }
         this.#sessionId = null
         this.#events.onStatus({ ended: record.ended, kind: "ended" })
         return { kind: "stop" }
@@ -823,6 +841,14 @@ class TerminalConnection {
   }
 }
 
+// The next write's worth of input, never splitting a surrogate pair.
+function inputChunk(input: string) {
+  if (input.length <= DATABASE_TERMINAL_WRITE_MAX_CHARACTERS) return input
+  const end = DATABASE_TERMINAL_WRITE_MAX_CHARACTERS
+  const last = input.charCodeAt(end - 1)
+  return input.slice(0, last >= 0xd800 && last <= 0xdbff ? end - 1 : end)
+}
+
 type StreamOutcome =
   | { kind: "stop" }
   | {
@@ -836,16 +862,22 @@ const FRESH_SESSION_MS = 60_000
 
 // What to tell the person when this page sees a new session: why the last one
 // ended, when the Relay knows, or that the Relay restarted under it. A page
-// opening an older session, or one they restarted themselves, needs no note.
+// opening an older session, or the page that restarted it, needs no note.
 function sessionNotice(
   previousSession: string | null,
-  attached: Extract<DatabaseTerminalStreamRecord, { type: "attached" }>
+  attached: Extract<DatabaseTerminalStreamRecord, { type: "attached" }>,
+  restartedHere: boolean
 ): SessionNotice | null {
   const witnessed =
     previousSession !== null ||
     Date.now() - Date.parse(attached.startedAt) < FRESH_SESSION_MS
-  if (!witnessed) return null
-  if (attached.previous && attached.previous.reason !== "restarted") {
+  if (!witnessed || restartedHere) return null
+  // Only a page that was showing the old session can tell a restart came
+  // from elsewhere.
+  if (
+    attached.previous &&
+    (attached.previous.reason !== "restarted" || previousSession !== null)
+  ) {
     return { ended: attached.previous, kind: "previous" }
   }
   if (

@@ -277,13 +277,13 @@ const databaseTerminalSessionShape = {
   sessionId: databaseTerminalIdSchema,
 }
 
+// The most input one terminal write carries; pages split larger pastes.
+export const DATABASE_TERMINAL_WRITE_MAX_CHARACTERS = 64 * 1024
+
 export const relayDatabaseTerminalWriteSchema = z
   .object({
     ...databaseTerminalSessionShape,
-    data: z
-      .string()
-      .min(1)
-      .max(64 * 1024),
+    data: z.string().min(1).max(DATABASE_TERMINAL_WRITE_MAX_CHARACTERS),
   })
   .strict()
 

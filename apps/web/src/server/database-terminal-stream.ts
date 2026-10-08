@@ -8,13 +8,19 @@ import {
 import { z } from "zod"
 
 import { RelayUnavailableError } from "@/effect/errors"
-import { forkPromise } from "@/effect/promise"
-import type { AuthenticatedUser } from "@/lib/auth-session"
+import { ensuringPromise, forkPromise } from "@/effect/promise"
+import { requireRelayPermission } from "@/lib/access-control"
+import { isEligibleAccount } from "@/lib/account-policy"
+import {
+  getAuthenticatedRealtimeIdentityFromHeaders,
+  type AuthenticatedUser,
+} from "@/lib/auth-session"
 import type {
   DatabaseTerminalStreamError,
   DatabaseTerminalStreamRecord,
 } from "@/lib/database-terminal-stream"
 import { databaseTerminalIdleTimeoutMs } from "@/lib/environment"
+import { subscribeRealtimeChanges } from "@/lib/realtime-source.server"
 import type { PersistedRelay } from "@/lib/relay-registry"
 import { registerDatabaseTerminalAttachment } from "@/server/database-terminal-hub"
 import {
@@ -26,14 +32,21 @@ import {
 // hasn't heard from in a minute.
 const HEARTBEAT_INTERVAL_MS = 20_000
 const PING_INTERVAL_MS = 15_000
+// Output a page hasn't read yet, in base64 characters. A page that falls this
+// far behind is detached; it reattaches from a fresh snapshot.
+const MAX_QUEUED_CHARACTERS = 2_000_000
 
 const encoder = new TextEncoder()
 
 // Attaches one page to the person's terminal session and streams it as NDJSON
 // records until the page leaves, the session ends, or the Relay is lost.
 export function openDatabaseTerminalStream(input: {
+  // The person's sign-in: its id, and the request headers that carry it, so
+  // access can be checked again while the stream stays open.
+  authSessionId: string
   cols: number
   databaseId: string
+  headers: Headers
   relay: PersistedRelay
   restart: boolean
   rows: number
@@ -43,6 +56,7 @@ export function openDatabaseTerminalStream(input: {
   const { databaseId, relay, user } = input
   const attachmentId = randomBytes(24).toString("base64url")
   const queued: Array<DatabaseTerminalStreamRecord> = []
+  let queuedCharacters = 0
   // Pushes can reach Hearth before the attach reply; they wait behind it.
   const early: Array<HearthDatabaseTerminalOutput> = []
   let attached = false
@@ -52,6 +66,19 @@ export function openDatabaseTerminalStream(input: {
 
   const send = (record: DatabaseTerminalStreamRecord) => {
     if (closed) return
+    if (record.type === "output") {
+      queuedCharacters += record.data.length
+      if (queuedCharacters > MAX_QUEUED_CHARACTERS) {
+        queued.length = 0
+        queuedCharacters = 0
+        leave({
+          code: "detached",
+          message: "This page fell behind the session",
+          type: "error",
+        })
+        return
+      }
+    }
     queued.push(record)
     wake?.()
   }
@@ -60,8 +87,9 @@ export function openDatabaseTerminalStream(input: {
     if (closed) return
     closed = true
     unregister()
+    unsubscribe()
     for (const timer of timers) clearInterval(timer)
-    input.signal.removeEventListener("abort", leave)
+    input.signal.removeEventListener("abort", onAbort)
     wake?.()
   }
   const fail = (cause: unknown) =>
@@ -90,9 +118,9 @@ export function openDatabaseTerminalStream(input: {
   )
   // A page that leaves stops being a viewer now rather than at expiry, so
   // the idle timeout starts from when it actually closed.
-  const leave = () => {
+  const leave = (record?: DatabaseTerminalStreamRecord) => {
     const wasOpen = !closed
-    finish()
+    finish(record)
     if (wasOpen) {
       forkPromise(() =>
         databaseRpc(
@@ -105,7 +133,44 @@ export function openDatabaseTerminalStream(input: {
       )
     }
   }
-  input.signal.addEventListener("abort", leave, { once: true })
+  const onAbort = () => leave()
+  input.signal.addEventListener("abort", onAbort, { once: true })
+
+  // Access is checked again on every renewal and whenever the person's access
+  // or sign-in changes. A page that lost it is detached; reattaching runs the
+  // route's own checks, which tell the page why.
+  let checking = false
+  const recheck = () => {
+    if (closed || checking) return
+    checking = true
+    const lost = () =>
+      leave({
+        code: "detached",
+        message: "Checking access to this terminal again",
+        type: "error",
+      })
+    forkPromise(
+      () =>
+        ensuringPromise(
+          async () => {
+            if (!(await stillAuthorized(input))) lost()
+          },
+          () => {
+            checking = false
+          }
+        ),
+      lost
+    )
+  }
+  const unsubscribe = subscribeRealtimeChanges((event) => {
+    if (
+      (event.type === "access.changed" && event.userIds.includes(user.id)) ||
+      (event.type === "session.revoked" &&
+        event.sessionIds.includes(input.authSessionId))
+    ) {
+      recheck()
+    }
+  })
 
   forkPromise(async () => {
     const credential = await requiredCredential(relay.id, databaseId)
@@ -134,6 +199,7 @@ export function openDatabaseTerminalStream(input: {
     timers.push(
       setInterval(() => send({ type: "ping" }), PING_INTERVAL_MS),
       setInterval(() => {
+        recheck()
         forkPromise(async () => {
           const renewed = z.object({ unknown: z.array(z.string()) }).parse(
             await databaseRpc(
@@ -167,6 +233,7 @@ export function openDatabaseTerminalStream(input: {
         wake = null
       }
       const record = queued.shift()
+      if (record?.type === "output") queuedCharacters -= record.data.length
       if (record) {
         controller.enqueue(encoder.encode(`${JSON.stringify(record)}\n`))
         return
@@ -177,6 +244,31 @@ export function openDatabaseTerminalStream(input: {
       leave()
     },
   })
+}
+
+async function stillAuthorized(input: {
+  authSessionId: string
+  databaseId: string
+  headers: Headers
+  relay: PersistedRelay
+}) {
+  const identity = await getAuthenticatedRealtimeIdentityFromHeaders(
+    input.headers
+  )
+  if (
+    !identity ||
+    identity.sessionId !== input.authSessionId ||
+    !isEligibleAccount(identity.user)
+  ) {
+    return false
+  }
+  await requireRelayPermission({
+    databaseId: input.databaseId,
+    permission: "database.terminal",
+    relayId: input.relay.id,
+    user: identity.user,
+  })
+  return true
 }
 
 function streamErrorCode(cause: unknown): DatabaseTerminalStreamError {

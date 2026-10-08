@@ -72,8 +72,10 @@ export const Route = createFileRoute("/api/database-terminal/$databaseId")({
         }
         return new Response(
           openDatabaseTerminalStream({
+            authSessionId: identity.value.sessionId,
             cols: target.data.cols,
             databaseId: target.data.databaseId,
+            headers: request.headers,
             relay: access.value.relay,
             restart: target.data.restart === "1",
             rows: target.data.rows,

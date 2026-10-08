@@ -106,19 +106,48 @@ export class DatabaseTerminals {
   readonly #sessions = new Map<string, TerminalSession>()
   readonly #attachments = new Map<string, TerminalSession>()
   readonly #endings = new Map<string, DatabaseTerminalEnd>()
+  // The attach in progress per person and database, which the next one waits
+  // for.
+  readonly #attaching = new Map<string, Promise<unknown>>()
   #sweeper: ReturnType<typeof setInterval> | null = null
 
   constructor(config: Pick<RelayConfig, "dockerSocket">) {
     this.#config = config
   }
 
-  async attach(
+  // Attaches run one at a time per person and database, so pages opening
+  // together share one session and a restart can't race another attach.
+  attach(
     owner: string,
     database: RelayManagedDatabase,
     input: RelayDatabaseTerminalAttach,
     push: PushTerminalOutput
   ): Promise<RelayDatabaseTerminalAttached> {
     const key = sessionKey(owner, database.id)
+    const previous = this.#attaching.get(key) ?? Promise.resolve()
+    const attached = recoverPromise(
+      () => previous,
+      () => undefined
+    ).then(() => this.#attachNow(key, owner, database, input, push))
+    const settled = recoverPromise(
+      () => attached,
+      () => undefined
+    )
+    this.#attaching.set(key, settled)
+    forkPromise(async () => {
+      await settled
+      if (this.#attaching.get(key) === settled) this.#attaching.delete(key)
+    })
+    return attached
+  }
+
+  async #attachNow(
+    key: string,
+    owner: string,
+    database: RelayManagedDatabase,
+    input: RelayDatabaseTerminalAttach,
+    push: PushTerminalOutput
+  ): Promise<RelayDatabaseTerminalAttached> {
     let session = this.#sessions.get(key)
     if (session && input.restart) {
       await this.#end(session, "restarted")
