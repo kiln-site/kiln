@@ -159,6 +159,7 @@ export const cliRelaySchema = z
     id: z.string().regex(/^[A-Za-z\d_-]{43}$/u),
     name: z.string().min(1).max(120),
     platform: z.string().min(1).nullable(),
+    releaseName: z.string().min(1).max(120).nullable().default(null),
     serverCount: z.number().int().nonnegative().nullable(),
     status: z.enum(["connected", "unreachable"]),
     version: z.string().min(1).nullable(),

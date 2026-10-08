@@ -64,7 +64,7 @@ import {
   relayConnectionQueryOptions,
   relaySnapshotQueryOptions,
 } from "@/lib/query-options"
-import { kilnReleaseLabel } from "@/lib/release-version"
+import { kilnReleaseName } from "@/lib/release-version"
 import { disableDevelopmentBypass } from "@/server/auth"
 import { engineLabel } from "@/components/database/database-presentation"
 import {
@@ -944,7 +944,7 @@ function selectSidebarRelayPickerItems(
       source: "fleet",
     },
     key: sidebarPickerKey("relay", node.relayId, node.relayId),
-    meta: `${node.arch} · ${kilnReleaseLabel(node.version)}`,
+    meta: `${node.arch} · ${node.releaseName ?? kilnReleaseName(node.version)}`,
     name: node.relayName,
     searchText: `${node.relayId} ${node.version}`,
   }))

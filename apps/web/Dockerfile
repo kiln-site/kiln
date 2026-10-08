@@ -23,12 +23,14 @@ COPY --chown=vp:vp packages/ui ./packages/ui
 
 ARG SOURCE_COMMIT
 ARG KILN_VERSION
+ARG KILN_RELEASE_NUMBER
 ARG SENTRY_SOURCEMAPS
 ARG VITE_SENTRY_DSN
 ARG VITE_SENTRY_REPLAYS_SESSION_SAMPLE_RATE=0.05
 ARG VITE_SENTRY_TRACES_SAMPLE_RATE=0.05
 ENV SOURCE_COMMIT=$SOURCE_COMMIT
 ENV KILN_VERSION=$KILN_VERSION
+ENV KILN_RELEASE_NUMBER=$KILN_RELEASE_NUMBER
 ENV SENTRY_SOURCEMAPS=$SENTRY_SOURCEMAPS
 ENV VITE_SENTRY_DSN=$VITE_SENTRY_DSN
 ENV VITE_SENTRY_REPLAYS_SESSION_SAMPLE_RATE=$VITE_SENTRY_REPLAYS_SESSION_SAMPLE_RATE
@@ -53,6 +55,8 @@ FROM gcr.io/distroless/nodejs24-debian12:nonroot AS runtime
 
 ARG KILN_GIT_REPO=https://github.com/kiln-site/kiln
 ARG KILN_VERSION
+ARG KILN_RELEASE_NUMBER
+ARG KILN_RELEASE_NAME
 ARG SOURCE_COMMIT
 ENV NODE_ENV=production
 ENV HOST=0.0.0.0
@@ -70,6 +74,8 @@ ARG KILN_IMAGE_SOURCE=https://github.com/kiln-site/hearth
 LABEL org.opencontainers.image.source="${KILN_IMAGE_SOURCE}" \
   org.opencontainers.image.version="${KILN_VERSION}" \
   org.opencontainers.image.revision="${SOURCE_COMMIT}" \
+  io.kiln.release-number="${KILN_RELEASE_NUMBER}" \
+  io.kiln.release-name="${KILN_RELEASE_NAME}" \
   io.kiln.component="hearth"
 
 COPY --from=runtime-deps --chown=65532:65532 /runtime/node_modules ./node_modules

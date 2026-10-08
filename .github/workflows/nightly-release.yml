@@ -49,6 +49,8 @@ jobs:
       prepare_sentry_source_maps: ${{ matrix.component == 'hearth' && vars.SENTRY_ORG != '' && vars.SENTRY_PROJECT != '' }}
       build_args: |
         SOURCE_COMMIT=${{ github.sha }}
+        KILN_RELEASE_NUMBER=${{ needs.config.outputs.release_number }}
+        KILN_RELEASE_NAME=${{ needs.config.outputs.release_name }}
         KILN_GIT_REPO=${{ needs.config.outputs.repository }}
         KILN_IMAGE_SOURCE=${{ needs.config.outputs.source }}
         SENTRY_DSN=${{ vars.SENTRY_DSN }}

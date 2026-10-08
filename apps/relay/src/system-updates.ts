@@ -23,6 +23,10 @@ import {
 import { Effect, Semaphore } from "effect"
 
 import { command } from "./command.js"
+import {
+  containerReleaseName,
+  containerReleaseVersion,
+} from "./release-labels.js"
 import { RelaySystemUpdateError } from "./effect/errors.js"
 import {
   KILN_INSTALLATION_LABEL,
@@ -703,6 +707,7 @@ function updateEligibility(
   component: KilnComponent | null
   container: string
   currentImage: string
+  currentReleaseName: string | null
   currentVersion: string | null
   eligible: boolean
   installationId: string | null
@@ -714,6 +719,7 @@ function updateEligibility(
   const currentImage = inspected.Config.Image
   const installationId = labels[KILN_INSTALLATION_LABEL]?.trim() || null
   const sameInstallation = installationId === expectedInstallationId
+  const currentVersion = containerReleaseVersion(labels)
   const official = isKilnGitRepositorySource(
     labels["org.opencontainers.image.source"],
     gitRepository
@@ -726,7 +732,8 @@ function updateEligibility(
     component,
     container: inspected.Name.replace(/^\//u, ""),
     currentImage,
-    currentVersion: labels["org.opencontainers.image.version"]?.trim() || null,
+    currentReleaseName: containerReleaseName(labels, currentVersion),
+    currentVersion,
     eligible: Boolean(sameInstallation && component && official && eligibleTag),
     installationId,
     reason: !sameInstallation

@@ -62,6 +62,7 @@ const pushedSnapshot = {
     memory: { totalBytes: 1, usedBytes: 0 },
     name: "Relay test node",
     platform: "linux",
+    releaseName: null,
     startedAt: "2026-01-01T00:00:00.000Z",
     storage: { totalBytes: 1, usedBytes: 0 },
     uptimeSeconds: 0,

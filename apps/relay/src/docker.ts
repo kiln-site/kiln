@@ -218,6 +218,37 @@ export interface RelaySftpPublication {
   status: RelaySftpPublicationStatus
 }
 
+type RelayContainerIdentity = {
+  labels: Readonly<Record<string, string>>
+  startedAt: string | null
+}
+
+const unknownRelayContainer: RelayContainerIdentity = {
+  labels: {},
+  startedAt: null,
+}
+
+function parseRelayContainerIdentity(output: string): RelayContainerIdentity {
+  const [startedAtJson = "null", labelsJson = "null"] = output
+    .trim()
+    .split("\n")
+  const startedAt: unknown = JSON.parse(startedAtJson)
+  const labels: unknown = JSON.parse(labelsJson)
+  const timestamp =
+    typeof startedAt === "string" ? Date.parse(startedAt) : Number.NaN
+  return {
+    labels:
+      labels !== null &&
+      typeof labels === "object" &&
+      Object.values(labels).every((value) => typeof value === "string")
+        ? (labels as Record<string, string>)
+        : {},
+    startedAt: Number.isFinite(timestamp)
+      ? new Date(timestamp).toISOString()
+      : null,
+  }
+}
+
 type DockerCommandEffect = (
   executable: string,
   arguments_: Array<string>,
@@ -441,7 +472,7 @@ export class DockerDriver {
   readonly #lifecycleSessions = new Map<string, RelayStoredLifecycleSession>()
   #lifecycleSessionsInitialization: Promise<void> | null = null
   readonly #diskUsageSemaphore = Semaphore.makeUnsafe(1)
-  #relayStartedAt: Promise<string | null> | undefined
+  #relayContainer: Promise<RelayContainerIdentity> | undefined
   #relaySftpPublication: Promise<RelaySftpPublication> | undefined
   readonly #resourceCache = new Map<string, ResourceCacheEntry>()
   readonly #resourceHistory = new Map<string, Array<RelayInstanceResources>>()
@@ -1511,9 +1542,9 @@ export class DockerDriver {
     return this.#cachedDockerVersion
   }
 
-  relayStartedAt(): Promise<string | null> {
-    this.#relayStartedAt ??= this.#inspectRelayStartedAt()
-    return this.#relayStartedAt
+  relayContainer(): Promise<RelayContainerIdentity> {
+    this.#relayContainer ??= this.#inspectRelayContainer()
+    return this.#relayContainer
   }
 
   relaySftpPublication(port: number): Promise<RelaySftpPublication> {
@@ -1523,22 +1554,27 @@ export class DockerDriver {
     return this.#relaySftpPublication
   }
 
-  async #inspectRelayStartedAt(): Promise<string | null> {
+  async #inspectRelayContainer(): Promise<RelayContainerIdentity> {
     return runEffect(
       promiseEffect(() =>
         command(
           "docker",
-          ["inspect", "--format", "{{.State.StartedAt}}", hostname()],
+          [
+            "inspect",
+            "--format",
+            "{{json .State.StartedAt}}\n{{json .Config.Labels}}",
+            hostname(),
+          ],
           { timeout: 2_500 }
         )
       ).pipe(
-        Effect.map((result) => {
-          const timestamp = Date.parse(result.stdout.trim())
-          return Number.isFinite(timestamp)
-            ? new Date(timestamp).toISOString()
-            : null
-        }),
-        Effect.catch(() => Effect.succeed(null))
+        Effect.flatMap((result) =>
+          Effect.try({
+            try: () => parseRelayContainerIdentity(result.stdout),
+            catch: (cause) => cause,
+          })
+        ),
+        Effect.catch(() => Effect.succeed(unknownRelayContainer))
       )
     )
   }

@@ -2,10 +2,11 @@ import {
   compareKilnReleaseVersions,
   isKilnNightlyVersion,
   isKilnReleaseVersion,
+  kilnReleaseName,
   kilnReleaseVersionCore,
 } from "@workspace/contracts"
 
-export { isKilnReleaseVersion }
+export { isKilnReleaseVersion, kilnReleaseName }
 
 type ReleaseVersionMetadata = {
   aliases?: ReadonlyArray<string>
@@ -96,13 +97,11 @@ export function findKilnRelease<TRelease extends ReleaseVersionMetadata>(
   )
 }
 
-/** Human release name, e.g. "v0.1.0 Nightly #17", for a reported version. */
-export function kilnReleaseLabel(version: string): string {
-  if (!isKilnReleaseVersion(version)) return version
-  const core = kilnReleaseVersionCore(version)
-  if (!isKilnNightlyVersion(version)) return `v${core}`
-  const sequence = /-nightly\.(\d+)$/u.exec(version)?.[1]
-  return sequence ? `v${core} Nightly #${sequence}` : `v${core} Nightly`
+export function githubReleaseUrl(
+  gitRepository: string,
+  version: string
+): string {
+  return `${gitRepository}/releases/tag/${encodeURIComponent(`v${version}`)}`
 }
 
 function comparePublishedAt(

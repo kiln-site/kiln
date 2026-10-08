@@ -1620,6 +1620,7 @@ function cliRelaySummary(
     id: relay.id,
     name: relay.name,
     platform: snapshot?.node.platform ?? relay.nodePlatform,
+    releaseName: snapshot?.node.releaseName ?? relay.nodeReleaseName,
     serverCount: snapshot?.instances.length ?? null,
     status: snapshot ? "connected" : "unreachable",
     version: snapshot?.node.version ?? relay.nodeVersion,

@@ -39,6 +39,32 @@ export function kilnReleaseVersionCore(version: string): string {
   return version.replace(nightlyVersionSuffixPattern, "")
 }
 
+/** Docker label holding the CI run number a release image was built by. */
+export const kilnReleaseNumberLabel = "io.kiln.release-number"
+/** Docker label holding the display name of the release a container runs. */
+export const kilnReleaseNameLabel = "io.kiln.release-name"
+
+/**
+ * Display name GitHub releases use, e.g. "v0.1.0" or "v0.1.0 Nightly #123".
+ * Versions that are not Kiln releases, such as development builds, are kept.
+ */
+export function kilnReleaseName(
+  version: string,
+  releaseNumber?: string | null
+): string {
+  const parsedVersion = parseKilnReleaseVersion(version)
+  if (!parsedVersion) return version
+  const core = `v${parsedVersion.core.join(".")}`
+  if (!parsedVersion.nightly) return core
+  const runNumber = releaseNumber?.trim() ?? ""
+  const number = /^\d+$/u.test(runNumber)
+    ? runNumber
+    : parsedVersion.nightly.kind === "legacy"
+      ? String(parsedVersion.nightly.sequence)
+      : null
+  return number ? `${core} Nightly #${number}` : `${core} Nightly`
+}
+
 export function compareKilnReleaseVersions(
   left: string,
   right: string

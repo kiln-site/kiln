@@ -48,6 +48,7 @@ const config = defineConfig(({ command }) => {
               "COMMIT_SHA",
               "GITHUB_SHA",
               "KILN_BUILD_SHA",
+              "KILN_RELEASE_NUMBER",
               "KILN_VERSION",
               "SENTRY_AUTH_TOKEN",
               "SENTRY_ORG",
@@ -100,6 +101,9 @@ const config = defineConfig(({ command }) => {
       "import.meta.env.VITE_KILN_SOURCE_SHA": JSON.stringify(sourceCommit),
       "import.meta.env.VITE_KILN_VERSION": JSON.stringify(
         process.env.KILN_VERSION?.trim() || release.releaseLine
+      ),
+      "import.meta.env.VITE_KILN_RELEASE_NUMBER": JSON.stringify(
+        process.env.KILN_RELEASE_NUMBER?.trim() ?? ""
       ),
     },
     envDir: "../..",

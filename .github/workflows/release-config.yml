@@ -16,6 +16,10 @@ on:
         value: ${{ jobs.config.outputs.source }}
       version:
         value: ${{ jobs.config.outputs.version }}
+      release_number:
+        value: ${{ jobs.config.outputs.releaseNumber }}
+      release_name:
+        value: ${{ jobs.config.outputs.releaseName }}
 
 permissions:
   contents: read
@@ -28,6 +32,8 @@ jobs:
       prefix: ${{ steps.config.outputs.prefix }}
       source: ${{ steps.config.outputs.source }}
       version: ${{ steps.config.outputs.version }}
+      releaseNumber: ${{ steps.config.outputs.releaseNumber }}
+      releaseName: ${{ steps.config.outputs.releaseName }}
     steps:
       - name: Reject nightly configuration reruns
         if: inputs.resolve_release_line && github.run_attempt != 1

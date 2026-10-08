@@ -41,7 +41,9 @@ import {
   compareLatestReleaseVersion,
   compareReleaseVersions,
   findKilnRelease,
+  githubReleaseUrl,
   isKilnReleaseVersion,
+  kilnReleaseName,
 } from "@/lib/release-version"
 import {
   beginSystemUpdateBatch,
@@ -74,6 +76,7 @@ import { getSystemUpdateStatus, startSystemUpdates } from "@/server/updates"
 
 type UpdateTarget = {
   component: "hearth" | "relay"
+  currentReleaseName: string | null
   currentVersion: string | null
   eligible: boolean
   key: string
@@ -447,7 +450,9 @@ export const InfraUpdatesDialog = React.memo(function InfraUpdatesDialog({
                   relays: replaceRelayUpdateVersion(
                     overview.relays,
                     completed.relayId,
-                    completedVersion
+                    completedVersion,
+                    findKilnRelease(overview.releases, completedVersion)
+                      ?.name ?? kilnReleaseName(completedVersion)
                   ),
                 }
               : overview
@@ -1540,15 +1545,12 @@ const UpdateTargetRow = React.memo(function UpdateTargetRow({
                 </span>
                 <GitHubVersionLink href={currentRelease.url}>
                   <span className="block max-w-56 truncate text-sm font-semibold text-foreground">
-                    {currentRelease.name}
+                    {target.currentReleaseName ?? currentRelease.name}
                   </span>
                 </GitHubVersionLink>
               </>
             ) : null}
-            <UpdateTargetStatusCallout
-              releases={releases}
-              target={target}
-            />
+            <UpdateTargetStatusCallout releases={releases} target={target} />
           </div>
           <div className="mt-2 h-4 overflow-hidden" aria-live="polite">
             <UpdateTargetDetails
@@ -1645,11 +1647,7 @@ const UpdateTargetStatusCallout = React.memo(
       target.currentVersion,
       releases
     )
-    return (
-      <UpdateStatusCallout
-        status={targetStatus(target, comparison)}
-      />
-    )
+    return <UpdateStatusCallout status={targetStatus(target, comparison)} />
   }
 )
 
@@ -1984,7 +1982,7 @@ const ChangelogTargetButton = React.memo(function ChangelogTargetButton({
       <span>
         <span className="block text-xs font-semibold">{target.name}</span>
         <span className="type-meta block font-mono">
-          {displayVersion(target.currentVersion)}
+          {target.currentReleaseName ?? displayVersion(target.currentVersion)}
         </span>
       </span>
     </button>
@@ -2276,6 +2274,8 @@ function UpdateConfirmation({
 function updateTargets(overview: UpdateOverview): Array<UpdateTarget> {
   const hearth: UpdateTarget = {
     component: "hearth",
+    currentReleaseName:
+      overview.hearth?.currentReleaseName ?? overview.currentReleaseName,
     currentVersion:
       overview.hearth?.currentVersion ?? overview.currentVersion ?? null,
     eligible: overview.hearth?.eligible ?? false,
@@ -2288,17 +2288,16 @@ function updateTargets(overview: UpdateOverview): Array<UpdateTarget> {
   }
   return [
     ...(overview.canUpdateHearth ? [hearth] : []),
-    ...overview.relays.map(
-      (relay): UpdateTarget => ({
-        component: "relay",
-        currentVersion: relay.currentVersion,
-        eligible: relay.eligible,
-        key: relayTargetKey(relay.relayId),
-        name: relay.name,
-        reason: relay.reason,
-        relayId: relay.relayId,
-      })
-    ),
+    ...overview.relays.map((relay): UpdateTarget => ({
+      component: "relay",
+      currentReleaseName: relay.currentReleaseName,
+      currentVersion: relay.currentVersion,
+      eligible: relay.eligible,
+      key: relayTargetKey(relay.relayId),
+      name: relay.name,
+      reason: relay.reason,
+      relayId: relay.relayId,
+    })),
   ]
 }
 
@@ -2564,6 +2563,7 @@ function areChangelogTargetButtonPropsEqual(
     previous.selected === next.selected &&
     previous.onSelect === next.onSelect &&
     previous.target.component === next.target.component &&
+    previous.target.currentReleaseName === next.target.currentReleaseName &&
     previous.target.currentVersion === next.target.currentVersion &&
     previous.target.key === next.target.key &&
     previous.target.name === next.target.name
@@ -2637,6 +2637,7 @@ function areUpdateTargetsEqual(
 ): boolean {
   return (
     previous.component === next.component &&
+    previous.currentReleaseName === next.currentReleaseName &&
     previous.currentVersion === next.currentVersion &&
     previous.eligible === next.eligible &&
     previous.key === next.key &&
@@ -2923,10 +2924,6 @@ function formatReleaseDate(publishedAt: string | null): string {
   return Number.isFinite(date.getTime())
     ? releaseDateFormatter.format(date)
     : "Recently published"
-}
-
-function githubReleaseUrl(gitRepository: string, version: string): string {
-  return `${gitRepository}/releases/tag/${encodeURIComponent(`v${version}`)}`
 }
 
 function markdownTextLines(

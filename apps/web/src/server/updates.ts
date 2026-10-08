@@ -1,4 +1,5 @@
 import { createServerFn, createServerOnlyFn } from "@tanstack/react-start"
+import { kilnReleaseName } from "@workspace/contracts"
 import { Effect } from "effect"
 import { z } from "zod"
 
@@ -33,16 +34,27 @@ const updateStatusSchema = z.object({
   operationId: z.uuid(),
   relayId: z.string().min(1),
 })
-const systemInspectionSchema = z.object({
-  component: componentSchema.nullable(),
-  container: z.string().min(1),
-  currentImage: z.string().min(1),
-  currentVersion: z.string().nullable(),
-  eligible: z.boolean(),
-  installationId: z.string().nullable().optional().default(null),
-  reason: z.string().nullable(),
-  sameInstallation: z.boolean().optional().default(true),
-})
+const systemInspectionSchema = z
+  .object({
+    component: componentSchema.nullable(),
+    container: z.string().min(1),
+    currentImage: z.string().min(1),
+    // Older Relays do not report release labels.
+    currentReleaseName: z.string().nullable().optional().default(null),
+    currentVersion: z.string().nullable(),
+    eligible: z.boolean(),
+    installationId: z.string().nullable().optional().default(null),
+    reason: z.string().nullable(),
+    sameInstallation: z.boolean().optional().default(true),
+  })
+  .transform((inspection) => ({
+    ...inspection,
+    currentReleaseName:
+      inspection.currentReleaseName ??
+      (inspection.currentVersion
+        ? kilnReleaseName(inspection.currentVersion)
+        : null),
+  }))
 const updateOperationSchema = z.object({
   component: componentSchema,
   error: z.string().nullable(),
@@ -118,6 +130,7 @@ export const getUpdateOverview = createServerFn({ method: "GET" }).handler(
                   component: "relay" as const,
                   container: "",
                   currentImage: "",
+                  currentReleaseName: relay.nodeReleaseName,
                   currentVersion: relay.nodeVersion,
                   eligible: false,
                   name: relay.name,
@@ -170,6 +183,10 @@ export const getUpdateOverview = createServerFn({ method: "GET" }).handler(
 
     return {
       canUpdateHearth: platformAdmin,
+      currentReleaseName: kilnReleaseName(
+        import.meta.env.VITE_KILN_VERSION,
+        import.meta.env.VITE_KILN_RELEASE_NUMBER
+      ),
       currentVersion: import.meta.env.VITE_KILN_VERSION,
       hearth: hearthTarget,
       releases,

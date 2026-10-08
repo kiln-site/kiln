@@ -122,6 +122,7 @@ import {
   compareLatestReleaseVersion,
   findKilnRelease,
   isKilnReleaseVersion,
+  kilnReleaseName,
 } from "@/lib/release-version"
 import type { PublicKilnRelease } from "@/effect/github-releases"
 import { useKilnGitRepository } from "@/lib/git-repository"
@@ -165,7 +166,13 @@ const relayInventoryError = new Error("Could not load Relays")
 const pendingRelayResumes = new Map<string, Promise<void>>()
 const noOutdatedRelays: ReadonlySet<string> = new Set()
 const noPublicReleases: ReadonlyArray<PublicKilnRelease> = []
-const noReportedRelayVersions: ReadonlyMap<string, string | null> = new Map()
+type ReportedRelayRelease = {
+  releaseName: string | null
+  version: string | null
+}
+
+const noReportedRelayVersions: ReadonlyMap<string, ReportedRelayRelease> =
+  new Map()
 const noOwnerProfileIds: ReadonlyMap<string, string> = new Map()
 // Owner cells read profiles from context so avatars never rebuild columns.
 const RelayOwnerProfileIdsContext =
@@ -194,6 +201,7 @@ type RelayRegistryTableItem = Pick<
   | "name"
   | "nodeArch"
   | "nodePlatform"
+  | "nodeReleaseName"
   | "nodeVersion"
   | "ownerEmail"
   | "ownerName"
@@ -223,6 +231,7 @@ const relayTableSearchFields = [
   (relay: RelayTableItem) => relay.hostname,
   (relay: RelayTableItem) => relay.nodeArch,
   (relay: RelayTableItem) => relay.nodePlatform,
+  (relay: RelayTableItem) => relay.nodeReleaseName,
   (relay: RelayTableItem) => relay.nodeVersion,
   (relay: RelayTableItem) => relay.ownerEmail,
   (relay: RelayTableItem) => relay.ownerName,
@@ -514,6 +523,7 @@ const FilteredRelayTable = React.memo(function FilteredRelayTable({
           name: relay.name,
           nodeArch: relay.nodeArch,
           nodePlatform: relay.nodePlatform,
+          nodeReleaseName: relay.nodeReleaseName,
           nodeVersion: relay.nodeVersion,
           ownerEmail: relay.ownerEmail,
           ownerName: relay.ownerName,
@@ -686,7 +696,7 @@ function RelayTable({
   onOpenUpdates,
 }: {
   outdatedRelayIds: ReadonlySet<string>
-  reportedVersions: ReadonlyMap<string, string | null>
+  reportedVersions: ReadonlyMap<string, ReportedRelayRelease>
   releases: ReadonlyArray<PublicKilnRelease>
   searchStore: DataTableSearchStore
   source: DataTableSource<RelayTableItem>
@@ -798,20 +808,23 @@ function RelayTable({
         }),
       }),
       relayTableColumnHelper.accessor(
-        (relay) => reportedVersions.get(relay.id) ?? relay.nodeVersion ?? "",
+        (relay) =>
+          reportedVersions.get(relay.id)?.version ?? relay.nodeVersion ?? "",
         {
           id: "version",
           header: "Version",
           sortFn: "text",
           cell: ({ row }) => {
             const relay = row.original
+            const reported = reportedVersions.get(relay.id)
             return (
               <RelayVersion
                 name={relay.name}
                 outdated={outdatedRelayIds.has(relay.id)}
+                releaseName={reported?.releaseName ?? relay.nodeReleaseName}
                 releases={releases}
                 relayId={relay.id}
-                version={reportedVersions.get(relay.id) ?? relay.nodeVersion}
+                version={reported?.version ?? relay.nodeVersion}
                 onOpenUpdates={onOpenUpdates}
               />
             )
@@ -2016,14 +2029,17 @@ function selectCanReviewUpdates(capabilities: {
 
 function selectRelayUpdateSummary(overview: UpdateOverview): {
   outdatedRelayIds: ReadonlySet<string>
-  reportedVersions: ReadonlyMap<string, string | null>
+  reportedVersions: ReadonlyMap<string, ReportedRelayRelease>
   releases: ReadonlyArray<PublicKilnRelease>
 } {
   const latestRelease = overview.releases[0]
   const outdatedRelayIds = new Set<string>()
-  const reportedVersions = new Map<string, string | null>()
+  const reportedVersions = new Map<string, ReportedRelayRelease>()
   for (const relay of overview.relays) {
-    reportedVersions.set(relay.relayId, relay.currentVersion)
+    reportedVersions.set(relay.relayId, {
+      releaseName: relay.currentReleaseName,
+      version: relay.currentVersion,
+    })
     if (
       latestRelease &&
       isKilnReleaseVersion(relay.currentVersion) &&
@@ -2058,6 +2074,7 @@ function isGitCommitSha(value: string): boolean {
 function RelayVersion({
   name,
   outdated,
+  releaseName,
   releases,
   relayId,
   version,
@@ -2065,6 +2082,7 @@ function RelayVersion({
 }: {
   name: string
   outdated: boolean
+  releaseName: string | null
   releases: ReadonlyArray<PublicKilnRelease>
   relayId: string
   version: string | null
@@ -2072,6 +2090,7 @@ function RelayVersion({
 }) {
   const gitRepository = useKilnGitRepository()
   const release = findKilnRelease(releases, version)
+  const displayName = releaseName ?? (version ? kilnReleaseName(version) : null)
   const versionLabel = !version ? (
     <span className="type-meta truncate font-mono text-foreground">—</span>
   ) : release ? (
@@ -2079,11 +2098,11 @@ function RelayVersion({
       href={release.url}
       target="_blank"
       rel="noreferrer"
-      aria-label={`View ${release.name} on GitHub`}
-      title={`${release.name} (${release.tag})`}
+      aria-label={`View ${displayName} on GitHub`}
+      title={`${displayName} (${release.tag})`}
       className="type-label truncate text-primary transition-colors hover:text-primary focus-visible:text-primary focus-visible:outline-none"
     >
-      {release.name}
+      {displayName}
     </a>
   ) : isGitCommitSha(version) ? (
     <a
@@ -2097,7 +2116,7 @@ function RelayVersion({
     </a>
   ) : (
     <span className="type-meta truncate font-mono text-foreground">
-      {version}
+      {displayName}
     </span>
   )
 

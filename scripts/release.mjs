@@ -19,6 +19,7 @@ import {
 import {
   isKilnReleaseVersion,
   compareKilnReleaseVersions,
+  kilnReleaseName,
 } from "../packages/contracts/src/release-version.ts"
 
 const execFileAsync = promisify(execFile)
@@ -111,7 +112,19 @@ export async function workflowReleaseConfiguration(
   if (environment.GITHUB_RUN_ATTEMPT !== "1")
     throw new Error("Start a new Nightly release from main.")
 
-  return releaseConfiguration(environment, timestamp, await loadLatestStable())
+  const config = releaseConfiguration(
+    environment,
+    timestamp,
+    await loadLatestStable()
+  )
+  // Images carry the run number so Relays can name their release offline.
+  const releaseNumber = environment.GITHUB_RUN_NUMBER?.trim() ?? ""
+  if (!/^\d+$/u.test(releaseNumber)) throw new Error("Invalid run number")
+  return {
+    ...config,
+    releaseNumber,
+    releaseName: kilnReleaseName(config.version, releaseNumber),
+  }
 }
 
 export function validateReleaseManifest(manifest, repository, version) {
@@ -422,7 +435,7 @@ async function nightly() {
     publishRelease(
       manifest,
       false,
-      `v${version.split("-nightly.")[0]} Nightly #${process.env.GITHUB_RUN_NUMBER}`,
+      kilnReleaseName(version, process.env.GITHUB_RUN_NUMBER),
       repository
     )
   }

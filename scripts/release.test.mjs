@@ -137,6 +137,7 @@ test("nightly configuration reruns fail before resolving a release line", async 
     GITHUB_REPOSITORY: "example/fork",
     KILN_RESOLVE_RELEASE_LINE: "true",
     GITHUB_RUN_ATTEMPT: "1",
+    GITHUB_RUN_NUMBER: "123",
   }
   const timestamp = "2026-09-30T12:00:00Z"
   const first = await workflowReleaseConfiguration(
@@ -148,6 +149,9 @@ test("nightly configuration reruns fail before resolving a release line", async 
     })
   )
   assert.equal(first.version, "1.3.0-nightly.20260930.120000")
+  // Image labels and the GitHub release title must name the same release.
+  assert.equal(first.releaseNumber, "123")
+  assert.equal(first.releaseName, "v1.3.0 Nightly #123")
 
   const retry = { ...environment, GITHUB_RUN_ATTEMPT: "2" }
   const unexpectedRead = () => assert.fail("must not read release state")
@@ -156,11 +160,14 @@ test("nightly configuration reruns fail before resolving a release line", async 
     /Start a new Nightly release from main/u
   )
   // PR and Ember configuration can still be rerun without reading release state.
-  await workflowReleaseConfiguration(
+  // Their images are not releases, so they must not claim a release number.
+  const pullRequest = await workflowReleaseConfiguration(
     { ...retry, KILN_RESOLVE_RELEASE_LINE: "false" },
     timestamp,
     unexpectedRead
   )
+  assert.equal(pullRequest.releaseNumber, undefined)
+  assert.equal(pullRequest.releaseName, undefined)
 })
 
 test("nightly rolling tags never move backwards or replace an established stable", () => {

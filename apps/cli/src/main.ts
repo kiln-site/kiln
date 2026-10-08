@@ -176,7 +176,7 @@ const runCommandEffect = Effect.fn("cli.command")(function* (
         result.relays.map((relay) => [
           relay.name,
           relay.status,
-          relay.version ?? "-",
+          relay.releaseName ?? relay.version ?? "-",
           [relay.platform, relay.arch].filter(Boolean).join("/") || "-",
           relay.serverCount === null ? "-" : String(relay.serverCount),
           relay.id,
@@ -929,7 +929,13 @@ function writeRelayInfo(
   writeLine(`Name: ${result.relay.name}`)
   writeLine(`ID: ${result.relay.id}`)
   writeLine(`Status: ${result.relay.status}`)
-  writeLine(`Version: ${result.relay.version ?? "unknown"}`)
+  writeLine(
+    `Version: ${
+      result.relay.releaseName && result.relay.version
+        ? `${result.relay.releaseName} (${result.relay.version})`
+        : (result.relay.version ?? "unknown")
+    }`
+  )
   writeLine(
     `Platform: ${[result.relay.platform, result.relay.arch].filter(Boolean).join("/") || "unknown"}`
   )

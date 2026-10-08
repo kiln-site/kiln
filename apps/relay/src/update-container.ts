@@ -2,7 +2,12 @@ import {
   LEGACY_KILN_GIT_REPO,
   DEFAULT_KILN_GIT_REPO,
   kilnImageRepository,
+  kilnReleaseName,
+  kilnReleaseNameLabel,
+  kilnReleaseNumberLabel,
 } from "@workspace/contracts"
+
+import { KILN_VERSION_LABEL } from "./release-labels.js"
 
 // Official images retain the pre-rename source label until older Relays that
 // require this exact value have had a compatibility release available.
@@ -65,6 +70,34 @@ export function managedImageChannel(
   const stable = `${kilnImageRepository(component, repository)}:latest`
   const nightly = `${kilnImageRepository(component, repository)}:latest-nightly`
   return image === stable || image === nightly ? image : null
+}
+
+function replacementLabels(
+  current: Record<string, string> | null | undefined,
+  target: Record<string, string> | null | undefined,
+  targetVersion: string
+): Record<string, string> {
+  // Release labels describe an image, so never carry the old image's over.
+  const preserved = Object.fromEntries(
+    Object.entries(current ?? {}).filter(
+      ([label]) =>
+        label !== kilnReleaseNameLabel && label !== kilnReleaseNumberLabel
+    )
+  )
+  const labels: Record<string, string> = {
+    ...preserved,
+    ...target,
+    [KILN_VERSION_LABEL]: targetVersion,
+  }
+  // Stable releases reuse a nightly image, so name the installed release
+  // instead of trusting the name baked into the image.
+  return {
+    ...labels,
+    [kilnReleaseNameLabel]: kilnReleaseName(
+      targetVersion,
+      labels[kilnReleaseNumberLabel]
+    ),
+  }
 }
 
 export function replaceContainerEffect(
@@ -142,11 +175,11 @@ export function replaceContainerEffect(
         docker.createContainer(input.targetContainer, {
           ...preservedConfig,
           Image: input.targetReference,
-          Labels: {
-            ...current.Config.Labels,
-            ...target.Config?.Labels,
-            "org.opencontainers.image.version": input.targetVersion,
-          },
+          Labels: replacementLabels(
+            current.Config.Labels,
+            target.Config?.Labels,
+            input.targetVersion
+          ),
           ...(targetHealthcheck === undefined
             ? {}
             : { Healthcheck: targetHealthcheck }),

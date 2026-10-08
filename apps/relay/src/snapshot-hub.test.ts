@@ -128,6 +128,7 @@ function emptySnapshot(): RelaySnapshot {
       memory: { totalBytes: 16_000, usedBytes: 8_000 },
       name: "Test Relay",
       platform: "linux",
+      releaseName: null,
       startedAt: "2026-08-08T11:00:00.000Z",
       storage: { totalBytes: 100_000, usedBytes: 50_000 },
       uptimeSeconds: 3_600,

@@ -30,8 +30,10 @@ COPY --chown=vp:vp packages/contracts ./packages/contracts
 
 ARG SOURCE_COMMIT
 ARG KILN_VERSION
+ARG KILN_RELEASE_NUMBER
 ENV SOURCE_COMMIT=$SOURCE_COMMIT
 ENV KILN_VERSION=$KILN_VERSION
+ENV KILN_RELEASE_NUMBER=$KILN_RELEASE_NUMBER
 RUN vp run relay#build
 
 FROM docker:29.8.2-cli AS docker-cli
@@ -59,6 +61,8 @@ COPY --from=build /source/apps/relay/dist ./dist
 COPY --chmod=755 apps/relay/bin/kiln-relay.mjs /usr/local/bin/kiln-relay
 
 ARG KILN_VERSION
+ARG KILN_RELEASE_NUMBER
+ARG KILN_RELEASE_NAME
 ARG SOURCE_COMMIT
 
 # Keep the legacy source label until older Relays have received the
@@ -67,6 +71,8 @@ ARG KILN_IMAGE_SOURCE=https://github.com/kiln-site/hearth
 LABEL org.opencontainers.image.source="${KILN_IMAGE_SOURCE}" \
   org.opencontainers.image.version="${KILN_VERSION}" \
   org.opencontainers.image.revision="${SOURCE_COMMIT}" \
+  io.kiln.release-number="${KILN_RELEASE_NUMBER}" \
+  io.kiln.release-name="${KILN_RELEASE_NAME}" \
   io.kiln.component="relay"
 
 EXPOSE 4100 2022

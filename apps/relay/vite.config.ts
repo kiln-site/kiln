@@ -16,6 +16,9 @@ export default defineConfig({
     define: {
       "import.meta.env.KILN_BUILD_SHA": JSON.stringify(buildCommit),
       "import.meta.env.KILN_VERSION": JSON.stringify(buildVersion),
+      "import.meta.env.KILN_RELEASE_NUMBER": JSON.stringify(
+        process.env.KILN_RELEASE_NUMBER?.trim() ?? ""
+      ),
     },
     deps: {
       // tsdown <0.23 compatibility: resolve external dependency subpaths.
@@ -50,6 +53,7 @@ export default defineConfig({
             "COMMIT_SHA",
             "GITHUB_SHA",
             "KILN_BUILD_SHA",
+            "KILN_RELEASE_NUMBER",
             "KILN_VERSION",
             "SOURCE_COMMIT",
           ],

@@ -89,7 +89,10 @@ class FakeDocker implements ContainerUpdateDocker {
   failCommand: string | null = null
   failHealthCheck = false
 
-  constructor(readonly current: ContainerInspect = currentContainer) {
+  constructor(
+    readonly current: ContainerInspect = currentContainer,
+    readonly image: ImageInspect = targetImage
+  ) {
     this.containers.set("hearth", {
       config: current.Config,
       id: current.Id,
@@ -157,7 +160,7 @@ class FakeDocker implements ContainerUpdateDocker {
   }
 
   async inspectImage(): Promise<ImageInspect> {
-    return targetImage
+    return this.image
   }
 
   async waitUntilHealthy(name: string): Promise<void> {
@@ -225,6 +228,7 @@ describe("container replacement", () => {
               "coolify.managed": "true",
               "io.kiln.component": "hearth",
               "org.opencontainers.image.revision": "new-commit",
+              "io.kiln.release-name": "v0.1.0 Nightly #2",
               "org.opencontainers.image.source": KILN_IMAGE_SOURCE,
               "org.opencontainers.image.version": "0.1.0-nightly.2",
             },
@@ -235,6 +239,66 @@ describe("container replacement", () => {
         expect(replaced?.config).not.toHaveProperty("Hostname")
         expect(docker.containers.has("hearth-backup")).toBe(false)
         expect(docker.tags.get(channelReference)).toBe(targetDigest)
+      })
+  )
+
+  effectIt.effect(
+    "names the installed release instead of the old or baked one",
+    () =>
+      Effect.gen(function* () {
+        const labelsAfter = function* (
+          labels: Record<string, string>,
+          targetVersion: string
+        ) {
+          const docker = new FakeDocker(
+            {
+              ...currentContainer,
+              Config: {
+                ...currentContainer.Config,
+                Labels: {
+                  ...currentContainer.Config.Labels,
+                  "io.kiln.release-name": "v0.0.9 Nightly #100",
+                  "io.kiln.release-number": "100",
+                },
+              },
+            },
+            { Config: { ...targetImage.Config, Labels: labels } }
+          )
+          yield* replaceContainerEffect(
+            { ...replacement, targetVersion },
+            docker,
+            ignorePhase
+          )
+          const config = docker.containers.get("hearth")?.config as {
+            Labels: Record<string, string>
+          }
+          return config.Labels
+        }
+        const nightlyImage = {
+          "io.kiln.component": "hearth",
+          "io.kiln.release-name": "v0.1.0 Nightly #123",
+          "io.kiln.release-number": "123",
+          "org.opencontainers.image.source": KILN_IMAGE_SOURCE,
+          "org.opencontainers.image.version": "0.1.0-nightly.20261008.120000",
+        }
+
+        // Stable promotion reuses the nightly image without rebuilding it.
+        expect(yield* labelsAfter(nightlyImage, "0.1.0")).toMatchObject({
+          "io.kiln.release-name": "v0.1.0",
+          "io.kiln.release-number": "123",
+          "org.opencontainers.image.version": "0.1.0",
+        })
+        expect(
+          yield* labelsAfter(nightlyImage, "0.1.0-nightly.20261008.120000")
+        ).toMatchObject({ "io.kiln.release-name": "v0.1.0 Nightly #123" })
+
+        // Images built before release labels must not inherit the old ones.
+        const unlabelled = yield* labelsAfter(
+          targetImage.Config?.Labels ?? {},
+          "0.1.0-nightly.20261008.120000"
+        )
+        expect(unlabelled["io.kiln.release-name"]).toBe("v0.1.0 Nightly")
+        expect(unlabelled).not.toHaveProperty("io.kiln.release-number")
       })
   )
 

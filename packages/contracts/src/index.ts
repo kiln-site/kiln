@@ -1211,6 +1211,8 @@ export const relayNodeSchema = z.object({
   id: z.string().min(1),
   name: z.string().min(1),
   version: z.string().min(1),
+  /** Display name from the Relay's release labels; older Relays omit it. */
+  releaseName: z.string().min(1).nullable().default(null),
   capabilities: z.array(relayNodeCapabilitySchema).default([]),
   canProvisionInstances: z.boolean().default(true),
   platform: z.string().min(1),
