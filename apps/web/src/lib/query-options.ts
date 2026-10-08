@@ -59,7 +59,7 @@ import {
 } from "@/server/relays"
 import { getTailscaleStacks } from "@/server/tailscale"
 import { getAuthState } from "@/server/auth"
-import { getKilnReleaseNames, getUpdateOverview } from "@/server/updates"
+import { getUpdateOverview } from "@/server/updates"
 import { getScheduleOptions, getSchedules } from "@/server/schedules"
 import type { RelayFleetSnapshot } from "@/lib/relay-fleet"
 import {
@@ -155,7 +155,6 @@ export const queryKeys = {
   tailscale: (relayId: string) => ["tailscale", "relays", relayId] as const,
   tailscaleStacks: ["tailscale", "stacks"] as const,
   updates: ["updates", "overview"] as const,
-  releaseNames: ["updates", "release-names"] as const,
   instanceFavorites: ["instance-favorites"] as const,
   uiPreferences: ["ui", "preferences"] as const,
 }
@@ -536,17 +535,6 @@ export function updateOverviewQueryOptions() {
     queryKey: queryKeys.updates,
     queryFn: () => getUpdateOverview(),
     staleTime: 30_000,
-  })
-}
-
-export function kilnReleaseNamesQueryOptions() {
-  return queryOptions({
-    queryKey: queryKeys.releaseNames,
-    queryFn: () => getKilnReleaseNames(),
-    retry: false,
-    // Hearth caches the GitHub lookup, so a short client window only lets a
-    // fallback list recover once the server's retry cooldown passes.
-    staleTime: 60_000,
   })
 }
 

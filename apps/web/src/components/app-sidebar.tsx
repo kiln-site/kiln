@@ -62,7 +62,6 @@ import {
   accessCapabilitiesQueryOptions,
   managedDatabaseDirectoryQueryOptions,
   relayConnectionQueryOptions,
-  kilnReleaseNamesQueryOptions,
   relaySnapshotQueryOptions,
 } from "@/lib/query-options"
 import { kilnReleaseLabel } from "@/lib/release-version"
@@ -76,7 +75,6 @@ import {
   type ManagedDatabaseDirectoryEntry,
 } from "@/lib/database-route"
 import type { getManagedDatabaseDirectory } from "@/server/databases"
-import type { getKilnReleaseNames } from "@/server/updates"
 import type { RelayFleetSnapshot } from "@/lib/relay-fleet"
 import {
   findFirstCanonicalRelayInstance,
@@ -869,19 +867,10 @@ const SidebarInstancePicker = React.memo(function SidebarInstancePicker({
     ...relaySnapshotQueryOptions(),
     select: selectSidebarServerPickerItems,
   })
-  const { data: releaseNames = noReleaseNames } = useQuery({
-    ...kilnReleaseNamesQueryOptions(),
-    enabled: showRelays,
-  })
-  const selectRelayItems = React.useCallback(
-    (snapshot: RelayFleetSnapshot) =>
-      selectSidebarRelayPickerItems(snapshot, releaseNames),
-    [releaseNames]
-  )
   const { data: relayItems = emptyPickerItems } = useQuery({
     ...relaySnapshotQueryOptions(),
     enabled: showRelays,
-    select: selectRelayItems,
+    select: selectSidebarRelayPickerItems,
   })
   const { data: databaseItems = emptyPickerItems } = useQuery({
     ...managedDatabaseDirectoryQueryOptions(),
@@ -914,7 +903,6 @@ const SidebarInstancePicker = React.memo(function SidebarInstancePicker({
 })
 
 const emptyPickerItems: Array<InstancePickerItem> = []
-const noReleaseNames: Awaited<ReturnType<typeof getKilnReleaseNames>> = []
 
 function sidebarPickerKey(
   kind: InstancePickerItem["identity"]["kind"],
@@ -945,8 +933,7 @@ function selectSidebarServerPickerItems(
 }
 
 function selectSidebarRelayPickerItems(
-  snapshot: RelayFleetSnapshot,
-  releaseNames: Awaited<ReturnType<typeof getKilnReleaseNames>>
+  snapshot: RelayFleetSnapshot
 ): Array<InstancePickerItem> {
   return snapshot.nodes.map((node) => ({
     identity: {
@@ -957,7 +944,7 @@ function selectSidebarRelayPickerItems(
       source: "fleet",
     },
     key: sidebarPickerKey("relay", node.relayId, node.relayId),
-    meta: `${node.arch} · ${kilnReleaseLabel(node.version, releaseNames)}`,
+    meta: `${node.arch} · ${kilnReleaseLabel(node.version)}`,
     name: node.relayName,
     searchText: `${node.relayId} ${node.version}`,
   }))

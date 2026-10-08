@@ -83,62 +83,6 @@ async function updateRelaysForUser(
   return relays.filter((relay) => allowed.has(relay.id))
 }
 
-type KilnReleaseName = {
-  aliases: ReadonlyArray<string>
-  name: string
-  version: string
-}
-
-const releaseNamesTtlMs = 10 * 60_000
-const releaseNamesRetryMs = 60_000
-let releaseNamesCache: {
-  expiresAt: number
-  names: Promise<ReadonlyArray<KilnReleaseName>>
-} | null = null
-let lastKnownReleaseNames: ReadonlyArray<KilnReleaseName> = []
-
-// Picker labels are cosmetic: share one GitHub lookup across sessions and fall
-// back to the last good list so the shared unauthenticated quota stays free
-// for update checks.
-function cachedKilnReleaseNames(): Promise<ReadonlyArray<KilnReleaseName>> {
-  const now = Date.now()
-  if (releaseNamesCache && releaseNamesCache.expiresAt > now) {
-    return releaseNamesCache.names
-  }
-  const entry: NonNullable<typeof releaseNamesCache> = {
-    expiresAt: now + releaseNamesTtlMs,
-    names: Promise.resolve(lastKnownReleaseNames),
-  }
-  entry.names = runAppEffect(
-    "updates.release-names",
-    listKilnReleasesEffect().pipe(
-      Effect.map((releases) => {
-        lastKnownReleaseNames = releases.map(({ aliases, name, version }) => ({
-          aliases,
-          name,
-          version,
-        }))
-        return lastKnownReleaseNames
-      }),
-      Effect.catchCause(() =>
-        Effect.sync(() => {
-          entry.expiresAt = Date.now() + releaseNamesRetryMs
-          return lastKnownReleaseNames
-        })
-      )
-    )
-  )
-  releaseNamesCache = entry
-  return entry.names
-}
-
-export const getKilnReleaseNames = createServerFn({ method: "GET" }).handler(
-  async () => {
-    await requireEligibleResourceUser()
-    return cachedKilnReleaseNames()
-  }
-)
-
 export const getUpdateOverview = createServerFn({ method: "GET" }).handler(
   async () => {
     const user = await requireUpdateAccess()

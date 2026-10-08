@@ -83,9 +83,10 @@ export function compareLatestReleaseVersion(
   return comparison
 }
 
-export function findKilnRelease<
-  TRelease extends Pick<ReleaseVersionMetadata, "aliases" | "version">,
->(releases: ReadonlyArray<TRelease>, version: string | null): TRelease | null {
+export function findKilnRelease<TRelease extends ReleaseVersionMetadata>(
+  releases: ReadonlyArray<TRelease>,
+  version: string | null
+): TRelease | null {
   if (!version) return null
   return (
     releases.find(
@@ -95,19 +96,8 @@ export function findKilnRelease<
   )
 }
 
-type ReleaseLabelMetadata = {
-  aliases?: ReadonlyArray<string>
-  name: string
-  version: string
-}
-
-/** Human release name, e.g. "v0.1.0 Nightly #123", for a reported version. */
-export function kilnReleaseLabel(
-  version: string,
-  releases: ReadonlyArray<ReleaseLabelMetadata>
-): string {
-  const release = findKilnRelease(releases, version)
-  if (release) return release.name
+/** Human release name, e.g. "v0.1.0 Nightly #17", for a reported version. */
+export function kilnReleaseLabel(version: string): string {
   if (!isKilnReleaseVersion(version)) return version
   const core = kilnReleaseVersionCore(version)
   if (!isKilnNightlyVersion(version)) return `v${core}`
