@@ -16,10 +16,7 @@ import {
 import { forkAppEffect } from "@/effect/runtime"
 import { databaseTable } from "@/lib/database-config"
 import { kilnGitRepository } from "@/lib/environment"
-import {
-  compareLatestReleaseVersion,
-  isKilnReleaseVersion,
-} from "@/lib/release-version"
+import { isKilnReleaseVersion, newerStableRelease } from "@/lib/release-version"
 
 // A platform-wide setting row: Hearth's version when it last started.
 const startedVersionSettingId = "00000000-0000-4000-8000-000000000002"
@@ -102,12 +99,11 @@ export const notifyLatestKilnReleaseEffect = Effect.fn(
   "notifications.notifyLatestRelease"
 )(function* (currentVersion: string) {
   if (!isKilnReleaseVersion(currentVersion)) return
-  const stable = (yield* listKilnReleasesEffect()).filter(
-    (release) => release.channel === "stable"
+  const latest = newerStableRelease(
+    currentVersion,
+    yield* listKilnReleasesEffect()
   )
-  const latest = stable[0]
-  if (!latest || compareLatestReleaseVersion(currentVersion, stable) !== 1)
-    return
+  if (!latest) return
   const admins = yield* platformAdminIdsEffect()
   yield* notifyUsersEffect(admins, `kiln.release:${latest.version}`, {
     kind: "kiln.release",

@@ -121,17 +121,24 @@ export function clearNotificationsMutationOptions(
   )
 }
 
+/** How many of the newest notifications the popover lists. */
+export const notificationsPopoverLimit = 10
+
 /**
- * Marks every unread notification in the cached inbox read, for opening the
- * popover from an event handler. Returns the IDs it marked so the view can
- * keep them highlighted.
+ * Marks the unread notifications among the popover's newest rows read, for
+ * opening the popover from an event handler. Older unread ones stay unread
+ * until the user sees them. Returns the IDs it marked so the view can keep
+ * them highlighted.
  */
 export function markCachedNotificationsRead(
   queryClient: QueryClient
 ): ReadonlySet<string> {
-  const unread = (
-    queryClient.getQueryData(notificationsQueryOptions().queryKey) ?? []
-  ).flatMap((notification) =>
+  const shown = [
+    ...(queryClient.getQueryData(notificationsQueryOptions().queryKey) ?? []),
+  ]
+    .sort(newestFirst)
+    .slice(0, notificationsPopoverLimit)
+  const unread = shown.flatMap((notification) =>
     notification.readAt === null ? [notification.id] : []
   )
   if (unread.length) {
@@ -143,4 +150,12 @@ export function markCachedNotificationsRead(
     forkPromise(() => observer.mutate(unread))
   }
   return new Set(unread)
+}
+
+// The popover's order: newest first, then by ID, as the server sorts them.
+function newestFirst(left: KilnNotification, right: KilnNotification) {
+  if (left.createdAt !== right.createdAt) {
+    return right.createdAt - left.createdAt
+  }
+  return left.id < right.id ? 1 : left.id > right.id ? -1 : 0
 }

@@ -28,6 +28,7 @@ import {
 import {
   markCachedNotificationsRead,
   notificationsCollectionOptions,
+  notificationsPopoverLimit,
 } from "@/lib/collections/notifications"
 
 interface NotificationsPopoverStore {
@@ -304,7 +305,8 @@ function NotificationsPopoverPanel({ onNavigate }: { onNavigate: () => void }) {
   const unread = useUnreadNotificationIds()
   const { clearThrough, dismiss } = useNotificationClearing()
   const newest = notifications[0]
-  // What was new when it opened, plus anything that arrived since.
+  // What was new when it opened, plus anything still unread: newer arrivals
+  // and older rows below the ones shown.
   const newCount =
     highlighted.size + unread.filter(({ id }) => !highlighted.has(id)).length
 
@@ -372,9 +374,6 @@ function NotificationsPopoverPanel({ onNavigate }: { onNavigate: () => void }) {
     </>
   )
 }
-
-/** How many of the newest notifications the popover lists. */
-const notificationsPopoverLimit = 10
 
 export function NotificationsEmptyState() {
   return (

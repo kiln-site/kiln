@@ -83,6 +83,47 @@ export function compareLatestReleaseVersion(
   return comparison
 }
 
+/**
+ * The newest stable release when it is newer than the installed build. Every
+ * release in the feed, nightlies included, supplies publication dates: builds
+ * on one release line are ordered by when they shipped. An installed nightly
+ * the feed no longer lists has no date, so a stable release on its line can't
+ * be called newer.
+ */
+export function newerStableRelease<
+  TRelease extends ReleaseVersionMetadata & { channel: "nightly" | "stable" },
+>(
+  currentVersion: string | null,
+  releases: ReadonlyArray<TRelease>
+): TRelease | null {
+  if (!isKilnReleaseVersion(currentVersion)) return null
+  const latestStable = orderKilnReleases(releases).find(
+    (release) => release.channel === "stable"
+  )
+  if (!latestStable) return null
+  const currentRelease = findKilnRelease(releases, currentVersion)
+  const installedVersion = currentRelease?.version ?? currentVersion
+  if (latestStable.version === installedVersion) return null
+  if (
+    !currentRelease &&
+    isKilnNightlyVersion(installedVersion) &&
+    kilnReleaseVersionCore(installedVersion) ===
+      kilnReleaseVersionCore(latestStable.version)
+  ) {
+    return null
+  }
+  const publishedAtByVersion = new Map(
+    releases.map((release) => [release.version, release.publishedAt])
+  )
+  return compareReleaseVersions(
+    latestStable.version,
+    installedVersion,
+    publishedAtByVersion
+  ) === 1
+    ? latestStable
+    : null
+}
+
 export function findKilnRelease<TRelease extends ReleaseVersionMetadata>(
   releases: ReadonlyArray<TRelease>,
   version: string | null

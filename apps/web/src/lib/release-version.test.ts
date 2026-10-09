@@ -4,6 +4,7 @@ import {
   compareLatestReleaseVersion,
   compareReleaseVersions,
   isKilnReleaseVersion,
+  newerStableRelease,
   orderKilnReleases,
 } from "@/lib/release-version"
 
@@ -105,5 +106,35 @@ describe("release version ordering", () => {
     ]
 
     expect(compareLatestReleaseVersion("0.1.0-nightly.12", releases)).toBe(0)
+  })
+})
+
+describe("newer stable release", () => {
+  const release = (
+    version: string,
+    publishedAt: string | null,
+    channel: "nightly" | "stable" = version.includes("nightly")
+      ? "nightly"
+      : "stable"
+  ) => ({ channel, publishedAt, version })
+  const feed = [
+    release("0.2.0-nightly.21", "2026-08-03T00:00:00.000Z"),
+    release("0.2.0", "2026-08-02T00:00:00.000Z"),
+    release("0.2.0-nightly.19", "2026-08-01T00:00:00.000Z"),
+    release("0.1.0", "2026-07-01T00:00:00.000Z"),
+  ]
+
+  it("offers a stable release published after the installed build", () => {
+    expect(newerStableRelease("0.1.0", feed)?.version).toBe("0.2.0")
+    expect(newerStableRelease("0.2.0-nightly.19", feed)?.version).toBe("0.2.0")
+  })
+
+  it("never offers an older stable release to a later nightly", () => {
+    expect(newerStableRelease("0.2.0-nightly.21", feed)).toBeNull()
+    expect(newerStableRelease("0.2.0", feed)).toBeNull()
+  })
+
+  it("stays quiet when the installed nightly's date is unknown", () => {
+    expect(newerStableRelease("0.2.0-nightly.5", feed)).toBeNull()
   })
 })
