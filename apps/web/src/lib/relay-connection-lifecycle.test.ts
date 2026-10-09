@@ -45,6 +45,7 @@ import {
   relayConnectionBrowserMetadata,
   relayConnectionState,
   relayRpc,
+  followUnconfirmedSystemUpdates,
   recordSystemUpdates,
   resumeSystemUpdates,
   trackSystemUpdates,
@@ -286,7 +287,7 @@ describeMysql("system update tracking", () => {
             yield* Effect.promise(() => advanceTimersUntil(nextSettledState()))
 
             expect(isRelayUpdating(relayId)).toBe(false)
-            expect(yield* forgottenOperations).toEqual([])
+            expect(yield* selectRows("system_update_operation")).toEqual([])
             expect(relayStates[0]).toBe("connected")
             expect(relayStates[1]).toBe("connected:updating")
             expect(relayStates).toContain("unreachable:updating")
@@ -350,6 +351,21 @@ describeMysql("system update tracking", () => {
         })
     )
 
+    it.effect("keeps following an update whose start was not confirmed", () =>
+      Effect.gen(function* () {
+        yield* resetDatabase
+        // The Relay may have started these before its reply was lost.
+        yield* followUnconfirmedSystemUpdates(
+          yield* recordSystemUpdates(relayId, ["hearth", "relay"])
+        )
+
+        expect(isRelayUpdating(relayId)).toBe(true)
+        expect(yield* selectRows("system_update_operation")).toMatchObject([
+          { component: "relay", operation_id: null },
+        ])
+      })
+    )
+
     it.effect("stops tracking an update when its deadline passes", () =>
       Effect.gen(function* () {
         yield* resetDatabase
@@ -362,23 +378,14 @@ describeMysql("system update tracking", () => {
         )
         expect(isRelayUpdating(relayId)).toBe(true)
 
+        const settled = nextSettledState()
         yield* Effect.promise(() => vi.advanceTimersByTimeAsync(1_000))
+        yield* Effect.promise(() => advanceTimersUntil(settled))
         expect(isRelayUpdating(relayId)).toBe(false)
-        expect(yield* forgottenOperations).toEqual([])
+        expect(yield* selectRows("system_update_operation")).toEqual([])
       })
     )
   })
-})
-
-// Settling publishes first, then removes the row; the driver's own timers are
-// faked here, so let virtual time pass while waiting for it.
-const forgottenOperations = Effect.gen(function* () {
-  for (let attempt = 0; attempt < 50; attempt += 1) {
-    const rows = yield* selectRows("system_update_operation")
-    if (rows.length === 0) return rows
-    yield* Effect.promise(() => vi.advanceTimersByTimeAsync(100))
-  }
-  return yield* selectRows("system_update_operation")
 })
 
 function nextSettledState(): Promise<void> {

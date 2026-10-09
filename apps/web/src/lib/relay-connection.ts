@@ -228,7 +228,7 @@ export const trackSystemUpdates = Effect.fn("relay.update.track")(function* (
   }
 })
 
-/** Forgets recorded updates that never started. */
+/** Forgets recorded updates the Relay refused to start. */
 export const forgetSystemUpdates = (
   updates: ReadonlyArray<SystemUpdateRecord>
 ) =>
@@ -236,23 +236,27 @@ export const forgetSystemUpdates = (
     discard: true,
   })
 
+/** Keeps following recorded updates whose start was never confirmed. */
+export const followUnconfirmedSystemUpdates = (
+  updates: ReadonlyArray<SystemUpdateRecord>
+) => Effect.forEach(updates, followSystemUpdate, { discard: true })
+
 export const resumeSystemUpdates = Effect.fn("relay.update.resume")(
   function* () {
     const now = yield* Clock.currentTimeMillis
     for (const record of yield* listSystemUpdatesEffect()) {
-      // Without an operation ID a Hearth update has nothing to show, and a
-      // Relay update can only be shown until its deadline.
-      if (
-        record.deadlineAt <= now ||
-        (record.operationId === null && record.component === "hearth")
-      ) {
-        yield* forgetSystemUpdate(record.id)
-      } else {
-        yield* watchSystemUpdate({ ...record, latest: undefined })
-      }
+      if (record.deadlineAt <= now) yield* forgetSystemUpdate(record.id)
+      else yield* followSystemUpdate(record)
     }
   }
 )
+
+// Without an operation ID a Hearth update has nothing to show, and a Relay
+// update can only be shown until its deadline.
+const followSystemUpdate = (record: SystemUpdateRecord) =>
+  record.operationId === null && record.component === "hearth"
+    ? forgetSystemUpdate(record.id)
+    : watchSystemUpdate({ ...record, latest: undefined })
 
 const watchSystemUpdate = Effect.fnUntraced(function* (
   update: TrackedSystemUpdate
@@ -298,9 +302,11 @@ const pollSystemUpdate = Effect.fnUntraced(function* (
 const settleSystemUpdate = Effect.fnUntraced(function* (
   update: TrackedSystemUpdate
 ) {
+  // Forget the record before announcing, so anyone who sees the update end
+  // can rely on a replacement Hearth not resuming it.
+  yield* forgetSystemUpdate(update.id)
   systemUpdates.delete(update.id)
   if (update.component === "relay") publishRelayState(update.relayId)
-  yield* forgetSystemUpdate(update.id)
 })
 
 const forgetSystemUpdate = (id: string) =>

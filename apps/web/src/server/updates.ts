@@ -6,6 +6,7 @@ import {
   kilnReleaseManifestEffect,
   listKilnReleasesEffect,
 } from "@/effect/github-releases"
+import { RelayUnavailableError } from "@/effect/errors"
 import { runAppEffect } from "@/effect/runtime"
 import {
   isPlatformAdmin,
@@ -201,6 +202,7 @@ export const startSystemUpdates = createServerFn({ method: "POST" })
       manifest,
       relays,
       {
+        followUnconfirmedSystemUpdates,
         forgetSystemUpdates,
         recordSystemUpdates,
         relayRpc,
@@ -343,37 +345,50 @@ export const startSystemUpdates = createServerFn({ method: "POST" })
                   group.targets.map((target) => target.component)
                 )
               )
-              const operations = await relayRpc(
-                group.relay,
-                "relay.update.apply",
-                {
-                  helperImage: immutableImage(manifest.components.relay),
-                  targets: group.targets.map((target) => ({
-                    targetContainer: target.targetContainer,
-                    targetImage: target.targetImage,
-                    version: targetVersion,
-                  })),
-                  // A single target can also be understood by Relays from before
-                  // batched updates, preserving the rolling upgrade path.
-                  ...(legacyTarget
-                    ? {
-                        targetContainer: legacyTarget.targetContainer,
-                        targetImage: legacyTarget.targetImage,
-                        version: targetVersion,
-                      }
-                    : {}),
-                },
-                15 * 60_000,
-                user.id
-              )
-                .then(parseUpdateOperations)
-                .catch(async (cause: unknown) => {
-                  await runAppEffect(
-                    "updates.forget",
-                    forgetSystemUpdates(updates)
+              const operations = await runAppEffect(
+                "updates.apply",
+                Effect.tryPromise({
+                  try: () =>
+                    relayRpc(
+                      group.relay,
+                      "relay.update.apply",
+                      {
+                        helperImage: immutableImage(manifest.components.relay),
+                        targets: group.targets.map((target) => ({
+                          targetContainer: target.targetContainer,
+                          targetImage: target.targetImage,
+                          version: targetVersion,
+                        })),
+                        // A single target can also be understood by Relays from before
+                        // batched updates, preserving the rolling upgrade path.
+                        ...(legacyTarget
+                          ? {
+                              targetContainer: legacyTarget.targetContainer,
+                              targetImage: legacyTarget.targetImage,
+                              version: targetVersion,
+                            }
+                          : {}),
+                      },
+                      15 * 60_000,
+                      user.id
+                    ),
+                  catch: (cause) => cause,
+                }).pipe(
+                  Effect.flatMap((response) =>
+                    Effect.try({
+                      try: () => parseUpdateOperations(response),
+                      catch: (cause) => cause,
+                    })
+                  ),
+                  // A lost reply doesn't mean the update didn't start: the
+                  // Relay launches its updater before replying.
+                  Effect.tapError((cause) =>
+                    relayRefusedRequest(cause)
+                      ? forgetSystemUpdates(updates)
+                      : followUnconfirmedSystemUpdates(updates)
                   )
-                  throw cause
-                })
+                )
+              )
               await runAppEffect(
                 "updates.track",
                 trackSystemUpdates(updates, operations)
@@ -436,6 +451,12 @@ export const getSystemUpdateStatus = createServerFn({ method: "POST" })
       ? null
       : operation
   })
+
+// Errors the Relay reports itself carry a code; anything else, such as a
+// dropped connection or timeout, leaves the outcome unknown.
+function relayRefusedRequest(cause: unknown): boolean {
+  return cause instanceof RelayUnavailableError && cause.code !== undefined
+}
 
 async function selectedRelay(
   relays: Array<PersistedRelay>,
