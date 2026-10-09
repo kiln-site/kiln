@@ -452,10 +452,21 @@ export const getSystemUpdateStatus = createServerFn({ method: "POST" })
       : operation
   })
 
-// Errors the Relay reports itself carry a code; anything else, such as a
-// dropped connection or timeout, leaves the outcome unknown.
+// Relay control errors sent before the operation runs. Any other failure,
+// including operation errors after the updater launched, a dropped
+// connection, or a timeout, leaves the outcome unknown.
+const relayRejectionCodes = new Set([
+  "forbidden",
+  "invalid_timeout",
+  "too_many_requests",
+])
+
 function relayRefusedRequest(cause: unknown): boolean {
-  return cause instanceof RelayUnavailableError && cause.code !== undefined
+  return (
+    cause instanceof RelayUnavailableError &&
+    cause.code !== undefined &&
+    relayRejectionCodes.has(cause.code)
+  )
 }
 
 async function selectedRelay(
