@@ -9,7 +9,10 @@ import {
   relayBrowserProtocol,
   relayConsoleStreamEventSchema,
 } from "@workspace/contracts"
-import type { RelayConsoleStreamEvent } from "@workspace/contracts"
+import type {
+  RelayConsoleResource,
+  RelayConsoleStreamEvent,
+} from "@workspace/contracts"
 import { Effect, Result, Stream } from "effect"
 
 import type {
@@ -30,7 +33,7 @@ const AUTHENTICATION_TIMEOUT_MS = 10_000
 
 export async function* openHearthRelayConsoleStream(input: {
   credentialId?: string
-  instanceId: string
+  resource: RelayConsoleResource
   relayId: string
   signal: AbortSignal
   identity?: AuthenticatedRealtimeIdentity
@@ -48,20 +51,27 @@ export async function* openHearthRelayConsoleStream(input: {
   if (!input.identity && (!input.user || !input.credentialId)) {
     throw new Error("Authentication required")
   }
-  const prepared = input.identity
-    ? await prepareConsoleCapabilityForIdentity({
-        identity: input.identity,
-        instanceId: input.instanceId,
-        publicKeyJwk: browserKey,
-        relayId: input.relayId,
-      })
-    : await prepareConsoleCapabilityForUser({
-        credentialId: input.credentialId!,
-        instanceId: input.instanceId,
-        publicKeyJwk: browserKey,
-        relayId: input.relayId,
-        user: input.user!,
-      })
+  const { identity, resource } = input
+  // CLI credentials only follow servers' consoles.
+  if (!identity && resource.kind !== "instance") {
+    throw new Error("Only server consoles can be followed from the CLI")
+  }
+  const prepare = () =>
+    identity
+      ? prepareConsoleCapabilityForIdentity({
+          identity,
+          publicKeyJwk: browserKey,
+          relayId: input.relayId,
+          resource,
+        })
+      : prepareConsoleCapabilityForUser({
+          credentialId: input.credentialId!,
+          instanceId: resource.id,
+          publicKeyJwk: browserKey,
+          relayId: input.relayId,
+          user: input.user!,
+        })
+  const prepared = await prepare()
   const { capability, relay, relayCaCertificatePem } = prepared
   const control = relayControlEndpoint(relay)
   const protocol = control.useTls ? "wss" : "ws"
@@ -99,20 +109,7 @@ export async function* openHearthRelayConsoleStream(input: {
         renewalTimer = null
         forkPromise(
           async () => {
-            const renewed = input.identity
-              ? await prepareConsoleCapabilityForIdentity({
-                  identity: input.identity,
-                  instanceId: input.instanceId,
-                  publicKeyJwk: browserKey,
-                  relayId: input.relayId,
-                })
-              : await prepareConsoleCapabilityForUser({
-                  credentialId: input.credentialId!,
-                  instanceId: input.instanceId,
-                  publicKeyJwk: browserKey,
-                  relayId: input.relayId,
-                  user: input.user!,
-                })
+            const renewed = await prepare()
             if (renewed.capability.version !== 2) {
               throw new Error("Relay console renewal downgraded capability v2")
             }
@@ -201,16 +198,13 @@ export async function* openHearthRelayConsoleStream(input: {
         })
       )
       const ready = await nextAuthenticationMessage(inbox, "confirmation")
-      if (
-        ready.type !== "auth.ready" ||
-        ready.instanceId !== input.instanceId
-      ) {
+      if (ready.type !== "auth.ready" || ready.instanceId !== resource.id) {
         throw new Error("Relay rejected the Hearth console proxy")
       }
       if (activeCapability.version === 2) scheduleRenewal(ready)
       socket.send(
         JSON.stringify({
-          instanceId: input.instanceId,
+          instanceId: resource.id,
           type: "console.subscribe",
           v: 1,
         })

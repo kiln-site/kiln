@@ -1,12 +1,18 @@
 import * as Sentry from "@sentry/tanstackstart-react"
 import { createFileRoute } from "@tanstack/react-router"
-import { relayIdSchema } from "@workspace/contracts"
+import { relayBrowserResourceKinds, relayIdSchema } from "@workspace/contracts"
 import { Effect, Result } from "effect"
+import { z } from "zod"
 
 import { openHearthRelayConsoleStream } from "@/server/relay-console-proxy"
 import { requireEligibleResourceIdentity } from "@/server/auth"
 
 const encoder = new TextEncoder()
+// The path names a resource of this kind; servers when it is left out.
+const resourceKindSchema = z
+  .enum(relayBrowserResourceKinds)
+  .nullable()
+  .transform((kind) => kind ?? "instance")
 
 export const Route = createFileRoute("/api/console/$instanceId")({
   server: {
@@ -31,8 +37,14 @@ export const Route = createFileRoute("/api/console/$instanceId")({
 
         const url = new URL(request.url)
         const relayId = relayIdSchema.safeParse(url.searchParams.get("relayId"))
+        const kind = resourceKindSchema.safeParse(url.searchParams.get("kind"))
         const instanceId = decodePathSegment(url.pathname.split("/").at(-1))
-        if (!relayId.success || !instanceId || instanceId.length > 64) {
+        if (
+          !relayId.success ||
+          !kind.success ||
+          !instanceId ||
+          instanceId.length > 64
+        ) {
           return Response.json(
             {
               code: "invalid_console_target",
@@ -50,8 +62,8 @@ export const Route = createFileRoute("/api/console/$instanceId")({
               request.signal.addEventListener("abort", abort, { once: true })
               if (request.signal.aborted) abort()
               const iterator = openHearthRelayConsoleStream({
-                instanceId,
                 relayId: relayId.data,
+                resource: { id: instanceId, kind: kind.data },
                 signal: lifecycle.signal,
                 identity,
               })

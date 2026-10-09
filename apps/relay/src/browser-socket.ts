@@ -29,13 +29,16 @@ import {
   relayBrowserConsoleProtocol,
   relayBrowserConsoleProtocols,
   relayBrowserProtocol,
+  relayConsoleReadActions,
   relayInstanceLifecycleEventTime as lifecycleEventTime,
 } from "@workspace/contracts"
 import type {
   RelayBrowserAuthorizationRevision,
   RelayBrowserCapability,
   RelayBrowserCapabilityV2,
+  RelayBrowserResourceKind,
   RelayConsole,
+  RelayConsoleResource,
   RelayConsoleLine,
   RelayInstanceLifecycleEvent,
 } from "@workspace/contracts"
@@ -54,6 +57,8 @@ import {
   encodeConsoleLineFrame,
   encodeNewestConsoleBatch,
 } from "./console-frames.js"
+import type { ConsoleSource, ConsoleSources } from "./console-sources.js"
+import { actionsForRole } from "./permissions.js"
 import { MAX_TRANSFER_BYTES } from "./files.js"
 import type { ArchiveDownloadEntry, FilesystemDriver } from "./files.js"
 import type { RelayIdentity } from "./effect/identity.js"
@@ -170,6 +175,7 @@ const decodeBrowserRenew = Schema.decodeUnknownOption(RelayBrowserRenewSchema)
 
 export interface BrowserSocketOptions {
   readonly config: Pick<RelayConfig, "browserLimits" | "proxyMode">
+  readonly consoleSources: ConsoleSources
   readonly docker: DockerDriver
   readonly filesystem: FilesystemDriver
   readonly identity: RelayIdentity
@@ -209,7 +215,6 @@ export function attachBrowserSocket(
     pendingAuthentications: 0,
   }
   const hubs = new ConsoleHubRegistry(
-    options.docker,
     options.subscribeSnapshots,
     (socket, encoded, kind, action) =>
       outboxes.get(socket)?.send(encoded, kind, action) ?? false
@@ -436,16 +441,23 @@ function authenticateBrowser(
     const consoleSubscription = decodeBrowserSubscription(input.value)
     if (Option.isSome(consoleSubscription)) {
       const subscription = consoleSubscription.value
+      // The capability decides the resource's kind; the subscription only
+      // names the resource it is for.
+      const resource: RelayConsoleResource = {
+        id: capability.instanceId,
+        kind: capabilityResourceKind(capability),
+      }
+      const source = options.consoleSources(resource.kind, resource.id)
       if (
-        subscription.instanceId !== capability.instanceId ||
+        subscription.instanceId !== resource.id ||
         (capability.version === 2 && capability.operation !== "console") ||
-        !registry.isActive(socket, "instance.console.read")
+        !registry.isActive(socket, source.readAction)
       ) {
-        socket.close(4403, "Console capability does not allow this instance")
+        socket.close(4403, "Console capability does not allow this resource")
         return
       }
       forkPromise(
-        () => hubs.subscribe(socket, subscription.instanceId),
+        () => hubs.subscribe(socket, resource, source),
         () => socket.close(4500, "Console stream failed")
       )
       return
@@ -454,6 +466,7 @@ function authenticateBrowser(
     if (Option.isSome(resourceSubscription)) {
       const subscription = resourceSubscription.value
       if (
+        capabilityResourceKind(capability) !== "instance" ||
         subscription.instanceId !== capability.instanceId ||
         (capability.version === 2 && capability.operation !== "resources") ||
         !registry.isActive(socket, "instance.read")
@@ -468,6 +481,7 @@ function authenticateBrowser(
     if (Option.isSome(consoleWrite)) {
       const request = consoleWrite.value
       if (
+        capabilityResourceKind(capability) !== "instance" ||
         request.instanceId !== capability.instanceId ||
         (capability.version === 2 && capability.operation !== "console") ||
         !registry.isActive(socket, "instance.console.write")
@@ -495,6 +509,7 @@ function authenticateBrowser(
     if (Option.isSome(consoleCompletion)) {
       const request = consoleCompletion.value
       if (
+        capabilityResourceKind(capability) !== "instance" ||
         request.instanceId !== capability.instanceId ||
         (capability.version === 2 && capability.operation !== "console") ||
         !registry.isActive(socket, "instance.console.write")
@@ -600,7 +615,7 @@ function authenticateBrowser(
       parsed.payload.version === 2
         ? await options.runEffect(
             options.state.browserAuthority({
-              instanceId: parsed.payload.instanceId,
+              instanceId: serverScopeId(parsed.payload),
               issuer: parsed.payload.issuer,
               loginSessionId: parsed.payload.loginSessionId,
               subject: parsed.payload.subject,
@@ -698,7 +713,7 @@ function authenticateBrowser(
     if (!validProof) throw new Error("Browser renewal proof is invalid")
     const current = await options.runEffect(
       options.state.browserAuthority({
-        instanceId: parsed.payload.instanceId,
+        instanceId: serverScopeId(parsed.payload),
         issuer: parsed.payload.issuer,
         loginSessionId: parsed.payload.loginSessionId,
         subject: parsed.payload.subject,
@@ -899,6 +914,12 @@ function validateCapability(
   const now = Date.now()
   const payload = capability.payload
   if (payload.version === 2) validateCapabilityV2(payload, now)
+  // From the client's role, as the control socket does, so a client paired
+  // before an action existed still has every action its role grants.
+  const clientActions: ReadonlyArray<string> = actionsForRole(
+    client.role,
+    client.actions
+  )
   if (
     payload.audience !== relayId ||
     payload.expiresAt <= now ||
@@ -906,9 +927,9 @@ function validateCapability(
     payload.origin !== origin ||
     !client.origins.includes(origin) ||
     payload.actions.length === 0 ||
-    (requiredAction !== null && !client.actions.includes(requiredAction)) ||
+    (requiredAction !== null && !clientActions.includes(requiredAction)) ||
     (requiredAction !== null && !payload.actions.includes(requiredAction)) ||
-    payload.actions.some((action) => !client.actions.includes(action)) ||
+    payload.actions.some((action) => !clientActions.includes(action)) ||
     !verify(
       null,
       Buffer.from(capability.encoded),
@@ -924,12 +945,11 @@ function validateCapabilityV2(
   capability: RelayBrowserCapabilityV2,
   now: number
 ): void {
-  const allowed =
-    capability.operation === "console"
-      ? new Set(["instance.console.read", "instance.console.write"])
-      : capability.operation === "resources"
-        ? new Set(["instance.read"])
-        : new Set(["instance.files.download", "instance.files.upload"])
+  const allowed = new Set(
+    browserCapabilityActions[capability.resourceKind ?? "instance"][
+      capability.operation
+    ]
+  )
   const writes = capability.actions.some(
     (action) =>
       action === "instance.console.write" || action === "instance.files.upload"
@@ -963,6 +983,42 @@ function validateCapabilityV2(
   }
 }
 
+// The actions a v2 capability may carry, by resource kind and operation.
+// Other kinds only read console output.
+const browserCapabilityActions: Record<
+  RelayBrowserResourceKind,
+  Record<RelayBrowserCapabilityV2["operation"], ReadonlyArray<string>>
+> = {
+  database: {
+    console: [relayConsoleReadActions.database],
+    file: [],
+    resources: [],
+  },
+  instance: {
+    console: [relayConsoleReadActions.instance, "instance.console.write"],
+    file: ["instance.files.download", "instance.files.upload"],
+    resources: ["instance.read"],
+  },
+}
+
+// Capabilities name the kind of resource they are for; v1 capabilities and
+// v2 ones without a kind are for servers.
+function capabilityResourceKind(
+  capability: RelayBrowserCapability
+): RelayBrowserResourceKind {
+  return capability.version === 2
+    ? (capability.resourceKind ?? "instance")
+    : "instance"
+}
+
+// The server whose access revisions apply to the capability, if it is for
+// one. Other kinds are revised for the person across the Relay.
+function serverScopeId(capability: RelayBrowserCapability): string | null {
+  return capabilityResourceKind(capability) === "instance"
+    ? capability.instanceId
+    : null
+}
+
 function browserAuthority(
   capability: RelayBrowserCapability
 ): BrowserSessionAuthority {
@@ -971,6 +1027,7 @@ function browserAuthority(
     actions: new Set(capability.actions),
     expiresAt: capability.expiresAt,
     instanceId: capability.instanceId,
+    resourceKind: "instance",
     issuer: capability.issuer,
     issuerGeneration: 0,
     keyThumbprint: capability.keyThumbprint,
@@ -1962,42 +2019,48 @@ type BrowserDelivery = (
   action?: string
 ) => boolean
 
+// One hub per resource, keyed by its kind and ID, shared by every socket
+// following that resource's console.
 class ConsoleHubRegistry {
   readonly #deliver: BrowserDelivery
-  readonly #docker: DockerDriver
   readonly #hubs = new Map<string, ConsoleHub>()
   readonly #pendingHubs = new Map<string, Fiber.Fiber<ConsoleHub, Error>>()
   readonly #subscribeSnapshots: BrowserSocketOptions["subscribeSnapshots"]
   readonly #subscriptions = new Map<WebSocket, string>()
 
   constructor(
-    docker: DockerDriver,
     subscribeSnapshots: BrowserSocketOptions["subscribeSnapshots"],
     deliver: BrowserDelivery
   ) {
-    this.#docker = docker
     this.#subscribeSnapshots = subscribeSnapshots
     this.#deliver = deliver
   }
 
-  subscribe(socket: WebSocket, instanceId: string): Promise<void> {
+  subscribe(
+    socket: WebSocket,
+    resource: RelayConsoleResource,
+    source: ConsoleSource
+  ): Promise<void> {
+    const key = `${resource.kind}:${resource.id}`
     this.remove(socket)
-    this.#subscriptions.set(socket, instanceId)
+    this.#subscriptions.set(socket, key)
     let hubEffect: Effect.Effect<ConsoleHub, Error>
-    const existingHub = this.#hubs.get(instanceId)
+    const existingHub = this.#hubs.get(key)
     if (existingHub) {
       hubEffect = Effect.succeed(existingHub)
     } else {
-      let pending = this.#pendingHubs.get(instanceId)
+      let pending = this.#pendingHubs.get(key)
       if (!pending) {
-        pending = Effect.runFork(this.#createHubEffect(instanceId))
-        this.#pendingHubs.set(instanceId, pending)
+        pending = Effect.runFork(
+          this.#createHubEffect(key, resource.id, source)
+        )
+        this.#pendingHubs.set(key, pending)
       }
       hubEffect = Fiber.join(pending).pipe(
         Effect.ensuring(
           Effect.sync(() => {
-            if (this.#pendingHubs.get(instanceId) === pending) {
-              this.#pendingHubs.delete(instanceId)
+            if (this.#pendingHubs.get(key) === pending) {
+              this.#pendingHubs.delete(key)
             }
           })
         )
@@ -2008,14 +2071,12 @@ class ConsoleHubRegistry {
         Effect.tap((hub) =>
           Effect.sync(() => {
             if (
-              this.#subscriptions.get(socket) !== instanceId ||
+              this.#subscriptions.get(socket) !== key ||
               socket.readyState !== WebSocket.OPEN
             ) {
               const hasWaitingSubscriber = [
                 ...this.#subscriptions.values(),
-              ].some(
-                (subscribedInstanceId) => subscribedInstanceId === instanceId
-              )
+              ].some((subscribedKey) => subscribedKey === key)
               if (hub.subscriberCount === 0 && !hasWaitingSubscriber) {
                 hub.close()
               }
@@ -2030,10 +2091,10 @@ class ConsoleHubRegistry {
   }
 
   remove(socket: WebSocket): void {
-    const instanceId = this.#subscriptions.get(socket)
-    if (!instanceId) return
+    const key = this.#subscriptions.get(socket)
+    if (!key) return
     this.#subscriptions.delete(socket)
-    this.#hubs.get(instanceId)?.remove(socket)
+    this.#hubs.get(key)?.remove(socket)
   }
 
   close(): void {
@@ -2046,23 +2107,28 @@ class ConsoleHubRegistry {
     this.#subscriptions.clear()
   }
 
-  #createHubEffect(instanceId: string): Effect.Effect<ConsoleHub, Error> {
+  #createHubEffect(
+    key: string,
+    resourceId: string,
+    source: ConsoleSource
+  ): Effect.Effect<ConsoleHub, Error> {
     return timedBrowserOperation(
       "Discover console session",
       "relay.console.discovery",
-      (signal) => this.#docker.consoleSession(instanceId, signal)
+      (signal) => source.session(signal)
     ).pipe(
       Effect.map((session) => {
         const hub = new ConsoleHub(
-          this.#docker,
+          source,
+          resourceId,
           session,
           this.#subscribeSnapshots,
           this.#deliver,
           () => {
-            if (hub.subscriberCount === 0) this.#hubs.delete(instanceId)
+            if (hub.subscriberCount === 0) this.#hubs.delete(key)
           }
         )
-        this.#hubs.set(instanceId, hub)
+        this.#hubs.set(key, hub)
         return hub
       })
     )
@@ -2163,9 +2229,10 @@ class ResourceHubRegistry {
 
 class ConsoleHub {
   readonly #backgroundFibers = new Set<Fiber.Fiber<void, never>>()
-  readonly #docker: DockerDriver
   readonly #deliver: BrowserDelivery
-  readonly #instanceId: string
+  // Sent as `instanceId` in console frames, whatever the resource's kind.
+  readonly #resourceId: string
+  readonly #source: ConsoleSource
   readonly #lineIds = new Set<string>()
   readonly #onEmpty: () => void
   readonly #recent: Array<RelayConsoleLine> = []
@@ -2182,20 +2249,23 @@ class ConsoleHub {
   #unsubscribeSnapshots: (() => void) | null
 
   constructor(
-    docker: DockerDriver,
+    source: ConsoleSource,
+    resourceId: string,
     session: DockerConsoleSession,
     subscribeSnapshots: BrowserSocketOptions["subscribeSnapshots"],
     deliver: BrowserDelivery,
     onEmpty: () => void
   ) {
-    this.#docker = docker
     this.#deliver = deliver
-    this.#instanceId = session.instance.id
+    this.#resourceId = resourceId
+    this.#source = source
     this.#nextSession = session
     this.#onEmpty = onEmpty
-    this.#unsubscribeSnapshots = subscribeSnapshots((sample) => {
-      this.#observeSnapshot(sample)
-    })
+    this.#unsubscribeSnapshots = source.lifecycle
+      ? subscribeSnapshots((sample) => {
+          this.#observeSnapshot(sample)
+        })
+      : null
   }
 
   get subscriberCount(): number {
@@ -2339,7 +2409,7 @@ class ConsoleHub {
       : timedBrowserOperation(
           "Rediscover console session",
           "relay.console.discovery",
-          (signal) => this.#docker.consoleSession(this.#instanceId, signal)
+          (signal) => this.#source.session(signal)
         )
   }
 
@@ -2385,7 +2455,7 @@ class ConsoleHub {
     }
     const encoded = encodeConsoleLineFrame(line)
     for (const socket of this.#subscribers) {
-      this.#deliver(socket, encoded, "console", "instance.console.read")
+      this.#deliver(socket, encoded, "console", this.#source.readAction)
     }
   }
 
@@ -2393,9 +2463,7 @@ class ConsoleHub {
     if (this.#closed || this.#sessionLifecycle === undefined) {
       return
     }
-    const lifecycle = sample.snapshot.instances.find(
-      (instance) => instance.id === this.#instanceId
-    )?.lifecycle
+    const lifecycle = this.#source.lifecycle?.(sample)
     const startedAt = lifecycleEventTime(lifecycle, "started")
     if (
       !startedAt ||
@@ -2427,7 +2495,7 @@ class ConsoleHub {
     return timedBrowserOperation(
       "Discover replacement console session",
       "relay.console.discovery",
-      (signal) => this.#docker.consoleSession(this.#instanceId, signal)
+      (signal) => this.#source.session(signal)
     ).pipe(
       Effect.flatMap((session) =>
         timedBrowserOperation(
@@ -2534,18 +2602,18 @@ class ConsoleHub {
         socket,
         JSON.stringify({
           type: "ready",
-          instanceId: this.#instanceId,
+          instanceId: this.#resourceId,
           lifecycle,
         }),
         "console",
-        "instance.console.read"
+        this.#source.readAction
       )
       for (const line of this.#recent.slice(snapshotStart)) {
         this.#deliver(
           socket,
           encodeConsoleLineFrame(line),
           "console",
-          "instance.console.read"
+          this.#source.readAction
         )
       }
       return
@@ -2553,21 +2621,21 @@ class ConsoleHub {
 
     const reset = encodeNewestConsoleBatch({
       type: "reset",
-      instanceId: this.#instanceId,
+      instanceId: this.#resourceId,
       lifecycle,
       lines: this.#recent.slice(snapshotStart),
       truncated: this.#truncated || snapshotStart > 0,
     })
-    this.#deliver(socket, reset.encoded, "console", "instance.console.read")
+    this.#deliver(socket, reset.encoded, "console", this.#source.readAction)
     this.#deliver(
       socket,
       JSON.stringify({
         type: "ready",
-        instanceId: this.#instanceId,
+        instanceId: this.#resourceId,
         lifecycle,
       }),
       "console",
-      "instance.console.read"
+      this.#source.readAction
     )
     this.#sendHistory(
       new Set([socket]),
@@ -2584,14 +2652,14 @@ class ConsoleHub {
     )
     if (subscribers.length === 0) return
     const frames = encodeConsoleHistoryFrames({
-      instanceId: this.#instanceId,
+      instanceId: this.#resourceId,
       lifecycle: this.#sessionLifecycle ?? [],
       lines,
       truncated: this.#truncated,
     })
     for (const encoded of frames) {
       for (const socket of subscribers) {
-        this.#deliver(socket, encoded, "console", "instance.console.read")
+        this.#deliver(socket, encoded, "console", this.#source.readAction)
       }
     }
   }

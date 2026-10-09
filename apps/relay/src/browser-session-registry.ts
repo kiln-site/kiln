@@ -4,6 +4,7 @@ import type {
   RelayBrowserAuthorizationRevision,
   RelayBrowserCapabilityV2,
   RelayBrowserOperationKind,
+  RelayBrowserResourceKind,
 } from "@workspace/contracts"
 
 import type { RelayConfig } from "./config.js"
@@ -15,6 +16,7 @@ const FLOOR_PRUNE_INTERVAL_MS = 30_000
 export interface BrowserSessionAuthority {
   readonly actions: ReadonlySet<string>
   readonly expiresAt: number
+  // The ID of the resource, of `resourceKind`, the session is for.
   readonly instanceId: string
   readonly issuer: string
   readonly issuerGeneration: number
@@ -22,6 +24,7 @@ export interface BrowserSessionAuthority {
   readonly loginSessionId: string | null
   readonly operation: RelayBrowserOperationKind | null
   readonly origin: string
+  readonly resourceKind: RelayBrowserResourceKind
   readonly revision: number
   readonly subject: string
   readonly version: 1 | 2
@@ -325,7 +328,11 @@ export class BrowserSessionRegistry {
     let minimum = 0
     const scopes: ReadonlyArray<RelayBrowserAuthorizationRevision["scope"]> = [
       { kind: "subject_relay" },
-      { instanceId: authority.instanceId, kind: "instance" },
+      // Hearth revises other kinds of resource for the person across the
+      // Relay, which the scope above covers.
+      ...(authority.resourceKind === "instance"
+        ? ([{ instanceId: authority.instanceId, kind: "instance" }] as const)
+        : []),
       ...(authority.loginSessionId
         ? ([
             {
@@ -394,12 +401,10 @@ export class BrowserSessionRegistry {
     for (const session of this.#established.values()) {
       const existing = session.authority
       if (existing.issuer !== authority.issuer) continue
-      if (existing.instanceId === authority.instanceId) instance += 1
+      const sameResource = sameResourceAs(existing, authority)
+      if (sameResource) instance += 1
       if (existing.subject === authority.subject) user += 1
-      if (
-        existing.subject === authority.subject &&
-        existing.instanceId === authority.instanceId
-      ) {
+      if (existing.subject === authority.subject && sameResource) {
         userInstance += 1
       }
     }
@@ -424,6 +429,7 @@ export function authorityFromCapability(
     loginSessionId: capability.loginSessionId,
     operation: capability.operation,
     origin: capability.origin,
+    resourceKind: capability.resourceKind ?? "instance",
     revision: capability.authorizationRevision,
     subject: capability.subject,
     version: 2,
@@ -440,8 +446,19 @@ function sameOwner(
     left.loginSessionId === right.loginSessionId &&
     left.origin === right.origin &&
     left.keyThumbprint === right.keyThumbprint &&
-    left.instanceId === right.instanceId &&
+    sameResourceAs(left, right) &&
     left.operation === right.operation
+  )
+}
+
+// Resources of different kinds can share an ID.
+function sameResourceAs(
+  left: BrowserSessionAuthority,
+  right: BrowserSessionAuthority
+): boolean {
+  return (
+    left.resourceKind === right.resourceKind &&
+    left.instanceId === right.instanceId
   )
 }
 

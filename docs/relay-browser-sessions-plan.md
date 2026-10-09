@@ -15,17 +15,17 @@ are worth keeping.
 
 ## Decisions
 
-| Concern | Decision |
-| --- | --- |
-| Traffic planes | Keep Hearth-Relay control, browser-Relay data, and browser-Hearth SSE separate. |
-| Browser ownership | Connections belong to one browser tab, login session, and instance. Different tabs, users, sessions, and instances never share authority. |
-| Physical sockets | Move write/completion onto console-read; keep resources separate for backpressure isolation. Files remain request-scoped HTTP. |
-| Reuse | Console and resources use one scoped direct-socket helper but retain feature-specific codecs and fallbacks. Do not build a session framework or message bus. |
-| Authorization | Treat a capability as a short, renewable Relay-enforced lease, not one-time admission to an unlimited socket. |
-| Permission changes | Refresh authorization in place when possible; otherwise reconnect the affected socket automatically. Never require a page refresh. |
-| Revocation | Push persisted revision watermarks to Relay for prompt revocation; lease expiry is the hard bound during a partition. |
-| High-frequency data | Keep console and resource samples out of TanStack Query/DB and React context state. |
-| Scale | Encode once per changed instance, enforce hierarchical limits, and keep authorization delivery durable without adding shared infrastructure to single-node installs. |
+| Concern             | Decision                                                                                                                                                             |
+| ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Traffic planes      | Keep Hearth-Relay control, browser-Relay data, and browser-Hearth SSE separate.                                                                                      |
+| Browser ownership   | Connections belong to one browser tab, login session, and instance. Different tabs, users, sessions, and instances never share authority.                            |
+| Physical sockets    | Move write/completion onto console-read; keep resources separate for backpressure isolation. Files remain request-scoped HTTP.                                       |
+| Reuse               | Console and resources use one scoped direct-socket helper but retain feature-specific codecs and fallbacks. Do not build a session framework or message bus.         |
+| Authorization       | Treat a capability as a short, renewable Relay-enforced lease, not one-time admission to an unlimited socket.                                                        |
+| Permission changes  | Refresh authorization in place when possible; otherwise reconnect the affected socket automatically. Never require a page refresh.                                   |
+| Revocation          | Push persisted revision watermarks to Relay for prompt revocation; lease expiry is the hard bound during a partition.                                                |
+| High-frequency data | Keep console and resource samples out of TanStack Query/DB and React context state.                                                                                  |
+| Scale               | Encode once per changed instance, enforce hierarchical limits, and keep authorization delivery durable without adding shared infrastructure to single-node installs. |
 
 This is today's traffic isolation minus the unnecessary third command socket,
 not a new lane framework. Console bursts, history, and slow-consumer recovery
@@ -121,8 +121,11 @@ its existing batches and history behavior. Capability, browser wire, and
 control versions are independent. Retain the current claims and require:
 
 - issuer, Relay audience, subject user ID, Hearth login session ID;
-- instance, operation kind (`console`, `resources`, or `file`), optional
-  normalized path, exact actions, and browser origin;
+- resource, operation kind (`console`, `resources`, or `file`), optional
+  normalized path, exact actions, and browser origin. The resource is a server
+  unless `resourceKind` names another kind, such as a database, whose
+  capabilities only read console output and require Relays reporting
+  `console-resources-v1`;
 - capability ID, authorization revision, issuer generation, issued-at, expiry,
   and version;
 - thumbprint of the session's non-extractable browser key.
@@ -222,7 +225,8 @@ coalesced, and out-of-order delivery is harmless.
 The scope tuple is one of `instance(instanceId)`, `subjectRelay`, or
 `loginSession(loginSessionId)`. Relay compares a capability revision only with
 the floors applicable to that capability's issuer, subject, login session, and
-instance, and independently requires its issuer generation to equal the
+server (other kinds of resource have no server floor; Hearth revises them
+through the subject floor), and independently requires its issuer generation to equal the
 current persisted generation:
 
 ```text
@@ -335,15 +339,15 @@ Identity keys are scoped by paired issuer so IDs from different Hearths cannot
 collide. Reject the newest admission with WebSocket 1013; do not evict an
 established unrelated session.
 
-| Environment variable | Initial default | Scope |
-| --- | ---: | --- |
-| `KILN_RELAY_BROWSER_SESSIONS_MAX` | 512 | Relay total |
-| `KILN_RELAY_BROWSER_SESSIONS_PER_INSTANCE_MAX` | 256 | issuer + instance |
-| `KILN_RELAY_BROWSER_SESSIONS_PER_USER_MAX` | 64 | issuer + subject |
-| `KILN_RELAY_BROWSER_SESSIONS_PER_USER_INSTANCE_MAX` | 16 | issuer + subject + instance |
-| `KILN_RELAY_BROWSER_PENDING_HANDSHAKES_MAX` | 64 | unauthenticated Relay total |
-| `KILN_RELAY_BROWSER_PENDING_HANDSHAKES_PER_IP_MAX` | 16 | unauthenticated source IP |
-| `KILN_RELAY_BROWSER_PENDING_FILE_AUTH_MAX` | 16 | concurrent HTTP body/proof authentication |
+| Environment variable                                | Initial default | Scope                                     |
+| --------------------------------------------------- | --------------: | ----------------------------------------- |
+| `KILN_RELAY_BROWSER_SESSIONS_MAX`                   |             512 | Relay total                               |
+| `KILN_RELAY_BROWSER_SESSIONS_PER_INSTANCE_MAX`      |             256 | issuer + instance                         |
+| `KILN_RELAY_BROWSER_SESSIONS_PER_USER_MAX`          |              64 | issuer + subject                          |
+| `KILN_RELAY_BROWSER_SESSIONS_PER_USER_INSTANCE_MAX` |              16 | issuer + subject + instance               |
+| `KILN_RELAY_BROWSER_PENDING_HANDSHAKES_MAX`         |              64 | unauthenticated Relay total               |
+| `KILN_RELAY_BROWSER_PENDING_HANDSHAKES_PER_IP_MAX`  |              16 | unauthenticated source IP                 |
+| `KILN_RELAY_BROWSER_PENDING_FILE_AUTH_MAX`          |              16 | concurrent HTTP body/proof authentication |
 
 Pending handshakes use their own pool so an unauthenticated flood cannot consume
 established capacity. After authentication, one registry critical section first

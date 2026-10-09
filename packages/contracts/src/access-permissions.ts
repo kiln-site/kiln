@@ -857,6 +857,7 @@ export const relayReadOnlyMachineActions = [
   "schedule.read",
   "instance.read",
   "instance.console.read",
+  "database.logs.read",
   "instance.sftp.connect",
   "instance.files.list",
   "instance.files.read",

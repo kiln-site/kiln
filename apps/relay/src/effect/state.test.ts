@@ -203,6 +203,37 @@ describe("Relay state", () => {
     })
   )
 
+  stateTest("applies a server's browser floor only to that server", () =>
+    Effect.gen(function* () {
+      const store = yield* RelayStateStore
+      yield* store.reviseBrowserAuthorization(
+        "browser-issuer",
+        [
+          {
+            minimumRevision: 7,
+            scope: { instanceId: "instance-a", kind: "instance" },
+            subject: "user-a",
+          },
+        ],
+        3,
+        Date.UTC(2026, 0, 4)
+      )
+      const floor = (instanceId: string | null) =>
+        store
+          .browserAuthority({
+            instanceId,
+            issuer: "browser-issuer",
+            loginSessionId: "session-a",
+            subject: "user-a",
+          })
+          .pipe(Effect.map((authority) => authority.minimumRevision))
+
+      assert.strictEqual(yield* floor("instance-a"), 7)
+      // Sessions for other kinds of resource have no server.
+      assert.strictEqual(yield* floor(null), 0)
+    })
+  )
+
   stateTest(
     "persists monotonic browser floors and bounded replay entries",
     () =>

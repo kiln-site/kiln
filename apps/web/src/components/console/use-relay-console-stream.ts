@@ -4,6 +4,7 @@ import { Effect, Fiber, Queue, Stream } from "effect"
 import type {
   RelayConsole,
   RelayConsoleLine,
+  RelayConsoleResource,
   RelayInstanceLifecycleEvent,
   RelayInstanceLifecycleState,
   RelayObservedState,
@@ -39,9 +40,11 @@ import {
   relayBrowserAuthorizationChanges,
 } from "@/lib/authenticated-relay-socket"
 
+// Follows a resource's console. Server state lines come from `runtime`, which
+// only servers have.
 export function useRelayConsoleStream(
   relayId: string,
-  instanceId: string,
+  resource: RelayConsoleResource,
   relayConnected: boolean,
   browserOrigin: string | null,
   consoleTransport: "direct" | "hearth" | null,
@@ -51,6 +54,12 @@ export function useRelayConsoleStream(
   retryVersion = 0
 ) {
   const queryClient = useQueryClient()
+  const { id: instanceId, kind: resourceKind } = resource
+  const consoleKey = React.useMemo(
+    () =>
+      queryKeys.relay.console(relayId, { id: instanceId, kind: resourceKind }),
+    [instanceId, relayId, resourceKind]
+  )
   const hasEverBeenLiveRef = React.useRef(false)
   const lastRetryVersionRef = React.useRef(retryVersion)
   const previousConnectionRef = React.useRef<Fiber.Fiber<void, unknown> | null>(
@@ -61,9 +70,7 @@ export function useRelayConsoleStream(
     runtimeRef.current = runtime
   }, [runtime])
   const cachedConsole =
-    queryClient.getQueryData<RelayConsole>(
-      queryKeys.relay.console(relayId, instanceId)
-    ) ?? null
+    queryClient.getQueryData<RelayConsole>(consoleKey) ?? null
   const consoleDataRef = React.useRef<RelayConsole | null>(
     consoleMatchesRuntime(cachedConsole, runtime) ? cachedConsole : null
   )
@@ -85,15 +92,12 @@ export function useRelayConsoleStream(
   const commitConsole = React.useCallback(
     (next: RelayConsole) => {
       consoleDataRef.current = next
-      queryClient.setQueryData(
-        queryKeys.relay.console(relayId, instanceId),
-        next
-      )
+      queryClient.setQueryData(consoleKey, next)
       setSnapshot((current) =>
         updateConsoleStreamSnapshot(current, { consoleData: next })
       )
     },
-    [instanceId, queryClient, relayId]
+    [consoleKey, queryClient]
   )
 
   React.useEffect(() => {
@@ -340,10 +344,7 @@ export function useRelayConsoleStream(
         for (const line of next.lines) seen.add(line.id)
       }
       consoleDataRef.current = next
-      queryClient.setQueryData(
-        queryKeys.relay.console(relayId, instanceId),
-        next
-      )
+      queryClient.setQueryData(consoleKey, next)
       commitSnapshot({ consoleData: next })
     }
 
@@ -383,20 +384,23 @@ export function useRelayConsoleStream(
         startedAt &&
         lifecycleEventTime(currentRuntime?.lifecycle, "started") === startedAt
       )
-      const nextLines = mergeConsoleStateLines(
-        lines,
-        runtimeMatchesSession
-          ? (currentRuntime?.lifecycle ?? [])
-          : startedAt
-            ? [{ state: "started", time: startedAt }]
-            : [],
-        runtimeMatchesSession
-          ? currentRuntime?.observedState
-          : startedAt
-            ? "starting"
-            : currentRuntime?.observedState,
-        runtimeMatchesSession ? (currentRuntime?.recovery ?? null) : null
-      )
+      const nextLines =
+        resourceKind !== "instance"
+          ? [...lines]
+          : mergeConsoleStateLines(
+              lines,
+              runtimeMatchesSession
+                ? (currentRuntime?.lifecycle ?? [])
+                : startedAt
+                  ? [{ state: "started", time: startedAt }]
+                  : [],
+              runtimeMatchesSession
+                ? currentRuntime?.observedState
+                : startedAt
+                  ? "starting"
+                  : currentRuntime?.observedState,
+              runtimeMatchesSession ? (currentRuntime?.recovery ?? null) : null
+            )
       seen.clear()
       for (const line of nextLines) seen.add(line.id)
       const nextConsole = {
@@ -406,10 +410,7 @@ export function useRelayConsoleStream(
         truncated,
       }
       consoleDataRef.current = nextConsole
-      queryClient.setQueryData(
-        queryKeys.relay.console(relayId, instanceId),
-        nextConsole
-      )
+      queryClient.setQueryData(consoleKey, nextConsole)
       commitSnapshot({ consoleData: nextConsole })
     }
 
@@ -420,14 +421,15 @@ export function useRelayConsoleStream(
         if (previousConnection) yield* Fiber.interrupt(previousConnection)
         const authorizationChanges = yield* relayBrowserAuthorizationChanges(
           relayId,
-          instanceId
+          instanceId,
+          resourceKind
         )
         watchOpening()
         let retryDelay = 400
         while (!disposed) {
           const failure = yield* openRelayConsoleStream(
             relayId,
-            instanceId,
+            { id: instanceId, kind: resourceKind },
             refreshRoute ? null : browserOrigin,
             refreshRoute ? null : consoleTransport,
             loadTiming,
@@ -494,10 +496,7 @@ export function useRelayConsoleStream(
                   }
                   sessionInitializedRef.current = true
                   consoleDataRef.current = nextConsole
-                  queryClient.setQueryData(
-                    queryKeys.relay.console(relayId, instanceId),
-                    nextConsole
-                  )
+                  queryClient.setQueryData(consoleKey, nextConsole)
                   commitSnapshot({
                     connection: "live",
                     consoleData: nextConsole,
@@ -540,10 +539,7 @@ export function useRelayConsoleStream(
                     truncated: event.truncated,
                   }
                   consoleDataRef.current = nextConsole
-                  queryClient.setQueryData(
-                    queryKeys.relay.console(relayId, instanceId),
-                    nextConsole
-                  )
+                  queryClient.setQueryData(consoleKey, nextConsole)
                   commitSnapshot({ consoleData: nextConsole })
                 } else {
                   if (awaitingNewSessionRef.current) {
@@ -607,12 +603,14 @@ export function useRelayConsoleStream(
   }, [
     browserOrigin,
     canWrite,
+    consoleKey,
     consoleTransport,
     instanceId,
     loadTiming,
     queryClient,
     relayConnected,
     relayId,
+    resourceKind,
     retryVersion,
   ])
 

@@ -284,10 +284,10 @@ describe("Relay capability issuance orchestration", () => {
 
     const issued = await issueBrowserCapabilitiesForRequest({
       authenticate: () => Promise.resolve({ sessionId: "session-one", user }),
-      instanceId: "instance-one",
       publicKeyJwk,
       relayId: "relay-one",
       requests: [{ kind: "console", optInV2: true, write: true }],
+      resource: { id: "instance-one", kind: "instance" },
     })
 
     expect(issued.capabilities[0]).toMatchObject({
@@ -305,6 +305,66 @@ describe("Relay capability issuance orchestration", () => {
     expect(Number(payload.expiresAt) - Number(payload.issuedAt)).toBe(30_000)
   })
 
+  describe("database consoles", () => {
+    // Alice can read the logs of database-one only.
+    beforeEach(() => {
+      fakes.features.add("browser-capability-v2")
+      fakes.features.add("browser-lease-renewal-v1")
+      fakes.features.add("console-resources-v1")
+      fakes.requirePermissions.mockImplementation(
+        (input: { databaseId?: string; permissions: Array<string> }) =>
+          input.databaseId === "database-one" &&
+          input.permissions.every(
+            (permission) => permission === "database.logs.read"
+          )
+            ? Effect.void
+            : Effect.fail(new Error("Permission denied"))
+      )
+    })
+
+    const issue = (
+      databaseId: string,
+      write = false
+    ): ReturnType<typeof issueBrowserCapabilitiesForRequest> =>
+      issueBrowserCapabilitiesForRequest({
+        authenticate: () => Promise.resolve({ sessionId: "session-one", user }),
+        publicKeyJwk,
+        relayId: "relay-one",
+        requests: [{ kind: "console", optInV2: true, write }],
+        resource: { id: databaseId, kind: "database" },
+      })
+
+    it("issues a capability to read a database's console", async () => {
+      const issued = await issue("database-one")
+
+      expect(
+        decodeCapabilityPayload(issued.capabilities[0]!.capability)
+      ).toMatchObject({
+        actions: ["database.logs.read"],
+        instanceId: "database-one",
+        operation: "console",
+        resourceKind: "database",
+        version: 2,
+      })
+    })
+
+    it("refuses a database whose logs the person can't read", async () => {
+      await expect(issue("database-two")).rejects.toThrow()
+    })
+
+    it("refuses console input to a database", async () => {
+      await expect(issue("database-one", true)).rejects.toThrow()
+    })
+
+    it("refuses Relays that can't stream database consoles", async () => {
+      fakes.features.delete("console-resources-v1")
+
+      await expect(issue("database-one")).rejects.toThrow(
+        "Update this Relay to view these logs."
+      )
+    })
+  })
+
   it("uses the generation synchronized after stale issuance material was loaded", async () => {
     fakes.features.add("browser-capability-v2")
     fakes.features.add("browser-lease-renewal-v1")
@@ -312,10 +372,10 @@ describe("Relay capability issuance orchestration", () => {
 
     const issued = await issueBrowserCapabilitiesForRequest({
       authenticate: () => Promise.resolve({ sessionId: "session-one", user }),
-      instanceId: "instance-one",
       publicKeyJwk,
       relayId: "relay-one",
       requests: [{ kind: "console", optInV2: true, write: false }],
+      resource: { id: "instance-one", kind: "instance" },
     })
 
     expect(
@@ -343,10 +403,10 @@ describe("Relay capability issuance orchestration", () => {
 
     const issued = await issueBrowserCapabilitiesForRequest({
       authenticate: () => Promise.resolve({ sessionId: "session-one", user }),
-      instanceId: "instance-one",
       publicKeyJwk,
       relayId: "relay-one",
       requests: [{ kind: "console", optInV2: true, write: true }],
+      resource: { id: "instance-one", kind: "instance" },
     })
 
     expect(
@@ -365,10 +425,10 @@ describe("Relay capability issuance orchestration", () => {
     await expect(
       issueBrowserCapabilitiesForRequest({
         authenticate: () => Promise.resolve({ sessionId: "session-one", user }),
-        instanceId: "instance-one",
         publicKeyJwk,
         relayId: "relay-one",
         requests: [{ kind: "console", optInV2: true, write: true }],
+        resource: { id: "instance-one", kind: "instance" },
       })
     ).rejects.toBe(revoked)
   })

@@ -85,7 +85,8 @@ export interface RelayAuditInput {
 export interface RelayAuditRecord extends RelayAuditInput {}
 
 export interface RelayBrowserAuthorityQuery {
-  readonly instanceId: string
+  // The server whose revisions apply, or null for other kinds of resource.
+  readonly instanceId: string | null
   readonly issuer: string
   readonly loginSessionId: string
   readonly subject: string
@@ -2245,7 +2246,11 @@ const makeRelayStateStore = Effect.gen(function* () {
               AND subject = ${query.subject}
               AND (
                 (scope_kind = 'subject_relay' AND scope_id = '')
-                OR (scope_kind = 'instance' AND scope_id = ${query.instanceId})
+                -- Instance floors never have an empty ID, so '' matches none.
+                OR (
+                  scope_kind = 'instance'
+                  AND scope_id = ${query.instanceId ?? ""}
+                )
                 OR (
                   scope_kind = 'login_session'
                   AND scope_id = ${query.loginSessionId}

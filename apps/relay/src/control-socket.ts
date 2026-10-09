@@ -21,7 +21,7 @@ import {
   relayControlMaxFrameBytes,
   relayControlRequestTimeoutMs,
   relayControlProtocol,
-  relayDatabaseLogsV1Feature,
+  relayConsoleResourcesV1Feature,
   relayFileRequestReplayV1Feature,
   relaySnapshotDeltaFeature,
   isAuditedRelayControlOperation,
@@ -642,7 +642,7 @@ function authenticateSocket(
           relayBrowserCapabilityV2Feature,
           relayBrowserLeaseRenewalV1Feature,
           relayFileRequestReplayV1Feature,
-          relayDatabaseLogsV1Feature,
+          relayConsoleResourcesV1Feature,
         ],
         protocol: relayControlProtocol,
         relayBuild: relayBuildLabel(),
@@ -956,11 +956,6 @@ function actionForRequest(request: RelayControlRequest): RelayAction | null {
     case "database.terminal.claim":
     case "database.terminal.restart":
       return "database.dump.import"
-    // Following output is seeing the database, like its status.
-    case "database.logs.attach":
-    case "database.logs.heartbeat":
-    case "database.logs.detach":
-      return "database.read"
     case "backup.task.enqueue": {
       const kind = objectString(request.payload, "kind")
       if (kind === "create") return "backup.create"

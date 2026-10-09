@@ -1506,35 +1506,6 @@ export const relayConsoleLineSchema = z.object({
   segments: z.array(relayConsoleSegmentSchema).optional(),
 })
 
-// Database logs: the Relay follows a database container's output for each
-// page Hearth attaches and pushes the lines to Hearth. Pages renew through
-// heartbeats like database terminals; a page that stops renewing is dropped.
-export const relayDatabaseLogsAttachSchema = z
-  .object({
-    // Chosen by Hearth per page; lines for it are pushed to Hearth.
-    attachmentId: databaseTerminalIdSchema,
-    databaseId: databaseIdSchema,
-  })
-  .strict()
-
-export const relayDatabaseLogsHeartbeatSchema =
-  relayDatabaseTerminalHeartbeatSchema
-
-export const relayDatabaseLogsDetachSchema = relayDatabaseTerminalDetachSchema
-
-// The most lines one push carries; the first pushes carry recent history.
-export const DATABASE_LOGS_PUSH_MAX_LINES = 1_000
-
-// Relay to Hearth: lines for one attachment, in order. `ended` arrives with
-// the last push: the container stopped, or its output can't be followed. Not
-// strict: a Relay newer than its Hearth may send fields this Hearth doesn't
-// know yet.
-export const hearthDatabaseLogsOutputSchema = z.object({
-  attachmentId: databaseTerminalIdSchema,
-  ended: z.enum(["stopped", "failed"]).nullable(),
-  lines: z.array(relayConsoleLineSchema).max(DATABASE_LOGS_PUSH_MAX_LINES),
-})
-
 export const relayConsoleSchema = z.object({
   instanceId: z.string().min(1),
   lifecycle: z.array(relayInstanceLifecycleEventSchema).default([]),
@@ -1723,9 +1694,6 @@ export type RelayDatabaseTerminalAttached = z.infer<
 >
 export type HearthDatabaseTerminalOutput = z.infer<
   typeof hearthDatabaseTerminalOutputSchema
->
-export type HearthDatabaseLogsOutput = z.infer<
-  typeof hearthDatabaseLogsOutputSchema
 >
 export type RelayDatabaseDataWrite = z.infer<
   typeof relayDatabaseDataWriteSchema

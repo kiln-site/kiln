@@ -175,7 +175,6 @@ export interface DockerConsoleSession {
     limit?: number,
     signal?: AbortSignal
   ) => Promise<RelayConsole>
-  readonly instance: RelayInstanceConfig
   readonly stream: (
     signal: AbortSignal,
     limit?: number
@@ -1164,18 +1163,50 @@ export class DockerDriver {
     signal?: AbortSignal
   ): Promise<DockerConsoleSession> {
     const discovered = await this.#findDiscovered(instanceId, signal)
-    const instance = discovered.config
-    const targets = await this.#consoleTargets(instance, discovered, signal)
+    const targets = await this.#consoleTargets(
+      discovered.config,
+      discovered,
+      signal
+    )
+    return this.#consoleSessionFor(
+      discovered.config.id,
+      discovered.container,
+      targets
+    )
+  }
+
+  // The console of any one container, such as a database's, read the same
+  // way as a server's.
+  async containerConsoleSession(
+    resourceId: string,
+    containerId: string,
+    signal?: AbortSignal
+  ): Promise<DockerConsoleSession> {
+    const inspected = await command("docker", ["inspect", containerId], {
+      signal,
+    })
+    const container = (JSON.parse(inspected.stdout) as Array<DockerInspect>)[0]
+    if (!container) throw new Error(`Container ${containerId} was not found`)
+    return this.#consoleSessionFor(resourceId, container, [
+      { component: null, container },
+    ])
+  }
+
+  // `container` is the one whose start begins the session.
+  #consoleSessionFor(
+    resourceId: string,
+    container: DockerInspect,
+    targets: ReadonlyArray<ConsoleTarget>
+  ): DockerConsoleSession {
     return {
       history: (limit = 2_000, historySignal) =>
         this.#consoleHistory(
-          instance,
-          discovered,
+          resourceId,
+          container,
           targets,
           limit,
           historySignal
         ),
-      instance,
       stream: (signal, limit = 200) =>
         this.#streamConsoleTargets(
           targets.map((target) => ({
@@ -1190,8 +1221,8 @@ export class DockerDriver {
   }
 
   async #consoleHistory(
-    instance: RelayInstanceConfig,
-    discovered: DiscoveredInstance,
+    resourceId: string,
+    container: DockerInspect,
     targets: ReadonlyArray<ConsoleTarget>,
     limit: number,
     signal?: AbortSignal
@@ -1200,7 +1231,7 @@ export class DockerDriver {
       Math.max(limit, 100),
       MAX_CONSOLE_HISTORY_LINES
     )
-    const startedAt = consoleStartedAt(discovered.container)
+    const startedAt = consoleStartedAt(container)
     const results = await Promise.all(
       targets.map(async (target) => {
         const targetSince = dockerLogSinceArguments(
@@ -1234,7 +1265,7 @@ export class DockerDriver {
     const occurrences = new Map<string, number>()
 
     return {
-      instanceId: instance.id,
+      instanceId: resourceId,
       lifecycle: startedAt ? [{ state: "started", time: startedAt }] : [],
       lines: rawLines.map((line) => {
         const hash = createHash("sha1")
@@ -1305,20 +1336,6 @@ export class DockerDriver {
       const session = await openSession()
       yield* session.stream(signal, limit)
     })()
-  }
-
-  // Follows one container's last `limit` lines and its output after,
-  // across restarts. Ends when the container stops.
-  streamContainerLogs(
-    containerId: string,
-    signal: AbortSignal,
-    limit: number
-  ): AsyncIterable<RelayConsoleLine> {
-    return this.#streamConsoleTargets(
-      [{ component: null, id: containerId, since: [] }],
-      signal,
-      limit
-    )
   }
 
   #streamConsoleTargets(

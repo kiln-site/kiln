@@ -21,9 +21,6 @@ import {
   relayDatabaseTerminalAttachSchema,
   relayDatabaseTerminalDetachSchema,
   relayDatabaseTerminalHeartbeatSchema,
-  relayDatabaseLogsAttachSchema,
-  relayDatabaseLogsDetachSchema,
-  relayDatabaseLogsHeartbeatSchema,
   relayDatabaseTerminalClaimSchema,
   relayDatabaseTerminalRestartSchema,
   relayDatabaseTerminalWriteSchema,
@@ -89,7 +86,7 @@ import { DockerDriver } from "./docker.js"
 import { DatabaseBrowser } from "./database-browser.js"
 import { DatabaseDriver } from "./databases.js"
 import { browseManagedDatabase } from "./database-sql-browser.js"
-import { DatabaseLogs } from "./database-logs.js"
+import { consoleSources } from "./console-sources.js"
 import { DatabaseTerminals } from "./database-terminal.js"
 import { forkPromise } from "./effect/promise.js"
 import {
@@ -201,7 +198,6 @@ const docker = new DockerDriver(
 )
 const databases = new DatabaseDriver(config, docker, databaseConnections)
 const databaseTerminals = new DatabaseTerminals(config)
-const databaseLogs = new DatabaseLogs(docker)
 forkPromise(async () => databaseTerminals.sweep(await databases.list()))
 const systemUpdates = new SystemUpdateManager(config)
 const filesystem = new FilesystemDriver(config)
@@ -651,6 +647,7 @@ const controlSocket = attachControlSocket({
 })
 const browserSocket = attachBrowserSocket({
   config,
+  consoleSources: consoleSources(docker, databases),
   docker,
   filesystem,
   identity: relayIdentity,
@@ -919,7 +916,6 @@ function shutdownRelay(signal: NodeJS.Signals): Promise<void> {
         scheduleManager.close()
         lifecycle.close()
         snapshotHub.close()
-        databaseLogs.close()
       })
       yield* Effect.all(
         [
@@ -1040,8 +1036,8 @@ async function relaySnapshot() {
   }
 }
 
-// A terminal or logs page belongs to the paired client and the person it
-// acted for, so one Hearth user can't read or type into another's session.
+// A terminal belongs to the paired client and the person it acted for, so
+// one Hearth user can't read or type into another's session.
 function terminalOwner(
   client: RelayClientGrant,
   request: RelayControlRequest
@@ -1435,31 +1431,6 @@ async function executeControlRequest(
         input.attachmentId,
         input.rows,
         input.cols
-      )
-    }
-    case "database.logs.attach": {
-      const input = relayDatabaseLogsAttachSchema.parse(request.payload)
-      return databaseLogs.attach(
-        terminalOwner(client, request),
-        await databases.target(input.databaseId),
-        input.attachmentId,
-        // Lines go back to the Hearth connection that attached.
-        (output, timeoutMs) =>
-          requestHearth("hearth.database.logs.output", output, timeoutMs)
-      )
-    }
-    case "database.logs.heartbeat": {
-      const input = relayDatabaseLogsHeartbeatSchema.parse(request.payload)
-      return databaseLogs.heartbeat(
-        terminalOwner(client, request),
-        input.attachmentIds
-      )
-    }
-    case "database.logs.detach": {
-      const input = relayDatabaseLogsDetachSchema.parse(request.payload)
-      return databaseLogs.detach(
-        terminalOwner(client, request),
-        input.attachmentId
       )
     }
     case "database.data.write": {

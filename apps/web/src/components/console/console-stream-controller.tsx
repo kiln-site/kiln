@@ -54,7 +54,7 @@ export function ConsoleStreamController({
   })
   const snapshot = useRelayConsoleStream(
     relayId,
-    instanceId,
+    { id: instanceId, kind: "instance" },
     relayConnected,
     browserOrigin,
     consoleTransport,
@@ -143,7 +143,7 @@ function TailscaleConsoleStreamSource({
   const consoleTransport = useRelayConsoleTransport(relayId)
   const snapshot = useRelayConsoleStream(
     relayId,
-    instanceId,
+    { id: instanceId, kind: "instance" },
     relayConnected,
     browserOrigin,
     consoleTransport,
@@ -179,7 +179,7 @@ function TailscaleConsoleStreamSource({
   return null
 }
 
-function useRelayBrowserOrigin(relayId: string): string | null {
+export function useRelayBrowserOrigin(relayId: string): string | null {
   const queryClient = useQueryClient()
   const selectBrowserOrigin = React.useMemo(
     () => selectRelayBrowserOrigin(relayId),
@@ -192,7 +192,9 @@ function useRelayBrowserOrigin(relayId: string): string | null {
   return data
 }
 
-function useRelayConsoleTransport(relayId: string): "direct" | "hearth" | null {
+export function useRelayConsoleTransport(
+  relayId: string
+): "direct" | "hearth" | null {
   const queryClient = useQueryClient()
   const selectConsoleTransport = React.useMemo(
     () => selectRelayConsoleTransport(relayId),

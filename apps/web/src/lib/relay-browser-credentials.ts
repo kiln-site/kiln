@@ -1,3 +1,4 @@
+import type { RelayBrowserResourceKind } from "@workspace/contracts"
 import { Effect } from "effect"
 
 import { forkPromise } from "@/effect/promise"
@@ -29,6 +30,7 @@ interface CredentialEntry {
   pending: Map<string, PendingCapability>
   references: number
   relayId: string
+  resourceKind: RelayBrowserResourceKind
 }
 
 interface CapabilityWaiter {
@@ -64,12 +66,13 @@ export function notifyRelayBrowserAuthorizationChanged(): void {
 
 export function relayBrowserAuthorizationSignal(
   relayId: string,
-  instanceId: string
+  instanceId: string,
+  resourceKind: RelayBrowserResourceKind = "instance"
 ): {
   getSnapshot: () => number
   subscribe: (listener: () => void) => () => void
 } {
-  const id = `${relayId}:${instanceId}`
+  const id = credentialsKey(relayId, instanceId, resourceKind)
   return {
     getSnapshot: () => authorizationVersions.get(id) ?? 0,
     subscribe: (listener) => {
@@ -89,13 +92,15 @@ export function relayBrowserAuthorizationSignal(
 
 /**
  * Shares one non-extractable proof key between the console and resource
- * sockets owned by one browser tab and instance route. The entry disappears
+ * sockets owned by one browser tab and resource route. The entry disappears
  * as soon as the last feature releases it, so navigation cannot reuse
- * authority across instances.
+ * authority across resources. `instanceId` is the ID of a resource of
+ * `resourceKind`.
  */
 export function acquireRelayBrowserCredentials(
   relayId: string,
-  instanceId: string
+  instanceId: string,
+  resourceKind: RelayBrowserResourceKind = "instance"
 ): {
   credentials: Promise<RelayBrowserCredentials>
   issue: (request: BrowserCapabilityRequest) => Promise<IssuedBrowserCapability>
@@ -103,7 +108,7 @@ export function acquireRelayBrowserCredentials(
   onAuthorizationChange: (listener: () => void) => () => void
   release: () => void
 } {
-  const id = `${relayId}:${instanceId}`
+  const id = credentialsKey(relayId, instanceId, resourceKind)
   let entry = credentialsByInstance.get(id)
   if (!entry) {
     const credentials = createCredentials()
@@ -119,6 +124,7 @@ export function acquireRelayBrowserCredentials(
       pending: new Map(),
       references: 0,
       relayId,
+      resourceKind,
     }
     credentialsByInstance.set(id, entry)
   }
@@ -251,6 +257,7 @@ function flushCapabilities(entry: CredentialEntry): Promise<void> {
             publicKeyJwk: credentials.publicKeyJwk,
             relayId: entry.relayId,
             requests: pending.map(({ request }) => request),
+            resourceKind: entry.resourceKind,
           },
           signal: controller.signal,
         })
@@ -304,6 +311,18 @@ function flushCapabilities(entry: CredentialEntry): Promise<void> {
       )
     )
   )
+}
+
+// Servers keep their original keys; other kinds of resource can share a
+// server's ID, so theirs name the kind.
+function credentialsKey(
+  relayId: string,
+  instanceId: string,
+  resourceKind: RelayBrowserResourceKind
+): string {
+  return resourceKind === "instance"
+    ? `${relayId}:${instanceId}`
+    : `${relayId}:${resourceKind}:${instanceId}`
 }
 
 function capabilityRequestKey(request: BrowserCapabilityRequest): string {
