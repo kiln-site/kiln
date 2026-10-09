@@ -27,6 +27,7 @@ import {
   ServerCog,
   ShieldCheck,
   TriangleAlert,
+  UserRound,
   X,
 } from "lucide-react"
 
@@ -118,6 +119,8 @@ type UpdateTarget = {
   eligible: boolean
   key: string
   name: string
+  // Who paired the Relay: "You", their name, or null for the Panel.
+  owner: string | null
   reachable: boolean
   reason: string | null
   relayId: string | null
@@ -1441,6 +1444,7 @@ const UpdateTargetRow = React.memo(function UpdateTargetRow({
           <h3 className="type-card-title min-w-0 shrink truncate">
             {target.name}
           </h3>
+          {target.owner ? <UpdateTargetOwner owner={target.owner} /> : null}
           <UpdateTargetVersion
             activityStore={activityStore}
             latestVersion={latestVersion}
@@ -1481,6 +1485,22 @@ const UpdateTargetRow = React.memo(function UpdateTargetRow({
     </div>
   )
 }, areUpdateTargetRowPropsEqual)
+
+function UpdateTargetOwner({ owner }: { owner: string }) {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span className="type-meta flex max-w-40 min-w-0 shrink-0 cursor-default items-center gap-1 text-muted-foreground">
+          <UserRound aria-hidden="true" className="size-3 shrink-0" />
+          <span className="truncate">{owner}</span>
+        </span>
+      </TooltipTrigger>
+      <TooltipContent>
+        {owner === "You" ? "You paired this Relay" : `Paired by ${owner}`}
+      </TooltipContent>
+    </Tooltip>
+  )
+}
 
 type TargetUpdateState = "done" | "failed" | "idle" | "running"
 
@@ -2958,6 +2978,8 @@ function withDevMockRelays(
       currentVersion: current,
       eligible: false,
       name: `relay-${["eu", "us", "ap"][index % 3]}-${String(index + 1).padStart(2, "0")}`,
+      ownedByViewer: index % 4 === 0,
+      ownerName: ["Notch", "jeb_", "Dinnerbone"][index % 3] ?? null,
       reachable: false as const,
       reason: "Development mock Relay",
       relayId,
@@ -3114,6 +3136,7 @@ function updateTargets(overview: UpdateOverview): Array<UpdateTarget> {
     eligible: overview.hearth?.eligible ?? false,
     key: "hearth",
     name: "Panel",
+    owner: null,
     reachable: true,
     reason:
       overview.hearth?.reason ??
@@ -3128,6 +3151,7 @@ function updateTargets(overview: UpdateOverview): Array<UpdateTarget> {
       eligible: relay.eligible,
       key: relayTargetKey(relay.relayId),
       name: relay.name,
+      owner: relay.ownedByViewer ? "You" : relay.ownerName,
       reachable: relay.reachable,
       reason: relay.reason,
       relayId: relay.relayId,
@@ -3358,6 +3382,7 @@ function areUpdateTargetsEqual(
     previous.eligible === next.eligible &&
     previous.key === next.key &&
     previous.name === next.name &&
+    previous.owner === next.owner &&
     previous.reachable === next.reachable &&
     previous.reason === next.reason &&
     previous.relayId === next.relayId

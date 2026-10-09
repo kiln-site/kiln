@@ -9,6 +9,7 @@ import {
   releaseHistoryPageEffect,
 } from "@/effect/kiln-release-feed"
 import { RelayUnavailableError } from "@/effect/errors"
+import { attachRelayOwnersEffect } from "@/effect/relay-owners"
 import { runAppEffect } from "@/effect/runtime"
 import {
   isPlatformAdmin,
@@ -179,6 +180,22 @@ export const getUpdateOverview = createServerFn({ method: "GET" }).handler(
     ])
     const hearthTarget = hearthCandidates.find((target) => target) ?? null
     const currentVersion = import.meta.env.VITE_KILN_VERSION
+    // Admins can update Relays other people brought, so each one names who
+    // paired it. Like the Relays page, only admins see email-derived names.
+    const owners = new Map(
+      (
+        await runAppEffect(
+          "updates.relay-owners",
+          attachRelayOwnersEffect(enabledRelays, platformAdmin)
+        )
+      ).map((relay) => [
+        relay.id,
+        {
+          ownedByViewer: relay.createdBy === user.id,
+          ownerName: relay.ownerName,
+        },
+      ])
+    )
     // The versions each component ran before, so the changelog can show
     // where it came from. Recording them is best effort.
     const previousVersions = await runAppEffect(
@@ -211,7 +228,11 @@ export const getUpdateOverview = createServerFn({ method: "GET" }).handler(
       hearth: hearthTarget,
       previousVersions,
       releases,
-      relays: relayTargets,
+      relays: relayTargets.map((relay) => ({
+        ...relay,
+        ownedByViewer: owners.get(relay.relayId)?.ownedByViewer ?? false,
+        ownerName: owners.get(relay.relayId)?.ownerName ?? null,
+      })),
     }
   }
 )
