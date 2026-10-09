@@ -48,10 +48,7 @@ export const ConsoleLogViewportController = React.memo(
       const normalizedQuery = filters.query.trim().toLowerCase()
       const filtered: Array<ConsoleDisplayLine> = []
       for (const line of consoleData?.lines ?? []) {
-        const redacted = filters.redactSensitive
-          ? redactSensitiveTextWithRanges(line.text)
-          : null
-        const text = redacted?.text ?? line.text
+        const prepared = prepareLine(line, filters.redactSensitive)
         const source = line as RelayConsoleLine & {
           relayId?: string
           service?: ConsoleService
@@ -69,18 +66,9 @@ export const ConsoleLogViewportController = React.memo(
           filters.levels.has(line.level) &&
           relayMatches &&
           serviceMatches &&
-          (!normalizedQuery || text.toLowerCase().includes(normalizedQuery))
+          (!normalizedQuery || prepared.searchText.includes(normalizedQuery))
         ) {
-          filtered.push(
-            !redacted?.redactions.length
-              ? line
-              : {
-                  ...line,
-                  text,
-                  segments: undefined,
-                  sensitiveTextRedactions: redacted.redactions,
-                }
-          )
+          filtered.push(prepared.display)
         }
       }
       return filtered
@@ -127,6 +115,35 @@ export const ConsoleLogViewportController = React.memo(
   }
 )
 
+interface PreparedLine {
+  display: ConsoleDisplayLine
+  searchText: string
+}
+
+// Lines never change once received, so each is redacted and lowercased once
+// rather than on every keystroke and batch. Reusing the shown line also keeps
+// its row from rendering again.
+const redactedLines = new WeakMap<RelayConsoleLine, PreparedLine>()
+const plainLines = new WeakMap<RelayConsoleLine, PreparedLine>()
+
+function prepareLine(line: RelayConsoleLine, redact: boolean): PreparedLine {
+  const cache = redact ? redactedLines : plainLines
+  const cached = cache.get(line)
+  if (cached) return cached
+  const redacted = redact ? redactSensitiveTextWithRanges(line.text) : null
+  const display: ConsoleDisplayLine = redacted?.redactions.length
+    ? {
+        ...line,
+        text: redacted.text,
+        segments: undefined,
+        sensitiveTextRedactions: redacted.redactions,
+      }
+    : line
+  const prepared = { display, searchText: display.text.toLowerCase() }
+  cache.set(line, prepared)
+  return prepared
+}
+
 function consoleLineService(
   line: RelayConsoleLine & { service?: ConsoleService }
 ): ConsoleService | null {
@@ -172,11 +189,15 @@ function ConsoleLogViewport({
   )
   const parentRef = React.useRef<HTMLDivElement>(null)
   const programmaticScroll = React.useRef(false)
+  const getItemKey = React.useCallback(
+    (index: number) => filteredLines[index]?.id ?? index,
+    [filteredLines]
+  )
   const rowVirtualizer = useVirtualizer({
     count: filteredLines.length,
     getScrollElement: () => parentRef.current,
     estimateSize: () => 30,
-    getItemKey: (index) => filteredLines[index]?.id ?? index,
+    getItemKey,
     overscan: 18,
     anchorTo: "end",
     followOnAppend: true,

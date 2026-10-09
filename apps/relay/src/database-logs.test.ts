@@ -1,7 +1,8 @@
-import type {
-  HearthDatabaseLogsOutput,
-  RelayConsoleLine,
-  RelayManagedDatabase,
+import {
+  relayControlMaxFrameBytes,
+  type HearthDatabaseLogsOutput,
+  type RelayConsoleLine,
+  type RelayManagedDatabase,
 } from "@workspace/contracts"
 import { afterEach, describe, expect, it, vi } from "vite-plus/test"
 
@@ -51,9 +52,15 @@ function container() {
       stopped = true
       wake?.()
     },
-    write(text: string) {
+    write(text: string, segments?: RelayConsoleLine["segments"]) {
       next += 1
-      queue.push({ id: String(next), level: "info", text, timestamp: null })
+      queue.push({
+        id: String(next),
+        level: "info",
+        segments,
+        text,
+        timestamp: null,
+      })
       wake?.()
     },
   }
@@ -63,6 +70,7 @@ function container() {
 function page(accepting = true) {
   const pushes: Array<HearthDatabaseLogsOutput> = []
   return {
+    pushes,
     get ended() {
       return pushes.find((push) => push.ended)?.ended ?? null
     },
@@ -98,6 +106,29 @@ describe("database logs", () => {
     expect(
       logs.heartbeat(alice, ["attachment-alice-0000000001"]).unknown
     ).toEqual(["attachment-alice-0000000001"])
+  })
+
+  it("keeps every push within a control frame, however styled its lines", async () => {
+    const source = container()
+    const logs = new DatabaseLogs(source.docker)
+    const viewer = page()
+    // Styling every character makes a line's encoding many times its text.
+    const text = "x".repeat(16 * 1024)
+    const segments = [...text].map((character) => ({
+      bold: true,
+      color: "#ff0000",
+      text: character,
+    }))
+    for (let line = 0; line < 10; line += 1) source.write(text, segments)
+    logs.attach(alice, database, "attachment-alice-0000000001", viewer.push)
+
+    await vi.waitFor(() => expect(viewer.lines).toHaveLength(10))
+    for (const push of viewer.pushes) {
+      expect(Buffer.byteLength(JSON.stringify(push))).toBeLessThan(
+        relayControlMaxFrameBytes
+      )
+    }
+    expect(source.followers).toBe(1)
   })
 
   it("keeps each person's logs to themselves", async () => {

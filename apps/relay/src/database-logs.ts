@@ -1,10 +1,12 @@
 import {
   DATABASE_LOGS_PUSH_MAX_LINES,
+  relayBrowserMaxFrameBytes,
   type HearthDatabaseLogsOutput,
   type RelayConsoleLine,
   type RelayManagedDatabase,
 } from "@workspace/contracts"
 
+import { fitConsoleLine } from "./console-frames.js"
 import type { DockerDriver } from "./docker.js"
 import { forkPromise, recoverPromise } from "./effect/promise.js"
 
@@ -17,12 +19,13 @@ import { forkPromise, recoverPromise } from "./effect/promise.js"
 const HISTORY_LINES = 2_000
 // Every follower is a process, so a Relay runs a bounded number.
 const MAX_FOLLOWERS = 64
-// Lines waiting for a page that isn't keeping up; older ones are dropped.
-const MAX_QUEUED_LINES = 5_000
-// Longer lines are cut, so any line fits in a push.
-const MAX_LINE_CHARACTERS = 16 * 1024
-// Pushes stay well under the 1 MB control frame.
-const MAX_PUSH_CHARACTERS = 256 * 1024
+// Encoded lines waiting for a page that isn't keeping up; older ones are
+// dropped.
+const MAX_QUEUED_BYTES = 4 * 1024 * 1024
+// Pushes share Hearth's control connection, whose frames are at most 1 MB.
+// Lines are fitted to a browser frame (256 KB), so a push of one line still
+// fits.
+const MAX_PUSH_BYTES = 256 * 1024
 const PUSH_TIMEOUT_MS = 10_000
 // Lines arriving together, like the history, go in one push.
 const PUSH_DELAY_MS = 25
@@ -40,7 +43,8 @@ interface Follower {
   ended: HearthDatabaseLogsOutput["ended"]
   owner: string
   push: PushDatabaseLogs
-  queued: Array<RelayConsoleLine>
+  queued: Array<QueuedLine>
+  queuedBytes: number
   renewedAt: number
   sending: boolean
   timer: ReturnType<typeof setTimeout> | null
@@ -75,6 +79,7 @@ export class DatabaseLogs {
       owner,
       push,
       queued: [],
+      queuedBytes: 0,
       renewedAt: Date.now(),
       sending: false,
       timer: null,
@@ -118,17 +123,17 @@ export class DatabaseLogs {
           follower.abort.signal,
           HISTORY_LINES
         )) {
-          follower.queued.push(
-            line.text.length > MAX_LINE_CHARACTERS
-              ? {
-                  ...line,
-                  segments: undefined,
-                  text: line.text.slice(0, MAX_LINE_CHARACTERS),
-                }
-              : line
-          )
-          if (follower.queued.length > MAX_QUEUED_LINES) {
-            follower.queued.splice(0, follower.queued.length - MAX_QUEUED_LINES)
+          // Sized as encoded: styling can make a line many times its text.
+          let bytes = Buffer.byteLength(JSON.stringify(line))
+          let fitted = line
+          if (bytes > relayBrowserMaxFrameBytes) {
+            fitted = fitConsoleLine(line, JSON.stringify)
+            bytes = Buffer.byteLength(JSON.stringify(fitted))
+          }
+          follower.queued.push({ bytes, line: fitted })
+          follower.queuedBytes += bytes
+          while (follower.queuedBytes > MAX_QUEUED_BYTES) {
+            follower.queuedBytes -= follower.queued.shift()!.bytes
           }
           this.#schedule(attachmentId, follower)
         }
@@ -155,7 +160,7 @@ export class DatabaseLogs {
     if (follower.sending || this.#followers.get(attachmentId) !== follower) {
       return
     }
-    const lines = takePush(follower.queued)
+    const lines = takePush(follower)
     const ended = follower.queued.length === 0 ? follower.ended : null
     if (lines.length === 0 && !ended) return
     follower.sending = true
@@ -181,6 +186,7 @@ export class DatabaseLogs {
     follower.abort.abort()
     if (follower.timer) clearTimeout(follower.timer)
     follower.queued.length = 0
+    follower.queuedBytes = 0
   }
 
   #startSweeper() {
@@ -199,15 +205,24 @@ export class DatabaseLogs {
   }
 }
 
-function takePush(queued: Array<RelayConsoleLine>) {
+interface QueuedLine {
+  bytes: number
+  line: RelayConsoleLine
+}
+
+function takePush(follower: Follower): Array<RelayConsoleLine> {
+  const { queued } = follower
   let count = 0
-  let characters = 0
+  let bytes = 0
   while (count < queued.length && count < DATABASE_LOGS_PUSH_MAX_LINES) {
-    characters += queued[count]!.text.length * 2
-    if (count > 0 && characters > MAX_PUSH_CHARACTERS) break
+    // One more for the comma between lines.
+    bytes += queued[count]!.bytes + 1
+    if (count > 0 && bytes > MAX_PUSH_BYTES) break
     count += 1
   }
-  return queued.splice(0, count)
+  const taken = queued.splice(0, count)
+  for (const { bytes: lineBytes } of taken) follower.queuedBytes -= lineBytes
+  return taken.map(({ line }) => line)
 }
 
 function isAccepted(reply: unknown) {

@@ -28,9 +28,9 @@ import { databaseRpc } from "@/server/managed-database-access"
 // hasn't heard from in a minute.
 const HEARTBEAT_INTERVAL_MS = 20_000
 const PING_INTERVAL_MS = 15_000
-// Lines a page hasn't read yet. A page that falls this far behind is
-// detached; it follows again from fresh history.
-const MAX_QUEUED_LINES = 10_000
+// Encoded output a page hasn't read yet. A page that falls this far behind
+// is detached; it follows again from fresh history.
+const MAX_QUEUED_BYTES = 8 * 1024 * 1024
 
 const encoder = new TextEncoder()
 
@@ -49,8 +49,8 @@ export function openDatabaseLogsStream(input: {
 }): ReadableStream<Uint8Array> {
   const { databaseId, relay, user } = input
   const attachmentId = randomBytes(24).toString("base64url")
-  const queued: Array<DatabaseLogsStreamRecord> = []
-  let queuedLines = 0
+  const queued: Array<Uint8Array> = []
+  let queuedBytes = 0
   // Pushes can reach Hearth before the attach reply; they wait behind it.
   const early: Array<HearthDatabaseLogsOutput> = []
   let attached = false
@@ -60,20 +60,19 @@ export function openDatabaseLogsStream(input: {
 
   const send = (record: DatabaseLogsStreamRecord) => {
     if (closed) return
-    if (record.type === "lines") {
-      queuedLines += record.lines.length
-      if (queuedLines > MAX_QUEUED_LINES) {
-        queued.length = 0
-        queuedLines = 0
-        leave({
-          code: "detached",
-          message: "This page fell behind the database's output",
-          type: "error",
-        })
-        return
-      }
+    const encoded = encoder.encode(`${JSON.stringify(record)}\n`)
+    queuedBytes += encoded.byteLength
+    if (queuedBytes > MAX_QUEUED_BYTES) {
+      queued.length = 0
+      queuedBytes = 0
+      leave({
+        code: "detached",
+        message: "This page fell behind the database's output",
+        type: "error",
+      })
+      return
     }
-    queued.push(record)
+    queued.push(encoded)
     wake?.()
   }
   const finish = (record?: DatabaseLogsStreamRecord) => {
@@ -226,9 +225,9 @@ export function openDatabaseLogsStream(input: {
         wake = null
       }
       const record = queued.shift()
-      if (record?.type === "lines") queuedLines -= record.lines.length
       if (record) {
-        controller.enqueue(encoder.encode(`${JSON.stringify(record)}\n`))
+        queuedBytes -= record.byteLength
+        controller.enqueue(record)
         return
       }
       controller.close()

@@ -124,7 +124,9 @@ function batchEnvelope(
   ]
 }
 
-function fitConsoleLine(
+// Drops a line's styling, then cuts its text, until its encoding fits in a
+// browser frame.
+export function fitConsoleLine(
   line: RelayConsoleLine,
   encode: (candidate: RelayConsoleLine) => string
 ): RelayConsoleLine {
