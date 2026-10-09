@@ -4,7 +4,7 @@ import {
   resourceInvitationScopeKey,
 } from "@/components/pending-resource-invitations"
 import * as React from "react"
-import { useLiveQuery } from "@tanstack/react-db"
+import { eq, useLiveQuery } from "@tanstack/react-db"
 import {
   queryOptions,
   useMutation,
@@ -101,6 +101,7 @@ import {
 } from "@/components/instance-name-presentation"
 import { UserAvatar } from "@/components/account-avatar"
 import { useInfraUpdateDialogStore } from "@/components/infra-update-dialog-provider"
+import { relayNodesCollectionOptions } from "@/lib/collections/relay-nodes"
 import { relaysCollectionOptions } from "@/lib/collections/relays"
 import {
   isMinecraftUsername,
@@ -2086,9 +2087,26 @@ function RelayVersion({
   onOpenUpdates: (relayId?: string) => void
 }) {
   const gitRepository = useKilnGitRepository()
-  const release = findKilnRelease(releases, version)
-  const displayName = releaseName ?? (version ? kilnReleaseName(version) : null)
-  const versionLabel = !version ? (
+  // The live snapshot is readable without update access, unlike the overview.
+  const { data: liveNodes } = useLiveQuery(
+    (query) =>
+      query
+        .from({ node: relayNodesCollectionOptions })
+        .where(({ node }) => eq(node.relayId, relayId))
+        .select(({ node }) => ({
+          releaseName: node.releaseName,
+          version: node.version,
+        })),
+    [relayId]
+  )
+  const live = liveNodes?.[0]
+  const currentVersion = live?.version ?? version
+  const currentReleaseName = live ? live.releaseName : releaseName
+  const release = findKilnRelease(releases, currentVersion)
+  const displayName =
+    currentReleaseName ??
+    (currentVersion ? kilnReleaseName(currentVersion) : null)
+  const versionLabel = !currentVersion ? (
     <span className="type-meta truncate font-mono text-foreground">—</span>
   ) : release ? (
     <a
@@ -2101,15 +2119,15 @@ function RelayVersion({
     >
       {displayName}
     </a>
-  ) : isGitCommitSha(version) ? (
+  ) : isGitCommitSha(currentVersion) ? (
     <a
-      href={`${gitRepository}/commit/${version}`}
+      href={`${gitRepository}/commit/${currentVersion}`}
       target="_blank"
       rel="noreferrer"
-      aria-label={`View Relay commit ${version}`}
+      aria-label={`View Relay commit ${currentVersion}`}
       className="type-meta truncate font-mono text-primary transition-colors hover:text-primary focus-visible:text-primary focus-visible:outline-none"
     >
-      {version.slice(0, 7)}
+      {currentVersion.slice(0, 7)}
     </a>
   ) : (
     <span className="type-meta truncate font-mono text-foreground">
