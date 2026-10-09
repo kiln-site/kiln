@@ -989,6 +989,7 @@ function actionForRequest(request: RelayControlRequest): RelayAction | null {
     case "database.terminal.restart":
       return "database.dump.import"
     case "app.list":
+    case "app.network.routes.read":
       return "app.read"
     case "app.create":
       return "app.create"
@@ -997,6 +998,7 @@ function actionForRequest(request: RelayControlRequest): RelayAction | null {
     case "app.deploy":
     case "app.action":
     case "app.network.write":
+    case "app.network.routes.write":
       return "app.manage"
     case "app.terminal.attach":
     case "app.terminal.heartbeat":

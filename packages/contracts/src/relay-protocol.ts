@@ -75,6 +75,8 @@ export const relayControlOperations = [
   "app.deploy",
   "app.action",
   "app.network.write",
+  "app.network.routes.read",
+  "app.network.routes.write",
   "app.terminal.attach",
   "app.terminal.heartbeat",
   "app.terminal.detach",
@@ -173,6 +175,7 @@ const auditedRelayControlOperations = new Set<RelayControlOperation>([
   "app.deploy",
   "app.action",
   "app.network.write",
+  "app.network.routes.write",
   "app.terminal.attach",
   "app.terminal.restart",
   "backup.task.enqueue",
@@ -221,7 +224,8 @@ export function relayControlDeadlineMs(
     return 360_000
   }
   return operation === "instance.network.ports.write" ||
-    operation === "instance.network.routes.write"
+    operation === "instance.network.routes.write" ||
+    operation === "app.network.routes.write"
     ? 240_000
     : 30_000
 }

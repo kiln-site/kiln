@@ -74,6 +74,8 @@ import {
 } from "./port-allocations.js"
 import { INSTANCE_STOP_TIMEOUT_SECONDS } from "./power-state.js"
 import {
+  APP_SERVICE,
+  appIdFromRouteOwner,
   relayOwnerLabel,
   relayOwnsLabels,
   relayResourceNames,
@@ -1301,6 +1303,159 @@ export class LifecycleDriver {
       await this.#serializeEdgeMutation(() =>
         this.#disableExternalEdge(settings)
       )
+      if (settings.mode === "traefik") {
+        await this.#connectTraefikToApps(routes)
+      }
+    }
+  }
+
+  // Bundled Traefik reaches routed apps on their own networks.
+  async #connectTraefikToApps(routes: ReadonlyArray<RelayStoredWebRoute>) {
+    const appIds = new Set(
+      routes.flatMap((route) => {
+        const appId = appIdFromRouteOwner(route.instanceId)
+        return appId ? [appId] : []
+      })
+    )
+    for (const appId of appIds) {
+      await recoverPromise(
+        () =>
+          connectNetwork(
+            this.#resources.traefikContainer,
+            this.#resources.appNetwork(appId)
+          ),
+        () => undefined
+      )
+    }
+  }
+
+  // The Traefik labels each of an app's services needs for its routes, and
+  // the edge network Traefik reaches them on. Only an external Traefik reads
+  // labels; bundled Traefik routes from its file configuration.
+  async appRoutePlan(
+    routes: ReadonlyArray<RelayInstanceWebRoute & { readonly service?: string }>
+  ): Promise<{
+    labels: (service: string) => Record<string, string>
+    network: string | null
+  }> {
+    const settings = await this.proxySettings()
+    if (
+      routes.length === 0 ||
+      (settings.mode !== "none" && settings.mode !== "coolify")
+    ) {
+      return { labels: () => ({}), network: null }
+    }
+    await this.#serializeEdgeMutation(() => this.#ensureEdgeNetwork())
+    const profile = this.#externalTraefikProfile(settings)
+    return {
+      labels: (service) => {
+        const own = routes.filter(
+          (route) => (route.service ?? APP_SERVICE) === service
+        )
+        return own.length > 0
+          ? traefikRouteLabels(own, profile, this.#resources.edgeNetwork)
+          : {}
+      },
+      network: this.#resources.edgeNetwork,
+    }
+  }
+
+  // Whether an app's routes are live: bundled Traefik applies them as soon
+  // as they're saved; an external one once a deploy puts their labels on
+  // the app's containers.
+  async appWebRouteState(
+    routes: ReadonlyArray<
+      RelayInstanceWebRoute & { readonly service?: string }
+    >,
+    containers: ReadonlyArray<{
+      readonly labels: Readonly<Record<string, string>>
+      readonly networks: ReadonlyArray<string>
+      readonly service: string
+    }>
+  ): Promise<Omit<RelayInstanceWebRouteState, "routes">> {
+    const settings = await this.proxySettings()
+    if (settings.mode === "traefik") {
+      return {
+        edgeConnected: false,
+        message:
+          "Bundled Traefik routes to this app as soon as routes are saved.",
+        proxyConnected: true,
+        requiresRestart: false,
+        status: "ready",
+      }
+    }
+    if (settings.mode === "hearth") {
+      return {
+        edgeConnected: false,
+        message:
+          "Hearth proxy mode does not publish websites. Choose an existing or bundled Traefik edge.",
+        proxyConnected: false,
+        requiresRestart: false,
+        status: routes.length > 0 ? "blocked" : "ready",
+      }
+    }
+    const profile = this.#externalTraefikProfile(settings)
+    const edge = this.#resources.edgeNetwork
+    const routesFor = (service: string) =>
+      routes.filter((route) => (route.service ?? APP_SERVICE) === service)
+    const requiresDeploy = containers.some((container) => {
+      const own = routesFor(container.service)
+      return routeLabelsRequireRestart(
+        container.labels,
+        own,
+        own.length > 0 ? traefikRouteLabels(own, profile, edge) : {}
+      )
+    })
+    const edgeConnected = containers
+      .filter((container) => routesFor(container.service).length > 0)
+      .every((container) => container.networks.includes(edge))
+    const proxy = await this.#externalTraefikContainer(settings)
+    const proxyConnected = Boolean(
+      proxy && (await containerUsesNetwork(proxy, edge))
+    )
+    if (routes.length > 0 && containers.length === 0) {
+      return {
+        edgeConnected,
+        message: "Deploy this app to publish its routes.",
+        proxyConnected,
+        requiresRestart: true,
+        status: "pending_restart",
+      }
+    }
+    if (requiresDeploy) {
+      return {
+        edgeConnected,
+        message:
+          routes.length > 0
+            ? "Deploy this app to apply its pending Traefik labels."
+            : "Deploy once to remove this app's stale Traefik labels.",
+        proxyConnected,
+        requiresRestart: true,
+        status: "pending_restart",
+      }
+    }
+    if (routes.length > 0 && (!edgeConnected || !proxyConnected)) {
+      return {
+        edgeConnected,
+        message: proxy
+          ? `Relay found ${proxy}, but the ${edge} attachment is not ready yet.`
+          : settings.mode === "coolify"
+            ? "Relay could not find Coolify's running coolify-proxy container."
+            : `Attach your Traefik container to ${edge} to activate these routes.`,
+        proxyConnected,
+        requiresRestart: false,
+        status: "blocked",
+      }
+    }
+    return {
+      edgeConnected,
+      message:
+        routes.length > 0
+          ? "Traefik labels and edge network membership are applied."
+          : "This app is not exposed to the edge network.",
+      proxyConnected,
+      requiresRestart: false,
+      status: "ready",
     }
   }
 
@@ -3225,7 +3380,27 @@ export class LifecycleDriver {
   async #disableExternalEdge(settings: RelayProxySettings): Promise<void> {
     const instances = await this.#docker.inspectInstances()
     const proxy = await this.#externalTraefikContainer(settings)
+    // Apps join the edge network for their routes too.
+    const apps = await recoverPromise(
+      async () =>
+        (
+          await command("docker", [
+            "ps",
+            "--all",
+            "--filter",
+            "label=kiln.resource.kind=app",
+            "--filter",
+            `network=${this.#resources.edgeNetwork}`,
+            "--format",
+            "{{.Names}}",
+          ])
+        ).stdout
+          .split("\n")
+          .filter(Boolean),
+      () => []
+    )
     await Promise.all([
+      ...apps.map((app) => disconnectNetwork(app, this.#resources.edgeNetwork)),
       ...instances
         .filter((instance) => instance.managedByRelay)
         .map((instance) =>

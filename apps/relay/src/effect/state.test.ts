@@ -1280,7 +1280,7 @@ describe("legacy machine mutation migration", () => {
             const database = new DatabaseSync(filename)
             try {
               database.exec(
-                "DELETE FROM effect_sql_migrations WHERE migration_id = 16"
+                "DELETE FROM effect_sql_migrations WHERE migration_id >= 16"
               )
               database
                 .prepare(

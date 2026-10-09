@@ -67,7 +67,12 @@ import { getUpdateOverview } from "@/server/updates"
 import { getScheduleOptions, getSchedules } from "@/server/schedules"
 import type { RelayFleetSnapshot } from "@/lib/relay-fleet"
 import { withInventoryRelayStatus } from "@/lib/inventory-relay-status"
-import { getAppConfig, getAppDirectory, getApps } from "@/server/apps"
+import {
+  getAppConfig,
+  getAppDirectory,
+  getApps,
+  getAppWebRoutes,
+} from "@/server/apps"
 import {
   backupRunScopesEqual,
   backupRunsInputFromQueryKey,
@@ -126,6 +131,8 @@ export const queryKeys = {
       ["apps", relayId, appId, "config"] as const,
     directory: ["apps", "directory"] as const,
     list: ["apps", "list"] as const,
+    webRoutes: (relayId: string, appId: string) =>
+      ["apps", relayId, appId, "web-routes"] as const,
   },
   databases: {
     all: ["databases"] as const,
@@ -452,6 +459,14 @@ export async function fetchApps(queryClient: QueryClient) {
   return statuses
     ? withInventoryRelayStatus(overview, "apps", statuses)
     : overview
+}
+
+export function appWebRoutesQueryOptions(relayId: string, appId: string) {
+  return queryOptions({
+    queryKey: queryKeys.apps.webRoutes(relayId, appId),
+    queryFn: () => getAppWebRoutes({ data: { appId, relayId } }),
+    staleTime: 10_000,
+  })
 }
 
 export function appConfigQueryOptions(relayId: string, appId: string) {

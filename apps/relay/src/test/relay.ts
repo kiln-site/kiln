@@ -30,7 +30,7 @@ import { DatabaseDriver } from "../databases.js"
 import { DockerDriver } from "../docker.js"
 import { makeRelayStateLayer, RelayStateStore } from "../effect/state.js"
 import { LifecycleDriver } from "../lifecycle.js"
-import { relayResourceNames } from "../relay-resources.js"
+import { appRouteOwner, relayResourceNames } from "../relay-resources.js"
 import { RuntimeRecoveryManager } from "../runtime-recovery.js"
 import { type ContainerSeed, type FakeContainer, fakeDocker } from "./docker.js"
 
@@ -118,7 +118,16 @@ export async function relayHarness(
     )
     lifecycles.push(lifecycle)
     return {
-      apps: new AppDriver(config, () => lifecycle.hostDataDirectory()),
+      apps: new AppDriver(
+        config,
+        () => lifecycle.hostDataDirectory(),
+        async (appId) =>
+          lifecycle.appRoutePlan(
+            await Effect.runPromise(
+              state.listInstanceRoutes(appRouteOwner(appId))
+            )
+          )
+      ),
       bricks,
       databaseConnections,
       databases: new DatabaseDriver(config, docker, databaseConnections),

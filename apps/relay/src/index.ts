@@ -22,6 +22,9 @@ import {
   relayAppTerminalWriteSchema,
   relayCreateAppSchema,
   appIdFromFileRoot,
+  appIdSchema,
+  relayAppWebRouteStateSchema,
+  relayAppWebRoutesWriteSchema,
   relayDeleteAppSchema,
   relayDeployAppSchema,
   relayDatabaseActionSchema,
@@ -103,6 +106,7 @@ import {
   databaseTerminalTarget,
 } from "./container-terminal.js"
 import { AppDriver } from "./apps.js"
+import { APP_SERVICE, appRouteOwner } from "./relay-resources.js"
 import { forkPromise } from "./effect/promise.js"
 import {
   inspectEncryptedPlatformBackup,
@@ -222,7 +226,17 @@ const lifecycle = new LifecycleDriver(
   bricks,
   databaseConnections
 )
-const apps = new AppDriver(config, () => lifecycle.hostDataDirectory())
+const apps = new AppDriver(
+  config,
+  () => lifecycle.hostDataDirectory(),
+  async (appId) =>
+    lifecycle.appRoutePlan(
+      await runRelayEffect(
+        "relay.apps.routes",
+        startupCore.state.listInstanceRoutes(appRouteOwner(appId))
+      )
+    )
+)
 const appFilesystem = new FilesystemDriver({
   ...config,
   rootDirectory: apps.rootDirectory,
@@ -1480,14 +1494,97 @@ async function executeControlRequest(
       return apps.list()
     case "app.create":
       return apps.create(relayCreateAppSchema.parse(request.payload))
-    case "app.delete":
-      return apps.delete(relayDeleteAppSchema.parse(request.payload))
+    case "app.delete": {
+      const input = relayDeleteAppSchema.parse(request.payload)
+      const deleted = await apps.delete(input)
+      // Its routes go with it, so their hostnames are free again.
+      await serializeWebRouteMutation(async () => {
+        await runRelayEffect(
+          "relay.apps.routes.clear",
+          startup.state.replaceInstanceRoutes(appRouteOwner(input.appId), [])
+        )
+        await lifecycle.configureWebRoutes(
+          await runRelayEffect(
+            "relay.apps.routes.all",
+            startup.state.listWebRoutes()
+          )
+        )
+      })
+      return deleted
+    }
     case "app.deploy":
       return apps.deploy(relayDeployAppSchema.parse(request.payload))
     case "app.action":
       return apps.action(relayAppActionSchema.parse(request.payload))
     case "app.network.write":
       return apps.updateNetwork(relayAppNetworkSchema.parse(request.payload))
+    case "app.network.routes.read": {
+      const appId = appIdSchema.parse(payload.appId)
+      return appWebRouteState(appId)
+    }
+    case "app.network.routes.write": {
+      const input = relayAppWebRoutesWriteSchema.parse(request.payload)
+      return serializeWebRouteMutation(async () => {
+        await apps.get(input.appId)
+        const owner = appRouteOwner(input.appId)
+        const configuredRoutes = await runRelayEffect(
+          "relay.apps.routes.collisionCheck",
+          startup.state.listWebRoutes()
+        )
+        const routes = assignRelayWebRouteIds(
+          owner,
+          input.routes,
+          configuredRoutes
+        )
+        const collision = routes.find((route) =>
+          configuredRoutes.some(
+            (configured) =>
+              configured.instanceId !== owner &&
+              configured.hostname === route.hostname &&
+              configured.path === route.path
+          )
+        )
+        if (collision) {
+          throw new Error(
+            `Another server or app already uses https://${collision.hostname}${collision.path ?? ""}. Hostname and path routes must be unique on a Relay.`
+          )
+        }
+        const previous = await runRelayEffect(
+          "relay.apps.routes.previous",
+          startup.state.listInstanceRoutes(owner)
+        )
+        await runRelayEffect(
+          "relay.apps.routes.replace",
+          startup.state.replaceInstanceRoutes(owner, routes)
+        )
+        await Effect.runPromise(
+          relayOperation(async () => {
+            await lifecycle.configureWebRoutes(
+              await runRelayEffect(
+                "relay.apps.routes.all",
+                startup.state.listWebRoutes()
+              )
+            )
+          }).pipe(
+            Effect.onError(() =>
+              cleanupOperation("app web route rollback", async () => {
+                await runRelayEffect(
+                  "relay.apps.routes.rollback",
+                  startup.state.replaceInstanceRoutes(owner, previous)
+                )
+                await lifecycle.configureWebRoutes(
+                  await runRelayEffect(
+                    "relay.apps.routes.rollbackAll",
+                    startup.state.listWebRoutes()
+                  )
+                )
+              })
+            )
+          )
+        )
+        return appWebRouteState(input.appId)
+      })
+    }
     case "app.terminal.attach": {
       const input = relayAppTerminalAttachSchema.parse(request.payload)
       return terminals.attach(
@@ -2286,6 +2383,24 @@ function systemUpdateTarget(value: unknown): {
     targetImage: requiredString(target, "targetImage"),
     version: requiredString(target, "version"),
   }
+}
+
+// An app's routes, and whether Traefik serves them yet.
+async function appWebRouteState(appId: string) {
+  const [app, routes] = await Promise.all([
+    apps.get(appId),
+    runRelayEffect(
+      "relay.apps.routes.read",
+      startup.state.listInstanceRoutes(appRouteOwner(appId))
+    ),
+  ])
+  return relayAppWebRouteStateSchema.parse({
+    ...(await lifecycle.appWebRouteState(routes, app.containers)),
+    routes: routes.map((route) => ({
+      ...route,
+      service: route.service ?? APP_SERVICE,
+    })),
+  })
 }
 
 // A server's files, or an app's data directory (`app:<appId>`), with the

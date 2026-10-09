@@ -7,10 +7,12 @@ import {
   type AppConfig,
   type RelayApp,
 } from "@workspace/contracts"
+import { Effect } from "effect"
 import { afterEach, describe, expect, it, vi } from "vite-plus/test"
 
 vi.mock("./command.js", () => import("./test/docker.js"))
 
+import { appRouteOwner } from "./relay-resources.js"
 import { fakeDocker } from "./test/docker.js"
 import {
   relayHarness,
@@ -45,13 +47,16 @@ async function deploy(
       name: "Website",
     })
   )
-  for (let step = 0; step < 50; step += 1) {
+  // Docker and the filesystem are real I/O; each step lets them progress
+  // before the clock moves on.
+  for (let step = 0; step < 10_000; step += 1) {
     const app = await harness.apps.get(appId)
     if (app.deployment?.state !== "running") {
       vi.useRealTimers()
       return app
     }
-    await vi.advanceTimersByTimeAsync(1_000)
+    await new Promise((resolve) => setImmediate(resolve))
+    await vi.advanceTimersByTimeAsync(100)
   }
   throw new Error("The deployment never finished")
 }
@@ -128,6 +133,39 @@ describe("apps", () => {
     })
     expect(history.lines.map((line) => line.text)).toContain(
       "Pulling nginx:alpine"
+    )
+  })
+
+  it("labels a deployed container for its web routes on an external Traefik", async () => {
+    const harness = await relayHarness({ KILN_RELAY_PROXY: "none" })
+    await harness.apps.create({ id: appId, name: "Website" })
+    fakeDocker.images.set("nginx:alpine", {})
+    await Effect.runPromise(
+      harness.state.replaceInstanceRoutes(appRouteOwner(appId), [
+        {
+          hostname: "site.example.com",
+          id: "0a1b2c3d",
+          name: "Site",
+          path: null,
+          service: "app",
+          stripPrefix: true,
+          targetPort: 80,
+        },
+      ])
+    )
+
+    await deploy(harness, {})
+
+    const [container] = appContainers()
+    expect(container!.labels).toMatchObject({
+      "traefik.enable": "true",
+      "traefik.http.routers.kiln-route-0a1b2c3d-https.rule":
+        "Host(`site.example.com`)",
+      "traefik.http.services.kiln-route-0a1b2c3d.loadbalancer.server.port":
+        "80",
+    })
+    expect([...container!.networks.keys()]).toContain(
+      harness.resources.edgeNetwork
     )
   })
 

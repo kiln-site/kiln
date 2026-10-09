@@ -1071,6 +1071,26 @@ export const relayInstanceWebRouteStateSchema = z
   })
   .strict()
 
+// App web routes are server routes aimed at one of the app's services.
+export const relayAppWebRouteInputSchema =
+  relayInstanceWebRouteInputSchema.extend({ service: appServiceNameSchema })
+
+export const relayAppWebRouteSchema = relayInstanceWebRouteSchema.extend({
+  service: appServiceNameSchema,
+})
+
+export const relayAppWebRouteStateSchema =
+  relayInstanceWebRouteStateSchema.extend({
+    routes: relayInstanceWebRouteArraySchema(relayAppWebRouteSchema),
+  })
+
+export const relayAppWebRoutesWriteSchema = z
+  .object({
+    appId: appIdSchema,
+    routes: relayInstanceWebRouteArraySchema(relayAppWebRouteInputSchema),
+  })
+  .strict()
+
 export const relayProxyDiagnosticsSchema = z
   .object({
     browserOrigin: z.url(),
@@ -1884,6 +1904,9 @@ export type RelayDeployApp = z.infer<typeof relayDeployAppSchema>
 export type RelayAppAction = z.infer<typeof relayAppActionSchema>
 export type RelayDeleteApp = z.infer<typeof relayDeleteAppSchema>
 export type RelayAppNetwork = z.infer<typeof relayAppNetworkSchema>
+export type RelayAppWebRoute = z.infer<typeof relayAppWebRouteSchema>
+export type RelayAppWebRouteInput = z.infer<typeof relayAppWebRouteInputSchema>
+export type RelayAppWebRouteState = z.infer<typeof relayAppWebRouteStateSchema>
 export type RelayAppTerminalAttach = z.infer<
   typeof relayAppTerminalAttachSchema
 >

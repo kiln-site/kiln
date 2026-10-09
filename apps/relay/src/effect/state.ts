@@ -111,8 +111,11 @@ export interface RelayAuditQuery {
   readonly to?: number
 }
 
+// A server's route, or an app's (owned by `app:<appId>`), which also names
+// the app's service it reaches.
 export interface RelayStoredWebRoute extends RelayInstanceWebRoute {
   readonly instanceId: string
+  readonly service?: string
 }
 
 export interface RelayStoredDatabaseConnection {
@@ -226,6 +229,7 @@ const RelayWebRouteRowSchema = Schema.Struct({
   instanceId: Schema.String,
   name: Schema.String,
   path: Schema.String,
+  service: Schema.NullOr(Schema.String),
   stripPrefix: Schema.Number,
   targetPort: Schema.Number,
 })
@@ -526,7 +530,10 @@ export class RelayStateStore extends Context.Service<
     >
     readonly listInstanceRoutes: (
       instanceId: string
-    ) => Effect.Effect<ReadonlyArray<RelayInstanceWebRoute>, RelayStateError>
+    ) => Effect.Effect<
+      ReadonlyArray<RelayInstanceWebRoute & { readonly service?: string }>,
+      RelayStateError
+    >
     readonly listWebRoutes: () => Effect.Effect<
       ReadonlyArray<RelayStoredWebRoute>,
       RelayStateError
@@ -577,7 +584,9 @@ export class RelayStateStore extends Context.Service<
     ) => Effect.Effect<void, RelayStateError>
     readonly replaceInstanceRoutes: (
       instanceId: string,
-      routes: ReadonlyArray<RelayInstanceWebRoute>
+      routes: ReadonlyArray<
+        RelayInstanceWebRoute & { readonly service?: string }
+      >
     ) => Effect.Effect<void, RelayStateError>
     readonly touchClient: (
       clientId: string,
@@ -989,6 +998,17 @@ const migrations = SqliteMigrator.fromRecord({
        WHERE role = 'custom'
          AND EXISTS (SELECT 1 FROM json_each(actions_json) WHERE value = 'instance.files.write')
          AND NOT EXISTS (SELECT 1 FROM json_each(actions_json) WHERE value = 'instance.files.rename')
+    `
+  }),
+  // App routes reach one of the app's services.
+  "17_web_route_services": Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient
+    const columns = yield* sql<{ name: string }>`
+      SELECT name FROM pragma_table_info('relay_web_routes')
+    `
+    if (columns.some((column) => column.name === "service")) return
+    yield* sql`
+      ALTER TABLE relay_web_routes ADD COLUMN service TEXT
     `
   }),
 })
@@ -1409,6 +1429,7 @@ const makeRelayStateStore = Effect.gen(function* () {
             hostname,
             name,
             path,
+            service,
             strip_prefix AS stripPrefix,
             target_port AS targetPort
           FROM relay_web_routes
@@ -1422,6 +1443,7 @@ const makeRelayStateStore = Effect.gen(function* () {
             hostname,
             name,
             path,
+            service,
             strip_prefix AS stripPrefix,
             target_port AS targetPort
           FROM relay_web_routes
@@ -1434,6 +1456,7 @@ const makeRelayStateStore = Effect.gen(function* () {
       instanceId: row.instanceId,
       name: row.name,
       path: row.path || null,
+      ...(row.service === null ? {} : { service: row.service }),
       stripPrefix: row.stripPrefix === 1,
       targetPort: row.targetPort,
     }))
@@ -2842,6 +2865,7 @@ const makeRelayStateStore = Effect.gen(function* () {
                   hostname,
                   name,
                   path,
+                  service,
                   strip_prefix,
                   target_port,
                   created_at,
@@ -2852,6 +2876,7 @@ const makeRelayStateStore = Effect.gen(function* () {
                   ${route.hostname},
                   ${route.name},
                   ${route.path ?? ""},
+                  ${route.service ?? null},
                   ${route.stripPrefix ? 1 : 0},
                   ${route.targetPort},
                   ${now},

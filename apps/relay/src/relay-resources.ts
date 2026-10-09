@@ -1,8 +1,13 @@
+import { appFileRootId, appIdFromFileRoot } from "@workspace/contracts"
+
 import type { RelayConfig } from "./config.js"
 
 export const RELAY_OWNER_LABEL = "kiln.relay.owner"
 
 export interface RelayResourceNames {
+  // The name an app's service answers to on its network.
+  appAlias(appId: string, service: string): string
+  appNetwork(appId: string): string
   coreDnsContainer: string
   edgeNetwork: string
   gameNetwork: string
@@ -26,6 +31,11 @@ export function relayResourceNames(
       : legacyName
 
   return {
+    appAlias: (appId, service) =>
+      service === APP_SERVICE
+        ? `app-${appId.slice(0, 8)}`
+        : `${service}.app-${appId.slice(0, 8)}`,
+    appNetwork: (appId) => name(`kiln-app-${appId}-network`),
     coreDnsContainer: name("kiln-coredns"),
     edgeNetwork: name("kiln-edge"),
     gameNetwork: name("kiln-minecraft"),
@@ -43,6 +53,14 @@ export function relayResourceNames(
     traefikContainer: name("kiln-traefik"),
   }
 }
+
+// Image and Dockerfile apps run one service under this name.
+export const APP_SERVICE = "app"
+
+// App web routes are stored owned by `app:<appId>`, the key files use for an
+// app's data directory, so they never collide with a server's.
+export const appRouteOwner = appFileRootId
+export const appIdFromRouteOwner = appIdFromFileRoot
 
 export function relayOwnerLabel(
   config: Pick<RelayConfig, "resourceNamespace">
