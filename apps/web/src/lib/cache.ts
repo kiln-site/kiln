@@ -104,7 +104,7 @@ export const writeCachedJson = Effect.fn("cache.write")(function* <TValue>(
   }
 })
 
-const readCachedJson = Effect.fn("cache.readJson")(function* <TResult>(
+export const readCachedJson = Effect.fn("cache.readJson")(function* <TResult>(
   policy: CachePolicy,
   decode: (input: unknown) => TResult
 ) {

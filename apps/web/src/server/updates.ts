@@ -354,7 +354,7 @@ export const startSystemUpdates = createServerFn({ method: "POST" })
                   operation.component === "relay" &&
                   operation.status === "running"
                 ) {
-                  markRelayUpdating(group.relay, operation)
+                  markRelayUpdating(group.relay.id, operation)
                 }
               }
               return { group, operations }
@@ -412,7 +412,7 @@ export const getSystemUpdateStatus = createServerFn({ method: "POST" })
     if (operation.component === "relay") {
       // A Hearth replaced earlier in the same batch starts without the
       // window, so a running Relay operation restores it.
-      if (operation.status === "running") markRelayUpdating(relay, operation)
+      if (operation.status === "running") markRelayUpdating(relay.id, operation)
       else clearRelayUpdating(relay.id, operation.id)
     }
     return operation.component === "hearth" && !isPlatformAdmin(user)

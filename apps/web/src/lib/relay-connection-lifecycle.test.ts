@@ -23,6 +23,29 @@ vi.mock("@/lib/relay-registry", () => ({
   listPersistedRelays: vi.fn(async () => []),
   loadRelayCredentials: vi.fn(),
 }))
+// An in-memory cache stands in for Redis so update windows can outlive the
+// process-local registry, as they do when a batched update replaces Hearth.
+vi.mock("@/effect/cache", async (importOriginal) => {
+  const original = await importOriginal<typeof import("@/effect/cache")>()
+  const { Effect, Layer } = await import("effect")
+  const entries = new Map<string, string>()
+  return {
+    ...original,
+    AppCacheLive: Layer.succeed(original.AppCache)({
+      backend: "redis-protocol",
+      enabled: true,
+      get: (key) => Effect.sync(() => entries.get(key)),
+      remove: (key) =>
+        Effect.sync(() => {
+          entries.delete(key)
+        }),
+      set: (key, value) =>
+        Effect.sync(() => {
+          entries.set(key, value)
+        }),
+    }),
+  }
+})
 vi.mock("@/lib/sftp-authorization", () => ({
   resolveSftpAuthorization: vi.fn(),
 }))
@@ -52,12 +75,6 @@ import { loadRelayCredentials } from "@/lib/relay-registry"
 import { subscribeRealtimeChanges } from "@/lib/realtime-source.server"
 
 const relayId = "relay-connection-effect-test"
-const offlineEndpoint = {
-  hostname: "127.0.0.1",
-  id: relayId,
-  port: 1,
-  useTls: false,
-}
 const pushedSnapshot = {
   instances: [],
   node: {
@@ -202,7 +219,7 @@ effectIt.effect(
           relayRpc(endpoint, "relay.snapshot", {}, 1_000)
         )
         updateOperations.set("update-a", "running")
-        markRelayUpdating(endpoint, {
+        markRelayUpdating(relayId, {
           id: "update-a",
           startedAt: new Date().toISOString(),
         })
@@ -243,8 +260,8 @@ effectIt.effect(
 
 it("keeps a newer update window when an older operation settles", () => {
   const startedAt = new Date().toISOString()
-  markRelayUpdating(offlineEndpoint, { id: "update-a", startedAt })
-  markRelayUpdating(offlineEndpoint, { id: "update-b", startedAt })
+  markRelayUpdating(relayId, { id: "update-a", startedAt })
+  markRelayUpdating(relayId, { id: "update-b", startedAt })
 
   clearRelayUpdating(relayId, "update-a")
   expect(isRelayUpdating(relayId)).toBe(true)
@@ -252,6 +269,61 @@ it("keeps a newer update window when an older operation settles", () => {
   clearRelayUpdating(relayId, "update-b")
   expect(isRelayUpdating(relayId)).toBe(false)
 })
+
+it("does not reopen an update window after its deadline", () => {
+  const relayStates: Array<string> = []
+  const unsubscribe = subscribeRealtimeChanges((event) => {
+    if (event.type === "relay.state") relayStates.push(event.status)
+  })
+  markRelayUpdating(relayId, {
+    id: "update-a",
+    startedAt: new Date(Date.now() - 20 * 60_000).toISOString(),
+  })
+
+  expect(isRelayUpdating(relayId)).toBe(false)
+  expect(relayStates).toEqual([])
+  unsubscribe()
+})
+
+effectIt.effect(
+  "restores an update window when Hearth restarts mid-update",
+  () =>
+    withRelayServer(({ endpoint }) =>
+      Effect.gen(function* () {
+        updateOperations.set("update-a", "running")
+        markRelayUpdating(relayId, {
+          id: "update-a",
+          startedAt: new Date().toISOString(),
+        })
+        yield* Effect.promise(() => nextEventLoopTurn())
+        // A replaced Hearth starts without windows or Relay connections.
+        globalThis.kilnRelayUpdates?.get(relayId)?.watcher.interruptUnsafe()
+        globalThis.kilnRelayUpdates?.clear()
+        expect(isRelayUpdating(relayId)).toBe(false)
+
+        yield* promiseEffect(() =>
+          relayRpc(endpoint, "relay.snapshot", {}, 1_000)
+        )
+        yield* Effect.promise(() => nextEventLoopTurn())
+        expect(isRelayUpdating(relayId)).toBe(true)
+
+        updateOperations.set("update-a", "succeeded")
+        yield* Effect.promise(() =>
+          advanceTimersUntil(
+            new Promise<void>((resolve) => {
+              const unsubscribe = subscribeRealtimeChanges((event) => {
+                if (event.type === "relay.state" && !event.updating) {
+                  unsubscribe()
+                  resolve()
+                }
+              })
+            })
+          )
+        )
+        expect(isRelayUpdating(relayId)).toBe(false)
+      })
+    )
+)
 
 it("reports a Relay unreachable once its update window expires", async () => {
   const relayStates: Array<string> = []
@@ -261,7 +333,7 @@ it("reports a Relay unreachable once its update window expires", async () => {
     }
   })
   // A restored window keeps the deadline of the operation's start.
-  markRelayUpdating(offlineEndpoint, {
+  markRelayUpdating(relayId, {
     id: "update-a",
     startedAt: new Date(Date.now() - 5 * 60_000).toISOString(),
   })
@@ -534,6 +606,10 @@ async function advanceTimersUntil<TResult>(
     await new Promise<void>((resolve) => setImmediate(resolve))
   }
   return promise
+}
+
+function nextEventLoopTurn(): Promise<void> {
+  return new Promise<void>((resolve) => setImmediate(resolve))
 }
 
 function promiseEffect<TResult>(run: () => Promise<TResult>) {

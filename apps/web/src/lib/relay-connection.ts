@@ -42,6 +42,12 @@ import {
 } from "@/lib/relay-control-endpoint"
 import { RelayUnavailableError } from "@/effect/errors"
 import { forkAppEffect, runAppEffect } from "@/effect/runtime"
+import {
+  invalidateCached,
+  readCachedJson,
+  writeCachedJson,
+  type CachePolicy,
+} from "@/lib/cache"
 import { ensuringPromise, forkPromise } from "@/effect/promise"
 import type { RelayCredentials } from "@/lib/relay-registry"
 import { resolveSftpAuthorization } from "@/lib/sftp-authorization"
@@ -94,12 +100,30 @@ const connections = (globalThis.kilnRelayConnections ??= new Map())
 // An update replaces the Relay container, so its disconnect is expected. The
 // window stays open until the Relay reports the operation settled or the
 // deadline passes; a reconnect alone may still be the Relay being replaced.
+// Windows are also cached because a batched update replaces Hearth first.
 const relayUpdates = (globalThis.kilnRelayUpdates ??= new Map())
 const RELAY_UPDATE_WINDOW_MS = 15 * 60_000
 const RELAY_UPDATE_POLL_MS = 2_000
 const relayUpdateOperationSchema = z
   .object({ status: z.enum(["failed", "running", "succeeded"]) })
   .nullable()
+const cachedRelayUpdateSchema = z.object({
+  id: z.string().min(1),
+  startedAt: z.string(),
+})
+
+interface RelayUpdateOperation {
+  id: string
+  startedAt: string
+}
+
+function relayUpdateCachePolicy(relayId: string, ttlMs: number): CachePolicy {
+  return {
+    key: `relay:${relayId}:update-window`,
+    name: "Relay update window",
+    ttlMs,
+  }
+}
 
 export async function relayRpc(
   relay: RelayEndpoint,
@@ -124,6 +148,7 @@ export async function relayRpc(
   if (!connection) {
     connection = new RelayConnection(effectiveRelay)
     connections.set(relay.id, connection)
+    restoreRelayUpdateWindow(relay.id)
   }
   const result = await runAppEffect(
     `relay.rpc.${operation}`,
@@ -145,35 +170,36 @@ export function isRelayUpdating(relayId: string): boolean {
 }
 
 export function markRelayUpdating(
-  relay: RelayEndpoint,
-  operation: { id: string; startedAt: string }
+  relayId: string,
+  operation: RelayUpdateOperation
 ): void {
-  const current = relayUpdates.get(relay.id)
+  const current = relayUpdates.get(relayId)
   if (current?.operationId === operation.id) return
-  current?.watcher.interruptUnsafe()
   const startedAt = Date.parse(operation.startedAt)
-  const remainingMs = Math.max(
-    0,
+  const remainingMs =
     (Number.isNaN(startedAt) ? Date.now() : startedAt) +
-      RELAY_UPDATE_WINDOW_MS -
-      Date.now()
-  )
+    RELAY_UPDATE_WINDOW_MS -
+    Date.now()
+  if (remainingMs <= 0) return
+  current?.watcher.interruptUnsafe()
   let update: RelayUpdateWindow
   const watcher = forkAppEffect(
     "relay.update.window",
-    watchRelayUpdate(relay, operation.id).pipe(
+    writeCachedJson(relayUpdateCachePolicy(relayId, remainingMs), {
+      id: operation.id,
+      startedAt: operation.startedAt,
+    }).pipe(
+      Effect.andThen(watchRelayUpdate(relayId, operation.id)),
       Effect.timeoutOrElse({
         duration: remainingMs,
         orElse: () => Effect.void,
       }),
-      Effect.andThen(
-        Effect.sync(() => closeRelayUpdateWindow(relay.id, update))
-      )
+      Effect.andThen(Effect.sync(() => closeRelayUpdateWindow(relayId, update)))
     )
   )
   update = { operationId: operation.id, watcher }
-  relayUpdates.set(relay.id, update)
-  publishRelayState(relay.id)
+  relayUpdates.set(relayId, update)
+  publishRelayState(relayId)
 }
 
 export function clearRelayUpdating(relayId: string, operationId: string): void {
@@ -183,19 +209,38 @@ export function clearRelayUpdating(relayId: string, operationId: string): void {
   closeRelayUpdateWindow(relayId, update)
 }
 
+function restoreRelayUpdateWindow(relayId: string): void {
+  forkAppEffect(
+    "relay.update.restore",
+    readCachedJson(
+      relayUpdateCachePolicy(relayId, RELAY_UPDATE_WINDOW_MS),
+      (input) => cachedRelayUpdateSchema.parse(input)
+    ).pipe(
+      Effect.map(
+        Option.map((operation) => {
+          if (!relayUpdates.has(relayId)) markRelayUpdating(relayId, operation)
+        })
+      )
+    )
+  )
+}
+
+// Polls through whichever connection is current so an edited endpoint is
+// never replaced by the one the window started with.
 const watchRelayUpdate = Effect.fnUntraced(function* (
-  relay: RelayEndpoint,
+  relayId: string,
   operationId: string
-) {
+): Effect.fn.Return<void> {
   while (true) {
     yield* Effect.sleep(RELAY_UPDATE_POLL_MS)
-    if (relayConnectionState(relay.id).status !== "authenticated") continue
-    const operation = yield* Effect.tryPromise(() =>
-      relayRpc(relay, "relay.update.status", { operationId }, 5_000)
-    ).pipe(
-      Effect.map((result) => relayUpdateOperationSchema.safeParse(result)),
-      Effect.orElseSucceed(() => null)
-    )
+    const connection = connections.get(relayId)
+    if (connection?.state.status !== "authenticated") continue
+    const operation = yield* connection
+      .request("relay.update.status", { operationId }, 5_000)
+      .pipe(
+        Effect.map((result) => relayUpdateOperationSchema.safeParse(result)),
+        Effect.orElseSucceed(() => null)
+      )
     if (operation?.success && operation.data?.status !== "running") return
   }
 })
@@ -207,6 +252,10 @@ function closeRelayUpdateWindow(
   if (relayUpdates.get(relayId) !== update) return
   relayUpdates.delete(relayId)
   publishRelayState(relayId)
+  forkAppEffect(
+    "relay.update.forget",
+    invalidateCached(relayUpdateCachePolicy(relayId, RELAY_UPDATE_WINDOW_MS))
+  )
 }
 
 function publishRelayState(relayId: string): void {
