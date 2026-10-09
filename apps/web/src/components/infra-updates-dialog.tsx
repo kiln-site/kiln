@@ -27,7 +27,6 @@ import {
   ServerCog,
   ShieldCheck,
   TriangleAlert,
-  UserRound,
   X,
 } from "lucide-react"
 
@@ -69,10 +68,16 @@ import {
 } from "@/lib/changelog-timeline"
 import { flattenCursorPages } from "@/lib/cursor-page"
 import {
+  isMinecraftUsername,
+  minecraftUsernameKey,
+} from "@/lib/minecraft-profile"
+import {
   queryKeys,
+  relayOwnerMinecraftProfilesQueryOptions,
   releaseHistoryInfiniteQueryOptions,
   updateOverviewQueryOptions,
 } from "@/lib/query-options"
+import { UserAvatar } from "@/components/account-avatar"
 import { RelativeTime } from "@/components/relative-time"
 import { replaceRelayUpdateVersion } from "@/lib/system-update-cache"
 import {
@@ -119,8 +124,9 @@ type UpdateTarget = {
   eligible: boolean
   key: string
   name: string
-  // Who paired the Relay: "You", their name, or null for the Panel.
-  owner: string | null
+  // Who paired the Relay, or null for the Panel and unowned Relays.
+  ownerName: string | null
+  ownedByViewer: boolean
   // Someone else paired it, so Update all leaves it to its own row.
   ownedByOther: boolean
   reachable: boolean
@@ -1346,7 +1352,7 @@ const UpdateTargetList = React.memo(function UpdateTargetList({
     () => targets.filter((target) => target.component === "relay"),
     [targets]
   )
-  const sortedRelays = useActionOrder(relays, releases)
+  const groups = useActionGroups(relays, releases)
   const latestRelease = releases[0] ?? null
   if (!latestRelease) {
     return (
@@ -1356,15 +1362,14 @@ const UpdateTargetList = React.memo(function UpdateTargetList({
     )
   }
   const hearthTarget = targets.find((target) => target.component === "hearth")
-  const relayTargets = sortedRelays
 
   return (
-    <div className="pb-2">
-      {hearthTarget ? (
-        <>
-          <UpdateSectionLabel>Hearth</UpdateSectionLabel>
+    <UpdateOwnerProfiles relays={relays}>
+      <div className="pb-2">
+        {hearthTarget ? (
           <UpdateTargetRow
             activityStore={activityStore}
+            first
             focused={false}
             latestVersion={latestRelease.version}
             releases={releases}
@@ -1372,53 +1377,76 @@ const UpdateTargetList = React.memo(function UpdateTargetList({
             onChangelog={onChangelog}
             onUpdate={onUpdate}
           />
-        </>
-      ) : null}
-      <UpdateSectionLabel summary={relaySummary(relays, releases)}>
-        Relays
-      </UpdateSectionLabel>
-      {relayTargets.length > 0 ? (
-        relayTargets.map((target) => (
-          <UpdateTargetRow
-            activityStore={activityStore}
-            focused={target.relayId === focusedRelayId}
-            key={target.key}
-            latestVersion={latestRelease.version}
-            releases={releases}
-            target={target}
-            onChangelog={onChangelog}
-            onUpdate={onUpdate}
-          />
-        ))
-      ) : (
-        <p className="type-support border-t border-border/60 px-5 py-5 text-muted-foreground">
-          No Relays are paired with this Panel.
-        </p>
-      )}
-      <div className="border-t border-border/60" />
-    </div>
+        ) : null}
+        {groups.map(({ group, targets: groupTargets }, index) => (
+          <React.Fragment key={group}>
+            <UpdateSectionLabel
+              count={groupTargets.length}
+              first={!hearthTarget && index === 0}
+            >
+              {updateGroupLabel[group]}
+            </UpdateSectionLabel>
+            {groupTargets.map((target) => (
+              <UpdateTargetRow
+                activityStore={activityStore}
+                focused={target.relayId === focusedRelayId}
+                key={target.key}
+                latestVersion={latestRelease.version}
+                releases={releases}
+                target={target}
+                onChangelog={onChangelog}
+                onUpdate={onUpdate}
+              />
+            ))}
+          </React.Fragment>
+        ))}
+        {relays.length === 0 ? (
+          <p className="type-support border-t border-border/60 px-5 py-5 text-muted-foreground">
+            No Relays are paired with this Panel.
+          </p>
+        ) : null}
+        <div className="border-t border-border/60" />
+      </div>
+    </UpdateOwnerProfiles>
   )
 })
 
 function UpdateSectionLabel({
   children,
-  summary,
+  count,
+  first = false,
 }: {
   children: React.ReactNode
-  summary?: string | null
+  count: number
+  first?: boolean
 }) {
   return (
-    <p className="flex h-8 items-end gap-3 px-5 pb-1.5 text-muted-foreground">
+    <p
+      className={`flex h-9 items-end gap-2 px-5 pb-1.5 text-muted-foreground ${
+        first ? "" : "border-t border-border/60"
+      }`}
+    >
       <span className="type-technical-label text-[0.6875rem]">{children}</span>
-      {summary ? (
-        <span className="type-meta normal-case">{summary}</span>
-      ) : null}
+      <span className="type-meta font-mono">{count}</span>
     </p>
   )
 }
 
-// What a target needs, for ordering: updates first, then current ones, then
-// ones Kiln can't update, then offline.
+type UpdateGroup = "available" | "current" | "unavailable"
+
+const updateGroupLabel: Readonly<Record<UpdateGroup, string>> = {
+  available: "Update available",
+  current: "Up to date",
+  unavailable: "Unavailable",
+}
+
+const updateGroups: ReadonlyArray<UpdateGroup> = [
+  "available",
+  "current",
+  "unavailable",
+]
+
+// Offline ranks after can't-update, inside the Unavailable group.
 function targetActionRank(
   target: UpdateTarget,
   releases: ReadonlyArray<PublicKilnRelease>
@@ -1431,72 +1459,101 @@ function targetActionRank(
     : 2
 }
 
+function rankGroup(rank: number): UpdateGroup {
+  return rank === 0 ? "available" : rank === 1 ? "current" : "unavailable"
+}
+
 /**
- * Relays in the order that needs action first, fixed while the dialog is
- * open: a Relay that finishes updating stays put instead of jumping to the
- * up-to-date group. Relays seen for the first time join at their rank.
+ * Relays grouped by what they need, your own first in each group. Groups are
+ * fixed while the dialog is open: a Relay that finishes updating stays where
+ * it was instead of jumping to Up to date. New Relays join by their state.
  */
-function useActionOrder(
+function useActionGroups(
   relays: ReadonlyArray<UpdateTarget>,
   releases: ReadonlyArray<PublicKilnRelease>
-): Array<UpdateTarget> {
-  const orderRef = React.useRef<Map<string, number> | null>(null)
+): Array<{ group: UpdateGroup; targets: Array<UpdateTarget> }> {
+  const ranksRef = React.useRef<Map<string, number> | null>(null)
   const relayKeys = relays.map((relay) => relay.key).join("\n")
-  // Only a change in which Relays exist reorders; versions alone don't.
-  const order = React.useMemo(() => {
-    const ranked = [...relays].sort(
-      (left, right) =>
-        targetActionRank(left, releases) - targetActionRank(right, releases) ||
-        left.name.localeCompare(right.name)
+  // Only a change in which Relays exist regroups; versions alone don't.
+  const ranks = React.useMemo(() => {
+    const previous = ranksRef.current
+    const next = new Map(
+      relays.map((relay) => [
+        relay.key,
+        previous?.get(relay.key) ?? targetActionRank(relay, releases),
+      ])
     )
-    const previous = orderRef.current
-    // Known Relays keep their place; new ones slot in after them by rank.
-    const next = previous
-      ? [
-          ...ranked
-            .filter((relay) => previous.has(relay.key))
-            .sort(
-              (left, right) =>
-                (previous.get(left.key) ?? 0) - (previous.get(right.key) ?? 0)
-            ),
-          ...ranked.filter((relay) => !previous.has(relay.key)),
-        ]
-      : ranked
-    const map = new Map(next.map((relay, index) => [relay.key, index]))
-    orderRef.current = map
-    return map
+    ranksRef.current = next
+    return next
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [relayKeys])
-  return React.useMemo(
-    () =>
-      [...relays].sort(
-        (left, right) =>
-          (order.get(left.key) ?? 0) - (order.get(right.key) ?? 0)
-      ),
-    [order, relays]
+  return React.useMemo(() => {
+    const rankOf = (relay: UpdateTarget) => ranks.get(relay.key) ?? 3
+    return updateGroups.flatMap((group) => {
+      const targets = relays
+        .filter((relay) => rankGroup(rankOf(relay)) === group)
+        .sort(
+          (left, right) =>
+            Number(right.ownedByViewer) - Number(left.ownedByViewer) ||
+            rankOf(left) - rankOf(right) ||
+            left.name.localeCompare(right.name)
+        )
+      return targets.length > 0 ? [{ group, targets }] : []
+    })
+  }, [ranks, relays])
+}
+
+const UpdateOwnerProfileIdsContext = React.createContext<
+  ReadonlyMap<string, string>
+>(new Map())
+
+/** Resolves owners' Minecraft heads once for every row. */
+function UpdateOwnerProfiles({
+  children,
+  relays,
+}: {
+  children: React.ReactNode
+  relays: ReadonlyArray<UpdateTarget>
+}) {
+  const ownerNames = [
+    ...new Set(
+      relays.flatMap((relay) =>
+        relay.ownerName && isMinecraftUsername(relay.ownerName)
+          ? [minecraftUsernameKey(relay.ownerName)]
+          : []
+      )
+    ),
+  ]
+    .sort()
+    .join(",")
+  const { data: profileIds = noOwnerProfileIds } = useQuery({
+    ...relayOwnerMinecraftProfilesQueryOptions(ownerNames),
+    select: selectOwnerProfileIds,
+  })
+  return (
+    <UpdateOwnerProfileIdsContext.Provider value={profileIds}>
+      {children}
+    </UpdateOwnerProfileIdsContext.Provider>
   )
 }
 
-function relaySummary(
-  relays: ReadonlyArray<UpdateTarget>,
-  releases: ReadonlyArray<PublicKilnRelease>
-): string | null {
-  if (relays.length === 0) return null
-  const behind = relays.filter((relay) =>
-    targetHasUpdate(relay, releases)
-  ).length
-  const offline = relays.filter((relay) => !relay.reachable).length
-  return [
-    String(relays.length),
-    behind > 0 ? `${behind} behind` : null,
-    offline > 0 ? `${offline} offline` : null,
-  ]
-    .filter(Boolean)
-    .join(" · ")
+const noOwnerProfileIds: ReadonlyMap<string, string> = new Map()
+
+function selectOwnerProfileIds(
+  profiles: Array<{ displayName: string; profileId: string }>
+): ReadonlyMap<string, string> {
+  return new Map(
+    profiles.map((profile) => [
+      minecraftUsernameKey(profile.displayName),
+      profile.profileId,
+    ])
+  )
 }
 
 type UpdateTargetRowProps = {
   activityStore: SystemUpdateActivityStore
+  // The top row sits right under the header, which draws its own border.
+  first?: boolean
   focused: boolean
   latestVersion: string
   releases: ReadonlyArray<PublicKilnRelease>
@@ -1512,6 +1569,7 @@ const updateRowClassName =
 
 const UpdateTargetRow = React.memo(function UpdateTargetRow({
   activityStore,
+  first = false,
   focused,
   latestVersion,
   releases,
@@ -1528,7 +1586,7 @@ const UpdateTargetRow = React.memo(function UpdateTargetRow({
   return (
     <div
       ref={rowRef}
-      className={`${updateRowClassName} ${
+      className={`${updateRowClassName} ${first ? "border-t-0" : ""} ${
         focused
           ? "bg-accent/35 before:absolute before:inset-y-0 before:left-0 before:w-0.5 before:bg-primary"
           : "hover:bg-accent/15"
@@ -1540,13 +1598,12 @@ const UpdateTargetRow = React.memo(function UpdateTargetRow({
           <h3 className="type-card-title min-w-0 shrink truncate">
             {target.name}
           </h3>
-          {target.owner ? <UpdateTargetOwner owner={target.owner} /> : null}
-          <UpdateTargetVersion
-            activityStore={activityStore}
-            latestVersion={latestVersion}
-            releases={releases}
-            target={target}
-          />
+          {target.ownerName ? (
+            <UpdateTargetOwner
+              name={target.ownerName}
+              viewer={target.ownedByViewer}
+            />
+          ) : null}
         </div>
         <div
           aria-live="polite"
@@ -1554,6 +1611,7 @@ const UpdateTargetRow = React.memo(function UpdateTargetRow({
         >
           <UpdateTargetStatus
             activityStore={activityStore}
+            latestVersion={latestVersion}
             releases={releases}
             target={target}
           />
@@ -1587,17 +1645,33 @@ const UpdateTargetRow = React.memo(function UpdateTargetRow({
   )
 }, areUpdateTargetRowPropsEqual)
 
-function UpdateTargetOwner({ owner }: { owner: string }) {
+function UpdateTargetOwner({
+  name,
+  viewer,
+}: {
+  name: string
+  viewer: boolean
+}) {
+  const profileIds = React.useContext(UpdateOwnerProfileIdsContext)
   return (
     <Tooltip>
       <TooltipTrigger asChild>
-        <span className="type-meta flex max-w-40 min-w-0 shrink-0 cursor-default items-center gap-1 text-muted-foreground">
-          <UserRound aria-hidden="true" className="size-3 shrink-0" />
-          <span className="truncate">{owner}</span>
+        <span
+          className={`flex max-w-44 min-w-0 shrink-0 cursor-default items-center gap-1.5 text-[0.8125rem] font-medium ${
+            viewer ? "text-primary" : "text-foreground/85"
+          }`}
+        >
+          <UserAvatar
+            className="size-4 data-[size=sm]:size-4"
+            fallbackClassName="text-[0.5rem]"
+            name={name}
+            profileId={profileIds.get(minecraftUsernameKey(name))}
+          />
+          <span className="truncate">{viewer ? "You" : name}</span>
         </span>
       </TooltipTrigger>
       <TooltipContent>
-        {owner === "You" ? "You paired this Relay" : `Paired by ${owner}`}
+        {viewer ? "You paired this Relay" : `Paired by ${name}`}
       </TooltipContent>
     </Tooltip>
   )
@@ -1708,46 +1782,6 @@ function UpdateTargetIcon({ target }: { target: UpdateTarget }) {
   )
 }
 
-const UpdateTargetVersion = React.memo(function UpdateTargetVersion({
-  activityStore,
-  latestVersion,
-  releases,
-  target,
-}: {
-  activityStore: SystemUpdateActivityStore
-  latestVersion: string
-  releases: ReadonlyArray<PublicKilnRelease>
-  target: UpdateTarget
-}) {
-  const state = useTargetUpdateState(activityStore, target.key)
-  const latest = releaseVersionLabel(releases, latestVersion)
-  if (state === "done") {
-    return (
-      <span className="type-meta truncate font-mono text-foreground">
-        {latest}
-      </span>
-    )
-  }
-  const current = releaseVersionLabel(releases, target.currentVersion)
-  if (current === null) return null
-  const showTarget =
-    (state === "running" || targetHasUpdate(target, releases)) &&
-    target.currentVersion !== latestVersion
-  return (
-    <span className="type-meta flex min-w-0 items-center gap-1.5 font-mono whitespace-nowrap text-muted-foreground">
-      <span className={`truncate ${showTarget ? "" : "text-foreground"}`}>
-        {current}
-      </span>
-      {showTarget ? (
-        <>
-          <ArrowRight aria-label="to" className="size-3 shrink-0" />
-          <span className="truncate text-foreground">{latest}</span>
-        </>
-      ) : null}
-    </span>
-  )
-})
-
 type StatusTone = "failed" | "info" | "muted" | "warning"
 
 const statusToneClassName: Readonly<Record<StatusTone, string>> = {
@@ -1780,10 +1814,12 @@ function StatusText({
 
 const UpdateTargetStatus = React.memo(function UpdateTargetStatus({
   activityStore,
+  latestVersion,
   releases,
   target,
 }: {
   activityStore: SystemUpdateActivityStore
+  latestVersion: string
   releases: ReadonlyArray<PublicKilnRelease>
   target: UpdateTarget
 }) {
@@ -1800,8 +1836,39 @@ const UpdateTargetStatus = React.memo(function UpdateTargetStatus({
     )
   }
   if (failure) return <StatusText tone="failed">{failure}</StatusText>
-  const status = targetStatus(target, releases)
-  return <StatusText tone={status.tone}>{status.text}</StatusText>
+  const current = releaseVersionLabel(releases, target.currentVersion)
+  const next = targetHasUpdate(target, releases)
+    ? releaseVersionLabel(releases, latestVersion)
+    : null
+  const note = targetNote(target, releases)
+  return (
+    <>
+      {current ? (
+        <span className="type-meta flex shrink-0 items-center gap-1.5 font-mono whitespace-nowrap text-muted-foreground">
+          {current}
+          {next ? (
+            <>
+              <ArrowRight aria-label="to" className="size-3" />
+              <span className="text-foreground">{next}</span>
+            </>
+          ) : null}
+        </span>
+      ) : null}
+      {note ? (
+        <>
+          {current ? (
+            <span
+              aria-hidden="true"
+              className="type-meta text-muted-foreground"
+            >
+              ·
+            </span>
+          ) : null}
+          <StatusText tone={note.tone}>{note.text}</StatusText>
+        </>
+      ) : null}
+    </>
+  )
 })
 
 const UpdateTargetProgress = React.memo(function UpdateTargetProgress({
@@ -1918,7 +1985,11 @@ const UpdateTargetAction = React.memo(function UpdateTargetAction({
         disabled={hearthReloadRequired}
         size="sm"
         type="button"
-        variant="outline"
+        variant={
+          state === "failed" || targetHasUpdate(target, releases)
+            ? "default"
+            : "outline"
+        }
         onClick={update}
       >
         {state === "failed"
@@ -2005,7 +2076,7 @@ const UpdaterFooter = React.memo(function UpdaterFooter({
               <span className="text-destructive">{confirmation.error}</span>
             ) : pendingTargets.length === 1 &&
               pendingTargets[0]?.ownedByOther ? (
-              `Paired by ${pendingTargets[0].owner}. Game servers keep running.`
+              `Paired by ${pendingTargets[0].ownerName}. Game servers keep running.`
             ) : (
               "Game servers keep running."
             )}
@@ -2121,6 +2192,9 @@ const UpdaterFooter = React.memo(function UpdaterFooter({
               Mock failure
             </Button>
           </>
+        ) : null}
+        {checkFailed || import.meta.env.DEV ? (
+          <span aria-hidden="true" className="mx-1.5 h-6 w-px bg-border" />
         ) : null}
         <Button
           disabled={availableTargets.length === 0}
@@ -3094,7 +3168,10 @@ function withDevMockRelays(
       currentVersion: current,
       name: `relay-${["eu", "us", "ap"][index % 3]}-${String(index + 1).padStart(2, "0")}`,
       ownedByViewer: index % 4 === 0,
-      ownerName: ["Notch", "jeb_", "Dinnerbone"][index % 3] ?? null,
+      ownerName:
+        index % 4 === 0
+          ? "Kiln Developer"
+          : (["Notch", "jeb_", "Dinnerbone"][index % 3] ?? null),
       relayId,
     }
     // A third can update, a third can't, and a third are offline. Updating
@@ -3170,18 +3247,19 @@ function changelogMarkers(
 function UpdateListSkeleton() {
   return (
     <div aria-busy="true" aria-label="Checking for updates">
-      <UpdateSectionLabel>Hearth</UpdateSectionLabel>
-      <UpdateRowSkeleton />
-      <UpdateSectionLabel>Relays</UpdateSectionLabel>
+      <UpdateRowSkeleton first />
+      <p className="flex h-9 items-end border-t border-border/60 px-5 pb-2">
+        <Skeleton className="h-2.5 w-24" />
+      </p>
       <UpdateRowSkeleton />
       <UpdateRowSkeleton />
     </div>
   )
 }
 
-function UpdateRowSkeleton() {
+function UpdateRowSkeleton({ first = false }: { first?: boolean }) {
   return (
-    <div className={updateRowClassName}>
+    <div className={`${updateRowClassName} ${first ? "border-t-0" : ""}`}>
       <Skeleton className="size-8" />
       <div className="min-w-0">
         <div className="flex h-5 items-center">
@@ -3268,7 +3346,8 @@ function updateTargets(overview: UpdateOverview): Array<UpdateTarget> {
     eligible: overview.hearth?.eligible ?? false,
     key: "hearth",
     name: "Panel",
-    owner: null,
+    ownerName: null,
+    ownedByViewer: false,
     ownedByOther: false,
     reachable: true,
     reason:
@@ -3284,7 +3363,8 @@ function updateTargets(overview: UpdateOverview): Array<UpdateTarget> {
       eligible: relay.eligible,
       key: relayTargetKey(relay.relayId),
       name: relay.name,
-      owner: relay.ownedByViewer ? "You" : relay.ownerName,
+      ownerName: relay.ownerName,
+      ownedByViewer: relay.ownedByViewer,
       ownedByOther: !relay.ownedByViewer && relay.ownerName !== null,
       reachable: relay.reachable,
       reason: relay.reason,
@@ -3496,6 +3576,7 @@ function areUpdateTargetRowPropsEqual(
   next: UpdateTargetRowProps
 ): boolean {
   return (
+    previous.first === next.first &&
     previous.focused === next.focused &&
     previous.activityStore === next.activityStore &&
     previous.latestVersion === next.latestVersion &&
@@ -3516,7 +3597,8 @@ function areUpdateTargetsEqual(
     previous.eligible === next.eligible &&
     previous.key === next.key &&
     previous.name === next.name &&
-    previous.owner === next.owner &&
+    previous.ownerName === next.ownerName &&
+    previous.ownedByViewer === next.ownedByViewer &&
     previous.ownedByOther === next.ownedByOther &&
     previous.reachable === next.reachable &&
     previous.reason === next.reason &&
@@ -3546,10 +3628,11 @@ function targetHasUpdate(
   return target.eligible && (target.currentVersion === null || comparison === 1)
 }
 
-function targetStatus(
+// What the version alone doesn't say. The group says whether it's behind.
+function targetNote(
   target: UpdateTarget,
   releases: ReadonlyArray<PublicKilnRelease>
-): { text: string; tone: StatusTone } {
+): { text: string; tone: StatusTone } | null {
   if (!target.reachable) {
     return {
       text: target.reason ? `Offline · ${target.reason}` : "Offline",
@@ -3560,7 +3643,7 @@ function targetStatus(
     target.currentVersion,
     releases
   )
-  if (comparison === 0) return { text: "Up to date", tone: "muted" }
+  if (comparison === 0) return null
   if (comparison === -1) {
     return { text: "Newer than the latest release", tone: "info" }
   }
@@ -3573,26 +3656,7 @@ function targetStatus(
   if (target.currentVersion === null) {
     return { text: "Version unknown", tone: "warning" }
   }
-  if (comparison === 1) {
-    const behind = releasesBehind(releases, target.currentVersion)
-    return {
-      text:
-        behind === null
-          ? "Update available"
-          : `${behind} ${behind === 1 ? "release" : "releases"} behind`,
-      tone: "warning",
-    }
-  }
-  return { text: "Custom build", tone: "info" }
-}
-
-function releasesBehind(
-  releases: ReadonlyArray<PublicKilnRelease>,
-  version: string
-): number | null {
-  const release = findKilnRelease(releases, version)
-  const index = release ? releases.indexOf(release) : -1
-  return index > 0 ? index : null
+  return comparison === 1 ? null : { text: "Custom build", tone: "info" }
 }
 
 function compactReleaseName(name: string): string {
