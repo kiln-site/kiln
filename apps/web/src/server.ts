@@ -6,13 +6,14 @@ import { Effect } from "effect"
 
 import { hearthStreamHandler } from "./app-server-handler"
 import { migrateDatabase } from "./effect/migrations"
-import { disposeAppRuntime } from "./effect/runtime"
+import { disposeAppRuntime, runAppEffect } from "./effect/runtime"
 import { forkPromise } from "./effect/promise"
 import { startAccessInvitationDelivery } from "./lib/access-invitation-delivery"
 import { scheduleBackupCopyProcessing } from "./lib/backup-copy"
 import { wakePendingAuthorizationDelivery } from "./lib/authorization-delivery"
 import { scheduleInstancePostProvisionProcessing } from "./lib/instance-post-provision"
 import { startKilnUpdateNotifications } from "./lib/kiln-update-notifications"
+import { resumeSystemUpdates } from "./lib/relay-connection"
 import { scheduleTailscaleCleanupProcessing } from "./lib/tailscale-cleanup.server"
 import {
   initializeRelayFromEnvironment,
@@ -62,6 +63,14 @@ scheduleBackupCopyProcessing()
 scheduleInstancePostProvisionProcessing()
 scheduleTailscaleCleanupProcessing()
 startKilnUpdateNotifications()
+forkPromise(
+  () => runAppEffect("relay.update.resume", resumeSystemUpdates()),
+  (cause) => {
+    Sentry.captureException(cause, {
+      tags: { "kiln.operation": "relay.update.resume" },
+    })
+  }
+)
 forkPromise(wakePendingAuthorizationDelivery, (cause) => {
   Sentry.captureException(cause, {
     tags: { "kiln.operation": "authorization.delivery.recover" },

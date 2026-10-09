@@ -62,6 +62,7 @@ import { getAuthState } from "@/server/auth"
 import { getUpdateOverview } from "@/server/updates"
 import { getScheduleOptions, getSchedules } from "@/server/schedules"
 import type { RelayFleetSnapshot } from "@/lib/relay-fleet"
+import { withDatabaseRelayStatus } from "@/lib/database-relay-status"
 import {
   backupRunScopesEqual,
   backupRunsInputFromQueryKey,
@@ -385,10 +386,36 @@ export function managedDatabaseDirectoryQueryOptions() {
 export function managedDatabasesQueryOptions() {
   return queryOptions({
     queryKey: queryKeys.databases.list,
-    queryFn: () => getManagedDatabases(),
+    queryFn: ({ client }) => fetchManagedDatabases(client),
     refetchOnWindowFocus: "always",
     staleTime: 5_000,
   })
+}
+
+/**
+ * Inventory responses can resolve after newer Relay status events, so the
+ * live Relay status from the connection cache is reapplied to every result.
+ */
+export async function fetchManagedDatabases(queryClient: QueryClient) {
+  const overview = await getManagedDatabases()
+  const connection = queryClient.getQueryData<RelayConnection>(
+    queryKeys.relay.connection
+  )
+  if (
+    connection?.status !== "connected" &&
+    connection?.status !== "unreachable"
+  ) {
+    return overview
+  }
+  return withDatabaseRelayStatus(
+    overview,
+    new Map(
+      connection.relays.map((relay) => [
+        relay.id,
+        { status: relay.status, updating: relay.updating === true },
+      ])
+    )
+  )
 }
 
 export function managedDatabaseCredentialQueryOptions(

@@ -46,6 +46,7 @@ export type ServerListInstance = Pick<
   relayId: string
   relayName: string
   relayStatus: "connected" | "unreachable"
+  relayUpdating?: boolean
   routeId: string
 }
 

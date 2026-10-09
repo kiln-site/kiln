@@ -9,7 +9,10 @@ import {
   DatabaseNetworkPicker,
   useDatabaseNetworkToggle,
 } from "@/components/database/database-network"
-import type { ManagedDatabase } from "@/components/database/database-presentation"
+import {
+  databaseRelayAvailable,
+  type ManagedDatabase,
+} from "@/components/database/database-presentation"
 import { useDatabaseWorkspace } from "@/components/database/database-workspace-context"
 import { CopyMetaRow, InfoCard, InfoCardHeader } from "@/components/info-card"
 import { InstanceName } from "@/components/instance-name"
@@ -25,7 +28,7 @@ import { relayInstanceRouteIdentifier } from "@/lib/relay-selectors"
 export function DatabaseNetworkPage() {
   const { database } = useDatabaseWorkspace()
   const canWrite =
-    database.inventoryStatus === "available" &&
+    databaseRelayAvailable(database) &&
     database.permissions.includes("database.network.write")
 
   return (

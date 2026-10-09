@@ -1,9 +1,21 @@
 import { QueryClient } from "@tanstack/react-query"
 import { afterEach, describe, expect, it, vi } from "vite-plus/test"
 
+// Database inventory is fetched from Hearth; tests control when it resolves.
+vi.mock("@/server/databases", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/server/databases")>()),
+  getManagedDatabases: vi.fn(),
+}))
+
+import { getManagedDatabasesCollection } from "@/lib/collections/managed-databases"
 import { getRelayInstancesCollection } from "@/lib/collections/relay-instances"
 import { createAppClients, type AppRouterContext } from "@/lib/query-client"
-import { queryKeys, type RelayConnection } from "@/lib/query-options"
+import {
+  managedDatabasesQueryOptions,
+  queryKeys,
+  type RelayConnection,
+} from "@/lib/query-options"
+import { getManagedDatabases } from "@/server/databases"
 import type { RelayFleetSnapshot } from "@/lib/relay-fleet"
 import type {
   FleetInstance,
@@ -206,7 +218,9 @@ describe("realtime event application", () => {
       clients.queryClient.getQueryData<Array<FleetInstance>>(
         queryKeys.relay.instances
       )
-    ).toEqual([{ ...collectionAlpha, relayStatus: "unreachable" }])
+    ).toEqual([
+      { ...collectionAlpha, relayStatus: "unreachable", relayUpdating: false },
+    ])
   })
 
   it("updates a node without rebuilding instance data", () => {
@@ -227,6 +241,129 @@ describe("realtime event application", () => {
     )
     expect(result?.instances).toBe(current.instances)
     expect(result?.nodes).toEqual([updatedNode])
+  })
+
+  it("patches database rows from Relay status and refetches only when the Relay returns", async () => {
+    const app = createAppClients()
+    openClients.push(app)
+    const clients = {
+      instances: getRelayInstancesCollection(app.dbClient),
+      queryClient: app.queryClient,
+    }
+    const databases = getManagedDatabasesCollection(app.dbClient)
+    const database = {
+      id: "d".repeat(40),
+      inventoryStatus: "available",
+      observedState: "running",
+      relayId: alpha.relayId,
+      relayStatus: "connected",
+      relayUpdating: false,
+    }
+    clients.queryClient.setQueryData(queryKeys.databases.list, {
+      databases: [database],
+      relayErrors: [],
+      relays: [],
+    })
+    await databases.preload()
+    const refreshTopics = vi.fn().mockResolvedValue(undefined)
+
+    applyEvent(
+      clients,
+      {
+        epoch,
+        relayId: alpha.relayId,
+        sequence: 1,
+        status: "unreachable",
+        type: "relay.status",
+        updating: true,
+      },
+      refreshTopics
+    )
+    // The collection follows its backing query cache.
+    await vi.waitFor(() =>
+      expect(databases.toArray).toMatchObject([
+        { relayStatus: "unreachable", relayUpdating: true },
+      ])
+    )
+    expect(refreshTopics).not.toHaveBeenCalled()
+
+    applyEvent(
+      clients,
+      relayStatus(alpha.relayId, "connected", 2),
+      refreshTopics
+    )
+    await vi.waitFor(() =>
+      expect(databases.toArray).toMatchObject([
+        { relayStatus: "connected", relayUpdating: false },
+      ])
+    )
+    expect(refreshTopics).toHaveBeenCalledWith(["databases"], {
+      relayId: alpha.relayId,
+    })
+  })
+
+  it("keeps a newer Relay status when an older inventory response arrives", async () => {
+    const clients = fleet()
+    clients.queryClient.setQueryData(queryKeys.relay.connection, {
+      relay: { id: alpha.relayId, name: alpha.relayName },
+      relays: [
+        { id: alpha.relayId, name: alpha.relayName, status: "connected" },
+      ],
+      snapshot: snapshot(),
+      status: "connected",
+    })
+    type Overview = Awaited<ReturnType<typeof getManagedDatabases>>
+    let resolveResponse!: (overview: Overview) => void
+    vi.mocked(getManagedDatabases).mockReturnValueOnce(
+      new Promise<Overview>((resolve) => {
+        resolveResponse = resolve
+      })
+    )
+    const fetching = clients.queryClient.fetchQuery(
+      managedDatabasesQueryOptions()
+    )
+
+    applyEvent(clients, relayStatus(alpha.relayId, "unreachable"))
+    resolveResponse({
+      databases: [
+        {
+          id: "d".repeat(40),
+          inventoryStatus: "available",
+          observedState: "running",
+          relayId: alpha.relayId,
+          relayStatus: "connected",
+          relayUpdating: false,
+        },
+      ],
+      relayErrors: [],
+      relays: [],
+    } as unknown as Overview)
+
+    expect((await fetching).databases).toMatchObject([
+      { relayStatus: "unreachable" },
+    ])
+  })
+
+  it("refetches databases when a Relay whose inventory failed returns", () => {
+    const clients = fleet()
+    clients.queryClient.setQueryData(queryKeys.databases.list, {
+      databases: [],
+      relayErrors: [
+        {
+          message: "Relay database inventory is unavailable",
+          relayId: alpha.relayId,
+          relayName: alpha.relayName,
+        },
+      ],
+      relays: [],
+    })
+    const refreshTopics = vi.fn().mockResolvedValue(undefined)
+
+    applyEvent(clients, relayStatus(alpha.relayId, "connected"), refreshTopics)
+
+    expect(refreshTopics).toHaveBeenCalledWith(["databases"], {
+      relayId: alpha.relayId,
+    })
   })
 
   it("keeps Relay connection state and fleet rows in sync", () => {
@@ -259,8 +396,10 @@ describe("realtime event application", () => {
         queryKeys.relay.snapshot
       )
     ).toEqual({
-      instances: [{ ...alpha, relayStatus: "unreachable" }],
-      nodes: [{ ...node, relayStatus: "unreachable" }],
+      instances: [
+        { ...alpha, relayStatus: "unreachable", relayUpdating: false },
+      ],
+      nodes: [{ ...node, relayStatus: "unreachable", relayUpdating: false }],
     })
 
     applyEvent(clients, relayStatus(alpha.relayId, "connected", 2))
@@ -388,6 +527,7 @@ describe("authoritative Relay recovery", () => {
           id: alpha.relayId,
           name: alpha.relayName,
           status: "connected",
+          updating: false,
         },
       ],
       snapshot: snapshot(),
@@ -461,6 +601,7 @@ describe("authoritative Relay recovery", () => {
           id: alpha.relayId,
           name: alpha.relayName,
           status: "connected",
+          updating: false,
         },
       ],
       snapshot: snapshot(),
@@ -506,6 +647,7 @@ describe("authoritative Relay recovery", () => {
           id: alpha.relayId,
           name: alpha.relayName,
           status: "unreachable",
+          updating: false,
         },
       ],
       snapshot: unreachableSnapshot,

@@ -3,7 +3,9 @@ import * as React from "react"
 import { cn } from "@workspace/ui/lib/utils"
 
 export interface IdentityStatusPresentation {
+  detail?: string
   label: string
+  pulse?: boolean
   tone: "danger" | "info" | "neutral" | "success" | "warning"
 }
 
@@ -47,6 +49,7 @@ export const IdentityName = React.memo(function IdentityName({
           <IdentityStatus
             className={statusClassName}
             label={status.label}
+            pulse={status.pulse}
             tone={status.tone}
           />
         ) : null}
@@ -79,6 +82,7 @@ export const IdentityName = React.memo(function IdentityName({
 const IdentityStatus = React.memo(function IdentityStatus({
   className,
   label,
+  pulse,
   tone,
 }: IdentityStatusPresentation & { className?: string }) {
   return (
@@ -87,6 +91,7 @@ const IdentityStatus = React.memo(function IdentityStatus({
         className={cn(
           "absolute -right-0.5 -bottom-0.5 size-1.5 rounded-full ring-2 ring-background",
           statusToneClassName[tone],
+          pulse && "animate-pulse",
           className
         )}
         aria-hidden="true"

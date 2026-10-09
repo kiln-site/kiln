@@ -12,7 +12,12 @@ const DatabaseTerminal = React.lazy(async () => {
 export function DatabaseTerminalPage() {
   const { database } = useDatabaseWorkspace()
 
-  if (database.observedState !== "running") {
+  // Unavailable inventory only has a placeholder state; the terminal shows its
+  // own reconnecting state while the Relay is away.
+  if (
+    database.inventoryStatus !== "unavailable" &&
+    database.observedState !== "running"
+  ) {
     return (
       <div className="grid min-h-0 flex-1 place-items-center bg-card px-6 text-center">
         <div className="max-w-sm">

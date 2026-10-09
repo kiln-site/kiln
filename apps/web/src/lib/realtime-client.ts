@@ -17,7 +17,14 @@ import {
   type RelayConnection,
 } from "@/lib/query-options"
 import type { FleetInstance, RealtimeClientEvent } from "@/lib/realtime-events"
+import type { getManagedDatabases } from "@/server/databases"
+import {
+  databaseInventoryStale,
+  withDatabaseRelayStatus,
+} from "@/lib/database-relay-status"
 import type { RelayFleetSnapshot } from "@/lib/relay-fleet"
+
+type ManagedDatabaseOverview = Awaited<ReturnType<typeof getManagedDatabases>>
 
 export interface ApplyRealtimeEventInput {
   event: Exclude<RealtimeClientEvent, { type: "relay.invalidate" | "reset" }>
@@ -110,6 +117,14 @@ function applyRealtimeEvent(input: ApplyRealtimeEventInput): void {
     return
   }
   if (event.type === "relay.status") {
+    if (applyRelayStatusToDatabases(queryClient, event)) {
+      void (
+        refreshTopics?.(["databases"], { relayId: event.relayId }) ??
+        refreshHearthRealtimeTopics(queryClient, ["databases"], {
+          relayId: event.relayId,
+        })
+      )
+    }
     if (!instances.isReady()) {
       const snapshot = queryClient.getQueryData<RelayFleetSnapshot>(
         queryKeys.relay.snapshot
@@ -121,9 +136,8 @@ function applyRealtimeEvent(input: ApplyRealtimeEventInput): void {
       return
     }
     const changed = instances.toArray.flatMap((instance) =>
-      instance.relayId === event.relayId &&
-      instance.relayStatus !== event.status
-        ? [{ ...instance, relayStatus: event.status }]
+      relayStatusChanged(instance, event)
+        ? [withRelayStatus(instance, event)]
         : []
     )
     // Query Collection manual writes commit the collection and its backing
@@ -168,21 +182,72 @@ function applyRealtimeSnapshotEvent(
     return {
       ...snapshot,
       instances: snapshot.instances.map((instance) =>
-        instance.relayId === event.relayId &&
-        instance.relayStatus !== event.status
-          ? { ...instance, relayStatus: event.status }
+        relayStatusChanged(instance, event)
+          ? withRelayStatus(instance, event)
           : instance
       ),
       nodes: snapshot.nodes.map((node) =>
-        node.relayId === event.relayId && node.relayStatus !== event.status
-          ? { ...node, relayStatus: event.status }
-          : node
+        relayStatusChanged(node, event) ? withRelayStatus(node, event) : node
       ),
     }
   }
   return {
     ...snapshot,
     instances: applyRealtimeInstancesEvent(snapshot.instances, event),
+  }
+}
+
+type RelayStatusEvent = Extract<RealtimeClientEvent, { type: "relay.status" }>
+
+/**
+ * Patches Relay reachability onto cached database rows. Returns whether the
+ * Relay came back to inventory that may have changed while it was away.
+ */
+function applyRelayStatusToDatabases(
+  queryClient: QueryClient,
+  event: RelayStatusEvent
+): boolean {
+  let stale = false
+  queryClient.setQueryData<ManagedDatabaseOverview>(
+    queryKeys.databases.list,
+    (overview) => {
+      if (!overview) return overview
+      stale =
+        event.status === "connected" &&
+        databaseInventoryStale(overview, event.relayId)
+      return withDatabaseRelayStatus(
+        overview,
+        new Map([
+          [
+            event.relayId,
+            { status: event.status, updating: event.updating ?? false },
+          ],
+        ])
+      )
+    }
+  )
+  return stale
+}
+
+function relayStatusChanged(
+  item: { relayId: string; relayStatus: string; relayUpdating?: boolean },
+  event: RelayStatusEvent
+): boolean {
+  return (
+    item.relayId === event.relayId &&
+    (item.relayStatus !== event.status ||
+      (item.relayUpdating ?? false) !== (event.updating ?? false))
+  )
+}
+
+function withRelayStatus<T extends { relayUpdating?: boolean }>(
+  item: T,
+  event: RelayStatusEvent
+): T & { relayStatus: RelayStatusEvent["status"] } {
+  return {
+    ...item,
+    relayStatus: event.status,
+    relayUpdating: event.updating ?? false,
   }
 }
 
@@ -344,7 +409,9 @@ function applyRealtimeRelayStatus(
     return connection
   }
   const relays = connection.relays.map((relay) =>
-    relay.id === event.relayId ? { ...relay, status: event.status } : relay
+    relay.id === event.relayId
+      ? { ...relay, status: event.status, updating: event.updating ?? false }
+      : relay
   )
   return connectionWithRelayStatuses(connection, snapshot, relays)
 }

@@ -962,6 +962,7 @@ function selectSidebarRelayPickerItems(
       relayId: node.relayId,
       relayStatus: node.relayStatus,
       source: "fleet",
+      updating: node.relayUpdating,
     },
     key: sidebarPickerKey("relay", node.relayId, node.relayId),
     meta: `${node.arch} · ${kilnReleaseLabel(node.version)}`,

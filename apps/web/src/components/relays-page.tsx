@@ -95,10 +95,11 @@ import {
 import { IdentityName } from "@/components/identity-name"
 import { InstanceName } from "@/components/instance-name"
 import {
-  relayStatusPresentation as relayIdentityStatusPresentation,
-  type InstanceStatusPresentation,
+  relayStatusPresentation,
+  statusColumnWidth,
   type RelayIdentityStatus,
 } from "@/components/instance-name-presentation"
+import { StatusIndicator } from "@/components/status-indicator"
 import { UserAvatar } from "@/components/account-avatar"
 import { useInfraUpdateDialogStore } from "@/components/infra-update-dialog-provider"
 import { relaysCollectionOptions } from "@/lib/collections/relays"
@@ -202,18 +203,21 @@ type RelayRegistryTableItem = Pick<
 >
 
 type RelayReachability = "connected" | "paused" | "unreachable"
-const noRelayConnectionStates: ReadonlyArray<{
+interface RelayConnectionStatus {
   id: string
   status: RelayReachability
-}> = []
+  updating: boolean
+}
+const noRelayConnectionStates: ReadonlyArray<RelayConnectionStatus> = []
 
 interface RelayTableItem extends RelayRegistryTableItem {
   relayStatus: RelayIdentityStatus
+  updating: boolean
 }
 
 const relayTableItemCache = new WeakMap<
   RelayRegistryTableItem,
-  Map<RelayIdentityStatus, RelayTableItem>
+  Map<string, RelayTableItem>
 >()
 
 const relayTableColumnHelper = createDataTableColumnHelper<RelayTableItem>()
@@ -226,14 +230,8 @@ const relayTableSearchFields = [
   (relay: RelayTableItem) => relay.nodeVersion,
   (relay: RelayTableItem) => relay.ownerEmail,
   (relay: RelayTableItem) => relay.ownerName,
-  (relay: RelayTableItem) => relayStatusView(relay).label,
+  (relay: RelayTableItem) => relayStatusPresentation(relay).label,
 ] as const
-
-interface RelayStatusView {
-  enabled: boolean
-  lastError: string | null
-  relayStatus: RelayIdentityStatus
-}
 
 interface RelayPauseView {
   enabled: boolean
@@ -251,10 +249,14 @@ interface RelayEditView {
 
 function selectRelayConnectionStates(
   connection: RelayConnection
-): ReadonlyArray<{ id: string; status: RelayReachability }> {
+): ReadonlyArray<RelayConnectionStatus> {
   return connection.status === "unconfigured"
     ? noRelayConnectionStates
-    : connection.relays.map(({ id, status }) => ({ id, status }))
+    : connection.relays.map(({ id, status, updating }) => ({
+        id,
+        status,
+        updating: updating === true,
+      }))
 }
 
 function relayOwnerNamesKey(
@@ -282,22 +284,25 @@ function selectOwnerProfileIds(
 
 function projectRelayTableItems(
   relays: ReadonlyArray<RelayRegistryTableItem> | undefined,
-  relayStatuses: ReadonlyMap<string, RelayReachability>,
+  relayStatuses: ReadonlyMap<string, RelayConnectionStatus>,
   missingStatus: "checking" | "unknown"
 ): Array<RelayTableItem> | undefined {
   return relays?.map((relay) => {
+    const connection = relayStatuses.get(relay.id)
     const relayStatus = relay.enabled
-      ? (relayStatuses.get(relay.id) ?? missingStatus)
+      ? (connection?.status ?? missingStatus)
       : "paused"
+    const updating = relay.enabled && connection?.updating === true
     let statusCache = relayTableItemCache.get(relay)
     if (!statusCache) {
       statusCache = new Map()
       relayTableItemCache.set(relay, statusCache)
     }
-    const cached = statusCache.get(relayStatus)
+    const cacheKey = `${relayStatus}:${updating}`
+    const cached = statusCache.get(cacheKey)
     if (cached) return cached
-    const item = { ...relay, relayStatus }
-    statusCache.set(relayStatus, item)
+    const item = { ...relay, relayStatus, updating }
+    statusCache.set(cacheKey, item)
     return item
   })
 }
@@ -532,7 +537,7 @@ const FilteredRelayTable = React.memo(function FilteredRelayTable({
     [result.data]
   )
   const relayStatuses = React.useMemo(
-    () => new Map(connectionStates.map((relay) => [relay.id, relay.status])),
+    () => new Map(connectionStates.map((relay) => [relay.id, relay])),
     [connectionStates]
   )
   const tableItems = React.useMemo(
@@ -715,26 +720,25 @@ function RelayTable({
   }))
   const definition = React.useMemo(() => {
     const columns = relayTableColumnHelper.columns([
-      relayTableColumnHelper.accessor((relay) => relayStatusView(relay).label, {
-        id: "status",
-        header: () => <span className="sr-only sm:not-sr-only">Status</span>,
-        sortFn: "text",
-        cell: ({ row }) => <RelayStatus relay={row.original} />,
-        meta: dataTableColumnMeta(
-          {
-            width: {
-              base: "2.5rem",
-              sm: "6.5rem",
-              xl: "minmax(6.5rem,0.8fr)",
-            },
-          },
-          {
-            cellClassName: "px-2 sm:px-3",
-            headerClassName: "px-2 sm:px-3",
-            headerLabelClassName: "shrink-0 overflow-visible text-clip",
-          }
-        ),
-      }),
+      relayTableColumnHelper.accessor(
+        (relay) => relayStatusPresentation(relay).label,
+        {
+          id: "status",
+          header: () => <span className="sr-only sm:not-sr-only">Status</span>,
+          sortFn: "text",
+          cell: ({ row }) => (
+            <StatusIndicator status={relayStatusPresentation(row.original)} />
+          ),
+          meta: dataTableColumnMeta(
+            { width: { base: "2.5rem", sm: statusColumnWidth } },
+            {
+              cellClassName: "px-2 sm:px-3",
+              headerClassName: "px-2 sm:px-3",
+              headerLabelClassName: "shrink-0 overflow-visible text-clip",
+            }
+          ),
+        }
+      ),
       relayTableColumnHelper.display({
         id: "favorite",
         header: () => <span className="sr-only">Favorite</span>,
@@ -769,6 +773,7 @@ function RelayTable({
                   relayId: relay.id,
                   relayStatus: relay.relayStatus,
                   source: "registry",
+                  updating: relay.updating,
                 }}
                 live={false}
                 meta={
@@ -1284,57 +1289,6 @@ const RelayOwnerCell = React.memo(function RelayOwnerCell({
     />
   )
 })
-
-const RelayStatus = React.memo(function RelayStatus({
-  relay,
-}: {
-  relay: RelayStatusView
-}) {
-  const status = relayStatusView(relay)
-  const indicator = (
-    <span
-      aria-label={status.label}
-      className={`type-label inline-flex items-center gap-1.5 ${status.text}`}
-    >
-      <span className={`size-1.5 shrink-0 rounded-full ${status.dot}`} />
-      <span className="hidden sm:inline">{status.label}</span>
-    </span>
-  )
-  if (status.label !== "Unreachable" || !relay.lastError) return indicator
-  return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <span tabIndex={0} className="cursor-default outline-none">
-          {indicator}
-        </span>
-      </TooltipTrigger>
-      <TooltipContent side="bottom" sideOffset={6}>
-        <span className="max-w-64 text-muted-foreground">
-          {relay.lastError}
-        </span>
-      </TooltipContent>
-    </Tooltip>
-  )
-})
-
-function relayStatusView(relay: RelayStatusView) {
-  const status = relayIdentityStatusPresentation(relay)
-  return { ...status, ...relayStatusToneClasses[status.tone] }
-}
-
-const relayStatusToneClasses: Record<
-  InstanceStatusPresentation["tone"],
-  { dot: string; text: string }
-> = {
-  danger: { dot: "bg-destructive", text: "text-destructive" },
-  info: { dot: "bg-sky-400", text: "text-sky-300" },
-  neutral: {
-    dot: "bg-muted-foreground/50",
-    text: "text-muted-foreground",
-  },
-  success: { dot: "bg-emerald-400", text: "text-emerald-300" },
-  warning: { dot: "bg-amber-400", text: "text-amber-300" },
-}
 
 function EmptyRelayTable({
   searchActive,

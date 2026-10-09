@@ -1,6 +1,6 @@
 import { randomUUID, sign, verify } from "node:crypto"
 import * as Sentry from "@sentry/tanstackstart-react"
-import { Effect, Fiber, Option, Schema } from "effect"
+import { Clock, Effect, Fiber, Option, Schema } from "effect"
 import { WebSocket } from "ws"
 
 import {
@@ -42,6 +42,13 @@ import {
 } from "@/lib/relay-control-endpoint"
 import { RelayUnavailableError } from "@/effect/errors"
 import { forkAppEffect, runAppEffect } from "@/effect/runtime"
+import {
+  attachSystemUpdateOperationEffect,
+  forgetSystemUpdateEffect,
+  listSystemUpdatesEffect,
+  recordSystemUpdatesEffect,
+  type SystemUpdateRecord,
+} from "@/effect/system-update-operations"
 import { ensuringPromise, forkPromise } from "@/effect/promise"
 import type { RelayCredentials } from "@/lib/relay-registry"
 import { resolveSftpAuthorization } from "@/lib/sftp-authorization"
@@ -80,11 +87,29 @@ interface BrowserAuthorizationReadiness {
   resolve: (issuerGeneration: number) => void
 }
 
+interface TrackedSystemUpdate extends SystemUpdateRecord {
+  // The Relay's latest operation record, shared with the updates dialog.
+  latest: unknown
+  watcher?: Fiber.Fiber<void, unknown>
+}
+
 declare global {
   var kilnRelayConnections: Map<string, RelayConnection> | undefined
+  var kilnSystemUpdates: Map<string, TrackedSystemUpdate> | undefined
 }
 
 const connections = (globalThis.kilnRelayConnections ??= new Map())
+// Hearth is the only observer of an update: one tracker per update polls the
+// Relay's operation record until it settles or the deadline passes. A
+// reconnect alone proves nothing, since it may still be the Relay being
+// replaced. Updates are recorded in MySQL before they start so a replaced
+// Hearth resumes tracking.
+const systemUpdates = (globalThis.kilnSystemUpdates ??= new Map())
+const SYSTEM_UPDATE_WINDOW_MS = 15 * 60_000
+const SYSTEM_UPDATE_POLL_MS = 2_000
+const systemUpdateStatusSchema = z
+  .object({ status: z.enum(["failed", "running", "succeeded"]) })
+  .nullable()
 
 export async function relayRpc(
   relay: RelayEndpoint,
@@ -123,6 +148,184 @@ export async function relayRpc(
     })
   }
   return result
+}
+
+export function isRelayUpdating(relayId: string): boolean {
+  for (const update of systemUpdates.values()) {
+    if (update.component === "relay" && update.relayId === relayId) return true
+  }
+  return false
+}
+
+/**
+ * The tracker's latest record for an operation while its Relay is connected.
+ * During an outage callers ask the Relay themselves and observe the failure.
+ */
+export function trackedSystemUpdateStatus(
+  relayId: string,
+  operationId: string
+): unknown {
+  if (relayConnectionState(relayId).status !== "authenticated") return undefined
+  for (const update of systemUpdates.values()) {
+    if (update.relayId === relayId && update.operationId === operationId) {
+      return update.latest
+    }
+  }
+  return undefined
+}
+
+/**
+ * Records updates about to start on a Relay. Callers must not start them if
+ * this fails, or a Hearth replaced by the update could not resume tracking.
+ */
+export const recordSystemUpdates = Effect.fn("relay.update.record")(function* (
+  relayId: string,
+  components: ReadonlyArray<"hearth" | "relay">
+) {
+  const deadlineAt = (yield* Clock.currentTimeMillis) + SYSTEM_UPDATE_WINDOW_MS
+  const updates = components.map((component): SystemUpdateRecord => ({
+    component,
+    deadlineAt,
+    id: randomUUID(),
+    operationId: null,
+    relayId,
+  }))
+  yield* recordSystemUpdatesEffect(updates)
+  return updates
+})
+
+/** Starts tracking recorded updates with the operations the Relay started. */
+export const trackSystemUpdates = Effect.fn("relay.update.track")(function* (
+  updates: ReadonlyArray<SystemUpdateRecord>,
+  operations: ReadonlyArray<{
+    component: "hearth" | "relay"
+    id: string
+    status: string
+  }>
+) {
+  for (const update of updates) {
+    const operation = operations.find(
+      (candidate) =>
+        candidate.component === update.component &&
+        candidate.status === "running"
+    )
+    if (!operation) {
+      yield* forgetSystemUpdate(update.id)
+      continue
+    }
+    yield* attachSystemUpdateOperationEffect(update.id, operation.id).pipe(
+      Effect.catch((cause) =>
+        Effect.logWarning("Could not record a system update operation", {
+          cause,
+        })
+      )
+    )
+    yield* watchSystemUpdate({
+      ...update,
+      latest: operation,
+      operationId: operation.id,
+    })
+  }
+})
+
+/** Forgets recorded updates the Relay refused to start. */
+export const forgetSystemUpdates = (
+  updates: ReadonlyArray<SystemUpdateRecord>
+) =>
+  Effect.forEach(updates, (update) => forgetSystemUpdate(update.id), {
+    discard: true,
+  })
+
+/** Keeps following recorded updates whose start was never confirmed. */
+export const followUnconfirmedSystemUpdates = (
+  updates: ReadonlyArray<SystemUpdateRecord>
+) => Effect.forEach(updates, followSystemUpdate, { discard: true })
+
+export const resumeSystemUpdates = Effect.fn("relay.update.resume")(
+  function* () {
+    const now = yield* Clock.currentTimeMillis
+    for (const record of yield* listSystemUpdatesEffect()) {
+      if (record.deadlineAt <= now) yield* forgetSystemUpdate(record.id)
+      else yield* followSystemUpdate(record)
+    }
+  }
+)
+
+// Without an operation ID a Hearth update has nothing to show, and a Relay
+// update can only be shown until its deadline.
+const followSystemUpdate = (record: SystemUpdateRecord) =>
+  record.operationId === null && record.component === "hearth"
+    ? forgetSystemUpdate(record.id)
+    : watchSystemUpdate({ ...record, latest: undefined })
+
+const watchSystemUpdate = Effect.fnUntraced(function* (
+  update: TrackedSystemUpdate
+) {
+  if (systemUpdates.has(update.id)) return
+  systemUpdates.set(update.id, update)
+  if (update.component === "relay") publishRelayState(update.relayId)
+  update.watcher = yield* pollSystemUpdate(update).pipe(
+    Effect.timeoutOrElse({
+      duration: Math.max(
+        0,
+        update.deadlineAt - (yield* Clock.currentTimeMillis)
+      ),
+      orElse: () => Effect.void,
+    }),
+    Effect.andThen(settleSystemUpdate(update)),
+    Effect.forkDetach
+  )
+})
+
+const pollSystemUpdate = Effect.fnUntraced(function* (
+  update: TrackedSystemUpdate
+): Effect.fn.Return<void> {
+  const { operationId } = update
+  // An update recorded before Hearth was replaced may never have learned its
+  // operation; it can only end at its deadline.
+  if (operationId === null) return yield* Effect.never
+  while (true) {
+    yield* Effect.sleep(SYSTEM_UPDATE_POLL_MS)
+    // Poll through the current connection so endpoint edits are respected.
+    const connection = connections.get(update.relayId)
+    if (connection?.state.status !== "authenticated") continue
+    const record = yield* connection
+      .request("relay.update.status", { operationId }, 5_000)
+      .pipe(Effect.option)
+    if (Option.isNone(record)) continue
+    update.latest = record.value
+    const status = systemUpdateStatusSchema.safeParse(record.value)
+    if (status.success && status.data?.status !== "running") return
+  }
+})
+
+const settleSystemUpdate = Effect.fnUntraced(function* (
+  update: TrackedSystemUpdate
+) {
+  // Forget the record before announcing, so anyone who sees the update end
+  // can rely on a replacement Hearth not resuming it.
+  yield* forgetSystemUpdate(update.id)
+  systemUpdates.delete(update.id)
+  if (update.component === "relay") publishRelayState(update.relayId)
+})
+
+const forgetSystemUpdate = (id: string) =>
+  forgetSystemUpdateEffect(id).pipe(
+    Effect.catch((cause) =>
+      Effect.logWarning("Could not forget a system update", { cause })
+    )
+  )
+
+function publishRelayState(relayId: string): void {
+  publishRealtimeChange({
+    relayId,
+    status:
+      relayConnectionState(relayId).status === "authenticated"
+        ? "connected"
+        : "unreachable",
+    type: "relay.state",
+    updating: isRelayUpdating(relayId),
+  })
 }
 
 export function relayConnectionState(relayId: string): RelayConnectionState {
@@ -1036,6 +1239,7 @@ class RelayConnection {
         relayId: this.#relay.id,
         status: isReachable ? "connected" : "unreachable",
         type: "relay.state",
+        updating: isRelayUpdating(this.#relay.id),
       })
     }
     if (becameAuthenticated) {

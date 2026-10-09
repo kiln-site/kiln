@@ -22,6 +22,7 @@ import { Input } from "@workspace/ui/components/input"
 import { showToast } from "@workspace/ui/components/sonner"
 
 import {
+  databaseRelayAvailable,
   DATABASE_DUMP_LIMIT_BYTES,
   downloadTextFile,
   showDatabaseOperationError,
@@ -129,7 +130,7 @@ export function CredentialsDialog({
           <p className="text-xs text-destructive">{rotate.error.message}</p>
         ) : null}
         <DialogFooter className="sm:justify-between">
-          {database.inventoryStatus === "available" &&
+          {databaseRelayAvailable(database) &&
           database.permissions.includes("database.credentials.rotate") ? (
             <Button
               disabled={rotate.isPending}

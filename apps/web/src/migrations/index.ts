@@ -5,6 +5,7 @@ import { utcInstants } from "./0002_utc_instants"
 import { revokeTrustedDevices } from "./0003_revoke_trusted_devices"
 import { instanceFavorites } from "./0004_instance_favorites"
 import { notifications } from "./0005_notifications"
+import { systemUpdateOperations } from "./0006_system_update_operations"
 
 // Append new migrations with the next id. Never edit or reorder applied ones.
 export const migrations: ReadonlyArray<Migration> = [
@@ -13,4 +14,5 @@ export const migrations: ReadonlyArray<Migration> = [
   revokeTrustedDevices,
   instanceFavorites,
   notifications,
+  systemUpdateOperations,
 ]

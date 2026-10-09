@@ -11,6 +11,7 @@ export const fleetInstanceSchema = relayInstanceSchema.extend({
   relayId: relayIdSchema,
   relayName: z.string().min(1),
   relayStatus: z.enum(["connected", "unreachable"]),
+  relayUpdating: z.boolean().optional(),
   routeId: z.string().min(1),
 })
 
@@ -18,6 +19,7 @@ export const fleetNodeSchema = relayNodeSchema.extend({
   relayId: relayIdSchema,
   relayName: z.string().min(1),
   relayStatus: z.enum(["connected", "unreachable"]),
+  relayUpdating: z.boolean().optional(),
 })
 
 const sequencedEventSchema = z.object({
@@ -65,6 +67,7 @@ export const realtimeClientEventSchema = z.discriminatedUnion("type", [
     relayId: relayIdSchema,
     status: z.enum(["connected", "unreachable"]),
     type: z.literal("relay.status"),
+    updating: z.boolean().optional(),
   }),
   sequencedEventSchema.extend({
     scope: hearthScopeSchema.optional(),
@@ -82,6 +85,8 @@ export function realtimeEventRefreshesHearth(
 ): boolean {
   return (
     event.type === "collections.invalidate" ||
+    // Database inventory follows Relay reachability and update state.
+    event.type === "relay.status" ||
     (event.type === "relay.invalidate" && event.topics !== undefined)
   )
 }

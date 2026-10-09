@@ -7,6 +7,7 @@ export interface FleetRelayInstance extends RelayInstance {
   relayId: string
   relayName: string
   relayStatus: RelayReachability
+  relayUpdating?: boolean
   routeId: string
 }
 
@@ -14,6 +15,7 @@ export interface FleetRelayNode extends RelayNode {
   relayId: string
   relayName: string
   relayStatus: RelayReachability
+  relayUpdating?: boolean
 }
 
 export interface RelayFleetSnapshot {

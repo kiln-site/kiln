@@ -32,12 +32,13 @@ import {
   useDatabaseExport,
 } from "@/components/database/database-dialogs"
 import {
-  DatabaseStatus,
+  databaseRelayAvailable,
   databaseStatusPresentation,
   engineBadgeClasses,
   engineLabel,
   type ManagedDatabase,
 } from "@/components/database/database-presentation"
+import { StatusIndicator } from "@/components/status-indicator"
 import { useDatabaseWorkspace } from "@/components/database/database-workspace-context"
 import {
   CopyMetaRow,
@@ -63,7 +64,7 @@ export function DatabaseInfoPage() {
   const { database, routeId } = useDatabaseWorkspace()
   const can = (permission: ManagedDatabase["permissions"][number]) =>
     database.permissions.includes(permission)
-  const available = database.inventoryStatus === "available"
+  const available = databaseRelayAvailable(database)
 
   return (
     <section className="min-h-0 flex-1 overflow-y-auto bg-card">
@@ -141,12 +142,7 @@ export function DatabaseInfoPage() {
             icon={<Network />}
             title="Relay placement"
             action={
-              <DatabaseStatus
-                status={databaseStatusPresentation(
-                  database.inventoryStatus,
-                  database.observedState
-                )}
-              />
+              <StatusIndicator status={databaseStatusPresentation(database)} />
             }
           />
           <div className="grid sm:grid-cols-2 lg:grid-cols-4">

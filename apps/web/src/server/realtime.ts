@@ -16,7 +16,7 @@ import {
 } from "@/lib/access-control"
 import { grantHasPermission } from "@/lib/permissions"
 import { hearthAudienceAllows } from "@/lib/hearth-realtime-topics"
-import { relayConnectionState } from "@/lib/relay-connection"
+import { isRelayUpdating, relayConnectionState } from "@/lib/relay-connection"
 import {
   allocateRealtimeCursor,
   classifyRealtimeEvent,
@@ -245,6 +245,7 @@ export async function openAuthorizedRealtimeStream(input: {
         sequence: event.sequence,
         status: event.status,
         type: "relay.status",
+        updating: event.updating,
       })
       return
     }
@@ -539,6 +540,7 @@ function fleetInstance(
     relayId: relay.id,
     relayName: relay.name,
     relayStatus: reachability(relay.id),
+    relayUpdating: isRelayUpdating(relay.id),
     routeId: relayInstanceRouteId(relay.id, instance.shortId),
   }
 }
@@ -549,6 +551,7 @@ function fleetNode(node: RelayNode, relay: PersistedRelay): FleetNode {
     relayId: relay.id,
     relayName: relay.name,
     relayStatus: reachability(relay.id),
+    relayUpdating: isRelayUpdating(relay.id),
   }
 }
 

@@ -23,12 +23,14 @@ describe("realtime source", () => {
       relayId: "relay-a",
       status: "connected",
       type: "relay.state",
+      updating: false,
     })
     unsubscribe()
     publishRealtimeChange({
       relayId: "relay-a",
       status: "unreachable",
       type: "relay.state",
+      updating: false,
     })
 
     expect(received).toEqual([first.sequence])
@@ -130,5 +132,11 @@ describe("realtime source", () => {
         type: "relay.snapshot.delta",
       })
     ).toBe(false)
+  })
+
+  it("refreshes Relay-backed database inventory when a Relay state change is lost", () => {
+    expect(realtimeSourceEventRefreshesHearth({ type: "relay.state" })).toBe(
+      true
+    )
   })
 })

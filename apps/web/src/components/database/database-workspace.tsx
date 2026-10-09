@@ -6,6 +6,7 @@ import { Database, LoaderCircle } from "lucide-react"
 import { Button } from "@workspace/ui/components/button"
 
 import {
+  databaseRelayAvailable,
   engineLabel,
   showDatabaseOperationError,
   type ManagedDatabaseOverview,
@@ -269,7 +270,7 @@ function DatabasePowerControls({
       noun="database"
       powerPermissions={powerPermissions}
       target={{ name: database.name, observedState: database.observedState }}
-      relayConnected={database.inventoryStatus === "available"}
+      relayConnected={databaseRelayAvailable(database)}
       onAction={handleAction}
     />
   )

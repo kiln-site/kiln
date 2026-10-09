@@ -30,6 +30,7 @@ vi.mock("@/lib/relay-registry", () => ({
 }))
 
 vi.mock("@/lib/relay-connection", () => ({
+  isRelayUpdating: () => false,
   relayConnectionState: () => ({
     lastError: null,
     status: "disconnected",
@@ -220,6 +221,7 @@ describe("authorized realtime stream", () => {
         // A later delivered event bounds the read without timers or absent-frame polling.
         publishRealtimeChange({
           type: "relay.state",
+          updating: false,
           relayId: "relay-one",
           status: "connected",
         })
