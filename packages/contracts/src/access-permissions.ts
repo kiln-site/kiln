@@ -81,6 +81,7 @@ export const accessPermissions = [
   "database.data.read",
   "database.data.write",
   "database.terminal",
+  "database.logs.read",
 ] as const
 export type AccessPermission = (typeof accessPermissions)[number]
 Object.freeze(accessPermissions)
@@ -226,6 +227,7 @@ const permissionPlacement: Record<
   "database.data.read": ["database.data", "database"],
   "database.data.write": ["database.data", "database"],
   "database.terminal": ["database.terminal", "database"],
+  "database.logs.read": ["database.logs", "database"],
 }
 
 const familyScopes: Record<PermissionFamily, readonly PermissionScopeType[]> = {
@@ -452,6 +454,10 @@ const permissionCopy: Record<
     label: "Use database terminal",
     description: "Open the database's command-line client, signed in.",
   },
+  "database.logs.read": {
+    label: "View database logs",
+    description: "Watch the database container's live output.",
+  },
   "backup.read": {
     label: "View backups",
     description: "See available backups and their status.",
@@ -577,6 +583,7 @@ const blockLabels: Record<string, string> = {
   "database.dump": "Database data",
   "database.data": "Database tables",
   "database.terminal": "Database terminal",
+  "database.logs": "Database logs",
   "resource.deletion": "Resource deletion",
   "resource.creation": "Resource creation",
   "relay.configuration": "Relay configuration",
@@ -775,6 +782,7 @@ export const builtinPermissionPresets: readonly PermissionPreset[] =
           "overview.all",
           "instance.console.read",
           "instance.configuration.read",
+          "database.logs.read",
           "instance.network.read",
           "database.network.read",
           "backup.read",
@@ -800,6 +808,7 @@ export const builtinPermissionPresets: readonly PermissionPreset[] =
           "instance.network.write",
           "database.power",
           "database.network.write",
+          "database.logs.read",
           "backup.all",
           "schedule.all",
         ].map((key) =>

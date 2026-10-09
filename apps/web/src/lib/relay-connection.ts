@@ -31,6 +31,7 @@ import type {
   RelaySnapshotDelta,
 } from "@workspace/contracts"
 import {
+  hearthDatabaseLogsOutputSchema,
   hearthDatabaseTerminalOutputSchema,
   relayTailscaleStackIdSchema,
 } from "@workspace/contracts"
@@ -1168,6 +1169,25 @@ class RelayConnection {
         yield* sendSocketEffect(socket, {
           id: randomUUID(),
           payload: deliverDatabaseTerminalOutput(this.#relay.id, output),
+          replyTo: request.id,
+          type: "response",
+          v: 1,
+        })
+      })
+    }
+    if (request.operation === "hearth.database.logs.output") {
+      return Effect.gen({ self: this }, function* () {
+        const output = yield* Effect.try({
+          try: () => hearthDatabaseLogsOutputSchema.parse(request.payload),
+          catch: asError,
+        })
+        const { deliverDatabaseLogsOutput } = yield* Effect.tryPromise({
+          try: () => import("@/server/database-logs-hub"),
+          catch: asError,
+        })
+        yield* sendSocketEffect(socket, {
+          id: randomUUID(),
+          payload: deliverDatabaseLogsOutput(this.#relay.id, output),
           replyTo: request.id,
           type: "response",
           v: 1,

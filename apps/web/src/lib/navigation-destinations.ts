@@ -14,6 +14,7 @@ import {
   RadioTower,
   RefreshCw,
   Rocket,
+  ScrollText,
   Server,
   SlidersHorizontal,
   Table2,
@@ -286,7 +287,12 @@ export function canAccessInstancePermission(
   )
 }
 
-export type DatabaseDestinationId = "info" | "network" | "terminal" | "viewer"
+export type DatabaseDestinationId =
+  | "info"
+  | "logs"
+  | "network"
+  | "terminal"
+  | "viewer"
 
 export interface DatabaseDestination extends NavigationDestination {
   // Engines the destination applies to; every engine when omitted.
@@ -303,6 +309,14 @@ export const databaseDestinations = [
     label: "Terminal",
     permission: "database.terminal",
     to: "/db/$databaseId/terminal",
+  },
+  {
+    icon: ScrollText,
+    id: "logs",
+    keywords: ["output", "container", "errors"],
+    label: "Logs",
+    permission: "database.logs.read",
+    to: "/db/$databaseId/logs",
   },
   {
     engines: ["mysql", "mariadb", "postgres"],

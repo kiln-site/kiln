@@ -164,6 +164,12 @@ interface ConsoleTarget {
   container: DockerInspect
 }
 
+interface LogTarget {
+  component: ConsoleTarget["component"]
+  id: string
+  since: Array<string>
+}
+
 export interface DockerConsoleSession {
   readonly history: (
     limit?: number,
@@ -1171,7 +1177,15 @@ export class DockerDriver {
         ),
       instance,
       stream: (signal, limit = 200) =>
-        this.#streamConsoleTargets(targets, signal, limit),
+        this.#streamConsoleTargets(
+          targets.map((target) => ({
+            component: target.component,
+            id: target.container.Id,
+            since: dockerLogSinceArguments(target.container.State.StartedAt),
+          })),
+          signal,
+          limit
+        ),
     }
   }
 
@@ -1293,8 +1307,22 @@ export class DockerDriver {
     })()
   }
 
+  // Follows one container's last `limit` lines and its output after,
+  // across restarts. Ends when the container stops.
+  streamContainerLogs(
+    containerId: string,
+    signal: AbortSignal,
+    limit: number
+  ): AsyncIterable<RelayConsoleLine> {
+    return this.#streamConsoleTargets(
+      [{ component: null, id: containerId, since: [] }],
+      signal,
+      limit
+    )
+  }
+
   #streamConsoleTargets(
-    targets: ReadonlyArray<ConsoleTarget>,
+    targets: ReadonlyArray<LogTarget>,
     signal: AbortSignal,
     limit: number
   ): AsyncIterable<RelayConsoleLine> {
@@ -1330,19 +1358,16 @@ export class DockerDriver {
             let stdoutBuffer = ""
             let stderrBuffer = ""
             let settled = false
-            const targetSince = dockerLogSinceArguments(
-              target.container.State.StartedAt
-            )
             const child = spawn(
               "docker",
               [
                 "logs",
                 "--follow",
                 "--timestamps",
-                ...targetSince,
+                ...target.since,
                 "--tail",
                 String(Math.ceil(boundedLimit / targets.length)),
-                target.container.Id,
+                target.id,
               ],
               { stdio: ["ignore", "pipe", "pipe"] }
             )

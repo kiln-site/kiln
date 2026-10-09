@@ -19,6 +19,7 @@ export const relayAuthenticationWindowMs = 10_000
 export const relayBrowserCapabilityV2Feature = "browser-capability-v2"
 export const relayBrowserLeaseRenewalV1Feature = "browser-lease-renewal-v1"
 export const relayFileRequestReplayV1Feature = "file-request-replay-v1"
+export const relayDatabaseLogsV1Feature = "database-logs-v1"
 export const relayBrowserAuthorizationReviseMaxItems = 256
 
 export const relayControlOperations = [
@@ -64,6 +65,9 @@ export const relayControlOperations = [
   "database.terminal.write",
   "database.terminal.claim",
   "database.terminal.restart",
+  "database.logs.attach",
+  "database.logs.heartbeat",
+  "database.logs.detach",
   "backup.task.enqueue",
   "backup.task.cancel",
   "backup.task.get",
@@ -106,6 +110,7 @@ export const relayControlOperations = [
   "instance.network.databases.remove",
   "hearth.tailscale.instance.detach",
   "hearth.database.terminal.output",
+  "hearth.database.logs.output",
   "sftp.authorization.resolve",
 ] as const
 
