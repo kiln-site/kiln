@@ -444,6 +444,12 @@ export class FakeDocker {
     this.#inFlight += 1
     try {
       const stdout = await this.#dispatch([...arguments_], options, input)
+      // As execFile, which `command` runs on, fails on more output.
+      if (Buffer.byteLength(stdout) > (options.maxBuffer ?? 4 * 1024 * 1024)) {
+        throw new Error(
+          `Command failed: ${commandLine}\nstdout maxBuffer length exceeded`
+        )
+      }
       return { stderr: "", stdout }
     } catch (cause) {
       if (cause instanceof DockerFailure) {
@@ -1538,6 +1544,22 @@ export function commandWithInput(
   input: string | undefined
 ): Promise<CommandResult> {
   return fakeDocker.run(executable, arguments_, {}, input)
+}
+
+export async function commandLines(
+  executable: string,
+  arguments_: ReadonlyArray<string>,
+  onLine: (line: string) => void,
+  options: { signal?: AbortSignal; timeout?: number } = {}
+): Promise<void> {
+  const result = await fakeDocker.run(executable, arguments_, {
+    maxBuffer: Number.POSITIVE_INFINITY,
+    signal: options.signal,
+    timeout: options.timeout,
+  })
+  for (const output of [result.stdout, result.stderr]) {
+    for (const line of output.split("\n")) if (line) onLine(line)
+  }
 }
 
 // ------------------------------------------------------------------ parsing

@@ -13,7 +13,7 @@ import {
   type DatabaseConnections,
   type DatabaseConnectionSnapshot,
 } from "./database-connections.js"
-import { command, commandEffect } from "./command.js"
+import { command, commandEffect, commandLines } from "./command.js"
 import type { CommandResult } from "./command.js"
 import type { BrickCatalog } from "./bricks.js"
 import { directoryApparentSizeEffect } from "./disk-usage.js"
@@ -411,6 +411,9 @@ const CONSOLE_TTY_COLUMNS = 120
 const CONSOLE_TTY_ROWS = 40
 const MAX_SHARED_CONSOLE_BYTES = 10 * 1024 * 1024
 export const MAX_CONSOLE_HISTORY_LINES = 5_000
+// Console history kept from one read, in characters; the newest output is
+// kept and the history says it was truncated.
+const MAX_CONSOLE_HISTORY_CHARACTERS = 16 * 1024 * 1024
 const STARTUP_READINESS_LOG_LINES = 1_000
 const RESOURCE_HISTORY_WINDOW_MS = 6 * 60_000
 const DISK_USAGE_REFRESH_MS = 60_000
@@ -1232,34 +1235,41 @@ export class DockerDriver {
       MAX_CONSOLE_HISTORY_LINES
     )
     const startedAt = consoleStartedAt(container)
+    let cut = false
     const results = await Promise.all(
       targets.map(async (target) => {
-        const targetSince = dockerLogSinceArguments(
-          target.container.State.StartedAt
+        // Read as it arrives, keeping the newest output within the limit,
+        // rather than buffering output of any size.
+        const kept: Array<{ characters: number; line: ParsedConsoleLine }> = []
+        let characters = 0
+        const limit = MAX_CONSOLE_HISTORY_CHARACTERS / targets.length
+        await commandLines(
+          "docker",
+          [
+            "logs",
+            "--timestamps",
+            ...dockerLogSinceArguments(target.container.State.StartedAt),
+            "--tail",
+            String(boundedLimit),
+            target.container.Id,
+          ],
+          (raw) => {
+            const line = parseConsoleLine(raw)
+            if (!line) return
+            kept.push({ characters: raw.length, line })
+            characters += raw.length
+            while (characters > limit && kept.length > 1) {
+              characters -= kept.shift()!.characters
+              cut = true
+            }
+          },
+          { signal, timeout: 15_000 }
         )
-        return {
-          target,
-          result: await command(
-            "docker",
-            [
-              "logs",
-              "--timestamps",
-              ...targetSince,
-              "--tail",
-              String(boundedLimit),
-              target.container.Id,
-            ],
-            { signal, timeout: 15_000 }
-          ),
-        }
+        return kept.map(({ line }) => prefixConsoleLine(line, target.component))
       })
     )
     const rawLines = results
-      .flatMap(({ result, target }) =>
-        parseConsoleOutput(result).map((line) =>
-          prefixConsoleLine(line, target.component)
-        )
-      )
+      .flat()
       .sort(compareConsoleLines)
       .slice(-boundedLimit)
     const occurrences = new Map<string, number>()
@@ -1276,7 +1286,7 @@ export class DockerDriver {
         occurrences.set(hash, occurrence + 1)
         return { ...line, id: `${hash}-${occurrence}` }
       }),
-      truncated: rawLines.length >= boundedLimit,
+      truncated: cut || rawLines.length >= boundedLimit,
     }
   }
 

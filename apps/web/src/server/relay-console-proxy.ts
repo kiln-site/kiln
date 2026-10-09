@@ -29,6 +29,13 @@ import {
 
 const MAX_INBOX_BYTES = 2 * 1024 * 1024
 const MAX_INBOX_MESSAGES = 256
+// Reading from the Relay pauses once the page falls this far behind and
+// resumes once it catches up, so the Relay holds back its history instead
+// of either side giving up on the other.
+const PAUSE_INBOX_BYTES = MAX_INBOX_BYTES / 2
+const PAUSE_INBOX_MESSAGES = MAX_INBOX_MESSAGES / 2
+const RESUME_INBOX_BYTES = MAX_INBOX_BYTES / 8
+const RESUME_INBOX_MESSAGES = MAX_INBOX_MESSAGES / 8
 const AUTHENTICATION_TIMEOUT_MS = 10_000
 
 export async function* openHearthRelayConsoleStream(input: {
@@ -324,6 +331,13 @@ function createSocketInbox(socket: WebSocket, signal: AbortSignal) {
           }
           messages.push({ bytes: data.byteLength, value: message })
           queuedBytes += data.byteLength
+          if (
+            !socket.isPaused &&
+            (queuedBytes >= PAUSE_INBOX_BYTES ||
+              messages.length >= PAUSE_INBOX_MESSAGES)
+          ) {
+            socket.pause()
+          }
         }
       },
     })
@@ -358,6 +372,13 @@ function createSocketInbox(socket: WebSocket, signal: AbortSignal) {
       const queued = messages.shift()
       if (queued) {
         queuedBytes -= queued.bytes
+        if (
+          socket.isPaused &&
+          queuedBytes <= RESUME_INBOX_BYTES &&
+          messages.length <= RESUME_INBOX_MESSAGES
+        ) {
+          socket.resume()
+        }
         return Promise.resolve(queued.value)
       }
       if (terminalError) return Promise.reject(terminalError)

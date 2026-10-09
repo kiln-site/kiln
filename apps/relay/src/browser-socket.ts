@@ -217,7 +217,9 @@ export function attachBrowserSocket(
   const hubs = new ConsoleHubRegistry(
     options.subscribeSnapshots,
     (socket, encoded, kind, action) =>
-      outboxes.get(socket)?.send(encoded, kind, action) ?? false
+      outboxes.get(socket)?.send(encoded, kind, action) ?? false,
+    (socket, bytes) =>
+      outboxes.get(socket)?.whenRoomFor(bytes) ?? Promise.resolve(false)
   )
   const resourceHubs = new ResourceHubRegistry(
     options.docker,
@@ -2019,10 +2021,15 @@ type BrowserDelivery = (
   action?: string
 ) => boolean
 
+// Resolves once a socket's outbox has room for `bytes` more, or false once
+// the socket is gone.
+type BrowserRoom = (socket: WebSocket, bytes: number) => Promise<boolean>
+
 // One hub per resource, keyed by its kind and ID, shared by every socket
 // following that resource's console.
 class ConsoleHubRegistry {
   readonly #deliver: BrowserDelivery
+  readonly #room: BrowserRoom
   readonly #hubs = new Map<string, ConsoleHub>()
   readonly #pendingHubs = new Map<string, Fiber.Fiber<ConsoleHub, Error>>()
   readonly #subscribeSnapshots: BrowserSocketOptions["subscribeSnapshots"]
@@ -2030,10 +2037,12 @@ class ConsoleHubRegistry {
 
   constructor(
     subscribeSnapshots: BrowserSocketOptions["subscribeSnapshots"],
-    deliver: BrowserDelivery
+    deliver: BrowserDelivery,
+    room: BrowserRoom
   ) {
     this.#subscribeSnapshots = subscribeSnapshots
     this.#deliver = deliver
+    this.#room = room
   }
 
   subscribe(
@@ -2124,6 +2133,7 @@ class ConsoleHubRegistry {
           session,
           this.#subscribeSnapshots,
           this.#deliver,
+          this.#room,
           () => {
             if (hub.subscriberCount === 0) this.#hubs.delete(key)
           }
@@ -2230,6 +2240,7 @@ class ResourceHubRegistry {
 class ConsoleHub {
   readonly #backgroundFibers = new Set<Fiber.Fiber<void, never>>()
   readonly #deliver: BrowserDelivery
+  readonly #room: BrowserRoom
   // Sent as `instanceId` in console frames, whatever the resource's kind.
   readonly #resourceId: string
   readonly #source: ConsoleSource
@@ -2254,9 +2265,11 @@ class ConsoleHub {
     session: DockerConsoleSession,
     subscribeSnapshots: BrowserSocketOptions["subscribeSnapshots"],
     deliver: BrowserDelivery,
+    room: BrowserRoom,
     onEmpty: () => void
   ) {
     this.#deliver = deliver
+    this.#room = room
     this.#resourceId = resourceId
     this.#source = source
     this.#nextSession = session
@@ -2656,11 +2669,21 @@ class ConsoleHub {
       lifecycle: this.#sessionLifecycle ?? [],
       lines,
       truncated: this.#truncated,
-    })
-    for (const encoded of frames) {
-      for (const socket of subscribers) {
-        this.#deliver(socket, encoded, "console", this.#source.readAction)
-      }
+    }).map((encoded) => ({ bytes: Buffer.byteLength(encoded), encoded }))
+    // History can be larger than a socket's outbox, so each socket gets it a
+    // frame at a time as its outbox empties. Frames name their session, so
+    // pages ignore any that arrive after the session changed.
+    for (const socket of subscribers) {
+      this.#forkBackground(
+        Effect.promise(async () => {
+          for (const { bytes, encoded } of frames) {
+            if (!(await this.#room(socket, bytes))) return
+            if (this.#closed || !this.#subscribers.has(socket)) return
+            this.#deliver(socket, encoded, "console", this.#source.readAction)
+          }
+        }),
+        "browser.console.history"
+      )
     }
   }
 }

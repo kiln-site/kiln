@@ -239,6 +239,32 @@ describe("relay browser socket integration", () => {
     })
   })
 
+  it("delivers a history larger than the socket's outbox", async () => {
+    const relay = await startRelay()
+    const { messages, socket } = await authenticate(relay, {
+      instanceId: largeHistoryId,
+    })
+    let closedEarly = false
+    socket.once("close", () => {
+      closedEarly = true
+    })
+
+    socket.send(
+      JSON.stringify({
+        instanceId: largeHistoryId,
+        type: "console.subscribe",
+        v: 1,
+      })
+    )
+    let received = lineTexts(await messages.next("reset")).length
+    while (received < largeHistoryLines) {
+      received += lineTexts(await messages.next("history")).length
+    }
+
+    expect(received).toBe(largeHistoryLines)
+    expect(closedEarly).toBe(false)
+  })
+
   it("rejects a socket from an origin the capability was not issued to", async () => {
     const relay = await startRelay()
     const result = await attemptAuthentication(relay, {
@@ -297,19 +323,33 @@ interface TestRelay {
   }) => void
 }
 
-// The Relay's consoles: each server and database container writes one line.
+// This server's history is several times the test outbox (2 MiB).
+const largeHistoryId = "large-history"
+const largeHistoryLines = 1_000
+
+// The Relay's consoles: each server and database container writes one line,
+// besides the server with a large history.
 function consoleSession(
   resourceId: string,
   text: string
 ): DockerConsoleSession {
   const startedAt = "2026-01-01T00:00:00.000Z"
+  const lines =
+    resourceId === largeHistoryId
+      ? Array.from({ length: largeHistoryLines }, (_, index) => ({
+          id: `line-${index}`,
+          level: "info" as const,
+          text: `${index} ${"x".repeat(10_000)}`,
+          timestamp: new Date(Date.parse(startedAt) + index).toISOString(),
+        }))
+      : [{ id: "line-1", level: "info" as const, text, timestamp: startedAt }]
   return {
-    history: () =>
+    history: (limit = 2_000) =>
       Promise.resolve({
         instanceId: resourceId,
         lifecycle: [{ state: "started", time: startedAt }],
-        lines: [{ id: "line-1", level: "info", text, timestamp: startedAt }],
-        truncated: false,
+        lines: lines.slice(-limit),
+        truncated: lines.length > limit,
       }),
     // Nothing more is written until the follower stops.
     stream: (signal) => ({
