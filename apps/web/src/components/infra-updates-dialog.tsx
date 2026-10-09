@@ -935,7 +935,7 @@ const UpdaterDialog = React.memo(function UpdaterDialog({
       <DialogContent
         aria-describedby={undefined}
         initialFocus={closeButtonRef}
-        className="h-[min(40rem,calc(100dvh-2rem))] max-h-none grid-rows-[auto_minmax(0,1fr)_auto] gap-0 overflow-hidden p-0 sm:max-w-3xl"
+        className="h-[min(40rem,calc(100dvh-2rem))] max-h-none grid-cols-[minmax(0,1fr)] grid-rows-[auto_minmax(0,1fr)_auto] gap-0 overflow-hidden p-0 sm:max-w-3xl"
         showCloseButton={false}
       >
         <UpdateDialogData
@@ -2123,6 +2123,7 @@ const UpdaterFooter = React.memo(function UpdaterFooter({
         {import.meta.env.DEV && latestRelease ? (
           <>
             <Button
+              className="hidden sm:inline-flex"
               disabled={targets.length === 0}
               type="button"
               variant="ghost"
@@ -2138,6 +2139,7 @@ const UpdaterFooter = React.memo(function UpdaterFooter({
               Mock
             </Button>
             <Button
+              className="hidden sm:inline-flex"
               disabled={targets.length === 0}
               type="button"
               variant="ghost"
@@ -2155,7 +2157,10 @@ const UpdaterFooter = React.memo(function UpdaterFooter({
           </>
         ) : null}
         {checkFailed || import.meta.env.DEV ? (
-          <span aria-hidden="true" className="mx-1.5 h-6 w-px bg-border" />
+          <span
+            aria-hidden="true"
+            className={`mx-1.5 h-6 w-px bg-border ${checkFailed ? "" : "hidden sm:block"}`}
+          />
         ) : null}
         <Button
           disabled={availableTargets.length === 0}
@@ -2468,18 +2473,20 @@ const UpdateChangelogPage = React.memo(function UpdateChangelogPage({
   return (
     <div className="absolute inset-0 flex flex-col">
       <div className="flex h-12 shrink-0 items-center gap-2 border-b pr-3 pl-3">
+        {/* Narrow screens keep icons and swatches, so every control fits. */}
         <Button
-          className="shrink-0 bg-card shadow-none"
+          aria-label="Back"
+          className="shrink-0 bg-card px-2 shadow-none sm:px-3"
           size="sm"
           type="button"
           variant="outline"
           onClick={store.showOverview}
         >
           <ChevronLeft />
-          Back
+          <span className="hidden sm:inline">Back</span>
         </Button>
         <h3 className="type-card-title ml-1 min-w-0 flex-1 truncate">
-          Changelog
+          <span className="hidden sm:inline">Changelog</span>
         </h3>
         <ChangelogLegendButton
           index={items.length > 0 ? 0 : undefined}
@@ -2514,11 +2521,12 @@ const UpdateChangelogPage = React.memo(function UpdateChangelogPage({
           variant="ghost"
         >
           <a
+            aria-label="Releases on GitHub"
             href={`${gitRepository}/releases`}
             rel="noreferrer"
             target="_blank"
           >
-            GitHub
+            <span className="hidden sm:inline">GitHub</span>
             <ExternalLink />
           </a>
         </Button>
@@ -2595,6 +2603,7 @@ function ChangelogLegendButton({
 }) {
   return (
     <Button
+      aria-label={typeof children === "string" ? children : undefined}
       className="shrink-0 px-2 text-muted-foreground hover:text-foreground"
       disabled={index === undefined}
       size="sm"
@@ -2605,7 +2614,7 @@ function ChangelogLegendButton({
       }}
     >
       <span aria-hidden="true" className={swatch} />
-      {children}
+      <span className="hidden sm:inline">{children}</span>
     </Button>
   )
 }

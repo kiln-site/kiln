@@ -205,8 +205,16 @@ function requestJsonResponse<S extends Schema.Constraint>(
 ) {
   return Effect.gen(function* () {
     const client = yield* HttpClient.HttpClient
-    const response = yield* client.get(url, { headers }).pipe(
+    // The timeout covers reading the body too: a response whose headers
+    // arrive but whose body stalls would otherwise hold the feed lock.
+    return yield* client.get(url, { headers }).pipe(
       Effect.flatMap(HttpClientResponse.filterStatusOk),
+      Effect.flatMap((response) =>
+        Effect.map(
+          HttpClientResponse.schemaBodyJson(schema)(response),
+          (body) => ({ body, link: response.headers["link"] ?? "" })
+        )
+      ),
       Effect.timeout("15 seconds"),
       Effect.retry({
         schedule: Schedule.exponential("500 millis"),
@@ -214,8 +222,6 @@ function requestJsonResponse<S extends Schema.Constraint>(
         while: isRetryableRequest,
       })
     )
-    const body = yield* HttpClientResponse.schemaBodyJson(schema)(response)
-    return { body, link: response.headers["link"] ?? "" }
   }).pipe(
     Effect.provide(FetchHttpClient.layer),
     Effect.mapError((cause) =>

@@ -1,5 +1,5 @@
 import { assert, layer } from "@effect/vitest"
-import { Effect, Layer } from "effect"
+import { Effect, Exit, Fiber, Layer, Queue } from "effect"
 import { FetchHttpClient } from "effect/http"
 import { TestClock } from "effect/testing"
 
@@ -189,6 +189,28 @@ describeMysql("Kiln release feed", () => {
           serveStable(true)
           assert.deepStrictEqual(yield* aliases, [promoted])
         })
+    )
+
+    it.effect("gives up on a GitHub response whose body stalls", () =>
+      Effect.gen(function* () {
+        yield* resetDatabase
+        // Headers arrive, then the body never finishes.
+        const requests = yield* Queue.unbounded<void>()
+        serve = () => {
+          Queue.offerUnsafe(requests, undefined)
+          return new Response(new ReadableStream({ start() {} }), {
+            headers: { "content-type": "application/json" },
+          })
+        }
+
+        const check = yield* Effect.forkChild(Effect.exit(recentVersions))
+        // The first try and both retries each wait out the timeout.
+        for (let attempt = 0; attempt < 3; attempt += 1) {
+          yield* Queue.take(requests)
+          yield* TestClock.adjust("20 seconds")
+        }
+        assert.isTrue(Exit.isFailure(yield* Fiber.join(check)))
+      })
     )
 
     it.effect("remembers the version each component ran before", () =>
