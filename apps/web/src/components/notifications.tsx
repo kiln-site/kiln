@@ -280,33 +280,34 @@ function NotificationsPopoverPanel({ onNavigate }: { onNavigate: () => void }) {
         <h2 className="text-sm font-semibold">Notifications</h2>
         {newCount > 0 ? <UnreadCountBadge count={newCount} /> : null}
         <span className="flex-1" />
-        {newest ? (
-          <Button
-            variant="ghost"
-            size="sm"
-            className="text-muted-foreground hover:text-foreground"
-            onClick={() => clearThrough(newest.createdAt)}
-          >
-            Clear all
-          </Button>
-        ) : null}
+        <Button
+          variant="ghost"
+          size="sm"
+          className="text-muted-foreground hover:text-foreground"
+          disabled={!newest}
+          onClick={() => newest && clearThrough(newest.createdAt)}
+        >
+          Clear all
+        </Button>
       </div>
-      {isPending ? (
-        <p className="px-4 py-10 text-center text-sm text-muted-foreground">
-          Loading notifications…
-        </p>
-      ) : !notifications?.length ? (
-        <NotificationsEmptyState />
-      ) : (
-        // About four and a half rows, so the cut-off row shows there's more.
-        <NotificationList
-          className="max-h-[20.5rem] overflow-y-auto overscroll-contain"
-          highlighted={highlighted}
-          notifications={notifications}
-          onDismiss={dismiss}
-          onNavigate={onNavigate}
-        />
-      )}
+      {/* A fixed height, about four and a half rows, so the popover never
+          resizes and a cut-off row shows there's more. */}
+      <div className="h-[20.5rem] overflow-y-auto overscroll-contain">
+        {isPending ? (
+          <p className="grid h-full place-items-center text-sm text-muted-foreground">
+            Loading notifications…
+          </p>
+        ) : !notifications?.length ? (
+          <NotificationsEmptyState />
+        ) : (
+          <NotificationList
+            highlighted={highlighted}
+            notifications={notifications}
+            onDismiss={dismiss}
+            onNavigate={onNavigate}
+          />
+        )}
+      </div>
       <Link
         to="/notifications"
         className="flex h-10 shrink-0 items-center justify-center border-t border-border/70 text-sm font-medium text-primary transition-colors hover:bg-accent/50 focus-visible:bg-accent/50 focus-visible:outline-none"
@@ -320,12 +321,9 @@ function NotificationsPopoverPanel({ onNavigate }: { onNavigate: () => void }) {
 
 export function NotificationsEmptyState() {
   return (
-    <div className="flex flex-col items-center gap-2 px-4 py-10 text-center">
+    <div className="flex h-full flex-col items-center justify-center gap-2 px-4 text-center">
       <Bell className="size-5 text-muted-foreground/70" aria-hidden />
       <p className="text-sm font-medium">You're all caught up</p>
-      <p className="max-w-64 text-xs text-muted-foreground">
-        New Kiln releases and changes to your access will show up here.
-      </p>
     </div>
   )
 }

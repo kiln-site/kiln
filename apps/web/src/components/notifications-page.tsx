@@ -23,24 +23,21 @@ export function NotificationsPage() {
   const newest = notifications[0]
 
   return (
-    <div className="mx-auto flex w-full max-w-3xl flex-col gap-3 px-3 py-4 sm:px-5 sm:py-5">
-      <div className="flex min-h-8 items-center gap-3">
-        <p className="flex-1 text-sm text-muted-foreground">
-          Kiln releases, updates, and changes to your access.
-        </p>
-        {newest ? (
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => clearThrough(newest.createdAt)}
-          >
-            Clear all
-          </Button>
-        ) : null}
+    <div className="mx-auto flex h-full w-full max-w-3xl flex-col gap-3 px-3 py-4 sm:px-5 sm:py-5">
+      <div className="flex justify-end">
+        <Button
+          variant="outline"
+          size="sm"
+          disabled={!newest}
+          onClick={() => newest && clearThrough(newest.createdAt)}
+        >
+          Clear all
+        </Button>
       </div>
+      {/* Fills the page whatever it holds, and scrolls inside. */}
       <section
         aria-label="Notifications"
-        className="min-w-0 rounded-xl border bg-card/45"
+        className="flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto rounded-xl border bg-card/45"
       >
         {notifications.length ? (
           <NotificationList
