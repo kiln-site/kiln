@@ -63,6 +63,10 @@ const relativeTimeFormatter = new Intl.RelativeTimeFormat(undefined, {
 const activeSessionsQueryKey = ["account", "active-sessions"] as const
 const linkedCliQueryKey = ["account", "linked-clis"] as const
 const redactedTextAlphabet = "abcdefghjkmnpqrstuvwxyz23456789"
+const redactedDigitAlphabet = "0123456789"
+const redactedSeparators = new Set(["@", ".", "-", "_", ":"])
+// The CLI names credentials `${hostname} (${platform}/${arch})` by default.
+const defaultCliNamePattern = /^(.+) (\([^()\s]+\/[^()\s]+\))$/
 
 type ActiveSession = AccountSessionSummary
 
@@ -146,7 +150,11 @@ function ProfileCard({ user }: { user: AuthenticatedUser }) {
           <div className="min-w-0">
             <h2 className="type-section-title break-words">{displayName}</h2>
             <div className="mt-1.5 min-w-0">
-              <RedactedEmail value={email} />
+              <RedactedText
+                label="email address"
+                value={email}
+                className="font-mono text-xs text-muted-foreground"
+              />
             </div>
           </div>
         </div>
@@ -478,7 +486,15 @@ function EmailAddressAction({ currentEmail }: { currentEmail: string }) {
   )
 }
 
-function RedactedEmail({ value }: { value: string }) {
+function RedactedText({
+  className,
+  label,
+  value,
+}: {
+  className?: string
+  label: string
+  value: string
+}) {
   const [revealed, setRevealed] = React.useState(false)
   const redacted = React.useMemo(() => redactedPlaceholder(value), [value])
 
@@ -488,12 +504,11 @@ function RedactedEmail({ value }: { value: string }) {
         <button
           type="button"
           className={cn(
-            "min-w-0 cursor-pointer rounded-sm text-left font-mono text-xs break-all text-muted-foreground transition hover:text-foreground",
-            !revealed && "blur-[3px] select-none"
+            "min-w-0 cursor-pointer rounded-sm text-left break-all transition hover:text-foreground",
+            !revealed && "blur-[3px] select-none",
+            className
           )}
-          aria-label={
-            revealed ? `${value}. Hide email address` : "Reveal email address"
-          }
+          aria-label={revealed ? `${value}. Hide ${label}` : `Reveal ${label}`}
           aria-pressed={revealed}
           onClick={() => setRevealed((current) => !current)}
         >
@@ -501,7 +516,7 @@ function RedactedEmail({ value }: { value: string }) {
         </button>
       </TooltipTrigger>
       <TooltipContent side="top" sideOffset={6}>
-        {revealed ? "Click to hide email" : "Click to reveal email"}
+        {revealed ? `Click to hide ${label}` : `Click to reveal ${label}`}
       </TooltipContent>
     </Tooltip>
   )
@@ -514,17 +529,17 @@ function redactedPlaceholder(value: string): string {
     state = Math.imul(state, 0x01000193)
   }
 
-  const nextCharacter = () => {
+  const nextCharacter = (alphabet: string) => {
     state = Math.imul(state ^ (state >>> 13), 0x85ebca6b)
     state = Math.imul(state ^ (state >>> 16), 0xc2b2ae35)
-    return (
-      redactedTextAlphabet[Math.abs(state) % redactedTextAlphabet.length] ?? "x"
-    )
+    return alphabet[Math.abs(state) % alphabet.length] ?? "x"
   }
 
   return Array.from(value, (character) => {
-    if (["@", ".", "-", "_"].includes(character)) return character
-    return nextCharacter()
+    if (redactedSeparators.has(character)) return character
+    return nextCharacter(
+      /\d/.test(character) ? redactedDigitAlphabet : redactedTextAlphabet
+    )
   }).join("")
 }
 
@@ -1203,7 +1218,7 @@ function CliCredentialsPanel({ enabled }: { enabled: boolean }) {
             <AccountListItem
               key={credential.id}
               icon={<Terminal />}
-              title={credential.name}
+              title={<CliCredentialName name={credential.name} />}
               meta={`${credential.mode === "read_only" ? "Read-only" : "Full access"} · ${credential.lastUsedAt ? `Used ${formatRelative(credential.lastUsedAt)}` : "Never used"}`}
               action={
                 <Button
@@ -1427,7 +1442,16 @@ const SessionRow = React.memo(function SessionRow({
       accessory={
         current ? <StatusPill tone="success">Current</StatusPill> : null
       }
-      meta={`${activeSession.ipAddress || "Unknown IP"} · Signed in ${formatRelative(activeSession.createdAt)}`}
+      meta={
+        <>
+          {activeSession.ipAddress ? (
+            <RedactedText label="IP address" value={activeSession.ipAddress} />
+          ) : (
+            "Unknown IP"
+          )}
+          {` · Signed in ${formatRelative(activeSession.createdAt)}`}
+        </>
+      }
       action={
         <Button
           type="button"
@@ -1452,6 +1476,16 @@ const SessionRow = React.memo(function SessionRow({
   )
 })
 
+function CliCredentialName({ name }: { name: string }) {
+  const match = defaultCliNamePattern.exec(name)
+  if (!match) return name
+  return (
+    <>
+      <RedactedText label="hostname" value={match[1] ?? ""} /> {match[2]}
+    </>
+  )
+}
+
 function AccountListItem({
   accessory,
   action,
@@ -1462,8 +1496,8 @@ function AccountListItem({
   accessory?: React.ReactNode
   action: React.ReactNode
   icon: React.ReactNode
-  meta: string
-  title: string
+  meta: React.ReactNode
+  title: React.ReactNode
 }) {
   return (
     <li className="flex items-center gap-3 px-4 py-3">
@@ -1472,7 +1506,9 @@ function AccountListItem({
       </span>
       <div className="min-w-0 flex-1">
         <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-          <span className="min-w-0 text-sm font-medium break-words">{title}</span>
+          <span className="min-w-0 text-sm font-medium break-words">
+            {title}
+          </span>
           {accessory}
         </div>
         <p className="type-meta mt-0.5 break-words text-muted-foreground">
