@@ -302,6 +302,20 @@ it("ignores late observations of older or settled operations", () => {
   expect(isRelayUpdating(relayId)).toBe(false)
 })
 
+it("keeps a newer window when an older operation is still reported running", () => {
+  const updateA = {
+    id: "update-a",
+    startedAt: new Date(Date.now() - 60_000).toISOString(),
+  }
+  const updateB = { id: "update-b", startedAt: new Date().toISOString() }
+  markRelayUpdating(relayId, updateA)
+  markRelayUpdating(relayId, updateB)
+
+  markRelayUpdating(relayId, updateA)
+  clearRelayUpdating(relayId, updateB)
+  expect(isRelayUpdating(relayId)).toBe(false)
+})
+
 it("does not reopen an update window after its deadline", () => {
   const relayStates: Array<string> = []
   const unsubscribe = subscribeRealtimeChanges((event) => {
