@@ -1,5 +1,7 @@
 import * as React from "react"
-import { useQuery } from "@tanstack/react-query"
+import { isNull, useLiveQuery } from "@tanstack/react-db"
+import { useQueryClient } from "@tanstack/react-query"
+import type { QueryClient } from "@tanstack/react-query"
 import { Link } from "@tanstack/react-router"
 import { Bell } from "lucide-react"
 
@@ -18,17 +20,19 @@ import {
 import { cn } from "@workspace/ui/lib/utils"
 
 import {
-  NotificationList,
-  useHighlightUnread,
+  NotificationGroupLabel,
+  NotificationRow,
+  notificationListItems,
   useNotificationClearing,
 } from "@/components/notification-list"
 import {
-  notificationInboxQueryOptions,
-  selectUnreadNotificationCount,
-} from "@/lib/notification-queries"
+  markCachedNotificationsRead,
+  notificationsCollectionOptions,
+} from "@/lib/collections/notifications"
 
 interface NotificationsPopoverStore {
   close: () => void
+  getHighlighted: () => ReadonlySet<string>
   getServerSnapshot: () => boolean
   getSnapshot: () => boolean
   open: () => void
@@ -36,16 +40,25 @@ interface NotificationsPopoverStore {
   subscribe: (listener: () => void) => () => void
 }
 
-function createNotificationsPopoverStore(): NotificationsPopoverStore {
+const noHighlights: ReadonlySet<string> = new Set()
+
+// Opening the popover is the moment the user looks, so it marks the inbox
+// read right there in the event, and remembers what was new to highlight it.
+function createNotificationsPopoverStore(
+  queryClient: QueryClient
+): NotificationsPopoverStore {
   let open = false
+  let highlighted = noHighlights
   const listeners = new Set<() => void>()
   const setOpen = (next: boolean) => {
     if (open === next) return
+    if (next) highlighted = markCachedNotificationsRead(queryClient)
     open = next
     for (const listener of listeners) listener()
   }
   return {
     close: () => setOpen(false),
+    getHighlighted: () => highlighted,
     getServerSnapshot: () => false,
     getSnapshot: () => open,
     open: () => setOpen(true),
@@ -86,7 +99,10 @@ export const NotificationsProvider = React.memo(function NotificationsProvider({
 }: {
   children: React.ReactNode
 }) {
-  const [store] = React.useState(createNotificationsPopoverStore)
+  const queryClient = useQueryClient()
+  const [store] = React.useState(() =>
+    createNotificationsPopoverStore(queryClient)
+  )
   return (
     <NotificationsPopoverContext.Provider value={store}>
       {children}
@@ -94,12 +110,18 @@ export const NotificationsProvider = React.memo(function NotificationsProvider({
   )
 })
 
-function useUnreadNotificationCount(): number {
-  const { data = 0 } = useQuery({
-    ...notificationInboxQueryOptions(),
-    select: selectUnreadNotificationCount,
-  })
+function useUnreadNotificationIds(): ReadonlyArray<{ id: string }> {
+  const { data } = useLiveQuery((query) =>
+    query
+      .from({ notification: notificationsCollectionOptions })
+      .where(({ notification }) => isNull(notification.readAt))
+      .select(({ notification }) => ({ id: notification.id }))
+  )
   return data
+}
+
+function useUnreadNotificationCount(): number {
+  return useUnreadNotificationIds().length
 }
 
 function unreadLabel(count: number) {
@@ -264,15 +286,27 @@ function NotificationsPopoverContent({ align }: { align: "start" | "end" }) {
 }
 
 // Mounted only while the popover is open, so a closed popover never renders
-// the list or marks anything read.
+// the list.
 function NotificationsPopoverPanel({ onNavigate }: { onNavigate: () => void }) {
-  const { data: inbox, isPending } = useQuery(notificationInboxQueryOptions())
-  const notifications = inbox?.notifications
-  const highlighted = useHighlightUnread(notifications)
+  const store = useNotificationsPopoverStore()
+  const highlighted = React.useSyncExternalStore(
+    store.subscribe,
+    store.getHighlighted,
+    store.getHighlighted
+  )
+  const { data: notifications, isLoading } = useLiveQuery((query) =>
+    query
+      .from({ notification: notificationsCollectionOptions })
+      .orderBy(({ notification }) => notification.createdAt, "desc")
+      .orderBy(({ notification }) => notification.id, "desc")
+      .limit(notificationsPopoverLimit)
+  )
+  const unread = useUnreadNotificationIds()
   const { clearThrough, dismiss } = useNotificationClearing()
-  const newest = notifications?.[0]
-  // Opening reads everything, so keep counting what was new when it opened.
-  const newCount = Math.max(inbox?.unreadCount ?? 0, highlighted.size)
+  const newest = notifications[0]
+  // What was new when it opened, plus anything that arrived since.
+  const newCount =
+    highlighted.size + unread.filter(({ id }) => !highlighted.has(id)).length
 
   return (
     <>
@@ -292,20 +326,40 @@ function NotificationsPopoverPanel({ onNavigate }: { onNavigate: () => void }) {
       </div>
       {/* A fixed height, about four and a half rows, so the popover never
           resizes and a cut-off row shows there's more. */}
-      <div className="h-[20.5rem] overflow-y-auto overscroll-contain">
-        {isPending ? (
+      <div
+        role="feed"
+        aria-label="Latest notifications"
+        aria-busy={isLoading}
+        className="h-[20.5rem] overflow-y-auto overscroll-contain"
+      >
+        {isLoading ? (
           <p className="grid h-full place-items-center text-sm text-muted-foreground">
             Loading notifications…
           </p>
-        ) : !notifications?.length ? (
-          <NotificationsEmptyState />
+        ) : notifications.length ? (
+          notificationListItems(notifications).map((item) =>
+            item.kind === "group" ? (
+              <NotificationGroupLabel
+                key={item.key}
+                className="sticky top-0 z-10"
+                label={item.label}
+              />
+            ) : (
+              <NotificationRow
+                key={item.key}
+                className="border-b border-border/60 last:border-b-0"
+                highlighted={
+                  highlighted.has(item.notification.id) ||
+                  item.notification.readAt === null
+                }
+                notification={item.notification}
+                onDismiss={dismiss}
+                onNavigate={onNavigate}
+              />
+            )
+          )
         ) : (
-          <NotificationList
-            highlighted={highlighted}
-            notifications={notifications}
-            onDismiss={dismiss}
-            onNavigate={onNavigate}
-          />
+          <NotificationsEmptyState />
         )}
       </div>
       <Link
@@ -318,6 +372,9 @@ function NotificationsPopoverPanel({ onNavigate }: { onNavigate: () => void }) {
     </>
   )
 }
+
+/** How many of the newest notifications the popover lists. */
+const notificationsPopoverLimit = 10
 
 export function NotificationsEmptyState() {
   return (

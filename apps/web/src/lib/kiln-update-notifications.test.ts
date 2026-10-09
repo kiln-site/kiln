@@ -7,7 +7,7 @@ import { TestDatabase, describeMysql, resetDatabase } from "@/test/database"
 import { insertUser } from "@/test/seed"
 
 const updates = (userId: string) =>
-  Effect.map(listNotificationsEffect(userId, 50), ({ notifications }) =>
+  Effect.map(listNotificationsEffect(userId), (notifications) =>
     notifications.flatMap(({ content }) =>
       content.kind === "kiln.updated"
         ? [`${content.previousVersion} -> ${content.version}`]

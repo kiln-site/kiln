@@ -9,10 +9,9 @@ import { developmentBypassUserId } from "@/lib/development-bypass"
 import { developmentBypassEnabled } from "@/lib/environment"
 import {
   notificationContentSchema,
+  notificationHistoryLimit,
   type KilnNotification,
   type NotificationContent,
-  type NotificationCursor,
-  type NotificationPage,
 } from "@/lib/notifications"
 import { publishRealtimeChange } from "@/lib/realtime-source.server"
 
@@ -68,26 +67,22 @@ export function publishNotificationChange(userIds: ReadonlyArray<string>) {
 }
 
 /**
- * The user's notifications, newest first, `limit` at a time. Pass the last
- * row of a page as `before` to continue after it.
+ * The user's newest notifications, newest first. History is capped so the
+ * whole inbox stays one small sync.
  */
 export const listNotificationsEffect = Effect.fn("notifications.list")(
-  function* (userId: string, limit: number, before?: NotificationCursor) {
+  function* (userId: string) {
     const database = yield* Database
     const rows = yield* database.queryRows<NotificationRow>(
       "notifications.list",
       `SELECT id, kind, data, created_at, read_at
          FROM ${databaseTable("notification")}
-        WHERE user_id = ? AND dismissed_at IS NULL${
-          before ? " AND (created_at < ? OR (created_at = ? AND id < ?))" : ""
-        }
+        WHERE user_id = ? AND dismissed_at IS NULL
         ORDER BY created_at DESC, id DESC
-        LIMIT ?`,
-      before
-        ? [userId, before.createdAt, before.createdAt, before.id, limit]
-        : [userId, limit]
+        LIMIT ${notificationHistoryLimit}`,
+      [userId]
     )
-    const notifications = rows.flatMap((row): Array<KilnNotification> => {
+    return rows.flatMap((row): Array<KilnNotification> => {
       // Rows outlive Kiln versions; skip kinds this version can't show.
       const content = decodeContent(row)
       return Option.isSome(content)
@@ -101,45 +96,41 @@ export const listNotificationsEffect = Effect.fn("notifications.list")(
           ]
         : []
     })
-    // Continue after the last row read, even one this version skipped.
-    const last = rows.length === limit ? rows.at(-1) : undefined
-    const nextCursor: NotificationCursor | null = last
-      ? { createdAt: Number(last.created_at), id: last.id }
-      : null
-    return { nextCursor, notifications } satisfies NotificationPage
   }
 )
 
-export const countUnreadNotificationsEffect = Effect.fn(
-  "notifications.countUnread"
-)(function* (userId: string) {
-  const database = yield* Database
-  const rows = yield* database.queryRows<RowDataPacket & { count: number }>(
-    "notifications.countUnread",
-    `SELECT COUNT(*) AS count
-       FROM ${databaseTable("notification")}
-      WHERE user_id = ? AND read_at IS NULL AND dismissed_at IS NULL`,
-    [userId]
-  )
-  return Number(rows[0]?.count ?? 0)
-})
-
 /**
- * Marks the user's notifications created at or before `through` as read.
- * Anything delivered after the user looked stays unread.
+ * Marks the user's unread notifications as read: the given IDs, or all of
+ * them. Returns the IDs this call marked.
  */
 export const markNotificationsReadEffect = Effect.fn("notifications.markRead")(
-  function* (userId: string, through: number) {
+  function* (userId: string, ids: ReadonlyArray<string> | "all") {
+    if (ids !== "all" && !ids.length) return []
     const database = yield* Database
     const now = yield* Clock.currentTimeMillis
-    const result = yield* database.execute(
-      "notifications.markRead",
-      `UPDATE ${databaseTable("notification")}
-          SET read_at = ?
-        WHERE user_id = ? AND read_at IS NULL AND created_at <= ?`,
-      [now, userId, through]
+    return yield* database.transaction("notifications.markRead", (tx) =>
+      Effect.gen(function* () {
+        const unread = yield* tx.queryRows<RowDataPacket & { id: string }>(
+          `SELECT id FROM ${databaseTable("notification")}
+            WHERE user_id = ? AND read_at IS NULL AND dismissed_at IS NULL${
+              ids === "all"
+                ? ""
+                : ` AND id IN (${ids.map(() => "?").join(", ")})`
+            }
+            FOR UPDATE`,
+          ids === "all" ? [userId] : [userId, ...ids]
+        )
+        const marked = unread.map((row) => row.id)
+        if (!marked.length) return marked
+        yield* tx.execute(
+          `UPDATE ${databaseTable("notification")}
+              SET read_at = ?
+            WHERE user_id = ? AND id IN (${marked.map(() => "?").join(", ")})`,
+          [now, userId, ...marked]
+        )
+        return marked
+      })
     )
-    return result.affectedRows
   }
 )
 

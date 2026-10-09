@@ -1,71 +1,118 @@
-import { useInfiniteQuery } from "@tanstack/react-query"
-import { LoaderCircle } from "lucide-react"
+import * as React from "react"
+import { useLiveQuery } from "@tanstack/react-db"
+import { useVirtualizer } from "@tanstack/react-virtual"
 
 import { Button } from "@workspace/ui/components/button"
 
 import {
-  NotificationList,
-  useHighlightUnread,
+  NotificationGroupLabel,
+  NotificationRow,
+  notificationListItems,
   useNotificationClearing,
 } from "@/components/notification-list"
 import { NotificationsEmptyState } from "@/components/notifications"
-import { notificationsPageQueryOptions } from "@/lib/notification-queries"
+import { notificationsCollectionOptions } from "@/lib/collections/notifications"
 
-export function NotificationsPage() {
-  const { data, fetchNextPage, hasNextPage, isFetchingNextPage } =
-    useInfiniteQuery({
-      ...notificationsPageQueryOptions(),
-      select: (pages) => pages.pages.flatMap((page) => page.notifications),
-    })
-  const notifications = data ?? []
-  const highlighted = useHighlightUnread(data)
-  const { clearThrough, dismiss } = useNotificationClearing()
-  const newest = notifications[0]
+/**
+ * The full history, virtualized. `newIds` are the notifications that were
+ * unread when the page opened, kept highlighted while it stays open.
+ */
+export function NotificationsPage({ newIds }: { newIds: ReadonlySet<string> }) {
+  const { data: notifications, isLoading } = useLiveQuery((query) =>
+    query
+      .from({ notification: notificationsCollectionOptions })
+      .orderBy(({ notification }) => notification.createdAt, "desc")
+      .orderBy(({ notification }) => notification.id, "desc")
+  )
+  const items = React.useMemo(
+    () => notificationListItems(notifications),
+    [notifications]
+  )
+  const { dismiss } = useNotificationClearing()
+  const scrollRef = React.useRef<HTMLDivElement>(null)
+  const virtualizer = useVirtualizer({
+    count: items.length,
+    estimateSize: (index) => (items[index]?.kind === "group" ? 29 : 66),
+    getItemKey: (index) => items[index]?.key ?? index,
+    getScrollElement: () => scrollRef.current,
+    overscan: 10,
+  })
 
   return (
-    <div className="mx-auto flex h-full w-full max-w-3xl flex-col gap-3 px-3 py-4 sm:px-5 sm:py-5">
-      <div className="flex justify-end">
-        <Button
-          variant="outline"
-          size="sm"
-          disabled={!newest}
-          onClick={() => newest && clearThrough(newest.createdAt)}
-        >
-          Clear all
-        </Button>
-      </div>
+    <div className="mx-auto flex h-full w-full max-w-3xl flex-col px-3 py-4 sm:px-5 sm:py-5">
       {/* Fills the page whatever it holds, and scrolls inside. */}
-      <section
+      <div
+        ref={scrollRef}
+        role="feed"
         aria-label="Notifications"
-        className="flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto rounded-xl border bg-card/45"
+        aria-busy={isLoading}
+        className="min-h-0 min-w-0 flex-1 overflow-y-auto overscroll-contain rounded-xl border bg-card/45"
       >
-        {notifications.length ? (
-          <NotificationList
-            className="[&>section:first-child>h3]:rounded-t-xl"
-            highlighted={highlighted}
-            notifications={notifications}
-            onDismiss={dismiss}
-          />
-        ) : (
+        {items.length ? (
+          <div
+            className="relative w-full"
+            style={{ height: `${virtualizer.getTotalSize()}px` }}
+          >
+            {virtualizer.getVirtualItems().map((virtualItem) => {
+              const item = items[virtualItem.index]
+              if (!item) return null
+              return (
+                <div
+                  key={virtualItem.key}
+                  ref={virtualizer.measureElement}
+                  data-index={virtualItem.index}
+                  className="absolute inset-x-0 top-0"
+                  style={{ transform: `translateY(${virtualItem.start}px)` }}
+                >
+                  {item.kind === "group" ? (
+                    <NotificationGroupLabel
+                      className={virtualItem.index === 0 ? "" : "border-t"}
+                      label={item.label}
+                    />
+                  ) : (
+                    <NotificationRow
+                      className="border-b border-border/60"
+                      highlighted={
+                        newIds.has(item.notification.id) ||
+                        item.notification.readAt === null
+                      }
+                      notification={item.notification}
+                      onDismiss={dismiss}
+                    />
+                  )}
+                </div>
+              )
+            })}
+          </div>
+        ) : isLoading ? null : (
           <NotificationsEmptyState />
         )}
-        {hasNextPage ? (
-          <div className="border-t border-border/60 p-2">
-            <Button
-              variant="ghost"
-              size="sm"
-              className="w-full text-muted-foreground hover:text-foreground"
-              disabled={isFetchingNextPage}
-              onClick={() => void fetchNextPage()}
-            >
-              {isFetchingNextPage ? (
-                <LoaderCircle className="animate-spin" />
-              ) : null}
-              {isFetchingNextPage ? "Loading" : "Load older notifications"}
-            </Button>
-          </div>
-        ) : null}
-      </section>
+      </div>
     </div>
   )
 }
+
+/** Clear all, in the page header beside the title. */
+export const NotificationsToolbarActions = React.memo(
+  function NotificationsToolbarActions() {
+    const { data: newest } = useLiveQuery((query) =>
+      query
+        .from({ notification: notificationsCollectionOptions })
+        .orderBy(({ notification }) => notification.createdAt, "desc")
+        .limit(1)
+        .select(({ notification }) => ({ createdAt: notification.createdAt }))
+    )
+    const { clearThrough } = useNotificationClearing()
+    const through = newest[0]?.createdAt
+    return (
+      <Button
+        variant="outline"
+        size="sm"
+        disabled={through === undefined}
+        onClick={() => through !== undefined && clearThrough(through)}
+      >
+        Clear all
+      </Button>
+    )
+  }
+)
