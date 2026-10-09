@@ -87,8 +87,8 @@ export function commandLines(
           if (pending) onLine(pending)
           pending = ""
         },
-        read: (chunk: Buffer) => {
-          const lines = (pending + chunk.toString("utf8")).split("\n")
+        read: (chunk: string) => {
+          const lines = (pending + chunk).split("\n")
           pending = (lines.pop() ?? "").slice(0, MAX_COMMAND_LINE_CHARACTERS)
           for (const line of lines) {
             onLine(line.slice(0, MAX_COMMAND_LINE_CHARACTERS))
@@ -98,6 +98,9 @@ export function commandLines(
     }
     const stdout = reader()
     const stderr = reader()
+    // Decoded across chunks, so characters split between them stay whole.
+    child.stdout.setEncoding("utf8")
+    child.stderr.setEncoding("utf8")
     child.stdout.on("data", stdout.read)
     child.stderr.on("data", stderr.read)
     child.once("error", (cause) => {

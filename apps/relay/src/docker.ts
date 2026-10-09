@@ -1398,18 +1398,21 @@ export class DockerDriver {
               ],
               { stdio: ["ignore", "pipe", "pipe"] }
             )
-            const consume = (source: "stdout" | "stderr", chunk: Buffer) => {
+            const consume = (source: "stdout" | "stderr", chunk: string) => {
               const current =
-                (source === "stdout" ? stdoutBuffer : stderrBuffer) +
-                chunk.toString("utf8")
+                (source === "stdout" ? stdoutBuffer : stderrBuffer) + chunk
               const lines = current.split("\n")
               const remainder = lines.pop() ?? ""
               if (source === "stdout") stdoutBuffer = remainder
               else stderrBuffer = remainder
               for (const line of lines) queueLine(line, target.component)
             }
-            child.stdout.on("data", (chunk: Buffer) => consume("stdout", chunk))
-            child.stderr.on("data", (chunk: Buffer) => consume("stderr", chunk))
+            // Decoded across chunks, so characters split between them stay
+            // whole.
+            child.stdout.setEncoding("utf8")
+            child.stderr.setEncoding("utf8")
+            child.stdout.on("data", (chunk: string) => consume("stdout", chunk))
+            child.stderr.on("data", (chunk: string) => consume("stderr", chunk))
             child.on("error", (error) => {
               if (settled) return
               settled = true
