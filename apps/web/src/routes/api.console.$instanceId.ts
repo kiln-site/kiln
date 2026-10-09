@@ -48,7 +48,7 @@ export const Route = createFileRoute("/api/console/$instanceId")({
           return Response.json(
             {
               code: "invalid_console_target",
-              error: "The console target is invalid.",
+              error: "The stream target is invalid.",
             },
             { status: 400 }
           )
@@ -68,8 +68,7 @@ export const Route = createFileRoute("/api/console/$instanceId")({
                 identity,
               })
               const first = await iterator.next()
-              if (first.done)
-                throw new Error("Relay console stream ended early")
+              if (first.done) throw new Error("The Relay's stream ended early")
 
               let firstPending = true
               let finished = false
@@ -113,7 +112,7 @@ export const Route = createFileRoute("/api/console/$instanceId")({
                               message:
                                 cause instanceof Error
                                   ? cause.message
-                                  : "The Hearth console proxy was interrupted.",
+                                  : "The stream through Hearth was interrupted.",
                               type: "proxy.error",
                             })
                           )
@@ -153,7 +152,7 @@ export const Route = createFileRoute("/api/console/$instanceId")({
                     error:
                       cause instanceof Error
                         ? cause.message
-                        : "Hearth could not open the Relay console stream.",
+                        : "Hearth could not open the Relay's stream.",
                   },
                   { status: 502 }
                 )

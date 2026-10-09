@@ -23,7 +23,7 @@ export const ConsoleRetryButton = React.memo(function ConsoleRetryButton({
   return (
     <ConsoleWarning
       message={`${error} Retry without reloading the page. Output and filters are kept`}
-      label="Retry console connection"
+      label="Retry connection"
       action={{
         onClick: streamStore.retry,
         text: showLabel ? "Retry" : undefined,

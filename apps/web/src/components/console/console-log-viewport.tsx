@@ -15,6 +15,7 @@ import type {
   ConsoleStreamStore,
   ConsoleUiStore,
 } from "@/components/console/console-stores"
+import { useConsoleCopy } from "@/components/console/console-copy-context"
 import { ConsoleTooltip } from "@/components/console/console-tooltip"
 import { ConsoleRetryButton } from "@/components/console/console-retry-button"
 import { OverlayNotice } from "@/components/overlay-notice"
@@ -171,6 +172,7 @@ function ConsoleLogViewport({
   uiStore,
 }: ConsoleLogViewportProps) {
   const { connection, error, loading, transport } = snapshot
+  const copy = useConsoleCopy()
   const [autoScroll, setAutoScroll] = React.useState(true)
   const query = React.useSyncExternalStore(
     uiStore.subscribe,
@@ -302,7 +304,7 @@ function ConsoleLogViewport({
         <div className="absolute inset-0 grid place-items-center bg-card/70 backdrop-blur-[2px]">
           <div className="flex items-center gap-2 text-xs text-muted-foreground">
             <LoaderCircle className="size-4 animate-spin text-primary" />
-            Opening live console stream
+            Opening live {copy.stream}
           </div>
         </div>
       ) : null}
@@ -336,10 +338,13 @@ const ConsoleConnectionNotice = React.memo(function ConsoleConnectionNotice({
   transport: ConsoleStreamSnapshot["transport"]
   error: string | null
 }) {
+  const copy = useConsoleCopy()
   if (!hasConsoleData) return null
   if (error)
     return (
-      <ConsoleConnectionNoticeContent message="CONSOLE CONNECTION FAILED" />
+      <ConsoleConnectionNoticeContent
+        message={`${copy.notice} CONNECTION FAILED`}
+      />
     )
   if (connection === "opening") return <DelayedConsoleOpeningNotice />
   if (connection === "live" && transport !== "hearth") return null

@@ -8,6 +8,7 @@ import type {
 } from "@workspace/contracts"
 import { Effect, Exit, Fiber, Result, Scope, Stream } from "effect"
 
+import { consoleCopy } from "@/lib/console-copy"
 import {
   startConsoleTimingSpan,
   withConsoleTimingSpan,
@@ -63,11 +64,12 @@ export function openRelayConsoleStream(
   timing?: ConsoleLoadTiming,
   write = false
 ): Stream.Stream<KilnConsoleStreamEvent, Error> {
+  const { stream } = consoleCopy[resource.kind]
   if (!navigator.onLine) {
     return Stream.fail(
       new RelayConsoleConnectionError(
         "browser_offline",
-        "You're offline. Reconnect to the internet to resume the console."
+        `You're offline. Reconnect to the internet to resume the ${stream}.`
       )
     )
   }
@@ -81,8 +83,8 @@ export function openRelayConsoleStream(
               new RelayConsoleConnectionError(
                 "hearth_proxy_failed",
                 fallbackMessage === null
-                  ? "Hearth can reach this Relay, but its secure console stream could not be opened."
-                  : "Hearth can reach this Relay, but neither the secure direct stream nor the Hearth fallback could read the console.",
+                  ? `Hearth can reach this Relay, but its secure ${stream} could not be opened.`
+                  : `Hearth can reach this Relay, but neither the secure direct stream nor the Hearth fallback could read the ${stream}.`,
                 { cause }
               )
             )
@@ -106,8 +108,7 @@ export function openRelayConsoleStream(
             Stream.prepend<KilnConsoleStreamEvent>([
               {
                 type: "reconnecting",
-                message:
-                  "The direct console stream failed. Trying to reconnect through Hearth.",
+                message: `The direct ${stream} failed. Trying to reconnect through Hearth.`,
               },
             ])
           )
@@ -379,7 +380,7 @@ function openHearthConsoleStream(
               "error" in problem &&
               typeof problem.error === "string"
               ? problem.error
-              : `Hearth console proxy returned HTTP ${response.status}`
+              : `The stream through Hearth returned HTTP ${response.status}`
           )
         )
       }
@@ -426,7 +427,7 @@ function parseHearthConsoleEvent(
         const message =
           "message" in value && typeof value.message === "string"
             ? value.message
-            : "Hearth console proxy was interrupted"
+            : "The stream through Hearth was interrupted"
         throw new Error(message)
       }
       return relayConsoleStreamEventSchema.parse(value)

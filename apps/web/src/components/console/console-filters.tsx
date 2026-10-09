@@ -16,6 +16,7 @@ import {
   consoleServices,
   type ConsoleUiStore,
 } from "@/components/console/console-stores"
+import { useConsoleCopy } from "@/components/console/console-copy-context"
 import { ConsoleTooltip } from "@/components/console/console-tooltip"
 import { tailscaleStacksQueryOptions } from "@/lib/query-options"
 import type { TailscaleStackOverview } from "@/server/tailscale"
@@ -23,6 +24,7 @@ import type { TailscaleStackOverview } from "@/server/tailscale"
 const emptyTailscaleStacks: Array<TailscaleStackOverview> = []
 
 export function ConsoleSearchControl({ uiStore }: { uiStore: ConsoleUiStore }) {
+  const copy = useConsoleCopy()
   const query = React.useSyncExternalStore(
     uiStore.subscribe,
     uiStore.getQuerySnapshot,
@@ -34,14 +36,14 @@ export function ConsoleSearchControl({ uiStore }: { uiStore: ConsoleUiStore }) {
       <Input
         value={query}
         onChange={(event) => uiStore.setQuery(event.target.value)}
-        placeholder="Search console"
-        aria-label="Search console"
+        placeholder={copy.search}
+        aria-label={copy.search}
         className="h-9 border-border/80 bg-background pl-8 text-base shadow-none sm:text-xs"
       />
       {query ? (
         <button
           type="button"
-          aria-label="Clear console search"
+          aria-label="Clear search"
           className="absolute top-1/2 right-2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
           onClick={() => uiStore.setQuery("")}
         >
@@ -107,8 +109,8 @@ function ConsoleLevelMenuTrigger({ uiStore }: { uiStore: ConsoleUiStore }) {
           className="relative size-9 shrink-0"
           aria-label={
             allLevels
-              ? "Filter console levels"
-              : `Filter console levels, ${levelCount} active`
+              ? "Filter log levels"
+              : `Filter log levels, ${levelCount} active`
           }
         >
           <ListFilter />
@@ -129,9 +131,7 @@ function ConsoleLevelMenuSummary({ uiStore }: { uiStore: ConsoleUiStore }) {
 
   return (
     <div className="flex items-center justify-between border-b px-2 py-2">
-      <p className="type-technical-label text-muted-foreground">
-        Console levels
-      </p>
+      <p className="type-technical-label text-muted-foreground">Log levels</p>
       <span className="type-meta font-mono text-muted-foreground tabular-nums">
         {levelCount}/{consoleLevels.length}
       </span>

@@ -291,7 +291,7 @@ function createSocketInbox(socket: WebSocket, signal: AbortSignal) {
     if (terminalError) return
     if (binary) {
       failAndClose(
-        new Error("Relay returned an unsupported binary console frame"),
+        new Error("The Relay sent an unsupported binary frame"),
         1003,
         "Binary console frames are unsupported"
       )
@@ -308,7 +308,7 @@ function createSocketInbox(socket: WebSocket, signal: AbortSignal) {
       onSuccess: (value) => {
         if (!value || typeof value !== "object" || Array.isArray(value)) {
           failAndClose(
-            new Error("Relay returned an invalid console message"),
+            new Error("The Relay sent an invalid message"),
             1007,
             "Invalid console message"
           )
@@ -323,7 +323,7 @@ function createSocketInbox(socket: WebSocket, signal: AbortSignal) {
             queuedBytes + data.byteLength > MAX_INBOX_BYTES
           ) {
             failAndClose(
-              new Error("Relay console proxy exceeded its backpressure limit"),
+              new Error("The page fell too far behind the Relay"),
               1013,
               "Console proxy backpressure exceeded"
             )
@@ -348,7 +348,7 @@ function createSocketInbox(socket: WebSocket, signal: AbortSignal) {
       new Error(
         reason.length
           ? reason.toString()
-          : `Relay console connection closed (${code})`
+          : `The Relay closed the stream (${code})`
       )
     )
   const abort = () => {

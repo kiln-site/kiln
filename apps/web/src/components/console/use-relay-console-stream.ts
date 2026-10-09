@@ -32,6 +32,7 @@ import {
   openRelayConsoleStream,
   RelayConsoleConnectionError,
 } from "@/lib/relay-console-stream"
+import { consoleCopy } from "@/lib/console-copy"
 import type { ConsoleLoadTiming } from "@/lib/console-performance"
 import { queryKeys } from "@/lib/query-options"
 import type { ConsoleInstanceRuntime } from "@/lib/relay-selectors"
@@ -309,7 +310,7 @@ export function useRelayConsoleStream(
       clearOpeningTimeout()
       openingTimer = window.setTimeout(() => {
         openingTimer = null
-        const error = "The console is taking too long to connect."
+        const error = `The ${consoleCopy[resourceKind].stream} is taking too long to connect.`
         loadTiming?.markRetryableFailure(new Error(error))
         commitSnapshot({
           connection: hasEverBeenLiveRef.current
@@ -564,7 +565,11 @@ export function useRelayConsoleStream(
                 }
               })
             ),
-            Effect.andThen(Effect.fail(new Error("Console stream closed"))),
+            Effect.andThen(
+              Effect.fail(
+                new Error(`The ${consoleCopy[resourceKind].stream} closed.`)
+              )
+            ),
             Effect.match({
               onFailure: (cause) => cause,
               onSuccess: () => null,
@@ -579,7 +584,7 @@ export function useRelayConsoleStream(
             connection: hasEverBeenLiveRef.current
               ? "reconnecting"
               : "unavailable",
-            error: consoleConnectionMessage(failure),
+            error: consoleConnectionMessage(failure, resourceKind),
             loading: false,
           })
           if (shouldWaitForRelayBrowserAuthorization(failure)) {
@@ -728,9 +733,12 @@ function updateConsoleStreamSnapshot(
     : next
 }
 
-function consoleConnectionMessage(cause: unknown): string {
+function consoleConnectionMessage(
+  cause: unknown,
+  resourceKind: RelayConsoleResource["kind"]
+): string {
   if (cause instanceof RelayConsoleConnectionError) return cause.message
   return cause instanceof Error && cause.message
     ? cause.message
-    : "The Relay is connected, but its console stream could not be read."
+    : `The Relay is connected, but its ${consoleCopy[resourceKind].stream} could not be read.`
 }

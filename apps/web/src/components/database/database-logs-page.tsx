@@ -1,5 +1,6 @@
 import * as React from "react"
 
+import { ConsoleCopyContext } from "@/components/console/console-copy-context"
 import {
   ConsoleLevelMenu,
   ConsoleSearchControl,
@@ -25,6 +26,7 @@ import {
 import { useRelayConsoleStream } from "@/components/console/use-relay-console-stream"
 import { databaseRelayAvailable } from "@/components/database/database-presentation"
 import { useDatabaseWorkspace } from "@/components/database/database-workspace-context"
+import { consoleCopy } from "@/lib/console-copy"
 
 // The server console without its command bar: the database container's
 // output, followed live the same way.
@@ -53,20 +55,22 @@ function DatabaseLogsSession({
   const [streamStore] = React.useState(createConsoleStreamStore)
 
   return (
-    <section className="flex min-h-0 flex-1 flex-col bg-card">
-      <DatabaseLogsStreamController
-        databaseId={databaseId}
-        relayAvailable={relayAvailable}
-        relayId={relayId}
-        streamStore={streamStore}
-      />
-      <DatabaseLogsToolbar streamStore={streamStore} uiStore={uiStore} />
-      <ConsoleLogViewportController
-        active
-        streamStore={streamStore}
-        uiStore={uiStore}
-      />
-    </section>
+    <ConsoleCopyContext.Provider value={consoleCopy.database}>
+      <section className="flex min-h-0 flex-1 flex-col bg-card">
+        <DatabaseLogsStreamController
+          databaseId={databaseId}
+          relayAvailable={relayAvailable}
+          relayId={relayId}
+          streamStore={streamStore}
+        />
+        <DatabaseLogsToolbar streamStore={streamStore} uiStore={uiStore} />
+        <ConsoleLogViewportController
+          active
+          streamStore={streamStore}
+          uiStore={uiStore}
+        />
+      </section>
+    </ConsoleCopyContext.Provider>
   )
 }
 
