@@ -110,29 +110,27 @@ export const NotificationRow = React.memo(function NotificationRow({
         <Icon className="size-4" aria-hidden />
       </span>
       <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-        <span className="flex items-baseline gap-3">
-          <span className="min-w-0 flex-1 text-sm leading-snug font-medium">
-            {title}
-            {url ? (
-              <ExternalLink
-                className="ml-1.5 inline size-3 -translate-y-px text-muted-foreground"
-                aria-hidden
-              />
-            ) : null}
-          </span>
-          <span className="flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground">
-            {highlighted ? (
-              <span
-                aria-label="Unread"
-                className="size-1.5 rounded-full bg-primary"
-              />
-            ) : null}
-            <RelativeTime timestamp={notification.createdAt} />
-          </span>
+        <span className="text-sm leading-snug font-medium">
+          {title}
+          {url ? (
+            <ExternalLink
+              className="ml-1.5 inline size-3 -translate-y-px text-muted-foreground"
+              aria-hidden
+            />
+          ) : null}
         </span>
         <span className="text-xs text-muted-foreground">
           {notificationDetail(content)}
         </span>
+      </span>
+      <span className="flex shrink-0 items-center gap-1.5 self-center text-xs text-muted-foreground">
+        {highlighted ? (
+          <span
+            aria-label="Unread"
+            className="size-1.5 rounded-full bg-primary"
+          />
+        ) : null}
+        <RelativeTime timestamp={notification.createdAt} />
       </span>
     </>
   )
