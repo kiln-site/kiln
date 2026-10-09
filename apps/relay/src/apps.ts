@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process"
-import { mkdir, rm, writeFile } from "node:fs/promises"
+import { mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 
 import type {
@@ -28,8 +28,8 @@ import { forkPromise, promiseEffect } from "./effect/promise.js"
 import { relayOwnerLabel, relayOwnsLabels } from "./relay-resources.js"
 
 // Apps are found by their labels, like databases: the Relay keeps nothing
-// about them besides their data directory and the log of their latest
-// deployment, which lives in memory.
+// about them besides their data directory and the logs of their recent
+// deployments.
 const KIND_LABEL = "kiln.resource.kind"
 const APP_KIND = "app"
 const ID_LABEL = "kiln.app.id"
@@ -42,6 +42,8 @@ export const SINGLE_APP_SERVICE = "app"
 export const APP_DEPLOYMENT_STREAM = "deployment"
 const SERVICE_STREAM_PREFIX = "service:"
 const MAX_DEPLOYMENT_LINES = 5_000
+// Finished deployments' logs kept per app, newest first.
+const KEPT_DEPLOYMENTS = 20
 const PULL_TIMEOUT_MS = 15 * 60_000
 const BUILD_TIMEOUT_MS = 30 * 60_000
 // How long a new container must stay up before its deployment succeeds.
@@ -98,6 +100,8 @@ export class AppDriver {
   readonly #config: RelayConfig
   readonly #hostDataDirectory: () => Promise<string>
   readonly #deployments = new Map<string, Deployment>()
+  // Apps whose latest deployment has been read back from disk this run.
+  readonly #restored = new Set<string>()
   // Wakes whatever follows an app when its deployment or containers change.
   readonly #waiters = new Map<string, Set<() => void>>()
   readonly #mutations = new Map<
@@ -125,6 +129,7 @@ export class AppDriver {
       ...networks,
       ...containers.map((container) => container.appId),
     ])
+    await Promise.all([...ids].map((id) => this.#restoreDeployment(id)))
     return [...ids].map((id) =>
       this.#toApp(
         id,
@@ -247,6 +252,10 @@ export class AppDriver {
           recursive: true,
         })
       }
+      await rm(this.#deploymentDirectory(input.appId), {
+        force: true,
+        recursive: true,
+      })
       this.#deployments.delete(input.appId)
       this.#wake(input.appId)
       return { appId: input.appId, deleted: true }
@@ -319,6 +328,7 @@ export class AppDriver {
     signal?: AbortSignal
   ): Promise<DockerConsoleSession> {
     if (!stream || stream === APP_DEPLOYMENT_STREAM) {
+      await this.#restoreDeployment(appId)
       return this.#deploymentSession(appId)
     }
     if (!stream.startsWith(SERVICE_STREAM_PREFIX)) {
@@ -448,19 +458,67 @@ export class AppDriver {
       )
     )
     const seconds = ((Date.now() - startedAt) / 1_000).toFixed(1)
-    if (Result.isSuccess(outcome)) {
-      deployment.state = "succeeded"
-      log(`Deployment finished in ${seconds}s`)
-    } else {
-      const message = deployment.abort.signal.aborted
+    const message = Result.isSuccess(outcome)
+      ? null
+      : deployment.abort.signal.aborted
         ? "The deployment was cancelled"
         : errorMessage(outcome.failure)
-      deployment.state = "failed"
-      deployment.error = message.slice(0, 2_000)
-      log(`Deployment failed after ${seconds}s: ${message}`, "error")
+    if (message === null) log(`Deployment finished in ${seconds}s`)
+    else log(`Deployment failed after ${seconds}s: ${message}`, "error")
+    const finished = {
+      error: message?.slice(0, 2_000) ?? null,
+      finishedAt: new Date().toISOString(),
+      state: message === null ? ("succeeded" as const) : ("failed" as const),
     }
-    deployment.finishedAt = new Date().toISOString()
+    // Saved before it shows as finished, so a finished deployment's log is
+    // always on disk.
+    await this.#saveDeployment(input.appId, { ...deployment, ...finished })
+    Object.assign(deployment, finished)
     this.#wake(input.appId)
+  }
+
+  // Writes a finished deployment's log, keeping the newest few per app. A
+  // log that can't be written only costs its history.
+  async #saveDeployment(appId: string, deployment: Deployment) {
+    const directory = this.#deploymentDirectory(appId)
+    await Effect.runPromise(
+      promiseEffect(async () => {
+        await mkdir(directory, { recursive: true, mode: 0o700 })
+        const { abort: _abort, ...saved } = deployment
+        await writeFile(
+          join(directory, `${deployment.id}.json`),
+          JSON.stringify(saved),
+          { mode: 0o600 }
+        )
+        const older = (await deploymentFiles(directory)).slice(KEPT_DEPLOYMENTS)
+        for (const file of older)
+          await rm(join(directory, file), { force: true })
+      }).pipe(Effect.ignore)
+    )
+  }
+
+  // The latest deployment from before the Relay restarted, if any.
+  async #restoreDeployment(appId: string) {
+    if (this.#restored.has(appId) || this.#deployments.has(appId)) return
+    this.#restored.add(appId)
+    const directory = this.#deploymentDirectory(appId)
+    const restored = await Effect.runPromise(
+      promiseEffect(async () => {
+        const [latest] = await deploymentFiles(directory)
+        if (!latest) return null
+        const saved = JSON.parse(
+          await readFile(join(directory, latest), "utf8")
+        ) as Omit<Deployment, "abort">
+        return { ...saved, abort: new AbortController() } satisfies Deployment
+      }).pipe(Effect.orElseSucceed(() => null))
+    )
+    if (restored && !this.#deployments.has(appId)) {
+      this.#deployments.set(appId, restored)
+    }
+  }
+
+  #deploymentDirectory(appId: string): string {
+    return join(this.#config.dataDirectory, "app-deployments", appId)
   }
 
   async #pullImage(input: RelayDeployApp, deployment: Deployment) {
@@ -1378,6 +1436,15 @@ function isoTime(value: string | undefined): string | null {
 // UTC time to the second, as in kiln-<shortid>-20261009093012.
 function deploymentStamp(): string {
   return new Date().toISOString().replace(/[-:T]/gu, "").slice(0, 14)
+}
+
+// A directory's deployment logs, newest first: their names are their UTC
+// start times.
+async function deploymentFiles(directory: string): Promise<Array<string>> {
+  return (await readdir(directory))
+    .filter((file) => /^\d{14}\.json$/u.test(file))
+    .sort()
+    .reverse()
 }
 
 function labelArguments(labels: Readonly<Record<string, string>>) {

@@ -77,6 +77,7 @@ import { Route as AppAppAppIdFilesRouteImport } from './routes/_app/app/$appId.f
 import { Route as AppAppAppIdInfoRouteImport } from './routes/_app/app/$appId.info'
 import { Route as AppAppAppIdLogsRouteImport } from './routes/_app/app/$appId.logs'
 import { Route as AppAppAppIdNetworkRouteImport } from './routes/_app/app/$appId.network'
+import { Route as AppAppAppIdOverviewRouteImport } from './routes/_app/app/$appId.overview'
 import { Route as AppAppAppIdTerminalRouteImport } from './routes/_app/app/$appId.terminal'
 import { Route as AppDbDatabaseIdIndexRouteImport } from './routes/_app/db/$databaseId.index'
 import { Route as AppDbDatabaseIdSplatRouteImport } from './routes/_app/db/$databaseId.$'
@@ -438,6 +439,11 @@ const AppAppAppIdNetworkRoute = AppAppAppIdNetworkRouteImport.update({
   path: '/network',
   getParentRoute: () => AppAppAppIdRoute,
 } as any)
+const AppAppAppIdOverviewRoute = AppAppAppIdOverviewRouteImport.update({
+  id: '/overview',
+  path: '/overview',
+  getParentRoute: () => AppAppAppIdRoute,
+} as any)
 const AppAppAppIdTerminalRoute = AppAppAppIdTerminalRouteImport.update({
   id: '/terminal',
   path: '/terminal',
@@ -610,6 +616,7 @@ export interface FileRoutesByFullPath {
   '/app/$appId/info': typeof AppAppAppIdInfoRoute
   '/app/$appId/logs': typeof AppAppAppIdLogsRoute
   '/app/$appId/network': typeof AppAppAppIdNetworkRoute
+  '/app/$appId/overview': typeof AppAppAppIdOverviewRoute
   '/app/$appId/terminal': typeof AppAppAppIdTerminalRoute
   '/db/$databaseId/$': typeof AppDbDatabaseIdSplatRoute
   '/db/$databaseId/info': typeof AppDbDatabaseIdInfoRoute
@@ -692,6 +699,7 @@ export interface FileRoutesByTo {
   '/app/$appId/info': typeof AppAppAppIdInfoRoute
   '/app/$appId/logs': typeof AppAppAppIdLogsRoute
   '/app/$appId/network': typeof AppAppAppIdNetworkRoute
+  '/app/$appId/overview': typeof AppAppAppIdOverviewRoute
   '/app/$appId/terminal': typeof AppAppAppIdTerminalRoute
   '/db/$databaseId/$': typeof AppDbDatabaseIdSplatRoute
   '/db/$databaseId/info': typeof AppDbDatabaseIdInfoRoute
@@ -783,6 +791,7 @@ export interface FileRoutesById {
   '/_app/app/$appId/info': typeof AppAppAppIdInfoRoute
   '/_app/app/$appId/logs': typeof AppAppAppIdLogsRoute
   '/_app/app/$appId/network': typeof AppAppAppIdNetworkRoute
+  '/_app/app/$appId/overview': typeof AppAppAppIdOverviewRoute
   '/_app/app/$appId/terminal': typeof AppAppAppIdTerminalRoute
   '/_app/db/$databaseId/$': typeof AppDbDatabaseIdSplatRoute
   '/_app/db/$databaseId/info': typeof AppDbDatabaseIdInfoRoute
@@ -874,6 +883,7 @@ export interface FileRouteTypes {
     | '/app/$appId/info'
     | '/app/$appId/logs'
     | '/app/$appId/network'
+    | '/app/$appId/overview'
     | '/app/$appId/terminal'
     | '/db/$databaseId/$'
     | '/db/$databaseId/info'
@@ -956,6 +966,7 @@ export interface FileRouteTypes {
     | '/app/$appId/info'
     | '/app/$appId/logs'
     | '/app/$appId/network'
+    | '/app/$appId/overview'
     | '/app/$appId/terminal'
     | '/db/$databaseId/$'
     | '/db/$databaseId/info'
@@ -1046,6 +1057,7 @@ export interface FileRouteTypes {
     | '/_app/app/$appId/info'
     | '/_app/app/$appId/logs'
     | '/_app/app/$appId/network'
+    | '/_app/app/$appId/overview'
     | '/_app/app/$appId/terminal'
     | '/_app/db/$databaseId/$'
     | '/_app/db/$databaseId/info'
@@ -1579,6 +1591,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppAppAppIdNetworkRouteImport
       parentRoute: typeof AppAppAppIdRoute
     }
+    '/_app/app/$appId/overview': {
+      id: '/_app/app/$appId/overview'
+      path: '/overview'
+      fullPath: '/app/$appId/overview'
+      preLoaderRoute: typeof AppAppAppIdOverviewRouteImport
+      parentRoute: typeof AppAppAppIdRoute
+    }
     '/_app/app/$appId/terminal': {
       id: '/_app/app/$appId/terminal'
       path: '/terminal'
@@ -1825,6 +1844,7 @@ interface AppAppAppIdRouteChildren {
   AppAppAppIdInfoRoute: typeof AppAppAppIdInfoRoute
   AppAppAppIdLogsRoute: typeof AppAppAppIdLogsRoute
   AppAppAppIdNetworkRoute: typeof AppAppAppIdNetworkRoute
+  AppAppAppIdOverviewRoute: typeof AppAppAppIdOverviewRoute
   AppAppAppIdTerminalRoute: typeof AppAppAppIdTerminalRoute
   AppAppAppIdIndexRoute: typeof AppAppAppIdIndexRoute
 }
@@ -1835,6 +1855,7 @@ const AppAppAppIdRouteChildren: AppAppAppIdRouteChildren = {
   AppAppAppIdInfoRoute: AppAppAppIdInfoRoute,
   AppAppAppIdLogsRoute: AppAppAppIdLogsRoute,
   AppAppAppIdNetworkRoute: AppAppAppIdNetworkRoute,
+  AppAppAppIdOverviewRoute: AppAppAppIdOverviewRoute,
   AppAppAppIdTerminalRoute: AppAppAppIdTerminalRoute,
   AppAppAppIdIndexRoute: AppAppAppIdIndexRoute,
 }

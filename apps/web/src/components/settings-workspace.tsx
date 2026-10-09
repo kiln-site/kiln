@@ -45,7 +45,7 @@ import {
   ResourceUsersCard,
 } from "@/components/info-card"
 import { InstanceFavoriteButton } from "@/components/instance-favorite"
-import { ReadOnlyCodeViewer } from "@/components/read-only-code-viewer"
+import { CodeDocumentPanel } from "@/components/code-document-panel"
 import { ServerDeleteDialog } from "@/components/server-delete-dialog"
 import { hostPortAddress } from "@/lib/domain-address"
 import { provisioningFailureDiagnostics } from "@/lib/provisioning-diagnostics"
@@ -547,9 +547,10 @@ function BrickInfoCard({
               {recipeQuery.error.message || "Could not load the Brick recipe"}
             </div>
           ) : recipeQuery.data ? (
-            <ReadOnlyCodeViewer
+            <CodeDocumentPanel
               content={recipeQuery.data.content}
               languagePath="brick-recipe.json"
+              noun="recipe"
               onShare={canShare ? shareRecipe : undefined}
               sourceUrl={recipeQuery.data.sourceUrl}
               title={recipeQuery.data.name}
