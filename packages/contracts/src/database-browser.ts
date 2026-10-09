@@ -1,5 +1,5 @@
 import { z } from "zod"
-import { fileRootIdSchema } from "./file-root.js"
+import { fileRootIdSchema } from "./app-keys.js"
 
 // Engine-agnostic protocol for browsing and editing databases: file-backed
 // SQLite and managed MySQL/MariaDB/Postgres implement the same actions.

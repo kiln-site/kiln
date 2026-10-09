@@ -1,6 +1,7 @@
 import * as React from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { Link } from "@tanstack/react-router"
+import { appTailscaleMemberId } from "@workspace/contracts"
 import type { AppPort, RelayAppWebRoute } from "@workspace/contracts"
 import {
   Cable,
@@ -43,11 +44,13 @@ import {
 } from "@/components/app/app-presentation"
 import { useAppWorkspace } from "@/components/app/app-workspace-context"
 import { CopyMetaRow, InfoCard, InfoCardHeader } from "@/components/info-card"
+import { TailscaleMembershipSection } from "@/components/tailscale-network-membership"
 import {
   parseWebRouteForm,
   WebRouteFields,
 } from "@/components/web-route-fields"
 import {
+  accessCapabilitiesQueryOptions,
   appConfigQueryOptions,
   appWebRoutesQueryOptions,
   managedDatabasesQueryOptions,
@@ -114,6 +117,10 @@ export function AppNetworkPage() {
               app={app}
               canManage={canManage}
               databaseIds={config.data.config.databaseIds}
+            />
+            <AppTailscale
+              app={app}
+              compose={config.data.config.sourceType === "compose"}
             />
           </>
         ) : (
@@ -432,6 +439,54 @@ function AppWebRouteDialog({
     </Dialog>
   )
 }
+
+// Each service can join Tailscale networks like a server, keeping its
+// address across deploys. Managing Tailscale is for platform admins.
+function AppTailscale({ app, compose }: { app: App; compose: boolean }) {
+  const { data: isPlatformAdmin } = useQuery({
+    ...accessCapabilitiesQueryOptions(),
+    select: (capabilities) => capabilities.isPlatformAdmin,
+  })
+  if (!isPlatformAdmin) return null
+  const services = appServices(app)
+  const members =
+    services.length > 0 ? services : compose ? [] : [APP_SERVICE_NAME]
+  if (members.length === 0) {
+    return (
+      <InfoCard>
+        <InfoCardHeader icon={<Network />} title="Tailscale networks" />
+        <p className="px-4 py-4 text-xs text-muted-foreground">
+          Deploy this app once so its services can join Tailscale networks.
+        </p>
+      </InfoCard>
+    )
+  }
+  return (
+    <React.Suspense fallback={null}>
+      {members.map((service) => (
+        <TailscaleMembershipSection
+          key={service}
+          member={{
+            id: appTailscaleMemberId(app.id, service),
+            name: members.length > 1 ? `${service}-${app.name}` : app.name,
+            relayId: app.relayId,
+            relayName: app.relayName,
+            shortId: app.shortId,
+          }}
+          noun={members.length > 1 ? "service" : "app"}
+          title={
+            members.length > 1
+              ? `Tailscale networks · ${service}`
+              : "Tailscale networks"
+          }
+        />
+      ))}
+    </React.Suspense>
+  )
+}
+
+// Image and Dockerfile apps run one service under this name.
+const APP_SERVICE_NAME = "app"
 
 function PublishedPorts({
   app,

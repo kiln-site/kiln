@@ -102,6 +102,17 @@ export interface AppRoutePlan {
   readonly network: string | null
 }
 
+// What deploys join each service to besides its own network: its Traefik
+// routes, and the Tailscale networks its services are members of.
+export interface AppNetworking {
+  readonly routes: (appId: string) => Promise<AppRoutePlan>
+  readonly tailscale: (
+    appId: string
+  ) => Promise<
+    ReadonlyArray<{ address: string; network: string; service: string }>
+  >
+}
+
 export interface AppFileRoot {
   directory: string
   id: string
@@ -111,7 +122,7 @@ export class AppDriver {
   readonly #config: RelayConfig
   readonly #resources: RelayResourceNames
   readonly #hostDataDirectory: () => Promise<string>
-  readonly #routes: (appId: string) => Promise<AppRoutePlan>
+  readonly #networking: AppNetworking
   readonly #deployments = new Map<string, Deployment>()
   // Apps whose latest deployment has been read back from disk this run.
   readonly #restored = new Set<string>()
@@ -125,12 +136,12 @@ export class AppDriver {
   constructor(
     config: RelayConfig,
     hostDataDirectory: () => Promise<string>,
-    routes: (appId: string) => Promise<AppRoutePlan>
+    networking: AppNetworking
   ) {
     this.#config = config
     this.#resources = relayResourceNames(config)
     this.#hostDataDirectory = hostDataDirectory
-    this.#routes = routes
+    this.#networking = networking
   }
 
   // Where app data directories live inside the Relay.
@@ -597,7 +608,10 @@ export class AppDriver {
       deployment,
       config.databaseIds
     )
-    const routes = await this.#routes(input.appId)
+    const routes = await this.#networking.routes(input.appId)
+    const tailscale = (await this.#networking.tailscale(input.appId)).filter(
+      (membership) => membership.service === APP_SERVICE
+    )
     await command(
       "docker",
       [
@@ -642,6 +656,20 @@ export class AppDriver {
         "--alias",
         hostname,
         network,
+        name,
+      ])
+    }
+    // Tailscale members keep their address, which the new container takes
+    // once the previous one stops.
+    for (const membership of tailscale) {
+      await command("docker", [
+        "network",
+        "connect",
+        "--ip",
+        membership.address,
+        "--alias",
+        hostname,
+        membership.network,
         name,
       ])
     }
@@ -732,7 +760,8 @@ export class AppDriver {
     const prepared = this.#prepareCompose(normalized, {
       appId: input.appId,
       databases,
-      routes: await this.#routes(input.appId),
+      routes: await this.#networking.routes(input.appId),
+      tailscale: await this.#networking.tailscale(input.appId),
       deploymentId: deployment.id,
       directory,
       hostDirectory,
@@ -790,6 +819,11 @@ export class AppDriver {
       directory: string
       hostDirectory: string
       routes: AppRoutePlan
+      tailscale: ReadonlyArray<{
+        address: string
+        network: string
+        service: string
+      }>
     }
   ): ComposeProject {
     // Databases and the Traefik edge, joined under the service's alias.
@@ -814,6 +848,17 @@ export class AppDriver {
                 network,
                 { aliases: [this.#serviceAlias(options.appId, name)] },
               ])
+            ),
+            ...Object.fromEntries(
+              options.tailscale
+                .filter((membership) => membership.service === name)
+                .map((membership) => [
+                  membership.network,
+                  {
+                    aliases: [this.#serviceAlias(options.appId, name)],
+                    ipv4_address: membership.address,
+                  },
+                ])
             ),
           }
       services[name] = {
@@ -856,7 +901,10 @@ export class AppDriver {
         ...normalized.networks,
         kiln_app: { external: true, name: this.#networkName(options.appId) },
         ...Object.fromEntries(
-          joined.map((network) => [network, { external: true, name: network }])
+          [
+            ...joined,
+            ...options.tailscale.map((membership) => membership.network),
+          ].map((network) => [network, { external: true, name: network }])
         ),
       },
       services,

@@ -1,8 +1,10 @@
-import { access, writeFile } from "node:fs/promises"
+import { access, mkdir, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 
 import {
+  appTailscaleMemberId,
   defaultAppConfig,
+  relayTailscaleStackConfigSchema,
   relayDeployAppSchema,
   type AppConfig,
   type RelayApp,
@@ -167,6 +169,48 @@ describe("apps", () => {
     expect([...container!.networks.keys()]).toContain(
       harness.resources.edgeNetwork
     )
+  })
+
+  it("puts a service at its Tailscale address when the app deploys", async () => {
+    const harness = await createdApp()
+    const stackId = "e".repeat(40)
+    const address = "10.165.57.12"
+    const network = harness.resources.tailscaleStackNetwork(stackId)
+    fakeDocker.addNetwork({
+      labels: { "kiln.relay.owner": TEST_NAMESPACE },
+      name: network,
+      subnet: "10.165.57.0/24",
+    })
+    await mkdir(join(harness.config.rootDirectory, stackId), {
+      recursive: true,
+    })
+    await writeFile(
+      join(harness.config.rootDirectory, stackId, "stack.json"),
+      JSON.stringify(
+        relayTailscaleStackConfigSchema.parse({
+          bindings: [
+            {
+              address,
+              enabled: true,
+              hostname: "website",
+              instanceId: appTailscaleMemberId(appId, "app"),
+            },
+          ],
+          domain: "test",
+          hostname: "private-network",
+          id: stackId,
+          name: "Private Network",
+          subnet: "10.165.57.0/24",
+        })
+      )
+    )
+
+    await deploy(harness, {})
+
+    const [container] = appContainers()
+    expect(container!.networks.get(network)).toMatchObject({
+      ipAddress: address,
+    })
   })
 
   it("removes an app's containers, network, and data when deleted", async () => {

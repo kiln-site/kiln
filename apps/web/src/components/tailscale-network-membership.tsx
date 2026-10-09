@@ -314,10 +314,22 @@ export const TailscaleConnectServersPopover = React.memo(
   }
 )
 
-export function GameServerTailscaleSection({
-  server,
+// A server's, or an app service's, Tailscale networks: which it has joined,
+// under what hostname, and joining or leaving others.
+export type TailscaleMember = Pick<
+  InstanceWorkspaceInstance,
+  "id" | "name" | "relayId" | "relayName" | "shortId"
+>
+
+export function TailscaleMembershipSection({
+  member: server,
+  noun = "server",
+  title = "Tailscale networks",
 }: {
-  server: InstanceWorkspaceInstance
+  member: TailscaleMember
+  // Lowercase, as in "disconnects this server".
+  noun?: string
+  title?: string
 }) {
   const { data } = useSuspenseQuery(tailscaleStacksQueryOptions())
   const { stacks, unsupportedRelays } = data
@@ -377,7 +389,7 @@ export function GameServerTailscaleSection({
       <div className="flex min-h-12 items-center justify-between gap-3 border-b border-border/70 px-4 py-3">
         <div className="flex min-w-0 items-center gap-2.5">
           <Network className="size-4 shrink-0 text-primary" />
-          <h2 className="truncate text-sm font-semibold">Tailscale networks</h2>
+          <h2 className="truncate text-sm font-semibold">{title}</h2>
           <span className="grid size-4 shrink-0 place-items-center">
             {relayUnsupported ? (
               <TailscaleRelayUpdateHint relayName={server.relayName} />
@@ -398,8 +410,9 @@ export function GameServerTailscaleSection({
           {availableStacks.map((stack) => {
             const binding = findBinding(stack, server)
             return (
-              <GameServerMembershipRow
+              <MembershipRow
                 key={stack.id}
+                noun={noun}
                 binding={binding}
                 disabled={
                   save.isPending || (relayUnsupported && Boolean(binding))
@@ -826,10 +839,11 @@ function CopyIdentifierMenuItem({
   )
 }
 
-const GameServerMembershipRow = React.memo(function GameServerMembershipRow({
+const MembershipRow = React.memo(function MembershipRow({
   binding,
   disabled,
   joinDisabled,
+  noun,
   pending,
   relayId,
   serverId,
@@ -840,6 +854,7 @@ const GameServerMembershipRow = React.memo(function GameServerMembershipRow({
   binding?: StackBinding
   disabled: boolean
   joinDisabled: boolean
+  noun: string
   pending: boolean
   relayId: string
   serverId: string
@@ -933,8 +948,8 @@ const GameServerMembershipRow = React.memo(function GameServerMembershipRow({
             <DialogTitle>Leave {stack.name}?</DialogTitle>
             <DialogDescription>
               {onlyBindingOnRelay
-                ? `This disconnects this server from ${stack.name}. Because it is the last server on this Relay, Tailscale will also be removed from the Relay in the background.`
-                : `This disconnects this server from ${stack.name}. Tailscale will remain installed on the Relay for its other servers.`}
+                ? `This disconnects this ${noun} from ${stack.name}. Because it is the last member on this Relay, Tailscale will also be removed from the Relay in the background.`
+                : `This disconnects this ${noun} from ${stack.name}. Tailscale will remain installed on the Relay for its other members.`}
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
@@ -980,7 +995,7 @@ const JoinNetworkDialog = React.memo(function JoinNetworkDialog({
   network: TailscaleStackOverview
   open: boolean
   pending: boolean
-  server: InstanceWorkspaceInstance
+  server: TailscaleMember
   onOpenChange: (open: boolean) => void
   onJoin: (hostname: string, authKey?: string) => Promise<void>
 }) {
