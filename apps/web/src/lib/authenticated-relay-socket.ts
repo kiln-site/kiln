@@ -4,6 +4,7 @@ import {
   relayBrowserProofTranscript,
   relayBrowserProtocol,
 } from "@workspace/contracts"
+import type { RelayBrowserResourceKind } from "@workspace/contracts"
 import * as Sentry from "@sentry/tanstackstart-react"
 import {
   Cause,
@@ -55,14 +56,19 @@ export function shouldWaitForRelayBrowserAuthorization(
 /** Keep a scoped wake-up even after a denied stream releases its credentials. */
 export function relayBrowserAuthorizationChanges(
   relayId: string,
-  instanceId: string
+  instanceId: string,
+  resourceKind: RelayBrowserResourceKind = "instance"
 ) {
   return Effect.gen(function* () {
     const changes = yield* Queue.sliding<void>(1)
     yield* Effect.addFinalizer(() => Queue.shutdown(changes))
     yield* Effect.acquireRelease(
       Effect.sync(() =>
-        relayBrowserAuthorizationSignal(relayId, instanceId).subscribe(() => {
+        relayBrowserAuthorizationSignal(
+          relayId,
+          instanceId,
+          resourceKind
+        ).subscribe(() => {
           Queue.offerUnsafe(changes, undefined)
         })
       ),

@@ -13,7 +13,7 @@ import {
   type DatabaseConnections,
   type DatabaseConnectionSnapshot,
 } from "./database-connections.js"
-import { command, commandEffect } from "./command.js"
+import { command, commandEffect, commandLines } from "./command.js"
 import type { CommandResult } from "./command.js"
 import type { BrickCatalog } from "./bricks.js"
 import { directoryApparentSizeEffect } from "./disk-usage.js"
@@ -164,12 +164,17 @@ interface ConsoleTarget {
   container: DockerInspect
 }
 
+interface LogTarget {
+  component: ConsoleTarget["component"]
+  id: string
+  since: Array<string>
+}
+
 export interface DockerConsoleSession {
   readonly history: (
     limit?: number,
     signal?: AbortSignal
   ) => Promise<RelayConsole>
-  readonly instance: RelayInstanceConfig
   readonly stream: (
     signal: AbortSignal,
     limit?: number
@@ -406,6 +411,9 @@ const CONSOLE_TTY_COLUMNS = 120
 const CONSOLE_TTY_ROWS = 40
 const MAX_SHARED_CONSOLE_BYTES = 10 * 1024 * 1024
 export const MAX_CONSOLE_HISTORY_LINES = 5_000
+// Console history kept from one read, in characters; the newest output is
+// kept and the history says it was truncated.
+const MAX_CONSOLE_HISTORY_CHARACTERS = 16 * 1024 * 1024
 const STARTUP_READINESS_LOG_LINES = 1_000
 const RESOURCE_HISTORY_WINDOW_MS = 6 * 60_000
 const DISK_USAGE_REFRESH_MS = 60_000
@@ -1158,26 +1166,66 @@ export class DockerDriver {
     signal?: AbortSignal
   ): Promise<DockerConsoleSession> {
     const discovered = await this.#findDiscovered(instanceId, signal)
-    const instance = discovered.config
-    const targets = await this.#consoleTargets(instance, discovered, signal)
+    const targets = await this.#consoleTargets(
+      discovered.config,
+      discovered,
+      signal
+    )
+    return this.#consoleSessionFor(
+      discovered.config.id,
+      discovered.container,
+      targets
+    )
+  }
+
+  // The console of any one container, such as a database's, read the same
+  // way as a server's.
+  async containerConsoleSession(
+    resourceId: string,
+    containerId: string,
+    signal?: AbortSignal
+  ): Promise<DockerConsoleSession> {
+    const inspected = await command("docker", ["inspect", containerId], {
+      signal,
+    })
+    const container = (JSON.parse(inspected.stdout) as Array<DockerInspect>)[0]
+    if (!container) throw new Error(`Container ${containerId} was not found`)
+    return this.#consoleSessionFor(resourceId, container, [
+      { component: null, container },
+    ])
+  }
+
+  // `container` is the one whose start begins the session.
+  #consoleSessionFor(
+    resourceId: string,
+    container: DockerInspect,
+    targets: ReadonlyArray<ConsoleTarget>
+  ): DockerConsoleSession {
     return {
       history: (limit = 2_000, historySignal) =>
         this.#consoleHistory(
-          instance,
-          discovered,
+          resourceId,
+          container,
           targets,
           limit,
           historySignal
         ),
-      instance,
       stream: (signal, limit = 200) =>
-        this.#streamConsoleTargets(targets, signal, limit),
+        this.#streamConsoleTargets(
+          targets.map((target) => ({
+            component: target.component,
+            id: target.container.Id,
+            since: dockerLogSinceArguments(target.container.State.StartedAt),
+          })),
+          signal,
+          limit
+        ),
     }
   }
 
   async #consoleHistory(
-    instance: RelayInstanceConfig,
-    discovered: DiscoveredInstance,
+    resourceId: string,
+    container: DockerInspect,
     targets: ReadonlyArray<ConsoleTarget>,
     limit: number,
     signal?: AbortSignal
@@ -1186,41 +1234,48 @@ export class DockerDriver {
       Math.max(limit, 100),
       MAX_CONSOLE_HISTORY_LINES
     )
-    const startedAt = consoleStartedAt(discovered.container)
+    const startedAt = consoleStartedAt(container)
+    let cut = false
     const results = await Promise.all(
       targets.map(async (target) => {
-        const targetSince = dockerLogSinceArguments(
-          target.container.State.StartedAt
+        // Read as it arrives, keeping the newest output within the limit,
+        // rather than buffering output of any size.
+        const kept: Array<{ characters: number; line: ParsedConsoleLine }> = []
+        let characters = 0
+        const limit = MAX_CONSOLE_HISTORY_CHARACTERS / targets.length
+        await commandLines(
+          "docker",
+          [
+            "logs",
+            "--timestamps",
+            ...dockerLogSinceArguments(target.container.State.StartedAt),
+            "--tail",
+            String(boundedLimit),
+            target.container.Id,
+          ],
+          (raw) => {
+            const line = parseConsoleLine(raw)
+            if (!line) return
+            kept.push({ characters: raw.length, line })
+            characters += raw.length
+            while (characters > limit && kept.length > 1) {
+              characters -= kept.shift()!.characters
+              cut = true
+            }
+          },
+          { signal, timeout: 15_000 }
         )
-        return {
-          target,
-          result: await command(
-            "docker",
-            [
-              "logs",
-              "--timestamps",
-              ...targetSince,
-              "--tail",
-              String(boundedLimit),
-              target.container.Id,
-            ],
-            { signal, timeout: 15_000 }
-          ),
-        }
+        return kept.map(({ line }) => prefixConsoleLine(line, target.component))
       })
     )
     const rawLines = results
-      .flatMap(({ result, target }) =>
-        parseConsoleOutput(result).map((line) =>
-          prefixConsoleLine(line, target.component)
-        )
-      )
+      .flat()
       .sort(compareConsoleLines)
       .slice(-boundedLimit)
     const occurrences = new Map<string, number>()
 
     return {
-      instanceId: instance.id,
+      instanceId: resourceId,
       lifecycle: startedAt ? [{ state: "started", time: startedAt }] : [],
       lines: rawLines.map((line) => {
         const hash = createHash("sha1")
@@ -1231,7 +1286,7 @@ export class DockerDriver {
         occurrences.set(hash, occurrence + 1)
         return { ...line, id: `${hash}-${occurrence}` }
       }),
-      truncated: rawLines.length >= boundedLimit,
+      truncated: cut || rawLines.length >= boundedLimit,
     }
   }
 
@@ -1294,7 +1349,7 @@ export class DockerDriver {
   }
 
   #streamConsoleTargets(
-    targets: ReadonlyArray<ConsoleTarget>,
+    targets: ReadonlyArray<LogTarget>,
     signal: AbortSignal,
     limit: number
   ): AsyncIterable<RelayConsoleLine> {
@@ -1330,34 +1385,34 @@ export class DockerDriver {
             let stdoutBuffer = ""
             let stderrBuffer = ""
             let settled = false
-            const targetSince = dockerLogSinceArguments(
-              target.container.State.StartedAt
-            )
             const child = spawn(
               "docker",
               [
                 "logs",
                 "--follow",
                 "--timestamps",
-                ...targetSince,
+                ...target.since,
                 "--tail",
                 String(Math.ceil(boundedLimit / targets.length)),
-                target.container.Id,
+                target.id,
               ],
               { stdio: ["ignore", "pipe", "pipe"] }
             )
-            const consume = (source: "stdout" | "stderr", chunk: Buffer) => {
+            const consume = (source: "stdout" | "stderr", chunk: string) => {
               const current =
-                (source === "stdout" ? stdoutBuffer : stderrBuffer) +
-                chunk.toString("utf8")
+                (source === "stdout" ? stdoutBuffer : stderrBuffer) + chunk
               const lines = current.split("\n")
               const remainder = lines.pop() ?? ""
               if (source === "stdout") stdoutBuffer = remainder
               else stderrBuffer = remainder
               for (const line of lines) queueLine(line, target.component)
             }
-            child.stdout.on("data", (chunk: Buffer) => consume("stdout", chunk))
-            child.stderr.on("data", (chunk: Buffer) => consume("stderr", chunk))
+            // Decoded across chunks, so characters split between them stay
+            // whole.
+            child.stdout.setEncoding("utf8")
+            child.stderr.setEncoding("utf8")
+            child.stdout.on("data", (chunk: string) => consume("stdout", chunk))
+            child.stderr.on("data", (chunk: string) => consume("stderr", chunk))
             child.on("error", (error) => {
               if (settled) return
               settled = true

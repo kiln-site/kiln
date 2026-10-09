@@ -41,7 +41,11 @@ describe("Relay console connection setup", () => {
       new Error("Capability service unavailable")
     )
     const event = await Effect.runPromise(
-      openRelayConsoleStream("relay", "instance", null).pipe(Stream.runHead)
+      openRelayConsoleStream(
+        "relay",
+        { id: "instance", kind: "instance" },
+        null
+      ).pipe(Stream.runHead)
     )
     expect(Option.getOrThrow(event)).toMatchObject({ type: "reconnecting" })
     expect(fetchFallback).not.toHaveBeenCalled()
@@ -63,7 +67,7 @@ describe("Relay console connection setup", () => {
     const event = await Effect.runPromise(
       openRelayConsoleStream(
         "relay-one",
-        "instance-one",
+        { id: "instance-one", kind: "instance" },
         "https://relay.example.com",
         "hearth"
       ).pipe(Stream.runHead)
@@ -90,7 +94,7 @@ describe("Relay console connection setup", () => {
     const running = Effect.runPromise(
       openRelayConsoleStream(
         "relay-one",
-        "instance-one",
+        { id: "instance-one", kind: "instance" },
         "https://relay.example.com"
       ).pipe(Stream.runHead)
     )
@@ -124,7 +128,7 @@ describe("Relay console connection setup", () => {
       Effect.result(
         openRelayConsoleStream(
           "relay-one",
-          "instance-one",
+          { id: "instance-one", kind: "instance" },
           "https://relay.example.com"
         ).pipe(Stream.runDrain)
       )
@@ -154,7 +158,7 @@ describe("Relay console connection setup", () => {
     const running = Effect.runPromise(
       openRelayConsoleStream(
         "relay-one",
-        "instance-one",
+        { id: "instance-one", kind: "instance" },
         "https://relay.example.com"
       ).pipe(Stream.runHead)
     )
@@ -188,7 +192,7 @@ describe("Relay console connection setup", () => {
     const running = Effect.runPromise(
       openRelayConsoleStream(
         "relay-one",
-        "instance-one",
+        { id: "instance-one", kind: "instance" },
         "https://relay.example.com"
       ).pipe(Stream.runHead)
     )
@@ -219,7 +223,7 @@ describe("Relay console connection setup", () => {
     const running = Effect.runPromise(
       openRelayConsoleStream(
         "relay-one",
-        "instance-one",
+        { id: "instance-one", kind: "instance" },
         "https://relay.example.com"
       ).pipe(Stream.runHead)
     )
@@ -249,7 +253,7 @@ describe("Relay console connection setup", () => {
     const running = Effect.runPromise(
       openRelayConsoleStream(
         "relay-one",
-        "instance-one",
+        { id: "instance-one", kind: "instance" },
         "https://cached-relay.example.com"
       ).pipe(Stream.runHead)
     )
@@ -285,7 +289,7 @@ describe("Relay console connection setup", () => {
       Effect.result(
         openRelayConsoleStream(
           "relay-one",
-          "instance-one",
+          { id: "instance-one", kind: "instance" },
           "https://relay.example.com"
         ).pipe(Stream.runDrain)
       )
@@ -309,9 +313,11 @@ describe("Relay console connection setup", () => {
     vi.stubGlobal("fetch", fetchFallback)
 
     const running = Effect.runPromise(
-      openRelayConsoleStream("relay-one", "instance-one", null).pipe(
-        Stream.runHead
-      )
+      openRelayConsoleStream(
+        "relay-one",
+        { id: "instance-one", kind: "instance" },
+        null
+      ).pipe(Stream.runHead)
     )
 
     await capability.requested

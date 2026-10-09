@@ -86,6 +86,7 @@ import { DockerDriver } from "./docker.js"
 import { DatabaseBrowser } from "./database-browser.js"
 import { DatabaseDriver } from "./databases.js"
 import { browseManagedDatabase } from "./database-sql-browser.js"
+import { consoleSources } from "./console-sources.js"
 import { DatabaseTerminals } from "./database-terminal.js"
 import { forkPromise } from "./effect/promise.js"
 import {
@@ -646,6 +647,7 @@ const controlSocket = attachControlSocket({
 })
 const browserSocket = attachBrowserSocket({
   config,
+  consoleSources: consoleSources(docker, databases),
   docker,
   filesystem,
   identity: relayIdentity,

@@ -4,6 +4,8 @@ import * as Sentry from "@sentry/tanstackstart-react"
 import {
   relayBrowserCapabilityV2Feature,
   relayBrowserLeaseRenewalV1Feature,
+  relayConsoleReadActions,
+  relayConsoleResourcesV1Feature,
   relayFileRequestReplayV1Feature,
   relayProxyBrowserMetadataSchema,
   relayProxyDiagnosticsSchema,
@@ -11,6 +13,7 @@ import {
 } from "@workspace/contracts"
 import type {
   RelayBrowserOperationKind,
+  RelayConsoleResource,
   RelayProxyBrowserMetadata,
   RelayProxyMode,
 } from "@workspace/contracts"
@@ -48,6 +51,7 @@ type BrowserPublicKey = {
 }
 
 type BrowserAction =
+  | "database.logs.read"
   | "instance.console.read"
   | "instance.console.write"
   | "instance.files.download"
@@ -65,13 +69,13 @@ interface IssuedBrowserCapability {
 
 export function issueBrowserCapabilitiesForRequest(input: {
   authenticate: () => Promise<AuthenticatedRealtimeIdentity>
-  instanceId: string
   publicKeyJwk: BrowserPublicKey
   relayId: string
   requests: ReadonlyArray<
     | { kind: "console"; optInV2: boolean; write: boolean }
     | { kind: "resources"; optInV2: boolean }
   >
+  resource: RelayConsoleResource
 }): Promise<{
   capabilities: Array<
     IssuedBrowserCapability & { kind: "console" | "resources" }
@@ -100,21 +104,26 @@ export function issueBrowserCapabilitiesForRequest(input: {
       }
       const identity = identityResult.success
       const material = materialResult.success
-      const permissions = input.requests.flatMap((request) =>
-        request.kind === "console" && request.write
-          ? (["instance.console.read", "instance.console.write"] as const)
-          : request.kind === "console"
-            ? (["instance.console.read"] as const)
-            : (["instance.read"] as const)
+      const actionsByRequest = new Map(
+        input.requests.map((request) => [
+          request.kind,
+          browserActions(input.resource, request),
+        ])
       )
       const authorizationInput = {
         authorizationSession: {
           id: identity.sessionId,
           kind: "better_auth" as const,
         },
-        instanceId: input.instanceId,
-        permissions: [...new Set(permissions)],
+        permissions: [
+          ...new Set(
+            [...actionsByRequest.values()]
+              .flat()
+              .map(permissionForBrowserAction)
+          ),
+        ],
         relayId: material.relay.id,
+        resource: input.resource,
         identity,
       }
       yield* authorizeBrowserCapabilityEffect(authorizationInput)
@@ -126,7 +135,11 @@ export function issueBrowserCapabilitiesForRequest(input: {
       const versions = new Map(
         input.requests.map((request) => [
           request.kind,
-          negotiatedVersion(request.kind, request.optInV2, features),
+          resourceVersion(
+            input.resource,
+            negotiatedVersion(request.kind, request.optInV2, features),
+            features
+          ),
         ])
       )
       const [credentials, proxy, issuerGeneration] = yield* Effect.all(
@@ -154,23 +167,17 @@ export function issueBrowserCapabilitiesForRequest(input: {
       const capabilities = yield* Effect.all(
         input.requests.map((request) => {
           const version = versions.get(request.kind) ?? 1
-          const actions: ReadonlyArray<BrowserAction> =
-            request.kind === "resources"
-              ? ["instance.read"]
-              : request.write
-                ? ["instance.console.read", "instance.console.write"]
-                : ["instance.console.read"]
           return createBrowserCapabilityEffect({
-            actions,
+            actions: actionsByRequest.get(request.kind) ?? [],
             authorizationRevision: version === 2 ? authorization.revision : 0,
             credentials,
-            instanceId: input.instanceId,
             loginSessionId: identity.sessionId,
             operation: request.kind,
             path: null,
             proxy,
             publicKeyJwk: input.publicKeyJwk,
             relay: synchronizedRelay,
+            resource: input.resource,
             subject: identity.user.id,
             version,
           }).pipe(
@@ -207,12 +214,12 @@ export function issueConsoleCapabilityForRequest(input: {
       actions: input.write
         ? ["instance.console.read", "instance.console.write"]
         : ["instance.console.read"],
-      instanceId: input.instanceId,
       path: null,
       publicKeyJwk: input.publicKeyJwk,
       relayId: input.relayId,
       resolveBrowserMetadata: true,
       user: authenticatedUserEffect(input.authenticate),
+      resource: { id: input.instanceId, kind: "instance" },
     }).pipe(Effect.map((prepared) => prepared.capability))
   )
 }
@@ -232,12 +239,12 @@ export function prepareConsoleCapabilityForUser(input: {
         id: input.credentialId,
         kind: "cli_credential",
       },
-      instanceId: input.instanceId,
       optInV2: true,
       path: null,
       publicKeyJwk: input.publicKeyJwk,
       relayId: input.relayId,
       resolveBrowserMetadata: false,
+      resource: { id: input.instanceId, kind: "instance" },
       identity: Effect.succeed({
         sessionId: `cli:${input.credentialId}`,
         user: input.user,
@@ -248,16 +255,15 @@ export function prepareConsoleCapabilityForUser(input: {
 
 export function prepareConsoleCapabilityForIdentity(input: {
   identity: AuthenticatedRealtimeIdentity
-  instanceId: string
   publicKeyJwk: BrowserPublicKey
   relayId: string
+  resource: RelayConsoleResource
 }): Promise<PreparedBrowserCapability> {
   return runAppEffect(
     "console.capability.prepareProxyV2",
     prepareBrowserCapabilityEffect({
-      actions: ["instance.console.read"],
+      actions: [relayConsoleReadActions[input.resource.kind]],
       identity: Effect.succeed(input.identity),
-      instanceId: input.instanceId,
       // Prefer renewable v2 whenever Relay supports it. The configured floor
       // still controls whether a rolling-upgrade fallback to v1 is allowed.
       optInV2: true,
@@ -265,6 +271,7 @@ export function prepareConsoleCapabilityForIdentity(input: {
       publicKeyJwk: input.publicKeyJwk,
       relayId: input.relayId,
       resolveBrowserMetadata: false,
+      resource: input.resource,
     })
   )
 }
@@ -279,12 +286,12 @@ export function issueResourceCapabilityForRequest(input: {
     "resource.capability.issue",
     prepareBrowserCapabilityEffect({
       actions: ["instance.read"],
-      instanceId: input.instanceId,
       path: null,
       publicKeyJwk: input.publicKeyJwk,
       relayId: input.relayId,
       resolveBrowserMetadata: true,
       user: authenticatedUserEffect(input.authenticate),
+      resource: { id: input.instanceId, kind: "instance" },
     }).pipe(Effect.map((prepared) => prepared.capability))
   )
 }
@@ -302,11 +309,11 @@ export function issueFileCapabilityForRequest(input: {
     "file.capability.issue",
     prepareBrowserCapabilityEffect({
       actions: [input.action],
-      instanceId: input.instanceId,
       path: input.path,
       publicKeyJwk: input.publicKeyJwk,
       relayId: input.relayId,
       resolveBrowserMetadata: true,
+      resource: { id: input.instanceId, kind: "instance" },
       identity: authenticatedIdentityEffect(input.authenticate),
       optInV2: input.optInV2,
     }).pipe(Effect.map((prepared) => prepared.capability))
@@ -319,11 +326,11 @@ const prepareBrowserCapabilityEffect = Effect.fn("relay.capability.prepare")(
     authorizationSession?:
       | { id: string; kind: "better_auth" }
       | { id: string; kind: "cli_credential" }
-    instanceId: string
     path: string | null
     publicKeyJwk: BrowserPublicKey
     relayId: string
     resolveBrowserMetadata: boolean
+    resource: RelayConsoleResource
     identity?: Effect.Effect<AuthenticatedRealtimeIdentity, unknown>
     optInV2?: boolean
     user?: Effect.Effect<AuthenticatedUser, unknown>
@@ -364,9 +371,9 @@ const prepareBrowserCapabilityEffect = Effect.fn("relay.capability.prepare")(
       const { relayConnectionFeatures } = await import("@/lib/relay-connection")
       return relayConnectionFeatures(material.relay.id)
     })
-    const version = negotiatedVersion(
-      operation,
-      input.optInV2 ?? false,
+    const version = resourceVersion(
+      input.resource,
+      negotiatedVersion(operation, input.optInV2 ?? false, features),
       features
     )
     if (version === 2 && identity.sessionId.length === 0) {
@@ -381,9 +388,9 @@ const prepareBrowserCapabilityEffect = Effect.fn("relay.capability.prepare")(
           ? { id: identity.sessionId, kind: "better_auth" as const }
           : null),
       identity,
-      instanceId: input.instanceId,
       permissions: input.actions.map(permissionForBrowserAction),
       relayId: material.relay.id,
+      resource: input.resource,
     }
     yield* authorizeBrowserCapabilityEffect(authorizationInput)
 
@@ -414,13 +421,13 @@ const prepareBrowserCapabilityEffect = Effect.fn("relay.capability.prepare")(
       actions: input.actions,
       authorizationRevision: version === 2 ? authorization.revision : 0,
       credentials,
-      instanceId: input.instanceId,
       loginSessionId: identity.sessionId,
       operation,
       path: input.path,
       proxy,
       publicKeyJwk: input.publicKeyJwk,
       relay: synchronizedRelay,
+      resource: input.resource,
       subject: user.id,
       version,
     })
@@ -442,9 +449,9 @@ const authorizeBrowserCapabilityEffect = Effect.fn(
     | { id: string; kind: "cli_credential" }
     | null
   identity: AuthenticatedRealtimeIdentity
-  instanceId: string
   permissions: ReadonlyArray<AccessPermission>
   relayId: string
+  resource: RelayConsoleResource
 }) {
   for (
     let attempt = 0;
@@ -456,7 +463,7 @@ const authorizeBrowserCapabilityEffect = Effect.fn(
       user: input.identity.user,
     })
     yield* requireRelayPermissionsEffect({
-      instanceId: input.instanceId,
+      ...resourceScope(input.resource),
       permissions: input.permissions,
       relayId: input.relayId,
       user: snapshot.user,
@@ -545,13 +552,13 @@ const createBrowserCapabilityEffect = Effect.fn("relay.capability.sign")(
     actions: ReadonlyArray<BrowserAction>
     authorizationRevision?: number
     credentials: RelayCredentials
-    instanceId: string
     loginSessionId?: string
     operation?: RelayBrowserOperationKind
     path: string | null
     proxy: RelayProxyBrowserMetadata | null
     publicKeyJwk: BrowserPublicKey
     relay: PersistedRelay
+    resource: RelayConsoleResource
     subject: string
     version?: 1 | 2
   }) {
@@ -569,7 +576,7 @@ const createBrowserCapabilityEffect = Effect.fn("relay.capability.sign")(
           audience: input.relay.id,
           capabilityId: randomUUID(),
           expiresAt: now + (version === 2 && mutation ? 30_000 : 60_000),
-          instanceId: input.instanceId,
+          instanceId: input.resource.id,
           issuedAt: now,
           issuer: input.credentials.clientId,
           keyThumbprint: browserKeyThumbprint(input.publicKeyJwk),
@@ -585,6 +592,10 @@ const createBrowserCapabilityEffect = Effect.fn("relay.capability.sign")(
                   "login session"
                 ),
                 operation: requiredV2Field(input.operation, "operation"),
+                // Servers leave it out, for Relays that predate other kinds.
+                ...(input.resource.kind === "instance"
+                  ? {}
+                  : { resourceKind: input.resource.kind }),
               }
             : {}),
           version,
@@ -641,6 +652,52 @@ function negotiatedVersion(
     )
   }
   return 1
+}
+
+// Only v2 capabilities say what kind of resource they are for, so others need
+// v2 and a Relay that knows the kind.
+function resourceVersion(
+  resource: RelayConsoleResource,
+  version: 1 | 2,
+  features: ReadonlySet<string>
+): 1 | 2 {
+  if (
+    resource.kind !== "instance" &&
+    (version !== 2 || !features.has(relayConsoleResourcesV1Feature))
+  ) {
+    throw new Error("Update this Relay to view these logs.")
+  }
+  return version
+}
+
+// What a browser asks for: console output, with input for servers, or a
+// server's resource usage.
+function browserActions(
+  resource: RelayConsoleResource,
+  request: { kind: "console"; write: boolean } | { kind: "resources" }
+): ReadonlyArray<BrowserAction> {
+  if (resource.kind !== "instance") {
+    if (request.kind !== "console" || request.write) {
+      throw new Error(`A ${resource.kind} only has console output to read`)
+    }
+    return [relayConsoleReadActions[resource.kind]]
+  }
+  if (request.kind === "resources") return ["instance.read"]
+  return request.write
+    ? ["instance.console.read", "instance.console.write"]
+    : ["instance.console.read"]
+}
+
+// The grant scope a resource's permissions are checked in.
+function resourceScope(resource: RelayConsoleResource) {
+  switch (resource.kind) {
+    case "instance":
+      return { instanceId: resource.id }
+    case "database":
+      return { databaseId: resource.id }
+    default:
+      return resource.kind satisfies never
+  }
 }
 
 function relayBrowserAuthorizationReadyEffect(

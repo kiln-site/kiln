@@ -323,6 +323,7 @@ function authority(
     keyThumbprint: "thumbprint-a",
     loginSessionId: "login-session-a",
     operation: "console",
+    resourceKind: "instance",
     origin: "https://hearth.test",
     revision: 1,
     subject: "user-a",

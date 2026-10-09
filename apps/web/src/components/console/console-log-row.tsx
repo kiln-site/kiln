@@ -153,8 +153,15 @@ function renderConsoleText(
   >,
   query: string
 ): React.ReactNode {
+  // Matched against the whole line, so a match can span styled segments.
+  const matches = queryMatches(line.text, query)
   if (!line.segments?.length) {
-    return renderConsoleTextPart(line.text, query, line.sensitiveTextRedactions)
+    return renderConsoleTextPart(
+      line.text,
+      matches,
+      0,
+      line.sensitiveTextRedactions
+    )
   }
   let offset = 0
   return line.segments.map((segment) => {
@@ -165,10 +172,23 @@ function renderConsoleText(
         key={`${start}-${segment.text}`}
         style={consoleSegmentStyle(segment)}
       >
-        {renderConsoleTextPart(segment.text, query)}
+        {renderConsoleTextPart(segment.text, matches, start)}
       </span>
     )
   })
+}
+
+// Where the query appears in the line, as [from, to) ranges.
+type TextMatches = ReadonlyArray<readonly [from: number, to: number]>
+
+function queryMatches(text: string, query: string): TextMatches {
+  const normalized = query.trim()
+  if (!normalized) return []
+  const escaped = normalized.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")
+  return Array.from(
+    text.matchAll(new RegExp(escaped, "giu")),
+    (match) => [match.index, match.index + match[0].length] as const
+  )
 }
 
 function consoleSegmentStyle(
@@ -183,12 +203,16 @@ function consoleSegmentStyle(
   }
 }
 
+// `offset` is where `text` starts in its line, which `matches` refer to.
 function renderConsoleTextPart(
   text: string,
-  query: string,
+  matches: TextMatches,
+  offset: number,
   redactions: ReadonlyArray<SensitiveTextRedactionRange> = []
 ): React.ReactNode {
-  if (redactions.length === 0) return renderConsoleSegment(text, query)
+  if (redactions.length === 0) {
+    return renderConsoleSegment(text, matches, offset)
+  }
 
   let cursor = 0
   const rendered: Array<React.ReactNode> = []
@@ -196,7 +220,11 @@ function renderConsoleTextPart(
     if (redaction.from > cursor) {
       rendered.push(
         <React.Fragment key={`text-${cursor}`}>
-          {renderConsoleSegment(text.slice(cursor, redaction.from), query)}
+          {renderConsoleSegment(
+            text.slice(cursor, redaction.from),
+            matches,
+            offset + cursor
+          )}
         </React.Fragment>
       )
     }
@@ -216,20 +244,24 @@ function renderConsoleTextPart(
   if (cursor < text.length) {
     rendered.push(
       <React.Fragment key={`text-${cursor}`}>
-        {renderConsoleSegment(text.slice(cursor), query)}
+        {renderConsoleSegment(text.slice(cursor), matches, offset + cursor)}
       </React.Fragment>
     )
   }
   return rendered
 }
 
-function renderConsoleSegment(text: string, query: string): React.ReactNode {
+function renderConsoleSegment(
+  text: string,
+  matches: TextMatches,
+  offset: number
+): React.ReactNode {
   const urlPattern =
     /(https?:\/\/[^\s<>"']*?[^\s<>"'.,;:!?)}\]])(?=[.,;:!?)}\]]*(?:\s|$))/gu
-  let offset = 0
+  let cursor = 0
   return text.split(urlPattern).map((part) => {
-    const start = offset
-    offset += part.length
+    const start = cursor
+    cursor += part.length
     if (/^https?:\/\//u.test(part)) {
       return (
         <a
@@ -246,30 +278,50 @@ function renderConsoleSegment(text: string, query: string): React.ReactNode {
     }
     return (
       <React.Fragment key={`text-${start}`}>
-        {highlightText(part, query)}
+        {highlightText(part, matches, offset + start)}
       </React.Fragment>
     )
   })
 }
 
-function highlightText(text: string, query: string): React.ReactNode {
-  const normalized = query.trim()
-  if (!normalized) return text
-  const escaped = normalized.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")
-  const parts = text.split(new RegExp(`(${escaped})`, "giu"))
-  let offset = 0
-  return parts.map((part) => {
-    const start = offset
-    offset += part.length
-    return part.toLowerCase() === normalized.toLowerCase() ? (
+// Highlights the parts of `text`, which starts at `offset` in its line, that
+// fall in a match.
+function highlightText(
+  text: string,
+  matches: TextMatches,
+  offset: number
+): React.ReactNode {
+  const end = offset + text.length
+  const rendered: Array<React.ReactNode> = []
+  let cursor = 0
+  for (const [matchFrom, matchTo] of matches) {
+    const from = Math.max(matchFrom, offset) - offset
+    const to = Math.min(matchTo, end) - offset
+    if (to <= from) continue
+    if (from > cursor) {
+      rendered.push(
+        <React.Fragment key={`text-${cursor}`}>
+          {text.slice(cursor, from)}
+        </React.Fragment>
+      )
+    }
+    rendered.push(
       <mark
-        key={`match-${start}`}
+        key={`match-${from}`}
         className="rounded-sm bg-amber-300 px-0.5 text-stone-950"
       >
-        {part}
+        {text.slice(from, to)}
       </mark>
-    ) : (
-      <React.Fragment key={`text-${start}`}>{part}</React.Fragment>
     )
-  })
+    cursor = to
+  }
+  if (rendered.length === 0) return text
+  if (cursor < text.length) {
+    rendered.push(
+      <React.Fragment key={`text-${cursor}`}>
+        {text.slice(cursor)}
+      </React.Fragment>
+    )
+  }
+  return rendered
 }

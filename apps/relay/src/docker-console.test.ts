@@ -44,7 +44,9 @@ describe("Docker console parsing", () => {
     "100  177k    0  177k    0     0   170k      0 --:--:--  0:00:01 --:--:--  170k",
     "\u001b[2K\u001b[1A> list",
   ])("drops terminal-only output: %j", (line) => {
-    expect(parseConsoleLine(`2026-07-25T17:59:03.000000000Z ${line}`)).toBeNull()
+    expect(
+      parseConsoleLine(`2026-07-25T17:59:03.000000000Z ${line}`)
+    ).toBeNull()
   })
 })
 
@@ -52,7 +54,9 @@ describe("console stop commands", () => {
   const id = "a".repeat(40)
 
   async function legacyServer(harness: RelayHarness, stopLabel: string) {
-    const recipe = serverRecipe({ console: { stopCommands: ["stop", "/stop"] } })
+    const recipe = serverRecipe({
+      console: { stopCommands: ["stop", "/stop"] },
+    })
     const container = await harness.seedServer({
       id,
       labels: {
@@ -89,5 +93,52 @@ describe("console stop commands", () => {
     expect(container.stdin).toBe("stop\n")
     const [after] = await harness.docker.inspectInstances()
     expect(after?.desiredState).toBe("running")
+  })
+})
+
+describe("console history", () => {
+  const id = "b".repeat(40)
+  const startedAt = "2026-07-25T17:00:00.000Z"
+
+  // A server whose current run has written `count` lines of `size` characters.
+  async function serverWithOutput(count: number, size: number) {
+    const harness = await relayHarness()
+    const recipe = serverRecipe()
+    await harness.seedServer({
+      id,
+      labels: {
+        "kiln.brick.snapshot-sha256": await harness.bricks.saveSnapshot(recipe),
+        "kiln.brick.source": await harness.publishRecipe(recipe),
+      },
+      logs: Array.from({ length: count }, (_, index) => ({
+        text: `line ${index} ${"x".repeat(size)}`,
+        time: new Date(Date.parse(startedAt) + 1_000 + index).toISOString(),
+      })),
+      running: true,
+      startedAt,
+      tty: true,
+    })
+    await harness.docker.inspectInstances()
+    return harness.docker.consoleSession(id)
+  }
+
+  it("reads history larger than one command's output", async () => {
+    const session = await serverWithOutput(1_000, 5_000)
+
+    const history = await session.history(5_000)
+
+    expect(history.lines).toHaveLength(1_000)
+    expect(history.lines.at(0)?.text).toMatch(/^line 0 /u)
+    expect(history.truncated).toBe(false)
+  })
+
+  it("keeps the newest history within its size limit and says it was cut", async () => {
+    const session = await serverWithOutput(2_000, 10_000)
+
+    const history = await session.history(5_000)
+
+    expect(history.lines.length).toBeLessThan(2_000)
+    expect(history.lines.at(-1)?.text).toMatch(/^line 1999 /u)
+    expect(history.truncated).toBe(true)
   })
 })

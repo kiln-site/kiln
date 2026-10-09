@@ -24,6 +24,7 @@ export const relayActions = [
   "database.network.write",
   "database.dump.export",
   "database.dump.import",
+  "database.logs.read",
   "backup.read",
   "backup.create",
   "backup.download",

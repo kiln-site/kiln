@@ -71,6 +71,7 @@ import { Route as ApiDatabaseTerminalDatabaseIdRouteImport } from './routes/api.
 import { Route as AppDbDatabaseIdIndexRouteImport } from './routes/_app/db/$databaseId.index'
 import { Route as AppDbDatabaseIdSplatRouteImport } from './routes/_app/db/$databaseId.$'
 import { Route as AppDbDatabaseIdInfoRouteImport } from './routes/_app/db/$databaseId.info'
+import { Route as AppDbDatabaseIdLogsRouteImport } from './routes/_app/db/$databaseId.logs'
 import { Route as AppDbDatabaseIdNetworkRouteImport } from './routes/_app/db/$databaseId.network'
 import { Route as AppDbDatabaseIdTerminalRouteImport } from './routes/_app/db/$databaseId.terminal'
 import { Route as AppDbDatabaseIdViewerRouteImport } from './routes/_app/db/$databaseId.viewer'
@@ -396,6 +397,11 @@ const AppDbDatabaseIdInfoRoute = AppDbDatabaseIdInfoRouteImport.update({
   path: '/info',
   getParentRoute: () => AppDbDatabaseIdRoute,
 } as any)
+const AppDbDatabaseIdLogsRoute = AppDbDatabaseIdLogsRouteImport.update({
+  id: '/logs',
+  path: '/logs',
+  getParentRoute: () => AppDbDatabaseIdRoute,
+} as any)
 const AppDbDatabaseIdNetworkRoute = AppDbDatabaseIdNetworkRouteImport.update({
   id: '/network',
   path: '/network',
@@ -532,6 +538,7 @@ export interface FileRoutesByFullPath {
   '/settings/': typeof AppSettingsIndexRoute
   '/db/$databaseId/$': typeof AppDbDatabaseIdSplatRoute
   '/db/$databaseId/info': typeof AppDbDatabaseIdInfoRoute
+  '/db/$databaseId/logs': typeof AppDbDatabaseIdLogsRoute
   '/db/$databaseId/network': typeof AppDbDatabaseIdNetworkRoute
   '/db/$databaseId/terminal': typeof AppDbDatabaseIdTerminalRoute
   '/db/$databaseId/viewer': typeof AppDbDatabaseIdViewerRoute
@@ -603,6 +610,7 @@ export interface FileRoutesByTo {
   '/settings': typeof AppSettingsIndexRoute
   '/db/$databaseId/$': typeof AppDbDatabaseIdSplatRoute
   '/db/$databaseId/info': typeof AppDbDatabaseIdInfoRoute
+  '/db/$databaseId/logs': typeof AppDbDatabaseIdLogsRoute
   '/db/$databaseId/network': typeof AppDbDatabaseIdNetworkRoute
   '/db/$databaseId/terminal': typeof AppDbDatabaseIdTerminalRoute
   '/db/$databaseId/viewer': typeof AppDbDatabaseIdViewerRoute
@@ -682,6 +690,7 @@ export interface FileRoutesById {
   '/_app/settings/': typeof AppSettingsIndexRoute
   '/_app/db/$databaseId/$': typeof AppDbDatabaseIdSplatRoute
   '/_app/db/$databaseId/info': typeof AppDbDatabaseIdInfoRoute
+  '/_app/db/$databaseId/logs': typeof AppDbDatabaseIdLogsRoute
   '/_app/db/$databaseId/network': typeof AppDbDatabaseIdNetworkRoute
   '/_app/db/$databaseId/terminal': typeof AppDbDatabaseIdTerminalRoute
   '/_app/db/$databaseId/viewer': typeof AppDbDatabaseIdViewerRoute
@@ -761,6 +770,7 @@ export interface FileRouteTypes {
     | '/settings/'
     | '/db/$databaseId/$'
     | '/db/$databaseId/info'
+    | '/db/$databaseId/logs'
     | '/db/$databaseId/network'
     | '/db/$databaseId/terminal'
     | '/db/$databaseId/viewer'
@@ -832,6 +842,7 @@ export interface FileRouteTypes {
     | '/settings'
     | '/db/$databaseId/$'
     | '/db/$databaseId/info'
+    | '/db/$databaseId/logs'
     | '/db/$databaseId/network'
     | '/db/$databaseId/terminal'
     | '/db/$databaseId/viewer'
@@ -910,6 +921,7 @@ export interface FileRouteTypes {
     | '/_app/settings/'
     | '/_app/db/$databaseId/$'
     | '/_app/db/$databaseId/info'
+    | '/_app/db/$databaseId/logs'
     | '/_app/db/$databaseId/network'
     | '/_app/db/$databaseId/terminal'
     | '/_app/db/$databaseId/viewer'
@@ -1394,6 +1406,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppDbDatabaseIdInfoRouteImport
       parentRoute: typeof AppDbDatabaseIdRoute
     }
+    '/_app/db/$databaseId/logs': {
+      id: '/_app/db/$databaseId/logs'
+      path: '/logs'
+      fullPath: '/db/$databaseId/logs'
+      preLoaderRoute: typeof AppDbDatabaseIdLogsRouteImport
+      parentRoute: typeof AppDbDatabaseIdRoute
+    }
     '/_app/db/$databaseId/network': {
       id: '/_app/db/$databaseId/network'
       path: '/network'
@@ -1582,6 +1601,7 @@ const AppSettingsRouteWithChildren = AppSettingsRoute._addFileChildren(
 interface AppDbDatabaseIdRouteChildren {
   AppDbDatabaseIdSplatRoute: typeof AppDbDatabaseIdSplatRoute
   AppDbDatabaseIdInfoRoute: typeof AppDbDatabaseIdInfoRoute
+  AppDbDatabaseIdLogsRoute: typeof AppDbDatabaseIdLogsRoute
   AppDbDatabaseIdNetworkRoute: typeof AppDbDatabaseIdNetworkRoute
   AppDbDatabaseIdTerminalRoute: typeof AppDbDatabaseIdTerminalRoute
   AppDbDatabaseIdViewerRoute: typeof AppDbDatabaseIdViewerRoute
@@ -1591,6 +1611,7 @@ interface AppDbDatabaseIdRouteChildren {
 const AppDbDatabaseIdRouteChildren: AppDbDatabaseIdRouteChildren = {
   AppDbDatabaseIdSplatRoute: AppDbDatabaseIdSplatRoute,
   AppDbDatabaseIdInfoRoute: AppDbDatabaseIdInfoRoute,
+  AppDbDatabaseIdLogsRoute: AppDbDatabaseIdLogsRoute,
   AppDbDatabaseIdNetworkRoute: AppDbDatabaseIdNetworkRoute,
   AppDbDatabaseIdTerminalRoute: AppDbDatabaseIdTerminalRoute,
   AppDbDatabaseIdViewerRoute: AppDbDatabaseIdViewerRoute,

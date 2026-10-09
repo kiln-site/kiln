@@ -15,6 +15,7 @@ import type {
   ConsoleStreamStore,
   ConsoleUiStore,
 } from "@/components/console/console-stores"
+import { useConsoleCopy } from "@/components/console/console-copy-context"
 import { ConsoleTooltip } from "@/components/console/console-tooltip"
 import { ConsoleRetryButton } from "@/components/console/console-retry-button"
 import { OverlayNotice } from "@/components/overlay-notice"
@@ -48,10 +49,7 @@ export const ConsoleLogViewportController = React.memo(
       const normalizedQuery = filters.query.trim().toLowerCase()
       const filtered: Array<ConsoleDisplayLine> = []
       for (const line of consoleData?.lines ?? []) {
-        const redacted = filters.redactSensitive
-          ? redactSensitiveTextWithRanges(line.text)
-          : null
-        const text = redacted?.text ?? line.text
+        const prepared = prepareLine(line, filters.redactSensitive)
         const source = line as RelayConsoleLine & {
           relayId?: string
           service?: ConsoleService
@@ -69,18 +67,9 @@ export const ConsoleLogViewportController = React.memo(
           filters.levels.has(line.level) &&
           relayMatches &&
           serviceMatches &&
-          (!normalizedQuery || text.toLowerCase().includes(normalizedQuery))
+          (!normalizedQuery || prepared.searchText.includes(normalizedQuery))
         ) {
-          filtered.push(
-            !redacted?.redactions.length
-              ? line
-              : {
-                  ...line,
-                  text,
-                  segments: undefined,
-                  sensitiveTextRedactions: redacted.redactions,
-                }
-          )
+          filtered.push(prepared.display)
         }
       }
       return filtered
@@ -127,6 +116,35 @@ export const ConsoleLogViewportController = React.memo(
   }
 )
 
+interface PreparedLine {
+  display: ConsoleDisplayLine
+  searchText: string
+}
+
+// Lines never change once received, so each is redacted and lowercased once
+// rather than on every keystroke and batch. Reusing the shown line also keeps
+// its row from rendering again.
+const redactedLines = new WeakMap<RelayConsoleLine, PreparedLine>()
+const plainLines = new WeakMap<RelayConsoleLine, PreparedLine>()
+
+function prepareLine(line: RelayConsoleLine, redact: boolean): PreparedLine {
+  const cache = redact ? redactedLines : plainLines
+  const cached = cache.get(line)
+  if (cached) return cached
+  const redacted = redact ? redactSensitiveTextWithRanges(line.text) : null
+  const display: ConsoleDisplayLine = redacted?.redactions.length
+    ? {
+        ...line,
+        text: redacted.text,
+        segments: undefined,
+        sensitiveTextRedactions: redacted.redactions,
+      }
+    : line
+  const prepared = { display, searchText: display.text.toLowerCase() }
+  cache.set(line, prepared)
+  return prepared
+}
+
 function consoleLineService(
   line: RelayConsoleLine & { service?: ConsoleService }
 ): ConsoleService | null {
@@ -154,6 +172,7 @@ function ConsoleLogViewport({
   uiStore,
 }: ConsoleLogViewportProps) {
   const { connection, error, loading, transport } = snapshot
+  const copy = useConsoleCopy()
   const [autoScroll, setAutoScroll] = React.useState(true)
   const query = React.useSyncExternalStore(
     uiStore.subscribe,
@@ -172,11 +191,15 @@ function ConsoleLogViewport({
   )
   const parentRef = React.useRef<HTMLDivElement>(null)
   const programmaticScroll = React.useRef(false)
+  const getItemKey = React.useCallback(
+    (index: number) => filteredLines[index]?.id ?? index,
+    [filteredLines]
+  )
   const rowVirtualizer = useVirtualizer({
     count: filteredLines.length,
     getScrollElement: () => parentRef.current,
     estimateSize: () => 30,
-    getItemKey: (index) => filteredLines[index]?.id ?? index,
+    getItemKey,
     overscan: 18,
     anchorTo: "end",
     followOnAppend: true,
@@ -281,7 +304,7 @@ function ConsoleLogViewport({
         <div className="absolute inset-0 grid place-items-center bg-card/70 backdrop-blur-[2px]">
           <div className="flex items-center gap-2 text-xs text-muted-foreground">
             <LoaderCircle className="size-4 animate-spin text-primary" />
-            Opening live console stream
+            Opening live {copy.stream}
           </div>
         </div>
       ) : null}
@@ -315,10 +338,13 @@ const ConsoleConnectionNotice = React.memo(function ConsoleConnectionNotice({
   transport: ConsoleStreamSnapshot["transport"]
   error: string | null
 }) {
+  const copy = useConsoleCopy()
   if (!hasConsoleData) return null
   if (error)
     return (
-      <ConsoleConnectionNoticeContent message="CONSOLE CONNECTION FAILED" />
+      <ConsoleConnectionNoticeContent
+        message={`${copy.notice} CONNECTION FAILED`}
+      />
     )
   if (connection === "opening") return <DelayedConsoleOpeningNotice />
   if (connection === "live" && transport !== "hearth") return null

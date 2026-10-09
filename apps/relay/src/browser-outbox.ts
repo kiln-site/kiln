@@ -14,6 +14,10 @@ export class BrowserOutbox {
   readonly #maxMessages: number
   readonly #normal: Array<OutboxItem> = []
   readonly #priority: Array<OutboxItem> = []
+  readonly #roomWaiters: Array<{
+    readonly bytes: number
+    readonly resolve: (open: boolean) => void
+  }> = []
   readonly #socket: WebSocket
   #bytes = 0
   #closed = false
@@ -65,12 +69,48 @@ export class BrowserOutbox {
     return true
   }
 
+  // Resolves once `bytes` more fit in half the outbox, or false once it has
+  // closed. Bursts larger than the outbox, like a console's history, send
+  // through this a message at a time, leaving the other half for live
+  // messages.
+  whenRoomFor(bytes: number): Promise<boolean> {
+    if (this.#closed) return Promise.resolve(false)
+    if (this.#roomWaiters.length === 0 && this.#hasRoomFor(bytes)) {
+      return Promise.resolve(true)
+    }
+    return new Promise((resolve) => {
+      this.#roomWaiters.push({ bytes, resolve })
+    })
+  }
+
   close(): void {
     this.#closed = true
     this.#priority.length = 0
     this.#normal.length = 0
     this.#resource = null
     this.#bytes = 0
+    for (const waiter of this.#roomWaiters.splice(0)) waiter.resolve(false)
+  }
+
+  #hasRoomFor(bytes: number): boolean {
+    return (
+      this.#messageCount() === 0 ||
+      (this.#bytes + bytes <= this.#maxBytes / 2 &&
+        this.#messageCount() < this.#maxMessages / 2)
+    )
+  }
+
+  // One waiter at a time, so each sends before the next is measured. A
+  // waiter that doesn't send doesn't hold up the rest: the next is checked
+  // again shortly.
+  #wakeRoomWaiter(): void {
+    const waiter = this.#roomWaiters[0]
+    if (!waiter || this.#closed || !this.#hasRoomFor(waiter.bytes)) return
+    this.#roomWaiters.shift()
+    waiter.resolve(true)
+    if (this.#roomWaiters.length > 0) {
+      setImmediate(() => this.#wakeRoomWaiter())
+    }
   }
 
   #messageCount(): number {
@@ -90,7 +130,10 @@ export class BrowserOutbox {
   #drain(): void {
     if (this.#sending || this.#closed) return
     const item = this.#next()
-    if (!item) return
+    if (!item) {
+      this.#wakeRoomWaiter()
+      return
+    }
     if (!this.#authorize(item.action)) {
       this.#drain()
       return
@@ -105,6 +148,7 @@ export class BrowserOutbox {
         }
         return
       }
+      this.#wakeRoomWaiter()
       this.#drain()
     })
   }

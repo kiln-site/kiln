@@ -1,5 +1,5 @@
 import { createServerFn } from "@tanstack/react-start"
-import { relayIdSchema } from "@workspace/contracts"
+import { relayBrowserResourceKinds, relayIdSchema } from "@workspace/contracts"
 import { z } from "zod"
 
 const browserCapabilityInputSchema = z.object({
@@ -33,6 +33,11 @@ const fileCapabilityInputSchema = browserCapabilityInputSchema.extend({
 const browserCapabilityBatchSchema = browserCapabilityInputSchema
   .omit({ write: true })
   .extend({
+    // `instanceId` is the ID of a resource of this kind.
+    resourceKind: z
+      .enum(relayBrowserResourceKinds)
+      .optional()
+      .default("instance"),
     requests: z
       .array(
         z.discriminatedUnion("kind", [
@@ -69,10 +74,10 @@ export const issueBrowserCapabilities = createServerFn({ method: "POST" })
     ])
     return issueBrowserCapabilitiesForRequest({
       authenticate: requireEligibleResourceIdentity,
-      instanceId: data.instanceId,
       publicKeyJwk: data.publicKeyJwk,
       relayId: data.relayId,
       requests: data.requests,
+      resource: { id: data.instanceId, kind: data.resourceKind },
     })
   })
 

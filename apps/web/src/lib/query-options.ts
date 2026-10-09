@@ -4,7 +4,11 @@ import {
   queryOptions,
 } from "@tanstack/react-query"
 import type { QueryClient } from "@tanstack/react-query"
-import type { BackupTarget, RelayInstance } from "@workspace/contracts"
+import type {
+  BackupTarget,
+  RelayConsoleResource,
+  RelayInstance,
+} from "@workspace/contracts"
 
 import { getAccessCapabilities, getInvitationPreview } from "@/server/access"
 import { getActivity } from "@/server/activity"
@@ -127,8 +131,8 @@ export const queryKeys = {
   relay: {
     all: ["relay"] as const,
     connection: ["relay", "connection"] as const,
-    console: (relayId: string, instanceId: string) =>
-      ["relay", relayId, "instances", instanceId, "console"] as const,
+    console: (relayId: string, resource: RelayConsoleResource) =>
+      ["relay", relayId, `${resource.kind}s`, resource.id, "console"] as const,
     file: (relayId: string, instanceId: string, path: string) =>
       [
         "relay",

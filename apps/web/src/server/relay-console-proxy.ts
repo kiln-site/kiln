@@ -9,7 +9,10 @@ import {
   relayBrowserProtocol,
   relayConsoleStreamEventSchema,
 } from "@workspace/contracts"
-import type { RelayConsoleStreamEvent } from "@workspace/contracts"
+import type {
+  RelayConsoleResource,
+  RelayConsoleStreamEvent,
+} from "@workspace/contracts"
 import { Effect, Result, Stream } from "effect"
 
 import type {
@@ -26,11 +29,18 @@ import {
 
 const MAX_INBOX_BYTES = 2 * 1024 * 1024
 const MAX_INBOX_MESSAGES = 256
+// Reading from the Relay pauses once the page falls this far behind and
+// resumes once it catches up, so the Relay holds back its history instead
+// of either side giving up on the other.
+const PAUSE_INBOX_BYTES = MAX_INBOX_BYTES / 2
+const PAUSE_INBOX_MESSAGES = MAX_INBOX_MESSAGES / 2
+const RESUME_INBOX_BYTES = MAX_INBOX_BYTES / 8
+const RESUME_INBOX_MESSAGES = MAX_INBOX_MESSAGES / 8
 const AUTHENTICATION_TIMEOUT_MS = 10_000
 
 export async function* openHearthRelayConsoleStream(input: {
   credentialId?: string
-  instanceId: string
+  resource: RelayConsoleResource
   relayId: string
   signal: AbortSignal
   identity?: AuthenticatedRealtimeIdentity
@@ -48,20 +58,27 @@ export async function* openHearthRelayConsoleStream(input: {
   if (!input.identity && (!input.user || !input.credentialId)) {
     throw new Error("Authentication required")
   }
-  const prepared = input.identity
-    ? await prepareConsoleCapabilityForIdentity({
-        identity: input.identity,
-        instanceId: input.instanceId,
-        publicKeyJwk: browserKey,
-        relayId: input.relayId,
-      })
-    : await prepareConsoleCapabilityForUser({
-        credentialId: input.credentialId!,
-        instanceId: input.instanceId,
-        publicKeyJwk: browserKey,
-        relayId: input.relayId,
-        user: input.user!,
-      })
+  const { identity, resource } = input
+  // CLI credentials only follow servers' consoles.
+  if (!identity && resource.kind !== "instance") {
+    throw new Error("Only server consoles can be followed from the CLI")
+  }
+  const prepare = () =>
+    identity
+      ? prepareConsoleCapabilityForIdentity({
+          identity,
+          publicKeyJwk: browserKey,
+          relayId: input.relayId,
+          resource,
+        })
+      : prepareConsoleCapabilityForUser({
+          credentialId: input.credentialId!,
+          instanceId: resource.id,
+          publicKeyJwk: browserKey,
+          relayId: input.relayId,
+          user: input.user!,
+        })
+  const prepared = await prepare()
   const { capability, relay, relayCaCertificatePem } = prepared
   const control = relayControlEndpoint(relay)
   const protocol = control.useTls ? "wss" : "ws"
@@ -99,20 +116,7 @@ export async function* openHearthRelayConsoleStream(input: {
         renewalTimer = null
         forkPromise(
           async () => {
-            const renewed = input.identity
-              ? await prepareConsoleCapabilityForIdentity({
-                  identity: input.identity,
-                  instanceId: input.instanceId,
-                  publicKeyJwk: browserKey,
-                  relayId: input.relayId,
-                })
-              : await prepareConsoleCapabilityForUser({
-                  credentialId: input.credentialId!,
-                  instanceId: input.instanceId,
-                  publicKeyJwk: browserKey,
-                  relayId: input.relayId,
-                  user: input.user!,
-                })
+            const renewed = await prepare()
             if (renewed.capability.version !== 2) {
               throw new Error("Relay console renewal downgraded capability v2")
             }
@@ -201,16 +205,13 @@ export async function* openHearthRelayConsoleStream(input: {
         })
       )
       const ready = await nextAuthenticationMessage(inbox, "confirmation")
-      if (
-        ready.type !== "auth.ready" ||
-        ready.instanceId !== input.instanceId
-      ) {
+      if (ready.type !== "auth.ready" || ready.instanceId !== resource.id) {
         throw new Error("Relay rejected the Hearth console proxy")
       }
       if (activeCapability.version === 2) scheduleRenewal(ready)
       socket.send(
         JSON.stringify({
-          instanceId: input.instanceId,
+          instanceId: resource.id,
           type: "console.subscribe",
           v: 1,
         })
@@ -290,7 +291,7 @@ function createSocketInbox(socket: WebSocket, signal: AbortSignal) {
     if (terminalError) return
     if (binary) {
       failAndClose(
-        new Error("Relay returned an unsupported binary console frame"),
+        new Error("The Relay sent an unsupported binary frame"),
         1003,
         "Binary console frames are unsupported"
       )
@@ -307,7 +308,7 @@ function createSocketInbox(socket: WebSocket, signal: AbortSignal) {
       onSuccess: (value) => {
         if (!value || typeof value !== "object" || Array.isArray(value)) {
           failAndClose(
-            new Error("Relay returned an invalid console message"),
+            new Error("The Relay sent an invalid message"),
             1007,
             "Invalid console message"
           )
@@ -322,7 +323,7 @@ function createSocketInbox(socket: WebSocket, signal: AbortSignal) {
             queuedBytes + data.byteLength > MAX_INBOX_BYTES
           ) {
             failAndClose(
-              new Error("Relay console proxy exceeded its backpressure limit"),
+              new Error("The page fell too far behind the Relay"),
               1013,
               "Console proxy backpressure exceeded"
             )
@@ -330,6 +331,13 @@ function createSocketInbox(socket: WebSocket, signal: AbortSignal) {
           }
           messages.push({ bytes: data.byteLength, value: message })
           queuedBytes += data.byteLength
+          if (
+            !socket.isPaused &&
+            (queuedBytes >= PAUSE_INBOX_BYTES ||
+              messages.length >= PAUSE_INBOX_MESSAGES)
+          ) {
+            socket.pause()
+          }
         }
       },
     })
@@ -340,7 +348,7 @@ function createSocketInbox(socket: WebSocket, signal: AbortSignal) {
       new Error(
         reason.length
           ? reason.toString()
-          : `Relay console connection closed (${code})`
+          : `The Relay closed the stream (${code})`
       )
     )
   const abort = () => {
@@ -364,6 +372,13 @@ function createSocketInbox(socket: WebSocket, signal: AbortSignal) {
       const queued = messages.shift()
       if (queued) {
         queuedBytes -= queued.bytes
+        if (
+          socket.isPaused &&
+          queuedBytes <= RESUME_INBOX_BYTES &&
+          messages.length <= RESUME_INBOX_MESSAGES
+        ) {
+          socket.resume()
+        }
         return Promise.resolve(queued.value)
       }
       if (terminalError) return Promise.reject(terminalError)

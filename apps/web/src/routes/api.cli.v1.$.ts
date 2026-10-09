@@ -419,8 +419,8 @@ async function streamConsole(
   if (request.signal.aborted) abort()
   const iterator = openHearthRelayConsoleStream({
     credentialId: principal.credentialId,
-    instanceId: input.instanceId,
     relayId: input.relayId,
+    resource: { id: input.instanceId, kind: "instance" },
     signal: lifecycle.signal,
     user: principal.user,
   })

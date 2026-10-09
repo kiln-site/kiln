@@ -19,6 +19,9 @@ export const relayAuthenticationWindowMs = 10_000
 export const relayBrowserCapabilityV2Feature = "browser-capability-v2"
 export const relayBrowserLeaseRenewalV1Feature = "browser-lease-renewal-v1"
 export const relayFileRequestReplayV1Feature = "file-request-replay-v1"
+// The Relay streams console output for more kinds of resource than servers;
+// see `relayBrowserResourceKinds`.
+export const relayConsoleResourcesV1Feature = "console-resources-v1"
 export const relayBrowserAuthorizationReviseMaxItems = 256
 
 export const relayControlOperations = [
@@ -244,6 +247,29 @@ export const RelayBrowserOperationKindSchema = Schema.Literals([
   "resources",
 ])
 
+// The kinds of resource a browser capability can be for. Its `instanceId` is
+// the resource's ID; capabilities without `resourceKind` are for servers.
+export const relayBrowserResourceKinds = ["instance", "database"] as const
+
+export const RelayBrowserResourceKindSchema = Schema.Literals(
+  relayBrowserResourceKinds
+)
+
+export type RelayBrowserResourceKind =
+  typeof RelayBrowserResourceKindSchema.Type
+
+export interface RelayConsoleResource {
+  readonly id: string
+  readonly kind: RelayBrowserResourceKind
+}
+
+// The action that reads each kind of resource's console output. Only servers
+// take console input.
+export const relayConsoleReadActions = {
+  database: "database.logs.read",
+  instance: "instance.console.read",
+} as const satisfies Record<RelayBrowserResourceKind, string>
+
 export const RelayBrowserCapabilityV1Schema = Schema.Struct({
   actions: Schema.Array(Schema.String),
   audience: Schema.String,
@@ -274,6 +300,9 @@ export const RelayBrowserCapabilityV2Schema = Schema.Struct({
   operation: RelayBrowserOperationKindSchema,
   origin: Schema.String,
   path: Schema.NullOr(Schema.String),
+  // Absent for servers, so Relays without other kinds read these unchanged.
+  // Relays that predate a kind ignore it and refuse the kind's actions.
+  resourceKind: Schema.optionalKey(RelayBrowserResourceKindSchema),
   subject: Schema.String,
   version: Schema.Literal(2),
 })

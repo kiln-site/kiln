@@ -181,7 +181,7 @@ export function ConsoleSelectionControl({
             variant="ghost"
             size="icon"
             className="size-6 shrink-0 text-muted-foreground hover:text-foreground"
-            aria-label="Clear selected console lines"
+            aria-label="Clear selected lines"
             onClick={uiStore.clearSelection}
           >
             <X className="size-3.5" />
