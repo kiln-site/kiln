@@ -40,6 +40,11 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@workspace/ui/components/dialog"
+import {
+  HoverCard,
+  HoverCardContent,
+  HoverCardTrigger,
+} from "@workspace/ui/components/hover-card"
 import { Input } from "@workspace/ui/components/input"
 import {
   Popover,
@@ -1377,6 +1382,7 @@ const UpdateTargetList = React.memo(function UpdateTargetList({
           No Relays are paired with this Panel.
         </p>
       )}
+      <div className="border-t border-border/60" />
     </div>
   )
 })
@@ -2062,7 +2068,7 @@ const changelogRowHeight: Readonly<
   day: 32,
   earlier: 44,
   quiet: 30,
-  version: 60,
+  version: 44,
 }
 const changelogEndHeight = 64
 // Pages to load on open looking for the oldest version a component runs.
@@ -2140,6 +2146,8 @@ const UpdateChangelogPage = React.memo(function UpdateChangelogPage({
       timeline.missingMarkers > 0 &&
       hasNextPage &&
       !isFetchingNextPage &&
+      // A failed page waits for Retry instead of being fetched again.
+      !isError &&
       pageCount < changelogMarkerPageLimit
     ) {
       void fetchNextPage()
@@ -2147,6 +2155,7 @@ const UpdateChangelogPage = React.memo(function UpdateChangelogPage({
   }, [
     fetchNextPage,
     hasNextPage,
+    isError,
     isFetchingNextPage,
     pageCount,
     timeline.missingMarkers,
@@ -2679,10 +2688,13 @@ const ChangelogVersionLine = React.memo(function ChangelogVersionLine({
 }) {
   const { latest, markers, release, releaseCount } = item
   const current = markers.some((marker) => marker.state === "current")
+  const previous = markers.some((marker) => marker.state === "previous")
   return (
     <div
-      className={`relative grid h-full grid-cols-[minmax(0,1fr)_auto] items-center gap-3 border-b border-border/60 bg-popover pr-4 pl-12 before:absolute before:left-[1.4375rem] before:w-px before:-translate-x-1/2 before:bg-muted-foreground/30 ${
-        first ? "before:top-1/2 before:bottom-0" : "before:inset-y-0"
+      className={`relative flex h-full items-center gap-3 bg-popover pr-4 pl-12 before:absolute before:left-[1.4375rem] before:w-px before:-translate-x-1/2 before:bg-muted-foreground/30 ${
+        first
+          ? "border-b border-border/60 before:top-1/2 before:bottom-0"
+          : "border-y border-border/60 before:inset-y-0"
       }`}
     >
       <span
@@ -2695,21 +2707,23 @@ const ChangelogVersionLine = React.memo(function ChangelogVersionLine({
               : "border border-muted-foreground bg-popover"
         }`}
       />
-      <div className="min-w-0">
-        <div className="flex h-5 min-w-0 items-baseline gap-2">
-          <h3 className="type-card-title truncate">
-            {compactReleaseName(release.name)}
-          </h3>
-          <span className="type-meta shrink-0 font-mono text-muted-foreground">
-            {formatShortReleaseDate(release.publishedAt)}
-          </span>
-        </div>
-        <div className="type-meta mt-[3px] flex h-[1.125rem] min-w-0 items-center gap-3 overflow-hidden whitespace-nowrap">
-          {latest ? <span className="text-primary">Latest</span> : null}
-          <ChangelogMarkers markers={markers} />
-        </div>
+      <div className="flex min-w-0 flex-1 items-baseline gap-2.5 whitespace-nowrap">
+        <h3 className="type-card-title truncate">
+          {compactReleaseName(release.name)}
+        </h3>
+        {latest ? <span className="type-meta text-primary">Latest</span> : null}
+        {current ? (
+          <span className="type-meta text-sky-200">Current</span>
+        ) : null}
+        {previous ? (
+          <span className="type-meta text-muted-foreground">Previous</span>
+        ) : null}
+        <span className="type-meta shrink-0 font-mono text-muted-foreground">
+          {formatShortReleaseDate(release.publishedAt)}
+        </span>
+        <ChangelogMarkerIcons markers={markers} />
       </div>
-      <div className="flex items-center gap-1">
+      <div className="flex shrink-0 items-center gap-1">
         {releaseCount > 1 ? (
           <span className="type-meta text-muted-foreground">
             {releaseCount} releases
@@ -2735,105 +2749,97 @@ const ChangelogVersionLine = React.memo(function ChangelogVersionLine({
   )
 })
 
-// Past a few, names won't fit on one line; the line counts them and the
-// tooltip lists who's there.
-const changelogMarkerNameLimit = 3
-
-function ChangelogMarkers({
+// Who runs, or ran, this version: a Panel icon and a Relay icon with a count
+// of the others. Hovering lists them all, scrolling past a dozen or so.
+function ChangelogMarkerIcons({
   markers,
 }: {
   markers: ReadonlyArray<ChangelogMarker>
 }) {
   if (markers.length === 0) return null
-  if (markers.length <= changelogMarkerNameLimit) {
-    return markers.map((marker) => (
-      <ChangelogMarkerLabel
-        component={marker.component}
-        key={marker.key}
-        previous={marker.state === "previous"}
-      >
-        {marker.name}
-      </ChangelogMarkerLabel>
-    ))
-  }
+  const groups = (["current", "previous"] as const).flatMap((state) => {
+    const inState = markers.filter((marker) => marker.state === state)
+    const panel = inState.find((marker) => marker.component === "hearth")
+    const relays = inState.filter((marker) => marker.component === "relay")
+    return [
+      ...(panel ? [{ component: "hearth" as const, extra: 0, state }] : []),
+      ...(relays.length > 0
+        ? [{ component: "relay" as const, extra: relays.length - 1, state }]
+        : []),
+    ]
+  })
   const current = markers.filter((marker) => marker.state === "current")
   const previous = markers.filter((marker) => marker.state === "previous")
+
   return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <span className="flex min-w-0 cursor-default items-center gap-3">
-          <ChangelogMarkerGroup markers={current} />
-          <ChangelogMarkerGroup markers={previous} previous />
+    <HoverCard closeDelay={100} openDelay={150}>
+      <HoverCardTrigger asChild>
+        <span
+          aria-label={markers
+            .map(
+              (marker) =>
+                `${marker.name}${marker.state === "previous" ? " (previous)" : ""}`
+            )
+            .join(", ")}
+          className="flex shrink-0 cursor-default items-center gap-2 self-center"
+          role="img"
+        >
+          {groups.map((group) => (
+            <span
+              className={`type-meta inline-flex items-center gap-0.5 ${
+                group.state === "current"
+                  ? "text-sky-200"
+                  : "text-muted-foreground"
+              }`}
+              key={`${group.state}:${group.component}`}
+            >
+              {group.component === "hearth" ? (
+                <ServerCog className="size-3.5" />
+              ) : (
+                <RadioTower className="size-3.5" />
+              )}
+              {group.extra > 0 ? `+${group.extra}` : null}
+            </span>
+          ))}
         </span>
-      </TooltipTrigger>
-      <TooltipContent className="max-w-80" side="bottom">
-        {current.length > 0 ? (
-          <p>
-            <span className="text-muted-foreground">On this version: </span>
-            {current.map((marker) => marker.name).join(", ")}
-          </p>
-        ) : null}
-        {previous.length > 0 ? (
-          <p className={current.length > 0 ? "mt-1" : ""}>
-            <span className="text-muted-foreground">Before: </span>
-            {previous.map((marker) => marker.name).join(", ")}
-          </p>
-        ) : null}
-      </TooltipContent>
-    </Tooltip>
+      </HoverCardTrigger>
+      <HoverCardContent align="start" className="w-64 p-0">
+        <div className="max-h-60 overflow-y-auto overscroll-contain py-1.5">
+          <ChangelogMarkerList label="Current" markers={current} />
+          <ChangelogMarkerList label="Previous" markers={previous} />
+        </div>
+      </HoverCardContent>
+    </HoverCard>
   )
 }
 
-function ChangelogMarkerGroup({
+function ChangelogMarkerList({
+  label,
   markers,
-  previous = false,
 }: {
+  label: string
   markers: ReadonlyArray<ChangelogMarker>
-  previous?: boolean
 }) {
-  const panel = markers.find((marker) => marker.component === "hearth")
-  const relays = markers.filter((marker) => marker.component === "relay")
+  if (markers.length === 0) return null
   return (
-    <>
-      {panel ? (
-        <ChangelogMarkerLabel component="hearth" previous={previous}>
-          {panel.name}
-        </ChangelogMarkerLabel>
-      ) : null}
-      {relays.length > 0 ? (
-        <ChangelogMarkerLabel component="relay" previous={previous}>
-          {relays.length === 1 ? relays[0]?.name : `${relays.length} Relays`}
-        </ChangelogMarkerLabel>
-      ) : null}
-    </>
-  )
-}
-
-function ChangelogMarkerLabel({
-  children,
-  component,
-  previous,
-}: {
-  children: React.ReactNode
-  component: "hearth" | "relay"
-  previous: boolean
-}) {
-  return (
-    <span
-      className={`inline-flex min-w-0 items-center gap-1 ${
-        previous ? "text-muted-foreground" : "text-sky-200"
-      }`}
-    >
-      {component === "hearth" ? (
-        <ServerCog className="size-3 shrink-0" />
-      ) : (
-        <RadioTower className="size-3 shrink-0" />
-      )}
-      <span className="truncate">
-        {children}
-        {previous ? " · before" : ""}
-      </span>
-    </span>
+    <div className="px-1.5 py-1">
+      <p className="type-technical-label px-1.5 pb-1 text-[0.6875rem] text-muted-foreground">
+        {label} · {markers.length}
+      </p>
+      {markers.map((marker) => (
+        <p
+          className="flex h-7 items-center gap-2 px-1.5 text-sm"
+          key={marker.key}
+        >
+          {marker.component === "hearth" ? (
+            <ServerCog className="size-3.5 shrink-0 text-muted-foreground" />
+          ) : (
+            <RadioTower className="size-3.5 shrink-0 text-muted-foreground" />
+          )}
+          <span className="truncate">{marker.name}</span>
+        </p>
+      ))}
+    </div>
   )
 }
 
@@ -2874,7 +2880,7 @@ function ChangelogEnd({
 function ChangelogSkeleton() {
   return (
     <div aria-hidden="true">
-      <div className="flex h-[60px] items-center border-b border-border/60 pl-12">
+      <div className="flex h-[44px] items-center border-b border-border/60 pl-12">
         <Skeleton className="h-3 w-40" />
       </div>
       {Array.from({ length: 9 }, (_, index) => (

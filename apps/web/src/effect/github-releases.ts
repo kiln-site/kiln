@@ -1,4 +1,10 @@
-import { Effect, Schema } from "effect"
+import { Cause, Effect, Schedule, Schema } from "effect"
+import {
+  FetchHttpClient,
+  HttpClient,
+  HttpClientError,
+  HttpClientResponse,
+} from "effect/http"
 
 import {
   kilnGitRepositoryApiUrl,
@@ -82,14 +88,12 @@ export const fetchKilnReleasePageEffect = Effect.fn("github.releases.page")(
       kilnGitRepository(),
       "releases"
     )
-    const { body, response } = yield* requestJsonResponse(
+    const { body, link } = yield* requestJsonResponse(
       `${repositoryApi}?per_page=${perPage}&page=${page}`,
       Schema.Array(GitHubReleaseSchema)
     )
     return {
-      hasNextPage: /<[^>]+>;\s*rel="next"/u.test(
-        response.headers.get("link") ?? ""
-      ),
+      hasNextPage: /<[^>]+>;\s*rel="next"/u.test(link),
       releases: body.flatMap((release): Array<PublicKilnRelease> => {
         if (release.draft || !release.tag_name.startsWith("v")) return []
         const version = release.tag_name.slice(1)
@@ -182,40 +186,50 @@ function releaseVersionAliases(
   return [`${match[1]}-nightly.${match[2]}`]
 }
 
-function requestJson<TValue>(
-  url: string,
-  schema: Schema.Decoder<TValue>
-): Effect.Effect<TValue, ExternalServiceError> {
+// Network failures, timeouts, and GitHub's own 5xx errors are worth a quick
+// retry. Rate limits (403, 429) aren't: retrying spends what's left of them.
+const isRetryableRequest = (error: unknown) =>
+  Cause.isTimeoutError(error) ||
+  (HttpClientError.isHttpClientError(error) &&
+    (error.reason._tag === "TransportError" ||
+      (error.reason._tag === "StatusCodeError" &&
+        error.reason.response.status >= 500)))
+
+function requestJson<S extends Schema.Constraint>(url: string, schema: S) {
   return Effect.map(requestJsonResponse(url, schema), ({ body }) => body)
 }
 
-function requestJsonResponse<TValue>(
+function requestJsonResponse<S extends Schema.Constraint>(
   url: string,
-  schema: Schema.Decoder<TValue>
-): Effect.Effect<{ body: TValue; response: Response }, ExternalServiceError> {
-  return Effect.tryPromise({
-    try: async () => {
-      const response = await fetch(url, {
-        headers,
-        redirect: "follow",
-        signal: AbortSignal.timeout(15_000),
+  schema: S
+) {
+  return Effect.gen(function* () {
+    const client = yield* HttpClient.HttpClient
+    const response = yield* client.get(url, { headers }).pipe(
+      Effect.flatMap(HttpClientResponse.filterStatusOk),
+      Effect.timeout("15 seconds"),
+      Effect.retry({
+        schedule: Schedule.exponential("500 millis"),
+        times: 2,
+        while: isRetryableRequest,
       })
-      if (!response.ok) {
-        throw new Error(`GitHub returned HTTP ${response.status}`)
-      }
-      return {
-        body: Schema.decodeUnknownSync(schema)(await response.json()),
-        response,
-      }
-    },
-    catch: (cause) =>
+    )
+    const body = yield* HttpClientResponse.schemaBodyJson(schema)(response)
+    return { body, link: response.headers["link"] ?? "" }
+  }).pipe(
+    Effect.provide(FetchHttpClient.layer),
+    Effect.mapError((cause) =>
       ExternalServiceError.make({
         cause,
-        message:
-          cause instanceof Error
-            ? cause.message
+        message: HttpClientError.isHttpClientError(cause)
+          ? cause.reason._tag === "StatusCodeError"
+            ? `GitHub returned HTTP ${cause.reason.response.status}`
+            : "Couldn’t reach GitHub"
+          : Cause.isTimeoutError(cause)
+            ? "GitHub took too long to respond"
             : "GitHub returned an invalid response",
         service: "GitHub Releases",
-      }),
-  })
+      })
+    )
+  )
 }

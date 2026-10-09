@@ -1,7 +1,7 @@
 import { assert, layer } from "@effect/vitest"
-import { Effect } from "effect"
+import { Effect, Layer } from "effect"
+import { FetchHttpClient } from "effect/http"
 import { TestClock } from "effect/testing"
-import { afterEach, vi } from "vite-plus/test"
 
 import {
   listKilnReleasesEffect,
@@ -24,8 +24,8 @@ function serveReleasePages(
   pages: ReadonlyArray<ReadonlyArray<ReturnType<typeof nightly>>>
 ) {
   const requests: Array<number> = []
-  vi.stubGlobal("fetch", async (input: string | URL) => {
-    const url = new URL(String(input))
+  serve = (input) => {
+    const url = new URL(input)
     const page = Number(url.searchParams.get("page") ?? 1)
     requests.push(page)
     const releases = pages[page - 1] ?? []
@@ -54,20 +54,22 @@ function serveReleasePages(
             : {},
       }
     )
-  })
+  }
   return requests
 }
+
+let serve: (url: string) => Response = () =>
+  new Response("not found", { status: 404 })
+const GitHub = Layer.succeed(FetchHttpClient.Fetch)(async (input) =>
+  serve(String(input instanceof Request ? input.url : input))
+)
 
 const recentVersions = Effect.map(listKilnReleasesEffect(), (releases) =>
   releases.map(({ version }) => version)
 )
 
-afterEach(() => {
-  vi.unstubAllGlobals()
-})
-
 describeMysql("Kiln release feed", () => {
-  layer(TestDatabase)((it) => {
+  layer(Layer.merge(TestDatabase, GitHub))((it) => {
     it.effect(
       "asks GitHub only for new releases, at most every few minutes",
       () =>
@@ -132,6 +134,61 @@ describeMysql("Kiln release feed", () => {
           nightly(1).version,
         ])
       })
+    )
+
+    it.effect(
+      "finds a stable release's image version once its manifest loads",
+      () =>
+        Effect.gen(function* () {
+          yield* resetDatabase
+          const promoted = nightly(9).version
+          const stable = {
+            assets: [
+              {
+                browser_download_url: "https://github.test/v0.1.0/manifest",
+                name: "release-manifest.json",
+              },
+            ],
+            body: null,
+            draft: false,
+            html_url: "https://github.com/kiln-site/kiln/releases/tag/v0.1.0",
+            name: "v0.1.0",
+            prerelease: false,
+            published_at: "2026-08-10T00:00:00Z",
+            tag_name: "v0.1.0",
+          }
+          const serveStable = (manifest: boolean) => {
+            serve = (url) =>
+              url.endsWith("/manifest")
+                ? manifest
+                  ? Response.json({
+                      channel: "stable",
+                      commit: "0".repeat(40),
+                      compatibility: { relayProtocol: 1 },
+                      components: {
+                        hearth: { digest: "sha256:h", image: "kiln/hearth" },
+                        relay: { digest: "sha256:r", image: "kiln/relay" },
+                      },
+                      imageVersion: promoted,
+                      publishedAt: "2026-08-10T00:00:00Z",
+                      schemaVersion: 1,
+                      version: "0.1.0",
+                    })
+                  : new Response("not found", { status: 404 })
+                : Response.json([stable])
+          }
+          const aliases = Effect.map(
+            listKilnReleasesEffect(),
+            (releases) => releases[0]?.aliases ?? []
+          )
+
+          serveStable(false)
+          assert.deepStrictEqual(yield* aliases, [])
+
+          yield* TestClock.adjust("5 minutes")
+          serveStable(true)
+          assert.deepStrictEqual(yield* aliases, [promoted])
+        })
     )
 
     it.effect("remembers the version each component ran before", () =>

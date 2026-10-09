@@ -1,7 +1,7 @@
 import { assert, layer } from "@effect/vitest"
-import { Effect } from "effect"
+import { Effect, Layer } from "effect"
+import { FetchHttpClient } from "effect/http"
 import { TestClock } from "effect/testing"
-import { afterEach, vi } from "vite-plus/test"
 
 import { listNotificationsEffect } from "@/effect/notifications"
 import {
@@ -65,25 +65,26 @@ function serveReleaseFeed(releases: ReadonlyArray<[string, string, string?]>) {
     published_at: publishedAt,
     tag_name: `v${version}`,
   }))
-  vi.stubGlobal("fetch", async (input: string | URL) => {
-    const url = String(input)
+  serve = (url) => {
     const body =
       manifests.get(url) ?? (url.includes("/releases?") ? feed : null)
     return body
       ? Response.json(body)
       : new Response("not found", { status: 404 })
-  })
+  }
 }
+
+let serve: (url: string) => Response = () =>
+  new Response("not found", { status: 404 })
+const GitHub = Layer.succeed(FetchHttpClient.Fetch)(async (input) =>
+  serve(String(input instanceof Request ? input.url : input))
+)
 
 // Hearth asks GitHub for new releases at most every few minutes.
 const nextReleaseCheck = TestClock.adjust("5 minutes")
 
-afterEach(() => {
-  vi.unstubAllGlobals()
-})
-
 describeMysql("Kiln update notifications", () => {
-  layer(TestDatabase)((it) => {
+  layer(Layer.merge(TestDatabase, GitHub))((it) => {
     it.effect("tells admins once when Hearth starts on a newer version", () =>
       Effect.gen(function* () {
         yield* resetDatabase

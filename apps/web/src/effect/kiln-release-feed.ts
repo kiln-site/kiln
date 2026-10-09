@@ -188,6 +188,7 @@ const syncReleaseFeed = feedLock.withPermits(1)(
       )
     }
     const checked = yield* catchUpWithGitHub(current).pipe(
+      Effect.tap(() => resolvePendingAliases),
       Effect.catch((error) =>
         // Serve what Hearth has, and wait out the interval before asking
         // again rather than spending the rate limit on retries.
@@ -224,6 +225,32 @@ const catchUpWithGitHub = Effect.fnUntraced(function* (
     if (added < releases.length || !hasNextPage) break
   }
   return current?.historyPage ?? null
+})
+
+// Stable releases whose manifest couldn't be read when they were saved.
+// Without the alias, an installed stable build looks out of date.
+const resolvePendingAliases = Effect.gen(function* () {
+  const database = yield* Database
+  const table = databaseTable("system_release")
+  const pending = yield* database.queryRows<ReleaseRow>(
+    "releases.loadPendingAliases",
+    `SELECT tag, version, name, channel, aliases, notes, url, manifest_url, published_at
+       FROM ${table}
+      WHERE channel = 'stable' AND aliases IS NULL
+      ORDER BY published_at DESC
+      LIMIT 5`
+  )
+  for (const row of pending) {
+    const resolved = yield* kilnStableReleaseAliasesEffect(
+      publicRelease(row)
+    ).pipe(Effect.option)
+    if (Option.isNone(resolved)) continue
+    yield* database.execute(
+      "releases.saveAliases",
+      `UPDATE ${table} SET aliases = ? WHERE tag = ?`,
+      [JSON.stringify(resolved.value), row.tag]
+    )
+  }
 })
 
 const backfillReleaseHistory = Effect.gen(function* () {
@@ -280,10 +307,16 @@ const saveReleases = Effect.fnUntraced(function* (
   const known = new Set(existing.map(({ tag }) => tag))
   const added = releases.filter(({ tag }) => !known.has(tag))
   for (const release of added) {
+    // Null marks a stable alias still to be resolved; a later check retries.
     const aliases =
       release.channel === "stable"
         ? yield* kilnStableReleaseAliasesEffect(release).pipe(
-            Effect.catch(() => Effect.succeed(release.aliases))
+            Effect.catch((error) =>
+              Effect.logWarning(
+                `Could not read the manifest of ${release.tag}`,
+                error
+              ).pipe(Effect.as(null))
+            )
           )
         : release.aliases
     yield* database.execute(
@@ -297,7 +330,7 @@ const saveReleases = Effect.fnUntraced(function* (
         release.version,
         release.name,
         release.channel,
-        JSON.stringify(aliases),
+        aliases === null ? null : JSON.stringify(aliases),
         release.notes,
         release.url,
         release.manifestUrl,

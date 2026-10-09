@@ -22,7 +22,7 @@ export const systemReleases: Migration = {
   \`version\` varchar(191) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
   \`name\` varchar(255) NOT NULL,
   \`channel\` enum('nightly','stable') NOT NULL,
-  \`aliases\` json NOT NULL,
+  \`aliases\` json DEFAULT NULL,
   \`notes\` mediumtext DEFAULT NULL,
   \`url\` varchar(512) NOT NULL,
   \`manifest_url\` varchar(512) NOT NULL,
