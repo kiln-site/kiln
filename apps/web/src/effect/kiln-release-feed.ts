@@ -101,7 +101,12 @@ export const listKilnReleasesEffect = Effect.fn("releases.listRecent")(
  */
 export const releaseHistoryPageEffect = Effect.fn("releases.historyPage")(
   function* (cursor: ReleaseHistoryCursor | null, limit: number) {
-    let state = yield* syncReleaseFeed
+    // Only the newest page needs GitHub's latest releases; older pages are
+    // read straight from Hearth's copy.
+    let state =
+      cursor === null
+        ? yield* syncReleaseFeed
+        : ((yield* loadFeedState) ?? emptyState())
     let rows = yield* selectReleases(cursor, limit + 1)
     if (rows.length <= limit && state.historyPage !== null) {
       state = yield* feedLock.withPermits(1)(backfillReleaseHistory)

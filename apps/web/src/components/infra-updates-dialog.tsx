@@ -20,6 +20,7 @@ import {
   ChevronRight,
   CloudDownload,
   ExternalLink,
+  GitPullRequest,
   LoaderCircle,
   RadioTower,
   RefreshCw,
@@ -932,10 +933,12 @@ const UpdaterDialog = React.memo(function UpdaterDialog({
   const closeButtonRef = React.useRef<HTMLButtonElement>(null)
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
+      {/* Opaque and unblurred: Firefox and Arc re-blur the backdrop on
+          every frame the changelog scrolls inside a backdrop-filter. */}
       <DialogContent
         aria-describedby={undefined}
         initialFocus={closeButtonRef}
-        className="h-[min(40rem,calc(100dvh-2rem))] max-h-none grid-cols-[minmax(0,1fr)] grid-rows-[auto_minmax(0,1fr)_auto] gap-0 overflow-hidden p-0 sm:max-w-3xl"
+        className="h-[min(40rem,calc(100dvh-2rem))] max-h-none grid-cols-[minmax(0,1fr)] grid-rows-[auto_minmax(0,1fr)_auto] gap-0 overflow-hidden bg-popover p-0 backdrop-blur-none sm:max-w-3xl"
         showCloseButton={false}
       >
         <UpdateDialogData
@@ -2353,86 +2356,12 @@ const UpdateChangelogPage = React.memo(function UpdateChangelogPage({
     void refetch()
   }, [latestTag, refetch, releases])
 
-  const scrollRef = React.useRef<HTMLDivElement>(null)
   const { items } = timeline
-  // The version line above the visible rows stays pinned to the top, so
-  // it's clear which update the changes belong to.
-  const headerIndexes = React.useMemo(
-    () =>
-      items.flatMap((item, index) =>
-        item.kind === "version" || item.kind === "earlier" ? [index] : []
-      ),
-    [items]
-  )
-  const pinnedIndexRef = React.useRef(0)
-  const rangeExtractor = React.useCallback(
-    (range: Range) => {
-      let pinned = 0
-      for (const index of headerIndexes) {
-        if (index > range.startIndex) break
-        pinned = index
-      }
-      pinnedIndexRef.current = pinned
-      return [...new Set([pinned, ...defaultRangeExtractor(range)])].sort(
-        (left, right) => left - right
-      )
-    },
-    [headerIndexes]
-  )
-  const virtualizer = useVirtualizer({
-    count: items.length + 1,
-    estimateSize: (index) => {
-      const item = items[index]
-      return item ? changelogRowHeight[item.kind] : changelogEndHeight
-    },
-    getItemKey: (index) => items[index]?.key ?? "end",
-    getScrollElement: () => scrollRef.current,
-    overscan: 12,
-    rangeExtractor,
-  })
-  const virtualItems = virtualizer.getVirtualItems()
-  const lastVisibleIndex = virtualItems.at(-1)?.index ?? 0
-
-  React.useEffect(() => {
-    if (
-      lastVisibleIndex >= items.length - 20 &&
-      hasNextPage &&
-      !isFetchingNextPage &&
-      !isError
-    ) {
-      void fetchNextPage()
-    }
-  }, [
-    fetchNextPage,
-    hasNextPage,
-    isError,
-    isFetchingNextPage,
-    items.length,
-    lastVisibleIndex,
-  ])
-
-  // Opened from a component's row: start at its version line.
-  const jumpedRef = React.useRef(false)
-  React.useLayoutEffect(() => {
-    if (jumpedRef.current) return
-    const jumpTarget = store.getJumpTarget()
-    if (!jumpTarget) {
-      jumpedRef.current = true
-      return
-    }
-    const index = timeline.markerIndexes.get(`${jumpTarget}:current`)
-    if (index === undefined) {
-      if (!isPending && (!hasNextPage || pageCount >= changelogMarkerPageLimit))
-        jumpedRef.current = true
-      return
-    }
-    jumpedRef.current = true
-    virtualizer.scrollToIndex(index, { align: "start" })
-  }, [hasNextPage, isPending, pageCount, store, timeline, virtualizer])
-
+  // The feed owns the virtualizer, so scrolling re-renders only the feed.
+  const jumpRef = React.useRef<((index: number) => void) | null>(null)
   const jumpTo = React.useCallback(
-    (index: number) => virtualizer.scrollToIndex(index, { align: "start" }),
-    [virtualizer]
+    (index: number) => jumpRef.current?.(index),
+    []
   )
   // The newest line each kind of marker sits on.
   const legendIndexes = React.useMemo(() => {
@@ -2531,62 +2460,236 @@ const UpdateChangelogPage = React.memo(function UpdateChangelogPage({
           </a>
         </Button>
       </div>
-      <div
-        ref={scrollRef}
-        aria-busy={isPending}
-        aria-label="Changelog"
-        className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-contain"
-        role="feed"
-      >
-        {isPending ? (
-          <ChangelogSkeleton />
-        ) : (
-          <div
-            className="relative w-full"
-            style={{ height: `${virtualizer.getTotalSize()}px` }}
-          >
-            {virtualItems.map((virtualItem) => {
-              const item = items[virtualItem.index]
-              const pinned =
-                item !== undefined &&
-                (item.kind === "version" || item.kind === "earlier") &&
-                virtualItem.index === pinnedIndexRef.current
+      <ChangelogFeed
+        error={isError}
+        fetchNextPage={fetchNextPage}
+        gitRepository={gitRepository}
+        hasNextPage={hasNextPage}
+        isFetchingNextPage={isFetchingNextPage}
+        jumpRef={jumpRef}
+        markerIndexes={timeline.markerIndexes}
+        items={items}
+        pageCount={pageCount}
+        pending={isPending}
+        store={store}
+      />
+    </div>
+  )
+})
+
+// Start loading the next page while this many rows are still below the
+// viewport, so scrolling rarely reaches the loading row.
+const changelogPrefetchRows = 120
+
+const ChangelogFeed = React.memo(function ChangelogFeed({
+  error,
+  fetchNextPage,
+  gitRepository,
+  hasNextPage,
+  isFetchingNextPage,
+  items,
+  jumpRef,
+  markerIndexes,
+  pageCount,
+  pending,
+  store,
+}: {
+  error: boolean
+  fetchNextPage: () => Promise<unknown>
+  gitRepository: string
+  hasNextPage: boolean
+  isFetchingNextPage: boolean
+  items: ReadonlyArray<ChangelogTimelineItem>
+  jumpRef: React.Ref<(index: number) => void>
+  markerIndexes: ReadonlyMap<string, number>
+  pageCount: number
+  pending: boolean
+  store: UpdateDialogViewStore
+}) {
+  const scrollRef = React.useRef<HTMLDivElement>(null)
+  // Row offsets, and where each version line's section ends: the next line
+  // or the end row. A line sticks within its section, so the next line
+  // pushes it away instead of sliding over it.
+  const layout = React.useMemo(() => {
+    const starts: Array<number> = []
+    const headers: Array<number> = []
+    let offset = 0
+    items.forEach((item, index) => {
+      starts.push(offset)
+      offset += changelogRowHeight[item.kind]
+      if (isChangelogHeader(item)) headers.push(index)
+    })
+    starts.push(offset)
+    const sectionEnds = new Map<number, number>()
+    headers.forEach((index, position) => {
+      sectionEnds.set(index, starts[headers[position + 1] ?? items.length] ?? 0)
+    })
+    return { headers, sectionEnds, starts }
+  }, [items])
+  const rangeExtractor = React.useCallback(
+    (range: Range) => {
+      // The line above the visible rows stays rendered so it can stick.
+      let pinned: number | undefined
+      for (const index of layout.headers) {
+        if (index > range.startIndex) break
+        pinned = index
+      }
+      const indexes = defaultRangeExtractor(range)
+      return pinned === undefined || indexes.includes(pinned)
+        ? indexes
+        : [pinned, ...indexes]
+    },
+    [layout]
+  )
+  const virtualizer = useVirtualizer({
+    count: items.length + 1,
+    estimateSize: (index) => {
+      const item = items[index]
+      return item ? changelogRowHeight[item.kind] : changelogEndHeight
+    },
+    getItemKey: (index) => items[index]?.key ?? "end",
+    getScrollElement: () => scrollRef.current,
+    overscan: 12,
+    rangeExtractor,
+    useFlushSync: false,
+  })
+  const virtualItems = virtualizer.getVirtualItems()
+  const lastVisibleIndex = virtualItems.at(-1)?.index ?? 0
+
+  React.useImperativeHandle(
+    jumpRef,
+    () => (index: number) =>
+      virtualizer.scrollToIndex(index, { align: "start" }),
+    [virtualizer]
+  )
+
+  React.useEffect(() => {
+    if (
+      lastVisibleIndex >= items.length - changelogPrefetchRows &&
+      hasNextPage &&
+      !isFetchingNextPage &&
+      !error
+    ) {
+      void fetchNextPage()
+    }
+  }, [
+    error,
+    fetchNextPage,
+    hasNextPage,
+    isFetchingNextPage,
+    items.length,
+    lastVisibleIndex,
+  ])
+
+  // Opened from a component's row: start at its version line.
+  const jumpedRef = React.useRef(false)
+  React.useLayoutEffect(() => {
+    if (jumpedRef.current) return
+    const jumpTarget = store.getJumpTarget()
+    if (!jumpTarget) {
+      jumpedRef.current = true
+      return
+    }
+    const index = markerIndexes.get(`${jumpTarget}:current`)
+    if (index === undefined) {
+      if (!pending && (!hasNextPage || pageCount >= changelogMarkerPageLimit))
+        jumpedRef.current = true
+      return
+    }
+    jumpedRef.current = true
+    virtualizer.scrollToIndex(index, { align: "start" })
+  }, [hasNextPage, markerIndexes, pageCount, pending, store, virtualizer])
+
+  const retry = React.useCallback(() => void fetchNextPage(), [fetchNextPage])
+
+  return (
+    <div
+      ref={scrollRef}
+      aria-busy={pending}
+      aria-label="Changelog"
+      className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-contain contain-strict"
+      role="feed"
+    >
+      {pending ? (
+        <ChangelogSkeleton />
+      ) : (
+        <div
+          className="relative w-full"
+          style={{ height: `${virtualizer.getTotalSize()}px` }}
+        >
+          {virtualItems.map((virtualItem) => {
+            const item = items[virtualItem.index]
+            if (!item) {
               return (
                 <div
-                  className={`inset-x-0 top-0 ${
-                    pinned ? "sticky z-10" : "absolute"
-                  } ${item?.kind === "version" || item?.kind === "earlier" ? "z-10" : ""}`}
+                  className="absolute inset-x-0 top-0"
                   data-index={virtualItem.index}
                   key={virtualItem.key}
                   style={{
                     height: `${virtualItem.size}px`,
-                    ...(pinned
-                      ? {}
-                      : { transform: `translateY(${virtualItem.start}px)` }),
+                    transform: `translateY(${virtualItem.start}px)`,
                   }}
                 >
-                  {item ? (
-                    <ChangelogRow
-                      first={virtualItem.index === 0}
-                      gitRepository={gitRepository}
-                      item={item}
-                    />
-                  ) : (
-                    <ChangelogEnd
-                      error={isError}
-                      loading={hasNextPage || isFetchingNextPage}
-                      onRetry={() => void fetchNextPage()}
-                    />
-                  )}
+                  <ChangelogEnd
+                    error={error}
+                    loading={hasNextPage || isFetchingNextPage}
+                    onRetry={retry}
+                  />
                 </div>
               )
-            })}
-          </div>
-        )}
-      </div>
+            }
+            const row = (
+              <ChangelogRow
+                first={virtualItem.index === 0}
+                gitRepository={gitRepository}
+                item={item}
+              />
+            )
+            if (!isChangelogHeader(item)) {
+              return (
+                <div
+                  className="absolute inset-x-0 top-0"
+                  data-index={virtualItem.index}
+                  key={virtualItem.key}
+                  style={{
+                    height: `${virtualItem.size}px`,
+                    transform: `translateY(${virtualItem.start}px)`,
+                  }}
+                >
+                  {row}
+                </div>
+              )
+            }
+            const sectionEnd =
+              layout.sectionEnds.get(virtualItem.index) ?? virtualItem.end
+            return (
+              <div
+                className="pointer-events-none absolute inset-x-0 z-10"
+                data-index={virtualItem.index}
+                key={virtualItem.key}
+                style={{
+                  height: `${sectionEnd - virtualItem.start}px`,
+                  top: `${virtualItem.start}px`,
+                }}
+              >
+                <div
+                  className="pointer-events-auto sticky top-0"
+                  style={{ height: `${virtualItem.size}px` }}
+                >
+                  {row}
+                </div>
+              </div>
+            )
+          })}
+        </div>
+      )}
     </div>
   )
 })
+
+function isChangelogHeader(item: ChangelogTimelineItem): boolean {
+  return item.kind === "version" || item.kind === "earlier"
+}
 
 // Doubles as the legend for the timeline's dots, and jumps to the newest
 // line of its kind.
@@ -2897,12 +3000,14 @@ const ChangelogRow = React.memo(function ChangelogRow({
       </span>
       {change.pullRequest ? (
         <a
-          className="type-meta font-mono text-muted-foreground transition-colors hover:text-primary"
+          aria-label={`Pull request #${change.pullRequest}`}
+          className="type-meta inline-flex items-center gap-1 font-mono text-muted-foreground transition-colors hover:text-primary"
           href={`${gitRepository}/pull/${change.pullRequest}`}
           rel="noreferrer"
           target="_blank"
         >
-          #{change.pullRequest}
+          <GitPullRequest aria-hidden="true" className="size-3.5" />
+          {change.pullRequest}
         </a>
       ) : (
         <span />
