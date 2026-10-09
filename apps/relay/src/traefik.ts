@@ -10,7 +10,11 @@ import type { RelayConfig } from "./config.js"
 import { containerName, type DockerEngine } from "./docker-engine.js"
 import { recoverPromise } from "./effect/promise.js"
 import type { RelayStoredWebRoute } from "./effect/state.js"
-import { relayResourceNames } from "./relay-resources.js"
+import {
+  APP_SERVICE,
+  appIdFromRouteOwner,
+  relayResourceNames,
+} from "./relay-resources.js"
 import {
   WEB_ROUTE_LABEL_PREFIX,
   WEB_ROUTE_REVISION_LABEL,
@@ -171,6 +175,17 @@ accessLog: {}
 `
 }
 
+// A server's container, or the network alias of an app's service.
+function routeUpstreamHost(
+  resources: ReturnType<typeof relayResourceNames>,
+  route: RelayStoredWebRoute
+): string {
+  const appId = appIdFromRouteOwner(route.instanceId)
+  return appId
+    ? resources.appAlias(appId, route.service ?? APP_SERVICE)
+    : resources.instanceContainer(route.instanceId)
+}
+
 export function traefikDynamicConfiguration(
   config: RelayConfig,
   routes: ReadonlyArray<RelayStoredWebRoute>,
@@ -236,7 +251,7 @@ export function traefikDynamicConfiguration(
       `    ${name}:`,
       "      loadBalancer:",
       "        servers:",
-      `          - url: ${JSON.stringify(`http://${resources.instanceContainer(route.instanceId)}:${route.targetPort}`)}`
+      `          - url: ${JSON.stringify(`http://${routeUpstreamHost(resources, route)}:${route.targetPort}`)}`
     )
   }
 

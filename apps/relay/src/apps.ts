@@ -25,7 +25,13 @@ import { parseConsoleLine } from "./console-parsing.js"
 import { databaseNetworkName } from "./databases.js"
 import type { DockerConsoleSession } from "./docker.js"
 import { forkPromise, promiseEffect } from "./effect/promise.js"
-import { relayOwnerLabel, relayOwnsLabels } from "./relay-resources.js"
+import {
+  APP_SERVICE,
+  relayOwnerLabel,
+  relayOwnsLabels,
+  relayResourceNames,
+  type RelayResourceNames,
+} from "./relay-resources.js"
 
 // Apps are found by their labels, like databases: the Relay keeps nothing
 // about them besides their data directory and the logs of their recent
@@ -35,8 +41,6 @@ const APP_KIND = "app"
 const ID_LABEL = "kiln.app.id"
 const SERVICE_LABEL = "kiln.app.service"
 const DEPLOYMENT_LABEL = "kiln.app.deployment"
-// Image and Dockerfile apps run one service under this name.
-export const SINGLE_APP_SERVICE = "app"
 // The console stream that follows an app's deployments; its services'
 // streams are `service:<name>`.
 export const APP_DEPLOYMENT_STREAM = "deployment"
@@ -91,6 +95,13 @@ interface Deployment extends RelayAppDeployment {
   lines: Array<RelayConsoleLine>
 }
 
+// What an app's web routes need of its containers: Traefik labels for each
+// service, and the edge network Traefik reaches them on, if any.
+export interface AppRoutePlan {
+  readonly labels: (service: string) => Record<string, string>
+  readonly network: string | null
+}
+
 export interface AppFileRoot {
   directory: string
   id: string
@@ -98,7 +109,9 @@ export interface AppFileRoot {
 
 export class AppDriver {
   readonly #config: RelayConfig
+  readonly #resources: RelayResourceNames
   readonly #hostDataDirectory: () => Promise<string>
+  readonly #routes: (appId: string) => Promise<AppRoutePlan>
   readonly #deployments = new Map<string, Deployment>()
   // Apps whose latest deployment has been read back from disk this run.
   readonly #restored = new Set<string>()
@@ -109,9 +122,15 @@ export class AppDriver {
     { semaphore: Semaphore.Semaphore; references: number }
   >()
 
-  constructor(config: RelayConfig, hostDataDirectory: () => Promise<string>) {
+  constructor(
+    config: RelayConfig,
+    hostDataDirectory: () => Promise<string>,
+    routes: (appId: string) => Promise<AppRoutePlan>
+  ) {
     this.#config = config
+    this.#resources = relayResourceNames(config)
     this.#hostDataDirectory = hostDataDirectory
+    this.#routes = routes
   }
 
   // Where app data directories live inside the Relay.
@@ -578,6 +597,7 @@ export class AppDriver {
       deployment,
       config.databaseIds
     )
+    const routes = await this.#routes(input.appId)
     await command(
       "docker",
       [
@@ -594,9 +614,10 @@ export class AppDriver {
         "unless-stopped",
         "--mount",
         `type=bind,source=${join(host, "apps", input.appId)},target=${config.dataMount}`,
-        ...labelArguments(
-          this.#containerLabels(input.appId, SINGLE_APP_SERVICE, deployment.id)
-        ),
+        ...labelArguments({
+          ...routes.labels(APP_SERVICE),
+          ...this.#containerLabels(input.appId, APP_SERVICE, deployment.id),
+        }),
         ...Object.entries(environment).flatMap(([key, value]) => [
           "--env",
           `${key}=${value}`,
@@ -611,7 +632,10 @@ export class AppDriver {
       { timeout: 120_000 }
     )
     log(`Created container ${name}`)
-    for (const network of databases) {
+    for (const network of [
+      ...databases,
+      ...(routes.network ? [routes.network] : []),
+    ]) {
       await command("docker", [
         "network",
         "connect",
@@ -708,6 +732,7 @@ export class AppDriver {
     const prepared = this.#prepareCompose(normalized, {
       appId: input.appId,
       databases,
+      routes: await this.#routes(input.appId),
       deploymentId: deployment.id,
       directory,
       hostDirectory,
@@ -764,8 +789,14 @@ export class AppDriver {
       deploymentId: string
       directory: string
       hostDirectory: string
+      routes: AppRoutePlan
     }
   ): ComposeProject {
+    // Databases and the Traefik edge, joined under the service's alias.
+    const joined = [
+      ...options.databases,
+      ...(options.routes.network ? [options.routes.network] : []),
+    ]
     const services: Record<string, ComposeService> = {}
     for (const [name, service] of Object.entries(normalized.services ?? {})) {
       if (!appServiceNameSchema.safeParse(name).success) {
@@ -779,7 +810,7 @@ export class AppDriver {
               aliases: [this.#serviceAlias(options.appId, name)],
             },
             ...Object.fromEntries(
-              options.databases.map((network) => [
+              joined.map((network) => [
                 network,
                 { aliases: [this.#serviceAlias(options.appId, name)] },
               ])
@@ -794,6 +825,7 @@ export class AppDriver {
         ),
         labels: {
           ...service.labels,
+          ...options.routes.labels(name),
           ...this.#containerLabels(options.appId, name, options.deploymentId),
         },
         restart: service.restart ?? "unless-stopped",
@@ -824,10 +856,7 @@ export class AppDriver {
         ...normalized.networks,
         kiln_app: { external: true, name: this.#networkName(options.appId) },
         ...Object.fromEntries(
-          options.databases.map((network) => [
-            network,
-            { external: true, name: network },
-          ])
+          joined.map((network) => [network, { external: true, name: network }])
         ),
       },
       services,
@@ -1109,7 +1138,7 @@ export class AppDriver {
           oomKilled: container.State.OOMKilled ?? false,
           ports: publishedPorts(container),
           running: container.State.Running,
-          service: service.success ? service.data : SINGLE_APP_SERVICE,
+          service: service.success ? service.data : APP_SERVICE,
           startedAt: container.State.Running
             ? isoTime(container.State.StartedAt)
             : null,
@@ -1178,7 +1207,7 @@ export class AppDriver {
   }
 
   #networkName(appId: string): string {
-    return `${this.#prefix()}kiln-app-${appId}-network`
+    return this.#resources.appNetwork(appId)
   }
 
   #composeProject(appId: string): string {
@@ -1190,9 +1219,7 @@ export class AppDriver {
   }
 
   #serviceAlias(appId: string, service: string): string {
-    return service === SINGLE_APP_SERVICE
-      ? this.#hostname(appId)
-      : `${service}.${this.#hostname(appId)}`
+    return this.#resources.appAlias(appId, service)
   }
 
   #databaseNetworkPrefix(): string {

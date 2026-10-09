@@ -11,6 +11,8 @@ import {
   relayAppTerminalClaimSchema,
   relayAppTerminalRestartSchema,
   relayAppTerminalWriteSchema,
+  relayAppWebRouteInputSchema,
+  relayAppWebRouteStateSchema,
   relayIdSchema,
 } from "@workspace/contracts"
 import type { RelayApp } from "@workspace/contracts"
@@ -372,6 +374,44 @@ export const updateAppNetwork = createServerFn({ method: "POST" })
     )
     publishAppChange(relay.id, false)
     return updated
+  })
+
+export const getAppWebRoutes = createServerFn({ method: "GET" })
+  .validator(appInputSchema)
+  .handler(async ({ data }) => {
+    const { relay, user } = await authorizedApp(data, "app.read")
+    return relayAppWebRouteStateSchema.parse(
+      await databaseRpc(
+        relay,
+        "app.network.routes.read",
+        { appId: data.appId },
+        30_000,
+        user.id
+      )
+    )
+  })
+
+// Saves the app's routes. Bundled Traefik serves them right away; an
+// external Traefik once a deploy labels the app's containers.
+export const updateAppWebRoutes = createServerFn({ method: "POST" })
+  .validator(
+    appInputSchema.extend({
+      routes: z.array(relayAppWebRouteInputSchema).max(16),
+    })
+  )
+  .handler(async ({ data }) => {
+    const { relay, user } = await authorizedApp(data, "app.manage")
+    const state = relayAppWebRouteStateSchema.parse(
+      await databaseRpc(
+        relay,
+        "app.network.routes.write",
+        { appId: data.appId, routes: data.routes },
+        240_000,
+        user.id
+      )
+    )
+    publishAppChange(relay.id, false)
+    return state
   })
 
 export const deleteApp = createServerFn({ method: "POST" })

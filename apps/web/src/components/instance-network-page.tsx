@@ -21,10 +21,7 @@ import {
   RotateCw,
   Trash2,
 } from "lucide-react"
-import {
-  relayInstancePortInputSchema,
-  relayInstanceWebRouteInputSchema,
-} from "@workspace/contracts"
+import { relayInstancePortInputSchema } from "@workspace/contracts"
 import type {
   RelayInstancePendingPrimaryPort,
   RelayInstancePortAllocation,
@@ -68,6 +65,10 @@ import {
   useInstanceRelayConnected,
 } from "@/components/instance-workspace-context"
 import { GameServerTailscaleSection } from "@/components/tailscale-network-membership"
+import {
+  parseWebRouteForm,
+  WebRouteFields,
+} from "@/components/web-route-fields"
 import {
   WorkspaceTableCell,
   WorkspaceTableHead,
@@ -2460,15 +2461,7 @@ function AddNetworkRouteDialog({
                 return
               }
 
-              const path = String(form.get("path") ?? "").trim()
-              const parsed = relayInstanceWebRouteInputSchema.safeParse({
-                id: webRoute?.id,
-                hostname: String(form.get("hostname") ?? ""),
-                name: String(form.get("name") ?? ""),
-                path: path || null,
-                stripPrefix: form.get("stripPrefix") === "on",
-                targetPort: Number(form.get("targetPort")),
-              })
+              const parsed = parseWebRouteForm(form, webRoute?.id)
               if (!parsed.success) {
                 setValidationError(
                   parsed.error.issues[0]?.message ?? "Web route is invalid"
@@ -2560,65 +2553,7 @@ function AddNetworkRouteDialog({
               </div>
             </>
           ) : (
-            <>
-              <label className="type-label block space-y-1.5">
-                Name
-                <Input
-                  autoComplete="off"
-                  defaultValue={webRoute?.name}
-                  maxLength={32}
-                  name="name"
-                  placeholder="Live map"
-                  required
-                />
-              </label>
-              <label className="type-label block space-y-1.5">
-                Hostname
-                <Input
-                  autoCapitalize="none"
-                  autoCorrect="off"
-                  defaultValue={webRoute?.hostname}
-                  name="hostname"
-                  placeholder="map.donutsmp.com"
-                  required
-                />
-              </label>
-              <div className="grid grid-cols-[minmax(0,1fr)_8rem] gap-3">
-                <label className="type-label block space-y-1.5">
-                  Path (optional)
-                  <Input
-                    defaultValue={webRoute?.path ?? ""}
-                    name="path"
-                    placeholder="/map"
-                  />
-                </label>
-                <label className="type-label block space-y-1.5">
-                  Internal Port
-                  <Input
-                    defaultValue={webRoute?.targetPort}
-                    max={65_535}
-                    min={1}
-                    name="targetPort"
-                    placeholder="8080"
-                    required
-                    type="number"
-                  />
-                </label>
-              </div>
-              <label className="type-support flex items-center gap-2 text-muted-foreground">
-                <input
-                  className="accent-primary"
-                  defaultChecked={webRoute?.stripPrefix ?? true}
-                  name="stripPrefix"
-                  type="checkbox"
-                />
-                Strip the configured path before forwarding
-              </label>
-              <div className="type-meta flex gap-2 border border-amber-400/20 bg-amber-400/5 px-3 py-2 text-amber-100">
-                <AlertTriangle className="mt-0.5 size-3.5 shrink-0 text-amber-300" />
-                Point this hostname at the Relay before applying the route.
-              </div>
-            </>
+            <WebRouteFields route={webRoute} />
           )}
 
           {validationError || portLease.error || error ? (

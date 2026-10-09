@@ -10,11 +10,13 @@ import type { RelayStoredWebRoute } from "./effect/state.js"
 
 const ROUTE_ID_ATTEMPTS = 32
 
-export function assignRelayWebRouteIds(
+export function assignRelayWebRouteIds<
+  Route extends RelayInstanceWebRouteInput,
+>(
   instanceId: string,
-  routes: ReadonlyArray<RelayInstanceWebRouteInput>,
+  routes: ReadonlyArray<Route>,
   configuredRoutes: ReadonlyArray<RelayStoredWebRoute>
-): Array<RelayInstanceWebRoute> {
+): Array<Route & Pick<RelayInstanceWebRoute, "id">> {
   const owners = new Map(
     configuredRoutes.map((route) => [route.id, route.instanceId])
   )
