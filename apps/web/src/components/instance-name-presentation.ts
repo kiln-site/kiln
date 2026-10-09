@@ -45,6 +45,7 @@ export type InstanceNameInstance =
       inventoryStatus?: "available" | "missing" | "unavailable"
       kind: "database"
       observedState?: RelayObservedState
+      relayStatus?: "connected" | "unreachable"
       relayUpdating?: boolean
     })
 
@@ -59,12 +60,12 @@ export function instanceStatusPresentation(
       relayUpdating: instance.relayUpdating === true,
     })
   }
-  const relayReachable = instance.inventoryStatus !== "unavailable"
+  const inventoried = instance.inventoryStatus !== "unavailable"
   return workloadStatusPresentation({
     missing: instance.inventoryStatus === "missing",
     // Hearth only has a placeholder state for databases it cannot inventory.
-    observedState: relayReachable ? instance.observedState : undefined,
-    relayReachable,
+    observedState: inventoried ? instance.observedState : undefined,
+    relayReachable: inventoried && instance.relayStatus !== "unreachable",
     relayUpdating: instance.relayUpdating === true,
   })
 }

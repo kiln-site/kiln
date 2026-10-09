@@ -150,6 +150,7 @@ function LiveDatabaseIdentity(
           inventoryStatus: database.inventoryStatus,
           name: database.name,
           observedState: database.observedState,
+          relayStatus: database.relayStatus,
           relayUpdating: database.relayUpdating,
         })),
   })
@@ -166,6 +167,7 @@ function LiveDatabaseIdentity(
               inventoryStatus:
                 live?.inventoryStatus ?? instance.inventoryStatus,
               observedState: live?.observedState ?? instance.observedState,
+              relayStatus: live ? live.relayStatus : instance.relayStatus,
               relayUpdating: live ? live.relayUpdating : instance.relayUpdating,
             })
       }
@@ -430,6 +432,7 @@ function instancePresentationEqual(
       live ||
       (previous.inventoryStatus === next.inventoryStatus &&
         previous.observedState === next.observedState &&
+        previous.relayStatus === next.relayStatus &&
         previous.relayUpdating === next.relayUpdating)
     )
   }

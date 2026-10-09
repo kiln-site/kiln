@@ -38,7 +38,7 @@ export const engineBadgeClasses: Record<DatabaseEngine, string> = {
 export function databaseStatusPresentation(
   database: Pick<
     ManagedDatabase,
-    "inventoryStatus" | "observedState" | "relayUpdating"
+    "inventoryStatus" | "observedState" | "relayStatus" | "relayUpdating"
   >
 ) {
   return instanceStatusPresentation({
@@ -47,8 +47,20 @@ export function databaseStatusPresentation(
     kind: "database",
     observedState: database.observedState,
     relayId: "status-presentation",
+    relayStatus: database.relayStatus,
     relayUpdating: database.relayUpdating,
   })
+}
+
+// Inventory says whether the database exists; relayStatus follows live Relay
+// reachability between inventory refreshes.
+export function databaseRelayAvailable(
+  database: Pick<ManagedDatabase, "inventoryStatus" | "relayStatus">
+): boolean {
+  return (
+    database.inventoryStatus === "available" &&
+    database.relayStatus === "connected"
+  )
 }
 
 export function engineLabel(engine: DatabaseEngine): string {

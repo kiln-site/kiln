@@ -1,7 +1,7 @@
 import { generateKeyPairSync, randomBytes, randomUUID, sign } from "node:crypto"
 import { once } from "node:events"
 
-import { it as effectIt } from "@effect/vitest"
+import { it as effectIt, layer } from "@effect/vitest"
 import { Effect } from "effect"
 import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test"
 import { WebSocketServer } from "ws"
@@ -23,30 +23,6 @@ vi.mock("@/lib/relay-registry", () => ({
   listPersistedRelays: vi.fn(async () => []),
   loadRelayCredentials: vi.fn(),
 }))
-// An in-memory cache stands in for Redis so update windows can outlive the
-// process-local registry, as they do when a batched update replaces Hearth.
-const cacheEntries = vi.hoisted(() => new Map<string, string>())
-vi.mock("@/effect/cache", async (importOriginal) => {
-  const original = await importOriginal<typeof import("@/effect/cache")>()
-  const { Effect, Layer } = await import("effect")
-  const entries = cacheEntries
-  return {
-    ...original,
-    AppCacheLive: Layer.succeed(original.AppCache)({
-      backend: "redis-protocol",
-      enabled: true,
-      get: (key) => Effect.sync(() => entries.get(key)),
-      remove: (key) =>
-        Effect.sync(() => {
-          entries.delete(key)
-        }),
-      set: (key, value) =>
-        Effect.sync(() => {
-          entries.set(key, value)
-        }),
-    }),
-  }
-})
 vi.mock("@/lib/sftp-authorization", () => ({
   resolveSftpAuthorization: vi.fn(),
 }))
@@ -63,17 +39,19 @@ vi.mock("@/lib/authorization-delivery", () => ({
 }))
 
 import {
-  clearRelayUpdating,
   closeRelayConnection,
   isRelayUpdating,
-  markRelayUpdating,
   relayBrowserAuthorizationReady,
   relayConnectionBrowserMetadata,
   relayConnectionState,
   relayRpc,
+  resumeSystemUpdates,
+  trackSystemUpdate,
 } from "@/lib/relay-connection"
 import { loadRelayCredentials } from "@/lib/relay-registry"
 import { subscribeRealtimeChanges } from "@/lib/realtime-source.server"
+import { TestDatabase, describeMysql, resetDatabase } from "@/test/database"
+import { insertRows, selectRows } from "@/test/seed"
 
 const relayId = "relay-connection-effect-test"
 const pushedSnapshot = {
@@ -126,12 +104,10 @@ beforeEach(() => {
 
 afterEach(() => {
   // Each test starts as a fresh Hearth process.
-  for (const update of globalThis.kilnRelayUpdates?.values() ?? []) {
-    update.watcher.interruptUnsafe()
+  for (const update of globalThis.kilnSystemUpdates?.values() ?? []) {
+    update.watcher?.interruptUnsafe()
   }
-  globalThis.kilnRelayUpdates?.clear()
-  globalThis.kilnSettledRelayUpdates?.clear()
-  cacheEntries.clear()
+  globalThis.kilnSystemUpdates?.clear()
   closeRelayConnection(relayId)
   vi.useRealTimers()
   vi.restoreAllMocks()
@@ -207,191 +183,6 @@ effectIt.effect(
     )
 )
 
-effectIt.effect(
-  "keeps a Relay updating across reconnects until its operation settles",
-  () =>
-    withRelayServer(({ disconnect, endpoint, reconnected }) =>
-      Effect.gen(function* () {
-        const relayStates: Array<string> = []
-        const unsubscribe = subscribeRealtimeChanges((event) => {
-          if (event.type === "relay.state") {
-            relayStates.push(
-              `${event.status}${event.updating ? ":updating" : ""}`
-            )
-          }
-        })
-        yield* promiseEffect(() =>
-          relayRpc(endpoint, "relay.snapshot", {}, 1_000)
-        )
-        updateOperations.set("update-a", "running")
-        markRelayUpdating(relayId, {
-          id: "update-a",
-          startedAt: new Date().toISOString(),
-        })
-
-        // The control socket can drop and return to the Relay being replaced.
-        disconnect()
-        yield* Effect.promise(() => advanceTimersUntil(reconnected))
-        yield* promiseEffect(() =>
-          relayRpc(endpoint, "relay.snapshot", {}, 1_000)
-        )
-        yield* Effect.promise(() => vi.advanceTimersByTimeAsync(10_000))
-        expect(isRelayUpdating(relayId)).toBe(true)
-
-        updateOperations.set("update-a", "succeeded")
-        yield* Effect.promise(() =>
-          advanceTimersUntil(
-            new Promise<void>((resolve) => {
-              const unsubscribeSettled = subscribeRealtimeChanges((event) => {
-                if (event.type === "relay.state" && !event.updating) {
-                  unsubscribeSettled()
-                  resolve()
-                }
-              })
-            })
-          )
-        )
-
-        expect(isRelayUpdating(relayId)).toBe(false)
-        expect(relayStates[0]).toBe("connected")
-        expect(relayStates[1]).toBe("connected:updating")
-        expect(relayStates).toContain("unreachable:updating")
-        expect(relayStates).not.toContain("unreachable")
-        expect(relayStates.at(-1)).toBe("connected")
-        unsubscribe()
-      })
-    )
-)
-
-it("keeps a newer update window when an older operation settles", () => {
-  const updateA = {
-    id: "update-a",
-    startedAt: new Date(Date.now() - 60_000).toISOString(),
-  }
-  const updateB = { id: "update-b", startedAt: new Date().toISOString() }
-  markRelayUpdating(relayId, updateA)
-  markRelayUpdating(relayId, updateB)
-
-  clearRelayUpdating(relayId, updateA)
-  expect(isRelayUpdating(relayId)).toBe(true)
-
-  clearRelayUpdating(relayId, updateB)
-  expect(isRelayUpdating(relayId)).toBe(false)
-})
-
-it("ignores late observations of older or settled operations", () => {
-  const updateA = {
-    id: "update-a",
-    startedAt: new Date(Date.now() - 60_000).toISOString(),
-  }
-  const updateB = { id: "update-b", startedAt: new Date().toISOString() }
-
-  // A settlement can arrive before a cached window has been restored.
-  clearRelayUpdating(relayId, updateA)
-  markRelayUpdating(relayId, updateA)
-  expect(isRelayUpdating(relayId)).toBe(false)
-
-  markRelayUpdating(relayId, updateB)
-  // A status poll that saw A running resolves after B started.
-  markRelayUpdating(relayId, updateA)
-  clearRelayUpdating(relayId, updateA)
-  expect(isRelayUpdating(relayId)).toBe(true)
-
-  clearRelayUpdating(relayId, updateB)
-  markRelayUpdating(relayId, updateB)
-  expect(isRelayUpdating(relayId)).toBe(false)
-})
-
-it("keeps a newer window when an older operation is still reported running", () => {
-  const updateA = {
-    id: "update-a",
-    startedAt: new Date(Date.now() - 60_000).toISOString(),
-  }
-  const updateB = { id: "update-b", startedAt: new Date().toISOString() }
-  markRelayUpdating(relayId, updateA)
-  markRelayUpdating(relayId, updateB)
-
-  markRelayUpdating(relayId, updateA)
-  clearRelayUpdating(relayId, updateB)
-  expect(isRelayUpdating(relayId)).toBe(false)
-})
-
-it("does not reopen an update window after its deadline", () => {
-  const relayStates: Array<string> = []
-  const unsubscribe = subscribeRealtimeChanges((event) => {
-    if (event.type === "relay.state") relayStates.push(event.status)
-  })
-  markRelayUpdating(relayId, {
-    id: "update-a",
-    startedAt: new Date(Date.now() - 20 * 60_000).toISOString(),
-  })
-
-  expect(isRelayUpdating(relayId)).toBe(false)
-  expect(relayStates).toEqual([])
-  unsubscribe()
-})
-
-effectIt.effect(
-  "restores an update window when Hearth restarts mid-update",
-  () =>
-    withRelayServer(({ endpoint }) =>
-      Effect.gen(function* () {
-        updateOperations.set("update-a", "running")
-        markRelayUpdating(relayId, {
-          id: "update-a",
-          startedAt: new Date().toISOString(),
-        })
-        yield* Effect.promise(() => nextEventLoopTurn())
-        // A replaced Hearth starts without windows or Relay connections.
-        globalThis.kilnRelayUpdates?.get(relayId)?.watcher.interruptUnsafe()
-        globalThis.kilnRelayUpdates?.clear()
-        expect(isRelayUpdating(relayId)).toBe(false)
-
-        yield* promiseEffect(() =>
-          relayRpc(endpoint, "relay.snapshot", {}, 1_000)
-        )
-        yield* Effect.promise(() => nextEventLoopTurn())
-        expect(isRelayUpdating(relayId)).toBe(true)
-
-        updateOperations.set("update-a", "succeeded")
-        yield* Effect.promise(() =>
-          advanceTimersUntil(
-            new Promise<void>((resolve) => {
-              const unsubscribe = subscribeRealtimeChanges((event) => {
-                if (event.type === "relay.state" && !event.updating) {
-                  unsubscribe()
-                  resolve()
-                }
-              })
-            })
-          )
-        )
-        expect(isRelayUpdating(relayId)).toBe(false)
-      })
-    )
-)
-
-it("reports a Relay unreachable once its update window expires", async () => {
-  const relayStates: Array<string> = []
-  const unsubscribe = subscribeRealtimeChanges((event) => {
-    if (event.type === "relay.state" && event.relayId === relayId) {
-      relayStates.push(`${event.status}${event.updating ? ":updating" : ""}`)
-    }
-  })
-  // A restored window keeps the deadline of the operation's start.
-  markRelayUpdating(relayId, {
-    id: "update-a",
-    startedAt: new Date(Date.now() - 5 * 60_000).toISOString(),
-  })
-  await vi.advanceTimersByTimeAsync(10 * 60_000 - 1_000)
-  expect(isRelayUpdating(relayId)).toBe(true)
-
-  await vi.advanceTimersByTimeAsync(1_000)
-  expect(isRelayUpdating(relayId)).toBe(false)
-  expect(relayStates).toEqual(["unreachable:updating", "unreachable"])
-  unsubscribe()
-})
-
 it("settles failed generation readiness and replaces it for retry", async () => {
   let rejectSynchronization: (cause: Error) => void = () => undefined
   let markSynchronizationStarted: () => void = () => undefined
@@ -444,6 +235,135 @@ it("advances a newer persisted generation on the same control socket", async () 
     await new Promise<void>((resolve) => fixture.server.close(() => resolve()))
   }
 })
+
+// System update tracking records operations in MySQL so a replaced Hearth can
+// resume them.
+describeMysql("system update tracking", () => {
+  // The live clock lets tracker sleeps follow the fake timers used here.
+  layer(TestDatabase, { excludeTestServices: true })((it) => {
+    it.effect(
+      "keeps a Relay updating across reconnects until it reports the operation settled",
+      () =>
+        withRelayServer(({ disconnect, endpoint, reconnected }) =>
+          Effect.gen(function* () {
+            yield* resetDatabase
+            const relayStates: Array<string> = []
+            const unsubscribe = subscribeRealtimeChanges((event) => {
+              if (event.type === "relay.state") {
+                relayStates.push(
+                  `${event.status}${event.updating ? ":updating" : ""}`
+                )
+              }
+            })
+            yield* promiseEffect(() =>
+              relayRpc(endpoint, "relay.snapshot", {}, 1_000)
+            )
+            updateOperations.set("update-a", "running")
+            yield* trackSystemUpdate(relayId, {
+              component: "relay",
+              id: "update-a",
+            })
+            expect(yield* selectRows("system_update_operation")).toMatchObject([
+              { component: "relay", operation_id: "update-a" },
+            ])
+
+            // The control socket can drop and return to the Relay being
+            // replaced, which still reports the operation running.
+            disconnect()
+            yield* Effect.promise(() => advanceTimersUntil(reconnected))
+            yield* promiseEffect(() =>
+              relayRpc(endpoint, "relay.snapshot", {}, 1_000)
+            )
+            yield* Effect.promise(() => vi.advanceTimersByTimeAsync(10_000))
+            expect(isRelayUpdating(relayId)).toBe(true)
+
+            updateOperations.set("update-a", "succeeded")
+            yield* Effect.promise(() => advanceTimersUntil(nextSettledState()))
+
+            expect(isRelayUpdating(relayId)).toBe(false)
+            expect(yield* forgottenOperations).toEqual([])
+            expect(relayStates[0]).toBe("connected")
+            expect(relayStates[1]).toBe("connected:updating")
+            expect(relayStates).toContain("unreachable:updating")
+            expect(relayStates).not.toContain("unreachable")
+            expect(relayStates.at(-1)).toBe("connected")
+            unsubscribe()
+          })
+        )
+    )
+
+    it.effect(
+      "resumes recorded updates when Hearth is replaced and forgets expired ones",
+      () =>
+        Effect.gen(function* () {
+          yield* resetDatabase
+          const now = Date.now()
+          yield* insertRows("system_update_operation", [
+            {
+              component: "relay",
+              deadline_at: now + 60_000,
+              operation_id: "update-a",
+              relay_id: relayId,
+            },
+            {
+              component: "relay",
+              deadline_at: now - 1,
+              operation_id: "update-b",
+              relay_id: "relay-with-an-expired-update",
+            },
+          ])
+
+          yield* resumeSystemUpdates()
+
+          expect(isRelayUpdating(relayId)).toBe(true)
+          expect(isRelayUpdating("relay-with-an-expired-update")).toBe(false)
+          expect(yield* selectRows("system_update_operation")).toMatchObject([
+            { operation_id: "update-a" },
+          ])
+        })
+    )
+
+    it.effect("stops tracking an update when its deadline passes", () =>
+      Effect.gen(function* () {
+        yield* resetDatabase
+        yield* trackSystemUpdate(relayId, {
+          component: "relay",
+          id: "update-a",
+        })
+        yield* Effect.promise(() =>
+          vi.advanceTimersByTimeAsync(15 * 60_000 - 1_000)
+        )
+        expect(isRelayUpdating(relayId)).toBe(true)
+
+        yield* Effect.promise(() => vi.advanceTimersByTimeAsync(1_000))
+        expect(isRelayUpdating(relayId)).toBe(false)
+        expect(yield* forgottenOperations).toEqual([])
+      })
+    )
+  })
+})
+
+// Settling publishes first, then removes the row; the driver's own timers are
+// faked here, so let virtual time pass while waiting for it.
+const forgottenOperations = Effect.gen(function* () {
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    const rows = yield* selectRows("system_update_operation")
+    if (rows.length === 0) return rows
+    yield* Effect.promise(() => vi.advanceTimersByTimeAsync(100))
+  }
+  return yield* selectRows("system_update_operation")
+})
+
+function nextSettledState(): Promise<void> {
+  return new Promise<void>((resolve) => {
+    const unsubscribe = subscribeRealtimeChanges((event) => {
+      if (event.type === "relay.state" && !event.updating) {
+        unsubscribe()
+        resolve()
+      }
+    })
+  })
+}
 
 interface RelayServerFixture {
   cancelled: Promise<void>
@@ -652,10 +572,6 @@ async function advanceTimersUntil<TResult>(
     await new Promise<void>((resolve) => setImmediate(resolve))
   }
   return promise
-}
-
-function nextEventLoopTurn(): Promise<void> {
-  return new Promise<void>((resolve) => setImmediate(resolve))
 }
 
 function promiseEffect<TResult>(run: () => Promise<TResult>) {

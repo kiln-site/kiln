@@ -327,6 +327,12 @@ export const getManagedDatabases = createServerFn({ method: "GET" }).handler(
     return {
       databases: databases.map((database) => ({
         ...database,
+        // Realtime Relay status events patch these two fields in place, so
+        // reachability changes never refetch the whole inventory.
+        relayStatus:
+          database.inventoryStatus === "unavailable"
+            ? ("unreachable" as const)
+            : ("connected" as const),
         relayUpdating: isRelayUpdating(database.relayId),
       })),
       relayErrors,

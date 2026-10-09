@@ -197,7 +197,7 @@ export const startSystemUpdates = createServerFn({ method: "POST" })
     if (!latestRelease) {
       throw new Error("No public Kiln release is available to install")
     }
-    const [manifest, relays, { markRelayUpdating, relayRpc }, hearthContainer] =
+    const [manifest, relays, { relayRpc, trackSystemUpdate }, hearthContainer] =
       await Promise.all([
         runAppEffect(
           "updates.manifest",
@@ -349,14 +349,16 @@ export const startSystemUpdates = createServerFn({ method: "POST" })
                 user.id
               )
               const operations = parseUpdateOperations(response)
-              for (const operation of operations) {
-                if (
-                  operation.component === "relay" &&
-                  operation.status === "running"
-                ) {
-                  markRelayUpdating(group.relay.id, operation)
-                }
-              }
+              await runAppEffect(
+                "updates.track",
+                Effect.forEach(
+                  operations.filter(
+                    (operation) => operation.status === "running"
+                  ),
+                  (operation) => trackSystemUpdate(group.relay.id, operation),
+                  { discard: true }
+                )
+              )
               return { group, operations }
             },
             catch: (cause) => cause,
@@ -395,26 +397,22 @@ export const getSystemUpdateStatus = createServerFn({ method: "POST" })
   .validator(updateStatusSchema)
   .handler(async ({ data }) => {
     const user = await requireUpdateAccess()
-    const [relays, { clearRelayUpdating, markRelayUpdating, relayRpc }] =
-      await Promise.all([
-        updateRelaysForUser(user),
-        import("@/lib/relay-connection"),
-      ])
-    const relay = await selectedRelay(relays, data.relayId)
-    const result = await relayRpc(
-      relay,
-      "relay.update.status",
-      { operationId: data.operationId },
-      15_000
+    const [relays, { relayRpc, trackedSystemUpdateStatus }] = await Promise.all(
+      [updateRelaysForUser(user), import("@/lib/relay-connection")]
     )
+    const relay = await selectedRelay(relays, data.relayId)
+    // Hearth's tracker already polls operations it started; only ask the
+    // Relay directly before the tracker has a record.
+    const result =
+      trackedSystemUpdateStatus(relay.id, data.operationId) ??
+      (await relayRpc(
+        relay,
+        "relay.update.status",
+        { operationId: data.operationId },
+        15_000
+      ))
     if (result === null) return null
     const operation = updateOperationSchema.parse(result)
-    if (operation.component === "relay") {
-      // A Hearth replaced earlier in the same batch starts without the
-      // window, so a running Relay operation restores it.
-      if (operation.status === "running") markRelayUpdating(relay.id, operation)
-      else clearRelayUpdating(relay.id, operation)
-    }
     return operation.component === "hearth" && !isPlatformAdmin(user)
       ? null
       : operation

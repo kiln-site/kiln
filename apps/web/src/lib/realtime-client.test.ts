@@ -1,6 +1,7 @@
 import { QueryClient } from "@tanstack/react-query"
 import { afterEach, describe, expect, it, vi } from "vite-plus/test"
 
+import { getManagedDatabasesCollection } from "@/lib/collections/managed-databases"
 import { getRelayInstancesCollection } from "@/lib/collections/relay-instances"
 import { createAppClients, type AppRouterContext } from "@/lib/query-client"
 import { queryKeys, type RelayConnection } from "@/lib/query-options"
@@ -229,6 +230,65 @@ describe("realtime event application", () => {
     )
     expect(result?.instances).toBe(current.instances)
     expect(result?.nodes).toEqual([updatedNode])
+  })
+
+  it("patches database rows from Relay status and refetches only when the Relay returns", async () => {
+    const app = createAppClients()
+    openClients.push(app)
+    const clients = {
+      instances: getRelayInstancesCollection(app.dbClient),
+      queryClient: app.queryClient,
+    }
+    const databases = getManagedDatabasesCollection(app.dbClient)
+    const database = {
+      id: "d".repeat(40),
+      inventoryStatus: "available",
+      observedState: "running",
+      relayId: alpha.relayId,
+      relayStatus: "connected",
+      relayUpdating: false,
+    }
+    clients.queryClient.setQueryData(queryKeys.databases.list, {
+      databases: [database],
+      relayErrors: [],
+      relays: [],
+    })
+    await databases.preload()
+    const refreshTopics = vi.fn().mockResolvedValue(undefined)
+
+    applyEvent(
+      clients,
+      {
+        epoch,
+        relayId: alpha.relayId,
+        sequence: 1,
+        status: "unreachable",
+        type: "relay.status",
+        updating: true,
+      },
+      refreshTopics
+    )
+    // The collection follows its backing query cache.
+    await vi.waitFor(() =>
+      expect(databases.toArray).toMatchObject([
+        { relayStatus: "unreachable", relayUpdating: true },
+      ])
+    )
+    expect(refreshTopics).not.toHaveBeenCalled()
+
+    applyEvent(
+      clients,
+      relayStatus(alpha.relayId, "connected", 2),
+      refreshTopics
+    )
+    await vi.waitFor(() =>
+      expect(databases.toArray).toMatchObject([
+        { relayStatus: "connected", relayUpdating: false },
+      ])
+    )
+    expect(refreshTopics).toHaveBeenCalledWith(["databases"], {
+      relayId: alpha.relayId,
+    })
   })
 
   it("keeps Relay connection state and fleet rows in sync", () => {

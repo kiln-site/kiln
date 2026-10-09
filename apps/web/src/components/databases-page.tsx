@@ -73,6 +73,7 @@ import {
 } from "@/components/database/database-dialogs"
 import { DatabaseNetworkPicker } from "@/components/database/database-network"
 import {
+  databaseRelayAvailable,
   databaseStatusPresentation,
   engineBadgeClasses,
   engineLabel,
@@ -447,6 +448,7 @@ const DatabaseTable = React.memo(function DatabaseTable({
                     kind: "database",
                     observedState: database.observedState,
                     relayId: database.relayId,
+                    relayStatus: database.relayStatus,
                     relayUpdating: database.relayUpdating,
                   }}
                   live={false}
@@ -586,7 +588,7 @@ const DatabaseActions = React.memo(function DatabaseActions({
     [database.permissions]
   )
   const running = database.observedState === "running"
-  const available = database.inventoryStatus === "available"
+  const available = databaseRelayAvailable(database)
   const busy = action.isPending || exportDump.isPending
   const canExport =
     available &&

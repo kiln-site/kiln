@@ -32,6 +32,7 @@ import {
   useDatabaseExport,
 } from "@/components/database/database-dialogs"
 import {
+  databaseRelayAvailable,
   databaseStatusPresentation,
   engineBadgeClasses,
   engineLabel,
@@ -63,7 +64,7 @@ export function DatabaseInfoPage() {
   const { database, routeId } = useDatabaseWorkspace()
   const can = (permission: ManagedDatabase["permissions"][number]) =>
     database.permissions.includes(permission)
-  const available = database.inventoryStatus === "available"
+  const available = databaseRelayAvailable(database)
 
   return (
     <section className="min-h-0 flex-1 overflow-y-auto bg-card">

@@ -17,7 +17,10 @@ import {
   type RelayConnection,
 } from "@/lib/query-options"
 import type { FleetInstance, RealtimeClientEvent } from "@/lib/realtime-events"
+import type { getManagedDatabases } from "@/server/databases"
 import type { RelayFleetSnapshot } from "@/lib/relay-fleet"
+
+type ManagedDatabaseOverview = Awaited<ReturnType<typeof getManagedDatabases>>
 
 export interface ApplyRealtimeEventInput {
   event: Exclude<RealtimeClientEvent, { type: "relay.invalidate" | "reset" }>
@@ -110,14 +113,14 @@ function applyRealtimeEvent(input: ApplyRealtimeEventInput): void {
     return
   }
   if (event.type === "relay.status") {
-    // Database inventory is fetched through the Relay, so its reachability
-    // and update state come from the same refresh.
-    void (
-      refreshTopics?.(["databases"], { relayId: event.relayId }) ??
-      refreshHearthRealtimeTopics(queryClient, ["databases"], {
-        relayId: event.relayId,
-      })
-    )
+    if (applyRelayStatusToDatabases(queryClient, event)) {
+      void (
+        refreshTopics?.(["databases"], { relayId: event.relayId }) ??
+        refreshHearthRealtimeTopics(queryClient, ["databases"], {
+          relayId: event.relayId,
+        })
+      )
+    }
     if (!instances.isReady()) {
       const snapshot = queryClient.getQueryData<RelayFleetSnapshot>(
         queryKeys.relay.snapshot
@@ -191,6 +194,45 @@ function applyRealtimeSnapshotEvent(
 }
 
 type RelayStatusEvent = Extract<RealtimeClientEvent, { type: "relay.status" }>
+
+/**
+ * Patches Relay reachability onto cached database rows. Returns whether the
+ * Relay came back to rows whose inventory may have changed while it was away.
+ */
+function applyRelayStatusToDatabases(
+  queryClient: QueryClient,
+  event: RelayStatusEvent
+): boolean {
+  let stale = false
+  queryClient.setQueryData<ManagedDatabaseOverview>(
+    queryKeys.databases.list,
+    (overview) => {
+      if (!overview) return overview
+      let changed = false
+      const databases = overview.databases.map((database) => {
+        if (database.relayId !== event.relayId) return database
+        if (
+          event.status === "connected" &&
+          (database.inventoryStatus === "unavailable" ||
+            database.relayStatus === "unreachable")
+        ) {
+          stale = true
+        }
+        const relayUpdating = event.updating ?? false
+        if (
+          database.relayStatus === event.status &&
+          database.relayUpdating === relayUpdating
+        ) {
+          return database
+        }
+        changed = true
+        return { ...database, relayStatus: event.status, relayUpdating }
+      })
+      return changed ? { ...overview, databases } : overview
+    }
+  )
+  return stale
+}
 
 function relayStatusChanged(
   item: { relayId: string; relayStatus: string; relayUpdating?: boolean },
