@@ -2,9 +2,11 @@ import { isAccountEnabled, isAccountVerified } from "@/lib/account-policy"
 import { Outlet, createFileRoute, redirect } from "@tanstack/react-router"
 
 import { AppNotFoundPage } from "@/components/app-error-page"
+import { appRouteIdFromSelection } from "@/lib/app-route"
 import { databaseRouteIdFromSelection } from "@/lib/database-route"
 import {
   accessCapabilitiesQueryOptions,
+  appDirectoryQueryOptions,
   authStateQueryOptions,
   managedDatabaseDirectoryQueryOptions,
   relayConnectionQueryOptions,
@@ -45,6 +47,9 @@ export const Route = createFileRoute("/_app")({
       await context.queryClient.ensureQueryData(
         managedDatabaseDirectoryQueryOptions()
       )
+    }
+    if (appRouteIdFromSelection(uiPreferences.selectedInstanceRouteId)) {
+      await context.queryClient.ensureQueryData(appDirectoryQueryOptions())
     }
   },
   component: AuthenticatedApp,

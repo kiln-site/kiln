@@ -3,10 +3,17 @@ import { Play } from "lucide-react"
 
 import { DatabaseCredentialsPopover } from "@/components/database/database-credentials-popover"
 import { useDatabaseWorkspace } from "@/components/database/database-workspace-context"
+import type { TerminalBackend } from "@/components/terminal-session"
+import { databaseTerminalStreamUrl } from "@/lib/database-terminal-stream"
+import {
+  claimDatabaseTerminal,
+  restartDatabaseTerminal,
+  writeDatabaseTerminal,
+} from "@/server/databases"
 
-const DatabaseTerminal = React.lazy(async () => {
-  const module = await import("@/components/database/database-terminal")
-  return { default: module.DatabaseTerminal }
+const TerminalSession = React.lazy(async () => {
+  const module = await import("@/components/terminal-session")
+  return { default: module.TerminalSession }
 })
 
 export function DatabaseTerminalPage() {
@@ -37,7 +44,7 @@ export function DatabaseTerminalPage() {
 
   return (
     <React.Suspense fallback={<div className="min-h-0 flex-1 bg-card" />}>
-      <DatabaseTerminal
+      <DatabaseTerminalSession
         key={`${database.relayId}:${database.id}`}
         databaseId={database.id}
         relayId={database.relayId}
@@ -50,4 +57,28 @@ export function DatabaseTerminalPage() {
       />
     </React.Suspense>
   )
+}
+
+function DatabaseTerminalSession({
+  databaseId,
+  relayId,
+  toolbarActions,
+}: {
+  databaseId: string
+  relayId: string
+  toolbarActions: React.ReactNode
+}) {
+  const backend = React.useMemo<TerminalBackend>(() => {
+    const target = { databaseId, relayId }
+    return {
+      claim: (input) =>
+        claimDatabaseTerminal({ data: { ...target, ...input } }),
+      noun: "database",
+      restart: () => restartDatabaseTerminal({ data: target }),
+      streamUrl: (size) => databaseTerminalStreamUrl({ ...target, ...size }),
+      write: (sessionId, data) =>
+        writeDatabaseTerminal({ data: { ...target, data, sessionId } }),
+    }
+  }, [databaseId, relayId])
+  return <TerminalSession backend={backend} toolbarActions={toolbarActions} />
 }

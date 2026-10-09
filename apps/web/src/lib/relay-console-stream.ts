@@ -240,6 +240,7 @@ function openDirectRelayConsoleStream(
         socket.send(
           JSON.stringify({
             instanceId: resource.id,
+            ...(resource.stream ? { stream: resource.stream } : {}),
             type: "console.subscribe",
             v: 1,
           })
@@ -324,6 +325,7 @@ function hearthConsoleStreamUrl(
 ): string {
   const search = new URLSearchParams({ relayId })
   if (resource.kind !== "instance") search.set("kind", resource.kind)
+  if (resource.stream) search.set("stream", resource.stream)
   return `/api/console/${encodeURIComponent(resource.id)}?${search}`
 }
 

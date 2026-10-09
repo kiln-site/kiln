@@ -78,7 +78,7 @@ vi.mock("@/lib/access-control", () => ({
 
 import { publishRealtimeChange } from "@/lib/realtime-source.server"
 import { deliverDatabaseTerminalOutput } from "./database-terminal-hub"
-import { openDatabaseTerminalStream } from "./database-terminal-stream"
+import { databaseTerminalTarget, openTerminalStream } from "./terminal-stream"
 
 const user = {
   email: "user@example.com",
@@ -99,14 +99,14 @@ async function openStream() {
   boundary.endsWhileAttaching = false
   boundary.signedIn = true
   const page = new AbortController()
-  const reader = openDatabaseTerminalStream({
+  const reader = openTerminalStream({
     authSessionId: "sign-in-one",
     cols: 80,
-    databaseId: "e".repeat(40),
     headers: new Headers(),
     relay,
     rows: 24,
     signal: page.signal,
+    target: databaseTerminalTarget(relay, "e".repeat(40), user),
     user,
   }).getReader()
   const decoder = new TextDecoder()
@@ -136,14 +136,14 @@ describe("database terminal stream", () => {
     vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] })
     boundary.endsWhileAttaching = true
     boundary.renewals = 0
-    const reader = openDatabaseTerminalStream({
+    const reader = openTerminalStream({
       authSessionId: "sign-in-one",
       cols: 80,
-      databaseId: "e".repeat(40),
       headers: new Headers(),
       relay,
       rows: 24,
       signal: new AbortController().signal,
+      target: databaseTerminalTarget(relay, "e".repeat(40), user),
       user,
     }).getReader()
     const decoder = new TextDecoder()

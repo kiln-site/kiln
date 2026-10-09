@@ -55,11 +55,15 @@ export function useRelayConsoleStream(
   retryVersion = 0
 ) {
   const queryClient = useQueryClient()
-  const { id: instanceId, kind: resourceKind } = resource
+  const { id: instanceId, kind: resourceKind, stream } = resource
   const consoleKey = React.useMemo(
     () =>
-      queryKeys.relay.console(relayId, { id: instanceId, kind: resourceKind }),
-    [instanceId, relayId, resourceKind]
+      queryKeys.relay.console(relayId, {
+        id: instanceId,
+        kind: resourceKind,
+        stream,
+      }),
+    [instanceId, relayId, resourceKind, stream]
   )
   const hasEverBeenLiveRef = React.useRef(false)
   const lastRetryVersionRef = React.useRef(retryVersion)
@@ -430,7 +434,7 @@ export function useRelayConsoleStream(
         while (!disposed) {
           const failure = yield* openRelayConsoleStream(
             relayId,
-            { id: instanceId, kind: resourceKind },
+            { id: instanceId, kind: resourceKind, stream },
             refreshRoute ? null : browserOrigin,
             refreshRoute ? null : consoleTransport,
             loadTiming,
@@ -617,6 +621,7 @@ export function useRelayConsoleStream(
     relayId,
     resourceKind,
     retryVersion,
+    stream,
   ])
 
   return snapshot

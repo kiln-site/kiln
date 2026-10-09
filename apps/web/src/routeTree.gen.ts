@@ -41,6 +41,7 @@ import { Route as ApiRealtimeRouteImport } from './routes/api.realtime'
 import { Route as ApiSentryCheckRouteImport } from './routes/api.sentry-check'
 import { Route as CliAuthorizeRouteImport } from './routes/cli.authorize'
 import { Route as DownloadsIdRouteImport } from './routes/downloads.$id'
+import { Route as AppAppAppIdRouteImport } from './routes/_app/app/$appId'
 import { Route as AppAutomationsIndexRouteImport } from './routes/_app.automations.index'
 import { Route as AppAutomationsCalendarRouteImport } from './routes/_app.automations.calendar'
 import { Route as AppAutomationsHistoryRouteImport } from './routes/_app.automations.history'
@@ -52,6 +53,7 @@ import { Route as AppBackupsRunsRouteImport } from './routes/_app.backups.runs'
 import { Route as AppBackupsSettingsRouteImport } from './routes/_app.backups.settings'
 import { Route as AppDbDatabaseIdRouteImport } from './routes/_app/db/$databaseId'
 import { Route as AppInfraIndexRouteImport } from './routes/_app.infra.index'
+import { Route as AppInfraAppsRouteImport } from './routes/_app.infra.apps'
 import { Route as AppInfraDatabasesRouteImport } from './routes/_app.infra.databases'
 import { Route as AppInfraDomainsRouteImport } from './routes/_app.infra.domains'
 import { Route as AppInfraRelaysRouteImport } from './routes/_app.infra.relays'
@@ -65,9 +67,17 @@ import { Route as AppSettingsAppearanceRouteImport } from './routes/_app.setting
 import { Route as AppSettingsBillingRouteImport } from './routes/_app.settings.billing'
 import { Route as AppSettingsFilesRouteImport } from './routes/_app.settings.files'
 import { Route as AppSettingsRelaysRouteImport } from './routes/_app.settings.relays'
+import { Route as ApiAppTerminalAppIdRouteImport } from './routes/api.app-terminal.$appId'
 import { Route as ApiAuthSplatRouteImport } from './routes/api.auth.$'
 import { Route as ApiConsoleInstanceIdRouteImport } from './routes/api.console.$instanceId'
 import { Route as ApiDatabaseTerminalDatabaseIdRouteImport } from './routes/api.database-terminal.$databaseId'
+import { Route as AppAppAppIdIndexRouteImport } from './routes/_app/app/$appId.index'
+import { Route as AppAppAppIdSplatRouteImport } from './routes/_app/app/$appId.$'
+import { Route as AppAppAppIdFilesRouteImport } from './routes/_app/app/$appId.files'
+import { Route as AppAppAppIdInfoRouteImport } from './routes/_app/app/$appId.info'
+import { Route as AppAppAppIdLogsRouteImport } from './routes/_app/app/$appId.logs'
+import { Route as AppAppAppIdNetworkRouteImport } from './routes/_app/app/$appId.network'
+import { Route as AppAppAppIdTerminalRouteImport } from './routes/_app/app/$appId.terminal'
 import { Route as AppDbDatabaseIdIndexRouteImport } from './routes/_app/db/$databaseId.index'
 import { Route as AppDbDatabaseIdSplatRouteImport } from './routes/_app/db/$databaseId.$'
 import { Route as AppDbDatabaseIdInfoRouteImport } from './routes/_app/db/$databaseId.info'
@@ -85,6 +95,7 @@ import { Route as AppServerServerIdStartupRouteImport } from './routes/_app/serv
 import { Route as ApiCliAuthDeviceRouteImport } from './routes/api.cli.auth.device'
 import { Route as ApiCliAuthTokenRouteImport } from './routes/api.cli.auth.token'
 import { Route as ApiCliV1SplatRouteImport } from './routes/api.cli.v1.$'
+import { Route as AppAppAppIdFilesSplatRouteImport } from './routes/_app/app/$appId.files.$'
 import { Route as AppServerServerIdFilesSplatRouteImport } from './routes/_app/server/$serverId.files.$'
 
 const IndexRoute = IndexRouteImport.update({
@@ -246,6 +257,11 @@ const DownloadsIdRoute = DownloadsIdRouteImport.update({
   path: '/downloads/$id',
   getParentRoute: () => rootRouteImport,
 } as any)
+const AppAppAppIdRoute = AppAppAppIdRouteImport.update({
+  id: '/app/$appId',
+  path: '/app/$appId',
+  getParentRoute: () => AppRoute,
+} as any)
 const AppAutomationsIndexRoute = AppAutomationsIndexRouteImport.update({
   id: '/',
   path: '/',
@@ -299,6 +315,11 @@ const AppDbDatabaseIdRoute = AppDbDatabaseIdRouteImport.update({
 const AppInfraIndexRoute = AppInfraIndexRouteImport.update({
   id: '/',
   path: '/',
+  getParentRoute: () => AppInfraRoute,
+} as any)
+const AppInfraAppsRoute = AppInfraAppsRouteImport.update({
+  id: '/apps',
+  path: '/apps',
   getParentRoute: () => AppInfraRoute,
 } as any)
 const AppInfraDatabasesRoute = AppInfraDatabasesRouteImport.update({
@@ -366,6 +387,11 @@ const AppSettingsRelaysRoute = AppSettingsRelaysRouteImport.update({
   path: '/relays',
   getParentRoute: () => AppSettingsRoute,
 } as any)
+const ApiAppTerminalAppIdRoute = ApiAppTerminalAppIdRouteImport.update({
+  id: '/api/app-terminal/$appId',
+  path: '/api/app-terminal/$appId',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ApiAuthSplatRoute = ApiAuthSplatRouteImport.update({
   id: '/api/auth/$',
   path: '/api/auth/$',
@@ -382,6 +408,41 @@ const ApiDatabaseTerminalDatabaseIdRoute =
     path: '/api/database-terminal/$databaseId',
     getParentRoute: () => rootRouteImport,
   } as any)
+const AppAppAppIdIndexRoute = AppAppAppIdIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => AppAppAppIdRoute,
+} as any)
+const AppAppAppIdSplatRoute = AppAppAppIdSplatRouteImport.update({
+  id: '/$',
+  path: '/$',
+  getParentRoute: () => AppAppAppIdRoute,
+} as any)
+const AppAppAppIdFilesRoute = AppAppAppIdFilesRouteImport.update({
+  id: '/files',
+  path: '/files',
+  getParentRoute: () => AppAppAppIdRoute,
+} as any)
+const AppAppAppIdInfoRoute = AppAppAppIdInfoRouteImport.update({
+  id: '/info',
+  path: '/info',
+  getParentRoute: () => AppAppAppIdRoute,
+} as any)
+const AppAppAppIdLogsRoute = AppAppAppIdLogsRouteImport.update({
+  id: '/logs',
+  path: '/logs',
+  getParentRoute: () => AppAppAppIdRoute,
+} as any)
+const AppAppAppIdNetworkRoute = AppAppAppIdNetworkRouteImport.update({
+  id: '/network',
+  path: '/network',
+  getParentRoute: () => AppAppAppIdRoute,
+} as any)
+const AppAppAppIdTerminalRoute = AppAppAppIdTerminalRouteImport.update({
+  id: '/terminal',
+  path: '/terminal',
+  getParentRoute: () => AppAppAppIdRoute,
+} as any)
 const AppDbDatabaseIdIndexRoute = AppDbDatabaseIdIndexRouteImport.update({
   id: '/',
   path: '/',
@@ -470,6 +531,11 @@ const ApiCliV1SplatRoute = ApiCliV1SplatRouteImport.update({
   path: '/api/cli/v1/$',
   getParentRoute: () => rootRouteImport,
 } as any)
+const AppAppAppIdFilesSplatRoute = AppAppAppIdFilesSplatRouteImport.update({
+  id: '/$',
+  path: '/$',
+  getParentRoute: () => AppAppAppIdFilesRoute,
+} as any)
 const AppServerServerIdFilesSplatRoute =
   AppServerServerIdFilesSplatRouteImport.update({
     id: '/$',
@@ -509,6 +575,7 @@ export interface FileRoutesByFullPath {
   '/api/sentry-check': typeof ApiSentryCheckRoute
   '/cli/authorize': typeof CliAuthorizeRoute
   '/downloads/$id': typeof DownloadsIdRoute
+  '/app/$appId': typeof AppAppAppIdRouteWithChildren
   '/automations/calendar': typeof AppAutomationsCalendarRoute
   '/automations/history': typeof AppAutomationsHistoryRoute
   '/automations/schedules': typeof AppAutomationsSchedulesRoute
@@ -517,6 +584,7 @@ export interface FileRoutesByFullPath {
   '/backups/runs': typeof AppBackupsRunsRoute
   '/backups/settings': typeof AppBackupsSettingsRoute
   '/db/$databaseId': typeof AppDbDatabaseIdRouteWithChildren
+  '/infra/apps': typeof AppInfraAppsRoute
   '/infra/databases': typeof AppInfraDatabasesRoute
   '/infra/domains': typeof AppInfraDomainsRoute
   '/infra/relays': typeof AppInfraRelaysRoute
@@ -529,6 +597,7 @@ export interface FileRoutesByFullPath {
   '/settings/billing': typeof AppSettingsBillingRoute
   '/settings/files': typeof AppSettingsFilesRoute
   '/settings/relays': typeof AppSettingsRelaysRoute
+  '/api/app-terminal/$appId': typeof ApiAppTerminalAppIdRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/console/$instanceId': typeof ApiConsoleInstanceIdRoute
   '/api/database-terminal/$databaseId': typeof ApiDatabaseTerminalDatabaseIdRoute
@@ -536,6 +605,12 @@ export interface FileRoutesByFullPath {
   '/backups/': typeof AppBackupsIndexRoute
   '/infra/': typeof AppInfraIndexRoute
   '/settings/': typeof AppSettingsIndexRoute
+  '/app/$appId/$': typeof AppAppAppIdSplatRoute
+  '/app/$appId/files': typeof AppAppAppIdFilesRouteWithChildren
+  '/app/$appId/info': typeof AppAppAppIdInfoRoute
+  '/app/$appId/logs': typeof AppAppAppIdLogsRoute
+  '/app/$appId/network': typeof AppAppAppIdNetworkRoute
+  '/app/$appId/terminal': typeof AppAppAppIdTerminalRoute
   '/db/$databaseId/$': typeof AppDbDatabaseIdSplatRoute
   '/db/$databaseId/info': typeof AppDbDatabaseIdInfoRoute
   '/db/$databaseId/logs': typeof AppDbDatabaseIdLogsRoute
@@ -551,8 +626,10 @@ export interface FileRoutesByFullPath {
   '/api/cli/auth/device': typeof ApiCliAuthDeviceRoute
   '/api/cli/auth/token': typeof ApiCliAuthTokenRoute
   '/api/cli/v1/$': typeof ApiCliV1SplatRoute
+  '/app/$appId/': typeof AppAppAppIdIndexRoute
   '/db/$databaseId/': typeof AppDbDatabaseIdIndexRoute
   '/server/$serverId/': typeof AppServerServerIdIndexRoute
+  '/app/$appId/files/$': typeof AppAppAppIdFilesSplatRoute
   '/server/$serverId/files/$': typeof AppServerServerIdFilesSplatRoute
 }
 export interface FileRoutesByTo {
@@ -590,6 +667,7 @@ export interface FileRoutesByTo {
   '/backups/destinations': typeof AppBackupsDestinationsRoute
   '/backups/runs': typeof AppBackupsRunsRoute
   '/backups/settings': typeof AppBackupsSettingsRoute
+  '/infra/apps': typeof AppInfraAppsRoute
   '/infra/databases': typeof AppInfraDatabasesRoute
   '/infra/domains': typeof AppInfraDomainsRoute
   '/infra/relays': typeof AppInfraRelaysRoute
@@ -601,6 +679,7 @@ export interface FileRoutesByTo {
   '/settings/billing': typeof AppSettingsBillingRoute
   '/settings/files': typeof AppSettingsFilesRoute
   '/settings/relays': typeof AppSettingsRelaysRoute
+  '/api/app-terminal/$appId': typeof ApiAppTerminalAppIdRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/console/$instanceId': typeof ApiConsoleInstanceIdRoute
   '/api/database-terminal/$databaseId': typeof ApiDatabaseTerminalDatabaseIdRoute
@@ -608,6 +687,12 @@ export interface FileRoutesByTo {
   '/backups': typeof AppBackupsIndexRoute
   '/infra': typeof AppInfraIndexRoute
   '/settings': typeof AppSettingsIndexRoute
+  '/app/$appId/$': typeof AppAppAppIdSplatRoute
+  '/app/$appId/files': typeof AppAppAppIdFilesRouteWithChildren
+  '/app/$appId/info': typeof AppAppAppIdInfoRoute
+  '/app/$appId/logs': typeof AppAppAppIdLogsRoute
+  '/app/$appId/network': typeof AppAppAppIdNetworkRoute
+  '/app/$appId/terminal': typeof AppAppAppIdTerminalRoute
   '/db/$databaseId/$': typeof AppDbDatabaseIdSplatRoute
   '/db/$databaseId/info': typeof AppDbDatabaseIdInfoRoute
   '/db/$databaseId/logs': typeof AppDbDatabaseIdLogsRoute
@@ -623,8 +708,10 @@ export interface FileRoutesByTo {
   '/api/cli/auth/device': typeof ApiCliAuthDeviceRoute
   '/api/cli/auth/token': typeof ApiCliAuthTokenRoute
   '/api/cli/v1/$': typeof ApiCliV1SplatRoute
+  '/app/$appId': typeof AppAppAppIdIndexRoute
   '/db/$databaseId': typeof AppDbDatabaseIdIndexRoute
   '/server/$serverId': typeof AppServerServerIdIndexRoute
+  '/app/$appId/files/$': typeof AppAppAppIdFilesSplatRoute
   '/server/$serverId/files/$': typeof AppServerServerIdFilesSplatRoute
 }
 export interface FileRoutesById {
@@ -661,6 +748,7 @@ export interface FileRoutesById {
   '/api/sentry-check': typeof ApiSentryCheckRoute
   '/cli/authorize': typeof CliAuthorizeRoute
   '/downloads/$id': typeof DownloadsIdRoute
+  '/_app/app/$appId': typeof AppAppAppIdRouteWithChildren
   '/_app/automations/calendar': typeof AppAutomationsCalendarRoute
   '/_app/automations/history': typeof AppAutomationsHistoryRoute
   '/_app/automations/schedules': typeof AppAutomationsSchedulesRoute
@@ -669,6 +757,7 @@ export interface FileRoutesById {
   '/_app/backups/runs': typeof AppBackupsRunsRoute
   '/_app/backups/settings': typeof AppBackupsSettingsRoute
   '/_app/db/$databaseId': typeof AppDbDatabaseIdRouteWithChildren
+  '/_app/infra/apps': typeof AppInfraAppsRoute
   '/_app/infra/databases': typeof AppInfraDatabasesRoute
   '/_app/infra/domains': typeof AppInfraDomainsRoute
   '/_app/infra/relays': typeof AppInfraRelaysRoute
@@ -681,6 +770,7 @@ export interface FileRoutesById {
   '/_app/settings/billing': typeof AppSettingsBillingRoute
   '/_app/settings/files': typeof AppSettingsFilesRoute
   '/_app/settings/relays': typeof AppSettingsRelaysRoute
+  '/api/app-terminal/$appId': typeof ApiAppTerminalAppIdRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/console/$instanceId': typeof ApiConsoleInstanceIdRoute
   '/api/database-terminal/$databaseId': typeof ApiDatabaseTerminalDatabaseIdRoute
@@ -688,6 +778,12 @@ export interface FileRoutesById {
   '/_app/backups/': typeof AppBackupsIndexRoute
   '/_app/infra/': typeof AppInfraIndexRoute
   '/_app/settings/': typeof AppSettingsIndexRoute
+  '/_app/app/$appId/$': typeof AppAppAppIdSplatRoute
+  '/_app/app/$appId/files': typeof AppAppAppIdFilesRouteWithChildren
+  '/_app/app/$appId/info': typeof AppAppAppIdInfoRoute
+  '/_app/app/$appId/logs': typeof AppAppAppIdLogsRoute
+  '/_app/app/$appId/network': typeof AppAppAppIdNetworkRoute
+  '/_app/app/$appId/terminal': typeof AppAppAppIdTerminalRoute
   '/_app/db/$databaseId/$': typeof AppDbDatabaseIdSplatRoute
   '/_app/db/$databaseId/info': typeof AppDbDatabaseIdInfoRoute
   '/_app/db/$databaseId/logs': typeof AppDbDatabaseIdLogsRoute
@@ -703,8 +799,10 @@ export interface FileRoutesById {
   '/api/cli/auth/device': typeof ApiCliAuthDeviceRoute
   '/api/cli/auth/token': typeof ApiCliAuthTokenRoute
   '/api/cli/v1/$': typeof ApiCliV1SplatRoute
+  '/_app/app/$appId/': typeof AppAppAppIdIndexRoute
   '/_app/db/$databaseId/': typeof AppDbDatabaseIdIndexRoute
   '/_app/server/$serverId/': typeof AppServerServerIdIndexRoute
+  '/_app/app/$appId/files/$': typeof AppAppAppIdFilesSplatRoute
   '/_app/server/$serverId/files/$': typeof AppServerServerIdFilesSplatRoute
 }
 export interface FileRouteTypes {
@@ -741,6 +839,7 @@ export interface FileRouteTypes {
     | '/api/sentry-check'
     | '/cli/authorize'
     | '/downloads/$id'
+    | '/app/$appId'
     | '/automations/calendar'
     | '/automations/history'
     | '/automations/schedules'
@@ -749,6 +848,7 @@ export interface FileRouteTypes {
     | '/backups/runs'
     | '/backups/settings'
     | '/db/$databaseId'
+    | '/infra/apps'
     | '/infra/databases'
     | '/infra/domains'
     | '/infra/relays'
@@ -761,6 +861,7 @@ export interface FileRouteTypes {
     | '/settings/billing'
     | '/settings/files'
     | '/settings/relays'
+    | '/api/app-terminal/$appId'
     | '/api/auth/$'
     | '/api/console/$instanceId'
     | '/api/database-terminal/$databaseId'
@@ -768,6 +869,12 @@ export interface FileRouteTypes {
     | '/backups/'
     | '/infra/'
     | '/settings/'
+    | '/app/$appId/$'
+    | '/app/$appId/files'
+    | '/app/$appId/info'
+    | '/app/$appId/logs'
+    | '/app/$appId/network'
+    | '/app/$appId/terminal'
     | '/db/$databaseId/$'
     | '/db/$databaseId/info'
     | '/db/$databaseId/logs'
@@ -783,8 +890,10 @@ export interface FileRouteTypes {
     | '/api/cli/auth/device'
     | '/api/cli/auth/token'
     | '/api/cli/v1/$'
+    | '/app/$appId/'
     | '/db/$databaseId/'
     | '/server/$serverId/'
+    | '/app/$appId/files/$'
     | '/server/$serverId/files/$'
   fileRoutesByTo: FileRoutesByTo
   to:
@@ -822,6 +931,7 @@ export interface FileRouteTypes {
     | '/backups/destinations'
     | '/backups/runs'
     | '/backups/settings'
+    | '/infra/apps'
     | '/infra/databases'
     | '/infra/domains'
     | '/infra/relays'
@@ -833,6 +943,7 @@ export interface FileRouteTypes {
     | '/settings/billing'
     | '/settings/files'
     | '/settings/relays'
+    | '/api/app-terminal/$appId'
     | '/api/auth/$'
     | '/api/console/$instanceId'
     | '/api/database-terminal/$databaseId'
@@ -840,6 +951,12 @@ export interface FileRouteTypes {
     | '/backups'
     | '/infra'
     | '/settings'
+    | '/app/$appId/$'
+    | '/app/$appId/files'
+    | '/app/$appId/info'
+    | '/app/$appId/logs'
+    | '/app/$appId/network'
+    | '/app/$appId/terminal'
     | '/db/$databaseId/$'
     | '/db/$databaseId/info'
     | '/db/$databaseId/logs'
@@ -855,8 +972,10 @@ export interface FileRouteTypes {
     | '/api/cli/auth/device'
     | '/api/cli/auth/token'
     | '/api/cli/v1/$'
+    | '/app/$appId'
     | '/db/$databaseId'
     | '/server/$serverId'
+    | '/app/$appId/files/$'
     | '/server/$serverId/files/$'
   id:
     | '__root__'
@@ -892,6 +1011,7 @@ export interface FileRouteTypes {
     | '/api/sentry-check'
     | '/cli/authorize'
     | '/downloads/$id'
+    | '/_app/app/$appId'
     | '/_app/automations/calendar'
     | '/_app/automations/history'
     | '/_app/automations/schedules'
@@ -900,6 +1020,7 @@ export interface FileRouteTypes {
     | '/_app/backups/runs'
     | '/_app/backups/settings'
     | '/_app/db/$databaseId'
+    | '/_app/infra/apps'
     | '/_app/infra/databases'
     | '/_app/infra/domains'
     | '/_app/infra/relays'
@@ -912,6 +1033,7 @@ export interface FileRouteTypes {
     | '/_app/settings/billing'
     | '/_app/settings/files'
     | '/_app/settings/relays'
+    | '/api/app-terminal/$appId'
     | '/api/auth/$'
     | '/api/console/$instanceId'
     | '/api/database-terminal/$databaseId'
@@ -919,6 +1041,12 @@ export interface FileRouteTypes {
     | '/_app/backups/'
     | '/_app/infra/'
     | '/_app/settings/'
+    | '/_app/app/$appId/$'
+    | '/_app/app/$appId/files'
+    | '/_app/app/$appId/info'
+    | '/_app/app/$appId/logs'
+    | '/_app/app/$appId/network'
+    | '/_app/app/$appId/terminal'
     | '/_app/db/$databaseId/$'
     | '/_app/db/$databaseId/info'
     | '/_app/db/$databaseId/logs'
@@ -934,8 +1062,10 @@ export interface FileRouteTypes {
     | '/api/cli/auth/device'
     | '/api/cli/auth/token'
     | '/api/cli/v1/$'
+    | '/_app/app/$appId/'
     | '/_app/db/$databaseId/'
     | '/_app/server/$serverId/'
+    | '/_app/app/$appId/files/$'
     | '/_app/server/$serverId/files/$'
   fileRoutesById: FileRoutesById
 }
@@ -962,6 +1092,7 @@ export interface RootRouteChildren {
   ApiSentryCheckRoute: typeof ApiSentryCheckRoute
   CliAuthorizeRoute: typeof CliAuthorizeRoute
   DownloadsIdRoute: typeof DownloadsIdRoute
+  ApiAppTerminalAppIdRoute: typeof ApiAppTerminalAppIdRoute
   ApiAuthSplatRoute: typeof ApiAuthSplatRoute
   ApiConsoleInstanceIdRoute: typeof ApiConsoleInstanceIdRoute
   ApiDatabaseTerminalDatabaseIdRoute: typeof ApiDatabaseTerminalDatabaseIdRoute
@@ -1196,6 +1327,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof DownloadsIdRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/_app/app/$appId': {
+      id: '/_app/app/$appId'
+      path: '/app/$appId'
+      fullPath: '/app/$appId'
+      preLoaderRoute: typeof AppAppAppIdRouteImport
+      parentRoute: typeof AppRoute
+    }
     '/_app/automations/': {
       id: '/_app/automations/'
       path: '/'
@@ -1271,6 +1409,13 @@ declare module '@tanstack/react-router' {
       path: '/'
       fullPath: '/infra/'
       preLoaderRoute: typeof AppInfraIndexRouteImport
+      parentRoute: typeof AppInfraRoute
+    }
+    '/_app/infra/apps': {
+      id: '/_app/infra/apps'
+      path: '/apps'
+      fullPath: '/infra/apps'
+      preLoaderRoute: typeof AppInfraAppsRouteImport
       parentRoute: typeof AppInfraRoute
     }
     '/_app/infra/databases': {
@@ -1364,6 +1509,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppSettingsRelaysRouteImport
       parentRoute: typeof AppSettingsRoute
     }
+    '/api/app-terminal/$appId': {
+      id: '/api/app-terminal/$appId'
+      path: '/api/app-terminal/$appId'
+      fullPath: '/api/app-terminal/$appId'
+      preLoaderRoute: typeof ApiAppTerminalAppIdRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/auth/$': {
       id: '/api/auth/$'
       path: '/api/auth/$'
@@ -1384,6 +1536,55 @@ declare module '@tanstack/react-router' {
       fullPath: '/api/database-terminal/$databaseId'
       preLoaderRoute: typeof ApiDatabaseTerminalDatabaseIdRouteImport
       parentRoute: typeof rootRouteImport
+    }
+    '/_app/app/$appId/': {
+      id: '/_app/app/$appId/'
+      path: '/'
+      fullPath: '/app/$appId/'
+      preLoaderRoute: typeof AppAppAppIdIndexRouteImport
+      parentRoute: typeof AppAppAppIdRoute
+    }
+    '/_app/app/$appId/$': {
+      id: '/_app/app/$appId/$'
+      path: '/$'
+      fullPath: '/app/$appId/$'
+      preLoaderRoute: typeof AppAppAppIdSplatRouteImport
+      parentRoute: typeof AppAppAppIdRoute
+    }
+    '/_app/app/$appId/files': {
+      id: '/_app/app/$appId/files'
+      path: '/files'
+      fullPath: '/app/$appId/files'
+      preLoaderRoute: typeof AppAppAppIdFilesRouteImport
+      parentRoute: typeof AppAppAppIdRoute
+    }
+    '/_app/app/$appId/info': {
+      id: '/_app/app/$appId/info'
+      path: '/info'
+      fullPath: '/app/$appId/info'
+      preLoaderRoute: typeof AppAppAppIdInfoRouteImport
+      parentRoute: typeof AppAppAppIdRoute
+    }
+    '/_app/app/$appId/logs': {
+      id: '/_app/app/$appId/logs'
+      path: '/logs'
+      fullPath: '/app/$appId/logs'
+      preLoaderRoute: typeof AppAppAppIdLogsRouteImport
+      parentRoute: typeof AppAppAppIdRoute
+    }
+    '/_app/app/$appId/network': {
+      id: '/_app/app/$appId/network'
+      path: '/network'
+      fullPath: '/app/$appId/network'
+      preLoaderRoute: typeof AppAppAppIdNetworkRouteImport
+      parentRoute: typeof AppAppAppIdRoute
+    }
+    '/_app/app/$appId/terminal': {
+      id: '/_app/app/$appId/terminal'
+      path: '/terminal'
+      fullPath: '/app/$appId/terminal'
+      preLoaderRoute: typeof AppAppAppIdTerminalRouteImport
+      parentRoute: typeof AppAppAppIdRoute
     }
     '/_app/db/$databaseId/': {
       id: '/_app/db/$databaseId/'
@@ -1504,6 +1705,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiCliV1SplatRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/_app/app/$appId/files/$': {
+      id: '/_app/app/$appId/files/$'
+      path: '/$'
+      fullPath: '/app/$appId/files/$'
+      preLoaderRoute: typeof AppAppAppIdFilesSplatRouteImport
+      parentRoute: typeof AppAppAppIdFilesRoute
+    }
     '/_app/server/$serverId/files/$': {
       id: '/_app/server/$serverId/files/$'
       path: '/$'
@@ -1553,6 +1761,7 @@ const AppBackupsRouteWithChildren = AppBackupsRoute._addFileChildren(
 )
 
 interface AppInfraRouteChildren {
+  AppInfraAppsRoute: typeof AppInfraAppsRoute
   AppInfraDatabasesRoute: typeof AppInfraDatabasesRoute
   AppInfraDomainsRoute: typeof AppInfraDomainsRoute
   AppInfraRelaysRoute: typeof AppInfraRelaysRoute
@@ -1563,6 +1772,7 @@ interface AppInfraRouteChildren {
 }
 
 const AppInfraRouteChildren: AppInfraRouteChildren = {
+  AppInfraAppsRoute: AppInfraAppsRoute,
   AppInfraDatabasesRoute: AppInfraDatabasesRoute,
   AppInfraDomainsRoute: AppInfraDomainsRoute,
   AppInfraRelaysRoute: AppInfraRelaysRoute,
@@ -1596,6 +1806,41 @@ const AppSettingsRouteChildren: AppSettingsRouteChildren = {
 
 const AppSettingsRouteWithChildren = AppSettingsRoute._addFileChildren(
   AppSettingsRouteChildren,
+)
+
+interface AppAppAppIdFilesRouteChildren {
+  AppAppAppIdFilesSplatRoute: typeof AppAppAppIdFilesSplatRoute
+}
+
+const AppAppAppIdFilesRouteChildren: AppAppAppIdFilesRouteChildren = {
+  AppAppAppIdFilesSplatRoute: AppAppAppIdFilesSplatRoute,
+}
+
+const AppAppAppIdFilesRouteWithChildren =
+  AppAppAppIdFilesRoute._addFileChildren(AppAppAppIdFilesRouteChildren)
+
+interface AppAppAppIdRouteChildren {
+  AppAppAppIdSplatRoute: typeof AppAppAppIdSplatRoute
+  AppAppAppIdFilesRoute: typeof AppAppAppIdFilesRouteWithChildren
+  AppAppAppIdInfoRoute: typeof AppAppAppIdInfoRoute
+  AppAppAppIdLogsRoute: typeof AppAppAppIdLogsRoute
+  AppAppAppIdNetworkRoute: typeof AppAppAppIdNetworkRoute
+  AppAppAppIdTerminalRoute: typeof AppAppAppIdTerminalRoute
+  AppAppAppIdIndexRoute: typeof AppAppAppIdIndexRoute
+}
+
+const AppAppAppIdRouteChildren: AppAppAppIdRouteChildren = {
+  AppAppAppIdSplatRoute: AppAppAppIdSplatRoute,
+  AppAppAppIdFilesRoute: AppAppAppIdFilesRouteWithChildren,
+  AppAppAppIdInfoRoute: AppAppAppIdInfoRoute,
+  AppAppAppIdLogsRoute: AppAppAppIdLogsRoute,
+  AppAppAppIdNetworkRoute: AppAppAppIdNetworkRoute,
+  AppAppAppIdTerminalRoute: AppAppAppIdTerminalRoute,
+  AppAppAppIdIndexRoute: AppAppAppIdIndexRoute,
+}
+
+const AppAppAppIdRouteWithChildren = AppAppAppIdRoute._addFileChildren(
+  AppAppAppIdRouteChildren,
 )
 
 interface AppDbDatabaseIdRouteChildren {
@@ -1670,6 +1915,7 @@ interface AppRouteChildren {
   AppOperationsRoute: typeof AppOperationsRoute
   AppServersRoute: typeof AppServersRoute
   AppSettingsRoute: typeof AppSettingsRouteWithChildren
+  AppAppAppIdRoute: typeof AppAppAppIdRouteWithChildren
   AppDbDatabaseIdRoute: typeof AppDbDatabaseIdRouteWithChildren
   AppServerServerIdRoute: typeof AppServerServerIdRouteWithChildren
 }
@@ -1685,6 +1931,7 @@ const AppRouteChildren: AppRouteChildren = {
   AppOperationsRoute: AppOperationsRoute,
   AppServersRoute: AppServersRoute,
   AppSettingsRoute: AppSettingsRouteWithChildren,
+  AppAppAppIdRoute: AppAppAppIdRouteWithChildren,
   AppDbDatabaseIdRoute: AppDbDatabaseIdRouteWithChildren,
   AppServerServerIdRoute: AppServerServerIdRouteWithChildren,
 }
@@ -1714,6 +1961,7 @@ const rootRouteChildren: RootRouteChildren = {
   ApiSentryCheckRoute: ApiSentryCheckRoute,
   CliAuthorizeRoute: CliAuthorizeRoute,
   DownloadsIdRoute: DownloadsIdRoute,
+  ApiAppTerminalAppIdRoute: ApiAppTerminalAppIdRoute,
   ApiAuthSplatRoute: ApiAuthSplatRoute,
   ApiConsoleInstanceIdRoute: ApiConsoleInstanceIdRoute,
   ApiDatabaseTerminalDatabaseIdRoute: ApiDatabaseTerminalDatabaseIdRoute,

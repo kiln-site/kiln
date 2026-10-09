@@ -2,7 +2,7 @@ import * as React from "react"
 import { and, eq } from "@tanstack/db"
 import { useLiveQuery } from "@tanstack/react-db"
 import { useQuery } from "@tanstack/react-query"
-import { Database, RadioTower, Server } from "lucide-react"
+import { Boxes, Database, RadioTower, Server } from "lucide-react"
 
 import { cn } from "@workspace/ui/lib/utils"
 import {
@@ -17,6 +17,7 @@ import {
 } from "@/components/instance-name-presentation"
 import { IdentityName } from "@/components/identity-name"
 import { InstanceFavoriteStar } from "@/components/instance-favorite"
+import { appsCollectionOptions } from "@/lib/collections/apps"
 import { managedDatabasesCollectionOptions } from "@/lib/collections/managed-databases"
 import { relayInstancesCollectionOptions } from "@/lib/collections/relay-instances"
 import { relayNodesCollectionOptions } from "@/lib/collections/relay-nodes"
@@ -58,6 +59,9 @@ const MemoInstanceName = React.memo(function MemoInstanceName(
   if (instance.kind === "database") {
     return <LiveDatabaseIdentity {...props} instance={instance} />
   }
+  if (instance.kind === "app") {
+    return <LiveAppIdentity {...props} instance={instance} />
+  }
   if (instance.source === "registry") {
     return <LiveRegistryRelayIdentity {...props} instance={instance} />
   }
@@ -66,6 +70,7 @@ const MemoInstanceName = React.memo(function MemoInstanceName(
 
 type ServerInstance = Extract<InstanceNameInstance, { kind: "server" }>
 type DatabaseInstance = Extract<InstanceNameInstance, { kind: "database" }>
+type AppInstance = Extract<InstanceNameInstance, { kind: "app" }>
 type RelayInstance = Extract<InstanceNameInstance, { kind: "relay" }>
 
 function StaticInstanceName(props: InstanceNameProps) {
@@ -152,6 +157,44 @@ function LiveDatabaseIdentity(
           observedState: database.observedState,
           relayStatus: database.relayStatus,
           relayUpdating: database.relayUpdating,
+        })),
+  })
+  const live = data?.[0]
+  return (
+    <InstanceNameView
+      {...props}
+      liveName={live?.name}
+      status={
+        props.showStatus === false
+          ? undefined
+          : instanceStatusPresentation({
+              ...instance,
+              inventoryStatus:
+                live?.inventoryStatus ?? instance.inventoryStatus,
+              observedState: live?.observedState ?? instance.observedState,
+              relayStatus: live ? live.relayStatus : instance.relayStatus,
+              relayUpdating: live ? live.relayUpdating : instance.relayUpdating,
+            })
+      }
+    />
+  )
+}
+
+function LiveAppIdentity(props: InstanceNameProps & { instance: AppInstance }) {
+  const { instance } = props
+  const { data } = useLiveQuery({
+    query: (query) =>
+      query
+        .from({ app: appsCollectionOptions })
+        .where(({ app }) =>
+          and(eq(app.id, instance.id), eq(app.relayId, instance.relayId))
+        )
+        .select(({ app }) => ({
+          inventoryStatus: app.inventoryStatus,
+          name: app.name,
+          observedState: app.observedState,
+          relayStatus: app.relayStatus,
+          relayUpdating: app.relayUpdating,
         })),
   })
   const live = data?.[0]
@@ -336,9 +379,11 @@ const InstanceIcon = React.memo(function InstanceIcon({
   const Icon =
     instance.kind === "database"
       ? Database
-      : instance.kind === "relay"
-        ? RadioTower
-        : Server
+      : instance.kind === "app"
+        ? Boxes
+        : instance.kind === "relay"
+          ? RadioTower
+          : Server
   return <Icon className={cn("size-4", iconSizeClassName)} aria-hidden="true" />
 })
 
@@ -427,7 +472,10 @@ function instancePresentationEqual(
           previous.updating === next.updating))
     )
   }
-  if (previous.kind === "database" && next.kind === "database") {
+  if (
+    (previous.kind === "database" || previous.kind === "app") &&
+    next.kind === previous.kind
+  ) {
     return (
       live ||
       (previous.inventoryStatus === next.inventoryStatus &&

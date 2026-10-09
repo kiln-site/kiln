@@ -18,7 +18,7 @@ services:
       - /bin/sh
       - -lc
       - |
-        apk add --no-cache docker-cli docker-cli-compose
+        apk add --no-cache docker-cli docker-cli-buildx docker-cli-compose
         # Pin restic to the version shipped in apps/relay/Dockerfile so dev
         # exercises the same CLI/JSON surface as production.
         if ! restic version 2>/dev/null | grep -q '^restic 0.19.1'; then

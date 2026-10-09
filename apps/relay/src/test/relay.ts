@@ -22,6 +22,7 @@ import {
 import { Effect, ManagedRuntime } from "effect"
 import { onTestFinished } from "vite-plus/test"
 
+import { AppDriver } from "../apps.js"
 import { BrickCatalog } from "../bricks.js"
 import { loadConfig, type RelayConfig } from "../config.js"
 import { DatabaseConnections } from "../database-connections.js"
@@ -36,6 +37,7 @@ import { type ContainerSeed, type FakeContainer, fakeDocker } from "./docker.js"
 export const TEST_NAMESPACE = "kiln-test"
 
 export interface RelayDrivers {
+  readonly apps: AppDriver
   readonly bricks: BrickCatalog
   readonly databaseConnections: DatabaseConnections
   readonly databases: DatabaseDriver
@@ -116,6 +118,7 @@ export async function relayHarness(
     )
     lifecycles.push(lifecycle)
     return {
+      apps: new AppDriver(config, () => lifecycle.hostDataDirectory()),
       bricks,
       databaseConnections,
       databases: new DatabaseDriver(config, docker, databaseConnections),
@@ -146,7 +149,12 @@ export async function relayHarness(
     state,
     restart: drivers,
     publishRecipe,
-    createServer: async ({ id, recipe = serverRecipe(), start = false, variables = {} }) =>
+    createServer: async ({
+      id,
+      recipe = serverRecipe(),
+      start = false,
+      variables = {},
+    }) =>
       initial.lifecycle.createInstanceWithId(
         id,
         relayCreateInstanceSchema.parse({

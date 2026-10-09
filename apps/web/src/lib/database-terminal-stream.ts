@@ -48,3 +48,19 @@ export function databaseTerminalStreamUrl(input: {
   })
   return `/api/database-terminal/${encodeURIComponent(input.databaseId)}?${search}`
 }
+
+export function appTerminalStreamUrl(input: {
+  appId: string
+  cols: number
+  relayId: string
+  rows: number
+  service: string
+}) {
+  const search = new URLSearchParams({
+    cols: String(input.cols),
+    relayId: input.relayId,
+    rows: String(input.rows),
+    service: input.service,
+  })
+  return `/api/app-terminal/${encodeURIComponent(input.appId)}?${search}`
+}

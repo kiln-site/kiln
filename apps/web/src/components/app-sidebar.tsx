@@ -5,6 +5,7 @@ import {
   useSuspenseQuery,
 } from "@tanstack/react-query"
 import {
+  Boxes,
   CalendarClock,
   ChevronsUpDown,
   Database,
@@ -66,6 +67,7 @@ import type { AuthenticatedUser } from "@/lib/auth-session"
 import { clearAppearanceCache } from "@/lib/appearance"
 import {
   accessCapabilitiesQueryOptions,
+  appDirectoryQueryOptions,
   managedDatabaseDirectoryQueryOptions,
   relayConnectionQueryOptions,
   relaySnapshotQueryOptions,
@@ -81,6 +83,13 @@ import {
   type ManagedDatabaseDirectoryEntry,
 } from "@/lib/database-route"
 import type { getManagedDatabaseDirectory } from "@/server/databases"
+import {
+  appRouteIdFromSelection,
+  appRouteIdentifier,
+  appSelectionRouteId,
+  resolveAppRoute,
+  type AppDirectoryEntry,
+} from "@/lib/app-route"
 import type { RelayFleetSnapshot } from "@/lib/relay-fleet"
 import {
   findFirstCanonicalRelayInstance,
@@ -94,6 +103,7 @@ import type { SidebarInstance } from "@/lib/relay-selectors"
 import { globalSectionFromRouteId } from "@/lib/route-sections"
 import type { GlobalSection } from "@/lib/route-sections"
 import {
+  accessibleDestinationsForApp,
   accessibleDestinationsForDatabase,
   accessibleDestinationsForServer,
   accessibleInfrastructureDestinations,
@@ -101,6 +111,7 @@ import {
   canAccessAutomations,
   canAccessBackups,
   serverDestinations,
+  type AppDestinationId,
   type DatabaseDestinationId,
   type NavigationAccessCapabilities,
   type ServerDestination,
@@ -227,7 +238,10 @@ function InfrastructureNavigation({
   const showDatabases = destinations.some(
     (destination) => destination.to === "/infra/databases"
   )
-  if (!showServers && !showDatabases) return null
+  const showApps = destinations.some(
+    (destination) => destination.to === "/infra/apps"
+  )
+  if (!showServers && !showDatabases && !showApps) return null
 
   return (
     <SidebarGroup className="pt-2">
@@ -241,6 +255,9 @@ function InfrastructureNavigation({
           ) : null}
           {showDatabases ? (
             <DatabasesNavigationItem relayConfigured={relayConfigured} />
+          ) : null}
+          {showApps ? (
+            <AppsNavigationItem relayConfigured={relayConfigured} />
           ) : null}
         </SidebarMenu>
       </SidebarGroupContent>
@@ -282,6 +299,41 @@ const DatabaseCount = React.memo(function DatabaseCount({
     ...managedDatabaseDirectoryQueryOptions(),
     enabled: relayConfigured,
     select: (databases) => databases.length,
+  })
+
+  return count
+})
+
+function AppsNavigationItem({ relayConfigured }: { relayConfigured: boolean }) {
+  return (
+    <SidebarMenuItem>
+      <SidebarMenuButton asChild tooltip="Apps">
+        <Link
+          to="/infra/apps"
+          activeOptions={{ exact: true, includeSearch: false }}
+          activeProps={{ "data-active": true }}
+          preload="intent"
+        >
+          <Boxes />
+          <span>Apps</span>
+        </Link>
+      </SidebarMenuButton>
+      <SidebarMenuBadge className="text-sidebar-muted-foreground">
+        <AppCount relayConfigured={relayConfigured} />
+      </SidebarMenuBadge>
+    </SidebarMenuItem>
+  )
+}
+
+const AppCount = React.memo(function AppCount({
+  relayConfigured,
+}: {
+  relayConfigured: boolean
+}) {
+  const { data: count = 0 } = useQuery({
+    ...appDirectoryQueryOptions(),
+    enabled: relayConfigured,
+    select: (apps) => apps.length,
   })
 
   return count
@@ -337,24 +389,26 @@ function SidebarInstanceNavigation({
   initialSelectedInstanceRouteId: string | null
   relayConfigured: boolean
 }) {
-  // "server", a database selection ("db:<id>"), or null off instance routes.
+  // "server", a database selection ("db:<id>"), an app selection
+  // ("app:<id>"), or null off instance routes.
   const routeSelection = useRouterState({
     select: (state) => {
       const params = state.matches.at(-1)?.params as
-        | { databaseId?: string; serverId?: string }
+        | { appId?: string; databaseId?: string; serverId?: string }
         | undefined
       if (params?.databaseId) return databaseSelectionRouteId(params.databaseId)
+      if (params?.appId) return appSelectionRouteId(params.appId)
       return params?.serverId ? "server" : null
     },
   })
-  const databaseRouteId =
+  const selection =
     routeSelection === "server"
       ? null
-      : databaseRouteIdFromSelection(
-          routeSelection ??
-            readSelectedInstanceRouteId() ??
-            initialSelectedInstanceRouteId
-        )
+      : (routeSelection ??
+        readSelectedInstanceRouteId() ??
+        initialSelectedInstanceRouteId)
+  const databaseRouteId = databaseRouteIdFromSelection(selection)
+  const appRouteId = appRouteIdFromSelection(selection)
   const showDatabases =
     relayConfigured &&
     accessibleInfrastructureDestinations(capabilities).some(
@@ -383,9 +437,110 @@ function SidebarInstanceNavigation({
       databaseRouteId={databaseRouteId}
       fallback={serverNavigation}
     />
+  ) : appRouteId ? (
+    <SidebarAppNavigation
+      appRouteId={appRouteId}
+      capabilities={capabilities}
+      fallback={serverNavigation}
+    />
   ) : (
     serverNavigation
   )
+}
+
+function SidebarAppNavigation({
+  appRouteId,
+  capabilities,
+  fallback,
+}: {
+  appRouteId: string
+  capabilities: NavigationAccessCapabilities
+  fallback: React.ReactNode
+}) {
+  const select = React.useMemo(
+    () => (apps: Array<AppDirectoryEntry>) => {
+      const resolution = resolveAppRoute(apps, appRouteId)
+      return resolution.status === "found"
+        ? {
+            app: resolution.database,
+            routeId: appRouteIdentifier(apps, resolution.database),
+          }
+        : null
+    },
+    [appRouteId]
+  )
+  const query = useQuery({ ...appDirectoryQueryOptions(), select })
+  if (!query.data) return query.isPending ? null : fallback
+  const { app, routeId } = query.data
+
+  return (
+    <>
+      <RememberSelectedInstance
+        instanceRouteId={appSelectionRouteId(routeId)}
+      />
+      <SidebarSeparator />
+      <SidebarGroup>
+        <SidebarGroupLabel className="type-technical-label">
+          App
+        </SidebarGroupLabel>
+        <SidebarGroupContent>
+          <SidebarMenu>
+            <InstanceSelector
+              capabilities={capabilities}
+              selection={{ kind: "app", app }}
+            />
+            <AppTabNavigation
+              app={app}
+              capabilities={capabilities}
+              routeId={routeId}
+            />
+          </SidebarMenu>
+        </SidebarGroupContent>
+      </SidebarGroup>
+    </>
+  )
+}
+
+const AppTabNavigation = React.memo(function AppTabNavigation({
+  app,
+  capabilities,
+  routeId,
+}: {
+  app: AppDirectoryEntry
+  capabilities: NavigationAccessCapabilities
+  routeId: string
+}) {
+  return accessibleDestinationsForApp(app, capabilities).map((item) => (
+    <SidebarMenuItem key={item.id}>
+      <SidebarMenuButton asChild tooltip={item.label}>
+        <Link
+          to={appTabRoute(item.id)}
+          params={{ appId: routeId }}
+          activeOptions={{ exact: item.id !== "files" }}
+          activeProps={{ "data-active": true }}
+          preload="intent"
+        >
+          <item.icon />
+          <span>{item.label}</span>
+        </Link>
+      </SidebarMenuButton>
+    </SidebarMenuItem>
+  ))
+})
+
+function appTabRoute(tab: AppDestinationId) {
+  switch (tab) {
+    case "files":
+      return "/app/$appId/files" as const
+    case "info":
+      return "/app/$appId/info" as const
+    case "logs":
+      return "/app/$appId/logs" as const
+    case "network":
+      return "/app/$appId/network" as const
+    case "terminal":
+      return "/app/$appId/terminal" as const
+  }
 }
 
 function SidebarDatabaseNavigation({
@@ -651,6 +806,7 @@ function ambiguousServerHref(shortId: string) {
 type InstanceSelection =
   | { kind: "server"; instance: SidebarInstance }
   | { kind: "database"; database: ManagedDatabaseDirectoryEntry }
+  | { kind: "app"; app: AppDirectoryEntry }
   | { kind: "none"; serverCount: number }
 
 const InstanceSelector = React.memo(function InstanceSelector({
@@ -712,6 +868,21 @@ const InstanceSelector = React.memo(function InstanceSelector({
         )
         return
       }
+      if (item.identity.kind === "app") {
+        const apps = queryClient.getQueryData(
+          appDirectoryQueryOptions().queryKey
+        )
+        const routeId = apps
+          ? appRouteIdentifier(apps, item.identity)
+          : item.identity.id
+        const tab = appTabFromPathname(window.location.pathname)
+        void navigate(
+          tab
+            ? { to: appTabRoute(tab), params: { appId: routeId } }
+            : { to: "/app/$appId", params: { appId: routeId } }
+        )
+        return
+      }
       if (item.identity.kind === "relay") {
         void navigate({
           to: "/infra/relays",
@@ -761,7 +932,9 @@ const InstanceSelector = React.memo(function InstanceSelector({
             selection.database.relayId,
             selection.database.id
           )
-        : null
+        : selection.kind === "app"
+          ? sidebarPickerKey("app", selection.app.relayId, selection.app.id)
+          : null
   const selectedKeys = React.useMemo(
     () => new Set(selectedKey ? [selectedKey] : []),
     [selectedKey]
@@ -777,7 +950,9 @@ const InstanceSelector = React.memo(function InstanceSelector({
             tooltip={
               selection.kind === "database"
                 ? "Switch database"
-                : "Switch server"
+                : selection.kind === "app"
+                  ? "Switch app"
+                  : "Switch server"
             }
             aria-label={
               selection.kind === "none" ? "Choose a server" : undefined
@@ -824,6 +999,27 @@ const InstanceSelector = React.memo(function InstanceSelector({
                   meta={`${engineLabel(selection.database.engine)} · ${selection.database.relayName}`}
                   metaClassName="text-sidebar-muted-foreground"
                   name={selection.database.name}
+                  nameClassName="type-control-sm text-sidebar-foreground"
+                  showFavorite={false}
+                  statusClassName="ring-popover"
+                  textClassName="group-data-[collapsible=icon]:sr-only"
+                />
+              </>
+            ) : selection.kind === "app" ? (
+              <>
+                <span className="sr-only">Switch app. </span>
+                <InstanceName
+                  className="min-w-0 flex-1 gap-2 group-data-[collapsible=icon]:gap-0"
+                  iconClassName="border-sidebar-border/70 bg-background/25 text-sidebar-foreground/85 group-data-[collapsible=icon]:absolute group-data-[collapsible=icon]:inset-0 group-data-[collapsible=icon]:size-full group-data-[collapsible=icon]:rounded-none group-data-[collapsible=icon]:border-0 group-data-[collapsible=icon]:bg-transparent"
+                  iconSizeClassName="group-data-[collapsible=icon]:size-5!"
+                  instance={{
+                    id: selection.app.id,
+                    kind: "app",
+                    relayId: selection.app.relayId,
+                  }}
+                  meta={`${selection.app.shortId} · ${selection.app.relayName}`}
+                  metaClassName="text-sidebar-muted-foreground"
+                  name={selection.app.name}
                   nameClassName="type-control-sm text-sidebar-foreground"
                   showFavorite={false}
                   statusClassName="ring-popover"
@@ -890,6 +1086,9 @@ const SidebarInstancePicker = React.memo(function SidebarInstancePicker({
   const showRelays = destinations.some(
     (destination) => destination.to === "/infra/relays"
   )
+  const showApps = destinations.some(
+    (destination) => destination.to === "/infra/apps"
+  )
   const { data: serverItems = emptyPickerItems } = useQuery({
     ...relaySnapshotQueryOptions(),
     select: selectSidebarServerPickerItems,
@@ -904,16 +1103,32 @@ const SidebarInstancePicker = React.memo(function SidebarInstancePicker({
     enabled: showDatabases,
     select: selectSidebarDatabasePickerItems,
   })
+  const { data: appItems = emptyPickerItems } = useQuery({
+    ...appDirectoryQueryOptions(),
+    enabled: showApps,
+    select: selectSidebarAppPickerItems,
+  })
   const items = React.useMemo(
     () =>
-      databaseItems.length === 0 && relayItems.length === 0
+      databaseItems.length === 0 &&
+      relayItems.length === 0 &&
+      appItems.length === 0
         ? serverItems
         : [
             ...serverItems,
             ...(showDatabases ? databaseItems : emptyPickerItems),
+            ...(showApps ? appItems : emptyPickerItems),
             ...(showRelays ? relayItems : emptyPickerItems),
           ],
-    [databaseItems, relayItems, serverItems, showDatabases, showRelays]
+    [
+      appItems,
+      databaseItems,
+      relayItems,
+      serverItems,
+      showApps,
+      showDatabases,
+      showRelays,
+    ]
   )
 
   return (
@@ -987,6 +1202,18 @@ function selectSidebarDatabasePickerItems(
     meta: `${engineLabel(database.engine)} · ${database.shortId}`,
     name: database.name,
     searchText: `${database.id} ${database.relayName}`,
+  }))
+}
+
+function selectSidebarAppPickerItems(
+  apps: Array<AppDirectoryEntry>
+): Array<InstancePickerItem> {
+  return apps.map((app) => ({
+    identity: { id: app.id, kind: "app", relayId: app.relayId },
+    key: sidebarPickerKey("app", app.relayId, app.id),
+    meta: `App · ${app.shortId}`,
+    name: app.name,
+    searchText: `${app.id} ${app.relayName}`,
   }))
 }
 
@@ -1397,6 +1624,12 @@ function instanceTabFromPathname(pathname: string): InstanceTab | null {
   if (/^\/server\/[^/]+\/info\/?$/.test(pathname)) return "info"
   if (/^\/server\/[^/]+\/console\/?$/.test(pathname)) return "console"
   return null
+}
+
+function appTabFromPathname(pathname: string): AppDestinationId | null {
+  const match =
+    /^\/app\/[^/]+\/(files|info|logs|network|terminal)(?:\/|$)/.exec(pathname)
+  return match ? (match[1] as AppDestinationId) : null
 }
 
 function databaseTabFromPathname(

@@ -74,6 +74,19 @@ export type InstanceWorkspaceInstance = Pick<
   routeId: string
 }
 
+// What the file workspace needs of what it browses: a server, or an app's
+// data directory (whose `id` is its file root, `app:<appId>`).
+export type FileWorkspaceInstance = Pick<
+  InstanceWorkspaceInstance,
+  | "id"
+  | "implementation"
+  | "name"
+  | "observedState"
+  | "relayId"
+  | "shortId"
+  | "version"
+>
+
 export type InstanceRuntime = Pick<
   RelayInstance,
   "id" | "lifecycle" | "observedState" | "recovery" | "resources"

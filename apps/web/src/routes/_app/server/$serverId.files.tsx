@@ -131,7 +131,7 @@ function FilesRoute() {
       <FileWorkspace
         key={`${instance.relayId}:${instance.id}`}
         instance={instance}
-        serverId={serverId}
+        route={{ id: serverId, kind: "server" }}
         active
         routeFilePath={filePath}
         canShare={permissions.shareLogs}

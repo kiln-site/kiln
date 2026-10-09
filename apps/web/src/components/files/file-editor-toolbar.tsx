@@ -14,7 +14,7 @@ import type {
   EditorSessionStore,
   FileEditorPreferencesStore,
 } from "@/components/files/file-workspace-stores"
-import type { InstanceWorkspaceInstance } from "@/lib/relay-selectors"
+import type { FileWorkspaceInstance } from "@/lib/relay-selectors"
 
 export function EditorResponsiveActions({
   canShare,
@@ -29,7 +29,7 @@ export function EditorResponsiveActions({
   canShare: boolean
   canWrite: boolean
   file: RelayFileContent
-  instance: InstanceWorkspaceInstance
+  instance: FileWorkspaceInstance
   loading: boolean
   preferencesStore: FileEditorPreferencesStore
   saveFile: SaveFileRevision

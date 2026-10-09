@@ -49,11 +49,13 @@ export const Route = createFileRoute("/api/database-terminal/$databaseId")({
         }
         // Loaded here so the server-only modules stay out of the client
         // bundle, which includes every route file.
-        const [{ authorizedDatabase }, { openDatabaseTerminalStream }] =
-          await Promise.all([
-            import("@/server/managed-database-access"),
-            import("@/server/database-terminal-stream"),
-          ])
+        const [
+          { authorizedDatabase },
+          { databaseTerminalTarget, openTerminalStream },
+        ] = await Promise.all([
+          import("@/server/managed-database-access"),
+          import("@/server/terminal-stream"),
+        ])
         const access = await Effect.runPromise(
           Effect.tryPromise({
             try: () => authorizedDatabase(target.data, "database.terminal"),
@@ -70,14 +72,18 @@ export const Route = createFileRoute("/api/database-terminal/$databaseId")({
           )
         }
         return new Response(
-          openDatabaseTerminalStream({
+          openTerminalStream({
             authSessionId: identity.value.sessionId,
             cols: target.data.cols,
-            databaseId: target.data.databaseId,
             headers: request.headers,
             relay: access.value.relay,
             rows: target.data.rows,
             signal: request.signal,
+            target: databaseTerminalTarget(
+              access.value.relay,
+              target.data.databaseId,
+              access.value.user
+            ),
             user: access.value.user,
           }),
           {

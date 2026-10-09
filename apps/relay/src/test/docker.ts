@@ -1108,6 +1108,25 @@ export class FakeDocker {
 
   async #volumeCommand(arguments_: Array<string>): Promise<string> {
     const [subcommand = "", ...rest] = arguments_
+    if (subcommand === "ls") {
+      const { values } = parseFlags(rest, ["--filter", "--format"])
+      const filters = values.get("--filter") ?? []
+      return [...this.volumes.values()]
+        .filter((volume) =>
+          filters.every((filter) => {
+            const [key, value = ""] = splitOnce(filter, "=")
+            if (key !== "label") {
+              return this.#unsupported(`docker volume ls --filter ${filter}`)
+            }
+            const [label, expected] = splitOnce(value, "=")
+            return expected === undefined
+              ? Object.hasOwn(volume.labels, label)
+              : volume.labels[label] === expected
+          })
+        )
+        .map((volume) => `${volume.name}\n`)
+        .join("")
+    }
     if (subcommand === "create") {
       const { positional, values } = parseFlags(rest, ["--label"])
       const [name = ""] = positional

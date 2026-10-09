@@ -7,6 +7,7 @@ import { instanceFavorites } from "./0004_instance_favorites"
 import { notifications } from "./0005_notifications"
 import { systemUpdateOperations } from "./0006_system_update_operations"
 import { systemReleases } from "./0007_system_releases"
+import { apps } from "./0008_apps"
 
 // Append new migrations with the next id. Never edit or reorder applied ones.
 export const migrations: ReadonlyArray<Migration> = [
@@ -17,4 +18,5 @@ export const migrations: ReadonlyArray<Migration> = [
   notifications,
   systemUpdateOperations,
   systemReleases,
+  apps,
 ]

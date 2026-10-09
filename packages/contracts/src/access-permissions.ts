@@ -82,17 +82,31 @@ export const accessPermissions = [
   "database.data.write",
   "database.terminal",
   "database.logs.read",
+  "app.read",
+  "app.create",
+  "app.manage",
+  "app.delete",
+  "app.logs.read",
+  "app.terminal",
+  "app.files.read",
+  "app.files.write",
 ] as const
 export type AccessPermission = (typeof accessPermissions)[number]
 Object.freeze(accessPermissions)
 Object.freeze(legacyAccessPermissions)
 
 /**
- * relay/instance/database permissions belong to one resource kind and carry
- * that kind's base visibility. shared permissions (access, presets, backups,
- * schedules) apply wherever they are assigned and carry the target's visibility.
+ * relay/instance/database/app permissions belong to one resource kind and
+ * carry that kind's base visibility. shared permissions (access, presets,
+ * backups, schedules) apply wherever they are assigned and carry the target's
+ * visibility. App permissions are granted on a Relay, for all of its apps.
  */
-export type PermissionFamily = "relay" | "instance" | "database" | "shared"
+export type PermissionFamily =
+  | "relay"
+  | "instance"
+  | "database"
+  | "app"
+  | "shared"
 
 export interface PermissionDefinition {
   readonly key: AccessPermission
@@ -150,6 +164,7 @@ const implicationEdges: Partial<
   "database.credentials.rotate": ["database.credentials.read"],
   "database.network.write": ["database.network.read"],
   "database.data.write": ["database.data.read"],
+  "app.files.write": ["app.files.read"],
   "backup.create": ["backup.read"],
   "backup.download": ["backup.read"],
   "backup.restore": ["backup.read"],
@@ -228,12 +243,21 @@ const permissionPlacement: Record<
   "database.data.write": ["database.data", "database"],
   "database.terminal": ["database.terminal", "database"],
   "database.logs.read": ["database.logs", "database"],
+  "app.read": ["overview", "app"],
+  "app.create": ["resource.creation", "relay"],
+  "app.manage": ["app.manage", "app"],
+  "app.delete": ["resource.deletion", "app"],
+  "app.logs.read": ["app.logs", "app"],
+  "app.terminal": ["app.terminal", "app"],
+  "app.files.read": ["app.files", "app"],
+  "app.files.write": ["app.files", "app"],
 }
 
 const familyScopes: Record<PermissionFamily, readonly PermissionScopeType[]> = {
   relay: relayScopes,
   instance: instanceScopes,
   database: databaseScopes,
+  app: relayScopes,
   shared: allScopes,
 }
 
@@ -242,6 +266,7 @@ const familyVisibility: Record<PermissionFamily, AccessPermission | null> = {
   relay: "relay.read",
   instance: "instance.read",
   database: "database.read",
+  app: "app.read",
   shared: null,
 }
 
@@ -454,6 +479,39 @@ const permissionCopy: Record<
     label: "Use database terminal",
     description: "Open the database's command-line client, signed in.",
   },
+  "app.read": {
+    label: "View apps",
+    description: "See apps, their containers, and how they are configured.",
+  },
+  "app.create": {
+    label: "Create apps",
+    description: "Add apps on this Relay.",
+  },
+  "app.manage": {
+    label: "Configure and deploy apps",
+    description:
+      "Change an app's source, environment, and networking, deploy it, and start or stop it. Apps can run any container, with the access that gives on the Relay's host.",
+  },
+  "app.delete": {
+    label: "Delete apps",
+    description: "Remove apps, their containers, and their data.",
+  },
+  "app.logs.read": {
+    label: "View app logs",
+    description: "Read deployment logs and container output.",
+  },
+  "app.terminal": {
+    label: "Open app shells",
+    description: "Run a shell inside an app's containers.",
+  },
+  "app.files.read": {
+    label: "View app files",
+    description: "Browse and download an app's data directory.",
+  },
+  "app.files.write": {
+    label: "Edit app files",
+    description: "Create, upload, edit, move, and delete an app's files.",
+  },
   "database.logs.read": {
     label: "View database logs",
     description: "Watch the database container's live output.",
@@ -584,6 +642,10 @@ const blockLabels: Record<string, string> = {
   "database.data": "Database tables",
   "database.terminal": "Database terminal",
   "database.logs": "Database logs",
+  "app.manage": "App configuration",
+  "app.logs": "App logs",
+  "app.terminal": "App shell",
+  "app.files": "App files",
   "resource.deletion": "Resource deletion",
   "resource.creation": "Resource creation",
   "relay.configuration": "Relay configuration",
@@ -783,6 +845,7 @@ export const builtinPermissionPresets: readonly PermissionPreset[] =
           "instance.console.read",
           "instance.configuration.read",
           "database.logs.read",
+          "app.logs.read",
           "instance.network.read",
           "database.network.read",
           "backup.read",
@@ -809,6 +872,7 @@ export const builtinPermissionPresets: readonly PermissionPreset[] =
           "database.power",
           "database.network.write",
           "database.logs.read",
+          "app.logs.read",
           "backup.all",
           "schedule.all",
         ].map((key) =>
@@ -858,6 +922,8 @@ export const relayReadOnlyMachineActions = [
   "instance.read",
   "instance.console.read",
   "database.logs.read",
+  "app.read",
+  "app.logs.read",
   "instance.sftp.connect",
   "instance.files.list",
   "instance.files.read",
@@ -918,6 +984,12 @@ export function permissionsForRelayClientPolicy(
         case "instance.files.list":
         case "instance.files.download":
           permissions = ["instance.files.read"]
+          break
+        case "app.files.download":
+          permissions = ["app.files.read"]
+          break
+        case "app.files.upload":
+          permissions = ["app.files.write"]
           break
         case "instance.files.create":
         case "instance.files.rename":

@@ -3,6 +3,8 @@ import { z } from "zod"
 export const hearthRealtimeTopics = [
   "access",
   "activity",
+  "app-directory",
+  "apps",
   "backup-settings",
   "backup-storage",
   "backups",

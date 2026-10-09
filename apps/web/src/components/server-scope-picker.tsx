@@ -123,7 +123,8 @@ export const ServerScopePicker = React.memo(function ServerScopePicker({
   const selectGroup = React.useCallback(
     (group: InstancePickerGroup) => {
       if (group === "all") onSelect(null)
-      else onSelectKind?.(group)
+      // Apps have no backups or activity to scope to.
+      else if (group !== "app") onSelectKind?.(group)
       setPickerOpen(false)
     },
     [onSelect, onSelectKind]

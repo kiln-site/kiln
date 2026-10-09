@@ -7,6 +7,7 @@ import {
   indentUnit,
   syntaxHighlighting,
 } from "@codemirror/language"
+import { dockerFile } from "@codemirror/legacy-modes/mode/dockerfile"
 import { json } from "@codemirror/legacy-modes/mode/javascript"
 import { properties } from "@codemirror/legacy-modes/mode/properties"
 import { shell } from "@codemirror/legacy-modes/mode/shell"
@@ -493,6 +494,8 @@ function languageForPath(path: string): Extension {
       return StreamLanguage.define(properties)
     case "shell":
       return StreamLanguage.define(shell)
+    case "dockerfile":
+      return StreamLanguage.define(dockerFile)
     case "sql":
       return StreamLanguage.define(sqlite)
     case "snbt":

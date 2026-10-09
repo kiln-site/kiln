@@ -212,6 +212,7 @@ export async function* openHearthRelayConsoleStream(input: {
       socket.send(
         JSON.stringify({
           instanceId: resource.id,
+          ...(resource.stream ? { stream: resource.stream } : {}),
           type: "console.subscribe",
           v: 1,
         })

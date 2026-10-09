@@ -19,7 +19,7 @@ import {
   FileTreeRevealButton,
 } from "@/components/files/file-viewer-toolbar"
 import { relayFileActivityQueryOptions } from "@/lib/query-options"
-import type { InstanceWorkspaceInstance } from "@/lib/relay-selectors"
+import type { FileWorkspaceInstance } from "@/lib/relay-selectors"
 
 const recentFileDateFormatter = new Intl.DateTimeFormat(undefined, {
   month: "short",
@@ -133,7 +133,7 @@ export function FilesHome({
   onUploadFiles,
   actions,
 }: {
-  instance: InstanceWorkspaceInstance
+  instance: FileWorkspaceInstance
   fileIndex: FileTreeIndex
   fileTreeLoading: boolean
   fileTreeError: string | null

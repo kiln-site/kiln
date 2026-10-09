@@ -41,13 +41,16 @@ export type InstanceNameInstance =
       kind: "relay"
       source?: "fleet" | "registry"
     } & RelayStatusSource)
-  | (InstanceIdentity & {
-      inventoryStatus?: "available" | "missing" | "unavailable"
-      kind: "database"
-      observedState?: RelayObservedState
-      relayStatus?: "connected" | "unreachable"
-      relayUpdating?: boolean
-    })
+  | (InventoryIdentity & { kind: "database" })
+  | (InventoryIdentity & { kind: "app" })
+
+// Databases and apps: what their Relay's inventory last reported.
+interface InventoryIdentity extends InstanceIdentity {
+  inventoryStatus?: "available" | "missing" | "unavailable"
+  observedState?: RelayObservedState
+  relayStatus?: "connected" | "unreachable"
+  relayUpdating?: boolean
+}
 
 export function instanceStatusPresentation(
   instance: InstanceNameInstance

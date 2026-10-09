@@ -223,7 +223,7 @@ export const InstanceFavoriteToggle = React.memo(
 )
 
 /** Infra tables that can be narrowed to the user's favorites. */
-export type FavoritesOnlyTable = "databases" | "relays" | "servers"
+export type FavoritesOnlyTable = "apps" | "databases" | "relays" | "servers"
 
 const favoritesOnlyStorageKeyPrefix = "kiln:favorites-only:v1:"
 const favoritesOnlyChangedEvent = "kiln:favorites-only:changed"
@@ -375,6 +375,7 @@ const favoritesOnlyLabels: Record<
   FavoritesOnlyTable,
   { plural: string; singular: string }
 > = {
+  apps: { plural: "apps", singular: "app" },
   databases: { plural: "databases", singular: "database" },
   relays: { plural: "Relays", singular: "Relay" },
   servers: { plural: "servers", singular: "server" },
