@@ -58,24 +58,26 @@ export function notificationListItems(
   return items
 }
 
-export function NotificationGroupLabel({
-  className,
-  label,
-}: {
-  className?: string
-  label: string
-}) {
-  return (
-    <h3
-      className={cn(
-        "type-technical-label border-b border-border/60 bg-muted/85 px-4 py-1.5 text-muted-foreground backdrop-blur-sm",
-        className
-      )}
-    >
-      {label}
-    </h3>
-  )
-}
+export const NotificationGroupLabel = React.memo(
+  function NotificationGroupLabel({
+    className,
+    label,
+  }: {
+    className?: string
+    label: string
+  }) {
+    return (
+      <h3
+        className={cn(
+          "type-technical-label border-b border-border/60 bg-muted/85 px-4 py-1.5 text-muted-foreground backdrop-blur-sm",
+          className
+        )}
+      >
+        {label}
+      </h3>
+    )
+  }
+)
 
 export const NotificationRow = React.memo(function NotificationRow({
   className,

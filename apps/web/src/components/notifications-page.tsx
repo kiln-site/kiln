@@ -1,8 +1,10 @@
 import * as React from "react"
 import { useLiveQuery } from "@tanstack/react-db"
-import { useVirtualizer } from "@tanstack/react-virtual"
+import { defaultRangeExtractor, useVirtualizer } from "@tanstack/react-virtual"
+import type { Range } from "@tanstack/react-virtual"
 
 import { Button } from "@workspace/ui/components/button"
+import { cn } from "@workspace/ui/lib/utils"
 
 import {
   NotificationGroupLabel,
@@ -30,12 +32,35 @@ export function NotificationsPage({ newIds }: { newIds: ReadonlySet<string> }) {
   )
   const { dismiss } = useNotificationClearing()
   const scrollRef = React.useRef<HTMLDivElement>(null)
+  // The day label above the visible rows stays rendered and pins to the top,
+  // like the popover's labels; the next label scrolls up over it.
+  const groupIndexes = React.useMemo(
+    () =>
+      items.flatMap((item, index) => (item.kind === "group" ? [index] : [])),
+    [items]
+  )
+  const pinnedIndexRef = React.useRef(0)
+  const rangeExtractor = React.useCallback(
+    (range: Range) => {
+      let pinned = 0
+      for (const index of groupIndexes) {
+        if (index > range.startIndex) break
+        pinned = index
+      }
+      pinnedIndexRef.current = pinned
+      return [
+        ...new Set([pinnedIndexRef.current, ...defaultRangeExtractor(range)]),
+      ].sort((left, right) => left - right)
+    },
+    [groupIndexes]
+  )
   const virtualizer = useVirtualizer({
     count: items.length,
     estimateSize: (index) => (items[index]?.kind === "group" ? 29 : 66),
     getItemKey: (index) => items[index]?.key ?? index,
     getScrollElement: () => scrollRef.current,
     overscan: 10,
+    rangeExtractor,
   })
 
   return (
@@ -56,19 +81,27 @@ export function NotificationsPage({ newIds }: { newIds: ReadonlySet<string> }) {
             {virtualizer.getVirtualItems().map((virtualItem) => {
               const item = items[virtualItem.index]
               if (!item) return null
+              const pinned =
+                item.kind === "group" &&
+                virtualItem.index === pinnedIndexRef.current
               return (
                 <div
                   key={virtualItem.key}
                   ref={virtualizer.measureElement}
                   data-index={virtualItem.index}
-                  className="absolute inset-x-0 top-0"
-                  style={{ transform: `translateY(${virtualItem.start}px)` }}
+                  className={cn(
+                    "inset-x-0 top-0",
+                    pinned ? "sticky z-10" : "absolute",
+                    item.kind === "group" && "z-10"
+                  )}
+                  style={
+                    pinned
+                      ? undefined
+                      : { transform: `translateY(${virtualItem.start}px)` }
+                  }
                 >
                   {item.kind === "group" ? (
-                    <NotificationGroupLabel
-                      className={virtualItem.index === 0 ? "" : "border-t"}
-                      label={item.label}
-                    />
+                    <NotificationGroupLabel label={item.label} />
                   ) : (
                     <NotificationRow
                       className="border-b border-border/60"
