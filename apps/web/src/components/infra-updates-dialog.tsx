@@ -120,11 +120,9 @@ type UpdateTarget = {
   eligible: boolean
   key: string
   name: string
-  // Who paired the Relay, or null for the Panel and unowned Relays.
+  // Who brought the Relay; null for the Panel and Relays an admin paired.
   ownerName: string | null
   ownedByViewer: boolean
-  // Someone else paired it, so Update all leaves it to its own row.
-  ownedByOther: boolean
   reachable: boolean
   reason: string | null
   relayId: string | null
@@ -2055,7 +2053,8 @@ const UpdaterFooter = React.memo(function UpdaterFooter({
             {confirmation.error ? (
               <span className="text-destructive">{confirmation.error}</span>
             ) : pendingTargets.length === 1 &&
-              pendingTargets[0]?.ownedByOther ? (
+              pendingTargets[0]?.ownerName &&
+              !pendingTargets[0].ownedByViewer ? (
               `Brought by ${pendingTargets[0].ownerName}. Game servers keep running.`
             ) : (
               "Game servers keep running."
@@ -2105,12 +2104,9 @@ const UpdaterFooter = React.memo(function UpdaterFooter({
     )
   }
 
-  const updatable = latestRelease
+  const availableTargets = latestRelease
     ? targets.filter((target) => targetHasUpdate(target, releases))
     : []
-  // Relays other people paired update from their own row, never in bulk.
-  const availableTargets = updatable.filter((target) => !target.ownedByOther)
-  const othersCount = updatable.length - availableTargets.length
   return (
     <UpdaterFooterBar tone={checkFailed ? "warning" : "default"}>
       {checkFailed ? (
@@ -2122,15 +2118,7 @@ const UpdaterFooter = React.memo(function UpdaterFooter({
           </span>
         </span>
       ) : (
-        <span className="flex min-w-0 items-center gap-2">
-          <LastCheckedLabel activityStore={activityStore} open={open} />
-          {othersCount > 0 ? (
-            <span className="truncate">
-              · Skips {othersCount} {othersCount === 1 ? "Relay" : "Relays"}{" "}
-              brought by others
-            </span>
-          ) : null}
-        </span>
+        <LastCheckedLabel activityStore={activityStore} open={open} />
       )}
       <span className="flex shrink-0 items-center gap-1.5">
         {checkFailed ? (
@@ -2190,11 +2178,9 @@ const UpdaterFooter = React.memo(function UpdaterFooter({
           }}
         >
           <CloudDownload />
-          {availableTargets.length === 0
-            ? "Update all"
-            : othersCount > 0
-              ? `Update ${availableTargets.length}`
-              : `Update all (${availableTargets.length})`}
+          {availableTargets.length > 0
+            ? `Update all (${availableTargets.length})`
+            : "Update all"}
         </Button>
       </span>
     </UpdaterFooterBar>
@@ -3329,7 +3315,6 @@ function updateTargets(overview: UpdateOverview): Array<UpdateTarget> {
     name: "Panel",
     ownerName: null,
     ownedByViewer: false,
-    ownedByOther: false,
     reachable: true,
     reason:
       overview.hearth?.reason ??
@@ -3346,7 +3331,6 @@ function updateTargets(overview: UpdateOverview): Array<UpdateTarget> {
       name: relay.name,
       ownerName: relay.ownerName,
       ownedByViewer: relay.ownedByViewer,
-      ownedByOther: !relay.ownedByViewer && relay.ownerName !== null,
       reachable: relay.reachable,
       reason: relay.reason,
       relayId: relay.relayId,
@@ -3580,7 +3564,6 @@ function areUpdateTargetsEqual(
     previous.name === next.name &&
     previous.ownerName === next.ownerName &&
     previous.ownedByViewer === next.ownedByViewer &&
-    previous.ownedByOther === next.ownedByOther &&
     previous.reachable === next.reachable &&
     previous.reason === next.reason &&
     previous.relayId === next.relayId
