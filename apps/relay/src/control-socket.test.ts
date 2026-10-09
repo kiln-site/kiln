@@ -97,6 +97,61 @@ describe("Relay control socket", () => {
     })
   })
 
+  it("keeps an app's files behind app file actions, apart from servers'", async () => {
+    const relay = await startRelay()
+    const appFiles = `app:${"a".repeat(40)}`
+    const serverId = "b".repeat(40)
+    const serverReader = await relay.pair({
+      actions: ["instance.files.list", "instance.files.read"],
+      role: "custom",
+    })
+    const appReader = await relay.pair({
+      actions: ["app.files.read"],
+      role: "custom",
+    })
+
+    const asServerReader = await relay.connect(serverReader)
+    const forApp = sendRequest(asServerReader.socket, "instance.files.read", {
+      instanceId: appFiles,
+      path: "config.yml",
+    })
+    expect(await asServerReader.inbox.next()).toMatchObject({
+      code: "forbidden",
+      replyTo: forApp,
+      type: "error",
+    })
+
+    const asAppReader = await relay.connect(appReader)
+    const ownFiles = sendRequest(asAppReader.socket, "instance.files.read", {
+      instanceId: appFiles,
+      path: "config.yml",
+    })
+    expect(await asAppReader.inbox.next()).toMatchObject({
+      payload: { ok: true },
+      replyTo: ownFiles,
+      type: "response",
+    })
+    const write = sendRequest(asAppReader.socket, "instance.files.write", {
+      content: "",
+      instanceId: appFiles,
+      path: "config.yml",
+    })
+    expect(await asAppReader.inbox.next()).toMatchObject({
+      code: "forbidden",
+      replyTo: write,
+      type: "error",
+    })
+    const forServer = sendRequest(asAppReader.socket, "instance.files.read", {
+      instanceId: serverId,
+      path: "server.properties",
+    })
+    expect(await asAppReader.inbox.next()).toMatchObject({
+      code: "forbidden",
+      replyTo: forServer,
+      type: "error",
+    })
+  })
+
   it("rejects a request whose id is already in flight", async () => {
     const release = deferred<void>()
     const relay = await startRelay({

@@ -15,7 +15,7 @@ import {
   normalizeDirectoryPath,
   uploadDroppedFiles,
 } from "@/components/files/file-tree-utils"
-import type { InstanceWorkspaceInstance } from "@/lib/relay-selectors"
+import type { FileWorkspaceInstance } from "@/lib/relay-selectors"
 import { uploadRelayFile } from "@/lib/relay-file-transfer"
 
 export type UploadFiles = (
@@ -69,7 +69,7 @@ export function useFileUploadAction({
   onRefresh,
 }: {
   canWrite: boolean
-  instance: InstanceWorkspaceInstance
+  instance: FileWorkspaceInstance
   onRefresh: () => void
 }): { uploadFiles: UploadFiles; uploading: boolean } {
   const mutation = useMutation({

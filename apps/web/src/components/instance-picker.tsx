@@ -4,6 +4,7 @@ import { useVirtualizer } from "@tanstack/react-virtual"
 import { Link } from "@tanstack/react-router"
 import {
   ArrowRight,
+  Boxes,
   Check,
   Database,
   Layers,
@@ -82,6 +83,7 @@ const kindPresentation: Record<
   InstancePickerKind,
   { Icon: typeof ServerIcon; label: string; plural: string }
 > = {
+  app: { Icon: Boxes, label: "App", plural: "apps" },
   database: { Icon: Database, label: "Database", plural: "databases" },
   relay: { Icon: RadioTower, label: "Relay", plural: "Relays" },
   server: { Icon: ServerIcon, label: "Server", plural: "servers" },
@@ -90,6 +92,7 @@ const kindPresentation: Record<
 const kindOrder: ReadonlyArray<InstancePickerKind> = [
   "server",
   "database",
+  "app",
   "relay",
 ]
 const emptyGroups: ReadonlySet<InstancePickerGroup> = new Set()
@@ -683,6 +686,7 @@ const groupPresentation: Record<
   { Icon: typeof ServerIcon; label: string }
 > = {
   all: { Icon: Layers, label: "All instances" },
+  app: { Icon: Boxes, label: "All apps" },
   database: { Icon: Database, label: "All databases" },
   relay: { Icon: RadioTower, label: "All Relays" },
   server: { Icon: ServerIcon, label: "All servers" },
@@ -770,6 +774,7 @@ function InstancePickerEmptyState({
 }
 
 const viewAllDestinations = {
+  app: { label: "View all apps", to: "/infra/apps" },
   database: { label: "View all databases", to: "/infra/databases" },
   relay: { label: "View all Relays", to: "/infra/relays" },
   server: { label: "View all servers", to: "/infra/servers" },

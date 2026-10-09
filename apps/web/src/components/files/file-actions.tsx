@@ -36,7 +36,7 @@ import {
   type FileSelectionStore,
 } from "@/components/files/file-workspace-stores"
 import { downloadRelayArchive } from "@/lib/relay-file-transfer"
-import type { InstanceWorkspaceInstance } from "@/lib/relay-selectors"
+import type { FileWorkspaceInstance } from "@/lib/relay-selectors"
 import { mutateRelayFiles } from "@/server/relay"
 
 type FileActionDialogState =
@@ -72,7 +72,7 @@ export function useFileActions({
   selectionStore,
 }: {
   canWrite: boolean
-  instance: InstanceWorkspaceInstance
+  instance: FileWorkspaceInstance
   onRefresh: () => void
   onPathChange: (path: string) => void
   selectionStore: FileSelectionStore

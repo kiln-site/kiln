@@ -6,6 +6,8 @@ import {
   relayBrowserLeaseRenewalV1Feature,
   relayConsoleReadActions,
   relayConsoleResourcesV1Feature,
+  relayAppsV1Feature,
+  appIdFromFileRoot,
   relayFileRequestReplayV1Feature,
   relayProxyBrowserMetadataSchema,
   relayProxyDiagnosticsSchema,
@@ -51,6 +53,9 @@ type BrowserPublicKey = {
 }
 
 type BrowserAction =
+  | "app.files.download"
+  | "app.files.upload"
+  | "app.logs.read"
   | "database.logs.read"
   | "instance.console.read"
   | "instance.console.write"
@@ -305,15 +310,24 @@ export function issueFileCapabilityForRequest(input: {
   relayId: string
   optInV2: boolean
 }): Promise<IssuedBrowserCapability> {
+  // An app's data directory (`app:<appId>`) is transferred with the app's
+  // own file actions.
+  const app = appIdFromFileRoot(input.instanceId) !== null
   return runAppEffect(
     "file.capability.issue",
     prepareBrowserCapabilityEffect({
-      actions: [input.action],
+      actions: [
+        app
+          ? input.action === "instance.files.upload"
+            ? "app.files.upload"
+            : "app.files.download"
+          : input.action,
+      ],
       path: input.path,
       publicKeyJwk: input.publicKeyJwk,
       relayId: input.relayId,
       resolveBrowserMetadata: true,
-      resource: { id: input.instanceId, kind: "instance" },
+      resource: { id: input.instanceId, kind: app ? "app" : "instance" },
       identity: authenticatedIdentityEffect(input.authenticate),
       optInV2: input.optInV2,
     }).pipe(Effect.map((prepared) => prepared.capability))
@@ -360,8 +374,9 @@ const prepareBrowserCapabilityEffect = Effect.fn("relay.capability.prepare")(
     }
     const material = materialResult.success
 
-    const operation: RelayBrowserOperationKind = input.actions.some((action) =>
-      action.startsWith("instance.files.")
+    const operation: RelayBrowserOperationKind = input.actions.some(
+      (action) =>
+        action.startsWith("instance.files.") || action.startsWith("app.files.")
     )
       ? "file"
       : input.actions.includes("instance.read")
@@ -663,7 +678,9 @@ function resourceVersion(
 ): 1 | 2 {
   if (
     resource.kind !== "instance" &&
-    (version !== 2 || !features.has(relayConsoleResourcesV1Feature))
+    (version !== 2 ||
+      !features.has(relayConsoleResourcesV1Feature) ||
+      (resource.kind === "app" && !features.has(relayAppsV1Feature)))
   ) {
     throw new Error("Update this Relay to view these logs.")
   }
@@ -695,6 +712,9 @@ function resourceScope(resource: RelayConsoleResource) {
       return { instanceId: resource.id }
     case "database":
       return { databaseId: resource.id }
+    // App permissions are granted on the Relay.
+    case "app":
+      return {}
     default:
       return resource.kind satisfies never
   }
@@ -735,6 +755,10 @@ function permissionForBrowserAction(action: BrowserAction): AccessPermission {
       return "instance.files.read"
     case "instance.files.upload":
       return "instance.files.write"
+    case "app.files.download":
+      return "app.files.read"
+    case "app.files.upload":
+      return "app.files.write"
     default:
       return action
   }

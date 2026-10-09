@@ -38,15 +38,23 @@ import { showToast } from "@workspace/ui/components/sonner"
 import { OverlayNotice } from "@/components/overlay-notice"
 import { WorkspaceToolbarTooltip } from "@/components/workspace-toolbar-tooltip"
 import { ensuringPromise, forkPromise, recoverPromise } from "@/effect/promise"
-import {
-  databaseTerminalStreamUrl,
-  type DatabaseTerminalStreamRecord,
-} from "@/lib/database-terminal-stream"
-import {
-  claimDatabaseTerminal,
-  restartDatabaseTerminal,
-  writeDatabaseTerminal,
-} from "@/server/databases"
+import type { DatabaseTerminalStreamRecord } from "@/lib/database-terminal-stream"
+
+// What a terminal page attaches to: a database's client or a shell in one of
+// an app's services. The session works the same way for both.
+export interface TerminalBackend {
+  readonly claim: (input: {
+    attachmentId: string
+    cols: number
+    rows: number
+    sessionId: string
+  }) => Promise<{ seq: number }>
+  // Lowercase, as in "the database stopped".
+  readonly noun: string
+  readonly restart: () => Promise<unknown>
+  readonly streamUrl: (size: { cols: number; rows: number }) => string
+  readonly write: (sessionId: string, data: string) => Promise<unknown>
+}
 
 // The person's terminal session lives on the Relay and outlives this page.
 // The page shows a recreation of it: a snapshot of the screen when it
@@ -92,13 +100,12 @@ const NOTICE_VISIBLE_MS = 10_000
 // How long a tab that took over from another says it's now the active one.
 const ACTIVATED_VISIBLE_MS = 2_500
 
-export function DatabaseTerminal({
-  databaseId,
-  relayId,
+export function TerminalSession({
+  backend,
   toolbarActions,
 }: {
-  databaseId: string
-  relayId: string
+  // Stable while the target is; a new backend starts a new connection.
+  backend: TerminalBackend
   // Extra toolbar buttons from the page, before the terminal's own.
   toolbarActions?: React.ReactNode
 }) {
@@ -183,12 +190,7 @@ export function DatabaseTerminal({
         </div>
       </div>
       <div className="relative min-h-0 flex-1">
-        <TerminalSurface
-          ref={surface}
-          databaseId={databaseId}
-          events={events}
-          relayId={relayId}
-        />
+        <TerminalSurface ref={surface} backend={backend} events={events} />
         {!atBottom && status.kind === "live" ? (
           <Button
             size="sm"
@@ -203,11 +205,16 @@ export function DatabaseTerminal({
         <TerminalNotice
           activated={activated}
           control={control}
+          noun={backend.noun}
           notice={notice}
           status={status}
           onDismissNotice={() => setNotice(null)}
         />
-        <TerminalOverlay status={status} onReconnect={reconnect} />
+        <TerminalOverlay
+          noun={backend.noun}
+          status={status}
+          onReconnect={reconnect}
+        />
       </div>
     </section>
   )
@@ -336,6 +343,7 @@ function RestartSessionButton({
 function TerminalNotice({
   activated,
   control,
+  noun,
   notice,
   onDismissNotice,
   status,
@@ -343,6 +351,7 @@ function TerminalNotice({
   // This tab just took over from another.
   activated: boolean
   control: TerminalControl
+  noun: string
   notice: SessionNotice | null
   onDismissNotice: () => void
   status: TerminalStatus
@@ -390,7 +399,7 @@ function TerminalNotice({
       message={`NEW SESSION · ${
         notice.kind === "relay-restarted"
           ? "THE RELAY RESTARTED"
-          : endedLabel(notice.ended)
+          : endedLabel(notice.ended, noun)
       }`}
       tone="info"
       onDismiss={onDismissNotice}
@@ -402,9 +411,11 @@ const noticeIcon = <Info className="size-3" />
 const otherTabIcon = <AppWindow className="size-3" />
 
 function TerminalOverlay({
+  noun,
   onReconnect,
   status,
 }: {
+  noun: string
   onReconnect: () => void
   status: TerminalStatus
 }) {
@@ -429,14 +440,14 @@ function TerminalOverlay({
     status.kind === "ended"
       ? [
           "Session ended",
-          endedDescription(status.ended),
+          endedDescription(status.ended, noun),
           "Start new session",
           onReconnect,
         ]
       : status.kind === "not-running"
         ? [
-            "Database isn't running",
-            "Start the database to open its terminal.",
+            `${capitalized(noun)} isn't running`,
+            `Start the ${noun} to open its terminal.`,
             "Try again",
             onReconnect,
           ]
@@ -464,12 +475,12 @@ function TerminalOverlay({
   )
 }
 
-function endedDescription(ended: DatabaseTerminalEnd) {
+function endedDescription(ended: DatabaseTerminalEnd, noun: string) {
   switch (ended.reason) {
     case "exited":
       return "The client exited."
     case "database-stopped":
-      return "The database stopped or restarted, which ended the session."
+      return `The ${noun} stopped or restarted, which ended the session.`
     case "timed-out":
       return "The session ended after a while without an open page."
     case "restarted":
@@ -480,12 +491,12 @@ function endedDescription(ended: DatabaseTerminalEnd) {
 }
 
 // Why the last session ended, short enough for a notice.
-function endedLabel(ended: DatabaseTerminalEnd) {
+function endedLabel(ended: DatabaseTerminalEnd, noun: string) {
   switch (ended.reason) {
     case "exited":
       return "THE CLIENT EXITED"
     case "database-stopped":
-      return "THE DATABASE STOPPED"
+      return `THE ${noun.toUpperCase()} STOPPED`
     case "timed-out":
       return "THE LAST ONE TIMED OUT"
     case "restarted":
@@ -531,8 +542,8 @@ interface TerminalSurfaceHandle {
 const TerminalSurface = React.memo(
   React.forwardRef<
     TerminalSurfaceHandle,
-    { databaseId: string; events: TerminalSurfaceEvents; relayId: string }
-  >(function TerminalSurface({ databaseId, events, relayId }, ref) {
+    { backend: TerminalBackend; events: TerminalSurfaceEvents }
+  >(function TerminalSurface({ backend, events }, ref) {
     const containerRef = React.useRef<HTMLDivElement>(null)
     const handle = React.useRef<TerminalSurfaceHandle | null>(null)
     React.useImperativeHandle(ref, () => ({
@@ -578,7 +589,7 @@ const TerminalSurface = React.memo(
       }
       const connection = new TerminalConnection(
         terminal,
-        { databaseId, relayId },
+        backend,
         events,
         measure
       )
@@ -654,7 +665,7 @@ const TerminalSurface = React.memo(
         handle.current = null
         terminal.dispose()
       }
-    }, [databaseId, events, relayId])
+    }, [backend, events])
 
     return (
       <div className="absolute inset-0 overflow-hidden bg-black py-3 pr-2 pl-4 text-foreground [&_.xterm-helper-textarea]:!text-[16px]">
@@ -669,7 +680,7 @@ const TerminalSurface = React.memo(
 class TerminalConnection {
   readonly #events: TerminalSurfaceEvents
   readonly #measure: () => TerminalSize | null
-  readonly #target: { databaseId: string; relayId: string }
+  readonly #backend: TerminalBackend
   readonly #terminal: Terminal
   #abort: AbortController | null = null
   #flushTimer: ReturnType<typeof setTimeout> | null = null
@@ -707,12 +718,12 @@ class TerminalConnection {
 
   constructor(
     terminal: Terminal,
-    target: { databaseId: string; relayId: string },
+    backend: TerminalBackend,
     events: TerminalSurfaceEvents,
     measure: () => TerminalSize | null
   ) {
     this.#terminal = terminal
-    this.#target = target
+    this.#backend = backend
     this.#events = events
     this.#measure = measure
   }
@@ -776,8 +787,10 @@ class TerminalConnection {
       this.#claimTimer = null
       forkPromise(
         async () => {
-          const { seq } = await claimDatabaseTerminal({
-            data: { ...this.#target, ...size, attachmentId, sessionId },
+          const { seq } = await this.#backend.claim({
+            ...size,
+            attachmentId,
+            sessionId,
           })
           if (this.#claim?.request !== request) return
           this.#claim.seq = seq
@@ -854,10 +867,7 @@ class TerminalConnection {
     forkPromise(
       () =>
         ensuringPromise(
-          () =>
-            writeDatabaseTerminal({
-              data: { ...this.#target, data, sessionId },
-            }),
+          () => this.#backend.write(sessionId, data),
           () => {
             this.#writing = false
             if (this.#pendingInput) {
@@ -882,7 +892,7 @@ class TerminalConnection {
     if (restart) {
       const restarted = await recoverPromise(
         async () => {
-          await restartDatabaseTerminal({ data: this.#target })
+          await this.#backend.restart()
           return true
         },
         () => false
@@ -923,8 +933,7 @@ class TerminalConnection {
     const abort = new AbortController()
     this.#abort = abort
     const response = await fetch(
-      databaseTerminalStreamUrl({
-        ...this.#target,
+      this.#backend.streamUrl({
         // Used only when this starts a session; joining keeps its size.
         cols: this.#measure()?.cols ?? this.#terminal.cols,
         rows: this.#measure()?.rows ?? this.#terminal.rows,
@@ -937,7 +946,7 @@ class TerminalConnection {
         message:
           response.status === 401
             ? "Your sign-in expired. Reload the page to sign in again."
-            : "You no longer have access to this database's terminal.",
+            : `You no longer have access to this ${this.#backend.noun}'s terminal.`,
       })
       return { kind: "stop" }
     }
@@ -1223,4 +1232,8 @@ function terminalTheme(element: HTMLElement) {
     white: "#d6d3d1",
     yellow: "#facc15",
   }
+}
+
+function capitalized(value: string) {
+  return `${value.charAt(0).toUpperCase()}${value.slice(1)}`
 }

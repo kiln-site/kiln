@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto"
 
 import {
+  appIdFromFileRoot,
   relayFileActivitySchema,
   type RelayFileActivity,
 } from "@workspace/contracts"
@@ -202,10 +203,15 @@ const setFilePinnedEffect = Effect.fn("files.activity.setPinned")(function* (
   if (!updated) return yield* FilePinLimitError.make({ limit: pinnedFileLimit })
 })
 
+// Recent and pinned files belong to servers; apps' data directories
+// (`app:<appId>`) don't keep them yet.
 export function listFileActivity(
   relayId: string,
   instanceId: string
 ): Promise<RelayFileActivity> {
+  if (appIdFromFileRoot(instanceId)) {
+    return Promise.resolve({ files: [], instanceId })
+  }
   return runAppEffect(
     "files.activity.list",
     listFileActivityEffect(relayId, instanceId)
@@ -217,6 +223,7 @@ export function recordFileViewed(
   instanceId: string,
   path: string
 ): Promise<void> {
+  if (appIdFromFileRoot(instanceId)) return Promise.resolve()
   return runAppEffect(
     "files.activity.recordView",
     recordFileViewedEffect(relayId, instanceId, path)
@@ -228,6 +235,7 @@ export function recordFileEdited(
   instanceId: string,
   path: string
 ): Promise<void> {
+  if (appIdFromFileRoot(instanceId)) return Promise.resolve()
   return runAppEffect(
     "files.activity.recordEdit",
     recordFileEditedEffect(relayId, instanceId, path)
@@ -241,6 +249,9 @@ export async function setFilePinned(
   pinned: boolean,
   validPaths: ReadonlySet<string>
 ): Promise<RelayFileActivity> {
+  if (appIdFromFileRoot(instanceId)) {
+    throw new Error("Pinning files isn't available for apps yet")
+  }
   await runAppEffect(
     "files.activity.setPinned",
     setFilePinnedEffect(relayId, instanceId, path, pinned, validPaths)

@@ -1,4 +1,5 @@
 import { z } from "zod"
+import { fileRootIdSchema } from "./file-root.js"
 
 // Engine-agnostic protocol for browsing and editing databases: file-backed
 // SQLite and managed MySQL/MariaDB/Postgres implement the same actions.
@@ -208,7 +209,7 @@ export const databaseWriteRequestSchema = z.discriminatedUnion("action", [
 
 export const relayFileDatabaseInputSchema = z
   .object({
-    instanceId: z.string().regex(/^[a-f0-9]{40}$/u),
+    instanceId: fileRootIdSchema,
     path: z.string().min(1).max(8_192),
   })
   .strict()

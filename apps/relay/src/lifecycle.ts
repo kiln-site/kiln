@@ -4364,6 +4364,11 @@ export class LifecycleDriver {
     await command("docker", ["network", "rm", name])
   }
 
+  // The Relay's data directory as the Docker host sees it, for bind mounts.
+  hostDataDirectory(): Promise<string> {
+    return this.#hostDataDirectory()
+  }
+
   async #hostDataDirectory(): Promise<string> {
     this.#hostDataDirectoryPromise ??= this.#resolveHostDataDirectory()
     return this.#hostDataDirectoryPromise

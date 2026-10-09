@@ -36,7 +36,7 @@ import {
   FileTreeRevealButton,
 } from "@/components/files/file-viewer-toolbar"
 import { fileLanguageForPath } from "@/lib/file-language"
-import type { InstanceWorkspaceInstance } from "@/lib/relay-selectors"
+import type { FileWorkspaceInstance } from "@/lib/relay-selectors"
 import { loadSyntaxCodeEditorModule } from "@/lib/syntax-editor-module-preload"
 const SyntaxCodeEditor = React.lazy(async () => {
   const module = await loadSyntaxCodeEditorModule()
@@ -62,7 +62,7 @@ function Editor({
 }: {
   file: RelayFileContent
   displayPath: string
-  instance: InstanceWorkspaceInstance
+  instance: FileWorkspaceInstance
   loading: boolean
   error: string | null
   canShare: boolean

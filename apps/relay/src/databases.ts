@@ -646,6 +646,14 @@ function databaseResourceName(
   return `${prefix}kiln-db-${id}-${suffix}`
 }
 
+// The private network a database's clients join to reach it.
+export function databaseNetworkName(
+  config: Pick<RelayConfig, "resourceNamespace">,
+  id: string
+): string {
+  return databaseResourceName(config, id, "network")
+}
+
 function databaseHostname(id: string): string {
   return `database-${id}`
 }

@@ -28,7 +28,7 @@ import {
   relayFileQueryOptions,
 } from "@/lib/query-options"
 import { isDatabaseFilePath } from "@/lib/database-files"
-import type { InstanceWorkspaceInstance } from "@/lib/relay-selectors"
+import type { FileWorkspaceInstance } from "@/lib/relay-selectors"
 import { warmSyntaxCodeEditorModule } from "@/lib/syntax-editor-module-preload"
 import { recordRelayFileView } from "@/server/relay"
 
@@ -152,7 +152,7 @@ interface FileViewerProps {
   fileTreeLoading: boolean
   fileTreeRetrying: boolean
   fileIndex: FileTreeIndex
-  instance: InstanceWorkspaceInstance
+  instance: FileWorkspaceInstance
   onPathChange: (path: string) => void
   onRetryFileTree: () => void
   onTreeExpand: () => void
@@ -412,7 +412,7 @@ function FileViewActivityRecorder({
   revision,
   enabled,
 }: {
-  instance: InstanceWorkspaceInstance
+  instance: FileWorkspaceInstance
   path: string
   revision: string
   enabled: boolean

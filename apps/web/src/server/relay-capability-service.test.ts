@@ -56,6 +56,7 @@ import type {
 import {
   issueBrowserCapabilitiesForRequest,
   issueConsoleCapabilityForRequest,
+  issueFileCapabilityForRequest,
   prepareConsoleCapabilityForUser,
 } from "@/server/relay-capability-service"
 
@@ -362,6 +363,92 @@ describe("Relay capability issuance orchestration", () => {
       await expect(issue("database-one")).rejects.toThrow(
         "Update this Relay to view these logs."
       )
+    })
+  })
+
+  describe("apps", () => {
+    const appId = "a".repeat(40)
+    // Alice holds app permissions on the Relay, which cover all its apps;
+    // `granted` lists them.
+    let granted: Array<string>
+    beforeEach(() => {
+      granted = ["app.logs.read", "app.files.read"]
+      for (const feature of [
+        "browser-capability-v2",
+        "browser-lease-renewal-v1",
+        "console-resources-v1",
+        "file-request-replay-v1",
+        "apps-v1",
+      ]) {
+        fakes.features.add(feature)
+      }
+      fakes.requirePermissions.mockImplementation(
+        (input: {
+          databaseId?: string
+          instanceId?: string
+          permissions: Array<string>
+        }) =>
+          !input.databaseId &&
+          !input.instanceId &&
+          input.permissions.every((permission) => granted.includes(permission))
+            ? Effect.void
+            : Effect.fail(new Error("Permission denied"))
+      )
+    })
+
+    const issueLogs = () =>
+      issueBrowserCapabilitiesForRequest({
+        authenticate: () => Promise.resolve({ sessionId: "session-one", user }),
+        publicKeyJwk,
+        relayId: "relay-one",
+        requests: [{ kind: "console", optInV2: true, write: false }],
+        resource: { id: appId, kind: "app" },
+      })
+    const issueFiles = (
+      action: "instance.files.download" | "instance.files.upload"
+    ) =>
+      issueFileCapabilityForRequest({
+        action,
+        authenticate: () => Promise.resolve({ sessionId: "session-one", user }),
+        instanceId: `app:${appId}`,
+        optInV2: true,
+        path: "config.yml",
+        publicKeyJwk,
+        relayId: "relay-one",
+      })
+
+    it("issues a capability to read an app's logs", async () => {
+      const issued = await issueLogs()
+
+      expect(
+        decodeCapabilityPayload(issued.capabilities[0]!.capability)
+      ).toMatchObject({
+        actions: ["app.logs.read"],
+        instanceId: appId,
+        resourceKind: "app",
+      })
+    })
+
+    it("refuses Relays that can't run apps", async () => {
+      fakes.features.delete("apps-v1")
+
+      await expect(issueLogs()).rejects.toThrow(
+        "Update this Relay to view these logs."
+      )
+    })
+
+    it("transfers an app's files with the app's own file permissions", async () => {
+      const issued = await issueFiles("instance.files.download")
+
+      expect(decodeCapabilityPayload(issued.capability)).toMatchObject({
+        actions: ["app.files.download"],
+        instanceId: `app:${appId}`,
+        operation: "file",
+        resourceKind: "app",
+      })
+      await expect(issueFiles("instance.files.upload")).rejects.toThrow()
+      granted = ["instance.files.read", "instance.files.write"]
+      await expect(issueFiles("instance.files.download")).rejects.toThrow()
     })
   })
 

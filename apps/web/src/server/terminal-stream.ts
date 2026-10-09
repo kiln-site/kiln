@@ -4,6 +4,8 @@ import {
   relayDatabaseTerminalAttachedSchema,
   relayDatabaseTerminalHeartbeatSchema,
   type HearthDatabaseTerminalOutput,
+  type RelayControlOperation,
+  type RelayDatabaseTerminalAttached,
 } from "@workspace/contracts"
 import { z } from "zod"
 
@@ -38,21 +40,117 @@ const MAX_QUEUED_CHARACTERS = 2_000_000
 
 const encoder = new TextEncoder()
 
+// What a terminal stream attaches to: a database's client or a shell in one
+// of an app's services. Both are sessions the Relay keeps the same way.
+export interface TerminalStreamTarget {
+  readonly attach: (
+    attachmentId: string,
+    rows: number,
+    cols: number
+  ) => Promise<{ session: RelayDatabaseTerminalAttached; user: string }>
+  // Throws once the person may no longer use this terminal.
+  readonly authorize: (user: AuthenticatedUser) => Promise<void>
+  readonly operations: {
+    readonly detach: RelayControlOperation
+    readonly heartbeat: RelayControlOperation
+  }
+}
+
+export function databaseTerminalTarget(
+  relay: PersistedRelay,
+  databaseId: string,
+  user: AuthenticatedUser
+): TerminalStreamTarget {
+  return {
+    attach: async (attachmentId, rows, cols) => {
+      const credential = await requiredCredential(relay.id, databaseId)
+      const session = relayDatabaseTerminalAttachedSchema.parse(
+        await databaseRpc(
+          relay,
+          "database.terminal.attach",
+          {
+            attachmentId,
+            cols,
+            databaseId,
+            idleTimeoutMs: databaseTerminalIdleTimeoutMs(),
+            password: credential.password,
+            rows,
+            username: credential.username,
+          },
+          30_000,
+          user.id
+        )
+      )
+      return { session, user: credential.username }
+    },
+    authorize: (current) =>
+      requireRelayPermission({
+        databaseId,
+        permission: "database.terminal",
+        relayId: relay.id,
+        user: current,
+      }),
+    operations: {
+      detach: "database.terminal.detach",
+      heartbeat: "database.terminal.heartbeat",
+    },
+  }
+}
+
+export function appTerminalTarget(
+  relay: PersistedRelay,
+  appId: string,
+  service: string,
+  user: AuthenticatedUser
+): TerminalStreamTarget {
+  return {
+    attach: async (attachmentId, rows, cols) => {
+      const session = relayDatabaseTerminalAttachedSchema.parse(
+        await databaseRpc(
+          relay,
+          "app.terminal.attach",
+          {
+            appId,
+            attachmentId,
+            cols,
+            idleTimeoutMs: databaseTerminalIdleTimeoutMs(),
+            rows,
+            service,
+          },
+          30_000,
+          user.id
+        )
+      )
+      return { session, user: service }
+    },
+    authorize: (current) =>
+      requireRelayPermission({
+        permission: "app.terminal",
+        relayId: relay.id,
+        user: current,
+      }),
+    operations: {
+      detach: "app.terminal.detach",
+      heartbeat: "app.terminal.heartbeat",
+    },
+  }
+}
+
 // Attaches one page to the person's terminal session and streams it as NDJSON
 // records until the page leaves, the session ends, or the Relay is lost.
-export function openDatabaseTerminalStream(input: {
+export function openTerminalStream(input: {
   // The person's sign-in: its id, and the request headers that carry it, so
   // access can be checked again while the stream stays open.
   authSessionId: string
   cols: number
-  databaseId: string
   headers: Headers
   relay: PersistedRelay
   rows: number
   signal: AbortSignal
+  target: TerminalStreamTarget
   user: AuthenticatedUser
 }): ReadableStream<Uint8Array> {
-  const { databaseId, relay, user } = input
+  const { relay, target, user } = input
   const attachmentId = randomBytes(24).toString("base64url")
   const queued: Array<DatabaseTerminalStreamRecord> = []
   let queuedCharacters = 0
@@ -131,7 +229,7 @@ export function openDatabaseTerminalStream(input: {
       forkPromise(() =>
         databaseRpc(
           relay,
-          "database.terminal.detach",
+          target.operations.detach,
           { attachmentId },
           10_000,
           user.id
@@ -179,30 +277,17 @@ export function openDatabaseTerminalStream(input: {
   })
 
   forkPromise(async () => {
-    const credential = await requiredCredential(relay.id, databaseId)
-    const session = relayDatabaseTerminalAttachedSchema.parse(
-      await databaseRpc(
-        relay,
-        "database.terminal.attach",
-        {
-          attachmentId,
-          cols: input.cols,
-          databaseId,
-          idleTimeoutMs: databaseTerminalIdleTimeoutMs(),
-          password: credential.password,
-          rows: input.rows,
-          username: credential.username,
-        },
-        30_000,
-        user.id
-      )
+    const attachedSession = await target.attach(
+      attachmentId,
+      input.rows,
+      input.cols
     )
     if (closed) return
     send({
-      ...session,
+      ...attachedSession.session,
       attachmentId,
       type: "attached",
-      user: credential.username,
+      user: attachedSession.user,
     })
     attached = true
     timers.push(
@@ -213,7 +298,7 @@ export function openDatabaseTerminalStream(input: {
           const renewed = z.object({ unknown: z.array(z.string()) }).parse(
             await databaseRpc(
               relay,
-              "database.terminal.heartbeat",
+              target.operations.heartbeat,
               relayDatabaseTerminalHeartbeatSchema.parse({
                 attachmentIds: [attachmentId],
               }),
@@ -259,9 +344,8 @@ export function openDatabaseTerminalStream(input: {
 
 async function stillAuthorized(input: {
   authSessionId: string
-  databaseId: string
   headers: Headers
-  relay: PersistedRelay
+  target: TerminalStreamTarget
 }) {
   const identity = await getAuthenticatedRealtimeIdentityFromHeaders(
     input.headers
@@ -273,12 +357,7 @@ async function stillAuthorized(input: {
   ) {
     return false
   }
-  await requireRelayPermission({
-    databaseId: input.databaseId,
-    permission: "database.terminal",
-    relayId: input.relay.id,
-    user: identity.user,
-  })
+  await input.target.authorize(identity.user)
   return true
 }
 
@@ -286,7 +365,7 @@ function streamErrorCode(cause: unknown): DatabaseTerminalStreamError {
   if (cause instanceof RelayUnavailableError) {
     // Operation errors carry the Relay's code; connection failures don't.
     if (cause.code === undefined) return "relay-unavailable"
-    return cause.message.includes("Start the database")
+    return /\bto open its terminal\b/u.test(cause.message)
       ? "not-running"
       : "failed"
   }

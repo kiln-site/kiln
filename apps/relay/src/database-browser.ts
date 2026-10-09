@@ -12,7 +12,7 @@ import type {
 } from "@workspace/contracts"
 import { Deferred, Effect, Pool, Scope } from "effect"
 
-import type { RelayInstanceConfig } from "./config.js"
+import type { FileRoot } from "./files.js"
 import {
   COMMIT_CHANNEL_FD,
   COMMIT_GRANTED,
@@ -40,16 +40,16 @@ export class DatabaseBrowser {
     this.#filesystem = filesystem
   }
 
-  read(instance: RelayInstanceConfig, input: RelayFileDatabaseReadInput) {
+  read(instance: FileRoot, input: RelayFileDatabaseReadInput) {
     return this.#run(instance, input.path, input.request, true)
   }
 
-  write(instance: RelayInstanceConfig, input: RelayFileDatabaseWriteInput) {
+  write(instance: FileRoot, input: RelayFileDatabaseWriteInput) {
     return this.#run(instance, input.path, input.request, false)
   }
 
   #run(
-    instance: RelayInstanceConfig,
+    instance: FileRoot,
     requestedPath: string,
     request: DatabaseReadRequest | DatabaseWriteRequest,
     readOnly: boolean

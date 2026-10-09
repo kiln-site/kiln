@@ -459,6 +459,10 @@ async function startRelay(
           Promise.resolve({
             containerId: `container-${id}`,
           } as RelayManagedDatabase),
+      },
+      {
+        consoleSession: (id) =>
+          Promise.resolve(consoleSession(id, `app ${id} output`)),
       }
     ),
     docker: {} as DockerDriver,

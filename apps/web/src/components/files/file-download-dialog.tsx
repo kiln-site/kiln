@@ -48,10 +48,10 @@ import {
   isValidRelayDownloadName,
 } from "@/lib/relay-file-transfer"
 import type { RelayFileDownloadPreview } from "@/lib/relay-file-transfer"
-import type { InstanceWorkspaceInstance } from "@/lib/relay-selectors"
+import type { FileWorkspaceInstance } from "@/lib/relay-selectors"
 
 interface FileDownloadDialogProps {
-  instance: InstanceWorkspaceInstance
+  instance: FileWorkspaceInstance
   onOpenChange: (open: boolean) => void
   open: boolean
   path: string

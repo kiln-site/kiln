@@ -22,6 +22,8 @@ import {
   relayControlRequestTimeoutMs,
   relayControlProtocol,
   relayConsoleResourcesV1Feature,
+  relayAppsV1Feature,
+  appIdFromFileRoot,
   relayFileRequestReplayV1Feature,
   relaySnapshotDeltaFeature,
   isAuditedRelayControlOperation,
@@ -643,6 +645,7 @@ function authenticateSocket(
           relayBrowserLeaseRenewalV1Feature,
           relayFileRequestReplayV1Feature,
           relayConsoleResourcesV1Feature,
+          relayAppsV1Feature,
         ],
         protocol: relayControlProtocol,
         relayBuild: relayBuildLabel(),
@@ -802,6 +805,12 @@ function auditDetailsForRequest(
   if (typeof payload.databaseId === "string") {
     details.databaseId = payload.databaseId
   }
+  if (typeof payload.appId === "string") {
+    details.appId = payload.appId
+  }
+  if (request.operation === "app.create" && typeof payload.id === "string") {
+    details.appId = payload.id
+  }
   if (
     request.operation === "database.create" &&
     typeof payload.id === "string"
@@ -809,7 +818,8 @@ function auditDetailsForRequest(
     details.databaseId = payload.id
   }
   if (
-    request.operation === "instance.action" &&
+    (request.operation === "instance.action" ||
+      request.operation === "app.action") &&
     typeof payload.action === "string"
   ) {
     details.action = payload.action
@@ -878,7 +888,29 @@ function authenticationVerifier(options: {
   )
 }
 
+function appFileAction(operation: RelayControlOperation): RelayAction {
+  switch (operation) {
+    case "instance.files.list":
+    case "instance.files.directory.list":
+    case "instance.files.directory.sizes":
+    case "instance.files.search":
+    case "instance.files.stat":
+    case "instance.files.read":
+    case "instance.files.database.read":
+      return "app.files.read"
+    default:
+      return "app.files.write"
+  }
+}
+
 function actionForRequest(request: RelayControlRequest): RelayAction | null {
+  // An app's data directory is served by the same file operations.
+  if (
+    request.operation.startsWith("instance.files.") &&
+    appIdFromFileRoot(objectString(request.payload, "instanceId") ?? "")
+  ) {
+    return appFileAction(request.operation)
+  }
   switch (request.operation) {
     case "relay.snapshot":
     case "relay.system.inspect":
@@ -956,6 +988,23 @@ function actionForRequest(request: RelayControlRequest): RelayAction | null {
     case "database.terminal.claim":
     case "database.terminal.restart":
       return "database.dump.import"
+    case "app.list":
+      return "app.read"
+    case "app.create":
+      return "app.create"
+    case "app.delete":
+      return "app.delete"
+    case "app.deploy":
+    case "app.action":
+    case "app.network.write":
+      return "app.manage"
+    case "app.terminal.attach":
+    case "app.terminal.heartbeat":
+    case "app.terminal.detach":
+    case "app.terminal.write":
+    case "app.terminal.claim":
+    case "app.terminal.restart":
+      return "app.terminal"
     case "backup.task.enqueue": {
       const kind = objectString(request.payload, "kind")
       if (kind === "create") return "backup.create"

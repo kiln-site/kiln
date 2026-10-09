@@ -12,9 +12,10 @@ import { afterEach, describe, expect, it, vi } from "vite-plus/test"
 vi.mock("./command.js", () => import("./test/docker.js"))
 
 import {
-  DatabaseTerminals,
+  ContainerTerminals,
+  databaseTerminalTarget,
   VIEWER_EXPIRES_AFTER_MS,
-} from "./database-terminal.js"
+} from "./container-terminal.js"
 import { fakeDocker } from "./test/docker.js"
 import {
   relayHarness,
@@ -124,7 +125,7 @@ function attachmentId(index: number) {
 }
 
 function attach(
-  terminals: DatabaseTerminals,
+  terminals: ContainerTerminals,
   owner: string,
   database: Awaited<ReturnType<typeof runningDatabase>>,
   watcher: ReturnType<typeof viewer>,
@@ -133,12 +134,14 @@ function attach(
   attachments += 1
   return terminals.attach(
     owner,
-    database,
+    databaseTerminalTarget(
+      database,
+      credentials.username,
+      credentials.password
+    ),
     {
-      ...credentials,
       attachmentId: attachmentId(attachments),
       cols: options.cols ?? 80,
-      databaseId,
       idleTimeoutMs,
       rows: options.rows ?? 24,
     },
@@ -169,7 +172,7 @@ describe("database terminal sessions", () => {
   it("keeps one session per person and database that a new page picks up where the last left off", async () => {
     const harness = await relayHarness()
     const database = await runningDatabase(harness)
-    const terminals = new DatabaseTerminals(harness.config)
+    const terminals = new ContainerTerminals(harness.config)
     const first = viewer()
     const session = await attach(terminals, alice, database, first)
 
@@ -185,7 +188,7 @@ describe("database terminal sessions", () => {
   it("gives pages that open at the same time one shared session", async () => {
     const harness = await relayHarness()
     const database = await runningDatabase(harness)
-    const terminals = new DatabaseTerminals(harness.config)
+    const terminals = new ContainerTerminals(harness.config)
 
     const [first, second] = await Promise.all([
       attach(terminals, alice, database, viewer()),
@@ -202,7 +205,7 @@ describe("database terminal sessions", () => {
   it("shows every page the session at one size, changing where its output did", async () => {
     const harness = await relayHarness()
     const database = await runningDatabase(harness)
-    const terminals = new DatabaseTerminals(harness.config)
+    const terminals = new ContainerTerminals(harness.config)
     const first = await attach(terminals, alice, database, viewer())
     const other = viewer()
     const joined = await attach(terminals, alice, database, other, {
@@ -240,7 +243,7 @@ describe("database terminal sessions", () => {
   it("puts one of a person's pages in control at a time", async () => {
     const harness = await relayHarness()
     const database = await runningDatabase(harness)
-    const terminals = new DatabaseTerminals(harness.config)
+    const terminals = new ContainerTerminals(harness.config)
     const laptop = viewer()
     const session = await attach(terminals, alice, database, laptop)
     const laptopAttachment = attachmentId(attachments)
@@ -292,7 +295,7 @@ describe("database terminal sessions", () => {
   it("keeps each person's session to themselves", async () => {
     const harness = await relayHarness()
     const database = await runningDatabase(harness)
-    const terminals = new DatabaseTerminals(harness.config)
+    const terminals = new ContainerTerminals(harness.config)
     const aliceSession = await attach(terminals, alice, database, viewer())
     const aliceAttachment = attachmentId(attachments)
     const mallorySession = await attach(terminals, mallory, database, viewer())
@@ -310,7 +313,7 @@ describe("database terminal sessions", () => {
     const harness = await relayHarness()
     const database = await runningDatabase(harness)
     await attach(
-      new DatabaseTerminals(harness.config),
+      new ContainerTerminals(harness.config),
       alice,
       database,
       viewer()
@@ -324,7 +327,7 @@ describe("database terminal sessions", () => {
   it("keeps running while a page is open and times out once none are", async () => {
     const harness = await relayHarness()
     const database = await runningDatabase(harness)
-    const terminals = new DatabaseTerminals(harness.config)
+    const terminals = new ContainerTerminals(harness.config)
     await attach(terminals, alice, database, viewer())
     const open = attachmentId(attachments)
     const [client] = clientExecs()
@@ -348,7 +351,7 @@ describe("database terminal sessions", () => {
   it("stops counting a page that stopped renewing as open", async () => {
     const harness = await relayHarness()
     const database = await runningDatabase(harness)
-    const terminals = new DatabaseTerminals(harness.config)
+    const terminals = new ContainerTerminals(harness.config)
     vi.useFakeTimers({ toFake: ["setTimeout", "setInterval", "Date"] })
     await settled(attach(terminals, alice, database, viewer()))
     const [client] = clientExecs()
@@ -365,7 +368,7 @@ describe("database terminal sessions", () => {
   it("drops a viewer Hearth no longer has, so the idle timeout starts", async () => {
     const harness = await relayHarness()
     const database = await runningDatabase(harness)
-    const terminals = new DatabaseTerminals(harness.config)
+    const terminals = new ContainerTerminals(harness.config)
     const gone = viewer(false)
     vi.useFakeTimers({ toFake: ["setTimeout", "setInterval", "Date"] })
     const session = await settled(attach(terminals, alice, database, gone))
@@ -382,7 +385,7 @@ describe("database terminal sessions", () => {
   it("restarts into a new session and tells open pages the old one ended", async () => {
     const harness = await relayHarness()
     const database = await runningDatabase(harness)
-    const terminals = new DatabaseTerminals(harness.config)
+    const terminals = new ContainerTerminals(harness.config)
     const open = viewer()
     const first = await attach(terminals, alice, database, open)
 
@@ -399,7 +402,7 @@ describe("database terminal sessions", () => {
   it("shows a slow page every resize, even ones with no output between them", async () => {
     const harness = await relayHarness()
     const database = await runningDatabase(harness)
-    const terminals = new DatabaseTerminals(harness.config)
+    const terminals = new ContainerTerminals(harness.config)
     const slow = viewer(true, { held: true })
     const slowAttached = await attach(terminals, alice, database, slow)
     const slowAttachment = attachmentId(attachments)
@@ -446,7 +449,7 @@ describe("database terminal sessions", () => {
   it("shows a page that opens mid escape sequence the same screen", async () => {
     const harness = await relayHarness()
     const database = await runningDatabase(harness)
-    const terminals = new DatabaseTerminals(harness.config)
+    const terminals = new ContainerTerminals(harness.config)
     const first = viewer()
     const firstAttached = await attach(terminals, alice, database, first)
     const { sessionId } = firstAttached
@@ -472,7 +475,7 @@ describe("database terminal sessions", () => {
 
     const page = viewer()
     const session = await attach(
-      new DatabaseTerminals(harness.config),
+      new ContainerTerminals(harness.config),
       alice,
       database,
       page
@@ -487,7 +490,7 @@ describe("database terminal sessions", () => {
   it("keeps a replacement session working when the old one finishes ending late", async () => {
     const harness = await relayHarness()
     const database = await runningDatabase(harness)
-    const terminals = new DatabaseTerminals(harness.config)
+    const terminals = new ContainerTerminals(harness.config)
     const old = viewer()
     const first = await attach(terminals, alice, database, old)
     const inspection = fakeDocker.hold({ command: "inspect" })
@@ -522,7 +525,7 @@ describe("database terminal sessions", () => {
   it("says why a session ended: its client exited, or the database stopped", async () => {
     const harness = await relayHarness()
     const database = await runningDatabase(harness)
-    const terminals = new DatabaseTerminals(harness.config)
+    const terminals = new ContainerTerminals(harness.config)
     const exiting = viewer()
     await attach(terminals, alice, database, exiting)
     fakeDocker.exitExec(clientExecs()[0]!.id)

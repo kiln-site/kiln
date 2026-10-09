@@ -17,14 +17,16 @@ import {
   type RelayConnection,
 } from "@/lib/query-options"
 import type { FleetInstance, RealtimeClientEvent } from "@/lib/realtime-events"
+import type { getApps } from "@/server/apps"
 import type { getManagedDatabases } from "@/server/databases"
 import {
-  databaseInventoryStale,
-  withDatabaseRelayStatus,
-} from "@/lib/database-relay-status"
+  inventoryStale,
+  withInventoryRelayStatus,
+} from "@/lib/inventory-relay-status"
 import type { RelayFleetSnapshot } from "@/lib/relay-fleet"
 
 type ManagedDatabaseOverview = Awaited<ReturnType<typeof getManagedDatabases>>
+type AppOverview = Awaited<ReturnType<typeof getApps>>
 
 export interface ApplyRealtimeEventInput {
   event: Exclude<RealtimeClientEvent, { type: "relay.invalidate" | "reset" }>
@@ -117,10 +119,18 @@ function applyRealtimeEvent(input: ApplyRealtimeEventInput): void {
     return
   }
   if (event.type === "relay.status") {
-    if (applyRelayStatusToDatabases(queryClient, event)) {
+    const staleTopics = [
+      ...(applyRelayStatusToDatabases(queryClient, event)
+        ? (["databases"] as const)
+        : []),
+      ...(applyRelayStatusToApps(queryClient, event)
+        ? (["apps"] as const)
+        : []),
+    ]
+    if (staleTopics.length > 0) {
       void (
-        refreshTopics?.(["databases"], { relayId: event.relayId }) ??
-        refreshHearthRealtimeTopics(queryClient, ["databases"], {
+        refreshTopics?.(staleTopics, { relayId: event.relayId }) ??
+        refreshHearthRealtimeTopics(queryClient, staleTopics, {
           relayId: event.relayId,
         })
       )
@@ -214,19 +224,39 @@ function applyRelayStatusToDatabases(
       if (!overview) return overview
       stale =
         event.status === "connected" &&
-        databaseInventoryStale(overview, event.relayId)
-      return withDatabaseRelayStatus(
+        inventoryStale(overview, "databases", event.relayId)
+      return withInventoryRelayStatus(
         overview,
-        new Map([
-          [
-            event.relayId,
-            { status: event.status, updating: event.updating ?? false },
-          ],
-        ])
+        "databases",
+        relayStatusMap(event)
       )
     }
   )
   return stale
+}
+
+function applyRelayStatusToApps(
+  queryClient: QueryClient,
+  event: RelayStatusEvent
+): boolean {
+  let stale = false
+  queryClient.setQueryData<AppOverview>(queryKeys.apps.list, (overview) => {
+    if (!overview) return overview
+    stale =
+      event.status === "connected" &&
+      inventoryStale(overview, "apps", event.relayId)
+    return withInventoryRelayStatus(overview, "apps", relayStatusMap(event))
+  })
+  return stale
+}
+
+function relayStatusMap(event: RelayStatusEvent) {
+  return new Map([
+    [
+      event.relayId,
+      { status: event.status, updating: event.updating ?? false },
+    ],
+  ])
 }
 
 function relayStatusChanged(

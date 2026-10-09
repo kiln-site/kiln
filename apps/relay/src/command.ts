@@ -69,13 +69,23 @@ export function commandLines(
   executable: string,
   arguments_: ReadonlyArray<string>,
   onLine: (line: string) => void,
-  options: { signal?: AbortSignal; timeout?: number } = {}
+  options: {
+    env?: NodeJS.ProcessEnv
+    // Written to stdin, which is otherwise closed.
+    input?: string
+    signal?: AbortSignal
+    timeout?: number
+  } = {}
 ): Promise<void> {
   return new Promise((resolve, reject) => {
     const child = spawn(executable, arguments_, {
+      env: options.env,
       signal: options.signal,
-      stdio: ["ignore", "pipe", "pipe"],
+      stdio: ["pipe", "pipe", "pipe"],
     })
+    // A process that exits without reading its input isn't an error here.
+    child.stdin.on("error", () => undefined)
+    child.stdin.end(options.input ?? "")
     const timeout = setTimeout(() => {
       child.kill("SIGKILL")
       reject(new Error(`${executable} timed out`))

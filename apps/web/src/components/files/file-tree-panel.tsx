@@ -34,7 +34,7 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@workspace/ui/components/tooltip"
-import type { InstanceWorkspaceInstance } from "@/lib/relay-selectors"
+import type { FileWorkspaceInstance } from "@/lib/relay-selectors"
 import { EditorTooltip } from "@/components/files/editor-tooltip"
 import { FileActionsMenu } from "@/components/files/file-actions-menu"
 import { selectedUploadFiles } from "@/components/files/file-upload-selection"
@@ -570,7 +570,7 @@ export function FileTreePanel({
   uploading,
   actions,
 }: {
-  instance: InstanceWorkspaceInstance
+  instance: FileWorkspaceInstance
   fileIndex: FileTreeIndex
   preparedInput: FileTreePreparedInput
   selectionStore: FileSelectionStore

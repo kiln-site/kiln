@@ -19,7 +19,7 @@ import {
   FileToolbarIdentity,
   FileTreeRevealButton,
 } from "@/components/files/file-viewer-toolbar"
-import type { InstanceWorkspaceInstance } from "@/lib/relay-selectors"
+import type { FileWorkspaceInstance } from "@/lib/relay-selectors"
 import {
   getRelayDatabaseOverview,
   getRelayDatabaseRows,
@@ -44,7 +44,7 @@ export function FileDatabaseViewer({
 }: {
   canWrite: boolean
   displayPath: string
-  instance: InstanceWorkspaceInstance
+  instance: FileWorkspaceInstance
   onNotDatabase: () => void
   onTreeExpand: () => void
   treeCollapsed: boolean
@@ -93,7 +93,7 @@ function DatabaseOverflowMenu({
   instance,
   path,
 }: {
-  instance: InstanceWorkspaceInstance
+  instance: FileWorkspaceInstance
   path: string
 }) {
   const [open, setOpen] = React.useState(false)

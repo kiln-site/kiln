@@ -14,6 +14,16 @@ import {
   relayConsoleCompletionInputSchema,
   relayConsoleShareInputSchema,
   relayCreateDatabaseSchema,
+  relayAppActionSchema,
+  relayAppNetworkSchema,
+  relayAppTerminalAttachSchema,
+  relayAppTerminalClaimSchema,
+  relayAppTerminalRestartSchema,
+  relayAppTerminalWriteSchema,
+  relayCreateAppSchema,
+  appIdFromFileRoot,
+  relayDeleteAppSchema,
+  relayDeployAppSchema,
   relayDatabaseActionSchema,
   relayDatabaseDumpSchema,
   relayDatabaseDataReadSchema,
@@ -87,13 +97,18 @@ import { DatabaseBrowser } from "./database-browser.js"
 import { DatabaseDriver } from "./databases.js"
 import { browseManagedDatabase } from "./database-sql-browser.js"
 import { consoleSources } from "./console-sources.js"
-import { DatabaseTerminals } from "./database-terminal.js"
+import {
+  appTerminalTarget,
+  ContainerTerminals,
+  databaseTerminalTarget,
+} from "./container-terminal.js"
+import { AppDriver } from "./apps.js"
 import { forkPromise } from "./effect/promise.js"
 import {
   inspectEncryptedPlatformBackup,
   restoreEncryptedPlatformBackup,
 } from "./platform-backups.js"
-import { FilesystemDriver } from "./files.js"
+import { FilesystemDriver, type FileRoot } from "./files.js"
 import { LifecycleDriver } from "./lifecycle.js"
 import { nodeSnapshot } from "./node.js"
 import { RelayPairingError } from "./effect/errors.js"
@@ -197,8 +212,7 @@ const docker = new DockerDriver(
   databaseConnections
 )
 const databases = new DatabaseDriver(config, docker, databaseConnections)
-const databaseTerminals = new DatabaseTerminals(config)
-forkPromise(async () => databaseTerminals.sweep(await databases.list()))
+const terminals = new ContainerTerminals(config)
 const systemUpdates = new SystemUpdateManager(config)
 const filesystem = new FilesystemDriver(config)
 const databaseBrowser = new DatabaseBrowser(filesystem)
@@ -208,6 +222,30 @@ const lifecycle = new LifecycleDriver(
   bricks,
   databaseConnections
 )
+const apps = new AppDriver(config, () => lifecycle.hostDataDirectory())
+const appFilesystem = new FilesystemDriver({
+  ...config,
+  rootDirectory: apps.rootDirectory,
+})
+const appDatabaseBrowser = new DatabaseBrowser(appFilesystem)
+forkPromise(async () => {
+  const [managedDatabases, managedApps] = await Promise.all([
+    databases.list(),
+    apps.list(),
+  ])
+  await terminals.sweep([
+    ...managedDatabases.flatMap((database) =>
+      database.containerId && database.observedState === "running"
+        ? [database.containerId]
+        : []
+    ),
+    ...managedApps.flatMap((app) =>
+      app.containers.flatMap((container) =>
+        container.running ? [container.id] : []
+      )
+    ),
+  ])
+})
 const databaseConnectionSnapshots = await docker.databaseConnectionSnapshots()
 await databaseConnections.initialize(databaseConnectionSnapshots)
 for (const snapshot of databaseConnectionSnapshots) {
@@ -647,7 +685,11 @@ const controlSocket = attachControlSocket({
 })
 const browserSocket = attachBrowserSocket({
   config,
-  consoleSources: consoleSources(docker, databases),
+  appFiles: {
+    filesystem: appFilesystem,
+    root: (appId) => apps.fileRoot(appId),
+  },
+  consoleSources: consoleSources(docker, databases, apps),
   docker,
   filesystem,
   identity: relayIdentity,
@@ -1383,9 +1425,13 @@ async function executeControlRequest(
     }
     case "database.terminal.attach": {
       const input = relayDatabaseTerminalAttachSchema.parse(request.payload)
-      return databaseTerminals.attach(
+      return terminals.attach(
         terminalOwner(client, request),
-        await databases.target(input.databaseId),
+        databaseTerminalTarget(
+          await databases.target(input.databaseId),
+          input.username,
+          input.password
+        ),
         input,
         // Output goes back to the Hearth connection that attached.
         (output, timeoutMs) =>
@@ -1394,28 +1440,25 @@ async function executeControlRequest(
     }
     case "database.terminal.heartbeat": {
       const input = relayDatabaseTerminalHeartbeatSchema.parse(request.payload)
-      return databaseTerminals.heartbeat(
+      return terminals.heartbeat(
         terminalOwner(client, request),
         input.attachmentIds
       )
     }
     case "database.terminal.restart": {
       const input = relayDatabaseTerminalRestartSchema.parse(request.payload)
-      return databaseTerminals.restart(
-        terminalOwner(client, request),
-        input.databaseId
-      )
+      return terminals.restart(terminalOwner(client, request), input.databaseId)
     }
     case "database.terminal.detach": {
       const input = relayDatabaseTerminalDetachSchema.parse(request.payload)
-      return databaseTerminals.detach(
+      return terminals.detach(
         terminalOwner(client, request),
         input.attachmentId
       )
     }
     case "database.terminal.write": {
       const input = relayDatabaseTerminalWriteSchema.parse(request.payload)
-      return databaseTerminals.write(
+      return terminals.write(
         terminalOwner(client, request),
         input.databaseId,
         input.sessionId,
@@ -1424,9 +1467,76 @@ async function executeControlRequest(
     }
     case "database.terminal.claim": {
       const input = relayDatabaseTerminalClaimSchema.parse(request.payload)
-      return databaseTerminals.claim(
+      return terminals.claim(
         terminalOwner(client, request),
         input.databaseId,
+        input.sessionId,
+        input.attachmentId,
+        input.rows,
+        input.cols
+      )
+    }
+    case "app.list":
+      return apps.list()
+    case "app.create":
+      return apps.create(relayCreateAppSchema.parse(request.payload))
+    case "app.delete":
+      return apps.delete(relayDeleteAppSchema.parse(request.payload))
+    case "app.deploy":
+      return apps.deploy(relayDeployAppSchema.parse(request.payload))
+    case "app.action":
+      return apps.action(relayAppActionSchema.parse(request.payload))
+    case "app.network.write":
+      return apps.updateNetwork(relayAppNetworkSchema.parse(request.payload))
+    case "app.terminal.attach": {
+      const input = relayAppTerminalAttachSchema.parse(request.payload)
+      return terminals.attach(
+        terminalOwner(client, request),
+        appTerminalTarget(
+          input.appId,
+          input.service,
+          await apps.serviceContainer(input.appId, input.service)
+        ),
+        input,
+        (output, timeoutMs) =>
+          requestHearth("hearth.database.terminal.output", output, timeoutMs)
+      )
+    }
+    case "app.terminal.heartbeat": {
+      const input = relayDatabaseTerminalHeartbeatSchema.parse(request.payload)
+      return terminals.heartbeat(
+        terminalOwner(client, request),
+        input.attachmentIds
+      )
+    }
+    case "app.terminal.detach": {
+      const input = relayDatabaseTerminalDetachSchema.parse(request.payload)
+      return terminals.detach(
+        terminalOwner(client, request),
+        input.attachmentId
+      )
+    }
+    case "app.terminal.restart": {
+      const input = relayAppTerminalRestartSchema.parse(request.payload)
+      return terminals.restart(
+        terminalOwner(client, request),
+        appTerminalTarget(input.appId, input.service, null).key
+      )
+    }
+    case "app.terminal.write": {
+      const input = relayAppTerminalWriteSchema.parse(request.payload)
+      return terminals.write(
+        terminalOwner(client, request),
+        appTerminalTarget(input.appId, input.service, null).key,
+        input.sessionId,
+        input.data
+      )
+    }
+    case "app.terminal.claim": {
+      const input = relayAppTerminalClaimSchema.parse(request.payload)
+      return terminals.claim(
+        terminalOwner(client, request),
+        appTerminalTarget(input.appId, input.service, null).key,
         input.sessionId,
         input.attachmentId,
         input.rows,
@@ -1752,101 +1862,122 @@ async function executeControlRequest(
       }
     }
     case "instance.files.list":
-      return runRelayEffect(
-        "relay.files.tree",
-        filesystem.tree(await requiredInstance(payload))
+      return withFileTarget(payload, (target) =>
+        runRelayEffect("relay.files.tree", target.filesystem.tree(target.root))
       )
     case "instance.files.directory.list": {
       const input = relayDirectoryPageInputSchema.parse(payload)
-      return runRelayEffect(
-        "relay.files.directory",
-        filesystem.directory(await requiredInstance(input), input)
+      return withFileTarget(input, (target) =>
+        runRelayEffect(
+          "relay.files.directory",
+          target.filesystem.directory(target.root, input)
+        )
       )
     }
     case "instance.files.directory.sizes": {
       const input = relayDirectorySizesInputSchema.parse(payload)
-      return runRelayEffect(
-        "relay.files.directorySizes",
-        filesystem.directorySizes(await requiredInstance(input), input)
+      return withFileTarget(input, (target) =>
+        runRelayEffect(
+          "relay.files.directorySizes",
+          target.filesystem.directorySizes(target.root, input)
+        )
       )
     }
     case "instance.files.search": {
       const input = relayFileSearchPageInputSchema.parse(payload)
-      return runRelayEffect(
-        "relay.files.search",
-        filesystem.search(await requiredInstance(input), input)
+      return withFileTarget(input, (target) =>
+        runRelayEffect(
+          "relay.files.search",
+          target.filesystem.search(target.root, input)
+        )
       )
     }
     case "instance.files.stat": {
       const input = relayFileStatInputSchema.parse(payload)
-      return runRelayEffect(
-        "relay.files.stat",
-        filesystem.entry(await requiredInstance(input), input.path)
+      return withFileTarget(input, (target) =>
+        runRelayEffect(
+          "relay.files.stat",
+          target.filesystem.entry(target.root, input.path)
+        )
       )
     }
     case "instance.files.read":
-      return runRelayEffect(
-        "relay.files.read",
-        filesystem.read(
-          await requiredInstance(payload),
-          requiredString(payload, "path")
+      return withFileTarget(payload, (target) =>
+        runRelayEffect(
+          "relay.files.read",
+          target.filesystem.read(target.root, requiredString(payload, "path"))
         )
       )
     case "instance.files.write": {
-      const instance = await requiredInstance(payload)
       const input = relaySaveFileInputSchema.parse(payload)
-      return serializeInstanceMutation(instance.id, () =>
-        runRelayEffect(
-          "relay.files.write",
-          filesystem.write(instance, requiredString(payload, "path"), input)
+      return withFileTarget(payload, (target) =>
+        serializeInstanceMutation(target.root.id, () =>
+          runRelayEffect(
+            "relay.files.write",
+            target.filesystem.write(
+              target.root,
+              requiredString(payload, "path"),
+              input
+            )
+          )
         )
       )
     }
     case "instance.files.upload-url": {
       const input = relayRemoteFileUploadSchema.parse(request.payload)
-      const instance = await requiredInstance(input)
-      return serializeInstanceMutation(instance.id, () =>
-        runRelayEffect(
-          "relay.files.uploadUrl",
-          withRemoteFileSource(input.url, (source) =>
-            filesystem
-              .upload(instance, input.path, source)
-              .pipe(Effect.map(relayRemoteFileUploadResultSchema.parse))
+      return withFileTarget(input, (target) =>
+        serializeInstanceMutation(target.root.id, () =>
+          runRelayEffect(
+            "relay.files.uploadUrl",
+            withRemoteFileSource(input.url, (source) =>
+              target.filesystem
+                .upload(target.root, input.path, source)
+                .pipe(Effect.map(relayRemoteFileUploadResultSchema.parse))
+            )
           )
         )
       )
     }
     case "instance.files.mutate": {
-      const instance = await requiredInstance(payload)
       const input = relayFileMutationInputSchema.parse(payload)
-      return serializeInstanceMutation(instance.id, () =>
-        runRelayEffect(
-          "relay.files.mutate.legacy",
-          filesystem
-            .mutate(instance, input)
-            .pipe(Effect.andThen(filesystem.tree(instance)))
+      return withFileTarget(payload, (target) =>
+        serializeInstanceMutation(target.root.id, () =>
+          runRelayEffect(
+            "relay.files.mutate.legacy",
+            target.filesystem
+              .mutate(target.root, input)
+              .pipe(Effect.andThen(target.filesystem.tree(target.root)))
+          )
         )
       )
     }
     case "instance.files.mutate.result": {
-      const instance = await requiredInstance(payload)
       const input = relayFileMutationInputSchema.parse(payload)
-      return serializeInstanceMutation(instance.id, () =>
-        runRelayEffect("relay.files.mutate", filesystem.mutate(instance, input))
+      return withFileTarget(payload, (target) =>
+        serializeInstanceMutation(target.root.id, () =>
+          runRelayEffect(
+            "relay.files.mutate",
+            target.filesystem.mutate(target.root, input)
+          )
+        )
       )
     }
     case "instance.files.database.read": {
       const input = relayFileDatabaseReadInputSchema.parse(payload)
-      return runRelayEffect(
-        "relay.files.database.read",
-        databaseBrowser.read(await requiredInstance(input), input)
+      return withFileTarget(input, (target) =>
+        runRelayEffect(
+          "relay.files.database.read",
+          target.databaseBrowser.read(target.root, input)
+        )
       )
     }
     case "instance.files.database.write": {
       const input = relayFileDatabaseWriteInputSchema.parse(payload)
-      return runRelayEffect(
-        "relay.files.database.write",
-        databaseBrowser.write(await requiredInstance(input), input)
+      return withFileTarget(input, (target) =>
+        runRelayEffect(
+          "relay.files.database.write",
+          target.databaseBrowser.write(target.root, input)
+        )
       )
     }
     case "instance.console.history":
@@ -2155,6 +2286,28 @@ function systemUpdateTarget(value: unknown): {
     targetImage: requiredString(target, "targetImage"),
     version: requiredString(target, "version"),
   }
+}
+
+// A server's files, or an app's data directory (`app:<appId>`), with the
+// drivers that serve it.
+async function withFileTarget<T>(
+  payload: Readonly<Record<string, unknown>>,
+  run: (target: {
+    databaseBrowser: DatabaseBrowser
+    filesystem: FilesystemDriver
+    root: FileRoot
+  }) => Promise<T>
+): Promise<T> {
+  const appId = appIdFromFileRoot(requiredString(payload, "instanceId"))
+  return run(
+    appId
+      ? {
+          databaseBrowser: appDatabaseBrowser,
+          filesystem: appFilesystem,
+          root: await apps.fileRoot(appId),
+        }
+      : { databaseBrowser, filesystem, root: await requiredInstance(payload) }
+  )
 }
 
 async function requiredInstance(payload: Readonly<Record<string, unknown>>) {

@@ -1,9 +1,11 @@
 import type { ComponentType } from "react"
 import {
+  Boxes,
   CalendarDays,
   CircleUserRound,
   CreditCard,
   Database,
+  FileCode2,
   Folder,
   FolderDown,
   Globe2,
@@ -41,6 +43,7 @@ export interface NavigationDestination {
 }
 
 export type InfrastructureDestinationAccess =
+  | "app-read"
   | "database-read"
   | "instance-read"
   | "manage-relays"
@@ -106,6 +109,13 @@ export const infrastructureDestinations = [
     keywords: ["infrastructure", "mysql"],
     label: "Databases",
     to: "/infra/databases",
+  },
+  {
+    access: "app-read",
+    icon: Boxes,
+    keywords: ["infrastructure", "docker", "compose", "containers"],
+    label: "Apps",
+    to: "/infra/apps",
   },
 ] as const satisfies ReadonlyArray<
   NavigationDestination & { access: InfrastructureDestinationAccess }
@@ -390,6 +400,94 @@ export function databaseDestinationHref(
   return destination.to.replace("$databaseId", encodeURIComponent(routeId))
 }
 
+export type AppDestinationId =
+  | "files"
+  | "info"
+  | "logs"
+  | "network"
+  | "terminal"
+
+export interface AppDestination extends NavigationDestination {
+  id: AppDestinationId
+  permission: AccessPermission
+}
+
+export const appDestinations = [
+  {
+    icon: ScrollText,
+    id: "logs",
+    keywords: ["deployment", "output", "containers", "errors"],
+    label: "Logs",
+    permission: "app.logs.read",
+    to: "/app/$appId/logs",
+  },
+  {
+    icon: TerminalSquare,
+    id: "terminal",
+    keywords: ["console", "shell", "exec", "bash"],
+    label: "Terminal",
+    permission: "app.terminal",
+    to: "/app/$appId/terminal",
+  },
+  {
+    icon: Folder,
+    id: "files",
+    keywords: ["data", "volumes", "upload"],
+    label: "Files",
+    permission: "app.files.read",
+    to: "/app/$appId/files",
+  },
+  {
+    icon: Network,
+    id: "network",
+    keywords: ["ports", "databases", "connections"],
+    label: "Network",
+    permission: "app.read",
+    to: "/app/$appId/network",
+  },
+  {
+    icon: FileCode2,
+    id: "info",
+    keywords: ["settings", "source", "dockerfile", "compose", "image"],
+    label: "Info",
+    permission: "app.read",
+    to: "/app/$appId/info",
+  },
+] as const satisfies ReadonlyArray<AppDestination>
+
+// App permissions are granted on a Relay, for all of its apps.
+export function canAccessAppPermission(
+  capabilities: NavigationAccessCapabilities,
+  app: { relayId: string },
+  permission: AccessPermission
+): boolean {
+  if (capabilities.isPlatformAdmin) return true
+  return capabilities.grants.some(
+    (grant) =>
+      grant.relayId === app.relayId &&
+      grant.resourceType === "relay" &&
+      grant.resourceId === app.relayId &&
+      grantHasPermission(grant, permission)
+  )
+}
+
+export function accessibleDestinationsForApp(
+  app: { relayId: string },
+  capabilities: NavigationAccessCapabilities
+): ReadonlyArray<AppDestination> {
+  const destinations: ReadonlyArray<AppDestination> = appDestinations
+  return destinations.filter((destination) =>
+    canAccessAppPermission(capabilities, app, destination.permission)
+  )
+}
+
+export function appDestinationHref(
+  destination: AppDestination,
+  routeId: string
+): string {
+  return destination.to.replace("$appId", encodeURIComponent(routeId))
+}
+
 export function accessibleInfrastructureDestinations(
   capabilities: NavigationAccessCapabilities
 ) {
@@ -415,6 +513,9 @@ export function canAccessInfrastructureDestination(
   }
   if (destination.access === "platform-admin") {
     return capabilities.isPlatformAdmin
+  }
+  if (destination.access === "app-read") {
+    return hasScopedPermission(capabilities, "app.read", ["relay"])
   }
   if (destination.access === "instance-read") {
     return (

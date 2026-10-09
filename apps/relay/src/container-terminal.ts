@@ -8,7 +8,6 @@ import type {
   DatabaseTerminalEnd,
   DatabaseTerminalEndReason,
   HearthDatabaseTerminalOutput,
-  RelayDatabaseTerminalAttach,
   RelayDatabaseTerminalAttached,
   RelayManagedDatabase,
 } from "@workspace/contracts"
@@ -18,10 +17,11 @@ import { Result } from "effect"
 import type { RelayConfig } from "./config.js"
 import { forkPromise, recoverPromise } from "./effect/promise.js"
 
-// Each person gets one terminal session per database. It belongs to the Relay,
-// so it outlives tabs, devices, and Hearth restarts: Hearth attaches viewers,
-// the Relay pushes their output to Hearth, and a session nobody views ends
-// after its idle timeout. Relay restarts end every session.
+// Each person gets one terminal session per target: a database's client, or a
+// shell in one of an app's services. It belongs to the Relay, so it outlives
+// tabs, devices, and Hearth restarts: Hearth attaches viewers, the Relay
+// pushes their output to Hearth, and a session nobody views ends after its
+// idle timeout. Relay restarts end every session.
 
 // Sessions keep a terminal's memory each, so a Relay holds a bounded number.
 const MAX_SESSIONS = 64
@@ -63,6 +63,26 @@ const { SerializeAddon: HeadlessSerializeAddon } =
     SerializeAddon: new () => SerializeAddon
   }
 
+// What a terminal session runs, and where.
+export interface TerminalTarget {
+  // Names the session alongside its owner: a database's ID, or an app's
+  // service.
+  readonly key: string
+  readonly containerId: string | null
+  readonly running: boolean
+  readonly command: ReadonlyArray<string>
+  readonly environment: ReadonlyArray<string>
+  // Why a session can't start while the container isn't running.
+  readonly stoppedMessage: string
+}
+
+export interface TerminalAttach {
+  readonly attachmentId: string
+  readonly cols: number
+  readonly idleTimeoutMs: number
+  readonly rows: number
+}
+
 // Distinguishes this Relay process's sessions from a previous one's.
 const BOOT_ID = randomBytes(6).toString("base64url")
 
@@ -102,7 +122,6 @@ interface TerminalSession {
   // The last change the screen has applied; snapshots are in this state.
   appliedSeq: number
   containerId: string
-  databaseId: string
   ending: DatabaseTerminalEndReason | null
   // Settles once ending has finished; set as soon as it starts.
   finished: Promise<void> | null
@@ -130,12 +149,12 @@ interface TerminalSession {
   viewers: Map<string, Viewer>
 }
 
-export class DatabaseTerminals {
+export class ContainerTerminals {
   readonly #config: Pick<RelayConfig, "dockerSocket">
   readonly #sessions = new Map<string, TerminalSession>()
   readonly #attachments = new Map<string, TerminalSession>()
   readonly #endings = new Map<string, DatabaseTerminalEnd>()
-  // The attach in progress per person and database, which the next one waits
+  // The attach in progress per person and target, which the next one waits
   // for.
   readonly #attaching = new Map<string, Promise<unknown>>()
   #sweeper: ReturnType<typeof setInterval> | null = null
@@ -144,24 +163,24 @@ export class DatabaseTerminals {
     this.#config = config
   }
 
-  // Attaches and restarts run one at a time per person and database, so
-  // pages opening together share one session and a restart can't race them.
+  // Attaches and restarts run one at a time per person and target, so pages
+  // opening together share one session and a restart can't race them.
   attach(
     owner: string,
-    database: RelayManagedDatabase,
-    input: RelayDatabaseTerminalAttach,
+    target: TerminalTarget,
+    input: TerminalAttach,
     push: PushTerminalOutput
   ): Promise<RelayDatabaseTerminalAttached> {
-    const key = sessionKey(owner, database.id)
+    const key = sessionKey(owner, target.key)
     return this.#exclusive(key, () =>
-      this.#attachNow(key, owner, database, input, push)
+      this.#attachNow(key, owner, target, input, push)
     )
   }
 
-  // Ends the person's session on this database, if any; their pages then
+  // Ends the person's session on this target, if any; their pages then
   // attach to a new one.
-  restart(owner: string, databaseId: string) {
-    const key = sessionKey(owner, databaseId)
+  restart(owner: string, targetKey: string) {
+    const key = sessionKey(owner, targetKey)
     return this.#exclusive(key, async () => {
       const session = this.#sessions.get(key)
       if (session) await this.#end(session, "restarted")
@@ -190,8 +209,8 @@ export class DatabaseTerminals {
   async #attachNow(
     key: string,
     owner: string,
-    database: RelayManagedDatabase,
-    input: RelayDatabaseTerminalAttach,
+    target: TerminalTarget,
+    input: TerminalAttach,
     push: PushTerminalOutput
   ): Promise<RelayDatabaseTerminalAttached> {
     let session = this.#sessions.get(key)
@@ -201,7 +220,7 @@ export class DatabaseTerminals {
       await session.finished
       session = this.#sessions.get(key)
     }
-    session ??= await this.#start(key, database, input)
+    session ??= await this.#start(key, target, input)
     session.idleTimeoutMs = input.idleTimeoutMs
     if (session.idleTimer) clearTimeout(session.idleTimer)
     session.idleTimer = null
@@ -257,8 +276,8 @@ export class DatabaseTerminals {
     return { detached: true }
   }
 
-  write(owner: string, databaseId: string, sessionId: string, data: string) {
-    const session = this.#current(owner, databaseId, sessionId)
+  write(owner: string, targetKey: string, sessionId: string, data: string) {
+    const session = this.#current(owner, targetKey, sessionId)
     session.socket.write(data)
     return { accepted: true }
   }
@@ -267,13 +286,13 @@ export class DatabaseTerminals {
   // other page hears that another page is in control.
   async claim(
     owner: string,
-    databaseId: string,
+    targetKey: string,
     sessionId: string,
     attachmentId: string,
     rows: number,
     cols: number
   ) {
-    const session = this.#current(owner, databaseId, sessionId)
+    const session = this.#current(owner, targetKey, sessionId)
     if (session.viewers.get(attachmentId)?.owner !== owner) {
       throw new Error("This page is no longer attached to the session")
     }
@@ -325,8 +344,8 @@ export class DatabaseTerminals {
     return next.seq
   }
 
-  #current(owner: string, databaseId: string, sessionId: string) {
-    const session = this.#sessions.get(sessionKey(owner, databaseId))
+  #current(owner: string, targetKey: string, sessionId: string) {
+    const session = this.#sessions.get(sessionKey(owner, targetKey))
     // Another person's session is indistinguishable from a missing one.
     if (!session || session.id !== sessionId || session.ending) {
       throw new Error("The terminal session has ended")
@@ -334,23 +353,18 @@ export class DatabaseTerminals {
     return session
   }
 
-  async #start(
-    key: string,
-    database: RelayManagedDatabase,
-    input: RelayDatabaseTerminalAttach
-  ) {
-    const containerId = database.containerId
-    if (!containerId || database.observedState !== "running") {
-      throw new Error("Start the database to open its terminal")
+  async #start(key: string, target: TerminalTarget, input: TerminalAttach) {
+    const containerId = target.containerId
+    if (!containerId || !target.running) {
+      throw new Error(target.stoppedMessage)
     }
     if (this.#sessions.size >= MAX_SESSIONS) {
       throw new Error(
-        "This Relay has too many open database terminals. Try again later."
+        "This Relay has too many open terminals. Try again later."
       )
     }
     const sessionId = `${BOOT_ID}.${randomBytes(18).toString("base64url")}`
     const pidFile = `${PID_FILE_PREFIX}${sessionId}`
-    const client = terminalClient(database, input.username, input.password)
     const created = await this.#dockerJson<{ Id: string }>(
       "POST",
       `/containers/${encodeURIComponent(containerId)}/exec`,
@@ -363,9 +377,9 @@ export class DatabaseTerminals {
           "-c",
           'echo $$ > "$0" && exec "$@"',
           pidFile,
-          ...client.command,
+          ...target.command,
         ],
-        Env: [...client.environment, "TERM=xterm-256color", "LANG=C.UTF-8"],
+        Env: [...target.environment, "TERM=xterm-256color", "LANG=C.UTF-8"],
         Tty: true,
       }
     )
@@ -390,7 +404,6 @@ export class DatabaseTerminals {
         },
       ],
       containerId,
-      databaseId: database.id,
       ended: null,
       ending: null,
       execId: created.Id,
@@ -595,25 +608,22 @@ export class DatabaseTerminals {
     return state?.State?.Running === true
   }
 
-  // Clients left by a Relay that stopped while terminals were open.
-  async sweep(databases: ReadonlyArray<RelayManagedDatabase>) {
+  // Clients left by a Relay that stopped while terminals were open, in
+  // these running containers.
+  async sweep(containerIds: ReadonlyArray<string>) {
     await Promise.all(
-      databases.flatMap(({ containerId, observedState }) =>
-        containerId && observedState === "running"
-          ? [
-              // One unreachable database shouldn't stop the others' sweep.
-              recoverPromise(
-                () =>
-                  this.#runDetached(containerId, [
-                    "sh",
-                    "-c",
-                    `${HANG_UP_FUNCTION}; for file in "$0"*; do [ -f "$file" ] && hang_up "$file"; done`,
-                    PID_FILE_PREFIX,
-                  ]),
-                () => undefined
-              ),
-            ]
-          : []
+      containerIds.map((containerId) =>
+        // One unreachable container shouldn't stop the others' sweep.
+        recoverPromise(
+          () =>
+            this.#runDetached(containerId, [
+              "sh",
+              "-c",
+              `${HANG_UP_FUNCTION}; for file in "$0"*; do [ -f "$file" ] && hang_up "$file"; done`,
+              PID_FILE_PREFIX,
+            ]),
+          () => undefined
+        )
       )
     )
   }
@@ -816,8 +826,8 @@ class SequenceBoundary {
   }
 }
 
-function sessionKey(owner: string, databaseId: string) {
-  return `${owner}\u0000${databaseId}`
+function sessionKey(owner: string, targetKey: string) {
+  return `${owner}\u0000${targetKey}`
 }
 
 function isAccepted(reply: unknown) {
@@ -828,9 +838,44 @@ function isAccepted(reply: unknown) {
   )
 }
 
-// The engine's own client, signed in as the database's user. Passwords go
-// through the environment the clients read, never the command line.
-function terminalClient(
+// A database's terminal: the engine's own client, signed in as the
+// database's user. Passwords go through the environment the clients read,
+// never the command line.
+export function databaseTerminalTarget(
+  database: RelayManagedDatabase,
+  username: string,
+  password: string
+): TerminalTarget {
+  return {
+    ...databaseClient(database, username, password),
+    containerId: database.containerId,
+    key: database.id,
+    running: database.observedState === "running",
+    stoppedMessage: "Start the database to open its terminal",
+  }
+}
+
+// A login shell in one of an app's containers, bash where the image has it.
+export function appTerminalTarget(
+  appId: string,
+  service: string,
+  container: { id: string; running: boolean } | null
+): TerminalTarget {
+  return {
+    command: [
+      "sh",
+      "-c",
+      "if command -v bash >/dev/null 2>&1; then exec bash -l; else exec sh -l; fi",
+    ],
+    containerId: container?.id ?? null,
+    environment: [],
+    key: `app:${appId}:${service}`,
+    running: container?.running ?? false,
+    stoppedMessage: `Start ${service} to open its terminal`,
+  }
+}
+
+function databaseClient(
   database: RelayManagedDatabase,
   username: string,
   password: string

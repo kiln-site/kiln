@@ -26,11 +26,23 @@ import {
   type ServerAction,
 } from "@/lib/instance-power-state"
 
+// Takes the place of Start and Stop, which stay in the actions menu, for kinds
+// whose main action is something else, like an app's Deploy.
+export interface WorkspacePrimaryAction {
+  disabled: boolean
+  icon: React.ReactNode
+  label: string
+  pending: boolean
+  pendingLabel: string
+  onClick: () => void
+}
+
 export function WorkspacePowerControls({
   action,
   killWarning,
   noun,
   powerPermissions,
+  primaryAction,
   target,
   onAction,
   relayConnected,
@@ -41,6 +53,7 @@ export function WorkspacePowerControls({
   // Lowercase, for example "server".
   noun: string
   powerPermissions: Record<ServerAction, boolean>
+  primaryAction?: WorkspacePrimaryAction
   target: {
     name: string
     observedState: RelayObservedState
@@ -51,7 +64,9 @@ export function WorkspacePowerControls({
 }) {
   const [serverActionsOpen, setServerActionsOpen] = React.useState(false)
   const [confirmKill, setConfirmKill] = React.useState(false)
-  if (!Object.values(powerPermissions).some(Boolean)) return null
+  if (!Object.values(powerPermissions).some(Boolean) && !primaryAction) {
+    return null
+  }
   const capitalizedNoun = `${noun.charAt(0).toUpperCase()}${noun.slice(1)}`
 
   const isRunning = target.observedState === "running"
@@ -83,36 +98,55 @@ export function WorkspacePowerControls({
 
   return (
     <div className="col-start-2 row-start-1 flex items-center justify-end gap-1.5 xl:col-start-3">
-      <Button
-        variant="outline"
-        size="sm"
-        className={
-          powerIsOn
-            ? "hidden h-9 w-[6.5rem] justify-center gap-1.5 !border-red-500/65 !bg-red-600 px-3 text-xs !text-white shadow-none hover:!border-red-400 hover:!bg-red-500 disabled:!border-red-500/35 disabled:!bg-red-600/45 disabled:!text-white/70 md:inline-flex"
-            : "hidden h-9 w-[6.5rem] justify-center gap-1.5 !border-blue-500/65 !bg-blue-600 px-3 text-xs !text-white shadow-none hover:!border-blue-400 hover:!bg-blue-500 md:inline-flex"
-        }
-        disabled={powerIsOn ? stopUnavailable : startUnavailable}
-        onClick={() => runAction(powerIsOn ? "stop" : "start")}
-      >
-        {powerIsTransitioning ? (
-          <LoaderCircle className="animate-spin" />
-        ) : powerIsOn ? (
-          <CircleStop />
-        ) : (
-          <Play />
-        )}
-        {action === "start"
-          ? "Starting"
-          : action === "stop" || action === "restart" || isStopping
-            ? "Stopping"
-            : isProvisioning
-              ? provisioningFailed
-                ? "Failed"
-                : "Provisioning"
-              : powerIsOn
-                ? "Stop"
-                : "Start"}
-      </Button>
+      {primaryAction ? (
+        <Button
+          variant="outline"
+          size="sm"
+          className="h-9 min-w-[6.5rem] justify-center gap-1.5 !border-blue-500/65 !bg-blue-600 px-3 text-xs !text-white shadow-none hover:!border-blue-400 hover:!bg-blue-500 disabled:!border-blue-500/35 disabled:!bg-blue-600/45 disabled:!text-white/70"
+          disabled={primaryAction.disabled || primaryAction.pending}
+          onClick={primaryAction.onClick}
+        >
+          {primaryAction.pending ? (
+            <LoaderCircle className="animate-spin" />
+          ) : (
+            primaryAction.icon
+          )}
+          {primaryAction.pending
+            ? primaryAction.pendingLabel
+            : primaryAction.label}
+        </Button>
+      ) : (
+        <Button
+          variant="outline"
+          size="sm"
+          className={
+            powerIsOn
+              ? "hidden h-9 w-[6.5rem] justify-center gap-1.5 !border-red-500/65 !bg-red-600 px-3 text-xs !text-white shadow-none hover:!border-red-400 hover:!bg-red-500 disabled:!border-red-500/35 disabled:!bg-red-600/45 disabled:!text-white/70 md:inline-flex"
+              : "hidden h-9 w-[6.5rem] justify-center gap-1.5 !border-blue-500/65 !bg-blue-600 px-3 text-xs !text-white shadow-none hover:!border-blue-400 hover:!bg-blue-500 md:inline-flex"
+          }
+          disabled={powerIsOn ? stopUnavailable : startUnavailable}
+          onClick={() => runAction(powerIsOn ? "stop" : "start")}
+        >
+          {powerIsTransitioning ? (
+            <LoaderCircle className="animate-spin" />
+          ) : powerIsOn ? (
+            <CircleStop />
+          ) : (
+            <Play />
+          )}
+          {action === "start"
+            ? "Starting"
+            : action === "stop" || action === "restart" || isStopping
+              ? "Stopping"
+              : isProvisioning
+                ? provisioningFailed
+                  ? "Failed"
+                  : "Provisioning"
+                : powerIsOn
+                  ? "Stop"
+                  : "Start"}
+        </Button>
+      )}
       <Popover
         open={serverActionsOpen}
         onOpenChange={(open) => {

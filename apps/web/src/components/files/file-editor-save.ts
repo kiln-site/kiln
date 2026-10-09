@@ -10,7 +10,7 @@ import {
   relayDirectoryQueryOptions,
   relayFileEntryQueryOptions,
 } from "@/lib/query-options"
-import type { InstanceWorkspaceInstance } from "@/lib/relay-selectors"
+import type { FileWorkspaceInstance } from "@/lib/relay-selectors"
 import { snbtDiagnosticForEditor } from "@/lib/snbt-validation"
 import { saveRelayFile } from "@/server/relay"
 
@@ -99,7 +99,7 @@ export async function saveEditorChanges(
 
 export function useFileSaveAction(
   file: RelayFileContent,
-  instance: InstanceWorkspaceInstance,
+  instance: FileWorkspaceInstance,
   sessionStore: EditorSessionStore
 ) {
   const queryClient = useQueryClient()

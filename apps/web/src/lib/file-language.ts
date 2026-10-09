@@ -1,5 +1,6 @@
 export type FileLanguage = {
   id:
+    | "dockerfile"
     | "ini"
     | "json"
     | "log"
@@ -25,6 +26,13 @@ export function fileLanguageForPath(path: string): FileLanguage {
     lowerPath.endsWith(".dat_old")
   ) {
     return { id: "snbt", label: "SNBT" }
+  }
+  if (
+    filename === "dockerfile" ||
+    filename.startsWith("dockerfile.") ||
+    filename.endsWith(".dockerfile")
+  ) {
+    return { id: "dockerfile", label: "Dockerfile" }
   }
   if (lowerPath.endsWith(".json")) return { id: "json", label: "JSON" }
   if (lowerPath.endsWith(".json5")) return { id: "json", label: "JSON5" }

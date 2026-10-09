@@ -24,7 +24,7 @@ import { FileViewer, queryErrorMessage } from "@/components/files/file-viewer"
 import { refreshFileQueries } from "@/components/files/file-query-options"
 import { FileTreeIndex } from "@/components/files/file-tree-index"
 import { relayRootDirectoryQueryOptions } from "@/lib/query-options"
-import type { InstanceWorkspaceInstance } from "@/lib/relay-selectors"
+import type { FileWorkspaceInstance } from "@/lib/relay-selectors"
 import {
   warmSyntaxCodeEditorModule,
   warmSyntaxCodeEditorModuleWhenIdle,
@@ -47,8 +47,9 @@ const InitializedFileTreePanel = React.memo(function InitializedFileTreePanel({
 })
 
 interface FileWorkspaceProps {
-  instance: InstanceWorkspaceInstance
-  serverId: string
+  instance: FileWorkspaceInstance
+  // Where file paths live in the URL: a server's or an app's files route.
+  route: { kind: "app" | "server"; id: string }
   active: boolean
   routeFilePath?: string
   canShare: boolean
@@ -84,30 +85,31 @@ export function FileWorkspace(props: FileWorkspaceProps) {
       if (currentPath === path) return
       if (path) warmSyntaxCodeEditorModule()
 
-      const nextLocation = router.buildLocation({
-        to: "/server/$serverId/files/$",
-        params: { serverId: props.serverId, _splat: path },
-      })
+      const location =
+        props.route.kind === "app"
+          ? ({
+              to: "/app/$appId/files/$",
+              params: { appId: props.route.id, _splat: path },
+            } as const)
+          : ({
+              to: "/server/$serverId/files/$",
+              params: { serverId: props.route.id, _splat: path },
+            } as const)
+      const nextLocation = router.buildLocation(location)
       const nextUrl = new URL(nextLocation.href, window.location.href).href
       selectionStore.navigate(path, window.location.href, nextUrl)
       if (!props.active) return
 
-      void router
-        .navigate({
-          to: "/server/$serverId/files/$",
-          params: { serverId: props.serverId, _splat: path },
-          resetScroll: false,
-        })
-        .then(() => {
-          if (!path.endsWith("/") || window.location.pathname.endsWith("/")) {
-            return
-          }
-          const canonical = new URL(window.location.href)
-          canonical.pathname = `${canonical.pathname}/`
-          window.history.replaceState(window.history.state, "", canonical)
-        })
+      void router.navigate({ ...location, resetScroll: false }).then(() => {
+        if (!path.endsWith("/") || window.location.pathname.endsWith("/")) {
+          return
+        }
+        const canonical = new URL(window.location.href)
+        canonical.pathname = `${canonical.pathname}/`
+        window.history.replaceState(window.history.state, "", canonical)
+      })
     },
-    [props.active, props.serverId, router, selectionStore]
+    [props.active, props.route.id, props.route.kind, router, selectionStore]
   )
 
   return (
@@ -126,7 +128,7 @@ export function FileWorkspace(props: FileWorkspaceProps) {
 }
 
 interface FileWorkspaceSurfaceProps {
-  instance: InstanceWorkspaceInstance
+  instance: FileWorkspaceInstance
   selectionStore: FileSelectionStore
   canShare: boolean
   canWrite: boolean

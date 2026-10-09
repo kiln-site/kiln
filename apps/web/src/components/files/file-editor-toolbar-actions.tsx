@@ -57,7 +57,7 @@ import {
 import { copyToClipboard } from "@/components/files/file-viewer-toolbar"
 import { queryKeys, relayFileActivityQueryOptions } from "@/lib/query-options"
 import { redactSensitiveText } from "@/lib/redaction"
-import type { InstanceWorkspaceInstance } from "@/lib/relay-selectors"
+import type { FileWorkspaceInstance } from "@/lib/relay-selectors"
 import { updateRelayFilePin, uploadToMclogs } from "@/server/relay"
 
 function formatName(path: string) {
@@ -69,7 +69,7 @@ function useEditorShareAction({
   path,
   sessionStore,
 }: {
-  instance: InstanceWorkspaceInstance
+  instance: FileWorkspaceInstance
   path: string
   sessionStore: EditorSessionStore
 }) {
@@ -111,7 +111,7 @@ function EditorShareButton({
   path,
   sessionStore,
 }: {
-  instance: InstanceWorkspaceInstance
+  instance: FileWorkspaceInstance
   loading: boolean
   path: string
   sessionStore: EditorSessionStore
@@ -331,7 +331,7 @@ function EditorOverflowMenu({
   file: RelayFileContent
   filePath: string
   fileReadOnly: boolean
-  instance: InstanceWorkspaceInstance
+  instance: FileWorkspaceInstance
   loading: boolean
   preferencesStore: FileEditorPreferencesStore
   saveFile: SaveFileRevision
@@ -449,7 +449,7 @@ function EditorShareActionMenuItem({
   path,
   sessionStore,
 }: {
-  instance: InstanceWorkspaceInstance
+  instance: FileWorkspaceInstance
   loading: boolean
   path: string
   sessionStore: EditorSessionStore
@@ -589,7 +589,7 @@ function EditorDownloadActionMenuItem({
   loading,
   path,
 }: {
-  instance: InstanceWorkspaceInstance
+  instance: FileWorkspaceInstance
   loading: boolean
   path: string
 }) {
@@ -622,7 +622,7 @@ export function EditorDownloadButton({
   loading,
   path,
 }: {
-  instance: InstanceWorkspaceInstance
+  instance: FileWorkspaceInstance
   loading: boolean
   path: string
 }) {
@@ -671,7 +671,7 @@ function EditorMobileOverflowMenu({
   file: RelayFileContent
   filePath: string
   fileReadOnly: boolean
-  instance: InstanceWorkspaceInstance
+  instance: FileWorkspaceInstance
   loading: boolean
   preferencesStore: FileEditorPreferencesStore
   saveFile: SaveFileRevision
@@ -765,7 +765,7 @@ function EditorMobileOverflowMenu({
   )
 }
 
-function useFilePinAction(instance: InstanceWorkspaceInstance, path: string) {
+function useFilePinAction(instance: FileWorkspaceInstance, path: string) {
   const queryClient = useQueryClient()
   const selectPinned = React.useCallback(
     (activity: RelayFileActivity) =>
@@ -822,7 +822,7 @@ function FilePinActionMenuItem({
 }: {
   canWrite: boolean
   editorLoading: boolean
-  instance: InstanceWorkspaceInstance
+  instance: FileWorkspaceInstance
   path: string
 }) {
   const { error, loading, pinned, pinning, setPinned } = useFilePinAction(

@@ -21,6 +21,7 @@ import * as Sentry from "@sentry/node"
 import ZipStream from "zip-stream"
 
 import {
+  appIdFromFileRoot,
   projectRelayInstanceOverview,
   RelayBrowserCapabilitySchema,
   RelayBrowserRenewSchema,
@@ -60,7 +61,11 @@ import {
 import type { ConsoleSource, ConsoleSources } from "./console-sources.js"
 import { actionsForRole } from "./permissions.js"
 import { MAX_TRANSFER_BYTES } from "./files.js"
-import type { ArchiveDownloadEntry, FilesystemDriver } from "./files.js"
+import type {
+  ArchiveDownloadEntry,
+  FileRoot,
+  FilesystemDriver,
+} from "./files.js"
 import type { RelayIdentity } from "./effect/identity.js"
 import { ensuringPromise, forkPromise } from "./effect/promise.js"
 import type { RelayClientGrant, RelayStateStore } from "./effect/state.js"
@@ -129,6 +134,8 @@ const BrowserPublicKeySchema = BrowserAuthSchema.fields.publicKeyJwk
 
 const BrowserSubscribeSchema = Schema.Struct({
   instanceId: Schema.String,
+  // One of the resource's outputs, such as an app's deployment log.
+  stream: Schema.optionalKey(Schema.String.check(Schema.isMaxLength(128))),
   type: Schema.Literal("console.subscribe"),
   v: Schema.Literal(1),
 })
@@ -178,6 +185,11 @@ export interface BrowserSocketOptions {
   readonly consoleSources: ConsoleSources
   readonly docker: DockerDriver
   readonly filesystem: FilesystemDriver
+  // Serves app data directories, addressed as `app:<appId>`.
+  readonly appFiles?: {
+    readonly filesystem: FilesystemDriver
+    readonly root: (appId: string) => Promise<FileRoot>
+  }
   readonly identity: RelayIdentity
   readonly runEffect: <T, E>(effect: Effect.Effect<T, E>) => Promise<T>
   readonly server: Server
@@ -448,8 +460,13 @@ function authenticateBrowser(
       const resource: RelayConsoleResource = {
         id: capability.instanceId,
         kind: capabilityResourceKind(capability),
+        ...(subscription.stream ? { stream: subscription.stream } : {}),
       }
-      const source = options.consoleSources(resource.kind, resource.id)
+      const source = options.consoleSources(
+        resource.kind,
+        resource.id,
+        resource.stream
+      )
       if (
         subscription.instanceId !== resource.id ||
         (capability.version === 2 && capability.operation !== "console") ||
@@ -954,7 +971,9 @@ function validateCapabilityV2(
   )
   const writes = capability.actions.some(
     (action) =>
-      action === "instance.console.write" || action === "instance.files.upload"
+      action === "instance.console.write" ||
+      action === "instance.files.upload" ||
+      action === "app.files.upload"
   )
   const maximumLease = writes
     ? BROWSER_WRITE_LEASE_MAX_MS
@@ -991,6 +1010,11 @@ const browserCapabilityActions: Record<
   RelayBrowserResourceKind,
   Record<RelayBrowserCapabilityV2["operation"], ReadonlyArray<string>>
 > = {
+  app: {
+    console: [relayConsoleReadActions.app],
+    file: ["app.files.download", "app.files.upload"],
+    resources: [],
+  },
   database: {
     console: [relayConsoleReadActions.database],
     file: [],
@@ -1232,14 +1256,20 @@ async function handleBrowserFileRequest(
 
   await runBrowser(
     browserOperation(async () => {
-      const instance = await options.docker.findInstance(instanceId)
-      if (!instance) {
+      const appId = appIdFromFileRoot(instanceId)
+      const filesystem = appId
+        ? options.appFiles?.filesystem
+        : options.filesystem
+      const instance = appId
+        ? await options.appFiles?.root(appId)
+        : await options.docker.findInstance(instanceId)
+      if (!instance || !filesystem) {
         browserJson(response, 404, { error: "Instance not found" }, origin)
         return
       }
       if (method === "PUT") {
         const uploaded = await options.runEffect(
-          options.filesystem.upload(instance, path, request, transfer.active)
+          filesystem.upload(instance, path, request, transfer.active)
         )
         void auditBrowserTransfer(
           options,
@@ -1252,7 +1282,7 @@ async function handleBrowserFileRequest(
       }
       if (downloadForm?.archivePaths) {
         await options.runEffect(
-          options.filesystem.withArchiveDownload(
+          filesystem.withArchiveDownload(
             instance,
             downloadForm.archivePaths,
             (entries) =>
@@ -1288,7 +1318,7 @@ async function handleBrowserFileRequest(
         return
       }
       await options.runEffect(
-        options.filesystem.withDownload(instance, path, (download) =>
+        filesystem.withDownload(instance, path, (download) =>
           Effect.tryPromise({
             try: async () => {
               const compression = downloadForm?.compression ?? "none"
@@ -1422,6 +1452,14 @@ async function handleBrowserFileRequest(
   return true
 }
 
+// Transfers of an app's files (`app:<appId>`) need its own file actions.
+function fileTransferAction(method: BrowserFileMethod, instanceId: string) {
+  const app = appIdFromFileRoot(instanceId) !== null
+  if (method === "PUT")
+    return app ? "app.files.upload" : "instance.files.upload"
+  return app ? "app.files.download" : "instance.files.download"
+}
+
 async function authenticateBrowserRequest(input: {
   credentials?: BrowserRequestCredentials
   instanceId: string
@@ -1444,8 +1482,7 @@ async function authenticateBrowserRequest(input: {
     input.credentials?.authorization ?? header(input.request, "authorization")
   if (!authorization.startsWith("Kiln ")) throw new Error("Missing capability")
   const parsed = decodeCapability(authorization.slice(5))
-  const requiredAction =
-    input.method === "PUT" ? "instance.files.upload" : "instance.files.download"
+  const requiredAction = fileTransferAction(input.method, input.instanceId)
   const publicKeyJwk = Schema.decodeUnknownSync(BrowserPublicKeySchema)(
     JSON.parse(
       Buffer.from(
@@ -1611,10 +1648,7 @@ async function auditBrowserTransfer(
             instanceId: authentication.instanceId,
             method,
             outcome,
-            permission:
-              method === "PUT"
-                ? "instance.files.upload"
-                : "instance.files.download",
+            permission: fileTransferAction(method, authentication.instanceId),
             subject: authentication.subject,
           },
           event:
@@ -2050,7 +2084,7 @@ class ConsoleHubRegistry {
     resource: RelayConsoleResource,
     source: ConsoleSource
   ): Promise<void> {
-    const key = `${resource.kind}:${resource.id}`
+    const key = `${resource.kind}:${resource.id}:${resource.stream ?? ""}`
     this.remove(socket)
     this.#subscriptions.set(socket, key)
     let hubEffect: Effect.Effect<ConsoleHub, Error>

@@ -495,6 +495,33 @@ export class FakeDocker {
     if (first === "image" && second === "inspect") {
       return this.#inspect(arguments_.slice(2), "image")
     }
+    if (first === "image" && second === "ls") {
+      const { values } = parseFlags(arguments_.slice(2), [
+        "--filter",
+        "--format",
+      ])
+      const filters = values.get("--filter") ?? []
+      return [...this.images.entries()]
+        .filter(([, labels]) =>
+          filters.every((filter) => {
+            const [key, value = ""] = splitOnce(filter, "=")
+            if (key !== "label") {
+              return this.#unsupported(`docker image ls --filter ${filter}`)
+            }
+            const [label, expected] = splitOnce(value, "=")
+            return expected === undefined
+              ? Object.hasOwn(labels, label)
+              : labels[label] === expected
+          })
+        )
+        .map(([image]) => `${image}\n`)
+        .join("")
+    }
+    if (first === "image" && second === "rm") {
+      const { positional } = parseFlags(arguments_.slice(2), [])
+      for (const image of positional) this.images.delete(image)
+      return ""
+    }
     switch (first) {
       case "start":
         return this.#power("start", rest)
@@ -1177,6 +1204,25 @@ export class FakeDocker {
 
   async #volumeCommand(arguments_: Array<string>): Promise<string> {
     const [subcommand = "", ...rest] = arguments_
+    if (subcommand === "ls") {
+      const { values } = parseFlags(rest, ["--filter", "--format"])
+      const filters = values.get("--filter") ?? []
+      return [...this.volumes.values()]
+        .filter((volume) =>
+          filters.every((filter) => {
+            const [key, value = ""] = splitOnce(filter, "=")
+            if (key !== "label") {
+              return this.#unsupported(`docker volume ls --filter ${filter}`)
+            }
+            const [label, expected] = splitOnce(value, "=")
+            return expected === undefined
+              ? Object.hasOwn(volume.labels, label)
+              : volume.labels[label] === expected
+          })
+        )
+        .map((volume) => `${volume.name}\n`)
+        .join("")
+    }
     if (subcommand === "create") {
       const { positional, values } = parseFlags(rest, ["--label"])
       const [name = ""] = positional

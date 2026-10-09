@@ -68,6 +68,10 @@ import {
 } from "@workspace/contracts"
 
 import type { RelayConfig, RelayInstanceConfig } from "./config.js"
+
+// The directory files are served from, relative to the driver's root: a
+// server's, or an app's data directory.
+export type FileRoot = Pick<RelayInstanceConfig, "directory" | "id">
 import { directoryApparentSizeEffect } from "./disk-usage.js"
 import { RelayFilesystemError } from "./effect/errors.js"
 import { ensuringPromise, promiseEffect } from "./effect/promise.js"
@@ -108,7 +112,7 @@ export class FilesystemDriver {
     this.#config = config
   }
 
-  tree(instance: RelayInstanceConfig) {
+  tree(instance: FileRoot) {
     return Effect.gen({ self: this }, function* () {
       const root = yield* this.#instanceRoot(instance)
       const modifiedAt: Record<string, number> = {}
@@ -195,7 +199,7 @@ export class FilesystemDriver {
     }).pipe(Effect.withSpan("relay.files.tree"))
   }
 
-  directory(instance: RelayInstanceConfig, input: RelayDirectoryPageInput) {
+  directory(instance: FileRoot, input: RelayDirectoryPageInput) {
     return Effect.gen({ self: this }, function* () {
       const root = yield* this.#instanceRoot(instance)
       const requestedDirectory = normalizeDirectoryPath(input.path)
@@ -280,10 +284,7 @@ export class FilesystemDriver {
     }).pipe(Effect.withSpan("relay.files.directory"))
   }
 
-  directorySizes(
-    instance: RelayInstanceConfig,
-    input: RelayDirectorySizesInput
-  ) {
+  directorySizes(instance: FileRoot, input: RelayDirectorySizesInput) {
     return Effect.gen({ self: this }, function* () {
       const root = yield* this.#instanceRoot(instance)
       const paths = [...new Set(input.paths.map(normalizeDirectoryPath))]
@@ -340,7 +341,7 @@ export class FilesystemDriver {
     }).pipe(Effect.withSpan("relay.files.directorySizes"))
   }
 
-  search(instance: RelayInstanceConfig, input: RelayFileSearchPageInput) {
+  search(instance: FileRoot, input: RelayFileSearchPageInput) {
     return Effect.gen({ self: this }, function* () {
       const root = yield* this.#instanceRoot(instance)
       const query = input.query.trim()
@@ -410,7 +411,7 @@ export class FilesystemDriver {
     }).pipe(Effect.withSpan("relay.files.search"))
   }
 
-  entry(instance: RelayInstanceConfig, requestedPath: string) {
+  entry(instance: FileRoot, requestedPath: string) {
     return Effect.gen({ self: this }, function* () {
       yield* validateRelativePath(requestedPath.replace(/\/$/u, ""))
       const root = yield* this.#instanceRoot(instance)
@@ -441,7 +442,7 @@ export class FilesystemDriver {
     }).pipe(Effect.withSpan("relay.files.stat"))
   }
 
-  read(instance: RelayInstanceConfig, requestedPath: string) {
+  read(instance: FileRoot, requestedPath: string) {
     return Effect.gen({ self: this }, function* () {
       const path = yield* this.#existingFile(instance, requestedPath)
       const metadata = yield* filesystemOperation("read.stat", () => stat(path))
@@ -549,11 +550,7 @@ export class FilesystemDriver {
     }).pipe(Effect.withSpan("relay.files.read"))
   }
 
-  write(
-    instance: RelayInstanceConfig,
-    requestedPath: string,
-    input: RelaySaveFileInput
-  ) {
+  write(instance: FileRoot, requestedPath: string, input: RelaySaveFileInput) {
     return Effect.gen({ self: this }, function* () {
       if (requestedPath.toLowerCase().endsWith(".log.gz")) {
         return yield* filesystemFailure(
@@ -610,7 +607,7 @@ export class FilesystemDriver {
     )
   }
 
-  latestLog(instance: RelayInstanceConfig) {
+  latestLog(instance: FileRoot) {
     return Effect.gen({ self: this }, function* () {
       const requestedPath = "logs/latest.log" as const
       const path = yield* this.#existingFile(instance, requestedPath)
@@ -648,7 +645,7 @@ export class FilesystemDriver {
   }
 
   withDownload<TResult, TError, TRequirements>(
-    instance: RelayInstanceConfig,
+    instance: FileRoot,
     requestedPath: string,
     use: (download: {
       file: FileHandle
@@ -706,7 +703,7 @@ export class FilesystemDriver {
   }
 
   withArchiveDownload<TResult, TError, TRequirements>(
-    instance: RelayInstanceConfig,
+    instance: FileRoot,
     requestedPaths: ReadonlyArray<string>,
     use: (
       entries: ReadonlyArray<ArchiveDownloadEntry>
@@ -729,7 +726,7 @@ export class FilesystemDriver {
   }
 
   upload(
-    instance: RelayInstanceConfig,
+    instance: FileRoot,
     requestedPath: string,
     source: AsyncIterable<Uint8Array>,
     authorizeCommit: () => boolean = () => true
@@ -771,7 +768,7 @@ export class FilesystemDriver {
     )
   }
 
-  mutate(instance: RelayInstanceConfig, input: RelayFileMutationInput) {
+  mutate(instance: FileRoot, input: RelayFileMutationInput) {
     return Effect.gen({ self: this }, function* () {
       const root = yield* this.#instanceRoot(instance)
 
@@ -1034,11 +1031,11 @@ export class FilesystemDriver {
     }
   }
 
-  resolveFile(instance: RelayInstanceConfig, requestedPath: string) {
+  resolveFile(instance: FileRoot, requestedPath: string) {
     return this.#existingFile(instance, requestedPath)
   }
 
-  #existingFile(instance: RelayInstanceConfig, requestedPath: string) {
+  #existingFile(instance: FileRoot, requestedPath: string) {
     return Effect.gen({ self: this }, function* () {
       yield* validateRelativePath(requestedPath)
       const root = yield* this.#instanceRoot(instance)
@@ -1060,7 +1057,7 @@ export class FilesystemDriver {
     })
   }
 
-  #instanceRoot(instance: RelayInstanceConfig) {
+  #instanceRoot(instance: FileRoot) {
     const config = this.#config
     return Effect.gen(function* () {
       const configuredRoot = yield* filesystemOperation(

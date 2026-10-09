@@ -6,6 +6,7 @@ import {
 } from "@tanstack/react-query"
 import { useNavigate, useRouterState } from "@tanstack/react-router"
 
+import { AppWorkspaceShell } from "@/components/app/app-workspace"
 import { DatabaseWorkspaceShell } from "@/components/database/database-workspace"
 import { EmptyServerState } from "@/components/empty-server-state"
 import { InfraShell } from "@/components/infra-layout"
@@ -43,6 +44,7 @@ function AppRouteViewport({ children }: { children: React.ReactNode }) {
     select: (state) => {
       const routeId = state.matches.at(-1)?.routeId
       if (routeId?.startsWith("/_app/db/")) return "database"
+      if (routeId?.startsWith("/_app/app/")) return "app"
       return state.matches.some(
         (match) => match.status === "notFound" || match._notFound
       )
@@ -53,6 +55,9 @@ function AppRouteViewport({ children }: { children: React.ReactNode }) {
 
   if (routeFrame === "database") {
     return <DatabaseWorkspaceShell>{children}</DatabaseWorkspaceShell>
+  }
+  if (routeFrame === "app") {
+    return <AppWorkspaceShell>{children}</AppWorkspaceShell>
   }
   if (routeFrame === "not-found") {
     return <NotFoundRouteFrame>{children}</NotFoundRouteFrame>

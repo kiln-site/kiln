@@ -3,7 +3,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test"
 
 import type { ShowToastOptions } from "@workspace/ui/components/sonner"
-import type { InstanceWorkspaceInstance } from "@/lib/relay-selectors"
+import type { FileWorkspaceInstance } from "@/lib/relay-selectors"
 
 const mocks = vi.hoisted(() => ({
   upload: vi.fn(),
@@ -80,7 +80,7 @@ function startUploads(sizes: ReadonlyArray<number>) {
       instance: {
         id: "instance-one",
         relayId: "relay-one",
-      } as InstanceWorkspaceInstance,
+      } as FileWorkspaceInstance,
       onRefresh,
     })
     uploadFiles = action.uploadFiles

@@ -66,7 +66,8 @@ import { getAuthState } from "@/server/auth"
 import { getUpdateOverview } from "@/server/updates"
 import { getScheduleOptions, getSchedules } from "@/server/schedules"
 import type { RelayFleetSnapshot } from "@/lib/relay-fleet"
-import { withDatabaseRelayStatus } from "@/lib/database-relay-status"
+import { withInventoryRelayStatus } from "@/lib/inventory-relay-status"
+import { getAppConfig, getAppDirectory, getApps } from "@/server/apps"
 import {
   backupRunScopesEqual,
   backupRunsInputFromQueryKey,
@@ -119,6 +120,13 @@ export const queryKeys = {
       ["domains", "instances", relayId, instanceId] as const,
     settings: ["domains", "settings"] as const,
   },
+  apps: {
+    all: ["apps"] as const,
+    config: (relayId: string, appId: string) =>
+      ["apps", relayId, appId, "config"] as const,
+    directory: ["apps", "directory"] as const,
+    list: ["apps", "list"] as const,
+  },
   databases: {
     all: ["databases"] as const,
     credential: (relayId: string, databaseId: string) =>
@@ -132,7 +140,14 @@ export const queryKeys = {
     all: ["relay"] as const,
     connection: ["relay", "connection"] as const,
     console: (relayId: string, resource: RelayConsoleResource) =>
-      ["relay", relayId, `${resource.kind}s`, resource.id, "console"] as const,
+      [
+        "relay",
+        relayId,
+        `${resource.kind}s`,
+        resource.id,
+        "console",
+        resource.stream ?? null,
+      ] as const,
     file: (relayId: string, instanceId: string, path: string) =>
       [
         "relay",
@@ -402,6 +417,54 @@ export function managedDatabasesQueryOptions() {
  */
 export async function fetchManagedDatabases(queryClient: QueryClient) {
   const overview = await getManagedDatabases()
+  const statuses = liveRelayStatuses(queryClient)
+  return statuses
+    ? withInventoryRelayStatus(overview, "databases", statuses)
+    : overview
+}
+
+export function appDirectoryQueryOptions() {
+  return queryOptions({
+    queryKey: queryKeys.apps.directory,
+    queryFn: () => getAppDirectory(),
+    refetchOnWindowFocus: false,
+    staleTime: 30_000,
+  })
+}
+
+export function appsQueryOptions() {
+  return queryOptions({
+    queryKey: queryKeys.apps.list,
+    queryFn: ({ client }) => fetchApps(client),
+    refetchOnWindowFocus: "always",
+    // Deployments run on the Relay; follow them until they finish.
+    refetchInterval: (query) =>
+      query.state.data?.apps.some((app) => app.deployment?.state === "running")
+        ? 2_000
+        : false,
+    staleTime: 5_000,
+  })
+}
+
+export async function fetchApps(queryClient: QueryClient) {
+  const overview = await getApps()
+  const statuses = liveRelayStatuses(queryClient)
+  return statuses
+    ? withInventoryRelayStatus(overview, "apps", statuses)
+    : overview
+}
+
+export function appConfigQueryOptions(relayId: string, appId: string) {
+  return queryOptions({
+    queryKey: queryKeys.apps.config(relayId, appId),
+    queryFn: () => getAppConfig({ data: { appId, relayId } }),
+    staleTime: 30_000,
+  })
+}
+
+// The connection cache's live Relay status, which inventory responses can
+// be older than.
+function liveRelayStatuses(queryClient: QueryClient) {
   const connection = queryClient.getQueryData<RelayConnection>(
     queryKeys.relay.connection
   )
@@ -409,16 +472,13 @@ export async function fetchManagedDatabases(queryClient: QueryClient) {
     connection?.status !== "connected" &&
     connection?.status !== "unreachable"
   ) {
-    return overview
+    return null
   }
-  return withDatabaseRelayStatus(
-    overview,
-    new Map(
-      connection.relays.map((relay) => [
-        relay.id,
-        { status: relay.status, updating: relay.updating === true },
-      ])
-    )
+  return new Map(
+    connection.relays.map((relay) => [
+      relay.id,
+      { status: relay.status, updating: relay.updating === true },
+    ])
   )
 }
 

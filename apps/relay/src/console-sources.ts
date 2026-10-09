@@ -4,6 +4,7 @@ import {
   type RelayInstanceLifecycleEvent,
 } from "@workspace/contracts"
 
+import type { AppDriver } from "./apps.js"
 import type { DatabaseDriver } from "./databases.js"
 import type { DockerConsoleSession, DockerDriver } from "./docker.js"
 import type { RelaySnapshotSample } from "./snapshot-hub.js"
@@ -26,14 +27,17 @@ export interface ConsoleSource {
 
 export type ConsoleSources = (
   kind: RelayBrowserResourceKind,
-  id: string
+  id: string,
+  // One of the resource's outputs, for kinds with more than one.
+  stream?: string
 ) => ConsoleSource
 
 export function consoleSources(
   docker: Pick<DockerDriver, "consoleSession" | "containerConsoleSession">,
-  databases: Pick<DatabaseDriver, "target">
+  databases: Pick<DatabaseDriver, "target">,
+  apps: Pick<AppDriver, "consoleSession">
 ): ConsoleSources {
-  return (kind, id) => {
+  return (kind, id, stream) => {
     switch (kind) {
       case "instance":
         return {
@@ -57,6 +61,22 @@ export function consoleSources(
               signal
             )
           },
+        }
+      case "app":
+        return {
+          readAction: relayConsoleReadActions.app,
+          session: (signal) =>
+            apps.consoleSession(
+              id,
+              stream,
+              (containerId, containerSignal) =>
+                docker.containerConsoleSession(
+                  id,
+                  containerId,
+                  containerSignal
+                ),
+              signal
+            ),
         }
       default:
         return kind satisfies never

@@ -59,8 +59,8 @@ describeMysql("database migrations", () => {
             WHERE table_schema = DATABASE()
           `
           // Baseline, the migration ledger, instance favorites, notifications,
-          // and tracked system updates.
-          expect(count).toBe(baselineTables.length + 4)
+          // tracked system updates, and apps.
+          expect(count).toBe(baselineTables.length + 5)
           expect(yield* ledger).toEqual(migrationIds)
           // Only better-auth keeps dates, as DATETIME.
           expect((yield* columnTypes).map((row) => row.dataType)).toEqual([
