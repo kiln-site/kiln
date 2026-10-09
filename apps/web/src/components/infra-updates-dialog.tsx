@@ -933,8 +933,8 @@ const UpdaterDialog = React.memo(function UpdaterDialog({
   const closeButtonRef = React.useRef<HTMLButtonElement>(null)
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      {/* Opaque and unblurred: Firefox and Arc re-blur the backdrop on
-          every frame the changelog scrolls inside a backdrop-filter. */}
+      {/* Opaque and unblurred: a backdrop-filter is redrawn on every frame
+          the changelog scrolls, which Firefox and Arc can't keep up with. */}
       <DialogContent
         aria-describedby={undefined}
         initialFocus={closeButtonRef}
