@@ -1055,12 +1055,7 @@ const UpdateDialogData = React.memo(function UpdateDialogData({
 
   return (
     <>
-      <UpdaterHeader
-        activityStore={activityStore}
-        closeButtonRef={closeButtonRef}
-        open={open}
-        store={store}
-      />
+      <UpdaterHeader closeButtonRef={closeButtonRef} store={store} />
       <UpdateDialogBody
         activityStore={activityStore}
         errorMessage={
@@ -1097,14 +1092,10 @@ const UpdateDialogData = React.memo(function UpdateDialogData({
 const noReleases: ReadonlyArray<PublicKilnRelease> = []
 
 const UpdaterHeader = React.memo(function UpdaterHeader({
-  activityStore,
   closeButtonRef,
-  open,
   store,
 }: {
-  activityStore: SystemUpdateActivityStore
   closeButtonRef: React.RefObject<HTMLButtonElement | null>
-  open: boolean
   store: UpdateDialogViewStore
 }) {
   return (
@@ -1115,7 +1106,6 @@ const UpdaterHeader = React.memo(function UpdaterHeader({
       </DialogTitle>
       <div className="flex shrink-0 items-center gap-0.5">
         <UpdaterChangelogButton store={store} />
-        <UpdaterCheckButton activityStore={activityStore} open={open} />
         <DialogClose
           render={
             <Button
@@ -2118,7 +2108,10 @@ const UpdaterFooter = React.memo(function UpdaterFooter({
           </span>
         </span>
       ) : (
-        <LastCheckedLabel activityStore={activityStore} open={open} />
+        <span className="-ml-2 flex min-w-0 items-center gap-1">
+          <UpdaterCheckButton activityStore={activityStore} open={open} />
+          <LastCheckedLabel activityStore={activityStore} open={open} />
+        </span>
       )}
       <span className="flex shrink-0 items-center gap-1.5">
         {checkFailed ? (
