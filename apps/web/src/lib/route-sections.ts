@@ -4,6 +4,7 @@ export type GlobalSection =
   | "backups"
   | "infra"
   | "automations"
+  | "notifications"
   | "settings"
   | null
 
@@ -15,6 +16,7 @@ export function globalSectionFromRouteId(
   if (routeId?.startsWith("/_app/automations")) return "automations"
   if (routeId === "/_app/activity") return "activity"
   if (routeId === "/_app/access") return "access"
+  if (routeId === "/_app/notifications") return "notifications"
   if (routeId?.startsWith("/_app/settings")) return "settings"
   return null
 }

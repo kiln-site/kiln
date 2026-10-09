@@ -1,23 +1,15 @@
 import * as React from "react"
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
+import { useQuery } from "@tanstack/react-query"
 import { Link } from "@tanstack/react-router"
-import {
-  Bell,
-  ExternalLink,
-  PackageCheck,
-  Rocket,
-  UserMinus,
-  UserPlus,
-  X,
-} from "lucide-react"
+import { Bell } from "lucide-react"
 
 import { Button } from "@workspace/ui/components/button"
 import {
-  Dialog,
-  DialogContent,
-  DialogTitle,
-} from "@workspace/ui/components/dialog"
-import { showToast } from "@workspace/ui/components/sonner"
+  Popover,
+  PopoverAnchor,
+  PopoverContent,
+  PopoverTrigger,
+} from "@workspace/ui/components/popover"
 import {
   Tooltip,
   TooltipContent,
@@ -25,40 +17,39 @@ import {
 } from "@workspace/ui/components/tooltip"
 import { cn } from "@workspace/ui/lib/utils"
 
-import type {
-  KilnNotification,
-  NotificationContent,
-  NotificationResource,
-} from "@/lib/notifications"
 import {
-  clearNotificationsMutationOptions,
-  dismissNotificationMutationOptions,
-  markNotificationsReadMutationOptions,
-  notificationsQueryOptions,
+  NotificationList,
+  useHighlightUnread,
+  useNotificationClearing,
+} from "@/components/notification-list"
+import {
+  notificationInboxQueryOptions,
   selectUnreadNotificationCount,
-} from "@/lib/query-options"
+} from "@/lib/notification-queries"
 
-interface NotificationsDialogStore {
+interface NotificationsPopoverStore {
   close: () => void
   getServerSnapshot: () => boolean
   getSnapshot: () => boolean
   open: () => void
+  setOpen: (open: boolean) => void
   subscribe: (listener: () => void) => () => void
 }
 
-function createNotificationsDialogStore(): NotificationsDialogStore {
+function createNotificationsPopoverStore(): NotificationsPopoverStore {
   let open = false
   const listeners = new Set<() => void>()
-  const publish = (next: boolean) => {
+  const setOpen = (next: boolean) => {
     if (open === next) return
     open = next
     for (const listener of listeners) listener()
   }
   return {
-    close: () => publish(false),
+    close: () => setOpen(false),
     getServerSnapshot: () => false,
     getSnapshot: () => open,
-    open: () => publish(true),
+    open: () => setOpen(true),
+    setOpen,
     subscribe: (listener) => {
       listeners.add(listener)
       return () => listeners.delete(listener)
@@ -66,40 +57,46 @@ function createNotificationsDialogStore(): NotificationsDialogStore {
   }
 }
 
-const NotificationsDialogContext =
-  React.createContext<NotificationsDialogStore | null>(null)
+const NotificationsPopoverContext =
+  React.createContext<NotificationsPopoverStore | null>(null)
 
-function useNotificationsDialogStore(): NotificationsDialogStore {
-  const store = React.useContext(NotificationsDialogContext)
+function useNotificationsPopoverStore(): NotificationsPopoverStore {
+  const store = React.useContext(NotificationsPopoverContext)
   if (!store) {
     throw new Error(
-      "useNotificationsDialogStore must be used inside NotificationsDialogProvider"
+      "useNotificationsPopoverStore must be used inside NotificationsProvider"
     )
   }
   return store
 }
 
-// Triggers only read the stable store, so opening the dialog re-renders the
-// dialog host alone, never the sidebar.
-export const NotificationsDialogProvider = React.memo(
-  function NotificationsDialogProvider({
-    children,
-  }: {
-    children: React.ReactNode
-  }) {
-    const [store] = React.useState(createNotificationsDialogStore)
-    return (
-      <NotificationsDialogContext.Provider value={store}>
-        {children}
-        <NotificationsDialogHost store={store} />
-      </NotificationsDialogContext.Provider>
-    )
-  }
-)
+function useNotificationsPopoverOpen(store: NotificationsPopoverStore) {
+  return React.useSyncExternalStore(
+    store.subscribe,
+    store.getSnapshot,
+    store.getServerSnapshot
+  )
+}
+
+// The bell and the collapsed account menu share one open state, so either can
+// open the popover. Opening it re-renders the popover's owner alone, never the
+// rest of the sidebar.
+export const NotificationsProvider = React.memo(function NotificationsProvider({
+  children,
+}: {
+  children: React.ReactNode
+}) {
+  const [store] = React.useState(createNotificationsPopoverStore)
+  return (
+    <NotificationsPopoverContext.Provider value={store}>
+      {children}
+    </NotificationsPopoverContext.Provider>
+  )
+})
 
 function useUnreadNotificationCount(): number {
   const { data = 0 } = useQuery({
-    ...notificationsQueryOptions(),
+    ...notificationInboxQueryOptions(),
     select: selectUnreadNotificationCount,
   })
   return data
@@ -111,37 +108,91 @@ function unreadLabel(count: number) {
     : `Notifications, ${count > 9 ? "more than 9" : count} unread`
 }
 
+/** The unread total in the accent color, shortened to 9+. */
+function UnreadCountBadge({
+  className,
+  count,
+}: {
+  className?: string
+  count: number
+}) {
+  return (
+    <span
+      aria-hidden
+      className={cn(
+        "grid h-4 min-w-4 place-items-center rounded-full bg-primary px-1 text-[0.625rem] leading-none font-semibold text-primary-foreground tabular-nums",
+        className
+      )}
+    >
+      {count > 9 ? "9+" : count}
+    </span>
+  )
+}
+
 /** The bell beside the Kiln name in the expanded sidebar. */
-export const NotificationsBellButton = React.memo(
-  function NotificationsBellButton({
-    className,
-    tooltipHidden,
-  }: {
-    className?: string
-    tooltipHidden: boolean
-  }) {
-    const store = useNotificationsDialogStore()
-    const unread = useUnreadNotificationCount()
-    return (
+export const NotificationsBell = React.memo(function NotificationsBell({
+  className,
+  tooltipHidden,
+}: {
+  className?: string
+  tooltipHidden: boolean
+}) {
+  const store = useNotificationsPopoverStore()
+  const open = useNotificationsPopoverOpen(store)
+  const unread = useUnreadNotificationCount()
+  return (
+    <Popover open={open} onOpenChange={store.setOpen}>
       <Tooltip>
         <TooltipTrigger asChild>
-          <button
-            type="button"
-            className={cn(
-              "relative grid size-7 shrink-0 place-items-center text-sidebar-foreground/55 transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:ring-2 focus-visible:ring-sidebar-ring/45 focus-visible:outline-none",
-              className
-            )}
-            aria-label={unreadLabel(unread)}
-            onClick={store.open}
-          >
-            <Bell className="size-4" />
-            {unread > 0 ? <UnreadDot className="top-1 right-1" /> : null}
-          </button>
+          <PopoverTrigger asChild>
+            <button
+              type="button"
+              className={cn(
+                "relative grid size-7 shrink-0 place-items-center text-sidebar-foreground/55 transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:ring-2 focus-visible:ring-sidebar-ring/45 focus-visible:outline-none data-[state=open]:bg-sidebar-accent data-[state=open]:text-sidebar-accent-foreground",
+                className
+              )}
+              aria-label={unreadLabel(unread)}
+            >
+              <Bell className={cn("size-4", unread > 0 && "text-primary")} />
+              {unread > 0 ? (
+                <UnreadCountBadge
+                  count={unread}
+                  className="absolute -top-1 -right-1.5 ring-2 ring-sidebar"
+                />
+              ) : null}
+            </button>
+          </PopoverTrigger>
         </TooltipTrigger>
-        <TooltipContent side="right" align="center" hidden={tooltipHidden}>
+        <TooltipContent
+          side="right"
+          align="center"
+          hidden={tooltipHidden || open}
+        >
           Notifications
         </TooltipContent>
       </Tooltip>
+      <NotificationsPopoverContent align="start" />
+    </Popover>
+  )
+})
+
+/**
+ * Anchors the popover to the collapsed sidebar's account avatar, where the
+ * account menu's Notifications item opens it.
+ */
+export const CollapsedNotificationsAnchor = React.memo(
+  function CollapsedNotificationsAnchor({
+    children,
+  }: {
+    children: React.ReactNode
+  }) {
+    const store = useNotificationsPopoverStore()
+    const open = useNotificationsPopoverOpen(store)
+    return (
+      <Popover open={open} onOpenChange={store.setOpen}>
+        <PopoverAnchor className="grid">{children}</PopoverAnchor>
+        <NotificationsPopoverContent align="end" />
+      </Popover>
     )
   }
 )
@@ -152,7 +203,7 @@ export const NotificationsMenuItem = React.memo(function NotificationsMenuItem({
 }: {
   onSelect: () => void
 }) {
-  const store = useNotificationsDialogStore()
+  const store = useNotificationsPopoverStore()
   const unread = useUnreadNotificationCount()
   return (
     <button
@@ -166,318 +217,115 @@ export const NotificationsMenuItem = React.memo(function NotificationsMenuItem({
     >
       <Bell className="size-4" />
       <span className="flex-1">Notifications</span>
-      {unread > 0 ? (
-        <span className="type-label min-w-5 rounded-md bg-primary/15 px-1 text-center text-primary tabular-nums">
-          {unread > 9 ? "9+" : unread}
-        </span>
-      ) : null}
+      {unread > 0 ? <UnreadCountBadge count={unread} /> : null}
     </button>
   )
 })
 
-/** Marks the collapsed account avatar while anything is unread. */
+/** The unread total on the collapsed sidebar's account avatar. */
 export const UnreadNotificationsIndicator = React.memo(
   function UnreadNotificationsIndicator() {
     const unread = useUnreadNotificationCount()
-    return unread > 0 ? <UnreadDot className="top-0.5 right-0.5" /> : null
+    return unread > 0 ? (
+      <UnreadCountBadge
+        count={unread}
+        className="pointer-events-none absolute -top-1 -right-1.5 ring-2 ring-sidebar"
+      />
+    ) : null
   }
 )
 
-function UnreadDot({ className }: { className?: string }) {
+function NotificationsPopoverContent({ align }: { align: "start" | "end" }) {
+  const store = useNotificationsPopoverStore()
+  // Following a link moves focus to the new page; returning it to the bell
+  // would pop the bell's tooltip over that page.
+  const navigatedRef = React.useRef(false)
+  const navigate = React.useCallback(() => {
+    navigatedRef.current = true
+    store.close()
+  }, [store])
+  const handleCloseAutoFocus = React.useCallback((event: Event) => {
+    if (navigatedRef.current) event.preventDefault()
+    navigatedRef.current = false
+  }, [])
   return (
-    <span
-      aria-hidden
-      className={cn(
-        "pointer-events-none absolute size-1.5 rounded-full bg-primary ring-2 ring-sidebar",
-        className
-      )}
-    />
+    <PopoverContent
+      aria-label="Notifications"
+      side="right"
+      align={align}
+      sideOffset={10}
+      collisionPadding={8}
+      className="flex w-[min(26rem,calc(100vw-1rem))] flex-col p-0"
+      onCloseAutoFocus={handleCloseAutoFocus}
+    >
+      <NotificationsPopoverPanel onNavigate={navigate} />
+    </PopoverContent>
   )
 }
 
-const NotificationsDialogHost = React.memo(function NotificationsDialogHost({
-  store,
-}: {
-  store: NotificationsDialogStore
-}) {
-  const open = React.useSyncExternalStore(
-    store.subscribe,
-    store.getSnapshot,
-    store.getServerSnapshot
-  )
-  const handleOpenChange = React.useCallback(
-    (next: boolean) => {
-      if (!next) store.close()
-    },
-    [store]
-  )
-  return (
-    <Dialog open={open} onOpenChange={handleOpenChange}>
-      <DialogContent className="gap-0 p-0 sm:max-w-md">
-        <NotificationsPanel onNavigate={store.close} />
-      </DialogContent>
-    </Dialog>
-  )
-})
-
-function showNotificationFailure(action: string) {
-  return (error: Error) =>
-    showToast({
-      message: `Could not ${action}: ${error.message}`,
-      type: "error",
-    })
-}
-
-// Mounted only while the dialog is open. Opening it reads everything shown;
-// rows that were unread keep their highlight until the dialog closes.
-function NotificationsPanel({ onNavigate }: { onNavigate: () => void }) {
-  const queryClient = useQueryClient()
-  const { data: notifications, isPending } = useQuery(
-    notificationsQueryOptions()
-  )
-  const { mutate: markRead } = useMutation(
-    markNotificationsReadMutationOptions(queryClient)
-  )
-  const { mutate: dismiss } = useMutation(
-    dismissNotificationMutationOptions(
-      queryClient,
-      showNotificationFailure("clear the notification")
-    )
-  )
-  const { mutate: clear } = useMutation(
-    clearNotificationsMutationOptions(
-      queryClient,
-      showNotificationFailure("clear notifications")
-    )
-  )
-  const [highlighted, setHighlighted] = React.useState<ReadonlySet<string>>(
-    () => new Set()
-  )
-
-  const newestUnread = notifications?.find(
-    (notification) => notification.readAt === null
-  )
-  React.useEffect(() => {
-    if (!newestUnread || !notifications) return
-    const unread = notifications.filter(
-      (notification) => notification.readAt === null
-    )
-    setHighlighted((current) => {
-      const next = new Set(current)
-      for (const notification of unread) next.add(notification.id)
-      return next
-    })
-    markRead(Math.max(...unread.map((notification) => notification.createdAt)))
-  }, [markRead, newestUnread, notifications])
-
+// Mounted only while the popover is open, so a closed popover never renders
+// the list or marks anything read.
+function NotificationsPopoverPanel({ onNavigate }: { onNavigate: () => void }) {
+  const { data: inbox, isPending } = useQuery(notificationInboxQueryOptions())
+  const notifications = inbox?.notifications
+  const highlighted = useHighlightUnread(notifications)
+  const { clearThrough, dismiss } = useNotificationClearing()
   const newest = notifications?.[0]
+  // Opening reads everything, so keep counting what was new when it opened.
+  const newCount = Math.max(inbox?.unreadCount ?? 0, highlighted.size)
+
   return (
     <>
-      <div className="flex h-13 items-center gap-2 border-b border-border/70 pr-12 pl-5">
-        <DialogTitle className="flex-1">Notifications</DialogTitle>
+      <div className="flex h-12 shrink-0 items-center gap-2 border-b border-border/70 pr-2 pl-4">
+        <h2 className="text-sm font-semibold">Notifications</h2>
+        {newCount > 0 ? <UnreadCountBadge count={newCount} /> : null}
+        <span className="flex-1" />
         {newest ? (
           <Button
             variant="ghost"
             size="sm"
             className="text-muted-foreground hover:text-foreground"
-            onClick={() => clear(newest.createdAt)}
+            onClick={() => clearThrough(newest.createdAt)}
           >
             Clear all
           </Button>
         ) : null}
       </div>
       {isPending ? (
-        <p className="px-5 py-10 text-center text-sm text-muted-foreground">
+        <p className="px-4 py-10 text-center text-sm text-muted-foreground">
           Loading notifications…
         </p>
       ) : !notifications?.length ? (
-        <div className="flex flex-col items-center gap-2 px-5 py-12 text-center">
-          <Bell className="size-5 text-muted-foreground/70" aria-hidden />
-          <p className="text-sm font-medium">You're all caught up</p>
-          <p className="max-w-64 text-xs text-muted-foreground">
-            New Kiln releases and changes to your access will show up here.
-          </p>
-        </div>
+        <NotificationsEmptyState />
       ) : (
-        <ul
-          aria-label="Notifications"
-          className="max-h-[min(32rem,calc(100dvh-10rem))] overflow-y-auto py-1"
-        >
-          {notifications.map((notification) => (
-            <NotificationRow
-              key={notification.id}
-              highlighted={highlighted.has(notification.id)}
-              notification={notification}
-              onDismiss={dismiss}
-              onNavigate={onNavigate}
-            />
-          ))}
-        </ul>
-      )}
-    </>
-  )
-}
-
-const NotificationRow = React.memo(function NotificationRow({
-  highlighted,
-  notification,
-  onDismiss,
-  onNavigate,
-}: {
-  highlighted: boolean
-  notification: KilnNotification
-  onDismiss: (id: string) => void
-  onNavigate: () => void
-}) {
-  const { content } = notification
-  const Icon = notificationIcons[content.kind]
-  const title = notificationTitle(content)
-  const url =
-    content.kind === "kiln.release" || content.kind === "kiln.updated"
-      ? content.url
-      : null
-  const body = (
-    <>
-      <span
-        className={cn(
-          "mt-0.5 grid size-8 shrink-0 place-items-center rounded-md border border-border/70 bg-muted/40 text-muted-foreground",
-          highlighted && "border-primary/30 bg-primary/10 text-primary"
-        )}
-      >
-        <Icon className="size-4" aria-hidden />
-      </span>
-      <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-        <span className="text-sm leading-snug font-medium">
-          {title}
-          {url ? (
-            <ExternalLink
-              className="ml-1.5 inline size-3 -translate-y-px text-muted-foreground"
-              aria-hidden
-            />
-          ) : null}
-        </span>
-        <span className="text-xs text-muted-foreground">
-          {notificationDetail(content)}
-        </span>
-        <time
-          className="text-xs text-muted-foreground/75"
-          dateTime={new Date(notification.createdAt).toISOString()}
-          title={notificationDateFormatter.format(notification.createdAt)}
-        >
-          {formatRelative(notification.createdAt)}
-        </time>
-      </span>
-      {highlighted ? (
-        <span
-          aria-label="Unread"
-          className="mt-1.5 size-2 shrink-0 rounded-full bg-primary"
+        // About four and a half rows, so the cut-off row shows there's more.
+        <NotificationList
+          className="max-h-[20.5rem] overflow-y-auto overscroll-contain"
+          highlighted={highlighted}
+          notifications={notifications}
+          onDismiss={dismiss}
+          onNavigate={onNavigate}
         />
-      ) : null}
+      )}
+      <Link
+        to="/notifications"
+        className="flex h-10 shrink-0 items-center justify-center border-t border-border/70 text-sm font-medium text-primary transition-colors hover:bg-accent/50 focus-visible:bg-accent/50 focus-visible:outline-none"
+        onClick={onNavigate}
+      >
+        View all notifications
+      </Link>
     </>
   )
-  const contentClassName =
-    "flex min-w-0 flex-1 items-start gap-3 py-3 pr-1 pl-5 text-left focus-visible:outline-none"
+}
 
+export function NotificationsEmptyState() {
   return (
-    <li
-      className={cn(
-        "flex items-start transition-colors has-[a:focus-visible]:bg-accent/60 has-[a:hover]:bg-accent/60",
-        highlighted && "bg-primary/[0.04]"
-      )}
-    >
-      {content.kind === "access.invited" ? (
-        <Link
-          to="/invite"
-          search={{ id: content.invitationId }}
-          className={contentClassName}
-          onClick={onNavigate}
-        >
-          {body}
-        </Link>
-      ) : url ? (
-        <a
-          href={url}
-          target="_blank"
-          rel="noopener noreferrer"
-          className={contentClassName}
-        >
-          {body}
-        </a>
-      ) : (
-        <div className={contentClassName}>{body}</div>
-      )}
-      <Button
-        variant="ghost"
-        size="icon-sm"
-        className="mt-2.5 mr-3 shrink-0 text-muted-foreground hover:text-foreground"
-        aria-label={`Clear "${title}"`}
-        onClick={() => onDismiss(notification.id)}
-      >
-        <X className="size-3.5" />
-      </Button>
-    </li>
+    <div className="flex flex-col items-center gap-2 px-4 py-10 text-center">
+      <Bell className="size-5 text-muted-foreground/70" aria-hidden />
+      <p className="text-sm font-medium">You're all caught up</p>
+      <p className="max-w-64 text-xs text-muted-foreground">
+        New Kiln releases and changes to your access will show up here.
+      </p>
+    </div>
   )
-})
-
-const notificationIcons = {
-  "access.invited": UserPlus,
-  "access.removed": UserMinus,
-  "kiln.release": Rocket,
-  "kiln.updated": PackageCheck,
-} satisfies Record<
-  NotificationContent["kind"],
-  React.ComponentType<{
-    className?: string
-  }>
->
-
-const resourceTypeLabels = {
-  database: "database",
-  instance: "server",
-  relay: "Relay",
-} satisfies Record<NotificationResource["type"], string>
-
-function notificationTitle(content: NotificationContent): string {
-  switch (content.kind) {
-    case "kiln.release":
-      return `Kiln ${content.version} is available`
-    case "kiln.updated":
-      return `Kiln was updated to ${content.version}`
-    case "access.invited":
-      return `${content.actorName} invited you to ${content.resource.name}`
-    case "access.removed":
-      return `You no longer have access to ${content.resource.name}`
-  }
-}
-
-function notificationDetail(content: NotificationContent): string {
-  switch (content.kind) {
-    case "kiln.release":
-      return "See what's new in the release notes."
-    case "kiln.updated":
-      return `Previously ${content.previousVersion}.`
-    case "access.invited":
-      return `Review the invitation to join this ${resourceTypeLabels[content.resource.type]}.`
-    case "access.removed":
-      return `${content.actorName} removed you from this ${resourceTypeLabels[content.resource.type]}.`
-  }
-}
-
-const notificationDateFormatter = new Intl.DateTimeFormat(undefined, {
-  dateStyle: "medium",
-  timeStyle: "short",
-})
-const relativeTimeFormatter = new Intl.RelativeTimeFormat(undefined, {
-  numeric: "auto",
-})
-
-function formatRelative(value: number): string {
-  const minutes = Math.round((Date.now() - value) / 60_000)
-  if (minutes < 1) return "Just now"
-  if (minutes < 60) return relativeTimeFormatter.format(-minutes, "minute")
-  const hours = Math.round(minutes / 60)
-  if (hours < 24) return relativeTimeFormatter.format(-hours, "hour")
-  const days = Math.round(hours / 24)
-  if (days < 30) return relativeTimeFormatter.format(-days, "day")
-  return notificationDateFormatter.format(value)
 }

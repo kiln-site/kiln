@@ -9,7 +9,10 @@ import {
   markNotificationsReadEffect,
   notifyUsersEffect,
 } from "@/effect/notifications"
-import type { NotificationContent } from "@/lib/notifications"
+import type {
+  NotificationContent,
+  NotificationCursor,
+} from "@/lib/notifications"
 import { TestDatabase, describeMysql, resetDatabase } from "@/test/database"
 import { insertRows, insertUser } from "@/test/seed"
 
@@ -31,8 +34,11 @@ const removed: NotificationContent = {
   },
 }
 
+const inbox = (userId: string) =>
+  Effect.map(listNotificationsEffect(userId, 50), (page) => page.notifications)
+
 const contents = (userId: string) =>
-  Effect.map(listNotificationsEffect(userId), (notifications) =>
+  Effect.map(inbox(userId), (notifications) =>
     notifications.map(({ content, readAt }) => ({
       content,
       read: readAt !== null,
@@ -106,8 +112,8 @@ describeMysql("notifications", () => {
           "access.removed:grant-a:2",
           removed
         )
-        const [newest, oldest] = yield* listNotificationsEffect("user-a")
-        const [othersRelease] = yield* listNotificationsEffect("user-b")
+        const [newest, oldest] = yield* inbox("user-a")
+        const [othersRelease] = yield* inbox("user-b")
 
         // Another user's notification ID clears nothing.
         assert.strictEqual(
@@ -148,6 +154,49 @@ describeMysql("notifications", () => {
         assert.deepStrictEqual(yield* contents("user-b"), [
           { content: release, read: false },
         ])
+      })
+    )
+
+    it.effect("pages through every notification exactly once", () =>
+      Effect.gen(function* () {
+        yield* resetDatabase
+        yield* insertUser("user-a")
+        // Three share a timestamp; one in the middle is from a newer Kiln.
+        yield* TestClock.setTime(1_000)
+        for (const version of ["0.1.0", "0.2.0", "0.3.0"])
+          yield* notifyUsersEffect(["user-a"], `kiln.release:${version}`, {
+            ...release,
+            version,
+          })
+        yield* insertRows("notification", {
+          id: "00000000-0000-4000-8000-0000000000a1",
+          user_id: "user-a",
+          kind: "announcement.future",
+          source_key: "announcement:1",
+          data: JSON.stringify({ title: "From a newer Kiln" }),
+          created_at: 1_000,
+        })
+        yield* TestClock.setTime(2_000)
+        yield* notifyUsersEffect(
+          ["user-a"],
+          "access.removed:grant-a:2",
+          removed
+        )
+
+        const seen: Array<string> = []
+        let before: NotificationCursor | undefined
+        for (let page = 0; page < 10; page++) {
+          const result = yield* listNotificationsEffect("user-a", 2, before)
+          seen.push(...result.notifications.map(({ id }) => id))
+          if (!result.nextCursor) break
+          before = result.nextCursor
+        }
+        const all = yield* inbox("user-a")
+        assert.strictEqual(all.length, 4)
+        assert.deepStrictEqual(
+          seen,
+          all.map(({ id }) => id)
+        )
       })
     )
 

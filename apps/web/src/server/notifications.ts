@@ -3,22 +3,59 @@ import { z } from "zod"
 
 import {
   clearNotificationsEffect,
+  countUnreadNotificationsEffect,
   dismissNotificationEffect,
   listNotificationsEffect,
   markNotificationsReadEffect,
   publishNotificationChange,
 } from "@/effect/notifications"
 import { runAppEffect } from "@/effect/runtime"
+import {
+  notificationCursorSchema,
+  notificationInboxLimit,
+  notificationPageSize,
+  type NotificationInbox,
+} from "@/lib/notifications"
 import { requireEligibleResourceUser } from "@/server/auth"
 
 // Notifications are addressed to one user, so every read and write is keyed
 // by the signed-in user's ID and never by input.
-export const getNotifications = createServerFn({ method: "GET" }).handler(
-  async () => {
+
+/** The newest notifications and the unread total, for the sidebar. */
+export const getNotificationInbox = createServerFn({ method: "GET" }).handler(
+  async (): Promise<NotificationInbox> => {
     const user = await requireEligibleResourceUser()
-    return runAppEffect("notifications.list", listNotificationsEffect(user.id))
+    const [page, unreadCount] = await Promise.all([
+      runAppEffect(
+        "notifications.inbox",
+        listNotificationsEffect(user.id, notificationInboxLimit)
+      ),
+      runAppEffect(
+        "notifications.countUnread",
+        countUnreadNotificationsEffect(user.id)
+      ),
+    ])
+    return { notifications: page.notifications, unreadCount }
   }
 )
+
+export const getNotificationsPage = createServerFn({ method: "GET" })
+  .validator(
+    z.strictObject({
+      before: notificationCursorSchema.nullable().default(null),
+    })
+  )
+  .handler(async ({ data }) => {
+    const user = await requireEligibleResourceUser()
+    return runAppEffect(
+      "notifications.page",
+      listNotificationsEffect(
+        user.id,
+        notificationPageSize,
+        data.before ?? undefined
+      )
+    )
+  })
 
 export const markNotificationsRead = createServerFn({ method: "POST" })
   .validator(z.strictObject({ through: z.number().int().nonnegative() }))

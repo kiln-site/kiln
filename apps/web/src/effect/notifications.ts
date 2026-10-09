@@ -9,9 +9,10 @@ import { developmentBypassUserId } from "@/lib/development-bypass"
 import { developmentBypassEnabled } from "@/lib/environment"
 import {
   notificationContentSchema,
-  notificationInboxLimit,
   type KilnNotification,
   type NotificationContent,
+  type NotificationCursor,
+  type NotificationPage,
 } from "@/lib/notifications"
 import { publishRealtimeChange } from "@/lib/realtime-source.server"
 
@@ -66,19 +67,27 @@ export function publishNotificationChange(userIds: ReadonlyArray<string>) {
   })
 }
 
+/**
+ * The user's notifications, newest first, `limit` at a time. Pass the last
+ * row of a page as `before` to continue after it.
+ */
 export const listNotificationsEffect = Effect.fn("notifications.list")(
-  function* (userId: string) {
+  function* (userId: string, limit: number, before?: NotificationCursor) {
     const database = yield* Database
     const rows = yield* database.queryRows<NotificationRow>(
       "notifications.list",
       `SELECT id, kind, data, created_at, read_at
          FROM ${databaseTable("notification")}
-        WHERE user_id = ? AND dismissed_at IS NULL
+        WHERE user_id = ? AND dismissed_at IS NULL${
+          before ? " AND (created_at < ? OR (created_at = ? AND id < ?))" : ""
+        }
         ORDER BY created_at DESC, id DESC
-        LIMIT ${notificationInboxLimit}`,
-      [userId]
+        LIMIT ?`,
+      before
+        ? [userId, before.createdAt, before.createdAt, before.id, limit]
+        : [userId, limit]
     )
-    return rows.flatMap((row): Array<KilnNotification> => {
+    const notifications = rows.flatMap((row): Array<KilnNotification> => {
       // Rows outlive Kiln versions; skip kinds this version can't show.
       const content = decodeContent(row)
       return Option.isSome(content)
@@ -92,8 +101,28 @@ export const listNotificationsEffect = Effect.fn("notifications.list")(
           ]
         : []
     })
+    // Continue after the last row read, even one this version skipped.
+    const last = rows.length === limit ? rows.at(-1) : undefined
+    const nextCursor: NotificationCursor | null = last
+      ? { createdAt: Number(last.created_at), id: last.id }
+      : null
+    return { nextCursor, notifications } satisfies NotificationPage
   }
 )
+
+export const countUnreadNotificationsEffect = Effect.fn(
+  "notifications.countUnread"
+)(function* (userId: string) {
+  const database = yield* Database
+  const rows = yield* database.queryRows<RowDataPacket & { count: number }>(
+    "notifications.countUnread",
+    `SELECT COUNT(*) AS count
+       FROM ${databaseTable("notification")}
+      WHERE user_id = ? AND read_at IS NULL AND dismissed_at IS NULL`,
+    [userId]
+  )
+  return Number(rows[0]?.count ?? 0)
+})
 
 /**
  * Marks the user's notifications created at or before `through` as read.

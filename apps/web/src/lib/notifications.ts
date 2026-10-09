@@ -51,5 +51,26 @@ export interface KilnNotification {
   readAt: number | null
 }
 
-/** How many of the newest notifications the inbox shows. */
-export const notificationInboxLimit = 50
+/** Where a page of notifications ends; the next page starts after it. */
+export const notificationCursorSchema = z.strictObject({
+  createdAt: z.number().int().nonnegative(),
+  id: z.uuid(),
+})
+
+export type NotificationCursor = z.infer<typeof notificationCursorSchema>
+
+export interface NotificationInbox {
+  notifications: Array<KilnNotification>
+  unreadCount: number
+}
+
+export interface NotificationPage {
+  nextCursor: NotificationCursor | null
+  notifications: Array<KilnNotification>
+}
+
+/** How many of the newest notifications the sidebar popover lists. */
+export const notificationInboxLimit = 10
+
+/** How many notifications each page of the notifications page loads. */
+export const notificationPageSize = 30

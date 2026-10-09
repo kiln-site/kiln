@@ -12,7 +12,7 @@ import {
 import { AppRouteContent } from "@/components/app-route-content"
 import { AppSidebar } from "@/components/app-sidebar"
 import { InfraUpdateDialogProvider } from "@/components/infra-update-dialog-provider"
-import { NotificationsDialogProvider } from "@/components/notifications"
+import { NotificationsProvider } from "@/components/notifications"
 import { PanelFooter } from "@/components/panel-footer"
 import { RealtimeSync } from "@/components/realtime-sync"
 import { RelayConnectionToastMonitor } from "@/components/relay-connection-toast"
@@ -43,7 +43,7 @@ export const AppFrame = React.memo(function AppFrame({
     <SidebarProvider defaultOpen={uiPreferences.sidebarOpen}>
       <AppearanceHydrator appearance={uiPreferences.appearance} />
       <InfraUpdateDialogProvider>
-        <NotificationsDialogProvider>
+        <NotificationsProvider>
           <AccountStatusSync />
           <RealtimeSync />
           <RelayConnectionToastMonitor />
@@ -62,7 +62,7 @@ export const AppFrame = React.memo(function AppFrame({
             </div>
             <PanelFooter />
           </SidebarInset>
-        </NotificationsDialogProvider>
+        </NotificationsProvider>
       </InfraUpdateDialogProvider>
     </SidebarProvider>
   )

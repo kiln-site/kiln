@@ -57,6 +57,7 @@ const sectionTitles: Record<PageSection, string> = {
   automations: "Automations",
   backups: "Backups",
   infra: "Infrastructure",
+  notifications: "Notifications",
   settings: "Settings",
 }
 

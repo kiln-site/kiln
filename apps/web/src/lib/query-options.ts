@@ -33,13 +33,6 @@ import {
 } from "@/lib/minecraft-profile"
 import { getUiPreferences } from "@/server/preferences"
 import {
-  clearNotifications,
-  dismissNotification,
-  getNotifications,
-  markNotificationsRead,
-} from "@/server/notifications"
-import type { KilnNotification } from "@/lib/notifications"
-import {
   getInstanceFavorites,
   setInstanceFavorite,
 } from "@/server/instance-favorites"
@@ -163,7 +156,11 @@ export const queryKeys = {
   tailscaleStacks: ["tailscale", "stacks"] as const,
   updates: ["updates", "overview"] as const,
   instanceFavorites: ["instance-favorites"] as const,
-  notifications: ["notifications"] as const,
+  notifications: {
+    all: ["notifications"] as const,
+    inbox: ["notifications", "inbox"] as const,
+    page: ["notifications", "page"] as const,
+  },
   uiPreferences: ["ui", "preferences"] as const,
 }
 
@@ -501,101 +498,6 @@ export function setInstanceFavoriteMutationOptions(
       if (pending === 1) await queryClient.invalidateQueries({ queryKey })
     },
   })
-}
-
-export function notificationsQueryOptions() {
-  return queryOptions({
-    queryKey: queryKeys.notifications,
-    queryFn: () => getNotifications(),
-    staleTime: Infinity,
-  })
-}
-
-export function selectUnreadNotificationCount(
-  notifications: ReadonlyArray<KilnNotification>
-): number {
-  let count = 0
-  for (const notification of notifications) {
-    if (notification.readAt === null) count += 1
-  }
-  return count
-}
-
-export function markNotificationsReadMutationOptions(queryClient: QueryClient) {
-  const { queryKey } = notificationsQueryOptions()
-  return mutationOptions({
-    mutationKey: ["notifications", "mark-read"] as const,
-    mutationFn: (through: number) =>
-      markNotificationsRead({ data: { through } }),
-    onMutate: async (through) => {
-      await queryClient.cancelQueries({ queryKey })
-      const readAt = Date.now()
-      queryClient.setQueryData(queryKey, (current) =>
-        current?.map((notification) =>
-          notification.readAt === null && notification.createdAt <= through
-            ? { ...notification, readAt }
-            : notification
-        )
-      )
-    },
-    onSettled: () => queryClient.invalidateQueries({ queryKey }),
-  })
-}
-
-function removeNotificationsMutationOptions<TInput>(
-  queryClient: QueryClient,
-  action: "clear" | "dismiss",
-  mutationFn: (input: TInput) => Promise<void>,
-  removes: (input: TInput) => (notification: KilnNotification) => boolean,
-  onFailure: (error: Error) => void
-) {
-  const { queryKey } = notificationsQueryOptions()
-  return mutationOptions({
-    mutationKey: ["notifications", action] as const,
-    mutationFn,
-    onMutate: async (input) => {
-      await queryClient.cancelQueries({ queryKey })
-      const previous = queryClient.getQueryData(queryKey)
-      const removed = removes(input)
-      queryClient.setQueryData(queryKey, (current) =>
-        current?.filter((notification) => !removed(notification))
-      )
-      return { previous }
-    },
-    onError: (error, _input, context) => {
-      if (context?.previous)
-        queryClient.setQueryData(queryKey, context.previous)
-      onFailure(error)
-    },
-    onSettled: () => queryClient.invalidateQueries({ queryKey }),
-  })
-}
-
-export function dismissNotificationMutationOptions(
-  queryClient: QueryClient,
-  onFailure: (error: Error) => void
-) {
-  return removeNotificationsMutationOptions(
-    queryClient,
-    "dismiss",
-    (id: string) => dismissNotification({ data: { id } }),
-    (id) => (notification) => notification.id === id,
-    onFailure
-  )
-}
-
-/** Clears every notification created at or before `through`. */
-export function clearNotificationsMutationOptions(
-  queryClient: QueryClient,
-  onFailure: (error: Error) => void
-) {
-  return removeNotificationsMutationOptions(
-    queryClient,
-    "clear",
-    (through: number) => clearNotifications({ data: { through } }),
-    (through) => (notification) => notification.createdAt <= through,
-    onFailure
-  )
 }
 
 export function uiPreferencesQueryOptions() {
