@@ -16,8 +16,6 @@ export type ChangelogTimelineItem =
       latest: boolean
       markers: ReadonlyArray<ChangelogMarker>
       release: ChangelogRelease
-      // Releases this line covers: itself and the unmarked ones below it.
-      releaseCount: number
     }
   | { kind: "earlier"; key: string }
   | { kind: "day"; key: string; label: string }
@@ -76,11 +74,12 @@ export function changelogTimeline(
   const markerIndexes = new Map<string, number>()
   let day: string | null = null
 
-  const pushChanges = (release: ChangelogRelease) => {
+  // Version lines carry their own time, so only "Earlier" is split by day.
+  const pushChanges = (release: ChangelogRelease, byDay: boolean) => {
     const visible = release.changes
     if (visible.length === 0) return 0
     const label = formatDay(release.publishedAt)
-    if (label !== day) {
+    if (byDay && label !== day) {
       day = label
       items.push({ key: `day:${release.tag}`, kind: "day", label })
     }
@@ -112,16 +111,13 @@ export function changelogTimeline(
       latest: lineIndex === 0,
       markers: lineMarkers,
       release,
-      releaseCount: end - lineIndex,
     })
-    // The version line shows its release's date.
-    day = formatDay(release.publishedAt)
     let shown = 0
     let hiddenCount = 0
     for (let index = lineIndex; index < end; index += 1) {
       const covered = releases[index]
       if (!covered) continue
-      shown += pushChanges(covered)
+      shown += pushChanges(covered, false)
       hiddenCount += covered.hiddenCount
     }
     if (shown === 0) {
@@ -134,7 +130,7 @@ export function changelogTimeline(
     day = null
     for (let index = oldestLine + 1; index < releases.length; index += 1) {
       const release = releases[index]
-      if (release) pushChanges(release)
+      if (release) pushChanges(release, true)
     }
   }
 

@@ -72,6 +72,7 @@ import {
   releaseHistoryInfiniteQueryOptions,
   updateOverviewQueryOptions,
 } from "@/lib/query-options"
+import { RelativeTime } from "@/components/relative-time"
 import { replaceRelayUpdateVersion } from "@/lib/system-update-cache"
 import {
   compareLatestReleaseVersion,
@@ -2738,8 +2739,11 @@ const ChangelogVersionLine = React.memo(function ChangelogVersionLine({
   first: boolean
   item: Extract<ChangelogTimelineItem, { kind: "version" }>
 }) {
-  const { latest, markers, release, releaseCount } = item
+  const { latest, markers, release } = item
   const current = markers.some((marker) => marker.state === "current")
+  const publishedAt = release.publishedAt
+    ? Date.parse(release.publishedAt)
+    : null
   return (
     <div
       className={`relative flex h-full items-center gap-3 bg-popover pr-4 pl-12 before:absolute before:left-[1.4375rem] before:w-px before:-translate-x-1/2 before:bg-muted-foreground/30 ${
@@ -2762,17 +2766,22 @@ const ChangelogVersionLine = React.memo(function ChangelogVersionLine({
         <h3 className="truncate text-base leading-tight font-semibold">
           {compactReleaseName(release.name)}
         </h3>
-        <span className="shrink-0 font-mono text-[0.8125rem] text-muted-foreground">
-          {formatShortReleaseDate(release.publishedAt)}
-        </span>
-        <ChangelogMarkerIcons markers={markers} />
+        <ChangelogMarkerIcons
+          markers={markers.filter((marker) => marker.state === "current")}
+          state="current"
+        />
+        <ChangelogMarkerIcons
+          markers={markers.filter((marker) => marker.state === "previous")}
+          state="previous"
+        />
       </div>
       <div className="flex shrink-0 items-center gap-1">
-        {releaseCount > 1 ? (
-          <span className="type-support text-muted-foreground">
-            {releaseCount} releases
-          </span>
-        ) : null}
+        {publishedAt === null ? null : (
+          <RelativeTime
+            className="type-support text-muted-foreground"
+            timestamp={publishedAt}
+          />
+        )}
         <Button
           asChild
           className="text-muted-foreground"
@@ -2793,64 +2802,43 @@ const ChangelogVersionLine = React.memo(function ChangelogVersionLine({
   )
 })
 
-// Who runs, or ran, this version: a Panel icon and a Relay icon with a count
-// of the others. Hovering lists them all, scrolling past a dozen or so.
+// Who runs (or ran) this version: a Panel icon and a Relay icon with a count
+// of the others. Current and previous get separate sets, each listing its
+// members on hover, scrolling past a dozen or so.
 function ChangelogMarkerIcons({
   markers,
+  state,
 }: {
   markers: ReadonlyArray<ChangelogMarker>
+  state: ChangelogMarker["state"]
 }) {
   if (markers.length === 0) return null
-  const groups = (["current", "previous"] as const).flatMap((state) => {
-    const inState = markers.filter((marker) => marker.state === state)
-    const panel = inState.find((marker) => marker.component === "hearth")
-    const relays = inState.filter((marker) => marker.component === "relay")
-    return [
-      ...(panel ? [{ component: "hearth" as const, extra: 0, state }] : []),
-      ...(relays.length > 0
-        ? [{ component: "relay" as const, extra: relays.length - 1, state }]
-        : []),
-    ]
-  })
-  const current = markers.filter((marker) => marker.state === "current")
-  const previous = markers.filter((marker) => marker.state === "previous")
+  const panel = markers.some((marker) => marker.component === "hearth")
+  const relays = markers.filter((marker) => marker.component === "relay")
+  const label = state === "current" ? "Current" : "Previous"
 
   return (
     <HoverCard closeDelay={100} openDelay={150}>
       <HoverCardTrigger asChild>
         <span
-          aria-label={markers
-            .map(
-              (marker) =>
-                `${marker.name}${marker.state === "previous" ? " (previous)" : ""}`
-            )
-            .join(", ")}
-          className="flex shrink-0 cursor-default items-center gap-2 self-center"
+          aria-label={`${label}: ${markers.map((marker) => marker.name).join(", ")}`}
+          className={`flex shrink-0 cursor-default items-center gap-2 self-center text-[0.8125rem] ${
+            state === "current" ? "text-sky-200" : "text-muted-foreground"
+          }`}
           role="img"
         >
-          {groups.map((group) => (
-            <span
-              className={`inline-flex items-center gap-0.5 text-[0.8125rem] ${
-                group.state === "current"
-                  ? "text-sky-200"
-                  : "text-muted-foreground"
-              }`}
-              key={`${group.state}:${group.component}`}
-            >
-              {group.component === "hearth" ? (
-                <ServerCog className="size-4" />
-              ) : (
-                <RadioTower className="size-4" />
-              )}
-              {group.extra > 0 ? `+${group.extra}` : null}
+          {panel ? <ServerCog className="size-4" /> : null}
+          {relays.length > 0 ? (
+            <span className="inline-flex items-center gap-0.5">
+              <RadioTower className="size-4" />
+              {relays.length > 1 ? `+${relays.length - 1}` : null}
             </span>
-          ))}
+          ) : null}
         </span>
       </HoverCardTrigger>
       <HoverCardContent align="start" className="w-64 p-0">
         <div className="max-h-60 overflow-y-auto overscroll-contain py-1.5">
-          <ChangelogMarkerList label="Current" markers={current} />
-          <ChangelogMarkerList label="Previous" markers={previous} />
+          <ChangelogMarkerList label={label} markers={markers} />
         </div>
       </HoverCardContent>
     </HoverCard>
@@ -2961,7 +2949,7 @@ function withDevMockRelays(
     const relayId = `dev-mock-relay-${index + 1}`
     // Most share one nightly; the rest trail behind.
     const current = versionAt(index < count * 0.6 ? 2 : index % 2 ? 5 : 12)
-    const previous = versionAt(index % 3 === 0 ? 9 : 20)
+    const previous = versionAt(index % 3 === 0 ? 5 : 20)
     if (previous) previousVersions[`relay:${relayId}`] = previous
     return {
       component: "relay" as const,
