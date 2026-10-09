@@ -47,8 +47,8 @@ function DialogOverlay({
   ...props
 }: DialogPrimitive.Backdrop.Props) {
   return (
-    // No backdrop blur: anything that changes inside a dialog would re-blur
-    // the whole screen every frame, which drops frames on large displays.
+    // No backdrop blur: a full-screen blur made scrolling inside dialogs drop
+    // frames on high-resolution displays.
     <DialogPrimitive.Backdrop
       data-slot="dialog-overlay"
       className={cn(
