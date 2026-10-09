@@ -2068,7 +2068,7 @@ const changelogRowHeight: Readonly<
   day: 32,
   earlier: 44,
   quiet: 30,
-  version: 44,
+  version: 52,
 }
 const changelogEndHeight = 64
 // Pages to load on open looking for the oldest version a component runs.
@@ -2258,6 +2258,18 @@ const UpdateChangelogPage = React.memo(function UpdateChangelogPage({
     (index: number) => virtualizer.scrollToIndex(index, { align: "start" }),
     [virtualizer]
   )
+  // The newest line each kind of marker sits on.
+  const legendIndexes = React.useMemo(() => {
+    const firstWith = (state: ChangelogMarker["state"]) => {
+      const index = items.findIndex(
+        (item) =>
+          item.kind === "version" &&
+          item.markers.some((marker) => marker.state === state)
+      )
+      return index < 0 ? undefined : index
+    }
+    return { current: firstWith("current"), previous: firstWith("previous") }
+  }, [items])
   const jumpEntries = React.useMemo(
     () =>
       targets.map((target): ChangelogJumpEntry => {
@@ -2298,17 +2310,27 @@ const UpdateChangelogPage = React.memo(function UpdateChangelogPage({
         <h3 className="type-card-title ml-1 min-w-0 flex-1 truncate">
           Changelog
         </h3>
-        <Button
-          className="shrink-0 text-muted-foreground hover:text-foreground"
-          disabled={items.length === 0}
-          size="sm"
-          type="button"
-          variant="ghost"
-          onClick={() => jumpTo(0)}
+        <ChangelogLegendButton
+          index={items.length > 0 ? 0 : undefined}
+          swatch="size-2 bg-primary"
+          onJump={jumpTo}
         >
-          <span aria-hidden="true" className="size-2 bg-primary" />
           Latest
-        </Button>
+        </ChangelogLegendButton>
+        <ChangelogLegendButton
+          index={legendIndexes.current}
+          swatch="size-2 bg-sky-300"
+          onJump={jumpTo}
+        >
+          Current
+        </ChangelogLegendButton>
+        <ChangelogLegendButton
+          index={legendIndexes.previous}
+          swatch="size-2 border border-muted-foreground"
+          onJump={jumpTo}
+        >
+          Previous
+        </ChangelogLegendButton>
         {jumpEntries.length === 1 && jumpEntries[0] ? (
           <ChangelogJumpButton entry={jumpEntries[0]} onJump={jumpTo} />
         ) : jumpEntries.length > 1 ? (
@@ -2386,6 +2408,36 @@ const UpdateChangelogPage = React.memo(function UpdateChangelogPage({
     </div>
   )
 })
+
+// Doubles as the legend for the timeline's dots, and jumps to the newest
+// line of its kind.
+function ChangelogLegendButton({
+  children,
+  index,
+  swatch,
+  onJump,
+}: {
+  children: React.ReactNode
+  index: number | undefined
+  swatch: string
+  onJump: (index: number) => void
+}) {
+  return (
+    <Button
+      className="shrink-0 px-2 text-muted-foreground hover:text-foreground"
+      disabled={index === undefined}
+      size="sm"
+      type="button"
+      variant="ghost"
+      onClick={() => {
+        if (index !== undefined) onJump(index)
+      }}
+    >
+      <span aria-hidden="true" className={swatch} />
+      {children}
+    </Button>
+  )
+}
 
 type ChangelogJumpEntry = {
   component: "hearth" | "relay"
@@ -2688,7 +2740,6 @@ const ChangelogVersionLine = React.memo(function ChangelogVersionLine({
 }) {
   const { latest, markers, release, releaseCount } = item
   const current = markers.some((marker) => marker.state === "current")
-  const previous = markers.some((marker) => marker.state === "previous")
   return (
     <div
       className={`relative flex h-full items-center gap-3 bg-popover pr-4 pl-12 before:absolute before:left-[1.4375rem] before:w-px before:-translate-x-1/2 before:bg-muted-foreground/30 ${
@@ -2699,7 +2750,7 @@ const ChangelogVersionLine = React.memo(function ChangelogVersionLine({
     >
       <span
         aria-hidden="true"
-        className={`absolute top-1/2 left-[1.4375rem] size-2.5 -translate-x-1/2 -translate-y-1/2 ${
+        className={`absolute top-1/2 left-[1.4375rem] size-3 -translate-x-1/2 -translate-y-1/2 ${
           latest
             ? "bg-primary"
             : current
@@ -2708,24 +2759,17 @@ const ChangelogVersionLine = React.memo(function ChangelogVersionLine({
         }`}
       />
       <div className="flex min-w-0 flex-1 items-baseline gap-2.5 whitespace-nowrap">
-        <h3 className="type-card-title truncate">
+        <h3 className="truncate text-base leading-tight font-semibold">
           {compactReleaseName(release.name)}
         </h3>
-        {latest ? <span className="type-meta text-primary">Latest</span> : null}
-        {current ? (
-          <span className="type-meta text-sky-200">Current</span>
-        ) : null}
-        {previous ? (
-          <span className="type-meta text-muted-foreground">Previous</span>
-        ) : null}
-        <span className="type-meta shrink-0 font-mono text-muted-foreground">
+        <span className="shrink-0 font-mono text-[0.8125rem] text-muted-foreground">
           {formatShortReleaseDate(release.publishedAt)}
         </span>
         <ChangelogMarkerIcons markers={markers} />
       </div>
       <div className="flex shrink-0 items-center gap-1">
         {releaseCount > 1 ? (
-          <span className="type-meta text-muted-foreground">
+          <span className="type-support text-muted-foreground">
             {releaseCount} releases
           </span>
         ) : null}
@@ -2786,7 +2830,7 @@ function ChangelogMarkerIcons({
         >
           {groups.map((group) => (
             <span
-              className={`type-meta inline-flex items-center gap-0.5 ${
+              className={`inline-flex items-center gap-0.5 text-[0.8125rem] ${
                 group.state === "current"
                   ? "text-sky-200"
                   : "text-muted-foreground"
@@ -2794,9 +2838,9 @@ function ChangelogMarkerIcons({
               key={`${group.state}:${group.component}`}
             >
               {group.component === "hearth" ? (
-                <ServerCog className="size-3.5" />
+                <ServerCog className="size-4" />
               ) : (
-                <RadioTower className="size-3.5" />
+                <RadioTower className="size-4" />
               )}
               {group.extra > 0 ? `+${group.extra}` : null}
             </span>
@@ -2880,7 +2924,7 @@ function ChangelogEnd({
 function ChangelogSkeleton() {
   return (
     <div aria-hidden="true">
-      <div className="flex h-[44px] items-center border-b border-border/60 pl-12">
+      <div className="flex h-[52px] items-center border-b border-border/60 pl-12">
         <Skeleton className="h-3 w-40" />
       </div>
       {Array.from({ length: 9 }, (_, index) => (
