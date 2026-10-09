@@ -100,7 +100,13 @@ export function newerStableRelease<
   const latestStable = orderKilnReleases(releases).find(
     (release) => release.channel === "stable"
   )
-  if (!latestStable) return null
+  if (
+    !latestStable ||
+    latestStable.version === currentVersion ||
+    latestStable.aliases?.includes(currentVersion)
+  ) {
+    return null
+  }
   const currentRelease = findKilnRelease(releases, currentVersion)
   const installedVersion = currentRelease?.version ?? currentVersion
   if (latestStable.version === installedVersion) return null
