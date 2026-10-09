@@ -17,6 +17,7 @@ import {
   Check,
   ChevronDown,
   ChevronLeft,
+  ChevronRight,
   CloudDownload,
   ExternalLink,
   LoaderCircle,
@@ -27,6 +28,7 @@ import {
   ServerCog,
   ShieldCheck,
   TriangleAlert,
+  UserRound,
   X,
 } from "lucide-react"
 
@@ -68,16 +70,10 @@ import {
 } from "@/lib/changelog-timeline"
 import { flattenCursorPages } from "@/lib/cursor-page"
 import {
-  isMinecraftUsername,
-  minecraftUsernameKey,
-} from "@/lib/minecraft-profile"
-import {
   queryKeys,
-  relayOwnerMinecraftProfilesQueryOptions,
   releaseHistoryInfiniteQueryOptions,
   updateOverviewQueryOptions,
 } from "@/lib/query-options"
-import { UserAvatar } from "@/components/account-avatar"
 import { RelativeTime } from "@/components/relative-time"
 import { replaceRelayUpdateVersion } from "@/lib/system-update-cache"
 import {
@@ -1353,6 +1349,27 @@ const UpdateTargetList = React.memo(function UpdateTargetList({
     [targets]
   )
   const groups = useActionGroups(relays, releases)
+  // Up to date and Unavailable start folded so the Relays that need an
+  // update stand out; with none to update, Up to date opens instead. The
+  // group holding a Relay opened from its page always starts open.
+  const [collapsed, setCollapsed] = React.useState(() => {
+    const folded = new Set<UpdateGroup>(["unavailable"])
+    if (groups.some(({ group }) => group === "available")) folded.add("current")
+    for (const { group, targets: groupTargets } of groups) {
+      if (groupTargets.some((target) => target.relayId === focusedRelayId)) {
+        folded.delete(group)
+      }
+    }
+    return folded
+  })
+  const toggleGroup = React.useCallback((group: UpdateGroup) => {
+    setCollapsed((current) => {
+      const next = new Set(current)
+      if (next.has(group)) next.delete(group)
+      else next.add(group)
+      return next
+    })
+  }, [])
   const latestRelease = releases[0] ?? null
   if (!latestRelease) {
     return (
@@ -1364,71 +1381,87 @@ const UpdateTargetList = React.memo(function UpdateTargetList({
   const hearthTarget = targets.find((target) => target.component === "hearth")
 
   return (
-    <UpdateOwnerProfiles relays={relays}>
-      <div className="pb-2">
-        {hearthTarget ? (
-          <UpdateTargetRow
-            activityStore={activityStore}
-            first
-            focused={false}
-            latestVersion={latestRelease.version}
-            releases={releases}
-            target={hearthTarget}
-            onChangelog={onChangelog}
-            onUpdate={onUpdate}
+    <div className="pb-2">
+      {hearthTarget ? (
+        <UpdateTargetRow
+          activityStore={activityStore}
+          first
+          focused={false}
+          latestVersion={latestRelease.version}
+          releases={releases}
+          target={hearthTarget}
+          onChangelog={onChangelog}
+          onUpdate={onUpdate}
+        />
+      ) : null}
+      {groups.map(({ group, targets: groupTargets }, index) => (
+        <React.Fragment key={group}>
+          <UpdateGroupHeader
+            collapsed={collapsed.has(group)}
+            count={groupTargets.length}
+            first={!hearthTarget && index === 0}
+            group={group}
+            onToggle={toggleGroup}
           />
-        ) : null}
-        {groups.map(({ group, targets: groupTargets }, index) => (
-          <React.Fragment key={group}>
-            <UpdateSectionLabel
-              count={groupTargets.length}
-              first={!hearthTarget && index === 0}
-            >
-              {updateGroupLabel[group]}
-            </UpdateSectionLabel>
-            {groupTargets.map((target) => (
-              <UpdateTargetRow
-                activityStore={activityStore}
-                focused={target.relayId === focusedRelayId}
-                key={target.key}
-                latestVersion={latestRelease.version}
-                releases={releases}
-                target={target}
-                onChangelog={onChangelog}
-                onUpdate={onUpdate}
-              />
-            ))}
-          </React.Fragment>
-        ))}
-        {relays.length === 0 ? (
-          <p className="type-support border-t border-border/60 px-5 py-5 text-muted-foreground">
-            No Relays are paired with this Panel.
-          </p>
-        ) : null}
-        <div className="border-t border-border/60" />
-      </div>
-    </UpdateOwnerProfiles>
+          {collapsed.has(group)
+            ? null
+            : groupTargets.map((target) => (
+                <UpdateTargetRow
+                  activityStore={activityStore}
+                  focused={target.relayId === focusedRelayId}
+                  key={target.key}
+                  latestVersion={latestRelease.version}
+                  releases={releases}
+                  target={target}
+                  onChangelog={onChangelog}
+                  onUpdate={onUpdate}
+                />
+              ))}
+        </React.Fragment>
+      ))}
+      {relays.length === 0 ? (
+        <p className="type-support border-t border-border/60 px-5 py-5 text-muted-foreground">
+          No Relays are paired with this Panel.
+        </p>
+      ) : null}
+      <div className="border-t border-border/60" />
+    </div>
   )
 })
 
-function UpdateSectionLabel({
-  children,
+function UpdateGroupHeader({
+  collapsed,
   count,
-  first = false,
+  first,
+  group,
+  onToggle,
 }: {
-  children: React.ReactNode
+  collapsed: boolean
   count: number
-  first?: boolean
+  first: boolean
+  group: UpdateGroup
+  onToggle: (group: UpdateGroup) => void
 }) {
   return (
-    <p
-      className={`flex h-9 items-end gap-2 px-5 pb-1.5 text-muted-foreground ${
+    <button
+      aria-expanded={!collapsed}
+      className={`flex h-9 w-full items-center gap-2 px-5 text-left text-muted-foreground transition-colors hover:bg-accent/15 hover:text-foreground ${
         first ? "" : "border-t border-border/60"
       }`}
+      type="button"
+      onClick={() => onToggle(group)}
     >
-      <span className="type-technical-label text-[0.6875rem]">{children}</span>
+      <ChevronRight
+        aria-hidden="true"
+        className={`size-3.5 shrink-0 transition-transform ${
+          collapsed ? "" : "rotate-90"
+        }`}
+      />
+      <span className="type-technical-label text-[0.6875rem]">
+        {updateGroupLabel[group]}
+      </span>
       <span className="type-meta font-mono">{count}</span>
-    </p>
+    </button>
   )
 }
 
@@ -1501,53 +1534,6 @@ function useActionGroups(
       return targets.length > 0 ? [{ group, targets }] : []
     })
   }, [ranks, relays])
-}
-
-const UpdateOwnerProfileIdsContext = React.createContext<
-  ReadonlyMap<string, string>
->(new Map())
-
-/** Resolves owners' Minecraft heads once for every row. */
-function UpdateOwnerProfiles({
-  children,
-  relays,
-}: {
-  children: React.ReactNode
-  relays: ReadonlyArray<UpdateTarget>
-}) {
-  const ownerNames = [
-    ...new Set(
-      relays.flatMap((relay) =>
-        relay.ownerName && isMinecraftUsername(relay.ownerName)
-          ? [minecraftUsernameKey(relay.ownerName)]
-          : []
-      )
-    ),
-  ]
-    .sort()
-    .join(",")
-  const { data: profileIds = noOwnerProfileIds } = useQuery({
-    ...relayOwnerMinecraftProfilesQueryOptions(ownerNames),
-    select: selectOwnerProfileIds,
-  })
-  return (
-    <UpdateOwnerProfileIdsContext.Provider value={profileIds}>
-      {children}
-    </UpdateOwnerProfileIdsContext.Provider>
-  )
-}
-
-const noOwnerProfileIds: ReadonlyMap<string, string> = new Map()
-
-function selectOwnerProfileIds(
-  profiles: Array<{ displayName: string; profileId: string }>
-): ReadonlyMap<string, string> {
-  return new Map(
-    profiles.map((profile) => [
-      minecraftUsernameKey(profile.displayName),
-      profile.profileId,
-    ])
-  )
 }
 
 type UpdateTargetRowProps = {
@@ -1652,26 +1638,19 @@ function UpdateTargetOwner({
   name: string
   viewer: boolean
 }) {
-  const profileIds = React.useContext(UpdateOwnerProfileIdsContext)
   return (
     <Tooltip>
       <TooltipTrigger asChild>
-        <span
-          className={`flex max-w-44 min-w-0 shrink-0 cursor-default items-center gap-1.5 text-[0.8125rem] font-medium ${
-            viewer ? "text-primary" : "text-foreground/85"
-          }`}
-        >
-          <UserAvatar
-            className="size-4 data-[size=sm]:size-4"
-            fallbackClassName="text-[0.5rem]"
-            name={name}
-            profileId={profileIds.get(minecraftUsernameKey(name))}
+        <span className="type-meta flex max-w-44 min-w-0 shrink-0 cursor-default items-center gap-1 text-muted-foreground">
+          <UserRound
+            aria-hidden="true"
+            className="size-3.5 shrink-0 text-primary"
           />
           <span className="truncate">{viewer ? "You" : name}</span>
         </span>
       </TooltipTrigger>
       <TooltipContent>
-        {viewer ? "You paired this Relay" : `Paired by ${name}`}
+        {viewer ? "You brought this Relay" : `Brought by ${name}`}
       </TooltipContent>
     </Tooltip>
   )
@@ -1836,10 +1815,11 @@ const UpdateTargetStatus = React.memo(function UpdateTargetStatus({
     )
   }
   if (failure) return <StatusText tone="failed">{failure}</StatusText>
-  const current = releaseVersionLabel(releases, target.currentVersion)
-  const next = targetHasUpdate(target, releases)
-    ? releaseVersionLabel(releases, latestVersion)
-    : null
+  const current = fullVersionLabel(releases, target.currentVersion)
+  const next =
+    current && targetHasUpdate(target, releases)
+      ? shortenAfter(current, fullVersionLabel(releases, latestVersion))
+      : null
   const note = targetNote(target, releases)
   return (
     <>
@@ -2076,7 +2056,7 @@ const UpdaterFooter = React.memo(function UpdaterFooter({
               <span className="text-destructive">{confirmation.error}</span>
             ) : pendingTargets.length === 1 &&
               pendingTargets[0]?.ownedByOther ? (
-              `Paired by ${pendingTargets[0].ownerName}. Game servers keep running.`
+              `Brought by ${pendingTargets[0].ownerName}. Game servers keep running.`
             ) : (
               "Game servers keep running."
             )}
@@ -2147,7 +2127,7 @@ const UpdaterFooter = React.memo(function UpdaterFooter({
           {othersCount > 0 ? (
             <span className="truncate">
               · Skips {othersCount} {othersCount === 1 ? "Relay" : "Relays"}{" "}
-              paired by others
+              brought by others
             </span>
           ) : null}
         </span>
@@ -3168,9 +3148,10 @@ function withDevMockRelays(
       currentVersion: current,
       name: `relay-${["eu", "us", "ap"][index % 3]}-${String(index + 1).padStart(2, "0")}`,
       ownedByViewer: index % 4 === 0,
+      // The development user is an admin, so its own Relays name nobody.
       ownerName:
         index % 4 === 0
-          ? "Kiln Developer"
+          ? null
           : (["Notch", "jeb_", "Dinnerbone"][index % 3] ?? null),
       relayId,
     }
@@ -3659,18 +3640,36 @@ function targetNote(
   return comparison === 1 ? null : { text: "Custom build", tone: "info" }
 }
 
-function compactReleaseName(name: string): string {
-  return name.replace(/^v\d+\.\d+\.\d+\s+(?=Nightly\b)/u, "")
-}
-
-function releaseVersionLabel(
+// "v0.1.0 Nightly #269", or the raw version for builds GitHub doesn't list.
+function fullVersionLabel(
   releases: ReadonlyArray<PublicKilnRelease>,
   version: string | null
 ): string | null {
   if (!version) return null
   const release = findKilnRelease(releases, version)
-  if (release) return compactReleaseName(release.name)
+  if (release) return release.name
   return isKilnReleaseVersion(version) ? `v${version}` : version
+}
+
+// Drops the words a target shares with where it comes from:
+// "v0.1.0 Nightly #269" → "v0.1.0 Nightly #274" reads as "→ #274".
+function shortenAfter(from: string, to: string | null): string | null {
+  if (!to) return null
+  const fromWords = from.split(" ")
+  const toWords = to.split(" ")
+  let shared = 0
+  while (
+    shared < toWords.length - 1 &&
+    fromWords[shared] !== undefined &&
+    fromWords[shared] === toWords[shared]
+  ) {
+    shared += 1
+  }
+  return toWords.slice(shared).join(" ")
+}
+
+function compactReleaseName(name: string): string {
+  return name.replace(/^v\d+\.\d+\.\d+\s+(?=Nightly\b)/u, "")
 }
 
 function parseActiveUpdates(value: unknown): Array<ActiveUpdate> {

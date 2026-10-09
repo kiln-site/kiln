@@ -9,6 +9,7 @@ import {
   releaseHistoryPageEffect,
 } from "@/effect/kiln-release-feed"
 import { RelayUnavailableError } from "@/effect/errors"
+import { platformAdminIdsEffect } from "@/effect/notifications"
 import { attachRelayOwnersEffect } from "@/effect/relay-owners"
 import { runAppEffect } from "@/effect/runtime"
 import {
@@ -180,19 +181,26 @@ export const getUpdateOverview = createServerFn({ method: "GET" }).handler(
     ])
     const hearthTarget = hearthCandidates.find((target) => target) ?? null
     const currentVersion = import.meta.env.VITE_KILN_VERSION
-    // Admins can update Relays other people brought, so each one names who
-    // paired it. Like the Relays page, only admins see email-derived names.
+    // Admins can update Relays other people brought, so those name who
+    // paired them. Relays an admin paired are the platform's own and name
+    // nobody. Like the Relays page, only admins see email-derived names.
+    const [relaysWithOwners, adminIds] = await runAppEffect(
+      "updates.relay-owners",
+      Effect.all([
+        attachRelayOwnersEffect(enabledRelays, platformAdmin),
+        platformAdminIdsEffect(),
+      ])
+    )
+    const admins = new Set(adminIds)
     const owners = new Map(
-      (
-        await runAppEffect(
-          "updates.relay-owners",
-          attachRelayOwnersEffect(enabledRelays, platformAdmin)
-        )
-      ).map((relay) => [
+      relaysWithOwners.map((relay) => [
         relay.id,
         {
           ownedByViewer: relay.createdBy === user.id,
-          ownerName: relay.ownerName,
+          ownerName:
+            relay.createdBy && admins.has(relay.createdBy)
+              ? null
+              : relay.ownerName,
         },
       ])
     )
