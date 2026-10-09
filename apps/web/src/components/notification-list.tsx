@@ -23,6 +23,7 @@ import {
 import {
   clearNotificationsMutationOptions,
   dismissNotificationMutationOptions,
+  notificationsQueryOptions,
   setCachedInvitationOutcome,
 } from "@/lib/collections/notifications"
 import type {
@@ -283,17 +284,26 @@ function InvitationActions({
         accepted ? "accepted" : "declined"
       )
   )
+  // A failed answer usually means the invitation changed meanwhile; reload
+  // the inbox so the row shows what happened to it.
+  const answer = (decision: "accept" | "decline") =>
+    mutate(decision, {
+      onError: () =>
+        void queryClient.invalidateQueries({
+          queryKey: notificationsQueryOptions().queryKey,
+        }),
+    })
   return (
     <div className="relative flex shrink-0 items-center gap-1.5">
       <Button
         variant="outline"
         size="xs"
         disabled={isPending}
-        onClick={() => mutate("decline")}
+        onClick={() => answer("decline")}
       >
         {isPending && variables === "decline" ? "Declining…" : "Decline"}
       </Button>
-      <Button size="xs" disabled={isPending} onClick={() => mutate("accept")}>
+      <Button size="xs" disabled={isPending} onClick={() => answer("accept")}>
         {isPending && variables === "accept" ? "Accepting…" : "Accept"}
       </Button>
     </div>
@@ -395,6 +405,8 @@ function notificationTitle(content: NotificationContent): string {
           return `Declined ${actorName}'s invite to ${resource.name}`
         case "cancelled":
           return `${actorName}'s invite to ${resource.name} was cancelled`
+        case "expired":
+          return `${actorName}'s invite to ${resource.name} expired`
       }
     }
     case "access.removed":

@@ -159,6 +159,12 @@ describeMysql("Kiln update notifications", () => {
           yield* notifyLatestKilnReleaseEffect(installed)
           assert.deepStrictEqual(yield* releaseNotices("admin"), ["0.4.0"])
 
+          // A feed that no longer lists it, say past GitHub's newest 100
+          // releases, is no proof the notice is stale.
+          serveReleaseFeed([])
+          yield* notifyLatestKilnReleaseEffect(installed)
+          assert.deepStrictEqual(yield* releaseNotices("admin"), ["0.4.0"])
+
           yield* notifyLatestKilnReleaseEffect("0.4.0")
           assert.deepStrictEqual(yield* releaseNotices("admin"), [])
         })

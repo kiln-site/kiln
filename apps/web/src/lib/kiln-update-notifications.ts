@@ -109,44 +109,73 @@ export const recordStartedKilnVersionEffect = Effect.fn(
  * Tells platform admins about the newest stable Kiln release when it is newer
  * than this installation. Nightly builds ship several times a day, so they
  * stay in the Updates dialog. Each release is announced once per admin, and
- * admins added later still receive the pending one on the next check. Older
- * announcements, and any the installation has caught up with, are cleared.
+ * admins added later still receive the pending one on the next check.
+ *
+ * Clearing is permanent, so an announcement is cleared only once it is known
+ * to be stale: the installation runs that release or a newer one, or the feed
+ * lists a newer stable release. One the feed no longer lists stays.
  */
 export const notifyLatestKilnReleaseEffect = Effect.fn(
   "notifications.notifyLatestRelease"
 )(function* (currentVersion: string) {
   if (!isKilnReleaseVersion(currentVersion)) return
-  const latest = newerStableRelease(
-    currentVersion,
-    yield* listKilnReleasesEffect()
-  )
-  const sourceKey = latest ? `kiln.release:${latest.version}` : null
+  const releases = yield* listKilnReleasesEffect()
+  const latest = newerStableRelease(currentVersion, releases)
   const admins = yield* platformAdminIdsEffect()
-  if (latest && sourceKey)
-    yield* notifyUsersEffect(admins, sourceKey, {
+  if (latest)
+    yield* notifyUsersEffect(admins, releaseSourceKey(latest.version), {
       kind: "kiln.release",
       name: latest.name,
       url: latest.url,
       version: latest.version,
     })
-  const cleared = yield* clearReleaseNotificationsEffect(sourceKey)
+  const stale = (version: string) =>
+    version === currentVersion ||
+    // Stable images keep the nightly version they were promoted from.
+    releases.some(
+      (release) =>
+        release.version === version && release.aliases?.includes(currentVersion)
+    ) ||
+    compareKilnReleaseVersions(version, currentVersion) === -1 ||
+    (latest !== null &&
+      compareKilnReleaseVersions(version, latest.version) === -1)
+  const cleared = yield* clearReleaseNotificationsEffect(stale)
   if (latest || cleared > 0) publishNotificationChange(admins)
 })
 
-// Clears every announced release except `keep`.
+const releaseSourceKeyPrefix = "kiln.release:"
+
+function releaseSourceKey(version: string) {
+  return `${releaseSourceKeyPrefix}${version}`
+}
+
+// Clears the announced releases whose version is `stale`.
 const clearReleaseNotificationsEffect = Effect.fnUntraced(function* (
-  keep: string | null
+  stale: (version: string) => boolean
 ) {
   const database = yield* Database
+  const announced = yield* database.queryRows<
+    RowDataPacket & { source_key: string }
+  >(
+    "notifications.announcedReleases",
+    `SELECT DISTINCT source_key FROM ${databaseTable("notification")}
+      WHERE kind = 'kiln.release' AND dismissed_at IS NULL`
+  )
+  const keys = announced.flatMap(({ source_key }) =>
+    source_key.startsWith(releaseSourceKeyPrefix) &&
+    stale(source_key.slice(releaseSourceKeyPrefix.length))
+      ? [source_key]
+      : []
+  )
+  if (!keys.length) return 0
   const now = yield* Clock.currentTimeMillis
   const result = yield* database.execute(
     "notifications.clearReleases",
     `UPDATE ${databaseTable("notification")}
         SET dismissed_at = ?, read_at = COALESCE(read_at, ?)
-      WHERE kind = 'kiln.release' AND dismissed_at IS NULL${
-        keep ? " AND source_key <> ?" : ""
-      }`,
-    keep ? [now, now, keep] : [now, now]
+      WHERE kind = 'kiln.release' AND dismissed_at IS NULL
+        AND source_key IN (${keys.map(() => "?").join(", ")})`,
+    [now, now, ...keys]
   )
   return result.affectedRows
 })

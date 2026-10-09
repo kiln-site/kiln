@@ -101,7 +101,9 @@ export function publishNotificationChange(userIds: ReadonlyArray<string>) {
 
 /**
  * The user's newest notifications, newest first. History is capped so the
- * whole inbox stays one small sync.
+ * whole inbox stays one small sync. Unanswered invitations carry their
+ * invitation's current state, so one answered elsewhere, cancelled, or
+ * expired never offers Accept and Decline.
  */
 export const listNotificationsEffect = Effect.fn("notifications.list")(
   function* (userId: string) {
@@ -115,7 +117,7 @@ export const listNotificationsEffect = Effect.fn("notifications.list")(
         LIMIT ${notificationHistoryLimit}`,
       [userId]
     )
-    return rows.flatMap((row): Array<KilnNotification> => {
+    const notifications = rows.flatMap((row): Array<KilnNotification> => {
       // Rows outlive Kiln versions; skip kinds this version can't show.
       const content = decodeContent(row)
       return Option.isSome(content)
@@ -129,8 +131,59 @@ export const listNotificationsEffect = Effect.fn("notifications.list")(
           ]
         : []
     })
+    const outcomes = yield* invitationOutcomesEffect(
+      userId,
+      notifications.flatMap(({ content }) =>
+        content.kind === "access.invited" && content.outcome === undefined
+          ? [content.invitationId]
+          : []
+      )
+    )
+    return notifications.map((notification) => {
+      const { content } = notification
+      if (content.kind !== "access.invited" || content.outcome !== undefined)
+        return notification
+      const outcome = outcomes.get(content.invitationId)
+      return outcome
+        ? { ...notification, content: { ...content, outcome } }
+        : notification
+    })
   }
 )
+
+// The state of the user's invitations that are no longer pending. One that
+// no longer exists counts as cancelled.
+const invitationOutcomesEffect = Effect.fnUntraced(function* (
+  userId: string,
+  invitationIds: ReadonlyArray<string>
+) {
+  const outcomes = new Map<string, InvitationOutcome>()
+  if (!invitationIds.length) return outcomes
+  const database = yield* Database
+  const now = yield* Clock.currentTimeMillis
+  const rows = yield* database.queryRows<
+    RowDataPacket & { id: string; outcome: InvitationOutcome | null }
+  >(
+    "notifications.invitationOutcomes",
+    `SELECT id,
+            CASE
+              WHEN accepted_at IS NOT NULL THEN 'accepted'
+              WHEN declined_at IS NOT NULL THEN 'declined'
+              WHEN revoked_at IS NOT NULL OR cancelled_at IS NOT NULL
+                THEN 'cancelled'
+              WHEN expires_at <= ? THEN 'expired'
+            END AS outcome
+       FROM ${databaseTable("invitation")}
+      WHERE user_id = ? AND id IN (${invitationIds.map(() => "?").join(", ")})`,
+    [now, userId, ...invitationIds]
+  )
+  for (const id of invitationIds) outcomes.set(id, "cancelled")
+  for (const row of rows) {
+    if (row.outcome) outcomes.set(row.id, row.outcome)
+    else outcomes.delete(row.id)
+  }
+  return outcomes
+})
 
 /**
  * Marks the user's unread notifications as read: the given IDs, or all of

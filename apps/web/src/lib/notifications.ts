@@ -34,8 +34,10 @@ export const notificationContentSchema = z.discriminatedUnion("kind", [
     actorName: z.string(),
     invitationId: z.string(),
     kind: z.literal("access.invited"),
-    // How the invitation ended: answered by the user, or cancelled.
-    outcome: z.enum(["accepted", "declined", "cancelled"]).optional(),
+    // How the invitation ended: answered by the user, cancelled, or expired.
+    outcome: z
+      .enum(["accepted", "declined", "cancelled", "expired"])
+      .optional(),
     resource: notificationResourceSchema,
   }),
   z.object({

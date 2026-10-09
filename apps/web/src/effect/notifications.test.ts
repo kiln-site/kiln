@@ -35,6 +35,23 @@ const removed: NotificationContent = {
   },
 }
 
+// Invitations as the access flow leaves them; unanswered and unexpired
+// unless a row says otherwise.
+const insertInvitations = (rows: ReadonlyArray<Record<string, unknown>>) =>
+  insertRows(
+    "invitation",
+    rows.map((row) => ({
+      token_hash: String(row.id).padEnd(64, "0"),
+      email: `${String(row.user_id)}@example.test`,
+      invited_by: "owner",
+      expires_at: 1_000_000,
+      accepted_at: null,
+      revoked_at: null,
+      created_at: 0,
+      ...row,
+    }))
+  )
+
 const contents = (userId: string) =>
   Effect.map(listNotificationsEffect(userId), (notifications) =>
     notifications.map(({ content, readAt }) => ({
@@ -207,6 +224,12 @@ describeMysql("notifications", () => {
           ...(outcome ? { outcome } : {}),
           resource: removed.resource,
         })
+        yield* insertInvitations([
+          { id: "inv-a", user_id: "user-a" },
+          { id: "inv-b", user_id: "user-a" },
+          { id: "inv-c", user_id: "user-a" },
+          { id: "inv-d", user_id: "user-b" },
+        ])
         yield* TestClock.setTime(1_000)
         yield* notifyUsersEffect(
           ["user-a"],
@@ -227,8 +250,8 @@ describeMysql("notifications", () => {
         )
         yield* notifyUsersEffect(
           ["user-b"],
-          "access.invited:inv-a",
-          invited("inv-a")
+          "access.invited:inv-d",
+          invited("inv-d")
         )
 
         // An answer marks the notification read; a cancellation stays unread
@@ -255,8 +278,52 @@ describeMysql("notifications", () => {
           { content: invited("inv-a", "accepted"), read: true },
         ])
         assert.deepStrictEqual(yield* contents("user-b"), [
-          { content: invited("inv-a"), read: false },
+          { content: invited("inv-d"), read: false },
         ])
+      })
+    )
+
+    it.effect("shows what became of invitations answered elsewhere", () =>
+      Effect.gen(function* () {
+        yield* resetDatabase
+        yield* insertUser("user-a")
+        yield* TestClock.setTime(10_000)
+        // Notifications written before outcomes were recorded, or whose
+        // invitation changed without them, carry no outcome of their own.
+        yield* insertInvitations([
+          { id: "pending", user_id: "user-a" },
+          { id: "expired", user_id: "user-a", expires_at: 10_000 },
+          { id: "accepted", user_id: "user-a", accepted_at: 5_000 },
+          { id: "revoked", user_id: "user-a", revoked_at: 5_000 },
+          { id: "other-user", user_id: "user-b" },
+        ])
+        const ids = ["pending", "expired", "accepted", "revoked", "other-user"]
+        for (const [index, id] of ids.entries()) {
+          yield* TestClock.setTime(1_000 + index)
+          yield* notifyUsersEffect(["user-a"], `access.invited:${id}`, {
+            actorName: "Owner",
+            invitationId: id,
+            kind: "access.invited",
+            resource: removed.resource,
+          })
+        }
+        yield* TestClock.setTime(10_000)
+
+        assert.deepStrictEqual(
+          (yield* listNotificationsEffect("user-a")).map(({ content }) =>
+            content.kind === "access.invited"
+              ? [content.invitationId, content.outcome ?? "pending"]
+              : null
+          ),
+          [
+            // Another user's invitation is never this user's to answer.
+            ["other-user", "cancelled"],
+            ["revoked", "cancelled"],
+            ["accepted", "accepted"],
+            ["expired", "expired"],
+            ["pending", "pending"],
+          ]
+        )
       })
     )
 
