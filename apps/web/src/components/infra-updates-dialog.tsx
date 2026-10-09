@@ -121,6 +121,8 @@ type UpdateTarget = {
   name: string
   // Who paired the Relay: "You", their name, or null for the Panel.
   owner: string | null
+  // Someone else paired it, so Update all leaves it to its own row.
+  ownedByOther: boolean
   reachable: boolean
   reason: string | null
   relayId: string | null
@@ -1340,6 +1342,11 @@ const UpdateTargetList = React.memo(function UpdateTargetList({
   onChangelog: (targetKey: string) => void
   onUpdate: UpdateHandler
 }) {
+  const relays = React.useMemo(
+    () => targets.filter((target) => target.component === "relay"),
+    [targets]
+  )
+  const sortedRelays = useActionOrder(relays, releases)
   const latestRelease = releases[0] ?? null
   if (!latestRelease) {
     return (
@@ -1349,7 +1356,7 @@ const UpdateTargetList = React.memo(function UpdateTargetList({
     )
   }
   const hearthTarget = targets.find((target) => target.component === "hearth")
-  const relayTargets = targets.filter((target) => target.component === "relay")
+  const relayTargets = sortedRelays
 
   return (
     <div className="pb-2">
@@ -1367,7 +1374,9 @@ const UpdateTargetList = React.memo(function UpdateTargetList({
           />
         </>
       ) : null}
-      <UpdateSectionLabel>Relays</UpdateSectionLabel>
+      <UpdateSectionLabel summary={relaySummary(relays, releases)}>
+        Relays
+      </UpdateSectionLabel>
       {relayTargets.length > 0 ? (
         relayTargets.map((target) => (
           <UpdateTargetRow
@@ -1391,12 +1400,99 @@ const UpdateTargetList = React.memo(function UpdateTargetList({
   )
 })
 
-function UpdateSectionLabel({ children }: { children: React.ReactNode }) {
+function UpdateSectionLabel({
+  children,
+  summary,
+}: {
+  children: React.ReactNode
+  summary?: string | null
+}) {
   return (
-    <p className="type-technical-label flex h-8 items-end px-5 pb-1.5 text-[0.6875rem] text-muted-foreground">
-      {children}
+    <p className="flex h-8 items-end gap-3 px-5 pb-1.5 text-muted-foreground">
+      <span className="type-technical-label text-[0.6875rem]">{children}</span>
+      {summary ? (
+        <span className="type-meta normal-case">{summary}</span>
+      ) : null}
     </p>
   )
+}
+
+// What a target needs, for ordering: updates first, then current ones, then
+// ones Kiln can't update, then offline.
+function targetActionRank(
+  target: UpdateTarget,
+  releases: ReadonlyArray<PublicKilnRelease>
+): number {
+  if (!target.reachable) return 3
+  if (targetHasUpdate(target, releases)) return 0
+  return target.eligible ||
+    compareLatestReleaseVersion(target.currentVersion, releases) === 0
+    ? 1
+    : 2
+}
+
+/**
+ * Relays in the order that needs action first, fixed while the dialog is
+ * open: a Relay that finishes updating stays put instead of jumping to the
+ * up-to-date group. Relays seen for the first time join at their rank.
+ */
+function useActionOrder(
+  relays: ReadonlyArray<UpdateTarget>,
+  releases: ReadonlyArray<PublicKilnRelease>
+): Array<UpdateTarget> {
+  const orderRef = React.useRef<Map<string, number> | null>(null)
+  const relayKeys = relays.map((relay) => relay.key).join("\n")
+  // Only a change in which Relays exist reorders; versions alone don't.
+  const order = React.useMemo(() => {
+    const ranked = [...relays].sort(
+      (left, right) =>
+        targetActionRank(left, releases) - targetActionRank(right, releases) ||
+        left.name.localeCompare(right.name)
+    )
+    const previous = orderRef.current
+    // Known Relays keep their place; new ones slot in after them by rank.
+    const next = previous
+      ? [
+          ...ranked
+            .filter((relay) => previous.has(relay.key))
+            .sort(
+              (left, right) =>
+                (previous.get(left.key) ?? 0) - (previous.get(right.key) ?? 0)
+            ),
+          ...ranked.filter((relay) => !previous.has(relay.key)),
+        ]
+      : ranked
+    const map = new Map(next.map((relay, index) => [relay.key, index]))
+    orderRef.current = map
+    return map
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [relayKeys])
+  return React.useMemo(
+    () =>
+      [...relays].sort(
+        (left, right) =>
+          (order.get(left.key) ?? 0) - (order.get(right.key) ?? 0)
+      ),
+    [order, relays]
+  )
+}
+
+function relaySummary(
+  relays: ReadonlyArray<UpdateTarget>,
+  releases: ReadonlyArray<PublicKilnRelease>
+): string | null {
+  if (relays.length === 0) return null
+  const behind = relays.filter((relay) =>
+    targetHasUpdate(relay, releases)
+  ).length
+  const offline = relays.filter((relay) => !relay.reachable).length
+  return [
+    String(relays.length),
+    behind > 0 ? `${behind} behind` : null,
+    offline > 0 ? `${offline} offline` : null,
+  ]
+    .filter(Boolean)
+    .join(" · ")
 }
 
 type UpdateTargetRowProps = {
@@ -1435,7 +1531,7 @@ const UpdateTargetRow = React.memo(function UpdateTargetRow({
       className={`${updateRowClassName} ${
         focused
           ? "bg-accent/35 before:absolute before:inset-y-0 before:left-0 before:w-0.5 before:bg-primary"
-          : ""
+          : "hover:bg-accent/15"
       }`}
     >
       <UpdateTargetIcon target={target} />
@@ -1464,16 +1560,21 @@ const UpdateTargetRow = React.memo(function UpdateTargetRow({
         </div>
       </div>
       <div className="flex items-center gap-1">
-        <Button
-          className="text-muted-foreground"
-          size="sm"
-          type="button"
-          variant="ghost"
-          onClick={() => onChangelog(target.key)}
-        >
-          <ScrollText />
-          Changes
-        </Button>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              aria-label={`Changes for ${target.name}`}
+              className="text-muted-foreground hover:text-foreground"
+              size="icon-sm"
+              type="button"
+              variant="ghost"
+              onClick={() => onChangelog(target.key)}
+            >
+              <ScrollText />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>Changes</TooltipContent>
+        </Tooltip>
         <UpdateTargetAction
           activityStore={activityStore}
           latestVersion={latestVersion}
@@ -1902,6 +2003,9 @@ const UpdaterFooter = React.memo(function UpdaterFooter({
             </span>{" "}
             {confirmation.error ? (
               <span className="text-destructive">{confirmation.error}</span>
+            ) : pendingTargets.length === 1 &&
+              pendingTargets[0]?.ownedByOther ? (
+              `Paired by ${pendingTargets[0].owner}. Game servers keep running.`
             ) : (
               "Game servers keep running."
             )}
@@ -1950,9 +2054,12 @@ const UpdaterFooter = React.memo(function UpdaterFooter({
     )
   }
 
-  const availableTargets = latestRelease
+  const updatable = latestRelease
     ? targets.filter((target) => targetHasUpdate(target, releases))
     : []
+  // Relays other people paired update from their own row, never in bulk.
+  const availableTargets = updatable.filter((target) => !target.ownedByOther)
+  const othersCount = updatable.length - availableTargets.length
   return (
     <UpdaterFooterBar tone={checkFailed ? "warning" : "default"}>
       {checkFailed ? (
@@ -1964,7 +2071,15 @@ const UpdaterFooter = React.memo(function UpdaterFooter({
           </span>
         </span>
       ) : (
-        <LastCheckedLabel activityStore={activityStore} open={open} />
+        <span className="flex min-w-0 items-center gap-2">
+          <LastCheckedLabel activityStore={activityStore} open={open} />
+          {othersCount > 0 ? (
+            <span className="truncate">
+              · Skips {othersCount} {othersCount === 1 ? "Relay" : "Relays"}{" "}
+              paired by others
+            </span>
+          ) : null}
+        </span>
       )}
       <span className="flex shrink-0 items-center gap-1.5">
         {checkFailed ? (
@@ -2021,9 +2136,11 @@ const UpdaterFooter = React.memo(function UpdaterFooter({
           }}
         >
           <CloudDownload />
-          {availableTargets.length > 0
-            ? `Update all (${availableTargets.length})`
-            : "Update all"}
+          {availableTargets.length === 0
+            ? "Update all"
+            : othersCount > 0
+              ? `Update ${availableTargets.length}`
+              : `Update all (${availableTargets.length})`}
         </Button>
       </span>
     </UpdaterFooterBar>
@@ -2971,19 +3088,34 @@ function withDevMockRelays(
     const current = versionAt(index < count * 0.6 ? 2 : index % 2 ? 5 : 12)
     const previous = versionAt(index % 3 === 0 ? 5 : 20)
     if (previous) previousVersions[`relay:${relayId}`] = previous
-    return {
-      component: "relay" as const,
+    const base = {
       container: "",
       currentImage: "",
       currentVersion: current,
-      eligible: false,
       name: `relay-${["eu", "us", "ap"][index % 3]}-${String(index + 1).padStart(2, "0")}`,
       ownedByViewer: index % 4 === 0,
       ownerName: ["Notch", "jeb_", "Dinnerbone"][index % 3] ?? null,
-      reachable: false as const,
-      reason: "Development mock Relay",
       relayId,
     }
+    // A third can update, a third can't, and a third are offline. Updating
+    // one for real fails; the footer's Mock buttons simulate it instead.
+    return index % 3 === 2
+      ? {
+          ...base,
+          component: "relay" as const,
+          eligible: false,
+          reachable: false as const,
+          reason: "Development mock Relay",
+        }
+      : {
+          ...base,
+          component: "relay" as const,
+          eligible: index % 3 === 1,
+          installationId: null,
+          reachable: true as const,
+          reason: index % 3 === 1 ? null : "Development mock Relay",
+          sameInstallation: true,
+        }
   })
   return {
     ...overview,
@@ -3137,6 +3269,7 @@ function updateTargets(overview: UpdateOverview): Array<UpdateTarget> {
     key: "hearth",
     name: "Panel",
     owner: null,
+    ownedByOther: false,
     reachable: true,
     reason:
       overview.hearth?.reason ??
@@ -3152,6 +3285,7 @@ function updateTargets(overview: UpdateOverview): Array<UpdateTarget> {
       key: relayTargetKey(relay.relayId),
       name: relay.name,
       owner: relay.ownedByViewer ? "You" : relay.ownerName,
+      ownedByOther: !relay.ownedByViewer && relay.ownerName !== null,
       reachable: relay.reachable,
       reason: relay.reason,
       relayId: relay.relayId,
@@ -3383,6 +3517,7 @@ function areUpdateTargetsEqual(
     previous.key === next.key &&
     previous.name === next.name &&
     previous.owner === next.owner &&
+    previous.ownedByOther === next.ownedByOther &&
     previous.reachable === next.reachable &&
     previous.reason === next.reason &&
     previous.relayId === next.relayId
