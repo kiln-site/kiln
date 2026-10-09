@@ -101,30 +101,33 @@ export const listKilnReleasesEffect = Effect.fn("github.releases.list")(
         ]
       })
     )
-    const latestRelease = orderedReleases[0]
-    if (!latestRelease || latestRelease.channel !== "stable") {
-      return orderedReleases
-    }
+    // A stable image keeps the nightly version it was promoted from, named in
+    // its manifest. Alias the newest stable release to it even when a newer
+    // nightly tops the feed, so an installed stable build is still known.
+    const stableIndex = orderedReleases.findIndex(
+      (release) => release.channel === "stable"
+    )
+    const stableRelease = orderedReleases[stableIndex]
+    if (!stableRelease) return orderedReleases
 
     const manifest = yield* requestJson(
-      latestRelease.manifestUrl,
+      stableRelease.manifestUrl,
       ReleaseManifestSchema
     )
+    const imageVersion = manifest.imageVersion
     if (
-      manifest.imageVersion === undefined ||
-      !isKilnReleaseVersion(manifest.imageVersion) ||
-      kilnReleaseVersionCore(manifest.imageVersion) !==
-        kilnReleaseVersionCore(latestRelease.version)
+      imageVersion === undefined ||
+      !isKilnReleaseVersion(imageVersion) ||
+      kilnReleaseVersionCore(imageVersion) !==
+        kilnReleaseVersionCore(stableRelease.version)
     ) {
       return orderedReleases
     }
-    return [
-      {
-        ...latestRelease,
-        aliases: [...latestRelease.aliases, manifest.imageVersion],
-      },
-      ...orderedReleases.slice(1),
-    ]
+    return orderedReleases.map((release, index) =>
+      index === stableIndex
+        ? { ...release, aliases: [...release.aliases, imageVersion] }
+        : release
+    )
   }
 )
 

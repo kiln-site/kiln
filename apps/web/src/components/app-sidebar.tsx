@@ -45,6 +45,12 @@ import {
 } from "@workspace/ui/components/tooltip"
 import { AccountAvatar } from "@/components/account-avatar"
 import { HearthMark } from "@/components/hearth-mark"
+import {
+  CollapsedNotificationsAnchor,
+  NotificationsBell,
+  NotificationsMenuItem,
+  UnreadNotificationsIndicator,
+} from "@/components/notifications"
 import { BackupIcon } from "@/components/backup-icon"
 import {
   RouteCommandMenuProvider,
@@ -167,6 +173,7 @@ const AppSidebarView = React.memo(function AppSidebarView({
                   KILN
                 </span>
               </SidebarMenuButton>
+              <HeaderNotificationsBell />
             </SidebarMenuItem>
           </SidebarMenu>
           <RouteCommandMenuTrigger />
@@ -192,6 +199,19 @@ const AppSidebarView = React.memo(function AppSidebarView({
     </RouteCommandMenuProvider>
   )
 })
+
+// Collapsed, notifications live in the account menu instead. Only one popover
+// may be mounted at a time, since both share one open state.
+function HeaderNotificationsBell() {
+  const { isMobile, state } = useSidebar()
+  if (state === "collapsed" && !isMobile) return null
+  return (
+    <NotificationsBell
+      className="absolute top-1/2 right-1 -translate-y-1/2"
+      tooltipHidden={isMobile}
+    />
+  )
+}
 
 function InfrastructureNavigation({
   capabilities,
@@ -1171,59 +1191,64 @@ function AccountNavigation({
 function CollapsedAccountMenu({ user }: { user: AuthenticatedUser }) {
   const [open, setOpen] = React.useState(false)
   const [signingOut, setSigningOut] = React.useState(false)
+  const closeMenu = React.useCallback(() => setOpen(false), [])
 
   return (
-    <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger asChild>
-        <button
-          type="button"
-          className="grid size-[32px] place-items-center transition-colors hover:bg-sidebar-accent focus-visible:ring-2 focus-visible:ring-sidebar-ring/45 focus-visible:outline-none data-[state=open]:bg-sidebar-accent"
-          aria-label={`Open account menu for ${user.name}`}
+    <CollapsedNotificationsAnchor>
+      <Popover open={open} onOpenChange={setOpen}>
+        <PopoverTrigger asChild>
+          <button
+            type="button"
+            className="relative grid size-[32px] place-items-center transition-colors hover:bg-sidebar-accent focus-visible:ring-2 focus-visible:ring-sidebar-ring/45 focus-visible:outline-none data-[state=open]:bg-sidebar-accent"
+            aria-label={`Open account menu for ${user.name}`}
+          >
+            <AccountAvatar name={user.name} />
+            <UnreadNotificationsIndicator />
+          </button>
+        </PopoverTrigger>
+        <PopoverContent
+          aria-label="Account menu"
+          side="right"
+          align="end"
+          className="w-48 p-1"
         >
-          <AccountAvatar name={user.name} />
-        </button>
-      </PopoverTrigger>
-      <PopoverContent
-        aria-label="Account menu"
-        side="right"
-        align="end"
-        className="w-48 p-1"
-      >
-        <p className="truncate px-2 py-2 text-xs text-muted-foreground">
-          {user.name}
-        </p>
-        <div className="-mx-1 mb-1 h-px bg-border" />
-        <Link
-          to="/settings/account"
-          preload="intent"
-          className="flex h-9 w-full items-center gap-2 px-2 text-sm transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:ring-2 focus-visible:ring-ring/45 focus-visible:outline-none"
-          onClick={() => setOpen(false)}
-        >
-          <Settings className="size-4" />
-          <span>Settings</span>
-        </Link>
-        <button
-          type="button"
-          className="flex h-9 w-full items-center gap-2 px-2 text-left text-sm transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:ring-2 focus-visible:ring-ring/45 focus-visible:outline-none disabled:pointer-events-none disabled:opacity-45"
-          aria-label={signingOut ? "Signing out" : "Logout"}
-          disabled={signingOut}
-          onClick={() => {
-            setSigningOut(true)
-            forkPromise(
-              () => signOut(user.isDevelopmentBypass),
-              () => setSigningOut(false)
-            )
-          }}
-        >
-          {signingOut ? (
-            <LoaderCircle className="size-4 animate-spin" />
-          ) : (
-            <LogOut className="size-4" />
-          )}
-          <span>{signingOut ? "Signing out" : "Logout"}</span>
-        </button>
-      </PopoverContent>
-    </Popover>
+          <p className="truncate px-2 py-2 text-xs text-muted-foreground">
+            {user.name}
+          </p>
+          <div className="-mx-1 mb-1 h-px bg-border" />
+          <NotificationsMenuItem onSelect={closeMenu} />
+          <Link
+            to="/settings/account"
+            preload="intent"
+            className="flex h-9 w-full items-center gap-2 px-2 text-sm transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:ring-2 focus-visible:ring-ring/45 focus-visible:outline-none"
+            onClick={() => setOpen(false)}
+          >
+            <Settings className="size-4" />
+            <span>Settings</span>
+          </Link>
+          <button
+            type="button"
+            className="flex h-9 w-full items-center gap-2 px-2 text-left text-sm transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:ring-2 focus-visible:ring-ring/45 focus-visible:outline-none disabled:pointer-events-none disabled:opacity-45"
+            aria-label={signingOut ? "Signing out" : "Logout"}
+            disabled={signingOut}
+            onClick={() => {
+              setSigningOut(true)
+              forkPromise(
+                () => signOut(user.isDevelopmentBypass),
+                () => setSigningOut(false)
+              )
+            }}
+          >
+            {signingOut ? (
+              <LoaderCircle className="size-4 animate-spin" />
+            ) : (
+              <LogOut className="size-4" />
+            )}
+            <span>{signingOut ? "Signing out" : "Logout"}</span>
+          </button>
+        </PopoverContent>
+      </Popover>
+    </CollapsedNotificationsAnchor>
   )
 }
 
@@ -1349,6 +1374,7 @@ function globalSectionFromPathname(pathname: string): GlobalSection {
     return "backups"
   }
   if (pathname === "/access") return "access"
+  if (pathname === "/notifications") return "notifications"
   if (pathname === "/settings" || pathname.startsWith("/settings/")) {
     return "settings"
   }

@@ -156,6 +156,7 @@ export const queryKeys = {
   tailscaleStacks: ["tailscale", "stacks"] as const,
   updates: ["updates", "overview"] as const,
   instanceFavorites: ["instance-favorites"] as const,
+  notifications: ["notifications"] as const,
   uiPreferences: ["ui", "preferences"] as const,
 }
 

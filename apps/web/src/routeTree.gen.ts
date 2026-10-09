@@ -31,6 +31,7 @@ import { Route as AppActivityRouteImport } from './routes/_app.activity'
 import { Route as AppAutomationsRouteImport } from './routes/_app.automations'
 import { Route as AppBackupsRouteImport } from './routes/_app.backups'
 import { Route as AppInfraRouteImport } from './routes/_app.infra'
+import { Route as AppNotificationsRouteImport } from './routes/_app.notifications'
 import { Route as AppOperationsRouteImport } from './routes/_app.operations'
 import { Route as AppServersRouteImport } from './routes/_app.servers'
 import { Route as AppSettingsRouteImport } from './routes/_app.settings'
@@ -192,6 +193,11 @@ const AppBackupsRoute = AppBackupsRouteImport.update({
 const AppInfraRoute = AppInfraRouteImport.update({
   id: '/infra',
   path: '/infra',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppNotificationsRoute = AppNotificationsRouteImport.update({
+  id: '/notifications',
+  path: '/notifications',
   getParentRoute: () => AppRoute,
 } as any)
 const AppOperationsRoute = AppOperationsRouteImport.update({
@@ -487,6 +493,7 @@ export interface FileRoutesByFullPath {
   '/automations': typeof AppAutomationsRouteWithChildren
   '/backups': typeof AppBackupsRouteWithChildren
   '/infra': typeof AppInfraRouteWithChildren
+  '/notifications': typeof AppNotificationsRoute
   '/operations': typeof AppOperationsRoute
   '/servers': typeof AppServersRoute
   '/settings': typeof AppSettingsRouteWithChildren
@@ -560,6 +567,7 @@ export interface FileRoutesByTo {
   '/$': typeof AppSplatRoute
   '/access': typeof AppAccessRoute
   '/activity': typeof AppActivityRoute
+  '/notifications': typeof AppNotificationsRoute
   '/operations': typeof AppOperationsRoute
   '/servers': typeof AppServersRoute
   '/api/account-status': typeof ApiAccountStatusRoute
@@ -635,6 +643,7 @@ export interface FileRoutesById {
   '/_app/automations': typeof AppAutomationsRouteWithChildren
   '/_app/backups': typeof AppBackupsRouteWithChildren
   '/_app/infra': typeof AppInfraRouteWithChildren
+  '/_app/notifications': typeof AppNotificationsRoute
   '/_app/operations': typeof AppOperationsRoute
   '/_app/servers': typeof AppServersRoute
   '/_app/settings': typeof AppSettingsRouteWithChildren
@@ -713,6 +722,7 @@ export interface FileRouteTypes {
     | '/automations'
     | '/backups'
     | '/infra'
+    | '/notifications'
     | '/operations'
     | '/servers'
     | '/settings'
@@ -786,6 +796,7 @@ export interface FileRouteTypes {
     | '/$'
     | '/access'
     | '/activity'
+    | '/notifications'
     | '/operations'
     | '/servers'
     | '/api/account-status'
@@ -860,6 +871,7 @@ export interface FileRouteTypes {
     | '/_app/automations'
     | '/_app/backups'
     | '/_app/infra'
+    | '/_app/notifications'
     | '/_app/operations'
     | '/_app/servers'
     | '/_app/settings'
@@ -1100,6 +1112,13 @@ declare module '@tanstack/react-router' {
       path: '/infra'
       fullPath: '/infra'
       preLoaderRoute: typeof AppInfraRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/notifications': {
+      id: '/_app/notifications'
+      path: '/notifications'
+      fullPath: '/notifications'
+      preLoaderRoute: typeof AppNotificationsRouteImport
       parentRoute: typeof AppRoute
     }
     '/_app/operations': {
@@ -1626,6 +1645,7 @@ interface AppRouteChildren {
   AppAutomationsRoute: typeof AppAutomationsRouteWithChildren
   AppBackupsRoute: typeof AppBackupsRouteWithChildren
   AppInfraRoute: typeof AppInfraRouteWithChildren
+  AppNotificationsRoute: typeof AppNotificationsRoute
   AppOperationsRoute: typeof AppOperationsRoute
   AppServersRoute: typeof AppServersRoute
   AppSettingsRoute: typeof AppSettingsRouteWithChildren
@@ -1640,6 +1660,7 @@ const AppRouteChildren: AppRouteChildren = {
   AppAutomationsRoute: AppAutomationsRouteWithChildren,
   AppBackupsRoute: AppBackupsRouteWithChildren,
   AppInfraRoute: AppInfraRouteWithChildren,
+  AppNotificationsRoute: AppNotificationsRoute,
   AppOperationsRoute: AppOperationsRoute,
   AppServersRoute: AppServersRoute,
   AppSettingsRoute: AppSettingsRouteWithChildren,

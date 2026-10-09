@@ -55,6 +55,7 @@ const hearthRealtimeQueryScopes = {
   "file-activity": [prefix(["file-activity"])],
   "instance-directory": [exact(queryKeys.schedules.options)],
   "instance-web-routes": [prefix(["web-routes"])],
+  notifications: [exact(queryKeys.notifications)],
   preferences: [exact(queryKeys.uiPreferences)],
   "relay-health": [exact(queryKeys.relays)],
   "relay-proxy": [prefix(["relays", "proxy"])],
