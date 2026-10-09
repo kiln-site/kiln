@@ -33,6 +33,7 @@ import type {
 import {
   hearthDatabaseTerminalOutputSchema,
   relayTailscaleStackIdSchema,
+  tailscaleMemberIdSchema,
 } from "@workspace/contracts"
 import { z } from "zod"
 
@@ -60,7 +61,8 @@ export type { RelayEndpoint }
 
 const MAX_BACKOFF_MS = 30_000
 const tailscaleInstanceDetachSchema = z.strictObject({
-  instanceId: z.string().regex(/^[a-f0-9]{40}$/u),
+  // A server, or an app's service being deleted.
+  instanceId: tailscaleMemberIdSchema,
   mode: z.enum(["prepare", "rollback"]),
   stackIds: z.array(relayTailscaleStackIdSchema).min(1).max(4_096),
 })

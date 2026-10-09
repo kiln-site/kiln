@@ -44,6 +44,7 @@ import type {
   RelayUpdateInstanceStartup,
 } from "@workspace/contracts"
 import {
+  appTailscaleMember,
   builtinTailscaleBrickId,
   builtinTailscaleBrickSource,
   relayDiskAllocationAvailableBytes,
@@ -638,6 +639,13 @@ export class LifecycleDriver {
     const existing = await this.#readTailscaleStackConfig(input.id)
     const instances = await this.#docker.inspectInstances()
     for (const binding of input.bindings) {
+      const app = appTailscaleMember(binding.instanceId)
+      if (app) {
+        // Throws for an app that isn't on this Relay. One not deployed yet
+        // joins when it deploys.
+        await this.#appServiceContainer?.(app.appId, app.service)
+        continue
+      }
       const instance = instances.find(
         (candidate) => candidate.id === binding.instanceId
       )
@@ -1676,6 +1684,7 @@ export class LifecycleDriver {
               action,
               portConfiguration
             )
+            await this.reattachTailscaleMember(instance.id)
             if (pendingExternalPort) {
               const networking = await this.networking()
               if (networking?.enabled) {
@@ -1897,6 +1906,7 @@ export class LifecycleDriver {
             },
           }
         )
+        await this.reattachTailscaleMember(instance.id)
         const networking = await this.networking()
         if (networking?.enabled) {
           await this.#refreshCoreDnsConfiguration(networking)
@@ -2245,8 +2255,8 @@ export class LifecycleDriver {
     })
 
     return runLifecycle(
-      lifecycleOperation(() =>
-        this.#provisionManagedInstance({
+      lifecycleOperation(async () => {
+        const reconfigured = await this.#provisionManagedInstance({
           diskLimitBytes,
           grandfatheredDiskLimitBytes: existing.limits.diskBytes,
           id: existing.id,
@@ -2259,7 +2269,11 @@ export class LifecycleDriver {
           tailscale,
           variables,
         })
-      ).pipe(
+        // The new container joins its Tailscale networks where the old one
+        // was.
+        await this.reattachTailscaleMember(existing.id)
+        return reconfigured
+      }).pipe(
         Effect.mapError(
           (error) =>
             new Error(
@@ -3001,7 +3015,9 @@ export class LifecycleDriver {
             stackIds: affectedStackIds,
           })
         }
-        detachedStacks = await this.#detachInstanceFromTailscaleStacks(instance)
+        detachedStacks = await this.#detachMemberFromTailscaleStacks(
+          instance.id
+        )
         await runLifecycle(
           lifecycleOperation(() =>
             command(
@@ -3693,8 +3709,8 @@ export class LifecycleDriver {
     for (const binding of previousById.values()) {
       const replacement = desiredById.get(binding.instanceId)
       if (replacement?.address === binding.address) continue
-      const instance = await this.#docker.findInstance(binding.instanceId)
-      if (!instance) continue
+      const container = await this.#tailscaleMemberContainer(binding.instanceId)
+      if (!container) continue
       await recoverPromise(
         () =>
           command("docker", [
@@ -3702,38 +3718,15 @@ export class LifecycleDriver {
             "disconnect",
             "--force",
             network,
-            instance.service,
+            container,
           ]),
         () => undefined
       )
     }
     for (const binding of desiredById.values()) {
-      const prior = previousById.get(binding.instanceId)
-      const instance = await this.#docker.findInstance(binding.instanceId)
-      if (!instance) continue
-      if (
-        prior?.address === binding.address &&
-        (await containerUsesNetwork(instance.service, network))
-      ) {
-        continue
-      }
-      if (await containerUsesNetwork(instance.service, network)) {
-        await command("docker", [
-          "network",
-          "disconnect",
-          "--force",
-          network,
-          instance.service,
-        ])
-      }
-      await command("docker", [
-        "network",
-        "connect",
-        "--ip",
-        binding.address,
-        network,
-        instance.service,
-      ])
+      const container = await this.#tailscaleMemberContainer(binding.instanceId)
+      if (!container) continue
+      await attachTailscaleMember(container, network, binding.address)
     }
   }
 
@@ -4186,9 +4179,7 @@ export class LifecycleDriver {
     )
   }
 
-  async #detachInstanceFromTailscaleStacks(
-    instance: RelayInstanceConfig
-  ): Promise<
+  async #detachMemberFromTailscaleStacks(memberId: string): Promise<
     Array<{
       next: RelayTailscaleStackConfig
       previous: RelayTailscaleStackConfig
@@ -4196,7 +4187,7 @@ export class LifecycleDriver {
     }>
   > {
     const configs = (await this.#tailscaleStackConfigs()).filter((config) =>
-      config.bindings.some((binding) => binding.instanceId === instance.id)
+      config.bindings.some((binding) => binding.instanceId === memberId)
     )
     const completed: Array<{
       next: RelayTailscaleStackConfig
@@ -4208,14 +4199,14 @@ export class LifecycleDriver {
         for (const previous of configs) {
           if (await this.#tailscaleStackRemovalPending(previous.id)) {
             throw new Error(
-              `Finish removing ${previous.name} from Tailscale before deleting this server`
+              `Finish removing ${previous.name} from Tailscale before deleting this`
             )
           }
           const records = await this.#readTailscaleStackDnsRecords(previous)
           const detached = tailscaleStackWithoutInstance(
             previous,
             records,
-            instance.id
+            memberId
           )
           const next = detached.config
           completed.push({ next, previous, records })
@@ -4235,7 +4226,7 @@ export class LifecycleDriver {
             const rollbackFailures =
               await this.#restoreInstanceTailscaleStacks(completed)
             throw new Error(
-              `Could not remove the server from its Tailscale networks: ${
+              `Could not remove it from its Tailscale networks: ${
                 cause instanceof Error ? cause.message : "unknown error"
               }${
                 rollbackFailures.length > 0
@@ -4539,6 +4530,104 @@ export class LifecycleDriver {
     await command("docker", ["network", "rm", name])
   }
 
+  // An app service's current container, for its Tailscale memberships. Set
+  // once the app driver exists, since that driver needs this one.
+  #appServiceContainer:
+    | ((appId: string, service: string) => Promise<string | null>)
+    | null = null
+
+  useAppServiceContainers(
+    resolve: (appId: string, service: string) => Promise<string | null>
+  ) {
+    this.#appServiceContainer = resolve
+  }
+
+  // The container a Tailscale member runs in: a server's, or an app
+  // service's newest. Null when it has none yet.
+  async #tailscaleMemberContainer(memberId: string): Promise<string | null> {
+    const app = appTailscaleMember(memberId)
+    if (app) {
+      return this.#appServiceContainer
+        ? this.#appServiceContainer(app.appId, app.service)
+        : null
+    }
+    return (await this.#docker.findInstance(memberId))?.service ?? null
+  }
+
+  // Every enabled membership whose member matches, with the network and the
+  // address it holds there.
+  async tailscaleMemberships(
+    matches: (memberId: string) => boolean
+  ): Promise<Array<{ address: string; memberId: string; network: string }>> {
+    return (await this.#tailscaleStackConfigs()).flatMap((config) =>
+      activeTailscaleStackBindings(config.bindings)
+        .filter((binding) => matches(binding.instanceId))
+        .map((binding) => ({
+          address: binding.address,
+          memberId: binding.instanceId,
+          network: this.#resources.tailscaleStackNetwork(config.id),
+        }))
+    )
+  }
+
+  // Puts a member's container back at its address on each of its Tailscale
+  // networks, after the container was recreated.
+  async reattachTailscaleMember(memberId: string): Promise<void> {
+    const container = await this.#tailscaleMemberContainer(memberId)
+    if (!container) return
+    for (const membership of await this.tailscaleMemberships(
+      (candidate) => candidate === memberId
+    )) {
+      await attachTailscaleMember(
+        container,
+        membership.network,
+        membership.address
+      )
+    }
+  }
+
+  // Takes an app's services off their Tailscale networks before the app is
+  // deleted. Hearth drops their DNS records from every node first, and puts
+  // them back if the detach fails.
+  async detachAppFromTailscale(
+    appId: string,
+    synchronize: (input: {
+      memberId: string
+      mode: "prepare" | "rollback"
+      stackIds: ReadonlyArray<string>
+    }) => Promise<void>
+  ): Promise<void> {
+    const configs = await this.#tailscaleStackConfigs()
+    const memberIds = [
+      ...new Set(
+        configs.flatMap((config) =>
+          config.bindings
+            .map((binding) => binding.instanceId)
+            .filter((memberId) => appTailscaleMember(memberId)?.appId === appId)
+        )
+      ),
+    ]
+    for (const memberId of memberIds) {
+      const stackIds = configs
+        .filter((config) =>
+          config.bindings.some((binding) => binding.instanceId === memberId)
+        )
+        .map((config) => config.id)
+      await synchronize({ memberId, mode: "prepare", stackIds })
+      await runLifecycle(
+        lifecycleOperation(() =>
+          this.#detachMemberFromTailscaleStacks(memberId)
+        ).pipe(
+          Effect.tapError(() =>
+            lifecycleOperation(() =>
+              synchronize({ memberId, mode: "rollback", stackIds })
+            ).pipe(Effect.ignore)
+          )
+        )
+      )
+    }
+  }
+
   // The Relay's data directory as the Docker host sees it, for bind mounts.
   hostDataDirectory(): Promise<string> {
     return this.#hostDataDirectory()
@@ -4583,6 +4672,58 @@ async function ensureProtectedFile(path: string): Promise<void> {
     )
   )
   await chmod(path, 0o600)
+}
+
+// Puts a container on a Tailscale network at its member address, moving it
+// there if it holds another.
+async function attachTailscaleMember(
+  container: string,
+  network: string,
+  address: string
+): Promise<void> {
+  if ((await containerNetworkAddress(container, network)) === address) return
+  if (await containerUsesNetwork(container, network)) {
+    await command("docker", [
+      "network",
+      "disconnect",
+      "--force",
+      network,
+      container,
+    ])
+  }
+  await command("docker", [
+    "network",
+    "connect",
+    "--ip",
+    address,
+    network,
+    container,
+  ])
+}
+
+// The address a container holds, or is configured to take when it starts,
+// on a network.
+async function containerNetworkAddress(
+  name: string,
+  network: string
+): Promise<string | null> {
+  return recoverPromise(
+    async () => {
+      const result = await command("docker", [
+        "inspect",
+        "--format",
+        "{{json .NetworkSettings.Networks}}",
+        name,
+      ])
+      const networks = JSON.parse(result.stdout) as Record<
+        string,
+        { IPAMConfig?: { IPv4Address?: string } | null; IPAddress?: string }
+      > | null
+      const endpoint = networks?.[network]
+      return endpoint?.IPAMConfig?.IPv4Address || endpoint?.IPAddress || null
+    },
+    () => null
+  )
 }
 
 async function containerUsesNetwork(

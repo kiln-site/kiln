@@ -23,6 +23,7 @@ import {
   relayCreateAppSchema,
   appIdFromFileRoot,
   appIdSchema,
+  appTailscaleMember,
   relayAppWebRouteStateSchema,
   relayAppWebRoutesWriteSchema,
   relayDeleteAppSchema,
@@ -226,17 +227,28 @@ const lifecycle = new LifecycleDriver(
   bricks,
   databaseConnections
 )
-const apps = new AppDriver(
-  config,
-  () => lifecycle.hostDataDirectory(),
-  async (appId) =>
+const apps = new AppDriver(config, () => lifecycle.hostDataDirectory(), {
+  routes: async (appId) =>
     lifecycle.appRoutePlan(
       await runRelayEffect(
         "relay.apps.routes",
         startupCore.state.listInstanceRoutes(appRouteOwner(appId))
       )
-    )
-)
+    ),
+  tailscale: async (appId) =>
+    (
+      await lifecycle.tailscaleMemberships(
+        (memberId) => appTailscaleMember(memberId)?.appId === appId
+      )
+    ).map((membership) => ({
+      ...membership,
+      service: appTailscaleMember(membership.memberId)!.service,
+    })),
+})
+lifecycle.useAppServiceContainers(async (appId, service) => {
+  await apps.get(appId)
+  return (await apps.serviceContainer(appId, service))?.name ?? null
+})
 const appFilesystem = new FilesystemDriver({
   ...config,
   rootDirectory: apps.rootDirectory,
@@ -1496,6 +1508,17 @@ async function executeControlRequest(
       return apps.create(relayCreateAppSchema.parse(request.payload))
     case "app.delete": {
       const input = relayDeleteAppSchema.parse(request.payload)
+      // Hearth removes its services' DNS records from every node first.
+      await lifecycle.detachAppFromTailscale(
+        input.appId,
+        async ({ memberId, mode, stackIds }) => {
+          await requestHearth(
+            "hearth.tailscale.instance.detach",
+            { instanceId: memberId, mode, stackIds },
+            60_000
+          )
+        }
+      )
       const deleted = await apps.delete(input)
       // Its routes go with it, so their hostnames are free again.
       await serializeWebRouteMutation(async () => {

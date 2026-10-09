@@ -12,7 +12,7 @@ import {
   databaseReadRequestSchema,
   databaseWriteRequestSchema,
 } from "./database-browser.js"
-import { fileRootIdSchema } from "./file-root.js"
+import { fileRootIdSchema, tailscaleMemberIdSchema } from "./app-keys.js"
 import {
   relayTailscaleDomainSchema,
   relayTailscaleHostnameSchema,
@@ -34,7 +34,7 @@ export * from "./tailscale.js"
 export * from "./schedules.js"
 export * from "./snbt.js"
 export * from "./database-browser.js"
-export * from "./file-root.js"
+export * from "./app-keys.js"
 
 export const relayIdSchema = z.string().regex(/^[A-Za-z\d_-]{43}$/u)
 
@@ -833,7 +833,8 @@ export const relayTailscaleStackBindingInputSchema = z
   .object({
     enabled: z.boolean().default(true),
     hostname: relayTailscaleSubdomainSchema,
-    instanceId: z.string().regex(/^[a-f0-9]{40}$/u),
+    // A server, or an app's service (see `appTailscaleMemberId`).
+    instanceId: tailscaleMemberIdSchema,
   })
   .strict()
 

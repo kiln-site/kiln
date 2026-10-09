@@ -64,7 +64,7 @@ import {
   useInstancePermissions,
   useInstanceRelayConnected,
 } from "@/components/instance-workspace-context"
-import { GameServerTailscaleSection } from "@/components/tailscale-network-membership"
+import { TailscaleMembershipSection } from "@/components/tailscale-network-membership"
 import {
   parseWebRouteForm,
   WebRouteFields,
@@ -253,7 +253,7 @@ function WebRoutesNetworkPage({
           onRestart={restartPendingRoutes}
         />
         {showTailscale ? (
-          <GameServerTailscaleSection server={instance} />
+          <TailscaleMembershipSection member={instance} />
         ) : null}
       </div>
     </main>

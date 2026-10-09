@@ -2,6 +2,7 @@ import { createHash, randomBytes } from "node:crypto"
 
 import { createServerFn } from "@tanstack/react-start"
 import {
+  appTailscaleMember,
   builtinTailscaleBrickId,
   MAXIMUM_TAILSCALE_STACK_BINDINGS,
   relayIdSchema,
@@ -13,6 +14,7 @@ import {
   relayTailscaleStackSchema,
   relayTailscaleStacksSchema,
   relayTailscaleSubdomainSchema,
+  tailscaleMemberIdSchema,
 } from "@workspace/contracts"
 import { Effect } from "effect"
 import { z } from "zod"
@@ -40,6 +42,7 @@ import {
   type TailscaleNetworkDefinition,
   type TailscaleOAuthCredential,
 } from "@/effect/tailscale-networks"
+import { listAppRecordsEffect } from "@/effect/managed-apps"
 import { runAppEffect } from "@/effect/runtime"
 import { isPlatformAdmin } from "@/lib/access-control"
 import { invalidateRelayCache, relayCachePolicy } from "@/lib/relay-client"
@@ -58,7 +61,8 @@ import type { RelaySnapshot, RelayTailscaleStack } from "@workspace/contracts"
 const stackBindingInputSchema = z.strictObject({
   enabled: z.boolean().default(true),
   hostname: relayTailscaleSubdomainSchema,
-  instanceId: z.string().regex(/^[a-f0-9]{40}$/u),
+  // A server, or an app's service (see `appTailscaleMemberId`).
+  instanceId: tailscaleMemberIdSchema,
   relayId: relayIdSchema,
 })
 
@@ -368,6 +372,11 @@ export const saveTailscaleStack = createServerFn({ method: "POST" })
       )
     }
     requireCompleteTailscaleDeploymentList(currentResult.unavailableRelays)
+    const appRecords = data.bindings.some((binding) =>
+      appTailscaleMember(binding.instanceId)
+    )
+      ? await runAppEffect("tailscale.appMembers", listAppRecordsEffect())
+      : []
     for (const binding of data.bindings) {
       const snapshot = currentResult.snapshots.get(binding.relayId)
       if (!snapshot) {
@@ -387,6 +396,18 @@ export const saveTailscaleStack = createServerFn({ method: "POST" })
         throw new Error(
           `${relay?.name ?? "This Relay"} must be updated before its servers can join a Tailscale network`
         )
+      }
+      const app = appTailscaleMember(binding.instanceId)
+      if (app) {
+        if (
+          !appRecords.some(
+            (record) =>
+              record.appId === app.appId && record.relayId === binding.relayId
+          )
+        ) {
+          throw new Error(`App ${app.appId.slice(0, 8)} is unavailable`)
+        }
+        continue
       }
       const instance = snapshot.instances.find(
         (candidate) => candidate.id === binding.instanceId

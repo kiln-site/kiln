@@ -14,7 +14,11 @@ vi.mock("./command.js", () => import("./test/docker.js"))
 
 import type { RelayInstanceConfig } from "./config.js"
 import { fakeDocker } from "./test/docker.js"
-import { relayHarness, TEST_NAMESPACE, type RelayHarness } from "./test/relay.js"
+import {
+  relayHarness,
+  TEST_NAMESPACE,
+  type RelayHarness,
+} from "./test/relay.js"
 
 const owner = { "kiln.relay.owner": TEST_NAMESPACE }
 
@@ -311,5 +315,56 @@ describe("Tailscale stack forwarding", () => {
     await harness.lifecycle.reconcileTailscaleStackFirewalls()
 
     expect(container.firewall.get("KILN-TAILSCALE")).toEqual(allowlist)
+  })
+})
+
+describe("Tailscale members", () => {
+  it("keeps a server at its Tailscale address when its container is recreated", async () => {
+    const harness = await relayHarness()
+    const serverId = "a".repeat(40)
+    const stackId = "c".repeat(40)
+    const address = "10.165.57.10"
+    await harness.createServer({ id: serverId })
+    const network = harness.resources.tailscaleStackNetwork(stackId)
+    fakeDocker.addNetwork({
+      labels: owner,
+      name: network,
+      subnet: "10.165.57.0/24",
+    })
+    const directory = join(harness.config.rootDirectory, stackId)
+    await mkdir(directory, { recursive: true })
+    await writeFile(
+      join(directory, "stack.json"),
+      JSON.stringify(
+        stackConfig(stackId, {
+          bindings: [
+            { address, enabled: true, hostname: "paper", instanceId: serverId },
+          ],
+          subnet: "10.165.57.0/24",
+        })
+      )
+    )
+    const container = harness.resources.instanceContainer(serverId)
+    fakeDocker.connect(container, network, address)
+
+    // A port change recreates the server's container.
+    await harness.lifecycle.updateInstancePorts(
+      serverId,
+      [
+        {
+          id: "primary",
+          internalPort: 25_566,
+          name: "Default Server",
+          protocol: "tcp",
+        },
+      ],
+      []
+    )
+
+    expect(
+      fakeDocker.container(container)?.networks.get(network)
+    ).toMatchObject({
+      ipAddress: address,
+    })
   })
 })
