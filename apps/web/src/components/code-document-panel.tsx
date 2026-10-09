@@ -29,22 +29,38 @@ const ignoreSearchOpenChange = () => undefined
 
 type FeedbackState = "idle" | "pending" | "success" | "error"
 
-export function ReadOnlyCodeViewer({
+// A code document in a dialog: a Brick recipe to read, or an app's
+// Dockerfile or Compose file to edit. Editing adds the page's own actions,
+// such as Save, to the toolbar.
+export function CodeDocumentPanel({
+  actions,
   content,
+  edit,
   languagePath,
+  noun,
   onShare,
   sourceUrl,
   title,
 }: {
+  // Toolbar buttons from the page, before the panel's own.
+  actions?: React.ReactNode
   content: string
+  edit?: {
+    // The saved content, which changes are marked against.
+    original: string
+    placeholder?: string
+    onChange: (content: string) => void
+  }
   languagePath: string
+  // Lowercase, as in "Copy recipe".
+  noun: string
   onShare?: (content: string) => Promise<string>
   sourceUrl?: string | null
   title: string
 }) {
   const [copyState, setCopyState] = React.useState<FeedbackState>("idle")
   const [shareState, setShareState] = React.useState<FeedbackState>("idle")
-  const [wrapLines, setWrapLines] = React.useState(true)
+  const [wrapLines, setWrapLines] = React.useState(!edit)
   const copyResetTimer = React.useRef<number | null>(null)
   const shareResetTimer = React.useRef<number | null>(null)
 
@@ -99,6 +115,7 @@ export function ReadOnlyCodeViewer({
         </div>
 
         <div className="flex shrink-0 items-center gap-1">
+          {actions}
           {onShare ? (
             <Tooltip>
               <TooltipTrigger asChild>
@@ -113,7 +130,7 @@ export function ReadOnlyCodeViewer({
                         : "ghost"
                   }
                   disabled={shareState === "pending"}
-                  aria-label="Share recipe and copy link"
+                  aria-label={`Share ${noun} and copy link`}
                   onClick={() => void shareContents()}
                 >
                   {shareState === "pending" ? (
@@ -140,8 +157,8 @@ export function ReadOnlyCodeViewer({
                 {shareState === "success"
                   ? "Share link copied"
                   : shareState === "error"
-                    ? "Could not share recipe"
-                    : "Share recipe"}
+                    ? `Could not share ${noun}`
+                    : `Share ${noun}`}
               </TooltipContent>
             </Tooltip>
           ) : null}
@@ -159,7 +176,7 @@ export function ReadOnlyCodeViewer({
                       : "ghost"
                 }
                 disabled={copyState === "pending"}
-                aria-label="Copy recipe"
+                aria-label={`Copy ${noun}`}
                 onClick={() => void copyContents()}
               >
                 {copyState === "success" ? <Check /> : <Copy />}
@@ -167,10 +184,10 @@ export function ReadOnlyCodeViewer({
             </TooltipTrigger>
             <TooltipContent side="bottom">
               {copyState === "success"
-                ? "Recipe copied"
+                ? `${capitalized(noun)} copied`
                 : copyState === "error"
-                  ? "Could not copy recipe"
-                  : "Copy recipe"}
+                  ? `Could not copy ${noun}`
+                  : `Copy ${noun}`}
             </TooltipContent>
           </Tooltip>
 
@@ -182,13 +199,13 @@ export function ReadOnlyCodeViewer({
                     href={sourceUrl}
                     target="_blank"
                     rel="noreferrer"
-                    aria-label="View recipe URL"
+                    aria-label={`View ${noun} URL`}
                   >
                     <ExternalLink />
                   </a>
                 </Button>
               </TooltipTrigger>
-              <TooltipContent side="bottom">View recipe URL</TooltipContent>
+              <TooltipContent side="bottom">View {noun} URL</TooltipContent>
             </Tooltip>
           ) : null}
 
@@ -217,15 +234,16 @@ export function ReadOnlyCodeViewer({
       <div className="relative min-h-0 min-w-0 flex-1 overflow-hidden">
         <React.Suspense fallback={<CodeViewerLoadingState />}>
           <SyntaxCodeEditor
-            ariaLabel={`View ${title}`}
+            ariaLabel={edit ? `Edit ${title}` : `View ${title}`}
             disabled={false}
-            fontSize={12}
-            onChange={ignoreEditorChange}
+            fontSize={edit ? 13 : 12}
+            onChange={edit?.onChange ?? ignoreEditorChange}
             onSearchOpenChange={ignoreSearchOpenChange}
-            originalValue={content}
+            originalValue={edit?.original ?? content}
             path={languagePath}
+            placeholder={edit?.placeholder}
             redactSensitive={false}
-            readOnly
+            readOnly={!edit}
             searchOpen={false}
             searchQuery=""
             showChanges={false}
@@ -242,7 +260,7 @@ function CodeViewerLoadingState() {
   return (
     <div
       className="flex h-full min-h-0 min-w-0 bg-card"
-      aria-label="Opening recipe viewer"
+      aria-label="Opening the editor"
       aria-busy="true"
     >
       <div
@@ -281,4 +299,8 @@ async function copyText(value: string) {
       )
     )
   )
+}
+
+function capitalized(value: string) {
+  return `${value.charAt(0).toUpperCase()}${value.slice(1)}`
 }

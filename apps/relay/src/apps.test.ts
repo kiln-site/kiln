@@ -111,6 +111,26 @@ describe("apps", () => {
     expect(previous!.state.running).toBe(true)
   })
 
+  it("keeps the latest deployment's log across a Relay restart", async () => {
+    const harness = await createdApp()
+    const deployed = await deploy(harness, {})
+
+    const { apps } = await harness.restart()
+    const app = await apps.get(appId)
+    const session = await apps.consoleSession(appId, "deployment", () =>
+      Promise.reject(new Error("Not a container stream"))
+    )
+    const history = await session.history()
+
+    expect(app.deployment).toMatchObject({
+      id: deployed.deployment!.id,
+      state: "succeeded",
+    })
+    expect(history.lines.map((line) => line.text)).toContain(
+      "Pulling nginx:alpine"
+    )
+  })
+
   it("removes an app's containers, network, and data when deleted", async () => {
     const harness = await createdApp()
     await deploy(harness, {})

@@ -538,6 +538,8 @@ function appTabRoute(tab: AppDestinationId) {
       return "/app/$appId/logs" as const
     case "network":
       return "/app/$appId/network" as const
+    case "overview":
+      return "/app/$appId/overview" as const
     case "terminal":
       return "/app/$appId/terminal" as const
   }
@@ -1628,7 +1630,9 @@ function instanceTabFromPathname(pathname: string): InstanceTab | null {
 
 function appTabFromPathname(pathname: string): AppDestinationId | null {
   const match =
-    /^\/app\/[^/]+\/(files|info|logs|network|terminal)(?:\/|$)/.exec(pathname)
+    /^\/app\/[^/]+\/(files|info|logs|network|overview|terminal)(?:\/|$)/.exec(
+      pathname
+    )
   return match ? (match[1] as AppDestinationId) : null
 }
 

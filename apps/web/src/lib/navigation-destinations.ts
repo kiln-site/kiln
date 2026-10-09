@@ -5,11 +5,11 @@ import {
   CircleUserRound,
   CreditCard,
   Database,
-  FileCode2,
   Folder,
   FolderDown,
   Globe2,
   History,
+  LayoutDashboard,
   ListTodo,
   Network,
   Palette,
@@ -405,6 +405,7 @@ export type AppDestinationId =
   | "info"
   | "logs"
   | "network"
+  | "overview"
   | "terminal"
 
 export interface AppDestination extends NavigationDestination {
@@ -413,6 +414,14 @@ export interface AppDestination extends NavigationDestination {
 }
 
 export const appDestinations = [
+  {
+    icon: LayoutDashboard,
+    id: "overview",
+    keywords: ["source", "dockerfile", "compose", "image", "deploy"],
+    label: "Overview",
+    permission: "app.read",
+    to: "/app/$appId/overview",
+  },
   {
     icon: ScrollText,
     id: "logs",
@@ -430,6 +439,14 @@ export const appDestinations = [
     to: "/app/$appId/terminal",
   },
   {
+    icon: Network,
+    id: "network",
+    keywords: ["ports", "domains", "web routes", "databases"],
+    label: "Network",
+    permission: "app.read",
+    to: "/app/$appId/network",
+  },
+  {
     icon: Folder,
     id: "files",
     keywords: ["data", "volumes", "upload"],
@@ -438,17 +455,9 @@ export const appDestinations = [
     to: "/app/$appId/files",
   },
   {
-    icon: Network,
-    id: "network",
-    keywords: ["ports", "databases", "connections"],
-    label: "Network",
-    permission: "app.read",
-    to: "/app/$appId/network",
-  },
-  {
-    icon: FileCode2,
+    icon: SlidersHorizontal,
     id: "info",
-    keywords: ["settings", "source", "dockerfile", "compose", "image"],
+    keywords: ["settings", "details", "delete"],
     label: "Info",
     permission: "app.read",
     to: "/app/$appId/info",

@@ -196,7 +196,8 @@ function AppRouteTitle() {
       if (pathname.endsWith("/logs")) return "Logs"
       if (pathname.includes("/files")) return "Files"
       if (pathname.endsWith("/network")) return "Network"
-      return "Info"
+      if (pathname.endsWith("/info")) return "Info"
+      return "Overview"
     },
   })
   return <>{title}</>

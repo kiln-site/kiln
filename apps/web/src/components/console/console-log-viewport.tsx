@@ -315,12 +315,21 @@ function ConsoleLogViewport({
       ) : null}
       {!loading && consoleData && filteredLines.length === 0 ? (
         <div className="absolute inset-0 grid place-items-center text-center">
-          <div>
-            <p className="text-sm font-semibold">No matching output</p>
-            <p className="mt-1 text-xs text-muted-foreground">
-              Adjust the search or log-level filters.
-            </p>
-          </div>
+          {consoleData.lines.length === 0 ? (
+            <div>
+              <p className="text-sm font-semibold">No output yet</p>
+              <p className="mt-1 text-xs text-muted-foreground">
+                It appears here as soon as there is any.
+              </p>
+            </div>
+          ) : (
+            <div>
+              <p className="text-sm font-semibold">No matching output</p>
+              <p className="mt-1 text-xs text-muted-foreground">
+                Adjust the search or log-level filters.
+              </p>
+            </div>
+          )}
         </div>
       ) : null}
     </div>
