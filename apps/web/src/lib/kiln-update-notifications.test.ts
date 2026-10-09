@@ -1,5 +1,6 @@
 import { assert, layer } from "@effect/vitest"
 import { Effect } from "effect"
+import { TestClock } from "effect/testing"
 import { afterEach, vi } from "vite-plus/test"
 
 import { listNotificationsEffect } from "@/effect/notifications"
@@ -74,6 +75,9 @@ function serveReleaseFeed(releases: ReadonlyArray<[string, string, string?]>) {
   })
 }
 
+// Hearth asks GitHub for new releases at most every few minutes.
+const nextReleaseCheck = TestClock.adjust("5 minutes")
+
 afterEach(() => {
   vi.unstubAllGlobals()
 })
@@ -119,6 +123,7 @@ describeMysql("Kiln update notifications", () => {
         serveReleaseFeed([stable, promoted])
         yield* notifyLatestKilnReleaseEffect(installed)
         // A newer nightly on top of the feed changes nothing for stable users.
+        yield* nextReleaseCheck
         serveReleaseFeed([
           ["0.3.0-nightly.20260805.090000", "2026-08-05T09:00:00Z"],
           stable,
@@ -127,6 +132,7 @@ describeMysql("Kiln update notifications", () => {
         yield* notifyLatestKilnReleaseEffect(installed)
         assert.deepStrictEqual(yield* releaseNotices("admin"), [])
 
+        yield* nextReleaseCheck
         serveReleaseFeed([
           ["0.3.0", "2026-08-09T00:00:00Z", "0.3.0-nightly.20260808.090000"],
           ["0.3.0-nightly.20260805.090000", "2026-08-05T09:00:00Z"],
@@ -155,12 +161,14 @@ describeMysql("Kiln update notifications", () => {
           assert.deepStrictEqual(yield* releaseNotices("admin"), ["0.3.0"])
 
           releases.unshift(["0.4.0", "2026-08-16T00:00:00Z"])
+          yield* nextReleaseCheck
           serveReleaseFeed(releases)
           yield* notifyLatestKilnReleaseEffect(installed)
           assert.deepStrictEqual(yield* releaseNotices("admin"), ["0.4.0"])
 
           // A feed that no longer lists it, say past GitHub's newest 100
           // releases, is no proof the notice is stale.
+          yield* nextReleaseCheck
           serveReleaseFeed([])
           yield* notifyLatestKilnReleaseEffect(installed)
           assert.deepStrictEqual(yield* releaseNotices("admin"), ["0.4.0"])

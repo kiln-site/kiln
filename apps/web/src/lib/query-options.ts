@@ -59,7 +59,8 @@ import {
 } from "@/server/relays"
 import { getTailscaleStacks } from "@/server/tailscale"
 import { getAuthState } from "@/server/auth"
-import { getUpdateOverview } from "@/server/updates"
+import type { ReleaseHistoryCursor } from "@/effect/kiln-release-feed"
+import { getReleaseHistory, getUpdateOverview } from "@/server/updates"
 import { getScheduleOptions, getSchedules } from "@/server/schedules"
 import type { RelayFleetSnapshot } from "@/lib/relay-fleet"
 import { withDatabaseRelayStatus } from "@/lib/database-relay-status"
@@ -156,6 +157,7 @@ export const queryKeys = {
   tailscale: (relayId: string) => ["tailscale", "relays", relayId] as const,
   tailscaleStacks: ["tailscale", "stacks"] as const,
   updates: ["updates", "overview"] as const,
+  releaseHistory: ["updates", "release-history"] as const,
   instanceFavorites: ["instance-favorites"] as const,
   notifications: ["notifications"] as const,
   uiPreferences: ["ui", "preferences"] as const,
@@ -563,6 +565,20 @@ export function updateOverviewQueryOptions() {
     queryKey: queryKeys.updates,
     queryFn: () => getUpdateOverview(),
     staleTime: 30_000,
+  })
+}
+
+export function releaseHistoryInfiniteQueryOptions() {
+  return infiniteQueryOptions({
+    queryKey: queryKeys.releaseHistory,
+    initialPageParam: null as ReleaseHistoryCursor | null,
+    queryFn: ({ pageParam, signal }) =>
+      getReleaseHistory({ data: { cursor: pageParam }, signal }),
+    getNextPageParam: (page) => page.nextCursor,
+    // Releases never change once published; new ones arrive with the
+    // overview, which refreshes this list.
+    refetchOnWindowFocus: false,
+    staleTime: 5 * 60_000,
   })
 }
 

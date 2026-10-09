@@ -39,14 +39,13 @@ export function InfraRouteOutlet() {
 }
 
 const InfraNavigation = React.memo(function InfraNavigation() {
-  const store = useInfraUpdateDialogStore()
   const { data: capabilities } = useSuspenseQuery(
     accessCapabilitiesQueryOptions()
   )
   const destinations = accessibleInfrastructureDestinations(capabilities)
 
   return (
-    <div className="mb-6 flex min-w-0 items-center gap-2 border-b">
+    <div className="mb-6 flex min-w-0 items-center border-b">
       <nav
         aria-label="Infrastructure sections"
         className="no-scrollbar flex min-w-0 flex-1 gap-1 overflow-x-auto overflow-y-hidden"
@@ -66,26 +65,35 @@ const InfraNavigation = React.memo(function InfraNavigation() {
           </Link>
         ))}
       </nav>
-      {capabilities.canUpdateRelays ? (
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button
-              aria-label="Review system updates"
-              className="mb-1 h-8 shrink-0 px-2 sm:px-2.5"
-              size="sm"
-              type="button"
-              variant="outline"
-              onClick={() => store.open()}
-            >
-              <CloudDownload />
-              <span className="hidden sm:inline">Updates</span>
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent side="bottom" sideOffset={6}>
-            Review system updates
-          </TooltipContent>
-        </Tooltip>
-      ) : null}
     </div>
+  )
+})
+
+export const InfraToolbarActions = React.memo(function InfraToolbarActions() {
+  const store = useInfraUpdateDialogStore()
+  const { data: capabilities } = useSuspenseQuery(
+    accessCapabilitiesQueryOptions()
+  )
+  if (!capabilities.canUpdateRelays) return null
+
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Button
+          aria-label="Review system updates"
+          className="h-9 w-9 shrink-0 gap-1.5 bg-card px-0 text-xs shadow-none sm:w-[6.5rem] sm:px-3"
+          size="sm"
+          type="button"
+          variant="outline"
+          onClick={() => store.open()}
+        >
+          <CloudDownload />
+          <span className="hidden sm:inline">Updates</span>
+        </Button>
+      </TooltipTrigger>
+      <TooltipContent side="bottom" sideOffset={6}>
+        Review system updates
+      </TooltipContent>
+    </Tooltip>
   )
 })

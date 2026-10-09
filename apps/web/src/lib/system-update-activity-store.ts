@@ -13,13 +13,19 @@ export interface SystemUpdateActivityStore {
   getTargetActivitySnapshot: (
     targetKey: string
   ) => SystemUpdateActivity | undefined
+  getTargetFailureSnapshot: (targetKey: string) => string | undefined
   setActivities: (activities: ReadonlyArray<SystemUpdateActivity>) => void
   setHearthReloadRequired: (required: boolean) => void
   setPhase: (operationId: string, phase: string) => void
+  setTargetFailure: (targetKey: string, message: string | null) => void
   subscribeActivities: (listener: () => void) => () => void
   subscribeHearthReloadRequired: (listener: () => void) => () => void
   subscribePhase: (operationId: string, listener: () => void) => () => void
   subscribeTargetActivity: (
+    targetKey: string,
+    listener: () => void
+  ) => () => void
+  subscribeTargetFailure: (
     targetKey: string,
     listener: () => void
   ) => () => void
@@ -29,10 +35,12 @@ export function createSystemUpdateActivityStore(): SystemUpdateActivityStore {
   let activities: ReadonlyArray<SystemUpdateActivity> = []
   let hearthReloadRequired = false
   const phases = new Map<string, string>()
+  const failures = new Map<string, string>()
   const activityListeners = new Set<() => void>()
   const hearthReloadRequiredListeners = new Set<() => void>()
   const phaseListeners = new Map<string, Set<() => void>>()
   const targetListeners = new Map<string, Set<() => void>>()
+  const failureListeners = new Map<string, Set<() => void>>()
 
   const subscribeKeyed = (
     listeners: Map<string, Set<() => void>>,
@@ -55,6 +63,7 @@ export function createSystemUpdateActivityStore(): SystemUpdateActivityStore {
     getPhaseSnapshot: (operationId) => phases.get(operationId),
     getTargetActivitySnapshot: (targetKey) =>
       activities.find((activity) => activity.targetKey === targetKey),
+    getTargetFailureSnapshot: (targetKey) => failures.get(targetKey),
     setActivities: (nextActivities) => {
       const previousByTarget = new Map(
         activities.map((activity) => [activity.targetKey, activity])
@@ -97,6 +106,12 @@ export function createSystemUpdateActivityStore(): SystemUpdateActivityStore {
       phases.set(operationId, phase)
       for (const listener of phaseListeners.get(operationId) ?? []) listener()
     },
+    setTargetFailure: (targetKey, message) => {
+      if ((failures.get(targetKey) ?? null) === message) return
+      if (message === null) failures.delete(targetKey)
+      else failures.set(targetKey, message)
+      for (const listener of failureListeners.get(targetKey) ?? []) listener()
+    },
     subscribeActivities: (listener) => {
       activityListeners.add(listener)
       return () => activityListeners.delete(listener)
@@ -109,5 +124,7 @@ export function createSystemUpdateActivityStore(): SystemUpdateActivityStore {
       subscribeKeyed(phaseListeners, operationId, listener),
     subscribeTargetActivity: (targetKey, listener) =>
       subscribeKeyed(targetListeners, targetKey, listener),
+    subscribeTargetFailure: (targetKey, listener) =>
+      subscribeKeyed(failureListeners, targetKey, listener),
   }
 }
