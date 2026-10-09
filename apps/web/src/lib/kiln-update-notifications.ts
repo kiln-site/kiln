@@ -7,7 +7,7 @@ import {
 } from "@workspace/contracts"
 
 import { Database } from "@/effect/database"
-import { listKilnReleasesEffect } from "@/effect/github-releases"
+import { listKilnReleasesEffect } from "@/effect/kiln-release-feed"
 import {
   notifyUsersEffect,
   platformAdminIdsEffect,

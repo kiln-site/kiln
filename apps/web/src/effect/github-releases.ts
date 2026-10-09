@@ -1,4 +1,10 @@
-import { Effect, Schema } from "effect"
+import { Cause, Effect, Schedule, Schema } from "effect"
+import {
+  FetchHttpClient,
+  HttpClient,
+  HttpClientError,
+  HttpClientResponse,
+} from "effect/http"
 
 import {
   kilnGitRepositoryApiUrl,
@@ -8,7 +14,7 @@ import {
 
 import { ExternalServiceError } from "@/effect/errors"
 import { kilnGitRepository } from "@/lib/environment"
-import { isKilnReleaseVersion, orderKilnReleases } from "@/lib/release-version"
+import { isKilnReleaseVersion } from "@/lib/release-version"
 
 const headers = {
   Accept: "application/vnd.github+json",
@@ -66,18 +72,29 @@ export type PublicKilnRelease = {
   version: string
 }
 
-export const listKilnReleasesEffect = Effect.fn("github.releases.list")(
-  function* () {
+export type KilnReleasePage = {
+  hasNextPage: boolean
+  releases: Array<PublicKilnRelease>
+}
+
+/**
+ * One page of GitHub's release feed, newest first. Only published releases
+ * with an update manifest are kept. Stable releases get their image version
+ * alias from `kilnStableReleaseAliasesEffect`, not here.
+ */
+export const fetchKilnReleasePageEffect = Effect.fn("github.releases.page")(
+  function* (page: number, perPage: number) {
     const repositoryApi = kilnGitRepositoryApiUrl(
       kilnGitRepository(),
       "releases"
     )
-    const releases = yield* requestJson(
-      `${repositoryApi}?per_page=100`,
+    const { body, link } = yield* requestJsonResponse(
+      `${repositoryApi}?per_page=${perPage}&page=${page}`,
       Schema.Array(GitHubReleaseSchema)
     )
-    const orderedReleases = orderKilnReleases(
-      releases.flatMap((release): Array<PublicKilnRelease> => {
+    return {
+      hasNextPage: /<[^>]+>;\s*rel="next"/u.test(link),
+      releases: body.flatMap((release): Array<PublicKilnRelease> => {
         if (release.draft || !release.tag_name.startsWith("v")) return []
         const version = release.tag_name.slice(1)
         if (!isKilnReleaseVersion(version)) return []
@@ -99,37 +116,33 @@ export const listKilnReleasesEffect = Effect.fn("github.releases.list")(
             version,
           },
         ]
-      })
-    )
-    // A stable image keeps the nightly version it was promoted from, named in
-    // its manifest. Alias the newest stable release to it even when a newer
-    // nightly tops the feed, so an installed stable build is still known.
-    const stableIndex = orderedReleases.findIndex(
-      (release) => release.channel === "stable"
-    )
-    const stableRelease = orderedReleases[stableIndex]
-    if (!stableRelease) return orderedReleases
-
-    const manifest = yield* requestJson(
-      stableRelease.manifestUrl,
-      ReleaseManifestSchema
-    )
-    const imageVersion = manifest.imageVersion
-    if (
-      imageVersion === undefined ||
-      !isKilnReleaseVersion(imageVersion) ||
-      kilnReleaseVersionCore(imageVersion) !==
-        kilnReleaseVersionCore(stableRelease.version)
-    ) {
-      return orderedReleases
-    }
-    return orderedReleases.map((release, index) =>
-      index === stableIndex
-        ? { ...release, aliases: [...release.aliases, imageVersion] }
-        : release
-    )
+      }),
+    } satisfies KilnReleasePage
   }
 )
+
+/**
+ * A stable image keeps the nightly version it was promoted from, named in its
+ * manifest. The alias lets an installed stable build be found by that version.
+ */
+export const kilnStableReleaseAliasesEffect = Effect.fn(
+  "github.releases.stableAliases"
+)(function* (release: PublicKilnRelease) {
+  const manifest = yield* requestJson(
+    release.manifestUrl,
+    ReleaseManifestSchema
+  )
+  const imageVersion = manifest.imageVersion
+  if (
+    imageVersion === undefined ||
+    !isKilnReleaseVersion(imageVersion) ||
+    kilnReleaseVersionCore(imageVersion) !==
+      kilnReleaseVersionCore(release.version)
+  ) {
+    return release.aliases
+  }
+  return [...release.aliases, imageVersion]
+})
 
 export const kilnReleaseManifestEffect = Effect.fn("github.releases.manifest")(
   function* (tag: string) {
@@ -173,30 +186,56 @@ function releaseVersionAliases(
   return [`${match[1]}-nightly.${match[2]}`]
 }
 
-function requestJson<TValue>(
+// Network failures, timeouts, and GitHub's own 5xx errors are worth a quick
+// retry. Rate limits (403, 429) aren't: retrying spends what's left of them.
+const isRetryableRequest = (error: unknown) =>
+  Cause.isTimeoutError(error) ||
+  (HttpClientError.isHttpClientError(error) &&
+    (error.reason._tag === "TransportError" ||
+      (error.reason._tag === "StatusCodeError" &&
+        error.reason.response.status >= 500)))
+
+function requestJson<S extends Schema.Constraint>(url: string, schema: S) {
+  return Effect.map(requestJsonResponse(url, schema), ({ body }) => body)
+}
+
+function requestJsonResponse<S extends Schema.Constraint>(
   url: string,
-  schema: Schema.Decoder<TValue>
-): Effect.Effect<TValue, ExternalServiceError> {
-  return Effect.tryPromise({
-    try: async () => {
-      const response = await fetch(url, {
-        headers,
-        redirect: "follow",
-        signal: AbortSignal.timeout(15_000),
+  schema: S
+) {
+  return Effect.gen(function* () {
+    const client = yield* HttpClient.HttpClient
+    // The timeout covers reading the body too: a response whose headers
+    // arrive but whose body stalls would otherwise hold the feed lock.
+    return yield* client.get(url, { headers }).pipe(
+      Effect.flatMap(HttpClientResponse.filterStatusOk),
+      Effect.flatMap((response) =>
+        Effect.map(
+          HttpClientResponse.schemaBodyJson(schema)(response),
+          (body) => ({ body, link: response.headers["link"] ?? "" })
+        )
+      ),
+      Effect.timeout("15 seconds"),
+      Effect.retry({
+        schedule: Schedule.exponential("500 millis"),
+        times: 2,
+        while: isRetryableRequest,
       })
-      if (!response.ok) {
-        throw new Error(`GitHub returned HTTP ${response.status}`)
-      }
-      return Schema.decodeUnknownSync(schema)(await response.json())
-    },
-    catch: (cause) =>
+    )
+  }).pipe(
+    Effect.provide(FetchHttpClient.layer),
+    Effect.mapError((cause) =>
       ExternalServiceError.make({
         cause,
-        message:
-          cause instanceof Error
-            ? cause.message
+        message: HttpClientError.isHttpClientError(cause)
+          ? cause.reason._tag === "StatusCodeError"
+            ? `GitHub returned HTTP ${cause.reason.response.status}`
+            : "Couldn’t reach GitHub"
+          : Cause.isTimeoutError(cause)
+            ? "GitHub took too long to respond"
             : "GitHub returned an invalid response",
         service: "GitHub Releases",
-      }),
-  })
+      })
+    )
+  )
 }

@@ -2,11 +2,15 @@ import { createServerFn, createServerOnlyFn } from "@tanstack/react-start"
 import { Effect } from "effect"
 import { z } from "zod"
 
+import { kilnReleaseManifestEffect } from "@/effect/github-releases"
 import {
-  kilnReleaseManifestEffect,
   listKilnReleasesEffect,
-} from "@/effect/github-releases"
+  recordComponentVersionsEffect,
+  releaseHistoryPageEffect,
+} from "@/effect/kiln-release-feed"
 import { RelayUnavailableError } from "@/effect/errors"
+import { platformAdminIdsEffect } from "@/effect/notifications"
+import { attachRelayOwnersEffect } from "@/effect/relay-owners"
 import { runAppEffect } from "@/effect/runtime"
 import {
   isPlatformAdmin,
@@ -29,6 +33,14 @@ const startUpdateTargetSchema = z.object({
 })
 const startUpdatesSchema = z.object({
   targets: z.array(startUpdateTargetSchema).min(1),
+})
+const releaseHistorySchema = z.object({
+  cursor: z
+    .object({
+      publishedAt: z.number().int().nonnegative(),
+      tag: z.string().min(1).max(191),
+    })
+    .nullable(),
 })
 const updateStatusSchema = z.object({
   operationId: z.uuid(),
@@ -168,16 +180,82 @@ export const getUpdateOverview = createServerFn({ method: "GET" }).handler(
         : Promise.resolve([]),
     ])
     const hearthTarget = hearthCandidates.find((target) => target) ?? null
+    const currentVersion = import.meta.env.VITE_KILN_VERSION
+    // Admins can update Relays other people brought, so those name who
+    // paired them. Relays an admin paired are the platform's own and name
+    // nobody. Like the Relays page, only admins see email-derived names.
+    const [relaysWithOwners, adminIds] = await runAppEffect(
+      "updates.relay-owners",
+      Effect.all([
+        attachRelayOwnersEffect(enabledRelays, platformAdmin),
+        platformAdminIdsEffect(),
+      ])
+    )
+    const admins = new Set(adminIds)
+    const owners = new Map(
+      relaysWithOwners.map((relay) => [
+        relay.id,
+        {
+          ownedByViewer: relay.createdBy === user.id,
+          ownerName:
+            relay.createdBy && admins.has(relay.createdBy)
+              ? null
+              : relay.ownerName,
+        },
+      ])
+    )
+    // The versions each component ran before, so the changelog can show
+    // where it came from. Recording them is best effort.
+    const previousVersions = await runAppEffect(
+      "updates.component-versions",
+      recordComponentVersionsEffect([
+        ...(platformAdmin
+          ? [
+              {
+                key: "hearth",
+                version: hearthTarget?.currentVersion ?? currentVersion,
+              },
+            ]
+          : []),
+        ...relayTargets.map((relay) => ({
+          key: `relay:${relay.relayId}`,
+          version: relay.currentVersion,
+        })),
+      ]).pipe(
+        Effect.catch((error) =>
+          Effect.logWarning("Could not record component versions", error).pipe(
+            Effect.as({} as Record<string, string>)
+          )
+        )
+      )
+    )
 
     return {
       canUpdateHearth: platformAdmin,
-      currentVersion: import.meta.env.VITE_KILN_VERSION,
+      currentVersion,
       hearth: hearthTarget,
+      previousVersions,
       releases,
-      relays: relayTargets,
+      relays: relayTargets.map((relay) => ({
+        ...relay,
+        ownedByViewer: owners.get(relay.relayId)?.ownedByViewer ?? false,
+        ownerName: owners.get(relay.relayId)?.ownerName ?? null,
+      })),
     }
   }
 )
+
+export const getReleaseHistory = createServerFn({ method: "GET" })
+  .validator(releaseHistorySchema)
+  .handler(async ({ data }) => {
+    await requireUpdateAccess()
+    return runAppEffect(
+      "updates.release-history",
+      releaseHistoryPageEffect(data.cursor, releaseHistoryPageSize)
+    )
+  })
+
+const releaseHistoryPageSize = 60
 
 export const startSystemUpdates = createServerFn({ method: "POST" })
   .validator(startUpdatesSchema)

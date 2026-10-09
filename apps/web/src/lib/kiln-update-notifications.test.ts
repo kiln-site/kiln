@@ -1,6 +1,7 @@
 import { assert, layer } from "@effect/vitest"
-import { Effect } from "effect"
-import { afterEach, vi } from "vite-plus/test"
+import { Effect, Layer } from "effect"
+import { FetchHttpClient } from "effect/http"
+import { TestClock } from "effect/testing"
 
 import { listNotificationsEffect } from "@/effect/notifications"
 import {
@@ -64,22 +65,26 @@ function serveReleaseFeed(releases: ReadonlyArray<[string, string, string?]>) {
     published_at: publishedAt,
     tag_name: `v${version}`,
   }))
-  vi.stubGlobal("fetch", async (input: string | URL) => {
-    const url = String(input)
+  serve = (url) => {
     const body =
       manifests.get(url) ?? (url.includes("/releases?") ? feed : null)
     return body
       ? Response.json(body)
       : new Response("not found", { status: 404 })
-  })
+  }
 }
 
-afterEach(() => {
-  vi.unstubAllGlobals()
-})
+let serve: (url: string) => Response = () =>
+  new Response("not found", { status: 404 })
+const GitHub = Layer.succeed(FetchHttpClient.Fetch)(async (input) =>
+  serve(String(input instanceof Request ? input.url : input))
+)
+
+// Hearth asks GitHub for new releases at most every few minutes.
+const nextReleaseCheck = TestClock.adjust("5 minutes")
 
 describeMysql("Kiln update notifications", () => {
-  layer(TestDatabase)((it) => {
+  layer(Layer.merge(TestDatabase, GitHub))((it) => {
     it.effect("tells admins once when Hearth starts on a newer version", () =>
       Effect.gen(function* () {
         yield* resetDatabase
@@ -119,6 +124,7 @@ describeMysql("Kiln update notifications", () => {
         serveReleaseFeed([stable, promoted])
         yield* notifyLatestKilnReleaseEffect(installed)
         // A newer nightly on top of the feed changes nothing for stable users.
+        yield* nextReleaseCheck
         serveReleaseFeed([
           ["0.3.0-nightly.20260805.090000", "2026-08-05T09:00:00Z"],
           stable,
@@ -127,6 +133,7 @@ describeMysql("Kiln update notifications", () => {
         yield* notifyLatestKilnReleaseEffect(installed)
         assert.deepStrictEqual(yield* releaseNotices("admin"), [])
 
+        yield* nextReleaseCheck
         serveReleaseFeed([
           ["0.3.0", "2026-08-09T00:00:00Z", "0.3.0-nightly.20260808.090000"],
           ["0.3.0-nightly.20260805.090000", "2026-08-05T09:00:00Z"],
@@ -155,12 +162,14 @@ describeMysql("Kiln update notifications", () => {
           assert.deepStrictEqual(yield* releaseNotices("admin"), ["0.3.0"])
 
           releases.unshift(["0.4.0", "2026-08-16T00:00:00Z"])
+          yield* nextReleaseCheck
           serveReleaseFeed(releases)
           yield* notifyLatestKilnReleaseEffect(installed)
           assert.deepStrictEqual(yield* releaseNotices("admin"), ["0.4.0"])
 
           // A feed that no longer lists it, say past GitHub's newest 100
           // releases, is no proof the notice is stale.
+          yield* nextReleaseCheck
           serveReleaseFeed([])
           yield* notifyLatestKilnReleaseEffect(installed)
           assert.deepStrictEqual(yield* releaseNotices("admin"), ["0.4.0"])
