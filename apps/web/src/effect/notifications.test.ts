@@ -213,6 +213,7 @@ describeMysql("notifications", () => {
           "access.invited:inv-a",
           invited("inv-a")
         )
+        yield* TestClock.setTime(1_500)
         yield* notifyUsersEffect(
           ["user-a"],
           "access.invited:inv-c",
@@ -230,8 +231,8 @@ describeMysql("notifications", () => {
           invited("inv-a")
         )
 
-        // Accepting marks the notification read and declining clears it; a
-        // cancellation stays unread so the user notices it.
+        // An answer marks the notification read; a cancellation stays unread
+        // so the user notices it.
         yield* resolveInvitationNotificationsEffect(
           "user-a",
           ["inv-a"],
@@ -250,6 +251,7 @@ describeMysql("notifications", () => {
 
         assert.deepStrictEqual(yield* contents("user-a"), [
           { content: invited("inv-b", "cancelled"), read: false },
+          { content: invited("inv-c", "declined"), read: true },
           { content: invited("inv-a", "accepted"), read: true },
         ])
         assert.deepStrictEqual(yield* contents("user-b"), [

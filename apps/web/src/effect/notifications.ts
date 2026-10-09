@@ -59,9 +59,9 @@ export const notifyUsersEffect = Effect.fn("notifications.notify")(function* (
 
 /**
  * Records how a user's invitations ended on their notifications, so the inbox
- * shows the answer in place of Accept and Decline. Accepting marks them read,
- * declining clears them, and a cancellation leaves them for the user to
- * notice. Inside a transaction the change commits with the decision.
+ * shows the answer in place of Accept and Decline. An answer marks them read;
+ * a cancellation leaves them for the user to notice. Inside a transaction the
+ * change commits with the decision.
  */
 export const resolveInvitationNotificationsEffect = Effect.fn(
   "notifications.resolveInvitations"
@@ -77,14 +77,12 @@ export const resolveInvitationNotificationsEffect = Effect.fn(
     "notifications.resolveInvitations",
     `UPDATE ${databaseTable("notification")}
         SET data = JSON_SET(data, '$.outcome', ?),
-            read_at = COALESCE(read_at, ?),
-            dismissed_at = COALESCE(dismissed_at, ?)
+            read_at = COALESCE(read_at, ?)
       WHERE user_id = ? AND kind = 'access.invited'
         AND source_key IN (${invitationIds.map(() => "?").join(", ")})`,
     [
       outcome,
       outcome === "cancelled" ? null : now,
-      outcome === "declined" ? now : null,
       userId,
       ...invitationIds.map((id) => `access.invited:${id}`),
     ]
