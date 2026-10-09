@@ -44,7 +44,6 @@ export function ResourceInvitationDialog({
   invitationId: string
   onClose: () => void
 }) {
-  const queryClient = useQueryClient()
   const navigate = useNavigate()
   const invitation = useQuery({
     queryKey: ["resource-invitation", invitationId],
@@ -56,55 +55,17 @@ export function ResourceInvitationDialog({
       (permission) => !permission.compatibilityOnly && keys.has(permission.key)
     )
   }, [invitation.data?.permissions])
-  const decision = useMutation({
-    mutationFn: (value: "accept" | "decline") =>
-      decideResourceInvitation({
-        data: { id: invitationId, decision: value, force: false },
-      }),
-    onSuccess: (result) => {
-      queryClient.setQueryData(
-        myInvitationsQueryOptions().queryKey,
-        (previous: Array<ResourceInvitation> | undefined) =>
-          previous?.filter((item) => item.id !== invitationId)
-      )
+  const decision = useResourceInvitationDecision(
+    invitationId,
+    (accepted, destination) => {
       onClose()
       showToast({
         type: "success",
-        message: result.accepted
-          ? "Invitation accepted"
-          : "Invitation declined",
+        message: accepted ? "Invitation accepted" : "Invitation declined",
       })
-      // Navigate from whatever the cache already holds. Awaiting a capability
-      // fetch and a full fleet snapshot before moving left the accept button
-      // spinning for the length of a Relay round trip; the refreshed data
-      // lands on the destination page instead.
-      if (result.accepted)
-        void navigate({
-          href: acceptedDestination(queryClient, result.scope),
-        })
-      void queryClient.invalidateQueries({
-        queryKey: myInvitationsQueryOptions().queryKey,
-      })
-      void queryClient.invalidateQueries({
-        queryKey: accessCapabilitiesQueryOptions().queryKey,
-      })
-      void queryClient.invalidateQueries({
-        queryKey: ["resource-invitation", invitationId],
-      })
-      if (!result.accepted) return
-      void queryClient.invalidateQueries({
-        queryKey:
-          result.scope.resourceType === "database"
-            ? queryKeys.databases.list
-            : queryKeys.relays,
-      })
-      if (result.scope.resourceType === "instance")
-        void queryClient.invalidateQueries({
-          queryKey: relayConnectionQueryOptions(queryClient).queryKey,
-        })
-    },
-    onError: (cause) => showToast({ type: "error", message: cause.message }),
-  })
+      if (destination) void navigate({ href: destination })
+    }
+  )
   return (
     <Dialog
       open
@@ -196,10 +157,65 @@ type DecidedScope = Awaited<
   ReturnType<typeof decideResourceInvitation>
 >["scope"]
 
+/**
+ * Accepting or declining one of the user's invitations, then refreshing what
+ * it changed. `onDecided` gets the accepted resource's page, if any.
+ */
+export function useResourceInvitationDecision(
+  invitationId: string,
+  onDecided: (accepted: boolean, destination: string | null) => void
+) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (value: "accept" | "decline") =>
+      decideResourceInvitation({
+        data: { id: invitationId, decision: value, force: false },
+      }),
+    onSuccess: (result) => {
+      queryClient.setQueryData(
+        myInvitationsQueryOptions().queryKey,
+        (previous: Array<ResourceInvitation> | undefined) =>
+          previous?.filter((item) => item.id !== invitationId)
+      )
+      // Resolve from whatever the cache already holds. Awaiting a capability
+      // fetch and a full fleet snapshot first left the accept button spinning
+      // for the length of a Relay round trip; the refreshed data lands on the
+      // destination page instead.
+      onDecided(
+        result.accepted,
+        result.accepted
+          ? acceptedInvitationHref(queryClient, result.scope)
+          : null
+      )
+      void queryClient.invalidateQueries({
+        queryKey: myInvitationsQueryOptions().queryKey,
+      })
+      void queryClient.invalidateQueries({
+        queryKey: accessCapabilitiesQueryOptions().queryKey,
+      })
+      void queryClient.invalidateQueries({
+        queryKey: ["resource-invitation", invitationId],
+      })
+      if (!result.accepted) return
+      void queryClient.invalidateQueries({
+        queryKey:
+          result.scope.resourceType === "database"
+            ? queryKeys.databases.list
+            : queryKeys.relays,
+      })
+      if (result.scope.resourceType === "instance")
+        void queryClient.invalidateQueries({
+          queryKey: relayConnectionQueryOptions(queryClient).queryKey,
+        })
+    },
+    onError: (cause) => showToast({ type: "error", message: cause.message }),
+  })
+}
+
 // Prefer the server's own workspace when the cached fleet snapshot can already
 // resolve it. Otherwise send the user to the matching inventory list filtered
 // to the resource, which resolves once the invalidated queries settle.
-function acceptedDestination(
+export function acceptedInvitationHref(
   queryClient: QueryClient,
   scope: DecidedScope
 ): string {

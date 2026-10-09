@@ -85,6 +85,7 @@ describeMysql("Kiln update notifications", () => {
         yield* resetDatabase
         yield* insertUser("admin", { role: "admin" })
         yield* insertUser("member", { role: "user" })
+        serveReleaseFeed([])
 
         // A fresh install has nothing to compare against.
         yield* recordStartedKilnVersionEffect("0.2.0")
@@ -135,6 +136,38 @@ describeMysql("Kiln update notifications", () => {
         yield* notifyLatestKilnReleaseEffect(installed)
         assert.deepStrictEqual(yield* releaseNotices("admin"), ["0.3.0"])
       })
+    )
+
+    it.effect(
+      "clears release notices once installed or replaced by a newer one",
+      () =>
+        Effect.gen(function* () {
+          yield* resetDatabase
+          yield* insertUser("admin", { role: "admin" })
+          const installed = "0.2.0"
+          const releases: Array<[string, string]> = [
+            ["0.2.0", "2026-08-02T00:00:00Z"],
+          ]
+
+          releases.unshift(["0.3.0", "2026-08-09T00:00:00Z"])
+          serveReleaseFeed(releases)
+          yield* notifyLatestKilnReleaseEffect(installed)
+          assert.deepStrictEqual(yield* releaseNotices("admin"), ["0.3.0"])
+
+          releases.unshift(["0.4.0", "2026-08-16T00:00:00Z"])
+          serveReleaseFeed(releases)
+          yield* notifyLatestKilnReleaseEffect(installed)
+          assert.deepStrictEqual(yield* releaseNotices("admin"), ["0.4.0"])
+
+          // A feed that no longer lists it, say past GitHub's newest 100
+          // releases, is no proof the notice is stale.
+          serveReleaseFeed([])
+          yield* notifyLatestKilnReleaseEffect(installed)
+          assert.deepStrictEqual(yield* releaseNotices("admin"), ["0.4.0"])
+
+          yield* notifyLatestKilnReleaseEffect("0.4.0")
+          assert.deepStrictEqual(yield* releaseNotices("admin"), [])
+        })
     )
   })
 })

@@ -23,6 +23,9 @@ export const notificationContentSchema = z.discriminatedUnion("kind", [
   }),
   z.object({
     kind: z.literal("kiln.updated"),
+    // Release names, e.g. "v0.1.0 Nightly #17", when GitHub listed them.
+    name: z.string().optional(),
+    previousName: z.string().optional(),
     previousVersion: z.string(),
     url: releaseUrlSchema.nullable(),
     version: z.string(),
@@ -31,6 +34,10 @@ export const notificationContentSchema = z.discriminatedUnion("kind", [
     actorName: z.string(),
     invitationId: z.string(),
     kind: z.literal("access.invited"),
+    // How the invitation ended: answered by the user, cancelled, or expired.
+    outcome: z
+      .enum(["accepted", "declined", "cancelled", "expired"])
+      .optional(),
     resource: notificationResourceSchema,
   }),
   z.object({
@@ -43,6 +50,9 @@ export const notificationContentSchema = z.discriminatedUnion("kind", [
 export type NotificationContent = z.infer<typeof notificationContentSchema>
 export type NotificationKind = NotificationContent["kind"]
 export type NotificationResource = z.infer<typeof notificationResourceSchema>
+export type InvitationOutcome = NonNullable<
+  Extract<NotificationContent, { kind: "access.invited" }>["outcome"]
+>
 
 export interface KilnNotification {
   content: NotificationContent

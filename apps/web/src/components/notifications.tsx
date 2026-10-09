@@ -278,7 +278,7 @@ function NotificationsPopoverContent({ align }: { align: "start" | "end" }) {
       align={align}
       sideOffset={10}
       collisionPadding={8}
-      className="flex w-[min(26rem,calc(100vw-1rem))] flex-col p-0"
+      className="flex w-[min(30rem,calc(100vw-1rem))] flex-col p-0"
       onCloseAutoFocus={handleCloseAutoFocus}
     >
       <NotificationsPopoverPanel onNavigate={navigate} />
@@ -332,7 +332,7 @@ function NotificationsPopoverPanel({ onNavigate }: { onNavigate: () => void }) {
         role="feed"
         aria-label="Latest notifications"
         aria-busy={isLoading}
-        className="h-[20.5rem] overflow-y-auto overscroll-contain"
+        className="h-[18rem] overflow-y-auto overscroll-contain"
       >
         {isLoading ? (
           <p className="grid h-full place-items-center text-sm text-muted-foreground">
@@ -349,6 +349,7 @@ function NotificationsPopoverPanel({ onNavigate }: { onNavigate: () => void }) {
             ) : (
               <NotificationRow
                 key={item.key}
+                variant="popover"
                 className="border-b border-border/60 last:border-b-0"
                 highlighted={
                   highlighted.has(item.notification.id) ||
