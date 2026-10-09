@@ -16,7 +16,11 @@ import {
 import { forkAppEffect } from "@/effect/runtime"
 import { databaseTable } from "@/lib/database-config"
 import { kilnGitRepository } from "@/lib/environment"
-import { isKilnReleaseVersion, newerStableRelease } from "@/lib/release-version"
+import {
+  findKilnRelease,
+  isKilnReleaseVersion,
+  newerStableRelease,
+} from "@/lib/release-version"
 
 // A platform-wide setting row: Hearth's version when it last started.
 const startedVersionSettingId = "00000000-0000-4000-8000-000000000002"
@@ -48,6 +52,20 @@ export const recordStartedKilnVersionEffect = Effect.fn(
   const previousVersion = startedVersionFromSetting(rows[0]?.setting_value)
   if (previousVersion === currentVersion) return
 
+  const updated =
+    previousVersion !== null &&
+    compareKilnReleaseVersions(currentVersion, previousVersion) === 1
+  // Release names like "v0.1.0 Nightly #17" only exist on GitHub. Without
+  // them the notification falls back to the version.
+  const releases = updated
+    ? yield* listKilnReleasesEffect().pipe(
+        Effect.catchCause((cause) =>
+          Effect.logWarning("Could not load Kiln release names", cause).pipe(
+            Effect.as([])
+          )
+        )
+      )
+    : []
   const now = yield* Clock.currentTimeMillis
   yield* database
     .transaction("notifications.recordStartedVersion", () =>
@@ -67,14 +85,12 @@ export const recordStartedKilnVersionEffect = Effect.fn(
             now,
           ]
         )
-        if (
-          !previousVersion ||
-          compareKilnReleaseVersions(currentVersion, previousVersion) !== 1
-        )
-          return []
+        if (!updated) return []
         const admins = yield* platformAdminIdsEffect()
         yield* notifyUsersEffect(admins, `kiln.updated:${currentVersion}`, {
           kind: "kiln.updated",
+          name: findKilnRelease(releases, currentVersion)?.name,
+          previousName: findKilnRelease(releases, previousVersion)?.name,
           previousVersion,
           url: releaseTagUrl(currentVersion),
           version: currentVersion,
@@ -93,7 +109,8 @@ export const recordStartedKilnVersionEffect = Effect.fn(
  * Tells platform admins about the newest stable Kiln release when it is newer
  * than this installation. Nightly builds ship several times a day, so they
  * stay in the Updates dialog. Each release is announced once per admin, and
- * admins added later still receive the pending one on the next check.
+ * admins added later still receive the pending one on the next check. Older
+ * announcements, and any the installation has caught up with, are cleared.
  */
 export const notifyLatestKilnReleaseEffect = Effect.fn(
   "notifications.notifyLatestRelease"
@@ -103,15 +120,35 @@ export const notifyLatestKilnReleaseEffect = Effect.fn(
     currentVersion,
     yield* listKilnReleasesEffect()
   )
-  if (!latest) return
+  const sourceKey = latest ? `kiln.release:${latest.version}` : null
   const admins = yield* platformAdminIdsEffect()
-  yield* notifyUsersEffect(admins, `kiln.release:${latest.version}`, {
-    kind: "kiln.release",
-    name: latest.name,
-    url: latest.url,
-    version: latest.version,
-  })
-  publishNotificationChange(admins)
+  if (latest && sourceKey)
+    yield* notifyUsersEffect(admins, sourceKey, {
+      kind: "kiln.release",
+      name: latest.name,
+      url: latest.url,
+      version: latest.version,
+    })
+  const cleared = yield* clearReleaseNotificationsEffect(sourceKey)
+  if (latest || cleared > 0) publishNotificationChange(admins)
+})
+
+// Clears every announced release except `keep`.
+const clearReleaseNotificationsEffect = Effect.fnUntraced(function* (
+  keep: string | null
+) {
+  const database = yield* Database
+  const now = yield* Clock.currentTimeMillis
+  const result = yield* database.execute(
+    "notifications.clearReleases",
+    `UPDATE ${databaseTable("notification")}
+        SET dismissed_at = ?, read_at = COALESCE(read_at, ?)
+      WHERE kind = 'kiln.release' AND dismissed_at IS NULL${
+        keep ? " AND source_key <> ?" : ""
+      }`,
+    keep ? [now, now, keep] : [now, now]
+  )
+  return result.affectedRows
 })
 
 const StartedVersionSetting = Schema.Struct({ version: Schema.String })

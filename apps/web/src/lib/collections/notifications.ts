@@ -8,7 +8,7 @@ import type { QueryClient } from "@tanstack/react-query"
 import { queryCollectionOptions } from "@tanstack/query-db-collection"
 
 import { forkPromise } from "@/effect/promise"
-import type { KilnNotification } from "@/lib/notifications"
+import type { InvitationOutcome, KilnNotification } from "@/lib/notifications"
 import { queryKeys } from "@/lib/query-options"
 import {
   clearNotifications,
@@ -118,6 +118,31 @@ export function clearNotificationsMutationOptions(
     (through) => (notifications) =>
       notifications.filter((notification) => notification.createdAt > through),
     onFailure
+  )
+}
+
+/**
+ * Shows an invitation's answer on its notification right away; the server
+ * records the same outcome and the realtime refresh confirms it.
+ */
+export function setCachedInvitationOutcome(
+  queryClient: QueryClient,
+  id: string,
+  outcome: InvitationOutcome
+) {
+  const readAt = Date.now()
+  queryClient.setQueryData(
+    notificationsQueryOptions().queryKey,
+    (notifications) =>
+      notifications?.map((notification) =>
+        notification.id === id && notification.content.kind === "access.invited"
+          ? {
+              ...notification,
+              content: { ...notification.content, outcome },
+              readAt: notification.readAt ?? readAt,
+            }
+          : notification
+      )
   )
 }
 

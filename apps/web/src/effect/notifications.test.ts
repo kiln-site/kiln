@@ -8,8 +8,12 @@ import {
   listNotificationsEffect,
   markNotificationsReadEffect,
   notifyUsersEffect,
+  resolveInvitationNotificationsEffect,
 } from "@/effect/notifications"
-import type { NotificationContent } from "@/lib/notifications"
+import type {
+  InvitationOutcome,
+  NotificationContent,
+} from "@/lib/notifications"
 import { TestDatabase, describeMysql, resetDatabase } from "@/test/database"
 import { insertRows, insertUser } from "@/test/seed"
 
@@ -184,6 +188,62 @@ describeMysql("notifications", () => {
         )
         assert.deepStrictEqual(yield* contents("user-b"), [
           { content: release, read: false },
+        ])
+      })
+    )
+
+    it.effect("records an invitation's answer in the invitee's inbox", () =>
+      Effect.gen(function* () {
+        yield* resetDatabase
+        yield* insertUser("user-a")
+        yield* insertUser("user-b")
+        const invited = (
+          invitationId: string,
+          outcome?: InvitationOutcome
+        ): NotificationContent => ({
+          actorName: "Owner",
+          invitationId,
+          kind: "access.invited",
+          ...(outcome ? { outcome } : {}),
+          resource: removed.resource,
+        })
+        yield* TestClock.setTime(1_000)
+        yield* notifyUsersEffect(
+          ["user-a"],
+          "access.invited:inv-a",
+          invited("inv-a")
+        )
+        yield* TestClock.setTime(2_000)
+        yield* notifyUsersEffect(
+          ["user-a"],
+          "access.invited:inv-b",
+          invited("inv-b")
+        )
+        yield* notifyUsersEffect(
+          ["user-b"],
+          "access.invited:inv-a",
+          invited("inv-a")
+        )
+
+        // Answering marks the notification read; a cancellation stays unread
+        // so the user notices it.
+        yield* resolveInvitationNotificationsEffect(
+          "user-a",
+          ["inv-a"],
+          "accepted"
+        )
+        yield* resolveInvitationNotificationsEffect(
+          "user-a",
+          ["inv-b"],
+          "cancelled"
+        )
+
+        assert.deepStrictEqual(yield* contents("user-a"), [
+          { content: invited("inv-b", "cancelled"), read: false },
+          { content: invited("inv-a", "accepted"), read: true },
+        ])
+        assert.deepStrictEqual(yield* contents("user-b"), [
+          { content: invited("inv-a"), read: false },
         ])
       })
     )

@@ -56,7 +56,7 @@ export function NotificationsPage({ newIds }: { newIds: ReadonlySet<string> }) {
   )
   const virtualizer = useVirtualizer({
     count: items.length,
-    estimateSize: (index) => (items[index]?.kind === "group" ? 29 : 66),
+    estimateSize: (index) => (items[index]?.kind === "group" ? 29 : 62),
     getItemKey: (index) => items[index]?.key ?? index,
     getScrollElement: () => scrollRef.current,
     overscan: 10,

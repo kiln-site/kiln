@@ -18,8 +18,11 @@ import {
 import {
   notifyUsersEffect,
   publishNotificationChange,
+  resolveInvitationNotificationsEffect,
 } from "@/effect/notifications"
+import type { DatabaseTransaction } from "@/effect/database"
 import { runAppEffect } from "@/effect/runtime"
+import type { InvitationOutcome } from "@/lib/notifications"
 import { databaseTable } from "@/lib/database-config"
 import { databasePool } from "@/lib/database"
 import { kilnPublicUrl } from "@/lib/environment"
@@ -66,6 +69,34 @@ const inviteSchema = z.object({
     .max(25),
 })
 /** SQL predicate for an invitation attempt that can still be accepted; binds now. */
+const invitationOutcomes = {
+  accept: "accepted",
+  cancel: "cancelled",
+  decline: "declined",
+} satisfies Record<"accept" | "cancel" | "decline", InvitationOutcome>
+
+// Cancels the access grant's unanswered invitations and marks them cancelled
+// in the user's inbox.
+const cancelPendingInvitationsEffect = Effect.fnUntraced(function* (
+  tx: DatabaseTransaction,
+  userId: string,
+  accessId: string,
+  actorId: string,
+  now: number
+) {
+  const pending = yield* tx.queryRows<RowDataPacket & { id: string }>(
+    `SELECT id FROM ${databaseTable("invitation")} WHERE access_id = ? AND accepted_at IS NULL AND declined_at IS NULL AND revoked_at IS NULL FOR UPDATE`,
+    [accessId]
+  )
+  if (!pending.length) return
+  const ids = pending.map((row) => row.id)
+  yield* tx.execute(
+    `UPDATE ${databaseTable("invitation")} SET revoked_at = ?, cancelled_at = ?, cancelled_by = ? WHERE id IN (${ids.map(() => "?").join(", ")})`,
+    [now, now, actorId, ...ids]
+  )
+  yield* resolveInvitationNotificationsEffect(userId, ids, "cancelled")
+})
+
 const currentAttemptFor = (alias = "") =>
   ["accepted_at IS NULL", "declined_at IS NULL", "revoked_at IS NULL"]
     .map((column) => `${alias}${column}`)
@@ -258,9 +289,12 @@ export const inviteResourceAccess = createServerFn({ method: "POST" })
               ]
             )
             yield* writeAccessAssignmentEffect(tx, accessId, target, actor.id)
-            yield* tx.execute(
-              `UPDATE ${databaseTable("invitation")} SET revoked_at = ?, cancelled_at = ?, cancelled_by = ? WHERE access_id = ? AND accepted_at IS NULL AND declined_at IS NULL AND revoked_at IS NULL`,
-              [now, now, actor.id, accessId]
+            yield* cancelPendingInvitationsEffect(
+              tx,
+              recipient.id,
+              accessId,
+              actor.id,
+              now
             )
             const id = randomUUID(),
               token = randomBytes(32).toString("base64url"),
@@ -531,6 +565,11 @@ export const decideResourceInvitation = createServerFn({ method: "POST" })
                 : [now, now, actor.id, data.id]
             )
           }
+          yield* resolveInvitationNotificationsEffect(
+            invitation.user_id,
+            [data.id],
+            invitationOutcomes[data.decision]
+          )
           yield* auditAccessEffect(
             tx,
             actor.id,
@@ -551,6 +590,7 @@ export const decideResourceInvitation = createServerFn({ method: "POST" })
       )
     )
     await publishResourceAccessChange([result.userId], [result.scope.relayId])
+    publishNotificationChange([result.userId])
     return result
   })
 
@@ -800,9 +840,12 @@ export const updateResourceAccess = createServerFn({ method: "POST" })
             })
             yield* writeAccessAssignmentEffect(tx, grant.id, data, actor.id)
           } else {
-            yield* tx.execute(
-              `UPDATE ${databaseTable("invitation")} SET revoked_at = ?, cancelled_at = ?, cancelled_by = ? WHERE access_id = ? AND accepted_at IS NULL AND declined_at IS NULL AND revoked_at IS NULL`,
-              [now, now, actor.id, grant.id]
+            yield* cancelPendingInvitationsEffect(
+              tx,
+              grant.user_id,
+              grant.id,
+              actor.id,
+              now
             )
           }
           yield* tx.execute(
@@ -854,7 +897,8 @@ export const updateResourceAccess = createServerFn({ method: "POST" })
       )
     )
     await publishResourceAccessChange([result.userId], [data.relayId])
-    if (result.removed) publishNotificationChange([result.userId])
+    // Revoking removes access or cancels a pending invitation.
+    if (data.revoke) publishNotificationChange([result.userId])
     return result
   })
 

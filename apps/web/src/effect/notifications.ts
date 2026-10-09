@@ -10,6 +10,7 @@ import { developmentBypassEnabled } from "@/lib/environment"
 import {
   notificationContentSchema,
   notificationHistoryLimit,
+  type InvitationOutcome,
   type KilnNotification,
   type NotificationContent,
 } from "@/lib/notifications"
@@ -53,6 +54,38 @@ export const notifyUsersEffect = Effect.fn("notifications.notify")(function* (
       json,
       now,
     ])
+  )
+})
+
+/**
+ * Records how a user's invitations ended on their notifications, so the inbox
+ * shows the answer in place of Accept and Decline. An answer marks them read;
+ * a cancellation leaves them for the user to notice. Inside a transaction the
+ * change commits with the decision.
+ */
+export const resolveInvitationNotificationsEffect = Effect.fn(
+  "notifications.resolveInvitations"
+)(function* (
+  userId: string,
+  invitationIds: ReadonlyArray<string>,
+  outcome: InvitationOutcome
+) {
+  if (!invitationIds.length) return
+  const database = yield* Database
+  const now = yield* Clock.currentTimeMillis
+  yield* database.execute(
+    "notifications.resolveInvitations",
+    `UPDATE ${databaseTable("notification")}
+        SET data = JSON_SET(data, '$.outcome', ?),
+            read_at = COALESCE(read_at, ?)
+      WHERE user_id = ? AND kind = 'access.invited'
+        AND source_key IN (${invitationIds.map(() => "?").join(", ")})`,
+    [
+      outcome,
+      outcome === "cancelled" ? null : now,
+      userId,
+      ...invitationIds.map((id) => `access.invited:${id}`),
+    ]
   )
 })
 
