@@ -64,6 +64,7 @@ import {
   relayConnectionQueryOptions,
   relaySnapshotQueryOptions,
 } from "@/lib/query-options"
+import { kilnReleaseLabel } from "@/lib/release-version"
 import { disableDevelopmentBypass } from "@/server/auth"
 import { engineLabel } from "@/components/database/database-presentation"
 import {
@@ -943,9 +944,9 @@ function selectSidebarRelayPickerItems(
       source: "fleet",
     },
     key: sidebarPickerKey("relay", node.relayId, node.relayId),
-    meta: `${node.arch} · ${node.version}`,
+    meta: `${node.arch} · ${kilnReleaseLabel(node.version)}`,
     name: node.relayName,
-    searchText: node.relayId,
+    searchText: `${node.relayId} ${node.version}`,
   }))
 }
 
@@ -955,9 +956,9 @@ function selectSidebarDatabasePickerItems(
   return databases.map((database) => ({
     identity: { id: database.id, kind: "database", relayId: database.relayId },
     key: sidebarPickerKey("database", database.relayId, database.id),
-    meta: `${database.relayName} · ${database.id.slice(0, 8)}`,
+    meta: `${engineLabel(database.engine)} · ${database.shortId}`,
     name: database.name,
-    searchText: database.id,
+    searchText: `${database.id} ${database.relayName}`,
   }))
 }
 
