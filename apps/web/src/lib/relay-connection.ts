@@ -43,10 +43,11 @@ import {
 import { RelayUnavailableError } from "@/effect/errors"
 import { forkAppEffect, runAppEffect } from "@/effect/runtime"
 import {
-  forgetSystemUpdateOperationEffect,
-  listSystemUpdateOperationsEffect,
-  recordSystemUpdateOperationEffect,
-  type SystemUpdateOperationRecord,
+  attachSystemUpdateOperationEffect,
+  forgetSystemUpdateEffect,
+  listSystemUpdatesEffect,
+  recordSystemUpdatesEffect,
+  type SystemUpdateRecord,
 } from "@/effect/system-update-operations"
 import { ensuringPromise, forkPromise } from "@/effect/promise"
 import type { RelayCredentials } from "@/lib/relay-registry"
@@ -86,7 +87,7 @@ interface BrowserAuthorizationReadiness {
   resolve: (issuerGeneration: number) => void
 }
 
-interface TrackedSystemUpdate extends SystemUpdateOperationRecord {
+interface TrackedSystemUpdate extends SystemUpdateRecord {
   // The Relay's latest operation record, shared with the updates dialog.
   latest: unknown
   watcher?: Fiber.Fiber<void, unknown>
@@ -98,10 +99,11 @@ declare global {
 }
 
 const connections = (globalThis.kilnRelayConnections ??= new Map())
-// Hearth is the only observer of an update: one tracker per operation polls
-// the Relay's operation record until it settles or the deadline passes. A
+// Hearth is the only observer of an update: one tracker per update polls the
+// Relay's operation record until it settles or the deadline passes. A
 // reconnect alone proves nothing, since it may still be the Relay being
-// replaced. Rows in MySQL let a replaced Hearth resume tracking.
+// replaced. Updates are recorded in MySQL before they start so a replaced
+// Hearth resumes tracking.
 const systemUpdates = (globalThis.kilnSystemUpdates ??= new Map())
 const SYSTEM_UPDATE_WINDOW_MS = 15 * 60_000
 const SYSTEM_UPDATE_POLL_MS = 2_000
@@ -163,38 +165,88 @@ export function trackedSystemUpdateStatus(
   relayId: string,
   operationId: string
 ): unknown {
-  const update = systemUpdates.get(operationId)
-  if (update?.relayId !== relayId) return undefined
   if (relayConnectionState(relayId).status !== "authenticated") return undefined
-  return update.latest
+  for (const update of systemUpdates.values()) {
+    if (update.relayId === relayId && update.operationId === operationId) {
+      return update.latest
+    }
+  }
+  return undefined
 }
 
-export const trackSystemUpdate = Effect.fn("relay.update.track")(function* (
+/**
+ * Records updates about to start on a Relay. Callers must not start them if
+ * this fails, or a Hearth replaced by the update could not resume tracking.
+ */
+export const recordSystemUpdates = Effect.fn("relay.update.record")(function* (
   relayId: string,
-  operation: { component: "hearth" | "relay"; id: string }
+  components: ReadonlyArray<"hearth" | "relay">
 ) {
-  const update: TrackedSystemUpdate = {
-    component: operation.component,
-    deadlineAt: (yield* Clock.currentTimeMillis) + SYSTEM_UPDATE_WINDOW_MS,
-    latest: operation,
-    operationId: operation.id,
+  const deadlineAt = (yield* Clock.currentTimeMillis) + SYSTEM_UPDATE_WINDOW_MS
+  const updates = components.map((component): SystemUpdateRecord => ({
+    component,
+    deadlineAt,
+    id: randomUUID(),
+    operationId: null,
     relayId,
-  }
-  // Recorded before the Relay replaces Hearth so the replacement can resume.
-  yield* recordSystemUpdateOperationEffect(update).pipe(
-    Effect.catch((cause) =>
-      Effect.logWarning("Could not record a system update", { cause })
-    )
-  )
-  yield* watchSystemUpdate(update)
+  }))
+  yield* recordSystemUpdatesEffect(updates)
+  return updates
 })
+
+/** Starts tracking recorded updates with the operations the Relay started. */
+export const trackSystemUpdates = Effect.fn("relay.update.track")(function* (
+  updates: ReadonlyArray<SystemUpdateRecord>,
+  operations: ReadonlyArray<{
+    component: "hearth" | "relay"
+    id: string
+    status: string
+  }>
+) {
+  for (const update of updates) {
+    const operation = operations.find(
+      (candidate) =>
+        candidate.component === update.component &&
+        candidate.status === "running"
+    )
+    if (!operation) {
+      yield* forgetSystemUpdate(update.id)
+      continue
+    }
+    yield* attachSystemUpdateOperationEffect(update.id, operation.id).pipe(
+      Effect.catch((cause) =>
+        Effect.logWarning("Could not record a system update operation", {
+          cause,
+        })
+      )
+    )
+    yield* watchSystemUpdate({
+      ...update,
+      latest: operation,
+      operationId: operation.id,
+    })
+  }
+})
+
+/** Forgets recorded updates that never started. */
+export const forgetSystemUpdates = (
+  updates: ReadonlyArray<SystemUpdateRecord>
+) =>
+  Effect.forEach(updates, (update) => forgetSystemUpdate(update.id), {
+    discard: true,
+  })
 
 export const resumeSystemUpdates = Effect.fn("relay.update.resume")(
   function* () {
     const now = yield* Clock.currentTimeMillis
-    for (const record of yield* listSystemUpdateOperationsEffect()) {
-      if (record.deadlineAt <= now) {
-        yield* forgetSystemUpdate(record.operationId)
+    for (const record of yield* listSystemUpdatesEffect()) {
+      // Without an operation ID a Hearth update has nothing to show, and a
+      // Relay update can only be shown until its deadline.
+      if (
+        record.deadlineAt <= now ||
+        (record.operationId === null && record.component === "hearth")
+      ) {
+        yield* forgetSystemUpdate(record.id)
       } else {
         yield* watchSystemUpdate({ ...record, latest: undefined })
       }
@@ -205,8 +257,8 @@ export const resumeSystemUpdates = Effect.fn("relay.update.resume")(
 const watchSystemUpdate = Effect.fnUntraced(function* (
   update: TrackedSystemUpdate
 ) {
-  if (systemUpdates.has(update.operationId)) return
-  systemUpdates.set(update.operationId, update)
+  if (systemUpdates.has(update.id)) return
+  systemUpdates.set(update.id, update)
   if (update.component === "relay") publishRelayState(update.relayId)
   update.watcher = yield* pollSystemUpdate(update).pipe(
     Effect.timeoutOrElse({
@@ -224,17 +276,17 @@ const watchSystemUpdate = Effect.fnUntraced(function* (
 const pollSystemUpdate = Effect.fnUntraced(function* (
   update: TrackedSystemUpdate
 ): Effect.fn.Return<void> {
+  const { operationId } = update
+  // An update recorded before Hearth was replaced may never have learned its
+  // operation; it can only end at its deadline.
+  if (operationId === null) return yield* Effect.never
   while (true) {
     yield* Effect.sleep(SYSTEM_UPDATE_POLL_MS)
     // Poll through the current connection so endpoint edits are respected.
     const connection = connections.get(update.relayId)
     if (connection?.state.status !== "authenticated") continue
     const record = yield* connection
-      .request(
-        "relay.update.status",
-        { operationId: update.operationId },
-        5_000
-      )
+      .request("relay.update.status", { operationId }, 5_000)
       .pipe(Effect.option)
     if (Option.isNone(record)) continue
     update.latest = record.value
@@ -246,13 +298,13 @@ const pollSystemUpdate = Effect.fnUntraced(function* (
 const settleSystemUpdate = Effect.fnUntraced(function* (
   update: TrackedSystemUpdate
 ) {
-  systemUpdates.delete(update.operationId)
+  systemUpdates.delete(update.id)
   if (update.component === "relay") publishRelayState(update.relayId)
-  yield* forgetSystemUpdate(update.operationId)
+  yield* forgetSystemUpdate(update.id)
 })
 
-const forgetSystemUpdate = (operationId: string) =>
-  forgetSystemUpdateOperationEffect(operationId).pipe(
+const forgetSystemUpdate = (id: string) =>
+  forgetSystemUpdateEffect(id).pipe(
     Effect.catch((cause) =>
       Effect.logWarning("Could not forget a system update", { cause })
     )

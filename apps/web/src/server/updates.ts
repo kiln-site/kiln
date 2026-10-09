@@ -197,18 +197,27 @@ export const startSystemUpdates = createServerFn({ method: "POST" })
     if (!latestRelease) {
       throw new Error("No public Kiln release is available to install")
     }
-    const [manifest, relays, { relayRpc, trackSystemUpdate }, hearthContainer] =
-      await Promise.all([
-        runAppEffect(
-          "updates.manifest",
-          kilnReleaseManifestEffect(latestRelease.tag)
-        ),
-        updateRelaysForUser(user),
-        import("@/lib/relay-connection"),
-        data.targets.some(({ component }) => component === "hearth")
-          ? getContainerHostname()
-          : Promise.resolve(null),
-      ])
+    const [
+      manifest,
+      relays,
+      {
+        forgetSystemUpdates,
+        recordSystemUpdates,
+        relayRpc,
+        trackSystemUpdates,
+      },
+      hearthContainer,
+    ] = await Promise.all([
+      runAppEffect(
+        "updates.manifest",
+        kilnReleaseManifestEffect(latestRelease.tag)
+      ),
+      updateRelaysForUser(user),
+      import("@/lib/relay-connection"),
+      data.targets.some(({ component }) => component === "hearth")
+        ? getContainerHostname()
+        : Promise.resolve(null),
+    ])
     const prepared = await Effect.runPromise(
       Effect.forEach(
         data.targets,
@@ -325,7 +334,16 @@ export const startSystemUpdates = createServerFn({ method: "POST" })
               })
               const legacyTarget =
                 group.targets.length === 1 ? group.targets[0] : undefined
-              const response = await relayRpc(
+              // The updater may replace Hearth seconds after it starts, so the
+              // update is recorded first and never started if that fails.
+              const updates = await runAppEffect(
+                "updates.record",
+                recordSystemUpdates(
+                  group.relay.id,
+                  group.targets.map((target) => target.component)
+                )
+              )
+              const operations = await relayRpc(
                 group.relay,
                 "relay.update.apply",
                 {
@@ -348,16 +366,17 @@ export const startSystemUpdates = createServerFn({ method: "POST" })
                 15 * 60_000,
                 user.id
               )
-              const operations = parseUpdateOperations(response)
+                .then(parseUpdateOperations)
+                .catch(async (cause: unknown) => {
+                  await runAppEffect(
+                    "updates.forget",
+                    forgetSystemUpdates(updates)
+                  )
+                  throw cause
+                })
               await runAppEffect(
                 "updates.track",
-                Effect.forEach(
-                  operations.filter(
-                    (operation) => operation.status === "running"
-                  ),
-                  (operation) => trackSystemUpdate(group.relay.id, operation),
-                  { discard: true }
-                )
+                trackSystemUpdates(updates, operations)
               )
               return { group, operations }
             },

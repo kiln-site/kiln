@@ -45,8 +45,9 @@ import {
   relayConnectionBrowserMetadata,
   relayConnectionState,
   relayRpc,
+  recordSystemUpdates,
   resumeSystemUpdates,
-  trackSystemUpdate,
+  trackSystemUpdates,
 } from "@/lib/relay-connection"
 import { loadRelayCredentials } from "@/lib/relay-registry"
 import { subscribeRealtimeChanges } from "@/lib/realtime-source.server"
@@ -258,11 +259,15 @@ describeMysql("system update tracking", () => {
             yield* promiseEffect(() =>
               relayRpc(endpoint, "relay.snapshot", {}, 1_000)
             )
+            // Recorded before the Relay starts the update.
+            const updates = yield* recordSystemUpdates(relayId, ["relay"])
+            expect(yield* selectRows("system_update_operation")).toMatchObject([
+              { component: "relay", operation_id: null },
+            ])
             updateOperations.set("update-a", "running")
-            yield* trackSystemUpdate(relayId, {
-              component: "relay",
-              id: "update-a",
-            })
+            yield* trackSystemUpdates(updates, [
+              { component: "relay", id: "update-a", status: "running" },
+            ])
             expect(yield* selectRows("system_update_operation")).toMatchObject([
               { component: "relay", operation_id: "update-a" },
             ])
@@ -302,14 +307,31 @@ describeMysql("system update tracking", () => {
             {
               component: "relay",
               deadline_at: now + 60_000,
+              id: "00000000-0000-4000-8000-00000000000a",
               operation_id: "update-a",
               relay_id: relayId,
             },
             {
               component: "relay",
               deadline_at: now - 1,
+              id: "00000000-0000-4000-8000-00000000000b",
               operation_id: "update-b",
               relay_id: "relay-with-an-expired-update",
+            },
+            // Hearth was replaced before it learned these operations.
+            {
+              component: "relay",
+              deadline_at: now + 60_000,
+              id: "00000000-0000-4000-8000-00000000000c",
+              operation_id: null,
+              relay_id: "relay-with-an-unknown-operation",
+            },
+            {
+              component: "hearth",
+              deadline_at: now + 60_000,
+              id: "00000000-0000-4000-8000-00000000000d",
+              operation_id: null,
+              relay_id: relayId,
             },
           ])
 
@@ -317,8 +339,13 @@ describeMysql("system update tracking", () => {
 
           expect(isRelayUpdating(relayId)).toBe(true)
           expect(isRelayUpdating("relay-with-an-expired-update")).toBe(false)
-          expect(yield* selectRows("system_update_operation")).toMatchObject([
-            { operation_id: "update-a" },
+          expect(isRelayUpdating("relay-with-an-unknown-operation")).toBe(true)
+          const remaining = yield* selectRows<{ id: string }>(
+            "system_update_operation"
+          )
+          expect(remaining.map((row) => row.id).sort()).toEqual([
+            "00000000-0000-4000-8000-00000000000a",
+            "00000000-0000-4000-8000-00000000000c",
           ])
         })
     )
@@ -326,10 +353,10 @@ describeMysql("system update tracking", () => {
     it.effect("stops tracking an update when its deadline passes", () =>
       Effect.gen(function* () {
         yield* resetDatabase
-        yield* trackSystemUpdate(relayId, {
-          component: "relay",
-          id: "update-a",
-        })
+        yield* trackSystemUpdates(
+          yield* recordSystemUpdates(relayId, ["relay"]),
+          [{ component: "relay", id: "update-a", status: "running" }]
+        )
         yield* Effect.promise(() =>
           vi.advanceTimersByTimeAsync(15 * 60_000 - 1_000)
         )

@@ -2,8 +2,7 @@ import { collectionOptions, type DbClient } from "@tanstack/react-db"
 import type { QueryClient } from "@tanstack/react-query"
 import { queryCollectionOptions } from "@tanstack/query-db-collection"
 
-import { queryKeys } from "@/lib/query-options"
-import { getManagedDatabases } from "@/server/databases"
+import { fetchManagedDatabases, queryKeys } from "@/lib/query-options"
 
 export const managedDatabasesCollectionOptions = collectionOptions(
   "managed-databases",
@@ -12,7 +11,7 @@ export const managedDatabasesCollectionOptions = collectionOptions(
       id: "managed-databases",
       getKey: managedDatabaseKey,
       queryClient: client.requireDependency<QueryClient>("queryClient"),
-      queryFn: () => getManagedDatabases(),
+      queryFn: ({ client }) => fetchManagedDatabases(client),
       queryKey: queryKeys.databases.list,
       refetchOnWindowFocus: "always",
       select: (overview) => overview.databases,
