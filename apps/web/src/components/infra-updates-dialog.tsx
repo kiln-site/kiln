@@ -1514,6 +1514,8 @@ const UpdateTargetRow = React.memo(function UpdateTargetRow({
 }: UpdateTargetRowProps) {
   const rowRef = React.useRef<HTMLDivElement>(null)
   const currentRelease = findKilnRelease(releases, target.currentVersion)
+  const currentReleaseName =
+    target.currentReleaseName ?? currentRelease?.name ?? null
 
   React.useEffect(() => {
     if (focused) rowRef.current?.scrollIntoView({ block: "nearest" })
@@ -1535,7 +1537,7 @@ const UpdateTargetRow = React.memo(function UpdateTargetRow({
             <h3 className="min-w-0 truncate text-sm font-semibold">
               {target.name}
             </h3>
-            {currentRelease ? (
+            {currentReleaseName ? (
               <>
                 <span
                   aria-hidden="true"
@@ -1543,11 +1545,17 @@ const UpdateTargetRow = React.memo(function UpdateTargetRow({
                 >
                   ·
                 </span>
-                <GitHubVersionLink href={currentRelease.url}>
+                {currentRelease ? (
+                  <GitHubVersionLink href={currentRelease.url}>
+                    <span className="block max-w-56 truncate text-sm font-semibold text-foreground">
+                      {currentReleaseName}
+                    </span>
+                  </GitHubVersionLink>
+                ) : (
                   <span className="block max-w-56 truncate text-sm font-semibold text-foreground">
-                    {target.currentReleaseName ?? currentRelease.name}
+                    {currentReleaseName}
                   </span>
-                </GitHubVersionLink>
+                )}
               </>
             ) : null}
             <UpdateTargetStatusCallout releases={releases} target={target} />

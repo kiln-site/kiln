@@ -32,6 +32,7 @@ import {
   cliSftpResponseSchema,
   cliUpdateServerStartupRequestSchema,
   databaseEngineSupportsLogicalBackups,
+  kilnReleaseName,
   relayConsoleCommandResultSchema,
   relayConsoleSchema,
   relayFileContentSchema,
@@ -1620,7 +1621,9 @@ function cliRelaySummary(
     id: relay.id,
     name: relay.name,
     platform: snapshot?.node.platform ?? relay.nodePlatform,
-    releaseName: snapshot?.node.releaseName ?? relay.nodeReleaseName,
+    releaseName: snapshot
+      ? (snapshot.node.releaseName ?? kilnReleaseName(snapshot.node.version))
+      : relay.nodeReleaseName,
     serverCount: snapshot?.instances.length ?? null,
     status: snapshot ? "connected" : "unreachable",
     version: snapshot?.node.version ?? relay.nodeVersion,
