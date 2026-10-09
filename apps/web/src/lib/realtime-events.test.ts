@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vite-plus/test"
 
-import { realtimeClientEventSchema } from "./realtime-events"
+import {
+  realtimeClientEventSchema,
+  realtimeEventRefreshesHearth,
+} from "./realtime-events"
 
 const cursor = {
   epoch: "00000000-0000-4000-8000-000000000001",
@@ -24,5 +27,17 @@ describe("realtime client events", () => {
         type: "reset",
       }).success
     ).toBe(false)
+  })
+
+  it("refreshes Relay-backed database inventory when a Relay status is dropped", () => {
+    expect(
+      realtimeEventRefreshesHearth({
+        ...cursor,
+        relayId: "r".repeat(43),
+        status: "unreachable",
+        type: "relay.status",
+        updating: true,
+      })
+    ).toBe(true)
   })
 })

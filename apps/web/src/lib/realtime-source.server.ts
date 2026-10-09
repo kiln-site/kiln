@@ -122,7 +122,12 @@ export function realtimeSourceEventRefreshesHearth(event: {
   directoryChanged?: boolean
   type: RealtimeSourceEvent["type"]
 }): boolean {
-  if (event.type === "hearth.invalidate" || event.type === "instance.delete") {
+  if (
+    event.type === "hearth.invalidate" ||
+    event.type === "instance.delete" ||
+    // Database inventory follows Relay reachability and update state.
+    event.type === "relay.state"
+  ) {
     return true
   }
   return (

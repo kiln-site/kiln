@@ -349,14 +349,13 @@ export const startSystemUpdates = createServerFn({ method: "POST" })
                 user.id
               )
               const operations = parseUpdateOperations(response)
-              if (
-                operations.some(
-                  (operation) =>
-                    operation.component === "relay" &&
-                    operation.status === "running"
-                )
-              ) {
-                markRelayUpdating(group.relay.id)
+              for (const operation of operations) {
+                if (
+                  operation.component === "relay" &&
+                  operation.status === "running"
+                ) {
+                  markRelayUpdating(group.relay, operation)
+                }
               }
               return { group, operations }
             },
@@ -396,10 +395,11 @@ export const getSystemUpdateStatus = createServerFn({ method: "POST" })
   .validator(updateStatusSchema)
   .handler(async ({ data }) => {
     const user = await requireUpdateAccess()
-    const [relays, { clearRelayUpdating, relayRpc }] = await Promise.all([
-      updateRelaysForUser(user),
-      import("@/lib/relay-connection"),
-    ])
+    const [relays, { clearRelayUpdating, markRelayUpdating, relayRpc }] =
+      await Promise.all([
+        updateRelaysForUser(user),
+        import("@/lib/relay-connection"),
+      ])
     const relay = await selectedRelay(relays, data.relayId)
     const result = await relayRpc(
       relay,
@@ -409,8 +409,11 @@ export const getSystemUpdateStatus = createServerFn({ method: "POST" })
     )
     if (result === null) return null
     const operation = updateOperationSchema.parse(result)
-    if (operation.component === "relay" && operation.status !== "running") {
-      clearRelayUpdating(relay.id)
+    if (operation.component === "relay") {
+      // A Hearth replaced earlier in the same batch starts without the
+      // window, so a running Relay operation restores it.
+      if (operation.status === "running") markRelayUpdating(relay, operation)
+      else clearRelayUpdating(relay.id, operation.id)
     }
     return operation.component === "hearth" && !isPlatformAdmin(user)
       ? null

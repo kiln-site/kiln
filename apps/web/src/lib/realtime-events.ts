@@ -85,6 +85,8 @@ export function realtimeEventRefreshesHearth(
 ): boolean {
   return (
     event.type === "collections.invalidate" ||
+    // Database inventory follows Relay reachability and update state.
+    event.type === "relay.status" ||
     (event.type === "relay.invalidate" && event.topics !== undefined)
   )
 }

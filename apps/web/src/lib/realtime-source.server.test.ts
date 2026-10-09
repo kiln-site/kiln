@@ -133,4 +133,10 @@ describe("realtime source", () => {
       })
     ).toBe(false)
   })
+
+  it("refreshes Relay-backed database inventory when a Relay state change is lost", () => {
+    expect(realtimeSourceEventRefreshesHearth({ type: "relay.state" })).toBe(
+      true
+    )
+  })
 })

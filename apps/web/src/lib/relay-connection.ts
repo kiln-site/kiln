@@ -81,8 +81,8 @@ interface BrowserAuthorizationReadiness {
 }
 
 interface RelayUpdateWindow {
-  disconnected: boolean
-  expiry: Fiber.Fiber<void, unknown>
+  operationId: string
+  watcher: Fiber.Fiber<void, unknown>
 }
 
 declare global {
@@ -92,10 +92,14 @@ declare global {
 
 const connections = (globalThis.kilnRelayConnections ??= new Map())
 // An update replaces the Relay container, so its disconnect is expected. The
-// window closes once the replacement authenticates, the operation settles, or
-// the deadline passes and the Relay is reported as unreachable again.
+// window stays open until the Relay reports the operation settled or the
+// deadline passes; a reconnect alone may still be the Relay being replaced.
 const relayUpdates = (globalThis.kilnRelayUpdates ??= new Map())
 const RELAY_UPDATE_WINDOW_MS = 15 * 60_000
+const RELAY_UPDATE_POLL_MS = 2_000
+const relayUpdateOperationSchema = z
+  .object({ status: z.enum(["failed", "running", "succeeded"]) })
+  .nullable()
 
 export async function relayRpc(
   relay: RelayEndpoint,
@@ -140,29 +144,61 @@ export function isRelayUpdating(relayId: string): boolean {
   return relayUpdates.has(relayId)
 }
 
-export function markRelayUpdating(relayId: string): void {
-  relayUpdates.get(relayId)?.expiry.interruptUnsafe()
+export function markRelayUpdating(
+  relay: RelayEndpoint,
+  operation: { id: string; startedAt: string }
+): void {
+  const current = relayUpdates.get(relay.id)
+  if (current?.operationId === operation.id) return
+  current?.watcher.interruptUnsafe()
+  const startedAt = Date.parse(operation.startedAt)
+  const remainingMs = Math.max(
+    0,
+    (Number.isNaN(startedAt) ? Date.now() : startedAt) +
+      RELAY_UPDATE_WINDOW_MS -
+      Date.now()
+  )
   let update: RelayUpdateWindow
-  const expiry = forkAppEffect(
+  const watcher = forkAppEffect(
     "relay.update.window",
-    Effect.sleep(RELAY_UPDATE_WINDOW_MS).pipe(
-      Effect.andThen(Effect.sync(() => closeRelayUpdateWindow(relayId, update)))
+    watchRelayUpdate(relay, operation.id).pipe(
+      Effect.timeoutOrElse({
+        duration: remainingMs,
+        orElse: () => Effect.void,
+      }),
+      Effect.andThen(
+        Effect.sync(() => closeRelayUpdateWindow(relay.id, update))
+      )
     )
   )
-  update = {
-    disconnected: relayConnectionState(relayId).status !== "authenticated",
-    expiry,
-  }
-  relayUpdates.set(relayId, update)
-  publishRelayState(relayId)
+  update = { operationId: operation.id, watcher }
+  relayUpdates.set(relay.id, update)
+  publishRelayState(relay.id)
 }
 
-export function clearRelayUpdating(relayId: string): void {
+export function clearRelayUpdating(relayId: string, operationId: string): void {
   const update = relayUpdates.get(relayId)
-  if (!update) return
-  update.expiry.interruptUnsafe()
+  if (update?.operationId !== operationId) return
+  update.watcher.interruptUnsafe()
   closeRelayUpdateWindow(relayId, update)
 }
+
+const watchRelayUpdate = Effect.fnUntraced(function* (
+  relay: RelayEndpoint,
+  operationId: string
+) {
+  while (true) {
+    yield* Effect.sleep(RELAY_UPDATE_POLL_MS)
+    if (relayConnectionState(relay.id).status !== "authenticated") continue
+    const operation = yield* Effect.tryPromise(() =>
+      relayRpc(relay, "relay.update.status", { operationId }, 5_000)
+    ).pipe(
+      Effect.map((result) => relayUpdateOperationSchema.safeParse(result)),
+      Effect.orElseSucceed(() => null)
+    )
+    if (operation?.success && operation.data?.status !== "running") return
+  }
+})
 
 function closeRelayUpdateWindow(
   relayId: string,
@@ -1082,17 +1118,6 @@ class RelayConnection {
     const wasReachable = this.#state.status === "authenticated"
     const isReachable = status === "authenticated"
     this.#state = { lastError, status, updatedAt: Date.now() }
-    const update = relayUpdates.get(this.#relay.id)
-    if (update && connections.get(this.#relay.id) === this) {
-      if (!isReachable) {
-        update.disconnected = true
-      } else if (update.disconnected) {
-        // The replacement Relay is back; its reachability event below also
-        // reports that the update window has closed.
-        update.expiry.interruptUnsafe()
-        relayUpdates.delete(this.#relay.id)
-      }
-    }
     Sentry.addBreadcrumb({
       category: "relay.connection",
       data: { relayId: this.#relay.id },

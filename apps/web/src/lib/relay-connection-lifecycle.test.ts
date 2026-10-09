@@ -52,6 +52,12 @@ import { loadRelayCredentials } from "@/lib/relay-registry"
 import { subscribeRealtimeChanges } from "@/lib/realtime-source.server"
 
 const relayId = "relay-connection-effect-test"
+const offlineEndpoint = {
+  hostname: "127.0.0.1",
+  id: relayId,
+  port: 1,
+  useTls: false,
+}
 const pushedSnapshot = {
   instances: [],
   node: {
@@ -86,6 +92,9 @@ const pushedSnapshot = {
   },
 } satisfies RelaySnapshot
 
+// Update operation statuses the fake Relay reports, keyed by operation ID.
+const updateOperations = new Map<string, "failed" | "running" | "succeeded">()
+
 // Fake only timeouts: Effect's scheduler (setImmediate) and the real ws/ed25519
 // handshake keep running, while reconnect backoff, request deadlines, and the
 // readiness retry wait for virtual time.
@@ -94,10 +103,13 @@ beforeEach(() => {
   authorizationFakes.synchronize.mockReset().mockResolvedValue(3)
   authorizationFakes.synchronizeMinimum.mockReset().mockResolvedValue(4)
   authorizationFakes.wake.mockReset()
+  updateOperations.clear()
 })
 
 afterEach(() => {
-  clearRelayUpdating(relayId)
+  for (const operationId of ["update-a", "update-b"]) {
+    clearRelayUpdating(relayId, operationId)
+  }
   closeRelayConnection(relayId)
   vi.useRealTimers()
   vi.restoreAllMocks()
@@ -174,7 +186,7 @@ effectIt.effect(
 )
 
 effectIt.effect(
-  "reports an updating Relay through its replacement and closes on reconnect",
+  "keeps a Relay updating across reconnects until its operation settles",
   () =>
     withRelayServer(({ disconnect, endpoint, reconnected }) =>
       Effect.gen(function* () {
@@ -189,13 +201,33 @@ effectIt.effect(
         yield* promiseEffect(() =>
           relayRpc(endpoint, "relay.snapshot", {}, 1_000)
         )
-        markRelayUpdating(relayId)
-        expect(isRelayUpdating(relayId)).toBe(true)
+        updateOperations.set("update-a", "running")
+        markRelayUpdating(endpoint, {
+          id: "update-a",
+          startedAt: new Date().toISOString(),
+        })
 
+        // The control socket can drop and return to the Relay being replaced.
         disconnect()
         yield* Effect.promise(() => advanceTimersUntil(reconnected))
         yield* promiseEffect(() =>
           relayRpc(endpoint, "relay.snapshot", {}, 1_000)
+        )
+        yield* Effect.promise(() => vi.advanceTimersByTimeAsync(10_000))
+        expect(isRelayUpdating(relayId)).toBe(true)
+
+        updateOperations.set("update-a", "succeeded")
+        yield* Effect.promise(() =>
+          advanceTimersUntil(
+            new Promise<void>((resolve) => {
+              const unsubscribeSettled = subscribeRealtimeChanges((event) => {
+                if (event.type === "relay.state" && !event.updating) {
+                  unsubscribeSettled()
+                  resolve()
+                }
+              })
+            })
+          )
         )
 
         expect(isRelayUpdating(relayId)).toBe(false)
@@ -209,6 +241,18 @@ effectIt.effect(
     )
 )
 
+it("keeps a newer update window when an older operation settles", () => {
+  const startedAt = new Date().toISOString()
+  markRelayUpdating(offlineEndpoint, { id: "update-a", startedAt })
+  markRelayUpdating(offlineEndpoint, { id: "update-b", startedAt })
+
+  clearRelayUpdating(relayId, "update-a")
+  expect(isRelayUpdating(relayId)).toBe(true)
+
+  clearRelayUpdating(relayId, "update-b")
+  expect(isRelayUpdating(relayId)).toBe(false)
+})
+
 it("reports a Relay unreachable once its update window expires", async () => {
   const relayStates: Array<string> = []
   const unsubscribe = subscribeRealtimeChanges((event) => {
@@ -216,11 +260,15 @@ it("reports a Relay unreachable once its update window expires", async () => {
       relayStates.push(`${event.status}${event.updating ? ":updating" : ""}`)
     }
   })
-  markRelayUpdating(relayId)
-  await vi.advanceTimersByTimeAsync(15 * 60_000 - 1)
+  // A restored window keeps the deadline of the operation's start.
+  markRelayUpdating(offlineEndpoint, {
+    id: "update-a",
+    startedAt: new Date(Date.now() - 5 * 60_000).toISOString(),
+  })
+  await vi.advanceTimersByTimeAsync(10 * 60_000 - 1_000)
   expect(isRelayUpdating(relayId)).toBe(true)
 
-  await vi.advanceTimersByTimeAsync(1)
+  await vi.advanceTimersByTimeAsync(1_000)
   expect(isRelayUpdating(relayId)).toBe(false)
   expect(relayStates).toEqual(["unreachable:updating", "unreachable"])
   unsubscribe()
@@ -441,7 +489,21 @@ function authenticateRelaySocket(
     }
     if (message.type !== "request") return
     requests.push(message)
-    if (message.operation === "relay.update.status") return
+    if (message.operation === "relay.update.status") {
+      const { operationId } = message.payload as { operationId?: string }
+      const status = operationId ? updateOperations.get(operationId) : undefined
+      if (!status) return
+      socket.send(
+        JSON.stringify({
+          id: randomUUID(),
+          payload: { status },
+          replyTo: message.id,
+          type: "response",
+          v: 1,
+        })
+      )
+      return
+    }
     socket.send(
       JSON.stringify({
         id: randomUUID(),
