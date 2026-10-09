@@ -63,7 +63,10 @@ import {
 } from "@/components/data-table-workspace"
 import { DataTable } from "@/components/data-table-view"
 import { InstanceName } from "@/components/instance-name"
-import { instanceStatusPresentation } from "@/components/instance-name-presentation"
+import {
+  instanceStatusPresentation,
+  statusColumnWidth,
+} from "@/components/instance-name-presentation"
 import { StatusIndicator } from "@/components/status-indicator"
 import {
   accessCapabilitiesQueryOptions,
@@ -459,7 +462,7 @@ const ServerDataTable = React.memo(function ServerDataTable({
             <StatusIndicator status={serverStatus(row.original.server)} />
           ),
           meta: dataTableColumnMeta(
-            { width: { base: "2.5rem", sm: "7.5rem" } },
+            { width: { base: "2.5rem", sm: statusColumnWidth } },
             {
               cellClassName: "px-2 sm:px-3",
               headerClassName: "px-2 sm:px-3",

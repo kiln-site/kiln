@@ -96,6 +96,7 @@ import { IdentityName } from "@/components/identity-name"
 import { InstanceName } from "@/components/instance-name"
 import {
   relayStatusPresentation,
+  statusColumnWidth,
   type RelayIdentityStatus,
 } from "@/components/instance-name-presentation"
 import { StatusIndicator } from "@/components/status-indicator"
@@ -729,13 +730,7 @@ function RelayTable({
             <StatusIndicator status={relayStatusPresentation(row.original)} />
           ),
           meta: dataTableColumnMeta(
-            {
-              width: {
-                base: "2.5rem",
-                sm: "7.5rem",
-                xl: "minmax(7.5rem,0.8fr)",
-              },
-            },
+            { width: { base: "2.5rem", sm: statusColumnWidth } },
             {
               cellClassName: "px-2 sm:px-3",
               headerClassName: "px-2 sm:px-3",

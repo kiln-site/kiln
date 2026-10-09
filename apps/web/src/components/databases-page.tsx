@@ -95,6 +95,7 @@ import {
   DataTableWorkspace,
 } from "@/components/data-table-workspace"
 import { InstanceName } from "@/components/instance-name"
+import { statusColumnWidth } from "@/components/instance-name-presentation"
 import { StatusIndicator } from "@/components/status-indicator"
 import { getManagedDatabasesCollection } from "@/lib/collections/managed-databases"
 import type { InstanceFavorite } from "@/lib/instance-favorites"
@@ -396,7 +397,7 @@ const DatabaseTable = React.memo(function DatabaseTable({
             />
           ),
           meta: dataTableColumnMeta(
-            { width: { base: "2.5rem", sm: "7.5rem" } },
+            { width: { base: "2.5rem", sm: statusColumnWidth } },
             {
               cellClassName: "px-2 sm:px-3",
               headerClassName: "px-2 sm:px-3",

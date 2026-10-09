@@ -3,6 +3,10 @@ import type { IdentityStatusPresentation } from "@/components/identity-name"
 
 export type InstanceStatusPresentation = IdentityStatusPresentation
 
+// Status columns hug their longest label, "Unreachable" (5.18rem with its
+// dot), plus the cells' 0.75rem horizontal padding.
+export const statusColumnWidth = "6.7rem"
+
 export type RelayIdentityStatus =
   | "checking"
   | "connected"
