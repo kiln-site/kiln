@@ -579,12 +579,12 @@ export function releaseHistoryInfiniteQueryOptions() {
     queryFn: ({ pageParam, signal }) =>
       getReleaseHistory({ data: { cursor: pageParam }, signal }),
     getNextPageParam: (page) => page.nextCursor,
-    // Releases never change once published; new ones arrive with the
+    // Releases rarely change once published; new ones arrive with the
     // overview, which refreshes this list. Pages stay cached between visits,
-    // so reopening the changelog doesn't page back through history again.
+    // so reopening the changelog shows them at once while they refresh.
     gcTime: 30 * 60_000,
     refetchOnWindowFocus: false,
-    staleTime: Number.POSITIVE_INFINITY,
+    staleTime: 5 * 60_000,
   })
 }
 

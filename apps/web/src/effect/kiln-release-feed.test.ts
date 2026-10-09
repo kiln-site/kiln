@@ -121,6 +121,34 @@ describeMysql("Kiln release feed", () => {
       })
     )
 
+    it.effect("never pages into another repository's releases", () =>
+      Effect.gen(function* () {
+        yield* resetDatabase
+        serveReleasePages([[nightly(4), nightly(3), nightly(2)]])
+        const first = yield* releaseHistoryPageEffect(null, 1)
+        assert.isNotNull(first.nextCursor)
+
+        const repository = process.env.KILN_GIT_REPO
+        process.env.KILN_GIT_REPO = "https://github.com/someone/kiln-fork"
+        serveReleasePages([[nightly(1)]])
+        const older = yield* releaseHistoryPageEffect(
+          first.nextCursor,
+          10
+        ).pipe(
+          Effect.ensuring(
+            Effect.sync(() => {
+              if (repository === undefined) delete process.env.KILN_GIT_REPO
+              else process.env.KILN_GIT_REPO = repository
+            })
+          )
+        )
+        assert.deepStrictEqual(
+          older.releases.map(({ version }) => version),
+          [nightly(1).version]
+        )
+      })
+    )
+
     it.effect("stops offering a release GitHub withdrew", () =>
       Effect.gen(function* () {
         yield* resetDatabase
