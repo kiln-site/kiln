@@ -88,20 +88,28 @@ interface BrowserAuthorizationReadiness {
 
 interface RelayUpdateWindow {
   operationId: string
+  startedAt: number
   watcher: Fiber.Fiber<void, unknown>
 }
 
 declare global {
   var kilnRelayConnections: Map<string, RelayConnection> | undefined
   var kilnRelayUpdates: Map<string, RelayUpdateWindow> | undefined
+  var kilnSettledRelayUpdates:
+    | Map<string, { operationId: string; startedAt: number }>
+    | undefined
 }
 
 const connections = (globalThis.kilnRelayConnections ??= new Map())
 // An update replaces the Relay container, so its disconnect is expected. The
 // window stays open until the Relay reports the operation settled or the
 // deadline passes; a reconnect alone may still be the Relay being replaced.
-// Windows are also cached because a batched update replaces Hearth first.
+// Windows are also cached because a batched update replaces Hearth first;
+// like the connection registry, this assumes a single Hearth process.
 const relayUpdates = (globalThis.kilnRelayUpdates ??= new Map())
+// Windows only move forward: restores and status polls can arrive late, so an
+// operation that already settled, or one older than the newest seen, is stale.
+const settledRelayUpdates = (globalThis.kilnSettledRelayUpdates ??= new Map())
 const RELAY_UPDATE_WINDOW_MS = 15 * 60_000
 const RELAY_UPDATE_POLL_MS = 2_000
 const relayUpdateOperationSchema = z
@@ -174,12 +182,17 @@ export function markRelayUpdating(
   operation: RelayUpdateOperation
 ): void {
   const current = relayUpdates.get(relayId)
-  if (current?.operationId === operation.id) return
-  const startedAt = Date.parse(operation.startedAt)
-  const remainingMs =
-    (Number.isNaN(startedAt) ? Date.now() : startedAt) +
-    RELAY_UPDATE_WINDOW_MS -
-    Date.now()
+  const settled = settledRelayUpdates.get(relayId)
+  const startedAt = relayUpdateStartedAt(operation)
+  if (
+    current?.operationId === operation.id ||
+    settled?.operationId === operation.id ||
+    startedAt < (current?.startedAt ?? -Infinity) ||
+    startedAt < (settled?.startedAt ?? -Infinity)
+  ) {
+    return
+  }
+  const remainingMs = startedAt + RELAY_UPDATE_WINDOW_MS - Date.now()
   if (remainingMs <= 0) return
   current?.watcher.interruptUnsafe()
   let update: RelayUpdateWindow
@@ -197,16 +210,42 @@ export function markRelayUpdating(
       Effect.andThen(Effect.sync(() => closeRelayUpdateWindow(relayId, update)))
     )
   )
-  update = { operationId: operation.id, watcher }
+  update = { operationId: operation.id, startedAt, watcher }
   relayUpdates.set(relayId, update)
   publishRelayState(relayId)
 }
 
-export function clearRelayUpdating(relayId: string, operationId: string): void {
+export function clearRelayUpdating(
+  relayId: string,
+  operation: RelayUpdateOperation
+): void {
   const update = relayUpdates.get(relayId)
-  if (update?.operationId !== operationId) return
-  update.watcher.interruptUnsafe()
-  closeRelayUpdateWindow(relayId, update)
+  if (update?.operationId === operation.id) {
+    update.watcher.interruptUnsafe()
+    closeRelayUpdateWindow(relayId, update)
+    return
+  }
+  // A settlement can arrive before a cached window finishes restoring.
+  rememberSettledRelayUpdate(
+    relayId,
+    operation.id,
+    relayUpdateStartedAt(operation)
+  )
+}
+
+function rememberSettledRelayUpdate(
+  relayId: string,
+  operationId: string,
+  startedAt: number
+): void {
+  const settled = settledRelayUpdates.get(relayId)
+  if (settled && settled.startedAt > startedAt) return
+  settledRelayUpdates.set(relayId, { operationId, startedAt })
+}
+
+function relayUpdateStartedAt(operation: RelayUpdateOperation): number {
+  const startedAt = Date.parse(operation.startedAt)
+  return Number.isNaN(startedAt) ? Date.now() : startedAt
 }
 
 function restoreRelayUpdateWindow(relayId: string): void {
@@ -251,6 +290,7 @@ function closeRelayUpdateWindow(
 ): void {
   if (relayUpdates.get(relayId) !== update) return
   relayUpdates.delete(relayId)
+  rememberSettledRelayUpdate(relayId, update.operationId, update.startedAt)
   publishRelayState(relayId)
   forkAppEffect(
     "relay.update.forget",

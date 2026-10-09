@@ -25,10 +25,11 @@ vi.mock("@/lib/relay-registry", () => ({
 }))
 // An in-memory cache stands in for Redis so update windows can outlive the
 // process-local registry, as they do when a batched update replaces Hearth.
+const cacheEntries = vi.hoisted(() => new Map<string, string>())
 vi.mock("@/effect/cache", async (importOriginal) => {
   const original = await importOriginal<typeof import("@/effect/cache")>()
   const { Effect, Layer } = await import("effect")
-  const entries = new Map<string, string>()
+  const entries = cacheEntries
   return {
     ...original,
     AppCacheLive: Layer.succeed(original.AppCache)({
@@ -124,9 +125,13 @@ beforeEach(() => {
 })
 
 afterEach(() => {
-  for (const operationId of ["update-a", "update-b"]) {
-    clearRelayUpdating(relayId, operationId)
+  // Each test starts as a fresh Hearth process.
+  for (const update of globalThis.kilnRelayUpdates?.values() ?? []) {
+    update.watcher.interruptUnsafe()
   }
+  globalThis.kilnRelayUpdates?.clear()
+  globalThis.kilnSettledRelayUpdates?.clear()
+  cacheEntries.clear()
   closeRelayConnection(relayId)
   vi.useRealTimers()
   vi.restoreAllMocks()
@@ -259,14 +264,41 @@ effectIt.effect(
 )
 
 it("keeps a newer update window when an older operation settles", () => {
-  const startedAt = new Date().toISOString()
-  markRelayUpdating(relayId, { id: "update-a", startedAt })
-  markRelayUpdating(relayId, { id: "update-b", startedAt })
+  const updateA = {
+    id: "update-a",
+    startedAt: new Date(Date.now() - 60_000).toISOString(),
+  }
+  const updateB = { id: "update-b", startedAt: new Date().toISOString() }
+  markRelayUpdating(relayId, updateA)
+  markRelayUpdating(relayId, updateB)
 
-  clearRelayUpdating(relayId, "update-a")
+  clearRelayUpdating(relayId, updateA)
   expect(isRelayUpdating(relayId)).toBe(true)
 
-  clearRelayUpdating(relayId, "update-b")
+  clearRelayUpdating(relayId, updateB)
+  expect(isRelayUpdating(relayId)).toBe(false)
+})
+
+it("ignores late observations of older or settled operations", () => {
+  const updateA = {
+    id: "update-a",
+    startedAt: new Date(Date.now() - 60_000).toISOString(),
+  }
+  const updateB = { id: "update-b", startedAt: new Date().toISOString() }
+
+  // A settlement can arrive before a cached window has been restored.
+  clearRelayUpdating(relayId, updateA)
+  markRelayUpdating(relayId, updateA)
+  expect(isRelayUpdating(relayId)).toBe(false)
+
+  markRelayUpdating(relayId, updateB)
+  // A status poll that saw A running resolves after B started.
+  markRelayUpdating(relayId, updateA)
+  clearRelayUpdating(relayId, updateA)
+  expect(isRelayUpdating(relayId)).toBe(true)
+
+  clearRelayUpdating(relayId, updateB)
+  markRelayUpdating(relayId, updateB)
   expect(isRelayUpdating(relayId)).toBe(false)
 })
 
