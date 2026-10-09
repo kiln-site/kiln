@@ -16,7 +16,6 @@ import { Clock, Effect, Result } from "effect"
 import { z } from "zod"
 
 import {
-  kilnReleaseName,
   relayPairingRequestTranscript,
   relayBrowserCapabilityV2Feature,
   relayPairingResponseTranscript,
@@ -69,7 +68,6 @@ export interface PersistedRelay {
   nodeArch: string | null
   nodePlatform: string | null
   nodeVersion: string | null
-  nodeReleaseName: string | null
   paired: true
   port: number
   role: "custom" | "full_access" | "read_only"
@@ -154,7 +152,6 @@ interface RelayRow extends RowDataPacket {
   node_arch: string | null
   node_platform: string | null
   node_version: string | null
-  node_release_name: string | null
   port: number
   relay_ca_certificate: string | null
   relay_public_key: string
@@ -242,7 +239,7 @@ async function findPersistedRelayRow(id: string): Promise<RelayRow | null> {
     `SELECT id, name, hostname, port, use_tls, browser_origin,
             client_id, client_role, client_actions, issuer_generation, enabled,
             last_connected_at, last_error, managed_ember_count,
-            node_arch, node_platform, node_version, node_release_name,
+            node_arch, node_platform, node_version,
             relay_public_key, relay_ca_certificate,
             client_public_key, client_private_key_ciphertext, created_by, created_at
        FROM ${databaseTable("relay")}
@@ -260,7 +257,7 @@ export const listPersistedRelaysEffect = Effect.fn("relays.list")(function* () {
     `SELECT id, name, hostname, port, use_tls, browser_origin,
             client_id, client_role, client_actions, issuer_generation, enabled,
             last_connected_at, last_error, managed_ember_count,
-            node_arch, node_platform, node_version, node_release_name,
+            node_arch, node_platform, node_version,
             relay_public_key, relay_ca_certificate,
             client_public_key, client_private_key_ciphertext, created_by, created_at
        FROM ${databaseTable("relay")}
@@ -278,7 +275,7 @@ export const loadEnabledRelayForIssuanceEffect = Effect.fn(
     `SELECT id, name, hostname, port, use_tls, browser_origin,
             client_id, client_role, client_actions, issuer_generation, enabled,
             last_connected_at, last_error, managed_ember_count,
-            node_arch, node_platform, node_version, node_release_name,
+            node_arch, node_platform, node_version,
             relay_public_key, relay_ca_certificate,
             client_public_key, client_private_key_ciphertext, created_by, created_at
        FROM ${databaseTable("relay")}
@@ -1106,8 +1103,7 @@ async function inspectPersistedRelay(id: string): Promise<PersistedRelay> {
         `UPDATE ${databaseTable("relay")}
           SET last_connected_at = ?, last_error = NULL,
               managed_ember_count = ?, node_arch = ?,
-              node_platform = ?, node_version = ?, node_release_name = ?,
-              updated_at = ?
+              node_platform = ?, node_version = ?, updated_at = ?
         WHERE id = ?`,
         [
           now,
@@ -1116,7 +1112,6 @@ async function inspectPersistedRelay(id: string): Promise<PersistedRelay> {
           snapshot.node.arch,
           snapshot.node.platform,
           snapshot.node.version,
-          snapshot.node.releaseName?.slice(0, 120) ?? null,
           now,
           id,
         ]
@@ -1184,7 +1179,7 @@ export const loadRelayCredentialsEffect = Effect.fn("relays.credentials")(
       `SELECT id, name, hostname, port, use_tls, browser_origin,
               client_id, client_role, client_actions, issuer_generation, enabled,
               last_connected_at, last_error, managed_ember_count,
-              node_arch, node_platform, node_version, node_release_name,
+              node_arch, node_platform, node_version,
               relay_public_key, relay_ca_certificate,
               client_public_key, client_private_key_ciphertext
          FROM ${databaseTable("relay")} WHERE id = ? LIMIT 1`,
@@ -1453,10 +1448,6 @@ function toPersistedRelay(row: RelayRow): PersistedRelay {
     nodeArch: row.node_arch,
     nodePlatform: row.node_platform,
     nodeVersion: row.node_version,
-    // Relays older than release labels only report their version.
-    nodeReleaseName:
-      row.node_release_name ??
-      (row.node_version ? kilnReleaseName(row.node_version) : null),
     paired: true,
     port: Number(row.port),
     role: row.client_role,

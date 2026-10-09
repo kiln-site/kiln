@@ -201,7 +201,6 @@ type RelayRegistryTableItem = Pick<
   | "name"
   | "nodeArch"
   | "nodePlatform"
-  | "nodeReleaseName"
   | "nodeVersion"
   | "ownerEmail"
   | "ownerName"
@@ -231,7 +230,6 @@ const relayTableSearchFields = [
   (relay: RelayTableItem) => relay.hostname,
   (relay: RelayTableItem) => relay.nodeArch,
   (relay: RelayTableItem) => relay.nodePlatform,
-  (relay: RelayTableItem) => relay.nodeReleaseName,
   (relay: RelayTableItem) => relay.nodeVersion,
   (relay: RelayTableItem) => relay.ownerEmail,
   (relay: RelayTableItem) => relay.ownerName,
@@ -523,7 +521,6 @@ const FilteredRelayTable = React.memo(function FilteredRelayTable({
           name: relay.name,
           nodeArch: relay.nodeArch,
           nodePlatform: relay.nodePlatform,
-          nodeReleaseName: relay.nodeReleaseName,
           nodeVersion: relay.nodeVersion,
           ownerEmail: relay.ownerEmail,
           ownerName: relay.ownerName,
@@ -821,7 +818,7 @@ function RelayTable({
               <RelayVersion
                 name={relay.name}
                 outdated={outdatedRelayIds.has(relay.id)}
-                releaseName={reported?.releaseName ?? relay.nodeReleaseName}
+                releaseName={reported?.releaseName ?? null}
                 releases={releases}
                 relayId={relay.id}
                 version={reported?.version ?? relay.nodeVersion}

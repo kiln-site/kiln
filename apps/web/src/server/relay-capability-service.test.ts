@@ -86,7 +86,6 @@ const relay = {
   name: "Relay One",
   nodeArch: "arm64",
   nodePlatform: "linux",
-  nodeReleaseName: null,
   nodeVersion: "24.0.0",
   paired: true,
   port: 4100,

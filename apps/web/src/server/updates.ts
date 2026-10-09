@@ -130,7 +130,9 @@ export const getUpdateOverview = createServerFn({ method: "GET" }).handler(
                   component: "relay" as const,
                   container: "",
                   currentImage: "",
-                  currentReleaseName: relay.nodeReleaseName,
+                  currentReleaseName: relay.nodeVersion
+                    ? kilnReleaseName(relay.nodeVersion)
+                    : null,
                   currentVersion: relay.nodeVersion,
                   eligible: false,
                   name: relay.name,

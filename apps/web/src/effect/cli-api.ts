@@ -1615,18 +1615,18 @@ function cliRelaySummary(
   relay: PersistedRelay,
   snapshot: z.infer<typeof relaySnapshotSchema> | null
 ) {
+  const version = snapshot?.node.version ?? relay.nodeVersion
   return cliRelaySchema.parse({
     arch: snapshot?.node.arch ?? relay.nodeArch,
     canProvisionServers: snapshot?.node.canProvisionInstances ?? null,
     id: relay.id,
     name: relay.name,
     platform: snapshot?.node.platform ?? relay.nodePlatform,
-    releaseName: snapshot
-      ? (snapshot.node.releaseName ?? kilnReleaseName(snapshot.node.version))
-      : relay.nodeReleaseName,
+    releaseName:
+      snapshot?.node.releaseName ?? (version ? kilnReleaseName(version) : null),
     serverCount: snapshot?.instances.length ?? null,
     status: snapshot ? "connected" : "unreachable",
-    version: snapshot?.node.version ?? relay.nodeVersion,
+    version,
   })
 }
 
