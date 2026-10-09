@@ -143,7 +143,7 @@ export const NotificationRow = React.memo(function NotificationRow({
     <article
       aria-label={title}
       className={cn(
-        "group/row flex items-start transition-colors hover:bg-accent/50 has-[a:focus-visible]:bg-accent/50",
+        "group/row flex transition-colors hover:bg-accent/50 has-[a:focus-visible]:bg-accent/50",
         highlighted && "bg-primary/[0.04]",
         className
       )}
@@ -172,7 +172,7 @@ export const NotificationRow = React.memo(function NotificationRow({
       <Button
         variant="ghost"
         size="icon-xs"
-        className="mt-2.5 mr-2 ml-1 shrink-0 text-muted-foreground opacity-0 transition-opacity group-focus-within/row:opacity-100 group-hover/row:opacity-100 hover:text-foreground focus-visible:opacity-100 [@media(hover:none)]:opacity-100"
+        className="mr-2 ml-1 shrink-0 self-center text-muted-foreground opacity-0 transition-opacity group-focus-within/row:opacity-100 group-hover/row:opacity-100 hover:text-foreground focus-visible:opacity-100 [@media(hover:none)]:opacity-100"
         aria-label={`Clear "${title}"`}
         onClick={() => onDismiss(notification.id)}
       >
