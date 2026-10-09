@@ -122,8 +122,9 @@ export function clearNotificationsMutationOptions(
 }
 
 /**
- * Shows an invitation's answer on its notification right away; the server
- * records the same outcome and the realtime refresh confirms it.
+ * Shows an invitation's answer on its notification right away; a declined one
+ * is cleared. The server records the same outcome and the realtime refresh
+ * confirms it.
  */
 export function setCachedInvitationOutcome(
   queryClient: QueryClient,
@@ -134,14 +135,18 @@ export function setCachedInvitationOutcome(
   queryClient.setQueryData(
     notificationsQueryOptions().queryKey,
     (notifications) =>
-      notifications?.map((notification) =>
-        notification.id === id && notification.content.kind === "access.invited"
-          ? {
-              ...notification,
-              content: { ...notification.content, outcome },
-              readAt: notification.readAt ?? readAt,
-            }
-          : notification
+      notifications?.flatMap((notification) =>
+        notification.id !== id || notification.content.kind !== "access.invited"
+          ? [notification]
+          : outcome === "declined"
+            ? []
+            : [
+                {
+                  ...notification,
+                  content: { ...notification.content, outcome },
+                  readAt: notification.readAt ?? readAt,
+                },
+              ]
       )
   )
 }

@@ -349,6 +349,7 @@ function NotificationsPopoverPanel({ onNavigate }: { onNavigate: () => void }) {
             ) : (
               <NotificationRow
                 key={item.key}
+                variant="popover"
                 className="border-b border-border/60 last:border-b-0"
                 highlighted={
                   highlighted.has(item.notification.id) ||

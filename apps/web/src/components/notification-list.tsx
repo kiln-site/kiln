@@ -1,6 +1,6 @@
 import * as React from "react"
 import { useMutation, useQueryClient } from "@tanstack/react-query"
-import { useNavigate } from "@tanstack/react-router"
+import { Link, useNavigate } from "@tanstack/react-router"
 import {
   ExternalLink,
   PackageCheck,
@@ -88,20 +88,26 @@ export const NotificationGroupLabel = React.memo(
 
 /**
  * One notification in two lines: what happened, then when plus one detail.
- * Actions sit beside it, so a row never grows taller for them.
+ * Actions sit beside it, so a row never grows taller for them. In the popover
+ * the row opens the notifications page at itself; the page has room for a
+ * second line of title, and marks the notification it was opened at.
  */
 export const NotificationRow = React.memo(function NotificationRow({
   className,
+  focused = false,
   highlighted,
   notification,
   onDismiss,
   onNavigate,
+  variant,
 }: {
   className?: string
+  focused?: boolean
   highlighted: boolean
   notification: KilnNotification
   onDismiss: (id: string) => void
   onNavigate?: () => void
+  variant: "page" | "popover"
 }) {
   const { content } = notification
   const Icon = notificationIcons[content.kind]
@@ -112,11 +118,24 @@ export const NotificationRow = React.memo(function NotificationRow({
     <article
       aria-label={title}
       className={cn(
-        "group/row flex items-center gap-3 py-2.5 pr-2 pl-4 transition-colors hover:bg-accent/50 has-[:focus-visible]:bg-accent/50",
+        "group/row relative flex items-center gap-3 py-2.5 pr-2 pl-4 transition-colors hover:bg-accent/50 has-[:focus-visible]:bg-accent/50",
         highlighted && "bg-primary/[0.04]",
+        focused &&
+          "bg-accent/40 before:absolute before:inset-y-0 before:left-0 before:w-0.5 before:bg-primary",
         className
       )}
     >
+      {variant === "popover" ? (
+        // Covers the row; the actions and time sit above it.
+        <Link
+          to="/notifications"
+          search={{ focus: notification.id }}
+          aria-label={title}
+          title={title}
+          className="absolute inset-0 focus-visible:outline-none"
+          onClick={onNavigate}
+        />
+      ) : null}
       <span
         className={cn(
           "grid size-8 shrink-0 place-items-center rounded-md border border-border/70 bg-muted/40 text-muted-foreground",
@@ -126,7 +145,13 @@ export const NotificationRow = React.memo(function NotificationRow({
         <Icon className="size-4" aria-hidden />
       </span>
       <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-        <p className="truncate text-sm leading-snug font-medium" title={title}>
+        <p
+          className={cn(
+            "text-sm leading-snug font-medium",
+            variant === "page" ? "line-clamp-2 break-words" : "truncate"
+          )}
+          title={variant === "page" ? title : undefined}
+        >
           {title}
         </p>
         <p className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
@@ -137,7 +162,7 @@ export const NotificationRow = React.memo(function NotificationRow({
             />
           ) : null}
           <RelativeTime
-            className="shrink-0"
+            className="relative shrink-0"
             timestamp={notification.createdAt}
           />
           {detail ? (
@@ -145,9 +170,7 @@ export const NotificationRow = React.memo(function NotificationRow({
               <span aria-hidden className="opacity-60">
                 ·
               </span>
-              <span className="truncate" title={detail}>
-                {detail}
-              </span>
+              <span className="truncate">{detail}</span>
             </>
           ) : null}
         </p>
@@ -160,7 +183,7 @@ export const NotificationRow = React.memo(function NotificationRow({
       <Button
         variant="ghost"
         size="icon-xs"
-        className="shrink-0 text-muted-foreground opacity-0 transition-opacity group-focus-within/row:opacity-100 group-hover/row:opacity-100 hover:text-foreground focus-visible:opacity-100 [@media(hover:none)]:opacity-100"
+        className="relative -ml-2 shrink-0 text-muted-foreground opacity-0 transition-opacity group-focus-within/row:opacity-100 group-hover/row:opacity-100 hover:text-foreground focus-visible:opacity-100 [@media(hover:none)]:opacity-100"
         aria-label={`Clear "${title}"`}
         onClick={() => onDismiss(notification.id)}
       >
@@ -182,13 +205,13 @@ function NotificationActions({
   switch (content.kind) {
     case "kiln.updated":
       return content.url ? (
-        <div className="flex shrink-0 items-center gap-1.5">
+        <div className="relative flex shrink-0 items-center gap-1.5">
           <ChangelogLink url={content.url} />
         </div>
       ) : null
     case "kiln.release":
       return (
-        <div className="flex shrink-0 items-center gap-1.5">
+        <div className="relative flex shrink-0 items-center gap-1.5">
           <ChangelogLink url={content.url} />
           <UpdateKilnButton onNavigate={onNavigate} />
         </div>
@@ -261,7 +284,7 @@ function InvitationActions({
       )
   )
   return (
-    <div className="flex shrink-0 items-center gap-1.5">
+    <div className="relative flex shrink-0 items-center gap-1.5">
       <Button
         variant="outline"
         size="xs"
@@ -290,7 +313,7 @@ function OpenResourceButton({
     <Button
       variant="outline"
       size="xs"
-      className="shrink-0"
+      className="relative shrink-0"
       onClick={() => {
         onNavigate?.()
         void navigate({

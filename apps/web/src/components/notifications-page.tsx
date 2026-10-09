@@ -17,9 +17,16 @@ import { notificationsCollectionOptions } from "@/lib/collections/notifications"
 
 /**
  * The full history, virtualized. `newIds` are the notifications that were
- * unread when the page opened, kept highlighted while it stays open.
+ * unread when the page opened, kept highlighted while it stays open, and
+ * `focusId` is the one it was opened at, scrolled into view and marked.
  */
-export function NotificationsPage({ newIds }: { newIds: ReadonlySet<string> }) {
+export function NotificationsPage({
+  focusId,
+  newIds,
+}: {
+  focusId: string | null
+  newIds: ReadonlySet<string>
+}) {
   const { data: notifications, isLoading } = useLiveQuery((query) =>
     query
       .from({ notification: notificationsCollectionOptions })
@@ -62,9 +69,20 @@ export function NotificationsPage({ newIds }: { newIds: ReadonlySet<string> }) {
     overscan: 10,
     rangeExtractor,
   })
+  const focusIndex = focusId
+    ? items.findIndex((item) => item.key === focusId)
+    : -1
+  // Scroll to the focused notification once it is listed; later changes to
+  // the list leave the user's scroll position alone.
+  const scrolledToRef = React.useRef<string | null>(null)
+  React.useLayoutEffect(() => {
+    if (focusIndex < 0 || scrolledToRef.current === focusId) return
+    scrolledToRef.current = focusId
+    virtualizer.scrollToIndex(focusIndex, { align: "center" })
+  }, [focusId, focusIndex, virtualizer])
 
   return (
-    <div className="mx-auto flex h-full w-full max-w-3xl flex-col px-3 py-4 sm:px-5 sm:py-5">
+    <div className="mx-auto flex h-full w-full max-w-5xl flex-col px-3 py-4 sm:px-5 sm:py-5">
       {/* Fills the page whatever it holds, and scrolls inside. */}
       <div
         ref={scrollRef}
@@ -105,6 +123,8 @@ export function NotificationsPage({ newIds }: { newIds: ReadonlySet<string> }) {
                   ) : (
                     <NotificationRow
                       className="border-b border-border/60"
+                      focused={item.notification.id === focusId}
+                      variant="page"
                       highlighted={
                         newIds.has(item.notification.id) ||
                         item.notification.readAt === null
