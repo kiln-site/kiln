@@ -73,7 +73,7 @@ export const listNotificationsEffect = Effect.fn("notifications.list")(
       "notifications.list",
       `SELECT id, kind, data, created_at, read_at
          FROM ${databaseTable("notification")}
-        WHERE user_id = ?
+        WHERE user_id = ? AND dismissed_at IS NULL
         ORDER BY created_at DESC, id DESC
         LIMIT ${notificationInboxLimit}`,
       [userId]
@@ -109,6 +109,44 @@ export const markNotificationsReadEffect = Effect.fn("notifications.markRead")(
           SET read_at = ?
         WHERE user_id = ? AND read_at IS NULL AND created_at <= ?`,
       [now, userId, through]
+    )
+    return result.affectedRows
+  }
+)
+
+/**
+ * Clears one of the user's notifications. The row stays dismissed so the event
+ * that sent it is never delivered to this user again.
+ */
+export const dismissNotificationEffect = Effect.fn("notifications.dismiss")(
+  function* (userId: string, id: string) {
+    const database = yield* Database
+    const now = yield* Clock.currentTimeMillis
+    const result = yield* database.execute(
+      "notifications.dismiss",
+      `UPDATE ${databaseTable("notification")}
+          SET dismissed_at = ?, read_at = COALESCE(read_at, ?)
+        WHERE id = ? AND user_id = ? AND dismissed_at IS NULL`,
+      [now, now, id, userId]
+    )
+    return result.affectedRows
+  }
+)
+
+/**
+ * Clears the user's notifications created at or before `through`, so anything
+ * delivered after the user looked stays in the inbox.
+ */
+export const clearNotificationsEffect = Effect.fn("notifications.clear")(
+  function* (userId: string, through: number) {
+    const database = yield* Database
+    const now = yield* Clock.currentTimeMillis
+    const result = yield* database.execute(
+      "notifications.clear",
+      `UPDATE ${databaseTable("notification")}
+          SET dismissed_at = ?, read_at = COALESCE(read_at, ?)
+        WHERE user_id = ? AND dismissed_at IS NULL AND created_at <= ?`,
+      [now, now, userId, through]
     )
     return result.affectedRows
   }

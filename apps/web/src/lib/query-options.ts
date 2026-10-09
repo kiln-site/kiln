@@ -32,7 +32,12 @@ import {
   minecraftUsernameKey,
 } from "@/lib/minecraft-profile"
 import { getUiPreferences } from "@/server/preferences"
-import { getNotifications, markNotificationsRead } from "@/server/notifications"
+import {
+  clearNotifications,
+  dismissNotification,
+  getNotifications,
+  markNotificationsRead,
+} from "@/server/notifications"
 import type { KilnNotification } from "@/lib/notifications"
 import {
   getInstanceFavorites,
@@ -535,6 +540,62 @@ export function markNotificationsReadMutationOptions(queryClient: QueryClient) {
     },
     onSettled: () => queryClient.invalidateQueries({ queryKey }),
   })
+}
+
+function removeNotificationsMutationOptions<TInput>(
+  queryClient: QueryClient,
+  action: "clear" | "dismiss",
+  mutationFn: (input: TInput) => Promise<void>,
+  removes: (input: TInput) => (notification: KilnNotification) => boolean,
+  onFailure: (error: Error) => void
+) {
+  const { queryKey } = notificationsQueryOptions()
+  return mutationOptions({
+    mutationKey: ["notifications", action] as const,
+    mutationFn,
+    onMutate: async (input) => {
+      await queryClient.cancelQueries({ queryKey })
+      const previous = queryClient.getQueryData(queryKey)
+      const removed = removes(input)
+      queryClient.setQueryData(queryKey, (current) =>
+        current?.filter((notification) => !removed(notification))
+      )
+      return { previous }
+    },
+    onError: (error, _input, context) => {
+      if (context?.previous)
+        queryClient.setQueryData(queryKey, context.previous)
+      onFailure(error)
+    },
+    onSettled: () => queryClient.invalidateQueries({ queryKey }),
+  })
+}
+
+export function dismissNotificationMutationOptions(
+  queryClient: QueryClient,
+  onFailure: (error: Error) => void
+) {
+  return removeNotificationsMutationOptions(
+    queryClient,
+    "dismiss",
+    (id: string) => dismissNotification({ data: { id } }),
+    (id) => (notification) => notification.id === id,
+    onFailure
+  )
+}
+
+/** Clears every notification created at or before `through`. */
+export function clearNotificationsMutationOptions(
+  queryClient: QueryClient,
+  onFailure: (error: Error) => void
+) {
+  return removeNotificationsMutationOptions(
+    queryClient,
+    "clear",
+    (through: number) => clearNotifications({ data: { through } }),
+    (through) => (notification) => notification.createdAt <= through,
+    onFailure
+  )
 }
 
 export function uiPreferencesQueryOptions() {

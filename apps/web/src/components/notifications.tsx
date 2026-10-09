@@ -8,15 +8,16 @@ import {
   Rocket,
   UserMinus,
   UserPlus,
+  X,
 } from "lucide-react"
 
+import { Button } from "@workspace/ui/components/button"
 import {
   Dialog,
   DialogContent,
-  DialogDescription,
-  DialogHeader,
   DialogTitle,
 } from "@workspace/ui/components/dialog"
+import { showToast } from "@workspace/ui/components/sonner"
 import {
   Tooltip,
   TooltipContent,
@@ -30,6 +31,8 @@ import type {
   NotificationResource,
 } from "@/lib/notifications"
 import {
+  clearNotificationsMutationOptions,
+  dismissNotificationMutationOptions,
   markNotificationsReadMutationOptions,
   notificationsQueryOptions,
   selectUnreadNotificationCount,
@@ -211,27 +214,41 @@ const NotificationsDialogHost = React.memo(function NotificationsDialogHost({
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent className="gap-0 p-0 sm:max-w-md">
-        <DialogHeader className="border-b border-border/70 px-5 pt-5 pb-4">
-          <DialogTitle>Notifications</DialogTitle>
-          <DialogDescription>
-            Kiln releases and changes to your access.
-          </DialogDescription>
-        </DialogHeader>
-        <NotificationsList onNavigate={store.close} />
+        <NotificationsPanel onNavigate={store.close} />
       </DialogContent>
     </Dialog>
   )
 })
 
+function showNotificationFailure(action: string) {
+  return (error: Error) =>
+    showToast({
+      message: `Could not ${action}: ${error.message}`,
+      type: "error",
+    })
+}
+
 // Mounted only while the dialog is open. Opening it reads everything shown;
 // rows that were unread keep their highlight until the dialog closes.
-function NotificationsList({ onNavigate }: { onNavigate: () => void }) {
+function NotificationsPanel({ onNavigate }: { onNavigate: () => void }) {
   const queryClient = useQueryClient()
   const { data: notifications, isPending } = useQuery(
     notificationsQueryOptions()
   )
   const { mutate: markRead } = useMutation(
     markNotificationsReadMutationOptions(queryClient)
+  )
+  const { mutate: dismiss } = useMutation(
+    dismissNotificationMutationOptions(
+      queryClient,
+      showNotificationFailure("clear the notification")
+    )
+  )
+  const { mutate: clear } = useMutation(
+    clearNotificationsMutationOptions(
+      queryClient,
+      showNotificationFailure("clear notifications")
+    )
   )
   const [highlighted, setHighlighted] = React.useState<ReadonlySet<string>>(
     () => new Set()
@@ -253,52 +270,68 @@ function NotificationsList({ onNavigate }: { onNavigate: () => void }) {
     markRead(Math.max(...unread.map((notification) => notification.createdAt)))
   }, [markRead, newestUnread, notifications])
 
-  if (isPending) {
-    return (
-      <p className="px-5 py-10 text-center text-sm text-muted-foreground">
-        Loading notifications…
-      </p>
-    )
-  }
-  if (!notifications?.length) {
-    return (
-      <div className="flex flex-col items-center gap-2 px-5 py-12 text-center">
-        <Bell className="size-5 text-muted-foreground/70" aria-hidden />
-        <p className="text-sm font-medium">You're all caught up</p>
-        <p className="max-w-64 text-xs text-muted-foreground">
-          New Kiln releases and changes to your access will show up here.
-        </p>
-      </div>
-    )
-  }
+  const newest = notifications?.[0]
   return (
-    <ul
-      aria-label="Notifications"
-      className="max-h-[min(32rem,calc(100dvh-10rem))] overflow-y-auto py-1"
-    >
-      {notifications.map((notification) => (
-        <NotificationRow
-          key={notification.id}
-          highlighted={highlighted.has(notification.id)}
-          notification={notification}
-          onNavigate={onNavigate}
-        />
-      ))}
-    </ul>
+    <>
+      <div className="flex h-13 items-center gap-2 border-b border-border/70 pr-12 pl-5">
+        <DialogTitle className="flex-1">Notifications</DialogTitle>
+        {newest ? (
+          <Button
+            variant="ghost"
+            size="sm"
+            className="text-muted-foreground hover:text-foreground"
+            onClick={() => clear(newest.createdAt)}
+          >
+            Clear all
+          </Button>
+        ) : null}
+      </div>
+      {isPending ? (
+        <p className="px-5 py-10 text-center text-sm text-muted-foreground">
+          Loading notifications…
+        </p>
+      ) : !notifications?.length ? (
+        <div className="flex flex-col items-center gap-2 px-5 py-12 text-center">
+          <Bell className="size-5 text-muted-foreground/70" aria-hidden />
+          <p className="text-sm font-medium">You're all caught up</p>
+          <p className="max-w-64 text-xs text-muted-foreground">
+            New Kiln releases and changes to your access will show up here.
+          </p>
+        </div>
+      ) : (
+        <ul
+          aria-label="Notifications"
+          className="max-h-[min(32rem,calc(100dvh-10rem))] overflow-y-auto py-1"
+        >
+          {notifications.map((notification) => (
+            <NotificationRow
+              key={notification.id}
+              highlighted={highlighted.has(notification.id)}
+              notification={notification}
+              onDismiss={dismiss}
+              onNavigate={onNavigate}
+            />
+          ))}
+        </ul>
+      )}
+    </>
   )
 }
 
 const NotificationRow = React.memo(function NotificationRow({
   highlighted,
   notification,
+  onDismiss,
   onNavigate,
 }: {
   highlighted: boolean
   notification: KilnNotification
+  onDismiss: (id: string) => void
   onNavigate: () => void
 }) {
   const { content } = notification
   const Icon = notificationIcons[content.kind]
+  const title = notificationTitle(content)
   const url =
     content.kind === "kiln.release" || content.kind === "kiln.updated"
       ? content.url
@@ -315,7 +348,7 @@ const NotificationRow = React.memo(function NotificationRow({
       </span>
       <span className="flex min-w-0 flex-1 flex-col gap-0.5">
         <span className="text-sm leading-snug font-medium">
-          {notificationTitle(content)}
+          {title}
           {url ? (
             <ExternalLink
               className="ml-1.5 inline size-3 -translate-y-px text-muted-foreground"
@@ -342,44 +375,48 @@ const NotificationRow = React.memo(function NotificationRow({
       ) : null}
     </>
   )
-  const rowClassName = cn(
-    "flex w-full items-start gap-3 px-5 py-3 text-left",
-    highlighted && "bg-primary/[0.04]"
-  )
-  const actionClassName = cn(
-    rowClassName,
-    "transition-colors hover:bg-accent/60 focus-visible:bg-accent/60 focus-visible:outline-none"
-  )
+  const contentClassName =
+    "flex min-w-0 flex-1 items-start gap-3 py-3 pr-1 pl-5 text-left focus-visible:outline-none"
 
-  if (content.kind === "access.invited") {
-    return (
-      <li>
+  return (
+    <li
+      className={cn(
+        "flex items-start transition-colors has-[a:focus-visible]:bg-accent/60 has-[a:hover]:bg-accent/60",
+        highlighted && "bg-primary/[0.04]"
+      )}
+    >
+      {content.kind === "access.invited" ? (
         <Link
           to="/invite"
           search={{ id: content.invitationId }}
-          className={actionClassName}
+          className={contentClassName}
           onClick={onNavigate}
         >
           {body}
         </Link>
-      </li>
-    )
-  }
-  if (url) {
-    return (
-      <li>
+      ) : url ? (
         <a
           href={url}
           target="_blank"
           rel="noopener noreferrer"
-          className={actionClassName}
+          className={contentClassName}
         >
           {body}
         </a>
-      </li>
-    )
-  }
-  return <li className={rowClassName}>{body}</li>
+      ) : (
+        <div className={contentClassName}>{body}</div>
+      )}
+      <Button
+        variant="ghost"
+        size="icon-sm"
+        className="mt-2.5 mr-3 shrink-0 text-muted-foreground hover:text-foreground"
+        aria-label={`Clear "${title}"`}
+        onClick={() => onDismiss(notification.id)}
+      >
+        <X className="size-3.5" />
+      </Button>
+    </li>
+  )
 })
 
 const notificationIcons = {

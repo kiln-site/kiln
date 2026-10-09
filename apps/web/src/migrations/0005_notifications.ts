@@ -5,8 +5,9 @@ import type { Migration } from "@/effect/migrations"
 import { databaseTableName } from "@/lib/database-config"
 
 // One row per recipient. Broadcasts fan out at write time, so reading and
-// marking stay per-user. `source_key` names the event (a release, an
-// invitation) so repeated delivery never duplicates a user's row. No foreign
+// clearing stay per-user. `source_key` names the event (a release, an
+// invitation) so repeated delivery never duplicates a user's row; cleared rows
+// stay as `dismissed_at` so a later check can't deliver them again. No foreign
 // keys, like `instance_favorite`: development sign-in has no user row.
 export const notifications: Migration = {
   id: 5,
@@ -22,6 +23,7 @@ export const notifications: Migration = {
   \`data\` json NOT NULL,
   \`created_at\` bigint unsigned NOT NULL,
   \`read_at\` bigint unsigned DEFAULT NULL,
+  \`dismissed_at\` bigint unsigned DEFAULT NULL,
   PRIMARY KEY (\`id\`),
   UNIQUE KEY \`${table}_source_unique\` (\`user_id\`,\`source_key\`),
   KEY \`${table}_user_created_idx\` (\`user_id\`,\`created_at\`)
