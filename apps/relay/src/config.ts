@@ -125,6 +125,11 @@ export function loadConfig(
   const proxyMode = relayProxyMode(environment)
   const port = parsePort(environment, "KILN_RELAY_PORT", 4100)
   const sftpPort = parsePort(environment, "KILN_RELAY_SFTP_PORT", 2022)
+  // The image's native healthcheck parses this too; accept only plain digits
+  // so both always agree on the port.
+  if (!/^\d*$/u.test(environment.KILN_RELAY_HEALTH_PORT?.trim() ?? "")) {
+    throw new Error("KILN_RELAY_HEALTH_PORT must be a valid TCP port")
+  }
   const healthPort = parsePort(environment, "KILN_RELAY_HEALTH_PORT", 4101)
   if (healthPort === port || healthPort === sftpPort) {
     throw new Error(

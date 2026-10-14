@@ -35,17 +35,19 @@ ENV KILN_VERSION=$KILN_VERSION
 RUN vp run relay#build
 
 # Docker runs the HEALTHCHECK every interval, so it is a static native binary
-# instead of a Node.js process. Cross-compile on the build platform; the stage
-# only depends on the checker source, so it stays cached.
+# instead of a Node.js process. Test natively, then cross-compile on the build
+# platform; the stage only depends on the checker source, so it stays cached.
 FROM --platform=$BUILDPLATFORM golang:1.27.2-alpine AS healthcheck
 
 ARG TARGETOS
 ARG TARGETARCH
+ENV CGO_ENABLED=0
 WORKDIR /src
 COPY apps/relay/healthcheck ./
 RUN --mount=type=cache,target=/root/.cache/go-build \
-  CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
-  go build -trimpath -ldflags="-s -w" -o /out/kiln-relay-healthcheck .
+  go test ./... \
+  && GOOS=$TARGETOS GOARCH=$TARGETARCH \
+    go build -trimpath -ldflags="-s -w" -o /out/kiln-relay-healthcheck .
 
 FROM docker:29.8.2-cli AS docker-cli
 

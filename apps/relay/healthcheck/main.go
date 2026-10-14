@@ -7,9 +7,11 @@ package main
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"net"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -21,10 +23,24 @@ func main() {
 	}
 }
 
+// healthPort reads KILN_RELAY_HEALTH_PORT the way the Relay's config does:
+// surrounding whitespace is ignored and an empty value means 4101.
+func healthPort() (string, error) {
+	value := strings.TrimSpace(os.Getenv("KILN_RELAY_HEALTH_PORT"))
+	if value == "" {
+		return "4101", nil
+	}
+	port, err := strconv.Atoi(value)
+	if err != nil || port < 1 || port > 65535 {
+		return "", errors.New("KILN_RELAY_HEALTH_PORT must be a valid TCP port")
+	}
+	return strconv.Itoa(port), nil
+}
+
 func check() error {
-	port := os.Getenv("KILN_RELAY_HEALTH_PORT")
-	if port == "" {
-		port = "4101"
+	port, err := healthPort()
+	if err != nil {
+		return err
 	}
 	deadline := time.Now().Add(2500 * time.Millisecond)
 	dialer := net.Dialer{Deadline: deadline}

@@ -57,7 +57,7 @@ services:
           "2",
           "-O",
           "/dev/null",
-          "http://127.0.0.1:4101/health",
+          "http://127.0.0.1:${KILN_RELAY_HEALTH_PORT:-4101}/health",
         ]
       interval: 10s
       timeout: 3s
