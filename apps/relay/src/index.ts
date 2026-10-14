@@ -1268,12 +1268,11 @@ async function executeControlRequest(
         lifecycle.proxySettings(),
         runRelayEffect("relay.proxy.routes", startup.state.listWebRoutes()),
       ])
+      const bundled = settings.mode === "traefik"
       return relayProxyConfigurationSchema.parse({
-        dynamicConfiguration: traefikDynamicConfiguration(
-          config,
-          routes,
-          settings
-        ),
+        dynamicConfiguration: bundled
+          ? traefikDynamicConfiguration(config, routes, settings)
+          : null,
         routes: routes.map((route) => {
           const appId = appIdFromRouteOwner(route.instanceId)
           return {
@@ -1293,10 +1292,9 @@ async function executeControlRequest(
             upstream: traefikRouteUpstream(config, route),
           }
         }),
-        staticConfiguration:
-          settings.mode === "traefik"
-            ? traefikStaticConfiguration(settings)
-            : null,
+        staticConfiguration: bundled
+          ? traefikStaticConfiguration(settings)
+          : null,
       })
     }
     case "relay.proxy.write": {

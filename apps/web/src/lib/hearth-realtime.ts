@@ -110,11 +110,20 @@ function queryScopes(
   if (topic === "file-activity" && scope?.instanceId) {
     return [exact(queryKeys.fileActivity(scope.relayId, scope.instanceId))]
   }
+  if (topic === "apps" && scope) {
+    return [
+      ...hearthRealtimeQueryScopes.apps,
+      exact(queryKeys.relayProxyConfiguration(scope.relayId)),
+    ]
+  }
   if (topic === "instance-web-routes" && scope?.instanceId) {
-    return [exact(queryKeys.relay.webRoutes(scope.relayId, scope.instanceId))]
+    return [
+      exact(queryKeys.relay.webRoutes(scope.relayId, scope.instanceId)),
+      exact(queryKeys.relayProxyConfiguration(scope.relayId)),
+    ]
   }
   if (topic === "relay-proxy" && scope) {
-    return [exact(["relays", "proxy", scope.relayId])]
+    return [prefix(queryKeys.relayProxy(scope.relayId))]
   }
   if (topic === "relays" && scope) {
     return [
@@ -122,7 +131,7 @@ function queryScopes(
         ({ queryKey }) => queryKey[0] !== "relays"
       ),
       exact(queryKeys.relays),
-      exact(["relays", "proxy", scope.relayId]),
+      prefix(queryKeys.relayProxy(scope.relayId)),
       prefix(["databases", scope.relayId]),
     ]
   }

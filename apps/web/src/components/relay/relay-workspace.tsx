@@ -3,10 +3,7 @@ import { useQuery } from "@tanstack/react-query"
 import { RadioTower } from "lucide-react"
 
 import { RelayPauseButton } from "@/components/relay/relay-actions"
-import {
-  relayAddress,
-  useRelayLiveStatus,
-} from "@/components/relay/relay-presentation"
+import { useRelayLiveStatus } from "@/components/relay/relay-presentation"
 import {
   RelayWorkspaceContext,
   type RelayWorkspaceRelay,

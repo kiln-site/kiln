@@ -1114,7 +1114,8 @@ export const relayProxyDiagnosticsSchema = z
 // static file only for its bundled Traefik), and each web route with the
 // server or app it reaches.
 export const relayProxyConfigurationSchema = z.object({
-  dynamicConfiguration: z.string(),
+  // Both files only exist for the bundled Traefik.
+  dynamicConfiguration: z.string().nullable(),
   routes: z.array(
     z.object({
       hostname: z.string(),

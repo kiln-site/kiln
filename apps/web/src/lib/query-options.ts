@@ -184,6 +184,9 @@ export const queryKeys = {
     options: ["schedules", "options"] as const,
   },
   relays: ["relays"] as const,
+  relayProxy: (relayId: string) => ["relays", "proxy", relayId] as const,
+  relayProxyConfiguration: (relayId: string) =>
+    ["relays", "proxy", relayId, "configuration"] as const,
   tailscale: (relayId: string) => ["tailscale", "relays", relayId] as const,
   tailscaleStacks: ["tailscale", "stacks"] as const,
   updates: ["updates", "overview"] as const,
@@ -639,7 +642,7 @@ export function relaysQueryOptions() {
 export function relayProxyQueryOptions(relayId: string) {
   return queryOptions({
     queryFn: () => getRelayProxy({ data: { id: relayId } }),
-    queryKey: ["relays", "proxy", relayId] as const,
+    queryKey: queryKeys.relayProxy(relayId),
     retry: false,
     staleTime: 10_000,
   })
@@ -648,7 +651,7 @@ export function relayProxyQueryOptions(relayId: string) {
 export function relayProxyConfigurationQueryOptions(relayId: string) {
   return queryOptions({
     queryFn: () => getRelayProxyConfiguration({ data: { id: relayId } }),
-    queryKey: ["relays", "proxy", relayId, "configuration"] as const,
+    queryKey: queryKeys.relayProxyConfiguration(relayId),
     retry: false,
     staleTime: 10_000,
   })

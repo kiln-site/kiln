@@ -26,6 +26,8 @@ export const relayConsoleResourcesV1Feature = "console-resources-v1"
 export const relayAppsV1Feature = "apps-v1"
 // The Relay streams its own container's output as the `relay` console kind.
 export const relayLogsV1Feature = "relay-logs-v1"
+// The Relay answers `relay.proxy.config.read` with its proxy configuration.
+export const relayProxyConfigurationV1Feature = "relay-proxy-configuration-v1"
 export const relayBrowserAuthorizationReviseMaxItems = 256
 
 export const relayControlOperations = [

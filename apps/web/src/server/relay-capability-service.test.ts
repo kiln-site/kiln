@@ -507,13 +507,13 @@ describe("Relay capability issuance orchestration", () => {
     })
 
     it("refuses another Relay's logs through this Relay", async () => {
-      await expect(issueLogs("relay-two")).rejects.toThrow()
+      await expect(issueLogs("relay-two")).rejects.toThrow("Relay not found")
     })
 
     it("refuses people who can only view the Relay", async () => {
       granted = ["relay.read"]
 
-      await expect(issueLogs()).rejects.toThrow()
+      await expect(issueLogs()).rejects.toThrow("Permission denied")
     })
 
     it("refuses Relays that can't stream their own logs", async () => {

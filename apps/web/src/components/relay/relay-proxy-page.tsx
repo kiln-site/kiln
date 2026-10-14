@@ -26,7 +26,6 @@ import { InfoCard, InfoCardHeader, MetaRow } from "@/components/info-card"
 import type { InstanceStatusPresentation } from "@/components/instance-name-presentation"
 import { useRelayLiveStatus } from "@/components/relay/relay-presentation"
 import { useRelayWorkspace } from "@/components/relay/relay-workspace-context"
-import { EditRelayDialog } from "@/components/relays-page"
 import { StatusIndicator } from "@/components/status-indicator"
 import { canAccessRelayPermission } from "@/lib/navigation-destinations"
 import {
@@ -39,6 +38,13 @@ import {
 import type { RelayFleetSnapshot } from "@/lib/relay-fleet"
 import type { RelayDirectoryEntry } from "@/lib/relay-route"
 import type { getRelayProxy } from "@/server/relays"
+
+// Only loaded when someone opens it, so the Relays page stays out of this
+// route.
+const EditRelayDialog = React.lazy(async () => {
+  const module = await import("@/components/relays-page")
+  return { default: module.EditRelayDialog }
+})
 
 type ProxyDiagnostics = Awaited<ReturnType<typeof getRelayProxy>>
 
@@ -123,7 +129,9 @@ function RelayProxyStatusCard({ relay }: { relay: RelayDirectoryEntry }) {
         />
       )}
       {editing ? (
-        <EditRelayDialog relay={relay} open onOpenChange={setEditing} />
+        <React.Suspense fallback={null}>
+          <EditRelayDialog relay={relay} open onOpenChange={setEditing} />
+        </React.Suspense>
       ) : null}
     </InfoCard>
   )
@@ -235,7 +243,7 @@ function RelayProxyRoutes({ relayId }: { relayId: string }) {
         <InfoCardHeader icon={<Route />} title="Routes" />
         <QueryState
           error={configuration.error}
-          errorFallback="Could not read the Traefik configuration. The Relay may need an update."
+          errorFallback="Could not read the proxy configuration."
           pendingLabel="Reading routes…"
         />
       </InfoCard>
@@ -244,12 +252,36 @@ function RelayProxyRoutes({ relayId }: { relayId: string }) {
   return (
     <>
       <RelayRoutesCard relayId={relayId} routes={configuration.data.routes} />
-      <TraefikConfigurationCard configuration={configuration.data} />
+      {configuration.data.dynamicConfiguration !== null &&
+      configuration.data.staticConfiguration !== null ? (
+        <TraefikConfigurationCard
+          dynamicConfiguration={configuration.data.dynamicConfiguration}
+          staticConfiguration={configuration.data.staticConfiguration}
+        />
+      ) : null}
     </>
   )
 }
 
 type ProxyRoute = RelayProxyConfiguration["routes"][number]
+
+// Plain objects, so structural sharing keeps them stable while names don't
+// change.
+function selectRelayServers(relayId: string) {
+  return (snapshot: RelayFleetSnapshot) =>
+    Object.fromEntries(
+      snapshot.instances
+        .filter((instance) => instance.relayId === relayId)
+        .map((instance) => [
+          instance.id,
+          { name: instance.name, routeId: instance.routeId },
+        ])
+    )
+}
+
+function selectAppNames(apps: Array<{ id: string; name: string }>) {
+  return Object.fromEntries(apps.map((app) => [app.id, app.name]))
+}
 
 function RelayRoutesCard({
   relayId,
@@ -258,6 +290,19 @@ function RelayRoutesCard({
   relayId: string
   routes: ReadonlyArray<ProxyRoute>
 }) {
+  const selectServers = React.useMemo(
+    () => selectRelayServers(relayId),
+    [relayId]
+  )
+  const { data: servers = {} } = useQuery({
+    ...relaySnapshotQueryOptions(),
+    select: selectServers,
+  })
+  const { data: appNames = {} } = useQuery({
+    ...appDirectoryQueryOptions(),
+    select: selectAppNames,
+  })
+
   return (
     <InfoCard className="mt-4">
       <InfoCardHeader
@@ -289,7 +334,28 @@ function RelayRoutesCard({
                 {route.hostname}
                 {route.path ?? ""}
               </a>
-              <RouteOwner owner={route.owner} relayId={relayId} />
+              {route.owner.kind === "app" ? (
+                <Link
+                  to="/app/$appId/network"
+                  params={{ appId: route.owner.id }}
+                  className="flex min-w-0 items-center gap-1.5 text-xs hover:text-primary"
+                >
+                  <Boxes className="size-3.5 shrink-0 text-muted-foreground" />
+                  <span className="truncate">
+                    {appNames[route.owner.id] ?? route.owner.id.slice(0, 8)}
+                  </span>
+                  {route.owner.service ? (
+                    <span className="truncate text-muted-foreground">
+                      · {route.owner.service}
+                    </span>
+                  ) : null}
+                </Link>
+              ) : (
+                <ServerRouteOwner
+                  id={route.owner.id}
+                  server={servers[route.owner.id]}
+                />
+              )}
               <span
                 className="truncate font-mono text-xs text-muted-foreground"
                 title={route.upstream}
@@ -304,80 +370,43 @@ function RelayRoutesCard({
   )
 }
 
-function selectServerName(relayId: string, serverId: string) {
-  return (snapshot: RelayFleetSnapshot) =>
-    snapshot.instances.find(
-      (instance) => instance.relayId === relayId && instance.id === serverId
-    )?.name ?? null
-}
-
-function RouteOwner({
-  owner,
-  relayId,
+function ServerRouteOwner({
+  id,
+  server,
 }: {
-  owner: ProxyRoute["owner"]
-  relayId: string
+  id: string
+  server: { name: string; routeId: string } | undefined
 }) {
-  const selectServer = React.useMemo(
-    () => selectServerName(relayId, owner.id),
-    [owner.id, relayId]
-  )
-  const { data: serverName } = useQuery({
-    ...relaySnapshotQueryOptions(),
-    enabled: owner.kind === "server",
-    select: selectServer,
-  })
-  const { data: appName } = useQuery({
-    ...appDirectoryQueryOptions(),
-    enabled: owner.kind === "app",
-    select: (apps) => apps.find((app) => app.id === owner.id)?.name ?? null,
-  })
-
-  if (owner.kind === "app") {
-    return (
-      <Link
-        to="/app/$appId/network"
-        params={{ appId: owner.id }}
-        className="flex min-w-0 items-center gap-1.5 text-xs hover:text-primary"
-      >
-        <Boxes className="size-3.5 shrink-0 text-muted-foreground" />
-        <span className="truncate">{appName ?? owner.id.slice(0, 8)}</span>
-        {owner.service ? (
-          <span className="truncate text-muted-foreground">
-            · {owner.service}
-          </span>
-        ) : null}
-      </Link>
-    )
-  }
-  return (
-    <span className="flex min-w-0 items-center gap-1.5 text-xs">
+  const content = (
+    <>
       <Server className="size-3.5 shrink-0 text-muted-foreground" />
-      <span className="truncate">{serverName ?? owner.id.slice(0, 8)}</span>
-    </span>
+      <span className="truncate">{server?.name ?? id.slice(0, 8)}</span>
+    </>
+  )
+  return server ? (
+    <Link
+      to="/server/$serverId/network"
+      params={{ serverId: server.routeId }}
+      className="flex min-w-0 items-center gap-1.5 text-xs hover:text-primary"
+    >
+      {content}
+    </Link>
+  ) : (
+    <span className="flex min-w-0 items-center gap-1.5 text-xs">{content}</span>
   )
 }
 
+// The bundled Traefik's files, as the Relay writes them.
 function TraefikConfigurationCard({
-  configuration,
+  dynamicConfiguration,
+  staticConfiguration,
 }: {
-  configuration: RelayProxyConfiguration
+  dynamicConfiguration: string
+  staticConfiguration: string
 }) {
   const files = [
-    {
-      content: configuration.dynamicConfiguration,
-      id: "dynamic",
-      name: "dynamic/kiln.yaml",
-    },
-    ...(configuration.staticConfiguration === null
-      ? []
-      : [
-          {
-            content: configuration.staticConfiguration,
-            id: "static",
-            name: "traefik.yml",
-          },
-        ]),
+    { content: dynamicConfiguration, id: "dynamic", name: "dynamic/kiln.yaml" },
+    { content: staticConfiguration, id: "static", name: "traefik.yml" },
   ]
   const [selected, setSelected] = React.useState("dynamic")
   const file = files.find(({ id }) => id === selected) ?? files[0]!
@@ -388,8 +417,7 @@ function TraefikConfigurationCard({
         icon={<FileCode2 />}
         title="Traefik configuration"
         action={
-          files.length > 1 ? (
-            <div
+          <div
               role="tablist"
               aria-label="Configuration file"
               className="flex rounded-lg border bg-background/60 p-0.5"
@@ -412,7 +440,6 @@ function TraefikConfigurationCard({
                 </button>
               ))}
             </div>
-          ) : null
         }
       />
       <div className="flex h-[28rem] min-h-0 flex-col">

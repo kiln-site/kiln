@@ -23,6 +23,7 @@ import {
   relayConsoleResourcesV1Feature,
   relayAppsV1Feature,
   relayLogsV1Feature,
+  relayProxyConfigurationV1Feature,
   appIdFromFileRoot,
   relayFileRequestReplayV1Feature,
   relaySnapshotDeltaFeature,
@@ -649,6 +650,7 @@ function authenticateSocket(
           relayConsoleResourcesV1Feature,
           relayAppsV1Feature,
           relayLogsV1Feature,
+          relayProxyConfigurationV1Feature,
         ],
         protocol: relayControlProtocol,
         relayBuild: relayBuildLabel(),
@@ -944,8 +946,9 @@ function actionForRequest(request: RelayControlRequest): RelayAction | null {
     case "relay.tailscale.stack.remove":
       return "instance.delete"
     case "relay.proxy.read":
-    case "relay.proxy.config.read":
       return "relay.read"
+    case "relay.proxy.config.read":
+      return "instance.network.read"
     case "relay.proxy.write":
       return "relay.configure"
     case "relay.pairing.create":

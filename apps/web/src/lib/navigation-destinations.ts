@@ -519,7 +519,7 @@ export const relayDestinations = [
     id: "proxy",
     keywords: ["traefik", "routes", "domains", "certificates", "https"],
     label: "Proxy",
-    permission: "relay.read",
+    permission: "instance.network.read",
     to: "/relay/$relayId/proxy",
   },
 ] as const satisfies ReadonlyArray<RelayDestination>

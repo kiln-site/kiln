@@ -1380,11 +1380,13 @@ export function EditRelayDialog({
   })
   const updateProxy = useMutation({
     mutationFn: updateRelayProxy,
-    onSuccess: (result) =>
-      queryClient.setQueryData(
-        relayProxyQueryOptions(relay.id).queryKey,
-        result
-      ),
+    onSuccess: (result) => {
+      queryClient.setQueryData(queryKeys.relayProxy(relay.id), result)
+      void queryClient.invalidateQueries({
+        exact: true,
+        queryKey: queryKeys.relayProxyConfiguration(relay.id),
+      })
+    },
   })
 
   async function submit(event: React.FormEvent<HTMLFormElement>) {
