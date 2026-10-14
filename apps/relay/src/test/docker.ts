@@ -1429,14 +1429,23 @@ export class FakeDocker {
     return {
       kind: "stream",
       write: (response) => {
-        let closed = false
-        response.on("close", () => {
-          closed = true
-        })
         response.writeHead(200, {
           "Content-Type": container.tty
             ? "application/vnd.docker.raw-stream"
             : "application/vnd.docker.multiplexed-stream",
+        })
+        const error = container.logStreamError
+        // A follower is registered before the history is sent, so the
+        // container stopping meanwhile still ends the response.
+        const follower =
+          follow && error === null && container.state.running
+            ? { containerId: container.id, response }
+            : null
+        if (follower) this.#followers.add(follower)
+        let closed = false
+        response.once("close", () => {
+          closed = true
+          if (follower) this.#followers.delete(follower)
         })
         // Sent as the reader takes it, as Docker does, so a reader that hangs
         // up stops the rest from being read.
@@ -1446,27 +1455,18 @@ export class FakeDocker {
               container.lastLogRead = "abandoned"
               return
             }
+            // The container stopped, which ends its followers.
+            if (response.writableEnded) return
             const line = Buffer.from(`${time} ${text}\n`)
             if (!response.write(container.tty ? line : frame(1, line))) {
-              await new Promise((resolve) => {
-                response.once("drain", resolve)
-                response.once("close", resolve)
-              })
+              await writable(response)
             }
           }
           container.lastLogRead = "complete"
-          if (container.logStreamError !== null) {
-            // Having answered 200, Docker reports a failed read in the stream.
-            response.end(frame(3, Buffer.from(container.logStreamError)))
-            return
-          }
-          if (!follow || !container.state.running) {
-            response.end()
-            return
-          }
-          const follower = { containerId: container.id, response }
-          this.#followers.add(follower)
-          response.on("close", () => this.#followers.delete(follower))
+          if (response.writableEnded) return
+          // Having answered 200, Docker reports a failed read in the stream.
+          if (error !== null) response.end(frame(3, Buffer.from(error)))
+          else if (!follower) response.end()
         }
         void send()
       },
@@ -2028,6 +2028,19 @@ function frame(stream: 1 | 2 | 3, payload: Buffer): Buffer {
   header[0] = stream
   header.writeUInt32BE(payload.length, 4)
   return Buffer.concat([header, payload])
+}
+
+/** Waits until `response` drains or closes, leaving no listener behind. */
+function writable(response: ServerResponse): Promise<void> {
+  return new Promise((resolve) => {
+    const done = () => {
+      response.off("drain", done)
+      response.off("close", done)
+      resolve()
+    }
+    response.on("drain", done)
+    response.on("close", done)
+  })
 }
 
 /** Unix seconds with nanoseconds, as `since` and `until` take them. */
