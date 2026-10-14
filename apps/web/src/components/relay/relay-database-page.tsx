@@ -1,10 +1,4 @@
 import * as React from "react"
-import {
-  databaseOverviewSchema,
-  databaseQueryResultSchema,
-  databaseRowsSchema,
-  type DatabaseReadRequest,
-} from "@workspace/contracts"
 
 import {
   DATABASE_QUERY_MAX_ROWS,
@@ -12,7 +6,11 @@ import {
 } from "@/components/database-viewer/database-source"
 import { FileToolbarIdentity } from "@/components/files/file-viewer-toolbar"
 import { useRelayWorkspace } from "@/components/relay/relay-workspace-context"
-import { readRelayStateDatabase } from "@/server/relay-database"
+import {
+  getRelayStateDatabaseOverview,
+  getRelayStateDatabaseRows,
+  runRelayStateDatabaseQuery,
+} from "@/server/relay-database"
 
 const DatabaseViewer = React.lazy(async () => {
   const module = await import("@/components/database-viewer/database-viewer")
@@ -26,22 +24,24 @@ const identity = () => (
 export function RelayDatabasePage() {
   const { relay } = useRelayWorkspace()
   const source = React.useMemo<DatabaseSource>(() => {
-    const read = (request: DatabaseReadRequest) =>
-      readRelayStateDatabase({ data: { relayId: relay.id, request } })
+    const relayId = relay.id
     return {
       canQuery: true,
       canWrite: false,
-      queryKey: ["relay-state-database", relay.id],
-      overview: async () =>
-        databaseOverviewSchema.parse(await read({ action: "overview" })),
-      rows: async (input) =>
-        databaseRowsSchema.parse(await read({ action: "rows", ...input })),
-      query: async (sql, write) => {
-        if (write) throw new Error("The Relay database is read-only")
-        return databaseQueryResultSchema.parse(
-          await read({ action: "query", sql, maxRows: DATABASE_QUERY_MAX_ROWS })
-        )
-      },
+      queryKey: ["relay-state-database", relayId],
+      overview: () => getRelayStateDatabaseOverview({ data: { relayId } }),
+      rows: (input) =>
+        getRelayStateDatabaseRows({
+          data: { relayId, request: { action: "rows", ...input } },
+        }),
+      // The viewer only offers writes when `canWrite` is set.
+      query: (sql) =>
+        runRelayStateDatabaseQuery({
+          data: {
+            relayId,
+            request: { action: "query", maxRows: DATABASE_QUERY_MAX_ROWS, sql },
+          },
+        }),
       mutate: () =>
         Promise.reject(new Error("The Relay database is read-only")),
     }

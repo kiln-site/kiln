@@ -1,35 +1,50 @@
 import { createServerFn } from "@tanstack/react-start"
 import {
   databaseOverviewSchema,
-  databaseRowsSchema,
+  databaseQueryInputSchema,
   databaseQueryResultSchema,
+  databaseRowsInputSchema,
+  databaseRowsSchema,
   relayIdSchema,
-  relayStateDatabaseReadSchema,
+  type DatabaseReadRequest,
 } from "@workspace/contracts"
+import { z } from "zod"
 
 import { databaseRpc } from "@/server/managed-database-access"
 import { authorizedRelay } from "@/server/relay-access"
 
-export const readRelayStateDatabase = createServerFn({ method: "POST" })
-  .validator(relayStateDatabaseReadSchema.extend({ relayId: relayIdSchema }))
-  .handler(async ({ data }) => {
-    const { relay, user } = await authorizedRelay(
-      data.relayId,
-      "relay.database.read"
+const relayInputSchema = z.object({ relayId: relayIdSchema })
+
+// The Relay opens its state read-only for every request.
+async function readRelayState(relayId: string, request: DatabaseReadRequest) {
+  const { relay, user } = await authorizedRelay(relayId, "relay.database.read")
+  return databaseRpc(
+    relay,
+    "relay.database.read",
+    { request },
+    30_000,
+    user.id
+  )
+}
+
+export const getRelayStateDatabaseOverview = createServerFn({ method: "GET" })
+  .validator(relayInputSchema)
+  .handler(async ({ data }) =>
+    databaseOverviewSchema.parse(
+      await readRelayState(data.relayId, { action: "overview" })
     )
-    const result = await databaseRpc(
-      relay,
-      "relay.database.read",
-      { request: data.request },
-      30_000,
-      user.id
+  )
+
+export const getRelayStateDatabaseRows = createServerFn({ method: "POST" })
+  .validator(relayInputSchema.extend({ request: databaseRowsInputSchema }))
+  .handler(async ({ data }) =>
+    databaseRowsSchema.parse(await readRelayState(data.relayId, data.request))
+  )
+
+export const runRelayStateDatabaseQuery = createServerFn({ method: "POST" })
+  .validator(relayInputSchema.extend({ request: databaseQueryInputSchema }))
+  .handler(async ({ data }) =>
+    databaseQueryResultSchema.parse(
+      await readRelayState(data.relayId, data.request)
     )
-    switch (data.request.action) {
-      case "overview":
-        return databaseOverviewSchema.parse(result)
-      case "rows":
-        return databaseRowsSchema.parse(result)
-      case "query":
-        return databaseQueryResultSchema.parse(result)
-    }
-  })
+  )

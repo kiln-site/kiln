@@ -34,54 +34,67 @@ const SQLITE_SIDECARS = ["-journal", "-wal", "-shm"] as const
 
 export class DatabaseBrowser {
   readonly #filesystem: FilesystemDriver
-  readonly #workers = new DatabaseWorkerPool()
 
   constructor(filesystem: FilesystemDriver) {
     this.#filesystem = filesystem
   }
 
   read(instance: FileRoot, input: RelayFileDatabaseReadInput) {
-    return this.#run(instance, input.path, input.request, true)
+    return this.#filesystem
+      .resolveFile(instance, input.path)
+      .pipe(Effect.flatMap((path) => runDatabase(path, input.request, "read")))
   }
 
   write(instance: FileRoot, input: RelayFileDatabaseWriteInput) {
-    return this.#run(instance, input.path, input.request, false)
+    return this.#filesystem
+      .resolveFile(instance, input.path)
+      .pipe(
+        Effect.flatMap((path) => runDatabase(path, input.request, "write"))
+      )
   }
+}
 
-  #run(
-    instance: FileRoot,
-    requestedPath: string,
-    request: DatabaseReadRequest | DatabaseWriteRequest,
-    readOnly: boolean
-  ) {
-    return Effect.gen({ self: this }, function* () {
-      const path = yield* this.#filesystem.resolveFile(instance, requestedPath)
-      yield* assertSqliteFile(path)
-      const writable = yield* promiseEffect(() =>
-        access(path, fsConstants.W_OK)
-      ).pipe(
+// A database outside any file root, such as the Relay's own state. It is
+// always opened, and reported, read-only.
+export function readDatabaseFile(path: string, request: DatabaseReadRequest) {
+  return runDatabase(path, request, "inspect")
+}
+
+function runDatabase(
+  path: string,
+  request: DatabaseReadRequest | DatabaseWriteRequest,
+  mode: "inspect" | "read" | "write"
+) {
+  return Effect.gen(function* () {
+    yield* assertSqliteFile(path)
+    const writable =
+      mode !== "inspect" &&
+      (yield* promiseEffect(() => access(path, fsConstants.W_OK)).pipe(
         Effect.map(() => true),
         Effect.catch(() => Effect.succeed(false))
+      ))
+    if (mode === "write" && !writable) {
+      return yield* Effect.fail(
+        RelayDatabaseBrowserError.make({
+          code: "read_only_file",
+          reason: "The database file is read-only on disk",
+        })
       )
-      if (!readOnly && !writable) {
-        return yield* Effect.fail(
-          RelayDatabaseBrowserError.make({
-            code: "read_only_file",
-            reason: "The database file is read-only on disk",
-          })
-        )
-      }
-      const result = yield* this.#workers.run({ path, readOnly, request })
-      if (request.action !== "overview") return result
-      const metadata = yield* databaseOperation("stat", () => stat(path))
-      return {
-        ...(result as object),
-        modifiedAt: metadata.mtime.toISOString(),
-        readOnly: !writable,
-        sizeBytes: metadata.size,
-      }
-    }).pipe(Effect.withSpan(`relay.files.database.${request.action}`))
-  }
+    }
+    const result = yield* workers.run({
+      path,
+      readOnly: mode !== "write",
+      request,
+    })
+    if (request.action !== "overview") return result
+    const metadata = yield* databaseOperation("stat", () => stat(path))
+    return {
+      ...(result as object),
+      modifiedAt: metadata.mtime.toISOString(),
+      readOnly: !writable,
+      sizeBytes: metadata.size,
+    }
+  }).pipe(Effect.withSpan(`relay.files.database.${request.action}`))
 }
 
 function assertSqliteFile(path: string) {
@@ -224,6 +237,10 @@ class DatabaseWorkerPool {
     })
   }
 }
+
+// Shared by every database browser, so the Relay never runs more than
+// MAX_ACTIVE_WORKERS SQLite workers at once.
+const workers = new DatabaseWorkerPool()
 
 interface DatabaseJobState {
   stage: "queued" | "running" | "committing" | "cancelled"

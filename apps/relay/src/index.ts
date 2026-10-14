@@ -1,4 +1,3 @@
-import { RelayStateDatabase } from "./relay-state-database.js"
 import {
   HostShell,
   hostTerminalTarget,
@@ -106,10 +105,11 @@ import {
   discoverRelayAdvertisedHost,
   discoverRelayGameHost,
   loadConfig,
+  relayStateDatabasePath,
 } from "./config.js"
 import { attachControlSocket } from "./control-socket.js"
 import { DockerDriver } from "./docker.js"
-import { DatabaseBrowser } from "./database-browser.js"
+import { DatabaseBrowser, readDatabaseFile } from "./database-browser.js"
 import { DatabaseDriver } from "./databases.js"
 import { browseManagedDatabase } from "./database-sql-browser.js"
 import { consoleSources } from "./console-sources.js"
@@ -289,7 +289,6 @@ const hostFilesystem = new FilesystemDriver(
 )
 const hostFiles = new HostFiles(config)
 const hostDatabaseBrowser = new DatabaseBrowser(hostFilesystem)
-const relayStateDatabase = new RelayStateDatabase(config)
 async function hostFileRoot(id: string): Promise<FileRoot> {
   if (!config.hostAccess) throw new HostAccessDisabledError()
   if (id !== relayIdentity.fingerprint) throw new Error("Relay not found")
@@ -1287,7 +1286,7 @@ async function executeControlRequest(
       const input = relayStateDatabaseReadSchema.parse(request.payload)
       return runRelayEffect(
         "relay.database.read",
-        relayStateDatabase.read(input.request)
+        readDatabaseFile(relayStateDatabasePath(config), input.request)
       )
     }
     case "relay.host.read":

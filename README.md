@@ -68,7 +68,8 @@ Files page refuses to open them.
 
 The Database page inspects the live `/data/network/relay.sqlite` file in
 read-only mode. `relay.database.read` grants access to its state, including
-sensitive configuration.
+sensitive configuration. When host files are mounted, `relay.files.read` can
+read the same file through Docker's volume directory.
 
 Then:
 
