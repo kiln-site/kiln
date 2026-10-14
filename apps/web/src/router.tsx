@@ -1,4 +1,3 @@
-import * as Sentry from "@sentry/tanstackstart-react"
 import { createRouter as createTanStackRouter } from "@tanstack/react-router"
 import { routerWithDbClient } from "@tanstack/react-router-with-db"
 import { setupRouterSsrQueryIntegration } from "@tanstack/react-router-ssr-query"
@@ -28,12 +27,6 @@ export function getRouter() {
 
   setupRouterSsrQueryIntegration({ queryClient, router })
   const dbRouter = routerWithDbClient(router, dbClient)
-
-  if (!dbRouter.isServer && Sentry.isInitialized()) {
-    Sentry.addIntegration(
-      Sentry.tanstackRouterBrowserTracingIntegration(dbRouter)
-    )
-  }
 
   return dbRouter
 }

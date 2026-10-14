@@ -1,9 +1,9 @@
-import * as Sentry from "@sentry/tanstackstart-react"
 import { createFileRoute } from "@tanstack/react-router"
 import { relayBrowserResourceKinds, relayIdSchema } from "@workspace/contracts"
 import { Effect, Result } from "effect"
 import { z } from "zod"
 
+import { reportAppError } from "@/effect/runtime"
 import { openHearthRelayConsoleStream } from "@/server/relay-console-proxy"
 import { requireEligibleResourceIdentity } from "@/server/auth"
 
@@ -146,11 +146,9 @@ export const Route = createFileRoute("/api/console/$instanceId")({
           }).pipe(
             Effect.match({
               onFailure: (cause) => {
-                Sentry.captureException(cause, {
-                  tags: {
-                    "kiln.operation": "console.proxy.connect",
-                    "kiln.relay_id": relayId.data,
-                  },
+                reportAppError(cause, {
+                  operation: "console.proxy.connect",
+                  attributes: { "kiln.relay_id": relayId.data },
                 })
                 return Response.json(
                   {

@@ -4,18 +4,16 @@
   "type": "module",
   "private": true,
   "scripts": {
-    "dev": "NODE_OPTIONS='--conditions=development --import ./instrument.mjs' tsx watch src/index.ts",
+    "dev": "NODE_OPTIONS='--conditions=development' tsx watch src/index.ts",
     "format": "vp fmt \"src/**/*.ts\"",
     "lint": "vp lint src",
-    "start": "node --import ./dist/instrument.mjs dist/src/index.mjs"
+    "start": "node dist/src/index.mjs"
   },
   "dependencies": {
     "@effect/sql-sqlite-node": "4.0.1",
-    "@opentelemetry/api": "1.9.1",
-    "@opentelemetry/core": "2.11.0",
     "@peculiar/x509": "2.1.0",
-    "@sentry/node": "^10.76.0",
     "@workspace/contracts": "workspace:*",
+    "@workspace/telemetry": "workspace:*",
     "@xterm/addon-serialize": "0.14.0",
     "@xterm/headless": "6.0.0",
     "effect": "4.0.1",

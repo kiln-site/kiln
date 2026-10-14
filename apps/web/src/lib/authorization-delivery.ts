@@ -1,4 +1,3 @@
-import * as Sentry from "@sentry/tanstackstart-react"
 import {
   relayBrowserAuthorizationReviseMaxItems,
   relayBrowserCapabilityV2Feature,
@@ -9,7 +8,7 @@ import { z } from "zod"
 
 import { Database, type DatabaseTransaction } from "@/effect/database"
 import { ensuringPromise, recoverPromise } from "@/effect/promise"
-import { runAppEffect } from "@/effect/runtime"
+import { reportAppError, runAppEffect, traceAppPromise } from "@/effect/runtime"
 import { databasePool } from "@/lib/database"
 import { databaseTable } from "@/lib/database-config"
 import { loadPersistedRelay } from "@/lib/relay-registry"
@@ -136,18 +135,13 @@ async function reconcileRelayIssuerGeneration(
   if (!Number.isSafeInteger(observedGeneration) || observedGeneration < 0) {
     throw new Error("Relay reported an invalid browser issuer generation")
   }
-  await Sentry.startSpan(
-    {
-      name: "Reconcile Relay browser issuer generation",
-      op: "db.authorization.generation.reconcile",
-    },
-    async () => {
-      const now = Date.now()
-      // The acknowledgement predicate makes the rollback increment idempotent
-      // across concurrent/repeated control handshakes. Once an increment is
-      // pending, later observations only retain the lower acknowledgement.
-      await databasePool.execute(
-        `UPDATE ${databaseTable("relay")}
+  await traceAppPromise("authorization.generation.reconcile", async () => {
+    const now = Date.now()
+    // The acknowledgement predicate makes the rollback increment idempotent
+    // across concurrent/repeated control handshakes. Once an increment is
+    // pending, later observations only retain the lower acknowledgement.
+    await databasePool.execute(
+      `UPDATE ${databaseTable("relay")}
             SET issuer_generation = issuer_generation + 1,
                 acknowledged_issuer_generation = ?,
                 updated_at = ?
@@ -155,16 +149,16 @@ async function reconcileRelayIssuerGeneration(
             AND ? < issuer_generation
             AND acknowledged_issuer_generation >= issuer_generation
             AND issuer_generation < ?`,
-        [
-          observedGeneration,
-          now,
-          relayId,
-          observedGeneration,
-          Number.MAX_SAFE_INTEGER,
-        ]
-      )
-      await databasePool.execute(
-        `UPDATE ${databaseTable("relay")}
+      [
+        observedGeneration,
+        now,
+        relayId,
+        observedGeneration,
+        Number.MAX_SAFE_INTEGER,
+      ]
+    )
+    await databasePool.execute(
+      `UPDATE ${databaseTable("relay")}
             SET issuer_generation = GREATEST(issuer_generation, ?),
                 acknowledged_issuer_generation = IF(
                   ? >= issuer_generation,
@@ -173,17 +167,16 @@ async function reconcileRelayIssuerGeneration(
                 ),
                 updated_at = ?
           WHERE id = ?`,
-        [
-          observedGeneration,
-          observedGeneration,
-          observedGeneration,
-          observedGeneration,
-          now,
-          relayId,
-        ]
-      )
-    }
-  )
+      [
+        observedGeneration,
+        observedGeneration,
+        observedGeneration,
+        observedGeneration,
+        now,
+        relayId,
+      ]
+    )
+  })
 }
 
 /**
@@ -328,19 +321,13 @@ async function drain(
           ) {
             return
           }
-          const more = await Sentry.startSpan(
-            {
-              name: "Deliver authorization revisions",
-              op: "relay.authorization.deliver",
-            },
-            () => deliverBatch(relayId)
+          const more = await traceAppPromise("authorization.deliver", () =>
+            deliverBatch(relayId)
           )
           if (more) state.wake = true
         },
         (cause) => {
-          Sentry.captureException(cause, {
-            tags: { component: "authorization-delivery" },
-          })
+          reportAppError(cause, { operation: "authorization-delivery" })
           state.retry = setTimeout(
             () => {
               state.retry = null
@@ -430,28 +417,18 @@ async function deliverBatch(relayId: string): Promise<boolean> {
     }
   }
 
-  await Sentry.startSpan(
-    {
-      name: "Acknowledge authorization revisions",
-      op: "db.authorization.ack",
-      attributes: { "authorization.item_count": result.items.length },
-    },
-    () =>
-      runAppEffect(
-        "authorization.delivery.ack",
-        Effect.gen(function* () {
-          const database = yield* Database
-          yield* database.transaction(
-            "authorization.delivery.ack",
-            (connection) =>
-              acknowledgeAuthorizationDeliveryEffect(
-                connection,
-                relayId,
-                result
-              )
-          )
-        })
-      )
+  await traceAppPromise("authorization.ack", () =>
+    runAppEffect(
+      "authorization.delivery.ack",
+      Effect.gen(function* () {
+        const database = yield* Database
+        yield* database.transaction(
+          "authorization.delivery.ack",
+          (connection) =>
+            acknowledgeAuthorizationDeliveryEffect(connection, relayId, result)
+        )
+      })
+    )
   )
   return pending.length === relayBrowserAuthorizationReviseMaxItems
 }

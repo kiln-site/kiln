@@ -1,8 +1,4 @@
-import { describe, expect, it, vi } from "vite-plus/test"
-
-vi.mock("@sentry/tanstackstart-react", () => ({
-  captureException: vi.fn(),
-}))
+import { describe, expect, it } from "vite-plus/test"
 
 import { removeRelayThenCleanup } from "./relay-removal"
 

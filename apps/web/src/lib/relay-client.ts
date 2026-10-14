@@ -1,7 +1,7 @@
-import * as Sentry from "@sentry/tanstackstart-react"
 import { Effect } from "effect"
 import { z } from "zod"
 
+import { traceAppPromise } from "@/effect/runtime"
 import { RelayResponseError, RelayUnavailableError } from "@/effect/errors"
 import {
   invalidateCached,
@@ -55,12 +55,8 @@ export const relayFetchEffect = Effect.fn("relay.fetch")(function* (
 ) {
   const response = yield* Effect.tryPromise({
     try: () =>
-      Sentry.startSpan(
-        {
-          name: `${init?.method ?? "GET"} ${normalizedRelayRoute(path)}`,
-          op: "http.client.relay",
-          attributes: { "relay.id": relay.id },
-        },
+      traceAppPromise(
+        `${init?.method ?? "GET"} ${normalizedRelayRoute(path)}`,
         async () => {
           const request = relayControlRequest(path, init)
           const payload = await relayRpc(

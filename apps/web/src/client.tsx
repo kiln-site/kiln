@@ -1,7 +1,5 @@
 import { scan } from "react-scan"
 
-import "./instrument.client"
-
 import { StrictMode, startTransition } from "react"
 import {
   Await,
@@ -12,7 +10,10 @@ import { hydrateStart } from "@tanstack/react-start/client"
 import { hydrateRoot } from "react-dom/client"
 
 import { AppRouterApplication } from "@/components/app-router-application"
+import { startBrowserTelemetry } from "@/lib/browser-telemetry"
 import { createRenderAudit } from "@/lib/render-audit"
+
+startBrowserTelemetry()
 
 if (import.meta.env.DEV && typeof window !== "undefined") {
   const { audit, onRender } = createRenderAudit()

@@ -9,7 +9,6 @@ import {
   verify,
 } from "node:crypto"
 import { Effect, Option, Schema } from "effect"
-import * as Sentry from "@sentry/node"
 
 import {
   relayPairingRequestTranscript,
@@ -17,6 +16,7 @@ import {
   relayBootstrapEnrollmentTranscript,
 } from "@workspace/contracts"
 
+import { reportRelayError } from "./runtime.js"
 import { actionsForRole } from "../permissions.js"
 import type { RelayAction } from "../permissions.js"
 import { RelayPairingError } from "./errors.js"
@@ -307,9 +307,7 @@ export const pairHearth = Effect.fn("RelayPairing.pairHearth")(
       .pipe(
         Effect.catch((cause) =>
           Effect.sync(() => {
-            Sentry.captureException(cause, {
-              tags: { "kiln.operation": "relay.pairing.audit" },
-            })
+            reportRelayError(cause, { operation: "relay.pairing.audit" })
           })
         )
       )

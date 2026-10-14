@@ -3,7 +3,6 @@ import { createServer as createHttpsServer } from "node:https"
 import { createHmac, randomBytes, randomUUID } from "node:crypto"
 import { mkdir } from "node:fs/promises"
 import { hostname } from "node:os"
-import * as Sentry from "@sentry/node"
 import { Effect, Schema, Semaphore } from "effect"
 
 import {
@@ -133,7 +132,9 @@ import {
   disposeRelayRuntime,
   forkRelayEffect,
   initializeRelayRuntime,
+  reportRelayError,
   runRelayEffect,
+  runRelayEffectUntraced,
 } from "./effect/runtime.js"
 import { RelayStateStore } from "./effect/state.js"
 import type {
@@ -376,7 +377,7 @@ const webRouteMutation = Semaphore.makeUnsafe(1)
 const snapshotHub = new RelaySnapshotHub(relaySnapshot)
 // Keep one shared snapshot sampler active so crash recovery does not depend on
 // a Hearth control connection. Interactive readers reuse the same cached loop.
-// It also reports Relay memory to Sentry, throttled to once a minute.
+// It also records Relay memory metrics, throttled to once a minute.
 snapshotHub.subscribe(
   ({ snapshot }) => reportRelayMemoryMetrics(snapshot.node.relayMemory),
   false
@@ -425,9 +426,9 @@ const scheduleManager = await ScheduleManager.make({
   platformTargetId: config.installationId ?? relayIdentity.fingerprint,
   relayId: relayIdentity.fingerprint,
   reportError: (message, cause) => {
-    Sentry.captureException(
+    reportRelayError(
       cause instanceof Error ? cause : new Error(message, { cause }),
-      { tags: { "kiln.operation": "schedule.occurrence" } }
+      { operation: "schedule.occurrence" }
     )
   },
   runDatabasePower: async (databaseId, action) => {
@@ -694,8 +695,8 @@ const requestHandler = (
             json(response, 401, { error: cause.message, code: cause.code })
             return
           }
-          Sentry.captureException(cause, {
-            tags: { "kiln.operation": normalizedRequestOperation(request) },
+          reportRelayError(cause, {
+            operation: normalizedRequestOperation(request),
           })
           console.error(cause)
           json(response, 500, {
@@ -961,9 +962,7 @@ function tlsRefreshLoop() {
   let nextDelay = activeTls.mode === "external" ? 60_000 : 6 * 60 * 60_000
   const recordFailure = (cause: unknown) =>
     Effect.sync(() => {
-      Sentry.captureException(cause, {
-        tags: { "kiln.operation": "relay.tls.refresh" },
-      })
+      reportRelayError(cause, { operation: "relay.tls.refresh" })
       console.error(
         "Relay TLS refresh failed; retaining the last valid certificate",
         cause
@@ -1037,13 +1036,8 @@ function shutdownRelay(signal: NodeJS.Signals): Promise<void> {
           "Relay shutdown deadline reached; closed active connections"
         )
       }
-      yield* Effect.all(
-        [
-          cleanupOperation("Effect runtime", disposeRelayRuntime),
-          cleanupOperation("Sentry", () => Sentry.close(2_000)),
-        ],
-        { concurrency: 2, discard: true }
-      )
+      // Disposing the runtime also flushes pending telemetry.
+      yield* cleanupOperation("Effect runtime", disposeRelayRuntime)
       yield* Effect.sync(() => process.exit(0))
     })
   )
@@ -1063,22 +1057,13 @@ async function relaySnapshot() {
         relayOperation(() => nodeSnapshot(config, docker)),
         relayOperation(() => docker.inspectInstances()),
         relayOperation(() =>
-          runRelayEffect(
-            "relay.snapshot.instanceNames",
-            startup.state.listInstanceNames()
-          )
+          runRelayEffectUntraced(startup.state.listInstanceNames())
         ),
         relayOperation(() =>
-          runRelayEffect(
-            "relay.snapshot.pendingPrimaryPorts",
-            startup.state.listPendingPrimaryPorts()
-          )
+          runRelayEffectUntraced(startup.state.listPendingPrimaryPorts())
         ),
         relayOperation(() =>
-          runRelayEffect(
-            "relay.snapshot.provisioningJobs",
-            startup.state.listProvisioningJobs()
-          )
+          runRelayEffectUntraced(startup.state.listProvisioningJobs())
         ),
         relayOperation(() => docker.relaySftpPublication(sftpServer.port)),
       ] as const,
@@ -2622,8 +2607,9 @@ function cleanupOperation(
     Effect.asVoid,
     Effect.catch((cause) =>
       Effect.sync(() => {
-        Sentry.captureException(cause, {
-          tags: { "kiln.operation": "relay.cleanup", "kiln.resource": name },
+        reportRelayError(cause, {
+          operation: "relay.cleanup",
+          attributes: { "kiln.resource": name },
         })
         console.error(`Relay ${name} cleanup failed`, cause)
       })

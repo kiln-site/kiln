@@ -46,16 +46,17 @@ jobs:
       source_label: ${{ needs.config.outputs.source }}
       publish: true
       publish_manifest: false
-      prepare_sentry_source_maps: ${{ matrix.component == 'hearth' && vars.SENTRY_ORG != '' && vars.SENTRY_PROJECT != '' }}
       build_args: |
         SOURCE_COMMIT=${{ github.sha }}
         KILN_GIT_REPO=${{ needs.config.outputs.repository }}
         KILN_IMAGE_SOURCE=${{ needs.config.outputs.source }}
-        SENTRY_DSN=${{ vars.SENTRY_DSN }}
-        VITE_SENTRY_DSN=${{ vars.VITE_SENTRY_DSN }}
-        VITE_SENTRY_REPLAYS_SESSION_SAMPLE_RATE=${{ vars.VITE_SENTRY_REPLAYS_SESSION_SAMPLE_RATE || '0.05' }}
-        VITE_SENTRY_TRACES_SAMPLE_RATE=${{ vars.VITE_SENTRY_TRACES_SAMPLE_RATE || '0.05' }}
-        SENTRY_SOURCEMAPS=${{ matrix.component == 'hearth' && vars.SENTRY_ORG != '' && vars.SENTRY_PROJECT != '' && 'prepare' || '' }}
+        OTEL_EXPORTER_OTLP_ENDPOINT=${{ vars.OTEL_EXPORTER_OTLP_ENDPOINT }}
+        OTEL_EXPORTER_OTLP_HEADERS=${{ vars.OTEL_EXPORTER_OTLP_HEADERS }}
+        OTEL_LOGS_EXPORTER=${{ vars.OTEL_LOGS_EXPORTER }}
+        OTEL_METRICS_EXPORTER=${{ vars.OTEL_METRICS_EXPORTER }}
+        OTEL_RESOURCE_ATTRIBUTES=${{ vars.OTEL_RESOURCE_ATTRIBUTES }}
+        OTEL_TRACES_EXPORTER=${{ vars.OTEL_TRACES_EXPORTER }}
+        OTEL_TRACES_SAMPLER_ARG=${{ vars.OTEL_TRACES_SAMPLER_ARG }}
 
   cli_build:
     needs: config
@@ -63,48 +64,6 @@ jobs:
     with:
       ref: ${{ github.sha }}
       version: ${{ needs.config.outputs.version }}
-
-  sentry:
-    name: Publish Sentry source maps
-    needs: images
-    if: vars.SENTRY_ORG != '' && vars.SENTRY_PROJECT != ''
-    runs-on: ubuntu-24.04
-    steps:
-      - name: Download prepared source maps
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: nightly-sentry-source-maps
-          path: apps/web/dist
-
-      - name: Download Sentry CLI
-        id: sentry_cli
-        continue-on-error: true
-        env:
-          SENTRY_CLI_SHA256: 13f8cb34ae01a6a272d7d7c22e277a105286615b4020de900ea95a8de47cdbb6
-          SENTRY_CLI_VERSION: 3.8.0
-        run: |
-          curl --fail --location --retry 3 --silent --show-error \
-            --output /tmp/sentry-cli \
-            "https://github.com/getsentry/sentry-cli/releases/download/${SENTRY_CLI_VERSION}/sentry-cli-Linux-x86_64"
-          echo "${SENTRY_CLI_SHA256}  /tmp/sentry-cli" | sha256sum --check
-          chmod +x /tmp/sentry-cli
-
-      - name: Publish source maps
-        if: steps.sentry_cli.outcome == 'success'
-        continue-on-error: true
-        env:
-          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
-          SENTRY_ORG: ${{ vars.SENTRY_ORG }}
-          SENTRY_PROJECT: ${{ vars.SENTRY_PROJECT }}
-        run: |
-          /tmp/sentry-cli releases new \
-            --project "$SENTRY_PROJECT" \
-            "$GITHUB_SHA"
-          /tmp/sentry-cli sourcemaps upload \
-            --project "$SENTRY_PROJECT" \
-            --release "$GITHUB_SHA" \
-            apps/web/dist
-          /tmp/sentry-cli releases finalize "$GITHUB_SHA"
 
   release:
     needs: [code, config, images]

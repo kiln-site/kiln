@@ -1,6 +1,6 @@
-import * as Sentry from "@sentry/tanstackstart-react"
 import { Effect } from "effect"
 
+import { reportAppError } from "@/effect/runtime"
 import { deleteInstanceAccessEffect } from "@/lib/access-control"
 import { invalidateRelayCache, relayCachePolicy } from "@/lib/relay-client"
 
@@ -48,18 +48,15 @@ const reportPostDeleteCleanupFailureEffect = Effect.fn(
   instanceId: string,
   error: unknown
 ) {
-  yield* Effect.try({
-    try: () => {
-      Sentry.captureException(error, {
-        tags: {
-          "kiln.instance_id": instanceId,
-          "kiln.operation": operation,
-          "kiln.relay_id": relayId,
-        },
-      })
-    },
-    catch: () => undefined,
-  }).pipe(Effect.catch(() => Effect.void))
+  yield* Effect.sync(() =>
+    reportAppError(error, {
+      operation,
+      attributes: {
+        "kiln.instance_id": instanceId,
+        "kiln.relay_id": relayId,
+      },
+    })
+  )
   yield* Effect.logWarning(
     "Post-delete Hearth cleanup failed after Relay removed the server",
     {

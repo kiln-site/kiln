@@ -16,12 +16,12 @@ import { constants as fsConstants } from "node:fs"
 import type { Stats } from "node:fs"
 import type { AddressInfo } from "node:net"
 import { dirname, posix, resolve, sep } from "node:path"
-import * as Sentry from "@sentry/node"
 import { Effect, Fiber } from "effect"
 import ssh2 from "ssh2"
 import type { Attributes, Connection, FileEntry, SFTPWrapper } from "ssh2"
 import type { FileHandle } from "node:fs/promises"
 
+import { reportRelayError } from "./effect/runtime.js"
 import type { RelayConfig } from "./config.js"
 import type { ControlSocketServer } from "./control-socket.js"
 import type { DockerDriver } from "./docker.js"
@@ -152,17 +152,10 @@ export async function attachSftpServer(options: {
                 grants = authorized
                 authenticatedUsername = context.username.trim().toLowerCase()
                 authenticatedCredential = credential
-                Sentry.addBreadcrumb({
-                  category: "relay.sftp",
-                  level: "info",
-                  message: "SFTP authentication accepted",
-                })
                 context.accept()
               },
               onFailure: (cause) => {
-                Sentry.captureException(cause, {
-                  tags: { "kiln.operation": "sftp.authentication" },
-                })
+                reportRelayError(cause, { operation: "sftp.authentication" })
                 context.reject(["password"])
               },
             })
@@ -195,10 +188,8 @@ export async function attachSftpServer(options: {
                       }
                     },
                     onFailure: (cause) => {
-                      Sentry.captureException(cause, {
-                        tags: {
-                          "kiln.operation": "sftp.authorization.refresh",
-                        },
+                      reportRelayError(cause, {
+                        operation: "sftp.authorization.refresh",
                       })
                       client.end()
                     },
@@ -223,9 +214,7 @@ export async function attachSftpServer(options: {
                     serveSftp(acceptSftp(), resolved)
                   },
                   onFailure: (cause) => {
-                    Sentry.captureException(cause, {
-                      tags: { "kiln.operation": "sftp.session" },
-                    })
+                    reportRelayError(cause, { operation: "sftp.session" })
                     session.end()
                   },
                 })
@@ -238,22 +227,12 @@ export async function attachSftpServer(options: {
           session.on("subsystem", (_accept, reject) => reject())
         })
       })
-      client.on("error", (cause) => {
-        Sentry.addBreadcrumb({
-          category: "relay.sftp",
-          level: "warning",
-          message: cause.message,
-        })
-      })
+      // Without a listener, a client socket error would crash the Relay.
+      client.on("error", () => {})
       client.once("close", () => {
         for (const fiber of connectionFibers) fiber.interruptUnsafe()
         connectionFibers.clear()
         connections.delete(client)
-        Sentry.addBreadcrumb({
-          category: "relay.sftp",
-          level: "info",
-          message: "SFTP connection closed",
-        })
       })
     }
   )
@@ -262,9 +241,7 @@ export async function attachSftpServer(options: {
     listenSftpServerEffect(server, options.config.sftpPort, options.config.host)
   )
   server.on("error", (cause: Error) => {
-    Sentry.captureException(cause, {
-      tags: { "kiln.operation": "sftp.server" },
-    })
+    reportRelayError(cause, { operation: "sftp.server" })
   })
   const address = server.address() as AddressInfo
   const port = address.port
@@ -818,12 +795,6 @@ function serveSftp(stream: SFTPWrapper, grants: ReadonlyArray<ResolvedGrant>) {
         target.physicalPath,
         operation
       )
-      Sentry.addBreadcrumb({
-        category: "relay.sftp.operation",
-        data: { action },
-        level: "info",
-        message: "SFTP mutation completed",
-      })
       stream.status(requestId, STATUS_CODE.OK)
     })
   }

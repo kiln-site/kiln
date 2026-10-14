@@ -1,4 +1,3 @@
-import * as Sentry from "@sentry/tanstackstart-react"
 import {
   relayConsoleCommandResultSchema,
   relayConsoleCompletionSchema,
@@ -8,6 +7,7 @@ import type {
   RelayConsoleCommandResult,
 } from "@workspace/contracts"
 
+import { traceBrowser } from "@/lib/browser-telemetry"
 import { relayConsoleOperationClient } from "@/lib/relay-console-operations"
 import {
   completeRelayConsoleCommand,
@@ -19,11 +19,11 @@ export async function sendDirectRelayCommand(
   instanceId: string,
   command: string
 ): Promise<RelayConsoleCommandResult> {
-  return Sentry.startSpan(
+  return traceBrowser(
+    "Send Relay console command",
     {
-      name: "Send Relay console command",
-      op: "websocket.console.command",
-      attributes: { "kiln.channel": "console" },
+      "kiln.operation": "websocket.console.command",
+      "kiln.channel": "console",
     },
     async (span) => {
       const client = relayConsoleOperationClient(relayId, instanceId)
@@ -47,11 +47,11 @@ export async function completeDirectRelayCommand(
   input: string,
   cursor: number
 ): Promise<RelayConsoleCompletion> {
-  return Sentry.startSpan(
+  return traceBrowser(
+    "Complete Relay console command",
     {
-      name: "Complete Relay console command",
-      op: "websocket.console.completion",
-      attributes: { "kiln.channel": "console" },
+      "kiln.operation": "websocket.console.completion",
+      "kiln.channel": "console",
     },
     async (span) => {
       const client = relayConsoleOperationClient(relayId, instanceId)

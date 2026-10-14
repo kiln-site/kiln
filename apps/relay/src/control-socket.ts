@@ -8,7 +8,6 @@ import {
 import { Deferred, Effect, Fiber, Option, Schema } from "effect"
 import type { Effect as EffectType } from "effect"
 import { WebSocket, WebSocketServer } from "ws"
-import * as Sentry from "@sentry/node"
 
 import {
   RelayControlClientMessageSchema,
@@ -40,6 +39,7 @@ import type {
   RelaySnapshot,
 } from "@workspace/contracts"
 
+import { reportRelayError } from "./effect/runtime.js"
 import {
   actionsForRole,
   fileMutationAction,
@@ -546,10 +546,8 @@ function authenticateSocket(
               ).pipe(
                 Effect.catch((cause) =>
                   Effect.sync(() => {
-                    Sentry.captureException(cause, {
-                      tags: {
-                        "kiln.operation": "relay.control.audit",
-                      },
+                    reportRelayError(cause, {
+                      operation: "relay.control.audit",
                     })
                   })
                 )
@@ -583,9 +581,7 @@ function authenticateSocket(
       Effect.catch((cause) =>
         Effect.sync(() => {
           if (!controller.signal.aborted) {
-            Sentry.captureException(cause, {
-              tags: relayControlFailureTags(request),
-            })
+            reportRelayError(cause, relayControlErrorContext(request))
           }
           sendError(
             socket,
@@ -1193,12 +1189,14 @@ function relayControlErrorMessage(cause: unknown): string {
   return detail && detail.length <= 240 ? detail : "Relay operation failed"
 }
 
-function relayControlFailureTags(
+function relayControlErrorContext(
   request: Pick<RelayControlRequest, "id" | "operation">
 ) {
   return {
-    "kiln.operation": request.operation,
-    "kiln.request_id": request.id,
-    "kiln.transport": "control-socket",
+    operation: request.operation,
+    attributes: {
+      "kiln.request_id": request.id,
+      "kiln.transport": "control-socket",
+    },
   }
 }

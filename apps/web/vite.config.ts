@@ -4,7 +4,6 @@ import { resolve } from "node:path"
 import { Result } from "effect"
 import { defineConfig, lazyPlugins } from "vite-plus"
 import type { Plugin } from "vite-plus"
-import { sentryTanstackStart } from "@sentry/tanstackstart-react/vite"
 import { devtools } from "@tanstack/devtools-vite"
 import { tanstackStart } from "@tanstack/react-start/plugin/vite"
 import viteReact from "@vitejs/plugin-react"
@@ -23,25 +22,26 @@ const reactScanProductionShim = resolve(
   import.meta.dirname,
   "node_modules/react-scan/dist/rsc-shim.mjs"
 )
+// Baked into the server bundle as telemetry defaults; see packages/telemetry.
+const telemetryEnvironment = [
+  "OTEL_EXPORTER_OTLP_ENDPOINT",
+  "OTEL_EXPORTER_OTLP_HEADERS",
+  "OTEL_LOGS_EXPORTER",
+  "OTEL_METRICS_EXPORTER",
+  "OTEL_RESOURCE_ATTRIBUTES",
+  "OTEL_TRACES_EXPORTER",
+  "OTEL_TRACES_SAMPLER_ARG",
+]
 
 const config = defineConfig(({ command }) => {
   const sourceCommit = resolveBuildCommit()
   const buildCommit = command === "serve" ? "" : sourceCommit
-  const sentryAuthToken = process.env.SENTRY_AUTH_TOKEN
-  const sentrySourceMaps = process.env.SENTRY_SOURCEMAPS
-  const configureSentry =
-    Boolean(sentryAuthToken) || sentrySourceMaps === "prepare"
 
   return {
-    build: sentrySourceMaps === "prepare" ? { sourcemap: "hidden" } : undefined,
     run: {
       tasks: {
         build: {
-          command: [
-            "vp build",
-            "node scripts/normalize-build-assets.mjs",
-            "vp pack",
-          ],
+          command: ["vp build", "node scripts/normalize-build-assets.mjs"],
           dependsOn: [{ task: "build", from: "dependencies" }],
           cache: {
             env: [
@@ -49,13 +49,7 @@ const config = defineConfig(({ command }) => {
               "GITHUB_SHA",
               "KILN_BUILD_SHA",
               "KILN_VERSION",
-              "SENTRY_AUTH_TOKEN",
-              "SENTRY_ORG",
-              "SENTRY_PROJECT",
-              "VITE_SENTRY_DSN",
-              "VITE_SENTRY_REPLAYS_SESSION_SAMPLE_RATE",
-              "VITE_SENTRY_TRACES_SAMPLE_RATE",
-              "SENTRY_SOURCEMAPS",
+              "OTEL_*",
               "SOURCE_COMMIT",
             ],
           },
@@ -74,32 +68,20 @@ const config = defineConfig(({ command }) => {
         },
       },
     },
-    pack: {
-      clean: false,
-      deps: {
-        // tsdown <0.23 compatibility: resolve external dependency subpaths.
-        // Remove to preserve subpath imports as written (the new default).
-        // https://tsdown.dev/options/dependencies#deps-resolvedepsubpath
-        resolveDepSubpath: true,
-        alwaysBundle: [
-          "@opentelemetry/api",
-          "@opentelemetry/core",
-          "@sentry/tanstackstart-react",
-        ],
-        onlyBundle: false,
-      },
-      entry: ["instrument.server.mjs"],
-      format: "esm",
-      minify: true,
-      outDir: "dist/instrument",
-      platform: "node",
-      target: "node24",
-    },
     define: {
       "import.meta.env.VITE_KILN_BUILD_SHA": JSON.stringify(buildCommit),
       "import.meta.env.VITE_KILN_SOURCE_SHA": JSON.stringify(sourceCommit),
       "import.meta.env.VITE_KILN_VERSION": JSON.stringify(
         process.env.KILN_VERSION?.trim() || release.releaseLine
+      ),
+      // Not under import.meta.env: that object reaches browser bundles.
+      __KILN_TELEMETRY_DEFAULTS__: JSON.stringify(
+        Object.fromEntries(
+          telemetryEnvironment.map((name) => [
+            name,
+            process.env[name]?.trim() ?? "",
+          ])
+        )
       ),
     },
     envDir: "../..",
@@ -132,21 +114,6 @@ const config = defineConfig(({ command }) => {
       devtools(),
       tailwindcss(),
       tanstackStart(),
-      ...(configureSentry
-        ? [
-            sentryTanstackStart({
-              org: process.env.SENTRY_ORG,
-              project: process.env.SENTRY_PROJECT,
-              authToken: sentryAuthToken,
-              sourcemaps:
-                sentrySourceMaps === "prepare"
-                  ? { disable: "disable-upload" }
-                  : undefined,
-              silent: !sentryAuthToken,
-              telemetry: false,
-            }),
-          ]
-        : []),
       viteReact(),
     ]),
     test: {

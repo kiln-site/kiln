@@ -25,8 +25,16 @@ Before editing files for a substantial task:
 - Keep `.agents/skills/kiln-cli/SKILL.md` in sync with CLI changes.
 - Follow the Testing rules below; prefer browser validation during
   development.
-- This project uses Sentry.io for errors, traces, session replays, and more. Review the
-  `sentry-cli` skill when debugging.
+- Hearth, Relays, and the browser export OpenTelemetry traces, logs, and
+  metrics through Effect (`packages/telemetry`), configured by `OTEL_*`
+  variables. Errors are error logs with `exception.*` attributes and an
+  `error.fingerprint` that groups occurrences. They currently go to Sentry
+  over OTLP: query them with `sentry log list` and
+  `sentry explore --dataset logs` (see the `sentry-cli` skill).
+- Name spans with `Effect.fn("Area.operation")` or `Effect.withSpan`, keep
+  names stable and put IDs in attributes. Give long-lived loops and workers no
+  span of their own, span each unit of work instead, and use metrics, not
+  spans, for hot paths.
 - Avoid patching framework/library internals unless explicitly given permission.
 - Use Sonner for transient feedback and shared tooltips
 - For user-visible or runtime work, use T3 Code's collaborative Preview against

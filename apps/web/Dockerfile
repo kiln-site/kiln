@@ -11,6 +11,7 @@ WORKDIR /source
 COPY --chown=vp:vp package.json pnpm-lock.yaml pnpm-workspace.yaml .node-version ./
 COPY --chown=vp:vp apps/web/package.json ./apps/web/package.json
 COPY --chown=vp:vp packages/contracts/package.json ./packages/contracts/package.json
+COPY --chown=vp:vp packages/telemetry/package.json ./packages/telemetry/package.json
 COPY --chown=vp:vp packages/ui/package.json ./packages/ui/package.json
 COPY --chown=vp:vp patches ./patches
 RUN --mount=type=cache,target=/home/vp/.local/share/pnpm/store,uid=1000,gid=1000,sharing=locked \
@@ -19,27 +20,27 @@ RUN --mount=type=cache,target=/home/vp/.local/share/pnpm/store,uid=1000,gid=1000
 COPY --chown=vp:vp tsconfig.json vite.config.ts release.json ./
 COPY --chown=vp:vp apps/web ./apps/web
 COPY --chown=vp:vp packages/contracts ./packages/contracts
+COPY --chown=vp:vp packages/telemetry ./packages/telemetry
 COPY --chown=vp:vp packages/ui ./packages/ui
 
 ARG SOURCE_COMMIT
 ARG KILN_VERSION
-ARG SENTRY_SOURCEMAPS
-ARG VITE_SENTRY_DSN
-ARG VITE_SENTRY_REPLAYS_SESSION_SAMPLE_RATE=0.05
-ARG VITE_SENTRY_TRACES_SAMPLE_RATE=0.05
+# Telemetry defaults are baked into the server bundle, not the image
+# environment: the Relay updater carries a container's environment into its
+# replacement, so image ENV values would outlive the release that set them.
+ARG OTEL_EXPORTER_OTLP_ENDPOINT
+ARG OTEL_EXPORTER_OTLP_HEADERS
+ARG OTEL_LOGS_EXPORTER
+ARG OTEL_METRICS_EXPORTER
+ARG OTEL_RESOURCE_ATTRIBUTES
+ARG OTEL_TRACES_EXPORTER
+ARG OTEL_TRACES_SAMPLER_ARG
 ENV SOURCE_COMMIT=$SOURCE_COMMIT
 ENV KILN_VERSION=$KILN_VERSION
-ENV SENTRY_SOURCEMAPS=$SENTRY_SOURCEMAPS
-ENV VITE_SENTRY_DSN=$VITE_SENTRY_DSN
-ENV VITE_SENTRY_REPLAYS_SESSION_SAMPLE_RATE=$VITE_SENTRY_REPLAYS_SESSION_SAMPLE_RATE
-ENV VITE_SENTRY_TRACES_SAMPLE_RATE=$VITE_SENTRY_TRACES_SAMPLE_RATE
 RUN vp run web#build
 
 FROM build AS runtime-build
 RUN find apps/web/dist -type f -name '*.map' -delete
-
-FROM scratch AS sentry-source-maps
-COPY --from=build /source/apps/web/dist /
 
 FROM ghcr.io/voidzero-dev/vite-plus:${VITE_PLUS_VERSION} AS runtime-deps
 
@@ -59,9 +60,6 @@ ENV HOST=0.0.0.0
 ENV KILN_GIT_REPO=$KILN_GIT_REPO
 ENV KILN_DEFAULT_GIT_REPO=$KILN_GIT_REPO
 ENV PORT=3000
-ARG SENTRY_DSN
-ENV SENTRY_DSN=$SENTRY_DSN
-ENV SENTRY_TRACES_SAMPLE_RATE=0.05
 WORKDIR /app
 
 # Keep the legacy source label until older Relays have received the
@@ -79,7 +77,6 @@ COPY --from=runtime-build --chown=65532:65532 \
   /source/apps/web/scripts/start-container.mjs \
   ./scripts/
 COPY --from=runtime-build --chown=65532:65532 /source/apps/web/keyring.mjs ./keyring.mjs
-COPY --from=runtime-build --chown=65532:65532 /source/apps/web/dist/instrument/instrument.server.mjs ./instrument.server.mjs
 COPY --from=runtime-build --chown=65532:65532 /source/apps/web/package.runtime.json ./package.json
 
 USER 65532:65532

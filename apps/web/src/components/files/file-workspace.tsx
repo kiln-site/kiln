@@ -95,9 +95,7 @@ export function FileWorkspace(props: FileWorkspaceProps) {
               to: "/server/$serverId/files/$",
               params: { serverId: props.route.id, _splat: path },
             } as const)
-      const nextLocation = router.buildLocation(location)
-      const nextUrl = new URL(nextLocation.href, window.location.href).href
-      selectionStore.navigate(path, window.location.href, nextUrl)
+      selectionStore.navigate(path)
       if (!props.active) return
 
       void router.navigate({ ...location, resetScroll: false }).then(() => {

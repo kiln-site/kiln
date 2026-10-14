@@ -4,7 +4,8 @@
     "module": "ESNext",
     "moduleResolution": "bundler",
     "paths": {
-      "@workspace/contracts": ["./packages/contracts/src/index.ts"]
+      "@workspace/contracts": ["./packages/contracts/src/index.ts"],
+      "@workspace/telemetry": ["./packages/telemetry/src/index.ts"]
     },
     "skipLibCheck": true,
     "strict": true

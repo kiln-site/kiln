@@ -1,5 +1,4 @@
 import * as React from "react"
-import * as Sentry from "@sentry/tanstackstart-react"
 import {
   useMutation,
   useQuery,
@@ -462,7 +461,6 @@ function RelayResourceStreamController({
                   retryDelay = 500
                   if (event.sequence <= lastSequence) return
                   lastSequence = event.sequence
-                  const patchStartedAt = performance.now()
                   resourceHistoryStore(instance.relayId, instance.id).record(
                     event.history,
                     event.instance.resources
@@ -493,16 +491,6 @@ function RelayResourceStreamController({
                       }
                     )
                   }
-                  Sentry.metrics.distribution(
-                    "relay.resources.query_patch",
-                    performance.now() - patchStartedAt,
-                    {
-                      unit: "millisecond",
-                      attributes: {
-                        "kiln.durable_changed": String(durableChanged),
-                      },
-                    }
-                  )
                 })
               ),
               Effect.andThen(

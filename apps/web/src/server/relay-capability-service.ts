@@ -1,6 +1,5 @@
 import { createHash, randomUUID, sign } from "node:crypto"
 
-import * as Sentry from "@sentry/tanstackstart-react"
 import {
   relayBrowserCapabilityV2Feature,
   relayBrowserLeaseRenewalV1Feature,
@@ -42,7 +41,7 @@ import {
 import type { PersistedRelay, RelayCredentials } from "@/lib/relay-registry"
 import { CredentialError } from "@/effect/errors"
 import { recoverPromise } from "@/effect/promise"
-import { runAppEffect } from "@/effect/runtime"
+import { runAppEffect, traceAppPromise } from "@/effect/runtime"
 import type { AccessPermission } from "@/lib/permissions"
 
 type BrowserPublicKey = {
@@ -497,67 +496,50 @@ const resolveRelayBrowserMetadataEffect = Effect.fn(
   "relay.capability.resolveBrowserMetadata"
 )(function* (relay: PersistedRelay) {
   return yield* Effect.promise(() =>
-    Sentry.startSpan(
-      {
-        name: "Resolve Relay browser metadata",
-        op: "rpc.relay.browser-metadata",
-      },
-      (span) =>
-        recoverPromise(
-          async () => {
-            const { relayConnectionBrowserMetadata, relayRpc } =
-              await import("@/lib/relay-connection")
-            const synchronized = relayConnectionBrowserMetadata(relay.id)
-            if (synchronized) {
-              span.setAttribute(
-                "kiln.console.metadata_shape",
-                "connection_snapshot"
-              )
-              return synchronized
-            }
-            const value = await relayRpc(
-              relay,
-              "relay.proxy.read",
-              { includeDiagnostics: false },
-              5_000
-            )
-            if (!value || typeof value !== "object") {
-              span.setAttribute(
-                "kiln.console.metadata_shape",
-                "registry_fallback"
-              )
-              return null
-            }
-            const response = Object.fromEntries(Object.entries(value))
-            const metadata = relayProxyBrowserMetadataSchema.safeParse(response)
-            if (metadata.success) {
-              span.setAttribute("kiln.console.metadata_shape", "lightweight")
-              return metadata.data
-            }
-            // Relays predating the lightweight metadata hint ignore its payload
-            // and return full diagnostics. Keep rolling upgrades compatible
-            // without adding a second RPC.
-            const diagnostics = relayProxyDiagnosticsSchema.parse(
-              response.diagnostics
-            )
-            const settings = relayProxySettingsSchema.parse(response.settings)
-            span.setAttribute(
-              "kiln.console.metadata_shape",
-              "legacy_diagnostics"
-            )
-            return {
-              browserOrigin: diagnostics.browserOrigin,
-              mode: settings.mode,
-            } satisfies RelayProxyBrowserMetadata
-          },
-          () => {
-            span.setAttribute(
-              "kiln.console.metadata_shape",
-              "registry_fallback"
-            )
+    traceAppPromise("relay.capability.browserMetadata.read", (span) =>
+      recoverPromise(
+        async () => {
+          const { relayConnectionBrowserMetadata, relayRpc } =
+            await import("@/lib/relay-connection")
+          const synchronized = relayConnectionBrowserMetadata(relay.id)
+          if (synchronized) {
+            span.attribute("kiln.console.metadata_shape", "connection_snapshot")
+            return synchronized
+          }
+          const value = await relayRpc(
+            relay,
+            "relay.proxy.read",
+            { includeDiagnostics: false },
+            5_000
+          )
+          if (!value || typeof value !== "object") {
+            span.attribute("kiln.console.metadata_shape", "registry_fallback")
             return null
           }
-        )
+          const response = Object.fromEntries(Object.entries(value))
+          const metadata = relayProxyBrowserMetadataSchema.safeParse(response)
+          if (metadata.success) {
+            span.attribute("kiln.console.metadata_shape", "lightweight")
+            return metadata.data
+          }
+          // Relays predating the lightweight metadata hint ignore its payload
+          // and return full diagnostics. Keep rolling upgrades compatible
+          // without adding a second RPC.
+          const diagnostics = relayProxyDiagnosticsSchema.parse(
+            response.diagnostics
+          )
+          const settings = relayProxySettingsSchema.parse(response.settings)
+          span.attribute("kiln.console.metadata_shape", "legacy_diagnostics")
+          return {
+            browserOrigin: diagnostics.browserOrigin,
+            mode: settings.mode,
+          } satisfies RelayProxyBrowserMetadata
+        },
+        () => {
+          span.attribute("kiln.console.metadata_shape", "registry_fallback")
+          return null
+        }
+      )
     )
   )
 })

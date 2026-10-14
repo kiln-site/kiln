@@ -9,7 +9,10 @@ test("Relay runtime manifest includes every external dependency", async () => {
     readPackage("apps/relay/package.json"),
     readPackage("apps/relay/package.runtime.json"),
   ])
-  const bundledDependencies = new Set(["@workspace/contracts"])
+  const bundledDependencies = new Set([
+    "@workspace/contracts",
+    "@workspace/telemetry",
+  ])
   const expected = Object.keys(relayPackage.dependencies)
     .filter((dependency) => !bundledDependencies.has(dependency))
     .sort()

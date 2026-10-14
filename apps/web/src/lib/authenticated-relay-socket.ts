@@ -5,7 +5,6 @@ import {
   relayBrowserProtocol,
 } from "@workspace/contracts"
 import type { RelayBrowserResourceKind } from "@workspace/contracts"
-import * as Sentry from "@sentry/tanstackstart-react"
 import {
   Cause,
   Clock,
@@ -17,6 +16,7 @@ import {
   Stream,
 } from "effect"
 
+import { startBrowserSpan, traceBrowser } from "@/lib/browser-telemetry"
 import type { RelayBrowserCredentials } from "@/lib/relay-browser-credentials"
 import { relayBrowserAuthorizationSignal } from "@/lib/relay-browser-credentials"
 import type { RelayConsoleOperation } from "@/lib/relay-console-operations"
@@ -165,10 +165,9 @@ export function maintainRelayBrowserLease(
     const renew = Effect.gen(function* () {
       yield* Effect.acquireRelease(
         Effect.sync(() =>
-          Sentry.startInactiveSpan({
-            name: "Renew Relay browser lease",
-            op: "websocket.relay.renew",
+          startBrowserSpan("Renew Relay browser lease", {
             attributes: {
+              "kiln.operation": "websocket.relay.renew",
               "kiln.channel": input.channel,
               "kiln.retry_count": retryCount,
             },
@@ -182,9 +181,9 @@ export function maintainRelayBrowserLease(
                 ? "cancelled"
                 : "error"
             span.setAttribute("kiln.result", result)
-            if (result === "error")
-              span.setStatus({ code: 2, message: "renewal_failed" })
-            span.end()
+            span.end(
+              result === "error" ? new Error("renewal_failed") : undefined
+            )
           })
       )
       const capability = yield* Effect.tryPromise({
@@ -356,11 +355,11 @@ export function authenticateRelayBrowserSocket(
   return Effect.gen(function* () {
     const proof = yield* Effect.tryPromise({
       try: () =>
-        Sentry.startSpan(
+        traceBrowser(
+          "Sign Relay browser proof",
           {
-            name: "Sign Relay browser proof",
-            op: "crypto.relay.proof",
-            attributes: { "kiln.channel": input.channel },
+            "kiln.operation": "crypto.relay.proof",
+            "kiln.channel": input.channel,
           },
           () =>
             crypto.subtle.sign(

@@ -1,8 +1,9 @@
 import { readFile } from "node:fs/promises"
 
-import * as Sentry from "@sentry/node"
 import type { RelayProcessMemory } from "@workspace/contracts"
-import { Effect, Predicate } from "effect"
+import { Effect, Metric, Predicate } from "effect"
+
+import { forkRelayEffect } from "./effect/runtime.js"
 
 type ContainerMemory = NonNullable<RelayProcessMemory["container"]>
 
@@ -18,6 +19,24 @@ let containerSample: {
 } | null = null
 let cgroupUnavailable = false
 let metricsReportedAt = 0
+
+const memoryGauges = {
+  rss: memoryGauge("relay.memory.rss", "Relay process resident set"),
+  heapUsed: memoryGauge("relay.memory.heap_used", "Relay V8 heap in use"),
+  external: memoryGauge("relay.memory.external", "Relay memory outside V8"),
+  containerUsed: memoryGauge(
+    "relay.memory.container.used",
+    "Relay container memory, including page cache"
+  ),
+  containerAnon: memoryGauge(
+    "relay.memory.container.anon",
+    "Relay container anonymous memory"
+  ),
+  containerFile: memoryGauge(
+    "relay.memory.container.file",
+    "Relay container page cache"
+  ),
+}
 
 /**
  * Samples the Relay's own memory for the 2-second node snapshot. Process
@@ -38,22 +57,37 @@ export async function relayProcessMemory(): Promise<RelayProcessMemory> {
   }
 }
 
-/** Sends Relay memory gauges to Sentry at most once a minute. */
+/** Records Relay memory gauges at most once a minute. */
 export function reportRelayMemoryMetrics(
   memory: RelayProcessMemory | undefined
 ): void {
   const now = Date.now()
   if (!memory || now - metricsReportedAt < metricsIntervalMs) return
   metricsReportedAt = now
-  const gauge = (name: string, value: number | null | undefined) => {
-    if (value != null) Sentry.metrics.gauge(name, value, { unit: "byte" })
-  }
-  gauge("relay.memory.rss", memory.process.rssBytes)
-  gauge("relay.memory.heap_used", memory.process.heapUsedBytes)
-  gauge("relay.memory.external", memory.process.externalBytes)
-  gauge("relay.memory.container.used", memory.container?.usedBytes)
-  gauge("relay.memory.container.anon", memory.container?.anonBytes)
-  gauge("relay.memory.container.file", memory.container?.fileBytes)
+  const readings = [
+    [memoryGauges.rss, memory.process.rssBytes],
+    [memoryGauges.heapUsed, memory.process.heapUsedBytes],
+    [memoryGauges.external, memory.process.externalBytes],
+    [memoryGauges.containerUsed, memory.container?.usedBytes],
+    [memoryGauges.containerAnon, memory.container?.anonBytes],
+    [memoryGauges.containerFile, memory.container?.fileBytes],
+  ] as const
+  forkRelayEffect(
+    "relay.memory.metrics",
+    Effect.forEach(
+      readings,
+      ([gauge, value]) =>
+        value == null ? Effect.void : Metric.update(gauge, value),
+      { discard: true }
+    )
+  )
+}
+
+function memoryGauge(name: string, description: string) {
+  return Metric.gauge(name, {
+    description: `${description}, in bytes`,
+    attributes: { unit: "By" },
+  })
 }
 
 function containerMemory(): Promise<ContainerMemory | null> {

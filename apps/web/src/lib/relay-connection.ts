@@ -1,5 +1,4 @@
 import { randomUUID, sign, verify } from "node:crypto"
-import * as Sentry from "@sentry/tanstackstart-react"
 import { Clock, Effect, Fiber, Option, Schema } from "effect"
 import { WebSocket } from "ws"
 
@@ -45,7 +44,7 @@ import {
   type RelayEndpoint,
 } from "@/lib/relay-control-endpoint"
 import { RelayUnavailableError } from "@/effect/errors"
-import { forkAppEffect, runAppEffect } from "@/effect/runtime"
+import { forkAppEffect, reportAppError, runAppEffect } from "@/effect/runtime"
 import {
   attachSystemUpdateOperationEffect,
   forgetSystemUpdateEffect,
@@ -835,8 +834,8 @@ class RelayConnection {
                 readiness?.resolve(issuerGeneration)
               },
               (cause) => {
-                Sentry.captureException(cause, {
-                  tags: { component: "browser-authorization-sync" },
+                reportAppError(cause, {
+                  operation: "browser-authorization-sync",
                 })
                 // A temporary Hearth DB failure must not strand a Relay whose
                 // durable authorization state rolled back. Retry only while
@@ -1111,11 +1110,9 @@ class RelayConnection {
           controller.signal.aborted || error instanceof RelayRequestTimeoutError
         return Effect.sync(() => {
           if (!cancelled) {
-            Sentry.captureException(error, {
-              tags: {
-                "kiln.operation": request.operation,
-                "kiln.relay_id": this.#relay.id,
-              },
+            reportAppError(error, {
+              operation: request.operation,
+              attributes: { "kiln.relay_id": this.#relay.id },
             })
           }
         }).pipe(
@@ -1255,12 +1252,6 @@ class RelayConnection {
     const wasReachable = this.#state.status === "authenticated"
     const isReachable = status === "authenticated"
     this.#state = { lastError, status, updatedAt: Date.now() }
-    Sentry.addBreadcrumb({
-      category: "relay.connection",
-      data: { relayId: this.#relay.id },
-      level: status === "unreachable" ? "warning" : "info",
-      message: status,
-    })
     if (
       wasReachable !== isReachable &&
       connections.get(this.#relay.id) === this

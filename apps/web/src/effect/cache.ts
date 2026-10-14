@@ -1,4 +1,3 @@
-import * as Sentry from "@sentry/tanstackstart-react"
 import { Context, Deferred, Effect, Exit, Layer } from "effect"
 import { createClient } from "redis"
 import type { RedisClientOptions } from "redis"
@@ -124,22 +123,13 @@ function makeRedisCacheLayer(
           return connected.pipe(
             Effect.flatMap((redis) => {
               used = redis
-              return Effect.tryPromise(() =>
-                Sentry.startSpan(
-                  {
-                    name: `${operation} cache`,
-                    op: "cache.redis",
-                    attributes: { "cache.backend": "redis-protocol" },
-                  },
-                  async (span) => {
-                    const result = await run(redis)
-                    const attributes = resultAttributes?.(result) ?? {}
-                    for (const [name, value] of Object.entries(attributes)) {
-                      span.setAttribute(name, value)
-                    }
-                    return result
-                  }
-                )
+              return Effect.tryPromise(() => run(redis)).pipe(
+                Effect.tap((result) =>
+                  Effect.annotateCurrentSpan(resultAttributes?.(result) ?? {})
+                ),
+                Effect.withSpan(`${operation} cache`, {
+                  attributes: { "cache.backend": "redis-protocol" },
+                })
               )
             }),
             // One deadline covers waiting for the connection and the reply.

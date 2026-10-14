@@ -1,10 +1,10 @@
-import * as Sentry from "@sentry/node"
 import { Clock, Effect, Semaphore } from "effect"
 import type {
   RelayDesiredState,
   RelayInstanceRecovery,
 } from "@workspace/contracts"
 
+import { reportRelayError } from "./effect/runtime.js"
 import type { RelayConfig } from "./config.js"
 import { DockerEngine } from "./docker-engine.js"
 import {
@@ -502,11 +502,9 @@ export class RuntimeRecoveryManager {
         }),
         Effect.catch((cause) =>
           Effect.sync(() => {
-            Sentry.captureException(cause, {
-              tags: {
-                "kiln.instance_id": observation.instanceId,
-                "kiln.recovery": "worker_failed",
-              },
+            reportRelayError(cause, {
+              operation: "relay.recovery.worker_failed",
+              attributes: { "kiln.instance_id": observation.instanceId },
             })
           }).pipe(
             Effect.andThen(
@@ -640,11 +638,9 @@ export class RuntimeRecoveryManager {
             )
             this.#reportedStopFailures.add(observation.instanceId)
             if (shouldReport) {
-              Sentry.captureException(cause, {
-                tags: {
-                  "kiln.instance_id": observation.instanceId,
-                  "kiln.recovery": "intent_enforcement_failed",
-                },
+              reportRelayError(cause, {
+                operation: "relay.recovery.intent_enforcement_failed",
+                attributes: { "kiln.instance_id": observation.instanceId },
               })
             }
             return shouldReport
@@ -715,25 +711,20 @@ export class RuntimeRecoveryManager {
     return this.#persist(failed).pipe(
       Effect.tap(() =>
         Effect.sync(() => {
-          const context = {
-            extra: {
-              attempts: failed.attempts,
-              exitCode: failed.lastExitCode,
-              oomKilled: failed.lastOomKilled,
-              reason: failed.lastReason,
-              runtimeMs: failed.lastRuntimeMs,
-            },
-            tags: {
-              "kiln.instance_id": observation.instanceId,
-              "kiln.recovery": "exhausted",
-            },
-          }
-          if (cause) Sentry.captureException(cause, context)
-          else
-            Sentry.captureMessage(
-              "Server automatic recovery exhausted",
-              context
-            )
+          reportRelayError(
+            cause ?? new Error("Server automatic recovery exhausted"),
+            {
+              operation: "relay.recovery.exhausted",
+              attributes: {
+                "kiln.instance_id": observation.instanceId,
+                "kiln.recovery.attempts": failed.attempts,
+                "kiln.recovery.exit_code": failed.lastExitCode,
+                "kiln.recovery.oom_killed": failed.lastOomKilled,
+                "kiln.recovery.reason": failed.lastReason,
+                "kiln.recovery.runtime_ms": failed.lastRuntimeMs,
+              },
+            }
+          )
         })
       ),
       Effect.tap(() =>

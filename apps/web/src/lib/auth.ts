@@ -1,6 +1,5 @@
 import { createHash } from "node:crypto"
 
-import * as Sentry from "@sentry/tanstackstart-react"
 import { passkey } from "@better-auth/passkey"
 import { betterAuth } from "better-auth"
 import {
@@ -15,6 +14,7 @@ import { tanstackStartCookies } from "better-auth/tanstack-start"
 import { Resend } from "resend"
 import { Effect } from "effect"
 
+import { reportAppError } from "@/effect/runtime"
 import { isAccountVerified } from "@/lib/account-policy"
 import { AuthCodeEmail } from "@/emails/auth-code-email"
 import { databasePool } from "@/lib/database"
@@ -391,8 +391,8 @@ async function recordBetterAuthAuthorizationChange(
     }).pipe(
       Effect.tapError((cause) =>
         Effect.sync(() => {
-          Sentry.captureException(cause, {
-            tags: { component: "better-auth-authorization-revision" },
+          reportAppError(cause, {
+            operation: "better-auth-authorization-revision",
           })
         })
       )

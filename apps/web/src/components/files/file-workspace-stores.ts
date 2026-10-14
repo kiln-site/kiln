@@ -1,7 +1,9 @@
-import * as Sentry from "@sentry/tanstackstart-react"
 import { Result } from "effect"
 
 import { mobileBreakpoint } from "@workspace/ui/hooks/use-mobile"
+
+import type { BrowserSpan } from "@/lib/browser-telemetry"
+import { startBrowserSpan } from "@/lib/browser-telemetry"
 
 export const fileEditorFontSizes = [10, 11, 12, 14, 16]
 const fileEditorFontSizeStorageKey = "kiln:file-editor-font-size"
@@ -67,7 +69,7 @@ export interface FileSelectionStore {
   completeNavigation: (path: string, result: "loaded" | "unavailable") => void
   getIsHomeSnapshot: () => boolean
   getSnapshot: () => string
-  navigate: (path: string, from: string, to: string) => void
+  navigate: (path: string) => void
   select: (path: string) => void
   subscribe: (listener: () => void) => () => void
 }
@@ -79,7 +81,7 @@ export function createFileSelectionStore(
   let navigation:
     | {
         path: string
-        span: ReturnType<typeof Sentry.startInactiveSpan>
+        span: BrowserSpan
       }
     | undefined
   const listeners = new Set<() => void>()
@@ -103,24 +105,16 @@ export function createFileSelectionStore(
     },
     getIsHomeSnapshot: () => path === "",
     getSnapshot: () => path,
-    navigate: (nextPath, from, to) => {
+    navigate: (nextPath) => {
       if (navigation) {
         navigation.span.setAttribute("kiln.file.result", "superseded")
         navigation.span.end()
       }
-      Sentry.addBreadcrumb({
-        category: "navigation",
-        type: "navigation",
-        data: { from, to },
-      })
       navigation = {
         path: nextPath,
-        span: Sentry.startInactiveSpan({
-          name: to,
-          op: "navigation",
-          forceTransaction: true,
+        span: startBrowserSpan("File navigation", {
           attributes: {
-            "sentry.source": "route",
+            "kiln.operation": "navigation",
             "kiln.navigation.type": "file",
           },
         }),
@@ -198,17 +192,13 @@ export function createFileEditorPreferencesStore(): FileEditorPreferencesStore {
         setDefaultFontSize(
           defaultFileEditorFontSize(window.innerWidth < mobileBreakpoint)
         )
-        const stored = window.localStorage.getItem(
-          fileEditorFontSizeStorageKey
-        )
+        const stored = window.localStorage.getItem(fileEditorFontSizeStorageKey)
         const storedValue = Number.parseInt(stored ?? "", 10)
         hasStoredOverride = fileEditorFontSizes.includes(storedValue)
         if (!hasStoredOverride && stored !== null) {
           window.localStorage.removeItem(fileEditorFontSizeStorageKey)
         }
-        updateFontSize(
-          hasStoredOverride ? storedValue : currentDefaultFontSize
-        )
+        updateFontSize(hasStoredOverride ? storedValue : currentDefaultFontSize)
       })
       // Keep the default when browser storage is unavailable.
     },

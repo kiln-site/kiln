@@ -21,17 +21,21 @@ Under **Settings → Secrets and variables → Actions → Variables**, configur
 | `CLI_DEFAULT_URL`      | Optional default panel URL embedded in the CLI. Fork builds without this require a URL or saved profile. | `https://kiln.site`                |
 | `BUILD_RUNNER_AMD64`   | Optional Linux x64 runner label for push-triggered image builds and all native CLI checks/builds.        | `blacksmith-4vcpu-ubuntu-2404`     |
 | `BUILD_RUNNER_ARM64`   | Optional Linux ARM64 runner label for push-triggered image builds and all native CLI checks/builds.      | `blacksmith-4vcpu-ubuntu-2404-arm` |
-| `SENTRY_DSN`           | Optional server telemetry DSN baked into published images.                                               | Your server DSN                    |
-| `VITE_SENTRY_DSN`      | Optional browser telemetry DSN baked into Hearth.                                                        | Your browser DSN                   |
-| `SENTRY_ORG`           | Optional source-map upload organization.                                                                 | `quartzdev`                        |
-| `SENTRY_PROJECT`       | Optional source-map upload project.                                                                      | `kiln`                             |
+| `OTEL_*`               | Optional OpenTelemetry defaults baked into published images. See below.                                  | Kiln's telemetry backend           |
 
-Source-map uploads also require the `SENTRY_AUTH_TOKEN` Actions **secret**. Both
-organization and project must be set to prepare/upload maps. Sentry upload
-failures remain non-blocking. No upstream telemetry destination is a fallback.
-Explicit deployment environment values override baked server configuration;
-Compose's `SENTRY_DSN` defaults to empty, so set it in `.env` to enable server
-telemetry. Browser telemetry requires an image rebuild to change.
+Published images bake in defaults for these OpenTelemetry variables, read from
+repository variables of the same name: `OTEL_EXPORTER_OTLP_ENDPOINT`,
+`OTEL_EXPORTER_OTLP_HEADERS`, `OTEL_TRACES_EXPORTER`, `OTEL_LOGS_EXPORTER`,
+`OTEL_METRICS_EXPORTER`, `OTEL_TRACES_SAMPLER_ARG`, and
+`OTEL_RESOURCE_ATTRIBUTES`. Any OTLP/HTTP backend works. A signal is exported
+only when its `*_EXPORTER` variable is `otlp`; leave them unset to publish
+images without telemetry. No upstream telemetry destination is a fallback.
+
+The values ship inside every image, so the headers must only grant write
+access to telemetry. Header values are URI-encoded: write a space as `%20` and
+`=` as `%3D`. Deployment environment values override the baked defaults, and
+`OTEL_SDK_DISABLED=true` turns telemetry off. Browser telemetry goes through
+Hearth, so it follows Hearth's configuration.
 
 Normal GitHub `ubuntu-24.04` / `ubuntu-24.04-arm` runners are the default.
 Image PRs, manual image runs, and scheduled image builds retain GitHub runners.

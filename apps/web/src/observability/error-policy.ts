@@ -4,17 +4,7 @@ const EXPECTED_ERROR_TAGS = new Set([
   "ResourceNotFoundError",
 ])
 
-export function parseSampleRate(
-  value: string | undefined,
-  fallback: number
-): number {
-  if (!value?.trim()) return fallback
-  const parsed = Number(value)
-  return Number.isFinite(parsed) && parsed >= 0 && parsed <= 1
-    ? parsed
-    : fallback
-}
-
+/** Outcomes the app handles on purpose, so they are not reported as errors. */
 export function isExpectedAppError(value: unknown): boolean {
   if (typeof value !== "object" || value === null) {
     return false

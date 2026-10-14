@@ -38,7 +38,6 @@ import { Route as AppSettingsRouteImport } from './routes/_app.settings'
 import { Route as ApiAccountStatusRouteImport } from './routes/api.account-status'
 import { Route as ApiHealthRouteImport } from './routes/api.health'
 import { Route as ApiRealtimeRouteImport } from './routes/api.realtime'
-import { Route as ApiSentryCheckRouteImport } from './routes/api.sentry-check'
 import { Route as CliAuthorizeRouteImport } from './routes/cli.authorize'
 import { Route as DownloadsIdRouteImport } from './routes/downloads.$id'
 import { Route as AppAppAppIdRouteImport } from './routes/_app/app/$appId'
@@ -96,6 +95,7 @@ import { Route as AppServerServerIdStartupRouteImport } from './routes/_app/serv
 import { Route as ApiCliAuthDeviceRouteImport } from './routes/api.cli.auth.device'
 import { Route as ApiCliAuthTokenRouteImport } from './routes/api.cli.auth.token'
 import { Route as ApiCliV1SplatRouteImport } from './routes/api.cli.v1.$'
+import { Route as ApiTelemetryV1SignalRouteImport } from './routes/api.telemetry.v1.$signal'
 import { Route as AppAppAppIdFilesSplatRouteImport } from './routes/_app/app/$appId.files.$'
 import { Route as AppServerServerIdFilesSplatRouteImport } from './routes/_app/server/$serverId.files.$'
 
@@ -241,11 +241,6 @@ const ApiHealthRoute = ApiHealthRouteImport.update({
 const ApiRealtimeRoute = ApiRealtimeRouteImport.update({
   id: '/api/realtime',
   path: '/api/realtime',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const ApiSentryCheckRoute = ApiSentryCheckRouteImport.update({
-  id: '/api/sentry-check',
-  path: '/api/sentry-check',
   getParentRoute: () => rootRouteImport,
 } as any)
 const CliAuthorizeRoute = CliAuthorizeRouteImport.update({
@@ -537,6 +532,11 @@ const ApiCliV1SplatRoute = ApiCliV1SplatRouteImport.update({
   path: '/api/cli/v1/$',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiTelemetryV1SignalRoute = ApiTelemetryV1SignalRouteImport.update({
+  id: '/api/telemetry/v1/$signal',
+  path: '/api/telemetry/v1/$signal',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const AppAppAppIdFilesSplatRoute = AppAppAppIdFilesSplatRouteImport.update({
   id: '/$',
   path: '/$',
@@ -578,7 +578,6 @@ export interface FileRoutesByFullPath {
   '/api/account-status': typeof ApiAccountStatusRoute
   '/api/health': typeof ApiHealthRoute
   '/api/realtime': typeof ApiRealtimeRoute
-  '/api/sentry-check': typeof ApiSentryCheckRoute
   '/cli/authorize': typeof CliAuthorizeRoute
   '/downloads/$id': typeof DownloadsIdRoute
   '/app/$appId': typeof AppAppAppIdRouteWithChildren
@@ -633,6 +632,7 @@ export interface FileRoutesByFullPath {
   '/api/cli/auth/device': typeof ApiCliAuthDeviceRoute
   '/api/cli/auth/token': typeof ApiCliAuthTokenRoute
   '/api/cli/v1/$': typeof ApiCliV1SplatRoute
+  '/api/telemetry/v1/$signal': typeof ApiTelemetryV1SignalRoute
   '/app/$appId/': typeof AppAppAppIdIndexRoute
   '/db/$databaseId/': typeof AppDbDatabaseIdIndexRoute
   '/server/$serverId/': typeof AppServerServerIdIndexRoute
@@ -664,7 +664,6 @@ export interface FileRoutesByTo {
   '/api/account-status': typeof ApiAccountStatusRoute
   '/api/health': typeof ApiHealthRoute
   '/api/realtime': typeof ApiRealtimeRoute
-  '/api/sentry-check': typeof ApiSentryCheckRoute
   '/cli/authorize': typeof CliAuthorizeRoute
   '/downloads/$id': typeof DownloadsIdRoute
   '/automations/calendar': typeof AppAutomationsCalendarRoute
@@ -716,6 +715,7 @@ export interface FileRoutesByTo {
   '/api/cli/auth/device': typeof ApiCliAuthDeviceRoute
   '/api/cli/auth/token': typeof ApiCliAuthTokenRoute
   '/api/cli/v1/$': typeof ApiCliV1SplatRoute
+  '/api/telemetry/v1/$signal': typeof ApiTelemetryV1SignalRoute
   '/app/$appId': typeof AppAppAppIdIndexRoute
   '/db/$databaseId': typeof AppDbDatabaseIdIndexRoute
   '/server/$serverId': typeof AppServerServerIdIndexRoute
@@ -753,7 +753,6 @@ export interface FileRoutesById {
   '/api/account-status': typeof ApiAccountStatusRoute
   '/api/health': typeof ApiHealthRoute
   '/api/realtime': typeof ApiRealtimeRoute
-  '/api/sentry-check': typeof ApiSentryCheckRoute
   '/cli/authorize': typeof CliAuthorizeRoute
   '/downloads/$id': typeof DownloadsIdRoute
   '/_app/app/$appId': typeof AppAppAppIdRouteWithChildren
@@ -808,6 +807,7 @@ export interface FileRoutesById {
   '/api/cli/auth/device': typeof ApiCliAuthDeviceRoute
   '/api/cli/auth/token': typeof ApiCliAuthTokenRoute
   '/api/cli/v1/$': typeof ApiCliV1SplatRoute
+  '/api/telemetry/v1/$signal': typeof ApiTelemetryV1SignalRoute
   '/_app/app/$appId/': typeof AppAppAppIdIndexRoute
   '/_app/db/$databaseId/': typeof AppDbDatabaseIdIndexRoute
   '/_app/server/$serverId/': typeof AppServerServerIdIndexRoute
@@ -845,7 +845,6 @@ export interface FileRouteTypes {
     | '/api/account-status'
     | '/api/health'
     | '/api/realtime'
-    | '/api/sentry-check'
     | '/cli/authorize'
     | '/downloads/$id'
     | '/app/$appId'
@@ -900,6 +899,7 @@ export interface FileRouteTypes {
     | '/api/cli/auth/device'
     | '/api/cli/auth/token'
     | '/api/cli/v1/$'
+    | '/api/telemetry/v1/$signal'
     | '/app/$appId/'
     | '/db/$databaseId/'
     | '/server/$serverId/'
@@ -931,7 +931,6 @@ export interface FileRouteTypes {
     | '/api/account-status'
     | '/api/health'
     | '/api/realtime'
-    | '/api/sentry-check'
     | '/cli/authorize'
     | '/downloads/$id'
     | '/automations/calendar'
@@ -983,6 +982,7 @@ export interface FileRouteTypes {
     | '/api/cli/auth/device'
     | '/api/cli/auth/token'
     | '/api/cli/v1/$'
+    | '/api/telemetry/v1/$signal'
     | '/app/$appId'
     | '/db/$databaseId'
     | '/server/$serverId'
@@ -1019,7 +1019,6 @@ export interface FileRouteTypes {
     | '/api/account-status'
     | '/api/health'
     | '/api/realtime'
-    | '/api/sentry-check'
     | '/cli/authorize'
     | '/downloads/$id'
     | '/_app/app/$appId'
@@ -1074,6 +1073,7 @@ export interface FileRouteTypes {
     | '/api/cli/auth/device'
     | '/api/cli/auth/token'
     | '/api/cli/v1/$'
+    | '/api/telemetry/v1/$signal'
     | '/_app/app/$appId/'
     | '/_app/db/$databaseId/'
     | '/_app/server/$serverId/'
@@ -1101,7 +1101,6 @@ export interface RootRouteChildren {
   ApiAccountStatusRoute: typeof ApiAccountStatusRoute
   ApiHealthRoute: typeof ApiHealthRoute
   ApiRealtimeRoute: typeof ApiRealtimeRoute
-  ApiSentryCheckRoute: typeof ApiSentryCheckRoute
   CliAuthorizeRoute: typeof CliAuthorizeRoute
   DownloadsIdRoute: typeof DownloadsIdRoute
   ApiAppTerminalAppIdRoute: typeof ApiAppTerminalAppIdRoute
@@ -1111,6 +1110,7 @@ export interface RootRouteChildren {
   ApiCliAuthDeviceRoute: typeof ApiCliAuthDeviceRoute
   ApiCliAuthTokenRoute: typeof ApiCliAuthTokenRoute
   ApiCliV1SplatRoute: typeof ApiCliV1SplatRoute
+  ApiTelemetryV1SignalRoute: typeof ApiTelemetryV1SignalRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -1316,13 +1316,6 @@ declare module '@tanstack/react-router' {
       path: '/api/realtime'
       fullPath: '/api/realtime'
       preLoaderRoute: typeof ApiRealtimeRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/api/sentry-check': {
-      id: '/api/sentry-check'
-      path: '/api/sentry-check'
-      fullPath: '/api/sentry-check'
-      preLoaderRoute: typeof ApiSentryCheckRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/cli/authorize': {
@@ -1724,6 +1717,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiCliV1SplatRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/telemetry/v1/$signal': {
+      id: '/api/telemetry/v1/$signal'
+      path: '/api/telemetry/v1/$signal'
+      fullPath: '/api/telemetry/v1/$signal'
+      preLoaderRoute: typeof ApiTelemetryV1SignalRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/_app/app/$appId/files/$': {
       id: '/_app/app/$appId/files/$'
       path: '/$'
@@ -1979,7 +1979,6 @@ const rootRouteChildren: RootRouteChildren = {
   ApiAccountStatusRoute: ApiAccountStatusRoute,
   ApiHealthRoute: ApiHealthRoute,
   ApiRealtimeRoute: ApiRealtimeRoute,
-  ApiSentryCheckRoute: ApiSentryCheckRoute,
   CliAuthorizeRoute: CliAuthorizeRoute,
   DownloadsIdRoute: DownloadsIdRoute,
   ApiAppTerminalAppIdRoute: ApiAppTerminalAppIdRoute,
@@ -1989,6 +1988,7 @@ const rootRouteChildren: RootRouteChildren = {
   ApiCliAuthDeviceRoute: ApiCliAuthDeviceRoute,
   ApiCliAuthTokenRoute: ApiCliAuthTokenRoute,
   ApiCliV1SplatRoute: ApiCliV1SplatRoute,
+  ApiTelemetryV1SignalRoute: ApiTelemetryV1SignalRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

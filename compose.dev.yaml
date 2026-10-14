@@ -68,6 +68,7 @@ services:
       - relay-dev-node-modules:/workspace/node_modules
       - relay-dev-app-node-modules:/workspace/apps/relay/node_modules
       - relay-dev-contracts-node-modules:/workspace/packages/contracts/node_modules
+      - relay-dev-telemetry-node-modules:/workspace/packages/telemetry/node_modules
       - kiln-dev-pnpm-store:/root/.local/share/pnpm/store
       - minio-certs:/minio-certs:ro
     ports: !reset []
@@ -92,7 +93,6 @@ services:
       NODE_ENV: development
       KILN_ENVIRONMENT: dev
       KILN_BRICKS_CATALOG_URL: file:///workspace/apps/bricks/catalog.yml
-      KILN_SENTRY_VERIFICATION_TOKEN: ${KILN_SENTRY_VERIFICATION_TOKEN:-}
       NODE_EXTRA_CA_CERTS: /minio-certs/public.crt
     command:
       - /bin/sh
@@ -128,6 +128,7 @@ services:
       - hearth-dev-node-modules:/workspace/node_modules
       - hearth-dev-web-node-modules:/workspace/apps/web/node_modules
       - hearth-dev-contracts-node-modules:/workspace/packages/contracts/node_modules
+      - hearth-dev-telemetry-node-modules:/workspace/packages/telemetry/node_modules
       - hearth-dev-ui-node-modules:/workspace/packages/ui/node_modules
       - kiln-dev-pnpm-store:/root/.local/share/pnpm/store
       - minio-certs:/minio-certs:ro
@@ -194,9 +195,11 @@ volumes:
   relay-dev-node-modules:
   relay-dev-app-node-modules:
   relay-dev-contracts-node-modules:
+  relay-dev-telemetry-node-modules:
   hearth-dev-node-modules:
   hearth-dev-web-node-modules:
   hearth-dev-contracts-node-modules:
+  hearth-dev-telemetry-node-modules:
   hearth-dev-ui-node-modules:
   minio-certs:
   minio-data:

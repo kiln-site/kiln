@@ -13,12 +13,6 @@ const fakes = vi.hoisted(() => ({
   requirePermissions: vi.fn(),
   revisions: vi.fn(),
   features: new Set<string>(),
-  span: { setAttribute: vi.fn() },
-}))
-
-vi.mock("@sentry/tanstackstart-react", () => ({
-  startSpan: (_options: unknown, run: (span: typeof fakes.span) => unknown) =>
-    run(fakes.span),
 }))
 
 vi.mock("@/lib/access-control", () => ({

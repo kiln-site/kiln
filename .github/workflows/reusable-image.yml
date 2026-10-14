@@ -57,11 +57,6 @@ on:
         description: Version embedded in the image
         type: string
         default: ""
-      prepare_sentry_source_maps:
-        description: Export source maps from the exact amd64 image build
-        required: false
-        type: boolean
-        default: false
       publish_provenance:
         description: Provenance mode used for published images
         required: false
@@ -141,24 +136,6 @@ jobs:
           jq --exit-status --arg version "$EXPECTED_VERSION" \
             '.labels["org.opencontainers.image.version"] == $version' <<< "$METADATA"
 
-      - name: Prepare Sentry source maps
-        if: inputs.publish && inputs.prepare_sentry_source_maps && matrix.architecture == 'amd64'
-        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
-        env:
-          DOCKER_BUILD_RECORD_UPLOAD: false
-        with:
-          context: .
-          file: ${{ inputs.dockerfile }}
-          target: sentry-source-maps
-          build-args: |
-            ${{ inputs.build_args }}
-            KILN_VERSION=${{ inputs.version }}
-          platforms: linux/${{ matrix.architecture }}
-          outputs: type=local,dest=/tmp/sentry-source-maps
-          cache-from: type=registry,ref=${{ steps.cache.outputs.ref }}
-          provenance: false
-          sbom: false
-
       - name: Build${{ inputs.publish && ' and publish' || '' }} image
         id: build
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
@@ -197,19 +174,6 @@ jobs:
           path: /tmp/digests/*
           if-no-files-found: error
           retention-days: 1
-
-      - name: Upload prepared Sentry source maps
-        if: inputs.publish && inputs.prepare_sentry_source_maps && matrix.architecture == 'amd64'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: nightly-sentry-source-maps
-          path: |
-            /tmp/sentry-source-maps/**/*.js
-            /tmp/sentry-source-maps/**/*.mjs
-            /tmp/sentry-source-maps/**/*.map
-          if-no-files-found: error
-          retention-days: 1
-          compression-level: 1
 
   publish:
     name: Publish ${{ inputs.name }} manifest

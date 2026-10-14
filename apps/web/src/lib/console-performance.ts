@@ -1,7 +1,9 @@
-import * as Sentry from "@sentry/tanstackstart-react"
 import { Effect } from "effect"
 
-type ConsoleSpan = ReturnType<typeof Sentry.startInactiveSpan>
+import type { BrowserSpan } from "@/lib/browser-telemetry"
+import { startBrowserSpan } from "@/lib/browser-telemetry"
+
+type ConsoleSpan = BrowserSpan
 
 export interface ConsoleLoadTiming {
   cancel: () => void
@@ -24,18 +26,12 @@ export function createConsoleLoadTiming(): ConsoleLoadTiming {
 
   const start = () => {
     if (!open || openSpan) return
-    openSpan = Sentry.startInactiveSpan({
-      name: "Console open",
-      op: "ui.console.open",
-      forceTransaction: true,
-      attributes: {
-        "sentry.source": "component",
-      },
+    openSpan = startBrowserSpan("Console open", {
+      attributes: { "kiln.operation": "ui.console.open" },
     })
-    rowsSpan = Sentry.startInactiveSpan({
-      name: "Console first rows painted",
-      op: "ui.console.paint",
-      parentSpan: openSpan,
+    rowsSpan = startBrowserSpan("Console first rows painted", {
+      attributes: { "kiln.operation": "ui.console.paint" },
+      parent: openSpan,
     })
   }
 
@@ -119,11 +115,9 @@ export function startConsoleTimingSpan(
   name: string,
   op: string
 ): ConsoleSpan {
-  const parentSpan = timing?.parentSpan()
-  return Sentry.startInactiveSpan({
-    name,
-    op,
-    ...(parentSpan ? { parentSpan } : {}),
+  return startBrowserSpan(name, {
+    attributes: { "kiln.operation": op },
+    parent: timing?.parentSpan(),
   })
 }
 

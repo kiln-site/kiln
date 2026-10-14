@@ -1,5 +1,4 @@
-import * as Sentry from "@sentry/tanstackstart-react"
-import { Effect } from "effect"
+import { reportAppError } from "@/effect/runtime"
 
 type RelayCleanupFailure = "backups" | "domains"
 
@@ -59,16 +58,5 @@ function reportRelayCleanupFailure(
   relayId: string,
   error: unknown
 ) {
-  Effect.runSync(
-    Effect.try({
-      try: () =>
-        Sentry.captureException(error, {
-          tags: {
-            "kiln.operation": operation,
-            "kiln.relay_id": relayId,
-          },
-        }),
-      catch: () => undefined,
-    }).pipe(Effect.catch(() => Effect.void))
-  )
+  reportAppError(error, { operation, attributes: { "kiln.relay_id": relayId } })
 }

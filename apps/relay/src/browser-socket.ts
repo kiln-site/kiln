@@ -17,7 +17,6 @@ import {
 } from "node:zlib"
 import { Effect, Fiber, Option, Result, Schema } from "effect"
 import { WebSocket, WebSocketServer } from "ws"
-import * as Sentry from "@sentry/node"
 import ZipStream from "zip-stream"
 
 import {
@@ -48,6 +47,7 @@ import {
   relayConsoleCompletionInputSchema,
 } from "@workspace/contracts"
 
+import { reportRelayError, traceRelayPromise } from "./effect/runtime.js"
 import {
   MAX_CONSOLE_HISTORY_LINES,
   type DockerConsoleSession,
@@ -414,12 +414,8 @@ function authenticateBrowser(
         () =>
           ensuringPromise(
             () =>
-              Sentry.startSpan(
-                {
-                  name: "Authenticate browser session",
-                  op: "relay.browser.auth",
-                },
-                () => authenticate(input.value)
+              traceRelayPromise("relay.browser.auth", () =>
+                authenticate(input.value)
               ),
             () => {
               authenticationAttempt = false
@@ -440,9 +436,8 @@ function authenticateBrowser(
         () =>
           ensuringPromise(
             () =>
-              Sentry.startSpan(
-                { name: "Renew browser lease", op: "relay.browser.renew" },
-                () => renew(renewal.value)
+              traceRelayPromise("relay.browser.renew", () =>
+                renew(renewal.value)
               ),
             () => {
               authenticationAttempt = false
@@ -846,9 +841,7 @@ async function auditBrowserConsoleWrite(
     ).pipe(
       Effect.catch((cause) =>
         Effect.sync(() => {
-          Sentry.captureException(cause, {
-            tags: { "kiln.operation": "browser.console.audit" },
-          })
+          reportRelayError(cause, { operation: "browser.console.audit" })
         })
       )
     )
@@ -1417,14 +1410,12 @@ async function handleBrowserFileRequest(
     }).pipe(
       Effect.catch((cause) =>
         Effect.sync(() => {
-          Sentry.captureException(cause, {
-            tags: {
-              "kiln.operation":
-                method === "PUT"
-                  ? "browser.file.upload"
-                  : "browser.file.download",
-              "kiln.relay_id": options.identity.fingerprint,
-            },
+          reportRelayError(cause, {
+            operation:
+              method === "PUT"
+                ? "browser.file.upload"
+                : "browser.file.download",
+            attributes: { "kiln.relay_id": options.identity.fingerprint },
           })
           if (response.headersSent) {
             response.destroy(cause instanceof Error ? cause : undefined)
@@ -1661,9 +1652,7 @@ async function auditBrowserTransfer(
     ).pipe(
       Effect.catch((cause) =>
         Effect.sync(() => {
-          Sentry.captureException(cause, {
-            tags: { "kiln.operation": "browser.file.audit" },
-          })
+          reportRelayError(cause, { operation: "browser.file.audit" })
         })
       )
     )
@@ -2385,9 +2374,7 @@ class ConsoleHub {
       Effect.catch((cause) =>
         Effect.sync(() => {
           if (!this.#closed) {
-            Sentry.captureException(cause, {
-              tags: { "kiln.operation": "browser.console.stream" },
-            })
+            reportRelayError(cause, { operation: "browser.console.stream" })
           }
         })
       ),
@@ -2467,9 +2454,7 @@ class ConsoleHub {
         Effect.catch((cause) =>
           Effect.sync(() => {
             if (!this.#closed) {
-              Sentry.captureException(cause, {
-                tags: { "kiln.operation": operation },
-              })
+              reportRelayError(cause, { operation: operation })
             }
           })
         ),
@@ -2812,7 +2797,7 @@ function timedBrowserOperation<TResult>(
   run: (signal: AbortSignal) => Promise<TResult>
 ): Effect.Effect<TResult, Error> {
   return browserOperation((signal) =>
-    Sentry.startSpan({ name, op }, () => run(signal))
+    traceRelayPromise(name, () => run(signal), { "kiln.operation": op })
   )
 }
 

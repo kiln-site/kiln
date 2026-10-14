@@ -1,5 +1,4 @@
 import * as React from "react"
-import * as Sentry from "@sentry/tanstackstart-react"
 import { Link, useRouter, useRouterState } from "@tanstack/react-router"
 import type { AnyRouter } from "@tanstack/react-router"
 import { ArrowLeft, RefreshCw, TriangleAlert } from "lucide-react"
@@ -8,6 +7,7 @@ import { createPortal } from "react-dom"
 import { Button } from "@workspace/ui/components/button"
 
 import { HearthMark } from "@/components/hearth-mark"
+import { reportBrowserError } from "@/lib/browser-telemetry"
 
 const reportedErrors = new WeakSet<Error>()
 const notFoundStatus = {
@@ -28,7 +28,7 @@ export function AppErrorPage({ error, reset }: AppErrorPageProps) {
       if (reportedErrors.has(error)) return
       reportedErrors.add(error)
     }
-    Sentry.captureException(error)
+    reportBrowserError(error, { operation: "app.error_page" })
   }, [error])
 
   return (

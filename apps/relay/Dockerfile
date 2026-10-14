@@ -20,6 +20,7 @@ WORKDIR /source
 COPY --chown=vp:vp package.json pnpm-lock.yaml pnpm-workspace.yaml .node-version ./
 COPY --chown=vp:vp apps/relay/package.json ./apps/relay/package.json
 COPY --chown=vp:vp packages/contracts/package.json ./packages/contracts/package.json
+COPY --chown=vp:vp packages/telemetry/package.json ./packages/telemetry/package.json
 COPY --chown=vp:vp patches ./patches
 RUN --mount=type=cache,target=/home/vp/.local/share/pnpm/store,uid=1000,gid=1000,sharing=locked \
   vp install --frozen-lockfile --ignore-scripts --filter relay...
@@ -27,9 +28,20 @@ RUN --mount=type=cache,target=/home/vp/.local/share/pnpm/store,uid=1000,gid=1000
 COPY --chown=vp:vp tsconfig.json vite.config.ts release.json ./
 COPY --chown=vp:vp apps/relay ./apps/relay
 COPY --chown=vp:vp packages/contracts ./packages/contracts
+COPY --chown=vp:vp packages/telemetry ./packages/telemetry
 
 ARG SOURCE_COMMIT
 ARG KILN_VERSION
+# Telemetry defaults are baked into the bundle, not the image environment:
+# the Relay updater carries a container's environment into its replacement,
+# so image ENV values would outlive the release that set them.
+ARG OTEL_EXPORTER_OTLP_ENDPOINT
+ARG OTEL_EXPORTER_OTLP_HEADERS
+ARG OTEL_LOGS_EXPORTER
+ARG OTEL_METRICS_EXPORTER
+ARG OTEL_RESOURCE_ATTRIBUTES
+ARG OTEL_TRACES_EXPORTER
+ARG OTEL_TRACES_SAMPLER_ARG
 ENV SOURCE_COMMIT=$SOURCE_COMMIT
 ENV KILN_VERSION=$KILN_VERSION
 RUN vp run relay#build
@@ -59,9 +71,6 @@ ARG KILN_GIT_REPO=https://github.com/kiln-site/kiln
 ENV KILN_GIT_REPO=$KILN_GIT_REPO
 ENV KILN_DEFAULT_GIT_REPO=$KILN_GIT_REPO
 ENV NODE_ENV=production
-ARG SENTRY_DSN
-ENV SENTRY_DSN=$SENTRY_DSN
-ENV SENTRY_TRACES_SAMPLE_RATE=0.05
 WORKDIR /app
 
 COPY --from=docker-cli /usr/local/bin/docker /usr/local/bin/docker
@@ -92,4 +101,4 @@ EXPOSE 4100 2022
 # interval lets the self-updater see a replacement become healthy quickly.
 HEALTHCHECK --interval=10s --timeout=3s --start-period=10s --start-interval=1s --retries=3 \
   CMD ["/usr/local/bin/kiln-relay-healthcheck"]
-CMD ["--import", "./dist/instrument.mjs", "dist/src/index.mjs"]
+CMD ["dist/src/index.mjs"]

@@ -3,9 +3,9 @@ import {
   relayResourceStreamEventSchema,
 } from "@workspace/contracts"
 import type { RelayResourceStreamEvent } from "@workspace/contracts"
-import * as Sentry from "@sentry/tanstackstart-react"
 import { Effect, Stream } from "effect"
 
+import { startBrowserSpan, traceBrowser } from "@/lib/browser-telemetry"
 import {
   maintainRelayBrowserLease,
   isTerminalRelayBrowserFailure,
@@ -39,11 +39,11 @@ export function openRelayResourceStream(
           })
           const capability = yield* Effect.tryPromise({
             try: () =>
-              Sentry.startSpan(
+              traceBrowser(
+                "Issue resource capability",
                 {
-                  name: "Issue resource capability",
-                  op: "http.resources.capability",
-                  attributes: { "kiln.channel": "resources" },
+                  "kiln.operation": "http.resources.capability",
+                  "kiln.channel": "resources",
                 },
                 () => credentials.issue({ kind: "resources", optInV2: true })
               ),
@@ -58,10 +58,11 @@ export function openRelayResourceStream(
           }
           const span = yield* Effect.acquireRelease(
             Effect.sync(() =>
-              Sentry.startInactiveSpan({
-                name: "Open authenticated resource socket",
-                op: "websocket.resources.connect",
-                attributes: { "kiln.channel": "resources" },
+              startBrowserSpan("Open authenticated resource socket", {
+                attributes: {
+                  "kiln.operation": "websocket.resources.connect",
+                  "kiln.channel": "resources",
+                },
               })
             ),
             (span) => Effect.sync(() => span.end())
@@ -151,11 +152,15 @@ function resourceEventObserver(): {
     transport: "direct" | "hearth"
   ) => void
 } {
-  const firstEventSpan = Sentry.startInactiveSpan({
-    name: "Receive first authoritative resource event",
-    op: "stream.resources.first_event",
-    attributes: { "kiln.channel": "resources" },
-  })
+  const firstEventSpan = startBrowserSpan(
+    "Receive first authoritative resource event",
+    {
+      attributes: {
+        "kiln.operation": "stream.resources.first_event",
+        "kiln.channel": "resources",
+      },
+    }
+  )
   let pending = true
   return {
     close: () => {
@@ -164,19 +169,7 @@ function resourceEventObserver(): {
       firstEventSpan.setAttribute("kiln.result", "cancelled")
       firstEventSpan.end()
     },
-    observe: (event, transport) => {
-      const sampledAt = event.instance.resources?.sampledAt
-      const sampleAge = sampledAt ? Date.now() - Date.parse(sampledAt) : NaN
-      if (Number.isFinite(sampleAge)) {
-        Sentry.metrics.distribution(
-          "relay.resources.sample_age",
-          Math.max(0, sampleAge),
-          {
-            unit: "millisecond",
-            attributes: { "kiln.transport": transport },
-          }
-        )
-      }
+    observe: (_event, transport) => {
       if (!pending) return
       pending = false
       firstEventSpan.setAttribute("kiln.result", "ok")

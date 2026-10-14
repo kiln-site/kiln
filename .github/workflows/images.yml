@@ -29,9 +29,6 @@ jobs:
             cache_scope: hearth
             build_args: |
               SOURCE_COMMIT=${{ github.sha }}
-              VITE_SENTRY_DSN=${{ vars.VITE_SENTRY_DSN }}
-              VITE_SENTRY_REPLAYS_SESSION_SAMPLE_RATE=${{ vars.VITE_SENTRY_REPLAYS_SESSION_SAMPLE_RATE || '0.05' }}
-              VITE_SENTRY_TRACES_SAMPLE_RATE=${{ vars.VITE_SENTRY_TRACES_SAMPLE_RATE || '0.05' }}
           - name: Relay
             image: relay
             dockerfile: apps/relay/Dockerfile

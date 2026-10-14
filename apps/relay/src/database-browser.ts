@@ -296,8 +296,8 @@ function spawnWorker() {
     import.meta.url
   )
   return fork(fileURLToPath(entry), [], {
-    // Production workers skip the Relay's own preloads (Sentry); development
-    // keeps tsx's loader so the TypeScript entry can run.
+    // Production workers start without the Relay's flags; development keeps
+    // tsx's loader so the TypeScript entry can run.
     execArgv: [
       ...(development
         ? process.execArgv.filter((flag) => !flag.startsWith("--inspect"))
