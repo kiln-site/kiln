@@ -126,6 +126,7 @@ import { applyStoredInstanceNames } from "./instance-names.js"
 import { normalizedRoute } from "./route-label.js"
 import { uploadConsoleLogToMclogs } from "./mclogs.js"
 import { closeRelayServer } from "./shutdown.js"
+import { handleHealthRequest, listenRelayHealthServerEffect } from "./health.js"
 import { attachSftpServer } from "./sftp-server.js"
 import { actionsForRole, relayActions } from "./permissions.js"
 import type { RelayAction } from "./permissions.js"
@@ -602,7 +603,7 @@ const requestHandler = (
 ): void => {
   Effect.runFork(
     relayOperation(async () => {
-      if (healthCheck(request, response)) return
+      if (handleHealthRequest(request, response)) return
       if (trustProbe(request, response)) return
       if (bootstrapDiscovery(request, response)) return
       if (await pairingRequest(request, response)) return
@@ -663,6 +664,7 @@ const browserSocket = attachBrowserSocket({
 })
 let startingSftpServer: Awaited<ReturnType<typeof attachSftpServer>> | null =
   null
+let healthServer: HttpServer | null = null
 const sftpServer = await Effect.runPromise(
   relayOperation(() =>
     attachSftpServer({
@@ -687,6 +689,17 @@ const sftpServer = await Effect.runPromise(
       relayOperation(() => lifecycle.assertPrivateProxyListener())
     ),
     Effect.tap(() => listenRelayServerEffect(server, config.port, config.host)),
+    // Start the Docker healthcheck listener only once the main listener is up,
+    // so "healthy" keeps meaning the Relay is serving.
+    Effect.tap(() =>
+      listenRelayHealthServerEffect(config.healthPort).pipe(
+        Effect.tap((listening) =>
+          Effect.sync(() => {
+            healthServer = listening
+          })
+        )
+      )
+    ),
     Effect.onError(() =>
       Effect.sync(() => {
         tailscaleFirewallFiber.interruptUnsafe()
@@ -913,6 +926,8 @@ function shutdownRelay(signal: NodeJS.Signals): Promise<void> {
     Effect.gen(function* () {
       yield* Effect.sync(() => {
         console.log(`Received ${signal}; shutting down relay`)
+        healthServer?.close()
+        healthServer?.closeAllConnections()
         tailscaleFirewallFiber.interruptUnsafe()
         tlsRefreshFiber.interruptUnsafe()
         backupFiber.interruptUnsafe()
@@ -2274,18 +2289,6 @@ function serializeWebRouteMutation<T>(mutate: () => Promise<T>): Promise<T> {
 
 function normalizedRequestOperation(url: string | undefined): string {
   return normalizedRoute(new URL(url ?? "/", "http://relay").pathname)
-}
-
-function healthCheck(
-  request: IncomingMessage,
-  response: ServerResponse
-): boolean {
-  const method = request.method ?? "GET"
-  if (method !== "GET" && method !== "HEAD") return false
-  const url = new URL(request.url ?? "/", "http://relay")
-  if (url.pathname !== "/health") return false
-  response.writeHead(204, { "Cache-Control": "no-store" }).end()
-  return true
 }
 
 function listenRelayServerEffect(

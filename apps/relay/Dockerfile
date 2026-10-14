@@ -34,6 +34,19 @@ ENV SOURCE_COMMIT=$SOURCE_COMMIT
 ENV KILN_VERSION=$KILN_VERSION
 RUN vp run relay#build
 
+# Docker runs the HEALTHCHECK every interval, so it is a static native binary
+# instead of a Node.js process. Cross-compile on the build platform; the stage
+# only depends on the checker source, so it stays cached.
+FROM --platform=$BUILDPLATFORM golang:1.27.2-alpine AS healthcheck
+
+ARG TARGETOS
+ARG TARGETARCH
+WORKDIR /src
+COPY apps/relay/healthcheck ./
+RUN --mount=type=cache,target=/root/.cache/go-build \
+  CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
+  go build -trimpath -ldflags="-s -w" -o /out/kiln-relay-healthcheck .
+
 FROM docker:29.8.2-cli AS docker-cli
 
 FROM restic/restic:0.19.1 AS restic
@@ -52,6 +65,7 @@ WORKDIR /app
 COPY --from=docker-cli /usr/local/bin/docker /usr/local/bin/docker
 COPY --from=docker-cli /usr/local/libexec/docker/cli-plugins/docker-compose /usr/local/libexec/docker/cli-plugins/docker-compose
 COPY --from=restic /usr/bin/restic /usr/bin/restic
+COPY --from=healthcheck /out/kiln-relay-healthcheck /usr/local/bin/kiln-relay-healthcheck
 COPY --from=runtime-deps /runtime/node_modules ./node_modules
 COPY apps/relay/package.runtime.json ./package.json
 RUN ["/nodejs/bin/node", "--input-type=module", "-e", "await import('reflect-metadata'); const manifest = await import('./package.json', { with: { type: 'json' } }); await Promise.all(Object.keys(manifest.default.dependencies).map((name) => import(name)))"]
@@ -70,6 +84,9 @@ LABEL org.opencontainers.image.source="${KILN_IMAGE_SOURCE}" \
   io.kiln.component="relay"
 
 EXPOSE 4100 2022
-HEALTHCHECK --interval=10s --timeout=3s --start-period=10s --retries=3 \
-  CMD ["/nodejs/bin/node", "-e", "const proxy=process.env.KILN_RELAY_PROXY;const plain=proxy==='coolify'||proxy==='traefik';const request=require(plain?'node:http':'node:https').get({host:'127.0.0.1',port:process.env.KILN_RELAY_PORT||'4100',path:'/health',rejectUnauthorized:false,timeout:2500},response=>process.exit(response.statusCode===204?0:1));request.on('error',()=>process.exit(1));request.on('timeout',()=>request.destroy())"]
+# The checker probes the loopback-only plain-HTTP listener on
+# KILN_RELAY_HEALTH_PORT (default 4101), which is never published. The 1s start
+# interval lets the self-updater see a replacement become healthy quickly.
+HEALTHCHECK --interval=10s --timeout=3s --start-period=10s --start-interval=1s --retries=3 \
+  CMD ["/usr/local/bin/kiln-relay-healthcheck"]
 CMD ["--import", "./dist/instrument.mjs", "dist/src/index.mjs"]

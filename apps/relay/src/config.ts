@@ -88,6 +88,7 @@ export interface RelayConfig {
   }
   gameHostSource: RelayGameHostSource
   gitRepository: string
+  healthPort: number
   host: string
   installationId: string | null
   managedLabel: string
@@ -123,6 +124,13 @@ export function loadConfig(
   const dataDirectory = environment.KILN_RELAY_DATA_DIR?.trim() || "/data"
   const proxyMode = relayProxyMode(environment)
   const port = parsePort(environment, "KILN_RELAY_PORT", 4100)
+  const sftpPort = parsePort(environment, "KILN_RELAY_SFTP_PORT", 2022)
+  const healthPort = parsePort(environment, "KILN_RELAY_HEALTH_PORT", 4101)
+  if (healthPort === port || healthPort === sftpPort) {
+    throw new Error(
+      "KILN_RELAY_HEALTH_PORT must differ from KILN_RELAY_PORT and KILN_RELAY_SFTP_PORT"
+    )
+  }
   const coolifyPublicOrigin = relayCoolifyPublicOrigin(environment, port)
   if (
     proxyMode === "coolify" &&
@@ -217,6 +225,7 @@ export function loadConfig(
     gamePortRange: relayGamePortRange(environment),
     gameHostSource,
     gitRepository,
+    healthPort,
     host: environment.KILN_RELAY_BIND_HOST?.trim() || "0.0.0.0",
     installationId,
     managedLabel: "kiln.relay.managed=true",
@@ -261,7 +270,7 @@ export function loadConfig(
     },
     serverIdLabel: "kiln.server.id",
     sftpDevAuthentication: sftpDevAuthentication(environment),
-    sftpPort: parsePort(environment, "KILN_RELAY_SFTP_PORT", 2022),
+    sftpPort,
     tlsCertificatePath: environment.KILN_RELAY_TLS_CERT_FILE?.trim() || null,
     tlsKeyPath: environment.KILN_RELAY_TLS_KEY_FILE?.trim() || null,
     tlsMode,
