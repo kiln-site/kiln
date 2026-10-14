@@ -4,7 +4,7 @@ import type { Fiber, Tracer } from "effect"
 
 import { makeRelayStateLayer, RelayStateStore } from "./state.js"
 import { relayBuildCommit, relayBuildVersion } from "../build-info.js"
-import type { RelayConfig } from "../config.js"
+import { relayStateDatabasePath, type RelayConfig } from "../config.js"
 
 declare const __KILN_TELEMETRY_DEFAULTS__: Telemetry.TelemetryDefaults
 
@@ -22,7 +22,7 @@ export function initializeRelayRuntime(config: RelayConfig): void {
   if (runtime) return
   runtime = ManagedRuntime.make(
     Layer.merge(
-      makeRelayStateLayer(`${config.dataDirectory}/network/relay.sqlite`),
+      makeRelayStateLayer(relayStateDatabasePath(config)),
       Telemetry.layer(
         {
           serviceName: "relay",

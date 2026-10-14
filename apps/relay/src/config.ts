@@ -718,3 +718,9 @@ function highEntropySecret(
 function formatUrlHost(value: string): string {
   return value.includes(":") && !value.startsWith("[") ? `[${value}]` : value
 }
+
+export function relayStateDatabasePath(
+  config: Pick<RelayConfig, "dataDirectory">
+): string {
+  return `${config.dataDirectory}/network/relay.sqlite`
+}

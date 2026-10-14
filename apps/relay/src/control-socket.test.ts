@@ -192,6 +192,35 @@ describe("Relay control socket", () => {
     })
   })
 
+  it("refuses Relay state to a client granted ordinary database access", async () => {
+    const relay = await startRelay()
+    const connection = await relay.connect(
+      await relay.pair({
+        role: "custom",
+        actions: ["database.read"],
+      })
+    )
+    const denied = sendRequest(connection.socket, "relay.database.read", {
+      request: { action: "overview" },
+    })
+    expect(await connection.inbox.next()).toMatchObject({
+      code: "forbidden",
+      replyTo: denied,
+      type: "error",
+    })
+    const reader = await relay.connect(
+      await relay.pair({ role: "custom", actions: ["relay.database.read"] })
+    )
+    const accepted = sendRequest(reader.socket, "relay.database.read", {
+      request: { action: "overview" },
+    })
+    expect(await reader.inbox.next()).toMatchObject({
+      payload: { ok: true },
+      replyTo: accepted,
+      type: "response",
+    })
+  })
+
   it("keeps host files behind their own grants", async () => {
     const relay = await startRelay()
     const hostId = "H".repeat(43)

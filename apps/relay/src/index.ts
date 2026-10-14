@@ -1,3 +1,4 @@
+import { RelayStateDatabase } from "./relay-state-database.js"
 import {
   HostShell,
   hostTerminalTarget,
@@ -21,6 +22,7 @@ import {
   relayCreateDatabaseSchema,
   relayAppActionSchema,
   relayAppNetworkSchema,
+  relayStateDatabaseReadSchema,
   relayHostTerminalAttachSchema,
   relayHostTerminalWriteSchema,
   relayHostTerminalClaimSchema,
@@ -287,6 +289,7 @@ const hostFilesystem = new FilesystemDriver(
 )
 const hostFiles = new HostFiles(config)
 const hostDatabaseBrowser = new DatabaseBrowser(hostFilesystem)
+const relayStateDatabase = new RelayStateDatabase(config)
 async function hostFileRoot(id: string): Promise<FileRoot> {
   if (!config.hostAccess) throw new HostAccessDisabledError()
   if (id !== relayIdentity.fingerprint) throw new Error("Relay not found")
@@ -1279,6 +1282,13 @@ async function executeControlRequest(
       }
       await snapshotHub.refresh()
       return { mode, removed: mode === "commit" }
+    }
+    case "relay.database.read": {
+      const input = relayStateDatabaseReadSchema.parse(request.payload)
+      return runRelayEffect(
+        "relay.database.read",
+        relayStateDatabase.read(input.request)
+      )
     }
     case "relay.host.read":
       return {

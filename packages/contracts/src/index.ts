@@ -203,6 +203,10 @@ export const relayDatabaseExportSchema = relayDatabaseDumpSchema.omit({
   content: true,
 })
 
+export const relayStateDatabaseReadSchema = z
+  .object({ request: databaseReadRequestSchema })
+  .strict()
+
 export const relayDatabaseDataReadSchema = relayDatabaseExportSchema.extend({
   request: databaseReadRequestSchema,
 })

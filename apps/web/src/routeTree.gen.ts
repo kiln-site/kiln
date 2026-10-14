@@ -89,6 +89,7 @@ import { Route as AppDbDatabaseIdTerminalRouteImport } from './routes/_app/db/$d
 import { Route as AppDbDatabaseIdViewerRouteImport } from './routes/_app/db/$databaseId.viewer'
 import { Route as AppRelayRelayIdIndexRouteImport } from './routes/_app/relay/$relayId.index'
 import { Route as AppRelayRelayIdSplatRouteImport } from './routes/_app/relay/$relayId.$'
+import { Route as AppRelayRelayIdDatabaseRouteImport } from './routes/_app/relay/$relayId.database'
 import { Route as AppRelayRelayIdFilesRouteImport } from './routes/_app/relay/$relayId.files'
 import { Route as AppRelayRelayIdInfoRouteImport } from './routes/_app/relay/$relayId.info'
 import { Route as AppRelayRelayIdLogsRouteImport } from './routes/_app/relay/$relayId.logs'
@@ -509,6 +510,11 @@ const AppRelayRelayIdSplatRoute = AppRelayRelayIdSplatRouteImport.update({
   path: '/$',
   getParentRoute: () => AppRelayRelayIdRoute,
 } as any)
+const AppRelayRelayIdDatabaseRoute = AppRelayRelayIdDatabaseRouteImport.update({
+  id: '/database',
+  path: '/database',
+  getParentRoute: () => AppRelayRelayIdRoute,
+} as any)
 const AppRelayRelayIdFilesRoute = AppRelayRelayIdFilesRouteImport.update({
   id: '/files',
   path: '/files',
@@ -687,6 +693,7 @@ export interface FileRoutesByFullPath {
   '/db/$databaseId/terminal': typeof AppDbDatabaseIdTerminalRoute
   '/db/$databaseId/viewer': typeof AppDbDatabaseIdViewerRoute
   '/relay/$relayId/$': typeof AppRelayRelayIdSplatRoute
+  '/relay/$relayId/database': typeof AppRelayRelayIdDatabaseRoute
   '/relay/$relayId/files': typeof AppRelayRelayIdFilesRouteWithChildren
   '/relay/$relayId/info': typeof AppRelayRelayIdInfoRoute
   '/relay/$relayId/logs': typeof AppRelayRelayIdLogsRoute
@@ -779,6 +786,7 @@ export interface FileRoutesByTo {
   '/db/$databaseId/terminal': typeof AppDbDatabaseIdTerminalRoute
   '/db/$databaseId/viewer': typeof AppDbDatabaseIdViewerRoute
   '/relay/$relayId/$': typeof AppRelayRelayIdSplatRoute
+  '/relay/$relayId/database': typeof AppRelayRelayIdDatabaseRoute
   '/relay/$relayId/files': typeof AppRelayRelayIdFilesRouteWithChildren
   '/relay/$relayId/info': typeof AppRelayRelayIdInfoRoute
   '/relay/$relayId/logs': typeof AppRelayRelayIdLogsRoute
@@ -881,6 +889,7 @@ export interface FileRoutesById {
   '/_app/db/$databaseId/terminal': typeof AppDbDatabaseIdTerminalRoute
   '/_app/db/$databaseId/viewer': typeof AppDbDatabaseIdViewerRoute
   '/_app/relay/$relayId/$': typeof AppRelayRelayIdSplatRoute
+  '/_app/relay/$relayId/database': typeof AppRelayRelayIdDatabaseRoute
   '/_app/relay/$relayId/files': typeof AppRelayRelayIdFilesRouteWithChildren
   '/_app/relay/$relayId/info': typeof AppRelayRelayIdInfoRoute
   '/_app/relay/$relayId/logs': typeof AppRelayRelayIdLogsRoute
@@ -983,6 +992,7 @@ export interface FileRouteTypes {
     | '/db/$databaseId/terminal'
     | '/db/$databaseId/viewer'
     | '/relay/$relayId/$'
+    | '/relay/$relayId/database'
     | '/relay/$relayId/files'
     | '/relay/$relayId/info'
     | '/relay/$relayId/logs'
@@ -1075,6 +1085,7 @@ export interface FileRouteTypes {
     | '/db/$databaseId/terminal'
     | '/db/$databaseId/viewer'
     | '/relay/$relayId/$'
+    | '/relay/$relayId/database'
     | '/relay/$relayId/files'
     | '/relay/$relayId/info'
     | '/relay/$relayId/logs'
@@ -1176,6 +1187,7 @@ export interface FileRouteTypes {
     | '/_app/db/$databaseId/terminal'
     | '/_app/db/$databaseId/viewer'
     | '/_app/relay/$relayId/$'
+    | '/_app/relay/$relayId/database'
     | '/_app/relay/$relayId/files'
     | '/_app/relay/$relayId/info'
     | '/_app/relay/$relayId/logs'
@@ -1795,6 +1807,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppRelayRelayIdSplatRouteImport
       parentRoute: typeof AppRelayRelayIdRoute
     }
+    '/_app/relay/$relayId/database': {
+      id: '/_app/relay/$relayId/database'
+      path: '/database'
+      fullPath: '/relay/$relayId/database'
+      preLoaderRoute: typeof AppRelayRelayIdDatabaseRouteImport
+      parentRoute: typeof AppRelayRelayIdRoute
+    }
     '/_app/relay/$relayId/files': {
       id: '/_app/relay/$relayId/files'
       path: '/files'
@@ -2091,6 +2110,7 @@ const AppRelayRelayIdFilesRouteWithChildren =
 
 interface AppRelayRelayIdRouteChildren {
   AppRelayRelayIdSplatRoute: typeof AppRelayRelayIdSplatRoute
+  AppRelayRelayIdDatabaseRoute: typeof AppRelayRelayIdDatabaseRoute
   AppRelayRelayIdFilesRoute: typeof AppRelayRelayIdFilesRouteWithChildren
   AppRelayRelayIdInfoRoute: typeof AppRelayRelayIdInfoRoute
   AppRelayRelayIdLogsRoute: typeof AppRelayRelayIdLogsRoute
@@ -2101,6 +2121,7 @@ interface AppRelayRelayIdRouteChildren {
 
 const AppRelayRelayIdRouteChildren: AppRelayRelayIdRouteChildren = {
   AppRelayRelayIdSplatRoute: AppRelayRelayIdSplatRoute,
+  AppRelayRelayIdDatabaseRoute: AppRelayRelayIdDatabaseRoute,
   AppRelayRelayIdFilesRoute: AppRelayRelayIdFilesRouteWithChildren,
   AppRelayRelayIdInfoRoute: AppRelayRelayIdInfoRoute,
   AppRelayRelayIdLogsRoute: AppRelayRelayIdLogsRoute,

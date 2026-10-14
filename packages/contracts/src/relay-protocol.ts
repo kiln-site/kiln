@@ -50,6 +50,7 @@ export const relayControlOperations = [
   "relay.tailscale.stack.remove",
   "relay.host.read",
   "relay.host.files.mount",
+  "relay.database.read",
   "relay.terminal.attach",
   "relay.terminal.heartbeat",
   "relay.terminal.detach",

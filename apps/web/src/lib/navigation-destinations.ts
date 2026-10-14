@@ -496,6 +496,7 @@ export type RelayDestinationId =
   | "logs"
   | "proxy"
   | "files"
+  | "database"
 
 export interface RelayDestination extends NavigationDestination {
   id: RelayDestinationId
@@ -518,6 +519,14 @@ export const relayDestinations = [
     label: "Terminal",
     permission: "relay.terminal",
     to: "/relay/$relayId/terminal",
+  },
+  {
+    icon: Database,
+    id: "database",
+    keywords: ["sqlite", "state", "tables", "query"],
+    label: "Database",
+    permission: "relay.database.read",
+    to: "/relay/$relayId/database",
   },
   {
     icon: ScrollText,

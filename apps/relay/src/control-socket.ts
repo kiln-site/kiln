@@ -964,6 +964,8 @@ function actionForRequest(request: RelayControlRequest): RelayAction | null {
     case "relay.terminal.claim":
     case "relay.terminal.restart":
       return "relay.terminal"
+    case "relay.database.read":
+      return "relay.database.read"
     case "relay.host.read":
     case "relay.proxy.read":
       return "relay.read"
