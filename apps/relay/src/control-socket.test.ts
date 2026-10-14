@@ -2,8 +2,10 @@ import { generateKeyPairSync, randomBytes, sign, verify } from "node:crypto"
 import { once } from "node:events"
 import { mkdtempSync, rmSync } from "node:fs"
 import { createServer } from "node:http"
+import type { AddressInfo } from "node:net"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
+import type { Duplex } from "node:stream"
 import { ManagedRuntime } from "effect"
 import type { Effect } from "effect"
 import { WebSocket } from "ws"
@@ -30,6 +32,7 @@ import { fingerprint } from "./effect/identity.js"
 import { makeRelayStateLayer, RelayStateStore } from "./effect/state.js"
 import type { RelayClientRole } from "./effect/state.js"
 import type { RelayAction } from "./permissions.js"
+import { sendRawRequest } from "./test/raw-http.js"
 
 describe("Relay control socket", () => {
   it("authenticates a paired Hearth with signed challenges and serves its requests", async () => {
@@ -65,6 +68,22 @@ describe("Relay control socket", () => {
       replyTo: id,
       type: "response",
     })
+  })
+
+  it("ignores upgrade targets that URL parsing rejects instead of crashing", async () => {
+    const relay = await startRelay()
+    const address = relay.server.address() as AddressInfo
+    const upgraded = once(relay.server, "upgrade")
+
+    const malformed = sendRawRequest(address.port, "//%", { upgrade: true })
+    // Listeners run in registration order; the control socket's has returned.
+    const [, upgradedSocket] = (await upgraded) as [unknown, Duplex]
+    // Production answers these with 400 from index.ts; this harness has no
+    // such listener, so release the parked socket.
+    upgradedSocket.destroy()
+    malformed.destroy()
+    const { inbox } = await relay.open()
+    expect((await inbox.next()).type).toBe("auth.challenge")
   })
 
   it("rejects an identity proof signed by a different key", async () => {
@@ -574,6 +593,7 @@ async function startRelay(
     },
     control,
     open,
+    server,
     pair: async (
       grant: {
         readonly actions?: ReadonlyArray<RelayAction>

@@ -127,6 +127,7 @@ import { normalizedRoute } from "./route-label.js"
 import { uploadConsoleLogToMclogs } from "./mclogs.js"
 import { closeRelayServer } from "./shutdown.js"
 import { handleHealthRequest, listenRelayHealthServerEffect } from "./health.js"
+import { requestUrl } from "./request-url.js"
 import { attachSftpServer } from "./sftp-server.js"
 import { actionsForRole, relayActions } from "./permissions.js"
 import type { RelayAction } from "./permissions.js"
@@ -601,6 +602,15 @@ const requestHandler = (
   request: IncomingMessage,
   response: ServerResponse
 ): void => {
+  // Route handlers below parse the target with `new URL()`; reject what it
+  // cannot parse (e.g. `//%`) before they run.
+  if (!requestUrl(request)) {
+    json(response, 400, {
+      error: "Invalid request target",
+      code: "invalid_request",
+    })
+    return
+  }
   Effect.runFork(
     relayOperation(async () => {
       if (handleHealthRequest(request, response)) return
@@ -621,7 +631,7 @@ const requestHandler = (
             return
           }
           Sentry.captureException(cause, {
-            tags: { "kiln.operation": normalizedRequestOperation(request.url) },
+            tags: { "kiln.operation": normalizedRequestOperation(request) },
           })
           console.error(cause)
           json(response, 500, {
@@ -650,6 +660,12 @@ const controlSocket = attachControlSocket({
   state: startup.state,
   subscribeSnapshots: (listener) =>
     snapshotHub.subscribe(({ snapshot }) => listener(snapshot), false),
+})
+server.on("upgrade", (request, socket) => {
+  // The socket upgrade listeners ignore targets they cannot parse; close them.
+  if (requestUrl(request)) return
+  socket.on("error", () => socket.destroy())
+  socket.end("HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n")
 })
 const browserSocket = attachBrowserSocket({
   config,
@@ -2287,8 +2303,8 @@ function serializeWebRouteMutation<T>(mutate: () => Promise<T>): Promise<T> {
   return Effect.runPromise(webRouteMutation.withPermit(relayOperation(mutate)))
 }
 
-function normalizedRequestOperation(url: string | undefined): string {
-  return normalizedRoute(new URL(url ?? "/", "http://relay").pathname)
+function normalizedRequestOperation(request: IncomingMessage): string {
+  return normalizedRoute(requestUrl(request)?.pathname ?? "/")
 }
 
 function listenRelayServerEffect(

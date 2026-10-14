@@ -78,6 +78,7 @@ import {
   BROWSER_ISSUED_AT_SKEW_MS,
   isCanonicalBrowserFileProofNonce,
 } from "./browser-security.js"
+import { requestUrl } from "./request-url.js"
 import type { Server } from "node:http"
 import type { IncomingMessage, ServerResponse } from "node:http"
 
@@ -241,8 +242,7 @@ export function attachBrowserSocket(
   })
 
   options.server.on("upgrade", (request, socket, head) => {
-    const url = new URL(request.url ?? "/", "http://relay")
-    if (url.pathname !== "/v1/browser") return
+    if (requestUrl(request)?.pathname !== "/v1/browser") return
     const requestedProtocols = parseProtocols(
       request.headers["sec-websocket-protocol"]
     )

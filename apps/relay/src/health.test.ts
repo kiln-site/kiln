@@ -4,6 +4,7 @@ import { Effect } from "effect"
 import { describe, expect, it, onTestFinished } from "vite-plus/test"
 
 import { listenRelayHealthServerEffect } from "./health.js"
+import { rawStatusLine } from "./test/raw-http.js"
 
 async function listen(port = 0) {
   const server = await Effect.runPromise(listenRelayHealthServerEffect(port))
@@ -40,6 +41,13 @@ describe("Relay health listener", () => {
     expect(await status("/")).toBe(404)
     expect(await status("/pair")).toBe(404)
     expect(await status("/backups/download")).toBe(404)
+  })
+
+  it("survives request targets that URL parsing rejects", async () => {
+    const { port } = await listen()
+
+    expect(await rawStatusLine(port, "//%")).toMatch(/^HTTP\/1\.1 404 /u)
+    expect(await rawStatusLine(port, "/health")).toMatch(/^HTTP\/1\.1 204 /u)
   })
 
   it("binds only to loopback", async () => {

@@ -1,6 +1,9 @@
 import { createHash, generateKeyPairSync, sign } from "node:crypto"
 import type { KeyObject } from "node:crypto"
+import { once } from "node:events"
 import { createServer, request as httpRequest } from "node:http"
+import type { Server } from "node:http"
+import type { Duplex } from "node:stream"
 import { Effect } from "effect"
 import { afterEach, describe, expect, it, vi } from "vite-plus/test"
 import { WebSocket } from "ws"
@@ -16,6 +19,7 @@ import {
 import { attachBrowserSocket } from "./browser-socket.js"
 import type { BrowserSocketServer } from "./browser-socket.js"
 import { consoleSources } from "./console-sources.js"
+import { sendRawRequest } from "./test/raw-http.js"
 import type { RelayStateStore } from "./effect/state.js"
 import type { RelayIdentity } from "./effect/identity.js"
 import type { DockerConsoleSession, DockerDriver } from "./docker.js"
@@ -33,6 +37,21 @@ afterEach(async () => {
 })
 
 describe("relay browser socket integration", () => {
+  it("ignores upgrade targets that URL parsing rejects instead of crashing", async () => {
+    const relay = await startRelay()
+    const upgraded = once(relay.server, "upgrade")
+
+    const malformed = sendRawRequest(relay.port, "//%", { upgrade: true })
+    // Listeners run in registration order; the browser socket's has returned.
+    const [, upgradedSocket] = (await upgraded) as [unknown, Duplex]
+    // Production answers these with 400 from index.ts; this harness has no
+    // such listener, so release the parked socket.
+    upgradedSocket.destroy()
+    malformed.destroy()
+    const messages = messageCollector(relay.connect(origin))
+    expect(await messages.next("auth.challenge")).toBeDefined()
+  })
+
   it("authenticates, renews with nonce rotation, and closes on a revision floor", async () => {
     const relay = await startRelay()
     const socket = relay.connect(origin)
@@ -317,6 +336,7 @@ interface TestRelay {
   readonly issuerPrivateKey: KeyObject
   readonly nextFileRequest: () => Promise<void>
   readonly port: number
+  readonly server: Server
   readonly setAuthority: (authority: {
     issuerGeneration: number
     minimumRevision: number
@@ -508,6 +528,7 @@ async function startRelay(
         fileRequests.push(resolve)
       }),
     port: address.port,
+    server,
     setAuthority: (authority) => {
       currentAuthority = authority
     },

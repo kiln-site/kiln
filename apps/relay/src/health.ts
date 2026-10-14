@@ -6,6 +6,8 @@ import {
 } from "node:http"
 import { Effect } from "effect"
 
+import { requestUrl } from "./request-url.js"
+
 // Docker's HEALTHCHECK runs inside the Relay's network namespace, so the
 // probe listener never needs to leave loopback.
 const healthHost = "127.0.0.1"
@@ -17,8 +19,7 @@ export function handleHealthRequest(
 ): boolean {
   const method = request.method ?? "GET"
   if (method !== "GET" && method !== "HEAD") return false
-  const url = new URL(request.url ?? "/", "http://relay")
-  if (url.pathname !== "/health") return false
+  if (requestUrl(request)?.pathname !== "/health") return false
   response.writeHead(204, { "Cache-Control": "no-store" }).end()
   return true
 }

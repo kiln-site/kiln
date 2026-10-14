@@ -46,6 +46,7 @@ import {
 import { relayBuildLabel } from "./build-info.js"
 import { isSourceAllowed } from "./source-policy.js"
 import { createRelaySnapshotDelta } from "./snapshot-delta.js"
+import { requestUrl } from "./request-url.js"
 import type { RelayAction } from "./permissions.js"
 import type { RelayIdentity } from "./effect/identity.js"
 import type { RelayClientGrant, RelayStateStore } from "./effect/state.js"
@@ -117,8 +118,7 @@ export function attachControlSocket(
   })
 
   options.server.on("upgrade", (request, socket, head) => {
-    const url = new URL(request.url ?? "/", "http://relay")
-    if (url.pathname !== "/v1/socket") return
+    if (requestUrl(request)?.pathname !== "/v1/socket") return
     const protocols = parseProtocols(request.headers["sec-websocket-protocol"])
     if (!protocols.includes(relayControlProtocol)) {
       socket.write("HTTP/1.1 426 Upgrade Required\r\nConnection: close\r\n\r\n")
