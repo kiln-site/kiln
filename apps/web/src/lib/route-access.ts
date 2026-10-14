@@ -126,55 +126,27 @@ export async function redirectToFirstAccessibleServerDestination(
   throw redirect({ href: firstAccessibleAppHref(capabilities), replace: true })
 }
 
-// A workspace's destinations the person can open, and where to send them
-// when the one they asked for is not among them: the first they can open, or
-// out of the workspace.
-async function resourceDestinations<D extends { id: string }>(
-  queryClient: QueryClient,
-  destinations: (
-    capabilities: NavigationAccessCapabilities
-  ) => ReadonlyArray<D>,
-  href: (destination: D) => string
-) {
-  const capabilities = await routeAccessCapabilities(queryClient)
-  const accessible = destinations(capabilities)
-  const fallback = accessible[0]
-  return {
-    accessible,
-    fallback: redirect({
-      href: fallback ? href(fallback) : firstAccessibleAppHref(capabilities),
-      replace: true,
-    }),
-  }
-}
-
+// Allows a workspace destination the person can open. Otherwise, or when no
+// destination is asked for, redirects to the first one they can open, or out
+// of the workspace.
 async function requireResourceDestination<D extends { id: string }>(
   queryClient: QueryClient,
   destinations: (
     capabilities: NavigationAccessCapabilities
   ) => ReadonlyArray<D>,
-  destinationId: D["id"],
-  href: (destination: D) => string
+  href: (destination: D) => string,
+  destinationId?: D["id"]
 ): Promise<void> {
-  const { accessible, fallback } = await resourceDestinations(
-    queryClient,
-    destinations,
-    href
-  )
+  const capabilities = await routeAccessCapabilities(queryClient)
+  const accessible = destinations(capabilities)
   if (accessible.some((destination) => destination.id === destinationId)) {
     return
   }
-  throw fallback
-}
-
-async function redirectToFirstResourceDestination<D extends { id: string }>(
-  queryClient: QueryClient,
-  destinations: (
-    capabilities: NavigationAccessCapabilities
-  ) => ReadonlyArray<D>,
-  href: (destination: D) => string
-): Promise<never> {
-  throw (await resourceDestinations(queryClient, destinations, href)).fallback
+  const fallback = accessible[0]
+  throw redirect({
+    href: fallback ? href(fallback) : firstAccessibleAppHref(capabilities),
+    replace: true,
+  })
 }
 
 type RouteDatabase = Parameters<typeof accessibleDestinationsForDatabase>[0]
@@ -188,8 +160,8 @@ export function requireDatabaseDestinationAccess(
   return requireResourceDestination(
     queryClient,
     (capabilities) => accessibleDestinationsForDatabase(database, capabilities),
-    destinationId,
-    (destination) => databaseDestinationHref(destination, routeId)
+    (destination) => databaseDestinationHref(destination, routeId),
+    destinationId
   )
 }
 
@@ -197,8 +169,8 @@ export function redirectToFirstAccessibleDatabaseDestination(
   queryClient: QueryClient,
   database: RouteDatabase,
   routeId: string
-): Promise<never> {
-  return redirectToFirstResourceDestination(
+): Promise<void> {
+  return requireResourceDestination(
     queryClient,
     (capabilities) => accessibleDestinationsForDatabase(database, capabilities),
     (destination) => databaseDestinationHref(destination, routeId)
@@ -214,8 +186,8 @@ export function requireAppDestinationAccess(
   return requireResourceDestination(
     queryClient,
     (capabilities) => accessibleDestinationsForApp(app, capabilities),
-    destinationId,
-    (destination) => appDestinationHref(destination, routeId)
+    (destination) => appDestinationHref(destination, routeId),
+    destinationId
   )
 }
 
@@ -223,8 +195,8 @@ export function redirectToFirstAccessibleAppDestination(
   queryClient: QueryClient,
   app: { relayId: string },
   routeId: string
-): Promise<never> {
-  return redirectToFirstResourceDestination(
+): Promise<void> {
+  return requireResourceDestination(
     queryClient,
     (capabilities) => accessibleDestinationsForApp(app, capabilities),
     (destination) => appDestinationHref(destination, routeId)
@@ -240,8 +212,8 @@ export function requireRelayDestinationAccess(
   return requireResourceDestination(
     queryClient,
     (capabilities) => accessibleDestinationsForRelay(relay, capabilities),
-    destinationId,
-    (destination) => relayDestinationHref(destination, routeId)
+    (destination) => relayDestinationHref(destination, routeId),
+    destinationId
   )
 }
 
@@ -249,8 +221,8 @@ export function redirectToFirstAccessibleRelayDestination(
   queryClient: QueryClient,
   relay: { id: string },
   routeId: string
-): Promise<never> {
-  return redirectToFirstResourceDestination(
+): Promise<void> {
+  return requireResourceDestination(
     queryClient,
     (capabilities) => accessibleDestinationsForRelay(relay, capabilities),
     (destination) => relayDestinationHref(destination, routeId)

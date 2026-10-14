@@ -32,6 +32,7 @@ import {
   relaysQueryOptions,
 } from "@/lib/query-options"
 import {
+  relayAddress,
   relayRouteIdentifier,
   resolveRelayRoute,
   type RelayDirectoryEntry,
@@ -139,14 +140,6 @@ function RelayHeaderActions({ relay }: { relay: RelayDirectoryEntry }) {
   })
   if (!canPause) return null
   return (
-    <RelayPauseButton
-      relay={{ enabled: relay.enabled, id: relay.id, name: relay.name }}
-    />
+<RelayPauseButton relay={relay} />
   )
-}
-
-export function relayAddress(
-  relay: Pick<RelayDirectoryEntry, "hostname" | "port" | "useTls">
-): string {
-  return `${relay.useTls ? "https" : "http"}://${relay.hostname}:${relay.port}`
 }

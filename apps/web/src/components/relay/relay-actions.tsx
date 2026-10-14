@@ -156,7 +156,7 @@ export function RemoveRelayDialog({
   name: string
   relayId: string
   onOpenChange: (open: boolean) => void
-  onRemoved?: () => void
+  onRemoved?: () => Promise<void>
 }) {
   const queryClient = useQueryClient()
   const pendingRef = React.useRef(false)
@@ -166,6 +166,9 @@ export function RemoveRelayDialog({
   const removeMutation = useMutation({
     mutationFn: removeRelay,
     onSuccess: async () => {
+      // Leave the Relay's pages before it disappears from the cache, so they
+      // don't flash as unavailable.
+      await onRemoved?.()
       queryClient.setQueryData<Array<PersistedRelay>>(
         queryKeys.relays,
         (current) => current?.filter((item) => item.id !== relayId)
@@ -201,7 +204,6 @@ export function RemoveRelayDialog({
             dismissToast(relayResumedToastId(relayId))
             dismissToast(relayResumeErrorToastId(relayId))
             onOpenChange(false)
-            onRemoved?.()
             showToast({
               message:
                 result.cleanupFailures.length > 0
@@ -343,7 +345,7 @@ export async function invalidateRelayRuntimeQueries(queryClient: QueryClient) {
   ])
 }
 
-export async function pauseRelay(
+async function pauseRelay(
   queryClient: QueryClient,
   relay: Pick<PersistedRelay, "id" | "name">
 ): Promise<void> {
@@ -363,7 +365,7 @@ export async function pauseRelay(
   showPausedRelayToast(queryClient, relay)
 }
 
-export async function resumeRelay(
+async function resumeRelay(
   queryClient: QueryClient,
   relay: Pick<PersistedRelay, "id" | "name">
 ): Promise<void> {

@@ -36,7 +36,6 @@ import { RelativeTime } from "@/components/relative-time"
 import { RelayMemoryCell } from "@/components/relay-memory-cell"
 import { RemoveRelayDialog } from "@/components/relay/relay-actions"
 import { useRelayLiveStatus } from "@/components/relay/relay-presentation"
-import { relayAddress } from "@/components/relay/relay-workspace"
 import { useRelayWorkspace } from "@/components/relay/relay-workspace-context"
 import { StatusIndicator } from "@/components/status-indicator"
 import { formatBytes } from "@/lib/format-bytes"
@@ -46,12 +45,11 @@ import {
   relaySnapshotQueryOptions,
 } from "@/lib/query-options"
 import type { RelayFleetSnapshot } from "@/lib/relay-fleet"
-import type { RelayDirectoryEntry } from "@/lib/relay-route"
+import { relayAddress, type RelayDirectoryEntry } from "@/lib/relay-route"
 
 // Who and where the Relay is, the machine it runs on, and how to remove it.
 export function RelayInfoPage() {
   const { relay } = useRelayWorkspace()
-  const status = useRelayLiveStatus(relay)
   const { data: canDelete = false } = useQuery({
     ...accessCapabilitiesQueryOptions(),
     select: (capabilities) =>
@@ -71,7 +69,7 @@ export function RelayInfoPage() {
           />
         </div>
         <RelayConnectionCard relay={relay} />
-        <RelayNodeCard connected={status.connected} relayId={relay.id} />
+        <RelayNodeCard relay={relay} />
         {canDelete ? <RelayDangerZone relay={relay} /> : null}
       </div>
     </section>
@@ -154,21 +152,17 @@ function RelayConnectionCard({ relay }: { relay: RelayDirectoryEntry }) {
           value={relay.browserOrigin || "Same as address"}
           mono
         />
-        <div className="flex min-h-14 items-center gap-3 border-b px-4 py-3 last:border-b-0">
-          <History className="size-3.5 shrink-0 text-muted-foreground" />
-          <span className="min-w-0 flex-1">
-            <span className="type-technical-label block text-muted-foreground">
-              Last connected
-            </span>
-            <span className="mt-0.5 block truncate text-xs font-medium">
-              {relay.lastConnectedAt ? (
-                <RelativeTime timestamp={Date.parse(relay.lastConnectedAt)} />
-              ) : (
-                "Never"
-              )}
-            </span>
-          </span>
-        </div>
+        <MetaRow
+          icon={History}
+          label="Last connected"
+          value={
+            relay.lastConnectedAt ? (
+              <RelativeTime timestamp={Date.parse(relay.lastConnectedAt)} />
+            ) : (
+              "Never"
+            )
+          }
+        />
       </div>
       {relay.lastError ? (
         <MetaRow
@@ -205,13 +199,9 @@ function selectRelayNode(relayId: string) {
   }
 }
 
-function RelayNodeCard({
-  connected,
-  relayId,
-}: {
-  connected: boolean
-  relayId: string
-}) {
+function RelayNodeCard({ relay }: { relay: RelayDirectoryEntry }) {
+  const relayId = relay.id
+  const { connected } = useRelayLiveStatus(relay)
   const select = React.useMemo(() => selectRelayNode(relayId), [relayId])
   const { data: node } = useQuery({ ...relaySnapshotQueryOptions(), select })
 
@@ -253,17 +243,11 @@ function RelayNodeCard({
             label="Storage"
             value={formatBytes(node.storageTotalBytes)}
           />
-          <div className="flex min-h-14 items-center gap-3 border-b px-4 py-3 last:border-b-0">
-            <MemoryStick className="size-3.5 shrink-0 text-muted-foreground" />
-            <span className="min-w-0 flex-1">
-              <span className="type-technical-label block text-muted-foreground">
-                Relay memory
-              </span>
-              <span className="mt-0.5 block text-xs">
-                <RelayMemoryCell connected={connected} relayId={relayId} />
-              </span>
-            </span>
-          </div>
+          <MetaRow
+            icon={MemoryStick}
+            label="Relay memory"
+            value={<RelayMemoryCell connected={connected} relayId={relayId} />}
+          />
         </div>
       ) : (
         <p className="px-4 py-5 text-sm text-muted-foreground">
@@ -300,7 +284,7 @@ function RelayDangerZone({ relay }: { relay: RelayDirectoryEntry }) {
           name={relay.name}
           relayId={relay.id}
           onOpenChange={setOpen}
-          onRemoved={() => void navigate({ to: "/infra/relays" })}
+          onRemoved={() => navigate({ to: "/infra/relays" })}
         />
       ) : null}
     </>

@@ -18,6 +18,22 @@ export interface RelayLiveStatus {
   updating: boolean
 }
 
+// A Relay's status from its entry in the shared connection poll, or `missing`
+// while the poll has no entry for it.
+export function relayLiveState(
+  enabled: boolean,
+  state: { status: string; updating?: boolean } | null | undefined,
+  missing: "checking" | "unknown"
+): { relayStatus: RelayIdentityStatus; updating: boolean } {
+  if (!enabled) return { relayStatus: "paused", updating: false }
+  const status = state?.status
+  return {
+    relayStatus:
+      status === "connected" || status === "unreachable" ? status : missing,
+    updating: state?.updating === true,
+  }
+}
+
 // Whether Hearth reaches the Relay now, from the shared connection poll.
 export function useRelayLiveStatus(relay: {
   enabled: boolean
@@ -42,17 +58,13 @@ export function useRelayLiveStatus(relay: {
   })
   // Structural sharing keeps `state` stable while the Relay's state is.
   return React.useMemo(() => {
-    const status = state?.status
-    const updating = state?.updating === true
-    const relayStatus: RelayIdentityStatus = !relay.enabled
-      ? "paused"
-      : status === "connected" || status === "unreachable"
-        ? status
-        : isPending
-          ? "checking"
-          : "unknown"
+    const { relayStatus, updating } = relayLiveState(
+      relay.enabled,
+      state,
+      isPending ? "checking" : "unknown"
+    )
     return {
-      connected: relay.enabled && status === "connected",
+      connected: relayStatus === "connected",
       presentation: relayStatusPresentation({
         enabled: relay.enabled,
         lastError: relay.lastError,

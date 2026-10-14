@@ -13,3 +13,9 @@ export const relayRouteIdentifier = shortIdRouteIdentifier
 const relaySelection = shortIdRouteSelection("relay")
 export const relaySelectionRouteId = relaySelection.toSelection
 export const relayRouteIdFromSelection = relaySelection.fromSelection
+
+export function relayAddress(
+  relay: Pick<RelayDirectoryEntry, "hostname" | "port" | "useTls">
+): string {
+  return `${relay.useTls ? "https" : "http"}://${relay.hostname}:${relay.port}`
+}

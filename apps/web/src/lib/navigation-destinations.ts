@@ -538,9 +538,7 @@ export function relayDestinationHref(
   destination: RelayDestination,
   routeId: string
 ): string {
-  return destination.to
-    .replace("$relayId", encodeURIComponent(routeId))
-    .replace(/\/\$$/u, "/")
+  return destination.to.replace("$relayId", encodeURIComponent(routeId))
 }
 
 export function accessibleInfrastructureDestinations(

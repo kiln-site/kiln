@@ -74,6 +74,7 @@ import {
   showRelayError,
   updateRelayCache,
 } from "@/components/relay/relay-actions"
+import { relayLiveState } from "@/components/relay/relay-presentation"
 import { CopyIdentifierMenuItem } from "@/components/copy-identifier-menu-item"
 import {
   FavoritesOnlyButton,
@@ -110,6 +111,7 @@ import {
   minecraftUsernameKey,
 } from "@/lib/minecraft-profile"
 import { pairingFeedbackFrom } from "@/lib/relay-pairing-errors"
+import { relayAddress } from "@/lib/relay-route"
 import { canRefetchSystemUpdateOverview } from "@/lib/system-update-presence"
 import {
   accessCapabilitiesQueryOptions,
@@ -281,11 +283,11 @@ function projectRelayTableItems(
   missingStatus: "checking" | "unknown"
 ): Array<RelayTableItem> | undefined {
   return relays?.map((relay) => {
-    const connection = relayStatuses.get(relay.id)
-    const relayStatus = relay.enabled
-      ? (connection?.status ?? missingStatus)
-      : "paused"
-    const updating = relay.enabled && connection?.updating === true
+    const { relayStatus, updating } = relayLiveState(
+      relay.enabled,
+      relayStatuses.get(relay.id),
+      missingStatus
+    )
     let statusCache = relayTableItemCache.get(relay)
     if (!statusCache) {
       statusCache = new Map()
@@ -857,7 +859,7 @@ function RelayTable({
           return (
             <DataTableTextCell
               monospace
-              title={`${relay.useTls ? "https" : "http"}://${relay.hostname}:${relay.port}`}
+              title={relayAddress(relay)}
               value={relay.hostname}
             />
           )
