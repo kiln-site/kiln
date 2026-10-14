@@ -452,7 +452,7 @@ export const appDestinations = [
     keywords: ["data", "volumes", "upload"],
     label: "Files",
     permission: "app.files.read",
-    to: "/app/$appId/files",
+    to: "/app/$appId/files/$",
   },
   {
     icon: SlidersHorizontal,

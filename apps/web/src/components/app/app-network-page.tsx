@@ -107,7 +107,9 @@ export function AppNetworkPage() {
               compose={config.data.config.sourceType === "compose"}
             />
             <PublishedPorts
-              key={config.dataUpdatedAt}
+              // A fresh form when the saved ports change, and only then:
+              // refetches of the same ports keep unsaved edits.
+              key={JSON.stringify(config.data.config.ports)}
               app={app}
               canManage={canManage}
               compose={config.data.config.sourceType === "compose"}

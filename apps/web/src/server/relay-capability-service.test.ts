@@ -450,6 +450,18 @@ describe("Relay capability issuance orchestration", () => {
       granted = ["instance.files.read", "instance.files.write"]
       await expect(issueFiles("instance.files.download")).rejects.toThrow()
     })
+
+    // The Relay refuses write capabilities that outlive its 30-second lease.
+    it("issues app uploads within the Relay's write lease", async () => {
+      granted = ["app.files.write"]
+
+      const payload = decodeCapabilityPayload(
+        (await issueFiles("instance.files.upload")).capability
+      )
+
+      expect(payload.actions).toEqual(["app.files.upload"])
+      expect(Number(payload.expiresAt) - Number(payload.issuedAt)).toBe(30_000)
+    })
   })
 
   it("uses the generation synchronized after stale issuance material was loaded", async () => {

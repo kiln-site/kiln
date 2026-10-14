@@ -584,7 +584,8 @@ const createBrowserCapabilityEffect = Effect.fn("relay.capability.sign")(
         const mutation = input.actions.some(
           (action) =>
             action === "instance.console.write" ||
-            action === "instance.files.upload"
+            action === "instance.files.upload" ||
+            action === "app.files.upload"
         )
         const payload = {
           actions: input.actions,

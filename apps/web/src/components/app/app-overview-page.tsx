@@ -61,6 +61,12 @@ type EditableConfig = Omit<AppConfig, "databaseIds">
 export function AppOverviewPage() {
   const { app } = useAppWorkspace()
   const config = useQuery(appConfigQueryOptions(app.relayId, app.id))
+  // A fresh form when the saved configuration changes, and only then:
+  // refetches of the same configuration keep unsaved edits.
+  const formKey = React.useMemo(
+    () => JSON.stringify(config.data ?? null),
+    [config.data]
+  )
 
   return (
     <section className="min-h-0 flex-1 overflow-y-auto bg-card">
@@ -69,8 +75,7 @@ export function AppOverviewPage() {
           <div className="flex min-w-0 flex-col gap-4">
             {config.data ? (
               <AppConfigForm
-                // A fresh form for each saved configuration.
-                key={config.dataUpdatedAt}
+                key={formKey}
                 app={app}
                 canManage={
                   app.permissions.includes("app.manage") &&
