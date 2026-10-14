@@ -565,6 +565,8 @@ function launchBatchHelperEffect(
         `kiln-updater-${input.batchId}`,
         "--label",
         "io.kiln.update-helper=true",
+        // The helper runs the Relay image without its health endpoint.
+        "--no-healthcheck",
         "--volumes-from",
         input.volumesFrom,
         "--env",
