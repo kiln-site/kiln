@@ -2,7 +2,7 @@ import { readFile } from "node:fs/promises"
 
 import * as Sentry from "@sentry/node"
 import type { RelayProcessMemory } from "@workspace/contracts"
-import { Predicate } from "effect"
+import { Effect, Predicate } from "effect"
 
 type ContainerMemory = NonNullable<RelayProcessMemory["container"]>
 
@@ -65,26 +65,33 @@ function containerMemory(): Promise<ContainerMemory | null> {
   ) {
     return containerSample.value
   }
-  const value = readContainerMemory()
+  const value = Effect.runPromise(readContainerMemory())
   containerSample = { sampledAt: now, value }
   return value
 }
 
-async function readContainerMemory(): Promise<ContainerMemory | null> {
-  const [current, max, stat] = await Promise.all([
-    readFile(`${cgroupDirectory}/memory.current`, "utf8").catch(
-      (cause: unknown) => {
-        // No memory.current means cgroup v1, a host process, or a host cgroup
-        // namespace (the root cgroup has no memory.current); none of these
-        // change while the Relay runs. Other failures, such as EMFILE during
-        // heavy file activity, are retried once the cached sample expires.
-        if (isMissingFile(cause)) cgroupUnavailable = true
-        return null
-      }
-    ),
-    readCgroupFile("memory.max"),
-    readCgroupFile("memory.stat"),
-  ])
+const readContainerMemory = Effect.fnUntraced(function* () {
+  const [current, max, stat] = yield* Effect.all(
+    [
+      readCgroupFile("memory.current").pipe(
+        Effect.catchIf(isMissingFile, () =>
+          // No memory.current means cgroup v1, a host process, or a host
+          // cgroup namespace (the root cgroup has no memory.current); none of
+          // these change while the Relay runs.
+          Effect.sync(() => {
+            cgroupUnavailable = true
+            return null
+          })
+        ),
+        // Other failures, such as EMFILE during heavy file activity, are
+        // retried once the cached sample expires.
+        Effect.orElseSucceed(() => null)
+      ),
+      readCgroupFile("memory.max").pipe(Effect.orElseSucceed(() => null)),
+      readCgroupFile("memory.stat").pipe(Effect.orElseSucceed(() => null)),
+    ],
+    { concurrency: "unbounded" }
+  )
   const usedBytes = current === null ? null : byteCount(current)
   if (usedBytes === null) return null
   const values = stat === null ? null : memoryStatValues(stat)
@@ -96,8 +103,8 @@ async function readContainerMemory(): Promise<ContainerMemory | null> {
     activeFileBytes: values?.active_file ?? null,
     inactiveFileBytes: values?.inactive_file ?? null,
     kernelBytes: values?.kernel ?? null,
-  }
-}
+  } satisfies ContainerMemory
+})
 
 const memoryStatKeys = new Set([
   "anon",
@@ -133,6 +140,9 @@ function isMissingFile(cause: unknown): boolean {
   )
 }
 
-function readCgroupFile(name: string): Promise<string | null> {
-  return readFile(`${cgroupDirectory}/${name}`, "utf8").catch(() => null)
+function readCgroupFile(name: string): Effect.Effect<string, unknown> {
+  return Effect.tryPromise({
+    try: () => readFile(`${cgroupDirectory}/${name}`, "utf8"),
+    catch: (cause) => cause,
+  })
 }
