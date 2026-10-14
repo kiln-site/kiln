@@ -31,6 +31,7 @@ import {
   ResourceUsersCard,
 } from "@/components/info-card"
 import { InstanceFavoriteButton } from "@/components/instance-favorite"
+import { LocalDateTime } from "@/components/local-date-time"
 import { RelativeTime } from "@/components/relative-time"
 import { RelayMemoryCell } from "@/components/relay-memory-cell"
 import { RemoveRelayDialog } from "@/components/relay/relay-actions"
@@ -46,11 +47,6 @@ import {
 } from "@/lib/query-options"
 import type { RelayFleetSnapshot } from "@/lib/relay-fleet"
 import type { RelayDirectoryEntry } from "@/lib/relay-route"
-
-const dateFormatter = new Intl.DateTimeFormat(undefined, {
-  dateStyle: "medium",
-  timeStyle: "short",
-})
 
 // Who and where the Relay is, the machine it runs on, and how to remove it.
 export function RelayInfoPage() {
@@ -117,7 +113,7 @@ function RelayIdentityCard({ relay }: { relay: RelayDirectoryEntry }) {
         <MetaRow
           icon={CalendarClock}
           label="Paired"
-          value={dateFormatter.format(new Date(relay.createdAt))}
+          value={<LocalDateTime timestamp={relay.createdAt} />}
         />
       </div>
     </InfoCard>
@@ -239,9 +235,11 @@ function RelayNodeCard({
             icon={Timer}
             label="Started"
             value={
-              node.startedAt
-                ? dateFormatter.format(new Date(node.startedAt))
-                : "Unknown"
+              node.startedAt ? (
+                <LocalDateTime timestamp={node.startedAt} />
+              ) : (
+                "Unknown"
+              )
             }
           />
           <MetaRow icon={Cpu} label="CPU cores" value={String(node.cores)} />
