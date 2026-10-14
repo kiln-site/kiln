@@ -27,6 +27,11 @@ export function appIdFromFileRoot(id: string): string | null {
   return resourceIdPattern.test(appId) ? appId : null
 }
 
+// A server's files, the only roots with recent and pinned files.
+export function isServerFileRoot(id: string): boolean {
+  return !appIdFromFileRoot(id) && !isRelayFileRoot(id)
+}
+
 // An app's service joins a Tailscale network as `app:<appId>:<service>`
 // wherever a server would be named by its ID.
 const appMemberPattern =

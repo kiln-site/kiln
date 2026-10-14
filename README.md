@@ -48,12 +48,17 @@ Generate secrets with `openssl rand -base64 48`. `BETTER_AUTH_SECRETS` is versio
 
 The Relay workspace includes a root terminal on its Docker host, protected by
 `relay.terminal`. Set `KILN_RELAY_HOST_ACCESS=false` on the Relay to disable host
-access. The Files page uses the same browser and editor as server and app files,
-with separate `relay.files.read` and `relay.files.write` permissions. Container
-installs must mount `/:/host:rw,rslave` (included in the Compose files).
-Its small shell helper is created on first use and removed when host
+access. Its small shell helper is created on first use and removed when host
 access is disabled. Each person's session survives page and Hearth reconnects
 and closes after the configured terminal idle timeout.
+
+The Files page browses and edits the host's files with the same browser and
+editor as server and app files, protected by `relay.files.read` and
+`relay.files.write`. It needs the host's filesystem mounted at `/host`, which
+`compose.host-files.yaml` adds: start the stack below with
+`docker compose -f compose.yaml -f compose.host-files.yaml up -d` to turn it on.
+Links with absolute targets resolve inside the Relay's container, so the Files
+page refuses to open them.
 
 Then:
 

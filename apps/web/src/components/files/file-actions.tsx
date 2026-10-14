@@ -52,16 +52,18 @@ function formatName(path: string) {
   return path.split("/").filter(Boolean).at(-1) ?? path
 }
 
-// The input sits after a fixed `/data/`, so drop that prefix from pasted paths.
-function withoutDataPrefix(value: string, rootPath: string) {
-  return rootPath
-    ? value.replace(/^\/+(?:data(?:\/+|$))?/u, "")
-    : value.replace(/^\/+/u, "")
+// The input sits after the root path, so drop it from pasted paths.
+function withoutRootPath(value: string, rootPath: string) {
+  const root = rootPath.replace(/^\/+/u, "")
+  return value.replace(
+    root ? new RegExp(`^/+(?:${root}(?:/+|$))?`, "u") : /^\/+/u,
+    ""
+  )
 }
 
 function moveTargetDirectory(value: string, rootPath: string): string | null {
   const directory = normalizeDirectoryPath(
-    withoutDataPrefix(value.trim().replace(/[\\/]+/gu, "/"), rootPath)
+    withoutRootPath(value.trim().replace(/[\\/]+/gu, "/"), rootPath)
   )
   const segments = directory.split("/")
   return segments.includes(".") || segments.includes("..") ? null : directory
@@ -492,7 +494,7 @@ export function FileActionDialogHost({
               aria-label={`Destination folder in ${rootPath || "/"}`}
               onFocus={(event) => event.currentTarget.select()}
               onChange={(event) =>
-                setValue(withoutDataPrefix(event.target.value, rootPath))
+                setValue(withoutRootPath(event.target.value, rootPath))
               }
               onKeyDown={(event) => {
                 if (event.key === "Enter") {

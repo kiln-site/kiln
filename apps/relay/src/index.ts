@@ -7,7 +7,7 @@ import {
 import { createServer as createHttpServer } from "node:http"
 import { createServer as createHttpsServer } from "node:https"
 import { createHmac, randomBytes, randomUUID } from "node:crypto"
-import { mkdir } from "node:fs/promises"
+import { mkdir, stat } from "node:fs/promises"
 import { hostname } from "node:os"
 import { Effect, Schema, Semaphore } from "effect"
 
@@ -127,7 +127,7 @@ import {
   traefikRouteUpstream,
   traefikStaticConfiguration,
 } from "./traefik.js"
-import { forkPromise } from "./effect/promise.js"
+import { forkPromise, recoverPromise } from "./effect/promise.js"
 import {
   inspectEncryptedPlatformBackup,
   restoreEncryptedPlatformBackup,
@@ -288,17 +288,12 @@ async function hostFileRoot(id: string): Promise<FileRoot> {
   if (id !== relayIdentity.fingerprint) throw new Error("Relay not found")
   return { id, directory: "." }
 }
-async function hostRootAvailable(): Promise<boolean> {
-  try {
-    return (await import("node:fs/promises"))
-      .stat(config.hostRootDirectory)
-      .then(
-        (value) => value.isDirectory(),
-        () => false
-      )
-  } catch {
-    return false
-  }
+// Files need the host's filesystem mounted at the host root.
+function hostRootAvailable(): Promise<boolean> {
+  return recoverPromise(
+    async () => (await stat(config.hostRootDirectory)).isDirectory(),
+    () => false
+  )
 }
 const appDatabaseBrowser = new DatabaseBrowser(appFilesystem)
 // A helper left from when host access was on goes; one still in use has its

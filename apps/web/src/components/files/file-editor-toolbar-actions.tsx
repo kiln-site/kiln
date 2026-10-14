@@ -1,6 +1,10 @@
 import * as React from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import type { RelayFileActivity, RelayFileContent } from "@workspace/contracts"
+import {
+  isServerFileRoot,
+  type RelayFileActivity,
+  type RelayFileContent,
+} from "@workspace/contracts"
 import {
   ALargeSmall,
   Check,
@@ -372,12 +376,14 @@ function EditorOverflowMenu({
           <EditorCopyActionMenuItem sessionStore={sessionStore} />
           <EditorWrapActionMenuItem sessionStore={sessionStore} />
           <EditorRedactActionMenuItem sessionStore={sessionStore} />
-          <FilePinActionMenuItem
-            canWrite={canWrite}
-            editorLoading={loading}
-            instance={instance}
-            path={filePath}
-          />
+          {isServerFileRoot(instance.id) ? (
+            <FilePinActionMenuItem
+              canWrite={canWrite}
+              editorLoading={loading}
+              instance={instance}
+              path={filePath}
+            />
+          ) : null}
           <EditorReviewChangesMenuItem
             fileReadOnly={fileReadOnly}
             labelMode="dynamic"
@@ -719,12 +725,14 @@ function EditorMobileOverflowMenu({
             onSelect={() => setOpen(false)}
           />
           <EditorCopyActionMenuItem sessionStore={sessionStore} />
-          <FilePinActionMenuItem
-            canWrite={canWrite}
-            editorLoading={loading}
-            instance={instance}
-            path={filePath}
-          />
+          {isServerFileRoot(instance.id) ? (
+            <FilePinActionMenuItem
+              canWrite={canWrite}
+              editorLoading={loading}
+              instance={instance}
+              path={filePath}
+            />
+          ) : null}
           <EditorWrapActionMenuItem sessionStore={sessionStore} />
           <EditorRedactActionMenuItem sessionStore={sessionStore} />
           <EditorReviewChangesMenuItem

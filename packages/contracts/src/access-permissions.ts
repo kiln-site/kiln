@@ -593,7 +593,7 @@ const permissionCopy: Record<
   "relay.files.write": {
     label: "Edit host files",
     description:
-      "Create, upload, edit, move, and delete files on the Relay’s host.",
+      "Create, upload, edit, move, and delete files anywhere on the Relay’s host. Equivalent to root on the host.",
   },
   "relay.terminal": {
     label: "Open host terminal",

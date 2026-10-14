@@ -1,4 +1,3 @@
-import { isRelayFileRoot } from "@workspace/contracts"
 import { FileRootPathContext } from "@/components/files/file-root-context"
 import * as React from "react"
 import { prepareFileTreeInput } from "@pierre/trees"
@@ -119,7 +118,7 @@ export function FileWorkspace(props: FileWorkspaceProps) {
 
   return (
     <FileRootPathContext
-      value={isRelayFileRoot(props.instance.id) ? "" : "/data"}
+      value={props.route.kind === "relay" ? "" : "/data"}
     >
       <StableFileWorkspaceSurface
         instance={props.instance}

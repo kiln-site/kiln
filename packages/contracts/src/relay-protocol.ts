@@ -24,8 +24,9 @@ export const relayFileRequestReplayV1Feature = "file-request-replay-v1"
 export const relayConsoleResourcesV1Feature = "console-resources-v1"
 // The Relay deploys apps: Docker images, Dockerfiles, and Compose projects.
 export const relayAppsV1Feature = "apps-v1"
-// The Relay streams its own container's output as the `relay` console kind.
+// The Relay serves its host's files under its own ID as a file root.
 export const relayHostFilesV1Feature = "relay-host-files-v1"
+// The Relay streams its own container's output as the `relay` console kind.
 export const relayLogsV1Feature = "relay-logs-v1"
 // The Relay answers `relay.proxy.config.read` with its proxy configuration.
 export const relayProxyConfigurationV1Feature = "relay-proxy-configuration-v1"

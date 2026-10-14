@@ -1,0 +1,9 @@
+# Lets the Relay's Files page browse and edit its Docker host's filesystem.
+# Add it to the Compose stack only where people with relay.files.write
+# should have root over the host's files:
+#
+#   docker compose -f compose.yaml -f compose.host-files.yaml up -d
+services:
+  relay:
+    volumes:
+      - /:/host:rw,rslave

@@ -1,5 +1,6 @@
 import {
   chmod,
+  chown,
   cp,
   lstat,
   mkdir,
@@ -587,9 +588,16 @@ export class FilesystemDriver {
 
       const temporary = `${path}.hearth-${process.pid}-${randomUUID()}`
       return yield* Effect.acquireUseRelease(
-        filesystemOperation("write.temporary", () =>
-          writeFile(temporary, encoded, { mode: metadata.mode })
-        ),
+        filesystemOperation("write.temporary", async () => {
+          await writeFile(temporary, encoded)
+          // The copy replacing the file keeps its owner and mode. The Relay
+          // usually runs as root, so it would otherwise hand host and server
+          // files to root, and the umask would narrow their mode.
+          if (process.getuid?.() === 0) {
+            await chown(temporary, metadata.uid, metadata.gid)
+          }
+          await chmod(temporary, metadata.mode)
+        }),
         () =>
           filesystemOperation("write.replace", () =>
             rename(temporary, path)
@@ -2644,6 +2652,8 @@ function ensureContained(root: string, candidate: string) {
     : filesystemFailure(
         "path_outside_instance",
         "path",
-        "Path resolves outside the instance directory"
+        // Includes absolute links in host files: they resolve inside the
+        // Relay's container, not on the host.
+        "This path or a link in it leads outside these files"
       )
 }

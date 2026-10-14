@@ -1,8 +1,7 @@
 import { createHash } from "node:crypto"
 
 import {
-  appIdFromFileRoot,
-  isRelayFileRoot,
+  isServerFileRoot,
   relayFileActivitySchema,
   type RelayFileActivity,
 } from "@workspace/contracts"
@@ -204,13 +203,13 @@ const setFilePinnedEffect = Effect.fn("files.activity.setPinned")(function* (
   if (!updated) return yield* FilePinLimitError.make({ limit: pinnedFileLimit })
 })
 
-// Recent and pinned files belong to servers; app and host roots do not
-// insert resource keys into the server-only activity tables.
+// Recent and pinned files belong to servers; app and host roots don't keep
+// them in the server-only activity tables.
 export function listFileActivity(
   relayId: string,
   instanceId: string
 ): Promise<RelayFileActivity> {
-  if (appIdFromFileRoot(instanceId) || isRelayFileRoot(instanceId)) {
+  if (!isServerFileRoot(instanceId)) {
     return Promise.resolve({ files: [], instanceId })
   }
   return runAppEffect(
@@ -224,8 +223,7 @@ export function recordFileViewed(
   instanceId: string,
   path: string
 ): Promise<void> {
-  if (appIdFromFileRoot(instanceId) || isRelayFileRoot(instanceId))
-    return Promise.resolve()
+  if (!isServerFileRoot(instanceId)) return Promise.resolve()
   return runAppEffect(
     "files.activity.recordView",
     recordFileViewedEffect(relayId, instanceId, path)
@@ -237,8 +235,7 @@ export function recordFileEdited(
   instanceId: string,
   path: string
 ): Promise<void> {
-  if (appIdFromFileRoot(instanceId) || isRelayFileRoot(instanceId))
-    return Promise.resolve()
+  if (!isServerFileRoot(instanceId)) return Promise.resolve()
   return runAppEffect(
     "files.activity.recordEdit",
     recordFileEditedEffect(relayId, instanceId, path)
@@ -252,7 +249,7 @@ export async function setFilePinned(
   pinned: boolean,
   validPaths: ReadonlySet<string>
 ): Promise<RelayFileActivity> {
-  if (appIdFromFileRoot(instanceId) || isRelayFileRoot(instanceId)) {
+  if (!isServerFileRoot(instanceId)) {
     throw new Error("Pinning files is only available for servers")
   }
   await runAppEffect(

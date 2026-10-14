@@ -1,4 +1,5 @@
 import {
+  chmod,
   mkdtemp,
   mkdir,
   readFile,
@@ -265,6 +266,34 @@ describe("Relay legacy file tree", () => {
         assert.notInclude(
           tree.paths,
           "world/level-0/level-1/level-2/level-3/level-4/level-5/level-6/level-7/level-8/level-9/level-10/"
+        )
+      })
+    )
+  )
+})
+
+describe("Relay file editing", () => {
+  // Saving replaces the file with a new copy, which the umask would narrow.
+  it.effect("keeps a file's mode when saving it", () =>
+    withSetup(({ driver, instance, root }) =>
+      Effect.gen(function* () {
+        const path = resolve(root, "server.properties")
+        yield* fromPromise(() => writeFile(path, "motd=old\n"))
+        yield* fromPromise(() => chmod(path, 0o666))
+        const opened = yield* driver.read(instance, "server.properties")
+
+        yield* driver.write(instance, "server.properties", {
+          content: "motd=new\n",
+          expectedModifiedAt: opened.modifiedAt,
+        })
+
+        assert.strictEqual(
+          yield* fromPromise(() => readFile(path, "utf8")),
+          "motd=new\n"
+        )
+        assert.strictEqual(
+          (yield* fromPromise(() => stat(path))).mode & 0o777,
+          0o666
         )
       })
     )
