@@ -28,6 +28,7 @@ import type {
   RelayAuthChallenge,
   RelayControlOperation,
   RelayControlRequest,
+  RelayNode,
   RelayProxyBrowserMetadata,
   RelaySnapshot,
   RelaySnapshotDelta,
@@ -340,6 +341,15 @@ export function relayConnectionState(relayId: string): RelayConnectionState {
   )
 }
 
+/**
+ * The Relay node last pushed over this Hearth process's own control socket.
+ * Each process keeps its own connections, so this is null until this process
+ * has authenticated with the Relay. Callers must authorize the reader first.
+ */
+export function relayConnectionNode(relayId: string): RelayNode | null {
+  return connections.get(relayId)?.pushedNode ?? null
+}
+
 export function relayConnectionBrowserMetadata(
   relayId: string
 ): RelayProxyBrowserMetadata | null {
@@ -406,6 +416,13 @@ class RelayConnection {
 
   get state(): RelayConnectionState {
     return this.#state
+  }
+
+  /** The node from the pushed snapshot, without consuming it for RPC reads. */
+  get pushedNode(): RelayNode | null {
+    return this.#state.status === "authenticated"
+      ? (this.#pushedSnapshot?.node ?? null)
+      : null
   }
 
   get browserMetadata(): RelayProxyBrowserMetadata | null {

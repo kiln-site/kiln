@@ -107,7 +107,7 @@ import type { PersistedRelay } from "@/lib/relay-registry"
 import { listPersistedRelays } from "@/lib/relay-registry"
 import { resolveMclogsApiUrl } from "@/lib/mclogs"
 import { publishRealtimeChange } from "@/lib/realtime-source.server"
-import { isRelayUpdating, relayConnectionState } from "@/lib/relay-connection"
+import { isRelayUpdating, relayConnectionNode } from "@/lib/relay-connection"
 import { updateInstanceSourceName } from "@/lib/instance-registry"
 
 const instanceInputSchema = z.object({
@@ -251,10 +251,12 @@ export const getRelaySnapshot = createServerFn({ method: "POST" }).handler(
 )
 
 /**
- * Live Relay memory for the Relays table. Reads Hearth's cached snapshot, which
- * Relays keep current through node resource deltas, so polling it costs no
- * extra Relay round trip. `relayMemory` is null for Relays that predate memory
- * reporting.
+ * Live Relay memory for the Relays table. After authorization it reads the node
+ * this process's control socket last received (kept current by node resource
+ * deltas): no Relay round trip, cache read, or snapshot validation. A Relay is
+ * omitted while this process has no authenticated connection to it, and its
+ * cell shows no reading; another Hearth process's sockets are not consulted.
+ * `relayMemory` is null for Relays that predate memory reporting.
  */
 export const getRelayMemoryReadings = createServerFn({
   method: "GET",
@@ -264,24 +266,13 @@ export const getRelayMemoryReadings = createServerFn({
     user,
     await listPersistedRelays()
   )
-  const readable = relays.filter(
-    (relay) =>
-      relay.enabled &&
-      canReadRelayNode(user, relay.id, grants) &&
-      relayConnectionState(relay.id).status === "authenticated"
-  )
-  const readings = await Promise.all(
-    readable.map((relay) =>
-      relaySnapshot(relay).then(
-        ({ node }) => ({
-          relayId: relay.id,
-          relayMemory: node.relayMemory ?? null,
-        }),
-        () => null
-      )
-    )
-  )
-  return readings.filter((reading) => reading !== null)
+  return relays.flatMap((relay) => {
+    if (!relay.enabled || !canReadRelayNode(user, relay.id, grants)) return []
+    const node = relayConnectionNode(relay.id)
+    return node
+      ? [{ relayId: relay.id, relayMemory: node.relayMemory ?? null }]
+      : []
+  })
 })
 
 export const getFreshRelayConnectionState = createServerFn({

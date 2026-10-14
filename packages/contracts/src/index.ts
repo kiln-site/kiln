@@ -1896,6 +1896,14 @@ export function applyRelaySnapshotDelta(
   snapshot: RelaySnapshot,
   delta: RelaySnapshotDelta
 ): RelaySnapshot {
+  // Node resource samples arrive every few seconds; keep the instances array.
+  if (delta.instances.length === 0 && delta.deletedInstanceIds.length === 0) {
+    return {
+      ...snapshot,
+      node: delta.node ?? snapshot.node,
+      relay: delta.relay ?? snapshot.relay,
+    }
+  }
   const deleted = new Set(delta.deletedInstanceIds)
   const upserts = new Map(
     delta.instances.map((instance) => [instance.id, instance])

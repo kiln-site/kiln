@@ -2,6 +2,7 @@ import { readFile } from "node:fs/promises"
 
 import * as Sentry from "@sentry/node"
 import type { RelayProcessMemory } from "@workspace/contracts"
+import { Predicate } from "effect"
 
 type ContainerMemory = NonNullable<RelayProcessMemory["container"]>
 
@@ -21,7 +22,7 @@ let metricsReportedAt = 0
 /**
  * Samples the Relay's own memory for the 2-second node snapshot. Process
  * numbers are free to read; the cgroup files are cached for a few seconds and
- * skipped for good once the Relay is known not to run in a cgroup v2 container.
+ * skipped for good once `memory.current` is known not to exist.
  */
 export async function relayProcessMemory(): Promise<RelayProcessMemory> {
   const usage = process.memoryUsage()
@@ -71,18 +72,21 @@ function containerMemory(): Promise<ContainerMemory | null> {
 
 async function readContainerMemory(): Promise<ContainerMemory | null> {
   const [current, max, stat] = await Promise.all([
-    readCgroupFile("memory.current"),
+    readFile(`${cgroupDirectory}/memory.current`, "utf8").catch(
+      (cause: unknown) => {
+        // No memory.current means cgroup v1, a host process, or a host cgroup
+        // namespace (the root cgroup has no memory.current); none of these
+        // change while the Relay runs. Other failures, such as EMFILE during
+        // heavy file activity, are retried once the cached sample expires.
+        if (isMissingFile(cause)) cgroupUnavailable = true
+        return null
+      }
+    ),
     readCgroupFile("memory.max"),
     readCgroupFile("memory.stat"),
   ])
   const usedBytes = current === null ? null : byteCount(current)
-  if (usedBytes === null) {
-    // cgroup v1, a host process, or a cgroup namespace without memory
-    // accounting. None of these change while the Relay runs.
-    cgroupUnavailable = true
-    containerSample = null
-    return null
-  }
+  if (usedBytes === null) return null
   const values = stat === null ? null : memoryStatValues(stat)
   return {
     usedBytes,
@@ -120,6 +124,13 @@ function memoryStatValues(stat: string): Partial<Record<string, number>> {
 function byteCount(value: string): number | null {
   const parsed = Number(value.trim())
   return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : null
+}
+
+function isMissingFile(cause: unknown): boolean {
+  return (
+    Predicate.hasProperty(cause, "code") &&
+    (cause.code === "ENOENT" || cause.code === "ENOTDIR")
+  )
 }
 
 function readCgroupFile(name: string): Promise<string | null> {
