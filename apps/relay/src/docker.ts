@@ -1,20 +1,19 @@
 import { createHash } from "node:crypto"
-import { spawn } from "node:child_process"
 import { existsSync, readdirSync } from "node:fs"
 import { statfs } from "node:fs/promises"
 import { request } from "node:http"
 import { Socket } from "node:net"
 import { hostname } from "node:os"
 import { basename, relative, resolve } from "node:path"
-import { Cause, Effect, Option, Queue, Result, Semaphore, Stream } from "effect"
+import { Effect, Option, Queue, Result, Semaphore, Stream } from "effect"
 
 import {
   DATABASE_CONNECTION_LABEL_PREFIX,
   type DatabaseConnections,
   type DatabaseConnectionSnapshot,
 } from "./database-connections.js"
-import { command, commandEffect, commandLines } from "./command.js"
-import type { CommandResult } from "./command.js"
+import { command } from "./command.js"
+import { DockerEngine, type DockerLogOptions } from "./docker-engine.js"
 import type { BrickCatalog } from "./bricks.js"
 import { directoryApparentSizeEffect } from "./disk-usage.js"
 import { ensuringPromise } from "./effect/promise.js"
@@ -76,10 +75,7 @@ import {
   parseConsoleOutput,
   type ParsedConsoleLine,
 } from "./console-parsing.js"
-import {
-  dockerPublishedHostPortsFromListing,
-  procNetTcpHasListener,
-} from "./docker-port-parsing.js"
+import { procNetTcpHasListener } from "./docker-port-parsing.js"
 import { legacyDiskLimitAssignments } from "./resource-quotas.js"
 import { WEB_ROUTE_LABEL_PREFIX } from "./web-route-labels.js"
 import type { RelayWebRouteLabelSnapshot } from "./web-route-labels.js"
@@ -167,7 +163,8 @@ interface ConsoleTarget {
 interface LogTarget {
   component: ConsoleTarget["component"]
   id: string
-  since: Array<string>
+  since: string | undefined
+  tty: boolean
 }
 
 export interface DockerConsoleSession {
@@ -223,12 +220,6 @@ export interface RelaySftpPublication {
   status: RelaySftpPublicationStatus
 }
 
-type DockerCommandEffect = (
-  executable: string,
-  arguments_: Array<string>,
-  options?: { timeout?: number }
-) => Effect.Effect<CommandResult, unknown>
-
 export function relaySftpPublicationFromBindings(
   bindings: DockerPortBindings,
   containerPort: number
@@ -257,17 +248,13 @@ export const inspectRelaySftpPublicationEffect = Effect.fn(
   "relay.sftp.publication.inspect"
 )(function* (
   containerPort: number,
-  containerName: string = hostname(),
-  inspect: DockerCommandEffect = commandEffect
+  containerName: string,
+  inspectHostConfig: (container: string) => Effect.Effect<unknown, unknown>
 ) {
-  return yield* inspect(
-    "docker",
-    ["inspect", "--format", "{{json .HostConfig}}", containerName],
-    { timeout: 2_500 }
-  ).pipe(
-    Effect.flatMap((result) =>
+  return yield* inspectHostConfig(containerName).pipe(
+    Effect.flatMap((hostConfig) =>
       Effect.try({
-        try: () => decodeDockerSftpInspect(result.stdout),
+        try: () => decodeDockerSftpInspect(hostConfig),
         catch: (cause) => cause,
       })
     ),
@@ -286,11 +273,10 @@ function unknownRelaySftpPublication(port: number): RelaySftpPublication {
   return { port, status: "unknown" }
 }
 
-function decodeDockerSftpInspect(input: string): {
+function decodeDockerSftpInspect(parsed: unknown): {
   bindings: DockerPortBindings
   networkMode: string
 } {
-  const parsed: unknown = JSON.parse(input)
   if (!isUnknownRecord(parsed)) throw new Error("Invalid Docker port bindings")
   const networkMode = parsed.NetworkMode
   if (typeof networkMode !== "string") {
@@ -444,6 +430,7 @@ export class DockerDriver {
   readonly #consoleSizeStarts = new Map<string, string>()
   readonly #consoleSizePending = new Map<string, Promise<void>>()
   readonly #diskUsageCache = new Map<string, DiskUsageCacheEntry>()
+  readonly #engine: DockerEngine
   readonly #powerTransitions = new Map<string, InstancePowerTransition>()
   readonly #runtimeRecovery: RuntimeRecoveryManager
   readonly #lifecycleSessions = new Map<string, RelayStoredLifecycleSession>()
@@ -464,6 +451,7 @@ export class DockerDriver {
   ) {
     this.#bricks = bricks
     this.#config = config
+    this.#engine = new DockerEngine(config.dockerSocket)
     this.#resources = relayResourceNames(config)
     this.#runtimeRecovery = runtimeRecovery
     this.#state = state
@@ -529,9 +517,9 @@ export class DockerDriver {
           ) {
             return Effect.void
           }
-          return promiseEffect(() =>
-            command("docker", ["update", "--restart=no", config.service])
-          ).pipe(Effect.ignore)
+          return this.#engine
+            .setRestartPolicy(config.service, "no")
+            .pipe(Effect.ignore)
         },
         { concurrency: "unbounded", discard: true }
       )
@@ -741,15 +729,16 @@ export class DockerDriver {
       range.start === range.end
         ? `${range.start}/${protocol}`
         : `${range.start}-${range.end}/${protocol}`
-    const portsResult = await command("docker", [
-      "container",
-      "ls",
-      "--filter",
-      `publish=${publishedPort}`,
-      "--format",
-      "{{.Ports}}",
-    ])
-    return dockerPublishedHostPortsFromListing(portsResult.stdout, protocol)
+    const containers = await runEffect(
+      this.#engine.listContainers({ filters: { publish: [publishedPort] } })
+    )
+    return new Set(
+      containers.flatMap((container) =>
+        (container.Ports ?? []).flatMap((port) =>
+          port.Type === protocol && port.PublicPort ? [port.PublicPort] : []
+        )
+      )
+    )
   }
 
   resourceHistory(instanceId: string): Array<RelayInstanceResources> {
@@ -843,17 +832,23 @@ export class DockerDriver {
               ? (INSTANCE_STOP_TIMEOUT_SECONDS + 60) * 1_000
               : (INSTANCE_STOP_TIMEOUT_SECONDS + 15) * 1_000
         if (instance.managedByRelay) {
-          await command("docker", ["update", "--restart=no", instance.service])
-          const actionArguments =
-            action === "stop" || action === "restart"
-              ? [
-                  action,
-                  "--time",
-                  String(INSTANCE_STOP_TIMEOUT_SECONDS),
-                  instance.service,
-                ]
-              : [action, instance.service]
-          await command("docker", actionArguments, { timeout })
+          const engine = this.#engine
+          await runEffect(
+            Effect.gen(function* () {
+              yield* engine.setRestartPolicy(instance.service, "no")
+              const options = {
+                seconds: INSTANCE_STOP_TIMEOUT_SECONDS,
+                timeout,
+              }
+              yield* action === "start"
+                ? engine.startContainer(instance.service, { timeout })
+                : action === "stop"
+                  ? engine.stopContainer(instance.service, options)
+                  : action === "restart"
+                    ? engine.restartContainer(instance.service, options)
+                    : engine.killContainer(instance.service, { timeout })
+            })
+          )
         } else {
           const common = this.#composeArguments()
           const actionArguments =
@@ -926,12 +921,9 @@ export class DockerDriver {
       throw new Error("Relay can only recreate containers it created")
     }
 
-    const inspected = await command("docker", ["inspect", instance.service])
-    const current = (
-      JSON.parse(inspected.stdout) as Array<DockerRecreateInspect>
-    )[0]
-    if (!current)
-      throw new Error(`Docker could not inspect ${instance.service}`)
+    const current = await runEffect(
+      this.#engine.inspectContainer<DockerRecreateInspect>(instance.service)
+    )
 
     const labels = { ...current.Config.Labels }
     for (const label of Object.keys(labels)) {
@@ -994,24 +986,17 @@ export class DockerDriver {
     }
     this.#powerTransitions.set(instance.id, transition)
     const backupName = `${instance.service}-kiln-backup-${Date.now()}`
+    const engine = this.#engine
     let replacementCreated = false
     await runEffect(
-      promiseEffect(async () => {
+      Effect.gen(function* () {
         if (current.State.Running) {
-          await command(
-            "docker",
-            [
-              "stop",
-              "--time",
-              String(INSTANCE_STOP_TIMEOUT_SECONDS),
-              instance.service,
-            ],
-            {
-              timeout: (INSTANCE_STOP_TIMEOUT_SECONDS + 15) * 1_000,
-            }
-          )
+          yield* engine.stopContainer(instance.service, {
+            seconds: INSTANCE_STOP_TIMEOUT_SECONDS,
+            timeout: (INSTANCE_STOP_TIMEOUT_SECONDS + 15) * 1_000,
+          })
         }
-        await command("docker", ["rename", instance.service, backupName])
+        yield* engine.renameContainer(instance.service, backupName)
       }).pipe(
         Effect.onError(() =>
           Effect.all(
@@ -1038,10 +1023,8 @@ export class DockerDriver {
     }
     await runEffect(
       promiseEffect(async () => {
-        await this.#dockerJson(
-          "POST",
-          `/containers/create?name=${encodeURIComponent(instance.service)}`,
-          {
+        await runEffect(
+          engine.createContainer(instance.service, {
             ...current.Config,
             ExposedPorts: exposedPorts,
             HostConfig: {
@@ -1062,7 +1045,7 @@ export class DockerDriver {
                 },
               },
             },
-          }
+          })
         )
         replacementCreated = true
         const secondaryNetworks = portConfiguration
@@ -1075,21 +1058,20 @@ export class DockerDriver {
             ? [edgeNetwork]
             : []
         for (const network of new Set(secondaryNetworks)) {
-          const arguments_ = ["network", "connect"]
-          for (const alias of recreatedNetworkAliases(
-            current.NetworkSettings?.Networks?.[network]?.Aliases,
-            instance.service
-          )) {
-            arguments_.push("--alias", alias)
-          }
-          arguments_.push(network, instance.service)
-          await command("docker", arguments_)
+          await runEffect(
+            engine.connectNetwork(network, instance.service, {
+              aliases: recreatedNetworkAliases(
+                current.NetworkSettings?.Networks?.[network]?.Aliases,
+                instance.service
+              ),
+            })
+          )
         }
         await this.databaseConnections.reconcile(instance.id, instance.service)
         if (action !== "stop") {
-          await command("docker", ["start", instance.service], {
-            timeout: 120_000,
-          })
+          await runEffect(
+            engine.startContainer(instance.service, { timeout: 120_000 })
+          )
         }
         if (this.#powerTransitions.get(instance.id) === transition) {
           this.#powerTransitions.set(instance.id, {
@@ -1101,19 +1083,17 @@ export class DockerDriver {
         Effect.catch((cause) =>
           Effect.gen(function* () {
             if (replacementCreated) {
-              yield* promiseEffect(() =>
-                command("docker", ["rm", "--force", instance.service])
-              ).pipe(Effect.ignore)
+              yield* engine
+                .removeContainer(instance.service, { force: true })
+                .pipe(Effect.ignore)
             }
-            yield* promiseEffect(() =>
-              command("docker", ["rename", backupName, instance.service])
-            ).pipe(Effect.ignore)
+            yield* engine
+              .renameContainer(backupName, instance.service)
+              .pipe(Effect.ignore)
             if (current.State.Running) {
-              yield* promiseEffect(() =>
-                command("docker", ["start", instance.service], {
-                  timeout: 120_000,
-                })
-              ).pipe(Effect.ignore)
+              yield* engine
+                .startContainer(instance.service, { timeout: 120_000 })
+                .pipe(Effect.ignore)
             }
             yield* Effect.sync(clearTransition)
             yield* runtimeRecovery
@@ -1130,11 +1110,7 @@ export class DockerDriver {
       )
     )
     await runEffect(
-      promiseEffect(() =>
-        command("docker", ["rm", "--force", backupName], {
-          timeout: 90_000,
-        })
-      ).pipe(
+      engine.removeContainer(backupName, { force: true, timeout: 90_000 }).pipe(
         Effect.catch((cause) =>
           Effect.sync(() => {
             console.warn(
@@ -1185,11 +1161,10 @@ export class DockerDriver {
     containerId: string,
     signal?: AbortSignal
   ): Promise<DockerConsoleSession> {
-    const inspected = await command("docker", ["inspect", containerId], {
-      signal,
-    })
-    const container = (JSON.parse(inspected.stdout) as Array<DockerInspect>)[0]
-    if (!container) throw new Error(`Container ${containerId} was not found`)
+    const container = await Effect.runPromise(
+      this.#engine.inspectContainer<DockerInspect>(containerId),
+      { signal }
+    )
     return this.#consoleSessionFor(resourceId, container, [
       { component: null, container },
     ])
@@ -1215,7 +1190,8 @@ export class DockerDriver {
           targets.map((target) => ({
             component: target.component,
             id: target.container.Id,
-            since: dockerLogSinceArguments(target.container.State.StartedAt),
+            since: logsSince(target.container.State.StartedAt),
+            tty: target.container.Config.Tty ?? false,
           })),
           signal,
           limit
@@ -1243,27 +1219,27 @@ export class DockerDriver {
         const kept: Array<{ characters: number; line: ParsedConsoleLine }> = []
         let characters = 0
         const limit = MAX_CONSOLE_HISTORY_CHARACTERS / targets.length
-        await commandLines(
-          "docker",
-          [
-            "logs",
-            "--timestamps",
-            ...dockerLogSinceArguments(target.container.State.StartedAt),
-            "--tail",
-            String(boundedLimit),
+        await Effect.runPromise(
+          this.#engine.containerLogLines(
             target.container.Id,
-          ],
-          (raw) => {
-            const line = parseConsoleLine(raw)
-            if (!line) return
-            kept.push({ characters: raw.length, line })
-            characters += raw.length
-            while (characters > limit && kept.length > 1) {
-              characters -= kept.shift()!.characters
-              cut = true
+            {
+              since: logsSince(target.container.State.StartedAt),
+              tail: boundedLimit,
+              timeout: 15_000,
+              tty: target.container.Config.Tty ?? false,
+            },
+            (raw) => {
+              const line = parseConsoleLine(raw)
+              if (!line) return
+              kept.push({ characters: raw.length, line })
+              characters += raw.length
+              while (characters > limit && kept.length > 1) {
+                characters -= kept.shift()!.characters
+                cut = true
+              }
             }
-          },
-          { signal, timeout: 15_000 }
+          ),
+          { signal }
         )
         return kept.map(({ line }) => prefixConsoleLine(line, target.component))
       })
@@ -1294,22 +1270,17 @@ export class DockerDriver {
     const discovered = await this.#findDiscovered(instance.id)
     const targets = await this.#consoleTargets(instance, discovered)
     const results = await Promise.all(
-      targets.map(async (target) => {
-        const targetSince = dockerLogSinceArguments(
-          target.container.State.StartedAt
-        )
-        return {
-          target,
-          result: await command(
-            "docker",
-            ["logs", "--timestamps", ...targetSince, target.container.Id],
-            {
-              maxBuffer: MAX_SHARED_CONSOLE_BYTES + 1024,
-              timeout: 30_000,
-            }
-          ),
-        }
-      })
+      targets.map(async (target) => ({
+        target,
+        result: await runEffect(
+          this.#engine.containerLogs(target.container.Id, {
+            maxBytes: MAX_SHARED_CONSOLE_BYTES + 1024,
+            since: logsSince(target.container.State.StartedAt),
+            timeout: 30_000,
+            tty: target.container.Config.Tty ?? false,
+          })
+        ),
+      }))
     )
     const lines = results
       .flatMap(({ result, target }) =>
@@ -1353,6 +1324,7 @@ export class DockerDriver {
     signal: AbortSignal,
     limit: number
   ): AsyncIterable<RelayConsoleLine> {
+    const engine = this.#engine
     return Stream.toAsyncIterable(
       Stream.callback<RelayConsoleLine, unknown>((queue) =>
         Effect.gen(function* () {
@@ -1361,7 +1333,6 @@ export class DockerDriver {
             MAX_CONSOLE_HISTORY_LINES
           )
           const occurrences = new Map<string, number>()
-          let open = targets.length
 
           const queueLine = (
             value: string,
@@ -1381,72 +1352,31 @@ export class DockerDriver {
               id: `${hash}-${occurrence}`,
             })
           }
-          const children = targets.map((target) => {
-            let stdoutBuffer = ""
-            let stderrBuffer = ""
-            let settled = false
-            const child = spawn(
-              "docker",
-              [
-                "logs",
-                "--follow",
-                "--timestamps",
-                ...target.since,
-                "--tail",
-                String(Math.ceil(boundedLimit / targets.length)),
+          // Aborting ends the stream; closing it interrupts the requests.
+          const stop = () => Queue.endUnsafe(queue)
+          if (signal.aborted) return stop()
+          signal.addEventListener("abort", stop, { once: true })
+          yield* Effect.addFinalizer(() =>
+            Effect.sync(() => signal.removeEventListener("abort", stop))
+          )
+          // Each log ends when its container stops; the stream ends with all.
+          yield* Effect.forEach(
+            targets,
+            (target) =>
+              engine.containerLogLines(
                 target.id,
-              ],
-              { stdio: ["ignore", "pipe", "pipe"] }
-            )
-            const consume = (source: "stdout" | "stderr", chunk: string) => {
-              const current =
-                (source === "stdout" ? stdoutBuffer : stderrBuffer) + chunk
-              const lines = current.split("\n")
-              const remainder = lines.pop() ?? ""
-              if (source === "stdout") stdoutBuffer = remainder
-              else stderrBuffer = remainder
-              for (const line of lines) queueLine(line, target.component)
-            }
-            // Decoded across chunks, so characters split between them stay
-            // whole.
-            child.stdout.setEncoding("utf8")
-            child.stderr.setEncoding("utf8")
-            child.stdout.on("data", (chunk: string) => consume("stdout", chunk))
-            child.stderr.on("data", (chunk: string) => consume("stderr", chunk))
-            child.on("error", (error) => {
-              if (settled) return
-              settled = true
-              open -= 1
-              Queue.failCauseUnsafe(queue, Cause.fail(error))
-            })
-            child.on("close", (code) => {
-              if (stdoutBuffer) queueLine(stdoutBuffer, target.component)
-              if (stderrBuffer) queueLine(stderrBuffer, target.component)
-              if (settled) return
-              settled = true
-              open -= 1
-              if (!signal.aborted && code && code !== 143) {
-                Queue.failCauseUnsafe(
-                  queue,
-                  Cause.fail(
-                    new Error(`Docker log stream exited with code ${code}`)
-                  )
-                )
-              } else if (open === 0) {
-                Queue.endUnsafe(queue)
-              }
-            })
-            return child
-          })
-          const stop = () => {
-            signal.removeEventListener("abort", stop)
-            for (const child of children) {
-              if (!child.killed) child.kill("SIGTERM")
-            }
-          }
-          if (signal.aborted) stop()
-          else signal.addEventListener("abort", stop, { once: true })
-          yield* Effect.addFinalizer(() => Effect.sync(stop))
+                {
+                  follow: true,
+                  since: target.since,
+                  tail: Math.ceil(boundedLimit / targets.length),
+                  timeout: null,
+                  tty: target.tty,
+                },
+                (line) => queueLine(line, target.component)
+              ),
+            { concurrency: "unbounded", discard: true }
+          )
+          stop()
         }).pipe(
           Effect.catchCause((cause) =>
             Effect.sync(() => {
@@ -1555,13 +1485,9 @@ export class DockerDriver {
     if (this.#cachedDockerVersion !== undefined) {
       return this.#cachedDockerVersion
     }
-    const result = await runEffect(
-      promiseEffect(() =>
-        command("docker", ["version", "--format", "{{.Server.Version}}"])
-      ).pipe(Effect.option)
-    )
+    const result = await runEffect(this.#engine.version().pipe(Effect.option))
     this.#cachedDockerVersion = Option.isSome(result)
-      ? result.value.stdout.trim() || null
+      ? result.value.Version.trim() || null
       : null
     return this.#cachedDockerVersion
   }
@@ -1573,22 +1499,20 @@ export class DockerDriver {
 
   relaySftpPublication(port: number): Promise<RelaySftpPublication> {
     this.#relaySftpPublication ??= runEffect(
-      inspectRelaySftpPublicationEffect(port)
+      inspectRelaySftpPublicationEffect(port, hostname(), (container) =>
+        this.#engine
+          .inspectContainer(container, { timeout: 2_500 })
+          .pipe(Effect.map((inspected) => inspected.HostConfig))
+      )
     )
     return this.#relaySftpPublication
   }
 
   async #inspectRelayStartedAt(): Promise<string | null> {
     return runEffect(
-      promiseEffect(() =>
-        command(
-          "docker",
-          ["inspect", "--format", "{{.State.StartedAt}}", hostname()],
-          { timeout: 2_500 }
-        )
-      ).pipe(
-        Effect.map((result) => {
-          const timestamp = Date.parse(result.stdout.trim())
+      this.#engine.inspectContainer(hostname(), { timeout: 2_500 }).pipe(
+        Effect.map((container) => {
+          const timestamp = Date.parse(container.State.StartedAt)
           return Number.isFinite(timestamp)
             ? new Date(timestamp).toISOString()
             : null
@@ -1695,34 +1619,12 @@ export class DockerDriver {
   }
 
   async #resizeConsole(containerId: string): Promise<void> {
-    await new Promise<void>((resolvePromise, rejectPromise) => {
-      const resizePath = `/containers/${encodeURIComponent(containerId)}/resize?h=${CONSOLE_TTY_ROWS}&w=${CONSOLE_TTY_COLUMNS}`
-      const resizeRequest = request({
-        socketPath: this.#config.dockerSocket,
-        path: resizePath,
-        method: "POST",
+    await runEffect(
+      this.#engine.resizeContainer(containerId, {
+        columns: CONSOLE_TTY_COLUMNS,
+        rows: CONSOLE_TTY_ROWS,
       })
-      let settled = false
-      const settle = (error?: Error) => {
-        if (settled) return
-        settled = true
-        clearTimeout(timer)
-        if (error) rejectPromise(error)
-        else resolvePromise()
-      }
-      const timer = setTimeout(() => {
-        resizeRequest.destroy(new Error("Docker console resize timed out"))
-      }, 5_000)
-
-      resizeRequest.on("response", (response) => {
-        response.resume()
-        const status = response.statusCode ?? 500
-        if (status >= 200 && status < 300) settle()
-        else settle(new Error(`Docker console resize returned HTTP ${status}`))
-      })
-      resizeRequest.on("error", (error) => settle(error))
-      resizeRequest.end()
-    })
+    )
   }
 
   async #probeConsoleCompletion(
@@ -1832,35 +1734,34 @@ export class DockerDriver {
     probe: InstanceReadinessProbe
   ): Promise<InstanceReadiness | undefined> {
     const historical = probe === "historical"
-    const logWindowArguments = historical
-      ? historicalReadinessLogArguments(container.State.StartedAt)
-      : [
-          ...dockerLogSinceArguments(container.State.StartedAt),
-          "--tail",
-          String(STARTUP_READINESS_LOG_LINES),
-        ]
+    const logWindow = historical
+      ? historicalReadinessLogWindow(container.State.StartedAt)
+      : {
+          since: logsSince(container.State.StartedAt),
+          tail: STARTUP_READINESS_LOG_LINES,
+        }
     return runEffect(
-      promiseEffect(() =>
-        command(
-          "docker",
-          ["logs", "--timestamps", ...logWindowArguments, container.Id],
-          { timeout: historical ? 15_000 : 2_000 }
+      this.#engine
+        .containerLogs(container.Id, {
+          ...logWindow,
+          timeout: historical ? 15_000 : 2_000,
+          tty: container.Config.Tty ?? false,
+        })
+        .pipe(
+          Effect.map((result) => {
+            const match = matchingReadyLogLine(
+              parseConsoleOutput(result),
+              readiness.logs
+            )
+            return match
+              ? {
+                  ready: true,
+                  readyAt: match.timestamp ?? new Date().toISOString(),
+                }
+              : { ready: false }
+          }),
+          Effect.catch(() => Effect.succeed(undefined))
         )
-      ).pipe(
-        Effect.map((result) => {
-          const match = matchingReadyLogLine(
-            parseConsoleOutput(result),
-            readiness.logs
-          )
-          return match
-            ? {
-                ready: true,
-                readyAt: match.timestamp ?? new Date().toISOString(),
-              }
-            : { ready: false }
-        }),
-        Effect.catch(() => Effect.succeed(undefined))
-      )
     )
   }
 
@@ -1885,10 +1786,18 @@ export class DockerDriver {
     if (attempts.some(Boolean)) return true
 
     if (minecraft) {
-      const ready = await minecraftStatusReadyInContainer(container.Id, port)
+      const ready = await minecraftStatusReadyInContainer(
+        this.#engine,
+        container.Id,
+        port
+      )
       if (ready !== undefined) return ready
     }
-    const listening = await containerPortListening(container.Id, port)
+    const listening = await containerPortListening(
+      this.#engine,
+      container.Id,
+      port
+    )
     return listening ?? (attempts.length > 0 ? false : undefined)
   }
 
@@ -2139,6 +2048,7 @@ export class DockerDriver {
         instance.config.directory
       )
       const findCurrent = () => this.#findDiscovered(instance.config.id)
+      const engine = this.#engine
       const refresh = Effect.gen(function* () {
         const usedBytes = yield* directoryApparentSizeEffect(directory)
         cached.usedBytes = usedBytes
@@ -2158,18 +2068,10 @@ export class DockerDriver {
               `Stopping ${current.config.name}: disk usage exceeded its configured quota`
             )
           })
-          yield* promiseEffect(() =>
-            command(
-              "docker",
-              [
-                "stop",
-                "--time",
-                String(INSTANCE_STOP_TIMEOUT_SECONDS),
-                current.config.service,
-              ],
-              { timeout: (INSTANCE_STOP_TIMEOUT_SECONDS + 15) * 1_000 }
-            )
-          )
+          yield* engine.stopContainer(current.config.service, {
+            seconds: INSTANCE_STOP_TIMEOUT_SECONDS,
+            timeout: (INSTANCE_STOP_TIMEOUT_SECONDS + 15) * 1_000,
+          })
         }
       }).pipe(
         // Keep the last healthy value. Directory scans race with normal game
@@ -2203,131 +2105,9 @@ export class DockerDriver {
   }
 
   async #dockerStats(containerId: string): Promise<DockerStats> {
-    return new Promise<DockerStats>((resolvePromise, rejectPromise) => {
-      const statsRequest = request({
-        socketPath: this.#config.dockerSocket,
-        path: `/containers/${encodeURIComponent(containerId)}/stats?stream=false`,
-        method: "GET",
-      })
-      const chunks: Array<Buffer> = []
-      let size = 0
-      const timer = setTimeout(() => {
-        statsRequest.destroy(new Error("Docker stats timed out"))
-      }, 2_500)
-
-      statsRequest.on("response", (response) => {
-        response.on("error", (error) => {
-          clearTimeout(timer)
-          rejectPromise(error)
-        })
-        if ((response.statusCode ?? 500) >= 400) {
-          response.resume()
-          clearTimeout(timer)
-          rejectPromise(
-            new Error(
-              `Docker stats returned HTTP ${response.statusCode ?? 500}`
-            )
-          )
-          return
-        }
-        response.on("data", (chunk: Buffer) => {
-          size += chunk.length
-          if (size > 1024 * 1024) {
-            statsRequest.destroy(
-              new Error("Docker stats response was too large")
-            )
-            return
-          }
-          chunks.push(chunk)
-        })
-        response.on("end", () => {
-          clearTimeout(timer)
-          Result.try(
-            () =>
-              JSON.parse(Buffer.concat(chunks).toString("utf8")) as DockerStats
-          ).pipe(
-            Result.match({
-              onFailure: rejectPromise,
-              onSuccess: resolvePromise,
-            })
-          )
-        })
-      })
-      statsRequest.on("error", (error) => {
-        clearTimeout(timer)
-        rejectPromise(error)
-      })
-      statsRequest.end()
-    })
-  }
-
-  async #dockerJson(
-    method: "POST",
-    path: string,
-    body: unknown
-  ): Promise<unknown> {
-    return new Promise((resolvePromise, rejectPromise) => {
-      const encoded = Buffer.from(JSON.stringify(body))
-      const dockerRequest = request({
-        headers: {
-          "Content-Length": String(encoded.byteLength),
-          "Content-Type": "application/json",
-        },
-        method,
-        path,
-        socketPath: this.#config.dockerSocket,
-      })
-      const chunks: Array<Buffer> = []
-      let size = 0
-      const timer = setTimeout(() => {
-        dockerRequest.destroy(new Error("Docker API request timed out"))
-      }, 60_000)
-
-      dockerRequest.on("response", (response) => {
-        response.on("data", (chunk: Buffer) => {
-          size += chunk.length
-          if (size > 1024 * 1024) {
-            dockerRequest.destroy(
-              new Error("Docker API response was too large")
-            )
-            return
-          }
-          chunks.push(chunk)
-        })
-        response.on("end", () => {
-          clearTimeout(timer)
-          const text = Buffer.concat(chunks).toString("utf8")
-          if ((response.statusCode ?? 500) >= 400) {
-            const message = Result.try(
-              () => JSON.parse(text) as { message?: unknown }
-            ).pipe(
-              Result.map((parsed) =>
-                typeof parsed.message === "string" ? parsed.message : text
-              ),
-              // Docker occasionally returns a plain-text proxy error.
-              Result.getOrElse(() => text)
-            )
-            rejectPromise(
-              new Error(
-                `Docker API returned HTTP ${response.statusCode ?? 500}: ${message || "request failed"}`
-              )
-            )
-            return
-          }
-          Result.try(() => (text ? (JSON.parse(text) as unknown) : null)).pipe(
-            Result.match({
-              onFailure: rejectPromise,
-              onSuccess: resolvePromise,
-            })
-          )
-        })
-      })
-      dockerRequest.on("error", (cause) => {
-        clearTimeout(timer)
-        rejectPromise(cause)
-      })
-      dockerRequest.end(encoded)
-    })
+    return (await runEffect(
+      this.#engine.containerStats(containerId)
+    )) as DockerStats
   }
 
   async #findDiscovered(
@@ -2352,14 +2132,12 @@ export class DockerDriver {
     const companionName = this.#resources.tailscaleStackDnsContainer(
       instance.id
     )
-    const inspected = await runEffect(
-      promiseEffect(() =>
-        command("docker", ["inspect", companionName], { signal })
-      ).pipe(Effect.catch(() => Effect.succeed(null)))
+    const companion = await Effect.runPromise(
+      this.#engine
+        .inspectContainer<DockerInspect>(companionName)
+        .pipe(Effect.catch(() => Effect.succeed(null))),
+      { signal }
     )
-    const companion = inspected
-      ? (JSON.parse(inspected.stdout) as Array<DockerInspect>)[0]
-      : null
     return [
       { component: "tailscale", container: discovered.container },
       ...(companion
@@ -2368,32 +2146,26 @@ export class DockerDriver {
     ]
   }
 
+  // Runs on every snapshot: one listing, then one inspect per server, all on
+  // the Docker socket.
   async #discover(signal?: AbortSignal): Promise<Array<DiscoveredInstance>> {
-    const idsResult = await command(
-      "docker",
-      [
-        "container",
-        "ls",
-        "--all",
-        "--filter",
-        `label=${this.#config.managedLabel}`,
-        "--format",
-        "{{.ID}}",
-      ],
+    const engine = this.#engine
+    const config = this.#config
+    const containers = await Effect.runPromise(
+      Effect.gen(function* () {
+        const listed = yield* engine.listContainers({
+          all: true,
+          filters: { label: [config.managedLabel] },
+        })
+        const ids = listed.flatMap((container) =>
+          container.Labels?.["kiln.resource.kind"] !== "database" &&
+          relayOwnsLabels(config, container.Labels)
+            ? [container.Id]
+            : []
+        )
+        return yield* engine.inspectContainers<DockerInspect>(ids)
+      }),
       { signal }
-    )
-    const ids = idsResult.stdout.split("\n").filter(Boolean)
-    if (ids.length === 0) return []
-
-    const inspectResult = await command("docker", ["inspect", ...ids], {
-      signal,
-    })
-    const containers = (
-      JSON.parse(inspectResult.stdout) as Array<DockerInspect>
-    ).filter(
-      (container) =>
-        container.Config.Labels?.["kiln.resource.kind"] !== "database" &&
-        relayOwnsLabels(this.#config, container.Config.Labels)
     )
     if (containers.length === 0) return []
     const diskLimitCandidates = containers.map((container) => ({
@@ -2650,27 +2422,33 @@ function tcpPortOpen(host: string, port: number): Promise<boolean> {
 }
 
 async function containerPortListening(
+  engine: DockerEngine,
   containerId: string,
   port: number
 ): Promise<boolean | undefined> {
-  const ipv4 = await containerNetworkSockets(containerId, "/proc/net/tcp")
+  const ipv4 = await containerNetworkSockets(
+    engine,
+    containerId,
+    "/proc/net/tcp"
+  )
   if (ipv4 !== undefined && procNetTcpHasListener(ipv4, port)) return true
 
-  const ipv6 = await containerNetworkSockets(containerId, "/proc/net/tcp6")
+  const ipv6 = await containerNetworkSockets(
+    engine,
+    containerId,
+    "/proc/net/tcp6"
+  )
   if (ipv6 !== undefined && procNetTcpHasListener(ipv6, port)) return true
   return ipv4 === undefined && ipv6 === undefined ? undefined : false
 }
 
 async function containerNetworkSockets(
+  engine: DockerEngine,
   containerId: string,
   path: "/proc/net/tcp" | "/proc/net/tcp6"
 ): Promise<string | undefined> {
   return runEffect(
-    promiseEffect(() =>
-      command("docker", ["exec", containerId, "cat", path], {
-        timeout: 2_000,
-      })
-    ).pipe(
+    engine.exec(containerId, ["cat", path], { timeout: 2_000 }).pipe(
       Effect.map((output) => output.stdout),
       Effect.catch(() => Effect.succeed(undefined))
     )
@@ -2678,6 +2456,7 @@ async function containerNetworkSockets(
 }
 
 async function minecraftStatusReadyInContainer(
+  engine: DockerEngine,
   containerId: string,
   port: number
 ): Promise<boolean | undefined> {
@@ -2691,12 +2470,10 @@ async function minecraftStatusReadyInContainer(
     "fi",
   ].join("\n")
   return runEffect(
-    promiseEffect(() =>
-      command(
-        "docker",
+    engine
+      .exec(
+        containerId,
         [
-          "exec",
-          containerId,
           "sh",
           "-c",
           script,
@@ -2706,17 +2483,17 @@ async function minecraftStatusReadyInContainer(
         ],
         { timeout: 2_000 }
       )
-    ).pipe(
-      Effect.map((result) => {
-        const status = result.stdout.trim()
-        return status === "ready"
-          ? true
-          : status === "waiting"
-            ? false
-            : undefined
-      }),
-      Effect.catch(() => Effect.succeed(undefined))
-    )
+      .pipe(
+        Effect.map((result) => {
+          const status = result.stdout.trim()
+          return status === "ready"
+            ? true
+            : status === "waiting"
+              ? false
+              : undefined
+        }),
+        Effect.catch(() => Effect.succeed(undefined))
+      )
   )
 }
 
@@ -2975,17 +2752,17 @@ function addLifecycleEvent(
     : [...events, { state, time }]
 }
 
-function historicalReadinessLogArguments(startedAt: string): Array<string> {
-  const since = dockerLogSinceArguments(startedAt)
-  const parsed = Date.parse(startedAt)
-  if (since.length === 0 || !Number.isFinite(parsed)) {
-    return ["--tail", String(MAX_CONSOLE_HISTORY_LINES)]
+function historicalReadinessLogWindow(
+  startedAt: string
+): Pick<DockerLogOptions, "since" | "tail" | "until"> {
+  const since = logsSince(startedAt)
+  if (since === undefined) return { tail: MAX_CONSOLE_HISTORY_LINES }
+  return {
+    since,
+    until: new Date(
+      Date.parse(startedAt) + INSTANCE_STARTUP_READINESS_TIMEOUT_MS
+    ).toISOString(),
   }
-  return [
-    ...since,
-    "--until",
-    new Date(parsed + INSTANCE_STARTUP_READINESS_TIMEOUT_MS).toISOString(),
-  ]
 }
 
 type InstanceReadinessProbe = "historical" | "live"
@@ -3066,11 +2843,10 @@ function consoleFinishedAt(container: DockerInspect): string | null {
     : null
 }
 
-function dockerLogSinceArguments(startedAt: string): Array<string> {
+// Logs of the current run; a container that never started has no start time.
+function logsSince(startedAt: string): string | undefined {
   const timestamp = Date.parse(startedAt)
-  return Number.isFinite(timestamp) && timestamp > 0
-    ? ["--since", startedAt]
-    : []
+  return Number.isFinite(timestamp) && timestamp > 0 ? startedAt : undefined
 }
 
 function titleCase(value: string): string {

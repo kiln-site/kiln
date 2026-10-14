@@ -21,8 +21,8 @@ import {
   type BackupArchiveCreateTaskResult,
 } from "@workspace/contracts"
 
-import { command } from "./command.js"
 import type { RelayConfig } from "./config.js"
+import { DockerEngine, type DockerContainerSummary } from "./docker-engine.js"
 
 const PLATFORM_MAGIC = Buffer.from("KILNPLATFORM0001", "ascii")
 const PLATFORM_HEADER_BYTES = 64
@@ -52,7 +52,7 @@ export async function createEncryptedPlatformBackup(
   signal.throwIfAborted()
   const installationId = requiredInstallationId(config, input.target.id)
   const recoveryKey = requiredRecoveryKey(config)
-  const container = await hearthDatabaseContainer(installationId)
+  const container = await hearthDatabaseContainer(config, installationId)
   const manifest: PlatformBackupManifest = {
     compression: "gzip",
     createdAt: new Date().toISOString(),
@@ -199,7 +199,7 @@ export async function restoreEncryptedPlatformBackup(
 ): Promise<PlatformBackupManifest> {
   const installationId = requiredInstallationId(config, confirmedInstallationId)
   const recoveryKey = requiredRecoveryKey(config)
-  if (await hearthApplicationIsRunning(installationId)) {
+  if (await hearthApplicationIsRunning(config, installationId)) {
     throw new Error("Stop Hearth before restoring a Kiln platform backup")
   }
   const opened = await openPlatformBackup(source)
@@ -214,7 +214,7 @@ export async function restoreEncryptedPlatformBackup(
   )
   decipher.setAAD(opened.manifestBytes)
   decipher.setAuthTag(opened.tag)
-  const container = await hearthDatabaseContainer(installationId)
+  const container = await hearthDatabaseContainer(config, installationId)
   const restoreDirectory = resolve(config.dataDirectory, "restores")
   const stagedDump = resolve(
     restoreDirectory,
@@ -309,44 +309,51 @@ async function openPlatformBackup(source: string): Promise<{
   )
 }
 
+// Running Hearth containers of this installation with the given resource label.
+function runningHearthContainers(
+  config: RelayConfig,
+  installationId: string,
+  resource: "hearth" | "hearth-database"
+): Promise<ReadonlyArray<DockerContainerSummary>> {
+  return Effect.runPromise(
+    new DockerEngine(config.dockerSocket).listContainers({
+      filters: {
+        label: [
+          `io.kiln.installation=${installationId}`,
+          `io.kiln.resource=${resource}`,
+        ],
+      },
+    })
+  )
+}
+
 async function hearthDatabaseContainer(
+  config: RelayConfig,
   installationId: string
 ): Promise<string> {
-  const result = await command("docker", [
-    "container",
-    "ls",
-    "--filter",
-    `label=io.kiln.installation=${installationId}`,
-    "--filter",
-    "label=io.kiln.resource=hearth-database",
-    "--format",
-    "{{.ID}}",
-  ])
-  const containers = result.stdout.split("\n").filter(Boolean)
-  if (containers.length !== 1) {
+  const containers = await runningHearthContainers(
+    config,
+    installationId,
+    "hearth-database"
+  )
+  const [container] = containers
+  if (!container || containers.length > 1) {
     throw new Error(
       containers.length === 0
         ? "The colocated Hearth database container was not found"
         : "Multiple Hearth database containers matched this installation"
     )
   }
-  return containers[0]
+  return container.Id
 }
 
 async function hearthApplicationIsRunning(
+  config: RelayConfig,
   installationId: string
 ): Promise<boolean> {
-  const result = await command("docker", [
-    "container",
-    "ls",
-    "--filter",
-    `label=io.kiln.installation=${installationId}`,
-    "--filter",
-    "label=io.kiln.resource=hearth",
-    "--format",
-    "{{.ID}}",
-  ])
-  return result.stdout.trim().length > 0
+  return (
+    (await runningHearthContainers(config, installationId, "hearth")).length > 0
+  )
 }
 
 function requiredInstallationId(config: RelayConfig, targetId: string): string {

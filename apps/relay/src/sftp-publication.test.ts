@@ -63,13 +63,10 @@ describe("Relay SFTP publication", () => {
         "relay-container",
         () =>
           Effect.succeed({
-            stderr: "",
-            stdout: JSON.stringify({
-              NetworkMode: "kiln",
-              PortBindings: {
-                "2022/tcp": [{ HostIp: "0.0.0.0", HostPort: "32022" }],
-              },
-            }),
+            NetworkMode: "kiln",
+            PortBindings: {
+              "2022/tcp": [{ HostIp: "0.0.0.0", HostPort: "32022" }],
+            },
           })
       )
 

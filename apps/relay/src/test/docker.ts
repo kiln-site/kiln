@@ -1,14 +1,14 @@
 /**
  * A stateful, in-memory Docker for Relay tests.
  *
- * Relay drives Docker through the CLI (`./command.js`) and, for a few calls,
- * the Engine API on `config.dockerSocket`. Tests replace both at that single
- * boundary:
+ * Relay drives Docker through the Engine API on `config.dockerSocket` and, to
+ * create containers, networks, and volumes, pull images, and run clients that
+ * read stdin, the CLI (`./command.js`). Tests replace both at that boundary:
  *
  *   vi.mock("./command.js", () => import("./test/docker.js"))
  *   config.dockerSocket = await fakeDocker.listen()
  *
- * Commands mutate containers, networks, volumes, and images the way Docker
+ * Requests mutate containers, networks, volumes, and images the way Docker
  * would, so tests assert the resulting state instead of argv or call order.
  * Only what Relay actually invokes is modelled; anything else fails loudly and
  * is reported by `reset()`.
@@ -90,6 +90,8 @@ export interface FakeExec {
   readonly tty: boolean
   size: { cols: number; rows: number } | null
   running: boolean
+  /** Set once a non-interactive exec has run. */
+  exitCode: number | null
 }
 
 export interface FakeNetwork {
@@ -183,7 +185,15 @@ const BOOLEAN_FLAGS = new Set([
   "-i",
 ])
 
-class DockerFailure extends Error {}
+/** A failure the daemon reports, with the HTTP status the API answers. */
+class DockerFailure extends Error {
+  constructor(
+    message: string,
+    readonly status = 500
+  ) {
+    super(message)
+  }
+}
 
 export class FakeDocker {
   readonly containers = new Map<string, FakeContainer>()
@@ -210,10 +220,15 @@ export class FakeDocker {
   }> = []
   #unmodelled: Array<string> = []
   #inFlight = 0
-  #idleWaiters: Array<() => void> = []
+  #lastActivity = 0
   #lastTimestamp = 0
   #socketPath: string | null = null
   readonly #execSockets = new Map<string, Duplex>()
+  /** Responses following a running container's logs. */
+  readonly #followers = new Set<{
+    containerId: string
+    response: ServerResponse
+  }>()
 
   /** Starts the Engine API socket (once) and returns its path. */
   async listen(): Promise<string> {
@@ -253,6 +268,8 @@ export class FakeDocker {
     this.tailscale.controlPlaneReachable = true
     this.tailscale.machines.clear()
     this.#faults.length = 0
+    for (const follower of this.#followers) follower.response.end()
+    this.#followers.clear()
     this.#unmodelled = []
     if (unmodelled.length > 0) {
       throw new Error(
@@ -423,13 +440,23 @@ export class FakeDocker {
   }
 
   /**
-   * Resolves once no Docker command is running, for work Relay starts in the
-   * background (recovery restarts, compensating stops).
+   * Resolves once Docker has been quiet for a moment, for work Relay starts in
+   * the background (recovery restarts, compensating stops). A request Relay
+   * just sent to the socket can still be on its way, so no request running is
+   * not enough.
    */
   idle(): Promise<void> {
-    return this.#inFlight === 0
-      ? Promise.resolve()
-      : new Promise((resolve) => this.#idleWaiters.push(resolve))
+    return new Promise((resolve) => {
+      const check = () => {
+        if (this.#inFlight === 0 && Date.now() - this.#lastActivity >= 25) {
+          // Let callers observe the result before waiters resume.
+          setImmediate(resolve)
+        } else {
+          setTimeout(check, 5)
+        }
+      }
+      setTimeout(check, 5)
+    })
   }
 
   /** The `command()` boundary: runs one Docker CLI invocation. */
@@ -441,7 +468,7 @@ export class FakeDocker {
   ): Promise<CommandResult> {
     const commandLine = `${executable} ${arguments_.join(" ")}`
     if (executable !== "docker") return this.#unsupported(commandLine)
-    this.#inFlight += 1
+    this.#begin()
     try {
       const stdout = await this.#dispatch([...arguments_], options, input)
       // As execFile, which `command` runs on, fails on more output.
@@ -459,17 +486,21 @@ export class FakeDocker {
       }
       throw cause
     } finally {
-      this.#inFlight -= 1
-      if (this.#inFlight === 0) {
-        // Let callers observe the result before waiters resume.
-        setImmediate(() => {
-          if (this.#inFlight > 0) return
-          for (const resolve of this.#idleWaiters.splice(0)) resolve()
-        })
-      }
+      this.#settled()
     }
   }
 
+  #begin(): void {
+    this.#inFlight += 1
+    this.#lastActivity = Date.now()
+  }
+
+  #settled(): void {
+    this.#inFlight -= 1
+    this.#lastActivity = Date.now()
+  }
+
+  // What Relay still runs through the CLI; everything else uses the API.
   async #dispatch(
     arguments_: Array<string>,
     options: CommandOptions,
@@ -477,48 +508,15 @@ export class FakeDocker {
   ): Promise<string> {
     const [first = "", second = ""] = arguments_
     const rest = arguments_.slice(1)
-    if (first === "container" && (second === "ls" || second === "list")) {
-      return this.#list(arguments_.slice(2))
-    }
-    if (first === "ps") return this.#list(rest)
-    if (first === "container" && second === "inspect") {
-      return this.#inspect(arguments_.slice(2), "container")
-    }
     if (first === "container" && second === "create") {
       return this.#create(arguments_.slice(2), options, false, input)
     }
     if (first === "create") return this.#create(rest, options, false, input)
     if (first === "run") return this.#create(rest, options, true, input)
-    if (first === "inspect") return this.#inspect(rest, "any")
     if (first === "network") return this.#networkCommand(rest)
     if (first === "volume") return this.#volumeCommand(rest)
-    if (first === "image" && second === "inspect") {
-      return this.#inspect(arguments_.slice(2), "image")
-    }
-    switch (first) {
-      case "start":
-        return this.#power("start", rest)
-      case "stop":
-        return this.#power("stop", rest)
-      case "restart":
-        return this.#power("restart", rest)
-      case "kill":
-        return this.#power("kill", rest)
-      case "rm":
-        return this.#remove(rest)
-      case "rename":
-        return this.#rename(rest)
-      case "update":
-        return this.#update(rest)
-      case "logs":
-        return this.#logs(rest)
-      case "exec":
-        return this.#exec(rest)
-      case "pull":
-        return this.#pull(rest)
-      case "version":
-        return "27.3.1\n"
-    }
+    if (first === "exec") return this.#exec(rest)
+    if (first === "pull") return this.#pull(rest)
     return this.#unsupported(`docker ${arguments_.join(" ")}`)
   }
 
@@ -539,28 +537,6 @@ export class FakeDocker {
   }
 
   // ---------------------------------------------------------------- listing
-
-  #list(arguments_: Array<string>): string {
-    const { flags, values } = parseFlags(arguments_, ["--filter", "--format"])
-    const all = flags.has("--all") || flags.has("-a")
-    const format = values.get("--format")?.[0] ?? "{{.ID}}"
-    const filters = values.get("--filter") ?? []
-    return [...this.containers.values()]
-      .filter((container) => all || container.state.running)
-      .filter((container) =>
-        filters.every((filter) => this.#matchesFilter(container, filter))
-      )
-      .map(
-        (container) =>
-          `${renderTemplate(format, {
-            ID: container.id.slice(0, 12),
-            Image: container.image,
-            Names: container.name,
-            Ports: portsSummary(container),
-          })}\n`
-      )
-      .join("")
-  }
 
   #matchesFilter(container: FakeContainer, filter: string): boolean {
     const separator = filter.indexOf("=")
@@ -595,30 +571,6 @@ export class FakeDocker {
   }
 
   // ------------------------------------------------------------- inspection
-
-  #inspect(
-    arguments_: Array<string>,
-    kind: "any" | "container" | "image"
-  ): string {
-    const { positional, values } = parseFlags(arguments_, ["--format"])
-    const format = values.get("--format")?.[0]
-    const found: Array<unknown> = []
-    const missing: Array<string> = []
-    for (const target of positional) {
-      const object =
-        kind === "image"
-          ? this.#imageObject(target)
-          : this.#containerObject(target)
-      if (object) found.push(object)
-      else missing.push(target)
-    }
-    if (missing.length > 0 && found.length === 0) {
-      throw new DockerFailure(`No such object: ${missing.join(", ")}`)
-    }
-    return format
-      ? found.map((object) => `${renderTemplate(format, object)}\n`).join("")
-      : `${JSON.stringify(found, null, 2)}\n`
-  }
 
   #containerObject(reference: string): unknown {
     const container = this.container(reference)
@@ -727,21 +679,24 @@ export class FakeDocker {
       : { Config: { Labels: labels }, Id: `sha256:${image}`, RepoTags: [image] }
   }
 
-  #networkObject(network: FakeNetwork): unknown {
+  /** Listing networks leaves out their containers, as Docker does. */
+  #networkObject(network: FakeNetwork, withContainers = true): unknown {
     return {
-      Containers: Object.fromEntries(
-        [...this.containers.values()].flatMap((container) => {
-          const endpoint = container.networks.get(network.name)
-          return endpoint
-            ? [
-                [
-                  container.id,
-                  { IPv4Address: endpoint.ipAddress, Name: container.name },
-                ],
-              ]
-            : []
-        })
-      ),
+      Containers:
+        withContainers &&
+        Object.fromEntries(
+          [...this.containers.values()].flatMap((container) => {
+            const endpoint = container.networks.get(network.name)
+            return endpoint
+              ? [
+                  [
+                    container.id,
+                    { IPv4Address: endpoint.ipAddress, Name: container.name },
+                  ],
+                ]
+              : []
+          })
+        ),
       Driver: "bridge",
       IPAM: { Config: network.subnet ? [{ Subnet: network.subnet }] : [] },
       Id: network.id,
@@ -866,29 +821,29 @@ export class FakeDocker {
 
   // ------------------------------------------------------------ power state
 
-  async #power(
+  /** Returns false when the container was already in the requested state. */
+  async #powerOne(
     action: "kill" | "restart" | "start" | "stop",
-    arguments_: Array<string>
-  ): Promise<string> {
-    const { positional } = parseFlags(arguments_, ["--time"])
-    for (const reference of positional) {
-      await this.#checkpoint(action, reference)
-      const container = this.#requiredContainer(reference)
-      if (action === "start") {
-        if (!container.state.running) this.#start(container)
-      } else if (action === "stop") {
-        if (container.state.running) this.#stop(container, 0)
-      } else if (action === "kill") {
-        if (!container.state.running) {
-          throw new DockerFailure(`container ${reference} is not running`)
-        }
-        this.#stop(container, 137)
-      } else {
-        if (container.state.running) this.#stop(container, 0)
-        this.#start(container)
+    reference: string
+  ): Promise<boolean> {
+    await this.#checkpoint(action, reference)
+    const container = this.#requiredContainer(reference)
+    if (action === "start") {
+      if (container.state.running) return false
+      this.#start(container)
+    } else if (action === "stop") {
+      if (!container.state.running) return false
+      this.#stop(container, 0)
+    } else if (action === "kill") {
+      if (!container.state.running) {
+        throw new DockerFailure(`container ${reference} is not running`, 409)
       }
+      this.#stop(container, 137)
+    } else {
+      if (container.state.running) this.#stop(container, 0)
+      this.#start(container)
     }
-    return `${positional.join("\n")}\n`
+    return true
   }
 
   #start(container: FakeContainer): void {
@@ -920,78 +875,51 @@ export class FakeDocker {
     this.#endExecs(container)
   }
 
-  // A container's execs end with it.
+  // A container's execs, and anyone following its logs, end with it.
   #endExecs(container: FakeContainer): void {
     for (const exec of this.execs.values()) {
       if (exec.running && exec.containerId === container.id) {
         this.exitExec(exec.id)
       }
     }
-  }
-
-  async #remove(arguments_: Array<string>): Promise<string> {
-    const { flags, positional } = parseFlags(arguments_, [])
-    const force = flags.has("--force") || flags.has("-f")
-    for (const reference of positional) {
-      await this.#checkpoint("rm", reference)
-      const container = this.#requiredContainer(reference)
-      if (container.state.running && !force) {
-        throw new DockerFailure(
-          `cannot remove container "/${container.name}": container is running`
-        )
-      }
-      this.containers.delete(container.id)
+    for (const follower of this.#followers) {
+      if (follower.containerId !== container.id) continue
+      this.#followers.delete(follower)
+      follower.response.end()
     }
-    return `${positional.join("\n")}\n`
   }
 
-  async #rename(arguments_: Array<string>): Promise<string> {
-    const [from = "", to = ""] = arguments_
+  async #removeOne(reference: string, force: boolean): Promise<void> {
+    await this.#checkpoint("rm", reference)
+    const container = this.#requiredContainer(reference)
+    if (container.state.running && !force) {
+      throw new DockerFailure(
+        `cannot remove container "/${container.name}": container is running`,
+        409
+      )
+    }
+    this.#endExecs(container)
+    this.containers.delete(container.id)
+  }
+
+  async #renameOne(from: string, to: string): Promise<void> {
     await this.#checkpoint("rename", from)
     const container = this.#requiredContainer(from)
     if (this.container(to)) {
       throw new DockerFailure(
-        `Conflict. The container name "/${to}" is already in use`
+        `Conflict. The container name "/${to}" is already in use`,
+        409
       )
     }
     container.name = to
-    return ""
   }
 
-  async #update(arguments_: Array<string>): Promise<string> {
-    const { positional, values } = parseFlags(arguments_, ["--restart"])
-    const [reference = ""] = positional
+  async #setRestartPolicy(reference: string, policy: string): Promise<void> {
     await this.#checkpoint("update", reference)
-    const container = this.#requiredContainer(reference)
-    const restart = values.get("--restart")?.[0]
-    if (restart === undefined) {
-      return this.#unsupported(`docker update ${arguments_.join(" ")}`)
-    }
-    container.restartPolicy = restart
-    return `${reference}\n`
+    this.#requiredContainer(reference).restartPolicy = policy
   }
 
   // ---------------------------------------------------------- logs and exec
-
-  #logs(arguments_: Array<string>): string {
-    const { positional, values } = parseFlags(arguments_, [
-      "--since",
-      "--tail",
-      "--until",
-    ])
-    const container = this.#requiredContainer(positional[0] ?? "")
-    const since = values.get("--since")?.[0]
-    const until = values.get("--until")?.[0]
-    const tail = values.get("--tail")?.[0]
-    const lines = container.logs.filter(
-      ({ time }) =>
-        (since === undefined || Date.parse(time) >= Date.parse(since)) &&
-        (until === undefined || Date.parse(time) < Date.parse(until))
-    )
-    const selected =
-      tail === undefined || tail === "all" ? lines : lines.slice(-Number(tail))
-    return selected.map(({ text, time }) => `${time} ${text}\n`).join("")
-  }
 
   async #exec(arguments_: Array<string>): Promise<string> {
     const env: Record<string, string> = {}
@@ -1013,8 +941,17 @@ export class FakeDocker {
     await this.#checkpoint("exec", reference)
     const container = this.#requiredContainer(reference)
     if (!container.state.running) {
-      throw new DockerFailure(`container ${reference} is not running`)
+      throw new DockerFailure(`container ${reference} is not running`, 409)
     }
+    return this.#runProgram(container, argv, env)
+  }
+
+  /** What a process Relay runs with `docker exec` prints, or how it fails. */
+  #runProgram(
+    container: FakeContainer,
+    argv: Array<string>,
+    env: Record<string, string>
+  ): string {
     container.processes.push({ argv, env })
     const [program = "", ...programArguments] = argv
     if (program === "iptables") {
@@ -1067,43 +1004,6 @@ export class FakeDocker {
 
   async #networkCommand(arguments_: Array<string>): Promise<string> {
     const [subcommand = "", ...rest] = arguments_
-    if (subcommand === "inspect") {
-      const { positional, values } = parseFlags(rest, ["--format"])
-      const format = values.get("--format")?.[0]
-      for (const reference of positional) {
-        await this.#checkpoint("network inspect", reference)
-      }
-      const found = positional.flatMap((reference) => {
-        const network = this.network(reference)
-        return network ? [this.#networkObject(network)] : []
-      })
-      if (found.length === 0) {
-        throw new DockerFailure(`network ${positional.join(" ")} not found`)
-      }
-      return format
-        ? found.map((object) => `${renderTemplate(format, object)}\n`).join("")
-        : `${JSON.stringify(found, null, 2)}\n`
-    }
-    if (subcommand === "ls") {
-      await this.#checkpoint("network ls")
-      const { values } = parseFlags(rest, ["--filter", "--format"])
-      const filters = values.get("--filter") ?? []
-      return [...this.networks.values()]
-        .filter((network) =>
-          filters.every((filter) => {
-            const [key, value = ""] = splitOnce(filter, "=")
-            if (key !== "label") {
-              return this.#unsupported(`docker network ls --filter ${filter}`)
-            }
-            const [label, expected] = splitOnce(value, "=")
-            return expected === undefined
-              ? Object.hasOwn(network.labels, label)
-              : network.labels[label] === expected
-          })
-        )
-        .map((network) => `${network.id.slice(0, 12)}\n`)
-        .join("")
-    }
     if (subcommand === "create") {
       const { flags, positional, values } = parseFlags(rest, [
         "--driver",
@@ -1113,7 +1013,7 @@ export class FakeDocker {
       const [name = ""] = positional
       await this.#checkpoint("network create", name)
       if (this.networks.has(name)) {
-        throw new DockerFailure(`network with name ${name} already exists`)
+        throw new DockerFailure(`network with name ${name} already exists`, 409)
       }
       const network = this.addNetwork({
         internal: flags.has("--internal"),
@@ -1123,56 +1023,78 @@ export class FakeDocker {
       })
       return `${network.id}\n`
     }
-    if (subcommand === "connect") {
-      const { positional, values } = parseFlags(rest, ["--alias", "--ip"])
-      const [networkName = "", containerName = ""] = positional
-      await this.#checkpoint("network connect", networkName)
-      const network = this.network(networkName)
-      if (!network) throw new DockerFailure(`network ${networkName} not found`)
-      const container = this.#requiredContainer(containerName)
-      if (container.networks.has(network.name)) {
-        throw new DockerFailure(
-          `endpoint with name ${container.name} already exists in network ${network.name}`
-        )
-      }
-      container.networks.set(network.name, {
-        aliases: [...(values.get("--alias") ?? []), container.name],
-        ipAddress: values.get("--ip")?.[0] ?? "",
-      })
-      return ""
-    }
-    if (subcommand === "disconnect") {
-      const { positional } = parseFlags(rest, [])
-      const [networkName = "", containerName = ""] = positional
-      await this.#checkpoint("network disconnect", networkName)
-      const network = this.network(networkName)
-      if (!network) throw new DockerFailure(`network ${networkName} not found`)
-      const container = this.#requiredContainer(containerName)
-      if (!container.networks.delete(network.name)) {
-        throw new DockerFailure(
-          `container ${container.name} is not connected to network ${network.name}`
-        )
-      }
-      return ""
-    }
-    if (subcommand === "rm") {
-      for (const reference of rest) {
-        await this.#checkpoint("network rm", reference)
-        const network = this.network(reference)
-        if (!network) throw new DockerFailure(`network ${reference} not found`)
-        const attached = [...this.containers.values()].filter((container) =>
-          container.networks.has(network.name)
-        )
-        if (attached.length > 0) {
-          throw new DockerFailure(
-            `error while removing network: network ${network.name} has active endpoints (${attached.map(({ name }) => name).join(", ")})`
-          )
-        }
-        this.networks.delete(network.name)
-      }
-      return ""
-    }
     return this.#unsupported(`docker network ${arguments_.join(" ")}`)
+  }
+
+  #networkList(filters: Array<string>): Array<FakeNetwork> {
+    return [...this.networks.values()].filter((network) =>
+      filters.every((filter) => {
+        const [key, value = ""] = splitOnce(filter, "=")
+        if (key !== "label") {
+          return this.#unsupported(`docker network ls --filter ${filter}`)
+        }
+        const [label, expected] = splitOnce(value, "=")
+        return expected === undefined
+          ? Object.hasOwn(network.labels, label)
+          : network.labels[label] === expected
+      })
+    )
+  }
+
+  #requiredNetwork(reference: string): FakeNetwork {
+    const network = this.network(reference)
+    if (!network) throw new DockerFailure(`network ${reference} not found`, 404)
+    return network
+  }
+
+  async #networkConnect(
+    networkName: string,
+    containerName: string,
+    endpoint: { aliases: Array<string>; ipAddress: string }
+  ): Promise<void> {
+    await this.#checkpoint("network connect", networkName)
+    const network = this.#requiredNetwork(networkName)
+    const container = this.#requiredContainer(containerName)
+    if (container.networks.has(network.name)) {
+      throw new DockerFailure(
+        `endpoint with name ${container.name} already exists in network ${network.name}`,
+        403
+      )
+    }
+    container.networks.set(network.name, {
+      aliases: [...endpoint.aliases, container.name],
+      ipAddress: endpoint.ipAddress,
+    })
+  }
+
+  async #networkDisconnect(
+    networkName: string,
+    containerName: string
+  ): Promise<void> {
+    await this.#checkpoint("network disconnect", networkName)
+    const network = this.#requiredNetwork(networkName)
+    const container = this.#requiredContainer(containerName)
+    if (!container.networks.delete(network.name)) {
+      throw new DockerFailure(
+        `container ${container.name} is not connected to network ${network.name}`,
+        403
+      )
+    }
+  }
+
+  async #networkRemove(reference: string): Promise<void> {
+    await this.#checkpoint("network rm", reference)
+    const network = this.#requiredNetwork(reference)
+    const attached = [...this.containers.values()].filter((container) =>
+      container.networks.has(network.name)
+    )
+    if (attached.length > 0) {
+      throw new DockerFailure(
+        `error while removing network: network ${network.name} has active endpoints (${attached.map(({ name }) => name).join(", ")})`,
+        403
+      )
+    }
+    this.networks.delete(network.name)
   }
 
   async #volumeCommand(arguments_: Array<string>): Promise<string> {
@@ -1189,67 +1111,189 @@ export class FakeDocker {
       }
       return `${name}\n`
     }
-    if (subcommand === "inspect") {
-      const { positional, values } = parseFlags(rest, ["--format"])
-      const format = values.get("--format")?.[0]
-      const found = positional.flatMap((name) => {
-        const volume = this.volumes.get(name)
-        return volume
-          ? [{ Driver: "local", Labels: volume.labels, Name: volume.name }]
-          : []
-      })
-      if (found.length === 0) {
-        throw new DockerFailure(`get ${positional.join(" ")}: no such volume`)
-      }
-      return format
-        ? found.map((object) => `${renderTemplate(format, object)}\n`).join("")
-        : `${JSON.stringify(found, null, 2)}\n`
-    }
-    if (subcommand === "rm") {
-      for (const name of rest) {
-        await this.#checkpoint("volume rm", name)
-        if (!this.volumes.has(name)) {
-          throw new DockerFailure(`get ${name}: no such volume`)
-        }
-        const user = [...this.containers.values()].find((container) =>
-          container.mounts.some(
-            (mount) => mount.type === "volume" && mount.source === name
-          )
-        )
-        if (user) {
-          throw new DockerFailure(
-            `remove ${name}: volume is in use - [${user.id}]`
-          )
-        }
-        this.volumes.delete(name)
-      }
-      return ""
-    }
     return this.#unsupported(`docker volume ${arguments_.join(" ")}`)
+  }
+
+  async #volumeRemove(name: string): Promise<void> {
+    await this.#checkpoint("volume rm", name)
+    if (!this.volumes.has(name)) {
+      throw new DockerFailure(`get ${name}: no such volume`, 404)
+    }
+    const user = [...this.containers.values()].find((container) =>
+      container.mounts.some(
+        (mount) => mount.type === "volume" && mount.source === name
+      )
+    )
+    if (user) {
+      throw new DockerFailure(
+        `remove ${name}: volume is in use - [${user.id}]`,
+        409
+      )
+    }
+    this.volumes.delete(name)
   }
 
   // ------------------------------------------------------------- Engine API
 
   async #api(request: IncomingMessage, response: ServerResponse) {
-    const url = new URL(request.url ?? "/", "http://docker")
-    const body = await readBody(request)
-    const send = (status: number, payload: unknown) => {
+    this.#begin()
+    try {
+      const url = new URL(request.url ?? "/", "http://docker")
+      const body = await readBody(request)
+      const answer = await this.#route(request.method ?? "GET", url, body)
+      if (answer.kind === "stream") answer.write(response)
+      else if (answer.status === 204 || answer.status === 304) {
+        response.writeHead(answer.status).end()
+      } else {
+        response.writeHead(answer.status, {
+          "Content-Type": "application/json",
+        })
+        response.end(JSON.stringify(answer.payload))
+      }
+    } catch (cause) {
+      const status = cause instanceof DockerFailure ? cause.status : 500
       response.writeHead(status, { "Content-Type": "application/json" })
-      response.end(JSON.stringify(payload))
+      response.end(
+        JSON.stringify({
+          message: cause instanceof Error ? cause.message : String(cause),
+        })
+      )
+    } finally {
+      this.#settled()
     }
-    const match = /^\/containers\/([^/]+)\/(resize|stats)$/u.exec(url.pathname)
-    const execCreate = /^\/containers\/([^/]+)\/exec$/u.exec(url.pathname)
-    if (request.method === "POST" && execCreate) {
-      const target = this.container(decodeURIComponent(execCreate[1] ?? ""))
-      if (!target?.state.running) {
-        send(target ? 409 : 404, { message: "Container is not running" })
-        return
+  }
+
+  async #route(method: string, url: URL, body: string): Promise<ApiAnswer> {
+    const path = url.pathname
+    const json = (status: number, payload: unknown = {}): ApiAnswer => ({
+      kind: "json",
+      payload,
+      status,
+    })
+    const flag = (name: string) => {
+      const value = url.searchParams.get(name)
+      return value === "1" || value === "true"
+    }
+    const route = (pattern: RegExp) =>
+      pattern
+        .exec(path)
+        ?.slice(1)
+        .map((part) => decodeURIComponent(part))
+    let parameters: Array<string> | undefined
+
+    if (method === "GET" && path === "/version") {
+      return json(200, { ApiVersion: "1.47", Version: "27.3.1" })
+    }
+    if (method === "GET" && path === "/containers/json") {
+      const filters = apiFilters(url)
+      return json(
+        200,
+        [...this.containers.values()]
+          .filter((container) => flag("all") || container.state.running)
+          .filter((container) =>
+            filters.every((filter) => this.#matchesFilter(container, filter))
+          )
+          .map((container) => containerSummary(container))
+      )
+    }
+    if (method === "POST" && path === "/containers/create") {
+      const name = url.searchParams.get("name") ?? undefined
+      await this.#checkpoint("create", name)
+      const container = this.#createFromApi(name, JSON.parse(body))
+      return json(201, { Id: container.id, Warnings: [] })
+    }
+    if (
+      method === "GET" &&
+      (parameters = route(/^\/containers\/([^/]+)\/json$/u))
+    ) {
+      const target = this.#requiredContainer(parameters[0] ?? "")
+      await this.#checkpoint("inspect", target.name)
+      return json(200, this.#containerObject(target.id))
+    }
+    if (
+      method === "POST" &&
+      (parameters = route(
+        /^\/containers\/([^/]+)\/(start|stop|restart|kill)$/u
+      ))
+    ) {
+      const [reference = "", action] = parameters
+      const changed = await this.#powerOne(
+        action as "kill" | "restart" | "start" | "stop",
+        reference
+      )
+      return json(changed ? 204 : 304)
+    }
+    if (
+      method === "DELETE" &&
+      (parameters = route(/^\/containers\/([^/]+)$/u))
+    ) {
+      await this.#removeOne(parameters[0] ?? "", flag("force"))
+      return json(204)
+    }
+    if (
+      method === "POST" &&
+      (parameters = route(/^\/containers\/([^/]+)\/rename$/u))
+    ) {
+      await this.#renameOne(
+        parameters[0] ?? "",
+        url.searchParams.get("name") ?? ""
+      )
+      return json(204)
+    }
+    if (
+      method === "POST" &&
+      (parameters = route(/^\/containers\/([^/]+)\/update$/u))
+    ) {
+      const update = JSON.parse(body) as { RestartPolicy?: { Name?: string } }
+      const policy = update.RestartPolicy?.Name
+      if (policy === undefined) return this.#unsupported(`POST ${path} ${body}`)
+      await this.#setRestartPolicy(parameters[0] ?? "", policy)
+      return json(200, { Warnings: [] })
+    }
+    if (
+      method === "GET" &&
+      (parameters = route(/^\/containers\/([^/]+)\/stats$/u))
+    ) {
+      const container = this.#requiredContainer(parameters[0] ?? "")
+      return json(200, {
+        cpu_stats: {
+          cpu_usage: { total_usage: 0 },
+          online_cpus: 1,
+          system_cpu_usage: 0,
+        },
+        memory_stats: { limit: container.memoryBytes, usage: 0 },
+        networks: {},
+        precpu_stats: { cpu_usage: { total_usage: 0 }, system_cpu_usage: 0 },
+      })
+    }
+    if (
+      method === "POST" &&
+      (parameters = route(/^\/containers\/([^/]+)\/resize$/u))
+    ) {
+      this.#requiredContainer(parameters[0] ?? "")
+      return json(200)
+    }
+    if (
+      method === "GET" &&
+      (parameters = route(/^\/containers\/([^/]+)\/logs$/u))
+    ) {
+      return this.#logStream(this.#requiredContainer(parameters[0] ?? ""), url)
+    }
+    if (
+      method === "POST" &&
+      (parameters = route(/^\/containers\/([^/]+)\/exec$/u))
+    ) {
+      const target = this.#requiredContainer(parameters[0] ?? "")
+      if (!target.state.running) {
+        throw new DockerFailure(`Container ${target.id} is not running`, 409)
       }
       const input = JSON.parse(body) as {
         Cmd?: Array<string>
         Env?: Array<string>
         Tty?: boolean
+        User?: string
       }
+      if (input.User) return this.#unsupported(`exec as ${input.User}`)
       const exec: FakeExec = {
         cmd: input.Cmd ?? [],
         containerId: target.id,
@@ -1258,93 +1302,174 @@ export class FakeDocker {
             (entry) => splitOnce(entry, "=") as [string, string]
           )
         ),
+        exitCode: null,
         id: randomBytes(32).toString("hex"),
         running: false,
         size: null,
         tty: input.Tty ?? false,
       }
       this.execs.set(exec.id, exec)
-      send(201, { Id: exec.id })
-      return
+      return json(201, { Id: exec.id })
     }
-    const execStart = /^\/exec\/([^/]+)\/start$/u.exec(url.pathname)
-    if (request.method === "POST" && execStart) {
-      const exec = this.execs.get(decodeURIComponent(execStart[1] ?? ""))
-      if (!exec) {
-        send(404, { message: "No such exec instance" })
-        return
+    if (
+      method === "POST" &&
+      (parameters = route(/^\/exec\/([^/]+)\/start$/u))
+    ) {
+      const exec = this.execs.get(parameters[0] ?? "")
+      if (!exec) throw new DockerFailure("No such exec instance", 404)
+      const options = JSON.parse(body || "{}") as { Detach?: boolean }
+      if (options.Detach) {
+        this.#runDetachedExec(exec)
+        return json(200)
       }
-      this.#runDetachedExec(exec)
-      send(200, {})
-      return
+      return this.#runExec(exec)
     }
-    const execResize = /^\/exec\/([^/]+)\/resize$/u.exec(url.pathname)
-    if (request.method === "POST" && execResize) {
-      const exec = this.execs.get(decodeURIComponent(execResize[1] ?? ""))
-      if (!exec?.running) {
-        send(404, { message: "No such exec instance" })
-        return
-      }
+    if (
+      method === "POST" &&
+      (parameters = route(/^\/exec\/([^/]+)\/resize$/u))
+    ) {
+      const exec = this.execs.get(parameters[0] ?? "")
+      if (!exec?.running) throw new DockerFailure("No such exec instance", 404)
       exec.size = {
         cols: Number(url.searchParams.get("w")),
         rows: Number(url.searchParams.get("h")),
       }
-      send(200, {})
-      return
+      return json(200)
     }
-    if (request.method === "POST" && url.pathname === "/containers/create") {
-      try {
-        const name = url.searchParams.get("name") ?? undefined
-        await this.#checkpoint("create", name)
-        const container = this.#createFromApi(name, JSON.parse(body))
-        send(201, { Id: container.id, Warnings: [] })
-      } catch (cause) {
-        send(cause instanceof DockerFailure ? 409 : 500, {
-          message: cause instanceof Error ? cause.message : String(cause),
+    if (method === "GET" && (parameters = route(/^\/exec\/([^/]+)\/json$/u))) {
+      const exec = this.execs.get(parameters[0] ?? "")
+      if (!exec) throw new DockerFailure("No such exec instance", 404)
+      return json(200, { ExitCode: exec.exitCode, Running: exec.running })
+    }
+    if (method === "GET" && path === "/networks") {
+      await this.#checkpoint("network ls")
+      return json(
+        200,
+        this.#networkList(apiFilters(url)).map((network) =>
+          this.#networkObject(network, false)
+        )
+      )
+    }
+    if (method === "GET" && (parameters = route(/^\/networks\/([^/]+)$/u))) {
+      const [reference = ""] = parameters
+      await this.#checkpoint("network inspect", reference)
+      return json(200, this.#networkObject(this.#requiredNetwork(reference)))
+    }
+    if (
+      method === "POST" &&
+      (parameters = route(/^\/networks\/([^/]+)\/(connect|disconnect)$/u))
+    ) {
+      const [network = "", action] = parameters
+      const input = JSON.parse(body) as {
+        Container: string
+        EndpointConfig?: {
+          Aliases?: Array<string>
+          IPAMConfig?: { IPv4Address?: string }
+        }
+      }
+      if (action === "connect") {
+        await this.#networkConnect(network, input.Container, {
+          aliases: input.EndpointConfig?.Aliases ?? [],
+          ipAddress: input.EndpointConfig?.IPAMConfig?.IPv4Address ?? "",
         })
+      } else {
+        await this.#networkDisconnect(network, input.Container)
       }
-      return
+      return json(200)
     }
-    const inspect = /^\/containers\/([^/]+)\/json$/u.exec(url.pathname)
-    if (request.method === "GET" && inspect) {
-      const target = this.container(decodeURIComponent(inspect[1] ?? ""))
-      if (!target) {
-        send(404, { message: `No such container: ${inspect[1]}` })
-        return
+    if (method === "DELETE" && (parameters = route(/^\/networks\/([^/]+)$/u))) {
+      await this.#networkRemove(parameters[0] ?? "")
+      return json(204)
+    }
+    if (method === "GET" && (parameters = route(/^\/volumes\/([^/]+)$/u))) {
+      const volume = this.volumes.get(parameters[0] ?? "")
+      if (!volume) {
+        throw new DockerFailure(`get ${parameters[0]}: no such volume`, 404)
       }
-      await this.#checkpoint("inspect", target.name)
-      send(200, {
-        Id: target.id,
-        Name: `/${target.name}`,
-        State: {
-          ExitCode: target.state.exitCode,
-          Running: target.state.running,
-          StartedAt: target.state.startedAt,
-        },
+      return json(200, {
+        Driver: "local",
+        Labels: volume.labels,
+        Name: volume.name,
       })
-      return
     }
-    const container = match
-      ? this.container(decodeURIComponent(match[1] ?? ""))
-      : undefined
-    if (!container) {
-      send(404, { message: `No such container: ${url.pathname}` })
-      return
+    if (method === "DELETE" && (parameters = route(/^\/volumes\/([^/]+)$/u))) {
+      await this.#volumeRemove(parameters[0] ?? "")
+      return json(204)
     }
-    if (match?.[2] === "resize") {
-      send(200, {})
-      return
+    if (method === "GET" && (parameters = route(/^\/images\/(.+)\/json$/u))) {
+      const [image = ""] = parameters
+      const found = this.#imageObject(image)
+      if (!found) throw new DockerFailure(`No such image: ${image}`, 404)
+      return json(200, found)
     }
-    send(200, {
-      cpu_stats: {
-        cpu_usage: { total_usage: 0 },
-        online_cpus: 1,
-        system_cpu_usage: 0,
+    return this.#unsupported(`${method} ${path}`)
+  }
+
+  /** `docker logs`; following ends when the container stops. */
+  #logStream(container: FakeContainer, url: URL): ApiAnswer {
+    const since = url.searchParams.get("since")
+    const until = url.searchParams.get("until")
+    const tail = url.searchParams.get("tail") ?? "all"
+    const lines = container.logs.filter(
+      ({ time }) =>
+        (since === null || Date.parse(time) >= unixMilliseconds(since)) &&
+        (until === null || Date.parse(time) < unixMilliseconds(until))
+    )
+    const selected = tail === "all" ? lines : lines.slice(-Number(tail))
+    const follow = url.searchParams.get("follow") === "1"
+    return {
+      kind: "stream",
+      write: (response) => {
+        response.writeHead(200, {
+          "Content-Type": container.tty
+            ? "application/vnd.docker.raw-stream"
+            : "application/vnd.docker.multiplexed-stream",
+        })
+        for (const { text, time } of selected) {
+          const line = Buffer.from(`${time} ${text}\n`)
+          response.write(container.tty ? line : frame(1, line))
+        }
+        if (!follow || !container.state.running) {
+          response.end()
+          return
+        }
+        const follower = { containerId: container.id, response }
+        this.#followers.add(follower)
+        response.on("close", () => this.#followers.delete(follower))
       },
-      memory_stats: { limit: container.memoryBytes, usage: 0 },
-      networks: {},
-      precpu_stats: { cpu_usage: { total_usage: 0 }, system_cpu_usage: 0 },
-    })
+    }
+  }
+
+  /** A non-interactive exec: its output, multiplexed, ends as it exits. */
+  #runExec(exec: FakeExec): ApiAnswer {
+    const container = this.containers.get(exec.containerId)
+    if (!container?.state.running) {
+      throw new DockerFailure(
+        `Container ${exec.containerId} is not running`,
+        409
+      )
+    }
+    let stdout = ""
+    let stderr = ""
+    try {
+      stdout = this.#runProgram(container, exec.cmd, exec.env)
+      exec.exitCode = 0
+    } catch (cause) {
+      if (!(cause instanceof DockerFailure)) throw cause
+      stderr = `${cause.message}\n`
+      exec.exitCode = 1
+    }
+    return {
+      kind: "stream",
+      write: (response) => {
+        response.writeHead(200, {
+          "Content-Type": "application/vnd.docker.raw-stream",
+        })
+        if (stdout) response.write(frame(1, Buffer.from(stdout)))
+        if (stderr) response.write(frame(2, Buffer.from(stderr)))
+        response.end()
+      },
+    }
   }
 
   #createFromApi(name: string | undefined, body: CreateBody): FakeContainer {
@@ -1497,7 +1622,9 @@ export class FakeDocker {
 
   #requiredContainer(reference: string): FakeContainer {
     const container = this.container(reference)
-    if (!container) throw new DockerFailure(`No such container: ${reference}`)
+    if (!container) {
+      throw new DockerFailure(`No such container: ${reference}`, 404)
+    }
     return container
   }
 
@@ -1760,87 +1887,6 @@ function splitOnce(value: string, separator: string): [string, string?] {
     : [value.slice(0, index), value.slice(index + separator.length)]
 }
 
-function portsSummary(container: FakeContainer): string {
-  if (!container.state.running) return ""
-  return Object.entries(container.portBindings)
-    .flatMap(([port, hosts]) =>
-      hosts.flatMap((host) =>
-        host.HostIp
-          ? [`${host.HostIp}:${host.HostPort}->${port}`]
-          : [
-              `0.0.0.0:${host.HostPort}->${port}`,
-              `[::]:${host.HostPort}->${port}`,
-            ]
-      )
-    )
-    .join(", ")
-}
-
-/**
- * The subset of Go templates Relay passes to `--format`: field paths,
- * `json`, `index`, and `range … println … end`.
- */
-function renderTemplate(template: string, root: unknown): string {
-  const withRanges = template.replace(
-    /\{\{\s*range\s+(\.[\w.]*)\s*\}\}(.*?)\{\{\s*end\s*\}\}/gu,
-    (_match, path: string, body: string) => {
-      const value = lookup(root, path)
-      const items =
-        value && typeof value === "object" ? Object.values(value) : []
-      return items
-        .map((item) =>
-          body.replace(
-            /\{\{\s*println\s+(\.[\w.]*)\s*\}\}/gu,
-            (_inner, itemPath: string) =>
-              `${goString(lookup(item, itemPath))}\n`
-          )
-        )
-        .join("")
-    }
-  )
-  return withRanges.replace(
-    /\{\{\s*(?:(json)\s+(\.[\w.]*)|index\s+(\.[\w.]*)\s+"([^"]*)"|(\.[\w.]*))\s*\}\}/gu,
-    (
-      _match,
-      json: string | undefined,
-      jsonPath: string | undefined,
-      indexPath: string | undefined,
-      key: string | undefined,
-      path: string | undefined
-    ) => {
-      if (json && jsonPath)
-        return JSON.stringify(lookup(root, jsonPath) ?? null)
-      if (indexPath && key !== undefined) {
-        const map = lookup(root, indexPath) as
-          | Record<string, unknown>
-          | undefined
-        return map && Object.hasOwn(map, key)
-          ? goString(map[key])
-          : "<no value>"
-      }
-      return goString(lookup(root, path ?? "."))
-    }
-  )
-}
-
-function lookup(root: unknown, path: string): unknown {
-  return path
-    .split(".")
-    .filter(Boolean)
-    .reduce<unknown>(
-      (value, key) =>
-        value && typeof value === "object"
-          ? (value as Record<string, unknown>)[key]
-          : undefined,
-      root
-    )
-}
-
-function goString(value: unknown): string {
-  if (value === undefined || value === null) return "<no value>"
-  return typeof value === "object" ? JSON.stringify(value) : String(value)
-}
-
 /** The iptables subcommands Relay uses, against one network namespace. */
 function iptables(
   chains: Map<string, Array<string>>,
@@ -1897,6 +1943,61 @@ function procNetTcp(listeningPorts: ReadonlyArray<number>): string {
       `   ${index}: 00000000:${port.toString(16).toUpperCase().padStart(4, "0")} 00000000:0000 0A 00000000:00000000 00:00000000 00000000  1000        0 ${10_000 + index}`
   )
   return `${[header, ...rows].join("\n")}\n`
+}
+
+type ApiAnswer =
+  | { kind: "json"; payload: unknown; status: number }
+  | { kind: "stream"; write: (response: ServerResponse) => void }
+
+/** The API's `filters` parameter as the CLI's `--filter key=value` strings. */
+function apiFilters(url: URL): Array<string> {
+  const filters = JSON.parse(url.searchParams.get("filters") ?? "{}") as Record<
+    string,
+    Array<string>
+  >
+  return Object.entries(filters).flatMap(([key, values]) =>
+    values.map((value) => `${key}=${value}`)
+  )
+}
+
+function containerSummary(container: FakeContainer): unknown {
+  return {
+    Id: container.id,
+    Image: container.image,
+    Labels: container.labels,
+    Names: [`/${container.name}`],
+    Ports: Object.entries(container.portBindings).flatMap(([port, hosts]) => {
+      const [privatePort = "0", type = "tcp"] = port.split("/")
+      const exposed = { PrivatePort: Number(privatePort), Type: type }
+      if (!container.state.running) return [exposed]
+      return hosts.flatMap((host) =>
+        (host.HostIp ? [host.HostIp] : ["0.0.0.0", "::"]).map((ip) => ({
+          ...exposed,
+          IP: ip,
+          PublicPort: Number(host.HostPort),
+        }))
+      )
+    }),
+    State: container.state.running
+      ? "running"
+      : container.state.startedAt === NEVER
+        ? "created"
+        : "exited",
+  }
+}
+
+/** One frame of a multiplexed stream: 1 is stdout, 2 is stderr. */
+function frame(stream: 1 | 2, payload: Buffer): Buffer {
+  const header = Buffer.alloc(8)
+  header[0] = stream
+  header.writeUInt32BE(payload.length, 4)
+  return Buffer.concat([header, payload])
+}
+
+/** Unix seconds with nanoseconds, as `since` and `until` take them. */
+function unixMilliseconds(value: string): number {
+  const [seconds = "0", fraction = ""] = value.split(".")
+  return Number(seconds) * 1_000 + Number(fraction.padEnd(9, "0").slice(0, 3))
 }
 
 function readBody(request: IncomingMessage): Promise<string> {

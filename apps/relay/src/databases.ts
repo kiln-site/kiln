@@ -23,6 +23,11 @@ import type { DatabaseConnections } from "./database-connections.js"
 import { command, commandWithInput } from "./command.js"
 import type { RelayConfig } from "./config.js"
 import type { DockerDriver } from "./docker.js"
+import {
+  containerName,
+  DockerEngine,
+  type DockerContainerSummary,
+} from "./docker-engine.js"
 import { relayOwnerLabel, relayOwnsLabels } from "./relay-resources.js"
 
 const DATABASE_KIND_LABEL = "kiln.resource.kind"
@@ -94,12 +99,6 @@ interface DatabaseContainerInspect {
   }
 }
 
-interface AttachedContainerInspect {
-  Config: { Labels: Record<string, string | undefined> | null }
-  Id: string
-  Name: string
-}
-
 function databaseRecoveryLabels(
   config: Pick<RelayConfig, "resourceNamespace">,
   input: Pick<RelayCreateDatabase, "databaseName" | "engine" | "id" | "name">,
@@ -131,6 +130,7 @@ function databaseRecoveryLabels(
 export class DatabaseDriver {
   readonly #config: RelayConfig
   readonly #docker: DockerDriver
+  readonly #engine: DockerEngine
 
   readonly #mutations = new Map<
     string,
@@ -164,6 +164,7 @@ export class DatabaseDriver {
   ) {
     this.#config = config
     this.#docker = docker
+    this.#engine = new DockerEngine(config.dockerSocket)
   }
 
   async list(): Promise<Array<RelayManagedDatabase>> {
@@ -252,16 +253,29 @@ export class DatabaseDriver {
         { timeout: 120_000 }
       )
       containerCreated = true
-      await command("docker", ["start", container], { timeout: 120_000 })
-      await waitUntilReady(container)
+      await Effect.runPromise(
+        this.#engine.startContainer(container, { timeout: 120_000 })
+      )
+      await waitUntilReady(this.#engine, container)
       return await this.#required(input.id)
     })
     if (Result.isFailure(created)) {
-      if (containerCreated) {
-        await ignoreCommand(["rm", "--force", container])
-      }
-      if (networkCreated) await ignoreCommand(["network", "rm", network])
-      if (volumeCreated) await ignoreCommand(["volume", "rm", volume])
+      const engine = this.#engine
+      await Effect.runPromise(
+        Effect.gen(function* () {
+          if (containerCreated) {
+            yield* engine
+              .removeContainer(container, { force: true })
+              .pipe(Effect.ignore)
+          }
+          if (networkCreated) {
+            yield* engine.removeNetwork(network).pipe(Effect.ignore)
+          }
+          if (volumeCreated) {
+            yield* engine.removeVolume(volume).pipe(Effect.ignore)
+          }
+        })
+      )
       throw created.failure
     }
     return created.success
@@ -271,17 +285,22 @@ export class DatabaseDriver {
     const database = await this.#required(input.databaseId)
     const container = requiredContainerId(database)
     if (input.action === "stop") {
-      await command("docker", ["stop", "--time", "30", container], {
-        timeout: 45_000,
-      })
+      await Effect.runPromise(
+        this.#engine.stopContainer(container, { seconds: 30, timeout: 45_000 })
+      )
     } else if (input.action === "start") {
-      await command("docker", ["start", container], { timeout: 120_000 })
-      await waitUntilReady(container)
+      await Effect.runPromise(
+        this.#engine.startContainer(container, { timeout: 120_000 })
+      )
+      await waitUntilReady(this.#engine, container)
     } else {
-      await command("docker", ["restart", "--time", "30", container], {
-        timeout: 150_000,
-      })
-      await waitUntilReady(container)
+      await Effect.runPromise(
+        this.#engine.restartContainer(container, {
+          seconds: 30,
+          timeout: 150_000,
+        })
+      )
+      await waitUntilReady(this.#engine, container)
     }
     return this.#required(input.databaseId)
   }
@@ -313,28 +332,31 @@ export class DatabaseDriver {
     if (!container && !network && !volume) {
       throw new Error("Database not found")
     }
+    const engine = this.#engine
     if (network) {
       const connected = await this.#attachedContainers(network)
       for (const attached of connected) {
         if (attached.Id === container) continue
-        await ignoreCommand([
-          "network",
-          "disconnect",
-          "--force",
-          network,
-          attached.Name.replace(/^\//u, ""),
-        ])
+        await Effect.runPromise(
+          engine
+            .disconnectNetwork(network, containerName(attached), {
+              force: true,
+            })
+            .pipe(Effect.ignore)
+        )
       }
     }
     if (container) {
-      await command("docker", ["rm", "--force", container], {
-        timeout: 90_000,
-      })
+      await Effect.runPromise(
+        engine.removeContainer(container, { force: true, timeout: 90_000 })
+      )
     }
-    if (network) await ignoreCommand(["network", "rm", network])
+    if (network) {
+      await Effect.runPromise(engine.removeNetwork(network).pipe(Effect.ignore))
+    }
     await this.connections.forgetDatabase(input.databaseId)
     if (input.deleteData && volume) {
-      await command("docker", ["volume", "rm", volume])
+      await Effect.runPromise(engine.removeVolume(volume))
     }
     return { databaseId: input.databaseId, deleted: true }
   }
@@ -496,22 +518,20 @@ export class DatabaseDriver {
   }
 
   async #discover(): Promise<Array<DatabaseContainerInspect>> {
-    const result = await command("docker", [
-      "container",
-      "ls",
-      "--all",
-      "--filter",
-      `label=${DATABASE_KIND_LABEL}=${DATABASE_KIND}`,
-      "--format",
-      "{{.ID}}",
-    ])
-    const ids = result.stdout.split("\n").filter(Boolean)
-    if (ids.length === 0) return []
-    const inspected = JSON.parse(
-      (await command("docker", ["inspect", ...ids])).stdout
-    ) as Array<DatabaseContainerInspect>
-    return inspected.filter((container) =>
-      relayOwnsLabels(this.#config, container.Config.Labels)
+    const engine = this.#engine
+    const config = this.#config
+    return Effect.runPromise(
+      Effect.gen(function* () {
+        const listed = yield* engine.listContainers({
+          all: true,
+          filters: { label: [`${DATABASE_KIND_LABEL}=${DATABASE_KIND}`] },
+        })
+        return yield* engine.inspectContainers<DatabaseContainerInspect>(
+          listed.flatMap((container) =>
+            relayOwnsLabels(config, container.Labels) ? [container.Id] : []
+          )
+        )
+      })
     )
   }
 
@@ -526,7 +546,7 @@ export class DatabaseDriver {
     const network = requiredLabel(labels, "kiln.database.network")
     const attached = await this.#attachedContainers(network)
     const connectedInstanceIds = attached.flatMap((candidate) => {
-      const instanceId = candidate.Config.Labels?.[this.#config.serverIdLabel]
+      const instanceId = candidate.Labels?.[this.#config.serverIdLabel]
       return instanceId?.match(/^[a-f0-9]{40}$/iu)
         ? [instanceId.toLowerCase()]
         : []
@@ -568,23 +588,16 @@ export class DatabaseDriver {
     })
   }
 
+  // Listed containers carry their labels, so none is inspected.
   async #attachedContainers(
     network: string
-  ): Promise<Array<AttachedContainerInspect>> {
-    const result = await command("docker", [
-      "container",
-      "ls",
-      "--all",
-      "--filter",
-      `network=${network}`,
-      "--format",
-      "{{.ID}}",
-    ])
-    const ids = result.stdout.split("\n").filter(Boolean)
-    if (ids.length === 0) return []
-    return JSON.parse(
-      (await command("docker", ["inspect", ...ids])).stdout
-    ) as Array<AttachedContainerInspect>
+  ): Promise<ReadonlyArray<DockerContainerSummary>> {
+    return Effect.runPromise(
+      this.#engine.listContainers({
+        all: true,
+        filters: { network: [network] },
+      })
+    )
   }
 
   async #ownedDatabaseResource(
@@ -605,16 +618,14 @@ export class DatabaseDriver {
     )
     for (const name of candidates) {
       const inspected = await promiseResult(() =>
-        command("docker", [
-          kind,
-          "inspect",
-          "--format",
-          "{{json .Labels}}",
-          name,
-        ])
+        Effect.runPromise(
+          kind === "network"
+            ? this.#engine.inspectNetwork(name)
+            : this.#engine.inspectVolume(name)
+        )
       )
       if (Result.isFailure(inspected)) continue
-      const labels = stringLabels(JSON.parse(inspected.success.stdout))
+      const labels = stringLabels(inspected.success.Labels)
       if (
         labels[DATABASE_KIND_LABEL] === DATABASE_KIND &&
         labels["kiln.database.id"] === databaseId &&
@@ -629,7 +640,7 @@ export class DatabaseDriver {
 
   async #ensureImage(image: string) {
     const inspected = await promiseResult(() =>
-      command("docker", ["image", "inspect", image])
+      Effect.runPromise(this.#engine.inspectImage(image))
     )
     if (Result.isFailure(inspected)) {
       await command("docker", ["pull", image], { timeout: 300_000 })
@@ -833,16 +844,15 @@ async function writeAclFile(
   )
 }
 
-async function waitUntilReady(container: string): Promise<void> {
+async function waitUntilReady(
+  engine: DockerEngine,
+  container: string
+): Promise<void> {
   const deadline = Date.now() + 180_000
   while (Date.now() < deadline) {
-    const result = await command("docker", [
-      "inspect",
-      "--format",
-      "{{json .State}}",
-      container,
-    ])
-    const state = JSON.parse(result.stdout) as DatabaseContainerInspect["State"]
+    const { State: state } = await Effect.runPromise(
+      engine.inspectContainer<DatabaseContainerInspect>(container)
+    )
     if (!state.Running) {
       throw new Error(
         state.Error || `Database exited with code ${state.ExitCode}`
@@ -855,15 +865,6 @@ async function waitUntilReady(container: string): Promise<void> {
     await new Promise((resolve) => setTimeout(resolve, 2_000))
   }
   throw new Error("Database did not become ready within 3 minutes")
-}
-
-async function ignoreCommand(arguments_: Array<string>): Promise<void> {
-  await Effect.runPromise(
-    Effect.tryPromise({
-      try: () => command("docker", arguments_),
-      catch: (cause) => cause,
-    }).pipe(Effect.ignore)
-  )
 }
 
 function promiseResult<TResult>(run: () => Promise<TResult>) {

@@ -9,6 +9,22 @@ export class CommandError extends Schema.TaggedError<CommandError>()(
   }
 ) {}
 
+export class DockerEngineError extends Schema.TaggedError<DockerEngineError>()(
+  "DockerEngineError",
+  {
+    /** The request, such as `POST /containers/{id}/start`. */
+    operation: Schema.String,
+    reason: Schema.String,
+    /** The daemon's HTTP status; absent when the socket itself failed. */
+    status: Schema.optional(Schema.Number),
+    cause: Schema.optional(Schema.Defect()),
+  }
+) {
+  override get message() {
+    return this.reason
+  }
+}
+
 export class RelayOperationError extends Schema.TaggedError<RelayOperationError>()(
   "RelayOperationError",
   {

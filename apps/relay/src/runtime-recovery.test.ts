@@ -76,10 +76,9 @@ const dockerIdle = Effect.promise(() => fakeDocker.idle())
 
 const makeManager = (environment: Record<string, string> = {}) =>
   Effect.gen(function* () {
-    const manager = new RuntimeRecoveryManager(
-      loadConfig({ NODE_ENV: "test", ...environment }),
-      yield* RelayStateStore
-    )
+    const config = loadConfig({ NODE_ENV: "test", ...environment })
+    config.dockerSocket = yield* Effect.promise(() => fakeDocker.listen())
+    const manager = new RuntimeRecoveryManager(config, yield* RelayStateStore)
     yield* manager.initialize()
     return manager
   })

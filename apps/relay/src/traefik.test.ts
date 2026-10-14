@@ -1,10 +1,9 @@
 import { relayInstanceWebRoutesSchema } from "@workspace/contracts"
 import { parse } from "yaml"
-import { afterEach, describe, expect, it, vi } from "vite-plus/test"
-
-vi.mock("./command.js", () => import("./test/docker.js"))
+import { afterEach, beforeAll, describe, expect, it } from "vite-plus/test"
 
 import { loadConfig } from "./config.js"
+import { DockerEngine } from "./docker-engine.js"
 import { type ContainerSeed, fakeDocker } from "./test/docker.js"
 import {
   discoverExternalTraefikContainer,
@@ -172,6 +171,10 @@ describe("external Traefik labels", () => {
 })
 
 describe("external Traefik discovery", () => {
+  let docker: DockerEngine
+  beforeAll(async () => {
+    docker = new DockerEngine(await fakeDocker.listen())
+  })
   afterEach(() => {
     fakeDocker.reset()
   })
@@ -202,6 +205,7 @@ describe("external Traefik discovery", () => {
     for (const mode of ["none", "hearth", "traefik"] as const) {
       await expect(
         discoverExternalTraefikContainer({
+          docker,
           edgeNetwork: edge,
           resourceNamespace: "hearth-feature-a1b2c3",
           settings: { ...settings, mode },
@@ -222,6 +226,7 @@ describe("external Traefik discovery", () => {
 
     await expect(
       discoverExternalTraefikContainer({
+        docker,
         edgeNetwork: "kiln-edge",
         resourceNamespace: null,
         settings: { ...settings, mode: "none" },

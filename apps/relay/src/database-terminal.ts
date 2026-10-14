@@ -13,9 +13,10 @@ import type {
   RelayManagedDatabase,
 } from "@workspace/contracts"
 import type { ITerminalAddon, Terminal } from "@xterm/headless"
-import { Result } from "effect"
+import { Effect } from "effect"
 
 import type { RelayConfig } from "./config.js"
+import { DockerEngine } from "./docker-engine.js"
 import { forkPromise, recoverPromise } from "./effect/promise.js"
 
 // Each person gets one terminal session per database. It belongs to the Relay,
@@ -140,8 +141,11 @@ export class DatabaseTerminals {
   readonly #attaching = new Map<string, Promise<unknown>>()
   #sweeper: ReturnType<typeof setInterval> | null = null
 
+  readonly #docker: DockerEngine
+
   constructor(config: Pick<RelayConfig, "dockerSocket">) {
     this.#config = config
+    this.#docker = new DockerEngine(config.dockerSocket)
   }
 
   // Attaches and restarts run one at a time per person and database, so
@@ -280,9 +284,8 @@ export class DatabaseTerminals {
     const before = session.changes.at(-1)!
     const seq = this.#change(session, { active: attachmentId, cols, rows })
     if (before.cols !== cols || before.rows !== rows) {
-      await this.#dockerJson(
-        "POST",
-        `/exec/${encodeURIComponent(session.execId)}/resize?h=${rows}&w=${cols}`
+      await Effect.runPromise(
+        this.#docker.resizeExec(session.execId, { columns: cols, rows })
       )
     }
     // Pages know the claim took effect once they see this change.
@@ -351,10 +354,8 @@ export class DatabaseTerminals {
     const sessionId = `${BOOT_ID}.${randomBytes(18).toString("base64url")}`
     const pidFile = `${PID_FILE_PREFIX}${sessionId}`
     const client = terminalClient(database, input.username, input.password)
-    const created = await this.#dockerJson<{ Id: string }>(
-      "POST",
-      `/containers/${encodeURIComponent(containerId)}/exec`,
-      {
+    const created = await Effect.runPromise(
+      this.#docker.createExec(containerId, {
         AttachStderr: true,
         AttachStdin: true,
         AttachStdout: true,
@@ -367,7 +368,7 @@ export class DatabaseTerminals {
         ],
         Env: [...client.environment, "TERM=xterm-256color", "LANG=C.UTF-8"],
         Tty: true,
-      }
+      })
     )
     const socket = await this.#startExec(created.Id, input.rows, input.cols)
     const screen = new HeadlessTerminal({
@@ -586,13 +587,14 @@ export class DatabaseTerminals {
   async #containerRunning(session: TerminalSession) {
     const state = await recoverPromise(
       () =>
-        this.#dockerJson<{ State?: { Running?: boolean } }>(
-          "GET",
-          `/containers/${encodeURIComponent(session.containerId)}/json`
+        Effect.runPromise(
+          this.#docker.inspectContainer(session.containerId, {
+            timeout: 10_000,
+          })
         ),
       () => null
     )
-    return state?.State?.Running === true
+    return state?.State.Running === true
   }
 
   // Clients left by a Relay that stopped while terminals were open.
@@ -619,15 +621,15 @@ export class DatabaseTerminals {
   }
 
   async #runDetached(containerId: string, command: Array<string>) {
-    const created = await this.#dockerJson<{ Id: string }>(
-      "POST",
-      `/containers/${encodeURIComponent(containerId)}/exec`,
-      { AttachStderr: false, AttachStdout: false, Cmd: command }
-    )
-    await this.#dockerJson(
-      "POST",
-      `/exec/${encodeURIComponent(created.Id)}/start`,
-      { Detach: true }
+    const docker = this.#docker
+    await Effect.runPromise(
+      docker
+        .createExec(containerId, {
+          AttachStderr: false,
+          AttachStdout: false,
+          Cmd: command,
+        })
+        .pipe(Effect.flatMap((created) => docker.startDetachedExec(created.Id)))
     )
   }
 
@@ -670,43 +672,6 @@ export class DatabaseTerminals {
         reject(error)
       })
       started.end(body)
-    })
-  }
-
-  #dockerJson<TResult>(method: string, path: string, payload?: unknown) {
-    return new Promise<TResult>((resolve, reject) => {
-      const body = payload === undefined ? "" : JSON.stringify(payload)
-      const call = request(
-        {
-          headers: {
-            "Content-Length": Buffer.byteLength(body),
-            "Content-Type": "application/json",
-          },
-          method,
-          path,
-          socketPath: this.#config.dockerSocket,
-          timeout: 10_000,
-        },
-        (response) => {
-          const chunks: Array<Buffer> = []
-          response.on("data", (chunk: Buffer) => chunks.push(chunk))
-          response.on("end", () => {
-            const text = Buffer.concat(chunks).toString("utf8")
-            if ((response.statusCode ?? 500) >= 300) {
-              reject(new Error(dockerMessage(text, response.statusCode)))
-              return
-            }
-            const parsed = Result.try(
-              () => (text ? JSON.parse(text) : null) as TResult
-            )
-            if (Result.isSuccess(parsed)) resolve(parsed.success)
-            else reject(new Error("Docker returned an invalid response"))
-          })
-        }
-      )
-      call.on("timeout", () => call.destroy(new Error("Docker did not answer")))
-      call.on("error", reject)
-      call.end(body)
     })
   }
 }
@@ -876,11 +841,4 @@ function terminalClient(
         ],
       }
   }
-}
-
-function dockerMessage(text: string, status: number | undefined) {
-  const parsed = Result.try(() => JSON.parse(text) as { message?: unknown })
-  return Result.isSuccess(parsed) && typeof parsed.success?.message === "string"
-    ? parsed.success.message
-    : `Docker returned HTTP ${status ?? 500}`
 }

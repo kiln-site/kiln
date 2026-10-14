@@ -59,6 +59,7 @@ import type { BrickCatalog } from "./bricks.js"
 import { removeResticRepository } from "./backups.js"
 import type { RelayConfig, RelayInstanceConfig } from "./config.js"
 import type { DockerDriver } from "./docker.js"
+import { containerName, DockerEngine } from "./docker-engine.js"
 import {
   INSTALLATION_MARKER_ENV,
   INSTALLATION_MARKER_LABEL,
@@ -300,6 +301,7 @@ export class LifecycleDriver {
   readonly #bricks: BrickCatalog
   readonly #config: RelayConfig
   readonly #docker: DockerDriver
+  readonly #engine: DockerEngine
   readonly #resources: RelayResourceNames
   #edgeMutation: Promise<void> = Promise.resolve()
   #edgeReconciliationFiber: Fiber.Fiber<void> | null = null
@@ -323,6 +325,7 @@ export class LifecycleDriver {
     this.#bricks = bricks
     this.#config = config
     this.#docker = docker
+    this.#engine = new DockerEngine(config.dockerSocket)
     this.#resources = relayResourceNames(config)
   }
 
@@ -411,18 +414,17 @@ export class LifecycleDriver {
       })
     }
 
-    const [ipv4Result, ipv6Result] = await Promise.allSettled([
-      command(
-        "docker",
-        ["exec", this.#resources.tailscaleContainer, "tailscale", "ip", "-4"],
-        { timeout: 10_000 }
-      ),
-      command(
-        "docker",
-        ["exec", this.#resources.tailscaleContainer, "tailscale", "ip", "-6"],
-        { timeout: 10_000 }
-      ),
-    ])
+    const [ipv4Result, ipv6Result] = await Promise.allSettled(
+      (["-4", "-6"] as const).map((family) =>
+        runLifecycle(
+          this.#engine.exec(
+            this.#resources.tailscaleContainer,
+            ["tailscale", "ip", family],
+            { timeout: 10_000 }
+          )
+        )
+      )
+    )
     const ipv4Address =
       ipv4Result.status === "fulfilled"
         ? ipv4Result.value.stdout.trim().split("\n")[0] || null
@@ -474,16 +476,12 @@ export class LifecycleDriver {
 
     const overview = await this.tailscaleOverview()
     if (overview.status.connected) {
-      await command(
-        "docker",
-        [
-          "exec",
+      await runLifecycle(
+        this.#engine.exec(
           this.#resources.tailscaleContainer,
-          "tailscale",
-          "set",
-          `--hostname=${settings.hostname}`,
-        ],
-        { timeout: 30_000 }
+          ["tailscale", "set", `--hostname=${settings.hostname}`],
+          { timeout: 30_000 }
+        )
       )
       await this.#ensureTailscaleDns(settings, overview.status.dnsAddress, true)
     }
@@ -826,15 +824,9 @@ export class LifecycleDriver {
           const instance = await this.#docker.findInstance(binding.instanceId)
           if (instance) {
             await runLifecycle(
-              lifecycleOperation(() =>
-                command("docker", [
-                  "network",
-                  "disconnect",
-                  "--force",
-                  network,
-                  instance.service,
-                ])
-              ).pipe(Effect.ignore)
+              this.#engine
+                .disconnectNetwork(network, instance.service, { force: true })
+                .pipe(Effect.ignore)
             )
           }
         }
@@ -843,9 +835,12 @@ export class LifecycleDriver {
         )
         const container = this.#resources.tailscaleStackContainer(id)
         if (await this.#containerRunning(container)) {
-          await command("docker", ["stop", "--time", "10", container], {
-            timeout: 30_000,
-          })
+          await runLifecycle(
+            this.#engine.stopContainer(container, {
+              seconds: 10,
+              timeout: 30_000,
+            })
+          )
         }
       }).pipe(
         Effect.catch((cause) =>
@@ -901,29 +896,27 @@ export class LifecycleDriver {
       !controlPlaneDeviceRemoved &&
       (await this.#containerExists(container))
     ) {
-      await command("docker", ["start", container], {
-        timeout: 30_000,
-      })
+      await runLifecycle(
+        this.#engine.startContainer(container, { timeout: 30_000 })
+      )
       await runLifecycle(
         lifecycleOperation(() => this.#logoutTailscaleStack(container)).pipe(
           Effect.catch((cause) =>
-            lifecycleOperation(() =>
-              command("docker", ["stop", "--time", "10", container], {
-                timeout: 30_000,
-              })
-            ).pipe(
-              Effect.ignore,
-              Effect.flatMap(() =>
-                Effect.fail(
-                  new Error(
-                    `Could not log the Tailscale machine out; local identity was preserved for retry: ${
-                      cause instanceof Error ? cause.message : "unknown error"
-                    }`,
-                    { cause }
+            this.#engine
+              .stopContainer(container, { seconds: 10, timeout: 30_000 })
+              .pipe(
+                Effect.ignore,
+                Effect.flatMap(() =>
+                  Effect.fail(
+                    new Error(
+                      `Could not log the Tailscale machine out; local identity was preserved for retry: ${
+                        cause instanceof Error ? cause.message : "unknown error"
+                      }`,
+                      { cause }
+                    )
                   )
                 )
               )
-            )
           )
         )
       )
@@ -951,19 +944,15 @@ export class LifecycleDriver {
 
   async #logoutTailscaleStack(container: string): Promise<void> {
     await Effect.runPromise(
-      Effect.tryPromise({
-        try: () =>
-          command("docker", ["exec", container, "tailscale", "logout"], {
-            timeout: 30_000,
+      this.#engine
+        .exec(container, ["tailscale", "logout"], { timeout: 30_000 })
+        .pipe(
+          Effect.retry({
+            schedule: Schedule.spaced("500 millis"),
+            times: 2,
           }),
-        catch: (cause) => cause,
-      }).pipe(
-        Effect.retry({
-          schedule: Schedule.spaced("500 millis"),
-          times: 2,
-        }),
-        Effect.asVoid
-      )
+          Effect.asVoid
+        )
     )
   }
 
@@ -1111,13 +1100,7 @@ export class LifecycleDriver {
       )
     }
     const inspected = await tapPromiseError(
-      () =>
-        command("docker", [
-          "inspect",
-          "--format",
-          "{{json .HostConfig.PortBindings}}",
-          reference,
-        ]),
+      () => runLifecycle(this.#engine.inspectContainer(reference)),
       (cause) => {
         throw new Error(
           "Proxy TLS mode could not inspect its Relay container through the Docker socket. Keep the socket mounted so Relay can verify its private listener.",
@@ -1125,10 +1108,7 @@ export class LifecycleDriver {
         )
       }
     )
-    const bindings = JSON.parse(inspected.stdout) as Record<
-      string,
-      Array<{ HostIp?: string; HostPort?: string }> | null
-    > | null
+    const bindings = inspected.HostConfig?.PortBindings
     const published = bindings?.[`${this.#config.port}/tcp`] ?? []
     const unsafe = published.filter(
       (binding) => binding.HostIp !== "127.0.0.1" && binding.HostIp !== "::1"
@@ -1166,17 +1146,13 @@ export class LifecycleDriver {
     const settings = configuredSettings ?? (await this.proxySettings())
     const ports = await Promise.all(
       ([80, 443] as const).map(async (port) => {
-        const result = await command("docker", [
-          "ps",
-          "--filter",
-          `publish=${port}`,
-          "--format",
-          "{{.Names}}",
-        ])
-        const owners = result.stdout
-          .split("\n")
-          .map((value) => value.trim())
-          .filter(Boolean)
+        const owners = (
+          await runLifecycle(
+            this.#engine.listContainers({
+              filters: { publish: [String(port)] },
+            })
+          )
+        ).map(containerName)
         const conflictingOwner = owners.find(
           (owner) => owner !== this.#resources.traefikContainer
         )
@@ -1187,17 +1163,8 @@ export class LifecycleDriver {
         }
       })
     )
-    const bundledContainerRunning = await recoverPromise(
-      async () =>
-        (
-          await command("docker", [
-            "inspect",
-            "--format",
-            "{{.State.Running}}",
-            this.#resources.traefikContainer,
-          ])
-        ).stdout.trim() === "true",
-      () => false
+    const bundledContainerRunning = await this.#containerRunning(
+      this.#resources.traefikContainer
     )
     const coolifyProxy =
       settings.mode === "coolify"
@@ -1241,7 +1208,11 @@ export class LifecycleDriver {
           "Coolify mode could not find a running coolify-proxy container. Confirm this Relay is on a Coolify host using its Traefik proxy."
         )
       } else if (
-        !(await containerUsesNetwork(coolifyProxy, this.#resources.edgeNetwork))
+        !(await containerUsesNetwork(
+          this.#engine,
+          coolifyProxy,
+          this.#resources.edgeNetwork
+        ))
       ) {
         warnings.push(
           `Coolify Traefik is not attached to ${this.#resources.edgeNetwork}. Relay will keep retrying the private edge attachment.`
@@ -1342,19 +1313,25 @@ export class LifecycleDriver {
       profile,
       this.#resources.edgeNetwork
     )
-    const labels = await containerLabels(instance.service)
+    const labels = await containerLabels(this.#engine, instance.service)
     const requiresRestart = routeLabelsRequireRestart(
       labels,
       routes,
       desiredLabels
     )
     const edgeConnected = await containerUsesNetwork(
+      this.#engine,
       instance.service,
       this.#resources.edgeNetwork
     )
     const proxy = await this.#externalTraefikContainer(settings)
     const proxyConnected = Boolean(
-      proxy && (await containerUsesNetwork(proxy, this.#resources.edgeNetwork))
+      proxy &&
+      (await containerUsesNetwork(
+        this.#engine,
+        proxy,
+        this.#resources.edgeNetwork
+      ))
     )
 
     if (requiresRestart) {
@@ -1409,9 +1386,11 @@ export class LifecycleDriver {
       }
       const coreDns = this.#resources.tailscaleStackDnsContainer(instance.id)
       if (action === "stop" || action === "kill") {
-        await recoverPromise(
-          () => command("docker", [action, coreDns]),
-          () => undefined
+        await runLifecycle(
+          (action === "stop"
+            ? this.#engine.stopContainer(coreDns)
+            : this.#engine.killContainer(coreDns)
+          ).pipe(Effect.ignore)
         )
         return this.#docker.runAction(instance, action)
       }
@@ -1426,13 +1405,11 @@ export class LifecycleDriver {
         )
       }
       if (config) await this.#configureTailscaleStackRouting(config)
-      await recoverPromise(
-        () =>
-          command("docker", [
-            action === "restart" ? "restart" : "start",
-            coreDns,
-          ]),
-        () => undefined
+      await runLifecycle(
+        (action === "restart"
+          ? this.#engine.restartContainer(coreDns)
+          : this.#engine.startContainer(coreDns)
+        ).pipe(Effect.ignore)
       )
       return updated
     }
@@ -1484,7 +1461,7 @@ export class LifecycleDriver {
                 ]
               : instance.ports
           const desiredLabels = this.#containerWebRouteLabels(routes, settings)
-          const labels = await containerLabels(instance.service)
+          const labels = await containerLabels(this.#engine, instance.service)
           const primary = allocations.find(
             (allocation) => allocation.kind === "primary"
           )
@@ -2069,25 +2046,20 @@ export class LifecycleDriver {
       )
     }
 
-    await recoverPromise(
-      () =>
-        command(
-          "docker",
-          [
-            "stop",
-            "--time",
-            String(INSTANCE_STOP_TIMEOUT_SECONDS),
-            existing.service,
-          ],
-          {
-            timeout: (INSTANCE_STOP_TIMEOUT_SECONDS + 15) * 1_000,
-          }
-        ),
-      () => undefined
+    await runLifecycle(
+      this.#engine
+        .stopContainer(existing.service, {
+          seconds: INSTANCE_STOP_TIMEOUT_SECONDS,
+          timeout: (INSTANCE_STOP_TIMEOUT_SECONDS + 15) * 1_000,
+        })
+        .pipe(Effect.ignore)
     )
-    await command("docker", ["rm", "--force", existing.service], {
-      timeout: 90_000,
-    })
+    await runLifecycle(
+      this.#engine.removeContainer(existing.service, {
+        force: true,
+        timeout: 90_000,
+      })
+    )
 
     return runLifecycle(
       lifecycleOperation(() =>
@@ -2261,19 +2233,13 @@ export class LifecycleDriver {
       if (installationMarker) {
         await runLifecycle(
           pullImage().pipe(
-            Effect.catch(() =>
-              lifecycleOperation(() =>
-                command("docker", ["image", "inspect", image])
-              )
-            ),
+            Effect.catch(() => this.#engine.inspectImage(image)),
             Effect.asVoid
           )
         )
       } else {
         await runLifecycle(
-          lifecycleOperation(() =>
-            command("docker", ["image", "inspect", image])
-          ).pipe(
+          this.#engine.inspectImage(image).pipe(
             Effect.catch(() => pullImage()),
             Effect.asVoid
           )
@@ -2282,15 +2248,16 @@ export class LifecycleDriver {
     }
     if (installationMarker) {
       const protocol = await runLifecycle(
-        lifecycleOperation(() =>
-          command("docker", [
-            "image",
-            "inspect",
-            "--format",
-            `{{ index .Config.Labels "${INSTALLATION_MARKER_PROTOCOL_LABEL}" }}`,
-            image,
-          ])
-        ).pipe(Effect.map((result) => result.stdout.trim()))
+        this.#engine
+          .inspectImage(image)
+          .pipe(
+            Effect.map(
+              (inspected) =>
+                inspected.Config?.Labels?.[
+                  INSTALLATION_MARKER_PROTOCOL_LABEL
+                ]?.trim() ?? ""
+            )
+          )
       )
       if (supportsInstallationMarkerProtocol(protocol)) {
         managedInstallationMarker = installationMarker
@@ -2496,20 +2463,19 @@ export class LifecycleDriver {
         await command("docker", arguments_, { timeout: 60_000 })
         await input.onPhase?.("finalizing")
         if (usesExternalEdge && webRoutes.length > 0) {
-          await command("docker", [
-            "network",
-            "connect",
-            "--alias",
-            containerName,
-            this.#resources.edgeNetwork,
-            containerName,
-          ])
+          await runLifecycle(
+            this.#engine.connectNetwork(
+              this.#resources.edgeNetwork,
+              containerName,
+              { aliases: [containerName] }
+            )
+          )
         }
         await this.databaseConnections.reconcile(id, containerName)
         if (input.start) {
-          await command("docker", ["start", containerName], {
-            timeout: 120_000,
-          })
+          await runLifecycle(
+            this.#engine.startContainer(containerName, { timeout: 120_000 })
+          )
         }
         await this.#docker.recordProvisionedState(
           id,
@@ -2521,9 +2487,7 @@ export class LifecycleDriver {
         await this.#refreshTailscaleDns()
       }).pipe(
         Effect.catch((error) =>
-          lifecycleOperation(() =>
-            command("docker", ["rm", "--force", containerName])
-          ).pipe(
+          this.#engine.removeContainer(containerName, { force: true }).pipe(
             Effect.ignore,
             Effect.flatMap(() =>
               input.prepareDirectory
@@ -2848,24 +2812,19 @@ export class LifecycleDriver {
         }
         detachedStacks = await this.#detachInstanceFromTailscaleStacks(instance)
         await runLifecycle(
-          lifecycleOperation(() =>
-            command(
-              "docker",
-              [
-                "stop",
-                "--time",
-                String(INSTANCE_STOP_TIMEOUT_SECONDS),
-                instance.service,
-              ],
-              {
-                timeout: (INSTANCE_STOP_TIMEOUT_SECONDS + 15) * 1_000,
-              }
-            )
-          ).pipe(Effect.ignore)
+          this.#engine
+            .stopContainer(instance.service, {
+              seconds: INSTANCE_STOP_TIMEOUT_SECONDS,
+              timeout: (INSTANCE_STOP_TIMEOUT_SECONDS + 15) * 1_000,
+            })
+            .pipe(Effect.ignore)
         )
-        await command("docker", ["rm", "--force", instance.service], {
-          timeout: 90_000,
-        })
+        await runLifecycle(
+          this.#engine.removeContainer(instance.service, {
+            force: true,
+            timeout: 90_000,
+          })
+        )
       }).pipe(
         Effect.catch((cause) =>
           lifecycleOperation(async () => {
@@ -3014,6 +2973,7 @@ export class LifecycleDriver {
     await this.#ensureRelayEdgeNetwork()
     const relayContainer = requiredRelayContainerReference()
     await connectNetworkWithAlias(
+      this.#engine,
       relayContainer,
       this.#resources.relayEdgeNetwork,
       this.#resources.relayEdgeAlias
@@ -3079,10 +3039,12 @@ export class LifecycleDriver {
           arguments_
         )
         await connectNetwork(
+          this.#engine,
           this.#resources.traefikContainer,
           this.#resources.relayEdgeNetwork
         )
         await connectNetwork(
+          this.#engine,
           this.#resources.traefikContainer,
           this.#resources.gameNetwork
         )
@@ -3111,7 +3073,8 @@ export class LifecycleDriver {
     await this.#ensureEdgeNetwork()
     if (settings.mode === "coolify") {
       const proxy = await this.#externalTraefikContainer(settings)
-      if (proxy) await connectNetwork(proxy, this.#resources.edgeNetwork)
+      if (proxy)
+        await connectNetwork(this.#engine, proxy, this.#resources.edgeNetwork)
     }
 
     const routedInstances = new Set(routes.map((route) => route.instanceId))
@@ -3121,8 +3084,16 @@ export class LifecycleDriver {
         .filter((instance) => instance.managedByRelay)
         .map((instance) =>
           routedInstances.has(instance.id)
-            ? connectNetwork(instance.service, this.#resources.edgeNetwork)
-            : disconnectNetwork(instance.service, this.#resources.edgeNetwork)
+            ? connectNetwork(
+                this.#engine,
+                instance.service,
+                this.#resources.edgeNetwork
+              )
+            : disconnectNetwork(
+                this.#engine,
+                instance.service,
+                this.#resources.edgeNetwork
+              )
         )
     )
   }
@@ -3131,7 +3102,11 @@ export class LifecycleDriver {
     await this.#removeOwnedContainer(this.#resources.traefikContainer)
     const relayContainer = process.env.HOSTNAME?.trim()
     if (relayContainer) {
-      await disconnectNetwork(relayContainer, this.#resources.relayEdgeNetwork)
+      await disconnectNetwork(
+        this.#engine,
+        relayContainer,
+        this.#resources.relayEdgeNetwork
+      )
     }
     await this.#removeOwnedNetwork(this.#resources.relayEdgeNetwork)
   }
@@ -3151,6 +3126,7 @@ export class LifecycleDriver {
     settings: RelayProxySettings
   ): Promise<string | null> {
     return discoverExternalTraefikContainer({
+      docker: this.#engine,
       edgeNetwork: this.#resources.edgeNetwork,
       resourceNamespace: this.#config.resourceNamespace,
       settings,
@@ -3229,25 +3205,28 @@ export class LifecycleDriver {
       ...instances
         .filter((instance) => instance.managedByRelay)
         .map((instance) =>
-          disconnectNetwork(instance.service, this.#resources.edgeNetwork)
+          disconnectNetwork(
+            this.#engine,
+            instance.service,
+            this.#resources.edgeNetwork
+          )
         ),
-      ...(proxy ? [disconnectNetwork(proxy, this.#resources.edgeNetwork)] : []),
+      ...(proxy
+        ? [disconnectNetwork(this.#engine, proxy, this.#resources.edgeNetwork)]
+        : []),
     ])
     await this.#removeOwnedNetwork(this.#resources.edgeNetwork)
   }
 
   async #removeExternalTraefikRoutes(): Promise<void> {
-    const result = await command("docker", [
-      "ps",
-      "--all",
-      "--filter",
-      "label=kiln.relay.web-route=true",
-      "--format",
-      "{{.Names}}",
-    ])
-    const names = result.stdout
-      .split("\n")
-      .map((name) => name.trim())
+    const listed = await runLifecycle(
+      this.#engine.listContainers({
+        all: true,
+        filters: { label: ["kiln.relay.web-route=true"] },
+      })
+    )
+    const names = listed
+      .map(containerName)
       .filter((name) =>
         name.startsWith(
           this.#config.resourceNamespace
@@ -3274,9 +3253,11 @@ export class LifecycleDriver {
       join(this.#config.dataDirectory, "infrastructure", "coredns", "Corefile"),
       coreDnsConfiguration(networking, this.#dnsHostnames(instances))
     )
-    await command("docker", ["restart", this.#resources.coreDnsContainer], {
-      timeout: 90_000,
-    })
+    await runLifecycle(
+      this.#engine.restartContainer(this.#resources.coreDnsContainer, {
+        timeout: 90_000,
+      })
+    )
   }
 
   #dnsHostnames(instances: Array<RelayInstance>): Array<string> {
@@ -3458,19 +3439,8 @@ export class LifecycleDriver {
     config: RelayTailscaleStackConfig
   ): Promise<void> {
     const name = this.#resources.tailscaleStackNetwork(config.id)
-    const inspected = await recoverPromise(
-      () =>
-        command("docker", [
-          "network",
-          "inspect",
-          "--format",
-          "{{json .Labels}}",
-          name,
-        ]),
-      () => null
-    )
-    if (inspected) {
-      const labels = stringLabels(JSON.parse(inspected.stdout))
+    const labels = await this.#networkLabels(name)
+    if (labels) {
       if (
         labels["kiln.relay.network"] !== `tailscale:${config.id}` ||
         !relayOwnsLabels(this.#config, labels)
@@ -3520,16 +3490,10 @@ export class LifecycleDriver {
       if (replacement?.address === binding.address) continue
       const instance = await this.#docker.findInstance(binding.instanceId)
       if (!instance) continue
-      await recoverPromise(
-        () =>
-          command("docker", [
-            "network",
-            "disconnect",
-            "--force",
-            network,
-            instance.service,
-          ]),
-        () => undefined
+      await runLifecycle(
+        this.#engine
+          .disconnectNetwork(network, instance.service, { force: true })
+          .pipe(Effect.ignore)
       )
     }
     for (const binding of desiredById.values()) {
@@ -3538,27 +3502,22 @@ export class LifecycleDriver {
       if (!instance) continue
       if (
         prior?.address === binding.address &&
-        (await containerUsesNetwork(instance.service, network))
+        (await containerUsesNetwork(this.#engine, instance.service, network))
       ) {
         continue
       }
-      if (await containerUsesNetwork(instance.service, network)) {
-        await command("docker", [
-          "network",
-          "disconnect",
-          "--force",
-          network,
-          instance.service,
-        ])
+      if (await containerUsesNetwork(this.#engine, instance.service, network)) {
+        await runLifecycle(
+          this.#engine.disconnectNetwork(network, instance.service, {
+            force: true,
+          })
+        )
       }
-      await command("docker", [
-        "network",
-        "connect",
-        "--ip",
-        binding.address,
-        network,
-        instance.service,
-      ])
+      await runLifecycle(
+        this.#engine.connectNetwork(network, instance.service, {
+          ipv4Address: binding.address,
+        })
+      )
     }
   }
 
@@ -3576,9 +3535,7 @@ export class LifecycleDriver {
     await mkdir(stateDirectory, { recursive: true, mode: 0o700 })
     for (const image of [TAILSCALE_IMAGE, COREDNS_IMAGE]) {
       await runLifecycle(
-        lifecycleOperation(() =>
-          command("docker", ["image", "inspect", image])
-        ).pipe(
+        this.#engine.inspectImage(image).pipe(
           Effect.catch(() =>
             lifecycleOperation(() =>
               command("docker", ["pull", image], { timeout: 300_000 })
@@ -3734,17 +3691,17 @@ export class LifecycleDriver {
   ): Promise<void> {
     await this.#ensureTailscaleStackFirewall(config)
     const container = this.#resources.tailscaleStackContainer(config.id)
-    await command(
-      "docker",
-      [
-        "exec",
+    await runLifecycle(
+      this.#engine.exec(
         container,
-        "tailscale",
-        "set",
-        `--hostname=${config.hostname}`,
-        `--advertise-routes=${config.subnet}`,
-      ],
-      { timeout: 30_000 }
+        [
+          "tailscale",
+          "set",
+          `--hostname=${config.hostname}`,
+          `--advertise-routes=${config.subnet}`,
+        ],
+        { timeout: 30_000 }
+      )
     )
   }
 
@@ -3753,24 +3710,15 @@ export class LifecycleDriver {
   ): Promise<void> {
     const container = this.#resources.tailscaleStackContainer(config.id)
     const chain = TAILSCALE_STACK_FORWARD_CHAIN
+    const iptables = (...arguments_: Array<string>) =>
+      runLifecycle(this.#engine.exec(container, ["iptables", ...arguments_]))
     const [hook, specification] = await Promise.all([
       recoverPromise(
-        () =>
-          command("docker", [
-            "exec",
-            container,
-            "iptables",
-            "-C",
-            "FORWARD",
-            "-i",
-            "tailscale0",
-            "-j",
-            chain,
-          ]),
+        () => iptables("-C", "FORWARD", "-i", "tailscale0", "-j", chain),
         () => null
       ),
       recoverPromise(
-        () => command("docker", ["exec", container, "iptables", "-S", chain]),
+        () => iptables("-S", chain),
         () => null
       ),
     ])
@@ -3785,28 +3733,17 @@ export class LifecycleDriver {
       return
     }
     await recoverPromise(
-      () => command("docker", ["exec", container, "iptables", "-N", chain]),
+      () => iptables("-N", chain),
       () => undefined
     )
     if (!hook) {
-      await command("docker", [
-        "exec",
-        container,
-        "iptables",
-        "-I",
-        "FORWARD",
-        "1",
-        "-i",
-        "tailscale0",
-        "-j",
-        chain,
-      ])
+      await iptables("-I", "FORWARD", "1", "-i", "tailscale0", "-j", chain)
     }
-    await command("docker", ["exec", container, "iptables", "-F", chain])
+    await iptables("-F", chain)
     for (const rule of tailscaleStackFirewallRules(
       activeTailscaleStackBindings(config.bindings)
     )) {
-      await command("docker", ["exec", container, "iptables", ...rule])
+      await iptables(...rule)
     }
   }
 
@@ -3956,18 +3893,16 @@ export class LifecycleDriver {
   async #tailscaleStackContainerGeneration(id: string): Promise<string | null> {
     const inspected = await recoverPromise(
       () =>
-        command("docker", [
-          "container",
-          "inspect",
-          "--format",
-          "{{.Id}}|{{.State.StartedAt}}|{{.State.Running}}",
-          this.#resources.tailscaleStackContainer(id),
-        ]),
+        runLifecycle(
+          this.#engine.inspectContainer(
+            this.#resources.tailscaleStackContainer(id)
+          )
+        ),
       () => null
     )
-    if (!inspected) return null
-    const generation = inspected.stdout.trim()
-    return generation.endsWith("|true") ? generation : null
+    return inspected?.State.Running
+      ? `${inspected.Id}|${inspected.State.StartedAt}`
+      : null
   }
 
   async #readTailscaleStackDnsRecords(
@@ -4128,22 +4063,19 @@ export class LifecycleDriver {
     ipv6Address: string | null
   }> {
     const name = this.#resources.tailscaleStackContainer(id)
-    const [ipv4, ipv6] = await Promise.all([
-      recoverPromise(
-        () =>
-          command("docker", ["exec", name, "tailscale", "ip", "-4"], {
-            timeout: 10_000,
-          }),
-        () => null
-      ),
-      recoverPromise(
-        () =>
-          command("docker", ["exec", name, "tailscale", "ip", "-6"], {
-            timeout: 10_000,
-          }),
-        () => null
-      ),
-    ])
+    const [ipv4, ipv6] = await Promise.all(
+      (["-4", "-6"] as const).map((family) =>
+        recoverPromise(
+          () =>
+            runLifecycle(
+              this.#engine.exec(name, ["tailscale", "ip", family], {
+                timeout: 10_000,
+              })
+            ),
+          () => null
+        )
+      )
+    )
     return {
       ipv4Address: ipv4?.stdout.trim().split("\n")[0] || null,
       ipv6Address: ipv6?.stdout.trim().split("\n")[0] || null,
@@ -4198,33 +4130,38 @@ export class LifecycleDriver {
   }
 
   async #containerExists(name: string): Promise<boolean> {
-    const inspected = await recoverPromise(
-      () =>
-        command("docker", [
-          "container",
-          "inspect",
-          "--format",
-          "{{.Id}}",
-          name,
-        ]),
-      () => null
-    )
-    return Boolean(inspected?.stdout.trim())
+    return (await this.#containerLabels(name)) !== null
   }
 
   async #containerRunning(name: string): Promise<boolean> {
-    const inspected = await recoverPromise(
-      () =>
-        command("docker", [
-          "container",
-          "inspect",
-          "--format",
-          "{{.State.Running}}",
-          name,
-        ]),
+    return recoverPromise(
+      async () =>
+        (await runLifecycle(this.#engine.inspectContainer(name))).State.Running,
+      () => false
+    )
+  }
+
+  // A container's labels, or null when Docker cannot inspect it.
+  async #containerLabels(name: string): Promise<Record<string, string> | null> {
+    return recoverPromise(
+      async () =>
+        stringLabels(
+          (await runLifecycle(this.#engine.inspectContainer(name))).Config
+            .Labels
+        ),
       () => null
     )
-    return inspected?.stdout.trim() === "true"
+  }
+
+  // A network's labels, or null when Docker cannot inspect it.
+  async #networkLabels(name: string): Promise<Record<string, string> | null> {
+    return recoverPromise(
+      async () =>
+        stringLabels(
+          (await runLifecycle(this.#engine.inspectNetwork(name))).Labels
+        ),
+      () => null
+    )
   }
 
   async #replaceContainer(
@@ -4252,24 +4189,9 @@ export class LifecycleDriver {
     arguments_: Array<string>
   ): Promise<void> {
     if (!replace) {
-      const inspected = await recoverPromise(
-        () =>
-          command("docker", [
-            "container",
-            "inspect",
-            "--format",
-            "{{json .Config.Labels}}",
-            name,
-          ]),
-        () => null
-      )
-      if (inspected) {
-        if (
-          !relayOwnsLabels(
-            this.#config,
-            stringLabels(JSON.parse(inspected.stdout))
-          )
-        ) {
+      const labels = await this.#containerLabels(name)
+      if (labels) {
+        if (!relayOwnsLabels(this.#config, labels)) {
           throw new Error(
             `Docker container ${name} exists but is not owned by this Relay`
           )
@@ -4281,41 +4203,19 @@ export class LifecycleDriver {
   }
 
   async #removeOwnedContainer(name: string): Promise<void> {
-    const inspected = await recoverPromise(
-      () =>
-        command("docker", [
-          "container",
-          "inspect",
-          "--format",
-          "{{json .Config.Labels}}",
-          name,
-        ]),
-      () => null
-    )
-    if (!inspected) return
-    const labels = stringLabels(JSON.parse(inspected.stdout))
+    const labels = await this.#containerLabels(name)
+    if (!labels) return
     if (!relayOwnsLabels(this.#config, labels)) {
       throw new Error(
         `Docker container ${name} is not owned by this Relay and will not be removed`
       )
     }
-    await command("docker", ["rm", "--force", name])
+    await runLifecycle(this.#engine.removeContainer(name, { force: true }))
   }
 
   async #ensureOwnedNetwork(name: string, kind: string): Promise<void> {
-    const inspected = await recoverPromise(
-      () =>
-        command("docker", [
-          "network",
-          "inspect",
-          "--format",
-          "{{json .Labels}}",
-          name,
-        ]),
-      () => null
-    )
-    if (inspected) {
-      const labels = stringLabels(JSON.parse(inspected.stdout))
+    const labels = await this.#networkLabels(name)
+    if (labels) {
       const legacyGameNetwork =
         !this.#config.resourceNamespace &&
         kind === "game" &&
@@ -4343,25 +4243,14 @@ export class LifecycleDriver {
   }
 
   async #removeOwnedNetwork(name: string): Promise<void> {
-    const inspected = await recoverPromise(
-      () =>
-        command("docker", [
-          "network",
-          "inspect",
-          "--format",
-          "{{json .Labels}}",
-          name,
-        ]),
-      () => null
-    )
-    if (!inspected) return
-    const labels = stringLabels(JSON.parse(inspected.stdout))
+    const labels = await this.#networkLabels(name)
+    if (!labels) return
     if (!relayOwnsLabels(this.#config, labels)) {
       throw new Error(
         `Docker network ${name} is not owned by this Relay and will not be removed`
       )
     }
-    await command("docker", ["network", "rm", name])
+    await runLifecycle(this.#engine.removeNetwork(name))
   }
 
   async #hostDataDirectory(): Promise<string> {
@@ -4373,15 +4262,13 @@ export class LifecycleDriver {
     const containerId = process.env.HOSTNAME?.trim()
     if (containerId) {
       const source = await runLifecycle(
-        lifecycleOperation(async () => {
-          const inspected = await command("docker", ["inspect", containerId])
-          const containers = JSON.parse(inspected.stdout) as Array<{
-            Mounts?: Array<{ Destination: string; Source: string }>
-          }>
-          return containers[0]?.Mounts?.find(
-            (mount) => mount.Destination === this.#config.dataDirectory
-          )?.Source
-        }).pipe(
+        this.#engine.inspectContainer(containerId).pipe(
+          Effect.map(
+            (container) =>
+              container.Mounts?.find(
+                (mount) => mount.Destination === this.#config.dataDirectory
+              )?.Source
+          ),
           // A host-run Relay can use its local data path directly.
           Effect.catch(() => Effect.succeed(undefined))
         )
@@ -4405,38 +4292,35 @@ async function ensureProtectedFile(path: string): Promise<void> {
   await chmod(path, 0o600)
 }
 
-async function containerUsesNetwork(
-  name: string,
-  network: string
-): Promise<boolean> {
+async function containerNetworks(
+  docker: DockerEngine,
+  name: string
+): Promise<Readonly<Record<string, { readonly Aliases?: unknown }>>> {
   return recoverPromise(
-    async () => {
-      const result = await command("docker", [
-        "inspect",
-        "--format",
-        "{{json .NetworkSettings.Networks}}",
-        name,
-      ])
-      const networks = JSON.parse(result.stdout) as unknown
-      return Boolean(
-        networks && typeof networks === "object" && network in networks
-      )
-    },
-    () => false
+    async () =>
+      (await Effect.runPromise(docker.inspectContainer(name))).NetworkSettings
+        ?.Networks ?? {},
+    () => ({})
   )
 }
 
-async function containerLabels(name: string): Promise<Record<string, string>> {
+async function containerUsesNetwork(
+  docker: DockerEngine,
+  name: string,
+  network: string
+): Promise<boolean> {
+  return Object.hasOwn(await containerNetworks(docker, name), network)
+}
+
+async function containerLabels(
+  docker: DockerEngine,
+  name: string
+): Promise<Record<string, string>> {
   return recoverPromise(
-    async () => {
-      const result = await command("docker", [
-        "inspect",
-        "--format",
-        "{{json .Config.Labels}}",
-        name,
-      ])
-      return stringLabels(JSON.parse(result.stdout))
-    },
+    async () =>
+      stringLabels(
+        (await Effect.runPromise(docker.inspectContainer(name))).Config.Labels
+      ),
     () => ({})
   )
 }
@@ -4450,57 +4334,41 @@ function stringLabels(value: unknown): Record<string, string> {
   )
 }
 
-async function connectNetwork(name: string, network: string): Promise<void> {
-  if (await containerUsesNetwork(name, network)) return
-  await command("docker", ["network", "connect", network, name])
+async function connectNetwork(
+  docker: DockerEngine,
+  name: string,
+  network: string
+): Promise<void> {
+  if (await containerUsesNetwork(docker, name, network)) return
+  await Effect.runPromise(docker.connectNetwork(network, name))
 }
 
 async function connectNetworkWithAlias(
+  docker: DockerEngine,
   name: string,
   network: string,
   alias: string
 ): Promise<void> {
-  if (await containerUsesNetworkAlias(name, network, alias)) return
-  if (await containerUsesNetwork(name, network)) {
-    await command("docker", ["network", "disconnect", network, name])
+  const networks = await containerNetworks(docker, name)
+  const aliases = networks[network]?.Aliases
+  if (Array.isArray(aliases) && aliases.includes(alias)) return
+  if (Object.hasOwn(networks, network)) {
+    await Effect.runPromise(docker.disconnectNetwork(network, name))
   }
-  await command("docker", [
-    "network",
-    "connect",
-    "--alias",
-    alias,
-    network,
-    name,
-  ])
-}
-
-async function containerUsesNetworkAlias(
-  name: string,
-  network: string,
-  alias: string
-): Promise<boolean> {
-  return recoverPromise(
-    async () => {
-      const result = await command("docker", [
-        "inspect",
-        "--format",
-        "{{json .NetworkSettings.Networks}}",
-        name,
-      ])
-      const networks = JSON.parse(result.stdout) as Record<
-        string,
-        { Aliases?: unknown }
-      >
-      const aliases = networks[network]?.Aliases
-      return Array.isArray(aliases) && aliases.includes(alias)
-    },
-    () => false
+  await Effect.runPromise(
+    docker.connectNetwork(network, name, { aliases: [alias] })
   )
 }
 
-async function disconnectNetwork(name: string, network: string): Promise<void> {
-  if (!(await containerUsesNetwork(name, network))) return
-  await command("docker", ["network", "disconnect", "--force", network, name])
+async function disconnectNetwork(
+  docker: DockerEngine,
+  name: string,
+  network: string
+): Promise<void> {
+  if (!(await containerUsesNetwork(docker, name, network))) return
+  await Effect.runPromise(
+    docker.disconnectNetwork(network, name, { force: true })
+  )
 }
 
 function formatPublicHost(hostname: string): string {

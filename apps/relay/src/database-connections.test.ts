@@ -204,29 +204,24 @@ describe("database connection recovery", () => {
     expect(await manager.labels(otherServer)).toEqual(connectionLabels([]))
   })
 
-  it("isolates a vanished network and a failed attachment from healthy connections", async () => {
+  it("isolates a failed attachment from healthy connections", async () => {
     const { manager, server } = await setup()
     databaseNetwork("healthy", healthyId)
-    const vanished = databaseNetwork("vanished", "e".repeat(40))
     await manager.set(instanceId, databaseId, true)
     await manager.set(instanceId, healthyId, true)
-    const inspect = fakeDocker.hold({
-      command: "network inspect",
-      target: vanished.id.slice(0, 12),
-    })
     fakeDocker.failNext(
       { command: "network connect", target: network },
       "network disappeared before connect"
     )
 
-    const reconciling = manager.reconcile(instanceId, "server")
-    await inspect.reached
-    fakeDocker.networks.delete("vanished")
-    inspect.release()
-    const issues = await reconciling
+    const issues = await manager.reconcile(instanceId, "server")
 
-    expect(issues).toHaveLength(2)
-    expect(issues.some((issue) => issue.databaseId === databaseId)).toBe(true)
+    expect(issues).toEqual([
+      expect.objectContaining({
+        databaseId,
+        message: expect.stringContaining("network disappeared before connect"),
+      }),
+    ])
     expect(server.networks.has("healthy")).toBe(true)
     expect(await manager.labels(instanceId)).toEqual(
       connectionLabels([
@@ -262,9 +257,9 @@ describe("database connection recovery", () => {
     )
   })
 
-  it.each(["network ls", "network inspect"])(
-    "imports live and labeled references once when %s fails during recovery",
-    async (failing) => {
+  it(
+    "imports live and labeled references once when listing networks fails during recovery",
+    async () => {
       const { harness, manager } = await setup()
       const ownedNetwork = `${TEST_NAMESPACE}-kiln-db-${databaseId}-network`
       const missing = { databaseId: "e".repeat(40), relayId }
@@ -272,7 +267,7 @@ describe("database connection recovery", () => {
         labels: connectionLabels([missing]),
         networks: [ownedNetwork, `foreign-kiln-db-${"f".repeat(40)}-network`],
       })
-      fakeDocker.failNext({ command: failing }, "Network disappeared")
+      fakeDocker.failNext({ command: "network ls" }, "Network disappeared")
 
       await manager.initialize([recovering])
 

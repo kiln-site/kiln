@@ -5,8 +5,8 @@ import type {
   RelayInstanceRecovery,
 } from "@workspace/contracts"
 
-import { commandEffect } from "./command.js"
 import type { RelayConfig } from "./config.js"
+import { DockerEngine } from "./docker-engine.js"
 import {
   INSTANCE_STOP_TIMEOUT_SECONDS,
   type InstancePowerAction,
@@ -48,9 +48,11 @@ export class RuntimeRecoveryManager {
   readonly #records = new Map<string, RelayRuntimeRecoveryRecord>()
   readonly #reportedStopFailures = new Set<string>()
   readonly #state: RelayStateStore["Service"]
+  readonly #docker: DockerEngine
 
   constructor(config: RelayConfig, state: RelayStateStore["Service"]) {
     this.#config = config.runtimeRecovery
+    this.#docker = new DockerEngine(config.dockerSocket)
     this.#state = state
   }
 
@@ -480,39 +482,41 @@ export class RuntimeRecoveryManager {
     requestedAt: number,
     token: symbol
   ): Effect.Effect<void, never> {
-    return startContainer(observation.service).pipe(
-      Effect.tap(() =>
-        Effect.logInfo("Docker accepted the server recovery start", {
-          instanceId: observation.instanceId,
-        })
-      ),
-      Effect.matchEffect({
-        onFailure: (cause) =>
-          this.#recordRestartFailure(observation, requestedAt, token, cause),
-        onSuccess: () => this.#enforceDesiredStateAfterStart(observation),
-      }),
-      Effect.withSpan("relay.runtimeRecovery.restartWorker", {
-        attributes: {
-          "kiln.recovery.instance_id": observation.instanceId,
-        },
-      }),
-      Effect.catch((cause) =>
-        Effect.sync(() => {
-          Sentry.captureException(cause, {
-            tags: {
-              "kiln.instance_id": observation.instanceId,
-              "kiln.recovery": "worker_failed",
-            },
+    return this.#docker
+      .startContainer(observation.service, { timeout: 120_000 })
+      .pipe(
+        Effect.tap(() =>
+          Effect.logInfo("Docker accepted the server recovery start", {
+            instanceId: observation.instanceId,
           })
-        }).pipe(
-          Effect.andThen(
-            Effect.logError("Server recovery worker failed", {
-              instanceId: observation.instanceId,
+        ),
+        Effect.matchEffect({
+          onFailure: (cause) =>
+            this.#recordRestartFailure(observation, requestedAt, token, cause),
+          onSuccess: () => this.#enforceDesiredStateAfterStart(observation),
+        }),
+        Effect.withSpan("relay.runtimeRecovery.restartWorker", {
+          attributes: {
+            "kiln.recovery.instance_id": observation.instanceId,
+          },
+        }),
+        Effect.catch((cause) =>
+          Effect.sync(() => {
+            Sentry.captureException(cause, {
+              tags: {
+                "kiln.instance_id": observation.instanceId,
+                "kiln.recovery": "worker_failed",
+              },
             })
+          }).pipe(
+            Effect.andThen(
+              Effect.logError("Server recovery worker failed", {
+                instanceId: observation.instanceId,
+              })
+            )
           )
         )
       )
-    )
   }
 
   #recordRestartFailure(
@@ -601,22 +605,27 @@ export class RuntimeRecoveryManager {
       .pipe(
         Effect.flatMap((shouldStop) =>
           shouldStop
-            ? stopContainer(observation.service).pipe(
-                Effect.tap(() =>
-                  Effect.sync(() => {
-                    this.#reportedStopFailures.delete(observation.instanceId)
-                  }).pipe(
-                    Effect.andThen(
-                      Effect.logInfo(
-                        "Stopped server to enforce stopped intent",
-                        {
-                          instanceId: observation.instanceId,
-                        }
+            ? this.#docker
+                .stopContainer(observation.service, {
+                  seconds: INSTANCE_STOP_TIMEOUT_SECONDS,
+                  timeout: (INSTANCE_STOP_TIMEOUT_SECONDS + 15) * 1_000,
+                })
+                .pipe(
+                  Effect.tap(() =>
+                    Effect.sync(() => {
+                      this.#reportedStopFailures.delete(observation.instanceId)
+                    }).pipe(
+                      Effect.andThen(
+                        Effect.logInfo(
+                          "Stopped server to enforce stopped intent",
+                          {
+                            instanceId: observation.instanceId,
+                          }
+                        )
                       )
                     )
                   )
                 )
-              )
             : Effect.void
         ),
         Effect.withSpan("relay.runtimeRecovery.compensatingStop", {
@@ -791,18 +800,6 @@ export class RuntimeRecoveryManager {
     return created
   }
 }
-
-const startContainer = (service: string): Effect.Effect<void, unknown> =>
-  commandEffect("docker", ["start", service], { timeout: 120_000 }).pipe(
-    Effect.asVoid
-  )
-
-const stopContainer = (service: string): Effect.Effect<void, unknown> =>
-  commandEffect(
-    "docker",
-    ["stop", "--time", String(INSTANCE_STOP_TIMEOUT_SECONDS), service],
-    { timeout: (INSTANCE_STOP_TIMEOUT_SECONDS + 15) * 1_000 }
-  ).pipe(Effect.asVoid)
 
 function retryDelayMs(attempt: number, initialDelayMs: number): number {
   if (initialDelayMs === 0) return 0

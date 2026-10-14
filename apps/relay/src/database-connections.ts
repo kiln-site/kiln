@@ -1,8 +1,8 @@
 import { databaseIdSchema, relayIdSchema } from "@workspace/contracts"
 import { Effect } from "effect"
 
-import { command } from "./command.js"
 import type { RelayConfig } from "./config.js"
+import { DockerEngine } from "./docker-engine.js"
 import {
   DATABASE_CONNECTION_RECOVERY_KEY,
   type RelayStateStore,
@@ -73,11 +73,6 @@ function decodeDatabaseConnectionLabels(
   return { connections, warnings }
 }
 
-interface DatabaseNetwork {
-  Name: string
-  Labels: Record<string, string> | null
-}
-
 export interface DatabaseConnectionIssue {
   databaseId: string | null
   message: string
@@ -112,10 +107,14 @@ export class DatabaseConnections {
       : null
   }
 
+  readonly #docker: DockerEngine
+
   constructor(
     readonly config: RelayConfig,
     readonly state: RelayStateStore["Service"]
-  ) {}
+  ) {
+    this.#docker = new DockerEngine(config.dockerSocket)
+  }
 
   async initialize(
     snapshots: ReadonlyArray<DatabaseConnectionSnapshot>
@@ -169,7 +168,7 @@ export class DatabaseConnections {
           connections.push({ databaseId, relayId: this.config.nodeId })
       }
       // Owned network names in the container snapshot carry the full database
-      // ID. Recover these even if a network vanished between ls and inspect.
+      // ID. Recover these even if the network is gone or could not be listed.
       // This makes the import complete without erasing live, unlabeled intent.
       for (const network of snapshot.networks) {
         const databaseId = this.#databaseIdFromNetwork(network)
@@ -280,24 +279,20 @@ export class DatabaseConnections {
           desired.add(network)
         }
         if (networks.size === 0) return
-        const inspected = await command("docker", [
-          "inspect",
-          "--format",
-          "{{json .NetworkSettings.Networks}}",
-          service,
-        ])
-        const attached = JSON.parse(inspected.stdout) as Record<string, unknown>
+        const container = await Effect.runPromise(
+          this.#docker.inspectContainer(service)
+        )
+        const attached = container.NetworkSettings?.Networks ?? {}
         for (const [databaseId, network] of networks) {
           const connect = desired.has(network)
           if (connect === Object.hasOwn(attached, network)) continue
           await recoverPromise(
             () =>
-              command("docker", [
-                "network",
-                connect ? "connect" : "disconnect",
-                network,
-                service,
-              ]),
+              Effect.runPromise(
+                connect
+                  ? this.#docker.connectNetwork(network, service)
+                  : this.#docker.disconnectNetwork(network, service)
+              ),
             (cause) => {
               issues.push({
                 databaseId,
@@ -325,34 +320,12 @@ export class DatabaseConnections {
   async #networks(
     issues: Array<DatabaseConnectionIssue>
   ): Promise<Map<string, string>> {
-    const listed = await command("docker", [
-      "network",
-      "ls",
-      "--filter",
-      "label=kiln.resource.kind=database",
-      "--format",
-      "{{.ID}}",
-    ])
-    const ids = listed.stdout.trim().split(/\s+/u).filter(Boolean)
-    if (ids.length === 0) return new Map()
-    const inspected = await Promise.all(
-      ids.map((id) =>
-        recoverPromise(
-          async () => {
-            const result = await command("docker", ["network", "inspect", id])
-            return JSON.parse(result.stdout) as Array<DatabaseNetwork>
-          },
-          () => {
-            issues.push({
-              databaseId: null,
-              message: `Could not inspect database network ${id}`,
-            })
-            return []
-          }
-        )
-      )
+    // Listed networks carry their labels, so no network is inspected.
+    const networks = await Effect.runPromise(
+      this.#docker.listNetworks({
+        filters: { label: ["kiln.resource.kind=database"] },
+      })
     )
-    const networks = inspected.flat()
     const ambiguous = new Set<string>()
     const result = new Map<string, string>()
     for (const network of networks) {

@@ -144,6 +144,22 @@ describe("managed database deletion", () => {
     expect(server.networks.has(networkOf(id))).toBe(false)
     expect(server.state.running).toBe(true)
   })
+
+  it("finishes when the container disappears before Docker removes it", async () => {
+    const harness = await relayHarness()
+    const id = "d".repeat(40)
+    await createDatabase(harness, id)
+    const removal = fakeDocker.hold({ command: "rm" })
+
+    const deleting = harness.databases.delete({ databaseId: id, deleteData: true })
+    await removal.reached
+    fakeDocker.removeContainer(databaseContainer(id).name)
+    removal.release()
+
+    await expect(deleting).resolves.toEqual({ databaseId: id, deleted: true })
+    expect(fakeDocker.networks.has(networkOf(id))).toBe(false)
+    expect(fakeDocker.volumes.has(volumeOf(id))).toBe(false)
+  })
 })
 
 describe("explicit database connections", () => {
