@@ -18,8 +18,10 @@ import {
   relayControlMaxFrameBytes,
   relayControlRequestTimeoutMs,
   relayControlProtocol,
+  relaySnapshotControlDelta,
   relaySnapshotDeltaFeature,
   relaySnapshotDeltaSchema,
+  relaySnapshotNodeResourcesFeature,
   relaySnapshotSchema,
 } from "@workspace/contracts"
 import type {
@@ -909,15 +911,23 @@ class RelayConnection {
               delta.data
             )
             this.#hasPushedSnapshot = true
-            publishRealtimeChange({
-              delta: delta.data,
-              directoryChanged: snapshotDeltaChangesDirectory(
-                previousSnapshot,
-                delta.data
-              ),
-              relayId: this.#relay.id,
-              type: "relay.snapshot.delta",
-            })
+            // Resource-only node samples refresh the cached snapshot without
+            // waking browsers on the fleet-wide realtime channel.
+            const controlDelta = relaySnapshotControlDelta(
+              previousSnapshot,
+              delta.data
+            )
+            if (controlDelta) {
+              publishRealtimeChange({
+                delta: controlDelta,
+                directoryChanged: snapshotDeltaChangesDirectory(
+                  previousSnapshot,
+                  controlDelta
+                ),
+                relayId: this.#relay.id,
+                type: "relay.snapshot.delta",
+              })
+            }
           }
           return
         }
@@ -984,6 +994,7 @@ class RelayConnection {
         clientId: credentials.clientId,
         features: [
           relaySnapshotDeltaFeature,
+          relaySnapshotNodeResourcesFeature,
           relayBrowserCapabilityV2Feature,
           relayBrowserLeaseRenewalV1Feature,
           relayFileRequestReplayV1Feature,

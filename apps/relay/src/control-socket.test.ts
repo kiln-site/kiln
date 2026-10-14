@@ -15,6 +15,7 @@ import {
   relayControlMaxFrameBytes,
   relayControlProtocol,
   relaySnapshotDeltaFeature,
+  relaySnapshotNodeResourcesFeature,
 } from "@workspace/contracts"
 import type {
   RelayAuthChallenge,
@@ -452,6 +453,42 @@ describe("Relay control socket", () => {
       seq: 2,
       type: "event",
     })
+  })
+
+  it("sends node resource samples only to Hearths that advertise support", async () => {
+    const relay = await startRelay()
+    const resourceClient = await relay.connect(await relay.pair(), {
+      features: [relaySnapshotDeltaFeature, relaySnapshotNodeResourcesFeature],
+    })
+    // Older Hearths forward every node delta to browsers.
+    const controlClient = await relay.connect(await relay.pair(), {
+      features: [relaySnapshotDeltaFeature],
+    })
+
+    const sampled = {
+      instances: [],
+      node: { relayMemory: { container: null, process: { rssBytes: 1 } } },
+    }
+    relay.pushSnapshot(sampled)
+    relay.pushSnapshot({ ...sampled, instances: [{ id: "added" }] })
+
+    expect(await resourceClient.inbox.next()).toMatchObject({
+      event: "relay.snapshot.delta",
+      payload: { instances: [], node: sampled.node },
+      seq: 2,
+    })
+    expect(await resourceClient.inbox.next()).toMatchObject({
+      event: "relay.snapshot.delta",
+      payload: { instances: [{ id: "added" }] },
+      seq: 3,
+    })
+    const controlDelta = await controlClient.inbox.next()
+    expect(controlDelta).toMatchObject({
+      event: "relay.snapshot.delta",
+      payload: { instances: [{ id: "added" }] },
+      seq: 2,
+    })
+    expect(controlDelta).not.toHaveProperty("payload.node")
   })
 })
 

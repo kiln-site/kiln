@@ -99,6 +99,7 @@ import {
   statusColumnWidth,
   type RelayIdentityStatus,
 } from "@/components/instance-name-presentation"
+import { RelayMemoryCell } from "@/components/relay-memory-cell"
 import { StatusIndicator } from "@/components/status-indicator"
 import { UserAvatar } from "@/components/account-avatar"
 import { useInfraUpdateDialogStore } from "@/components/infra-update-dialog-provider"
@@ -830,6 +831,21 @@ function RelayTable({
           }),
         }
       ),
+      relayTableColumnHelper.display({
+        id: "memory",
+        header: "Memory",
+        enableSorting: false,
+        cell: ({ row }) => (
+          <RelayMemoryCell
+            connected={row.original.relayStatus === "connected"}
+            relayId={row.original.id}
+          />
+        ),
+        meta: dataTableColumnMeta({
+          hideBelow: "lg",
+          width: "minmax(13.5rem,1fr)",
+        }),
+      }),
       relayTableColumnHelper.accessor((relay) => relay.hostname, {
         id: "host",
         header: "Host / IP",

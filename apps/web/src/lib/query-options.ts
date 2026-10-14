@@ -53,6 +53,7 @@ import {
   getRelayFileEntry,
   getRelayFile,
   getRelayFileActivity,
+  getRelayMemoryReadings,
   getRelaySnapshot,
   getRelayTree,
 } from "@/server/relay"
@@ -148,6 +149,7 @@ export const queryKeys = {
       ["relay", relayId, "instances", instanceId, "recipe"] as const,
     snapshot: ["relay", "snapshot"] as const,
     instances: ["relay", "instances"] as const,
+    memory: ["relay", "memory"] as const,
     webRoutes: (relayId: string, instanceId: string) =>
       ["web-routes", relayId, instanceId] as const,
     tree: (relayId: string, instanceId: string) =>
@@ -326,6 +328,18 @@ export function relayConnectionQueryOptions(queryClient: QueryClient) {
     },
     refetchIntervalInBackground: false,
     refetchOnWindowFocus: (query) => query.state.data?.status !== "connected",
+    staleTime: connectedRelayPollDelayMs,
+  })
+}
+
+/** Polled only while a Relay memory cell is mounted and the tab is visible. */
+export function relayMemoryReadingsQueryOptions() {
+  return queryOptions({
+    queryKey: queryKeys.relay.memory,
+    queryFn: ({ signal }) => getRelayMemoryReadings({ signal }),
+    refetchInterval: connectedRelayPollDelayMs,
+    refetchIntervalInBackground: false,
+    refetchOnWindowFocus: false,
     staleTime: connectedRelayPollDelayMs,
   })
 }

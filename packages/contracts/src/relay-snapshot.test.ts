@@ -44,6 +44,7 @@ describe("Relay snapshot compatibility", () => {
     })
 
     expect(snapshot.relay?.sftp.publication).toBe("unknown")
+    expect(snapshot.node.relayMemory).toBeUndefined()
   })
 })
 

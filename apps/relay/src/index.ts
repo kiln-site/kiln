@@ -96,6 +96,7 @@ import {
 import { FilesystemDriver } from "./files.js"
 import { LifecycleDriver } from "./lifecycle.js"
 import { nodeSnapshot } from "./node.js"
+import { reportRelayMemoryMetrics } from "./relay-memory.js"
 import { RelayPairingError } from "./effect/errors.js"
 import {
   loadOrCreateRelayIdentity,
@@ -309,7 +310,11 @@ const webRouteMutation = Semaphore.makeUnsafe(1)
 const snapshotHub = new RelaySnapshotHub(relaySnapshot)
 // Keep one shared snapshot sampler active so crash recovery does not depend on
 // a Hearth control connection. Interactive readers reuse the same cached loop.
-snapshotHub.subscribe(() => undefined, false)
+// It also reports Relay memory to Sentry, throttled to once a minute.
+snapshotHub.subscribe(
+  ({ snapshot }) => reportRelayMemoryMetrics(snapshot.node.relayMemory),
+  false
+)
 const provisioningManager = await runRelayEffect(
   "relay.startup.provisioning",
   ProvisioningManager.make({

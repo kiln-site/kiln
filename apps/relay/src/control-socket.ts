@@ -24,6 +24,7 @@ import {
   relayConsoleResourcesV1Feature,
   relayFileRequestReplayV1Feature,
   relaySnapshotDeltaFeature,
+  relaySnapshotNodeResourcesFeature,
   isAuditedRelayControlOperation,
 } from "@workspace/contracts"
 import type {
@@ -271,6 +272,7 @@ function authenticateSocket(
   let eventSequence = 0
   let previousSnapshot: RelaySnapshot | null = null
   let snapshotDeltasEnabled = false
+  let nodeResourceDeltasEnabled = false
   const inFlight = new Map<
     string,
     {
@@ -441,6 +443,9 @@ function authenticateSocket(
         return yield* controlFailure("Invalid Hearth identity proof")
       }
       snapshotDeltasEnabled = features.includes(relaySnapshotDeltaFeature)
+      nodeResourceDeltasEnabled = features.includes(
+        relaySnapshotNodeResourcesFeature
+      )
       yield* completedAuthenticationEffect(client)
     })
   }
@@ -682,7 +687,9 @@ function authenticateSocket(
           send(socket, update)
           return
         }
-        const delta = createRelaySnapshotDelta(previous, next)
+        const delta = createRelaySnapshotDelta(previous, next, {
+          nodeResources: nodeResourceDeltasEnabled,
+        })
         if (!delta) return
         const update: RelayControlEvent = {
           event: "relay.snapshot.delta",

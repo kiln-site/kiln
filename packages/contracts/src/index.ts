@@ -1207,6 +1207,40 @@ export const relayNodeCapabilitySchema = z.enum([
   "tailscale-staged-removal",
 ])
 
+const relayMemoryBytesSchema = z.number().int().nonnegative()
+
+/**
+ * Memory used by the Relay itself, separate from the host totals in
+ * `RelayNode.memory`. `process` is the Relay's Node.js process. `container` is
+ * the Relay container's cgroup v2 accounting, which also counts page cache the
+ * kernel charged to the Relay (for example from walking server directories or
+ * reading files for backups); that cache is reclaimable, so it is reported as
+ * `fileBytes` rather than folded into the process numbers. `container` is null
+ * when the Relay is not in a cgroup v2 container or the files are unreadable.
+ */
+export const relayProcessMemorySchema = z.object({
+  process: z.object({
+    rssBytes: relayMemoryBytesSchema,
+    heapUsedBytes: relayMemoryBytesSchema,
+    heapTotalBytes: relayMemoryBytesSchema,
+    externalBytes: relayMemoryBytesSchema,
+    arrayBuffersBytes: relayMemoryBytesSchema,
+  }),
+  container: z
+    .object({
+      /** `memory.current`: everything charged to the cgroup. */
+      usedBytes: relayMemoryBytesSchema,
+      /** `memory.max`, or null when the cgroup is unlimited. */
+      limitBytes: relayMemoryBytesSchema.nullable(),
+      anonBytes: relayMemoryBytesSchema.nullable(),
+      fileBytes: relayMemoryBytesSchema.nullable(),
+      activeFileBytes: relayMemoryBytesSchema.nullable(),
+      inactiveFileBytes: relayMemoryBytesSchema.nullable(),
+      kernelBytes: relayMemoryBytesSchema.nullable(),
+    })
+    .nullable(),
+})
+
 export const relayNodeSchema = z.object({
   id: z.string().min(1),
   name: z.string().min(1),
@@ -1234,6 +1268,8 @@ export const relayNodeSchema = z.object({
     version: z.string().nullable(),
   }),
   connectedAt: z.string().datetime(),
+  /** Absent from Relays that predate memory reporting. */
+  relayMemory: relayProcessMemorySchema.optional(),
 })
 
 export const relaySftpPublicationStatusSchema = z.enum([
@@ -1792,15 +1828,23 @@ export type RelayInstance = z.infer<typeof relayInstanceSchema>
 export type RelaySnapshotDelta = z.infer<typeof relaySnapshotDeltaSchema>
 export type RelayNode = z.infer<typeof relayNodeSchema>
 export type RelaySnapshot = z.infer<typeof relaySnapshotSchema>
+export type RelayProcessMemory = z.infer<typeof relayProcessMemorySchema>
 
 /**
  * Builds the control-plane portion of a Relay snapshot update. High-frequency
  * resource samples use their dedicated stream and must not wake every Hearth
  * client through the fleet-wide realtime channel.
+ *
+ * `nodeResources` also sends the node whenever its resource samples (CPU,
+ * memory, storage, uptime, Relay memory) change, for Hearths that advertise
+ * `relaySnapshotNodeResourcesFeature`. Those Hearths keep their cached node
+ * current and strip resource-only node changes with
+ * `relaySnapshotControlDelta` before notifying browsers.
  */
 export function createRelaySnapshotDelta(
   previous: RelaySnapshot,
-  next: RelaySnapshot
+  next: RelaySnapshot,
+  options: { readonly nodeResources?: boolean } = {}
 ): RelaySnapshotDelta | null {
   const previousInstances = new Map(
     previous.instances.map((instance) => [instance.id, instance])
@@ -1821,8 +1865,10 @@ export function createRelaySnapshotDelta(
     nextIds.has(instance.id) ? [] : [instance.id]
   )
   const node = jsonValueEqual(
-    relayNodeControlState(previous.node),
-    relayNodeControlState(next.node)
+    options.nodeResources
+      ? previous.node
+      : relayNodeControlState(previous.node),
+    options.nodeResources ? next.node : relayNodeControlState(next.node)
   )
     ? undefined
     : next.node
@@ -1868,6 +1914,32 @@ export function applyRelaySnapshotDelta(
   }
 }
 
+/**
+ * Drops a node that only carries new resource samples, so a delta received
+ * with `relaySnapshotNodeResourcesFeature` wakes browsers exactly as often as
+ * a control-only delta. Returns null when nothing control-relevant changed.
+ */
+export function relaySnapshotControlDelta(
+  previous: RelaySnapshot,
+  delta: RelaySnapshotDelta
+): RelaySnapshotDelta | null {
+  if (
+    !delta.node ||
+    !jsonValueEqual(
+      relayNodeControlState(previous.node),
+      relayNodeControlState(delta.node)
+    )
+  ) {
+    return delta
+  }
+  const { node: _node, ...control } = delta
+  return control.instances.length === 0 &&
+    control.deletedInstanceIds.length === 0 &&
+    !control.relay
+    ? null
+    : control
+}
+
 function relayInstanceControlState(instance: RelayInstance) {
   const { resources: _resources, ...control } = instance
   return control
@@ -1877,6 +1949,7 @@ function relayNodeControlState(node: RelayNode) {
   const {
     cpu: _cpu,
     memory: _memory,
+    relayMemory: _relayMemory,
     storage: _storage,
     uptimeSeconds: _uptimeSeconds,
     ...control

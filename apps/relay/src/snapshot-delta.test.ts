@@ -2,6 +2,8 @@ import { describe, expect, it } from "vite-plus/test"
 
 import type { RelaySnapshot } from "@workspace/contracts"
 
+import { relaySnapshotControlDelta } from "@workspace/contracts"
+
 import {
   applyRelaySnapshotDelta,
   createRelaySnapshotDelta,
@@ -29,6 +31,27 @@ const relay = {
   sftp: {},
   tls: null,
 } as unknown as NonNullable<RelaySnapshot["relay"]>
+
+function relayMemory(rssBytes: number, fileBytes: number) {
+  return {
+    container: {
+      activeFileBytes: fileBytes / 2,
+      anonBytes: rssBytes,
+      fileBytes,
+      inactiveFileBytes: fileBytes / 2,
+      kernelBytes: 1_024,
+      limitBytes: null,
+      usedBytes: rssBytes + fileBytes,
+    },
+    process: {
+      arrayBuffersBytes: 1_024,
+      externalBytes: 2_048,
+      heapTotalBytes: rssBytes / 2,
+      heapUsedBytes: rssBytes / 4,
+      rssBytes,
+    },
+  }
+}
 
 function snapshot(
   instances: RelaySnapshot["instances"],
@@ -61,6 +84,7 @@ describe("Relay snapshot deltas", () => {
         ...node,
         cpu: { cores: 8, loadPercent: 10 },
         memory: { totalBytes: 100, usedBytes: 25 },
+        relayMemory: relayMemory(4_096, 8_192),
         storage: { totalBytes: 200, usedBytes: 50 },
         uptimeSeconds: 10,
       }
@@ -76,12 +100,41 @@ describe("Relay snapshot deltas", () => {
         ...node,
         cpu: { cores: 8, loadPercent: 90 },
         memory: { totalBytes: 100, usedBytes: 75 },
+        relayMemory: relayMemory(6_144, 16_384),
         storage: { totalBytes: 200, usedBytes: 80 },
         uptimeSeconds: 12,
       }
     )
 
     expect(createRelaySnapshotDelta(previous, next)).toBeNull()
+  })
+
+  it("keeps node resources current for Hearths that opt in without waking browsers", () => {
+    const previous = snapshot([instanceA], {
+      ...node,
+      memory: { totalBytes: 100, usedBytes: 25 },
+      relayMemory: relayMemory(4_096, 8_192),
+    })
+    const next = snapshot([instanceA], {
+      ...node,
+      memory: { totalBytes: 100, usedBytes: 75 },
+      relayMemory: relayMemory(6_144, 16_384),
+    })
+    const delta = createRelaySnapshotDelta(previous, next, {
+      nodeResources: true,
+    })
+
+    expect(delta).not.toBeNull()
+    expect(applyRelaySnapshotDelta(previous, delta!)).toEqual(next)
+    expect(relaySnapshotControlDelta(previous, delta!)).toBeNull()
+
+    const renamed = snapshot([instanceA], { ...next.node, name: "relay-b" })
+    const renameDelta = createRelaySnapshotDelta(previous, renamed, {
+      nodeResources: true,
+    })
+    expect(relaySnapshotControlDelta(previous, renameDelta!)?.node).toEqual(
+      renamed.node
+    )
   })
 
   it("contains only changed, added, and deleted instances", () => {

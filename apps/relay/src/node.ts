@@ -14,6 +14,7 @@ import type { RelayNode } from "@workspace/contracts"
 import { relayBuildLabel } from "./build-info.js"
 import type { RelayConfig } from "./config.js"
 import type { DockerDriver } from "./docker.js"
+import { relayProcessMemory } from "./relay-memory.js"
 
 const connectedAt = new Date().toISOString()
 const relayVersion = relayBuildLabel()
@@ -25,9 +26,10 @@ export async function nodeSnapshot(
   const filesystem = await statfs(config.rootDirectory)
   const storageTotal = filesystem.blocks * filesystem.bsize
   const storageAvailable = filesystem.bavail * filesystem.bsize
-  const [dockerVersion, startedAt] = await Promise.all([
+  const [dockerVersion, startedAt, relayMemory] = await Promise.all([
     docker.dockerVersion(),
     docker.relayStartedAt(),
+    relayProcessMemory(),
   ])
   const totalMemory = totalmem()
   const startedAtTimestamp = startedAt ? Date.parse(startedAt) : Number.NaN
@@ -61,5 +63,6 @@ export async function nodeSnapshot(
       version: dockerVersion,
     },
     connectedAt,
+    relayMemory,
   }
 }

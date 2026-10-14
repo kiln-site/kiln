@@ -208,6 +208,11 @@ export const RelayControlOperationSchema = Schema.Literals(
 )
 
 export const relaySnapshotDeltaFeature = "relay.snapshot.delta.v1"
+// Hearth keeps node resource samples (CPU, memory, Relay memory) current, so
+// snapshot deltas carry the node whenever those samples change. Older Hearths
+// would forward every such delta to browsers, so they never receive them.
+export const relaySnapshotNodeResourcesFeature =
+  "relay.snapshot.node-resources.v1"
 
 export const RelayAuthChallengeSchema = Schema.Struct({
   expiresAt: Schema.Number,

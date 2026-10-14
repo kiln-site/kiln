@@ -107,7 +107,7 @@ import type { PersistedRelay } from "@/lib/relay-registry"
 import { listPersistedRelays } from "@/lib/relay-registry"
 import { resolveMclogsApiUrl } from "@/lib/mclogs"
 import { publishRealtimeChange } from "@/lib/realtime-source.server"
-import { isRelayUpdating } from "@/lib/relay-connection"
+import { isRelayUpdating, relayConnectionState } from "@/lib/relay-connection"
 import { updateInstanceSourceName } from "@/lib/instance-registry"
 
 const instanceInputSchema = z.object({
@@ -249,6 +249,40 @@ export const getRelaySnapshot = createServerFn({ method: "POST" }).handler(
     return authorizedFleetSnapshot(user, true)
   }
 )
+
+/**
+ * Live Relay memory for the Relays table. Reads Hearth's cached snapshot, which
+ * Relays keep current through node resource deltas, so polling it costs no
+ * extra Relay round trip. `relayMemory` is null for Relays that predate memory
+ * reporting.
+ */
+export const getRelayMemoryReadings = createServerFn({
+  method: "GET",
+}).handler(async () => {
+  const user = await requireEligibleResourceUser()
+  const { grants, relays } = await authorizedRelays(
+    user,
+    await listPersistedRelays()
+  )
+  const readable = relays.filter(
+    (relay) =>
+      relay.enabled &&
+      canReadRelayNode(user, relay.id, grants) &&
+      relayConnectionState(relay.id).status === "authenticated"
+  )
+  const readings = await Promise.all(
+    readable.map((relay) =>
+      relaySnapshot(relay).then(
+        ({ node }) => ({
+          relayId: relay.id,
+          relayMemory: node.relayMemory ?? null,
+        }),
+        () => null
+      )
+    )
+  )
+  return readings.filter((reading) => reading !== null)
+})
 
 export const getFreshRelayConnectionState = createServerFn({
   method: "POST",
