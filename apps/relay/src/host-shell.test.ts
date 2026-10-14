@@ -2,8 +2,7 @@ import { describe, expect, it, vi } from "vite-plus/test"
 
 vi.mock("./command.js", () => import("./test/docker.js"))
 
-import { HostShell, hostTerminalTarget } from "./host-shell.js"
-import { ContainerTerminals } from "./container-terminal.js"
+import { HOST_SHELL_IMAGE, HostShell } from "./host-shell.js"
 import { fakeDocker } from "./test/docker.js"
 import { relayHarness, TEST_NAMESPACE } from "./test/relay.js"
 
@@ -16,7 +15,7 @@ describe("host access", () => {
       helper.container(),
     ])
     expect(first).toEqual(second)
-    const container = fakeDocker.container(first.id)!
+    const container = fakeDocker.container(first)!
     expect(container.state.running).toBe(true)
     container.state.running = false
     expect(await new HostShell(config).container()).toEqual(first)
@@ -31,7 +30,7 @@ describe("host access", () => {
       "Host access is turned off"
     )
     await disabled.remove()
-    expect(fakeDocker.container(created.id)).toBeUndefined()
+    expect(fakeDocker.container(created)).toBeUndefined()
   })
 
   it("does not take over or remove another container with the helper's name", async () => {
@@ -47,36 +46,21 @@ describe("host access", () => {
     expect(await helper.runningContainer()).toBeNull()
   })
 
-  it("keeps host shell sessions private to the person and paired client", async () => {
+  it("replaces a helper from an earlier revision instead of reusing it", async () => {
     const { config } = await relayHarness()
-    const target = hostTerminalTarget(await new HostShell(config).container())
-    const terminals = new ContainerTerminals(config)
-    try {
-      const input = {
-        attachmentId: "a".repeat(24),
-        cols: 80,
-        rows: 24,
-        idleTimeoutMs: 60_000,
-      }
-      const session = await terminals.attach(
-        "hearth:alice",
-        target,
-        input,
-        async () => ({ accepted: true })
-      )
-      expect(() =>
-        terminals.write("hearth:mallory", target.key, session.sessionId, "id\n")
-      ).toThrow()
-      terminals.write("hearth:alice", target.key, session.sessionId, "id\n")
-      const again = await terminals.attach(
-        "hearth:alice",
-        target,
-        { ...input, attachmentId: "b".repeat(24) },
-        async () => ({ accepted: true })
-      )
-      expect(again.sessionId).toBe(session.sessionId)
-    } finally {
-      await terminals.restart("hearth:alice", target.key)
-    }
+    const earlier = fakeDocker.addContainer({
+      name: `${TEST_NAMESPACE}-kiln-host-shell`,
+      image: HOST_SHELL_IMAGE,
+      labels: {
+        "kiln.relay.infrastructure": "host-shell",
+        "kiln.relay.owner": TEST_NAMESPACE,
+      },
+    })
+
+    const current = await new HostShell(config).container()
+
+    expect(current).not.toBe(earlier.id)
+    expect(fakeDocker.container(earlier.id)).toBeUndefined()
+    expect(fakeDocker.container(current)!.state.running).toBe(true)
   })
 })

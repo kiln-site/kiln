@@ -1,18 +1,25 @@
-import { Effect, Result } from "effect"
+import { Effect } from "effect"
 
-import { command } from "./command.js"
 import type { RelayConfig } from "./config.js"
 import {
   DockerEngine,
+  ensureImage,
   isDockerNotFound,
   type DockerContainerInspect,
 } from "./docker-engine.js"
-import { relayOwnerLabel, relayOwnsLabels } from "./relay-resources.js"
+import { ensuringPromise } from "./effect/promise.js"
+import { RELAY_OWNER_LABEL, relayOwnsLabels } from "./relay-resources.js"
 import type { TerminalTarget } from "./container-terminal.js"
 
-// BusyBox's nsenter is all the helper needs.
-export const HOST_SHELL_IMAGE = "alpine:3.22"
+// BusyBox's nsenter is all the helper needs. Pinned, as it runs as root on
+// the host.
+export const HOST_SHELL_IMAGE =
+  "alpine:3.22@sha256:5291449c3df73caf6ed85e649dec1b9e818b39a5d8c871e97afc13e9cd5e8fa8"
 const HOST_SHELL_LABEL = "kiln.relay.infrastructure"
+// Raised whenever the helper's configuration changes, so older helpers are
+// replaced rather than reused.
+const HOST_SHELL_REVISION_LABEL = "kiln.relay.host-shell.revision"
+const HOST_SHELL_REVISION = "1"
 
 export class HostAccessDisabledError extends Error {
   constructor() {
@@ -30,7 +37,7 @@ export class HostShell {
   readonly #config: Pick<RelayConfig, "hostAccess" | "resourceNamespace">
   readonly #engine: DockerEngine
   readonly #name: string
-  #pending: Promise<{ id: string; running: boolean }> | null = null
+  #pending: Promise<string> | null = null
 
   constructor(
     config: Pick<
@@ -49,15 +56,18 @@ export class HostShell {
     return this.#config.hostAccess
   }
 
-  // The running helper, started if it isn't. Concurrent callers share one
-  // start.
-  container(): Promise<{ id: string; running: boolean }> {
+  // The running helper's ID, started if it isn't. Concurrent callers share
+  // one start.
+  container(): Promise<string> {
     if (!this.#config.hostAccess) {
       return Promise.reject(new HostAccessDisabledError())
     }
-    this.#pending ??= this.#ensure().finally(() => {
-      this.#pending = null
-    })
+    this.#pending ??= ensuringPromise(
+      () => this.#ensure(),
+      () => {
+        this.#pending = null
+      }
+    )
     return this.#pending
   }
 
@@ -81,7 +91,7 @@ export class HostShell {
     )
   }
 
-  async #ensure(): Promise<{ id: string; running: boolean }> {
+  async #ensure(): Promise<string> {
     const existing = await this.#inspect()
     if (existing) {
       if (!this.#owns(existing)) {
@@ -89,24 +99,21 @@ export class HostShell {
           `Docker container ${this.#name} exists but is not owned by this Relay`
         )
       }
-      if (existing.Config.Image === HOST_SHELL_IMAGE) {
+      if (
+        existing.Config.Image === HOST_SHELL_IMAGE &&
+        existing.Config.Labels?.[HOST_SHELL_REVISION_LABEL] ===
+          HOST_SHELL_REVISION
+      ) {
         if (!existing.State.Running) {
           await Effect.runPromise(this.#engine.startContainer(existing.Id))
         }
-        return { id: existing.Id, running: true }
+        return existing.Id
       }
       await Effect.runPromise(
         this.#engine.removeContainer(existing.Id, { force: true })
       )
     }
-    const image = await Effect.runPromise(
-      this.#engine.inspectImage(HOST_SHELL_IMAGE).pipe(Effect.result)
-    )
-    if (Result.isFailure(image)) {
-      if (!isDockerNotFound(image.failure)) throw image.failure
-      await command("docker", ["pull", HOST_SHELL_IMAGE], { timeout: 300_000 })
-    }
-    const owner = relayOwnerLabel(this.#config)
+    await Effect.runPromise(ensureImage(this.#engine, HOST_SHELL_IMAGE))
     const created = await Effect.runPromise(
       this.#engine.createContainer(this.#name, {
         Cmd: ["sleep", "infinity"],
@@ -115,16 +122,24 @@ export class HostShell {
           PidMode: "host",
           Privileged: true,
           RestartPolicy: { Name: "no" },
+          // Sessions record host PIDs in /tmp for the Relay to hang up. A
+          // tmpfs forgets them when the helper stops, so a PID the host has
+          // since given to another process is never signalled.
+          Tmpfs: { "/tmp": "" },
         },
         Image: HOST_SHELL_IMAGE,
         Labels: {
           [HOST_SHELL_LABEL]: "host-shell",
-          ...(owner ? Object.fromEntries([owner.split("=", 2)]) : {}),
+          [HOST_SHELL_REVISION_LABEL]: HOST_SHELL_REVISION,
+          "kiln.relay.owned": "true",
+          ...(this.#config.resourceNamespace
+            ? { [RELAY_OWNER_LABEL]: this.#config.resourceNamespace }
+            : {}),
         },
       })
     )
     await Effect.runPromise(this.#engine.startContainer(created.Id))
-    return { id: created.Id, running: true }
+    return created.Id
   }
 
   #owns(container: DockerContainerInspect): boolean {
@@ -150,9 +165,7 @@ export class HostShell {
 // A login shell on the Relay's host, bash where the host has it. nsenter
 // joins the host's mount, UTS, IPC, and network namespaces; the helper already
 // shares its processes, so the shell stays the process the session started.
-export function hostTerminalTarget(
-  container: { id: string; running: boolean } | null
-): TerminalTarget {
+export function hostTerminalTarget(containerId: string): TerminalTarget {
   return {
     command: [
       "nsenter",
@@ -170,10 +183,10 @@ export function hostTerminalTarget(
       "-c",
       'cd "$HOME" 2>/dev/null || cd /; if command -v bash >/dev/null 2>&1; then exec bash -l; else exec sh -l; fi',
     ],
-    containerId: container?.id ?? null,
+    containerId,
     environment: ["HOME=/root"],
     key: HOST_TERMINAL_KEY,
-    running: container?.running ?? false,
+    running: true,
     stoppedMessage: "The host shell could not start",
   }
 }

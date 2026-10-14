@@ -23,7 +23,11 @@ import type { DatabaseConnections } from "./database-connections.js"
 import { command, commandWithInput } from "./command.js"
 import type { RelayConfig } from "./config.js"
 import type { DockerDriver } from "./docker.js"
-import { DockerEngine, type DockerContainerSummary } from "./docker-engine.js"
+import {
+  DockerEngine,
+  ensureImage,
+  type DockerContainerSummary,
+} from "./docker-engine.js"
 import { relayOwnerLabel, relayOwnsLabels } from "./relay-resources.js"
 
 const DATABASE_KIND_LABEL = "kiln.resource.kind"
@@ -205,7 +209,7 @@ export class DatabaseDriver {
     let volumeCreated = false
 
     const created = await promiseResult(async () => {
-      await this.#ensureImage(spec.image)
+      await Effect.runPromise(ensureImage(this.#engine, spec.image))
       await command("docker", [
         "volume",
         "create",
@@ -632,15 +636,6 @@ export class DatabaseDriver {
       }
     }
     return null
-  }
-
-  async #ensureImage(image: string) {
-    const inspected = await promiseResult(() =>
-      Effect.runPromise(this.#engine.inspectImage(image))
-    )
-    if (Result.isFailure(inspected)) {
-      await command("docker", ["pull", image], { timeout: 300_000 })
-    }
   }
 }
 

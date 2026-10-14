@@ -241,7 +241,6 @@ const docker = new DockerDriver(
 )
 const databases = new DatabaseDriver(config, docker, databaseConnections)
 const hostShell = new HostShell(config)
-if (!hostShell.enabled) await hostShell.remove()
 const terminals = new ContainerTerminals(config)
 const systemUpdates = new SystemUpdateManager(config)
 const filesystem = new FilesystemDriver(config)
@@ -279,14 +278,17 @@ const appFilesystem = new FilesystemDriver({
   rootDirectory: apps.rootDirectory,
 })
 const appDatabaseBrowser = new DatabaseBrowser(appFilesystem)
-const previousHostContainer = await hostShell.runningContainer()
-if (previousHostContainer) await terminals.sweep([previousHostContainer])
+// A helper left from when host access was on goes; one still in use has its
+// sessions swept with the rest.
+if (!hostShell.enabled) forkPromise(() => hostShell.remove())
 forkPromise(async () => {
-  const [managedDatabases, managedApps] = await Promise.all([
+  const [managedDatabases, managedApps, hostContainer] = await Promise.all([
     databases.list(),
     apps.list(),
+    hostShell.enabled ? hostShell.runningContainer() : null,
   ])
   await terminals.sweep([
+    ...(hostContainer ? [hostContainer] : []),
     ...managedDatabases.flatMap((database) =>
       database.containerId && database.observedState === "running"
         ? [database.containerId]

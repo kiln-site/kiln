@@ -16,7 +16,9 @@ import { Agent, request } from "node:http"
 import { StringDecoder } from "node:string_decoder"
 import { Effect, Predicate, Result } from "effect"
 
+import { command } from "./command.js"
 import { DockerEngineError } from "./effect/errors.js"
+import { promiseEffect } from "./effect/promise.js"
 
 export { DockerEngineError }
 
@@ -904,4 +906,19 @@ function query(
   }
   const encoded = search.toString()
   return encoded ? `?${encoded}` : ""
+}
+
+// Pulls an image Docker doesn't have yet, on the CLI like every pull.
+export function ensureImage(
+  engine: DockerEngine,
+  image: string
+): Effect.Effect<void, unknown> {
+  return engine.inspectImage(image).pipe(
+    Effect.catch(() =>
+      promiseEffect(() =>
+        command("docker", ["pull", image], { timeout: 300_000 })
+      )
+    ),
+    Effect.asVoid
+  )
 }
