@@ -48,16 +48,11 @@ services:
     healthcheck:
       # The dev image has no native checker, so BusyBox wget probes the same
       # loopback-only plain-HTTP health listener the production image uses.
+      # The unquoted echo trims the port like Relay does; empty means 4101.
       test:
         [
-          "CMD",
-          "wget",
-          "-q",
-          "-T",
-          "2",
-          "-O",
-          "/dev/null",
-          "http://127.0.0.1:${KILN_RELAY_HEALTH_PORT:-4101}/health",
+          "CMD-SHELL",
+          'port=$$(echo $$KILN_RELAY_HEALTH_PORT); wget -q -T 2 -O /dev/null "http://127.0.0.1:$${port:-4101}/health"',
         ]
       interval: 10s
       timeout: 3s

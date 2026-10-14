@@ -127,7 +127,7 @@ import { normalizedRoute } from "./route-label.js"
 import { uploadConsoleLogToMclogs } from "./mclogs.js"
 import { closeRelayServer } from "./shutdown.js"
 import { handleHealthRequest, listenRelayHealthServerEffect } from "./health.js"
-import { requestUrl } from "./request-url.js"
+import { rejectMalformedUpgrades, requestUrl } from "./request-url.js"
 import { attachSftpServer } from "./sftp-server.js"
 import { actionsForRole, relayActions } from "./permissions.js"
 import type { RelayAction } from "./permissions.js"
@@ -661,12 +661,7 @@ const controlSocket = attachControlSocket({
   subscribeSnapshots: (listener) =>
     snapshotHub.subscribe(({ snapshot }) => listener(snapshot), false),
 })
-server.on("upgrade", (request, socket) => {
-  // The socket upgrade listeners ignore targets they cannot parse; close them.
-  if (requestUrl(request)) return
-  socket.on("error", () => socket.destroy())
-  socket.end("HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n")
-})
+rejectMalformedUpgrades(server)
 const browserSocket = attachBrowserSocket({
   config,
   consoleSources: consoleSources(docker, databases),

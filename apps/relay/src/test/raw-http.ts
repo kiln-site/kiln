@@ -8,7 +8,7 @@ import { connect, type Socket } from "node:net"
 export function sendRawRequest(
   port: number,
   target: string,
-  options: { readonly upgrade?: boolean } = {}
+  options: { readonly allowHalfOpen?: boolean; readonly upgrade?: boolean } = {}
 ): Socket {
   const headers = [
     `GET ${target} HTTP/1.1`,
@@ -22,7 +22,11 @@ export function sendRawRequest(
         ]
       : ["Connection: close"]),
   ]
-  const socket = connect({ host: "127.0.0.1", port })
+  const socket = connect({
+    allowHalfOpen: options.allowHalfOpen ?? false,
+    host: "127.0.0.1",
+    port,
+  })
   socket.once("connect", () => {
     socket.write(`${headers.join("\r\n")}\r\n\r\n`)
   })
