@@ -326,37 +326,17 @@ export class DockerEngine {
       readonly timeout?: number
     }
   ): Effect.Effect<DockerOutput, DockerEngineError> {
-    const stdout: Array<Buffer> = []
-    const stderr: Array<Buffer> = []
-    let size = 0
     const maxBytes = options.maxBytes ?? DEFAULT_MAX_BYTES
-    const operation = `GET /containers/${reference}/logs`
-    let overflow = false
-    const frames = demultiplexer(options.tty, (stream, payload) => {
-      size += payload.length
-      if (size > maxBytes) overflow = true
-      else (stream === "stderr" ? stderr : stdout).push(payload)
-    })
+    const output = outputCollector(
+      maxBytes,
+      `Docker's logs for ${reference} exceeded ${maxBytes} bytes`
+    )
     return this.#exchange({
       method: "GET",
-      onData: frames,
+      onData: demultiplexer(options.tty, output.add),
       path: logsPath(reference, options, false),
       timeout: options.timeout,
-    }).pipe(
-      Effect.flatMap(() =>
-        overflow
-          ? Effect.fail(
-              new DockerEngineError({
-                operation,
-                reason: `Docker's logs for ${reference} exceeded ${maxBytes} bytes`,
-              })
-            )
-          : Effect.succeed({
-              stderr: Buffer.concat(stderr).toString("utf8"),
-              stdout: Buffer.concat(stdout).toString("utf8"),
-            })
-      )
-    )
+    }).pipe(Effect.map(output.read))
   }
 
   /**
@@ -410,31 +390,18 @@ export class DockerEngine {
         Cmd: command,
         Tty: false,
       })
-      const stdout: Array<Buffer> = []
-      const stderr: Array<Buffer> = []
-      let size = 0
+      const collected = outputCollector(
+        DEFAULT_MAX_BYTES,
+        `The output of ${command[0] ?? "exec"} exceeded ${DEFAULT_MAX_BYTES} bytes`
+      )
       yield* this.#exchange({
         body: { Detach: false, Tty: false },
         method: "POST",
-        onData: demultiplexer(false, (stream, payload) => {
-          size += payload.length
-          if (size <= DEFAULT_MAX_BYTES) {
-            ;(stream === "stderr" ? stderr : stdout).push(payload)
-          }
-        }),
+        onData: demultiplexer(false, collected.add),
         path: `/exec/${segment(created.Id)}/start`,
         timeout: null,
       })
-      const output = {
-        stderr: Buffer.concat(stderr).toString("utf8"),
-        stdout: Buffer.concat(stdout).toString("utf8"),
-      }
-      if (size > DEFAULT_MAX_BYTES) {
-        return yield* new DockerEngineError({
-          operation,
-          reason: `The output of ${command[0] ?? "exec"} exceeded ${DEFAULT_MAX_BYTES} bytes`,
-        })
-      }
+      const output = collected.read()
       const exitCode = yield* this.#execExitCode(created.Id)
       if (exitCode !== 0) {
         const detail = output.stderr.trim() || output.stdout.trim()
@@ -771,18 +738,17 @@ function withTimeout<A>(
 
 /**
  * Splits a non-TTY stream into stdout and stderr: each frame is a stream byte,
- * three zero bytes, a big-endian payload length, then the payload.
+ * three zero bytes, a big-endian payload length, then the payload. A reason
+ * returned by `onFrame`, or an error frame, abandons the stream.
  */
 function demultiplexer(
   tty: boolean,
-  onFrame: (stream: "stderr" | "stdout", payload: Buffer) => void
+  onFrame: (
+    stream: "stderr" | "stdout",
+    payload: Buffer
+  ) => string | undefined | void
 ): (chunk: Buffer) => string | undefined {
-  if (tty) {
-    return (chunk) => {
-      onFrame("stdout", chunk)
-      return undefined
-    }
-  }
+  if (tty) return (chunk) => onFrame("stdout", chunk) ?? undefined
   let pending: Buffer = Buffer.alloc(0)
   return (chunk) => {
     pending = pending.length === 0 ? chunk : Buffer.concat([pending, chunk])
@@ -794,15 +760,39 @@ function demultiplexer(
       pending = pending.subarray(8 + length)
       // As moby's stdcopy: 0 (stdin) and 1 go to stdout, 2 to stderr, and 3
       // is an error Docker hit after it had already answered 200.
-      if (type === 0 || type === 1) onFrame("stdout", payload)
-      else if (type === 2) onFrame("stderr", payload)
-      else if (type === 3) {
-        return `Error from daemon in stream: ${payload.toString("utf8").trim()}`
-      } else {
-        return `Docker sent an unrecognized stream type ${type}`
-      }
+      const problem =
+        type === 0 || type === 1
+          ? onFrame("stdout", payload)
+          : type === 2
+            ? onFrame("stderr", payload)
+            : type === 3
+              ? `Error from daemon in stream: ${payload.toString("utf8").trim()}`
+              : `Docker sent an unrecognized stream type ${type}`
+      if (problem) return problem
     }
     return undefined
+  }
+}
+
+/**
+ * Holds stdout and stderr up to `maxBytes` together; past it, `add` returns
+ * `overflow` so the request stops instead of reading the rest.
+ */
+function outputCollector(maxBytes: number, overflow: string) {
+  const stdout: Array<Buffer> = []
+  const stderr: Array<Buffer> = []
+  let size = 0
+  return {
+    add: (stream: "stderr" | "stdout", payload: Buffer) => {
+      size += payload.length
+      if (size > maxBytes) return overflow
+      ;(stream === "stderr" ? stderr : stdout).push(payload)
+      return undefined
+    },
+    read: (): DockerOutput => ({
+      stderr: Buffer.concat(stderr).toString("utf8"),
+      stdout: Buffer.concat(stdout).toString("utf8"),
+    }),
   }
 }
 

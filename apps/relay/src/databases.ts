@@ -23,11 +23,7 @@ import type { DatabaseConnections } from "./database-connections.js"
 import { command, commandWithInput } from "./command.js"
 import type { RelayConfig } from "./config.js"
 import type { DockerDriver } from "./docker.js"
-import {
-  containerName,
-  DockerEngine,
-  type DockerContainerSummary,
-} from "./docker-engine.js"
+import { DockerEngine, type DockerContainerSummary } from "./docker-engine.js"
 import { relayOwnerLabel, relayOwnsLabels } from "./relay-resources.js"
 
 const DATABASE_KIND_LABEL = "kiln.resource.kind"
@@ -339,7 +335,7 @@ export class DatabaseDriver {
         if (attached.Id === container) continue
         await Effect.runPromise(
           engine
-            .disconnectNetwork(network, containerName(attached), {
+            .disconnectNetwork(network, attached.Id, {
               force: true,
             })
             .pipe(Effect.ignore)

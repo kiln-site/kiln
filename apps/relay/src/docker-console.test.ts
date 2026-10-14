@@ -132,6 +132,35 @@ describe("console history", () => {
     expect(history.truncated).toBe(false)
   })
 
+  it("stops reading a shared log as soon as it passes the sharing limit", async () => {
+    const harness = await relayHarness()
+    const recipe = serverRecipe()
+    // About 12 MiB, past the 10 MiB sharing limit.
+    const container = await harness.seedServer({
+      id,
+      labels: {
+        "kiln.brick.snapshot-sha256": await harness.bricks.saveSnapshot(recipe),
+        "kiln.brick.source": await harness.publishRecipe(recipe),
+      },
+      logs: Array.from({ length: 12_000 }, (_, index) => ({
+        text: `line ${index} ${"x".repeat(1_000)}`,
+        time: new Date(Date.parse(startedAt) + 1_000 + index).toISOString(),
+      })),
+      running: true,
+      startedAt,
+      tty: true,
+    })
+    await harness.docker.inspectInstances()
+    const instance = await harness.docker.findInstance(id)
+    if (!instance) throw new Error("Server was not discovered")
+
+    await expect(harness.docker.consoleLog(instance)).rejects.toThrow(
+      "exceeded"
+    )
+    // Relay hung up instead of reading the rest of the log.
+    await vi.waitFor(() => expect(container.lastLogRead).toBe("abandoned"))
+  })
+
   describe("when Docker fails partway through reading the logs", () => {
     async function failingServer() {
       const harness = await relayHarness()

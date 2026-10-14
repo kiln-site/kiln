@@ -76,6 +76,8 @@ export interface FakeContainer {
    * lines, the way Docker reports an error once it has answered 200.
    */
   logStreamError: string | null
+  /** Whether the last log read was sent in full or its reader hung up. */
+  lastLogRead: "abandoned" | "complete" | null
   /** Everything written to the container's console through `attach`. */
   stdin: string
   /** Processes run with `docker exec`, as the container saw them. */
@@ -343,6 +345,7 @@ export class FakeDocker {
       starts: 0,
       logs: [...(seed.logs ?? [])],
       logStreamError: null,
+      lastLogRead: null,
       stdin: "",
       processes: [],
       firewall: new Map(),
@@ -1426,27 +1429,46 @@ export class FakeDocker {
     return {
       kind: "stream",
       write: (response) => {
+        let closed = false
+        response.on("close", () => {
+          closed = true
+        })
         response.writeHead(200, {
           "Content-Type": container.tty
             ? "application/vnd.docker.raw-stream"
             : "application/vnd.docker.multiplexed-stream",
         })
-        for (const { text, time } of selected) {
-          const line = Buffer.from(`${time} ${text}\n`)
-          response.write(container.tty ? line : frame(1, line))
+        // Sent as the reader takes it, as Docker does, so a reader that hangs
+        // up stops the rest from being read.
+        const send = async () => {
+          for (const { text, time } of selected) {
+            if (closed) {
+              container.lastLogRead = "abandoned"
+              return
+            }
+            const line = Buffer.from(`${time} ${text}\n`)
+            if (!response.write(container.tty ? line : frame(1, line))) {
+              await new Promise((resolve) => {
+                response.once("drain", resolve)
+                response.once("close", resolve)
+              })
+            }
+          }
+          container.lastLogRead = "complete"
+          if (container.logStreamError !== null) {
+            // Having answered 200, Docker reports a failed read in the stream.
+            response.end(frame(3, Buffer.from(container.logStreamError)))
+            return
+          }
+          if (!follow || !container.state.running) {
+            response.end()
+            return
+          }
+          const follower = { containerId: container.id, response }
+          this.#followers.add(follower)
+          response.on("close", () => this.#followers.delete(follower))
         }
-        if (container.logStreamError !== null) {
-          // Having answered 200, Docker reports a failed read in the stream.
-          response.end(frame(3, Buffer.from(container.logStreamError)))
-          return
-        }
-        if (!follow || !container.state.running) {
-          response.end()
-          return
-        }
-        const follower = { containerId: container.id, response }
-        this.#followers.add(follower)
-        response.on("close", () => this.#followers.delete(follower))
+        void send()
       },
     }
   }

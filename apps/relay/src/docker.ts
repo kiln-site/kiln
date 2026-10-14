@@ -13,7 +13,11 @@ import {
   type DatabaseConnectionSnapshot,
 } from "./database-connections.js"
 import { command } from "./command.js"
-import { DockerEngine, type DockerLogOptions } from "./docker-engine.js"
+import {
+  DockerEngine,
+  DockerEngineError,
+  type DockerLogOptions,
+} from "./docker-engine.js"
 import type { BrickCatalog } from "./bricks.js"
 import { directoryApparentSizeEffect } from "./disk-usage.js"
 import { ensuringPromise } from "./effect/promise.js"
@@ -403,6 +407,7 @@ const MAX_CONSOLE_HISTORY_CHARACTERS = 16 * 1024 * 1024
 const STARTUP_READINESS_LOG_LINES = 1_000
 const RESOURCE_HISTORY_WINDOW_MS = 6 * 60_000
 const DISK_USAGE_REFRESH_MS = 60_000
+const DISCOVERY_TIMEOUT_MS = 30_000
 
 function diskQuotaExceeded(
   usedBytes: number,
@@ -2164,7 +2169,19 @@ export class DockerDriver {
             : []
         )
         return yield* engine.inspectContainers<DockerInspect>(ids)
-      }),
+      }).pipe(
+        // One budget for the whole listing, as `docker inspect a b c` had.
+        Effect.timeoutOrElse({
+          duration: DISCOVERY_TIMEOUT_MS,
+          orElse: () =>
+            Effect.fail(
+              new DockerEngineError({
+                operation: "discover containers",
+                reason: `Docker did not list Kiln's containers within ${DISCOVERY_TIMEOUT_MS} ms`,
+              })
+            ),
+        })
+      ),
       { signal }
     )
     if (containers.length === 0) return []
