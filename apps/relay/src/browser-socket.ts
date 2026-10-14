@@ -2348,6 +2348,7 @@ class ConsoleHub {
 
   remove(socket: WebSocket): void {
     this.#subscribers.delete(socket)
+    this.#historyReaders.delete(socket)
     if (this.#subscribers.size > 0 || this.#graceFiber || this.#closed) return
     let graceFiber: Fiber.Fiber<void, never>
     graceFiber = Effect.runFork(
@@ -2565,6 +2566,8 @@ class ConsoleHub {
     this.#sessionFloor = startedAt
     this.#sessionLifecycle = snapshot.lifecycle
     this.#session += 1
+    // History still being sent is for the last session.
+    this.#historyReaders.clear()
     this.#clearHistoryFrames()
     this.#backfillStartedAt = undefined
     this.#truncated = snapshot.truncated
@@ -2730,6 +2733,8 @@ class ConsoleHub {
       "console",
       this.#source.readAction
     )
+    // Any history the socket was still being sent is replaced by this.
+    this.#historyReaders.delete(socket)
     this.#sendHistory(socket, this.#position(snapshotStart + reset.start))
   }
 

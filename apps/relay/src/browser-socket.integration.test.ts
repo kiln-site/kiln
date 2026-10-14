@@ -343,6 +343,30 @@ describe("relay browser socket integration", () => {
     ).toEqual([])
   })
 
+  it("sends a slow browser the whole of a run that starts while it reads the last", async () => {
+    const live = new LiveConsole("short-restart-console")
+    live.start("2026-01-01T00:00:00.000Z", 1_000, 10_000)
+    const relay = await startRelay({}, [live])
+    const first = await openConsole(relay, live)
+    await first.until(() => first.showing(live.lines.map((line) => line.id)))
+    // A browser joins and is slow to read its history.
+    const slow = await openConsole(relay, live)
+    slow.socket.pause()
+
+    // The new run's newest lines all fit in its reset; the rest are read
+    // after, while the slow browser still hasn't caught up.
+    live.start("2026-01-01T01:00:00.000Z", 1_000, 40)
+    relay.reportRuns()
+    const restarted = live.lines.map((line) => line.id)
+    await first.until(() => first.showing(restarted))
+    slow.socket.resume()
+    const written = live.write(1).map((line) => line.id)
+    await slow.until(() => slow.showing(written))
+
+    await slow.until(() => slow.showing(restarted))
+    expect(slow.lineIds()).toEqual([...restarted, ...written])
+  })
+
   it("rejects a socket from an origin the capability was not issued to", async () => {
     const relay = await startRelay()
     const result = await attemptAuthentication(relay, {
