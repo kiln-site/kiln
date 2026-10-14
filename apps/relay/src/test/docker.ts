@@ -461,9 +461,16 @@ export class FakeDocker {
    * not enough.
    */
   idle(): Promise<void> {
+    // Quiet is counted from no earlier than the call, so a request still on
+    // its way from work Relay started just before (a forked restart) has
+    // time to arrive, however long ago the last one was.
+    const called = Date.now()
     return new Promise((resolve) => {
       const check = () => {
-        if (this.#inFlight === 0 && Date.now() - this.#lastActivity >= 25) {
+        if (
+          this.#inFlight === 0 &&
+          Date.now() - Math.max(this.#lastActivity, called) >= 25
+        ) {
           // Let callers observe the result before waiters resume.
           setImmediate(resolve)
         } else {
