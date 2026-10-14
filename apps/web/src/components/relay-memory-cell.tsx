@@ -127,7 +127,7 @@ function RelayMemoryDetails({ memory }: { memory: RelayProcessMemory }) {
       <p className="text-muted-foreground">
         {container
           ? "Process memory is what the Relay itself uses. Container memory also counts file cache from scanning server folders and reading backups; the kernel frees it when memory is needed. Docker stats leaves out only inactive cache."
-          : "Process memory is what the Relay itself uses. Container memory is unavailable outside a cgroup v2 container."}
+          : "Process memory is what the Relay itself uses. Container memory is unavailable when cgroup v2 accounting can't be read."}
       </p>
     </div>
   )
