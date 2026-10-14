@@ -21,9 +21,13 @@ import { Effect, Result, Semaphore } from "effect"
 
 import { command, commandLines } from "./command.js"
 import type { RelayConfig } from "./config.js"
+import { consoleLineCharacters } from "./console-frames.js"
 import { parseConsoleLine } from "./console-parsing.js"
 import { databaseNetworkName } from "./databases.js"
-import type { DockerConsoleSession } from "./docker.js"
+import {
+  MAX_CONSOLE_HISTORY_CHARACTERS,
+  type DockerConsoleSession,
+} from "./docker.js"
 import {
   DockerEngine,
   isDockerNotFound,
@@ -103,7 +107,9 @@ interface AppContainer extends RelayAppContainer {
 
 interface Deployment extends RelayAppDeployment {
   abort: AbortController
-  // Lines dropped from the front once the log reached its limit.
+  // The characters of `lines`, which aren't saved with them.
+  characters: number
+  // Lines dropped from the front once the log reached its limits.
   dropped: number
   lines: Array<RelayConsoleLine>
 }
@@ -210,6 +216,7 @@ export class AppDriver {
     await this.get(input.appId)
     const deployment: Deployment = {
       abort: new AbortController(),
+      characters: 0,
       dropped: 0,
       error: null,
       finishedAt: null,
@@ -544,7 +551,7 @@ export class AppDriver {
     await Effect.runPromise(
       promiseEffect(async () => {
         await mkdir(directory, { recursive: true, mode: 0o700 })
-        const { abort: _abort, ...saved } = deployment
+        const { abort: _abort, characters: _characters, ...saved } = deployment
         await writeFile(
           join(directory, `${deployment.id}.json`),
           JSON.stringify(saved),
@@ -568,8 +575,17 @@ export class AppDriver {
         if (!latest) return null
         const saved = JSON.parse(
           await readFile(join(directory, latest), "utf8")
-        ) as Omit<Deployment, "abort">
-        return { ...saved, abort: new AbortController() } satisfies Deployment
+        ) as Omit<Deployment, "abort" | "characters">
+        const deployment: Deployment = {
+          ...saved,
+          abort: new AbortController(),
+          characters: saved.lines.reduce(
+            (total, line) => total + consoleLineCharacters(line),
+            0
+          ),
+        }
+        trimDeploymentLog(deployment)
+        return deployment
       }).pipe(Effect.orElseSucceed(() => null))
     )
     if (restored && !this.#deployments.has(appId)) {
@@ -1123,16 +1139,15 @@ export class AppDriver {
     level: RelayConsoleLevel = "info"
   ) {
     const index = deployment.dropped + deployment.lines.length
-    deployment.lines.push({
+    const line = {
       id: `${deployment.id}-${index}`,
       level,
       text,
       timestamp: new Date().toISOString(),
-    })
-    if (deployment.lines.length > MAX_DEPLOYMENT_LINES) {
-      deployment.lines.shift()
-      deployment.dropped += 1
     }
+    deployment.lines.push(line)
+    deployment.characters += consoleLineCharacters(line)
+    trimDeploymentLog(deployment)
     this.#wake(appId)
   }
 
@@ -1632,6 +1647,20 @@ async function deploymentFiles(directory: string): Promise<Array<string>> {
     .filter((file) => /^\d{14}\.json$/u.test(file))
     .sort()
     .reverse()
+}
+
+// Drops a deployment log's oldest lines past its line or character budget.
+// Lines keep their IDs, which count the dropped lines.
+function trimDeploymentLog(deployment: Deployment): void {
+  while (
+    deployment.lines.length > MAX_DEPLOYMENT_LINES ||
+    (deployment.characters > MAX_CONSOLE_HISTORY_CHARACTERS &&
+      deployment.lines.length > 1)
+  ) {
+    const line = deployment.lines.shift()!
+    deployment.characters -= consoleLineCharacters(line)
+    deployment.dropped += 1
+  }
 }
 
 function labelArguments(labels: Readonly<Record<string, string>>) {

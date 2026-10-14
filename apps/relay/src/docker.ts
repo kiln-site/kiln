@@ -401,9 +401,10 @@ const CONSOLE_TTY_COLUMNS = 120
 const CONSOLE_TTY_ROWS = 40
 const MAX_SHARED_CONSOLE_BYTES = 10 * 1024 * 1024
 export const MAX_CONSOLE_HISTORY_LINES = 5_000
-// Console history kept from one read, in characters; the newest output is
-// kept and the history says it was truncated.
-const MAX_CONSOLE_HISTORY_CHARACTERS = 16 * 1024 * 1024
+// Console history kept from one read, and by each console browsers follow,
+// in characters; the newest output is kept and the history says it was
+// truncated.
+export const MAX_CONSOLE_HISTORY_CHARACTERS = 16 * 1024 * 1024
 const STARTUP_READINESS_LOG_LINES = 1_000
 const RESOURCE_HISTORY_WINDOW_MS = 6 * 60_000
 const DISK_USAGE_REFRESH_MS = 60_000
@@ -1259,10 +1260,7 @@ export class DockerDriver {
       instanceId: resourceId,
       lifecycle: startedAt ? [{ state: "started", time: startedAt }] : [],
       lines: rawLines.map((line) => {
-        const hash = createHash("sha1")
-          .update(`${line.timestamp ?? ""}\u0000${line.text}`)
-          .digest("hex")
-          .slice(0, 14)
+        const hash = consoleLineHash(line)
         const occurrence = occurrences.get(hash) ?? 0
         occurrences.set(hash, occurrence + 1)
         return { ...line, id: `${hash}-${occurrence}` }
@@ -1337,24 +1335,17 @@ export class DockerDriver {
             Math.max(limit, 100),
             MAX_CONSOLE_HISTORY_LINES
           )
-          const occurrences = new Map<string, number>()
-
           const queueLine = (
             value: string,
-            component: ConsoleTarget["component"]
+            component: ConsoleTarget["component"],
+            lineId: (raw: string, line: ParsedConsoleLine) => string
           ) => {
             const parsed = parseConsoleLine(value)
             if (!parsed) return
             const prefixed = prefixConsoleLine(parsed, component)
-            const hash = createHash("sha1")
-              .update(`${prefixed.timestamp ?? ""}\u0000${prefixed.text}`)
-              .digest("hex")
-              .slice(0, 14)
-            const occurrence = occurrences.get(hash) ?? 0
-            occurrences.set(hash, occurrence + 1)
             Queue.offerUnsafe(queue, {
               ...prefixed,
-              id: `${hash}-${occurrence}`,
+              id: lineId(value, prefixed),
             })
           }
           // Aborting ends the stream; closing it interrupts the requests.
@@ -1367,8 +1358,10 @@ export class DockerDriver {
           // Each log ends when its container stops; the stream ends with all.
           yield* Effect.forEach(
             targets,
-            (target) =>
-              engine.containerLogLines(
+            (target) => {
+              // Each target's lines carry its component, so none share IDs.
+              const lineId = followedConsoleLineIds()
+              return engine.containerLogLines(
                 target.id,
                 {
                   follow: true,
@@ -1377,8 +1370,9 @@ export class DockerDriver {
                   timeout: null,
                   tty: target.tty,
                 },
-                (line) => queueLine(line, target.component)
-              ),
+                (line) => queueLine(line, target.component, lineId)
+              )
+            },
             { concurrency: "unbounded", discard: true }
           )
           stop()
@@ -2829,6 +2823,62 @@ function prefixConsoleLine(
     segments: undefined,
     service: component,
     text: `[${component}] ${line.text}`,
+  }
+}
+
+// A console line's ID is this, numbered among the lines with the same
+// timestamp and text. History reads and followed logs number lines alike, so
+// hubs and pages recognize the lines they already have.
+function consoleLineHash(line: ParsedConsoleLine): string {
+  return createHash("sha1")
+    .update(`${line.timestamp ?? ""}\u0000${line.text}`)
+    .digest("hex")
+    .slice(0, 14)
+}
+
+const DOCKER_LOG_STAMP_PATTERN = /^\d{4}-\d{2}-\d{2}T\S+Z/u
+// Line counts a followed log keeps at most, should its lines not move on
+// from their timestamps. A line numbered again after its count was evicted
+// can only share an ID with lines further back than hubs (5,000 lines) and
+// pages (about 10,000) recognize.
+const MAX_FOLLOWED_LINE_COUNTS = 8 * MAX_CONSOLE_HISTORY_LINES
+
+// IDs for a followed log's lines, numbered as a history read numbers them,
+// without counting every line a long-lived log has written. Docker stamps
+// every line it sends to the nanosecond (in its text, should the stamp not
+// parse), so a line can only repeat one with the stamp the log is at.
+// Counts for stamps the log has moved past are dropped, a round late, so
+// stdout and stderr arriving slightly out of order still count.
+function followedConsoleLineIds(): (
+  raw: string,
+  line: ParsedConsoleLine
+) => string {
+  // Least recently counted first.
+  const counts = new Map<string, { count: number; stamp: string | null }>()
+  let newest = ""
+  let floor = ""
+  let limit = 1_024
+  return (raw, line) => {
+    const hash = consoleLineHash(line)
+    const stamp = DOCKER_LOG_STAMP_PATTERN.exec(raw)?.[0] ?? null
+    if (stamp !== null && stamp > newest) newest = stamp
+    const count = counts.get(hash)?.count ?? 0
+    counts.delete(hash)
+    counts.set(hash, { count: count + 1, stamp })
+    if (counts.size > limit) {
+      for (const [key, value] of counts) {
+        if (value.stamp !== null && value.stamp < floor) counts.delete(key)
+      }
+      if (counts.size > MAX_FOLLOWED_LINE_COUNTS) {
+        for (const key of counts.keys()) {
+          if (counts.size <= MAX_FOLLOWED_LINE_COUNTS / 2) break
+          counts.delete(key)
+        }
+      }
+      floor = newest
+      limit = Math.max(1_024, counts.size * 2)
+    }
+    return `${hash}-${count}`
   }
 }
 

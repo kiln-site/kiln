@@ -24,56 +24,18 @@ const TRUNCATED_LINE_SUFFIX = "… [line truncated]"
 export function encodeNewestConsoleBatch(
   input: ConsoleBatchInput
 ): EncodedConsoleBatch {
-  let start = input.lines.length
-  const selectedNewestFirst: Array<string> = []
-  let selectedBytes = 0
-
-  while (start > 0) {
-    const nextStart = start - 1
-    const original = input.lines[nextStart]
-    const originalJson = JSON.stringify(original)
-    const originalBytes = Buffer.byteLength(originalJson)
-    const candidateBytes = batchByteLength(
-      input,
-      nextStart,
-      selectedBytes + originalBytes,
-      selectedNewestFirst.length + 1
-    )
-    if (
-      candidateBytes > relayBrowserMaxFrameBytes &&
-      selectedNewestFirst.length > 0
-    ) {
-      break
-    }
-    const line =
-      candidateBytes > relayBrowserMaxFrameBytes
-        ? fitConsoleLine(original, (candidate) =>
-            encodeBatch(input, [JSON.stringify(candidate)], nextStart)
-          )
-        : original
-    const lineJson = JSON.stringify(line)
-    start = nextStart
-    selectedNewestFirst.push(lineJson)
-    selectedBytes += Buffer.byteLength(lineJson)
-  }
-
-  return {
-    encoded: encodeBatch(input, [...selectedNewestFirst].reverse(), start),
-    start,
-  }
+  return encodeNewestBatch(input, batchEnvelope(input), input.lines.length)
 }
 
 export function encodeConsoleHistoryFrames(
   input: Omit<ConsoleBatchInput, "type">
 ): Array<string> {
+  const history = { ...input, type: "history" as const }
+  const envelope = batchEnvelope(history)
   const frames: Array<string> = []
   let end = input.lines.length
   while (end > 0) {
-    const batch = encodeNewestConsoleBatch({
-      ...input,
-      lines: input.lines.slice(0, end),
-      type: "history",
-    })
+    const batch = encodeNewestBatch(history, envelope, end)
     frames.push(batch.encoded)
     if (batch.start >= end) {
       throw new Error("Could not fit a console line in a browser frame")
@@ -83,6 +45,16 @@ export function encodeConsoleHistoryFrames(
   return frames
 }
 
+// About what a line holds in memory, in characters, for budgets on the
+// output kept for browsers.
+export function consoleLineCharacters(line: RelayConsoleLine): number {
+  let characters = line.text.length
+  for (const segment of line.segments ?? []) {
+    characters += segment.text.length
+  }
+  return characters
+}
+
 export function encodeConsoleLineFrame(line: RelayConsoleLine): string {
   const fitted = fitConsoleLine(line, (candidate) =>
     JSON.stringify({ type: "line", line: candidate })
@@ -90,38 +62,67 @@ export function encodeConsoleLineFrame(line: RelayConsoleLine): string {
   return JSON.stringify({ type: "line", line: fitted })
 }
 
-function encodeBatch(
+// The newest of the lines before `end` that fit in one frame, each line
+// encoded once, so a whole history encodes in one pass over its lines.
+function encodeNewestBatch(
   input: ConsoleBatchInput,
-  encodedLines: ReadonlyArray<string>,
-  start: number
-): string {
-  const [prefix, suffix] = batchEnvelope(input, start)
-  return `${prefix}${encodedLines.join(",")}${suffix}`
+  envelope: BatchEnvelope,
+  end: number
+): EncodedConsoleBatch {
+  let start = end
+  const selectedNewestFirst: Array<string> = []
+  let selectedBytes = 0
+
+  while (start > 0) {
+    const nextStart = start - 1
+    const original = input.lines[nextStart]!
+    const originalJson = JSON.stringify(original)
+    const candidateBytes =
+      envelope.prefixBytes +
+      selectedBytes +
+      Buffer.byteLength(originalJson) +
+      selectedNewestFirst.length +
+      Buffer.byteLength(envelope.suffix(nextStart))
+    if (
+      candidateBytes > relayBrowserMaxFrameBytes &&
+      selectedNewestFirst.length > 0
+    ) {
+      break
+    }
+    const lineJson =
+      candidateBytes > relayBrowserMaxFrameBytes
+        ? JSON.stringify(
+            fitConsoleLine(original, (candidate) =>
+              envelope.encode([JSON.stringify(candidate)], nextStart)
+            )
+          )
+        : originalJson
+    start = nextStart
+    selectedNewestFirst.push(lineJson)
+    selectedBytes += Buffer.byteLength(lineJson)
+  }
+
+  return {
+    encoded: envelope.encode(selectedNewestFirst.reverse(), start),
+    start,
+  }
 }
 
-function batchByteLength(
-  input: ConsoleBatchInput,
-  start: number,
-  encodedLineBytes: number,
-  lineCount: number
-): number {
-  const [prefix, suffix] = batchEnvelope(input, start)
-  return (
-    Buffer.byteLength(prefix) +
-    encodedLineBytes +
-    Math.max(0, lineCount - 1) +
-    Buffer.byteLength(suffix)
-  )
+interface BatchEnvelope {
+  readonly encode: (lines: ReadonlyArray<string>, start: number) => string
+  readonly prefixBytes: number
+  readonly suffix: (start: number) => string
 }
 
-function batchEnvelope(
-  input: ConsoleBatchInput,
-  start: number
-): [prefix: string, suffix: string] {
-  return [
-    `{"type":${JSON.stringify(input.type)},"instanceId":${JSON.stringify(input.instanceId)},"lifecycle":${JSON.stringify(input.lifecycle)},"lines":[`,
-    `],"truncated":${input.truncated || start > 0}}`,
-  ]
+function batchEnvelope(input: ConsoleBatchInput): BatchEnvelope {
+  const prefix = `{"type":${JSON.stringify(input.type)},"instanceId":${JSON.stringify(input.instanceId)},"lifecycle":${JSON.stringify(input.lifecycle)},"lines":[`
+  const suffix = (start: number) =>
+    `],"truncated":${input.truncated || start > 0}}`
+  return {
+    encode: (lines, start) => `${prefix}${lines.join(",")}${suffix(start)}`,
+    prefixBytes: Buffer.byteLength(prefix),
+    suffix,
+  }
 }
 
 // Drops a line's styling, then cuts its text, until its encoding fits in a

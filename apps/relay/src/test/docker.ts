@@ -416,6 +416,32 @@ export class FakeDocker {
     this.#endExecs(container)
   }
 
+  /** How many requests are following containers' logs. */
+  followerCount(): number {
+    return this.#followers.size
+  }
+
+  /**
+   * Simulates the container's process writing `lines`, all at once, to its
+   * log and to anyone following it.
+   */
+  writeLogs(
+    containerName: string,
+    lines: ReadonlyArray<{ text: string; time: string }>
+  ): void {
+    const container = this.#requiredContainer(containerName)
+    container.logs.push(...lines)
+    const output = Buffer.concat(
+      lines.map(({ text, time }) => {
+        const line = Buffer.from(`${time} ${text}\n`)
+        return container.tty ? line : frame(1, line)
+      })
+    )
+    for (const follower of this.#followers) {
+      if (follower.containerId === container.id) follower.response.write(output)
+    }
+  }
+
   /** Simulates Docker or the host restarting the container's process. */
   restartProcess(containerName: string): void {
     this.#start(this.#requiredContainer(containerName))

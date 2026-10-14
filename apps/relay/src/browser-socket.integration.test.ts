@@ -24,6 +24,7 @@ import type { RelayStateStore } from "./effect/state.js"
 import type { RelayIdentity } from "./effect/identity.js"
 import type { DockerConsoleSession, DockerDriver } from "./docker.js"
 import type { FilesystemDriver } from "./files.js"
+import type { RelaySnapshotSample } from "./snapshot-hub.js"
 
 const origin = "https://hearth.test"
 const relayId = "relay-test-fingerprint"
@@ -284,6 +285,73 @@ describe("relay browser socket integration", () => {
     expect(closedEarly).toBe(false)
   })
 
+  it("gives every browser joining a busy console its whole log", async () => {
+    const live = new LiveConsole("busy-console")
+    live.start("2026-01-01T00:00:00.000Z", 5_000, 1_000)
+    const relay = await startRelay({}, [live])
+    // The first browser opens the console, which then reads all of its
+    // history.
+    const first = await openConsole(relay, live)
+    const history = live.lines.map((line) => line.id)
+    await first.settle(() => first.showing(history))
+
+    // Others join while it keeps writing, and are slow to read what they're
+    // sent.
+    const joined: Array<{
+      firstLine: number
+      view: Awaited<ReturnType<typeof openConsole>>
+    }> = []
+    for (let index = 0; index < 4; index += 1) {
+      // The console keeps its newest 5,000 lines.
+      const firstLine = live.lines.length - 5_000
+      const view = await openConsole(relay, live)
+      view.socket.pause()
+      joined.push({ firstLine, view })
+      live.write(30)
+    }
+    for (const { view } of joined) view.socket.resume()
+    live.write(30)
+    const all = live.lines.map((line) => line.id)
+
+    for (const { firstLine, view } of [
+      { firstLine: 0, view: first },
+      ...joined,
+    ]) {
+      await view.settle(() => view.showing(all.slice(firstLine)))
+      const shown = view.lineIds()
+      // Older lines may come along, but none are missing or out of order.
+      const start = all.indexOf(shown[0]!)
+      expect(start).toBeGreaterThanOrEqual(0)
+      expect(start).toBeLessThanOrEqual(firstLine)
+      expect(shown).toEqual(all.slice(start))
+    }
+  })
+
+  it("stops sending a run's history once the server restarts", async () => {
+    const live = new LiveConsole("restarting-console")
+    // History far larger than what the socket buffers.
+    live.start("2026-01-01T00:00:00.000Z", 1_000, 10_000)
+    const relay = await startRelay({}, [live])
+    const first = await openConsole(relay, live)
+    await first.settle(() => first.showing(live.lines.map((line) => line.id)))
+    // A browser joins and is slow to read its history.
+    const slow = await openConsole(relay, live)
+    slow.socket.pause()
+
+    live.start("2026-01-01T01:00:00.000Z", 300, 10_000)
+    relay.reportRuns()
+    slow.socket.resume()
+    const restarted = live.lines.map((line) => line.id)
+    await slow.settle(() => slow.showing(restarted))
+
+    expect(slow.lineIds()).toEqual(restarted)
+    const reset = slow.runs.findIndex((run) => run.startedAt === live.startedAt)
+    expect(reset).toBeGreaterThan(0)
+    expect(
+      slow.runs.slice(reset).filter((run) => run.startedAt !== live.startedAt)
+    ).toEqual([])
+  })
+
   it("rejects a socket from an origin the capability was not issued to", async () => {
     const relay = await startRelay()
     const result = await attemptAuthentication(relay, {
@@ -335,6 +403,7 @@ interface TestRelay {
   readonly connect: (socketOrigin: string) => WebSocket
   readonly issuerPrivateKey: KeyObject
   readonly nextFileRequest: () => Promise<void>
+  readonly reportRuns: () => void
   readonly port: number
   readonly server: Server
   readonly setAuthority: (authority: {
@@ -346,6 +415,78 @@ interface TestRelay {
 // This server's history is several times the test outbox (2 MiB).
 const largeHistoryId = "large-history"
 const largeHistoryLines = 1_000
+
+// A server console the test writes to, and restarts, as a running server
+// would.
+class LiveConsole {
+  readonly id: string
+  lines: Array<RelayConsoleLine> = []
+  startedAt = ""
+  #written = 0
+  readonly #wakers = new Set<() => void>()
+
+  constructor(id: string) {
+    this.id = id
+  }
+
+  // Starts a new run whose history is `count` lines of `width` characters.
+  start(startedAt: string, count: number, width: number): void {
+    this.startedAt = startedAt
+    this.lines = []
+    this.write(count, width)
+  }
+
+  write(count: number, width = 40): Array<RelayConsoleLine> {
+    const written = Array.from({ length: count }, () => {
+      const index = this.#written++
+      return {
+        id: `line-${index}`,
+        level: "info" as const,
+        text: `${index} ${"x".repeat(width)}`,
+        timestamp: new Date(Date.parse(this.startedAt) + index).toISOString(),
+      }
+    })
+    this.lines.push(...written)
+    for (const wake of this.#wakers) wake()
+    return written
+  }
+
+  session(): DockerConsoleSession {
+    const lines = this.lines
+    const startedAt = this.startedAt
+    return {
+      history: (limit = 2_000) =>
+        Promise.resolve({
+          instanceId: this.id,
+          lifecycle: [{ state: "started", time: startedAt }],
+          lines: lines.slice(-limit),
+          truncated: lines.length > limit,
+        }),
+      stream: (signal) => this.#follow(lines, signal),
+    }
+  }
+
+  // Like Docker following a log: the newest lines, then what follows, until
+  // the run ends.
+  async *#follow(
+    lines: Array<RelayConsoleLine>,
+    signal: AbortSignal
+  ): AsyncIterable<RelayConsoleLine> {
+    let next = Math.max(0, lines.length - 200)
+    while (!signal.aborted && this.lines === lines) {
+      while (next < lines.length) yield lines[next++]!
+      await new Promise<void>((resolve) => {
+        const wake = () => {
+          this.#wakers.delete(wake)
+          signal.removeEventListener("abort", wake)
+          resolve()
+        }
+        this.#wakers.add(wake)
+        signal.addEventListener("abort", wake, { once: true })
+      })
+    }
+  }
+}
 
 // The Relay's consoles: each server and database container writes one line,
 // besides the server with a large history.
@@ -391,8 +532,10 @@ async function startRelay(
   clientGrant: {
     actions?: Array<string>
     role?: "custom" | "full_access"
-  } = {}
+  } = {},
+  liveConsoles: ReadonlyArray<LiveConsole> = []
 ): Promise<TestRelay> {
+  const snapshotListeners = new Set<(sample: RelaySnapshotSample) => void>()
   const issuerKeys = generateKeyPairSync("ed25519")
   const browserKeys = generateKeyPairSync("ec", { namedCurve: "P-256" })
   const publicKeyJwk = browserKeys.publicKey.export({ format: "jwk" })
@@ -470,7 +613,10 @@ async function startRelay(
     consoleSources: consoleSources(
       {
         consoleSession: (id) =>
-          Promise.resolve(consoleSession(id, `server ${id} output`)),
+          Promise.resolve(
+            liveConsoles.find((live) => live.id === id)?.session() ??
+              consoleSession(id, `server ${id} output`)
+          ),
         containerConsoleSession: (id, containerId) =>
           Promise.resolve(consoleSession(id, `database ${containerId} output`)),
       },
@@ -491,7 +637,10 @@ async function startRelay(
     runEffect: (effect) => Effect.runPromise(effect),
     server,
     state,
-    subscribeSnapshots: () => () => undefined,
+    subscribeSnapshots: (listener) => {
+      snapshotListeners.add(listener)
+      return () => snapshotListeners.delete(listener)
+    },
   })
   const attached = browserServer
   await new Promise<void>((resolve, reject) => {
@@ -527,6 +676,19 @@ async function startRelay(
       return socket
     },
     issuerPrivateKey: issuerKeys.privateKey,
+    // Reports each live console's current run, as the Relay's snapshots do.
+    reportRuns: () => {
+      const sample = {
+        sequence: 1,
+        snapshot: {
+          instances: liveConsoles.map((live) => ({
+            id: live.id,
+            lifecycle: [{ state: "started", time: live.startedAt }],
+          })),
+        },
+      } as unknown as RelaySnapshotSample
+      for (const listener of snapshotListeners) listener(sample)
+    },
     nextFileRequest: () =>
       new Promise<void>((resolve) => {
         fileRequests.push(resolve)
@@ -577,6 +739,85 @@ const databaseCapability = {
   instanceId: sharedId,
   resourceKind: "database",
 } satisfies Partial<RelayBrowserCapabilityV2>
+
+let openedConsoles = 0
+
+// Opens a live console as a page does, keeping the lines of the run it
+// shows: a reset starts a run, history for that run fills in older lines,
+// and live lines follow.
+async function openConsole(relay: TestRelay, live: LiveConsole) {
+  // Each from its own login, so none replaces another.
+  const { socket } = await authenticate(relay, {
+    instanceId: live.id,
+    loginSessionId: `login-session-${(openedConsoles += 1)}`,
+  })
+  let startedAt: string | null = null
+  let ready = false
+  const lines = new Map<string, RelayConsoleLine>()
+  // The run each reset and history frame was for, in arrival order.
+  const runs: Array<{ startedAt: string; type: string }> = []
+  const checks = new Set<() => void>()
+  socket.on("message", (data) => {
+    const frame = JSON.parse(data.toString()) as {
+      lifecycle?: Array<{ time: string }>
+      line?: RelayConsoleLine
+      lines?: Array<RelayConsoleLine>
+      type: string
+    }
+    const run = frame.lifecycle?.[0]?.time ?? null
+    if (frame.type === "ready") ready = true
+    if (frame.type === "reset" || frame.type === "history") {
+      runs.push({ startedAt: run ?? "", type: frame.type })
+    }
+    if (frame.type === "reset") {
+      startedAt = run
+      lines.clear()
+    }
+    if (
+      frame.type === "reset" ||
+      (frame.type === "history" && run === startedAt)
+    ) {
+      for (const line of frame.lines ?? []) lines.set(line.id, line)
+    } else if (frame.type === "line" && frame.line) {
+      lines.set(frame.line.id, frame.line)
+    }
+    for (const check of checks) check()
+  })
+  socket.send(
+    JSON.stringify({ instanceId: live.id, type: "console.subscribe", v: 1 })
+  )
+  const view = {
+    socket,
+    runs,
+    // Shown oldest first, as pages order lines.
+    lineIds: () =>
+      [...lines.values()]
+        .sort((left, right) =>
+          (left.timestamp ?? "").localeCompare(right.timestamp ?? "")
+        )
+        .map((line) => line.id),
+    showing: (ids: ReadonlyArray<string>) => ids.every((id) => lines.has(id)),
+    // Resolves once `predicate` holds, or after a while regardless, for the
+    // test to report what was shown.
+    settle: (predicate: () => boolean) =>
+      new Promise<void>((resolve) => {
+        const done = () => {
+          checks.delete(check)
+          clearTimeout(timeout)
+          resolve()
+        }
+        const check = () => {
+          if (predicate()) done()
+        }
+        const timeout = setTimeout(done, 2_000)
+        timeout.unref()
+        checks.add(check)
+        check()
+      }),
+  }
+  await view.settle(() => ready)
+  return view
+}
 
 function lineTexts(frame: Record<string, unknown>): Array<string> {
   return (frame.lines as Array<{ text: string }>).map((line) => line.text)

@@ -49,11 +49,13 @@ import {
 } from "@workspace/contracts"
 
 import {
+  MAX_CONSOLE_HISTORY_CHARACTERS,
   MAX_CONSOLE_HISTORY_LINES,
   type DockerConsoleSession,
   type DockerDriver,
 } from "./docker.js"
 import {
+  consoleLineCharacters,
   encodeConsoleHistoryFrames,
   encodeConsoleLineFrame,
   encodeNewestConsoleBatch,
@@ -2280,11 +2282,24 @@ class ConsoleHub {
   readonly #source: ConsoleSource
   readonly #lineIds = new Set<string>()
   readonly #onEmpty: () => void
+  // The session's newest output, within MAX_CONSOLE_HISTORY_LINES and
+  // MAX_CONSOLE_HISTORY_CHARACTERS.
   readonly #recent: Array<RelayConsoleLine> = []
   readonly #subscribers = new Set<WebSocket>()
+  // Lines appended this session. The line `n` from the end of `#recent` is
+  // at position `#appended - n`, which stays put as older lines are trimmed
+  // or backfilled.
+  #appended = 0
   #backfillStartedAt: string | null | undefined
   #closed = false
   #graceFiber: Fiber.Fiber<void, never> | null = null
+  // The history sent to joining browsers, encoded once and shared by all
+  // that join while it's being sent, then let go.
+  #history: SharedConsoleHistory | null = null
+  #recentCharacters = 0
+  // Changes with each session, which ends history still being sent for the
+  // last.
+  #session = 0
   #nextSession: DockerConsoleSession | null
   #sessionFloor: string | null = null
   #sessionLifecycle: Array<RelayInstanceLifecycleEvent> | undefined
@@ -2495,15 +2510,31 @@ class ConsoleHub {
     if (this.#lineIds.has(line.id)) return
     this.#lineIds.add(line.id)
     this.#recent.push(line)
-    if (this.#recent.length > MAX_CONSOLE_HISTORY_LINES) {
-      const removed = this.#recent.shift()
-      if (removed) this.#lineIds.delete(removed.id)
-      this.#truncated = true
-    }
+    this.#recentCharacters += consoleLineCharacters(line)
+    this.#appended += 1
+    this.#trim()
     const encoded = encodeConsoleLineFrame(line)
     for (const socket of this.#subscribers) {
       this.#deliver(socket, encoded, "console", this.#source.readAction)
     }
+  }
+
+  // Drops the oldest lines past the line or character budget, returning how
+  // many it dropped.
+  #trim(): number {
+    let removed = 0
+    while (
+      this.#recent.length > MAX_CONSOLE_HISTORY_LINES ||
+      (this.#recentCharacters > MAX_CONSOLE_HISTORY_CHARACTERS &&
+        this.#recent.length > 1)
+    ) {
+      const line = this.#recent.shift()!
+      this.#recentCharacters -= consoleLineCharacters(line)
+      this.#lineIds.delete(line.id)
+      this.#truncated = true
+      removed += 1
+    }
+    return removed
   }
 
   #observeSnapshot(sample: RelaySnapshotSample): void {
@@ -2530,11 +2561,19 @@ class ConsoleHub {
     const startedAt = lifecycleEventTime(snapshot.lifecycle, "started")
     this.#sessionFloor = startedAt
     this.#sessionLifecycle = snapshot.lifecycle
+    this.#session += 1
+    this.#history = null
     this.#backfillStartedAt = undefined
     this.#truncated = snapshot.truncated
     this.#recent.splice(0, this.#recent.length, ...snapshot.lines)
+    this.#recentCharacters = 0
     this.#lineIds.clear()
-    for (const line of snapshot.lines) this.#lineIds.add(line.id)
+    for (const line of snapshot.lines) {
+      this.#lineIds.add(line.id)
+      this.#recentCharacters += consoleLineCharacters(line)
+    }
+    this.#appended = snapshot.lines.length
+    this.#trim()
     for (const socket of this.#subscribers) this.#sendSession(socket)
   }
 
@@ -2622,19 +2661,17 @@ class ConsoleHub {
           }
           const fresh = older.filter((line) => !this.#lineIds.has(line.id))
           if (fresh.length === 0) return
-          for (const line of fresh) this.#lineIds.add(line.id)
-          this.#recent.unshift(...fresh)
-          if (this.#recent.length > MAX_CONSOLE_HISTORY_LINES) {
-            const removed = this.#recent.splice(
-              0,
-              this.#recent.length - MAX_CONSOLE_HISTORY_LINES
-            )
-            for (const line of removed) this.#lineIds.delete(line.id)
-            this.#truncated = true
-          } else {
-            this.#truncated ||= history.truncated
+          for (const line of fresh) {
+            this.#lineIds.add(line.id)
+            this.#recentCharacters += consoleLineCharacters(line)
           }
-          this.#sendHistory(this.#subscribers, fresh)
+          this.#recent.unshift(...fresh)
+          // Shared history from before misses these lines.
+          this.#history = null
+          this.#truncated ||= history.truncated
+          const kept = fresh.slice(this.#trim())
+          if (kept.length === 0) return
+          this.#sendHistory(this.#subscribers, kept)
         })
       ),
       Effect.asVoid
@@ -2684,9 +2721,56 @@ class ConsoleHub {
       "console",
       this.#source.readAction
     )
-    this.#sendHistory(
-      new Set([socket]),
-      this.#recent.slice(0, snapshotStart + reset.start)
+    this.#sendSharedHistory(socket, snapshotStart + reset.start)
+  }
+
+  // Sends the lines of `#recent` before `end`, the reset just sent, as
+  // history. Browsers joining together share one encoding: a browser
+  // joining after it was made gets the lines since encoded for it alone, as
+  // long as those are few. Pages drop lines they already have, so history
+  // may overlap a reset but must not leave a gap before it.
+  #sendSharedHistory(socket: WebSocket, end: number): void {
+    if (end === 0) return
+    const position = this.#appended - (this.#recent.length - end)
+    let history = this.#history
+    let since: ReadonlyArray<ConsoleHistoryFrame> = []
+    if (
+      history &&
+      history.truncated === this.#truncated &&
+      position - history.end <= SHARED_HISTORY_GAP_LINES
+    ) {
+      if (position > history.end) {
+        since = this.#encodeHistory(
+          this.#recent.slice(Math.max(0, end - (position - history.end)), end),
+          true
+        )
+      }
+    } else {
+      history = {
+        end: position,
+        frames: this.#encodeHistory(
+          this.#recent.slice(0, end),
+          this.#truncated
+        ),
+        readers: 0,
+        truncated: this.#truncated,
+      }
+      this.#history = history
+    }
+    const shared = history
+    shared.readers += 1
+    this.#forkBackground(
+      this.#sendFramesEffect(socket, [...since, ...shared.frames]).pipe(
+        Effect.ensuring(
+          Effect.sync(() => {
+            shared.readers -= 1
+            if (shared.readers === 0 && this.#history === shared) {
+              this.#history = null
+            }
+          })
+        )
+      ),
+      "browser.console.history"
     )
   }
 
@@ -2698,28 +2782,67 @@ class ConsoleHub {
       (socket) => socket.protocol === relayBrowserConsoleProtocol
     )
     if (subscribers.length === 0) return
-    const frames = encodeConsoleHistoryFrames({
-      instanceId: this.#resourceId,
-      lifecycle: this.#sessionLifecycle ?? [],
-      lines,
-      truncated: this.#truncated,
-    }).map((encoded) => ({ bytes: Buffer.byteLength(encoded), encoded }))
-    // History can be larger than a socket's outbox, so each socket gets it a
-    // frame at a time as its outbox empties. Frames name their session, so
-    // pages ignore any that arrive after the session changed.
+    const frames = this.#encodeHistory(lines, this.#truncated)
     for (const socket of subscribers) {
       this.#forkBackground(
-        Effect.promise(async () => {
-          for (const { bytes, encoded } of frames) {
-            if (!(await this.#room(socket, bytes))) return
-            if (this.#closed || !this.#subscribers.has(socket)) return
-            this.#deliver(socket, encoded, "console", this.#source.readAction)
-          }
-        }),
+        this.#sendFramesEffect(socket, frames),
         "browser.console.history"
       )
     }
   }
+
+  #encodeHistory(
+    lines: ReadonlyArray<RelayConsoleLine>,
+    truncated: boolean
+  ): Array<ConsoleHistoryFrame> {
+    return encodeConsoleHistoryFrames({
+      instanceId: this.#resourceId,
+      lifecycle: this.#sessionLifecycle ?? [],
+      lines,
+      truncated,
+    }).map((encoded) => ({ bytes: Buffer.byteLength(encoded), encoded }))
+  }
+
+  // History can be larger than a socket's outbox, so it's sent a frame at a
+  // time as the outbox empties, until the socket leaves or the session
+  // changes.
+  #sendFramesEffect(
+    socket: WebSocket,
+    frames: ReadonlyArray<ConsoleHistoryFrame>
+  ): Effect.Effect<void> {
+    const session = this.#session
+    return Effect.gen({ self: this }, function* () {
+      for (const { bytes, encoded } of frames) {
+        if (!(yield* Effect.promise(() => this.#room(socket, bytes)))) return
+        if (
+          this.#closed ||
+          this.#session !== session ||
+          !this.#subscribers.has(socket)
+        ) {
+          return
+        }
+        this.#deliver(socket, encoded, "console", this.#source.readAction)
+      }
+    })
+  }
+}
+
+// A browser joining needs no more than this many lines encoded for it alone
+// to use the history browsers joining before it share.
+const SHARED_HISTORY_GAP_LINES = 200
+
+interface ConsoleHistoryFrame {
+  readonly bytes: number
+  readonly encoded: string
+}
+
+interface SharedConsoleHistory {
+  // The position just past its newest line.
+  readonly end: number
+  // Newest first, as sent.
+  readonly frames: ReadonlyArray<ConsoleHistoryFrame>
+  readers: number
+  readonly truncated: boolean
 }
 
 function browserKeyThumbprint(jwk: {
