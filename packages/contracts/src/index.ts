@@ -310,6 +310,19 @@ export const relayDatabaseTerminalClaimSchema = z
   })
   .strict()
 
+// Host shells use the same session protocol as database and app terminals.
+export const relayHostTerminalAttachSchema =
+  relayDatabaseTerminalAttachSchema.omit({
+    databaseId: true,
+    password: true,
+    username: true,
+  })
+export const relayHostTerminalWriteSchema =
+  relayDatabaseTerminalWriteSchema.omit({ databaseId: true })
+export const relayHostTerminalClaimSchema =
+  relayDatabaseTerminalClaimSchema.omit({ databaseId: true })
+export const relayHostAccessSchema = z.object({ terminal: z.boolean() })
+
 // Relay to Hearth: output for one attachment, in order. `ended` arrives with
 // the session's last output. Not strict: a Relay newer than its Hearth may
 // send fields this Hearth doesn't know yet.

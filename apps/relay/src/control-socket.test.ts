@@ -117,6 +117,26 @@ describe("Relay control socket", () => {
     })
   })
 
+  it.each([
+    "relay.terminal.attach",
+    "relay.terminal.write",
+    "relay.terminal.claim",
+    "relay.terminal.restart",
+  ] as const)(
+    "refuses host shell operation %s for read-only clients",
+    async (operation) => {
+      const relay = await startRelay()
+      const hearth = await relay.pair({ role: "read_only" })
+      const { inbox, socket } = await relay.connect(hearth)
+      const id = sendRequest(socket, operation, {})
+      expect(await inbox.next()).toMatchObject({
+        code: "forbidden",
+        replyTo: id,
+        type: "error",
+      })
+    }
+  )
+
   it("keeps an app's files behind app file actions, apart from servers'", async () => {
     const relay = await startRelay()
     const appFiles = `app:${"a".repeat(40)}`

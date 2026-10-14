@@ -79,6 +79,7 @@ export const accessPermissions = [
   "relay.connections.manage",
   "relay.audit.read",
   "relay.logs.read",
+  "relay.terminal",
   "database.data.read",
   "database.data.write",
   "database.terminal",
@@ -191,6 +192,7 @@ const permissionPlacement: Record<
   "relay.connections.manage": ["relay.connections", "relay"],
   "relay.audit.read": ["relay.activity", "relay"],
   "relay.logs.read": ["relay.logs", "relay"],
+  "relay.terminal": ["relay.terminal", "relay"],
   "instance.create": ["resource.creation", "relay"],
   "database.create": ["resource.creation", "relay"],
   "access.read": ["access", "shared"],
@@ -578,6 +580,10 @@ const permissionCopy: Record<
     label: "View Relay activity",
     description: "Read the Relay’s activity history.",
   },
+  "relay.terminal": {
+    label: "Open host terminal",
+    description: "Run a root shell on the Relay’s host node.",
+  },
   "relay.logs.read": {
     label: "View Relay logs",
     description: "Watch the Relay container’s live output.",
@@ -658,6 +664,7 @@ const blockLabels: Record<string, string> = {
   "relay.connections": "Relay connections",
   "relay.activity": "Relay activity",
   "relay.logs": "Relay logs",
+  "relay.terminal": "Host terminal",
 }
 export const permissionBlocks = Object.freeze(
   [...new Set(permissionCatalog.map((entry) => entry.block))].map((key) =>

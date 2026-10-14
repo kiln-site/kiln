@@ -46,6 +46,12 @@ KILN_ENABLE_SIGNUPS=false
 
 Generate secrets with `openssl rand -base64 48`. `BETTER_AUTH_SECRETS` is versioned (`1:<secret>`). Keep an offline copy of `KILN_PLATFORM_BACKUP_KEY`; it is intentionally separate from Hearth's live secrets so a platform bundle remains recoverable after Hearth is lost. For a colocated Compose stack, give Hearth and Relay the same bootstrap token so they can pair on first boot. Set `KILN_RELAY_PROXY` to `traefik` or `coolify` when an edge should terminate TLS; `none` leaves that to you.
 
+The Relay workspace includes a root terminal on its Docker host, protected by
+`relay.terminal`. Set `KILN_RELAY_HOST_ACCESS=false` on the Relay to disable host
+access. Its small shell helper is created on first use and removed when host
+access is disabled. Each person's session survives page and Hearth reconnects
+and closes after the configured terminal idle timeout.
+
 Then:
 
 ```sh

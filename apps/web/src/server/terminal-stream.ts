@@ -136,6 +136,41 @@ export function appTerminalTarget(
   }
 }
 
+export function relayTerminalTarget(
+  relay: PersistedRelay,
+  user: AuthenticatedUser
+): TerminalStreamTarget {
+  return {
+    attach: async (attachmentId, rows, cols) => ({
+      session: relayDatabaseTerminalAttachedSchema.parse(
+        await databaseRpc(
+          relay,
+          "relay.terminal.attach",
+          {
+            attachmentId,
+            cols,
+            rows,
+            idleTimeoutMs: databaseTerminalIdleTimeoutMs(),
+          },
+          360_000,
+          user.id
+        )
+      ),
+      user: "root",
+    }),
+    authorize: (current) =>
+      requireRelayPermission({
+        permission: "relay.terminal",
+        relayId: relay.id,
+        user: current,
+      }),
+    operations: {
+      detach: "relay.terminal.detach",
+      heartbeat: "relay.terminal.heartbeat",
+    },
+  }
+}
+
 // Attaches one page to the person's terminal session and streams it as NDJSON
 // records until the page leaves, the session ends, or the Relay is lost.
 export function openTerminalStream(input: {

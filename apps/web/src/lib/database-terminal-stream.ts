@@ -64,3 +64,15 @@ export function appTerminalStreamUrl(input: {
   })
   return `/api/app-terminal/${encodeURIComponent(input.appId)}?${search}`
 }
+
+export function relayTerminalStreamUrl(input: {
+  cols: number
+  rows: number
+  relayId: string
+}) {
+  const search = new URLSearchParams({
+    cols: String(input.cols),
+    rows: String(input.rows),
+  })
+  return `/api/relay-terminal/${encodeURIComponent(input.relayId)}?${search}`
+}

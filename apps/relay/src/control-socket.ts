@@ -945,6 +945,14 @@ function actionForRequest(request: RelayControlRequest): RelayAction | null {
       return "instance.network.write"
     case "relay.tailscale.stack.remove":
       return "instance.delete"
+    case "relay.terminal.attach":
+    case "relay.terminal.heartbeat":
+    case "relay.terminal.detach":
+    case "relay.terminal.write":
+    case "relay.terminal.claim":
+    case "relay.terminal.restart":
+      return "relay.terminal"
+    case "relay.host.read":
     case "relay.proxy.read":
       return "relay.read"
     case "relay.proxy.config.read":

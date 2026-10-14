@@ -1,3 +1,9 @@
+import {
+  HostShell,
+  hostTerminalTarget,
+  HOST_TERMINAL_KEY,
+  HostAccessDisabledError,
+} from "./host-shell.js"
 import { createServer as createHttpServer } from "node:http"
 import { createServer as createHttpsServer } from "node:https"
 import { createHmac, randomBytes, randomUUID } from "node:crypto"
@@ -15,6 +21,9 @@ import {
   relayCreateDatabaseSchema,
   relayAppActionSchema,
   relayAppNetworkSchema,
+  relayHostTerminalAttachSchema,
+  relayHostTerminalWriteSchema,
+  relayHostTerminalClaimSchema,
   relayAppTerminalAttachSchema,
   relayAppTerminalClaimSchema,
   relayAppTerminalRestartSchema,
@@ -231,6 +240,8 @@ const docker = new DockerDriver(
   databaseConnections
 )
 const databases = new DatabaseDriver(config, docker, databaseConnections)
+const hostShell = new HostShell(config)
+if (!hostShell.enabled) await hostShell.remove()
 const terminals = new ContainerTerminals(config)
 const systemUpdates = new SystemUpdateManager(config)
 const filesystem = new FilesystemDriver(config)
@@ -268,6 +279,8 @@ const appFilesystem = new FilesystemDriver({
   rootDirectory: apps.rootDirectory,
 })
 const appDatabaseBrowser = new DatabaseBrowser(appFilesystem)
+const previousHostContainer = await hostShell.runningContainer()
+if (previousHostContainer) await terminals.sweep([previousHostContainer])
 forkPromise(async () => {
   const [managedDatabases, managedApps] = await Promise.all([
     databases.list(),
@@ -1248,6 +1261,60 @@ async function executeControlRequest(
       }
       await snapshotHub.refresh()
       return { mode, removed: mode === "commit" }
+    }
+    case "relay.host.read":
+      return { terminal: hostShell.enabled }
+    case "relay.terminal.attach": {
+      const input = relayHostTerminalAttachSchema.parse(request.payload)
+      return terminals.attach(
+        terminalOwner(client, request),
+        hostTerminalTarget(await hostShell.container()),
+        input,
+        (output, timeoutMs) =>
+          requestHearth("hearth.database.terminal.output", output, timeoutMs)
+      )
+    }
+    case "relay.terminal.heartbeat": {
+      const input = relayDatabaseTerminalHeartbeatSchema.parse(request.payload)
+      return terminals.heartbeat(
+        terminalOwner(client, request),
+        input.attachmentIds
+      )
+    }
+    case "relay.terminal.detach": {
+      const input = relayDatabaseTerminalDetachSchema.parse(request.payload)
+      return terminals.detach(
+        terminalOwner(client, request),
+        input.attachmentId
+      )
+    }
+    case "relay.terminal.restart":
+      if (!hostShell.enabled) throw new HostAccessDisabledError()
+      return terminals.restart(
+        terminalOwner(client, request),
+        HOST_TERMINAL_KEY
+      )
+    case "relay.terminal.write": {
+      if (!hostShell.enabled) throw new HostAccessDisabledError()
+      const input = relayHostTerminalWriteSchema.parse(request.payload)
+      return terminals.write(
+        terminalOwner(client, request),
+        HOST_TERMINAL_KEY,
+        input.sessionId,
+        input.data
+      )
+    }
+    case "relay.terminal.claim": {
+      if (!hostShell.enabled) throw new HostAccessDisabledError()
+      const input = relayHostTerminalClaimSchema.parse(request.payload)
+      return terminals.claim(
+        terminalOwner(client, request),
+        HOST_TERMINAL_KEY,
+        input.sessionId,
+        input.attachmentId,
+        input.rows,
+        input.cols
+      )
     }
     case "relay.proxy.read": {
       const settings = await lifecycle.proxySettings()

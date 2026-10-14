@@ -490,7 +490,7 @@ export function appDestinationHref(
   return destination.to.replace("$appId", encodeURIComponent(routeId))
 }
 
-export type RelayDestinationId = "info" | "logs" | "proxy"
+export type RelayDestinationId = "info" | "terminal" | "logs" | "proxy"
 
 export interface RelayDestination extends NavigationDestination {
   id: RelayDestinationId
@@ -505,6 +505,14 @@ export const relayDestinations = [
     label: "Info",
     permission: "relay.read",
     to: "/relay/$relayId/info",
+  },
+  {
+    icon: TerminalSquare,
+    id: "terminal",
+    keywords: ["shell", "ssh", "host", "node"],
+    label: "Terminal",
+    permission: "relay.terminal",
+    to: "/relay/$relayId/terminal",
   },
   {
     icon: ScrollText,

@@ -46,6 +46,13 @@ export const relayControlOperations = [
   "relay.tailscale.stack.dns",
   "relay.tailscale.stack.list",
   "relay.tailscale.stack.remove",
+  "relay.host.read",
+  "relay.terminal.attach",
+  "relay.terminal.heartbeat",
+  "relay.terminal.detach",
+  "relay.terminal.write",
+  "relay.terminal.claim",
+  "relay.terminal.restart",
   "relay.proxy.read",
   "relay.proxy.config.read",
   "relay.proxy.write",
@@ -149,6 +156,8 @@ const auditedRelayControlOperations = new Set<RelayControlOperation>([
   "relay.tailscale.stack.remove",
   "relay.tailscale.write",
   "relay.proxy.write",
+  "relay.terminal.attach",
+  "relay.terminal.restart",
   "instance.create",
   "instance.provision.prepare",
   "instance.provision.claim",
@@ -199,6 +208,7 @@ export function isAuditedRelayControlOperation(
 export function relayControlDeadlineMs(
   operation: RelayControlOperation
 ): number {
+  if (operation === "relay.terminal.attach") return 360_000
   if (operation === "relay.update.apply") return 15 * 60_000
   if (operation === "relay.tailscale.install") return 240_000
   if (operation === "relay.tailscale.stack.apply") return 240_000
