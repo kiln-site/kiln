@@ -27,22 +27,14 @@ export function encodeNewestConsoleBatch(
   return encodeNewestBatch(input, batchEnvelope(input), input.lines.length)
 }
 
-export function encodeConsoleHistoryFrames(
-  input: Omit<ConsoleBatchInput, "type">
-): Array<string> {
+// The history frame of the newest lines before `end` that fit in one, and
+// where those lines start. Older lines follow in a frame ending there.
+export function encodeConsoleHistoryFrame(
+  input: Omit<ConsoleBatchInput, "type">,
+  end: number
+): EncodedConsoleBatch {
   const history = { ...input, type: "history" as const }
-  const envelope = batchEnvelope(history)
-  const frames: Array<string> = []
-  let end = input.lines.length
-  while (end > 0) {
-    const batch = encodeNewestBatch(history, envelope, end)
-    frames.push(batch.encoded)
-    if (batch.start >= end) {
-      throw new Error("Could not fit a console line in a browser frame")
-    }
-    end = batch.start
-  }
-  return frames
+  return encodeNewestBatch(history, batchEnvelope(history), end)
 }
 
 // About what a line holds in memory, in characters, for budgets on the
@@ -62,8 +54,8 @@ export function encodeConsoleLineFrame(line: RelayConsoleLine): string {
   return JSON.stringify({ type: "line", line: fitted })
 }
 
-// The newest of the lines before `end` that fit in one frame, each line
-// encoded once, so a whole history encodes in one pass over its lines.
+// The newest of the lines before `end` that fit in one frame, encoding only
+// those, so a whole history encodes in one pass over its lines.
 function encodeNewestBatch(
   input: ConsoleBatchInput,
   envelope: BatchEnvelope,

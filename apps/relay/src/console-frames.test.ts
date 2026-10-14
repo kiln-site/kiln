@@ -3,7 +3,7 @@ import { describe, expect, it } from "vite-plus/test"
 import { relayBrowserMaxFrameBytes } from "@workspace/contracts"
 
 import {
-  encodeConsoleHistoryFrames,
+  encodeConsoleHistoryFrame,
   encodeConsoleLineFrame,
 } from "./console-frames.js"
 
@@ -15,12 +15,21 @@ describe("console browser frames", () => {
       text: `${index}: ${"x".repeat(1_300)}`,
       timestamp: "2026-07-25T17:59:03.123456789Z",
     }))
-    const frames = encodeConsoleHistoryFrames({
+    const input = {
       instanceId: "instance",
-      lifecycle: [{ state: "started", time: "2026-07-25T17:59:03.123456789Z" }],
+      lifecycle: [
+        { state: "started" as const, time: "2026-07-25T17:59:03.123456789Z" },
+      ],
       lines,
       truncated: false,
-    })
+    }
+    // Newest first, each frame ending where the last began.
+    const frames: Array<string> = []
+    for (let end = lines.length; end > 0;) {
+      const frame = encodeConsoleHistoryFrame(input, end)
+      frames.push(frame.encoded)
+      end = frame.start
+    }
 
     expect(frames.length).toBeGreaterThan(1)
     expect(

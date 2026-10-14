@@ -286,6 +286,54 @@ describe("console history", () => {
     expect(new Set(followed.map((line) => line.id)).size).toBe(written.length)
   })
 
+  it("numbers a repeat that Docker logs thousands of lines out of order", async () => {
+    const harness = await relayHarness()
+    const recipe = serverRecipe()
+    const container = await harness.seedServer({
+      id,
+      labels: {
+        "kiln.brick.snapshot-sha256": await harness.bricks.saveSnapshot(recipe),
+        "kiln.brick.source": await harness.publishRecipe(recipe),
+      },
+      running: true,
+      startedAt,
+      tty: false,
+    })
+    await harness.docker.inspectInstances()
+    const session = await harness.docker.consoleSession(id)
+    const at = (offset: number) =>
+      new Date(Date.parse(startedAt) + 1_000 + offset).toISOString()
+    const repeated = { text: "Saving chunks", time: at(0) }
+    const written = [
+      repeated,
+      ...Array.from({ length: 2_050 }, (_, index) => ({
+        text: `line ${index}`,
+        time: at(1 + index),
+      })),
+      repeated,
+    ]
+
+    const controller = new AbortController()
+    const followed: Array<RelayConsoleLine> = []
+    const read = (async () => {
+      for await (const line of session.stream(controller.signal)) {
+        followed.push(line)
+        if (followed.length === written.length) return
+      }
+    })()
+    await vi.waitFor(() => expect(fakeDocker.followerCount()).toBe(1))
+    fakeDocker.writeLogs(container.name, written)
+    await read
+    controller.abort()
+    const history = await session.history(5_000)
+
+    const followedIds = followed.map((line) => line.id)
+    expect(new Set(followedIds).size).toBe(written.length)
+    expect([...followedIds].sort((a, b) => a.localeCompare(b))).toEqual(
+      history.lines.map((line) => line.id).sort((a, b) => a.localeCompare(b))
+    )
+  })
+
   it("keeps the newest history within its size limit and says it was cut", async () => {
     const session = await serverWithOutput(2_000, 10_000)
 

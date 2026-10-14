@@ -216,6 +216,8 @@ export class FakeDocker {
   readonly images = new Map<string, Record<string, string>>()
   /** Images whose registry cannot be reached; pulling them fails. */
   readonly unreachableImages = new Set<string>()
+  /** What pulling an image prints before its final status, by image. */
+  readonly pullOutput = new Map<string, string>()
   /**
    * Images whose process exits as soon as it starts. Under a restart policy
    * Docker keeps restarting them, reporting them running and restarting.
@@ -277,6 +279,7 @@ export class FakeDocker {
     this.volumes.clear()
     this.images.clear()
     this.unreachableImages.clear()
+    this.pullOutput.clear()
     this.crashingImages.clear()
     this.tailscale.controlPlaneReachable = true
     this.tailscale.machines.clear()
@@ -1048,7 +1051,7 @@ export class FakeDocker {
       )
     }
     this.images.set(image, this.images.get(image) ?? {})
-    return `Status: Downloaded newer image for ${image}\n`
+    return `${this.pullOutput.get(image) ?? ""}Status: Downloaded newer image for ${image}\n`
   }
 
   // ------------------------------------------------------ networks, volumes

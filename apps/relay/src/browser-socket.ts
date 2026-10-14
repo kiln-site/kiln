@@ -29,6 +29,7 @@ import {
   relayBrowserRequestProofTranscript,
   relayBrowserConsoleProtocol,
   relayBrowserConsoleProtocols,
+  relayBrowserMaxFrameBytes,
   relayBrowserProtocol,
   relayConsoleReadActions,
   relayInstanceLifecycleEventTime as lifecycleEventTime,
@@ -56,7 +57,7 @@ import {
 } from "./docker.js"
 import {
   consoleLineCharacters,
-  encodeConsoleHistoryFrames,
+  encodeConsoleHistoryFrame,
   encodeConsoleLineFrame,
   encodeNewestConsoleBatch,
 } from "./console-frames.js"
@@ -2280,6 +2281,10 @@ class ConsoleHub {
   // Sent as `instanceId` in console frames, whatever the resource's kind.
   readonly #resourceId: string
   readonly #source: ConsoleSource
+  // Recently sent history frames, by the position they end at.
+  readonly #historyFrames = new Map<number, HistoryFrame>()
+  // Where each browser still being sent history is up to.
+  readonly #historyReaders = new Map<WebSocket, { position: number }>()
   readonly #lineIds = new Set<string>()
   readonly #onEmpty: () => void
   // The session's newest output, within MAX_CONSOLE_HISTORY_LINES and
@@ -2292,10 +2297,8 @@ class ConsoleHub {
   #appended = 0
   #backfillStartedAt: string | null | undefined
   #closed = false
+  #historyFrameCharacters = 0
   #graceFiber: Fiber.Fiber<void, never> | null = null
-  // The history sent to joining browsers, encoded once and shared by all
-  // that join while it's being sent, then let go.
-  #history: SharedConsoleHistory | null = null
   #recentCharacters = 0
   // Changes with each session, which ends history still being sent for the
   // last.
@@ -2562,7 +2565,7 @@ class ConsoleHub {
     this.#sessionFloor = startedAt
     this.#sessionLifecycle = snapshot.lifecycle
     this.#session += 1
-    this.#history = null
+    this.#clearHistoryFrames()
     this.#backfillStartedAt = undefined
     this.#truncated = snapshot.truncated
     this.#recent.splice(0, this.#recent.length, ...snapshot.lines)
@@ -2666,12 +2669,18 @@ class ConsoleHub {
             this.#recentCharacters += consoleLineCharacters(line)
           }
           this.#recent.unshift(...fresh)
-          // Shared history from before misses these lines.
-          this.#history = null
           this.#truncated ||= history.truncated
           const kept = fresh.slice(this.#trim())
           if (kept.length === 0) return
-          this.#sendHistory(this.#subscribers, kept)
+          // Browsers still being sent history reach these lines in turn.
+          for (const socket of this.#subscribers) {
+            if (
+              socket.protocol === relayBrowserConsoleProtocol &&
+              !this.#historyReaders.has(socket)
+            ) {
+              this.#sendHistory(socket, this.#position(kept.length))
+            }
+          }
         })
       ),
       Effect.asVoid
@@ -2721,52 +2730,60 @@ class ConsoleHub {
       "console",
       this.#source.readAction
     )
-    this.#sendSharedHistory(socket, snapshotStart + reset.start)
+    this.#sendHistory(socket, this.#position(snapshotStart + reset.start))
   }
 
-  // Sends the lines of `#recent` before `end`, the reset just sent, as
-  // history. Browsers joining together share one encoding: a browser
-  // joining after it was made gets the lines since encoded for it alone, as
-  // long as those are few. Pages drop lines they already have, so history
-  // may overlap a reset but must not leave a gap before it.
-  #sendSharedHistory(socket: WebSocket, end: number): void {
-    if (end === 0) return
-    const position = this.#appended - (this.#recent.length - end)
-    let history = this.#history
-    let since: ReadonlyArray<ConsoleHistoryFrame> = []
-    if (
-      history &&
-      history.truncated === this.#truncated &&
-      position - history.end <= SHARED_HISTORY_GAP_LINES
-    ) {
-      if (position > history.end) {
-        since = this.#encodeHistory(
-          this.#recent.slice(Math.max(0, end - (position - history.end)), end),
-          true
-        )
-      }
-    } else {
-      history = {
-        end: position,
-        frames: this.#encodeHistory(
-          this.#recent.slice(0, end),
-          this.#truncated
-        ),
-        readers: 0,
-        truncated: this.#truncated,
-      }
-      this.#history = history
-    }
-    const shared = history
-    shared.readers += 1
+  // The position of the line at `index` in `#recent`.
+  #position(index: number): number {
+    return this.#appended - this.#recent.length + index
+  }
+
+  // Sends `socket` the session's lines before `position` as history, newest
+  // first, a frame at a time as its outbox empties. Each frame is made only
+  // once there's room for it, so a slow browser keeps no history of its own
+  // waiting in the Relay. Lines never change, so the history meets the reset
+  // or lines it continues from without a gap, however long the browser
+  // takes; it ends early if older lines are trimmed meanwhile, the socket
+  // leaves, or the session changes.
+  #sendHistory(socket: WebSocket, position: number): void {
+    if (position <= this.#position(0)) return
+    const reader = { position }
+    const session = this.#session
+    this.#historyReaders.set(socket, reader)
     this.#forkBackground(
-      this.#sendFramesEffect(socket, [...since, ...shared.frames]).pipe(
+      Effect.gen({ self: this }, function* () {
+        for (;;) {
+          const open = yield* Effect.promise(() =>
+            this.#room(socket, relayBrowserMaxFrameBytes)
+          )
+          const end = reader.position - this.#position(0)
+          if (
+            !open ||
+            end <= 0 ||
+            this.#closed ||
+            this.#session !== session ||
+            this.#historyReaders.get(socket) !== reader ||
+            !this.#subscribers.has(socket)
+          ) {
+            return
+          }
+          const frame = this.#historyFrame(reader.position)
+          this.#deliver(
+            socket,
+            frame.encoded,
+            "console",
+            this.#source.readAction
+          )
+          if (frame.start <= this.#position(0)) return
+          reader.position = frame.start
+        }
+      }).pipe(
         Effect.ensuring(
           Effect.sync(() => {
-            shared.readers -= 1
-            if (shared.readers === 0 && this.#history === shared) {
-              this.#history = null
+            if (this.#historyReaders.get(socket) === reader) {
+              this.#historyReaders.delete(socket)
             }
+            if (this.#historyReaders.size === 0) this.#clearHistoryFrames()
           })
         )
       ),
@@ -2774,75 +2791,53 @@ class ConsoleHub {
     )
   }
 
-  #sendHistory(
-    sockets: ReadonlySet<WebSocket>,
-    lines: ReadonlyArray<RelayConsoleLine>
-  ): void {
-    const subscribers = [...sockets].filter(
-      (socket) => socket.protocol === relayBrowserConsoleProtocol
+  // The history frame of the newest lines before `position` that fit in
+  // one, and the position of its oldest line. Browsers sent the same history
+  // together, such as when they all reconnect, share the frames: one that
+  // stops short of the oldest kept line holds the same lines whatever else
+  // changes in the session, so it's kept a while for the next browser.
+  #historyFrame(position: number): HistoryFrame {
+    const cached = this.#historyFrames.get(position)
+    if (cached) return cached
+    const batch = encodeConsoleHistoryFrame(
+      {
+        instanceId: this.#resourceId,
+        lifecycle: this.#sessionLifecycle ?? [],
+        lines: this.#recent,
+        truncated: this.#truncated,
+      },
+      position - this.#position(0)
     )
-    if (subscribers.length === 0) return
-    const frames = this.#encodeHistory(lines, this.#truncated)
-    for (const socket of subscribers) {
-      this.#forkBackground(
-        this.#sendFramesEffect(socket, frames),
-        "browser.console.history"
-      )
+    const frame = {
+      encoded: batch.encoded,
+      start: this.#position(batch.start),
     }
-  }
-
-  #encodeHistory(
-    lines: ReadonlyArray<RelayConsoleLine>,
-    truncated: boolean
-  ): Array<ConsoleHistoryFrame> {
-    return encodeConsoleHistoryFrames({
-      instanceId: this.#resourceId,
-      lifecycle: this.#sessionLifecycle ?? [],
-      lines,
-      truncated,
-    }).map((encoded) => ({ bytes: Buffer.byteLength(encoded), encoded }))
-  }
-
-  // History can be larger than a socket's outbox, so it's sent a frame at a
-  // time as the outbox empties, until the socket leaves or the session
-  // changes.
-  #sendFramesEffect(
-    socket: WebSocket,
-    frames: ReadonlyArray<ConsoleHistoryFrame>
-  ): Effect.Effect<void> {
-    const session = this.#session
-    return Effect.gen({ self: this }, function* () {
-      for (const { bytes, encoded } of frames) {
-        if (!(yield* Effect.promise(() => this.#room(socket, bytes)))) return
-        if (
-          this.#closed ||
-          this.#session !== session ||
-          !this.#subscribers.has(socket)
-        ) {
-          return
-        }
-        this.#deliver(socket, encoded, "console", this.#source.readAction)
+    if (batch.start > 0) {
+      this.#historyFrames.set(position, frame)
+      this.#historyFrameCharacters += frame.encoded.length
+      for (const [key, evicted] of this.#historyFrames) {
+        if (this.#historyFrameCharacters <= MAX_HISTORY_FRAME_CHARACTERS) break
+        this.#historyFrames.delete(key)
+        this.#historyFrameCharacters -= evicted.encoded.length
       }
-    })
+    }
+    return frame
+  }
+
+  #clearHistoryFrames(): void {
+    this.#historyFrames.clear()
+    this.#historyFrameCharacters = 0
   }
 }
 
-// A browser joining needs no more than this many lines encoded for it alone
-// to use the history browsers joining before it share.
-const SHARED_HISTORY_GAP_LINES = 200
+// Recently encoded history frames a console keeps for browsers being sent
+// the same history, in characters: up to 32 full frames.
+const MAX_HISTORY_FRAME_CHARACTERS = 32 * relayBrowserMaxFrameBytes
 
-interface ConsoleHistoryFrame {
-  readonly bytes: number
+interface HistoryFrame {
   readonly encoded: string
-}
-
-interface SharedConsoleHistory {
-  // The position just past its newest line.
-  readonly end: number
-  // Newest first, as sent.
-  readonly frames: ReadonlyArray<ConsoleHistoryFrame>
-  readers: number
-  readonly truncated: boolean
+  // The position of its oldest line.
+  readonly start: number
 }
 
 function browserKeyThumbprint(jwk: {

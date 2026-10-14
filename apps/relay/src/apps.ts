@@ -439,10 +439,14 @@ export class AppDriver {
     while (!signal.aborted) {
       const woken = this.#nextWake(appId, signal)
       if (deployment) {
-        next = Math.max(next, deployment.dropped)
-        while (next < deployment.dropped + deployment.lines.length) {
-          yield deployment.lines[next - deployment.dropped]!
-          next += 1
+        // Lines can be dropped while one is being read, so skip past them.
+        for (
+          next = Math.max(next, deployment.dropped);
+          next < deployment.dropped + deployment.lines.length;
+          next = Math.max(next + 1, deployment.dropped)
+        ) {
+          const line = deployment.lines[next - deployment.dropped]
+          if (line) yield line
         }
       }
       if ((this.#deployments.get(appId) ?? null) !== deployment) return

@@ -1335,17 +1335,18 @@ export class DockerDriver {
             Math.max(limit, 100),
             MAX_CONSOLE_HISTORY_LINES
           )
+          const lineId = followedConsoleLineIds()
+
           const queueLine = (
             value: string,
-            component: ConsoleTarget["component"],
-            lineId: (raw: string, line: ParsedConsoleLine) => string
+            component: ConsoleTarget["component"]
           ) => {
             const parsed = parseConsoleLine(value)
             if (!parsed) return
             const prefixed = prefixConsoleLine(parsed, component)
             Queue.offerUnsafe(queue, {
               ...prefixed,
-              id: lineId(value, prefixed),
+              id: lineId(prefixed),
             })
           }
           // Aborting ends the stream; closing it interrupts the requests.
@@ -1358,10 +1359,8 @@ export class DockerDriver {
           // Each log ends when its container stops; the stream ends with all.
           yield* Effect.forEach(
             targets,
-            (target) => {
-              // Each target's lines carry its component, so none share IDs.
-              const lineId = followedConsoleLineIds()
-              return engine.containerLogLines(
+            (target) =>
+              engine.containerLogLines(
                 target.id,
                 {
                   follow: true,
@@ -1370,9 +1369,8 @@ export class DockerDriver {
                   timeout: null,
                   tty: target.tty,
                 },
-                (line) => queueLine(line, target.component, lineId)
-              )
-            },
+                (line) => queueLine(line, target.component)
+              ),
             { concurrency: "unbounded", discard: true }
           )
           stop()
@@ -2836,47 +2834,24 @@ function consoleLineHash(line: ParsedConsoleLine): string {
     .slice(0, 14)
 }
 
-const DOCKER_LOG_STAMP_PATTERN = /^\d{4}-\d{2}-\d{2}T\S+Z/u
-// Line counts a followed log keeps at most, should its lines not move on
-// from their timestamps. A line numbered again after its count was evicted
-// can only share an ID with lines further back than hubs (5,000 lines) and
-// pages (about 10,000) recognize.
-const MAX_FOLLOWED_LINE_COUNTS = 8 * MAX_CONSOLE_HISTORY_LINES
+// How many lines back a followed log still numbers a repeat after the line
+// it repeats. Past this, nothing recognizes the earlier line's ID any more:
+// hubs keep 5,000 lines, and pages about 10,000 IDs.
+const FOLLOWED_LINE_REPEAT_HORIZON = 3 * MAX_CONSOLE_HISTORY_LINES
 
 // IDs for a followed log's lines, numbered as a history read numbers them,
-// without counting every line a long-lived log has written. Docker stamps
-// every line it sends to the nanosecond (in its text, should the stamp not
-// parse), so a line can only repeat one with the stamp the log is at.
-// Counts for stamps the log has moved past are dropped, a round late, so
-// stdout and stderr arriving slightly out of order still count.
-function followedConsoleLineIds(): (
-  raw: string,
-  line: ParsedConsoleLine
-) => string {
-  // Least recently counted first.
-  const counts = new Map<string, { count: number; stamp: string | null }>()
-  let newest = ""
-  let floor = ""
-  let limit = 1_024
-  return (raw, line) => {
+// without counting every line a long-lived log has written: a line's count
+// is kept while it was last seen within the horizon.
+function followedConsoleLineIds(): (line: ParsedConsoleLine) => string {
+  // Least recently seen first.
+  const counts = new Map<string, number>()
+  return (line) => {
     const hash = consoleLineHash(line)
-    const stamp = DOCKER_LOG_STAMP_PATTERN.exec(raw)?.[0] ?? null
-    if (stamp !== null && stamp > newest) newest = stamp
-    const count = counts.get(hash)?.count ?? 0
+    const count = counts.get(hash) ?? 0
     counts.delete(hash)
-    counts.set(hash, { count: count + 1, stamp })
-    if (counts.size > limit) {
-      for (const [key, value] of counts) {
-        if (value.stamp !== null && value.stamp < floor) counts.delete(key)
-      }
-      if (counts.size > MAX_FOLLOWED_LINE_COUNTS) {
-        for (const key of counts.keys()) {
-          if (counts.size <= MAX_FOLLOWED_LINE_COUNTS / 2) break
-          counts.delete(key)
-        }
-      }
-      floor = newest
-      limit = Math.max(1_024, counts.size * 2)
+    counts.set(hash, count + 1)
+    if (counts.size > FOLLOWED_LINE_REPEAT_HORIZON) {
+      counts.delete(counts.keys().next().value!)
     }
     return `${hash}-${count}`
   }

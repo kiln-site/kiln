@@ -8,6 +8,7 @@ import {
   relayDeployAppSchema,
   type AppConfig,
   type RelayApp,
+  type RelayConsoleLine,
 } from "@workspace/contracts"
 import { Effect } from "effect"
 import { afterEach, describe, expect, it, vi } from "vite-plus/test"
@@ -162,6 +163,46 @@ describe("apps", () => {
     expect(history.lines.map((line) => line.text)).toContain(
       "Pulling nginx:alpine"
     )
+  })
+
+  it("follows a deployment's log while its oldest lines are dropped", async () => {
+    const harness = await createdApp()
+    // A pull that prints more than a deployment log keeps.
+    const image = "verbose:latest"
+    fakeDocker.pullOutput.set(
+      image,
+      Array.from(
+        { length: 20 },
+        (_, index) => `layer ${index} ${"x".repeat(1024 * 1024)}\n`
+      ).join("")
+    )
+    const pull = fakeDocker.hold({ command: "pull" })
+    const deploying = deploy(harness, { image })
+    await pull.reached
+    const session = await harness.apps.consoleSession(appId, "deployment", () =>
+      Promise.reject(new Error("Not a container stream"))
+    )
+    const controller = new AbortController()
+    const lines = session.stream(controller.signal)[Symbol.asyncIterator]()
+    // Reading its first line when the pull prints the rest at once.
+    const first = await lines.next()
+    pull.release()
+    await deploying
+    const rest: Array<RelayConsoleLine | undefined> = []
+    for (;;) {
+      const { value } = await lines.next()
+      rest.push(value)
+      if (!value || value.text.startsWith("Deployment ")) break
+    }
+    controller.abort()
+
+    const index = (line: RelayConsoleLine | undefined) =>
+      Number(line?.id.split("-").at(-1))
+    const history = await session.history(5_000)
+    expect(index(first.value)).toBe(0)
+    expect(rest.every((line) => line !== undefined)).toBe(true)
+    expect(rest.map(index)).toEqual(history.lines.map(index))
+    expect(history.lines.length).toBeLessThan(20)
   })
 
   it("labels a deployed container for its web routes on an external Traefik", async () => {

@@ -293,37 +293,28 @@ describe("relay browser socket integration", () => {
     // history.
     const first = await openConsole(relay, live)
     const history = live.lines.map((line) => line.id)
-    await first.settle(() => first.showing(history))
+    await first.until(() => first.showing(history))
 
     // Others join while it keeps writing, and are slow to read what they're
     // sent.
-    const joined: Array<{
-      firstLine: number
-      view: Awaited<ReturnType<typeof openConsole>>
-    }> = []
+    const joined: Array<Awaited<ReturnType<typeof openConsole>>> = []
     for (let index = 0; index < 4; index += 1) {
-      // The console keeps its newest 5,000 lines.
-      const firstLine = live.lines.length - 5_000
       const view = await openConsole(relay, live)
       view.socket.pause()
-      joined.push({ firstLine, view })
+      joined.push(view)
       live.write(30)
     }
-    for (const { view } of joined) view.socket.resume()
+    for (const view of joined) view.socket.resume()
     live.write(30)
     const all = live.lines.map((line) => line.id)
+    // The console keeps its newest 5,000 lines.
+    const kept = all.slice(-5_000)
 
-    for (const { firstLine, view } of [
-      { firstLine: 0, view: first },
-      ...joined,
-    ]) {
-      await view.settle(() => view.showing(all.slice(firstLine)))
+    for (const view of [first, ...joined]) {
+      await view.until(() => view.showing(kept))
       const shown = view.lineIds()
       // Older lines may come along, but none are missing or out of order.
-      const start = all.indexOf(shown[0]!)
-      expect(start).toBeGreaterThanOrEqual(0)
-      expect(start).toBeLessThanOrEqual(firstLine)
-      expect(shown).toEqual(all.slice(start))
+      expect(shown).toEqual(all.slice(all.indexOf(shown[0]!)))
     }
   })
 
@@ -333,7 +324,7 @@ describe("relay browser socket integration", () => {
     live.start("2026-01-01T00:00:00.000Z", 1_000, 10_000)
     const relay = await startRelay({}, [live])
     const first = await openConsole(relay, live)
-    await first.settle(() => first.showing(live.lines.map((line) => line.id)))
+    await first.until(() => first.showing(live.lines.map((line) => line.id)))
     // A browser joins and is slow to read its history.
     const slow = await openConsole(relay, live)
     slow.socket.pause()
@@ -342,7 +333,7 @@ describe("relay browser socket integration", () => {
     relay.reportRuns()
     slow.socket.resume()
     const restarted = live.lines.map((line) => line.id)
-    await slow.settle(() => slow.showing(restarted))
+    await slow.until(() => slow.showing(restarted))
 
     expect(slow.lineIds()).toEqual(restarted)
     const reset = slow.runs.findIndex((run) => run.startedAt === live.startedAt)
@@ -797,25 +788,29 @@ async function openConsole(relay: TestRelay, live: LiveConsole) {
         )
         .map((line) => line.id),
     showing: (ids: ReadonlyArray<string>) => ids.every((id) => lines.has(id)),
-    // Resolves once `predicate` holds, or after a while regardless, for the
-    // test to report what was shown.
-    settle: (predicate: () => boolean) =>
-      new Promise<void>((resolve) => {
-        const done = () => {
+    // Resolves once `predicate` holds, failing should the socket close
+    // first.
+    until: (predicate: () => boolean) =>
+      new Promise<void>((resolve, reject) => {
+        const finish = () => {
           checks.delete(check)
-          clearTimeout(timeout)
-          resolve()
+          socket.off("close", closed)
         }
         const check = () => {
-          if (predicate()) done()
+          if (!predicate()) return
+          finish()
+          resolve()
         }
-        const timeout = setTimeout(done, 2_000)
-        timeout.unref()
+        const closed = (code: number) => {
+          finish()
+          reject(new Error(`The console closed with ${code}`))
+        }
         checks.add(check)
+        socket.once("close", closed)
         check()
       }),
   }
-  await view.settle(() => ready)
+  await view.until(() => ready)
   return view
 }
 
