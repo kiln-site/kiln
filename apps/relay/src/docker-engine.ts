@@ -140,8 +140,12 @@ interface Exchange {
   /** For the whole exchange; `null` waits as long as the answer lasts. */
   readonly timeout?: number | null
   readonly maxBytes?: number
-  /** Receives a successful body as it arrives instead of buffering it. */
-  readonly onData?: (chunk: Buffer) => void
+  /**
+   * Receives a successful body as it arrives instead of buffering it. A
+   * returned reason fails the exchange, as when Docker reports an error
+   * within the stream.
+   */
+  readonly onData?: (chunk: Buffer) => string | undefined
 }
 
 export class DockerEngine {
@@ -660,7 +664,8 @@ export class DockerEngine {
         response.on("data", (chunk: Buffer) => {
           if (settled) return
           if (stream) {
-            stream(chunk)
+            const problem = stream(chunk)
+            if (problem !== undefined) fail(problem)
             return
           }
           size += chunk.length
@@ -771,20 +776,33 @@ function withTimeout<A>(
 function demultiplexer(
   tty: boolean,
   onFrame: (stream: "stderr" | "stdout", payload: Buffer) => void
-): (chunk: Buffer) => void {
-  if (tty) return (chunk) => onFrame("stdout", chunk)
+): (chunk: Buffer) => string | undefined {
+  if (tty) {
+    return (chunk) => {
+      onFrame("stdout", chunk)
+      return undefined
+    }
+  }
   let pending: Buffer = Buffer.alloc(0)
   return (chunk) => {
     pending = pending.length === 0 ? chunk : Buffer.concat([pending, chunk])
     while (pending.length >= 8) {
       const length = pending.readUInt32BE(4)
       if (pending.length < 8 + length) break
-      onFrame(
-        pending[0] === 2 ? "stderr" : "stdout",
-        pending.subarray(8, 8 + length)
-      )
+      const type = pending[0]
+      const payload = pending.subarray(8, 8 + length)
       pending = pending.subarray(8 + length)
+      // As moby's stdcopy: 0 (stdin) and 1 go to stdout, 2 to stderr, and 3
+      // is an error Docker hit after it had already answered 200.
+      if (type === 0 || type === 1) onFrame("stdout", payload)
+      else if (type === 2) onFrame("stderr", payload)
+      else if (type === 3) {
+        return `Error from daemon in stream: ${payload.toString("utf8").trim()}`
+      } else {
+        return `Docker sent an unrecognized stream type ${type}`
+      }
     }
+    return undefined
   }
 }
 

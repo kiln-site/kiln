@@ -71,6 +71,11 @@ export interface FakeContainer {
   /** Number of times Docker started this container after it was created. */
   starts: number
   logs: Array<{ text: string; time: string }>
+  /**
+   * Set to make reading this container's (non-TTY) logs fail after the
+   * lines, the way Docker reports an error once it has answered 200.
+   */
+  logStreamError: string | null
   /** Everything written to the container's console through `attach`. */
   stdin: string
   /** Processes run with `docker exec`, as the container saw them. */
@@ -337,6 +342,7 @@ export class FakeDocker {
       },
       starts: 0,
       logs: [...(seed.logs ?? [])],
+      logStreamError: null,
       stdin: "",
       processes: [],
       firewall: new Map(),
@@ -1429,6 +1435,11 @@ export class FakeDocker {
           const line = Buffer.from(`${time} ${text}\n`)
           response.write(container.tty ? line : frame(1, line))
         }
+        if (container.logStreamError !== null) {
+          // Having answered 200, Docker reports a failed read in the stream.
+          response.end(frame(3, Buffer.from(container.logStreamError)))
+          return
+        }
         if (!follow || !container.state.running) {
           response.end()
           return
@@ -1986,8 +1997,11 @@ function containerSummary(container: FakeContainer): unknown {
   }
 }
 
-/** One frame of a multiplexed stream: 1 is stdout, 2 is stderr. */
-function frame(stream: 1 | 2, payload: Buffer): Buffer {
+/**
+ * One frame of a multiplexed stream: 1 is stdout, 2 is stderr, and 3 an error
+ * Docker hit while streaming.
+ */
+function frame(stream: 1 | 2 | 3, payload: Buffer): Buffer {
   const header = Buffer.alloc(8)
   header[0] = stream
   header.writeUInt32BE(payload.length, 4)

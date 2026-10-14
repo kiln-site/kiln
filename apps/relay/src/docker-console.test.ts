@@ -132,6 +132,69 @@ describe("console history", () => {
     expect(history.truncated).toBe(false)
   })
 
+  describe("when Docker fails partway through reading the logs", () => {
+    async function failingServer() {
+      const harness = await relayHarness()
+      const recipe = serverRecipe()
+      const container = await harness.seedServer({
+        id,
+        labels: {
+          "kiln.brick.snapshot-sha256": await harness.bricks.saveSnapshot(recipe),
+          "kiln.brick.source": await harness.publishRecipe(recipe),
+        },
+        logs: [
+          {
+            text: "Starting server",
+            time: new Date(Date.parse(startedAt) + 1_000).toISOString(),
+          },
+        ],
+        running: true,
+        startedAt,
+        tty: false,
+      })
+      container.logStreamError = "log file is corrupted"
+      await harness.docker.inspectInstances()
+      const instance = await harness.docker.findInstance(id)
+      if (!instance) throw new Error("Server was not discovered")
+      return { harness, instance }
+    }
+
+    it("fails the shared log instead of sharing the error as output", async () => {
+      const { harness, instance } = await failingServer()
+
+      await expect(harness.docker.consoleLog(instance)).rejects.toThrow(
+        "log file is corrupted"
+      )
+    })
+
+    it("fails the history", async () => {
+      const { harness } = await failingServer()
+      const session = await harness.docker.consoleSession(id)
+
+      await expect(session.history(5_000)).rejects.toThrow(
+        "log file is corrupted"
+      )
+    })
+
+    it("fails the live stream", async () => {
+      const { harness, instance } = await failingServer()
+      const controller = new AbortController()
+      const read = async () => {
+        const lines: Array<string> = []
+        for await (const line of harness.docker.streamConsole(
+          instance,
+          controller.signal
+        )) {
+          lines.push(line.text)
+        }
+        return lines
+      }
+
+      await expect(read()).rejects.toThrow("log file is corrupted")
+      controller.abort()
+    })
+  })
+
   it("keeps the newest history within its size limit and says it was cut", async () => {
     const session = await serverWithOutput(2_000, 10_000)
 
