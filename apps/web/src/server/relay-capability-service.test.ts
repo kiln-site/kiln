@@ -458,6 +458,73 @@ describe("Relay capability issuance orchestration", () => {
     })
   })
 
+  describe("Relay logs", () => {
+    // Alice holds Relay permissions on relay-one; `granted` lists them.
+    let granted: Array<string>
+    beforeEach(() => {
+      granted = ["relay.logs.read"]
+      for (const feature of [
+        "browser-capability-v2",
+        "browser-lease-renewal-v1",
+        "console-resources-v1",
+        "relay-logs-v1",
+      ]) {
+        fakes.features.add(feature)
+      }
+      fakes.requirePermissions.mockImplementation(
+        (input: {
+          databaseId?: string
+          instanceId?: string
+          permissions: Array<string>
+        }) =>
+          !input.databaseId &&
+          !input.instanceId &&
+          input.permissions.every((permission) => granted.includes(permission))
+            ? Effect.void
+            : Effect.fail(new Error("Permission denied"))
+      )
+    })
+
+    const issueLogs = (id = "relay-one") =>
+      issueBrowserCapabilitiesForRequest({
+        authenticate: () => Promise.resolve({ sessionId: "session-one", user }),
+        publicKeyJwk,
+        relayId: "relay-one",
+        requests: [{ kind: "console", optInV2: true, write: false }],
+        resource: { id, kind: "relay" },
+      })
+
+    it("issues a capability to read the Relay's own logs", async () => {
+      const issued = await issueLogs()
+
+      expect(
+        decodeCapabilityPayload(issued.capabilities[0]!.capability)
+      ).toMatchObject({
+        actions: ["relay.logs.read"],
+        instanceId: "relay-one",
+        resourceKind: "relay",
+      })
+    })
+
+    it("refuses another Relay's logs through this Relay", async () => {
+      await expect(issueLogs("relay-two")).rejects.toThrow()
+    })
+
+    it("refuses people who can only view the Relay", async () => {
+      granted = ["relay.read"]
+
+      await expect(issueLogs()).rejects.toThrow()
+    })
+
+    it("refuses Relays that can't stream their own logs", async () => {
+      fakes.features.delete("relay-logs-v1")
+
+      await expect(issueLogs()).rejects.toThrow(
+        "Update this Relay to view these logs."
+      )
+    })
+  })
+
   it("uses the generation synchronized after stale issuance material was loaded", async () => {
     fakes.features.add("browser-capability-v2")
     fakes.features.add("browser-lease-renewal-v1")

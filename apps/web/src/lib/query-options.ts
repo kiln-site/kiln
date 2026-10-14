@@ -58,9 +58,11 @@ import {
   getRelayTree,
 } from "@/server/relay"
 import {
-  getRelays,
   getRelayOwnerMinecraftProfiles,
+  getRelayProxy,
+  getRelayProxyConfiguration,
   getRelayTailscale,
+  getRelays,
 } from "@/server/relays"
 import { getTailscaleStacks } from "@/server/tailscale"
 import { getAuthState } from "@/server/auth"
@@ -631,6 +633,24 @@ export function relaysQueryOptions() {
     queryKey: queryKeys.relays,
     queryFn: () => getRelays(),
     staleTime: Infinity,
+  })
+}
+
+export function relayProxyQueryOptions(relayId: string) {
+  return queryOptions({
+    queryFn: () => getRelayProxy({ data: { id: relayId } }),
+    queryKey: ["relays", "proxy", relayId] as const,
+    retry: false,
+    staleTime: 10_000,
+  })
+}
+
+export function relayProxyConfigurationQueryOptions(relayId: string) {
+  return queryOptions({
+    queryFn: () => getRelayProxyConfiguration({ data: { id: relayId } }),
+    queryKey: ["relays", "proxy", relayId, "configuration"] as const,
+    retry: false,
+    staleTime: 10_000,
   })
 }
 

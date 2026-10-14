@@ -1021,6 +1021,11 @@ const browserCapabilityActions: Record<
     file: ["instance.files.download", "instance.files.upload"],
     resources: ["instance.read"],
   },
+  relay: {
+    console: [relayConsoleReadActions.relay],
+    file: [],
+    resources: [],
+  },
 }
 
 // Capabilities name the kind of resource they are for; v1 capabilities and

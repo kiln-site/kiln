@@ -1110,6 +1110,34 @@ export const relayProxyDiagnosticsSchema = z
   })
   .strict()
 
+// What the Relay's proxy serves: the Traefik configuration it generates (the
+// static file only for its bundled Traefik), and each web route with the
+// server or app it reaches.
+export const relayProxyConfigurationSchema = z.object({
+  dynamicConfiguration: z.string(),
+  routes: z.array(
+    z.object({
+      hostname: z.string(),
+      id: z.string(),
+      name: z.string(),
+      owner: z.object({
+        id: z.string(),
+        kind: z.enum(["app", "server"]),
+        service: z.string().nullable(),
+      }),
+      path: z.string().nullable(),
+      stripPrefix: z.boolean(),
+      targetPort: z.number().int(),
+      upstream: z.string(),
+    })
+  ),
+  staticConfiguration: z.string().nullable(),
+})
+
+export type RelayProxyConfiguration = z.infer<
+  typeof relayProxyConfigurationSchema
+>
+
 export const relayInstanceResourcesSchema = z.object({
   sampledAt: z.string().datetime(),
   cpu: z.object({

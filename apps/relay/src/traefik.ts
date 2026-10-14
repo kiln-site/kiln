@@ -186,6 +186,14 @@ function routeUpstreamHost(
     : resources.instanceContainer(route.instanceId)
 }
 
+// Where a route's requests go, as Traefik reaches it.
+export function traefikRouteUpstream(
+  config: RelayConfig,
+  route: RelayStoredWebRoute
+): string {
+  return `http://${routeUpstreamHost(relayResourceNames(config), route)}:${route.targetPort}`
+}
+
 export function traefikDynamicConfiguration(
   config: RelayConfig,
   routes: ReadonlyArray<RelayStoredWebRoute>,

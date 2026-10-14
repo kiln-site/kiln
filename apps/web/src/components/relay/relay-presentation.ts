@@ -6,6 +6,7 @@ import {
   type InstanceStatusPresentation,
   type RelayIdentityStatus,
 } from "@/components/instance-name-presentation"
+import type { PersistedRelay } from "@/lib/relay-registry"
 import {
   relayConnectionQueryOptions,
   type RelayConnection,
@@ -75,4 +76,10 @@ export function useRelayLiveStatus(relay: {
       updating,
     }
   }, [isPending, relay.enabled, relay.lastError, state])
+}
+
+export function relayAddress(
+  relay: Pick<PersistedRelay, "hostname" | "port" | "useTls">
+): string {
+  return `${relay.useTls ? "https" : "http"}://${relay.hostname}:${relay.port}`
 }

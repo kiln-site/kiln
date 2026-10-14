@@ -490,7 +490,7 @@ export function appDestinationHref(
   return destination.to.replace("$appId", encodeURIComponent(routeId))
 }
 
-export type RelayDestinationId = "info"
+export type RelayDestinationId = "info" | "logs" | "proxy"
 
 export interface RelayDestination extends NavigationDestination {
   id: RelayDestinationId
@@ -505,6 +505,22 @@ export const relayDestinations = [
     label: "Info",
     permission: "relay.read",
     to: "/relay/$relayId/info",
+  },
+  {
+    icon: ScrollText,
+    id: "logs",
+    keywords: ["output", "container", "errors"],
+    label: "Logs",
+    permission: "relay.logs.read",
+    to: "/relay/$relayId/logs",
+  },
+  {
+    icon: Waypoints,
+    id: "proxy",
+    keywords: ["traefik", "routes", "domains", "certificates", "https"],
+    label: "Proxy",
+    permission: "relay.read",
+    to: "/relay/$relayId/proxy",
   },
 ] as const satisfies ReadonlyArray<RelayDestination>
 

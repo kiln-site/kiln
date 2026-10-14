@@ -24,6 +24,8 @@ export const relayFileRequestReplayV1Feature = "file-request-replay-v1"
 export const relayConsoleResourcesV1Feature = "console-resources-v1"
 // The Relay deploys apps: Docker images, Dockerfiles, and Compose projects.
 export const relayAppsV1Feature = "apps-v1"
+// The Relay streams its own container's output as the `relay` console kind.
+export const relayLogsV1Feature = "relay-logs-v1"
 export const relayBrowserAuthorizationReviseMaxItems = 256
 
 export const relayControlOperations = [
@@ -43,6 +45,7 @@ export const relayControlOperations = [
   "relay.tailscale.stack.list",
   "relay.tailscale.stack.remove",
   "relay.proxy.read",
+  "relay.proxy.config.read",
   "relay.proxy.write",
   "relay.pairing.create",
   "relay.pairing.list",
@@ -280,11 +283,13 @@ export const RelayBrowserOperationKindSchema = Schema.Literals([
 ])
 
 // The kinds of resource a browser capability can be for. Its `instanceId` is
-// the resource's ID; capabilities without `resourceKind` are for servers.
+// the resource's ID (a Relay's own ID for `relay`); capabilities without
+// `resourceKind` are for servers.
 export const relayBrowserResourceKinds = [
   "instance",
   "database",
   "app",
+  "relay",
 ] as const
 
 export const RelayBrowserResourceKindSchema = Schema.Literals(
@@ -308,6 +313,7 @@ export const relayConsoleReadActions = {
   app: "app.logs.read",
   database: "database.logs.read",
   instance: "instance.console.read",
+  relay: "relay.logs.read",
 } as const satisfies Record<RelayBrowserResourceKind, string>
 
 export const RelayBrowserCapabilityV1Schema = Schema.Struct({

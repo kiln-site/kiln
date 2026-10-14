@@ -6,6 +6,7 @@ import {
   relayConsoleReadActions,
   relayConsoleResourcesV1Feature,
   relayAppsV1Feature,
+  relayLogsV1Feature,
   appIdFromFileRoot,
   relayFileRequestReplayV1Feature,
   relayProxyBrowserMetadataSchema,
@@ -61,6 +62,7 @@ type BrowserAction =
   | "instance.files.download"
   | "instance.files.upload"
   | "instance.read"
+  | "relay.logs.read"
 
 interface IssuedBrowserCapability {
   browserOrigin: string
@@ -467,6 +469,10 @@ const authorizeBrowserCapabilityEffect = Effect.fn(
   relayId: string
   resource: RelayConsoleResource
 }) {
+  // A Relay's own output is only ever the Relay the capability is for.
+  if (input.resource.kind === "relay" && input.resource.id !== input.relayId) {
+    return yield* Effect.fail(new Error("Relay not found"))
+  }
   for (
     let attempt = 0;
     attempt < MAX_AUTHORIZATION_STABILITY_ATTEMPTS;
@@ -663,7 +669,8 @@ function resourceVersion(
     resource.kind !== "instance" &&
     (version !== 2 ||
       !features.has(relayConsoleResourcesV1Feature) ||
-      (resource.kind === "app" && !features.has(relayAppsV1Feature)))
+      (resource.kind === "app" && !features.has(relayAppsV1Feature)) ||
+      (resource.kind === "relay" && !features.has(relayLogsV1Feature)))
   ) {
     throw new Error("Update this Relay to view these logs.")
   }
@@ -695,8 +702,9 @@ function resourceScope(resource: RelayConsoleResource) {
       return { instanceId: resource.id }
     case "database":
       return { databaseId: resource.id }
-    // App permissions are granted on the Relay.
+    // App and Relay permissions are granted on the Relay.
     case "app":
+    case "relay":
       return {}
     default:
       return resource.kind satisfies never

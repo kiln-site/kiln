@@ -6,7 +6,6 @@ import {
 import * as React from "react"
 import { useLiveQuery } from "@tanstack/react-db"
 import {
-  queryOptions,
   useMutation,
   useQuery,
   useQueryClient,
@@ -118,6 +117,7 @@ import {
   queryKeys,
   relayConnectionQueryOptions,
   relayOwnerMinecraftProfilesQueryOptions,
+  relayProxyQueryOptions,
   relaysQueryOptions,
   type RelayConnection,
   updateOverviewQueryOptions,
@@ -147,7 +147,6 @@ import {
 import {
   addRelay,
   checkRelay,
-  getRelayProxy,
   previewRelayPairing,
   renameRelay,
   updateRelay,
@@ -175,15 +174,6 @@ const noRelayUpdateSummary = {
   outdatedRelayIds: noOutdatedRelays,
   reportedVersions: noReportedRelayVersions,
   releases: noPublicReleases,
-}
-
-function relayProxyQueryOptions(relayId: string) {
-  return queryOptions({
-    queryFn: () => getRelayProxy({ data: { id: relayId } }),
-    queryKey: ["relays", "proxy", relayId] as const,
-    retry: false,
-    staleTime: 10_000,
-  })
 }
 
 type RelayRegistryTableItem = Pick<
@@ -1362,7 +1352,7 @@ function PairingReview({
   )
 }
 
-function EditRelayDialog({
+export function EditRelayDialog({
   relay,
   open,
   onOpenChange,

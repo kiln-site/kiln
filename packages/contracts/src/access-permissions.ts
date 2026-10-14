@@ -78,6 +78,7 @@ export const accessPermissions = [
   "relay.connections.read",
   "relay.connections.manage",
   "relay.audit.read",
+  "relay.logs.read",
   "database.data.read",
   "database.data.write",
   "database.terminal",
@@ -189,6 +190,7 @@ const permissionPlacement: Record<
   "relay.connections.read": ["relay.connections", "relay"],
   "relay.connections.manage": ["relay.connections", "relay"],
   "relay.audit.read": ["relay.activity", "relay"],
+  "relay.logs.read": ["relay.logs", "relay"],
   "instance.create": ["resource.creation", "relay"],
   "database.create": ["resource.creation", "relay"],
   "access.read": ["access", "shared"],
@@ -576,6 +578,10 @@ const permissionCopy: Record<
     label: "View Relay activity",
     description: "Read the Relay’s activity history.",
   },
+  "relay.logs.read": {
+    label: "View Relay logs",
+    description: "Watch the Relay container’s live output.",
+  },
 }
 
 /** Stable IDs are an allowlist, never wildcard patterns. */
@@ -651,6 +657,7 @@ const blockLabels: Record<string, string> = {
   "relay.configuration": "Relay configuration",
   "relay.connections": "Relay connections",
   "relay.activity": "Relay activity",
+  "relay.logs": "Relay logs",
 }
 export const permissionBlocks = Object.freeze(
   [...new Set(permissionCatalog.map((entry) => entry.block))].map((key) =>

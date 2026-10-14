@@ -16,31 +16,7 @@ import {
   appServices,
 } from "@/components/app/app-presentation"
 import { useAppWorkspace } from "@/components/app/app-workspace-context"
-import { ConsoleCopyContext } from "@/components/console/console-copy-context"
-import {
-  ConsoleLevelMenu,
-  ConsoleSearchControl,
-} from "@/components/console/console-filters"
-import { ConsoleLogViewportController } from "@/components/console/console-log-viewport"
-import { ConsoleRetryButton } from "@/components/console/console-retry-button"
-import {
-  createConsoleStreamStore,
-  createConsoleUiStore,
-  type ConsoleStreamStore,
-  type ConsoleUiStore,
-} from "@/components/console/console-stores"
-import {
-  useRelayBrowserOrigin,
-  useRelayConsoleTransport,
-} from "@/components/console/console-stream-controller"
-import {
-  ConsoleRedactButton,
-  ConsoleSelectionControl,
-  ConsoleTimestampButton,
-  ConsoleWrapButton,
-} from "@/components/console/console-toolbar-actions"
-import { useRelayConsoleStream } from "@/components/console/use-relay-console-stream"
-import { consoleCopy } from "@/lib/console-copy"
+import { ResourceLogsSession } from "@/components/console/resource-logs"
 
 const DEPLOYMENT_STREAM = "deployment"
 const SERVICE_PREFIX = "service:"
@@ -108,19 +84,14 @@ function AppLogsSession({
   services: ReadonlyArray<string>
   stream: string
 }) {
-  const [uiStore] = React.useState(createConsoleUiStore)
-  const [streamStore] = React.useState(createConsoleStreamStore)
-
   return (
-    <ConsoleCopyContext.Provider value={consoleCopy.app}>
-      <section className="flex min-h-0 flex-1 flex-col bg-card">
-        <AppLogsStreamController
-          appId={appId}
-          relayAvailable={relayAvailable}
-          relayId={relayId}
-          stream={stream}
-          streamStore={streamStore}
-        />
+    <ResourceLogsSession
+      id={appId}
+      kind="app"
+      relayAvailable={relayAvailable}
+      relayId={relayId}
+      stream={stream}
+      header={
         <div className="flex min-h-12 shrink-0 items-center gap-2 border-b px-3 sm:px-4">
           <div
             role="tablist"
@@ -164,14 +135,8 @@ function AppLogsSession({
             </Select>
           ) : null}
         </div>
-        <AppLogsToolbar streamStore={streamStore} uiStore={uiStore} />
-        <ConsoleLogViewportController
-          active
-          streamStore={streamStore}
-          uiStore={uiStore}
-        />
-      </section>
-    </ConsoleCopyContext.Provider>
+      }
+    />
   )
 }
 
@@ -207,66 +172,3 @@ function LogSourceTab({
     </button>
   )
 }
-
-const AppLogsToolbar = React.memo(function AppLogsToolbar({
-  streamStore,
-  uiStore,
-}: {
-  streamStore: ConsoleStreamStore
-  uiStore: ConsoleUiStore
-}) {
-  return (
-    <div className="flex min-h-14 shrink-0 flex-wrap items-center gap-2 border-b px-3 py-2.5 sm:px-4">
-      <ConsoleSearchControl uiStore={uiStore} />
-      <ConsoleLevelMenu uiStore={uiStore} />
-      <ConsoleRetryButton streamStore={streamStore} />
-      <div className="ml-auto flex items-center gap-1.5">
-        <ConsoleSelectionControl active uiStore={uiStore} />
-        <ConsoleRedactButton uiStore={uiStore} />
-        <ConsoleWrapButton uiStore={uiStore} />
-        <ConsoleTimestampButton uiStore={uiStore} />
-      </div>
-    </div>
-  )
-})
-
-const AppLogsStreamController = React.memo(function AppLogsStreamController({
-  appId,
-  relayAvailable,
-  relayId,
-  stream,
-  streamStore,
-}: {
-  appId: string
-  relayAvailable: boolean
-  relayId: string
-  stream: string
-  streamStore: ConsoleStreamStore
-}) {
-  const retryVersion = React.useSyncExternalStore(
-    streamStore.subscribeRetry,
-    streamStore.getRetrySnapshot,
-    streamStore.getRetrySnapshot
-  )
-  const resource = React.useMemo(
-    () => ({ id: appId, kind: "app" as const, stream }),
-    [appId, stream]
-  )
-  const snapshot = useRelayConsoleStream(
-    relayId,
-    resource,
-    relayAvailable,
-    useRelayBrowserOrigin(relayId),
-    useRelayConsoleTransport(relayId),
-    // Apps have no server runtime, so no server state lines.
-    null,
-    undefined,
-    false,
-    retryVersion
-  )
-  React.useLayoutEffect(
-    () => streamStore.setSnapshot(snapshot),
-    [snapshot, streamStore]
-  )
-  return null
-})

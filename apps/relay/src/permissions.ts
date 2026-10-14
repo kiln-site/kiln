@@ -9,6 +9,7 @@ export const relayActions = [
   "relay.configure",
   "relay.update",
   "relay.audit.read",
+  "relay.logs.read",
   "relay.pairing.create",
   "relay.pairing.list",
   "relay.pairing.revoke",

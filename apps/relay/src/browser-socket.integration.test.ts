@@ -158,7 +158,7 @@ describe("relay browser socket integration", () => {
 
     const reset = await messages.next("reset")
     expect(reset.instanceId).toBe(sharedId)
-    expect(lineTexts(reset)).toEqual([`database container-${sharedId} output`])
+    expect(lineTexts(reset)).toEqual([`container container-${sharedId} output`])
   })
 
   it("keeps a server's console from a capability for a database", async () => {
@@ -216,6 +216,43 @@ describe("relay browser socket integration", () => {
     await expect(messages.next("reset")).resolves.toMatchObject({
       instanceId: sharedId,
     })
+  })
+
+  it("streams the Relay's own container to a capability for its logs", async () => {
+    const relay = await startRelay({ actions: ["relay.logs.read"] })
+    const { messages, socket } = await authenticate(relay, relayLogsCapability)
+
+    socket.send(
+      JSON.stringify({ instanceId: relayId, type: "console.subscribe", v: 1 })
+    )
+
+    const reset = await messages.next("reset")
+    expect(lineTexts(reset)).toEqual(["container relay-container output"])
+  })
+
+  it("refuses Relay logs to a Hearth the Relay doesn't let read them", async () => {
+    const relay = await startRelay()
+    const result = await attemptAuthentication(relay, {
+      capability: relayLogsCapability,
+    })
+
+    expect(result.ready).toBe(false)
+    expect(result.closed.code).toBe(4401)
+  })
+
+  it("refuses a Relay logs capability carrying a server's console actions", async () => {
+    const relay = await startRelay({
+      actions: ["relay.logs.read", "instance.console.write"],
+    })
+    const result = await attemptAuthentication(relay, {
+      capability: {
+        ...relayLogsCapability,
+        actions: ["relay.logs.read", "instance.console.write"],
+      },
+    })
+
+    expect(result.ready).toBe(false)
+    expect(result.closed.code).toBe(4401)
   })
 
   it("closes a database console when the person's access on the Relay changes", async () => {
@@ -633,7 +670,9 @@ async function startRelay(
               consoleSession(id, `server ${id} output`)
           ),
         containerConsoleSession: (id, containerId) =>
-          Promise.resolve(consoleSession(id, `database ${containerId} output`)),
+          Promise.resolve(
+            consoleSession(id, `container ${containerId} output`)
+          ),
       },
       {
         target: (id) =>
@@ -644,7 +683,8 @@ async function startRelay(
       {
         consoleSession: (id) =>
           Promise.resolve(consoleSession(id, `app ${id} output`)),
-      }
+      },
+      () => ({ containerId: "relay-container", id: relayId })
     ),
     docker: {} as DockerDriver,
     filesystem: {} as FilesystemDriver,
@@ -837,6 +877,12 @@ async function openConsole(relay: TestRelay, live: LiveConsole) {
   await view.until(() => ready)
   return view
 }
+
+const relayLogsCapability = {
+  actions: ["relay.logs.read"],
+  instanceId: relayId,
+  resourceKind: "relay",
+} satisfies Partial<RelayBrowserCapabilityV2>
 
 function lineTexts(frame: Record<string, unknown>): Array<string> {
   return (frame.lines as Array<{ text: string }>).map((line) => line.text)

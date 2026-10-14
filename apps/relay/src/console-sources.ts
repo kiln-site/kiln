@@ -35,7 +35,9 @@ export type ConsoleSources = (
 export function consoleSources(
   docker: Pick<DockerDriver, "consoleSession" | "containerConsoleSession">,
   databases: Pick<DatabaseDriver, "target">,
-  apps: Pick<AppDriver, "consoleSession">
+  apps: Pick<AppDriver, "consoleSession">,
+  // This Relay's ID, and the container it runs in (unknown outside Docker).
+  relay: () => { containerId: string | null; id: string }
 ): ConsoleSources {
   return (kind, id, stream) => {
     switch (kind) {
@@ -77,6 +79,18 @@ export function consoleSources(
                 ),
               signal
             ),
+        }
+      case "relay":
+        return {
+          readAction: relayConsoleReadActions.relay,
+          session: async (signal) => {
+            const { containerId, id: relayId } = relay()
+            if (id !== relayId) throw new Error("Relay not found")
+            if (!containerId) {
+              throw new Error("This Relay is not running in a container")
+            }
+            return docker.containerConsoleSession(id, containerId, signal)
+          },
         }
       default:
         return kind satisfies never

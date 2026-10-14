@@ -55,6 +55,7 @@ import {
   relayNetworkingSchema,
   relayProxyBrowserMetadataSchema,
   relayProxyReadInputSchema,
+  relayProxyConfigurationSchema,
   relayProxySettingsSchema,
   relayDirectoryPageInputSchema,
   relayDirectorySizesInputSchema,
@@ -106,7 +107,16 @@ import {
   databaseTerminalTarget,
 } from "./container-terminal.js"
 import { AppDriver } from "./apps.js"
-import { APP_SERVICE, appRouteOwner } from "./relay-resources.js"
+import {
+  APP_SERVICE,
+  appIdFromRouteOwner,
+  appRouteOwner,
+} from "./relay-resources.js"
+import {
+  traefikDynamicConfiguration,
+  traefikRouteUpstream,
+  traefikStaticConfiguration,
+} from "./traefik.js"
 import { forkPromise } from "./effect/promise.js"
 import {
   inspectEncryptedPlatformBackup,
@@ -733,7 +743,11 @@ const browserSocket = attachBrowserSocket({
     filesystem: appFilesystem,
     root: (appId) => apps.fileRoot(appId),
   },
-  consoleSources: consoleSources(docker, databases, apps),
+  consoleSources: consoleSources(docker, databases, apps, () => ({
+    // Docker names a container's host after its ID.
+    containerId: process.env.HOSTNAME?.trim() || null,
+    id: config.nodeId,
+  })),
   docker,
   filesystem,
   identity: relayIdentity,
@@ -1248,6 +1262,42 @@ async function executeControlRequest(
         diagnostics: await lifecycle.proxyDiagnostics(settings),
         settings,
       }
+    }
+    case "relay.proxy.config.read": {
+      const [settings, routes] = await Promise.all([
+        lifecycle.proxySettings(),
+        runRelayEffect("relay.proxy.routes", startup.state.listWebRoutes()),
+      ])
+      return relayProxyConfigurationSchema.parse({
+        dynamicConfiguration: traefikDynamicConfiguration(
+          config,
+          routes,
+          settings
+        ),
+        routes: routes.map((route) => {
+          const appId = appIdFromRouteOwner(route.instanceId)
+          return {
+            hostname: route.hostname,
+            id: route.id,
+            name: route.name,
+            owner: appId
+              ? {
+                  id: appId,
+                  kind: "app",
+                  service: route.service ?? APP_SERVICE,
+                }
+              : { id: route.instanceId, kind: "server", service: null },
+            path: route.path,
+            stripPrefix: route.stripPrefix,
+            targetPort: route.targetPort,
+            upstream: traefikRouteUpstream(config, route),
+          }
+        }),
+        staticConfiguration:
+          settings.mode === "traefik"
+            ? traefikStaticConfiguration(settings)
+            : null,
+      })
     }
     case "relay.proxy.write": {
       const settings = relayProxySettingsSchema.parse(request.payload)

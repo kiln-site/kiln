@@ -5,6 +5,7 @@ import {
   relayIdSchema as relayFingerprintSchema,
   relayNameSchema,
   relayProxyDiagnosticsSchema,
+  relayProxyConfigurationSchema,
   relayProxySettingsSchema,
   relayTailscaleInstallSchema,
   relayTailscaleOverviewSchema,
@@ -388,6 +389,23 @@ export const getRelayProxy = createServerFn({ method: "GET" })
     if (!relay) throw new Error("Relay is not configured or is paused")
     return relayProxyResponseSchema.parse(
       await relayRpc(relay, "relay.proxy.read", {}, 15_000)
+    )
+  })
+
+export const getRelayProxyConfiguration = createServerFn({ method: "GET" })
+  .validator(relayIdSchema)
+  .handler(async ({ data }) => {
+    await requireRelayAdministrator(data.id, "relay.read")
+    const [{ listPersistedRelays }, { relayRpc }] = await Promise.all([
+      import("@/lib/relay-registry"),
+      import("@/lib/relay-connection"),
+    ])
+    const relay = (await listPersistedRelays()).find(
+      (candidate) => candidate.enabled && candidate.id === data.id
+    )
+    if (!relay) throw new Error("Relay is not configured or is paused")
+    return relayProxyConfigurationSchema.parse(
+      await relayRpc(relay, "relay.proxy.config.read", {}, 15_000)
     )
   })
 
