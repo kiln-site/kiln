@@ -1,3 +1,4 @@
+import { useFileRootPath } from "@/components/files/file-root-context"
 import * as React from "react"
 import { useInfiniteQuery, useQueries, useQuery } from "@tanstack/react-query"
 import type { RelayFileEntry } from "@workspace/contracts"
@@ -374,6 +375,7 @@ export function RootDirectoryList({
   onRetry: () => void
   retrying: boolean
 }) {
+  const rootPath = useFileRootPath()
   const directory = useFileDirectory(fileIndex, "", enabled)
   const entries = React.useMemo(
     () => directoryEntries(directory.entries),
@@ -415,7 +417,7 @@ export function RootDirectoryList({
       <div className="mb-2 flex min-h-8 items-center gap-2 px-1">
         <Folder className="size-3.5 text-primary" />
         <h2 className="type-technical-label text-muted-foreground">
-          Root · /data
+          Root · {rootPath || "/"}
         </h2>
         {selectedPaths.length ? (
           <span className="type-code ml-auto text-muted-foreground">
@@ -592,6 +594,7 @@ function DirectoryViewContent({
   treeCollapsed: boolean
   uploading: boolean
 }) {
+  const rootPath = useFileRootPath()
   const directory = useFileDirectory(fileIndex, path)
   const entries = React.useMemo(
     () => directoryEntries(directory.entries),
@@ -697,7 +700,7 @@ function DirectoryViewContent({
               type="file"
               multiple
               className="hidden"
-              aria-label={`Upload files to /data/${path}`}
+              aria-label={`Upload files to ${rootPath}/${path}`}
               onChange={handleUploadInput}
             />
             <input
@@ -706,7 +709,7 @@ function DirectoryViewContent({
               type="file"
               multiple
               className="hidden"
-              aria-label={`Upload folder to /data/${path}`}
+              aria-label={`Upload folder to ${rootPath}/${path}`}
               onChange={handleUploadInput}
             />
             <FileActionsMenu
@@ -759,7 +762,7 @@ function DirectoryViewContent({
 
           <button
             type="button"
-            aria-label={`Go up to /data/${parent}`}
+            aria-label={`Go up to ${rootPath}/${parent}`}
             className="group/row grid min-h-11 w-full grid-cols-[2.25rem_minmax(12rem,1fr)_7rem_11rem_2.5rem] items-center border-b border-border/55 px-2 text-left transition-colors hover:bg-accent/30 focus-visible:bg-accent/40 focus-visible:outline-none"
             onClick={() => onOpen(parent)}
           >

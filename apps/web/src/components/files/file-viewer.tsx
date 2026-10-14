@@ -1,3 +1,4 @@
+import { useFileRootPath } from "@/components/files/file-root-context"
 import * as React from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { HardDriveDownload } from "lucide-react"
@@ -183,6 +184,7 @@ export function FileViewer({
   onUploadFiles,
   uploading,
 }: FileViewerProps) {
+  const rootPath = useFileRootPath()
   const selectedPath = React.useSyncExternalStore(
     selectionStore.subscribe,
     selectionStore.getSnapshot,
@@ -245,7 +247,7 @@ export function FileViewer({
     selectedPath && entryQuery.isError
       ? queryErrorMessage(
           entryQuery.error,
-          `Could not find /data/${selectedPath}`
+          `Could not find ${rootPath}/${selectedPath}`
         )
       : null
   const error =

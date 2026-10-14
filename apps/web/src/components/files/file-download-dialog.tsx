@@ -1,3 +1,4 @@
+import { useFileRootPath } from "@/components/files/file-root-context"
 import * as React from "react"
 import { useMutation, useQuery } from "@tanstack/react-query"
 import { queryKeys } from "@/lib/query-options"
@@ -63,6 +64,7 @@ export const FileDownloadDialog = React.memo(function FileDownloadDialog({
   open,
   path,
 }: FileDownloadDialogProps) {
+  const rootPath = useFileRootPath()
   const preferences = React.useMemo(
     () => readFileDownloadPreferences(),
     [open, path]
@@ -241,7 +243,7 @@ export const FileDownloadDialog = React.memo(function FileDownloadDialog({
             <div className="min-w-0">
               <DialogTitle className="text-lg">Download file</DialogTitle>
               <DialogDescription className="mt-0.5 truncate font-mono">
-                /data/{path}
+                {rootPath}/{path}
               </DialogDescription>
             </div>
           </div>

@@ -321,7 +321,10 @@ export const relayHostTerminalWriteSchema =
   relayDatabaseTerminalWriteSchema.omit({ databaseId: true })
 export const relayHostTerminalClaimSchema =
   relayDatabaseTerminalClaimSchema.omit({ databaseId: true })
-export const relayHostAccessSchema = z.object({ terminal: z.boolean() })
+export const relayHostAccessSchema = z.object({
+  terminal: z.boolean(),
+  files: z.boolean().default(false),
+})
 
 // Relay to Hearth: output for one attachment, in order. `ended` arrives with
 // the session's last output. Not strict: a Relay newer than its Hearth may

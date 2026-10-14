@@ -458,6 +458,72 @@ describe("Relay capability issuance orchestration", () => {
     })
   })
 
+  describe("host file capabilities", () => {
+    const hostId = "H".repeat(43)
+    let granted: string[]
+    beforeEach(() => {
+      granted = ["relay.files.read"]
+      fakes.loadRelay.mockReturnValue(
+        Effect.succeed({ ...material, relay: { ...relay, id: hostId } })
+      )
+      for (const feature of [
+        "browser-capability-v2",
+        "file-request-replay-v1",
+        "relay-host-files-v1",
+      ])
+        fakes.features.add(feature)
+      fakes.requirePermissions.mockImplementation(
+        (input: { instanceId?: string; permissions: string[] }) =>
+          !input.instanceId &&
+          input.permissions.every((permission) => granted.includes(permission))
+            ? Effect.void
+            : Effect.fail(new Error("Permission denied"))
+      )
+    })
+    const issue = (
+      action: "instance.files.download" | "instance.files.upload",
+      instanceId = hostId
+    ) =>
+      issueFileCapabilityForRequest({
+        action,
+        instanceId,
+        relayId: hostId,
+        path: "etc/os-release",
+        publicKeyJwk,
+        optInV2: true,
+        authenticate: () => Promise.resolve({ sessionId: "session-one", user }),
+      })
+    it("uses host permissions and keeps another Relay's root outside the capability", async () => {
+      expect(
+        decodeCapabilityPayload(
+          (await issue("instance.files.download")).capability
+        )
+      ).toMatchObject({
+        actions: ["relay.files.download"],
+        instanceId: hostId,
+        resourceKind: "relay",
+        operation: "file",
+      })
+      await expect(
+        issue("instance.files.download", "J".repeat(43))
+      ).rejects.toThrow()
+      await expect(issue("instance.files.upload")).rejects.toThrow()
+      granted = ["instance.files.read", "app.files.read"]
+      await expect(issue("instance.files.download")).rejects.toThrow()
+    })
+    it("limits host uploads to a write lease and refuses old Relays", async () => {
+      granted = ["relay.files.write"]
+      const payload = decodeCapabilityPayload(
+        (await issue("instance.files.upload")).capability
+      )
+      expect(Number(payload.expiresAt) - Number(payload.issuedAt)).toBe(30_000)
+      fakes.features.delete("relay-host-files-v1")
+      await expect(issue("instance.files.upload")).rejects.toThrow(
+        "Update this Relay"
+      )
+    })
+  })
+
   describe("Relay logs", () => {
     // Alice holds Relay permissions on relay-one; `granted` lists them.
     let granted: Array<string>

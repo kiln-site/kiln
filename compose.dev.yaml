@@ -52,7 +52,7 @@ services:
       test:
         [
           "CMD-SHELL",
-          "port=$$(printf '%s' \"$$KILN_RELAY_HEALTH_PORT\" | tr -cd '0-9'); wget -q -T 2 -O /dev/null \"http://127.0.0.1:$${port:-4101}/health\"",
+          'port=$$(printf ''%s'' "$$KILN_RELAY_HEALTH_PORT" | tr -cd ''0-9''); wget -q -T 2 -O /dev/null "http://127.0.0.1:$${port:-4101}/health"',
         ]
       interval: 10s
       timeout: 3s
@@ -63,6 +63,7 @@ services:
         condition: service_completed_successfully
     volumes: !override
       - /var/run/docker.sock:/var/run/docker.sock
+      - /:/host:rw,rslave
       - relay-data:/data
       - .:/workspace
       - relay-dev-node-modules:/workspace/node_modules

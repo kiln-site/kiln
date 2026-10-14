@@ -1,12 +1,10 @@
 import * as React from "react"
-import { useQuery } from "@tanstack/react-query"
-import { TerminalSquare } from "lucide-react"
 
+import { RelayHostAccess } from "@/components/relay/relay-host-access"
 import { useRelayWorkspace } from "@/components/relay/relay-workspace-context"
 import type { TerminalBackend } from "@/components/terminal-session"
 import { relayTerminalStreamUrl } from "@/lib/database-terminal-stream"
 import {
-  getRelayHostAccess,
   claimRelayTerminal,
   restartRelayTerminal,
   writeRelayTerminal,
@@ -19,35 +17,12 @@ const TerminalSession = React.lazy(async () => {
 
 export function RelayTerminalPage() {
   const { relay } = useRelayWorkspace()
-  const access = useQuery({
-    queryKey: ["relay-host-access", relay.id],
-    queryFn: () => getRelayHostAccess({ data: { relayId: relay.id } }),
-    retry: false,
-  })
-  if (access.isPending) return <div className="min-h-0 flex-1 bg-card" />
-  if (access.error || !access.data?.terminal) {
-    return (
-      <div className="grid min-h-0 flex-1 place-items-center bg-card px-6 text-center">
-        <div className="max-w-sm">
-          <TerminalSquare className="mx-auto mb-4 size-5 text-muted-foreground" />
-          <p className="text-sm font-semibold">
-            {access.error
-              ? "Host terminal unavailable"
-              : "Host access is disabled"}
-          </p>
-          <p className="mt-1.5 text-xs leading-relaxed text-muted-foreground">
-            {access.error
-              ? access.error.message
-              : "Enable host access in the Relay's configuration to open a shell on this node."}
-          </p>
-        </div>
-      </div>
-    )
-  }
   return (
-    <React.Suspense fallback={<div className="min-h-0 flex-1 bg-card" />}>
-      <RelayTerminalSession key={relay.id} relayId={relay.id} />
-    </React.Suspense>
+    <RelayHostAccess feature="terminal">
+      <React.Suspense fallback={<div className="min-h-0 flex-1 bg-card" />}>
+        <RelayTerminalSession key={relay.id} relayId={relay.id} />
+      </React.Suspense>
+    </RelayHostAccess>
   )
 }
 

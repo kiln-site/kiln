@@ -8,6 +8,8 @@ import {
   relayAppsV1Feature,
   relayLogsV1Feature,
   appIdFromFileRoot,
+  isRelayFileRoot,
+  relayHostFilesV1Feature,
   relayFileRequestReplayV1Feature,
   relayProxyBrowserMetadataSchema,
   relayProxyDiagnosticsSchema,
@@ -63,6 +65,8 @@ type BrowserAction =
   | "instance.files.upload"
   | "instance.read"
   | "relay.logs.read"
+  | "relay.files.download"
+  | "relay.files.upload"
 
 interface IssuedBrowserCapability {
   browserOrigin: string
@@ -313,22 +317,30 @@ export function issueFileCapabilityForRequest(input: {
 }): Promise<IssuedBrowserCapability> {
   // An app's data directory (`app:<appId>`) is transferred with the app's
   // own file actions.
+  const host = isRelayFileRoot(input.instanceId)
   const app = appIdFromFileRoot(input.instanceId) !== null
   return runAppEffect(
     "file.capability.issue",
     prepareBrowserCapabilityEffect({
       actions: [
-        app
+        host
           ? input.action === "instance.files.upload"
-            ? "app.files.upload"
-            : "app.files.download"
-          : input.action,
+            ? "relay.files.upload"
+            : "relay.files.download"
+          : app
+            ? input.action === "instance.files.upload"
+              ? "app.files.upload"
+              : "app.files.download"
+            : input.action,
       ],
       path: input.path,
       publicKeyJwk: input.publicKeyJwk,
       relayId: input.relayId,
       resolveBrowserMetadata: true,
-      resource: { id: input.instanceId, kind: app ? "app" : "instance" },
+      resource: {
+        id: input.instanceId,
+        kind: host ? "relay" : app ? "app" : "instance",
+      },
       identity: authenticatedIdentityEffect(input.authenticate),
       optInV2: input.optInV2,
     }).pipe(Effect.map((prepared) => prepared.capability))
@@ -377,7 +389,9 @@ const prepareBrowserCapabilityEffect = Effect.fn("relay.capability.prepare")(
 
     const operation: RelayBrowserOperationKind = input.actions.some(
       (action) =>
-        action.startsWith("instance.files.") || action.startsWith("app.files.")
+        action.startsWith("instance.files.") ||
+        action.startsWith("app.files.") ||
+        action.startsWith("relay.files.")
     )
       ? "file"
       : input.actions.includes("instance.read")
@@ -390,7 +404,8 @@ const prepareBrowserCapabilityEffect = Effect.fn("relay.capability.prepare")(
     const version = resourceVersion(
       input.resource,
       negotiatedVersion(operation, input.optInV2 ?? false, features),
-      features
+      features,
+      operation
     )
     if (version === 2 && identity.sessionId.length === 0) {
       return yield* Effect.fail(
@@ -573,7 +588,8 @@ const createBrowserCapabilityEffect = Effect.fn("relay.capability.sign")(
           (action) =>
             action === "instance.console.write" ||
             action === "instance.files.upload" ||
-            action === "app.files.upload"
+            action === "app.files.upload" ||
+            action === "relay.files.upload"
         )
         const payload = {
           actions: input.actions,
@@ -663,8 +679,15 @@ function negotiatedVersion(
 function resourceVersion(
   resource: RelayConsoleResource,
   version: 1 | 2,
-  features: ReadonlySet<string>
+  features: ReadonlySet<string>,
+  operation: RelayBrowserOperationKind = "console"
 ): 1 | 2 {
+  if (operation === "file" && resource.kind === "relay") {
+    if (version !== 2 || !features.has(relayHostFilesV1Feature))
+      throw new Error("Update this Relay to access host files.")
+    return version
+  }
+
   if (
     resource.kind !== "instance" &&
     (version !== 2 ||
@@ -746,6 +769,10 @@ function permissionForBrowserAction(action: BrowserAction): AccessPermission {
       return "instance.files.read"
     case "instance.files.upload":
       return "instance.files.write"
+    case "relay.files.download":
+      return "relay.files.read"
+    case "relay.files.upload":
+      return "relay.files.write"
     case "app.files.download":
       return "app.files.read"
     case "app.files.upload":

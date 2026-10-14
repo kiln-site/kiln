@@ -1,3 +1,4 @@
+import { useFileRootPath } from "@/components/files/file-root-context"
 import * as React from "react"
 import { useQuery } from "@tanstack/react-query"
 import type { RelayFileActivityEntry } from "@workspace/contracts"
@@ -76,6 +77,7 @@ function FileActivityRow({
   entry: RelayFileActivityEntry
   onOpen: (path: string) => void
 }) {
+  const rootPath = useFileRootPath()
   const kind = fileActivityKind(entry)
   return (
     <button
@@ -91,7 +93,7 @@ function FileActivityRow({
           {formatName(entry.path)}
         </span>
         <span className="type-code hidden min-w-0 truncate text-muted-foreground sm:block">
-          /data/{entry.path}
+          {rootPath}/{entry.path}
         </span>
       </span>
       <span className="type-meta flex shrink-0 items-center gap-1.5 pl-2 text-muted-foreground">

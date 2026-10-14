@@ -1,3 +1,4 @@
+import { useFileRootPath } from "@/components/files/file-root-context"
 import * as React from "react"
 import { useMutation } from "@tanstack/react-query"
 import { Effect } from "effect"
@@ -72,6 +73,7 @@ export function useFileUploadAction({
   instance: FileWorkspaceInstance
   onRefresh: () => void
 }): { uploadFiles: UploadFiles; uploading: boolean } {
+  const rootPath = useFileRootPath()
   const mutation = useMutation({
     mutationFn: async ({
       files,
@@ -219,7 +221,7 @@ export function useFileUploadAction({
                   ? failed.cause instanceof Error
                     ? failed.cause.message
                     : "The Relay could not complete every upload."
-                  : `Added to /data/${normalizeDirectoryPath(directory)}`,
+                  : `Added to ${rootPath}/${normalizeDirectoryPath(directory)}`,
               })
               if (uploaded) onRefresh()
             })
@@ -290,6 +292,7 @@ export function useFileDropTarget({
 }
 
 export function FileDropOverlay({ directory }: { directory: string }) {
+  const rootPath = useFileRootPath()
   return (
     <div className="pointer-events-none absolute inset-2 z-50 hidden place-items-center border border-primary/55 bg-card/88 shadow-[inset_0_0_0_1px_color-mix(in_oklch,var(--primary),transparent_75%)] backdrop-blur-sm group-data-[file-drop-active=true]/drop:grid">
       <div className="text-center">
@@ -298,7 +301,7 @@ export function FileDropOverlay({ directory }: { directory: string }) {
         </div>
         <p className="mt-3 text-sm font-semibold">Drop files to upload</p>
         <p className="type-code mt-1 text-muted-foreground">
-          /data/{normalizeDirectoryPath(directory)}
+          {rootPath}/{normalizeDirectoryPath(directory)}
         </p>
       </div>
     </div>

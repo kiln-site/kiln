@@ -1,3 +1,4 @@
+import { useFileRootPath } from "@/components/files/file-root-context"
 import * as React from "react"
 import { Effect } from "effect"
 import { Check, Copy, FileCode2, Folder, FolderTree } from "lucide-react"
@@ -71,9 +72,10 @@ export function FileTreeRevealButton({ onClick }: { onClick: () => void }) {
 }
 
 function FilePathCopyButton({ path }: { path: string }) {
+  const rootPath = useFileRootPath()
   const [copyState, setCopyState] = React.useState<"idle" | "copied">("idle")
   const resetTimer = React.useRef<number | null>(null)
-  const fullFilePath = `/data/${path.replace(/^\/+/, "")}`
+  const fullFilePath = `${rootPath}/${path.replace(/^\/+/, "")}`
 
   React.useEffect(
     () => () => {
@@ -125,6 +127,7 @@ export const FileToolbarIdentity = React.memo(function FileToolbarIdentity({
   readOnly?: boolean
   directory?: boolean
 }) {
+  const rootPath = useFileRootPath()
   return (
     <div className="flex min-w-0 flex-1 items-center gap-2.5 md:gap-3">
       {directory ? (
@@ -147,7 +150,7 @@ export const FileToolbarIdentity = React.memo(function FileToolbarIdentity({
           <FilePathCopyButton key={path} path={path} />
         ) : (
           <p className="type-code truncate text-muted-foreground">
-            /data/{path}
+            {rootPath}/{path}
           </p>
         )}
       </div>

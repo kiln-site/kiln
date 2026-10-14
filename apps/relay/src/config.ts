@@ -85,6 +85,7 @@ export interface RelayConfig {
   // access already amounts to root there; this lets an operator keep it out
   // of the panel.
   hostAccess: boolean
+  hostRootDirectory: string
   gameHost: string
   gamePortRange: {
     end: number
@@ -231,6 +232,7 @@ export function loadConfig(
     dockerSocket: "/var/run/docker.sock",
     dataDirectory,
     hostAccess: booleanEnvironment(environment.KILN_RELAY_HOST_ACCESS, true),
+    hostRootDirectory: environment.KILN_RELAY_HOST_ROOT?.trim() || "/host",
     gameHost,
     gamePortRange: relayGamePortRange(environment),
     gameHostSource,

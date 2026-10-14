@@ -2,6 +2,7 @@ import { createServerFn } from "@tanstack/react-start"
 import { Effect } from "effect"
 import {
   appIdFromFileRoot,
+  isRelayFileRoot,
   projectRelayInstanceOverview,
   relayFileActivitySchema,
   relayFileContentSchema,
@@ -1337,6 +1338,18 @@ async function requireFilePermission(
     | "instance.files.read"
     | "instance.files.write"
 ) {
+  if (isRelayFileRoot(instanceId)) {
+    if (instanceId !== relayId) throw new Error("Relay not found")
+    await requireRelayPermission({
+      user,
+      relayId,
+      permission:
+        permission === "instance.files.read"
+          ? "relay.files.read"
+          : "relay.files.write",
+    })
+    return
+  }
   if (appIdFromFileRoot(instanceId)) {
     await requireRelayPermission({
       permission:

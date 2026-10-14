@@ -9,7 +9,13 @@ import { z } from "zod"
 const APP_FILE_ROOT_PREFIX = "app:"
 const resourceIdPattern = /^[a-f0-9]{40}$/u
 
-export const fileRootIdSchema = z.string().regex(/^(?:app:)?[a-f0-9]{40}$/u)
+// A Relay's host files use its fingerprint, scoped by the Relay connection.
+export const fileRootIdSchema = z
+  .string()
+  .regex(/^(?:(?:app:)?[a-f0-9]{40}|[A-Za-z\d_-]{43})$/u)
+export function isRelayFileRoot(id: string): boolean {
+  return /^[A-Za-z\d_-]{43}$/u.test(id)
+}
 
 export function appFileRootId(appId: string): string {
   return `${APP_FILE_ROOT_PREFIX}${appId}`

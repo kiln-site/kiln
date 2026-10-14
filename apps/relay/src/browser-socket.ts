@@ -21,6 +21,7 @@ import ZipStream from "zip-stream"
 
 import {
   appIdFromFileRoot,
+  isRelayFileRoot,
   projectRelayInstanceOverview,
   RelayBrowserCapabilitySchema,
   RelayBrowserRenewSchema,
@@ -190,6 +191,10 @@ export interface BrowserSocketOptions {
   readonly docker: DockerDriver
   readonly filesystem: FilesystemDriver
   // Serves app data directories, addressed as `app:<appId>`.
+  readonly hostFiles?: {
+    readonly filesystem: FilesystemDriver
+    readonly root: (relayId: string) => Promise<FileRoot>
+  }
   readonly appFiles?: {
     readonly filesystem: FilesystemDriver
     readonly root: (appId: string) => Promise<FileRoot>
@@ -969,7 +974,8 @@ function validateCapabilityV2(
     (action) =>
       action === "instance.console.write" ||
       action === "instance.files.upload" ||
-      action === "app.files.upload"
+      action === "app.files.upload" ||
+      action === "relay.files.upload"
   )
   const maximumLease = writes
     ? BROWSER_WRITE_LEASE_MAX_MS
@@ -1023,7 +1029,7 @@ const browserCapabilityActions: Record<
   },
   relay: {
     console: [relayConsoleReadActions.relay],
-    file: [],
+    file: ["relay.files.download", "relay.files.upload"],
     resources: [],
   },
 }
@@ -1257,13 +1263,18 @@ async function handleBrowserFileRequest(
 
   await runBrowser(
     browserOperation(async () => {
+      const host = isRelayFileRoot(instanceId)
       const appId = appIdFromFileRoot(instanceId)
-      const filesystem = appId
-        ? options.appFiles?.filesystem
-        : options.filesystem
-      const instance = appId
-        ? await options.appFiles?.root(appId)
-        : await options.docker.findInstance(instanceId)
+      const filesystem = host
+        ? options.hostFiles?.filesystem
+        : appId
+          ? options.appFiles?.filesystem
+          : options.filesystem
+      const instance = host
+        ? await options.hostFiles?.root(instanceId)
+        : appId
+          ? await options.appFiles?.root(appId)
+          : await options.docker.findInstance(instanceId)
       if (!instance || !filesystem) {
         browserJson(response, 404, { error: "Instance not found" }, origin)
         return
@@ -1453,6 +1464,8 @@ async function handleBrowserFileRequest(
 
 // Transfers of an app's files (`app:<appId>`) need its own file actions.
 function fileTransferAction(method: BrowserFileMethod, instanceId: string) {
+  if (isRelayFileRoot(instanceId))
+    return method === "PUT" ? "relay.files.upload" : "relay.files.download"
   const app = appIdFromFileRoot(instanceId) !== null
   if (method === "PUT")
     return app ? "app.files.upload" : "instance.files.upload"

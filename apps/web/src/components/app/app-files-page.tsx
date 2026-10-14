@@ -1,23 +1,11 @@
 import * as React from "react"
-import { useSuspenseQuery } from "@tanstack/react-query"
 import { useMatch } from "@tanstack/react-router"
 import { appFileRootId } from "@workspace/contracts"
 
 import { appRelayAvailable } from "@/components/app/app-presentation"
 import { useAppWorkspace } from "@/components/app/app-workspace-context"
-import {
-  FileTreeLoadingPanel,
-  FileWorkspaceLoadingState,
-} from "@/components/file-tree-loading-panel"
-import { uiPreferencesQueryOptions } from "@/lib/query-options"
+import { ResourceFilesPage } from "@/components/files/resource-files-page"
 import type { FileWorkspaceInstance } from "@/lib/relay-selectors"
-import { warmSyntaxCodeEditorModule } from "@/lib/syntax-editor-module-preload"
-import { loadFileWorkspaceModule } from "@/lib/workspace-module-preloads"
-
-const FileWorkspace = React.lazy(async () => {
-  const module = await loadFileWorkspaceModule()
-  return { default: module.FileWorkspace }
-})
 
 // An app's data directory in the same file workspace servers use. It is
 // mounted into the app's containers, at its data mount or `${KILN_DATA}`.
@@ -28,15 +16,6 @@ export function AppFilesPage() {
     shouldThrow: false,
     select: (match) => match.params._splat,
   })
-  const { data: preferences } = useSuspenseQuery({
-    ...uiPreferencesQueryOptions(),
-    select: selectFileTreePreferences,
-  })
-
-  React.useLayoutEffect(() => {
-    if (filePath) warmSyntaxCodeEditorModule()
-  }, [filePath])
-
   const instance = React.useMemo<FileWorkspaceInstance>(
     () => ({
       id: appFileRootId(app.id),
@@ -55,45 +34,12 @@ export function AppFilesPage() {
   )
 
   return (
-    <React.Suspense
-      fallback={
-        <div className="flex min-h-0 flex-1 bg-card">
-          <FileTreeLoadingPanel
-            collapsed={false}
-            width={preferences.fileTreeWidth}
-          />
-          <div className="grid min-h-0 flex-1 place-items-center px-6 text-center">
-            <FileWorkspaceLoadingState
-              title="Opening file workspace"
-              description="Preparing the file browser and editor."
-            />
-          </div>
-        </div>
-      }
-    >
-      <FileWorkspace
-        key={`${app.relayId}:${app.id}`}
-        instance={instance}
-        route={route}
-        active
-        routeFilePath={filePath}
-        canShare={false}
-        canWrite={app.permissions.includes("app.files.write")}
-        relayConnected={appRelayAvailable(app)}
-        openTreeOnEntry
-        initialTreeCollapsed={preferences.fileTreeCollapsed}
-        initialTreeWidth={preferences.fileTreeWidth}
-      />
-    </React.Suspense>
+    <ResourceFilesPage
+      instance={instance}
+      route={route}
+      filePath={filePath}
+      canWrite={app.permissions.includes("app.files.write")}
+      connected={appRelayAvailable(app)}
+    />
   )
-}
-
-function selectFileTreePreferences(preferences: {
-  fileTreeCollapsed: boolean
-  fileTreeWidth: number | null
-}) {
-  return {
-    fileTreeCollapsed: preferences.fileTreeCollapsed,
-    fileTreeWidth: preferences.fileTreeWidth,
-  }
 }

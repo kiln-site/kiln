@@ -192,6 +192,49 @@ describe("Relay control socket", () => {
     })
   })
 
+  it("keeps host files behind their own grants", async () => {
+    const relay = await startRelay()
+    const hostId = "H".repeat(43)
+    for (const actions of [
+      ["instance.files.list", "instance.files.read", "instance.files.write"],
+      ["app.files.read", "app.files.write"],
+    ] as const) {
+      const hearth = await relay.pair({ role: "custom", actions })
+      const connection = await relay.connect(hearth)
+      const id = sendRequest(connection.socket, "instance.files.read", {
+        instanceId: hostId,
+        path: "etc/os-release",
+      })
+      expect(await connection.inbox.next()).toMatchObject({
+        code: "forbidden",
+        replyTo: id,
+        type: "error",
+      })
+    }
+    const reader = await relay.connect(
+      await relay.pair({ role: "custom", actions: ["relay.files.read"] })
+    )
+    const read = sendRequest(reader.socket, "instance.files.read", {
+      instanceId: hostId,
+      path: "etc/os-release",
+    })
+    expect(await reader.inbox.next()).toMatchObject({
+      payload: { ok: true },
+      replyTo: read,
+      type: "response",
+    })
+    const write = sendRequest(reader.socket, "instance.files.write", {
+      instanceId: hostId,
+      path: "etc/os-release",
+      content: "changed",
+    })
+    expect(await reader.inbox.next()).toMatchObject({
+      code: "forbidden",
+      replyTo: write,
+      type: "error",
+    })
+  })
+
   it("rejects a request whose id is already in flight", async () => {
     const release = deferred<void>()
     const relay = await startRelay({

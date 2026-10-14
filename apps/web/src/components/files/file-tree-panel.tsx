@@ -1,3 +1,4 @@
+import { useFileRootPath } from "@/components/files/file-root-context"
 import * as React from "react"
 import { useInfiniteQuery, useIsFetching } from "@tanstack/react-query"
 import { relayFileSearchQueryOptions } from "@/components/files/file-query-options"
@@ -590,6 +591,7 @@ export function FileTreePanel({
   uploading: boolean
   actions: FileActionsController
 }) {
+  const rootPath = useFileRootPath()
   const selectedPath = selectionStore.getSnapshot()
   const initialPath =
     selectedPath && fileIndex.getPaths().includes(selectedPath)
@@ -820,7 +822,7 @@ export function FileTreePanel({
         mode === "move" ? "Move to" : "Upload to"
     }
     if (dropPathLabelRef.current) {
-      dropPathLabelRef.current.textContent = `/data/${directory}`
+      dropPathLabelRef.current.textContent = `${rootPath}/${directory}`
     }
   }
 
@@ -1394,7 +1396,9 @@ export function FileTreePanel({
           <FolderTree className="size-[18px] shrink-0 text-primary" />
           <div className="min-w-0">
             <p className="truncate text-sm font-semibold">Browse files</p>
-            <p className="type-code truncate text-muted-foreground">/data</p>
+            <p className="type-code truncate text-muted-foreground">
+              {rootPath || "/"}
+            </p>
           </div>
         </div>
         <Button
@@ -1592,7 +1596,7 @@ export function FileTreePanel({
           ref={dropPathLabelRef}
           className="type-code max-w-[65%] truncate text-primary"
         >
-          /data/
+          {rootPath}/
         </span>
       </div>
 

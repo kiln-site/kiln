@@ -1,3 +1,4 @@
+import { useFileRootPath } from "@/components/files/file-root-context"
 import * as React from "react"
 import { useMutation } from "@tanstack/react-query"
 import { Effect } from "effect"
@@ -52,13 +53,15 @@ function formatName(path: string) {
 }
 
 // The input sits after a fixed `/data/`, so drop that prefix from pasted paths.
-function withoutDataPrefix(value: string) {
-  return value.replace(/^\/+(?:data(?:\/+|$))?/u, "")
+function withoutDataPrefix(value: string, rootPath: string) {
+  return rootPath
+    ? value.replace(/^\/+(?:data(?:\/+|$))?/u, "")
+    : value.replace(/^\/+/u, "")
 }
 
-function moveTargetDirectory(value: string): string | null {
+function moveTargetDirectory(value: string, rootPath: string): string | null {
   const directory = normalizeDirectoryPath(
-    withoutDataPrefix(value.trim().replace(/[\\/]+/gu, "/"))
+    withoutDataPrefix(value.trim().replace(/[\\/]+/gu, "/"), rootPath)
   )
   const segments = directory.split("/")
   return segments.includes(".") || segments.includes("..") ? null : directory
@@ -77,6 +80,7 @@ export function useFileActions({
   onPathChange: (path: string) => void
   selectionStore: FileSelectionStore
 }) {
+  const rootPath = useFileRootPath()
   const [dialog, setDialog] = React.useState<FileActionDialogState>(null)
   const [downloadPath, setDownloadPath] = React.useState<string | null>(null)
   const settleMove = React.useRef<((moved: boolean) => void) | null>(null)
@@ -294,7 +298,7 @@ export function useFileActions({
       return
     }
     if (dialog.kind === "move-to") {
-      const directory = moveTargetDirectory(value ?? "")
+      const directory = moveTargetDirectory(value ?? "", rootPath)
       if (directory === null) {
         showToast({
           type: "error",
@@ -398,6 +402,7 @@ export function FileActionDialogHost({
   onOpenChange: (open: boolean) => void
   onSubmit: (value?: string) => Promise<void>
 }) {
+  const rootPath = useFileRootPath()
   const initialValue =
     dialog?.kind === "rename"
       ? formatName(dialog.path)
@@ -424,10 +429,12 @@ export function FileActionDialogHost({
           </DialogHeader>
           <dl className="type-code grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1.5">
             <dt className="text-muted-foreground">From</dt>
-            <dd className="truncate">/data/{dialog.path}</dd>
+            <dd className="truncate">
+              {rootPath}/{dialog.path}
+            </dd>
             <dt className="text-muted-foreground">To</dt>
             <dd className="truncate text-primary">
-              /data/{dialog.destination}
+              {rootPath}/{dialog.destination}
             </dd>
           </dl>
           <DialogFooter>
@@ -474,7 +481,7 @@ export function FileActionDialogHost({
         {dialog.kind === "move-to" ? (
           <InputGroup>
             <InputGroupAddon className="font-mono text-xs">
-              /data/
+              {rootPath}/
             </InputGroupAddon>
             <InputGroupInput
               autoFocus
@@ -482,10 +489,10 @@ export function FileActionDialogHost({
               spellCheck={false}
               className="font-mono text-sm"
               value={value}
-              aria-label="Destination folder in /data"
+              aria-label={`Destination folder in ${rootPath || "/"}`}
               onFocus={(event) => event.currentTarget.select()}
               onChange={(event) =>
-                setValue(withoutDataPrefix(event.target.value))
+                setValue(withoutDataPrefix(event.target.value, rootPath))
               }
               onKeyDown={(event) => {
                 if (event.key === "Enter") {

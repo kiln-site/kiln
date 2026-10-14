@@ -1,3 +1,5 @@
+import { isRelayFileRoot } from "@workspace/contracts"
+import { FileRootPathContext } from "@/components/files/file-root-context"
 import * as React from "react"
 import { prepareFileTreeInput } from "@pierre/trees"
 import { useInfiniteQuery, useQueryClient } from "@tanstack/react-query"
@@ -49,7 +51,7 @@ const InitializedFileTreePanel = React.memo(function InitializedFileTreePanel({
 interface FileWorkspaceProps {
   instance: FileWorkspaceInstance
   // Where file paths live in the URL: a server's or an app's files route.
-  route: { kind: "app" | "server"; id: string }
+  route: { kind: "app" | "server" | "relay"; id: string }
   active: boolean
   routeFilePath?: string
   canShare: boolean
@@ -86,15 +88,20 @@ export function FileWorkspace(props: FileWorkspaceProps) {
       if (path) warmSyntaxCodeEditorModule()
 
       const location =
-        props.route.kind === "app"
+        props.route.kind === "relay"
           ? ({
-              to: "/app/$appId/files/$",
-              params: { appId: props.route.id, _splat: path },
+              to: "/relay/$relayId/files/$",
+              params: { relayId: props.route.id, _splat: path },
             } as const)
-          : ({
-              to: "/server/$serverId/files/$",
-              params: { serverId: props.route.id, _splat: path },
-            } as const)
+          : props.route.kind === "app"
+            ? ({
+                to: "/app/$appId/files/$",
+                params: { appId: props.route.id, _splat: path },
+              } as const)
+            : ({
+                to: "/server/$serverId/files/$",
+                params: { serverId: props.route.id, _splat: path },
+              } as const)
       selectionStore.navigate(path)
       if (!props.active) return
 
@@ -111,17 +118,21 @@ export function FileWorkspace(props: FileWorkspaceProps) {
   )
 
   return (
-    <StableFileWorkspaceSurface
-      instance={props.instance}
-      selectionStore={selectionStore}
-      canShare={props.canShare}
-      canWrite={props.canWrite}
-      relayConnected={props.relayConnected}
-      onPathChange={handlePathChange}
-      openTreeOnEntry={props.openTreeOnEntry}
-      initialTreeCollapsed={props.initialTreeCollapsed}
-      initialTreeWidth={props.initialTreeWidth}
-    />
+    <FileRootPathContext
+      value={isRelayFileRoot(props.instance.id) ? "" : "/data"}
+    >
+      <StableFileWorkspaceSurface
+        instance={props.instance}
+        selectionStore={selectionStore}
+        canShare={props.canShare}
+        canWrite={props.canWrite}
+        relayConnected={props.relayConnected}
+        onPathChange={handlePathChange}
+        openTreeOnEntry={props.openTreeOnEntry}
+        initialTreeCollapsed={props.initialTreeCollapsed}
+        initialTreeWidth={props.initialTreeWidth}
+      />
+    </FileRootPathContext>
   )
 }
 
