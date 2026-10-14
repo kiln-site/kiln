@@ -58,6 +58,7 @@ import {
   RouteCommandMenuTrigger,
 } from "@/components/route-command-menu"
 import { InstanceName } from "@/components/instance-name"
+import { useRelayLiveStatus } from "@/components/relay/relay-presentation"
 import {
   InstancePickerContent,
   type InstancePickerItem,
@@ -71,6 +72,7 @@ import {
   managedDatabaseDirectoryQueryOptions,
   relayConnectionQueryOptions,
   relaySnapshotQueryOptions,
+  relaysQueryOptions,
 } from "@/lib/query-options"
 import { kilnReleaseLabel } from "@/lib/release-version"
 import { disableDevelopmentBypass } from "@/server/auth"
@@ -92,6 +94,13 @@ import {
 } from "@/lib/app-route"
 import type { RelayFleetSnapshot } from "@/lib/relay-fleet"
 import {
+  relayRouteIdFromSelection,
+  relayRouteIdentifier,
+  relaySelectionRouteId,
+  resolveRelayRoute,
+  type RelayDirectoryEntry,
+} from "@/lib/relay-route"
+import {
   findFirstCanonicalRelayInstance,
   relayInstanceRouteIdentifier,
   resolveCanonicalRelayInstance,
@@ -105,15 +114,18 @@ import type { GlobalSection } from "@/lib/route-sections"
 import {
   accessibleDestinationsForApp,
   accessibleDestinationsForDatabase,
+  accessibleDestinationsForRelay,
   accessibleDestinationsForServer,
   accessibleInfrastructureDestinations,
   canAccessActivity,
   canAccessAutomations,
   canAccessBackups,
+  relayDestinations,
   serverDestinations,
   type AppDestinationId,
   type DatabaseDestinationId,
   type NavigationAccessCapabilities,
+  type RelayDestinationId,
   type ServerDestination,
   type ServerDestinationId,
 } from "@/lib/navigation-destinations"
@@ -390,14 +402,21 @@ function SidebarInstanceNavigation({
   relayConfigured: boolean
 }) {
   // "server", a database selection ("db:<id>"), an app selection
-  // ("app:<id>"), or null off instance routes.
+  // ("app:<id>"), a Relay selection ("relay:<id>"), or null off instance
+  // routes.
   const routeSelection = useRouterState({
     select: (state) => {
       const params = state.matches.at(-1)?.params as
-        | { appId?: string; databaseId?: string; serverId?: string }
+        | {
+            appId?: string
+            databaseId?: string
+            relayId?: string
+            serverId?: string
+          }
         | undefined
       if (params?.databaseId) return databaseSelectionRouteId(params.databaseId)
       if (params?.appId) return appSelectionRouteId(params.appId)
+      if (params?.relayId) return relaySelectionRouteId(params.relayId)
       return params?.serverId ? "server" : null
     },
   })
@@ -409,6 +428,7 @@ function SidebarInstanceNavigation({
         initialSelectedInstanceRouteId)
   const databaseRouteId = databaseRouteIdFromSelection(selection)
   const appRouteId = appRouteIdFromSelection(selection)
+  const relayRouteId = relayRouteIdFromSelection(selection)
   const showDatabases =
     relayConfigured &&
     accessibleInfrastructureDestinations(capabilities).some(
@@ -443,6 +463,12 @@ function SidebarInstanceNavigation({
       capabilities={capabilities}
       fallback={serverNavigation}
     />
+  ) : relayRouteId ? (
+    <SidebarRelayNavigation
+      capabilities={capabilities}
+      fallback={serverNavigation}
+      relayRouteId={relayRouteId}
+    />
   ) : (
     serverNavigation
   )
@@ -462,8 +488,8 @@ function SidebarAppNavigation({
       const resolution = resolveAppRoute(apps, appRouteId)
       return resolution.status === "found"
         ? {
-            app: resolution.database,
-            routeId: appRouteIdentifier(apps, resolution.database),
+            app: resolution.resource,
+            routeId: appRouteIdentifier(apps, resolution.resource),
           }
         : null
     },
@@ -474,26 +500,51 @@ function SidebarAppNavigation({
   const { app, routeId } = query.data
 
   return (
-    <>
-      <RememberSelectedInstance
-        instanceRouteId={appSelectionRouteId(routeId)}
+    <SidebarResourceGroup
+      capabilities={capabilities}
+      label="App"
+      selection={{ kind: "app", app }}
+      selectionRouteId={appSelectionRouteId(routeId)}
+    >
+      <AppTabNavigation
+        app={app}
+        capabilities={capabilities}
+        routeId={routeId}
       />
+    </SidebarResourceGroup>
+  )
+}
+
+// The picker and pages of the selected database, app, or Relay.
+function SidebarResourceGroup({
+  capabilities,
+  children,
+  label,
+  selection,
+  selectionRouteId,
+}: {
+  capabilities: NavigationAccessCapabilities
+  children: React.ReactNode
+  label: string
+  selection: InstanceSelection
+  // Remembered so the sidebar reopens on this resource.
+  selectionRouteId: string
+}) {
+  return (
+    <>
+      <RememberSelectedInstance instanceRouteId={selectionRouteId} />
       <SidebarSeparator />
       <SidebarGroup>
         <SidebarGroupLabel className="type-technical-label">
-          App
+          {label}
         </SidebarGroupLabel>
         <SidebarGroupContent>
           <SidebarMenu>
             <InstanceSelector
               capabilities={capabilities}
-              selection={{ kind: "app", app }}
+              selection={selection}
             />
-            <AppTabNavigation
-              app={app}
-              capabilities={capabilities}
-              routeId={routeId}
-            />
+            {children}
           </SidebarMenu>
         </SidebarGroupContent>
       </SidebarGroup>
@@ -560,7 +611,7 @@ function SidebarDatabaseNavigation({
       const resolution = resolveDatabaseRoute(databases, databaseRouteId)
       const database =
         resolution.status === "found"
-          ? resolution.database
+          ? resolution.resource
           : databaseRouteId === null
             ? databases[0]
             : undefined
@@ -575,31 +626,94 @@ function SidebarDatabaseNavigation({
   const { database, routeId } = query.data
 
   return (
-    <>
-      <RememberSelectedInstance
-        instanceRouteId={databaseSelectionRouteId(routeId)}
+    <SidebarResourceGroup
+      capabilities={capabilities}
+      label="Database"
+      selection={{ kind: "database", database }}
+      selectionRouteId={databaseSelectionRouteId(routeId)}
+    >
+      <DatabaseTabNavigation
+        capabilities={capabilities}
+        database={database}
+        routeId={routeId}
       />
-      <SidebarSeparator />
-      <SidebarGroup>
-        <SidebarGroupLabel className="type-technical-label">
-          Database
-        </SidebarGroupLabel>
-        <SidebarGroupContent>
-          <SidebarMenu>
-            <InstanceSelector
-              capabilities={capabilities}
-              selection={{ kind: "database", database }}
-            />
-            <DatabaseTabNavigation
-              capabilities={capabilities}
-              database={database}
-              routeId={routeId}
-            />
-          </SidebarMenu>
-        </SidebarGroupContent>
-      </SidebarGroup>
-    </>
+    </SidebarResourceGroup>
   )
+}
+
+function SidebarRelayNavigation({
+  capabilities,
+  fallback,
+  relayRouteId,
+}: {
+  capabilities: NavigationAccessCapabilities
+  fallback: React.ReactNode
+  relayRouteId: string
+}) {
+  const select = React.useMemo(
+    () => (relays: Array<RelayDirectoryEntry>) => {
+      const resolution = resolveRelayRoute(relays, relayRouteId)
+      return resolution.status === "found"
+        ? {
+            relay: resolution.resource,
+            routeId: relayRouteIdentifier(relays, resolution.resource),
+          }
+        : null
+    },
+    [relayRouteId]
+  )
+  const query = useQuery({ ...relaysQueryOptions(), select })
+  if (!query.data) return query.isPending ? null : fallback
+  const { relay, routeId } = query.data
+
+  return (
+    <SidebarResourceGroup
+      capabilities={capabilities}
+      label="Relay"
+      selection={{ kind: "relay", relay }}
+      selectionRouteId={relaySelectionRouteId(routeId)}
+    >
+      <RelayTabNavigation
+        capabilities={capabilities}
+        relay={relay}
+        routeId={routeId}
+      />
+    </SidebarResourceGroup>
+  )
+}
+
+const RelayTabNavigation = React.memo(function RelayTabNavigation({
+  capabilities,
+  relay,
+  routeId,
+}: {
+  capabilities: NavigationAccessCapabilities
+  relay: RelayDirectoryEntry
+  routeId: string
+}) {
+  return accessibleDestinationsForRelay(relay, capabilities).map((item) => (
+    <SidebarMenuItem key={item.id}>
+      <SidebarMenuButton asChild tooltip={item.label}>
+        <Link
+          to={relayTabRoute(item.id)}
+          params={{ relayId: routeId }}
+          activeOptions={{ exact: true }}
+          activeProps={{ "data-active": true }}
+          preload="intent"
+        >
+          <item.icon />
+          <span>{item.label}</span>
+        </Link>
+      </SidebarMenuButton>
+    </SidebarMenuItem>
+  ))
+})
+
+function relayTabRoute(tab: RelayDestinationId) {
+  switch (tab) {
+    case "info":
+      return "/relay/$relayId/info" as const
+  }
 }
 
 const DatabaseTabNavigation = React.memo(function DatabaseTabNavigation({
@@ -809,6 +923,7 @@ type InstanceSelection =
   | { kind: "server"; instance: SidebarInstance }
   | { kind: "database"; database: ManagedDatabaseDirectoryEntry }
   | { kind: "app"; app: AppDirectoryEntry }
+  | { kind: "relay"; relay: RelayDirectoryEntry }
   | { kind: "none"; serverCount: number }
 
 const InstanceSelector = React.memo(function InstanceSelector({
@@ -886,10 +1001,16 @@ const InstanceSelector = React.memo(function InstanceSelector({
         return
       }
       if (item.identity.kind === "relay") {
-        void navigate({
-          to: "/infra/relays",
-          search: { search: item.identity.relayId },
-        })
+        const relays = queryClient.getQueryData(relaysQueryOptions().queryKey)
+        const routeId = relays
+          ? relayRouteIdentifier(relays, { id: item.identity.relayId })
+          : item.identity.relayId
+        const tab = relayTabFromPathname(window.location.pathname)
+        void navigate(
+          tab
+            ? { to: relayTabRoute(tab), params: { relayId: routeId } }
+            : { to: "/relay/$relayId", params: { relayId: routeId } }
+        )
         return
       }
       const snapshot = queryClient.getQueryData(
@@ -936,7 +1057,9 @@ const InstanceSelector = React.memo(function InstanceSelector({
           )
         : selection.kind === "app"
           ? sidebarPickerKey("app", selection.app.relayId, selection.app.id)
-          : null
+          : selection.kind === "relay"
+            ? sidebarPickerKey("relay", selection.relay.id, selection.relay.id)
+            : null
   const selectedKeys = React.useMemo(
     () => new Set(selectedKey ? [selectedKey] : []),
     [selectedKey]
@@ -954,7 +1077,9 @@ const InstanceSelector = React.memo(function InstanceSelector({
                 ? "Switch database"
                 : selection.kind === "app"
                   ? "Switch app"
-                  : "Switch server"
+                  : selection.kind === "relay"
+                    ? "Switch Relay"
+                    : "Switch server"
             }
             aria-label={
               selection.kind === "none" ? "Choose a server" : undefined
@@ -962,72 +1087,44 @@ const InstanceSelector = React.memo(function InstanceSelector({
             className="mb-1.5 h-auto border border-sidebar-border/75 bg-background/35 px-2 py-2 group-data-[collapsible=icon]:h-[32px]! group-data-[collapsible=icon]:overflow-visible group-data-[collapsible=icon]:bg-black/10 hover:border-sidebar-border hover:bg-sidebar-accent group-data-[collapsible=icon]:hover:bg-black/15 data-[state=open]:border-sidebar-border data-[state=open]:bg-sidebar-accent dark:group-data-[collapsible=icon]:bg-black/25 dark:group-data-[collapsible=icon]:hover:bg-black/35"
           >
             {instance ? (
-              <>
-                <span className="sr-only">Switch server. </span>
-                <InstanceName
-                  className="min-w-0 flex-1 gap-2 group-data-[collapsible=icon]:gap-0"
-                  iconClassName="border-sidebar-border/70 bg-background/25 text-sidebar-foreground/85 group-data-[collapsible=icon]:absolute group-data-[collapsible=icon]:inset-0 group-data-[collapsible=icon]:size-full group-data-[collapsible=icon]:rounded-none group-data-[collapsible=icon]:border-0 group-data-[collapsible=icon]:bg-transparent"
-                  iconSizeClassName="group-data-[collapsible=icon]:size-5!"
-                  instance={{
-                    brickId: instance.brickId,
-                    brickSource: instance.brickSource,
-                    id: instance.id,
-                    implementation: instance.implementation,
-                    kind: "server",
-                    observedState: instance.observedState,
-                    relayId: instance.relayId,
-                  }}
-                  meta={`${instance.implementation} ${instance.version}`}
-                  metaClassName="text-sidebar-muted-foreground"
-                  name={instance.name}
-                  nameClassName="type-control-sm text-sidebar-foreground"
-                  showFavorite={false}
-                  statusClassName="ring-popover"
-                  textClassName="group-data-[collapsible=icon]:sr-only"
-                />
-              </>
+              <SelectorInstanceName
+                instance={{
+                  brickId: instance.brickId,
+                  brickSource: instance.brickSource,
+                  id: instance.id,
+                  implementation: instance.implementation,
+                  kind: "server",
+                  observedState: instance.observedState,
+                  relayId: instance.relayId,
+                }}
+                label="Switch server."
+                meta={`${instance.implementation} ${instance.version}`}
+                name={instance.name}
+              />
             ) : selection.kind === "database" ? (
-              <>
-                <span className="sr-only">Switch database. </span>
-                <InstanceName
-                  className="min-w-0 flex-1 gap-2 group-data-[collapsible=icon]:gap-0"
-                  iconClassName="border-sidebar-border/70 bg-background/25 text-sidebar-foreground/85 group-data-[collapsible=icon]:absolute group-data-[collapsible=icon]:inset-0 group-data-[collapsible=icon]:size-full group-data-[collapsible=icon]:rounded-none group-data-[collapsible=icon]:border-0 group-data-[collapsible=icon]:bg-transparent"
-                  iconSizeClassName="group-data-[collapsible=icon]:size-5!"
-                  instance={{
-                    id: selection.database.id,
-                    kind: "database",
-                    relayId: selection.database.relayId,
-                  }}
-                  meta={`${engineLabel(selection.database.engine)} · ${selection.database.relayName}`}
-                  metaClassName="text-sidebar-muted-foreground"
-                  name={selection.database.name}
-                  nameClassName="type-control-sm text-sidebar-foreground"
-                  showFavorite={false}
-                  statusClassName="ring-popover"
-                  textClassName="group-data-[collapsible=icon]:sr-only"
-                />
-              </>
+              <SelectorInstanceName
+                instance={{
+                  id: selection.database.id,
+                  kind: "database",
+                  relayId: selection.database.relayId,
+                }}
+                label="Switch database."
+                meta={`${engineLabel(selection.database.engine)} · ${selection.database.relayName}`}
+                name={selection.database.name}
+              />
             ) : selection.kind === "app" ? (
-              <>
-                <span className="sr-only">Switch app. </span>
-                <InstanceName
-                  className="min-w-0 flex-1 gap-2 group-data-[collapsible=icon]:gap-0"
-                  iconClassName="border-sidebar-border/70 bg-background/25 text-sidebar-foreground/85 group-data-[collapsible=icon]:absolute group-data-[collapsible=icon]:inset-0 group-data-[collapsible=icon]:size-full group-data-[collapsible=icon]:rounded-none group-data-[collapsible=icon]:border-0 group-data-[collapsible=icon]:bg-transparent"
-                  iconSizeClassName="group-data-[collapsible=icon]:size-5!"
-                  instance={{
-                    id: selection.app.id,
-                    kind: "app",
-                    relayId: selection.app.relayId,
-                  }}
-                  meta={`${selection.app.shortId} · ${selection.app.relayName}`}
-                  metaClassName="text-sidebar-muted-foreground"
-                  name={selection.app.name}
-                  nameClassName="type-control-sm text-sidebar-foreground"
-                  showFavorite={false}
-                  statusClassName="ring-popover"
-                  textClassName="group-data-[collapsible=icon]:sr-only"
-                />
-              </>
+              <SelectorInstanceName
+                instance={{
+                  id: selection.app.id,
+                  kind: "app",
+                  relayId: selection.app.relayId,
+                }}
+                label="Switch app."
+                meta={`${selection.app.shortId} · ${selection.app.relayName}`}
+                name={selection.app.name}
+              />
+            ) : selection.kind === "relay" ? (
+              <SelectorRelayName relay={selection.relay} />
             ) : (
               <>
                 <span className="relative grid size-8 shrink-0 place-items-center rounded-md border border-sidebar-border/70 bg-background/25 group-data-[collapsible=icon]:absolute group-data-[collapsible=icon]:inset-0 group-data-[collapsible=icon]:size-full group-data-[collapsible=icon]:rounded-none group-data-[collapsible=icon]:border-0 group-data-[collapsible=icon]:bg-transparent">
@@ -1069,6 +1166,64 @@ const InstanceSelector = React.memo(function InstanceSelector({
     </SidebarMenuItem>
   )
 })
+
+// The selected instance in the sidebar's picker button; collapsed, only its
+// icon shows.
+function SelectorInstanceName({
+  instance,
+  label,
+  live,
+  meta,
+  name,
+}: {
+  instance: React.ComponentProps<typeof InstanceName>["instance"]
+  // Read before the name by screen readers, for example "Switch app."
+  label: string
+  // False when the caller already tracks the instance's live status.
+  live?: boolean
+  meta: string
+  name: string
+}) {
+  return (
+    <>
+      <span className="sr-only">{label} </span>
+      <InstanceName
+        className="min-w-0 flex-1 gap-2 group-data-[collapsible=icon]:gap-0"
+        iconClassName="border-sidebar-border/70 bg-background/25 text-sidebar-foreground/85 group-data-[collapsible=icon]:absolute group-data-[collapsible=icon]:inset-0 group-data-[collapsible=icon]:size-full group-data-[collapsible=icon]:rounded-none group-data-[collapsible=icon]:border-0 group-data-[collapsible=icon]:bg-transparent"
+        iconSizeClassName="group-data-[collapsible=icon]:size-5!"
+        instance={instance}
+        live={live}
+        meta={meta}
+        metaClassName="text-sidebar-muted-foreground"
+        name={name}
+        nameClassName="type-control-sm text-sidebar-foreground"
+        showFavorite={false}
+        statusClassName="ring-popover"
+        textClassName="group-data-[collapsible=icon]:sr-only"
+      />
+    </>
+  )
+}
+
+function SelectorRelayName({ relay }: { relay: RelayDirectoryEntry }) {
+  const { relayStatus, updating } = useRelayLiveStatus(relay)
+  return (
+    <SelectorInstanceName
+      instance={{
+        enabled: relay.enabled,
+        id: relay.id,
+        kind: "relay",
+        relayId: relay.id,
+        relayStatus,
+        updating,
+      }}
+      label="Switch Relay."
+      live={false}
+      meta={`${relay.nodeArch ?? "unknown"} · ${relay.id.slice(0, 8)}`}
+      name={relay.name}
+    />
+  )
+}
 
 const SidebarInstancePicker = React.memo(function SidebarInstancePicker({
   capabilities,
@@ -1634,6 +1789,14 @@ function appTabFromPathname(pathname: string): AppDestinationId | null {
       pathname
     )
   return match ? (match[1] as AppDestinationId) : null
+}
+
+function relayTabFromPathname(pathname: string): RelayDestinationId | null {
+  const segment = /^\/relay\/[^/]+\/([^/]+)/.exec(pathname)?.[1]
+  return (
+    relayDestinations.find((destination) => destination.id === segment)?.id ??
+    null
+  )
 }
 
 function databaseTabFromPathname(

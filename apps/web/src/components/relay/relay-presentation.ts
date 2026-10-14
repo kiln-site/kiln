@@ -1,0 +1,66 @@
+import * as React from "react"
+import { useQuery, useQueryClient } from "@tanstack/react-query"
+
+import {
+  relayStatusPresentation,
+  type InstanceStatusPresentation,
+  type RelayIdentityStatus,
+} from "@/components/instance-name-presentation"
+import {
+  relayConnectionQueryOptions,
+  type RelayConnection,
+} from "@/lib/query-options"
+
+export interface RelayLiveStatus {
+  connected: boolean
+  presentation: InstanceStatusPresentation
+  relayStatus: RelayIdentityStatus
+  updating: boolean
+}
+
+// Whether Hearth reaches the Relay now, from the shared connection poll.
+export function useRelayLiveStatus(relay: {
+  enabled: boolean
+  id: string
+  lastError: string | null
+}): RelayLiveStatus {
+  const queryClient = useQueryClient()
+  const select = React.useCallback(
+    (connection: RelayConnection) => {
+      if (connection.status === "unconfigured") return null
+      const state = connection.relays.find(({ id }) => id === relay.id)
+      return state
+        ? { status: state.status, updating: state.updating === true }
+        : null
+    },
+    [relay.id]
+  )
+  const { data: state, isPending } = useQuery({
+    ...relayConnectionQueryOptions(queryClient),
+    notifyOnChangeProps: ["data", "isPending"],
+    select,
+  })
+  // Structural sharing keeps `state` stable while the Relay's state is.
+  return React.useMemo(() => {
+    const status = state?.status
+    const updating = state?.updating === true
+    const relayStatus: RelayIdentityStatus = !relay.enabled
+      ? "paused"
+      : status === "connected" || status === "unreachable"
+        ? status
+        : isPending
+          ? "checking"
+          : "unknown"
+    return {
+      connected: relay.enabled && status === "connected",
+      presentation: relayStatusPresentation({
+        enabled: relay.enabled,
+        lastError: relay.lastError,
+        relayStatus,
+        updating,
+      }),
+      relayStatus,
+      updating,
+    }
+  }, [isPending, relay.enabled, relay.lastError, state])
+}

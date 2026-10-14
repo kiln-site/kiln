@@ -75,9 +75,9 @@ import {
   backupCanBeRemoved,
   backupTargetName,
   BackupActionButton,
-  formatBytes,
   targetKey,
 } from "@/components/backups/table-row"
+import { formatBytes } from "@/lib/format-bytes"
 import { BackupToolbar } from "@/components/backups/toolbar"
 import { grantHasPermission } from "@/lib/permissions"
 import {

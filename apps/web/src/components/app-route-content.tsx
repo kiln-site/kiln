@@ -12,6 +12,7 @@ import { EmptyServerState } from "@/components/empty-server-state"
 import { InfraShell } from "@/components/infra-layout"
 import { InstanceRouteFrame } from "@/components/instance-route-frame"
 import { InstanceWorkspaceShell } from "@/components/instance-workspace"
+import { RelayWorkspaceShell } from "@/components/relay/relay-workspace"
 import { RelayUnavailableState } from "@/components/relay-unavailable-state"
 import { SettingsShell } from "@/components/settings-layout"
 import { AutomationsShell } from "@/components/automations-layout"
@@ -45,6 +46,7 @@ function AppRouteViewport({ children }: { children: React.ReactNode }) {
       const routeId = state.matches.at(-1)?.routeId
       if (routeId?.startsWith("/_app/db/")) return "database"
       if (routeId?.startsWith("/_app/app/")) return "app"
+      if (routeId?.startsWith("/_app/relay/")) return "relay"
       return state.matches.some(
         (match) => match.status === "notFound" || match._notFound
       )
@@ -58,6 +60,9 @@ function AppRouteViewport({ children }: { children: React.ReactNode }) {
   }
   if (routeFrame === "app") {
     return <AppWorkspaceShell>{children}</AppWorkspaceShell>
+  }
+  if (routeFrame === "relay") {
+    return <RelayWorkspaceShell>{children}</RelayWorkspaceShell>
   }
   if (routeFrame === "not-found") {
     return <NotFoundRouteFrame>{children}</NotFoundRouteFrame>

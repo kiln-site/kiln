@@ -1,4 +1,5 @@
 import { databaseRouteIdFromSelection } from "@/lib/database-route"
+import { relayRouteIdFromSelection } from "@/lib/relay-route"
 import { firstAccessibleAppHref } from "@/lib/navigation-destinations"
 import { isAccountEnabled, isAccountVerified } from "@/lib/account-policy"
 import { createFileRoute, redirect } from "@tanstack/react-router"
@@ -78,6 +79,15 @@ export const Route = createFileRoute("/")({
       throw redirect({
         to: "/db/$databaseId",
         params: { databaseId: rememberedDatabase },
+      })
+    }
+    const rememberedRelay = relayRouteIdFromSelection(
+      uiPreferences.selectedInstanceRouteId
+    )
+    if (rememberedRelay) {
+      throw redirect({
+        to: "/relay/$relayId",
+        params: { relayId: rememberedRelay },
       })
     }
     if (connection.status !== "connected") {

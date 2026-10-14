@@ -24,7 +24,7 @@ export const Route = createFileRoute("/_app/app/$appId")({
         replace: true,
       })
     }
-    const app = resolution.database
+    const app = resolution.resource
     const routeIdentifier = appRouteIdentifier(apps, app)
     if (params.appId !== routeIdentifier) {
       const segments = location.pathname.split("/")

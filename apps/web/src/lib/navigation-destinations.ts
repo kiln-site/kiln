@@ -470,14 +470,7 @@ export function canAccessAppPermission(
   app: { relayId: string },
   permission: AccessPermission
 ): boolean {
-  if (capabilities.isPlatformAdmin) return true
-  return capabilities.grants.some(
-    (grant) =>
-      grant.relayId === app.relayId &&
-      grant.resourceType === "relay" &&
-      grant.resourceId === app.relayId &&
-      grantHasPermission(grant, permission)
-  )
+  return canAccessRelayPermission(capabilities, app.relayId, permission)
 }
 
 export function accessibleDestinationsForApp(
@@ -495,6 +488,59 @@ export function appDestinationHref(
   routeId: string
 ): string {
   return destination.to.replace("$appId", encodeURIComponent(routeId))
+}
+
+export type RelayDestinationId = "info"
+
+export interface RelayDestination extends NavigationDestination {
+  id: RelayDestinationId
+  permission: AccessPermission
+}
+
+export const relayDestinations = [
+  {
+    icon: SlidersHorizontal,
+    id: "info",
+    keywords: ["settings", "details", "node", "version"],
+    label: "Info",
+    permission: "relay.read",
+    to: "/relay/$relayId/info",
+  },
+] as const satisfies ReadonlyArray<RelayDestination>
+
+// Granted on the Relay itself.
+export function canAccessRelayPermission(
+  capabilities: NavigationAccessCapabilities,
+  relayId: string,
+  permission: AccessPermission
+): boolean {
+  if (capabilities.isPlatformAdmin) return true
+  return capabilities.grants.some(
+    (grant) =>
+      grant.relayId === relayId &&
+      grant.resourceType === "relay" &&
+      grant.resourceId === relayId &&
+      grantHasPermission(grant, permission)
+  )
+}
+
+export function accessibleDestinationsForRelay(
+  relay: { id: string },
+  capabilities: NavigationAccessCapabilities
+): ReadonlyArray<RelayDestination> {
+  const destinations: ReadonlyArray<RelayDestination> = relayDestinations
+  return destinations.filter((destination) =>
+    canAccessRelayPermission(capabilities, relay.id, destination.permission)
+  )
+}
+
+export function relayDestinationHref(
+  destination: RelayDestination,
+  routeId: string
+): string {
+  return destination.to
+    .replace("$relayId", encodeURIComponent(routeId))
+    .replace(/\/\$$/u, "/")
 }
 
 export function accessibleInfrastructureDestinations(

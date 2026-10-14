@@ -12,25 +12,19 @@ import {
   useQueryClient,
   useSuspenseQuery,
 } from "@tanstack/react-query"
-import type { QueryClient } from "@tanstack/react-query"
 import { Link } from "@tanstack/react-router"
 import { Effect } from "effect"
 import {
-  ArchiveX,
   Check,
   CircleAlert,
-  Cloud,
   EllipsisVertical,
   Fingerprint,
   ListTodo,
   LoaderCircle,
-  Pause,
-  Play,
   Plus,
   RefreshCw,
   ServerCog,
   Settings2,
-  Trash2,
   TriangleAlert,
   UserRound,
   X,
@@ -60,7 +54,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@workspace/ui/components/select"
-import { dismissToast, showToast } from "@workspace/ui/components/sonner"
+import { showToast } from "@workspace/ui/components/sonner"
 import {
   Tooltip,
   TooltipContent,
@@ -72,7 +66,14 @@ import {
   relayProxySettingsSchema,
 } from "@workspace/contracts"
 
-import { RelayToastTitle } from "@/components/relay-toast-title"
+import {
+  RelayDeleteButton,
+  RelayPauseButton,
+  invalidateRelayRuntimeQueries,
+  messageFrom,
+  showRelayError,
+  updateRelayCache,
+} from "@/components/relay/relay-actions"
 import { CopyIdentifierMenuItem } from "@/components/copy-identifier-menu-item"
 import {
   FavoritesOnlyButton,
@@ -110,7 +111,6 @@ import {
 } from "@/lib/minecraft-profile"
 import { pairingFeedbackFrom } from "@/lib/relay-pairing-errors"
 import { canRefetchSystemUpdateOverview } from "@/lib/system-update-presence"
-import { resetActiveBackupRunsToFirstPage } from "@/lib/backup-runs-cache"
 import {
   accessCapabilitiesQueryOptions,
   queryKeys,
@@ -147,9 +147,7 @@ import {
   checkRelay,
   getRelayProxy,
   previewRelayPairing,
-  removeRelay,
   renameRelay,
-  setRelayEnabled,
   updateRelay,
   updateRelayProxy,
 } from "@/server/relays"
@@ -164,7 +162,6 @@ const invitationTimeFormatter = new Intl.DateTimeFormat("en-US", {
 })
 const minimumRelaySyncFeedbackMs = 500
 const relayInventoryError = new Error("Could not load Relays")
-const pendingRelayResumes = new Map<string, Promise<void>>()
 const noOutdatedRelays: ReadonlySet<string> = new Set()
 const noPublicReleases: ReadonlyArray<PublicKilnRelease> = []
 const noReportedRelayVersions: ReadonlyMap<string, string | null> = new Map()
@@ -233,11 +230,6 @@ const relayTableSearchFields = [
   (relay: RelayTableItem) => relay.ownerName,
   (relay: RelayTableItem) => relayStatusPresentation(relay).label,
 ] as const
-
-interface RelayPauseView {
-  enabled: boolean
-  name: string
-}
 
 interface RelayEditView {
   enabled: boolean
@@ -765,28 +757,38 @@ function RelayTable({
           const relay = row.original
           return (
             <div className="flex w-full min-w-0 items-center gap-1">
-              <InstanceName
-                className="min-w-0 flex-1"
-                instance={{
-                  enabled: relay.enabled,
-                  id: relay.id,
-                  kind: "relay",
-                  relayId: relay.id,
-                  relayStatus: relay.relayStatus,
-                  source: "registry",
-                  updating: relay.updating,
-                }}
-                live={false}
-                meta={
-                  <span title={relay.id}>
-                    {relay.nodeArch ?? "unknown"} <span aria-hidden>•</span>{" "}
-                    {shortRelayId(relay.id)}
-                  </span>
-                }
-                metaClassName="font-mono"
-                name={relay.name}
-                showFavorite={false}
-              />
+              <Link
+                to="/relay/$relayId"
+                // The full ID always resolves; the route shortens it when no
+                // other Relay shares its short ID.
+                params={{ relayId: relay.id }}
+                preload="intent"
+                className="group/relay-link flex min-h-14 min-w-0 flex-1 items-center outline-none focus-visible:ring-2 focus-visible:ring-ring/40 focus-visible:ring-inset"
+              >
+                <InstanceName
+                  className="min-w-0 flex-1"
+                  instance={{
+                    enabled: relay.enabled,
+                    id: relay.id,
+                    kind: "relay",
+                    relayId: relay.id,
+                    relayStatus: relay.relayStatus,
+                    source: "registry",
+                    updating: relay.updating,
+                  }}
+                  live={false}
+                  meta={
+                    <span title={relay.id}>
+                      {relay.nodeArch ?? "unknown"} <span aria-hidden>•</span>{" "}
+                      {shortRelayId(relay.id)}
+                    </span>
+                  }
+                  metaClassName="font-mono"
+                  name={relay.name}
+                  nameClassName="transition-colors group-hover/relay-link:text-primary"
+                  showFavorite={false}
+                />
+              </Link>
               <PendingResourceInvitationBadge
                 resourceType="relay"
                 relayId={relay.id}
@@ -1021,264 +1023,6 @@ const RelayEditButton = React.memo(function RelayEditButton({
         Configure
       </TooltipContent>
     </Tooltip>
-  )
-})
-
-const RelayPauseButton = React.memo(function RelayPauseButton({
-  relay,
-}: {
-  relay: RelayPauseView & { id: string }
-}) {
-  const queryClient = useQueryClient()
-  const pendingRef = React.useRef(false)
-  const [pending, setPending] = React.useState(false)
-
-  async function togglePaused() {
-    if (pendingRef.current) return
-    pendingRef.current = true
-    setPending(true)
-    const relayIdentity = { id: relay.id, name: relay.name }
-    await Effect.runPromise(
-      Effect.tryPromise({
-        try: () =>
-          relay.enabled
-            ? pauseRelay(queryClient, relayIdentity)
-            : resumeRelay(queryClient, relayIdentity),
-        catch: (cause) => cause,
-      }).pipe(
-        Effect.catch((cause) =>
-          Effect.sync(() =>
-            showRelayError(
-              cause,
-              relay.enabled ? "Could not pause Relay" : "Could not resume Relay"
-            )
-          )
-        ),
-        Effect.ensuring(
-          Effect.sync(() => {
-            pendingRef.current = false
-            setPending(false)
-          })
-        )
-      )
-    )
-  }
-
-  return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <Button
-          type="button"
-          size="icon-sm"
-          variant="ghost"
-          aria-label={`${relay.enabled ? "Pause" : "Resume"} ${relay.name}`}
-          disabled={pending}
-          className="text-muted-foreground hover:text-foreground"
-          onClick={() => void togglePaused()}
-        >
-          {pending ? (
-            <LoaderCircle className="animate-spin" />
-          ) : relay.enabled ? (
-            <Pause />
-          ) : (
-            <Play />
-          )}
-        </Button>
-      </TooltipTrigger>
-      <TooltipContent side="bottom" sideOffset={6}>
-        {relay.enabled ? "Pause" : "Resume"}
-      </TooltipContent>
-    </Tooltip>
-  )
-})
-
-const RelayDeleteButton = React.memo(function RelayDeleteButton({
-  relayId,
-  name,
-}: {
-  relayId: string
-  name: string
-}) {
-  const queryClient = useQueryClient()
-  const pendingRef = React.useRef(false)
-  const [open, setOpen] = React.useState(false)
-  const [pending, setPending] = React.useState(false)
-  const [forgetBackups, setForgetBackups] = React.useState(true)
-  const [removeVanityDomains, setRemoveVanityDomains] = React.useState(true)
-  const removeMutation = useMutation({
-    mutationFn: removeRelay,
-    onSuccess: async () => {
-      queryClient.setQueryData<Array<PersistedRelay>>(
-        queryKeys.relays,
-        (current) => current?.filter((item) => item.id !== relayId)
-      )
-      await Promise.all([
-        invalidateRelayRuntimeQueries(queryClient),
-        resetActiveBackupRunsToFirstPage(queryClient),
-        queryClient.invalidateQueries({ queryKey: queryKeys.domains.settings }),
-        queryClient.invalidateQueries({ queryKey: queryKeys.databases.all }),
-        queryClient.invalidateQueries({ queryKey: queryKeys.schedules.all }),
-        queryClient.invalidateQueries({
-          queryKey: queryKeys.access.capabilities,
-        }),
-      ])
-    },
-  })
-
-  async function remove() {
-    if (pendingRef.current) return
-    pendingRef.current = true
-    setPending(true)
-    await Effect.runPromise(
-      Effect.tryPromise({
-        try: () =>
-          removeMutation.mutateAsync({
-            data: { forgetBackups, id: relayId, removeVanityDomains },
-          }),
-        catch: (cause) => cause,
-      }).pipe(
-        Effect.tap((result) =>
-          Effect.sync(() => {
-            dismissToast(relayPausedToastId(relayId))
-            dismissToast(relayResumedToastId(relayId))
-            dismissToast(relayResumeErrorToastId(relayId))
-            setOpen(false)
-            showToast({
-              message:
-                result.cleanupFailures.length > 0
-                  ? `${name} removed, but some Hearth cleanup could not be completed`
-                  : `${name} removed from Hearth`,
-              type: result.cleanupFailures.length > 0 ? "warning" : "success",
-            })
-          })
-        ),
-        Effect.catch((cause) =>
-          Effect.sync(() => showRelayError(cause, "Could not remove Relay"))
-        ),
-        Effect.ensuring(
-          Effect.sync(() => {
-            pendingRef.current = false
-            setPending(false)
-          })
-        )
-      )
-    )
-  }
-
-  function changeOpen(nextOpen: boolean) {
-    if (pending) return
-    setOpen(nextOpen)
-    if (nextOpen) {
-      setForgetBackups(true)
-      setRemoveVanityDomains(true)
-    }
-  }
-
-  return (
-    <>
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <Button
-            type="button"
-            size="icon-sm"
-            variant="ghost"
-            aria-label={`Remove ${name}`}
-            disabled={pending}
-            className="text-destructive hover:bg-destructive/10 hover:text-destructive"
-            onClick={() => changeOpen(true)}
-          >
-            {pending ? <LoaderCircle className="animate-spin" /> : <Trash2 />}
-          </Button>
-        </TooltipTrigger>
-        <TooltipContent side="bottom" sideOffset={6}>
-          Remove
-        </TooltipContent>
-      </Tooltip>
-
-      <Dialog open={open} onOpenChange={changeOpen}>
-        <DialogContent className="sm:max-w-lg">
-          <DialogHeader>
-            <DialogTitle>Remove {name}?</DialogTitle>
-            <DialogDescription>
-              Hearth will stop managing this Relay. Nothing on the Relay itself
-              will be changed or deleted.
-            </DialogDescription>
-          </DialogHeader>
-
-          <div className="space-y-2">
-            <label className="flex cursor-pointer items-start gap-3 rounded-lg border border-border/70 bg-background/35 p-3 transition-colors hover:bg-muted/25 has-checked:border-primary/35 has-checked:bg-primary/[0.06]">
-              <input
-                aria-describedby={`forget-backups-description-${relayId}`}
-                checked={forgetBackups}
-                className="mt-0.5 size-4 shrink-0 rounded-[3px] border-input accent-primary"
-                disabled={pending}
-                type="checkbox"
-                onChange={(event) => setForgetBackups(event.target.checked)}
-              />
-              <ArchiveX className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
-              <span className="min-w-0">
-                <span className="block text-sm font-semibold">
-                  Forget all backups
-                </span>
-                <span
-                  id={`forget-backups-description-${relayId}`}
-                  className="mt-0.5 block text-xs leading-5 text-muted-foreground"
-                >
-                  Remove backup history from Hearth. Stored backup files on the
-                  Relay are not deleted.
-                </span>
-              </span>
-            </label>
-
-            <label className="flex cursor-pointer items-start gap-3 rounded-lg border border-border/70 bg-background/35 p-3 transition-colors hover:bg-muted/25 has-checked:border-primary/35 has-checked:bg-primary/[0.06]">
-              <input
-                aria-describedby={`remove-domains-description-${relayId}`}
-                checked={removeVanityDomains}
-                className="mt-0.5 size-4 shrink-0 rounded-[3px] border-input accent-primary"
-                disabled={pending}
-                type="checkbox"
-                onChange={(event) =>
-                  setRemoveVanityDomains(event.target.checked)
-                }
-              />
-              <Cloud className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
-              <span className="min-w-0">
-                <span className="block text-sm font-semibold">
-                  Remove vanity domains
-                </span>
-                <span
-                  id={`remove-domains-description-${relayId}`}
-                  className="mt-0.5 block text-xs leading-5 text-muted-foreground"
-                >
-                  Delete this Relay’s managed DNS records from Cloudflare.
-                  Nothing changes on the Relay.
-                </span>
-              </span>
-            </label>
-          </div>
-
-          <DialogFooter>
-            <Button
-              disabled={pending}
-              type="button"
-              variant="ghost"
-              onClick={() => changeOpen(false)}
-            >
-              Cancel
-            </Button>
-            <Button
-              disabled={pending}
-              type="button"
-              variant="destructive"
-              onClick={() => void remove()}
-            >
-              {pending ? <LoaderCircle className="animate-spin" /> : <Trash2 />}
-              Remove Relay
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-    </>
   )
 })
 
@@ -2100,161 +1844,6 @@ function relayProxyMode(value: FormDataEntryValue | null) {
   if (value === "traefik") return "traefik"
   if (value === "hearth") return "hearth"
   return "none"
-}
-
-function updateRelayCache(
-  queryClient: QueryClient,
-  updatedRelays: Array<PersistedRelay>
-) {
-  if (updatedRelays.length === 0) return
-  const updates = new Map(updatedRelays.map((relay) => [relay.id, relay]))
-  queryClient.setQueryData<Array<PersistedRelay>>(
-    queryKeys.relays,
-    (current) =>
-      current?.map((relay) => {
-        const update = updates.get(relay.id)
-        return update ? { ...relay, ...update } : relay
-      }) ?? updatedRelays
-  )
-}
-
-async function invalidateRelayRuntimeQueries(queryClient: QueryClient) {
-  await Promise.all([
-    queryClient.invalidateQueries({
-      queryKey: queryKeys.relay.connection,
-      exact: true,
-    }),
-    queryClient.invalidateQueries({
-      queryKey: queryKeys.relay.snapshot,
-      exact: true,
-    }),
-  ])
-}
-
-async function pauseRelay(
-  queryClient: QueryClient,
-  relay: Pick<PersistedRelay, "id" | "name">
-): Promise<void> {
-  await queryClient.cancelQueries({
-    predicate: ({ queryKey }) =>
-      queryKey[0] === queryKeys.relay.all[0] &&
-      (queryKey[1] === queryKeys.relay.connection[1] ||
-        queryKey[1] === queryKeys.relay.snapshot[1] ||
-        queryKey[1] === relay.id),
-  })
-  const updatedRelay = await setRelayEnabled({
-    data: { enabled: false, id: relay.id },
-  })
-  updateRelayCache(queryClient, [updatedRelay])
-  await invalidateRelayRuntimeQueries(queryClient)
-  dismissToast(relayResumedToastId(relay.id))
-  showPausedRelayToast(queryClient, relay)
-}
-
-async function resumeRelay(
-  queryClient: QueryClient,
-  relay: Pick<PersistedRelay, "id" | "name">
-): Promise<void> {
-  const existing = pendingRelayResumes.get(relay.id)
-  if (existing) return existing
-  dismissToast(relayResumeErrorToastId(relay.id))
-  const pending = performRelayResume(queryClient, relay)
-  pendingRelayResumes.set(relay.id, pending)
-  await Effect.runPromise(
-    Effect.tryPromise({
-      try: () => pending,
-      catch: (cause) => cause,
-    }).pipe(
-      Effect.ensuring(
-        Effect.sync(() => {
-          if (pendingRelayResumes.get(relay.id) === pending)
-            pendingRelayResumes.delete(relay.id)
-        })
-      )
-    )
-  )
-}
-
-async function performRelayResume(
-  queryClient: QueryClient,
-  relay: Pick<PersistedRelay, "id" | "name">
-): Promise<void> {
-  const updatedRelay = await setRelayEnabled({
-    data: { enabled: true, id: relay.id },
-  })
-  updateRelayCache(queryClient, [updatedRelay])
-  await invalidateRelayRuntimeQueries(queryClient)
-  dismissToast(relayPausedToastId(relay.id))
-  dismissToast(relayResumeErrorToastId(relay.id))
-  showToast({
-    type: "success",
-    message: <RelayToastTitle name={relay.name} state="resumed" />,
-    id: relayResumedToastId(relay.id),
-    icon: <Play className="size-4 text-emerald-400" />,
-    description: "Hearth has resumed requesting Relay data.",
-    duration: 4_000,
-  })
-}
-
-function showPausedRelayToast(
-  queryClient: QueryClient,
-  relay: Pick<PersistedRelay, "id" | "name">
-): void {
-  showToast({
-    type: "info",
-    message: <RelayToastTitle name={relay.name} state="paused" />,
-    id: relayPausedToastId(relay.id),
-    icon: <Pause className="size-4 text-sky-400" />,
-    description: "Hearth stopped requesting data. The Relay remains online.",
-    duration: Infinity,
-    action: {
-      label: "Reconnect",
-      onClick: (event) => {
-        event.preventDefault()
-        forkPromise(
-          () => resumeRelay(queryClient, relay),
-          (cause) =>
-            showToast({
-              type: "error",
-              message: (
-                <RelayToastTitle
-                  name={relay.name}
-                  state="could not be resumed"
-                />
-              ),
-              id: relayResumeErrorToastId(relay.id),
-              description: messageFrom(cause, "Try reconnecting again."),
-              duration: 6_000,
-            })
-        )
-      },
-    },
-  })
-}
-
-function showRelayError(cause: unknown, fallback: string) {
-  showToast({
-    type: "error",
-    message: fallback,
-    description: messageFrom(cause, fallback),
-    duration: 6_000,
-  })
-}
-
-function relayPausedToastId(relayId: string): string {
-  return `relay-paused:${relayId}`
-}
-
-function relayResumedToastId(relayId: string): string {
-  return `relay-resumed:${relayId}`
-}
-
-function relayResumeErrorToastId(relayId: string): string {
-  return `relay-resume-error:${relayId}`
-}
-
-function messageFrom(cause: unknown, fallback: string): string {
-  return cause instanceof Error ? cause.message : fallback
 }
 
 function selectCanAddRelay(capabilities: {

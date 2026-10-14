@@ -46,7 +46,7 @@ export const Route = createFileRoute("/_app/db/$databaseId")({
       }
       throw redirect({ to: "/infra/databases", replace: true })
     }
-    const database = resolution.database
+    const database = resolution.resource
     const routeIdentifier = databaseRouteIdentifier(databases, database)
     if (params.databaseId !== routeIdentifier) {
       const segments = location.pathname.split("/")

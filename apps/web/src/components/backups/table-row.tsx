@@ -53,6 +53,7 @@ import type {
   BackupFilters,
   BackupNameStore,
 } from "@/components/backups/state"
+import { formatBytes } from "@/lib/format-bytes"
 
 type BackupAvailabilityTagView = {
   error: string | null
@@ -1337,16 +1338,4 @@ function formatBackupElapsed(elapsedMs: number): string {
   const minutes = Math.floor(elapsedSeconds / 60)
   const seconds = elapsedSeconds % 60
   return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`
-}
-
-export function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`
-  const units = ["KiB", "MiB", "GiB", "TiB"]
-  let value = bytes / 1024
-  let index = 0
-  while (value >= 1024 && index < units.length - 1) {
-    value /= 1024
-    index += 1
-  }
-  return `${value >= 10 ? value.toFixed(0) : value.toFixed(1)} ${units[index]}`
 }

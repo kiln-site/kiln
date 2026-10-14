@@ -135,7 +135,7 @@ export function ResourceUsersCard({
   noun: string
   relayId: string
   resourceId: string
-  resourceType: "database" | "instance"
+  resourceType: "database" | "instance" | "relay"
 }) {
   const { data: access } = useQuery({
     ...accessCapabilitiesQueryOptions(),
