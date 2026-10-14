@@ -2,9 +2,11 @@
  * OpenTelemetry export for Hearth and Relays, configured only through the
  * standard OTEL_* environment variables so any OTLP backend works:
  *
- * - `OTEL_EXPORTER_OTLP_ENDPOINT` and `OTEL_EXPORTER_OTLP_HEADERS`
+ * - `OTEL_EXPORTER_OTLP_ENDPOINT` and `OTEL_EXPORTER_OTLP_HEADERS`: nothing
+ *   is exported without an endpoint
  * - `OTEL_TRACES_EXPORTER`, `OTEL_LOGS_EXPORTER`, `OTEL_METRICS_EXPORTER`: a
- *   signal is exported only when its variable includes `otlp`
+ *   signal is exported only when its variable includes `otlp`. Traces and
+ *   logs default to `otlp`; metrics default to off. `none` turns one off.
  * - `OTEL_TRACES_SAMPLER_ARG`: share of traces kept (default 0.05)
  * - `OTEL_RESOURCE_ATTRIBUTES`, e.g. `deployment.environment.name=production`
  *
@@ -73,8 +75,8 @@ const spanStorage = () =>
   ).AsyncLocalStorage)<Tracer.AnySpan>())
 
 /**
- * Exports traces, logs and metrics over OTLP. Without an endpoint or with no
- * signal enabled this provides nothing and Effect keeps its defaults. Invalid
+ * Exports traces, logs and metrics over OTLP. Without an endpoint this
+ * provides nothing and Effect keeps its defaults. Invalid
  * configuration disables telemetry instead of failing the runtime.
  */
 export const layer = (
@@ -160,13 +162,21 @@ const sampleRatio = Config.Number("OTEL_TRACES_SAMPLER_ARG").pipe(
   Config.withDefault(defaultSampleRatio)
 )
 
+// Traces and logs export whenever an endpoint is set. Metrics stay opt-in
+// because some backends, such as Sentry, reject them.
+const signalDefaults: TelemetryDefaults = {
+  OTEL_TRACES_EXPORTER: "otlp",
+  OTEL_LOGS_EXPORTER: "otlp",
+}
+
 const configDefaults = (defaults: TelemetryDefaults) =>
   ConfigProvider.layerAdd(
-    ConfigProvider.fromUnknown(
-      Object.fromEntries(
+    ConfigProvider.fromUnknown({
+      ...signalDefaults,
+      ...Object.fromEntries(
         Object.entries(defaults).filter(([, value]) => value?.trim())
-      )
-    )
+      ),
+    })
   )
 
 const sampledTracer = Effect.gen(function* () {

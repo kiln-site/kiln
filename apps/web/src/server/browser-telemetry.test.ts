@@ -39,8 +39,6 @@ describe("browser telemetry forwarding", () => {
     boundary.forwarded = []
     vi.stubEnv("OTEL_EXPORTER_OTLP_ENDPOINT", "https://otlp.example.com/otlp")
     vi.stubEnv("OTEL_EXPORTER_OTLP_HEADERS", "authorization=Bearer%20secret")
-    vi.stubEnv("OTEL_TRACES_EXPORTER", "otlp")
-    vi.stubEnv("OTEL_LOGS_EXPORTER", "otlp")
     vi.stubEnv("OTEL_TRACES_SAMPLER_ARG", "0.5")
     vi.stubGlobal("fetch", async (url: string, init: RequestInit) => {
       boundary.forwarded.push({

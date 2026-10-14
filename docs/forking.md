@@ -27,9 +27,11 @@ Published images bake in defaults for these OpenTelemetry variables, read from
 repository variables of the same name: `OTEL_EXPORTER_OTLP_ENDPOINT`,
 `OTEL_EXPORTER_OTLP_HEADERS`, `OTEL_TRACES_EXPORTER`, `OTEL_LOGS_EXPORTER`,
 `OTEL_METRICS_EXPORTER`, `OTEL_TRACES_SAMPLER_ARG`, and
-`OTEL_RESOURCE_ATTRIBUTES`. Any OTLP/HTTP backend works. A signal is exported
-only when its `*_EXPORTER` variable is `otlp`; leave them unset to publish
-images without telemetry. No upstream telemetry destination is a fallback.
+`OTEL_RESOURCE_ATTRIBUTES`. Any OTLP/HTTP backend works. Only the endpoint is
+required: traces and logs are then exported unless their `*_EXPORTER` variable
+is `none`, and metrics only when `OTEL_METRICS_EXPORTER` is `otlp`. Leave the
+endpoint unset to publish images without telemetry. No upstream telemetry
+destination is a fallback.
 
 The values ship inside every image, so the headers must only grant write
 access to telemetry. Header values are URI-encoded: write a space as `%20` and
