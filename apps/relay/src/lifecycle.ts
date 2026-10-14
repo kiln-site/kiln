@@ -1300,6 +1300,7 @@ export class LifecycleDriver {
       await recoverPromise(
         () =>
           connectNetwork(
+            this.#engine,
             this.#resources.traefikContainer,
             this.#resources.appNetwork(appId)
           ),
@@ -1390,7 +1391,7 @@ export class LifecycleDriver {
       .every((container) => container.networks.includes(edge))
     const proxy = await this.#externalTraefikContainer(settings)
     const proxyConnected = Boolean(
-      proxy && (await containerUsesNetwork(proxy, edge))
+      proxy && (await containerUsesNetwork(this.#engine, proxy, edge))
     )
     if (routes.length > 0 && containers.length === 0) {
       return {
@@ -3219,6 +3220,8 @@ export class LifecycleDriver {
           this.#resources.traefikContainer,
           this.#resources.gameNetwork
         )
+        // A new Traefik container joins routed apps' networks too.
+        await this.#connectTraefikToApps(routes)
       }).pipe(
         Effect.mapError((cause) =>
           isPortBindingFailure(cause)

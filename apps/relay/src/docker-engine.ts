@@ -531,12 +531,45 @@ export class DockerEngine {
 
   // ------------------------------------------------------- volumes, images
 
+  listVolumes(
+    options: { readonly filters?: DockerFilters } = {}
+  ): Effect.Effect<ReadonlyArray<DockerVolume>, DockerEngineError> {
+    return this.#json<{
+      readonly Volumes: ReadonlyArray<DockerVolume> | null
+    }>({
+      method: "GET",
+      path: `/volumes${query({
+        filters: options.filters && JSON.stringify(options.filters),
+      })}`,
+    }).pipe(Effect.map((answer) => answer.Volumes ?? []))
+  }
+
   inspectVolume(name: string): Effect.Effect<DockerVolume, DockerEngineError> {
     return this.#json({ method: "GET", path: `/volumes/${segment(name)}` })
   }
 
   removeVolume(name: string): Effect.Effect<void, DockerEngineError> {
     return this.#empty({ method: "DELETE", path: `/volumes/${segment(name)}` })
+  }
+
+  listImages(
+    options: { readonly filters?: DockerFilters } = {}
+  ): Effect.Effect<ReadonlyArray<{ readonly Id: string }>, DockerEngineError> {
+    return this.#json({
+      method: "GET",
+      path: `/images/json${query({
+        filters: options.filters && JSON.stringify(options.filters),
+      })}`,
+    })
+  }
+
+  /** `docker image rm --force`. */
+  removeImage(reference: string): Effect.Effect<void, DockerEngineError> {
+    return this.#empty({
+      method: "DELETE",
+      path: `/images/${imageSegment(reference)}${query({ force: true })}`,
+      timeout: 90_000,
+    })
   }
 
   inspectImage(image: string): Effect.Effect<DockerImage, DockerEngineError> {

@@ -24,6 +24,11 @@ import type { RelayConfig } from "./config.js"
 import { parseConsoleLine } from "./console-parsing.js"
 import { databaseNetworkName } from "./databases.js"
 import type { DockerConsoleSession } from "./docker.js"
+import {
+  DockerEngine,
+  isDockerNotFound,
+  type DockerEngineError,
+} from "./docker-engine.js"
 import { forkPromise, promiseEffect } from "./effect/promise.js"
 import {
   APP_SERVICE,
@@ -41,6 +46,7 @@ const APP_KIND = "app"
 const ID_LABEL = "kiln.app.id"
 const SERVICE_LABEL = "kiln.app.service"
 const DEPLOYMENT_LABEL = "kiln.app.deployment"
+const COMPOSE_PROJECT_LABEL = "com.docker.compose.project"
 // The console stream that follows an app's deployments; its services'
 // streams are `service:<name>`.
 export const APP_DEPLOYMENT_STREAM = "deployment"
@@ -61,11 +67,14 @@ interface ContainerInspect {
   Config: {
     Image: string
     Labels: Record<string, string | undefined> | null
+    Tty?: boolean
   }
   Created: string
   HostConfig?: { NetworkMode?: string }
   Id: string
   Name: string
+  // Times Docker restarted it under its restart policy.
+  RestartCount?: number
   NetworkSettings?: {
     Networks?: Record<string, unknown> | null
     Ports?: Record<string, Array<{ HostPort?: string }> | null> | null
@@ -74,6 +83,7 @@ interface ContainerInspect {
     ExitCode: number
     Health?: { Status: string }
     OOMKilled?: boolean
+    Restarting?: boolean
     Running: boolean
     StartedAt?: string
     Status: string
@@ -86,6 +96,9 @@ interface AppContainer extends RelayAppContainer {
   health: string | null
   networkMode: string | null
   oomKilled: boolean
+  // Exited since it started, and Docker restarted it or is about to.
+  restarted: boolean
+  tty: boolean
 }
 
 interface Deployment extends RelayAppDeployment {
@@ -120,6 +133,7 @@ export interface AppFileRoot {
 
 export class AppDriver {
   readonly #config: RelayConfig
+  readonly #engine: DockerEngine
   readonly #resources: RelayResourceNames
   readonly #hostDataDirectory: () => Promise<string>
   readonly #networking: AppNetworking
@@ -139,6 +153,7 @@ export class AppDriver {
     networking: AppNetworking
   ) {
     this.#config = config
+    this.#engine = new DockerEngine(config.dockerSocket)
     this.#resources = relayResourceNames(config)
     this.#hostDataDirectory = hostDataDirectory
     this.#networking = networking
@@ -216,18 +231,22 @@ export class AppDriver {
     return this.#serialize(input.appId, async () => {
       const containers = await this.#appContainers(input.appId)
       if (containers.length === 0) throw new Error("Deploy the app first")
-      const ids = containers.map((container) => container.id)
-      if (input.action === "stop") {
-        await command("docker", ["stop", "--time", "30", ...ids], {
-          timeout: 90_000,
-        })
-      } else if (input.action === "start") {
-        await command("docker", ["start", ...ids], { timeout: 120_000 })
-      } else {
-        await command("docker", ["restart", "--time", "30", ...ids], {
-          timeout: 150_000,
-        })
-      }
+      const engine = this.#engine
+      await docker(
+        Effect.forEach(
+          containers,
+          ({ id }) =>
+            input.action === "stop"
+              ? engine.stopContainer(id, { seconds: 30, timeout: 90_000 })
+              : input.action === "start"
+                ? engine.startContainer(id, { timeout: 120_000 })
+                : engine.restartContainer(id, {
+                    seconds: 30,
+                    timeout: 150_000,
+                  }),
+          { concurrency: "unbounded", discard: true }
+        )
+      )
       this.#wake(input.appId)
       return this.get(input.appId)
     })
@@ -244,37 +263,47 @@ export class AppDriver {
       ) {
         throw new Error("App not found")
       }
-      if (containers.length > 0) {
-        await command(
-          "docker",
-          ["rm", "--force", ...containers.map((container) => container.id)],
-          { timeout: 90_000 }
+      const engine = this.#engine
+      await docker(
+        Effect.forEach(
+          containers,
+          ({ id }) =>
+            engine.removeContainer(id, { force: true, timeout: 90_000 }),
+          { concurrency: "unbounded", discard: true }
         )
-      }
-      const project = this.#composeProject(input.appId)
-      for (const network of await listIds("network", [
-        `label=com.docker.compose.project=${project}`,
-      ])) {
-        await ignoreCommand(["network", "rm", network])
+      )
+      const project = [
+        `com.docker.compose.project=${this.#composeProject(input.appId)}`,
+      ]
+      for (const network of await docker(
+        engine.listNetworks({ filters: { label: project } })
+      )) {
+        await this.#removeNetwork(network.Name)
       }
       if (input.deleteData) {
-        for (const volume of await listIds("volume", [
-          `label=com.docker.compose.project=${project}`,
-        ])) {
-          await ignoreCommand(["volume", "rm", "--force", volume])
+        for (const volume of await docker(
+          engine.listVolumes({ filters: { label: project } })
+        )) {
+          await docker(engine.removeVolume(volume.Name).pipe(Effect.ignore))
         }
       }
-      await ignoreCommand(["network", "rm", this.#networkName(input.appId)])
-      // Built images are only cleanup; a failure to list them doesn't stop
+      await this.#removeNetwork(this.#networkName(input.appId))
+      // Built images are only cleanup; failing to remove them doesn't stop
       // the app's removal.
-      const images = await Effect.runPromise(
-        promiseEffect(() =>
-          listIds("image", [`label=${ID_LABEL}=${input.appId}`])
-        ).pipe(Effect.orElseSucceed((): Array<string> => []))
+      await docker(
+        engine
+          .listImages({ filters: { label: [`${ID_LABEL}=${input.appId}`] } })
+          .pipe(
+            Effect.flatMap((images) =>
+              Effect.forEach(
+                images,
+                (image) => engine.removeImage(image.Id).pipe(Effect.ignore),
+                { discard: true }
+              )
+            ),
+            Effect.ignore
+          )
       )
-      for (const image of images) {
-        await ignoreCommand(["image", "rm", "--force", image])
-      }
       await rm(this.#dockerfilePath(input.appId), { force: true })
       if (input.deleteData) {
         await rm(this.#appDirectory(input.appId), {
@@ -308,18 +337,19 @@ export class AppDriver {
         )
         for (const network of wanted) {
           if (attached.includes(network)) continue
-          await command("docker", [
-            "network",
-            "connect",
-            "--alias",
-            this.#serviceAlias(input.appId, container.service),
-            network,
-            container.id,
-          ])
+          await docker(
+            this.#engine.connectNetwork(network, container.id, {
+              aliases: [this.#serviceAlias(input.appId, container.service)],
+            })
+          )
         }
         for (const network of attached) {
           if (wanted.has(network)) continue
-          await ignoreCommand(["network", "disconnect", network, container.id])
+          await docker(
+            this.#engine
+              .disconnectNetwork(network, container.id)
+              .pipe(Effect.ignore)
+          )
         }
       }
       this.#wake(input.appId)
@@ -650,80 +680,145 @@ export class AppDriver {
       ...databases,
       ...(routes.network ? [routes.network] : []),
     ]) {
-      await command("docker", [
-        "network",
-        "connect",
-        "--alias",
-        hostname,
-        network,
-        name,
-      ])
+      await docker(
+        this.#engine.connectNetwork(network, name, { aliases: [hostname] })
+      )
     }
     // Tailscale members keep their address, which the new container takes
     // once the previous one stops.
     for (const membership of tailscale) {
-      await command("docker", [
-        "network",
-        "connect",
-        "--ip",
-        membership.address,
-        "--alias",
-        hostname,
-        membership.network,
-        name,
-      ])
-    }
-    // The previous containers stop first: they may hold the host ports the
-    // new one publishes. They come back if the new one fails to start.
-    const running = previous.filter((container) => container.running)
-    for (const container of running) {
-      log(`Stopping ${container.name}`)
-      await command("docker", ["stop", "--time", "30", container.id], {
-        timeout: 60_000,
-      })
-    }
-    const started = await Effect.runPromise(
-      Effect.result(
-        promiseEffect(async () => {
-          await command("docker", ["start", name], { timeout: 120_000 })
-          log(`Started ${name}`)
-          await this.#settle(input.appId, deployment, name)
+      await docker(
+        this.#engine.connectNetwork(membership.network, name, {
+          aliases: [hostname],
+          ipv4Address: membership.address,
         })
       )
+    }
+    await this.#replacing(input.appId, deployment, previous, [name], () =>
+      this.#startContainer(input.appId, deployment, name)
     )
+  }
+
+  async #startContainer(appId: string, deployment: Deployment, name: string) {
+    await docker(this.#engine.startContainer(name, { timeout: 120_000 }))
+    this.#log(appId, deployment, `Started ${name}`)
+    await this.#settle(appId, deployment, name)
+  }
+
+  // Swaps an app's previous containers for a deployment's. The previous ones
+  // stop first, since they may hold the host ports the new ones publish, and
+  // come back if the new ones fail to start; once they're up, the previous
+  // ones are removed.
+  async #replacing(
+    appId: string,
+    deployment: Deployment,
+    previous: ReadonlyArray<AppContainer>,
+    created: ReadonlyArray<string>,
+    start: () => Promise<void>
+  ) {
+    const running = previous.filter((container) => container.running)
+    for (const container of running) {
+      this.#log(appId, deployment, `Stopping ${container.name}`)
+      await docker(
+        this.#engine.stopContainer(container.id, {
+          seconds: 30,
+          timeout: 60_000,
+        })
+      )
+    }
+    const started = await Effect.runPromise(Effect.result(promiseEffect(start)))
     if (Result.isFailure(started)) {
-      await ignoreCommand(["rm", "--force", name])
+      // Whatever the deployment started makes way for the previous
+      // containers; with none to bring back, a failed service stays for its
+      // logs.
+      const failed =
+        running.length > 0
+          ? (await this.#appContainers(appId))
+              .filter((container) => container.deploymentId === deployment.id)
+              .map((container) => container.id)
+          : []
+      for (const container of new Set([...created, ...failed])) {
+        await this.#removeContainer(container)
+      }
       for (const container of running) {
-        log(`Restarting ${container.name}`, "warn")
-        await ignoreCommand(["start", container.id])
+        this.#log(appId, deployment, `Restarting ${container.name}`, "warn")
+        await docker(
+          this.#engine
+            .startContainer(container.id, { timeout: 120_000 })
+            .pipe(Effect.ignore)
+        )
       }
       throw started.failure
     }
     for (const container of previous) {
-      log(`Removing ${container.name}`)
-      await ignoreCommand(["rm", "--force", container.id])
+      this.#log(appId, deployment, `Removing ${container.name}`)
+      await this.#removeContainer(container.id)
     }
+  }
+
+  async #removeContainer(container: string) {
+    await docker(
+      this.#engine
+        .removeContainer(container, { force: true, timeout: 90_000 })
+        .pipe(Effect.ignore)
+    )
+  }
+
+  // Removes one of an app's networks, first disconnecting what else joined
+  // it, such as bundled Traefik for the app's routes.
+  async #removeNetwork(name: string) {
+    const engine = this.#engine
+    await docker(
+      Effect.gen(function* () {
+        const network = yield* engine.inspectNetwork(name)
+        for (const container of Object.keys(network.Containers ?? {})) {
+          yield* engine
+            .disconnectNetwork(name, container, { force: true })
+            .pipe(Effect.catchIf(isDockerNotFound, () => Effect.void))
+        }
+        yield* engine.removeNetwork(name)
+      }).pipe(Effect.catchIf(isDockerNotFound, () => Effect.void))
+    )
   }
 
   // Waits briefly so a container that exits right away fails its
   // deployment, with its last output in the deployment log.
   async #settle(appId: string, deployment: Deployment, name: string) {
     await sleep(SETTLE_MS, deployment.abort.signal)
-    const inspected = JSON.parse(
-      (await command("docker", ["inspect", name])).stdout
-    ) as Array<ContainerInspect>
-    const state = inspected[0]?.State
-    if (state?.Running) return
+    const [container] = this.#appContainer(
+      await docker(this.#engine.inspectContainer<ContainerInspect>(name))
+    )
+    if (container?.running && !container.restarted) return
     this.#log(
       appId,
       deployment,
       `${name} exited right after starting:`,
       "error"
     )
-    await recoverCommandLines(["logs", "--tail", "40", name], (line) =>
-      this.#logOutput(appId, deployment, line)
+    await this.#tailLogs(appId, deployment, container?.id ?? name, false)
+    throw new Error(
+      container?.restarted
+        ? `${name} keeps exiting, and Docker keeps restarting it`
+        : `${name} exited with code ${container?.exitCode ?? "unknown"}`
     )
-    throw new Error(`${name} exited with code ${state?.ExitCode ?? "unknown"}`)
+  }
+
+  // A container's last lines, into the deployment log.
+  async #tailLogs(
+    appId: string,
+    deployment: Deployment,
+    container: string,
+    tty: boolean
+  ) {
+    await docker(
+      this.#engine
+        .containerLogLines(
+          container,
+          { tail: 40, timeout: 15_000, tty },
+          (line) => this.#logOutput(appId, deployment, line)
+        )
+        .pipe(Effect.ignore)
+    )
   }
 
   async #deployCompose(
@@ -767,6 +862,25 @@ export class AppDriver {
       hostDirectory,
     })
     log(`Services: ${Object.keys(prepared.services).join(", ")}`)
+    // Containers from an image or Dockerfile deployment aren't the
+    // project's, so Compose's --remove-orphans can't see them.
+    const previous = (await this.#appContainers(input.appId)).filter(
+      (container) => container.labels[COMPOSE_PROJECT_LABEL] !== project
+    )
+    await this.#replacing(input.appId, deployment, previous, [], () =>
+      this.#composeUp(input, deployment, compose, environment, prepared)
+    )
+  }
+
+  async #composeUp(
+    input: RelayDeployApp,
+    deployment: Deployment,
+    compose: ReadonlyArray<string>,
+    environment: NodeJS.ProcessEnv,
+    prepared: ComposeProject
+  ) {
+    const log = (text: string, level: RelayConsoleLevel = "info") =>
+      this.#log(input.appId, deployment, text, level)
     await this.#stream(
       input.appId,
       deployment,
@@ -790,15 +904,12 @@ export class AppDriver {
     const exited = containers.filter(
       (container) =>
         container.deploymentId === deployment.id &&
-        !container.running &&
-        container.exitCode !== 0
+        (container.restarted ||
+          (!container.running && container.exitCode !== 0))
     )
     for (const container of exited) {
-      log(`${container.name} exited with code ${container.exitCode}:`, "error")
-      await recoverCommandLines(
-        ["logs", "--tail", "40", container.id],
-        (line) => this.#logOutput(input.appId, deployment, line)
-      )
+      log(`${container.name} exited after starting:`, "error")
+      await this.#tailLogs(input.appId, deployment, container.id, container.tty)
     }
     if (exited.length > 0) {
       throw new Error(
@@ -940,24 +1051,14 @@ export class AppDriver {
     for (const id of databaseIds) {
       const network = databaseNetworkName(this.#config, id)
       const inspected = await Effect.runPromise(
-        Effect.result(
-          promiseEffect(() =>
-            command("docker", [
-              "network",
-              "inspect",
-              "--format",
-              "{{json .Labels}}",
-              network,
-            ])
-          )
-        )
+        Effect.result(this.#engine.inspectNetwork(network))
       )
-      if (Result.isFailure(inspected)) continue
-      const labels = JSON.parse(inspected.success.stdout) as Record<
-        string,
-        string
-      > | null
-      if (relayOwnsLabels(this.#config, labels)) found.set(id, network)
+      if (
+        Result.isSuccess(inspected) &&
+        relayOwnsLabels(this.#config, inspected.success.Labels)
+      ) {
+        found.set(id, network)
+      }
     }
     return found
   }
@@ -1148,73 +1249,84 @@ export class AppDriver {
   }
 
   async #containers(appId?: string): Promise<Array<AppContainer>> {
-    const ids = await listIds("container", [
-      appId ? `label=${ID_LABEL}=${appId}` : `label=${KIND_LABEL}=${APP_KIND}`,
-    ])
-    if (ids.length === 0) return []
-    const inspected = JSON.parse(
-      (await command("docker", ["inspect", ...ids])).stdout
-    ) as Array<ContainerInspect>
-    return inspected.flatMap((container) => {
-      const labels = container.Config.Labels ?? {}
-      const id = labels[ID_LABEL]
-      if (
-        labels[KIND_LABEL] !== APP_KIND ||
-        !id?.match(/^[a-f0-9]{40}$/u) ||
-        !relayOwnsLabels(this.#config, labels)
-      ) {
-        return []
-      }
-      const service = appServiceNameSchema.safeParse(labels[SERVICE_LABEL])
-      return [
-        {
-          appId: id,
-          createdAt: isoTime(container.Created),
-          deploymentId: labels[DEPLOYMENT_LABEL] ?? null,
-          exitCode: container.State.Running ? null : container.State.ExitCode,
-          health: container.State.Health?.Status ?? null,
-          id: container.Id,
-          image: container.Config.Image,
-          labels: Object.fromEntries(
-            Object.entries(labels).flatMap(([key, value]) =>
-              value === undefined ? [] : [[key, value]]
+    const engine = this.#engine
+    const inspected = await docker(
+      engine
+        .listContainers({
+          all: true,
+          filters: {
+            label: [
+              appId ? `${ID_LABEL}=${appId}` : `${KIND_LABEL}=${APP_KIND}`,
+            ],
+          },
+        })
+        .pipe(
+          Effect.flatMap((containers) =>
+            engine.inspectContainers<ContainerInspect>(
+              containers.map((container) => container.Id)
             )
-          ),
-          name: container.Name.replace(/^\//u, ""),
-          networkMode: container.HostConfig?.NetworkMode ?? null,
-          networks: Object.keys(container.NetworkSettings?.Networks ?? {}),
-          oomKilled: container.State.OOMKilled ?? false,
-          ports: publishedPorts(container),
-          running: container.State.Running,
-          service: service.success ? service.data : APP_SERVICE,
-          startedAt: container.State.Running
-            ? isoTime(container.State.StartedAt)
-            : null,
-          state: container.State.Status,
-          status: container.State.Running
-            ? container.State.Health
-              ? `running (${container.State.Health.Status})`
-              : "running"
-            : `${container.State.Status} (${container.State.ExitCode})`,
-        },
-      ]
-    })
+          )
+        )
+    )
+    return inspected.flatMap((container) => this.#appContainer(container))
+  }
+
+  #appContainer(container: ContainerInspect): Array<AppContainer> {
+    const labels = container.Config.Labels ?? {}
+    const id = labels[ID_LABEL]
+    if (
+      labels[KIND_LABEL] !== APP_KIND ||
+      !id?.match(/^[a-f0-9]{40}$/u) ||
+      !relayOwnsLabels(this.#config, labels)
+    ) {
+      return []
+    }
+    const service = appServiceNameSchema.safeParse(labels[SERVICE_LABEL])
+    const { State: state } = container
+    return [
+      {
+        appId: id,
+        createdAt: isoTime(container.Created),
+        deploymentId: labels[DEPLOYMENT_LABEL] ?? null,
+        exitCode: state.Running ? null : state.ExitCode,
+        health: state.Health?.Status ?? null,
+        id: container.Id,
+        image: container.Config.Image,
+        labels: Object.fromEntries(
+          Object.entries(labels).flatMap(([key, value]) =>
+            value === undefined ? [] : [[key, value]]
+          )
+        ),
+        name: container.Name.replace(/^\//u, ""),
+        networkMode: container.HostConfig?.NetworkMode ?? null,
+        networks: Object.keys(container.NetworkSettings?.Networks ?? {}),
+        oomKilled: state.OOMKilled ?? false,
+        ports: publishedPorts(container),
+        // Docker reports a container it is about to restart as running.
+        restarted:
+          (state.Restarting ?? false) || (container.RestartCount ?? 0) > 0,
+        running: state.Running,
+        service: service.success ? service.data : APP_SERVICE,
+        startedAt: state.Running ? isoTime(state.StartedAt) : null,
+        state: state.Status,
+        status: state.Running
+          ? state.Health
+            ? `running (${state.Health.Status})`
+            : "running"
+          : `${state.Status} (${state.ExitCode})`,
+        tty: container.Config.Tty ?? false,
+      },
+    ]
   }
 
   // App IDs with a network on this Relay: every app has one from creation.
   async #networks(): Promise<Array<string>> {
-    const ids = await listIds("network", [`label=${KIND_LABEL}=${APP_KIND}`])
-    if (ids.length === 0) return []
-    const result = await command("docker", [
-      "network",
-      "inspect",
-      "--format",
-      "{{json .Labels}}",
-      ...ids,
-    ])
-    return result.stdout.split("\n").flatMap((line) => {
-      if (!line.trim()) return []
-      const labels = JSON.parse(line) as Record<string, string> | null
+    const networks = await docker(
+      this.#engine.listNetworks({
+        filters: { label: [`${KIND_LABEL}=${APP_KIND}`] },
+      })
+    )
+    return networks.flatMap(({ Labels: labels }) => {
       const id = labels?.[ID_LABEL]
       return id?.match(/^[a-f0-9]{40}$/u) &&
         relayOwnsLabels(this.#config, labels)
@@ -1529,38 +1641,8 @@ function labelArguments(labels: Readonly<Record<string, string>>) {
   ])
 }
 
-async function listIds(
-  kind: "container" | "image" | "network" | "volume",
-  filters: ReadonlyArray<string>
-): Promise<Array<string>> {
-  const result = await command("docker", [
-    kind,
-    "ls",
-    ...(kind === "container" ? ["--all"] : []),
-    ...filters.flatMap((filter) => ["--filter", filter]),
-    "--format",
-    "{{.ID}}",
-  ])
-  return [...new Set(result.stdout.split("\n").filter(Boolean))]
-}
-
-async function ignoreCommand(arguments_: Array<string>): Promise<void> {
-  await Effect.runPromise(
-    promiseEffect(() =>
-      command("docker", arguments_, { timeout: 90_000 })
-    ).pipe(Effect.ignore)
-  )
-}
-
-async function recoverCommandLines(
-  arguments_: Array<string>,
-  onLine: (line: string) => void
-): Promise<void> {
-  await Effect.runPromise(
-    promiseEffect(() =>
-      commandLines("docker", arguments_, onLine, { timeout: 15_000 })
-    ).pipe(Effect.ignore)
-  )
+function docker<A>(effect: Effect.Effect<A, DockerEngineError>): Promise<A> {
+  return Effect.runPromise(effect)
 }
 
 function sleep(milliseconds: number, signal: AbortSignal): Promise<void> {

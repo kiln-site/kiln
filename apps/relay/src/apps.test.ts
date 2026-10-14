@@ -26,6 +26,7 @@ const appId = "c".repeat(40)
 
 afterEach(() => {
   vi.useRealTimers()
+  vi.unstubAllEnvs()
 })
 
 async function createdApp() {
@@ -35,13 +36,20 @@ async function createdApp() {
   return harness
 }
 
+// Where the last deployment left the fake clock, so the next one starts
+// later and gets its own time.
+let clock = 0
+
 // Deploys and lets the new container settle, under fake timers, until the
 // deployment finishes.
 async function deploy(
   harness: RelayHarness,
   config: Partial<AppConfig>
 ): Promise<RelayApp> {
-  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] })
+  vi.useFakeTimers({
+    now: Math.max(Date.now(), clock),
+    toFake: ["Date", "setTimeout", "clearTimeout"],
+  })
   await harness.apps.deploy(
     relayDeployAppSchema.parse({
       appId,
@@ -54,6 +62,7 @@ async function deploy(
   for (let step = 0; step < 10_000; step += 1) {
     const app = await harness.apps.get(appId)
     if (app.deployment?.state !== "running") {
+      clock = Date.now()
       vi.useRealTimers()
       return app
     }
@@ -112,6 +121,23 @@ describe("apps", () => {
 
     expect(app.deployment).toMatchObject({ state: "failed" })
     expect(app.observedState).toBe("running")
+    expect(appContainers().map((container) => container.id)).toEqual([
+      previous!.id,
+    ])
+    expect(previous!.state.running).toBe(true)
+  })
+
+  // Docker reports a container it keeps restarting as running.
+  it("keeps the running container when its replacement keeps crashing", async () => {
+    const harness = await createdApp()
+    await deploy(harness, {})
+    const [previous] = appContainers()
+    fakeDocker.images.set("crashes:latest", {})
+    fakeDocker.crashingImages.add("crashes:latest")
+
+    const app = await deploy(harness, { image: "crashes:latest" })
+
+    expect(app.deployment).toMatchObject({ state: "failed" })
     expect(appContainers().map((container) => container.id)).toEqual([
       previous!.id,
     ])
@@ -211,6 +237,53 @@ describe("apps", () => {
     expect(container!.networks.get(network)).toMatchObject({
       ipAddress: address,
     })
+  })
+
+  it("keeps bundled Traefik on a routed app's network when Traefik is recreated", async () => {
+    const harness = await relayHarness({ KILN_RELAY_PROXY: "traefik" })
+    await harness.apps.create({ id: appId, name: "Website" })
+    fakeDocker.addContainer({ name: "kiln-relay", running: true })
+    vi.stubEnv("HOSTNAME", "kiln-relay")
+    const route = {
+      hostname: "site.example.com",
+      id: "0a1b2c3d",
+      instanceId: appRouteOwner(appId),
+      name: "Site",
+      path: null,
+      service: "app",
+      stripPrefix: true,
+      targetPort: 80,
+    }
+
+    await harness.lifecycle.configureProxy(
+      {
+        acmeEmail: "admin@example.com",
+        mode: "traefik",
+        traefikImage: "traefik:v3.7.13",
+      },
+      [route]
+    )
+
+    expect([
+      ...fakeDocker
+        .container(harness.resources.traefikContainer)!
+        .networks.keys(),
+    ]).toContain(harness.resources.appNetwork(appId))
+  })
+
+  it("removes a routed app's network that bundled Traefik joined", async () => {
+    const harness = await createdApp()
+    const network = harness.resources.appNetwork(appId)
+    fakeDocker.addContainer({
+      name: harness.resources.traefikContainer,
+      networks: [network],
+      running: true,
+    })
+
+    await harness.apps.delete({ appId, deleteData: false })
+
+    expect(fakeDocker.networks.has(network)).toBe(false)
+    await expect(harness.apps.list()).resolves.toEqual([])
   })
 
   it("removes an app's containers, network, and data when deleted", async () => {
