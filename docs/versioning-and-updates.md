@@ -76,7 +76,8 @@ then launches a short-lived updater from the selected Relay digest. The helper:
 2. Stops it gracefully and renames it as a rollback copy.
 3. Creates the replacement with the existing environment, mounts, labels,
    ports, restart policy, and Docker networks.
-4. Waits for the replacement health check.
+4. Waits for the replacement's Docker health check to report `healthy`. For
+   Relays, see [Relay runtime](relay-runtime.md#health-check).
 5. Removes the rollback copy on success, or restores it on failure.
 
 Update operation state lives in the Relay data volume, so a Relay can report

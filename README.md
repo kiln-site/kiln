@@ -77,6 +77,9 @@ Then:
 docker compose up -d
 ```
 
+See [Relay runtime](docs/relay-runtime.md) for how the Relay talks to Docker,
+how its health check works, and how to read its memory use.
+
 ## Development
 
 Requires the Node version in `.node-version`, pnpm/Vite+, and Docker with
