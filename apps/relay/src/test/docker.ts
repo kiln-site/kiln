@@ -220,6 +220,11 @@ export class FakeDocker {
   }> = []
   /** Set to fail the next builds with BuildKit's message. */
   buildFailure: string | null = null
+  /**
+   * Set to reject builds before reading their context, as the daemon does a
+   * request it can't run, with this message.
+   */
+  buildRejection: string | null = null
   /** Images whose registry cannot be reached; pulling them fails. */
   readonly unreachableImages = new Set<string>()
   /** What pulling an image prints before its final status, by image. */
@@ -302,6 +307,7 @@ export class FakeDocker {
     this.streamErrors.clear()
     this.builds.length = 0
     this.buildFailure = null
+    this.buildRejection = null
     this.tailscale.controlPlaneReachable = true
     this.tailscale.machines.clear()
     this.#faults.length = 0
@@ -1151,6 +1157,11 @@ export class FakeDocker {
     try {
       const url = new URL(request.url ?? "/", "http://docker")
       if (request.method === "POST" && url.pathname === "/build") {
+        if (this.buildRejection !== null) {
+          response.writeHead(400, { "Content-Type": "application/json" })
+          response.end(JSON.stringify({ message: this.buildRejection }))
+          return
+        }
         this.#build(url, await readContext(request)).write(response)
         return
       }

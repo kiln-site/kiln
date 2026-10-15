@@ -1020,10 +1020,17 @@ export class DockerEngine {
         socketPath,
       })
       let settled = false
+      let bodySent = false
       const settle = (result: Effect.Effect<Buffer, DockerEngineError>) => {
         if (settled) return
         settled = true
         if (timer) clearTimeout(timer)
+        // A body still being sent (such as a build context Docker rejected
+        // early) stops being read, and its connection goes with it.
+        if (exchange.bodyStream && !bodySent) {
+          exchange.bodyStream.destroy()
+          call.destroy()
+        }
         resume(result)
       }
       const reject = (
@@ -1095,6 +1102,9 @@ export class DockerEngine {
             cause,
           })
         )
+        bodyStream.once("end", () => {
+          bodySent = true
+        })
         bodyStream.pipe(call)
       } else {
         call.end(body)

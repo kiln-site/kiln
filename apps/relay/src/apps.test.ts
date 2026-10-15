@@ -1,3 +1,4 @@
+import { readdirSync } from "node:fs"
 import { access, mkdir, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 
@@ -352,6 +353,29 @@ describe("apps", () => {
     const [container] = appContainers()
     expect(container!.image).toBe(build!.tag)
     expect(container!.state.running).toBe(true)
+  })
+
+  it("stops sending a build context Docker rejects, closing the files it was reading", async () => {
+    const harness = await createdApp()
+    const data = join(harness.config.dataDirectory, "apps", appId)
+    // Larger than the connection buffers, so it is still being read when
+    // Docker answers.
+    await writeFile(join(data, "large.bin"), Buffer.alloc(8 * 1024 * 1024, 7))
+    fakeDocker.buildRejection = "unsupported builder version"
+    const openFiles = () => readdirSync("/dev/fd").length
+    const before = openFiles()
+
+    const app = await deploy(harness, {
+      dockerfile: "FROM alpine\nCOPY . .\n",
+      sourceType: "dockerfile",
+    })
+
+    expect(app.deployment).toMatchObject({
+      error: "Error response from daemon: unsupported builder version",
+      state: "failed",
+    })
+    // Files close as their streams finish being destroyed.
+    await vi.waitFor(() => expect(openFiles()).toBeLessThanOrEqual(before))
   })
 
   it("fails a deployment whose build fails, with the build's error", async () => {

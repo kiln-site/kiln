@@ -269,8 +269,11 @@ function contextArchive(
     )
   )
   // A Node.js stream, which pipes into a request; it reads the archive as
-  // the request takes it.
-  return Readable.from(archive)
+  // the request takes it. Closing it, as a cancelled or rejected build does,
+  // stops the archive and whatever file it was reading.
+  const readable = Readable.from(archive)
+  readable.once("close", () => archive.destroy())
+  return readable
 }
 
 async function addEntry(
@@ -318,12 +321,28 @@ function entryWritten(
   }
 ): Promise<void> {
   return new Promise((resolve, reject) => {
-    const done = (error?: Error | null) => (error ? reject(error) : resolve())
+    let finished = false
+    const closed = () => done(new Error("The build context was closed"))
+    const done = (error?: Error | null) => {
+      if (finished) return
+      finished = true
+      archive.off("close", closed)
+      if (error) {
+        // The file being read is closed with the archive.
+        entry.source?.destroy()
+        reject(error)
+      } else resolve()
+    }
+    if (archive.destroyed) {
+      done(new Error("The build context was closed"))
+      return
+    }
+    archive.once("close", closed)
     const sink = entry.content
       ? archive.entry(entry.header, entry.content, done)
       : archive.entry(entry.header, done)
     if (entry.source) {
-      entry.source.once("error", reject)
+      entry.source.once("error", done)
       entry.source.pipe(sink)
     }
   })
