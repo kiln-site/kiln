@@ -265,6 +265,11 @@ export class FakeDocker {
     match: FakeDockerOperation
     run: () => Promise<void>
   }> = []
+  /** Operations that fail after Docker applied them. */
+  readonly #afterFaults: Array<{
+    match: FakeDockerOperation
+    message: string
+  }> = []
   #unmodelled: Array<string> = []
   #inFlight = 0
   #lastActivity = 0
@@ -347,6 +352,7 @@ export class FakeDocker {
     this.tailscale.controlPlaneReachable = true
     this.tailscale.machines.clear()
     this.#faults.length = 0
+    this.#afterFaults.length = 0
     for (const follower of this.#followers) follower.response.end()
     this.#followers.clear()
     this.#unmodelled = []
@@ -558,6 +564,25 @@ export class FakeDocker {
       match,
       run: () => Promise.reject(new DockerFailure(message)),
     })
+  }
+
+  /**
+   * Applies the next matching operation, then fails it with `message`, as
+   * when Docker made a change but the answer was lost or came too late.
+   */
+  failAfterNext(match: FakeDockerOperation, message: string): void {
+    this.#afterFaults.push({ match, message })
+  }
+
+  #appliedCheckpoint(command: string, target?: string): void {
+    const index = this.#afterFaults.findIndex(
+      ({ match }) =>
+        match.command === command &&
+        (match.target === undefined || match.target === target)
+    )
+    if (index === -1) return
+    const [fault] = this.#afterFaults.splice(index, 1)
+    throw new DockerFailure(fault!.message, 500)
   }
 
   /**
@@ -968,6 +993,7 @@ export class FakeDocker {
       if (container.state.running) this.#stop(container, 0)
       this.#start(container)
     }
+    this.#appliedCheckpoint(action, reference)
     return true
   }
 
@@ -1056,6 +1082,7 @@ export class FakeDocker {
       )
     }
     container.name = to
+    this.#appliedCheckpoint("rename", from)
   }
 
   async #setRestartPolicy(reference: string, policy: string): Promise<void> {
