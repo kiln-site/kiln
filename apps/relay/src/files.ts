@@ -187,7 +187,7 @@ export class FilesystemDriver {
               directorySize += size
             } else if (
               entry.isSymbolicLink() &&
-              (yield* Effect.promise(() => linksToDirectory(root, absolute)))
+              (yield* linksToDirectory(root, absolute))
             ) {
               // Listed like the paged index, but not walked: links can loop.
               const directoryPath = `${path}/`
@@ -1238,7 +1238,8 @@ async function relayFileEntry(
   const metadata = await lstat(absolute)
   const kind =
     entry.isDirectory() ||
-    (entry.isSymbolicLink() && (await linksToDirectory(root, absolute)))
+    (entry.isSymbolicLink() &&
+      (await Effect.runPromise(linksToDirectory(root, absolute))))
       ? "directory"
       : "file"
   return {
@@ -1252,17 +1253,12 @@ async function relayFileEntry(
 // Stat and directory reads follow links, so listings must agree: a link to a
 // directory inside the root is listed as that directory. Links that leave the
 // root or dangle stay files and fail when opened.
-async function linksToDirectory(
-  root: string,
-  absolute: string
-): Promise<boolean> {
-  try {
+function linksToDirectory(root: string, absolute: string) {
+  return filesystemOperation("link.resolve", async () => {
     const target = await realpath(absolute)
     if (target !== root && !target.startsWith(`${root}${sep}`)) return false
     return (await stat(target)).isDirectory()
-  } catch {
-    return false
-  }
+  }).pipe(Effect.catch(() => Effect.succeed(false)))
 }
 
 function estimatedFileEntryBytes(path: string): number {
