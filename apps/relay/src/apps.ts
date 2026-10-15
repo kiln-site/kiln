@@ -33,7 +33,6 @@ import {
 } from "./compose-project.js"
 import { composeUp } from "./compose-up.js"
 import { buildImage } from "./docker-build.js"
-import { shellWords } from "./shell-words.js"
 import { createContainer } from "./docker-container-spec.js"
 import {
   DockerEngine,
@@ -1471,6 +1470,46 @@ function describeSource(config: AppConfig): string {
     case "compose":
       return "Docker Compose"
   }
+}
+
+// Splits a start command the way a shell would, without running one, so it
+// works in images that have no shell.
+function shellWords(input: string): Array<string> {
+  const words: Array<string> = []
+  let current = ""
+  let started = false
+  let quote: '"' | "'" | null = null
+  for (let index = 0; index < input.length; index += 1) {
+    const character = input[index]!
+    if (quote) {
+      if (character === quote) quote = null
+      else if (
+        character === "\\" &&
+        quote === '"' &&
+        index + 1 < input.length
+      ) {
+        current += input[++index]
+      } else current += character
+      continue
+    }
+    if (character === '"' || character === "'") {
+      quote = character
+      started = true
+    } else if (character === "\\" && index + 1 < input.length) {
+      current += input[++index]
+      started = true
+    } else if (/\s/u.test(character)) {
+      if (started) words.push(current)
+      current = ""
+      started = false
+    } else {
+      current += character
+      started = true
+    }
+  }
+  if (quote) throw new Error("The start command has an unclosed quote")
+  if (started) words.push(current)
+  return words
 }
 
 function unquote(value: string): string {
