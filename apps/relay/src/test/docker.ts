@@ -266,6 +266,8 @@ export class FakeDocker {
   readonly imageTags = new Map<string, string>()
   /** Images whose health check fails once they start. */
   readonly unhealthyImages = new Set<string>()
+  /** Images whose health check never settles, staying `starting`. */
+  readonly startingImages = new Set<string>()
   /** The platform each pull asked for, or null, by the image's reference. */
   readonly pullPlatforms = new Map<string, string | null>()
   /**
@@ -360,6 +362,7 @@ export class FakeDocker {
     this.imagePlatforms.clear()
     this.imageTags.clear()
     this.unhealthyImages.clear()
+    this.startingImages.clear()
     this.pullPlatforms.clear()
     this.crashingImages.clear()
     this.programFailures.clear()
@@ -1044,7 +1047,9 @@ export class FakeDocker {
     container.state.health = container.healthCheck
       ? this.unhealthyImages.has(container.image)
         ? "unhealthy"
-        : "healthy"
+        : this.startingImages.has(container.image)
+          ? "starting"
+          : "healthy"
       : undefined
     container.starts += 1
     // Each run gets a fresh network namespace.

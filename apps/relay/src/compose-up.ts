@@ -148,7 +148,11 @@ export function composeUp(
         timeout: STOP_MARGIN_MS + 600_000,
       })
     const remove = (container: ContainerSummary) =>
-      engine.removeContainer(container.Id, { force: true, timeout: 90_000 })
+      engine.removeContainer(container.Id, {
+        force: true,
+        strict: true,
+        timeout: 90_000,
+      })
     const logged = (
       container: ContainerSummary,
       [working, done]: readonly [string, string],
@@ -161,14 +165,18 @@ export function composeUp(
       )
     }
 
+    const usersOf = new Map<string, Array<string>>()
+    for (const name of Object.keys(services).sort()) {
+      for (const key of Object.keys(services[name]!.networks ?? {})) {
+        const list = usersOf.get(key)
+        if (list) list.push(name)
+        else usersOf.set(key, [name])
+      }
+    }
     const networks = yield* planNetworks(engine, project, plan, onLine, {
       // Compose's: the containers of the services that use a network.
       containersOf: (key) =>
-        Object.entries(services)
-          .filter(([, service]) => Object.hasOwn(service.networks ?? {}, key))
-          .map(([name]) => name)
-          .sort()
-          .flatMap((name) => observed.get(name) ?? []),
+        (usersOf.get(key) ?? []).flatMap((name) => observed.get(name) ?? []),
       connected,
       stop: (container) => {
         let step = stopped.get(container.Id)
@@ -236,8 +244,7 @@ export function composeUp(
     ) => {
       const containerName = nameOf(name)
       const stops: Array<Step> = []
-      for (const [dependent, other] of Object.entries(services)) {
-        if (!other.depends_on?.[name]?.restart) continue
+      for (const dependent of restartsWith.get(name) ?? []) {
         for (const target of observed.get(dependent) ?? []) {
           if (stopped.has(target.Id)) continue
           const step = plan.add(
@@ -274,6 +281,18 @@ export function composeUp(
         }),
         removing
       )
+    }
+    // The services that restart with each, by `depends_on: restart: true`.
+    const restartsWith = new Map<string, Array<string>>()
+    for (const [dependent, service] of Object.entries(services)) {
+      for (const [dependency, settings] of Object.entries(
+        service.depends_on ?? {}
+      )) {
+        if (!settings.restart) continue
+        const list = restartsWith.get(dependency)
+        if (list) list.push(dependent)
+        else restartsWith.set(dependency, [dependent])
+      }
     }
     const last = new Map<string, Step>()
     for (const name of order) {
@@ -348,20 +367,29 @@ export function composeUp(
     const start = (name: string) =>
       Effect.gen(function* () {
         const service = services[name]!
-        for (const [dependency, settings] of Object.entries(
-          service.depends_on ?? {}
-        )) {
-          const dependencyStarted = started.get(dependency)
-          if (!dependencyStarted) continue
-          yield* Deferred.await(dependencyStarted)
-          yield* waitForDependency(
-            engine,
-            created.get(dependency)!,
-            dependency,
-            settings,
-            onLine
-          )
-        }
+        const dependencies = Object.entries(service.depends_on ?? {}).filter(
+          ([dependency]) => started.has(dependency)
+        )
+        // Once what it depends on has started, every condition is waited
+        // on at once, and the first to fail ends the wait, as Compose's
+        // waitDependencies.
+        yield* Effect.forEach(
+          dependencies,
+          ([dependency]) => Deferred.await(started.get(dependency)!),
+          { concurrency: "unbounded", discard: true }
+        )
+        yield* Effect.forEach(
+          dependencies,
+          ([dependency, settings]) =>
+            waitForDependency(
+              engine,
+              created.get(dependency)!,
+              dependency,
+              settings,
+              onLine
+            ),
+          { concurrency: "unbounded", discard: true }
+        )
         const id = created.get(name)!
         yield* injectFiles(engine, project, name, service, id)
         const containerName = nameOf(name)

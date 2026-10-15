@@ -331,18 +331,23 @@ export class DockerEngine {
 
   /**
    * Removes a container. Forced removal of one that no longer exists
-   * succeeds, as `docker rm --force` does.
+   * succeeds, as `docker rm --force` does, unless `strict`, which fails as
+   * the API does.
    */
   removeContainer(
     reference: string,
-    options: { readonly force?: boolean; readonly timeout?: number } = {}
+    options: {
+      readonly force?: boolean
+      readonly strict?: boolean
+      readonly timeout?: number
+    } = {}
   ): Effect.Effect<void, DockerEngineError> {
     const removal = this.#empty({
       method: "DELETE",
       path: `/containers/${segment(reference)}${query({ force: options.force })}`,
       timeout: options.timeout,
     })
-    return options.force
+    return options.force && !options.strict
       ? removal.pipe(Effect.catchIf(isDockerNotFound, () => Effect.void))
       : removal
   }

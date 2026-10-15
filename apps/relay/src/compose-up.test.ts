@@ -160,6 +160,51 @@ describe("composeUp redeploys, as Compose's reconciler", () => {
     ])
   })
 
+  it("stops where a removal Docker answers with 404 stops it, as Compose's executor does", async () => {
+    await Effect.runPromise(await up(yaml()))
+    const data = containers()[0]!.data
+    // The previous database is gone by the time it's removed.
+    const removing = fakeDocker.hold({ command: "rm" })
+
+    const exit = Effect.runPromiseExit(await up(yaml()))
+    await removing.reached
+    fakeDocker.removeContainer(`${projectName}-db-1`)
+    removing.release()
+
+    expect((await exit)._tag).toBe("Failure")
+    // The replacement keeps its temporary name.
+    expect(containers()).toEqual([
+      { data, name: `<id>_${projectName}-db-1`, state: "created" },
+      { data: undefined, name: `${projectName}-web-1`, state: "running" },
+    ])
+  })
+
+  it("waits on every dependency at once, failing on the first that fails", async () => {
+    fakeDocker.images.set("busybox:1", {})
+    // One dependency never settles; the other turns unhealthy.
+    fakeDocker.startingImages.add("busybox:1")
+    fakeDocker.unhealthyImages.add("postgres:17")
+    const file = [
+      "services:",
+      "  web:",
+      "    image: nginx:alpine",
+      "    depends_on:",
+      "      cache: { condition: service_healthy }",
+      "      db: { condition: service_healthy }",
+      "  cache:",
+      "    image: busybox:1",
+      "    healthcheck: { test: [CMD, 'true'] }",
+      "  db:",
+      "    image: postgres:17",
+      "    healthcheck: { test: [CMD, 'true'] }",
+    ].join("\n")
+
+    const exit = await Effect.runPromiseExit(await up(file))
+
+    expect(exit._tag).toBe("Failure")
+    expect(String(exit)).toContain("db-1 is unhealthy")
+  })
+
   it("checks a local image against DOCKER_DEFAULT_PLATFORM, and pulls for it", async () => {
     // Present, but for another platform.
     fakeDocker.imagePlatforms.set("postgres:17", "linux/amd64")
