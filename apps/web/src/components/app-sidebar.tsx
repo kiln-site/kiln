@@ -185,10 +185,10 @@ const AppSidebarView = React.memo(function AppSidebarView({
       <Sidebar collapsible="icon" className="border-sidebar-border/80">
         <SidebarHeader className="h-20 shrink-0 justify-center px-2 py-2">
           <SidebarMenu>
-            <SidebarMenuItem>
+            <SidebarMenuItem className="flex items-center gap-1">
               <SidebarMenuButton
                 size="lg"
-                className="h-11 hover:bg-transparent active:bg-transparent data-[state=open]:bg-transparent"
+                className="h-11 min-w-0 flex-1 hover:bg-transparent active:bg-transparent data-[state=open]:bg-transparent"
                 tooltip="Kiln"
               >
                 <HearthMark className="group-data-[collapsible=icon]:size-[32px]!" />
@@ -233,7 +233,7 @@ function HeaderNotificationsBell() {
   if (state === "collapsed" && !isMobile) return null
   return (
     <NotificationsBell
-      className="absolute top-1/2 right-1 size-8 -translate-y-1/2"
+      className="mr-1"
       tooltipHidden={isMobile}
     />
   )
