@@ -26,11 +26,8 @@ import {
   MAX_CONSOLE_HISTORY_CHARACTERS,
   type DockerConsoleSession,
 } from "./docker.js"
-import {
-  type ComposeProject,
-  type ComposeService,
-  loadComposeProject,
-} from "./compose-project.js"
+import { loadComposeProject } from "./compose-load.js"
+import type { ComposeProject, ComposeService } from "./compose-project.js"
 import { composeUp } from "./compose-up.js"
 import { buildImage } from "./docker-build.js"
 import { createContainer } from "./docker-container-spec.js"
@@ -853,13 +850,21 @@ export class AppDriver {
       KILN_DATA: hostDirectory,
     }
     log("Reading Compose file")
-    const normalized = await loadComposeProject({
-      environment,
-      onWarning: (line) => this.#logOutput(input.appId, deployment, line, "warn"),
-      projectDirectory: directory,
-      projectName: project,
-      yaml: input.config.compose,
-    })
+    // In a worker the deployment's cancellation stops.
+    const normalized = await Effect.runPromise(
+      loadComposeProject(
+        {
+          environment,
+          onWarning: (line) =>
+            this.#logOutput(input.appId, deployment, line, "warn"),
+          projectDirectory: directory,
+          projectName: project,
+          yaml: input.config.compose,
+        },
+        { timeoutMs: this.#config.composeLoadTimeoutMs }
+      ),
+      { signal: deployment.abort.signal }
+    )
     const databases = await this.#connectableDatabases(
       input.appId,
       deployment,

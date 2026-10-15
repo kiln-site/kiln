@@ -5,7 +5,7 @@ import { join } from "node:path"
 import { Effect, Fiber } from "effect"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test"
 
-import { loadComposeProject } from "./compose-project.js"
+import { readComposeProject } from "./compose-project.js"
 import { composeUp } from "./compose-up.js"
 import { DockerEngine } from "./docker-engine.js"
 import { fakeDocker } from "./test/docker.js"
@@ -44,7 +44,7 @@ async function up(
   file: string,
   environment: Readonly<Record<string, string>> = {}
 ) {
-  const project = await loadComposeProject({
+  const project = await readComposeProject({
     environment,
     onWarning: () => {},
     projectDirectory: directory,

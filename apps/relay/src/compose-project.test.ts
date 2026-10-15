@@ -2,9 +2,11 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 
+import { Effect, Fiber } from "effect"
 import { afterEach, beforeEach, describe, expect, it } from "vite-plus/test"
 
-import { loadComposeProject } from "./compose-project.js"
+import { loadComposeProject } from "./compose-load.js"
+import { loadConfig } from "./config.js"
 
 let directory: string
 
@@ -16,16 +18,57 @@ afterEach(async () => {
   await rm(directory, { force: true, recursive: true })
 })
 
-async function load(yaml: string, environment: Record<string, string> = {}) {
+// The Relay's load, in its worker, with the configured timeout.
+function loading(
+  yaml: string,
+  environment: Record<string, string> = {},
+  configuration: NodeJS.ProcessEnv = {}
+) {
   const warnings: Array<string> = []
-  const project = await loadComposeProject({
-    environment,
-    onWarning: (warning) => warnings.push(warning),
-    projectDirectory: directory,
-    projectName: "kiln-app-x",
-    yaml,
-  })
+  const config = loadConfig({ NODE_ENV: "development", ...configuration })
+  return {
+    effect: loadComposeProject(
+      {
+        environment,
+        onWarning: (warning) => warnings.push(warning),
+        projectDirectory: directory,
+        projectName: "kiln-app-x",
+        yaml,
+      },
+      { timeoutMs: config.composeLoadTimeoutMs }
+    ),
+    warnings,
+  }
+}
+
+async function load(yaml: string, environment: Record<string, string> = {}) {
+  const { effect, warnings } = loading(yaml, environment)
+  const project = await Effect.runPromise(effect)
   return { project, warnings }
+}
+
+// 20,000 anchors each aliased once, which the YAML library resolves in
+// time quadratic in their number: seconds of work for the worker.
+const slowToLoad = [
+  "services:",
+  "  web:",
+  "    image: nginx",
+  `x-pairs: [${Array.from({ length: 20_000 }, (_, index) => `&a${index} x, *a${index}`).join(", ")}]`,
+].join("\n")
+
+// The longest gap between ticks of a 10 ms timer on this thread while
+// `work` runs.
+async function longestStall(work: Promise<unknown>): Promise<number> {
+  let last = performance.now()
+  let longest = 0
+  const timer = setInterval(() => {
+    const now = performance.now()
+    longest = Math.max(longest, now - last)
+    last = now
+  }, 10)
+  await work.catch(() => undefined)
+  clearInterval(timer)
+  return longest
 }
 
 describe("Compose variables", () => {
@@ -382,7 +425,58 @@ describe("Compose features Kiln can't run", () => {
   })
 })
 
+describe("Compose files, loaded off the Relay's thread", () => {
+  it("stops a load past its configured time, while this thread keeps running", async () => {
+    const { effect } = loading(slowToLoad, {}, {
+      KILN_RELAY_COMPOSE_LOAD_TIMEOUT: "1",
+    })
+    const result = Effect.runPromise(effect)
+
+    const stall = await longestStall(result)
+
+    await expect(result).rejects.toThrow(
+      "Compose file is too large or complex to load: loading it took longer than 1 s"
+    )
+    expect(stall).toBeLessThan(250)
+  })
+
+  it("terminates the worker when the load is interrupted", async () => {
+    const fiber = Effect.runFork(loading(slowToLoad).effect)
+    // Let the worker start churning.
+    await longestStall(new Promise((resolve) => setTimeout(resolve, 300)))
+
+    await Effect.runPromise(Fiber.interrupt(fiber))
+
+    // With the worker gone, the process has nothing left to compute.
+    const before = process.cpuUsage()
+    await longestStall(new Promise((resolve) => setTimeout(resolve, 300)))
+    const used = process.cpuUsage(before)
+    expect((used.user + used.system) / 1_000).toBeLessThan(150)
+  })
+
+  it("names the memory limit when a load runs out of it", async () => {
+    // Merge keys copying a 5,000-entry mapping into 500 more.
+    const yaml = [
+      `x-base: &base {${Array.from({ length: 5_000 }, (_, index) => `k${index}: v`).join(", ")}}`,
+      ...Array.from({ length: 500 }, (_, index) => `x-copy-${index}: { <<: *base }`),
+      "services:",
+      "  web:",
+      "    image: nginx",
+    ].join("\n")
+
+    await expect(load(yaml)).rejects.toThrow(
+      /Compose file is too large or complex to load|comes to more than 100000 values/u
+    )
+  })
+})
+
 describe("Compose files, bounded", () => {
+  it("refuses a list or mapping used as a key", async () => {
+    await expect(
+      load(`services:\n  web:\n    image: nginx\n    labels: { ? ${"[".repeat(300)}${"]".repeat(300)} : x }\n`)
+    ).rejects.toThrow("The Compose file uses a list or mapping as a key")
+  })
+
   it("refuses aliases that expand past what it reads, before walking them", async () => {
     // 62 KB: a 30,000-entry list, aliased 300 times.
     const yaml = [
@@ -395,7 +489,7 @@ describe("Compose files, bounded", () => {
 
     const started = performance.now()
     await expect(load(yaml)).rejects.toThrow(
-      "The Compose file comes to more than 1000000 values with its aliases expanded"
+      "The Compose file comes to more than 100000 values with its aliases expanded"
     )
     expect(performance.now() - started).toBeLessThan(1_000)
   })
@@ -442,6 +536,16 @@ describe("Compose files, bounded", () => {
 })
 
 describe("Compose variable substitution, bounded", () => {
+  it("substitutes 55,000 defaults on one line in time linear in its length", async () => {
+    const started = performance.now()
+    const { project } = await load(
+      `services:\n  web:\n    image: nginx\n    environment:\n      LONG: "${"${UNSET:-x}".repeat(55_000)}"\n`
+    )
+
+    expect(project.services.web?.environment?.LONG).toBe("x".repeat(55_000))
+    expect(performance.now() - started).toBeLessThan(3_000)
+  })
+
   it("substitutes a thousand defaults on one line, one after another", async () => {
     const { project } = await load(
       `services:\n  web:\n    image: nginx\n    environment:\n      LONG: "${"${UNSET:-x}".repeat(1_000)}"\n`

@@ -54,6 +54,7 @@ export default defineConfig({
       "src/updater": "src/updater.ts",
       "src/host-files-helper": "src/host-files-helper.ts",
       "src/database-browser-worker": "src/database-browser-worker.ts",
+      "src/compose-load-worker": "src/compose-load-worker.ts",
     },
     format: "esm",
     minify: true,

@@ -15,7 +15,7 @@ import { homedir } from "node:os"
 import { join, resolve } from "node:path"
 
 import { Effect, Predicate, Result } from "effect"
-import { parseDocument } from "yaml"
+import { isCollection, parseDocument, visit } from "yaml"
 
 import { cleanPath } from "./docker-patterns.js"
 import { shellWords } from "./shell-words.js"
@@ -252,6 +252,11 @@ export interface ComposeProject {
    * `DOCKER_DEFAULT_PLATFORM` in it is the default platform.
    */
   environment?: Record<string, string>
+  /**
+   * Services the file defines that its profiles leave out: their
+   * containers are the project's, not orphans.
+   */
+  disabled_services?: Array<string>
   [key: string]: unknown
 }
 
@@ -281,7 +286,7 @@ const MAX_FILE_BYTES = 4 * 1024 * 1024
 // What a Compose file may come to with its aliases read as copies, as
 // compose-go (go-yaml) reads them: a 62 KB file aliasing a 30,000-entry
 // list 300 times is 9 million nodes. Real files are thousands.
-const MAX_TREE_NODES = 1_000_000
+const MAX_TREE_NODES = 100_000
 const MAX_TREE_DEPTH = 256
 // How deep `${A:-${B:-…}}` defaults may nest.
 const MAX_SUBSTITUTION_DEPTH = 100
@@ -371,7 +376,11 @@ const LEGACY_OCTAL = {
 }
 
 /** Reads a Compose file into its normalized project. */
-export async function loadComposeProject(
+/**
+ * Reads a Compose project on the calling thread. The Relay loads one with
+ * `loadComposeProject` (./compose-load.js), which runs this in a worker.
+ */
+export async function readComposeProject(
   options: ComposeLoadOptions
 ): Promise<ComposeProject> {
   const document = parseDocument(options.yaml, {
@@ -387,6 +396,17 @@ export async function loadComposeProject(
         : `The Compose file is not valid YAML: ${problem.message.split("\n")[0]}`
     )
   }
+  // A list or mapping as a key, which Compose has no use for, and which
+  // would hide its depth from the tree's check.
+  visit(document, {
+    Pair(_, pair) {
+      if (isCollection(pair.key)) {
+        throw new ComposeError(
+          "The Compose file uses a list or mapping as a key"
+        )
+      }
+    },
+  })
   const raw: Value = document.toJS({ maxAliasCount: 1_000 })
   if (!isMapping(raw)) throw new ComposeError("The Compose file is empty")
   checkTree(raw)
@@ -605,6 +625,7 @@ async function normalizeProject(
     ...(Object.keys(secrets).length > 0 && { secrets }),
     ...(Object.keys(configs).length > 0 && { configs }),
     environment: variables,
+    ...(disabled.size > 0 && { disabled_services: [...disabled].sort() }),
   }
 }
 
@@ -2300,16 +2321,16 @@ function interpolateTree(
   return result
 }
 
-// compose-go's template pattern: `$$`, `$NAME`, or `${NAME[op word]}`
-// (greedy up to the last `}` on the line, then cut at the first closing
-// brace), or a `${` that's none of these.
-const TEMPLATE =
-  /\$(?:(\$)|([_a-z][_a-z0-9]*)|\{(?:([_a-z][_a-z0-9]*(?::?[-+?][^\n]*)?)\}|()))/giu
-
 /**
  * Compose's variable substitution (compose-go's `template.Substitute`):
  * `$NAME`, `${NAME}`, the `:-`, `-`, `:?`, `?`, `:+`, and `+` modifiers
  * (whose words are substituted too), and `$$` for a literal `$`.
+ *
+ * Read as compose-go's pattern reads it: a `${NAME` with a modifier runs to
+ * the last `}` on its line, then is cut at its first closing brace, and
+ * reading carries on after the cut. Scanned once, left to right: each
+ * line's last `}` is found once, and the cut is found from the template's
+ * start, so a line of many templates is read in time linear in its length.
  */
 function substituteTemplate(
   text: string,
@@ -2319,32 +2340,49 @@ function substituteTemplate(
   expansion: Expansion
 ): string {
   if (!text.includes("$")) return text
-  // Each template in turn: one with a default is cut at its first closing
-  // brace, and what follows it is read on from there, as compose-go reads
-  // it (recursively, which a long line of them would overflow).
-  const template = new RegExp(TEMPLATE.source, "giu")
   let output = ""
   let position = 0
+  let search = 0
+  // The line the last template was on: where it ends, and its last `}`.
+  let lineEnd = -1
+  let lastBrace = -1
+  const lastBraceOnLine = (at: number) => {
+    if (at > lineEnd) {
+      const end = text.indexOf("\n", at)
+      lineEnd = end === -1 ? text.length : end
+      lastBrace = text.lastIndexOf("}", lineEnd - 1)
+    }
+    return lastBrace
+  }
   for (;;) {
-    template.lastIndex = position
-    const match = template.exec(text)
-    if (!match) break
+    const dollar = text.indexOf("$", search)
+    if (dollar === -1) break
+    const parsed = Result.try(() => parseTemplate(text, dollar, lastBraceOnLine))
+    if (Result.isFailure(parsed)) {
+      throw interpolationError(
+        path,
+        new ComposeError(`Invalid template: ${JSON.stringify(text)}`)
+      )
+    }
+    if (parsed.success === undefined) {
+      search = dollar + 1
+      continue
+    }
+    const template = parsed.success
     const replaced = Result.try(() =>
-      replacement(match[0], lookup, onUnset, expansion)
+      replacement(template, lookup, onUnset, expansion)
     )
     if (Result.isFailure(replaced)) {
       const failure =
-        replaced.failure instanceof InvalidTemplate
-          ? new ComposeError(`Invalid template: ${JSON.stringify(text)}`)
-          : replaced.failure instanceof ComposeError
-            ? replaced.failure
-            : new ComposeError(String(replaced.failure))
+        replaced.failure instanceof ComposeError
+          ? replaced.failure
+          : new ComposeError(String(replaced.failure))
       throw interpolationError(path, failure)
     }
-    const [value, consumed] = replaced.success
+    const value = replaced.success
     // Checked before the piece joins the result.
     expansion.total += value.length
-    if (output.length + (match.index - position) + value.length > MAX_SUBSTITUTED_VALUE) {
+    if (output.length + (dollar - position) + value.length > MAX_SUBSTITUTED_VALUE) {
       throw interpolationError(
         path,
         new ComposeError(
@@ -2360,8 +2398,9 @@ function substituteTemplate(
         )
       )
     }
-    output += text.slice(position, match.index) + value
-    position = match.index + consumed
+    output += text.slice(position, dollar) + value
+    position = dollar + template.length
+    search = position
   }
   return output + text.slice(position)
 }
@@ -2376,100 +2415,134 @@ function interpolationError(path: string, failure: ComposeError): ComposeError {
 
 class InvalidTemplate extends Error {}
 
-const OPERATORS = [":?", "?", ":-", "-", ":+", "+"] as const
-
-// The value of the first template in `matched`, and how much of `matched`
-// it takes: up to its first closing brace when it has a default.
-function replacement(
-  matched: string,
-  lookup: Lookup,
-  onUnset: (name: string) => void,
-  expansion: Expansion
-): readonly [string, number] {
-  // The operator is the one that appears first in the whole match.
-  const operator = [...OPERATORS]
-    .filter((candidate) => matched.includes(candidate))
-    .sort((left, right) => matched.indexOf(left) - matched.indexOf(right))[0]
-  const closing = firstClosingBrace(matched)
-  let template = matched
-  if (closing > -1) template = template.slice(0, closing + 1)
-  const match = new RegExp(TEMPLATE.source, "iu").exec(template)
-  if (match?.[1]) return ["$", matched.length]
-  let name = match?.[2] ?? ""
-  let braced = false
-  if (!name) {
-    name = match?.[3] ?? ""
-    braced = true
-  }
-  if (!name) throw new InvalidTemplate()
-  if (braced && operator && name.includes(operator)) {
-    const separator = name.indexOf(operator)
-    const variable = name.slice(0, separator)
-    const word = name.slice(separator + operator.length)
-    const value = lookup(variable)
-    const nested = (text: string) => {
-      if (expansion.depth >= MAX_SUBSTITUTION_DEPTH) {
-        throw new ComposeError(
-          `variable defaults nest more than ${MAX_SUBSTITUTION_DEPTH} deep`
-        )
-      }
-      expansion.depth += 1
-      const value = Result.try(() =>
-        substituteTemplate(text, lookup, onUnset, "", expansion)
-      )
-      expansion.depth -= 1
-      if (Result.isFailure(value)) throw value.failure
-      return value.success
+type Template =
+  | { readonly kind: "escaped"; readonly length: number }
+  | { readonly kind: "named"; readonly length: number; readonly name: string }
+  | {
+      readonly kind: "modified"
+      readonly length: number
+      readonly name: string
+      readonly operator: ":-" | "-" | ":+" | "+" | ":?" | "?"
+      readonly word: string
     }
-    let substituted: string
-    switch (operator) {
-      case ":-":
-      case "-":
-        substituted =
-          value === undefined || (operator === ":-" && value === "")
-            ? nested(word)
-            : value
-        break
-      case ":+":
-      case "+":
-        substituted =
-          value !== undefined && (operator === "+" || value !== "")
-            ? nested(word)
-            : (value ?? "")
-        break
-      default:
-        if (value === undefined || (operator === ":?" && value === "")) {
-          const reason = nested(word)
-          throw new ComposeError(
-            reason
-              ? `required variable ${variable} is missing a value: ${reason}`
-              : `required variable ${variable} is missing a value`
-          )
-        }
-        substituted = value
-    }
-    return [substituted, template.length]
-  }
-  const value = lookup(name)
-  if (value === undefined) onUnset(name)
-  return [value ?? "", matched.length]
-}
 
-// compose-go's getFirstBraceClosingIndex, which skips the character after
-// each `{`.
-function firstClosingBrace(text: string): number {
+const isNameStart = (character: string | undefined) =>
+  character !== undefined && /^[_a-z]$/iu.test(character)
+const isNameCharacter = (character: string | undefined) =>
+  character !== undefined && /^[_a-z0-9]$/iu.test(character)
+
+// The template at `dollar` (a `$`), as compose-go's pattern matches it:
+// undefined when it matches none (the `$` is literal), and InvalidTemplate
+// for a `${` that's no template.
+function parseTemplate(
+  text: string,
+  dollar: number,
+  lastBraceOnLine: (at: number) => number
+): Template | undefined {
+  const next = text[dollar + 1]
+  if (next === "$") return { kind: "escaped", length: 2 }
+  if (isNameStart(next)) {
+    let end = dollar + 2
+    while (isNameCharacter(text[end])) end += 1
+    return { kind: "named", length: end - dollar, name: text.slice(dollar + 1, end) }
+  }
+  if (next !== "{" || !isNameStart(text[dollar + 2])) {
+    if (next === "{") throw new InvalidTemplate()
+    return undefined
+  }
+  let end = dollar + 3
+  while (isNameCharacter(text[end])) end += 1
+  const name = text.slice(dollar + 2, end)
+  if (text[end] === "}") return { kind: "named", length: end + 1 - dollar, name }
+  const operator =
+    text[end] === ":" && "-+?".includes(text[end + 1] ?? "x")
+      ? (`:${text[end + 1]}` as ":-" | ":+" | ":?")
+      : "-+?".includes(text[end] ?? "x")
+        ? (text[end] as "-" | "+" | "?")
+        : undefined
+  const last = lastBraceOnLine(dollar)
+  if (operator === undefined || last < end + operator.length) {
+    throw new InvalidTemplate()
+  }
+  // compose-go's getFirstBraceClosingIndex, which skips the character
+  // after each `{`, up to the line's last `}`.
+  let closing = -1
   let open = 0
-  for (let index = 0; index < text.length; index += 1) {
+  for (let index = dollar; index <= last; index += 1) {
     if (text[index] === "}") {
       open -= 1
-      if (open === 0) return index
+      if (open === 0) {
+        closing = index
+        break
+      }
     }
     if (text[index] === "{") {
       open += 1
       index += 1
     }
   }
-  return -1
+  const stop = closing === -1 ? last : closing
+  return {
+    kind: "modified",
+    length: stop + 1 - dollar,
+    name,
+    operator,
+    word: text.slice(end + operator.length, stop),
+  }
+}
+
+// A template's value.
+function replacement(
+  template: Template,
+  lookup: Lookup,
+  onUnset: (name: string) => void,
+  expansion: Expansion
+): string {
+  if (template.kind === "escaped") return "$"
+  if (template.kind === "named") {
+    const value = lookup(template.name)
+    if (value === undefined) onUnset(template.name)
+    return value ?? ""
+  }
+  const { name: variable, operator, word } = template
+  const value = lookup(variable)
+  const nested = (text: string) => {
+    if (expansion.depth >= MAX_SUBSTITUTION_DEPTH) {
+      throw new ComposeError(
+        `variable defaults nest more than ${MAX_SUBSTITUTION_DEPTH} deep`
+      )
+    }
+    expansion.depth += 1
+    const result = Result.try(() =>
+      substituteTemplate(text, lookup, onUnset, "", expansion)
+    )
+    expansion.depth -= 1
+    if (Result.isFailure(result)) throw result.failure
+    return result.success
+  }
+  switch (operator) {
+    case ":-":
+    case "-":
+      return value === undefined || (operator === ":-" && value === "")
+        ? nested(word)
+        : value
+    case ":+":
+    case "+":
+      return value !== undefined && (operator === "+" || value !== "")
+        ? nested(word)
+        : (value ?? "")
+    default: {
+      if (value === undefined || (operator === ":?" && value === "")) {
+        const reason = nested(word)
+        throw new ComposeError(
+          reason
+            ? `required variable ${variable} is missing a value: ${reason}`
+            : `required variable ${variable} is missing a value`
+        )
+      }
+      return value
+    }
+  }
 }
 
 // ------------------------------------------------------------ ordering

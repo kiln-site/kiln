@@ -55,6 +55,8 @@ export interface RelayConfig {
   advertisedHost: string
   advertisedHostInferred: boolean
   backupTimeoutMs: number
+  /** How long reading an app's Compose file may take. */
+  composeLoadTimeoutMs: number
   brickCatalogUrl: string
   bootstrapToken: string | null
   browserOrigin: string
@@ -204,6 +206,12 @@ export function loadConfig(
     backupTimeoutMs:
       positiveIntegerEnvironment(environment, "KILN_BACKUP_TIMEOUT", 60) *
       60_000,
+    composeLoadTimeoutMs:
+      positiveIntegerEnvironment(
+        environment,
+        "KILN_RELAY_COMPOSE_LOAD_TIMEOUT",
+        10
+      ) * 1_000,
     brickCatalogUrl:
       legacyFileCatalogUrl?.protocol === "file:"
         ? legacyFileCatalogUrl.href

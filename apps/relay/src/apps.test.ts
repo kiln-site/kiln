@@ -31,7 +31,9 @@ afterEach(() => {
 })
 
 async function createdApp() {
-  const harness = await relayHarness()
+  // `deploy` runs fake time far faster than the Compose loader's worker
+  // runs in real time, so its timeout is out of the way.
+  const harness = await relayHarness({ KILN_RELAY_COMPOSE_LOAD_TIMEOUT: "3600" })
   await harness.apps.create({ id: appId, name: "Website" })
   fakeDocker.images.set("nginx:alpine", {})
   return harness
@@ -625,6 +627,42 @@ describe("apps", () => {
       appContainers().find(
         (container) => container.labels["com.docker.compose.service"] === name
       )
+
+    it("stops reading a Compose file when its deployment is cancelled", async () => {
+      const harness = await createdApp()
+      // Seconds of work for the loader's worker.
+      const compose = [
+        "services:",
+        "  web:",
+        "    image: nginx:alpine",
+        `x-pairs: [${Array.from({ length: 20_000 }, (_, index) => `&a${index} x, *a${index}`).join(", ")}]`,
+      ].join("\n")
+      const deploying = harness.apps.deploy(
+        relayDeployAppSchema.parse({
+          appId,
+          config: { ...defaultAppConfig, compose, sourceType: "compose" },
+          name: "Website",
+        })
+      )
+      await vi.waitFor(async () =>
+        expect((await harness.apps.get(appId)).deployment?.state).toBe("running")
+      )
+      // Let the worker get going.
+      await new Promise((resolve) => setTimeout(resolve, 300))
+
+      // Deleting the app cancels its deployment, and the load with it.
+      const started = performance.now()
+      await harness.apps.delete({ appId, deleteData: false })
+      await deploying
+      expect(performance.now() - started).toBeLessThan(2_000)
+
+      // With the worker gone, the process has nothing left to compute.
+      const before = process.cpuUsage()
+      await new Promise((resolve) => setTimeout(resolve, 300))
+      const used = process.cpuUsage(before)
+      expect((used.user + used.system) / 1_000).toBeLessThan(150)
+      expect(appContainers()).toEqual([])
+    })
 
     it("runs one container per service, labeled as Compose labels them", async () => {
       const harness = await createdApp()
