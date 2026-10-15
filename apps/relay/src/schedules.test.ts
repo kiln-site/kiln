@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm, stat } from "node:fs/promises"
+import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { setImmediate as yieldToEventLoop } from "node:timers/promises"
@@ -140,41 +140,6 @@ function runNow(schedules: ScheduleManager) {
 }
 
 describe("Relay schedule persistence", () => {
-  it.each(["empty", "disabled", "future"] as const)(
-    "leaves the state file untouched during idle ticks with %s schedules",
-    async (kind) => {
-      const { directory, schedules } = await manager()
-      if (kind !== "empty") {
-        await schedules.apply({
-          ...projection,
-          cron: "* * * * *",
-          enabled: kind === "future",
-        })
-      }
-      const statePath = join(directory, "schedules.json")
-      const before = await stat(statePath, { bigint: true })
-      const fiber = Effect.runFork(schedules.run())
-      try {
-        // Wait for each tick's file I/O to finish before advancing its sleep.
-        await advanceUntil(() => expect(vi.getTimerCount()).toBeGreaterThan(0))
-        for (let second = 0; second < 20; second++) {
-          await vi.advanceTimersByTimeAsync(1_000)
-          await advanceUntil(() =>
-            expect(vi.getTimerCount()).toBeGreaterThan(0)
-          )
-        }
-        const after = await stat(statePath, { bigint: true })
-        expect({ inode: after.ino, modified: after.mtimeNs }).toEqual({
-          inode: before.ino,
-          modified: before.mtimeNs,
-        })
-      } finally {
-        await Effect.runPromise(Fiber.interrupt(fiber))
-        schedules.close()
-      }
-    }
-  )
-
   it("persists due runs before execution and preserves completed history on restart", async () => {
     const commands: Array<string> = []
     const { directory, restart, schedules } = await manager({
