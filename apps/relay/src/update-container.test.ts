@@ -213,12 +213,78 @@ describe("container replacement", () => {
   )
 
   effectIt.effect(
+    "restarts the old container when renaming it aside fails",
+    () =>
+      Effect.gen(function* () {
+        const { current, docker, oldImage } = yield* runningHearth()
+        // A backup left behind by an earlier update holds the name.
+        const leftover = fakeDocker.addContainer({ name: "hearth-backup" })
+
+        const failure = yield* replaceContainerEffect(
+          replacement,
+          docker,
+          ignorePhase
+        ).pipe(Effect.flip)
+
+        expect(failure.reason).toContain("is already in use")
+        expect(failure.rollbackFailures).toEqual([])
+        expect(hearth()?.id).toBe(current.id)
+        expect(hearth()?.state.running).toBe(true)
+        expect(fakeDocker.container("hearth-backup")?.id).toBe(leftover.id)
+        expect(channelTarget()).toBe(oldImage)
+      })
+  )
+
+  effectIt.effect(
+    "puts back the old container's name when a rename Docker applied reports a failure",
+    () =>
+      Effect.gen(function* () {
+        const { current, docker, oldImage } = yield* runningHearth()
+        fakeDocker.failAfterNext(
+          { command: "rename", target: "hearth" },
+          "context deadline exceeded"
+        )
+
+        const failure = yield* replaceContainerEffect(
+          replacement,
+          docker,
+          ignorePhase
+        ).pipe(Effect.flip)
+
+        expect(failure.rollbackFailures).toEqual([])
+        expect(hearth()?.id).toBe(current.id)
+        expect(hearth()?.state.running).toBe(true)
+        expect(fakeDocker.container("hearth-backup")).toBeUndefined()
+        expect(channelTarget()).toBe(oldImage)
+      })
+  )
+
+  effectIt.effect(
+    "restarts the old container when a stop that stopped it reports a failure",
+    () =>
+      Effect.gen(function* () {
+        const { current, docker } = yield* runningHearth()
+        fakeDocker.failAfterNext(
+          { command: "stop", target: "hearth" },
+          "context deadline exceeded"
+        )
+
+        yield* replaceContainerEffect(replacement, docker, ignorePhase).pipe(
+          Effect.flip
+        )
+
+        expect(hearth()?.id).toBe(current.id)
+        expect(hearth()?.state.running).toBe(true)
+      })
+  )
+
+  effectIt.effect(
     "attempts every rollback step and reports rollback failures",
     () =>
       Effect.gen(function* () {
         const { current, docker, oldImage } = yield* runningHearth()
         fakeDocker.unhealthyImages.add(channelReference)
-        fakeDocker.failNext({ command: "rm", target: "hearth" }, "removal failed")
+        fakeDocker.failNext({ command: "rm" }, "removal failed")
 
         const failure = yield* replaceContainerEffect(
           replacement,
