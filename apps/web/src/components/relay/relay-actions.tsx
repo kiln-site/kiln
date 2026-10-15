@@ -45,34 +45,90 @@ export const RelayPauseButton = React.memo(function RelayPauseButton({
   relay: RelayPauseTarget
 }) {
   const { pending, toggle } = useRelayPauseToggle(relay)
+  const [confirming, setConfirming] = React.useState(false)
 
   return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <Button
-          type="button"
-          size="icon-sm"
-          variant="ghost"
-          aria-label={`${relay.enabled ? "Pause" : "Resume"} ${relay.name}`}
-          disabled={pending}
-          className="text-muted-foreground hover:text-foreground"
-          onClick={toggle}
-        >
-          {pending ? (
-            <LoaderCircle className="animate-spin" />
-          ) : relay.enabled ? (
-            <Pause />
-          ) : (
-            <Play />
-          )}
-        </Button>
-      </TooltipTrigger>
-      <TooltipContent side="bottom" sideOffset={6}>
-        {relay.enabled ? "Pause" : "Resume"}
-      </TooltipContent>
-    </Tooltip>
+    <>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Button
+            type="button"
+            size="icon-sm"
+            variant="ghost"
+            aria-label={`${relay.enabled ? "Pause" : "Resume"} ${relay.name}`}
+            disabled={pending}
+            className="text-muted-foreground hover:text-foreground"
+            onClick={() =>
+              relay.enabled ? setConfirming(true) : void toggle()
+            }
+          >
+            {pending ? (
+              <LoaderCircle className="animate-spin" />
+            ) : relay.enabled ? (
+              <Pause />
+            ) : (
+              <Play />
+            )}
+          </Button>
+        </TooltipTrigger>
+        <TooltipContent side="bottom" sideOffset={6}>
+          {relay.enabled ? "Pause" : "Resume"}
+        </TooltipContent>
+      </Tooltip>
+      {confirming ? (
+        <RelayPauseDialog relay={relay} onClose={() => setConfirming(false)} />
+      ) : null}
+    </>
   )
 })
+
+// Mounted only while open.
+export function RelayPauseDialog({
+  relay,
+  onClose,
+}: {
+  relay: RelayPauseTarget
+  onClose: () => void
+}) {
+  const { pending, toggle } = useRelayPauseToggle(relay)
+
+  async function pause() {
+    await toggle()
+    onClose()
+  }
+
+  return (
+    <Dialog
+      open
+      onOpenChange={(open) => {
+        if (!open && !pending) onClose()
+      }}
+    >
+      <DialogContent className="sm:max-w-md" showCloseButton={!pending}>
+        <DialogHeader>
+          <DialogTitle>Pause {relay.name}?</DialogTitle>
+          <DialogDescription>
+            Hearth stops requesting data from this Relay. Servers keep running.
+          </DialogDescription>
+        </DialogHeader>
+        <DialogFooter>
+          <Button
+            disabled={pending}
+            type="button"
+            variant="ghost"
+            onClick={onClose}
+          >
+            Cancel
+          </Button>
+          <Button disabled={pending} type="button" onClick={() => void pause()}>
+            {pending ? <LoaderCircle className="animate-spin" /> : <Pause />}
+            Pause Relay
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
 
 interface RelayPauseTarget {
   enabled: boolean
@@ -116,7 +172,7 @@ export function useRelayPauseToggle(relay: RelayPauseTarget) {
     )
   }
 
-  return { pending, toggle: () => void togglePaused() }
+  return { pending, toggle: togglePaused }
 }
 
 export const RelayDeleteButton = React.memo(function RelayDeleteButton({

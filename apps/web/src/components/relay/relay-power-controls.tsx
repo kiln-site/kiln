@@ -34,6 +34,7 @@ import {
 
 import {
   messageFrom,
+  RelayPauseDialog,
   useRelayPauseToggle,
 } from "@/components/relay/relay-actions"
 import { useRelayLiveStatus } from "@/components/relay/relay-presentation"
@@ -67,9 +68,9 @@ export const RelayPowerControls = React.memo(function RelayPowerControls({
   relay: RelayDirectoryEntry
 }) {
   const [menuOpen, setMenuOpen] = React.useState(false)
-  const [confirming, setConfirming] = React.useState<RelayRestartTarget | null>(
-    null
-  )
+  const [confirming, setConfirming] = React.useState<
+    RelayRestartTarget | "pause" | null
+  >(null)
   const pause = useRelayPauseToggle(relay)
   const { connected } = useRelayLiveStatus(relay)
   if (
@@ -81,9 +82,11 @@ export const RelayPowerControls = React.memo(function RelayPowerControls({
 
   const restartUnavailable = !relay.enabled || !connected
 
+  // Pausing asks first; resuming doesn't.
   function togglePause() {
     setMenuOpen(false)
-    pause.toggle()
+    if (relay.enabled) setConfirming("pause")
+    else void pause.toggle()
   }
 
   function confirmRestart(target: RelayRestartTarget) {
@@ -99,11 +102,11 @@ export const RelayPowerControls = React.memo(function RelayPowerControls({
           size="sm"
           className={
             relay.enabled
-              ? "hidden h-9 w-[6.5rem] justify-center gap-1.5 !border-red-500/65 !bg-red-600 px-3 text-xs !text-white shadow-none hover:!border-red-400 hover:!bg-red-500 disabled:!border-red-500/35 disabled:!bg-red-600/45 disabled:!text-white/70 md:inline-flex"
+              ? "hidden h-9 w-[6.5rem] justify-center gap-1.5 !border-yellow-400/70 !bg-yellow-400 px-3 text-xs !text-yellow-950 shadow-none hover:!border-yellow-300 hover:!bg-yellow-300 disabled:!border-yellow-400/35 disabled:!bg-yellow-400/45 disabled:!text-yellow-950/70 md:inline-flex"
               : "hidden h-9 w-[6.5rem] justify-center gap-1.5 !border-blue-500/65 !bg-blue-600 px-3 text-xs !text-white shadow-none hover:!border-blue-400 hover:!bg-blue-500 disabled:!border-blue-500/35 disabled:!bg-blue-600/45 disabled:!text-white/70 md:inline-flex"
           }
           disabled={pause.pending}
-          onClick={pause.toggle}
+          onClick={togglePause}
         >
           {pause.pending ? (
             <LoaderCircle className="animate-spin" />
@@ -190,7 +193,9 @@ export const RelayPowerControls = React.memo(function RelayPowerControls({
           </div>
         </PopoverContent>
       </Popover>
-      {confirming ? (
+      {confirming === "pause" ? (
+        <RelayPauseDialog relay={relay} onClose={() => setConfirming(null)} />
+      ) : confirming ? (
         <RelayRestartDialog
           relay={relay}
           target={confirming}
