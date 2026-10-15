@@ -183,8 +183,8 @@ const AppSidebarView = React.memo(function AppSidebarView({
       relayConfigured={relayConfigured}
     >
       <Sidebar collapsible="icon" className="border-sidebar-border/80">
-        <SidebarHeader className="gap-1.5 px-2 py-2">
-          <SidebarMenu className="h-16 justify-center">
+        <SidebarHeader className="h-20 shrink-0 justify-center px-2 py-2">
+          <SidebarMenu>
             <SidebarMenuItem>
               <SidebarMenuButton
                 size="lg"
@@ -199,8 +199,13 @@ const AppSidebarView = React.memo(function AppSidebarView({
               <HeaderNotificationsBell />
             </SidebarMenuItem>
           </SidebarMenu>
-          <RouteCommandMenuTrigger />
         </SidebarHeader>
+
+        <SidebarSeparator className="mx-0 data-horizontal:w-full" />
+
+        <div className="shrink-0 p-2 group-data-[collapsible=icon]:px-0">
+          <RouteCommandMenuTrigger />
+        </div>
 
         <SidebarSeparator />
 
