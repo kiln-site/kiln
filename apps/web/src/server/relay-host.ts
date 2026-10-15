@@ -4,9 +4,11 @@ import {
   relayHostTerminalClaimSchema,
   relayHostTerminalWriteSchema,
   relayIdSchema,
+  relayRestartV1Feature,
 } from "@workspace/contracts"
 import { z } from "zod"
 
+import type { PersistedRelay } from "@/lib/relay-registry"
 import { databaseRpc } from "@/server/managed-database-access"
 import { authorizedRelay } from "@/server/relay-access"
 
@@ -61,3 +63,35 @@ export const restartRelayTerminal = createServerFn({ method: "POST" })
     await databaseRpc(relay, "relay.terminal.restart", {}, 30_000, user.id)
     return { restarted: true }
   })
+
+// Requires `relay.update`, as updating already restarts the Relay. Game
+// servers, apps, and databases keep running.
+export const restartRelay = createServerFn({ method: "POST" })
+  .validator(targetSchema)
+  .handler(async ({ data }) => {
+    const { relay, user } = await authorizedRelay(data.relayId, "relay.update")
+    await requireRelayRestart(relay)
+    await databaseRpc(relay, "relay.restart", {}, 30_000, user.id)
+    return { restarting: true }
+  })
+
+// Requires `relay.terminal`, as a root shell on the host could reboot it
+// anyway.
+export const restartRelayHost = createServerFn({ method: "POST" })
+  .validator(targetSchema)
+  .handler(async ({ data }) => {
+    const { relay, user } = await authorizedRelay(
+      data.relayId,
+      "relay.terminal"
+    )
+    await requireRelayRestart(relay)
+    await databaseRpc(relay, "relay.host.restart", {}, 120_000, user.id)
+    return { restarting: true }
+  })
+
+async function requireRelayRestart(relay: PersistedRelay): Promise<void> {
+  const { relayConnectionFeatures } = await import("@/lib/relay-connection")
+  if (!relayConnectionFeatures(relay.id).has(relayRestartV1Feature)) {
+    throw new Error("Update this Relay to restart it from Hearth.")
+  }
+}

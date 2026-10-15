@@ -130,6 +130,7 @@ import {
   traefikStaticConfiguration,
 } from "./traefik.js"
 import { forkPromise } from "./effect/promise.js"
+import { DockerEngine } from "./docker-engine.js"
 import {
   inspectEncryptedPlatformBackup,
   restoreEncryptedPlatformBackup,
@@ -245,6 +246,7 @@ const docker = new DockerDriver(
 )
 const databases = new DatabaseDriver(config, docker, databaseConnections)
 const hostShell = new HostShell(config)
+const relayEngine = new DockerEngine(config.dockerSocket)
 const terminals = new ContainerTerminals(config)
 const systemUpdates = new SystemUpdateManager(config)
 const filesystem = new FilesystemDriver(config)
@@ -1235,6 +1237,33 @@ async function executeControlRequest(
         "relay.systemUpdates.status",
         systemUpdates.status(requiredString(payload, "operationId"))
       )
+    case "relay.restart": {
+      // Fails here, while Hearth is still waiting, when the Relay isn't a
+      // container Docker can restart.
+      const relayContainer = await runRelayEffect(
+        "relay.restart.inspect",
+        relayEngine.inspectContainer(hostname())
+      )
+      // Docker restarts the Relay once Hearth has its answer.
+      forkRelayEffect(
+        "relay.restart",
+        Effect.sleep("1 second").pipe(
+          Effect.andThen(
+            relayEngine.restartContainer(relayContainer.Id, { seconds: 15 })
+          ),
+          Effect.withSpan("Relay.restart"),
+          Effect.catch((cause) =>
+            Effect.sync(() =>
+              reportRelayError(cause, { operation: "relay.restart" })
+            )
+          )
+        )
+      )
+      return { restarting: true }
+    }
+    case "relay.host.restart":
+      await hostShell.restartHost()
+      return { restarting: true }
     case "relay.networking.read":
       return (await lifecycle.networking()) ?? null
     case "relay.networking.write":

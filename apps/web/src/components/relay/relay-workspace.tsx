@@ -2,7 +2,7 @@ import * as React from "react"
 import { useQuery } from "@tanstack/react-query"
 import { RadioTower } from "lucide-react"
 
-import { RelayPauseButton } from "@/components/relay/relay-actions"
+import { RelayPowerControls } from "@/components/relay/relay-power-controls"
 import { useRelayLiveStatus } from "@/components/relay/relay-presentation"
 import {
   RelayWorkspaceContext,
@@ -133,13 +133,22 @@ function RelayStatusLabel({ relay }: { relay: RelayDirectoryEntry }) {
 }
 
 function RelayHeaderActions({ relay }: { relay: RelayDirectoryEntry }) {
-  const { data: canPause = false } = useQuery({
+  const { data: permissions } = useQuery({
     ...accessCapabilitiesQueryOptions(),
-    select: (capabilities) =>
-      canAccessRelayPermission(capabilities, relay.id, "relay.pause"),
+    select: (capabilities) => ({
+      pause: canAccessRelayPermission(capabilities, relay.id, "relay.pause"),
+      restartHost: canAccessRelayPermission(
+        capabilities,
+        relay.id,
+        "relay.terminal"
+      ),
+      restartRelay: canAccessRelayPermission(
+        capabilities,
+        relay.id,
+        "relay.update"
+      ),
+    }),
   })
-  if (!canPause) return null
-  return (
-<RelayPauseButton relay={relay} />
-  )
+  if (!permissions) return null
+  return <RelayPowerControls permissions={permissions} relay={relay} />
 }

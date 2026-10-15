@@ -25,6 +25,7 @@ import {
   relayLogsV1Feature,
   relayProxyConfigurationV1Feature,
   relayHostFilesV1Feature,
+  relayRestartV1Feature,
   appIdFromFileRoot,
   isRelayFileRoot,
   relayFileRequestReplayV1Feature,
@@ -654,6 +655,7 @@ function authenticateSocket(
           relayLogsV1Feature,
           relayProxyConfigurationV1Feature,
           relayHostFilesV1Feature,
+          relayRestartV1Feature,
         ],
         protocol: relayControlProtocol,
         relayBuild: relayBuildLabel(),
@@ -937,6 +939,9 @@ function actionForRequest(request: RelayControlRequest): RelayAction | null {
       return "relay.read"
     case "relay.update.apply":
       return "relay.update"
+    // Updating already restarts the Relay.
+    case "relay.restart":
+      return "relay.update"
     case "relay.rename":
       return "relay.rename"
     case "relay.audit.list":
@@ -963,6 +968,9 @@ function actionForRequest(request: RelayControlRequest): RelayAction | null {
     case "relay.terminal.write":
     case "relay.terminal.claim":
     case "relay.terminal.restart":
+      return "relay.terminal"
+    // A root shell on the host could reboot it anyway.
+    case "relay.host.restart":
       return "relay.terminal"
     case "relay.database.read":
       return "relay.database.read"

@@ -30,6 +30,9 @@ export const relayHostFilesV1Feature = "relay-host-files-v1"
 export const relayLogsV1Feature = "relay-logs-v1"
 // The Relay answers `relay.proxy.config.read` with its proxy configuration.
 export const relayProxyConfigurationV1Feature = "relay-proxy-configuration-v1"
+// The Relay restarts its own container (`relay.restart`) and its host
+// (`relay.host.restart`).
+export const relayRestartV1Feature = "relay-restart-v1"
 export const relayBrowserAuthorizationReviseMaxItems = 256
 
 export const relayControlOperations = [
@@ -37,6 +40,7 @@ export const relayControlOperations = [
   "relay.system.inspect",
   "relay.update.apply",
   "relay.update.status",
+  "relay.restart",
   "relay.rename",
   "relay.audit.list",
   "relay.networking.read",
@@ -50,6 +54,7 @@ export const relayControlOperations = [
   "relay.tailscale.stack.remove",
   "relay.host.read",
   "relay.host.files.mount",
+  "relay.host.restart",
   "relay.database.read",
   "relay.terminal.attach",
   "relay.terminal.heartbeat",
@@ -149,6 +154,8 @@ export type RelayControlOperation = (typeof relayControlOperations)[number]
 const auditedRelayControlOperations = new Set<RelayControlOperation>([
   "relay.rename",
   "relay.update.apply",
+  "relay.restart",
+  "relay.host.restart",
   "relay.pairing.create",
   "relay.pairing.revoke",
   "relay.clients.update",
@@ -214,6 +221,8 @@ export function relayControlDeadlineMs(
 ): number {
   if (operation === "relay.terminal.attach") return 360_000
   if (operation === "relay.update.apply") return 15 * 60_000
+  // The host's shell helper may have to be pulled first.
+  if (operation === "relay.host.restart") return 120_000
   if (operation === "relay.tailscale.install") return 240_000
   if (operation === "relay.tailscale.stack.apply") return 240_000
   if (operation === "relay.tailscale.stack.remove") return 120_000

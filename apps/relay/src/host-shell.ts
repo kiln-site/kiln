@@ -80,6 +80,21 @@ export class HostShell {
       : null
   }
 
+  // Reboots the host with its own tools. The reboot waits a moment, so the
+  // caller hears back before the host's network goes down.
+  async restartHost(): Promise<void> {
+    const container = await this.container()
+    await Effect.runPromise(
+      this.#engine.exec(container, [
+        ...hostNamespaces,
+        "--",
+        "sh",
+        "-c",
+        HOST_RESTART_SCRIPT,
+      ])
+    )
+  }
+
   // Removes the helper, when host access has been turned off.
   async remove(): Promise<void> {
     const existing = await this.#inspect()
@@ -168,15 +183,7 @@ export class HostShell {
 export function hostTerminalTarget(containerId: string): TerminalTarget {
   return {
     command: [
-      "nsenter",
-      "--target",
-      "1",
-      "--mount",
-      "--uts",
-      "--ipc",
-      "--net",
-      "--root",
-      "--wd",
+      ...hostNamespaces,
       "--no-fork",
       "--",
       "sh",
@@ -192,3 +199,30 @@ export function hostTerminalTarget(containerId: string): TerminalTarget {
 }
 
 export const HOST_TERMINAL_KEY = "relay:host"
+
+const hostNamespaces = [
+  "nsenter",
+  "--target",
+  "1",
+  "--mount",
+  "--uts",
+  "--ipc",
+  "--net",
+  "--root",
+  "--wd",
+] as const
+
+// systemd's reboot where systemd runs the host, otherwise whichever reboot
+// command the host has. Docker stops and later restarts its containers, the
+// Relay's and the game servers', apps', and databases' among them.
+const HOST_RESTART_SCRIPT = `if [ -d /run/systemd/system ] && command -v systemctl >/dev/null 2>&1; then
+  set -- systemctl reboot
+elif command -v shutdown >/dev/null 2>&1; then
+  set -- shutdown -r now
+elif command -v reboot >/dev/null 2>&1; then
+  set -- reboot
+else
+  echo "The host has no reboot command" >&2
+  exit 127
+fi
+(sleep 2; "$@") </dev/null >/dev/null 2>&1 &`

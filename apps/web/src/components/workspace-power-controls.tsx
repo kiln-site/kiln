@@ -260,7 +260,7 @@ export function WorkspacePowerControls({
   )
 }
 
-function PowerActionButton({
+export function PowerActionButton({
   description,
   disabled,
   icon,
