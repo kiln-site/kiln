@@ -108,7 +108,8 @@ export function RelayPauseDialog({
         <DialogHeader>
           <DialogTitle>Pause {relay.name}?</DialogTitle>
           <DialogDescription>
-            Hearth stops requesting data from this Relay. Servers keep running.
+            Hearth stops requesting data from this Relay. Game servers keep
+            running.
           </DialogDescription>
         </DialogHeader>
         <DialogFooter>

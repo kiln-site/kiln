@@ -319,6 +319,13 @@ export class SystemUpdateManager {
     )
   }
 
+  // Whether an update this Relay started is still running.
+  running() {
+    return this.#runningBatchEffect().pipe(
+      Effect.map((batch) => batch !== null)
+    )
+  }
+
   #runningBatchEffect() {
     const active = this.#activeBatch
     if (!active) return Effect.succeed<UpdateBatch | null>(null)

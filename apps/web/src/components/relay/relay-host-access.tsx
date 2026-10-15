@@ -27,14 +27,22 @@ import { getRelayHostAccess, mountRelayHostFiles } from "@/server/relay-host"
 
 const hostAccessKey = (relayId: string) => ["relay-host-access", relayId]
 
+// Whether the Relay allows host access, and the state of its host files.
+export function relayHostAccessQueryOptions(relayId: string) {
+  return {
+    queryKey: hostAccessKey(relayId),
+    queryFn: () => getRelayHostAccess({ data: { relayId } }),
+    retry: false,
+    staleTime: 30_000,
+  }
+}
+
 function useRelayHostAccess() {
   const { relay } = useRelayWorkspace()
   const { connected } = useRelayLiveStatus(relay)
   const access = useQuery({
-    queryKey: hostAccessKey(relay.id),
-    queryFn: () => getRelayHostAccess({ data: { relayId: relay.id } }),
+    ...relayHostAccessQueryOptions(relay.id),
     enabled: connected,
-    retry: false,
     // While the Relay restarts to mount host files, check until it's back.
     staleTime: (query) =>
       query.state.data?.files.status === "mounting" ? 0 : 30_000,

@@ -95,9 +95,14 @@ export const restartRelayHost = createServerFn({ method: "POST" })
   })
 
 async function requireRelayRestart(relay: PersistedRelay): Promise<void> {
-  const { relayConnectionFeatures } = await import("@/lib/relay-connection")
+  const { isRelayUpdating, relayConnectionFeatures } =
+    await import("@/lib/relay-connection")
   if (!relayConnectionFeatures(relay.id).has(relayRestartV1Feature)) {
     throw new Error("Update this Relay to restart it from Hearth.")
+  }
+  // A restart could interrupt the update replacing the Relay.
+  if (isRelayUpdating(relay.id)) {
+    throw new Error("Wait for this Relay's update to finish.")
   }
 }
 

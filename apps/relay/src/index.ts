@@ -249,6 +249,18 @@ const hostShell = new HostShell(config)
 const relayEngine = new DockerEngine(config.dockerSocket)
 const terminals = new ContainerTerminals(config)
 const systemUpdates = new SystemUpdateManager(config)
+// Set once a restart of the Relay or its host is under way, so a second
+// request in the moment before the Relay goes down doesn't start another.
+let restarting = false
+
+async function refuseRestartUnlessIdle(): Promise<void> {
+  if (restarting) throw new Error("This Relay is already restarting.")
+  if (
+    await runRelayEffect("relay.restart.updateCheck", systemUpdates.running())
+  ) {
+    throw new Error("Wait for this Relay's update to finish.")
+  }
+}
 const filesystem = new FilesystemDriver(config)
 const databaseBrowser = new DatabaseBrowser(filesystem)
 const lifecycle = new LifecycleDriver(
@@ -1238,12 +1250,14 @@ async function executeControlRequest(
         systemUpdates.status(requiredString(payload, "operationId"))
       )
     case "relay.restart": {
+      await refuseRestartUnlessIdle()
       // Fails here, while Hearth is still waiting, when the Relay isn't a
       // container Docker can restart.
       const relayContainer = await runRelayEffect(
         "relay.restart.inspect",
         relayEngine.inspectContainer(hostname())
       )
+      restarting = true
       // Docker restarts the Relay once Hearth has its answer.
       forkRelayEffect(
         "relay.restart",
@@ -1253,16 +1267,24 @@ async function executeControlRequest(
           ),
           Effect.withSpan("Relay.restart"),
           Effect.catch((cause) =>
-            Effect.sync(() =>
+            Effect.sync(() => {
+              restarting = false
               reportRelayError(cause, { operation: "relay.restart" })
-            )
+            })
           )
         )
       )
       return { restarting: true }
     }
     case "relay.host.restart":
-      await hostShell.restartHost()
+      await refuseRestartUnlessIdle()
+      restarting = true
+      try {
+        await hostShell.restartHost()
+      } catch (cause) {
+        restarting = false
+        throw cause
+      }
       return { restarting: true }
     case "relay.resources.read":
       return { history: docker.relayResourceHistory() }

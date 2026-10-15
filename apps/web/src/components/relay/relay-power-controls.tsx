@@ -1,5 +1,5 @@
 import * as React from "react"
-import { useMutation } from "@tanstack/react-query"
+import { useMutation, useQuery } from "@tanstack/react-query"
 import { useRouteContext } from "@tanstack/react-router"
 import {
   EllipsisVertical,
@@ -37,6 +37,7 @@ import {
   RelayPauseDialog,
   useRelayPauseToggle,
 } from "@/components/relay/relay-actions"
+import { relayHostAccessQueryOptions } from "@/components/relay/relay-host-access"
 import { useRelayLiveStatus } from "@/components/relay/relay-presentation"
 import { PowerActionButton } from "@/components/workspace-power-controls"
 import { isDevelopmentBypassIdentity } from "@/lib/development-bypass"
@@ -48,12 +49,14 @@ type RelayRestartTarget = "relay" | "host"
 const restartCopy = {
   host: {
     action: "Restart host",
-    description: "All servers, apps, and databases on this host will restart.",
+    description:
+      "All game servers, apps, and databases on this host will restart.",
     title: (name: string) => `Restart ${name}’s host?`,
   },
   relay: {
     action: "Restart Relay",
-    description: "Servers keep running. The Relay reconnects in a few seconds.",
+    description:
+      "Game servers keep running. The Relay reconnects in a few seconds.",
     title: (name: string) => `Restart ${name}?`,
   },
 } satisfies Record<RelayRestartTarget, unknown>
@@ -72,7 +75,13 @@ export const RelayPowerControls = React.memo(function RelayPowerControls({
     RelayRestartTarget | "pause" | null
   >(null)
   const pause = useRelayPauseToggle(relay)
-  const { connected } = useRelayLiveStatus(relay)
+  const { connected, updating } = useRelayLiveStatus(relay)
+  // Asked when the menu opens: with host access off, the Relay refuses.
+  const { data: hostAccess } = useQuery({
+    ...relayHostAccessQueryOptions(relay.id),
+    enabled: menuOpen && permissions.restartHost && connected,
+    select: (access) => access.terminal,
+  })
   if (
     !permissions.pause &&
     !permissions.restartRelay &&
@@ -80,7 +89,8 @@ export const RelayPowerControls = React.memo(function RelayPowerControls({
   )
     return null
 
-  const restartUnavailable = !relay.enabled || !connected
+  // Restarting mid-update could break the update.
+  const restartUnavailable = !relay.enabled || !connected || updating
 
   // Pausing asks first; resuming doesn't.
   function togglePause() {
@@ -157,7 +167,7 @@ export const RelayPowerControls = React.memo(function RelayPowerControls({
             ) : null}
             {permissions.restartRelay ? (
               <PowerActionButton
-                description="Servers keep running"
+                description="Game servers keep running"
                 disabled={restartUnavailable}
                 icon={<RotateCw className="size-3.5" />}
                 label="Restart Relay"
@@ -166,8 +176,12 @@ export const RelayPowerControls = React.memo(function RelayPowerControls({
             ) : null}
             {permissions.restartHost ? (
               <PowerActionButton
-                description="Reboots everything on this machine"
-                disabled={restartUnavailable}
+                description={
+                  hostAccess === false
+                    ? "Host access is off on this Relay"
+                    : "Reboots everything on this machine"
+                }
+                disabled={restartUnavailable || hostAccess === false}
                 icon={<Power className="size-3.5" />}
                 label="Restart host"
                 tone="kill"

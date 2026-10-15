@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query"
 import { RadioTower } from "lucide-react"
 
 import { RelayPowerControls } from "@/components/relay/relay-power-controls"
+import { useRelayLiveStatus } from "@/components/relay/relay-presentation"
 import { RelayResourceMeters } from "@/components/relay/relay-resource-meters"
 import {
   RelayWorkspaceContext,
@@ -104,6 +105,7 @@ const RelayWorkspaceHeader = React.memo(function RelayWorkspaceHeader({
             />
           }
         >
+          <RelayStatusLabel relay={relay} />
           <span className="hidden shrink-0 items-center gap-1.5 @[40rem]:inline-flex">
             <WorkspaceIdCopyButton
               id={relay.id}
@@ -123,6 +125,20 @@ const RelayWorkspaceHeader = React.memo(function RelayWorkspaceHeader({
     />
   )
 })
+
+// Only when the Relay isn't simply online: its meters and actions can't say
+// why they're idle.
+function RelayStatusLabel({ relay }: { relay: RelayDirectoryEntry }) {
+  const { presentation, relayStatus, updating } = useRelayLiveStatus(relay)
+  if (!updating && (relayStatus === "connected" || relayStatus === "checking"))
+    return null
+  return (
+    <span className="inline-flex shrink-0 items-center gap-1.5">
+      <span>{presentation.label}</span>
+      <WorkspaceMetaSeparator />
+    </span>
+  )
+}
 
 function RelayHeaderActions({ relay }: { relay: RelayDirectoryEntry }) {
   const { data: permissions } = useQuery({

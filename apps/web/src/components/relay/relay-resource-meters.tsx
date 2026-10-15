@@ -30,7 +30,12 @@ export const RelayResourceMeters = React.memo(function RelayResourceMeters({
     () => resourceHistoryStore(relay.id, "relay"),
     [relay.id]
   )
-  const { connected } = useRelayLiveStatus(relay)
+  const { connected, relayStatus } = useRelayLiveStatus(relay)
+  const unavailable = connected
+    ? "Sampling"
+    : relayStatus === "paused"
+      ? "Paused"
+      : "Offline"
   const { data: supported = true } = useQuery({
     ...relayResourcesQueryOptions(relay.id),
     enabled: connected,
@@ -53,6 +58,7 @@ export const RelayResourceMeters = React.memo(function RelayResourceMeters({
             connected={connected}
             historyStore={historyStore}
             resourceId={resourceId}
+            unavailable={unavailable}
           />
         ))}
         <RelayUptimeMeter connected={connected} relayId={relay.id} />
@@ -105,10 +111,12 @@ function RelayResourceMeter({
   connected,
   historyStore,
   resourceId,
+  unavailable,
 }: {
   connected: boolean
   historyStore: ResourceHistoryStore
   resourceId: ResourceId
+  unavailable: string
 }) {
   const resources = React.useSyncExternalStore(
     historyStore.subscribe,
@@ -117,7 +125,7 @@ function RelayResourceMeter({
   )
   const resource = resourceItem(connected ? resources : null, resourceId, {
     storageScope: "kiln",
-    unavailable: connected ? "Sampling" : "Offline",
+    unavailable,
   })
 
   return <ResourceMeter resource={resource} historyStore={historyStore} />

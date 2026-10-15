@@ -1,10 +1,10 @@
 import { createHash } from "node:crypto"
 import { existsSync, readdirSync } from "node:fs"
-import { statfs } from "node:fs/promises"
+import { lstat, readdir, statfs } from "node:fs/promises"
 import { request } from "node:http"
 import { Socket } from "node:net"
-import { hostname } from "node:os"
-import { basename, relative, resolve } from "node:path"
+import { cpus, hostname, totalmem } from "node:os"
+import { basename, join, relative, resolve } from "node:path"
 import { Effect, Option, Queue, Result, Semaphore, Stream } from "effect"
 
 import {
@@ -387,6 +387,8 @@ interface ResourceCacheEntry {
 }
 
 interface DiskUsageCacheEntry {
+  // The folder measured, for the Relay's own total to reuse.
+  directory?: string
   lastAttempt: number
   pending: boolean
   usedBytes: number | null
@@ -408,8 +410,8 @@ export const MAX_CONSOLE_HISTORY_CHARACTERS = 16 * 1024 * 1024
 const STARTUP_READINESS_LOG_LINES = 1_000
 const RESOURCE_HISTORY_WINDOW_MS = 6 * 60_000
 const DISK_USAGE_REFRESH_MS = 60_000
-// The data directory holds every server, so it is walked less often than one
-// server's folder.
+// The data directory holds every server, so it is totalled less often than
+// one server's folder is walked.
 const RELAY_DISK_USAGE_REFRESH_MS = 5 * 60_000
 const DISCOVERY_TIMEOUT_MS = 30_000
 
@@ -455,6 +457,7 @@ export class DockerDriver {
     value: null,
   }
   readonly #relayDiskUsage = initialDiskUsageCacheEntry()
+  #relayProcessCpu: { at: number; usage: NodeJS.CpuUsage } | null = null
   #relayResourceHistory: Array<RelayInstanceResources> = []
   readonly #state: RelayStateStore["Service"]
 
@@ -2055,7 +2058,10 @@ export class DockerDriver {
 
   async #sampleRelayResources(): Promise<RelayInstanceResources> {
     const [stats, filesystem] = await Promise.all([
-      this.#dockerStats(hostname()),
+      // Docker can't find the Relay when it isn't a container or has been
+      // given another hostname. The process's own usage stands in then, so
+      // the disk figures still arrive.
+      this.#dockerStats(hostname()).catch(() => null),
       statfs(this.#config.dataDirectory),
     ])
     const nodeStorageTotal = filesystem.blocks * filesystem.bsize
@@ -2066,7 +2072,7 @@ export class DockerDriver {
     const dataUsed = this.#relayDataUsage()
     return {
       sampledAt: new Date().toISOString(),
-      ...containerCpuAndMemory(stats, 0),
+      ...(stats ? containerCpuAndMemory(stats, 0) : this.#relayProcessUsage()),
       storage: {
         totalBytes: nodeStorageTotal,
         usedBytes: dataUsed,
@@ -2081,6 +2087,36 @@ export class DockerDriver {
     }
   }
 
+  #relayProcessUsage(): Pick<RelayInstanceResources, "cpu" | "memory"> {
+    const now = performance.now()
+    const usage = process.cpuUsage()
+    const previous = this.#relayProcessCpu
+    this.#relayProcessCpu = { at: now, usage }
+    const cores = Math.max(cpus().length, 1)
+    const elapsedMicros = previous ? (now - previous.at) * 1_000 : 0
+    const usedMicros = previous
+      ? usage.user -
+        previous.usage.user +
+        (usage.system - previous.usage.system)
+      : 0
+    const memoryTotal = totalmem()
+    const memoryUsed = Math.min(process.memoryUsage.rss(), memoryTotal)
+    return {
+      cpu: {
+        capacityPercent: cores * 100,
+        percent:
+          elapsedMicros > 0
+            ? roundPercent((usedMicros / elapsedMicros) * 100)
+            : 0,
+      },
+      memory: {
+        totalBytes: memoryTotal,
+        usedBytes: memoryUsed,
+        percent: roundPercent(percentOf(memoryUsed, memoryTotal)),
+      },
+    }
+  }
+
   #relayDataUsage(): number | null {
     const cached = this.#relayDiskUsage
     if (
@@ -2089,26 +2125,70 @@ export class DockerDriver {
     ) {
       cached.lastAttempt = Date.now()
       cached.pending = true
-      const refresh = directoryApparentSizeEffect(
-        this.#config.dataDirectory
-      ).pipe(
-        Effect.tap((usedBytes) =>
-          Effect.sync(() => {
-            cached.usedBytes = usedBytes
-          })
-        ),
-        // Keep the last value; scans race with servers writing.
-        Effect.catch(() => Effect.void),
-        Effect.ensuring(
-          Effect.sync(() => {
-            cached.lastAttempt = Date.now()
-            cached.pending = false
-          })
+      Effect.runFork(
+        this.#kilnDataUsage().pipe(
+          Effect.tap((usedBytes) =>
+            Effect.sync(() => {
+              cached.usedBytes = usedBytes
+            })
+          ),
+          // Keep the last value; scans race with servers writing.
+          Effect.catch(() => Effect.void),
+          Effect.ensuring(
+            Effect.sync(() => {
+              cached.lastAttempt = Date.now()
+              cached.pending = false
+            })
+          )
         )
       )
-      Effect.runFork(this.#diskUsageSemaphore.withPermits(1)(refresh))
     }
     return cached.usedBytes
+  }
+
+  // Everything in the data directory. Server folders measured for their own
+  // meters count with that figure instead of being walked again, and every
+  // other folder takes the disk usage permit on its own, so a server's
+  // measurement never waits behind the whole tree.
+  #kilnDataUsage(): Effect.Effect<number, unknown> {
+    const measured = new Map<string, number>()
+    for (const entry of this.#diskUsageCache.values()) {
+      if (entry.directory && entry.usedBytes !== null) {
+        measured.set(entry.directory, entry.usedBytes)
+      }
+    }
+    const semaphore = this.#diskUsageSemaphore
+    const dataDirectory = resolve(this.#config.dataDirectory)
+    const rootDirectory = resolve(this.#config.rootDirectory)
+    const sizeOfEntries = Effect.fnUntraced(function* (
+      directory: string,
+      device: number
+    ): Effect.fn.Return<number, unknown> {
+      const entries = yield* promiseEffect(() =>
+        readdir(directory, { withFileTypes: true })
+      )
+      let total = 0
+      for (const entry of entries) {
+        if (entry.isSymbolicLink()) continue
+        const path = join(directory, entry.name)
+        const metadata = yield* Effect.option(promiseEffect(() => lstat(path)))
+        if (Option.isNone(metadata) || metadata.value.dev !== device) continue
+        if (entry.isFile()) {
+          total += metadata.value.size
+        } else if (path === rootDirectory) {
+          total += yield* sizeOfEntries(path, device)
+        } else if (entry.isDirectory()) {
+          total +=
+            measured.get(path) ??
+            (yield* semaphore.withPermits(1)(directoryApparentSizeEffect(path)))
+        }
+      }
+      return total
+    })
+    return promiseEffect(() => lstat(dataDirectory)).pipe(
+      Effect.flatMap((metadata) => sizeOfEntries(dataDirectory, metadata.dev)),
+      Effect.withSpan("Relay.dataUsage")
+    )
   }
 
   #directoryUsageFor(instance: DiscoveredInstance): number | null {
@@ -2124,6 +2204,7 @@ export class DockerDriver {
         this.#config.rootDirectory,
         instance.config.directory
       )
+      cached.directory = directory
       const findCurrent = () => this.#findDiscovered(instance.config.id)
       const engine = this.#engine
       const refresh = Effect.gen(function* () {
