@@ -70,6 +70,15 @@ export function relayOwnerLabel(
     : null
 }
 
+/** `relayOwnerLabel` as labels to merge into a resource's. */
+export function relayOwnerLabels(
+  config: Pick<RelayConfig, "resourceNamespace">
+): Record<string, string> {
+  return config.resourceNamespace
+    ? { [RELAY_OWNER_LABEL]: config.resourceNamespace }
+    : {}
+}
+
 export function relayOwnsLabels(
   config: Pick<RelayConfig, "resourceNamespace">,
   labels: Readonly<Record<string, string | undefined>> | null

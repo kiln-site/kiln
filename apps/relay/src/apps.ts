@@ -19,7 +19,7 @@ import type {
 import { appServiceNameSchema, relayAppSchema } from "@workspace/contracts"
 import { Effect, Result, Semaphore } from "effect"
 
-import { command, commandLines } from "./command.js"
+import { commandLines } from "./command.js"
 import type { RelayConfig } from "./config.js"
 import { consoleLineCharacters } from "./console-frames.js"
 import { parseConsoleLine } from "./console-parsing.js"
@@ -28,6 +28,7 @@ import {
   MAX_CONSOLE_HISTORY_CHARACTERS,
   type DockerConsoleSession,
 } from "./docker.js"
+import { createContainer } from "./docker-container-spec.js"
 import {
   DockerEngine,
   isDockerNotFound,
@@ -666,38 +667,32 @@ export class AppDriver {
     const tailscale = (await this.#networking.tailscale(input.appId)).filter(
       (membership) => membership.service === APP_SERVICE
     )
-    await command(
-      "docker",
-      [
-        "create",
-        "--name",
-        name,
-        "--hostname",
+    await docker(
+      createContainer(this.#engine, {
+        command: shellWords(config.command),
+        env: environment,
         hostname,
-        "--network",
-        this.#networkName(input.appId),
-        "--network-alias",
-        hostname,
-        "--restart",
-        "unless-stopped",
-        "--mount",
-        `type=bind,source=${join(host, "apps", input.appId)},target=${config.dataMount}`,
-        ...labelArguments({
+        image,
+        labels: {
           ...routes.labels(APP_SERVICE),
           ...this.#containerLabels(input.appId, APP_SERVICE, deployment.id),
-        }),
-        ...Object.entries(environment).flatMap(([key, value]) => [
-          "--env",
-          `${key}=${value}`,
-        ]),
-        ...config.ports.flatMap((port) => [
-          "--publish",
-          `${port.hostPort}:${port.containerPort}/${port.protocol}`,
-        ]),
-        image,
-        ...shellWords(config.command),
-      ],
-      { timeout: 120_000 }
+        },
+        mounts: [
+          {
+            source: join(host, "apps", input.appId),
+            target: config.dataMount,
+            type: "bind",
+          },
+        ],
+        name,
+        network: { aliases: [hostname], name: this.#networkName(input.appId) },
+        ports: config.ports.map((port) => ({
+          containerPort: port.containerPort,
+          hostPort: port.hostPort,
+          protocol: port.protocol,
+        })),
+        restart: "unless-stopped",
+      })
     )
     log(`Created container ${name}`)
     for (const network of [
@@ -1162,12 +1157,12 @@ export class AppDriver {
   async #ensureResources(appId: string) {
     await mkdir(this.#appDirectory(appId), { recursive: true })
     if ((await this.#networks()).includes(appId)) return
-    await command("docker", [
-      "network",
-      "create",
-      ...labelArguments(this.#resourceLabels(appId)),
-      this.#networkName(appId),
-    ])
+    await docker(
+      this.#engine.createNetwork({
+        labels: this.#resourceLabels(appId),
+        name: this.#networkName(appId),
+      })
+    )
   }
 
   #toApp(

@@ -16,7 +16,6 @@ import { Effect, Fiber, Schedule, Semaphore } from "effect"
 
 import type { DatabaseConnections } from "./database-connections.js"
 import { resolveBrick, resolveBrickForProvisioning } from "./bricks.js"
-import { command } from "./command.js"
 import { directoryApparentSizeEffect } from "./disk-usage.js"
 import { recoverPromise, tapPromiseError } from "./effect/promise.js"
 import type {
@@ -60,6 +59,11 @@ import type { BrickCatalog } from "./bricks.js"
 import { removeResticRepository } from "./backups.js"
 import type { RelayConfig, RelayInstanceConfig } from "./config.js"
 import type { DockerDriver } from "./docker.js"
+import {
+  type ContainerSpec,
+  createContainer,
+  runContainer,
+} from "./docker-container-spec.js"
 import { containerName, DockerEngine } from "./docker-engine.js"
 import {
   INSTALLATION_MARKER_ENV,
@@ -78,7 +82,7 @@ import { INSTANCE_STOP_TIMEOUT_SECONDS } from "./power-state.js"
 import {
   APP_SERVICE,
   appIdFromRouteOwner,
-  relayOwnerLabel,
+  relayOwnerLabels,
   relayOwnsLabels,
   relayResourceNames,
   type RelayResourceNames,
@@ -109,7 +113,8 @@ import {
   type TraefikLabelProfile,
 } from "./traefik.js"
 
-const OWNED_LABEL = "kiln.relay.owned=true"
+// Containers Relay runs for its own infrastructure, named when created.
+type InfrastructureContainer = Omit<ContainerSpec, "name">
 const TAILSCALE_IMAGE = "tailscale/tailscale:stable"
 const COREDNS_IMAGE = "coredns/coredns:1.14.7"
 const TAILSCALE_STACK_DISK_BYTES = 128 * 1024 * 1024
@@ -509,8 +514,7 @@ export class LifecycleDriver {
       lifecycleOperation(async () => {
         await this.#replaceContainer(
           this.#resources.tailscaleContainer,
-          this.#tailscaleContainerArguments(settings, hostInfrastructure, true),
-          { ...process.env, TS_AUTHKEY: authKey }
+          this.#tailscaleContainer(settings, hostInfrastructure, authKey)
         )
         const connected = await this.#waitForTailscaleConnection(90_000)
         if (!connected.status.connected || !connected.status.dnsAddress) {
@@ -523,7 +527,7 @@ export class LifecycleDriver {
         // the one-time key so it is not retained in Docker container metadata.
         await this.#replaceContainer(
           this.#resources.tailscaleContainer,
-          this.#tailscaleContainerArguments(settings, hostInfrastructure)
+          this.#tailscaleContainer(settings, hostInfrastructure)
         )
         const reconnected = await this.#waitForTailscaleConnection(45_000)
         if (!reconnected.status.connected || !reconnected.status.dnsAddress) {
@@ -899,7 +903,7 @@ export class LifecycleDriver {
       await this.#ensureTailscaleStackNetwork(config)
       await this.#replaceContainer(
         container,
-        await this.#tailscaleStackContainerArguments(config, false)
+        await this.#tailscaleStackContainer(config)
       )
     }
     if (
@@ -2468,100 +2472,39 @@ export class LifecycleDriver {
     }
     const portLabels = portAllocationContainerLabels(portAllocations)
     const variablesLabel = JSON.stringify(resolved.values)
-    const arguments_ = [
-      "container",
-      "create",
-      "--name",
-      containerName,
-      "--hostname",
-      containerName,
-      "--network",
-      this.#resources.gameNetwork,
-      "--network-alias",
-      containerName,
-      "--interactive",
-      "--tty",
-      "--restart",
-      "no",
-      "--read-only",
-      "--tmpfs",
-      "/tmp:rw,exec,nosuid,nodev,size=128m",
-      "--cap-drop",
-      "ALL",
-      "--security-opt",
-      "no-new-privileges:true",
-      "--pids-limit",
-      String(definition.runtime.resources.pids),
-      "--memory-reservation",
-      resolved.memoryReservation,
-      "--memory",
-      memoryLimit,
-      "--memory-swap",
-      memoryLimit,
-      "--label",
-      "kiln.relay.managed=true",
-      "--label",
-      OWNED_LABEL,
-      "--label",
-      `kiln.server.id=${id}`,
-      "--label",
-      `kiln.brick.id=${definition.metadata.id}`,
-      "--label",
-      `kiln.brick.format=${definition.format}`,
-      "--label",
-      `kiln.brick.source=${input.recipe}`,
-      "--label",
-      `kiln.brick.snapshot-sha256=${snapshotSha256}`,
-      "--label",
-      `kiln.brick.variables=${variablesLabel}`,
-      "--label",
-      `kiln.brick.network-mode=${definition.network.mode}`,
-      "--label",
-      `kiln.brick.supports-srv=${definition.network.supportsSrv}`,
-      "--label",
-      "kiln.traefik.managed=true",
-      "--label",
-      `kiln.traefik.service.port=${primaryAllocation.internalPort}`,
-      "--label",
-      `kiln.instance.name=${defaultInstanceName}`,
-      "--label",
-      `kiln.instance.version=${version}`,
-      "--label",
-      `kiln.instance.java=${resolved.runtimeName}`,
-      "--label",
-      `kiln.instance.game=${definition.metadata.game}`,
-      "--label",
-      `kiln.instance.public-host=${this.#config.gameHost}`,
-      "--label",
-      `kiln.instance.directory=${id}`,
-      "--label",
-      `kiln.instance.memory-bytes=${memoryLimitBytes}`,
-      "--label",
-      `kiln.instance.disk-bytes=${input.diskLimitBytes}`,
-      "--label",
-      `kiln.instance.mount=${definition.runtime.storage.mount}`,
-      "--volume",
-      `${hostDirectory}:${definition.runtime.storage.mount}`,
-    ]
+    const labels: Record<string, string> = {
+      "kiln.relay.managed": "true",
+      "kiln.relay.owned": "true",
+      "kiln.server.id": id,
+      "kiln.brick.id": definition.metadata.id,
+      "kiln.brick.format": definition.format,
+      "kiln.brick.source": input.recipe,
+      "kiln.brick.snapshot-sha256": snapshotSha256,
+      "kiln.brick.variables": variablesLabel,
+      "kiln.brick.network-mode": definition.network.mode,
+      "kiln.brick.supports-srv": String(definition.network.supportsSrv),
+      "kiln.traefik.managed": "true",
+      "kiln.traefik.service.port": String(primaryAllocation.internalPort),
+      "kiln.instance.name": defaultInstanceName,
+      "kiln.instance.version": version,
+      "kiln.instance.java": resolved.runtimeName,
+      "kiln.instance.game": definition.metadata.game,
+      "kiln.instance.public-host": this.#config.gameHost,
+      "kiln.instance.directory": id,
+      "kiln.instance.memory-bytes": String(memoryLimitBytes),
+      "kiln.instance.disk-bytes": String(input.diskLimitBytes),
+      "kiln.instance.mount": definition.runtime.storage.mount,
+    }
     if (managedInstallationMarker) {
-      arguments_.push(
-        "--label",
-        `${INSTALLATION_MARKER_LABEL}=${managedInstallationMarker}`
-      )
+      labels[INSTALLATION_MARKER_LABEL] = managedInstallationMarker
     }
-    for (const [label, value] of Object.entries(portLabels)) {
-      arguments_.push("--label", `${label}=${value}`)
-    }
+    Object.assign(labels, portLabels)
     if (definition.readiness) {
-      arguments_.push(
-        "--label",
-        `kiln.brick.readiness=${JSON.stringify(definition.readiness)}`
-      )
+      labels["kiln.brick.readiness"] = JSON.stringify(definition.readiness)
     }
     if (definition.console) {
-      arguments_.push(
-        "--label",
-        `kiln.brick.console-stop-commands=${JSON.stringify(definition.console.stopCommands)}`
+      labels["kiln.brick.console-stop-commands"] = JSON.stringify(
+        definition.console.stopCommands
       )
     }
     if (hostname) {
@@ -2569,64 +2512,70 @@ export class LifecycleDriver {
         definition.network.mode === "direct"
           ? primaryAllocation.internalPort
           : this.#config.connectPort
-      arguments_.push(
-        "--label",
-        `kiln.instance.hostname=${
-          privatePort === 25_565 ? hostname : `${hostname}:${privatePort}`
-        }`
-      )
+      labels["kiln.instance.hostname"] =
+        privatePort === 25_565 ? hostname : `${hostname}:${privatePort}`
     }
-    arguments_.push(
-      "--label",
-      `kiln.instance.tailscale-enabled=${input.tailscale.enabled}`
-    )
+    labels["kiln.instance.tailscale-enabled"] = String(input.tailscale.enabled)
     if (input.tailscale.subdomain) {
-      arguments_.push(
-        "--label",
-        `kiln.instance.tailscale-subdomain=${input.tailscale.subdomain}`
-      )
+      labels["kiln.instance.tailscale-subdomain"] = input.tailscale.subdomain
     }
-    const ownerLabel = relayOwnerLabel(this.#config)
-    if (ownerLabel) arguments_.push("--label", ownerLabel)
-    for (const [label, value] of Object.entries(routeLabels)) {
-      arguments_.push("--label", `${label}=${value}`)
-    }
-
-    if (definition.runtime.workingDirectory) {
-      arguments_.push("--workdir", definition.runtime.workingDirectory)
-    }
-    if (definition.runtime.stopSignal) {
-      arguments_.push("--stop-signal", definition.runtime.stopSignal)
-    }
-    if (definition.runtime.user) {
-      arguments_.push("--user", definition.runtime.user)
-    }
-    if (definition.runtime.entrypoint?.[0]) {
-      arguments_.push("--entrypoint", definition.runtime.entrypoint[0])
-    }
-    for (const [name, value] of Object.entries(resolved.environment)) {
-      arguments_.push("--env", `${name}=${value}`)
-    }
-    for (const [binding, candidates] of Object.entries(
+    Object.assign(labels, relayOwnerLabels(this.#config), routeLabels)
+    Object.assign(labels, await this.databaseConnections.labels(id))
+    const ports = Object.entries(
       dockerPortBindingsForAllocations(portAllocations)
-    )) {
+    ).flatMap(([binding, candidates]) => {
       const hostPort = candidates[0]?.HostPort
-      if (!hostPort) continue
-      arguments_.push("--publish", `${hostPort}:${binding}`)
+      const [containerPort, protocol] = binding.split("/")
+      return hostPort
+        ? [
+            {
+              containerPort: Number(containerPort),
+              hostPort,
+              protocol: protocol === "udp" ? ("udp" as const) : ("tcp" as const),
+            },
+          ]
+        : []
+    })
+    const spec: ContainerSpec = {
+      binds: [`${hostDirectory}:${definition.runtime.storage.mount}`],
+      capDrop: ["ALL"],
+      command: [
+        ...(definition.runtime.entrypoint?.slice(1) ?? []),
+        ...(definition.runtime.command ?? []),
+      ],
+      ...(definition.runtime.entrypoint?.[0] && {
+        entrypoint: definition.runtime.entrypoint[0],
+      }),
+      env: resolved.environment,
+      hostname: containerName,
+      image,
+      interactive: true,
+      labels,
+      memory: memoryLimit,
+      memoryReservation: resolved.memoryReservation,
+      memorySwap: memoryLimit,
+      name: containerName,
+      network: { aliases: [containerName], name: this.#resources.gameNetwork },
+      pidsLimit: definition.runtime.resources.pids,
+      ports,
+      readOnly: true,
+      restart: "no",
+      securityOpt: ["no-new-privileges:true"],
+      ...(definition.runtime.stopSignal && {
+        stopSignal: definition.runtime.stopSignal,
+      }),
+      tmpfs: { "/tmp": "rw,exec,nosuid,nodev,size=128m" },
+      tty: true,
+      ...(definition.runtime.user && { user: definition.runtime.user }),
+      ...(definition.runtime.workingDirectory && {
+        workdir: definition.runtime.workingDirectory,
+      }),
     }
-    for (const [label, value] of Object.entries(
-      await this.databaseConnections.labels(id)
-    )) {
-      arguments_.push("--label", `${label}=${value}`)
-    }
-    arguments_.push(image)
-    arguments_.push(...(definition.runtime.entrypoint?.slice(1) ?? []))
-    arguments_.push(...(definition.runtime.command ?? []))
 
     await input.onPhase?.("creating_container")
     await runLifecycle(
       lifecycleOperation(async () => {
-        await command("docker", arguments_, { timeout: 60_000 })
+        await runLifecycle(createContainer(this.#engine, spec))
         await input.onPhase?.("finalizing")
         if (usesExternalEdge && webRoutes.length > 0) {
           await runLifecycle(
@@ -3087,36 +3036,36 @@ export class LifecycleDriver {
       `bind = "0.0.0.0:25565"\nwelcome_message = "<aqua>Starting your Kiln instance…</aqua>"\naction_bar = "<gray>The requested backend is not ready yet.</gray>"\ndefault_game_mode = "spectator"\nfetch_player_skins = false\n\n[forwarding]\nmethod = "NONE"\nsecret = "unused"\n\n[server_list]\nreply_to_status = true\nmax_players = 20\nmessage_of_the_day = "<aqua>Kiln standby</aqua>"\n`
     )
 
-    await this.#ensureContainer(this.#resources.coreDnsContainer, replace, [
-      "--network",
-      this.#resources.gameNetwork,
-      "--network-alias",
-      "coredns",
-      "--restart",
-      "unless-stopped",
-      "--publish",
-      `${networking.dnsPort}:${networking.dnsPort}/udp`,
-      "--publish",
-      `${networking.dnsPort}:${networking.dnsPort}/tcp`,
-      "--env",
-      `KILN_NODE_ADDRESS=${networking.address}`,
-      "--volume",
-      `${join(hostInfrastructure, "coredns", "Corefile")}:/etc/coredns/Corefile:ro`,
-      "coredns/coredns:1.14.7",
-      "-conf",
-      "/etc/coredns/Corefile",
-    ])
-    await this.#ensureContainer(this.#resources.limboContainer, replace, [
-      "--network",
-      this.#resources.gameNetwork,
-      "--network-alias",
-      "limbo",
-      "--restart",
-      "unless-stopped",
-      "--volume",
-      `${join(hostInfrastructure, "limbo", "server.toml")}:/usr/src/app/server.toml:ro`,
-      "ghcr.io/quozul/picolimbo:v1.13.1-mc26.2",
-    ])
+    await this.#ensureContainer(this.#resources.coreDnsContainer, replace, {
+      binds: [
+        `${join(hostInfrastructure, "coredns", "Corefile")}:/etc/coredns/Corefile:ro`,
+      ],
+      command: ["-conf", "/etc/coredns/Corefile"],
+      env: { KILN_NODE_ADDRESS: networking.address },
+      image: "coredns/coredns:1.14.7",
+      network: { aliases: ["coredns"], name: this.#resources.gameNetwork },
+      ports: [
+        {
+          containerPort: networking.dnsPort,
+          hostPort: networking.dnsPort,
+          protocol: "udp",
+        },
+        {
+          containerPort: networking.dnsPort,
+          hostPort: networking.dnsPort,
+          protocol: "tcp",
+        },
+      ],
+      restart: "unless-stopped",
+    })
+    await this.#ensureContainer(this.#resources.limboContainer, replace, {
+      binds: [
+        `${join(hostInfrastructure, "limbo", "server.toml")}:/usr/src/app/server.toml:ro`,
+      ],
+      image: "ghcr.io/quozul/picolimbo:v1.13.1-mc26.2",
+      network: { aliases: ["limbo"], name: this.#resources.gameNetwork },
+      restart: "unless-stopped",
+    })
   }
 
   async #ensureTraefik(
@@ -3180,31 +3129,27 @@ export class LifecycleDriver {
       ensureProtectedFile(join(infrastructure, "state", "acme.json")),
     ])
 
-    const arguments_ = [
-      "--network",
-      this.#resources.relayEdgeNetwork,
-      "--restart",
-      "unless-stopped",
-      "--label",
-      "kiln.relay.infrastructure=traefik",
-      "--publish",
-      "80:80",
-      "--publish",
-      "443:443",
-      "--volume",
-      `${join(hostInfrastructure, "traefik.yaml")}:/etc/traefik/traefik.yaml:ro`,
-      "--volume",
-      `${join(hostInfrastructure, "dynamic")}:/etc/traefik/dynamic:ro`,
-      "--volume",
-      `${join(hostInfrastructure, "state")}:/var/lib/traefik`,
-    ]
-    arguments_.push(settings.traefikImage)
+    const traefik: InfrastructureContainer = {
+      binds: [
+        `${join(hostInfrastructure, "traefik.yaml")}:/etc/traefik/traefik.yaml:ro`,
+        `${join(hostInfrastructure, "dynamic")}:/etc/traefik/dynamic:ro`,
+        `${join(hostInfrastructure, "state")}:/var/lib/traefik`,
+      ],
+      image: settings.traefikImage,
+      labels: { "kiln.relay.infrastructure": "traefik" },
+      network: { name: this.#resources.relayEdgeNetwork },
+      ports: [
+        { containerPort: 80, hostPort: 80, protocol: "tcp" },
+        { containerPort: 443, hostPort: 443, protocol: "tcp" },
+      ],
+      restart: "unless-stopped",
+    }
     await runLifecycle(
       lifecycleOperation(async () => {
         await this.#ensureContainer(
           this.#resources.traefikContainer,
           replace,
-          arguments_
+          traefik
         )
         await connectNetwork(
           this.#engine,
@@ -3455,38 +3400,29 @@ export class LifecycleDriver {
       .map((instance) => instance.connectAddress.split(":")[0] ?? "")
   }
 
-  #tailscaleContainerArguments(
+  #tailscaleContainer(
     settings: RelayTailscaleSettings,
     hostInfrastructure: string,
-    authenticate = false
-  ): Array<string> {
-    const arguments_ = [
-      "--network",
-      "host",
-      "--restart",
-      "unless-stopped",
-      "--cap-add",
-      "NET_ADMIN",
-      "--cap-add",
-      "NET_RAW",
-      "--device",
-      "/dev/net/tun:/dev/net/tun",
-      "--env",
-      "TS_AUTH_ONCE=true",
-      "--env",
-      "TS_KUBE_SECRET=",
-      "--env",
-      "TS_STATE_DIR=/var/lib/tailscale",
-      "--env",
-      "TS_USERSPACE=false",
-      "--env",
-      `TS_HOSTNAME=${settings.hostname}`,
-      "--volume",
-      `${join(hostInfrastructure, "tailscale", "state")}:/var/lib/tailscale`,
-    ]
-    if (authenticate) arguments_.push("--env", "TS_AUTHKEY")
-    arguments_.push(TAILSCALE_IMAGE)
-    return arguments_
+    authKey?: string
+  ): InfrastructureContainer {
+    return {
+      binds: [
+        `${join(hostInfrastructure, "tailscale", "state")}:/var/lib/tailscale`,
+      ],
+      capAdd: ["NET_ADMIN", "NET_RAW"],
+      devices: ["/dev/net/tun:/dev/net/tun"],
+      env: {
+        TS_AUTH_ONCE: "true",
+        TS_KUBE_SECRET: "",
+        TS_STATE_DIR: "/var/lib/tailscale",
+        TS_USERSPACE: "false",
+        TS_HOSTNAME: settings.hostname,
+        ...(authKey !== undefined && { TS_AUTHKEY: authKey }),
+      },
+      image: TAILSCALE_IMAGE,
+      network: "host",
+      restart: "unless-stopped",
+    }
   }
 
   async #waitForTailscaleConnection(
@@ -3526,19 +3462,16 @@ export class LifecycleDriver {
       join(coreDns, "Corefile"),
       tailscaleCoreDnsConfiguration(settings, address, hostnames)
     )
-    await this.#ensureContainer(this.#resources.coreDnsContainer, replace, [
-      "--network",
-      "host",
-      "--restart",
-      "unless-stopped",
-      "--env",
-      `KILN_NODE_ADDRESS=${address}`,
-      "--volume",
-      `${join(hostInfrastructure, "coredns", "Corefile")}:/etc/coredns/Corefile:ro`,
-      "coredns/coredns:1.14.7",
-      "-conf",
-      "/etc/coredns/Corefile",
-    ])
+    await this.#ensureContainer(this.#resources.coreDnsContainer, replace, {
+      binds: [
+        `${join(hostInfrastructure, "coredns", "Corefile")}:/etc/coredns/Corefile:ro`,
+      ],
+      command: ["-conf", "/etc/coredns/Corefile"],
+      env: { KILN_NODE_ADDRESS: address },
+      image: "coredns/coredns:1.14.7",
+      network: "host",
+      restart: "unless-stopped",
+    })
   }
 
   async #refreshTailscaleDns(): Promise<void> {
@@ -3640,20 +3573,17 @@ export class LifecycleDriver {
       }
       return
     }
-    const arguments_ = [
-      "network",
-      "create",
-      "--driver",
-      "bridge",
-      "--subnet",
-      config.subnet,
-      "--label",
-      `kiln.relay.network=tailscale:${config.id}`,
-    ]
-    const ownerLabel = relayOwnerLabel(this.#config)
-    if (ownerLabel) arguments_.push("--label", ownerLabel)
-    arguments_.push(name)
-    await command("docker", arguments_)
+    await runLifecycle(
+      this.#engine.createNetwork({
+        driver: "bridge",
+        labels: {
+          "kiln.relay.network": `tailscale:${config.id}`,
+          ...relayOwnerLabels(this.#config),
+        },
+        name,
+        subnet: config.subnet,
+      })
+    )
   }
 
   async #reconcileTailscaleStackBindings(
@@ -3724,8 +3654,7 @@ export class LifecycleDriver {
       lifecycleOperation(async () => {
         await this.#replaceContainer(
           name,
-          await this.#tailscaleStackContainerArguments(config, true),
-          { ...process.env, TS_AUTHKEY: authKey }
+          await this.#tailscaleStackContainer(config, authKey)
         )
         if (!(await this.#waitForTailscaleStackConnection(config.id, 90_000))) {
           throw new Error("Tailscale did not connect in time")
@@ -3734,7 +3663,7 @@ export class LifecycleDriver {
         // machine identity has authenticated.
         await this.#replaceContainer(
           name,
-          await this.#tailscaleStackContainerArguments(config, false)
+          await this.#tailscaleStackContainer(config)
         )
         if (!(await this.#waitForTailscaleStackConnection(config.id, 45_000))) {
           throw new Error(
@@ -3753,96 +3682,63 @@ export class LifecycleDriver {
     )
   }
 
-  async #tailscaleStackContainerArguments(
+  async #tailscaleStackContainer(
     config: RelayTailscaleStackConfig,
-    includeAuthKey: boolean
-  ): Promise<Array<string>> {
+    authKey?: string
+  ): Promise<InfrastructureContainer> {
     const hostRoot = await this.#hostDataDirectory()
-    const arguments_ = [
-      "--hostname",
-      config.hostname,
-      "--network",
-      this.#resources.tailscaleStackNetwork(config.id),
-      "--ip",
-      tailscaleStackServiceAddress(config.subnet),
-      "--restart",
-      "unless-stopped",
-      "--cap-add",
-      "NET_ADMIN",
-      "--cap-add",
-      "NET_RAW",
-      "--device",
-      "/dev/net/tun:/dev/net/tun",
-      "--sysctl",
-      "net.ipv4.ip_forward=1",
-      "--sysctl",
-      "net.ipv6.conf.all.forwarding=1",
-      "--pids-limit",
-      "128",
-      "--memory-reservation",
-      "16m",
-      "--memory",
-      "64m",
-      "--memory-swap",
-      "64m",
-      "--label",
-      "kiln.relay.managed=true",
-      "--label",
-      OWNED_LABEL,
-      "--label",
-      `kiln.server.id=${config.id}`,
-      "--label",
-      `kiln.brick.id=${builtinTailscaleBrickId}`,
-      "--label",
-      "kiln.brick.format=kiln.brick/v1",
-      "--label",
-      `kiln.brick.source=${builtinTailscaleBrickSource}`,
-      "--label",
-      "kiln.brick.variables={}",
-      "--label",
-      "kiln.brick.network-mode=direct",
-      "--label",
-      "kiln.brick.primary-port=53",
-      "--label",
-      `kiln.instance.name=${config.name}`,
-      "--label",
-      "kiln.instance.version=stable",
-      "--label",
-      "kiln.instance.java=Tailscale + CoreDNS",
-      "--label",
-      "kiln.instance.game=Networking",
-      "--label",
-      `kiln.instance.hostname=${config.hostname}.${config.domain}`,
-      "--label",
-      `kiln.instance.directory=${config.id}`,
-      "--label",
-      `kiln.instance.memory-bytes=${TAILSCALE_STACK_MEMORY_BYTES}`,
-      "--label",
-      `kiln.instance.disk-bytes=${TAILSCALE_STACK_DISK_BYTES}`,
-      "--label",
-      "kiln.instance.mount=/config",
-      "--volume",
-      `${join(hostRoot, "instances", config.id)}:/config`,
-      "--volume",
-      `${join(hostRoot, "infrastructure", "tailscale-stacks", config.id, "state")}:/var/lib/tailscale`,
-      "--env",
-      "TS_STATE_DIR=/var/lib/tailscale",
-      "--env",
-      "TS_USERSPACE=false",
-      "--env",
-      "TS_ACCEPT_DNS=false",
-      "--env",
-      "TS_AUTH_ONCE=true",
-      "--env",
-      `TS_HOSTNAME=${config.hostname}`,
-      "--env",
-      "TS_EXTRA_ARGS=--accept-dns=false",
-    ]
-    if (includeAuthKey) {
-      arguments_.push("--env", "TS_AUTHKEY")
+    return {
+      binds: [
+        `${join(hostRoot, "instances", config.id)}:/config`,
+        `${join(hostRoot, "infrastructure", "tailscale-stacks", config.id, "state")}:/var/lib/tailscale`,
+      ],
+      capAdd: ["NET_ADMIN", "NET_RAW"],
+      devices: ["/dev/net/tun:/dev/net/tun"],
+      env: {
+        TS_STATE_DIR: "/var/lib/tailscale",
+        TS_USERSPACE: "false",
+        TS_ACCEPT_DNS: "false",
+        TS_AUTH_ONCE: "true",
+        TS_HOSTNAME: config.hostname,
+        TS_EXTRA_ARGS: "--accept-dns=false",
+        ...(authKey !== undefined && { TS_AUTHKEY: authKey }),
+      },
+      hostname: config.hostname,
+      image: TAILSCALE_IMAGE,
+      labels: {
+        "kiln.relay.managed": "true",
+        "kiln.relay.owned": "true",
+        "kiln.server.id": config.id,
+        "kiln.brick.id": builtinTailscaleBrickId,
+        "kiln.brick.format": "kiln.brick/v1",
+        "kiln.brick.source": builtinTailscaleBrickSource,
+        "kiln.brick.variables": "{}",
+        "kiln.brick.network-mode": "direct",
+        "kiln.brick.primary-port": "53",
+        "kiln.instance.name": config.name,
+        "kiln.instance.version": "stable",
+        "kiln.instance.java": "Tailscale + CoreDNS",
+        "kiln.instance.game": "Networking",
+        "kiln.instance.hostname": `${config.hostname}.${config.domain}`,
+        "kiln.instance.directory": config.id,
+        "kiln.instance.memory-bytes": String(TAILSCALE_STACK_MEMORY_BYTES),
+        "kiln.instance.disk-bytes": String(TAILSCALE_STACK_DISK_BYTES),
+        "kiln.instance.mount": "/config",
+      },
+      memory: "64m",
+      memoryReservation: "16m",
+      memorySwap: "64m",
+      network: {
+        ipv4Address: tailscaleStackServiceAddress(config.subnet),
+        name: this.#resources.tailscaleStackNetwork(config.id),
+      },
+      pidsLimit: 128,
+      restart: "unless-stopped",
+      sysctls: {
+        "net.ipv4.ip_forward": "1",
+        "net.ipv6.conf.all.forwarding": "1",
+      },
     }
-    arguments_.push(TAILSCALE_IMAGE)
-    return arguments_
   }
 
   async #restartTailscaleStack(
@@ -3853,7 +3749,7 @@ export class LifecycleDriver {
     )
     await this.#replaceContainer(
       this.#resources.tailscaleStackContainer(config.id),
-      await this.#tailscaleStackContainerArguments(config, false)
+      await this.#tailscaleStackContainer(config)
     )
     if (!(await this.#waitForTailscaleStackConnection(config.id, 45_000))) {
       throw new Error("Tailscale did not reconnect with its persisted identity")
@@ -3952,7 +3848,7 @@ export class LifecycleDriver {
       await this.#ensureTailscaleStackNetwork(attempted)
       await this.#replaceContainer(
         this.#resources.tailscaleStackContainer(attempted.id),
-        await this.#tailscaleStackContainerArguments(attempted, false)
+        await this.#tailscaleStackContainer(attempted)
       )
       await this.#prepareTailscaleStackRemoval(attempted.id)
       await this.#commitTailscaleStackRemoval(attempted.id)
@@ -4011,28 +3907,19 @@ export class LifecycleDriver {
     )
     await this.#replaceContainer(
       this.#resources.tailscaleStackDnsContainer(config.id),
-      [
-        "--network",
-        `container:${this.#resources.tailscaleStackContainer(config.id)}`,
-        "--restart",
-        "unless-stopped",
-        "--read-only",
-        "--cap-drop",
-        "ALL",
-        "--cap-add",
-        "NET_BIND_SERVICE",
-        "--security-opt",
-        "no-new-privileges:true",
-        "--pids-limit",
-        "64",
-        "--memory",
-        "32m",
-        "--volume",
-        `${hostPath}:/etc/coredns/Corefile:ro`,
-        COREDNS_IMAGE,
-        "-conf",
-        "/etc/coredns/Corefile",
-      ]
+      {
+        binds: [`${hostPath}:/etc/coredns/Corefile:ro`],
+        capAdd: ["NET_BIND_SERVICE"],
+        capDrop: ["ALL"],
+        command: ["-conf", "/etc/coredns/Corefile"],
+        image: COREDNS_IMAGE,
+        memory: "32m",
+        network: `container:${this.#resources.tailscaleStackContainer(config.id)}`,
+        pidsLimit: 64,
+        readOnly: true,
+        restart: "unless-stopped",
+        securityOpt: ["no-new-privileges:true"],
+      }
     )
   }
 
@@ -4336,29 +4223,29 @@ export class LifecycleDriver {
     )
   }
 
+  // `docker run --detach`, after removing the container of that name.
   async #replaceContainer(
     name: string,
-    arguments_: Array<string>,
-    env?: NodeJS.ProcessEnv
+    container: InfrastructureContainer
   ): Promise<void> {
     await this.#removeOwnedContainer(name)
-    const ownedArguments = [...arguments_]
-    const ownerLabel = relayOwnerLabel(this.#config)
-    if (ownerLabel) ownedArguments.unshift("--label", ownerLabel)
-    await command(
-      "docker",
-      ["run", "--detach", "--name", name, ...ownedArguments],
-      {
-        env,
-        timeout: 180_000,
-      }
+    await runLifecycle(
+      runContainer(
+        this.#engine,
+        {
+          ...container,
+          labels: { ...relayOwnerLabels(this.#config), ...container.labels },
+          name,
+        },
+        { timeout: 180_000 }
+      )
     )
   }
 
   async #ensureContainer(
     name: string,
     replace: boolean,
-    arguments_: Array<string>
+    container: InfrastructureContainer
   ): Promise<void> {
     if (!replace) {
       const labels = await this.#containerLabels(name)
@@ -4371,7 +4258,7 @@ export class LifecycleDriver {
         return
       }
     }
-    await this.#replaceContainer(name, arguments_)
+    await this.#replaceContainer(name, container)
   }
 
   async #removeOwnedContainer(name: string): Promise<void> {
@@ -4402,16 +4289,15 @@ export class LifecycleDriver {
       }
       return
     }
-    const arguments_ = [
-      "network",
-      "create",
-      "--label",
-      `kiln.relay.network=${kind}`,
-    ]
-    const ownerLabel = relayOwnerLabel(this.#config)
-    if (ownerLabel) arguments_.push("--label", ownerLabel)
-    arguments_.push(name)
-    await command("docker", arguments_)
+    await runLifecycle(
+      this.#engine.createNetwork({
+        labels: {
+          "kiln.relay.network": kind,
+          ...relayOwnerLabels(this.#config),
+        },
+        name,
+      })
+    )
   }
 
   async #removeOwnedNetwork(name: string): Promise<void> {
