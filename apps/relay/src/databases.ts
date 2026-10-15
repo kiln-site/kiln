@@ -27,6 +27,7 @@ import {
   DockerEngine,
   ensureImage,
   type DockerContainerSummary,
+  type DockerExecProcess,
 } from "./docker-engine.js"
 import { relayOwnerLabel, relayOwnsLabels } from "./relay-resources.js"
 
@@ -380,14 +381,9 @@ export class DatabaseDriver {
         input.nextPassword
       )
       const loaded = await promiseResult(() =>
-        runProcess(
-          "docker",
-          databaseAclLoadArguments(
-            engine,
-            container,
-            input.username,
-            input.currentPassword
-          ),
+        this.#client(
+          container,
+          databaseAclLoadClient(engine, input.username, input.currentPassword),
           undefined,
           60_000
         )
@@ -405,14 +401,9 @@ export class DatabaseDriver {
     }
 
     const sql = rotationSql(database.engine, input.username, input.nextPassword)
-    await runProcess(
-      "docker",
-      databaseClientArguments(
-        database,
-        input.username,
-        input.currentPassword,
-        "import"
-      ),
+    await this.#client(
+      container,
+      databaseClient(database, input.username, input.currentPassword, "import"),
       sql,
       60_000
     )
@@ -455,14 +446,9 @@ export class DatabaseDriver {
     if (!databaseEngineSupportsLogicalBackups(database.engine)) {
       throw new Error(`${database.engine} dump export is not supported yet`)
     }
-    const result = await runProcess(
-      "docker",
-      databaseClientArguments(
-        database,
-        input.username,
-        input.password,
-        "export"
-      ),
+    const result = await this.#client(
+      requiredContainerId(database),
+      databaseClient(database, input.username, input.password, "export"),
       undefined,
       120_000
     )
@@ -487,18 +473,43 @@ export class DatabaseDriver {
         "The database dump is larger than the current 700 KB transfer limit"
       )
     }
-    await runProcess(
-      "docker",
-      databaseClientArguments(
-        database,
-        input.username,
-        input.password,
-        "import"
-      ),
+    await this.#client(
+      requiredContainerId(database),
+      databaseClient(database, input.username, input.password, "import"),
       input.content,
       120_000
     )
     return { databaseId: database.id, imported: true }
+  }
+
+  /** Starts a process in a database's container, streaming its stdio. */
+  process(
+    database: RelayManagedDatabase,
+    command: ReadonlyArray<string>,
+    options: { readonly stdin?: boolean; readonly user?: string } = {}
+  ): Promise<DockerExecProcess> {
+    return Effect.runPromise(
+      this.#engine.execProcess(requiredContainerId(database), command, options)
+    )
+  }
+
+  // Runs a database client in the database's container, with `input` on its
+  // stdin; credentials go through its environment.
+  #client(
+    container: string,
+    client: DatabaseClient,
+    input: string | undefined,
+    timeout: number
+  ) {
+    return Effect.runPromise(
+      this.#engine.execWithInput(container, client.command, {
+        env: client.env,
+        input,
+        maxOutputBytes: MAX_DUMP_BYTES + 64 * 1024,
+        overflow: "Database transfer exceeded the current size limit",
+        timeout,
+      })
+    )
   }
 
   async #required(id: string): Promise<RelayManagedDatabase> {
@@ -727,79 +738,77 @@ function healthArguments(engine: DatabaseEngine): Array<string> {
   ]
 }
 
-function databaseClientArguments(
+interface DatabaseClient {
+  readonly command: ReadonlyArray<string>
+  readonly env: ReadonlyArray<string>
+}
+
+function databaseClient(
   database: RelayManagedDatabase,
   username: string,
   password: string,
   mode: "export" | "import"
-): Array<string> {
-  const container = database.containerId ?? database.id
+): DatabaseClient {
   if (database.engine === "mysql") {
-    return [
-      "exec",
-      "-i",
-      "-e",
-      `MYSQL_PWD=${password}`,
-      container,
-      mode === "export" ? "mysqldump" : "mysql",
-      "--user",
-      username,
-      ...(mode === "export"
-        ? ["--single-transaction", "--skip-lock-tables", "--no-tablespaces"]
-        : []),
-      database.databaseName,
-    ]
+    return {
+      command: [
+        mode === "export" ? "mysqldump" : "mysql",
+        "--user",
+        username,
+        ...(mode === "export"
+          ? ["--single-transaction", "--skip-lock-tables", "--no-tablespaces"]
+          : []),
+        database.databaseName,
+      ],
+      env: [`MYSQL_PWD=${password}`],
+    }
   }
   if (database.engine === "mariadb") {
-    return [
-      "exec",
-      "-i",
-      "-e",
-      `MYSQL_PWD=${password}`,
-      container,
-      mode === "export" ? "mariadb-dump" : "mariadb",
-      "--user",
-      username,
-      ...(mode === "export"
-        ? ["--single-transaction", "--skip-lock-tables"]
-        : []),
-      database.databaseName,
-    ]
+    return {
+      command: [
+        mode === "export" ? "mariadb-dump" : "mariadb",
+        "--user",
+        username,
+        ...(mode === "export"
+          ? ["--single-transaction", "--skip-lock-tables"]
+          : []),
+        database.databaseName,
+      ],
+      env: [`MYSQL_PWD=${password}`],
+    }
   }
-  return [
-    "exec",
-    "-i",
-    "-e",
-    `PGPASSWORD=${password}`,
-    container,
-    mode === "export" ? "pg_dump" : "psql",
-    "--username",
-    username,
-    "--dbname",
-    database.databaseName,
-    ...(mode === "export"
-      ? ["--clean", "--if-exists", "--no-owner"]
-      : ["--set", "ON_ERROR_STOP=on"]),
-  ]
+  return {
+    command: [
+      mode === "export" ? "pg_dump" : "psql",
+      "--username",
+      username,
+      "--dbname",
+      database.databaseName,
+      ...(mode === "export"
+        ? ["--clean", "--if-exists", "--no-owner"]
+        : ["--set", "ON_ERROR_STOP=on"]),
+    ],
+    env: [`PGPASSWORD=${password}`],
+  }
 }
 
-function databaseAclLoadArguments(
+function databaseAclLoadClient(
   engine: "redis" | "valkey",
-  container: string,
   username: string,
   password: string
-): Array<string> {
-  return [
-    "exec",
-    "-e",
-    `${engine === "redis" ? "REDISCLI_AUTH" : "VALKEYCLI_AUTH"}=${password}`,
-    container,
-    engine === "redis" ? "redis-cli" : "valkey-cli",
-    "--user",
-    username,
-    "ACL",
-    "LOAD",
-  ]
+): DatabaseClient {
+  return {
+    command: [
+      engine === "redis" ? "redis-cli" : "valkey-cli",
+      "--user",
+      username,
+      "ACL",
+      "LOAD",
+    ],
+    env: [
+      `${engine === "redis" ? "REDISCLI_AUTH" : "VALKEYCLI_AUTH"}=${password}`,
+    ],
+  }
 }
 
 function rotationSql(

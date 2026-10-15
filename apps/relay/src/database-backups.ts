@@ -1,5 +1,4 @@
 import { createHash } from "node:crypto"
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process"
 import { createReadStream, createWriteStream } from "node:fs"
 import { rm, stat } from "node:fs/promises"
 import { Transform } from "node:stream"
@@ -15,6 +14,7 @@ import {
 } from "@workspace/contracts"
 
 import type { DatabaseDriver } from "./databases.js"
+import type { DockerExecProcess } from "./docker-engine.js"
 
 const DATABASE_BACKUP_TIMEOUT_MS = 30 * 60_000
 const MAX_DATABASE_ERROR_BYTES = 64 * 1024
@@ -34,7 +34,7 @@ export async function createCompressedDatabaseBackup(
 ): Promise<BackupArchiveCreateTaskResult> {
   signal.throwIfAborted()
   const database = await databases.backupTarget(input.target.id)
-  const child = spawnDatabaseClient(database, "export")
+  const child = await startDatabaseClient(databases, database, "export")
   const stderr = collectProcessErrors(child)
   const sourceMeter = byteMeter((bytes) => {
     progress.completed = bytes
@@ -61,7 +61,7 @@ export async function createCompressedDatabaseBackup(
     )
   )
   if (Result.isFailure(written)) {
-    child.kill("SIGKILL")
+    child.kill()
     await rm(destination, { force: true })
     throw written.failure
   }
@@ -85,8 +85,11 @@ export async function restoreCompressedDatabaseBackup(
   source: string
 ): Promise<{ warnings: Array<string> }> {
   const database = await databases.backupTarget(databaseId)
-  const child = spawnDatabaseClient(database, "import")
+  const child = await startDatabaseClient(databases, database, "import")
   const stderr = collectProcessErrors(child)
+  // The client's progress output isn't kept, but it must be read for the
+  // client to keep going.
+  child.stdout.resume()
   const restored = await Effect.runPromise(
     Effect.result(
       Effect.tryPromise({
@@ -105,30 +108,24 @@ export async function restoreCompressedDatabaseBackup(
     )
   )
   if (Result.isFailure(restored)) {
-    child.kill("SIGKILL")
+    child.kill()
     throw restored.failure
   }
   return { warnings: [] }
 }
 
-function spawnDatabaseClient(
+function startDatabaseClient(
+  databases: DatabaseDriver,
   database: RelayManagedDatabase,
   mode: "export" | "import"
-): ChildProcessWithoutNullStreams {
-  const container = database.containerId ?? database.id
-  const shell = databaseBackupShell(database, mode)
-  return spawn(
-    "docker",
-    [
-      "exec",
-      "-i",
-      ...(database.engine === "postgres" ? ["--user", "postgres"] : []),
-      container,
-      "sh",
-      "-ec",
-      shell,
-    ],
-    { stdio: ["pipe", "pipe", "pipe"] }
+): Promise<DockerExecProcess> {
+  return databases.process(
+    database,
+    ["sh", "-ec", databaseBackupShell(database, mode)],
+    {
+      stdin: mode === "import",
+      ...(database.engine === "postgres" ? { user: "postgres" } : {}),
+    }
   )
 }
 
@@ -154,7 +151,7 @@ function databaseBackupShell(
   throw new Error(`${database.engine} logical backups are not supported yet`)
 }
 
-function collectProcessErrors(child: ChildProcessWithoutNullStreams) {
+function collectProcessErrors(child: DockerExecProcess) {
   const chunks: Array<Buffer> = []
   let bytes = 0
   child.stderr.on("data", (chunk: Buffer) => {
@@ -167,38 +164,19 @@ function collectProcessErrors(child: ChildProcessWithoutNullStreams) {
   return () => Buffer.concat(chunks).toString("utf8").trim()
 }
 
-function requireSuccessfulProcess(
-  child: ChildProcessWithoutNullStreams,
+async function requireSuccessfulProcess(
+  child: DockerExecProcess,
   stderr: () => string,
   signal?: AbortSignal
 ): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const aborted = () => {
-      clearTimeout(timeout)
-      child.kill("SIGKILL")
-      reject(signal?.reason ?? new Error("Database backup cancelled"))
-    }
-    const timeout = setTimeout(() => {
-      child.kill("SIGKILL")
-      reject(new Error("Database backup command timed out"))
-    }, DATABASE_BACKUP_TIMEOUT_MS)
-    child.once("error", (cause) => {
-      clearTimeout(timeout)
-      signal?.removeEventListener("abort", aborted)
-      reject(cause)
-    })
-    child.once("close", (code) => {
-      clearTimeout(timeout)
-      signal?.removeEventListener("abort", aborted)
-      if (code === 0) resolve()
-      else
-        reject(
-          new Error(stderr() || `Database command exited with code ${code}`)
-        )
-    })
-    signal?.addEventListener("abort", aborted, { once: true })
-    if (signal?.aborted) aborted()
+  const code = await child.waitFor({
+    signal,
+    timedOut: "Database backup command timed out",
+    timeout: DATABASE_BACKUP_TIMEOUT_MS,
   })
+  if (code !== 0) {
+    throw new Error(stderr() || `Database command exited with code ${code}`)
+  }
 }
 
 function byteMeter(

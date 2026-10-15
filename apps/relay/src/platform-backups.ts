@@ -6,7 +6,6 @@ import {
   randomUUID,
   scrypt,
 } from "node:crypto"
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process"
 import { createReadStream, createWriteStream } from "node:fs"
 import { mkdir, open, rm, stat, writeFile } from "node:fs/promises"
 import { resolve } from "node:path"
@@ -22,7 +21,11 @@ import {
 } from "@workspace/contracts"
 
 import type { RelayConfig } from "./config.js"
-import { DockerEngine, type DockerContainerSummary } from "./docker-engine.js"
+import {
+  DockerEngine,
+  type DockerContainerSummary,
+  type DockerExecProcess,
+} from "./docker-engine.js"
 
 const PLATFORM_MAGIC = Buffer.from("KILNPLATFORM0001", "ascii")
 const PLATFORM_HEADER_BYTES = 64
@@ -78,7 +81,7 @@ export async function createEncryptedPlatformBackup(
     mode: 0o600,
   })
 
-  const child = spawnPlatformDump(container)
+  const child = await startPlatformClient(config, container, PLATFORM_DUMP)
   const stderr = collectProcessErrors(child)
   const sourceMeter = byteMeter((bytes) => {
     progress.completed = bytes
@@ -109,7 +112,7 @@ export async function createEncryptedPlatformBackup(
     )
   )
   if (Result.isFailure(written)) {
-    child.kill("SIGKILL")
+    child.kill()
     await rm(destination, { force: true })
     throw written.failure
   }
@@ -239,8 +242,10 @@ export async function restoreEncryptedPlatformBackup(
     await rm(stagedDump, { force: true })
     throw decrypted.failure
   }
-  const child = spawnPlatformImport(container)
+  const child = await startPlatformClient(config, container, PLATFORM_IMPORT)
   const stderr = collectProcessErrors(child)
+  // mysql's output isn't kept, but it must be read for it to keep going.
+  child.stdout.resume()
   const restored = await Effect.runPromise(
     Effect.result(
       Effect.tryPromise({
@@ -259,7 +264,7 @@ export async function restoreEncryptedPlatformBackup(
     )
   )
   if (Result.isFailure(restored)) {
-    child.kill("SIGKILL")
+    child.kill()
     await rm(stagedDump, { force: true })
     throw restored.failure
   }
@@ -385,35 +390,22 @@ function platformHeader(
   return header
 }
 
-function spawnPlatformDump(container: string): ChildProcessWithoutNullStreams {
-  return spawn(
-    "docker",
-    [
-      "exec",
-      "-i",
-      container,
-      "sh",
-      "-ec",
-      'MYSQL_PWD="$MYSQL_ROOT_PASSWORD" exec mysqldump --user=root --single-transaction --skip-lock-tables --no-tablespaces --routines --events --triggers --add-drop-database --databases "$MYSQL_DATABASE"',
-    ],
-    { stdio: ["pipe", "pipe", "pipe"] }
-  )
-}
+const PLATFORM_DUMP =
+  'MYSQL_PWD="$MYSQL_ROOT_PASSWORD" exec mysqldump --user=root --single-transaction --skip-lock-tables --no-tablespaces --routines --events --triggers --add-drop-database --databases "$MYSQL_DATABASE"'
+const PLATFORM_IMPORT =
+  'MYSQL_PWD="$MYSQL_ROOT_PASSWORD" exec mysql --user=root "$MYSQL_DATABASE"'
 
-function spawnPlatformImport(
-  container: string
-): ChildProcessWithoutNullStreams {
-  return spawn(
-    "docker",
-    [
-      "exec",
-      "-i",
+function startPlatformClient(
+  config: RelayConfig,
+  container: string,
+  script: string
+): Promise<DockerExecProcess> {
+  return Effect.runPromise(
+    new DockerEngine(config.dockerSocket).execProcess(
       container,
-      "sh",
-      "-ec",
-      'MYSQL_PWD="$MYSQL_ROOT_PASSWORD" exec mysql --user=root "$MYSQL_DATABASE"',
-    ],
-    { stdio: ["pipe", "pipe", "pipe"] }
+      ["sh", "-ec", script],
+      { stdin: script === PLATFORM_IMPORT }
+    )
   )
 }
 
@@ -437,7 +429,7 @@ function parsePlatformManifest(value: Buffer): PlatformBackupManifest {
   return parsed as PlatformBackupManifest
 }
 
-function collectProcessErrors(child: ChildProcessWithoutNullStreams) {
+function collectProcessErrors(child: DockerExecProcess) {
   const chunks: Array<Buffer> = []
   let bytes = 0
   child.stderr.on("data", (chunk: Buffer) => {
@@ -449,40 +441,21 @@ function collectProcessErrors(child: ChildProcessWithoutNullStreams) {
   return () => Buffer.concat(chunks).toString("utf8").trim()
 }
 
-function requireSuccessfulProcess(
-  child: ChildProcessWithoutNullStreams,
+async function requireSuccessfulProcess(
+  child: DockerExecProcess,
   stderr: () => string,
   signal?: AbortSignal
 ): Promise<void> {
-  return new Promise((resolveProcess, rejectProcess) => {
-    const aborted = () => {
-      clearTimeout(timeout)
-      child.kill("SIGKILL")
-      rejectProcess(signal?.reason ?? new Error("Platform backup cancelled"))
-    }
-    const timeout = setTimeout(() => {
-      child.kill("SIGKILL")
-      rejectProcess(new Error("Platform backup command timed out"))
-    }, PLATFORM_BACKUP_TIMEOUT_MS)
-    child.once("error", (cause) => {
-      clearTimeout(timeout)
-      signal?.removeEventListener("abort", aborted)
-      rejectProcess(cause)
-    })
-    child.once("close", (code) => {
-      clearTimeout(timeout)
-      signal?.removeEventListener("abort", aborted)
-      if (code === 0) resolveProcess()
-      else
-        rejectProcess(
-          new Error(
-            stderr() || `Platform backup command exited with code ${code}`
-          )
-        )
-    })
-    signal?.addEventListener("abort", aborted, { once: true })
-    if (signal?.aborted) aborted()
+  const code = await child.waitFor({
+    signal,
+    timedOut: "Platform backup command timed out",
+    timeout: PLATFORM_BACKUP_TIMEOUT_MS,
   })
+  if (code !== 0) {
+    throw new Error(
+      stderr() || `Platform backup command exited with code ${code}`
+    )
+  }
 }
 
 function byteMeter(

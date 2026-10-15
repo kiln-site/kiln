@@ -2,8 +2,8 @@
  * A stateful, in-memory Docker for Relay tests.
  *
  * Relay drives Docker through the Engine API on `config.dockerSocket` and, to
- * create containers, networks, and volumes, pull images, and run clients that
- * read stdin, the CLI (`./command.js`). Tests replace both at that boundary:
+ * create containers, networks, and volumes, and pull images, the CLI
+ * (`./command.js`). Tests replace both at that boundary:
  *
  *   vi.mock("./command.js", () => import("./test/docker.js"))
  *   config.dockerSocket = await fakeDocker.listen()
@@ -87,7 +87,15 @@ export interface FakeContainer {
   /** Everything written to the container's console through `attach`. */
   stdin: string
   /** Processes run with `docker exec`, as the container saw them. */
-  processes: Array<{ argv: Array<string>; env: Record<string, string> }>
+  processes: Array<{
+    argv: Array<string>
+    env: Record<string, string>
+    user?: string
+  }>
+  /** What a database client in the container dumps. */
+  sqlDump: string
+  /** SQL database clients in the container were given on stdin. */
+  executedSql: Array<string>
   /** iptables chains inside the container's network namespace. */
   firewall: Map<string, Array<string>>
   /** TCP ports the container's process is listening on. */
@@ -101,6 +109,8 @@ export interface FakeExec {
   readonly cmd: Array<string>
   readonly env: Record<string, string>
   readonly tty: boolean
+  readonly attachStdin: boolean
+  readonly user: string | undefined
   size: { cols: number; rows: number } | null
   running: boolean
   /** Set once a non-interactive exec has run. */
@@ -220,6 +230,11 @@ export class FakeDocker {
   execGreeting = ""
   /** Local images and their labels. */
   readonly images = new Map<string, Record<string, string>>()
+  /**
+   * Programs that fail when a container runs them, with what they print to
+   * stderr; they exit with code 1.
+   */
+  readonly programFailures = new Map<string, string>()
   /** Images whose registry cannot be reached; pulling them fails. */
   readonly unreachableImages = new Set<string>()
   /** What pulling an image prints before its final status, by image. */
@@ -287,6 +302,7 @@ export class FakeDocker {
     this.unreachableImages.clear()
     this.pullOutput.clear()
     this.crashingImages.clear()
+    this.programFailures.clear()
     this.tailscale.controlPlaneReachable = true
     this.tailscale.machines.clear()
     this.#faults.length = 0
@@ -363,6 +379,8 @@ export class FakeDocker {
       lastLogRead: null,
       stdin: "",
       processes: [],
+      sqlDump: "",
+      executedSql: [],
       firewall: new Map(),
       listeningPorts: [...(seed.listeningPorts ?? [])],
     }
@@ -572,7 +590,6 @@ export class FakeDocker {
     if (first === "run") return this.#create(rest, options, true, input)
     if (first === "network") return this.#networkCommand(rest)
     if (first === "volume") return this.#volumeCommand(rest)
-    if (first === "exec") return this.#exec(rest)
     if (first === "pull") return this.#pull(rest)
     return this.#unsupported(`docker ${arguments_.join(" ")}`)
   }
@@ -986,39 +1003,30 @@ export class FakeDocker {
 
   // ---------------------------------------------------------- logs and exec
 
-  async #exec(arguments_: Array<string>): Promise<string> {
-    const env: Record<string, string> = {}
-    let index = 0
-    while (arguments_[index]?.startsWith("-")) {
-      const flag = arguments_[index]
-      if (flag === "-e" || flag === "--env") {
-        const [name, value = ""] = splitOnce(arguments_[index + 1] ?? "", "=")
-        env[name] = value
-        index += 2
-      } else if (flag === "-i" || flag === "--interactive") {
-        index += 1
-      } else {
-        return this.#unsupported(`docker exec ${arguments_.join(" ")}`)
-      }
-    }
-    const reference = arguments_[index] ?? ""
-    const argv = arguments_.slice(index + 1)
-    await this.#checkpoint("exec", reference)
-    const container = this.#requiredContainer(reference)
-    if (!container.state.running) {
-      throw new DockerFailure(`container ${reference} is not running`, 409)
-    }
-    return this.#runProgram(container, argv, env)
-  }
-
   /** What a process Relay runs with `docker exec` prints, or how it fails. */
   #runProgram(
     container: FakeContainer,
     argv: Array<string>,
-    env: Record<string, string>
+    env: Record<string, string>,
+    input = "",
+    user?: string
   ): string {
-    container.processes.push({ argv, env })
+    container.processes.push({ argv, env, ...(user ? { user } : {}) })
     const [program = "", ...programArguments] = argv
+    // A shell script names the client it runs with `exec`.
+    const client =
+      program === "sh" || program === "bash"
+        ? (/\bexec (\S+)/u.exec(programArguments[1] ?? "")?.[1] ?? program)
+        : program
+    const failure = this.programFailures.get(client)
+    if (failure !== undefined) throw new DockerFailure(failure)
+    if (["mysqldump", "mariadb-dump", "pg_dump"].includes(client)) {
+      return container.sqlDump
+    }
+    if (["mysql", "mariadb", "psql"].includes(client)) {
+      container.executedSql.push(input)
+      return ""
+    }
     if (program === "iptables") {
       return iptables(container.firewall, programArguments)
     }
@@ -1362,13 +1370,14 @@ export class FakeDocker {
         throw new DockerFailure(`Container ${target.id} is not running`, 409)
       }
       const input = JSON.parse(body) as {
+        AttachStdin?: boolean
         Cmd?: Array<string>
         Env?: Array<string>
         Tty?: boolean
         User?: string
       }
-      if (input.User) return this.#unsupported(`exec as ${input.User}`)
       const exec: FakeExec = {
+        attachStdin: input.AttachStdin ?? false,
         cmd: input.Cmd ?? [],
         containerId: target.id,
         env: Object.fromEntries(
@@ -1381,6 +1390,7 @@ export class FakeDocker {
         running: false,
         size: null,
         tty: input.Tty ?? false,
+        user: input.User,
       }
       this.execs.set(exec.id, exec)
       return json(201, { Id: exec.id })
@@ -1591,7 +1601,13 @@ export class FakeDocker {
     let stdout = ""
     let stderr = ""
     try {
-      stdout = this.#runProgram(container, exec.cmd, exec.env)
+      stdout = this.#runProgram(
+        container,
+        exec.cmd,
+        exec.env,
+        "",
+        exec.user
+      )
       exec.exitCode = 0
     } catch (cause) {
       if (!(cause instanceof DockerFailure)) throw cause
@@ -1713,6 +1729,10 @@ export class FakeDocker {
       socket.end("HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n")
       return
     }
+    if (!exec.tty) {
+      this.#startStreamedExec(exec, request, socket, head)
+      return
+    }
     exec.running = true
     this.#execSockets.set(execId, socket)
     socket.write(
@@ -1748,6 +1768,77 @@ export class FakeDocker {
       this.#execSockets.delete(execId)
     })
     socket.on("error", () => undefined)
+  }
+
+  /**
+   * A non-TTY exec over an upgraded connection: it reads stdin until the
+   * client half-closes it (or right away without stdin), then answers with
+   * its output, multiplexed, and exits.
+   */
+  #startStreamedExec(
+    exec: FakeExec,
+    request: IncomingMessage,
+    socket: Duplex,
+    head: Buffer
+  ) {
+    exec.running = true
+    this.#execSockets.set(exec.id, socket)
+    socket.write(
+      "HTTP/1.1 101 UPGRADED\r\nContent-Type: application/vnd.docker.multiplexed-stream\r\nConnection: Upgrade\r\nUpgrade: tcp\r\n\r\n"
+    )
+    let bodyLeft = Number(request.headers["content-length"] ?? 0)
+    const input: Array<Buffer> = []
+    let finished = false
+    const finish = () => {
+      if (finished) return
+      finished = true
+      const container = this.containers.get(exec.containerId)
+      let stdout = ""
+      let stderr = ""
+      let exitCode = 0
+      if (!container?.state.running) {
+        stderr = "container is not running\n"
+        exitCode = 126
+      } else {
+        try {
+          stdout = this.#runProgram(
+            container,
+            exec.cmd,
+            exec.env,
+            Buffer.concat(input).toString("utf8"),
+            exec.user
+          )
+        } catch (cause) {
+          if (!(cause instanceof DockerFailure)) throw cause
+          stderr = `${cause.message}\n`
+          exitCode = 1
+        }
+      }
+      exec.exitCode = exitCode
+      exec.running = false
+      if (socket.destroyed) return
+      if (stdout) socket.write(frame(1, Buffer.from(stdout)))
+      if (stderr) socket.write(frame(2, Buffer.from(stderr)))
+      socket.end()
+    }
+    const receive = (chunk: Buffer) => {
+      if (bodyLeft > 0) {
+        const taken = Math.min(bodyLeft, chunk.length)
+        bodyLeft -= taken
+        chunk = chunk.subarray(taken)
+      }
+      if (chunk.length > 0) input.push(chunk)
+    }
+    if (head.length > 0) receive(head)
+    socket.on("data", receive)
+    // The client half-closing the connection closes the process's stdin.
+    socket.on("end", finish)
+    socket.on("close", () => {
+      exec.running = false
+      this.#execSockets.delete(exec.id)
+    })
+    socket.on("error", () => undefined)
+    if (!exec.attachStdin) setImmediate(finish)
   }
 
   // Detached execs Relay runs are `sh -c` scripts that hang up clients by

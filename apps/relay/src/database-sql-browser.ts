@@ -1,4 +1,3 @@
-import { type ChildProcess, spawn } from "node:child_process"
 import { Duplex } from "node:stream"
 
 import type {
@@ -25,6 +24,8 @@ import { Effect, Exit, Result } from "effect"
 import mysql from "mysql2"
 import pg from "pg"
 
+import type { DatabaseDriver } from "./databases.js"
+import type { DockerExecProcess } from "./docker-engine.js"
 import { RelayDatabaseBrowserError } from "./effect/errors.js"
 import { promiseEffect, recoverPromise } from "./effect/promise.js"
 
@@ -57,6 +58,7 @@ export interface BrowseAccess {
 }
 
 export function browseManagedDatabase(
+  databases: Pick<DatabaseDriver, "process">,
   database: RelayManagedDatabase,
   credentials: ManagedDatabaseCredentials,
   request: DatabaseReadRequest | DatabaseWriteRequest,
@@ -77,10 +79,16 @@ export function browseManagedDatabase(
       browserError("not_running", "Start the database to browse its tables")
     )
   }
+  const port = database.internalPort
   const target = {
-    container,
     databaseName: database.databaseName,
-    port: database.internalPort,
+    open: () =>
+      databases.process(
+        database,
+        [...CONTAINER_SOCKET_COMMAND, String(port)],
+        { stdin: true }
+      ),
+    port,
     ...credentials,
   }
   return Effect.acquireUseRelease(
@@ -165,8 +173,9 @@ interface SqlSession {
 }
 
 interface SessionTarget extends ManagedDatabaseCredentials {
-  container: string
   databaseName: string
+  // Starts the process a session's connection runs over.
+  open: () => Promise<DockerExecProcess>
   port: number
 }
 
@@ -188,7 +197,7 @@ class PostgresSession implements SqlSession {
       password: target.password,
       port: target.port,
       statement_timeout: STATEMENT_TIMEOUT_MS,
-      stream: () => new ContainerSocket(target.container, target.port),
+      stream: () => new ContainerSocket(target.open),
       // Every value arrives as Postgres text; columns decode by type below.
       types: { getTypeParser: () => (value: string) => value },
       user: target.username,
@@ -341,7 +350,7 @@ class MysqlSession implements SqlSession {
       database: target.databaseName,
       multipleStatements,
       password: target.password,
-      stream: () => new ContainerSocket(target.container, target.port),
+      stream: () => new ContainerSocket(target.open),
       supportBigNumbers: true,
       user: target.username,
     })
@@ -453,68 +462,88 @@ class MysqlSession implements SqlSession {
   }
 }
 
-// A Duplex that pg and mysql2 use in place of a TCP socket. Inside the
-// database container, bash connects to the engine on loopback and copies
-// bytes both ways over `docker exec`'s stdio.
+// Inside the database container, bash connects to the engine on loopback and
+// copies bytes both ways over the exec's stdio. When the Relay side closes,
+// it stops the reader too, so the database sees the connection drop instead
+// of holding it until it times out. bash must reap the reader itself: an
+// orphan is adopted by the container's PID 1, which in the Postgres image is
+// the postmaster, and it restarts the server when an unknown child dies by
+// signal.
+const CONTAINER_SOCKET_COMMAND = [
+  "bash",
+  "-c",
+  'exec 3<>"/dev/tcp/127.0.0.1/$0" || exit 1; cat <&3 & reader=$!; cat >&3; kill "$reader" 2>/dev/null; wait "$reader"',
+]
+
+// A Duplex that pg and mysql2 use in place of a TCP socket, carried by an
+// exec in the database container (see CONTAINER_SOCKET_COMMAND).
 class ContainerSocket extends Duplex {
-  readonly #container: string
-  readonly #port: number
-  #child: ChildProcess | null = null
+  readonly #open: () => Promise<DockerExecProcess>
+  #ready: Promise<DockerExecProcess | null> | null = null
+  #process: DockerExecProcess | null = null
   #stderr = ""
 
-  constructor(container: string, port: number) {
+  constructor(open: () => Promise<DockerExecProcess>) {
     super()
-    this.#container = container
-    this.#port = port
+    this.#open = open
     // mysql2 never calls connect(); pg calls it once with its own arguments.
     queueMicrotask(() => this.connect())
   }
 
   connect() {
-    if (this.#child) return this
-    const child = spawn(
-      "docker",
-      [
-        "exec",
-        "-i",
-        this.#container,
-        "bash",
-        "-c",
-        // When the Relay side closes, stop the reader too, so the database
-        // sees the connection drop instead of holding it until it times out.
-        // bash must reap the reader itself: an orphan is adopted by the
-        // container's PID 1, which in the Postgres image is the postmaster,
-        // and it restarts the server when an unknown child dies by signal.
-        'exec 3<>"/dev/tcp/127.0.0.1/$0" || exit 1; cat <&3 & reader=$!; cat >&3; kill "$reader" 2>/dev/null; wait "$reader"',
-        String(this.#port),
-      ],
-      { stdio: ["pipe", "pipe", "pipe"] }
-    )
-    this.#child = child
-    child.once("spawn", () => this.emit("connect"))
-    child.once("error", (error) => this.destroy(error))
-    child.stdout?.on("data", (chunk: Buffer) => {
-      if (!this.push(chunk)) child.stdout?.pause()
-    })
-    child.stdout?.once("end", () => this.push(null))
-    child.stderr?.on("data", (chunk: Buffer) => {
-      this.#stderr = `${this.#stderr}${chunk.toString("utf8")}`.slice(-2_000)
-    })
-    child.once("exit", (code) => {
-      if (code && code !== 0 && !this.destroyed) {
-        this.destroy(
-          new Error(
-            this.#stderr.trim() ||
-              `The database connection closed with code ${code}`
-          )
-        )
-      }
-    })
+    this.#ready ??= this.#start()
     return this
   }
 
+  async #start(): Promise<DockerExecProcess | null> {
+    const started = await Effect.runPromise(
+      Effect.result(Effect.tryPromise(() => this.#open()))
+    )
+    if (Result.isFailure(started)) {
+      this.destroy(
+        started.failure.cause instanceof Error
+          ? started.failure.cause
+          : new Error("The database connection could not be opened")
+      )
+      return null
+    }
+    const process = started.success
+    if (this.destroyed) {
+      process.kill()
+      return null
+    }
+    this.#process = process
+    process.stdout.on("data", (chunk: Buffer) => {
+      if (!this.push(chunk)) process.stdout.pause()
+    })
+    process.stdout.once("end", () => this.push(null))
+    process.stdout.on("error", () => undefined)
+    process.stderr.on("data", (chunk: Buffer) => {
+      this.#stderr = `${this.#stderr}${chunk.toString("utf8")}`.slice(-2_000)
+    })
+    process.stderr.on("error", () => undefined)
+    void this.#watchExit(process)
+    this.emit("connect")
+    return process
+  }
+
+  async #watchExit(process: DockerExecProcess) {
+    const exited = await Effect.runPromise(Effect.result(process.exitCode))
+    if (this.destroyed) return
+    const code = Result.isSuccess(exited) ? exited.success : null
+    if (code === 0) return
+    this.destroy(
+      new Error(
+        this.#stderr.trim() ||
+          (code === null
+            ? "The database connection closed unexpectedly"
+            : `The database connection closed with code ${code}`)
+      )
+    )
+  }
+
   override _read() {
-    this.#child?.stdout?.resume()
+    this.#process?.stdout.resume()
   }
 
   override _write(
@@ -522,25 +551,32 @@ class ContainerSocket extends Duplex {
     _encoding: BufferEncoding,
     callback: (error?: Error | null) => void
   ) {
-    const stdin = this.#child?.stdin
-    if (!stdin) {
-      callback(new Error("The database connection is not open"))
-      return
-    }
-    stdin.write(chunk, callback)
+    void this.#whenOpen((process) => {
+      if (!process) {
+        callback(new Error("The database connection is not open"))
+        return
+      }
+      process.stdin.write(chunk, callback)
+    })
   }
 
   override _final(callback: (error?: Error | null) => void) {
-    this.#child?.stdin?.end()
-    callback()
+    void this.#whenOpen((process) => {
+      process?.stdin.end()
+      callback()
+    })
+  }
+
+  async #whenOpen(use: (process: DockerExecProcess | null) => void) {
+    this.connect()
+    use(this.#process ?? (await this.#ready))
   }
 
   override _destroy(
     error: Error | null,
     callback: (error?: Error | null) => void
   ) {
-    this.#child?.stdin?.destroy()
-    this.#child?.kill()
+    this.#process?.kill()
     callback(error)
   }
 

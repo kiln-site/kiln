@@ -12,7 +12,6 @@ import {
   type DatabaseConnections,
   type DatabaseConnectionSnapshot,
 } from "./database-connections.js"
-import { command } from "./command.js"
 import {
   DockerEngine,
   DockerEngineError,
@@ -892,43 +891,30 @@ export class DockerDriver {
             : action === "restart"
               ? (INSTANCE_STOP_TIMEOUT_SECONDS + 60) * 1_000
               : (INSTANCE_STOP_TIMEOUT_SECONDS + 15) * 1_000
-        if (instance.managedByRelay) {
-          const engine = this.#engine
-          await runEffect(
-            Effect.gen(function* () {
-              yield* engine.setRestartPolicy(instance.service, "no")
-              const options = {
-                seconds: INSTANCE_STOP_TIMEOUT_SECONDS,
-                timeout,
-              }
-              yield* action === "start"
-                ? engine.startContainer(instance.service, { timeout })
-                : action === "stop"
-                  ? engine.stopContainer(instance.service, options)
-                  : action === "restart"
-                    ? engine.restartContainer(instance.service, options)
-                    : engine.killContainer(instance.service, { timeout })
-            })
-          )
-        } else {
-          const common = this.#composeArguments()
-          const actionArguments =
-            action === "start"
-              ? ["up", "--detach", "--no-deps", instance.service]
-              : action === "stop" || action === "restart"
-                ? [
-                    action,
-                    "--timeout",
-                    String(INSTANCE_STOP_TIMEOUT_SECONDS),
-                    instance.service,
-                  ]
-                : [action, instance.service]
-
-          await command("docker", [...common, ...actionArguments], {
-            cwd: this.#config.projectDirectory,
-            timeout,
+        const engine = this.#engine
+        // Instances Relay doesn't own keep their restart policy, and are
+        // addressed by the container discovery found for them.
+        const container = instance.managedByRelay
+          ? instance.service
+          : discovered.container.Id
+        await runEffect(
+          Effect.gen(function* () {
+            if (instance.managedByRelay) {
+              yield* engine.setRestartPolicy(container, "no")
+            }
+            const options = {
+              seconds: INSTANCE_STOP_TIMEOUT_SECONDS,
+              timeout,
+            }
+            yield* action === "start"
+              ? engine.startContainer(container, { timeout })
+              : action === "stop"
+                ? engine.stopContainer(container, options)
+                : action === "restart"
+                  ? engine.restartContainer(container, options)
+                  : engine.killContainer(container, { timeout })
           })
-        }
+        )
       }).pipe(
         Effect.onError(() =>
           Effect.all(
@@ -2544,17 +2530,6 @@ export class DockerDriver {
     }
   }
 
-  #composeArguments(): Array<string> {
-    return [
-      "compose",
-      "--file",
-      this.#config.composeFile,
-      "--project-directory",
-      this.#config.projectDirectory,
-      "--project-name",
-      this.#config.projectName,
-    ]
-  }
 }
 
 function normalizedBrickNetworkMode(

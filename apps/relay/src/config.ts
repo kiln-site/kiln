@@ -73,7 +73,6 @@ export interface RelayConfig {
   }
   canProvisionInstances: boolean
   coolifyPublicOrigin: string | null
-  composeFile: string
   connectDomain: string
   connectPort: number
   directBrowserOrigin: string
@@ -105,8 +104,6 @@ export interface RelayConfig {
   port: number
   platformBackupKey: string | null
   publicPort: number
-  projectDirectory: string
-  projectName: string
   proxyMode: RelayProxyMode
   resourceNamespace: string | null
   rootDirectory: string
@@ -224,7 +221,6 @@ export function loadConfig(
       true
     ),
     coolifyPublicOrigin,
-    composeFile: `${dataDirectory}/instances/compose.yaml`,
     connectDomain: "test",
     connectPort: 25_565,
     directBrowserOrigin,
@@ -249,10 +245,6 @@ export function loadConfig(
     port,
     platformBackupKey: optionalPlatformBackupKey(environment),
     publicPort,
-    projectDirectory: `${dataDirectory}/instances`,
-    projectName: resourceNamespace
-      ? `${resourceNamespace}-mc-servers`
-      : "mc-servers",
     proxyMode,
     resourceNamespace,
     rootDirectory: `${dataDirectory}/instances`,

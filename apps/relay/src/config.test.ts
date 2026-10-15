@@ -351,7 +351,6 @@ describe("loadConfig", () => {
 
     expect(config.installationId).toBe("hearth-feature-a1b2c3")
     expect(config.resourceNamespace).toBe("hearth-feature-a1b2c3")
-    expect(config.projectName).toBe("hearth-feature-a1b2c3-mc-servers")
   })
 
   it("rejects unsafe Docker scope identifiers", () => {

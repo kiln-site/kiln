@@ -1671,6 +1671,7 @@ async function executeControlRequest(
       return runRelayEffect(
         "relay.databases.data.read",
         browseManagedDatabase(
+          databases,
           await databases.target(input.databaseId),
           input,
           input.request,
@@ -1897,6 +1898,7 @@ async function executeControlRequest(
       return runRelayEffect(
         "relay.databases.data.write",
         browseManagedDatabase(
+          databases,
           await databases.target(input.databaseId),
           input,
           input.request,

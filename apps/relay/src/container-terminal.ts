@@ -1,5 +1,4 @@
 import { randomBytes } from "node:crypto"
-import { request } from "node:http"
 import { createRequire } from "node:module"
 import type { Duplex } from "node:stream"
 
@@ -151,7 +150,6 @@ interface TerminalSession {
 }
 
 export class ContainerTerminals {
-  readonly #config: Pick<RelayConfig, "dockerSocket">
   readonly #sessions = new Map<string, TerminalSession>()
   readonly #attachments = new Map<string, TerminalSession>()
   readonly #endings = new Map<string, DatabaseTerminalEnd>()
@@ -163,7 +161,6 @@ export class ContainerTerminals {
   readonly #docker: DockerEngine
 
   constructor(config: Pick<RelayConfig, "dockerSocket">) {
-    this.#config = config
     this.#docker = new DockerEngine(config.dockerSocket)
   }
 
@@ -384,7 +381,13 @@ export class ContainerTerminals {
         Tty: true,
       })
     )
-    const socket = await this.#startExec(created.Id, input.rows, input.cols)
+    const socket = await Effect.runPromise(
+      this.#docker.hijack(`/exec/${encodeURIComponent(created.Id)}/start`, {
+        ConsoleSize: [input.rows, input.cols],
+        Detach: false,
+        Tty: true,
+      })
+    )
     const screen = new HeadlessTerminal({
       allowProposedApi: true,
       cols: input.cols,
@@ -641,48 +644,6 @@ export class ContainerTerminals {
         })
         .pipe(Effect.flatMap((created) => docker.startDetachedExec(created.Id)))
     )
-  }
-
-  #startExec(execId: string, rows: number, cols: number) {
-    return new Promise<Duplex>((resolve, reject) => {
-      const body = JSON.stringify({
-        ConsoleSize: [rows, cols],
-        Detach: false,
-        Tty: true,
-      })
-      const started = request({
-        headers: {
-          Connection: "Upgrade",
-          "Content-Length": Buffer.byteLength(body),
-          "Content-Type": "application/json",
-          Upgrade: "tcp",
-        },
-        method: "POST",
-        path: `/exec/${encodeURIComponent(execId)}/start`,
-        socketPath: this.#config.dockerSocket,
-      })
-      const timer = setTimeout(() => {
-        started.destroy(new Error("Docker exec did not start in time"))
-      }, 10_000)
-      started.on("upgrade", (_response, socket, head) => {
-        clearTimeout(timer)
-        // Output that came in the same packet as the upgrade response.
-        if (head.length > 0) socket.unshift(head)
-        resolve(socket)
-      })
-      started.on("response", (response) => {
-        clearTimeout(timer)
-        response.resume()
-        reject(
-          new Error(`Docker exec returned HTTP ${response.statusCode ?? 500}`)
-        )
-      })
-      started.on("error", (error) => {
-        clearTimeout(timer)
-        reject(error)
-      })
-      started.end(body)
-    })
   }
 }
 
