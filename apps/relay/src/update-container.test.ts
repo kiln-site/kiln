@@ -1,5 +1,5 @@
 import { it as effectIt } from "@effect/vitest"
-import { Effect } from "effect"
+import { Effect, Fiber } from "effect"
 import { afterEach, describe, expect, it } from "vite-plus/test"
 
 import { DockerEngine } from "./docker-engine.js"
@@ -57,14 +57,20 @@ function runningHearth(options: { hostname?: string } = {}) {
     })
     // Docker named the host after the container, unless it was given one.
     current.hostname = options.hostname ?? current.id.slice(0, 12)
-    current.networks.set("kiln", { aliases: ["hearth", current.id], ipAddress: "" })
+    current.networks.set("kiln", {
+      aliases: ["hearth", current.id],
+      ipAddress: "",
+    })
     current.networks.set("edge", {
       aliases: ["hearth-edge", "b".repeat(64)],
       ipAddress: "",
     })
     fakeDocker.images.set(targetDigest, targetLabels)
     fakeDocker.imageConfigs.set(targetDigest, {
-      Healthcheck: { Interval: 5_000_000_000, Test: ["CMD", "new-healthcheck"] },
+      Healthcheck: {
+        Interval: 5_000_000_000,
+        Test: ["CMD", "new-healthcheck"],
+      },
     })
     const docker = new DockerEngine(await fakeDocker.listen())
     return { current, docker, oldImage: `sha256:${channelReference}` }
@@ -116,6 +122,7 @@ describe("container replacement", () => {
         expect(replaced?.image).toBe(channelReference)
         expect(replaced?.labels).toEqual({
           "coolify.managed": "true",
+          "io.kiln.update-operation": expect.any(String),
           ...targetLabels,
         })
         expect(replaced?.env).toEqual({ EXAMPLE: "true" })
@@ -275,6 +282,99 @@ describe("container replacement", () => {
 
         expect(hearth()?.id).toBe(current.id)
         expect(hearth()?.state.running).toBe(true)
+      })
+  )
+
+  effectIt.effect(
+    "removes a replacement Docker created when the answer to its create was lost",
+    () =>
+      Effect.gen(function* () {
+        const { current, docker, oldImage } = yield* runningHearth()
+        fakeDocker.failAfterNext(
+          { command: "create", target: "hearth" },
+          "context deadline exceeded"
+        )
+
+        const failure = yield* replaceContainerEffect(
+          replacement,
+          docker,
+          ignorePhase
+        ).pipe(Effect.flip)
+
+        expect(failure.rollbackFailures).toEqual([])
+        expect(hearth()?.id).toBe(current.id)
+        expect(hearth()?.state.running).toBe(true)
+        expect([...fakeDocker.containers.values()]).toHaveLength(1)
+        expect(channelTarget()).toBe(oldImage)
+      })
+  )
+
+  effectIt.effect(
+    "leaves a container it didn't create that took the name, and reports it",
+    () =>
+      Effect.gen(function* () {
+        const { current, docker } = yield* runningHearth()
+        // Something unrelated takes the name while the replacement is being
+        // created, so the create fails.
+        const create = fakeDocker.hold({ command: "create", target: "hearth" })
+        const replacing = Effect.runFork(
+          replaceContainerEffect(replacement, docker, ignorePhase).pipe(
+            Effect.flip
+          )
+        )
+        yield* Effect.promise(() => create.reached)
+        const stranger = fakeDocker.addContainer({
+          name: "hearth",
+          running: true,
+        })
+        create.fail('Conflict. The container name "/hearth" is already in use')
+        const failure = yield* Fiber.join(replacing)
+
+        expect(fakeDocker.container(stranger.id)).toMatchObject({
+          name: "hearth",
+          state: { running: true },
+        })
+        expect(fakeDocker.container(current.id)?.name).toBe("hearth-backup")
+        expect(failure.rollbackFailures.join(" ")).toContain("didn't create")
+      })
+  )
+
+  effectIt.effect(
+    "keeps a healthy replacement when removing the old container fails after Docker removed it",
+    () =>
+      Effect.gen(function* () {
+        const { current, docker } = yield* runningHearth()
+        fakeDocker.failAfterNext({ command: "rm" }, "context deadline exceeded")
+
+        yield* replaceContainerEffect(replacement, docker, ignorePhase)
+
+        expect(hearth()?.id).not.toBe(current.id)
+        expect(hearth()?.state.running).toBe(true)
+        expect(fakeDocker.container(current.id)).toBeUndefined()
+      })
+  )
+
+  effectIt.effect(
+    "restarts the old container when the rename back reports a failure Docker applied",
+    () =>
+      Effect.gen(function* () {
+        const { current, docker, oldImage } = yield* runningHearth()
+        fakeDocker.unhealthyImages.add(channelReference)
+        fakeDocker.failAfterNext(
+          { command: "rename", target: current.id },
+          "context deadline exceeded"
+        )
+
+        const failure = yield* replaceContainerEffect(
+          replacement,
+          docker,
+          ignorePhase
+        ).pipe(Effect.flip)
+
+        expect(failure.rollbackFailures).toEqual([])
+        expect(hearth()?.id).toBe(current.id)
+        expect(hearth()?.state.running).toBe(true)
+        expect(channelTarget()).toBe(oldImage)
       })
   )
 

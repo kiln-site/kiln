@@ -1070,6 +1070,7 @@ export class FakeDocker {
     }
     this.#endExecs(container)
     this.containers.delete(container.id)
+    this.#appliedCheckpoint("rm", reference)
   }
 
   async #renameOne(from: string, to: string): Promise<void> {
@@ -1351,6 +1352,7 @@ export class FakeDocker {
       const name = url.searchParams.get("name") ?? undefined
       await this.#checkpoint("create", name)
       const container = this.#createFromApi(name, JSON.parse(body))
+      this.#appliedCheckpoint("create", name)
       return json(201, { Id: container.id, Warnings: [] })
     }
     if (
