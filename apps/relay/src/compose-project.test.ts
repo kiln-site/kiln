@@ -6,6 +6,7 @@ import { Effect, Fiber } from "effect"
 import { afterEach, beforeEach, describe, expect, it } from "vite-plus/test"
 
 import { loadComposeProject } from "./compose-load.js"
+import { readComposeProject } from "./compose-project.js"
 import { loadConfig } from "./config.js"
 
 let directory: string
@@ -39,6 +40,19 @@ function loading(
     ),
     warnings,
   }
+}
+
+// The load itself, on this thread, for how long its own work takes, apart
+// from the worker's start (which is slow under tsx in tests).
+async function read(yaml: string, environment: Record<string, string> = {}) {
+  const project = await readComposeProject({
+    environment,
+    onWarning: () => undefined,
+    projectDirectory: directory,
+    projectName: "kiln-app-x",
+    yaml,
+  })
+  return { project }
 }
 
 async function load(yaml: string, environment: Record<string, string> = {}) {
@@ -401,7 +415,7 @@ describe("Compose features Kiln can't run", () => {
     const repeated = Array.from({ length: 65_000 }, () => "'80'").join(", ")
 
     const started = performance.now()
-    const { project } = await load(
+    const { project } = await read(
       `services:\n  web:\n    image: nginx\n    ports: [${repeated}, { target: 80, published: "8080" }, '8080:80']\n    expose: ['90', '90']\n`
     )
 
@@ -425,7 +439,7 @@ describe("Compose features Kiln can't run", () => {
   })
 })
 
-describe("Compose files, loaded off the Relay's thread", () => {
+describe("Compose files, loaded off the Relay's thread", { timeout: 30_000 }, () => {
   it("stops a load past its configured time, while this thread keeps running", async () => {
     const { effect } = loading(slowToLoad, {}, {
       KILN_RELAY_COMPOSE_LOAD_TIMEOUT: "1",
@@ -475,14 +489,14 @@ describe("Compose files, bounded", () => {
     const keys = Array.from({ length: 30_000 }, (_, index) => `k${index}: v`)
 
     const started = performance.now()
-    const { project } = await load(
+    const { project } = await read(
       `services:\n  web:\n    image: nginx\n    labels: {${keys.join(", ")}}\n`
     )
     expect(performance.now() - started).toBeLessThan(3_000)
     expect(Object.keys(project.services.web?.labels ?? {})).toHaveLength(30_000)
 
     await expect(
-      load(`services:\n  web:\n    image: nginx\n    labels: {${keys.join(", ")}, k7: again}\n`)
+      read(`services:\n  web:\n    image: nginx\n    labels: {${keys.join(", ")}, k7: again}\n`)
     ).rejects.toThrow('The Compose file is not valid YAML: Map keys must be unique ("k7")')
   })
 
@@ -503,7 +517,7 @@ describe("Compose files, bounded", () => {
     ].join("\n")
 
     const started = performance.now()
-    await expect(load(yaml)).rejects.toThrow(
+    await expect(read(yaml)).rejects.toThrow(
       "The Compose file comes to more than 100000 values with its aliases expanded"
     )
     expect(performance.now() - started).toBeLessThan(1_000)
@@ -553,7 +567,7 @@ describe("Compose files, bounded", () => {
 describe("Compose variable substitution, bounded", () => {
   it("substitutes 55,000 defaults on one line in time linear in its length", async () => {
     const started = performance.now()
-    const { project } = await load(
+    const { project } = await read(
       `services:\n  web:\n    image: nginx\n    environment:\n      LONG: "${"${UNSET:-x}".repeat(55_000)}"\n`
     )
 

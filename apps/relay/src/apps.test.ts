@@ -605,7 +605,9 @@ describe("apps", () => {
     expect(appContainers()).toEqual([])
   })
 
-  describe("Compose projects", () => {
+  // Each deployment's Compose load starts a worker, which tsx compiles at
+  // each start in tests.
+  describe("Compose projects", { timeout: 30_000 }, () => {
     const project = `${TEST_NAMESPACE}-kiln-app-${appId}`
     const composeFile = [
       "services:",
