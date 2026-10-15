@@ -204,7 +204,8 @@ describe("apps", () => {
     expect(rest.map(index)).toEqual(history.lines.map(index))
     // The oldest lines were dropped from the log.
     expect(index(history.lines[0])).toBeGreaterThan(0)
-  })
+    // About 18 MB of pull output goes through the fake Docker's API.
+  }, 15_000)
 
   it("labels a deployed container for its web routes on an external Traefik", async () => {
     const harness = await relayHarness({ KILN_RELAY_PROXY: "none" })
