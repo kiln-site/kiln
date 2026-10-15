@@ -251,15 +251,31 @@ export function createContainer(
   spec: ContainerSpec,
   options: { readonly pullTimeout?: number } = {}
 ): Effect.Effect<{ readonly Id: string }, DockerEngineError> {
-  const create = engine.createContainer(spec.name, containerCreateBody(spec))
-  return create.pipe(
-    Effect.catchIf(
-      (cause) => isDockerNotFound(cause) && /no such image/iu.test(cause.reason),
-      () =>
-        engine
-          .pullImage(spec.image, { timeout: options.pullTimeout })
-          .pipe(Effect.andThen(create))
-    )
+  // An invalid size or duration fails the create, like a flag the CLI
+  // rejected, instead of throwing past the caller's cleanup.
+  const body = Effect.try({
+    try: () => containerCreateBody(spec),
+    catch: (cause) =>
+      new DockerEngineError({
+        cause,
+        operation: "POST /containers/create",
+        reason: cause instanceof Error ? cause.message : String(cause),
+      }),
+  })
+  return body.pipe(
+    Effect.flatMap((created) => {
+      const create = engine.createContainer(spec.name, created)
+      return create.pipe(
+        Effect.catchIf(
+          (cause) =>
+            isDockerNotFound(cause) && /no such image/iu.test(cause.reason),
+          () =>
+            engine
+              .pullImage(spec.image, { timeout: options.pullTimeout })
+              .pipe(Effect.andThen(create))
+        )
+      )
+    })
   )
 }
 
