@@ -15,7 +15,7 @@ import { homedir } from "node:os"
 import { join, resolve } from "node:path"
 
 import { Effect, Predicate, Result } from "effect"
-import { isCollection, parseDocument, visit } from "yaml"
+import { isCollection, isScalar, parseDocument, visit } from "yaml"
 
 import { cleanPath } from "./docker-patterns.js"
 import { shellWords } from "./shell-words.js"
@@ -387,6 +387,9 @@ export async function readComposeProject(
     customTags: (tags) => [LEGACY_OCTAL, ...tags],
     merge: true,
     prettyErrors: false,
+    // Checked below, once per mapping; the library compares each key with
+    // every other, which 30,000 keys made take seconds.
+    uniqueKeys: false,
   })
   const [problem] = [...document.errors, ...document.warnings]
   if (problem) {
@@ -399,6 +402,19 @@ export async function readComposeProject(
   // A list or mapping as a key, which Compose has no use for, and which
   // would hide its depth from the tree's check.
   visit(document, {
+    Map(_, map) {
+      // Keys unique by value, as the library's own check compares them.
+      const keys = new Set<unknown>()
+      for (const pair of map.items) {
+        if (!isScalar(pair.key)) continue
+        if (keys.has(pair.key.value)) {
+          throw new ComposeError(
+            `The Compose file is not valid YAML: Map keys must be unique (${JSON.stringify(String(pair.key.value))})`
+          )
+        }
+        keys.add(pair.key.value)
+      }
+    },
     Pair(_, pair) {
       if (isCollection(pair.key)) {
         throw new ComposeError(

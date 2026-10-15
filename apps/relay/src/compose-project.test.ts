@@ -471,6 +471,21 @@ describe("Compose files, loaded off the Relay's thread", () => {
 })
 
 describe("Compose files, bounded", () => {
+  it("checks 30,000 keys for duplicates in time linear in their number", async () => {
+    const keys = Array.from({ length: 30_000 }, (_, index) => `k${index}: v`)
+
+    const started = performance.now()
+    const { project } = await load(
+      `services:\n  web:\n    image: nginx\n    labels: {${keys.join(", ")}}\n`
+    )
+    expect(performance.now() - started).toBeLessThan(3_000)
+    expect(Object.keys(project.services.web?.labels ?? {})).toHaveLength(30_000)
+
+    await expect(
+      load(`services:\n  web:\n    image: nginx\n    labels: {${keys.join(", ")}, k7: again}\n`)
+    ).rejects.toThrow('The Compose file is not valid YAML: Map keys must be unique ("k7")')
+  })
+
   it("refuses a list or mapping used as a key", async () => {
     await expect(
       load(`services:\n  web:\n    image: nginx\n    labels: { ? ${"[".repeat(300)}${"]".repeat(300)} : x }\n`)
