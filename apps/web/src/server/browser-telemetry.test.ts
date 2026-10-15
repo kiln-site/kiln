@@ -37,7 +37,11 @@ describe("browser telemetry forwarding", () => {
   beforeEach(() => {
     boundary.signedIn = true
     boundary.forwarded = []
-    vi.stubEnv("OTEL_EXPORTER_OTLP_ENDPOINT", "https://otlp.example.com/otlp")
+    // The query parameter must survive appending the signal path.
+    vi.stubEnv(
+      "OTEL_EXPORTER_OTLP_ENDPOINT",
+      "https://otlp.example.com/otlp?tenant=one"
+    )
     vi.stubEnv("OTEL_EXPORTER_OTLP_HEADERS", "authorization=Bearer%20secret")
     vi.stubEnv("OTEL_TRACES_SAMPLER_ARG", "0.5")
     vi.stubGlobal("fetch", async (url: string, init: RequestInit) => {
@@ -94,7 +98,9 @@ describe("browser telemetry forwarding", () => {
     expect(response.status).toBe(204)
     expect(boundary.forwarded).toHaveLength(1)
     const [request] = boundary.forwarded
-    expect(request.url).toBe("https://otlp.example.com/otlp/v1/logs")
+    expect(request.url).toBe(
+      "https://otlp.example.com/otlp/v1/logs?tenant=one"
+    )
     expect(request.headers.get("authorization")).toBe("Bearer secret")
     expect(request.body).toMatchObject({
       resourceLogs: [

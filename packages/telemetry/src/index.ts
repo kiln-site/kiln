@@ -131,11 +131,11 @@ export const otlpTarget = (
     const baseEndpoint = yield* Config.URL("OTEL_EXPORTER_OTLP_ENDPOINT").pipe(
       Config.withDefault(undefined)
     )
-    const url =
-      signalEndpoint?.toString() ??
-      (baseEndpoint
-        ? `${baseEndpoint.toString().replace(/\/$/u, "")}/v1/${signal}`
-        : undefined)
+    if (!signalEndpoint && baseEndpoint) {
+      // The path is extended, not the string, so query parameters survive.
+      baseEndpoint.pathname = `${baseEndpoint.pathname.replace(/\/$/u, "")}/v1/${signal}`
+    }
+    const url = (signalEndpoint ?? baseEndpoint)?.toString()
     if (!url) return Option.none()
     const headers = yield* headersConfig(
       `OTEL_EXPORTER_OTLP_${name}_HEADERS`
