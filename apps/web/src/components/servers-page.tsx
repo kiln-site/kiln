@@ -330,8 +330,14 @@ const AddServerButton = React.memo(function AddServerButton({
 }) {
   if (!canProvision) return null
   return (
-    <Button type="button" onClick={dialogStore.open}>
-      <Plus /> Add Game Server
+    <Button
+      type="button"
+      aria-label="Add Game Server"
+      onClick={dialogStore.open}
+    >
+      <Plus />
+      <span className="sm:hidden">Add</span>
+      <span className="hidden sm:inline">Add Game Server</span>
     </Button>
   )
 })

@@ -85,7 +85,12 @@ function serverRoutes(
   routeId: string,
   capabilities: NavigationAccessCapabilities
 ) {
-  const serverKeywords = ["server", instance.name, instance.implementation]
+  const serverKeywords = [
+    "server",
+    "game server",
+    instance.name,
+    instance.implementation,
+  ]
   return accessibleDestinationsForServer(instance, capabilities).map(
     (destination) => ({
       icon: destination.icon,
