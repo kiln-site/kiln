@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises"
+import { mkdir, mkdtemp, readFile, rename, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { setImmediate as yieldToEventLoop } from "node:timers/promises"
@@ -140,6 +140,48 @@ function runNow(schedules: ScheduleManager) {
 }
 
 describe("Relay schedule persistence", () => {
+  it("recovers a failed completion write during idle ticks before restart", async () => {
+    const errors: Array<string> = []
+    const commands: Array<string> = []
+    const { directory, restart, schedules } = await manager({
+      findInstance: async () => ({}),
+      reportError: (message) => errors.push(message),
+      sendConsoleCommand: async (_instanceId, command) => {
+        commands.push(command)
+        // Keep the durable running claim, but make the completion write fail.
+        await rename(statePath, savedStatePath)
+        await mkdir(statePath)
+      },
+    })
+    const statePath = join(directory, "schedules.json")
+    const savedStatePath = join(directory, "saved-schedules.json")
+    // Manual execution of a disabled schedule leaves no future run to flush it.
+    await schedules.apply({ ...projection, enabled: false })
+    await runNow(schedules)
+    await advanceUntil(() => {
+      expect(errors).toContain(`Scheduled occurrence ${projection.id} failed`)
+      expect(latestRun(schedules)?.status).toBe("succeeded")
+    })
+
+    await rm(statePath, { recursive: true })
+    await rename(savedStatePath, statePath)
+    const fiber = Effect.runFork(schedules.run())
+    try {
+      await advanceUntil(async () => {
+        const state = JSON.parse(await readFile(statePath, "utf8"))
+        expect(state.runs[0].status).toBe("succeeded")
+      }, 1_000)
+    } finally {
+      await Effect.runPromise(Fiber.interrupt(fiber))
+      schedules.close()
+    }
+
+    const recovered = await restart()
+    expect(latestRun(recovered)?.status).toBe("succeeded")
+    expect(commands).toEqual(["say hello"])
+    recovered.close()
+  })
+
   it("persists due runs before execution and preserves completed history on restart", async () => {
     const commands: Array<string> = []
     const { directory, restart, schedules } = await manager({

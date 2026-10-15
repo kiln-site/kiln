@@ -112,6 +112,7 @@ export class ScheduleManager {
   readonly #options: ScheduleManagerOptions
   readonly #semaphore = Semaphore.makeUnsafe(1)
   readonly #statePath: string
+  #persistencePending = false
   #state: PersistedState
 
   private constructor(options: ScheduleManagerOptions, state: PersistedState) {
@@ -317,9 +318,13 @@ export class ScheduleManager {
           schedule.nextRunAt !== null &&
           schedule.nextRunAt <= now
       )
-      if (!hasDueSchedule) return []
+      if (!hasDueSchedule) {
+        if (this.#persistencePending) await this.#persist()
+        return []
+      }
 
       const previousState = structuredClone(this.#state)
+      const previousPersistencePending = this.#persistencePending
       const claimed: Array<{
         definition: RelayScheduleProjection
         scheduledAt: number
@@ -367,6 +372,7 @@ export class ScheduleManager {
       )
       if (Result.isFailure(result)) {
         this.#state = previousState
+        this.#persistencePending = previousPersistencePending
         throw result.failure
       }
       return result.success
@@ -865,10 +871,12 @@ export class ScheduleManager {
     )
   }
 
-  #persist() {
-    return Effect.runPromise(
+  async #persist() {
+    this.#persistencePending = true
+    await Effect.runPromise(
       writeFileAtomic(this.#statePath, JSON.stringify(this.#state), 0o600)
     )
+    this.#persistencePending = false
   }
 }
 
