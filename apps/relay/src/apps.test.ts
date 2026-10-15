@@ -784,6 +784,39 @@ describe("apps", () => {
       expect(service("built")?.platform).toBe("linux/arm64")
     })
 
+    it("builds an image services share once, and doesn't pull it for the services that use it", async () => {
+      const harness = await createdApp()
+      const data = join(harness.config.dataDirectory, "apps", appId)
+      await writeFile(join(data, "Dockerfile"), "FROM busybox\n")
+
+      const app = await deploy(harness, {
+        compose: [
+          "services:",
+          "  api:",
+          "    image: example/shared:1",
+          "    build: .",
+          "  worker:",
+          "    image: example/shared:1",
+          "    build: .",
+          "  cron:",
+          "    image: example/shared:1",
+          "    pull_policy: always",
+        ].join("\n"),
+        sourceType: "compose",
+      })
+
+      expect(app.deployment).toMatchObject({ state: "succeeded" })
+      expect(fakeDocker.builds.map((build) => build.tag)).toEqual([
+        "example/shared:1",
+      ])
+      expect([...fakeDocker.pulls.keys()]).not.toContain(
+        "docker.io/example/shared:1"
+      )
+      expect(
+        ["api", "worker", "cron"].map((name) => service(name)?.image)
+      ).toEqual(["example/shared:1", "example/shared:1", "example/shared:1"])
+    })
+
     it("recreates a network whose configuration changed, and keeps one that didn't", async () => {
       const harness = await createdApp()
       const file = (internal: boolean) =>

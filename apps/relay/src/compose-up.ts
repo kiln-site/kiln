@@ -105,19 +105,13 @@ export function composeUp(
     defaultPlatform()
   return Effect.gen(function* () {
     const order = dependencyOrder(services)
-    const images = new Map<string, InspectedImage & { readonly name: string }>()
-    for (const name of order) {
-      images.set(
-        name,
-        yield* ensureImage(
-          engine,
-          project,
-          name,
-          platformOf(services[name]!),
-          options
-        )
-      )
-    }
+    const images = yield* prepareImages(
+      engine,
+      project,
+      order,
+      platformOf,
+      options
+    )
     const existing = (yield* engine.listContainers({
       all: true,
       filters: { label: [`${PROJECT_LABEL}=${project.name}`] },
@@ -305,68 +299,128 @@ function withoutUnresolvedOptionalDependencies(
 
 // ---------------------------------------------------------------- images
 
-// Builds the image of a service with a build section (as `up --build`
-// does), or pulls its image when the pull policy asks: always, or when
-// missing (including when the local image is for another platform).
-function ensureImage(
+// The image each service runs: built for services with a build section (as
+// `up --build` does), or pulled when the pull policy asks, always or when
+// missing (including when the local image is for another platform). An
+// image is built or pulled once per platform, however many services use
+// it, builds and pulls of different images run at once, and an image a
+// service builds is never pulled for another.
+function prepareImages(
+  engine: DockerEngine,
+  project: ComposeProject,
+  order: ReadonlyArray<string>,
+  platformOf: (service: ComposeService) => string | undefined,
+  options: ComposeUpOptions
+): Effect.Effect<Map<string, InspectedImage & { readonly name: string }>, Error> {
+  const services = project.services
+  const imageOf = (name: string) =>
+    services[name]!.image ?? `${project.name}-${name}`
+  return Effect.gen(function* () {
+    const builds = new Map<string, string>()
+    for (const name of order) {
+      const key = `${imageOf(name)} ${platformOf(services[name]!) ?? ""}`
+      if (services[name]!.build && !builds.has(key)) builds.set(key, name)
+    }
+    const built = new Set([...builds.values()].map(imageOf))
+    const pulled = order.filter(
+      (name) => !services[name]!.build && !built.has(imageOf(name))
+    )
+    const local = new Map<string, InspectedImage | undefined>()
+    yield* Effect.forEach(
+      new Set(pulled.map(imageOf)),
+      (image) =>
+        engine.inspectImage<InspectedImage>(image).pipe(
+          Effect.map((found): InspectedImage | undefined => found),
+          Effect.catchIf(isDockerNotFound, () => Effect.succeed(undefined)),
+          Effect.tap((found) => Effect.sync(() => local.set(image, found)))
+        ),
+      { concurrency: "unbounded", discard: true }
+    )
+    const pulls = new Map<string, readonly [string, string | undefined]>()
+    for (const name of pulled) {
+      const service = services[name]!
+      const image = imageOf(name)
+      const found = local.get(image)
+      const present =
+        found !== undefined && matchesPlatform(found, service.platform)
+      const policy = service.pull_policy ?? "missing"
+      if (policy === "always" || (policy === "missing" && !present)) {
+        const platform = platformOf(service)
+        pulls.set(`${image} ${platform ?? ""}`, [image, platform])
+      } else if (!found) {
+        return yield* Effect.fail(
+          new Error(`No such image: ${image} (pull_policy ${policy})`)
+        )
+      }
+    }
+    yield* Effect.all(
+      [
+        ...[...builds.values()].map((name) =>
+          build(engine, project, name, platformOf(services[name]!), options)
+        ),
+        ...[...pulls.values()].map(([image, platform]) =>
+          Effect.gen(function* () {
+            options.onLine(`Image ${image}  Pulling`)
+            yield* engine.pullImage(image, {
+              onLine: options.onLine,
+              platform,
+              timeout: 15 * 60_000,
+            })
+            options.onLine(`Image ${image}  Pulled`)
+          })
+        ),
+      ],
+      { concurrency: "unbounded", discard: true }
+    )
+    // What was built or pulled is inspected again; what was there is known.
+    for (const [image] of pulls.values()) local.delete(image)
+    const images = new Map<string, InspectedImage & { readonly name: string }>()
+    for (const name of order) {
+      const image = imageOf(name)
+      let found = local.get(image)
+      if (!found) {
+        found = yield* engine.inspectImage<InspectedImage>(image)
+        local.set(image, found)
+      }
+      images.set(name, { ...found, name: image })
+    }
+    return images
+  })
+}
+
+function build(
   engine: DockerEngine,
   project: ComposeProject,
   name: string,
   platform: string | undefined,
   options: ComposeUpOptions
-): Effect.Effect<InspectedImage & { readonly name: string }, Error> {
+): Effect.Effect<void, Error> {
   const service = project.services[name]!
+  const build = service.build!
   const image = service.image ?? `${project.name}-${name}`
-  const inspect = engine.inspectImage<InspectedImage>(image)
   return Effect.gen(function* () {
-    if (service.build) {
-      options.onLine(`Image ${image}  Building`)
-      yield* buildImage(engine, {
-        buildArgs: service.build.args,
-        context: service.build.context,
-        dockerfile:
-          service.build.dockerfile_inline !== undefined
-            ? { content: service.build.dockerfile_inline }
-            : { path: service.build.dockerfile ?? "Dockerfile" },
-        labels: {
-          ...service.build.labels,
-          [PROJECT_LABEL]: project.name,
-          [SERVICE_LABEL]: name,
-        },
-        noCache: service.build.no_cache,
-        onLine: options.onLine,
-        platform,
-        pull: service.build.pull,
-        tag: image,
-        target: service.build.target,
-        timeout: options.buildTimeout,
-      })
-      options.onLine(`Image ${image}  Built`)
-      return { ...(yield* inspect), name: image }
-    }
-    const local = yield* inspect.pipe(
-      Effect.map((found): InspectedImage | undefined => found),
-      Effect.catchIf(isDockerNotFound, () => Effect.succeed(undefined))
-    )
-    const present =
-      local !== undefined && matchesPlatform(local, service.platform)
-    const policy = service.pull_policy ?? "missing"
-    if (policy === "always" || (policy === "missing" && !present)) {
-      options.onLine(`Image ${image}  Pulling`)
-      yield* engine.pullImage(image, {
-        onLine: options.onLine,
-        platform,
-        timeout: 15 * 60_000,
-      })
-      options.onLine(`Image ${image}  Pulled`)
-      return { ...(yield* inspect), name: image }
-    }
-    if (!local) {
-      return yield* Effect.fail(
-        new Error(`No such image: ${image} (pull_policy ${policy})`)
-      )
-    }
-    return { ...local, name: image }
+    options.onLine(`Image ${image}  Building`)
+    yield* buildImage(engine, {
+      buildArgs: build.args,
+      context: build.context,
+      dockerfile:
+        build.dockerfile_inline !== undefined
+          ? { content: build.dockerfile_inline }
+          : { path: build.dockerfile ?? "Dockerfile" },
+      labels: {
+        ...build.labels,
+        [PROJECT_LABEL]: project.name,
+        [SERVICE_LABEL]: name,
+      },
+      noCache: build.no_cache,
+      onLine: options.onLine,
+      platform,
+      pull: build.pull,
+      tag: image,
+      target: build.target,
+      timeout: options.buildTimeout,
+    })
+    options.onLine(`Image ${image}  Built`)
   })
 }
 
