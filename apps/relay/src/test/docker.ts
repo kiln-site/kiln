@@ -2456,9 +2456,17 @@ function syncDirectory(
       "content-type": "application/grpc",
       te: "trailers",
     }
+    // BuildKit's encodeStringForHeader: every value query-escaped (as Go's
+    // url.QueryEscape) when any has a character past ASCII.
     for (const [key, values] of Object.entries(metadata)) {
-      if (values.some((value) => /[^\x20-\x7e]/u.test(value))) {
-        headers[key] = values.map((value) => encodeURIComponent(value))
+      if (values.some((value) => /[^\p{ASCII}]/u.test(value))) {
+        headers[key] = values.map((value) =>
+          encodeURIComponent(value)
+            .replace(/[!'()*]/gu, (character) =>
+              `%${character.charCodeAt(0).toString(16).toUpperCase()}`
+            )
+            .replaceAll("%20", "+")
+        )
         headers[`${key}-encoded`] = "1"
       } else {
         headers[key] = [...values]

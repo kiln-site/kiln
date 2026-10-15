@@ -7,7 +7,8 @@
  * protobufs and is printed the way `docker build --progress plain` printed
  * it.
  */
-import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises"
+import { constants } from "node:fs"
+import { lstat, mkdtemp, open, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { basename, dirname, isAbsolute, join } from "node:path"
 
@@ -51,7 +52,7 @@ export function buildImage(
   const progress = buildProgress(options.onLine)
   return withDockerfile(options.dockerfile, options.context, (dockerfile) =>
     Effect.gen(function* () {
-      yield* checkIgnoreFile(options.context, dockerfile)
+      yield* checkBuildFiles(options.context, dockerfile)
       // The client config's proxies, as the CLI added them, under any
       // argument the build sets itself.
       const buildArgs = yield* withProxyEnvironment(options.buildArgs)
@@ -90,13 +91,19 @@ export function buildImage(
 const MAX_IGNORE_FILE_BYTES = 1024 * 1024
 const MAX_IGNORE_PATTERNS = 10_000
 const MAX_IGNORE_PATTERN_BYTES = 128 * 1024
+// What a header costs past its value, at most, in HPACK: its name, indexed
+// after the first (2 bytes), and the value's length (1 byte below 127, 3
+// past that, which these values never reach).
+const headerOverhead = (length: number) => (length < 127 ? 3 : 5)
 
 /**
- * Fails a build whose `.dockerignore` (or `<Dockerfile>.dockerignore`,
- * which BuildKit reads instead when there is one) is too large to send,
- * naming the limit, instead of letting the session break partway.
+ * Fails a build, naming the problem, when its Dockerfile isn't a file, or
+ * its `.dockerignore` (or `<Dockerfile>.dockerignore`, which BuildKit reads
+ * instead when there is one) isn't a regular file or is too large to send,
+ * instead of letting the session break partway. The ignore file is read
+ * from the handle it was opened by, no further than the limit.
  */
-function checkIgnoreFile(
+function checkBuildFiles(
   context: string,
   dockerfile: string
 ): Effect.Effect<void, DockerEngineError> {
@@ -106,79 +113,136 @@ function checkIgnoreFile(
       operation: "POST /build",
       reason: `The build's ${basename(path)} ${reason}`,
     })
-  const read = (path: string) =>
-    Effect.tryPromise({ try: () => stat(path), catch: (cause) => cause }).pipe(
-      Effect.map((info): { size: number } | undefined => info),
+  const unreadable = (path: string) => (cause: unknown) =>
+    failed(
+      path,
+      `could not be read: ${cause instanceof Error ? cause.message : String(cause)}`,
+      cause
+    )
+  const entry = (path: string) =>
+    Effect.tryPromise({ try: () => lstat(path), catch: (cause) => cause }).pipe(
+      Effect.map((found): Awaited<ReturnType<typeof lstat>> | undefined => found),
       Effect.catchIf(
         (cause) => Predicate.hasProperty(cause, "code") && cause.code === "ENOENT",
         () => Effect.succeed(undefined)
       ),
-      Effect.flatMap(
-        (info): Effect.Effect<string | number | undefined, unknown> =>
-          info === undefined || info.size > MAX_IGNORE_FILE_BYTES
-            ? Effect.succeed(info?.size)
-            : Effect.tryPromise({
-                try: () => readFile(path, "utf8"),
-                catch: (cause) => cause,
-              })
-      ),
-      Effect.mapError((cause) =>
-        failed(
-          path,
-          `could not be read: ${cause instanceof Error ? cause.message : String(cause)}`,
-          cause
-        )
-      )
+      Effect.mapError(unreadable(path))
     )
+  const read = (path: string) =>
+    Effect.gen(function* () {
+      const found = yield* entry(path)
+      if (found === undefined) return undefined
+      if (found.isSymbolicLink()) {
+        return yield* Effect.fail(
+          failed(path, "is a symbolic link; Kiln builds with a regular file there")
+        )
+      }
+      return yield* Effect.acquireUseRelease(
+        Effect.tryPromise({
+          try: () => open(path, constants.O_RDONLY | constants.O_NOFOLLOW),
+          catch: unreadable(path),
+        }),
+        (handle) =>
+          Effect.gen(function* () {
+            const info = yield* Effect.tryPromise({
+              try: () => handle.stat(),
+              catch: unreadable(path),
+            })
+            if (!info.isFile()) {
+              return yield* Effect.fail(failed(path, "is not a regular file"))
+            }
+            // One byte past the limit tells a file over it.
+            const buffer = Buffer.alloc(MAX_IGNORE_FILE_BYTES + 1)
+            let length = 0
+            for (;;) {
+              const { bytesRead } = yield* Effect.tryPromise({
+                try: () =>
+                  handle.read(buffer, length, buffer.length - length, null),
+                catch: unreadable(path),
+              })
+              length += bytesRead
+              if (bytesRead === 0 || length === buffer.length) break
+            }
+            if (length > MAX_IGNORE_FILE_BYTES) {
+              return yield* Effect.fail(
+                failed(
+                  path,
+                  `is over ${MAX_IGNORE_FILE_BYTES} bytes; Kiln builds with ignore files of up to that`
+                )
+              )
+            }
+            return buffer.toString("utf8", 0, length)
+          }),
+        (handle) => Effect.promise(() => handle.close())
+      )
+    })
   return Effect.gen(function* () {
+    // The Dockerfile itself is served through the session as BuildKit
+    // asks for it, a link resolved inside its own directory.
+    const file = yield* entry(dockerfile)
+    if (file && !file.isFile() && !file.isSymbolicLink()) {
+      return yield* Effect.fail(failed(dockerfile, "is not a regular file"))
+    }
     for (const path of [
       `${dockerfile}.dockerignore`,
       join(context, ".dockerignore"),
     ]) {
       const text = yield* read(path)
       if (text === undefined) continue
-      if (typeof text === "number") {
-        return yield* Effect.fail(
-          failed(
-            path,
-            `is ${text} bytes; Kiln builds with ignore files of up to ${MAX_IGNORE_FILE_BYTES} bytes`
-          )
-        )
-      }
       // Its patterns as moby/patternmatcher's ignorefile reads them.
-      let patterns = 0
-      let bytes = 0
+      const patterns: Array<string> = []
       for (const [index, line] of text.split("\n").entries()) {
         const raw = index === 0 ? line.replace(/^\uFEFF/u, "") : line
         if (raw.startsWith("#")) continue
         const pattern = raw.trim()
-        if (pattern === "") continue
-        patterns += 1
-        // As a header, escaped if it isn't printable ASCII.
-        bytes +=
-          (/^[\x20-\x7e]*$/u.test(pattern)
-            ? pattern.length
-            : encodeURIComponent(pattern).length) + 4
+        if (pattern !== "") patterns.push(pattern)
       }
-      if (patterns > MAX_IGNORE_PATTERNS) {
+      if (patterns.length > MAX_IGNORE_PATTERNS) {
         return yield* Effect.fail(
           failed(
             path,
-            `has ${patterns} patterns; Kiln builds with up to ${MAX_IGNORE_PATTERNS}`
+            `has ${patterns.length} patterns; Kiln builds with up to ${MAX_IGNORE_PATTERNS}`
           )
         )
+      }
+      // As BuildKit sends them: every one query-escaped, as Go's
+      // url.QueryEscape does, if any has a character past ASCII.
+      const escaped = patterns.some((pattern) => /[^\p{ASCII}]/u.test(pattern))
+      let bytes = 0
+      for (const pattern of patterns) {
+        const length = escaped ? queryEscapedLength(pattern) : pattern.length
+        bytes += length + headerOverhead(length)
       }
       if (bytes > MAX_IGNORE_PATTERN_BYTES) {
         return yield* Effect.fail(
           failed(
             path,
-            `has ${bytes} bytes of patterns; Kiln builds with up to ${MAX_IGNORE_PATTERN_BYTES}, which is what Docker can send back`
+            `has ${bytes} bytes of patterns as Docker sends them; Kiln builds with up to ${MAX_IGNORE_PATTERN_BYTES}, which is what Docker can send back`
           )
         )
       }
       return
     }
   })
+}
+
+// The length of Go's url.QueryEscape of `text`: letters, digits, and
+// `-_.~` as they are, a space as `+`, and every other byte as `%XX`.
+function queryEscapedLength(text: string): number {
+  let length = 0
+  for (const byte of Buffer.from(text, "utf8")) {
+    const unreserved =
+      (byte >= 0x30 && byte <= 0x39) ||
+      (byte >= 0x41 && byte <= 0x5a) ||
+      (byte >= 0x61 && byte <= 0x7a) ||
+      byte === 0x2d ||
+      byte === 0x2e ||
+      byte === 0x5f ||
+      byte === 0x7e ||
+      byte === 0x20
+    length += unreserved ? 1 : 3
+  }
+  return length
 }
 
 // Runs `use` with the Dockerfile's path. Contents are written to a

@@ -11,7 +11,8 @@
  * Dockerfile is never part of the context.
  */
 import { createHash, randomBytes } from "node:crypto"
-import type { BigIntStats } from "node:fs"
+import { isUtf8 } from "node:buffer"
+import { type BigIntStats, constants } from "node:fs"
 import { lstat, open, readdir, readlink, realpath } from "node:fs/promises"
 import { createServer, type ServerHttp2Stream } from "node:http2"
 import { basename, join } from "node:path"
@@ -568,18 +569,27 @@ function diffCopy(
 }
 
 // A file's contents as data packets, then an empty one; a file that can't
-// be opened is sent empty, as fsutil does.
+// be opened is sent empty, as fsutil does. It's opened without following a
+// link, and read only if it's still a regular file.
 function sendFile(
   stream: ServerHttp2Stream,
   id: number,
   path: string
 ): Effect.Effect<void, GrpcFailure> {
   const contents = Effect.acquireUseRelease(
-    Effect.result(Effect.tryPromise(() => open(path, "r"))),
+    Effect.result(
+      Effect.tryPromise(() =>
+        open(path, constants.O_RDONLY | constants.O_NOFOLLOW)
+      )
+    ),
     (opened) =>
       Effect.gen(function* () {
         if (Result.isFailure(opened)) return
         const handle = opened.success
+        const info = yield* Effect.result(
+          Effect.tryPromise(() => handle.stat())
+        )
+        if (Result.isFailure(info) || !info.success.isFile()) return
         for (;;) {
           const chunk = Buffer.allocUnsafe(CHUNK_BYTES)
           const { bytesRead } = yield* Effect.tryPromise({
@@ -793,7 +803,7 @@ function followLinks(
               cleanPath(`${directory}/${name}`),
               false
             )
-            if (targets?.length) found = [...(found ?? []), ...targets]
+            if (targets?.length) (found ??= []).push(...targets)
           }
           return found
         }
@@ -998,7 +1008,8 @@ function walkContext(
     Effect.gen(function* () {
       const listed = yield* Effect.result(
         Effect.tryPromise({
-          try: () => readdir(absolute, { withFileTypes: true }),
+          try: () =>
+            readdir(absolute, { encoding: "buffer", withFileTypes: true }),
           catch: (cause) => cause,
         })
       )
@@ -1010,13 +1021,25 @@ function walkContext(
         }
         return
       }
-      const entries = listed.success.sort((left, right) =>
-        byteOrder(left.name, right.name)
-      )
+      // A name that isn't UTF-8 can't be sent; the CLI fails on it too.
+      if (listed.success.some((entry) => !isUtf8(entry.name))) {
+        return yield* Effect.fail(
+          new GrpcFailure({
+            code: 13,
+            message: `a file name in ${relative ? JSON.stringify(relative) : "the build context"} isn't valid UTF-8: string field contains invalid UTF-8`,
+          })
+        )
+      }
+      const entries = listed.success
+        .map((entry) => ({
+          isDirectory: entry.isDirectory(),
+          name: entry.name.toString("utf8"),
+        }))
+        .sort((left, right) => byteOrder(left.name, right.name))
       for (const entry of entries) {
         const path = relative ? `${relative}/${entry.name}` : entry.name
         const childAbsolute = join(absolute, entry.name)
-        const isDirectory = entry.isDirectory()
+        const isDirectory = entry.isDirectory
         const result = yield* visit(path, childAbsolute, isDirectory, undefined)
         if (result === "skip") {
           if (isDirectory) continue

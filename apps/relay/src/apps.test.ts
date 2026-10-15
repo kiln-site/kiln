@@ -1,4 +1,4 @@
-import { access, mkdir, writeFile } from "node:fs/promises"
+import { access, mkdir, symlink, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 
 import {
@@ -10,7 +10,7 @@ import {
   type RelayApp,
   type RelayConsoleLine,
 } from "@workspace/contracts"
-import { Effect } from "effect"
+import { Effect, Result } from "effect"
 import { afterEach, describe, expect, it, vi } from "vite-plus/test"
 
 vi.mock("./command.js", () => import("./test/docker.js"))
@@ -423,7 +423,7 @@ describe("apps", () => {
     [
       "bytes of patterns",
       Array.from({ length: 1_100 }, (_, index) => `${index}`.padStart(127, "x")).join("\n"),
-      "The build's .dockerignore has 144100 bytes of patterns; Kiln builds with up to 131072, which is what Docker can send back",
+      "The build's .dockerignore has 145200 bytes of patterns as Docker sends them; Kiln builds with up to 131072, which is what Docker can send back",
     ],
   ])("refuses a .dockerignore of more %s than Docker can send back, before the build", async (_, ignore, error) => {
     const harness = await createdApp()
@@ -437,6 +437,92 @@ describe("apps", () => {
 
     expect(app.deployment).toMatchObject({ error, state: "failed" })
     expect(fakeDocker.builds).toEqual([])
+  })
+
+  it.each([
+    [
+      "a link to a device",
+      (path: string) => symlink("/dev/zero", path),
+      "The build's .dockerignore is a symbolic link; Kiln builds with a regular file there",
+    ],
+    [
+      "a directory",
+      (path: string) => mkdir(path),
+      "The build's .dockerignore is not a regular file",
+    ],
+    [
+      "over the size it reads",
+      (path: string) => writeFile(path, "x".repeat(1024 * 1024 + 1)),
+      "The build's .dockerignore is over 1048576 bytes; Kiln builds with ignore files of up to that",
+    ],
+  ])("refuses a .dockerignore that's %s, without reading past its limit", async (_, create, error) => {
+    const harness = await createdApp()
+    const data = join(harness.config.dataDirectory, "apps", appId)
+    await create(join(data, ".dockerignore"))
+
+    const app = await deploy(harness, {
+      dockerfile: "FROM alpine\nCOPY . .\n",
+      sourceType: "dockerfile",
+    })
+
+    expect(app.deployment).toMatchObject({ error, state: "failed" })
+    expect(fakeDocker.builds).toEqual([])
+  })
+
+  it("counts every pattern escaped, as BuildKit sends them, when any isn't ASCII", async () => {
+    const harness = await createdApp()
+    const data = join(harness.config.dataDirectory, "apps", appId)
+    // 111 patterns, about 88 KB as written, which BuildKit escapes to
+    // twice that, past what the session takes.
+    await writeFile(
+      join(data, ".dockerignore"),
+      [
+        ...Array.from({ length: 110 }, (_, index) => `${index}${"a/".repeat(400)}`),
+        "é",
+      ].join("\n")
+    )
+
+    const app = await deploy(harness, {
+      dockerfile: "FROM alpine\nCOPY . .\n",
+      sourceType: "dockerfile",
+    })
+
+    expect(app.deployment?.state).toBe("failed")
+    expect(app.deployment?.error).toMatch(
+      /^The build's \.dockerignore has \d+ bytes of patterns as Docker sends them; Kiln builds with up to 131072/u
+    )
+    expect(fakeDocker.builds).toEqual([])
+  })
+
+  it("fails a build with a file name that isn't UTF-8, as the CLI does", async (context) => {
+    const harness = await createdApp()
+    const data = join(harness.config.dataDirectory, "apps", appId)
+    await mkdir(join(data, "assets"))
+    const created = await Effect.runPromise(
+      Effect.result(
+        Effect.tryPromise(() =>
+          writeFile(
+            Buffer.concat([
+              Buffer.from(`${join(data, "assets")}/`),
+              Buffer.from([0x66, 0xff, 0x6f]),
+            ]),
+            "x"
+          )
+        )
+      )
+    )
+    // macOS's file systems refuse such names.
+    if (Result.isFailure(created)) context.skip()
+
+    const app = await deploy(harness, {
+      dockerfile: "FROM alpine\nCOPY . .\n",
+      sourceType: "dockerfile",
+    })
+
+    expect(app.deployment?.state).toBe("failed")
+    expect(app.deployment?.error).toContain(
+      'a file name in "assets" isn\'t valid UTF-8: string field contains invalid UTF-8'
+    )
   })
 
   it("fails a build whose session breaks with what broke it", async () => {
