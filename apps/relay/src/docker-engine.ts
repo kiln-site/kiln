@@ -17,7 +17,8 @@
  * Containers Relay creates are described in its own terms (see
  * `./docker-container-spec.js`).
  *
- * Builds and Compose stay on the CLI (see `./command.js`) for now.
+ * Dockerfile builds and Compose projects run the standalone `docker-buildx`
+ * and `docker-compose` binaries instead (see `./apps.js`).
  */
 import { Agent, request } from "node:http"
 import { type Duplex, PassThrough, Writable } from "node:stream"
