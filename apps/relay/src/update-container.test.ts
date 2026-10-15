@@ -1,75 +1,14 @@
 import { it as effectIt } from "@effect/vitest"
 import { Effect } from "effect"
-import { describe, expect, it } from "vite-plus/test"
+import { afterEach, describe, expect, it } from "vite-plus/test"
 
+import { DockerEngine } from "./docker-engine.js"
+import { fakeDocker } from "./test/docker.js"
 import {
   KILN_IMAGE_SOURCE,
   managedImageChannel,
   replaceContainerEffect,
-  type ContainerInspect,
-  type ContainerUpdateDocker,
-  type ImageInspect,
 } from "./update-container.js"
-
-const currentContainerId = "a".repeat(64)
-const currentContainer: ContainerInspect = {
-  Config: {
-    Cmd: ["old-command"],
-    Entrypoint: ["old-entrypoint"],
-    Env: ["EXAMPLE=true"],
-    Healthcheck: {
-      Interval: 10_000_000_000,
-      Test: ["CMD", "old-healthcheck"],
-    },
-    Hostname: currentContainerId.slice(0, 12),
-    Image: "ghcr.io/kiln-site/hearth:latest-nightly",
-    Labels: {
-      "coolify.managed": "true",
-      "io.kiln.component": "hearth",
-      "org.opencontainers.image.revision": "old-commit",
-      "org.opencontainers.image.source": KILN_IMAGE_SOURCE,
-      "org.opencontainers.image.version": "0.1.0-nightly.1",
-    },
-  },
-  HostConfig: {
-    NetworkMode: "kiln",
-    RestartPolicy: { Name: "unless-stopped" },
-  },
-  Id: currentContainerId,
-  Image: "sha256:old-image",
-  Name: "/hearth",
-  NetworkSettings: {
-    Networks: {
-      edge: { Aliases: ["hearth-edge", "b".repeat(64)] },
-      kiln: { Aliases: ["hearth", "a".repeat(64)] },
-    },
-  },
-  State: {
-    Running: true,
-  },
-}
-
-const targetImage: ImageInspect = {
-  Config: {
-    Healthcheck: {
-      Interval: 5_000_000_000,
-      Test: ["CMD", "new-healthcheck"],
-    },
-    Labels: {
-      "io.kiln.component": "hearth",
-      "org.opencontainers.image.revision": "new-commit",
-      "org.opencontainers.image.source": KILN_IMAGE_SOURCE,
-      "org.opencontainers.image.version": "0.1.0-nightly.2",
-    },
-  },
-}
-
-interface FakeContainer {
-  readonly config: unknown
-  readonly id: string
-  readonly networks: Record<string, Array<string>>
-  running: boolean
-}
 
 const channelReference = "ghcr.io/kiln-site/hearth:latest-nightly"
 const targetDigest = `ghcr.io/kiln-site/hearth@sha256:${"c".repeat(64)}`
@@ -80,98 +19,61 @@ const replacement = {
   targetReference: channelReference,
   targetVersion: "0.1.0-nightly.2",
 }
+const targetLabels = {
+  "io.kiln.component": "hearth",
+  "org.opencontainers.image.revision": "new-commit",
+  "org.opencontainers.image.source": KILN_IMAGE_SOURCE,
+  "org.opencontainers.image.version": "0.1.0-nightly.2",
+}
 const ignorePhase = () => Effect.void
 
-/** A small stateful Docker daemon: named containers plus image tags. */
-class FakeDocker implements ContainerUpdateDocker {
-  readonly containers = new Map<string, FakeContainer>()
-  readonly tags = new Map<string, string>()
-  failCommand: string | null = null
-  failHealthCheck = false
+afterEach(() => {
+  fakeDocker.reset()
+})
 
-  constructor(readonly current: ContainerInspect = currentContainer) {
-    this.containers.set("hearth", {
-      config: current.Config,
-      id: current.Id,
-      networks: {},
+/**
+ * Hearth running from the nightly channel tag on two networks, and the
+ * pulled target image, which declares a health check.
+ */
+function runningHearth(options: { hostname?: string } = {}) {
+  return Effect.promise(async () => {
+    fakeDocker.addNetwork({ name: "kiln" })
+    fakeDocker.addNetwork({ name: "edge" })
+    const current = fakeDocker.addContainer({
+      cmd: ["old-command"],
+      env: { EXAMPLE: "true" },
+      image: channelReference,
+      labels: {
+        "coolify.managed": "true",
+        "io.kiln.component": "hearth",
+        "org.opencontainers.image.revision": "old-commit",
+        "org.opencontainers.image.source": KILN_IMAGE_SOURCE,
+        "org.opencontainers.image.version": "0.1.0-nightly.1",
+      },
+      name: "hearth",
+      networks: ["kiln", "edge"],
+      restartPolicy: "unless-stopped",
       running: true,
     })
-    this.tags.set(channelReference, current.Image)
-  }
-
-  async command(
-    arguments_: Array<string>
-  ): Promise<{ stderr: string; stdout: string }> {
-    if (arguments_.join(" ") === this.failCommand) {
-      throw new Error(`command failed: ${this.failCommand}`)
-    }
-    const [subcommand, ...rest] = arguments_
-    const name = rest.at(-1) ?? ""
-    if (subcommand === "image" && rest[0] === "tag") {
-      this.tags.set(rest[2] ?? "", rest[1] ?? "")
-    } else if (subcommand === "stop") {
-      this.#container(name).running = false
-    } else if (subcommand === "start") {
-      this.#container(name).running = true
-    } else if (subcommand === "rm") {
-      this.containers.delete(name)
-    } else if (subcommand === "rename") {
-      const [from = "", to = ""] = rest
-      const container = this.#container(from)
-      if (this.containers.has(to)) throw new Error(`${to} already exists`)
-      this.containers.delete(from)
-      this.containers.set(to, container)
-    } else if (subcommand === "network" && rest[0] === "connect") {
-      const aliases = rest.filter((_, index) => rest[index - 1] === "--alias")
-      this.#container(name).networks[rest.at(-2) ?? ""] = aliases
-    } else {
-      throw new Error(`Unexpected docker ${arguments_.join(" ")}`)
-    }
-    return { stderr: "", stdout: "" }
-  }
-
-  async createContainer(name: string, configuration: unknown): Promise<void> {
-    if (this.containers.has(name)) throw new Error(`${name} already exists`)
-    const endpoints = (
-      configuration as {
-        NetworkingConfig: {
-          EndpointsConfig: Record<string, { Aliases: Array<string> }>
-        }
-      }
-    ).NetworkingConfig.EndpointsConfig
-    this.containers.set(name, {
-      config: configuration,
-      id: "replacement",
-      networks: Object.fromEntries(
-        Object.entries(endpoints).map(([network, { Aliases }]) => [
-          network,
-          Aliases,
-        ])
-      ),
-      running: false,
+    // Docker named the host after the container, unless it was given one.
+    current.hostname = options.hostname ?? current.id.slice(0, 12)
+    current.networks.set("kiln", { aliases: ["hearth", current.id], ipAddress: "" })
+    current.networks.set("edge", {
+      aliases: ["hearth-edge", "b".repeat(64)],
+      ipAddress: "",
     })
-  }
-
-  async inspectContainer(): Promise<ContainerInspect> {
-    return this.current
-  }
-
-  async inspectImage(): Promise<ImageInspect> {
-    return targetImage
-  }
-
-  async waitUntilHealthy(name: string): Promise<void> {
-    if (this.failHealthCheck || !this.#container(name).running) {
-      throw new Error("unhealthy")
-    }
-  }
-
-  #container(name: string): FakeContainer {
-    const container = this.containers.get(name)
-    if (!container) throw new Error(`No such container: ${name}`)
-    return container
-  }
+    fakeDocker.images.set(targetDigest, targetLabels)
+    fakeDocker.imageConfigs.set(targetDigest, {
+      Healthcheck: { Interval: 5_000_000_000, Test: ["CMD", "new-healthcheck"] },
+    })
+    const docker = new DockerEngine(await fakeDocker.listen())
+    return { current, docker, oldImage: `sha256:${channelReference}` }
+  })
 }
+
+const hearth = () => fakeDocker.container("hearth")
+const channelTarget = () =>
+  fakeDocker.imageTags.get("ghcr.io/kiln-site/hearth:latest-nightly")
 
 describe("managed update channels", () => {
   it("accepts only the matching floating channel tags", () => {
@@ -201,48 +103,42 @@ describe("container replacement", () => {
     "refreshes image metadata and Docker's generated hostname",
     () =>
       Effect.gen(function* () {
-        const docker = new FakeDocker()
+        const { current, docker } = yield* runningHearth()
 
         yield* replaceContainerEffect(replacement, docker, ignorePhase)
 
-        const replaced = docker.containers.get("hearth")
-        expect(replaced).toMatchObject({
-          id: "replacement",
-          networks: {
-            edge: ["hearth-edge", "hearth"],
-            kiln: ["hearth"],
-          },
+        const replaced = hearth()
+        expect(replaced?.id).not.toBe(current.id)
+        expect(replaced?.state).toMatchObject({
+          health: "healthy",
           running: true,
         })
-        expect(replaced?.config).toEqual(
-          expect.objectContaining({
-            Image: channelReference,
-            Healthcheck: {
-              Interval: 5_000_000_000,
-              Test: ["CMD", "new-healthcheck"],
-            },
-            Labels: {
-              "coolify.managed": "true",
-              "io.kiln.component": "hearth",
-              "org.opencontainers.image.revision": "new-commit",
-              "org.opencontainers.image.source": KILN_IMAGE_SOURCE,
-              "org.opencontainers.image.version": "0.1.0-nightly.2",
-            },
-          })
+        expect(replaced?.image).toBe(channelReference)
+        expect(replaced?.labels).toEqual({
+          "coolify.managed": "true",
+          ...targetLabels,
+        })
+        expect(replaced?.env).toEqual({ EXAMPLE: "true" })
+        expect(replaced?.restartPolicy).toBe("unless-stopped")
+        // The image's command and a fresh hostname, not the old container's.
+        expect(replaced?.cmd).toEqual([])
+        expect(replaced?.hostname).toBe(replaced?.id.slice(0, 12))
+        expect(replaced?.networks.get("kiln")?.aliases).toContain("hearth")
+        expect(replaced?.networks.get("edge")?.aliases).toEqual(
+          expect.arrayContaining(["hearth-edge", "hearth"])
         )
-        expect(replaced?.config).not.toHaveProperty("Cmd")
-        expect(replaced?.config).not.toHaveProperty("Entrypoint")
-        expect(replaced?.config).not.toHaveProperty("Hostname")
-        expect(docker.containers.has("hearth-backup")).toBe(false)
-        expect(docker.tags.get(channelReference)).toBe(targetDigest)
+        expect(fakeDocker.container("hearth-backup")).toBeUndefined()
+        expect(fakeDocker.container(current.id)).toBeUndefined()
+        expect(channelTarget()).toBe(`sha256:${targetDigest}`)
       })
   )
 
   effectIt.effect("reports replacement phases in execution order", () =>
     Effect.gen(function* () {
+      const { docker } = yield* runningHearth()
       const phases: Array<string> = []
 
-      yield* replaceContainerEffect(replacement, new FakeDocker(), (phase) =>
+      yield* replaceContainerEffect(replacement, docker, (phase) =>
         Effect.sync(() => {
           phases.push(phase)
         })
@@ -264,19 +160,11 @@ describe("container replacement", () => {
 
   effectIt.effect("preserves an explicitly configured hostname", () =>
     Effect.gen(function* () {
-      const docker = new FakeDocker({
-        ...currentContainer,
-        Config: {
-          ...currentContainer.Config,
-          Hostname: "hearth.internal",
-        },
-      })
+      const { docker } = yield* runningHearth({ hostname: "hearth.internal" })
 
       yield* replaceContainerEffect(replacement, docker, ignorePhase)
 
-      expect(docker.containers.get("hearth")?.config).toEqual(
-        expect.objectContaining({ Hostname: "hearth.internal" })
-      )
+      expect(hearth()?.hostname).toBe("hearth.internal")
     })
   )
 
@@ -284,7 +172,7 @@ describe("container replacement", () => {
     "records the stable release version for a promoted nightly image",
     () =>
       Effect.gen(function* () {
-        const docker = new FakeDocker()
+        const { docker } = yield* runningHearth()
 
         yield* replaceContainerEffect(
           {
@@ -296,12 +184,8 @@ describe("container replacement", () => {
           ignorePhase
         )
 
-        expect(docker.containers.get("hearth")?.config).toEqual(
-          expect.objectContaining({
-            Labels: expect.objectContaining({
-              "org.opencontainers.image.version": "0.1.0",
-            }),
-          })
+        expect(hearth()?.labels["org.opencontainers.image.version"]).toBe(
+          "0.1.0"
         )
       })
   )
@@ -310,8 +194,8 @@ describe("container replacement", () => {
     "restores the old container and channel image after a failed health check",
     () =>
       Effect.gen(function* () {
-        const docker = new FakeDocker()
-        docker.failHealthCheck = true
+        const { current, docker, oldImage } = yield* runningHearth()
+        fakeDocker.unhealthyImages.add(channelReference)
 
         const failure = yield* replaceContainerEffect(
           replacement,
@@ -321,12 +205,10 @@ describe("container replacement", () => {
 
         expect(failure.phase).toBe("replace")
         expect(failure.rollbackFailures).toEqual([])
-        expect(docker.containers.get("hearth")).toMatchObject({
-          id: currentContainerId,
-          running: true,
-        })
-        expect(docker.containers.has("hearth-backup")).toBe(false)
-        expect(docker.tags.get(channelReference)).toBe("sha256:old-image")
+        expect(hearth()?.id).toBe(current.id)
+        expect(hearth()?.state.running).toBe(true)
+        expect(fakeDocker.container("hearth-backup")).toBeUndefined()
+        expect(channelTarget()).toBe(oldImage)
       })
   )
 
@@ -334,9 +216,9 @@ describe("container replacement", () => {
     "attempts every rollback step and reports rollback failures",
     () =>
       Effect.gen(function* () {
-        const docker = new FakeDocker()
-        docker.failHealthCheck = true
-        docker.failCommand = "rm --force hearth"
+        const { current, docker, oldImage } = yield* runningHearth()
+        fakeDocker.unhealthyImages.add(channelReference)
+        fakeDocker.failNext({ command: "rm", target: "hearth" }, "removal failed")
 
         const failure = yield* replaceContainerEffect(
           replacement,
@@ -347,10 +229,8 @@ describe("container replacement", () => {
         expect(failure.rollbackFailures.length).toBeGreaterThan(0)
         // The old container is kept for manual recovery and the channel tag
         // is still restored after the earlier rollback step failed.
-        expect(docker.containers.get("hearth-backup")?.id).toBe(
-          currentContainerId
-        )
-        expect(docker.tags.get(channelReference)).toBe("sha256:old-image")
+        expect(fakeDocker.container("hearth-backup")?.id).toBe(current.id)
+        expect(channelTarget()).toBe(oldImage)
       })
   )
 })

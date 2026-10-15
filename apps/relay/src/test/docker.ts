@@ -82,6 +82,8 @@ export interface FakeContainer {
   starts: number
   /** `--rm`: Docker removes it once it exits. */
   autoRemove: boolean
+  /** Containers whose volumes it mounts (`--volumes-from`). */
+  volumesFrom: Array<string>
   /** Running once with stdin attached before it started (`run --rm -i`). */
   runOnce: { input: Array<Buffer>; socket: Duplex; stdinEnded: boolean } | null
   logs: Array<{ text: string; time: string }>
@@ -142,6 +144,8 @@ export interface FakeVolume {
 
 export interface ContainerSeed {
   name: string
+  hostname?: string
+  cmd?: Array<string>
   image?: string
   labels?: Record<string, string>
   env?: Record<string, string>
@@ -212,10 +216,16 @@ export class FakeDocker {
   /** What pulling an image prints before its final status, by image. */
   readonly pullOutput = new Map<string, string>()
   /**
-   * The registry credentials each pull carried (`X-Registry-Auth`, decoded),
-   * or null for an anonymous pull, by the image's full reference.
+   * Each pull, by the image's full reference, with the registry credentials
+   * it carried (`X-Registry-Auth`, decoded), or null for an anonymous pull.
    */
-  readonly pullCredentials = new Map<string, unknown>()
+  readonly pulls = new Map<string, unknown>()
+  /** Image config beyond labels, such as `Healthcheck`, by image. */
+  readonly imageConfigs = new Map<string, Record<string, unknown>>()
+  /** What each tag points at (`docker image tag`), by full reference. */
+  readonly imageTags = new Map<string, string>()
+  /** Images whose health check fails once they start. */
+  readonly unhealthyImages = new Set<string>()
   /**
    * Images whose process exits as soon as it starts. Under a restart policy
    * Docker keeps restarting them, reporting them running and restarting.
@@ -280,7 +290,10 @@ export class FakeDocker {
     this.images.clear()
     this.unreachableImages.clear()
     this.pullOutput.clear()
-    this.pullCredentials.clear()
+    this.pulls.clear()
+    this.imageConfigs.clear()
+    this.imageTags.clear()
+    this.unhealthyImages.clear()
     this.crashingImages.clear()
     this.programFailures.clear()
     this.streamErrors.clear()
@@ -328,10 +341,10 @@ export class FakeDocker {
       id: randomBytes(32).toString("hex"),
       name: seed.name,
       image: seed.image ?? "example/server:latest",
-      hostname: seed.name,
+      hostname: seed.hostname ?? seed.name,
       labels: { ...seed.labels },
       env: { ...seed.env },
-      cmd: [],
+      cmd: [...(seed.cmd ?? [])],
       tty: seed.tty ?? false,
       openStdin: seed.tty ?? false,
       restartPolicy: seed.restartPolicy ?? "no",
@@ -356,6 +369,7 @@ export class FakeDocker {
       },
       starts: 0,
       autoRemove: false,
+      volumesFrom: [],
       runOnce: null,
       logs: [...(seed.logs ?? [])],
       logStreamError: null,
@@ -572,6 +586,9 @@ export class FakeDocker {
         ? Object.hasOwn(container.labels, label)
         : container.labels[label] === expected
     }
+    if (key === "name") {
+      return new RegExp(value, "u").test(`/${container.name}`)
+    }
     if (key === "network") {
       const network = this.network(value)
       return network !== undefined && container.networks.has(network.name)
@@ -643,6 +660,7 @@ export class FakeDocker {
         Mounts: volumeMounts,
         NetworkMode: container.networkMode,
         PortBindings: container.portBindings,
+        VolumesFrom: container.volumesFrom.length ? container.volumesFrom : null,
         RestartPolicy: { MaximumRetryCount: 0, Name: container.restartPolicy },
       },
       Id: container.id,
@@ -708,16 +726,31 @@ export class FakeDocker {
   #imageKey(reference: string): string | undefined {
     const wanted = normalizedImage(reference)
     return [...this.images.keys()].find(
-      (key) => key === reference || normalizedImage(key) === wanted
+      (key) =>
+        key === reference ||
+        `sha256:${key}` === reference ||
+        normalizedImage(key) === wanted
     )
   }
 
   #imageObject(image: string): unknown {
     const key = this.#imageKey(image)
     const labels = key === undefined ? undefined : this.images.get(key)
-    return labels === undefined
+    return labels === undefined || key === undefined
       ? undefined
-      : { Config: { Labels: labels }, Id: `sha256:${image}`, RepoTags: [image] }
+      : {
+          Config: { ...this.imageConfigs.get(key), Labels: labels },
+          Id: this.#imageId(key),
+          RepoTags: [key],
+        }
+  }
+
+  /** The image a reference names: its tag's target, or its own ID. */
+  #imageId(reference: string): string {
+    if (reference.startsWith("sha256:")) return reference
+    return (
+      this.imageTags.get(normalizedImage(reference)) ?? `sha256:${reference}`
+    )
   }
 
   /** Listing networks leaves out their containers, as Docker does. */
@@ -752,6 +785,8 @@ export class FakeDocker {
   #createContainer(input: {
     autoRemove: boolean
     cmd: Array<string>
+    hostname: string | undefined
+    volumesFrom: Array<string>
     env: Record<string, string>
     healthCheck: boolean
     image: string
@@ -792,6 +827,9 @@ export class FakeDocker {
       tty: input.tty,
     })
     container.cmd = input.cmd
+    // Docker names a container's host after its ID when it isn't given one.
+    container.hostname = input.hostname || container.id.slice(0, 12)
+    container.volumesFrom = input.volumesFrom
     container.autoRemove = input.autoRemove
     container.openStdin = input.interactive
     container.healthCheck = input.healthCheck
@@ -896,7 +934,11 @@ export class FakeDocker {
     container.state.exitCode = crashing ? 1 : 0
     container.state.oomKilled = false
     container.state.startedAt = this.#timestamp()
-    container.state.health = container.healthCheck ? "healthy" : undefined
+    container.state.health = container.healthCheck
+      ? this.unhealthyImages.has(container.image)
+        ? "unhealthy"
+        : "healthy"
+      : undefined
     container.starts += 1
     // Each run gets a fresh network namespace.
     container.firewall = new Map()
@@ -1474,6 +1516,23 @@ export class FakeDocker {
         : `${fromImage}:${tag}`
       return this.#pullFromApi(reference, headers["x-registry-auth"])
     }
+    if (
+      method === "POST" &&
+      (parameters = route(/^\/images\/(.+)\/tag$/u))
+    ) {
+      const [source = ""] = parameters
+      const key = this.#imageKey(source)
+      if (key === undefined) {
+        throw new DockerFailure(`No such image: ${source}`, 404)
+      }
+      const target = `${url.searchParams.get("repo")}:${url.searchParams.get("tag") ?? "latest"}`
+      await this.#checkpoint("tag", target)
+      this.imageTags.set(normalizedImage(target), this.#imageId(source))
+      this.images.set(target, this.images.get(key) ?? {})
+      const config = this.imageConfigs.get(key)
+      if (config) this.imageConfigs.set(target, config)
+      return json(201)
+    }
     if (method === "GET" && path === "/images/json") {
       const filters = apiFilters(url)
       return json(
@@ -1525,7 +1584,7 @@ export class FakeDocker {
     const image = named(this.images.keys()) ?? named(this.pullOutput.keys()) ??
       named(this.unreachableImages) ?? reference
     await this.#checkpoint("pull", image)
-    this.pullCredentials.set(
+    this.pulls.set(
       normalizedImage(reference),
       typeof auth === "string"
         ? JSON.parse(Buffer.from(auth, "base64").toString("utf8"))
@@ -1684,6 +1743,8 @@ export class FakeDocker {
     return this.#createContainer({
       autoRemove: host.AutoRemove ?? false,
       cmd: body.Cmd ?? [],
+      hostname: body.Hostname,
+      volumesFrom: host.VolumesFrom ?? [],
       env: Object.fromEntries(
         (body.Env ?? []).map(
           (entry) => splitOnce(entry, "=") as [string, string]
@@ -1998,8 +2059,10 @@ interface CreateBody {
   Cmd?: Array<string> | null
   Env?: Array<string> | null
   Healthcheck?: { Test?: Array<string> }
+  Hostname?: string
   HostConfig?: {
     AutoRemove?: boolean
+    VolumesFrom?: Array<string> | null
     Binds?: Array<string> | null
     Memory?: number
     Mounts?: Array<{

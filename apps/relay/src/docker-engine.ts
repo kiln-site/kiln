@@ -892,11 +892,51 @@ export class DockerEngine {
     })
   }
 
-  inspectImage(image: string): Effect.Effect<DockerImage, DockerEngineError> {
+  /** `A` is how the caller reads Docker's answer; nothing checks it. */
+  inspectImage<A = DockerImage>(
+    image: string
+  ): Effect.Effect<A, DockerEngineError> {
     return this.#json({
       method: "GET",
       path: `/images/${imageSegment(image)}/json`,
     })
+  }
+
+  /**
+   * `docker image tag <source> <reference>`: points `reference`, a name
+   * with an optional tag, at the image `source` names.
+   */
+  tagImage(
+    source: string,
+    reference: string
+  ): Effect.Effect<void, DockerEngineError> {
+    const operation = "POST /images/{name}/tag"
+    return Effect.try({
+      try: () => parseImageReference(reference),
+      catch: (cause) =>
+        new DockerEngineError({
+          cause,
+          operation,
+          reason: cause instanceof Error ? cause.message : String(cause),
+        }),
+    }).pipe(
+      Effect.flatMap((target) =>
+        target.digest === undefined
+          ? this.#empty({
+              method: "POST",
+              path: `/images/${imageSegment(source)}/tag${query({
+                repo: repositoryName(target),
+                tag: target.tag ?? "latest",
+              })}`,
+            })
+          : Effect.fail(
+              new DockerEngineError({
+                operation,
+                reason: `refusing to create a tag with a digest reference: ${reference}`,
+              })
+            )
+      )
+    )
   }
 
   // ---------------------------------------------------------------- transport

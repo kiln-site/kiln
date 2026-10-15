@@ -42,19 +42,19 @@ describe("registry credentials for pulls", () => {
 
     await pull("nginx:1.27", "ghcr.io/kiln-site/relay:latest", "quay.io/a/b:1")
 
-    expect(fakeDocker.pullCredentials.get("docker.io/library/nginx:1.27")).toEqual({
+    expect(fakeDocker.pulls.get("docker.io/library/nginx:1.27")).toEqual({
       password: "hub-secret",
       serveraddress: "https://index.docker.io/v1/",
       username: "hub-user",
     })
     expect(
-      fakeDocker.pullCredentials.get("ghcr.io/kiln-site/relay:latest")
+      fakeDocker.pulls.get("ghcr.io/kiln-site/relay:latest")
     ).toEqual({
       password: "gh-secret",
       serveraddress: "ghcr.io",
       username: "gh-user",
     })
-    expect(fakeDocker.pullCredentials.get("quay.io/a/b:1")).toBeNull()
+    expect(fakeDocker.pulls.get("quay.io/a/b:1")).toBeNull()
   })
 
   it("finds credentials saved with a scheme or path, and identity tokens", async () => {
@@ -65,7 +65,7 @@ describe("registry credentials for pulls", () => {
     await pull("registry.example.com/team/app@sha256:" + "a".repeat(64))
 
     expect(
-      fakeDocker.pullCredentials.get(
+      fakeDocker.pulls.get(
         `registry.example.com/team/app@sha256:${"a".repeat(64)}`
       )
     ).toEqual({
@@ -79,7 +79,7 @@ describe("registry credentials for pulls", () => {
     await writeFile(join(directory, "config.json"), "{ not json")
     await pull("busybox:1")
 
-    expect(fakeDocker.pullCredentials.get("docker.io/library/alpine:3.21")).toBeNull()
-    expect(fakeDocker.pullCredentials.get("docker.io/library/busybox:1")).toBeNull()
+    expect(fakeDocker.pulls.get("docker.io/library/alpine:3.21")).toBeNull()
+    expect(fakeDocker.pulls.get("docker.io/library/busybox:1")).toBeNull()
   })
 })

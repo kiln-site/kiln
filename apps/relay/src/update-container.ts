@@ -3,6 +3,10 @@ import {
   DEFAULT_KILN_GIT_REPO,
   kilnImageRepository,
 } from "@workspace/contracts"
+import { Effect } from "effect"
+
+import type { DockerEngine } from "./docker-engine.js"
+import { RelaySystemUpdateError } from "./effect/errors.js"
 
 // Official images retain the pre-rename source label until older Relays that
 // require this exact value have had a compatibility release available.
@@ -48,17 +52,6 @@ export interface ImageInspect {
   }
 }
 
-export interface ContainerUpdateDocker {
-  command(
-    arguments_: Array<string>,
-    timeout?: number
-  ): Promise<{ stderr: string; stdout: string }>
-  createContainer(name: string, configuration: unknown): Promise<void>
-  inspectContainer(container: string): Promise<ContainerInspect>
-  inspectImage(image: string): Promise<ImageInspect>
-  waitUntilHealthy(container: string): Promise<void>
-}
-
 export function kilnComponent(value: string | undefined): KilnComponent | null {
   return value === "hearth" || value === "relay" ? value : null
 }
@@ -73,6 +66,12 @@ export function managedImageChannel(
   return image === stable || image === nightly ? image : null
 }
 
+/**
+ * Replaces a running Hearth or Relay container with one from the target
+ * image, keeping its configuration, networks, and name. The old container is
+ * renamed aside first and comes back if the replacement fails to start or
+ * become healthy; the channel tag is pointed back at the old image too.
+ */
 export function replaceContainerEffect(
   input: {
     backupName: string
@@ -81,18 +80,20 @@ export function replaceContainerEffect(
     targetReference: string
     targetVersion: string
   },
-  docker: ContainerUpdateDocker,
+  docker: DockerEngine,
   onPhase: (phase: string) => Effect.Effect<void>
 ) {
   return Effect.gen(function* () {
     yield* onPhase("replace.inspectContainer")
     const [current, target] = yield* Effect.all(
       [
-        updateOperation("replace.inspectContainer", () =>
-          docker.inspectContainer(input.targetContainer)
+        updateOperation(
+          "replace.inspectContainer",
+          docker.inspectContainer<ContainerInspect>(input.targetContainer)
         ),
-        updateOperation("replace.inspectImage", () =>
-          docker.inspectImage(input.targetImage)
+        updateOperation(
+          "replace.inspectImage",
+          docker.inspectImage<ImageInspect>(input.targetImage)
         ),
       ] as const,
       { concurrency: 2 }
@@ -115,21 +116,22 @@ export function replaceContainerEffect(
     let backupRenamed = false
     yield* Effect.gen(function* () {
       yield* onPhase("replace.tagTarget")
-      yield* updateOperation("replace.tagTarget", () =>
-        docker.command([
-          "image",
-          "tag",
-          input.targetImage,
-          input.targetReference,
-        ])
+      yield* updateOperation(
+        "replace.tagTarget",
+        docker.tagImage(input.targetImage, input.targetReference)
       )
       yield* onPhase("replace.stopCurrent")
-      yield* updateOperation("replace.stopCurrent", () =>
-        docker.command(["stop", "--time", "30", input.targetContainer], 45_000)
+      yield* updateOperation(
+        "replace.stopCurrent",
+        docker.stopContainer(input.targetContainer, {
+          seconds: 30,
+          timeout: 45_000,
+        })
       )
       yield* onPhase("replace.renameCurrent")
-      yield* updateOperation("replace.renameCurrent", () =>
-        docker.command(["rename", input.targetContainer, input.backupName])
+      yield* updateOperation(
+        "replace.renameCurrent",
+        docker.renameContainer(input.targetContainer, input.backupName)
       )
       backupRenamed = true
 
@@ -144,7 +146,8 @@ export function replaceContainerEffect(
       }
       const targetHealthcheck = target.Config?.Healthcheck
       yield* onPhase("replace.createTarget")
-      yield* updateOperation("replace.createTarget", () =>
+      yield* updateOperation(
+        "replace.createTarget",
         docker.createContainer(input.targetContainer, {
           ...preservedConfig,
           Image: input.targetReference,
@@ -179,33 +182,36 @@ export function replaceContainerEffect(
       }
       yield* Effect.forEach(
         networkNames.filter((network) => network !== primaryNetwork),
-        (network) => {
-          const arguments_ = ["network", "connect"]
-          for (const alias of networkAliases(
-            networks[network]?.Aliases,
-            input.targetContainer
-          )) {
-            arguments_.push("--alias", alias)
-          }
-          arguments_.push(network, input.targetContainer)
-          return updateOperation("replace.connectNetwork", () =>
-            docker.command(arguments_)
-          )
-        },
+        (network) =>
+          updateOperation(
+            "replace.connectNetwork",
+            docker.connectNetwork(network, input.targetContainer, {
+              aliases: networkAliases(
+                networks[network]?.Aliases,
+                input.targetContainer
+              ),
+            })
+          ),
         { discard: true }
       )
 
       yield* onPhase("replace.startTarget")
-      yield* updateOperation("replace.startTarget", () =>
-        docker.command(["start", input.targetContainer], 120_000)
+      yield* updateOperation(
+        "replace.startTarget",
+        docker.startContainer(input.targetContainer, { timeout: 120_000 })
       )
       yield* onPhase("replace.waitUntilHealthy")
-      yield* updateOperation("replace.waitUntilHealthy", () =>
-        docker.waitUntilHealthy(input.targetContainer)
+      yield* updateOperation(
+        "replace.waitUntilHealthy",
+        waitUntilHealthy(docker, input.targetContainer)
       )
       yield* onPhase("replace.removeBackup")
-      yield* updateOperation("replace.removeBackup", () =>
-        docker.command(["rm", "--force", input.backupName], 90_000)
+      yield* updateOperation(
+        "replace.removeBackup",
+        docker.removeContainer(input.backupName, {
+          force: true,
+          timeout: 90_000,
+        })
       )
     }).pipe(
       Effect.catch((cause) =>
@@ -242,7 +248,7 @@ const rollbackContainerReplacementEffect = Effect.fn(
     targetReference: string
   },
   current: ContainerInspect,
-  docker: ContainerUpdateDocker,
+  docker: DockerEngine,
   replacementCreated: boolean,
   backupRenamed: boolean
 ) {
@@ -250,26 +256,35 @@ const rollbackContainerReplacementEffect = Effect.fn(
   const operations = [
     ...(replacementCreated
       ? [
-          updateOperation("rollback.removeReplacement", () =>
-            docker.command(["rm", "--force", input.targetContainer], 90_000)
+          updateOperation(
+            "rollback.removeReplacement",
+            docker.removeContainer(input.targetContainer, {
+              force: true,
+              timeout: 90_000,
+            })
           ),
         ]
       : []),
     ...(backupRenamed
       ? [
-          updateOperation("rollback.restoreBackup", () =>
-            docker.command(["rename", input.backupName, input.targetContainer])
+          updateOperation(
+            "rollback.restoreBackup",
+            docker.renameContainer(input.backupName, input.targetContainer)
           ).pipe(
             Effect.andThen(
-              updateOperation("rollback.startBackup", () =>
-                docker.command(["start", input.targetContainer], 120_000)
+              updateOperation(
+                "rollback.startBackup",
+                docker.startContainer(input.targetContainer, {
+                  timeout: 120_000,
+                })
               )
             )
           ),
         ]
       : []),
-    updateOperation("rollback.restoreReference", () =>
-      docker.command(["image", "tag", current.Image, input.targetReference])
+    updateOperation(
+      "rollback.restoreReference",
+      docker.tagImage(current.Image, input.targetReference)
     ),
   ]
   yield* Effect.forEach(
@@ -287,20 +302,59 @@ const rollbackContainerReplacementEffect = Effect.fn(
   return rollbackFailures
 })
 
-function updateOperation<TResult>(phase: string, run: () => Promise<TResult>) {
-  return Effect.tryPromise({
-    try: run,
-    catch: (cause) =>
+/**
+ * Waits for a started container to become healthy, or, without a health
+ * check, to keep running for five seconds.
+ */
+export function waitUntilHealthy(
+  docker: DockerEngine,
+  container: string
+): Effect.Effect<void, Error> {
+  return Effect.gen(function* () {
+    const deadline = Date.now() + 120_000
+    let runningSince = 0
+    while (Date.now() < deadline) {
+      const current = yield* docker.inspectContainer<ContainerInspect>(container)
+      if (!current.State.Running) {
+        return yield* Effect.fail(
+          new Error("The replacement container exited during startup")
+        )
+      }
+      const health = current.State.Health?.Status
+      if (health === "healthy") return
+      if (health === "unhealthy") {
+        return yield* Effect.fail(
+          new Error("The replacement container failed its health check")
+        )
+      }
+      if (!health) {
+        runningSince ||= Date.now()
+        if (Date.now() - runningSince >= 5_000) return
+      }
+      yield* Effect.sleep(1_000)
+    }
+    return yield* Effect.fail(
+      new Error("The replacement container did not become healthy in time")
+    )
+  })
+}
+
+function updateOperation<A>(
+  phase: string,
+  operation: Effect.Effect<A, Error>
+): Effect.Effect<A, RelaySystemUpdateError> {
+  return operation.pipe(
+    Effect.mapError((cause) =>
       cause instanceof RelaySystemUpdateError
         ? cause
         : RelaySystemUpdateError.make({
             phase,
-            reason:
-              cause instanceof Error ? cause.message : "System update failed",
+            reason: cause.message || "System update failed",
             cause,
             rollbackFailures: [],
-          }),
-  })
+          })
+    )
+  )
 }
 
 function updateFailure(phase: string, reason: string) {
@@ -331,6 +385,3 @@ export function networkAliases(
     ])
   )
 }
-import { Effect } from "effect"
-
-import { RelaySystemUpdateError } from "./effect/errors.js"
