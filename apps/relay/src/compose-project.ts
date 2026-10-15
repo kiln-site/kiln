@@ -10,7 +10,7 @@
  * being ignored. Keys only Swarm reads are ignored, as Compose itself
  * ignores them when it runs containers.
  */
-import { readFile, stat } from "node:fs/promises"
+import { readFile } from "node:fs/promises"
 import { homedir } from "node:os"
 import { join, resolve } from "node:path"
 
@@ -397,7 +397,12 @@ async function normalizeProject(
     }
     if (service.profiles !== undefined) {
       const own = stringList(service.profiles, `services.${name}.profiles`)
-      if (!profiles.has("*") && !own.some((profile) => profiles.has(profile))) {
+      // No profiles, even an empty list, means the service always runs.
+      if (
+        own.length > 0 &&
+        !profiles.has("*") &&
+        !own.some((profile) => profiles.has(profile))
+      ) {
         disabled.add(name)
         continue
       }
@@ -756,6 +761,12 @@ const UNSUPPORTED_SERVICE_KEYS = new Set([
 ])
 // Keys with no effect on the containers `docker compose up` runs.
 const IGNORED_SERVICE_KEYS = new Set(["attach", "develop"])
+// Every port of every protocol, which ranges can't add up past.
+const MAX_SERVICE_PORTS = 3 * 65_536
+
+function tooManyPorts(at: string): ComposeError {
+  return new ComposeError(`${at} lists more than ${MAX_SERVICE_PORTS} ports`)
+}
 
 async function normalizeService(
   name: string,
@@ -840,12 +851,27 @@ async function normalizeService(
       case "oom_kill_disable":
         service[key] = bool(value, at)
         break
-      case "ports":
-        service.ports = list(value, at).flatMap((entry) => ports(entry, at))
+      case "ports": {
+        service.ports = []
+        for (const entry of list(value, at)) {
+          for (const port of ports(entry, at)) service.ports.push(port)
+          if (service.ports.length > MAX_SERVICE_PORTS) throw tooManyPorts(at)
+        }
         break
-      case "expose":
-        service.expose = list(value, at).map((entry) => scalarString(entry, at))
+      }
+      case "expose": {
+        let count = 0
+        service.expose = list(value, at).map((entry) => {
+          const text = scalarString(entry, at)
+          const [ports = "", protocolText] = text.split("/")
+          const [start, end] = range(ports, at, text)
+          protocol(protocolText, at)
+          count += end - start + 1
+          if (count > MAX_SERVICE_PORTS) throw tooManyPorts(at)
+          return text
+        })
         break
+      }
       case "volumes":
         service.volumes = list(value, at).map((entry) =>
           volumeMount(entry, at, directory)
@@ -975,13 +1001,10 @@ async function normalizeService(
           throw new ComposeError(`env file ${file.path} not found`)
         continue
       }
-      parseDotenv(
-        text,
-        merged,
-        (variable) => lookup(variable) ?? own[variable] ?? undefined,
-        () => undefined,
-        file.path
-      )
+      const resolve: Lookup = (variable) =>
+        lookup(variable) ?? own[variable] ?? undefined
+      if (file.raw) parseRawEnv(text, merged, resolve, file.path)
+      else parseDotenv(text, merged, resolve, () => undefined, file.path)
     }
     service.environment = { ...merged, ...own }
   }
@@ -1281,9 +1304,17 @@ function fileReference(value: Value, at: string): ComposeFileReference {
 // A YAML number (octal with a leading 0, as Compose reads YAML) or an
 // octal string, with or without its leading 0.
 function fileMode(value: Value, at: string): number {
-  if (typeof value === "number" && Number.isInteger(value)) return value
-  if (typeof value === "string" && /^[0-7]+$/u.test(value)) {
-    return Number.parseInt(value, 8)
+  const mode =
+    typeof value === "string" && /^[0-7]+$/u.test(value)
+      ? Number.parseInt(value, 8)
+      : value
+  if (
+    typeof mode === "number" &&
+    Number.isInteger(mode) &&
+    mode >= 0 &&
+    mode <= 0xff_ff_ff_ff
+  ) {
+    return mode
   }
   throw new ComposeError(`${at} must be a file mode`)
 }
@@ -1297,7 +1328,7 @@ function ports(value: Value, at: string): Array<ComposePort> {
       throw new ComposeError(`${at} needs a target port`)
     return [
       {
-        target: integer(value.target, `${at}.target`),
+        target: port(value.target, `${at}.target`),
         ...(value.published !== undefined &&
           value.published !== null &&
           value.published !== "" && {
@@ -1345,6 +1376,14 @@ function ports(value: Value, at: string): Array<ComposePort> {
       protocol: proto,
     }
   })
+}
+
+function port(value: Value, at: string): number {
+  const number = integer(value, at)
+  if (number < 0 || number > 65_535) {
+    throw new ComposeError(`${at} has an invalid port "${String(value)}"`)
+  }
+  return number
 }
 
 function range(text: string, at: string, whole: string): [number, number] {
@@ -1849,19 +1888,28 @@ function envFileEntries(
   value: Value,
   at: string,
   directory: string
-): Array<{ path: string; required: boolean }> {
+): Array<{ path: string; raw: boolean; required: boolean }> {
   return (typeof value === "string" ? [value] : list(value, at)).map(
     (entry) => {
       if (typeof entry === "string") {
-        return { path: resolve(directory, expandHome(entry)), required: true }
+        return {
+          path: resolve(directory, expandHome(entry)),
+          raw: false,
+          required: true,
+        }
       }
       if (!isMapping(entry))
         throw new ComposeError(`${at} entries must be paths`)
       checkKeys(at, entry, ["format", "path", "required"])
-      if (entry.format !== undefined && entry.format !== "dotenv") {
+      if (
+        entry.format !== undefined &&
+        entry.format !== "dotenv" &&
+        entry.format !== "raw"
+      ) {
         throw unsupported(`env_file format ${String(entry.format)} (${at})`)
       }
       return {
+        raw: entry.format === "raw",
         path: resolve(
           directory,
           expandHome(requiredString(entry.path, `${at}.path`))
@@ -1875,17 +1923,41 @@ function envFileEntries(
   )
 }
 
-// ---------------------------------------------------------- stat helper
-
-/** Whether a path exists, for warnings about missing secret files. */
-export async function pathExists(path: string): Promise<boolean> {
-  const found = await Effect.runPromise(
-    Effect.result(Effect.tryPromise(() => stat(path)))
-  )
-  return Result.isSuccess(found)
-}
-
 // ---------------------------------------------------------- env files
+
+/**
+ * The `raw` env_file format, read with the parser `docker run --env-file`
+ * uses (docker/cli's kvfile): each line is `KEY=value` as written, with no
+ * quotes removed and no variables expanded. Leading whitespace and `#`
+ * comment lines are skipped, and a key alone takes its value from `lookup`
+ * or is left out.
+ */
+function parseRawEnv(
+  text: string,
+  out: Record<string, string>,
+  lookup: Lookup,
+  path: string
+): void {
+  const fail = (reason: string): never => {
+    throw new ComposeError(`failed to parse env_file ${path}: ${reason}`)
+  }
+  for (const [index, scanned] of text.split("\n").entries()) {
+    let line = scanned.endsWith("\r") ? scanned.slice(0, -1) : scanned
+    if (index === 0 && line.startsWith("\uFEFF")) line = line.slice(1)
+    line = line.replace(/^[^\S\uFEFF]+/u, "")
+    if (line === "" || line.startsWith("#")) continue
+    const separator = line.indexOf("=")
+    const key = separator === -1 ? line : line.slice(0, separator)
+    if (key === "") fail(`no variable name on line '${line}'`)
+    if (/[ \t]/u.test(key)) fail(`variable '${key}' contains whitespaces`)
+    if (separator !== -1) {
+      out[key] = line.slice(separator + 1)
+      continue
+    }
+    const value = lookup(key)
+    if (value !== undefined) out[key] = value
+  }
+}
 
 /**
  * compose-go's dotenv parser: `KEY=value` (or `KEY: value`) statements,
@@ -1895,7 +1967,7 @@ export async function pathExists(path: string): Promise<boolean> {
  * `lookup`. Values go into `out`; variables expand from `lookup` first,
  * then from what `out` already holds.
  */
-export function parseDotenv(
+function parseDotenv(
   text: string,
   out: Record<string, string>,
   lookup: Lookup,
@@ -2078,7 +2150,7 @@ const TEMPLATE =
  * `$NAME`, `${NAME}`, the `:-`, `-`, `:?`, `?`, `:+`, and `+` modifiers
  * (whose words are substituted too), and `$$` for a literal `$`.
  */
-export function substituteTemplate(
+function substituteTemplate(
   text: string,
   lookup: Lookup,
   onUnset: (name: string) => void,
@@ -2318,7 +2390,7 @@ function bool(value: Value, at: string): boolean {
 
 function integer(value: Value, at: string): number {
   const number = typeof value === "string" ? Number(value) : value
-  if (typeof number !== "number" || !Number.isInteger(number)) {
+  if (typeof number !== "number" || !Number.isSafeInteger(number)) {
     throw new ComposeError(`${at} must be a whole number`)
   }
   return number
@@ -2345,7 +2417,7 @@ function expandHome(path: string): string {
 
 /** Go durations, such as `1m30s`, in nanoseconds; a bare number is seconds. */
 function duration(value: Value, at: string): number {
-  if (typeof value === "number") return value * 1e9
+  if (typeof value === "number") return safe(Math.round(value * 1e9), at)
   const text = requiredString(value, at)
   const units: Record<string, number> = {
     h: 3_600e9,
@@ -2366,19 +2438,19 @@ function duration(value: Value, at: string): number {
   if (consumed !== text.length || text.length === 0) {
     throw new ComposeError(`${at} has an invalid duration "${text}"`)
   }
-  return Math.round(total)
+  return safe(Math.round(total), at)
 }
 
 /** Sizes as Compose reads them: bytes, or a number with a binary unit. */
 function bytes(value: Value, at: string): number {
-  if (typeof value === "number") return value
+  if (typeof value === "number") return safe(value, at)
   const match = /^(\d+(?:\.\d+)?)\s*([bkmgtp])?(?:i?b)?$/iu.exec(
     requiredString(value, at).trim()
   )
   if (!match)
     throw new ComposeError(`${at} has an invalid size "${String(value)}"`)
   const exponent = "bkmgtp".indexOf((match[2] ?? "b").toLowerCase())
-  return Math.trunc(Number(match[1]) * 1024 ** exponent)
+  return safe(Math.trunc(Number(match[1]) * 1024 ** exponent), at)
 }
 
 // Nano CPUs, truncated as Compose converts them.
@@ -2387,5 +2459,14 @@ function nanoCpus(value: Value, at: string): number {
   if (typeof number !== "number" || !Number.isFinite(number) || number < 0) {
     throw new ComposeError(`${at} must be a number of CPUs`)
   }
-  return Math.trunc(number * 1e9)
+  return safe(Math.trunc(number * 1e9), at)
+}
+
+// Docker takes these as 64-bit integers; past 2^53 a number can't be sent
+// exactly, and no real setting is that large.
+function safe(number: number, at: string): number {
+  if (!Number.isSafeInteger(number) || number < 0) {
+    throw new ComposeError(`${at} is out of range`)
+  }
+  return number
 }

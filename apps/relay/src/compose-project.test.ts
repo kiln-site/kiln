@@ -113,6 +113,43 @@ describe("Compose variables", () => {
   })
 })
 
+describe("Compose env files", () => {
+  it("reads a raw env_file as docker run --env-file does, without quotes or interpolation", async () => {
+    await writeFile(
+      join(directory, "raw.env"),
+      "\uFEFF# comment\n  QUOTED=\"a b\"\nSINGLE='${HOME}'\nTRAILING=value # kept \r\nEMPTY=\nPASSED_THROUGH\nNOT_ANYWHERE\n"
+    )
+
+    const { project } = await load(
+      [
+        "services:",
+        "  web:",
+        "    image: nginx",
+        "    env_file: [{ path: raw.env, format: raw }]",
+      ].join("\n"),
+      { PASSED_THROUGH: "from-app" }
+    )
+
+    expect(project.services.web?.environment).toEqual({
+      EMPTY: "",
+      PASSED_THROUGH: "from-app",
+      QUOTED: '"a b"',
+      SINGLE: "'${HOME}'",
+      TRAILING: "value # kept ",
+    })
+  })
+
+  it("rejects a raw env_file key with whitespace", async () => {
+    await writeFile(join(directory, "raw.env"), "BAD KEY=value\n")
+
+    await expect(
+      load(
+        "services:\n  web:\n    image: nginx\n    env_file: [{ path: raw.env, format: raw }]\n"
+      )
+    ).rejects.toThrow("variable 'BAD KEY' contains whitespaces")
+  })
+})
+
 describe("Compose environments, as Compose resolves them", () => {
   it("expands .env with the app's variables first, and unsets env_file values set to null", async () => {
     await writeFile(
@@ -283,9 +320,37 @@ describe("Compose features Kiln can't run", () => {
 
   it("leaves out services in a profile, which no deploy activates", async () => {
     const { project } = await load(
-      "services:\n  web:\n    image: nginx\n  debug:\n    image: busybox\n    profiles: [debug]\n"
+      "services:\n  web:\n    image: nginx\n    profiles: []\n  debug:\n    image: busybox\n    profiles: [debug]\n"
     )
 
+    // An empty list is no profile, as Compose reads it.
     expect(Object.keys(project.services)).toEqual(["web"])
+  })
+
+  // Numbers past what a port or a 64-bit setting holds once looped or
+  // multiplied without end.
+  it.each([
+    ["an exposed port past 2^53", "expose: ['9007199254740992-9007199254740992']"],
+    ["an exposed port past 65535", "expose: ['65536']"],
+    ["a long-syntax target past 65535", "ports: [{ target: 70000 }]"],
+    ["a memory limit past 2^53", "mem_limit: 99999999999999999999"],
+    ["a duration past 2^53", "stop_grace_period: 99999999999h"],
+    ["CPUs past 2^53", "cpus: 1e300"],
+    ["a whole number past 2^53", "pids_limit: 9007199254740993"],
+  ])("rejects %s", async (_, line) => {
+    await expect(
+      load(`services:\n  web:\n    image: nginx\n    ${line}\n`)
+    ).rejects.toThrow(/out of range|invalid port|whole number/u)
+  })
+
+  it("rejects port ranges that add up past every port of every protocol", async () => {
+    const ranges = Array.from({ length: 4 }, () => "'0-65535'").join(", ")
+
+    await expect(
+      load(`services:\n  web:\n    image: nginx\n    expose: [${ranges}]\n`)
+    ).rejects.toThrow("lists more than 196608 ports")
+    await expect(
+      load(`services:\n  web:\n    image: nginx\n    ports: [${ranges}]\n`)
+    ).rejects.toThrow("lists more than 196608 ports")
   })
 })
