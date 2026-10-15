@@ -942,9 +942,8 @@ export const updateRelayFilePin = createServerFn({ method: "POST" })
         relayFileEntrySchema.parse
       )
     )
-    if (entry.kind !== "file" || entry.path !== data.path) {
-      throw new Error("File not found")
-    }
+    // Directories are pinned by their "/"-suffixed path.
+    if (entry.path !== data.path) throw new Error("File not found")
     const activity = await listFileActivity(relay.id, data.instanceId)
     const validPinnedPaths = await runAppEffect(
       "relay.fileStat.pinnedValidation",
@@ -960,7 +959,7 @@ export const updateRelayFilePin = createServerFn({ method: "POST" })
             Effect.match({
               onFailure: () => null,
               onSuccess: (pinnedEntry) =>
-                pinnedEntry.kind === "file" ? pinnedEntry.path : null,
+                pinnedEntry.path === file.path ? pinnedEntry.path : null,
             })
           )
         },

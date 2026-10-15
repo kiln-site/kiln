@@ -27,7 +27,7 @@ export function appIdFromFileRoot(id: string): string | null {
   return resourceIdPattern.test(appId) ? appId : null
 }
 
-// A server's files, the only roots with recent and pinned files.
+// A server's files, as opposed to an app's or a Relay's host files.
 export function isServerFileRoot(id: string): boolean {
   return !appIdFromFileRoot(id) && !isRelayFileRoot(id)
 }

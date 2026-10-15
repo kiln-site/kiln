@@ -185,6 +185,15 @@ export class FilesystemDriver {
               const size = yield* visit(absolute, depth + 1)
               sizes[directoryPath] = size
               directorySize += size
+            } else if (
+              entry.isSymbolicLink() &&
+              (yield* Effect.promise(() => linksToDirectory(root, absolute)))
+            ) {
+              // Listed like the paged index, but not walked: links can loop.
+              const directoryPath = `${path}/`
+              paths.push(directoryPath)
+              modifiedAt[directoryPath] = metadata[index]?.mtimeMs ?? 0
+              sizes[directoryPath] = 0
             } else if (entry.isFile() || entry.isSymbolicLink()) {
               paths.push(path)
               modifiedAt[path] = metadata[index]?.mtimeMs ?? 0
@@ -1224,14 +1233,35 @@ async function relayFileEntry(
   directory: string,
   entry: Dirent
 ): Promise<RelayFileEntry> {
-  const path = fileEntryPath(directory, entry)
-  const metadata = await lstat(join(root, path.replace(/\/$/u, "")))
-  const kind = entry.isDirectory() ? "directory" : "file"
+  const name = `${directory}${entry.name}`
+  const absolute = join(root, name)
+  const metadata = await lstat(absolute)
+  const kind =
+    entry.isDirectory() ||
+    (entry.isSymbolicLink() && (await linksToDirectory(root, absolute)))
+      ? "directory"
+      : "file"
   return {
     kind,
     modifiedAt: metadata.mtimeMs,
-    path,
+    path: kind === "directory" ? `${name}/` : name,
     size: kind === "directory" ? null : metadata.size,
+  }
+}
+
+// Stat and directory reads follow links, so listings must agree: a link to a
+// directory inside the root is listed as that directory. Links that leave the
+// root or dangle stay files and fail when opened.
+async function linksToDirectory(
+  root: string,
+  absolute: string
+): Promise<boolean> {
+  try {
+    const target = await realpath(absolute)
+    if (target !== root && !target.startsWith(`${root}${sep}`)) return false
+    return (await stat(target)).isDirectory()
+  } catch {
+    return false
   }
 }
 

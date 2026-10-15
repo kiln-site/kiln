@@ -8,6 +8,7 @@ import { notifications } from "./0005_notifications"
 import { systemUpdateOperations } from "./0006_system_update_operations"
 import { systemReleases } from "./0007_system_releases"
 import { apps } from "./0008_apps"
+import { fileActivityRoots } from "./0009_file_activity_roots"
 
 // Append new migrations with the next id. Never edit or reorder applied ones.
 export const migrations: ReadonlyArray<Migration> = [
@@ -19,4 +20,5 @@ export const migrations: ReadonlyArray<Migration> = [
   systemUpdateOperations,
   systemReleases,
   apps,
+  fileActivityRoots,
 ]

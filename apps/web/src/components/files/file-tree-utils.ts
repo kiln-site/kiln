@@ -5,6 +5,7 @@ import { showToast } from "@workspace/ui/components/sonner"
 
 import type { UploadFile } from "@/components/files/file-upload-selection"
 import { droppedUploadFiles } from "@/components/files/file-upload-selection"
+import type { FileWorkspaceInstance } from "@/lib/relay-selectors"
 
 export const folderInputAttributes = { webkitdirectory: "" }
 
@@ -80,6 +81,7 @@ export type FileWorkspaceAction =
 export interface FileActionsController {
   busy: boolean
   canWrite: boolean
+  instance: Pick<FileWorkspaceInstance, "id" | "relayId">
   request: (action: FileWorkspaceAction, paths: ReadonlyArray<string>) => void
   move: (path: string, destination: string) => Promise<boolean>
 }

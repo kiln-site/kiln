@@ -381,6 +381,7 @@ export function useFileActions({
     controller: {
       busy: mutation.isPending || archiveMutation.isPending,
       canWrite,
+      instance,
       request,
       move,
     } satisfies FileActionsController,

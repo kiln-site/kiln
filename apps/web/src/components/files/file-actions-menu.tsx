@@ -10,6 +10,8 @@ import {
   FileIcon,
   Folder,
   FolderInput,
+  Pin,
+  PinOff,
   Trash2,
 } from "lucide-react"
 import { createPortal } from "react-dom"
@@ -29,7 +31,10 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@workspace/ui/components/dropdown-menu"
+import { showToast } from "@workspace/ui/components/sonner"
 import { floatingSurfaceClassName } from "@workspace/ui/lib/surface-styles"
+
+import { useFilePin } from "@/components/files/file-pin"
 
 import {
   isUnarchiveSupportedPath,
@@ -137,6 +142,44 @@ function FileActionMenuSeparator({
   return <hr className="-mx-1 my-1 h-px border-0 bg-border" />
 }
 
+function showPinError(error: Error) {
+  showToast({
+    type: "error",
+    message: "Could not update pin",
+    description: error.message || undefined,
+  })
+}
+
+// Mounted only while a menu is open, so closed rows don't subscribe to pins.
+function FilePinMenuItem({
+  close,
+  controller,
+  path,
+  surface,
+}: {
+  close?: CloseFileActionsMenu
+  controller: FileActionsController
+  path: string
+  surface: FileActionsMenuSurface
+}) {
+  const { loading, pinned, pinning, setPinned } = useFilePin(
+    controller.instance,
+    path,
+    { onError: showPinError }
+  )
+  return (
+    <FileActionMenuItem
+      surface={surface}
+      close={close}
+      disabled={!controller.canWrite || loading || pinning}
+      icon={pinned ? <PinOff /> : <Pin />}
+      label={pinned ? "Unpin" : "Pin"}
+      onSelect={() => setPinned(!pinned)}
+      restoreFocus
+    />
+  )
+}
+
 function FileActionMenuItems({
   close,
   controller,
@@ -161,6 +204,14 @@ function FileActionMenuItems({
           label="Open"
           onSelect={onOpen}
           restoreFocus
+        />
+      ) : null}
+      {paths.length === 1 ? (
+        <FilePinMenuItem
+          surface={surface}
+          close={close}
+          controller={controller}
+          path={paths[0] ?? ""}
         />
       ) : null}
       <FileActionMenuItem

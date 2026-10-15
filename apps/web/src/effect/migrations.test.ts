@@ -2,11 +2,20 @@ import { expect, layer } from "@effect/vitest"
 import { Effect, Exit } from "effect"
 import { SqlClient } from "effect/sql"
 
+import { listFileActivityEffect } from "@/lib/file-activity"
 import { migrations } from "@/migrations"
 import { baseline } from "@/migrations/0001_baseline"
+import { fileActivityRoots } from "@/migrations/0009_file_activity_roots"
 import { baselineTables } from "@/migrations/baseline-schema"
 import { describeMysql, testDatabaseClient } from "@/test/database"
+import {
+  insertInstance,
+  insertRelay,
+  insertRows,
+  selectRows,
+} from "@/test/seed"
 
+import { Database, makeDatabase } from "./database"
 import { applyMigrations } from "./migrations"
 
 const migrationIds = migrations.map((migration) => migration.id)
@@ -132,6 +141,107 @@ describeMysql("database migrations", () => {
           ])
         }),
       // Rebuilding every table with a time column takes a while.
+      120_000
+    )
+
+    it.effect(
+      "keeps server file pins and drops each root's with its owner",
+      () =>
+        Effect.gen(function* () {
+          const sql = yield* SqlClient.SqlClient
+          const relayId = "relay-one"
+          const serverId = "a".repeat(40)
+          const appId = "b".repeat(40)
+          const activity = (path: string, row: Record<string, unknown>) => ({
+            relay_id: relayId,
+            path_hash: path.padEnd(64, "0").slice(0, 64),
+            path,
+            pinned: false,
+            last_viewed_at: 1,
+            created_at: 1,
+            updated_at: 1,
+            ...row,
+          })
+          const list = (root: string) =>
+            listFileActivityEffect(relayId, root).pipe(
+              Effect.map((result) =>
+                result.files.map(({ path, pinned }) => ({ path, pinned }))
+              ),
+              Effect.provideService(Database, makeDatabase(Effect.succeed(sql)))
+            )
+
+          yield* dropAllTables
+          yield* applyMigrations(
+            migrations.filter(
+              (migration) => migration.id < fileActivityRoots.id
+            )
+          )
+          yield* insertRelay(relayId)
+          yield* insertInstance(relayId, serverId)
+          yield* insertRows("file_activity", [
+            activity("server.properties", {
+              instance_id: serverId,
+              pinned: true,
+            }),
+            activity("logs/latest.log", { instance_id: serverId }),
+          ])
+
+          yield* applyMigrations(migrations)
+          expect(yield* list(serverId)).toEqual([
+            { path: "server.properties", pinned: true },
+            { path: "logs/latest.log", pinned: false },
+          ])
+
+          yield* insertRows("app", {
+            app_id: appId,
+            relay_id: relayId,
+            name: "app",
+            config_ciphertext: "",
+            created_by: "user",
+            created_at: 1,
+            updated_at: 1,
+          })
+          // Every row names the same columns for one multi-row insert.
+          const root = (
+            rootId: string,
+            instanceId: string | null,
+            app: string | null
+          ) => ({
+            root_id: rootId,
+            instance_id: instanceId,
+            app_id: app,
+          })
+          yield* insertRows("file_activity", [
+            activity("plugins/", root(serverId, serverId, null)),
+            activity("data/", {
+              ...root(`app:${appId}`, null, appId),
+              pinned: true,
+            }),
+            activity("etc/hosts", {
+              ...root(relayId, null, null),
+              pinned: true,
+            }),
+          ])
+          // Only files are recent; directories show only while pinned.
+          expect(yield* list(serverId)).toEqual([
+            { path: "server.properties", pinned: true },
+            { path: "logs/latest.log", pinned: false },
+          ])
+          expect(yield* list(`app:${appId}`)).toEqual([
+            { path: "data/", pinned: true },
+          ])
+
+          const roots = Effect.map(
+            selectRows<{ root_id: string }>("file_activity"),
+            (rows) => [...new Set(rows.map((row) => row.root_id))].sort()
+          )
+          yield* sql`DELETE FROM kiln_instance WHERE instance_id = ${serverId}`
+          expect(yield* roots).toEqual([`app:${appId}`, relayId])
+          yield* sql`DELETE FROM kiln_app WHERE app_id = ${appId}`
+          expect(yield* roots).toEqual([relayId])
+          yield* sql`DELETE FROM kiln_relay WHERE id = ${relayId}`
+          expect(yield* roots).toEqual([])
+        }),
       120_000
     )
   })

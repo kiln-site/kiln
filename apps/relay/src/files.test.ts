@@ -225,6 +225,47 @@ describe("Relay paged file index", () => {
       })
     )
   )
+
+  // Hearth's tree crashed when a listed file stat'ed as a directory.
+  it.effect("lists links the same way stat resolves them", () =>
+    withSetup(({ directory, driver, instance, root }) =>
+      Effect.gen(function* () {
+        yield* fromPromise(() => mkdir(resolve(root, "world", "region")))
+        yield* fromPromise(() =>
+          writeFile(resolve(root, "world", "region", "r.0.0.mca"), "chunk")
+        )
+        yield* fromPromise(() =>
+          symlink("region", resolve(root, "world", "linked"))
+        )
+        yield* fromPromise(() =>
+          symlink(directory, resolve(root, "world", "escape"))
+        )
+
+        const page = yield* driver.directory(instance, {
+          instanceId: instance.id,
+          path: "world/",
+        })
+        const kinds = Object.fromEntries(
+          page.entries.map((entry) => [entry.path, entry.kind])
+        )
+        assert.strictEqual(kinds["world/linked/"], "directory")
+        assert.strictEqual(kinds["world/escape"], "file")
+
+        const linked = yield* driver.entry(instance, "world/linked")
+        assert.strictEqual(linked.kind, "directory")
+        assert.strictEqual(linked.path, "world/linked/")
+
+        const children = yield* driver.directory(instance, {
+          instanceId: instance.id,
+          path: "world/linked/",
+        })
+        assert.deepEqual(
+          children.entries.map((entry) => entry.path),
+          ["world/linked/r.0.0.mca"]
+        )
+      })
+    )
+  )
 })
 
 describe("Relay legacy file tree", () => {

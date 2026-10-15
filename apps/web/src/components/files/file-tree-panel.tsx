@@ -1131,11 +1131,28 @@ export function FileTreePanel({
         const replacesPlaceholder = loadingPlaceholderPaths.current.delete(
           entry.path
         )
+        // A path that changed between file and directory replaces its old
+        // row; Trees throws when both kinds share a name.
+        const directory = entry.path.endsWith("/")
+        const existing =
+          model.getItem(entry.path) ??
+          model.getItem(directory ? entry.path.slice(0, -1) : `${entry.path}/`)
+        const replacesKind =
+          existing !== null && existing.isDirectory() !== directory
         return [
+          ...(replacesKind
+            ? [
+                {
+                  path: existing.getPath(),
+                  recursive: true,
+                  type: "remove" as const,
+                },
+              ]
+            : []),
           ...(replacesPlaceholder
             ? [{ path: entry.path, type: "remove" as const }]
             : []),
-          ...(!model.getItem(entry.path) || replacesPlaceholder
+          ...(!existing || replacesKind || replacesPlaceholder
             ? [{ path: entry.path, type: "add" as const }]
             : []),
         ]

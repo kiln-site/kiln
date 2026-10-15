@@ -2,7 +2,7 @@ import { useFileRootPath } from "@/components/files/file-root-context"
 import * as React from "react"
 import { useQuery } from "@tanstack/react-query"
 import type { RelayFileActivityEntry } from "@workspace/contracts"
-import { Clock3, LoaderCircle, Pin } from "lucide-react"
+import { Clock3, Folder, LoaderCircle, Pin } from "lucide-react"
 
 import { RootDirectoryList } from "@/components/files/file-directory-view"
 import { FileTypeIcon } from "@/components/files/file-type-icon"
@@ -78,6 +78,7 @@ function FileActivityRow({
   onOpen: (path: string) => void
 }) {
   const rootPath = useFileRootPath()
+  const directory = entry.path.endsWith("/")
   const kind = fileActivityKind(entry)
   return (
     <button
@@ -86,7 +87,11 @@ function FileActivityRow({
       onClick={() => onOpen(entry.path)}
     >
       <span className="grid size-7 place-items-center border border-border/70 bg-muted/20 transition-colors group-hover:border-primary/25">
-        <FileTypeIcon path={entry.path} />
+        {directory ? (
+          <Folder className="size-4 text-primary/80" />
+        ) : (
+          <FileTypeIcon path={entry.path} />
+        )}
       </span>
       <span className="flex min-w-0 items-baseline gap-2">
         <span className="min-w-0 truncate text-sm font-medium text-foreground">
@@ -97,19 +102,21 @@ function FileActivityRow({
         </span>
       </span>
       <span className="type-meta flex shrink-0 items-center gap-1.5 pl-2 text-muted-foreground">
-        <span>
-          {kind}{" "}
-          <time
-            dateTime={
-              kind === "Edited"
-                ? (entry.lastEditedAt ?? entry.lastViewedAt)
-                : entry.lastViewedAt
-            }
-            suppressHydrationWarning
-          >
-            {fileActivityTime(entry)}
-          </time>
-        </span>
+        {directory ? null : (
+          <span>
+            {kind}{" "}
+            <time
+              dateTime={
+                kind === "Edited"
+                  ? (entry.lastEditedAt ?? entry.lastViewedAt)
+                  : entry.lastViewedAt
+              }
+              suppressHydrationWarning
+            >
+              {fileActivityTime(entry)}
+            </time>
+          </span>
+        )}
         {entry.pinned ? (
           <Pin
             className="size-3.5 fill-primary/15 text-primary"
