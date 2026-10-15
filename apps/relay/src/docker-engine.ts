@@ -17,12 +17,13 @@
  * Containers are created from the flags Relay used to pass the CLI, as the
  * same request bodies (see `./docker-container-spec.js`).
  *
- * Builds send their context as a tar (see `./docker-build.js`).
+ * Builds serve their context through a BuildKit session (see
+ * `./docker-build.js`).
  *
  * Compose stays on the CLI (see `./command.js`) for now.
  */
 import { Agent, request } from "node:http"
-import { type Duplex, PassThrough, type Readable, Writable } from "node:stream"
+import { type Duplex, PassThrough, Writable } from "node:stream"
 import { StringDecoder } from "node:string_decoder"
 import { Effect, Predicate, Result } from "effect"
 
