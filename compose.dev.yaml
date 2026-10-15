@@ -1,6 +1,7 @@
 services:
   mysql:
-    ports: !reset []
+    ports: !override
+      - "127.0.0.1:${KILN_DEV_MYSQL_PORT:-3306}:3306"
 
   relay:
     build: !reset null
@@ -9,6 +10,7 @@ services:
     working_dir: /workspace
     environment:
       NODE_ENV: development
+      npm_config_store_dir: /root/.local/share/pnpm/store
       # Upgrade-only read path for instances created from the old Relay catalog.
       KILN_BRICKS_CATALOG_URL: file:///workspace/apps/bricks/catalog.yml
       KILN_RELAY_TLS_MODE: managed
@@ -18,6 +20,7 @@ services:
       - /bin/sh
       - -lc
       - |
+        set -eu
         apk add --no-cache docker-cli docker-cli-buildx docker-cli-compose
         # Pin restic to the version shipped in apps/relay/Dockerfile so dev
         # exercises the same CLI/JSON surface as production.
@@ -66,13 +69,30 @@ services:
       - /:/host:rw,rslave
       - relay-data:/data
       - .:/workspace
-      - relay-dev-node-modules:/workspace/node_modules
-      - relay-dev-app-node-modules:/workspace/apps/relay/node_modules
-      - relay-dev-contracts-node-modules:/workspace/packages/contracts/node_modules
-      - relay-dev-telemetry-node-modules:/workspace/packages/telemetry/node_modules
+      - type: volume
+        source: relay-dev-node-modules
+        target: /workspace/node_modules
+        volume:
+          nocopy: true
+      - type: volume
+        source: relay-dev-app-node-modules
+        target: /workspace/apps/relay/node_modules
+        volume:
+          nocopy: true
+      - type: volume
+        source: relay-dev-contracts-node-modules
+        target: /workspace/packages/contracts/node_modules
+        volume:
+          nocopy: true
+      - type: volume
+        source: relay-dev-telemetry-node-modules
+        target: /workspace/packages/telemetry/node_modules
+        volume:
+          nocopy: true
       - kiln-dev-pnpm-store:/root/.local/share/pnpm/store
       - minio-certs:/minio-certs:ro
-    ports: !reset []
+    ports: !override
+      - "127.0.0.1:${KILN_DEV_SFTP_PORT:-2022}:2022"
 
   hearth:
     build: !reset null
@@ -92,6 +112,7 @@ services:
         condition: service_completed_successfully
     environment:
       NODE_ENV: development
+      npm_config_store_dir: /root/.local/share/pnpm/store
       KILN_ENVIRONMENT: dev
       KILN_BRICKS_CATALOG_URL: file:///workspace/apps/bricks/catalog.yml
       NODE_EXTRA_CA_CERTS: /minio-certs/public.crt
@@ -99,6 +120,7 @@ services:
       - /bin/sh
       - -lc
       - |
+        set -eu
         corepack enable
         pnpm install --frozen-lockfile --ignore-scripts --filter web...
         pnpm rebuild esbuild
@@ -118,22 +140,41 @@ services:
       timeout: 3s
       start_period: 10s
       retries: 6
-    labels:
-      dev.orbstack.http-port: "3000"
     volumes: !override
       - .:/workspace
       - type: bind
         source: "${KILN_DEV_ENV_FILE:?Run through pnpm dev:docker}"
         target: /workspace/.env
         read_only: true
-      - hearth-dev-node-modules:/workspace/node_modules
-      - hearth-dev-web-node-modules:/workspace/apps/web/node_modules
-      - hearth-dev-contracts-node-modules:/workspace/packages/contracts/node_modules
-      - hearth-dev-telemetry-node-modules:/workspace/packages/telemetry/node_modules
-      - hearth-dev-ui-node-modules:/workspace/packages/ui/node_modules
+      - type: volume
+        source: hearth-dev-node-modules
+        target: /workspace/node_modules
+        volume:
+          nocopy: true
+      - type: volume
+        source: hearth-dev-web-node-modules
+        target: /workspace/apps/web/node_modules
+        volume:
+          nocopy: true
+      - type: volume
+        source: hearth-dev-contracts-node-modules
+        target: /workspace/packages/contracts/node_modules
+        volume:
+          nocopy: true
+      - type: volume
+        source: hearth-dev-telemetry-node-modules
+        target: /workspace/packages/telemetry/node_modules
+        volume:
+          nocopy: true
+      - type: volume
+        source: hearth-dev-ui-node-modules
+        target: /workspace/packages/ui/node_modules
+        volume:
+          nocopy: true
       - kiln-dev-pnpm-store:/root/.local/share/pnpm/store
       - minio-certs:/minio-certs:ro
-    ports: !reset []
+    ports: !override
+      - "127.0.0.1:${KILN_DEV_WEB_PORT:-3000}:3000"
 
   minio-certs:
     image: alpine:3.21

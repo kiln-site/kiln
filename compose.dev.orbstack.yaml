@@ -1,0 +1,13 @@
+# Optional OrbStack DNS/HTTPS access instead of published localhost ports.
+services:
+  mysql:
+    ports: !reset []
+
+  relay:
+    ports: !reset []
+
+  hearth:
+    ports: !reset []
+    labels:
+      dev.orbstack.http-port: "3000"
+      dev.orbstack.domains: "${KILN_INSTALLATION_ID}.orb.local"

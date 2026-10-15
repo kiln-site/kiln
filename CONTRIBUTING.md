@@ -34,23 +34,33 @@ permission first (see CLA §4).
 Maintainers: enable the repo at [cla-assistant.io](https://cla-assistant.io)
 and point it at this repository’s `CLA.md`.
 
+## Development
+
+See the [development guide](docs/development.md) for setup, running the Docker
+stack, and worktree cleanup.
+
 ## Pull requests
 
 1. Sign the CLA when CLA Assistant prompts you on the pull request.
 2. Keep changes focused and consistent with existing patterns.
 3. Prefer browser validation for UI work over large speculative test suites.
-4. Use a short, human PR title in `<type>(<scope>): <title>` format. Scopes are
+4. Name branches `<type>/<short-kebab-case-task>` (for example,
+   `fix/panel-disconnect` or `chore/repo-cleanup`), without personal or agent prefixes.
+   Use a short, human PR title in `<type>(<scope>): <title>` format. Scopes are
    `hearth`, `bricks`, `relay`, and `repo` for repo-wide changes.
 5. Use this description format:
 
    ```md
    # Why
+
    What it fixes or implements. Link an issue when one exists.
 
    # Summary
+
    Brief summary.
 
    # Notes
+
    Breaking changes, compatibility notes, migration steps, or anything else reviewers need to know.
    ```
 

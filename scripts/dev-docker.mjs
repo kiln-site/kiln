@@ -1,6 +1,6 @@
 import { createHash, randomBytes } from "node:crypto"
 import { chmodSync, existsSync, readFileSync, writeFileSync } from "node:fs"
-import { basename, dirname, resolve } from "node:path"
+import { dirname, resolve } from "node:path"
 import { spawnSync } from "node:child_process"
 
 const command = process.argv[2] ?? "start"
@@ -15,14 +15,28 @@ const commonGitDirectory = resolve(
 )
 const primaryRoot = dirname(commonGitDirectory)
 const primaryWorktree = resolve(worktreeRoot) === resolve(primaryRoot)
-const stack = primaryWorktree ? "hearth" : worktreeStack(worktreeRoot)
+// Keep the first branch-derived name across branch switches, including cleanup.
+const projectFile = resolve(
+  worktreeRoot,
+  git("rev-parse", "--git-path", "kiln-dev-project")
+)
+const stack = projectName()
 const namespace = primaryWorktree ? "" : stack
 const environmentFile = resolve(primaryRoot, ".env")
-const hearthUrl = `https://hearth.${stack}.orb.local`
-const relayUrl = `https://relay.${stack}.orb.local`
+const network = developmentNetwork()
+const orbstack = network === "orbstack"
+const webPort = developmentPort("KILN_DEV_WEB_PORT", 3000)
+const mysqlPort = developmentPort("KILN_DEV_MYSQL_PORT", 3306)
+const sftpPort = developmentPort("KILN_DEV_SFTP_PORT", 2022)
+const hearthUrl = orbstack
+  ? `https://${stack}.orb.local`
+  : `http://localhost:${webPort}`
+const relayHost = orbstack ? `relay.${stack}.orb.local` : "relay"
+const relayUrl = orbstack ? `https://${relayHost}` : `https://${relayHost}:4100`
 const composeFiles = [
   resolve(worktreeRoot, "compose.yaml"),
   resolve(worktreeRoot, "compose.dev.yaml"),
+  ...(orbstack ? [resolve(worktreeRoot, "compose.dev.orbstack.yaml")] : []),
 ]
 
 if (command === "setup") {
@@ -33,6 +47,12 @@ if (command === "setup") {
 }
 
 requireEnvironment()
+if (["start", "up", "down", "destroy", "refresh"].includes(command)) {
+  requireProjectOwnership()
+}
+if (["start", "up", "refresh"].includes(command)) {
+  writeFileSync(projectFile, `${stack}\n`)
+}
 if (command === "start" || command === "up" || command === "refresh") {
   ensureSharedStore()
 }
@@ -40,12 +60,20 @@ if (command === "start" || command === "up" || command === "refresh") {
 const composeEnvironment = {
   ...process.env,
   KILN_DEV_ENV_FILE: environmentFile,
+  KILN_DEV_WEB_PORT: String(webPort),
+  KILN_DEV_MYSQL_PORT: String(mysqlPort),
+  KILN_DEV_SFTP_PORT: String(sftpPort),
   KILN_INSTALLATION_ID: stack,
   KILN_RELAY_GAME_HOST: process.env.KILN_RELAY_GAME_HOST?.trim() || "localhost",
-  KILN_RELAY_HOST: `relay.${stack}.orb.local`,
+  KILN_RELAY_HOST: relayHost,
+  KILN_RELAY_PORT: "4100",
+  KILN_RELAY_SFTP_PORT: "2022",
+  // Bootstrap uses the direct managed-TLS endpoint, not the OrbStack edge.
+  KILN_RELAY_PUBLIC_URL: "",
+  KILN_RELAY_CONTROL_URL: "",
   KILN_RELAY_NAME: `D001-${createHash("sha256").update(resolve(worktreeRoot)).digest("hex").slice(0, 8)}`,
-  KILN_RELAY_PROXY: "none",
-  KILN_RELAY_PUBLIC_PORT: "443",
+  KILN_RELAY_PROXY: orbstack ? "none" : "hearth",
+  KILN_RELAY_PUBLIC_PORT: orbstack ? "443" : "4100",
   KILN_RELAY_RESOURCE_NAMESPACE: namespace,
   KILN_URL: hearthUrl,
 }
@@ -86,8 +114,8 @@ switch (command) {
       {
         ...process.env,
         KILN_TEST_MYSQL: "1",
-        DB_HOST: `mysql.${stack}.orb.local`,
-        DB_PORT: "3306",
+        DB_HOST: orbstack ? `mysql.${stack}.orb.local` : "127.0.0.1",
+        DB_PORT: orbstack ? "3306" : String(mysqlPort),
         DB_NAME: process.env.KILN_TEST_DB_NAME ?? "kiln_test",
         DB_USERNAME: "root",
         DB_PASSWORD: "kiln-root",
@@ -219,7 +247,7 @@ function waitForService(service) {
         fail(`${service} stopped before becoming ready.`)
       }
     }
-    run("sleep", ["2"], process.env)
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 2000)
   }
   fail(`Timed out waiting for ${service} to become ready.`)
 }
@@ -241,9 +269,11 @@ function captureCompose(arguments_, environment) {
 }
 
 function printStack() {
-  console.log(`Stack:  ${stack}`)
+  console.log(`Stack:  ${stack} (${network})`)
   console.log(`Hearth: ${hearthUrl}`)
-  console.log(`Relay:  ${relayUrl}\n`)
+  console.log(
+    `Relay:  ${relayUrl}${orbstack ? "" : " (internal; browser traffic goes through Hearth)"}\n`
+  )
 }
 
 function setupEnvironment() {
@@ -341,18 +371,80 @@ function secret(bytes) {
   return randomBytes(bytes).toString("base64url")
 }
 
-function worktreeStack(path) {
+function projectName() {
+  const override = process.env.KILN_DEV_PROJECT?.trim()
+  const saved = existsSync(projectFile)
+    ? readFileSync(projectFile, "utf8").trim()
+    : ""
+  const branch =
+    git("branch", "--show-current") ||
+    `detached-${git("rev-parse", "--short", "HEAD")}`
   const slug =
-    basename(path)
+    branch
+      .replace(/^[^/]+\//u, "")
       .toLowerCase()
       .replace(/[^a-z0-9]+/gu, "-")
       .replace(/^-+|-+$/gu, "")
-      .slice(0, 30) || "worktree"
-  const hash = createHash("sha256")
-    .update(resolve(path))
-    .digest("hex")
-    .slice(0, 6)
-  return `hearth-${slug}-${hash}`
+      .slice(0, 48)
+      .replace(/-+$/u, "") || "dev"
+  const name = override || saved || (primaryWorktree ? "kiln" : `kiln-${slug}`)
+  if (!/^[a-z0-9][a-z0-9-]{0,62}$/u.test(name)) {
+    fail(
+      "KILN_DEV_PROJECT must be 1–63 lowercase letters, digits, or hyphens, starting with a letter or digit."
+    )
+  }
+  if (override && saved && override !== saved) {
+    fail(
+      `This worktree already uses ${saved}. Stop its stack and remove ${projectFile} before choosing another project.`
+    )
+  }
+  return name
+}
+
+function developmentNetwork() {
+  const configured = process.env.KILN_DEV_NETWORK?.trim() || "auto"
+  if (configured === "localhost" || configured === "orbstack") return configured
+  if (configured !== "auto")
+    fail("KILN_DEV_NETWORK must be auto, localhost, or orbstack.")
+  const result = spawnSync(
+    "docker",
+    ["info", "--format", "{{.OperatingSystem}}"],
+    {
+      cwd: worktreeRoot,
+      encoding: "utf8",
+      env: process.env,
+    }
+  )
+  return result.status === 0 && /orbstack/iu.test(result.stdout)
+    ? "orbstack"
+    : "localhost"
+}
+
+function developmentPort(name, fallback) {
+  const value = process.env[name]?.trim() || String(fallback)
+  if (!/^\d+$/u.test(value) || Number(value) < 1 || Number(value) > 65535) {
+    fail(`${name} must be a TCP port between 1 and 65535.`)
+  }
+  return Number(value)
+}
+
+function requireProjectOwnership() {
+  const owners = capture("docker", [
+    "container",
+    "ls",
+    "--all",
+    "--filter",
+    `label=com.docker.compose.project=${stack}`,
+    "--format",
+    '{{.Label "com.docker.compose.project.working_dir"}}',
+  ])
+    .split("\n")
+    .filter(Boolean)
+  if (owners.some((owner) => resolve(owner) !== resolve(worktreeRoot))) {
+    fail(
+      `Docker project ${stack} belongs to another checkout. Set a unique KILN_DEV_PROJECT before starting this worktree.`
+    )
+  }
 }
 
 function git(...arguments_) {
@@ -375,7 +467,8 @@ function captureAt(
     env: environment,
   })
   if (result.status !== 0) {
-    process.stderr.write(result.stderr)
+    if (result.error) fail(`${executable}: ${result.error.message}`)
+    process.stderr.write(result.stderr ?? "")
     fail(`${executable} ${arguments_.join(" ")} failed.`)
   }
   return result.stdout.trim()
@@ -387,6 +480,7 @@ function run(executable, arguments_, environment, cwd = worktreeRoot) {
     env: environment,
     stdio: "inherit",
   })
+  if (result.error) fail(`${executable}: ${result.error.message}`)
   if (result.status !== 0) process.exit(result.status ?? 1)
 }
 

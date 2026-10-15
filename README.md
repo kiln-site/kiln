@@ -79,7 +79,8 @@ docker compose up -d
 
 ## Development
 
-Requires Node 20+, pnpm, Docker, and OrbStack.
+Requires the Node version in `.node-version`, pnpm/Vite+, and Docker with
+Compose v2. OrbStack is optional.
 
 ```sh
 vp install --frozen-lockfile
@@ -87,7 +88,8 @@ pnpm dev:setup
 pnpm dev:docker
 ```
 
-`dev:setup` only needs to run once per clone. Open the OrbStack URL printed by `dev:docker` to use the panel.
+Open the URL printed by `dev:docker`. See the [development guide](docs/development.md)
+for worktrees, localhost ports, optional OrbStack HTTPS, and cleanup.
 
 ## License
 
