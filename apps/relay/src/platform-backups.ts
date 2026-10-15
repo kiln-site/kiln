@@ -243,35 +243,48 @@ export async function restoreEncryptedPlatformBackup(
     await rm(stagedDump, { force: true })
     throw decrypted.failure
   }
-  const child = await startPlatformClient(config, container, PLATFORM_IMPORT)
-  const stderr = collectProcessErrors(child)
-  // mysql's output isn't kept, but it must be read for it to keep going.
-  child.stdout.resume()
+  // The decrypted dump is removed however the import ends, including when
+  // the database client can't start.
   const restored = await Effect.runPromise(
     Effect.result(
-      Effect.tryPromise({
-        try: () =>
-          streamIntoProcess(
-            child,
-            () =>
-              pipeline(
-                createReadStream(stagedDump),
-                createGunzip(),
-                byteMeter(undefined, MAX_PLATFORM_RESTORE_BYTES),
-                child.stdin
+      Effect.acquireUseRelease(
+        Effect.tryPromise({
+          try: () => startPlatformClient(config, container, PLATFORM_IMPORT),
+          catch: (cause) => cause,
+        }),
+        (child) => {
+          const stderr = collectProcessErrors(child)
+          // mysql's output isn't kept, but it must be read for it to keep
+          // going.
+          child.stdout.resume()
+          return Effect.tryPromise({
+            try: () =>
+              streamIntoProcess(
+                child,
+                () =>
+                  pipeline(
+                    createReadStream(stagedDump),
+                    createGunzip(),
+                    byteMeter(undefined, MAX_PLATFORM_RESTORE_BYTES),
+                    child.stdin
+                  ),
+                () => requireSuccessfulProcess(child, stderr)
               ),
-            () => requireSuccessfulProcess(child, stderr)
-          ),
-        catch: (cause) => cause,
-      })
+            catch: (cause) => cause,
+          })
+        },
+        (child, exit) =>
+          Effect.sync(() => {
+            if (exit._tag === "Failure") child.kill()
+          })
+      ).pipe(
+        Effect.ensuring(
+          Effect.promise(() => rm(stagedDump, { force: true }))
+        )
+      )
     )
   )
-  if (Result.isFailure(restored)) {
-    child.kill()
-    await rm(stagedDump, { force: true })
-    throw restored.failure
-  }
-  await rm(stagedDump, { force: true })
+  if (Result.isFailure(restored)) throw restored.failure
   return opened.manifest
 }
 

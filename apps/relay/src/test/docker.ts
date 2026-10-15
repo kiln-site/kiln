@@ -1368,6 +1368,7 @@ export class FakeDocker {
       (parameters = route(/^\/containers\/([^/]+)\/exec$/u))
     ) {
       const target = this.#requiredContainer(parameters[0] ?? "")
+      await this.#checkpoint("exec", target.name)
       if (!target.state.running) {
         throw new DockerFailure(`Container ${target.id} is not running`, 409)
       }
