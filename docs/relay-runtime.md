@@ -7,10 +7,10 @@ every node, so its idle cost is paid once per host.
 ## Snapshot loop
 
 The Relay keeps one snapshot sampler running at all times, even without a
-Hearth connection, so crash recovery never depends on Hearth. Every 2 seconds
-it lists Kiln's containers, inspects them, and samples resources for running
-servers. Only one sample runs at a time; a slow Docker daemon delays the next
-sample instead of stacking requests. Listing and inspecting share one 30 second
+Hearth connection, so crash recovery never depends on Hearth. Each sample lists
+Kiln's containers, inspects them, and samples resources for running servers.
+The next sample starts 2 seconds after the previous one finishes, so a slow
+Docker daemon spaces samples out instead of stacking requests. Listing and inspecting share one 30 second
 budget per sample.
 
 Disk usage for each server directory is measured separately, at most once a
@@ -19,10 +19,16 @@ minute.
 ## Docker access
 
 The Relay talks to the Docker Engine API over the mounted socket
-(`/var/run/docker.sock`) through one client, `apps/relay/src/docker-engine.ts`.
-The snapshot loop, power actions, console logs and streams, readiness probes,
-resource stats, crash recovery, databases, Tailscale stacks, and Traefik and
-Coolify discovery all use it. An idle Relay starts no processes.
+(`/var/run/docker.sock`), mostly through one client,
+`apps/relay/src/docker-engine.ts`. The snapshot loop, power actions, console
+logs and streams, container terminals, readiness probes, resource stats, crash
+recovery, databases, Tailscale stacks, and Traefik and Coolify discovery all
+use it. Console input and tab completion attach to the container over the same
+socket directly, because they hold the attach connection open themselves.
+
+An idle Relay starts no processes for its own sampling. Hearth's update check
+still runs `docker inspect` on each Relay whenever the Relays page loads or
+refetches.
 
 The client keeps the Docker CLI's observable behavior where callers rely on it:
 
@@ -32,7 +38,9 @@ The client keeps the Docker CLI's observable behavior where callers rely on it:
   stopping a stopped one succeeds.
 - A non-zero exec exit code fails the call.
 - An error Docker reports inside a log or exec stream fails the read.
-- Reads stop as soon as they pass their size limit.
+- One-shot reads, such as logs and exec output, stop as soon as they pass
+  their size limit. Followed log streams have no total limit, but each line is
+  cut off past 1 MiB.
 
 API paths are unversioned, so the daemon answers in its own API version.
 
@@ -43,12 +51,15 @@ riskier:
 | ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------- |
 | Creating containers, networks, and volumes | Their labels and options are a compatibility format that other Kiln versions read. Recreating an existing container uses the API.           |
 | `docker pull`                              | Keeps registry credentials from `~/.docker/config.json` and credential helpers.                                                             |
+| `docker build`                             | Builds Dockerfile apps with the CLI's build output and BuildKit behavior.                                                                   |
 | `docker compose`                           | Docker has no API for it.                                                                                                                   |
 | Execs that read stdin                      | Database import and export, credential rotation, platform dump and restore, the SQL browser, and database backups stream through a process. |
-| Self-update                                | Runs only during an update and is mostly `pull` and `run`.                                                                                  |
+| Self-update                                | The update check (`docker inspect`) and the updater, which is mostly `pull` and `run`.                                                      |
 
-New Docker calls should go through the Engine API client unless they fall into
-one of these cases.
+Console input and container terminals are the other exception: they read
+input, but use the API's attach and exec connections instead of the CLI. New
+Docker calls should go through the Engine API client unless they fall into one
+of these cases.
 
 ## Health check
 
@@ -79,15 +90,16 @@ the same loopback listener with BusyBox `wget`.
 ## Memory reporting
 
 Each snapshot includes the Relay's own memory, separate from the host totals.
-The Relays page shows it in the Memory column on large screens, for example
-`164 MiB process / 264 MiB container · 29 MiB cache`. The tooltip shows the
-full breakdown.
+The Relays page shows it in the Memory column on large screens as two lines,
+for example `164 MiB process` above `264 MiB container · 29 MiB cache`. The
+tooltip shows the full breakdown.
 
 | Reading      | Source                         | Meaning                                                                                                                                                  |
 | ------------ | ------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Process      | `process.memoryUsage()`        | The Relay's Node.js process: resident memory (RSS), JavaScript heap, and native buffers.                                                                 |
 | Container    | cgroup v2 `memory.current`     | Everything charged to the Relay container, including page cache.                                                                                         |
-| Cache        | `memory.stat` `file`           | Page cache charged to the container, mostly from walking server directories and reading files for backups. The kernel reclaims it under memory pressure. |
+| Cache        | `memory.stat` `file`           | Page cache charged to the container, mostly from reading files for backups and downloads. The kernel reclaims it under memory pressure.                  |
+| Kernel       | `memory.stat` `kernel`         | Kernel memory charged to the container, including the inode and directory caches from scanning server directories. Some kernels report none.            |
 | Docker stats | Container minus inactive cache | What `docker stats` and tools built on it, such as Beszel, report.                                                                                       |
 
 Container memory therefore overstates what the Relay holds. To judge the Relay
