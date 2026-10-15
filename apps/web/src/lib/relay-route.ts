@@ -14,8 +14,17 @@ const relaySelection = shortIdRouteSelection("relay")
 export const relaySelectionRouteId = relaySelection.toSelection
 export const relayRouteIdFromSelection = relaySelection.fromSelection
 
+// The scheme's default port goes unsaid, and any other port stands alone
+// without the scheme.
 export function relayAddress(
   relay: Pick<RelayDirectoryEntry, "hostname" | "port" | "useTls">
 ): string {
-  return `${relay.useTls ? "https" : "http"}://${relay.hostname}:${relay.port}`
+  const host =
+    relay.hostname.includes(":") && !relay.hostname.startsWith("[")
+      ? `[${relay.hostname}]`
+      : relay.hostname
+  const scheme = relay.useTls ? "https" : "http"
+  return relay.port === (relay.useTls ? 443 : 80)
+    ? `${scheme}://${host}`
+    : `${host}:${relay.port}`
 }
