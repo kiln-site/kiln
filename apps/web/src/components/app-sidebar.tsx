@@ -201,8 +201,6 @@ const AppSidebarView = React.memo(function AppSidebarView({
           </SidebarMenu>
         </SidebarHeader>
 
-        <SidebarSeparator className="mx-0 data-horizontal:w-full" />
-
         <div className="shrink-0 p-2 group-data-[collapsible=icon]:px-0">
           <RouteCommandMenuTrigger />
         </div>
