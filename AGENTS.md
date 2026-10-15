@@ -45,6 +45,13 @@ Before editing files for a substantial task:
 ## Work
 
 - Use Vite+ (`vp`) and existing Effect patterns.
+- Production code in `apps/` and `packages/` never uses `try`/`catch`,
+  Promise `.catch()`/`.finally()`, or `.then(_, onRejected)`; `vp lint`
+  enforces this (`kiln/effect-recovery`). Use `Effect.try`,
+  `Effect.tryPromise`, `Result.try`, `Effect.catch*`, and `Effect.ensuring`.
+  Where plain Promises must stay (React handlers, library callbacks), use the
+  helpers in `apps/{web,relay}/src/effect/promise.ts`: `recoverPromise`,
+  `forkPromise`, `ensuringPromise`, `tapPromiseError`, `settlePromises`.
 - Keep `.agents/skills/kiln-cli/SKILL.md` in sync with CLI changes.
 - Follow the Testing rules below; prefer browser validation during
   development.

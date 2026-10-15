@@ -7,7 +7,10 @@ export default defineConfig({
     fmt: false,
   },
   lint: {
-    jsPlugins: [{ name: "vite-plus", specifier: "vite-plus/oxlint-plugin" }],
+    jsPlugins: [
+      { name: "vite-plus", specifier: "vite-plus/oxlint-plugin" },
+      "./scripts/oxlint-plugin.mjs",
+    ],
     rules: {
       "vite-plus/prefer-vite-plus-imports": "error",
       // Match the previous ESLint rule surface without rewriting application
@@ -20,6 +23,23 @@ export default defineConfig({
       "unicorn/no-new-array": "off",
       "unicorn/prefer-string-starts-ends-with": "off",
     },
+    overrides: [
+      {
+        // Production code recovers errors through Effect/Result so failures
+        // keep their types, interruption, and telemetry.
+        files: ["apps/**/*.{ts,tsx}", "packages/**/*.{ts,tsx}"],
+        rules: { "kiln/effect-recovery": "error" },
+      },
+      {
+        // `test/` holds shared test fakes and fixtures, not production code.
+        files: [
+          "**/*.{test,spec}.{ts,tsx}",
+          "**/test/**",
+          "**/instrument.ts",
+        ],
+        rules: { "kiln/effect-recovery": "off" },
+      },
+    ],
     options: { typeAware: true, typeCheck: false },
   },
   test: {
