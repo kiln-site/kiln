@@ -212,6 +212,46 @@ describe("composeUp redeploys, as Compose's reconciler", () => {
     expect(String(exit)).toContain("db-1 is unhealthy")
   })
 
+  it("removes exited one-offs and keeps running ones and a disabled service's, as Compose's orphan rule does", async () => {
+    const labels = (service: string, oneOff: "False" | "True") => ({
+      "com.docker.compose.oneoff": oneOff,
+      "com.docker.compose.project": projectName,
+      "com.docker.compose.service": service,
+    })
+    // `docker compose run web …`: one finished, one still running.
+    fakeDocker.addContainer({
+      image: "nginx:alpine",
+      labels: labels("web", "True"),
+      name: `${projectName}-web-run-finished`,
+      running: false,
+      startedAt: "2026-10-15T00:00:00.000Z",
+    })
+    fakeDocker.addContainer({
+      image: "nginx:alpine",
+      labels: labels("web", "True"),
+      name: `${projectName}-web-run-live`,
+      running: true,
+    })
+    // A service the file's profiles leave out.
+    fakeDocker.addContainer({
+      image: "nginx:alpine",
+      labels: labels("debug", "False"),
+      name: `${projectName}-debug-1`,
+      running: true,
+    })
+
+    await Effect.runPromise(
+      await up(`${yaml()}\n  debug:\n    image: nginx:alpine\n    profiles: [debug]`)
+    )
+
+    expect(containers().map(({ name, state }) => `${name} ${state}`)).toEqual([
+      `${projectName}-db-1 running`,
+      `${projectName}-debug-1 running`,
+      `${projectName}-web-1 running`,
+      `${projectName}-web-run-live running`,
+    ])
+  })
+
   it("checks a local image against DOCKER_DEFAULT_PLATFORM, and pulls for it", async () => {
     // Present, but for another platform.
     fakeDocker.imagePlatforms.set("postgres:17", "linux/amd64")

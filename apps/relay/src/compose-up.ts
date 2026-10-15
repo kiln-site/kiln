@@ -68,6 +68,7 @@ interface ContainerSummary {
   }>
   readonly Created?: number
   readonly Names: ReadonlyArray<string>
+  readonly State?: string
 }
 
 interface InspectedContainer {
@@ -122,20 +123,32 @@ export function composeUp(
       all: true,
       filters: { label: [`${PROJECT_LABEL}=${project.name}`] },
     })) as unknown as ReadonlyArray<ContainerSummary>
-    // Each service's containers, and those of services no longer in the
-    // project (orphans).
+    // Each service's containers, and the orphans, as Compose's observed
+    // state sorts them: a container of a service the file defines (one its
+    // profiles leave out included) is the service's, one of a service it
+    // doesn't is an orphan, and so is a one-off (`compose run`) that's
+    // exited or dead; one still running is someone's session, left alone.
+    const known = new Set([
+      ...Object.keys(services),
+      ...(project.disabled_services ?? []),
+    ])
     const observed = new Map<string, Array<ContainerSummary>>()
     const orphans: Array<ContainerSummary> = []
     for (const container of existing) {
-      if (container.Labels?.[ONEOFF_LABEL] === "True") continue
       const service = container.Labels?.[SERVICE_LABEL] ?? ""
-      if (!services[service]) {
+      const oneOff = container.Labels?.[ONEOFF_LABEL]
+      if ((oneOff === undefined || oneOff === "False") && known.has(service)) {
+        if (!services[service]) continue
+        const list = observed.get(service)
+        if (list) list.push(container)
+        else observed.set(service, [container])
+      } else if (
+        oneOff === "True"
+          ? container.State === "exited" || container.State === "dead"
+          : !known.has(service)
+      ) {
         orphans.push(container)
-        continue
       }
-      const list = observed.get(service)
-      if (list) list.push(container)
-      else observed.set(service, [container])
     }
 
     const plan = new Plan()
