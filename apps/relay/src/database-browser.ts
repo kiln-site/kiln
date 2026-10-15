@@ -48,9 +48,7 @@ export class DatabaseBrowser {
   write(instance: FileRoot, input: RelayFileDatabaseWriteInput) {
     return this.#filesystem
       .resolveFile(instance, input.path)
-      .pipe(
-        Effect.flatMap((path) => runDatabase(path, input.request, "write"))
-      )
+      .pipe(Effect.flatMap((path) => runDatabase(path, input.request, "write")))
   }
 }
 
@@ -313,12 +311,10 @@ function spawnWorker() {
     import.meta.url
   )
   return fork(fileURLToPath(entry), [], {
-    // Production workers start without the Relay's flags; development keeps
-    // tsx's loader so the TypeScript entry can run.
+    // Production workers start without the Relay's flags; development loads
+    // tsx explicitly so the TypeScript entry also runs under tests.
     execArgv: [
-      ...(development
-        ? process.execArgv.filter((flag) => !flag.startsWith("--inspect"))
-        : []),
+      ...(development ? ["--import", "tsx"] : []),
       "--disable-warning=ExperimentalWarning",
     ],
     serialization: "advanced",
