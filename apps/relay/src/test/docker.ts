@@ -2,7 +2,7 @@
  * A stateful, in-memory Docker for Relay tests.
  *
  * Relay drives Docker through the Engine API on `config.dockerSocket`, and
- * the CLI (`./command.js`) for builds and Compose. Tests replace both at that
+ * the CLI (`./command.js`) for Compose. Tests replace both at that
  * boundary:
  *
  *   vi.mock("./command.js", () => import("./test/docker.js"))
@@ -25,6 +25,7 @@ import { tmpdir } from "node:os"
 import { join, posix } from "node:path"
 
 import { Effect, Result } from "effect"
+import { extract as createTarExtractor } from "tar-stream"
 
 import type { CommandOptions, CommandResult } from "../command.js"
 import {
@@ -207,6 +208,18 @@ export class FakeDocker {
    * one-off container (`run --rm -i`), its image.
    */
   readonly streamErrors = new Map<string, string>()
+  /** Builds, as Docker received them: their context's files and options. */
+  readonly builds: Array<{
+    readonly buildArgs: Record<string, string>
+    /** The Dockerfile Docker read from the context. */
+    readonly dockerfile: string
+    readonly files: Array<string>
+    readonly labels: Record<string, string>
+    readonly tag: string
+    readonly target: string | null
+  }> = []
+  /** Set to fail the next builds with BuildKit's message. */
+  buildFailure: string | null = null
   /** Images whose registry cannot be reached; pulling them fails. */
   readonly unreachableImages = new Set<string>()
   /** What pulling an image prints before its final status, by image. */
@@ -287,6 +300,8 @@ export class FakeDocker {
     this.crashingImages.clear()
     this.programFailures.clear()
     this.streamErrors.clear()
+    this.builds.length = 0
+    this.buildFailure = null
     this.tailscale.controlPlaneReachable = true
     this.tailscale.machines.clear()
     this.#faults.length = 0
@@ -1135,6 +1150,10 @@ export class FakeDocker {
     this.#begin()
     try {
       const url = new URL(request.url ?? "/", "http://docker")
+      if (request.method === "POST" && url.pathname === "/build") {
+        this.#build(url, await readContext(request)).write(response)
+        return
+      }
       const body = await readBody(request)
       const answer = await this.#route(
         request.method ?? "GET",
@@ -1554,6 +1573,46 @@ export class FakeDocker {
         response.writeHead(200, { "Content-Type": "application/json" })
         response.end(
           messages.map((message) => `${JSON.stringify(message)}\r\n`).join("")
+        )
+      },
+    }
+  }
+
+  /**
+   * `POST /build`: tags an image from the uploaded context, reporting a
+   * build failure within the output, as BuildKit does after answering 200.
+   */
+  #build(url: URL, context: Map<string, Buffer>): Extract<ApiAnswer, { kind: "stream" }> {
+    const tag = url.searchParams.get("t") ?? ""
+    const dockerfilePath = url.searchParams.get("dockerfile") ?? "Dockerfile"
+    const dockerfile = context.get(dockerfilePath)?.toString("utf8")
+    const labels = JSON.parse(url.searchParams.get("labels") ?? "{}") as Record<string, string>
+    this.builds.push({
+      buildArgs: JSON.parse(url.searchParams.get("buildargs") ?? "{}") as Record<string, string>,
+      dockerfile: dockerfile ?? "",
+      files: [...context.keys()].sort(),
+      labels,
+      tag,
+      target: url.searchParams.get("target"),
+    })
+    const failure =
+      dockerfile === undefined
+        ? `failed to read dockerfile: open ${dockerfilePath}: no such file or directory`
+        : this.buildFailure
+    if (failure === null) this.images.set(tag, labels)
+    return {
+      kind: "stream",
+      write: (response) => {
+        response.writeHead(200, { "Content-Type": "application/json" })
+        response.end(
+          [
+            { stream: `Building ${tag}\n` },
+            ...(failure === null
+              ? [{ stream: `Successfully tagged ${tag}\n` }]
+              : [{ error: failure, errorDetail: { message: failure } }]),
+          ]
+            .map((message) => `${JSON.stringify(message)}\r\n`)
+            .join("")
         )
       },
     }
@@ -2214,6 +2273,26 @@ function writable(response: ServerResponse): Promise<void> {
 function unixMilliseconds(value: string): number {
   const [seconds = "0", fraction = ""] = value.split(".")
   return Number(seconds) * 1_000 + Number(fraction.padEnd(9, "0").slice(0, 3))
+}
+
+/** A build context tar's regular files, by path. */
+function readContext(request: IncomingMessage): Promise<Map<string, Buffer>> {
+  return new Promise((resolve, reject) => {
+    const files = new Map<string, Buffer>()
+    const extractor = createTarExtractor()
+    extractor.on("entry", (header, stream, next) => {
+      const chunks: Array<Buffer> = []
+      stream.on("data", (chunk) => chunks.push(chunk as Buffer))
+      stream.on("end", () => {
+        if (header.type === "file") files.set(header.name, Buffer.concat(chunks))
+        next()
+      })
+      stream.resume()
+    })
+    extractor.on("finish", () => resolve(files))
+    extractor.on("error", reject)
+    request.pipe(extractor)
+  })
 }
 
 function readBody(request: IncomingMessage): Promise<string> {

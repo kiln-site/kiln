@@ -329,6 +329,48 @@ describe("apps", () => {
     await expect(harness.apps.list()).resolves.toEqual([])
   })
 
+  it("builds a Dockerfile from the app's files, leaving out what .dockerignore excludes", async () => {
+    const harness = await createdApp()
+    const data = join(harness.config.dataDirectory, "apps", appId)
+    await mkdir(join(data, "src"), { recursive: true })
+    await mkdir(join(data, "secrets"), { recursive: true })
+    await writeFile(join(data, "src", "server.js"), "console.log(1)\n")
+    await writeFile(join(data, "secrets", "token.txt"), "do not ship")
+    await writeFile(join(data, "debug.log"), "noise")
+    await writeFile(join(data, ".dockerignore"), "secrets\n*.log\n")
+    const dockerfile = 'FROM node:24-alpine\nCOPY . .\nCMD ["node", "src/server.js"]\n'
+
+    const app = await deploy(harness, { dockerfile, sourceType: "dockerfile" })
+
+    expect(app.deployment).toMatchObject({ state: "succeeded" })
+    const [build] = fakeDocker.builds
+    expect(build!.dockerfile).toBe(dockerfile)
+    expect(build!.files).toContain("src/server.js")
+    expect(build!.files).not.toContain("secrets/token.txt")
+    expect(build!.files).not.toContain("debug.log")
+    expect(build!.labels).toEqual({ "kiln.app.id": appId })
+    const [container] = appContainers()
+    expect(container!.image).toBe(build!.tag)
+    expect(container!.state.running).toBe(true)
+  })
+
+  it("fails a deployment whose build fails, with the build's error", async () => {
+    const harness = await createdApp()
+    fakeDocker.buildFailure =
+      'process "/bin/sh -c npm ci" did not complete successfully: exit code: 1'
+
+    const app = await deploy(harness, {
+      dockerfile: "FROM node:24-alpine\nRUN npm ci\n",
+      sourceType: "dockerfile",
+    })
+
+    expect(app.deployment).toMatchObject({
+      error: 'process "/bin/sh -c npm ci" did not complete successfully: exit code: 1',
+      state: "failed",
+    })
+    expect(appContainers()).toEqual([])
+  })
+
   it("removes an app's containers, network, and data when deleted", async () => {
     const harness = await createdApp()
     await deploy(harness, {})

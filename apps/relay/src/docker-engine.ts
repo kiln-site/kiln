@@ -17,10 +17,12 @@
  * Containers are created from the flags Relay used to pass the CLI, as the
  * same request bodies (see `./docker-container-spec.js`).
  *
- * Builds and Compose stay on the CLI (see `./command.js`) for now.
+ * Builds send their context as a tar (see `./docker-build.js`).
+ *
+ * Compose stays on the CLI (see `./command.js`) for now.
  */
 import { Agent, request } from "node:http"
-import { type Duplex, PassThrough, Writable } from "node:stream"
+import { type Duplex, PassThrough, type Readable, Writable } from "node:stream"
 import { StringDecoder } from "node:string_decoder"
 import { Effect, Predicate, Result } from "effect"
 
@@ -153,6 +155,8 @@ interface Exchange {
   readonly method: "DELETE" | "GET" | "POST"
   readonly path: string
   readonly body?: unknown
+  /** Sent as the request body instead of `body`, as it is read. */
+  readonly bodyStream?: Readable
   readonly headers?: Readonly<Record<string, string>>
   /** For the whole exchange; `null` waits as long as the answer lasts. */
   readonly timeout?: number | null
@@ -903,6 +907,58 @@ export class DockerEngine {
     })
   }
 
+  /**
+   * `POST /build`: sends `context` (a tar) and hands each JSON message of the
+   * build's output to `onMessage`. An error Docker reports in the output
+   * fails the build with its message.
+   */
+  build(options: {
+    readonly context: Readable
+    readonly onMessage: (message: Record<string, unknown>) => void
+    readonly parameters: Record<string, boolean | number | string | undefined>
+    readonly timeout?: number | null
+  }): Effect.Effect<void, DockerEngineError> {
+    let problem: string | undefined
+    const lines = lineReader((line) => {
+      if (problem !== undefined || !line.trim()) return
+      const parsed = Result.getOrUndefined(
+        Result.try((): unknown => JSON.parse(line))
+      )
+      if (!Predicate.isObject(parsed)) return
+      const message = parsed as Record<string, unknown>
+      const detail = Predicate.isObject(message.errorDetail)
+        ? (message.errorDetail as Record<string, unknown>)
+        : undefined
+      const error = Predicate.isString(detail?.message)
+        ? detail.message
+        : Predicate.isString(message.error)
+          ? message.error
+          : undefined
+      if (error !== undefined) problem = error
+      else options.onMessage(message)
+    })
+    return this.#exchange({
+      bodyStream: options.context,
+      headers: { "Content-Type": "application/x-tar" },
+      method: "POST",
+      onData: (chunk) => {
+        lines.read(chunk)
+        return problem
+      },
+      path: `/build${query(options.parameters)}`,
+      timeout: options.timeout === undefined ? 30 * 60_000 : options.timeout,
+    }).pipe(
+      Effect.flatMap(() => {
+        lines.flush()
+        return problem === undefined
+          ? Effect.void
+          : Effect.fail(
+              new DockerEngineError({ operation: "POST /build", reason: problem })
+            )
+      })
+    )
+  }
+
   /** `docker image rm --force`. */
   removeImage(reference: string): Effect.Effect<void, DockerEngineError> {
     return this.#empty({
@@ -1032,11 +1088,22 @@ export class DockerEngine {
       call.on("error", (cause) =>
         fail(transportFailure(cause, socketPath, operation), { cause })
       )
-      call.end(body)
+      const { bodyStream } = exchange
+      if (bodyStream) {
+        bodyStream.once("error", (cause) =>
+          fail(`Relay could not send ${operation}: ${cause.message}`, {
+            cause,
+          })
+        )
+        bodyStream.pipe(call)
+      } else {
+        call.end(body)
+      }
       return Effect.sync(() => {
         settled = true
         if (timer) clearTimeout(timer)
         call.destroy()
+        bodyStream?.destroy()
       })
     })
   }

@@ -28,6 +28,7 @@ import {
   MAX_CONSOLE_HISTORY_CHARACTERS,
   type DockerConsoleSession,
 } from "./docker.js"
+import { buildImage } from "./docker-build.js"
 import { createContainer } from "./docker-container-spec.js"
 import {
   DockerEngine,
@@ -312,6 +313,7 @@ export class AppDriver {
             Effect.ignore
           )
       )
+      // Where Relays that built with the CLI kept the app's Dockerfile.
       await rm(this.#dockerfilePath(input.appId), { force: true })
       if (input.deleteData) {
         await rm(this.#appDirectory(input.appId), {
@@ -619,28 +621,17 @@ export class AppDriver {
   // can COPY files uploaded to the app.
   async #buildImage(input: RelayDeployApp, deployment: Deployment) {
     const tag = `kiln-app-${input.appId}:${deployment.id}`
-    const dockerfile = this.#dockerfilePath(input.appId)
-    await mkdir(join(this.#config.dataDirectory, "app-builds"), {
-      recursive: true,
-      mode: 0o700,
-    })
-    await writeFile(dockerfile, input.config.dockerfile, { mode: 0o600 })
     this.#log(input.appId, deployment, `Building ${tag}`)
-    await this.#stream(
-      input.appId,
-      deployment,
-      [
-        "build",
-        "--progress",
-        "plain",
-        ...labelArguments(this.#imageLabels(input.appId)),
-        "--tag",
+    await Effect.runPromise(
+      buildImage(this.#engine, {
+        context: this.#appDirectory(input.appId),
+        dockerfile: { content: input.config.dockerfile },
+        labels: this.#imageLabels(input.appId),
+        onLine: (line) => this.#logOutput(input.appId, deployment, line),
         tag,
-        "--file",
-        dockerfile,
-        this.#appDirectory(input.appId),
-      ],
-      { timeout: BUILD_TIMEOUT_MS }
+        timeout: BUILD_TIMEOUT_MS,
+      }),
+      { signal: deployment.abort.signal }
     )
     return tag
   }
@@ -1664,13 +1655,6 @@ function trimDeploymentLog(deployment: Deployment): void {
     deployment.characters -= consoleLineCharacters(line)
     deployment.dropped += 1
   }
-}
-
-function labelArguments(labels: Readonly<Record<string, string>>) {
-  return Object.entries(labels).flatMap(([key, value]) => [
-    "--label",
-    `${key}=${value}`,
-  ])
 }
 
 function docker<A>(effect: Effect.Effect<A, DockerEngineError>): Promise<A> {
