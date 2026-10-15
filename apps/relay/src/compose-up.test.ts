@@ -3,7 +3,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 
 import { Effect, Fiber } from "effect"
-import { afterEach, beforeEach, describe, expect, it } from "vite-plus/test"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test"
 
 import { loadComposeProject } from "./compose-project.js"
 import { composeUp } from "./compose-up.js"
@@ -35,6 +35,7 @@ beforeEach(async () => {
 })
 
 afterEach(async () => {
+  vi.useRealTimers()
   fakeDocker.reset()
   await rm(directory, { force: true, recursive: true })
 })
@@ -115,9 +116,14 @@ describe("composeUp redeploys, as Compose's reconciler", () => {
   })
 
   it("stops where a lost stop answer stops it, and the next deploy removes what it left", async () => {
+    // Each deploy a minute after the last, so Docker's creation times (in
+    // seconds) tell which of a service's containers is newest.
+    vi.useFakeTimers({ now: Date.now(), toFake: ["Date"] })
+    const later = () => vi.setSystemTime(Date.now() + 60_000)
     await Effect.runPromise(await up(yaml()))
     const data = containers()[0]!.data
     fakeDocker.failAfterNext({ command: "stop" }, "stop timed out")
+    later()
 
     const exit = await Effect.runPromiseExit(await up(yaml()))
 
@@ -128,6 +134,7 @@ describe("composeUp redeploys, as Compose's reconciler", () => {
       { data: undefined, name: `${projectName}-web-1`, state: "running" },
     ])
 
+    later()
     await Effect.runPromise(await up(yaml()))
     expect(containers()).toEqual([
       { data, name: `${projectName}-db-1`, state: "running" },

@@ -57,6 +57,8 @@ export interface FakeMount {
 
 export interface FakeContainer {
   readonly id: string
+  /** When it was created, in Unix seconds, as Docker lists it. */
+  readonly created: number
   name: string
   image: string
   hostname: string
@@ -446,6 +448,7 @@ export class FakeDocker {
         finishedAt: seed.finishedAt ?? NEVER,
       },
       starts: 0,
+      created: Math.floor(Date.now() / 1_000),
       autoRemove: false,
       volumesFrom: [],
       runOnce: null,
@@ -2513,6 +2516,7 @@ function apiFilters(url: URL): Array<string> {
 
 function containerSummary(container: FakeContainer): unknown {
   return {
+    Created: container.created,
     Id: container.id,
     Image: container.image,
     Labels: container.labels,
