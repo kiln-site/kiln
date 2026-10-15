@@ -370,6 +370,49 @@ describe("apps", () => {
     expect(container!.state.running).toBe(true)
   })
 
+  it("refuses oversized and truncated session messages without buffering them, and still builds", async () => {
+    const harness = await createdApp()
+    const frame = (length: number, bytes: number) => {
+      const prefix = Buffer.alloc(5)
+      prefix.writeUInt32BE(length, 1)
+      return Buffer.concat([prefix, Buffer.alloc(bytes)])
+    }
+    // One advertising 2 GiB, one ending partway through, one compressed.
+    fakeDocker.sessionProbes.push(
+      frame(2 ** 31, 64 * 1024),
+      frame(10, 3),
+      Buffer.concat([Buffer.from([1]), frame(2, 2).subarray(1)])
+    )
+
+    const app = await deploy(harness, {
+      dockerfile: "FROM alpine\nCOPY . .\n",
+      sourceType: "dockerfile",
+    })
+
+    expect(fakeDocker.sessionProbeStatuses).toEqual(["8", "13", "12"])
+    expect(app.deployment).toMatchObject({ state: "succeeded" })
+  })
+
+  it("applies a .dockerignore of more patterns than an HTTP/2 header list holds by default", async () => {
+    const harness = await createdApp()
+    const data = join(harness.config.dataDirectory, "apps", appId)
+    await writeFile(join(data, "kept.txt"), "kept")
+    await writeFile(join(data, "excluded-150.txt"), "excluded")
+    await writeFile(
+      join(data, ".dockerignore"),
+      Array.from({ length: 200 }, (_, index) => `excluded-${index}.txt`).join("\n")
+    )
+
+    const app = await deploy(harness, {
+      dockerfile: "FROM alpine\nCOPY . .\n",
+      sourceType: "dockerfile",
+    })
+
+    expect(app.deployment).toMatchObject({ state: "succeeded" })
+    expect(fakeDocker.builds[0]?.files).toContain("kept.txt")
+    expect(fakeDocker.builds[0]?.files).not.toContain("excluded-150.txt")
+  })
+
   it("closes the build's session when Docker rejects the build", async () => {
     const harness = await createdApp()
     fakeDocker.buildRejection = "unsupported builder version"

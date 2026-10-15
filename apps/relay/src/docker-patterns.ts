@@ -29,7 +29,7 @@ export class Pattern {
   /** The cleaned pattern, without its `!`. */
   readonly text: string
   #type: MatchType | undefined
-  #regex: RegExp | undefined
+  #matcher: ((text: string) => boolean) | undefined
 
   constructor(text: string, exclusion: boolean) {
     this.text = text
@@ -49,7 +49,7 @@ export class Pattern {
         return suffix.startsWith("/") && path === suffix.slice(1)
       }
       default:
-        return this.#regex!.test(path)
+        return this.#matcher!(path)
     }
   }
 
@@ -105,9 +105,7 @@ export class Pattern {
       }
     }
     if (type === "regexp") {
-      const compiled = Result.try(
-        () => new RegExp(translateGoRegex(`${source}$`), "u")
-      )
+      const compiled = Result.try(() => compileGoRegex(`${source}$`))
       if (Result.isFailure(compiled)) {
         const cause = compiled.failure
         throw new BadPatternError(
@@ -115,7 +113,7 @@ export class Pattern {
           cause instanceof Error ? cause.message : String(cause)
         )
       }
-      this.#regex = compiled.success
+      this.#matcher = compiled.success
     }
     this.#type = type
   }
@@ -333,15 +331,46 @@ const PERL_CLASSES: Record<string, string> = {
 
 const SYNTAX = new Set("^$\\.*+?()[]{}|/")
 
+// The parts of a Go regular expression: characters (each a test of one
+// code point), assertions, groups, and repetitions.
+type Token =
+  | {
+      readonly kind: "assert"
+      readonly test: (text: ReadonlyArray<number>, at: number) => boolean
+    }
+  | { readonly kind: "char"; readonly test: (character: number) => boolean }
+  | { readonly kind: "close" }
+  | { readonly kind: "open" }
+  | { readonly kind: "repeat"; readonly operator: "*" | "+" | "?" }
+
 /**
- * Translates the Go regular expression patternmatcher built to JavaScript
- * (with the `u` flag): RE2's escapes, Perl and POSIX classes, and class
- * syntax, in their JavaScript spelling with the same meaning.
+ * Compiles the Go regular expression patternmatcher built into a matcher
+ * that runs in time linear in the text, as RE2 does: a Thompson NFA run as
+ * a Pike VM, so no pattern makes matching backtrack. RE2's escapes, Perl
+ * and POSIX classes, and class syntax keep their meaning; each class is a
+ * test of a single character.
  */
-function translateGoRegex(source: string): string {
+function compileGoRegex(source: string): (text: string) => boolean {
+  return runner(parseTokens(tokenize(source)))
+}
+
+function tokenize(source: string): Array<Token> {
   const characters = [...source]
   let index = 0
-  let output = ""
+  const tokens: Array<Token> = []
+  const output = {
+    // A character test from a JavaScript class, run on one character.
+    klass(pattern: string) {
+      const compiled = new RegExp(`^${pattern}$`, "u")
+      tokens.push({
+        kind: "char",
+        test: (value) => compiled.test(String.fromCodePoint(value)),
+      })
+    },
+    literal(value: number) {
+      tokens.push({ kind: "char", test: (character) => character === value })
+    },
+  }
   const fail = (reason: string): never => {
     throw new Error(reason)
   }
@@ -352,10 +381,10 @@ function translateGoRegex(source: string): string {
     }
     return -1
   }
-  const literal = (value: number, inClass: boolean) => {
+  const classLiteral = (value: number) => {
     const character = String.fromCodePoint(value)
     if (value < 0x20 || value === 0x7f) return `\\u{${value.toString(16)}}`
-    return SYNTAX.has(character) || (inClass && character === "-")
+    return SYNTAX.has(character) || character === "-"
       ? `\\${character}`
       : character
   }
@@ -513,12 +542,18 @@ function translateGoRegex(source: string): string {
       }
       body +=
         low === high
-          ? literal(low, true)
-          : `${literal(low, true)}-${literal(high, true)}`
+          ? classLiteral(low)
+          : `${classLiteral(low)}-${classLiteral(high)}`
     }
     return `[${negated ? "^" : ""}${body}]`
   }
 
+  const begin = (_: ReadonlyArray<number>, at: number) => at === 0
+  const end = (text: ReadonlyArray<number>, at: number) => at === text.length
+  const isWord = (value: number | undefined) =>
+    value !== undefined && /^[0-9A-Za-z_]$/u.test(String.fromCodePoint(value))
+  const boundary = (text: ReadonlyArray<number>, at: number) =>
+    isWord(text[at - 1]) !== isWord(text[at])
   while (index < characters.length) {
     const character = characters[index]!
     index += 1
@@ -526,44 +561,200 @@ function translateGoRegex(source: string): string {
       const next = characters[index]
       if (next === "A") {
         index += 1
-        output += "^"
+        tokens.push({ kind: "assert", test: begin })
       } else if (next === "z") {
         index += 1
-        output += "$"
+        tokens.push({ kind: "assert", test: end })
       } else if (next === "b" || next === "B") {
         index += 1
-        output += `\\${next}`
+        tokens.push({
+          kind: "assert",
+          test: next === "b" ? boundary : (text, at) => !boundary(text, at),
+        })
       } else if (next === "Q") {
         // Literal text up to `\E`.
-        const end = find("\\", "E", index + 1)
-        const text = characters.slice(index + 1, end === -1 ? undefined : end)
-        for (const quoted of text)
-          output += literal(quoted.codePointAt(0)!, false)
-        index = end === -1 ? characters.length : end + 2
+        const close = find("\\", "E", index + 1)
+        const text = characters.slice(
+          index + 1,
+          close === -1 ? undefined : close
+        )
+        for (const quoted of text) output.literal(quoted.codePointAt(0)!)
+        index = close === -1 ? characters.length : close + 2
       } else if (next === "C") {
         return fail("invalid escape sequence: \\C")
       } else {
         const escaped = escape()
-        output +=
-          "ranges" in escaped
-            ? escaped.ranges === ""
-              ? "[^\\0-\\u{10ffff}]"
-              : `[${escaped.ranges}]`
-            : literal(escaped.character, false)
+        if ("ranges" in escaped) {
+          output.klass(
+            escaped.ranges === "" ? "[^\\0-\\u{10ffff}]" : `[${escaped.ranges}]`
+          )
+        } else {
+          output.literal(escaped.character)
+        }
       }
     } else if (character === "[") {
-      output += characterClass()
+      output.klass(characterClass())
     } else if (character === ".") {
-      // RE2's `.` matches anything but a newline; JavaScript's also stops
-      // at `\r` and line separators.
-      output += "[^\\n]"
-    } else if (character === "]" || character === "{" || character === "}") {
-      output += `\\${character}`
+      // RE2's `.` matches anything but a newline.
+      tokens.push({ kind: "char", test: (value) => value !== 10 })
+    } else if (character === "^") {
+      tokens.push({ kind: "assert", test: begin })
+    } else if (character === "$") {
+      tokens.push({ kind: "assert", test: end })
+    } else if (character === "(") {
+      tokens.push({ kind: "open" })
+    } else if (character === ")") {
+      tokens.push({ kind: "close" })
+    } else if (character === "*" || character === "+" || character === "?") {
+      tokens.push({ kind: "repeat", operator: character })
     } else {
-      output += character
+      output.literal(character.codePointAt(0)!)
     }
   }
-  return output
+  return tokens
+}
+
+type Node =
+  | {
+      readonly kind: "assert"
+      readonly test: (text: ReadonlyArray<number>, at: number) => boolean
+    }
+  | { readonly kind: "char"; readonly test: (character: number) => boolean }
+  | {
+      readonly kind: "repeat"
+      readonly node: Node
+      readonly operator: "*" | "+" | "?"
+    }
+  | { readonly kind: "sequence"; readonly nodes: ReadonlyArray<Node> }
+
+function parseTokens(tokens: ReadonlyArray<Token>): Node {
+  let index = 0
+  const sequence = (): Node => {
+    const nodes: Array<Node> = []
+    while (index < tokens.length && tokens[index]!.kind !== "close") {
+      const token = tokens[index]!
+      index += 1
+      let node: Node
+      if (token.kind === "open") {
+        node = sequence()
+        if (tokens[index]?.kind !== "close")
+          throw new Error("missing closing )")
+        index += 1
+      } else if (token.kind === "repeat") {
+        throw new Error(
+          `missing argument to repetition operator: ${token.operator}`
+        )
+      } else if (token.kind === "close") {
+        throw new Error("unexpected )")
+      } else {
+        node = token
+      }
+      while (tokens[index]?.kind === "repeat") {
+        const repeat = tokens[index] as Extract<Token, { kind: "repeat" }>
+        node = { kind: "repeat", node, operator: repeat.operator }
+        index += 1
+      }
+      nodes.push(node)
+    }
+    return { kind: "sequence", nodes }
+  }
+  const root = sequence()
+  if (index !== tokens.length) throw new Error("unexpected )")
+  return root
+}
+
+type Instruction =
+  | {
+      op: "assert"
+      test: (text: ReadonlyArray<number>, at: number) => boolean
+      next: number
+    }
+  | { op: "char"; test: (character: number) => boolean; next: number }
+  | { op: "match" }
+  | { op: "split"; first: number; second: number }
+
+// A Pike VM: every thread advances one character at a time, and threads at
+// the same instruction merge, so a match takes time linear in the text.
+function runner(root: Node): (text: string) => boolean {
+  const program: Array<Instruction> = []
+  const emit = (instruction: Instruction) => program.push(instruction) - 1
+  // Compiles a node whose end continues at whatever's emitted next.
+  const compile = (node: Node): void => {
+    switch (node.kind) {
+      case "sequence":
+        for (const part of node.nodes) compile(part)
+        return
+      case "char":
+        emit({ next: program.length + 1, op: "char", test: node.test })
+        return
+      case "assert":
+        emit({ next: program.length + 1, op: "assert", test: node.test })
+        return
+      case "repeat": {
+        if (node.operator === "+") {
+          const start = program.length
+          compile(node.node)
+          emit({ first: start, op: "split", second: program.length + 1 })
+          return
+        }
+        const split = emit({
+          first: program.length + 1,
+          op: "split",
+          second: 0,
+        })
+        compile(node.node)
+        if (node.operator === "*") {
+          emit({ first: split, op: "split", second: program.length + 1 })
+        }
+        ;(program[split] as Extract<Instruction, { op: "split" }>).second =
+          program.length
+        return
+      }
+    }
+  }
+  compile(root)
+  emit({ op: "match" })
+  return (input) => {
+    const text = [...input].map((character) => character.codePointAt(0)!)
+    let current: Array<number> = []
+    const seen = new Int32Array(program.length).fill(-1)
+    let generation = 0
+    // Follows splits and assertions from `pc` at `at`, collecting the
+    // instructions that read a character (and reporting a match).
+    const add = (list: Array<number>, start: number, at: number): boolean => {
+      const stack = [start]
+      let matched = false
+      while (stack.length > 0) {
+        const pc = stack.pop()!
+        if (seen[pc] === generation) continue
+        seen[pc] = generation
+        const instruction = program[pc]!
+        if (instruction.op === "match") matched = true
+        else if (instruction.op === "char") list.push(pc)
+        else if (instruction.op === "assert") {
+          if (instruction.test(text, at)) stack.push(instruction.next)
+        } else stack.push(instruction.second, instruction.first)
+      }
+      return matched
+    }
+    for (let at = 0; ; at += 1) {
+      // A search, as Go's MatchString: a thread may start anywhere.
+      if (add(current, 0, at)) return true
+      if (at === text.length) return false
+      const next: Array<number> = []
+      generation += 1
+      for (const pc of current) {
+        const instruction = program[pc] as Extract<Instruction, { op: "char" }>
+        if (
+          instruction.test(text[at]!) &&
+          add(next, instruction.next, at + 1)
+        ) {
+          return true
+        }
+      }
+      current = next
+    }
+  }
 }
 
 const CONTROL_ESCAPES: Record<string, number> = {

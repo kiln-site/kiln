@@ -212,6 +212,20 @@ describe("build context patterns", () => {
     }
   )
 
+  it("matches in time linear in the name, as RE2 does, for a pattern that makes backtracking explode", () => {
+    // `*a*a…*ab` against a long name without a `b`: a backtracking
+    // matcher takes exponential time; Go's RE2 is linear.
+    const matcher = new PatternMatcher(["*a".repeat(20) + "b"])
+    const name = "a".repeat(100)
+
+    const started = performance.now()
+    const matched = matcher.matchesOrParentMatches(name)
+    const elapsed = performance.now() - started
+
+    expect(matched).toBe(false)
+    expect(elapsed).toBeLessThan(250)
+  })
+
   it("rejects a lone exception and fails a range Go's regexp rejects", () => {
     expect(() => new PatternMatcher(["!"])).toThrow(BadPatternError)
     // Passes filepath.Match's check, but `l-O` is a backwards range.

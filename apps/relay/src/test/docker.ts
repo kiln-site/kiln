@@ -260,6 +260,12 @@ export class FakeDocker {
   #lastActivity = 0
   #lastTimestamp = 0
   #socketPath: string | null = null
+  /**
+   * Raw request bodies sent to the Relay's session, as malformed gRPC calls,
+   * before each build reads through it, and the grpc-status each got.
+   */
+  readonly sessionProbes: Array<Buffer> = []
+  readonly sessionProbeStatuses: Array<string> = []
   /** Open build sessions, by ID: BuildKit's client for each. */
   readonly #sessions = new Map<string, ClientHttp2Session>()
   readonly #execSockets = new Map<string, Duplex>()
@@ -301,6 +307,8 @@ export class FakeDocker {
     const unmodelled = this.#unmodelled
     for (const session of this.#sessions.values()) session.destroy()
     this.#sessions.clear()
+    this.sessionProbes.length = 0
+    this.sessionProbeStatuses.length = 0
     this.containers.clear()
     this.execs.clear()
     this.execGreeting = ""
@@ -1184,6 +1192,9 @@ export class FakeDocker {
           return
         }
         await this.#checkpoint("build", url.searchParams.get("t") ?? "")
+        for (const probe of this.sessionProbes.splice(0)) {
+          this.sessionProbeStatuses.push(await probeSession(session!, probe))
+        }
         this.#build(
           url,
           await readSessionBuild(
@@ -2535,5 +2546,28 @@ function readBody(request: IncomingMessage): Promise<string> {
     request.on("data", (chunk: Buffer) => chunks.push(chunk))
     request.on("end", () => resolve(Buffer.concat(chunks).toString("utf8")))
     request.on("error", reject)
+  })
+}
+
+// Sends `body` as a health check call's request and returns its grpc-status.
+function probeSession(session: ClientHttp2Session, body: Buffer): Promise<string> {
+  return new Promise((resolve) => {
+    const stream = session.request({
+      ":method": "POST",
+      ":path": "/grpc.health.v1.Health/Check",
+      "content-type": "application/grpc",
+      te: "trailers",
+    })
+    let status = "none"
+    stream.on("trailers", (trailers) => {
+      status = String(trailers["grpc-status"])
+    })
+    stream.on("response", (headers) => {
+      if (headers["grpc-status"] !== undefined) status = String(headers["grpc-status"])
+    })
+    stream.on("data", () => undefined)
+    stream.on("error", () => undefined)
+    stream.on("close", () => resolve(status))
+    stream.end(body)
   })
 }

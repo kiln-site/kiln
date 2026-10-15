@@ -55,6 +55,12 @@ const MODE_TYPE =
   MODE_CHAR_DEVICE +
   MODE_IRREGULAR
 
+// What BuildKit sends the session is small (file requests, credential
+// lookups); larger messages are refused rather than buffered.
+const MAX_MESSAGE_BYTES = 4 * 1024 * 1024
+// Request headers, including a context's exclude patterns.
+const MAX_HEADER_LIST_BYTES = 4 * 1024 * 1024
+
 // fsutil sends files in packets of up to 32 KiB.
 const CHUNK_BYTES = 32 * 1024
 
@@ -128,7 +134,12 @@ function serve(
   socket: Duplex,
   roots: { readonly context: string; readonly dockerfile: string }
 ) {
-  const server = createServer()
+  // BuildKit sends each exclude pattern as its own metadata entry, so a
+  // long .dockerignore means many headers.
+  const server = createServer({
+    maxHeaderListPairs: 65_536,
+    settings: { maxHeaderListSize: MAX_HEADER_LIST_BYTES },
+  })
   const running = new Set<Fiber.Fiber<void>>()
   server.on("sessionError", () => undefined)
   server.on("stream", (stream, headers, _flags, rawHeaders) => {
@@ -240,9 +251,17 @@ function grpcMetadata(
   return decoded
 }
 
-/** Reads a stream's gRPC messages, each a 5-byte prefix and its bytes. */
+/**
+ * Reads a stream's gRPC messages, each a 5-byte prefix (a compression flag
+ * and a length) and its bytes. A compressed message, one longer than
+ * `MAX_MESSAGE_BYTES`, or one the stream ends partway through fails the
+ * call; what arrives is kept as it came, and copied once per message.
+ */
 class GrpcReader {
-  #buffered: Buffer = Buffer.alloc(0)
+  readonly #chunks: Array<Buffer> = []
+  #buffered = 0
+  // The length of the message being read, once its prefix is in.
+  #length: number | undefined
   readonly #messages: Array<Buffer> = []
   #ended = false
   #failure: GrpcFailure | undefined
@@ -250,32 +269,75 @@ class GrpcReader {
 
   constructor(readonly stream: ServerHttp2Stream) {
     stream.on("data", (chunk: Buffer) => {
-      this.#buffered =
-        this.#buffered.length === 0
-          ? chunk
-          : Buffer.concat([this.#buffered, chunk])
-      while (this.#buffered.length >= 5) {
-        const length = this.#buffered.readUInt32BE(1)
-        if (this.#buffered.length < 5 + length) break
-        if (this.#buffered[0] !== 0) {
-          this.#failure = new GrpcFailure({
-            code: 12,
-            message: "compressed messages aren't supported",
-          })
-        }
-        this.#messages.push(this.#buffered.subarray(5, 5 + length))
-        this.#buffered = this.#buffered.subarray(5 + length)
-      }
+      if (this.#failure) return
+      this.#chunks.push(chunk)
+      this.#buffered += chunk.length
+      this.#read()
       // Holds the sender back until the messages so far are read.
       if (this.#messages.length > 64) stream.pause()
       this.#wake?.()
     })
     const end = () => {
+      if (!this.#ended && (this.#length !== undefined || this.#buffered > 0)) {
+        this.#fail(13, "the gRPC stream ended partway through a message")
+      }
       this.#ended = true
       this.#wake?.()
     }
     stream.once("end", end)
     stream.once("close", end)
+  }
+
+  #read() {
+    for (;;) {
+      if (this.#length === undefined) {
+        if (this.#buffered < 5) return
+        const prefix = this.#take(5)
+        if (prefix[0] !== 0) {
+          this.#fail(12, "compressed messages aren't supported")
+          return
+        }
+        const length = prefix.readUInt32BE(1)
+        if (length > MAX_MESSAGE_BYTES) {
+          this.#fail(
+            8,
+            `the gRPC message is ${length} bytes, more than the ${MAX_MESSAGE_BYTES} allowed`
+          )
+          return
+        }
+        this.#length = length
+      }
+      if (this.#buffered < this.#length) return
+      this.#messages.push(this.#take(this.#length))
+      this.#length = undefined
+    }
+  }
+
+  // The next `count` bytes, taken off the chunks as they came.
+  #take(count: number): Buffer {
+    const parts: Array<Buffer> = []
+    let needed = count
+    while (needed > 0) {
+      const chunk = this.#chunks[0]!
+      if (chunk.length <= needed) {
+        parts.push(chunk)
+        this.#chunks.shift()
+        needed -= chunk.length
+      } else {
+        parts.push(chunk.subarray(0, needed))
+        this.#chunks[0] = chunk.subarray(needed)
+        needed = 0
+      }
+    }
+    this.#buffered -= count
+    return parts.length === 1 ? parts[0]! : Buffer.concat(parts, count)
+  }
+
+  #fail(code: number, message: string) {
+    this.#failure ??= new GrpcFailure({ code, message })
+    this.#chunks.length = 0
+    this.#buffered = 0
+    this.#wake?.()
   }
 
   /** The next message, or undefined once the caller ends its stream. */
@@ -357,7 +419,13 @@ function unary(
 ): Effect.Effect<void, GrpcFailure> {
   return Effect.gen(function* () {
     const request = yield* reader.next
-    yield* send(stream, yield* answer(request ?? Buffer.alloc(0)))
+    if (request === undefined) {
+      return yield* new GrpcFailure({
+        code: 13,
+        message: "the call had no request",
+      })
+    }
+    yield* send(stream, yield* answer(request))
   })
 }
 
