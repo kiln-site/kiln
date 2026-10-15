@@ -2206,9 +2206,7 @@ export class LifecycleDriver {
     })
     if (forcePull) {
       await runLifecycle(
-        lifecycleOperation(() =>
-          command("docker", ["pull", resolved.image], { timeout: 300_000 })
-        )
+        this.#engine.pullImage(resolved.image, { timeout: 300_000 })
       )
     }
 
@@ -2395,9 +2393,7 @@ export class LifecycleDriver {
     if (networking?.enabled) await this.#ensureInfrastructure(networking, false)
     let managedInstallationMarker: string | null = null
     const pullImage = () =>
-      lifecycleOperation(() =>
-        command("docker", ["pull", image], { timeout: 300_000 })
-      )
+      this.#engine.pullImage(image, { timeout: 300_000 })
     if (!input.skipImagePull) {
       await input.onPhase?.("pulling_image")
       if (installationMarker) {
@@ -3717,9 +3713,7 @@ export class LifecycleDriver {
       await runLifecycle(
         this.#engine.inspectImage(image).pipe(
           Effect.catch(() =>
-            lifecycleOperation(() =>
-              command("docker", ["pull", image], { timeout: 300_000 })
-            )
+            this.#engine.pullImage(image, { timeout: 300_000 })
           ),
           Effect.asVoid
         )

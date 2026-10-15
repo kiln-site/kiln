@@ -11,17 +11,24 @@
  * Execs that stream stdio (database clients, backups, terminals) run over
  * connections Docker upgrades, as `docker exec` does.
  *
- * Creating containers, networks, and volumes, pulling images, and Compose
- * stay on the CLI (see `./command.js`) for now.
+ * Pulls read registry credentials from the Docker client config as the CLI
+ * did (see `./registry-auth.js`).
+ *
+ * Creating containers, networks, and volumes, builds, and Compose stay on the
+ * CLI (see `./command.js`) for now.
  */
 import { Agent, request } from "node:http"
 import { type Duplex, PassThrough, Writable } from "node:stream"
 import { StringDecoder } from "node:string_decoder"
 import { Effect, Predicate, Result } from "effect"
 
-import { command } from "./command.js"
+import {
+  normalizedReference,
+  parseImageReference,
+  repositoryName,
+} from "./docker-reference.js"
 import { DockerEngineError } from "./effect/errors.js"
-import { promiseEffect } from "./effect/promise.js"
+import { registryAuthHeader } from "./registry-auth.js"
 
 export { DockerEngineError }
 
@@ -144,6 +151,7 @@ interface Exchange {
   readonly method: "DELETE" | "GET" | "POST"
   readonly path: string
   readonly body?: unknown
+  readonly headers?: Readonly<Record<string, string>>
   /** For the whole exchange; `null` waits as long as the answer lasts. */
   readonly timeout?: number | null
   readonly maxBytes?: number
@@ -770,6 +778,52 @@ export class DockerEngine {
     })
   }
 
+  /**
+   * Pulls an image, as `docker pull`, with credentials for its registry from
+   * the Docker client config (see `./registry-auth.js`). Each progress
+   * message goes to `onLine` the way the CLI printed it without a terminal,
+   * ending with the image's full reference.
+   */
+  pullImage(
+    image: string,
+    options: {
+      readonly onLine?: (line: string) => void
+      readonly timeout?: number
+    } = {}
+  ): Effect.Effect<void, DockerEngineError> {
+    return Effect.gen({ self: this }, function* () {
+      const reference = yield* Effect.try({
+        try: () => parseImageReference(image),
+        catch: (cause) =>
+          new DockerEngineError({
+            cause,
+            operation: "POST /images/create",
+            reason: cause instanceof Error ? cause.message : String(cause),
+          }),
+      })
+      const auth = yield* registryAuthHeader(reference)
+      const progress = progressReader(options.onLine)
+      yield* this.#exchange({
+        ...(auth && { headers: { "X-Registry-Auth": auth } }),
+        method: "POST",
+        onData: progress.read,
+        path: `/images/create${query({
+          fromImage: repositoryName(reference),
+          tag: reference.digest ?? reference.tag ?? "latest",
+        })}`,
+        timeout: options.timeout ?? 300_000,
+      })
+      const problem = progress.end()
+      if (problem !== undefined) {
+        return yield* new DockerEngineError({
+          operation: "POST /images/create",
+          reason: problem,
+        })
+      }
+      options.onLine?.(normalizedReference(reference))
+    })
+  }
+
   /** `docker image rm --force`. */
   removeImage(reference: string): Effect.Effect<void, DockerEngineError> {
     return this.#empty({
@@ -819,12 +873,13 @@ export class DockerEngine {
           : Buffer.from(JSON.stringify(exchange.body))
       const call = request({
         agent,
-        headers: body
-          ? {
-              "Content-Length": String(body.byteLength),
-              "Content-Type": "application/json",
-            }
-          : undefined,
+        headers: {
+          ...exchange.headers,
+          ...(body && {
+            "Content-Length": String(body.byteLength),
+            "Content-Type": "application/json",
+          }),
+        },
         method: exchange.method,
         path: exchange.path,
         socketPath,
@@ -1131,6 +1186,62 @@ export function dockerTimestamp(value: string): string {
   return `${Math.floor(milliseconds / 1_000)}.${String(remainder * 1_000_000).padStart(9, "0")}`
 }
 
+/**
+ * Reads Docker's JSON progress stream (pulls, builds, pushes) a line at a
+ * time, handing each message to `onLine` as the CLI printed it without a
+ * terminal. Repeated progress updates for one layer are printed once. An
+ * error Docker reports within the stream ends it with its message.
+ */
+function progressReader(onLine: ((line: string) => void) | undefined) {
+  let problem: string | undefined
+  const printed = new Set<string>()
+  const lines = lineReader((line) => {
+    if (problem !== undefined || !line.trim()) return
+    const parsed = Result.getOrUndefined(
+      Result.try((): unknown => JSON.parse(line))
+    )
+    if (!Predicate.isObject(parsed)) return
+    const message = parsed as Record<string, unknown>
+    const text = (value: unknown) =>
+      Predicate.isString(value) ? value : undefined
+    const detail = Predicate.isObject(message.errorDetail)
+      ? (message.errorDetail as Record<string, unknown>)
+      : undefined
+    const error = text(detail?.message) ?? text(message.error)
+    if (error !== undefined) {
+      problem = error
+      return
+    }
+    const stream = text(message.stream)
+    if (stream !== undefined) {
+      for (const part of stream.split("\n")) {
+        if (part.trim()) onLine?.(part.replace(/\r$/u, ""))
+      }
+      return
+    }
+    const status = text(message.status)
+    if (status === undefined) return
+    const id = text(message.id)
+    const progress = message.progressDetail
+    if (Predicate.isObject(progress) && Object.keys(progress).length > 0) {
+      const key = `${id ?? ""}\u0000${status}`
+      if (printed.has(key)) return
+      printed.add(key)
+    }
+    onLine?.(id ? `${id}: ${status}` : status)
+  })
+  return {
+    end: (): string | undefined => {
+      lines.flush()
+      return problem
+    },
+    read: (chunk: Buffer): string | undefined => {
+      lines.read(chunk)
+      return problem
+    },
+  }
+}
+
 function logsPath(
   reference: string,
   options: DockerLogOptions,
@@ -1305,17 +1416,13 @@ function query(
   return encoded ? `?${encoded}` : ""
 }
 
-// Pulls an image Docker doesn't have yet, on the CLI like every pull.
+// Pulls an image Docker doesn't have yet.
 export function ensureImage(
   engine: DockerEngine,
   image: string
-): Effect.Effect<void, unknown> {
+): Effect.Effect<void, DockerEngineError> {
   return engine.inspectImage(image).pipe(
-    Effect.catch(() =>
-      promiseEffect(() =>
-        command("docker", ["pull", image], { timeout: 300_000 })
-      )
-    ),
+    Effect.catch(() => engine.pullImage(image, { timeout: 300_000 })),
     Effect.asVoid
   )
 }

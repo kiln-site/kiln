@@ -604,9 +604,13 @@ export class AppDriver {
   async #pullImage(input: RelayDeployApp, deployment: Deployment) {
     const image = input.config.image
     this.#log(input.appId, deployment, `Pulling ${image}`)
-    await this.#stream(input.appId, deployment, ["pull", image], {
-      timeout: PULL_TIMEOUT_MS,
-    })
+    await Effect.runPromise(
+      this.#engine.pullImage(image, {
+        onLine: (line) => this.#logOutput(input.appId, deployment, line),
+        timeout: PULL_TIMEOUT_MS,
+      }),
+      { signal: deployment.abort.signal }
+    )
     return image
   }
 

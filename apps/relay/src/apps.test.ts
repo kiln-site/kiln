@@ -173,7 +173,7 @@ describe("apps", () => {
       image,
       Array.from(
         { length: 20 },
-        (_, index) => `layer ${index} ${"x".repeat(1024 * 1024)}\n`
+        (_, index) => `layer ${index} ${"x".repeat(900 * 1024)}\n`
       ).join("")
     )
     const pull = fakeDocker.hold({ command: "pull" })
@@ -202,7 +202,8 @@ describe("apps", () => {
     expect(index(first.value)).toBe(0)
     expect(rest.every((line) => line !== undefined)).toBe(true)
     expect(rest.map(index)).toEqual(history.lines.map(index))
-    expect(history.lines.length).toBeLessThan(20)
+    // The oldest lines were dropped from the log.
+    expect(index(history.lines[0])).toBeGreaterThan(0)
   })
 
   it("labels a deployed container for its web routes on an external Traefik", async () => {

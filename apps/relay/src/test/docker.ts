@@ -2,8 +2,7 @@
  * A stateful, in-memory Docker for Relay tests.
  *
  * Relay drives Docker through the Engine API on `config.dockerSocket` and, to
- * create containers, networks, and volumes, and pull images, the CLI
- * (`./command.js`). Tests replace both at that boundary:
+ * create containers, networks, and volumes, the CLI (`./command.js`). Tests replace both at that boundary:
  *
  *   vi.mock("./command.js", () => import("./test/docker.js"))
  *   config.dockerSocket = await fakeDocker.listen()
@@ -24,9 +23,13 @@ import type { Duplex } from "node:stream"
 import { tmpdir } from "node:os"
 import { join, posix } from "node:path"
 
-import { Effect } from "effect"
+import { Effect, Result } from "effect"
 
 import type { CommandOptions, CommandResult } from "../command.js"
+import {
+  normalizedReference,
+  parseImageReference,
+} from "../docker-reference.js"
 import { CommandError } from "../effect/errors.js"
 
 export type PortBindings = Record<
@@ -245,6 +248,11 @@ export class FakeDocker {
   /** What pulling an image prints before its final status, by image. */
   readonly pullOutput = new Map<string, string>()
   /**
+   * The registry credentials each pull carried (`X-Registry-Auth`, decoded),
+   * or null for an anonymous pull, by the image's full reference.
+   */
+  readonly pullCredentials = new Map<string, unknown>()
+  /**
    * Images whose process exits as soon as it starts. Under a restart policy
    * Docker keeps restarting them, reporting them running and restarting.
    */
@@ -306,6 +314,7 @@ export class FakeDocker {
     this.images.clear()
     this.unreachableImages.clear()
     this.pullOutput.clear()
+    this.pullCredentials.clear()
     this.crashingImages.clear()
     this.programFailures.clear()
     this.streamErrors.clear()
@@ -596,7 +605,6 @@ export class FakeDocker {
     if (first === "run") return this.#create(rest, options, true, input)
     if (first === "network") return this.#networkCommand(rest)
     if (first === "volume") return this.#volumeCommand(rest)
-    if (first === "pull") return this.#pull(rest)
     return this.#unsupported(`docker ${arguments_.join(" ")}`)
   }
 
@@ -759,8 +767,17 @@ export class FakeDocker {
     }
   }
 
+  /** The key of a local image `reference` names, as Docker normalizes it. */
+  #imageKey(reference: string): string | undefined {
+    const wanted = normalizedImage(reference)
+    return [...this.images.keys()].find(
+      (key) => key === reference || normalizedImage(key) === wanted
+    )
+  }
+
   #imageObject(image: string): unknown {
-    const labels = this.images.get(image)
+    const key = this.#imageKey(image)
+    const labels = key === undefined ? undefined : this.images.get(key)
     return labels === undefined
       ? undefined
       : { Config: { Labels: labels }, Id: `sha256:${image}`, RepoTags: [image] }
@@ -1063,18 +1080,6 @@ export class FakeDocker {
     return this.#unsupported(`tailscale ${arguments_.join(" ")}`)
   }
 
-  async #pull(arguments_: Array<string>): Promise<string> {
-    const [image = ""] = arguments_
-    await this.#checkpoint("pull", image)
-    if (this.unreachableImages.has(image)) {
-      throw new DockerFailure(
-        `Get "https://registry.example/v2/": net/http: request canceled (registry timeout)`
-      )
-    }
-    this.images.set(image, this.images.get(image) ?? {})
-    return `${this.pullOutput.get(image) ?? ""}Status: Downloaded newer image for ${image}\n`
-  }
-
   // ------------------------------------------------------ networks, volumes
 
   async #networkCommand(arguments_: Array<string>): Promise<string> {
@@ -1224,7 +1229,12 @@ export class FakeDocker {
     try {
       const url = new URL(request.url ?? "/", "http://docker")
       const body = await readBody(request)
-      const answer = await this.#route(request.method ?? "GET", url, body)
+      const answer = await this.#route(
+        request.method ?? "GET",
+        url,
+        body,
+        request.headers
+      )
       if (answer.kind === "stream") answer.write(response)
       else if (answer.status === 204 || answer.status === 304) {
         response.writeHead(answer.status).end()
@@ -1247,7 +1257,12 @@ export class FakeDocker {
     }
   }
 
-  async #route(method: string, url: URL, body: string): Promise<ApiAnswer> {
+  async #route(
+    method: string,
+    url: URL,
+    body: string,
+    headers: IncomingMessage["headers"]
+  ): Promise<ApiAnswer> {
     const path = url.pathname
     const json = (status: number, payload: unknown = {}): ApiAnswer => ({
       kind: "json",
@@ -1497,6 +1512,14 @@ export class FakeDocker {
       await this.#volumeRemove(parameters[0] ?? "")
       return json(204)
     }
+    if (method === "POST" && path === "/images/create") {
+      const fromImage = url.searchParams.get("fromImage") ?? ""
+      const tag = url.searchParams.get("tag") ?? "latest"
+      const reference = tag.includes(":")
+        ? `${fromImage}@${tag}`
+        : `${fromImage}:${tag}`
+      return this.#pullFromApi(reference, headers["x-registry-auth"])
+    }
     if (method === "GET" && path === "/images/json") {
       const filters = apiFilters(url)
       return json(
@@ -1531,6 +1554,49 @@ export class FakeDocker {
       return json(200, found)
     }
     return this.#unsupported(`${method} ${path}`)
+  }
+
+  /**
+   * `POST /images/create`: its progress as JSON messages. A registry that
+   * can't be reached fails within the stream, after Docker answered 200.
+   */
+  async #pullFromApi(
+    reference: string,
+    auth: string | Array<string> | undefined
+  ): Promise<ApiAnswer> {
+    const named = (images: Iterable<string>) =>
+      [...images].find(
+        (image) => normalizedImage(image) === normalizedImage(reference)
+      )
+    const image = named(this.images.keys()) ?? named(this.pullOutput.keys()) ??
+      named(this.unreachableImages) ?? reference
+    await this.#checkpoint("pull", image)
+    this.pullCredentials.set(
+      normalizedImage(reference),
+      typeof auth === "string"
+        ? JSON.parse(Buffer.from(auth, "base64").toString("utf8"))
+        : null
+    )
+    const messages: Array<unknown> = (this.pullOutput.get(image) ?? "")
+      .split("\n")
+      .filter(Boolean)
+      .map((status) => ({ status }))
+    if (this.unreachableImages.has(image)) {
+      const message = `Get "https://registry.example/v2/": net/http: request canceled (registry timeout)`
+      messages.push({ error: message, errorDetail: { message } })
+    } else {
+      this.images.set(image, this.images.get(image) ?? {})
+      messages.push({ status: `Status: Downloaded newer image for ${image}` })
+    }
+    return {
+      kind: "stream",
+      write: (response) => {
+        response.writeHead(200, { "Content-Type": "application/json" })
+        response.end(
+          messages.map((message) => `${JSON.stringify(message)}\r\n`).join("")
+        )
+      },
+    }
   }
 
   /** `docker logs`; following ends when the container stops. */
@@ -2138,6 +2204,20 @@ function clientOf(argv: ReadonlyArray<string>): string {
   return program === "sh" || program === "bash"
     ? (/\bexec (\S+)/u.exec(script)?.[1] ?? program)
     : program
+}
+
+/**
+ * An image reference in Docker's normalized form, or itself if invalid. A
+ * digest names the image whatever its tag, as Docker resolves it.
+ */
+function normalizedImage(reference: string): string {
+  const parsed = Result.try(() => parseImageReference(reference))
+  if (Result.isFailure(parsed)) return reference
+  const { digest, tag } = parsed.success
+  return normalizedReference({
+    ...parsed.success,
+    tag: digest ? undefined : tag,
+  })
 }
 
 /** `host`, `none`, `bridge`, and `container:<name>` are modes, not networks. */
