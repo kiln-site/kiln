@@ -242,6 +242,59 @@ const differential: ReadonlyArray<readonly [string, string]> = [
   ["a?b", "00000010000000000001110000000000100000000001000"],
 ]
 
+// The same, for Unicode properties, from patternmatcher built with Go
+// 1.26.8 (Docker 29's): names Go rejects though RE2JS knows them (newer
+// scripts, `Unknown`, underscored script names), names Go accepts though
+// RE2JS doesn't (any case, aliases, `ASCII`), and characters Unicode
+// assigned after Go's 15.0 tables.
+const unicodePaths = ["a", "A", "ab", "abc", "1", "123", "a1", "\u03b1\u03b2", "\u03a9", "x", "\u216b", "\u4e2d\u6587", "\ud83d\ude00", "\u0378", "\ud803\udd40", "\ud818\udd00", "\ud839\udcd0", "\ud807\udf00", "\u00e9", "\u01c5", "_", "-", " ", "aa", "aaa", "a*b", "a\\b", "\u00a0", "\u017f", "\u212a", "\u007f", "\u0080", "dir/\u03b1\u03b2"]
+const unicodeDifferential: ReadonlyArray<readonly [string, string]> = [
+  ["\\P{Unknown}*", "EEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEE"],
+  ["\\p{Unknown}*", "EEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEE"],
+  ["\\p{Garay}*", "EEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEE"],
+  ["[\\p{Sunuwar}]*", "EEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEE"],
+  ["\\p{Nag_Mundari}*", "EEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEE"],
+  ["\\p{Old_Italic}*", "EEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEE"],
+  ["\\p{greek}*", "000000011000000000000000000000000"],
+  ["\\p{GREEK}*", "000000011000000000000000000000000"],
+  ["[^\\p{greek}]*", "111111100111111111111111111111111"],
+  ["\\p{ASCII}*", "111111100100000000001111111000101"],
+  ["\\P{ascii}*", "000000011011111111110000000111010"],
+  ["[\\P{ASCII}]*", "000000011011111111110000000111010"],
+  ["\\p{Letter}*", "111100111101000010110001111011001"],
+  ["\\p{Lowercase_Letter}*", "101100110100000000100001111010001"],
+  ["\\p{lowercase letter}*", "101100110100000000100001111010001"],
+  ["\\p{Assigned}*", "111111111111100011111111111111111"],
+  ["\\P{Assigned}*", "000000000000011100000000000000000"],
+  ["\\p{Unassigned}*", "000000000000011100000000000000000"],
+  ["\\p{L}*", "111100111101000010110001111011001"],
+  ["[\\p{L}]*", "111100111101000010110001111011001"],
+  ["[^\\P{L}]*", "111100111101000010110001111011001"],
+  ["\\p{Lo}*", "000000000001000010000000000000000"],
+  ["\\p{Cn}*", "000000000000011100000000000000000"],
+  ["\\p{C}*", "000000000000011100000000000000110"],
+  ["\\p{Any}*", "111111111111111111111111111111111"],
+  ["\\P{Any}*", "000000000000000000000000000000000"],
+  ["[\\P{Any}]*", "000000000000000000000000000000000"],
+  ["[^\\P{Any}]*", "111111111111111111111111111111111"],
+  ["\\p{^Greek}*", "111111100111111111111111111111111"],
+  ["\\P{^Greek}*", "000000011000000000000000000000000"],
+  ["\\pL*", "111100111101000010110001111011001"],
+  ["\\pl*", "111100111101000010110001111011001"],
+  ["\\pX*", "EEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEE"],
+  ["\\p{Script=Greek}*", "EEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEE"],
+  ["\\p{L&}*", "EEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEE"],
+  ["\\p{Han}*", "000000000001000000000000000000000"],
+  ["\\p{Common}*", "000011000000100000001110000100110"],
+  ["\\x{110000}*", "EEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEE"],
+  ["\\C*", "EEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEE"],
+  ["\\Z*", "EEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEE"],
+  ["\\Qa*b\\E", "000000000000000000000000000000000"],
+  ["a{1001}", "000000000000000000000000000000000"],
+  ["[[:foo:]]*", "EEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEE"],
+  ["[a-\\pL]*", "EEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEE"],
+]
+
 // MatchesUsingParentResults, given its parents' results as a walk does.
 function matchesWalking(matcher: PatternMatcher, file: string): boolean {
   const parents = file.split("/").slice(0, -1).filter(Boolean)
@@ -313,9 +366,46 @@ describe("build context patterns", () => {
     expect(actual).toBe(verdicts)
   })
 
+  it.each(unicodeDifferential)("%s matches as patternmatcher built with Go 1.26 does", (pattern, verdicts) => {
+    const actual = unicodePaths
+      .map((path) => {
+        const matched = Result.try(() =>
+          new PatternMatcher([pattern]).matchesOrParentMatches(path)
+        )
+        if (Result.isFailure(matched)) {
+          expect(matched.failure).toBeInstanceOf(BadPatternError)
+          return "E"
+        }
+        return matched.success ? "1" : "0"
+      })
+      .join("")
+    expect(actual).toBe(verdicts)
+  })
+
+  it("refuses a pattern whose counted repeats would make a huge program, before compiling it", () => {
+    // 7 KB, which Go accepts, and RE2JS would hold in hundreds of MB.
+    const matcher = new PatternMatcher(["a{1000}".repeat(1_000) + "?"])
+
+    const started = performance.now()
+    expect(() => matcher.matchesOrParentMatches("a")).toThrow(
+      /its regular expression is 100000\d instructions; Kiln compiles up to 20000/u
+    )
+    expect(performance.now() - started).toBeLessThan(100)
+  })
+
+  it("refuses patterns that together would make too large a program", () => {
+    const matcher = new PatternMatcher(
+      Array.from({ length: 6 }, (_, index) => `${index}${"a{1000}".repeat(19)}?`)
+    )
+
+    expect(() => matcher.matchesOrParentMatches("a")).toThrow(
+      "the build's patterns come to more than 100000 regular expression instructions"
+    )
+  })
+
   it("compiles a long pattern in time linear in its length", () => {
     // Compiled on first use.
-    const matcher = new PatternMatcher(["[[:^digit:]]*a".repeat(20_000)])
+    const matcher = new PatternMatcher(["[[:^digit:]]*a".repeat(3_000)])
 
     const started = performance.now()
     const matched = matcher.matchesOrParentMatches("1".repeat(100))
