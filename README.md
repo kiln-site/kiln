@@ -1,6 +1,6 @@
 # Kiln
 
-Kiln is a self-hosted platform for running game servers. Hearth is the web panel that manages them; Relay is the agent that runs on each host.
+Kiln is a self-hosted platform for managing apps, databases, and game servers. Hearth is the web panel; Relay is the agent that runs on each host.
 
 ## Images
 

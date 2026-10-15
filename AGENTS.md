@@ -1,6 +1,6 @@
 # Kiln agents
 
-Kiln is a self-hosted platform focused on game servers, especially Minecraft.
+Kiln is a self-hosted platform for managing apps, databases, and game servers.
 Favor simple operation and existing patterns. Prioritize performance and UX;
 avoid unnecessary React renders and paints outside the changed component.
 
@@ -119,10 +119,8 @@ guide doesn't cover, search through the source code in `node_modules/effect/src`
 - Follow [Development](docs/development.md) for prerequisites, commands,
   worktree naming, optional OrbStack access, and cleanup.
 - Before changing core components, start `pnpm dev:docker` and confirm Hearth
-  loads at the printed URL. Use T3 Code's collaborative Preview when available,
-  open it with `open: true`, and pass its returned `tabId` on later calls.
-  Otherwise use an available browser and report the fallback. Keep the preview
-  available for the user while developing. Docs-only work does not need a stack.
+  loads at the printed URL. Validate user-visible changes in the browser.
+  Docs-only work does not need a stack.
 - Validate the changed behavior and run the relevant checks. Follow
   [Contributing](CONTRIBUTING.md) for PR conventions. When asked to deliver a PR,
   commit, push, and open it ready for review. Never merge it yourself.
