@@ -29,6 +29,8 @@ export { DockerEngineError }
 const DEFAULT_TIMEOUT_MS = 30_000
 const DEFAULT_MAX_BYTES = 4 * 1024 * 1024
 const MAX_ERROR_BYTES = 64 * 1024
+// How long an exec that has closed its output may take to report its code.
+const EXIT_CODE_WAIT_MS = 10_000
 // Longer lines are cut, so one line without an end can't grow without limit.
 const MAX_LINE_CHARACTERS = 1024 * 1024
 
@@ -645,17 +647,26 @@ export class DockerEngine {
     })
   }
 
-  // The output ends as the process exits; its code can be recorded just after.
+  // The output ends as the process exits; Docker records its code just
+  // after, which can take a while on a busy host.
   #execExitCode(id: string): Effect.Effect<number, DockerEngineError> {
     const inspect = this.#json<{
       readonly ExitCode: number | null
       readonly Running: boolean
     }>({ method: "GET", path: `/exec/${segment(id)}/json` })
     return Effect.gen(function* () {
-      for (let attempt = 0; ; attempt += 1) {
+      let waited = 0
+      for (let delay = 25; ; delay = Math.min(delay * 2, 500)) {
         const exec = yield* inspect
-        if (!exec.Running || attempt >= 20) return exec.ExitCode ?? -1
-        yield* Effect.sleep(25)
+        if (!exec.Running && exec.ExitCode !== null) return exec.ExitCode
+        if (waited >= EXIT_CODE_WAIT_MS) {
+          return yield* new DockerEngineError({
+            operation: "GET /exec/{id}/json",
+            reason: `Docker didn't report the exit code of exec ${id.slice(0, 12)} within ${EXIT_CODE_WAIT_MS} ms`,
+          })
+        }
+        yield* Effect.sleep(delay)
+        waited += delay
       }
     })
   }
@@ -921,9 +932,12 @@ export class DockerExecProcess {
     this.#exitCode = exitCode
     this.#program = program
     this.stdin = new Writable({
+      // Input the process can no longer read (it exited, or its connection
+      // closed) is dropped: what happened to the process is reported by its
+      // output and exit code, not as a write error.
       write: (chunk: Buffer, _encoding, callback) => {
-        if (!attachStdin || socket.destroyed) callback()
-        else socket.write(chunk, callback)
+        if (!attachStdin || socket.destroyed || !socket.writable) callback()
+        else socket.write(chunk, () => callback())
       },
       // Half-closes the connection: Docker closes the process's stdin and
       // keeps sending its output.
@@ -957,6 +971,13 @@ export class DockerExecProcess {
         failure ??= cause
       })
       socket.once("close", () => {
+        // A process that stops before reading all of its input stops its
+        // writer too, instead of having the rest read for nothing.
+        if (attachStdin && !this.stdin.writableFinished) {
+          this.stdin.destroy(
+            new Error(`${program} stopped before reading all of its input`)
+          )
+        }
         const error = this.#killed ? null : failure
         if (error) {
           this.stdout.destroy(error)
@@ -1022,11 +1043,40 @@ export class DockerExecProcess {
     return outcome.success
   }
 
-  /** Closes the connection, as stopping a `docker exec` client did. */
-  kill(): void {
+  /**
+   * Closes the connection, as stopping a `docker exec` client did. Returns
+   * whether that stopped the process, rather than it having ended already.
+   */
+  kill(): boolean {
+    if (this.#socket.destroyed) return false
     this.#killed = true
     this.#socket.destroy()
+    return true
   }
+}
+
+/**
+ * Streams input into a process (`input` pipes into its stdin) and waits for
+ * it to exit (`exited`). A process that fails on its own, such as a database
+ * client rejecting the input, reports its error rather than the input's
+ * stream; input that fails first stops the process and reports its own.
+ */
+export async function streamIntoProcess(
+  process: DockerExecProcess,
+  input: () => Promise<void>,
+  exited: () => Promise<void>
+): Promise<void> {
+  const settle = (run: () => Promise<void>) =>
+    Effect.runPromise(
+      Effect.result(Effect.tryPromise({ try: run, catch: (cause) => cause }))
+    )
+  const finished = settle(exited)
+  const piped = await settle(input)
+  const stopped = Result.isFailure(piped) && process.kill()
+  const outcome = await finished
+  if (Result.isFailure(piped) && stopped) throw piped.failure
+  if (Result.isFailure(outcome)) throw outcome.failure
+  if (Result.isFailure(piped)) throw piped.failure
 }
 
 // Fails with the signal's reason once it aborts.

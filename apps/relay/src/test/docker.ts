@@ -1013,11 +1013,7 @@ export class FakeDocker {
   ): string {
     container.processes.push({ argv, env, ...(user ? { user } : {}) })
     const [program = "", ...programArguments] = argv
-    // A shell script names the client it runs with `exec`.
-    const client =
-      program === "sh" || program === "bash"
-        ? (/\bexec (\S+)/u.exec(programArguments[1] ?? "")?.[1] ?? program)
-        : program
+    const client = clientOf(argv)
     const failure = this.programFailures.get(client)
     if (failure !== undefined) throw new DockerFailure(failure)
     if (["mysqldump", "mariadb-dump", "pg_dump"].includes(client)) {
@@ -1827,7 +1823,11 @@ export class FakeDocker {
         bodyLeft -= taken
         chunk = chunk.subarray(taken)
       }
-      if (chunk.length > 0) input.push(chunk)
+      if (chunk.length === 0) return
+      input.push(chunk)
+      // A failing client stops at its first input, as psql does at a bad
+      // statement, without reading the rest.
+      if (this.programFailures.has(clientOf(exec.cmd))) finish()
     }
     if (head.length > 0) receive(head)
     socket.on("data", receive)
@@ -2118,6 +2118,14 @@ function memoryBytes(value: string): number {
   if (!match) return 0
   const exponent = "bkmgt".indexOf((match[2] || "b").toLowerCase())
   return Number(match[1]) * 1024 ** exponent
+}
+
+/** The program a process runs: a shell script names it with `exec`. */
+function clientOf(argv: ReadonlyArray<string>): string {
+  const [program = "", , script = ""] = argv
+  return program === "sh" || program === "bash"
+    ? (/\bexec (\S+)/u.exec(script)?.[1] ?? program)
+    : program
 }
 
 /** `host`, `none`, `bridge`, and `container:<name>` are modes, not networks. */

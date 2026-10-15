@@ -25,6 +25,7 @@ import {
   DockerEngine,
   type DockerContainerSummary,
   type DockerExecProcess,
+  streamIntoProcess,
 } from "./docker-engine.js"
 
 const PLATFORM_MAGIC = Buffer.from("KILNPLATFORM0001", "ascii")
@@ -250,15 +251,17 @@ export async function restoreEncryptedPlatformBackup(
     Effect.result(
       Effect.tryPromise({
         try: () =>
-          Promise.all([
-            pipeline(
-              createReadStream(stagedDump),
-              createGunzip(),
-              byteMeter(undefined, MAX_PLATFORM_RESTORE_BYTES),
-              child.stdin
-            ),
-            requireSuccessfulProcess(child, stderr),
-          ]),
+          streamIntoProcess(
+            child,
+            () =>
+              pipeline(
+                createReadStream(stagedDump),
+                createGunzip(),
+                byteMeter(undefined, MAX_PLATFORM_RESTORE_BYTES),
+                child.stdin
+              ),
+            () => requireSuccessfulProcess(child, stderr)
+          ),
         catch: (cause) => cause,
       })
     )
