@@ -21,6 +21,17 @@ export const getRelayHostAccess = createServerFn({ method: "GET" })
     )
   })
 
+export const mountRelayHostFiles = createServerFn({ method: "POST" })
+  .validator(targetSchema)
+  .handler(async ({ data }) => {
+    const { relay, user } = await authorizedRelay(
+      data.relayId,
+      "relay.files.mount"
+    )
+    await databaseRpc(relay, "relay.host.files.mount", {}, 60_000, user.id)
+    return { started: true }
+  })
+
 export const writeRelayTerminal = createServerFn({ method: "POST" })
   .validator(relayHostTerminalWriteSchema.extend(targetSchema.shape))
   .handler(async ({ data: { relayId, ...input } }) => {

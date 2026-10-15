@@ -3,7 +3,10 @@ import { useQuery } from "@tanstack/react-query"
 import { useMatch } from "@tanstack/react-router"
 
 import { ResourceFilesPage } from "@/components/files/resource-files-page"
-import { RelayHostAccess } from "@/components/relay/relay-host-access"
+import {
+  HostFilesLimitation,
+  RelayHostFilesAccess,
+} from "@/components/relay/relay-host-access"
 import { useRelayLiveStatus } from "@/components/relay/relay-presentation"
 import { useRelayWorkspace } from "@/components/relay/relay-workspace-context"
 import { canAccessRelayPermission } from "@/lib/navigation-destinations"
@@ -40,14 +43,19 @@ export function RelayFilesPage() {
     [routeId]
   )
   return (
-    <RelayHostAccess feature="files">
-      <ResourceFilesPage
-        instance={instance}
-        route={route}
-        filePath={filePath}
-        canWrite={canWrite}
-        connected={connected}
-      />
-    </RelayHostAccess>
+    <RelayHostFilesAccess>
+      {(limitation) => (
+        <div className="flex min-h-0 flex-1 flex-col">
+          {limitation ? <HostFilesLimitation limitation={limitation} /> : null}
+          <ResourceFilesPage
+            instance={instance}
+            route={route}
+            filePath={filePath}
+            canWrite={canWrite && limitation !== "read-only"}
+            connected={connected}
+          />
+        </div>
+      )}
+    </RelayHostFilesAccess>
   )
 }

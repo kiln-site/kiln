@@ -321,9 +321,20 @@ export const relayHostTerminalWriteSchema =
   relayDatabaseTerminalWriteSchema.omit({ databaseId: true })
 export const relayHostTerminalClaimSchema =
   relayDatabaseTerminalClaimSchema.omit({ databaseId: true })
+export const relayHostFilesSchema = z.object({
+  // `mounting` while the Relay restarts itself with the host's filesystem.
+  status: z.enum(["disabled", "unmounted", "mounting", "ready"]),
+  // Why the Relay can't read or change some host files, when it can tell.
+  limitation: z
+    .enum(["rootless", "user-namespace", "non-root", "selinux", "read-only"])
+    .nullable(),
+  // Why the last attempt to mount the host's filesystem failed.
+  mountError: z.string().nullable(),
+})
+export type RelayHostFiles = z.infer<typeof relayHostFilesSchema>
 export const relayHostAccessSchema = z.object({
   terminal: z.boolean(),
-  files: z.boolean().default(false),
+  files: relayHostFilesSchema,
 })
 
 // Relay to Hearth: output for one attachment, in order. `ended` arrives with

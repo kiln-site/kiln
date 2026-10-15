@@ -967,6 +967,8 @@ function actionForRequest(request: RelayControlRequest): RelayAction | null {
     case "relay.host.read":
     case "relay.proxy.read":
       return "relay.read"
+    case "relay.host.files.mount":
+      return "relay.files.mount"
     case "relay.proxy.config.read":
       return "instance.network.read"
     case "relay.proxy.write":

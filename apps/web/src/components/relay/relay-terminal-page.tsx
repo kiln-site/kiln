@@ -1,6 +1,6 @@
 import * as React from "react"
 
-import { RelayHostAccess } from "@/components/relay/relay-host-access"
+import { RelayHostTerminalAccess } from "@/components/relay/relay-host-access"
 import { useRelayWorkspace } from "@/components/relay/relay-workspace-context"
 import type { TerminalBackend } from "@/components/terminal-session"
 import { relayTerminalStreamUrl } from "@/lib/database-terminal-stream"
@@ -18,11 +18,11 @@ const TerminalSession = React.lazy(async () => {
 export function RelayTerminalPage() {
   const { relay } = useRelayWorkspace()
   return (
-    <RelayHostAccess feature="terminal">
+    <RelayHostTerminalAccess>
       <React.Suspense fallback={<div className="min-h-0 flex-1 bg-card" />}>
         <RelayTerminalSession key={relay.id} relayId={relay.id} />
       </React.Suspense>
-    </RelayHostAccess>
+    </RelayHostTerminalAccess>
   )
 }
 

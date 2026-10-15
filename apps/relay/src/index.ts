@@ -7,7 +7,7 @@ import {
 import { createServer as createHttpServer } from "node:http"
 import { createServer as createHttpsServer } from "node:https"
 import { createHmac, randomBytes, randomUUID } from "node:crypto"
-import { mkdir, stat } from "node:fs/promises"
+import { mkdir } from "node:fs/promises"
 import { hostname } from "node:os"
 import { Effect, Schema, Semaphore } from "effect"
 
@@ -127,12 +127,13 @@ import {
   traefikRouteUpstream,
   traefikStaticConfiguration,
 } from "./traefik.js"
-import { forkPromise, recoverPromise } from "./effect/promise.js"
+import { forkPromise } from "./effect/promise.js"
 import {
   inspectEncryptedPlatformBackup,
   restoreEncryptedPlatformBackup,
 } from "./platform-backups.js"
 import { FilesystemDriver, type FileRoot } from "./files.js"
+import { HostFiles } from "./host-files.js"
 import { LifecycleDriver } from "./lifecycle.js"
 import { nodeSnapshot } from "./node.js"
 import { reportRelayMemoryMetrics } from "./relay-memory.js"
@@ -278,22 +279,18 @@ const appFilesystem = new FilesystemDriver({
   ...config,
   rootDirectory: apps.rootDirectory,
 })
-const hostFilesystem = new FilesystemDriver({
-  ...config,
-  rootDirectory: config.hostRootDirectory,
-})
+// Saves overwrite host files in place, as editors do, so hard links and
+// containers that bind-mount a file see the change.
+const hostFilesystem = new FilesystemDriver(
+  { ...config, rootDirectory: config.hostRootDirectory },
+  { saveInPlace: true }
+)
+const hostFiles = new HostFiles(config)
 const hostDatabaseBrowser = new DatabaseBrowser(hostFilesystem)
 async function hostFileRoot(id: string): Promise<FileRoot> {
   if (!config.hostAccess) throw new HostAccessDisabledError()
   if (id !== relayIdentity.fingerprint) throw new Error("Relay not found")
   return { id, directory: "." }
-}
-// Files need the host's filesystem mounted at the host root.
-function hostRootAvailable(): Promise<boolean> {
-  return recoverPromise(
-    async () => (await stat(config.hostRootDirectory)).isDirectory(),
-    () => false
-  )
 }
 const appDatabaseBrowser = new DatabaseBrowser(appFilesystem)
 // A helper left from when host access was on goes; one still in use has its
@@ -1286,8 +1283,11 @@ async function executeControlRequest(
     case "relay.host.read":
       return {
         terminal: hostShell.enabled,
-        files: config.hostAccess && (await hostRootAvailable()),
+        files: await hostFiles.status(),
       }
+    case "relay.host.files.mount":
+      await hostFiles.mount()
+      return { started: true }
     case "relay.terminal.attach": {
       const input = relayHostTerminalAttachSchema.parse(request.payload)
       return terminals.attach(

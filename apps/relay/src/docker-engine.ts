@@ -157,6 +157,13 @@ export class DockerEngine {
     return this.#json({ method: "GET", path: "/version" })
   }
 
+  info(): Effect.Effect<
+    { readonly SecurityOptions?: ReadonlyArray<string> | null },
+    DockerEngineError
+  > {
+    return this.#json({ method: "GET", path: "/info" })
+  }
+
   // ------------------------------------------------------------- containers
 
   listContainers(

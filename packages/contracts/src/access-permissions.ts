@@ -82,6 +82,7 @@ export const accessPermissions = [
   "relay.terminal",
   "relay.files.read",
   "relay.files.write",
+  "relay.files.mount",
   "database.data.read",
   "database.data.write",
   "database.terminal",
@@ -198,6 +199,7 @@ const permissionPlacement: Record<
   "relay.terminal": ["relay.terminal", "relay"],
   "relay.files.read": ["relay.files", "relay"],
   "relay.files.write": ["relay.files", "relay"],
+  "relay.files.mount": ["relay.files", "relay"],
   "instance.create": ["resource.creation", "relay"],
   "database.create": ["resource.creation", "relay"],
   "access.read": ["access", "shared"],
@@ -594,6 +596,11 @@ const permissionCopy: Record<
     label: "Edit host files",
     description:
       "Create, upload, edit, move, and delete files anywhere on the Relay’s host. Equivalent to root on the host.",
+  },
+  "relay.files.mount": {
+    label: "Mount host files",
+    description:
+      "Restart the Relay with its host’s filesystem mounted, so host files can be browsed.",
   },
   "relay.terminal": {
     label: "Open host terminal",

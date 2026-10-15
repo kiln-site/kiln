@@ -52,6 +52,7 @@ export default defineConfig({
     entry: {
       "src/index": "src/index.ts",
       "src/updater": "src/updater.ts",
+      "src/host-files-helper": "src/host-files-helper.ts",
       "src/database-browser-worker": "src/database-browser-worker.ts",
     },
     format: "esm",

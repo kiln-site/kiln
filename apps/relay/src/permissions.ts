@@ -13,6 +13,7 @@ export const relayActions = [
   "relay.terminal",
   "relay.files.read",
   "relay.files.write",
+  "relay.files.mount",
   "relay.files.download",
   "relay.files.upload",
   "relay.pairing.create",

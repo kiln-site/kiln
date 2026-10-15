@@ -307,14 +307,14 @@ function updateFailure(phase: string, reason: string) {
   )
 }
 
-function isDockerGeneratedHostname(
+export function isDockerGeneratedHostname(
   hostname: string | undefined,
   containerId: string
 ): boolean {
   return hostname === containerId.slice(0, 12) || hostname === containerId
 }
 
-function networkAliases(
+export function networkAliases(
   aliases: Array<string> | null | undefined,
   targetContainer: string
 ): Array<string> {

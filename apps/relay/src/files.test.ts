@@ -1,5 +1,6 @@
 import {
   chmod,
+  link,
   mkdtemp,
   mkdir,
   readFile,
@@ -297,6 +298,35 @@ describe("Relay file editing", () => {
         )
       })
     )
+  )
+
+  // Host files are saved in place, so a file's other names and containers
+  // that bind-mount it see the change.
+  it.effect(
+    "saves host files in place so their hard links see the change",
+    () =>
+      withSetup(({ directory, instance, root }) =>
+        Effect.gen(function* () {
+          const driver = new FilesystemDriver(testRelayConfig(directory), {
+            saveInPlace: true,
+          })
+          const path = resolve(root, "nginx.conf")
+          const linked = resolve(directory, "nginx.conf")
+          yield* fromPromise(() => writeFile(path, "worker_processes 1;\n"))
+          yield* fromPromise(() => link(path, linked))
+          const opened = yield* driver.read(instance, "nginx.conf")
+
+          yield* driver.write(instance, "nginx.conf", {
+            content: "worker_processes 4;\n",
+            expectedModifiedAt: opened.modifiedAt,
+          })
+
+          assert.strictEqual(
+            yield* fromPromise(() => readFile(linked, "utf8")),
+            "worker_processes 4;\n"
+          )
+        })
+      )
   )
 })
 
