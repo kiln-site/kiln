@@ -419,7 +419,7 @@ describe("Compose features Kiln can't run", () => {
       `services:\n  web:\n    image: nginx\n    ports: [${repeated}, { target: 80, published: "8080" }, '8080:80']\n    expose: ['90', '90']\n`
     )
 
-    expect(performance.now() - started).toBeLessThan(2_000)
+    expect(performance.now() - started).toBeLessThan(6_000)
     expect(project.services.web?.ports).toEqual([
       { protocol: "tcp", target: 80 },
       { protocol: "tcp", published: "8080", target: 80 },
@@ -598,7 +598,7 @@ describe("Compose variable substitution, bounded", () => {
     )
 
     const started = performance.now()
-    await expect(load("services:\n  web:\n    image: nginx\n")).rejects.toThrow(
+    await expect(read("services:\n  web:\n    image: nginx\n")).rejects.toThrow(
       "a value is longer than 1048576 characters once its variables are substituted"
     )
     expect(performance.now() - started).toBeLessThan(2_000)

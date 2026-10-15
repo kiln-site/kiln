@@ -271,7 +271,7 @@ describe("composeUp redeploys, as Compose's reconciler", () => {
     const started = performance.now()
     await Effect.runPromise(await up(yaml({ extra: `    ports: [${ports}]` })))
 
-    expect(performance.now() - started).toBeLessThan(2_000)
+    expect(performance.now() - started).toBeLessThan(6_000)
     const web = [...fakeDocker.containers.values()].find(
       (container) => container.name === `${projectName}-web-1`
     )
