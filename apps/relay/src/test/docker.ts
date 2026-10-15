@@ -2546,6 +2546,8 @@ function syncDirectory(
         failure ??= new Error(
           decodeURIComponent(String(trailers["grpc-message"] ?? `grpc status ${status}`))
         )
+        // gRPC ends the call with the server's status.
+        stream.end()
       }
     })
     stream.on("error", (cause) => {
