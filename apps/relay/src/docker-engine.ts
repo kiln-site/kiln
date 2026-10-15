@@ -5,8 +5,8 @@
  * requests; Relay's snapshot loop alone made two of them every two seconds.
  * Talking to the socket directly answers the same questions without a process.
  *
- * Paths are unversioned, so the daemon answers in its own API version: what
- * the bundled CLI negotiates with any daemon that is not newer than it.
+ * Paths are unversioned and the client doesn't negotiate a version, so the
+ * daemon answers every request in its own current API version.
  *
  * Execs that stream stdio (database clients, backups, terminals) run over
  * connections Docker upgrades, as `docker exec` does.
