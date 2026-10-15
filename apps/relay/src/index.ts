@@ -1264,6 +1264,8 @@ async function executeControlRequest(
     case "relay.host.restart":
       await hostShell.restartHost()
       return { restarting: true }
+    case "relay.resources.read":
+      return { history: docker.relayResourceHistory() }
     case "relay.networking.read":
       return (await lifecycle.networking()) ?? null
     case "relay.networking.write":

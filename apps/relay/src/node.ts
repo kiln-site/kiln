@@ -31,6 +31,7 @@ export async function nodeSnapshot(
     docker.relayStartedAt(),
     relayProcessMemory(),
   ])
+  const relayResources = docker.relayResources()
   const totalMemory = totalmem()
   const startedAtTimestamp = startedAt ? Date.parse(startedAt) : Number.NaN
 
@@ -64,5 +65,6 @@ export async function nodeSnapshot(
     },
     connectedAt,
     relayMemory,
+    ...(relayResources ? { relayResources } : {}),
   }
 }

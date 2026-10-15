@@ -33,6 +33,9 @@ export const relayProxyConfigurationV1Feature = "relay-proxy-configuration-v1"
 // The Relay restarts its own container (`relay.restart`) and its host
 // (`relay.host.restart`).
 export const relayRestartV1Feature = "relay-restart-v1"
+// The Relay reports its own usage in `node.relayResources`, and its recent
+// samples through `relay.resources.read`.
+export const relayResourcesV1Feature = "relay-resources-v1"
 export const relayBrowserAuthorizationReviseMaxItems = 256
 
 export const relayControlOperations = [
@@ -41,6 +44,7 @@ export const relayControlOperations = [
   "relay.update.apply",
   "relay.update.status",
   "relay.restart",
+  "relay.resources.read",
   "relay.rename",
   "relay.audit.list",
   "relay.networking.read",

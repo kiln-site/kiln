@@ -408,6 +408,9 @@ export const MAX_CONSOLE_HISTORY_CHARACTERS = 16 * 1024 * 1024
 const STARTUP_READINESS_LOG_LINES = 1_000
 const RESOURCE_HISTORY_WINDOW_MS = 6 * 60_000
 const DISK_USAGE_REFRESH_MS = 60_000
+// The data directory holds every server, so it is walked less often than one
+// server's folder.
+const RELAY_DISK_USAGE_REFRESH_MS = 5 * 60_000
 const DISCOVERY_TIMEOUT_MS = 30_000
 
 function diskQuotaExceeded(
@@ -446,6 +449,13 @@ export class DockerDriver {
   #relaySftpPublication: Promise<RelaySftpPublication> | undefined
   readonly #resourceCache = new Map<string, ResourceCacheEntry>()
   readonly #resourceHistory = new Map<string, Array<RelayInstanceResources>>()
+  readonly #relayResourceCache: ResourceCacheEntry = {
+    lastAttempt: 0,
+    pending: false,
+    value: null,
+  }
+  readonly #relayDiskUsage = initialDiskUsageCacheEntry()
+  #relayResourceHistory: Array<RelayInstanceResources> = []
   readonly #state: RelayStateStore["Service"]
 
   constructor(
@@ -751,6 +761,48 @@ export class DockerDriver {
     const history = this.#resourceHistory.get(instanceId) ?? []
     const cutoff = Date.now() - RESOURCE_HISTORY_WINDOW_MS
     return history.filter((sample) => Date.parse(sample.sampledAt) >= cutoff)
+  }
+
+  // The Relay's own usage, sampled like a server's: its container's CPU and
+  // memory, and everything Kiln keeps in the data directory against the
+  // node's disk. Null until the first sample lands, or outside Docker.
+  relayResources(): RelayInstanceResources | null {
+    const cached = this.#relayResourceCache
+    if (!cached.pending && Date.now() - cached.lastAttempt >= 1_500) {
+      cached.lastAttempt = Date.now()
+      cached.pending = true
+      Effect.runFork(
+        promiseEffect(() => this.#sampleRelayResources()).pipe(
+          Effect.tap((resources) =>
+            Effect.sync(() => {
+              cached.value = resources
+              const cutoff =
+                Date.parse(resources.sampledAt) - RESOURCE_HISTORY_WINDOW_MS
+              this.#relayResourceHistory = [
+                ...this.#relayResourceHistory,
+                resources,
+              ].filter((sample) => Date.parse(sample.sampledAt) >= cutoff)
+            })
+          ),
+          // Observational, like server sampling: keep the last good value.
+          Effect.ignore,
+          Effect.ensuring(
+            Effect.sync(() => {
+              cached.lastAttempt = Date.now()
+              cached.pending = false
+            })
+          )
+        )
+      )
+    }
+    return cached.value
+  }
+
+  relayResourceHistory(): Array<RelayInstanceResources> {
+    const cutoff = Date.now() - RESOURCE_HISTORY_WINDOW_MS
+    return this.#relayResourceHistory.filter(
+      (sample) => Date.parse(sample.sampledAt) >= cutoff
+    )
   }
 
   async recordProvisionedState(
@@ -1940,32 +1992,9 @@ export class DockerDriver {
       statfs(directory),
     ])
     const instanceStorageUsed = this.#directoryUsageFor(instance)
-    const cpuCurrent = stats.cpu_stats?.cpu_usage?.total_usage ?? 0
-    const cpuPrevious = stats.precpu_stats?.cpu_usage?.total_usage ?? 0
-    const systemCurrent = stats.cpu_stats?.system_cpu_usage ?? 0
-    const systemPrevious = stats.precpu_stats?.system_cpu_usage ?? 0
-    const cpuDelta = cpuCurrent - cpuPrevious
-    const systemDelta = systemCurrent - systemPrevious
-    const onlineCpus = Math.max(stats.cpu_stats?.online_cpus ?? 1, 1)
-    const cpuCapacityPercent = onlineCpus * 100
-    const cpuPercent =
-      cpuDelta > 0 && systemDelta > 0
-        ? (cpuDelta / systemDelta) * onlineCpus * 100
-        : 0
-
-    const memoryTotal = Math.max(
-      instance.config.limits.memoryBytes || stats.memory_stats?.limit || 0,
-      0
-    )
-    const memoryCache = Math.max(
-      stats.memory_stats?.stats?.total_inactive_file ??
-        stats.memory_stats?.stats?.inactive_file ??
-        0,
-      0
-    )
-    const memoryUsed = Math.max(
-      Math.min((stats.memory_stats?.usage ?? 0) - memoryCache, memoryTotal),
-      0
+    const { cpu, memory } = containerCpuAndMemory(
+      stats,
+      instance.config.limits.memoryBytes
     )
     const nodeStorageTotal = filesystem.blocks * filesystem.bsize
     const nodeStorageAvailable = filesystem.bavail * filesystem.bsize
@@ -2003,15 +2032,8 @@ export class DockerDriver {
 
     return {
       sampledAt: new Date(sampledAt).toISOString(),
-      cpu: {
-        capacityPercent: cpuCapacityPercent,
-        percent: roundPercent(cpuPercent),
-      },
-      memory: {
-        totalBytes: memoryTotal,
-        usedBytes: memoryUsed,
-        percent: roundPercent(percentOf(memoryUsed, memoryTotal)),
-      },
+      cpu,
+      memory,
       storage: {
         totalBytes: storageLimit,
         usedBytes: instanceStorageUsed,
@@ -2029,6 +2051,64 @@ export class DockerDriver {
         sentBytesPerSecond,
       },
     }
+  }
+
+  async #sampleRelayResources(): Promise<RelayInstanceResources> {
+    const [stats, filesystem] = await Promise.all([
+      this.#dockerStats(hostname()),
+      statfs(this.#config.dataDirectory),
+    ])
+    const nodeStorageTotal = filesystem.blocks * filesystem.bsize
+    const nodeStorageUsed = Math.max(
+      nodeStorageTotal - filesystem.bavail * filesystem.bsize,
+      0
+    )
+    const dataUsed = this.#relayDataUsage()
+    return {
+      sampledAt: new Date().toISOString(),
+      ...containerCpuAndMemory(stats, 0),
+      storage: {
+        totalBytes: nodeStorageTotal,
+        usedBytes: dataUsed,
+        percent:
+          dataUsed === null
+            ? null
+            : roundPercent(percentOf(dataUsed, nodeStorageTotal)),
+        nodeTotalBytes: nodeStorageTotal,
+        nodeUsedBytes: nodeStorageUsed,
+        nodePercent: roundPercent(percentOf(nodeStorageUsed, nodeStorageTotal)),
+      },
+    }
+  }
+
+  #relayDataUsage(): number | null {
+    const cached = this.#relayDiskUsage
+    if (
+      !cached.pending &&
+      Date.now() - cached.lastAttempt >= RELAY_DISK_USAGE_REFRESH_MS
+    ) {
+      cached.lastAttempt = Date.now()
+      cached.pending = true
+      const refresh = directoryApparentSizeEffect(
+        this.#config.dataDirectory
+      ).pipe(
+        Effect.tap((usedBytes) =>
+          Effect.sync(() => {
+            cached.usedBytes = usedBytes
+          })
+        ),
+        // Keep the last value; scans race with servers writing.
+        Effect.catch(() => Effect.void),
+        Effect.ensuring(
+          Effect.sync(() => {
+            cached.lastAttempt = Date.now()
+            cached.pending = false
+          })
+        )
+      )
+      Effect.runFork(this.#diskUsageSemaphore.withPermits(1)(refresh))
+    }
+    return cached.usedBytes
   }
 
   #directoryUsageFor(instance: DiscoveredInstance): number | null {
@@ -2594,6 +2674,52 @@ function parseBrickReadinessLabel(value: string | undefined) {
   return Result.try(() => brickReadinessSchema.parse(JSON.parse(value))).pipe(
     Result.getOrUndefined
   )
+}
+
+// A container's CPU over Docker's sampling interval, and its memory less
+// reclaimable page cache, against `memoryLimitBytes` or else the container's
+// own limit (the host's memory when it has none).
+function containerCpuAndMemory(
+  stats: DockerStats,
+  memoryLimitBytes: number
+): Pick<RelayInstanceResources, "cpu" | "memory"> {
+  const cpuCurrent = stats.cpu_stats?.cpu_usage?.total_usage ?? 0
+  const cpuPrevious = stats.precpu_stats?.cpu_usage?.total_usage ?? 0
+  const systemCurrent = stats.cpu_stats?.system_cpu_usage ?? 0
+  const systemPrevious = stats.precpu_stats?.system_cpu_usage ?? 0
+  const cpuDelta = cpuCurrent - cpuPrevious
+  const systemDelta = systemCurrent - systemPrevious
+  const onlineCpus = Math.max(stats.cpu_stats?.online_cpus ?? 1, 1)
+  const cpuPercent =
+    cpuDelta > 0 && systemDelta > 0
+      ? (cpuDelta / systemDelta) * onlineCpus * 100
+      : 0
+
+  const memoryTotal = Math.max(
+    memoryLimitBytes || stats.memory_stats?.limit || 0,
+    0
+  )
+  const memoryCache = Math.max(
+    stats.memory_stats?.stats?.total_inactive_file ??
+      stats.memory_stats?.stats?.inactive_file ??
+      0,
+    0
+  )
+  const memoryUsed = Math.max(
+    Math.min((stats.memory_stats?.usage ?? 0) - memoryCache, memoryTotal),
+    0
+  )
+  return {
+    cpu: {
+      capacityPercent: onlineCpus * 100,
+      percent: roundPercent(cpuPercent),
+    },
+    memory: {
+      totalBytes: memoryTotal,
+      usedBytes: memoryUsed,
+      percent: roundPercent(percentOf(memoryUsed, memoryTotal)),
+    },
+  }
 }
 
 function percentOf(used: number, total: number): number {

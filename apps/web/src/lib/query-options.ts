@@ -45,6 +45,7 @@ import {
   type InstanceFavorite,
 } from "@/lib/instance-favorites"
 import { getMinecraftProfile } from "@/server/minecraft"
+import { getRelayResources } from "@/server/relay-host"
 import { reconcilePendingPowerSnapshot } from "@/lib/instance-power-state"
 import { systemUpdateOverviewRefetchPolicy } from "@/lib/system-update-presence"
 import {
@@ -174,6 +175,7 @@ export const queryKeys = {
     snapshot: ["relay", "snapshot"] as const,
     instances: ["relay", "instances"] as const,
     memory: ["relay", "memory"] as const,
+    resources: (relayId: string) => ["relay", "resources", relayId] as const,
     webRoutes: (relayId: string, instanceId: string) =>
       ["web-routes", relayId, instanceId] as const,
     tree: (relayId: string, instanceId: string) =>
@@ -368,6 +370,18 @@ export function relayMemoryReadingsQueryOptions() {
     refetchIntervalInBackground: false,
     refetchOnWindowFocus: false,
     staleTime: connectedRelayPollDelayMs,
+  })
+}
+
+/** The Relay's own usage, polled while its meters are mounted and visible. */
+export function relayResourcesQueryOptions(relayId: string) {
+  return queryOptions({
+    queryKey: queryKeys.relay.resources(relayId),
+    queryFn: ({ signal }) => getRelayResources({ data: { relayId }, signal }),
+    refetchInterval: 2_000,
+    refetchIntervalInBackground: false,
+    refetchOnWindowFocus: false,
+    staleTime: 2_000,
   })
 }
 

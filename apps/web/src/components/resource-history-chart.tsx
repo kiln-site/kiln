@@ -86,6 +86,7 @@ export function ResourceHistoryChart({
   color,
   maxValue,
   formatValue,
+  storageLabel,
 }: {
   data: Array<HistorySample>
   resourceId: "cpu" | "memory" | "storage" | "network"
@@ -93,6 +94,9 @@ export function ResourceHistoryChart({
   color: string
   maxValue?: number
   formatValue: (value: number) => string
+  // Names the measured share of the disk, painted in front of the node's;
+  // a server's quota when absent.
+  storageLabel?: string
 }) {
   const formatValueRef = React.useRef(formatValue)
   React.useLayoutEffect(() => {
@@ -134,12 +138,16 @@ export function ResourceHistoryChart({
       ]
       // Instance is painted last so it stays in front of node usage.
       if (hasPrimaryValues) {
-        storage.push({ key: "value", label: "Instance quota", color })
+        storage.push({
+          key: "value",
+          label: storageLabel ?? "Instance quota",
+          color,
+        })
       }
       return storage
     }
     return [{ key: "value", label, color }]
-  }, [color, hasPrimaryValues, label, resourceId])
+  }, [color, hasPrimaryValues, label, resourceId, storageLabel])
 
   const definition = React.useMemo(() => {
     const isNetwork = resourceId === "network"
@@ -309,7 +317,9 @@ export function ResourceHistoryChart({
                   resourceId === "network" ? NETWORK_SENT_COLOR : color,
               }}
             />
-            {resourceId === "network" ? "↑ OUT" : "INSTANCE"}
+            {resourceId === "network"
+              ? "↑ OUT"
+              : (storageLabel ?? "Instance").toUpperCase()}
           </span>
         </div>
       ) : null}

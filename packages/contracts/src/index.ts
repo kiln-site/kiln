@@ -1525,6 +1525,13 @@ export const relayNodeSchema = z.object({
   connectedAt: z.string().datetime(),
   /** Absent from Relays that predate memory reporting. */
   relayMemory: relayProcessMemorySchema.optional(),
+  /**
+   * The Relay's own usage, sampled like a server's: its container's CPU and
+   * memory, and everything Kiln keeps in the Relay's data directory measured
+   * against the node's disk. Absent until the first sample, and from Relays
+   * that predate it.
+   */
+  relayResources: relayInstanceResourcesSchema.optional(),
 })
 
 export const relaySftpPublicationStatusSchema = z.enum([
@@ -2231,6 +2238,7 @@ function relayNodeControlState(node: RelayNode) {
     cpu: _cpu,
     memory: _memory,
     relayMemory: _relayMemory,
+    relayResources: _relayResources,
     storage: _storage,
     uptimeSeconds: _uptimeSeconds,
     ...control

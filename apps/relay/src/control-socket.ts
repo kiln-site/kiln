@@ -26,6 +26,7 @@ import {
   relayProxyConfigurationV1Feature,
   relayHostFilesV1Feature,
   relayRestartV1Feature,
+  relayResourcesV1Feature,
   appIdFromFileRoot,
   isRelayFileRoot,
   relayFileRequestReplayV1Feature,
@@ -656,6 +657,7 @@ function authenticateSocket(
           relayProxyConfigurationV1Feature,
           relayHostFilesV1Feature,
           relayRestartV1Feature,
+          relayResourcesV1Feature,
         ],
         protocol: relayControlProtocol,
         relayBuild: relayBuildLabel(),
@@ -936,6 +938,7 @@ function actionForRequest(request: RelayControlRequest): RelayAction | null {
     case "relay.snapshot":
     case "relay.system.inspect":
     case "relay.update.status":
+    case "relay.resources.read":
       return "relay.read"
     case "relay.update.apply":
       return "relay.update"

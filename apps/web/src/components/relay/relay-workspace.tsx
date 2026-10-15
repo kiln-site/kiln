@@ -3,7 +3,7 @@ import { useQuery } from "@tanstack/react-query"
 import { RadioTower } from "lucide-react"
 
 import { RelayPowerControls } from "@/components/relay/relay-power-controls"
-import { useRelayLiveStatus } from "@/components/relay/relay-presentation"
+import { RelayResourceMeters } from "@/components/relay/relay-resource-meters"
 import {
   RelayWorkspaceContext,
   type RelayWorkspaceRelay,
@@ -104,10 +104,6 @@ const RelayWorkspaceHeader = React.memo(function RelayWorkspaceHeader({
             />
           }
         >
-          <span className="hidden shrink-0 items-center gap-1.5 @[30rem]:inline-flex">
-            <RelayStatusLabel relay={relay} />
-            <WorkspaceMetaSeparator />
-          </span>
           <span className="hidden shrink-0 items-center gap-1.5 @[40rem]:inline-flex">
             <WorkspaceIdCopyButton
               id={relay.id}
@@ -122,15 +118,11 @@ const RelayWorkspaceHeader = React.memo(function RelayWorkspaceHeader({
           />
         </WorkspaceIdentity>
       }
+      center={<RelayResourceMeters relay={relay} />}
       actions={<RelayHeaderActions relay={relay} />}
     />
   )
 })
-
-function RelayStatusLabel({ relay }: { relay: RelayDirectoryEntry }) {
-  const { presentation } = useRelayLiveStatus(relay)
-  return <span>{presentation.label}</span>
-}
 
 function RelayHeaderActions({ relay }: { relay: RelayDirectoryEntry }) {
   const { data: permissions } = useQuery({

@@ -4,6 +4,9 @@ import {
   relayHostTerminalClaimSchema,
   relayHostTerminalWriteSchema,
   relayIdSchema,
+  relayInstanceResourcesSchema,
+  relayResourceHistoryMaxSamples,
+  relayResourcesV1Feature,
   relayRestartV1Feature,
 } from "@workspace/contracts"
 import { z } from "zod"
@@ -97,3 +100,42 @@ async function requireRelayRestart(relay: PersistedRelay): Promise<void> {
     throw new Error("Update this Relay to restart it from Hearth.")
   }
 }
+
+// The Relay's latest sample of its own usage, from the node this process's
+// control socket last received: no Relay round trip, so the Relay's meters
+// can poll it.
+export const getRelayResources = createServerFn({ method: "GET" })
+  .validator(targetSchema)
+  .handler(async ({ data }) => {
+    await authorizedRelay(data.relayId, "relay.read")
+    const { relayConnectionFeatures, relayConnectionNode } =
+      await import("@/lib/relay-connection")
+    const node = relayConnectionNode(data.relayId)
+    return {
+      resources: node?.relayResources ?? null,
+      startedAt: node?.startedAt ?? null,
+      supported: relayConnectionFeatures(data.relayId).has(
+        relayResourcesV1Feature
+      ),
+    }
+  })
+
+// Recent samples, to fill the meters' history when they open.
+export const getRelayResourceHistory = createServerFn({ method: "GET" })
+  .validator(targetSchema)
+  .handler(async ({ data }) => {
+    const { relay } = await authorizedRelay(data.relayId, "relay.read")
+    const { relayConnectionFeatures } = await import("@/lib/relay-connection")
+    if (!relayConnectionFeatures(relay.id).has(relayResourcesV1Feature)) {
+      return []
+    }
+    return relayResourceHistorySchema.parse(
+      await databaseRpc(relay, "relay.resources.read", {}, 15_000)
+    ).history
+  })
+
+const relayResourceHistorySchema = z.object({
+  history: z
+    .array(relayInstanceResourcesSchema)
+    .max(relayResourceHistoryMaxSamples),
+})
