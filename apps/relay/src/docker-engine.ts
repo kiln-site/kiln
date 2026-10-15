@@ -155,8 +155,6 @@ interface Exchange {
   readonly method: "DELETE" | "GET" | "POST"
   readonly path: string
   readonly body?: unknown
-  /** Sent as the request body instead of `body`, as it is read. */
-  readonly bodyStream?: Readable
   readonly headers?: Readonly<Record<string, string>>
   /** For the whole exchange; `null` waits as long as the answer lasts. */
   readonly timeout?: number | null
@@ -600,7 +598,12 @@ export class DockerEngine {
   hijack(
     path: string,
     body?: unknown,
-    options: { readonly timeout?: number } = {}
+    options: {
+      readonly headers?: Readonly<Record<string, string | ReadonlyArray<string>>>
+      /** What the connection becomes: `tcp` (raw streams) by default. */
+      readonly protocol?: string
+      readonly timeout?: number
+    } = {}
   ): Effect.Effect<Duplex, DockerEngineError> {
     const operation = `POST ${path.split("?")[0] ?? path}`
     const socketPath = this.socketPath
@@ -609,8 +612,9 @@ export class DockerEngine {
         body === undefined ? undefined : Buffer.from(JSON.stringify(body))
       const call = request({
         headers: {
+          ...(options.headers as Record<string, string | Array<string>>),
           Connection: "Upgrade",
-          Upgrade: "tcp",
+          Upgrade: options.protocol ?? "tcp",
           ...(encoded && {
             "Content-Length": String(encoded.byteLength),
             "Content-Type": "application/json",
@@ -908,12 +912,12 @@ export class DockerEngine {
   }
 
   /**
-   * `POST /build`: sends `context` (a tar) and hands each JSON message of the
-   * build's output to `onMessage`. An error Docker reports in the output
-   * fails the build with its message.
+   * `POST /build`, for a build whose context and Dockerfile a session
+   * serves (see `./buildkit-session.js`), handing each JSON message of its
+   * output to `onMessage`. An error Docker reports in the output fails the
+   * build with its message.
    */
   build(options: {
-    readonly context: Readable
     readonly onMessage: (message: Record<string, unknown>) => void
     readonly parameters: Record<string, boolean | number | string | undefined>
     readonly timeout?: number | null
@@ -938,8 +942,6 @@ export class DockerEngine {
       else options.onMessage(message)
     })
     return this.#exchange({
-      bodyStream: options.context,
-      headers: { "Content-Type": "application/x-tar" },
       method: "POST",
       onData: (chunk) => {
         lines.read(chunk)
@@ -1020,17 +1022,10 @@ export class DockerEngine {
         socketPath,
       })
       let settled = false
-      let bodySent = false
       const settle = (result: Effect.Effect<Buffer, DockerEngineError>) => {
         if (settled) return
         settled = true
         if (timer) clearTimeout(timer)
-        // A body still being sent (such as a build context Docker rejected
-        // early) stops being read, and its connection goes with it.
-        if (exchange.bodyStream && !bodySent) {
-          exchange.bodyStream.destroy()
-          call.destroy()
-        }
         resume(result)
       }
       const reject = (
@@ -1095,25 +1090,11 @@ export class DockerEngine {
       call.on("error", (cause) =>
         fail(transportFailure(cause, socketPath, operation), { cause })
       )
-      const { bodyStream } = exchange
-      if (bodyStream) {
-        bodyStream.once("error", (cause) =>
-          fail(`Relay could not send ${operation}: ${cause.message}`, {
-            cause,
-          })
-        )
-        bodyStream.once("end", () => {
-          bodySent = true
-        })
-        bodyStream.pipe(call)
-      } else {
-        call.end(body)
-      }
+      call.end(body)
       return Effect.sync(() => {
         settled = true
         if (timer) clearTimeout(timer)
         call.destroy()
-        bodyStream?.destroy()
       })
     })
   }

@@ -1,4 +1,3 @@
-import { readdirSync } from "node:fs"
 import { access, mkdir, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 
@@ -335,10 +334,21 @@ describe("apps", () => {
     const data = join(harness.config.dataDirectory, "apps", appId)
     await mkdir(join(data, "src"), { recursive: true })
     await mkdir(join(data, "secrets"), { recursive: true })
+    await mkdir(join(data, "cache", "keep"), { recursive: true })
     await writeFile(join(data, "src", "server.js"), "console.log(1)\n")
     await writeFile(join(data, "secrets", "token.txt"), "do not ship")
     await writeFile(join(data, "debug.log"), "noise")
-    await writeFile(join(data, ".dockerignore"), "secrets\n*.log\n")
+    await writeFile(join(data, "cache", "blob"), "noise")
+    await writeFile(join(data, "cache", "keep", "keep.txt"), "kept")
+    // A file of the app's own named like the Dockerfile Relay used to add.
+    await writeFile(join(data, ".kiln.Dockerfile"), "the app's file")
+    await writeFile(
+      join(data, ".dockerignore"),
+      // A negated class (`[^a]` excludes `secrets` but not `api`), and a
+      // wildcard exception under an excluded directory.
+      "[^a]*\n!src\n!.kiln.Dockerfile\n!api.txt\n*.log\ncache\n!**/keep.txt\n"
+    )
+    await writeFile(join(data, "api.txt"), "kept")
     const dockerfile = 'FROM node:24-alpine\nCOPY . .\nCMD ["node", "src/server.js"]\n'
 
     const app = await deploy(harness, { dockerfile, sourceType: "dockerfile" })
@@ -346,24 +356,23 @@ describe("apps", () => {
     expect(app.deployment).toMatchObject({ state: "succeeded" })
     const [build] = fakeDocker.builds
     expect(build!.dockerfile).toBe(dockerfile)
-    expect(build!.files).toContain("src/server.js")
-    expect(build!.files).not.toContain("secrets/token.txt")
-    expect(build!.files).not.toContain("debug.log")
+    // The Dockerfile isn't part of the context, so `COPY . .` doesn't copy
+    // it, and the app's own files are sent as they are.
+    expect(build!.files).toEqual([
+      ".kiln.Dockerfile",
+      "api.txt",
+      "cache/keep/keep.txt",
+      "src/server.js",
+    ])
     expect(build!.labels).toEqual({ "kiln.app.id": appId })
     const [container] = appContainers()
     expect(container!.image).toBe(build!.tag)
     expect(container!.state.running).toBe(true)
   })
 
-  it("stops sending a build context Docker rejects, closing the files it was reading", async () => {
+  it("closes the build's session when Docker rejects the build", async () => {
     const harness = await createdApp()
-    const data = join(harness.config.dataDirectory, "apps", appId)
-    // Larger than the connection buffers, so it is still being read when
-    // Docker answers.
-    await writeFile(join(data, "large.bin"), Buffer.alloc(8 * 1024 * 1024, 7))
     fakeDocker.buildRejection = "unsupported builder version"
-    const openFiles = () => readdirSync("/dev/fd").length
-    const before = openFiles()
 
     const app = await deploy(harness, {
       dockerfile: "FROM alpine\nCOPY . .\n",
@@ -374,8 +383,33 @@ describe("apps", () => {
       error: "Error response from daemon: unsupported builder version",
       state: "failed",
     })
-    // Files close as their streams finish being destroyed.
-    await vi.waitFor(() => expect(openFiles()).toBeLessThanOrEqual(before))
+    await vi.waitFor(() => expect(fakeDocker.sessionCount()).toBe(0))
+  })
+
+  it("closes a build's session when its deployment is cancelled", async () => {
+    const harness = await createdApp()
+    const build = fakeDocker.hold({ command: "build" })
+    const deploying = harness.apps.deploy(
+      relayDeployAppSchema.parse({
+        appId,
+        config: {
+          ...defaultAppConfig,
+          dockerfile: "FROM alpine\nCOPY . .\n",
+          sourceType: "dockerfile",
+        },
+        name: "Website",
+      })
+    )
+    await build.reached
+    expect(fakeDocker.sessionCount()).toBe(1)
+
+    // Deleting the app cancels its deployment.
+    const deleting = harness.apps.delete({ appId, deleteData: false })
+    await vi.waitFor(() => expect(fakeDocker.sessionCount()).toBe(0))
+    build.release()
+    await deploying
+    await deleting
+    expect(appContainers()).toEqual([])
   })
 
   it("fails a deployment whose build fails, with the build's error", async () => {

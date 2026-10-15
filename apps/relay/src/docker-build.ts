@@ -1,39 +1,41 @@
 /**
- * Image builds over the Engine API: `POST /build` with BuildKit, the build
- * context sent as a tar.
- *
- * Without a BuildKit session (the gRPC channel buildx keeps with the daemon),
- * the daemon reads the context and the Dockerfile from the uploaded tar and
- * applies no `.dockerignore`. So the context is filtered here, with the same
- * pattern rules, and a Dockerfile that isn't in the context is added to the
- * tar. Progress arrives as BuildKit status protobufs and is printed the way
- * `docker build --progress plain` printed it.
+ * Image builds over the Engine API: `POST /build` with BuildKit, the way the
+ * docker CLI ran them, with a session (see `./buildkit-session.js`) serving
+ * the build context and the Dockerfile's directory. BuildKit applies
+ * `.dockerignore` (or `<Dockerfile>.dockerignore`) and keeps the Dockerfile
+ * out of the context, as for the CLI. Progress arrives as BuildKit status
+ * protobufs and is printed the way `docker build --progress plain` printed
+ * it.
  */
-import { createReadStream } from "node:fs"
-import { lstat, readdir, readFile, readlink } from "node:fs/promises"
-import { join, posix } from "node:path"
-import { Readable } from "node:stream"
+import { mkdtemp, rm, writeFile } from "node:fs/promises"
+import { tmpdir } from "node:os"
+import { basename, dirname, isAbsolute, join } from "node:path"
 
 import { Effect, Predicate, Result } from "effect"
-import { pack as createTarPack, type Pack } from "tar-stream"
 
-import { type DockerEngine, DockerEngineError } from "./docker-engine.js"
-
-// Where a Dockerfile from outside the context goes in it.
-export const INJECTED_DOCKERFILE = ".kiln.Dockerfile"
+import { withBuildSession } from "./buildkit-session.js"
+import { withProxyEnvironment } from "./docker-client-config.js"
+import {
+  defaultPlatform,
+  type DockerEngine,
+  DockerEngineError,
+} from "./docker-engine.js"
+import { protobufFields } from "./protobuf.js"
 
 export interface BuildOptions {
   /** The build context directory, as Relay sees it. */
   readonly context: string
   /**
-   * The Dockerfile: a path relative to the context, or its contents when it
-   * isn't in the context.
+   * The Dockerfile: its path (absolute, or relative to the context), or its
+   * contents.
    */
   readonly dockerfile: { readonly path: string } | { readonly content: string }
   readonly tag: string
   readonly labels?: Readonly<Record<string, string>>
   readonly buildArgs?: Readonly<Record<string, string>>
   readonly target?: string
+  /** `--platform`; DOCKER_DEFAULT_PLATFORM, as the CLI's default, if unset. */
+  readonly platform?: string
   readonly noCache?: boolean
   /** Always pulls base images, as `--pull`. */
   readonly pull?: boolean
@@ -46,306 +48,76 @@ export function buildImage(
   engine: DockerEngine,
   options: BuildOptions
 ): Effect.Effect<void, DockerEngineError> {
-  const operation = "POST /build"
-  return Effect.gen(function* () {
-    const dockerfile =
-      "path" in options.dockerfile
-        ? posix.normalize(options.dockerfile.path)
-        : INJECTED_DOCKERFILE
-    if (dockerfile.startsWith("../") || posix.isAbsolute(dockerfile)) {
-      return yield* new DockerEngineError({
-        operation,
-        reason: `The Dockerfile ${dockerfile} is outside the build context`,
-      })
-    }
-    const ignore = yield* Effect.tryPromise({
-      try: () => readIgnoreFile(options.context),
-      catch: (cause) =>
-        new DockerEngineError({
-          cause,
-          operation,
-          reason: `Docker could not read the build context's .dockerignore: ${cause instanceof Error ? cause.message : String(cause)}`,
-        }),
-    })
-    const progress = buildProgress(options.onLine)
-    yield* engine.build({
-      context: contextArchive(options.context, {
-        ignore,
-        injected:
-          "content" in options.dockerfile
-            ? { content: options.dockerfile.content, name: INJECTED_DOCKERFILE }
-            : undefined,
-        keep: [dockerfile, ".dockerignore"],
-      }),
-      onMessage: progress.message,
-      parameters: {
-        buildargs: JSON.stringify(options.buildArgs ?? {}),
-        dockerfile,
-        labels: JSON.stringify(options.labels ?? {}),
-        nocache: options.noCache ?? false,
-        pull: options.pull ?? false,
-        rm: true,
-        t: options.tag,
-        target: options.target,
-        version: "2",
-      },
-      timeout: options.timeout,
-    })
-  })
-}
-
-// ----------------------------------------------------------- .dockerignore
-
-interface IgnorePattern {
-  readonly exclusion: boolean
-  readonly regex: RegExp
-  readonly text: string
-}
-
-/** The context's `.dockerignore` patterns, read as BuildKit reads them. */
-async function readIgnoreFile(
-  context: string
-): Promise<ReadonlyArray<IgnorePattern>> {
-  const text = await Effect.runPromise(
-    Effect.tryPromise(() => readFile(join(context, ".dockerignore"), "utf8")).pipe(
-      Effect.catch((cause) =>
-        Predicate.hasProperty(cause, "cause") &&
-        Predicate.hasProperty(cause.cause, "code") &&
-        cause.cause.code === "ENOENT"
-          ? Effect.succeed("")
-          : Effect.fail(cause)
+  const progress = buildProgress(options.onLine)
+  return withDockerfile(options.dockerfile, options.context, (dockerfile) =>
+    Effect.gen(function* () {
+      // The client config's proxies, as the CLI added them, under any
+      // argument the build sets itself.
+      const buildArgs = yield* withProxyEnvironment(options.buildArgs)
+      yield* withBuildSession(
+        engine,
+        { context: options.context, dockerfile: dirname(dockerfile) },
+        (session) =>
+          engine.build({
+            onMessage: progress.message,
+            parameters: {
+              buildargs: JSON.stringify(buildArgs ?? {}),
+              dockerfile: basename(dockerfile),
+              labels: JSON.stringify(options.labels ?? {}),
+              nocache: options.noCache ?? false,
+              platform: options.platform || defaultPlatform(),
+              pull: options.pull ?? false,
+              remote: "client-session",
+              rm: true,
+              session,
+              t: options.tag,
+              target: options.target,
+              version: "2",
+            },
+            timeout: options.timeout,
+          })
       )
-    )
-  )
-  return ignorePatterns(text)
-}
-
-function ignorePatterns(text: string): Array<IgnorePattern> {
-  const patterns: Array<IgnorePattern> = []
-  for (const [index, raw] of text.split(/\r?\n/u).entries()) {
-    let line = index === 0 ? raw.replace(/^﻿/u, "") : raw
-    if (line.startsWith("#")) continue
-    line = line.trim()
-    if (!line) continue
-    const exclusion = line.startsWith("!")
-    if (exclusion) line = line.slice(1).trim()
-    if (line) {
-      line = posix.normalize(line).replace(/\/+$/u, "") || "/"
-      if (line.length > 1 && line.startsWith("/")) line = line.slice(1)
-    }
-    if (!line) continue
-    patterns.push({ exclusion, regex: patternRegex(line), text: line })
-  }
-  return patterns
-}
-
-// moby/patternmatcher's translation of a pattern to a regular expression.
-function patternRegex(pattern: string): RegExp {
-  let source = "^"
-  const characters = [...pattern]
-  for (let index = 0; index < characters.length; index += 1) {
-    const character = characters[index]!
-    if (character === "*") {
-      if (characters[index + 1] === "*") {
-        index += 1
-        // `**/` is `**`.
-        if (characters[index + 1] === "/") index += 1
-        source += index + 1 >= characters.length ? ".*" : "(.*/)?"
-      } else {
-        source += "[^/]*"
-      }
-    } else if (character === "?") {
-      source += "[^/]"
-    } else if (character === "\\") {
-      const next = characters[index + 1]
-      if (next === undefined) source += "\\\\"
-      else {
-        source += escapeRegex(next)
-        index += 1
-      }
-    } else if (character === "[" || character === "]") {
-      source += character
-    } else {
-      source += escapeRegex(character)
-    }
-  }
-  return new RegExp(`${source}$`, "u")
-}
-
-function escapeRegex(character: string): string {
-  return /[.+()|{}$^\\]/u.test(character) ? `\\${character}` : character
-}
-
-/**
- * Whether `path` (relative, with `/`) is ignored: by the last pattern that
- * matches it or one of its parent directories, as patternmatcher's
- * `MatchesOrParentMatches`.
- */
-function isIgnored(
-  patterns: ReadonlyArray<IgnorePattern>,
-  path: string
-): boolean {
-  let ignored = false
-  const parents = path.split("/").slice(0, -1)
-  for (const pattern of patterns) {
-    if (pattern.exclusion !== ignored) continue
-    let match = pattern.regex.test(path)
-    for (let depth = 1; !match && depth <= parents.length; depth += 1) {
-      match = pattern.regex.test(parents.slice(0, depth).join("/"))
-    }
-    if (match) ignored = !pattern.exclusion
-  }
-  return ignored
-}
-
-// --------------------------------------------------------------- context
-
-/**
- * The context as a tar, written as it is read: regular files, directories,
- * and symlinks, owned by root as the CLI sends them, without ignored paths.
- * An ignored directory is skipped whole unless an exception could include
- * something in it.
- */
-function contextArchive(
-  directory: string,
-  options: {
-    readonly ignore: ReadonlyArray<IgnorePattern>
-    readonly injected?: { readonly content: string; readonly name: string }
-    /** Paths sent even when ignored, as the CLI does for its build files. */
-    readonly keep: ReadonlyArray<string>
-  }
-): Readable {
-  const archive = createTarPack()
-  const exceptions = options.ignore.filter((pattern) => pattern.exclusion)
-  const write = async () => {
-    const walk = async (relative: string): Promise<void> => {
-      const entries = await readdir(join(directory, relative), {
-        withFileTypes: true,
-      })
-      entries.sort((left, right) => (left.name < right.name ? -1 : 1))
-      for (const entry of entries) {
-        const path = relative ? `${relative}/${entry.name}` : entry.name
-        if (options.injected && path === options.injected.name) continue
-        const ignored =
-          isIgnored(options.ignore, path) && !options.keep.includes(path)
-        if (ignored && !entry.isDirectory()) continue
-        if (
-          ignored &&
-          !exceptions.some((pattern) =>
-            `${pattern.text}/`.startsWith(`${path}/`)
-          )
-        ) {
-          continue
-        }
-        await addEntry(archive, directory, path, !ignored)
-        if (entry.isDirectory()) await walk(path)
-      }
-    }
-    await walk("")
-    if (options.injected) {
-      await entryWritten(archive, {
-        content: Buffer.from(options.injected.content),
-        header: {
-          gid: 0,
-          mode: 0o644,
-          mtime: new Date(0),
-          name: options.injected.name,
-          type: "file",
-          uid: 0,
-        },
-      })
-    }
-    archive.finalize()
-  }
-  void Effect.runPromise(
-    Effect.tryPromise(write).pipe(
-      Effect.catch((cause) =>
-        Effect.sync(() => {
-          archive.destroy(
-            cause.cause instanceof Error ? cause.cause : new Error(String(cause))
-          )
-        })
-      )
-    )
-  )
-  // A Node.js stream, which pipes into a request; it reads the archive as
-  // the request takes it. Closing it, as a cancelled or rejected build does,
-  // stops the archive and whatever file it was reading.
-  const readable = Readable.from(archive)
-  readable.once("close", () => archive.destroy())
-  return readable
-}
-
-async function addEntry(
-  archive: Pack,
-  directory: string,
-  path: string,
-  included: boolean
-): Promise<void> {
-  const absolute = join(directory, path)
-  const stats = await lstat(absolute)
-  const header = {
-    gid: 0,
-    mode: stats.mode & 0o7777,
-    mtime: stats.mtime,
-    name: path,
-    uid: 0,
-  }
-  if (stats.isDirectory()) {
-    if (included) {
-      await entryWritten(archive, { header: { ...header, type: "directory" } })
-    }
-  } else if (stats.isSymbolicLink()) {
-    await entryWritten(archive, {
-      header: {
-        ...header,
-        linkname: await readlink(absolute),
-        type: "symlink",
-      },
     })
-  } else if (stats.isFile()) {
-    await entryWritten(archive, {
-      header: { ...header, size: stats.size, type: "file" },
-      source: createReadStream(absolute),
-    })
-  }
-  // Sockets, pipes, and devices aren't part of a build context.
+  )
 }
 
-function entryWritten(
-  archive: Pack,
-  entry: {
-    readonly content?: Buffer
-    readonly header: Parameters<Pack["entry"]>[0]
-    readonly source?: Readable
+// Runs `use` with the Dockerfile's path. Contents are written to a
+// directory of their own for the build, so the session serves nothing else
+// from it.
+function withDockerfile<A>(
+  dockerfile: BuildOptions["dockerfile"],
+  context: string,
+  use: (path: string) => Effect.Effect<A, DockerEngineError>
+): Effect.Effect<A, DockerEngineError> {
+  if ("path" in dockerfile) {
+    return use(
+      isAbsolute(dockerfile.path)
+        ? dockerfile.path
+        : join(context, dockerfile.path)
+    )
   }
-): Promise<void> {
-  return new Promise((resolve, reject) => {
-    let finished = false
-    const closed = () => done(new Error("The build context was closed"))
-    const done = (error?: Error | null) => {
-      if (finished) return
-      finished = true
-      archive.off("close", closed)
-      if (error) {
-        // The file being read is closed with the archive.
-        entry.source?.destroy()
-        reject(error)
-      } else resolve()
-    }
-    if (archive.destroyed) {
-      done(new Error("The build context was closed"))
-      return
-    }
-    archive.once("close", closed)
-    const sink = entry.content
-      ? archive.entry(entry.header, entry.content, done)
-      : archive.entry(entry.header, done)
-    if (entry.source) {
-      entry.source.once("error", done)
-      entry.source.pipe(sink)
-    }
-  })
+  const failed = (cause: unknown) =>
+    new DockerEngineError({
+      cause,
+      operation: "POST /build",
+      reason: `Relay could not write the Dockerfile: ${cause instanceof Error ? cause.message : String(cause)}`,
+    })
+  return Effect.acquireUseRelease(
+    Effect.tryPromise({
+      try: () => mkdtemp(join(tmpdir(), "kiln-build-")),
+      catch: failed,
+    }),
+    (directory) =>
+      Effect.tryPromise({
+        try: () =>
+          writeFile(join(directory, "Dockerfile"), dockerfile.content, {
+            mode: 0o600,
+          }),
+        catch: failed,
+      }).pipe(Effect.andThen(use(join(directory, "Dockerfile")))),
+    (directory) =>
+      Effect.promise(() => rm(directory, { force: true, recursive: true }))
+  )
 }
 
 // -------------------------------------------------------------- progress
@@ -369,14 +141,20 @@ function buildProgress(onLine: ((line: string) => void) | undefined) {
   const vertexFor = (digest: string) => {
     let vertex = vertices.get(digest)
     if (!vertex) {
-      vertex = { completed: false, digest, name: "", number: null, started: null }
+      vertex = {
+        completed: false,
+        digest,
+        name: "",
+        number: null,
+        started: null,
+      }
       vertices.set(digest, vertex)
     }
     return vertex
   }
   const announce = (vertex: Vertex) => {
     if (vertex.number !== null) return vertex.number
-    vertex.number = (numbered += 1)
+    vertex.number = numbered += 1
     print(`#${vertex.number} ${vertex.name}`)
     return vertex.number
   }
@@ -388,11 +166,16 @@ function buildProgress(onLine: ((line: string) => void) | undefined) {
         }
         return
       }
-      if (message.id !== "moby.buildkit.trace" || !Predicate.isString(message.aux)) {
+      if (
+        message.id !== "moby.buildkit.trace" ||
+        !Predicate.isString(message.aux)
+      ) {
         return
       }
       const status = Result.getOrUndefined(
-        Result.try(() => decodeStatus(Buffer.from(message.aux as string, "base64")))
+        Result.try(() =>
+          decodeStatus(Buffer.from(message.aux as string, "base64"))
+        )
       )
       if (!status) return
       for (const update of status.vertexes) {
@@ -408,7 +191,8 @@ function buildProgress(onLine: ((line: string) => void) | undefined) {
         if (update.error) print(`#${number} ERROR: ${update.error}`)
         else if (update.cached) print(`#${number} CACHED`)
         else {
-          const seconds = (update.completed - (vertex.started ?? update.completed)) / 1_000
+          const seconds =
+            (update.completed - (vertex.started ?? update.completed)) / 1_000
           print(`#${number} DONE ${seconds.toFixed(1)}s`)
         }
       }
@@ -502,12 +286,17 @@ function decodeStatus(buffer: Buffer): Status {
         started: null as number | null,
       }
       for (const [inner, part] of protobufFields(value)) {
-        if (inner === 1 && Buffer.isBuffer(part)) vertex.digest = part.toString("utf8")
-        else if (inner === 3 && Buffer.isBuffer(part)) vertex.name = part.toString("utf8")
+        if (inner === 1 && Buffer.isBuffer(part))
+          vertex.digest = part.toString("utf8")
+        else if (inner === 3 && Buffer.isBuffer(part))
+          vertex.name = part.toString("utf8")
         else if (inner === 4) vertex.cached = part === 1
-        else if (inner === 5 && Buffer.isBuffer(part)) vertex.started = timestamp(part)
-        else if (inner === 6 && Buffer.isBuffer(part)) vertex.completed = timestamp(part)
-        else if (inner === 7 && Buffer.isBuffer(part)) vertex.error = part.toString("utf8")
+        else if (inner === 5 && Buffer.isBuffer(part))
+          vertex.started = timestamp(part)
+        else if (inner === 6 && Buffer.isBuffer(part))
+          vertex.completed = timestamp(part)
+        else if (inner === 7 && Buffer.isBuffer(part))
+          vertex.error = part.toString("utf8")
       }
       status.vertexes.push(vertex)
     } else if (field === 2) {
@@ -519,26 +308,34 @@ function decodeStatus(buffer: Buffer): Status {
         vertex: "",
       }
       for (const [inner, part] of protobufFields(value)) {
-        if (inner === 1 && Buffer.isBuffer(part)) update.id = part.toString("utf8")
-        else if (inner === 2 && Buffer.isBuffer(part)) update.vertex = part.toString("utf8")
+        if (inner === 1 && Buffer.isBuffer(part))
+          update.id = part.toString("utf8")
+        else if (inner === 2 && Buffer.isBuffer(part))
+          update.vertex = part.toString("utf8")
         else if (inner === 4 && typeof part === "number") update.current = part
         else if (inner === 5 && typeof part === "number") update.total = part
-        else if (inner === 8 && Buffer.isBuffer(part)) update.completed = timestamp(part)
+        else if (inner === 8 && Buffer.isBuffer(part))
+          update.completed = timestamp(part)
       }
       status.statuses.push(update)
     } else if (field === 3) {
       const log = { message: "", timestamp: 0, vertex: "" }
       for (const [inner, part] of protobufFields(value)) {
-        if (inner === 1 && Buffer.isBuffer(part)) log.vertex = part.toString("utf8")
-        else if (inner === 2 && Buffer.isBuffer(part)) log.timestamp = timestamp(part)
-        else if (inner === 4 && Buffer.isBuffer(part)) log.message = part.toString("utf8")
+        if (inner === 1 && Buffer.isBuffer(part))
+          log.vertex = part.toString("utf8")
+        else if (inner === 2 && Buffer.isBuffer(part))
+          log.timestamp = timestamp(part)
+        else if (inner === 4 && Buffer.isBuffer(part))
+          log.message = part.toString("utf8")
       }
       status.logs.push(log)
     } else if (field === 4) {
       const warning = { short: "", vertex: "" }
       for (const [inner, part] of protobufFields(value)) {
-        if (inner === 1 && Buffer.isBuffer(part)) warning.vertex = part.toString("utf8")
-        else if (inner === 3 && Buffer.isBuffer(part)) warning.short = part.toString("utf8")
+        if (inner === 1 && Buffer.isBuffer(part))
+          warning.vertex = part.toString("utf8")
+        else if (inner === 3 && Buffer.isBuffer(part))
+          warning.short = part.toString("utf8")
       }
       status.warnings.push(warning)
     }
@@ -555,38 +352,4 @@ function timestamp(buffer: Buffer): number {
     if (field === 2 && typeof value === "number") nanos = value
   }
   return seconds * 1_000 + nanos / 1_000_000
-}
-
-/** A message's fields: varints as numbers, length-delimited as buffers. */
-function* protobufFields(
-  buffer: Buffer
-): Generator<readonly [number, number | Buffer]> {
-  let offset = 0
-  const varint = () => {
-    let value = 0
-    let scale = 1
-    for (;;) {
-      const byte = buffer[offset]
-      if (byte === undefined) throw new Error("Truncated protobuf varint")
-      offset += 1
-      value += (byte & 0x7f) * scale
-      if ((byte & 0x80) === 0) return value
-      scale *= 128
-    }
-  }
-  while (offset < buffer.length) {
-    const key = varint()
-    const field = Math.floor(key / 8)
-    const wire = key % 8
-    if (wire === 0) yield [field, varint()]
-    else if (wire === 2) {
-      const length = varint()
-      const value = buffer.subarray(offset, offset + length)
-      if (value.length !== length) throw new Error("Truncated protobuf field")
-      offset += length
-      yield [field, value]
-    } else if (wire === 1) offset += 8
-    else if (wire === 5) offset += 4
-    else throw new Error(`Unsupported protobuf wire type ${wire}`)
-  }
 }

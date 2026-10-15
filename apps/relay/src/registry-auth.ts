@@ -1,5 +1,5 @@
 /**
- * Registry credentials for pulls, from where the CLI read them: the
+ * Registry credentials for pulls and builds, from where the CLI read them: the
  * `DOCKER_AUTH_CONFIG` environment variable first, then the Docker client
  * config, `$DOCKER_CONFIG/config.json` or `~/.docker/config.json`.
  *
@@ -31,17 +31,41 @@ interface AuthConfig {
 export function registryAuthHeader(
   reference: ImageReference
 ): Effect.Effect<string | undefined> {
-  const server = registryServer(reference)
+  return registryAuthConfig(registryServer(reference)).pipe(
+    Effect.map((auth) => auth && encodeAuthConfig(auth))
+  )
+}
+
+/**
+ * What a build session answers BuildKit asking for a registry's
+ * credentials (to pull base images), as the CLI's auth provider did: an
+ * identity token as the secret, or the username and password; empty for a
+ * registry it has none for.
+ */
+export function registryCredentials(
+  host: string
+): Effect.Effect<{ readonly secret: string; readonly username: string }> {
+  const server = host === "registry-1.docker.io" ? DOCKER_HUB_SERVER : host
+  return registryAuthConfig(server).pipe(
+    Effect.map((auth) =>
+      auth?.identitytoken
+        ? { secret: auth.identitytoken, username: "" }
+        : { secret: auth?.password ?? "", username: auth?.username ?? "" }
+    )
+  )
+}
+
+// `DOCKER_AUTH_CONFIG`'s credentials for `server`, else the config file's.
+function registryAuthConfig(
+  server: string
+): Effect.Effect<AuthConfig | undefined> {
   const fromEnvironment = authConfig(
     parseJson(process.env.DOCKER_AUTH_CONFIG ?? ""),
     server
   )
-  if (fromEnvironment) return Effect.succeed(encodeAuthConfig(fromEnvironment))
+  if (fromEnvironment) return Effect.succeed(fromEnvironment)
   return dockerClientConfig().pipe(
-    Effect.map((config) => {
-      const auth = authConfig(config, server)
-      return auth && encodeAuthConfig(auth)
-    })
+    Effect.map((config) => authConfig(config, server))
   )
 }
 

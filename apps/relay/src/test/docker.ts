@@ -20,19 +20,21 @@ import {
   type IncomingMessage,
   type ServerResponse,
 } from "node:http"
+import { type ClientHttp2Session, connect as connectHttp2 } from "node:http2"
 import type { Duplex } from "node:stream"
 import { tmpdir } from "node:os"
 import { join, posix } from "node:path"
 
 import { Effect, Result } from "effect"
-import { extract as createTarExtractor } from "tar-stream"
 
 import type { CommandOptions, CommandResult } from "../command.js"
 import {
   normalizedReference,
   parseImageReference,
 } from "../docker-reference.js"
+import { cleanPath } from "../docker-patterns.js"
 import { CommandError } from "../effect/errors.js"
+import { protobufFields, protobufMessage } from "../protobuf.js"
 
 export type PortBindings = Record<
   string,
@@ -208,12 +210,15 @@ export class FakeDocker {
    * one-off container (`run --rm -i`), its image.
    */
   readonly streamErrors = new Map<string, string>()
-  /** Builds, as Docker received them: their context's files and options. */
+  /**
+   * Builds, as BuildKit read them through their session: the Dockerfile,
+   * the context's regular files (after its ignore file), and the options.
+   */
   readonly builds: Array<{
     readonly buildArgs: Record<string, string>
-    /** The Dockerfile Docker read from the context. */
     readonly dockerfile: string
     readonly files: Array<string>
+    readonly platform: string | null
     readonly labels: Record<string, string>
     readonly tag: string
     readonly target: string | null
@@ -221,8 +226,8 @@ export class FakeDocker {
   /** Set to fail the next builds with BuildKit's message. */
   buildFailure: string | null = null
   /**
-   * Set to reject builds before reading their context, as the daemon does a
-   * request it can't run, with this message.
+   * Set to reject builds before reading through their session, as the
+   * daemon does a request it can't run, with this message.
    */
   buildRejection: string | null = null
   /** Images whose registry cannot be reached; pulling them fails. */
@@ -255,6 +260,8 @@ export class FakeDocker {
   #lastActivity = 0
   #lastTimestamp = 0
   #socketPath: string | null = null
+  /** Open build sessions, by ID: BuildKit's client for each. */
+  readonly #sessions = new Map<string, ClientHttp2Session>()
   readonly #execSockets = new Map<string, Duplex>()
   /** `POST /containers/{id}/wait` requests, resolved as containers exit. */
   readonly #exitWaiters = new Map<string, Array<(exitCode: number) => void>>()
@@ -292,6 +299,8 @@ export class FakeDocker {
    */
   reset(): void {
     const unmodelled = this.#unmodelled
+    for (const session of this.#sessions.values()) session.destroy()
+    this.#sessions.clear()
     this.containers.clear()
     this.execs.clear()
     this.execGreeting = ""
@@ -452,6 +461,11 @@ export class FakeDocker {
     container.state.oomKilled = exit.oomKilled ?? false
     container.state.finishedAt = this.#timestamp()
     this.#endExecs(container)
+  }
+
+  /** How many build sessions clients have open with the daemon. */
+  sessionCount(): number {
+    return this.#sessions.size
   }
 
   /** How many requests are following containers' logs. */
@@ -1157,12 +1171,26 @@ export class FakeDocker {
     try {
       const url = new URL(request.url ?? "/", "http://docker")
       if (request.method === "POST" && url.pathname === "/build") {
-        if (this.buildRejection !== null) {
+        await readBody(request)
+        const session = this.#sessions.get(url.searchParams.get("session") ?? "")
+        const rejection =
+          this.buildRejection ??
+          (url.searchParams.get("remote") === "client-session" && session
+            ? null
+            : "no active session")
+        if (rejection !== null) {
           response.writeHead(400, { "Content-Type": "application/json" })
-          response.end(JSON.stringify({ message: this.buildRejection }))
+          response.end(JSON.stringify({ message: rejection }))
           return
         }
-        this.#build(url, await readContext(request)).write(response)
+        await this.#checkpoint("build", url.searchParams.get("t") ?? "")
+        this.#build(
+          url,
+          await readSessionBuild(
+            session!,
+            url.searchParams.get("dockerfile") || "Dockerfile"
+          )
+        ).write(response)
         return
       }
       const body = await readBody(request)
@@ -1590,26 +1618,33 @@ export class FakeDocker {
   }
 
   /**
-   * `POST /build`: tags an image from the uploaded context, reporting a
-   * build failure within the output, as BuildKit does after answering 200.
+   * `POST /build`: tags an image from what BuildKit read through the build's
+   * session, reporting a build failure within the output, as BuildKit does
+   * after answering 200.
    */
-  #build(url: URL, context: Map<string, Buffer>): Extract<ApiAnswer, { kind: "stream" }> {
+  #build(
+    url: URL,
+    read: SessionBuild | { readonly failure: string }
+  ): Extract<ApiAnswer, { kind: "stream" }> {
     const tag = url.searchParams.get("t") ?? ""
     const dockerfilePath = url.searchParams.get("dockerfile") ?? "Dockerfile"
-    const dockerfile = context.get(dockerfilePath)?.toString("utf8")
+    const dockerfile = "failure" in read ? undefined : read.dockerfile
     const labels = JSON.parse(url.searchParams.get("labels") ?? "{}") as Record<string, string>
     this.builds.push({
       buildArgs: JSON.parse(url.searchParams.get("buildargs") ?? "{}") as Record<string, string>,
       dockerfile: dockerfile ?? "",
-      files: [...context.keys()].sort(),
+      files: "failure" in read ? [] : [...read.files.keys()].sort(),
       labels,
+      platform: url.searchParams.get("platform"),
       tag,
       target: url.searchParams.get("target"),
     })
     const failure =
-      dockerfile === undefined
-        ? `failed to read dockerfile: open ${dockerfilePath}: no such file or directory`
-        : this.buildFailure
+      "failure" in read
+        ? read.failure
+        : dockerfile === undefined
+          ? `failed to read dockerfile: open ${dockerfilePath}: no such file or directory`
+          : this.buildFailure
     if (failure === null) this.images.set(tag, labels)
     return {
       kind: "stream",
@@ -1797,6 +1832,23 @@ export class FakeDocker {
 
   #attach(request: IncomingMessage, socket: Duplex, head: Buffer): void {
     const url = new URL(request.url ?? "/", "http://docker")
+    if (url.pathname === "/session") {
+      // The daemon becomes the client of the Relay's gRPC server.
+      const id = String(request.headers["x-docker-expose-session-uuid"] ?? "")
+      socket.write(
+        "HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: h2c\r\n\r\n"
+      )
+      if (head.length > 0) socket.unshift(head)
+      const session = connectHttp2("http://buildkit", {
+        createConnection: () => socket,
+      })
+      session.on("error", () => undefined)
+      this.#sessions.set(id, session)
+      session.once("close", () => this.#sessions.delete(id))
+      // The session ends when the Relay hangs up, as the daemon's does.
+      socket.once("end", () => session.destroy())
+      return
+    }
     const execStart = /^\/exec\/([^/]+)\/start$/u.exec(url.pathname)?.[1]
     if (execStart) {
       this.#startExec(decodeURIComponent(execStart), request, socket, head)
@@ -2286,23 +2338,194 @@ function unixMilliseconds(value: string): number {
   return Number(seconds) * 1_000 + Number(fraction.padEnd(9, "0").slice(0, 3))
 }
 
-/** A build context tar's regular files, by path. */
-function readContext(request: IncomingMessage): Promise<Map<string, Buffer>> {
-  return new Promise((resolve, reject) => {
-    const files = new Map<string, Buffer>()
-    const extractor = createTarExtractor()
-    extractor.on("entry", (header, stream, next) => {
-      const chunks: Array<Buffer> = []
-      stream.on("data", (chunk) => chunks.push(chunk as Buffer))
-      stream.on("end", () => {
-        if (header.type === "file") files.set(header.name, Buffer.concat(chunks))
-        next()
-      })
-      stream.resume()
+interface SessionBuild {
+  readonly dockerfile: string | undefined
+  /** The context's regular files, by path. */
+  readonly files: Map<string, Buffer>
+}
+
+/**
+ * What BuildKit's Dockerfile frontend reads through a build session: the
+ * Dockerfile (and `<Dockerfile>.dockerignore`) from the Dockerfile's
+ * directory, the context's `.dockerignore` when there's no such file, then
+ * the context with its patterns excluded.
+ */
+async function readSessionBuild(
+  session: ClientHttp2Session,
+  filename: string
+): Promise<SessionBuild | { readonly failure: string }> {
+  const read = async (): Promise<SessionBuild> => {
+    const lowercase =
+      posix.basename(filename) === "Dockerfile"
+        ? [posix.join(posix.dirname(filename), "dockerfile")]
+        : []
+    const definition = await syncDirectory(session, {
+      "dir-name": ["dockerfile"],
+      followpaths: [filename, `${filename}.dockerignore`, ...lowercase],
     })
-    extractor.on("finish", () => resolve(files))
-    extractor.on("error", reject)
-    request.pipe(extractor)
+    const dockerfile =
+      definition.get(filename) ??
+      (lowercase[0] === undefined ? undefined : definition.get(lowercase[0]))
+    const ignore =
+      definition.get(`${filename}.dockerignore`) ??
+      (
+        await syncDirectory(session, {
+          "dir-name": ["context"],
+          followpaths: [".dockerignore"],
+        })
+      ).get(".dockerignore")
+    const excludes = ignore ? ignorePatterns(ignore.toString("utf8")) : []
+    const files = await syncDirectory(session, {
+      "dir-name": ["context"],
+      ...(excludes.length > 0 && { "exclude-patterns": excludes }),
+    })
+    return { dockerfile: dockerfile?.toString("utf8"), files }
+  }
+  return Effect.runPromise(
+    Effect.tryPromise(read).pipe(
+      Effect.catch((cause) =>
+        Effect.succeed({
+          failure: `failed to solve: ${cause.cause instanceof Error ? cause.cause.message : String(cause)}`,
+        })
+      )
+    )
+  )
+}
+
+// moby/patternmatcher's ignorefile.ReadAll.
+function ignorePatterns(text: string): Array<string> {
+  const patterns: Array<string> = []
+  for (const [index, raw] of text.split("\n").entries()) {
+    const line = (index === 0 ? raw.replace(/^﻿/u, "") : raw).replace(/\r$/u, "")
+    if (line.startsWith("#")) continue
+    let pattern = line.trim()
+    if (!pattern) continue
+    const invert = pattern.startsWith("!")
+    if (invert) pattern = pattern.slice(1).trim()
+    if (pattern) {
+      pattern = cleanPath(pattern)
+      if (pattern.length > 1 && pattern.startsWith("/")) pattern = pattern.slice(1)
+    }
+    patterns.push(invert ? `!${pattern}` : pattern)
+  }
+  return patterns
+}
+
+// Go's os.FileMode type bits, of fsutil's stats.
+const FILE_MODE_TYPE = 2 ** 31 + 2 ** 27 + 2 ** 26 + 2 ** 25 + 2 ** 24 + 2 ** 21 + 2 ** 19
+
+/**
+ * A directory through the session's FileSync, as fsutil's receiver reads
+ * it: every stat, then each regular file it asks for, until it finishes.
+ */
+function syncDirectory(
+  session: ClientHttp2Session,
+  metadata: Record<string, ReadonlyArray<string>>
+): Promise<Map<string, Buffer>> {
+  return new Promise((resolve, reject) => {
+    const headers: Record<string, string | Array<string>> = {
+      ":method": "POST",
+      ":path": "/moby.filesync.v1.FileSync/DiffCopy",
+      "content-type": "application/grpc",
+      te: "trailers",
+    }
+    for (const [key, values] of Object.entries(metadata)) {
+      if (values.some((value) => /[^\x20-\x7e]/u.test(value))) {
+        headers[key] = values.map((value) => encodeURIComponent(value))
+        headers[`${key}-encoded`] = "1"
+      } else {
+        headers[key] = [...values]
+      }
+    }
+    const stream = session.request(headers)
+    const write = (message: Buffer) => {
+      const prefix = Buffer.alloc(5)
+      prefix.writeUInt32BE(message.length, 1)
+      stream.write(Buffer.concat([prefix, message]))
+    }
+    const requested = new Map<number, string>()
+    const contents = new Map<string, Array<Buffer>>()
+    let index = 0
+    let pending = 0
+    let statsDone = false
+    let finished = false
+    let failure: Error | undefined
+    const finishIfDone = () => {
+      if (!statsDone || pending > 0 || finished) return
+      finished = true
+      write(protobufMessage([[1, 3]]))
+    }
+    let buffered = Buffer.alloc(0)
+    stream.on("data", (chunk: Buffer) => {
+      buffered = Buffer.concat([buffered, chunk])
+      while (buffered.length >= 5 && buffered.length >= 5 + buffered.readUInt32BE(1)) {
+        const message = buffered.subarray(5, 5 + buffered.readUInt32BE(1))
+        buffered = buffered.subarray(5 + message.length)
+        let type = 0
+        let id = 0
+        let data: Buffer | undefined
+        let stat: Buffer | undefined
+        for (const [field, value] of protobufFields(message)) {
+          if (field === 1 && typeof value === "number") type = value
+          if (field === 2 && Buffer.isBuffer(value)) stat = value
+          if (field === 3 && typeof value === "number") id = value
+          if (field === 4 && Buffer.isBuffer(value)) data = value
+        }
+        if (type === 0 && !stat) {
+          statsDone = true
+          finishIfDone()
+        } else if (type === 0 && stat) {
+          let path = ""
+          let mode = 0
+          let linkname = ""
+          for (const [field, value] of protobufFields(stat)) {
+            if (field === 1 && Buffer.isBuffer(value)) path = value.toString("utf8")
+            if (field === 2 && typeof value === "number") mode = value
+            if (field === 7 && Buffer.isBuffer(value)) linkname = value.toString("utf8")
+          }
+          if ((mode & FILE_MODE_TYPE) === 0 && !linkname) {
+            requested.set(index, path)
+            contents.set(path, [])
+            pending += 1
+            write(protobufMessage([[1, 1], [3, index]]))
+          }
+          index += 1
+        } else if (type === 2) {
+          const path = requested.get(id)
+          if (path === undefined) continue
+          if (data?.length) contents.get(path)!.push(data)
+          else {
+            pending -= 1
+            finishIfDone()
+          }
+        } else if (type === 3) {
+          stream.end()
+        } else if (type === 4) {
+          failure = new Error(data?.toString("utf8") ?? "error from sender")
+        }
+      }
+    })
+    stream.on("trailers", (trailers) => {
+      const status = trailers["grpc-status"]
+      if (status !== undefined && status !== "0") {
+        failure ??= new Error(
+          decodeURIComponent(String(trailers["grpc-message"] ?? `grpc status ${status}`))
+        )
+      }
+    })
+    stream.on("error", (cause) => {
+      failure ??= cause
+    })
+    stream.on("close", () => {
+      if (failure) reject(failure)
+      else {
+        resolve(
+          new Map(
+            [...contents].map(([path, chunks]) => [path, Buffer.concat(chunks)])
+          )
+        )
+      }
+    })
   })
 }
 
