@@ -6,6 +6,7 @@ import {
   useSuspenseQuery,
 } from "@tanstack/react-query"
 import { Link } from "@tanstack/react-router"
+import { appTailscaleMember } from "@workspace/contracts"
 import {
   CircleAlert,
   Copy,
@@ -83,7 +84,7 @@ import {
   showTailscaleOperationProgress,
   showTailscaleOperationSuccess,
   tailscaleOperationToastId,
-  type TailscaleOperation,
+  type TailscaleOperationToast,
 } from "@/lib/tailscale-operation-toasts"
 import {
   saveTailscaleStack,
@@ -1168,13 +1169,13 @@ function useStackMembershipMutation() {
 function membershipOperationToast(
   stack: TailscaleStackOverview,
   bindings: Array<StackBinding>
-) {
+): TailscaleOperationToast {
   const currentBindingKeys = new Set(stack.bindings.map(stackBindingKey))
   const nextBindingKeys = new Set(bindings.map(stackBindingKey))
-  const added = bindings.some(
+  const added = bindings.find(
     (binding) => !currentBindingKeys.has(stackBindingKey(binding))
   )
-  const removed = stack.bindings.some(
+  const removed = stack.bindings.find(
     (binding) => !nextBindingKeys.has(stackBindingKey(binding))
   )
   const deployedRelayIds = new Set(
@@ -1186,7 +1187,7 @@ function membershipOperationToast(
       newRelayIds.add(relayId)
     }
   }
-  const operation: TailscaleOperation =
+  const operation: TailscaleOperationToast["operation"] =
     newRelayIds.size > 0
       ? "install"
       : added
@@ -1194,9 +1195,14 @@ function membershipOperationToast(
         : removed
           ? "disconnect"
           : "update"
+  const changedBinding = added ?? removed
 
   return {
     id: tailscaleOperationToastId(stack.id),
+    memberKind:
+      changedBinding && appTailscaleMember(changedBinding.instanceId)
+        ? "app"
+        : "server",
     networkName: stack.name,
     nodeCount: operation === "install" ? newRelayIds.size : undefined,
     operation,

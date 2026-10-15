@@ -2,8 +2,9 @@ import { showToast } from "@workspace/ui/components/sonner"
 
 export type TailscaleOperation = "connect" | "disconnect" | "install" | "update"
 
-interface TailscaleOperationToast {
+export interface TailscaleOperationToast {
   id: string
+  memberKind: "app" | "server"
   networkName: string
   nodeCount?: number
   operation: TailscaleOperation
@@ -15,11 +16,12 @@ export function tailscaleOperationToastId(networkId: string): string {
 
 export function showTailscaleOperationProgress({
   id,
+  memberKind,
   networkName,
   nodeCount = 1,
   operation,
 }: TailscaleOperationToast): void {
-  const content = progressContent(operation, networkName, nodeCount)
+  const content = progressContent(operation, networkName, nodeCount, memberKind)
   showToast({
     type: "loading",
     id,
@@ -31,11 +33,12 @@ export function showTailscaleOperationProgress({
 
 export function showTailscaleOperationSuccess({
   id,
+  memberKind,
   networkName,
   nodeCount = 1,
   operation,
 }: TailscaleOperationToast): void {
-  const content = successContent(operation, networkName, nodeCount)
+  const content = successContent(operation, networkName, nodeCount, memberKind)
   showToast({
     type: "success",
     id,
@@ -54,7 +57,7 @@ export function showTailscaleOperationError(
     id: toast.id,
     message:
       toast.operation === "disconnect"
-        ? "Could not disconnect game server"
+        ? `Could not disconnect ${toast.memberKind === "app" ? "app service" : "game server"}`
         : "Could not connect Tailscale",
     description:
       cause instanceof Error
@@ -67,8 +70,10 @@ export function showTailscaleOperationError(
 function progressContent(
   operation: TailscaleOperation,
   networkName: string,
-  nodeCount: number
+  nodeCount: number,
+  memberKind: TailscaleOperationToast["memberKind"]
 ) {
+  const noun = memberKind === "app" ? "app service" : "game server"
   switch (operation) {
     case "install":
       return {
@@ -77,13 +82,13 @@ function progressContent(
       }
     case "connect":
       return {
-        message: "Connecting game server…",
-        description: `Adding the game server to ${networkName}.`,
+        message: `Connecting ${noun}…`,
+        description: `Adding the ${noun} to ${networkName}.`,
       }
     case "disconnect":
       return {
-        message: "Disconnecting game server…",
-        description: `Removing the game server from ${networkName}.`,
+        message: `Disconnecting ${noun}…`,
+        description: `Removing the ${noun} from ${networkName}.`,
       }
     case "update":
       return {
@@ -96,8 +101,11 @@ function progressContent(
 function successContent(
   operation: TailscaleOperation,
   networkName: string,
-  nodeCount: number
+  nodeCount: number,
+  memberKind: TailscaleOperationToast["memberKind"]
 ) {
+  const label = memberKind === "app" ? "App service" : "Game server"
+  const noun = label.toLowerCase()
   switch (operation) {
     case "install":
       return {
@@ -106,13 +114,13 @@ function successContent(
       }
     case "connect":
       return {
-        message: "Game server connected",
-        description: `The game server can now be reached through ${networkName}.`,
+        message: `${label} connected`,
+        description: `The ${noun} can now be reached through ${networkName}.`,
       }
     case "disconnect":
       return {
-        message: "Game server disconnected",
-        description: `The game server is no longer reachable through ${networkName}.`,
+        message: `${label} disconnected`,
+        description: `The ${noun} is no longer reachable through ${networkName}.`,
       }
     case "update":
       return {

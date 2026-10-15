@@ -42,7 +42,10 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@workspace/ui/components/tooltip"
-import { MAXIMUM_INSTANCE_NAME_LENGTH } from "@workspace/contracts"
+import {
+  appTailscaleMember,
+  MAXIMUM_INSTANCE_NAME_LENGTH,
+} from "@workspace/contracts"
 
 import {
   createWorkspaceTableSearchStore,
@@ -264,7 +267,7 @@ const TailscaleNetworkPicker = React.memo(function TailscaleNetworkPicker({
         >
           <p className="type-meta mt-1 truncate font-mono text-muted-foreground">
             {selectedStack
-              ? `${selectedStack.bindings.length} ${selectedStack.bindings.length === 1 ? "game server" : "game servers"} · ${selectedStack.deployments.length} ${selectedStack.deployments.length === 1 ? "node" : "nodes"}`
+              ? `${bindingSummary(selectedStack)} · ${selectedStack.deployments.length} ${selectedStack.deployments.length === 1 ? "node" : "nodes"}`
               : stacks.length > 0
                 ? `${stacks.length} networks available`
                 : "Add a network before connecting game servers"}
@@ -872,6 +875,25 @@ function stackSaveInput(
     id: stack.id,
     name: overrides.name ?? stack.name,
   }
+}
+
+function bindingSummary(stack: TailscaleStackOverview): string {
+  const appServiceCount = stack.bindings.filter(({ instanceId }) =>
+    appTailscaleMember(instanceId)
+  ).length
+  const gameServerCount = stack.bindings.length - appServiceCount
+  const counts: Array<string> = []
+  if (gameServerCount > 0) {
+    counts.push(
+      `${gameServerCount} ${gameServerCount === 1 ? "game server" : "game servers"}`
+    )
+  }
+  if (appServiceCount > 0) {
+    counts.push(
+      `${appServiceCount} ${appServiceCount === 1 ? "app service" : "app services"}`
+    )
+  }
+  return counts.length > 0 ? counts.join(" · ") : "0 instances"
 }
 
 function connectedBindingCount(stack: TailscaleStackOverview): number {

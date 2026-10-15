@@ -328,7 +328,7 @@ const ManagedDomainsTableHead = React.memo(function ManagedDomainsTableHead() {
       <WorkspaceTableHeading className="hidden w-20 md:table-cell">
         SRV
       </WorkspaceTableHeading>
-      <WorkspaceTableHeading className="w-[30%]">
+      <WorkspaceTableHeading className="w-[30%] max-sm:whitespace-normal">
         Game Server
       </WorkspaceTableHeading>
     </WorkspaceTableHead>
