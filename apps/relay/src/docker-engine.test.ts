@@ -1,5 +1,5 @@
 import { Effect, Result } from "effect"
-import { describe, expect, it, onTestFinished } from "vite-plus/test"
+import { describe, expect, it, onTestFinished, vi } from "vite-plus/test"
 
 import { DockerEngine, DockerEngineError } from "./docker-engine.js"
 import { fakeDocker } from "./test/docker.js"
@@ -57,6 +57,29 @@ describe("exec processes", () => {
     )
     expect(Result.isFailure(exited) && exited.failure.message).toContain(
       "container is being removed"
+    )
+  })
+})
+
+describe("image pulls", () => {
+  it("pull for DOCKER_DEFAULT_PLATFORM, as the CLI did, unless given one", async () => {
+    const engine = new DockerEngine(await fakeDocker.listen())
+    onTestFinished(() => fakeDocker.reset())
+    vi.stubEnv("DOCKER_DEFAULT_PLATFORM", "linux/arm64")
+    onTestFinished(() => {
+      vi.unstubAllEnvs()
+    })
+
+    await Effect.runPromise(engine.pullImage("alpine:3.21"))
+    await Effect.runPromise(
+      engine.pullImage("busybox:1", { platform: "linux/amd64" })
+    )
+
+    expect(fakeDocker.pullPlatforms.get("docker.io/library/alpine:3.21")).toBe(
+      "linux/arm64"
+    )
+    expect(fakeDocker.pullPlatforms.get("docker.io/library/busybox:1")).toBe(
+      "linux/amd64"
     )
   })
 })

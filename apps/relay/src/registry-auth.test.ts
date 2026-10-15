@@ -74,6 +74,45 @@ describe("registry credentials for pulls", () => {
     })
   })
 
+  it("prefers DOCKER_AUTH_CONFIG's credentials to the config file's, by registry", async () => {
+    await login({
+      "https://index.docker.io/v1/": { auth: basic("hub-user", "hub-secret") },
+      "ghcr.io": { auth: basic("file-user", "file-secret") },
+    })
+    vi.stubEnv(
+      "DOCKER_AUTH_CONFIG",
+      JSON.stringify({
+        auths: { "ghcr.io": { auth: basic("env-user", "env-secret") } },
+      })
+    )
+
+    await pull("ghcr.io/kiln-site/relay:latest", "nginx:1.27", "quay.io/a/b:1")
+
+    expect(
+      fakeDocker.pullCredentials.get("ghcr.io/kiln-site/relay:latest")
+    ).toEqual({
+      password: "env-secret",
+      serveraddress: "ghcr.io",
+      username: "env-user",
+    })
+    expect(fakeDocker.pullCredentials.get("docker.io/library/nginx:1.27")).toEqual({
+      password: "hub-secret",
+      serveraddress: "https://index.docker.io/v1/",
+      username: "hub-user",
+    })
+    expect(fakeDocker.pullCredentials.get("quay.io/a/b:1")).toBeNull()
+  })
+
+  it("forwards a registry token saved without a username", async () => {
+    await login({ "ghcr.io": { registrytoken: "bearer-token" } })
+
+    await pull("ghcr.io/kiln-site/relay:latest")
+
+    expect(
+      fakeDocker.pullCredentials.get("ghcr.io/kiln-site/relay:latest")
+    ).toEqual({ registrytoken: "bearer-token", serveraddress: "ghcr.io" })
+  })
+
   it("pulls anonymously without a config, and with one it can't read", async () => {
     await pull("alpine:3.21")
     await writeFile(join(directory, "config.json"), "{ not json")

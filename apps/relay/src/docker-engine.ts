@@ -782,12 +782,14 @@ export class DockerEngine {
    * Pulls an image, as `docker pull`, with credentials for its registry from
    * the Docker client config (see `./registry-auth.js`). Each progress
    * message goes to `onLine` the way the CLI printed it without a terminal,
-   * ending with the image's full reference.
+   * ending with the image's full reference. Without a `platform`, it pulls
+   * for `DOCKER_DEFAULT_PLATFORM`, as the CLI did, or the daemon's own.
    */
   pullImage(
     image: string,
     options: {
       readonly onLine?: (line: string) => void
+      readonly platform?: string
       readonly timeout?: number
     } = {}
   ): Effect.Effect<void, DockerEngineError> {
@@ -809,6 +811,7 @@ export class DockerEngine {
         onData: progress.read,
         path: `/images/create${query({
           fromImage: repositoryName(reference),
+          platform: options.platform || defaultPlatform(),
           tag: reference.digest ?? reference.tag ?? "latest",
         })}`,
         timeout: options.timeout ?? 300_000,
@@ -1278,6 +1281,11 @@ function withTimeout<A>(
 }
 
 function ignoreStreamError() {}
+
+/** The platform the CLI used for a pull, create, or build without one. */
+export function defaultPlatform(): string | undefined {
+  return process.env.DOCKER_DEFAULT_PLATFORM?.trim() || undefined
+}
 
 /**
  * Splits a non-TTY stream into stdout and stderr: each frame is a stream byte,

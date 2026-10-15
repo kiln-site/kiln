@@ -1,6 +1,7 @@
 /**
- * Registry credentials for pulls, from the Docker client config the CLI read:
- * `$DOCKER_CONFIG/config.json`, or `~/.docker/config.json`.
+ * Registry credentials for pulls, from where the CLI read them: the
+ * `DOCKER_AUTH_CONFIG` environment variable first, then the Docker client
+ * config, `$DOCKER_CONFIG/config.json` or `~/.docker/config.json`.
  *
  * Only `auths` entries are read. Credential helpers (`credsStore`,
  * `credHelpers`) are external programs the Relay image does not ship, so the
@@ -20,37 +21,52 @@ const DOCKER_HUB_SERVER = "https://index.docker.io/v1/"
 interface AuthConfig {
   readonly identitytoken?: string
   readonly password?: string
+  readonly registrytoken?: string
   readonly serveraddress: string
   readonly username?: string
 }
 
-export function dockerConfigPath(
-  environment: NodeJS.ProcessEnv = process.env
-): string {
+function dockerConfigPath(): string {
   const directory =
-    environment.DOCKER_CONFIG?.trim() || join(homedir(), ".docker")
+    process.env.DOCKER_CONFIG?.trim() || join(homedir(), ".docker")
   return join(directory, "config.json")
 }
 
 /**
- * The `X-Registry-Auth` header for pulling `reference`, or undefined when
- * the config has no credentials for its registry. A missing or unreadable
- * config means anonymous pulls, as with the CLI.
+ * The Docker client config, parsed, or undefined when it is missing or
+ * can't be read, which the CLI treated as an empty config.
  */
-export function registryAuthHeader(
-  reference: ImageReference,
-  configPath = dockerConfigPath()
-): Effect.Effect<string | undefined> {
-  return Effect.tryPromise(() => readFile(configPath, "utf8")).pipe(
-    Effect.map((text) => {
-      const config = Result.getOrUndefined(
-        Result.try((): unknown => JSON.parse(text))
-      )
-      const auth = authConfig(config, registryServer(reference))
-      return auth && encodeAuthConfig(auth)
-    }),
+export function dockerClientConfig(): Effect.Effect<unknown> {
+  return Effect.tryPromise(() => readFile(dockerConfigPath(), "utf8")).pipe(
+    Effect.map(parseJson),
     Effect.orElseSucceed(() => undefined)
   )
+}
+
+/**
+ * The `X-Registry-Auth` header for pulling `reference`, or undefined when
+ * neither `DOCKER_AUTH_CONFIG` nor the config has credentials for its
+ * registry, which means an anonymous pull, as with the CLI.
+ */
+export function registryAuthHeader(
+  reference: ImageReference
+): Effect.Effect<string | undefined> {
+  const server = registryServer(reference)
+  const fromEnvironment = authConfig(
+    parseJson(process.env.DOCKER_AUTH_CONFIG ?? ""),
+    server
+  )
+  if (fromEnvironment) return Effect.succeed(encodeAuthConfig(fromEnvironment))
+  return dockerClientConfig().pipe(
+    Effect.map((config) => {
+      const auth = authConfig(config, server)
+      return auth && encodeAuthConfig(auth)
+    })
+  )
+}
+
+function parseJson(text: string): unknown {
+  return Result.getOrUndefined(Result.try((): unknown => JSON.parse(text)))
 }
 
 /** Where `docker login` keeps a registry's credentials. */
@@ -84,10 +100,12 @@ function authConfig(config: unknown, server: string): AuthConfig | undefined {
     }
   }
   const identitytoken = text("identitytoken")
-  if (!username && !identitytoken) return undefined
+  const registrytoken = text("registrytoken")
+  if (!username && !identitytoken && !registrytoken) return undefined
   return {
     ...(identitytoken ? { identitytoken } : {}),
     ...(password ? { password } : {}),
+    ...(registrytoken ? { registrytoken } : {}),
     serveraddress: server,
     ...(username ? { username } : {}),
   }
