@@ -502,7 +502,6 @@ const UNSUPPORTED_SERVICE_KEYS = new Set([
   "blkio_config",
   "configs",
   "credential_spec",
-  "develop",
   "device_cgroup_rules",
   "extends",
   "external_links",
@@ -523,8 +522,8 @@ const UNSUPPORTED_SERVICE_KEYS = new Set([
   "cpu_rt_period",
   "cpu_rt_runtime",
 ])
-// Keys with no effect on the containers Relay runs.
-const IGNORED_SERVICE_KEYS = new Set(["attach"])
+// Keys with no effect on the containers `docker compose up` runs.
+const IGNORED_SERVICE_KEYS = new Set(["attach", "develop"])
 
 async function normalizeService(
   name: string,
