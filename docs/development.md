@@ -52,6 +52,16 @@ to be unique across running stacks.
 Run relevant checks with `vp check`, `vp run -r typecheck`, or targeted
 `vp test run` suites. Validate user-visible changes in the browser.
 
+## PR titles
+
+Use `<type>(<scope>): <short human title>`. Examples:
+
+- fix(relay): prevent player disconnects when updating relays
+- ci(repo): update agent skills
+- ui(cli): improve help menu visual
+
+See [Contributing](../CONTRIBUTING.md) for the other PR conventions.
+
 ## Existing stacks and cleanup
 
 The new `kiln-*` names create fresh stacks; old `hearth*` data is preserved.
