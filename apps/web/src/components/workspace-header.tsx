@@ -143,7 +143,7 @@ export function WorkspaceCopyValueButton({
   )
 }
 
-function useCopyFeedback(value: string) {
+export function useCopyFeedback(value: string) {
   const [copied, setCopied] = React.useState(false)
   const resetTimer = React.useRef<number | null>(null)
   React.useEffect(

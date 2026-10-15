@@ -152,6 +152,20 @@ export function selectSidebarInstanceCount(
   return count
 }
 
+// How many servers one Relay runs, and how many of those are running.
+export function selectRelayServerCounts(relayId: string) {
+  return (snapshot: RelayFleetSnapshot): { running: number; total: number } => {
+    let running = 0
+    let total = 0
+    for (const instance of snapshot.instances) {
+      if (instance.relayId !== relayId || !isServerInstance(instance)) continue
+      total += 1
+      if (instance.observedState === "running") running += 1
+    }
+    return { running, total }
+  }
+}
+
 function sidebarInstance(
   instance: RelayFleetSnapshot["instances"][number]
 ): SidebarInstance {

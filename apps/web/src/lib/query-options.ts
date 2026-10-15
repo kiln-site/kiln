@@ -54,7 +54,7 @@ import {
   getRelayFileEntry,
   getRelayFile,
   getRelayFileActivity,
-  getRelayMemoryReadings,
+  getRelayNodeReadings,
   getRelaySnapshot,
   getRelayTree,
 } from "@/server/relay"
@@ -174,7 +174,7 @@ export const queryKeys = {
       ["relay", relayId, "instances", instanceId, "recipe"] as const,
     snapshot: ["relay", "snapshot"] as const,
     instances: ["relay", "instances"] as const,
-    memory: ["relay", "memory"] as const,
+    nodeReadings: ["relay", "node-readings"] as const,
     resources: (relayId: string) => ["relay", "resources", relayId] as const,
     webRoutes: (relayId: string, instanceId: string) =>
       ["web-routes", relayId, instanceId] as const,
@@ -362,10 +362,14 @@ export function relayConnectionQueryOptions(queryClient: QueryClient) {
 }
 
 /** Polled only while a Relay memory cell is mounted and the tab is visible. */
-export function relayMemoryReadingsQueryOptions() {
+export type RelayNodeReading = Awaited<
+  ReturnType<typeof getRelayNodeReadings>
+>[number]
+
+export function relayNodeReadingsQueryOptions() {
   return queryOptions({
-    queryKey: queryKeys.relay.memory,
-    queryFn: ({ signal }) => getRelayMemoryReadings({ signal }),
+    queryKey: queryKeys.relay.nodeReadings,
+    queryFn: ({ signal }) => getRelayNodeReadings({ signal }),
     refetchInterval: connectedRelayPollDelayMs,
     refetchIntervalInBackground: false,
     refetchOnWindowFocus: false,

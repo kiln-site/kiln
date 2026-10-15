@@ -1,44 +1,30 @@
 import * as React from "react"
 import { useQuery } from "@tanstack/react-query"
 import { useNavigate } from "@tanstack/react-router"
-import {
-  CalendarClock,
-  Container,
-  Cpu,
-  Fingerprint,
-  Globe2,
-  HardDrive,
-  History,
-  KeyRound,
-  MemoryStick,
-  RadioTower,
-  ServerCog,
-  ShieldCheck,
-  Timer,
-  Trash2,
-  TriangleAlert,
-  UserRound,
-} from "lucide-react"
+import { Trash2 } from "lucide-react"
 
 import { Button } from "@workspace/ui/components/button"
 
 import {
-  CopyMetaRow,
-  DangerZone,
-  InfoCard,
-  InfoCardHeader,
-  MetaRow,
-  ResourceUsersCard,
-} from "@/components/info-card"
+  InfoCopyValue,
+  InfoDetailRow,
+  InfoDetails,
+  InfoFact,
+  InfoFactList,
+  InfoFooter,
+  InfoFooterItem,
+  InfoManageAccessButton,
+  InfoPage,
+} from "@/components/info-page"
 import { InstanceFavoriteButton } from "@/components/instance-favorite"
 import { LocalDateTime } from "@/components/local-date-time"
 import { RelativeTime } from "@/components/relative-time"
-import { RelayMemoryCell } from "@/components/relay-memory-cell"
 import { RemoveRelayDialog } from "@/components/relay/relay-actions"
 import { useRelayLiveStatus } from "@/components/relay/relay-presentation"
+import { RelayUsage } from "@/components/relay/relay-usage"
+import { RelayWorkloads } from "@/components/relay/relay-workloads"
 import { useRelayWorkspace } from "@/components/relay/relay-workspace-context"
-import { StatusIndicator } from "@/components/status-indicator"
-import { formatBytes } from "@/lib/format-bytes"
+import { WorkspaceIdCopyButton } from "@/components/workspace-header"
 import { canAccessRelayPermission } from "@/lib/navigation-destinations"
 import {
   accessCapabilitiesQueryOptions,
@@ -47,138 +33,77 @@ import {
 import type { RelayFleetSnapshot } from "@/lib/relay-fleet"
 import { relayAddress, type RelayDirectoryEntry } from "@/lib/relay-route"
 
-// Who and where the Relay is, the machine it runs on, and how to remove it.
+// How the Relay's machine is doing and what runs on it, then how Hearth
+// reaches it and what it runs on, then who owns it.
 export function RelayInfoPage() {
-  const { relay } = useRelayWorkspace()
-  const { data: canDelete = false } = useQuery({
-    ...accessCapabilitiesQueryOptions(),
-    select: (capabilities) =>
-      canAccessRelayPermission(capabilities, relay.id, "relay.delete"),
-  })
+  const { relay, routeId } = useRelayWorkspace()
 
   return (
-    <section className="min-h-0 flex-1 overflow-y-auto bg-card">
-      <div className="mx-auto max-w-5xl px-5 py-6 sm:px-8 sm:py-8">
-        <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_20rem]">
-          <RelayIdentityCard relay={relay} />
-          <ResourceUsersCard
-            noun="Relay"
-            relayId={relay.id}
-            resourceId={relay.id}
-            resourceType="relay"
+    <InfoPage>
+      <RelayLiveUsage relay={relay} />
+      <RelayWorkloads relayId={relay.id} routeId={routeId} />
+      <div className="mt-8 grid gap-8 lg:grid-cols-2 lg:gap-6">
+        <RelayConnectionFacts relay={relay} />
+        <RelayMachineFacts relay={relay} />
+      </div>
+      <RelayFooter relay={relay} routeId={routeId} />
+    </InfoPage>
+  )
+}
+
+function RelayLiveUsage({ relay }: { relay: RelayDirectoryEntry }) {
+  const { connected } = useRelayLiveStatus(relay)
+  return <RelayUsage connected={connected} relayId={relay.id} />
+}
+
+function RelayConnectionFacts({ relay }: { relay: RelayDirectoryEntry }) {
+  return (
+    <InfoFactList title="Connection">
+      <InfoFact label="Address">
+        <InfoCopyValue label="Relay address" value={relayAddress(relay)} />
+      </InfoFact>
+      <InfoFact label="TLS">
+        <InfoDetails title="TLS" trigger={tlsLabel(relay)}>
+          <p>{tlsDescription(relay)}</p>
+          <InfoDetailRow
+            label="Browser origin"
+            value={relay.browserOrigin || "Same as address"}
           />
-        </div>
-        <RelayConnectionCard relay={relay} />
-        <RelayNodeCard relay={relay} />
-        {canDelete ? <RelayDangerZone relay={relay} /> : null}
-      </div>
-    </section>
-  )
-}
-
-function RelayIdentityCard({ relay }: { relay: RelayDirectoryEntry }) {
-  const { presentation } = useRelayLiveStatus(relay)
-  return (
-    <InfoCard>
-      <InfoCardHeader
-        icon={<Fingerprint />}
-        title="Identity"
-        action={
-          <div className="flex items-center gap-2">
-            <StatusIndicator status={presentation} />
-            <InstanceFavoriteButton
-              id={relay.id}
-              kind="relay"
-              relayId={relay.id}
-            />
-          </div>
-        }
-      />
-      <MetaRow icon={RadioTower} label="Name" value={relay.name} />
-      <MetaRow
-        icon={Fingerprint}
-        label="Relay full ID"
-        value={relay.id}
-        mono
-        wrap
-      />
-      <div className="grid sm:grid-cols-2">
-        <MetaRow
-          icon={UserRound}
-          label="Owner"
-          value={relay.ownerName ?? relay.ownerEmail ?? "Unassigned"}
-        />
-        <MetaRow
-          icon={CalendarClock}
-          label="Paired"
-          value={<LocalDateTime timestamp={relay.createdAt} />}
-        />
-      </div>
-    </InfoCard>
-  )
-}
-
-function RelayConnectionCard({ relay }: { relay: RelayDirectoryEntry }) {
-  return (
-    <InfoCard className="mt-4">
-      <InfoCardHeader icon={<Globe2 />} title="Connection" />
-      <CopyMetaRow icon={Globe2} label="Address" value={relayAddress(relay)} />
-      <div className="grid sm:grid-cols-2">
-        <MetaRow
-          icon={ShieldCheck}
-          label="TLS"
-          value={
-            !relay.useTls
-              ? "Off"
-              : relay.managedTls
-                ? "Managed by the Relay"
-                : "Custom certificate"
-          }
-        />
-        <MetaRow
-          icon={KeyRound}
-          label="Hearth access"
-          value={
-            relay.role === "full_access"
-              ? "Full access"
-              : relay.role === "read_only"
-                ? "Read only"
-                : "Custom"
-          }
-        />
-        <MetaRow
-          icon={Globe2}
-          label="Browser origin"
-          value={relay.browserOrigin || "Same as address"}
-          mono
-        />
-        <MetaRow
-          icon={History}
-          label="Last connected"
-          value={
-            relay.lastConnectedAt ? (
-              <RelativeTime timestamp={Date.parse(relay.lastConnectedAt)} />
-            ) : (
-              "Never"
-            )
-          }
-        />
-      </div>
+          <p>Where browsers reach the Relay directly.</p>
+        </InfoDetails>
+      </InfoFact>
+      <InfoFact label="Hearth access">
+        <InfoDetails
+          title={roleLabel(relay.role)}
+          trigger={roleLabel(relay.role)}
+        >
+          <p>{roleDescription(relay)}</p>
+        </InfoDetails>
+      </InfoFact>
+      <InfoFact label="Last connected">
+        {relay.lastConnectedAt ? (
+          <RelativeTime timestamp={Date.parse(relay.lastConnectedAt)} />
+        ) : (
+          "Never"
+        )}
+      </InfoFact>
       {relay.lastError ? (
-        <MetaRow
-          icon={TriangleAlert}
-          label="Last error"
-          value={relay.lastError}
-          wrap
-        />
+        <InfoFact label="Last error">
+          <span
+            className="truncate font-mono text-xs text-muted-foreground"
+            title={relay.lastError}
+          >
+            {relay.lastError}
+          </span>
+        </InfoFact>
       ) : null}
-    </InfoCard>
+    </InfoFactList>
   )
 }
 
-// The node's details change rarely; live usage samples are left out so they
-// don't re-render the page.
-function selectRelayNode(relayId: string) {
+// The node's details change rarely; live usage is left to RelayUsage so new
+// samples don't re-render these facts.
+function selectRelayMachine(relayId: string) {
   return (snapshot: RelayFleetSnapshot) => {
     const node = snapshot.nodes.find(
       (candidate) => candidate.relayId === relayId
@@ -186,99 +111,112 @@ function selectRelayNode(relayId: string) {
     if (!node) return null
     return {
       arch: node.arch,
-      cores: node.cpu.cores,
       dockerVersion: node.docker.available
         ? (node.docker.version ?? "Available")
         : "Unavailable",
-      memoryTotalBytes: node.memory.totalBytes,
       platform: node.platform,
       startedAt: node.startedAt,
-      storageTotalBytes: node.storage.totalBytes,
       version: node.version,
     }
   }
 }
 
-function RelayNodeCard({ relay }: { relay: RelayDirectoryEntry }) {
+function RelayMachineFacts({ relay }: { relay: RelayDirectoryEntry }) {
   const relayId = relay.id
   const { connected } = useRelayLiveStatus(relay)
-  const select = React.useMemo(() => selectRelayNode(relayId), [relayId])
-  const { data: node } = useQuery({ ...relaySnapshotQueryOptions(), select })
+  const select = React.useMemo(() => selectRelayMachine(relayId), [relayId])
+  const { data: machine } = useQuery({ ...relaySnapshotQueryOptions(), select })
 
   return (
-    <InfoCard className="mt-4">
-      <InfoCardHeader icon={<ServerCog />} title="Node" />
-      {node ? (
-        <div className="grid sm:grid-cols-2 lg:grid-cols-4">
-          <MetaRow
-            icon={RadioTower}
-            label="Relay version"
-            value={node.version}
-          />
-          <MetaRow
-            icon={ServerCog}
-            label="Platform"
-            value={`${node.platform} · ${node.arch}`}
-          />
-          <MetaRow icon={Container} label="Docker" value={node.dockerVersion} />
-          <MetaRow
-            icon={Timer}
-            label="Started"
-            value={
-              node.startedAt ? (
-                <LocalDateTime timestamp={node.startedAt} />
-              ) : (
-                "Unknown"
-              )
-            }
-          />
-          <MetaRow icon={Cpu} label="CPU cores" value={String(node.cores)} />
-          <MetaRow
-            icon={MemoryStick}
-            label="Memory"
-            value={formatBytes(node.memoryTotalBytes)}
-          />
-          <MetaRow
-            icon={HardDrive}
-            label="Storage"
-            value={formatBytes(node.storageTotalBytes)}
-          />
-          <MetaRow
-            icon={MemoryStick}
-            label="Relay memory"
-            value={<RelayMemoryCell connected={connected} relayId={relayId} />}
-          />
-        </div>
+    <InfoFactList title="Machine">
+      {machine ? (
+        <>
+          <InfoFact label="Relay version">{machine.version}</InfoFact>
+          <InfoFact label="System">
+            {platformLabel(machine.platform)}, {machine.arch}
+          </InfoFact>
+          <InfoFact label="Docker">{machine.dockerVersion}</InfoFact>
+          <InfoFact label="Started">
+            {machine.startedAt ? (
+              <LocalDateTime timestamp={machine.startedAt} />
+            ) : (
+              "Unknown"
+            )}
+          </InfoFact>
+        </>
       ) : (
-        <p className="px-4 py-5 text-sm text-muted-foreground">
+        <p className="py-3 text-[0.8125rem] text-muted-foreground">
           {connected
-            ? "Waiting for the Relay to report its node."
-            : "Node details appear once Hearth reaches the Relay."}
+            ? "Waiting for the Relay to report its machine."
+            : "Machine details appear once Hearth reaches the Relay."}
         </p>
       )}
-    </InfoCard>
+    </InfoFactList>
   )
 }
 
-function RelayDangerZone({ relay }: { relay: RelayDirectoryEntry }) {
+function RelayFooter({
+  relay,
+  routeId,
+}: {
+  relay: RelayDirectoryEntry
+  routeId: string
+}) {
+  const { data: canDelete = false } = useQuery({
+    ...accessCapabilitiesQueryOptions(),
+    select: (capabilities) =>
+      canAccessRelayPermission(capabilities, relay.id, "relay.delete"),
+  })
+  return (
+    <InfoFooter
+      actions={
+        <>
+          <InstanceFavoriteButton
+            id={relay.id}
+            kind="relay"
+            relayId={relay.id}
+          />
+          <InfoManageAccessButton
+            relayId={relay.id}
+            resourceId={relay.id}
+            resourceType="relay"
+          />
+          {canDelete ? <RemoveRelayButton relay={relay} /> : null}
+        </>
+      }
+    >
+      <InfoFooterItem label="Owner">
+        {relay.ownerName ?? relay.ownerEmail ?? "Unassigned"}
+      </InfoFooterItem>
+      <InfoFooterItem label="Paired">
+        <LocalDateTime timestamp={relay.createdAt} />
+      </InfoFooterItem>
+      <InfoFooterItem label="ID">
+        <WorkspaceIdCopyButton
+          id={relay.id}
+          label="Relay ID"
+          shortId={routeId.slice(0, 8)}
+        />
+      </InfoFooterItem>
+    </InfoFooter>
+  )
+}
+
+function RemoveRelayButton({ relay }: { relay: RelayDirectoryEntry }) {
   const navigate = useNavigate()
   const [open, setOpen] = React.useState(false)
   return (
     <>
-      <DangerZone
-        title="Remove Relay"
-        detail={relay.id}
-        action={
-          <Button
-            type="button"
-            variant="destructive"
-            onClick={() => setOpen(true)}
-          >
-            <Trash2 />
-            Remove
-          </Button>
-        }
-      />
+      <Button
+        type="button"
+        size="sm"
+        variant="ghost"
+        className="text-destructive hover:bg-destructive/10 hover:text-destructive"
+        onClick={() => setOpen(true)}
+      >
+        <Trash2 />
+        Remove Relay
+      </Button>
       {open ? (
         <RemoveRelayDialog
           name={relay.name}
@@ -289,4 +227,41 @@ function RelayDangerZone({ relay }: { relay: RelayDirectoryEntry }) {
       ) : null}
     </>
   )
+}
+
+function tlsLabel(relay: RelayDirectoryEntry): string {
+  if (!relay.useTls) return "Off"
+  return relay.managedTls ? "Managed by the Relay" : "Custom certificate"
+}
+
+function tlsDescription(relay: RelayDirectoryEntry): string {
+  if (!relay.useTls) {
+    return "Traffic between Hearth and this Relay is not encrypted."
+  }
+  return relay.managedTls
+    ? "The Relay issues its own certificate. Hearth trusts it through the certificate authority saved when the Relay was paired."
+    : "The Relay serves a certificate from a public or custom certificate authority."
+}
+
+function roleLabel(role: RelayDirectoryEntry["role"]): string {
+  if (role === "full_access") return "Full access"
+  if (role === "read_only") return "Read only"
+  return "Custom"
+}
+
+function roleDescription(relay: RelayDirectoryEntry): string {
+  if (relay.role === "full_access") {
+    return "Hearth can use every Relay action: create and remove servers, open terminals, edit files, and change settings."
+  }
+  if (relay.role === "read_only") {
+    return "Hearth can see this Relay and what runs on it, but can’t change anything."
+  }
+  return `Hearth can use ${relay.actions.length} selected Relay ${relay.actions.length === 1 ? "action" : "actions"}.`
+}
+
+function platformLabel(platform: string): string {
+  if (platform === "linux") return "Linux"
+  if (platform === "darwin") return "macOS"
+  if (platform === "win32") return "Windows"
+  return platform
 }

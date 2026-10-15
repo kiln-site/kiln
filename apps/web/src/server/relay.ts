@@ -253,14 +253,15 @@ export const getRelaySnapshot = createServerFn({ method: "POST" }).handler(
 )
 
 /**
- * Live Relay memory for the Relays table. After authorization it reads the node
- * this process's control socket last received (kept current by node resource
- * deltas): no Relay round trip, cache read, or snapshot validation. A Relay is
- * omitted while this process has no authenticated connection to it, and its
- * cell shows no reading; another Hearth process's sockets are not consulted.
- * `relayMemory` is null for Relays that predate memory reporting.
+ * Live node usage for the Relays table and the Relay Info page. After
+ * authorization it reads the node this process's control socket last received
+ * (kept current by node resource deltas): no Relay round trip, cache read, or
+ * snapshot validation. A Relay is omitted while this process has no
+ * authenticated connection to it, and shows no reading; another Hearth
+ * process's sockets are not consulted. `relayMemory` is null for Relays that
+ * predate memory reporting.
  */
-export const getRelayMemoryReadings = createServerFn({
+export const getRelayNodeReadings = createServerFn({
   method: "GET",
 }).handler(async () => {
   const user = await requireEligibleResourceUser()
@@ -272,7 +273,15 @@ export const getRelayMemoryReadings = createServerFn({
     if (!relay.enabled || !canReadRelayNode(user, relay.id, grants)) return []
     const node = relayConnectionNode(relay.id)
     return node
-      ? [{ relayId: relay.id, relayMemory: node.relayMemory ?? null }]
+      ? [
+          {
+            cpu: node.cpu,
+            memory: node.memory,
+            relayId: relay.id,
+            relayMemory: node.relayMemory ?? null,
+            storage: node.storage,
+          },
+        ]
       : []
   })
 })
