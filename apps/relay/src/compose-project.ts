@@ -10,7 +10,7 @@
  * being ignored. Keys only Swarm reads are ignored, as Compose itself
  * ignores them when it runs containers.
  */
-import { readFile } from "node:fs/promises"
+import { readFile, stat } from "node:fs/promises"
 import { homedir } from "node:os"
 import { join, resolve } from "node:path"
 
@@ -271,6 +271,19 @@ type Lookup = (name: string) => string | undefined
 
 class ComposeError extends Error {}
 
+// What variable substitution may produce: values of up to 1 MiB, and
+// 16 MiB in all, so a file can't make loading build ever larger strings
+// (`A=x`, then `A=${A}${A}` on each line, doubles A every line).
+const MAX_SUBSTITUTED_VALUE = 1024 * 1024
+const MAX_SUBSTITUTED_TOTAL = 16 * 1024 * 1024
+// `.env` and env files are read whole; none is near this.
+const MAX_FILE_BYTES = 4 * 1024 * 1024
+
+/** What one load's substitutions have produced so far. */
+interface Expansion {
+  total: number
+}
+
 // Integers with a leading 0 are octal (`mode: 0440`), as in the YAML
 // parser Compose uses, and not decimal as YAML 1.2 has them.
 const LEGACY_OCTAL = {
@@ -301,6 +314,7 @@ export async function loadComposeProject(
   const raw: Value = document.toJS({ maxAliasCount: 1_000 })
   if (!isMapping(raw)) throw new ComposeError("The Compose file is empty")
 
+  const expansion: Expansion = { total: 0 }
   const warned = new Set<string>()
   const onUnset = (name: string) => {
     if (warned.has(name)) return
@@ -321,7 +335,8 @@ export async function loadComposeProject(
       dotenv,
       (name) => options.environment[name],
       onUnset,
-      join(options.projectDirectory, ".env")
+      join(options.projectDirectory, ".env"),
+      expansion
     )
   }
   const variables: Record<string, string> = {
@@ -330,18 +345,31 @@ export async function loadComposeProject(
   }
   const lookup: Lookup = (name) =>
     Object.hasOwn(variables, name) ? variables[name] : undefined
-  const interpolated = interpolateTree(raw, lookup, onUnset, "")
+  const interpolated = interpolateTree(raw, lookup, onUnset, "", expansion)
   if (!isMapping(interpolated)) {
     throw new ComposeError("The Compose file is empty")
   }
-  return normalizeProject(interpolated, options, variables)
+  return normalizeProject(interpolated, options, variables, expansion)
 }
 
 async function readOptionalFile(path: string): Promise<string | undefined> {
   const read = await Effect.runPromise(
-    Effect.result(Effect.tryPromise(() => readFile(path, "utf8")))
+    Effect.result(
+      Effect.tryPromise(() => stat(path)).pipe(
+        Effect.flatMap((info) =>
+          info.size > MAX_FILE_BYTES
+            ? Effect.fail(
+                new ComposeError(
+                  `${path} is ${info.size} bytes; Kiln reads files of up to ${MAX_FILE_BYTES}`
+                )
+              )
+            : Effect.tryPromise(() => readFile(path, "utf8"))
+        )
+      )
+    )
   )
   if (Result.isSuccess(read)) return read.success
+  if (read.failure instanceof ComposeError) throw read.failure
   const cause = read.failure.cause
   if (Predicate.hasProperty(cause, "code") && cause.code === "ENOENT") {
     return undefined
@@ -364,7 +392,8 @@ const PROJECT_KEYS = new Set([
 async function normalizeProject(
   raw: Mapping,
   options: ComposeLoadOptions,
-  variables: Record<string, string>
+  variables: Record<string, string>,
+  expansion: Expansion
 ): Promise<ComposeProject> {
   for (const key of Object.keys(raw)) {
     if (key.startsWith("x-") || PROJECT_KEYS.has(key)) continue
@@ -407,7 +436,13 @@ async function normalizeProject(
         continue
       }
     }
-    services[name] = await normalizeService(name, service, options, lookup)
+    services[name] = await normalizeService(
+      name,
+      service,
+      options,
+      lookup,
+      expansion
+    )
   }
   for (const [name, service] of Object.entries(services)) {
     implicitDependencies(service)
@@ -772,7 +807,8 @@ async function normalizeService(
   name: string,
   raw: Mapping,
   options: ComposeLoadOptions,
-  lookup: Lookup
+  lookup: Lookup,
+  expansion: Expansion
 ): Promise<ComposeService> {
   const path = `services.${name}`
   const directory = options.projectDirectory
@@ -852,24 +888,40 @@ async function normalizeService(
         service[key] = bool(value, at)
         break
       case "ports": {
-        service.ports = []
+        // One per host address, published port, target, and protocol, the
+        // last one's settings in the first one's place, as compose-go's
+        // EnforceUnicity keeps them.
+        const unique: Array<ComposePort> = []
+        const indexes = new Map<string, number>()
+        let count = 0
         for (const entry of list(value, at)) {
-          for (const port of ports(entry, at)) service.ports.push(port)
-          if (service.ports.length > MAX_SERVICE_PORTS) throw tooManyPorts(at)
+          for (const port of ports(entry, at)) {
+            count += 1
+            if (count > MAX_SERVICE_PORTS) throw tooManyPorts(at)
+            const key = `${port.host_ip ?? "0.0.0.0"}:${port.published ?? "%!s(<nil>)"}:${port.target}/${port.protocol}`
+            const index = indexes.get(key)
+            if (index === undefined) {
+              indexes.set(key, unique.length)
+              unique.push(port)
+            } else unique[index] = port
+          }
         }
+        service.ports = unique
         break
       }
       case "expose": {
         let count = 0
-        service.expose = list(value, at).map((entry) => {
+        const unique = new Set<string>()
+        for (const entry of list(value, at)) {
           const text = scalarString(entry, at)
           const [ports = "", protocolText] = text.split("/")
           const [start, end] = range(ports, at, text)
           protocol(protocolText, at)
           count += end - start + 1
           if (count > MAX_SERVICE_PORTS) throw tooManyPorts(at)
-          return text
-        })
+          unique.add(text)
+        }
+        service.expose = [...unique]
         break
       }
       case "volumes":
@@ -1004,7 +1056,9 @@ async function normalizeService(
       const resolve: Lookup = (variable) =>
         lookup(variable) ?? own[variable] ?? undefined
       if (file.raw) parseRawEnv(text, merged, resolve, file.path)
-      else parseDotenv(text, merged, resolve, () => undefined, file.path)
+      else {
+        parseDotenv(text, merged, resolve, () => undefined, file.path, expansion)
+      }
     }
     service.environment = { ...merged, ...own }
   }
@@ -1972,7 +2026,8 @@ function parseDotenv(
   out: Record<string, string>,
   lookup: Lookup,
   onUnset: (name: string) => void,
-  path: string
+  path: string,
+  expansion: Expansion
 ): void {
   let source = text.startsWith("\uFEFF") ? text.slice(1) : text
   let line = 1
@@ -1985,7 +2040,8 @@ function parseDotenv(
       (name) =>
         lookup(name) ?? (Object.hasOwn(out, name) ? out[name] : undefined),
       onUnset,
-      path
+      path,
+      expansion
     )
   const isSpace = (character: string) =>
     /^[\t\v\f\r \u0085\u00a0]$/u.test(character)
@@ -2119,20 +2175,27 @@ function interpolateTree(
   value: Value,
   lookup: Lookup,
   onUnset: (name: string) => void,
-  path: string
+  path: string,
+  expansion: Expansion
 ): Value {
   if (typeof value === "string")
-    return substituteTemplate(value, lookup, onUnset, path)
+    return substituteTemplate(value, lookup, onUnset, path, expansion)
   if (Array.isArray(value)) {
     return value.map((entry, index) =>
-      interpolateTree(entry, lookup, onUnset, `${path}[${index}]`)
+      interpolateTree(entry, lookup, onUnset, `${path}[${index}]`, expansion)
     )
   }
   if (isMapping(value)) {
     return Object.fromEntries(
       Object.entries(value).map(([key, entry]) => [
         key,
-        interpolateTree(entry, lookup, onUnset, path ? `${path}.${key}` : key),
+        interpolateTree(
+          entry,
+          lookup,
+          onUnset,
+          path ? `${path}.${key}` : key,
+          expansion
+        ),
       ])
     )
   }
@@ -2154,20 +2217,45 @@ function substituteTemplate(
   text: string,
   lookup: Lookup,
   onUnset: (name: string) => void,
-  path: string
+  path: string,
+  expansion: Expansion
 ): string {
   if (!text.includes("$")) return text
   let failure: ComposeError | undefined
-  const result = text.replace(TEMPLATE, (match) => {
-    const replaced = Result.try(() => replacement(match, lookup, onUnset))
-    if (Result.isSuccess(replaced)) return replaced.success
-    failure ??=
-      replaced.failure instanceof InvalidTemplate
-        ? new ComposeError(`Invalid template: ${JSON.stringify(text)}`)
-        : replaced.failure instanceof ComposeError
-          ? replaced.failure
-          : new ComposeError(String(replaced.failure))
-    return ""
+  // The result's length so far, checked before each piece joins it.
+  let length = 0
+  let consumed = 0
+  const result = text.replace(TEMPLATE, (match: string, ...rest: Array<unknown>) => {
+    if (failure) return ""
+    const replaced = Result.try(() =>
+      replacement(match, lookup, onUnset, expansion)
+    )
+    if (Result.isFailure(replaced)) {
+      failure =
+        replaced.failure instanceof InvalidTemplate
+          ? new ComposeError(`Invalid template: ${JSON.stringify(text)}`)
+          : replaced.failure instanceof ComposeError
+            ? replaced.failure
+            : new ComposeError(String(replaced.failure))
+      return ""
+    }
+    const offset = rest.at(-2) as number
+    length += offset - consumed + replaced.success.length
+    consumed = offset + match.length
+    expansion.total += replaced.success.length
+    if (length > MAX_SUBSTITUTED_VALUE) {
+      failure = new ComposeError(
+        `a value is longer than ${MAX_SUBSTITUTED_VALUE} characters once its variables are substituted`
+      )
+      return ""
+    }
+    if (expansion.total > MAX_SUBSTITUTED_TOTAL) {
+      failure = new ComposeError(
+        `substituting variables produces more than ${MAX_SUBSTITUTED_TOTAL} characters`
+      )
+      return ""
+    }
+    return replaced.success
   })
   if (failure) {
     throw new ComposeError(
@@ -2186,7 +2274,8 @@ const OPERATORS = [":?", "?", ":-", "-", ":+", "+"] as const
 function replacement(
   matched: string,
   lookup: Lookup,
-  onUnset: (name: string) => void
+  onUnset: (name: string) => void,
+  expansion: Expansion
 ): string {
   // The operator is the one that appears first in the whole match.
   const operator = [...OPERATORS]
@@ -2214,7 +2303,7 @@ function replacement(
     const word = name.slice(separator + operator.length)
     const value = lookup(variable)
     const nested = (text: string) =>
-      substituteTemplate(text, lookup, onUnset, "")
+      substituteTemplate(text, lookup, onUnset, "", expansion)
     let substituted: string
     switch (operator) {
       case ":-":
@@ -2242,7 +2331,9 @@ function replacement(
         }
         substituted = value
     }
-    return substituted + substituteTemplate(rest, lookup, onUnset, "")
+    return (
+      substituted + substituteTemplate(rest, lookup, onUnset, "", expansion)
+    )
   }
   const value = lookup(name)
   if (value === undefined) onUnset(name)
@@ -2274,7 +2365,8 @@ export function dependencyOrder(
 ): Array<string> {
   const order: Array<string> = []
   const state = new Map<string, "done" | "visiting">()
-  const visit = (name: string, trail: Array<string>) => {
+  const trail: Array<string> = []
+  const visit = (name: string) => {
     const current = state.get(name)
     if (current === "done") return
     if (current === "visiting") {
@@ -2283,15 +2375,17 @@ export function dependencyOrder(
       )
     }
     state.set(name, "visiting")
+    trail.push(name)
     for (const dependency of Object.keys(
       services[name]?.depends_on ?? {}
     ).sort()) {
-      if (services[dependency]) visit(dependency, [...trail, name])
+      if (services[dependency]) visit(dependency)
     }
+    trail.pop()
     state.set(name, "done")
     order.push(name)
   }
-  for (const name of Object.keys(services).sort()) visit(name, [])
+  for (const name of Object.keys(services).sort()) visit(name)
   return order
 }
 
@@ -2443,7 +2537,13 @@ function duration(value: Value, at: string): number {
 
 /** Sizes as Compose reads them: bytes, or a number with a binary unit. */
 function bytes(value: Value, at: string): number {
-  if (typeof value === "number") return safe(value, at)
+  // A number is taken as is, as compose-go takes it: -1 is unlimited.
+  if (typeof value === "number") {
+    if (!Number.isSafeInteger(value)) {
+      throw new ComposeError(`${at} is out of range`)
+    }
+    return value
+  }
   const match = /^(\d+(?:\.\d+)?)\s*([bkmgtp])?(?:i?b)?$/iu.exec(
     requiredString(value, at).trim()
   )

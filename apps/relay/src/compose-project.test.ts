@@ -353,4 +353,65 @@ describe("Compose features Kiln can't run", () => {
       load(`services:\n  web:\n    image: nginx\n    ports: [${ranges}]\n`)
     ).rejects.toThrow("lists more than 196608 ports")
   })
+
+  it("keeps one of each port, as Compose does, however many times it's listed", async () => {
+    const repeated = Array.from({ length: 65_000 }, () => "'80'").join(", ")
+
+    const started = performance.now()
+    const { project } = await load(
+      `services:\n  web:\n    image: nginx\n    ports: [${repeated}, { target: 80, published: "8080" }, '8080:80']\n    expose: ['90', '90']\n`
+    )
+
+    expect(performance.now() - started).toBeLessThan(2_000)
+    expect(project.services.web?.ports).toEqual([
+      { protocol: "tcp", target: 80 },
+      { protocol: "tcp", published: "8080", target: 80 },
+    ])
+    expect(project.services.web?.expose).toEqual(["90"])
+  })
+
+  it("takes -1 for unlimited where Compose does", async () => {
+    const { project } = await load(
+      "services:\n  web:\n    image: nginx\n    memswap_limit: -1\n    pids_limit: -1\n"
+    )
+
+    expect(project.services.web).toMatchObject({
+      memswap_limit: -1,
+      pids_limit: -1,
+    })
+  })
+})
+
+describe("Compose variable substitution, bounded", () => {
+  it("refuses a .env whose values double without end", async () => {
+    await writeFile(
+      join(directory, ".env"),
+      ["A=x", ...Array.from({ length: 25 }, () => "A=${A}${A}")].join("\n")
+    )
+
+    const started = performance.now()
+    await expect(load("services:\n  web:\n    image: nginx\n")).rejects.toThrow(
+      "a value is longer than 1048576 characters once its variables are substituted"
+    )
+    expect(performance.now() - started).toBeLessThan(2_000)
+  })
+
+  it("refuses a Compose file whose substitutions add up past the limit", async () => {
+    const references = Array.from({ length: 40 }, (_, index) => `      V${index}: \${BIG}`)
+
+    await expect(
+      load(
+        ["services:", "  web:", "    image: nginx", "    environment:", ...references].join("\n"),
+        { BIG: "x".repeat(512 * 1024) }
+      )
+    ).rejects.toThrow("substituting variables produces more than 16777216 characters")
+  })
+
+  it("refuses an env file larger than it reads", async () => {
+    await writeFile(join(directory, "big.env"), `A=${"x".repeat(4 * 1024 * 1024)}`)
+
+    await expect(
+      load("services:\n  web:\n    image: nginx\n    env_file: big.env\n")
+    ).rejects.toThrow("Kiln reads files of up to 4194304")
+  })
 })
