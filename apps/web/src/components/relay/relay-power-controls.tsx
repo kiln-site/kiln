@@ -11,6 +11,14 @@ import {
 
 import { Button } from "@workspace/ui/components/button"
 import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@workspace/ui/components/dialog"
+import {
   Popover,
   PopoverContent,
   PopoverTrigger,
@@ -68,27 +76,6 @@ export const RelayPowerControls = React.memo(function RelayPowerControls({
   )
   const pause = useRelayPauseToggle(relay)
   const { connected } = useRelayLiveStatus(relay)
-  const restart = useMutation({
-    mutationFn: (target: RelayRestartTarget) =>
-      (target === "relay" ? restartRelay : restartRelayHost)({
-        data: { relayId: relay.id },
-      }),
-    onSuccess: (_result, target) => {
-      setMenuOpen(false)
-      setConfirming(null)
-      showToast({
-        type: "info",
-        message:
-          target === "relay"
-            ? `Restarting ${relay.name}`
-            : `Restarting ${relay.name}’s host`,
-        description: restartCopy[target].pending,
-        duration: 6_000,
-      })
-    },
-    onError: (cause, target) =>
-      showRelayError(cause, restartCopy[target].failure),
-  })
   if (
     !permissions.pause &&
     !permissions.restartRelay &&
@@ -96,12 +83,16 @@ export const RelayPowerControls = React.memo(function RelayPowerControls({
   )
     return null
 
-  const restartUnavailable = !relay.enabled || !connected || restart.isPending
-  const confirmation = confirming ? restartCopy[confirming] : null
+  const restartUnavailable = !relay.enabled || !connected
 
   function togglePause() {
     setMenuOpen(false)
     pause.toggle()
+  }
+
+  function confirmRestart(target: RelayRestartTarget) {
+    setMenuOpen(false)
+    setConfirming(target)
   }
 
   return (
@@ -134,14 +125,7 @@ export const RelayPowerControls = React.memo(function RelayPowerControls({
               : "Resume"}
         </Button>
       ) : null}
-      <Popover
-        open={menuOpen}
-        onOpenChange={(open) => {
-          if (!open && restart.isPending) return
-          setMenuOpen(open)
-          if (!open) setConfirming(null)
-        }}
-      >
+      <Popover open={menuOpen} onOpenChange={setMenuOpen}>
         <Tooltip>
           <TooltipTrigger asChild>
             <PopoverTrigger asChild>
@@ -162,93 +146,134 @@ export const RelayPowerControls = React.memo(function RelayPowerControls({
         <PopoverContent
           align="end"
           sideOffset={7}
-          className="w-[min(19rem,calc(100vw-1.5rem))] p-0"
+          className="w-[min(17rem,calc(100vw-1.5rem))] p-0"
         >
-          {confirming && confirmation ? (
-            <>
-              <div className="border-b px-3 py-2.5">
-                <p className="text-xs font-semibold text-foreground">
-                  {confirmation.title(relay.name)}
-                </p>
-                <p className="type-support mt-1 text-muted-foreground">
-                  {confirmation.warning}
-                </p>
-              </div>
-              <div className="flex justify-end gap-1.5 p-2">
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  disabled={restart.isPending}
-                  onClick={() => setConfirming(null)}
-                >
-                  Back
-                </Button>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="!border-red-500/65 !bg-red-600 !text-white hover:!border-red-400 hover:!bg-red-500"
-                  disabled={restartUnavailable}
-                  onClick={() => restart.mutate(confirming)}
-                >
-                  {restart.isPending ? (
-                    <LoaderCircle className="animate-spin" />
-                  ) : confirming === "relay" ? (
-                    <RotateCw />
+          <div className="p-1">
+            <p className="type-technical-label border-b px-2 py-2 text-muted-foreground">
+              Relay actions
+            </p>
+            {permissions.pause ? (
+              <PowerActionButton
+                description={
+                  relay.enabled
+                    ? "Stop requesting data from this Relay"
+                    : "Reconnect Hearth to this Relay"
+                }
+                disabled={pause.pending}
+                icon={
+                  relay.enabled ? (
+                    <Pause className="size-3.5" />
                   ) : (
-                    <Power />
-                  )}
-                  {confirmation.action}
-                </Button>
-              </div>
-            </>
-          ) : (
-            <div className="p-1">
-              <p className="type-technical-label border-b px-2 py-2 text-muted-foreground">
-                Relay actions
-              </p>
-              {permissions.pause ? (
-                <PowerActionButton
-                  description={
-                    relay.enabled
-                      ? "Stop requesting data from this Relay"
-                      : "Reconnect Hearth to this Relay"
-                  }
-                  disabled={pause.pending}
-                  icon={
-                    relay.enabled ? (
-                      <Pause className="size-3.5" />
-                    ) : (
-                      <Play className="size-3.5" />
-                    )
-                  }
-                  label={relay.enabled ? "Pause" : "Resume"}
-                  tone={relay.enabled ? "default" : "start"}
-                  onClick={togglePause}
-                />
-              ) : null}
-              {permissions.restartRelay ? (
-                <PowerActionButton
-                  description="Servers keep running"
-                  disabled={restartUnavailable}
-                  icon={<RotateCw className="size-3.5" />}
-                  label="Restart Relay"
-                  onClick={() => setConfirming("relay")}
-                />
-              ) : null}
-              {permissions.restartHost ? (
-                <PowerActionButton
-                  description="Reboots everything on this machine"
-                  disabled={restartUnavailable}
-                  icon={<Power className="size-3.5" />}
-                  label="Restart host"
-                  tone="kill"
-                  onClick={() => setConfirming("host")}
-                />
-              ) : null}
-            </div>
-          )}
+                    <Play className="size-3.5" />
+                  )
+                }
+                label={relay.enabled ? "Pause" : "Resume"}
+                tone={relay.enabled ? "default" : "start"}
+                onClick={togglePause}
+              />
+            ) : null}
+            {permissions.restartRelay ? (
+              <PowerActionButton
+                description="Servers keep running"
+                disabled={restartUnavailable}
+                icon={<RotateCw className="size-3.5" />}
+                label="Restart Relay"
+                onClick={() => confirmRestart("relay")}
+              />
+            ) : null}
+            {permissions.restartHost ? (
+              <PowerActionButton
+                description="Reboots everything on this machine"
+                disabled={restartUnavailable}
+                icon={<Power className="size-3.5" />}
+                label="Restart host"
+                tone="kill"
+                onClick={() => confirmRestart("host")}
+              />
+            ) : null}
+          </div>
         </PopoverContent>
       </Popover>
+      {confirming ? (
+        <RelayRestartDialog
+          relay={relay}
+          target={confirming}
+          onClose={() => setConfirming(null)}
+        />
+      ) : null}
     </div>
   )
 })
+
+// Mounted only while open.
+function RelayRestartDialog({
+  relay,
+  target,
+  onClose,
+}: {
+  relay: RelayDirectoryEntry
+  target: RelayRestartTarget
+  onClose: () => void
+}) {
+  const copy = restartCopy[target]
+  const restart = useMutation({
+    mutationFn: () =>
+      (target === "relay" ? restartRelay : restartRelayHost)({
+        data: { relayId: relay.id },
+      }),
+    onSuccess: () => {
+      onClose()
+      showToast({
+        type: "info",
+        message:
+          target === "relay"
+            ? `Restarting ${relay.name}`
+            : `Restarting ${relay.name}’s host`,
+        description: copy.pending,
+        duration: 6_000,
+      })
+    },
+    onError: (cause) => showRelayError(cause, copy.failure),
+  })
+
+  return (
+    <Dialog
+      open
+      onOpenChange={(open) => {
+        if (!open && !restart.isPending) onClose()
+      }}
+    >
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>{copy.title(relay.name)}</DialogTitle>
+          <DialogDescription>{copy.warning}</DialogDescription>
+        </DialogHeader>
+        <DialogFooter>
+          <Button
+            disabled={restart.isPending}
+            type="button"
+            variant="ghost"
+            onClick={onClose}
+          >
+            Cancel
+          </Button>
+          <Button
+            disabled={restart.isPending}
+            type="button"
+            variant={target === "host" ? "destructive" : "default"}
+            onClick={() => restart.mutate()}
+          >
+            {restart.isPending ? (
+              <LoaderCircle className="animate-spin" />
+            ) : target === "relay" ? (
+              <RotateCw />
+            ) : (
+              <Power />
+            )}
+            {copy.action}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
