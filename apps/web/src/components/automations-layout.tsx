@@ -175,7 +175,7 @@ function scheduleScopeOptions(
   for (const target of targets) {
     if (!target.available) continue
     options.push({
-      description: `${target.kind === "instance" ? "Server" : target.kind === "database" ? "Database" : "Relay"} · ${target.relayName} · ${target.id}`,
+      description: `${target.kind === "instance" ? "Game Server" : target.kind === "database" ? "Database" : "Relay"} · ${target.relayName} · ${target.id}`,
       id: target.id,
       kind: target.kind === "instance" ? "server" : target.kind,
       name:

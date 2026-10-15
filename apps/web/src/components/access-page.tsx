@@ -202,7 +202,7 @@ function scopeDescription(scope: ResourceScope | null, platform: boolean) {
   if (platform)
     return "Account status, verification, and platform administrators."
   if (scope) return "Manage users and linked permission presets."
-  return "Choose a server, database, or Relay to manage access."
+  return "Choose a game server, database, or Relay to manage access."
 }
 
 const AccessScopeControls = memo(function AccessScopeControls({
@@ -244,7 +244,7 @@ const AccessScopeControls = memo(function AccessScopeControls({
         scope ? (
           <Badge variant="outline">
             {scope.resourceType === "instance"
-              ? "Server"
+              ? "Game Server"
               : scope.resourceType === "relay"
                 ? "Relay"
                 : "Database"}
@@ -363,7 +363,7 @@ const ResourcePicker = memo(function ResourcePicker({
                 </span>
                 <span className="text-xs text-muted-foreground">
                   {resource.resourceType === "instance"
-                    ? "Server"
+                    ? "Game Server"
                     : resource.resourceType}
                 </span>
               </CommandItem>

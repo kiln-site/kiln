@@ -2014,7 +2014,7 @@ const ScheduleTargetSelector = React.memo(function ScheduleTargetSelector({
           >
             <span className="min-w-0 truncate text-left">
               {selectedNames.length === 0
-                ? "Select servers, databases, or Relays"
+                ? "Select game servers, databases, or Relays"
                 : selectedNames.slice(0, 3).join(", ")}
               {selectedNames.length > 3 ? ` +${selectedNames.length - 3}` : ""}
             </span>
@@ -2517,7 +2517,7 @@ const ScheduleActionTargetsButton = React.memo(
 function scheduleTargetPickerItem(option: ScheduleOption): InstancePickerItem {
   const kind =
     option.kind === "instance"
-      ? "Server"
+      ? "Game Server"
       : option.kind === "database"
         ? "Database"
         : "Relay"

@@ -378,7 +378,7 @@ const notificationIcons = {
 
 const resourceTypeLabels = {
   database: "Database",
-  instance: "Server",
+  instance: "Game Server",
   relay: "Relay",
 } satisfies Record<NotificationResource["type"], string>
 

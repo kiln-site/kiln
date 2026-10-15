@@ -285,7 +285,7 @@ const typeDetails: Record<
   ActivityType,
   { icon: React.ComponentType<{ className?: string }>; label: string }
 > = {
-  server: { icon: Server, label: "Server" },
+  server: { icon: Server, label: "Game Server" },
   power: { icon: CircleGauge, label: "Power" },
   console: { icon: TerminalSquare, label: "Console" },
   files: { icon: FolderClock, label: "Files" },
@@ -930,7 +930,7 @@ const ActivitySearch = React.memo(function ActivitySearch({
         type="search"
         value={value}
         onChange={(event) => update(event.currentTarget.value)}
-        placeholder="Search actions, people, servers…"
+        placeholder="Search actions, people, game servers…"
         aria-label="Search activity"
         className="pr-8 pl-9 text-base md:text-sm"
       />
@@ -1710,7 +1710,7 @@ function ActivityWhereLink({
         search={{ search: entry.relay.name }}
         preload="intent"
         className="min-w-0 truncate text-muted-foreground hover:text-primary"
-        aria-label={`View servers on ${entry.relay.name}`}
+        aria-label={`View game servers on ${entry.relay.name}`}
       >
         {entry.relay.name}
       </Link>

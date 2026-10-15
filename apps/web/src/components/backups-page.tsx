@@ -2298,7 +2298,7 @@ function backupScopeOptions({
   const options: Array<ServerPickerOption> = []
   for (const server of servers) {
     options.push({
-      description: `Server · ${server.relayName} · ${server.id}`,
+      description: `Game Server · ${server.relayName} · ${server.id}`,
       id: server.id,
       kind: "server",
       name: server.name,

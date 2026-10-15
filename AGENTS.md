@@ -5,6 +5,28 @@ Favor simple operation and existing patterns over new abstractions,
 
 Performance/Speed and UX is always the most important thing to keep in mind for every change you do. Make sure any UI change doesn't cause react to re-render/paint other components. If needed react-scan and react-audit can be used to verify.
 
+## Naming
+
+Users see different names than the code uses. Keep the code names; don't
+rename identifiers, routes, or wire formats to match the copy.
+User-facing name, then what the code calls it:
+
+- **Game Server**: `server` in Hearth's web UI (`/infra/servers`,
+  `/server/$serverId`, the picker kind `"server"`), and `instance` in the Relay
+  protocol, contracts, permissions (`instance.*`), and storage. CLI commands
+  keep `server` (`kiln servers list`, `kiln server info`).
+- **App**: `app`. **Database**: `database`.
+- **Relay**: `relay`, the host node that runs the containers.
+- **Hearth**: the web panel (`apps/web`).
+
+- Write "game server" in user-facing copy wherever a server sits beside Apps,
+  Databases, or Relays, or could be confused with a host: navigation, titles,
+  pickers, filters, kind labels, activity, and empty states. Inside one game
+  server's own pages, plain "server" is fine ("Server is running").
+- Never call a Relay or its host a "server" in copy; say "Relay" or "node".
+- "Instance" in copy means any managed resource (game server, database, app),
+  as in "All instances".
+
 <!-- intent-skills:start -->
 
 ## Skill Loading

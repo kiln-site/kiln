@@ -264,10 +264,10 @@ const TailscaleNetworkPicker = React.memo(function TailscaleNetworkPicker({
         >
           <p className="type-meta mt-1 truncate font-mono text-muted-foreground">
             {selectedStack
-              ? `${selectedStack.bindings.length} ${selectedStack.bindings.length === 1 ? "server" : "servers"} · ${selectedStack.deployments.length} ${selectedStack.deployments.length === 1 ? "node" : "nodes"}`
+              ? `${selectedStack.bindings.length} ${selectedStack.bindings.length === 1 ? "game server" : "game servers"} · ${selectedStack.deployments.length} ${selectedStack.deployments.length === 1 ? "node" : "nodes"}`
               : stacks.length > 0
                 ? `${stacks.length} networks available`
-                : "Add a network before connecting servers"}
+                : "Add a network before connecting game servers"}
           </p>
         </WorkspaceSummaryCard>
         <PopoverContent
@@ -359,14 +359,14 @@ const TailscaleToolbar = React.memo(function TailscaleToolbar({
               type="button"
               size="icon"
               variant="outline"
-              aria-label="Search connected servers"
+              aria-label="Search connected game servers"
               className="sm:hidden"
               onClick={() => setMobileSearchOpen(true)}
             >
               <Search />
             </Button>
           </TooltipTrigger>
-          <TooltipContent side="bottom">Search servers</TooltipContent>
+          <TooltipContent side="bottom">Search game servers</TooltipContent>
         </Tooltip>
       ) : null}
 
@@ -381,7 +381,7 @@ const TailscaleToolbar = React.memo(function TailscaleToolbar({
           type="button"
           size="icon"
           variant="ghost"
-          aria-label="Close server search"
+          aria-label="Close game server search"
           className="sm:hidden"
           onClick={() => {
             searchStore.set("")
@@ -410,7 +410,7 @@ const TailscaleSyncButton = React.memo(function TailscaleSyncButton() {
           type="button"
           size="icon"
           variant="outline"
-          aria-label="Refresh Tailscale servers"
+          aria-label="Refresh Tailscale game servers"
           aria-busy={syncing}
           disabled={syncing}
           onClick={() => {
@@ -434,7 +434,7 @@ const TailscaleSyncButton = React.memo(function TailscaleSyncButton() {
           <RefreshCw className={syncing ? "animate-spin" : undefined} />
         </Button>
       </TooltipTrigger>
-      <TooltipContent side="bottom">Refresh servers</TooltipContent>
+      <TooltipContent side="bottom">Refresh game servers</TooltipContent>
     </Tooltip>
   )
 })
@@ -456,8 +456,8 @@ const TailscaleSearchInput = React.memo(function TailscaleSearchInput({
         type="search"
         defaultValue={store.getServerSnapshot()}
         onChange={(event) => store.set(event.currentTarget.value)}
-        placeholder="Search connected servers"
-        aria-label="Search connected servers"
+        placeholder="Search connected game servers"
+        aria-label="Search connected game servers"
         className="pl-9 text-base md:text-sm"
       />
     </div>
@@ -638,7 +638,7 @@ const NetworkForm = React.memo(function NetworkForm({
       showToast({
         message: stack
           ? `${name.trim()} was updated`
-          : `${name.trim()} is ready for servers`,
+          : `${name.trim()} is ready for game servers`,
         type: "success",
       })
       onDone()

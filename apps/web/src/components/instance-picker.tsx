@@ -61,7 +61,7 @@ interface InstancePickerContentProps {
   onNavigate?: () => void
   onSelect: (item: InstancePickerItem) => void
   /**
-   * Enables the split "All servers | All databases | All Relays" row. Unlike
+   * Enables the split "All game servers | All databases | All Relays" row. Unlike
    * selecting every row, a group also covers instances added later.
    */
   onSelectGroup?: (group: InstancePickerGroup) => void
@@ -69,7 +69,7 @@ interface InstancePickerContentProps {
   onSelectMany?: (keys: ReadonlyArray<string>, selected: boolean) => void
   /** Adds an "All instances" segment to the group row. */
   includeAllGroup?: boolean
-  /** Adds "All servers", "All databases", and "All Relays" segments. */
+  /** Adds "All game servers", "All databases", and "All Relays" segments. */
   includeKindGroups?: boolean
   /** Row being saved; shows a spinner and locks every row until it settles. */
   pendingKey?: string
@@ -79,6 +79,7 @@ interface InstancePickerContentProps {
   viewAll?: boolean
 }
 
+// Kind `server` is shown to users as "Game Server". See AGENTS.md Naming.
 const kindPresentation: Record<
   InstancePickerKind,
   { Icon: typeof ServerIcon; label: string; plural: string }
@@ -86,7 +87,7 @@ const kindPresentation: Record<
   app: { Icon: Boxes, label: "App", plural: "apps" },
   database: { Icon: Database, label: "Database", plural: "databases" },
   relay: { Icon: RadioTower, label: "Relay", plural: "Relays" },
-  server: { Icon: ServerIcon, label: "Server", plural: "servers" },
+  server: { Icon: ServerIcon, label: "Game Server", plural: "game servers" },
 }
 
 const kindOrder: ReadonlyArray<InstancePickerKind> = [
@@ -689,7 +690,7 @@ const groupPresentation: Record<
   app: { Icon: Boxes, label: "All apps" },
   database: { Icon: Database, label: "All databases" },
   relay: { Icon: RadioTower, label: "All Relays" },
-  server: { Icon: ServerIcon, label: "All servers" },
+  server: { Icon: ServerIcon, label: "All game servers" },
 }
 
 const InstancePickerGroupRow = React.memo(function InstancePickerGroupRow({

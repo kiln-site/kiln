@@ -40,7 +40,7 @@ export const instancePickerFilters: ReadonlyArray<InstancePickerFilter> = [
   {
     group: "type",
     id: "server",
-    label: "Servers",
+    label: "Game Servers",
     matches: (item) => item.identity.kind === "server",
   },
   {
@@ -80,7 +80,7 @@ export function availableInstancePickerFilters(
 
 /**
  * Filters combine with OR inside a group and AND across groups, so
- * "Servers + Databases + Favorites" means favorite servers or databases.
+ * "Game Servers + Databases + Favorites" means favorite game servers or databases.
  */
 export function filterInstancePickerItems<T extends InstancePickerItem>(
   items: ReadonlyArray<T>,

@@ -99,8 +99,9 @@ export const infrastructureDestinations = [
   {
     access: "instance-read",
     icon: Server,
-    keywords: ["infrastructure", "instances"],
-    label: "Servers",
+    keywords: ["infrastructure", "instances", "servers"],
+    // Users see "Game Servers"; the code keeps "servers". See AGENTS.md Naming.
+    label: "Game Servers",
     to: "/infra/servers",
   },
   {

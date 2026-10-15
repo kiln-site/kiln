@@ -97,7 +97,7 @@ import { selectRelayConfigured } from "@/lib/relay-selectors"
 import type { ServerListInstance } from "@/lib/relay-selectors"
 
 const minimumManualSyncFeedbackMs = 500
-const serverInventoryError = new Error("Could not load servers")
+const serverInventoryError = new Error("Could not load game servers")
 const serverTableItemCache = new WeakMap<ServerListInstance, ServerTableItem>()
 
 interface ServerTableItem {
@@ -200,11 +200,11 @@ export const ServersPage = React.memo(function ServersPage({
             controls={<FavoritesOnlyButton table="servers" />}
             leading={<ServerSyncButton disabled={!relayConfigured} />}
             search={{
-              ariaLabel: "Search servers",
+              ariaLabel: "Search game servers",
               closeMobileWhenEmpty: true,
               id: "server-search",
               onValueChange: replaceDataTableUrlSearch,
-              placeholder: "Search servers",
+              placeholder: "Search game servers",
               store: searchStore,
             }}
           />
@@ -288,7 +288,7 @@ const ServerSyncButton = React.memo(function ServerSyncButton({
           type="button"
           size="icon"
           variant="outline"
-          aria-label="Sync servers"
+          aria-label="Sync game servers"
           aria-busy={syncing}
           disabled={disabled || syncing}
           onClick={syncServers}
@@ -308,7 +308,7 @@ const ActivityButton = React.memo(function ActivityButton() {
     <Tooltip>
       <TooltipTrigger asChild>
         <Button asChild variant="outline" className="px-2 sm:px-2.5">
-          <Link to="/activity" aria-label="Server activity">
+          <Link to="/activity" aria-label="Game server activity">
             <ListTodo />
             <span className="hidden sm:inline">Activity</span>
           </Link>
@@ -331,7 +331,7 @@ const AddServerButton = React.memo(function AddServerButton({
   if (!canProvision) return null
   return (
     <Button type="button" onClick={dialogStore.open}>
-      <Plus /> Add Server
+      <Plus /> Add Game Server
     </Button>
   )
 })
@@ -600,7 +600,7 @@ const ServerDataTable = React.memo(function ServerDataTable({
       }),
     ])
     return defineDataTable({
-      ariaLabel: "Servers",
+      ariaLabel: "Game Servers",
       columns,
       getRowId: serverTableItemKey,
       model: {
@@ -814,22 +814,24 @@ function EmptyServerTable({
       action={
         !searchActive && canProvision ? (
           <Button type="button" size="sm" onClick={dialogStore.open}>
-            <Plus /> Add Server
+            <Plus /> Add Game Server
           </Button>
         ) : null
       }
       description={
         <span className="block max-w-sm">
           {searchActive
-            ? "Try a server name, short ID, Relay, address, game, implementation, or version."
+            ? "Try a game server name, short ID, Relay, address, game, implementation, or version."
             : canProvision
               ? "Provision the first game server managed by Hearth."
-              : "No server instances have been assigned to your account yet."}
+              : "No game servers have been assigned to your account yet."}
         </span>
       }
       icon={<Server className="size-6 text-muted-foreground/45" />}
       title={
-        searchActive ? "No servers match your search" : "No managed servers"
+        searchActive
+          ? "No game servers match your search"
+          : "No managed game servers"
       }
     />
   )

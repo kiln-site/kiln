@@ -52,19 +52,19 @@ const scopeKindPresentation: Record<
   relay: { Icon: Network, label: "All Relays", one: "Relay", other: "Relays" },
   server: {
     Icon: Server,
-    label: "All servers",
-    one: "server",
-    other: "servers",
+    label: "All game servers",
+    one: "game server",
+    other: "game servers",
   },
 }
 
 export const ServerScopePicker = React.memo(function ServerScopePicker({
-  allLabel = "All servers",
+  allLabel = "All game servers",
   allowAll = true,
-  ariaLabel = "Accessible servers",
-  changeLabel = "Change server",
-  chooseLabel = "Choose server",
-  emptyMessage = "No accessible servers found.",
+  ariaLabel = "Accessible game servers",
+  changeLabel = "Change game server",
+  chooseLabel = "Choose game server",
+  emptyMessage = "No accessible game servers found.",
   manageSettingsControl,
   manageSettingsTooltip,
   onSelect,

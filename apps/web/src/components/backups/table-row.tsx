@@ -74,7 +74,7 @@ type BackupAvailabilityState =
   | "working"
 type BackupTargetPresentation = {
   id: string
-  kindLabel: "Database" | "Relay" | "Server"
+  kindLabel: "Database" | "Relay" | "Game Server"
   name: string
 }
 const activeStatuses = new Set(["queued", "running", "deleting"])
@@ -1049,7 +1049,7 @@ export function backupTargetPresentation(
   const shortId = backup.targetId.slice(0, 8)
   return {
     id: backup.targetId,
-    kindLabel: backup.targetKind === "database" ? "Database" : "Server",
+    kindLabel: backup.targetKind === "database" ? "Database" : "Game Server",
     name: targetName === backup.targetId ? shortId : targetName,
   }
 }
@@ -1057,7 +1057,7 @@ export function backupTargetPresentation(
 function missingTargetMessage(kind: Backup["targetKind"]): string {
   if (kind === "database") return "This database no longer exists"
   if (kind === "platform") return "This Relay no longer exists"
-  return "This server no longer exists"
+  return "This game server no longer exists"
 }
 
 function backupAvailabilityTags(

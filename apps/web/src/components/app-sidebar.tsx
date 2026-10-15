@@ -358,7 +358,7 @@ function ServersNavigationItem({
 }) {
   return (
     <SidebarMenuItem>
-      <SidebarMenuButton asChild tooltip="Servers">
+      <SidebarMenuButton asChild tooltip="Game Servers">
         <Link
           to="/infra/servers"
           activeOptions={{ exact: true, includeSearch: false }}
@@ -366,7 +366,7 @@ function ServersNavigationItem({
           preload="intent"
         >
           <ServerIcon />
-          <span>Servers</span>
+          <span>Game Servers</span>
         </Link>
       </SidebarMenuButton>
       <SidebarMenuBadge className="text-sidebar-muted-foreground">
@@ -1089,10 +1089,10 @@ const InstanceSelector = React.memo(function InstanceSelector({
                   ? "Switch app"
                   : selection.kind === "relay"
                     ? "Switch Relay"
-                    : "Switch server"
+                    : "Switch game server"
             }
             aria-label={
-              selection.kind === "none" ? "Choose a server" : undefined
+              selection.kind === "none" ? "Choose a game server" : undefined
             }
             className="mb-1.5 h-auto border border-sidebar-border/75 bg-background/35 px-2 py-2 group-data-[collapsible=icon]:h-[32px]! group-data-[collapsible=icon]:overflow-visible group-data-[collapsible=icon]:bg-black/10 hover:border-sidebar-border hover:bg-sidebar-accent group-data-[collapsible=icon]:hover:bg-black/15 data-[state=open]:border-sidebar-border data-[state=open]:bg-sidebar-accent dark:group-data-[collapsible=icon]:bg-black/25 dark:group-data-[collapsible=icon]:hover:bg-black/35"
           >
@@ -1107,7 +1107,7 @@ const InstanceSelector = React.memo(function InstanceSelector({
                   observedState: instance.observedState,
                   relayId: instance.relayId,
                 }}
-                label="Switch server."
+                label="Switch game server."
                 meta={`${instance.implementation} ${instance.version}`}
                 name={instance.name}
               />
@@ -1145,11 +1145,11 @@ const InstanceSelector = React.memo(function InstanceSelector({
                 </span>
                 <span className="flex min-w-0 flex-1 flex-col items-start group-data-[collapsible=icon]:hidden">
                   <span className="type-control-sm w-full truncate">
-                    Choose a server
+                    Choose a game server
                   </span>
                   <span className="type-meta w-full truncate text-sidebar-muted-foreground">
                     {selection.kind === "none" && selection.serverCount === 0
-                      ? "No managed servers"
+                      ? "No managed game servers"
                       : "Selection required"}
                   </span>
                 </span>

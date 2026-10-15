@@ -114,7 +114,7 @@ const AddServerDialog = React.memo(function AddServerDialog({
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="h-[min(36rem,calc(100dvh-2rem))] max-h-none gap-0 overflow-hidden p-0 sm:max-w-[calc(100%-2rem)] xl:max-w-5xl">
-        <DialogTitle className="sr-only">Add Server</DialogTitle>
+        <DialogTitle className="sr-only">Add Game Server</DialogTitle>
         {!catalogQuery.data ? (
           <div className="grid min-h-56 place-items-center text-center">
             {catalogQuery.isPending ? (

@@ -207,7 +207,7 @@ export function RouteCommandMenuProvider({
             {selectedServerRoutes.length > 0 ? (
               <>
                 <RouteGroup
-                  heading="Server"
+                  heading="Game Server"
                   routes={selectedServerRoutes}
                   onSelect={navigateToRoute}
                 />

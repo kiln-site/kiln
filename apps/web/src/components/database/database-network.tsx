@@ -140,7 +140,7 @@ export const DatabaseNetworkPicker = React.memo(function DatabaseNetworkPicker({
           <TooltipTrigger asChild>
             <PopoverTrigger asChild>
               <Button
-                aria-label={`Connect servers to ${database.name}`}
+                aria-label={`Connect game servers to ${database.name}`}
                 aria-expanded={open}
                 className="text-muted-foreground hover:text-primary"
                 size="icon-sm"
@@ -151,7 +151,7 @@ export const DatabaseNetworkPicker = React.memo(function DatabaseNetworkPicker({
               </Button>
             </PopoverTrigger>
           </TooltipTrigger>
-          <TooltipContent side="bottom">Connect servers</TooltipContent>
+          <TooltipContent side="bottom">Connect game servers</TooltipContent>
         </Tooltip>
       )}
       <PopoverContent
@@ -188,8 +188,8 @@ function DatabaseServerPicker({ database }: { database: NetworkDatabase }) {
   return (
     <InstancePickerContent
       multiple
-      ariaLabel="Servers"
-      emptyMessage={`No connectable servers are hosted on ${database.relayName}.`}
+      ariaLabel="Game Servers"
+      emptyMessage={`No connectable game servers are hosted on ${database.relayName}.`}
       items={servers}
       pendingKey={
         pendingInstanceId

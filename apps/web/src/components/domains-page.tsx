@@ -168,7 +168,9 @@ const DomainsToolbar = React.memo(function DomainsToolbar({
     onSuccess: ({ syncedServerCount }) => {
       showToast({
         message: `Synced ${syncedServerCount} ${
-          syncedServerCount === 1 ? "server address" : "server addresses"
+          syncedServerCount === 1
+            ? "game server address"
+            : "game server addresses"
         }`,
         type: "success",
       })
@@ -326,7 +328,9 @@ const ManagedDomainsTableHead = React.memo(function ManagedDomainsTableHead() {
       <WorkspaceTableHeading className="hidden w-20 md:table-cell">
         SRV
       </WorkspaceTableHeading>
-      <WorkspaceTableHeading className="w-[30%]">Server</WorkspaceTableHeading>
+      <WorkspaceTableHeading className="w-[30%]">
+        Game Server
+      </WorkspaceTableHeading>
     </WorkspaceTableHead>
   )
 })
@@ -413,8 +417,8 @@ function EmptyDomainsTable({ searchActive }: { searchActive: boolean }) {
       </p>
       <p className="type-support mt-1 max-w-sm text-muted-foreground">
         {searchActive
-          ? "Try a vanity address, server, Relay, port, status, or ID."
-          : "Active vanity addresses will appear here after a server is provisioned."}
+          ? "Try a vanity address, game server, Relay, port, status, or ID."
+          : "Active vanity addresses will appear here after a game server is provisioned."}
       </p>
     </div>
   )

@@ -49,7 +49,7 @@ export function DatabaseNetworkPage() {
         <InfoCard>
           <InfoCardHeader
             icon={<Cable />}
-            title="Connected servers"
+            title="Connected game servers"
             action={
               canWrite ? (
                 <DatabaseNetworkPicker database={database} variant="button" />
@@ -100,11 +100,11 @@ function ConnectedServers({
   if (servers.length === 0) {
     return (
       <SettingsEmptyState icon={<Unplug />}>
-        <p className="font-medium text-foreground">No servers connected</p>
+        <p className="font-medium text-foreground">No game servers connected</p>
         <p>
           {canWrite
-            ? "Connect a server to let it reach this database."
-            : "Servers connected to this database appear here."}
+            ? "Connect a game server to let it reach this database."
+            : "Game servers connected to this database appear here."}
         </p>
       </SettingsEmptyState>
     )

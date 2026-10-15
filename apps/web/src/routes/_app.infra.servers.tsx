@@ -21,7 +21,7 @@ export const Route = createFileRoute("/_app/infra/servers")({
       "/infra/servers"
     )
   },
-  head: () => ({ meta: [{ title: pageTitle("Servers") }] }),
+  head: () => ({ meta: [{ title: pageTitle("Game Servers") }] }),
   component: ServersRoute,
 })
 

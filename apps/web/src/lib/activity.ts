@@ -155,35 +155,35 @@ export function activityLabelForAudit(audit: RelayAuditRecord): string {
 
   if (operation === "instance.action") {
     const action = audit.details.action
-    if (action === "start") return "Started a server"
-    if (action === "restart") return "Restarted a server"
-    if (action === "stop") return "Stopped a server"
-    if (action === "kill") return "Killed a server process"
-    return "Changed a server power state"
+    if (action === "start") return "Started a game server"
+    if (action === "restart") return "Restarted a game server"
+    if (action === "stop") return "Stopped a game server"
+    if (action === "kill") return "Killed a game server process"
+    return "Changed a game server power state"
   }
-  if (operation === "instance.create") return "Created a server"
-  if (operation === "instance.delete") return "Deleted a server"
-  if (operation === "instance.rename") return "Renamed a server"
+  if (operation === "instance.create") return "Created a game server"
+  if (operation === "instance.delete") return "Deleted a game server"
+  if (operation === "instance.rename") return "Renamed a game server"
   if (operation === "instance.startup.write") {
     return audit.details.reinstall === true
-      ? "Reinstalled a server Brick"
-      : "Updated server startup settings"
+      ? "Reinstalled a game server Brick"
+      : "Updated game server startup settings"
   }
-  if (operation === "instance.files.write") return "Saved a server file"
+  if (operation === "instance.files.write") return "Saved a game server file"
   if (operation === "instance.files.database.write") {
-    return "Edited a server database"
+    return "Edited a game server database"
   }
   if (operation === "instance.files.upload-url") {
-    return "Downloaded a URL to a server"
+    return "Downloaded a URL to a game server"
   }
   if (operation === "instance.console.write") return "Sent a console command"
   if (operation === "instance.network.ports.write") {
-    return "Updated server port allocations"
+    return "Updated game server port allocations"
   }
   if (operation === "instance.network.databases.remove")
     return "Removed a saved database connection"
   if (operation === "instance.network.routes.write") {
-    return "Updated server network routes"
+    return "Updated game server network routes"
   }
   if (operation === "relay.rename") return "Renamed a Relay"
   if (operation === "relay.proxy.write") return "Updated Relay proxy settings"

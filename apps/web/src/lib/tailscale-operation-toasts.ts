@@ -54,7 +54,7 @@ export function showTailscaleOperationError(
     id: toast.id,
     message:
       toast.operation === "disconnect"
-        ? "Could not disconnect server"
+        ? "Could not disconnect game server"
         : "Could not connect Tailscale",
     description:
       cause instanceof Error
@@ -77,13 +77,13 @@ function progressContent(
       }
     case "connect":
       return {
-        message: "Connecting server…",
-        description: `Adding the server to ${networkName}.`,
+        message: "Connecting game server…",
+        description: `Adding the game server to ${networkName}.`,
       }
     case "disconnect":
       return {
-        message: "Disconnecting server…",
-        description: `Removing the server from ${networkName}.`,
+        message: "Disconnecting game server…",
+        description: `Removing the game server from ${networkName}.`,
       }
     case "update":
       return {
@@ -106,13 +106,13 @@ function successContent(
       }
     case "connect":
       return {
-        message: "Server connected",
-        description: `The server can now be reached through ${networkName}.`,
+        message: "Game server connected",
+        description: `The game server can now be reached through ${networkName}.`,
       }
     case "disconnect":
       return {
-        message: "Server disconnected",
-        description: `The server is no longer reachable through ${networkName}.`,
+        message: "Game server disconnected",
+        description: `The game server is no longer reachable through ${networkName}.`,
       }
     case "update":
       return {
