@@ -7,12 +7,9 @@
  * `credHelpers`) are external programs the Relay image does not ship, so the
  * CLI could not have used them here either.
  */
-import { readFile } from "node:fs/promises"
-import { homedir } from "node:os"
-import { join } from "node:path"
+import { Effect, Predicate } from "effect"
 
-import { Effect, Predicate, Result } from "effect"
-
+import { dockerClientConfig, parseJson } from "./docker-client-config.js"
 import { DOCKER_HUB, type ImageReference } from "./docker-reference.js"
 
 // The key Docker Hub credentials are saved under, as `docker login` does.
@@ -24,23 +21,6 @@ interface AuthConfig {
   readonly registrytoken?: string
   readonly serveraddress: string
   readonly username?: string
-}
-
-function dockerConfigPath(): string {
-  const directory =
-    process.env.DOCKER_CONFIG?.trim() || join(homedir(), ".docker")
-  return join(directory, "config.json")
-}
-
-/**
- * The Docker client config, parsed, or undefined when it is missing or
- * can't be read, which the CLI treated as an empty config.
- */
-export function dockerClientConfig(): Effect.Effect<unknown> {
-  return Effect.tryPromise(() => readFile(dockerConfigPath(), "utf8")).pipe(
-    Effect.map(parseJson),
-    Effect.orElseSucceed(() => undefined)
-  )
 }
 
 /**
@@ -63,10 +43,6 @@ export function registryAuthHeader(
       return auth && encodeAuthConfig(auth)
     })
   )
-}
-
-function parseJson(text: string): unknown {
-  return Result.getOrUndefined(Result.try((): unknown => JSON.parse(text)))
 }
 
 /** Where `docker login` keeps a registry's credentials. */

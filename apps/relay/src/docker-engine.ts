@@ -222,12 +222,16 @@ export class DockerEngine {
 
   createContainer(
     name: string,
-    body: unknown
+    body: unknown,
+    options: { readonly platform?: string } = {}
   ): Effect.Effect<{ readonly Id: string }, DockerEngineError> {
     return this.#json({
       body,
       method: "POST",
-      path: `/containers/create${query({ name: name || undefined })}`,
+      path: `/containers/create${query({
+        name: name || undefined,
+        platform: options.platform,
+      })}`,
       timeout: 60_000,
     })
   }

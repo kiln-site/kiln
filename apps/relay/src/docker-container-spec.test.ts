@@ -1,5 +1,9 @@
+import { mkdtemp, rm, writeFile } from "node:fs/promises"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
+
 import { Effect, Result } from "effect"
-import { describe, expect, it, onTestFinished } from "vite-plus/test"
+import { describe, expect, it, onTestFinished, vi } from "vite-plus/test"
 
 import {
   containerCreateBody,
@@ -127,6 +131,46 @@ describe("container create bodies", () => {
       DockerEngineError
     )
     expect(fakeDocker.container("kiln-invalid")).toBeUndefined()
+  })
+
+  it("carry the client config's proxies, as the CLI added them, under explicit env", async () => {
+    const engine = new DockerEngine(await fakeDocker.listen())
+    const directory = await mkdtemp(join(tmpdir(), "kiln-docker-config-"))
+    vi.stubEnv("DOCKER_CONFIG", directory)
+    vi.stubEnv("DOCKER_HOST", "")
+    onTestFinished(async () => {
+      vi.unstubAllEnvs()
+      fakeDocker.reset()
+      await rm(directory, { force: true, recursive: true })
+    })
+    await writeFile(
+      join(directory, "config.json"),
+      JSON.stringify({
+        proxies: {
+          default: { httpProxy: "http://default:3128" },
+          "unix:///var/run/docker.sock": {
+            httpProxy: "http://proxy:3128",
+            noProxy: "localhost,10.0.0.0/8",
+          },
+        },
+      })
+    )
+    fakeDocker.images.set("alpine:3.21", {})
+
+    await Effect.runPromise(
+      createContainer(engine, {
+        env: { HTTP_PROXY: "http://explicit:8080" },
+        image: "alpine:3.21",
+        name: "kiln-proxied",
+      })
+    )
+
+    expect(fakeDocker.container("kiln-proxied")?.env).toEqual({
+      HTTP_PROXY: "http://explicit:8080",
+      NO_PROXY: "localhost,10.0.0.0/8",
+      http_proxy: "http://proxy:3128",
+      no_proxy: "localhost,10.0.0.0/8",
+    })
   })
 
   it("match the CLI's for the update helper", () => {

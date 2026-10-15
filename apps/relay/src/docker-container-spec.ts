@@ -6,8 +6,10 @@
  */
 import { Effect, Fiber } from "effect"
 
+import { withProxyEnvironment } from "./docker-client-config.js"
 import {
   completeWithInput,
+  defaultPlatform,
   type DockerEngine,
   DockerEngineError,
   DockerExecProcess,
@@ -253,18 +255,25 @@ export function createContainer(
 ): Effect.Effect<{ readonly Id: string }, DockerEngineError> {
   // An invalid size or duration fails the create, like a flag the CLI
   // rejected, instead of throwing past the caller's cleanup.
-  const body = Effect.try({
-    try: () => containerCreateBody(spec),
-    catch: (cause) =>
-      new DockerEngineError({
-        cause,
-        operation: "POST /containers/create",
-        reason: cause instanceof Error ? cause.message : String(cause),
-      }),
-  })
+  const body = withProxyEnvironment(spec.env).pipe(
+    Effect.flatMap((env) =>
+      Effect.try({
+        try: () => containerCreateBody({ ...spec, env }),
+        catch: (cause) =>
+          new DockerEngineError({
+            cause,
+            operation: "POST /containers/create",
+            reason: cause instanceof Error ? cause.message : String(cause),
+          }),
+      })
+    )
+  )
   return body.pipe(
     Effect.flatMap((created) => {
-      const create = engine.createContainer(spec.name, created)
+      // For DOCKER_DEFAULT_PLATFORM, as the CLI's `--platform` default.
+      const create = engine.createContainer(spec.name, created, {
+        platform: defaultPlatform(),
+      })
       return create.pipe(
         Effect.catchIf(
           (cause) =>
