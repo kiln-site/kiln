@@ -740,8 +740,8 @@ function RelayTable({
         meta: dataTableColumnMeta({
           width: {
             base: "minmax(0,1fr)",
-            md: "minmax(0,1.25fr)",
-            xl: "minmax(0,1.5fr)",
+            // Fit the icon, architecture, and short ID; long names truncate.
+            lg: "12rem",
           },
         }),
       }),
@@ -776,10 +776,7 @@ function RelayTable({
         },
         meta: dataTableColumnMeta({
           hideBelow: "lg",
-          width: {
-            base: "minmax(10rem,1fr)",
-            xl: "minmax(10rem,2fr)",
-          },
+          width: "minmax(0,1fr)",
         }),
       }),
       relayTableColumnHelper.accessor(
@@ -796,8 +793,8 @@ function RelayTable({
             />
           ),
           meta: dataTableColumnMeta({
-            hideBelow: "xl",
-            width: "minmax(11rem,1.25fr)",
+            hideBelow: "lg",
+            width: "minmax(0,1fr)",
           }),
         }
       ),
@@ -813,7 +810,6 @@ function RelayTable({
             width: {
               base: "9rem",
               sm: "10rem",
-              xl: "minmax(10rem,1fr)",
             },
           },
           {
