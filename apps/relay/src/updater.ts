@@ -1,24 +1,18 @@
-import { execFile } from "node:child_process"
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises"
-import { request } from "node:http"
 import { join } from "node:path"
-import { promisify } from "node:util"
 import { Effect } from "effect"
 
+import { DockerEngine } from "./docker-engine.js"
 import { RelaySystemUpdateError } from "./effect/errors.js"
-import {
-  replaceContainerEffect,
-  type ContainerInspect,
-  type ContainerUpdateDocker,
-  type ImageInspect,
-} from "./update-container.js"
+import { replaceContainerEffect } from "./update-container.js"
 import {
   drainUpdateBatchEffect,
   retryContainerReplacementEffect,
 } from "./updater-effects.js"
 
-const executeFile = promisify(execFile)
-const dockerSocket = "/var/run/docker.sock"
+// The helper runs from the Relay image with the Relay's volumes, so it has
+// the Relay's Docker socket.
+const docker = new DockerEngine("/var/run/docker.sock")
 
 interface UpdateOperation {
   batchId?: string
@@ -44,18 +38,6 @@ interface UpdateBatch {
 const operationsDirectory = requiredEnvironment("KILN_UPDATE_DATA_DIR")
 const batchId = optionalEnvironment("KILN_UPDATE_BATCH_ID")
 
-const dockerRuntime: ContainerUpdateDocker = {
-  command: docker,
-  createContainer: (name, configuration) =>
-    dockerJson(
-      `/containers/create?name=${encodeURIComponent(name)}`,
-      configuration
-    ),
-  inspectContainer: inspect,
-  inspectImage,
-  waitUntilHealthy,
-}
-
 const runOperationEffect = Effect.fn("relay.updater.replace")(function* (
   operation: UpdateOperation,
   legacyReference?: string
@@ -80,7 +62,7 @@ const runOperationEffect = Effect.fn("relay.updater.replace")(function* (
         targetReference,
         targetVersion: operation.version,
       },
-      dockerRuntime,
+      docker,
       (phase) =>
         updateOperationEffect({ ...operation, phase }).pipe(
           Effect.catch(() => Effect.void)
@@ -163,95 +145,6 @@ const updaterEffect = (
 ).pipe(Effect.withSpan("relay.updater.run"))
 
 await Effect.runPromise(updaterEffect)
-
-async function waitUntilHealthy(container: string): Promise<void> {
-  const deadline = Date.now() + 120_000
-  let runningSince = 0
-  while (Date.now() < deadline) {
-    const current = await inspect(container)
-    if (!current.State.Running) {
-      throw new Error("The replacement container exited during startup")
-    }
-    const health = current.State.Health?.Status
-    if (health === "healthy") return
-    if (health === "unhealthy") {
-      throw new Error("The replacement container failed its health check")
-    }
-    if (!health) {
-      runningSince ||= Date.now()
-      if (Date.now() - runningSince >= 5_000) return
-    }
-    await new Promise((resolvePromise) => setTimeout(resolvePromise, 1_000))
-  }
-  throw new Error("The replacement container did not become healthy in time")
-}
-
-async function inspect(container: string): Promise<ContainerInspect> {
-  const result = await docker(["inspect", container])
-  const inspected = (JSON.parse(result.stdout) as Array<ContainerInspect>)[0]
-  if (!inspected) throw new Error("Docker could not inspect the target")
-  return inspected
-}
-
-async function inspectImage(image: string): Promise<ImageInspect> {
-  const result = await docker(["image", "inspect", image])
-  const inspected = (JSON.parse(result.stdout) as Array<ImageInspect>)[0]
-  if (!inspected) throw new Error("Docker could not inspect the target image")
-  return inspected
-}
-
-async function docker(
-  arguments_: Array<string>,
-  timeout = 60_000
-): Promise<{ stderr: string; stdout: string }> {
-  const result = await executeFile("docker", arguments_, {
-    encoding: "utf8",
-    maxBuffer: 4 * 1024 * 1024,
-    timeout,
-  })
-  return { stderr: result.stderr, stdout: result.stdout }
-}
-
-async function dockerJson(path: string, body: unknown): Promise<void> {
-  const encoded = Buffer.from(JSON.stringify(body))
-  await new Promise<void>((resolvePromise, rejectPromise) => {
-    const dockerRequest = request({
-      headers: {
-        "Content-Length": String(encoded.byteLength),
-        "Content-Type": "application/json",
-      },
-      method: "POST",
-      path,
-      socketPath: dockerSocket,
-    })
-    const chunks: Array<Buffer> = []
-    const timer = setTimeout(
-      () => dockerRequest.destroy(new Error("Docker API request timed out")),
-      60_000
-    )
-    dockerRequest.on("response", (response) => {
-      response.on("data", (chunk: Buffer) => chunks.push(chunk))
-      response.on("end", () => {
-        clearTimeout(timer)
-        const text = Buffer.concat(chunks).toString("utf8")
-        if ((response.statusCode ?? 500) >= 400) {
-          rejectPromise(
-            new Error(
-              `Docker API returned HTTP ${response.statusCode ?? 500}: ${text}`
-            )
-          )
-          return
-        }
-        resolvePromise()
-      })
-    })
-    dockerRequest.on("error", (cause) => {
-      clearTimeout(timer)
-      rejectPromise(cause)
-    })
-    dockerRequest.end(encoded)
-  })
-}
 
 function readOperationEffect(id: string) {
   return updaterOperation("readOperation", () =>

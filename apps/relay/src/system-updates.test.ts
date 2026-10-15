@@ -11,178 +11,134 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { it as effectIt } from "@effect/vitest"
 import { Effect, Exit, Fiber } from "effect"
-import { beforeEach, describe, expect, vi } from "vite-plus/test"
+import { beforeEach, describe, expect } from "vite-plus/test"
 
-import type { CommandOptions, CommandResult } from "./command.js"
 import { SystemUpdateManager, type UpdateOperation } from "./system-updates.js"
+import { fakeDocker, type HeldOperation } from "./test/docker.js"
 import { KILN_IMAGE_SOURCE } from "./update-container.js"
-
-const fake = vi.hoisted(() => ({ docker: null as FakeDocker | null }))
-
-vi.mock("./command.js", () => ({
-  command: (
-    executable: string,
-    arguments_: Array<string>,
-    options?: CommandOptions
-  ) => {
-    if (!fake.docker) throw new Error("Fake Docker is not installed")
-    return fake.docker.run(executable, arguments_, options)
-  },
-}))
 
 const targetImage = `ghcr.io/kiln-site/relay@sha256:${"a".repeat(64)}`
 const hearthImage = `ghcr.io/kiln-site/hearth@sha256:${"b".repeat(64)}`
 
-const relayContainer = {
-  Config: {
-    Hostname: "custom-relay-hostname",
-    Image: "ghcr.io/kiln-site/relay:latest",
-    Labels: {
-      "io.kiln.component": "relay",
-      "org.opencontainers.image.source": KILN_IMAGE_SOURCE,
-      "org.opencontainers.image.version": "0.1.0-nightly.1",
-    },
-  },
-  Id: "relay-container-id",
-  Name: "/kiln-relay",
-}
-
-const hearthContainer = {
-  Config: {
-    Hostname: "hearth-hostname",
-    Image: "ghcr.io/kiln-site/hearth:latest",
-    Labels: {
-      "io.kiln.component": "hearth",
-      "org.opencontainers.image.source": KILN_IMAGE_SOURCE,
-      "org.opencontainers.image.version": "0.1.0-nightly.1",
-    },
-  },
-  Id: "hearth-container-id",
-  Name: "/kiln-hearth",
-}
-
-interface FakeHelper {
-  readonly env: Record<string, string>
-  running: boolean
-  readonly volumesFrom: string | undefined
-}
-
-/** A small stateful stand-in for the Docker CLI behind `command`. */
-class FakeDocker {
+/**
+ * The Relay and Hearth containers of an installation, and the release
+ * images a registry offers, installed into the fake Docker as a test starts
+ * an update.
+ */
+class Installation {
   currentVersion = "0.1.0-nightly.1"
   currentImagePrefix = "ghcr.io/kiln-site"
   currentImageSource = KILN_IMAGE_SOURCE
   imageSource = KILN_IMAGE_SOURCE
   imageVersion = "0.1.0-nightly.18"
-  holdPull = false
-  readonly helpers = new Map<string, FakeHelper>()
-  readonly pulledImages = new Set<string>()
-  readonly pullStarted: Promise<void>
-  #pullStarted: () => void = () => undefined
+  #held: HeldOperation | null = null
 
-  constructor() {
-    this.pullStarted = new Promise((resolve) => {
-      this.#pullStarted = resolve
+  /** Holds the next pull until this is set back to false. */
+  set holdPull(hold: boolean) {
+    if (hold) this.#held = fakeDocker.hold({ command: "pull" })
+    else this.#held?.release()
+  }
+
+  get pullStarted(): Promise<void> {
+    if (!this.#held) throw new Error("No pull is held")
+    return this.#held.reached
+  }
+
+  get relay() {
+    return this.#installed("kiln-relay")
+  }
+
+  /** The update helpers' containers, by name. */
+  get helpers() {
+    return new Map(
+      [...fakeDocker.containers.values()]
+        .filter((container) => container.name.startsWith("kiln-updater-"))
+        .map((container) => [
+          container.name,
+          {
+            env: container.env,
+            running: container.state.running,
+            volumesFrom: container.volumesFrom[0],
+          },
+        ])
+    )
+  }
+
+  get pulledImages(): Set<string> {
+    return new Set(fakeDocker.pulls.keys())
+  }
+
+  addHelper(name: string) {
+    this.install()
+    fakeDocker.addContainer({ image: targetImage, name, running: true })
+  }
+
+  stopHelper(name: string) {
+    fakeDocker.exit(name, { exitCode: 0 })
+  }
+
+  async manager(options: {
+    dataDirectory: string
+    gitRepository?: string
+    installationId?: string | null
+  }): Promise<SystemUpdateManager> {
+    this.install()
+    return new SystemUpdateManager({
+      ...options,
+      dockerSocket: await fakeDocker.listen(),
     })
   }
 
-  readonly run = async (
-    _executable: string,
-    arguments_: Array<string>,
-    options: CommandOptions = {}
-  ): Promise<CommandResult> => {
-    const [subcommand, ...rest] = arguments_
-    if (subcommand === "pull") {
-      this.#pullStarted()
-      if (this.holdPull) await waitForAbort(options.signal)
-      this.pulledImages.add(rest[0] ?? "")
-      return emptyResult()
-    }
-    if (subcommand === "image" && rest[0] === "inspect") {
-      const component = rest[1] === hearthImage ? "hearth" : "relay"
-      return jsonResult([
-        {
-          Config: {
-            Labels: {
-              "io.kiln.component": component,
-              "org.opencontainers.image.source": this.imageSource,
-              "org.opencontainers.image.version": this.imageVersion,
-            },
-          },
-        },
-      ])
-    }
-    if (subcommand === "run") return this.#runHelper(rest)
-    if (subcommand === "rm") {
-      for (const name of rest) this.helpers.delete(name)
-      return emptyResult()
-    }
-    if (subcommand === "inspect") {
-      return jsonResult(rest.map((identifier) => this.#inspect(identifier)))
-    }
-    if (subcommand === "ps" && rest[0] === "--quiet") {
-      return {
-        stderr: "",
-        stdout: `${relayContainer.Id}\n${hearthContainer.Id}\n`,
+  install() {
+    if (fakeDocker.container("kiln-relay")) return
+    fakeDocker.addContainer({
+      hostname: "custom-relay-hostname",
+      image: `${this.currentImagePrefix}/relay:latest`,
+      labels: {
+        "io.kiln.component": "relay",
+        "org.opencontainers.image.source": this.currentImageSource,
+        "org.opencontainers.image.version": this.currentVersion,
+      },
+      name: "kiln-relay",
+      running: true,
+    })
+    fakeDocker.addContainer({
+      hostname: "hearth-hostname",
+      image: "ghcr.io/kiln-site/hearth:latest",
+      labels: {
+        "io.kiln.component": "hearth",
+        "org.opencontainers.image.source": KILN_IMAGE_SOURCE,
+        "org.opencontainers.image.version": "0.1.0-nightly.1",
+      },
+      name: "kiln-hearth",
+      running: true,
+    })
+    for (const prefix of new Set(["ghcr.io/kiln-site", this.currentImagePrefix])) {
+      for (const component of ["relay", "hearth"] as const) {
+        fakeDocker.images.set(
+          `${prefix}/${component}@sha256:${(component === "relay" ? "a" : "b").repeat(64)}`,
+          {
+            "io.kiln.component": component,
+            "org.opencontainers.image.source": this.imageSource,
+            "org.opencontainers.image.version": this.imageVersion,
+          }
+        )
       }
     }
-    if (subcommand === "ps" && rest[0] === "--all") {
-      const filter = rest.find((value) => value.startsWith("name="))
-      const name = filter?.slice("name=^/".length, -1) ?? ""
-      return { stderr: "", stdout: this.helpers.has(name) ? `${name}\n` : "" }
-    }
-    throw new Error(`Unexpected docker ${arguments_.join(" ")}`)
   }
 
-  #runHelper(arguments_: Array<string>): CommandResult {
-    const env: Record<string, string> = {}
-    let name = ""
-    let volumesFrom: string | undefined
-    for (let index = 0; index < arguments_.length; index += 1) {
-      const flag = arguments_[index]
-      const value = arguments_[index + 1] ?? ""
-      if (flag === "--name") name = value
-      else if (flag === "--volumes-from") volumesFrom = value
-      else if (flag === "--env") {
-        const separator = value.indexOf("=")
-        env[value.slice(0, separator)] = value.slice(separator + 1)
-      } else continue
-      index += 1
-    }
-    if (this.helpers.has(name)) throw new Error("Conflict: name in use")
-    this.helpers.set(name, { env, running: true, volumesFrom })
-    return emptyResult()
-  }
-
-  #inspect(identifier: string) {
-    const helper = this.helpers.get(identifier)
-    if (helper) return { State: { Running: helper.running } }
-    if (identifier === "kiln-relay" || identifier === relayContainer.Id) {
-      return {
-        ...relayContainer,
-        Config: {
-          ...relayContainer.Config,
-          Image: `${this.currentImagePrefix}/relay:latest`,
-          Labels: {
-            ...relayContainer.Config.Labels,
-            "org.opencontainers.image.source": this.currentImageSource,
-            "org.opencontainers.image.version": this.currentVersion,
-          },
-        },
-      }
-    }
-    if (identifier === "kiln-hearth" || identifier === hearthContainer.Id) {
-      return hearthContainer
-    }
-    throw new Error("No such container")
+  #installed(name: string) {
+    const container = fakeDocker.container(name)
+    if (!container) throw new Error(`${name} is not installed`)
+    return container
   }
 }
 
-let docker: FakeDocker
+let docker: Installation
 
 beforeEach(() => {
-  docker = new FakeDocker()
-  fake.docker = docker
+  fakeDocker.reset()
+  docker = new Installation()
 })
 
 const relayTarget = {
@@ -195,7 +151,7 @@ describe("release image versions", () => {
   effectIt.effect("starts a stable update from the promoted image digest", () =>
     withTemporaryDataDirectory((dataDirectory) =>
       Effect.gen(function* () {
-        const manager = new SystemUpdateManager({ dataDirectory })
+        const manager = yield* Effect.promise(() => docker.manager({ dataDirectory }))
 
         const operation = yield* manager.start({
           ...relayTarget,
@@ -212,7 +168,7 @@ describe("release image versions", () => {
               KILN_UPDATE_DATA_DIR: join(dataDirectory, "updates"),
             },
             running: true,
-            volumesFrom: relayContainer.Id,
+            volumesFrom: docker.relay.id,
           }
         )
       })
@@ -223,7 +179,7 @@ describe("release image versions", () => {
     withTemporaryDataDirectory((dataDirectory) =>
       Effect.gen(function* () {
         docker.imageVersion = "0.1.1-nightly.1"
-        const manager = new SystemUpdateManager({ dataDirectory })
+        const manager = yield* Effect.promise(() => docker.manager({ dataDirectory }))
 
         const operation = yield* manager.start({
           ...relayTarget,
@@ -242,10 +198,9 @@ describe("release image versions", () => {
         docker.imageSource = "https://github.com/example/kiln-fork"
         docker.currentImageSource = docker.imageSource
         docker.currentImagePrefix = "ghcr.io/example/kiln-fork"
-        const manager = new SystemUpdateManager({
-          dataDirectory,
-          gitRepository: docker.imageSource,
-        })
+        const manager = yield* Effect.promise(() =>
+          docker.manager({ dataDirectory, gitRepository: docker.imageSource })
+        )
 
         const forkImage = targetImage.replace(
           "ghcr.io/kiln-site",
@@ -266,7 +221,7 @@ describe("release image versions", () => {
   effectIt.effect("launches one helper for a co-located update batch", () =>
     withTemporaryDataDirectory((dataDirectory) =>
       Effect.gen(function* () {
-        const manager = new SystemUpdateManager({ dataDirectory })
+        const manager = yield* Effect.promise(() => docker.manager({ dataDirectory }))
 
         const operations = yield* manager.startBatch({
           helperImage: targetImage,
@@ -301,7 +256,7 @@ describe("release image versions", () => {
     withTemporaryDataDirectory((dataDirectory) =>
       Effect.gen(function* () {
         docker.currentVersion = "0.1.0-nightly.12"
-        const manager = new SystemUpdateManager({ dataDirectory })
+        const manager = yield* Effect.promise(() => docker.manager({ dataDirectory }))
 
         const failure = yield* manager
           .start({ ...relayTarget, version: "0.1.0-nightly.8" })
@@ -320,7 +275,7 @@ describe("release image versions", () => {
       withTemporaryDataDirectory((dataDirectory) =>
         Effect.gen(function* () {
           docker.currentVersion = "0.1.0"
-          const manager = new SystemUpdateManager({ dataDirectory })
+          const manager = yield* Effect.promise(() => docker.manager({ dataDirectory }))
 
           const operation = yield* manager.start({
             ...relayTarget,
@@ -338,7 +293,7 @@ describe("release image versions", () => {
       Effect.gen(function* () {
         docker.currentVersion = "0.1.0-nightly.20260726.171529"
         docker.imageVersion = "0.1.0-nightly.20260726.171530"
-        const manager = new SystemUpdateManager({ dataDirectory })
+        const manager = yield* Effect.promise(() => docker.manager({ dataDirectory }))
 
         const operation = yield* manager.start({
           ...relayTarget,
@@ -358,7 +313,7 @@ describe("update operation lifecycle", () => {
       withTemporaryDataDirectory((dataDirectory) =>
         Effect.gen(function* () {
           docker.holdPull = true
-          const manager = new SystemUpdateManager({ dataDirectory })
+          const manager = yield* Effect.promise(() => docker.manager({ dataDirectory }))
           const controller = new AbortController()
           const first = yield* manager
             .start({ ...relayTarget, version: "0.1.0" }, controller.signal)
@@ -403,14 +358,10 @@ describe("update operation lifecycle", () => {
     () =>
       withTemporaryDataDirectory((dataDirectory) =>
         Effect.gen(function* () {
-          const manager = new SystemUpdateManager({ dataDirectory })
+          const manager = yield* Effect.promise(() => docker.manager({ dataDirectory }))
           const operation = staleOperation()
           const helperName = `kiln-updater-${operation.id}`
-          docker.helpers.set(helperName, {
-            env: {},
-            running: true,
-            volumesFrom: relayContainer.Id,
-          })
+          docker.addHelper(helperName)
           const updatesDirectory = join(dataDirectory, "updates")
           yield* Effect.promise(() =>
             mkdir(updatesDirectory, { recursive: true })
@@ -425,8 +376,7 @@ describe("update operation lifecycle", () => {
           expect((yield* manager.status(operation.id))?.status).toBe("running")
           expect(docker.helpers.has(helperName)).toBe(true)
 
-          const helper = docker.helpers.get(helperName)
-          if (helper) helper.running = false
+          docker.stopHelper(helperName)
           expect((yield* manager.status(operation.id))?.status).toBe("failed")
           expect(docker.helpers.has(helperName)).toBe(false)
         })
@@ -439,7 +389,7 @@ describe("update operation lifecycle", () => {
       withTemporaryDataDirectory((dataDirectory) =>
         Effect.gen(function* () {
           docker.holdPull = true
-          const manager = new SystemUpdateManager({ dataDirectory })
+          const manager = yield* Effect.promise(() => docker.manager({ dataDirectory }))
           const controller = new AbortController()
           const first = yield* manager
             .start({ ...relayTarget, version: "0.1.0" }, controller.signal)
@@ -464,7 +414,7 @@ describe("update operation lifecycle", () => {
   effectIt.effect("recovers an orphaned target lock", () =>
     withTemporaryDataDirectory((dataDirectory) =>
       Effect.gen(function* () {
-        const manager = new SystemUpdateManager({ dataDirectory })
+        const manager = yield* Effect.promise(() => docker.manager({ dataDirectory }))
         const updatesDirectory = join(dataDirectory, "updates")
         const lockPath = join(updatesDirectory, "kiln-relay.lock")
         yield* Effect.promise(() =>
@@ -492,7 +442,7 @@ describe("container identity", () => {
     () =>
       withTemporaryDataDirectory((dataDirectory) =>
         Effect.gen(function* () {
-          const manager = new SystemUpdateManager({ dataDirectory })
+          const manager = yield* Effect.promise(() => docker.manager({ dataDirectory }))
 
           const inspection = yield* manager.inspect("custom-relay-hostname")
 
@@ -505,10 +455,12 @@ describe("container identity", () => {
   effectIt.effect("rejects a container from another Kiln installation", () =>
     withTemporaryDataDirectory((dataDirectory) =>
       Effect.gen(function* () {
-        const manager = new SystemUpdateManager({
-          dataDirectory,
-          installationId: "hearth-feature-a1b2c3",
-        })
+        const manager = yield* Effect.promise(() =>
+          docker.manager({
+            dataDirectory,
+            installationId: "hearth-feature-a1b2c3",
+          })
+        )
 
         const inspection = yield* manager.inspect("custom-relay-hostname")
 
@@ -549,26 +501,4 @@ function withTemporaryDataDirectory<TResult, TError, TRequirements>(
     use,
     (directory) => Effect.promise(() => removeTemporaryDirectory(directory))
   )
-}
-
-function emptyResult(): CommandResult {
-  return { stderr: "", stdout: "" }
-}
-
-function jsonResult(value: unknown): CommandResult {
-  return { stderr: "", stdout: JSON.stringify(value) }
-}
-
-async function waitForAbort(signal: AbortSignal | undefined): Promise<never> {
-  if (!signal) throw new Error("Expected an abort signal")
-  if (signal.aborted) throw abortError(signal)
-  return new Promise((_, reject) => {
-    signal.addEventListener("abort", () => reject(abortError(signal)), {
-      once: true,
-    })
-  })
-}
-
-function abortError(signal: AbortSignal): Error {
-  return signal.reason instanceof Error ? signal.reason : new Error("cancelled")
 }
