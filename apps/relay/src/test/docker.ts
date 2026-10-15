@@ -235,6 +235,11 @@ export class FakeDocker {
    * stderr; they exit with code 1.
    */
   readonly programFailures = new Map<string, string>()
+  /**
+   * Programs whose exec stream Docker breaks with an error frame (as it does
+   * for an error it hits after answering) instead of their output.
+   */
+  readonly streamErrors = new Map<string, string>()
   /** Images whose registry cannot be reached; pulling them fails. */
   readonly unreachableImages = new Set<string>()
   /** What pulling an image prints before its final status, by image. */
@@ -303,6 +308,7 @@ export class FakeDocker {
     this.pullOutput.clear()
     this.crashingImages.clear()
     this.programFailures.clear()
+    this.streamErrors.clear()
     this.tailscale.controlPlaneReachable = true
     this.tailscale.machines.clear()
     this.#faults.length = 0
@@ -1813,6 +1819,11 @@ export class FakeDocker {
       exec.exitCode = exitCode
       exec.running = false
       if (socket.destroyed) return
+      const streamError = this.streamErrors.get(clientOf(exec.cmd))
+      if (streamError !== undefined) {
+        socket.end(frame(3, Buffer.from(streamError)))
+        return
+      }
       if (stdout) socket.write(frame(1, Buffer.from(stdout)))
       if (stderr) socket.write(frame(2, Buffer.from(stderr)))
       socket.end()

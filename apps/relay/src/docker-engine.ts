@@ -946,6 +946,12 @@ export class DockerExecProcess {
         callback()
       },
     })
+    // How the process failed reaches callers through `exitCode`, and through
+    // the streams to those that pipe or write them; a stream nobody listens
+    // to failing must not become an uncaught error that stops the Relay.
+    for (const stream of [this.stdin, this.stdout, this.stderr]) {
+      stream.on("error", ignoreStreamError)
+    }
     // Reading waits for whichever reader is behind.
     const behind = new Set<PassThrough>()
     const demultiplex = demultiplexer(false, (stream, payload) => {
@@ -1159,6 +1165,8 @@ function withTimeout<A>(
     })
   )
 }
+
+function ignoreStreamError() {}
 
 /**
  * Splits a non-TTY stream into stdout and stderr: each frame is a stream byte,
