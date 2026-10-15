@@ -20,7 +20,7 @@ import {
 } from "./docker-engine.js"
 import type { BrickCatalog } from "./bricks.js"
 import { directoryApparentSizeEffect } from "./disk-usage.js"
-import { ensuringPromise } from "./effect/promise.js"
+import { ensuringPromise, recoverPromise } from "./effect/promise.js"
 import type {
   RelayStateStore,
   RelayStoredLifecycleSession,
@@ -2061,7 +2061,10 @@ export class DockerDriver {
       // Docker can't find the Relay when it isn't a container or has been
       // given another hostname. The process's own usage stands in then, so
       // the disk figures still arrive.
-      this.#dockerStats(hostname()).catch(() => null),
+      recoverPromise(
+        () => this.#dockerStats(hostname()),
+        () => null
+      ),
       statfs(this.#config.dataDirectory),
     ])
     const nodeStorageTotal = filesystem.blocks * filesystem.bsize
