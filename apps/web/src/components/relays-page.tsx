@@ -24,7 +24,6 @@ import {
   RefreshCw,
   ServerCog,
   Settings2,
-  TriangleAlert,
   UserRound,
   X,
 } from "lucide-react"
@@ -103,7 +102,6 @@ import {
 import { RelayMemoryCell } from "@/components/relay-memory-cell"
 import { StatusIndicator } from "@/components/status-indicator"
 import { UserAvatar } from "@/components/account-avatar"
-import { useInfraUpdateDialogStore } from "@/components/infra-update-dialog-provider"
 import { relaysCollectionOptions } from "@/lib/collections/relays"
 import {
   isMinecraftUsername,
@@ -111,7 +109,6 @@ import {
 } from "@/lib/minecraft-profile"
 import { pairingFeedbackFrom } from "@/lib/relay-pairing-errors"
 import { relayAddress } from "@/lib/relay-route"
-import { canRefetchSystemUpdateOverview } from "@/lib/system-update-presence"
 import {
   accessCapabilitiesQueryOptions,
   queryKeys,
@@ -120,15 +117,7 @@ import {
   relayProxyQueryOptions,
   relaysQueryOptions,
   type RelayConnection,
-  updateOverviewQueryOptions,
 } from "@/lib/query-options"
-import {
-  compareLatestReleaseVersion,
-  findKilnRelease,
-  isKilnReleaseVersion,
-} from "@/lib/release-version"
-import type { PublicKilnRelease } from "@/effect/github-releases"
-import { useKilnGitRepository } from "@/lib/git-repository"
 import type { InstanceFavorite } from "@/lib/instance-favorites"
 import type { PersistedRelay } from "@/lib/relay-registry"
 import {
@@ -153,7 +142,6 @@ import {
   updateRelayProxy,
 } from "@/server/relays"
 import type { ManagedRelay } from "@/server/relays"
-import type { UpdateOverview } from "@/server/updates"
 
 const invitationTimeFormatter = new Intl.DateTimeFormat("en-US", {
   hour: "numeric",
@@ -163,18 +151,10 @@ const invitationTimeFormatter = new Intl.DateTimeFormat("en-US", {
 })
 const minimumRelaySyncFeedbackMs = 500
 const relayInventoryError = new Error("Could not load Relays")
-const noOutdatedRelays: ReadonlySet<string> = new Set()
-const noPublicReleases: ReadonlyArray<PublicKilnRelease> = []
-const noReportedRelayVersions: ReadonlyMap<string, string | null> = new Map()
 const noOwnerProfileIds: ReadonlyMap<string, string> = new Map()
 // Owner cells read profiles from context so avatars never rebuild columns.
 const RelayOwnerProfileIdsContext =
   React.createContext<ReadonlyMap<string, string>>(noOwnerProfileIds)
-const noRelayUpdateSummary = {
-  outdatedRelayIds: noOutdatedRelays,
-  reportedVersions: noReportedRelayVersions,
-  releases: noPublicReleases,
-}
 
 type RelayRegistryTableItem = Pick<
   ManagedRelay,
@@ -185,7 +165,6 @@ type RelayRegistryTableItem = Pick<
   | "name"
   | "nodeArch"
   | "nodePlatform"
-  | "nodeVersion"
   | "ownerEmail"
   | "ownerName"
   | "port"
@@ -217,7 +196,6 @@ const relayTableSearchFields = [
   (relay: RelayTableItem) => relay.hostname,
   (relay: RelayTableItem) => relay.nodeArch,
   (relay: RelayTableItem) => relay.nodePlatform,
-  (relay: RelayTableItem) => relay.nodeVersion,
   (relay: RelayTableItem) => relay.ownerEmail,
   (relay: RelayTableItem) => relay.ownerName,
   (relay: RelayTableItem) => relayStatusPresentation(relay).label,
@@ -298,11 +276,6 @@ export const RelaysPage = React.memo(function RelaysPage({
   searchStore: DataTableSearchStore
 }) {
   const [dialogStore] = React.useState(createRelayDialogStore)
-  const updateDialogStore = useInfraUpdateDialogStore()
-  const { data: canReviewUpdates } = useSuspenseQuery({
-    ...accessCapabilitiesQueryOptions(),
-    select: selectCanReviewUpdates,
-  })
 
   return (
     <div className="mx-auto flex h-full min-h-[34rem] w-full max-w-[90rem] flex-col px-3 pb-3 sm:px-5 sm:pb-5">
@@ -312,11 +285,9 @@ export const RelaysPage = React.memo(function RelaysPage({
         }
       >
         <FilteredRelayTable
-          canReviewUpdates={canReviewUpdates}
           searchStore={searchStore}
           onAdd={dialogStore.openAdd}
           onEdit={dialogStore.openEdit}
-          onOpenUpdates={updateDialogStore.open}
         />
       </DataTableWorkspace>
 
@@ -477,17 +448,13 @@ const RelayDialogHost = React.memo(function RelayDialogHost({
 })
 
 const FilteredRelayTable = React.memo(function FilteredRelayTable({
-  canReviewUpdates,
   searchStore,
   onAdd,
   onEdit,
-  onOpenUpdates,
 }: {
-  canReviewUpdates: boolean
   searchStore: DataTableSearchStore
   onAdd: () => void
   onEdit: (relayId: string) => void
-  onOpenUpdates: (relayId?: string) => void
 }) {
   const queryClient = useQueryClient()
   const result = useLiveQuery({
@@ -504,7 +471,6 @@ const FilteredRelayTable = React.memo(function FilteredRelayTable({
           name: relay.name,
           nodeArch: relay.nodeArch,
           nodePlatform: relay.nodePlatform,
-          nodeVersion: relay.nodeVersion,
           ownerEmail: relay.ownerEmail,
           ownerName: relay.ownerName,
           port: relay.port,
@@ -546,24 +512,14 @@ const FilteredRelayTable = React.memo(function FilteredRelayTable({
     isLoading: result.isLoading,
     retry,
   })
-  const { data: updateSummary = noRelayUpdateSummary } = useQuery({
-    ...updateOverviewQueryOptions(),
-    enabled: () => canReviewUpdates && canRefetchSystemUpdateOverview(),
-    retry: false,
-    select: selectRelayUpdateSummary,
-  })
 
   return (
     <RelayOwnerProfilesProvider ownerNames={ownerNames}>
       <RelayTable
-        outdatedRelayIds={updateSummary.outdatedRelayIds}
-        reportedVersions={updateSummary.reportedVersions}
-        releases={updateSummary.releases}
         source={source}
         searchStore={searchStore}
         onAdd={onAdd}
         onEdit={onEdit}
-        onOpenUpdates={onOpenUpdates}
       />
     </RelayOwnerProfilesProvider>
   )
@@ -666,23 +622,15 @@ const RelaySyncButton = React.memo(function RelaySyncButton() {
 })
 
 function RelayTable({
-  outdatedRelayIds,
-  reportedVersions,
-  releases,
   searchStore,
   source,
   onAdd,
   onEdit,
-  onOpenUpdates,
 }: {
-  outdatedRelayIds: ReadonlySet<string>
-  reportedVersions: ReadonlyMap<string, string | null>
-  releases: ReadonlyArray<PublicKilnRelease>
   searchStore: DataTableSearchStore
   source: DataTableSource<RelayTableItem>
   onAdd: () => void
   onEdit: (relayId: string) => void
-  onOpenUpdates: (relayId?: string) => void
 }) {
   const [favoritesOnly] = useFavoritesOnly("relays")
   const visibleSource = useFavoritesOnlySource(
@@ -797,34 +745,6 @@ function RelayTable({
           },
         }),
       }),
-      relayTableColumnHelper.accessor(
-        (relay) => reportedVersions.get(relay.id) ?? relay.nodeVersion ?? "",
-        {
-          id: "version",
-          header: "Version",
-          sortFn: "text",
-          cell: ({ row }) => {
-            const relay = row.original
-            return (
-              <RelayVersion
-                name={relay.name}
-                outdated={outdatedRelayIds.has(relay.id)}
-                releases={releases}
-                relayId={relay.id}
-                version={reportedVersions.get(relay.id) ?? relay.nodeVersion}
-                onOpenUpdates={onOpenUpdates}
-              />
-            )
-          },
-          meta: dataTableColumnMeta({
-            hideBelow: "md",
-            width: {
-              base: "minmax(7rem,0.65fr)",
-              xl: "minmax(7rem,1fr)",
-            },
-          }),
-        }
-      ),
       relayTableColumnHelper.display({
         id: "memory",
         header: "Memory",
@@ -837,7 +757,7 @@ function RelayTable({
         ),
         meta: dataTableColumnMeta({
           hideBelow: "lg",
-          width: "minmax(13.5rem,1fr)",
+          width: "7.5rem",
         }),
       }),
       relayTableColumnHelper.accessor((relay) => relay.hostname, {
@@ -911,14 +831,7 @@ function RelayTable({
       search: { fields: relayTableSearchFields },
       virtualization: true,
     })
-  }, [
-    initialTableState,
-    onEdit,
-    onOpenUpdates,
-    outdatedRelayIds,
-    releases,
-    reportedVersions,
-  ])
+  }, [initialTableState, onEdit])
 
   return (
     <DataTable
@@ -1064,7 +977,7 @@ function EmptyRelayTable({
       }
       description={
         searchActive
-          ? "Try a Relay name, ID, host, architecture, version, owner, or status."
+          ? "Try a Relay name, ID, host, architecture, owner, or status."
           : canAddRelay
             ? "Pair the first Relay to start managing game servers from Hearth."
             : "No Relays have been assigned to your account."
@@ -1716,37 +1629,6 @@ function selectHasEnabledRelay(relays: Array<PersistedRelay>): boolean {
   return relays.some((relay) => relay.enabled)
 }
 
-function selectCanReviewUpdates(capabilities: {
-  canUpdateRelays: boolean
-}): boolean {
-  return capabilities.canUpdateRelays
-}
-
-function selectRelayUpdateSummary(overview: UpdateOverview): {
-  outdatedRelayIds: ReadonlySet<string>
-  reportedVersions: ReadonlyMap<string, string | null>
-  releases: ReadonlyArray<PublicKilnRelease>
-} {
-  const latestRelease = overview.releases[0]
-  const outdatedRelayIds = new Set<string>()
-  const reportedVersions = new Map<string, string | null>()
-  for (const relay of overview.relays) {
-    reportedVersions.set(relay.relayId, relay.currentVersion)
-    if (
-      latestRelease &&
-      isKilnReleaseVersion(relay.currentVersion) &&
-      compareLatestReleaseVersion(relay.currentVersion, overview.releases) === 1
-    ) {
-      outdatedRelayIds.add(relay.relayId)
-    }
-  }
-  return {
-    outdatedRelayIds,
-    reportedVersions,
-    releases: overview.releases,
-  }
-}
-
 function relayFavorite(relay: RelayTableItem): InstanceFavorite {
   return { id: relay.id, kind: "relay", relayId: relay.id }
 }
@@ -1757,80 +1639,6 @@ function relayRowKey(relay: RelayTableItem): string {
 
 function shortRelayId(id: string): string {
   return id.slice(0, 7)
-}
-
-function isGitCommitSha(value: string): boolean {
-  return /^[0-9a-f]{7,40}$/i.test(value)
-}
-
-function RelayVersion({
-  name,
-  outdated,
-  releases,
-  relayId,
-  version,
-  onOpenUpdates,
-}: {
-  name: string
-  outdated: boolean
-  releases: ReadonlyArray<PublicKilnRelease>
-  relayId: string
-  version: string | null
-  onOpenUpdates: (relayId?: string) => void
-}) {
-  const gitRepository = useKilnGitRepository()
-  const release = findKilnRelease(releases, version)
-  const versionLabel = !version ? (
-    <span className="type-meta truncate font-mono text-foreground">—</span>
-  ) : release ? (
-    <a
-      href={release.url}
-      target="_blank"
-      rel="noreferrer"
-      aria-label={`View ${release.name} on GitHub`}
-      title={`${release.name} (${release.tag})`}
-      className="type-label truncate text-primary transition-colors hover:text-primary focus-visible:text-primary focus-visible:outline-none"
-    >
-      {release.name}
-    </a>
-  ) : isGitCommitSha(version) ? (
-    <a
-      href={`${gitRepository}/commit/${version}`}
-      target="_blank"
-      rel="noreferrer"
-      aria-label={`View Relay commit ${version}`}
-      className="type-meta truncate font-mono text-primary transition-colors hover:text-primary focus-visible:text-primary focus-visible:outline-none"
-    >
-      {version.slice(0, 7)}
-    </a>
-  ) : (
-    <span className="type-meta truncate font-mono text-foreground">
-      {version}
-    </span>
-  )
-
-  return (
-    <div className="flex min-w-0 items-center gap-1">
-      {versionLabel}
-      {outdated ? (
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <button
-              aria-label={`Update ${name} to the latest release`}
-              className="shrink-0 rounded-sm text-amber-400 transition-colors hover:text-amber-300 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
-              type="button"
-              onClick={() => onOpenUpdates(relayId)}
-            >
-              <TriangleAlert className="size-3.5" />
-            </button>
-          </TooltipTrigger>
-          <TooltipContent side="bottom" sideOffset={6}>
-            Update available
-          </TooltipContent>
-        </Tooltip>
-      ) : null}
-    </div>
-  )
 }
 
 function relayProxyMode(value: FormDataEntryValue | null) {

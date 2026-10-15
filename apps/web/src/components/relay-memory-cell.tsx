@@ -1,5 +1,6 @@
 import * as React from "react"
 import { useQuery } from "@tanstack/react-query"
+import { Info } from "lucide-react"
 import type { RelayProcessMemory } from "@workspace/contracts"
 
 import {
@@ -63,23 +64,18 @@ function RelayMemorySummary({ memory }: { memory: RelayProcessMemory }) {
       <TooltipTrigger asChild>
         <span
           tabIndex={0}
-          className="flex min-w-0 cursor-default flex-col outline-none"
+          className="inline-flex cursor-default items-center gap-1.5 rounded-sm whitespace-nowrap outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
           aria-label={`Relay process ${formatMemory(process.rssBytes)}${
             container ? `, container ${formatMemory(container.usedBytes)}` : ""
           }`}
         >
-          <span className="type-meta truncate text-foreground tabular-nums">
+          <span className="type-meta text-foreground tabular-nums">
             {formatMemory(process.rssBytes)}
-            <span className="text-muted-foreground"> process</span>
           </span>
-          {container ? (
-            <span className="type-meta truncate text-muted-foreground tabular-nums">
-              {formatMemory(container.usedBytes)} container
-              {container.fileBytes !== null
-                ? ` · ${formatMemory(container.fileBytes)} cache`
-                : ""}
-            </span>
-          ) : null}
+          <Info
+            aria-hidden="true"
+            className="size-3 shrink-0 text-muted-foreground"
+          />
         </span>
       </TooltipTrigger>
       <TooltipContent side="bottom" sideOffset={6}>
@@ -124,11 +120,6 @@ function RelayMemoryDetails({ memory }: { memory: RelayProcessMemory }) {
           ) : null}
         </MemorySection>
       ) : null}
-      <p className="text-muted-foreground">
-        {container
-          ? "Process memory is what the Relay itself uses. Container memory also counts file cache from scanning server folders and reading backups; the kernel frees it when memory is needed. Docker stats leaves out only inactive cache."
-          : "Process memory is what the Relay itself uses. Container memory is unavailable when cgroup v2 accounting can't be read."}
-      </p>
     </div>
   )
 }
