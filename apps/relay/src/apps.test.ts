@@ -756,6 +756,93 @@ describe("apps", () => {
       expect(service("db")!.id).not.toBe(firstDb)
     })
 
+    describe("when a redeploy fails", () => {
+      const containers = () =>
+        appContainers()
+          .map((container) => ({
+            id: container.id,
+            name: container.name,
+            running: container.state.running,
+          }))
+          .sort((left, right) => left.name.localeCompare(right.name))
+
+      // The first deployment, running, and what it left.
+      async function deployed() {
+        const harness = await createdApp()
+        const first = await deploy(harness, {
+          compose: composeFile,
+          sourceType: "compose",
+        })
+        expect(first.deployment).toMatchObject({ state: "succeeded" })
+        const before = containers()
+        expect(before).toHaveLength(2)
+        expect(before.every((container) => container.running)).toBe(true)
+        return { before, harness }
+      }
+
+      it("leaves the previous containers untouched when Docker refuses a replacement", async () => {
+        const { before, harness } = await deployed()
+
+        const app = await deploy(harness, {
+          compose: composeFile.replace(
+            "'./uploads:/uploads'",
+            "{ type: bind, source: ./missing, target: /missing, bind: { create_host_path: false } }"
+          ),
+          sourceType: "compose",
+        })
+
+        expect(app.deployment?.state).toBe("failed")
+        expect(app.deployment?.error).toMatch(/bind source path does not exist/u)
+        expect(containers()).toEqual(before)
+      })
+
+      it("restarts a previous container whose stop failed after Docker applied it", async () => {
+        const { before, harness } = await deployed()
+        fakeDocker.failAfterNext({ command: "stop" }, "stop timed out")
+
+        const app = await deploy(harness, {
+          compose: composeFile,
+          sourceType: "compose",
+        })
+
+        expect(app.deployment).toMatchObject({
+          error: "Error response from daemon: stop timed out",
+          state: "failed",
+        })
+        expect(containers()).toEqual(before)
+      })
+
+      it("puts the previous containers back when a replacement fails to start", async () => {
+        const { before, harness } = await deployed()
+        fakeDocker.failNext({ command: "start" }, "port is already allocated")
+
+        const app = await deploy(harness, {
+          compose: composeFile,
+          sourceType: "compose",
+        })
+
+        expect(app.deployment).toMatchObject({
+          error: "Error response from daemon: port is already allocated",
+          state: "failed",
+        })
+        expect(containers()).toEqual(before)
+      })
+
+      it("puts back a replacement that started when a later one's dependency fails", async () => {
+        const { before, harness } = await deployed()
+        fakeDocker.images.set("postgres:18", {})
+        fakeDocker.unhealthyImages.add("postgres:18")
+
+        const app = await deploy(harness, {
+          compose: composeFile.replace("postgres:17", "postgres:18"),
+          sourceType: "compose",
+        })
+
+        expect(app.deployment?.error).toMatch(/is unhealthy/u)
+        expect(containers()).toEqual(before)
+      })
+    })
+
     it("pulls, builds, and creates for the platform a service pins", async () => {
       const harness = await createdApp()
       // Present, but for another platform.
