@@ -58,8 +58,8 @@ const restartCopy = {
   },
 } satisfies Record<RelayRestartTarget, unknown>
 
-// The Relay workspace's header actions: Pause or Resume, and a menu that also
-// restarts the Relay or its host.
+// The Relay workspace's header actions: Restart Relay, and a menu that also
+// pauses or resumes the Relay and restarts its host.
 export const RelayPowerControls = React.memo(function RelayPowerControls({
   permissions,
   relay,
@@ -96,32 +96,16 @@ export const RelayPowerControls = React.memo(function RelayPowerControls({
 
   return (
     <div className="col-start-2 row-start-1 flex items-center justify-end gap-1.5 xl:col-start-3">
-      {permissions.pause ? (
+      {permissions.restartRelay ? (
         <Button
           variant="outline"
           size="sm"
-          className={
-            relay.enabled
-              ? "hidden h-9 w-[6.5rem] justify-center gap-1.5 !border-yellow-400/70 !bg-yellow-400 px-3 text-xs !text-yellow-950 shadow-none hover:!border-yellow-300 hover:!bg-yellow-300 disabled:!border-yellow-400/35 disabled:!bg-yellow-400/45 disabled:!text-yellow-950/70 md:inline-flex"
-              : "hidden h-9 w-[6.5rem] justify-center gap-1.5 !border-blue-500/65 !bg-blue-600 px-3 text-xs !text-white shadow-none hover:!border-blue-400 hover:!bg-blue-500 disabled:!border-blue-500/35 disabled:!bg-blue-600/45 disabled:!text-white/70 md:inline-flex"
-          }
-          disabled={pause.pending}
-          onClick={togglePause}
+          className="hidden h-9 min-w-[6.5rem] justify-center gap-1.5 !border-red-500/65 !bg-red-600 px-3 text-xs !text-white shadow-none hover:!border-red-400 hover:!bg-red-500 disabled:!border-red-500/35 disabled:!bg-red-600/45 disabled:!text-white/70 md:inline-flex"
+          disabled={restartUnavailable}
+          onClick={() => setConfirming("relay")}
         >
-          {pause.pending ? (
-            <LoaderCircle className="animate-spin" />
-          ) : relay.enabled ? (
-            <Pause />
-          ) : (
-            <Play />
-          )}
-          {pause.pending
-            ? relay.enabled
-              ? "Pausing"
-              : "Resuming"
-            : relay.enabled
-              ? "Pause"
-              : "Resume"}
+          <RotateCw />
+          Restart Relay
         </Button>
       ) : null}
       <Popover open={menuOpen} onOpenChange={setMenuOpen}>
