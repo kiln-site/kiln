@@ -1,8 +1,10 @@
 # Kiln agents
 
 Kiln is a self-hosted platform for managing apps, databases, and game servers.
-Favor simple operation and existing patterns. Prioritize performance and UX;
-avoid unnecessary React renders and paints outside the changed component.
+Favor simple operation and existing patterns.
+
+Performance/Speed and UX is always the most important thing to keep in mind for every change you do.
+Avoid unnecessary React renders and paints outside the changed component.
 
 ## Naming
 
