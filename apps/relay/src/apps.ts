@@ -1,5 +1,7 @@
 import { spawn } from "node:child_process"
-import { mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises"
+import { constants } from "node:fs"
+import { access, mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises"
+import { homedir } from "node:os"
 import { join } from "node:path"
 
 import type {
@@ -630,7 +632,7 @@ export class AppDriver {
     await this.#stream(
       input.appId,
       deployment,
-      "docker-buildx",
+      await buildxExecutable(),
       [
         "build",
         "--progress",
@@ -1117,7 +1119,7 @@ export class AppDriver {
   async #stream(
     appId: string,
     deployment: Deployment,
-    executable: "docker-buildx" | "docker-compose",
+    executable: string,
     arguments_: Array<string>,
     options: { env?: NodeJS.ProcessEnv; input?: string; timeout: number }
   ) {
@@ -1516,6 +1518,29 @@ function composeConfig(
     child.stdin.on("error", () => undefined)
     child.stdin.end(input)
   })
+}
+
+/**
+ * The buildx plugin, where the docker CLI looks for it, in its order: its
+ * config directory's `cli-plugins`, then the system plugin directories
+ * (which is where Compose finds it too). On PATH if none has it.
+ */
+async function buildxExecutable(): Promise<string> {
+  const config = process.env.DOCKER_CONFIG || join(homedir(), ".docker")
+  for (const directory of [
+    join(config, "cli-plugins"),
+    "/usr/local/lib/docker/cli-plugins",
+    "/usr/local/libexec/docker/cli-plugins",
+    "/usr/lib/docker/cli-plugins",
+    "/usr/libexec/docker/cli-plugins",
+  ]) {
+    const candidate = join(directory, "docker-buildx")
+    const found = await Effect.runPromise(
+      Effect.result(Effect.tryPromise(() => access(candidate, constants.X_OK)))
+    )
+    if (Result.isSuccess(found)) return candidate
+  }
+  return "docker-buildx"
 }
 
 // A missing or invalid source fails before anything is deployed.

@@ -21,7 +21,25 @@ services:
       - -lc
       - |
         set -eu
-        apk add --no-cache docker-cli docker-cli-buildx docker-cli-compose
+        # The standalone Compose and buildx binaries apps/relay/Dockerfile
+        # ships, at the same paths, with no docker CLI.
+        if ! docker-compose version 2>/dev/null | grep -q 'v5.5.1$'; then
+          case "$$(uname -m)" in
+            aarch64) compose_arch=aarch64 buildx_arch=arm64
+              compose_sum=732e3a84c1a0f67256ce80bc2598a24546b10ca05f9faa97efceb1171ece2ef7
+              buildx_sum=efa38cb7aa7db2dbb9ad049b00b0a9737f66f033626177b5a4e845184ad7ab29 ;;
+            *) compose_arch=x86_64 buildx_arch=amd64
+              compose_sum=db1889184726840f75c4f9c001048430d4f25b3be3cb084d3ddd762bc0aed576
+              buildx_sum=982ca20490b45ed1ec8d99795974d3d874a358f75938c9c237305010e6b7e548 ;;
+          esac
+          mkdir -p /usr/local/libexec/docker/cli-plugins
+          wget -qO /usr/local/bin/docker-compose "https://github.com/docker/compose/releases/download/v5.5.1/docker-compose-linux-$${compose_arch}"
+          wget -qO /usr/local/libexec/docker/cli-plugins/docker-buildx "https://github.com/docker/buildx/releases/download/v0.37.2/buildx-v0.37.2.linux-$${buildx_arch}"
+          printf '%s  %s\n%s  %s\n' \
+            "$$compose_sum" /usr/local/bin/docker-compose \
+            "$$buildx_sum" /usr/local/libexec/docker/cli-plugins/docker-buildx | sha256sum -c -
+          chmod +x /usr/local/bin/docker-compose /usr/local/libexec/docker/cli-plugins/docker-buildx
+        fi
         # Pin restic to the version shipped in apps/relay/Dockerfile so dev
         # exercises the same CLI/JSON surface as production.
         if ! restic version 2>/dev/null | grep -q '^restic 0.19.1'; then

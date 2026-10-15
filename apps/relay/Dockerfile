@@ -63,6 +63,23 @@ RUN --mount=type=cache,target=/root/.cache/go-build \
 
 FROM docker:29.8.2-cli AS docker-cli
 
+# The standalone Compose and buildx binaries the Relay runs for app
+# deployments: the versions docker:29.8.2-cli bundles, pinned by checksum
+# for each architecture.
+FROM scratch AS compose-amd64
+ADD --checksum=sha256:db1889184726840f75c4f9c001048430d4f25b3be3cb084d3ddd762bc0aed576 --chmod=755 \
+  https://github.com/docker/compose/releases/download/v5.5.1/docker-compose-linux-x86_64 /docker-compose
+ADD --checksum=sha256:982ca20490b45ed1ec8d99795974d3d874a358f75938c9c237305010e6b7e548 --chmod=755 \
+  https://github.com/docker/buildx/releases/download/v0.37.2/buildx-v0.37.2.linux-amd64 /docker-buildx
+
+FROM scratch AS compose-arm64
+ADD --checksum=sha256:732e3a84c1a0f67256ce80bc2598a24546b10ca05f9faa97efceb1171ece2ef7 --chmod=755 \
+  https://github.com/docker/compose/releases/download/v5.5.1/docker-compose-linux-aarch64 /docker-compose
+ADD --checksum=sha256:efa38cb7aa7db2dbb9ad049b00b0a9737f66f033626177b5a4e845184ad7ab29 --chmod=755 \
+  https://github.com/docker/buildx/releases/download/v0.37.2/buildx-v0.37.2.linux-arm64 /docker-buildx
+
+FROM compose-${TARGETARCH} AS compose
+
 FROM restic/restic:0.19.1 AS restic
 
 FROM gcr.io/distroless/nodejs24-debian12 AS runtime
@@ -74,8 +91,10 @@ ENV NODE_ENV=production
 WORKDIR /app
 
 COPY --from=docker-cli /usr/local/bin/docker /usr/local/bin/docker
-COPY --from=docker-cli /usr/local/libexec/docker/cli-plugins/docker-compose /usr/local/libexec/docker/cli-plugins/docker-compose
-COPY --from=docker-cli /usr/local/libexec/docker/cli-plugins/docker-buildx /usr/local/libexec/docker/cli-plugins/docker-buildx
+# Compose runs on its own from PATH; buildx is a plugin, where Compose and
+# the Relay find it.
+COPY --from=compose /docker-compose /usr/local/bin/docker-compose
+COPY --from=compose /docker-buildx /usr/local/libexec/docker/cli-plugins/docker-buildx
 COPY --from=restic /usr/bin/restic /usr/bin/restic
 COPY --from=healthcheck /out/kiln-relay-healthcheck /usr/local/bin/kiln-relay-healthcheck
 COPY --from=runtime-deps /runtime/node_modules ./node_modules

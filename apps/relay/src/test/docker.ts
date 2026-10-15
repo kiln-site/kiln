@@ -572,7 +572,10 @@ export class FakeDocker {
     _options: CommandOptions = {},
     input?: string
   ): Promise<CommandResult> {
-    if (executable === "docker-buildx" && arguments_[0] === "build") {
+    if (
+      posix.basename(executable) === "docker-buildx" &&
+      arguments_[0] === "build"
+    ) {
       return this.#buildxBuild(arguments_)
     }
     if (
