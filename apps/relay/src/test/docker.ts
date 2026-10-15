@@ -266,6 +266,11 @@ export class FakeDocker {
    */
   readonly sessionProbes: Array<Buffer> = []
   readonly sessionProbeStatuses: Array<string> = []
+  /**
+   * Set to send these exclude patterns for the context instead of the
+   * ignore file's, as a daemon that sends more than the Relay checked.
+   */
+  excludePatterns: Array<string> | null = null
   /** Open build sessions, by ID: BuildKit's client for each. */
   readonly #sessions = new Map<string, ClientHttp2Session>()
   readonly #execSockets = new Map<string, Duplex>()
@@ -308,6 +313,7 @@ export class FakeDocker {
     for (const session of this.#sessions.values()) session.destroy()
     this.#sessions.clear()
     this.sessionProbes.length = 0
+    this.excludePatterns = null
     this.sessionProbeStatuses.length = 0
     this.containers.clear()
     this.execs.clear()
@@ -1199,7 +1205,8 @@ export class FakeDocker {
           url,
           await readSessionBuild(
             session!,
-            url.searchParams.get("dockerfile") || "Dockerfile"
+            url.searchParams.get("dockerfile") || "Dockerfile",
+            this.excludePatterns
           )
         ).write(response)
         return
@@ -1852,6 +1859,8 @@ export class FakeDocker {
       if (head.length > 0) socket.unshift(head)
       const session = connectHttp2("http://buildkit", {
         createConnection: () => socket,
+        // gRPC's only bound on what it sends is the server's header list size.
+        maxSendHeaderBlockLength: 64 * 1024 * 1024,
       })
       session.on("error", () => undefined)
       this.#sessions.set(id, session)
@@ -2363,9 +2372,15 @@ interface SessionBuild {
  */
 async function readSessionBuild(
   session: ClientHttp2Session,
-  filename: string
+  filename: string,
+  excludePatterns: ReadonlyArray<string> | null
 ): Promise<SessionBuild | { readonly failure: string }> {
   const read = async (): Promise<SessionBuild> => {
+    // gRPC waits for the server's settings, and its limits, before calling.
+    await new Promise((resolve) => {
+      if (session.remoteSettings.maxHeaderListSize !== undefined) resolve(null)
+      else session.once("remoteSettings", resolve)
+    })
     const lowercase =
       posix.basename(filename) === "Dockerfile"
         ? [posix.join(posix.dirname(filename), "dockerfile")]
@@ -2385,7 +2400,8 @@ async function readSessionBuild(
           followpaths: [".dockerignore"],
         })
       ).get(".dockerignore")
-    const excludes = ignore ? ignorePatterns(ignore.toString("utf8")) : []
+    const excludes =
+      excludePatterns ?? (ignore ? ignorePatterns(ignore.toString("utf8")) : [])
     const files = await syncDirectory(session, {
       "dir-name": ["context"],
       ...(excludes.length > 0 && { "exclude-patterns": excludes }),

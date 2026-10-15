@@ -82,7 +82,21 @@ export function withBuildSession<A, E, R>(
 ): Effect.Effect<A, DockerEngineError | E, R> {
   return Effect.acquireUseRelease(
     openSession(engine, directories),
-    (session) => use(session.id),
+    (session) =>
+      use(session.id).pipe(
+        // The daemon reports a broken session as a bare gRPC status; what
+        // broke it is here.
+        Effect.mapError((error) => {
+          const failure = session.failure()
+          return failure === undefined
+            ? error
+            : new DockerEngineError({
+                cause: failure,
+                operation: "POST /session",
+                reason: `The build's session with Docker failed: ${failure.message}`,
+              })
+        })
+      ),
     (session) => Effect.sync(() => session.close())
   )
 }
@@ -141,7 +155,10 @@ function serve(
     settings: { maxHeaderListSize: MAX_HEADER_LIST_BYTES },
   })
   const running = new Set<Fiber.Fiber<void>>()
-  server.on("sessionError", () => undefined)
+  let failure: Error | undefined
+  server.on("sessionError", (error) => {
+    failure ??= error
+  })
   server.on("stream", (stream, headers, _flags, rawHeaders) => {
     stream.on("error", () => undefined)
     const method = headers[":path"]
@@ -204,6 +221,8 @@ function serve(
       socket.destroy()
       server.close()
     },
+    /** What broke the connection, if something did. */
+    failure: () => failure,
     id,
   }
 }
@@ -230,7 +249,9 @@ function grpcMetadata(
   for (let index = 0; index + 1 < rawHeaders.length; index += 2) {
     const name = rawHeaders[index]!.toLowerCase()
     if (name.startsWith(":")) continue
-    values.set(name, [...(values.get(name) ?? []), rawHeaders[index + 1]!])
+    const list = values.get(name)
+    if (list) list.push(rawHeaders[index + 1]!)
+    else values.set(name, [rawHeaders[index + 1]!])
   }
   const decoded = new Map<string, ReadonlyArray<string>>()
   for (const [name, list] of values) {

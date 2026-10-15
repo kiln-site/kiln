@@ -393,14 +393,15 @@ describe("apps", () => {
     expect(app.deployment).toMatchObject({ state: "succeeded" })
   })
 
-  it("applies a .dockerignore of more patterns than an HTTP/2 header list holds by default", async () => {
+  it("applies a .dockerignore of as many patterns as Docker can send back", async () => {
     const harness = await createdApp()
     const data = join(harness.config.dataDirectory, "apps", appId)
     await writeFile(join(data, "kept.txt"), "kept")
-    await writeFile(join(data, "excluded-150.txt"), "excluded")
+    await writeFile(join(data, "xxxxxx150"), "excluded")
+    // 10,000 patterns, nearly 128 KiB of them as headers: both limits.
     await writeFile(
       join(data, ".dockerignore"),
-      Array.from({ length: 200 }, (_, index) => `excluded-${index}.txt`).join("\n")
+      Array.from({ length: 10_000 }, (_, index) => `${index}`.padStart(9, "x")).join("\n")
     )
 
     const app = await deploy(harness, {
@@ -410,7 +411,51 @@ describe("apps", () => {
 
     expect(app.deployment).toMatchObject({ state: "succeeded" })
     expect(fakeDocker.builds[0]?.files).toContain("kept.txt")
-    expect(fakeDocker.builds[0]?.files).not.toContain("excluded-150.txt")
+    expect(fakeDocker.builds[0]?.files).not.toContain("xxxxxx150")
+  })
+
+  it.each([
+    [
+      "patterns",
+      Array.from({ length: 60_000 }, (_, index) => `${index}`).join("\n"),
+      "The build's .dockerignore has 60000 patterns; Kiln builds with up to 10000",
+    ],
+    [
+      "bytes of patterns",
+      Array.from({ length: 1_100 }, (_, index) => `${index}`.padStart(127, "x")).join("\n"),
+      "The build's .dockerignore has 144100 bytes of patterns; Kiln builds with up to 131072, which is what Docker can send back",
+    ],
+  ])("refuses a .dockerignore of more %s than Docker can send back, before the build", async (_, ignore, error) => {
+    const harness = await createdApp()
+    const data = join(harness.config.dataDirectory, "apps", appId)
+    await writeFile(join(data, ".dockerignore"), ignore)
+
+    const app = await deploy(harness, {
+      dockerfile: "FROM alpine\nCOPY . .\n",
+      sourceType: "dockerfile",
+    })
+
+    expect(app.deployment).toMatchObject({ error, state: "failed" })
+    expect(fakeDocker.builds).toEqual([])
+  })
+
+  it("fails a build whose session breaks with what broke it", async () => {
+    const harness = await createdApp()
+    // More than an HTTP/2 header block can hold.
+    fakeDocker.excludePatterns = Array.from({ length: 16_000 }, (_, index) =>
+      `${index}`.padStart(10, "x")
+    )
+
+    const app = await deploy(harness, {
+      dockerfile: "FROM alpine\nCOPY . .\n",
+      sourceType: "dockerfile",
+    })
+
+    expect(app.deployment).toMatchObject({
+      error:
+        "The build's session with Docker failed: Too many CONTINUATION frames following a HEADER frame",
+      state: "failed",
+    })
   })
 
   it("closes the build's session when Docker rejects the build", async () => {
