@@ -20,9 +20,13 @@ import { Effect, Result, Semaphore } from "effect"
 
 import { promiseEffect } from "./effect/promise.js"
 import type { DatabaseConnections } from "./database-connections.js"
-import { command, commandWithInput } from "./command.js"
 import type { RelayConfig } from "./config.js"
 import type { DockerDriver } from "./docker.js"
+import {
+  type ContainerHealthcheck,
+  createContainer,
+  runWithInput,
+} from "./docker-container-spec.js"
 import {
   DockerEngine,
   ensureImage,
@@ -211,47 +215,36 @@ export class DatabaseDriver {
 
     const created = await promiseResult(async () => {
       await Effect.runPromise(ensureImage(this.#engine, spec.image))
-      await command("docker", [
-        "volume",
-        "create",
-        ...labelArguments(labels),
-        volume,
-      ])
+      await Effect.runPromise(
+        this.#engine.createVolume({ labels, name: volume })
+      )
       volumeCreated = true
-      await command("docker", [
-        "network",
-        "create",
-        "--internal",
-        ...labelArguments(labels),
-        network,
-      ])
+      await Effect.runPromise(
+        this.#engine.createNetwork({ internal: true, labels, name: network })
+      )
       networkCreated = true
       if (input.engine === "redis" || input.engine === "valkey") {
-        await writeAclFile(spec.image, volume, input.username, input.password)
-      }
-      await command(
-        "docker",
-        [
-          "create",
-          "--name",
-          container,
-          "--hostname",
-          databaseHostname(input.id),
-          "--network",
-          network,
-          "--network-alias",
-          databaseHostname(input.id),
-          "--restart",
-          "unless-stopped",
-          "--mount",
-          `type=volume,source=${volume},target=${spec.dataMount}`,
-          ...labelArguments(labels),
-          ...healthArguments(input.engine),
-          ...environmentArguments(input),
+        await writeAclFile(
+          this.#engine,
           spec.image,
-          ...(spec.command ?? []),
-        ],
-        { timeout: 120_000 }
+          volume,
+          input.username,
+          input.password
+        )
+      }
+      await Effect.runPromise(
+        createContainer(this.#engine, {
+          command: spec.command ?? [],
+          env: databaseEnvironment(input),
+          healthcheck: databaseHealthcheck(input.engine),
+          hostname: databaseHostname(input.id),
+          image: spec.image,
+          labels,
+          mounts: [{ source: volume, target: spec.dataMount, type: "volume" }],
+          name: container,
+          network: { aliases: [databaseHostname(input.id)], name: network },
+          restart: "unless-stopped",
+        })
       )
       containerCreated = true
       await Effect.runPromise(
@@ -375,6 +368,7 @@ export class DatabaseDriver {
       const labels = await this.#labels(database.id)
       const volume = requiredLabel(labels, "kiln.database.volume")
       await writeAclFile(
+        this.#engine,
         database.image,
         volume,
         input.username,
@@ -390,6 +384,7 @@ export class DatabaseDriver {
       )
       if (Result.isFailure(loaded)) {
         await writeAclFile(
+          this.#engine,
           database.image,
           volume,
           input.username,
@@ -676,66 +671,48 @@ function requiredContainerId(database: RelayManagedDatabase): string {
   return database.containerId
 }
 
-function labelArguments(
-  labels: Readonly<Record<string, string>>
-): Array<string> {
-  return Object.entries(labels).flatMap(([name, value]) => [
-    "--label",
-    `${name}=${value}`,
-  ])
-}
-
-function environmentArguments(input: RelayCreateDatabase): Array<string> {
+function databaseEnvironment(
+  input: RelayCreateDatabase
+): Record<string, string> {
   const rootPassword = randomBytes(36).toString("base64url")
-  const environment =
-    input.engine === "mysql"
+  return input.engine === "mysql"
+    ? {
+        MYSQL_DATABASE: input.databaseName,
+        MYSQL_PASSWORD: input.password,
+        MYSQL_ROOT_PASSWORD: rootPassword,
+        MYSQL_USER: input.username,
+      }
+    : input.engine === "mariadb"
       ? {
-          MYSQL_DATABASE: input.databaseName,
-          MYSQL_PASSWORD: input.password,
-          MYSQL_ROOT_PASSWORD: rootPassword,
-          MYSQL_USER: input.username,
+          MARIADB_DATABASE: input.databaseName,
+          MARIADB_PASSWORD: input.password,
+          MARIADB_ROOT_PASSWORD: rootPassword,
+          MARIADB_USER: input.username,
         }
-      : input.engine === "mariadb"
+      : input.engine === "postgres"
         ? {
-            MARIADB_DATABASE: input.databaseName,
-            MARIADB_PASSWORD: input.password,
-            MARIADB_ROOT_PASSWORD: rootPassword,
-            MARIADB_USER: input.username,
+            POSTGRES_DB: input.databaseName,
+            POSTGRES_PASSWORD: input.password,
+            POSTGRES_USER: input.username,
           }
-        : input.engine === "postgres"
-          ? {
-              POSTGRES_DB: input.databaseName,
-              POSTGRES_PASSWORD: input.password,
-              POSTGRES_USER: input.username,
-            }
-          : {}
-  return Object.entries(environment).flatMap(([name, value]) => [
-    "--env",
-    `${name}=${value}`,
-  ])
+        : {}
 }
 
-function healthArguments(engine: DatabaseEngine): Array<string> {
-  const commandValue =
-    engine === "mysql"
-      ? "mysqladmin ping -h 127.0.0.1 --silent"
-      : engine === "mariadb"
-        ? "healthcheck.sh --connect --innodb_initialized"
-        : engine === "postgres"
-          ? 'pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB"'
-          : "kill -0 1"
-  return [
-    "--health-cmd",
-    commandValue,
-    "--health-interval",
-    "5s",
-    "--health-timeout",
-    "3s",
-    "--health-retries",
-    "24",
-    "--health-start-period",
-    "10s",
-  ]
+function databaseHealthcheck(engine: DatabaseEngine): ContainerHealthcheck {
+  return {
+    command:
+      engine === "mysql"
+        ? "mysqladmin ping -h 127.0.0.1 --silent"
+        : engine === "mariadb"
+          ? "healthcheck.sh --connect --innodb_initialized"
+          : engine === "postgres"
+            ? 'pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB"'
+            : "kill -0 1",
+    interval: "5s",
+    retries: 24,
+    startPeriod: "10s",
+    timeout: "3s",
+  }
 }
 
 interface DatabaseClient {
@@ -825,7 +802,10 @@ function rotationSql(
   return `ALTER USER '${username}'@'%' IDENTIFIED BY '${escapedPassword}';\n`
 }
 
+// Writes the users file Redis and Valkey load into their data volume, with
+// the image's own shell, as `docker run --rm -i` did.
 async function writeAclFile(
+  engine: DockerEngine,
   image: string,
   volume: string,
   username: string,
@@ -833,22 +813,22 @@ async function writeAclFile(
 ) {
   const passwordHash = createHash("sha256").update(password).digest("hex")
   const acl = `user default off\nuser ${username} reset on #${passwordHash} ~* &* +@all\n`
-  await runProcess(
-    "docker",
-    [
-      "run",
-      "--rm",
-      "-i",
-      "--mount",
-      `type=volume,source=${volume},target=/data`,
-      "--entrypoint",
-      "sh",
-      image,
-      "-c",
-      "cat > /data/users.acl && chown 999:999 /data/users.acl && chmod 600 /data/users.acl",
-    ],
-    acl,
-    60_000
+  await Effect.runPromise(
+    runWithInput(
+      engine,
+      {
+        command: [
+          "-c",
+          "cat > /data/users.acl && chown 999:999 /data/users.acl && chmod 600 /data/users.acl",
+        ],
+        entrypoint: "sh",
+        image,
+        mounts: [{ source: volume, target: "/data", type: "volume" }],
+        name: "",
+      },
+      acl,
+      { maxOutputBytes: MAX_DUMP_BYTES + 64 * 1024, timeout: 60_000 }
+    )
   )
 }
 
@@ -906,16 +886,4 @@ function safeFileName(name: string): string {
       .replace(/[^a-z0-9]+/gu, "-")
       .replace(/^-+|-+$/gu, "") || "database"
   )
-}
-
-function runProcess(
-  executable: string,
-  arguments_: ReadonlyArray<string>,
-  input: string | undefined,
-  timeoutMs: number
-): Promise<{ stderr: string; stdout: string }> {
-  return commandWithInput(executable, arguments_, input, {
-    maxOutputBytes: MAX_DUMP_BYTES + 64 * 1024,
-    timeoutMs,
-  })
 }

@@ -14,8 +14,10 @@
  * Pulls read registry credentials from the Docker config file (see
  * `./registry-auth.js`).
  *
- * Creating containers, networks, and volumes, builds, and Compose stay on the
- * CLI (see `./command.js`) for now.
+ * Containers are created from the flags Relay used to pass the CLI, as the
+ * same request bodies (see `./docker-container-spec.js`).
+ *
+ * Builds and Compose stay on the CLI (see `./command.js`) for now.
  */
 import { Agent, request } from "node:http"
 import { type Duplex, PassThrough, Writable } from "node:stream"
@@ -225,9 +227,54 @@ export class DockerEngine {
     return this.#json({
       body,
       method: "POST",
-      path: `/containers/create${query({ name })}`,
+      path: `/containers/create${query({ name: name || undefined })}`,
       timeout: 60_000,
     })
+  }
+
+  /**
+   * Waits for a container to reach `condition` and returns its exit code, as
+   * `docker wait`. The request holds until then, so start it before the
+   * container can exit.
+   */
+  waitContainer(
+    reference: string,
+    condition: "next-exit" | "not-running" | "removed"
+  ): Effect.Effect<number, DockerEngineError> {
+    return this.#json<{
+      readonly Error?: { readonly Message?: string } | null
+      readonly StatusCode: number
+    }>({
+      method: "POST",
+      path: `/containers/${segment(reference)}/wait${query({ condition })}`,
+      timeout: null,
+    }).pipe(
+      Effect.flatMap((answer) =>
+        answer.Error?.Message
+          ? Effect.fail(
+              new DockerEngineError({
+                operation: "POST /containers/{id}/wait",
+                reason: answer.Error.Message,
+              })
+            )
+          : Effect.succeed(answer.StatusCode)
+      )
+    )
+  }
+
+  /**
+   * Attaches to a container's stdio, as `docker attach` (or `docker run`
+   * before it starts the container), and returns the raw connection.
+   */
+  attachContainer(reference: string): Effect.Effect<Duplex, DockerEngineError> {
+    return this.hijack(
+      `/containers/${segment(reference)}/attach${query({
+        stderr: true,
+        stdin: true,
+        stdout: true,
+        stream: true,
+      })}`
+    )
   }
 
   /** Succeeds when the container is already running, as `docker start`. */
@@ -527,36 +574,11 @@ export class DockerEngine {
         user: options.user,
       }),
       (process) =>
-        Effect.gen(function* () {
-          const output = outputCollector(
-            options.maxOutputBytes,
-            options.overflow
-          )
-          let overflow: string | undefined
-          const collect = (stream: "stderr" | "stdout") => (chunk: Buffer) => {
-            if (overflow !== undefined) return
-            overflow = output.add(stream, chunk)
-            if (overflow !== undefined) process.kill()
-          }
-          process.stdout.on("data", collect("stdout"))
-          process.stderr.on("data", collect("stderr"))
-          // A process that exits without reading its input isn't an error.
-          process.stdin.on("error", () => undefined)
-          process.stdin.end(options.input ?? "")
-          const exitCode = yield* process.exitCode
-          if (overflow !== undefined) {
-            return yield* new DockerEngineError({ operation, reason: overflow })
-          }
-          const result = output.read()
-          if (exitCode !== 0) {
-            return yield* new DockerEngineError({
-              operation,
-              reason:
-                result.stderr.trim() ||
-                `${program} exited with code ${exitCode}`,
-            })
-          }
-          return result
+        completeWithInput(process, {
+          input: options.input,
+          maxOutputBytes: options.maxOutputBytes,
+          operation,
+          overflow: options.overflow,
         }),
       (process) => Effect.sync(() => process.kill())
     )
@@ -737,6 +759,37 @@ export class DockerEngine {
     })
   }
 
+  /** `docker network create`, with the body the CLI sends. */
+  createNetwork(options: {
+    readonly name: string
+    readonly driver?: string
+    readonly internal?: boolean
+    readonly labels?: Readonly<Record<string, string>>
+    readonly subnet?: string
+  }): Effect.Effect<{ readonly Id: string }, DockerEngineError> {
+    return this.#json({
+      body: {
+        Attachable: false,
+        ConfigFrom: null,
+        ConfigOnly: false,
+        Driver: options.driver ?? "bridge",
+        IPAM: {
+          Config: options.subnet ? [{ Subnet: options.subnet }] : [],
+          Driver: "default",
+          Options: {},
+        },
+        Ingress: false,
+        Internal: options.internal ?? false,
+        Labels: { ...options.labels },
+        Name: options.name,
+        Options: {},
+        Scope: "",
+      },
+      method: "POST",
+      path: "/networks/create",
+    })
+  }
+
   removeNetwork(reference: string): Effect.Effect<void, DockerEngineError> {
     return this.#empty({
       method: "DELETE",
@@ -757,6 +810,25 @@ export class DockerEngine {
         filters: options.filters && JSON.stringify(options.filters),
       })}`,
     }).pipe(Effect.map((answer) => answer.Volumes ?? []))
+  }
+
+  /**
+   * `docker volume create`, with the body the CLI sends. Docker answers with
+   * the existing volume when one has the name.
+   */
+  createVolume(options: {
+    readonly name: string
+    readonly labels?: Readonly<Record<string, string>>
+  }): Effect.Effect<DockerVolume, DockerEngineError> {
+    return this.#json({
+      body: {
+        Driver: "local",
+        Labels: { ...options.labels },
+        Name: options.name,
+      },
+      method: "POST",
+      path: "/volumes/create",
+    })
   }
 
   inspectVolume(name: string): Effect.Effect<DockerVolume, DockerEngineError> {
@@ -964,8 +1036,9 @@ export class DockerEngine {
 }
 
 /**
- * A process started with `execProcess`: its stdio over the upgraded
- * connection, multiplexed as Docker sends it without a TTY.
+ * A process started with `execProcess`, or a container attached to before
+ * it starts: its stdio over the upgraded connection, multiplexed as Docker
+ * sends it without a TTY.
  */
 export class DockerExecProcess {
   readonly stdin: Writable
@@ -974,7 +1047,8 @@ export class DockerExecProcess {
   readonly #socket: Duplex
   readonly #ended: Promise<Error | null>
   readonly #exitCode: Effect.Effect<number, DockerEngineError>
-  readonly #program: string
+  /** What runs, for messages. */
+  readonly program: string
   #killed = false
 
   constructor(
@@ -985,7 +1059,7 @@ export class DockerExecProcess {
   ) {
     this.#socket = socket
     this.#exitCode = exitCode
-    this.#program = program
+    this.program = program
     this.stdin = new Writable({
       // Input the process can no longer read (it exited, or its connection
       // closed) is dropped: what happened to the process is reported by its
@@ -1057,7 +1131,7 @@ export class DockerExecProcess {
    * which leaves the process to notice its closed stdio.
    */
   get exitCode(): Effect.Effect<number, DockerEngineError> {
-    const operation = `exec ${this.#program}`
+    const operation = `exec ${this.program}`
     return Effect.promise(() => this.#ended).pipe(
       Effect.flatMap((failure) =>
         this.#killed
@@ -1138,6 +1212,52 @@ export async function streamIntoProcess(
   if (Result.isFailure(piped) && stopped) throw piped.failure
   if (Result.isFailure(outcome)) throw outcome.failure
   if (Result.isFailure(piped)) throw piped.failure
+}
+
+/**
+ * Writes `input` to a process's stdin, closes it, and returns the process's
+ * output once it exits, failing with its stderr when it exits with a
+ * non-zero code, as a CLI client run with `-i` reported it.
+ */
+export function completeWithInput(
+  process: DockerExecProcess,
+  options: {
+    readonly input?: string
+    readonly maxOutputBytes: number
+    readonly operation: string
+    /** Why output past `maxOutputBytes` failed. */
+    readonly overflow: string
+  }
+): Effect.Effect<DockerOutput, DockerEngineError> {
+  const { operation } = options
+  return Effect.gen(function* () {
+    const output = outputCollector(options.maxOutputBytes, options.overflow)
+    let overflow: string | undefined
+    const collect = (stream: "stderr" | "stdout") => (chunk: Buffer) => {
+      if (overflow !== undefined) return
+      overflow = output.add(stream, chunk)
+      if (overflow !== undefined) process.kill()
+    }
+    process.stdout.on("data", collect("stdout"))
+    process.stderr.on("data", collect("stderr"))
+    // A process that exits without reading its input isn't an error.
+    process.stdin.on("error", () => undefined)
+    process.stdin.end(options.input ?? "")
+    const exitCode = yield* process.exitCode
+    if (overflow !== undefined) {
+      return yield* new DockerEngineError({ operation, reason: overflow })
+    }
+    const result = output.read()
+    if (exitCode !== 0) {
+      return yield* new DockerEngineError({
+        operation,
+        reason:
+          result.stderr.trim() ||
+          `${process.program} exited with code ${exitCode}`,
+      })
+    }
+    return result
+  })
 }
 
 // Fails with the signal's reason once it aborts.
