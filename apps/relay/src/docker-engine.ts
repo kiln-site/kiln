@@ -18,9 +18,7 @@
  * same request bodies (see `./docker-container-spec.js`).
  *
  * Builds serve their context through a BuildKit session (see
- * `./docker-build.js`).
- *
- * Compose stays on the CLI (see `./command.js`) for now.
+ * `./docker-build.js`), and Compose projects run through `./compose-up.js`.
  */
 import { Agent, request } from "node:http"
 import { type Duplex, PassThrough, Writable } from "node:stream"
@@ -803,6 +801,13 @@ export class DockerEngine {
     })
   }
 
+  /** `POST /networks/create` with a body built by the caller. */
+  createNetworkFrom(
+    body: unknown
+  ): Effect.Effect<{ readonly Id: string }, DockerEngineError> {
+    return this.#json({ body, method: "POST", path: "/networks/create" })
+  }
+
   removeNetwork(reference: string): Effect.Effect<void, DockerEngineError> {
     return this.#empty({
       method: "DELETE",
@@ -842,6 +847,13 @@ export class DockerEngine {
       method: "POST",
       path: "/volumes/create",
     })
+  }
+
+  /** `POST /volumes/create` with a body built by the caller. */
+  createVolumeFrom(
+    body: unknown
+  ): Effect.Effect<DockerVolume, DockerEngineError> {
+    return this.#json({ body, method: "POST", path: "/volumes/create" })
   }
 
   inspectVolume(name: string): Effect.Effect<DockerVolume, DockerEngineError> {

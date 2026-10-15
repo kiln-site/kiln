@@ -1871,14 +1871,17 @@ export class FakeDocker {
     const host = body.HostConfig ?? {}
     const mounts: Array<FakeMount> = [
       ...(host.Binds ?? []).map((bind) => parseVolume(bind)),
-      ...(host.Mounts ?? []).map((mount) => ({
-        destination: mount.Target,
-        readOnly: mount.ReadOnly ?? false,
-        ...(mount.Type === "volume" && !mount.Source
-          ? { anonymous: true, source: randomBytes(32).toString("hex") }
-          : { source: mount.Source ?? "" }),
-        type: mount.Type === "volume" ? ("volume" as const) : ("bind" as const),
-      })),
+      ...(host.Mounts ?? [])
+        .filter((mount) => mount.Type !== "tmpfs")
+        .map((mount) => ({
+          destination: mount.Target,
+          readOnly: mount.ReadOnly ?? false,
+          ...(mount.Type === "volume" && !mount.Source
+            ? { anonymous: true, source: randomBytes(32).toString("hex") }
+            : { source: mount.Source ?? "" }),
+          type:
+            mount.Type === "volume" ? ("volume" as const) : ("bind" as const),
+        })),
     ]
     for (const destination of Object.keys(body.Volumes ?? {})) {
       if (mounts.some((mount) => mount.destination === destination)) continue
@@ -1888,6 +1891,16 @@ export class FakeDocker {
         source: randomBytes(32).toString("hex"),
         type: "volume",
       })
+    }
+    // Docker creates a named volume a container mounts if it doesn't exist.
+    for (const mount of mounts) {
+      if (
+        mount.type === "volume" &&
+        !mount.anonymous &&
+        !this.volumes.has(mount.source)
+      ) {
+        this.addVolume({ name: mount.source })
+      }
     }
     const endpoints = body.NetworkingConfig?.EndpointsConfig ?? {}
     for (const [network, endpoint] of Object.entries(endpoints)) {

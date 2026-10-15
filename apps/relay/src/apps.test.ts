@@ -603,6 +603,145 @@ describe("apps", () => {
     expect(appContainers()).toEqual([])
   })
 
+  describe("Compose projects", () => {
+    const project = `${TEST_NAMESPACE}-kiln-app-${appId}`
+    const composeFile = [
+      "services:",
+      "  web:",
+      "    image: nginx:alpine",
+      "    environment:",
+      "      DATA: ${KILN_DATA}",
+      "    volumes: ['./uploads:/uploads', 'cache:/cache']",
+      "    depends_on:",
+      "      db: { condition: service_healthy }",
+      "  db:",
+      "    image: postgres:17",
+      "    healthcheck: { test: pg_isready, interval: 1s }",
+      "volumes:",
+      "  cache:",
+    ].join("\n")
+
+    const service = (name: string) =>
+      appContainers().find(
+        (container) => container.labels["com.docker.compose.service"] === name
+      )
+
+    it("runs one container per service, labeled as Compose labels them", async () => {
+      const harness = await createdApp()
+      const data = join(harness.config.dataDirectory, "apps", appId)
+
+      const app = await deploy(harness, {
+        compose: composeFile,
+        sourceType: "compose",
+      })
+
+      expect(app.deployment).toMatchObject({ state: "succeeded" })
+      const web = service("web")!
+      const db = service("db")!
+      for (const container of [web, db]) {
+        expect(container.state.running).toBe(true)
+        expect(container.labels).toMatchObject({
+          "com.docker.compose.oneoff": "False",
+          "com.docker.compose.project": project,
+          "kiln.app.id": appId,
+          "kiln.resource.kind": "app",
+        })
+        expect([...container.networks.keys()]).toEqual(
+          expect.arrayContaining([
+            `${project}_default`,
+            `${TEST_NAMESPACE}-kiln-app-${appId}-network`,
+          ])
+        )
+      }
+      expect(web.labels["com.docker.compose.depends_on"]).toBe(
+        "db:service_healthy:false"
+      )
+      expect(fakeDocker.networks.get(`${project}_default`)?.labels).toMatchObject(
+        {
+          "com.docker.compose.network": "default",
+          "com.docker.compose.project": project,
+        }
+      )
+      expect(fakeDocker.volumes.get(`${project}_cache`)?.labels).toMatchObject({
+        "com.docker.compose.project": project,
+        "com.docker.compose.volume": "cache",
+      })
+      // Paths in the app's directory are bound from where the host has it.
+      expect(web.env.DATA).toBe(data)
+      expect(web.mounts).toContainEqual(
+        expect.objectContaining({
+          destination: "/uploads",
+          source: join(data, "uploads"),
+        })
+      )
+    })
+
+    it("replaces the previous containers, keeping their anonymous volumes, and removes dropped services", async () => {
+      const harness = await createdApp()
+      const first = await deploy(harness, {
+        compose: composeFile.replace(
+          "volumes:\n",
+          "  worker:\n    image: busybox\nvolumes:\n"
+        ),
+        sourceType: "compose",
+      })
+      expect(first.deployment).toMatchObject({ state: "succeeded" })
+      expect(service("worker")?.state.running).toBe(true)
+      // An image VOLUME Compose made an anonymous volume for.
+      const firstDb = service("db")!
+      const anonymous = fakeDocker.addVolume({ name: "a".repeat(64) })
+      firstDb.mounts.push({
+        destination: "/var/lib/postgresql/data",
+        source: anonymous.name,
+        type: "volume",
+      })
+
+      const app = await deploy(harness, {
+        compose: composeFile,
+        sourceType: "compose",
+      })
+
+      expect(app.deployment).toMatchObject({ state: "succeeded" })
+      expect(appContainers().map((container) => container.labels["com.docker.compose.service"]).sort()).toEqual(["db", "web"])
+      const db = service("db")!
+      expect(db.id).not.toBe(firstDb.id)
+      expect(db.mounts).toContainEqual(
+        expect.objectContaining({
+          destination: "/var/lib/postgresql/data",
+          source: anonymous.name,
+        })
+      )
+    })
+
+    it("fails when a dependency doesn't become healthy, leaving its dependents stopped", async () => {
+      const harness = await createdApp()
+      fakeDocker.unhealthyImages.add("postgres:17")
+
+      const app = await deploy(harness, {
+        compose: composeFile,
+        sourceType: "compose",
+      })
+
+      expect(app.deployment?.state).toBe("failed")
+      expect(app.deployment?.error).toMatch(
+        /dependency failed to start: container .*-db-\d+ is unhealthy/u
+      )
+      expect(service("web")?.state.running).toBe(false)
+    })
+
+    it("fails before running anything when the file uses what Kiln can't run", async () => {
+      const harness = await createdApp()
+
+      const app = await deploy(harness, {
+        compose: "services:\n  web:\n    image: nginx\n    secrets: [token]\n",
+        sourceType: "compose",
+      })
+
+      expect(app.deployment?.error).toMatch(/secrets.*doesn't support/u)
+      expect(appContainers()).toEqual([])
+    })
+  })
+
   it("removes an app's containers, network, and data when deleted", async () => {
     const harness = await createdApp()
     await deploy(harness, {})

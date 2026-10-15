@@ -1,4 +1,3 @@
-import { spawn } from "node:child_process"
 import { mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 
@@ -19,7 +18,6 @@ import type {
 import { appServiceNameSchema, relayAppSchema } from "@workspace/contracts"
 import { Effect, Result, Semaphore } from "effect"
 
-import { commandLines } from "./command.js"
 import type { RelayConfig } from "./config.js"
 import { consoleLineCharacters } from "./console-frames.js"
 import { parseConsoleLine } from "./console-parsing.js"
@@ -28,7 +26,14 @@ import {
   MAX_CONSOLE_HISTORY_CHARACTERS,
   type DockerConsoleSession,
 } from "./docker.js"
+import {
+  type ComposeProject,
+  type ComposeService,
+  loadComposeProject,
+} from "./compose-project.js"
+import { composeUp } from "./compose-up.js"
 import { buildImage } from "./docker-build.js"
+import { shellWords } from "./shell-words.js"
 import { createContainer } from "./docker-container-spec.js"
 import {
   DockerEngine,
@@ -841,22 +846,21 @@ export class AppDriver {
     const project = this.#composeProject(input.appId)
     const directory = this.#appDirectory(input.appId)
     const hostDirectory = join(host, "apps", input.appId)
+    // The app's environment and Kiln's variables, which take precedence
+    // over the project's .env, as the environment Compose ran in did.
     const environment = {
-      ...process.env,
       ...this.#environment(input.appId, deployment, input.config),
       KILN_APP_ID: input.appId,
       KILN_DATA: hostDirectory,
     }
-    const compose = ["compose", "--ansi", "never", "-p", project]
-    compose.push("--project-directory", directory, "-f", "-")
     log("Reading Compose file")
-    const normalized = await composeConfig(
-      [...compose, "config", "--format", "json"],
-      input.config.compose,
+    const normalized = await loadComposeProject({
       environment,
-      deployment.abort.signal,
-      (line) => this.#logOutput(input.appId, deployment, line, "warn")
-    )
+      onWarning: (line) => this.#logOutput(input.appId, deployment, line, "warn"),
+      projectDirectory: directory,
+      projectName: project,
+      yaml: input.config.compose,
+    })
     const databases = await this.#connectableDatabases(
       input.appId,
       deployment,
@@ -878,36 +882,32 @@ export class AppDriver {
       (container) => container.labels[COMPOSE_PROJECT_LABEL] !== project
     )
     await this.#replacing(input.appId, deployment, previous, [], () =>
-      this.#composeUp(input, deployment, compose, environment, prepared)
+      this.#composeUp(input, deployment, directory, prepared)
     )
   }
 
   async #composeUp(
     input: RelayDeployApp,
     deployment: Deployment,
-    compose: ReadonlyArray<string>,
-    environment: NodeJS.ProcessEnv,
+    directory: string,
     prepared: ComposeProject
   ) {
     const log = (text: string, level: RelayConsoleLevel = "info") =>
       this.#log(input.appId, deployment, text, level)
-    await this.#stream(
-      input.appId,
-      deployment,
-      [
-        ...compose,
-        "--progress",
-        "plain",
-        "up",
-        "--detach",
-        "--build",
-        "--remove-orphans",
-      ],
-      {
-        env: environment,
-        input: JSON.stringify(prepared),
-        timeout: BUILD_TIMEOUT_MS,
-      }
+    await Effect.runPromise(
+      composeUp(this.#engine, {
+        buildTimeout: BUILD_TIMEOUT_MS,
+        onLine: (line) => this.#logOutput(input.appId, deployment, line),
+        project: prepared,
+        workingDirectory: directory,
+      }).pipe(
+        Effect.timeoutOrElse({
+          duration: BUILD_TIMEOUT_MS,
+          orElse: () =>
+            Effect.fail(new Error("Docker Compose did not finish in time")),
+        })
+      ),
+      { signal: deployment.abort.signal }
     )
     await sleep(SETTLE_MS, deployment.abort.signal)
     const containers = await this.#appContainers(input.appId)
@@ -957,7 +957,7 @@ export class AppDriver {
       if (!appServiceNameSchema.safeParse(name).success) {
         throw new Error(`Rename the "${name}" service: use letters and digits`)
       }
-      const networks: Record<string, unknown> = service.network_mode
+      const networks: NonNullable<ComposeService["networks"]> = service.network_mode
         ? {}
         : {
             ...(service.networks ?? { default: null }),
@@ -1099,20 +1099,6 @@ export class AppDriver {
       environment[key!] = unquote(value!)
     }
     return environment
-  }
-
-  async #stream(
-    appId: string,
-    deployment: Deployment,
-    arguments_: Array<string>,
-    options: { env?: NodeJS.ProcessEnv; input?: string; timeout: number }
-  ) {
-    await commandLines(
-      "docker",
-      arguments_,
-      (line) => this.#logOutput(appId, deployment, line),
-      { ...options, signal: deployment.abort.signal }
-    )
   }
 
   #logOutput(
@@ -1442,68 +1428,6 @@ export class AppDriver {
   }
 }
 
-interface ComposeService {
-  container_name?: string
-  labels?: Record<string, string>
-  network_mode?: string
-  networks?: Record<string, unknown>
-  restart?: string
-  volumes?: Array<{ source?: unknown; type?: string; [key: string]: unknown }>
-  [key: string]: unknown
-}
-
-interface ComposeProject {
-  networks?: Record<string, unknown>
-  services: Record<string, ComposeService>
-  [key: string]: unknown
-}
-
-// What `docker compose config` makes of a Compose file, interpolated and in
-// its long form, so services can be changed without parsing YAML here.
-function composeConfig(
-  arguments_: ReadonlyArray<string>,
-  input: string,
-  env: NodeJS.ProcessEnv,
-  signal: AbortSignal,
-  onWarning: (line: string) => void
-): Promise<ComposeProject> {
-  return new Promise((resolve, reject) => {
-    const child = spawn("docker", arguments_, {
-      env,
-      signal,
-      stdio: ["pipe", "pipe", "pipe"],
-    })
-    let stdout = ""
-    let stderr = ""
-    child.stdout.setEncoding("utf8")
-    child.stderr.setEncoding("utf8")
-    child.stdout.on("data", (chunk: string) => {
-      stdout += chunk
-      if (stdout.length > 4 * 1024 * 1024) child.kill("SIGKILL")
-    })
-    child.stderr.on("data", (chunk: string) => {
-      stderr += chunk
-    })
-    child.once("error", reject)
-    child.once("close", (code) => {
-      const messages = stderr.split("\n").filter((line) => line.trim())
-      if (code !== 0) {
-        reject(new Error(messages.at(-1) ?? "The Compose file is not valid"))
-        return
-      }
-      for (const message of messages) onWarning(message)
-      const parsed = Result.try(() => JSON.parse(stdout) as ComposeProject)
-      if (Result.isFailure(parsed) || !parsed.success.services) {
-        reject(new Error("Docker Compose returned an unreadable project"))
-        return
-      }
-      resolve(parsed.success)
-    })
-    child.stdin.on("error", () => undefined)
-    child.stdin.end(input)
-  })
-}
-
 // A missing or invalid source fails before anything is deployed.
 function sourceProblem(config: AppConfig): string | null {
   switch (config.sourceType) {
@@ -1527,46 +1451,6 @@ function describeSource(config: AppConfig): string {
     case "compose":
       return "Docker Compose"
   }
-}
-
-// Splits a start command the way a shell would, without running one, so it
-// works in images that have no shell.
-function shellWords(input: string): Array<string> {
-  const words: Array<string> = []
-  let current = ""
-  let started = false
-  let quote: '"' | "'" | null = null
-  for (let index = 0; index < input.length; index += 1) {
-    const character = input[index]!
-    if (quote) {
-      if (character === quote) quote = null
-      else if (
-        character === "\\" &&
-        quote === '"' &&
-        index + 1 < input.length
-      ) {
-        current += input[++index]
-      } else current += character
-      continue
-    }
-    if (character === '"' || character === "'") {
-      quote = character
-      started = true
-    } else if (character === "\\" && index + 1 < input.length) {
-      current += input[++index]
-      started = true
-    } else if (/\s/u.test(character)) {
-      if (started) words.push(current)
-      current = ""
-      started = false
-    } else {
-      current += character
-      started = true
-    }
-  }
-  if (quote) throw new Error("The start command has an unclosed quote")
-  if (started) words.push(current)
-  return words
 }
 
 function unquote(value: string): string {
