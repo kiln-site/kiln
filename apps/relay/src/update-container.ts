@@ -25,6 +25,12 @@ export interface ContainerInspect {
   }
   Id: string
   Image: string
+  Mounts?: Array<{
+    Destination: string
+    Name?: string
+    RW?: boolean
+    Type?: string
+  }>
   Name: string
   NetworkSettings?: {
     Networks?: Record<string, { Aliases?: Array<string> | null }>

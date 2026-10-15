@@ -81,6 +81,45 @@ describe("mounting host files", () => {
     )
   })
 
+  it("keeps the Relay's state in a volume Docker named itself", async () => {
+    const { config } = await relayHarness()
+    fakeDocker.addNetwork({ name: "kiln" })
+    const relay = fakeDocker.addContainer({
+      name: "kiln-relay-1",
+      mounts: [
+        {
+          type: "volume",
+          source: "3f1c9a",
+          destination: "/data",
+          anonymous: true,
+        },
+      ],
+      networks: ["kiln"],
+      running: true,
+    })
+
+    await mount(new DockerEngine(config.dockerSocket), relay.id)
+
+    expect(fakeDocker.container("kiln-relay-1")!.mounts).toContainEqual(
+      expect.objectContaining({ source: "3f1c9a", destination: "/data" })
+    )
+  })
+
+  it("mounts a Relay on Docker's default bridge network", async () => {
+    const { config } = await relayHarness()
+    const relay = fakeDocker.addContainer({
+      name: "kiln-relay-1",
+      networks: ["bridge"],
+      running: true,
+    })
+
+    await mount(new DockerEngine(config.dockerSocket), relay.id)
+
+    const replaced = fakeDocker.container("kiln-relay-1")!
+    expect(replaced.id).not.toBe(relay.id)
+    expect(replaced.state.running).toBe(true)
+  })
+
   it("puts the Relay back when its replacement doesn't start", async () => {
     const { engine, relay } = await relayContainer()
     fakeDocker.failNext({ command: "start" }, "no space left on device")

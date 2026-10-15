@@ -258,7 +258,7 @@ function replacementEffect(
       HostConfig: {
         ...current.HostConfig,
         Mounts: [
-          ...((current.HostConfig.Mounts ?? []) as Array<unknown>),
+          ...namedVolumeMounts(current),
           {
             Type: "bind",
             Source: "/",
@@ -273,9 +273,9 @@ function replacementEffect(
       ...(primary && {
         NetworkingConfig: {
           EndpointsConfig: {
-            [primary]: {
-              Aliases: networkAliases(networks[primary]?.Aliases, name),
-            },
+            [primary]: userDefinedNetwork(primary)
+              ? { Aliases: networkAliases(networks[primary]?.Aliases, name) }
+              : {},
           },
         },
       }),
@@ -283,14 +283,65 @@ function replacementEffect(
     yield* Effect.forEach(
       networkNames.filter((network) => network !== primary),
       (network) =>
-        engine.connectNetwork(network, created.Id, {
-          aliases: networkAliases(networks[network]?.Aliases, name),
-        }),
+        engine.connectNetwork(
+          network,
+          created.Id,
+          userDefinedNetwork(network)
+            ? { aliases: networkAliases(networks[network]?.Aliases, name) }
+            : {}
+        ),
       { discard: true }
     )
     yield* engine.startContainer(created.Id, { timeout: 120_000 })
     yield* untilHealthy(engine, created.Id)
   })
+}
+
+// The Relay's mounts, with each volume given by name. Docker names a volume
+// itself when only its path is configured, as with `-v /data` or an image's
+// VOLUME, and would give the replacement a new, empty one: the Relay's state
+// would stay behind in the old volume.
+function namedVolumeMounts(current: ContainerInspect): Array<unknown> {
+  const mounts = (current.HostConfig.Mounts ?? []) as Array<{
+    Source?: string
+    Target: string
+    Type?: string
+  }>
+  const bound = ((current.HostConfig.Binds ?? []) as Array<string>).map(
+    (bind) => bind.split(":")[1]
+  )
+  const volumes = new Map(
+    (current.Mounts ?? [])
+      .filter((mount) => mount.Type === "volume" && mount.Name)
+      .map((mount) => [mount.Destination, mount])
+  )
+  const named = mounts.map((mount) => {
+    const volume = volumes.get(mount.Target)
+    return mount.Type === "volume" && !mount.Source && volume
+      ? { ...mount, Source: volume.Name }
+      : mount
+  })
+  const unlisted = [...volumes.values()]
+    .filter(
+      (volume) =>
+        !bound.includes(volume.Destination) &&
+        !mounts.some((mount) => mount.Target === volume.Destination)
+    )
+    .map((volume) => ({
+      Type: "volume",
+      Source: volume.Name,
+      Target: volume.Destination,
+      ReadOnly: volume.RW === false,
+    }))
+  return [...named, ...unlisted]
+}
+
+// Docker's own bridge, host, and none networks take no aliases.
+function userDefinedNetwork(network: string): boolean {
+  return (
+    !["bridge", "host", "none"].includes(network) &&
+    !network.startsWith("container:")
+  )
 }
 
 // Passes once the replacement's health check does, or at once without one.

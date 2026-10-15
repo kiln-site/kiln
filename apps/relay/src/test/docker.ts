@@ -40,6 +40,12 @@ export interface FakeMount {
   /** Host path for bind mounts, volume name for volume mounts. */
   readonly source: string
   readonly type: "bind" | "volume"
+  /**
+   * A volume Docker named itself, from `-v /path` or an image's VOLUME. It
+   * appears only in `Config.Volumes`, so a container created from the same
+   * configuration gets a new, empty one.
+   */
+  readonly anonymous?: boolean
 }
 
 export interface FakeContainer {
@@ -633,7 +639,7 @@ export class FakeDocker {
           `${mount.source}:${mount.destination}${mount.readOnly ? ":ro" : ""}`
       )
     const volumeMounts = container.mounts
-      .filter((mount) => mount.type === "volume")
+      .filter((mount) => mount.type === "volume" && !mount.anonymous)
       .map((mount) => ({
         ReadOnly: mount.readOnly ?? false,
         Source: mount.source,
@@ -657,6 +663,11 @@ export class FakeDocker {
         Labels: container.labels,
         OpenStdin: container.openStdin,
         Tty: container.tty,
+        Volumes: Object.fromEntries(
+          container.mounts
+            .filter((mount) => mount.anonymous)
+            .map((mount) => [mount.destination, {}])
+        ),
       },
       HostConfig: {
         Binds: binds,
@@ -1607,11 +1618,30 @@ export class FakeDocker {
       ...(host.Mounts ?? []).map((mount) => ({
         destination: mount.Target,
         readOnly: mount.ReadOnly ?? false,
-        source: mount.Source,
+        ...(mount.Type === "volume" && !mount.Source
+          ? { anonymous: true, source: randomBytes(32).toString("hex") }
+          : { source: mount.Source ?? "" }),
         type: mount.Type === "volume" ? ("volume" as const) : ("bind" as const),
       })),
     ]
+    for (const destination of Object.keys(body.Volumes ?? {})) {
+      if (mounts.some((mount) => mount.destination === destination)) continue
+      mounts.push({
+        anonymous: true,
+        destination,
+        source: randomBytes(32).toString("hex"),
+        type: "volume",
+      })
+    }
     const endpoints = body.NetworkingConfig?.EndpointsConfig ?? {}
+    for (const [network, endpoint] of Object.entries(endpoints)) {
+      if (isNetworkMode(network) && endpoint.Aliases?.length) {
+        throw new DockerFailure(
+          "network-scoped aliases are only supported for user-defined networks",
+          400
+        )
+      }
+    }
     return this.#createContainer({
       cmd: body.Cmd ?? [],
       env: Object.fromEntries(
@@ -1828,7 +1858,7 @@ interface CreateBody {
     Memory?: number
     Mounts?: Array<{
       ReadOnly?: boolean
-      Source: string
+      Source?: string
       Target: string
       Type: string
     }>
@@ -1841,6 +1871,7 @@ interface CreateBody {
   }
   Image: string
   Labels?: Record<string, string>
+  Volumes?: Record<string, object>
   NetworkingConfig?: {
     EndpointsConfig?: Record<
       string,
