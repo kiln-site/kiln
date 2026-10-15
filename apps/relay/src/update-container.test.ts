@@ -355,6 +355,27 @@ describe("container replacement", () => {
   )
 
   effectIt.effect(
+    "counts a failed replacement as removed when Docker removed it but the answer was lost",
+    () =>
+      Effect.gen(function* () {
+        const { current, docker } = yield* runningHearth()
+        fakeDocker.unhealthyImages.add(channelReference)
+        fakeDocker.failAfterNext({ command: "rm" }, "context deadline exceeded")
+
+        const failure = yield* replaceContainerEffect(
+          replacement,
+          docker,
+          ignorePhase
+        ).pipe(Effect.flip)
+
+        expect(failure.rollbackFailures).toEqual([])
+        expect(hearth()?.id).toBe(current.id)
+        expect(hearth()?.state.running).toBe(true)
+        expect([...fakeDocker.containers.values()]).toHaveLength(1)
+      })
+  )
+
+  effectIt.effect(
     "restarts the old container when the rename back reports a failure Docker applied",
     () =>
       Effect.gen(function* () {
