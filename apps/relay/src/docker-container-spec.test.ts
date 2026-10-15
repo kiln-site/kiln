@@ -1,6 +1,12 @@
-import { describe, expect, it } from "vite-plus/test"
+import { Effect, Result } from "effect"
+import { describe, expect, it, onTestFinished } from "vite-plus/test"
 
-import { containerCreateBody } from "./docker-container-spec.js"
+import {
+  containerCreateBody,
+  createContainer,
+} from "./docker-container-spec.js"
+import { DockerEngine, DockerEngineError } from "./docker-engine.js"
+import { fakeDocker } from "./test/docker.js"
 import recorded from "./test/docker-cli-create-bodies.json" with { type: "json" }
 
 // Container config and labels are read by other Kiln versions, so containers
@@ -101,6 +107,26 @@ describe("container create bodies", () => {
         sysctls: { "net.ipv4.ip_forward": "1" },
       })
     ).toEqual(recorded.stack)
+  })
+
+  it("fails a create with an invalid size as a Docker error, creating nothing", async () => {
+    const engine = new DockerEngine(await fakeDocker.listen())
+    onTestFinished(() => fakeDocker.reset())
+
+    const outcome = await Effect.runPromise(
+      Effect.result(
+        createContainer(engine, {
+          image: "alpine:3.21",
+          memory: "lots",
+          name: "kiln-invalid",
+        })
+      )
+    )
+
+    expect(Result.isFailure(outcome) && outcome.failure).toBeInstanceOf(
+      DockerEngineError
+    )
+    expect(fakeDocker.container("kiln-invalid")).toBeUndefined()
   })
 
   it("match the CLI's for the update helper", () => {
