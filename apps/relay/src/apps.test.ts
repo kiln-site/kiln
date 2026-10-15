@@ -756,90 +756,97 @@ describe("apps", () => {
       expect(service("db")!.id).not.toBe(firstDb)
     })
 
-    describe("when a redeploy fails", () => {
-      const containers = () =>
+    // What docker compose v5.5.1 leaves when a redeploy fails, which the
+    // next deploy replaces.
+    describe("when a redeploy fails, as Compose leaves it", () => {
+      // Each container: its service, whether it's the first deployment's,
+      // a replacement still under its temporary name, and its state.
+      const containers = (first: ReadonlyArray<string>) =>
         appContainers()
           .map((container) => ({
-            id: container.id,
-            name: container.name,
-            running: container.state.running,
+            first: first.includes(container.id),
+            service: container.labels["com.docker.compose.service"],
+            state: container.state.running
+              ? "running"
+              : container.starts === 0
+                ? "created"
+                : "exited",
+            temporary: /^[0-9a-f]{12}_/u.test(container.name),
           }))
-          .sort((left, right) => left.name.localeCompare(right.name))
+          .sort((left, right) =>
+            `${left.service}${left.first}`.localeCompare(
+              `${right.service}${right.first}`
+            )
+          )
 
-      // The first deployment, running, and what it left.
-      async function deployed() {
+      it.each([
+        [
+          "Docker refuses a replacement (a missing bind source), after the database's",
+          (file: string) =>
+            file.replace(
+              "'./uploads:/uploads'",
+              "{ type: bind, source: ./missing, target: /missing, bind: { create_host_path: false } }"
+            ),
+          () => undefined,
+          /bind source path does not exist/u,
+          [
+            { first: false, service: "db", state: "created", temporary: false },
+            { first: true, service: "web", state: "running", temporary: false },
+          ],
+        ],
+        [
+          "a replacement fails to start",
+          (file: string) => file,
+          () =>
+            fakeDocker.failNext({ command: "start" }, "port is already allocated"),
+          /port is already allocated/u,
+          [
+            { first: false, service: "db", state: "created", temporary: false },
+            { first: false, service: "web", state: "created", temporary: false },
+          ],
+        ],
+        [
+          "stopping a replaced container fails after Docker applied it",
+          (file: string) => file,
+          () => fakeDocker.failAfterNext({ command: "stop" }, "stop timed out"),
+          /stop timed out/u,
+          [
+            { first: false, service: "db", state: "created", temporary: true },
+            { first: true, service: "db", state: "exited", temporary: false },
+            { first: true, service: "web", state: "running", temporary: false },
+          ],
+        ],
+      ])("leaves what Compose leaves when %s, and the next deploy replaces it", async (_, change, fail, error, left) => {
         const harness = await createdApp()
         const first = await deploy(harness, {
           compose: composeFile,
           sourceType: "compose",
         })
         expect(first.deployment).toMatchObject({ state: "succeeded" })
-        const before = containers()
-        expect(before).toHaveLength(2)
-        expect(before.every((container) => container.running)).toBe(true)
-        return { before, harness }
-      }
+        const firstIds = appContainers().map((container) => container.id)
+        const cache = fakeDocker.volumes.get(`${project}_cache`)
+        fail()
 
-      it("leaves the previous containers untouched when Docker refuses a replacement", async () => {
-        const { before, harness } = await deployed()
-
-        const app = await deploy(harness, {
-          compose: composeFile.replace(
-            "'./uploads:/uploads'",
-            "{ type: bind, source: ./missing, target: /missing, bind: { create_host_path: false } }"
-          ),
+        const failed = await deploy(harness, {
+          compose: change(composeFile),
           sourceType: "compose",
         })
 
-        expect(app.deployment?.state).toBe("failed")
-        expect(app.deployment?.error).toMatch(/bind source path does not exist/u)
-        expect(containers()).toEqual(before)
-      })
+        expect(failed.deployment?.state).toBe("failed")
+        expect(failed.deployment?.error).toMatch(error)
+        expect(containers(firstIds)).toEqual(left)
 
-      it("restarts a previous container whose stop failed after Docker applied it", async () => {
-        const { before, harness } = await deployed()
-        fakeDocker.failAfterNext({ command: "stop" }, "stop timed out")
-
-        const app = await deploy(harness, {
+        const next = await deploy(harness, {
           compose: composeFile,
           sourceType: "compose",
         })
 
-        expect(app.deployment).toMatchObject({
-          error: "Error response from daemon: stop timed out",
-          state: "failed",
-        })
-        expect(containers()).toEqual(before)
-      })
-
-      it("puts the previous containers back when a replacement fails to start", async () => {
-        const { before, harness } = await deployed()
-        fakeDocker.failNext({ command: "start" }, "port is already allocated")
-
-        const app = await deploy(harness, {
-          compose: composeFile,
-          sourceType: "compose",
-        })
-
-        expect(app.deployment).toMatchObject({
-          error: "Error response from daemon: port is already allocated",
-          state: "failed",
-        })
-        expect(containers()).toEqual(before)
-      })
-
-      it("puts back a replacement that started when a later one's dependency fails", async () => {
-        const { before, harness } = await deployed()
-        fakeDocker.images.set("postgres:18", {})
-        fakeDocker.unhealthyImages.add("postgres:18")
-
-        const app = await deploy(harness, {
-          compose: composeFile.replace("postgres:17", "postgres:18"),
-          sourceType: "compose",
-        })
-
-        expect(app.deployment?.error).toMatch(/is unhealthy/u)
-        expect(containers()).toEqual(before)
+        expect(next.deployment).toMatchObject({ state: "succeeded" })
+        expect(containers(firstIds)).toEqual([
+          { first: false, service: "db", state: "running", temporary: false },
+          { first: false, service: "web", state: "running", temporary: false },
+        ])
+        expect(fakeDocker.volumes.get(`${project}_cache`)).toBe(cache)
       })
     })
 

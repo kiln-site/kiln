@@ -6,18 +6,19 @@
  * Compose gives them (networks and volumes with its config hash), and are
  * sent with the bodies Compose sends, so projects Compose deployed are
  * found, replaced, and removed as before. Each service has one container,
- * replaced on every deploy: every replacement is created first, inheriting
- * its predecessor's anonymous volumes, beside the previous containers,
- * which stop and give up their names only as each replacement starts, and
- * are removed once all have. Containers start once what they depend on is
- * started, healthy, or has completed, as `depends_on` asks. A deployment
- * that fails or is interrupted puts the previous containers back.
+ * replaced on every deploy as Compose's reconciler replaces it: created
+ * under a temporary name, inheriting its anonymous volumes, then the old
+ * one stopped and removed and the new one renamed, in a plan whose
+ * independent steps run at once. Containers then start once what they
+ * depend on is started, healthy, or has completed, as `depends_on` asks.
+ * A step that fails stops the deployment where it is, with nothing undone,
+ * as Compose leaves it; the next deployment carries on from there.
  */
 import { createHash } from "node:crypto"
 import { readFile } from "node:fs/promises"
 import { isAbsolute, join } from "node:path"
 
-import { Deferred, Effect, Exit } from "effect"
+import { Deferred, Effect, Semaphore } from "effect"
 import { pack as createTarPack } from "tar-stream"
 
 import type {
@@ -65,8 +66,8 @@ interface ContainerSummary {
     readonly Source?: string
     readonly Type: string
   }>
+  readonly Created?: number
   readonly Names: ReadonlyArray<string>
-  readonly State?: string
 }
 
 interface InspectedContainer {
@@ -121,96 +122,229 @@ export function composeUp(
       all: true,
       filters: { label: [`${PROJECT_LABEL}=${project.name}`] },
     })) as unknown as ReadonlyArray<ContainerSummary>
-    const current = existing.filter(
-      (container) => container.Labels?.[ONEOFF_LABEL] !== "True"
-    )
-    const networks = yield* ensureNetworks(engine, project, current, onLine)
-    const volumes = yield* ensureVolumes(engine, project, onLine)
-    // Services no longer in the project (orphans), and each service's
-    // previous containers, the first of which its replacement inherits
-    // anonymous volumes from.
-    const orphans = current.filter(
-      (container) => !services[container.Labels?.[SERVICE_LABEL] ?? ""]
-    )
-    const previousOf = (name: string) =>
-      current.filter((container) => container.Labels?.[SERVICE_LABEL] === name)
-    // The project's container that has the name a service's takes.
-    const holderOf = (name: string) =>
-      current.find((container) => containerNameOf(container) === nameOf(name))
+    // Each service's containers, and those of services no longer in the
+    // project (orphans).
+    const observed = new Map<string, Array<ContainerSummary>>()
+    const orphans: Array<ContainerSummary> = []
+    for (const container of existing) {
+      if (container.Labels?.[ONEOFF_LABEL] === "True") continue
+      const service = container.Labels?.[SERVICE_LABEL] ?? ""
+      if (!services[service]) {
+        orphans.push(container)
+        continue
+      }
+      const list = observed.get(service)
+      if (list) list.push(container)
+      else observed.set(service, [container])
+    }
 
-    const swap: SwapState = {
-      aside: [],
-      created: new Map(),
-      stopped: new Map(),
-    }
-    const created = new Map<string, Deferred.Deferred<string, Error>>()
-    const started = new Map<string, Deferred.Deferred<void, Error>>()
-    for (const name of order) {
-      created.set(name, yield* Deferred.make<string, Error>())
-      started.set(name, yield* Deferred.make<void, Error>())
-    }
-    const createdId = (name: string) => Deferred.await(created.get(name)!)
+    const plan = new Plan()
+    // Each container's stop, so one is stopped once, and what reconnects it
+    // to a recreated network.
+    const stopped = new Map<string, Step>()
+    const connected = new Map<string, Array<Step>>()
     const stop = (container: ContainerSummary) =>
-      Effect.gen(function* () {
-        if (swap.stopped.has(container.Id)) return
-        // Recorded first, so a stop whose answer is lost still restarts.
-        swap.stopped.set(container.Id, container.State === "running")
-        yield* engine.stopContainer(container.Id, {
-          timeout: STOP_MARGIN_MS + 600_000,
-        })
+      engine.stopContainer(container.Id, {
+        timeout: STOP_MARGIN_MS + 600_000,
       })
+    const remove = (container: ContainerSummary) =>
+      engine.removeContainer(container.Id, { force: true, timeout: 90_000 })
+    const logged = (
+      container: ContainerSummary,
+      [working, done]: readonly [string, string],
+      effect: Effect.Effect<void, Error>
+    ) => {
+      const name = containerNameOf(container)
+      return Effect.sync(() => onLine(`Container ${name}  ${working}`)).pipe(
+        Effect.andThen(effect),
+        Effect.andThen(Effect.sync(() => onLine(`Container ${name}  ${done}`)))
+      )
+    }
 
-    // Every replacement is created, with its files, while the previous
-    // containers run on: a container Docker refuses (a missing bind
-    // source, an unset secret) fails the deployment before anything stops.
-    // One whose name the previous container has is created beside it, as
-    // Compose does.
-    const create = (name: string) =>
+    const networks = yield* planNetworks(engine, project, plan, onLine, {
+      // Compose's: the containers of the services that use a network.
+      containersOf: (key) =>
+        Object.entries(services)
+          .filter(([, service]) => Object.hasOwn(service.networks ?? {}, key))
+          .map(([name]) => name)
+          .sort()
+          .flatMap((name) => observed.get(name) ?? []),
+      connected,
+      stop: (container) => {
+        let step = stopped.get(container.Id)
+        if (!step) {
+          step = plan.add(stop(container))
+          stopped.set(container.Id, step)
+        }
+        return step
+      },
+    })
+    const volumes = yield* planVolumes(engine, project, plan, onLine)
+
+    // The containers of each service, as the creates and removes so far
+    // leave them, which `network_mode: service:…` and the like resolve to.
+    const live = new Map<string, Array<ContainerSummary>>(
+      [...observed].map(([name, list]) => [name, [...list]])
+    )
+    const containerOf = (service: string) =>
+      [...(live.get(service) ?? [])].sort((left, right) =>
+        containerNameOf(left) < containerNameOf(right) ? -1 : 1
+      )[0]?.Id
+    const created = new Map<string, string>()
+    const create = (
+      name: string,
+      createName: string,
+      inherit: ContainerSummary | undefined
+    ) =>
       Effect.gen(function* () {
         const service = services[name]!
-        const containerName = nameOf(name)
-        // Containers this one shares a namespace or volumes with exist first.
-        const linked = new Map<string, string>()
-        for (const dependency of linkedServices(service)) {
-          if (created.has(dependency)) {
-            linked.set(dependency, yield* createdId(dependency))
-          }
-        }
-        const previous = previousOf(name)[0]
-        onLine(`Container ${containerName}  ${previous ? "Recreate" : "Creating"}`)
         const body = yield* containerBody(project, name, service, {
-          containerName,
-          containerOf: (dependency) => linked.get(dependency),
+          containerName: nameOf(name),
+          containerOf,
           image: images.get(name)!,
-          inherit: previous,
-          networks,
-          replacing: previous !== undefined,
-          volumes,
+          inherit,
+          networks: networks.names,
+          replacing: inherit !== undefined,
+          volumes: volumes.names,
           workingDirectory: options.workingDirectory,
         })
-        const holder = holderOf(name)
-        const temporary = holder
-          ? `${holder.Id.slice(0, 12)}_${containerName}`
-          : containerName
-        const container = yield* engine.createContainer(temporary, body, {
+        const container = yield* engine.createContainer(createName, body, {
           platform: platformOf(service),
         })
-        swap.created.set(name, {
-          id: container.Id,
-          // A new service's container, with nothing to give way to, stays
-          // when the deployment fails, for its logs.
-          restores: previous !== undefined || holder !== undefined,
-          temporary: holder !== undefined,
-        })
-        yield* injectFiles(engine, project, name, service, container.Id)
-        if (!previous) onLine(`Container ${containerName}  Created`)
-        return container.Id
+        created.set(name, container.Id)
+        const list = live.get(name) ?? []
+        list.push({ Id: container.Id, Labels: null, Names: [`/${createName}`] })
+        live.set(name, list)
+      })
+    const removeLive = (container: ContainerSummary) =>
+      Effect.sync(() => {
+        const service = container.Labels?.[SERVICE_LABEL] ?? ""
+        live.set(
+          service,
+          (live.get(service) ?? []).filter((entry) => entry.Id !== container.Id)
+        )
       })
 
-    // Once what it depends on is ready, a service's previous containers
-    // stop, the one with its name is renamed aside, and the replacement
-    // takes the name and starts. The previous ones stay until every
-    // replacement has started.
+    // Compose's recreate: the replacement is created under a temporary
+    // name, then the container it replaces stops and is removed, and the
+    // replacement takes its name. Dependents that restart with it stop
+    // first.
+    const recreate = (
+      name: string,
+      container: ContainerSummary,
+      after: ReadonlyArray<Step | undefined>
+    ) => {
+      const containerName = nameOf(name)
+      const stops: Array<Step> = []
+      for (const [dependent, other] of Object.entries(services)) {
+        if (!other.depends_on?.[name]?.restart) continue
+        for (const target of observed.get(dependent) ?? []) {
+          if (stopped.has(target.Id)) continue
+          const step = plan.add(
+            logged(target, ["Stopping", "Stopped"], stop(target))
+          )
+          stopped.set(target.Id, step)
+          stops.push(step)
+        }
+      }
+      const temporary = `${container.Id.slice(0, 12)}_${containerName}`
+      const creating = plan.add(
+        Effect.sync(() => onLine(`Container ${containerName}  Recreate`)).pipe(
+          Effect.andThen(create(name, temporary, container))
+        ),
+        ...after,
+        ...stops
+      )
+      let stopping = stopped.get(container.Id)
+      const alreadyStopped = stopping !== undefined
+      if (!stopping) {
+        stopping = plan.add(stop(container), creating)
+        stopped.set(container.Id, stopping)
+      }
+      const removing = plan.add(
+        remove(container).pipe(Effect.andThen(removeLive(container))),
+        stopping,
+        ...(alreadyStopped ? [creating] : []),
+        ...(connected.get(container.Id) ?? [])
+      )
+      return plan.add(
+        Effect.gen(function* () {
+          yield* engine.renameContainer(created.get(name)!, containerName)
+          onLine(`Container ${containerName}  Recreated`)
+        }),
+        removing
+      )
+    }
+    const last = new Map<string, Step>()
+    for (const name of order) {
+      const service = services[name]!
+      const after = [
+        ...Object.keys(service.networks ?? {})
+          .sort()
+          .map((key) => networks.steps.get(key)),
+        ...(service.volumes ?? []).map((volume) =>
+          volume.type === "volume" && volume.source
+            ? volumes.steps.get(volume.source)
+            : undefined
+        ),
+        ...Object.keys(service.depends_on ?? {})
+          .sort()
+          .map((dependency) => last.get(dependency)),
+      ]
+      // Its first container (by number, newest first) is replaced; any
+      // others are removed, as Compose scales to one.
+      const containers = [...(observed.get(name) ?? [])].sort(
+        (left, right) =>
+          containerNumber(left) - containerNumber(right) ||
+          (right.Created ?? 0) - (left.Created ?? 0)
+      )
+      let step: Step | undefined
+      for (const [index, container] of containers.entries()) {
+        if (index === 0) {
+          step = recreate(name, container, after)
+          continue
+        }
+        const stopping = plan.add(
+          logged(container, ["Stopping", "Stopped"], stop(container))
+        )
+        step = plan.add(
+          logged(
+            container,
+            ["Removing", "Removed"],
+            remove(container).pipe(Effect.andThen(removeLive(container)))
+          ),
+          stopping
+        )
+      }
+      if (containers.length === 0) {
+        const containerName = nameOf(name)
+        step = plan.add(
+          Effect.gen(function* () {
+            onLine(`Container ${containerName}  Creating`)
+            yield* create(name, containerName, undefined)
+            onLine(`Container ${containerName}  Created`)
+          }),
+          ...after
+        )
+      }
+      if (step) last.set(name, step)
+    }
+    // --remove-orphans.
+    for (const orphan of orphans) {
+      const stopping = plan.add(
+        logged(orphan, ["Stopping", "Stopped"], stop(orphan))
+      )
+      plan.add(logged(orphan, ["Removing", "Removed"], remove(orphan)), stopping)
+    }
+    yield* plan.run()
+
+    // Then each service's container starts, once what it depends on is
+    // started, healthy, or done, one start at a time, as Compose's start.
+    const started = new Map<string, Deferred.Deferred<void, Error>>()
+    for (const name of order) {
+      started.set(name, yield* Deferred.make<void, Error>())
+    }
+    const starting = yield* Semaphore.make(1)
     const start = (name: string) =>
       Effect.gen(function* () {
         const service = services[name]!
@@ -222,187 +356,85 @@ export function composeUp(
           yield* Deferred.await(dependencyStarted)
           yield* waitForDependency(
             engine,
-            yield* createdId(dependency),
+            created.get(dependency)!,
             dependency,
             settings,
             onLine
           )
         }
-        const id = yield* createdId(name)
+        const id = created.get(name)!
+        yield* injectFiles(engine, project, name, service, id)
         const containerName = nameOf(name)
-        const replacement = swap.created.get(name)!
-        yield* Effect.forEach(previousOf(name), stop, {
-          concurrency: "unbounded",
-          discard: true,
-        })
-        const holder = holderOf(name)
-        if (holder) {
-          swap.aside.push(holder)
-          yield* engine.renameContainer(
-            holder.Id,
-            `${holder.Id.slice(0, 12)}_${containerName}_previous`
-          )
-        }
-        if (replacement.temporary) {
-          yield* engine.renameContainer(id, containerName)
-          replacement.temporary = false
-          onLine(`Container ${containerName}  Recreated`)
-        }
         onLine(`Container ${containerName}  Starting`)
-        yield* engine.startContainer(id, { timeout: 120_000 })
+        yield* starting.withPermit(
+          engine.startContainer(id, { timeout: 120_000 })
+        )
         onLine(`Container ${containerName}  Started`)
       })
+    yield* Effect.forEach(
+      order,
+      (name) =>
+        start(name).pipe(
+          Effect.exit,
+          Effect.flatMap((exit) =>
+            Deferred.done(started.get(name)!, exit).pipe(Effect.andThen(exit))
+          )
+        ),
+      { concurrency: "unbounded", discard: true }
+    )
+  })
+}
 
-    const run = <A,>(
-      step: (name: string) => Effect.Effect<A, Error>,
-      done: Map<string, Deferred.Deferred<A, Error>>
-    ) =>
-      Effect.forEach(
-        order,
-        (name) =>
-          step(name).pipe(
-            Effect.exit,
-            Effect.flatMap((exit) =>
-              Deferred.done(done.get(name)!, exit).pipe(Effect.andThen(exit))
-            )
-          ),
+// Compose's container number label, 1 when there's none.
+function containerNumber(container: ContainerSummary): number {
+  return Number(container.Labels?.["com.docker.compose.container-number"]) || 1
+}
+
+/** A step of a deployment, run once the steps it comes after have. */
+interface Step {
+  readonly run: Effect.Effect<void, Error>
+  readonly after: ReadonlyArray<Step>
+}
+
+/**
+ * Compose's plan: the deployment's steps, each run as soon as those it
+ * comes after have, so independent ones run at once. The first that fails
+ * stops the rest, and nothing that ran is undone, as Compose's executor.
+ */
+class Plan {
+  readonly #steps: Array<Step> = []
+
+  add(
+    run: Effect.Effect<unknown, Error>,
+    ...after: ReadonlyArray<Step | undefined>
+  ): Step {
+    const step = {
+      after: after.filter((entry): entry is Step => entry !== undefined),
+      run: Effect.asVoid(run),
+    }
+    this.#steps.push(step)
+    return step
+  }
+
+  run(): Effect.Effect<void, Error> {
+    const steps = this.#steps
+    return Effect.gen(function* () {
+      const done = new Map<Step, Deferred.Deferred<void>>()
+      for (const step of steps) done.set(step, yield* Deferred.make<void>())
+      yield* Effect.forEach(
+        steps,
+        (step) =>
+          Effect.gen(function* () {
+            for (const before of step.after) {
+              yield* Deferred.await(done.get(before)!)
+            }
+            yield* step.run
+            yield* Deferred.succeed(done.get(step)!, undefined)
+          }),
         { concurrency: "unbounded", discard: true }
       )
-
-    yield* Effect.gen(function* () {
-      yield* run(create, created)
-      // Orphans stop before anything starts, as they may hold host ports
-      // the replacements publish.
-      yield* Effect.forEach(orphans, stop, {
-        concurrency: "unbounded",
-        discard: true,
-      })
-      yield* run(start, started)
-    }).pipe(
-      Effect.onExit((exit) =>
-        Exit.isSuccess(exit)
-          ? Effect.void
-          : rollback(engine, project.name, current, swap, onLine)
-      )
-    )
-
-    // Every replacement started: the previous containers and orphans go.
-    yield* Effect.forEach(
-      current,
-      (container) => {
-        const name = containerNameOf(container)
-        const orphan = orphans.includes(container)
-        if (orphan) onLine(`Container ${name}  Removing`)
-        return engine
-          .removeContainer(container.Id, { force: true, timeout: 90_000 })
-          .pipe(
-            Effect.tap(() =>
-              Effect.sync(() => {
-                if (orphan) onLine(`Container ${name}  Removed`)
-              })
-            ),
-            Effect.catch((error) =>
-              Effect.sync(() =>
-                onLine(`Container ${name}  Error removing: ${error.message}`)
-              )
-            )
-          )
-      },
-      { concurrency: "unbounded", discard: true }
-    )
-  })
-}
-
-interface SwapState {
-  /** Previous containers renamed aside for their replacements. */
-  readonly aside: Array<ContainerSummary>
-  /** Each service's replacement. */
-  readonly created: Map<
-    string,
-    { readonly id: string; readonly restores: boolean; temporary: boolean }
-  >
-  /** Containers stopped, and whether each was running. */
-  readonly stopped: Map<string, boolean>
-}
-
-// Puts the project back as the deployment found it: the replacements are
-// removed (and any Docker created without answering), the previous
-// containers take their names back, and those that ran start again. Each
-// step is attempted whatever the others do.
-function rollback(
-  engine: DockerEngine,
-  project: string,
-  previous: ReadonlyArray<ContainerSummary>,
-  swap: SwapState,
-  onLine: (line: string) => void
-): Effect.Effect<void> {
-  const attempt = (what: string, effect: Effect.Effect<unknown, Error>) =>
-    effect.pipe(
-      Effect.asVoid,
-      Effect.catch((error) =>
-        Effect.sync(() => onLine(`${what}: ${error.message}`))
-      )
-    )
-  const kept = new Set(
-    [...swap.created.values()]
-      .filter((replacement) => !replacement.restores)
-      .map((replacement) => replacement.id)
-  )
-  const known = new Set(previous.map((container) => container.Id))
-  return Effect.gen(function* () {
-    const found = yield* engine
-      .listContainers({
-        all: true,
-        filters: { label: [`${PROJECT_LABEL}=${project}`] },
-      })
-      .pipe(
-        Effect.map(
-          (containers) => containers as unknown as Array<ContainerSummary>
-        ),
-        Effect.catch(() => Effect.succeed([] as Array<ContainerSummary>))
-      )
-    const replacements = new Set([
-      ...[...swap.created.values()].map((replacement) => replacement.id),
-      ...found
-        .filter((container) => container.Labels?.[ONEOFF_LABEL] !== "True")
-        .map((container) => container.Id),
-    ])
-    yield* Effect.forEach(
-      [...replacements].filter((id) => !known.has(id) && !kept.has(id)),
-      (id) =>
-        attempt(
-          `Could not remove container ${id.slice(0, 12)}`,
-          engine.removeContainer(id, { force: true, timeout: 90_000 })
-        ),
-      { concurrency: "unbounded", discard: true }
-    )
-    // By what Docker reports, as a rename's answer can be lost.
-    for (const container of swap.aside) {
-      const name = containerNameOf(container)
-      yield* attempt(
-        `Could not rename container ${name} back`,
-        engine.inspectContainer<InspectedContainer>(container.Id).pipe(
-          Effect.flatMap((inspected) =>
-            inspected.Name === `/${name}`
-              ? Effect.void
-              : engine.renameContainer(container.Id, name)
-          )
-        )
-      )
-    }
-    yield* Effect.forEach(
-      previous.filter((container) => swap.stopped.get(container.Id)),
-      (container) => {
-        const name = containerNameOf(container)
-        onLine(`Container ${name}  Restarting`)
-        return attempt(
-          `Could not restart container ${name}`,
-          engine.startContainer(container.Id, { timeout: 120_000 })
-        )
-      },
-      { concurrency: "unbounded", discard: true }
-    )
-  })
+    })
+  }
 }
 
 function withoutUnresolvedOptionalDependencies(
@@ -476,7 +508,7 @@ function prepareImages(
       const image = imageOf(name)
       const found = local.get(image)
       const present =
-        found !== undefined && matchesPlatform(found, service.platform)
+        found !== undefined && matchesPlatform(found, platformOf(service))
       const policy = service.pull_policy ?? "missing"
       if (policy === "always" || (policy === "missing" && !present)) {
         const platform = platformOf(service)
@@ -587,17 +619,29 @@ function matchesPlatform(image: InspectedImage, platform: string | undefined) {
 // ------------------------------------------------------ networks, volumes
 
 /**
- * Each network services join, by key, as Docker names it: created when
- * missing, and recreated when its configuration changed (by Compose's
- * config hash), after the project's containers on it stop and leave it.
+ * Each network services join, by key, as Docker names it, and the steps
+ * that make it ready, as Compose's reconcileNetworks plans them: created
+ * when missing, and recreated when its configuration changed (by Compose's
+ * config hash). A recreated network's containers (those of the services
+ * that use it) stop and leave it, it's removed and created again, and
+ * they're connected to the new one.
  */
-function ensureNetworks(
+function planNetworks(
   engine: DockerEngine,
   project: ComposeProject,
-  containers: ReadonlyArray<ContainerSummary>,
-  onLine: (line: string) => void
-): Effect.Effect<Map<string, string>, Error> {
+  plan: Plan,
+  onLine: (line: string) => void,
+  containers: {
+    readonly containersOf: (key: string) => ReadonlyArray<ContainerSummary>
+    readonly stop: (container: ContainerSummary) => Step
+    readonly connected: Map<string, Array<Step>>
+  }
+): Effect.Effect<
+  { readonly names: Map<string, string>; readonly steps: Map<string, Step> },
+  Error
+> {
   return Effect.gen(function* () {
+    const steps = new Map<string, Step>()
     const used = new Set(
       Object.values(project.services).flatMap((service) =>
         Object.keys(service.networks ?? {})
@@ -661,33 +705,9 @@ function ensureNetworks(
         }
         const recorded = owned ? (labels[CONFIG_HASH_LABEL] ?? "") : ""
         if (recorded === "" || recorded === expected) continue
-        // Changed: the project's containers on it stop and leave it, and
-        // it's created again (under its new name, if renamed).
-        onLine(`Network ${observed.Name}  Recreate`)
-        const attached = containers.filter((container) =>
-          Object.keys(
-            (
-              container as unknown as {
-                NetworkSettings?: { Networks?: Record<string, unknown> }
-              }
-            ).NetworkSettings?.Networks ?? {}
-          ).includes(observed.Name)
-        )
-        for (const container of attached) {
-          yield* engine.stopContainer(container.Id, {
-            timeout: STOP_MARGIN_MS + 600_000,
-          })
-          yield* engine
-            .disconnectNetwork(observed.Name, container.Id, { force: true })
-            .pipe(Effect.catchIf(isDockerNotFound, () => Effect.void))
-        }
-        const removal = engine.removeNetwork(observed.Name)
-        if (observed.Name === name) yield* removal
-        else yield* removal.pipe(Effect.ignore)
       }
-      onLine(`Network ${name}  Creating`)
       const ipam = network.ipam
-      yield* engine
+      const create = engine
         .createNetworkFrom({
           Attachable: network.attachable ?? false,
           ConfigFrom: null,
@@ -731,21 +751,84 @@ function ensureNetworks(
           Effect.catchIf(
             (cause) => cause.status === 409,
             () => Effect.void
+          ),
+          Effect.andThen(
+            Effect.sync(() => onLine(`Network ${name}  Created`))
           )
         )
-      onLine(`Network ${name}  Created`)
+      const creating = Effect.sync(() =>
+        onLine(`Network ${name}  Creating`)
+      ).pipe(Effect.andThen(create))
+      if (!observed) {
+        steps.set(key, plan.add(creating))
+        continue
+      }
+      // Changed: its containers stop and leave it, and it's created again.
+      // Under a new name, the old one's removal can't hold that up, and one
+      // still in use is left.
+      const renamed = observed.Name !== name
+      const attached = containers.containersOf(key)
+      const disconnects = attached.map((container) =>
+        plan.add(
+          engine.disconnectNetwork(observed.Name, container.Id, {
+            force: true,
+          }),
+          containers.stop(container)
+        )
+      )
+      const removing = plan.add(
+        Effect.sync(() => onLine(`Network ${observed.Name}  Removing`)).pipe(
+          Effect.andThen(
+            engine.removeNetwork(observed.Name).pipe(
+              Effect.catchIf(
+                (cause) => renamed && cause.status === 409,
+                () =>
+                  Effect.sync(() =>
+                    onLine(
+                      `network ${observed.Name} is still in use and was left in place; remove it manually once no container is attached`
+                    )
+                  )
+              )
+            )
+          ),
+          Effect.andThen(
+            Effect.sync(() => onLine(`Network ${observed.Name}  Removed`))
+          )
+        ),
+        ...disconnects
+      )
+      const recreated = plan.add(creating, ...(renamed ? [] : [removing]))
+      steps.set(key, recreated)
+      for (const [index, container] of attached.entries()) {
+        const connecting = plan.add(
+          engine.connectNetwork(name, container.Id),
+          recreated,
+          ...(renamed ? [disconnects[index]] : [])
+        )
+        const list = containers.connected.get(container.Id) ?? []
+        list.push(connecting)
+        containers.connected.set(container.Id, list)
+      }
     }
-    return names
+    return { names, steps }
   })
 }
 
-/** Each named volume services mount, by key, as Docker names it. */
-function ensureVolumes(
+/**
+ * Each named volume services mount, by key, as Docker names it, and the
+ * step that creates it when it's missing.
+ */
+function planVolumes(
   engine: DockerEngine,
   project: ComposeProject,
+  plan: Plan,
   onLine: (line: string) => void
-): Effect.Effect<Map<string, string>, Error> {
+): Effect.Effect<
+  { readonly names: Map<string, string>; readonly steps: Map<string, Step> },
+  Error
+> {
   return Effect.gen(function* () {
+    const steps = new Map<string, Step>()
     const used = new Set(
       Object.values(project.services).flatMap((service) =>
         (service.volumes ?? []).flatMap((volume) =>
@@ -787,21 +870,28 @@ function ensureVolumes(
         // Compose keeps it when it can't ask.
         continue
       }
-      onLine(`Volume ${name}  Creating`)
-      yield* engine.createVolumeFrom({
-        ...(volume.driver && { Driver: volume.driver }),
-        ...(volume.driver_opts && { DriverOpts: volume.driver_opts }),
-        Labels: {
-          ...volume.labels,
-          [CONFIG_HASH_LABEL]: volumeHash(volume, name),
-          [PROJECT_LABEL]: project.name,
-          [VOLUME_LABEL]: key,
-        },
-        Name: name,
-      })
-      onLine(`Volume ${name}  Created`)
+      steps.set(
+        key,
+        plan.add(
+          Effect.gen(function* () {
+            onLine(`Volume ${name}  Creating`)
+            yield* engine.createVolumeFrom({
+              ...(volume.driver && { Driver: volume.driver }),
+              ...(volume.driver_opts && { DriverOpts: volume.driver_opts }),
+              Labels: {
+                ...volume.labels,
+                [CONFIG_HASH_LABEL]: volumeHash(volume, name),
+                [PROJECT_LABEL]: project.name,
+                [VOLUME_LABEL]: key,
+              },
+              Name: name,
+            })
+            onLine(`Volume ${name}  Created`)
+          })
+        )
+      )
     }
-    return names
+    return { names, steps }
   })
 }
 
@@ -834,10 +924,10 @@ function containerBody(
     for (const port of service.ports ?? []) {
       const key = `${port.target}/${port.protocol}`
       exposed[key] = {}
-      bindings[key] = [
-        ...(bindings[key] ?? []),
-        { HostIp: port.host_ip ?? "", HostPort: port.published ?? "" },
-      ]
+      const binding = { HostIp: port.host_ip ?? "", HostPort: port.published ?? "" }
+      const list = bindings[key]
+      if (list) list.push(binding)
+      else bindings[key] = [binding]
     }
     for (const entry of service.expose ?? []) {
       const [ports = "", protocol = "tcp"] = entry.split("/")
@@ -888,7 +978,7 @@ function containerBody(
       "com.docker.compose.project.working_dir": context.workingDirectory,
       [SERVICE_LABEL]: name,
       ...(context.replacing && {
-        "com.docker.compose.replace": context.containerName,
+        "com.docker.compose.replace": service.container_name ?? `${name}-1`,
       }),
     }
     const dns = service.dns ?? []
@@ -1212,7 +1302,11 @@ function containerMounts(
   readonly mounts: Array<Record<string, unknown>>
 } {
   const mounts = new Map<string, Record<string, unknown>>()
-  let volumes = [...(service.volumes ?? [])]
+  const declared = service.volumes ?? []
+  const anonymous = new Set(
+    declared.filter((volume) => !volume.source).map((volume) => volume.target)
+  )
+  const replaced = new Set<string>()
   for (const previous of context.inherit?.Mounts ?? []) {
     if (previous.Type === "tmpfs") continue
     const source =
@@ -1230,13 +1324,13 @@ function containerMounts(
     ) {
       mounts.set(previous.Destination, inherited)
     }
-    volumes = volumes.filter((volume) => {
-      if (volume.target !== previous.Destination || volume.source) return true
+    if (anonymous.has(previous.Destination)) {
       mounts.set(previous.Destination, inherited)
-      return false
-    })
+      replaced.add(previous.Destination)
+    }
   }
-  for (const volume of volumes) {
+  for (const volume of declared) {
+    if (!volume.source && replaced.has(volume.target)) continue
     mounts.set(volume.target, mountOf(volume, context.volumes))
   }
   const files = (
@@ -1262,10 +1356,13 @@ function containerMounts(
 
   const binds: Array<string> = []
   const others: Array<Record<string, unknown>> = []
+  const declaredAt = new Map<string, ComposeVolumeMount>()
+  for (const volume of declared) {
+    if (!declaredAt.has(volume.target)) declaredAt.set(volume.target, volume)
+  }
+  const named = new Set(context.volumes.values())
   for (const mount of mounts.values()) {
-    const declared = (service.volumes ?? []).find(
-      (volume) => volume.target === mount.Target
-    )
+    const declared = declaredAt.get(String(mount.Target))
     if (mount.Type === "bind" && declared) {
       const source = String(mount.Source)
       const volume: ComposeVolumeMount =
@@ -1276,8 +1373,7 @@ function containerMounts(
       }
     }
     if (mount.Type === "volume" && declared) {
-      const named = [...context.volumes.values()].includes(String(mount.Source))
-      if (named && !volumeRequiresMountApi(declared)) {
+      if (named.has(String(mount.Source)) && !volumeRequiresMountApi(declared)) {
         binds.push(bindString(String(mount.Source), declared))
         continue
       }
@@ -1645,20 +1741,6 @@ class DependencyFailure extends Error {
 }
 
 // ---------------------------------------------------------------- helpers
-
-// Services whose containers this one's shares a namespace or volumes with,
-// which must exist first.
-function linkedServices(service: ComposeService): Array<string> {
-  const shared = [service.network_mode, service.ipc, service.pid]
-    .map((mode) => /^service:(.+)$/u.exec(mode ?? "")?.[1])
-    .filter((name): name is string => name !== undefined)
-  return [
-    ...shared,
-    ...(service.volumes_from ?? []).flatMap((entry) =>
-      entry.startsWith("container:") ? [] : [entry.split(":")[0]!]
-    ),
-  ]
-}
 
 function containerNameOf(container: ContainerSummary): string {
   return (container.Names[0] ?? container.Id).replace(/^\//u, "")
