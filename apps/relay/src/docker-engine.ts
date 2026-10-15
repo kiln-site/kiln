@@ -151,7 +151,7 @@ export interface DockerLogOptions {
 }
 
 interface Exchange {
-  readonly method: "DELETE" | "GET" | "POST"
+  readonly method: "DELETE" | "GET" | "POST" | "PUT"
   readonly path: string
   readonly body?: unknown
   readonly headers?: Readonly<Record<string, string>>
@@ -345,6 +345,32 @@ export class DockerEngine {
     return options.force
       ? removal.pipe(Effect.catchIf(isDockerNotFound, () => Effect.void))
       : removal
+  }
+
+  /**
+   * `docker cp` into a container: extracts the tar `archive` at `path`,
+   * keeping its entries' owners when `copyUidGid` is set.
+   */
+  copyToContainer(
+    reference: string,
+    path: string,
+    archive: Effect.Effect<Buffer>,
+    options: { readonly copyUidGid?: boolean } = {}
+  ): Effect.Effect<void, DockerEngineError> {
+    return archive.pipe(
+      Effect.flatMap((body) =>
+        this.#empty({
+          body,
+          headers: { "Content-Type": "application/x-tar" },
+          method: "PUT",
+          path: `/containers/${segment(reference)}/archive${query({
+            copyUIDGID: options.copyUidGid || undefined,
+            noOverwriteDirNonDir: true,
+            path,
+          })}`,
+        })
+      )
+    )
   }
 
   renameContainer(
@@ -1057,18 +1083,22 @@ export class DockerEngine {
     const operation = operationName(exchange)
     const socketPath = this.socketPath
     return Effect.callback<Buffer, DockerEngineError>((resume) => {
+      // A buffer is sent as it is (with its own Content-Type), anything
+      // else as JSON.
       const body =
         exchange.body === undefined
           ? undefined
-          : Buffer.from(JSON.stringify(exchange.body))
+          : Buffer.isBuffer(exchange.body)
+            ? exchange.body
+            : Buffer.from(JSON.stringify(exchange.body))
       const call = request({
         agent,
         headers: {
-          ...exchange.headers,
           ...(body && {
             "Content-Length": String(body.byteLength),
             "Content-Type": "application/json",
           }),
+          ...exchange.headers,
         },
         method: exchange.method,
         path: exchange.path,

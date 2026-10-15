@@ -1,21 +1,23 @@
 /**
- * Compose files, read as `docker compose config` read them: YAML with
- * anchors and merge keys, variables interpolated from the project's `.env`
- * and environment, relative paths resolved against the project directory,
- * and short syntax expanded to the long form. The result has the same shape
- * as `docker compose config --format json`, for the keys Relay supports.
+ * Compose files, read as `docker compose config` read them (compose-go):
+ * YAML with anchors and merge keys, variables interpolated from the
+ * project's `.env` and environment, relative paths resolved against the
+ * project directory, short syntax expanded to the long form, and implicit
+ * defaults and dependencies added. The result has the shape of
+ * `docker compose config --format json`, for the keys Relay supports.
  *
  * Keys Relay can't honor fail loading with an error naming them, instead of
- * being ignored. Keys that only Swarm reads are ignored, as Compose itself
+ * being ignored. Keys only Swarm reads are ignored, as Compose itself
  * ignores them when it runs containers.
  */
-import { readFile } from "node:fs/promises"
+import { readFile, stat } from "node:fs/promises"
 import { homedir } from "node:os"
-import { isAbsolute, join, resolve } from "node:path"
+import { join, resolve } from "node:path"
 
 import { Effect, Predicate, Result } from "effect"
 import { parseDocument } from "yaml"
 
+import { cleanPath } from "./docker-patterns.js"
 import { shellWords } from "./shell-words.js"
 
 export type ComposeDependencyCondition =
@@ -27,6 +29,7 @@ export interface ComposeBuild {
   context: string
   dockerfile?: string
   dockerfile_inline?: string
+  /** Arguments without a value that the environment doesn't set are left out. */
   args?: Record<string, string>
   target?: string
   labels?: Record<string, string>
@@ -36,9 +39,10 @@ export interface ComposeBuild {
 
 export interface ComposePort {
   target: number
+  /** A port, a range Docker picks a free port from, or none. */
   published?: string
   host_ip?: string
-  protocol: "tcp" | "udp"
+  protocol: "sctp" | "tcp" | "udp"
 }
 
 export interface ComposeVolumeMount {
@@ -47,18 +51,36 @@ export interface ComposeVolumeMount {
   source?: string
   target: string
   read_only?: boolean
-  bind?: { propagation?: string; selinux?: "Z" | "z" }
-  volume?: { nocopy?: boolean; subpath?: string }
-  tmpfs?: { size?: number; mode?: number }
+  consistency?: string
+  /**
+   * Bind options. Present for the short syntax and an explicit `bind:`, and
+   * then the host path is created when missing unless `create_host_path`
+   * is false.
+   */
+  bind?: {
+    create_host_path?: false
+    propagation?: string
+    recursive?: string
+    selinux?: "Z" | "z"
+  }
+  volume?: {
+    labels?: Record<string, string>
+    nocopy?: boolean
+    subpath?: string
+  }
+  tmpfs?: { mode?: number; size?: number }
 }
 
 export interface ComposeServiceNetwork {
   aliases?: Array<string>
+  driver_opts?: Record<string, string>
+  gw_priority?: number
+  interface_name?: string
   ipv4_address?: string
   ipv6_address?: string
+  link_local_ips?: Array<string>
   mac_address?: string
   priority?: number
-  driver_opts?: Record<string, string>
 }
 
 export interface ComposeHealthcheck {
@@ -71,14 +93,43 @@ export interface ComposeHealthcheck {
   retries?: number
 }
 
+export interface ComposeDeviceRequest {
+  capabilities: Array<string>
+  /** -1 for all. */
+  count: number
+  device_ids?: Array<string>
+  driver?: string
+  options?: Record<string, string>
+}
+
+/** A secret or config a service mounts (`secrets:`, `configs:`). */
+export interface ComposeFileReference {
+  source: string
+  target?: string
+  uid?: string
+  gid?: string
+  /** File mode bits. */
+  mode?: number
+}
+
+/** A top-level secret or config: a file, or text from the environment or inline. */
+export interface ComposeFileObject {
+  name: string
+  file?: string
+  environment?: string
+  content?: string
+}
+
 export interface ComposeService {
   image?: string
   build?: ComposeBuild
   pull_policy?: "always" | "build" | "missing" | "never"
   command?: Array<string> | null
   entrypoint?: Array<string> | null
-  environment?: Record<string, string>
+  /** A null value unsets the variable (`environment: { NAME: null }`). */
+  environment?: Record<string, string | null>
   labels?: Record<string, string>
+  annotations?: Record<string, string>
   container_name?: string
   hostname?: string
   domainname?: string
@@ -89,16 +140,24 @@ export interface ComposeService {
   volumes?: Array<ComposeVolumeMount>
   volumes_from?: Array<string>
   tmpfs?: Array<string>
+  secrets?: Array<ComposeFileReference>
+  configs?: Array<ComposeFileReference>
   networks?: Record<string, ComposeServiceNetwork | null>
   network_mode?: string
   depends_on?: Record<
     string,
-    { condition: ComposeDependencyCondition; required: boolean; restart: boolean }
+    {
+      condition: ComposeDependencyCondition
+      required: boolean
+      restart: boolean
+    }
   >
   healthcheck?: ComposeHealthcheck
   restart?: string
+  /** `deploy.restart_policy`, which takes precedence over `restart`. */
+  restart_policy?: { condition: string; max_attempts?: number }
   stop_signal?: string
-  /** Seconds. */
+  /** Nanoseconds. */
   stop_grace_period?: number
   tty?: boolean
   stdin_open?: boolean
@@ -109,15 +168,21 @@ export interface ComposeService {
   cap_drop?: Array<string>
   security_opt?: Array<string>
   devices?: Array<{ source: string; target: string; permissions: string }>
+  device_cgroup_rules?: Array<string>
+  /** GPUs (`gpus`) and device reservations (`deploy`). */
+  device_requests?: Array<ComposeDeviceRequest>
   group_add?: Array<string>
   sysctls?: Record<string, string>
+  storage_opt?: Record<string, string>
   ulimits?: Record<string, { soft: number; hard: number }>
+  /** `host:address` entries. */
   extra_hosts?: Array<string>
   dns?: Array<string>
   dns_search?: Array<string>
   dns_opt?: Array<string>
   ipc?: string
   pid?: string
+  uts?: string
   cgroup?: string
   cgroup_parent?: string
   userns_mode?: string
@@ -150,6 +215,7 @@ export interface ComposeNetwork {
   driver_opts?: Record<string, string>
   internal?: boolean
   attachable?: boolean
+  enable_ipv4?: boolean
   enable_ipv6?: boolean
   ipam?: {
     driver?: string
@@ -178,6 +244,14 @@ export interface ComposeProject {
   services: Record<string, ComposeService>
   networks?: Record<string, unknown>
   volumes?: Record<string, ComposeVolume>
+  secrets?: Record<string, ComposeFileObject>
+  configs?: Record<string, ComposeFileObject>
+  /**
+   * The variables the project was interpolated with: the environment, then
+   * `.env`. Secrets and configs from the environment read it, and
+   * `DOCKER_DEFAULT_PLATFORM` in it is the default platform.
+   */
+  environment?: Record<string, string>
   [key: string]: unknown
 }
 
@@ -193,14 +267,26 @@ export interface ComposeLoadOptions {
 
 type Value = unknown
 type Mapping = Record<string, Value>
+type Lookup = (name: string) => string | undefined
 
 class ComposeError extends Error {}
+
+// Integers with a leading 0 are octal (`mode: 0440`), as in the YAML
+// parser Compose uses, and not decimal as YAML 1.2 has them.
+const LEGACY_OCTAL = {
+  default: true,
+  identify: (value: unknown) => typeof value === "number",
+  resolve: (text: string) => Number.parseInt(text, 8),
+  tag: "tag:yaml.org,2002:int",
+  test: /^[-+]?0[0-7]+$/u,
+}
 
 /** Reads a Compose file into its normalized project. */
 export async function loadComposeProject(
   options: ComposeLoadOptions
 ): Promise<ComposeProject> {
   const document = parseDocument(options.yaml, {
+    customTags: (tags) => [LEGACY_OCTAL, ...tags],
     merge: true,
     prettyErrors: false,
   })
@@ -215,57 +301,74 @@ export async function loadComposeProject(
   const raw: Value = document.toJS({ maxAliasCount: 1_000 })
   if (!isMapping(raw)) throw new ComposeError("The Compose file is empty")
 
-  const dotenv = await readEnvFile(
-    join(options.projectDirectory, ".env"),
-    false,
-    (name) => options.environment[name]
-  )
-  const variables: Record<string, string> = {
-    ...dotenv,
-    ...options.environment,
-  }
   const warned = new Set<string>()
-  const lookup = (name: string) => variables[name]
-  const interpolated = interpolateTree(raw, lookup, (name) => {
+  const onUnset = (name: string) => {
     if (warned.has(name)) return
     warned.add(name)
     options.onWarning(
       `The "${name}" variable is not set. Defaulting to a blank string.`
     )
-  })
+  }
+  // `.env` fills in what the environment doesn't set, and its own values
+  // expand with the environment's first.
+  const dotenv: Record<string, string> = {}
+  const dotenvText = await readOptionalFile(
+    join(options.projectDirectory, ".env")
+  )
+  if (dotenvText !== undefined) {
+    parseDotenv(
+      dotenvText,
+      dotenv,
+      (name) => options.environment[name],
+      onUnset,
+      join(options.projectDirectory, ".env")
+    )
+  }
+  const variables: Record<string, string> = {
+    ...dotenv,
+    ...options.environment,
+  }
+  const lookup: Lookup = (name) =>
+    Object.hasOwn(variables, name) ? variables[name] : undefined
+  const interpolated = interpolateTree(raw, lookup, onUnset, "")
   if (!isMapping(interpolated)) {
     throw new ComposeError("The Compose file is empty")
   }
-  return normalizeProject(interpolated, options, lookup)
+  return normalizeProject(interpolated, options, variables)
+}
+
+async function readOptionalFile(path: string): Promise<string | undefined> {
+  const read = await Effect.runPromise(
+    Effect.result(Effect.tryPromise(() => readFile(path, "utf8")))
+  )
+  if (Result.isSuccess(read)) return read.success
+  const cause = read.failure.cause
+  if (Predicate.hasProperty(cause, "code") && cause.code === "ENOENT") {
+    return undefined
+  }
+  throw cause
 }
 
 // ------------------------------------------------------------ project
 
 const PROJECT_KEYS = new Set([
+  "configs",
   "name",
   "networks",
+  "secrets",
   "services",
   "version",
   "volumes",
 ])
-// Top-level keys Relay can't run.
-const UNSUPPORTED_PROJECT_KEYS: Record<string, string> = {
-  configs: "configs",
-  include: "include",
-  models: "models",
-  secrets: "secrets",
-}
 
 async function normalizeProject(
   raw: Mapping,
   options: ComposeLoadOptions,
-  lookup: (name: string) => string | undefined
+  variables: Record<string, string>
 ): Promise<ComposeProject> {
   for (const key of Object.keys(raw)) {
     if (key.startsWith("x-") || PROJECT_KEYS.has(key)) continue
-    throw unsupported(
-      UNSUPPORTED_PROJECT_KEYS[key] ? `top-level \`${key}\`` : `the top-level key \`${key}\``
-    )
+    throw unsupported(`the top-level key \`${key}\``)
   }
   if (raw.version !== undefined) {
     options.onWarning(
@@ -276,6 +379,15 @@ async function normalizeProject(
   if (!isMapping(rawServices) || Object.keys(rawServices).length === 0) {
     throw new ComposeError("The Compose file has no services")
   }
+  // Profiles the environment activates, as COMPOSE_PROFILES does.
+  const profiles = new Set(
+    (variables.COMPOSE_PROFILES ?? "")
+      .split(",")
+      .map((profile) => profile.trim())
+      .filter(Boolean)
+  )
+  const lookup: Lookup = (name) =>
+    Object.hasOwn(variables, name) ? variables[name] : undefined
   const services: Record<string, ComposeService> = {}
   const disabled = new Set<string>()
   for (const [name, value] of Object.entries(rawServices)) {
@@ -283,50 +395,48 @@ async function normalizeProject(
     if (!isMapping(service)) {
       throw new ComposeError(`services.${name} must be a mapping`)
     }
-    // Services in a profile run only when it's active, and Relay activates
-    // none.
     if (service.profiles !== undefined) {
-      disabled.add(name)
-      continue
+      const own = stringList(service.profiles, `services.${name}.profiles`)
+      if (!profiles.has("*") && !own.some((profile) => profiles.has(profile))) {
+        disabled.add(name)
+        continue
+      }
     }
     services[name] = await normalizeService(name, service, options, lookup)
   }
   for (const [name, service] of Object.entries(services)) {
+    implicitDependencies(service)
     for (const [dependency, settings] of Object.entries(
       service.depends_on ?? {}
     )) {
       if (services[dependency]) continue
-      if (!settings.required) {
-        delete service.depends_on![dependency]
-        continue
-      }
+      // An optional one is left out of the profiles that are active; it
+      // stays listed, as in Compose, and isn't waited for.
+      if (disabled.has(dependency) && !settings.required) continue
       throw new ComposeError(
         disabled.has(dependency)
           ? `service "${dependency}" is required by "${name}" but is disabled by its profiles`
-          : `service "${name}" depends on undefined service "${dependency}"`
+          : `service "${name}" depends on undefined service "${dependency}": invalid compose project`
       )
     }
-    const networkService = /^service:(.+)$/u.exec(service.network_mode ?? "")
-    if (networkService && !services[networkService[1]!]) {
-      throw new ComposeError(
-        `service "${name}" uses the network of undefined service "${networkService[1]}"`
-      )
+    if (service.depends_on && Object.keys(service.depends_on).length === 0) {
+      delete service.depends_on
     }
   }
   dependencyOrder(services)
 
   const networks = normalizeNetworks(raw.networks, options.projectName)
   const volumes = normalizeVolumes(raw.volumes, options.projectName)
+  const secrets = normalizeFileObjects(raw.secrets, "secrets", options)
+  const configs = normalizeFileObjects(raw.configs, "configs", options)
   // Services without networks join `default`, which exists when one does.
-  const usesDefault = Object.values(services).some(
-    (service) =>
-      !service.network_mode &&
-      (!service.networks || Object.hasOwn(service.networks, "default"))
-  )
+  let usesDefault = false
   for (const service of Object.values(services)) {
-    if (!service.network_mode && !service.networks) {
+    if (service.network_mode) continue
+    if (!service.networks || Object.keys(service.networks).length === 0) {
       service.networks = { default: null }
     }
+    if (Object.hasOwn(service.networks, "default")) usesDefault = true
   }
   if (usesDefault && !networks.default) {
     networks.default = { name: `${options.projectName}_default` }
@@ -340,10 +450,26 @@ async function normalizeProject(
       }
     }
     for (const volume of service.volumes ?? []) {
-      if (volume.type === "volume" && volume.source && !volumes[volume.source]) {
+      if (
+        volume.type === "volume" &&
+        volume.source &&
+        !volumes[volume.source]
+      ) {
         throw new ComposeError(
           `service "${name}" refers to undefined volume ${volume.source}: invalid compose project`
         )
+      }
+    }
+    for (const [kind, defined] of [
+      ["secret", secrets],
+      ["config", configs],
+    ] as const) {
+      for (const reference of service[`${kind}s`] ?? []) {
+        if (!defined[reference.source]) {
+          throw new ComposeError(
+            `service "${name}" refers to undefined ${kind} ${reference.source}: invalid compose project`
+          )
+        }
       }
     }
   }
@@ -352,7 +478,36 @@ async function normalizeProject(
     networks,
     services,
     ...(Object.keys(volumes).length > 0 && { volumes }),
+    ...(Object.keys(secrets).length > 0 && { secrets }),
+    ...(Object.keys(configs).length > 0 && { configs }),
+    environment: variables,
   }
+}
+
+// Services this one shares a namespace or volumes with start first, as
+// compose-go adds them to depends_on.
+function implicitDependencies(service: ComposeService) {
+  const dependsOn = service.depends_on ?? {}
+  const add = (name: string, restart: boolean) => {
+    dependsOn[name] ??= {
+      condition: "service_started",
+      required: true,
+      restart,
+    }
+  }
+  for (const mode of [
+    service.network_mode,
+    service.ipc,
+    service.pid,
+    service.uts,
+    service.cgroup,
+  ]) {
+    if (mode?.startsWith("service:")) add(mode.slice("service:".length), true)
+  }
+  for (const entry of service.volumes_from ?? []) {
+    if (!entry.startsWith("container:")) add(entry.split(":")[0]!, false)
+  }
+  if (Object.keys(dependsOn).length > 0) service.depends_on = dependsOn
 }
 
 function normalizeNetworks(
@@ -390,9 +545,11 @@ function normalizeNetworks(
       continue
     }
     const ipam = network.ipam
-    if (ipam !== undefined && !isMapping(ipam)) {
+    if (ipam !== undefined && ipam !== null && !isMapping(ipam)) {
       throw new ComposeError(`${path}.ipam must be a mapping`)
     }
+    if (isMapping(ipam))
+      checkKeys(`${path}.ipam`, ipam, ["config", "driver", "options"])
     networks[key] = {
       name,
       ...(network.driver !== undefined && {
@@ -407,19 +564,19 @@ function normalizeNetworks(
       ...(network.attachable !== undefined && {
         attachable: bool(network.attachable, `${path}.attachable`),
       }),
+      ...(network.enable_ipv4 !== undefined && {
+        enable_ipv4: bool(network.enable_ipv4, `${path}.enable_ipv4`),
+      }),
       ...(network.enable_ipv6 !== undefined && {
         enable_ipv6: bool(network.enable_ipv6, `${path}.enable_ipv6`),
       }),
       ...(network.labels !== undefined && {
         labels: labelMap(network.labels, `${path}.labels`),
       }),
-      ...(ipam && {
+      ...(isMapping(ipam) && {
         ipam: {
           ...(ipam.driver !== undefined && {
             driver: requiredString(ipam.driver, `${path}.ipam.driver`),
-          }),
-          ...(ipam.options !== undefined && {
-            options: stringMap(ipam.options, `${path}.ipam.options`),
           }),
           ...(ipam.config !== undefined && {
             config: list(ipam.config, `${path}.ipam.config`).map(
@@ -430,15 +587,30 @@ function normalizeNetworks(
                     `${path}.ipam.config[${index}] must be a mapping`
                   )
                 }
+                checkKeys(`${path}.ipam.config`, config, [
+                  "aux_addresses",
+                  "gateway",
+                  "ip_range",
+                  "subnet",
+                ])
                 return {
                   ...(config.subnet !== undefined && {
-                    subnet: requiredString(config.subnet, `${path}.ipam.config.subnet`),
-                  }),
-                  ...(config.ip_range !== undefined && {
-                    ip_range: requiredString(config.ip_range, `${path}.ipam.config.ip_range`),
+                    subnet: requiredString(
+                      config.subnet,
+                      `${path}.ipam.config.subnet`
+                    ),
                   }),
                   ...(config.gateway !== undefined && {
-                    gateway: requiredString(config.gateway, `${path}.ipam.config.gateway`),
+                    gateway: requiredString(
+                      config.gateway,
+                      `${path}.ipam.config.gateway`
+                    ),
+                  }),
+                  ...(config.ip_range !== undefined && {
+                    ip_range: requiredString(
+                      config.ip_range,
+                      `${path}.ipam.config.ip_range`
+                    ),
                   }),
                   ...(config.aux_addresses !== undefined && {
                     aux_addresses: stringMap(
@@ -449,6 +621,9 @@ function normalizeNetworks(
                 }
               }
             ),
+          }),
+          ...(ipam.options !== undefined && {
+            options: stringMap(ipam.options, `${path}.ipam.options`),
           }),
         },
       }),
@@ -470,7 +645,13 @@ function normalizeVolumes(
       throw new ComposeError(`volumes.${key} must be a mapping`)
     }
     const path = `volumes.${key}`
-    checkKeys(path, volume, ["driver", "driver_opts", "external", "labels", "name"])
+    checkKeys(path, volume, [
+      "driver",
+      "driver_opts",
+      "external",
+      "labels",
+      "name",
+    ])
     const external = externalFlag(volume.external, path)
     const name =
       optionalString(volume.name, `${path}.name`) ??
@@ -494,33 +675,84 @@ function normalizeVolumes(
   return volumes
 }
 
+// Top-level `secrets` or `configs`: files mounted read-only, or text
+// written into the container.
+function normalizeFileObjects(
+  value: Value,
+  kind: "configs" | "secrets",
+  options: ComposeLoadOptions
+): Record<string, ComposeFileObject> {
+  const objects: Record<string, ComposeFileObject> = {}
+  if (value === undefined || value === null) return objects
+  if (!isMapping(value)) throw new ComposeError(`${kind} must be a mapping`)
+  for (const [key, raw] of Object.entries(value)) {
+    const object = raw ?? {}
+    if (!isMapping(object))
+      throw new ComposeError(`${kind}.${key} must be a mapping`)
+    const path = `${kind}.${key}`
+    checkKeys(path, object, [
+      ...(kind === "configs" ? ["content"] : []),
+      "environment",
+      "external",
+      "file",
+      "labels",
+      "name",
+    ])
+    if (externalFlag(object.external, path)) {
+      throw unsupported(`the external ${kind.slice(0, -1)} "${key}"`)
+    }
+    const name =
+      optionalString(object.name, `${path}.name`) ??
+      `${options.projectName}_${key}`
+    const sources = ["file", "environment", "content"].filter(
+      (source) => object[source] !== undefined
+    )
+    if (sources.length !== 1) {
+      throw new ComposeError(
+        `${path} needs exactly one of file, environment${kind === "configs" ? ", or content" : ""}`
+      )
+    }
+    objects[key] = {
+      name,
+      ...(object.file !== undefined && {
+        file: resolve(
+          options.projectDirectory,
+          expandHome(requiredString(object.file, `${path}.file`))
+        ),
+      }),
+      ...(object.environment !== undefined && {
+        environment: requiredString(object.environment, `${path}.environment`),
+      }),
+      ...(object.content !== undefined && {
+        content: requiredString(object.content, `${path}.content`),
+      }),
+    }
+  }
+  return objects
+}
+
 // ------------------------------------------------------------ services
 
-// Keys Relay can't honor when running a service, and why to say so.
+// Keys Relay can't honor when running a service.
 const UNSUPPORTED_SERVICE_KEYS = new Set([
-  "annotations",
   "blkio_config",
-  "configs",
+  "cpu_count",
+  "cpu_percent",
+  "cpu_rt_period",
+  "cpu_rt_runtime",
   "credential_spec",
-  "device_cgroup_rules",
   "extends",
   "external_links",
-  "gpus",
   "isolation",
   "label_file",
   "links",
   "models",
   "post_start",
+  "pre_start",
   "pre_stop",
   "provider",
-  "secrets",
-  "storage_opt",
   "use_api_socket",
-  "uts",
-  "cpu_count",
-  "cpu_percent",
-  "cpu_rt_period",
-  "cpu_rt_runtime",
+  "volume_driver",
 ])
 // Keys with no effect on the containers `docker compose up` runs.
 const IGNORED_SERVICE_KEYS = new Set(["attach", "develop"])
@@ -529,7 +761,7 @@ async function normalizeService(
   name: string,
   raw: Mapping,
   options: ComposeLoadOptions,
-  lookup: (name: string) => string | undefined
+  lookup: Lookup
 ): Promise<ComposeService> {
   const path = `services.${name}`
   const directory = options.projectDirectory
@@ -539,6 +771,7 @@ async function normalizeService(
     }
   }
   const service: ComposeService = {}
+  let deploy: Mapping | undefined
   for (const [key, value] of Object.entries(raw)) {
     if (value === undefined || key.startsWith("x-")) continue
     if (IGNORED_SERVICE_KEYS.has(key)) continue
@@ -548,12 +781,11 @@ async function normalizeService(
         service.image = requiredString(value, at)
         break
       case "build":
-        service.build = normalizeBuild(value, at, directory)
+        service.build = normalizeBuild(value, at, directory, lookup)
         break
       case "pull_policy": {
         const policy = requiredString(value, at)
-        const normalized =
-          policy === "if_not_present" ? "missing" : policy
+        const normalized = policy === "if_not_present" ? "missing" : policy
         if (!["always", "build", "missing", "never"].includes(normalized)) {
           throw unsupported(`pull_policy "${policy}" on service "${name}"`)
         }
@@ -566,7 +798,7 @@ async function normalizeService(
           value === null
             ? null
             : typeof value === "string"
-              ? shellWords(value, `${at}`)
+              ? shellWords(value, at)
               : stringList(value, at)
         break
       case "environment":
@@ -575,7 +807,8 @@ async function normalizeService(
       case "env_file":
         break
       case "labels":
-        service.labels = labelMap(value, at)
+      case "annotations":
+        service[key] = labelMap(value, at)
         break
       case "container_name":
       case "hostname":
@@ -585,6 +818,7 @@ async function normalizeService(
       case "stop_signal":
       case "ipc":
       case "pid":
+      case "uts":
       case "cgroup":
       case "cgroup_parent":
       case "userns_mode":
@@ -595,14 +829,9 @@ async function normalizeService(
       case "network_mode":
         service[key] = scalarString(value, at)
         break
-      case "restart": {
-        const policy = scalarString(value, at)
-        if (!/^(?:no|always|unless-stopped|on-failure(?::\d+)?)$/u.test(policy)) {
-          throw new ComposeError(`${at} has an invalid restart policy "${policy}"`)
-        }
-        service.restart = policy
+      case "restart":
+        service.restart = scalarString(value, at)
         break
-      }
       case "tty":
       case "stdin_open":
       case "init":
@@ -629,6 +858,20 @@ async function normalizeService(
         service.tmpfs =
           typeof value === "string" ? [value] : stringList(value, at)
         break
+      case "secrets":
+        service.secrets = list(value, at).map((entry) => {
+          const reference = fileReference(entry, at)
+          return {
+            ...reference,
+            target: reference.target ?? `/run/secrets/${reference.source}`,
+          }
+        })
+        break
+      case "configs":
+        service.configs = list(value, at).map((entry) =>
+          fileReference(entry, at)
+        )
+        break
       case "networks":
         service.networks = serviceNetworks(value, at)
         break
@@ -639,7 +882,7 @@ async function normalizeService(
         service.healthcheck = healthcheck(value, at)
         break
       case "stop_grace_period":
-        service.stop_grace_period = Math.ceil(duration(value, at) / 1e9)
+        service.stop_grace_period = duration(value, at)
         break
       case "cap_add":
       case "cap_drop":
@@ -647,16 +890,25 @@ async function normalizeService(
       case "group_add":
       case "dns_search":
       case "dns_opt":
+      case "device_cgroup_rules":
         service[key] = stringList(value, at)
         break
       case "dns":
-        service.dns = typeof value === "string" ? [value] : stringList(value, at)
+        service.dns =
+          typeof value === "string" ? [value] : stringList(value, at)
         break
       case "devices":
         service.devices = list(value, at).map((entry) => device(entry, at))
         break
+      case "gpus":
+        service.device_requests = [
+          ...(service.device_requests ?? []),
+          ...gpus(value, at),
+        ]
+        break
       case "sysctls":
-        service.sysctls = keyValues(value, at)
+      case "storage_opt":
+        service[key] = keyValues(value, at)
         break
       case "ulimits":
         service.ulimits = ulimits(value, at)
@@ -685,7 +937,11 @@ async function normalizeService(
         service.cpus = nanoCpus(value, at)
         break
       case "deploy":
-        applyDeploy(service, value, at, name)
+        if (value !== null) {
+          if (!isMapping(value))
+            throw new ComposeError(`${at} must be a mapping`)
+          deploy = value
+        }
         break
       case "scale":
         if (integer(value, at) !== 1) throw replicas(name)
@@ -696,9 +952,61 @@ async function normalizeService(
         throw unsupported(`\`${key}\` on service "${name}"`)
     }
   }
-  if (raw.env_file !== undefined) {
-    const files = await envFiles(raw.env_file, `${path}.env_file`, directory, lookup)
-    service.environment = { ...files, ...service.environment }
+  // After the service's own keys, which deploy's must agree with.
+  if (deploy) applyDeploy(service, deploy, `${path}.deploy`, name)
+  const mounted = new Map<string, string>()
+  // env_file values come first; environment's (resolved) override them,
+  // and env_file values expand with the environment's.
+  if (raw.env_file !== undefined && raw.env_file !== null) {
+    const own = service.environment ?? {}
+    const merged: Record<string, string> = Object.fromEntries(
+      Object.entries(own).filter(
+        (entry): entry is [string, string] => entry[1] !== null
+      )
+    )
+    for (const file of envFileEntries(
+      raw.env_file,
+      `${path}.env_file`,
+      directory
+    )) {
+      const text = await readOptionalFile(file.path)
+      if (text === undefined) {
+        if (file.required)
+          throw new ComposeError(`env file ${file.path} not found`)
+        continue
+      }
+      parseDotenv(
+        text,
+        merged,
+        (variable) => lookup(variable) ?? own[variable] ?? undefined,
+        () => undefined,
+        file.path
+      )
+    }
+    service.environment = { ...merged, ...own }
+  }
+  for (const [index, entry] of (service.tmpfs ?? []).entries()) {
+    const target = entry.split(":")[0]!
+    if (mounted.has(target)) {
+      throw new ComposeError(
+        `${path}.tmpfs[${index}]: target ${target} already mounted as ${mounted.get(target)}`
+      )
+    }
+    mounted.set(target, `${path}.tmpfs[${index}]`)
+  }
+  for (const [index, volume] of (service.volumes ?? []).entries()) {
+    if (mounted.has(volume.target)) {
+      throw new ComposeError(
+        `${path}.volumes[${index}]: target ${volume.target} already mounted as ${mounted.get(volume.target)}`
+      )
+    }
+    mounted.set(volume.target, `${path}.volumes[${index}]`)
+  }
+  const test = service.healthcheck?.test[0]
+  if (test !== undefined && !["CMD", "CMD-SHELL", "NONE"].includes(test)) {
+    throw new ComposeError(
+      'healthcheck.test must start either by "CMD", "CMD-SHELL" or "NONE"'
+    )
   }
   if (!service.image && !service.build) {
     throw new ComposeError(
@@ -707,7 +1015,7 @@ async function normalizeService(
   }
   if (service.network_mode && service.networks) {
     throw new ComposeError(
-      `service "${name}" declares networks and network_mode, which can't be used together`
+      `service "${name}" declares mutually exclusive \`network_mode\` and \`networks\``
     )
   }
   return service
@@ -716,59 +1024,80 @@ async function normalizeService(
 function normalizeBuild(
   value: Value,
   at: string,
-  directory: string
+  directory: string,
+  lookup: Lookup
 ): ComposeBuild {
   if (typeof value === "string") {
-    return { context: localPath(value, at, directory) }
-  }
-  if (!isMapping(value)) throw new ComposeError(`${at} must be a string or mapping`)
-  for (const key of Object.keys(value)) {
-    if (
-      ![
-        "args",
-        "context",
-        "dockerfile",
-        "dockerfile_inline",
-        "labels",
-        "no_cache",
-        "pull",
-        "target",
-      ].includes(key) &&
-      !key.startsWith("x-")
-    ) {
-      throw unsupported(`\`build.${key}\` (${at})`)
+    return {
+      context: localPath(value, at, directory),
+      dockerfile: "Dockerfile",
     }
   }
+  if (!isMapping(value))
+    throw new ComposeError(`${at} must be a string or mapping`)
+  checkKeys(at, value, [
+    "args",
+    "context",
+    "dockerfile",
+    "dockerfile_inline",
+    "labels",
+    "no_cache",
+    "pull",
+    "target",
+  ])
   const build: ComposeBuild = {
     context: localPath(
-      value.context === undefined ? "." : requiredString(value.context, `${at}.context`),
+      value.context === undefined || value.context === null
+        ? "."
+        : requiredString(value.context, `${at}.context`),
       `${at}.context`,
       directory
     ),
   }
-  if (value.dockerfile !== undefined) {
+  if (value.dockerfile !== undefined && value.dockerfile !== null) {
     build.dockerfile = requiredString(value.dockerfile, `${at}.dockerfile`)
   }
-  if (value.dockerfile_inline !== undefined) {
+  if (
+    value.dockerfile_inline !== undefined &&
+    value.dockerfile_inline !== null
+  ) {
     build.dockerfile_inline = requiredString(
       value.dockerfile_inline,
       `${at}.dockerfile_inline`
     )
   }
   if (build.dockerfile && build.dockerfile_inline) {
-    throw new ComposeError(`${at} can't have both dockerfile and dockerfile_inline`)
+    throw new ComposeError(
+      `${at} can't have both dockerfile and dockerfile_inline`
+    )
   }
-  if (value.args !== undefined) build.args = keyValues(value.args, `${at}.args`)
+  if (build.dockerfile === undefined && build.dockerfile_inline === undefined) {
+    build.dockerfile = "Dockerfile"
+  }
+  if (value.args !== undefined && value.args !== null) {
+    // An argument without a value takes the environment's, and is left out
+    // (so the Dockerfile's default applies) when that has none.
+    const args: Record<string, string> = {}
+    for (const [name, argument] of Object.entries(
+      equalsMapping(value.args, `${at}.args`)
+    )) {
+      const resolved = argument ?? lookup(name)
+      if (resolved !== undefined) args[name] = resolved
+    }
+    build.args = args
+  }
   if (value.target !== undefined) {
     build.target = requiredString(value.target, `${at}.target`)
   }
-  if (value.labels !== undefined) build.labels = labelMap(value.labels, `${at}.labels`)
-  if (value.no_cache !== undefined) build.no_cache = bool(value.no_cache, `${at}.no_cache`)
+  if (value.labels !== undefined)
+    build.labels = labelMap(value.labels, `${at}.labels`)
+  if (value.no_cache !== undefined)
+    build.no_cache = bool(value.no_cache, `${at}.no_cache`)
   if (value.pull !== undefined) build.pull = bool(value.pull, `${at}.pull`)
   return build
 }
 
-// A local build context; Relay sends it to Docker itself.
+// A local build context; Relay serves it to Docker itself.
 function localPath(value: string, at: string, directory: string): string {
   if (/^(?:[a-z][a-z0-9+.-]*:\/\/|git@|github\.com\/)/iu.test(value)) {
     throw unsupported(`remote build contexts (${at})`)
@@ -778,61 +1107,202 @@ function localPath(value: string, at: string, directory: string): string {
 
 function applyDeploy(
   service: ComposeService,
-  value: Value,
+  value: Mapping,
   at: string,
   name: string
 ) {
-  if (!isMapping(value)) throw new ComposeError(`${at} must be a mapping`)
-  if (value.replicas !== undefined && integer(value.replicas, `${at}.replicas`) !== 1) {
+  if (
+    value.replicas !== undefined &&
+    value.replicas !== null &&
+    integer(value.replicas, `${at}.replicas`) !== 1
+  ) {
     throw replicas(name)
   }
   const resources = value.resources
-  if (resources !== undefined) {
-    if (!isMapping(resources)) throw new ComposeError(`${at}.resources must be a mapping`)
+  if (resources !== undefined && resources !== null) {
+    if (!isMapping(resources))
+      throw new ComposeError(`${at}.resources must be a mapping`)
+    // A service-level value and its deploy counterpart can't differ.
+    const agree = (
+      key: "cpus" | "mem_limit" | "mem_reservation" | "pids_limit",
+      deployed: number,
+      deployPath: string
+    ) => {
+      const own = service[key] ?? 0
+      if (own !== 0 && own !== deployed) {
+        throw new ComposeError(
+          `services.${name}: can't set distinct values on '${key}' and '${deployPath}': invalid compose project`
+        )
+      }
+      if (deployed !== 0 && (key !== "pids_limit" || deployed > 0))
+        service[key] = deployed
+    }
     const limits = resources.limits
-    if (limits !== undefined) {
-      if (!isMapping(limits)) throw new ComposeError(`${at}.resources.limits must be a mapping`)
-      if (limits.cpus !== undefined) service.cpus = nanoCpus(limits.cpus, `${at}.resources.limits.cpus`)
-      if (limits.memory !== undefined) service.mem_limit = bytes(limits.memory, `${at}.resources.limits.memory`)
-      if (limits.pids !== undefined) service.pids_limit = integer(limits.pids, `${at}.resources.limits.pids`)
+    if (limits !== undefined && limits !== null) {
+      if (!isMapping(limits))
+        throw new ComposeError(`${at}.resources.limits must be a mapping`)
+      agree(
+        "cpus",
+        limits.cpus === undefined
+          ? 0
+          : nanoCpus(limits.cpus, `${at}.resources.limits.cpus`),
+        "deploy.resources.limits.cpus"
+      )
+      agree(
+        "mem_limit",
+        limits.memory === undefined
+          ? 0
+          : bytes(limits.memory, `${at}.resources.limits.memory`),
+        "deploy.resources.limits.memory"
+      )
+      agree(
+        "pids_limit",
+        limits.pids === undefined
+          ? 0
+          : integer(limits.pids, `${at}.resources.limits.pids`),
+        "deploy.resources.limits.pids"
+      )
     }
     const reservations = resources.reservations
-    if (reservations !== undefined) {
-      if (!isMapping(reservations)) throw new ComposeError(`${at}.resources.reservations must be a mapping`)
-      if (reservations.devices !== undefined || reservations.generic_resources !== undefined) {
-        throw unsupported(`device reservations on service "${name}"`)
+    if (reservations !== undefined && reservations !== null) {
+      if (!isMapping(reservations)) {
+        throw new ComposeError(`${at}.resources.reservations must be a mapping`)
       }
-      if (reservations.memory !== undefined) {
-        service.mem_reservation = bytes(reservations.memory, `${at}.resources.reservations.memory`)
+      if (reservations.generic_resources !== undefined) {
+        throw unsupported(`generic resource reservations on service "${name}"`)
+      }
+      agree(
+        "mem_reservation",
+        reservations.memory === undefined
+          ? 0
+          : bytes(reservations.memory, `${at}.resources.reservations.memory`),
+        "deploy.resources.reservations.memory"
+      )
+      if (reservations.devices !== undefined && reservations.devices !== null) {
+        service.device_requests = [
+          ...(service.device_requests ?? []),
+          ...list(
+            reservations.devices,
+            `${at}.resources.reservations.devices`
+          ).map((entry) =>
+            deviceRequest(entry, `${at}.resources.reservations.devices`)
+          ),
+        ]
       }
     }
   }
   const policy = value.restart_policy
-  if (policy !== undefined && service.restart === undefined) {
-    if (!isMapping(policy)) throw new ComposeError(`${at}.restart_policy must be a mapping`)
-    const condition = policy.condition === undefined ? "any" : requiredString(policy.condition, `${at}.restart_policy.condition`)
-    const attempts =
-      policy.max_attempts === undefined ? 0 : integer(policy.max_attempts, `${at}.restart_policy.max_attempts`)
-    service.restart =
-      condition === "none"
-        ? "no"
-        : condition === "on-failure"
-          ? attempts > 0
-            ? `on-failure:${attempts}`
-            : "on-failure"
-          : "always"
+  if (policy !== undefined && policy !== null) {
+    if (!isMapping(policy))
+      throw new ComposeError(`${at}.restart_policy must be a mapping`)
+    service.restart_policy = {
+      condition:
+        policy.condition === undefined || policy.condition === null
+          ? ""
+          : requiredString(policy.condition, `${at}.restart_policy.condition`),
+      ...(policy.max_attempts !== undefined &&
+        policy.max_attempts !== null && {
+          max_attempts: integer(
+            policy.max_attempts,
+            `${at}.restart_policy.max_attempts`
+          ),
+        }),
+    }
   }
 }
 
+function deviceRequest(value: Value, at: string): ComposeDeviceRequest {
+  if (!isMapping(value))
+    throw new ComposeError(`${at} entries must be mappings`)
+  checkKeys(at, value, [
+    "capabilities",
+    "count",
+    "device_ids",
+    "driver",
+    "options",
+  ])
+  return {
+    capabilities:
+      value.capabilities === undefined
+        ? []
+        : stringList(value.capabilities, `${at}.capabilities`),
+    count:
+      value.count === undefined
+        ? value.device_ids === undefined
+          ? -1
+          : 0
+        : String(value.count).toLowerCase() === "all"
+          ? -1
+          : integer(value.count, `${at}.count`),
+    ...(value.device_ids !== undefined && {
+      device_ids: stringList(value.device_ids, `${at}.device_ids`),
+    }),
+    ...(value.driver !== undefined && {
+      driver: requiredString(value.driver, `${at}.driver`),
+    }),
+    ...(value.options !== undefined && {
+      options: stringMap(value.options, `${at}.options`),
+    }),
+  }
+}
+
+// `gpus: all`, or a list of device requests; Docker adds the `gpu`
+// capability.
+function gpus(value: Value, at: string): Array<ComposeDeviceRequest> {
+  if (value === "all") return [{ capabilities: ["gpu"], count: -1 }]
+  return list(value, at).map((entry) => {
+    const request = deviceRequest(entry, at)
+    return { ...request, capabilities: [...request.capabilities, "gpu"] }
+  })
+}
+
+function fileReference(value: Value, at: string): ComposeFileReference {
+  if (typeof value === "string") return { source: value }
+  if (!isMapping(value))
+    throw new ComposeError(`${at} entries must be names or mappings`)
+  checkKeys(at, value, ["gid", "mode", "source", "target", "uid"])
+  return {
+    source: requiredString(value.source, `${at}.source`),
+    ...(value.target !== undefined && {
+      target: requiredString(value.target, `${at}.target`),
+    }),
+    ...(value.uid !== undefined && {
+      uid: scalarString(value.uid, `${at}.uid`),
+    }),
+    ...(value.gid !== undefined && {
+      gid: scalarString(value.gid, `${at}.gid`),
+    }),
+    ...(value.mode !== undefined && {
+      mode: fileMode(value.mode, `${at}.mode`),
+    }),
+  }
+}
+
+// A YAML number (octal with a leading 0, as Compose reads YAML) or an
+// octal string, with or without its leading 0.
+function fileMode(value: Value, at: string): number {
+  if (typeof value === "number" && Number.isInteger(value)) return value
+  if (typeof value === "string" && /^[0-7]+$/u.test(value)) {
+    return Number.parseInt(value, 8)
+  }
+  throw new ComposeError(`${at} must be a file mode`)
+}
+
+// `[host_ip:][published:]target[/protocol]`, as Docker's nat.ParsePortSpec
+// reads it: a published range with a single target is a range Docker picks
+// from.
 function ports(value: Value, at: string): Array<ComposePort> {
   if (isMapping(value)) {
-    if (value.target === undefined) throw new ComposeError(`${at} needs a target port`)
+    if (value.target === undefined)
+      throw new ComposeError(`${at} needs a target port`)
     return [
       {
         target: integer(value.target, `${at}.target`),
-        ...(value.published !== undefined && {
-          published: scalarString(value.published, `${at}.published`),
-        }),
+        ...(value.published !== undefined &&
+          value.published !== null &&
+          value.published !== "" && {
+            published: scalarString(value.published, `${at}.published`),
+          }),
         ...(value.host_ip !== undefined && {
           host_ip: requiredString(value.host_ip, `${at}.host_ip`),
         }),
@@ -841,38 +1311,40 @@ function ports(value: Value, at: string): Array<ComposePort> {
     ]
   }
   const text = scalarString(value, at)
-  const [spec = "", protocolText] = text.split("/")
-  const proto = protocol(protocolText, at)
-  // [host_ip:][published:]target, with IPv6 addresses in brackets.
-  const match = /^(?:(?:(\[[^\]]*\]|[^:]*):)?([^:]*):)?([^:]+)$/u.exec(spec)
-  if (!match) throw new ComposeError(`${at} has an invalid port "${text}"`)
-  const hostIp = match[1]?.replace(/^\[|\]$/gu, "")
-  const published = match[2] ?? ""
-  const [targetStart, targetEnd] = range(match[3]!, at, text)
-  const [publishedStart, publishedEnd] = published
-    ? range(published, at, text)
-    : [undefined, undefined]
-  const count = targetEnd - targetStart + 1
+  const parts = text.split(":")
+  const containerPart = parts.at(-1)!
+  const hostPort = parts.length >= 2 ? parts.at(-2)! : ""
+  let hostIp = parts.length >= 3 ? parts.slice(0, -2).join(":") : ""
+  const [targetText = "", protocolText] = containerPart.split("/")
+  if (hostIp.startsWith("[") && hostIp.endsWith("]"))
+    hostIp = hostIp.slice(1, -1)
+  if (!targetText) throw new ComposeError(`${at} has no port in "${text}"`)
+  const [targetStart, targetEnd] = range(targetText, at, text)
+  const [publishedStart, publishedEnd] = hostPort
+    ? range(hostPort, at, text)
+    : [0, 0]
   if (
-    publishedStart !== undefined &&
-    publishedEnd! - publishedStart + 1 !== count &&
-    publishedEnd !== publishedStart
+    hostPort &&
+    targetEnd - targetStart !== publishedEnd - publishedStart &&
+    targetEnd !== targetStart
   ) {
-    throw new ComposeError(`${at} has mismatched port ranges "${text}"`)
+    throw new ComposeError(
+      `${at}: invalid ranges specified for container and host Ports: ${targetText} and ${hostPort}`
+    )
   }
-  return Array.from({ length: count }, (_, index) => ({
-    target: targetStart + index,
-    ...(publishedStart !== undefined && {
-      published:
-        publishedEnd !== publishedStart && count > 1
-          ? String(publishedStart + index)
-          : publishedEnd !== publishedStart
-            ? `${publishedStart}-${publishedEnd}`
-            : String(publishedStart),
-    }),
-    ...(hostIp && { host_ip: hostIp }),
-    protocol: proto,
-  }))
+  const proto = protocol(protocolText || "tcp", at)
+  return Array.from({ length: targetEnd - targetStart + 1 }, (_, index) => {
+    let published = hostPort ? String(publishedStart + index) : ""
+    if (targetStart === targetEnd && publishedStart !== publishedEnd) {
+      published = `${published}-${publishedEnd}`
+    }
+    return {
+      target: targetStart + index,
+      ...(published && { published }),
+      ...(hostIp && { host_ip: hostIp }),
+      protocol: proto,
+    }
+  })
 }
 
 function range(text: string, at: string, whole: string): [number, number] {
@@ -886,10 +1358,11 @@ function range(text: string, at: string, whole: string): [number, number] {
   return [start, end]
 }
 
-function protocol(value: Value, at: string): "tcp" | "udp" {
-  if (value === undefined || value === "" || value === "tcp") return "tcp"
-  if (value === "udp") return "udp"
-  throw unsupported(`port protocol ${String(value)} (${at})`)
+function protocol(value: Value, at: string): ComposePort["protocol"] {
+  if (value === undefined || value === null || value === "") return "tcp"
+  const text = scalarString(value, at).toLowerCase()
+  if (text === "tcp" || text === "udp" || text === "sctp") return text
+  throw new ComposeError(`${at} has an invalid protocol "${text}"`)
 }
 
 function volumeMount(
@@ -898,67 +1371,186 @@ function volumeMount(
   directory: string
 ): ComposeVolumeMount {
   if (isMapping(value)) {
+    checkKeys(at, value, [
+      "bind",
+      "consistency",
+      "read_only",
+      "source",
+      "target",
+      "tmpfs",
+      "type",
+      "volume",
+    ])
     const type = requiredString(value.type ?? "volume", `${at}.type`)
     if (type !== "bind" && type !== "volume" && type !== "tmpfs") {
       throw unsupported(`volumes of type ${type} (${at})`)
     }
-    const target = requiredString(value.target, `${at}.target`)
-    const mount: ComposeVolumeMount = { target, type }
-    if (value.source !== undefined) {
+    const mount: ComposeVolumeMount = {
+      target: cleanPath(requiredString(value.target, `${at}.target`)),
+      type,
+    }
+    if (
+      value.source !== undefined &&
+      value.source !== null &&
+      value.source !== ""
+    ) {
       const source = requiredString(value.source, `${at}.source`)
       mount.source =
         type === "bind" ? resolve(directory, expandHome(source)) : source
     }
-    if (value.read_only !== undefined) mount.read_only = bool(value.read_only, `${at}.read_only`)
-    if (isMapping(value.bind)) {
-      if (value.bind.propagation !== undefined) {
-        mount.bind = { propagation: requiredString(value.bind.propagation, `${at}.bind.propagation`) }
-      }
-      if (value.bind.selinux !== undefined) {
-        mount.bind = { ...mount.bind, selinux: requiredString(value.bind.selinux, `${at}.bind.selinux`) as "Z" | "z" }
+    if (value.read_only !== undefined)
+      mount.read_only = bool(value.read_only, `${at}.read_only`)
+    if (value.consistency !== undefined) {
+      mount.consistency = requiredString(value.consistency, `${at}.consistency`)
+    }
+    if (value.bind !== undefined && value.bind !== null) {
+      if (!isMapping(value.bind))
+        throw new ComposeError(`${at}.bind must be a mapping`)
+      checkKeys(`${at}.bind`, value.bind, [
+        "create_host_path",
+        "propagation",
+        "recursive",
+        "selinux",
+      ])
+      const bindOptions = value.bind
+      mount.bind = {
+        ...(bindOptions.create_host_path !== undefined &&
+          !bool(
+            bindOptions.create_host_path,
+            `${at}.bind.create_host_path`
+          ) && {
+            create_host_path: false as const,
+          }),
+        ...(bindOptions.propagation !== undefined && {
+          propagation: requiredString(
+            bindOptions.propagation,
+            `${at}.bind.propagation`
+          ),
+        }),
+        ...(bindOptions.recursive !== undefined && {
+          recursive: requiredString(
+            bindOptions.recursive,
+            `${at}.bind.recursive`
+          ),
+        }),
+        ...(bindOptions.selinux !== undefined && {
+          selinux: requiredString(bindOptions.selinux, `${at}.bind.selinux`) as
+            | "Z"
+            | "z",
+        }),
       }
     }
-    if (isMapping(value.volume)) {
+    if (value.volume !== undefined && value.volume !== null) {
+      if (!isMapping(value.volume))
+        throw new ComposeError(`${at}.volume must be a mapping`)
+      checkKeys(`${at}.volume`, value.volume, ["labels", "nocopy", "subpath"])
+      const volumeOptions = value.volume
       mount.volume = {
-        ...(value.volume.nocopy !== undefined && { nocopy: bool(value.volume.nocopy, `${at}.volume.nocopy`) }),
-        ...(value.volume.subpath !== undefined && { subpath: requiredString(value.volume.subpath, `${at}.volume.subpath`) }),
+        ...(volumeOptions.labels !== undefined && {
+          labels: labelMap(volumeOptions.labels, `${at}.volume.labels`),
+        }),
+        ...(volumeOptions.nocopy !== undefined && {
+          nocopy: bool(volumeOptions.nocopy, `${at}.volume.nocopy`),
+        }),
+        ...(volumeOptions.subpath !== undefined && {
+          subpath: requiredString(
+            volumeOptions.subpath,
+            `${at}.volume.subpath`
+          ),
+        }),
       }
     }
-    if (isMapping(value.tmpfs)) {
+    if (value.tmpfs !== undefined && value.tmpfs !== null) {
+      if (!isMapping(value.tmpfs))
+        throw new ComposeError(`${at}.tmpfs must be a mapping`)
+      checkKeys(`${at}.tmpfs`, value.tmpfs, ["mode", "size"])
+      const tmpfsOptions = value.tmpfs
       mount.tmpfs = {
-        ...(value.tmpfs.size !== undefined && { size: bytes(value.tmpfs.size, `${at}.tmpfs.size`) }),
-        ...(value.tmpfs.mode !== undefined && { mode: integer(value.tmpfs.mode, `${at}.tmpfs.mode`) }),
+        ...(tmpfsOptions.mode !== undefined && {
+          mode: fileMode(tmpfsOptions.mode, `${at}.tmpfs.mode`),
+        }),
+        ...(tmpfsOptions.size !== undefined && {
+          size: bytes(tmpfsOptions.size, `${at}.tmpfs.size`),
+        }),
       }
     }
-    if (type === "bind" && !mount.source) throw new ComposeError(`${at} needs a source`)
+    if (type === "bind" && !mount.source)
+      throw new ComposeError(`${at} needs a source`)
     return mount
   }
-  const text = requiredString(value, at)
-  const parts = splitVolumeSpec(text)
-  if (parts.length === 1) return { target: parts[0]!, type: "volume" }
-  const [source = "", target = "", mode] = parts
-  if (!target) throw new ComposeError(`${at} has an invalid volume "${text}"`)
-  const bind = /^[./~]/u.test(source) || isAbsolute(source)
-  const mount: ComposeVolumeMount = bind
-    ? { source: resolve(directory, expandHome(source)), target, type: "bind" }
-    : { source, target, type: "volume" }
-  for (const option of (mode ?? "").split(",").filter(Boolean)) {
-    if (option === "ro") mount.read_only = true
-    else if (option === "rw") mount.read_only = false
-    else if (option === "z" || option === "Z") mount.bind = { ...mount.bind, selinux: option }
-    else if (option === "nocopy") mount.volume = { nocopy: true }
-    else if (/^r?(?:shared|slave|private)$/u.test(option)) {
-      mount.bind = { ...mount.bind, propagation: option }
-    } else if (!["cached", "delegated", "consistent"].includes(option)) {
-      throw new ComposeError(`${at} has an invalid volume mode "${option}"`)
-    }
-  }
-  return mount
+  return shortVolume(requiredString(value, at), at, directory)
 }
 
-// `source:target[:mode]`, allowing Windows-style drive letters.
-function splitVolumeSpec(text: string): Array<string> {
-  return text.split(":")
+// compose-go's ParseVolume: `[source:]target[:options]`, where a source
+// that's a path (starting with `.`, `/`, or `~`) is a bind that Docker
+// creates when missing, and unknown options are ignored.
+function shortVolume(
+  spec: string,
+  at: string,
+  directory: string
+): ComposeVolumeMount {
+  if (spec.length === 0)
+    throw new ComposeError(`${at}: invalid empty volume spec`)
+  if (spec.length <= 2) return { target: spec, type: "volume", volume: {} }
+  const fields: Array<string> = []
+  let buffer = ""
+  let depth = 0
+  const characters = [...spec]
+  for (let index = 0; index <= characters.length; index += 1) {
+    const character = characters[index]
+    if (character === "$" && characters[index + 1] === "{") {
+      depth += 1
+      buffer += character
+      continue
+    }
+    if (character === "}" && depth > 0) {
+      depth -= 1
+      buffer += character
+      continue
+    }
+    if ((character === ":" || character === undefined) && depth === 0) {
+      if (buffer === "") {
+        throw new ComposeError(
+          `${at}: invalid spec: ${spec}: empty section between colons`
+        )
+      }
+      if (fields.length === 2 && character === ":") {
+        throw new ComposeError(`${at}: invalid spec: ${spec}: too many colons`)
+      }
+      fields.push(buffer)
+      buffer = ""
+      continue
+    }
+    buffer += character
+  }
+  const [first = "", second, options] = fields
+  const source = second === undefined ? "" : first
+  const target = cleanPath(second === undefined ? first : second)
+  const bind = /^[./~]/u.test(source)
+  const mount: ComposeVolumeMount = bind
+    ? {
+        bind: {},
+        source: resolve(directory, expandHome(source)),
+        target,
+        type: "bind",
+      }
+    : { target, type: "volume", ...(source && { source }), volume: {} }
+  for (const option of (options ?? "").split(",")) {
+    if (option === "ro") mount.read_only = true
+    else if (option === "rw") delete mount.read_only
+    else if (option === "nocopy") mount.volume = { nocopy: true }
+    else if (option === "z" || option === "Z") {
+      mount.bind = { ...mount.bind, selinux: option }
+    } else if (/^r?(?:shared|slave|private)$/u.test(option)) {
+      mount.bind = { ...mount.bind, propagation: option }
+    }
+    // Other options are ignored, as compose-go ignores them.
+  }
+  if (mount.type === "volume" && mount.bind) {
+    // Bind options on a named volume are kept, as compose-go keeps them,
+    // and Docker reads them from the volume's binds string.
+  }
+  return mount
 }
 
 function serviceNetworks(
@@ -970,76 +1562,121 @@ function serviceNetworks(
       value.map((entry) => [scalarString(entry, at), null])
     )
   }
-  if (!isMapping(value)) throw new ComposeError(`${at} must be a list or mapping`)
+  if (!isMapping(value))
+    throw new ComposeError(`${at} must be a list or mapping`)
   const networks: Record<string, ComposeServiceNetwork | null> = {}
   for (const [name, raw] of Object.entries(value)) {
     if (raw === null || raw === undefined) {
       networks[name] = null
       continue
     }
-    if (!isMapping(raw)) throw new ComposeError(`${at}.${name} must be a mapping`)
-    checkKeys(`${at}.${name}`, raw, [
+    if (!isMapping(raw))
+      throw new ComposeError(`${at}.${name} must be a mapping`)
+    const path = `${at}.${name}`
+    checkKeys(path, raw, [
       "aliases",
       "driver_opts",
       "gw_priority",
+      "interface_name",
       "ipv4_address",
       "ipv6_address",
+      "link_local_ips",
       "mac_address",
       "priority",
     ])
     networks[name] = {
-      ...(raw.aliases !== undefined && { aliases: stringList(raw.aliases, `${at}.${name}.aliases`) }),
+      ...(raw.aliases !== undefined && {
+        aliases: stringList(raw.aliases, `${path}.aliases`),
+      }),
+      ...(raw.driver_opts !== undefined && {
+        driver_opts: stringMap(raw.driver_opts, `${path}.driver_opts`),
+      }),
+      ...(raw.gw_priority !== undefined && {
+        gw_priority: integer(raw.gw_priority, `${path}.gw_priority`),
+      }),
+      ...(raw.interface_name !== undefined && {
+        interface_name: requiredString(
+          raw.interface_name,
+          `${path}.interface_name`
+        ),
+      }),
       ...(raw.ipv4_address !== undefined && {
-        ipv4_address: requiredString(raw.ipv4_address, `${at}.${name}.ipv4_address`),
+        ipv4_address: requiredString(raw.ipv4_address, `${path}.ipv4_address`),
       }),
       ...(raw.ipv6_address !== undefined && {
-        ipv6_address: requiredString(raw.ipv6_address, `${at}.${name}.ipv6_address`),
+        ipv6_address: requiredString(raw.ipv6_address, `${path}.ipv6_address`),
+      }),
+      ...(raw.link_local_ips !== undefined && {
+        link_local_ips: stringList(
+          raw.link_local_ips,
+          `${path}.link_local_ips`
+        ),
       }),
       ...(raw.mac_address !== undefined && {
-        mac_address: requiredString(raw.mac_address, `${at}.${name}.mac_address`),
+        mac_address: requiredString(raw.mac_address, `${path}.mac_address`),
       }),
-      ...(raw.priority !== undefined && { priority: integer(raw.priority, `${at}.${name}.priority`) }),
-      ...(raw.driver_opts !== undefined && {
-        driver_opts: stringMap(raw.driver_opts, `${at}.${name}.driver_opts`),
+      ...(raw.priority !== undefined && {
+        priority: integer(raw.priority, `${path}.priority`),
       }),
     }
   }
   return networks
 }
 
-function dependencies(value: Value, at: string): NonNullable<ComposeService["depends_on"]> {
+function dependencies(
+  value: Value,
+  at: string
+): NonNullable<ComposeService["depends_on"]> {
   if (Array.isArray(value)) {
     return Object.fromEntries(
       value.map((entry) => [
         scalarString(entry, at),
-        { condition: "service_started" as const, required: true, restart: false },
+        {
+          condition: "service_started" as const,
+          required: true,
+          restart: false,
+        },
       ])
     )
   }
-  if (!isMapping(value)) throw new ComposeError(`${at} must be a list or mapping`)
+  if (!isMapping(value))
+    throw new ComposeError(`${at} must be a list or mapping`)
   return Object.fromEntries(
     Object.entries(value).map(([name, raw]) => {
       const settings = raw ?? {}
-      if (!isMapping(settings)) throw new ComposeError(`${at}.${name} must be a mapping`)
-      const condition =
-        settings.condition === undefined
-          ? "service_started"
-          : requiredString(settings.condition, `${at}.${name}.condition`)
+      if (!isMapping(settings))
+        throw new ComposeError(`${at}.${name} must be a mapping`)
+      checkKeys(`${at}.${name}`, settings, ["condition", "required", "restart"])
+      if (settings.condition === undefined || settings.condition === null) {
+        throw new ComposeError(`${at}.${name} missing property 'condition'`)
+      }
+      const condition = requiredString(
+        settings.condition,
+        `${at}.${name}.condition`
+      )
       if (
-        !["service_started", "service_healthy", "service_completed_successfully"].includes(
-          condition
-        )
+        ![
+          "service_started",
+          "service_healthy",
+          "service_completed_successfully",
+        ].includes(condition)
       ) {
-        throw new ComposeError(`${at}.${name} has an invalid condition "${condition}"`)
+        throw new ComposeError(
+          `${at}.${name} has an invalid condition "${condition}"`
+        )
       }
       return [
         name,
         {
           condition: condition as ComposeDependencyCondition,
           required:
-            settings.required === undefined ? true : bool(settings.required, `${at}.${name}.required`),
+            settings.required === undefined
+              ? true
+              : bool(settings.required, `${at}.${name}.required`),
           restart:
-            settings.restart === undefined ? false : bool(settings.restart, `${at}.${name}.restart`),
+            settings.restart === undefined
+              ? false
+              : bool(settings.restart, `${at}.${name}.restart`),
         },
       ]
     })
@@ -1061,35 +1698,49 @@ function healthcheck(value: Value, at: string): ComposeHealthcheck {
     return { test: ["NONE"] }
   }
   const test =
-    value.test === undefined
+    value.test === undefined || value.test === null
       ? []
       : typeof value.test === "string"
         ? ["CMD-SHELL", value.test]
         : stringList(value.test, `${at}.test`)
   return {
     test,
-    ...(value.interval !== undefined && { interval: duration(value.interval, `${at}.interval`) }),
-    ...(value.timeout !== undefined && { timeout: duration(value.timeout, `${at}.timeout`) }),
+    ...(value.interval !== undefined && {
+      interval: duration(value.interval, `${at}.interval`),
+    }),
+    ...(value.timeout !== undefined && {
+      timeout: duration(value.timeout, `${at}.timeout`),
+    }),
     ...(value.start_period !== undefined && {
       start_period: duration(value.start_period, `${at}.start_period`),
     }),
     ...(value.start_interval !== undefined && {
       start_interval: duration(value.start_interval, `${at}.start_interval`),
     }),
-    ...(value.retries !== undefined && { retries: integer(value.retries, `${at}.retries`) }),
+    ...(value.retries !== undefined && {
+      retries: integer(value.retries, `${at}.retries`),
+    }),
   }
 }
 
 function device(value: Value, at: string) {
   if (isMapping(value)) {
+    checkKeys(at, value, ["permissions", "source", "target"])
     return {
       permissions:
-        value.permissions === undefined ? "rwm" : requiredString(value.permissions, `${at}.permissions`),
+        value.permissions === undefined
+          ? "rwm"
+          : requiredString(value.permissions, `${at}.permissions`),
       source: requiredString(value.source, `${at}.source`),
       target: requiredString(value.target ?? value.source, `${at}.target`),
     }
   }
-  const [source = "", target = source, permissions = "rwm"] = requiredString(value, at).split(":")
+  const text = requiredString(value, at)
+  // A CDI device name (`vendor/class=name`) stays whole.
+  if (/^[^/:]+\/[^=:]+=[^:]+$/u.test(text)) {
+    return { permissions: "rwm", source: text, target: text }
+  }
+  const [source = "", target = source, permissions = "rwm"] = text.split(":")
   return { permissions, source, target }
 }
 
@@ -1112,207 +1763,294 @@ function ulimits(value: Value, at: string) {
   )
 }
 
+// `host:address` for each, as Docker takes them: from `host=address` or
+// `host:address` entries, or a mapping, with brackets off IPv6 addresses.
 function extraHosts(value: Value, at: string): Array<string> {
-  if (isMapping(value)) {
-    return Object.entries(value).flatMap(([host, addresses]) =>
-      (Array.isArray(addresses) ? addresses : [addresses]).map(
-        (address) => `${host}:${scalarString(address, `${at}.${host}`)}`
+  const pairs: Array<[string, string]> = isMapping(value)
+    ? Object.entries(value).flatMap(([host, addresses]) =>
+        (Array.isArray(addresses) ? addresses : [addresses]).map(
+          (address): [string, string] => [
+            host,
+            scalarString(address, `${at}.${host}`),
+          ]
+        )
       )
-    )
-  }
-  return stringList(value, at).map((entry) => {
-    const separator = entry.indexOf("=")
-    return separator === -1 ? entry : `${entry.slice(0, separator)}:${entry.slice(separator + 1)}`
-  })
+    : stringList(value, at).map((entry) => {
+        const equals = entry.indexOf("=")
+        const separator = equals === -1 ? entry.indexOf(":") : equals
+        if (separator === -1) {
+          throw new ComposeError(`${at} has an invalid extra host "${entry}"`)
+        }
+        return [entry.slice(0, separator), entry.slice(separator + 1)]
+      })
+  return pairs.map(
+    ([host, address]) =>
+      `${host}:${address.startsWith("[") && address.endsWith("]") ? address.slice(1, -1) : address}`
+  )
 }
 
 function logging(value: Value, at: string) {
   if (!isMapping(value)) throw new ComposeError(`${at} must be a mapping`)
   checkKeys(at, value, ["driver", "options"])
   return {
-    ...(value.driver !== undefined && { driver: requiredString(value.driver, `${at}.driver`) }),
-    ...(value.options !== undefined && value.options !== null && {
+    ...(value.driver !== undefined && {
+      driver: requiredString(value.driver, `${at}.driver`),
+    }),
+    ...(value.options !== undefined && {
       options: stringMap(value.options, `${at}.options`),
     }),
   }
 }
 
+// `environment`, with names without a value taken from the project's
+// variables, or kept as null (unset) when it has none.
 function environmentMap(
   value: Value,
   at: string,
-  lookup: (name: string) => string | undefined
-): Record<string, string> {
-  const environment: Record<string, string> = {}
-  const set = (name: string, raw: Value) => {
-    if (raw === null || raw === undefined) {
-      // A name without a value takes it from the project's environment,
-      // and is left out when that has none.
-      const found = lookup(name)
-      if (found !== undefined) environment[name] = found
-      return
-    }
-    environment[name] = scalarString(raw, `${at}.${name}`)
+  lookup: Lookup
+): Record<string, string | null> {
+  const environment: Record<string, string | null> = {}
+  for (const [name, raw] of Object.entries(equalsMapping(value, at))) {
+    environment[name] = raw ?? lookup(name) ?? null
   }
-  if (Array.isArray(value)) {
-    for (const entry of value) {
-      const text = scalarString(entry, at)
-      const separator = text.indexOf("=")
-      if (separator === -1) set(text, null)
-      else set(text.slice(0, separator), text.slice(separator + 1))
-    }
-    return environment
-  }
-  if (!isMapping(value)) throw new ComposeError(`${at} must be a list or mapping`)
-  for (const [name, raw] of Object.entries(value)) set(name, raw)
   return environment
 }
 
-async function envFiles(
+// A `KEY: value` mapping or `KEY=value` list; a key without `=` (or with a
+// null value) maps to null.
+function equalsMapping(
+  value: Value,
+  at: string
+): Record<string, string | null> {
+  if (Array.isArray(value)) {
+    return Object.fromEntries(
+      value.map((entry) => {
+        const text = scalarString(entry, at)
+        const separator = text.indexOf("=")
+        return separator === -1
+          ? [text, null]
+          : [text.slice(0, separator), text.slice(separator + 1)]
+      })
+    )
+  }
+  if (!isMapping(value))
+    throw new ComposeError(`${at} must be a list or mapping`)
+  return Object.fromEntries(
+    Object.entries(value).map(([name, raw]) => [
+      name,
+      raw === null || raw === undefined
+        ? null
+        : scalarString(raw, `${at}.${name}`),
+    ])
+  )
+}
+
+function envFileEntries(
   value: Value,
   at: string,
-  directory: string,
-  lookup: (name: string) => string | undefined
-): Promise<Record<string, string>> {
-  const entries = (typeof value === "string" ? [value] : list(value, at)).map(
+  directory: string
+): Array<{ path: string; required: boolean }> {
+  return (typeof value === "string" ? [value] : list(value, at)).map(
     (entry) => {
-      if (typeof entry === "string") return { path: entry, required: true }
-      if (!isMapping(entry)) throw new ComposeError(`${at} entries must be paths`)
+      if (typeof entry === "string") {
+        return { path: resolve(directory, expandHome(entry)), required: true }
+      }
+      if (!isMapping(entry))
+        throw new ComposeError(`${at} entries must be paths`)
+      checkKeys(at, entry, ["format", "path", "required"])
       if (entry.format !== undefined && entry.format !== "dotenv") {
         throw unsupported(`env_file format ${String(entry.format)} (${at})`)
       }
       return {
-        path: requiredString(entry.path, `${at}.path`),
-        required: entry.required === undefined ? true : bool(entry.required, `${at}.required`),
+        path: resolve(
+          directory,
+          expandHome(requiredString(entry.path, `${at}.path`))
+        ),
+        required:
+          entry.required === undefined
+            ? true
+            : bool(entry.required, `${at}.required`),
       }
     }
   )
-  const environment: Record<string, string> = {}
-  for (const entry of entries) {
-    Object.assign(
-      environment,
-      await readEnvFile(
-        resolve(directory, expandHome(entry.path)),
-        entry.required,
-        (name) => environment[name] ?? lookup(name)
-      )
-    )
-  }
-  return environment
+}
+
+// ---------------------------------------------------------- stat helper
+
+/** Whether a path exists, for warnings about missing secret files. */
+export async function pathExists(path: string): Promise<boolean> {
+  const found = await Effect.runPromise(
+    Effect.result(Effect.tryPromise(() => stat(path)))
+  )
+  return Result.isSuccess(found)
 }
 
 // ---------------------------------------------------------- env files
 
 /**
- * A dotenv file as Compose reads one: `KEY=value` lines, with `export`,
- * comments, single quotes kept literally, double quotes with escapes, and
- * variables in unquoted and double-quoted values.
+ * compose-go's dotenv parser: `KEY=value` (or `KEY: value`) statements,
+ * with `export`, `#` comments, single quotes kept literally, double quotes
+ * with escapes, unquoted values ending at ` #`, and variables expanded in
+ * unquoted and double-quoted values. A key alone takes its value from
+ * `lookup`. Values go into `out`; variables expand from `lookup` first,
+ * then from what `out` already holds.
  */
-async function readEnvFile(
-  path: string,
-  required: boolean,
-  lookup: (name: string) => string | undefined
-): Promise<Record<string, string>> {
-  const read = await Effect.runPromise(
-    Effect.result(Effect.tryPromise(() => readFile(path, "utf8")))
-  )
-  if (Result.isFailure(read)) {
-    const cause = read.failure.cause
-    const missing = Predicate.hasProperty(cause, "code") && cause.code === "ENOENT"
-    if (missing && !required) return {}
-    if (missing) throw new ComposeError(`env file ${path} not found`)
-    throw cause
-  }
-  const text = read.success
-  return parseEnvFile(text.replace(/^﻿/u, ""), path, lookup)
-}
-
-export function parseEnvFile(
+export function parseDotenv(
   text: string,
-  path: string,
-  lookup: (name: string) => string | undefined
-): Record<string, string> {
-  const values: Record<string, string> = {}
-  const resolveName = (name: string) => values[name] ?? lookup(name)
-  let index = 0
+  out: Record<string, string>,
+  lookup: Lookup,
+  onUnset: (name: string) => void,
+  path: string
+): void {
+  let source = text.startsWith("\uFEFF") ? text.slice(1) : text
   let line = 1
   const fail = (reason: string): never => {
-    throw new ComposeError(`${path} line ${line}: ${reason}`)
+    throw new ComposeError(`failed to read ${path}: line ${line}: ${reason}`)
   }
-  while (index < text.length) {
-    // Skip blank lines and comments.
-    const rest = text.slice(index)
-    const blank = /^[ \t]*(?:#[^\n]*)?(?:\r?\n|$)/u.exec(rest)
-    if (blank && blank[0].length > 0) {
-      index += blank[0].length
-      line += 1
+  const expand = (value: string) =>
+    substituteTemplate(
+      value,
+      (name) =>
+        lookup(name) ?? (Object.hasOwn(out, name) ? out[name] : undefined),
+      onUnset,
+      path
+    )
+  const isSpace = (character: string) =>
+    /^[\t\v\f\r \u0085\u00a0]$/u.test(character)
+  for (;;) {
+    // The next statement, past white space and comment lines.
+    for (;;) {
+      const start = source.search(/[^\s]/u)
+      line += (
+        source.slice(0, start === -1 ? source.length : start).match(/\n/gu) ??
+        []
+      ).length
+      if (start === -1) return
+      source = source.slice(start)
+      if (!source.startsWith("#")) break
+      const end = source.indexOf("\n")
+      if (end === -1) return
+      source = source.slice(end)
+    }
+    if (/^export\s/u.test(source)) {
+      source = source
+        .slice("export".length)
+        .replace(/^[\t\v\f\r \u0085\u00a0]+/u, "")
+    }
+    // The key, up to `=`, `:`, or the end of the line (a key alone).
+    let key = ""
+    let offset = 0
+    let inherited = false
+    for (let index = 0; index < source.length;) {
+      const character = String.fromCodePoint(source.codePointAt(index)!)
+      if (character === "=" || character === ":" || character === "\n") {
+        key = source.slice(0, index)
+        offset = index + 1
+        inherited = character === "\n"
+        break
+      }
+      if (!isSpace(character) && !/^[\p{L}\p{N}_.\-[\]]$/u.test(character)) {
+        fail(
+          `unexpected character ${JSON.stringify(character)} in variable name ${JSON.stringify(source.split("\n")[0])}`
+        )
+      }
+      index += character.length
+    }
+    if (inherited && !key.includes(" ")) line += 1
+    key = key.replace(/\s+$/u, "")
+    if (key.includes(" ")) fail("key cannot contain a space")
+    source = source.slice(offset).replace(/^[\t\v\f\r \u0085\u00a0]+/u, "")
+    if (inherited) {
+      const value = lookup(key)
+      if (value !== undefined) out[key] = value
       continue
     }
-    const key = /^[ \t]*(?:export[ \t]+)?([A-Za-z_.][A-Za-z0-9_.-]*)[ \t]*(=|:)?[ \t]*/u.exec(rest)
-    if (!key) fail("expected KEY=VALUE")
-    index += key![0].length
-    const name = key![1]!
-    if (!key![2]) {
-      // A name alone takes its value from the environment.
-      const found = lookup(name)
-      if (found !== undefined) values[name] = found
-      const end = text.indexOf("\n", index)
-      index = end === -1 ? text.length : end + 1
+    const quote = source[0]
+    if (quote !== '"' && quote !== "'") {
+      const end = source.indexOf("\n")
+      let value = end === -1 ? source : source.slice(0, end)
+      source = end === -1 ? "" : source.slice(end + 1)
       line += 1
+      const comment = value.indexOf(" #")
+      if (comment !== -1) value = value.slice(0, comment)
+      out[key] = expand(value.replace(/\s+$/u, ""))
       continue
     }
-    const quote = text[index]
-    if (quote === "'" || quote === '"') {
-      const close = findClosingQuote(text, index + 1, quote)
-      if (close === -1) fail(`unterminated quoted value for ${name}`)
-      const raw = text.slice(index + 1, close)
-      line += raw.split("\n").length - 1
-      values[name] =
-        quote === "'"
-          ? raw
-          : interpolate(unescapeDouble(raw), resolveName, () => undefined, `${path}:${name}`)
-      index = close + 1
-      const end = text.indexOf("\n", index)
-      index = end === -1 ? text.length : end + 1
-      line += 1
-      continue
+    // A quoted value, which can span lines.
+    let value = ""
+    let escaped = false
+    let closed = -1
+    for (let index = 1; index < source.length; index += 1) {
+      const character = source[index]!
+      if (character === "\n") line += 1
+      if (character !== quote) {
+        if (!escaped && character === "\\") {
+          escaped = true
+          continue
+        }
+        if (escaped) {
+          escaped = false
+          value += "\\"
+        }
+        value += character
+        continue
+      }
+      if (escaped) {
+        escaped = false
+        value += character
+        continue
+      }
+      closed = index
+      break
     }
-    const end = text.indexOf("\n", index)
-    let raw = text.slice(index, end === -1 ? text.length : end).replace(/\r$/u, "")
-    // An inline comment starts at a # after whitespace.
-    raw = raw.replace(/\s+#.*$/u, "").trim()
-    values[name] = interpolate(raw, resolveName, () => undefined, `${path}:${name}`)
-    index = end === -1 ? text.length : end + 1
-    line += 1
+    if (closed === -1) {
+      const end = source.indexOf("\n")
+      fail(
+        `unterminated quoted value ${end === -1 ? source : source.slice(0, end)}`
+      )
+    }
+    out[key] = quote === '"' ? expand(expandEscapes(value)) : value
+    source = source.slice(closed + 1)
   }
-  return values
 }
 
-function findClosingQuote(text: string, from: number, quote: string): number {
-  for (let index = from; index < text.length; index += 1) {
-    if (text[index] === "\\" && quote === '"') {
-      index += 1
-      continue
+// The shell escapes Compose expands in double-quoted values: `\a` through
+// `\v`, `\$` (a literal `$`), `\"`, `\\`, and octal `\0NNN`.
+function expandEscapes(value: string): string {
+  return value.replace(/\\(?:[abcfnrtv$"\\]|0\d{0,3})/gu, (match) => {
+    if (match === "\\$") return "$$"
+    const escapes: Record<string, string> = {
+      "\\\\": "\\",
+      '\\"': '"',
+      "\\a": "\u0007",
+      "\\b": "\b",
+      "\\f": "\f",
+      "\\n": "\n",
+      "\\r": "\r",
+      "\\t": "\t",
+      "\\v": "\v",
     }
-    if (text[index] === quote) return index
-  }
-  return -1
-}
-
-function unescapeDouble(raw: string): string {
-  return raw.replace(/\\(.)/gu, (_, character: string) =>
-    character === "n" ? "\n" : character === "r" ? "\r" : character === "t" ? "\t" : character
-  )
+    if (escapes[match] !== undefined) return escapes[match]
+    if (match === "\\c") return match
+    // `\0NNN` is octal NNN. Compose drops the 0 before reading it, so what
+    // it can't read is left without the 0 (and a lone `\0` as `\`).
+    const digits = match.slice(2)
+    if (!/^[0-7]{3}$/u.test(digits)) return `\\${digits}`
+    const code = Number.parseInt(digits, 8)
+    return code > 0xff ? `\\${digits}` : String.fromCharCode(code)
+  })
 }
 
 // ------------------------------------------------------- interpolation
 
 function interpolateTree(
   value: Value,
-  lookup: (name: string) => string | undefined,
+  lookup: Lookup,
   onUnset: (name: string) => void,
-  path = ""
+  path: string
 ): Value {
-  if (typeof value === "string") return interpolate(value, lookup, onUnset, path)
+  if (typeof value === "string")
+    return substituteTemplate(value, lookup, onUnset, path)
   if (Array.isArray(value)) {
     return value.map((entry, index) =>
       interpolateTree(entry, lookup, onUnset, `${path}[${index}]`)
@@ -1329,98 +2067,131 @@ function interpolateTree(
   return value
 }
 
+// compose-go's template pattern: `$$`, `$NAME`, or `${NAME[op word]}`
+// (greedy up to the last `}` on the line, then cut at the first closing
+// brace), or a `${` that's none of these.
+const TEMPLATE =
+  /\$(?:(\$)|([_a-z][_a-z0-9]*)|\{(?:([_a-z][_a-z0-9]*(?::?[-+?][^\n]*)?)\}|()))/giu
+
 /**
- * Compose's variable syntax: `$NAME`, `${NAME}`, with `:-`, `-`, `:?`,
- * `?`, `:+`, and `+` modifiers whose words are interpolated too, and `$$`
- * for a literal `$`.
+ * Compose's variable substitution (compose-go's `template.Substitute`):
+ * `$NAME`, `${NAME}`, the `:-`, `-`, `:?`, `?`, `:+`, and `+` modifiers
+ * (whose words are substituted too), and `$$` for a literal `$`.
  */
-export function interpolate(
+export function substituteTemplate(
   text: string,
-  lookup: (name: string) => string | undefined,
+  lookup: Lookup,
   onUnset: (name: string) => void,
   path: string
 ): string {
   if (!text.includes("$")) return text
-  let output = ""
-  let index = 0
-  const invalid = () =>
-    new ComposeError(`Invalid template in ${path}: "${text}"`)
-  while (index < text.length) {
-    const character = text[index]!
-    if (character !== "$") {
-      output += character
-      index += 1
-      continue
-    }
-    const next = text[index + 1]
-    if (next === "$") {
-      output += "$"
-      index += 2
-      continue
-    }
-    if (next === "{") {
-      let depth = 1
-      let end = index + 2
-      for (; end < text.length && depth > 0; end += 1) {
-        if (text[end] === "{" && text[end - 1] === "$") depth += 1
-        else if (text[end] === "}") depth -= 1
-      }
-      if (depth !== 0) throw invalid()
-      const expression = text.slice(index + 2, end - 1)
-      output += substitute(expression, lookup, onUnset, path, invalid)
-      index = end
-      continue
-    }
-    const name = /^[A-Za-z_][A-Za-z0-9_]*/u.exec(text.slice(index + 1))?.[0]
-    if (!name) {
-      output += "$"
-      index += 1
-      continue
-    }
-    const found = lookup(name)
-    if (found === undefined) onUnset(name)
-    output += found ?? ""
-    index += 1 + name.length
+  let failure: ComposeError | undefined
+  const result = text.replace(TEMPLATE, (match) => {
+    const replaced = Result.try(() => replacement(match, lookup, onUnset))
+    if (Result.isSuccess(replaced)) return replaced.success
+    failure ??=
+      replaced.failure instanceof InvalidTemplate
+        ? new ComposeError(`Invalid template: ${JSON.stringify(text)}`)
+        : replaced.failure instanceof ComposeError
+          ? replaced.failure
+          : new ComposeError(String(replaced.failure))
+    return ""
+  })
+  if (failure) {
+    throw new ComposeError(
+      path
+        ? `error while interpolating ${path}: ${failure.message}`
+        : failure.message
+    )
   }
-  return output
+  return result
 }
 
-function substitute(
-  expression: string,
-  lookup: (name: string) => string | undefined,
-  onUnset: (name: string) => void,
-  path: string,
-  invalid: () => Error
+class InvalidTemplate extends Error {}
+
+const OPERATORS = [":?", "?", ":-", "-", ":+", "+"] as const
+
+function replacement(
+  matched: string,
+  lookup: Lookup,
+  onUnset: (name: string) => void
 ): string {
-  const match = /^([A-Za-z_][A-Za-z0-9_]*)(?:(:?[-?+])([\s\S]*))?$/u.exec(expression)
-  if (!match) throw invalid()
-  const [, name = "", operator, word = ""] = match
-  const found = lookup(name)
-  const expand = () => interpolate(word, lookup, onUnset, path)
-  const empty = found === undefined || found === ""
-  switch (operator) {
-    case undefined:
-      if (found === undefined) onUnset(name)
-      return found ?? ""
-    case ":-":
-      return empty ? expand() : found
-    case "-":
-      return found === undefined ? expand() : found
-    case ":+":
-      return empty ? "" : expand()
-    case "+":
-      return found === undefined ? "" : expand()
-    case ":?":
-    case "?":
-      if (operator === ":?" ? empty : found === undefined) {
-        throw new ComposeError(
-          `required variable ${name} is missing a value${word ? `: ${expand()}` : ""}`
-        )
-      }
-      return found!
-    default:
-      throw invalid()
+  // The operator is the one that appears first in the whole match.
+  const operator = [...OPERATORS]
+    .filter((candidate) => matched.includes(candidate))
+    .sort((left, right) => matched.indexOf(left) - matched.indexOf(right))[0]
+  const closing = firstClosingBrace(matched)
+  let rest = ""
+  let template = matched
+  if (closing > -1) {
+    rest = template.slice(closing + 1)
+    template = template.slice(0, closing + 1)
   }
+  const match = new RegExp(TEMPLATE.source, "iu").exec(template)
+  if (match?.[1]) return "$"
+  let name = match?.[2] ?? ""
+  let braced = false
+  if (!name) {
+    name = match?.[3] ?? ""
+    braced = true
+  }
+  if (!name) throw new InvalidTemplate()
+  if (braced && operator && name.includes(operator)) {
+    const separator = name.indexOf(operator)
+    const variable = name.slice(0, separator)
+    const word = name.slice(separator + operator.length)
+    const value = lookup(variable)
+    const nested = (text: string) =>
+      substituteTemplate(text, lookup, onUnset, "")
+    let substituted: string
+    switch (operator) {
+      case ":-":
+      case "-":
+        substituted =
+          value === undefined || (operator === ":-" && value === "")
+            ? nested(word)
+            : value
+        break
+      case ":+":
+      case "+":
+        substituted =
+          value !== undefined && (operator === "+" || value !== "")
+            ? nested(word)
+            : (value ?? "")
+        break
+      default:
+        if (value === undefined || (operator === ":?" && value === "")) {
+          const reason = nested(word)
+          throw new ComposeError(
+            reason
+              ? `required variable ${variable} is missing a value: ${reason}`
+              : `required variable ${variable} is missing a value`
+          )
+        }
+        substituted = value
+    }
+    return substituted + substituteTemplate(rest, lookup, onUnset, "")
+  }
+  const value = lookup(name)
+  if (value === undefined) onUnset(name)
+  return value ?? ""
+}
+
+// compose-go's getFirstBraceClosingIndex, which skips the character after
+// each `{`.
+function firstClosingBrace(text: string): number {
+  let open = 0
+  for (let index = 0; index < text.length; index += 1) {
+    if (text[index] === "}") {
+      open -= 1
+      if (open === 0) return index
+    }
+    if (text[index] === "{") {
+      open += 1
+      index += 1
+    }
+  }
+  return -1
 }
 
 // ------------------------------------------------------------ ordering
@@ -1440,16 +2211,9 @@ export function dependencyOrder(
       )
     }
     state.set(name, "visiting")
-    const service = services[name]
-    const dependencies = Object.keys(service?.depends_on ?? {})
-    const networkService = /^service:(.+)$/u.exec(service?.network_mode ?? "")?.[1]
-    for (const dependency of [
-      ...dependencies,
-      ...(networkService ? [networkService] : []),
-      ...(service?.volumes_from ?? [])
-        .map((entry) => /^(?:service:)?([^:]+)/u.exec(entry)?.[1])
-        .filter((entry): entry is string => !!entry && !!services[entry]),
-    ].sort()) {
+    for (const dependency of Object.keys(
+      services[name]?.depends_on ?? {}
+    ).sort()) {
       if (services[dependency]) visit(dependency, [...trail, name])
     }
     state.set(name, "done")
@@ -1481,7 +2245,7 @@ function unsupported(what: string): ComposeError {
 
 function replicas(name: string): ComposeError {
   return new ComposeError(
-    `service "${name}" asks for more than one container, which Kiln doesn't support: each service runs one`
+    `service "${name}" asks for a number of containers other than one, which Kiln doesn't support: each service runs one`
   )
 }
 
@@ -1491,18 +2255,22 @@ function list(value: Value, at: string): Array<Value> {
 }
 
 function requiredString(value: Value, at: string): string {
-  if (typeof value !== "string") throw new ComposeError(`${at} must be a string`)
+  if (typeof value !== "string")
+    throw new ComposeError(`${at} must be a string`)
   return value
 }
 
 function optionalString(value: Value, at: string): string | undefined {
-  return value === undefined || value === null ? undefined : requiredString(value, at)
+  return value === undefined || value === null
+    ? undefined
+    : requiredString(value, at)
 }
 
 // Numbers and booleans in string positions are their YAML text.
 function scalarString(value: Value, at: string): string {
   if (typeof value === "string") return value
-  if (typeof value === "number" || typeof value === "boolean") return String(value)
+  if (typeof value === "number" || typeof value === "boolean")
+    return String(value)
   throw new ComposeError(`${at} must be a string`)
 }
 
@@ -1511,7 +2279,6 @@ function stringList(value: Value, at: string): Array<string> {
 }
 
 function stringMap(value: Value, at: string): Record<string, string> {
-  if (value === null) return {}
   if (!isMapping(value)) throw new ComposeError(`${at} must be a mapping`)
   return Object.fromEntries(
     Object.entries(value).map(([key, entry]) => [
@@ -1543,8 +2310,9 @@ function labelMap(value: Value, at: string): Record<string, string> {
 
 function bool(value: Value, at: string): boolean {
   if (typeof value === "boolean") return value
-  if (value === "true") return true
-  if (value === "false") return false
+  if (typeof value === "string" && /^(?:true|false)$/iu.test(value)) {
+    return value.toLowerCase() === "true"
+  }
   throw new ComposeError(`${at} must be true or false`)
 }
 
@@ -1557,21 +2325,25 @@ function integer(value: Value, at: string): number {
 }
 
 function externalFlag(value: Value, at: string): boolean {
-  if (value === undefined) return false
+  if (value === undefined || value === null) return false
   if (isMapping(value)) return true
   return bool(value, `${at}.external`)
 }
 
 // The deprecated `external: { name: … }` form.
 function externalName(value: Value): string | undefined {
-  return isMapping(value) && typeof value.name === "string" ? value.name : undefined
+  return isMapping(value) && typeof value.name === "string"
+    ? value.name
+    : undefined
 }
 
 function expandHome(path: string): string {
-  return path === "~" || path.startsWith("~/") ? join(homedir(), path.slice(1)) : path
+  return path === "~" || path.startsWith("~/")
+    ? join(homedir(), path.slice(1))
+    : path
 }
 
-/** Go durations, such as `1m30s`; a bare number is seconds. */
+/** Go durations, such as `1m30s`, in nanoseconds; a bare number is seconds. */
 function duration(value: Value, at: string): number {
   if (typeof value === "number") return value * 1e9
   const text = requiredString(value, at)
@@ -1603,15 +2375,17 @@ function bytes(value: Value, at: string): number {
   const match = /^(\d+(?:\.\d+)?)\s*([bkmgtp])?(?:i?b)?$/iu.exec(
     requiredString(value, at).trim()
   )
-  if (!match) throw new ComposeError(`${at} has an invalid size "${String(value)}"`)
+  if (!match)
+    throw new ComposeError(`${at} has an invalid size "${String(value)}"`)
   const exponent = "bkmgtp".indexOf((match[2] ?? "b").toLowerCase())
   return Math.trunc(Number(match[1]) * 1024 ** exponent)
 }
 
+// Nano CPUs, truncated as Compose converts them.
 function nanoCpus(value: Value, at: string): number {
   const number = typeof value === "string" ? Number(value) : value
   if (typeof number !== "number" || !Number.isFinite(number) || number < 0) {
     throw new ComposeError(`${at} must be a number of CPUs`)
   }
-  return Math.round(number * 1e9)
+  return Math.trunc(number * 1e9)
 }

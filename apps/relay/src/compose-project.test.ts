@@ -16,10 +16,7 @@ afterEach(async () => {
   await rm(directory, { force: true, recursive: true })
 })
 
-async function load(
-  yaml: string,
-  environment: Record<string, string> = {}
-) {
+async function load(yaml: string, environment: Record<string, string> = {}) {
   const warnings: Array<string> = []
   const project = await loadComposeProject({
     environment,
@@ -35,7 +32,7 @@ describe("Compose variables", () => {
   it("takes the app's environment over .env, as Compose takes the shell's", async () => {
     await writeFile(
       join(directory, ".env"),
-      'TAG=from-dotenv\nNAME=dotenv\nQUOTED="a b"\nSINGLE=\'${NOT_EXPANDED}\'\n'
+      "TAG=from-dotenv\nNAME=dotenv\nQUOTED=\"a b\"\nSINGLE='${NOT_EXPANDED}'\n"
     )
 
     const { project, warnings } = await load(
@@ -76,7 +73,9 @@ describe("Compose variables", () => {
 
   it("fails on a required variable without a value, with its message", async () => {
     await expect(
-      load("services:\n  web:\n    image: ${IMAGE:?Set IMAGE in the app's environment}\n")
+      load(
+        "services:\n  web:\n    image: ${IMAGE:?Set IMAGE in the app's environment}\n"
+      )
     ).rejects.toThrow(
       "required variable IMAGE is missing a value: Set IMAGE in the app's environment"
     )
@@ -102,8 +101,11 @@ describe("Compose variables", () => {
       { PASSED_THROUGH: "from-app" }
     )
 
+    // A name the environment doesn't set is kept, unset, as Compose keeps
+    // it.
     expect(project.services.web?.environment).toEqual({
       FROM_FILE: "yes",
+      NOT_ANYWHERE: null,
       OVERRIDDEN: "environment",
       PASSED_THROUGH: "from-app",
       WITH_COMMENT: "value",
@@ -111,7 +113,76 @@ describe("Compose variables", () => {
   })
 })
 
+describe("Compose environments, as Compose resolves them", () => {
+  it("expands .env with the app's variables first, and unsets env_file values set to null", async () => {
+    await writeFile(
+      join(directory, ".env"),
+      "CHAINED=${APP_VALUE}-c\nAPP_VALUE=from-dotenv\n"
+    )
+    await writeFile(
+      join(directory, "web.env"),
+      "SECRET=from-file\nKEPT=${CHAINED}\n"
+    )
+
+    const { project } = await load(
+      [
+        "services:",
+        "  web:",
+        "    image: nginx",
+        "    env_file: [web.env]",
+        "    environment:",
+        "      SECRET: null",
+      ].join("\n"),
+      { APP_VALUE: "app" }
+    )
+
+    expect(project.services.web?.environment).toEqual({
+      KEPT: "app-c",
+      SECRET: null,
+    })
+  })
+
+  it("leaves out build arguments without a value the environment doesn't set", async () => {
+    const { project } = await load(
+      [
+        "services:",
+        "  web:",
+        "    build:",
+        "      context: .",
+        "      args: [VERSION, FROM_APP, LITERAL=x, EMPTY=]",
+      ].join("\n"),
+      { FROM_APP: "app" }
+    )
+
+    expect(project.services.web?.build?.args).toEqual({
+      EMPTY: "",
+      FROM_APP: "app",
+      LITERAL: "x",
+    })
+  })
+})
+
 describe("Compose short syntax", () => {
+  it("publishes a host port range for a single target, and keeps gateway priorities", async () => {
+    const { project } = await load(
+      [
+        "services:",
+        "  web:",
+        "    image: nginx",
+        "    ports: ['8000-8005:80']",
+        "    networks:",
+        "      back: { gw_priority: 5 }",
+        "networks:",
+        "  back:",
+      ].join("\n")
+    )
+
+    expect(project.services.web?.ports).toEqual([
+      { protocol: "tcp", published: "8000-8005", target: 80 },
+    ])
+    expect(project.services.web?.networks?.back).toEqual({ gw_priority: 5 })
+  })
+
   it("expands ports, volumes, dependencies, and health checks to the long form", async () => {
     const { project } = await load(
       [
@@ -144,13 +215,14 @@ describe("Compose short syntax", () => {
     ])
     expect(web.volumes).toEqual([
       {
+        bind: {},
         read_only: true,
         source: join(directory, "data"),
         target: "/data",
         type: "bind",
       },
-      { source: "cache", target: "/cache", type: "volume" },
-      { target: "/scratch", type: "volume" },
+      { source: "cache", target: "/cache", type: "volume", volume: {} },
+      { target: "/scratch", type: "volume", volume: {} },
     ])
     expect(web.depends_on).toEqual({
       db: { condition: "service_started", required: true, restart: false },
@@ -159,8 +231,10 @@ describe("Compose short syntax", () => {
       interval: 90e9,
       test: ["CMD-SHELL", "curl -f http://localhost"],
     })
-    expect(project.services.db?.stop_grace_period).toBe(60)
-    expect(project.networks).toEqual({ default: { name: "kiln-app-x_default" } })
+    expect(project.services.db?.stop_grace_period).toBe(60e9)
+    expect(project.networks).toEqual({
+      default: { name: "kiln-app-x_default" },
+    })
     expect(project.volumes).toEqual({ cache: { name: "kiln-app-x_cache" } })
   })
 })
@@ -168,19 +242,19 @@ describe("Compose short syntax", () => {
 describe("Compose features Kiln can't run", () => {
   it.each([
     [
-      "secrets",
-      "services:\n  web:\n    image: nginx\n    secrets: [token]\nsecrets:\n  token:\n    file: ./token\n",
-      "secrets",
+      "links",
+      "services:\n  web:\n    image: nginx\n    links: [db]\n  db:\n    image: postgres\n",
+      '`links` on service "web"',
     ],
     [
       "extends",
       "services:\n  web:\n    extends: { file: base.yaml, service: web }\n",
-      "`extends` on service \"web\"",
+      '`extends` on service "web"',
     ],
     [
       "replicas",
       "services:\n  web:\n    image: nginx\n    deploy: { replicas: 3 }\n",
-      "more than one container",
+      "a number of containers other than one",
     ],
     [
       "a remote build",

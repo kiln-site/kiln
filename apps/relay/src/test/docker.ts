@@ -14,7 +14,7 @@
  * is reported by `reset()`.
  */
 import { randomBytes } from "node:crypto"
-import { rmSync } from "node:fs"
+import { existsSync, rmSync } from "node:fs"
 import {
   createServer,
   type IncomingMessage,
@@ -46,7 +46,7 @@ export interface FakeMount {
   readonly readOnly?: boolean
   /** Host path for bind mounts, volume name for volume mounts. */
   readonly source: string
-  readonly type: "bind" | "volume"
+  readonly type: "bind" | "tmpfs" | "volume"
   /**
    * A volume Docker named itself, from `-v /path` or an image's VOLUME. It
    * appears only in `Config.Volumes`, so a container created from the same
@@ -70,7 +70,10 @@ export interface FakeContainer {
   mounts: Array<FakeMount>
   portBindings: PortBindings
   networkMode: string
-  networks: Map<string, { aliases: Array<string>; ipAddress: string }>
+  networks: Map<
+    string,
+    { aliases: Array<string>; gwPriority?: number; ipAddress: string }
+  >
   healthCheck: boolean
   state: {
     running: boolean
@@ -87,6 +90,18 @@ export interface FakeContainer {
   autoRemove: boolean
   /** Containers whose volumes it mounts (`--volumes-from`). */
   volumesFrom: Array<string>
+  /** Namespaces it shares (`--ipc`, `--pid`), and the platform it's for. */
+  ipcMode: string
+  pidMode: string
+  platform: string | null
+  /** Files written into it (`docker cp`), with their owner and mode. */
+  copiedFiles: Array<{
+    path: string
+    content: string
+    mode: number
+    uid: number
+    gid: number
+  }>
   /** Running once with stdin attached before it started (`run --rm -i`). */
   runOnce: { input: Array<Buffer>; socket: Duplex; stdinEnded: boolean } | null
   logs: Array<{ text: string; time: string }>
@@ -245,6 +260,8 @@ export class FakeDocker {
   readonly pulls = new Map<string, unknown>()
   /** Image config beyond labels, such as `Healthcheck`, by image. */
   readonly imageConfigs = new Map<string, Record<string, unknown>>()
+  /** The platform of an image, as `os/architecture`; linux/amd64 if unset. */
+  readonly imagePlatforms = new Map<string, string>()
   /** What each tag points at (`docker image tag`), by full reference. */
   readonly imageTags = new Map<string, string>()
   /** Images whose health check fails once they start. */
@@ -340,6 +357,7 @@ export class FakeDocker {
     this.pullOutput.clear()
     this.pulls.clear()
     this.imageConfigs.clear()
+    this.imagePlatforms.clear()
     this.imageTags.clear()
     this.unhealthyImages.clear()
     this.pullPlatforms.clear()
@@ -405,6 +423,10 @@ export class FakeDocker {
       mounts: [...(seed.mounts ?? [])],
       portBindings: structuredClone(seed.portBindings ?? {}),
       networkMode: seed.networks?.[0] ?? "bridge",
+      ipcMode: "",
+      pidMode: "",
+      platform: null,
+      copiedFiles: [],
       networks: new Map(
         (seed.networks ?? []).map((network) => [
           network,
@@ -815,8 +837,10 @@ export class FakeDocker {
     return labels === undefined || key === undefined
       ? undefined
       : {
+          Architecture: (this.imagePlatforms.get(key) ?? "linux/amd64").split("/")[1],
           Config: { ...this.imageConfigs.get(key), Labels: labels },
           Id: this.#imageId(key),
+          Os: (this.imagePlatforms.get(key) ?? "linux/amd64").split("/")[0],
           RepoTags: [key],
         }
   }
@@ -872,7 +896,12 @@ export class FakeDocker {
     mounts: Array<FakeMount>
     name: string | undefined
     networkMode: string | undefined
-    networks: Array<{ aliases: Array<string>; ipAddress: string; name: string }>
+    networks: Array<{
+      aliases: Array<string>
+      gwPriority?: number
+      ipAddress: string
+      name: string
+    }>
     portBindings: PortBindings
     restartPolicy: string
     tty: boolean
@@ -913,6 +942,7 @@ export class FakeDocker {
     for (const network of input.networks) {
       container.networks.set(network.name, {
         aliases: network.aliases.length > 0 ? network.aliases : [name],
+        ...(network.gwPriority && { gwPriority: network.gwPriority }),
         ipAddress: network.ipAddress,
       })
     }
@@ -1348,10 +1378,28 @@ export class FakeDocker {
           .map((container) => containerSummary(container))
       )
     }
+    if (
+      method === "PUT" &&
+      (parameters = route(/^\/containers\/([^/]+)\/archive$/u))
+    ) {
+      const container = this.#requiredContainer(parameters[0] ?? "")
+      const directory = url.searchParams.get("path") ?? "/"
+      for (const entry of readTar(Buffer.from(body, "utf8"))) {
+        container.copiedFiles.push({
+          ...entry,
+          path: posix.join(directory, entry.path),
+        })
+      }
+      return json(200, {})
+    }
     if (method === "POST" && path === "/containers/create") {
       const name = url.searchParams.get("name") ?? undefined
       await this.#checkpoint("create", name)
-      const container = this.#createFromApi(name, JSON.parse(body))
+      const container = this.#createFromApi(
+        name,
+        JSON.parse(body),
+        url.searchParams.get("platform")
+      )
       this.#appliedCheckpoint("create", name)
       return json(201, { Id: container.id, Warnings: [] })
     }
@@ -1867,23 +1915,61 @@ export class FakeDocker {
     }
   }
 
-  #createFromApi(name: string | undefined, body: CreateBody): FakeContainer {
+  #createFromApi(
+    name: string | undefined,
+    body: CreateBody,
+    platform: string | null = null
+  ): FakeContainer {
     const host = body.HostConfig ?? {}
     const mounts: Array<FakeMount> = [
       ...(host.Binds ?? []).map((bind) => parseVolume(bind)),
-      ...(host.Mounts ?? [])
-        .filter((mount) => mount.Type !== "tmpfs")
-        .map((mount) => ({
+      ...(host.Mounts ?? []).map((mount) => {
+        // A bind the Mount API doesn't create needs its source to exist.
+        if (
+          mount.Type === "bind" &&
+          !mount.BindOptions?.CreateMountpoint &&
+          !existsSync(mount.Source ?? "")
+        ) {
+          throw new DockerFailure(
+            `invalid mount config for type "bind": bind source path does not exist: ${mount.Source}`,
+            400
+          )
+        }
+        return {
           destination: mount.Target,
           readOnly: mount.ReadOnly ?? false,
           ...(mount.Type === "volume" && !mount.Source
             ? { anonymous: true, source: randomBytes(32).toString("hex") }
             : { source: mount.Source ?? "" }),
           type:
-            mount.Type === "volume" ? ("volume" as const) : ("bind" as const),
-        })),
+            mount.Type === "volume"
+              ? ("volume" as const)
+              : mount.Type === "tmpfs"
+                ? ("tmpfs" as const)
+                : ("bind" as const),
+        }
+      }),
+      ...Object.keys(host.Tmpfs ?? {}).map((destination) => ({
+        destination,
+        source: "",
+        type: "tmpfs" as const,
+      })),
     ]
-    for (const destination of Object.keys(body.Volumes ?? {})) {
+    const seen = new Set<string>()
+    for (const mount of mounts) {
+      if (seen.has(mount.destination)) {
+        throw new DockerFailure(`Duplicate mount point: ${mount.destination}`, 400)
+      }
+      seen.add(mount.destination)
+    }
+    // The image's VOLUMEs, and the config's, that nothing mounts over get
+    // a volume of their own.
+    const imageKey = this.#imageKey(body.Image)
+    const imageVolumes = Object.keys(
+      ((imageKey === undefined ? undefined : this.imageConfigs.get(imageKey))
+        ?.Volumes as Record<string, unknown> | undefined) ?? {}
+    )
+    for (const destination of [...imageVolumes, ...Object.keys(body.Volumes ?? {})]) {
       if (mounts.some((mount) => mount.destination === destination)) continue
       mounts.push({
         anonymous: true,
@@ -1911,7 +1997,7 @@ export class FakeDocker {
         )
       }
     }
-    return this.#createContainer({
+    const created = this.#createContainer({
       autoRemove: host.AutoRemove ?? false,
       cmd: body.Cmd ?? [],
       hostname: body.Hostname,
@@ -1934,6 +2020,7 @@ export class FakeDocker {
         .filter(([network]) => !isNetworkMode(network))
         .map(([network, endpoint]) => ({
           aliases: endpoint.Aliases ?? [],
+          gwPriority: endpoint.GwPriority ?? 0,
           ipAddress: endpoint.IPAMConfig?.IPv4Address ?? "",
           name: network,
         })),
@@ -1949,6 +2036,10 @@ export class FakeDocker {
       restartPolicy: host.RestartPolicy?.Name ?? "no",
       tty: body.Tty ?? false,
     })
+    created.ipcMode = host.IpcMode ?? ""
+    created.pidMode = host.PidMode ?? ""
+    created.platform = platform
+    return created
   }
 
   #attach(request: IncomingMessage, socket: Duplex, head: Buffer): void {
@@ -2256,11 +2347,15 @@ interface CreateBody {
     Binds?: Array<string> | null
     Memory?: number
     Mounts?: Array<{
+      BindOptions?: { CreateMountpoint?: boolean }
       ReadOnly?: boolean
       Source?: string
       Target: string
       Type: string
     }>
+    IpcMode?: string
+    PidMode?: string
+    Tmpfs?: Record<string, string>
     NetworkMode?: string
     PortBindings?: Record<
       string,
@@ -2274,7 +2369,11 @@ interface CreateBody {
   NetworkingConfig?: {
     EndpointsConfig?: Record<
       string,
-      { Aliases?: Array<string>; IPAMConfig?: { IPv4Address?: string } }
+      {
+        Aliases?: Array<string>
+        GwPriority?: number
+        IPAMConfig?: { IPv4Address?: string }
+      }
     >
   }
   OpenStdin?: boolean
@@ -2282,10 +2381,10 @@ interface CreateBody {
 }
 
 function parseVolume(volume: string): FakeMount {
-  const [source = "", destination = "", mode] = volume.split(":")
+  const [source = "", destination = "", mode = ""] = volume.split(":")
   return {
     destination,
-    readOnly: mode === "ro",
+    readOnly: mode.split(",").includes("ro"),
     source,
     type: source.startsWith("/") ? "bind" : "volume",
   }
@@ -2412,7 +2511,21 @@ function containerSummary(container: FakeContainer): unknown {
     Id: container.id,
     Image: container.image,
     Labels: container.labels,
+    Mounts: container.mounts
+      .filter((mount) => mount.type !== "tmpfs")
+      .map((mount) => ({
+        Destination: mount.destination,
+        ...(mount.type === "volume" && { Name: mount.source }),
+        RW: !mount.readOnly,
+        Source: mount.source,
+        Type: mount.type,
+      })),
     Names: [`/${container.name}`],
+    NetworkSettings: {
+      Networks: Object.fromEntries(
+        [...container.networks.keys()].map((network) => [network, {}])
+      ),
+    },
     Ports: Object.entries(container.portBindings).flatMap(([port, hosts]) => {
       const [privatePort = "0", type = "tcp"] = port.split("/")
       const exposed = { PrivatePort: Number(privatePort), Type: type }
@@ -2701,4 +2814,34 @@ function probeSession(session: ClientHttp2Session, body: Buffer): Promise<string
     stream.on("close", () => resolve(status))
     stream.end(body)
   })
+}
+
+/** A tar archive's regular files: path, contents, mode, and owner. */
+function readTar(archive: Buffer) {
+  const entries: Array<{
+    path: string
+    content: string
+    mode: number
+    uid: number
+    gid: number
+  }> = []
+  const field = (header: Buffer, start: number, length: number) =>
+    header.subarray(start, start + length).toString("utf8").replace(/\0.*$/su, "").trim()
+  for (let offset = 0; offset + 512 <= archive.length; ) {
+    const header = archive.subarray(offset, offset + 512)
+    if (header.every((byte) => byte === 0)) break
+    const size = Number.parseInt(field(header, 124, 12) || "0", 8)
+    const type = field(header, 156, 1)
+    if (type === "" || type === "0") {
+      entries.push({
+        content: archive.subarray(offset + 512, offset + 512 + size).toString("utf8"),
+        gid: Number.parseInt(field(header, 116, 8) || "0", 8),
+        mode: Number.parseInt(field(header, 100, 8) || "0", 8),
+        path: field(header, 0, 100),
+        uid: Number.parseInt(field(header, 108, 8) || "0", 8),
+      })
+    }
+    offset += 512 + Math.ceil(size / 512) * 512
+  }
+  return entries
 }

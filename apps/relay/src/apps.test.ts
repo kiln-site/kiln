@@ -676,43 +676,6 @@ describe("apps", () => {
       )
     })
 
-    it("replaces the previous containers, keeping their anonymous volumes, and removes dropped services", async () => {
-      const harness = await createdApp()
-      const first = await deploy(harness, {
-        compose: composeFile.replace(
-          "volumes:\n",
-          "  worker:\n    image: busybox\nvolumes:\n"
-        ),
-        sourceType: "compose",
-      })
-      expect(first.deployment).toMatchObject({ state: "succeeded" })
-      expect(service("worker")?.state.running).toBe(true)
-      // An image VOLUME Compose made an anonymous volume for.
-      const firstDb = service("db")!
-      const anonymous = fakeDocker.addVolume({ name: "a".repeat(64) })
-      firstDb.mounts.push({
-        destination: "/var/lib/postgresql/data",
-        source: anonymous.name,
-        type: "volume",
-      })
-
-      const app = await deploy(harness, {
-        compose: composeFile,
-        sourceType: "compose",
-      })
-
-      expect(app.deployment).toMatchObject({ state: "succeeded" })
-      expect(appContainers().map((container) => container.labels["com.docker.compose.service"]).sort()).toEqual(["db", "web"])
-      const db = service("db")!
-      expect(db.id).not.toBe(firstDb.id)
-      expect(db.mounts).toContainEqual(
-        expect.objectContaining({
-          destination: "/var/lib/postgresql/data",
-          source: anonymous.name,
-        })
-      )
-    })
-
     it("fails when a dependency doesn't become healthy, leaving its dependents stopped", async () => {
       const harness = await createdApp()
       fakeDocker.unhealthyImages.add("postgres:17")
@@ -729,15 +692,271 @@ describe("apps", () => {
       expect(service("web")?.state.running).toBe(false)
     })
 
+    it("keeps a service's anonymous volumes, declared or from its image, read-only ones read-only, across redeploys", async () => {
+      const harness = await createdApp()
+      fakeDocker.imageConfigs.set("postgres:17", {
+        Volumes: { "/var/lib/postgresql/data": {} },
+      })
+      const file = [
+        "services:",
+        "  web:",
+        "    image: nginx:alpine",
+        "    volumes:",
+        "      - /data",
+        "      - { type: volume, target: /readonly, read_only: true }",
+        "      - { type: tmpfs, target: /scratch, read_only: true }",
+        "  db:",
+        "    image: postgres:17",
+      ].join("\n")
+      const mount = (name: string, destination: string) =>
+        service(name)?.mounts.find((entry) => entry.destination === destination)
+
+      const first = await deploy(harness, { compose: file, sourceType: "compose" })
+      expect(first.deployment).toMatchObject({ state: "succeeded" })
+      const before = {
+        data: mount("web", "/data")?.source,
+        db: mount("db", "/var/lib/postgresql/data")?.source,
+        readonly: mount("web", "/readonly")?.source,
+      }
+      const firstDb = service("db")!.id
+
+      const second = await deploy(harness, { compose: file, sourceType: "compose" })
+
+      expect(second.deployment).toMatchObject({ state: "succeeded" })
+      expect(service("db")!.id).not.toBe(firstDb)
+      expect(mount("web", "/data")).toMatchObject({ source: before.data, type: "volume" })
+      expect(mount("web", "/readonly")).toMatchObject({
+        readOnly: true,
+        source: before.readonly,
+      })
+      expect(mount("web", "/scratch")).toMatchObject({ readOnly: true, type: "tmpfs" })
+      expect(mount("db", "/var/lib/postgresql/data")?.source).toBe(before.db)
+      expect(appContainers()).toHaveLength(2)
+    })
+
+    it("replaces the previous containers and removes dropped services", async () => {
+      const harness = await createdApp()
+      const first = await deploy(harness, {
+        compose: composeFile.replace(
+          "volumes:\n",
+          "  worker:\n    image: busybox\nvolumes:\n"
+        ),
+        sourceType: "compose",
+      })
+      expect(first.deployment).toMatchObject({ state: "succeeded" })
+      const firstDb = service("db")!.id
+
+      const app = await deploy(harness, {
+        compose: composeFile,
+        sourceType: "compose",
+      })
+
+      expect(app.deployment).toMatchObject({ state: "succeeded" })
+      expect(appContainers().map((container) => container.labels["com.docker.compose.service"]).sort()).toEqual(["db", "web"])
+      expect(service("db")!.id).not.toBe(firstDb)
+    })
+
+    it("pulls, builds, and creates for the platform a service pins", async () => {
+      const harness = await createdApp()
+      // Present, but for another platform.
+      fakeDocker.images.set("busybox:1", {})
+      fakeDocker.imagePlatforms.set("busybox:1", "linux/amd64")
+      const data = join(harness.config.dataDirectory, "apps", appId)
+      await writeFile(join(data, "Dockerfile"), "FROM busybox\n")
+
+      const app = await deploy(harness, {
+        compose: [
+          "services:",
+          "  pinned:",
+          "    image: busybox:1",
+          "    platform: linux/arm64",
+          "  built:",
+          "    build: .",
+          "    platform: linux/arm64",
+        ].join("\n"),
+        sourceType: "compose",
+      })
+
+      expect(app.deployment).toMatchObject({ state: "succeeded" })
+      expect(fakeDocker.pullPlatforms.get("docker.io/library/busybox:1")).toBe("linux/arm64")
+      expect(fakeDocker.builds[0]?.platform).toBe("linux/arm64")
+      expect(service("pinned")?.platform).toBe("linux/arm64")
+      expect(service("built")?.platform).toBe("linux/arm64")
+    })
+
+    it("recreates a network whose configuration changed, and keeps one that didn't", async () => {
+      const harness = await createdApp()
+      const file = (internal: boolean) =>
+        [
+          "services:",
+          "  web:",
+          "    image: nginx:alpine",
+          "    networks: [back]",
+          "networks:",
+          "  back:",
+          `    internal: ${internal}`,
+        ].join("\n")
+      const network = () => fakeDocker.networks.get(`${project}_back`)
+
+      await deploy(harness, { compose: file(false), sourceType: "compose" })
+      const first = network()!
+      await deploy(harness, { compose: file(false), sourceType: "compose" })
+      expect(network()!.id).toBe(first.id)
+
+      const changed = await deploy(harness, { compose: file(true), sourceType: "compose" })
+
+      expect(changed.deployment).toMatchObject({ state: "succeeded" })
+      expect(network()).toMatchObject({ internal: true })
+      expect(network()!.id).not.toBe(first.id)
+      expect([...service("web")!.networks.keys()]).toContain(`${project}_back`)
+    })
+
+    it("shares the IPC and PID namespaces of a service it names, after creating it", async () => {
+      const harness = await createdApp()
+
+      const app = await deploy(harness, {
+        compose: [
+          "services:",
+          "  sidecar:",
+          "    image: busybox",
+          "    ipc: service:main",
+          "    pid: service:main",
+          "  main:",
+          "    image: busybox",
+          "    ipc: shareable",
+        ].join("\n"),
+        sourceType: "compose",
+      })
+
+      expect(app.deployment).toMatchObject({ state: "succeeded" })
+      const main = service("main")!
+      expect(service("sidecar")).toMatchObject({
+        ipcMode: `container:${main.id}`,
+        pidMode: `container:${main.id}`,
+      })
+    })
+
+    it("starts a service whose optional dependency fails, with a warning", async () => {
+      const harness = await createdApp()
+      fakeDocker.unhealthyImages.add("postgres:17")
+
+      const app = await deploy(harness, {
+        compose: composeFile.replace(
+          "db: { condition: service_healthy }",
+          "db: { condition: service_healthy, required: false }"
+        ),
+        sourceType: "compose",
+      })
+
+      expect(app.deployment).toMatchObject({ state: "succeeded" })
+      expect(service("web")?.state.running).toBe(true)
+      const session = await harness.apps.consoleSession(appId, "deployment", () =>
+        Promise.reject(new Error("Not a container stream"))
+      )
+      const history = await session.history(5_000)
+      expect(history.lines.map((line) => line.text)).toContainEqual(
+        expect.stringMatching(/optional dependency "db" failed to start: container .* is unhealthy/u)
+      )
+    })
+
+    it("fails a bind that mustn't create its missing host path", async () => {
+      const harness = await createdApp()
+      const file = [
+        "services:",
+        "  web:",
+        "    image: nginx:alpine",
+        "    volumes:",
+        "      - type: bind",
+        "        source: ./missing",
+        "        target: /missing",
+        "        bind: { create_host_path: false }",
+      ].join("\n")
+
+      const app = await deploy(harness, { compose: file, sourceType: "compose" })
+
+      expect(app.deployment?.error).toMatch(/bind source path does not exist/u)
+      expect(appContainers()).toEqual([])
+    })
+
+    it("mounts file secrets and configs read-only, and writes others into the container", async () => {
+      const harness = await createdApp()
+      const data = join(harness.config.dataDirectory, "apps", appId)
+      await writeFile(join(data, "token.txt"), "s3cret")
+
+      const app = await deploy(harness, {
+        compose: [
+          "services:",
+          "  web:",
+          "    image: nginx:alpine",
+          "    secrets:",
+          "      - token",
+          "      - { source: api, target: api.key, uid: '101', mode: 0400 }",
+          "    configs:",
+          "      - { source: settings, target: /etc/app.conf }",
+          "secrets:",
+          "  token: { file: ./token.txt }",
+          "  api: { environment: API_KEY }",
+          "configs:",
+          "  settings: { content: 'mode=${MODE}' }",
+        ].join("\n"),
+        environment: "API_KEY=from-env\nMODE=fast\n",
+        sourceType: "compose",
+      })
+
+      expect(app.deployment).toMatchObject({ state: "succeeded" })
+      const web = service("web")!
+      expect(web.mounts).toContainEqual(
+        expect.objectContaining({
+          destination: "/run/secrets/token",
+          readOnly: true,
+          source: join(data, "token.txt"),
+          type: "bind",
+        })
+      )
+      expect(web.copiedFiles).toEqual(
+        expect.arrayContaining([
+          { content: "from-env", gid: 0, mode: 0o400, path: "/run/secrets/api.key", uid: 101 },
+          { content: "mode=fast", gid: 0, mode: 0o444, path: "/etc/app.conf", uid: 0 },
+        ])
+      )
+    })
+
+    it("builds with the Dockerfile's own ignore file over the context's", async () => {
+      const harness = await createdApp()
+      const data = join(harness.config.dataDirectory, "apps", appId)
+      await mkdir(join(data, "docker"), { recursive: true })
+      await mkdir(join(data, "secrets"), { recursive: true })
+      await writeFile(join(data, "secrets", "credentials"), "do not ship")
+      await writeFile(join(data, "app.txt"), "ship")
+      await writeFile(join(data, ".dockerignore"), "nothing-matches\n")
+      await writeFile(join(data, "docker", "web.Dockerfile"), "FROM busybox\nCOPY . /app\n")
+      await writeFile(join(data, "docker", "web.Dockerfile.dockerignore"), "secrets\n")
+
+      const app = await deploy(harness, {
+        compose: [
+          "services:",
+          "  web:",
+          "    build: { context: ., dockerfile: docker/web.Dockerfile }",
+        ].join("\n"),
+        sourceType: "compose",
+      })
+
+      expect(app.deployment).toMatchObject({ state: "succeeded" })
+      const [build] = fakeDocker.builds
+      expect(build!.dockerfile).toBe("FROM busybox\nCOPY . /app\n")
+      expect(build!.files).toContain("app.txt")
+      expect(build!.files).not.toContain("secrets/credentials")
+    })
+
     it("fails before running anything when the file uses what Kiln can't run", async () => {
       const harness = await createdApp()
 
       const app = await deploy(harness, {
-        compose: "services:\n  web:\n    image: nginx\n    secrets: [token]\n",
+        compose: "services:\n  web:\n    image: nginx\n    links: [db]\n  db:\n    image: postgres\n",
         sourceType: "compose",
       })
 
-      expect(app.deployment?.error).toMatch(/secrets.*doesn't support/u)
+      expect(app.deployment?.error).toMatch(/`links`.*doesn't support/u)
       expect(appContainers()).toEqual([])
     })
   })

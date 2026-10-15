@@ -1016,8 +1016,28 @@ export class AppDriver {
     if (Object.keys(services).length === 0) {
       throw new Error("The Compose file has no services")
     }
+    // Secret and config files are bind mounted, from the host's path.
+    const hostFiles = (
+      objects: ComposeProject["secrets"]
+    ): ComposeProject["secrets"] =>
+      objects &&
+      Object.fromEntries(
+        Object.entries(objects).map(([key, object]) => [
+          key,
+          object.file !== undefined &&
+          (object.file === options.directory ||
+            object.file.startsWith(`${options.directory}/`))
+            ? {
+                ...object,
+                file: `${options.hostDirectory}${object.file.slice(options.directory.length)}`,
+              }
+            : object,
+        ])
+      )
     return {
       ...normalized,
+      ...(normalized.secrets && { secrets: hostFiles(normalized.secrets) }),
+      ...(normalized.configs && { configs: hostFiles(normalized.configs) }),
       networks: {
         ...normalized.networks,
         kiln_app: { external: true, name: this.#networkName(options.appId) },
