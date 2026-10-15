@@ -187,7 +187,7 @@ export const NotificationsBell = React.memo(function NotificationsBell({
           </PopoverTrigger>
         </TooltipTrigger>
         <TooltipContent
-          side="right"
+          side="bottom"
           align="center"
           hidden={tooltipHidden || open}
         >
