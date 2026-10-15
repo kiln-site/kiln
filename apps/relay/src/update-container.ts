@@ -319,9 +319,17 @@ const rollbackContainerReplacementEffect = Effect.fn(
       )
     } else if (before !== undefined) {
       for (const id of replacements) {
+        // Gone is gone, even if the removal's answer was lost.
         yield* attempt(
           "rollback.removeReplacement",
-          docker.removeContainer(id, { force: true, timeout: 90_000 })
+          docker.removeContainer(id, { force: true, timeout: 90_000 }).pipe(
+            Effect.catch((cause) =>
+              docker.inspectContainer(id).pipe(
+                Effect.andThen(Effect.fail(cause)),
+                Effect.catchIf(isDockerNotFound, () => Effect.void)
+              )
+            )
+          )
         )
       }
     }
