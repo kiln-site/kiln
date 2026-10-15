@@ -1,9 +1,9 @@
-import { mkdir, mkdtemp, rm } from "node:fs/promises"
+import { mkdir, mkdtemp, readFile, rm, stat } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { setImmediate as yieldToEventLoop } from "node:timers/promises"
 
-import { Effect } from "effect"
+import { Effect, Fiber } from "effect"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test"
 
 import type {
@@ -13,7 +13,7 @@ import type {
 } from "@workspace/contracts"
 import { nextScheduleOccurrence } from "@workspace/contracts"
 
-import { ScheduleManager } from "./schedules.js"
+import { ScheduleManager, type ScheduleManagerOptions } from "./schedules.js"
 
 const directories: Array<string> = []
 const minuteMs = 60_000
@@ -43,11 +43,11 @@ afterEach(async () => {
  * Advances virtual time in `stepMs` increments until `assertion` passes,
  * giving real file I/O a chance to finish between steps.
  */
-async function advanceUntil(assertion: () => void, stepMs = 0) {
+async function advanceUntil(assertion: () => void | Promise<void>, stepMs = 0) {
   const startedAt = performance.now()
   while (true) {
     try {
-      assertion()
+      await assertion()
       return
     } catch (error) {
       if (performance.now() - startedAt > 3_000) throw error
@@ -68,7 +68,7 @@ async function manager(
 ) {
   const directory = await mkdtemp(join(tmpdir(), "kiln-schedules-"))
   directories.push(directory)
-  const schedules = await ScheduleManager.make({
+  const options: ScheduleManagerOptions = {
     enqueueBackup:
       overrides.enqueueBackup ??
       (async () => {
@@ -84,8 +84,9 @@ async function manager(
     runInstancePower: async () => undefined,
     sendConsoleCommand: overrides.sendConsoleCommand ?? (async () => undefined),
     stateDirectory: directory,
-  })
-  return { directory, schedules }
+  }
+  const schedules = await ScheduleManager.make(options)
+  return { directory, restart: () => ScheduleManager.make(options), schedules }
 }
 
 const projection: RelayScheduleProjection = {
@@ -139,6 +140,100 @@ function runNow(schedules: ScheduleManager) {
 }
 
 describe("Relay schedule persistence", () => {
+  it.each(["empty", "disabled", "future"] as const)(
+    "leaves the state file untouched during idle ticks with %s schedules",
+    async (kind) => {
+      const { directory, schedules } = await manager()
+      if (kind !== "empty") {
+        await schedules.apply({
+          ...projection,
+          cron: "* * * * *",
+          enabled: kind === "future",
+        })
+      }
+      const statePath = join(directory, "schedules.json")
+      const before = await stat(statePath, { bigint: true })
+      const fiber = Effect.runFork(schedules.run())
+      try {
+        // Wait for each tick's file I/O to finish before advancing its sleep.
+        await advanceUntil(() => expect(vi.getTimerCount()).toBeGreaterThan(0))
+        for (let second = 0; second < 20; second++) {
+          await vi.advanceTimersByTimeAsync(1_000)
+          await advanceUntil(() =>
+            expect(vi.getTimerCount()).toBeGreaterThan(0)
+          )
+        }
+        const after = await stat(statePath, { bigint: true })
+        expect({ inode: after.ino, modified: after.mtimeNs }).toEqual({
+          inode: before.ino,
+          modified: before.mtimeNs,
+        })
+      } finally {
+        await Effect.runPromise(Fiber.interrupt(fiber))
+        schedules.close()
+      }
+    }
+  )
+
+  it("persists due runs before execution and preserves completed history on restart", async () => {
+    const commands: Array<string> = []
+    const { directory, restart, schedules } = await manager({
+      findInstance: async () => ({}),
+      sendConsoleCommand: async (_instanceId, command) => {
+        const state = JSON.parse(
+          await readFile(join(directory, "schedules.json"), "utf8")
+        )
+        expect(state.runs[0].status).toBe("running")
+        commands.push(command)
+      },
+    })
+    const applied = await schedules.apply({ ...projection, cron: "* * * * *" })
+    vi.setSystemTime(applied.nextRunAt!)
+    const fiber = Effect.runFork(schedules.run())
+    try {
+      await advanceUntil(() => {
+        expect(commands).toEqual(["say hello"])
+        expect(latestRun(schedules)?.status).toBe("succeeded")
+      })
+      await advanceUntil(async () => {
+        const state = JSON.parse(
+          await readFile(join(directory, "schedules.json"), "utf8")
+        )
+        expect(state.runs[0].status).toBe("succeeded")
+      })
+    } finally {
+      await Effect.runPromise(Fiber.interrupt(fiber))
+      schedules.close()
+    }
+
+    const recovered = await restart()
+    expect(latestRun(recovered)).toMatchObject({
+      scheduledAt: applied.nextRunAt,
+      status: "succeeded",
+    })
+    expect(recovered.overview().deployments).toEqual(
+      schedules.overview().deployments
+    )
+    recovered.close()
+  })
+
+  it("recovers an overdue schedule without a recent persisted heartbeat", async () => {
+    const { restart, schedules } = await manager()
+    const applied = await schedules.apply({ ...projection, cron: "* * * * *" })
+    schedules.close()
+    vi.advanceTimersByTime(2 * minuteMs)
+
+    const recovered = await restart()
+    expect(latestRun(recovered)).toMatchObject({
+      scheduledAt: applied.nextRunAt,
+      status: "missed",
+    })
+    expect(recovered.overview().deployments[0]?.nextRunAt).toBeGreaterThan(
+      Date.now()
+    )
+    recovered.close()
+  })
+
   it("keeps running due schedules after a failed tick", async () => {
     const commands: Array<string> = []
     const reportError = vi.fn()

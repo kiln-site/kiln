@@ -57,7 +57,6 @@ interface TargetExecutionState {
   readonly target: ScheduleTarget
 }
 
-const heartbeatPersistenceIntervalMs = 5_000
 const maxRetainedRuns = 1_000
 const scheduledBackupPollIntervalMs = 500
 const scheduledBackupWaitTimeoutMs = 6 * 60 * 60 * 1_000
@@ -113,7 +112,6 @@ export class ScheduleManager {
   readonly #options: ScheduleManagerOptions
   readonly #semaphore = Semaphore.makeUnsafe(1)
   readonly #statePath: string
-  #lastHeartbeatPersistedAt = 0
   #state: PersistedState
 
   private constructor(options: ScheduleManagerOptions, state: PersistedState) {
@@ -313,22 +311,15 @@ export class ScheduleManager {
   async #tick() {
     const due = await this.#serialized(async () => {
       const now = Date.now()
-      const persistHeartbeat =
-        now - this.#lastHeartbeatPersistedAt >= heartbeatPersistenceIntervalMs
       const hasDueSchedule = this.#state.schedules.some(
         (schedule) =>
           schedule.enabled &&
           schedule.nextRunAt !== null &&
           schedule.nextRunAt <= now
       )
-      if (!hasDueSchedule && !persistHeartbeat) {
-        this.#state.lastHeartbeatAt = now
-        return []
-      }
+      if (!hasDueSchedule) return []
 
-      const previousState = hasDueSchedule ? structuredClone(this.#state) : null
-      const previousHeartbeatAt = this.#state.lastHeartbeatAt
-      const previousHeartbeatPersistedAt = this.#lastHeartbeatPersistedAt
+      const previousState = structuredClone(this.#state)
       const claimed: Array<{
         definition: RelayScheduleProjection
         scheduledAt: number
@@ -369,18 +360,13 @@ export class ScheduleManager {
               this.#upsertRun(running)
             }
             this.#state.lastHeartbeatAt = now
-            if (claimed.length > 0 || persistHeartbeat) {
-              await this.#persist()
-              this.#lastHeartbeatPersistedAt = now
-            }
+            await this.#persist()
             return claimed
           })
         )
       )
       if (Result.isFailure(result)) {
-        if (previousState) this.#state = previousState
-        else this.#state.lastHeartbeatAt = previousHeartbeatAt
-        this.#lastHeartbeatPersistedAt = previousHeartbeatPersistedAt
+        this.#state = previousState
         throw result.failure
       }
       return result.success
