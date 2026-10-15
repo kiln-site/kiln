@@ -30,6 +30,10 @@ import {
 
 import { RelayStateError } from "./errors.js"
 import { BROWSER_AUTHORIZATION_FLOOR_RETENTION_MS } from "../browser-security.js"
+import {
+  makeRelayScheduleState,
+  type RelayScheduleState,
+} from "./schedule-state.js"
 
 export type RelayClientRole = "custom" | "full_access" | "read_only"
 
@@ -349,6 +353,7 @@ const RelayProvisioningJobRowSchema = Schema.Struct({
 export class RelayStateStore extends Context.Service<
   RelayStateStore,
   {
+    readonly schedules: RelayScheduleState
     readonly listInstanceDatabaseConnections: (
       instanceId: string
     ) => Effect.Effect<
@@ -1011,6 +1016,36 @@ const migrations = SqliteMigrator.fromRecord({
       ALTER TABLE relay_web_routes ADD COLUMN service TEXT
     `
   }),
+  "18_schedule_state": Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient
+    yield* sql`CREATE TABLE relay_schedules (
+      schedule_id TEXT PRIMARY KEY NOT NULL,
+      revision INTEGER NOT NULL CHECK (revision > 0),
+      enabled INTEGER NOT NULL CHECK (enabled IN (0, 1)),
+      next_run_at INTEGER,
+      definition_json TEXT NOT NULL
+    ) STRICT`
+    yield* sql`CREATE INDEX relay_schedules_due ON relay_schedules (next_run_at, schedule_id)
+      WHERE enabled = 1 AND next_run_at IS NOT NULL`
+    yield* sql`CREATE TABLE relay_schedule_tombstones (
+      schedule_id TEXT PRIMARY KEY NOT NULL,
+      revision INTEGER NOT NULL CHECK (revision > 0)
+    ) STRICT`
+    yield* sql`CREATE TABLE relay_schedule_runs (
+      run_id TEXT PRIMARY KEY NOT NULL,
+      schedule_id TEXT NOT NULL,
+      revision INTEGER NOT NULL CHECK (revision > 0),
+      scheduled_at INTEGER NOT NULL,
+      started_at INTEGER NOT NULL,
+      finished_at INTEGER,
+      status TEXT NOT NULL CHECK (status IN ('running', 'succeeded', 'partial', 'failed', 'noop', 'interrupted', 'missed')),
+      sequence_attempts_json TEXT NOT NULL,
+      target_runs_json TEXT NOT NULL,
+      UNIQUE (schedule_id, scheduled_at)
+    ) STRICT`
+    yield* sql`CREATE INDEX relay_schedule_runs_history ON relay_schedule_runs (scheduled_at DESC, run_id DESC)`
+    yield* sql`CREATE INDEX relay_schedule_runs_unfinished ON relay_schedule_runs (run_id) WHERE status = 'running'`
+  }),
 })
 
 function scrubBackupTaskInputJson(inputJson: string): string {
@@ -1541,6 +1576,7 @@ const makeRelayStateStore = Effect.gen(function* () {
         : ""
 
   return RelayStateStore.of({
+    schedules: makeRelayScheduleState(sql),
     listInstanceDatabaseConnections: (instanceId) =>
       run(
         "list_instance_database_connections",

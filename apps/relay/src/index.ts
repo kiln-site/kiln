@@ -543,6 +543,7 @@ const scheduleManager = await ScheduleManager.make({
     await docker.sendCommand(instance, command)
   },
   stateDirectory: `${config.dataDirectory}/schedules`,
+  state: startup.state.schedules,
 })
 const scheduleFiber = forkRelayEffect(
   "relay.schedules.worker",

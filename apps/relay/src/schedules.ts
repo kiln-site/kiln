@@ -1,4 +1,4 @@
-import { mkdir, readFile } from "node:fs/promises"
+import { link, readFile, unlink } from "node:fs/promises"
 import { resolve } from "node:path"
 
 import { Data, Effect, Result, Schedule, Semaphore } from "effect"
@@ -17,7 +17,6 @@ import {
   scheduleStableId,
   type BackupTaskInput,
   type RelayBackupTask,
-  type RelayScheduleDeployment,
   type RelayScheduleAction,
   type RelayScheduleProjection,
   type ScheduleActionAttempt,
@@ -26,25 +25,13 @@ import {
   type ScheduleTarget,
 } from "@workspace/contracts"
 
-import { writeFileAtomic } from "./effect/atomic-file.js"
+import {
+  legacyScheduleStateSchema,
+  relayTimezone,
+  type RelayScheduleState,
+} from "./effect/schedule-state.js"
 import { ensuringPromise, promiseEffect } from "./effect/promise.js"
 
-const persistedScheduleSchema = relayScheduleProjectionSchema.safeExtend({
-  nextRunAt: z.number().int().nonnegative().nullable(),
-})
-
-const persistedStateSchema = z
-  .object({
-    lastHeartbeatAt: z.number().int().nonnegative(),
-    runs: z.array(scheduleRunSchema).max(1_000),
-    schedules: z.array(persistedScheduleSchema),
-    tombstones: z.record(z.string(), z.number().int().positive()),
-    version: z.literal(1),
-  })
-  .strict()
-
-type PersistedSchedule = z.infer<typeof persistedScheduleSchema>
-type PersistedState = z.infer<typeof persistedStateSchema>
 type TargetScheduleAction = Exclude<RelayScheduleAction, { type: "wait" }>
 
 interface TargetExecutionState {
@@ -57,14 +44,12 @@ interface TargetExecutionState {
   readonly target: ScheduleTarget
 }
 
-const maxRetainedRuns = 1_000
+const scheduleBatchSize = 32
 const scheduledBackupPollIntervalMs = 500
 const scheduledBackupWaitTimeoutMs = 6 * 60 * 60 * 1_000
 const maximumTimerDurationMs = 2_147_483_647
 const targetExecutionConcurrency = 8
 const scheduleTickIntervalMs = 1_000
-const scheduleTickRetryBaseMs = 100
-const relayTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC"
 
 class ScheduleTickError extends Data.TaggedError("ScheduleTickError")<{
   readonly cause: unknown
@@ -103,6 +88,7 @@ export interface ScheduleManagerOptions {
     instanceId: string,
     command: string
   ) => Promise<void>
+  readonly state: RelayScheduleState
   readonly stateDirectory: string
 }
 
@@ -111,22 +97,38 @@ export class ScheduleManager {
   readonly #occurrenceFibers = new Set<Fiber.Fiber<void, unknown>>()
   readonly #options: ScheduleManagerOptions
   readonly #semaphore = Semaphore.makeUnsafe(1)
-  readonly #statePath: string
-  #persistencePending = false
-  #state: PersistedState
+  readonly #bootAt = Date.now()
+  #nextRunAt: number | null | undefined
+  #nextClaimAttemptAt = 0
+  #claimFailures = 0
 
-  private constructor(options: ScheduleManagerOptions, state: PersistedState) {
+  private constructor(options: ScheduleManagerOptions) {
     this.#options = options
-    this.#state = state
-    this.#statePath = resolve(options.stateDirectory, "schedules.json")
   }
 
   static async make(options: ScheduleManagerOptions) {
-    await mkdir(options.stateDirectory, { recursive: true, mode: 0o700 })
+    const manager = new ScheduleManager(options)
     const path = resolve(options.stateDirectory, "schedules.json")
-    const state = await readScheduleState(path)
-    const manager = new ScheduleManager(options, state)
-    await manager.#recoverAfterRestart()
+    if (!(await Effect.runPromise(options.state.legacyImported()))) {
+      const state = await readScheduleState(path)
+      await Effect.runPromise(options.state.importLegacy(state))
+    }
+    // Linking preserves the original archive if an old JSON file is restored.
+    // The import marker also covers a crash before retiring the source file.
+    await Effect.runPromise(
+      promiseEffect(() => link(path, `${path}.migrated`)).pipe(
+        Effect.andThen(promiseEffect(() => unlink(path))),
+        Effect.catch((cause) =>
+          isMissingFile(cause)
+            ? Effect.void
+            : Effect.logWarning(
+                "Legacy schedule file was left in place; SQLite is authoritative and the migration archive is preserved",
+                { cause, path }
+              )
+        )
+      )
+    )
+    await Effect.runPromise(options.state.interruptRuns(manager.#bootAt))
     return manager
   }
 
@@ -139,20 +141,8 @@ export class ScheduleManager {
             message: "Relay schedule tick failed",
           })
       ),
-      Effect.retry({
-        schedule: Schedule.exponential(
-          `${scheduleTickRetryBaseMs} millis`
-        ).pipe(Schedule.jittered),
-        times: 3,
-      }),
       Effect.catchTag("ScheduleTickError", (failure) =>
-        Effect.sync(() =>
-          this.#options.reportError?.(failure.message, failure.cause)
-        ).pipe(
-          Effect.andThen(
-            Effect.logError(failure.message, { cause: failure.cause })
-          )
-        )
+        Effect.sync(() => this.#claimFailed(failure.cause))
       ),
       Effect.andThen(Effect.sleep(`${scheduleTickIntervalMs} millis`)),
       Effect.forever
@@ -165,221 +155,105 @@ export class ScheduleManager {
   }
 
   apply(projection: RelayScheduleProjection) {
+    const input = relayScheduleProjectionSchema.parse(projection)
+    const nextRunAt = input.enabled
+      ? nextScheduleOccurrence(input.cron, relayTimezone, Date.now()).getTime()
+      : null
     return this.#serialized(async () => {
-      const input = relayScheduleProjectionSchema.parse(projection)
-      const tombstoneRevision = this.#state.tombstones[input.id] ?? 0
-      const current = this.#state.schedules.find(
-        (schedule) => schedule.id === input.id
+      const applied = await Effect.runPromise(
+        this.#options.state.apply(input, nextRunAt)
       )
-      if (tombstoneRevision >= input.revision) {
-        return deployment(input.id, tombstoneRevision, null)
-      }
-      if (current && current.revision > input.revision) {
-        return deployment(current.id, current.revision, current.nextRunAt)
-      }
-      const nextRunAt = input.enabled
-        ? nextScheduleOccurrence(
-            input.cron,
-            relayTimezone,
-            Date.now()
-          ).getTime()
-        : null
-      const stored: PersistedSchedule = { ...input, nextRunAt }
-      this.#state.schedules = [
-        ...this.#state.schedules.filter((schedule) => schedule.id !== input.id),
-        stored,
-      ]
-      delete this.#state.tombstones[input.id]
-      await this.#persist()
-      return deployment(input.id, input.revision, nextRunAt)
+      this.#nextRunAt = undefined
+      return applied
     })
   }
 
   remove(input: { revision: number; scheduleId: string }) {
     return this.#serialized(async () => {
-      const scheduleId = z.uuid().parse(input.scheduleId)
-      const revision = z.number().int().positive().parse(input.revision)
-      const current = this.#state.schedules.find(
-        (schedule) => schedule.id === scheduleId
+      const removed = await Effect.runPromise(
+        this.#options.state.remove({
+          revision: z.number().int().positive().parse(input.revision),
+          scheduleId: z.uuid().parse(input.scheduleId),
+        })
       )
-      const appliedRevision = Math.max(
-        revision,
-        current?.revision ?? 0,
-        this.#state.tombstones[scheduleId] ?? 0
-      )
-      this.#state.schedules = this.#state.schedules.filter(
-        (schedule) => schedule.id !== scheduleId
-      )
-      this.#state.tombstones[scheduleId] = appliedRevision
-      await this.#persist()
-      return deployment(scheduleId, appliedRevision, null)
+      this.#nextRunAt = undefined
+      return removed
     })
   }
 
-  async runNow(input: { revision: number; scheduleId: string }) {
-    const occurrence = await this.#serialized(async () => {
-      const scheduleId = z.uuid().parse(input.scheduleId)
-      const revision = z.number().int().positive().parse(input.revision)
-      const schedule = this.#state.schedules.find(
-        (candidate) => candidate.id === scheduleId
-      )
-      if (!schedule) throw new Error("Schedule is not deployed on this Relay")
-      if (schedule.revision !== revision) {
-        throw new Error("Schedule deployment is out of date")
+  runNow(input: { revision: number; scheduleId: string }) {
+    return this.#serialized(async () => {
+      if (this.#occurrenceFibers.size >= scheduleBatchSize) {
+        throw new Error(
+          "Relay schedule execution capacity reached; try again later"
+        )
       }
-      const latestScheduledAt = this.#state.runs.reduce(
-        (latest, run) =>
-          run.scheduleId === scheduleId
-            ? Math.max(latest, run.scheduledAt)
-            : latest,
-        0
+      const occurrence = await Effect.runPromise(
+        this.#options.state.runNow(
+          {
+            revision: z.number().int().positive().parse(input.revision),
+            scheduleId: z.uuid().parse(input.scheduleId),
+          },
+          Date.now(),
+          this.#options.relayId
+        )
       )
-      const scheduledAt = Math.max(Date.now(), latestScheduledAt + 1)
-      const { nextRunAt: _, ...definition } = schedule
-      const run = scheduleRunSchema.parse({
-        finishedAt: scheduledAt,
-        id: scheduleStableId(schedule.id, scheduledAt, this.#options.relayId),
-        revision: schedule.revision,
-        scheduleId: schedule.id,
-        scheduledAt,
-        startedAt: scheduledAt,
-        status: "running",
-        targetRuns: [],
-      })
-      this.#upsertRun(run)
-      await this.#persist()
-      return { definition, run, scheduledAt }
+      if ("error" in occurrence) throw new Error(occurrence.error)
+      this.#launchOccurrence(occurrence.definition, occurrence.scheduledAt)
+      return occurrence.run
     })
-    this.#launchOccurrence(occurrence.definition, occurrence.scheduledAt)
-    return occurrence.run
   }
 
   overview(scheduleIds?: ReadonlyArray<string>) {
-    const allowed = scheduleIds
-      ? new Set(scheduleIds.map((id) => z.uuid().parse(id)))
-      : null
-    const deployments: Array<RelayScheduleDeployment> = this.#state.schedules
-      .filter((schedule) => !allowed || allowed.has(schedule.id))
-      .map((schedule) =>
-        deployment(schedule.id, schedule.revision, schedule.nextRunAt)
-      )
-    const runs = this.#state.runs.filter(
-      (run) => !allowed || allowed.has(run.scheduleId)
+    return Effect.runPromise(
+      this.#options.state.overview(scheduleIds?.map((id) => z.uuid().parse(id)))
     )
-    return { deployments, runs }
   }
 
-  async #recoverAfterRestart() {
-    const now = Date.now()
-    this.#state.runs = this.#state.runs.map((run) =>
-      run.status === "running"
-        ? { ...run, finishedAt: now, status: "interrupted" }
-        : run
-    )
-    for (const schedule of this.#state.schedules) {
-      if (
-        !schedule.enabled ||
-        schedule.nextRunAt === null ||
-        schedule.nextRunAt > now
-      ) {
-        continue
-      }
-      const run = scheduleRunSchema.parse({
-        finishedAt: now,
-        id: scheduleStableId(
-          schedule.id,
-          schedule.nextRunAt,
-          this.#options.relayId
-        ),
-        revision: schedule.revision,
-        scheduleId: schedule.id,
-        scheduledAt: schedule.nextRunAt,
-        startedAt: now,
-        status: "missed",
-        targetRuns: [],
-      })
-      this.#upsertRun(run)
-      schedule.nextRunAt = nextScheduleOccurrence(
-        schedule.cron,
-        relayTimezone,
-        now
-      ).getTime()
+  // Storage failures affect every schedule, so one backoff covers them all.
+  #claimFailed(cause: unknown) {
+    if (this.#claimFailures++ === 0) {
+      this.#options.reportError?.("Relay schedule claim failed", cause)
     }
-    this.#state.lastHeartbeatAt = now
-    await this.#persist()
+    this.#nextClaimAttemptAt =
+      Date.now() +
+      Math.min(60_000, 1_000 * 2 ** Math.min(this.#claimFailures - 1, 6))
   }
 
-  async #tick() {
-    const due = await this.#serialized(async () => {
+  #tick() {
+    return this.#serialized(async () => {
       const now = Date.now()
-      const hasDueSchedule = this.#state.schedules.some(
-        (schedule) =>
-          schedule.enabled &&
-          schedule.nextRunAt !== null &&
-          schedule.nextRunAt <= now
-      )
-      if (!hasDueSchedule) {
-        if (this.#persistencePending) await this.#persist()
-        return []
-      }
-
-      const previousState = structuredClone(this.#state)
-      const previousPersistencePending = this.#persistencePending
-      const claimed: Array<{
-        definition: RelayScheduleProjection
-        scheduledAt: number
-      }> = []
-      const result = await Effect.runPromise(
-        Effect.result(
-          promiseEffect(async () => {
-            for (const schedule of this.#state.schedules) {
-              if (
-                !schedule.enabled ||
-                schedule.nextRunAt === null ||
-                schedule.nextRunAt > now
-              ) {
-                continue
-              }
-              const scheduledAt = schedule.nextRunAt
-              const { nextRunAt: _, ...definition } = schedule
-              claimed.push({ definition, scheduledAt })
-              schedule.nextRunAt = nextScheduleOccurrence(
-                schedule.cron,
-                relayTimezone,
-                now
-              ).getTime()
-              const running = scheduleRunSchema.parse({
-                finishedAt: now,
-                id: scheduleStableId(
-                  schedule.id,
-                  scheduledAt,
-                  this.#options.relayId
-                ),
-                revision: schedule.revision,
-                scheduleId: schedule.id,
-                scheduledAt,
-                startedAt: now,
-                status: "running",
-                targetRuns: [],
-              })
-              this.#upsertRun(running)
-            }
-            this.#state.lastHeartbeatAt = now
-            await this.#persist()
-            return claimed
-          })
+      if (now < this.#nextClaimAttemptAt) return
+      if (this.#nextRunAt === undefined) {
+        this.#nextRunAt = await Effect.runPromise(
+          this.#options.state.nextRunAt()
         )
-      )
-      if (Result.isFailure(result)) {
-        this.#state = previousState
-        this.#persistencePending = previousPersistencePending
-        throw result.failure
       }
-      return result.success
+      if (this.#nextRunAt === null || this.#nextRunAt > now) {
+        this.#claimFailures = 0
+        return
+      }
+      this.#nextRunAt = undefined
+      while (true) {
+        const available = scheduleBatchSize - this.#occurrenceFibers.size
+        if (available <= 0) return
+        const due = await Effect.runPromise(
+          this.#options.state.claimDue(
+            now,
+            this.#bootAt,
+            this.#options.relayId,
+            available
+          )
+        )
+        for (const occurrence of due.occurrences) {
+          if (occurrence.run.status === "running")
+            this.#launchOccurrence(occurrence.definition, occurrence.scheduledAt)
+        }
+        if (due.failure) return this.#claimFailed(due.failure.cause)
+        this.#claimFailures = 0
+        if (!due.hasMore) return
+      }
     })
-    for (const occurrence of due) {
-      this.#launchOccurrence(occurrence.definition, occurrence.scheduledAt)
-    }
   }
 
   #launchOccurrence(definition: RelayScheduleProjection, scheduledAt: number) {
@@ -574,10 +448,31 @@ export class ScheduleManager {
         : targetStatus,
       targetRuns,
     })
-    await this.#serialized(async () => {
-      this.#upsertRun(run)
-      await this.#persist()
-    })
+    // Keep only this executing occurrence alive while its completion is pending.
+    // A storage outage must not discard the result or re-execute its actions.
+    signal?.throwIfAborted()
+    let reported = false
+    await Effect.runPromise(
+      this.#options.state.completeRun(run).pipe(
+        Effect.tapError((cause) =>
+          Effect.sync(() => {
+            if (reported) return
+            reported = true
+            this.#options.reportError?.(
+              "Relay schedule completion write failed",
+              cause
+            )
+          })
+        ),
+        Effect.retry({
+          schedule: Schedule.min([
+            Schedule.exponential("1 second"),
+            Schedule.spaced("1 minute"),
+          ]),
+        })
+      ),
+      signal ? { signal } : undefined
+    )
   }
 
   async #executeTargetAction(
@@ -858,25 +753,10 @@ export class ScheduleManager {
     )
   }
 
-  #upsertRun(run: ScheduleRun) {
-    this.#state.runs = [
-      run,
-      ...this.#state.runs.filter((candidate) => candidate.id !== run.id),
-    ].slice(0, maxRetainedRuns)
-  }
-
   #serialized<TResult>(operation: () => Promise<TResult>): Promise<TResult> {
     return Effect.runPromise(
       this.#semaphore.withPermit(promiseEffect(operation))
     )
-  }
-
-  async #persist() {
-    this.#persistencePending = true
-    await Effect.runPromise(
-      writeFileAtomic(this.#statePath, JSON.stringify(this.#state), 0o600)
-    )
-    this.#persistencePending = false
   }
 }
 
@@ -907,14 +787,6 @@ async function waitForDuration(durationMs: number, signal?: AbortSignal) {
     )
     remainingMs -= chunkMs
   }
-}
-
-function deployment(
-  scheduleId: string,
-  acknowledgedRevision: number,
-  nextRunAt: number | null
-): RelayScheduleDeployment {
-  return { acknowledgedRevision, nextRunAt, scheduleId }
 }
 
 function attempt(input: {
@@ -1025,33 +897,24 @@ function aggregateRunStatus(
   return "noop" as const
 }
 
-async function readScheduleState(path: string): Promise<PersistedState> {
-  const loaded = await Effect.runPromise(
-    Effect.result(
-      promiseEffect(async () =>
-        persistedStateSchema.parse(JSON.parse(await readFile(path, "utf8")))
+function readScheduleState(path: string) {
+  return Effect.runPromise(
+    promiseEffect(() => readFile(path, "utf8")).pipe(
+      Effect.flatMap((contents) =>
+        Effect.try({
+          try: () => legacyScheduleStateSchema.parse(JSON.parse(contents)),
+          catch: (cause) => cause,
+        })
+      ),
+      Effect.catch((cause) =>
+        isMissingFile(cause) ? Effect.succeed(null) : Effect.fail(cause)
       )
     )
   )
-  if (Result.isFailure(loaded)) {
-    const cause = loaded.failure
-    if (
-      cause &&
-      typeof cause === "object" &&
-      "code" in cause &&
-      cause.code === "ENOENT"
-    ) {
-      return {
-        lastHeartbeatAt: Date.now(),
-        runs: [],
-        schedules: [],
-        tombstones: {},
-        version: 1,
-      }
-    }
-    throw cause
-  }
-  return loaded.success
+}
+
+function isMissingFile(cause: unknown) {
+  return cause instanceof Error && "code" in cause && cause.code === "ENOENT"
 }
 
 function errorMessage(cause: unknown) {
