@@ -561,16 +561,86 @@ export class FakeDocker {
   }
 
   /**
-   * The `command()` boundary. Relay no longer runs Docker CLI commands the
-   * fake models, so any that reach it are reported.
+   * The `command()` boundary. Of the processes the Relay runs, the fake
+   * models standalone Compose's `up` and buildx's `build`, which Relay runs
+   * for app deployments; anything else, the `docker` CLI included, is
+   * reported.
    */
   async run(
     executable: string,
     arguments_: ReadonlyArray<string>,
     _options: CommandOptions = {},
-    _input?: string
+    input?: string
   ): Promise<CommandResult> {
+    if (executable === "docker-buildx" && arguments_[0] === "build") {
+      return this.#buildxBuild(arguments_)
+    }
+    if (
+      executable === "docker-compose" &&
+      arguments_.slice(-4).join(" ") === "up --detach --build --remove-orphans"
+    ) {
+      return this.#composeUp(arguments_, input ?? "")
+    }
     return this.#unsupported(`${executable} ${arguments_.join(" ")}`)
+  }
+
+  // `docker-buildx build --progress plain [--label k=v]… --tag T --file F
+  // context`: the image, tagged and labelled.
+  #buildxBuild(arguments_: ReadonlyArray<string>): CommandResult {
+    const labels: Record<string, string> = {}
+    let tag = ""
+    for (let index = 1; index < arguments_.length; index += 1) {
+      const argument = arguments_[index]
+      if (argument === "--label") {
+        const [key, value = ""] = splitOnce(arguments_[++index] ?? "", "=")
+        labels[key] = value
+      } else if (argument === "--tag") tag = arguments_[++index] ?? ""
+      else if (argument === "--file" || argument === "--progress") index += 1
+    }
+    this.images.set(tag, labels)
+    return {
+      stderr: `#0 building with "default" instance using docker driver\n#1 naming to docker.io/library/${tag} done\n`,
+      stdout: "",
+    }
+  }
+
+  // `docker-compose … -p <project> … up --detach --build --remove-orphans`
+  // with the project on stdin: each service's container, replacing the
+  // project's previous ones.
+  #composeUp(arguments_: ReadonlyArray<string>, input: string): CommandResult {
+    const project = arguments_[arguments_.indexOf("-p") + 1] ?? ""
+    const definition = JSON.parse(input) as {
+      services: Record<
+        string,
+        {
+          container_name?: string
+          image?: string
+          labels?: Record<string, string>
+        }
+      >
+    }
+    for (const container of this.containers.values()) {
+      if (container.labels["com.docker.compose.project"] === project) {
+        this.containers.delete(container.id)
+      }
+    }
+    const lines: Array<string> = []
+    for (const [service, settings] of Object.entries(definition.services)) {
+      const name = settings.container_name ?? `${project}-${service}-1`
+      this.addContainer({
+        image: settings.image ?? `${project}-${service}`,
+        labels: {
+          ...settings.labels,
+          "com.docker.compose.oneoff": "False",
+          "com.docker.compose.project": project,
+          "com.docker.compose.service": service,
+        },
+        name,
+        running: true,
+      })
+      lines.push(` Container ${name}  Started`)
+    }
+    return { stderr: `${lines.join("\n")}\n`, stdout: "" }
   }
 
   #begin(): void {
@@ -2070,13 +2140,18 @@ export async function commandLines(
   executable: string,
   arguments_: ReadonlyArray<string>,
   onLine: (line: string) => void,
-  options: { signal?: AbortSignal; timeout?: number } = {}
+  options: { input?: string; signal?: AbortSignal; timeout?: number } = {}
 ): Promise<void> {
-  const result = await fakeDocker.run(executable, arguments_, {
-    maxBuffer: Number.POSITIVE_INFINITY,
-    signal: options.signal,
-    timeout: options.timeout,
-  })
+  const result = await fakeDocker.run(
+    executable,
+    arguments_,
+    {
+      maxBuffer: Number.POSITIVE_INFINITY,
+      signal: options.signal,
+      timeout: options.timeout,
+    },
+    options.input
+  )
   for (const output of [result.stdout, result.stderr]) {
     for (const line of output.split("\n")) if (line) onLine(line)
   }

@@ -626,9 +626,11 @@ export class AppDriver {
     })
     await writeFile(dockerfile, input.config.dockerfile, { mode: 0o600 })
     this.#log(input.appId, deployment, `Building ${tag}`)
+    // What `docker build` runs: buildx's build, with the default builder.
     await this.#stream(
       input.appId,
       deployment,
+      "docker-buildx",
       [
         "build",
         "--progress",
@@ -856,7 +858,8 @@ export class AppDriver {
       KILN_APP_ID: input.appId,
       KILN_DATA: hostDirectory,
     }
-    const compose = ["compose", "--ansi", "never", "-p", project]
+    // The standalone Compose binary, which `docker compose` runs.
+    const compose = ["--ansi", "never", "-p", project]
     compose.push("--project-directory", directory, "-f", "-")
     log("Reading Compose file")
     const normalized = await composeConfig(
@@ -903,6 +906,7 @@ export class AppDriver {
     await this.#stream(
       input.appId,
       deployment,
+      "docker-compose",
       [
         ...compose,
         "--progress",
@@ -1113,11 +1117,12 @@ export class AppDriver {
   async #stream(
     appId: string,
     deployment: Deployment,
+    executable: "docker-buildx" | "docker-compose",
     arguments_: Array<string>,
     options: { env?: NodeJS.ProcessEnv; input?: string; timeout: number }
   ) {
     await commandLines(
-      "docker",
+      executable,
       arguments_,
       (line) => this.#logOutput(appId, deployment, line),
       { ...options, signal: deployment.abort.signal }
@@ -1467,7 +1472,7 @@ interface ComposeProject {
   [key: string]: unknown
 }
 
-// What `docker compose config` makes of a Compose file, interpolated and in
+// What `docker-compose config` makes of a Compose file, interpolated and in
 // its long form, so services can be changed without parsing YAML here.
 function composeConfig(
   arguments_: ReadonlyArray<string>,
@@ -1477,7 +1482,7 @@ function composeConfig(
   onWarning: (line: string) => void
 ): Promise<ComposeProject> {
   return new Promise((resolve, reject) => {
-    const child = spawn("docker", arguments_, {
+    const child = spawn("docker-compose", arguments_, {
       env,
       signal,
       stdio: ["pipe", "pipe", "pipe"],
