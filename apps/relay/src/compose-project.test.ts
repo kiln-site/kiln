@@ -382,7 +382,82 @@ describe("Compose features Kiln can't run", () => {
   })
 })
 
+describe("Compose files, bounded", () => {
+  it("refuses aliases that expand past what it reads, before walking them", async () => {
+    // 62 KB: a 30,000-entry list, aliased 300 times.
+    const yaml = [
+      `x-big: &big [${Array.from({ length: 30_000 }, () => "a").join(",")}]`,
+      "services:",
+      "  web:",
+      "    image: nginx",
+      ...Array.from({ length: 300 }, (_, index) => `x-copy-${index}: *big`),
+    ].join("\n")
+
+    const started = performance.now()
+    await expect(load(yaml)).rejects.toThrow(
+      "The Compose file comes to more than 1000000 values with its aliases expanded"
+    )
+    expect(performance.now() - started).toBeLessThan(1_000)
+  })
+
+  it("reads an alias used many times once, with its variables", async () => {
+    const { project } = await load(
+      [
+        "x-env: &env",
+        ...Array.from({ length: 1_000 }, (_, index) => `  K${index}: \${VALUE}`),
+        "services:",
+        ...Array.from({ length: 50 }, (_, index) =>
+          [`  s${index}:`, "    image: nginx", "    environment: *env"].join("\n")
+        ),
+      ].join("\n"),
+      { VALUE: "set" }
+    )
+
+    expect(Object.keys(project.services)).toHaveLength(50)
+    expect(project.services.s49?.environment?.K999).toBe("set")
+  })
+
+  it("refuses a file nested deeper than it reads", async () => {
+    await expect(
+      load(`services:\n  web:\n    image: nginx\n    labels: { a: ${"[".repeat(300)}${"]".repeat(300)} }\n`)
+    ).rejects.toThrow("The Compose file nests deeper than 256 levels")
+  })
+
+  it("orders a long chain of dependencies without recursing on its length", async () => {
+    const { project } = await load(
+      [
+        "services:",
+        ...Array.from({ length: 5_000 }, (_, index) =>
+          [
+            `  s${index}:`,
+            "    image: nginx",
+            ...(index > 0 ? [`    depends_on: [s${index - 1}]`] : []),
+          ].join("\n")
+        ),
+      ].join("\n")
+    )
+
+    expect(Object.keys(project.services)).toHaveLength(5_000)
+  })
+})
+
 describe("Compose variable substitution, bounded", () => {
+  it("substitutes a thousand defaults on one line, one after another", async () => {
+    const { project } = await load(
+      `services:\n  web:\n    image: nginx\n    environment:\n      LONG: "${"${UNSET:-x}".repeat(1_000)}"\n`
+    )
+
+    expect(project.services.web?.environment?.LONG).toBe("x".repeat(1_000))
+  })
+
+  it("refuses defaults nested deeper than it reads", async () => {
+    const nested = `${"${A:-".repeat(101)}x${"}".repeat(101)}`
+
+    await expect(
+      load(`services:\n  web:\n    image: nginx\n    environment:\n      DEEP: "${nested}"\n`)
+    ).rejects.toThrow("variable defaults nest more than 100 deep")
+  })
+
   it("refuses a .env whose values double without end", async () => {
     await writeFile(
       join(directory, ".env"),

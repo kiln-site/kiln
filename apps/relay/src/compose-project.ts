@@ -278,10 +278,86 @@ const MAX_SUBSTITUTED_VALUE = 1024 * 1024
 const MAX_SUBSTITUTED_TOTAL = 16 * 1024 * 1024
 // `.env` and env files are read whole; none is near this.
 const MAX_FILE_BYTES = 4 * 1024 * 1024
+// What a Compose file may come to with its aliases read as copies, as
+// compose-go (go-yaml) reads them: a 62 KB file aliasing a 30,000-entry
+// list 300 times is 9 million nodes. Real files are thousands.
+const MAX_TREE_NODES = 1_000_000
+const MAX_TREE_DEPTH = 256
+// How deep `${A:-${B:-…}}` defaults may nest.
+const MAX_SUBSTITUTION_DEPTH = 100
 
 /** What one load's substitutions have produced so far. */
 interface Expansion {
   total: number
+  /** How deeply the substitution under way is nested in defaults. */
+  depth: number
+}
+
+/**
+ * Fails a file whose tree, with every alias read as a copy of what it
+ * names, has more nodes or nests deeper than Relay reads, or names itself,
+ * before anything walks it. Each shared node is counted once, by identity.
+ */
+function checkTree(root: Value): void {
+  if (root === null || typeof root !== "object") return
+  const sizes = new Map<object, number>()
+  const heights = new Map<object, number>()
+  const open = new Set<object>()
+  const stack: Array<{
+    readonly node: object
+    readonly children: ReadonlyArray<Value>
+    index: number
+  }> = []
+  const enter = (node: object) => {
+    if (stack.length >= MAX_TREE_DEPTH) {
+      throw new ComposeError(
+        `The Compose file nests deeper than ${MAX_TREE_DEPTH} levels`
+      )
+    }
+    open.add(node)
+    stack.push({
+      children: Array.isArray(node) ? node : Object.values(node),
+      index: 0,
+      node,
+    })
+  }
+  enter(root)
+  while (stack.length > 0) {
+    const top = stack.at(-1)!
+    if (top.index < top.children.length) {
+      const child = top.children[top.index]
+      top.index += 1
+      if (child !== null && typeof child === "object") {
+        if (open.has(child)) {
+          throw new ComposeError("The Compose file has an alias that contains itself")
+        }
+        if (!sizes.has(child)) enter(child)
+      }
+      continue
+    }
+    stack.pop()
+    open.delete(top.node)
+    let size = 1
+    let height = 1
+    for (const child of top.children) {
+      if (child !== null && typeof child === "object") {
+        size += sizes.get(child)!
+        height = Math.max(height, heights.get(child)! + 1)
+      } else size += 1
+    }
+    if (size > MAX_TREE_NODES) {
+      throw new ComposeError(
+        `The Compose file comes to more than ${MAX_TREE_NODES} values with its aliases expanded`
+      )
+    }
+    if (height > MAX_TREE_DEPTH) {
+      throw new ComposeError(
+        `The Compose file nests deeper than ${MAX_TREE_DEPTH} levels`
+      )
+    }
+    sizes.set(top.node, size)
+    heights.set(top.node, height)
+  }
 }
 
 // Integers with a leading 0 are octal (`mode: 0440`), as in the YAML
@@ -313,8 +389,9 @@ export async function loadComposeProject(
   }
   const raw: Value = document.toJS({ maxAliasCount: 1_000 })
   if (!isMapping(raw)) throw new ComposeError("The Compose file is empty")
+  checkTree(raw)
 
-  const expansion: Expansion = { total: 0 }
+  const expansion: Expansion = { depth: 0, total: 0 }
   const warned = new Set<string>()
   const onUnset = (name: string) => {
     if (warned.has(name)) return
@@ -345,7 +422,14 @@ export async function loadComposeProject(
   }
   const lookup: Lookup = (name) =>
     Object.hasOwn(variables, name) ? variables[name] : undefined
-  const interpolated = interpolateTree(raw, lookup, onUnset, "", expansion)
+  const interpolated = interpolateTree(
+    raw,
+    lookup,
+    onUnset,
+    "",
+    expansion,
+    new Map()
+  )
   if (!isMapping(interpolated)) {
     throw new ComposeError("The Compose file is empty")
   }
@@ -2171,22 +2255,34 @@ function expandEscapes(value: string): string {
 
 // ------------------------------------------------------- interpolation
 
+// An aliased node is one object wherever it's used; it's interpolated
+// once, as it reads the same everywhere. `checkTree` bounds the depth.
 function interpolateTree(
   value: Value,
   lookup: Lookup,
   onUnset: (name: string) => void,
   path: string,
-  expansion: Expansion
+  expansion: Expansion,
+  done: Map<object, Value>
 ): Value {
   if (typeof value === "string")
     return substituteTemplate(value, lookup, onUnset, path, expansion)
+  if (value === null || typeof value !== "object") return value
+  if (done.has(value)) return done.get(value)
+  let result: Value = value
   if (Array.isArray(value)) {
-    return value.map((entry, index) =>
-      interpolateTree(entry, lookup, onUnset, `${path}[${index}]`, expansion)
+    result = value.map((entry, index) =>
+      interpolateTree(
+        entry,
+        lookup,
+        onUnset,
+        `${path}[${index}]`,
+        expansion,
+        done
+      )
     )
-  }
-  if (isMapping(value)) {
-    return Object.fromEntries(
+  } else if (isMapping(value)) {
+    result = Object.fromEntries(
       Object.entries(value).map(([key, entry]) => [
         key,
         interpolateTree(
@@ -2194,12 +2290,14 @@ function interpolateTree(
           lookup,
           onUnset,
           path ? `${path}.${key}` : key,
-          expansion
+          expansion,
+          done
         ),
       ])
     )
   }
-  return value
+  done.set(value, result)
+  return result
 }
 
 // compose-go's template pattern: `$$`, `$NAME`, or `${NAME[op word]}`
@@ -2221,75 +2319,82 @@ function substituteTemplate(
   expansion: Expansion
 ): string {
   if (!text.includes("$")) return text
-  let failure: ComposeError | undefined
-  // The result's length so far, checked before each piece joins it.
-  let length = 0
-  let consumed = 0
-  const result = text.replace(TEMPLATE, (match: string, ...rest: Array<unknown>) => {
-    if (failure) return ""
+  // Each template in turn: one with a default is cut at its first closing
+  // brace, and what follows it is read on from there, as compose-go reads
+  // it (recursively, which a long line of them would overflow).
+  const template = new RegExp(TEMPLATE.source, "giu")
+  let output = ""
+  let position = 0
+  for (;;) {
+    template.lastIndex = position
+    const match = template.exec(text)
+    if (!match) break
     const replaced = Result.try(() =>
-      replacement(match, lookup, onUnset, expansion)
+      replacement(match[0], lookup, onUnset, expansion)
     )
     if (Result.isFailure(replaced)) {
-      failure =
+      const failure =
         replaced.failure instanceof InvalidTemplate
           ? new ComposeError(`Invalid template: ${JSON.stringify(text)}`)
           : replaced.failure instanceof ComposeError
             ? replaced.failure
             : new ComposeError(String(replaced.failure))
-      return ""
+      throw interpolationError(path, failure)
     }
-    const offset = rest.at(-2) as number
-    length += offset - consumed + replaced.success.length
-    consumed = offset + match.length
-    expansion.total += replaced.success.length
-    if (length > MAX_SUBSTITUTED_VALUE) {
-      failure = new ComposeError(
-        `a value is longer than ${MAX_SUBSTITUTED_VALUE} characters once its variables are substituted`
+    const [value, consumed] = replaced.success
+    // Checked before the piece joins the result.
+    expansion.total += value.length
+    if (output.length + (match.index - position) + value.length > MAX_SUBSTITUTED_VALUE) {
+      throw interpolationError(
+        path,
+        new ComposeError(
+          `a value is longer than ${MAX_SUBSTITUTED_VALUE} characters once its variables are substituted`
+        )
       )
-      return ""
     }
     if (expansion.total > MAX_SUBSTITUTED_TOTAL) {
-      failure = new ComposeError(
-        `substituting variables produces more than ${MAX_SUBSTITUTED_TOTAL} characters`
+      throw interpolationError(
+        path,
+        new ComposeError(
+          `substituting variables produces more than ${MAX_SUBSTITUTED_TOTAL} characters`
+        )
       )
-      return ""
     }
-    return replaced.success
-  })
-  if (failure) {
-    throw new ComposeError(
-      path
-        ? `error while interpolating ${path}: ${failure.message}`
-        : failure.message
-    )
+    output += text.slice(position, match.index) + value
+    position = match.index + consumed
   }
-  return result
+  return output + text.slice(position)
+}
+
+function interpolationError(path: string, failure: ComposeError): ComposeError {
+  return new ComposeError(
+    path
+      ? `error while interpolating ${path}: ${failure.message}`
+      : failure.message
+  )
 }
 
 class InvalidTemplate extends Error {}
 
 const OPERATORS = [":?", "?", ":-", "-", ":+", "+"] as const
 
+// The value of the first template in `matched`, and how much of `matched`
+// it takes: up to its first closing brace when it has a default.
 function replacement(
   matched: string,
   lookup: Lookup,
   onUnset: (name: string) => void,
   expansion: Expansion
-): string {
+): readonly [string, number] {
   // The operator is the one that appears first in the whole match.
   const operator = [...OPERATORS]
     .filter((candidate) => matched.includes(candidate))
     .sort((left, right) => matched.indexOf(left) - matched.indexOf(right))[0]
   const closing = firstClosingBrace(matched)
-  let rest = ""
   let template = matched
-  if (closing > -1) {
-    rest = template.slice(closing + 1)
-    template = template.slice(0, closing + 1)
-  }
+  if (closing > -1) template = template.slice(0, closing + 1)
   const match = new RegExp(TEMPLATE.source, "iu").exec(template)
-  if (match?.[1]) return "$"
+  if (match?.[1]) return ["$", matched.length]
   let name = match?.[2] ?? ""
   let braced = false
   if (!name) {
@@ -2302,8 +2407,20 @@ function replacement(
     const variable = name.slice(0, separator)
     const word = name.slice(separator + operator.length)
     const value = lookup(variable)
-    const nested = (text: string) =>
-      substituteTemplate(text, lookup, onUnset, "", expansion)
+    const nested = (text: string) => {
+      if (expansion.depth >= MAX_SUBSTITUTION_DEPTH) {
+        throw new ComposeError(
+          `variable defaults nest more than ${MAX_SUBSTITUTION_DEPTH} deep`
+        )
+      }
+      expansion.depth += 1
+      const value = Result.try(() =>
+        substituteTemplate(text, lookup, onUnset, "", expansion)
+      )
+      expansion.depth -= 1
+      if (Result.isFailure(value)) throw value.failure
+      return value.success
+    }
     let substituted: string
     switch (operator) {
       case ":-":
@@ -2331,13 +2448,11 @@ function replacement(
         }
         substituted = value
     }
-    return (
-      substituted + substituteTemplate(rest, lookup, onUnset, "", expansion)
-    )
+    return [substituted, template.length]
   }
   const value = lookup(name)
   if (value === undefined) onUnset(name)
-  return value ?? ""
+  return [value ?? "", matched.length]
 }
 
 // compose-go's getFirstBraceClosingIndex, which skips the character after
@@ -2365,27 +2480,41 @@ export function dependencyOrder(
 ): Array<string> {
   const order: Array<string> = []
   const state = new Map<string, "done" | "visiting">()
-  const trail: Array<string> = []
-  const visit = (name: string) => {
-    const current = state.get(name)
-    if (current === "done") return
-    if (current === "visiting") {
-      throw new ComposeError(
-        `dependency cycle detected: ${[...trail, name].join(" -> ")}`
-      )
-    }
+  // The services being visited, each with its dependencies left.
+  const trail: Array<{ readonly name: string; readonly left: Array<string> }> =
+    []
+  const enter = (name: string) => {
     state.set(name, "visiting")
-    trail.push(name)
-    for (const dependency of Object.keys(
-      services[name]?.depends_on ?? {}
-    ).sort()) {
-      if (services[dependency]) visit(dependency)
-    }
-    trail.pop()
-    state.set(name, "done")
-    order.push(name)
+    trail.push({
+      left: Object.keys(services[name]?.depends_on ?? {})
+        .sort()
+        .reverse(),
+      name,
+    })
   }
-  for (const name of Object.keys(services).sort()) visit(name)
+  for (const start of Object.keys(services).sort()) {
+    if (state.has(start)) continue
+    enter(start)
+    while (trail.length > 0) {
+      const top = trail.at(-1)!
+      const dependency = top.left.pop()
+      if (dependency === undefined) {
+        trail.pop()
+        state.set(top.name, "done")
+        order.push(top.name)
+        continue
+      }
+      if (!services[dependency]) continue
+      const current = state.get(dependency)
+      if (current === "done") continue
+      if (current === "visiting") {
+        throw new ComposeError(
+          `dependency cycle detected: ${[...trail.map((entry) => entry.name), dependency].join(" -> ")}`
+        )
+      }
+      enter(dependency)
+    }
+  }
   return order
 }
 
