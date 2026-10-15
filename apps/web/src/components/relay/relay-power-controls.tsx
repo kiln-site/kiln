@@ -1,5 +1,6 @@
 import * as React from "react"
 import { useMutation } from "@tanstack/react-query"
+import { useRouteContext } from "@tanstack/react-router"
 import {
   EllipsisVertical,
   LoaderCircle,
@@ -23,6 +24,7 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@workspace/ui/components/popover"
+import { Input } from "@workspace/ui/components/input"
 import { showToast } from "@workspace/ui/components/sonner"
 import {
   Tooltip,
@@ -31,11 +33,12 @@ import {
 } from "@workspace/ui/components/tooltip"
 
 import {
-  showRelayError,
+  messageFrom,
   useRelayPauseToggle,
 } from "@/components/relay/relay-actions"
 import { useRelayLiveStatus } from "@/components/relay/relay-presentation"
 import { PowerActionButton } from "@/components/workspace-power-controls"
+import { isDevelopmentBypassIdentity } from "@/lib/development-bypass"
 import type { RelayDirectoryEntry } from "@/lib/relay-route"
 import { restartRelay, restartRelayHost } from "@/server/relay-host"
 
@@ -44,20 +47,13 @@ type RelayRestartTarget = "relay" | "host"
 const restartCopy = {
   host: {
     action: "Restart host",
-    failure: "Could not restart the host",
-    pending: "The host is rebooting. The Relay reconnects once it is back up.",
+    description: "All servers, apps, and databases on this host will restart.",
     title: (name: string) => `Restart ${name}’s host?`,
-    warning:
-      "The machine the Relay runs on reboots. Every game server, app, and database on it stops, disconnecting players, and starts again once the host is back up. The Relay is offline until then.",
   },
   relay: {
     action: "Restart Relay",
-    failure: "Could not restart the Relay",
-    pending:
-      "Hearth reconnects once the Relay is back, usually within seconds.",
+    description: "Servers keep running. The Relay reconnects in a few seconds.",
     title: (name: string) => `Restart ${name}?`,
-    warning:
-      "The Relay restarts and reconnects to Hearth within a few seconds. Game servers, apps, and databases keep running, but open consoles, terminals, and transfers are interrupted.",
   },
 } satisfies Record<RelayRestartTarget, unknown>
 
@@ -205,7 +201,7 @@ export const RelayPowerControls = React.memo(function RelayPowerControls({
   )
 })
 
-// Mounted only while open.
+// Mounted only while open, so each opening starts with an empty password.
 function RelayRestartDialog({
   relay,
   target,
@@ -216,11 +212,17 @@ function RelayRestartDialog({
   onClose: () => void
 }) {
   const copy = restartCopy[target]
+  const passwordRequired = useRouteContext({
+    from: "/_app",
+    select: ({ user }) =>
+      target === "host" && !isDevelopmentBypassIdentity(user),
+  })
+  const [password, setPassword] = React.useState("")
   const restart = useMutation({
     mutationFn: () =>
-      (target === "relay" ? restartRelay : restartRelayHost)({
-        data: { relayId: relay.id },
-      }),
+      target === "relay"
+        ? restartRelay({ data: { relayId: relay.id } })
+        : restartRelayHost({ data: { password, relayId: relay.id } }),
     onSuccess: () => {
       onClose()
       showToast({
@@ -229,50 +231,95 @@ function RelayRestartDialog({
           target === "relay"
             ? `Restarting ${relay.name}`
             : `Restarting ${relay.name}’s host`,
-        description: copy.pending,
-        duration: 6_000,
+        duration: 4_000,
       })
     },
-    onError: (cause) => showRelayError(cause, copy.failure),
   })
+  const pending = restart.isPending
+  const error = restart.error
+    ? messageFrom(
+        restart.error,
+        target === "relay"
+          ? "Could not restart the Relay."
+          : "Could not restart the host."
+      )
+    : null
+
+  function submit(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    if (pending || (passwordRequired && !password)) return
+    restart.mutate()
+  }
 
   return (
     <Dialog
       open
       onOpenChange={(open) => {
-        if (!open && !restart.isPending) onClose()
+        if (!open && !pending) onClose()
       }}
     >
-      <DialogContent className="sm:max-w-md">
+      <DialogContent className="sm:max-w-md" showCloseButton={!pending}>
         <DialogHeader>
           <DialogTitle>{copy.title(relay.name)}</DialogTitle>
-          <DialogDescription>{copy.warning}</DialogDescription>
+          <DialogDescription>{copy.description}</DialogDescription>
         </DialogHeader>
-        <DialogFooter>
-          <Button
-            disabled={restart.isPending}
-            type="button"
-            variant="ghost"
-            onClick={onClose}
-          >
-            Cancel
-          </Button>
-          <Button
-            disabled={restart.isPending}
-            type="button"
-            variant={target === "host" ? "destructive" : "default"}
-            onClick={() => restart.mutate()}
-          >
-            {restart.isPending ? (
-              <LoaderCircle className="animate-spin" />
-            ) : target === "relay" ? (
-              <RotateCw />
-            ) : (
-              <Power />
-            )}
-            {copy.action}
-          </Button>
-        </DialogFooter>
+        <form className="grid gap-4" onSubmit={submit}>
+          {passwordRequired ? (
+            <div className="grid gap-1.5">
+              <label
+                htmlFor="restart-host-password"
+                className="type-technical-label text-muted-foreground"
+              >
+                Account password
+              </label>
+              <Input
+                id="restart-host-password"
+                aria-label="Account password"
+                type="password"
+                value={password}
+                onChange={(event) => {
+                  setPassword(event.currentTarget.value)
+                  restart.reset()
+                }}
+                autoComplete="current-password"
+                autoFocus
+                placeholder="Enter your account password"
+                className="bg-background"
+                disabled={pending}
+                required
+              />
+            </div>
+          ) : null}
+          {error ? (
+            <p role="alert" className="type-meta text-destructive">
+              {error}
+            </p>
+          ) : null}
+          <DialogFooter>
+            <Button
+              disabled={pending}
+              type="button"
+              variant="ghost"
+              onClick={onClose}
+            >
+              Cancel
+            </Button>
+            <Button
+              disabled={pending || (passwordRequired && !password)}
+              type="submit"
+              variant={target === "host" ? "destructive" : "default"}
+            >
+              {pending ? (
+                <LoaderCircle className="animate-spin" />
+              ) : target === "relay" ? (
+                <RotateCw />
+              ) : (
+                <Power />
+              )}
+              {copy.action}
+            </Button>
+          </DialogFooter>
+        </form>
       </DialogContent>
     </Dialog>
   )

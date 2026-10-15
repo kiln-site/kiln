@@ -76,14 +76,16 @@ export const restartRelay = createServerFn({ method: "POST" })
   })
 
 // Requires `relay.terminal`, as a root shell on the host could reboot it
-// anyway.
+// anyway, and the account password, as it takes down everything on the host.
 export const restartRelayHost = createServerFn({ method: "POST" })
-  .validator(targetSchema)
+  .validator(targetSchema.extend({ password: z.string().max(128) }))
   .handler(async ({ data }) => {
     const { relay, user } = await authorizedRelay(
       data.relayId,
       "relay.terminal"
     )
+    const { requireAccountPassword } = await import("@/lib/auth-password")
+    await requireAccountPassword(user, data.password)
     await requireRelayRestart(relay)
     await databaseRpc(relay, "relay.host.restart", {}, 120_000, user.id)
     return { restarting: true }
