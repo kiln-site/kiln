@@ -45,13 +45,6 @@ Before editing files for a substantial task:
 ## Work
 
 - Use Vite+ (`vp`) and existing Effect patterns.
-- Production code in `apps/` and `packages/` never uses `try`/`catch`,
-  Promise `.catch()`/`.finally()`, or `.then(_, onRejected)`; `vp lint`
-  enforces this (`kiln/effect-recovery`). Use `Effect.try`,
-  `Effect.tryPromise`, `Result.try`, `Effect.catch*`, and `Effect.ensuring`.
-  Where plain Promises must stay (React handlers, library callbacks), use the
-  helpers in `apps/{web,relay}/src/effect/promise.ts`: `recoverPromise`,
-  `forkPromise`, `ensuringPromise`, `tapPromiseError`, `settlePromises`.
 - Keep `.agents/skills/kiln-cli/SKILL.md` in sync with CLI changes.
 - Follow the Testing rules below; prefer browser validation during
   development.
@@ -130,7 +123,8 @@ guide doesn't cover, search through the source code in `node_modules/effect/src`
 - Before changing core components, start `pnpm dev:docker` and confirm Hearth
   loads at the printed URL. Validate user-visible changes in the browser.
   Docs-only work does not need a stack.
-- Validate the changed behavior and run the relevant checks. Follow
+- Validate the changed behavior. Before pushing, run `vp check`,
+  `vp run -r typecheck`, and the tests for what you changed. Follow
   [Contributing](CONTRIBUTING.md) for PR conventions. When asked to deliver a PR,
   commit, push, and open it ready for review. Never merge it yourself.
 - After merge, follow the cleanup instructions in the development guide.
