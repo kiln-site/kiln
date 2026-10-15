@@ -188,6 +188,7 @@ export const NotificationsBell = React.memo(function NotificationsBell({
         </TooltipTrigger>
         <TooltipContent
           side="bottom"
+          sideOffset={6}
           align="center"
           hidden={tooltipHidden || open}
         >
