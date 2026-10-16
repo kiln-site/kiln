@@ -173,14 +173,18 @@ export class DockerEngine {
     return this.#json({ method: "GET", path: "/version" })
   }
 
-  info(): Effect.Effect<
+  info(options: { readonly timeout?: number } = {}): Effect.Effect<
     {
       readonly OperatingSystem?: string
       readonly SecurityOptions?: ReadonlyArray<string> | null
     },
     DockerEngineError
   > {
-    return this.#json({ method: "GET", path: "/info" })
+    return this.#json({
+      method: "GET",
+      path: "/info",
+      timeout: options.timeout,
+    })
   }
 
   // ------------------------------------------------------------- containers

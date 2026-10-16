@@ -436,7 +436,9 @@ export class DockerDriver {
   readonly #config: RelayConfig
   readonly #resources: RelayResourceNames
   #cachedDockerVersion: string | null | undefined
-  #cachedHostOperatingSystem: string | undefined
+  #hostOperatingSystem: string | null = null
+  #hostOperatingSystemLookup = false
+  #hostOperatingSystemRetryAt = 0
   readonly #consoleLocks = new Map<string, Promise<void>>()
   readonly #consoleSizeStarts = new Map<string, string>()
   readonly #consoleSizePending = new Map<string, Promise<void>>()
@@ -1528,17 +1530,39 @@ export class DockerDriver {
   }
 
   // The host's operating system, which Docker reads from the host rather
-  // than this container. Only an answer is kept, so a later call retries.
-  async hostOperatingSystem(): Promise<string | null> {
-    if (this.#cachedHostOperatingSystem !== undefined) {
-      return this.#cachedHostOperatingSystem
+  // than this container. Looked up in the background with a short timeout,
+  // and again a minute after a failure, so a slow Docker never holds up a
+  // snapshot; snapshots leave it out until it's known.
+  hostOperatingSystem(): string | null {
+    if (
+      this.#hostOperatingSystem === null &&
+      !this.#hostOperatingSystemLookup &&
+      Date.now() >= this.#hostOperatingSystemRetryAt
+    ) {
+      this.#hostOperatingSystemLookup = true
+      Effect.runFork(
+        this.#engine.info({ timeout: 2_500 }).pipe(
+          Effect.option,
+          Effect.map((result) =>
+            Option.isSome(result)
+              ? result.value.OperatingSystem?.trim().slice(0, 200) || null
+              : null
+          ),
+          Effect.tap((operatingSystem) =>
+            Effect.sync(() => {
+              if (operatingSystem) this.#hostOperatingSystem = operatingSystem
+              else this.#hostOperatingSystemRetryAt = Date.now() + 60_000
+            })
+          ),
+          Effect.ensuring(
+            Effect.sync(() => {
+              this.#hostOperatingSystemLookup = false
+            })
+          )
+        )
+      )
     }
-    const result = await runEffect(this.#engine.info().pipe(Effect.option))
-    const operatingSystem = Option.isSome(result)
-      ? result.value.OperatingSystem?.trim().slice(0, 200)
-      : undefined
-    if (operatingSystem) this.#cachedHostOperatingSystem = operatingSystem
-    return operatingSystem || null
+    return this.#hostOperatingSystem
   }
 
   relayStartedAt(): Promise<string | null> {

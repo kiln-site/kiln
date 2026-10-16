@@ -35,14 +35,13 @@ export async function nodeSnapshot(
   const filesystem = await statfs(config.rootDirectory)
   const storageTotal = filesystem.blocks * filesystem.bsize
   const storageAvailable = filesystem.bavail * filesystem.bsize
-  const [dockerVersion, operatingSystem, cpuModel, startedAt, relayMemory] =
-    await Promise.all([
-      docker.dockerVersion(),
-      docker.hostOperatingSystem(),
-      hostCpuModel(),
-      docker.relayStartedAt(),
-      relayProcessMemory(),
-    ])
+  const operatingSystem = docker.hostOperatingSystem()
+  const [dockerVersion, cpuModel, startedAt, relayMemory] = await Promise.all([
+    docker.dockerVersion(),
+    hostCpuModel(),
+    docker.relayStartedAt(),
+    relayProcessMemory(),
+  ])
   const relayResources = docker.relayResources()
   const totalMemory = totalmem()
   const startedAtTimestamp = startedAt ? Date.parse(startedAt) : Number.NaN
