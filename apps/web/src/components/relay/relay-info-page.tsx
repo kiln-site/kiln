@@ -10,7 +10,7 @@ import { RemoveRelayDialog } from "@/components/relay/relay-actions"
 import { RelayInfoRail } from "@/components/relay/relay-info-rail"
 import { RelayProxySettings } from "@/components/relay/relay-proxy-settings"
 import {
-  RelayConnectionSettings,
+  RelayGeneralSettings,
   useRelayPermission,
 } from "@/components/relay/relay-settings"
 import { useRelayWorkspace } from "@/components/relay/relay-workspace-context"
@@ -23,7 +23,7 @@ export function RelayInfoPage() {
 
   return (
     <InfoPage rail={<RelayInfoRail relay={relay} routeId={routeId} />}>
-      <RelayConnectionSettings relay={relay} />
+      <RelayGeneralSettings relay={relay} />
       <RelayProxySettings relay={relay} />
       <RelayDangerZone relay={relay} />
     </InfoPage>

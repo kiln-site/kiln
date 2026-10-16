@@ -21,12 +21,12 @@ import {
   messageFrom,
   updateRelayCache,
 } from "@/components/relay/relay-actions"
-import { RelativeTime } from "@/components/relative-time"
+import { RelayVersion } from "@/components/relay/relay-version"
 import { canAccessRelayPermission } from "@/lib/navigation-destinations"
 import type { AccessPermission } from "@/lib/permissions"
 import { accessCapabilitiesQueryOptions } from "@/lib/query-options"
 import type { PersistedRelay } from "@/lib/relay-registry"
-import { relayAddress, type RelayDirectoryEntry } from "@/lib/relay-route"
+import type { RelayDirectoryEntry } from "@/lib/relay-route"
 import { renameRelay, updateRelay } from "@/server/relays"
 
 // The Relay's settings on its Info page. Each section edits in place and
@@ -44,7 +44,7 @@ export function useRelayPermission(
   return data
 }
 
-export function RelayConnectionSettings({
+export function RelayGeneralSettings({
   relay,
 }: {
   relay: RelayDirectoryEntry
@@ -82,7 +82,7 @@ export function RelayConnectionSettings({
 
   return (
     <InfoSection
-      title="Connection"
+      title="Relay"
       action={
         canEdit ? <InfoEditButton onClick={() => setEditing(true)} /> : null
       }
@@ -103,37 +103,36 @@ export function RelayConnectionSettings({
           <span className="truncate">{relay.name}</span>
         )}
       </InfoFact>
-      <InfoFact
-        label="Address"
-        htmlFor={editing ? "relay-hostname" : undefined}
-      >
-        {editing ? (
-          <>
-            <Input
-              id="relay-hostname"
-              name="hostname"
-              aria-label="Hostname"
-              className="h-8 max-w-60 font-mono text-xs"
-              defaultValue={relay.hostname}
-              placeholder="relay.example.com"
-              autoCapitalize="none"
-              spellCheck={false}
-              required
-            />
-            <Input
-              name="port"
-              aria-label="Port"
-              className="h-8 w-20 font-mono text-xs"
-              defaultValue={String(relay.port)}
-              type="number"
-              min={1}
-              max={65_535}
-              required
-            />
-          </>
-        ) : (
-          <InfoCopyValue label="Relay address" value={relayAddress(relay)} />
-        )}
+      {editing ? (
+        <InfoFact label="Address" htmlFor="relay-hostname">
+          <Input
+            id="relay-hostname"
+            name="hostname"
+            aria-label="Hostname"
+            className="h-8 max-w-60 font-mono text-xs"
+            defaultValue={relay.hostname}
+            placeholder="relay.example.com"
+            autoCapitalize="none"
+            spellCheck={false}
+            required
+          />
+          <Input
+            name="port"
+            aria-label="Port"
+            className="h-8 w-20 font-mono text-xs"
+            defaultValue={String(relay.port)}
+            type="number"
+            min={1}
+            max={65_535}
+            required
+          />
+        </InfoFact>
+      ) : null}
+      <InfoFact label="ID">
+        <InfoCopyValue label="Relay ID" value={relay.id} />
+      </InfoFact>
+      <InfoFact label="Version">
+        <RelayVersion relay={relay} />
       </InfoFact>
       <InfoFact label="TLS">
         <InfoDetails title="TLS" trigger={tlsLabel(relay)}>
@@ -145,15 +144,6 @@ export function RelayConnectionSettings({
           <p>Set when the Relay was paired.</p>
         </InfoDetails>
       </InfoFact>
-      {editing ? null : (
-        <InfoFact label="Last connected">
-          {relay.lastConnectedAt ? (
-            <RelativeTime timestamp={Date.parse(relay.lastConnectedAt)} />
-          ) : (
-            "Never"
-          )}
-        </InfoFact>
-      )}
       {relay.lastError && !editing ? (
         <InfoFact label="Last error">
           <span

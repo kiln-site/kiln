@@ -68,7 +68,7 @@ import { getTailscaleStacks } from "@/server/tailscale"
 import { getAuthState } from "@/server/auth"
 import type { ReleaseHistoryCursor } from "@/effect/kiln-release-feed"
 import {
-  getRelayUpdate,
+  getRelayRelease,
   getReleaseHistory,
   getUpdateOverview,
 } from "@/server/updates"
@@ -194,7 +194,7 @@ export const queryKeys = {
   tailscaleStacks: ["tailscale", "stacks"] as const,
   updates: ["updates", "overview"] as const,
   releaseHistory: ["updates", "release-history"] as const,
-  relayUpdate: (relayId: string, version: string) =>
+  relayRelease: (relayId: string, version: string) =>
     ["updates", "relay", relayId, version] as const,
   instanceFavorites: ["instance-favorites"] as const,
   notifications: ["notifications"] as const,
@@ -696,11 +696,11 @@ export function updateOverviewQueryOptions() {
   })
 }
 
-// Keyed by the version the Relay runs, so an update clears it.
-export function relayUpdateQueryOptions(relayId: string, version: string) {
+// Keyed by the version the Relay runs, so an update refreshes it.
+export function relayReleaseQueryOptions(relayId: string, version: string) {
   return queryOptions({
-    queryKey: queryKeys.relayUpdate(relayId, version),
-    queryFn: ({ signal }) => getRelayUpdate({ data: { relayId }, signal }),
+    queryKey: queryKeys.relayRelease(relayId, version),
+    queryFn: ({ signal }) => getRelayRelease({ data: { relayId }, signal }),
     refetchOnWindowFocus: false,
     retry: false,
     staleTime: 10 * 60_000,

@@ -14,6 +14,7 @@ import { platformAdminIdsEffect } from "@/effect/notifications"
 import { attachRelayOwnersEffect } from "@/effect/relay-owners"
 import { runAppEffect } from "@/effect/runtime"
 import {
+  grantsAllowPermission,
   isPlatformAdmin,
   listUserGrants,
   requireRelayPermission,
@@ -21,7 +22,10 @@ import {
 import { grantHasPermission } from "@/lib/permissions"
 import type { PersistedRelay } from "@/lib/relay-registry"
 import { listPersistedRelays } from "@/lib/relay-registry"
-import { compareLatestReleaseVersion } from "@/lib/release-version"
+import {
+  compareLatestReleaseVersion,
+  findKilnRelease,
+} from "@/lib/release-version"
 import {
   updateTargetVersion,
   validateUpdateManifest,
@@ -248,23 +252,33 @@ export const getUpdateOverview = createServerFn({ method: "GET" }).handler(
   }
 )
 
-// The newest Kiln release when this Relay runs an older one, by the Updates
-// dialog's rule. Null when it's current or its version is unknown.
-export const getRelayUpdate = createServerFn({ method: "GET" })
+// The release this Relay runs, by name, and for those who can update it the
+// newest release when it's newer, by the Updates dialog's rule. Either is
+// null when unknown, as for development builds.
+export const getRelayRelease = createServerFn({ method: "GET" })
   .validator(z.object({ relayId: relayIdSchema }))
   .handler(async ({ data }) => {
-    const { relay } = await authorizedRelay(data.relayId, "relay.update")
-    const { relayConnectionNode } = await import("@/lib/relay-connection")
+    const { relay, user } = await authorizedRelay(data.relayId, "relay.read")
+    const [{ relayConnectionNode }, grants, releases] = await Promise.all([
+      import("@/lib/relay-connection"),
+      isPlatformAdmin(user) ? null : listUserGrants(user.id, relay.id),
+      runAppEffect("updates.relay-release", listKilnReleasesEffect()),
+    ])
     const version = relayConnectionNode(relay.id)?.version ?? relay.nodeVersion
-    const releases = await runAppEffect(
-      "updates.relay-release",
-      listKilnReleasesEffect()
-    )
+    const current = findKilnRelease(releases, version)
     const latest = releases[0]
-    if (!latest || compareLatestReleaseVersion(version, releases) !== 1) {
-      return null
+    const canUpdate =
+      grants === null ||
+      grantsAllowPermission(grants, "relay.update", { relayId: relay.id })
+    return {
+      current: current ? { name: current.name, url: current.url } : null,
+      update:
+        canUpdate &&
+        latest &&
+        compareLatestReleaseVersion(version, releases) === 1
+          ? { name: latest.name, url: latest.url, version: latest.version }
+          : null,
     }
-    return { name: latest.name, url: latest.url, version: latest.version }
   })
 
 export const getReleaseHistory = createServerFn({ method: "GET" })
