@@ -11,7 +11,7 @@ import {
   useQueryClient,
   useSuspenseQuery,
 } from "@tanstack/react-query"
-import { Link } from "@tanstack/react-router"
+import { Link, useNavigate } from "@tanstack/react-router"
 import { Effect } from "effect"
 import {
   Check,
@@ -969,6 +969,7 @@ function AddRelayDialog({
   open: boolean
   onOpenChange: (open: boolean) => void
 }) {
+  const navigate = useNavigate()
   const queryClient = useQueryClient()
   const formRef = React.useRef<HTMLFormElement>(null)
   const [pending, setPending] = React.useState(false)
@@ -1049,6 +1050,13 @@ function AddRelayDialog({
           setFeedback(null)
           setReviewedPairing(null)
           formRef.current?.reset()
+          // A repaired Relay keeps its place; a new one opens its Info page.
+          if (!repaired) {
+            await navigate({
+              params: { relayId: relay.id },
+              to: "/relay/$relayId/info",
+            })
+          }
         },
         catch: (cause) => cause,
       }).pipe(

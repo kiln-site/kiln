@@ -432,23 +432,44 @@ function SidebarInstanceNavigation({
   const databaseRouteId = databaseRouteIdFromSelection(selection)
   const appRouteId = appRouteIdFromSelection(selection)
   const relayRouteId = relayRouteIdFromSelection(selection)
+  const destinations = accessibleInfrastructureDestinations(capabilities)
   const showDatabases =
     relayConfigured &&
-    accessibleInfrastructureDestinations(capabilities).some(
-      (destination) => destination.to === "/infra/databases"
-    )
+    destinations.some((destination) => destination.to === "/infra/databases")
+  const showApps =
+    relayConfigured &&
+    destinations.some((destination) => destination.to === "/infra/apps")
+  // Without servers, the sidebar opens the first database, then app, then
+  // Relay, so whatever the user can reach still fills it.
+  const relayFallback = relayConfigured ? (
+    <SidebarRelayNavigation
+      capabilities={capabilities}
+      fallback={null}
+      relayRouteId={null}
+    />
+  ) : null
+  const appFallback = showApps ? (
+    <SidebarAppNavigation
+      appRouteId={null}
+      capabilities={capabilities}
+      fallback={relayFallback}
+    />
+  ) : (
+    relayFallback
+  )
+  const databaseFallback = showDatabases ? (
+    <SidebarDatabaseNavigation
+      capabilities={capabilities}
+      databaseRouteId={null}
+      fallback={appFallback}
+    />
+  ) : (
+    appFallback
+  )
   const serverNavigation = (
     <SidebarServerNavigation
       capabilities={capabilities}
-      emptyFallback={
-        showDatabases ? (
-          <SidebarDatabaseNavigation
-            capabilities={capabilities}
-            databaseRouteId={null}
-            fallback={null}
-          />
-        ) : null
-      }
+      emptyFallback={databaseFallback}
       initialSelectedInstanceRouteId={initialSelectedInstanceRouteId}
       relayConfigured={relayConfigured}
     />
@@ -482,19 +503,21 @@ function SidebarAppNavigation({
   capabilities,
   fallback,
 }: {
-  appRouteId: string
+  // null selects the first app, for users without servers or databases.
+  appRouteId: string | null
   capabilities: NavigationAccessCapabilities
   fallback: React.ReactNode
 }) {
   const select = React.useMemo(
     () => (apps: Array<AppDirectoryEntry>) => {
       const resolution = resolveAppRoute(apps, appRouteId)
-      return resolution.status === "found"
-        ? {
-            app: resolution.resource,
-            routeId: appRouteIdentifier(apps, resolution.resource),
-          }
-        : null
+      const app =
+        resolution.status === "found"
+          ? resolution.resource
+          : appRouteId === null
+            ? apps[0]
+            : undefined
+      return app ? { app, routeId: appRouteIdentifier(apps, app) } : null
     },
     [appRouteId]
   )
@@ -651,19 +674,28 @@ function SidebarRelayNavigation({
 }: {
   capabilities: NavigationAccessCapabilities
   fallback: React.ReactNode
-  relayRouteId: string
+  // null selects the first Relay with a page the user can open, for users
+  // with no other instances.
+  relayRouteId: string | null
 }) {
   const select = React.useMemo(
     () => (relays: Array<RelayDirectoryEntry>) => {
       const resolution = resolveRelayRoute(relays, relayRouteId)
-      return resolution.status === "found"
-        ? {
-            relay: resolution.resource,
-            routeId: relayRouteIdentifier(relays, resolution.resource),
-          }
+      const relay =
+        resolution.status === "found"
+          ? resolution.resource
+          : relayRouteId === null
+            ? relays.find(
+                (candidate) =>
+                  accessibleDestinationsForRelay(candidate, capabilities)
+                    .length > 0
+              )
+            : undefined
+      return relay
+        ? { relay, routeId: relayRouteIdentifier(relays, relay) }
         : null
     },
-    [relayRouteId]
+    [capabilities, relayRouteId]
   )
   const query = useQuery({ ...relaysQueryOptions(), select })
   if (!query.data) return query.isPending ? null : fallback

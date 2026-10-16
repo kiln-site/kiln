@@ -10,7 +10,7 @@ import {
   useQueryClient,
   useSuspenseQuery,
 } from "@tanstack/react-query"
-import { Link } from "@tanstack/react-router"
+import { Link, useNavigate } from "@tanstack/react-router"
 import type { DatabaseEngine } from "@workspace/contracts"
 import {
   Database,
@@ -743,6 +743,7 @@ function CreateDatabaseDialog({
   onOpenChange: (open: boolean) => void
   relays: Array<ManagedRelay>
 }) {
+  const navigate = useNavigate()
   const queryClient = useQueryClient()
   const availableRelays = relays.filter((relay) => relay.canCreate)
   const [name, setName] = React.useState("")
@@ -756,12 +757,16 @@ function CreateDatabaseDialog({
       createManagedDatabase({
         data: { engine, name: name.trim(), relayId },
       }),
-    onSuccess: async () => {
+    onSuccess: async (created) => {
       await queryClient.invalidateQueries({
         queryKey: queryKeys.databases.all,
       })
       showToast({ message: `${name.trim()} is ready`, type: "success" })
       onOpenChange(false)
+      await navigate({
+        params: { databaseId: created.id },
+        to: "/db/$databaseId/info",
+      })
     },
   })
 
