@@ -126,6 +126,8 @@ export interface DockerNetwork {
 
 export interface DockerVolume {
   readonly Labels: Readonly<Record<string, string>> | null
+  // The volume's folder on the host, as the daemon sees it.
+  readonly Mountpoint?: string
   readonly Name: string
 }
 

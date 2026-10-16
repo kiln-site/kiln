@@ -2,6 +2,8 @@ import * as React from "react"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import {
   Cable,
+  Check,
+  Copy,
   Database,
   Download,
   HardDriveDownload,
@@ -10,7 +12,6 @@ import {
   Upload,
 } from "lucide-react"
 
-import { Badge } from "@workspace/ui/components/badge"
 import { Button } from "@workspace/ui/components/button"
 import { cn } from "@workspace/ui/lib/utils"
 
@@ -20,8 +21,7 @@ import {
   useDatabaseExport,
 } from "@/components/database/database-dialogs"
 import {
-  engineBadgeClasses,
-  engineLabel,
+  engineProductLabel,
   type ManagedDatabase,
 } from "@/components/database/database-presentation"
 import {
@@ -32,8 +32,8 @@ import {
   InfoSectionLink,
 } from "@/components/info-page"
 import { InstanceFavoriteButton } from "@/components/instance-favorite"
-import { LocalDateTime } from "@/components/local-date-time"
 import { RenameButton } from "@/components/rename-dialog"
+import { useCopyFeedback } from "@/components/workspace-header"
 import {
   managedDatabaseCredentialQueryOptions,
   queryKeys,
@@ -53,7 +53,6 @@ export function DatabaseGeneralSettings({
   canRename: boolean
   database: ManagedDatabase
 }) {
-  const version = database.image.split(":").at(1)
   return (
     <InfoSection
       icon={<Database />}
@@ -76,20 +75,15 @@ export function DatabaseGeneralSettings({
           value={database.name}
         />
       </InfoFact>
-      <InfoFact label="ID">
+      <InfoFact label="Kiln ID">
         <InfoCopyValue label="database ID" value={database.id} />
       </InfoFact>
       <InfoFact label="Engine">
-        <Badge
-          variant="outline"
-          className={`type-meta font-mono uppercase ${engineBadgeClasses[database.engine]}`}
-        >
-          {engineLabel(database.engine)}
-        </Badge>
-        {version ? <span className="font-mono text-xs">{version}</span> : null}
-      </InfoFact>
-      <InfoFact label="Created">
-        <LocalDateTime timestamp={database.createdAt} />
+        <InfoCopyValue
+          label="engine"
+          mono={false}
+          value={engineProductLabel(database)}
+        />
       </InfoFact>
     </InfoSection>
   )
@@ -118,8 +112,8 @@ function DatabaseRenameButton({ database }: { database: ManagedDatabase }) {
   )
 }
 
-// The login game servers use. Secrets stay in memory only while this page
-// shows them, and stay masked until revealed.
+// Where and how game servers log in. Secrets stay in memory only while this
+// page shows them, and stay masked until revealed.
 export function DatabaseCredentialsSection({
   available,
   canRotate,
@@ -149,17 +143,39 @@ export function DatabaseCredentialsSection({
       icon={<KeyRound />}
       title="Credentials"
       action={
-        canRotate ? (
-          <RotateDatabasePasswordButton
-            database={database}
-            disabledReason={
-              available ? undefined : "Reconnect this database's Relay first"
+        <>
+          <CopyConnectionUrlButton
+            url={
+              values
+                ? databaseConnectionUrl(
+                    database,
+                    values.username,
+                    encodeURIComponent(values.password)
+                  )
+                : null
             }
-            size="sm"
           />
-        ) : null
+          {canRotate ? (
+            <RotateDatabasePasswordButton
+              database={database}
+              disabledReason={
+                available ? undefined : "Reconnect this database's Relay first"
+              }
+              size="sm"
+            />
+          ) : null}
+        </>
       }
     >
+      <InfoFact label="Hostname">
+        <InfoCopyValue label="hostname" value={database.hostname} />
+      </InfoFact>
+      {/* Key-value stores have no named database to connect to. */}
+      {hasNamedDatabase(database) ? (
+        <InfoFact label="Database">
+          <InfoCopyValue label="database" value={database.databaseName} />
+        </InfoFact>
+      ) : null}
       {credential.isError ? (
         <InfoFact label="Error">
           <span
@@ -189,24 +205,27 @@ export function DatabaseCredentialsSection({
               <CredentialPending />
             )}
           </InfoFact>
-          <InfoFact label="Connection URL">
-            {values ? (
-              <InfoSecretValue
-                label="connection URL"
-                masked={databaseConnectionUrl(database, values.username, MASK)}
-                value={databaseConnectionUrl(
-                  database,
-                  values.username,
-                  encodeURIComponent(values.password)
-                )}
-              />
-            ) : (
-              <CredentialPending />
-            )}
-          </InfoFact>
         </>
       )}
     </InfoSection>
+  )
+}
+
+// Copies the full URL, password included, without showing it.
+function CopyConnectionUrlButton({ url }: { url: string | null }) {
+  const { copied, copy } = useCopyFeedback(url ?? "")
+  return (
+    <Button
+      type="button"
+      size="sm"
+      variant="outline"
+      disabled={!url}
+      className={copied ? "text-emerald-400 hover:text-emerald-400" : undefined}
+      onClick={() => void copy()}
+    >
+      Connection URL
+      {copied ? <Check /> : <Copy />}
+    </Button>
   )
 }
 
@@ -241,18 +260,6 @@ export function DatabaseDataSection({
       content
       action={
         <>
-          {canRestore ? (
-            <InfoSectionLink
-              to="/backups/runs"
-              search={{
-                kind: "database",
-                relay: database.relayId,
-                server: database.id,
-              }}
-            >
-              Restore backup
-            </InfoSectionLink>
-          ) : null}
           {canExport ? (
             <Button
               type="button"
@@ -269,6 +276,18 @@ export function DatabaseDataSection({
               )}
               Export SQL
             </Button>
+          ) : null}
+          {canRestore ? (
+            <InfoSectionLink
+              to="/backups/runs"
+              search={{
+                kind: "database",
+                relay: database.relayId,
+                server: database.id,
+              }}
+            >
+              Restore backup
+            </InfoSectionLink>
           ) : null}
         </>
       }
@@ -322,11 +341,10 @@ function DatabaseImportDropZone({
       >
         <Upload className="size-5 text-muted-foreground" />
         <span className="text-[0.8125rem] font-medium">
-          Drop a SQL dump to import, or click to choose one
+          Drop a .sql file to import
         </span>
         <span className="text-xs text-muted-foreground">
-          .sql text dumps from {engineLabel(database.engine)}, up to 700 KB.
-          Existing data is kept.
+          or click to choose one, up to 700 KB
         </span>
         <input
           accept=".sql,application/sql,text/plain"
@@ -387,12 +405,6 @@ export function DatabaseConnectionSettings({
           value={`${database.hostname}:${database.internalPort}`}
         />
       </InfoFact>
-      {/* Key-value stores have no named database to connect to. */}
-      {hasNamedDatabase(database) ? (
-        <InfoFact label="Database">
-          <InfoCopyValue label="database" value={database.databaseName} />
-        </InfoFact>
-      ) : null}
       <InfoFact label="Game servers">
         <span className={connected === 0 ? "text-muted-foreground" : undefined}>
           {connected === 0 ? "None connected" : `${connected} connected`}

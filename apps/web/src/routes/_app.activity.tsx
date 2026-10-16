@@ -18,6 +18,7 @@ import { requireGlobalDestinationAccess } from "@/lib/route-access"
 
 const activitySearchSchema = z
   .object({
+    database: z.string().max(64).optional(),
     from: activityInstantSchema.optional(),
     q: z.string().max(160).optional(),
     relay: z.string().max(64).optional(),
@@ -78,6 +79,7 @@ function ActivityRoute() {
 
 function replaceActivityFilterSearch(filters: ActivityFilters): void {
   const url = new URL(window.location.href)
+  setActivitySearchParam(url, "database", filters.database)
   setActivitySearchParam(url, "from", filters.from)
   setActivitySearchParam(url, "q", filters.q)
   setActivitySearchParam(url, "relay", filters.relay)

@@ -1004,11 +1004,13 @@ function actionForRequest(request: RelayControlRequest): RelayAction | null {
     case "brick.recipe":
       return "brick.read"
     case "database.list":
-    case "database.usage":
+    case "database.inspect":
       return "database.read"
     case "database.create":
       return "database.create"
+    // Wiping deletes all of a database's data, so it takes deletion.
     case "database.delete":
+    case "database.wipe":
       return "database.delete"
     case "database.action":
       return "database.power"

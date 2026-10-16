@@ -43,6 +43,12 @@ export function auditInstanceId(audit: RelayAuditRecord): string | null {
     : null
 }
 
+export function auditDatabaseId(audit: RelayAuditRecord): string | null {
+  return typeof audit.details.databaseId === "string"
+    ? audit.details.databaseId
+    : null
+}
+
 export function auditInstanceCreatorId(
   audit: RelayAuditRecord,
   instanceId: string

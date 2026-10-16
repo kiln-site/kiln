@@ -123,7 +123,8 @@ export function DangerZone({
   action: React.ReactNode
   className?: string
   detail?: string
-  title: string
+  // Left out when the actions say what they do.
+  title?: string
 }) {
   return (
     <div
@@ -137,8 +138,18 @@ export function DangerZone({
           <TriangleAlert className="size-4" />
         </span>
         <div className="min-w-0">
-          <p className="type-technical-label text-destructive">Danger zone</p>
-          <h3 className="mt-1 text-sm font-semibold">{title}</h3>
+          {title ? (
+            <>
+              <p className="type-technical-label text-destructive">
+                Danger zone
+              </p>
+              <h3 className="mt-1 text-sm font-semibold">{title}</h3>
+            </>
+          ) : (
+            <h3 className="type-technical-label text-destructive">
+              Danger zone
+            </h3>
+          )}
           {detail ? (
             <p className="type-meta mt-1 font-mono break-all text-muted-foreground">
               {detail}

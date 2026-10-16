@@ -61,6 +61,8 @@ import { relayInstanceRouteId } from "@/lib/relay-fleet"
 import type { ActivityData, ActivityEntry } from "@/server/activity"
 
 export interface ActivityFilters {
+  // A database's ID, from its Info page; there's no picker for it.
+  database?: string
   from?: string
   q?: string
   relay?: string
@@ -656,6 +658,7 @@ const ActivityClearFilters = React.memo(function ActivityClearFilters({
       variant="ghost"
       onClick={() =>
         onFiltersChange({
+          database: undefined,
           from: undefined,
           q: undefined,
           relay: undefined,
@@ -1780,6 +1783,7 @@ function activityActors(data: ActivityData): Array<ActivityEntry["actor"]> {
 
 function activityFilterCount(filters: ActivityFilters): number {
   return [
+    filters.database,
     filters.q,
     filters.type,
     filters.user,
@@ -1980,6 +1984,7 @@ function filterActivity(
     if (filters.user && entry.actor.id !== filters.user) return false
     if (filters.relay && entry.relay.id !== filters.relay) return false
     if (filters.server && entry.server?.id !== filters.server) return false
+    if (filters.database && entry.databaseId !== filters.database) return false
     if (filters.source && entry.source !== filters.source) return false
     if (!normalized) return true
     return [

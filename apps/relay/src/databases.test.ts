@@ -114,8 +114,8 @@ describe("managed database credential rotation", () => {
   )
 })
 
-describe("managed database usage", () => {
-  it("reports how much the database's own volume holds", async () => {
+describe("managed database container details", () => {
+  it("reports the database's container, data folder, and volume size", async () => {
     const harness = await relayHarness()
     const id = "f".repeat(40)
     const other = "1".repeat(40)
@@ -124,12 +124,31 @@ describe("managed database usage", () => {
     fakeDocker.volumes.get(volumeOf(id))?.files.set("base/1", "x".repeat(4096))
     fakeDocker.volumes.get(volumeOf(other))?.files.set("base/1", "x".repeat(10))
 
-    await expect(harness.databases.usage(id)).resolves.toEqual({
+    await expect(harness.databases.inspect(id)).resolves.toEqual({
+      containerName: `${TEST_NAMESPACE}-kiln-db-${id}-database`,
+      dataDirectory: `/var/lib/docker/volumes/${volumeOf(id)}/_data`,
       volumeBytes: 4096,
     })
-    await expect(harness.databases.usage("2".repeat(40))).rejects.toThrow(
+    await expect(harness.databases.inspect("2".repeat(40))).rejects.toThrow(
       "Database not found"
     )
+  })
+})
+
+describe("managed database wipe", () => {
+  it("refuses to wipe a stopped database", async () => {
+    const harness = await relayHarness()
+    const id = "3".repeat(40)
+    await createDatabase(harness, id)
+    await harness.databases.action({ action: "stop", databaseId: id })
+
+    await expect(
+      harness.databases.wipe({
+        databaseId: id,
+        password,
+        username: "kiln_user",
+      })
+    ).rejects.toThrow("Start the database before wiping it")
   })
 })
 

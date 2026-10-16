@@ -18,7 +18,7 @@ import {
   relayDatabaseTerminalClaimSchema,
   relayDatabaseTerminalRestartSchema,
   relayDatabaseTerminalWriteSchema,
-  relayDatabaseUsageSchema,
+  relayDatabaseContainerSchema,
   relayManagedDatabaseSchema,
 } from "@workspace/contracts"
 import type { RelayManagedDatabase } from "@workspace/contracts"
@@ -380,21 +380,45 @@ export const getManagedDatabaseCredential = createServerFn({ method: "GET" })
     }
   })
 
-// How much the database's volume holds. Docker measures it on request, so
-// the Info page asks only while it's open.
-export const getManagedDatabaseUsage = createServerFn({ method: "GET" })
+// The database's container: its name, data folder, and volume size. Docker
+// measures the volume on request, so the Info page asks only while it's open.
+export const getManagedDatabaseContainer = createServerFn({ method: "GET" })
   .validator(databaseInputSchema)
   .handler(async ({ data }) => {
     const { relay, user } = await authorizedDatabase(data, "database.read")
-    return relayDatabaseUsageSchema.parse(
+    return relayDatabaseContainerSchema.parse(
       await databaseRpc(
         relay,
-        "database.usage",
+        "database.inspect",
         { databaseId: data.databaseId },
         75_000,
         user.id
       )
     )
+  })
+
+// Deletes all of the database's data and keeps the database, so it takes
+// the permission that deletes it.
+export const wipeManagedDatabase = createServerFn({ method: "POST" })
+  .validator(databaseInputSchema)
+  .handler(async ({ data }) => {
+    const { relay, user } = await authorizedDatabase(data, "database.delete")
+    const credential = await requiredCredential(data.relayId, data.databaseId)
+    const database = relayManagedDatabaseSchema.parse(
+      await databaseRpc(
+        relay,
+        "database.wipe",
+        {
+          databaseId: data.databaseId,
+          password: credential.password,
+          username: credential.username,
+        },
+        120_000,
+        user.id
+      )
+    )
+    publishDatabaseChange(relay.id, false)
+    return database
   })
 
 // Renaming is managing the database as a whole, so it takes the permission

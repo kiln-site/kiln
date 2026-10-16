@@ -63,6 +63,24 @@ export function databaseRelayAvailable(
   )
 }
 
+// The engine's full name, as its makers write it.
+const engineProductNames: Record<DatabaseEngine, string> = {
+  mariadb: "MariaDB",
+  mysql: "MySQL",
+  postgres: "PostgreSQL",
+  redis: "Redis",
+  valkey: "Valkey",
+}
+
+// The engine and the version its image runs, such as "PostgreSQL 17".
+export function engineProductLabel(
+  database: Pick<ManagedDatabase, "engine" | "image">
+): string {
+  const version = database.image.split(":").at(1)
+  const name = engineProductNames[database.engine]
+  return version ? `${name} ${version}` : name
+}
+
 export function engineLabel(engine: DatabaseEngine): string {
   return (
     engineOptions.find((option) => option.value === engine)?.label ?? engine

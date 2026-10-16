@@ -2,7 +2,12 @@ import * as React from "react"
 import { useQuery } from "@tanstack/react-query"
 import { useNavigate } from "@tanstack/react-router"
 
-import { DeleteDatabaseDialog } from "@/components/database/database-dialogs"
+import { Eraser } from "lucide-react"
+
+import {
+  DeleteDatabaseDialog,
+  WipeDatabaseDialog,
+} from "@/components/database/database-dialogs"
 import { DatabaseInfoRail } from "@/components/database/database-info-rail"
 import {
   databaseRelayAvailable,
@@ -15,7 +20,11 @@ import {
   DatabaseGeneralSettings,
 } from "@/components/database/database-settings"
 import { useDatabaseWorkspace } from "@/components/database/database-workspace-context"
-import { InfoDangerZone, InfoPage } from "@/components/info-page"
+import {
+  InfoDangerAction,
+  InfoDangerZone,
+  InfoPage,
+} from "@/components/info-page"
 import {
   canAccessDatabasePermission,
   type NavigationAccessCapabilities,
@@ -64,7 +73,10 @@ export function DatabaseInfoPage() {
         routeId={routeId}
       />
       {can("database.delete") ? (
-        <DatabaseDangerZone database={database} />
+        <DatabaseDangerZone
+          canWipe={database.hasCredentials}
+          database={database}
+        />
       ) : null}
     </InfoPage>
   )
@@ -84,23 +96,55 @@ function useDatabaseBackupRestore(database: ManagedDatabase): boolean {
   return data
 }
 
-function DatabaseDangerZone({ database }: { database: ManagedDatabase }) {
+function DatabaseDangerZone({
+  canWipe,
+  database,
+}: {
+  canWipe: boolean
+  database: ManagedDatabase
+}) {
   const navigate = useNavigate()
   const leave = React.useCallback(() => {
     void navigate({ to: "/infra/databases", replace: true })
   }, [navigate])
+  const running =
+    database.observedState === "running" ||
+    database.observedState === "starting"
   return (
-    <InfoDangerZone
-      title="Delete this database"
-      action="Delete database"
-      dialog={(onOpenChange) => (
-        <DeleteDatabaseDialog
-          database={database}
-          open
-          onDeleted={leave}
-          onOpenChange={onOpenChange}
-        />
-      )}
-    />
+    <InfoDangerZone>
+      {canWipe ? (
+        <InfoDangerAction
+          icon={<Eraser />}
+          disabledReason={
+            !databaseRelayAvailable(database)
+              ? "Reconnect this database's Relay first"
+              : running
+                ? undefined
+                : "Start the database before wiping it"
+          }
+          dialog={(onOpenChange) => (
+            <WipeDatabaseDialog
+              database={database}
+              onOpenChange={onOpenChange}
+            />
+          )}
+        >
+          Wipe database
+        </InfoDangerAction>
+      ) : null}
+      <InfoDangerAction
+        solid
+        dialog={(onOpenChange) => (
+          <DeleteDatabaseDialog
+            database={database}
+            open
+            onDeleted={leave}
+            onOpenChange={onOpenChange}
+          />
+        )}
+      >
+        Delete database
+      </InfoDangerAction>
+    </InfoDangerZone>
   )
 }

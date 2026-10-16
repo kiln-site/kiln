@@ -1618,6 +1618,7 @@ export class FakeDocker {
       return json(200, {
         Driver: "local",
         Labels: volume.labels,
+        Mountpoint: `/var/lib/docker/volumes/${volume.name}/_data`,
         Name: volume.name,
       })
     }

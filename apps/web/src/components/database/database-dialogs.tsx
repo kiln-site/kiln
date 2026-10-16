@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import {
   CircleAlert,
   Copy,
+  Eraser,
   LoaderCircle,
   RotateCw,
   Trash2,
@@ -37,6 +38,7 @@ import {
   exportManagedDatabase,
   importManagedDatabase,
   rotateManagedDatabasePassword,
+  wipeManagedDatabase,
 } from "@/server/databases"
 
 export function CredentialsDialog({
@@ -384,6 +386,106 @@ function dumpSizeError(file: File | null): string | null {
   return file && file.size > DATABASE_DUMP_LIMIT_BYTES
     ? "SQL dumps are currently limited to 700 KB"
     : null
+}
+
+// Deletes every table and row and keeps the database, its login, and its
+// connections. Typing the name confirms it.
+export function WipeDatabaseDialog({
+  database,
+  onOpenChange,
+}: {
+  database: ManagedDatabase
+  onOpenChange: (open: boolean) => void
+}) {
+  const queryClient = useQueryClient()
+  const [confirmation, setConfirmation] = React.useState("")
+  const wipe = useMutation({
+    mutationFn: () =>
+      wipeManagedDatabase({
+        data: { databaseId: database.id, relayId: database.relayId },
+      }),
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: queryKeys.databases.list }),
+        queryClient.invalidateQueries({
+          queryKey: queryKeys.databases.container(
+            database.relayId,
+            database.id
+          ),
+        }),
+      ])
+      showToast({ message: `${database.name} wiped`, type: "success" })
+      onOpenChange(false)
+    },
+  })
+  const confirmed = confirmation.trim() === database.name
+
+  return (
+    <Dialog
+      open
+      onOpenChange={(nextOpen) => !wipe.isPending && onOpenChange(nextOpen)}
+    >
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>Wipe {database.name}?</DialogTitle>
+          <DialogDescription>
+            Every table and row is deleted. The database, its login, and its
+            game server connections stay. This can&apos;t be undone.
+          </DialogDescription>
+        </DialogHeader>
+        <form
+          className="space-y-4"
+          onSubmit={(event) => {
+            event.preventDefault()
+            if (confirmed && !wipe.isPending) wipe.mutate()
+          }}
+        >
+          <div className="space-y-1.5">
+            <label
+              htmlFor={`wipe-${database.id}`}
+              className="type-label block text-muted-foreground"
+            >
+              Type <span className="text-foreground">{database.name}</span> to
+              confirm
+            </label>
+            <Input
+              id={`wipe-${database.id}`}
+              value={confirmation}
+              autoComplete="off"
+              autoFocus
+              disabled={wipe.isPending}
+              onChange={(event) => setConfirmation(event.target.value)}
+            />
+          </div>
+          {wipe.error ? (
+            <p className="text-xs text-destructive">{wipe.error.message}</p>
+          ) : null}
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              disabled={wipe.isPending}
+              onClick={() => onOpenChange(false)}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="submit"
+              variant="destructive"
+              disabled={!confirmed || wipe.isPending}
+            >
+              {wipe.isPending ? (
+                <LoaderCircle className="animate-spin" />
+              ) : (
+                <Eraser />
+              )}
+              Wipe database
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  )
 }
 
 export function DeleteDatabaseDialog({

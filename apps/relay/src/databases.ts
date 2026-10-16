@@ -7,7 +7,8 @@ import type {
   RelayDatabaseDump,
   RelayDatabaseExport,
   RelayDatabaseNetwork,
-  RelayDatabaseUsage,
+  RelayDatabaseContainer,
+  RelayDatabaseWipe,
   RelayDeleteDatabase,
   RelayManagedDatabase,
   RelayRotateDatabaseCredentials,
@@ -17,7 +18,7 @@ import {
   databaseEngineSchema,
   relayManagedDatabaseSchema,
 } from "@workspace/contracts"
-import { Effect, Result, Semaphore } from "effect"
+import { Effect, Option, Result, Semaphore } from "effect"
 
 import { promiseEffect } from "./effect/promise.js"
 import type { DatabaseConnections } from "./database-connections.js"
@@ -185,15 +186,54 @@ export class DatabaseDriver {
     return this.#required(id)
   }
 
-  // How much the database's volume holds, measured by Docker on request.
-  async usage(id: string): Promise<RelayDatabaseUsage> {
-    const volume = requiredLabel(await this.#labels(id), "kiln.database.volume")
-    const volumes = await Effect.runPromise(
-      this.#engine.volumeUsage({ timeout: 60_000 })
+  // The database's container and data volume. Docker measures the volume on
+  // request; a measurement that fails leaves its size out, not the rest.
+  async inspect(id: string): Promise<RelayDatabaseContainer> {
+    const container = await this.#container(id)
+    const labels = container.Config.Labels ?? {}
+    const volume = requiredLabel(labels, "kiln.database.volume")
+    const engine = this.#engine
+    const [inspected, volumes] = await Effect.runPromise(
+      Effect.all(
+        [
+          Effect.option(engine.inspectVolume(volume)),
+          engine
+            .volumeUsage({ timeout: 60_000 })
+            .pipe(Effect.orElseSucceed(() => [])),
+        ],
+        { concurrency: "unbounded" }
+      )
     )
     const size = volumes.find((candidate) => candidate.Name === volume)
       ?.UsageData?.Size
-    return { volumeBytes: size !== undefined && size >= 0 ? size : null }
+    return {
+      containerName: container.Name.replace(/^\//u, ""),
+      dataDirectory: Option.getOrUndefined(inspected)?.Mountpoint || null,
+      volumeBytes: size !== undefined && size >= 0 ? size : null,
+    }
+  }
+
+  // Deletes everything in the database and leaves it empty, with the same
+  // name, login, and connections.
+  wipe(input: RelayDatabaseWipe): Promise<RelayManagedDatabase> {
+    return this.#serialize(input.databaseId, async () => {
+      const database = await this.#required(input.databaseId)
+      if (!database.observedState.match(/^(?:running|starting)$/u)) {
+        throw new Error("Start the database before wiping it")
+      }
+      const container = requiredContainerId(database)
+      const wipe = databaseWipeClient(database, input.username, input.password)
+      await Effect.runPromise(
+        this.#engine.execWithInput(container, wipe.command, {
+          env: wipe.env,
+          input: wipe.input,
+          maxOutputBytes: 64 * 1024,
+          overflow: "The database wipe printed more than expected",
+          timeout: 120_000,
+        })
+      )
+      return this.#required(input.databaseId)
+    })
   }
 
   async backupTarget(id: string): Promise<RelayManagedDatabase> {
@@ -528,11 +568,15 @@ export class DatabaseDriver {
   }
 
   async #labels(id: string): Promise<Record<string, string | undefined>> {
+    return (await this.#container(id)).Config.Labels ?? {}
+  }
+
+  async #container(id: string): Promise<DatabaseContainerInspect> {
     const container = (await this.#discover()).find(
       (candidate) => candidate.Config.Labels?.["kiln.database.id"] === id
     )
     if (!container) throw new Error("Database not found")
-    return container.Config.Labels ?? {}
+    return container
   }
 
   async #discover(): Promise<Array<DatabaseContainerInspect>> {
@@ -636,7 +680,7 @@ export class DatabaseDriver {
     )
     for (const name of candidates) {
       const inspected = await promiseResult(() =>
-        Effect.runPromise(
+        Effect.runPromise<{ readonly Labels: unknown }, unknown>(
           kind === "network"
             ? this.#engine.inspectNetwork(name)
             : this.#engine.inspectVolume(name)
@@ -778,6 +822,59 @@ function databaseClient(
         : ["--set", "ON_ERROR_STOP=on"]),
     ],
     env: [`PGPASSWORD=${password}`],
+  }
+}
+
+// SQL databases are dropped and created again as their administrator, from
+// inside the container, the way backup restores reach them. The name comes
+// from the container's label, which only allows [a-z0-9_]. Redis and Valkey
+// flush everything as the database's own user.
+function databaseWipeClient(
+  database: RelayManagedDatabase,
+  username: string,
+  password: string
+): DatabaseClient & { input: string } {
+  const name = database.databaseName
+  if (database.engine === "postgres") {
+    return {
+      command: [
+        "psql",
+        "--set",
+        "ON_ERROR_STOP=on",
+        "--username",
+        username,
+        "--dbname",
+        "postgres",
+      ],
+      env: [`PGPASSWORD=${password}`],
+      input: `DROP DATABASE IF EXISTS "${name}" WITH (FORCE);\nCREATE DATABASE "${name}";\n`,
+    }
+  }
+  if (database.engine === "mysql" || database.engine === "mariadb") {
+    const root =
+      database.engine === "mysql" ? "MYSQL_ROOT_PASSWORD" : "MARIADB_ROOT_PASSWORD"
+    const client = database.engine === "mysql" ? "mysql" : "mariadb"
+    return {
+      command: [
+        "sh",
+        "-ec",
+        `MYSQL_PWD="$${root}" exec ${client} --user=root`,
+      ],
+      env: [],
+      input: `DROP DATABASE IF EXISTS \`${name}\`;\nCREATE DATABASE \`${name}\`;\n`,
+    }
+  }
+  return {
+    command: [
+      database.engine === "redis" ? "redis-cli" : "valkey-cli",
+      "--user",
+      username,
+      "FLUSHALL",
+    ],
+    env: [
+      `${database.engine === "redis" ? "REDISCLI_AUTH" : "VALKEYCLI_AUTH"}=${password}`,
+    ],
+    input: "",
   }
 }
 

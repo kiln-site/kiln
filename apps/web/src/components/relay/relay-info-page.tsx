@@ -1,6 +1,10 @@
 import { useNavigate } from "@tanstack/react-router"
 
-import { InfoDangerZone, InfoPage } from "@/components/info-page"
+import {
+  InfoDangerAction,
+  InfoDangerZone,
+  InfoPage,
+} from "@/components/info-page"
 import { RemoveRelayDialog } from "@/components/relay/relay-actions"
 import { RelayInfoRail } from "@/components/relay/relay-info-rail"
 import { RelayProxySettings } from "@/components/relay/relay-proxy-settings"
@@ -30,17 +34,20 @@ function RelayDangerZone({ relay }: { relay: RelayDirectoryEntry }) {
   const navigate = useNavigate()
   if (!canDelete) return null
   return (
-    <InfoDangerZone
-      title="Remove this Relay"
-      action="Remove Relay"
-      dialog={(onOpenChange) => (
-        <RemoveRelayDialog
-          name={relay.name}
-          relayId={relay.id}
-          onOpenChange={onOpenChange}
-          onRemoved={() => navigate({ to: "/infra/relays" })}
-        />
-      )}
-    />
+    <InfoDangerZone>
+      <InfoDangerAction
+        solid
+        dialog={(onOpenChange) => (
+          <RemoveRelayDialog
+            name={relay.name}
+            relayId={relay.id}
+            onOpenChange={onOpenChange}
+            onRemoved={() => navigate({ to: "/infra/relays" })}
+          />
+        )}
+      >
+        Remove Relay
+      </InfoDangerAction>
+    </InfoDangerZone>
   )
 }

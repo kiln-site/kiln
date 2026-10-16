@@ -79,8 +79,9 @@ export const relayControlOperations = [
   "brick.catalog",
   "brick.recipe",
   "database.list",
-  "database.usage",
+  "database.inspect",
   "database.create",
+  "database.wipe",
   "database.delete",
   "database.action",
   "database.credentials.rotate",
@@ -192,6 +193,7 @@ const auditedRelayControlOperations = new Set<RelayControlOperation>([
   "instance.network.databases.remove",
   "database.create",
   "database.delete",
+  "database.wipe",
   "database.action",
   "database.credentials.rotate",
   "database.network.write",
@@ -240,7 +242,8 @@ export function relayControlDeadlineMs(
   if (operation === "database.credentials.rotate") return 180_000
   if (operation === "database.dump.export") return 120_000
   // Docker walks every volume to measure them.
-  if (operation === "database.usage") return 75_000
+  if (operation === "database.inspect") return 75_000
+  if (operation === "database.wipe") return 120_000
   if (operation === "database.dump.import") return 120_000
   if (operation === "instance.action") return 180_000
   if (

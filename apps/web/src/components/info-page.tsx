@@ -265,40 +265,54 @@ export function InfoCopyValue({
 }
 
 // The Danger zone at the bottom of an Info page, or after the sections when
-// they're taller. Its dialog mounts only while open.
-export function InfoDangerZone({
-  action,
+// they're taller, holding InfoDangerActions.
+export function InfoDangerZone({ children }: { children: React.ReactNode }) {
+  return (
+    <DangerZone
+      className="mt-auto"
+      action={
+        <div className="flex shrink-0 flex-wrap items-center gap-2">
+          {children}
+        </div>
+      }
+    />
+  )
+}
+
+// A Danger zone button and the dialog it opens, mounted only while open.
+// The last, most destructive action is solid; others are outlined.
+export function InfoDangerAction({
+  children,
   dialog,
   disabledReason,
-  title,
+  icon = <Trash2 />,
+  solid = false,
 }: {
   // The button's label, such as "Delete server".
-  action: string
+  children: string
   dialog: (onOpenChange: (open: boolean) => void) => React.ReactNode
   // Why the action can't run right now, such as a disconnected Relay.
   disabledReason?: string
-  title: string
+  icon?: React.ReactNode
+  solid?: boolean
 }) {
   const [open, setOpen] = React.useState(false)
   return (
     <>
-      <DangerZone
-        className="mt-auto"
-        title={title}
-        action={
-          <Button
-            type="button"
-            variant="destructive"
-            className="shrink-0"
-            disabled={Boolean(disabledReason)}
-            title={disabledReason}
-            onClick={() => setOpen(true)}
-          >
-            <Trash2 />
-            {action}
-          </Button>
-        }
-      />
+      <Button
+        type="button"
+        variant={solid ? "destructive" : "outline"}
+        className={cn(
+          !solid &&
+            "border-destructive/40 text-destructive hover:bg-destructive/10 hover:text-destructive"
+        )}
+        disabled={Boolean(disabledReason)}
+        title={disabledReason}
+        onClick={() => setOpen(true)}
+      >
+        {icon}
+        {children}
+      </Button>
       {open ? dialog(setOpen) : null}
     </>
   )

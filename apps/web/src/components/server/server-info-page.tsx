@@ -1,4 +1,8 @@
-import { InfoDangerZone, InfoPage } from "@/components/info-page"
+import {
+  InfoDangerAction,
+  InfoDangerZone,
+  InfoPage,
+} from "@/components/info-page"
 import { ServerDeleteDialog } from "@/components/server-delete-dialog"
 import { ServerInfoRail } from "@/components/server/server-info-rail"
 import {
@@ -80,28 +84,31 @@ function ServerDangerZone({
   relayConnected: boolean
 }) {
   return (
-    <InfoDangerZone
-      title="Delete this server"
-      action="Delete server"
-      disabledReason={
-        relayConnected
-          ? undefined
-          : "Reconnect this server's Relay before deleting"
-      }
-      dialog={(onOpenChange) => (
-        <ServerDeleteDialog
-          open
-          target={{
-            backupAvailable: !instance.provisioning,
-            id: instance.id,
-            name: instance.name,
-            relayId: instance.relayId,
-          }}
-          onDeleted={onDeleted}
-          passwordRequired={passwordRequired}
-          onOpenChange={onOpenChange}
-        />
-      )}
-    />
+    <InfoDangerZone>
+      <InfoDangerAction
+        solid
+        disabledReason={
+          relayConnected
+            ? undefined
+            : "Reconnect this server's Relay before deleting"
+        }
+        dialog={(onOpenChange) => (
+          <ServerDeleteDialog
+            open
+            target={{
+              backupAvailable: !instance.provisioning,
+              id: instance.id,
+              name: instance.name,
+              relayId: instance.relayId,
+            }}
+            onDeleted={onDeleted}
+            passwordRequired={passwordRequired}
+            onOpenChange={onOpenChange}
+          />
+        )}
+      >
+        Delete server
+      </InfoDangerAction>
+    </InfoDangerZone>
   )
 }

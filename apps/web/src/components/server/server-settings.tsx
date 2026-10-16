@@ -76,7 +76,7 @@ export function ServerGeneralSettings({
       <InfoFact label="Name">
         <InfoCopyValue label="server name" mono={false} value={instance.name} />
       </InfoFact>
-      <InfoFact label="ID">
+      <InfoFact label="Kiln ID">
         <InfoCopyValue label="server ID" value={instance.id} />
       </InfoFact>
       <InfoFact label="Game">{instance.game}</InfoFact>

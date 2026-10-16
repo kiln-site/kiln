@@ -92,7 +92,7 @@ export function RelayGeneralSettings({
       <InfoFact label="Name">
         <InfoCopyValue label="Relay name" mono={false} value={relay.name} />
       </InfoFact>
-      <InfoFact label="ID">
+      <InfoFact label="Kiln ID">
         <InfoCopyValue label="Relay ID" value={relay.id} />
       </InfoFact>
       <InfoFact label="Version">
