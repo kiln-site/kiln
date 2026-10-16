@@ -359,7 +359,8 @@ export function resourceUserCountQueryOptions(scope: {
 }
 
 // Who owns a resource, or null when the platform does. Keyed under the
-// Access page's own queries, so a transfer refreshes it.
+// Access page's own queries, so a transfer refreshes it; nothing announces
+// an owner renaming themselves, so it goes stale after a while too.
 export function resourceOwnerQueryOptions(scope: {
   relayId: string
   resourceId: string
@@ -375,17 +376,21 @@ export function resourceOwnerQueryOptions(scope: {
     ] as const,
     queryFn: () => getResourceOwner({ data: scope }),
     retry: false,
-    staleTime: Infinity,
+    staleTime: 30_000,
   })
 }
 
 // The owner's Minecraft head, apart from the owner so their card shows
-// before Mojang answers.
-export function resourceOwnerMinecraftProfileQueryOptions(scope: {
-  relayId: string
-  resourceId: string
-  resourceType: "database" | "instance" | "relay"
-}) {
+// before Mojang answers. Keyed by the owner's name too, so a new owner or
+// name looks the head up again.
+export function resourceOwnerMinecraftProfileQueryOptions(
+  scope: {
+    relayId: string
+    resourceId: string
+    resourceType: "database" | "instance" | "relay"
+  },
+  ownerName: string
+) {
   return queryOptions({
     queryKey: [
       "resource-access",
@@ -394,6 +399,7 @@ export function resourceOwnerMinecraftProfileQueryOptions(scope: {
       scope.resourceId,
       "owner",
       "minecraft",
+      ownerName,
     ] as const,
     queryFn: ({ signal }) =>
       getResourceOwnerMinecraftProfileId({ data: scope, signal }),

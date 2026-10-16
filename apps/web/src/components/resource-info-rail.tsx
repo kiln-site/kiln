@@ -96,7 +96,7 @@ const InfoRailOwner = React.memo(function InfoRailOwner({
   const scope = railScope(resource)
   const { data: owner } = useQuery(resourceOwnerQueryOptions(scope))
   const { data: profileId } = useQuery({
-    ...resourceOwnerMinecraftProfileQueryOptions(scope),
+    ...resourceOwnerMinecraftProfileQueryOptions(scope, owner?.name ?? ""),
     enabled: Boolean(owner),
   })
   if (owner === undefined) return null
