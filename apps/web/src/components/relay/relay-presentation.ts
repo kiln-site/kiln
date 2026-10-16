@@ -132,34 +132,49 @@ function proxyBlockedReason(
     .join(" ")
 }
 
-// What each proxy mode does, briefly, for the info beside it.
-export function proxyModeDescription(
+export interface ProxyModeCoverage {
+  items: ReadonlyArray<{ covered: boolean; label: string }>
+  note: string | null
+}
+
+// What traffic each proxy mode carries, as a checklist beside it.
+export function proxyModeCoverage(
   diagnostics: Pick<RelayProxyDiagnostics, "mode" | "warnings">
-): Array<string> {
+): ProxyModeCoverage {
+  const relay = diagnostics.mode !== "none"
+  const web = diagnostics.mode === "traefik" || diagnostics.mode === "coolify"
+  const items = [
+    { covered: relay, label: "Console traffic" },
+    { covered: relay, label: "File reads and writes" },
+    { covered: web, label: "App domains" },
+    { covered: web, label: "Game server web routes" },
+  ]
   switch (diagnostics.mode) {
     case "none": {
       // The Relay names the Docker network only in its note about this mode.
       const network = diagnostics.warnings
         .map((warning) => /Attach it to (\S+) before/u.exec(warning)?.[1])
         .find(Boolean)
-      return [
-        "Kiln doesn’t run a proxy on this node, so app domains need one of your own.",
-        network
-          ? `Connect it to the ${network} Docker network.`
-          : "Connect it to this Relay’s edge Docker network.",
-      ]
+      return {
+        items,
+        note: `Console and files reach the Relay directly. For domains, connect your own proxy to ${
+          network
+            ? `the ${network} Docker network`
+            : "this Relay’s edge network"
+        }.`,
+      }
     }
     case "hearth":
-      return [
-        "Hearth carries console and file traffic to this Relay.",
-        "To serve app domains, switch to Bundled or Coolify Traefik.",
-      ]
+      return {
+        items,
+        note: "For domains, switch to Bundled or Coolify Traefik.",
+      }
     case "traefik":
-      return [
-        "Kiln runs Traefik on ports 80 and 443, with certificates from Let’s Encrypt.",
-        "Kiln can’t tell from here whether the internet reaches it.",
-      ]
+      return {
+        items,
+        note: "Certificates come from Let’s Encrypt. Kiln can’t tell from here whether the internet reaches Traefik.",
+      }
     case "coolify":
-      return ["Kiln adds app domains to Coolify’s Traefik on this node."]
+      return { items, note: null }
   }
 }

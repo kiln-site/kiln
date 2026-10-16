@@ -1,7 +1,9 @@
 import { useQuery } from "@tanstack/react-query"
 import { Link } from "@tanstack/react-router"
-import { ArrowRight } from "lucide-react"
+import { ArrowRight, Check, X } from "lucide-react"
 import type { RelayProxyDiagnostics } from "@workspace/contracts"
+
+import { cn } from "@workspace/ui/lib/utils"
 
 import {
   InfoDetailRow,
@@ -12,7 +14,8 @@ import {
 } from "@/components/info-page"
 import { messageFrom } from "@/components/relay/relay-actions"
 import {
-  proxyModeDescription,
+  proxyModeCoverage,
+  type ProxyModeCoverage,
   proxyModeLabels,
   proxyStatusPresentation,
   useRelayLiveStatus,
@@ -73,12 +76,10 @@ export function RelayProxySettings({
       <InfoFact label="Mode">
         {proxyModeLabels[settings.mode]}
         <InfoHint
-          label="About this proxy mode"
+          label="What this proxy mode carries"
           title={proxyModeLabels[settings.mode]}
         >
-          {proxyModeDescription(diagnostics).map((line) => (
-            <p key={line}>{line}</p>
-          ))}
+          <ProxyModeCoverageList coverage={proxyModeCoverage(diagnostics)} />
         </InfoHint>
       </InfoFact>
       {bundled ? (
@@ -186,6 +187,39 @@ function ProxyPorts({ ports }: { ports: RelayProxyDiagnostics["ports"] }) {
         />
       ))}
     </InfoDetails>
+  )
+}
+
+function ProxyModeCoverageList({ coverage }: { coverage: ProxyModeCoverage }) {
+  return (
+    <>
+      <p className="type-technical-label text-muted-foreground/80">Proxies</p>
+      <ul className="flex flex-col gap-1.5">
+        {coverage.items.map(({ covered, label }) => (
+          <li
+            key={label}
+            className={cn(
+              "flex items-center gap-2",
+              covered ? "text-foreground" : "text-muted-foreground"
+            )}
+          >
+            {covered ? (
+              <Check
+                aria-label="Yes"
+                className="size-3.5 shrink-0 text-emerald-400"
+              />
+            ) : (
+              <X
+                aria-label="No"
+                className="size-3.5 shrink-0 text-muted-foreground/70"
+              />
+            )}
+            {label}
+          </li>
+        ))}
+      </ul>
+      {coverage.note ? <p>{coverage.note}</p> : null}
+    </>
   )
 }
 
