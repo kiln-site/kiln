@@ -28,6 +28,7 @@ import type {
 
 import { attachControlSocket } from "./control-socket.js"
 import type { ControlSocketOptions } from "./control-socket.js"
+import { RelayNotFoundError } from "./effect/errors.js"
 import { fingerprint } from "./effect/identity.js"
 import { makeRelayStateLayer, RelayStateStore } from "./effect/state.js"
 import type { RelayClientRole } from "./effect/state.js"
@@ -485,6 +486,27 @@ describe("Relay control socket", () => {
         type: "error",
       })
     }
+  })
+
+  it("answers not_found for something a request named that isn't here", async () => {
+    const relay = await startRelay({
+      execute: async () => {
+        throw RelayNotFoundError.make({
+          message: "Container hearth isn't on this Relay's Docker host",
+        })
+      },
+    })
+    const { inbox, socket } = await relay.connect(await relay.pair())
+
+    const id = sendRequest(socket, "relay.system.inspect", {
+      container: "hearth",
+    })
+    expect(await inbox.next()).toMatchObject({
+      code: "not_found",
+      message: "Container hearth isn't on this Relay's Docker host",
+      replyTo: id,
+      type: "error",
+    })
   })
 
   it("rejects an oversized response without closing the socket", async () => {

@@ -26,8 +26,8 @@ import {
 import { Effect, Semaphore } from "effect"
 
 import { runContainer } from "./docker-container-spec.js"
-import { DockerEngine } from "./docker-engine.js"
-import { RelaySystemUpdateError } from "./effect/errors.js"
+import { DockerEngine, isDockerNotFound } from "./docker-engine.js"
+import { RelayNotFoundError, RelaySystemUpdateError } from "./effect/errors.js"
 import {
   KILN_INSTALLATION_LABEL,
   kilnComponent,
@@ -119,8 +119,23 @@ export class SystemUpdateManager {
     this.#operationsDirectory = join(config.dataDirectory, "updates")
   }
 
-  inspect(container: string) {
-    return inspectContainerEffect(this.#engine, container).pipe(
+  /**
+   * Inspects a container Hearth named, or this Relay's own when `container`
+   * is null. Hearth asks every Relay for its own container and only the one
+   * on its Docker host has it, so a named container that isn't here fails
+   * with RelayNotFoundError rather than as a Relay error.
+   */
+  inspect(container: string | null) {
+    return inspectContainerEffect(this.#engine, container ?? hostname()).pipe(
+      Effect.catchIf(
+        (cause) => container !== null && isContainerMissing(cause),
+        () =>
+          Effect.fail(
+            RelayNotFoundError.make({
+              message: `Container ${container} isn't on this Relay's Docker host`,
+            })
+          )
+      ),
       Effect.map((inspected) =>
         updateEligibility(inspected, this.#installationId, this.#gitRepository)
       ),
@@ -942,6 +957,13 @@ function inspectContainerEffect(
         return yield* Effect.fail(directCause)
       })
     )
+  )
+}
+
+// Docker had no container by that ID or name, and none uses it as a hostname.
+function isContainerMissing(cause: RelaySystemUpdateError): boolean {
+  return (
+    cause.phase === "inspect.inspectContainer" && isDockerNotFound(cause.cause)
   )
 }
 

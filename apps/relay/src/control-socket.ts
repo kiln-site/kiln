@@ -45,6 +45,7 @@ import type {
   RelaySnapshot,
 } from "@workspace/contracts"
 
+import { RelayNotFoundError } from "./effect/errors.js"
 import { reportRelayError } from "./effect/runtime.js"
 import {
   actionsForRole,
@@ -586,18 +587,25 @@ function authenticateSocket(
     return operation.pipe(
       Effect.catch((cause) =>
         Effect.sync(() => {
-          if (!controller.signal.aborted) {
-            reportRelayError(cause, relayControlErrorContext(request))
+          if (controller.signal.aborted) {
+            sendError(
+              socket,
+              request.id,
+              "request_cancelled",
+              "Relay request was cancelled"
+            )
+            return
           }
+          if (cause instanceof RelayNotFoundError) {
+            sendError(socket, request.id, "not_found", cause.message)
+            return
+          }
+          reportRelayError(cause, relayControlErrorContext(request))
           sendError(
             socket,
             request.id,
-            controller.signal.aborted
-              ? "request_cancelled"
-              : "operation_failed",
-            controller.signal.aborted
-              ? "Relay request was cancelled"
-              : relayControlErrorMessage(cause)
+            "operation_failed",
+            relayControlErrorMessage(cause)
           )
         })
       ),

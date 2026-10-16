@@ -559,6 +559,28 @@ describe("container identity", () => {
       )
   )
 
+  effectIt.effect(
+    "answers that Hearth's container isn't here, but fails to find its own",
+    () =>
+      withTemporaryDataDirectory((dataDirectory) =>
+        Effect.gen(function* () {
+          const manager = yield* Effect.promise(() =>
+            docker.manager({ dataDirectory })
+          )
+
+          const elsewhere = yield* manager
+            .inspect("hearth-on-another-host")
+            .pipe(Effect.flip)
+          // This Relay's own container is the one beside it; the test host
+          // has none by its hostname.
+          const own = yield* manager.inspect(null).pipe(Effect.flip)
+
+          expect(elsewhere._tag).toBe("RelayNotFoundError")
+          expect(own._tag).toBe("RelaySystemUpdateError")
+        })
+      )
+  )
+
   effectIt.effect("rejects a container from another Kiln installation", () =>
     withTemporaryDataDirectory((dataDirectory) =>
       Effect.gen(function* () {

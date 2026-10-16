@@ -126,6 +126,19 @@ export class RelayUnavailableError extends Schema.TaggedError<RelayUnavailableEr
   }
 ) {}
 
+/**
+ * Hearth couldn't reach a Relay it expected might be away, such as one
+ * restarting into an update the browser is following. The browser shows it
+ * reconnecting and asks again, so it isn't reported.
+ */
+export class RelayAwayError extends Schema.TaggedError<RelayAwayError>()(
+  "RelayAwayError",
+  {
+    message: Schema.String,
+    cause: Schema.optional(Schema.Defect()),
+  }
+) {}
+
 export class RelayResponseError extends Schema.TaggedError<RelayResponseError>()(
   "RelayResponseError",
   {

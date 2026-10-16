@@ -62,6 +62,15 @@ export class BrickRecipeError extends Schema.TaggedError<BrickRecipeError>()(
   }
 }
 
+/**
+ * Something a request named isn't on this Relay. That answers the request,
+ * so Hearth gets `not_found` and the Relay doesn't report it as an error.
+ */
+export class RelayNotFoundError extends Schema.TaggedError<RelayNotFoundError>()(
+  "RelayNotFoundError",
+  { message: Schema.String }
+) {}
+
 export class RelayStateError extends Schema.TaggedError<RelayStateError>()(
   "RelayStateError",
   {

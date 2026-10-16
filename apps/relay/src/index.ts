@@ -1239,7 +1239,7 @@ async function executeControlRequest(
         systemUpdates.inspect(
           typeof payload.container === "string" && payload.container.trim()
             ? payload.container
-            : hostname()
+            : null
         )
       )
     case "relay.update.apply": {

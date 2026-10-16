@@ -9,7 +9,7 @@ import {
   recordComponentVersionsEffect,
   releaseHistoryPageEffect,
 } from "@/effect/kiln-release-feed"
-import { RelayUnavailableError } from "@/effect/errors"
+import { RelayAwayError, RelayUnavailableError } from "@/effect/errors"
 import { platformAdminIdsEffect } from "@/effect/notifications"
 import { attachRelayOwnersEffect } from "@/effect/relay-owners"
 import { runAppEffect } from "@/effect/runtime"
@@ -545,11 +545,22 @@ export const getSystemUpdateStatus = createServerFn({ method: "POST" })
       import("@/lib/relay-connection"),
     ])
     const relay = await selectedRelay(relays, data.relayId)
-    const result = await relayRpc(
-      relay,
-      "relay.update.status",
-      { operationId: data.operationId },
-      15_000
+    const result = await Effect.runPromise(
+      Effect.tryPromise({
+        try: () =>
+          relayRpc(
+            relay,
+            "relay.update.status",
+            { operationId: data.operationId },
+            15_000
+          ),
+        // The Relay may be restarting into the update. Errors it answered
+        // with carry a code and are still reported.
+        catch: (cause) =>
+          cause instanceof RelayUnavailableError && cause.code === undefined
+            ? RelayAwayError.make({ message: cause.message, cause })
+            : cause,
+      })
     )
     if (result === null) return null
     const operation = updateOperationSchema.parse(result)
