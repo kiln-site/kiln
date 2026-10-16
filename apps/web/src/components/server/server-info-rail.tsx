@@ -106,7 +106,7 @@ function CopyRelayIdButton({ relayId }: { relayId: string }) {
       aria-label={`Copy Relay ID ${relayId}`}
       title={relayId}
       className={cn(
-        "flex items-center gap-1.5 text-xs transition-colors outline-none focus-visible:text-primary",
+        "flex items-center gap-1.5 px-2 text-xs transition-colors outline-none hover:bg-muted focus-visible:bg-muted focus-visible:text-primary",
         copied
           ? "text-emerald-400"
           : "text-muted-foreground/80 hover:text-primary"

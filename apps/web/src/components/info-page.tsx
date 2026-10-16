@@ -273,8 +273,13 @@ function InfoRailRowContent({
           {detail}
         </span>
       ) : null}
-      {/* Above a row's link, so it takes its own clicks. */}
-      {action ? <span className="relative z-10 shrink-0">{action}</span> : null}
+      {/* Above a row's link, so it takes its own clicks, and the row's full
+          height so it's easy to hit. */}
+      {action ? (
+        <span className="relative z-10 -my-1.5 flex shrink-0 self-stretch">
+          {action}
+        </span>
+      ) : null}
     </>
   )
 }
