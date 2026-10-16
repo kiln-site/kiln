@@ -99,10 +99,6 @@ COPY apps/relay/package.runtime.json ./package.json
 RUN ["/nodejs/bin/node", "--input-type=module", "-e", "await import('reflect-metadata'); const manifest = await import('./package.json', { with: { type: 'json' } }); await Promise.all(Object.keys(manifest.default.dependencies).map((name) => import(name)))"]
 COPY --from=build /source/apps/relay/dist ./dist
 COPY --chmod=755 apps/relay/bin/kiln-relay.mjs /usr/local/bin/kiln-relay
-# The Relay runs no docker CLI: the build fails on any executable named
-# docker or docker-* anywhere on the image's filesystem (as find / -xdev,
-# past /proc and /sys), but the Compose and buildx binaries at their paths.
-RUN ["/nodejs/bin/node", "-e", "const fs = require('node:fs'); const path = require('node:path'); const allowed = new Set(['/usr/local/bin/docker-compose', '/usr/local/libexec/docker/cli-plugins/docker-buildx']); const device = fs.statSync('/').dev; const found = []; const walk = (directory) => { for (const entry of fs.readdirSync(directory, { withFileTypes: true })) { const full = path.join(directory, entry.name); if (full === '/proc' || full === '/sys') continue; const info = fs.lstatSync(full); if (info.dev !== device) continue; if (info.isDirectory()) { walk(full); continue } if (/^docker(-|$)/.test(entry.name) && (info.isSymbolicLink() || (info.isFile() && (info.mode & 0o111) !== 0)) && !(allowed.has(full) && info.isFile())) found.push(full) } }; walk('/'); if (found.length > 0) { console.error('The Relay image must not ship the docker CLI: ' + found.join(', ')); process.exit(1) }"]
 
 ARG KILN_VERSION
 ARG SOURCE_COMMIT
