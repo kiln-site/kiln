@@ -286,7 +286,7 @@ export function DatabaseDataSection({
                 server: database.id,
               }}
             >
-              Restore backup
+              Restore Backup
             </InfoSectionLink>
           ) : null}
         </>
@@ -341,11 +341,9 @@ function DatabaseImportDropZone({
       >
         <Upload className="size-5 text-muted-foreground" />
         <span className="text-[0.8125rem] font-medium">
-          Drop a .sql file to import
+          Upload a .sql file to import
         </span>
-        <span className="text-xs text-muted-foreground">
-          or click to choose one, up to 700 KB
-        </span>
+        <span className="text-xs text-muted-foreground">700 KB Limit</span>
         <input
           accept=".sql,application/sql,text/plain"
           className="sr-only"

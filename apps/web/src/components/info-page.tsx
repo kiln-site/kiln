@@ -280,13 +280,11 @@ export function InfoDangerZone({ children }: { children: React.ReactNode }) {
 }
 
 // A Danger zone button and the dialog it opens, mounted only while open.
-// The last, most destructive action is solid; others are outlined.
 export function InfoDangerAction({
   children,
   dialog,
   disabledReason,
   icon = <Trash2 />,
-  solid = false,
 }: {
   // The button's label, such as "Delete server".
   children: string
@@ -294,18 +292,13 @@ export function InfoDangerAction({
   // Why the action can't run right now, such as a disconnected Relay.
   disabledReason?: string
   icon?: React.ReactNode
-  solid?: boolean
 }) {
   const [open, setOpen] = React.useState(false)
   return (
     <>
       <Button
         type="button"
-        variant={solid ? "destructive" : "outline"}
-        className={cn(
-          !solid &&
-            "border-destructive/40 text-destructive hover:bg-destructive/10 hover:text-destructive"
-        )}
+        variant="destructive"
         disabled={Boolean(disabledReason)}
         title={disabledReason}
         onClick={() => setOpen(true)}

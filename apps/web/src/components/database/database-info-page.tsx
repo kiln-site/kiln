@@ -133,7 +133,6 @@ function DatabaseDangerZone({
         </InfoDangerAction>
       ) : null}
       <InfoDangerAction
-        solid
         dialog={(onOpenChange) => (
           <DeleteDatabaseDialog
             database={database}

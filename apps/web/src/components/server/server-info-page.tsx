@@ -86,7 +86,6 @@ function ServerDangerZone({
   return (
     <InfoDangerZone>
       <InfoDangerAction
-        solid
         disabledReason={
           relayConnected
             ? undefined

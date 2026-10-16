@@ -155,7 +155,7 @@ export function RotateDatabasePasswordButton({
         onClick={() => setOpen(true)}
       >
         <RotateCw />
-        Rotate password
+        Rotate Password
       </Button>
       {open ? (
         <RotateDatabasePasswordDialog
@@ -225,7 +225,7 @@ function RotateDatabasePasswordDialog({
             ) : (
               <RotateCw />
             )}
-            Rotate password
+            Rotate Password
           </Button>
         </DialogFooter>
       </DialogContent>

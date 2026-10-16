@@ -36,7 +36,6 @@ function RelayDangerZone({ relay }: { relay: RelayDirectoryEntry }) {
   return (
     <InfoDangerZone>
       <InfoDangerAction
-        solid
         dialog={(onOpenChange) => (
           <RemoveRelayDialog
             name={relay.name}
