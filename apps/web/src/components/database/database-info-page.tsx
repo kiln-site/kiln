@@ -1,4 +1,5 @@
 import * as React from "react"
+import { databaseEngineSupportsBrowsing } from "@workspace/contracts"
 import { useQuery } from "@tanstack/react-query"
 import { useNavigate } from "@tanstack/react-router"
 
@@ -41,6 +42,10 @@ export function DatabaseInfoPage() {
   const canExport = can("database.dump.export")
   const canImport = can("database.dump.import")
   const canRestore = useDatabaseBackupRestore(database)
+  // As the Viewer tab is offered.
+  const canView =
+    databaseEngineSupportsBrowsing(database.engine) &&
+    can("database.data.read")
 
   return (
     <InfoPage rail={<DatabaseInfoRail database={database} />}>
@@ -58,13 +63,15 @@ export function DatabaseInfoPage() {
       ) : null}
       {database.supportsImportExport &&
       database.hasCredentials &&
-      (canExport || canImport || canRestore) ? (
+      (canExport || canImport || canRestore || canView) ? (
         <DatabaseDataSection
           available={available}
           canExport={canExport}
           canImport={canImport}
           canRestore={canRestore}
+          canView={canView}
           database={database}
+          routeId={routeId}
         />
       ) : null}
       <DatabaseConnectionSettings

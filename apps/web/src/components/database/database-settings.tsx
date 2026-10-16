@@ -248,13 +248,17 @@ export function DatabaseDataSection({
   canExport,
   canImport,
   canRestore,
+  canView,
   database,
+  routeId,
 }: {
   available: boolean
   canExport: boolean
   canImport: boolean
   canRestore: boolean
+  canView: boolean
   database: ManagedDatabase
+  routeId: string
 }) {
   const exportDump = useDatabaseExport(database)
   const unavailableReason = available
@@ -284,6 +288,14 @@ export function DatabaseDataSection({
               )}
               Export SQL
             </Button>
+          ) : null}
+          {canView ? (
+            <InfoSectionLink
+              to="/db/$databaseId/viewer"
+              params={{ databaseId: routeId }}
+            >
+              View Data
+            </InfoSectionLink>
           ) : null}
           {canRestore ? <RestoreBackupButton database={database} /> : null}
         </>
