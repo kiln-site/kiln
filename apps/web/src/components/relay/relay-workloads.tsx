@@ -1,9 +1,7 @@
 import * as React from "react"
 import { useQuery } from "@tanstack/react-query"
-import { Link } from "@tanstack/react-router"
-import { ChevronRight } from "lucide-react"
 
-import { InfoRailGroup } from "@/components/info-page"
+import { InfoRailGroup, InfoRailLink } from "@/components/info-page"
 import {
   canAccessInfrastructureDestination,
   infrastructureDestinations,
@@ -125,24 +123,14 @@ function WorkloadLink({
   to: WorkloadList
 }) {
   return (
-    <Link
+    <InfoRailLink
       to={to}
       search={{ search }}
-      className="group -mx-2 flex min-w-0 items-center gap-2.5 px-2 py-1.5 text-[0.8125rem] transition-colors outline-none hover:bg-muted/60 focus-visible:bg-muted/60 focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-inset"
+      detail={detail}
+      leading={count ?? "—"}
     >
-      <span className="w-6 shrink-0 font-semibold tabular-nums">
-        {count ?? "—"}
-      </span>
-      <span className="min-w-0 flex-1 truncate text-muted-foreground transition-colors group-hover:text-foreground">
-        {count === 1 ? noun.one : noun.other}
-      </span>
-      {detail ? (
-        <span className="shrink-0 text-xs text-muted-foreground/80">
-          {detail}
-        </span>
-      ) : null}
-      <ChevronRight className="size-3.5 shrink-0 text-muted-foreground/70 transition-transform group-hover:translate-x-0.5" />
-    </Link>
+      {count === 1 ? noun.one : noun.other}
+    </InfoRailLink>
   )
 }
 

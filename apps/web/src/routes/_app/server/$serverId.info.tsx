@@ -7,7 +7,7 @@ import {
   useInstancePermissions,
   useInstanceRelayConnected,
 } from "@/components/instance-workspace-context"
-import { SettingsWorkspace } from "@/components/settings-workspace"
+import { ServerInfoPage } from "@/components/server/server-info-page"
 import { isDevelopmentBypassIdentity } from "@/lib/development-bypass"
 import { pageTitle } from "@/lib/page-title"
 import { relaySnapshotQueryOptions } from "@/lib/query-options"
@@ -48,7 +48,7 @@ function InfoRoute() {
   )
   if (!data) return null
   return (
-    <SettingsWorkspace
+    <ServerInfoPage
       key={`${data.instance.relayId}:${data.instance.id}`}
       instance={data.instance}
       node={data.node}

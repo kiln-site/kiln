@@ -1,0 +1,548 @@
+import * as React from "react"
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
+import { Link } from "@tanstack/react-router"
+import { Effect } from "effect"
+import {
+  ArrowRight,
+  Check,
+  Copy,
+  FileCode2,
+  LoaderCircle,
+  Pencil,
+} from "lucide-react"
+import {
+  MAXIMUM_INSTANCE_NAME_LENGTH,
+  type RelayInstancePortProtocol,
+} from "@workspace/contracts"
+
+import { Button } from "@workspace/ui/components/button"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@workspace/ui/components/dialog"
+import { Input } from "@workspace/ui/components/input"
+import { showToast } from "@workspace/ui/components/sonner"
+
+import { CodeDocumentPanel } from "@/components/code-document-panel"
+import {
+  InfoCopyValue,
+  InfoDetailRow,
+  InfoDetails,
+  InfoFact,
+  InfoHint,
+  InfoSection,
+} from "@/components/info-page"
+import { InstanceFavoriteButton } from "@/components/instance-favorite"
+import { LiveServerBrickIcon } from "@/components/instance-name"
+import { StatusIndicator } from "@/components/status-indicator"
+import { hostPortAddress } from "@/lib/domain-address"
+import { provisioningFailureDiagnostics } from "@/lib/provisioning-diagnostics"
+import { instanceRecipeQueryOptions } from "@/lib/query-options"
+import { applyUpdatedInstance } from "@/lib/realtime-client"
+import type { InstanceSettingsInstance } from "@/lib/relay-selectors"
+import { warmSyntaxCodeEditorModule } from "@/lib/syntax-editor-module-preload"
+import { updateInstanceName, uploadToMclogs } from "@/server/relay"
+
+// The game server's details on its Info page, one section per concern, each
+// with the actions that change it.
+
+export function ServerGeneralSettings({
+  canRename,
+  instance,
+  relayConnected,
+}: {
+  canRename: boolean
+  instance: InstanceSettingsInstance
+  relayConnected: boolean
+}) {
+  return (
+    <InfoSection
+      title="Server"
+      action={
+        <>
+          {canRename ? (
+            <ServerRenameButton
+              instance={instance}
+              relayConnected={relayConnected}
+            />
+          ) : null}
+          <InstanceFavoriteButton
+            id={instance.id}
+            kind="server"
+            relayId={instance.relayId}
+          />
+        </>
+      }
+    >
+      <InfoFact label="Name">
+        <InfoCopyValue label="server name" mono={false} value={instance.name} />
+      </InfoFact>
+      <InfoFact label="ID">
+        <InfoCopyValue label="server ID" value={instance.id} />
+      </InfoFact>
+      <InfoFact label="Game">{instance.game}</InfoFact>
+    </InfoSection>
+  )
+}
+
+// How players reach the server. Network changes the ports and domains.
+export function ServerConnectionSettings({
+  canViewNetwork,
+  instance,
+}: {
+  canViewNetwork: boolean
+  instance: InstanceSettingsInstance
+}) {
+  const address = instance.connectAddress
+  const addressError = address.startsWith("Error:") ? address : null
+  const directAddress =
+    instance.publicHost && instance.publicPort
+      ? hostPortAddress(instance.publicHost, instance.publicPort)
+      : null
+
+  return (
+    <InfoSection
+      title="Connection"
+      action={
+        canViewNetwork ? (
+          <Button asChild size="sm" variant="outline">
+            <Link
+              to="/server/$serverId/network"
+              params={{ serverId: instance.routeId }}
+            >
+              Network
+              <ArrowRight />
+            </Link>
+          </Button>
+        ) : null
+      }
+    >
+      <InfoFact label="Address">
+        {addressError ? (
+          <span
+            className="truncate font-mono text-xs text-destructive"
+            title={addressError}
+          >
+            {addressError}
+          </span>
+        ) : (
+          <InfoCopyValue label="server address" value={address} />
+        )}
+      </InfoFact>
+      {directAddress && directAddress !== address ? (
+        <InfoFact label="Direct">
+          <InfoCopyValue label="direct address" value={directAddress} />
+          <InfoHint label="About the direct address" title="Direct address">
+            <p>
+              The Relay’s host and the game port, without the domain. Players
+              can join here too.
+            </p>
+          </InfoHint>
+        </InfoFact>
+      ) : null}
+      {instance.ports.length > 0 ? (
+        <InfoFact label="Ports">
+          <InfoDetails
+            title="Ports"
+            trigger={
+              instance.ports.length === 1
+                ? "1 port"
+                : `${instance.ports.length} ports`
+            }
+          >
+            {instance.ports.map((port) => (
+              <InfoDetailRow
+                key={`${port.name}:${port.internalPort}:${port.protocol}`}
+                label={port.name}
+                value={`${port.externalPort} → ${port.internalPort} ${portProtocolLabel(port.protocol)}`}
+              />
+            ))}
+            <p>Public port on the Relay, then the port inside the server.</p>
+          </InfoDetails>
+        </InfoFact>
+      ) : null}
+    </InfoSection>
+  )
+}
+
+// What the server is built from. Startup changes its version and runtime.
+export function ServerBrickSettings({
+  canShare,
+  canViewStartup,
+  instance,
+}: {
+  canShare: boolean
+  canViewStartup: boolean
+  instance: InstanceSettingsInstance
+}) {
+  const provisioning = Boolean(instance.provisioning)
+  return (
+    <InfoSection
+      title="Brick"
+      action={
+        provisioning ? null : (
+          <>
+            <BrickRecipeButton canShare={canShare} instance={instance} />
+            {canViewStartup ? (
+              <Button asChild size="sm" variant="outline">
+                <Link
+                  to="/server/$serverId/startup"
+                  params={{ serverId: instance.routeId }}
+                >
+                  Startup
+                  <ArrowRight />
+                </Link>
+              </Button>
+            ) : null}
+          </>
+        )
+      }
+    >
+      <InfoFact label="Brick">
+        <LiveServerBrickIcon
+          brickId={instance.brickId}
+          brickSource={instance.brickSource}
+          className="size-4 shrink-0"
+          implementation={instance.implementation}
+        />
+        <InfoCopyValue
+          label="Brick ID"
+          value={instance.brickId ?? instance.implementation}
+        />
+      </InfoFact>
+      <InfoFact label="Version">
+        <span className="truncate">
+          {instance.implementation} {instance.version}
+        </span>
+      </InfoFact>
+      <InfoFact label="Runtime">
+        <span className="truncate font-mono text-xs">
+          {instance.javaVersion}
+        </span>
+      </InfoFact>
+    </InfoSection>
+  )
+}
+
+// Where provisioning is, and for a failed attempt, what to copy for support.
+export function ServerProvisioningSection({
+  instance,
+}: {
+  instance: InstanceSettingsInstance
+}) {
+  const provisioning = instance.provisioning
+  if (!provisioning) return null
+  const failed = provisioning.phase === "failed"
+  return (
+    <InfoSection
+      title="Provisioning"
+      status={
+        <StatusIndicator
+          status={
+            failed
+              ? { label: "Failed", tone: "danger" }
+              : { label: "In progress", pulse: true, tone: "info" }
+          }
+        />
+      }
+      action={failed ? <CopyDiagnosticsButton instance={instance} /> : null}
+    >
+      <InfoFact label="Attempt">{Math.max(1, provisioning.attempt)}</InfoFact>
+      <InfoFact label="Phase">
+        {provisioningPhaseLabel(provisioning.failedPhase ?? provisioning.phase)}
+      </InfoFact>
+      {failed ? (
+        <InfoFact label="Error">
+          <span
+            className="truncate font-mono text-xs text-muted-foreground"
+            title={provisioning.error ?? undefined}
+          >
+            {provisioning.error ?? "The Relay gave no reason."}
+          </span>
+        </InfoFact>
+      ) : null}
+    </InfoSection>
+  )
+}
+
+function CopyDiagnosticsButton({
+  instance,
+}: {
+  instance: InstanceSettingsInstance
+}) {
+  const provisioning = instance.provisioning
+  if (!provisioning) return null
+  const diagnostics = provisioningFailureDiagnostics({
+    attempt: provisioning.attempt,
+    error: provisioning.error,
+    failedPhase: provisioning.failedPhase,
+    instanceId: instance.id,
+    instanceName: instance.name,
+    relayId: instance.relayId,
+  })
+
+  function copyDiagnostics() {
+    Effect.runFork(
+      Effect.tryPromise({
+        try: () => navigator.clipboard.writeText(diagnostics),
+        catch: (cause) => cause,
+      }).pipe(
+        Effect.match({
+          onFailure: () =>
+            showToast({
+              message:
+                "Could not copy diagnostics. Select the error text manually.",
+              type: "error",
+            }),
+          onSuccess: () =>
+            showToast({
+              message: "Provisioning diagnostics copied",
+              type: "success",
+            }),
+        })
+      )
+    )
+  }
+
+  return (
+    <Button type="button" size="sm" variant="outline" onClick={copyDiagnostics}>
+      <Copy />
+      Copy diagnostics
+    </Button>
+  )
+}
+
+function BrickRecipeButton({
+  canShare,
+  instance,
+}: {
+  canShare: boolean
+  instance: InstanceSettingsInstance
+}) {
+  const [open, setOpen] = React.useState(false)
+  return (
+    <>
+      <Button
+        type="button"
+        size="sm"
+        variant="outline"
+        onPointerEnter={warmSyntaxCodeEditorModule}
+        onFocus={warmSyntaxCodeEditorModule}
+        onClick={() => {
+          warmSyntaxCodeEditorModule()
+          setOpen(true)
+        }}
+      >
+        <FileCode2 />
+        Recipe
+      </Button>
+      <Dialog open={open} onOpenChange={setOpen}>
+        <DialogContent className="gap-0 overflow-hidden p-0 sm:max-w-4xl">
+          {open ? (
+            <BrickRecipeDialogBody canShare={canShare} instance={instance} />
+          ) : null}
+        </DialogContent>
+      </Dialog>
+    </>
+  )
+}
+
+// Fetched only while the dialog is open.
+function BrickRecipeDialogBody({
+  canShare,
+  instance,
+}: {
+  canShare: boolean
+  instance: InstanceSettingsInstance
+}) {
+  const recipeQuery = useQuery(
+    instanceRecipeQueryOptions(instance.relayId, instance.id)
+  )
+  const shareRecipe = React.useCallback(
+    async (content: string) => {
+      const result = await uploadToMclogs({
+        data: {
+          content,
+          implementation: instance.implementation,
+          instanceId: instance.id,
+          path: "brick-recipe.json",
+          relayId: instance.relayId,
+          version: instance.version,
+        },
+      })
+      return result.url
+    },
+    [instance.id, instance.implementation, instance.relayId, instance.version]
+  )
+
+  return (
+    <>
+      <DialogHeader className="sr-only">
+        <DialogTitle>{recipeQuery.data?.name ?? "Brick recipe"}</DialogTitle>
+        <DialogDescription>Preview this server&apos;s recipe.</DialogDescription>
+      </DialogHeader>
+      {recipeQuery.isPending ? (
+        <div className="grid h-[min(72dvh,42rem)] min-h-80 place-items-center bg-card text-muted-foreground">
+          <LoaderCircle className="size-4 animate-spin" />
+        </div>
+      ) : recipeQuery.isError ? (
+        <div className="grid h-[min(72dvh,42rem)] min-h-80 place-items-center bg-card px-6 text-center text-xs text-destructive">
+          {recipeQuery.error.message || "Could not load the Brick recipe"}
+        </div>
+      ) : (
+        <CodeDocumentPanel
+          content={recipeQuery.data.content}
+          languagePath="brick-recipe.json"
+          noun="recipe"
+          onShare={canShare ? shareRecipe : undefined}
+          sourceUrl={recipeQuery.data.sourceUrl}
+          title={recipeQuery.data.name}
+        />
+      )}
+    </>
+  )
+}
+
+function ServerRenameButton({
+  instance,
+  relayConnected,
+}: {
+  instance: InstanceSettingsInstance
+  relayConnected: boolean
+}) {
+  const [open, setOpen] = React.useState(false)
+  return (
+    <>
+      <Button
+        type="button"
+        size="sm"
+        variant="outline"
+        disabled={!relayConnected}
+        title={
+          relayConnected
+            ? undefined
+            : "Reconnect this server's Relay before renaming"
+        }
+        onClick={() => setOpen(true)}
+      >
+        <Pencil />
+        Rename
+      </Button>
+      {open ? (
+        <ServerRenameDialog instance={instance} onOpenChange={setOpen} />
+      ) : null}
+    </>
+  )
+}
+
+function ServerRenameDialog({
+  instance,
+  onOpenChange,
+}: {
+  instance: InstanceSettingsInstance
+  onOpenChange: (open: boolean) => void
+}) {
+  const queryClient = useQueryClient()
+  const [name, setName] = React.useState(instance.name)
+  const [error, setError] = React.useState<string | null>(null)
+  const rename = useMutation({
+    mutationFn: updateInstanceName,
+    onSuccess: (updated) => {
+      applyUpdatedInstance(queryClient, updated)
+      showToast({ message: "Server renamed", type: "success" })
+      onOpenChange(false)
+    },
+    onError: (cause) =>
+      setError(
+        cause instanceof Error ? cause.message : "Could not rename the server"
+      ),
+  })
+  const nextName = name.trim()
+  const unchanged = !nextName || nextName === instance.name
+
+  function submit(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    if (unchanged || rename.isPending) return
+    setError(null)
+    rename.mutate({
+      data: {
+        instanceId: instance.id,
+        name: nextName,
+        relayId: instance.relayId,
+      },
+    })
+  }
+
+  return (
+    <Dialog
+      open
+      onOpenChange={(nextOpen) => !rename.isPending && onOpenChange(nextOpen)}
+    >
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>Rename server</DialogTitle>
+          <DialogDescription>
+            The name can change without changing the server ID.
+          </DialogDescription>
+        </DialogHeader>
+        <form className="space-y-4" onSubmit={submit}>
+          <div className="space-y-1.5">
+            <label
+              htmlFor={`server-name-${instance.id}`}
+              className="type-label block text-muted-foreground"
+            >
+              Name
+            </label>
+            <Input
+              id={`server-name-${instance.id}`}
+              value={name}
+              onChange={(event) => {
+                setName(event.target.value)
+                setError(null)
+              }}
+              maxLength={MAXIMUM_INSTANCE_NAME_LENGTH}
+              disabled={rename.isPending}
+              aria-invalid={Boolean(error)}
+              autoFocus
+              required
+            />
+            {error ? (
+              <p className="type-meta text-destructive">{error}</p>
+            ) : null}
+          </div>
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              disabled={rename.isPending}
+              onClick={() => onOpenChange(false)}
+            >
+              Cancel
+            </Button>
+            <Button type="submit" disabled={unchanged || rename.isPending}>
+              {rename.isPending ? (
+                <LoaderCircle className="animate-spin" />
+              ) : (
+                <Check />
+              )}
+              Save
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+function portProtocolLabel(protocol: RelayInstancePortProtocol): string {
+  return protocol === "both" ? "TCP/UDP" : protocol.toUpperCase()
+}
+
+function provisioningPhaseLabel(phase: string): string {
+  const words = phase.replaceAll("_", " ")
+  return `${words.charAt(0).toUpperCase()}${words.slice(1)}`
+}

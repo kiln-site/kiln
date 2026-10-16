@@ -1,5 +1,6 @@
 import * as React from "react"
-import { Check, Copy, Info } from "lucide-react"
+import { createLink } from "@tanstack/react-router"
+import { Check, ChevronRight, Copy, Info } from "lucide-react"
 
 import {
   Popover,
@@ -224,6 +225,45 @@ export function InfoRailGroup({
     </section>
   )
 }
+
+// A row in a rail group that opens a page: what leads it, such as a count,
+// then its label and a detail on the right.
+const InfoRailLinkAnchor = React.forwardRef<
+  HTMLAnchorElement,
+  React.ComponentPropsWithoutRef<"a"> & {
+    detail?: React.ReactNode
+    leading: React.ReactNode
+  }
+>(function InfoRailLinkAnchor(
+  { children, className, detail, leading, ...props },
+  ref
+) {
+  return (
+    <a
+      ref={ref}
+      {...props}
+      className={cn(
+        "group -mx-2 flex min-w-0 items-center gap-2.5 px-2 py-1.5 text-[0.8125rem] transition-colors outline-none hover:bg-muted/60 focus-visible:bg-muted/60 focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-inset",
+        className
+      )}
+    >
+      <span className="flex w-6 shrink-0 items-center font-semibold tabular-nums [&_svg]:size-3.5 [&_svg]:text-muted-foreground">
+        {leading}
+      </span>
+      <span className="min-w-0 flex-1 truncate text-muted-foreground transition-colors group-hover:text-foreground">
+        {children}
+      </span>
+      {detail ? (
+        <span className="shrink-0 text-xs text-muted-foreground/80">
+          {detail}
+        </span>
+      ) : null}
+      <ChevronRight className="size-3.5 shrink-0 text-muted-foreground/70 transition-transform group-hover:translate-x-0.5" />
+    </a>
+  )
+})
+
+export const InfoRailLink = createLink(InfoRailLinkAnchor)
 
 export function InfoRailCard({
   children,

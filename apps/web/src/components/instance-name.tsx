@@ -387,7 +387,7 @@ const InstanceIcon = React.memo(function InstanceIcon({
   return <Icon className={cn("size-4", iconSizeClassName)} aria-hidden="true" />
 })
 
-const LiveServerBrickIcon = React.memo(function LiveServerBrickIcon({
+export const LiveServerBrickIcon = React.memo(function LiveServerBrickIcon({
   brickId,
   brickSource,
   className,
