@@ -45,8 +45,10 @@ import {
   relayBrowserAuthorizationReady,
   relayConnectionBrowserMetadata,
   relayConnectionState,
+  relayConnectionNode,
   relayRpc,
   relaySystemUpdates,
+  relayUpdateReportState,
 } from "@/lib/relay-connection"
 import { loadRelayCredentials } from "@/lib/relay-registry"
 import { subscribeRealtimeChanges } from "@/lib/realtime-source.server"
@@ -245,20 +247,27 @@ effectIt.effect(
     withRelayServer(({ disconnect, endpoint, reconnected, reportUpdates }) =>
       Effect.gen(function* () {
         const relayStates: Array<string> = []
+        const browserEvents: Array<unknown> = []
         const unsubscribe = subscribeRealtimeChanges((event) => {
           if (event.type === "relay.state") {
             relayStates.push(
               `${event.status}${event.updating ? ":updating" : ""}`
             )
           }
+          if (event.type === "relay.snapshot.delta") browserEvents.push(event)
         })
         // This Hearth starts while the Relay is updating.
         reportUpdates([runningUpdate])
-        yield* promiseEffect(() =>
+        const snapshot = yield* promiseEffect(() =>
           relayRpc(endpoint, "relay.snapshot", {}, 1_000)
         )
         expect(isRelayUpdating(relayId)).toBe(true)
         expect(relaySystemUpdates(relayId)).toEqual([runningUpdate])
+        expect(relayUpdateReportState(relayId)).toBe("reporting")
+        // Hearth's own updates are for administrators only, so updates stay
+        // out of the snapshots browsers receive.
+        expect(snapshot).toEqual(pushedSnapshot)
+        expect(relayConnectionNode(relayId)).not.toHaveProperty("updates")
 
         // The Relay being replaced drops its connection and comes back.
         disconnect()
@@ -282,6 +291,7 @@ effectIt.effect(
         expect(relayStates).toContain("unreachable:updating")
         expect(relayStates).not.toContain("unreachable")
         expect(relayStates.at(-1)).toBe("connected")
+        expect(JSON.stringify(browserEvents)).not.toContain(runningUpdate.id)
         unsubscribe()
       })
     )
@@ -319,6 +329,7 @@ effectIt.effect(
           relayRpc(endpoint, "relay.snapshot", {}, 1_000)
         )
         expect(relaySystemUpdates(relayId)).toBeNull()
+        expect(relayUpdateReportState(relayId)).toBe("unsupported")
         expect(isRelayUpdating(relayId)).toBe(false)
       })
     )

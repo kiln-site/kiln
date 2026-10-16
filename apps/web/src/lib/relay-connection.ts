@@ -163,6 +163,20 @@ export function relaySystemUpdates(
   return relayUpdates.get(relayId)?.updates ?? null
 }
 
+/**
+ * Whether a Relay's reported updates are current: `reporting` once this
+ * process has its snapshot on the current connection, `unsupported` when that
+ * snapshot has none because the Relay predates reporting them, and
+ * `unavailable` until then. What it reported before going away is kept, but
+ * isn't current.
+ */
+export function relayUpdateReportState(
+  relayId: string
+): "reporting" | "unavailable" | "unsupported" {
+  if (!connections.get(relayId)?.pushedNode) return "unavailable"
+  return relayUpdates.has(relayId) ? "reporting" : "unsupported"
+}
+
 function rememberRelayUpdates(relayId: string, node: RelayNode): void {
   const wasUpdating = isRelayUpdating(relayId)
   const previous = relayUpdates.get(relayId)
@@ -185,6 +199,13 @@ function noteRelayUpdatesAbsent(relayId: string): void {
     if (relayUpdates.get(relayId) === reported) publishRelayState(relayId)
   }, ABSENT_RELAY_UPDATE_MS)
   reported.expiry.unref()
+}
+
+// Updates stay in Hearth's report cache: Hearth's own are only for platform
+// administrators, and a browser has no use for a phase change.
+function withoutUpdates(node: RelayNode): RelayNode {
+  const { updates: _updates, ...rest } = node
+  return rest
 }
 
 function isRunningRelayUpdate(update: RelaySystemUpdate): boolean {
@@ -762,19 +783,20 @@ class RelayConnection {
               return
             }
             const previousSnapshot = this.#pushedSnapshot
-            this.#pushedSnapshot = snapshot.data
-            this.#hasPushedSnapshot = true
             rememberRelayUpdates(this.#relay.id, snapshot.data.node)
+            const pushed = {
+              ...snapshot.data,
+              node: withoutUpdates(snapshot.data.node),
+            }
+            this.#pushedSnapshot = pushed
+            this.#hasPushedSnapshot = true
             if (!previousSnapshot) {
               publishRealtimeChange({
                 relayId: this.#relay.id,
                 type: "relay.snapshot.reset",
               })
             } else {
-              const delta = createRelaySnapshotDelta(
-                previousSnapshot,
-                snapshot.data
-              )
+              const delta = createRelaySnapshotDelta(previousSnapshot, pushed)
               if (delta) {
                 publishRealtimeChange({
                   delta,
@@ -789,28 +811,31 @@ class RelayConnection {
             }
             if (authenticated) resume(Effect.void)
           } else if (message.event === "relay.snapshot.delta") {
-            const delta = relaySnapshotDeltaSchema.safeParse(message.payload)
-            if (!delta.success || !this.#pushedSnapshot) {
+            const parsed = relaySnapshotDeltaSchema.safeParse(message.payload)
+            if (!parsed.success || !this.#pushedSnapshot) {
               resume(
                 relayConnectionFailure("Relay sent an invalid snapshot delta")
               )
               activeSocket.close(4400, "Relay snapshot delta is invalid")
               return
             }
+            const { node, ...changes } = parsed.data
+            if (node) rememberRelayUpdates(this.#relay.id, node)
+            const delta = {
+              ...changes,
+              ...(node ? { node: withoutUpdates(node) } : {}),
+            }
             const previousSnapshot = this.#pushedSnapshot
             this.#pushedSnapshot = applyRelaySnapshotDelta(
               previousSnapshot,
-              delta.data
+              delta
             )
             this.#hasPushedSnapshot = true
-            if (delta.data.node) {
-              rememberRelayUpdates(this.#relay.id, delta.data.node)
-            }
             // Resource-only node samples refresh the cached snapshot without
             // waking browsers on the fleet-wide realtime channel.
             const controlDelta = relaySnapshotControlDelta(
               previousSnapshot,
-              delta.data
+              delta
             )
             if (controlDelta) {
               publishRealtimeChange({

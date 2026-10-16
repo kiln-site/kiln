@@ -1513,6 +1513,8 @@ export const relaySystemUpdateSchema = z.object({
   error: z.string().max(2_000).nullable(),
   finishedAt: z.string().datetime().nullable(),
   phase: z.string().max(100).optional(),
+  /** The Hearth request that started it, when Hearth named one. */
+  requestId: z.uuid().optional(),
   startedAt: z.string().datetime(),
   status: z.enum(["failed", "running", "succeeded"]),
   version: z.string().min(1).max(100),

@@ -87,6 +87,7 @@ import {
   relayUpdateInstanceStartupSchema,
   relayBootstrapDiscoveryTranscript,
   relayControlDeadlineMs,
+  relaySystemUpdateSchema,
   RelayBrowserAuthorizationReviseSchema,
   relayBrowserAuthorizationReviseMaxItems,
   relayScheduleProjectionSchema,
@@ -1224,8 +1225,13 @@ async function executeControlRequest(
   if (signal.aborted) throw new Error("Relay request was cancelled")
   const payload = payloadRecord(request.payload)
   switch (request.operation) {
-    case "relay.snapshot":
-      return snapshotHub.read()
+    case "relay.snapshot": {
+      // Hearth reads updates from the pushed snapshots and keeps them from
+      // browsers; this read is passed on as is.
+      const { node, ...snapshot } = await snapshotHub.read()
+      const { updates: _updates, ...readable } = node
+      return { ...snapshot, node: readable }
+    }
     case "relay.system.inspect":
       return runRelayEffect(
         "relay.systemUpdates.inspect",
@@ -1245,6 +1251,11 @@ async function executeControlRequest(
         systemUpdates.startBatch(
           {
             helperImage: requiredString(payload, "helperImage"),
+            ...(typeof payload.requestId === "string" &&
+            relaySystemUpdateSchema.shape.requestId.safeParse(payload.requestId)
+              .success
+              ? { requestId: payload.requestId }
+              : {}),
             targets: targetValues
               ? targetValues.map(systemUpdateTarget)
               : [systemUpdateTarget(payload)],

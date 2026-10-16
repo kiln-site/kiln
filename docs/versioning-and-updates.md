@@ -86,8 +86,9 @@ the outcome after replacing itself. Each Relay reports the latest Hearth and
 Relay update it ran, running or finished, in the snapshot it sends Hearth on
 every connection. Hearth keeps no update state of its own: a Hearth replaced
 partway through an update, even one that replaced it before every Relay
-answered, learns how each update went from the Relays, and the Updates dialog
-reads them back when its start request was lost. A Relay finishes an update it
+answered, learns how each update went from the Relays. Each update carries the
+ID of the browser request that started it, so the Updates dialog finds its own
+updates in the Relays' reports when that request's reply was lost. A Relay finishes an update it
 accepted even if Hearth disconnects. A Relay that goes away mid-update is
 shown updating for up to 15 minutes. Hearth's existing Relay connection state
 continues to mark instances offline while Hearth is unavailable.

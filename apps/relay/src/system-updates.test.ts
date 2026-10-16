@@ -414,7 +414,7 @@ describe("update operation lifecycle", () => {
   )
 
   effectIt.effect(
-    "reports an update while its images are pulled, after the Relay is replaced, and its outcome",
+    "reports an update from its acceptance, through the Relay's replacement, to its outcome",
     () =>
       withTemporaryDataDirectory((dataDirectory) =>
         Effect.gen(function* () {
@@ -423,23 +423,42 @@ describe("update operation lifecycle", () => {
             docker.manager({ dataDirectory })
           )
           expect(yield* manager.updates()).toEqual([])
+          const requestId = "33333333-3333-4333-8333-333333333333"
           const starting = yield* manager
-            .start({ ...relayTarget, version: "0.1.0" })
+            .startBatch({
+              helperImage: targetImage,
+              requestId,
+              targets: [{ ...relayTarget, version: "0.1.0" }],
+            })
             .pipe(Effect.forkChild)
           yield* Effect.promise(() => docker.pullStarted)
 
-          // Accepted before anything is recorded on disk.
+          // Reported, named by its request, while its images are pulled.
           const [pulling] = yield* manager.updates()
           expect(pulling).toMatchObject({
             component: "relay",
             phase: "Preparing",
+            requestId,
             status: "running",
           })
-          expect((yield* manager.status(pulling!.id))?.status).toBe("running")
+          // A pull long enough to look stale doesn't fail an update whose
+          // helper hasn't launched yet.
+          const recorded = yield* readRecord(dataDirectory, pulling!.id)
+          yield* recordOutcome(dataDirectory, {
+            ...recorded,
+            startedAt: "2020-01-01T00:00:00.000Z",
+          })
+          expect(yield* manager.updates()).toMatchObject([
+            { id: pulling!.id, status: "running" },
+          ])
 
           docker.holdPull = false
-          const operation = yield* Fiber.join(starting)
-          expect(operation.id).toBe(pulling!.id)
+          const [operation] = yield* Fiber.join(starting)
+          expect(operation).toMatchObject({
+            id: pulling!.id,
+            status: "running",
+          })
+          expect(docker.helpers.size).toBe(1)
 
           // The helper replaces this Relay; its replacement reports the
           // update from the records, and the outcome the helper records.
@@ -447,10 +466,10 @@ describe("update operation lifecycle", () => {
             docker.manager({ dataDirectory })
           )
           expect(yield* replaced.updates()).toMatchObject([
-            { id: operation.id, status: "running" },
+            { id: operation!.id, requestId, status: "running" },
           ])
           yield* recordOutcome(dataDirectory, {
-            ...operation,
+            ...operation!,
             error: "x".repeat(5_000),
             finishedAt: new Date().toISOString(),
             phase: "replace.waitUntilHealthy",
@@ -458,12 +477,34 @@ describe("update operation lifecycle", () => {
           })
           const reported = yield* replaced.updates()
           expect(reported).toMatchObject([
-            { id: operation.id, status: "failed" },
+            { id: operation!.id, status: "failed" },
           ])
           // Hearth rejects a snapshot that doesn't match the contract.
           expect(() =>
             relaySnapshotSchema.shape.node.shape.updates.parse(reported)
           ).not.toThrow()
+        })
+      )
+  )
+
+  effectIt.effect(
+    "leaves out a record the snapshot contract would reject",
+    () =>
+      withTemporaryDataDirectory((dataDirectory) =>
+        Effect.gen(function* () {
+          const manager = yield* Effect.promise(() =>
+            docker.manager({ dataDirectory })
+          )
+          yield* Effect.promise(() =>
+            mkdir(join(dataDirectory, "updates"), { recursive: true })
+          )
+          yield* recordOutcome(dataDirectory, {
+            ...staleOperation(),
+            finishedAt: "not-a-date",
+            status: "failed",
+          })
+
+          expect(yield* manager.updates()).toEqual([])
         })
       )
   )
@@ -568,4 +609,10 @@ function recordOutcome(dataDirectory: string, operation: UpdateOperation) {
       JSON.stringify(operation)
     )
   )
+}
+
+function readRecord(dataDirectory: string, id: string) {
+  return Effect.promise(() =>
+    readFile(join(dataDirectory, "updates", `${id}.json`), "utf8")
+  ).pipe(Effect.map((text) => JSON.parse(text) as UpdateOperation))
 }
