@@ -1,13 +1,11 @@
 import * as React from "react"
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
+import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { Effect } from "effect"
 import {
   Cable,
-  Check,
   Copy,
   FileCode2,
   LoaderCircle,
-  Pencil,
   Server,
   ToyBrick,
   TriangleAlert,
@@ -19,11 +17,9 @@ import {
   Dialog,
   DialogContent,
   DialogDescription,
-  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from "@workspace/ui/components/dialog"
-import { Input } from "@workspace/ui/components/input"
 import { showToast } from "@workspace/ui/components/sonner"
 
 import { CodeDocumentPanel } from "@/components/code-document-panel"
@@ -35,6 +31,7 @@ import {
 } from "@/components/info-page"
 import { InstanceFavoriteButton } from "@/components/instance-favorite"
 import { LiveServerBrickIcon } from "@/components/instance-name"
+import { RenameButton } from "@/components/rename-dialog"
 import { StatusIndicator } from "@/components/status-indicator"
 import { hostPortAddress } from "@/lib/domain-address"
 import { provisioningFailureDiagnostics } from "@/lib/provisioning-diagnostics"
@@ -397,127 +394,29 @@ function ServerRenameButton({
   instance: InstanceSettingsInstance
   relayConnected: boolean
 }) {
-  const [open, setOpen] = React.useState(false)
-  return (
-    <>
-      <Button
-        type="button"
-        size="sm"
-        variant="outline"
-        disabled={!relayConnected}
-        title={
-          relayConnected
-            ? undefined
-            : "Reconnect this server's Relay before renaming"
-        }
-        onClick={() => setOpen(true)}
-      >
-        <Pencil />
-        Rename
-      </Button>
-      {open ? (
-        <ServerRenameDialog instance={instance} onOpenChange={setOpen} />
-      ) : null}
-    </>
-  )
-}
-
-function ServerRenameDialog({
-  instance,
-  onOpenChange,
-}: {
-  instance: InstanceSettingsInstance
-  onOpenChange: (open: boolean) => void
-}) {
   const queryClient = useQueryClient()
-  const [name, setName] = React.useState(instance.name)
-  const [error, setError] = React.useState<string | null>(null)
-  const rename = useMutation({
-    mutationFn: updateInstanceName,
-    onSuccess: (updated) => {
+  const rename = React.useCallback(
+    async (name: string) => {
+      const updated = await updateInstanceName({
+        data: { instanceId: instance.id, name, relayId: instance.relayId },
+      })
       applyUpdatedInstance(queryClient, updated)
-      showToast({ message: "Server renamed", type: "success" })
-      onOpenChange(false)
     },
-    onError: (cause) =>
-      setError(
-        cause instanceof Error ? cause.message : "Could not rename the server"
-      ),
-  })
-  const nextName = name.trim()
-  const unchanged = !nextName || nextName === instance.name
-
-  function submit(event: React.FormEvent<HTMLFormElement>) {
-    event.preventDefault()
-    if (unchanged || rename.isPending) return
-    setError(null)
-    rename.mutate({
-      data: {
-        instanceId: instance.id,
-        name: nextName,
-        relayId: instance.relayId,
-      },
-    })
-  }
-
+    [instance.id, instance.relayId, queryClient]
+  )
   return (
-    <Dialog
-      open
-      onOpenChange={(nextOpen) => !rename.isPending && onOpenChange(nextOpen)}
-    >
-      <DialogContent className="sm:max-w-md">
-        <DialogHeader>
-          <DialogTitle>Rename server</DialogTitle>
-          <DialogDescription>
-            The name can change without changing the server ID.
-          </DialogDescription>
-        </DialogHeader>
-        <form className="space-y-4" onSubmit={submit}>
-          <div className="space-y-1.5">
-            <label
-              htmlFor={`server-name-${instance.id}`}
-              className="type-label block text-muted-foreground"
-            >
-              Name
-            </label>
-            <Input
-              id={`server-name-${instance.id}`}
-              value={name}
-              onChange={(event) => {
-                setName(event.target.value)
-                setError(null)
-              }}
-              maxLength={MAXIMUM_INSTANCE_NAME_LENGTH}
-              disabled={rename.isPending}
-              aria-invalid={Boolean(error)}
-              autoFocus
-              required
-            />
-            {error ? (
-              <p className="type-meta text-destructive">{error}</p>
-            ) : null}
-          </div>
-          <DialogFooter>
-            <Button
-              type="button"
-              variant="outline"
-              disabled={rename.isPending}
-              onClick={() => onOpenChange(false)}
-            >
-              Cancel
-            </Button>
-            <Button type="submit" disabled={unchanged || rename.isPending}>
-              {rename.isPending ? (
-                <LoaderCircle className="animate-spin" />
-              ) : (
-                <Check />
-              )}
-              Save
-            </Button>
-          </DialogFooter>
-        </form>
-      </DialogContent>
-    </Dialog>
+    <RenameButton
+      disabledReason={
+        relayConnected
+          ? undefined
+          : "Reconnect this server's Relay before renaming"
+      }
+      id={instance.id}
+      maxLength={MAXIMUM_INSTANCE_NAME_LENGTH}
+      name={instance.name}
+      noun="server"
+      rename={rename}
+    />
   )
 }
 

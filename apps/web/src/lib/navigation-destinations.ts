@@ -314,6 +314,14 @@ export interface DatabaseDestination extends NavigationDestination {
 
 export const databaseDestinations = [
   {
+    icon: SlidersHorizontal,
+    id: "info",
+    keywords: ["settings", "credentials", "details"],
+    label: "Info",
+    permission: "database.read",
+    to: "/db/$databaseId/info",
+  },
+  {
     icon: TerminalSquare,
     id: "terminal",
     keywords: ["console", "shell", "cli", "psql", "mysql"],
@@ -322,12 +330,12 @@ export const databaseDestinations = [
     to: "/db/$databaseId/terminal",
   },
   {
-    icon: ScrollText,
-    id: "logs",
-    keywords: ["output", "container", "errors"],
-    label: "Logs",
-    permission: "database.logs.read",
-    to: "/db/$databaseId/logs",
+    icon: Network,
+    id: "network",
+    keywords: ["servers", "connections"],
+    label: "Network",
+    permission: "database.network.read",
+    to: "/db/$databaseId/network",
   },
   {
     engines: ["mysql", "mariadb", "postgres"],
@@ -339,20 +347,12 @@ export const databaseDestinations = [
     to: "/db/$databaseId/viewer",
   },
   {
-    icon: Network,
-    id: "network",
-    keywords: ["servers", "connections"],
-    label: "Network",
-    permission: "database.network.read",
-    to: "/db/$databaseId/network",
-  },
-  {
-    icon: SlidersHorizontal,
-    id: "info",
-    keywords: ["settings", "credentials", "details"],
-    label: "Info",
-    permission: "database.read",
-    to: "/db/$databaseId/info",
+    icon: ScrollText,
+    id: "logs",
+    keywords: ["output", "container", "errors"],
+    label: "Logs",
+    permission: "database.logs.read",
+    to: "/db/$databaseId/logs",
   },
 ] as const satisfies ReadonlyArray<DatabaseDestination>
 

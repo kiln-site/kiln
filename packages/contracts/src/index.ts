@@ -203,6 +203,15 @@ export const relayDatabaseExportSchema = relayDatabaseDumpSchema.omit({
   content: true,
 })
 
+export const relayDatabaseUsageRequestSchema = z
+  .object({ databaseId: databaseIdSchema })
+  .strict()
+
+// How much a database's volume holds, or null when Docker can't say.
+export const relayDatabaseUsageSchema = z
+  .object({ volumeBytes: z.number().int().nonnegative().nullable() })
+  .strict()
+
 export const relayStateDatabaseReadSchema = z
   .object({ request: databaseReadRequestSchema })
   .strict()
@@ -2023,6 +2032,7 @@ export type RelayRotateDatabaseCredentials = z.infer<
 export type RelayDatabaseNetwork = z.infer<typeof relayDatabaseNetworkSchema>
 export type RelayDatabaseDump = z.infer<typeof relayDatabaseDumpSchema>
 export type RelayDatabaseExport = z.infer<typeof relayDatabaseExportSchema>
+export type RelayDatabaseUsage = z.infer<typeof relayDatabaseUsageSchema>
 export type RelayDatabaseDataRead = z.infer<typeof relayDatabaseDataReadSchema>
 export type DatabaseTerminalControl = z.infer<
   typeof databaseTerminalControlSchema

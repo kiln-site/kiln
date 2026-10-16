@@ -79,6 +79,7 @@ export const relayControlOperations = [
   "brick.catalog",
   "brick.recipe",
   "database.list",
+  "database.usage",
   "database.create",
   "database.delete",
   "database.action",
@@ -238,6 +239,8 @@ export function relayControlDeadlineMs(
   if (operation === "app.action") return 180_000
   if (operation === "database.credentials.rotate") return 180_000
   if (operation === "database.dump.export") return 120_000
+  // Docker walks every volume to measure them.
+  if (operation === "database.usage") return 75_000
   if (operation === "database.dump.import") return 120_000
   if (operation === "instance.action") return 180_000
   if (

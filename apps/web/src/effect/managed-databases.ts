@@ -197,6 +197,38 @@ export const rotateManagedDatabaseCredentialEffect = Effect.fn(
   }
 })
 
+// Hearth keeps the name; the Relay's container label keeps the one it was
+// created with, for recovery.
+export const renameManagedDatabaseRecordEffect = Effect.fn(
+  "managedDatabases.rename"
+)(function* (relayId: string, databaseId: string, name: string) {
+  const database = yield* Database
+  const taken = yield* database.queryRows<ManagedDatabaseIdRow>(
+    "managed_database_rename_conflict",
+    `SELECT database_id
+       FROM ${databaseTable("database")}
+      WHERE relay_id = ? AND name = ? AND database_id <> ?
+      LIMIT 1`,
+    [relayId, name, databaseId]
+  )
+  if (taken.length > 0) {
+    return yield* Effect.fail(
+      new Error(`A database named "${name}" already exists on this Relay`)
+    )
+  }
+  const now = yield* Clock.currentTimeMillis
+  const result = yield* database.execute(
+    "managed_database_rename",
+    `UPDATE ${databaseTable("database")}
+        SET name = ?, updated_at = ?
+      WHERE relay_id = ? AND database_id = ?`,
+    [name, now, relayId, databaseId]
+  )
+  if (result.affectedRows !== 1) {
+    return yield* Effect.fail(new Error("Database record not found"))
+  }
+})
+
 export const deleteManagedDatabaseRecordEffect = Effect.fn(
   "managedDatabases.delete"
 )(function* (relayId: string, databaseId: string) {

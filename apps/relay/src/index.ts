@@ -49,6 +49,7 @@ import {
   relayDatabaseTerminalRestartSchema,
   relayDatabaseTerminalWriteSchema,
   relayDatabaseExportSchema,
+  relayDatabaseUsageRequestSchema,
   relayDatabaseNetworkSchema,
   relayDeleteDatabaseSchema,
   relayAuditQuerySchema,
@@ -1662,6 +1663,10 @@ async function executeControlRequest(
     }
     case "database.list":
       return databases.list()
+    case "database.usage":
+      return databases.usage(
+        relayDatabaseUsageRequestSchema.parse(request.payload).databaseId
+      )
     case "database.create":
       return databases.create(relayCreateDatabaseSchema.parse(request.payload))
     case "database.delete":

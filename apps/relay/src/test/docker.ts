@@ -1595,6 +1595,21 @@ export class FakeDocker {
           })),
       })
     }
+    // Each volume is as big as the files written into it.
+    if (method === "GET" && path === "/system/df") {
+      return json(200, {
+        Volumes: [...this.volumes.values()].map((volume) => ({
+          Name: volume.name,
+          UsageData: {
+            RefCount: 0,
+            Size: [...volume.files.values()].reduce(
+              (total, content) => total + Buffer.byteLength(content),
+              0
+            ),
+          },
+        })),
+      })
+    }
     if (method === "GET" && (parameters = route(/^\/volumes\/([^/]+)$/u))) {
       const volume = this.volumes.get(parameters[0] ?? "")
       if (!volume) {

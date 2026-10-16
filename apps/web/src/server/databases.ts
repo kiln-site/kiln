@@ -18,6 +18,7 @@ import {
   relayDatabaseTerminalClaimSchema,
   relayDatabaseTerminalRestartSchema,
   relayDatabaseTerminalWriteSchema,
+  relayDatabaseUsageSchema,
   relayManagedDatabaseSchema,
 } from "@workspace/contracts"
 import type { RelayManagedDatabase } from "@workspace/contracts"
@@ -30,6 +31,7 @@ import {
   listManagedDatabaseRecordsEffect,
   loadManagedDatabaseCredentialEffect,
   managedDatabaseNameExistsEffect,
+  renameManagedDatabaseRecordEffect,
   rotateManagedDatabaseCredentialEffect,
 } from "@/effect/managed-databases"
 import { runAppEffect } from "@/effect/runtime"
@@ -68,6 +70,9 @@ const databaseInputSchema = z.strictObject({
 })
 const databaseActionInputSchema = databaseInputSchema.extend({
   action: z.enum(["start", "stop", "restart"]),
+})
+const databaseRenameInputSchema = databaseInputSchema.extend({
+  name: relayDatabaseNameSchema,
 })
 const databaseNetworkInputSchema = databaseInputSchema.extend({
   connected: z.boolean(),
@@ -252,6 +257,8 @@ export const getManagedDatabases = createServerFn({ method: "GET" }).handler(
               ...database,
               hasCredentials: Boolean(record),
               inventoryStatus,
+              // A rename lives in Hearth; the Relay keeps the original.
+              name: record?.name ?? database.name,
               permissions,
               relayId: relay.id,
               relayName: relay.name,
@@ -371,6 +378,37 @@ export const getManagedDatabaseCredential = createServerFn({ method: "GET" })
       password: credential.password,
       username: credential.username,
     }
+  })
+
+// How much the database's volume holds. Docker measures it on request, so
+// the Info page asks only while it's open.
+export const getManagedDatabaseUsage = createServerFn({ method: "GET" })
+  .validator(databaseInputSchema)
+  .handler(async ({ data }) => {
+    const { relay, user } = await authorizedDatabase(data, "database.read")
+    return relayDatabaseUsageSchema.parse(
+      await databaseRpc(
+        relay,
+        "database.usage",
+        { databaseId: data.databaseId },
+        75_000,
+        user.id
+      )
+    )
+  })
+
+// Renaming is managing the database as a whole, so it takes the permission
+// that deletes it.
+export const renameManagedDatabase = createServerFn({ method: "POST" })
+  .validator(databaseRenameInputSchema)
+  .handler(async ({ data }) => {
+    const { relay } = await authorizedDatabase(data, "database.delete")
+    await runAppEffect(
+      "managedDatabases.rename",
+      renameManagedDatabaseRecordEffect(relay.id, data.databaseId, data.name)
+    )
+    publishDatabaseChange(relay.id, true)
+    return { name: data.name }
   })
 
 export const createManagedDatabase = createServerFn({ method: "POST" })

@@ -97,7 +97,7 @@ operation payloads, not inferred from names.
 | database.credentials.read          | View database credentials.                                                                                                                           |
 | database.credentials.rotate        | Rotate credentials; proposed read implication requires review.                                                                                       |
 | database.power                     | Database power.                                                                                                                                      |
-| database.delete                    | Delete database.                                                                                                                                     |
+| database.delete                    | Delete or rename database.                                                                                                                           |
 | database.network.read              | View database networking.                                                                                                                            |
 | database.network.write             | Manage database networking.                                                                                                                          |
 | database.dump.export               | Export data; supported engines only.                                                                                                                 |

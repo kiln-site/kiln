@@ -32,6 +32,7 @@ import {
 import { getDomainSettings, getInstanceDomain } from "@/server/domains"
 import {
   getManagedDatabaseCredential,
+  getManagedDatabaseUsage,
   getManagedDatabaseDirectory,
   getManagedDatabases,
 } from "@/server/databases"
@@ -156,6 +157,9 @@ export const queryKeys = {
       ["databases", relayId, databaseId, "credential"] as const,
     directory: ["databases", "directory"] as const,
     list: ["databases", "list"] as const,
+    // Outside "databases", so list refreshes don't measure the volume again.
+    usage: (relayId: string, databaseId: string) =>
+      ["database-usage", relayId, databaseId] as const,
   },
   fileActivity: (relayId: string, instanceId: string) =>
     ["file-activity", relayId, instanceId] as const,
@@ -590,6 +594,20 @@ export function managedDatabaseCredentialQueryOptions(
     queryFn: () =>
       getManagedDatabaseCredential({ data: { databaseId, relayId } }),
     staleTime: Infinity,
+  })
+}
+
+// Docker walks the volume to measure it, so this is read only while the Info
+// page shows it, and not refetched often.
+export function managedDatabaseUsageQueryOptions(
+  relayId: string,
+  databaseId: string
+) {
+  return queryOptions({
+    queryKey: queryKeys.databases.usage(relayId, databaseId),
+    queryFn: () => getManagedDatabaseUsage({ data: { databaseId, relayId } }),
+    retry: false,
+    staleTime: 5 * 60_000,
   })
 }
 

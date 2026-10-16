@@ -1004,6 +1004,7 @@ function actionForRequest(request: RelayControlRequest): RelayAction | null {
     case "brick.recipe":
       return "brick.read"
     case "database.list":
+    case "database.usage":
       return "database.read"
     case "database.create":
       return "database.create"

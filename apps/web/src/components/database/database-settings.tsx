@@ -1,24 +1,22 @@
 import * as React from "react"
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
+import { useQuery, useQueryClient } from "@tanstack/react-query"
 import {
   Cable,
   Database,
   Download,
-  Eye,
-  EyeOff,
   HardDriveDownload,
   KeyRound,
   LoaderCircle,
-  RotateCw,
   Upload,
 } from "lucide-react"
 
 import { Badge } from "@workspace/ui/components/badge"
 import { Button } from "@workspace/ui/components/button"
-import { showToast } from "@workspace/ui/components/sonner"
+import { cn } from "@workspace/ui/lib/utils"
 
 import {
   ImportDatabaseDialog,
+  RotateDatabasePasswordButton,
   useDatabaseExport,
 } from "@/components/database/database-dialogs"
 import {
@@ -29,23 +27,30 @@ import {
 import {
   InfoCopyValue,
   InfoFact,
+  InfoSecretValue,
   InfoSection,
   InfoSectionLink,
 } from "@/components/info-page"
 import { InstanceFavoriteButton } from "@/components/instance-favorite"
 import { LocalDateTime } from "@/components/local-date-time"
+import { RenameButton } from "@/components/rename-dialog"
 import {
   managedDatabaseCredentialQueryOptions,
   queryKeys,
 } from "@/lib/query-options"
-import { rotateManagedDatabasePassword } from "@/server/databases"
+import { renameManagedDatabase } from "@/server/databases"
 
 // The database's details on its Info page, one section per concern, each
 // with the actions that change it.
 
+const DATABASE_NAME_MAX_LENGTH = 120
+const MASK = "••••••••••••"
+
 export function DatabaseGeneralSettings({
+  canRename,
   database,
 }: {
+  canRename: boolean
   database: ManagedDatabase
 }) {
   const version = database.image.split(":").at(1)
@@ -54,11 +59,14 @@ export function DatabaseGeneralSettings({
       icon={<Database />}
       title="Database"
       action={
-        <InstanceFavoriteButton
-          id={database.id}
-          kind="database"
-          relayId={database.relayId}
-        />
+        <>
+          {canRename ? <DatabaseRenameButton database={database} /> : null}
+          <InstanceFavoriteButton
+            id={database.id}
+            kind="database"
+            relayId={database.relayId}
+          />
+        </>
       }
     >
       <InfoFact label="Name">
@@ -84,6 +92,265 @@ export function DatabaseGeneralSettings({
         <LocalDateTime timestamp={database.createdAt} />
       </InfoFact>
     </InfoSection>
+  )
+}
+
+// Hearth keeps the name, so renaming doesn't need the Relay.
+function DatabaseRenameButton({ database }: { database: ManagedDatabase }) {
+  const queryClient = useQueryClient()
+  const rename = React.useCallback(
+    async (name: string) => {
+      await renameManagedDatabase({
+        data: { databaseId: database.id, name, relayId: database.relayId },
+      })
+      await queryClient.invalidateQueries({ queryKey: queryKeys.databases.all })
+    },
+    [database.id, database.relayId, queryClient]
+  )
+  return (
+    <RenameButton
+      id={database.id}
+      maxLength={DATABASE_NAME_MAX_LENGTH}
+      name={database.name}
+      noun="database"
+      rename={rename}
+    />
+  )
+}
+
+// The login game servers use. Secrets stay in memory only while this page
+// shows them, and stay masked until revealed.
+export function DatabaseCredentialsSection({
+  available,
+  canRotate,
+  database,
+}: {
+  available: boolean
+  canRotate: boolean
+  database: ManagedDatabase
+}) {
+  const queryClient = useQueryClient()
+  const credential = useQuery(
+    managedDatabaseCredentialQueryOptions(database.relayId, database.id)
+  )
+  React.useEffect(
+    () => () => {
+      queryClient.removeQueries({
+        exact: true,
+        queryKey: queryKeys.databases.credential(database.relayId, database.id),
+      })
+    },
+    [database.id, database.relayId, queryClient]
+  )
+  const values = credential.data
+
+  return (
+    <InfoSection
+      icon={<KeyRound />}
+      title="Credentials"
+      action={
+        canRotate ? (
+          <RotateDatabasePasswordButton
+            database={database}
+            disabledReason={
+              available ? undefined : "Reconnect this database's Relay first"
+            }
+            size="sm"
+          />
+        ) : null
+      }
+    >
+      {credential.isError ? (
+        <InfoFact label="Error">
+          <span
+            className="truncate font-mono text-xs text-destructive"
+            title={credential.error.message}
+          >
+            {credential.error.message}
+          </span>
+        </InfoFact>
+      ) : (
+        <>
+          <InfoFact label="Username">
+            {values ? (
+              <InfoCopyValue label="username" value={values.username} />
+            ) : (
+              <CredentialPending />
+            )}
+          </InfoFact>
+          <InfoFact label="Password">
+            {values ? (
+              <InfoSecretValue
+                label="password"
+                masked={MASK}
+                value={values.password}
+              />
+            ) : (
+              <CredentialPending />
+            )}
+          </InfoFact>
+          <InfoFact label="Connection URL">
+            {values ? (
+              <InfoSecretValue
+                label="connection URL"
+                masked={databaseConnectionUrl(database, values.username, MASK)}
+                value={databaseConnectionUrl(
+                  database,
+                  values.username,
+                  encodeURIComponent(values.password)
+                )}
+              />
+            ) : (
+              <CredentialPending />
+            )}
+          </InfoFact>
+        </>
+      )}
+    </InfoSection>
+  )
+}
+
+function CredentialPending() {
+  return <LoaderCircle className="size-3.5 animate-spin text-muted-foreground" />
+}
+
+// Data in and out: drop a SQL dump to import it, export one, or restore a
+// backup from the Backups page.
+export function DatabaseDataSection({
+  available,
+  canExport,
+  canImport,
+  canRestore,
+  database,
+}: {
+  available: boolean
+  canExport: boolean
+  canImport: boolean
+  canRestore: boolean
+  database: ManagedDatabase
+}) {
+  const exportDump = useDatabaseExport(database)
+  const unavailableReason = available
+    ? undefined
+    : "Reconnect this database's Relay first"
+
+  return (
+    <InfoSection
+      icon={<HardDriveDownload />}
+      title="Data"
+      content
+      action={
+        <>
+          {canRestore ? (
+            <InfoSectionLink
+              to="/backups/runs"
+              search={{
+                kind: "database",
+                relay: database.relayId,
+                server: database.id,
+              }}
+            >
+              Restore backup
+            </InfoSectionLink>
+          ) : null}
+          {canExport ? (
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              disabled={!available || exportDump.isPending}
+              title={unavailableReason}
+              onClick={() => exportDump.mutate()}
+            >
+              {exportDump.isPending ? (
+                <LoaderCircle className="animate-spin" />
+              ) : (
+                <Download />
+              )}
+              Export SQL
+            </Button>
+          ) : null}
+        </>
+      }
+    >
+      {canImport ? (
+        <DatabaseImportDropZone
+          database={database}
+          disabledReason={unavailableReason}
+        />
+      ) : null}
+    </InfoSection>
+  )
+}
+
+// Dropping or choosing a dump opens the import, which confirms it first.
+function DatabaseImportDropZone({
+  database,
+  disabledReason,
+}: {
+  database: ManagedDatabase
+  disabledReason: string | undefined
+}) {
+  const [file, setFile] = React.useState<File | null>(null)
+  const [dragging, setDragging] = React.useState(false)
+  const disabled = Boolean(disabledReason)
+
+  return (
+    <>
+      <label
+        title={disabledReason}
+        className={cn(
+          "flex flex-col items-center gap-1.5 border border-dashed px-4 py-6 text-center transition-colors focus-within:border-primary",
+          disabled
+            ? "cursor-not-allowed opacity-60"
+            : "cursor-pointer hover:border-primary/70 hover:bg-muted/30",
+          dragging && "border-primary bg-primary/5"
+        )}
+        onDragOver={(event) => {
+          if (disabled) return
+          event.preventDefault()
+          setDragging(true)
+        }}
+        onDragLeave={() => setDragging(false)}
+        onDrop={(event) => {
+          event.preventDefault()
+          setDragging(false)
+          if (disabled) return
+          const dropped = event.dataTransfer.files[0]
+          if (dropped) setFile(dropped)
+        }}
+      >
+        <Upload className="size-5 text-muted-foreground" />
+        <span className="text-[0.8125rem] font-medium">
+          Drop a SQL dump to import, or click to choose one
+        </span>
+        <span className="text-xs text-muted-foreground">
+          .sql text dumps from {engineLabel(database.engine)}, up to 700 KB.
+          Existing data is kept.
+        </span>
+        <input
+          accept=".sql,application/sql,text/plain"
+          className="sr-only"
+          disabled={disabled}
+          type="file"
+          onChange={(event) => {
+            const chosen = event.currentTarget.files?.[0]
+            if (chosen) setFile(chosen)
+            event.currentTarget.value = ""
+          }}
+        />
+      </label>
+      {file ? (
+        <ImportDatabaseDialog
+          database={database}
+          initialFile={file}
+          open
+          onOpenChange={(open) => {
+            if (!open) setFile(null)
+          }}
+        />
+      ) : null}
+    </>
   )
 }
 
@@ -135,227 +402,6 @@ export function DatabaseConnectionSettings({
   )
 }
 
-// The login game servers use. Secrets are fetched only once revealed, and
-// stay in memory only while this page shows them.
-export function DatabaseCredentialsSection({
-  canRotate,
-  database,
-}: {
-  canRotate: boolean
-  database: ManagedDatabase
-}) {
-  const queryClient = useQueryClient()
-  const [revealed, setRevealed] = React.useState(false)
-  const credential = useQuery({
-    ...managedDatabaseCredentialQueryOptions(database.relayId, database.id),
-    enabled: revealed,
-  })
-  React.useEffect(
-    () => () => {
-      queryClient.removeQueries({
-        exact: true,
-        queryKey: queryKeys.databases.credential(database.relayId, database.id),
-      })
-    },
-    [database.id, database.relayId, queryClient]
-  )
-  const rotate = useMutation({
-    mutationFn: () =>
-      rotateManagedDatabasePassword({
-        data: { databaseId: database.id, relayId: database.relayId },
-      }),
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({
-        queryKey: queryKeys.databases.credential(database.relayId, database.id),
-      })
-      showToast({ message: "Database password rotated", type: "success" })
-    },
-    onError: (error) =>
-      showToast({
-        message: `Password rotation failed: ${error.message}`,
-        type: "error",
-      }),
-  })
-  const values = revealed ? credential.data : undefined
-
-  return (
-    <InfoSection
-      icon={<KeyRound />}
-      title="Credentials"
-      action={
-        <>
-          {/* Shown beside the password it changes. */}
-          {canRotate && revealed ? (
-            <Button
-              type="button"
-              size="sm"
-              variant="outline"
-              disabled={rotate.isPending}
-              onClick={() => rotate.mutate()}
-            >
-              {rotate.isPending ? (
-                <LoaderCircle className="animate-spin" />
-              ) : (
-                <RotateCw />
-              )}
-              Rotate password
-            </Button>
-          ) : null}
-          <Button
-            type="button"
-            size="sm"
-            variant="outline"
-            aria-pressed={revealed}
-            onClick={() => setRevealed((current) => !current)}
-          >
-            {revealed ? <EyeOff /> : <Eye />}
-            {revealed ? "Hide" : "Reveal"}
-          </Button>
-        </>
-      }
-    >
-      {revealed && credential.isError ? (
-        <InfoFact label="Error">
-          <span
-            className="truncate font-mono text-xs text-destructive"
-            title={credential.error.message}
-          >
-            {credential.error.message}
-          </span>
-        </InfoFact>
-      ) : (
-        <>
-          <InfoFact label="Username">
-            <SecretValue
-              label="username"
-              pending={revealed}
-              value={values?.username}
-            />
-          </InfoFact>
-          <InfoFact label="Password">
-            <SecretValue
-              label="password"
-              pending={revealed}
-              value={values?.password}
-            />
-          </InfoFact>
-          <InfoFact label="Connection URL">
-            <SecretValue
-              label="connection URL"
-              pending={revealed}
-              value={
-                values ? databaseConnectionUrl(database, values) : undefined
-              }
-            />
-          </InfoFact>
-        </>
-      )}
-    </InfoSection>
-  )
-}
-
-// Masked until revealed, then a spinner until the credential arrives.
-function SecretValue({
-  label,
-  pending,
-  value,
-}: {
-  label: string
-  pending: boolean
-  value: string | undefined
-}) {
-  if (value !== undefined) return <InfoCopyValue label={label} value={value} />
-  if (pending) {
-    return (
-      <LoaderCircle className="size-3.5 animate-spin text-muted-foreground" />
-    )
-  }
-  return (
-    <span
-      aria-label="Hidden"
-      className="font-mono text-xs tracking-widest text-muted-foreground"
-    >
-      ••••••••
-    </span>
-  )
-}
-
-// Moving data in and out as a SQL dump.
-export function DatabaseDataSection({
-  available,
-  canExport,
-  canImport,
-  database,
-}: {
-  available: boolean
-  canExport: boolean
-  canImport: boolean
-  database: ManagedDatabase
-}) {
-  const exportDump = useDatabaseExport(database)
-  const [importOpen, setImportOpen] = React.useState(false)
-  const unavailableReason = available
-    ? undefined
-    : "Reconnect this database's Relay first"
-
-  return (
-    <InfoSection
-      icon={<HardDriveDownload />}
-      title="Data"
-      action={
-        <>
-          {canImport ? (
-            <Button
-              type="button"
-              size="sm"
-              variant="outline"
-              disabled={!available}
-              title={unavailableReason}
-              onClick={() => setImportOpen(true)}
-            >
-              <Upload />
-              Import SQL
-            </Button>
-          ) : null}
-          {canExport ? (
-            <Button
-              type="button"
-              size="sm"
-              variant="outline"
-              disabled={!available || exportDump.isPending}
-              title={unavailableReason}
-              onClick={() => exportDump.mutate()}
-            >
-              {exportDump.isPending ? (
-                <LoaderCircle className="animate-spin" />
-              ) : (
-                <Download />
-              )}
-              Export SQL
-            </Button>
-          ) : null}
-        </>
-      }
-    >
-      <InfoFact label="Format">SQL dump</InfoFact>
-      <InfoFact label="Imports">
-        <span className="truncate">
-          Into{" "}
-          <span className="font-mono text-xs">{database.databaseName}</span>,
-          keeping existing data
-        </span>
-      </InfoFact>
-      {importOpen ? (
-        <ImportDatabaseDialog
-          database={database}
-          open
-          onOpenChange={setImportOpen}
-        />
-      ) : null}
-    </InfoSection>
-  )
-}
-
 function hasNamedDatabase(database: Pick<ManagedDatabase, "engine">): boolean {
   return database.engine !== "redis" && database.engine !== "valkey"
 }
@@ -365,7 +411,9 @@ function databaseConnectionUrl(
     ManagedDatabase,
     "databaseName" | "engine" | "hostname" | "internalPort"
   >,
-  credential: { password: string; username: string }
+  username: string,
+  // Already encoded, or a mask shown in its place.
+  password: string
 ): string {
   const scheme =
     database.engine === "postgres"
@@ -375,5 +423,5 @@ function databaseConnectionUrl(
         : "redis"
   const path =
     scheme === "redis" ? "" : `/${encodeURIComponent(database.databaseName)}`
-  return `${scheme}://${encodeURIComponent(credential.username)}:${encodeURIComponent(credential.password)}@${database.hostname}:${database.internalPort}${path}`
+  return `${scheme}://${encodeURIComponent(username)}:${password}@${database.hostname}:${database.internalPort}${path}`
 }

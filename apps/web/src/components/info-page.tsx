@@ -5,6 +5,8 @@ import {
   Check,
   ChevronRight,
   Copy,
+  Eye,
+  EyeOff,
   Info,
   Trash2,
 } from "lucide-react"
@@ -56,12 +58,16 @@ export function InfoPage({
 export function InfoSection({
   action,
   children,
+  content = false,
   icon,
   status,
   title,
 }: {
   action?: React.ReactNode
-  children: React.ReactNode
+  // Left out when the header says it all, such as actions alone.
+  children?: React.ReactNode
+  // Holds something other than facts, such as a drop zone.
+  content?: boolean
   icon?: React.ReactNode
   // Beside the title, such as a status indicator.
   status?: React.ReactNode
@@ -69,7 +75,12 @@ export function InfoSection({
 }) {
   return (
     <section className="min-w-0 border bg-background/45">
-      <header className="flex min-h-12 items-center gap-3 border-b px-4 py-2">
+      <header
+        className={cn(
+          "flex min-h-12 items-center gap-3 px-4 py-2",
+          children != null && "border-b"
+        )}
+      >
         <h3 className="flex min-w-0 items-center gap-2 text-sm font-semibold [&_svg]:size-4 [&_svg]:shrink-0 [&_svg]:text-muted-foreground">
           {icon}
           <span className="truncate">{title}</span>
@@ -81,7 +92,11 @@ export function InfoSection({
           </div>
         ) : null}
       </header>
-      <dl className="px-4">{children}</dl>
+      {children == null ? null : content ? (
+        <div className="p-4">{children}</div>
+      ) : (
+        <dl className="px-4">{children}</dl>
+      )}
     </section>
   )
 }
@@ -243,9 +258,7 @@ export function InfoCopyValue({
         </button>
       </TooltipTrigger>
       <TooltipContent side="bottom" sideOffset={6}>
-        {copied
-          ? `${label.charAt(0).toUpperCase()}${label.slice(1)} copied`
-          : `Copy ${label}`}
+        {copied ? `${capitalize(label)} copied` : `Copy ${label}`}
       </TooltipContent>
     </Tooltip>
   )
@@ -289,6 +302,92 @@ export function InfoDangerZone({
       {open ? dialog(setOpen) : null}
     </>
   )
+}
+
+// A secret, masked until revealed, that copies without being revealed.
+export function InfoSecretValue({
+  label,
+  masked,
+  value,
+}: {
+  // Lowercase noun, for example "password".
+  label: string
+  // Shown in place of the value, such as dots, or a URL with its password
+  // dotted out.
+  masked: string
+  value: string
+}) {
+  const [revealed, setRevealed] = React.useState(false)
+  const { copied, copy } = useCopyFeedback(value)
+  return (
+    <>
+      <span
+        className={cn(
+          "min-w-0 truncate font-mono text-xs",
+          !revealed && "text-muted-foreground"
+        )}
+        title={revealed ? value : undefined}
+      >
+        {revealed ? value : masked}
+      </span>
+      <InfoIconButton
+        label={revealed ? `Hide ${label}` : `Reveal ${label}`}
+        pressed={revealed}
+        onClick={() => setRevealed((current) => !current)}
+      >
+        {revealed ? <EyeOff /> : <Eye />}
+      </InfoIconButton>
+      <InfoIconButton
+        label={copied ? `${capitalize(label)} copied` : `Copy ${label}`}
+        tone={copied ? "success" : undefined}
+        onClick={() => void copy()}
+      >
+        {copied ? <Check /> : <Copy />}
+      </InfoIconButton>
+    </>
+  )
+}
+
+function InfoIconButton({
+  children,
+  label,
+  onClick,
+  pressed,
+  tone,
+}: {
+  children: React.ReactNode
+  label: string
+  onClick: () => void
+  pressed?: boolean
+  tone?: "success"
+}) {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <button
+          type="button"
+          aria-label={label}
+          aria-pressed={pressed}
+          className={cn(
+            "grid size-6 shrink-0 place-items-center transition-colors outline-none focus-visible:text-primary [&_svg]:size-3.5",
+            tone === "success"
+              ? "text-emerald-400"
+              : "text-muted-foreground hover:text-primary"
+          )}
+          onClick={onClick}
+        >
+          {children}
+        </button>
+      </TooltipTrigger>
+      <TooltipContent side="bottom" sideOffset={6}>
+        {label}
+      </TooltipContent>
+    </Tooltip>
+  )
+}
+
+function capitalize(text: string): string {
+  return `${text.charAt(0).toUpperCase()}${text.slice(1)}`
 }
 
 export function InfoRailGroup({

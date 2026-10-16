@@ -59,18 +59,6 @@ export function CredentialsDialog({
     })
     onOpenChange(false)
   }, [database.id, database.relayId, onOpenChange, queryClient])
-  const rotate = useMutation({
-    mutationFn: () =>
-      rotateManagedDatabasePassword({
-        data: { databaseId: database.id, relayId: database.relayId },
-      }),
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({
-        queryKey: queryKeys.databases.credential(database.relayId, database.id),
-      })
-      showToast({ message: "Database password rotated", type: "success" })
-    },
-  })
 
   return (
     <Dialog
@@ -126,30 +114,116 @@ export function CredentialsDialog({
             />
           </div>
         ) : null}
-        {rotate.error ? (
-          <p className="text-xs text-destructive">{rotate.error.message}</p>
-        ) : null}
         <DialogFooter className="sm:justify-between">
           {databaseRelayAvailable(database) &&
           database.permissions.includes("database.credentials.rotate") ? (
-            <Button
-              disabled={rotate.isPending}
-              type="button"
-              variant="outline"
-              onClick={() => rotate.mutate()}
-            >
-              {rotate.isPending ? (
-                <LoaderCircle className="animate-spin" />
-              ) : (
-                <RotateCw />
-              )}
-              Rotate password
-            </Button>
+            <RotateDatabasePasswordButton database={database} />
           ) : (
             <span />
           )}
           <Button type="button" onClick={close}>
             Done
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+// Rotate password, confirmed first: anything still using the old password,
+// like a game server's config, loses access until it gets the new one.
+export function RotateDatabasePasswordButton({
+  database,
+  disabledReason,
+  size = "default",
+}: {
+  database: Pick<ManagedDatabase, "id" | "name" | "relayId">
+  disabledReason?: string
+  size?: "default" | "sm"
+}) {
+  const [open, setOpen] = React.useState(false)
+  return (
+    <>
+      <Button
+        type="button"
+        size={size}
+        variant="outline"
+        disabled={Boolean(disabledReason)}
+        title={disabledReason}
+        onClick={() => setOpen(true)}
+      >
+        <RotateCw />
+        Rotate password
+      </Button>
+      {open ? (
+        <RotateDatabasePasswordDialog
+          database={database}
+          onOpenChange={setOpen}
+        />
+      ) : null}
+    </>
+  )
+}
+
+function RotateDatabasePasswordDialog({
+  database,
+  onOpenChange,
+}: {
+  database: Pick<ManagedDatabase, "id" | "name" | "relayId">
+  onOpenChange: (open: boolean) => void
+}) {
+  const queryClient = useQueryClient()
+  const rotate = useMutation({
+    mutationFn: () =>
+      rotateManagedDatabasePassword({
+        data: { databaseId: database.id, relayId: database.relayId },
+      }),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({
+        queryKey: queryKeys.databases.credential(database.relayId, database.id),
+      })
+      showToast({ message: "Database password rotated", type: "success" })
+      onOpenChange(false)
+    },
+  })
+  return (
+    <Dialog
+      open
+      onOpenChange={(nextOpen) => !rotate.isPending && onOpenChange(nextOpen)}
+    >
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>Rotate {database.name}&apos;s password?</DialogTitle>
+          <DialogDescription>
+            The database gets a new password right away. Anything still using
+            the current one, like a game server&apos;s config, can&apos;t
+            connect until you give it the new password.
+          </DialogDescription>
+        </DialogHeader>
+        {rotate.error ? (
+          <p className="text-xs text-destructive">{rotate.error.message}</p>
+        ) : null}
+        <DialogFooter>
+          <Button
+            type="button"
+            variant="outline"
+            disabled={rotate.isPending}
+            onClick={() => onOpenChange(false)}
+          >
+            Cancel
+          </Button>
+          <Button
+            type="button"
+            variant="destructive"
+            disabled={rotate.isPending}
+            onClick={() => rotate.mutate()}
+          >
+            {rotate.isPending ? (
+              <LoaderCircle className="animate-spin" />
+            ) : (
+              <RotateCw />
+            )}
+            Rotate password
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -209,15 +283,20 @@ export function CredentialField({
 
 export function ImportDatabaseDialog({
   database,
+  initialFile = null,
   open,
   onOpenChange,
 }: {
   database: ManagedDatabase
+  // A file already chosen, such as one dropped on the Info page.
+  initialFile?: File | null
   open: boolean
   onOpenChange: (open: boolean) => void
 }) {
-  const [file, setFile] = React.useState<File | null>(null)
-  const [localError, setLocalError] = React.useState<string | null>(null)
+  const [file, setFile] = React.useState<File | null>(initialFile)
+  const [localError, setLocalError] = React.useState<string | null>(() =>
+    dumpSizeError(initialFile)
+  )
   const upload = useMutation({
     mutationFn: async () => {
       if (!file) throw new Error("Choose a SQL dump first")
@@ -266,11 +345,7 @@ export function ImportDatabaseDialog({
             onChange={(event) => {
               const next = event.currentTarget.files?.[0] ?? null
               setFile(next)
-              setLocalError(
-                next && next.size > DATABASE_DUMP_LIMIT_BYTES
-                  ? "SQL dumps are currently limited to 700 KB"
-                  : null
-              )
+              setLocalError(dumpSizeError(next))
             }}
           />
         </label>
@@ -303,6 +378,12 @@ export function ImportDatabaseDialog({
       </DialogContent>
     </Dialog>
   )
+}
+
+function dumpSizeError(file: File | null): string | null {
+  return file && file.size > DATABASE_DUMP_LIMIT_BYTES
+    ? "SQL dumps are currently limited to 700 KB"
+    : null
 }
 
 export function DeleteDatabaseDialog({

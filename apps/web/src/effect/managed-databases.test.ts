@@ -7,6 +7,7 @@ import {
   listManagedDatabaseDirectoryEffect,
   listManagedDatabaseRecordsEffect,
   managedDatabaseNameExistsEffect,
+  renameManagedDatabaseRecordEffect,
 } from "@/effect/managed-databases"
 import { TestDatabase, describeMysql, resetDatabase } from "@/test/database"
 import { insertGrant, insertRelay, insertRows, selectRows } from "@/test/seed"
@@ -148,6 +149,36 @@ describeMysql("managed database persistence", () => {
         assert.isFalse(
           yield* managedDatabaseNameExistsEffect(relayTwo, "Primary")
         )
+      })
+    )
+
+    it.effect("renames a database unless another on its Relay has the name", () =>
+      Effect.gen(function* () {
+        yield* resetDatabase
+        yield* insertRelay(relayOne)
+        yield* insertRelay(relayTwo)
+        yield* insertManagedDatabase(relayOne, "primary-id", "Primary")
+        yield* insertManagedDatabase(relayOne, "replica-id", "Replica")
+        yield* insertManagedDatabase(relayTwo, "elsewhere-id", "Elsewhere")
+
+        const error = yield* Effect.flip(
+          renameManagedDatabaseRecordEffect(relayOne, "replica-id", "Primary")
+        )
+        assert.match(error.message, /already exists/u)
+        yield* renameManagedDatabaseRecordEffect(
+          relayOne,
+          "replica-id",
+          "Elsewhere"
+        )
+
+        const names = (yield* listManagedDatabaseRecordsEffect()).map(
+          (record) => [record.databaseId, record.name]
+        )
+        assert.deepStrictEqual(names.sort(([left], [right]) => left.localeCompare(right)), [
+          ["elsewhere-id", "Elsewhere"],
+          ["primary-id", "Primary"],
+          ["replica-id", "Elsewhere"],
+        ])
       })
     )
 

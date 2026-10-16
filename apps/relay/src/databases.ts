@@ -7,6 +7,7 @@ import type {
   RelayDatabaseDump,
   RelayDatabaseExport,
   RelayDatabaseNetwork,
+  RelayDatabaseUsage,
   RelayDeleteDatabase,
   RelayManagedDatabase,
   RelayRotateDatabaseCredentials,
@@ -182,6 +183,17 @@ export class DatabaseDriver {
   // The database as Docker reports it, for work that runs inside it.
   async target(id: string): Promise<RelayManagedDatabase> {
     return this.#required(id)
+  }
+
+  // How much the database's volume holds, measured by Docker on request.
+  async usage(id: string): Promise<RelayDatabaseUsage> {
+    const volume = requiredLabel(await this.#labels(id), "kiln.database.volume")
+    const volumes = await Effect.runPromise(
+      this.#engine.volumeUsage({ timeout: 60_000 })
+    )
+    const size = volumes.find((candidate) => candidate.Name === volume)
+      ?.UsageData?.Size
+    return { volumeBytes: size !== undefined && size >= 0 ? size : null }
   }
 
   async backupTarget(id: string): Promise<RelayManagedDatabase> {

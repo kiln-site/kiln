@@ -129,6 +129,12 @@ export interface DockerVolume {
   readonly Name: string
 }
 
+export interface DockerVolumeUsage {
+  readonly Name: string
+  // Size is -1 when Docker can't measure the volume.
+  readonly UsageData?: { readonly Size: number } | null
+}
+
 export interface DockerImage {
   readonly Config?: {
     readonly Labels?: Readonly<Record<string, string>> | null
@@ -824,6 +830,22 @@ export class DockerEngine {
       method: "POST",
       path: "/volumes/create",
     })
+  }
+
+  /**
+   * How much each volume holds, as `docker system df -v`. Docker walks every
+   * volume to answer, so ask only when someone wants the figure.
+   */
+  volumeUsage(
+    options: { readonly timeout?: number } = {}
+  ): Effect.Effect<ReadonlyArray<DockerVolumeUsage>, DockerEngineError> {
+    return this.#json<{
+      readonly Volumes?: ReadonlyArray<DockerVolumeUsage> | null
+    }>({
+      method: "GET",
+      path: `/system/df${query({ type: "volume" })}`,
+      timeout: options.timeout,
+    }).pipe(Effect.map((answer) => answer.Volumes ?? []))
   }
 
   inspectVolume(name: string): Effect.Effect<DockerVolume, DockerEngineError> {

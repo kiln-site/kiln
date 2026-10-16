@@ -114,6 +114,25 @@ describe("managed database credential rotation", () => {
   )
 })
 
+describe("managed database usage", () => {
+  it("reports how much the database's own volume holds", async () => {
+    const harness = await relayHarness()
+    const id = "f".repeat(40)
+    const other = "1".repeat(40)
+    await createDatabase(harness, id)
+    await createDatabase(harness, other)
+    fakeDocker.volumes.get(volumeOf(id))?.files.set("base/1", "x".repeat(4096))
+    fakeDocker.volumes.get(volumeOf(other))?.files.set("base/1", "x".repeat(10))
+
+    await expect(harness.databases.usage(id)).resolves.toEqual({
+      volumeBytes: 4096,
+    })
+    await expect(harness.databases.usage("2".repeat(40))).rejects.toThrow(
+      "Database not found"
+    )
+  })
+})
+
 describe("managed database ACL files", () => {
   it("fails a create whose ACL write Docker breaks off, leaving no one-off container", async () => {
     const harness = await relayHarness()

@@ -1,4 +1,5 @@
 import * as React from "react"
+import { useQuery } from "@tanstack/react-query"
 import { useNavigate } from "@tanstack/react-router"
 
 import { DeleteDatabaseDialog } from "@/components/database/database-dialogs"
@@ -15,6 +16,11 @@ import {
 } from "@/components/database/database-settings"
 import { useDatabaseWorkspace } from "@/components/database/database-workspace-context"
 import { InfoDangerZone, InfoPage } from "@/components/info-page"
+import {
+  canAccessDatabasePermission,
+  type NavigationAccessCapabilities,
+} from "@/lib/navigation-destinations"
+import { accessCapabilitiesQueryOptions } from "@/lib/query-options"
 
 // The database's details, each section with the actions that change it, and
 // a rail summing up where it runs and who can reach it.
@@ -25,37 +31,57 @@ export function DatabaseInfoPage() {
   const available = databaseRelayAvailable(database)
   const canExport = can("database.dump.export")
   const canImport = can("database.dump.import")
+  const canRestore = useDatabaseBackupRestore(database)
 
   return (
     <InfoPage rail={<DatabaseInfoRail database={database} />}>
-      <DatabaseGeneralSettings database={database} />
-      <DatabaseConnectionSettings
-        canViewNetwork={can("database.network.read")}
+      <DatabaseGeneralSettings
+        canRename={can("database.delete") && database.hasCredentials}
         database={database}
-        routeId={routeId}
       />
       {can("database.credentials.read") && database.hasCredentials ? (
         <DatabaseCredentialsSection
           key={`${database.relayId}:${database.id}`}
-          canRotate={available && can("database.credentials.rotate")}
+          available={available}
+          canRotate={can("database.credentials.rotate")}
           database={database}
         />
       ) : null}
       {database.supportsImportExport &&
       database.hasCredentials &&
-      (canExport || canImport) ? (
+      (canExport || canImport || canRestore) ? (
         <DatabaseDataSection
           available={available}
           canExport={canExport}
           canImport={canImport}
+          canRestore={canRestore}
           database={database}
         />
       ) : null}
+      <DatabaseConnectionSettings
+        canViewNetwork={can("database.network.read")}
+        database={database}
+        routeId={routeId}
+      />
       {can("database.delete") ? (
         <DatabaseDangerZone database={database} />
       ) : null}
     </InfoPage>
   )
+}
+
+// Backup permissions come from access grants, not the database's own list.
+function useDatabaseBackupRestore(database: ManagedDatabase): boolean {
+  const select = React.useCallback(
+    (capabilities: NavigationAccessCapabilities) =>
+      canAccessDatabasePermission(capabilities, database, "backup.restore"),
+    [database]
+  )
+  const { data = false } = useQuery({
+    ...accessCapabilitiesQueryOptions(),
+    select,
+  })
+  return data
 }
 
 function DatabaseDangerZone({ database }: { database: ManagedDatabase }) {
