@@ -1,6 +1,7 @@
 import * as React from "react"
 import { useQuery } from "@tanstack/react-query"
-import { Settings2 } from "lucide-react"
+import { Link } from "@tanstack/react-router"
+import { Database, Settings2 } from "lucide-react"
 
 import { Button } from "@workspace/ui/components/button"
 
@@ -15,7 +16,10 @@ import { InstanceFavoriteButton } from "@/components/instance-favorite"
 import { RelayVersion } from "@/components/relay/relay-version"
 import { canAccessRelayPermission } from "@/lib/navigation-destinations"
 import type { AccessPermission } from "@/lib/permissions"
-import { accessCapabilitiesQueryOptions } from "@/lib/query-options"
+import {
+  accessCapabilitiesQueryOptions,
+  relayHostFilesQueryOptions,
+} from "@/lib/query-options"
 import type { RelayDirectoryEntry } from "@/lib/relay-route"
 
 // Loaded when someone opens it, so the Relays page stays out of this route.
@@ -40,14 +44,23 @@ export function useRelayPermission(
 
 export function RelayGeneralSettings({
   relay,
+  routeId,
 }: {
   relay: RelayDirectoryEntry
+  routeId: string
 }) {
   return (
     <InfoSection
       title="Relay"
       action={
-        <InstanceFavoriteButton id={relay.id} kind="relay" relayId={relay.id} />
+        <>
+          <RelayDatabaseButton relayId={relay.id} routeId={routeId} />
+          <InstanceFavoriteButton
+            id={relay.id}
+            kind="relay"
+            relayId={relay.id}
+          />
+        </>
       }
     >
       <InfoFact label="Name">
@@ -80,6 +93,34 @@ export function RelayGeneralSettings({
         </InfoFact>
       ) : null}
     </InfoSection>
+  )
+}
+
+// Opens the Relay's own SQLite database in its host files, where it's pinned
+// by default.
+function RelayDatabaseButton({
+  relayId,
+  routeId,
+}: {
+  relayId: string
+  routeId: string
+}) {
+  const canReadFiles = useRelayPermission(relayId, "relay.files.read")
+  const { data } = useQuery({
+    ...relayHostFilesQueryOptions(relayId),
+    enabled: canReadFiles,
+  })
+  if (!canReadFiles || !data?.database) return null
+  return (
+    <Button asChild size="sm" variant="outline">
+      <Link
+        to="/relay/$relayId/files/$"
+        params={{ relayId: routeId, _splat: data.database }}
+      >
+        <Database />
+        Database
+      </Link>
+    </Button>
   )
 }
 

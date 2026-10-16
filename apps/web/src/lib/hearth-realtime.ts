@@ -117,7 +117,11 @@ function queryScopes(
     return [exact(queryKeys.relay.webRoutes(scope.relayId, scope.instanceId))]
   }
   if (topic === "relay-proxy" && scope) {
-    return [prefix(queryKeys.relayProxy(scope.relayId))]
+    return [
+      prefix(queryKeys.relayProxy(scope.relayId)),
+      // The Traefik config only exists in Bundled mode.
+      exact(queryKeys.relayHostFiles(scope.relayId)),
+    ]
   }
   if (topic === "relays" && scope) {
     return [

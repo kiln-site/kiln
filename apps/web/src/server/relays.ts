@@ -398,10 +398,11 @@ export const getRelayProxy = createServerFn({ method: "GET" })
     )
   })
 
-// The bundled Traefik's config on the Relay's host, as a path in its host
-// files. It's pinned there the first time, so it's at hand in Files. Null in
-// other proxy modes and from older Relays.
-export const getRelayTraefikConfigPath = createServerFn({ method: "GET" })
+// Files the Info page opens in the Relay's host files: its database, and the
+// bundled Traefik's config in that mode. Paths are relative to the host's
+// root, as the Files tab's are. Each is pinned there the first time. Null
+// from older Relays.
+export const getRelayHostFiles = createServerFn({ method: "GET" })
   .validator(relayIdSchema)
   .handler(async ({ data }) => {
     await requireRelayAdministrator(data.id, "relay.files.read")
@@ -412,16 +413,29 @@ export const getRelayTraefikConfigPath = createServerFn({ method: "GET" })
     if (
       !relayConnectionFeatures(relay.id).has(relayProxyConfigurationV1Feature)
     ) {
-      return { path: null }
+      return { database: null, traefikConfig: null }
     }
-    const { hostDirectory } = relayProxyConfigurationSchema.parse(
-      await relayRpc(relay, "relay.proxy.config.read", {}, 15_000)
-    )
-    if (!hostDirectory) return { path: null }
-    // Host file paths are relative to the host's root.
-    const path = `${hostDirectory.replace(/^\/+/u, "")}/traefik.yaml`
+    const { hostDataDirectory, staticConfiguration } =
+      relayProxyConfigurationSchema.parse(
+        await relayRpc(relay, "relay.proxy.config.read", {}, 15_000)
+      )
+    if (!hostDataDirectory) return { database: null, traefikConfig: null }
+    const root = hostDataDirectory.replace(/^\/+/u, "")
+    const files = {
+      database: `${root}/network/relay.sqlite`,
+      // Only the bundled Traefik has a static file.
+      traefikConfig:
+        staticConfiguration === null
+          ? null
+          : `${root}/infrastructure/traefik/traefik.yaml`,
+    }
     const { pinFileByDefault } = await import("@/lib/file-activity")
-    if (await pinFileByDefault(relay.id, relay.id, path)) {
+    const pinned = await Promise.all(
+      [files.database, files.traefikConfig]
+        .filter((path) => path !== null)
+        .map((path) => pinFileByDefault(relay.id, relay.id, path))
+    )
+    if (pinned.some(Boolean)) {
       publishRealtimeChange({
         audience: { kind: "relays", relayIds: [relay.id] },
         scope: { instanceId: relay.id, relayId: relay.id },
@@ -429,7 +443,7 @@ export const getRelayTraefikConfigPath = createServerFn({ method: "GET" })
         type: "hearth.invalidate",
       })
     }
-    return { path }
+    return files
   })
 
 export const updateRelayProxy = createServerFn({ method: "POST" })

@@ -1148,10 +1148,11 @@ export const relayProxyConfigurationSchema = z.object({
   // Both files only exist for the bundled Traefik.
   dynamicConfiguration: z.string().nullable(),
   /**
-   * The host folder holding the bundled Traefik's files, for opening them in
-   * the Relay's host files. Null in other modes; absent from older Relays.
+   * The Relay's data folder on its host, where its database and the bundled
+   * Traefik's files are, for opening them in its host files. Absent from
+   * older Relays.
    */
-  hostDirectory: z.string().min(1).nullable().optional(),
+  hostDataDirectory: z.string().min(1).optional(),
   routes: z.array(
     z.object({
       hostname: z.string(),

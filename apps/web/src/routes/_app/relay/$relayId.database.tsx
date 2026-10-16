@@ -1,17 +1,8 @@
-import { createFileRoute } from "@tanstack/react-router"
-import { RelayDatabasePage } from "@/components/relay/relay-database-page"
-import { pageTitle } from "@/lib/page-title"
-import { requireRelayDestinationAccess } from "@/lib/route-access"
+import { createFileRoute, redirect } from "@tanstack/react-router"
 
+// The Database page is gone; the Relay's database opens in Files from Info.
 export const Route = createFileRoute("/_app/relay/$relayId/database")({
-  beforeLoad: async ({ context, params }) => {
-    await requireRelayDestinationAccess(
-      context.queryClient,
-      context.relay,
-      "database",
-      params.relayId
-    )
+  beforeLoad: ({ params }) => {
+    throw redirect({ to: "/relay/$relayId/info", params, replace: true })
   },
-  component: RelayDatabasePage,
-  head: () => ({ meta: [{ title: pageTitle("Database") }] }),
 })

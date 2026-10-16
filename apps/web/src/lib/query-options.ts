@@ -61,7 +61,7 @@ import {
 import {
   getRelayOwnerMinecraftProfiles,
   getRelayProxy,
-  getRelayTraefikConfigPath,
+  getRelayHostFiles,
   getRelayTailscale,
   getRelays,
 } from "@/server/relays"
@@ -191,8 +191,8 @@ export const queryKeys = {
   },
   relays: ["relays"] as const,
   relayProxy: (relayId: string) => ["relays", "proxy", relayId] as const,
-  relayTraefikConfigPath: (relayId: string) =>
-    ["relays", "proxy", relayId, "traefik"] as const,
+  relayHostFiles: (relayId: string) =>
+    ["relays", "host-files", relayId] as const,
   tailscale: (relayId: string) => ["tailscale", "relays", relayId] as const,
   tailscaleStacks: ["tailscale", "stacks"] as const,
   updates: ["updates", "overview"] as const,
@@ -672,11 +672,12 @@ export function relayProxyQueryOptions(relayId: string) {
   })
 }
 
-// The path only moves if the Relay's data does, so it's read rarely.
-export function relayTraefikConfigPathQueryOptions(relayId: string) {
+// The paths only move if the Relay's data or proxy mode does, so they're read
+// rarely; a proxy change refreshes them.
+export function relayHostFilesQueryOptions(relayId: string) {
   return queryOptions({
-    queryFn: () => getRelayTraefikConfigPath({ data: { id: relayId } }),
-    queryKey: queryKeys.relayTraefikConfigPath(relayId),
+    queryFn: () => getRelayHostFiles({ data: { id: relayId } }),
+    queryKey: queryKeys.relayHostFiles(relayId),
     retry: false,
     staleTime: 5 * 60_000,
   })

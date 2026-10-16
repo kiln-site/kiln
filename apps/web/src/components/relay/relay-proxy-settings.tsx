@@ -22,7 +22,7 @@ import {
 import { StatusIndicator } from "@/components/status-indicator"
 import {
   relayProxyQueryOptions,
-  relayTraefikConfigPathQueryOptions,
+  relayHostFilesQueryOptions,
 } from "@/lib/query-options"
 import type { RelayDirectoryEntry } from "@/lib/relay-route"
 
@@ -127,17 +127,17 @@ function TraefikConfigLink({
 }) {
   const canReadFiles = useRelayPermission(relayId, "relay.files.read")
   const { data } = useQuery({
-    ...relayTraefikConfigPathQueryOptions(relayId),
+    ...relayHostFilesQueryOptions(relayId),
     enabled: canReadFiles,
   })
-  if (!canReadFiles || !data?.path) return null
+  if (!canReadFiles || !data?.traefikConfig) return null
   return (
     <InfoFact label="Traefik config">
       <Link
         to="/relay/$relayId/files/$"
         params={{
           relayId: routeId,
-          _splat: data.path,
+          _splat: data.traefikConfig,
         }}
         className="group flex min-w-0 items-center gap-1.5 font-mono text-xs transition-colors hover:text-primary"
       >
