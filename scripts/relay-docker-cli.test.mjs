@@ -12,7 +12,7 @@ const workspaceRoot = new URL("../", import.meta.url)
 // the standalone binaries.
 const startsDocker = [
   /\b(?:spawn|spawnSync|exec|execSync|execFile|execFileSync|command\w*)\(\s*["'`](?:[^"'`\s]*\/)?docker(?:["'`]|\s)/gu,
-  /["'`]-c["'`]\s*,\s*["'`](?:[^"'`]*[\s;&|(])?docker\s/gu,
+  /["'`]-c["'`]\s*,\s*[^\n]*?[\s;&|("'`/]docker\s/gu,
 ]
 
 test("Relay never runs the docker CLI", async () => {
