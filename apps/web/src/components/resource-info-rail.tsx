@@ -21,6 +21,7 @@ import {
   InfoRailLink,
   InfoRailRow,
 } from "@/components/info-page"
+import { OwnerCard } from "@/components/owner-card"
 import { useCopyFeedback } from "@/components/workspace-header"
 import {
   canAccessActivity,
@@ -32,13 +33,19 @@ import {
   accessCapabilitiesQueryOptions,
   backupUsageQueryOptions,
   relaysQueryOptions,
+  resourceOwnerMinecraftProfileQueryOptions,
+  resourceOwnerQueryOptions,
   resourceUserCountQueryOptions,
 } from "@/lib/query-options"
-import { relayRouteIdentifier, type RelayDirectoryEntry } from "@/lib/relay-route"
+import {
+  relayRouteIdentifier,
+  type RelayDirectoryEntry,
+} from "@/lib/relay-route"
 
 // The Info rail of an instance that runs on a Relay, a game server or a
 // database: links to its Relay, who can reach it, its activity, and its
-// backups, each shown only to those who can open it, then its container.
+// backups, each shown only to those who can open it, then its owner and its
+// container.
 
 export interface RailResource {
   // "instance" is a game server.
@@ -60,16 +67,47 @@ export function InstanceInfoRail({
 }) {
   return (
     <>
-      <InfoRailGroup>
+      <InfoRailGroup card>
         <InfoRailRelayLink name={relayName} relayId={resource.relayId} />
         <InfoRailUsersLink resource={resource} />
         <InfoRailActivityLink resource={resource} />
         <InfoRailBackupsLink resource={resource} />
       </InfoRailGroup>
+      <InfoRailOwner resource={resource} />
       {container}
     </>
   )
 }
+
+function railScope(resource: RailResource) {
+  return {
+    relayId: resource.relayId,
+    resourceId: resource.id,
+    resourceType: resource.kind,
+  }
+}
+
+// Shows once the owner loads, so it doesn't stand in for the platform first.
+const InfoRailOwner = React.memo(function InfoRailOwner({
+  resource,
+}: {
+  resource: RailResource
+}) {
+  const scope = railScope(resource)
+  const { data: owner } = useQuery(resourceOwnerQueryOptions(scope))
+  const { data: profileId } = useQuery({
+    ...resourceOwnerMinecraftProfileQueryOptions(scope),
+    enabled: Boolean(owner),
+  })
+  if (owner === undefined) return null
+  return (
+    <OwnerCard
+      email={owner?.email ?? null}
+      name={owner?.name ?? null}
+      profileId={profileId}
+    />
+  )
+})
 
 // Where the instance lives on the Relay and the limits it runs under. Values
 // the Relay reports separately show a spinner until they arrive.
@@ -238,13 +276,7 @@ function InfoRailUsersLink({ resource }: { resource: RailResource }) {
 // The owner and everyone invited or with access, as the Access page lists
 // them. Platform admins count only when they're one of those.
 function UserCount({ resource }: { resource: RailResource }) {
-  const { data } = useQuery(
-    resourceUserCountQueryOptions({
-      relayId: resource.relayId,
-      resourceId: resource.id,
-      resourceType: resource.kind,
-    })
-  )
+  const { data } = useQuery(resourceUserCountQueryOptions(railScope(resource)))
   if (data === undefined || data === null) return null
   return (
     <span
@@ -284,7 +316,11 @@ function InfoRailBackupsLink({ resource }: { resource: RailResource }) {
   const select = React.useCallback(
     (capabilities: NavigationAccessCapabilities) =>
       kind === "database"
-        ? canAccessDatabasePermission(capabilities, { id, relayId }, "backup.read")
+        ? canAccessDatabasePermission(
+            capabilities,
+            { id, relayId },
+            "backup.read"
+          )
         : canAccessInstancePermission(
             capabilities,
             { id, relayId },

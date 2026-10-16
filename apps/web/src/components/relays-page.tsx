@@ -104,8 +104,9 @@ import { StatusIndicator } from "@/components/status-indicator"
 import { UserAvatar } from "@/components/account-avatar"
 import { relaysCollectionOptions } from "@/lib/collections/relays"
 import {
-  isMinecraftUsername,
   minecraftUsernameKey,
+  relayOwnerNamesKey,
+  selectOwnerProfileIds,
 } from "@/lib/minecraft-profile"
 import { pairingFeedbackFrom } from "@/lib/relay-pairing-errors"
 import { relayAddress } from "@/lib/relay-route"
@@ -220,29 +221,6 @@ function selectRelayConnectionStates(
         status,
         updating: updating === true,
       }))
-}
-
-function relayOwnerNamesKey(
-  relays: ReadonlyArray<RelayRegistryTableItem> | undefined
-): string {
-  const names = new Set<string>()
-  for (const relay of relays ?? []) {
-    if (relay.ownerName && isMinecraftUsername(relay.ownerName)) {
-      names.add(minecraftUsernameKey(relay.ownerName))
-    }
-  }
-  return [...names].sort().join(",")
-}
-
-function selectOwnerProfileIds(
-  profiles: Array<{ displayName: string; profileId: string }>
-): ReadonlyMap<string, string> {
-  return new Map(
-    profiles.map((profile) => [
-      minecraftUsernameKey(profile.displayName),
-      profile.profileId,
-    ])
-  )
 }
 
 function projectRelayTableItems(

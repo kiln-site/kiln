@@ -36,6 +36,8 @@ import {
 } from "@/lib/resource-permissions"
 import { displayNameFromEmail } from "@/lib/display-name"
 import {
+  getResourceOwnerHandler,
+  getResourceOwnerMinecraftProfileIdHandler,
   getResourceUserCountHandler,
   peopleFilter,
 } from "@/server/resource-access.server"
@@ -912,6 +914,24 @@ export const getResourceUserCount = createServerFn({ method: "GET" })
   .validator(resourceScopeSchema)
   .handler(async ({ data }) =>
     getResourceUserCountHandler(await requireEligibleResourceUser(), data)
+  )
+
+// Who owns a resource, for its Info rail, or null when the platform does.
+export const getResourceOwner = createServerFn({ method: "GET" })
+  .validator(resourceScopeSchema)
+  .handler(async ({ data }) =>
+    getResourceOwnerHandler(await requireEligibleResourceUser(), data)
+  )
+
+export const getResourceOwnerMinecraftProfileId = createServerFn({
+  method: "GET",
+})
+  .validator(resourceScopeSchema)
+  .handler(async ({ data }) =>
+    getResourceOwnerMinecraftProfileIdHandler(
+      await requireEligibleResourceUser(),
+      data
+    )
   )
 
 export const getResourceAccess = createServerFn({ method: "GET" })

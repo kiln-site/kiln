@@ -56,8 +56,9 @@ export const attachRelayOwnersEffect = Effect.fn("relays.owners.attach")(
   }
 )
 
-function ownerDisplayName(
-  owner: RelayOwnerRow,
+// Owners' email-derived names are only for those who may see their email.
+export function ownerDisplayName(
+  owner: Pick<RelayOwnerRow, "email" | "name">,
   includeOwnerDetails: boolean
 ): string {
   if (includeOwnerDetails) return resolveDisplayName(owner.name, owner.email)

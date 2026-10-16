@@ -113,7 +113,10 @@ const InfoSectionLinkAnchor = React.forwardRef<
     <a
       ref={ref}
       {...props}
-      className={cn(buttonVariants({ size: "sm", variant: "outline" }), className)}
+      className={cn(
+        buttonVariants({ size: "sm", variant: "outline" }),
+        className
+      )}
     >
       {children}
       <ArrowRight />
@@ -399,10 +402,16 @@ function capitalize(text: string): string {
   return `${text.charAt(0).toUpperCase()}${text.slice(1)}`
 }
 
+// Rows in a card take its padding rather than lining up with the rail.
+const InfoRailInCardContext = React.createContext(false)
+
 export function InfoRailGroup({
+  card = false,
   children,
   title,
 }: {
+  // Boxes the rows in a card, divided by rules.
+  card?: boolean
   children: React.ReactNode
   // Left out when the rows say what they are, such as a list of links.
   title?: string
@@ -414,15 +423,36 @@ export function InfoRailGroup({
           {title}
         </h3>
       ) : null}
-      {children}
+      {card ? (
+        <div className="divide-y divide-border/60 border bg-background/45">
+          <InfoRailInCardContext.Provider value>
+            {children}
+          </InfoRailInCardContext.Provider>
+        </div>
+      ) : (
+        children
+      )}
     </section>
   )
 }
 
 const infoRailRowClassName =
-  "group -mx-2 flex min-w-0 items-center gap-2.5 px-2 py-1.5 text-[0.8125rem]"
+  "group flex min-w-0 items-center gap-2.5 text-[0.8125rem]"
+const infoRailRowSpacing = {
+  card: "px-3 py-2.5",
+  rail: "-mx-2 px-2 py-1.5",
+}
 const infoRailLinkClassName =
   "transition-colors outline-none hover:bg-muted/60 focus-visible:bg-muted/60 focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-inset"
+
+function useInfoRailRowClassName() {
+  return cn(
+    infoRailRowClassName,
+    React.useContext(InfoRailInCardContext)
+      ? infoRailRowSpacing.card
+      : infoRailRowSpacing.rail
+  )
+}
 
 // A row in a rail group: what leads it, such as a count, then its label, a
 // detail, and an action on the right.
@@ -437,6 +467,7 @@ function InfoRailRowContent({
   detail?: React.ReactNode
   leading: React.ReactNode
 }) {
+  const inCard = React.useContext(InfoRailInCardContext)
   return (
     <>
       <span className="flex w-6 shrink-0 items-center font-semibold tabular-nums [&_svg]:size-3.5 [&_svg]:text-muted-foreground">
@@ -447,15 +478,29 @@ function InfoRailRowContent({
       </span>
       {/* Inset as far as an action's padding, so details and actions in a
           group end in line. */}
-      {detail ? (
-        <span className="shrink-0 pr-2 text-xs text-muted-foreground/80">
+      {/* In a card, the detail is the row's count, such as how many backups
+          it keeps. */}
+      {detail != null ? (
+        <span
+          className={cn(
+            "shrink-0 pr-2",
+            inCard
+              ? "text-[0.8125rem] font-semibold text-foreground tabular-nums"
+              : "text-xs text-muted-foreground/80"
+          )}
+        >
           {detail}
         </span>
       ) : null}
       {/* Above a row's link, so it takes its own clicks, and the row's full
           height so it's easy to hit. */}
       {action ? (
-        <span className="relative z-10 -my-1.5 flex shrink-0 self-stretch">
+        <span
+          className={cn(
+            "relative z-10 flex shrink-0 self-stretch",
+            inCard ? "-my-2.5" : "-my-1.5"
+          )}
+        >
           {action}
         </span>
       ) : null}
@@ -471,7 +516,7 @@ export function InfoRailRow(props: {
   leading: React.ReactNode
 }) {
   return (
-    <div className={infoRailRowClassName}>
+    <div className={useInfoRailRowClassName()}>
       <InfoRailRowContent {...props} />
     </div>
   )
@@ -490,6 +535,7 @@ const InfoRailLinkAnchor = React.forwardRef<
   { action, children, className, detail, leading, ...props },
   ref
 ) {
+  const rowClassName = useInfoRailRowClassName()
   const chevron = (
     <ChevronRight className="size-3.5 shrink-0 text-muted-foreground/70 transition-transform group-hover:translate-x-0.5" />
   )
@@ -497,7 +543,7 @@ const InfoRailLinkAnchor = React.forwardRef<
     return (
       <div
         className={cn(
-          infoRailRowClassName,
+          rowClassName,
           "relative transition-colors hover:bg-muted/60 has-[a:focus-visible]:bg-muted/60",
           className
         )}
@@ -522,7 +568,7 @@ const InfoRailLinkAnchor = React.forwardRef<
     <a
       ref={ref}
       {...props}
-      className={cn(infoRailRowClassName, infoRailLinkClassName, className)}
+      className={cn(rowClassName, infoRailLinkClassName, className)}
     >
       <InfoRailRowContent detail={detail} leading={leading}>
         {children}

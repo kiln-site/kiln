@@ -1,12 +1,22 @@
-import { BadgeCheck } from "lucide-react"
+import * as React from "react"
+import { useQuery } from "@tanstack/react-query"
 
-import { InfoFact, InfoRailGroup } from "@/components/info-page"
-import { LocalDateTime } from "@/components/local-date-time"
+import { OwnerCard } from "@/components/owner-card"
 import {
   RelayNodeCard,
   useRelayNodeFacts,
 } from "@/components/relay/relay-node-card"
 import { RelayWorkloads } from "@/components/relay/relay-workloads"
+import {
+  isMinecraftUsername,
+  minecraftUsernameKey,
+  relayOwnerNamesKey,
+  selectOwnerProfileIds,
+} from "@/lib/minecraft-profile"
+import {
+  relayOwnerMinecraftProfilesQueryOptions,
+  relaysQueryOptions,
+} from "@/lib/query-options"
 import type { RelayDirectoryEntry } from "@/lib/relay-route"
 
 // What the Relay is at a glance: what runs on it, who owns it, and the node
@@ -22,33 +32,43 @@ export function RelayInfoRail({
   return (
     <>
       <RelayWorkloads relayId={relay.id} routeId={routeId} />
-      <InfoRailGroup title="Ownership">
-        <dl>
-          <InfoFact label="Owner">
-            <RelayOwner relay={relay} />
-          </InfoFact>
-          <InfoFact label="Paired">
-            <LocalDateTime dateOnly timestamp={relay.createdAt} />
-          </InfoFact>
-        </dl>
-      </InfoRailGroup>
+      <RelayOwnerCard
+        ownerEmail={relay.ownerEmail}
+        ownerName={relay.ownerName}
+      />
       <RelayNodeCard facts={node} relay={relay} />
     </>
   )
 }
 
-// A Relay with no recorded owner, like one set up with Kiln itself, belongs
-// to this Kiln.
-function RelayOwner({ relay }: { relay: RelayDirectoryEntry }) {
-  const owner = relay.ownerName ?? relay.ownerEmail
-  if (owner) return <span className="truncate">{owner}</span>
-  return (
-    <span
-      className="flex items-center gap-1"
-      title="Belongs to this Kiln, not to one person"
-    >
-      Kiln
-      <BadgeCheck aria-label="Verified" className="size-3.5 text-primary" />
-    </span>
+// Who owns the Relay; its email only reaches platform admins. The owner's
+// head comes from the avatars the Relays list caches.
+const RelayOwnerCard = React.memo(function RelayOwnerCard({
+  ownerEmail,
+  ownerName,
+}: Pick<RelayDirectoryEntry, "ownerEmail" | "ownerName">) {
+  const profileId = useRelayOwnerProfileId(ownerName)
+  return <OwnerCard email={ownerEmail} name={ownerName} profileId={profileId} />
+})
+
+function useRelayOwnerProfileId(name: string | null): string | null {
+  const { data: ownerNames = "" } = useQuery({
+    ...relaysQueryOptions(),
+    select: relayOwnerNamesKey,
+  })
+  const select = React.useCallback(
+    (profiles: Array<{ displayName: string; profileId: string }>) =>
+      name
+        ? (selectOwnerProfileIds(profiles).get(minecraftUsernameKey(name)) ??
+          null)
+        : null,
+    [name]
   )
+  const { data: profileId } = useQuery({
+    ...relayOwnerMinecraftProfilesQueryOptions(ownerNames),
+    enabled:
+      ownerNames.length > 0 && name !== null && isMinecraftUsername(name),
+    select,
+  })
+  return profileId ?? null
 }

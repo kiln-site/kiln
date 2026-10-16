@@ -12,11 +12,12 @@ import {
   managedDatabaseDirectoryQueryOptions,
   relaySnapshotQueryOptions,
 } from "@/lib/query-options"
-import { selectRelayServerCounts } from "@/lib/relay-selectors"
+import { selectRelayServerCount } from "@/lib/relay-selectors"
 
 type WorkloadList = "/infra/apps" | "/infra/databases" | "/infra/servers"
 
-// What runs on a Relay. Each count opens its list, searched to this Relay.
+// What runs on a Relay, a row for each kind. Each opens its list, searched to
+// this Relay.
 export function RelayWorkloads({
   relayId,
   routeId,
@@ -33,7 +34,7 @@ export function RelayWorkloads({
     return null
   }
   return (
-    <InfoRailGroup title="Runs">
+    <InfoRailGroup card>
       {access.servers ? (
         <ServerCount relayId={relayId} search={routeId} />
       ) : null}
@@ -52,15 +53,12 @@ const ServerCount = React.memo(function ServerCount({
   relayId: string
   search: string
 }) {
-  const select = React.useMemo(
-    () => selectRelayServerCounts(relayId),
-    [relayId]
-  )
+  const select = React.useMemo(() => selectRelayServerCount(relayId), [relayId])
   const { data } = useQuery({ ...relaySnapshotQueryOptions(), select })
   return (
     <WorkloadLink
-      count={data?.total}
-      detail={data && data.total > 0 ? `${data.running} running` : undefined}
+      count={data}
+      icon={<serversDestination.icon />}
       noun={{ one: "Game Server", other: "Game Servers" }}
       search={search}
       to="/infra/servers"
@@ -83,6 +81,7 @@ const DatabaseCount = React.memo(function DatabaseCount({
   return (
     <WorkloadLink
       count={data}
+      icon={<databasesDestination.icon />}
       noun={{ one: "Database", other: "Databases" }}
       search={search}
       to="/infra/databases"
@@ -102,6 +101,7 @@ const AppCount = React.memo(function AppCount({
   return (
     <WorkloadLink
       count={data}
+      icon={<appsDestination.icon />}
       noun={{ one: "App", other: "Apps" }}
       search={search}
       to="/infra/apps"
@@ -111,13 +111,13 @@ const AppCount = React.memo(function AppCount({
 
 function WorkloadLink({
   count,
-  detail,
+  icon,
   noun,
   search,
   to,
 }: {
   count: number | undefined
-  detail?: string
+  icon: React.ReactNode
   noun: { one: string; other: string }
   search: string
   to: WorkloadList
@@ -126,8 +126,8 @@ function WorkloadLink({
     <InfoRailLink
       to={to}
       search={{ search }}
-      detail={detail}
-      leading={count ?? "—"}
+      leading={icon}
+      detail={count ?? "—"}
     >
       {count === 1 ? noun.one : noun.other}
     </InfoRailLink>

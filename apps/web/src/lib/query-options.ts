@@ -78,7 +78,11 @@ import {
   getReleaseHistory,
   getUpdateOverview,
 } from "@/server/updates"
-import { getResourceUserCount } from "@/server/resource-access"
+import {
+  getResourceOwner,
+  getResourceOwnerMinecraftProfileId,
+  getResourceUserCount,
+} from "@/server/resource-access"
 import { getScheduleOptions, getSchedules } from "@/server/schedules"
 import type { RelayFleetSnapshot } from "@/lib/relay-fleet"
 import { withInventoryRelayStatus } from "@/lib/inventory-relay-status"
@@ -351,6 +355,51 @@ export function resourceUserCountQueryOptions(scope: {
     queryFn: () => getResourceUserCount({ data: scope }),
     retry: false,
     staleTime: Infinity,
+  })
+}
+
+// Who owns a resource, or null when the platform does. Keyed under the
+// Access page's own queries, so a transfer refreshes it.
+export function resourceOwnerQueryOptions(scope: {
+  relayId: string
+  resourceId: string
+  resourceType: "database" | "instance" | "relay"
+}) {
+  return queryOptions({
+    queryKey: [
+      "resource-access",
+      scope.relayId,
+      scope.resourceType,
+      scope.resourceId,
+      "owner",
+    ] as const,
+    queryFn: () => getResourceOwner({ data: scope }),
+    retry: false,
+    staleTime: Infinity,
+  })
+}
+
+// The owner's Minecraft head, apart from the owner so their card shows
+// before Mojang answers.
+export function resourceOwnerMinecraftProfileQueryOptions(scope: {
+  relayId: string
+  resourceId: string
+  resourceType: "database" | "instance" | "relay"
+}) {
+  return queryOptions({
+    queryKey: [
+      "resource-access",
+      scope.relayId,
+      scope.resourceType,
+      scope.resourceId,
+      "owner",
+      "minecraft",
+    ] as const,
+    queryFn: ({ signal }) =>
+      getResourceOwnerMinecraftProfileId({ data: scope, signal }),
+    gcTime: 60 * 60_000,
+    retry: false,
+    staleTime: 60 * 60_000,
   })
 }
 
