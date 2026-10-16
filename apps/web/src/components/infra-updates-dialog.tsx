@@ -203,9 +203,6 @@ const shortReleaseDateFormatter = new Intl.DateTimeFormat("en-US", {
   month: "short",
   timeZone: "UTC",
 })
-const retryTimeFormatter = new Intl.DateTimeFormat("en-US", {
-  timeStyle: "short",
-})
 const lastCheckedFormatter = new Intl.DateTimeFormat("en-US", {
   dateStyle: "medium",
   timeStyle: "short",
@@ -1279,7 +1276,6 @@ const UpdateDialogData = React.memo(function UpdateDialogData({
   const overviewQuery = useQuery({
     ...updateOverviewQueryOptions(),
     enabled: () => open && !busy && canRefetchSystemUpdateOverview(),
-    select: withoutReleasesCheckedAt,
     notifyOnChangeProps: ["data", "error", "isError", "isPending"],
   })
   const overview = React.useMemo(
@@ -1405,8 +1401,8 @@ const UpdaterChangelogButton = React.memo(function UpdaterChangelogButton({
   )
 })
 
-// The check button and what it found: when Hearth last asked GitHub, or for
-// a few seconds after a check that didn't get an answer, why not.
+// The check button and when Hearth last asked GitHub, or for a few seconds
+// after a check that didn't get an answer, why not.
 const UpdaterCheck = React.memo(function UpdaterCheck({
   activityStore,
   open,
@@ -1470,16 +1466,10 @@ const UpdaterCheckButton = React.memo(function UpdaterCheckButton({
   // now before reading the updates again.
   const checkMutation = useMutation({
     mutationFn: async () => {
-      const { failed, retryAt } = await checkForKilnReleases()
+      const { failed } = await checkForKilnReleases()
       // An update that started meanwhile holds the overview still.
       if (canRefetchSystemUpdateOverview()) await refetchOverview()
-      if (retryAt !== null) {
-        onNotice(
-          `GitHub limit reached · try again at ${retryTimeFormatter.format(new Date(retryAt))}`
-        )
-      } else if (failed) {
-        onNotice("Couldn’t reach GitHub")
-      }
+      if (failed) onNotice("Couldn’t reach GitHub")
     },
     onError: () => onNotice("Couldn’t check for updates"),
   })
@@ -2544,14 +2534,6 @@ function selectReleasesCheckedAt(overview: UpdateOverview): number | null {
   return overview.releasesCheckedAt
 }
 
-// The rows don't show when Hearth last asked GitHub (`UpdaterCheck` does),
-// so a check that only moved it leaves them the same overview to render.
-function withoutReleasesCheckedAt(overview: UpdateOverview): UpdateOverview {
-  return overview.releasesCheckedAt === null
-    ? overview
-    : { ...overview, releasesCheckedAt: null }
-}
-
 // Rows have fixed heights so the virtualizer never measures, and nothing
 // shifts while older releases load in below.
 const changelogRowHeight: Readonly<
@@ -2595,7 +2577,6 @@ const UpdateChangelogPage = React.memo(function UpdateChangelogPage({
     ...releaseHistoryInfiniteQueryOptions(),
     notifyOnChangeProps: [
       "data",
-      "dataUpdatedAt",
       "hasNextPage",
       "isError",
       "isFetchingNextPage",
@@ -2604,7 +2585,6 @@ const UpdateChangelogPage = React.memo(function UpdateChangelogPage({
   })
   const {
     data,
-    dataUpdatedAt,
     fetchNextPage,
     hasNextPage,
     isError,
@@ -2633,18 +2613,6 @@ const UpdateChangelogPage = React.memo(function UpdateChangelogPage({
     [markers, releases]
   )
   const pageCount = data?.pages.length ?? 0
-  // Older releases wait for GitHub's limit; Hearth says for how long, from
-  // when the page arrived by this browser's clock.
-  const resumeInMs = data?.pages.at(-1)?.resumeInMs ?? null
-  const pausedUntil = resumeInMs === null ? null : dataUpdatedAt + resumeInMs
-  React.useEffect(() => {
-    if (pausedUntil === null) return
-    const timer = window.setTimeout(
-      () => void refetch(),
-      Math.max(0, pausedUntil - Date.now()) + 1_000
-    )
-    return () => window.clearTimeout(timer)
-  }, [pausedUntil, refetch])
 
   // Keep loading while a component's version is older than what's loaded,
   // so its line shows without scrolling down to it first.
@@ -2798,7 +2766,6 @@ const UpdateChangelogPage = React.memo(function UpdateChangelogPage({
         markerIndexes={timeline.markerIndexes}
         items={items}
         pageCount={pageCount}
-        pausedUntil={hasNextPage ? null : pausedUntil}
         pending={isPending}
         store={store}
       />
@@ -2820,7 +2787,6 @@ const ChangelogFeed = React.memo(function ChangelogFeed({
   jumpRef,
   markerIndexes,
   pageCount,
-  pausedUntil,
   pending,
   store,
 }: {
@@ -2833,7 +2799,6 @@ const ChangelogFeed = React.memo(function ChangelogFeed({
   jumpRef: React.Ref<(index: number) => void>
   markerIndexes: ReadonlyMap<string, number>
   pageCount: number
-  pausedUntil: number | null
   pending: boolean
   store: UpdateDialogViewStore
 }) {
@@ -2964,7 +2929,6 @@ const ChangelogFeed = React.memo(function ChangelogFeed({
                   <ChangelogEnd
                     error={error}
                     loading={hasNextPage || isFetchingNextPage}
-                    pausedUntil={pausedUntil}
                     onRetry={retry}
                   />
                 </div>
@@ -3494,12 +3458,10 @@ function ChangelogMarkerList({
 function ChangelogEnd({
   error,
   loading,
-  pausedUntil,
   onRetry,
 }: {
   error: boolean
   loading: boolean
-  pausedUntil: number | null
   onRetry: () => void
 }) {
   return (
@@ -3520,8 +3482,6 @@ function ChangelogEnd({
           <LoaderCircle className="size-3.5 animate-spin" />
           Loading older releases
         </>
-      ) : pausedUntil !== null ? (
-        `Older releases load after ${retryTimeFormatter.format(new Date(pausedUntil))}`
       ) : (
         "The first Kiln release"
       )}

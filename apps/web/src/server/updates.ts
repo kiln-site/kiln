@@ -273,9 +273,8 @@ export const getUpdateOverview = createServerFn({ method: "GET" }).handler(
 
 /**
  * Asks GitHub for new Kiln releases now, for the updater's check button,
- * rather than waiting for Hearth's next check. `failed` says GitHub didn't
- * answer and the releases Hearth had are still shown; `retryAt`, when its
- * request limit lets Kiln check again.
+ * rather than waiting for Hearth's next check. `failed` says GitHub couldn't
+ * be asked and the releases Hearth had are still shown.
  */
 export const checkForKilnReleases = createServerFn({ method: "POST" }).handler(
   async () => {
