@@ -102,7 +102,7 @@ export class SystemUpdateManager {
   readonly #latest = new Map<KilnComponent, UpdateOperation>()
   #latestLoaded = false
   // Updates this process is still starting. Their helper isn't launched yet,
-  // so they're not checked for a helper that stopped.
+  // so `status` doesn't take its absence for a helper that stopped.
   readonly #starting = new Set<string>()
 
   constructor(config: {
@@ -389,8 +389,7 @@ export class SystemUpdateManager {
         this.#remember(recorded)
       }
       const running = Array.from(this.#latest.values()).filter(
-        (operation) =>
-          operation.status === "running" && !this.#starting.has(operation.id)
+        (operation) => operation.status === "running"
       )
       const current = yield* Effect.forEach(
         running,
@@ -407,6 +406,8 @@ export class SystemUpdateManager {
 
   #remember(operations: ReadonlyArray<UpdateOperation>) {
     for (const operation of operations) {
+      // One that can't be reported can't be compared with later ones either.
+      if (reportedUpdate(operation).length === 0) continue
       const known = this.#latest.get(operation.component)
       if (!known || known.id === operation.id || isNewer(operation, known)) {
         this.#latest.set(operation.component, operation)
@@ -439,10 +440,13 @@ export class SystemUpdateManager {
   status(id: string) {
     const engine = this.#engine
     const operationsDirectory = this.#operationsDirectory
+    const starting = this.#starting
     return Effect.gen(function* () {
       if (!/^[0-9a-f-]{36}$/u.test(id)) return null
       const operation = yield* readOperationEffect(operationsDirectory, id)
       if (!operation) return null
+      // Its helper isn't launched yet, so a missing helper means nothing.
+      if (starting.has(operation.id)) return operation
 
       const helperId = operation.batchId ?? operation.id
       if (
@@ -520,9 +524,7 @@ function isNewer(operation: UpdateOperation, than: UpdateOperation): boolean {
 
 // Hearth rejects a whole snapshot that breaks its contract, so a long error
 // is clamped and a record that still doesn't fit isn't reported.
-function reportedUpdate(
-  operation: UpdateOperation
-): Array<RelaySystemUpdate> {
+function reportedUpdate(operation: UpdateOperation): Array<RelaySystemUpdate> {
   const reported = relaySystemUpdateSchema.safeParse({
     component: operation.component,
     error: operation.error?.slice(0, 2_000) ?? null,

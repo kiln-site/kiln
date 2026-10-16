@@ -451,6 +451,7 @@ describe("update operation lifecycle", () => {
           expect(yield* manager.updates()).toMatchObject([
             { id: pulling!.id, status: "running" },
           ])
+          expect((yield* manager.status(pulling!.id))?.status).toBe("running")
 
           docker.holdPull = false
           const [operation] = yield* Fiber.join(starting)
@@ -488,7 +489,7 @@ describe("update operation lifecycle", () => {
   )
 
   effectIt.effect(
-    "leaves out a record the snapshot contract would reject",
+    "leaves out a record the snapshot contract would reject, and reports later ones",
     () =>
       withTemporaryDataDirectory((dataDirectory) =>
         Effect.gen(function* () {
@@ -500,11 +501,19 @@ describe("update operation lifecycle", () => {
           )
           yield* recordOutcome(dataDirectory, {
             ...staleOperation(),
-            finishedAt: "not-a-date",
+            finishedAt: new Date().toISOString(),
+            startedAt: "not-a-date",
             status: "failed",
           })
-
           expect(yield* manager.updates()).toEqual([])
+
+          const operation = yield* manager.start({
+            ...relayTarget,
+            version: "0.1.0",
+          })
+          expect(yield* manager.updates()).toMatchObject([
+            { id: operation.id, status: "running" },
+          ])
         })
       )
   )

@@ -1266,7 +1266,9 @@ async function executeControlRequest(
           AbortSignal.timeout(relayControlDeadlineMs("relay.update.apply"))
         )
       )
-      await Promise.all(
+      // The updates are running now, so failing to audit them must not
+      // tell Hearth they didn't start.
+      const audits = await Promise.allSettled(
         operations.map((operation) =>
           appendRelayAudit("system.update_started", client.id, request.id, {
             batchId: operation.batchId,
@@ -1277,6 +1279,13 @@ async function executeControlRequest(
           })
         )
       )
+      for (const audit of audits) {
+        if (audit.status === "rejected") {
+          reportRelayError(audit.reason, {
+            operation: "relay.update.apply.audit",
+          })
+        }
+      }
       return batched ? operations : operations[0]
     }
     case "relay.update.status":

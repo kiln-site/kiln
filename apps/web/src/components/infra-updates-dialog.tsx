@@ -3522,12 +3522,11 @@ async function startUpdates(
       if (uncertain.length > 0) {
         const found = yield* findStartedUpdates(
           requestId,
-          uncertain.map(({ target }) => target)
+          uncertain.map(({ target }) => target),
+          start
         )
         for (const { message, target } of uncertain) {
-          const update = found.get(target.key)
-          if (update) start(target, update.operationId, update.relayId)
-          else failures.push({ message, target })
+          if (!found.has(target.key)) failures.push({ message, target })
         }
       }
       return { failures }
@@ -3544,13 +3543,15 @@ const notStartedAfterMs = 20_000
 /**
  * Finds the updates a request started from what the Relays report, for
  * targets whose reply was lost: each Relay names the request in the updates
- * it accepted. Hearth's update is found on whichever Relay ran it.
+ * it accepted. Each is started as soon as it's found; returns the keys of
+ * the targets found.
  */
 const findStartedUpdates = Effect.fnUntraced(function* (
   requestId: string,
-  targets: ReadonlyArray<UpdateTarget>
+  targets: ReadonlyArray<UpdateTarget>,
+  onFound: (target: UpdateTarget, operationId: string, relayId: string) => void
 ) {
-  const found = new Map<string, { operationId: string; relayId: string }>()
+  const found = new Set<string>()
   const unresolved = new Map(targets.map((target) => [target.key, target]))
   const reportingWithout = new Map<string, number>()
   const deadline = Date.now() + startRecoveryWindowMs
@@ -3560,33 +3561,19 @@ const findStartedUpdates = Effect.fnUntraced(function* (
     )
     if (Option.isSome(reports)) {
       for (const target of unresolved.values()) {
-        const candidates =
-          target.component === "hearth"
-            ? reports.value
-            : reports.value.filter(
-                (report) => report.relayId === target.relayId
-              )
-        for (const report of candidates) {
-          const update = report.updates.find(
-            (candidate) =>
-              candidate.component === target.component &&
-              candidate.requestId === requestId
-          )
-          if (update) {
-            found.set(target.key, {
-              operationId: update.id,
-              relayId: report.relayId,
-            })
-          }
-        }
         const report = reports.value.find(
           (candidate) => candidate.relayId === target.relayId
         )
-        if (
-          found.has(target.key) ||
-          !report ||
-          report.state === "unsupported"
-        ) {
+        const update = report?.updates.find(
+          (candidate) =>
+            candidate.component === target.component &&
+            candidate.requestId === requestId
+        )
+        if (report && update) {
+          found.add(target.key)
+          onFound(target, update.id, report.relayId)
+        }
+        if (update || !report || report.state === "unsupported") {
           unresolved.delete(target.key)
         } else if (report.state === "unavailable") {
           reportingWithout.delete(target.key)

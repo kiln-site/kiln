@@ -339,8 +339,11 @@ export const startSystemUpdates = createServerFn({ method: "POST" })
                 latestRelease.version,
                 requested.component
               )
+              // Hearth's update runs on the Relay the browser was shown, so
+              // that's the one it looks for the update on if the reply is
+              // lost. The inspection below checks it can update Hearth.
               const relay =
-                requested.component === "relay"
+                requested.component === "relay" || requested.relayId
                   ? await selectedRelay(relays, requested.relayId)
                   : await coLocatedRelay(
                       relays,
