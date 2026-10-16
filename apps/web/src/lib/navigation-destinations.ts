@@ -495,7 +495,6 @@ export type RelayDestinationId =
   | "info"
   | "terminal"
   | "logs"
-  | "proxy"
   | "files"
   | "database"
 
@@ -508,7 +507,7 @@ export const relayDestinations = [
   {
     icon: SlidersHorizontal,
     id: "info",
-    keywords: ["settings", "details", "node", "version"],
+    keywords: ["settings", "details", "node", "version", "proxy", "traefik"],
     label: "Info",
     permission: "relay.read",
     to: "/relay/$relayId/info",
@@ -536,14 +535,6 @@ export const relayDestinations = [
     label: "Logs",
     permission: "relay.logs.read",
     to: "/relay/$relayId/logs",
-  },
-  {
-    icon: Waypoints,
-    id: "proxy",
-    keywords: ["traefik", "routes", "domains", "certificates", "https"],
-    label: "Proxy",
-    permission: "instance.network.read",
-    to: "/relay/$relayId/proxy",
   },
   {
     icon: Folder,

@@ -61,7 +61,6 @@ import {
 import {
   getRelayOwnerMinecraftProfiles,
   getRelayProxy,
-  getRelayProxyConfiguration,
   getRelayTailscale,
   getRelays,
 } from "@/server/relays"
@@ -191,8 +190,6 @@ export const queryKeys = {
   },
   relays: ["relays"] as const,
   relayProxy: (relayId: string) => ["relays", "proxy", relayId] as const,
-  relayProxyConfiguration: (relayId: string) =>
-    ["relays", "proxy", relayId, "configuration"] as const,
   tailscale: (relayId: string) => ["tailscale", "relays", relayId] as const,
   tailscaleStacks: ["tailscale", "stacks"] as const,
   updates: ["updates", "overview"] as const,
@@ -667,15 +664,6 @@ export function relayProxyQueryOptions(relayId: string) {
   return queryOptions({
     queryFn: () => getRelayProxy({ data: { id: relayId } }),
     queryKey: queryKeys.relayProxy(relayId),
-    retry: false,
-    staleTime: 10_000,
-  })
-}
-
-export function relayProxyConfigurationQueryOptions(relayId: string) {
-  return queryOptions({
-    queryFn: () => getRelayProxyConfiguration({ data: { id: relayId } }),
-    queryKey: queryKeys.relayProxyConfiguration(relayId),
     retry: false,
     staleTime: 10_000,
   })

@@ -1,23 +1,11 @@
 import * as React from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { Link } from "@tanstack/react-router"
-import { ChevronRight } from "lucide-react"
 import {
   relayConnectionSettingsSchema,
   relayNameSchema,
-  relayProxyModeSchema,
-  relayProxySettingsSchema,
 } from "@workspace/contracts"
 
-import { Button } from "@workspace/ui/components/button"
 import { Input } from "@workspace/ui/components/input"
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@workspace/ui/components/select"
 import { showToast } from "@workspace/ui/components/sonner"
 
 import {
@@ -35,23 +23,14 @@ import {
   messageFrom,
   updateRelayCache,
 } from "@/components/relay/relay-actions"
-import {
-  proxyModeLabels,
-  proxyStatusPresentation,
-  useRelayLiveStatus,
-} from "@/components/relay/relay-presentation"
+import { useRelayLiveStatus } from "@/components/relay/relay-presentation"
 import { RelativeTime } from "@/components/relative-time"
-import { StatusIndicator } from "@/components/status-indicator"
 import { canAccessRelayPermission } from "@/lib/navigation-destinations"
 import type { AccessPermission } from "@/lib/permissions"
-import {
-  accessCapabilitiesQueryOptions,
-  queryKeys,
-  relayProxyQueryOptions,
-} from "@/lib/query-options"
+import { accessCapabilitiesQueryOptions } from "@/lib/query-options"
 import type { PersistedRelay } from "@/lib/relay-registry"
 import { relayAddress, type RelayDirectoryEntry } from "@/lib/relay-route"
-import { renameRelay, updateRelay, updateRelayProxy } from "@/server/relays"
+import { renameRelay, updateRelay } from "@/server/relays"
 
 // The Relay's settings on its Info page. Each section edits in place and
 // saves on its own.
@@ -227,148 +206,6 @@ async function saveConnection(
     )
   }
   return updated
-}
-
-export function RelayProxySettings({
-  relay,
-  routeId,
-}: {
-  relay: RelayDirectoryEntry
-  routeId: string
-}) {
-  const { connected } = useRelayLiveStatus(relay)
-  const canEdit = useRelayPermission(relay.id, "relay.configure")
-  const canOpen = useRelayPermission(relay.id, "instance.network.read")
-  const proxy = useQuery({
-    ...relayProxyQueryOptions(relay.id),
-    enabled: connected,
-  })
-  const [editing, setEditing] = React.useState(false)
-  const queryClient = useQueryClient()
-  const save = useMutation({
-    mutationFn: (form: FormData) => {
-      const settings = relayProxySettingsSchema.safeParse({
-        acmeEmail: proxy.data?.settings.acmeEmail,
-        mode: relayProxyModeSchema.catch("none").parse(form.get("mode")),
-        traefikImage: form.get("traefikImage"),
-      })
-      if (!settings.success) {
-        throw new Error(
-          settings.error.issues[0]?.message ?? "Enter valid proxy settings"
-        )
-      }
-      return updateRelayProxy({ data: { relayId: relay.id, ...settings.data } })
-    },
-    onSuccess: (result) => {
-      setEditing(false)
-      queryClient.setQueryData(queryKeys.relayProxy(relay.id), result)
-      void queryClient.invalidateQueries({
-        exact: true,
-        queryKey: queryKeys.relayProxyConfiguration(relay.id),
-      })
-      showToast({ type: "success", message: "Proxy updated", duration: 4_000 })
-    },
-  })
-  const settings = proxy.data?.settings
-  const form =
-    editing && settings
-      ? {
-          error: save.error
-            ? messageFrom(save.error, "Could not update the proxy")
-            : null,
-          onCancel: () => {
-            save.reset()
-            setEditing(false)
-          },
-          onSubmit: save.mutate,
-          pending: save.isPending,
-        }
-      : undefined
-
-  return (
-    <InfoSection
-      title="Proxy"
-      action={
-        <>
-          {proxy.data ? (
-            <StatusIndicator
-              status={proxyStatusPresentation(proxy.data.diagnostics)}
-            />
-          ) : null}
-          {canOpen ? (
-            <Button asChild size="sm" variant="ghost">
-              <Link to="/relay/$relayId/proxy" params={{ relayId: routeId }}>
-                Routes
-                <ChevronRight />
-              </Link>
-            </Button>
-          ) : null}
-          {canEdit && settings ? (
-            <InfoEditButton onClick={() => setEditing(true)} />
-          ) : null}
-        </>
-      }
-      form={form}
-    >
-      {settings ? (
-        <>
-          <InfoFact
-            label="Mode"
-            htmlFor={form ? "relay-proxy-mode" : undefined}
-          >
-            {form ? (
-              <Select name="mode" defaultValue={settings.mode}>
-                <SelectTrigger
-                  id="relay-proxy-mode"
-                  className="type-control-sm h-8 w-full max-w-60"
-                >
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {relayProxyModeSchema.options.map((mode) => (
-                    <SelectItem key={mode} value={mode}>
-                      {proxyModeLabels[mode]}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            ) : (
-              proxyModeLabels[settings.mode]
-            )}
-          </InfoFact>
-          <InfoFact
-            label="Traefik image"
-            htmlFor={form ? "relay-traefik-image" : undefined}
-          >
-            {form ? (
-              <Input
-                id="relay-traefik-image"
-                name="traefikImage"
-                className="h-8 max-w-60 font-mono text-xs"
-                defaultValue={settings.traefikImage}
-                placeholder="traefik:v3.6"
-                required
-              />
-            ) : (
-              <span className="truncate font-mono text-xs">
-                {settings.traefikImage}
-              </span>
-            )}
-          </InfoFact>
-        </>
-      ) : (
-        <p className="py-3 text-[0.8125rem] text-muted-foreground">
-          {!relay.enabled
-            ? "Resume this Relay to see its proxy."
-            : proxy.error
-              ? messageFrom(proxy.error, "Could not read the proxy settings.")
-              : connected
-                ? "Reading the proxy settings…"
-                : "The proxy appears once Hearth reaches the Relay."}
-        </p>
-      )}
-    </InfoSection>
-  )
 }
 
 export function RelayAccessSettings({ relay }: { relay: RelayDirectoryEntry }) {

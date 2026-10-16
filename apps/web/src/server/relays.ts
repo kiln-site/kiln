@@ -5,8 +5,6 @@ import {
   relayIdSchema as relayFingerprintSchema,
   relayNameSchema,
   relayProxyDiagnosticsSchema,
-  relayProxyConfigurationSchema,
-  relayProxyConfigurationV1Feature,
   relayProxySettingsSchema,
   relayTailscaleInstallSchema,
   relayTailscaleOverviewSchema,
@@ -395,24 +393,6 @@ export const getRelayProxy = createServerFn({ method: "GET" })
     ])
     return relayProxyResponseSchema.parse(
       await relayRpc(relay, "relay.proxy.read", {}, 15_000)
-    )
-  })
-
-export const getRelayProxyConfiguration = createServerFn({ method: "GET" })
-  .validator(relayIdSchema)
-  .handler(async ({ data }) => {
-    await requireRelayAdministrator(data.id, "instance.network.read")
-    const [relay, { relayConnectionFeatures, relayRpc }] = await Promise.all([
-      enabledRelay(data.id),
-      import("@/lib/relay-connection"),
-    ])
-    if (
-      !relayConnectionFeatures(relay.id).has(relayProxyConfigurationV1Feature)
-    ) {
-      throw new Error("Update this Relay to view its proxy configuration.")
-    }
-    return relayProxyConfigurationSchema.parse(
-      await relayRpc(relay, "relay.proxy.config.read", {}, 15_000)
     )
   })
 

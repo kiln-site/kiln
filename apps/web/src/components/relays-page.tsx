@@ -1291,10 +1291,6 @@ export function EditRelayDialog({
     mutationFn: updateRelayProxy,
     onSuccess: (result) => {
       queryClient.setQueryData(queryKeys.relayProxy(relay.id), result)
-      void queryClient.invalidateQueries({
-        exact: true,
-        queryKey: queryKeys.relayProxyConfiguration(relay.id),
-      })
     },
   })
 

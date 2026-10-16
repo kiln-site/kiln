@@ -57,11 +57,14 @@ export function InfoSection({
   action,
   children,
   form,
+  notes,
   title,
 }: {
   action?: React.ReactNode
   children: React.ReactNode
   form?: InfoSectionForm
+  // Below the facts, such as warnings.
+  notes?: React.ReactNode
   title: string
 }) {
   const header = (
@@ -80,6 +83,7 @@ export function InfoSection({
       <section className={className}>
         {header}
         <dl className="px-4">{children}</dl>
+        {notes}
       </section>
     )
   }
@@ -93,6 +97,7 @@ export function InfoSection({
     >
       {header}
       <dl className="px-4">{children}</dl>
+      {notes}
       <footer className="flex items-center gap-2 border-t px-4 py-2.5">
         {form.error ? (
           <p role="status" className="min-w-0 flex-1 text-xs text-destructive">
