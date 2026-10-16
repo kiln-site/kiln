@@ -1,6 +1,8 @@
 import * as React from "react"
-import { useQuery } from "@tanstack/react-query"
-import { Activity, Box, RadioTower, Users } from "lucide-react"
+import { useInfiniteQuery, useQuery } from "@tanstack/react-query"
+import { Activity, Archive, Box, RadioTower, Users } from "lucide-react"
+
+import { cn } from "@workspace/ui/lib/utils"
 
 import {
   InfoCopyValue,
@@ -9,12 +11,20 @@ import {
   InfoRailGroup,
   InfoRailLink,
 } from "@/components/info-page"
+import type { IdentityStatusPresentation } from "@/components/identity-name"
 import { useRelayLiveStatus } from "@/components/relay/relay-presentation"
+import { RelativeTime } from "@/components/relative-time"
 import { StatusIndicator } from "@/components/status-indicator"
 import { formatBytes } from "@/lib/format-bytes"
-import { canAccessActivity } from "@/lib/navigation-destinations"
+import type { BackupRun, BackupRunsPage } from "@/lib/backup-runs"
+import {
+  canAccessActivity,
+  canAccessInstancePermission,
+} from "@/lib/navigation-destinations"
 import {
   accessCapabilitiesQueryOptions,
+  backupRunsInfiniteQueryOptions,
+  backupUsageQueryOptions,
   relaysQueryOptions,
 } from "@/lib/query-options"
 import { relayRouteIdentifier, type RelayDirectoryEntry } from "@/lib/relay-route"
@@ -24,7 +34,7 @@ import type {
 } from "@/lib/relay-selectors"
 
 // What the game server is at a glance: the Relay it runs on, who can reach
-// it, and its container. Its name, status, and usage are in the header.
+// it, its backups, and its container. Its name, status, and usage are in the header.
 export function ServerInfoRail({
   instance,
   node,
@@ -38,6 +48,7 @@ export function ServerInfoRail({
         <ServerRelayLink node={node} relayId={instance.relayId} />
       </InfoRailGroup>
       <ServerAccessLinks instance={instance} />
+      <ServerBackups instance={instance} />
       <ServerContainerCard instance={instance} />
     </>
   )
@@ -139,6 +150,122 @@ function selectAccessLinks(
     canManageAccess: capabilities.canManageAccess,
     canViewActivity: canAccessActivity(capabilities),
   }
+}
+
+// The latest backup, and how many the server keeps against its limit, linking
+// to them on the Backups page, for those who can read them.
+function ServerBackups({ instance }: { instance: InstanceSettingsInstance }) {
+  const select = React.useCallback(
+    (capabilities: Parameters<typeof canAccessInstancePermission>[0]) =>
+      canAccessInstancePermission(capabilities, instance, "backup.read"),
+    [instance]
+  )
+  const { data: canRead = false } = useQuery({
+    ...accessCapabilitiesQueryOptions(),
+    select,
+  })
+  if (!canRead) return null
+  return (
+    <InfoRailGroup title="Backups">
+      <dl>
+        <InfoFact label="Latest">
+          <LatestBackup instance={instance} />
+        </InfoFact>
+      </dl>
+      <InfoRailLink
+        to="/backups/runs"
+        search={{ kind: "server", relay: instance.relayId, server: instance.id }}
+        leading={<Archive />}
+        detail={<BackupCount instance={instance} />}
+      >
+        All backups
+      </InfoRailLink>
+    </InfoRailGroup>
+  )
+}
+
+// "3/10" against a limit, or just "3" without one.
+function BackupCount({ instance }: { instance: InstanceSettingsInstance }) {
+  const { data } = useQuery(
+    backupUsageQueryOptions(instance.relayId, {
+      id: instance.id,
+      kind: "instance",
+    })
+  )
+  if (!data) return null
+  const full =
+    data.quantityLimit !== null && data.quantityUsed >= data.quantityLimit
+  return (
+    <span
+      className={cn("tabular-nums", full && "text-amber-300")}
+      title={
+        data.quantityLimit === null
+          ? "Backups kept, with no limit"
+          : full
+            ? "At the backup limit; delete one to make another"
+            : `Backups kept, of ${data.quantityLimit} allowed`
+      }
+    >
+      {data.quantityLimit === null
+        ? data.quantityUsed
+        : `${data.quantityUsed}/${data.quantityLimit}`}
+    </span>
+  )
+}
+
+// The same newest-first query the Backups page runs for this server, so the
+// two share a cache and live updates.
+function LatestBackup({ instance }: { instance: InstanceSettingsInstance }) {
+  const options = React.useMemo(
+    () =>
+      backupRunsInfiniteQueryOptions({
+        direction: "desc",
+        scope: {
+          kind: "instance",
+          relayId: instance.relayId,
+          targetId: instance.id,
+        },
+        search: "",
+        sort: "createdAt",
+      }),
+    [instance.id, instance.relayId]
+  )
+  const { data: latest, isError, isPending } = useInfiniteQuery({
+    ...options,
+    select: selectLatestBackup,
+  })
+  if (isPending) return <span className="text-muted-foreground">—</span>
+  if (isError) {
+    return <span className="text-muted-foreground">Couldn’t load</span>
+  }
+  if (!latest) return <span className="text-muted-foreground">None yet</span>
+  return (
+    <>
+      <StatusIndicator status={backupStatusPresentation(latest)} />
+      <RelativeTime timestamp={Date.parse(latest.createdAt)} />
+    </>
+  )
+}
+
+function selectLatestBackup(data: {
+  pages: ReadonlyArray<BackupRunsPage>
+}): BackupRun | null {
+  return data.pages[0]?.items[0] ?? null
+}
+
+function backupStatusPresentation(
+  backup: BackupRun
+): IdentityStatusPresentation {
+  if (
+    backup.status === "queued" ||
+    backup.status === "running" ||
+    backup.taskStatus === "queued" ||
+    backup.taskStatus === "running"
+  ) {
+    return { label: "In progress", pulse: true, tone: "info" }
+  }
+  if (backup.status === "failed") return { label: "Failed", tone: "danger" }
+  return { label: "Available", tone: "success" }
 }
 
 // Where the server lives on the Relay, and the limits it runs under.

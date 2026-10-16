@@ -15,6 +15,7 @@ import type { AccessPermission } from "@/lib/permissions"
 import {
   copyBackupToDestinationHandler,
   createInstanceBackupHandler,
+  getBackupUsageHandler,
   restoreInstanceBackupHandler,
 } from "@/server/backups.server"
 import { TestDatabase, describeMysql, resetDatabase } from "@/test/database"
@@ -375,6 +376,61 @@ describeMysql("backup authorization", () => {
         assert.strictEqual(safety?.task_kind, "create")
         assert.strictEqual(restore?.depends_on_task_id, safety?.id)
       })
+    )
+
+    it.effect("reading backup usage needs backup.read on that server", () =>
+      Effect.gen(function* () {
+        yield* seed
+        yield* grant(siblingId, ["backup.read"])
+
+        const message = yield* rejection(() =>
+          getBackupUsageHandler(user, {
+            relayId,
+            target: { id: instanceId, kind: "instance" },
+          })
+        )
+
+        assert.include(message, "permission")
+      })
+    )
+
+    it.effect(
+      "backup usage counts what the limit counts, against the tighter limit",
+      () =>
+        Effect.gen(function* () {
+          yield* seed
+          yield* grant(instanceId, ["backup.read"])
+          const backup = (row: Record<string, unknown>) =>
+            insertBackup(randomUUID(), {
+              relay_id: relayId,
+              target_id: instanceId,
+              ...row,
+            })
+          yield* backup({ status: "available" })
+          yield* backup({ status: "queued" })
+          yield* backup({ status: "failed" })
+          yield* backup({ status: "deleted" })
+          yield* backup({ status: "available", target_id: siblingId })
+          yield* insertRows("backup_policy", {
+            relay_id: relayId,
+            target_kind: "instance",
+            target_id: instanceId,
+            exclude_patterns: "[]",
+            quantity_limit: 10,
+            admin_quantity_limit: 5,
+            created_at: at,
+            updated_at: at,
+          })
+
+          const usage = yield* Effect.promise(() =>
+            getBackupUsageHandler(user, {
+              relayId,
+              target: { id: instanceId, kind: "instance" },
+            })
+          )
+
+          assert.deepStrictEqual(usage, { quantityLimit: 5, quantityUsed: 2 })
+        })
     )
   })
 })

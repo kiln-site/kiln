@@ -19,6 +19,7 @@ import {
   deleteBackupHandler,
   getBackupDownloadUrlHandler,
   getBackupPolicyHandler,
+  getBackupUsageHandler,
   getBackupRunForQueryHandler,
   getBackupRunsPageHandler,
   renameBackupHandler,
@@ -195,6 +196,12 @@ export const getBackupPolicy = createServerFn({ method: "GET" })
   .validator(backupPolicyInputSchema)
   .handler(async ({ data }) =>
     getBackupPolicyHandler(await requireEligibleResourceUser(), data)
+  )
+
+export const getBackupUsage = createServerFn({ method: "GET" })
+  .validator(backupPolicyInputSchema)
+  .handler(async ({ data }) =>
+    getBackupUsageHandler(await requireEligibleResourceUser(), data)
   )
 
 export const cancelBackup = createServerFn({ method: "POST" })

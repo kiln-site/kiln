@@ -13,6 +13,7 @@ import {
   getBackupCatalogRecordEffect,
   listBackupCatalogPageEffect,
   getBackupPolicyEffect,
+  getBackupUsageEffect,
   reconcileBackupTaskEffect,
   renameBackupEffect,
   reserveBackupCopyEffect,
@@ -368,6 +369,33 @@ export async function getBackupPolicyHandler(
   return runAppEffect(
     "backups.getPolicy",
     getBackupPolicyEffect(data.relayId, target.kind, target.id)
+  )
+}
+
+// Anyone who can read a target's backups can see how many it keeps.
+export async function getBackupUsageHandler(
+  user: AuthenticatedUser,
+  data: BackupPolicyInput
+) {
+  let target = data.target
+  if (target.kind === "platform") {
+    if (!isPlatformAdmin(user)) {
+      throw new Error("Platform backups require administrator access")
+    }
+    target = { id: kilnInstallationId(), kind: "platform" }
+  } else {
+    await requireRelayPermission({
+      ...(target.kind === "database"
+        ? { databaseId: target.id }
+        : { instanceId: target.id }),
+      permission: "backup.read",
+      relayId: data.relayId,
+      user,
+    })
+  }
+  return runAppEffect(
+    "backups.getUsage",
+    getBackupUsageEffect(data.relayId, target.kind, target.id)
   )
 }
 

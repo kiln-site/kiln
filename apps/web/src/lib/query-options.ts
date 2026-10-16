@@ -12,7 +12,11 @@ import type {
 
 import { getAccessCapabilities, getInvitationPreview } from "@/server/access"
 import { getActivity } from "@/server/activity"
-import { getBackupPolicy, getBackupRunsPage } from "@/server/backups"
+import {
+  getBackupPolicy,
+  getBackupRunsPage,
+  getBackupUsage,
+} from "@/server/backups"
 import { getBackupStorage } from "@/server/backup-storage"
 import {
   getBrickCatalog,
@@ -120,6 +124,8 @@ export const queryKeys = {
     policy: (relayId: string, target: BackupTarget) =>
       ["backups", "policy", relayId, target.kind, target.id] as const,
     storage: ["backups", "storage"] as const,
+    usage: (relayId: string, target: BackupTarget) =>
+      ["backups", "usage", relayId, target.kind, target.id] as const,
   },
   bricks: ["bricks", "catalog"] as const,
   brickIcons: ["bricks", "icons"] as const,
@@ -319,6 +325,17 @@ export function backupStorageQueryOptions() {
     queryKey: queryKeys.backups.storage,
     queryFn: () => getBackupStorage(),
     staleTime: 30_000,
+  })
+}
+
+// How many backups a target keeps, against its quantity limit. Backup and
+// limit changes refresh it.
+export function backupUsageQueryOptions(relayId: string, target: BackupTarget) {
+  return queryOptions({
+    queryKey: queryKeys.backups.usage(relayId, target),
+    queryFn: () => getBackupUsage({ data: { relayId, target } }),
+    retry: false,
+    staleTime: Infinity,
   })
 }
 

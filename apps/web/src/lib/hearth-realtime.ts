@@ -43,9 +43,12 @@ const hearthRealtimeQueryScopes = {
   activity: [prefix(["activity"])],
   "app-directory": [exact(queryKeys.apps.directory)],
   apps: [prefix(["apps"])],
-  "backup-settings": [prefix(["backups", "policy"])],
+  "backup-settings": [
+    prefix(["backups", "policy"]),
+    prefix(["backups", "usage"]),
+  ],
   "backup-storage": [exact(queryKeys.backups.storage)],
-  backups: [],
+  backups: [prefix(["backups", "usage"])],
   "database-credentials": [prefix(["databases"])],
   "database-directory": [
     exact(queryKeys.databases.directory),
@@ -97,7 +100,10 @@ function queryScopes(
     ]
   }
   if (topic === "backup-settings" && scope) {
-    return [prefix(["backups", "policy", scope.relayId])]
+    return [
+      prefix(["backups", "policy", scope.relayId]),
+      prefix(["backups", "usage", scope.relayId]),
+    ]
   }
   if (topic === "database-credentials" && scope?.databaseId) {
     return [
