@@ -1,19 +1,18 @@
 import { useQuery } from "@tanstack/react-query"
 import { Link } from "@tanstack/react-router"
-import { ArrowRight, TriangleAlert } from "lucide-react"
+import { ArrowRight } from "lucide-react"
 import type { RelayProxyDiagnostics } from "@workspace/contracts"
-
-import { Popover, PopoverTrigger } from "@workspace/ui/components/popover"
 
 import {
   InfoDetailRow,
   InfoDetails,
-  InfoDetailsContent,
   InfoFact,
+  InfoHint,
   InfoSection,
 } from "@/components/info-page"
 import { messageFrom } from "@/components/relay/relay-actions"
 import {
+  proxyModeDescription,
   proxyModeLabels,
   proxyStatusPresentation,
   useRelayLiveStatus,
@@ -68,17 +67,20 @@ export function RelayProxySettings({
   return (
     <InfoSection
       title="Proxy"
-      status={
-        <>
-          <StatusIndicator status={proxyStatusPresentation(diagnostics)} />
-          {diagnostics.warnings.length > 0 ? (
-            <ProxyWarnings warnings={diagnostics.warnings} />
-          ) : null}
-        </>
-      }
+      status={<StatusIndicator status={proxyStatusPresentation(diagnostics)} />}
       action={<RelayConfigureButton relay={relay} />}
     >
-      <InfoFact label="Mode">{proxyModeLabels[settings.mode]}</InfoFact>
+      <InfoFact label="Mode">
+        {proxyModeLabels[settings.mode]}
+        <InfoHint
+          label="About this proxy mode"
+          title={proxyModeLabels[settings.mode]}
+        >
+          {proxyModeDescription(diagnostics).map((line) => (
+            <p key={line}>{line}</p>
+          ))}
+        </InfoHint>
+      </InfoFact>
       {bundled ? (
         <>
           <InfoFact label="Traefik image">
@@ -184,35 +186,6 @@ function ProxyPorts({ ports }: { ports: RelayProxyDiagnostics["ports"] }) {
         />
       ))}
     </InfoDetails>
-  )
-}
-
-// A warning icon beside the status, as the console's toolbar has; clicking
-// it shows what the Relay reported.
-function ProxyWarnings({ warnings }: { warnings: ReadonlyArray<string> }) {
-  const label =
-    warnings.length === 1
-      ? "1 proxy warning"
-      : `${warnings.length} proxy warnings`
-  return (
-    <Popover>
-      <PopoverTrigger
-        aria-label={label}
-        className="grid size-6 shrink-0 place-items-center text-amber-300 transition-colors outline-none hover:text-amber-200 focus-visible:text-amber-200 data-[state=open]:text-amber-200"
-      >
-        <TriangleAlert className="size-3.5" />
-      </PopoverTrigger>
-      <InfoDetailsContent
-        align="start"
-        title={warnings.length === 1 ? "Proxy warning" : "Proxy warnings"}
-      >
-        <ul className="flex flex-col gap-2">
-          {warnings.map((warning) => (
-            <li key={warning}>{warning}</li>
-          ))}
-        </ul>
-      </InfoDetailsContent>
-    </Popover>
   )
 }
 

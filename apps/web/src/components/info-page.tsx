@@ -1,5 +1,5 @@
 import * as React from "react"
-import { Check, Copy } from "lucide-react"
+import { Check, Copy, Info } from "lucide-react"
 
 import {
   Popover,
@@ -106,18 +106,39 @@ export function InfoDetails({
   )
 }
 
+// An info icon that opens an explanation, for labels rather than values.
+export function InfoHint({
+  children,
+  label,
+  title,
+}: {
+  children: React.ReactNode
+  // What the icon explains, for screen readers: "About this proxy mode".
+  label: string
+  title: string
+}) {
+  return (
+    <Popover>
+      <PopoverTrigger
+        aria-label={label}
+        className="grid size-5 shrink-0 place-items-center text-muted-foreground/70 transition-colors outline-none hover:text-primary focus-visible:text-primary data-[state=open]:text-primary"
+      >
+        <Info className="size-3.5" />
+      </PopoverTrigger>
+      <InfoDetailsContent title={title}>{children}</InfoDetailsContent>
+    </Popover>
+  )
+}
+
 export function InfoDetailsContent({
-  align = "end",
   children,
   title,
 }: {
-  // "end" for values on the right of a row, "start" for ones on the left.
-  align?: "start" | "end"
   children: React.ReactNode
   title: string
 }) {
   return (
-    <PopoverContent align={align} sideOffset={8} className="w-80 text-xs">
+    <PopoverContent align="end" sideOffset={8} className="w-80 text-xs">
       <p className="font-semibold text-foreground">{title}</p>
       <div className="mt-2 flex flex-col gap-2 leading-relaxed text-muted-foreground">
         {children}

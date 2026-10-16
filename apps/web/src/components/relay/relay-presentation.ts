@@ -87,7 +87,10 @@ export const proxyModeLabels = {
 } as const
 
 export function proxyStatusPresentation(
-  diagnostics: Pick<RelayProxyDiagnostics, "status">
+  diagnostics: Pick<
+    RelayProxyDiagnostics,
+    "containerRunning" | "mode" | "ports" | "status"
+  >
 ): InstanceStatusPresentation {
   switch (diagnostics.status) {
     case "ready":
@@ -95,10 +98,68 @@ export function proxyStatusPresentation(
     case "starting":
       return { label: "Starting", pulse: true, tone: "info" }
     case "blocked":
-      return { label: "Blocked", tone: "danger" }
+      return {
+        detail: proxyBlockedReason(diagnostics),
+        label: "Blocked",
+        tone: "danger",
+      }
     case "hearth":
       return { label: "Through Hearth", tone: "info" }
     case "disabled":
       return { label: "Disabled", tone: "neutral" }
+  }
+}
+
+// Why a proxy can't serve, from what the Relay found rather than its prose.
+function proxyBlockedReason(
+  diagnostics: Pick<
+    RelayProxyDiagnostics,
+    "containerRunning" | "mode" | "ports"
+  >
+): string | undefined {
+  if (diagnostics.mode === "coolify") {
+    return diagnostics.containerRunning
+      ? "Coolify’s Traefik isn’t connected to Kiln yet. The Relay keeps retrying."
+      : "Coolify’s proxy isn’t running on this node."
+  }
+  const taken = diagnostics.ports.filter((port) => !port.available)
+  if (taken.length === 0) return undefined
+  return taken
+    .map(
+      (port) =>
+        `Port ${port.port} is in use by ${port.owner ?? "another program"}.`
+    )
+    .join(" ")
+}
+
+// What each proxy mode does, briefly, for the info beside it.
+export function proxyModeDescription(
+  diagnostics: Pick<RelayProxyDiagnostics, "mode" | "warnings">
+): Array<string> {
+  switch (diagnostics.mode) {
+    case "none": {
+      // The Relay names the Docker network only in its note about this mode.
+      const network = diagnostics.warnings
+        .map((warning) => /Attach it to (\S+) before/u.exec(warning)?.[1])
+        .find(Boolean)
+      return [
+        "Kiln doesn’t run a proxy on this node, so app domains need one of your own.",
+        network
+          ? `Connect it to the ${network} Docker network.`
+          : "Connect it to this Relay’s edge Docker network.",
+      ]
+    }
+    case "hearth":
+      return [
+        "Hearth carries console and file traffic to this Relay.",
+        "To serve app domains, switch to Bundled or Coolify Traefik.",
+      ]
+    case "traefik":
+      return [
+        "Kiln runs Traefik on ports 80 and 443, with certificates from Let’s Encrypt.",
+        "Kiln can’t tell from here whether the internet reaches it.",
+      ]
+    case "coolify":
+      return ["Kiln adds app domains to Coolify’s Traefik on this node."]
   }
 }
