@@ -4,7 +4,7 @@ import { createWriteStream } from "node:fs"
 import { lstat, mkdir, opendir, rm } from "node:fs/promises"
 import { dirname, relative, resolve, sep } from "node:path"
 import { Transform } from "node:stream"
-import { pipeline } from "node:stream/promises"
+import { finished, pipeline } from "node:stream/promises"
 
 import { Effect, Result, Schedule } from "effect"
 
@@ -363,6 +363,8 @@ export function createResticDriver(options?: {
       if (Result.isFailure(dumped)) {
         output.destroy()
         hasher.destroy()
+        // Destruction still waits for a pending file open; so must cleanup.
+        await resultOf(() => finished(output, { cleanup: true }))
         await rm(input.destination, { force: true })
         throw dumped.failure
       }

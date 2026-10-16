@@ -1,13 +1,18 @@
 import { createCipheriv, scryptSync } from "node:crypto"
-import { mkdtempSync, rmSync } from "node:fs"
+import { existsSync, mkdtempSync, rmSync } from "node:fs"
 import { readdir, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { gzipSync } from "node:zlib"
 import { afterAll, assert, describe, expect, it } from "@effect/vitest"
-import { onTestFinished } from "vite-plus/test"
+import { onTestFinished, vi } from "vite-plus/test"
+
+import type { BackupCreateTaskInput } from "@workspace/contracts"
+
+vi.mock("./command.js", () => import("./test/docker.js"))
 
 import {
+  createEncryptedPlatformBackup,
   inspectEncryptedPlatformBackup,
   type PlatformBackupManifest,
   restoreEncryptedPlatformBackup,
@@ -53,6 +58,38 @@ function platformBundle(dump: string): Buffer {
 }
 
 describe("Kiln platform backups", () => {
+  it("fails with the client's error and keeps no partial bundle", async () => {
+    const harness = await relayHarness({
+      KILN_INSTALLATION_ID: "kiln-test",
+      KILN_PLATFORM_BACKUP_KEY: recoveryKey,
+    })
+    fakeDocker.addContainer({
+      labels: {
+        "io.kiln.installation": "kiln-test",
+        "io.kiln.resource": "hearth-database",
+      },
+      name: "kiln-test-database",
+      running: true,
+    })
+    fakeDocker.programFailures.set("mysqldump", "mysqldump: Access denied")
+    const destination = join(testDirectory, "failed.kiln")
+
+    await expect(
+      createEncryptedPlatformBackup(
+        harness.config,
+        {
+          backupId: "b".repeat(40),
+          maxBytes: null,
+          target: { id: "kiln-test", kind: "platform" },
+        } as unknown as BackupCreateTaskInput,
+        destination,
+        { completed: 0, total: 0 },
+        new AbortController().signal
+      )
+    ).rejects.toThrow("mysqldump: Access denied")
+    expect(existsSync(destination)).toBe(false)
+  })
+
   it("removes the decrypted dump when the database stops before the restore starts", async () => {
     const harness = await relayHarness({
       KILN_INSTALLATION_ID: "kiln-test",

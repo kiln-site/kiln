@@ -92,28 +92,28 @@ export async function createEncryptedPlatformBackup(
     input.maxBytes,
     header.byteLength + manifestBytes.byteLength
   )
+  const writing = pipeline(
+    child.stdout,
+    sourceMeter,
+    createGzip({ level: 6 }),
+    cipher,
+    storedLimit,
+    createWriteStream(destination, { flags: "a" }),
+    { signal }
+  )
+  const exited = requireSuccessfulProcess(child, stderr, signal)
   const written = await Effect.runPromise(
     Effect.result(
       Effect.tryPromise({
-        try: () =>
-          Promise.all([
-            pipeline(
-              child.stdout,
-              sourceMeter,
-              createGzip({ level: 6 }),
-              cipher,
-              storedLimit,
-              createWriteStream(destination, { flags: "a" }),
-              { signal }
-            ),
-            requireSuccessfulProcess(child, stderr, signal),
-          ]),
+        try: () => Promise.all([writing, exited]),
         catch: (cause) => cause,
       })
     )
   )
   if (Result.isFailure(written)) {
     child.kill()
+    // Appending can recreate the file if cleanup runs before the stream opens.
+    await Promise.allSettled([writing, exited])
     await rm(destination, { force: true })
     throw written.failure
   }

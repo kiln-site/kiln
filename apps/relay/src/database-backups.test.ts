@@ -87,6 +87,23 @@ describe("database backups", () => {
       'pg_dump: error: connection to server failed: FATAL: role "postgres" does not exist'
     )
     const destination = join(directory, "backup.sql.gz")
+    // The client can exit before the caller starts opening the backup file.
+    const start = harness.databases.process.bind(harness.databases)
+    vi.spyOn(harness.databases, "process").mockImplementationOnce(
+      async (...args) => {
+        const child = await start(...args)
+        const code = await child.waitFor({
+          timeout: 1_000,
+          timedOut: "Client did not exit",
+        })
+        vi.spyOn(child, "waitFor").mockImplementation(async () => {
+          // Deliver the buffered stderr to the backup's listener before exit.
+          child.stderr.read()
+          return code
+        })
+        return child
+      }
+    )
 
     await expect(
       createCompressedDatabaseBackup(
@@ -96,6 +113,46 @@ describe("database backups", () => {
         { completed: 0, total: 0 }
       )
     ).rejects.toThrow('role "postgres" does not exist')
+    expect(existsSync(destination)).toBe(false)
+  })
+
+  it("removes an oversized backup and reports the size limit", async () => {
+    const { container, directory, harness } = await harnessWithDatabase("postgres")
+    container.sqlDump = dump
+    const destination = join(directory, "backup.sql.gz")
+
+    await expect(
+      createCompressedDatabaseBackup(
+        harness.databases,
+        { ...backupInput(), maxBytes: 1 },
+        destination,
+        { completed: 0, total: 0 }
+      )
+    ).rejects.toThrow("Database backup exceeded its size limit")
+    expect(existsSync(destination)).toBe(false)
+  })
+
+  it("removes a backup cancelled while the client is dumping", async () => {
+    const { container, directory, harness } = await harnessWithDatabase("postgres")
+    container.sqlDump = dump
+    const destination = join(directory, "backup.sql.gz")
+    const controller = new AbortController()
+    const progress = {
+      set completed(_bytes: number) {
+        controller.abort(new Error("Backup cancelled"))
+      },
+      total: 0,
+    }
+
+    await expect(
+      createCompressedDatabaseBackup(
+        harness.databases,
+        backupInput(),
+        destination,
+        progress,
+        controller.signal
+      )
+    ).rejects.toThrow(/cancelled|aborted/iu)
     expect(existsSync(destination)).toBe(false)
   })
 

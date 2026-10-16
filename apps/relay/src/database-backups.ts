@@ -43,28 +43,29 @@ export async function createCompressedDatabaseBackup(
     progress.completed = bytes
   })
   const storedLimit = byteMeter(undefined, input.maxBytes)
+  const writing = pipeline(
+    child.stdout,
+    sourceMeter,
+    createGzip({ level: 6 }),
+    storedLimit,
+    createWriteStream(destination, { flags: "wx", mode: 0o600 }),
+    { signal }
+  )
+  const exited = requireSuccessfulProcess(child, stderr, signal)
 
   const written = await Effect.runPromise(
     Effect.result(
       Effect.tryPromise({
-        try: () =>
-          Promise.all([
-            pipeline(
-              child.stdout,
-              sourceMeter,
-              createGzip({ level: 6 }),
-              storedLimit,
-              createWriteStream(destination, { flags: "wx", mode: 0o600 }),
-              { signal }
-            ),
-            requireSuccessfulProcess(child, stderr, signal),
-          ]),
+        try: () => Promise.all([writing, exited]),
         catch: (cause) => cause,
       })
     )
   )
   if (Result.isFailure(written)) {
     child.kill()
+    // A failed client can exit before the write stream even opens the file.
+    // Settle both branches before cleanup, keeping the original failure.
+    await Promise.allSettled([writing, exited])
     await rm(destination, { force: true })
     throw written.failure
   }

@@ -309,6 +309,26 @@ describe("restic driver", () => {
     })
   })
 
+  it("keeps no partial export when restic cannot start", async () => {
+    const { spawn } = fakeRestic((restic) => {
+      queueMicrotask(() =>
+        restic.child.emit("error", new Error("restic could not start"))
+      )
+    })
+    const destination = join(testDirectory, "exports", "failed.zip")
+
+    await expect(
+      createResticDriver({ spawn }).dumpZip({
+        destination,
+        location: localLocation,
+        password: "secret",
+        selector: "abcdef12:/data/instances/server-one",
+        signal: new AbortController().signal,
+      })
+    ).rejects.toThrow("restic could not start")
+    expect(existsSync(destination)).toBe(false)
+  })
+
   it("treats restic exit 10 as a missing repository and 12 as a wrong password", async () => {
     const missing = fakeRestic((restic) =>
       restic.respond({
