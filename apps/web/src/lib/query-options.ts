@@ -844,12 +844,7 @@ export function releaseHistoryInfiniteQueryOptions() {
     initialPageParam: null as ReleaseHistoryCursor | null,
     queryFn: ({ pageParam, signal }) =>
       getReleaseHistory({ data: { cursor: pageParam }, signal }),
-    // Older releases that wait for GitHub's limit aren't asked for again
-    // until it resets; the changelog renders again then.
-    getNextPageParam: (page) =>
-      page.pausedUntil !== null && page.pausedUntil > Date.now()
-        ? undefined
-        : page.nextCursor,
+    getNextPageParam: (page) => page.nextCursor,
     // Releases rarely change once published; new ones arrive with the
     // overview, which refreshes this list. Pages stay cached between visits,
     // so reopening the changelog shows them at once while they refresh.

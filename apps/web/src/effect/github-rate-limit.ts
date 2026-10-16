@@ -5,24 +5,38 @@ import { Database } from "@/effect/database"
 import { databaseTable } from "@/lib/database-config"
 
 /**
- * What GitHub last said is left of the requests Kiln may make to it, and
- * when its count resets. Unauthenticated, it's 60 an hour per IP, shared by
- * checking for releases and starting updates, which reads the release's
- * manifest. Every request to GitHub's API records it here.
+ * What GitHub said is left of the requests Kiln may make to it in the
+ * current window, and when the window resets. Unauthenticated, it's 60 an
+ * hour per IP, shared by checking for releases and starting updates, which
+ * reads the release's manifest.
  */
 export type GitHubRateLimit = {
   remaining: number
   resetAt: number
 }
 
+/**
+ * What GitHub's responses said, recorded by every request to its API: the
+ * window's limit, and until when GitHub refused requests, as a secondary
+ * limit does for a while without using up the window.
+ */
+export type GitHubRateLimitObservation = {
+  limit: GitHubRateLimit | null
+  refusedUntil: number | null
+}
+
 const GitHubRateLimitSchema = Schema.Struct({
   remaining: Schema.Number,
   resetAt: Schema.Number,
 })
+const ObservationSchema = Schema.Struct({
+  limit: Schema.NullOr(GitHubRateLimitSchema),
+  refusedUntil: Schema.NullOr(Schema.Number),
+})
 const decodeJson = Schema.decodeUnknownOption(
-  Schema.fromJsonString(GitHubRateLimitSchema)
+  Schema.fromJsonString(ObservationSchema)
 )
-const decode = Schema.decodeUnknownOption(GitHubRateLimitSchema)
+const decode = Schema.decodeUnknownOption(ObservationSchema)
 
 const settingId = "00000000-0000-4000-8000-000000000004"
 const settingKey = "kiln.githubRateLimit"
@@ -30,6 +44,28 @@ const settingKey = "kiln.githubRateLimit"
 // Requests answer in any order, so each records what it saw against what's
 // recorded, one at a time.
 const recordLock = Semaphore.makeUnsafe(1)
+
+/**
+ * When Kiln may spend GitHub's requests on anything but updates again, or
+ * null if it may now: after a refusal ends, and once fewer than `reserve`
+ * are left, after the window resets.
+ */
+export function gitHubWaitUntil(
+  observed: GitHubRateLimitObservation | null,
+  now: number,
+  reserve: number
+): number | null {
+  const refused =
+    observed?.refusedUntil != null && observed.refusedUntil > now
+      ? observed.refusedUntil
+      : null
+  const limit = observed?.limit
+  const spent =
+    limit && limit.remaining <= reserve && now < limit.resetAt
+      ? limit.resetAt
+      : null
+  return refused === null ? spent : Math.max(refused, spent ?? 0)
+}
 
 export const loadGitHubRateLimitEffect = Effect.fnUntraced(function* () {
   const database = yield* Database
@@ -48,41 +84,55 @@ export const loadGitHubRateLimitEffect = Effect.fnUntraced(function* () {
   )
 })
 
-/** Records what a GitHub response said is left, or a refusal (none left). */
-export const recordGitHubRateLimitEffect = (limit: GitHubRateLimit) =>
+/** Records what a GitHub response said, merged with what's recorded. */
+export const recordGitHubRateLimitEffect = (
+  observed: GitHubRateLimitObservation
+) =>
   recordLock.withPermits(1)(
     Effect.gen(function* () {
       const now = yield* Clock.currentTimeMillis
       const stored = yield* loadGitHubRateLimitEffect()
-      const next = mergeRateLimit(stored, limit, now)
-      if (next !== stored) yield* saveGitHubRateLimitEffect(next)
+      yield* saveGitHubRateLimitEffect({
+        limit: mergeLimit(stored?.limit ?? null, observed.limit, now),
+        // A refusal holds until it ends, the later of two included.
+        refusedUntil: laterActive(
+          stored?.refusedUntil ?? null,
+          observed.refusedUntil,
+          now
+        ),
+      })
     })
   )
 
-function mergeRateLimit(
+function mergeLimit(
   stored: GitHubRateLimit | null,
-  next: GitHubRateLimit,
+  next: GitHubRateLimit | null,
   now: number
-): GitHubRateLimit {
-  if (!stored || now >= stored.resetAt) return next
-  // A refusal holds until it ends, the later of two refusals included,
-  // whatever answers sent before it say.
-  if (next.remaining === 0) {
-    return stored.remaining === 0 && stored.resetAt > next.resetAt
-      ? stored
-      : next
+): GitHubRateLimit | null {
+  if (!next) return stored
+  if (!stored || now >= stored.resetAt || next.resetAt > stored.resetAt) {
+    return next
   }
-  if (stored.remaining === 0) return stored
   // Within one window what's left only goes down, so an answer arriving
   // late can't raise it.
-  if (next.resetAt === stored.resetAt) {
-    return next.remaining < stored.remaining ? next : stored
-  }
-  return next
+  return next.resetAt === stored.resetAt && next.remaining < stored.remaining
+    ? next
+    : stored
+}
+
+function laterActive(
+  stored: number | null,
+  next: number | null,
+  now: number
+): number | null {
+  const active = [stored, next].filter(
+    (until): until is number => until !== null && until > now
+  )
+  return active.length > 0 ? Math.max(...active) : null
 }
 
 const saveGitHubRateLimitEffect = Effect.fnUntraced(function* (
-  limit: GitHubRateLimit
+  observed: GitHubRateLimitObservation
 ) {
   const database = yield* Database
   const now = yield* Clock.currentTimeMillis
@@ -93,6 +143,6 @@ const saveGitHubRateLimitEffect = Effect.fnUntraced(function* (
      VALUES (?, NULL, ?, ?, ?, ?)
      ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value),
                              updated_at = VALUES(updated_at)`,
-    [settingId, settingKey, JSON.stringify(limit), now, now]
+    [settingId, settingKey, JSON.stringify(observed), now, now]
   )
 })

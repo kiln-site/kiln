@@ -283,16 +283,78 @@ describeMysql("Kiln release feed", () => {
           page.releases.map(({ version }) => version),
           [nightly(4).version, nightly(3).version]
         )
-        assert.strictEqual(page.pausedUntil, resetAt)
+        // No cursor meanwhile, so the changelog doesn't ask again at once.
+        assert.strictEqual(page.nextCursor, null)
+        assert.strictEqual(page.resumeInMs, 30 * 60_000)
         assert.deepStrictEqual(requests, [1])
 
+        // Reading history again after the reset continues it.
         yield* TestClock.adjust("30 minutes")
-        const older = yield* releaseHistoryPageEffect(page.nextCursor, 3)
+        const again = yield* releaseHistoryPageEffect(null, 3)
+        assert.strictEqual(again.resumeInMs, null)
+        const older = yield* releaseHistoryPageEffect(again.nextCursor, 3)
         assert.deepStrictEqual(
-          older.releases.map(({ version }) => version),
-          [nightly(2).version, nightly(1).version]
+          [...again.releases, ...older.releases].map(({ version }) => version),
+          [
+            nightly(4).version,
+            nightly(3).version,
+            nightly(2).version,
+            nightly(1).version,
+          ]
         )
-        assert.strictEqual(older.pausedUntil, null)
+      })
+    )
+
+    it.effect("keeps the window's count through a secondary refusal", () =>
+      Effect.gen(function* () {
+        yield* resetDatabase
+        const now = yield* Clock.currentTimeMillis
+        const resetAt = now + 30 * 60_000
+        serveReleasePages([[nightly(1)]], { remaining: 10, resetAt })
+        yield* recentVersions
+
+        // An update's request is refused for two minutes, mid-window.
+        serve = () =>
+          new Response("secondary rate limit", {
+            headers: {
+              "retry-after": "120",
+              "x-ratelimit-remaining": "9",
+              "x-ratelimit-reset": String(resetAt / 1_000),
+            },
+            status: 403,
+          })
+        yield* Effect.exit(kilnReleaseManifestEffect(`v${nightly(1).version}`))
+
+        // After the refusal ends, what's left is still kept for updates.
+        yield* TestClock.adjust("3 minutes")
+        const requests = serveReleasePages([[nightly(2), nightly(1)]])
+        assert.strictEqual((yield* checkKilnReleasesEffect()).retryAt, resetAt)
+        assert.deepStrictEqual(requests, [])
+      })
+    )
+
+    it.effect("counts what failed responses say is left", () =>
+      Effect.gen(function* () {
+        yield* resetDatabase
+        const now = yield* Clock.currentTimeMillis
+        const resetAt = now + 30 * 60_000
+        serveReleasePages([[nightly(1)]], { remaining: 30, resetAt })
+        yield* recentVersions
+
+        serve = () =>
+          new Response("not found", {
+            headers: {
+              "x-ratelimit-remaining": "10",
+              "x-ratelimit-reset": String(resetAt / 1_000),
+            },
+            status: 404,
+          })
+        yield* Effect.exit(kilnReleaseManifestEffect(`v${nightly(1).version}`))
+
+        yield* TestClock.adjust("30 seconds")
+        const requests = serveReleasePages([[nightly(2), nightly(1)]])
+        assert.strictEqual((yield* checkKilnReleasesEffect()).retryAt, resetAt)
+        assert.deepStrictEqual(requests, [])
       })
     )
 

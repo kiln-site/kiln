@@ -8,8 +8,9 @@ import {
   type PublicKilnRelease,
 } from "@/effect/github-releases"
 import {
+  gitHubWaitUntil,
   loadGitHubRateLimitEffect,
-  type GitHubRateLimit,
+  type GitHubRateLimitObservation,
 } from "@/effect/github-rate-limit"
 import { databaseTable } from "@/lib/database-config"
 import { kilnGitRepository } from "@/lib/environment"
@@ -95,9 +96,10 @@ export type ReleaseHistoryCursor = {
 
 export type ReleaseHistoryPage = {
   nextCursor: ReleaseHistoryCursor | null
-  // Older releases wait for GitHub's limit to reset at this time, while
-  // what's left of it is kept for updates.
-  pausedUntil: number | null
+  // How long older releases wait for GitHub's limit, while what's left of
+  // it is kept for updates. Relative, so the browser's clock needn't agree
+  // with Hearth's; `nextCursor` is null meanwhile.
+  resumeInMs: number | null
   releases: Array<ChangelogRelease>
 }
 
@@ -161,14 +163,17 @@ export const releaseHistoryPageEffect = Effect.fn("releases.historyPage")(
     }
     const releases = rows.slice(0, limit)
     const last = releases.at(-1)
-    const more = rows.length > limit || state.historyPage !== null
+    const paused = rows.length <= limit && pausedUntil !== null
+    const more = rows.length > limit || (state.historyPage !== null && !paused)
+    const now = yield* Clock.currentTimeMillis
     return {
       nextCursor: more
         ? last
           ? { publishedAt: Number(last.published_at), tag: last.tag }
           : cursor
         : null,
-      pausedUntil: rows.length > limit ? null : pausedUntil,
+      resumeInMs:
+        paused && pausedUntil !== null ? Math.max(0, pausedUntil - now) : null,
       releases: releases.map(changelogRelease),
     } satisfies ReleaseHistoryPage
   }
@@ -238,7 +243,7 @@ const syncReleaseFeed = (maxAgeMs: number) =>
       if (current && now - current.checkedAt < maxAgeMs) {
         return checkOutcome(current, limit, now)
       }
-      const limitedUntil = rateLimitedUntil(limit, now)
+      const limitedUntil = waitUntil(limit, now)
       if (current && limitedUntil !== null) {
         return { failed: true, retryAt: limitedUntil, state: current }
       }
@@ -286,27 +291,22 @@ const syncReleaseFeed = (maxAgeMs: number) =>
 
 function checkOutcome(
   state: FeedState,
-  limit: GitHubRateLimit | null,
+  limit: GitHubRateLimitObservation | null,
   now: number
 ) {
   return {
     failed: state.failed === true,
-    retryAt: state.failed ? rateLimitedUntil(limit, now) : null,
+    retryAt: state.failed ? waitUntil(limit, now) : null,
     state,
   }
 }
 
-// When GitHub's request limit resets, while too little of it is left to
-// spend on releases.
-function rateLimitedUntil(
-  limit: GitHubRateLimit | null,
+// When GitHub may be asked for releases again, keeping what updates need.
+function waitUntil(
+  limit: GitHubRateLimitObservation | null,
   now: number
 ): number | null {
-  return limit &&
-    limit.remaining <= reservedGitHubRequests &&
-    now < limit.resetAt
-    ? limit.resetAt
-    : null
+  return gitHubWaitUntil(limit, now, reservedGitHubRequests)
 }
 
 function lastAnsweredAt(state: FeedState | null): number | null {
@@ -367,7 +367,7 @@ const backfillReleaseHistory = Effect.gen(function* () {
   }
   const now = yield* Clock.currentTimeMillis
   // Older releases wait while GitHub's limit is kept for updates.
-  const pausedUntil = rateLimitedUntil(yield* loadGitHubRateLimitEffect(), now)
+  const pausedUntil = waitUntil(yield* loadGitHubRateLimitEffect(), now)
   if (pausedUntil !== null) return { pausedUntil, state }
   // New releases push older ones to later pages, so this page may repeat
   // some Hearth has, but it never skips one.

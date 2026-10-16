@@ -2595,6 +2595,7 @@ const UpdateChangelogPage = React.memo(function UpdateChangelogPage({
     ...releaseHistoryInfiniteQueryOptions(),
     notifyOnChangeProps: [
       "data",
+      "dataUpdatedAt",
       "hasNextPage",
       "isError",
       "isFetchingNextPage",
@@ -2603,6 +2604,7 @@ const UpdateChangelogPage = React.memo(function UpdateChangelogPage({
   })
   const {
     data,
+    dataUpdatedAt,
     fetchNextPage,
     hasNextPage,
     isError,
@@ -2631,17 +2633,18 @@ const UpdateChangelogPage = React.memo(function UpdateChangelogPage({
     [markers, releases]
   )
   const pageCount = data?.pages.length ?? 0
-  const pausedUntil = data?.pages.at(-1)?.pausedUntil ?? null
-  // Rendering again once older releases may load lets paging continue.
-  const [, resumeHistory] = React.useReducer((count: number) => count + 1, 0)
+  // Older releases wait for GitHub's limit; Hearth says for how long, from
+  // when the page arrived by this browser's clock.
+  const resumeInMs = data?.pages.at(-1)?.resumeInMs ?? null
+  const pausedUntil = resumeInMs === null ? null : dataUpdatedAt + resumeInMs
   React.useEffect(() => {
     if (pausedUntil === null) return
     const timer = window.setTimeout(
-      resumeHistory,
+      () => void refetch(),
       Math.max(0, pausedUntil - Date.now()) + 1_000
     )
     return () => window.clearTimeout(timer)
-  }, [pausedUntil])
+  }, [pausedUntil, refetch])
 
   // Keep loading while a component's version is older than what's loaded,
   // so its line shows without scrolling down to it first.
