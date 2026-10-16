@@ -24,6 +24,7 @@ import {
 } from "@/components/app/app-config-dialogs"
 import { useAppContainerSelection } from "@/components/app/app-container-selection"
 import {
+  appAddresses,
   appContainers,
   appServices,
   showAppOperationError,
@@ -144,6 +145,9 @@ export function AppSourceSettings({
         <>
           {kind ? (
             <AppDocumentButton
+              // Another document closes this one's editor, so a draft can't
+              // save into the source that replaced it.
+              key={kind}
               app={app}
               canManage={canManage}
               kind={kind}
@@ -437,7 +441,8 @@ export function AppConnectionSettings({
   app: App
   routeId: string
 }) {
-  const services = appServices(app)
+  // Each Compose service answers to its own name.
+  const addresses = appAddresses(app)
   const ports = React.useMemo(
     () =>
       appContainers(app).flatMap((container) =>
@@ -456,20 +461,17 @@ export function AppConnectionSettings({
         </InfoSectionLink>
       }
     >
-      <InfoFact label="Internal address">
-        <InfoCopyValue label="internal address" value={app.hostname} />
-      </InfoFact>
-      {/* Each Compose service also answers to its own name. */}
-      {services.length > 1
-        ? services.map((service) => (
-            <InfoFact key={service} label={`${service} address`}>
-              <InfoCopyValue
-                label={`${service} address`}
-                value={`${service}.${app.hostname}`}
-              />
-            </InfoFact>
-          ))
-        : null}
+      {addresses.map(({ address, service }) =>
+        service ? (
+          <InfoFact key={service} label={`${service} address`}>
+            <InfoCopyValue label={`${service} address`} value={address} />
+          </InfoFact>
+        ) : (
+          <InfoFact key="app" label="Internal address">
+            <InfoCopyValue label="internal address" value={address} />
+          </InfoFact>
+        )
+      )}
       <InfoFact label="Docker network">
         {app.network ? (
           <InfoCopyValue label="Docker network" value={app.network} />

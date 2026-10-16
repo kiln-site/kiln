@@ -37,6 +37,7 @@ import {
 import { showToast } from "@workspace/ui/components/sonner"
 
 import {
+  appAddresses,
   appRelayAvailable,
   appServices,
   showAppOperationError,
@@ -68,7 +69,6 @@ export function AppNetworkPage() {
   const config = useQuery(appConfigQueryOptions(app.relayId, app.id))
   const canManage =
     appRelayAvailable(app) && app.permissions.includes("app.manage")
-  const services = appServices(app)
 
   return (
     <section className="min-h-0 flex-1 overflow-y-auto bg-card">
@@ -79,17 +79,18 @@ export function AppNetworkPage() {
             {app.name}’s containers share a network of their own. Connected
             databases reach it, and it reaches them, by name.
           </p>
-          <CopyMetaRow label="Internal address" value={app.hostname} />
-          {services.length > 1
-            ? services.map((service) => (
-                <CopyMetaRow
-                  key={service}
-                  icon={Radio}
-                  label={`${service} service`}
-                  value={`${service}.${app.hostname}`}
-                />
-              ))
-            : null}
+          {appAddresses(app).map(({ address, service }) =>
+            service ? (
+              <CopyMetaRow
+                key={service}
+                icon={Radio}
+                label={`${service} service`}
+                value={address}
+              />
+            ) : (
+              <CopyMetaRow key="app" label="Internal address" value={address} />
+            )
+          )}
           {app.network ? (
             <CopyMetaRow
               icon={Cable}
