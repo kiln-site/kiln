@@ -212,7 +212,8 @@ const lastCheckedFormatter = new Intl.DateTimeFormat("en-US", {
 function systemUpdateReportsQueryOptions(relayIds: ReadonlyArray<string>) {
   return queryOptions({
     queryKey: ["updates", "reports", ...relayIds],
-    queryFn: () => getSystemUpdates({ data: { relayIds: [...relayIds] } }),
+    queryFn: () =>
+      getSystemUpdates({ data: { relayIds: reportRelayIds(relayIds) } }),
     // Updates already followed keep their state while another Relay's is
     // read for the first time.
     placeholderData: keepPreviousData,
@@ -225,6 +226,12 @@ function systemUpdateReportsQueryOptions(relayIds: ReadonlyArray<string>) {
       "isPlaceholderData",
     ],
   })
+}
+
+// The Relays to read reports for, named in the request's URL, so many are
+// read as all of them.
+function reportRelayIds(relayIds: ReadonlyArray<string>): Array<string> | null {
+  return relayIds.length <= 50 ? [...relayIds] : null
 }
 
 // Follows an update by asking its Relay, which reads the update's own
@@ -3807,7 +3814,9 @@ const findStartedUpdates = Effect.fnUntraced(function* (
   const deadline = Date.now() + startRecoveryWindowMs
   // Hearth's own Relay is unknown when the browser wasn't shown one.
   const relayIds = targets.every(({ relayId }) => relayId)
-    ? Array.from(new Set(targets.flatMap(({ relayId }) => relayId ?? [])))
+    ? reportRelayIds(
+        Array.from(new Set(targets.flatMap(({ relayId }) => relayId ?? [])))
+      )
     : null
   while (unresolved.size > 0 && Date.now() < deadline) {
     const reports = yield* Effect.tryPromise(() =>
