@@ -64,13 +64,11 @@ The client keeps the Docker CLI's observable behavior where callers rely on it:
 - Execs that read stdin, for database import and export, database backups, the
   SQL browser, platform dump and restore, and password rotation, stream over a
   connection Docker upgrades, as `docker exec -i` did.
-- Pulls send credentials for the image's registry only, from
-  `DOCKER_AUTH_CONFIG` or the client config (`$DOCKER_CONFIG/config.json` or
-  `~/.docker/config.json`), and pull for `DOCKER_DEFAULT_PLATFORM` when it is
-  set. Credential helpers aren't run; the image ships none.
-- Containers, networks, and volumes are created with the request bodies the
-  CLI sent for the same flags, including the client config's proxies, because
-  their labels and options are a format other Kiln versions read.
+- Pulls send credentials for the image's registry only, from the Docker
+  config file (see [Private registries](#private-registries)).
+- Containers, networks, and volumes are created from Relay's own description
+  of them. The request carries only what Relay sets, and Docker fills in its
+  defaults. Labels are a format other Kiln versions read.
 
 Self-updates use the API end to end: the Relay pulls and verifies the image and
 launches the update helper, which replaces the container and rolls it back as
@@ -88,21 +86,32 @@ The Relay runs only two Docker executables, both for app deployments:
 | `docker-compose` | Compose apps, with the arguments `docker compose` had. Docker has no API for Compose.                                                     |
 | `docker-buildx`  | Dockerfile apps, as `docker build` ran it: BuildKit, `.dockerignore`, and `--progress plain` logs. Compose uses it for `build:` services. |
 
-The Relay finds buildx where the docker CLI does: the client config's
-`cliPluginsExtraDirs`, then `cli-plugins` in the config directory, then the
-system plugin directories, then `PATH`. As `docker build` did, it sets
-`BUILDX_BUILDER` to the current context's builder unless the environment or a
-builder alias chooses one, so the image lands in Docker even when
-`docker buildx use` selected a docker-container builder.
+Dockerfile builds run buildx from its path in the image on Docker's own
+builder (`BUILDX_BUILDER=default`), so the image always lands in Docker.
 
 The Relay image ships no `docker` CLI, so a build or Compose deploy runs one
 process instead of the CLI plus its plugin. It ships Compose v5.5.1 at
 `/usr/local/bin/docker-compose` and buildx v0.37.2 at
 `/usr/local/libexec/docker/cli-plugins/docker-buildx`, both pinned by checksum
-for amd64 and arm64. The image build fails on any other `docker` or `docker-*`
-executable or symlink, and `scripts/relay-docker-cli.test.mjs` fails if Relay
-code spawns `docker` or the Dockerfile installs the CLI. New Docker calls go
+for amd64 and arm64. `scripts/relay-docker-cli.test.mjs` fails if Relay code
+starts `docker` or the image definitions install the CLI. New Docker calls go
 through the Engine API client.
+
+### Private registries
+
+Registry logins live in one file, the Relay's Docker config:
+`$DOCKER_CONFIG/config.json`, or `/root/.docker/config.json` in the Relay
+image. It is the format `docker login` writes, and pulls, Compose, and buildx
+all read it, so one login covers images, Compose services, and `FROM` lines.
+Only `auths` entries with the credentials inline are used. Credential helpers
+(`credsStore`, `credHelpers`) are programs the image doesn't ship.
+
+Hearth doesn't manage registry logins yet. Running `docker login` on the host
+doesn't reach the Relay: Docker keeps logins on the client, not in the daemon,
+and the Relay's container has its own filesystem. On many hosts, such as
+Docker Desktop, the login sits in the system keychain instead of the file. To
+pull private images today, mount a config file with inline `auths` into the
+Relay container and point `DOCKER_CONFIG` at its directory.
 
 ## Health check
 
