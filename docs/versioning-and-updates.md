@@ -82,8 +82,14 @@ then launches a short-lived updater from the selected Relay digest. The helper:
 5. Removes the rollback copy on success, or restores it on failure.
 
 Update operation state lives in the Relay data volume, so a Relay can report
-the outcome after replacing itself. Hearth polls through disconnects and shows
-that it is waiting for reconnection. Hearth's existing Relay connection state
+the outcome after replacing itself. Each Relay reports the latest Hearth and
+Relay update it ran, running or finished, in the snapshot it sends Hearth on
+every connection. Hearth keeps no update state of its own: a Hearth replaced
+partway through an update, even one that replaced it before every Relay
+answered, learns how each update went from the Relays, and the Updates dialog
+reads them back when its start request was lost. A Relay finishes an update it
+accepted even if Hearth disconnects. A Relay that goes away mid-update is
+shown updating for up to 15 minutes. Hearth's existing Relay connection state
 continues to mark instances offline while Hearth is unavailable.
 
 Coolify remains free to manage the same containers. Kiln does not call the

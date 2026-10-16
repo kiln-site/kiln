@@ -1502,6 +1502,22 @@ export const relayProcessMemorySchema = z.object({
     .nullable(),
 })
 
+/**
+ * A Hearth or Relay update a Relay ran, from its own records. Its result
+ * outlives the Hearth that asked for it, so a Hearth replaced mid-update
+ * learns how it went from the Relay instead of the lost reply.
+ */
+export const relaySystemUpdateSchema = z.object({
+  id: z.uuid(),
+  component: z.enum(["hearth", "relay"]),
+  error: z.string().max(2_000).nullable(),
+  finishedAt: z.string().datetime().nullable(),
+  phase: z.string().max(100).optional(),
+  startedAt: z.string().datetime(),
+  status: z.enum(["failed", "running", "succeeded"]),
+  version: z.string().min(1).max(100),
+})
+
 export const relayNodeSchema = z.object({
   id: z.string().min(1),
   name: z.string().min(1),
@@ -1553,6 +1569,12 @@ export const relayNodeSchema = z.object({
    * that predate it.
    */
   relayResources: relayInstanceResourcesSchema.optional(),
+  /**
+   * The latest update of each container this Relay updates (itself, and
+   * Hearth when it shares the Docker host), running or finished. Absent from
+   * Relays that predate it.
+   */
+  updates: z.array(relaySystemUpdateSchema).max(8).optional(),
 })
 
 export const relaySftpPublicationStatusSchema = z.enum([
@@ -2128,6 +2150,7 @@ export type RelayInstanceCustomRouteLabel = z.infer<
 export type RelayInstance = z.infer<typeof relayInstanceSchema>
 export type RelaySnapshotDelta = z.infer<typeof relaySnapshotDeltaSchema>
 export type RelayNode = z.infer<typeof relayNodeSchema>
+export type RelaySystemUpdate = z.infer<typeof relaySystemUpdateSchema>
 export type RelaySnapshot = z.infer<typeof relaySnapshotSchema>
 export type RelayProcessMemory = z.infer<typeof relayProcessMemorySchema>
 

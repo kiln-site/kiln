@@ -9,7 +9,6 @@ import {
   recordComponentVersionsEffect,
   releaseHistoryPageEffect,
 } from "@/effect/kiln-release-feed"
-import { RelayUnavailableError } from "@/effect/errors"
 import { platformAdminIdsEffect } from "@/effect/notifications"
 import { attachRelayOwnersEffect } from "@/effect/relay-owners"
 import { runAppEffect } from "@/effect/runtime"
@@ -113,7 +112,17 @@ export const getUpdateOverview = createServerFn({ method: "GET" }).handler(
       platformAdmin ? getContainerHostname() : Promise.resolve(null),
     ])
     const enabledRelays = relays
-    const { relayRpc } = await import("@/lib/relay-connection")
+    const { relayRpc, relaySystemUpdates } =
+      await import("@/lib/relay-connection")
+    // The update each target last had, so the browser can tell the next one
+    // apart if the reply that starts it is lost.
+    const lastUpdateId = (
+      relayId: string,
+      component: "hearth" | "relay"
+    ): string | null =>
+      relaySystemUpdates(relayId)?.find(
+        (update) => update.component === component
+      )?.id ?? null
 
     const [relayTargets, hearthCandidates] = await Promise.all([
       Promise.all(
@@ -240,11 +249,15 @@ export const getUpdateOverview = createServerFn({ method: "GET" }).handler(
     return {
       canUpdateHearth: platformAdmin,
       currentVersion,
-      hearth: hearthTarget,
+      hearth: hearthTarget && {
+        ...hearthTarget,
+        lastUpdateId: lastUpdateId(hearthTarget.relayId, "hearth"),
+      },
       previousVersions,
       releases,
       relays: relayTargets.map((relay) => ({
         ...relay,
+        lastUpdateId: lastUpdateId(relay.relayId, "relay"),
         ownedByViewer: owners.get(relay.relayId)?.ownedByViewer ?? false,
         ownerName: owners.get(relay.relayId)?.ownerName ?? null,
       })),
@@ -312,28 +325,19 @@ export const startSystemUpdates = createServerFn({ method: "POST" })
     if (!latestRelease) {
       throw new Error("No public Kiln release is available to install")
     }
-    const [
-      manifest,
-      relays,
-      {
-        followUnconfirmedSystemUpdates,
-        forgetSystemUpdates,
-        recordSystemUpdates,
-        relayRpc,
-        trackSystemUpdates,
-      },
-      hearthContainer,
-    ] = await Promise.all([
-      runAppEffect(
-        "updates.manifest",
-        kilnReleaseManifestEffect(latestRelease.tag)
-      ),
-      updateRelaysForUser(user),
-      import("@/lib/relay-connection"),
-      data.targets.some(({ component }) => component === "hearth")
-        ? getContainerHostname()
-        : Promise.resolve(null),
-    ])
+    const [manifest, relays, { relayRpc }, hearthContainer] = await Promise.all(
+      [
+        runAppEffect(
+          "updates.manifest",
+          kilnReleaseManifestEffect(latestRelease.tag)
+        ),
+        updateRelaysForUser(user),
+        import("@/lib/relay-connection"),
+        data.targets.some(({ component }) => component === "hearth")
+          ? getContainerHostname()
+          : Promise.resolve(null),
+      ]
+    )
     const prepared = await Effect.runPromise(
       Effect.forEach(
         data.targets,
@@ -450,15 +454,9 @@ export const startSystemUpdates = createServerFn({ method: "POST" })
               })
               const legacyTarget =
                 group.targets.length === 1 ? group.targets[0] : undefined
-              // The updater may replace Hearth seconds after it starts, so the
-              // update is recorded first and never started if that fails.
-              const updates = await runAppEffect(
-                "updates.record",
-                recordSystemUpdates(
-                  group.relay.id,
-                  group.targets.map((target) => target.component)
-                )
-              )
+              // This Hearth may be replaced before every Relay answers. Each
+              // Relay still finishes what it accepted and reports it in its
+              // snapshot, which the browser reads back (getSystemUpdates).
               const operations = await runAppEffect(
                 "updates.apply",
                 Effect.tryPromise({
@@ -493,19 +491,8 @@ export const startSystemUpdates = createServerFn({ method: "POST" })
                       try: () => parseUpdateOperations(response),
                       catch: (cause) => cause,
                     })
-                  ),
-                  // A lost reply doesn't mean the update didn't start: the
-                  // Relay launches its updater before replying.
-                  Effect.tapError((cause) =>
-                    relayRefusedRequest(cause)
-                      ? forgetSystemUpdates(updates)
-                      : followUnconfirmedSystemUpdates(updates)
                   )
                 )
-              )
-              await runAppEffect(
-                "updates.track",
-                trackSystemUpdates(updates, operations)
               )
               return { group, operations }
             },
@@ -545,20 +532,17 @@ export const getSystemUpdateStatus = createServerFn({ method: "POST" })
   .validator(updateStatusSchema)
   .handler(async ({ data }) => {
     const user = await requireUpdateAccess()
-    const [relays, { relayRpc, trackedSystemUpdateStatus }] = await Promise.all(
-      [updateRelaysForUser(user), import("@/lib/relay-connection")]
-    )
+    const [relays, { relayRpc }] = await Promise.all([
+      updateRelaysForUser(user),
+      import("@/lib/relay-connection"),
+    ])
     const relay = await selectedRelay(relays, data.relayId)
-    // Hearth's tracker already polls operations it started; only ask the
-    // Relay directly before the tracker has a record.
-    const result =
-      trackedSystemUpdateStatus(relay.id, data.operationId) ??
-      (await relayRpc(
-        relay,
-        "relay.update.status",
-        { operationId: data.operationId },
-        15_000
-      ))
+    const result = await relayRpc(
+      relay,
+      "relay.update.status",
+      { operationId: data.operationId },
+      15_000
+    )
     if (result === null) return null
     const operation = updateOperationSchema.parse(result)
     return operation.component === "hearth" && !isPlatformAdmin(user)
@@ -566,22 +550,32 @@ export const getSystemUpdateStatus = createServerFn({ method: "POST" })
       : operation
   })
 
-// Relay control errors sent before the operation runs. Any other failure,
-// including operation errors after the updater launched, a dropped
-// connection, or a timeout, leaves the outcome unknown.
-const relayRejectionCodes = new Set([
-  "forbidden",
-  "invalid_timeout",
-  "too_many_requests",
-])
-
-function relayRefusedRequest(cause: unknown): boolean {
-  return (
-    cause instanceof RelayUnavailableError &&
-    cause.code !== undefined &&
-    relayRejectionCodes.has(cause.code)
-  )
-}
+/**
+ * The updates each Relay the user can update last reported, running or
+ * finished; Hearth's only for platform administrators. `updates` is null
+ * while a Relay hasn't reported to this Hearth, or predates reporting them.
+ * The browser reads them when the request that started an update was lost
+ * with the Hearth it replaced.
+ */
+export const getSystemUpdates = createServerFn({ method: "GET" }).handler(
+  async () => {
+    const user = await requireUpdateAccess()
+    const platformAdmin = isPlatformAdmin(user)
+    const [relays, { relayConnectionState, relaySystemUpdates }] =
+      await Promise.all([
+        updateRelaysForUser(user),
+        import("@/lib/relay-connection"),
+      ])
+    return relays.map((relay) => ({
+      connected: relayConnectionState(relay.id).status === "authenticated",
+      relayId: relay.id,
+      updates:
+        relaySystemUpdates(relay.id)?.filter(
+          (update) => platformAdmin || update.component === "relay"
+        ) ?? null,
+    }))
+  }
+)
 
 async function selectedRelay(
   relays: Array<PersistedRelay>,

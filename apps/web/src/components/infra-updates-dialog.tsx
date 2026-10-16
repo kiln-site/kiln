@@ -11,7 +11,7 @@ import {
   useVirtualizer,
   type Range,
 } from "@tanstack/react-virtual"
-import { Effect, Result } from "effect"
+import { Effect, Option, Result } from "effect"
 import {
   ArrowRight,
   Check,
@@ -113,13 +113,19 @@ import {
   setSystemUpdateOverviewRefetchBlocked,
 } from "@/lib/system-update-presence"
 import type { UpdateOverview } from "@/server/updates"
-import { getSystemUpdateStatus, startSystemUpdates } from "@/server/updates"
+import {
+  getSystemUpdates,
+  getSystemUpdateStatus,
+  startSystemUpdates,
+} from "@/server/updates"
 
 type UpdateTarget = {
   component: "hearth" | "relay"
   currentVersion: string | null
   eligible: boolean
   key: string
+  // The update the target last had, as its Relay reported it.
+  lastUpdateId: string | null
   name: string
   // Who brought the Relay; null for the Panel and Relays an admin paired.
   ownerName: string | null
@@ -3239,6 +3245,7 @@ function withDevMockRelays(
       container: "",
       currentImage: "",
       currentVersion: current,
+      lastUpdateId: null,
       name: `relay-${["eu", "us", "ap"][index % 3]}-${String(index + 1).padStart(2, "0")}`,
       ownedByViewer: index % 4 === 0,
       // The development user is an admin, so its own Relays name nobody.
@@ -3419,6 +3426,7 @@ function updateTargets(overview: UpdateOverview): Array<UpdateTarget> {
       overview.hearth?.currentVersion ?? overview.currentVersion ?? null,
     eligible: overview.hearth?.eligible ?? false,
     key: "hearth",
+    lastUpdateId: overview.hearth?.lastUpdateId ?? null,
     name: "Panel",
     ownerName: null,
     ownedByViewer: false,
@@ -3435,6 +3443,7 @@ function updateTargets(overview: UpdateOverview): Array<UpdateTarget> {
       currentVersion: relay.currentVersion,
       eligible: relay.eligible,
       key: relayTargetKey(relay.relayId),
+      lastUpdateId: relay.lastUpdateId,
       name: relay.name,
       ownerName: relay.ownerName,
       ownedByViewer: relay.ownedByViewer,
@@ -3472,58 +3481,121 @@ async function startUpdates(
         }),
       catch: (cause) => cause,
     }).pipe(
-      Effect.match({
-        onFailure: (cause) => {
-          return {
-            failures: targets.map((target) => ({
-              message:
+      Effect.matchEffect({
+        onFailure: (cause) =>
+          recoverStartedUpdates(targets).pipe(
+            Effect.map((started) => {
+              const message =
                 cause instanceof Error
                   ? cause.message
-                  : "Update could not start.",
-              target,
-            })),
-          }
-        },
-        onSuccess: (result) => {
-          const failures: Array<{
-            message: string
-            target: UpdateTarget
-          }> = []
-          for (const failure of result.failures) {
-            const target = targets.find(
-              (candidate) =>
-                candidate.component === failure.component &&
-                (candidate.component === "hearth" ||
-                  candidate.relayId === failure.relayId)
-            )
-            if (!target) continue
-            failures.push({ message: failure.message, target })
-          }
-          for (const started of result.started) {
-            const target = targets.find(
-              (candidate) =>
-                candidate.component === started.operation.component &&
-                (candidate.component === "hearth" ||
-                  candidate.relayId === started.relayId)
-            )
-            if (!target) continue
-            onStarted({
-              component: started.operation.component,
-              name: target.name,
-              operationId: started.operation.id,
-              previousVersion: target.currentVersion,
-              relayId: started.relayId,
-              targetVersion: latestVersion,
-              targetKey: target.key,
-              versionName: latestVersionName,
+                  : "Update could not start."
+              const failures: Array<{ message: string; target: UpdateTarget }> =
+                []
+              for (const target of targets) {
+                const operationId = started.get(target.key)
+                if (!operationId || !target.relayId) {
+                  failures.push({ message, target })
+                  continue
+                }
+                onStarted({
+                  component: target.component,
+                  name: target.name,
+                  operationId,
+                  previousVersion: target.currentVersion,
+                  relayId: target.relayId,
+                  targetVersion: latestVersion,
+                  targetKey: target.key,
+                  versionName: latestVersionName,
+                })
+              }
+              return { failures }
             })
-          }
-          return { failures }
-        },
+          ),
+        onSuccess: (result) =>
+          Effect.sync(() => {
+            const failures: Array<{
+              message: string
+              target: UpdateTarget
+            }> = []
+            for (const failure of result.failures) {
+              const target = targets.find(
+                (candidate) =>
+                  candidate.component === failure.component &&
+                  (candidate.component === "hearth" ||
+                    candidate.relayId === failure.relayId)
+              )
+              if (!target) continue
+              failures.push({ message: failure.message, target })
+            }
+            for (const started of result.started) {
+              const target = targets.find(
+                (candidate) =>
+                  candidate.component === started.operation.component &&
+                  (candidate.component === "hearth" ||
+                    candidate.relayId === started.relayId)
+              )
+              if (!target) continue
+              onStarted({
+                component: started.operation.component,
+                name: target.name,
+                operationId: started.operation.id,
+                previousVersion: target.currentVersion,
+                relayId: started.relayId,
+                targetVersion: latestVersion,
+                targetKey: target.key,
+                versionName: latestVersionName,
+              })
+            }
+            return { failures }
+          }),
       })
     )
   )
 }
+
+const startRecoveryWindowMs = 2 * 60_000
+
+/**
+ * Reads back the updates a lost start request began, by target key. The
+ * request is lost when one of its updates replaces Hearth before every Relay
+ * answers; the Relays still run what they accepted and report it, so once
+ * Hearth answers again each target either has an update newer than the one
+ * it last had, or none started. A Relay that predates reporting updates
+ * can't say.
+ */
+const recoverStartedUpdates = Effect.fnUntraced(function* (
+  targets: ReadonlyArray<UpdateTarget>
+) {
+  const started = new Map<string, string>()
+  const unresolved = new Set(targets.map((target) => target.key))
+  const deadline = Date.now() + startRecoveryWindowMs
+  while (unresolved.size > 0 && Date.now() < deadline) {
+    const reports = yield* Effect.tryPromise(() => getSystemUpdates()).pipe(
+      Effect.option
+    )
+    if (Option.isSome(reports)) {
+      for (const target of targets) {
+        if (!unresolved.has(target.key)) continue
+        const report = reports.value.find(
+          (candidate) => candidate.relayId === target.relayId
+        )
+        if (report?.updates) {
+          const update = report.updates.find(
+            (candidate) =>
+              candidate.component === target.component &&
+              candidate.id !== target.lastUpdateId
+          )
+          if (update) started.set(target.key, update.id)
+          unresolved.delete(target.key)
+        } else if (!report || report.connected) {
+          unresolved.delete(target.key)
+        }
+      }
+    }
+    if (unresolved.size > 0) yield* Effect.sleep("2 seconds")
+  }
+  return started
+})
 
 function registerUpdatePresence(update: ActiveUpdate): void {
   markSystemUpdateActive(update)

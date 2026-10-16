@@ -86,6 +86,7 @@ import {
   relayRotateDatabaseCredentialsSchema,
   relayUpdateInstanceStartupSchema,
   relayBootstrapDiscoveryTranscript,
+  relayControlDeadlineMs,
   RelayBrowserAuthorizationReviseSchema,
   relayBrowserAuthorizationReviseMaxItems,
   relayScheduleProjectionSchema,
@@ -1130,6 +1131,7 @@ async function relaySnapshot() {
     pendingPrimaryPorts,
     provisioningJobs,
     sftpPublication,
+    updates,
   ] = await Effect.runPromise(
     Effect.all(
       [
@@ -1145,6 +1147,7 @@ async function relaySnapshot() {
           runRelayEffectUntraced(startup.state.listProvisioningJobs())
         ),
         relayOperation(() => docker.relaySftpPublication(sftpServer.port)),
+        systemUpdates.updates(),
       ] as const,
       { concurrency: 4 }
     )
@@ -1171,7 +1174,7 @@ async function relaySnapshot() {
     }
   })
   return {
-    node,
+    node: { ...node, updates },
     instances: retainProvisioningInstances(
       [...instancesWithProvisioning, ...provisioningById.values()],
       retainedInstances
@@ -1246,7 +1249,10 @@ async function executeControlRequest(
               ? targetValues.map(systemUpdateTarget)
               : [systemUpdateTarget(payload)],
           },
-          signal
+          // An accepted update finishes even if Hearth disconnects, as it
+          // does when the same update replaces Hearth: its outcome is in the
+          // snapshot every Hearth receives.
+          AbortSignal.timeout(relayControlDeadlineMs("relay.update.apply"))
         )
       )
       await Promise.all(

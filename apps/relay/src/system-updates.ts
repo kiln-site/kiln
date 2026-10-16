@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto"
 import {
   link,
   mkdir,
+  readdir,
   readFile,
   rename,
   rm,
@@ -19,6 +20,7 @@ import {
   isKilnReleaseVersion,
   kilnReleaseVersionCore,
   kilnImageRepository,
+  type RelaySystemUpdate,
 } from "@workspace/contracts"
 import { Effect, Semaphore } from "effect"
 
@@ -91,6 +93,10 @@ export class SystemUpdateManager {
   readonly #operationsDirectory: string
   readonly #engine: DockerEngine
   #activeBatch: { id: string } | null = null
+  // The latest update of each component. Records on disk are merged in on
+  // the first read.
+  readonly #latest = new Map<KilnComponent, UpdateOperation>()
+  #latestLoaded = false
 
   constructor(config: {
     dataDirectory: string
@@ -200,6 +206,7 @@ export class SystemUpdateManager {
         const operations = prepared.map(({ operation }) => operation)
 
         yield* acquireOperationLocksEffect(operationsDirectory, operations)
+        this.#remember(operations)
         const failOperations = (cause: RelaySystemUpdateError) =>
           failQueuedOperationsEffect(
             operationsDirectory,
@@ -294,20 +301,26 @@ export class SystemUpdateManager {
           Effect.catch((cause) =>
             failOperations(cause).pipe(
               Effect.andThen(
+                Effect.sync(() =>
+                  operations.map((operation): UpdateOperation => ({
+                    ...operation,
+                    error: signal?.aborted
+                      ? "The update request was cancelled before replacement started."
+                      : cause.message,
+                    finishedAt: new Date().toISOString(),
+                    status: "failed",
+                  }))
+                )
+              ),
+              Effect.tap((failed) => Effect.sync(() => this.#remember(failed))),
+              Effect.flatMap((failed) =>
                 signal?.aborted
                   ? systemUpdateFailure(
                       "start.cancelled",
                       abortReason(signal).message,
                       abortReason(signal)
                     )
-                  : Effect.succeed(
-                      operations.map((operation): UpdateOperation => ({
-                        ...operation,
-                        error: cause.message,
-                        finishedAt: new Date().toISOString(),
-                        status: "failed",
-                      }))
-                    )
+                  : Effect.succeed(failed)
               )
             )
           ),
@@ -328,6 +341,60 @@ export class SystemUpdateManager {
         )
       }).pipe(Effect.withSpan("relay.systemUpdates.startBatch"))
     )
+  }
+
+  /**
+   * The latest update of each component, for the Relay's snapshot. The
+   * update helper records a running update's progress and outcome on disk,
+   * so those are read again; this also notices updates that stopped without
+   * an outcome (see `status`). What can't be read now is reported as last
+   * known, and read again next time.
+   */
+  updates(): Effect.Effect<Array<RelaySystemUpdate>> {
+    return Effect.gen({ self: this }, function* () {
+      if (!this.#latestLoaded) {
+        const recorded = yield* recordedOperationsEffect(
+          this.#operationsDirectory
+        ).pipe(
+          Effect.tap(() =>
+            Effect.sync(() => {
+              this.#latestLoaded = true
+            })
+          ),
+          Effect.catch((cause) =>
+            Effect.logWarning(
+              "System update records could not be read",
+              cause
+            ).pipe(Effect.as([]))
+          )
+        )
+        this.#remember(recorded)
+      }
+      const running = Array.from(this.#latest.values()).filter(
+        (operation) => operation.status === "running"
+      )
+      const current = yield* Effect.forEach(
+        running,
+        (operation) =>
+          this.status(operation.id).pipe(
+            Effect.catch(() => Effect.succeed(null))
+          ),
+        { concurrency: "unbounded" }
+      )
+      // An update whose images are still being pulled has no record yet,
+      // and stays as remembered.
+      this.#remember(current.flatMap((operation) => operation ?? []))
+      return Array.from(this.#latest.values(), reportedUpdate)
+    })
+  }
+
+  #remember(operations: ReadonlyArray<UpdateOperation>) {
+    for (const operation of operations) {
+      const known = this.#latest.get(operation.component)
+      if (!known || known.id === operation.id || isNewer(operation, known)) {
+        this.#latest.set(operation.component, operation)
+      }
+    }
   }
 
   // Whether an update this Relay started is still running.
@@ -355,10 +422,17 @@ export class SystemUpdateManager {
   status(id: string) {
     const engine = this.#engine
     const operationsDirectory = this.#operationsDirectory
+    const latest = this.#latest
     return Effect.gen(function* () {
       if (!/^[0-9a-f-]{36}$/u.test(id)) return null
       const operation = yield* readOperationEffect(operationsDirectory, id)
-      if (!operation) return null
+      if (!operation) {
+        // Accepted, with its images still being pulled.
+        for (const remembered of latest.values()) {
+          if (remembered.id === id) return remembered
+        }
+        return null
+      }
 
       const helperId = operation.batchId ?? operation.id
       if (
@@ -401,6 +475,51 @@ export class SystemUpdateManager {
       }
       return operation
     }).pipe(Effect.withSpan("relay.systemUpdates.status"))
+  }
+}
+
+const operationFilePattern = /^[0-9a-f-]{36}\.json$/u
+
+const recordedOperationsEffect = Effect.fn("relay.systemUpdates.recorded")(
+  function* (directory: string) {
+    const names = yield* systemUpdateOperation("operations.list", () =>
+      readdir(directory)
+    ).pipe(
+      Effect.catch((cause) =>
+        systemErrorCode(cause) === "ENOENT"
+          ? Effect.succeed<Array<string>>([])
+          : Effect.fail(cause)
+      )
+    )
+    const operations = yield* Effect.forEach(
+      names.filter((name) => operationFilePattern.test(name)),
+      (name) =>
+        readOperationEffect(directory, name.slice(0, -".json".length)).pipe(
+          // One unreadable record must not hide the others.
+          Effect.catch(() => Effect.succeed(null))
+        ),
+      { concurrency: 8 }
+    )
+    return operations.flatMap((operation) => operation ?? [])
+  }
+)
+
+function isNewer(operation: UpdateOperation, than: UpdateOperation): boolean {
+  return Date.parse(operation.startedAt) > Date.parse(than.startedAt)
+}
+
+// Clamped to what the snapshot contract accepts, so a long error can't
+// make Hearth reject the whole snapshot.
+function reportedUpdate(operation: UpdateOperation): RelaySystemUpdate {
+  return {
+    component: operation.component,
+    error: operation.error?.slice(0, 2_000) ?? null,
+    finishedAt: operation.finishedAt,
+    id: operation.id,
+    ...(operation.phase ? { phase: operation.phase.slice(0, 100) } : {}),
+    startedAt: operation.startedAt,
+    status: operation.status,
+    version: operation.version,
   }
 }
 

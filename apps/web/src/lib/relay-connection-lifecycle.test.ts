@@ -1,7 +1,7 @@
 import { generateKeyPairSync, randomBytes, randomUUID, sign } from "node:crypto"
 import { once } from "node:events"
 
-import { it as effectIt, layer } from "@effect/vitest"
+import { it as effectIt } from "@effect/vitest"
 import { Effect } from "effect"
 import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test"
 import { WebSocketServer } from "ws"
@@ -17,6 +17,7 @@ import type {
   RelayAuthChallenge,
   RelayControlClientMessage,
   RelaySnapshot,
+  RelaySystemUpdate,
 } from "@workspace/contracts"
 
 vi.mock("@/lib/relay-registry", () => ({
@@ -45,15 +46,10 @@ import {
   relayConnectionBrowserMetadata,
   relayConnectionState,
   relayRpc,
-  followUnconfirmedSystemUpdates,
-  recordSystemUpdates,
-  resumeSystemUpdates,
-  trackSystemUpdates,
+  relaySystemUpdates,
 } from "@/lib/relay-connection"
 import { loadRelayCredentials } from "@/lib/relay-registry"
 import { subscribeRealtimeChanges } from "@/lib/realtime-source.server"
-import { TestDatabase, describeMysql, resetDatabase } from "@/test/database"
-import { insertRows, selectRows } from "@/test/seed"
 
 const relayId = "relay-connection-effect-test"
 const pushedSnapshot = {
@@ -90,9 +86,6 @@ const pushedSnapshot = {
   },
 } satisfies RelaySnapshot
 
-// Update operation statuses the fake Relay reports, keyed by operation ID.
-const updateOperations = new Map<string, "failed" | "running" | "succeeded">()
-
 // Fake only timeouts: Effect's scheduler (setImmediate) and the real ws/ed25519
 // handshake keep running, while reconnect backoff, request deadlines, and the
 // readiness retry wait for virtual time.
@@ -101,15 +94,10 @@ beforeEach(() => {
   authorizationFakes.synchronize.mockReset().mockResolvedValue(3)
   authorizationFakes.synchronizeMinimum.mockReset().mockResolvedValue(4)
   authorizationFakes.wake.mockReset()
-  updateOperations.clear()
 })
 
 afterEach(() => {
   // Each test starts as a fresh Hearth process.
-  for (const update of globalThis.kilnSystemUpdates?.values() ?? []) {
-    update.watcher?.interruptUnsafe()
-  }
-  globalThis.kilnSystemUpdates?.clear()
   closeRelayConnection(relayId)
   vi.useRealTimers()
   vi.restoreAllMocks()
@@ -238,155 +226,114 @@ it("advances a newer persisted generation on the same control socket", async () 
   }
 })
 
-// System update tracking records operations in MySQL so a replaced Hearth can
-// resume them.
-describeMysql("system update tracking", () => {
-  // The live clock lets tracker sleeps follow the fake timers used here.
-  layer(TestDatabase, { excludeTestServices: true })((it) => {
-    it.effect(
-      "keeps a Relay updating across reconnects until it reports the operation settled",
-      () =>
-        withRelayServer(({ disconnect, endpoint, reconnected }) =>
-          Effect.gen(function* () {
-            yield* resetDatabase
-            const relayStates: Array<string> = []
-            const unsubscribe = subscribeRealtimeChanges((event) => {
-              if (event.type === "relay.state") {
-                relayStates.push(
-                  `${event.status}${event.updating ? ":updating" : ""}`
-                )
-              }
-            })
-            yield* promiseEffect(() =>
-              relayRpc(endpoint, "relay.snapshot", {}, 1_000)
+// Updates are what each Relay reports in its snapshot, so a Hearth replaced
+// mid-update learns how they went from the Relays.
+const runningUpdate: RelaySystemUpdate = {
+  component: "relay",
+  error: null,
+  finishedAt: null,
+  id: "00000000-0000-4000-8000-00000000000a",
+  phase: "replace.stopCurrent",
+  startedAt: "2026-01-01T00:00:00.000Z",
+  status: "running",
+  version: "0.1.0",
+}
+
+effectIt.effect(
+  "keeps a Relay updating while it replaces itself, until it reports the outcome",
+  () =>
+    withRelayServer(({ disconnect, endpoint, reconnected, reportUpdates }) =>
+      Effect.gen(function* () {
+        const relayStates: Array<string> = []
+        const unsubscribe = subscribeRealtimeChanges((event) => {
+          if (event.type === "relay.state") {
+            relayStates.push(
+              `${event.status}${event.updating ? ":updating" : ""}`
             )
-            // Recorded before the Relay starts the update.
-            const updates = yield* recordSystemUpdates(relayId, ["relay"])
-            expect(yield* selectRows("system_update_operation")).toMatchObject([
-              { component: "relay", operation_id: null },
-            ])
-            updateOperations.set("update-a", "running")
-            yield* trackSystemUpdates(updates, [
-              { component: "relay", id: "update-a", status: "running" },
-            ])
-            expect(yield* selectRows("system_update_operation")).toMatchObject([
-              { component: "relay", operation_id: "update-a" },
-            ])
-
-            // The control socket can drop and return to the Relay being
-            // replaced, which still reports the operation running.
-            disconnect()
-            yield* Effect.promise(() => advanceTimersUntil(reconnected))
-            yield* promiseEffect(() =>
-              relayRpc(endpoint, "relay.snapshot", {}, 1_000)
-            )
-            yield* Effect.promise(() => vi.advanceTimersByTimeAsync(10_000))
-            expect(isRelayUpdating(relayId)).toBe(true)
-
-            updateOperations.set("update-a", "succeeded")
-            yield* Effect.promise(() => advanceTimersUntil(nextSettledState()))
-
-            expect(isRelayUpdating(relayId)).toBe(false)
-            expect(yield* selectRows("system_update_operation")).toEqual([])
-            expect(relayStates[0]).toBe("connected")
-            expect(relayStates[1]).toBe("connected:updating")
-            expect(relayStates).toContain("unreachable:updating")
-            expect(relayStates).not.toContain("unreachable")
-            expect(relayStates.at(-1)).toBe("connected")
-            unsubscribe()
-          })
-        )
-    )
-
-    it.effect(
-      "resumes recorded updates when Hearth is replaced and forgets expired ones",
-      () =>
-        Effect.gen(function* () {
-          yield* resetDatabase
-          const now = Date.now()
-          yield* insertRows("system_update_operation", [
-            {
-              component: "relay",
-              deadline_at: now + 60_000,
-              id: "00000000-0000-4000-8000-00000000000a",
-              operation_id: "update-a",
-              relay_id: relayId,
-            },
-            {
-              component: "relay",
-              deadline_at: now - 1,
-              id: "00000000-0000-4000-8000-00000000000b",
-              operation_id: "update-b",
-              relay_id: "relay-with-an-expired-update",
-            },
-            // Hearth was replaced before it learned these operations.
-            {
-              component: "relay",
-              deadline_at: now + 60_000,
-              id: "00000000-0000-4000-8000-00000000000c",
-              operation_id: null,
-              relay_id: "relay-with-an-unknown-operation",
-            },
-            {
-              component: "hearth",
-              deadline_at: now + 60_000,
-              id: "00000000-0000-4000-8000-00000000000d",
-              operation_id: null,
-              relay_id: relayId,
-            },
-          ])
-
-          yield* resumeSystemUpdates()
-
-          expect(isRelayUpdating(relayId)).toBe(true)
-          expect(isRelayUpdating("relay-with-an-expired-update")).toBe(false)
-          expect(isRelayUpdating("relay-with-an-unknown-operation")).toBe(true)
-          const remaining = yield* selectRows<{ id: string }>(
-            "system_update_operation"
-          )
-          expect(remaining.map((row) => row.id).sort()).toEqual([
-            "00000000-0000-4000-8000-00000000000a",
-            "00000000-0000-4000-8000-00000000000c",
-          ])
+          }
         })
-    )
-
-    it.effect("keeps following an update whose start was not confirmed", () =>
-      Effect.gen(function* () {
-        yield* resetDatabase
-        // The Relay may have started these before its reply was lost.
-        yield* followUnconfirmedSystemUpdates(
-          yield* recordSystemUpdates(relayId, ["hearth", "relay"])
+        // This Hearth starts while the Relay is updating.
+        reportUpdates([runningUpdate])
+        yield* promiseEffect(() =>
+          relayRpc(endpoint, "relay.snapshot", {}, 1_000)
         )
-
         expect(isRelayUpdating(relayId)).toBe(true)
-        expect(yield* selectRows("system_update_operation")).toMatchObject([
-          { component: "relay", operation_id: null },
-        ])
-      })
-    )
+        expect(relaySystemUpdates(relayId)).toEqual([runningUpdate])
 
-    it.effect("stops tracking an update when its deadline passes", () =>
-      Effect.gen(function* () {
-        yield* resetDatabase
-        yield* trackSystemUpdates(
-          yield* recordSystemUpdates(relayId, ["relay"]),
-          [{ component: "relay", id: "update-a", status: "running" }]
-        )
-        yield* Effect.promise(() =>
-          vi.advanceTimersByTimeAsync(15 * 60_000 - 1_000)
+        // The Relay being replaced drops its connection and comes back.
+        disconnect()
+        yield* Effect.promise(() => advanceTimersUntil(reconnected))
+        yield* promiseEffect(() =>
+          relayRpc(endpoint, "relay.snapshot", {}, 1_000)
         )
         expect(isRelayUpdating(relayId)).toBe(true)
 
+        const succeeded = {
+          ...runningUpdate,
+          finishedAt: "2026-01-01T00:01:00.000Z",
+          status: "succeeded" as const,
+        }
         const settled = nextSettledState()
-        yield* Effect.promise(() => vi.advanceTimersByTimeAsync(1_000))
+        reportUpdates([succeeded])
         yield* Effect.promise(() => advanceTimersUntil(settled))
+
         expect(isRelayUpdating(relayId)).toBe(false)
-        expect(yield* selectRows("system_update_operation")).toEqual([])
+        expect(relaySystemUpdates(relayId)).toEqual([succeeded])
+        expect(relayStates).toContain("unreachable:updating")
+        expect(relayStates).not.toContain("unreachable")
+        expect(relayStates.at(-1)).toBe("connected")
+        unsubscribe()
       })
     )
+)
+
+effectIt.effect("stops showing a Relay that stays away as updating", () =>
+  withRelayServer(({ endpoint, reportUpdates, server }) =>
+    Effect.gen(function* () {
+      reportUpdates([runningUpdate])
+      yield* promiseEffect(() =>
+        relayRpc(endpoint, "relay.snapshot", {}, 1_000)
+      )
+      expect(isRelayUpdating(relayId)).toBe(true)
+
+      const away = nextRelayState("unreachable")
+      server.close()
+      for (const client of server.clients) client.terminate()
+      yield* Effect.promise(() => advanceTimersUntil(away))
+      expect(isRelayUpdating(relayId)).toBe(true)
+
+      const settled = nextSettledState()
+      yield* Effect.promise(() => vi.advanceTimersByTimeAsync(15 * 60_000))
+      yield* Effect.promise(() => settled)
+      expect(isRelayUpdating(relayId)).toBe(false)
+    })
+  )
+)
+
+effectIt.effect(
+  "reports nothing for a Relay that predates update reports",
+  () =>
+    withRelayServer(({ endpoint }) =>
+      Effect.gen(function* () {
+        yield* promiseEffect(() =>
+          relayRpc(endpoint, "relay.snapshot", {}, 1_000)
+        )
+        expect(relaySystemUpdates(relayId)).toBeNull()
+        expect(isRelayUpdating(relayId)).toBe(false)
+      })
+    )
+)
+
+function nextRelayState(status: "connected" | "unreachable"): Promise<void> {
+  return new Promise<void>((resolve) => {
+    const unsubscribe = subscribeRealtimeChanges((event) => {
+      if (event.type === "relay.state" && event.status === status) {
+        unsubscribe()
+        resolve()
+      }
+    })
   })
-})
+}
 
 function nextSettledState(): Promise<void> {
   return new Promise<void>((resolve) => {
@@ -408,6 +355,8 @@ interface RelayServerFixture {
     port: number
     useTls: false
   }
+  /** Reports updates in later snapshots, and on the current connection. */
+  reportUpdates: (updates: ReadonlyArray<RelaySystemUpdate>) => void
   requests: Array<RelayControlClientMessage>
   reconnected: Promise<void>
   server: WebSocketServer
@@ -465,6 +414,15 @@ async function setupRelayServer(): Promise<RelayServerFixture> {
   const requests: Array<RelayControlClientMessage> = []
   let activeSocket: WebSocket | null = null
   let connections = 0
+  let updates: ReadonlyArray<RelaySystemUpdate> | undefined
+  let sequence = 1
+  const snapshot = (): RelaySnapshot =>
+    updates
+      ? {
+          ...pushedSnapshot,
+          node: { ...pushedSnapshot.node, updates: [...updates] },
+        }
+      : pushedSnapshot
   let resolveReconnected: () => void = () => undefined
   const reconnected = new Promise<void>((resolve) => {
     resolveReconnected = resolve
@@ -481,9 +439,16 @@ async function setupRelayServer(): Promise<RelayServerFixture> {
       return
     }
     if (connections === 3) resolveReconnected()
-    authenticateRelaySocket(socket, relayKeys.privateKey, requests, () => {
-      resolveCancelled()
-    })
+    sequence = 1
+    authenticateRelaySocket(
+      socket,
+      relayKeys.privateKey,
+      requests,
+      snapshot,
+      () => {
+        resolveCancelled()
+      }
+    )
   })
   await once(server, "listening")
   return {
@@ -497,6 +462,24 @@ async function setupRelayServer(): Promise<RelayServerFixture> {
       port: (server.address() as AddressInfo).port,
       useTls: false,
     },
+    reportUpdates: (next) => {
+      updates = next
+      sequence += 1
+      activeSocket?.send(
+        JSON.stringify({
+          event: "relay.snapshot.delta",
+          id: randomUUID(),
+          payload: {
+            deletedInstanceIds: [],
+            instances: [],
+            node: snapshot().node,
+          },
+          seq: sequence,
+          type: "event",
+          v: 1,
+        })
+      )
+    },
     requests,
     reconnected,
     server,
@@ -507,6 +490,7 @@ function authenticateRelaySocket(
   socket: WebSocket,
   relayPrivateKey: ReturnType<typeof generateKeyPairSync>["privateKey"],
   requests: Array<RelayControlClientMessage>,
+  snapshot: () => RelaySnapshot,
   onCancel: () => void
 ): void {
   const unsignedChallenge: Omit<RelayAuthChallenge, "signature"> = {
@@ -547,7 +531,7 @@ function authenticateRelaySocket(
         JSON.stringify({
           event: "relay.snapshot",
           id: randomUUID(),
-          payload: pushedSnapshot,
+          payload: snapshot(),
           seq: 1,
           type: "event",
           v: 1,
@@ -561,21 +545,8 @@ function authenticateRelaySocket(
     }
     if (message.type !== "request") return
     requests.push(message)
-    if (message.operation === "relay.update.status") {
-      const { operationId } = message.payload as { operationId?: string }
-      const status = operationId ? updateOperations.get(operationId) : undefined
-      if (!status) return
-      socket.send(
-        JSON.stringify({
-          id: randomUUID(),
-          payload: { status },
-          replyTo: message.id,
-          type: "response",
-          v: 1,
-        })
-      )
-      return
-    }
+    // Never answered, so requests can time out.
+    if (message.operation === "relay.update.status") return
     socket.send(
       JSON.stringify({
         id: randomUUID(),
