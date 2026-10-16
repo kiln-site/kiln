@@ -13,6 +13,10 @@ import {
 } from "@workspace/contracts"
 
 import { ExternalServiceError } from "@/effect/errors"
+import {
+  saveGitHubRateLimitEffect,
+  type GitHubRateLimit,
+} from "@/effect/github-rate-limit"
 import { kilnGitRepository } from "@/lib/environment"
 import { isKilnReleaseVersion } from "@/lib/release-version"
 
@@ -20,15 +24,6 @@ const headers = {
   Accept: "application/vnd.github+json",
   "User-Agent": "kiln-hearth",
   "X-GitHub-Api-Version": "2022-11-28",
-}
-
-/**
- * What GitHub says is left of the requests this Kiln may make to it, and
- * when its count resets. Unauthenticated, it's 60 an hour per IP.
- */
-export type GitHubRateLimit = {
-  remaining: number
-  resetAt: number
 }
 
 /** GitHub refused a request because Kiln's request limit is used up. */
@@ -92,7 +87,6 @@ export type PublicKilnRelease = {
 
 export type KilnReleasePage = {
   hasNextPage: boolean
-  rateLimit: GitHubRateLimit | null
   releases: Array<PublicKilnRelease>
 }
 
@@ -107,13 +101,12 @@ export const fetchKilnReleasePageEffect = Effect.fn("github.releases.page")(
       kilnGitRepository(),
       "releases"
     )
-    const { body, link, rateLimit } = yield* requestJsonResponse(
+    const { body, link } = yield* requestJsonResponse(
       `${repositoryApi}?per_page=${perPage}&page=${page}`,
       Schema.Array(GitHubReleaseSchema)
     )
     return {
       hasNextPage: /<[^>]+>;\s*rel="next"/u.test(link),
-      rateLimit,
       releases: body.flatMap((release): Array<PublicKilnRelease> => {
         if (release.draft || !release.tag_name.startsWith("v")) return []
         const version = release.tag_name.slice(1)
@@ -232,23 +225,27 @@ function requestJsonResponse<S extends Schema.Constraint>(
         Effect.gen(function* () {
           const now = yield* Clock.currentTimeMillis
           const rateLimit = rateLimitOf(response.headers)
+          const retryAfter = Number(response.headers["retry-after"] ?? NaN)
+          // A used-up limit, or a secondary limit that names its own wait.
           if (
             response.status === 429 ||
-            (response.status === 403 && rateLimit?.remaining === 0)
+            (response.status === 403 &&
+              (rateLimit?.remaining === 0 || Number.isFinite(retryAfter)))
           ) {
-            const retryAfter = Number(response.headers["retry-after"])
             const resetAt = Number.isFinite(retryAfter)
               ? now + retryAfter * 1_000
               : (rateLimit?.resetAt ?? now + 60 * 60_000)
+            yield* recordRateLimit({ remaining: 0, resetAt })
             const minutes = Math.max(1, Math.ceil((resetAt - now) / 60_000))
             return yield* GitHubRateLimitError.make({
               message: `GitHub's limit on requests from this Kiln is used up. Try again in ${minutes} minute${minutes === 1 ? "" : "s"}.`,
               resetAt,
             })
           }
+          if (rateLimit) yield* recordRateLimit(rateLimit)
           const ok = yield* HttpClientResponse.filterStatusOk(response)
           const body = yield* HttpClientResponse.schemaBodyJson(schema)(ok)
-          return { body, link: ok.headers["link"] ?? "", rateLimit }
+          return { body, link: ok.headers["link"] ?? "" }
         })
       ),
       Effect.timeout("15 seconds"),
@@ -277,6 +274,14 @@ function requestJsonResponse<S extends Schema.Constraint>(
     )
   )
 }
+
+// Recording is best effort: the request's own outcome matters more.
+const recordRateLimit = (limit: GitHubRateLimit) =>
+  saveGitHubRateLimitEffect(limit).pipe(
+    Effect.catch((error) =>
+      Effect.logWarning("Could not record GitHub's rate limit", error)
+    )
+  )
 
 function rateLimitOf(
   responseHeaders: Readonly<Record<string, string | undefined>>

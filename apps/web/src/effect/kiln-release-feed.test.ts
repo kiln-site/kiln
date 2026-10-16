@@ -9,6 +9,7 @@ import {
   recordComponentVersionsEffect,
   releaseHistoryPageEffect,
 } from "@/effect/kiln-release-feed"
+import { kilnReleaseManifestEffect } from "@/effect/github-releases"
 import { TestDatabase, describeMysql, resetDatabase } from "@/test/database"
 
 const nightly = (build: number) => {
@@ -186,6 +187,105 @@ describeMysql("Kiln release feed", () => {
             (yield* checkKilnReleasesEffect()).retryAt,
             refusedUntil
           )
+          assert.deepStrictEqual(requests, [1])
+        })
+    )
+
+    it.effect(
+      "counts the requests updates make against what checking may spend",
+      () =>
+        Effect.gen(function* () {
+          yield* resetDatabase
+          const now = yield* Clock.currentTimeMillis
+          const resetAt = now + 30 * 60_000
+          serveReleasePages([[nightly(1)]], { remaining: 30, resetAt })
+          yield* recentVersions
+
+          // Starting updates reads releases from GitHub too.
+          serve = () =>
+            Response.json(
+              {
+                assets: [],
+                draft: false,
+                html_url: "https://github.com/kiln-site/kiln/releases/tag/v0",
+                name: "v0",
+                prerelease: true,
+                published_at: nightly(1).publishedAt,
+                tag_name: `v${nightly(1).version}`,
+              },
+              {
+                headers: {
+                  "x-ratelimit-remaining": "10",
+                  "x-ratelimit-reset": String(resetAt / 1_000),
+                },
+              }
+            )
+          yield* Effect.exit(
+            kilnReleaseManifestEffect(`v${nightly(1).version}`)
+          )
+
+          yield* TestClock.adjust("30 seconds")
+          const requests = serveReleasePages([[nightly(2), nightly(1)]])
+          assert.strictEqual(
+            (yield* checkKilnReleasesEffect()).retryAt,
+            resetAt
+          )
+          assert.deepStrictEqual(requests, [])
+        })
+    )
+
+    it.effect("waits as long as a secondary limit asks", () =>
+      Effect.gen(function* () {
+        yield* resetDatabase
+        serveReleasePages([[nightly(1)]])
+        yield* recentVersions
+
+        yield* TestClock.adjust("1 minute")
+        const refusedAt = yield* Clock.currentTimeMillis
+        let requests: Array<number> = []
+        serve = (input) => {
+          requests.push(Number(new URL(input).searchParams.get("page")))
+          return new Response("secondary rate limit", {
+            headers: { "retry-after": "120", "x-ratelimit-remaining": "40" },
+            status: 403,
+          })
+        }
+        assert.strictEqual(
+          (yield* checkKilnReleasesEffect()).retryAt,
+          refusedAt + 120_000
+        )
+        yield* TestClock.adjust("1 minute")
+        yield* checkKilnReleasesEffect()
+        assert.deepStrictEqual(requests, [1])
+
+        yield* TestClock.adjust("1 minute")
+        requests = serveReleasePages([[nightly(2), nightly(1)]])
+        assert.isFalse((yield* checkKilnReleasesEffect()).failed)
+        assert.deepStrictEqual(requests, [1])
+      })
+    )
+
+    it.effect(
+      "ends history at what Hearth has while GitHub's limit is kept",
+      () =>
+        Effect.gen(function* () {
+          yield* resetDatabase
+          const now = yield* Clock.currentTimeMillis
+          const requests = serveReleasePages(
+            [
+              [nightly(4), nightly(3)],
+              [nightly(2), nightly(1)],
+            ],
+            { remaining: 5, resetAt: now + 30 * 60_000 }
+          )
+
+          const page = yield* releaseHistoryPageEffect(null, 3)
+          assert.deepStrictEqual(
+            page.releases.map(({ version }) => version),
+            [nightly(4).version, nightly(3).version]
+          )
+          // No cursor, so the changelog doesn't ask for the same page again.
+          assert.strictEqual(page.nextCursor, null)
           assert.deepStrictEqual(requests, [1])
         })
     )

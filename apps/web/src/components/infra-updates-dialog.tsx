@@ -1279,6 +1279,7 @@ const UpdateDialogData = React.memo(function UpdateDialogData({
   const overviewQuery = useQuery({
     ...updateOverviewQueryOptions(),
     enabled: () => open && !busy && canRefetchSystemUpdateOverview(),
+    select: withoutReleasesCheckedAt,
     notifyOnChangeProps: ["data", "error", "isError", "isPending"],
   })
   const overview = React.useMemo(
@@ -2541,6 +2542,14 @@ const LastCheckedLabel = React.memo(function LastCheckedLabel({
 
 function selectReleasesCheckedAt(overview: UpdateOverview): number | null {
   return overview.releasesCheckedAt
+}
+
+// The rows don't show when Hearth last asked GitHub (`UpdaterCheck` does),
+// so a check that only moved it leaves them the same overview to render.
+function withoutReleasesCheckedAt(overview: UpdateOverview): UpdateOverview {
+  return overview.releasesCheckedAt === null
+    ? overview
+    : { ...overview, releasesCheckedAt: null }
 }
 
 // Rows have fixed heights so the virtualizer never measures, and nothing
