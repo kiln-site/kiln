@@ -429,7 +429,7 @@ function dumpSizeError(file: File | null): string | null {
 }
 
 // Deletes every table and row and keeps the database, its login, and its
-// connections. Typing the name confirms it.
+// connections. Confirmed the way deleting is.
 export function WipeDatabaseDialog({
   database,
   onOpenChange,
@@ -438,7 +438,6 @@ export function WipeDatabaseDialog({
   onOpenChange: (open: boolean) => void
 }) {
   const queryClient = useQueryClient()
-  const [confirmation, setConfirmation] = React.useState("")
   const wipe = useMutation({
     mutationFn: () =>
       wipeManagedDatabase({
@@ -458,7 +457,6 @@ export function WipeDatabaseDialog({
       onOpenChange(false)
     },
   })
-  const confirmed = confirmation.trim() === database.name
 
   return (
     <Dialog
@@ -469,60 +467,41 @@ export function WipeDatabaseDialog({
         <DialogHeader>
           <DialogTitle>Wipe {database.name}?</DialogTitle>
           <DialogDescription>
-            Every table and row is deleted. The database, its login, and its
-            game server connections stay. This can&apos;t be undone.
+            Every table and row will be permanently deleted. The database, its
+            credentials, and its game server connections stay.
           </DialogDescription>
         </DialogHeader>
-        <form
-          className="space-y-4"
-          onSubmit={(event) => {
-            event.preventDefault()
-            if (confirmed && !wipe.isPending) wipe.mutate()
-          }}
-        >
-          <div className="space-y-1.5">
-            <label
-              htmlFor={`wipe-${database.id}`}
-              className="type-label block text-muted-foreground"
-            >
-              Type <span className="text-foreground">{database.name}</span> to
-              confirm
-            </label>
-            <Input
-              id={`wipe-${database.id}`}
-              value={confirmation}
-              autoComplete="off"
-              autoFocus
-              disabled={wipe.isPending}
-              onChange={(event) => setConfirmation(event.target.value)}
-            />
-          </div>
-          {wipe.error ? (
-            <p className="text-xs text-destructive">{wipe.error.message}</p>
-          ) : null}
-          <DialogFooter>
-            <Button
-              type="button"
-              variant="outline"
-              disabled={wipe.isPending}
-              onClick={() => onOpenChange(false)}
-            >
-              Cancel
-            </Button>
-            <Button
-              type="submit"
-              variant="destructive"
-              disabled={!confirmed || wipe.isPending}
-            >
-              {wipe.isPending ? (
-                <LoaderCircle className="animate-spin" />
-              ) : (
-                <Eraser />
-              )}
-              Wipe database
-            </Button>
-          </DialogFooter>
-        </form>
+        <div className="flex items-start gap-3 rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-xs">
+          <CircleAlert className="mt-0.5 size-4 shrink-0 text-destructive" />
+          This action cannot be undone. Export a SQL dump first if you need a
+          recovery copy.
+        </div>
+        {wipe.error ? (
+          <p className="text-xs text-destructive">{wipe.error.message}</p>
+        ) : null}
+        <DialogFooter>
+          <Button
+            type="button"
+            variant="ghost"
+            disabled={wipe.isPending}
+            onClick={() => onOpenChange(false)}
+          >
+            Cancel
+          </Button>
+          <Button
+            disabled={wipe.isPending}
+            type="button"
+            variant="destructive"
+            onClick={() => wipe.mutate()}
+          >
+            {wipe.isPending ? (
+              <LoaderCircle className="animate-spin" />
+            ) : (
+              <Eraser />
+            )}
+            Wipe database
+          </Button>
+        </DialogFooter>
       </DialogContent>
     </Dialog>
   )
