@@ -218,11 +218,13 @@ function systemUpdateReportsQueryOptions(relayIds: ReadonlyArray<string>) {
     placeholderData: keepPreviousData,
     refetchInterval: 2_000,
     retry: false,
-    notifyOnChangeProps: ["data", "isError"],
+    notifyOnChangeProps: ["data", "dataUpdatedAt", "isError"],
   })
 }
 
-// Follows an update on a Relay from before updates were reported.
+// Follows an update by asking its Relay, which reads the update's own
+// record: for Relays from before updates were reported, and for an update a
+// newer one replaced in its Relay's report.
 function legacyActiveUpdateQueryOptions(active: ActiveUpdate) {
   return queryOptions({
     queryKey: ["updates", "operation", active.relayId, active.operationId],
@@ -428,8 +430,10 @@ export const InfraUpdatesDialog = React.memo(function InfraUpdatesDialog({
       preparingUpdatesRef.current = preparingUpdatesRef.current.filter(
         (preparing) => preparing.targetKey !== update.targetKey
       )
-      // Opening the updater may have found it in the Relay's report first.
+      // Opening the updater may have found it in the Relay's report first,
+      // and it may even have finished before this reply arrived.
       if (
+        completedOperations.current.has(update.operationId) ||
         activeRef.current.some(
           (active) => active.operationId === update.operationId
         )
@@ -1073,12 +1077,20 @@ const ActiveUpdatePollers = React.memo(function ActiveUpdatePollers({
     ...systemUpdateReportsQueryOptions(relayIds),
     enabled: relayIds.length > 0,
   })
+  // Updates their Relay reported without for `notStartedAfterMs`.
+  const [unreported, setUnreported] = React.useState<ReadonlySet<string>>(
+    () => new Set()
+  )
+  const markUnreported = React.useCallback((operationId: string) => {
+    setUnreported((current) => new Set(current).add(operationId))
+  }, [])
   // Nothing is known until the first read answers.
   if (reportsQuery.data === undefined && !reportsQuery.isError) return null
   const reports = reportsQuery.isError ? null : (reportsQuery.data ?? null)
   return active.map((update) => {
     const observation = observeReportedUpdate(reports, update)
-    return observation.kind === "unsupported" ? (
+    return observation.kind === "unsupported" ||
+      unreported.has(update.operationId) ? (
       <LegacyActiveUpdatePoller
         activityStore={activityStore}
         controller={controller}
@@ -1092,39 +1104,52 @@ const ActiveUpdatePollers = React.memo(function ActiveUpdatePollers({
         error={observation.kind === "finished" ? observation.error : null}
         key={update.operationId}
         kind={observation.kind}
+        // Only an absent update needs each read, to tell how long it's been.
+        observedAt={
+          observation.kind === "absent" ? reportsQuery.dataUpdatedAt : 0
+        }
         phase={observation.kind === "running" ? observation.phase : null}
         status={observation.kind === "finished" ? observation.status : null}
         update={update}
         version={observation.kind === "finished" ? observation.version : null}
+        onUnreported={markUnreported}
       />
     )
   })
 })
 
 /**
- * Follows one update through its Relay's reports. One the Relay reports
- * without for `notStartedAfterMs` has no record there, which fails it.
+ * Follows one update through its Relay's reports. One the Relay keeps
+ * reporting without for `notStartedAfterMs` may have been replaced by a
+ * newer one, so its Relay is asked for it instead (`onUnreported`).
  */
 const ReportedActiveUpdate = React.memo(function ReportedActiveUpdate({
   activityStore,
   controller,
   error,
   kind,
+  observedAt,
   phase,
   status,
   update,
   version,
+  onUnreported,
 }: {
   activityStore: SystemUpdateActivityStore
   controller: ActiveUpdatePollerController
   error: string | null
   kind: Exclude<ReportedUpdateObservation["kind"], "unsupported">
+  observedAt: number
   phase: string | null
   status: "failed" | "succeeded" | null
   update: ActiveUpdate
   version: string | null
+  onUnreported: (operationId: string) => void
 }) {
   const completed = React.useRef(false)
+  // When the reports first lacked it. Only reads count, so a tab whose
+  // polling paused in the background doesn't run out the time.
+  const absentSince = React.useRef<number | null>(null)
   const reconnecting = kind === "away"
   const shownPhase = reconnecting ? "reconnecting" : phase
 
@@ -1144,13 +1169,25 @@ const ReportedActiveUpdate = React.memo(function ReportedActiveUpdate({
       controller.complete(update, { error, status, version })
       return
     }
-    if (kind !== "absent") return
-    const timer = window.setTimeout(() => {
+    if (kind !== "absent") {
+      absentSince.current = null
+      return
+    }
+    absentSince.current ??= observedAt
+    if (observedAt - absentSince.current >= notStartedAfterMs) {
       completed.current = true
-      controller.complete(update, null)
-    }, notStartedAfterMs)
-    return () => window.clearTimeout(timer)
-  }, [controller, error, kind, status, update, version])
+      onUnreported(update.operationId)
+    }
+  }, [
+    controller,
+    error,
+    kind,
+    observedAt,
+    onUnreported,
+    status,
+    update,
+    version,
+  ])
 
   return null
 })
