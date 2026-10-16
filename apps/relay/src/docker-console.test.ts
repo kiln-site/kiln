@@ -344,3 +344,47 @@ describe("console history", () => {
     expect(history.truncated).toBe(true)
   })
 })
+
+describe("console completion", () => {
+  it("probes a running server's console, whatever its container attaches at start", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] })
+    const harness = await relayHarness()
+    const recipe = serverRecipe({
+      metadata: {
+        author: "Kiln",
+        description: "A test Brick recipe.",
+        game: "Minecraft",
+        id: "paper",
+        name: "Paper",
+      },
+    })
+    const container = await harness.seedServer({
+      id: "c".repeat(40),
+      labels: {
+        "kiln.brick.id": "paper",
+        "kiln.brick.snapshot-sha256": await harness.bricks.saveSnapshot(recipe),
+        "kiln.brick.source": await harness.publishRecipe(recipe),
+      },
+      running: true,
+      tty: true,
+    })
+    await harness.docker.inspectInstances()
+    const instance = await harness.docker.findInstance("c".repeat(40))
+    if (!instance) throw new Error("Server was not discovered")
+
+    let settled = false
+    const completion = harness.docker
+      .completeCommand(instance, "ver", 3)
+      .finally(() => {
+        settled = true
+      })
+    while (!settled) {
+      await vi.advanceTimersByTimeAsync(100)
+      await new Promise((resolve) => setImmediate(resolve))
+    }
+    vi.useRealTimers()
+
+    expect((await completion).supported).toBe(true)
+    expect(container.stdin).toContain("ver\t")
+  })
+})

@@ -1495,13 +1495,9 @@ export class DockerDriver {
     return this.#withConsoleLock(instance.id, async () => {
       const discovered = await this.#findDiscovered(instance.id)
       const { Config: containerConfig, State: state } = discovered.container
-      if (
-        !state.Running ||
-        !containerConfig.Tty ||
-        !containerConfig.OpenStdin ||
-        !containerConfig.AttachStdin ||
-        !containerConfig.AttachStdout
-      ) {
+      // The probe attaches to the console's TTY, which needs only a running
+      // container that keeps stdin open.
+      if (!state.Running || !containerConfig.Tty || !containerConfig.OpenStdin) {
         return emptyResult
       }
 

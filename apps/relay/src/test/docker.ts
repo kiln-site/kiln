@@ -615,9 +615,10 @@ export class FakeDocker {
       }))
     return {
       Config: {
-        AttachStderr: true,
+        // Relay's creates set only stdin's, as they do with Docker.
+        AttachStderr: false,
         AttachStdin: container.openStdin,
-        AttachStdout: true,
+        AttachStdout: false,
         Cmd: container.cmd,
         Env: Object.entries(container.env).map(
           ([name, value]) => `${name}=${value}`
