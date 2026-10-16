@@ -212,7 +212,10 @@ export interface ResourceItem {
   chartColor: string
 }
 
-function useUptime(startedAt: string | null, running: boolean): string | null {
+export function useUptime(
+  startedAt: string | null,
+  running: boolean
+): string | null {
   const [now, setNow] = React.useState<number | null>(null)
   const startedAtMs = Date.parse(startedAt ?? "")
 

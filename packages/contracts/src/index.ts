@@ -1512,6 +1512,11 @@ export const relayNodeSchema = z.object({
   arch: z.string().min(1),
   uptimeSeconds: z.number().nonnegative().nullable().default(null),
   startedAt: z.string().datetime().nullable().default(null),
+  /**
+   * When the node itself booted, to the minute. Absent from Relays that
+   * predate it. `startedAt` and `uptimeSeconds` are the Relay's own.
+   */
+  bootedAt: z.string().datetime().optional(),
   cpu: z.object({
     cores: z.number().int().positive(),
     loadPercent: z.number().min(0),

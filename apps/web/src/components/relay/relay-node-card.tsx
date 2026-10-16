@@ -6,8 +6,8 @@ import { Progress } from "@workspace/ui/components/progress"
 import { cn } from "@workspace/ui/lib/utils"
 
 import { InfoCopyValue, InfoFact, InfoRailCard } from "@/components/info-page"
-import { RelativeTime } from "@/components/relative-time"
 import { useRelayLiveStatus } from "@/components/relay/relay-presentation"
+import { useUptime } from "@/components/resource-meters"
 import { formatBytes } from "@/lib/format-bytes"
 import {
   relayNodeReadingsQueryOptions,
@@ -22,8 +22,8 @@ export interface RelayNodeFacts {
   cpuModel: string | null
   dockerVersion: string
   operatingSystem: string | null
+  bootedAt: string | null
   platform: string
-  startedAt: string | null
   version: string
 }
 
@@ -43,8 +43,8 @@ export function useRelayNodeFacts(relayId: string): RelayNodeFacts | null {
           ? (node.docker.version ?? "Available")
           : "Unavailable",
         operatingSystem: node.operatingSystem ?? null,
+        bootedAt: node.bootedAt ?? null,
         platform: node.platform,
-        startedAt: node.startedAt,
         version: node.version,
       }
     },
@@ -91,13 +91,11 @@ export function RelayNodeCard({
             {platformLabel(facts.platform)}, {facts.arch}
           </InfoFact>
           <InfoFact label="Docker">{facts.dockerVersion}</InfoFact>
-          <InfoFact label="Relay started">
-            {facts.startedAt ? (
-              <RelativeTime timestamp={Date.parse(facts.startedAt)} />
-            ) : (
-              "Unknown"
-            )}
-          </InfoFact>
+          {facts.bootedAt ? (
+            <InfoFact label="Uptime">
+              <NodeUptime bootedAt={facts.bootedAt} connected={connected} />
+            </InfoFact>
+          ) : null}
         </>
       ) : (
         <p className="py-3 text-[0.8125rem] text-muted-foreground">
@@ -108,6 +106,17 @@ export function RelayNodeCard({
       )}
     </InfoRailCard>
   )
+}
+
+// Ticks on its own, so the rest of the card doesn't re-render.
+function NodeUptime({
+  bootedAt,
+  connected,
+}: {
+  bootedAt: string
+  connected: boolean
+}) {
+  return <>{useUptime(bootedAt, connected) ?? "—"}</>
 }
 
 // From the shared node poll; a new sample re-renders only these bars.

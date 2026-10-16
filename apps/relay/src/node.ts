@@ -6,6 +6,7 @@ import {
   loadavg,
   platform,
   totalmem,
+  uptime,
 } from "node:os"
 import { statfs } from "node:fs/promises"
 
@@ -19,6 +20,13 @@ import { relayProcessMemory } from "./relay-memory.js"
 
 const connectedAt = new Date().toISOString()
 const relayVersion = relayBuildLabel()
+
+// Linux counts uptime for the whole machine, even inside a container.
+// Rounded to the minute, so samples taken moments apart agree.
+function nodeBootedAt(): string {
+  const bootedAt = Date.now() - uptime() * 1_000
+  return new Date(Math.round(bootedAt / 60_000) * 60_000).toISOString()
+}
 
 export async function nodeSnapshot(
   config: RelayConfig,
@@ -51,6 +59,7 @@ export async function nodeSnapshot(
       ? Math.max(0, Math.floor((Date.now() - startedAtTimestamp) / 1_000))
       : null,
     startedAt,
+    bootedAt: nodeBootedAt(),
     cpu: {
       cores: cpus().length,
       loadPercent: Math.round((loadavg()[0] / cpus().length) * 10_000) / 100,
