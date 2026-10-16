@@ -13,6 +13,7 @@ import type { RelayNode } from "@workspace/contracts"
 
 import { relayBuildLabel } from "./build-info.js"
 import type { RelayConfig } from "./config.js"
+import { hostCpuModel } from "./cpu-model.js"
 import type { DockerDriver } from "./docker.js"
 import { relayProcessMemory } from "./relay-memory.js"
 
@@ -26,10 +27,11 @@ export async function nodeSnapshot(
   const filesystem = await statfs(config.rootDirectory)
   const storageTotal = filesystem.blocks * filesystem.bsize
   const storageAvailable = filesystem.bavail * filesystem.bsize
-  const [dockerVersion, operatingSystem, startedAt, relayMemory] =
+  const [dockerVersion, operatingSystem, cpuModel, startedAt, relayMemory] =
     await Promise.all([
       docker.dockerVersion(),
       docker.hostOperatingSystem(),
+      hostCpuModel(),
       docker.relayStartedAt(),
       relayProcessMemory(),
     ])
@@ -52,6 +54,7 @@ export async function nodeSnapshot(
     cpu: {
       cores: cpus().length,
       loadPercent: Math.round((loadavg()[0] / cpus().length) * 10_000) / 100,
+      ...(cpuModel ? { model: cpuModel } : {}),
     },
     memory: {
       totalBytes: totalMemory,

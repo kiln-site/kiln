@@ -1509,6 +1509,11 @@ export const relayNodeSchema = z.object({
   cpu: z.object({
     cores: z.number().int().positive(),
     loadPercent: z.number().min(0),
+    /**
+     * Like "AMD EPYC 7763 64-Core Processor". Absent when the CPU doesn't
+     * say, and from Relays that predate it.
+     */
+    model: z.string().min(1).max(200).optional(),
   }),
   memory: z.object({
     totalBytes: z.number().nonnegative(),

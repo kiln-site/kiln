@@ -19,6 +19,7 @@ import type { RelayDirectoryEntry } from "@/lib/relay-route"
 
 export interface RelayNodeFacts {
   arch: string
+  cpuModel: string | null
   dockerVersion: string
   operatingSystem: string | null
   platform: string
@@ -37,6 +38,7 @@ export function useRelayNodeFacts(relayId: string): RelayNodeFacts | null {
       if (!node) return null
       return {
         arch: node.arch,
+        cpuModel: node.cpu.model ?? null,
         dockerVersion: node.docker.available
           ? (node.docker.version ?? "Available")
           : "Unavailable",
@@ -76,6 +78,13 @@ export function RelayNodeCard({
                 label="operating system"
                 value={facts.operatingSystem}
               />
+            </InfoFact>
+          ) : null}
+          {facts.cpuModel ? (
+            <InfoFact label="Processor">
+              <span className="truncate" title={facts.cpuModel}>
+                {facts.cpuModel}
+              </span>
             </InfoFact>
           ) : null}
           <InfoFact label="System">

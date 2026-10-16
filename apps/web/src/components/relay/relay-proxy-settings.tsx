@@ -52,7 +52,7 @@ export function RelayProxySettings({ relay }: { relay: RelayDirectoryEntry }) {
     mutationFn: (form: FormData) => {
       const settings = relayProxySettingsSchema.safeParse({
         acmeEmail: String(form.get("acmeEmail") ?? "").trim() || null,
-        mode: relayProxyModeSchema.catch("none").parse(form.get("mode")),
+        mode: form.get("mode"),
         traefikImage: form.get("traefikImage"),
       })
       if (!settings.success) {
