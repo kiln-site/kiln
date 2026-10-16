@@ -79,25 +79,25 @@ export type ResourceId = keyof typeof RESOURCE_STYLES
 const metersCollapsedStorageKey = "kiln:resource-meters-collapsed:v1"
 const metersCollapsedChangedEvent = "kiln:resource-meters-collapsed:changed"
 
-// The choice for this page, read from storage once. Storage only keeps it
-// across visits, so the toggle still works when storage is unavailable.
-let metersCollapsed: boolean | undefined
+// The choice when browser storage couldn't save it (full or blocked), so the
+// toggle still works for this page.
+let unsavedMetersCollapsed: boolean | undefined
 
 function readMetersCollapsed(): boolean {
-  metersCollapsed ??= Result.getOrElse(
+  if (unsavedMetersCollapsed !== undefined) return unsavedMetersCollapsed
+  return Result.getOrElse(
     Result.try(
       () => window.localStorage.getItem(metersCollapsedStorageKey) === "true"
     ),
     () => false
   )
-  return metersCollapsed
 }
 
 function subscribeMetersCollapsed(listener: () => void): () => void {
+  // A null key means another tab cleared storage.
   const onStorage = (event: StorageEvent) => {
-    if (event.key !== metersCollapsedStorageKey) return
-    metersCollapsed = event.newValue === "true"
-    listener()
+    if (event.key === null || event.key === metersCollapsedStorageKey)
+      listener()
   }
   window.addEventListener(metersCollapsedChangedEvent, listener)
   window.addEventListener("storage", onStorage)
@@ -108,12 +108,12 @@ function subscribeMetersCollapsed(listener: () => void): () => void {
 }
 
 function setMetersCollapsed(collapsed: boolean) {
-  metersCollapsed = collapsed
-  Result.try(() => {
+  const saved = Result.try(() => {
     if (collapsed)
       window.localStorage.setItem(metersCollapsedStorageKey, "true")
     else window.localStorage.removeItem(metersCollapsedStorageKey)
   })
+  unsavedMetersCollapsed = Result.isSuccess(saved) ? undefined : collapsed
   window.dispatchEvent(new Event(metersCollapsedChangedEvent))
 }
 
