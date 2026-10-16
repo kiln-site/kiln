@@ -1,7 +1,5 @@
 import * as React from "react"
-import { useQuery } from "@tanstack/react-query"
-import { Link } from "@tanstack/react-router"
-import { Check, Copy, LoaderCircle, Pencil, Users } from "lucide-react"
+import { Check, Copy, LoaderCircle, Pencil } from "lucide-react"
 
 import { Button } from "@workspace/ui/components/button"
 import {
@@ -17,7 +15,6 @@ import {
 import { cn } from "@workspace/ui/lib/utils"
 
 import { useCopyFeedback } from "@/components/workspace-header"
-import { accessCapabilitiesQueryOptions } from "@/lib/query-options"
 
 // Building blocks for Info pages: settings sections in the main column, each
 // edited in place, and a rail on the right that sums up what the resource is.
@@ -290,35 +287,4 @@ export function InfoRailCard({
       <dl className="px-3">{children}</dl>
     </section>
   )
-}
-
-export function InfoManageAccessButton({
-  relayId,
-  resourceId,
-  resourceType,
-}: {
-  relayId: string
-  resourceId: string
-  resourceType: "database" | "instance" | "relay"
-}) {
-  const { data: canManageAccess = false } = useQuery({
-    ...accessCapabilitiesQueryOptions(),
-    select: selectCanManageAccess,
-  })
-  if (!canManageAccess) return null
-  return (
-    <Button asChild size="sm" variant="ghost">
-      <Link
-        to="/access"
-        search={{ tab: "users", relayId, resourceType, resourceId }}
-      >
-        <Users />
-        Manage access
-      </Link>
-    </Button>
-  )
-}
-
-function selectCanManageAccess(capabilities: { canManageAccess: boolean }) {
-  return capabilities.canManageAccess
 }

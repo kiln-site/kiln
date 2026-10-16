@@ -14,16 +14,13 @@ import {
   InfoDetails,
   InfoEditButton,
   InfoFact,
-  InfoManageAccessButton,
   InfoSection,
 } from "@/components/info-page"
-import { relayHostAccessQueryOptions } from "@/components/relay/relay-host-access"
 import {
   invalidateRelayRuntimeQueries,
   messageFrom,
   updateRelayCache,
 } from "@/components/relay/relay-actions"
-import { useRelayLiveStatus } from "@/components/relay/relay-presentation"
 import { RelativeTime } from "@/components/relative-time"
 import { canAccessRelayPermission } from "@/lib/navigation-destinations"
 import type { AccessPermission } from "@/lib/permissions"
@@ -208,61 +205,6 @@ async function saveConnection(
   return updated
 }
 
-export function RelayAccessSettings({ relay }: { relay: RelayDirectoryEntry }) {
-  return (
-    <InfoSection
-      title="Access"
-      action={
-        <InfoManageAccessButton
-          relayId={relay.id}
-          resourceId={relay.id}
-          resourceType="relay"
-        />
-      }
-    >
-      <InfoFact label="Hearth access">
-        <InfoDetails
-          title={roleLabel(relay.role)}
-          trigger={roleLabel(relay.role)}
-        >
-          <p>{roleDescription(relay)}</p>
-          <p>Set when the Relay was paired.</p>
-        </InfoDetails>
-      </InfoFact>
-      <InfoFact label="Host access">
-        <RelayHostAccessValue relay={relay} />
-      </InfoFact>
-    </InfoSection>
-  )
-}
-
-function RelayHostAccessValue({ relay }: { relay: RelayDirectoryEntry }) {
-  const { connected } = useRelayLiveStatus(relay)
-  const { data: access } = useQuery({
-    ...relayHostAccessQueryOptions(relay.id),
-    enabled: connected,
-  })
-  if (!access) return <span className="text-muted-foreground">—</span>
-  const files = access.files.status !== "disabled"
-  const label =
-    access.terminal && files
-      ? "Terminal and files"
-      : access.terminal
-        ? "Terminal only"
-        : files
-          ? "Files only"
-          : "Off"
-  return (
-    <InfoDetails title="Host access" trigger={label}>
-      <p>
-        Whether this Relay’s Terminal and Files reach the machine itself, not
-        just its game servers, apps, and databases.
-      </p>
-      <p>Set in the Relay’s config on the node.</p>
-    </InfoDetails>
-  )
-}
-
 function tlsLabel(relay: RelayDirectoryEntry): string {
   if (!relay.useTls) return "Off"
   return relay.managedTls ? "Managed by the Relay" : "Custom certificate"
@@ -275,20 +217,4 @@ function tlsDescription(relay: RelayDirectoryEntry): string {
   return relay.managedTls
     ? "The Relay issues its own certificate. Hearth trusts it through the certificate authority saved when the Relay was paired."
     : "The Relay serves a certificate from a public or custom certificate authority."
-}
-
-function roleLabel(role: RelayDirectoryEntry["role"]): string {
-  if (role === "full_access") return "Full access"
-  if (role === "read_only") return "Read only"
-  return "Custom"
-}
-
-function roleDescription(relay: RelayDirectoryEntry): string {
-  if (relay.role === "full_access") {
-    return "Hearth can use every Relay action: create and remove game servers, open terminals, edit files, and change settings."
-  }
-  if (relay.role === "read_only") {
-    return "Hearth can see this Relay and what runs on it, but can’t change anything."
-  }
-  return `Hearth can use ${relay.actions.length} selected Relay ${relay.actions.length === 1 ? "action" : "actions"}.`
 }
