@@ -7,10 +7,13 @@ import { test } from "vite-plus/test"
 // buildx binaries. Its image ships no docker CLI, so code that starts one
 // would fail on every real install.
 const workspaceRoot = new URL("../", import.meta.url)
-// A process started as `docker`, by name or path, or a shell line that runs
-// it. `docker-compose` and `docker-buildx` are the standalone binaries.
-const startsDocker =
-  /\b(?:spawn|spawnSync|exec|execSync|execFile|execFileSync|command\w*)\(\s*["'`](?:[^"'`\s]*\/)?docker(?:["'`]|\s)/u
+// A process started as `docker`, by name or path, possibly across lines, or a
+// shell script (`sh -c`) that runs it. `docker-compose` and `docker-buildx` are
+// the standalone binaries.
+const startsDocker = [
+  /\b(?:spawn|spawnSync|exec|execSync|execFile|execFileSync|command\w*)\(\s*["'`](?:[^"'`\s]*\/)?docker(?:["'`]|\s)/gu,
+  /["'`]-c["'`]\s*,\s*["'`](?:[^"'`]*[\s;&|(])?docker\s/gu,
+]
 
 test("Relay never runs the docker CLI", async () => {
   const sources = await readdir(new URL("apps/relay/", workspaceRoot), {
@@ -22,9 +25,12 @@ test("Relay never runs the docker CLI", async () => {
       continue
     }
     const text = await readFile(new URL(`apps/relay/${path}`, workspaceRoot), "utf8")
-    text.split("\n").forEach((line, index) => {
-      if (startsDocker.test(line)) violations.push(`apps/relay/${path}:${index + 1}`)
-    })
+    for (const pattern of startsDocker) {
+      for (const match of text.matchAll(pattern)) {
+        const line = text.slice(0, match.index).split("\n").length
+        violations.push(`apps/relay/${path}:${line}`)
+      }
+    }
   }
   assert.deepEqual(violations, [], "Relay must use the Docker Engine API, not the docker CLI")
 })
