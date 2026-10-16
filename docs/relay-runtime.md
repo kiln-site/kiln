@@ -89,8 +89,9 @@ The Relay runs only two Docker executables, both for app deployments:
 Dockerfile builds run buildx from its path in the image on Docker's own
 builder (`BUILDX_BUILDER=default`), so the image always lands in Docker.
 
-The Relay image ships no `docker` CLI, so a build or Compose deploy runs one
-process instead of the CLI plus its plugin. It ships Compose v5.5.1 at
+The Relay image ships no `docker` CLI, so builds and Compose deploys no longer
+start it as a wrapper around the plugin. (Compose still starts buildx for
+`build:` services.) It ships Compose v5.5.1 at
 `/usr/local/bin/docker-compose` and buildx v0.37.2 at
 `/usr/local/libexec/docker/cli-plugins/docker-buildx`, both pinned by checksum
 for amd64 and arm64. `scripts/relay-docker-cli.test.mjs` fails if Relay code
