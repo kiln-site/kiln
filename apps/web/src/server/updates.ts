@@ -554,10 +554,10 @@ export const getSystemUpdateStatus = createServerFn({ method: "POST" })
             { operationId: data.operationId },
             15_000
           ),
-        // The Relay may be restarting into the update. Errors it answered
-        // with carry a code and are still reported.
+        // The Relay may be restarting into the update. Any other failure
+        // to reach it is still reported.
         catch: (cause) =>
-          cause instanceof RelayUnavailableError && cause.code === undefined
+          cause instanceof RelayUnavailableError && cause.disconnected
             ? RelayAwayError.make({ message: cause.message, cause })
             : cause,
       })

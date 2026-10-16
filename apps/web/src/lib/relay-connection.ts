@@ -854,25 +854,28 @@ class RelayConnection {
         this.#handleMessage(message)
       })
       activeSocket.once("error", (cause) => {
-        resume(relayConnectionFailure(cause.message, cause))
+        resume(
+          relayConnectionFailure(cause.message, cause, isRelayAwayError(cause))
+        )
       })
       activeSocket.once("close", (code, reason) => {
         const error = new Error(
           `Relay connection closed (${code}${reason.length ? `: ${reason.toString()}` : ""})`
         )
+        const away = relayAwayCloseCodes.has(code)
         this.#socket = null
         this.#rejectBrowserAuthorizationReadiness(error)
         this.#abortReverseRequests()
-        this.#rejectPending(error)
+        this.#rejectPending(error, away)
         if (this.#closed) {
           this.#setState("disconnected", null)
-          resume(relayConnectionFailure(error.message, error))
+          resume(relayConnectionFailure(error.message, error, away))
           return
         }
         this.#setState("unreachable", error.message)
         this.#attempt += 1
         this.#scheduleReconnect()
-        resume(relayConnectionFailure(error.message, error))
+        resume(relayConnectionFailure(error.message, error, away))
       })
       return Effect.sync(() => {
         if (
@@ -1133,9 +1136,9 @@ class RelayConnection {
     )
   }
 
-  #rejectPending(cause: Error): void {
+  #rejectPending(cause: Error, disconnected = false): void {
     for (const pending of this.#pending.values()) {
-      pending.resume(relayConnectionFailure(cause.message, cause))
+      pending.resume(relayConnectionFailure(cause.message, cause, disconnected))
     }
     this.#pending.clear()
   }
@@ -1285,13 +1288,33 @@ function sendSocketEffect(
 
 function relayConnectionFailure(
   message: string,
-  cause?: unknown
+  cause?: unknown,
+  disconnected = false
 ): Effect.Effect<never, RelayUnavailableError> {
   return Effect.fail(
     RelayUnavailableError.make({
       message,
       ...(cause === undefined ? {} : { cause }),
+      ...(disconnected ? { disconnected } : {}),
     })
+  )
+}
+
+// The Relay shut down (1001) or restarted (1012), or the connection dropped
+// without a close frame (1006). It closes with other codes to refuse Hearth.
+const relayAwayCloseCodes = new Set([1001, 1006, 1012])
+// Nothing was listening, or the connection dropped.
+const relayAwaySocketErrors = new Set(["ECONNREFUSED", "ECONNRESET", "EPIPE"])
+
+// A connection failure from a Relay that was away, such as one restarting,
+// rather than one that refused Hearth or a fault on either side.
+function isRelayAwayError(cause: Error): boolean {
+  const code = "code" in cause ? cause.code : undefined
+  return (
+    (typeof code === "string" && relayAwaySocketErrors.has(code)) ||
+    // A proxy in front of the Relay saying it's down. ws only puts the status
+    // in the message.
+    /^Unexpected server response: 50[234]$/u.test(cause.message)
   )
 }
 

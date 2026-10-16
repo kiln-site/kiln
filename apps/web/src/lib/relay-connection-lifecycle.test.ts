@@ -1,11 +1,14 @@
 import { generateKeyPairSync, randomBytes, randomUUID, sign } from "node:crypto"
 import { once } from "node:events"
+import { createServer } from "node:http"
+import type { IncomingMessage } from "node:http"
 
 import { it as effectIt } from "@effect/vitest"
 import { Effect } from "effect"
 import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test"
 import { WebSocketServer } from "ws"
 import type { AddressInfo } from "node:net"
+import type { Duplex } from "node:stream"
 import type { WebSocket } from "ws"
 
 import {
@@ -331,6 +334,103 @@ effectIt.effect(
         expect(relaySystemUpdates(relayId)).toBeNull()
         expect(relayUpdateReportState(relayId)).toBe("unsupported")
         expect(isRelayUpdating(relayId)).toBe(false)
+      })
+    )
+)
+
+// Hearth reports failing to reach a Relay unless the Relay was only away,
+// as it is while restarting into an update.
+it("tells a Relay that's away apart from one that refuses Hearth", async () => {
+  vi.mocked(loadRelayCredentials).mockResolvedValue({
+    caCertificatePem: null,
+    clientId: "hearth-client",
+    clientPrivateKeyPem: "unused",
+    clientPublicKeyPem: "unused",
+    relayPublicKeyPem: "unused",
+  })
+  const failure = async (
+    respond: (request: IncomingMessage, socket: Duplex) => void
+  ) => {
+    const server = createServer()
+    server.on("upgrade", (request, socket) => respond(request, socket))
+    server.listen(0, "127.0.0.1")
+    await once(server, "listening")
+    const port = (server.address() as AddressInfo).port
+    const error = await relayRpc(
+      { hostname: "127.0.0.1", id: relayId, port, useTls: false },
+      "relay.snapshot",
+      {},
+      1_000
+    ).then(
+      () => null,
+      (cause: unknown) => cause
+    )
+    closeRelayConnection(relayId)
+    server.closeAllConnections()
+    server.close()
+    return error
+  }
+  const closingWith = (code: number) => {
+    const relay = new WebSocketServer({
+      handleProtocols: () => relayControlProtocol,
+      noServer: true,
+    })
+    return (request: IncomingMessage, socket: Duplex) =>
+      relay.handleUpgrade(request, socket, Buffer.alloc(0), (client) =>
+        client.close(code)
+      )
+  }
+  const answering = (status: string) => (_: IncomingMessage, socket: Duplex) =>
+    socket.end(`HTTP/1.1 ${status}\r\nContent-Length: 0\r\n\r\n`)
+
+  // Away: shutting down, a proxy saying it's down, or the connection dropping.
+  expect(await failure(closingWith(1001))).toMatchObject({ disconnected: true })
+  expect(await failure(answering("503 Service Unavailable"))).toMatchObject({
+    disconnected: true,
+  })
+  expect(await failure((_, socket) => socket.destroy())).toMatchObject({
+    disconnected: true,
+  })
+  // Refusing this Hearth.
+  expect(await failure(closingWith(4403))).not.toHaveProperty("disconnected")
+  expect(await failure(answering("401 Unauthorized"))).not.toHaveProperty(
+    "disconnected"
+  )
+})
+
+effectIt.effect(
+  "fails an update check in flight as away when the Relay restarts",
+  () =>
+    withRelayServer(({ disconnect, endpoint, requests }) =>
+      Effect.gen(function* () {
+        yield* promiseEffect(() =>
+          relayRpc(endpoint, "relay.snapshot", {}, 1_000)
+        )
+        const status = relayRpc(
+          endpoint,
+          "relay.update.status",
+          { operationId: "00000000-0000-4000-8000-00000000000a" },
+          60_000
+        ).then(
+          () => null,
+          (cause: unknown) => cause
+        )
+        while (
+          !requests.some(
+            (request) =>
+              request.type === "request" &&
+              request.operation === "relay.update.status"
+          )
+        ) {
+          // oxlint-disable-next-line react-doctor/async-await-in-loop -- waits for the request to reach the Relay
+          yield* Effect.promise(
+            () => new Promise<void>((resolve) => setImmediate(resolve))
+          )
+        }
+        disconnect()
+        expect(yield* Effect.promise(() => status)).toMatchObject({
+          disconnected: true,
+        })
       })
     )
 )
