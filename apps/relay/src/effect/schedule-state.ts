@@ -166,7 +166,7 @@ export function makeRelayScheduleState(sql: SqlClient) {
           WHERE enabled = 1 AND next_run_at IS NOT NULL
         `.pipe(Effect.map((rows) => rows[0]?.next_run_at ?? null))
       ),
-    // schedules.json is retired after every import, so a file found at start
+    // Startup retires schedules.json after every import, so a file found at start
     // was written by an older Relay after a downgrade, or is the one an
     // interrupted start already imported. Either way it is at least as new as
     // SQLite: it wins ties, which carries same-revision credential refreshes,

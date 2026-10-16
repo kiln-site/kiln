@@ -107,8 +107,10 @@ export class ScheduleManager {
     const legacy = await readScheduleState(path)
     if (legacy) {
       await Effect.runPromise(options.state.importLegacy(legacy))
-      // The first archive is kept; a file an older Relay wrote after a
-      // downgrade is already merged and is only retired.
+      // The import trusts any file it finds to be newer than SQLite, so the
+      // Relay must not start with an imported file still in place. The first
+      // archive is kept; a file an older Relay wrote after a downgrade is
+      // already merged and is only retired.
       const archive = `${path}.migrated`
       await Effect.runPromise(
         promiseEffect(() => access(archive)).pipe(
@@ -118,13 +120,7 @@ export class ScheduleManager {
               hasErrorCode(cause, "ENOENT")
                 ? promiseEffect(() => rename(path, archive))
                 : Effect.fail(cause),
-          }),
-          Effect.catch((cause) =>
-            Effect.logError(
-              "Legacy schedule file could not be retired; it is merged again on every start",
-              { cause, path }
-            )
-          )
+          })
         )
       )
     }
