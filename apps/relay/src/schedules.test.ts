@@ -399,6 +399,82 @@ describe("Relay schedule persistence", () => {
     }
   })
 
+  it("still executes claimed occurrences when a later write in the batch fails", async () => {
+    const commands: Array<string> = []
+    const errors: Array<string> = []
+    const { filename, schedules } = await manager({
+      findInstance: async () => ({}),
+      reportError: (message) => errors.push(message),
+      sendConsoleCommand: async (_id, command) => {
+        commands.push(command)
+      },
+    })
+    const [healthyId, unreadableId] = [randomUUID(), randomUUID()].sort()
+    const applied = await schedules.apply({
+      ...projection,
+      id: healthyId!,
+      cron: "hourly",
+    })
+    await schedules.apply({ ...projection, id: unreadableId!, cron: "hourly" })
+    const database = new DatabaseSync(filename)
+    database
+      .prepare(
+        "UPDATE relay_schedules SET definition_json = '{' WHERE schedule_id = ?"
+      )
+      .run(unreadableId!)
+    database.exec(`CREATE TRIGGER fail_drop BEFORE DELETE ON relay_schedules
+      BEGIN SELECT RAISE(FAIL, 'storage unavailable'); END`)
+    vi.setSystemTime(applied.nextRunAt!)
+    const worker = Effect.runFork(schedules.run())
+    try {
+      await advanceUntil(async () => {
+        expect(commands).toEqual(["say hello"])
+        expect((await schedules.overview()).runs[0]?.status).toBe("succeeded")
+      })
+      expect(errors).toEqual(["Relay schedule claim failed"])
+      database.exec("DROP TRIGGER fail_drop")
+      await advanceUntil(async () => {
+        const { deployments } = await schedules.overview()
+        expect(deployments.map((d) => d.scheduleId)).toEqual([healthyId])
+      }, 1_000)
+      expect(commands).toEqual(["say hello"])
+    } finally {
+      database.close()
+      await Effect.runPromise(Fiber.interrupt(worker))
+    }
+  })
+
+  it("reports a long run and keeps its result after newer runs fill the history", async () => {
+    const { filename, schedules } = await manager({
+      findInstance: async () => ({}),
+    })
+    await schedules.apply({
+      ...projection,
+      enabled: false,
+      actions: [waitAction(30, "minutes"), projection.actions[0]!],
+    })
+    const long = await runNow(schedules)
+    const database = new DatabaseSync(filename)
+    const insert = database.prepare(`INSERT INTO relay_schedule_runs
+      (run_id, schedule_id, revision, scheduled_at, started_at, finished_at,
+       status, sequence_attempts_json, target_runs_json)
+      VALUES (?, ?, 1, ?, ?, ?, 'succeeded', '[]', '[]')`)
+    for (let index = 0; index < 1_000; index++) {
+      const at = Date.now() + 1 + index
+      insert.run(randomUUID(), projection.id, at, at, at)
+    }
+    database.close()
+    expect(
+      (await schedules.overview()).runs.find((run) => run.id === long.id)
+        ?.status
+    ).toBe("running")
+    await advanceUntil(async () => {
+      const { runs } = await schedules.overview()
+      expect(runs).toHaveLength(1_000)
+      expect(runs[0]).toMatchObject({ id: long.id, status: "succeeded" })
+    }, minuteMs)
+  })
+
   it("drains due work in batches without losing occurrences behind executing runs", async () => {
     let release!: () => void
     const blocked = new Promise<void>((resolve) => {
@@ -466,12 +542,16 @@ describe("Relay schedule persistence", () => {
     expect((await latestRun(recovered))?.status).toBe("interrupted")
   })
 
-  it("imports legacy definitions, history, and deletions once and then uses SQLite", async () => {
+  it("imports legacy state and merges files an older Relay writes after a downgrade by revision", async () => {
     const removedId = "32483f84-1709-4546-85b7-7eebc19a6b1f"
+    const otherId = "6f0d9a55-4be1-4a3e-9d4f-0f6c1f2b8a11"
     const legacy = {
       version: 1,
       lastHeartbeatAt: Date.now(),
-      schedules: [{ ...projection, nextRunAt: Date.now() + hourMs }],
+      schedules: [
+        { ...projection, nextRunAt: Date.now() + hourMs },
+        { ...projection, id: otherId, nextRunAt: Date.now() + hourMs },
+      ],
       tombstones: { [removedId]: 3 },
       runs: [
         {
@@ -489,31 +569,55 @@ describe("Relay schedule persistence", () => {
     const { directory, schedules, restart } = await manager({ legacy })
     expect((await latestRun(schedules))?.id).toBe("legacy-run")
     expect(
-      JSON.parse(
-        await readFile(join(directory, "schedules.json.migrated"), "utf8")
-      )
-    ).toEqual(legacy)
-    expect(
       await schedules.apply({ ...projection, id: removedId, revision: 2 })
     ).toMatchObject({ acknowledgedRevision: 3, nextRunAt: null })
     await schedules.apply({ ...projection, revision: 2 })
-    // A leftover pre-migration file must never overwrite newer SQLite state.
-    const restored = { ...legacy, lastHeartbeatAt: Date.now() + 1 }
-    await writeFile(join(directory, "schedules.json"), JSON.stringify(restored))
     schedules.close()
-    const recovered = await restart()
+
+    // A stale copy of the original file never moves a revision backward.
+    await writeFile(join(directory, "schedules.json"), JSON.stringify(legacy))
+    const stale = await restart()
     expect(
-      (await recovered.overview()).deployments[0]?.acknowledgedRevision
-    ).toBe(2)
-    expect((await latestRun(recovered))?.status).toBe("succeeded")
+      (await stale.overview([projection.id])).deployments[0]
+    ).toMatchObject({ acknowledgedRevision: 2 })
+    stale.close()
+
+    // After a downgrade the older Relay deletes one schedule and edits the
+    // other. Its file is newer, so both changes survive the re-upgrade.
+    await writeFile(
+      join(directory, "schedules.json"),
+      JSON.stringify({
+        ...legacy,
+        schedules: [
+          {
+            ...projection,
+            id: otherId,
+            name: "Edited",
+            revision: 4,
+            nextRunAt: Date.now() + hourMs,
+          },
+        ],
+        tombstones: { [projection.id]: 3 },
+        runs: [],
+      })
+    )
+    const recovered = await restart()
+    const { deployments } = await recovered.overview()
+    expect(deployments).toEqual([
+      expect.objectContaining({ scheduleId: otherId, acknowledgedRevision: 4 }),
+    ])
+    expect(
+      await recovered.apply({ ...projection, revision: 2 })
+    ).toMatchObject({ acknowledgedRevision: 3, nextRunAt: null })
+    expect((await latestRun(recovered))?.id).toBe("legacy-run")
+    await expect(
+      readFile(join(directory, "schedules.json"), "utf8")
+    ).rejects.toMatchObject({ code: "ENOENT" })
     expect(
       JSON.parse(
         await readFile(join(directory, "schedules.json.migrated"), "utf8")
       )
     ).toEqual(legacy)
-    expect(
-      JSON.parse(await readFile(join(directory, "schedules.json"), "utf8"))
-    ).toEqual(restored)
   })
 
   it("rolls back a failed legacy import and retries it without losing the source", async () => {
@@ -551,13 +655,6 @@ describe("Relay schedule persistence", () => {
     const database = new DatabaseSync(filename)
     expect(
       database.prepare("SELECT schedule_id FROM relay_schedules").all()
-    ).toEqual([])
-    expect(
-      database
-        .prepare(
-          "SELECT key FROM relay_metadata WHERE key = 'schedules_json_imported'"
-        )
-        .all()
     ).toEqual([])
     expect(
       JSON.parse(
@@ -816,41 +913,6 @@ describe("Relay schedule persistence", () => {
       expect(commands).toEqual([])
     } finally {
       await Effect.runPromise(Fiber.interrupt(worker))
-    }
-  })
-
-  it("rolls back a failed run claim and executes it once when storage recovers", async () => {
-    const commands: Array<string> = []
-    const errors: Array<string> = []
-    const { filename, schedules } = await manager({
-      findInstance: async () => ({}),
-      reportError: (message) => errors.push(message),
-      sendConsoleCommand: async (_instanceId, command) => {
-        commands.push(command)
-      },
-    })
-    const applied = await schedules.apply({ ...projection, cron: "* * * * *" })
-    const database = new DatabaseSync(filename)
-    database.exec(`CREATE TRIGGER fail_claim BEFORE UPDATE ON relay_schedules
-      BEGIN SELECT RAISE(FAIL, 'storage unavailable'); END`)
-    vi.setSystemTime(applied.nextRunAt!)
-    const fiber = Effect.runFork(schedules.run())
-    try {
-      await advanceUntil(
-        async () => expect(errors).toContain("Relay schedule claim failed"),
-        1_000
-      )
-      expect(commands).toEqual([])
-      expect((await schedules.overview()).runs).toEqual([])
-      database.exec("DROP TRIGGER fail_claim")
-      await advanceUntil(
-        async () => expect(commands).toEqual(["say hello"]),
-        1_000
-      )
-    } finally {
-      database.close()
-      await Effect.runPromise(Fiber.interrupt(fiber))
-      schedules.close()
     }
   })
 

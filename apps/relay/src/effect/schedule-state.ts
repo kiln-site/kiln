@@ -54,7 +54,6 @@ export interface ScheduleOccurrence {
 
 export type RelayScheduleState = ReturnType<typeof makeRelayScheduleState>
 
-const importKey = "schedules_json_imported"
 const historyLimit = 1_000
 export const relayTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC"
 
@@ -95,23 +94,30 @@ export function makeRelayScheduleState(sql: SqlClient) {
       ),
       Effect.withSpan(`relay.state.schedules.${operation}`)
     )
-  const writeRun = (record: ScheduleRun) =>
-    sql`
-    INSERT INTO relay_schedule_runs
-      (run_id, schedule_id, revision, scheduled_at, started_at, finished_at,
-       status, sequence_attempts_json, target_runs_json)
+  const runValues = (record: ScheduleRun) => sql`
+    (run_id, schedule_id, revision, scheduled_at, started_at, finished_at,
+     status, sequence_attempts_json, target_runs_json)
     VALUES (${record.id}, ${record.scheduleId}, ${record.revision}, ${record.scheduledAt},
       ${record.startedAt}, ${record.status === "running" ? null : record.finishedAt},
-      ${record.status}, ${JSON.stringify(record.sequenceAttempts)}, ${JSON.stringify(record.targetRuns)})
+      ${record.status}, ${JSON.stringify(record.sequenceAttempts)}, ${JSON.stringify(record.targetRuns)})`
+  const insertRun = (record: ScheduleRun) =>
+    sql`INSERT INTO relay_schedule_runs ${runValues(record)} ON CONFLICT DO NOTHING`.pipe(
+      Effect.asVoid
+    )
+  const writeRun = (record: ScheduleRun) =>
+    sql`
+    INSERT INTO relay_schedule_runs ${runValues(record)}
     ON CONFLICT(run_id) DO UPDATE SET finished_at = excluded.finished_at,
       status = excluded.status, sequence_attempts_json = excluded.sequence_attempts_json,
       target_runs_json = excluded.target_runs_json
   `.pipe(Effect.asVoid)
+  // History keeps the most recently finished runs, so a long run that ends
+  // after newer ones still reports its result.
   const pruneRuns = () =>
     sql`
     DELETE FROM relay_schedule_runs WHERE run_id IN (
       SELECT run_id FROM relay_schedule_runs WHERE status <> 'running'
-      ORDER BY scheduled_at DESC, run_id DESC LIMIT -1 OFFSET ${historyLimit}
+      ORDER BY finished_at DESC, run_id DESC LIMIT -1 OFFSET ${historyLimit}
     )
   `.pipe(Effect.asVoid)
   const claim = (
@@ -160,34 +166,37 @@ export function makeRelayScheduleState(sql: SqlClient) {
           WHERE enabled = 1 AND next_run_at IS NOT NULL
         `.pipe(Effect.map((rows) => rows[0]?.next_run_at ?? null))
       ),
-    legacyImported: () =>
-      run(
-        "legacy_imported",
-        sql<{ value: string }>`
-      SELECT value FROM relay_metadata WHERE key = ${importKey}
-    `.pipe(Effect.map((rows) => rows.length > 0))
-      ),
-    importLegacy: (state: z.infer<typeof legacyScheduleStateSchema> | null) =>
+    // Older Relays write schedules.json, including after a downgrade, so the
+    // file is merged by revision like any other delivery: whichever side saw
+    // the newer change wins, and re-reading the same file changes nothing.
+    importLegacy: (state: z.infer<typeof legacyScheduleStateSchema>) =>
       run(
         "import_legacy",
         sql.withTransaction(
           Effect.gen(function* () {
-            const existing =
-              yield* sql`SELECT key FROM relay_metadata WHERE key = ${importKey}`
-            if (existing.length) return
-            if (state) {
-              for (const schedule of state.schedules) {
-                const { nextRunAt, ...definition } = schedule
-                yield* sql`INSERT INTO relay_schedules
-            (schedule_id, revision, enabled, next_run_at, definition_json)
-            VALUES (${schedule.id}, ${schedule.revision}, ${schedule.enabled ? 1 : 0}, ${nextRunAt}, ${JSON.stringify(definition)})`
-              }
-              for (const [id, revision] of Object.entries(state.tombstones)) {
-                yield* sql`INSERT INTO relay_schedule_tombstones (schedule_id, revision) VALUES (${id}, ${revision})`
-              }
-              for (const record of state.runs) yield* writeRun(record)
+            for (const schedule of state.schedules) {
+              const { nextRunAt, ...definition } = schedule
+              yield* sql`INSERT INTO relay_schedules
+                  (schedule_id, revision, enabled, next_run_at, definition_json)
+                SELECT ${schedule.id}, ${schedule.revision}, ${schedule.enabled ? 1 : 0}, ${nextRunAt}, ${JSON.stringify(definition)}
+                WHERE NOT EXISTS (SELECT 1 FROM relay_schedule_tombstones
+                  WHERE schedule_id = ${schedule.id} AND revision >= ${schedule.revision})
+                ON CONFLICT(schedule_id) DO UPDATE SET revision = excluded.revision,
+                  enabled = excluded.enabled, next_run_at = excluded.next_run_at,
+                  definition_json = excluded.definition_json
+                WHERE excluded.revision > relay_schedules.revision`
+              yield* sql`DELETE FROM relay_schedule_tombstones
+                WHERE schedule_id = ${schedule.id} AND revision < ${schedule.revision}`
             }
-            yield* sql`INSERT INTO relay_metadata (key, value) VALUES (${importKey}, '1')`
+            for (const [id, revision] of Object.entries(state.tombstones)) {
+              yield* sql`DELETE FROM relay_schedules WHERE schedule_id = ${id} AND revision <= ${revision}`
+              yield* sql`INSERT INTO relay_schedule_tombstones (schedule_id, revision)
+                SELECT ${id}, ${revision}
+                WHERE NOT EXISTS (SELECT 1 FROM relay_schedules WHERE schedule_id = ${id})
+                ON CONFLICT(schedule_id) DO UPDATE SET revision = MAX(revision, excluded.revision)`
+            }
+            for (const record of state.runs) yield* insertRun(record)
+            yield* pruneRuns()
           })
         )
       ),
@@ -258,7 +267,19 @@ export function makeRelayScheduleState(sql: SqlClient) {
             FROM relay_schedules WHERE enabled = 1 AND next_run_at <= ${now}
             ORDER BY next_run_at, schedule_id LIMIT ${limit}`
           const occurrences: Array<ScheduleOccurrence> = []
-          let failure: { cause: unknown } | null = null
+          const failures: Array<unknown> = []
+          // Claims commit one row at a time, so a later failure must not hide
+          // the occurrences already claimed. Failed rows stay due for the next
+          // attempt, and the caller backs off on the first failure.
+          const attempt = <A, E>(effect: Effect.Effect<A, E>) =>
+            sqlFailure(effect).pipe(
+              Effect.result,
+              Effect.tap((result) =>
+                Effect.sync(() => {
+                  if (Result.isFailure(result)) failures.push(result.failure)
+                })
+              )
+            )
           for (const row of rows) {
             const occurrence = Result.try(() => {
               const definition = readDefinition(row)
@@ -274,30 +295,34 @@ export function makeRelayScheduleState(sql: SqlClient) {
             if (Result.isFailure(occurrence)) {
               // Drop an unusable local copy. Hearth sees the revision missing
               // and redeploys it, surfacing any error on that deployment.
-              yield* sql`DELETE FROM relay_schedules WHERE schedule_id = ${row.schedule_id}`
-              yield* Effect.logWarning(
-                "Unreadable Relay schedule removed for redeployment",
-                { scheduleId: row.schedule_id, cause: occurrence.failure }
+              const dropped = yield* attempt(
+                sql`DELETE FROM relay_schedules WHERE schedule_id = ${row.schedule_id}`
               )
+              if (Result.isSuccess(dropped)) {
+                yield* Effect.logWarning(
+                  "Unreadable Relay schedule removed for redeployment",
+                  { scheduleId: row.schedule_id, cause: occurrence.failure }
+                )
+              }
               continue
             }
-            const claimed = yield* sqlFailure(
+            const claimed = yield* attempt(
               sql.withTransaction(
                 claim(row, occurrence.success, now, bootAt, relayId)
               )
-            ).pipe(Effect.result)
-            // A failed row stays due for the next attempt; the rest of the
-            // batch still runs, and the caller backs off on the failure.
-            if (Result.isFailure(claimed)) {
-              failure ??= { cause: claimed.failure }
-              continue
+            )
+            if (Result.isSuccess(claimed) && claimed.success) {
+              occurrences.push(claimed.success)
             }
-            if (claimed.success) occurrences.push(claimed.success)
           }
           if (occurrences.some((item) => item.run.status === "missed")) {
-            yield* pruneRuns()
+            yield* attempt(pruneRuns())
           }
-          return { occurrences, failure, hasMore: rows.length === limit }
+          return {
+            occurrences,
+            failure: failures.length ? { cause: failures[0] } : null,
+            hasMore: rows.length === limit,
+          }
         })
       ),
     runNow: (
@@ -371,7 +396,8 @@ export function makeRelayScheduleState(sql: SqlClient) {
         WHERE ${ids} IS NULL OR schedule_id IN (SELECT value FROM json_each(${ids}))`
             const rows = yield* sql<RunRow>`SELECT * FROM relay_schedule_runs
         WHERE ${ids} IS NULL OR schedule_id IN (SELECT value FROM json_each(${ids}))
-        ORDER BY scheduled_at DESC, run_id DESC LIMIT ${historyLimit}`
+        ORDER BY finished_at IS NOT NULL, finished_at DESC, run_id DESC
+        LIMIT ${historyLimit}`
             const runs: Array<ScheduleRun> = []
             for (const row of rows) {
               const record = Result.try(() => readRun(row))

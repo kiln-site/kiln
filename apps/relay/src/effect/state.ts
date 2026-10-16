@@ -1043,7 +1043,8 @@ const migrations = SqliteMigrator.fromRecord({
       target_runs_json TEXT NOT NULL,
       UNIQUE (schedule_id, scheduled_at)
     ) STRICT`
-    yield* sql`CREATE INDEX relay_schedule_runs_history ON relay_schedule_runs (scheduled_at DESC, run_id DESC)`
+    yield* sql`CREATE INDEX relay_schedule_runs_history ON relay_schedule_runs (finished_at DESC, run_id DESC)
+      WHERE status <> 'running'`
     yield* sql`CREATE INDEX relay_schedule_runs_unfinished ON relay_schedule_runs (run_id) WHERE status = 'running'`
   }),
 })

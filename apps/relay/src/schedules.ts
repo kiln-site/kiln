@@ -51,11 +51,6 @@ const maximumTimerDurationMs = 2_147_483_647
 const targetExecutionConcurrency = 8
 const scheduleTickIntervalMs = 1_000
 
-class ScheduleTickError extends Data.TaggedError("ScheduleTickError")<{
-  readonly cause: unknown
-  readonly message: string
-}> {}
-
 class ScheduledBackupWaitError extends Data.TaggedError(
   "ScheduledBackupWaitError"
 )<{
@@ -109,41 +104,33 @@ export class ScheduleManager {
   static async make(options: ScheduleManagerOptions) {
     const manager = new ScheduleManager(options)
     const path = resolve(options.stateDirectory, "schedules.json")
-    if (!(await Effect.runPromise(options.state.legacyImported()))) {
-      const state = await readScheduleState(path)
-      await Effect.runPromise(options.state.importLegacy(state))
-    }
-    // Linking preserves the original archive if an old JSON file is restored.
-    // The import marker also covers a crash before retiring the source file.
-    await Effect.runPromise(
-      promiseEffect(() => link(path, `${path}.migrated`)).pipe(
-        Effect.andThen(promiseEffect(() => unlink(path))),
-        Effect.catch((cause) =>
-          isMissingFile(cause)
-            ? Effect.void
-            : Effect.logWarning(
-                "Legacy schedule file was left in place; SQLite is authoritative and the migration archive is preserved",
-                { cause, path }
-              )
+    const legacy = await readScheduleState(path)
+    if (legacy) {
+      await Effect.runPromise(options.state.importLegacy(legacy))
+      // The first archive is kept; a file an older Relay wrote after a
+      // downgrade is already merged and is only retired.
+      await Effect.runPromise(
+        promiseEffect(() => link(path, `${path}.migrated`)).pipe(
+          Effect.catch((cause) =>
+            hasErrorCode(cause, "EEXIST") ? Effect.void : Effect.fail(cause)
+          ),
+          Effect.andThen(promiseEffect(() => unlink(path))),
+          Effect.catch((cause) =>
+            Effect.logWarning(
+              "Legacy schedule file was left in place; it is merged again on the next start",
+              { cause, path }
+            )
+          )
         )
       )
-    )
+    }
     await Effect.runPromise(options.state.interruptRuns(manager.#bootAt))
     return manager
   }
 
   run() {
     return promiseEffect(() => this.#tick()).pipe(
-      Effect.mapError(
-        (cause) =>
-          new ScheduleTickError({
-            cause,
-            message: "Relay schedule tick failed",
-          })
-      ),
-      Effect.catchTag("ScheduleTickError", (failure) =>
-        Effect.sync(() => this.#claimFailed(failure.cause))
-      ),
+      Effect.catch((cause) => Effect.sync(() => this.#claimFailed(cause))),
       Effect.andThen(Effect.sleep(`${scheduleTickIntervalMs} millis`)),
       Effect.forever
     )
@@ -907,14 +894,14 @@ function readScheduleState(path: string) {
         })
       ),
       Effect.catch((cause) =>
-        isMissingFile(cause) ? Effect.succeed(null) : Effect.fail(cause)
+        hasErrorCode(cause, "ENOENT") ? Effect.succeed(null) : Effect.fail(cause)
       )
     )
   )
 }
 
-function isMissingFile(cause: unknown) {
-  return cause instanceof Error && "code" in cause && cause.code === "ENOENT"
+function hasErrorCode(cause: unknown, code: string) {
+  return cause instanceof Error && "code" in cause && cause.code === code
 }
 
 function errorMessage(cause: unknown) {
