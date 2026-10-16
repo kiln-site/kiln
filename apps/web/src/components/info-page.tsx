@@ -44,14 +44,11 @@ export function InfoPage({
 export function InfoSection({
   action,
   children,
-  notes,
   status,
   title,
 }: {
   action?: React.ReactNode
   children: React.ReactNode
-  // Below the facts, such as warnings.
-  notes?: React.ReactNode
   // Beside the title, such as a status indicator.
   status?: React.ReactNode
   title: string
@@ -68,7 +65,6 @@ export function InfoSection({
         ) : null}
       </header>
       <dl className="px-4">{children}</dl>
-      {notes}
     </section>
   )
 }
@@ -111,14 +107,17 @@ export function InfoDetails({
 }
 
 export function InfoDetailsContent({
+  align = "end",
   children,
   title,
 }: {
+  // "end" for values on the right of a row, "start" for ones on the left.
+  align?: "start" | "end"
   children: React.ReactNode
   title: string
 }) {
   return (
-    <PopoverContent align="end" sideOffset={8} className="w-80 text-xs">
+    <PopoverContent align={align} sideOffset={8} className="w-80 text-xs">
       <p className="font-semibold text-foreground">{title}</p>
       <div className="mt-2 flex flex-col gap-2 leading-relaxed text-muted-foreground">
         {children}

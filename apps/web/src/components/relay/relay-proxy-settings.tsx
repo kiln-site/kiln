@@ -3,9 +3,12 @@ import { Link } from "@tanstack/react-router"
 import { ArrowRight, TriangleAlert } from "lucide-react"
 import type { RelayProxyDiagnostics } from "@workspace/contracts"
 
+import { Popover, PopoverTrigger } from "@workspace/ui/components/popover"
+
 import {
   InfoDetailRow,
   InfoDetails,
+  InfoDetailsContent,
   InfoFact,
   InfoSection,
 } from "@/components/info-page"
@@ -65,13 +68,15 @@ export function RelayProxySettings({
   return (
     <InfoSection
       title="Proxy"
-      status={<StatusIndicator status={proxyStatusPresentation(diagnostics)} />}
-      action={<RelayConfigureButton relay={relay} />}
-      notes={
-        diagnostics.warnings.length > 0 ? (
-          <ProxyWarnings warnings={diagnostics.warnings} />
-        ) : null
+      status={
+        <>
+          <StatusIndicator status={proxyStatusPresentation(diagnostics)} />
+          {diagnostics.warnings.length > 0 ? (
+            <ProxyWarnings warnings={diagnostics.warnings} />
+          ) : null}
+        </>
       }
+      action={<RelayConfigureButton relay={relay} />}
     >
       <InfoFact label="Mode">{proxyModeLabels[settings.mode]}</InfoFact>
       {bundled ? (
@@ -182,19 +187,32 @@ function ProxyPorts({ ports }: { ports: RelayProxyDiagnostics["ports"] }) {
   )
 }
 
+// A warning icon beside the status, as the console's toolbar has; clicking
+// it shows what the Relay reported.
 function ProxyWarnings({ warnings }: { warnings: ReadonlyArray<string> }) {
+  const label =
+    warnings.length === 1
+      ? "1 proxy warning"
+      : `${warnings.length} proxy warnings`
   return (
-    <ul className="flex flex-col gap-2 border-t px-4 py-3">
-      {warnings.map((warning) => (
-        <li
-          key={warning}
-          className="flex items-start gap-2 text-xs text-amber-300"
-        >
-          <TriangleAlert className="mt-0.5 size-3.5 shrink-0" />
-          {warning}
-        </li>
-      ))}
-    </ul>
+    <Popover>
+      <PopoverTrigger
+        aria-label={label}
+        className="grid size-6 shrink-0 place-items-center text-amber-300 transition-colors outline-none hover:text-amber-200 focus-visible:text-amber-200 data-[state=open]:text-amber-200"
+      >
+        <TriangleAlert className="size-3.5" />
+      </PopoverTrigger>
+      <InfoDetailsContent
+        align="start"
+        title={warnings.length === 1 ? "Proxy warning" : "Proxy warnings"}
+      >
+        <ul className="flex flex-col gap-2">
+          {warnings.map((warning) => (
+            <li key={warning}>{warning}</li>
+          ))}
+        </ul>
+      </InfoDetailsContent>
+    </Popover>
   )
 }
 
