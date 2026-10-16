@@ -1,7 +1,5 @@
 import { spawn } from "node:child_process"
-import { constants } from "node:fs"
-import { access, mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises"
-import { homedir } from "node:os"
+import { mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 
 import type {
@@ -63,6 +61,8 @@ const MAX_DEPLOYMENT_LINES = 5_000
 const KEPT_DEPLOYMENTS = 20
 const PULL_TIMEOUT_MS = 15 * 60_000
 const BUILD_TIMEOUT_MS = 30 * 60_000
+// Where the Relay image installs buildx, as a plugin Compose finds too.
+const BUILDX = "/usr/local/libexec/docker/cli-plugins/docker-buildx"
 // How long a new container must stay up before its deployment succeeds.
 const SETTLE_MS = 3_000
 // Variables Docker and Compose read themselves; an app's environment can't
@@ -628,11 +628,10 @@ export class AppDriver {
     })
     await writeFile(dockerfile, input.config.dockerfile, { mode: 0o600 })
     this.#log(input.appId, deployment, `Building ${tag}`)
-    // What `docker build` runs: buildx's build, with the default builder.
     await this.#stream(
       input.appId,
       deployment,
-      await buildxExecutable(),
+      BUILDX,
       [
         "build",
         "--progress",
@@ -644,7 +643,8 @@ export class AppDriver {
         dockerfile,
         this.#appDirectory(input.appId),
       ],
-      { timeout: BUILD_TIMEOUT_MS }
+      // Docker's own builder, which loads the image into Docker.
+      { env: { ...process.env, BUILDX_BUILDER: "default" }, timeout: BUILD_TIMEOUT_MS }
     )
     return tag
   }
@@ -1518,29 +1518,6 @@ function composeConfig(
     child.stdin.on("error", () => undefined)
     child.stdin.end(input)
   })
-}
-
-/**
- * The buildx plugin, where the docker CLI looks for it, in its order: its
- * config directory's `cli-plugins`, then the system plugin directories
- * (which is where Compose finds it too). On PATH if none has it.
- */
-async function buildxExecutable(): Promise<string> {
-  const config = process.env.DOCKER_CONFIG || join(homedir(), ".docker")
-  for (const directory of [
-    join(config, "cli-plugins"),
-    "/usr/local/lib/docker/cli-plugins",
-    "/usr/local/libexec/docker/cli-plugins",
-    "/usr/lib/docker/cli-plugins",
-    "/usr/libexec/docker/cli-plugins",
-  ]) {
-    const candidate = join(directory, "docker-buildx")
-    const found = await Effect.runPromise(
-      Effect.result(Effect.tryPromise(() => access(candidate, constants.X_OK)))
-    )
-    if (Result.isSuccess(found)) return candidate
-  }
-  return "docker-buildx"
 }
 
 // A missing or invalid source fails before anything is deployed.
