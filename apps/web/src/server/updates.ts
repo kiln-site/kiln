@@ -540,7 +540,7 @@ export const getSystemUpdateStatus = createServerFn({ method: "POST" })
   .validator(updateStatusSchema)
   .handler(async ({ data }) => {
     const user = await requireUpdateAccess()
-    const [relays, { relayRpc }] = await Promise.all([
+    const [relays, { isRelayUpdating, relayRpc }] = await Promise.all([
       updateRelaysForUser(user),
       import("@/lib/relay-connection"),
     ])
@@ -554,10 +554,13 @@ export const getSystemUpdateStatus = createServerFn({ method: "POST" })
             { operationId: data.operationId },
             15_000
           ),
-        // The Relay may be restarting into the update. Any other failure
-        // to reach it is still reported.
+        // A Relay that reported a running update may be away restarting
+        // into it, for up to the 15 minutes Hearth shows it updating. Any
+        // other failure to reach it is still reported.
         catch: (cause) =>
-          cause instanceof RelayUnavailableError && cause.disconnected
+          cause instanceof RelayUnavailableError &&
+          cause.disconnected &&
+          isRelayUpdating(relay.id)
             ? RelayAwayError.make({ message: cause.message, cause })
             : cause,
       })

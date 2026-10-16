@@ -399,41 +399,67 @@ it("tells a Relay that's away apart from one that refuses Hearth", async () => {
 })
 
 effectIt.effect(
-  "fails an update check in flight as away when the Relay restarts",
+  "fails an update check in flight as away only when the Relay restarts",
   () =>
-    withRelayServer(({ disconnect, endpoint, requests }) =>
+    withRelayServer(({ disconnect, endpoint, requests, server }) =>
       Effect.gen(function* () {
         yield* promiseEffect(() =>
           relayRpc(endpoint, "relay.snapshot", {}, 1_000)
         )
-        const status = relayRpc(
-          endpoint,
-          "relay.update.status",
-          { operationId: "00000000-0000-4000-8000-00000000000a" },
-          60_000
-        ).then(
-          () => null,
-          (cause: unknown) => cause
+        const restarted = yield* Effect.promise(() =>
+          inFlightStatus(endpoint, requests, disconnect)
         )
-        while (
-          !requests.some(
-            (request) =>
-              request.type === "request" &&
-              request.operation === "relay.update.status"
-          )
-        ) {
-          // oxlint-disable-next-line react-doctor/async-await-in-loop -- waits for the request to reach the Relay
-          yield* Effect.promise(
-            () => new Promise<void>((resolve) => setImmediate(resolve))
-          )
-        }
-        disconnect()
-        expect(yield* Effect.promise(() => status)).toMatchObject({
-          disconnected: true,
-        })
+        expect(restarted).toMatchObject({ disconnected: true })
+
+        yield* Effect.promise(() =>
+          advanceTimersUntil(nextRelayState("connected"))
+        )
+        // A malformed frame before the connection drops is a fault.
+        const malformed = yield* Effect.promise(() =>
+          inFlightStatus(endpoint, requests, () => {
+            for (const client of server.clients) {
+              client.send(Buffer.from([0xff]), { binary: false }, () =>
+                client.terminate()
+              )
+            }
+          })
+        )
+        expect(malformed).toBeInstanceOf(Error)
+        expect(malformed).not.toHaveProperty("disconnected")
       })
     )
 )
+
+async function inFlightStatus(
+  endpoint: RelayServerFixture["endpoint"],
+  requests: Array<RelayControlClientMessage>,
+  interrupt: () => void
+): Promise<unknown> {
+  const sent = requests.length
+  const status = relayRpc(
+    endpoint,
+    "relay.update.status",
+    { operationId: "00000000-0000-4000-8000-00000000000a" },
+    60_000
+  ).then(
+    () => null,
+    (cause: unknown) => cause
+  )
+  while (
+    !requests
+      .slice(sent)
+      .some(
+        (request) =>
+          request.type === "request" &&
+          request.operation === "relay.update.status"
+      )
+  ) {
+    // oxlint-disable-next-line react-doctor/async-await-in-loop -- waits for the request to reach the Relay
+    await new Promise<void>((resolve) => setImmediate(resolve))
+  }
+  interrupt()
+  return status
+}
 
 function nextRelayState(status: "connected" | "unreachable"): Promise<void> {
   return new Promise<void>((resolve) => {

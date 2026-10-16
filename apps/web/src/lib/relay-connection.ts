@@ -456,7 +456,8 @@ class RelayConnection {
             resume(
               relayConnectionFailure(
                 cause.message || "Relay request could not be sent",
-                cause
+                cause,
+                isRelayAwayError(cause)
               )
             )
           })
@@ -622,6 +623,9 @@ class RelayConnection {
     return Effect.callback<void, RelayUnavailableError>((resume) => {
       let authenticated = false
       let challengeAnswered = false
+      // A socket error the close that follows it is about, such as a
+      // malformed frame before the Relay dropped the connection.
+      let socketError: Error | null = null
       activeSocket.on("message", (data, binary) => {
         if (binary) {
           resume(
@@ -854,6 +858,7 @@ class RelayConnection {
         this.#handleMessage(message)
       })
       activeSocket.once("error", (cause) => {
+        socketError = cause
         resume(
           relayConnectionFailure(cause.message, cause, isRelayAwayError(cause))
         )
@@ -862,7 +867,9 @@ class RelayConnection {
         const error = new Error(
           `Relay connection closed (${code}${reason.length ? `: ${reason.toString()}` : ""})`
         )
-        const away = relayAwayCloseCodes.has(code)
+        const away =
+          relayAwayCloseCodes.has(code) &&
+          (socketError === null || isRelayAwayError(socketError))
         this.#socket = null
         this.#rejectBrowserAuthorizationReadiness(error)
         this.#abortReverseRequests()
