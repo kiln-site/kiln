@@ -166,9 +166,11 @@ export function makeRelayScheduleState(sql: SqlClient) {
           WHERE enabled = 1 AND next_run_at IS NOT NULL
         `.pipe(Effect.map((rows) => rows[0]?.next_run_at ?? null))
       ),
-    // Older Relays write schedules.json, including after a downgrade, so the
-    // file is merged by revision like any other delivery: whichever side saw
-    // the newer change wins, and re-reading the same file changes nothing.
+    // schedules.json is retired after every import, so a file found at start
+    // was written by an older Relay after a downgrade, or is the one an
+    // interrupted start already imported. Either way it is at least as new as
+    // SQLite: it wins ties, which carries same-revision credential refreshes,
+    // and a newer revision or deletion here still wins.
     importLegacy: (state: z.infer<typeof legacyScheduleStateSchema>) =>
       run(
         "import_legacy",
@@ -184,7 +186,7 @@ export function makeRelayScheduleState(sql: SqlClient) {
                 ON CONFLICT(schedule_id) DO UPDATE SET revision = excluded.revision,
                   enabled = excluded.enabled, next_run_at = excluded.next_run_at,
                   definition_json = excluded.definition_json
-                WHERE excluded.revision > relay_schedules.revision`
+                WHERE excluded.revision >= relay_schedules.revision`
               yield* sql`DELETE FROM relay_schedule_tombstones
                 WHERE schedule_id = ${schedule.id} AND revision < ${schedule.revision}`
             }

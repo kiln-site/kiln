@@ -1,4 +1,4 @@
-import { link, readFile, unlink } from "node:fs/promises"
+import { access, readFile, rename, unlink } from "node:fs/promises"
 import { resolve } from "node:path"
 
 import { Data, Effect, Result, Schedule, Semaphore } from "effect"
@@ -109,15 +109,19 @@ export class ScheduleManager {
       await Effect.runPromise(options.state.importLegacy(legacy))
       // The first archive is kept; a file an older Relay wrote after a
       // downgrade is already merged and is only retired.
+      const archive = `${path}.migrated`
       await Effect.runPromise(
-        promiseEffect(() => link(path, `${path}.migrated`)).pipe(
+        promiseEffect(() => access(archive)).pipe(
+          Effect.matchEffect({
+            onSuccess: () => promiseEffect(() => unlink(path)),
+            onFailure: (cause) =>
+              hasErrorCode(cause, "ENOENT")
+                ? promiseEffect(() => rename(path, archive))
+                : Effect.fail(cause),
+          }),
           Effect.catch((cause) =>
-            hasErrorCode(cause, "EEXIST") ? Effect.void : Effect.fail(cause)
-          ),
-          Effect.andThen(promiseEffect(() => unlink(path))),
-          Effect.catch((cause) =>
-            Effect.logWarning(
-              "Legacy schedule file was left in place; it is merged again on the next start",
+            Effect.logError(
+              "Legacy schedule file could not be retired; it is merged again on every start",
               { cause, path }
             )
           )

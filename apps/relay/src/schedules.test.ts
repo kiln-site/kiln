@@ -582,8 +582,10 @@ describe("Relay schedule persistence", () => {
     ).toMatchObject({ acknowledgedRevision: 2 })
     stale.close()
 
-    // After a downgrade the older Relay deletes one schedule and edits the
-    // other. Its file is newer, so both changes survive the re-upgrade.
+    // After a downgrade the older Relay deletes one schedule and redeploys
+    // the other at the same revision, as Hearth does to refresh credentials.
+    // Its file is newer, so both changes survive the re-upgrade.
+    const redeployedNextRunAt = Date.now() + 2 * hourMs
     await writeFile(
       join(directory, "schedules.json"),
       JSON.stringify({
@@ -592,9 +594,7 @@ describe("Relay schedule persistence", () => {
           {
             ...projection,
             id: otherId,
-            name: "Edited",
-            revision: 4,
-            nextRunAt: Date.now() + hourMs,
+            nextRunAt: redeployedNextRunAt,
           },
         ],
         tombstones: { [projection.id]: 3 },
@@ -604,7 +604,11 @@ describe("Relay schedule persistence", () => {
     const recovered = await restart()
     const { deployments } = await recovered.overview()
     expect(deployments).toEqual([
-      expect.objectContaining({ scheduleId: otherId, acknowledgedRevision: 4 }),
+      {
+        scheduleId: otherId,
+        acknowledgedRevision: 1,
+        nextRunAt: redeployedNextRunAt,
+      },
     ])
     expect(
       await recovered.apply({ ...projection, revision: 2 })
