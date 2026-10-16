@@ -1,4 +1,5 @@
 import { createServerFn, createServerOnlyFn } from "@tanstack/react-start"
+import { relayIdSchema } from "@workspace/contracts"
 import { Effect } from "effect"
 import { z } from "zod"
 
@@ -20,11 +21,13 @@ import {
 import { grantHasPermission } from "@/lib/permissions"
 import type { PersistedRelay } from "@/lib/relay-registry"
 import { listPersistedRelays } from "@/lib/relay-registry"
+import { compareLatestReleaseVersion } from "@/lib/release-version"
 import {
   updateTargetVersion,
   validateUpdateManifest,
 } from "@/lib/update-manifest"
 import { requireEligibleResourceUser } from "@/server/auth"
+import { authorizedRelay } from "@/server/relay-access"
 
 const componentSchema = z.enum(["hearth", "relay"])
 const startUpdateTargetSchema = z.object({
@@ -244,6 +247,25 @@ export const getUpdateOverview = createServerFn({ method: "GET" }).handler(
     }
   }
 )
+
+// The newest Kiln release when this Relay runs an older one, by the Updates
+// dialog's rule. Null when it's current or its version is unknown.
+export const getRelayUpdate = createServerFn({ method: "GET" })
+  .validator(z.object({ relayId: relayIdSchema }))
+  .handler(async ({ data }) => {
+    const { relay } = await authorizedRelay(data.relayId, "relay.update")
+    const { relayConnectionNode } = await import("@/lib/relay-connection")
+    const version = relayConnectionNode(relay.id)?.version ?? relay.nodeVersion
+    const releases = await runAppEffect(
+      "updates.relay-release",
+      listKilnReleasesEffect()
+    )
+    const latest = releases[0]
+    if (!latest || compareLatestReleaseVersion(version, releases) !== 1) {
+      return null
+    }
+    return { name: latest.name, url: latest.url, version: latest.version }
+  })
 
 export const getReleaseHistory = createServerFn({ method: "GET" })
   .validator(releaseHistorySchema)

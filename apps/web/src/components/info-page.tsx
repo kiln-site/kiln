@@ -1,7 +1,7 @@
 import * as React from "react"
 import { useQuery } from "@tanstack/react-query"
 import { Link } from "@tanstack/react-router"
-import { Check, Copy, Info, Users } from "lucide-react"
+import { Check, Copy, LoaderCircle, Pencil, Users } from "lucide-react"
 
 import { Button } from "@workspace/ui/components/button"
 import {
@@ -9,7 +9,6 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@workspace/ui/components/popover"
-import { Progress } from "@workspace/ui/components/progress"
 import {
   Tooltip,
   TooltipContent,
@@ -20,99 +19,139 @@ import { cn } from "@workspace/ui/lib/utils"
 import { useCopyFeedback } from "@/components/workspace-header"
 import { accessCapabilitiesQueryOptions } from "@/lib/query-options"
 
-// Building blocks for Info pages: live tiles up top, short fact lists with the
-// rarely needed values behind popovers, and a footer for ownership and access.
+// Building blocks for Info pages: settings sections in the main column, each
+// edited in place, and a rail on the right that sums up what the resource is.
+// Rarely needed values sit behind popovers.
 
-export function InfoPage({ children }: { children: React.ReactNode }) {
+export function InfoPage({
+  children,
+  rail,
+}: {
+  children: React.ReactNode
+  rail: React.ReactNode
+}) {
   return (
     <section className="min-h-0 flex-1 overflow-y-auto bg-card">
-      <div className="mx-auto max-w-5xl px-5 py-6 sm:px-8 sm:py-8">
-        {children}
+      <div className="grid min-h-full lg:grid-cols-[minmax(0,1fr)_19rem]">
+        <div className="flex min-w-0 flex-col gap-4 px-5 py-6 sm:px-7">
+          {children}
+        </div>
+        <aside className="min-w-0 border-t bg-background/30 px-5 py-6 sm:px-6 lg:border-t-0 lg:border-l [&_dt]:w-24">
+          {rail}
+        </aside>
       </div>
     </section>
   )
 }
 
-// Tiles that share their borders, such as usage meters or linked counts. Each
-// tile paints its own background over the border color.
-export function InfoTiles({
-  children,
-  className,
-}: {
-  children: React.ReactNode
-  className?: string
-}) {
-  return (
-    <div
-      className={cn("grid gap-px overflow-hidden border bg-border", className)}
-    >
-      {children}
-    </div>
-  )
+export interface InfoSectionForm {
+  error: string | null
+  onCancel: () => void
+  onSubmit: (form: FormData) => void
+  pending: boolean
 }
 
-export function InfoMeter({
-  accessory,
-  detail,
-  label,
-  percent,
-  value,
-}: {
-  accessory?: React.ReactNode
-  detail?: React.ReactNode
-  label: string
-  // Null while there is no reading; the bar stays empty.
-  percent: number | null
-  value: React.ReactNode
-}) {
-  return (
-    <div className="min-w-0 bg-card px-4 pt-3.5 pb-4">
-      <div className="flex h-5 items-center justify-between gap-2 text-xs text-muted-foreground">
-        <span className="truncate">{label}</span>
-        {accessory}
-      </div>
-      <p className="mt-1.5 truncate text-xl font-semibold tracking-tight tabular-nums">
-        {value}
-        {detail ? (
-          <span className="ml-1.5 text-sm font-normal tracking-normal text-muted-foreground">
-            {detail}
-          </span>
-        ) : null}
-      </p>
-      <Progress
-        aria-label={label}
-        className="mt-3 [&_[data-slot=progress-indicator]]:bg-primary/75"
-        value={percent === null ? 0 : Math.min(100, Math.max(0, percent))}
-      />
-    </div>
-  )
-}
-
-export function InfoFactList({
+// A titled group of facts. With `form` the section is being edited: its facts
+// hold inputs, and it saves or cancels as a whole.
+export function InfoSection({
+  action,
   children,
+  description,
+  form,
   title,
 }: {
+  action?: React.ReactNode
   children: React.ReactNode
+  description?: string
+  form?: InfoSectionForm
   title: string
 }) {
+  const header = (
+    <header className="flex min-h-12 items-center gap-3 border-b px-4 py-2">
+      <h3 className="min-w-0 truncate text-sm font-semibold">
+        {title}
+        {description ? (
+          <span className="ml-2 hidden text-xs font-normal text-muted-foreground sm:inline">
+            {description}
+          </span>
+        ) : null}
+      </h3>
+      {action && !form ? (
+        <div className="ml-auto flex shrink-0 items-center gap-1.5">
+          {action}
+        </div>
+      ) : null}
+    </header>
+  )
+  const className = "min-w-0 border bg-background/45"
+  if (!form) {
+    return (
+      <section className={className}>
+        {header}
+        <dl className="px-4">{children}</dl>
+      </section>
+    )
+  }
   return (
-    <section className="min-w-0">
-      <h3 className="border-b pb-2 text-sm font-semibold">{title}</h3>
-      <dl>{children}</dl>
-    </section>
+    <form
+      className={className}
+      onSubmit={(event) => {
+        event.preventDefault()
+        form.onSubmit(new FormData(event.currentTarget))
+      }}
+    >
+      {header}
+      <dl className="px-4">{children}</dl>
+      <footer className="flex items-center gap-2 border-t px-4 py-2.5">
+        {form.error ? (
+          <p role="status" className="min-w-0 flex-1 text-xs text-destructive">
+            {form.error}
+          </p>
+        ) : null}
+        <div className="ml-auto flex shrink-0 gap-1.5">
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            disabled={form.pending}
+            onClick={form.onCancel}
+          >
+            Cancel
+          </Button>
+          <Button type="submit" size="sm" disabled={form.pending}>
+            {form.pending ? <LoaderCircle className="animate-spin" /> : null}
+            Save
+          </Button>
+        </div>
+      </footer>
+    </form>
+  )
+}
+
+export function InfoEditButton({ onClick }: { onClick: () => void }) {
+  return (
+    <Button type="button" size="sm" variant="ghost" onClick={onClick}>
+      <Pencil />
+      Edit
+    </Button>
   )
 }
 
 export function InfoFact({
   children,
+  htmlFor,
   label,
 }: {
   children: React.ReactNode
+  // The input the fact holds while its section is edited.
+  htmlFor?: string
   label: string
 }) {
   return (
-    <div className="flex min-h-10 items-center gap-3 border-b border-border/60 py-2 text-[0.8125rem] last:border-b-0">
-      <dt className="w-32 shrink-0 text-muted-foreground">{label}</dt>
+    <div className="flex min-h-10 items-center gap-3 border-b border-border/60 py-1.5 text-[0.8125rem] last:border-b-0">
+      <dt className="w-28 shrink-0 text-muted-foreground">
+        {htmlFor ? <label htmlFor={htmlFor}>{label}</label> : label}
+      </dt>
       <dd className="flex min-w-0 flex-1 items-center justify-end gap-1.5 text-right">
         {children}
       </dd>
@@ -140,31 +179,7 @@ export function InfoDetails({
   )
 }
 
-// An info icon that opens an explanation, for labels rather than values.
-export function InfoHint({
-  children,
-  label,
-  title,
-}: {
-  children: React.ReactNode
-  // What the icon explains, for screen readers: "About CPU load".
-  label: string
-  title: string
-}) {
-  return (
-    <Popover>
-      <PopoverTrigger
-        aria-label={label}
-        className="grid size-5 shrink-0 place-items-center text-muted-foreground/70 transition-colors outline-none hover:text-primary focus-visible:text-primary data-[state=open]:text-primary"
-      >
-        <Info className="size-3.5" />
-      </PopoverTrigger>
-      <InfoDetailsContent title={title}>{children}</InfoDetailsContent>
-    </Popover>
-  )
-}
-
-function InfoDetailsContent({
+export function InfoDetailsContent({
   children,
   title,
 }: {
@@ -238,39 +253,40 @@ export function InfoCopyValue({
   )
 }
 
-export function InfoFooter({
-  actions,
+export function InfoRailGroup({
   children,
+  title,
 }: {
-  actions?: React.ReactNode
   children: React.ReactNode
+  title: string
 }) {
   return (
-    <footer className="mt-8 flex flex-wrap items-center gap-x-5 gap-y-3 border-t pt-4 text-xs text-muted-foreground">
+    <section className="mt-6">
+      <h3 className="type-technical-label mb-1 text-muted-foreground/80">
+        {title}
+      </h3>
       {children}
-      {actions ? (
-        <div className="ml-auto flex flex-wrap items-center gap-2">
-          {actions}
-        </div>
-      ) : null}
-    </footer>
+    </section>
   )
 }
 
-export function InfoFooterItem({
+export function InfoRailCard({
   children,
-  label,
+  icon,
+  title,
 }: {
   children: React.ReactNode
-  label: string
+  icon: React.ReactNode
+  title: string
 }) {
   return (
-    <span className="flex min-w-0 items-center gap-1.5">
-      {label}
-      <span className="flex min-w-0 items-center font-medium text-foreground">
-        {children}
-      </span>
-    </span>
+    <section className="mt-6 border bg-background/45">
+      <h3 className="flex items-center gap-2 border-b px-3 py-2.5 text-[0.8125rem] font-semibold [&_svg]:size-3.5 [&_svg]:text-muted-foreground">
+        {icon}
+        {title}
+      </h3>
+      <dl className="px-3">{children}</dl>
+    </section>
   )
 }
 

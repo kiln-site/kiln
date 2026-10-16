@@ -3,7 +3,7 @@ import { useQuery } from "@tanstack/react-query"
 import { Link } from "@tanstack/react-router"
 import { ChevronRight } from "lucide-react"
 
-import { InfoTiles } from "@/components/info-page"
+import { InfoRailGroup } from "@/components/info-page"
 import {
   canAccessInfrastructureDestination,
   infrastructureDestinations,
@@ -35,7 +35,7 @@ export function RelayWorkloads({
     return null
   }
   return (
-    <InfoTiles className="mt-3 sm:grid-cols-[repeat(auto-fit,minmax(12rem,1fr))]">
+    <InfoRailGroup title="Runs">
       {access.servers ? (
         <ServerCount relayId={relayId} search={routeId} />
       ) : null}
@@ -43,7 +43,7 @@ export function RelayWorkloads({
         <DatabaseCount relayId={relayId} search={routeId} />
       ) : null}
       {access.apps ? <AppCount relayId={relayId} search={routeId} /> : null}
-    </InfoTiles>
+    </InfoRailGroup>
   )
 }
 
@@ -128,10 +128,12 @@ function WorkloadLink({
     <Link
       to={to}
       search={{ search }}
-      className="group flex min-w-0 items-center gap-3 bg-card px-4 py-3 transition-colors outline-none hover:bg-muted/60 focus-visible:bg-muted/60 focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-inset"
+      className="group -mx-2 flex min-w-0 items-center gap-2.5 px-2 py-1.5 text-[0.8125rem] transition-colors outline-none hover:bg-muted/60 focus-visible:bg-muted/60 focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-inset"
     >
-      <span className="text-lg font-semibold tabular-nums">{count ?? "—"}</span>
-      <span className="min-w-0 flex-1 truncate text-[0.8125rem] text-muted-foreground transition-colors group-hover:text-foreground">
+      <span className="w-6 shrink-0 font-semibold tabular-nums">
+        {count ?? "—"}
+      </span>
+      <span className="min-w-0 flex-1 truncate text-muted-foreground transition-colors group-hover:text-foreground">
         {count === 1 ? noun.one : noun.other}
       </span>
       {detail ? (
@@ -139,7 +141,7 @@ function WorkloadLink({
           {detail}
         </span>
       ) : null}
-      <ChevronRight className="size-4 shrink-0 text-muted-foreground/70 transition-transform group-hover:translate-x-0.5" />
+      <ChevronRight className="size-3.5 shrink-0 text-muted-foreground/70 transition-transform group-hover:translate-x-0.5" />
     </Link>
   )
 }

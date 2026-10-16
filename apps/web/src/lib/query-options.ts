@@ -54,7 +54,7 @@ import {
   getRelayFileEntry,
   getRelayFile,
   getRelayFileActivity,
-  getRelayNodeReadings,
+  getRelayMemoryReadings,
   getRelaySnapshot,
   getRelayTree,
 } from "@/server/relay"
@@ -68,7 +68,11 @@ import {
 import { getTailscaleStacks } from "@/server/tailscale"
 import { getAuthState } from "@/server/auth"
 import type { ReleaseHistoryCursor } from "@/effect/kiln-release-feed"
-import { getReleaseHistory, getUpdateOverview } from "@/server/updates"
+import {
+  getRelayUpdate,
+  getReleaseHistory,
+  getUpdateOverview,
+} from "@/server/updates"
 import { getScheduleOptions, getSchedules } from "@/server/schedules"
 import type { RelayFleetSnapshot } from "@/lib/relay-fleet"
 import { withInventoryRelayStatus } from "@/lib/inventory-relay-status"
@@ -174,7 +178,7 @@ export const queryKeys = {
       ["relay", relayId, "instances", instanceId, "recipe"] as const,
     snapshot: ["relay", "snapshot"] as const,
     instances: ["relay", "instances"] as const,
-    nodeReadings: ["relay", "node-readings"] as const,
+    memory: ["relay", "memory"] as const,
     resources: (relayId: string) => ["relay", "resources", relayId] as const,
     webRoutes: (relayId: string, instanceId: string) =>
       ["web-routes", relayId, instanceId] as const,
@@ -193,6 +197,8 @@ export const queryKeys = {
   tailscaleStacks: ["tailscale", "stacks"] as const,
   updates: ["updates", "overview"] as const,
   releaseHistory: ["updates", "release-history"] as const,
+  relayUpdate: (relayId: string, version: string) =>
+    ["updates", "relay", relayId, version] as const,
   instanceFavorites: ["instance-favorites"] as const,
   notifications: ["notifications"] as const,
   uiPreferences: ["ui", "preferences"] as const,
@@ -362,14 +368,10 @@ export function relayConnectionQueryOptions(queryClient: QueryClient) {
 }
 
 /** Polled only while a Relay memory cell is mounted and the tab is visible. */
-export type RelayNodeReading = Awaited<
-  ReturnType<typeof getRelayNodeReadings>
->[number]
-
-export function relayNodeReadingsQueryOptions() {
+export function relayMemoryReadingsQueryOptions() {
   return queryOptions({
-    queryKey: queryKeys.relay.nodeReadings,
-    queryFn: ({ signal }) => getRelayNodeReadings({ signal }),
+    queryKey: queryKeys.relay.memory,
+    queryFn: ({ signal }) => getRelayMemoryReadings({ signal }),
     refetchInterval: connectedRelayPollDelayMs,
     refetchIntervalInBackground: false,
     refetchOnWindowFocus: false,
@@ -699,6 +701,17 @@ export function updateOverviewQueryOptions() {
     queryKey: queryKeys.updates,
     queryFn: () => getUpdateOverview(),
     staleTime: 30_000,
+  })
+}
+
+// Keyed by the version the Relay runs, so an update clears it.
+export function relayUpdateQueryOptions(relayId: string, version: string) {
+  return queryOptions({
+    queryKey: queryKeys.relayUpdate(relayId, version),
+    queryFn: ({ signal }) => getRelayUpdate({ data: { relayId }, signal }),
+    refetchOnWindowFocus: false,
+    retry: false,
+    staleTime: 10 * 60_000,
   })
 }
 

@@ -115,10 +115,48 @@ export const InstanceFavoriteMenuItem = React.memo(
 )
 
 export const InstanceFavoriteButton = React.memo(
-  function InstanceFavoriteButton(favorite: InstanceFavorite) {
+  function InstanceFavoriteButton({
+    compact = false,
+    id,
+    kind,
+    relayId,
+  }: InstanceFavorite & {
+    // Just the star, with the label in a tooltip.
+    compact?: boolean
+  }) {
+    // Built from its fields: other props, like the dev tools' source tags,
+    // must not reach the favorites schema.
+    const favorite = React.useMemo(
+      () => ({ id, kind, relayId }),
+      [id, kind, relayId]
+    )
     const starred = useIsInstanceFavorite(favorite)
     const toggle = useToggleInstanceFavorite()
 
+    if (compact) {
+      const label = starred ? "Remove from favorites" : "Add to favorites"
+      return (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              type="button"
+              size="icon-sm"
+              variant="outline"
+              aria-label={label}
+              aria-pressed={starred}
+              onClick={() => toggle.mutate({ favorite, starred: !starred })}
+            >
+              <Star
+                className={cn(starred && "fill-amber-400 text-amber-400")}
+              />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent side="bottom" sideOffset={6}>
+            {label}
+          </TooltipContent>
+        </Tooltip>
+      )
+    }
     return (
       <Button
         type="button"

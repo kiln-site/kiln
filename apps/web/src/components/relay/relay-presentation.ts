@@ -1,6 +1,8 @@
 import * as React from "react"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 
+import type { RelayProxyDiagnostics } from "@workspace/contracts"
+
 import {
   relayStatusPresentation,
   type InstanceStatusPresentation,
@@ -75,4 +77,28 @@ export function useRelayLiveStatus(relay: {
       updating,
     }
   }, [isPending, relay.enabled, relay.lastError, state])
+}
+
+export const proxyModeLabels = {
+  coolify: "Coolify Traefik",
+  hearth: "Hearth proxy",
+  none: "None / existing Traefik",
+  traefik: "Bundled Traefik",
+} as const
+
+export function proxyStatusPresentation(
+  diagnostics: Pick<RelayProxyDiagnostics, "status">
+): InstanceStatusPresentation {
+  switch (diagnostics.status) {
+    case "ready":
+      return { label: "Ready", tone: "success" }
+    case "starting":
+      return { label: "Starting", pulse: true, tone: "info" }
+    case "blocked":
+      return { label: "Blocked", tone: "danger" }
+    case "hearth":
+      return { label: "Through Hearth", tone: "info" }
+    case "disabled":
+      return { label: "Disabled", tone: "neutral" }
+  }
 }

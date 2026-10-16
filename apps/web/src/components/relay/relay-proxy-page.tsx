@@ -23,8 +23,11 @@ import { cn } from "@workspace/ui/lib/utils"
 
 import { CodeDocumentPanel } from "@/components/code-document-panel"
 import { InfoCard, InfoCardHeader, MetaRow } from "@/components/info-card"
-import type { InstanceStatusPresentation } from "@/components/instance-name-presentation"
-import { useRelayLiveStatus } from "@/components/relay/relay-presentation"
+import {
+  proxyModeLabels,
+  proxyStatusPresentation,
+  useRelayLiveStatus,
+} from "@/components/relay/relay-presentation"
 import { useRelayWorkspace } from "@/components/relay/relay-workspace-context"
 import { StatusIndicator } from "@/components/status-indicator"
 import { canAccessRelayPermission } from "@/lib/navigation-destinations"
@@ -47,13 +50,6 @@ const EditRelayDialog = React.lazy(async () => {
 })
 
 type ProxyDiagnostics = Awaited<ReturnType<typeof getRelayProxy>>
-
-const proxyModeLabels = {
-  coolify: "Coolify Traefik",
-  hearth: "Hearth proxy",
-  none: "None / existing Traefik",
-  traefik: "Bundled Traefik",
-} as const
 
 // How the Relay publishes web routes: its proxy settings and health, the
 // routes it serves, and the Traefik configuration it generates for them.
@@ -215,23 +211,6 @@ function RelayProxyDetails({ proxy }: { proxy: ProxyDiagnostics }) {
       ) : null}
     </>
   )
-}
-
-function proxyStatusPresentation(
-  diagnostics: ProxyDiagnostics["diagnostics"]
-): InstanceStatusPresentation {
-  switch (diagnostics.status) {
-    case "ready":
-      return { label: "Ready", tone: "success" }
-    case "starting":
-      return { label: "Starting", pulse: true, tone: "info" }
-    case "blocked":
-      return { label: "Blocked", tone: "danger" }
-    case "hearth":
-      return { label: "Through Hearth", tone: "info" }
-    case "disabled":
-      return { label: "Disabled", tone: "neutral" }
-  }
 }
 
 function RelayProxyRoutes({ relayId }: { relayId: string }) {
