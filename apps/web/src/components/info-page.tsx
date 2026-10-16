@@ -214,13 +214,16 @@ export function InfoRailGroup({
   title,
 }: {
   children: React.ReactNode
-  title: string
+  // Left out when the rows say what they are, such as a list of links.
+  title?: string
 }) {
   return (
     <section className="mt-6 first:mt-0">
-      <h3 className="type-technical-label mb-1 text-muted-foreground/80">
-        {title}
-      </h3>
+      {title ? (
+        <h3 className="type-technical-label mb-1 text-muted-foreground/80">
+          {title}
+        </h3>
+      ) : null}
       {children}
     </section>
   )
