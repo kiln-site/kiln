@@ -165,7 +165,7 @@ export function ResourceMeterStrip({
           </TooltipContent>
         </Tooltip>
         <div
-          className={`grid min-w-0 divide-x divide-border/60 px-1.5 py-2 meters-collapsed:w-[13.5rem] meters-collapsed:auto-rows-fr meters-collapsed:grid-cols-1 meters-collapsed:gap-y-1 meters-collapsed:divide-x-0 meters-collapsed:px-2.5 meters-collapsed:py-[3px] ${columns === 4 ? "w-[29rem] grid-cols-4" : "w-[22rem] grid-cols-3"}`}
+          className={`grid min-w-0 divide-x divide-border/60 px-1.5 py-2 meters-collapsed:w-[13.5rem] meters-collapsed:auto-rows-fr meters-collapsed:grid-cols-1 meters-collapsed:divide-x-0 meters-collapsed:px-0 meters-collapsed:py-px ${columns === 4 ? "w-[29rem] grid-cols-4" : "w-[22rem] grid-cols-3"}`}
         >
           {children}
         </div>
@@ -190,7 +190,7 @@ export function ResourceMeter({
     <ResourceHistoryPopover resource={resource} historyStore={historyStore}>
       <button
         type="button"
-        className={`group type-meta grid min-w-0 grid-cols-[auto_minmax(0,1fr)] content-start items-center gap-x-1.5 text-left font-mono tracking-[0.065em] outline-none first:pl-1.5 focus-visible:bg-muted/25 meters-collapsed:grid-cols-[2.25rem_minmax(0,1fr)_2.5rem] meters-collapsed:content-stretch meters-collapsed:gap-x-1.5 meters-collapsed:px-0 meters-collapsed:text-[0.6875rem] meters-collapsed:leading-[11px] meters-collapsed:first:pl-0 ${resource.id === "network" ? "px-1.5 meters-collapsed:hidden" : "px-2.5"}`}
+        className={`group type-meta grid min-w-0 grid-cols-[auto_minmax(0,1fr)] content-start items-center gap-x-1.5 text-left font-mono tracking-[0.065em] outline-none first:pl-1.5 focus-visible:bg-muted/25 meters-collapsed:grid-cols-[2.25rem_minmax(0,1fr)_2.5rem] meters-collapsed:content-stretch meters-collapsed:gap-x-1.5 meters-collapsed:px-2.5 meters-collapsed:py-0.5 meters-collapsed:text-[0.6875rem] meters-collapsed:leading-[11px] meters-collapsed:first:pl-2.5 ${resource.id === "network" ? "px-1.5 meters-collapsed:hidden" : "px-2.5"}`}
       >
         <span className="col-start-1 row-start-1 font-medium text-muted-foreground transition-colors group-hover:text-foreground">
           {resource.label}
