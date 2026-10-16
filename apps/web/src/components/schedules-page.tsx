@@ -81,6 +81,7 @@ import {
 } from "@workspace/ui/components/select"
 import { Separator } from "@workspace/ui/components/separator"
 import { showToast } from "@workspace/ui/components/sonner"
+import { Switch } from "@workspace/ui/components/switch"
 import { Textarea } from "@workspace/ui/components/textarea"
 import {
   Tooltip,
@@ -1520,6 +1521,9 @@ function ScheduleEditorDialog({
     normalizeScheduleCron(existing?.cron ?? "daily")
   )
   const [enabled, setEnabled] = React.useState(existing?.enabled ?? true)
+  const [continueOnFailure, setContinueOnFailure] = React.useState(
+    existing?.continueOnFailure ?? false
+  )
   const [selectedTargets, setSelectedTargets] = React.useState(() => {
     if (existing) return new Set(existing.targets.map(targetKey))
     const selectable = editorOptions.filter((option) => option[permissionKey])
@@ -1573,6 +1577,7 @@ function ScheduleEditorDialog({
     mutationFn: async () => {
       const data = {
         actions: completeActions,
+        continueOnFailure,
         cron,
         enabled,
         name,
@@ -1678,6 +1683,7 @@ function ScheduleEditorDialog({
           <ScheduleEditorFields
             actionSelectionValid={actionSelectionValid}
             actions={actions}
+            continueOnFailure={continueOnFailure}
             cron={cron}
             cronSummary={cronSummary}
             name={name}
@@ -1692,6 +1698,7 @@ function ScheduleEditorDialog({
             onActionMove={moveEditorAction}
             onActionRemove={removeAction}
             onActionReorder={reorderEditorAction}
+            onContinueOnFailureChange={setContinueOnFailure}
             onCronChange={setCron}
             onNameChange={setName}
             onTargetToggle={toggleTargets}
@@ -1746,6 +1753,7 @@ function ScheduleEditorDialog({
 const ScheduleEditorFields = React.memo(function ScheduleEditorFields({
   actionSelectionValid,
   actions,
+  continueOnFailure,
   cron,
   cronSummary,
   name,
@@ -1760,12 +1768,14 @@ const ScheduleEditorFields = React.memo(function ScheduleEditorFields({
   onActionMove,
   onActionRemove,
   onActionReorder,
+  onContinueOnFailureChange,
   onCronChange,
   onNameChange,
   onTargetToggle,
 }: {
   actionSelectionValid: boolean
   actions: ReadonlyArray<ScheduleActionDraft>
+  continueOnFailure: boolean
   cron: string
   cronSummary: string | null
   name: string
@@ -1780,6 +1790,7 @@ const ScheduleEditorFields = React.memo(function ScheduleEditorFields({
   onActionMove: (actionId: string, direction: -1 | 1) => void
   onActionRemove: (actionId: string) => void
   onActionReorder: (actionId: string, targetId: string) => void
+  onContinueOnFailureChange: (continueOnFailure: boolean) => void
   onCronChange: React.Dispatch<React.SetStateAction<string>>
   onNameChange: React.Dispatch<React.SetStateAction<string>>
   onTargetToggle: (keys: ReadonlyArray<string>, checked: boolean) => void
@@ -1819,15 +1830,31 @@ const ScheduleEditorFields = React.memo(function ScheduleEditorFields({
         className="grid min-h-0 grid-rows-[auto_minmax(0,1fr)]"
         contentClassName="grid min-h-0 grid-rows-[minmax(0,1fr)_auto]"
         aside={
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            onClick={onActionAdd}
-          >
-            <Plus className="size-3.5" />
-            Add Action
-          </Button>
+          <div className="flex items-center gap-3">
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <label className="type-meta flex cursor-pointer items-center gap-2 text-muted-foreground">
+                  <Switch
+                    checked={continueOnFailure}
+                    onCheckedChange={onContinueOnFailureChange}
+                  />
+                  Continue on failure
+                </label>
+              </TooltipTrigger>
+              <TooltipContent>
+                Run the remaining actions even if one fails or times out
+              </TooltipContent>
+            </Tooltip>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={onActionAdd}
+            >
+              <Plus className="size-3.5" />
+              Add Action
+            </Button>
+          </div>
         }
         title="Actions"
       >
@@ -3193,6 +3220,7 @@ function cronAliasLabel(cron: string) {
 function scheduleInput(schedule: Schedule) {
   return {
     actions: schedule.actions,
+    continueOnFailure: schedule.continueOnFailure,
     cron: schedule.cron,
     enabled: schedule.enabled,
     name: schedule.name,

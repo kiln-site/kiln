@@ -327,7 +327,9 @@ export class ScheduleManager {
             const actionStartedAt = Date.now()
             const canContinue = targetStates.some(
               (state) =>
-                state.activeKey !== null && !state.failure && !state.missing
+                state.activeKey !== null &&
+                (schedule.continueOnFailure || !state.failure) &&
+                !state.missing
             )
             if (sequenceFailure || !canContinue) {
               sequenceAttempts.push(
@@ -486,7 +488,7 @@ export class ScheduleManager {
       )
       return
     }
-    if (state.failure) {
+    if (state.failure && !schedule.continueOnFailure) {
       state.attempts.push(
         attempt({
           action,
@@ -555,18 +557,22 @@ export class ScheduleManager {
         )
       )
     )
-    if (Result.isFailure(executed)) {
-      state.failure = errorMessage(executed.failure)
-      state.error = state.failure
+    const failure = Result.isFailure(executed)
+      ? errorMessage(executed.failure)
+      : null
+    // The first failure stays the target's error when later actions continue.
+    if (failure && !state.failure) {
+      state.failure = failure
+      state.error = failure
     }
     state.attempts.push(
       attempt({
         action,
-        error: state.failure,
+        error: failure,
         scheduledAt,
         scheduleId: schedule.id,
         startedAt: actionStartedAt,
-        status: state.failure ? "failed" : "succeeded",
+        status: failure ? "failed" : "succeeded",
         target: state.target,
       })
     )

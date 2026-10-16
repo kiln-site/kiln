@@ -69,6 +69,7 @@ class ScheduleRevisionConflictError extends Data.TaggedError(
 )<{ readonly message: string }> {}
 
 interface ScheduleRow extends RowDataPacket {
+  continue_on_failure: number
   created_at: number
   created_by: string
   cron_expression: string
@@ -547,15 +548,17 @@ async function saveNewSchedule(
         Effect.gen(function* () {
           yield* transaction.execute(
             `INSERT INTO ${databaseTable("schedule")}
-               (id, name, cron_expression, timezone, enabled, revision, created_by,
-                created_at, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+               (id, name, cron_expression, timezone, enabled,
+                continue_on_failure, revision, created_by, created_at,
+                updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             [
               schedule.id,
               schedule.name,
               schedule.cron,
               schedule.timezone,
               schedule.enabled,
+              schedule.continueOnFailure === true,
               schedule.revision,
               createdBy,
               now,
@@ -583,13 +586,14 @@ async function replaceSchedule(
           const result = yield* transaction.execute(
             `UPDATE ${databaseTable("schedule")}
                 SET name = ?, cron_expression = ?, timezone = ?, enabled = ?,
-                    revision = ?, updated_at = ?
+                    continue_on_failure = ?, revision = ?, updated_at = ?
               WHERE id = ? AND revision = ? AND deleted_at IS NULL`,
             [
               schedule.name,
               schedule.cron,
               schedule.timezone,
               schedule.enabled,
+              schedule.continueOnFailure === true,
               schedule.revision,
               now,
               schedule.id,
@@ -654,8 +658,9 @@ async function loadSchedules() {
   const [scheduleRows, actionRows, targetRows, deploymentRows, runRows] =
     await Promise.all([
       databasePool.query<ScheduleRow[]>(
-        `SELECT id, name, cron_expression, timezone, enabled, revision,
-                created_by, created_at, updated_at
+        `SELECT id, name, cron_expression, timezone, enabled,
+                continue_on_failure, revision, created_by, created_at,
+                updated_at
            FROM ${databaseTable("schedule")}
           WHERE deleted_at IS NULL
           ORDER BY updated_at DESC, id DESC`
@@ -694,6 +699,7 @@ async function loadSchedules() {
       actions: (actionsBySchedule.get(row.id) ?? []).map((action) =>
         scheduleActionSchema.parse(jsonValue(action.action_config))
       ),
+      continueOnFailure: Boolean(row.continue_on_failure),
       cron: row.cron_expression,
       enabled: Boolean(row.enabled),
       id: row.id,
@@ -785,8 +791,11 @@ async function deployScheduleToRelay(
   const deployed = await Effect.runPromise(
     Effect.result(
       promiseEffect(async () => {
+        const { continueOnFailure, ...definition } = schedule
         const projection: RelayScheduleProjection = {
-          ...schedule,
+          ...definition,
+          // Older Relays reject unknown keys, so only send the option when on.
+          ...(continueOnFailure ? { continueOnFailure } : {}),
           actions: await prepareRelayScheduleActions(schedule.actions, targets),
           targets: [...targets],
         }

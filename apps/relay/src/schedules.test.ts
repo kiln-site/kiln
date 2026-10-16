@@ -1226,6 +1226,47 @@ describe("Relay schedule persistence", () => {
     })
   })
 
+  it("runs later actions after a failure when the schedule continues on failure", async () => {
+    const commands: Array<string> = []
+    const { schedules } = await manager({
+      findInstance: async () => ({}),
+      sendConsoleCommand: async (_instanceId, command) => {
+        commands.push(command)
+        if (command === "say hello") throw new Error("Command failed")
+      },
+    })
+    await schedules.apply({
+      ...projection,
+      actions: [
+        projection.actions[0],
+        waitAction(20, "milliseconds"),
+        afterWaitCommand,
+      ],
+      continueOnFailure: true,
+    })
+
+    await runNow(schedules)
+
+    await advanceUntil(
+      async () => expect((await latestRun(schedules))?.status).toBe("failed"),
+      20
+    )
+    expect(commands).toEqual(["say hello", "say after wait"])
+    expect(await latestRun(schedules)).toMatchObject({
+      sequenceAttempts: [{ actionType: "wait", status: "succeeded" }],
+      targetRuns: [
+        {
+          attempts: [
+            { error: "Command failed", status: "failed" },
+            { error: null, status: "succeeded" },
+          ],
+          error: "Command failed",
+          status: "failed",
+        },
+      ],
+    })
+  })
+
   it("keeps a successful wait-only run as a noop", async () => {
     const { schedules } = await manager({ findInstance: async () => ({}) })
     await schedules.apply({
