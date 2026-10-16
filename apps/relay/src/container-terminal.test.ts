@@ -2,6 +2,7 @@ import { createRequire } from "node:module"
 
 import {
   relayCreateDatabaseSchema,
+  type DatabaseEngine,
   type DatabaseTerminalEnd,
   type HearthDatabaseTerminalOutput,
   type RelayDatabaseTerminalAttached,
@@ -34,11 +35,14 @@ afterEach(() => {
   vi.useRealTimers()
 })
 
-async function runningDatabase(harness: RelayHarness) {
+async function runningDatabase(
+  harness: RelayHarness,
+  engine: DatabaseEngine = "postgres"
+) {
   await harness.databases.create(
     relayCreateDatabaseSchema.parse({
       databaseName: "kiln_app",
-      engine: "postgres",
+      engine,
       id: databaseId,
       name: "Main database",
       ...credentials,
@@ -323,6 +327,26 @@ describe("database terminal sessions", () => {
     expect(client?.cmd.join(" ")).not.toContain(password)
     expect(client?.env.PGPASSWORD).toBe(password)
   })
+
+  // valkey-cli reads REDISCLI_AUTH, like redis-cli; any other variable
+  // opened an unauthenticated client.
+  it.each(["redis", "valkey"] as const)(
+    "signs the %s client in with the variable it reads",
+    async (engine) => {
+      const harness = await relayHarness()
+      const database = await runningDatabase(harness, engine)
+      await attach(
+        new ContainerTerminals(harness.config),
+        alice,
+        database,
+        viewer()
+      )
+
+      const [client] = clientExecs()
+      expect(client?.cmd.join(" ")).not.toContain(password)
+      expect(client?.env.REDISCLI_AUTH).toBe(password)
+    }
+  )
 
   it("keeps running while a page is open and times out once none are", async () => {
     const harness = await relayHarness()

@@ -842,9 +842,8 @@ function databaseClient(
           username,
           "--no-auth-warning",
         ],
-        environment: [
-          `${database.engine === "redis" ? "REDISCLI_AUTH" : "VALKEYCLI_AUTH"}=${password}`,
-        ],
+        // valkey-cli reads REDISCLI_AUTH too.
+        environment: [`REDISCLI_AUTH=${password}`],
       }
   }
 }
