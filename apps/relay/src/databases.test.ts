@@ -114,6 +114,24 @@ describe("managed database credential rotation", () => {
   )
 })
 
+describe("managed database ACL files", () => {
+  it("fails a create whose ACL write Docker breaks off, leaving no one-off container", async () => {
+    const harness = await relayHarness()
+    const id = "f".repeat(40)
+    fakeDocker.streamErrors.set("redis:8", "container is being removed")
+
+    await expect(createDatabase(harness, id, "redis")).rejects.toThrow(
+      "container is being removed"
+    )
+
+    expect(
+      [...fakeDocker.containers.values()].filter(
+        (container) => container.image === "redis:8" && container.autoRemove
+      )
+    ).toEqual([])
+  })
+})
+
 describe("managed database deletion", () => {
   it("removes owned network and volume resources without a container", async () => {
     const harness = await relayHarness()

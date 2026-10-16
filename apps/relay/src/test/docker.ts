@@ -203,7 +203,8 @@ export class FakeDocker {
   readonly programFailures = new Map<string, string>()
   /**
    * Programs whose exec stream Docker breaks with an error frame (as it does
-   * for an error it hits after answering) instead of their output.
+   * for an error it hits after answering) instead of their output; for a
+   * one-off container (`run --rm -i`), its image.
    */
   readonly streamErrors = new Map<string, string>()
   /** Images whose registry cannot be reached; pulling them fails. */
@@ -838,6 +839,13 @@ export class FakeDocker {
       if (!(cause instanceof DockerFailure)) throw cause
       stderr = `${cause.message}\n`
       exitCode = 1
+    }
+    const streamError = this.streamErrors.get(container.image)
+    if (streamError !== undefined) {
+      // The stream breaks; the container is left as it was, for Relay to
+      // remove.
+      run.socket.end(frame(3, Buffer.from(streamError)))
+      return
     }
     if (stderr && !run.socket.destroyed) {
       run.socket.write(frame(2, Buffer.from(stderr)))
