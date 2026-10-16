@@ -268,8 +268,10 @@ function InfoRailRowContent({
       <span className="min-w-0 flex-1 truncate text-muted-foreground transition-colors group-hover:text-foreground">
         {children}
       </span>
+      {/* Inset as far as an action's padding, so details and actions in a
+          group end in line. */}
       {detail ? (
-        <span className="shrink-0 text-xs text-muted-foreground/80">
+        <span className="shrink-0 pr-2 text-xs text-muted-foreground/80">
           {detail}
         </span>
       ) : null}
