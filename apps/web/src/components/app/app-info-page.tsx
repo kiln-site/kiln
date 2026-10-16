@@ -32,6 +32,18 @@ import { appConfigQueryOptions } from "@/lib/query-options"
 // containers. An app opens here.
 export function AppInfoPage() {
   const { app, routeId } = useAppWorkspace()
+  // Another app is a fresh page, so an open dialog's draft and the selected
+  // container can't carry over to it.
+  return (
+    <AppInfoContent
+      key={`${app.relayId}:${app.id}`}
+      app={app}
+      routeId={routeId}
+    />
+  )
+}
+
+function AppInfoContent({ app, routeId }: { app: App; routeId: string }) {
   const config = useQuery(appConfigQueryOptions(app.relayId, app.id))
   const [selection] = React.useState(createAppContainerSelection)
   const canManage =

@@ -1,23 +1,35 @@
 import * as React from "react"
 
-// Which service's container the Info rail's Container card shows. The card
-// pages through them, and the page's service tags, such as a route's
-// target, select one. Only the card subscribes, so selecting re-renders
-// nothing else.
+// Which container the Info rail's Container card shows. The card pages
+// through them by ID, and the page's service tags, such as a route's
+// target, pick a service's container. Only the card subscribes, so
+// selecting re-renders nothing else.
+export interface AppContainerTarget {
+  // While a redeploy replaces a container, two share a service, so paging
+  // picks one by ID; a service tag leaves it out.
+  containerId?: string
+  service: string
+}
+
 export interface AppContainerSelection {
-  get: () => string | null
-  select: (service: string) => void
+  get: () => AppContainerTarget | null
+  select: (target: AppContainerTarget) => void
   subscribe: (listener: () => void) => () => void
 }
 
 export function createAppContainerSelection(): AppContainerSelection {
-  let selected: string | null = null
+  let selected: AppContainerTarget | null = null
   const listeners = new Set<() => void>()
   return {
     get: () => selected,
-    select: (service) => {
-      if (service === selected) return
-      selected = service
+    select: (target) => {
+      if (
+        selected?.service === target.service &&
+        selected.containerId === target.containerId
+      ) {
+        return
+      }
+      selected = target
       for (const listener of listeners) listener()
     },
     subscribe: (listener) => {

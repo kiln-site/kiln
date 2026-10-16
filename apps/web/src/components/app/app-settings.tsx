@@ -654,7 +654,7 @@ function ServiceTag({ app, service }: { app: App; service: string }) {
       type="button"
       title={`${service}: ${state}. Show its container.`}
       className="inline-flex items-center gap-1.5 border bg-muted/30 px-1.5 py-0.5 font-mono text-[11px] text-foreground transition-colors outline-none hover:border-primary/60 hover:text-primary focus-visible:border-primary"
-      onClick={() => selection?.select(service)}
+      onClick={() => selection?.select({ service })}
     >
       <span
         aria-hidden="true"

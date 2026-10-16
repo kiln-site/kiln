@@ -41,13 +41,15 @@ export function appServices(app: Pick<App, "containers">): Array<string> {
   return [...new Set(appContainers(app).map((container) => container.service))]
 }
 
-// By service, so they keep their order across deployments.
+// By service, so they keep their order across deployments, and newest
+// first within one, so a replacement leads while the old one winds down.
 export function appContainers(
   app: Pick<App, "containers">
 ): Array<App["containers"][number]> {
   return [...app.containers].sort(
     (left, right) =>
       left.service.localeCompare(right.service) ||
+      (right.createdAt ?? "").localeCompare(left.createdAt ?? "") ||
       left.name.localeCompare(right.name)
   )
 }

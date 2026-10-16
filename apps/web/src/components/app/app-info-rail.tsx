@@ -4,7 +4,10 @@ import { ChevronLeft, ChevronRight, Container, Database } from "lucide-react"
 
 import { cn } from "@workspace/ui/lib/utils"
 
-import { useAppContainerSelection } from "@/components/app/app-container-selection"
+import {
+  useAppContainerSelection,
+  type AppContainerTarget,
+} from "@/components/app/app-container-selection"
 import { appContainers, type App } from "@/components/app/app-presentation"
 import {
   InfoCopyValue,
@@ -90,16 +93,12 @@ function AppContainerCard({ app }: { app: App }) {
     selection?.get ?? getNone,
     getNone
   )
-  // Follows the service rather than the position, so a redeploy keeps it.
-  const index = Math.max(
-    0,
-    containers.findIndex((container) => container.service === selected)
-  )
+  const index = selectedIndex(containers, selected)
   const container = containers[index]
   const step = (offset: number) => {
     const next =
       containers[(index + offset + containers.length) % containers.length]
-    if (next) selection?.select(next.service)
+    if (next) selection?.select({ containerId: next.id, service: next.service })
   }
 
   if (!container) {
@@ -299,10 +298,27 @@ function containerState(container: App["containers"][number]): string {
     : "Stopped"
 }
 
+// The selected container, or, once a redeploy replaces it, its service's
+// newest container, so the card stays on the same service.
+function selectedIndex(
+  containers: ReadonlyArray<App["containers"][number]>,
+  selected: AppContainerTarget | null
+): number {
+  if (!selected) return 0
+  const byId = selected.containerId
+    ? containers.findIndex((container) => container.id === selected.containerId)
+    : -1
+  if (byId !== -1) return byId
+  return Math.max(
+    0,
+    containers.findIndex((container) => container.service === selected.service)
+  )
+}
+
 function subscribeNever() {
   return () => undefined
 }
 
-function getNone(): string | null {
+function getNone(): AppContainerTarget | null {
   return null
 }
