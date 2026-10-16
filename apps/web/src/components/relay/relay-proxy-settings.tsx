@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query"
 import { Link } from "@tanstack/react-router"
-import { ArrowRight, Check, X } from "lucide-react"
+import { ArrowRight, Check, Waypoints, X } from "lucide-react"
 import type { RelayProxyDiagnostics } from "@workspace/contracts"
 
 import { cn } from "@workspace/ui/lib/utils"
@@ -48,6 +48,7 @@ export function RelayProxySettings({
   if (!proxy || !connected) {
     return (
       <InfoSection
+        icon={<Waypoints />}
         title="Proxy"
         action={<RelayConfigureButton relay={relay} />}
       >
@@ -68,6 +69,7 @@ export function RelayProxySettings({
   const bundled = settings.mode === "traefik"
   return (
     <InfoSection
+      icon={<Waypoints />}
       title="Proxy"
       status={<StatusIndicator status={proxyStatusPresentation(diagnostics)} />}
       action={<RelayConfigureButton relay={relay} />}

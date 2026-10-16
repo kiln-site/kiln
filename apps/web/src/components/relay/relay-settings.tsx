@@ -1,7 +1,7 @@
 import * as React from "react"
 import { useQuery } from "@tanstack/react-query"
 import { Link } from "@tanstack/react-router"
-import { Database, Settings2 } from "lucide-react"
+import { Database, RadioTower, Settings2 } from "lucide-react"
 
 import { Button } from "@workspace/ui/components/button"
 
@@ -76,6 +76,7 @@ export function RelayGeneralSettings({
 }) {
   return (
     <InfoSection
+      icon={<RadioTower />}
       title="Relay"
       action={
         <>

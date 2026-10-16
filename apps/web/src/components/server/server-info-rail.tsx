@@ -1,6 +1,14 @@
 import * as React from "react"
 import { useQuery } from "@tanstack/react-query"
-import { Activity, Archive, Box, RadioTower, Users } from "lucide-react"
+import {
+  Activity,
+  Archive,
+  Check,
+  Container,
+  Copy,
+  RadioTower,
+  Users,
+} from "lucide-react"
 
 import { cn } from "@workspace/ui/lib/utils"
 
@@ -10,7 +18,9 @@ import {
   InfoRailCard,
   InfoRailGroup,
   InfoRailLink,
+  InfoRailRow,
 } from "@/components/info-page"
+import { useCopyFeedback } from "@/components/workspace-header"
 import { formatBytes } from "@/lib/format-bytes"
 import {
   canAccessActivity,
@@ -49,7 +59,8 @@ export function ServerInfoRail({
   )
 }
 
-// Links to the Relay for those who manage it; others see just its name.
+// The Relay the server runs on, with its ID to copy. It opens the Relay for
+// those who manage it; others see just its name.
 function ServerRelayLink({
   node,
   relayId,
@@ -67,23 +78,48 @@ function ServerRelayLink({
     [relayId]
   )
   const { data } = useQuery({ ...relaysQueryOptions(), select })
+  const copyId = <CopyRelayIdButton relayId={relayId} />
   if (!data) {
     return (
-      <dl>
-        <InfoFact label="Relay">
-          <span className="truncate">{node.name}</span>
-        </InfoFact>
-      </dl>
+      <InfoRailRow action={copyId} leading={<RadioTower />}>
+        {node.name}
+      </InfoRailRow>
     )
   }
   return (
     <InfoRailLink
       to="/relay/$relayId/info"
       params={{ relayId: data.routeId }}
+      action={copyId}
       leading={<RadioTower />}
     >
       {data.name}
     </InfoRailLink>
+  )
+}
+
+function CopyRelayIdButton({ relayId }: { relayId: string }) {
+  const { copied, copy } = useCopyFeedback(relayId)
+  return (
+    <button
+      type="button"
+      aria-label={`Copy Relay ID ${relayId}`}
+      title={relayId}
+      className={cn(
+        "flex items-center gap-1.5 text-xs transition-colors outline-none focus-visible:text-primary",
+        copied
+          ? "text-emerald-400"
+          : "text-muted-foreground/80 hover:text-primary"
+      )}
+      onClick={() => void copy()}
+    >
+      {copied ? "Copied" : "Copy ID"}
+      {copied ? (
+        <Check className="size-3 shrink-0" />
+      ) : (
+        <Copy className="size-3 shrink-0 opacity-70" />
+      )}
+    </button>
   )
 }
 
@@ -208,7 +244,7 @@ function ServerContainerCard({
   instance: InstanceSettingsInstance
 }) {
   return (
-    <InfoRailCard icon={<Box />} title="Container">
+    <InfoRailCard icon={<Container />} title="Container">
       <InfoFact label="Name">
         <InfoCopyValue label="container name" value={instance.service} />
       </InfoFact>

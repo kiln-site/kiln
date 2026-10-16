@@ -4,16 +4,17 @@ import { Link } from "@tanstack/react-router"
 import { Effect } from "effect"
 import {
   ArrowRight,
+  Cable,
   Check,
   Copy,
   FileCode2,
   LoaderCircle,
   Pencil,
+  Server,
+  ToyBrick,
+  TriangleAlert,
 } from "lucide-react"
-import {
-  MAXIMUM_INSTANCE_NAME_LENGTH,
-  type RelayInstancePortProtocol,
-} from "@workspace/contracts"
+import { MAXIMUM_INSTANCE_NAME_LENGTH } from "@workspace/contracts"
 
 import { Button } from "@workspace/ui/components/button"
 import {
@@ -30,10 +31,7 @@ import { showToast } from "@workspace/ui/components/sonner"
 import { CodeDocumentPanel } from "@/components/code-document-panel"
 import {
   InfoCopyValue,
-  InfoDetailRow,
-  InfoDetails,
   InfoFact,
-  InfoHint,
   InfoSection,
 } from "@/components/info-page"
 import { InstanceFavoriteButton } from "@/components/instance-favorite"
@@ -61,6 +59,7 @@ export function ServerGeneralSettings({
 }) {
   return (
     <InfoSection
+      icon={<Server />}
       title="Server"
       action={
         <>
@@ -97,15 +96,18 @@ export function ServerConnectionSettings({
   canViewNetwork: boolean
   instance: InstanceSettingsInstance
 }) {
-  const address = instance.connectAddress
-  const addressError = address.startsWith("Error:") ? address : null
-  const directAddress =
+  // The raw address is the Relay's host and the game port; a configured one,
+  // such as a domain, is what the Relay advertises instead.
+  const rawAddress =
     instance.publicHost && instance.publicPort
       ? hostPortAddress(instance.publicHost, instance.publicPort)
-      : null
+      : instance.connectAddress
+  const configuredAddress =
+    instance.connectAddress !== rawAddress ? instance.connectAddress : null
 
   return (
     <InfoSection
+      icon={<Cable />}
       title="Connection"
       action={
         canViewNetwork ? (
@@ -121,51 +123,37 @@ export function ServerConnectionSettings({
         ) : null
       }
     >
-      <InfoFact label="Address">
-        {addressError ? (
-          <span
-            className="truncate font-mono text-xs text-destructive"
-            title={addressError}
-          >
-            {addressError}
-          </span>
+      <InfoFact label="Configured address">
+        {configuredAddress ? (
+          <AddressValue label="configured address" value={configuredAddress} />
         ) : (
-          <InfoCopyValue label="server address" value={address} />
+          <span className="text-muted-foreground">Not configured</span>
         )}
       </InfoFact>
-      {directAddress && directAddress !== address ? (
-        <InfoFact label="Direct">
-          <InfoCopyValue label="direct address" value={directAddress} />
-          <InfoHint label="About the direct address" title="Direct address">
-            <p>
-              The Relay’s host and the game port, without the domain. Players
-              can join here too.
-            </p>
-          </InfoHint>
-        </InfoFact>
-      ) : null}
+      <InfoFact label="Raw connect address">
+        <AddressValue label="raw connect address" value={rawAddress} />
+      </InfoFact>
+      {/* A count only; the Network page lists them. */}
       {instance.ports.length > 0 ? (
         <InfoFact label="Ports">
-          <InfoDetails
-            title="Ports"
-            trigger={
-              instance.ports.length === 1
-                ? "1 port"
-                : `${instance.ports.length} ports`
-            }
-          >
-            {instance.ports.map((port) => (
-              <InfoDetailRow
-                key={`${port.name}:${port.internalPort}:${port.protocol}`}
-                label={port.name}
-                value={`${port.externalPort} → ${port.internalPort} ${portProtocolLabel(port.protocol)}`}
-              />
-            ))}
-            <p>Public port on the Relay, then the port inside the server.</p>
-          </InfoDetails>
+          {instance.ports.length === 1
+            ? "1 port"
+            : `${instance.ports.length} ports`}
         </InfoFact>
       ) : null}
     </InfoSection>
+  )
+}
+
+// The Relay reports an address it can't work out as "Error: …".
+function AddressValue({ label, value }: { label: string; value: string }) {
+  if (!value.startsWith("Error:")) {
+    return <InfoCopyValue label={label} value={value} />
+  }
+  return (
+    <span className="truncate font-mono text-xs text-destructive" title={value}>
+      {value}
+    </span>
   )
 }
 
@@ -182,6 +170,7 @@ export function ServerBrickSettings({
   const provisioning = Boolean(instance.provisioning)
   return (
     <InfoSection
+      icon={<ToyBrick />}
       title="Brick"
       action={
         provisioning ? null : (
@@ -239,6 +228,7 @@ export function ServerProvisioningSection({
   const failed = provisioning.phase === "failed"
   return (
     <InfoSection
+      icon={failed ? <TriangleAlert /> : <LoaderCircle className="animate-spin" />}
       title="Provisioning"
       status={
         <StatusIndicator
@@ -536,10 +526,6 @@ function ServerRenameDialog({
       </DialogContent>
     </Dialog>
   )
-}
-
-function portProtocolLabel(protocol: RelayInstancePortProtocol): string {
-  return protocol === "both" ? "TCP/UDP" : protocol.toUpperCase()
 }
 
 function provisioningPhaseLabel(phase: string): string {
