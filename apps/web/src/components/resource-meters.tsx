@@ -79,18 +79,25 @@ export type ResourceId = keyof typeof RESOURCE_STYLES
 const metersCollapsedStorageKey = "kiln:resource-meters-collapsed:v1"
 const metersCollapsedChangedEvent = "kiln:resource-meters-collapsed:changed"
 
+// The choice for this page, read from storage once. Storage only keeps it
+// across visits, so the toggle still works when storage is unavailable.
+let metersCollapsed: boolean | undefined
+
 function readMetersCollapsed(): boolean {
-  return Result.getOrElse(
+  metersCollapsed ??= Result.getOrElse(
     Result.try(
       () => window.localStorage.getItem(metersCollapsedStorageKey) === "true"
     ),
     () => false
   )
+  return metersCollapsed
 }
 
 function subscribeMetersCollapsed(listener: () => void): () => void {
   const onStorage = (event: StorageEvent) => {
-    if (event.key === metersCollapsedStorageKey) listener()
+    if (event.key !== metersCollapsedStorageKey) return
+    metersCollapsed = event.newValue === "true"
+    listener()
   }
   window.addEventListener(metersCollapsedChangedEvent, listener)
   window.addEventListener("storage", onStorage)
@@ -101,12 +108,13 @@ function subscribeMetersCollapsed(listener: () => void): () => void {
 }
 
 function setMetersCollapsed(collapsed: boolean) {
+  metersCollapsed = collapsed
   Result.try(() => {
     if (collapsed)
       window.localStorage.setItem(metersCollapsedStorageKey, "true")
     else window.localStorage.removeItem(metersCollapsedStorageKey)
-    window.dispatchEvent(new Event(metersCollapsedChangedEvent))
   })
+  window.dispatchEvent(new Event(metersCollapsedChangedEvent))
 }
 
 // A workspace header's meters, a toggle, and uptime, each in its own card.
@@ -165,7 +173,7 @@ export function ResourceMeterStrip({
           </TooltipContent>
         </Tooltip>
         <div
-          className={`grid min-w-0 divide-x divide-border/60 px-1.5 py-2 meters-collapsed:w-[13.5rem] meters-collapsed:auto-rows-fr meters-collapsed:grid-cols-1 meters-collapsed:divide-x-0 meters-collapsed:px-0 meters-collapsed:py-px ${columns === 4 ? "w-[29rem] grid-cols-4" : "w-[22rem] grid-cols-3"}`}
+          className={`grid min-w-0 divide-x divide-border/60 px-1.5 py-2 meters-collapsed:w-[13.5rem] meters-collapsed:auto-rows-fr meters-collapsed:grid-cols-[auto_minmax(0,1fr)_minmax(2.5rem,auto)] meters-collapsed:divide-x-0 meters-collapsed:px-0 meters-collapsed:py-px ${columns === 4 ? "w-[29rem] grid-cols-4" : "w-[22rem] grid-cols-3"}`}
         >
           {children}
         </div>
@@ -190,7 +198,7 @@ export function ResourceMeter({
     <ResourceHistoryPopover resource={resource} historyStore={historyStore}>
       <button
         type="button"
-        className={`group type-meta grid min-w-0 grid-cols-[auto_minmax(0,1fr)] content-start items-center gap-x-1.5 text-left font-mono tracking-[0.065em] outline-none first:pl-1.5 focus-visible:bg-muted/25 meters-collapsed:grid-cols-[2.25rem_minmax(0,1fr)_2.5rem] meters-collapsed:content-stretch meters-collapsed:gap-x-1.5 meters-collapsed:px-2.5 meters-collapsed:py-0.5 meters-collapsed:text-[0.6875rem] meters-collapsed:leading-[11px] meters-collapsed:first:pl-2.5 ${resource.id === "network" ? "px-1.5 meters-collapsed:hidden" : "px-2.5"}`}
+        className={`group type-meta grid min-w-0 grid-cols-[auto_minmax(0,1fr)] content-start items-center gap-x-1.5 text-left font-mono tracking-[0.065em] outline-none first:pl-1.5 focus-visible:bg-muted/25 meters-collapsed:col-span-full meters-collapsed:grid-cols-subgrid meters-collapsed:content-stretch meters-collapsed:gap-x-1.5 meters-collapsed:px-2.5 meters-collapsed:py-0.5 meters-collapsed:text-[0.6875rem] meters-collapsed:leading-[11px] meters-collapsed:first:pl-2.5 ${resource.id === "network" ? "px-1.5 meters-collapsed:hidden" : "px-2.5"}`}
       >
         <span className="col-start-1 row-start-1 font-medium text-muted-foreground transition-colors group-hover:text-foreground">
           {resource.label}
@@ -203,7 +211,7 @@ export function ResourceMeter({
           />
         ) : (
           <span
-            className={`col-start-2 row-start-1 min-w-0 justify-self-end truncate font-medium tabular-nums meters-collapsed:col-start-3 ${resource.valueClassName}`}
+            className={`col-start-2 row-start-1 min-w-0 truncate text-right font-medium tabular-nums meters-collapsed:col-start-3 ${resource.valueClassName}`}
           >
             {resource.displayValue}
           </span>
@@ -291,7 +299,7 @@ function NetworkTransferValue({
   const isReceived = sampleSequence % 2 === 0
   return (
     <span
-      className={`col-start-2 row-start-1 min-w-0 justify-self-end truncate font-medium tracking-[-0.045em] tabular-nums meters-collapsed:col-start-3 ${isReceived ? "text-cyan-200/95" : "text-primary/90"}`}
+      className={`col-start-2 row-start-1 min-w-0 truncate text-right font-medium tracking-[-0.045em] tabular-nums meters-collapsed:col-start-3 ${isReceived ? "text-cyan-200/95" : "text-primary/90"}`}
       aria-label={`Download ${received}, upload ${sent}`}
     >
       {isReceived ? "↓" : "↑"} {isReceived ? received : sent}
@@ -579,22 +587,34 @@ function ResourceHistoryPopover({
   children: React.ReactElement
 }) {
   const triggerRef = React.useRef<HTMLAnchorElement>(null)
+  const [open, setOpen] = React.useState(false)
   const [sideOffset, setSideOffset] = React.useState(8)
 
   // Opens below the whole meters card rather than the hovered meter, so a
-  // stacked card's history doesn't cover the rows under it.
-  function anchorToCard(open: boolean) {
+  // stacked card's history doesn't cover the rows under it. The card
+  // resizes when it collapses or expands, which moves the meter in it.
+  React.useLayoutEffect(() => {
     const trigger = triggerRef.current
     const card = trigger?.closest("[data-resource-meters]")
     if (!open || !trigger || !card) return
-    setSideOffset(
-      card.getBoundingClientRect().bottom -
-        trigger.getBoundingClientRect().bottom
-    )
-  }
+    const anchorToCard = () =>
+      setSideOffset(
+        card.getBoundingClientRect().bottom -
+          trigger.getBoundingClientRect().bottom
+      )
+    anchorToCard()
+    const observer = new ResizeObserver(anchorToCard)
+    observer.observe(card)
+    return () => observer.disconnect()
+  }, [open])
 
   return (
-    <HoverCard openDelay={160} closeDelay={100} onOpenChange={anchorToCard}>
+    <HoverCard
+      open={open}
+      openDelay={160}
+      closeDelay={100}
+      onOpenChange={setOpen}
+    >
       <HoverCardTrigger ref={triggerRef} asChild>
         {children}
       </HoverCardTrigger>
