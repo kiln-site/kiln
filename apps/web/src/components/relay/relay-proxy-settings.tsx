@@ -49,12 +49,8 @@ export function RelayProxySettings({ relay }: { relay: RelayDirectoryEntry }) {
   return (
     <InfoSection
       title="Proxy"
-      action={
-        <>
-          <StatusIndicator status={proxyStatusPresentation(diagnostics)} />
-          <RelayConfigureButton relay={relay} />
-        </>
-      }
+      status={<StatusIndicator status={proxyStatusPresentation(diagnostics)} />}
+      action={<RelayConfigureButton relay={relay} />}
       notes={
         diagnostics.warnings.length > 0 ? (
           <ProxyWarnings warnings={diagnostics.warnings} />

@@ -45,18 +45,22 @@ export function InfoSection({
   action,
   children,
   notes,
+  status,
   title,
 }: {
   action?: React.ReactNode
   children: React.ReactNode
   // Below the facts, such as warnings.
   notes?: React.ReactNode
+  // Beside the title, such as a status indicator.
+  status?: React.ReactNode
   title: string
 }) {
   return (
     <section className="min-w-0 border bg-background/45">
       <header className="flex min-h-12 items-center gap-3 border-b px-4 py-2">
         <h3 className="min-w-0 truncate text-sm font-semibold">{title}</h3>
+        {status}
         {action ? (
           <div className="ml-auto flex shrink-0 items-center gap-1.5">
             {action}
