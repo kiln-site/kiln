@@ -433,14 +433,6 @@ export const appDestinations = [
     to: "/app/$appId/info",
   },
   {
-    icon: ScrollText,
-    id: "logs",
-    keywords: ["deployment", "output", "containers", "errors"],
-    label: "Logs",
-    permission: "app.logs.read",
-    to: "/app/$appId/logs",
-  },
-  {
     icon: TerminalSquare,
     id: "terminal",
     keywords: ["console", "shell", "exec", "bash"],
@@ -463,6 +455,14 @@ export const appDestinations = [
     label: "Files",
     permission: "app.files.read",
     to: "/app/$appId/files/$",
+  },
+  {
+    icon: ScrollText,
+    id: "logs",
+    keywords: ["deployment", "output", "containers", "errors"],
+    label: "Logs",
+    permission: "app.logs.read",
+    to: "/app/$appId/logs",
   },
 ] as const satisfies ReadonlyArray<AppDestination>
 
