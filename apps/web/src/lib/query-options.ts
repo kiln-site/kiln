@@ -77,6 +77,7 @@ import {
   getReleaseHistory,
   getUpdateOverview,
 } from "@/server/updates"
+import { getResourceUserCount } from "@/server/resource-access"
 import { getScheduleOptions, getSchedules } from "@/server/schedules"
 import type { RelayFleetSnapshot } from "@/lib/relay-fleet"
 import { withInventoryRelayStatus } from "@/lib/inventory-relay-status"
@@ -325,6 +326,27 @@ export function backupStorageQueryOptions() {
     queryKey: queryKeys.backups.storage,
     queryFn: () => getBackupStorage(),
     staleTime: 30_000,
+  })
+}
+
+// How many people the Access page lists for a resource, with its owner.
+// Keyed under the Access page's own queries, so access changes refresh it.
+export function resourceUserCountQueryOptions(scope: {
+  relayId: string
+  resourceId: string
+  resourceType: "database" | "instance" | "relay"
+}) {
+  return queryOptions({
+    queryKey: [
+      "resource-access",
+      scope.relayId,
+      scope.resourceType,
+      scope.resourceId,
+      "count",
+    ] as const,
+    queryFn: () => getResourceUserCount({ data: scope }),
+    retry: false,
+    staleTime: Infinity,
   })
 }
 

@@ -11,8 +11,6 @@ import {
   InfoRailGroup,
   InfoRailLink,
 } from "@/components/info-page"
-import { useRelayLiveStatus } from "@/components/relay/relay-presentation"
-import { StatusIndicator } from "@/components/status-indicator"
 import { formatBytes } from "@/lib/format-bytes"
 import {
   canAccessActivity,
@@ -22,6 +20,7 @@ import {
   accessCapabilitiesQueryOptions,
   backupUsageQueryOptions,
   relaysQueryOptions,
+  resourceUserCountQueryOptions,
 } from "@/lib/query-options"
 import { relayRouteIdentifier, type RelayDirectoryEntry } from "@/lib/relay-route"
 import type {
@@ -62,7 +61,7 @@ function ServerRelayLink({
     (relays: Array<RelayDirectoryEntry>) => {
       const relay = relays.find((candidate) => candidate.id === relayId)
       return relay
-        ? { relay, routeId: relayRouteIdentifier(relays, relay) }
+        ? { name: relay.name, routeId: relayRouteIdentifier(relays, relay) }
         : null
     },
     [relayId]
@@ -77,25 +76,13 @@ function ServerRelayLink({
       </dl>
     )
   }
-  return <RelayLink relay={data.relay} routeId={data.routeId} />
-}
-
-function RelayLink({
-  relay,
-  routeId,
-}: {
-  relay: RelayDirectoryEntry
-  routeId: string
-}) {
-  const { presentation } = useRelayLiveStatus(relay)
   return (
     <InfoRailLink
       to="/relay/$relayId/info"
-      params={{ relayId: routeId }}
+      params={{ relayId: data.routeId }}
       leading={<RadioTower />}
-      detail={<StatusIndicator status={presentation} />}
     >
-      {relay.name}
+      {data.name}
     </InfoRailLink>
   )
 }
@@ -131,8 +118,9 @@ function ServerLinks({ instance }: { instance: InstanceSettingsInstance }) {
             tab: "users",
           }}
           leading={<Users />}
+          detail={<UserCount instance={instance} />}
         >
-          Users and permissions
+          Users
         </InfoRailLink>
       ) : null}
       {access.canViewActivity ? (
@@ -159,6 +147,27 @@ function ServerLinks({ instance }: { instance: InstanceSettingsInstance }) {
         </InfoRailLink>
       ) : null}
     </>
+  )
+}
+
+// The owner and everyone invited or with access, as the Access page lists
+// them. Platform admins count only when they're one of those.
+function UserCount({ instance }: { instance: InstanceSettingsInstance }) {
+  const { data } = useQuery(
+    resourceUserCountQueryOptions({
+      relayId: instance.relayId,
+      resourceId: instance.id,
+      resourceType: "instance",
+    })
+  )
+  if (data === undefined || data === null) return null
+  return (
+    <span
+      className="tabular-nums"
+      title={data === 1 ? "1 person has access" : `${data} people have access`}
+    >
+      {data}
+    </span>
   )
 }
 

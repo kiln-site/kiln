@@ -8,8 +8,6 @@ import {
   builtinPermissionPresets,
   builtinPresetSelections,
   expandPermissionSelections,
-  permissionCatalog,
-  permissionCollections,
   permissionSelectionsSchema,
   permissionScopeTypeSchema,
   relayIdSchema,
@@ -37,6 +35,10 @@ import {
   type ResourceScope,
 } from "@/lib/resource-permissions"
 import { displayNameFromEmail } from "@/lib/display-name"
+import {
+  getResourceUserCountHandler,
+  peopleFilter,
+} from "@/server/resource-access.server"
 import {
   accessPolicyTransaction,
   lockAccessActorEffect,
@@ -904,37 +906,13 @@ export const updateResourceAccess = createServerFn({ method: "POST" })
 
 // Inheritance must be filtered before pagination. Cache the catalog's transitive
 // read selectors once per child kind; preset contents remain live SQL lookups.
-const inheritedPeopleSelectors = new Map(
-  (["instance", "database"] as const).map((scope) => {
-    const grantsRead = (selection: PermissionSelection) =>
-      expandPermissionSelections([selection], "relay").includes(`${scope}.read`)
-    return [
-      scope,
-      {
-        permissions: permissionCatalog.flatMap((entry) =>
-          accessPermissionSupported(entry.key, "relay") &&
-          grantsRead({ kind: "permission", key: entry.key })
-            ? [entry.key]
-            : []
-        ),
-        collections: permissionCollections.flatMap((entry) =>
-          entry.scopeTypes.includes("relay") &&
-          grantsRead({ kind: "collection", key: entry.key })
-            ? [entry.key]
-            : []
-        ),
-        builtins: builtinPermissionPresets.flatMap((entry) =>
-          expandPermissionSelections(
-            builtinPresetSelections(entry.key, "relay"),
-            "relay"
-          ).includes(`${scope}.read`)
-            ? [entry.key]
-            : []
-        ),
-      },
-    ] as const
-  })
-)
+// How many people the Access page lists for a scope, with its owner, or
+// null for those who can't read its people.
+export const getResourceUserCount = createServerFn({ method: "GET" })
+  .validator(resourceScopeSchema)
+  .handler(async ({ data }) =>
+    getResourceUserCountHandler(await requireEligibleResourceUser(), data)
+  )
 
 export const getResourceAccess = createServerFn({ method: "GET" })
   .validator(
@@ -991,39 +969,15 @@ export const getResourceAccess = createServerFn({ method: "GET" })
     )
     if (!owners.length) throw new Error("Resource not found")
     const canReadPeople = permissions.includes("access.read")
-    const inheritedSelectors =
-      data.resourceType === "relay"
-        ? undefined
-        : inheritedPeopleSelectors.get(data.resourceType)
-    const readSelection = (alias: string) =>
-      `((${alias}.selection_kind = 'permission' AND ${alias}.selection_key IN (?)) OR (${alias}.selection_kind = 'collection' AND ${alias}.selection_key IN (?)))`
-    const inheritedFilter = inheritedSelectors
-      ? ` OR (g.resource_type = 'relay' AND g.resource_id = g.relay_id AND g.state = 'active' AND (
-          EXISTS (SELECT 1 FROM ${databaseTable("access_selection")} s WHERE s.access_id = g.id AND ${readSelection("s")})
-          OR EXISTS (SELECT 1 FROM ${databaseTable("access_preset")} a
-            JOIN ${databaseTable("permission_preset")} p ON p.id = a.preset_id AND p.relay_id = g.relay_id AND p.resource_type = g.resource_type AND p.resource_id = g.resource_id
-            JOIN ${databaseTable("preset_selection")} s ON s.preset_id = p.id
-            WHERE a.access_id = g.id AND ${readSelection("s")})
-          OR EXISTS (SELECT 1 FROM ${databaseTable("access_preset")} a WHERE a.access_id = g.id AND a.builtin_key IN (?))
-        ))`
-      : ""
     const peopleSearch = data.search
       ? `%${data.search.replace(/[\\%_]/gu, "\\$&")}%`
       : null
+    const scopePeople = peopleFilter(data)
     const [people] = canReadPeople
       ? await databasePool.query<Array<GrantRow>>(
-          `SELECT g.*, u.email, u.name FROM ${databaseTable("access_grant")} g JOIN ${databaseTable("user")} u ON u.id = g.user_id WHERE g.relay_id = ? AND ((g.resource_type = ? AND g.resource_id = ?)${inheritedFilter}) AND g.state <> 'revoked'${peopleSearch ? " AND (u.email LIKE ? OR u.name LIKE ?)" : ""} ORDER BY g.created_at, g.id LIMIT 101 OFFSET ?`,
+          `SELECT g.*, u.email, u.name FROM ${databaseTable("access_grant")} g JOIN ${databaseTable("user")} u ON u.id = g.user_id WHERE ${scopePeople.sql}${peopleSearch ? " AND (u.email LIKE ? OR u.name LIKE ?)" : ""} ORDER BY g.created_at, g.id LIMIT 101 OFFSET ?`,
           [
-            ...scopeValues(data),
-            ...(inheritedSelectors
-              ? [
-                  inheritedSelectors.permissions,
-                  inheritedSelectors.collections,
-                  inheritedSelectors.permissions,
-                  inheritedSelectors.collections,
-                  inheritedSelectors.builtins,
-                ]
-              : []),
+            ...scopePeople.values,
             ...(peopleSearch ? [peopleSearch, peopleSearch] : []),
             data.offset,
           ]
