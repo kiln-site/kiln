@@ -252,8 +252,6 @@ export class FakeDocker {
    * or null for an anonymous pull, by the image's full reference.
    */
   readonly pullCredentials = new Map<string, unknown>()
-  /** The platform each pull asked for, or null, by the image's reference. */
-  readonly pullPlatforms = new Map<string, string | null>()
   /**
    * Images whose process exits as soon as it starts. Under a restart policy
    * Docker keeps restarting them, reporting them running and restarting.
@@ -317,7 +315,6 @@ export class FakeDocker {
     this.unreachableImages.clear()
     this.pullOutput.clear()
     this.pullCredentials.clear()
-    this.pullPlatforms.clear()
     this.crashingImages.clear()
     this.programFailures.clear()
     this.streamErrors.clear()
@@ -1521,10 +1518,6 @@ export class FakeDocker {
       const reference = tag.includes(":")
         ? `${fromImage}@${tag}`
         : `${fromImage}:${tag}`
-      this.pullPlatforms.set(
-        normalizedImage(reference),
-        url.searchParams.get("platform")
-      )
       return this.#pullFromApi(reference, headers["x-registry-auth"])
     }
     if (method === "GET" && path === "/images/json") {
