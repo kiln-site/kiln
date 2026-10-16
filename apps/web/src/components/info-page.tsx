@@ -1,7 +1,6 @@
 import * as React from "react"
-import { Check, Copy, LoaderCircle, Pencil } from "lucide-react"
+import { Check, Copy } from "lucide-react"
 
-import { Button } from "@workspace/ui/components/button"
 import {
   Popover,
   PopoverContent,
@@ -16,9 +15,9 @@ import { cn } from "@workspace/ui/lib/utils"
 
 import { useCopyFeedback } from "@/components/workspace-header"
 
-// Building blocks for Info pages: settings sections in the main column, each
-// edited in place, and a rail on the right that sums up what the resource is.
-// Rarely needed values sit behind popovers.
+// Building blocks for Info pages: sections of facts in the main column and a
+// rail on the right that sums up what the resource is. Rarely needed values
+// sit behind popovers.
 
 export function InfoPage({
   children,
@@ -41,110 +40,45 @@ export function InfoPage({
   )
 }
 
-export interface InfoSectionForm {
-  error: string | null
-  onCancel: () => void
-  onSubmit: (form: FormData) => void
-  pending: boolean
-}
-
-// A titled group of facts. With `form` the section is being edited: its facts
-// hold inputs, and it saves or cancels as a whole.
+// A titled group of facts, with its actions in the header.
 export function InfoSection({
   action,
   children,
-  form,
   notes,
   title,
 }: {
   action?: React.ReactNode
   children: React.ReactNode
-  form?: InfoSectionForm
   // Below the facts, such as warnings.
   notes?: React.ReactNode
   title: string
 }) {
-  const header = (
-    <header className="flex min-h-12 items-center gap-3 border-b px-4 py-2">
-      <h3 className="min-w-0 truncate text-sm font-semibold">{title}</h3>
-      {action && !form ? (
-        <div className="ml-auto flex shrink-0 items-center gap-1.5">
-          {action}
-        </div>
-      ) : null}
-    </header>
-  )
-  const className = "min-w-0 border bg-background/45"
-  if (!form) {
-    return (
-      <section className={className}>
-        {header}
-        <dl className="px-4">{children}</dl>
-        {notes}
-      </section>
-    )
-  }
   return (
-    <form
-      className={className}
-      onSubmit={(event) => {
-        event.preventDefault()
-        form.onSubmit(new FormData(event.currentTarget))
-      }}
-    >
-      {header}
+    <section className="min-w-0 border bg-background/45">
+      <header className="flex min-h-12 items-center gap-3 border-b px-4 py-2">
+        <h3 className="min-w-0 truncate text-sm font-semibold">{title}</h3>
+        {action ? (
+          <div className="ml-auto flex shrink-0 items-center gap-1.5">
+            {action}
+          </div>
+        ) : null}
+      </header>
       <dl className="px-4">{children}</dl>
       {notes}
-      <footer className="flex items-center gap-2 border-t px-4 py-2.5">
-        {form.error ? (
-          <p role="status" className="min-w-0 flex-1 text-xs text-destructive">
-            {form.error}
-          </p>
-        ) : null}
-        <div className="ml-auto flex shrink-0 gap-1.5">
-          <Button
-            type="button"
-            size="sm"
-            variant="outline"
-            disabled={form.pending}
-            onClick={form.onCancel}
-          >
-            Cancel
-          </Button>
-          <Button type="submit" size="sm" disabled={form.pending}>
-            {form.pending ? <LoaderCircle className="animate-spin" /> : null}
-            Save
-          </Button>
-        </div>
-      </footer>
-    </form>
-  )
-}
-
-export function InfoEditButton({ onClick }: { onClick: () => void }) {
-  return (
-    <Button type="button" size="sm" variant="ghost" onClick={onClick}>
-      <Pencil />
-      Edit
-    </Button>
+    </section>
   )
 }
 
 export function InfoFact({
   children,
-  htmlFor,
   label,
 }: {
   children: React.ReactNode
-  // The input the fact holds while its section is edited.
-  htmlFor?: string
   label: string
 }) {
   return (
     <div className="flex min-h-10 items-center gap-3 border-b border-border/60 py-1.5 text-[0.8125rem] last:border-b-0">
-      <dt className="w-28 shrink-0 text-muted-foreground">
-        {htmlFor ? <label htmlFor={htmlFor}>{label}</label> : label}
-      </dt>
+      <dt className="w-28 shrink-0 text-muted-foreground">{label}</dt>
       <dd className="flex min-w-0 flex-1 items-center justify-end gap-1.5 text-right">
         {children}
       </dd>

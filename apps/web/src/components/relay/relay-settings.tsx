@@ -1,36 +1,29 @@
 import * as React from "react"
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import {
-  relayConnectionSettingsSchema,
-  relayNameSchema,
-} from "@workspace/contracts"
+import { useQuery } from "@tanstack/react-query"
+import { Settings2 } from "lucide-react"
 
-import { Input } from "@workspace/ui/components/input"
-import { showToast } from "@workspace/ui/components/sonner"
+import { Button } from "@workspace/ui/components/button"
 
 import {
   InfoCopyValue,
   InfoDetailRow,
   InfoDetails,
-  InfoEditButton,
   InfoFact,
   InfoSection,
 } from "@/components/info-page"
-import {
-  invalidateRelayRuntimeQueries,
-  messageFrom,
-  updateRelayCache,
-} from "@/components/relay/relay-actions"
 import { RelayVersion } from "@/components/relay/relay-version"
 import { canAccessRelayPermission } from "@/lib/navigation-destinations"
 import type { AccessPermission } from "@/lib/permissions"
 import { accessCapabilitiesQueryOptions } from "@/lib/query-options"
-import type { PersistedRelay } from "@/lib/relay-registry"
 import type { RelayDirectoryEntry } from "@/lib/relay-route"
-import { renameRelay, updateRelay } from "@/server/relays"
 
-// The Relay's settings on its Info page. Each section edits in place and
-// saves on its own.
+// Loaded when someone opens it, so the Relays page stays out of this route.
+const EditRelayDialog = React.lazy(async () => {
+  const module = await import("@/components/relays-page")
+  return { default: module.EditRelayDialog }
+})
+
+// The Relay's details on its Info page; Configure changes them.
 
 export function useRelayPermission(
   relayId: string,
@@ -49,85 +42,11 @@ export function RelayGeneralSettings({
 }: {
   relay: RelayDirectoryEntry
 }) {
-  const canEdit = useRelayPermission(relay.id, "relay.configure")
-  const [editing, setEditing] = React.useState(false)
-  const queryClient = useQueryClient()
-  const save = useMutation({
-    mutationFn: (form: FormData) => saveConnection(relay, form),
-    onSuccess: async (updated) => {
-      setEditing(false)
-      if (updated.length === 0) return
-      updateRelayCache(queryClient, updated)
-      showToast({
-        type: "success",
-        message: `${updated.at(-1)?.name ?? relay.name} updated`,
-        duration: 4_000,
-      })
-      await invalidateRelayRuntimeQueries(queryClient)
-    },
-  })
-  const form = editing
-    ? {
-        error: save.error
-          ? messageFrom(save.error, "Could not update Relay")
-          : null,
-        onCancel: () => {
-          save.reset()
-          setEditing(false)
-        },
-        onSubmit: save.mutate,
-        pending: save.isPending,
-      }
-    : undefined
-
   return (
-    <InfoSection
-      title="Relay"
-      action={
-        canEdit ? <InfoEditButton onClick={() => setEditing(true)} /> : null
-      }
-      form={form}
-    >
-      <InfoFact label="Name" htmlFor={editing ? "relay-name" : undefined}>
-        {editing ? (
-          <Input
-            id="relay-name"
-            name="name"
-            className="h-8 max-w-72"
-            defaultValue={relay.name}
-            maxLength={120}
-            required
-            autoFocus
-          />
-        ) : (
-          <span className="truncate">{relay.name}</span>
-        )}
+    <InfoSection title="Relay" action={<RelayConfigureButton relay={relay} />}>
+      <InfoFact label="Name">
+        <span className="truncate">{relay.name}</span>
       </InfoFact>
-      {editing ? (
-        <InfoFact label="Address" htmlFor="relay-hostname">
-          <Input
-            id="relay-hostname"
-            name="hostname"
-            aria-label="Hostname"
-            className="h-8 max-w-60 font-mono text-xs"
-            defaultValue={relay.hostname}
-            placeholder="relay.example.com"
-            autoCapitalize="none"
-            spellCheck={false}
-            required
-          />
-          <Input
-            name="port"
-            aria-label="Port"
-            className="h-8 w-20 font-mono text-xs"
-            defaultValue={String(relay.port)}
-            type="number"
-            min={1}
-            max={65_535}
-            required
-          />
-        </InfoFact>
-      ) : null}
       <InfoFact label="ID">
         <InfoCopyValue label="Relay ID" value={relay.id} />
       </InfoFact>
@@ -144,7 +63,7 @@ export function RelayGeneralSettings({
           <p>Set when the Relay was paired.</p>
         </InfoDetails>
       </InfoFact>
-      {relay.lastError && !editing ? (
+      {relay.lastError ? (
         <InfoFact label="Last error">
           <span
             className="truncate font-mono text-xs text-muted-foreground"
@@ -158,41 +77,33 @@ export function RelayGeneralSettings({
   )
 }
 
-// Name and address live in separate stores, so the whole form is checked
-// before either is saved. Unchanged values aren't sent.
-async function saveConnection(
-  relay: RelayDirectoryEntry,
-  form: FormData
-): Promise<Array<PersistedRelay>> {
-  const name = relayNameSchema.safeParse(form.get("name"))
-  if (!name.success) {
-    throw new Error(name.error.issues[0]?.message ?? "Enter a Relay name")
-  }
-  const connection = relayConnectionSettingsSchema.safeParse({
-    hostname: form.get("hostname"),
-    port: Number(form.get("port")),
-    useTls: relay.useTls,
-  })
-  if (!connection.success) {
-    throw new Error(
-      connection.error.issues[0]?.message ?? "Enter a valid address"
-    )
-  }
-  const updated: Array<PersistedRelay> = []
-  if (name.data !== relay.name) {
-    updated.push(
-      await renameRelay({ data: { name: name.data, relayId: relay.id } })
-    )
-  }
-  if (
-    connection.data.hostname !== relay.hostname ||
-    connection.data.port !== relay.port
-  ) {
-    updated.push(
-      await updateRelay({ data: { id: relay.id, ...connection.data } })
-    )
-  }
-  return updated
+// Opens the Relay's settings dialog: name, address, and proxy.
+export function RelayConfigureButton({
+  relay,
+}: {
+  relay: RelayDirectoryEntry
+}) {
+  const canConfigure = useRelayPermission(relay.id, "relay.configure")
+  const [open, setOpen] = React.useState(false)
+  if (!canConfigure) return null
+  return (
+    <>
+      <Button
+        type="button"
+        size="sm"
+        variant="outline"
+        onClick={() => setOpen(true)}
+      >
+        <Settings2 />
+        Configure
+      </Button>
+      {open ? (
+        <React.Suspense fallback={null}>
+          <EditRelayDialog relay={relay} open onOpenChange={setOpen} />
+        </React.Suspense>
+      ) : null}
+    </>
+  )
 }
 
 function tlsLabel(relay: RelayDirectoryEntry): string {

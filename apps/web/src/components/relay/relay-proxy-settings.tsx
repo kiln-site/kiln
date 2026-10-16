@@ -1,26 +1,10 @@
-import * as React from "react"
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
+import { useQuery } from "@tanstack/react-query"
 import { TriangleAlert } from "lucide-react"
-import {
-  relayProxyModeSchema,
-  relayProxySettingsSchema,
-  type RelayProxyDiagnostics,
-} from "@workspace/contracts"
-
-import { Input } from "@workspace/ui/components/input"
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@workspace/ui/components/select"
-import { showToast } from "@workspace/ui/components/sonner"
+import type { RelayProxyDiagnostics } from "@workspace/contracts"
 
 import {
   InfoDetailRow,
   InfoDetails,
-  InfoEditButton,
   InfoFact,
   InfoSection,
 } from "@/components/info-page"
@@ -30,69 +14,28 @@ import {
   proxyStatusPresentation,
   useRelayLiveStatus,
 } from "@/components/relay/relay-presentation"
-import { useRelayPermission } from "@/components/relay/relay-settings"
+import { RelayConfigureButton } from "@/components/relay/relay-settings"
 import { StatusIndicator } from "@/components/status-indicator"
-import { queryKeys, relayProxyQueryOptions } from "@/lib/query-options"
+import { relayProxyQueryOptions } from "@/lib/query-options"
 import type { RelayDirectoryEntry } from "@/lib/relay-route"
-import { updateRelayProxy } from "@/server/relays"
 
-// How the Relay publishes web domains: its proxy's settings, edited in place,
-// and whether the proxy is healthy. The bundled Traefik's details only show
-// in that mode.
+// How the Relay publishes web domains: its proxy's settings and whether it's
+// healthy. The bundled Traefik's details only show in that mode.
 export function RelayProxySettings({ relay }: { relay: RelayDirectoryEntry }) {
   const { connected } = useRelayLiveStatus(relay)
-  const canEdit = useRelayPermission(relay.id, "relay.configure")
-  const proxy = useQuery({
+  const { data: proxy, error } = useQuery({
     ...relayProxyQueryOptions(relay.id),
     enabled: connected,
   })
-  const [editing, setEditing] = React.useState(false)
-  const queryClient = useQueryClient()
-  const save = useMutation({
-    mutationFn: (form: FormData) => {
-      const settings = relayProxySettingsSchema.safeParse({
-        acmeEmail: String(form.get("acmeEmail") ?? "").trim() || null,
-        mode: form.get("mode"),
-        traefikImage: form.get("traefikImage"),
-      })
-      if (!settings.success) {
-        throw new Error(
-          settings.error.issues[0]?.message ?? "Enter valid proxy settings"
-        )
-      }
-      return updateRelayProxy({ data: { relayId: relay.id, ...settings.data } })
-    },
-    onSuccess: (result) => {
-      setEditing(false)
-      queryClient.setQueryData(queryKeys.relayProxy(relay.id), result)
-      showToast({ type: "success", message: "Proxy updated", duration: 4_000 })
-    },
-  })
-  const settings = proxy.data?.settings
-  const diagnostics = proxy.data?.diagnostics
-  const form =
-    editing && settings
-      ? {
-          error: save.error
-            ? messageFrom(save.error, "Could not update the proxy")
-            : null,
-          onCancel: () => {
-            save.reset()
-            setEditing(false)
-          },
-          onSubmit: save.mutate,
-          pending: save.isPending,
-        }
-      : undefined
 
-  if (!settings || !diagnostics) {
+  if (!proxy) {
     return (
       <InfoSection title="Proxy">
         <p className="py-3 text-[0.8125rem] text-muted-foreground">
           {!relay.enabled
             ? "Resume this Relay to see its proxy."
-            : proxy.error
-              ? messageFrom(proxy.error, "Could not read the proxy settings.")
+            : error
+              ? messageFrom(error, "Could not read the proxy settings.")
               : connected
                 ? "Reading the proxy settings…"
                 : "The proxy appears once Hearth reaches the Relay."}
@@ -101,6 +44,7 @@ export function RelayProxySettings({ relay }: { relay: RelayDirectoryEntry }) {
     )
   }
 
+  const { diagnostics, settings } = proxy
   const bundled = settings.mode === "traefik"
   return (
     <InfoSection
@@ -108,73 +52,24 @@ export function RelayProxySettings({ relay }: { relay: RelayDirectoryEntry }) {
       action={
         <>
           <StatusIndicator status={proxyStatusPresentation(diagnostics)} />
-          {canEdit ? <InfoEditButton onClick={() => setEditing(true)} /> : null}
+          <RelayConfigureButton relay={relay} />
         </>
       }
-      form={form}
       notes={
-        diagnostics.warnings.length > 0 && !form ? (
+        diagnostics.warnings.length > 0 ? (
           <ProxyWarnings warnings={diagnostics.warnings} />
         ) : null
       }
     >
-      <InfoFact label="Mode" htmlFor={form ? "relay-proxy-mode" : undefined}>
-        {form ? (
-          <Select name="mode" defaultValue={settings.mode}>
-            <SelectTrigger
-              id="relay-proxy-mode"
-              className="type-control-sm h-8 w-full max-w-60"
-            >
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {relayProxyModeSchema.options.map((mode) => (
-                <SelectItem key={mode} value={mode}>
-                  {proxyModeLabels[mode]}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        ) : (
-          proxyModeLabels[settings.mode]
-        )}
-      </InfoFact>
-      {form || bundled ? (
-        <InfoFact
-          label="Traefik image"
-          htmlFor={form ? "relay-traefik-image" : undefined}
-        >
-          {form ? (
-            <Input
-              id="relay-traefik-image"
-              name="traefikImage"
-              className="h-8 max-w-60 font-mono text-xs"
-              defaultValue={settings.traefikImage}
-              placeholder="traefik:v3.6"
-              required
-            />
-          ) : (
+      <InfoFact label="Mode">{proxyModeLabels[settings.mode]}</InfoFact>
+      {bundled ? (
+        <>
+          <InfoFact label="Traefik image">
             <span className="truncate font-mono text-xs">
               {settings.traefikImage}
             </span>
-          )}
-        </InfoFact>
-      ) : null}
-      {form || bundled ? (
-        <InfoFact
-          label="Certificate email"
-          htmlFor={form ? "relay-acme-email" : undefined}
-        >
-          {form ? (
-            <Input
-              id="relay-acme-email"
-              name="acmeEmail"
-              type="email"
-              className="h-8 max-w-60 text-xs"
-              defaultValue={settings.acmeEmail ?? ""}
-              placeholder="Optional"
-            />
-          ) : (
+          </InfoFact>
+          <InfoFact label="Certificate email">
             <InfoDetails
               title="Certificate email"
               trigger={settings.acmeEmail ?? "None"}
@@ -184,11 +79,7 @@ export function RelayProxySettings({ relay }: { relay: RelayDirectoryEntry }) {
                 requests, such as ones about to expire.
               </p>
             </InfoDetails>
-          )}
-        </InfoFact>
-      ) : null}
-      {!form && bundled ? (
-        <>
+          </InfoFact>
           <InfoFact label="Traefik">
             {diagnostics.containerRunning ? "Running" : "Not running"}
           </InfoFact>
@@ -205,11 +96,9 @@ export function RelayProxySettings({ relay }: { relay: RelayDirectoryEntry }) {
           </InfoFact>
         </>
       ) : null}
-      {!form ? (
-        <InfoFact label="Ports">
-          <ProxyPorts ports={diagnostics.ports} />
-        </InfoFact>
-      ) : null}
+      <InfoFact label="Ports">
+        <ProxyPorts ports={diagnostics.ports} />
+      </InfoFact>
     </InfoSection>
   )
 }
