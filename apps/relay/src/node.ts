@@ -21,12 +21,12 @@ import { relayProcessMemory } from "./relay-memory.js"
 const connectedAt = new Date().toISOString()
 const relayVersion = relayBuildLabel()
 
-// Linux counts uptime for the whole machine, even inside a container.
-// Rounded to the minute, so samples taken moments apart agree.
-function nodeBootedAt(): string {
-  const bootedAt = Date.now() - uptime() * 1_000
-  return new Date(Math.round(bootedAt / 60_000) * 60_000).toISOString()
-}
+// When the machine booted. Linux counts uptime for the whole machine, even
+// inside a container. Worked out once: samples of it jitter, and a value that
+// changed between snapshots would send Hearth a node update each time.
+const nodeBootedAt = new Date(
+  Math.round((Date.now() - uptime() * 1_000) / 1_000) * 1_000
+).toISOString()
 
 export async function nodeSnapshot(
   config: RelayConfig,
@@ -58,7 +58,7 @@ export async function nodeSnapshot(
       ? Math.max(0, Math.floor((Date.now() - startedAtTimestamp) / 1_000))
       : null,
     startedAt,
-    bootedAt: nodeBootedAt(),
+    bootedAt: nodeBootedAt,
     cpu: {
       cores: cpus().length,
       loadPercent: Math.round((loadavg()[0] / cpus().length) * 10_000) / 100,
