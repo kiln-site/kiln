@@ -256,6 +256,54 @@ const setFilePinnedEffect = Effect.fn("files.activity.setPinned")(function* (
   if (!updated) return yield* FilePinLimitError.make({ limit: pinnedFileLimit })
 })
 
+// Pins a file that has no activity yet, so one someone unpinned stays
+// unpinned. Skips a root whose pins are full. Whether it pinned the file.
+const pinFileByDefaultEffect = Effect.fn("files.activity.pinByDefault")(
+  function* (relayId: string, instanceId: string, path: string) {
+    const database = yield* Database
+    const now = yield* Clock.currentTimeMillis
+    const [pins] = yield* database.queryRows<RowDataPacket & { count: number }>(
+      "file_activity_pin_count",
+      `SELECT COUNT(*) AS count FROM ${databaseTable("file_activity")}
+        WHERE relay_id = ? AND root_id = ? AND pinned = TRUE`,
+      [relayId, instanceId]
+    )
+    if (Number(pins?.count ?? 0) >= pinnedFileLimit) return false
+    yield* ensureActivityInstanceEffect(relayId, instanceId, now)
+    const { appId, serverId } = rootColumns(instanceId)
+    const result = yield* database.execute(
+      "file_activity_pin_by_default",
+      `INSERT IGNORE INTO ${databaseTable("file_activity")}
+         (relay_id, root_id, instance_id, app_id, path_hash, path, pinned,
+          last_viewed_at, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, TRUE, ?, ?, ?)`,
+      [
+        relayId,
+        instanceId,
+        serverId,
+        appId,
+        pathHash(path),
+        path,
+        now,
+        now,
+        now,
+      ]
+    )
+    return result.affectedRows === 1
+  }
+)
+
+export function pinFileByDefault(
+  relayId: string,
+  instanceId: string,
+  path: string
+): Promise<boolean> {
+  return runAppEffect(
+    "files.activity.pinByDefault",
+    pinFileByDefaultEffect(relayId, instanceId, path)
+  )
+}
+
 export function listFileActivity(
   relayId: string,
   instanceId: string

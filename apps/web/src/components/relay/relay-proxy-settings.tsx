@@ -22,7 +22,7 @@ import {
 import { StatusIndicator } from "@/components/status-indicator"
 import {
   relayProxyQueryOptions,
-  relayTraefikDirectoryQueryOptions,
+  relayTraefikConfigPathQueryOptions,
 } from "@/lib/query-options"
 import type { RelayDirectoryEntry } from "@/lib/relay-route"
 
@@ -116,8 +116,8 @@ export function RelayProxySettings({
   )
 }
 
-// Opens the bundled Traefik's config in the Relay's host files, where the
-// routes file sits beside it.
+// Opens the bundled Traefik's config in the Relay's host files, where it's
+// pinned by default and the routes file sits beside it.
 function TraefikConfigLink({
   relayId,
   routeId,
@@ -127,17 +127,17 @@ function TraefikConfigLink({
 }) {
   const canReadFiles = useRelayPermission(relayId, "relay.files.read")
   const { data } = useQuery({
-    ...relayTraefikDirectoryQueryOptions(relayId),
+    ...relayTraefikConfigPathQueryOptions(relayId),
     enabled: canReadFiles,
   })
-  if (!canReadFiles || !data?.directory) return null
+  if (!canReadFiles || !data?.path) return null
   return (
     <InfoFact label="Traefik config">
       <Link
         to="/relay/$relayId/files/$"
         params={{
           relayId: routeId,
-          _splat: `${data.directory.replace(/^\/+/, "")}/traefik.yaml`,
+          _splat: data.path,
         }}
         className="group flex min-w-0 items-center gap-1.5 font-mono text-xs transition-colors hover:text-primary"
       >

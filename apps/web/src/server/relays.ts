@@ -398,9 +398,10 @@ export const getRelayProxy = createServerFn({ method: "GET" })
     )
   })
 
-// Where the bundled Traefik's files are on the Relay's host, to open them in
-// its host files. Null in other proxy modes and from older Relays.
-export const getRelayTraefikDirectory = createServerFn({ method: "GET" })
+// The bundled Traefik's config on the Relay's host, as a path in its host
+// files. It's pinned there the first time, so it's at hand in Files. Null in
+// other proxy modes and from older Relays.
+export const getRelayTraefikConfigPath = createServerFn({ method: "GET" })
   .validator(relayIdSchema)
   .handler(async ({ data }) => {
     await requireRelayAdministrator(data.id, "relay.files.read")
@@ -411,12 +412,24 @@ export const getRelayTraefikDirectory = createServerFn({ method: "GET" })
     if (
       !relayConnectionFeatures(relay.id).has(relayProxyConfigurationV1Feature)
     ) {
-      return { directory: null }
+      return { path: null }
     }
     const { hostDirectory } = relayProxyConfigurationSchema.parse(
       await relayRpc(relay, "relay.proxy.config.read", {}, 15_000)
     )
-    return { directory: hostDirectory ?? null }
+    if (!hostDirectory) return { path: null }
+    // Host file paths are relative to the host's root.
+    const path = `${hostDirectory.replace(/^\/+/u, "")}/traefik.yaml`
+    const { pinFileByDefault } = await import("@/lib/file-activity")
+    if (await pinFileByDefault(relay.id, relay.id, path)) {
+      publishRealtimeChange({
+        audience: { kind: "relays", relayIds: [relay.id] },
+        scope: { instanceId: relay.id, relayId: relay.id },
+        topics: ["file-activity"],
+        type: "hearth.invalidate",
+      })
+    }
+    return { path }
   })
 
 export const updateRelayProxy = createServerFn({ method: "POST" })
