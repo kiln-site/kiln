@@ -142,10 +142,13 @@ export function InfoDetailRow({
 
 export function InfoCopyValue({
   label,
+  mono = true,
   value,
 }: {
   // Lowercase noun, for example "Relay address".
   label: string
+  // Identifiers and addresses are monospaced; names aren't.
+  mono?: boolean
   value: string
 }) {
   const { copied, copy } = useCopyFeedback(value)
@@ -156,7 +159,8 @@ export function InfoCopyValue({
           type="button"
           aria-label={`Copy ${label} ${value}`}
           className={cn(
-            "flex min-w-0 items-center gap-1.5 font-mono text-xs transition-colors",
+            "flex min-w-0 items-center gap-1.5 transition-colors",
+            mono && "font-mono text-xs",
             copied ? "text-emerald-400" : "hover:text-primary"
           )}
           onClick={() => void copy()}

@@ -109,7 +109,7 @@ function ProxyPorts({ ports }: { ports: RelayProxyDiagnostics["ports"] }) {
   const taken = ports.filter((port) => !port.available)
   const summary =
     taken.length === 0
-      ? `${ports.map((port) => port.port).join(" and ")} free`
+      ? `${ports.map((port) => port.port).join(" and ")} available`
       : taken
           .map((port) =>
             port.owner
@@ -126,7 +126,7 @@ function ProxyPorts({ ports }: { ports: RelayProxyDiagnostics["ports"] }) {
           label={`Port ${port.port}`}
           value={
             port.available
-              ? "Free"
+              ? "Available"
               : port.owner
                 ? `In use by ${port.owner}`
                 : "In use"

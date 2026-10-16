@@ -45,7 +45,7 @@ export function RelayGeneralSettings({
   return (
     <InfoSection title="Relay" action={<RelayConfigureButton relay={relay} />}>
       <InfoFact label="Name">
-        <span className="truncate">{relay.name}</span>
+        <InfoCopyValue label="Relay name" mono={false} value={relay.name} />
       </InfoFact>
       <InfoFact label="ID">
         <InfoCopyValue label="Relay ID" value={relay.id} />
