@@ -60,6 +60,11 @@ Before editing files for a substantial task:
   spans, for hot paths.
 - Avoid patching framework/library internals unless explicitly given permission.
 - Use Sonner for transient feedback and shared tooltips
+- The Relay drives Docker through its Engine API client
+  (`apps/relay/src/docker-engine.ts`). Use the API for what the daemon does,
+  run Docker's standalone binaries only for client-side work like Compose and
+  builds, and never start the `docker` CLI. See
+  [Adding Docker calls](docs/relay-runtime.md#adding-docker-calls).
 
 ## Testing
 

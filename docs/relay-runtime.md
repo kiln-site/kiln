@@ -95,8 +95,21 @@ start it as a wrapper around the plugin. (Compose still starts buildx for
 `/usr/local/bin/docker-compose` and buildx v0.37.2 at
 `/usr/local/libexec/docker/cli-plugins/docker-buildx`, both pinned by checksum
 for amd64 and arm64. `scripts/relay-docker-cli.test.mjs` fails if Relay code
-starts `docker` or the image definitions install the CLI. New Docker calls go
-through the Engine API client.
+starts `docker` or the image definitions install the CLI.
+
+### Adding Docker calls
+
+Use the Engine API client for anything the daemon does: inspecting and
+listing, creating, starting, and stopping containers, execs, logs, pulls,
+networks, and volumes. The `docker` CLI only turns its arguments into these
+requests, so calling the API directly skips a process per call and gives
+callers the daemon's own status and error.
+
+Run a standalone Docker binary only for work the client does itself, where
+the API would mean rebuilding Docker's tooling. Compose and BuildKit builds are
+those cases today: Compose has no API, and buildx handles the build context,
+`.dockerignore`, and BuildKit's session. Never start the `docker` CLI for
+either; it only wraps the binaries.
 
 ### Private registries
 
