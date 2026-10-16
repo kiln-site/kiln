@@ -429,7 +429,11 @@ describeMysql("backup authorization", () => {
             })
           )
 
-          assert.deepStrictEqual(usage, { quantityLimit: 5, quantityUsed: 2 })
+          assert.deepStrictEqual(usage, {
+            quantityAvailable: 1,
+            quantityLimit: 5,
+            quantityUsed: 2,
+          })
         })
     )
   })

@@ -1,6 +1,7 @@
 import * as React from "react"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import {
+  ArrowRight,
   Cable,
   Check,
   Copy,
@@ -13,9 +14,15 @@ import {
 } from "lucide-react"
 
 import { Button } from "@workspace/ui/components/button"
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@workspace/ui/components/tooltip"
 import { cn } from "@workspace/ui/lib/utils"
 
 import {
+  DATABASE_DUMP_ACCEPT,
   ImportDatabaseDialog,
   RotateDatabasePasswordButton,
   useDatabaseExport,
@@ -35,6 +42,7 @@ import { InstanceFavoriteButton } from "@/components/instance-favorite"
 import { RenameButton } from "@/components/rename-dialog"
 import { useCopyFeedback } from "@/components/workspace-header"
 import {
+  backupUsageQueryOptions,
   managedDatabaseCredentialQueryOptions,
   queryKeys,
 } from "@/lib/query-options"
@@ -277,18 +285,7 @@ export function DatabaseDataSection({
               Export SQL
             </Button>
           ) : null}
-          {canRestore ? (
-            <InfoSectionLink
-              to="/backups/runs"
-              search={{
-                kind: "database",
-                relay: database.relayId,
-                server: database.id,
-              }}
-            >
-              Restore Backup
-            </InfoSectionLink>
-          ) : null}
+          {canRestore ? <RestoreBackupButton database={database} /> : null}
         </>
       }
     >
@@ -299,6 +296,52 @@ export function DatabaseDataSection({
         />
       ) : null}
     </InfoSection>
+  )
+}
+
+// Opens the database's backups on the Backups page, where they're restored.
+// With none finished yet, it says so instead.
+function RestoreBackupButton({ database }: { database: ManagedDatabase }) {
+  const { data } = useQuery(
+    backupUsageQueryOptions(database.relayId, {
+      id: database.id,
+      kind: "database",
+    })
+  )
+  if (data && data.quantityAvailable > 0) {
+    return (
+      <InfoSectionLink
+        to="/backups/runs"
+        search={{
+          kind: "database",
+          relay: database.relayId,
+          server: database.id,
+        }}
+      >
+        Restore Backup
+      </InfoSectionLink>
+    )
+  }
+  const disabled = (
+    <Button type="button" size="sm" variant="outline" disabled>
+      Restore Backup
+      <ArrowRight />
+    </Button>
+  )
+  // Still counting: disabled, with nothing to explain yet.
+  if (!data) return disabled
+  return (
+    <Tooltip>
+      {/* A disabled button gets no hover, so its wrapper takes it. */}
+      <TooltipTrigger asChild>
+        <span tabIndex={0} className="inline-flex outline-none">
+          {disabled}
+        </span>
+      </TooltipTrigger>
+      <TooltipContent side="bottom" sideOffset={6}>
+        No backups found for this database
+      </TooltipContent>
+    </Tooltip>
   )
 }
 
@@ -341,11 +384,11 @@ function DatabaseImportDropZone({
       >
         <Upload className="size-5 text-muted-foreground" />
         <span className="text-[0.8125rem] font-medium">
-          Upload a .sql file to import
+          Upload a .sql or .dmp file to import
         </span>
         <span className="text-xs text-muted-foreground">700 KB Limit</span>
         <input
-          accept=".sql,application/sql,text/plain"
+          accept={DATABASE_DUMP_ACCEPT}
           className="sr-only"
           disabled={disabled}
           type="file"

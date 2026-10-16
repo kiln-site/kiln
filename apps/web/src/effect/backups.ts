@@ -108,6 +108,10 @@ interface BackupQuantityRow extends RowDataPacket {
   quantity_used: number | string
 }
 
+interface BackupUsageRow extends BackupQuantityRow {
+  quantity_available: number | string | null
+}
+
 interface BackupRow extends RowDataPacket {
   artifact_kind:
     | "archive"
@@ -2867,9 +2871,10 @@ export const getBackupUsageEffect = Effect.fn("backups.getUsage")(function* (
 ) {
   const database = yield* Database
   const [usageRows, policyRows] = yield* Effect.all([
-    database.queryRows<BackupQuantityRow>(
+    database.queryRows<BackupUsageRow>(
       "backup_usage_get",
-      `SELECT COUNT(*) AS quantity_used
+      `SELECT COUNT(*) AS quantity_used,
+              SUM(backup.status = 'available') AS quantity_available
          FROM ${databaseTable("backup")} backup
         WHERE backup.relay_id = ?
           AND backup.target_kind = ?
@@ -2889,6 +2894,11 @@ export const getBackupUsageEffect = Effect.fn("backups.getUsage")(function* (
   ])
   const policy = policyRows[0]
   return {
+    // Finished backups that can be restored.
+    quantityAvailable: safeDatabaseNumber(
+      usageRows[0]?.quantity_available ?? 0,
+      "available backup quantity"
+    ),
     quantityLimit: effectiveBackupLimit(
       policy?.quantity_limit ?? null,
       policy?.admin_quantity_limit ?? null

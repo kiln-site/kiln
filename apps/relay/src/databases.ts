@@ -515,15 +515,31 @@ export class DatabaseDriver {
     if (!databaseEngineSupportsLogicalBackups(database.engine)) {
       throw new Error(`${database.engine} dump import is not supported yet`)
     }
-    if (Buffer.byteLength(input.content) > MAX_DUMP_BYTES) {
+    const custom = input.format === "postgres-custom"
+    const dump = custom
+      ? Buffer.from(input.content, "base64")
+      : Buffer.from(input.content)
+    if (dump.byteLength > MAX_DUMP_BYTES) {
       throw new Error(
         "The database dump is larger than the current 700 KB transfer limit"
       )
     }
+    if (custom) {
+      if (database.engine !== "postgres") {
+        throw new Error(
+          "PostgreSQL custom-format dumps can only be imported into PostgreSQL"
+        )
+      }
+      if (!dump.subarray(0, 5).equals(POSTGRES_CUSTOM_DUMP_MAGIC)) {
+        throw new Error("This isn't a PostgreSQL custom-format dump")
+      }
+    }
     await this.#client(
       requiredContainerId(database),
-      databaseClient(database, input.username, input.password, "import"),
-      input.content,
+      custom
+        ? postgresRestoreClient(database, input.username, input.password)
+        : databaseClient(database, input.username, input.password, "import"),
+      dump,
       120_000
     )
     return { databaseId: database.id, imported: true }
@@ -545,7 +561,7 @@ export class DatabaseDriver {
   #client(
     container: string,
     client: DatabaseClient,
-    input: string | undefined,
+    input: string | Uint8Array | undefined,
     timeout: number
   ) {
     return Effect.runPromise(
@@ -875,6 +891,32 @@ function databaseWipeClient(
       `${database.engine === "redis" ? "REDISCLI_AUTH" : "VALKEYCLI_AUTH"}=${password}`,
     ],
     input: "",
+  }
+}
+
+// What pg_dump -Fc writes first.
+const POSTGRES_CUSTOM_DUMP_MAGIC = Buffer.from("PGDMP")
+
+// Restores a custom-format dump from stdin into the database, leaving
+// ownership and grants to the database's own user, and stopping at the
+// first error, as text imports do.
+function postgresRestoreClient(
+  database: RelayManagedDatabase,
+  username: string,
+  password: string
+): DatabaseClient {
+  return {
+    command: [
+      "pg_restore",
+      "--username",
+      username,
+      "--dbname",
+      database.databaseName,
+      "--no-owner",
+      "--no-privileges",
+      "--exit-on-error",
+    ],
+    env: [`PGPASSWORD=${password}`],
   }
 }
 

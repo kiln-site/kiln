@@ -573,7 +573,7 @@ export class DockerEngine {
     command: ReadonlyArray<string>,
     options: {
       readonly env?: ReadonlyArray<string>
-      readonly input?: string
+      readonly input?: string | Uint8Array
       readonly maxOutputBytes: number
       /** Why output past `maxOutputBytes` failed. */
       readonly overflow: string
@@ -1281,7 +1281,7 @@ export async function streamIntoProcess(
 export function completeWithInput(
   process: DockerExecProcess,
   options: {
-    readonly input?: string
+    readonly input?: string | Uint8Array
     readonly maxOutputBytes: number
     readonly operation: string
     /** Why output past `maxOutputBytes` failed. */

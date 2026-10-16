@@ -19,6 +19,7 @@ import {
   relayDatabaseTerminalRestartSchema,
   relayDatabaseTerminalWriteSchema,
   relayDatabaseContainerSchema,
+  relayDatabaseDumpFormatSchema,
   relayManagedDatabaseSchema,
 } from "@workspace/contracts"
 import type { RelayManagedDatabase } from "@workspace/contracts"
@@ -78,9 +79,18 @@ const databaseNetworkInputSchema = databaseInputSchema.extend({
   connected: z.boolean(),
   instanceId: z.string().regex(/^[a-f0-9]{40}$/u),
 })
-const databaseImportInputSchema = databaseInputSchema.extend({
-  content: z.string().max(700_000),
-})
+// A text dump, or a PostgreSQL custom-format dump in base64, which the
+// Relay checks against the same 700 KB once decoded.
+const databaseImportInputSchema = databaseInputSchema
+  .extend({
+    content: z.string().max(940_000),
+    format: relayDatabaseDumpFormatSchema.default("sql"),
+  })
+  .refine(
+    ({ content, format }) =>
+      format === "postgres-custom" || content.length <= 700_000,
+    "SQL dumps are currently limited to 700 KB"
+  )
 const databaseRowsRequestSchema = databaseInputSchema.extend({
   request: databaseRowsInputSchema,
 })
@@ -653,6 +663,9 @@ export const importManagedDatabase = createServerFn({ method: "POST" })
       {
         content: data.content,
         databaseId: data.databaseId,
+        // Left out for text dumps, so Relays from before custom-format
+        // imports still take them.
+        ...(data.format === "postgres-custom" ? { format: data.format } : {}),
         password: credential.password,
         username: credential.username,
       },

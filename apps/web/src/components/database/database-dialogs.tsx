@@ -307,7 +307,7 @@ export function ImportDatabaseDialog({
       }
       return importManagedDatabase({
         data: {
-          content: await file.text(),
+          ...(await readDatabaseDump(file, database.engine)),
           databaseId: database.id,
           relayId: database.relayId,
         },
@@ -328,20 +328,22 @@ export function ImportDatabaseDialog({
         <DialogHeader>
           <DialogTitle>Import SQL dump</DialogTitle>
           <DialogDescription>
-            Statements run against {database.databaseName}. Existing data is not
+            The dump runs against {database.databaseName}. Existing data is not
             cleared first. Current upload limit: 700 KB.
           </DialogDescription>
         </DialogHeader>
         <label className="block rounded-lg border border-dashed border-border p-4 text-center">
           <Upload className="mx-auto size-5 text-muted-foreground" />
           <span className="mt-2 block text-xs font-medium">
-            {file?.name ?? "Choose a .sql file"}
+            {file?.name ?? "Choose a .sql or .dmp file"}
           </span>
           <span className="type-meta mt-1 block text-muted-foreground">
-            MySQL, MariaDB, and PostgreSQL text dumps
+            {database.engine === "postgres"
+              ? "Text dumps, or custom-format dumps from pg_dump -Fc"
+              : "Text dumps from mysqldump or mariadb-dump"}
           </span>
           <input
-            accept=".sql,application/sql,text/plain"
+            accept={DATABASE_DUMP_ACCEPT}
             className="sr-only"
             type="file"
             onChange={(event) => {
@@ -380,6 +382,44 @@ export function ImportDatabaseDialog({
       </DialogContent>
     </Dialog>
   )
+}
+
+// What the file pickers offer. Dropped files of any name are read the same
+// way.
+export const DATABASE_DUMP_ACCEPT = ".sql,.dmp,application/sql,text/plain"
+
+// A text dump is sent as is. A PostgreSQL custom-format dump (pg_dump -Fc),
+// which starts with "PGDMP", is binary, so it goes in base64 for pg_restore.
+// Any other binary file isn't a dump we can import.
+async function readDatabaseDump(
+  file: File,
+  engine: ManagedDatabase["engine"]
+): Promise<{ content: string; format: "postgres-custom" | "sql" }> {
+  const bytes = new Uint8Array(await file.arrayBuffer())
+  const custom = new TextDecoder().decode(bytes.subarray(0, 5)) === "PGDMP"
+  if (custom) {
+    if (engine !== "postgres") {
+      throw new Error(
+        "This is a PostgreSQL custom-format dump, which only a PostgreSQL database can import"
+      )
+    }
+    return { content: base64(bytes), format: "postgres-custom" }
+  }
+  if (bytes.includes(0)) {
+    throw new Error(
+      "This file isn't a text SQL dump or a PostgreSQL custom-format dump"
+    )
+  }
+  return { content: new TextDecoder().decode(bytes), format: "sql" }
+}
+
+function base64(bytes: Uint8Array): string {
+  let binary = ""
+  // In chunks, so a large file doesn't overflow the argument list.
+  for (let start = 0; start < bytes.length; start += 0x8000) {
+    binary += String.fromCharCode(...bytes.subarray(start, start + 0x8000))
+  }
+  return btoa(binary)
 }
 
 function dumpSizeError(file: File | null): string | null {

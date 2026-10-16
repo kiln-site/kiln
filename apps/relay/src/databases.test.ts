@@ -152,6 +152,43 @@ describe("managed database wipe", () => {
   })
 })
 
+describe("managed database custom-format imports", () => {
+  it("refuses dumps that aren't PostgreSQL custom format, or aren't for PostgreSQL", async () => {
+    const harness = await relayHarness()
+    const postgres = "4".repeat(40)
+    const mysql = "5".repeat(40)
+    await createDatabase(harness, postgres)
+    await createDatabase(harness, mysql, "mysql")
+    const customDump = Buffer.from("PGDMP\u0001\u000e\u0000").toString("base64")
+    const credentials = { password, username: "kiln_user" }
+
+    await expect(
+      harness.databases.importDump({
+        ...credentials,
+        content: customDump,
+        databaseId: mysql,
+        format: "postgres-custom",
+      })
+    ).rejects.toThrow("can only be imported into PostgreSQL")
+    await expect(
+      harness.databases.importDump({
+        ...credentials,
+        content: Buffer.from("SELECT 1;").toString("base64"),
+        databaseId: postgres,
+        format: "postgres-custom",
+      })
+    ).rejects.toThrow("isn't a PostgreSQL custom-format dump")
+    await expect(
+      harness.databases.importDump({
+        ...credentials,
+        content: Buffer.alloc(700_001).toString("base64"),
+        databaseId: postgres,
+        format: "postgres-custom",
+      })
+    ).rejects.toThrow("700 KB transfer limit")
+  })
+})
+
 describe("managed database ACL files", () => {
   it("fails a create whose ACL write Docker breaks off, leaving no one-off container", async () => {
     const harness = await relayHarness()

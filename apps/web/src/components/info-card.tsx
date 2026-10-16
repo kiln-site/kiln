@@ -146,7 +146,7 @@ export function DangerZone({
               <h3 className="mt-1 text-sm font-semibold">{title}</h3>
             </>
           ) : (
-            <h3 className="type-technical-label text-foreground">
+            <h3 className="type-technical-label text-sm whitespace-nowrap text-foreground">
               Danger zone
             </h3>
           )}
