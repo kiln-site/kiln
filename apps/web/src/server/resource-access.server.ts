@@ -16,7 +16,9 @@ import { runAppEffect } from "@/effect/runtime"
 import type { AuthenticatedUser } from "@/lib/auth-session"
 import { databaseTable } from "@/lib/database-config"
 import { databasePool } from "@/lib/database"
+import type { AccessPermission } from "@/lib/permissions"
 import {
+  databaseScopeCapabilities,
   effectiveScopePermissions,
   loadResourceGrantsEffect,
   type ResourceScope,
@@ -163,24 +165,64 @@ interface ResourceOwnerRow extends RowDataPacket {
   name: string | null
 }
 
-// A scope's owner, for those who can see the scope at all. Like the Access
-// page, only those who can read its people see the owner's email.
+// The permissions a viewer holds on a scope that apply to it, as the Access
+// page reads them: Relay access that doesn't reach this kind of resource,
+// or this database's engine, doesn't count.
+export async function supportedScopePermissions(
+  data: ResourceScope,
+  permissions: ReadonlyArray<AccessPermission>
+): Promise<{
+  permissions: Array<AccessPermission>
+  supportedCapabilities: Array<string> | undefined
+}> {
+  const [engines] =
+    data.resourceType === "database"
+      ? await databasePool.query<Array<RowDataPacket & { engine: string }>>(
+          `SELECT engine FROM ${databaseTable("database")} WHERE relay_id = ? AND database_id = ?`,
+          [data.relayId, data.resourceId]
+        )
+      : [[]]
+  const supportedCapabilities =
+    data.resourceType === "database"
+      ? databaseScopeCapabilities(engines[0]?.engine)
+      : undefined
+  return {
+    permissions: permissions.filter((permission) =>
+      accessPermissionSupported(
+        permission,
+        data.resourceType,
+        supportedCapabilities
+      )
+    ),
+    supportedCapabilities,
+  }
+}
+
+// A scope's owner, for those the Access page would show the scope to. Like
+// it, only those who can read its people see the owner's email.
 async function readableResourceOwner(
   user: AuthenticatedUser,
   data: ResourceScope
 ): Promise<{ canReadPeople: boolean; row: ResourceOwnerRow } | null> {
   if (data.resourceType === "relay" && data.resourceId !== data.relayId)
     throw new Error("Resource not found")
-  let canReadPeople = user.role === "admin" || user.isDevelopmentBypass
-  if (!canReadPeople) {
-    const grants = await runAppEffect(
-      "access.scope",
-      loadResourceGrantsEffect(user.id, data.relayId, undefined, data)
-    )
-    const permissions = effectiveScopePermissions(grants, data)
-    if (permissions.size === 0) throw new Error("Resource not found")
-    canReadPeople = permissions.has("access.read")
-  }
+  const admin = user.role === "admin" || user.isDevelopmentBypass
+  const permissions = admin
+    ? expandPermissionSelections(
+        [{ kind: "collection", key: "all" }],
+        data.resourceType
+      )
+    : [
+        ...effectiveScopePermissions(
+          await runAppEffect(
+            "access.scope",
+            loadResourceGrantsEffect(user.id, data.relayId, undefined, data)
+          ),
+          data
+        ),
+      ]
+  const supported = await supportedScopePermissions(data, permissions)
+  if (!supported.permissions.length) throw new Error("Resource not found")
   const owner = ownerIdQuery(data)
   const [rows] = await databasePool.query<Array<ResourceOwnerRow>>(
     `SELECT u.id, u.name, u.email FROM (${owner.sql}) owner
@@ -188,7 +230,9 @@ async function readableResourceOwner(
     owner.values
   )
   const row = rows[0]
-  return row ? { canReadPeople, row } : null
+  return row
+    ? { canReadPeople: permissions.includes("access.read"), row }
+    : null
 }
 
 // Who owns a scope, as its Info rail shows them, or null when no one does

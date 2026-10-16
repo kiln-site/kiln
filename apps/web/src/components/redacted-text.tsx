@@ -24,7 +24,10 @@ export function RedactedText({
   label: string
   value: string
 }) {
-  const [revealed, setRevealed] = React.useState(false)
+  // Revealing applies to this value only; a new one, such as a new owner's
+  // email, starts blurred.
+  const [revealedValue, setRevealedValue] = React.useState<string | null>(null)
+  const revealed = revealedValue === value
   const redacted = React.useMemo(() => redactedPlaceholder(value), [value])
 
   return (
@@ -39,7 +42,7 @@ export function RedactedText({
           )}
           aria-label={revealed ? `${value}. Hide ${label}` : `Reveal ${label}`}
           aria-pressed={revealed}
-          onClick={() => setRevealed((current) => !current)}
+          onClick={() => setRevealedValue(revealed ? null : value)}
         >
           {revealed ? value : redacted}
         </button>

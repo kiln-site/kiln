@@ -7,7 +7,10 @@ import { afterAll } from "vite-plus/test"
 import { disposeAppRuntime } from "@/effect/runtime"
 import type { AuthenticatedUser } from "@/lib/auth-session"
 import type { AccessPermission } from "@/lib/permissions"
-import { getResourceOwnerHandler } from "@/server/resource-access.server"
+import {
+  getResourceOwnerHandler,
+  getResourceOwnerMinecraftProfileIdHandler,
+} from "@/server/resource-access.server"
 import { TestDatabase, describeMysql, resetDatabase } from "@/test/database"
 import {
   insertGrant,
@@ -48,7 +51,7 @@ const grant = (
       id,
       relayId,
       resourceId,
-      resourceType: "instance",
+      resourceType: resourceId === relayId ? "relay" : "instance",
       state: "active",
       userId,
     })
@@ -65,14 +68,32 @@ const grant = (
 const seed = Effect.gen(function* () {
   yield* resetDatabase
   yield* insertUser("owner", { name: "Steve" })
-  for (const id of ["manager", "player", "stranger"]) yield* insertUser(id)
+  for (const id of [
+    "manager",
+    "player",
+    "stranger",
+    "relay-viewer",
+    "relay-player",
+  ])
+    yield* insertUser(id)
   yield* insertRelay(relayId)
   yield* insertInstance(relayId, ownedId, { owner_id: "owner" })
   yield* insertInstance(relayId, unownedId)
   yield* grant("manager", ownedId, ["instance.read", "access.read"])
   yield* grant("player", ownedId, ["instance.read"])
   yield* grant("player", unownedId, ["instance.read"])
+  // Relay access reaches a server only through server permissions.
+  yield* grant("relay-viewer", relayId, ["relay.read"])
+  yield* grant("relay-player", relayId, ["instance.read"])
 })
+
+const refusal = (promise: Promise<unknown>) =>
+  Effect.promise(() =>
+    promise.then(
+      () => null,
+      (error: unknown) => error
+    )
+  )
 
 const ownerFor = (userId: string, resourceId: string) =>
   Effect.promise(() =>
@@ -112,14 +133,29 @@ describeMysql("resource owner", () => {
       Effect.gen(function* () {
         yield* seed
 
-        const failure = yield* Effect.promise(() =>
-          getResourceOwnerHandler(sessionUser("stranger"), scope(ownedId)).then(
-            () => null,
-            (error: unknown) => error
+        for (const userId of ["stranger", "relay-viewer"]) {
+          const user = sessionUser(userId)
+          assert.instanceOf(
+            yield* refusal(getResourceOwnerHandler(user, scope(ownedId))),
+            Error
           )
-        )
+          assert.instanceOf(
+            yield* refusal(
+              getResourceOwnerMinecraftProfileIdHandler(user, scope(ownedId))
+            ),
+            Error
+          )
+        }
+      })
+    )
 
-        assert.instanceOf(failure, Error)
+    it.effect("Relay access that can read servers sees their owner", () =>
+      Effect.gen(function* () {
+        yield* seed
+
+        const owner = yield* ownerFor("relay-player", ownedId)
+
+        assert.deepStrictEqual(owner, { email: null, name: "Steve" })
       })
     )
 

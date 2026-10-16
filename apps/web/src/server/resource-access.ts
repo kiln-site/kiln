@@ -4,7 +4,6 @@ import { Clock, Effect } from "effect"
 import type { RowDataPacket } from "mysql2/promise"
 import { z } from "zod"
 import {
-  accessPermissionSupported,
   builtinPermissionPresets,
   builtinPresetSelections,
   expandPermissionSelections,
@@ -26,7 +25,6 @@ import { databasePool } from "@/lib/database"
 import { kilnPublicUrl } from "@/lib/environment"
 import { requireEligibleResourceUser, requireVerifiedUser } from "@/server/auth"
 import {
-  databaseScopeCapabilities,
   loadResourceGrantsEffect,
   deduplicatePermissionSelections,
   effectiveScopePermissions,
@@ -40,6 +38,7 @@ import {
   getResourceOwnerMinecraftProfileIdHandler,
   getResourceUserCountHandler,
   peopleFilter,
+  supportedScopePermissions,
 } from "@/server/resource-access.server"
 import {
   accessPolicyTransaction,
@@ -958,24 +957,8 @@ export const getResourceAccess = createServerFn({ method: "GET" })
           data.resourceType
         )
       : [...effectiveScopePermissions(grants, data)]
-    const [engines] =
-      data.resourceType === "database"
-        ? await databasePool.query<Array<RowDataPacket & { engine: string }>>(
-            `SELECT engine FROM ${databaseTable("database")} WHERE relay_id = ? AND database_id = ?`,
-            [data.relayId, data.resourceId]
-          )
-        : [[]]
-    const supportedCapabilities =
-      data.resourceType === "database"
-        ? databaseScopeCapabilities(engines[0]?.engine)
-        : undefined
-    const supportedPermissions = permissions.filter((permission) =>
-      accessPermissionSupported(
-        permission,
-        data.resourceType,
-        supportedCapabilities
-      )
-    )
+    const { permissions: supportedPermissions, supportedCapabilities } =
+      await supportedScopePermissions(data, permissions)
     if (!supportedPermissions.length) throw new Error("Resource not found")
     const [owners] = await databasePool.query<Array<UserRow>>(
       data.resourceType === "relay"
