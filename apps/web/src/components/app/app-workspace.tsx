@@ -75,9 +75,7 @@ function useAppWorkspaceQuery(
     },
     [routeId]
   )
-  return useResourceWorkspaceQuery(
-    useQuery({ ...appsQueryOptions(), select })
-  )
+  return useResourceWorkspaceQuery(useQuery({ ...appsQueryOptions(), select }))
 }
 
 const AppWorkspaceHeader = React.memo(function AppWorkspaceHeader({
@@ -98,7 +96,7 @@ const AppWorkspaceHeader = React.memo(function AppWorkspaceHeader({
           title={
             <WorkspaceRouteTitle
               destinations={appDestinations}
-              fallback="Overview"
+              fallback="Info"
               notFoundRouteId="/_app/app/$appId/$"
             />
           }

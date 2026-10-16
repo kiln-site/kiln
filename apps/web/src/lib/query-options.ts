@@ -89,6 +89,8 @@ import { withInventoryRelayStatus } from "@/lib/inventory-relay-status"
 import {
   getAppConfig,
   getAppDirectory,
+  getAppOwner,
+  getAppOwnerMinecraftProfileId,
   getApps,
   getAppWebRoutes,
 } from "@/server/apps"
@@ -609,6 +611,35 @@ export function appWebRoutesQueryOptions(relayId: string, appId: string) {
     queryKey: queryKeys.apps.webRoutes(relayId, appId),
     queryFn: () => getAppWebRoutes({ data: { appId, relayId } }),
     staleTime: 10_000,
+  })
+}
+
+// Who created the app, outside "apps" so its changes don't refetch it. Like
+// a resource's owner, it goes stale after a while for owners who rename
+// themselves.
+export function appOwnerQueryOptions(relayId: string, appId: string) {
+  return queryOptions({
+    queryKey: ["app-owner", relayId, appId] as const,
+    queryFn: () => getAppOwner({ data: { appId, relayId } }),
+    retry: false,
+    staleTime: 30_000,
+  })
+}
+
+// The owner's Minecraft head, keyed by their name so a new name looks it up
+// again.
+export function appOwnerMinecraftProfileQueryOptions(
+  relayId: string,
+  appId: string,
+  ownerName: string
+) {
+  return queryOptions({
+    queryKey: ["app-owner", relayId, appId, "minecraft", ownerName] as const,
+    queryFn: ({ signal }) =>
+      getAppOwnerMinecraftProfileId({ data: { appId, relayId }, signal }),
+    gcTime: 60 * 60_000,
+    retry: false,
+    staleTime: 60 * 60_000,
   })
 }
 

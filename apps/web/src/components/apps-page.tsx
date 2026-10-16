@@ -621,7 +621,7 @@ function CreateAppDialog({
       // Leaving the list closes the dialog with it.
       await navigate({
         params: { appId: created.id },
-        to: "/app/$appId/overview",
+        to: "/app/$appId/info",
       })
     },
   })

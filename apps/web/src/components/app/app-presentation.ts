@@ -38,7 +38,18 @@ export function appRelayAvailable(
 
 // Image and Dockerfile apps run one service; Compose apps one per service.
 export function appServices(app: Pick<App, "containers">): Array<string> {
-  return [...new Set(app.containers.map((container) => container.service))]
+  return [...new Set(appContainers(app).map((container) => container.service))]
+}
+
+// By service, so they keep their order across deployments.
+export function appContainers(
+  app: Pick<App, "containers">
+): Array<App["containers"][number]> {
+  return [...app.containers].sort(
+    (left, right) =>
+      left.service.localeCompare(right.service) ||
+      left.name.localeCompare(right.name)
+  )
 }
 
 export function showAppOperationError(message: string, error: Error) {

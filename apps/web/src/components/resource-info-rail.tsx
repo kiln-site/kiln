@@ -43,7 +43,7 @@ import {
 } from "@/lib/relay-route"
 
 // The Info rail of an instance that runs on a Relay, a game server or a
-// database: links to its Relay, who can reach it, its activity, and its
+// database (an app's rail reuses its Relay link): links to its Relay, who can reach it, its activity, and its
 // backups, each shown only to those who can open it, then its owner and its
 // container.
 
@@ -183,7 +183,7 @@ export function InfoContainerCard({
 
 // The Relay the instance runs on, with its ID to copy. It opens the Relay for
 // those who manage it; others see just the name the instance reports.
-function InfoRailRelayLink({
+export function InfoRailRelayLink({
   name,
   relayId,
 }: {

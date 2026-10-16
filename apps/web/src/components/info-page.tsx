@@ -581,11 +581,14 @@ const InfoRailLinkAnchor = React.forwardRef<
 export const InfoRailLink = createLink(InfoRailLinkAnchor)
 
 export function InfoRailCard({
+  action,
   children,
   icon,
   summary,
   title,
 }: {
+  // At the end of the title row, such as a pager between containers.
+  action?: React.ReactNode
   children: React.ReactNode
   icon: React.ReactNode
   // Shown above the facts, such as usage bars.
@@ -594,10 +597,15 @@ export function InfoRailCard({
 }) {
   return (
     <section className="mt-6 border bg-background/45 first:mt-0">
-      <h3 className="flex items-center gap-2 border-b px-3 py-2.5 text-[0.8125rem] font-semibold [&_svg]:size-3.5 [&_svg]:text-muted-foreground">
-        {icon}
-        {title}
-      </h3>
+      <div className="flex min-h-10 items-center gap-2 border-b px-3 py-1.5">
+        <h3 className="flex min-w-0 items-center gap-2 text-[0.8125rem] font-semibold [&_svg]:size-3.5 [&_svg]:shrink-0 [&_svg]:text-muted-foreground">
+          {icon}
+          <span className="truncate">{title}</span>
+        </h3>
+        {action ? (
+          <div className="ml-auto flex shrink-0 items-center">{action}</div>
+        ) : null}
+      </div>
       {summary ? (
         <div className="border-b border-border/60 px-3">{summary}</div>
       ) : null}

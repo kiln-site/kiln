@@ -9,7 +9,6 @@ import {
   FolderDown,
   Globe2,
   History,
-  LayoutDashboard,
   ListTodo,
   Network,
   Palette,
@@ -406,7 +405,6 @@ export type AppDestinationId =
   | "info"
   | "logs"
   | "network"
-  | "overview"
   | "terminal"
 
 export interface AppDestination extends NavigationDestination {
@@ -416,12 +414,23 @@ export interface AppDestination extends NavigationDestination {
 
 export const appDestinations = [
   {
-    icon: LayoutDashboard,
-    id: "overview",
-    keywords: ["source", "dockerfile", "compose", "image", "deploy"],
-    label: "Overview",
+    icon: SlidersHorizontal,
+    id: "info",
+    keywords: [
+      "overview",
+      "settings",
+      "details",
+      "source",
+      "dockerfile",
+      "compose",
+      "image",
+      "environment",
+      "deploy",
+      "delete",
+    ],
+    label: "Info",
     permission: "app.read",
-    to: "/app/$appId/overview",
+    to: "/app/$appId/info",
   },
   {
     icon: ScrollText,
@@ -454,14 +463,6 @@ export const appDestinations = [
     label: "Files",
     permission: "app.files.read",
     to: "/app/$appId/files/$",
-  },
-  {
-    icon: SlidersHorizontal,
-    id: "info",
-    keywords: ["settings", "details", "delete"],
-    label: "Info",
-    permission: "app.read",
-    to: "/app/$appId/info",
   },
 ] as const satisfies ReadonlyArray<AppDestination>
 
