@@ -120,27 +120,8 @@ export class RelayUnavailableError extends Schema.TaggedError<RelayUnavailableEr
   {
     message: Schema.String,
     code: Schema.optional(Schema.String),
-    /**
-     * The Relay was away: it refused the connection, a proxy in front of it
-     * said it's down, or it shut down or dropped the connection. Not set for
-     * a Relay that refused this Hearth or a fault on Hearth's side.
-     */
-    disconnected: Schema.optional(Schema.Boolean),
     requestId: Schema.optional(Schema.String),
     retryable: Schema.optional(Schema.Boolean),
-    cause: Schema.optional(Schema.Defect()),
-  }
-) {}
-
-/**
- * Hearth couldn't reach a Relay it expected might be away, such as one
- * restarting into an update the browser is following. The browser shows it
- * reconnecting and asks again, so it isn't reported.
- */
-export class RelayAwayError extends Schema.TaggedError<RelayAwayError>()(
-  "RelayAwayError",
-  {
-    message: Schema.String,
     cause: Schema.optional(Schema.Defect()),
   }
 ) {}

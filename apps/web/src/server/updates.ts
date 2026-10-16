@@ -9,7 +9,7 @@ import {
   recordComponentVersionsEffect,
   releaseHistoryPageEffect,
 } from "@/effect/kiln-release-feed"
-import { RelayAwayError, RelayUnavailableError } from "@/effect/errors"
+import { RelayUnavailableError } from "@/effect/errors"
 import { platformAdminIdsEffect } from "@/effect/notifications"
 import { attachRelayOwnersEffect } from "@/effect/relay-owners"
 import { runAppEffect } from "@/effect/runtime"
@@ -540,30 +540,16 @@ export const getSystemUpdateStatus = createServerFn({ method: "POST" })
   .validator(updateStatusSchema)
   .handler(async ({ data }) => {
     const user = await requireUpdateAccess()
-    const [relays, { isRelayUpdating, relayRpc }] = await Promise.all([
+    const [relays, { relayRpc }] = await Promise.all([
       updateRelaysForUser(user),
       import("@/lib/relay-connection"),
     ])
     const relay = await selectedRelay(relays, data.relayId)
-    const result = await Effect.runPromise(
-      Effect.tryPromise({
-        try: () =>
-          relayRpc(
-            relay,
-            "relay.update.status",
-            { operationId: data.operationId },
-            15_000
-          ),
-        // A Relay that reported a running update may be away restarting
-        // into it, for up to the 15 minutes Hearth shows it updating. Any
-        // other failure to reach it is still reported.
-        catch: (cause) =>
-          cause instanceof RelayUnavailableError &&
-          cause.disconnected &&
-          isRelayUpdating(relay.id)
-            ? RelayAwayError.make({ message: cause.message, cause })
-            : cause,
-      })
+    const result = await relayRpc(
+      relay,
+      "relay.update.status",
+      { operationId: data.operationId },
+      15_000
     )
     if (result === null) return null
     const operation = updateOperationSchema.parse(result)
