@@ -4,7 +4,9 @@ import { Clock, Effect, Option, Schema, Semaphore } from "effect"
 import { Database } from "@/effect/database"
 import {
   fetchKilnReleasePageEffect,
+  GitHubRateLimitError,
   kilnStableReleaseAliasesEffect,
+  type GitHubRateLimit,
   type PublicKilnRelease,
 } from "@/effect/github-releases"
 import { databaseTable } from "@/lib/database-config"
@@ -16,10 +18,13 @@ import { isKilnReleaseVersion, orderKilnReleases } from "@/lib/release-version"
 // counts, so Hearth keeps every release it has seen and asks GitHub only
 // for the newest page, at most this often.
 const checkIntervalMs = 5 * 60_000
-// A check someone asks for still waits this long after the last one, so
-// repeated clicks and other admins share it instead of each spending the
-// rate limit.
+// A check someone asks for still waits this long after the last one ended,
+// so repeated clicks and other admins share it.
 const requestedCheckIntervalMs = 30_000
+// Requests left to GitHub's limit that checking leaves for starting updates,
+// which read the release's manifest from GitHub. Checks wait for the limit
+// to reset instead.
+const reservedGitHubRequests = 10
 const githubPageSize = 100
 const recentReleaseCount = 100
 // Pages GitHub may have grown by since the last check before Hearth stops
@@ -30,9 +35,16 @@ const feedSettingId = "00000000-0000-4000-8000-000000000003"
 const feedSettingKey = "kiln.releaseFeed"
 
 const FeedState = Schema.Struct({
+  // When the last check ended, whether GitHub answered or not.
   checkedAt: Schema.Number,
   // GitHub couldn't be asked at `checkedAt`, so Hearth kept its copy.
   failed: Schema.optional(Schema.Boolean),
+  // What GitHub said is left of its request limit, as of `checkedAt`.
+  rateLimit: Schema.optional(
+    Schema.Struct({ remaining: Schema.Number, resetAt: Schema.Number })
+  ),
+  // When GitHub last answered a check.
+  succeededAt: Schema.optional(Schema.Number),
   // The next GitHub page holding releases older than any Hearth has, or null
   // once Hearth has every release back to the first.
   historyPage: Schema.NullOr(Schema.Number),
@@ -102,21 +114,25 @@ export const listKilnReleasesEffect = Effect.fn("releases.listRecent")(
 
 /**
  * Checks GitHub for new Kiln releases now rather than when the last check is
- * old enough, unless one just ran. Returns when Hearth last asked GitHub and
- * whether it answered, so a failure shows instead of the releases it had.
+ * old enough, unless one just ended. `failed` says GitHub didn't answer, and
+ * `retryAt` when its request limit lets Kiln check again.
  */
 export const checkKilnReleasesEffect = Effect.fn("releases.check")(
   function* () {
-    const { failed, state } = yield* syncReleaseFeed(requestedCheckIntervalMs)
-    return { checkedAt: state.checkedAt, failed }
+    const { failed, retryAt, state } = yield* syncReleaseFeed(
+      requestedCheckIntervalMs
+    )
+    return { checkedAt: lastAnsweredAt(state), failed, retryAt }
   }
 )
 
-/** When Hearth last asked GitHub for releases, or null if it never has. */
+/** When GitHub last answered a check for releases, or null if never. */
 export const releasesCheckedAtEffect = Effect.fn("releases.checkedAt")(
   function* () {
     const state = yield* loadFeedState
-    return state?.repository === kilnGitRepository() ? state.checkedAt : null
+    return state?.repository === kilnGitRepository()
+      ? lastAnsweredAt(state)
+      : null
   }
 )
 
@@ -203,69 +219,118 @@ export const recordComponentVersionsEffect = Effect.fn(
   return previous
 })
 
-// Asks GitHub for new releases unless Hearth did within `maxAgeMs`.
-// `failed` says GitHub couldn't be asked, and Hearth's copy was kept.
+// Asks GitHub for new releases unless a check ended within `maxAgeMs` or
+// GitHub's request limit is down to what's left for updates. `failed` says
+// GitHub didn't answer, and Hearth's copy was kept.
 const syncReleaseFeed = (maxAgeMs: number) =>
   feedLock.withPermits(1)(
-  Effect.gen(function* () {
-    const repository = kilnGitRepository()
-    const now = yield* Clock.currentTimeMillis
-    const stored = yield* loadFeedState
-    const current = stored?.repository === repository ? stored : null
-    if (current && now - current.checkedAt < maxAgeMs) {
-      return { failed: current.failed === true, state: current }
-    }
+    Effect.gen(function* () {
+      const repository = kilnGitRepository()
+      const now = yield* Clock.currentTimeMillis
+      const stored = yield* loadFeedState
+      const current = stored?.repository === repository ? stored : null
+      if (current && now - current.checkedAt < maxAgeMs) {
+        return checkOutcome(current, now)
+      }
+      const limitedUntil = current ? rateLimitedUntil(current, now) : null
+      if (current && limitedUntil !== null) {
+        return { failed: true, retryAt: limitedUntil, state: current }
+      }
 
-    const database = yield* Database
-    if (!current) {
-      // A different repository is a different release history.
-      yield* database.execute(
-        "releases.clear",
-        `DELETE FROM ${databaseTable("system_release")}`
+      const database = yield* Database
+      if (!current) {
+        // A different repository is a different release history.
+        yield* database.execute(
+          "releases.clear",
+          `DELETE FROM ${databaseTable("system_release")}`
+        )
+      }
+      const checked = yield* catchUpWithGitHub(current).pipe(
+        Effect.tap(() => resolvePendingAliases),
+        Effect.map(({ historyPage, rateLimit }) => ({
+          failed: false,
+          historyPage,
+          rateLimit: rateLimit ?? undefined,
+        })),
+        Effect.catch((error) =>
+          // Serve what Hearth has, and wait out the interval before asking
+          // again rather than spending the rate limit on retries.
+          current
+            ? Effect.logWarning(
+                "Could not check GitHub for Kiln releases",
+                error
+              ).pipe(
+                Effect.as({
+                  failed: true,
+                  historyPage: current.historyPage,
+                  rateLimit:
+                    error instanceof GitHubRateLimitError
+                      ? { remaining: 0, resetAt: error.resetAt }
+                      : current.rateLimit,
+                })
+              )
+            : Effect.fail(error)
+        )
       )
-    }
-    const checked = yield* catchUpWithGitHub(current).pipe(
-      Effect.tap(() => resolvePendingAliases),
-      Effect.map((historyPage) => ({ failed: false, historyPage })),
-      Effect.catch((error) =>
-        // Serve what Hearth has, and wait out the interval before asking
-        // again rather than spending the rate limit on retries.
-        current
-          ? Effect.logWarning(
-              "Could not check GitHub for Kiln releases",
-              error
-            ).pipe(
-              Effect.as({ failed: true, historyPage: current.historyPage })
-            )
-          : Effect.fail(error)
-      )
-    )
-    const next: FeedState = {
-      checkedAt: now,
-      failed: checked.failed,
-      historyPage: checked.historyPage,
-      repository,
-    }
-    yield* saveFeedState(next)
-    return { failed: checked.failed, state: next }
-  })
-)
+      // A slow check counts from when it ended, so the next waits as long.
+      const endedAt = yield* Clock.currentTimeMillis
+      const next: FeedState = {
+        checkedAt: endedAt,
+        failed: checked.failed,
+        historyPage: checked.historyPage,
+        rateLimit: checked.rateLimit,
+        repository,
+        succeededAt: checked.failed
+          ? (lastAnsweredAt(current) ?? undefined)
+          : endedAt,
+      }
+      yield* saveFeedState(next)
+      return checkOutcome(next, endedAt)
+    })
+  )
+
+function checkOutcome(state: FeedState, now: number) {
+  return {
+    failed: state.failed === true,
+    retryAt: state.failed ? rateLimitedUntil(state, now) : null,
+    state,
+  }
+}
+
+// When GitHub's request limit resets, while too little of it is left to
+// spend on checking.
+function rateLimitedUntil(state: FeedState, now: number): number | null {
+  const limit = state.rateLimit
+  return limit &&
+    limit.remaining <= reservedGitHubRequests &&
+    now < limit.resetAt
+    ? limit.resetAt
+    : null
+}
+
+function lastAnsweredAt(state: FeedState | null): number | null {
+  if (!state) return null
+  // States saved before `succeededAt` was recorded.
+  return state.succeededAt ?? (state.failed ? null : state.checkedAt)
+}
 
 const catchUpWithGitHub = Effect.fnUntraced(function* (
   current: FeedState | null
 ) {
+  let rateLimit: GitHubRateLimit | null = null
   for (let page = 1; page <= maxCatchUpPages; page += 1) {
-    const { hasNextPage, releases } = yield* fetchKilnReleasePageEffect(
-      page,
-      githubPageSize
-    )
+    const fetched = yield* fetchKilnReleasePageEffect(page, githubPageSize)
+    rateLimit = fetched.rateLimit ?? rateLimit
+    const { hasNextPage, releases } = fetched
     if (page === 1) yield* removeWithdrawnReleases(releases)
     const added = yield* saveReleases(releases)
     // A fresh copy starts from the newest page and backfills on demand.
-    if (!current) return hasNextPage ? 2 : null
+    if (!current) return { historyPage: hasNextPage ? 2 : null, rateLimit }
     if (added < releases.length || !hasNextPage) break
+    // The rest is left to backfill rather than the requests for updates.
+    if (rateLimit && rateLimit.remaining <= reservedGitHubRequests) break
   }
-  return current?.historyPage ?? null
+  return { historyPage: current?.historyPage ?? null, rateLimit }
 })
 
 // Stable releases whose manifest couldn't be read when they were saved.
@@ -297,16 +362,18 @@ const resolvePendingAliases = Effect.gen(function* () {
 const backfillReleaseHistory = Effect.gen(function* () {
   const state = yield* loadFeedState
   if (!state || state.historyPage === null) return state ?? emptyState()
+  const now = yield* Clock.currentTimeMillis
+  // Older releases wait while GitHub's limit is kept for updates.
+  if (rateLimitedUntil(state, now) !== null) return state
   // New releases push older ones to later pages, so this page may repeat
   // some Hearth has, but it never skips one.
-  const { hasNextPage, releases } = yield* fetchKilnReleasePageEffect(
-    state.historyPage,
-    githubPageSize
-  )
+  const { hasNextPage, rateLimit, releases } =
+    yield* fetchKilnReleasePageEffect(state.historyPage, githubPageSize)
   yield* saveReleases(releases)
   const next: FeedState = {
     ...state,
     historyPage: hasNextPage ? state.historyPage + 1 : null,
+    rateLimit: rateLimit ?? state.rateLimit,
   }
   yield* saveFeedState(next)
   return next

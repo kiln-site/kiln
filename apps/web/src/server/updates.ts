@@ -11,7 +11,7 @@ import {
   releaseHistoryPageEffect,
   releasesCheckedAtEffect,
 } from "@/effect/kiln-release-feed"
-import { RelayUnavailableError } from "@/effect/errors"
+import { PermissionDeniedError, RelayUnavailableError } from "@/effect/errors"
 import { platformAdminIdsEffect } from "@/effect/notifications"
 import { attachRelayOwnersEffect } from "@/effect/relay-owners"
 import { runAppEffect } from "@/effect/runtime"
@@ -273,12 +273,23 @@ export const getUpdateOverview = createServerFn({ method: "GET" }).handler(
 
 /**
  * Asks GitHub for new Kiln releases now, for the updater's check button,
- * rather than waiting for Hearth's next check. `failed` says GitHub couldn't
- * be asked and the releases Hearth had are still shown.
+ * rather than waiting for Hearth's next check. `failed` says GitHub didn't
+ * answer and the releases Hearth had are still shown; `retryAt`, when its
+ * request limit lets Kiln check again.
  */
 export const checkForKilnReleases = createServerFn({ method: "POST" }).handler(
   async () => {
-    await requireUpdateAccess()
+    const user = await requireUpdateAccess()
+    // Checks spend Hearth's GitHub requests, so only those who can update
+    // something may ask for one.
+    if (
+      !isPlatformAdmin(user) &&
+      (await updateRelaysForUser(user)).length === 0
+    ) {
+      throw PermissionDeniedError.make({
+        message: "You don't have permission to update Kiln",
+      })
+    }
     return runAppEffect("updates.check-releases", checkKilnReleasesEffect())
   }
 )

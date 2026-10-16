@@ -192,7 +192,7 @@ type UpdateDialogViewStore = ReturnType<typeof createUpdateDialogViewStore>
 
 const updateFailureStorageKey = "kiln.system-update-failures"
 const systemUpdateToastId = "system-update"
-const releaseCheckToastId = "release-check"
+const checkNoticeDuration = 5_000
 const minimumUpdateCheckDuration = 750
 const completedUpdateDisplayDuration = 1_500
 const mockRelayPhaseDuration = 325
@@ -202,6 +202,9 @@ const shortReleaseDateFormatter = new Intl.DateTimeFormat("en-US", {
   day: "numeric",
   month: "short",
   timeZone: "UTC",
+})
+const retryTimeFormatter = new Intl.DateTimeFormat("en-US", {
+  timeStyle: "short",
 })
 const lastCheckedFormatter = new Intl.DateTimeFormat("en-US", {
   dateStyle: "medium",
@@ -413,9 +416,9 @@ export const InfraUpdatesDialog = React.memo(function InfraUpdatesDialog({
     if (!open) return
     let current = true
     void Effect.runPromise(
-      Effect.tryPromise(() => getSystemUpdates({ data: { relayIds: null } })).pipe(
-        Effect.option
-      )
+      Effect.tryPromise(() =>
+        getSystemUpdates({ data: { relayIds: null } })
+      ).pipe(Effect.option)
     ).then((reports) => {
       if (!current || Option.isNone(reports)) return
       const overview = queryClient.getQueryData<UpdateOverview>(
@@ -1401,12 +1404,55 @@ const UpdaterChangelogButton = React.memo(function UpdaterChangelogButton({
   )
 })
 
-const UpdaterCheckButton = React.memo(function UpdaterCheckButton({
+// The check button and what it found: when Hearth last asked GitHub, or for
+// a few seconds after a check that didn't get an answer, why not.
+const UpdaterCheck = React.memo(function UpdaterCheck({
   activityStore,
   open,
 }: {
   activityStore: SystemUpdateActivityStore
   open: boolean
+}) {
+  const [notice, setNotice] = React.useState<string | null>(null)
+  const noticeTimer = React.useRef<number | null>(null)
+  const showNotice = React.useCallback((message: string) => {
+    if (noticeTimer.current !== null) window.clearTimeout(noticeTimer.current)
+    setNotice(message)
+    noticeTimer.current = window.setTimeout(() => {
+      noticeTimer.current = null
+      setNotice(null)
+    }, checkNoticeDuration)
+  }, [])
+  React.useEffect(
+    () => () => {
+      if (noticeTimer.current !== null) window.clearTimeout(noticeTimer.current)
+    },
+    []
+  )
+  return (
+    <>
+      <UpdaterCheckButton
+        activityStore={activityStore}
+        open={open}
+        onNotice={showNotice}
+      />
+      {notice ? (
+        <span className="truncate text-amber-200">{notice}</span>
+      ) : (
+        <LastCheckedLabel activityStore={activityStore} open={open} />
+      )}
+    </>
+  )
+})
+
+const UpdaterCheckButton = React.memo(function UpdaterCheckButton({
+  activityStore,
+  open,
+  onNotice,
+}: {
+  activityStore: SystemUpdateActivityStore
+  open: boolean
+  onNotice: (message: string) => void
 }) {
   const updating = React.useSyncExternalStore(
     activityStore.subscribeActivities,
@@ -1423,24 +1469,18 @@ const UpdaterCheckButton = React.memo(function UpdaterCheckButton({
   // now before reading the updates again.
   const checkMutation = useMutation({
     mutationFn: async () => {
-      const { failed } = await checkForKilnReleases()
-      await refetchOverview()
-      if (failed) {
-        showToast({
-          type: "error",
-          message: "Couldn’t reach GitHub",
-          description: "Showing the releases Kiln already knew about.",
-          id: releaseCheckToastId,
-        })
+      const { failed, retryAt } = await checkForKilnReleases()
+      // An update that started meanwhile holds the overview still.
+      if (canRefetchSystemUpdateOverview()) await refetchOverview()
+      if (retryAt !== null) {
+        onNotice(
+          `GitHub limit reached · try again at ${retryTimeFormatter.format(new Date(retryAt))}`
+        )
+      } else if (failed) {
+        onNotice("Couldn’t reach GitHub")
       }
     },
-    onError: () => {
-      showToast({
-        type: "error",
-        message: "Couldn’t check for updates",
-        id: releaseCheckToastId,
-      })
-    },
+    onError: () => onNotice("Couldn’t check for updates"),
   })
   const checking = useMinimumDuration(
     overviewQuery.isFetching || checkMutation.isPending,
@@ -2372,8 +2412,7 @@ const UpdaterFooter = React.memo(function UpdaterFooter({
         </span>
       ) : (
         <span className="-ml-2 flex min-w-0 items-center gap-1">
-          <UpdaterCheckButton activityStore={activityStore} open={open} />
-          <LastCheckedLabel activityStore={activityStore} open={open} />
+          <UpdaterCheck activityStore={activityStore} open={open} />
         </span>
       )}
       <span className="flex shrink-0 items-center gap-1.5">
@@ -3725,8 +3764,7 @@ function reportedActiveUpdate(
   return {
     component: update.component,
     name:
-      target?.name ??
-      (update.component === "hearth" ? "Panel" : report.name),
+      target?.name ?? (update.component === "hearth" ? "Panel" : report.name),
     operationId: update.id,
     phase: update.phase,
     previousVersion: target?.currentVersion ?? null,
