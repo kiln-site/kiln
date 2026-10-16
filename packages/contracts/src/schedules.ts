@@ -165,8 +165,10 @@ export function nextScheduleOccurrence(
 
 export const scheduleInputSchema = z.object({
   actions: z.array(scheduleActionSchema).min(1).max(32),
-  // Keeps running a target's later actions after one fails. Hearth omits it
-  // from Relay projections when off, because older Relays reject unknown keys.
+  // Keeps running a target's later actions after one fails. Older Relays
+  // reject unknown keys, so Hearth omits it from projections when off and
+  // only turns it on for Relays with the `schedule-continue-on-failure`
+  // capability.
   continueOnFailure: z.boolean().optional(),
   cron: z.string().trim().min(1).max(120),
   enabled: z.boolean().default(true),

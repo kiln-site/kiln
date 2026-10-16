@@ -1489,6 +1489,7 @@ export const relayTailscaleStackSchema = z
 export const relayTailscaleStacksSchema = z.array(relayTailscaleStackSchema)
 
 export const relayNodeCapabilitySchema = z.enum([
+  "schedule-continue-on-failure",
   "tailscale-stacks",
   "tailscale-staged-removal",
 ])

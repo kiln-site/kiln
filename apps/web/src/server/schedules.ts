@@ -8,6 +8,7 @@ import { z } from "zod"
 import {
   normalizeScheduleCron,
   relayScheduleOverviewSchema,
+  relaySnapshotSchema,
   scheduleActionAppliesToTarget,
   scheduleActionSchema,
   scheduleDefinitionSchema,
@@ -49,7 +50,7 @@ import { relayRpc } from "@/lib/relay-connection"
 import { listPersistedRelays } from "@/lib/relay-registry"
 import { requireScheduleBackupDestinations } from "@/lib/schedule-backup-destinations.server"
 import { scheduleTargetsWithAvailability } from "@/lib/schedule-target-options"
-import { promiseEffect } from "@/effect/promise"
+import { promiseEffect, recoverPromise } from "@/effect/promise"
 import { requireEligibleResourceUser } from "@/server/auth"
 
 const scheduleWriteSchema = scheduleInputSchema
@@ -249,6 +250,7 @@ export const createSchedule = createServerFn({ method: "POST" })
       grants,
       user,
     })
+    await requireContinueOnFailureSupport(definition)
     await saveNewSchedule(definition, user.id)
     await deploySchedule(definition, user.id)
     const created = (await loadSchedules()).find(
@@ -310,6 +312,7 @@ export const updateSchedule = createServerFn({ method: "POST" })
       grants,
       user,
     })
+    await requireContinueOnFailureSupport(definition, existing)
     const previousRelayIds = new Set(
       existing.targets.map((target) => target.relayId)
     )
@@ -529,6 +532,54 @@ async function canonicalTargets(
     if (!canonical) throw new Error(`${target.name} is no longer available`)
     return canonical
   })
+}
+
+// An older Relay rejects the whole projection and keeps running the revision
+// it has, so a Relay must advertise support before a schedule turns this on
+// for it. Relays that already run it with the option keep it, which lets a
+// schedule be disabled or edited while its Relay is offline.
+async function requireContinueOnFailureSupport(
+  definition: ScheduleDefinition,
+  existing?: Pick<ScheduleDefinition, "continueOnFailure" | "targets">
+) {
+  if (!definition.continueOnFailure) return
+  const supported = new Set(
+    existing?.continueOnFailure
+      ? existing.targets.map((target) => target.relayId)
+      : []
+  )
+  const relayIds = new Set(
+    definition.targets
+      .map((target) => target.relayId)
+      .filter((relayId) => !supported.has(relayId))
+  )
+  if (relayIds.size === 0) return
+  const relays = new Map(
+    (await listPersistedRelays()).map((relay) => [relay.id, relay])
+  )
+  const unsupported = await Promise.all(
+    [...relayIds].map(async (relayId) => {
+      const relay = relays.get(relayId)
+      if (!relay?.enabled) return relay?.name ?? relayId
+      const snapshot = await recoverPromise(
+        async () =>
+          relaySnapshotSchema.parse(
+            await relayRpc(relay, "relay.snapshot", {}, 5_000)
+          ),
+        () => null
+      )
+      return snapshot?.node.capabilities.includes(
+        "schedule-continue-on-failure"
+      )
+        ? null
+        : relay.name
+    })
+  )
+  const names = unsupported.filter((name) => name !== null)
+  if (names.length === 0) return
+  throw new Error(
+    `Continue on failure needs these Relays online and updated: ${names.join(", ")}`
+  )
 }
 
 function targetKey(target: ScheduleTarget) {
