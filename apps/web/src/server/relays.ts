@@ -398,13 +398,12 @@ export const getRelayProxy = createServerFn({ method: "GET" })
     )
   })
 
-// The bundled Traefik's static and dynamic files, as the Relay generates
-// them. Both are null in other proxy modes. The dynamic file names every
-// domain and where it leads, so it needs the network permission.
-export const getRelayTraefikConfiguration = createServerFn({ method: "GET" })
+// Where the bundled Traefik's files are on the Relay's host, to open them in
+// its host files. Null in other proxy modes and from older Relays.
+export const getRelayTraefikDirectory = createServerFn({ method: "GET" })
   .validator(relayIdSchema)
   .handler(async ({ data }) => {
-    await requireRelayAdministrator(data.id, "instance.network.read")
+    await requireRelayAdministrator(data.id, "relay.files.read")
     const [relay, { relayConnectionFeatures, relayRpc }] = await Promise.all([
       enabledRelay(data.id),
       import("@/lib/relay-connection"),
@@ -412,13 +411,12 @@ export const getRelayTraefikConfiguration = createServerFn({ method: "GET" })
     if (
       !relayConnectionFeatures(relay.id).has(relayProxyConfigurationV1Feature)
     ) {
-      throw new Error("Update this Relay to view its Traefik configuration.")
+      return { directory: null }
     }
-    const { dynamicConfiguration, staticConfiguration } =
-      relayProxyConfigurationSchema.parse(
-        await relayRpc(relay, "relay.proxy.config.read", {}, 15_000)
-      )
-    return { dynamicConfiguration, staticConfiguration }
+    const { hostDirectory } = relayProxyConfigurationSchema.parse(
+      await relayRpc(relay, "relay.proxy.config.read", {}, 15_000)
+    )
+    return { directory: hostDirectory ?? null }
   })
 
 export const updateRelayProxy = createServerFn({ method: "POST" })

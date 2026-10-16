@@ -61,7 +61,7 @@ import {
 import {
   getRelayOwnerMinecraftProfiles,
   getRelayProxy,
-  getRelayTraefikConfiguration,
+  getRelayTraefikDirectory,
   getRelayTailscale,
   getRelays,
 } from "@/server/relays"
@@ -191,7 +191,7 @@ export const queryKeys = {
   },
   relays: ["relays"] as const,
   relayProxy: (relayId: string) => ["relays", "proxy", relayId] as const,
-  relayTraefikConfiguration: (relayId: string) =>
+  relayTraefikDirectory: (relayId: string) =>
     ["relays", "proxy", relayId, "traefik"] as const,
   tailscale: (relayId: string) => ["tailscale", "relays", relayId] as const,
   tailscaleStacks: ["tailscale", "stacks"] as const,
@@ -672,12 +672,13 @@ export function relayProxyQueryOptions(relayId: string) {
   })
 }
 
-export function relayTraefikConfigurationQueryOptions(relayId: string) {
+// The folder only moves if the Relay's data does, so it's read rarely.
+export function relayTraefikDirectoryQueryOptions(relayId: string) {
   return queryOptions({
-    queryFn: () => getRelayTraefikConfiguration({ data: { id: relayId } }),
-    queryKey: queryKeys.relayTraefikConfiguration(relayId),
+    queryFn: () => getRelayTraefikDirectory({ data: { id: relayId } }),
+    queryKey: queryKeys.relayTraefikDirectory(relayId),
     retry: false,
-    staleTime: 10_000,
+    staleTime: 5 * 60_000,
   })
 }
 

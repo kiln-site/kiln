@@ -1,5 +1,6 @@
 import { useQuery } from "@tanstack/react-query"
-import { TriangleAlert } from "lucide-react"
+import { Link } from "@tanstack/react-router"
+import { ArrowRight, TriangleAlert } from "lucide-react"
 import type { RelayProxyDiagnostics } from "@workspace/contracts"
 
 import {
@@ -14,15 +15,26 @@ import {
   proxyStatusPresentation,
   useRelayLiveStatus,
 } from "@/components/relay/relay-presentation"
-import { RelayConfigureButton } from "@/components/relay/relay-settings"
-import { RelayTraefikConfigButton } from "@/components/relay/relay-traefik-config"
+import {
+  RelayConfigureButton,
+  useRelayPermission,
+} from "@/components/relay/relay-settings"
 import { StatusIndicator } from "@/components/status-indicator"
-import { relayProxyQueryOptions } from "@/lib/query-options"
+import {
+  relayProxyQueryOptions,
+  relayTraefikDirectoryQueryOptions,
+} from "@/lib/query-options"
 import type { RelayDirectoryEntry } from "@/lib/relay-route"
 
 // How the Relay publishes web domains: its proxy's settings and whether it's
 // healthy. The bundled Traefik's details only show in that mode.
-export function RelayProxySettings({ relay }: { relay: RelayDirectoryEntry }) {
+export function RelayProxySettings({
+  relay,
+  routeId,
+}: {
+  relay: RelayDirectoryEntry
+  routeId: string
+}) {
   const { connected } = useRelayLiveStatus(relay)
   const { data: proxy, error } = useQuery({
     ...relayProxyQueryOptions(relay.id),
@@ -54,12 +66,7 @@ export function RelayProxySettings({ relay }: { relay: RelayDirectoryEntry }) {
     <InfoSection
       title="Proxy"
       status={<StatusIndicator status={proxyStatusPresentation(diagnostics)} />}
-      action={
-        <>
-          {bundled ? <RelayTraefikConfigButton relayId={relay.id} /> : null}
-          <RelayConfigureButton relay={relay} />
-        </>
-      }
+      action={<RelayConfigureButton relay={relay} />}
       notes={
         diagnostics.warnings.length > 0 ? (
           <ProxyWarnings warnings={diagnostics.warnings} />
@@ -74,6 +81,7 @@ export function RelayProxySettings({ relay }: { relay: RelayDirectoryEntry }) {
               {settings.traefikImage}
             </span>
           </InfoFact>
+          <TraefikConfigLink relayId={relay.id} routeId={routeId} />
           <InfoFact label="Certificate email">
             <InfoDetails
               title="Certificate email"
@@ -105,6 +113,38 @@ export function RelayProxySettings({ relay }: { relay: RelayDirectoryEntry }) {
         <ProxyPorts ports={diagnostics.ports} />
       </InfoFact>
     </InfoSection>
+  )
+}
+
+// Opens the bundled Traefik's config in the Relay's host files, where the
+// routes file sits beside it.
+function TraefikConfigLink({
+  relayId,
+  routeId,
+}: {
+  relayId: string
+  routeId: string
+}) {
+  const canReadFiles = useRelayPermission(relayId, "relay.files.read")
+  const { data } = useQuery({
+    ...relayTraefikDirectoryQueryOptions(relayId),
+    enabled: canReadFiles,
+  })
+  if (!canReadFiles || !data?.directory) return null
+  return (
+    <InfoFact label="Traefik config">
+      <Link
+        to="/relay/$relayId/files/$"
+        params={{
+          relayId: routeId,
+          _splat: `${data.directory.replace(/^\/+/, "")}/traefik.yaml`,
+        }}
+        className="group flex min-w-0 items-center gap-1.5 font-mono text-xs transition-colors hover:text-primary"
+      >
+        <span className="truncate">traefik.yaml</span>
+        <ArrowRight className="size-3.5 shrink-0 transition-transform group-hover:translate-x-0.5" />
+      </Link>
+    </InfoFact>
   )
 }
 

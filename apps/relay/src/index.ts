@@ -9,6 +9,7 @@ import { createServer as createHttpsServer } from "node:https"
 import { createHmac, randomBytes, randomUUID } from "node:crypto"
 import { mkdir } from "node:fs/promises"
 import { hostname } from "node:os"
+import { posix } from "node:path"
 import { Effect, Schema, Semaphore } from "effect"
 
 import {
@@ -1459,6 +1460,13 @@ async function executeControlRequest(
         }),
         staticConfiguration: bundled
           ? traefikStaticConfiguration(settings)
+          : null,
+        hostDirectory: bundled
+          ? posix.join(
+              await lifecycle.hostDataDirectory(),
+              "infrastructure",
+              "traefik"
+            )
           : null,
       })
     }

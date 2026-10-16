@@ -24,7 +24,7 @@ export function RelayInfoPage() {
   return (
     <InfoPage rail={<RelayInfoRail relay={relay} routeId={routeId} />}>
       <RelayGeneralSettings relay={relay} />
-      <RelayProxySettings relay={relay} />
+      <RelayProxySettings relay={relay} routeId={routeId} />
       <RelayDangerZone relay={relay} />
     </InfoPage>
   )
