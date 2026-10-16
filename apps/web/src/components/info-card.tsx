@@ -196,7 +196,7 @@ export function DangerZone({
   title,
 }: {
   action: React.ReactNode
-  detail: string
+  detail?: string
   title: string
 }) {
   return (
@@ -208,9 +208,11 @@ export function DangerZone({
         <div className="min-w-0">
           <p className="type-technical-label text-destructive">Danger zone</p>
           <h3 className="mt-1 text-sm font-semibold">{title}</h3>
-          <p className="type-meta mt-1 font-mono break-all text-muted-foreground">
-            {detail}
-          </p>
+          {detail ? (
+            <p className="type-meta mt-1 font-mono break-all text-muted-foreground">
+              {detail}
+            </p>
+          ) : null}
         </div>
       </div>
       {action}

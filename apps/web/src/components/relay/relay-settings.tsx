@@ -107,7 +107,6 @@ export function RelayConnectionSettings({
   return (
     <InfoSection
       title="Connection"
-      description="How Hearth reaches the Relay"
       action={
         canEdit ? <InfoEditButton onClick={() => setEditing(true)} /> : null
       }
@@ -289,7 +288,6 @@ export function RelayProxySettings({
   return (
     <InfoSection
       title="Proxy"
-      description="Routes web domains to apps"
       action={
         <>
           {proxy.data ? (
@@ -377,7 +375,6 @@ export function RelayAccessSettings({ relay }: { relay: RelayDirectoryEntry }) {
   return (
     <InfoSection
       title="Access"
-      description="What Hearth can do on this Relay"
       action={
         <InfoManageAccessButton
           relayId={relay.id}

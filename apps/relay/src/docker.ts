@@ -436,6 +436,7 @@ export class DockerDriver {
   readonly #config: RelayConfig
   readonly #resources: RelayResourceNames
   #cachedDockerVersion: string | null | undefined
+  #cachedHostOperatingSystem: string | undefined
   readonly #consoleLocks = new Map<string, Promise<void>>()
   readonly #consoleSizeStarts = new Map<string, string>()
   readonly #consoleSizePending = new Map<string, Promise<void>>()
@@ -1524,6 +1525,20 @@ export class DockerDriver {
       ? result.value.Version.trim() || null
       : null
     return this.#cachedDockerVersion
+  }
+
+  // The host's operating system, which Docker reads from the host rather
+  // than this container. Only an answer is kept, so a later call retries.
+  async hostOperatingSystem(): Promise<string | null> {
+    if (this.#cachedHostOperatingSystem !== undefined) {
+      return this.#cachedHostOperatingSystem
+    }
+    const result = await runEffect(this.#engine.info().pipe(Effect.option))
+    const operatingSystem = Option.isSome(result)
+      ? result.value.OperatingSystem?.trim().slice(0, 200)
+      : undefined
+    if (operatingSystem) this.#cachedHostOperatingSystem = operatingSystem
+    return operatingSystem || null
   }
 
   relayStartedAt(): Promise<string | null> {

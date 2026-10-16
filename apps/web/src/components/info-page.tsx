@@ -56,26 +56,17 @@ export interface InfoSectionForm {
 export function InfoSection({
   action,
   children,
-  description,
   form,
   title,
 }: {
   action?: React.ReactNode
   children: React.ReactNode
-  description?: string
   form?: InfoSectionForm
   title: string
 }) {
   const header = (
     <header className="flex min-h-12 items-center gap-3 border-b px-4 py-2">
-      <h3 className="min-w-0 truncate text-sm font-semibold">
-        {title}
-        {description ? (
-          <span className="ml-2 hidden text-xs font-normal text-muted-foreground sm:inline">
-            {description}
-          </span>
-        ) : null}
-      </h3>
+      <h3 className="min-w-0 truncate text-sm font-semibold">{title}</h3>
       {action && !form ? (
         <div className="ml-auto flex shrink-0 items-center gap-1.5">
           {action}
@@ -273,10 +264,13 @@ export function InfoRailGroup({
 export function InfoRailCard({
   children,
   icon,
+  summary,
   title,
 }: {
   children: React.ReactNode
   icon: React.ReactNode
+  // Shown above the facts, such as usage bars.
+  summary?: React.ReactNode
   title: string
 }) {
   return (
@@ -285,6 +279,9 @@ export function InfoRailCard({
         {icon}
         {title}
       </h3>
+      {summary ? (
+        <div className="border-b border-border/60 px-3">{summary}</div>
+      ) : null}
       <dl className="px-3">{children}</dl>
     </section>
   )

@@ -1522,6 +1522,11 @@ export const relayNodeSchema = z.object({
     available: z.boolean(),
     version: z.string().nullable(),
   }),
+  /**
+   * The host's operating system as Docker reports it, like "Ubuntu 24.04.1
+   * LTS". Absent when Docker can't say, and from Relays that predate it.
+   */
+  operatingSystem: z.string().min(1).max(200).optional(),
   connectedAt: z.string().datetime(),
   /** Absent from Relays that predate memory reporting. */
   relayMemory: relayProcessMemorySchema.optional(),

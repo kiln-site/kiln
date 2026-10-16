@@ -9,7 +9,10 @@ import {
   TooltipTrigger,
 } from "@workspace/ui/components/tooltip"
 
-import { relayMemoryReadingsQueryOptions } from "@/lib/query-options"
+import {
+  relayNodeReadingsQueryOptions,
+  type RelayNodeReading,
+} from "@/lib/query-options"
 
 type RelayMemoryReading = RelayProcessMemory | null | undefined
 
@@ -25,17 +28,12 @@ export const RelayMemoryCell = React.memo(function RelayMemoryCell({
   relayId: string
 }) {
   const select = React.useCallback(
-    (
-      readings: ReadonlyArray<{
-        relayId: string
-        relayMemory: RelayProcessMemory | null
-      }>
-    ): RelayMemoryReading =>
+    (readings: ReadonlyArray<RelayNodeReading>): RelayMemoryReading =>
       readings.find((reading) => reading.relayId === relayId)?.relayMemory,
     [relayId]
   )
   const { data: memory } = useQuery({
-    ...relayMemoryReadingsQueryOptions(),
+    ...relayNodeReadingsQueryOptions(),
     enabled: connected,
     notifyOnChangeProps: ["data"],
     select,

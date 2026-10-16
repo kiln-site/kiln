@@ -174,7 +174,10 @@ export class DockerEngine {
   }
 
   info(): Effect.Effect<
-    { readonly SecurityOptions?: ReadonlyArray<string> | null },
+    {
+      readonly OperatingSystem?: string
+      readonly SecurityOptions?: ReadonlyArray<string> | null
+    },
     DockerEngineError
   > {
     return this.#json({ method: "GET", path: "/info" })

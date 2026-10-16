@@ -41,7 +41,6 @@ function RelayDangerZone({ relay }: { relay: RelayDirectoryEntry }) {
     <>
       <DangerZone
         title="Remove this Relay"
-        detail={relay.id}
         action={
           <Button
             type="button"
