@@ -4,6 +4,8 @@ import {
   relayConnectionSettingsSchema,
   relayIdSchema as relayFingerprintSchema,
   relayNameSchema,
+  relayProxyConfigurationSchema,
+  relayProxyConfigurationV1Feature,
   relayProxyDiagnosticsSchema,
   relayProxySettingsSchema,
   relayTailscaleInstallSchema,
@@ -394,6 +396,29 @@ export const getRelayProxy = createServerFn({ method: "GET" })
     return relayProxyResponseSchema.parse(
       await relayRpc(relay, "relay.proxy.read", {}, 15_000)
     )
+  })
+
+// The bundled Traefik's static and dynamic files, as the Relay generates
+// them. Both are null in other proxy modes. The dynamic file names every
+// domain and where it leads, so it needs the network permission.
+export const getRelayTraefikConfiguration = createServerFn({ method: "GET" })
+  .validator(relayIdSchema)
+  .handler(async ({ data }) => {
+    await requireRelayAdministrator(data.id, "instance.network.read")
+    const [relay, { relayConnectionFeatures, relayRpc }] = await Promise.all([
+      enabledRelay(data.id),
+      import("@/lib/relay-connection"),
+    ])
+    if (
+      !relayConnectionFeatures(relay.id).has(relayProxyConfigurationV1Feature)
+    ) {
+      throw new Error("Update this Relay to view its Traefik configuration.")
+    }
+    const { dynamicConfiguration, staticConfiguration } =
+      relayProxyConfigurationSchema.parse(
+        await relayRpc(relay, "relay.proxy.config.read", {}, 15_000)
+      )
+    return { dynamicConfiguration, staticConfiguration }
   })
 
 export const updateRelayProxy = createServerFn({ method: "POST" })

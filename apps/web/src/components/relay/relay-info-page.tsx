@@ -37,7 +37,9 @@ function RelayDangerZone({ relay }: { relay: RelayDirectoryEntry }) {
   if (!canDelete) return null
   return (
     <>
+      {/* At the bottom of the page, or after the sections when they're taller. */}
       <DangerZone
+        className="mt-auto"
         title="Remove this Relay"
         action={
           <Button

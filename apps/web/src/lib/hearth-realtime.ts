@@ -111,10 +111,16 @@ function queryScopes(
     return [exact(queryKeys.fileActivity(scope.relayId, scope.instanceId))]
   }
   if (topic === "apps" && scope) {
-    return hearthRealtimeQueryScopes.apps
+    return [
+      ...hearthRealtimeQueryScopes.apps,
+      exact(queryKeys.relayTraefikConfiguration(scope.relayId)),
+    ]
   }
   if (topic === "instance-web-routes" && scope?.instanceId) {
-    return [exact(queryKeys.relay.webRoutes(scope.relayId, scope.instanceId))]
+    return [
+      exact(queryKeys.relay.webRoutes(scope.relayId, scope.instanceId)),
+      exact(queryKeys.relayTraefikConfiguration(scope.relayId)),
+    ]
   }
   if (topic === "relay-proxy" && scope) {
     return [prefix(queryKeys.relayProxy(scope.relayId))]

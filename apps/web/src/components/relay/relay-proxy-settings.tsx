@@ -15,6 +15,7 @@ import {
   useRelayLiveStatus,
 } from "@/components/relay/relay-presentation"
 import { RelayConfigureButton } from "@/components/relay/relay-settings"
+import { RelayTraefikConfigButton } from "@/components/relay/relay-traefik-config"
 import { StatusIndicator } from "@/components/status-indicator"
 import { relayProxyQueryOptions } from "@/lib/query-options"
 import type { RelayDirectoryEntry } from "@/lib/relay-route"
@@ -53,7 +54,12 @@ export function RelayProxySettings({ relay }: { relay: RelayDirectoryEntry }) {
     <InfoSection
       title="Proxy"
       status={<StatusIndicator status={proxyStatusPresentation(diagnostics)} />}
-      action={<RelayConfigureButton relay={relay} />}
+      action={
+        <>
+          {bundled ? <RelayTraefikConfigButton relayId={relay.id} /> : null}
+          <RelayConfigureButton relay={relay} />
+        </>
+      }
       notes={
         diagnostics.warnings.length > 0 ? (
           <ProxyWarnings warnings={diagnostics.warnings} />

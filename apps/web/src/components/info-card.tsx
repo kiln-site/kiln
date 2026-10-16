@@ -192,15 +192,22 @@ function selectUsersCardAccess(
 
 export function DangerZone({
   action,
+  className,
   detail,
   title,
 }: {
   action: React.ReactNode
+  className?: string
   detail?: string
   title: string
 }) {
   return (
-    <div className="mt-4 flex flex-col gap-3 rounded-xl border border-destructive/25 bg-destructive/4 px-4 py-3.5 sm:flex-row sm:items-center">
+    <div
+      className={cn(
+        "mt-4 flex flex-col gap-3 rounded-xl border border-destructive/25 bg-destructive/4 px-4 py-3.5 sm:flex-row sm:items-center",
+        className
+      )}
+    >
       <div className="flex min-w-0 flex-1 items-center gap-3">
         <span className="grid size-8 shrink-0 place-items-center rounded-lg border border-destructive/20 bg-destructive/10 text-destructive">
           <TriangleAlert className="size-4" />
