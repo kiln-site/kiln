@@ -16,6 +16,10 @@ import { isKilnReleaseVersion, orderKilnReleases } from "@/lib/release-version"
 // counts, so Hearth keeps every release it has seen and asks GitHub only
 // for the newest page, at most this often.
 const checkIntervalMs = 5 * 60_000
+// A check someone asks for still waits this long after the last one, so
+// repeated clicks and other admins share it instead of each spending the
+// rate limit.
+const requestedCheckIntervalMs = 30_000
 const githubPageSize = 100
 const recentReleaseCount = 100
 // Pages GitHub may have grown by since the last check before Hearth stops
@@ -27,6 +31,8 @@ const feedSettingKey = "kiln.releaseFeed"
 
 const FeedState = Schema.Struct({
   checkedAt: Schema.Number,
+  // GitHub couldn't be asked at `checkedAt`, so Hearth kept its copy.
+  failed: Schema.optional(Schema.Boolean),
   // The next GitHub page holding releases older than any Hearth has, or null
   // once Hearth has every release back to the first.
   historyPage: Schema.NullOr(Schema.Number),
@@ -88,9 +94,29 @@ export type ReleaseHistoryPage = {
  */
 export const listKilnReleasesEffect = Effect.fn("releases.listRecent")(
   function* () {
-    yield* syncReleaseFeed
+    yield* syncReleaseFeed(checkIntervalMs)
     const rows = yield* selectReleases(null, recentReleaseCount)
     return orderKilnReleases(rows.map(publicRelease))
+  }
+)
+
+/**
+ * Checks GitHub for new Kiln releases now rather than when the last check is
+ * old enough, unless one just ran. Returns when Hearth last asked GitHub and
+ * whether it answered, so a failure shows instead of the releases it had.
+ */
+export const checkKilnReleasesEffect = Effect.fn("releases.check")(
+  function* () {
+    const { failed, state } = yield* syncReleaseFeed(requestedCheckIntervalMs)
+    return { checkedAt: state.checkedAt, failed }
+  }
+)
+
+/** When Hearth last asked GitHub for releases, or null if it never has. */
+export const releasesCheckedAtEffect = Effect.fn("releases.checkedAt")(
+  function* () {
+    const state = yield* loadFeedState
+    return state?.repository === kilnGitRepository() ? state.checkedAt : null
   }
 )
 
@@ -107,7 +133,7 @@ export const releaseHistoryPageEffect = Effect.fn("releases.historyPage")(
     let state =
       stored?.repository === kilnGitRepository()
         ? stored
-        : yield* syncReleaseFeed
+        : (yield* syncReleaseFeed(checkIntervalMs)).state
     let rows = yield* selectReleases(cursor, limit + 1)
     if (rows.length <= limit && state.historyPage !== null) {
       state = yield* feedLock.withPermits(1)(backfillReleaseHistory)
@@ -177,13 +203,18 @@ export const recordComponentVersionsEffect = Effect.fn(
   return previous
 })
 
-const syncReleaseFeed = feedLock.withPermits(1)(
+// Asks GitHub for new releases unless Hearth did within `maxAgeMs`.
+// `failed` says GitHub couldn't be asked, and Hearth's copy was kept.
+const syncReleaseFeed = (maxAgeMs: number) =>
+  feedLock.withPermits(1)(
   Effect.gen(function* () {
     const repository = kilnGitRepository()
     const now = yield* Clock.currentTimeMillis
     const stored = yield* loadFeedState
     const current = stored?.repository === repository ? stored : null
-    if (current && now - current.checkedAt < checkIntervalMs) return current
+    if (current && now - current.checkedAt < maxAgeMs) {
+      return { failed: current.failed === true, state: current }
+    }
 
     const database = yield* Database
     if (!current) {
@@ -195,6 +226,7 @@ const syncReleaseFeed = feedLock.withPermits(1)(
     }
     const checked = yield* catchUpWithGitHub(current).pipe(
       Effect.tap(() => resolvePendingAliases),
+      Effect.map((historyPage) => ({ failed: false, historyPage })),
       Effect.catch((error) =>
         // Serve what Hearth has, and wait out the interval before asking
         // again rather than spending the rate limit on retries.
@@ -202,17 +234,20 @@ const syncReleaseFeed = feedLock.withPermits(1)(
           ? Effect.logWarning(
               "Could not check GitHub for Kiln releases",
               error
-            ).pipe(Effect.as(current.historyPage))
+            ).pipe(
+              Effect.as({ failed: true, historyPage: current.historyPage })
+            )
           : Effect.fail(error)
       )
     )
     const next: FeedState = {
       checkedAt: now,
-      historyPage: checked,
+      failed: checked.failed,
+      historyPage: checked.historyPage,
       repository,
     }
     yield* saveFeedState(next)
-    return next
+    return { failed: checked.failed, state: next }
   })
 )
 

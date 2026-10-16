@@ -121,6 +121,7 @@ import {
 } from "@/lib/system-update-reports"
 import type { UpdateOverview } from "@/server/updates"
 import {
+  checkForKilnReleases,
   getSystemUpdates,
   getSystemUpdateStatus,
   startSystemUpdates,
@@ -191,6 +192,7 @@ type UpdateDialogViewStore = ReturnType<typeof createUpdateDialogViewStore>
 
 const updateFailureStorageKey = "kiln.system-update-failures"
 const systemUpdateToastId = "system-update"
+const releaseCheckToastId = "release-check"
 const minimumUpdateCheckDuration = 750
 const completedUpdateDisplayDuration = 1_500
 const mockRelayPhaseDuration = 325
@@ -1416,10 +1418,35 @@ const UpdaterCheckButton = React.memo(function UpdaterCheckButton({
     enabled: () => open && !updating && canRefetchSystemUpdateOverview(),
     notifyOnChangeProps: ["isFetching"],
   })
+  const refetchOverview = overviewQuery.refetch
+  // Hearth asks GitHub itself only every few minutes, so checking asks it
+  // now before reading the updates again.
+  const checkMutation = useMutation({
+    mutationFn: async () => {
+      const { failed } = await checkForKilnReleases()
+      await refetchOverview()
+      if (failed) {
+        showToast({
+          type: "error",
+          message: "Couldn’t reach GitHub",
+          description: "Showing the releases Kiln already knew about.",
+          id: releaseCheckToastId,
+        })
+      }
+    },
+    onError: () => {
+      showToast({
+        type: "error",
+        message: "Couldn’t check for updates",
+        id: releaseCheckToastId,
+      })
+    },
+  })
   const checking = useMinimumDuration(
-    overviewQuery.isFetching,
+    overviewQuery.isFetching || checkMutation.isPending,
     minimumUpdateCheckDuration
   )
+  const check = checkMutation.mutate
 
   return (
     <Tooltip>
@@ -1432,7 +1459,7 @@ const UpdaterCheckButton = React.memo(function UpdaterCheckButton({
           size="icon-sm"
           type="button"
           variant="ghost"
-          onClick={() => void overviewQuery.refetch()}
+          onClick={() => check()}
         >
           <RefreshCw className={checking ? "animate-spin" : ""} />
         </Button>
@@ -2457,19 +2484,25 @@ const LastCheckedLabel = React.memo(function LastCheckedLabel({
     activityStore.getBusySnapshot,
     activityStore.getBusySnapshot
   )
-  const overviewQuery = useQuery({
+  // When Hearth last asked GitHub, which is what a check refreshes.
+  const { data: checkedAt } = useQuery({
     ...updateOverviewQueryOptions(),
     enabled: () => open && !updating && canRefetchSystemUpdateOverview(),
-    notifyOnChangeProps: ["dataUpdatedAt"],
+    select: selectReleasesCheckedAt,
+    notifyOnChangeProps: ["data"],
   })
   return (
     <span className="truncate">
-      {overviewQuery.dataUpdatedAt > 0
-        ? `Checked ${lastCheckedFormatter.format(new Date(overviewQuery.dataUpdatedAt))}`
+      {checkedAt
+        ? `Checked ${lastCheckedFormatter.format(new Date(checkedAt))}`
         : null}
     </span>
   )
 })
+
+function selectReleasesCheckedAt(overview: UpdateOverview): number | null {
+  return overview.releasesCheckedAt
+}
 
 // Rows have fixed heights so the virtualizer never measures, and nothing
 // shifts while older releases load in below.

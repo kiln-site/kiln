@@ -5,9 +5,11 @@ import { z } from "zod"
 
 import { kilnReleaseManifestEffect } from "@/effect/github-releases"
 import {
+  checkKilnReleasesEffect,
   listKilnReleasesEffect,
   recordComponentVersionsEffect,
   releaseHistoryPageEffect,
+  releasesCheckedAtEffect,
 } from "@/effect/kiln-release-feed"
 import { RelayUnavailableError } from "@/effect/errors"
 import { platformAdminIdsEffect } from "@/effect/notifications"
@@ -198,6 +200,10 @@ export const getUpdateOverview = createServerFn({ method: "GET" }).handler(
         : Promise.resolve([]),
     ])
     const hearthTarget = hearthCandidates.find((target) => target) ?? null
+    const releasesCheckedAt = await runAppEffect(
+      "updates.releases-checked-at",
+      releasesCheckedAtEffect()
+    )
     const currentVersion = import.meta.env.VITE_KILN_VERSION
     // Admins can update Relays other people brought, so those name who
     // paired them. Relays an admin paired are the platform's own and name
@@ -254,12 +260,26 @@ export const getUpdateOverview = createServerFn({ method: "GET" }).handler(
       hearth: hearthTarget,
       previousVersions,
       releases,
+      // When Hearth last asked GitHub for releases.
+      releasesCheckedAt,
       relays: relayTargets.map((relay) => ({
         ...relay,
         ownedByViewer: owners.get(relay.relayId)?.ownedByViewer ?? false,
         ownerName: owners.get(relay.relayId)?.ownerName ?? null,
       })),
     }
+  }
+)
+
+/**
+ * Asks GitHub for new Kiln releases now, for the updater's check button,
+ * rather than waiting for Hearth's next check. `failed` says GitHub couldn't
+ * be asked and the releases Hearth had are still shown.
+ */
+export const checkForKilnReleases = createServerFn({ method: "POST" }).handler(
+  async () => {
+    await requireUpdateAccess()
+    return runAppEffect("updates.check-releases", checkKilnReleasesEffect())
   }
 )
 

@@ -4,6 +4,7 @@ import { FetchHttpClient } from "effect/http"
 import { TestClock } from "effect/testing"
 
 import {
+  checkKilnReleasesEffect,
   listKilnReleasesEffect,
   recordComponentVersionsEffect,
   releaseHistoryPageEffect,
@@ -86,6 +87,36 @@ describeMysql("Kiln release feed", () => {
 
           yield* TestClock.adjust("5 minutes")
           serveReleasePages([[nightly(3), nightly(2), nightly(1)]])
+          assert.deepStrictEqual((yield* recentVersions)[0], nightly(3).version)
+        })
+    )
+
+    it.effect(
+      "checks GitHub when asked, sharing a check that just ran",
+      () =>
+        Effect.gen(function* () {
+          yield* resetDatabase
+          serveReleasePages([[nightly(2), nightly(1)]])
+          yield* recentVersions
+
+          // Published a minute later, before Hearth would check on its own.
+          yield* TestClock.adjust("1 minute")
+          let requests = serveReleasePages([[nightly(3), nightly(2), nightly(1)]])
+          assert.isFalse((yield* checkKilnReleasesEffect()).failed)
+          assert.deepStrictEqual((yield* recentVersions)[0], nightly(3).version)
+          yield* checkKilnReleasesEffect()
+          assert.deepStrictEqual(requests, [1])
+
+          // A check GitHub doesn't answer says so, and keeps the releases.
+          yield* TestClock.adjust("30 seconds")
+          requests = []
+          serve = (input) => {
+            requests.push(Number(new URL(input).searchParams.get("page")))
+            return new Response("rate limited", { status: 403 })
+          }
+          assert.isTrue((yield* checkKilnReleasesEffect()).failed)
+          assert.isTrue((yield* checkKilnReleasesEffect()).failed)
+          assert.deepStrictEqual(requests, [1])
           assert.deepStrictEqual((yield* recentVersions)[0], nightly(3).version)
         })
     )
