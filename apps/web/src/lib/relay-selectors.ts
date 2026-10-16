@@ -101,6 +101,7 @@ export type InstanceSettingsInstance = Pick<
   | "containerId"
   | "directory"
   | "game"
+  | "hostDirectory"
   | "id"
   | "implementation"
   | "javaVersion"
@@ -305,6 +306,7 @@ export function selectInstanceSettings(instanceId: string, relayId?: string) {
         containerId: instance.containerId,
         directory: instance.directory,
         game: instance.game,
+        hostDirectory: instance.hostDirectory,
         id: instance.id,
         implementation: instance.implementation,
         javaVersion: instance.javaVersion,

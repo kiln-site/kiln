@@ -1380,6 +1380,8 @@ export const relayInstanceSchema = z.object({
   connectAddress: z.string().min(1),
   service: z.string().min(1),
   directory: z.string().min(1),
+  // The server's folder on the Relay's host. Absent from older Relays.
+  hostDirectory: z.string().min(1).optional(),
   desiredState: relayDesiredStateSchema,
   observedState: relayObservedStateSchema,
   stateReason: relayInstanceStateReasonSchema.nullable().default(null),

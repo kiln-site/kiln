@@ -219,9 +219,17 @@ function ServerContainerCard({
           <span className="text-muted-foreground">Not created</span>
         )}
       </InfoFact>
-      <InfoFact label="Data">
-        <InfoCopyValue label="data directory" value={instance.directory} />
-      </InfoFact>
+      {/* The server's folder on the Relay's host; older Relays don't say. */}
+      {instance.hostDirectory ? (
+        <InfoFact label="Data">
+          <InfoCopyValue
+            display="Copy path"
+            label="data path"
+            mono={false}
+            value={instance.hostDirectory}
+          />
+        </InfoFact>
+      ) : null}
       {/* Game servers have no CPU limit yet. */}
       <InfoFact label="CPU">
         <span className="text-muted-foreground" title="No CPU limit">

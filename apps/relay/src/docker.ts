@@ -2539,6 +2539,7 @@ export class DockerDriver {
           : undefined,
       }),
       directory: relativeDirectory,
+      hostDirectory: serverMount.Source,
       game:
         labels["kiln.instance.game"] ??
         (validBrickId === "palworld" ? "Palworld" : "Minecraft"),

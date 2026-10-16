@@ -27,6 +27,8 @@ export interface RelayInstanceConfig {
   brickSnapshotSha256?: string
   connectAddress: string
   directory: string
+  // The server's folder on the Relay's host, its /server bind mount's source.
+  hostDirectory?: string
   game: string
   id: string
   shortId: string

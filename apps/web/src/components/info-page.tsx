@@ -168,10 +168,14 @@ export function InfoDetailRow({
 }
 
 export function InfoCopyValue({
+  display,
   label,
   mono = true,
   value,
 }: {
+  // Shown in place of a value too long to read in the row, such as "Copy
+  // path"; the value is still what's copied, and shows on hover.
+  display?: string
   // Lowercase noun, for example "Relay address".
   label: string
   // Identifiers and addresses are monospaced; names aren't.
@@ -193,7 +197,7 @@ export function InfoCopyValue({
           onClick={() => void copy()}
         >
           <span className="truncate" title={value}>
-            {value}
+            {display ?? value}
           </span>
           {copied ? (
             <Check className="size-3 shrink-0" />
