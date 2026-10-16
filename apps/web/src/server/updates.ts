@@ -52,10 +52,14 @@ const releaseHistorySchema = z.object({
     })
     .nullable(),
 })
-const systemUpdatesSchema = z.object({
-  // The Relays to read, or every one the user can update when null.
-  relayIds: z.array(z.string().min(1)).max(500).nullable(),
-})
+// Updaters from before the Relays could be chosen send nothing, which reads
+// them all; one may still be open while Hearth replaces itself.
+const systemUpdatesSchema = z
+  .object({
+    // The Relays to read, or every one the user can update when null.
+    relayIds: z.array(z.string().min(1)).max(500).nullable(),
+  })
+  .optional()
 const updateStatusSchema = z.object({
   operationId: z.uuid(),
   relayId: z.string().min(1),
@@ -580,7 +584,7 @@ export const getSystemUpdates = createServerFn({ method: "GET" })
         updateRelaysForUser(user),
         import("@/lib/relay-connection"),
       ])
-    const requested = data.relayIds ? new Set(data.relayIds) : null
+    const requested = data?.relayIds ? new Set(data.relayIds) : null
     const read = requested
       ? relays.filter((relay) => requested.has(relay.id))
       : relays

@@ -218,7 +218,12 @@ function systemUpdateReportsQueryOptions(relayIds: ReadonlyArray<string>) {
     placeholderData: keepPreviousData,
     refetchInterval: 2_000,
     retry: false,
-    notifyOnChangeProps: ["data", "dataUpdatedAt", "isError"],
+    notifyOnChangeProps: [
+      "data",
+      "dataUpdatedAt",
+      "isError",
+      "isPlaceholderData",
+    ],
   })
 }
 
@@ -1104,9 +1109,13 @@ const ActiveUpdatePollers = React.memo(function ActiveUpdatePollers({
         error={observation.kind === "finished" ? observation.error : null}
         key={update.operationId}
         kind={observation.kind}
-        // Only an absent update needs each read, to tell how long it's been.
+        // Only an absent update needs each read, to tell how long it's
+        // been. The previous Relays' read shown while these are first read
+        // isn't one.
         observedAt={
-          observation.kind === "absent" ? reportsQuery.dataUpdatedAt : 0
+          observation.kind === "absent" && !reportsQuery.isPlaceholderData
+            ? reportsQuery.dataUpdatedAt
+            : 0
         }
         phase={observation.kind === "running" ? observation.phase : null}
         status={observation.kind === "finished" ? observation.status : null}
@@ -1139,6 +1148,7 @@ const ReportedActiveUpdate = React.memo(function ReportedActiveUpdate({
   controller: ActiveUpdatePollerController
   error: string | null
   kind: Exclude<ReportedUpdateObservation["kind"], "unsupported">
+  // When the read that found it absent arrived, or 0 for no read.
   observedAt: number
   phase: string | null
   status: "failed" | "succeeded" | null
@@ -1173,6 +1183,7 @@ const ReportedActiveUpdate = React.memo(function ReportedActiveUpdate({
       absentSince.current = null
       return
     }
+    if (observedAt === 0) return
     absentSince.current ??= observedAt
     if (observedAt - absentSince.current >= notStartedAfterMs) {
       completed.current = true
