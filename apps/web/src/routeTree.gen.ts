@@ -87,6 +87,8 @@ import { Route as AppDbDatabaseIdLogsRouteImport } from './routes/_app/db/$datab
 import { Route as AppDbDatabaseIdNetworkRouteImport } from './routes/_app/db/$databaseId.network'
 import { Route as AppDbDatabaseIdTerminalRouteImport } from './routes/_app/db/$databaseId.terminal'
 import { Route as AppDbDatabaseIdViewerRouteImport } from './routes/_app/db/$databaseId.viewer'
+import { Route as AppInfraUpdatesIndexRouteImport } from './routes/_app.infra.updates.index'
+import { Route as AppInfraUpdatesChangelogRouteImport } from './routes/_app.infra.updates.changelog'
 import { Route as AppRelayRelayIdIndexRouteImport } from './routes/_app/relay/$relayId.index'
 import { Route as AppRelayRelayIdSplatRouteImport } from './routes/_app/relay/$relayId.$'
 import { Route as AppRelayRelayIdDatabaseRouteImport } from './routes/_app/relay/$relayId.database'
@@ -500,6 +502,17 @@ const AppDbDatabaseIdViewerRoute = AppDbDatabaseIdViewerRouteImport.update({
   path: '/viewer',
   getParentRoute: () => AppDbDatabaseIdRoute,
 } as any)
+const AppInfraUpdatesIndexRoute = AppInfraUpdatesIndexRouteImport.update({
+  id: '/updates/',
+  path: '/updates/',
+  getParentRoute: () => AppInfraRoute,
+} as any)
+const AppInfraUpdatesChangelogRoute =
+  AppInfraUpdatesChangelogRouteImport.update({
+    id: '/updates/changelog',
+    path: '/updates/changelog',
+    getParentRoute: () => AppInfraRoute,
+  } as any)
 const AppRelayRelayIdIndexRoute = AppRelayRelayIdIndexRouteImport.update({
   id: '/',
   path: '/',
@@ -692,6 +705,7 @@ export interface FileRoutesByFullPath {
   '/db/$databaseId/network': typeof AppDbDatabaseIdNetworkRoute
   '/db/$databaseId/terminal': typeof AppDbDatabaseIdTerminalRoute
   '/db/$databaseId/viewer': typeof AppDbDatabaseIdViewerRoute
+  '/infra/updates/changelog': typeof AppInfraUpdatesChangelogRoute
   '/relay/$relayId/$': typeof AppRelayRelayIdSplatRoute
   '/relay/$relayId/database': typeof AppRelayRelayIdDatabaseRoute
   '/relay/$relayId/files': typeof AppRelayRelayIdFilesRouteWithChildren
@@ -711,6 +725,7 @@ export interface FileRoutesByFullPath {
   '/api/telemetry/v1/$signal': typeof ApiTelemetryV1SignalRoute
   '/app/$appId/': typeof AppAppAppIdIndexRoute
   '/db/$databaseId/': typeof AppDbDatabaseIdIndexRoute
+  '/infra/updates/': typeof AppInfraUpdatesIndexRoute
   '/relay/$relayId/': typeof AppRelayRelayIdIndexRoute
   '/server/$serverId/': typeof AppServerServerIdIndexRoute
   '/app/$appId/files/$': typeof AppAppAppIdFilesSplatRoute
@@ -785,6 +800,7 @@ export interface FileRoutesByTo {
   '/db/$databaseId/network': typeof AppDbDatabaseIdNetworkRoute
   '/db/$databaseId/terminal': typeof AppDbDatabaseIdTerminalRoute
   '/db/$databaseId/viewer': typeof AppDbDatabaseIdViewerRoute
+  '/infra/updates/changelog': typeof AppInfraUpdatesChangelogRoute
   '/relay/$relayId/$': typeof AppRelayRelayIdSplatRoute
   '/relay/$relayId/database': typeof AppRelayRelayIdDatabaseRoute
   '/relay/$relayId/files': typeof AppRelayRelayIdFilesRouteWithChildren
@@ -804,6 +820,7 @@ export interface FileRoutesByTo {
   '/api/telemetry/v1/$signal': typeof ApiTelemetryV1SignalRoute
   '/app/$appId': typeof AppAppAppIdIndexRoute
   '/db/$databaseId': typeof AppDbDatabaseIdIndexRoute
+  '/infra/updates': typeof AppInfraUpdatesIndexRoute
   '/relay/$relayId': typeof AppRelayRelayIdIndexRoute
   '/server/$serverId': typeof AppServerServerIdIndexRoute
   '/app/$appId/files/$': typeof AppAppAppIdFilesSplatRoute
@@ -888,6 +905,7 @@ export interface FileRoutesById {
   '/_app/db/$databaseId/network': typeof AppDbDatabaseIdNetworkRoute
   '/_app/db/$databaseId/terminal': typeof AppDbDatabaseIdTerminalRoute
   '/_app/db/$databaseId/viewer': typeof AppDbDatabaseIdViewerRoute
+  '/_app/infra/updates/changelog': typeof AppInfraUpdatesChangelogRoute
   '/_app/relay/$relayId/$': typeof AppRelayRelayIdSplatRoute
   '/_app/relay/$relayId/database': typeof AppRelayRelayIdDatabaseRoute
   '/_app/relay/$relayId/files': typeof AppRelayRelayIdFilesRouteWithChildren
@@ -907,6 +925,7 @@ export interface FileRoutesById {
   '/api/telemetry/v1/$signal': typeof ApiTelemetryV1SignalRoute
   '/_app/app/$appId/': typeof AppAppAppIdIndexRoute
   '/_app/db/$databaseId/': typeof AppDbDatabaseIdIndexRoute
+  '/_app/infra/updates/': typeof AppInfraUpdatesIndexRoute
   '/_app/relay/$relayId/': typeof AppRelayRelayIdIndexRoute
   '/_app/server/$serverId/': typeof AppServerServerIdIndexRoute
   '/_app/app/$appId/files/$': typeof AppAppAppIdFilesSplatRoute
@@ -991,6 +1010,7 @@ export interface FileRouteTypes {
     | '/db/$databaseId/network'
     | '/db/$databaseId/terminal'
     | '/db/$databaseId/viewer'
+    | '/infra/updates/changelog'
     | '/relay/$relayId/$'
     | '/relay/$relayId/database'
     | '/relay/$relayId/files'
@@ -1010,6 +1030,7 @@ export interface FileRouteTypes {
     | '/api/telemetry/v1/$signal'
     | '/app/$appId/'
     | '/db/$databaseId/'
+    | '/infra/updates/'
     | '/relay/$relayId/'
     | '/server/$serverId/'
     | '/app/$appId/files/$'
@@ -1084,6 +1105,7 @@ export interface FileRouteTypes {
     | '/db/$databaseId/network'
     | '/db/$databaseId/terminal'
     | '/db/$databaseId/viewer'
+    | '/infra/updates/changelog'
     | '/relay/$relayId/$'
     | '/relay/$relayId/database'
     | '/relay/$relayId/files'
@@ -1103,6 +1125,7 @@ export interface FileRouteTypes {
     | '/api/telemetry/v1/$signal'
     | '/app/$appId'
     | '/db/$databaseId'
+    | '/infra/updates'
     | '/relay/$relayId'
     | '/server/$serverId'
     | '/app/$appId/files/$'
@@ -1186,6 +1209,7 @@ export interface FileRouteTypes {
     | '/_app/db/$databaseId/network'
     | '/_app/db/$databaseId/terminal'
     | '/_app/db/$databaseId/viewer'
+    | '/_app/infra/updates/changelog'
     | '/_app/relay/$relayId/$'
     | '/_app/relay/$relayId/database'
     | '/_app/relay/$relayId/files'
@@ -1205,6 +1229,7 @@ export interface FileRouteTypes {
     | '/api/telemetry/v1/$signal'
     | '/_app/app/$appId/'
     | '/_app/db/$databaseId/'
+    | '/_app/infra/updates/'
     | '/_app/relay/$relayId/'
     | '/_app/server/$serverId/'
     | '/_app/app/$appId/files/$'
@@ -1793,6 +1818,20 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppDbDatabaseIdViewerRouteImport
       parentRoute: typeof AppDbDatabaseIdRoute
     }
+    '/_app/infra/updates/': {
+      id: '/_app/infra/updates/'
+      path: '/updates'
+      fullPath: '/infra/updates/'
+      preLoaderRoute: typeof AppInfraUpdatesIndexRouteImport
+      parentRoute: typeof AppInfraRoute
+    }
+    '/_app/infra/updates/changelog': {
+      id: '/_app/infra/updates/changelog'
+      path: '/updates/changelog'
+      fullPath: '/infra/updates/changelog'
+      preLoaderRoute: typeof AppInfraUpdatesChangelogRouteImport
+      parentRoute: typeof AppInfraRoute
+    }
     '/_app/relay/$relayId/': {
       id: '/_app/relay/$relayId/'
       path: '/'
@@ -1997,6 +2036,8 @@ interface AppInfraRouteChildren {
   AppInfraSetupRoute: typeof AppInfraSetupRoute
   AppInfraTailscaleRoute: typeof AppInfraTailscaleRoute
   AppInfraIndexRoute: typeof AppInfraIndexRoute
+  AppInfraUpdatesChangelogRoute: typeof AppInfraUpdatesChangelogRoute
+  AppInfraUpdatesIndexRoute: typeof AppInfraUpdatesIndexRoute
 }
 
 const AppInfraRouteChildren: AppInfraRouteChildren = {
@@ -2008,6 +2049,8 @@ const AppInfraRouteChildren: AppInfraRouteChildren = {
   AppInfraSetupRoute: AppInfraSetupRoute,
   AppInfraTailscaleRoute: AppInfraTailscaleRoute,
   AppInfraIndexRoute: AppInfraIndexRoute,
+  AppInfraUpdatesChangelogRoute: AppInfraUpdatesChangelogRoute,
+  AppInfraUpdatesIndexRoute: AppInfraUpdatesIndexRoute,
 }
 
 const AppInfraRouteWithChildren = AppInfraRoute._addFileChildren(

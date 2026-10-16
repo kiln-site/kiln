@@ -1,21 +1,28 @@
 import * as React from "react"
 import { useSuspenseQuery } from "@tanstack/react-query"
-import { useRouter, useRouterState } from "@tanstack/react-router"
+import {
+  useNavigate,
+  useRouter,
+  useRouterState,
+} from "@tanstack/react-router"
 
 import { InfraUpdatesDialog } from "@/components/infra-updates-dialog"
 import { accessCapabilitiesQueryOptions } from "@/lib/query-options"
+
+export type InfraUpdateDialogView = "changelog" | "overview"
 
 type InfraUpdateDialogState = {
   open: boolean
   relayId: string | null
   requestId: number
+  view: InfraUpdateDialogView
 }
 
 export interface InfraUpdateDialogStore {
   close: () => void
   getServerSnapshot: () => InfraUpdateDialogState
   getSnapshot: () => InfraUpdateDialogState
-  open: (relayId?: string) => void
+  open: (relayId?: string, view?: InfraUpdateDialogView) => void
   subscribe: (listener: () => void) => () => void
 }
 
@@ -23,6 +30,7 @@ const closedUpdateDialogState: InfraUpdateDialogState = {
   open: false,
   relayId: null,
   requestId: 0,
+  view: "overview",
 }
 
 const InfraUpdateDialogContext =
@@ -43,14 +51,16 @@ function createInfraUpdateDialogStore(): InfraUpdateDialogStore {
         open: false,
         relayId: null,
         requestId: state.requestId,
+        view: state.view,
       }),
     getServerSnapshot: () => closedUpdateDialogState,
     getSnapshot: () => state,
-    open: (relayId) =>
+    open: (relayId, view = "overview") =>
       publish({
         open: true,
         relayId: relayId ?? null,
         requestId: state.requestId + 1,
+        view,
       }),
     subscribe: (listener) => {
       listeners.add(listener)
@@ -67,6 +77,25 @@ export function useInfraUpdateDialogStore(): InfraUpdateDialogStore {
     )
   }
   return store
+}
+
+// Opens the Updates dialog over the Relays page, for the URLs that link to
+// it: /infra/updates and /infra/updates/changelog.
+export function OpenInfraUpdateDialog({
+  view,
+}: {
+  view: InfraUpdateDialogView
+}) {
+  const navigate = useNavigate()
+  const store = useInfraUpdateDialogStore()
+
+  React.useEffect(() => {
+    void navigate({ to: "/infra/relays", replace: true }).then(() => {
+      store.open(undefined, view)
+    })
+  }, [navigate, store, view])
+
+  return null
 }
 
 export const InfraUpdateDialogProvider = React.memo(
@@ -139,6 +168,7 @@ const AuthorizedInfraUpdatesDialogHost = React.memo(
         initialRelayId={state.relayId}
         open={state.open}
         requestId={state.requestId}
+        view={state.view}
         onRetryTarget={returnToUpdater}
         onOpenChange={handleOpenChange}
       />

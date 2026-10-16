@@ -64,6 +64,7 @@ import {
 } from "@workspace/ui/components/tooltip"
 
 import type { PublicKilnRelease } from "@/effect/github-releases"
+import type { InfraUpdateDialogView } from "@/components/infra-update-dialog-provider"
 import { useKilnGitRepository } from "@/lib/git-repository"
 import {
   changelogTimeline,
@@ -186,7 +187,6 @@ const inactiveUpdateBatch = inactiveSystemUpdateBatch<
   HearthUpdateCompletion
 >()
 
-type DialogView = "changelog" | "overview"
 
 type UpdateDialogViewStore = ReturnType<typeof createUpdateDialogViewStore>
 
@@ -266,12 +266,14 @@ export const InfraUpdatesDialog = React.memo(function InfraUpdatesDialog({
   onOpenChange,
   onRetryTarget,
   requestId,
+  view,
 }: {
   initialRelayId: string | null
   open: boolean
   onOpenChange: (open: boolean) => void
   onRetryTarget: (relayId: string | null) => void
   requestId: number
+  view: InfraUpdateDialogView
 }) {
   const gitRepository = useKilnGitRepository()
   const githubIssuesUrl = `${gitRepository}/issues/new/choose`
@@ -354,8 +356,9 @@ export const InfraUpdatesDialog = React.memo(function InfraUpdatesDialog({
 
   React.useEffect(() => {
     if (requestId === 0) return
-    viewStore.showOverview()
-  }, [requestId, viewStore])
+    if (view === "changelog") viewStore.openChangelog(null)
+    else viewStore.showOverview()
+  }, [requestId, view, viewStore])
 
   // Follows updates this browser didn't start just now: ones it followed
   // before a reload, and ones the Relays report running.
@@ -4007,13 +4010,13 @@ function dismissConnectionToasts(
 }
 
 function createUpdateDialogViewStore() {
-  let view: DialogView = "overview"
+  let view: InfraUpdateDialogView = "overview"
   // The component whose version line the changelog opens on, or null for
   // the top.
   let jumpTarget: string | null = null
   const listeners = new Set<() => void>()
 
-  const setView = (next: DialogView) => {
+  const setView = (next: InfraUpdateDialogView) => {
     if (next === view) return
     view = next
     listeners.forEach((listener) => listener())

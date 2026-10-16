@@ -2,7 +2,6 @@ import * as React from "react"
 import { useMutation, useQueryClient } from "@tanstack/react-query"
 import { Link, useNavigate } from "@tanstack/react-router"
 import {
-  ExternalLink,
   PackageCheck,
   Rocket,
   UserMinus,
@@ -14,7 +13,6 @@ import { Button } from "@workspace/ui/components/button"
 import { showToast } from "@workspace/ui/components/sonner"
 import { cn } from "@workspace/ui/lib/utils"
 
-import { useInfraUpdateDialogStore } from "@/components/infra-update-dialog-provider"
 import { RelativeTime } from "@/components/relative-time"
 import {
   acceptedInvitationHref,
@@ -205,15 +203,15 @@ function NotificationActions({
 }) {
   switch (content.kind) {
     case "kiln.updated":
-      return content.url ? (
+      return (
         <div className="relative flex shrink-0 items-center gap-1.5">
-          <ChangelogLink url={content.url} />
+          <ChangelogLink onNavigate={onNavigate} />
         </div>
-      ) : null
+      )
     case "kiln.release":
       return (
         <div className="relative flex shrink-0 items-center gap-1.5">
-          <ChangelogLink url={content.url} />
+          <ChangelogLink onNavigate={onNavigate} />
           <UpdateKilnButton onNavigate={onNavigate} />
         </div>
       )
@@ -234,7 +232,8 @@ function NotificationActions({
   }
 }
 
-function ChangelogLink({ url }: { url: string }) {
+// Opens the Updates dialog's changelog.
+function ChangelogLink({ onNavigate }: { onNavigate?: () => void }) {
   return (
     <Button
       asChild
@@ -242,27 +241,20 @@ function ChangelogLink({ url }: { url: string }) {
       size="xs"
       className="text-muted-foreground hover:text-foreground"
     >
-      <a href={url} target="_blank" rel="noopener noreferrer">
+      <Link to="/infra/updates/changelog" onClick={onNavigate}>
         Changelog
-        <ExternalLink data-icon="inline-end" aria-hidden />
-      </a>
+      </Link>
     </Button>
   )
 }
 
 // Opens the Updates dialog, where the update is reviewed and started.
 function UpdateKilnButton({ onNavigate }: { onNavigate?: () => void }) {
-  const navigate = useNavigate()
-  const updateDialog = useInfraUpdateDialogStore()
   return (
-    <Button
-      size="xs"
-      onClick={() => {
-        onNavigate?.()
-        void navigate({ to: "/infra/relays" }).then(() => updateDialog.open())
-      }}
-    >
-      Update
+    <Button asChild size="xs">
+      <Link to="/infra/updates" onClick={onNavigate}>
+        Update
+      </Link>
     </Button>
   )
 }
