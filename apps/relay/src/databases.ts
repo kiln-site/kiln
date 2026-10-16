@@ -708,10 +708,10 @@ function databaseHealthcheck(engine: DatabaseEngine): ContainerHealthcheck {
           : engine === "postgres"
             ? 'pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB"'
             : "kill -0 1",
-    interval: "5s",
+    intervalMs: 5_000,
     retries: 24,
-    startPeriod: "10s",
-    timeout: "3s",
+    startPeriodMs: 10_000,
+    timeoutMs: 3_000,
   }
 }
 
@@ -803,7 +803,7 @@ function rotationSql(
 }
 
 // Writes the users file Redis and Valkey load into their data volume, with
-// the image's own shell, as `docker run --rm -i` did.
+// the image's own shell in a one-off container.
 async function writeAclFile(
   engine: DockerEngine,
   image: string,

@@ -3409,8 +3409,8 @@ export class LifecycleDriver {
       binds: [
         `${join(hostInfrastructure, "tailscale", "state")}:/var/lib/tailscale`,
       ],
-      capAdd: ["NET_ADMIN", "NET_RAW"],
-      devices: ["/dev/net/tun:/dev/net/tun"],
+      capAdd: ["CAP_NET_ADMIN", "CAP_NET_RAW"],
+      devices: ["/dev/net/tun"],
       env: {
         TS_AUTH_ONCE: "true",
         TS_KUBE_SECRET: "",
@@ -3575,7 +3575,6 @@ export class LifecycleDriver {
     }
     await runLifecycle(
       this.#engine.createNetwork({
-        driver: "bridge",
         labels: {
           "kiln.relay.network": `tailscale:${config.id}`,
           ...relayOwnerLabels(this.#config),
@@ -3692,8 +3691,8 @@ export class LifecycleDriver {
         `${join(hostRoot, "instances", config.id)}:/config`,
         `${join(hostRoot, "infrastructure", "tailscale-stacks", config.id, "state")}:/var/lib/tailscale`,
       ],
-      capAdd: ["NET_ADMIN", "NET_RAW"],
-      devices: ["/dev/net/tun:/dev/net/tun"],
+      capAdd: ["CAP_NET_ADMIN", "CAP_NET_RAW"],
+      devices: ["/dev/net/tun"],
       env: {
         TS_STATE_DIR: "/var/lib/tailscale",
         TS_USERSPACE: "false",
@@ -3909,7 +3908,7 @@ export class LifecycleDriver {
       this.#resources.tailscaleStackDnsContainer(config.id),
       {
         binds: [`${hostPath}:/etc/coredns/Corefile:ro`],
-        capAdd: ["NET_BIND_SERVICE"],
+        capAdd: ["CAP_NET_BIND_SERVICE"],
         capDrop: ["ALL"],
         command: ["-conf", "/etc/coredns/Corefile"],
         image: COREDNS_IMAGE,
@@ -4223,7 +4222,7 @@ export class LifecycleDriver {
     )
   }
 
-  // `docker run --detach`, after removing the container of that name.
+  // Creates and starts the container, after removing the one of that name.
   async #replaceContainer(
     name: string,
     container: InfrastructureContainer

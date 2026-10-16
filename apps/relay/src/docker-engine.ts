@@ -14,8 +14,8 @@
  * Pulls read registry credentials from the Docker config file (see
  * `./registry-auth.js`).
  *
- * Containers are created from the flags Relay used to pass the CLI, as the
- * same request bodies (see `./docker-container-spec.js`).
+ * Containers Relay creates are described in its own terms (see
+ * `./docker-container-spec.js`).
  *
  * Builds and Compose stay on the CLI (see `./command.js`) for now.
  */
@@ -759,31 +759,19 @@ export class DockerEngine {
     })
   }
 
-  /** `docker network create`, with the body the CLI sends. */
+  /** A bridge network. */
   createNetwork(options: {
     readonly name: string
-    readonly driver?: string
     readonly internal?: boolean
     readonly labels?: Readonly<Record<string, string>>
     readonly subnet?: string
   }): Effect.Effect<{ readonly Id: string }, DockerEngineError> {
     return this.#json({
       body: {
-        Attachable: false,
-        ConfigFrom: null,
-        ConfigOnly: false,
-        Driver: options.driver ?? "bridge",
-        IPAM: {
-          Config: options.subnet ? [{ Subnet: options.subnet }] : [],
-          Driver: "default",
-          Options: {},
-        },
-        Ingress: false,
         Internal: options.internal ?? false,
         Labels: { ...options.labels },
         Name: options.name,
-        Options: {},
-        Scope: "",
+        ...(options.subnet && { IPAM: { Config: [{ Subnet: options.subnet }] } }),
       },
       method: "POST",
       path: "/networks/create",
@@ -813,8 +801,8 @@ export class DockerEngine {
   }
 
   /**
-   * `docker volume create`, with the body the CLI sends. Docker answers with
-   * the existing volume when one has the name.
+   * A local volume. Docker answers with the existing volume when one has the
+   * name.
    */
   createVolume(options: {
     readonly name: string
@@ -822,7 +810,6 @@ export class DockerEngine {
   }): Effect.Effect<DockerVolume, DockerEngineError> {
     return this.#json({
       body: {
-        Driver: "local",
         Labels: { ...options.labels },
         Name: options.name,
       },

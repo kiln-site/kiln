@@ -1,8 +1,7 @@
 /**
- * Containers Relay creates, described by the `docker create` flags it used to
- * pass, and turned into the same `POST /containers/create` body the CLI sent
- * for them. Container config and labels are a format other Kiln versions
- * read, so the body keeps the CLI's field values and defaults exactly.
+ * Containers Relay creates, in Relay's own terms, and the
+ * `POST /containers/create` body for each. What a spec leaves unset is left
+ * out of the body, for Docker's defaults.
  */
 import { Effect, Fiber } from "effect"
 
@@ -17,9 +16,7 @@ import {
 
 export interface ContainerNetwork {
   readonly name: string
-  /** `--network-alias`. */
   readonly aliases?: ReadonlyArray<string>
-  /** `--ip`. */
   readonly ipv4Address?: string
 }
 
@@ -38,79 +35,62 @@ export interface ContainerMount {
 }
 
 export interface ContainerHealthcheck {
-  /** `--health-cmd`, run with the image's shell. */
+  /** Run with the image's shell. */
   readonly command: string
-  /** Durations as the CLI takes them, such as `5s`. */
-  readonly interval?: string
-  readonly timeout?: string
-  readonly startPeriod?: string
-  readonly retries?: number
+  readonly intervalMs: number
+  readonly timeoutMs: number
+  readonly startPeriodMs: number
+  readonly retries: number
 }
 
 export interface ContainerSpec {
   readonly name: string
   readonly image: string
-  /** Arguments after the image. */
+  /** Arguments after the entrypoint. */
   readonly command?: ReadonlyArray<string>
-  /** `--entrypoint`. */
   readonly entrypoint?: string
   readonly hostname?: string
   readonly user?: string
   readonly workdir?: string
   readonly stopSignal?: string
-  /** `--env`, in order. */
   readonly env?: Readonly<Record<string, string>>
   readonly labels?: Readonly<Record<string, string>>
   /**
-   * `--network` with its aliases and address; the container joins the
-   * first. `host`, `none`, or `container:<name>` instead of a network.
+   * A network to join, with its aliases and address, or `host`, `none`, or
+   * `container:<name>` instead.
    */
   readonly network?: ContainerNetwork | "host" | "none" | `container:${string}`
   readonly restart?: string
   readonly ports?: ReadonlyArray<ContainerPort>
-  /** `--volume` strings, as `source:target[:options]`. */
+  /** As `source:target[:options]`. */
   readonly binds?: ReadonlyArray<string>
-  /** `--mount`. */
   readonly mounts?: ReadonlyArray<ContainerMount>
-  /** `--tmpfs`, by path, with its options. */
+  /** Options by path, such as `rw,size=128m`. */
   readonly tmpfs?: Readonly<Record<string, string>>
+  /** As Docker stores them, such as `CAP_NET_ADMIN`, or `ALL`. */
   readonly capAdd?: ReadonlyArray<string>
   readonly capDrop?: ReadonlyArray<string>
   readonly securityOpt?: ReadonlyArray<string>
-  /** `--device` strings, as `host[:container[:permissions]]`. */
+  /** Host devices, each at the same path in the container. */
   readonly devices?: ReadonlyArray<string>
   readonly sysctls?: Readonly<Record<string, string>>
   readonly pidsLimit?: number
-  /** Sizes as the CLI takes them, such as `64m` or `1.5g`. */
+  /** Sizes in Docker's notation, such as `64m`, which recipes use. */
   readonly memory?: string
   readonly memoryReservation?: string
   readonly memorySwap?: string
   readonly readOnly?: boolean
-  /** `--interactive`. */
+  /** Keeps stdin open for the first attach: consoles and one-off runs. */
   readonly interactive?: boolean
   readonly tty?: boolean
   readonly healthcheck?: ContainerHealthcheck | "none"
   readonly volumesFrom?: ReadonlyArray<string>
-  /** `--rm`. */
+  /** Docker removes the container once it exits. */
   readonly autoRemove?: boolean
 }
 
-/** The body `docker create` sends for `spec`. */
-export function containerCreateBody(spec: ContainerSpec): unknown {
-  const network = spec.network ?? "default"
-  const mode = typeof network === "string" ? network : network.name
-  const endpoint = {
-    Aliases:
-      typeof network !== "string" && network.aliases?.length
-        ? [...network.aliases]
-        : null,
-    DriverOpts: null,
-    IPAMConfig:
-      typeof network !== "string" && network.ipv4Address
-        ? { IPv4Address: network.ipv4Address }
-        : null,
-    Links: null,
-  }
+function containerCreateBody(spec: ContainerSpec): unknown {
+  const network = spec.network
   const exposed: Record<string, object> = {}
   const bindings: Record<string, Array<{ HostIp: string; HostPort: string }>> =
     {}
@@ -122,137 +102,101 @@ export function containerCreateBody(spec: ContainerSpec): unknown {
       { HostIp: port.hostIp ?? "", HostPort: String(port.hostPort) },
     ]
   }
-  const env = Object.entries(spec.env ?? {}).map(
-    ([name, value]) => `${name}=${value}`
-  )
-  const memory = (value: string | undefined) =>
-    value === undefined ? 0 : ramInBytes(value)
+  const healthcheck = spec.healthcheck
   return {
-    AttachStderr: true,
-    AttachStdin: spec.interactive ?? false,
-    AttachStdout: true,
-    Cmd: spec.command?.length ? [...spec.command] : null,
-    Domainname: "",
-    Entrypoint: spec.entrypoint === undefined ? null : [spec.entrypoint],
-    Env: env.length > 0 ? env : null,
-    ...(Object.keys(exposed).length > 0 && { ExposedPorts: exposed }),
-    ...(spec.healthcheck !== undefined && {
-      Healthcheck:
-        spec.healthcheck === "none"
-          ? { Test: ["NONE"] }
-          : {
-              Interval: durationNanoseconds(spec.healthcheck.interval),
-              Retries: spec.healthcheck.retries ?? 0,
-              StartPeriod: durationNanoseconds(spec.healthcheck.startPeriod),
-              Test: ["CMD-SHELL", spec.healthcheck.command],
-              Timeout: durationNanoseconds(spec.healthcheck.timeout),
-            },
-    }),
-    Hostname: spec.hostname ?? "",
     Image: spec.image,
     Labels: { ...spec.labels },
-    OpenStdin: spec.interactive ?? false,
+    ...(spec.command?.length && { Cmd: [...spec.command] }),
+    ...(spec.entrypoint !== undefined && { Entrypoint: [spec.entrypoint] }),
+    ...(spec.env && {
+      Env: Object.entries(spec.env).map(([name, value]) => `${name}=${value}`),
+    }),
+    ...(spec.ports?.length && { ExposedPorts: exposed }),
+    ...(healthcheck && {
+      Healthcheck:
+        healthcheck === "none"
+          ? { Test: ["NONE"] }
+          : {
+              Interval: healthcheck.intervalMs * 1e6,
+              Retries: healthcheck.retries,
+              StartPeriod: healthcheck.startPeriodMs * 1e6,
+              Test: ["CMD-SHELL", healthcheck.command],
+              Timeout: healthcheck.timeoutMs * 1e6,
+            },
+    }),
+    ...(spec.hostname && { Hostname: spec.hostname }),
+    ...(spec.interactive && {
+      AttachStdin: true,
+      OpenStdin: true,
+      StdinOnce: true,
+    }),
     ...(spec.stopSignal && { StopSignal: spec.stopSignal }),
-    // `docker create -i` keeps stdin open for one attach, as `run -i` does.
-    StdinOnce: spec.interactive ?? false,
-    Tty: spec.tty ?? false,
-    User: spec.user ?? "",
-    Volumes: {},
-    WorkingDir: spec.workdir ?? "",
+    ...(spec.tty && { Tty: true }),
+    ...(spec.user && { User: spec.user }),
+    ...(spec.workdir && { WorkingDir: spec.workdir }),
     HostConfig: {
-      AutoRemove: spec.autoRemove ?? false,
-      Binds: spec.binds?.length ? [...spec.binds] : null,
-      BlkioDeviceReadBps: [],
-      BlkioDeviceReadIOps: [],
-      BlkioDeviceWriteBps: [],
-      BlkioDeviceWriteIOps: [],
-      BlkioWeight: 0,
-      BlkioWeightDevice: [],
-      CapAdd: spec.capAdd?.length ? spec.capAdd.map(capability) : null,
-      CapDrop: spec.capDrop?.length ? spec.capDrop.map(capability) : null,
-      Cgroup: "",
-      CgroupParent: "",
-      CgroupnsMode: "",
-      ConsoleSize: [0, 0],
-      ContainerIDFile: "",
-      CpuCount: 0,
-      CpuPercent: 0,
-      CpuPeriod: 0,
-      CpuQuota: 0,
-      CpuRealtimePeriod: 0,
-      CpuRealtimeRuntime: 0,
-      CpuShares: 0,
-      CpusetCpus: "",
-      CpusetMems: "",
-      DeviceCgroupRules: null,
-      DeviceRequests: null,
-      Devices: (spec.devices ?? []).map(device),
-      Dns: null,
-      DnsOptions: [],
-      DnsSearch: [],
-      ExtraHosts: null,
-      GroupAdd: null,
-      IOMaximumBandwidth: 0,
-      IOMaximumIOps: 0,
-      IpcMode: "",
-      Isolation: "",
-      Links: null,
-      LogConfig: { Config: {}, Type: "" },
-      MaskedPaths: null,
-      Memory: memory(spec.memory),
-      MemoryReservation: memory(spec.memoryReservation),
-      MemorySwap: memory(spec.memorySwap),
-      MemorySwappiness: -1,
+      ...(spec.autoRemove && { AutoRemove: true }),
+      ...(spec.binds?.length && { Binds: [...spec.binds] }),
+      ...(spec.capAdd?.length && { CapAdd: [...spec.capAdd] }),
+      ...(spec.capDrop?.length && { CapDrop: [...spec.capDrop] }),
+      ...(spec.devices?.length && {
+        Devices: spec.devices.map((path) => ({
+          CgroupPermissions: "rwm",
+          PathInContainer: path,
+          PathOnHost: path,
+        })),
+      }),
+      ...(spec.memory && { Memory: ramInBytes(spec.memory) }),
+      ...(spec.memoryReservation && {
+        MemoryReservation: ramInBytes(spec.memoryReservation),
+      }),
+      ...(spec.memorySwap && { MemorySwap: ramInBytes(spec.memorySwap) }),
       ...(spec.mounts?.length && {
         Mounts: spec.mounts.map((mount) => ({
-          ...(mount.readOnly && { ReadOnly: true }),
+          ReadOnly: mount.readOnly ?? false,
           Source: mount.source,
           Target: mount.target,
           Type: mount.type,
         })),
       }),
-      NanoCpus: 0,
-      NetworkMode: mode,
-      OomKillDisable: false,
-      OomScoreAdj: 0,
-      PidMode: "",
-      PidsLimit: spec.pidsLimit ?? 0,
-      PortBindings: bindings,
-      Privileged: false,
-      PublishAllPorts: false,
-      ReadonlyPaths: null,
-      ReadonlyRootfs: spec.readOnly ?? false,
-      RestartPolicy: { MaximumRetryCount: 0, Name: spec.restart ?? "no" },
-      SecurityOpt: spec.securityOpt?.length ? [...spec.securityOpt] : null,
-      ShmSize: 0,
+      ...(network && {
+        NetworkMode: typeof network === "string" ? network : network.name,
+      }),
+      ...(spec.pidsLimit && { PidsLimit: spec.pidsLimit }),
+      ...(spec.ports?.length && { PortBindings: bindings }),
+      ...(spec.readOnly && { ReadonlyRootfs: true }),
+      ...(spec.restart && { RestartPolicy: { Name: spec.restart } }),
+      ...(spec.securityOpt?.length && { SecurityOpt: [...spec.securityOpt] }),
       ...(spec.sysctls && { Sysctls: { ...spec.sysctls } }),
       ...(spec.tmpfs && { Tmpfs: { ...spec.tmpfs } }),
-      UTSMode: "",
-      Ulimits: null,
-      UsernsMode: "",
-      VolumeDriver: "",
-      VolumesFrom: spec.volumesFrom?.length ? [...spec.volumesFrom] : null,
+      ...(spec.volumesFrom?.length && { VolumesFrom: [...spec.volumesFrom] }),
     },
-    NetworkingConfig: {
-      EndpointsConfig:
-        mode === "host" || mode === "none" || mode.startsWith("container:")
-          ? {}
-          : { [mode]: endpoint },
-    },
+    ...(typeof network === "object" && {
+      NetworkingConfig: {
+        EndpointsConfig: {
+          [network.name]: {
+            ...(network.aliases?.length && { Aliases: [...network.aliases] }),
+            ...(network.ipv4Address && {
+              IPAMConfig: { IPv4Address: network.ipv4Address },
+            }),
+          },
+        },
+      },
+    }),
   }
 }
 
 /**
- * `docker create`: creates the container, pulling its image first when
- * Docker doesn't have it, as the CLI's default `--pull missing` did.
+ * Creates the container, pulling its image first when Docker doesn't have
+ * it.
  */
 export function createContainer(
   engine: DockerEngine,
   spec: ContainerSpec,
   options: { readonly pullTimeout?: number } = {}
 ): Effect.Effect<{ readonly Id: string }, DockerEngineError> {
-  // An invalid size or duration fails the create, like a flag the CLI
-  // rejected, instead of throwing past the caller's cleanup.
+  // An invalid size fails the create instead of throwing past the caller's
+  // cleanup.
   const body = Effect.try({
     try: () => containerCreateBody(spec),
     catch: (cause) =>
@@ -279,7 +223,7 @@ export function createContainer(
   )
 }
 
-/** `docker run --detach`: creates and starts the container. */
+/** Creates and starts the container. */
 export function runContainer(
   engine: DockerEngine,
   spec: ContainerSpec,
@@ -293,7 +237,7 @@ export function runContainer(
 }
 
 /**
- * `docker run --rm -i`: runs the container to completion with `input` on its
+ * Runs a one-off container to completion with `input` on its
  * stdin and returns its output, failing with its stderr when it exits with a
  * non-zero code. Docker removes the container once it exits; one that fails
  * to start or runs past `timeout` is removed here.
@@ -312,7 +256,7 @@ export function runWithInput(
       interactive: true,
     })
     return yield* Effect.gen(function* () {
-      // Waiting starts first, as the CLI's does, so a fast exit isn't missed.
+      // Waiting starts first, so a fast exit isn't missed.
       const exited = yield* Effect.forkChild(
         engine.waitContainer(created.Id, "removed")
       )
@@ -353,57 +297,16 @@ export function runWithInput(
 }
 
 /**
- * Sizes as the CLI parses them (go-units `RAMInBytes`): a number with an
+ * A size in Docker's notation (go-units `RAMInBytes`): a number with an
  * optional binary unit, `b`, `k`, `m`, `g`, `t`, or `p`, case-insensitive,
  * optionally followed by `b` or `ib`.
  */
-export function ramInBytes(value: string): number {
-  const match = /^(\d+(?:\.\d+)*) ?([kmgtp])?(?:i?b)?$/iu.exec(value.trim())
+function ramInBytes(value: string): number {
+  const match = /^(\d+(?:\.\d+)?) ?([kmgtp])?(?:i?b)?$/iu.exec(value.trim())
   const amount = Number(match?.[1])
   if (!match || !Number.isFinite(amount)) {
     throw new Error(`invalid size: '${value}'`)
   }
   const exponent = "kmgtp".indexOf((match[2] ?? "").toLowerCase()) + 1
   return Math.trunc(amount * 1024 ** exponent)
-}
-
-// Durations as Go's time.ParseDuration reads the CLI's health flags.
-function durationNanoseconds(value: string | undefined): number {
-  if (value === undefined) return 0
-  const units: Record<string, number> = {
-    h: 3_600e9,
-    m: 60e9,
-    ms: 1e6,
-    ns: 1,
-    s: 1e9,
-    us: 1e3,
-    µs: 1e3,
-  }
-  let total = 0
-  const pattern = /(\d+(?:\.\d+)?)(ns|us|µs|ms|s|m|h)/gu
-  let consumed = 0
-  for (const match of value.matchAll(pattern)) {
-    if (match.index !== consumed) break
-    total += Number(match[1]) * (units[match[2]!] ?? 0)
-    consumed += match[0].length
-  }
-  if (consumed !== value.length || value.length === 0) {
-    throw new Error(`invalid duration: ${value}`)
-  }
-  return Math.round(total)
-}
-
-// The CLI adds the CAP_ prefix Docker stores capabilities with; ALL stays.
-function capability(name: string): string {
-  const upper = name.toUpperCase()
-  return upper === "ALL" || upper.startsWith("CAP_") ? upper : `CAP_${upper}`
-}
-
-function device(value: string) {
-  const [host = "", container = host, permissions = "rwm"] = value.split(":")
-  return {
-    CgroupPermissions: permissions,
-    PathInContainer: container,
-    PathOnHost: host,
-  }
 }
