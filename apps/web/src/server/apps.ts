@@ -24,6 +24,7 @@ import {
   createAppRecordEffect,
   deleteAppRecordEffect,
   listAppRecordsEffect,
+  renameAppRecordEffect,
   saveAppConfigEffect,
 } from "@/effect/managed-apps"
 import { runAppEffect } from "@/effect/runtime"
@@ -62,6 +63,7 @@ const appActionInputSchema = appInputSchema.extend({
 const appConfigInputSchema = appInputSchema.extend({
   config: appConfigSchema.omit({ databaseIds: true }).partial(),
 })
+const appRenameInputSchema = appInputSchema.extend({ name: appNameSchema })
 const appNetworkInputSchema = appInputSchema.extend({
   databaseIds: z.array(databaseIdSchema).max(32),
 })
@@ -323,6 +325,20 @@ export const updateAppConfig = createServerFn({ method: "POST" })
     )
     publishAppChange(data.relayId, false)
     return { config }
+  })
+
+// Hearth keeps the name, so renaming doesn't need the Relay. It's
+// configuring the app, so it takes the permission that does.
+export const renameApp = createServerFn({ method: "POST" })
+  .validator(appRenameInputSchema)
+  .handler(async ({ data }) => {
+    const { relay } = await authorizedApp(data, "app.manage")
+    await runAppEffect(
+      "apps.rename",
+      renameAppRecordEffect(relay.id, data.appId, data.name)
+    )
+    publishAppChange(relay.id, true)
+    return { name: data.name }
   })
 
 // Deploys the saved configuration. The Relay answers once the deployment

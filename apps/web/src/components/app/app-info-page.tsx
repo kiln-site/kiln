@@ -40,7 +40,10 @@ export function AppInfoPage() {
   return (
     <AppContainerSelectionContext.Provider value={selection}>
       <InfoPage rail={<AppInfoRail app={app} routeId={routeId} />}>
-        <AppGeneralSettings app={app} />
+        <AppGeneralSettings
+          app={app}
+          canRename={app.permissions.includes("app.manage")}
+        />
         {config.data ? (
           <>
             <AppSourceSettings

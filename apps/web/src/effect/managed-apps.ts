@@ -139,6 +139,38 @@ export const saveAppConfigEffect = Effect.fn("apps.saveConfig")(function* (
   }
 })
 
+// Hearth keeps the name; the Relay uses it only to label deployment logs.
+export const renameAppRecordEffect = Effect.fn("apps.rename")(function* (
+  relayId: string,
+  appId: string,
+  name: string
+) {
+  const database = yield* Database
+  const taken = yield* database.queryRows<AppRow>(
+    "app_rename_conflict",
+    `SELECT app_id FROM ${databaseTable("app")}
+      WHERE relay_id = ? AND name = ? AND app_id <> ?
+      LIMIT 1`,
+    [relayId, name, appId]
+  )
+  if (taken.length > 0) {
+    return yield* Effect.fail(
+      new Error(`An app named "${name}" already exists on this Relay`)
+    )
+  }
+  const now = yield* Clock.currentTimeMillis
+  const result = yield* database.execute(
+    "app_rename",
+    `UPDATE ${databaseTable("app")}
+        SET name = ?, updated_at = ?
+      WHERE relay_id = ? AND app_id = ?`,
+    [name, now, relayId, appId]
+  )
+  if (result.affectedRows !== 1) {
+    return yield* Effect.fail(new Error("App not found"))
+  }
+})
+
 export const deleteAppRecordEffect = Effect.fn("apps.delete")(function* (
   relayId: string,
   appId: string

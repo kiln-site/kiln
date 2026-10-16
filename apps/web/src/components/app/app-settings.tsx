@@ -40,23 +40,39 @@ import {
 } from "@/components/info-page"
 import { InstanceFavoriteButton } from "@/components/instance-favorite"
 import { RelativeTime } from "@/components/relative-time"
+import { RenameButton } from "@/components/rename-dialog"
 import { StatusIndicator } from "@/components/status-indicator"
 import { appWebRoutesQueryOptions, queryKeys } from "@/lib/query-options"
 import { warmSyntaxCodeEditorModule } from "@/lib/syntax-editor-module-preload"
-import { deployApp } from "@/server/apps"
+import { deployApp, renameApp } from "@/server/apps"
 
 // The app's details on its Info page, one section per concern, each with
 // the actions that change it. What runs where is tagged with the service
 // whose container serves it.
 
-export function AppGeneralSettings({ app }: { app: App }) {
+const APP_NAME_MAX_LENGTH = 120
+
+export function AppGeneralSettings({
+  app,
+  canRename,
+}: {
+  app: App
+  canRename: boolean
+}) {
   const running = app.containers.filter((container) => container.running)
   return (
     <InfoSection
       icon={<Boxes />}
       title="App"
       action={
-        <InstanceFavoriteButton id={app.id} kind="app" relayId={app.relayId} />
+        <>
+          {canRename ? <AppRenameButton app={app} /> : null}
+          <InstanceFavoriteButton
+            id={app.id}
+            kind="app"
+            relayId={app.relayId}
+          />
+        </>
       }
     >
       <InfoFact label="Name">
@@ -75,6 +91,29 @@ export function AppGeneralSettings({ app }: { app: App }) {
         )}
       </InfoFact>
     </InfoSection>
+  )
+}
+
+// Hearth keeps the name, so renaming doesn't need the Relay.
+function AppRenameButton({ app }: { app: App }) {
+  const queryClient = useQueryClient()
+  const rename = React.useCallback(
+    async (name: string) => {
+      await renameApp({
+        data: { appId: app.id, name, relayId: app.relayId },
+      })
+      await queryClient.invalidateQueries({ queryKey: queryKeys.apps.all })
+    },
+    [app.id, app.relayId, queryClient]
+  )
+  return (
+    <RenameButton
+      id={app.id}
+      maxLength={APP_NAME_MAX_LENGTH}
+      name={app.name}
+      noun="app"
+      rename={rename}
+    />
   )
 }
 
