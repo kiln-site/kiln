@@ -1,11 +1,6 @@
-import * as React from "react"
 import { useNavigate } from "@tanstack/react-router"
-import { Trash2 } from "lucide-react"
 
-import { Button } from "@workspace/ui/components/button"
-
-import { DangerZone } from "@/components/info-card"
-import { InfoPage } from "@/components/info-page"
+import { InfoDangerZone, InfoPage } from "@/components/info-page"
 import { RemoveRelayDialog } from "@/components/relay/relay-actions"
 import { RelayInfoRail } from "@/components/relay/relay-info-rail"
 import { RelayProxySettings } from "@/components/relay/relay-proxy-settings"
@@ -33,34 +28,19 @@ export function RelayInfoPage() {
 function RelayDangerZone({ relay }: { relay: RelayDirectoryEntry }) {
   const canDelete = useRelayPermission(relay.id, "relay.delete")
   const navigate = useNavigate()
-  const [open, setOpen] = React.useState(false)
   if (!canDelete) return null
   return (
-    <>
-      {/* At the bottom of the page, or after the sections when they're taller. */}
-      <DangerZone
-        className="mt-auto"
-        title="Remove this Relay"
-        action={
-          <Button
-            type="button"
-            variant="destructive"
-            className="shrink-0"
-            onClick={() => setOpen(true)}
-          >
-            <Trash2 />
-            Remove Relay
-          </Button>
-        }
-      />
-      {open ? (
+    <InfoDangerZone
+      title="Remove this Relay"
+      action="Remove Relay"
+      dialog={(onOpenChange) => (
         <RemoveRelayDialog
           name={relay.name}
           relayId={relay.id}
-          onOpenChange={setOpen}
+          onOpenChange={onOpenChange}
           onRemoved={() => navigate({ to: "/infra/relays" })}
         />
-      ) : null}
-    </>
+      )}
+    />
   )
 }

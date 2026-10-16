@@ -1,7 +1,15 @@
 import * as React from "react"
 import { createLink } from "@tanstack/react-router"
-import { Check, ChevronRight, Copy, Info } from "lucide-react"
+import {
+  ArrowRight,
+  Check,
+  ChevronRight,
+  Copy,
+  Info,
+  Trash2,
+} from "lucide-react"
 
+import { Button, buttonVariants } from "@workspace/ui/components/button"
 import {
   Popover,
   PopoverContent,
@@ -14,6 +22,7 @@ import {
 } from "@workspace/ui/components/tooltip"
 import { cn } from "@workspace/ui/lib/utils"
 
+import { DangerZone } from "@/components/info-card"
 import { useCopyFeedback } from "@/components/workspace-header"
 
 // Building blocks for Info pages: sections of facts in the main column and a
@@ -76,6 +85,26 @@ export function InfoSection({
     </section>
   )
 }
+
+// A section action that opens the page where more of it changes, such as
+// Network.
+const InfoSectionLinkAnchor = React.forwardRef<
+  HTMLAnchorElement,
+  React.ComponentPropsWithoutRef<"a">
+>(function InfoSectionLinkAnchor({ children, className, ...props }, ref) {
+  return (
+    <a
+      ref={ref}
+      {...props}
+      className={cn(buttonVariants({ size: "sm", variant: "outline" }), className)}
+    >
+      {children}
+      <ArrowRight />
+    </a>
+  )
+})
+
+export const InfoSectionLink = createLink(InfoSectionLinkAnchor)
 
 export function InfoFact({
   children,
@@ -219,6 +248,46 @@ export function InfoCopyValue({
           : `Copy ${label}`}
       </TooltipContent>
     </Tooltip>
+  )
+}
+
+// The Danger zone at the bottom of an Info page, or after the sections when
+// they're taller. Its dialog mounts only while open.
+export function InfoDangerZone({
+  action,
+  dialog,
+  disabledReason,
+  title,
+}: {
+  // The button's label, such as "Delete server".
+  action: string
+  dialog: (onOpenChange: (open: boolean) => void) => React.ReactNode
+  // Why the action can't run right now, such as a disconnected Relay.
+  disabledReason?: string
+  title: string
+}) {
+  const [open, setOpen] = React.useState(false)
+  return (
+    <>
+      <DangerZone
+        className="mt-auto"
+        title={title}
+        action={
+          <Button
+            type="button"
+            variant="destructive"
+            className="shrink-0"
+            disabled={Boolean(disabledReason)}
+            title={disabledReason}
+            onClick={() => setOpen(true)}
+          >
+            <Trash2 />
+            {action}
+          </Button>
+        }
+      />
+      {open ? dialog(setOpen) : null}
+    </>
   )
 }
 

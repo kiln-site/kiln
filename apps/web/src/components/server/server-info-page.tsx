@@ -1,10 +1,4 @@
-import * as React from "react"
-import { Trash2 } from "lucide-react"
-
-import { Button } from "@workspace/ui/components/button"
-
-import { DangerZone } from "@/components/info-card"
-import { InfoPage } from "@/components/info-page"
+import { InfoDangerZone, InfoPage } from "@/components/info-page"
 import { ServerDeleteDialog } from "@/components/server-delete-dialog"
 import { ServerInfoRail } from "@/components/server/server-info-rail"
 import {
@@ -85,32 +79,16 @@ function ServerDangerZone({
   passwordRequired: boolean
   relayConnected: boolean
 }) {
-  const [open, setOpen] = React.useState(false)
   return (
-    <>
-      {/* At the bottom of the page, or after the sections when they're taller. */}
-      <DangerZone
-        className="mt-auto"
-        title="Delete this server"
-        action={
-          <Button
-            type="button"
-            variant="destructive"
-            className="shrink-0"
-            disabled={!relayConnected}
-            title={
-              relayConnected
-                ? undefined
-                : "Reconnect this server's Relay before deleting"
-            }
-            onClick={() => setOpen(true)}
-          >
-            <Trash2 />
-            Delete server
-          </Button>
-        }
-      />
-      {open ? (
+    <InfoDangerZone
+      title="Delete this server"
+      action="Delete server"
+      disabledReason={
+        relayConnected
+          ? undefined
+          : "Reconnect this server's Relay before deleting"
+      }
+      dialog={(onOpenChange) => (
         <ServerDeleteDialog
           open
           target={{
@@ -121,9 +99,9 @@ function ServerDangerZone({
           }}
           onDeleted={onDeleted}
           passwordRequired={passwordRequired}
-          onOpenChange={setOpen}
+          onOpenChange={onOpenChange}
         />
-      ) : null}
-    </>
+      )}
+    />
   )
 }

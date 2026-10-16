@@ -1,22 +1,14 @@
 import * as React from "react"
-import { useQuery } from "@tanstack/react-query"
-import { Link } from "@tanstack/react-router"
 import {
-  Activity,
-  ArrowRight,
   Check,
   Copy,
   Globe2,
   TriangleAlert,
-  Users,
   type LucideIcon,
 } from "lucide-react"
 
 import { Button } from "@workspace/ui/components/button"
 import { cn } from "@workspace/ui/lib/utils"
-
-import { canAccessActivity } from "@/lib/navigation-destinations"
-import { accessCapabilitiesQueryOptions } from "@/lib/query-options"
 
 // Building blocks shared by the Info pages of every instance kind.
 
@@ -120,74 +112,6 @@ export function CopyMetaRow({
       </Button>
     </div>
   )
-}
-
-export function ResourceUsersCard({
-  activityServerId,
-  noun,
-  relayId,
-  resourceId,
-  resourceType,
-}: {
-  // Activity filters by server only, so other kinds omit it.
-  activityServerId?: string
-  // Lowercase, for example "server".
-  noun: string
-  relayId: string
-  resourceId: string
-  resourceType: "database" | "instance" | "relay"
-}) {
-  const { data: access } = useQuery({
-    ...accessCapabilitiesQueryOptions(),
-    select: selectUsersCardAccess,
-  })
-  const canViewActivity = Boolean(access?.canViewActivity && activityServerId)
-  if (!access?.canManageAccess && !canViewActivity) return null
-  return (
-    <InfoCard className="self-start">
-      <InfoCardHeader icon={<Users />} title="Users & access" />
-      <div className="space-y-4 p-4">
-        <p className="text-sm text-muted-foreground">
-          {canViewActivity
-            ? `Manage this ${noun}’s invitations, presets, and permissions, or review recent activity.`
-            : `Manage this ${noun}’s invitations, presets, and permissions.`}
-        </p>
-        <div className="flex flex-wrap gap-2">
-          {access?.canManageAccess ? (
-            <Button asChild size="sm" variant="outline">
-              <Link
-                to="/access"
-                search={{ tab: "users", relayId, resourceType, resourceId }}
-              >
-                Manage access
-                <ArrowRight />
-              </Link>
-            </Button>
-          ) : null}
-          {canViewActivity ? (
-            <Button asChild size="sm" variant="ghost">
-              <Link
-                to="/activity"
-                search={{ relay: relayId, server: activityServerId }}
-              >
-                <Activity />
-                View activity
-              </Link>
-            </Button>
-          ) : null}
-        </div>
-      </div>
-    </InfoCard>
-  )
-}
-
-function selectUsersCardAccess(
-  capabilities: Parameters<typeof canAccessActivity>[0]
-) {
-  return {
-    canManageAccess: capabilities.canManageAccess,
-    canViewActivity: canAccessActivity(capabilities),
-  }
 }
 
 export function DangerZone({

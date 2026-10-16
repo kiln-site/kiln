@@ -1,9 +1,7 @@
 import * as React from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { Link } from "@tanstack/react-router"
 import { Effect } from "effect"
 import {
-  ArrowRight,
   Cable,
   Check,
   Copy,
@@ -33,6 +31,7 @@ import {
   InfoCopyValue,
   InfoFact,
   InfoSection,
+  InfoSectionLink,
 } from "@/components/info-page"
 import { InstanceFavoriteButton } from "@/components/instance-favorite"
 import { LiveServerBrickIcon } from "@/components/instance-name"
@@ -111,15 +110,12 @@ export function ServerConnectionSettings({
       title="Connection"
       action={
         canViewNetwork ? (
-          <Button asChild size="sm" variant="outline">
-            <Link
-              to="/server/$serverId/network"
-              params={{ serverId: instance.routeId }}
-            >
-              Network
-              <ArrowRight />
-            </Link>
-          </Button>
+          <InfoSectionLink
+            to="/server/$serverId/network"
+            params={{ serverId: instance.routeId }}
+          >
+            Network
+          </InfoSectionLink>
         ) : null
       }
     >
@@ -177,15 +173,12 @@ export function ServerBrickSettings({
           <>
             <BrickRecipeButton canShare={canShare} instance={instance} />
             {canViewStartup ? (
-              <Button asChild size="sm" variant="outline">
-                <Link
-                  to="/server/$serverId/startup"
-                  params={{ serverId: instance.routeId }}
-                >
-                  Startup
-                  <ArrowRight />
-                </Link>
-              </Button>
+              <InfoSectionLink
+                to="/server/$serverId/startup"
+                params={{ serverId: instance.routeId }}
+              >
+                Startup
+              </InfoSectionLink>
             ) : null}
           </>
         )
