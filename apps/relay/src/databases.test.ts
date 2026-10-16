@@ -87,8 +87,9 @@ describe("managed database recovery metadata", () => {
 
 describe("managed database credential rotation", () => {
   it.each([
+    // Valkey's client reads the same variable as Redis's.
     ["redis", "REDISCLI_AUTH"],
-    ["valkey", "VALKEYCLI_AUTH"],
+    ["valkey", "REDISCLI_AUTH"],
   ] as const)(
     "rotates %s credentials without exposing passwords to process arguments",
     async (engine, environmentName) => {
@@ -136,6 +137,28 @@ describe("managed database container details", () => {
 })
 
 describe("managed database wipe", () => {
+  // Their clients read REDISCLI_AUTH, so a wipe that set another variable
+  // would fail to log in and, without -e, still exit 0.
+  it.each(["redis", "valkey"] as const)(
+    "wipes %s logged in as its user, without exposing the password",
+    async (engine) => {
+      const harness = await relayHarness()
+      const id = "6".repeat(40)
+      await createDatabase(harness, id, engine)
+
+      await harness.databases.wipe({
+        databaseId: id,
+        password,
+        username: "kiln_user",
+      })
+
+      const [wipe] = databaseContainer(id).processes
+      expect(wipe?.env).toEqual({ REDISCLI_AUTH: password })
+      expect(wipe?.argv).toContain("-e")
+      expect(wipe?.argv.join(" ")).not.toContain(password)
+    }
+  )
+
   it("refuses to wipe a stopped database", async () => {
     const harness = await relayHarness()
     const id = "3".repeat(40)

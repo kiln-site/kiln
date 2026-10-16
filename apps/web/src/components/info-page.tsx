@@ -75,19 +75,21 @@ export function InfoSection({
 }) {
   return (
     <section className="min-w-0 border bg-background/45">
+      {/* On narrow screens, actions that don't fit beside the title wrap
+          below it rather than squeezing it out. */}
       <header
         className={cn(
-          "flex min-h-12 items-center gap-3 px-4 py-2",
+          "flex min-h-12 flex-wrap items-center gap-x-3 gap-y-2 px-4 py-2",
           children != null && "border-b"
         )}
       >
-        <h3 className="flex min-w-0 items-center gap-2 text-sm font-semibold [&_svg]:size-4 [&_svg]:shrink-0 [&_svg]:text-muted-foreground">
+        <h3 className="flex shrink-0 items-center gap-2 text-sm font-semibold [&_svg]:size-4 [&_svg]:shrink-0 [&_svg]:text-muted-foreground">
           {icon}
-          <span className="truncate">{title}</span>
+          <span>{title}</span>
         </h3>
         {status}
         {action ? (
-          <div className="ml-auto flex shrink-0 items-center gap-1.5">
+          <div className="ml-auto flex min-w-0 flex-wrap items-center justify-end gap-1.5">
             {action}
           </div>
         ) : null}

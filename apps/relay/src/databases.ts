@@ -880,17 +880,26 @@ function databaseWipeClient(
       input: `DROP DATABASE IF EXISTS \`${name}\`;\nCREATE DATABASE \`${name}\`;\n`,
     }
   }
+  return { ...keyValueClient(database.engine, username, password, ["FLUSHALL"]), input: "" }
+}
+
+// Redis and Valkey's clients both read the password from REDISCLI_AUTH, and
+// exit 0 on an error reply, such as a failed login, unless given -e.
+function keyValueClient(
+  engine: "redis" | "valkey",
+  username: string,
+  password: string,
+  command: ReadonlyArray<string>
+): DatabaseClient {
   return {
     command: [
-      database.engine === "redis" ? "redis-cli" : "valkey-cli",
+      engine === "redis" ? "redis-cli" : "valkey-cli",
+      "-e",
       "--user",
       username,
-      "FLUSHALL",
+      ...command,
     ],
-    env: [
-      `${database.engine === "redis" ? "REDISCLI_AUTH" : "VALKEYCLI_AUTH"}=${password}`,
-    ],
-    input: "",
+    env: [`REDISCLI_AUTH=${password}`],
   }
 }
 
@@ -925,18 +934,7 @@ function databaseAclLoadClient(
   username: string,
   password: string
 ): DatabaseClient {
-  return {
-    command: [
-      engine === "redis" ? "redis-cli" : "valkey-cli",
-      "--user",
-      username,
-      "ACL",
-      "LOAD",
-    ],
-    env: [
-      `${engine === "redis" ? "REDISCLI_AUTH" : "VALKEYCLI_AUTH"}=${password}`,
-    ],
-  }
+  return keyValueClient(engine, username, password, ["ACL", "LOAD"])
 }
 
 function rotationSql(
