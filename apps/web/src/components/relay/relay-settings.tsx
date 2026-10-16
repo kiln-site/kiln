@@ -11,6 +11,7 @@ import {
   InfoFact,
   InfoSection,
 } from "@/components/info-page"
+import { InstanceFavoriteButton } from "@/components/instance-favorite"
 import { RelayVersion } from "@/components/relay/relay-version"
 import { canAccessRelayPermission } from "@/lib/navigation-destinations"
 import type { AccessPermission } from "@/lib/permissions"
@@ -43,7 +44,12 @@ export function RelayGeneralSettings({
   relay: RelayDirectoryEntry
 }) {
   return (
-    <InfoSection title="Relay" action={<RelayConfigureButton relay={relay} />}>
+    <InfoSection
+      title="Relay"
+      action={
+        <InstanceFavoriteButton id={relay.id} kind="relay" relayId={relay.id} />
+      }
+    >
       <InfoFact label="Name">
         <InfoCopyValue label="Relay name" mono={false} value={relay.name} />
       </InfoFact>
@@ -77,7 +83,8 @@ export function RelayGeneralSettings({
   )
 }
 
-// Opens the Relay's settings dialog: name, address, and proxy.
+// Opens the Relay's settings dialog: name, address, and proxy. It lives on
+// the Proxy section, the Info page's only one with settings to change.
 export function RelayConfigureButton({
   relay,
 }: {

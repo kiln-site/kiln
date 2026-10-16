@@ -196,7 +196,7 @@ export function InfoRailGroup({
   title: string
 }) {
   return (
-    <section className="mt-6">
+    <section className="mt-6 first:mt-0">
       <h3 className="type-technical-label mb-1 text-muted-foreground/80">
         {title}
       </h3>
@@ -218,7 +218,7 @@ export function InfoRailCard({
   title: string
 }) {
   return (
-    <section className="mt-6 border bg-background/45">
+    <section className="mt-6 border bg-background/45 first:mt-0">
       <h3 className="flex items-center gap-2 border-b px-3 py-2.5 text-[0.8125rem] font-semibold [&_svg]:size-3.5 [&_svg]:text-muted-foreground">
         {icon}
         {title}

@@ -1,7 +1,6 @@
 import { BadgeCheck } from "lucide-react"
 
 import { InfoFact, InfoRailGroup } from "@/components/info-page"
-import { InstanceFavoriteButton } from "@/components/instance-favorite"
 import { LocalDateTime } from "@/components/local-date-time"
 import {
   RelayNodeCard,
@@ -22,9 +21,6 @@ export function RelayInfoRail({
   const node = useRelayNodeFacts(relay.id)
   return (
     <>
-      <div className="flex justify-end">
-        <InstanceFavoriteButton id={relay.id} kind="relay" relayId={relay.id} />
-      </div>
       <RelayWorkloads relayId={relay.id} routeId={routeId} />
       <InfoRailGroup title="Ownership">
         <dl>

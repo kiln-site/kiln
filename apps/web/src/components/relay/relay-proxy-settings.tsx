@@ -30,7 +30,10 @@ export function RelayProxySettings({ relay }: { relay: RelayDirectoryEntry }) {
 
   if (!proxy) {
     return (
-      <InfoSection title="Proxy">
+      <InfoSection
+        title="Proxy"
+        action={<RelayConfigureButton relay={relay} />}
+      >
         <p className="py-3 text-[0.8125rem] text-muted-foreground">
           {!relay.enabled
             ? "Resume this Relay to see its proxy."
