@@ -4,9 +4,9 @@ import {
   relayConnectionSettingsSchema,
   relayIdSchema as relayFingerprintSchema,
   relayNameSchema,
-  relayProxyConfigurationSchema,
-  relayProxyConfigurationV1Feature,
+  relayHostAccessSchema,
   relayProxyDiagnosticsSchema,
+  relayProxyModeSchema,
   relayProxySettingsSchema,
   relayTailscaleInstallSchema,
   relayTailscaleOverviewSchema,
@@ -401,41 +401,44 @@ export const getRelayProxy = createServerFn({ method: "GET" })
 // Files the Info page opens in the Relay's host files: its database, and the
 // bundled Traefik's config in that mode. Paths are relative to the host's
 // root, as the Files tab's are. Each is pinned there the first time. Null
-// from older Relays.
+// from older Relays. Both reads need only relay.read on the Relay, so a
+// connection that can browse host files can always find these.
 export const getRelayHostFiles = createServerFn({ method: "GET" })
   .validator(relayIdSchema)
   .handler(async ({ data }) => {
     await requireRelayAdministrator(data.id, "relay.files.read")
-    const [relay, { relayConnectionFeatures, relayRpc }] = await Promise.all([
+    const [relay, { relayRpc }] = await Promise.all([
       enabledRelay(data.id),
       import("@/lib/relay-connection"),
     ])
-    if (
-      !relayConnectionFeatures(relay.id).has(relayProxyConfigurationV1Feature)
-    ) {
-      return { database: null, traefikConfig: null }
-    }
-    const { hostDataDirectory, staticConfiguration } =
-      relayProxyConfigurationSchema.parse(
-        await relayRpc(relay, "relay.proxy.config.read", {}, 15_000)
-      )
-    if (!hostDataDirectory) return { database: null, traefikConfig: null }
-    const root = hostDataDirectory.replace(/^\/+/u, "")
+    const [{ dataDirectory }, proxy] = await Promise.all([
+      relayRpc(relay, "relay.host.read", {}, 15_000).then((value) =>
+        relayHostAccessSchema.parse(value)
+      ),
+      relayRpc(
+        relay,
+        "relay.proxy.read",
+        { includeDiagnostics: false },
+        15_000
+      ).then((value) => relayProxyModeReadSchema.parse(value)),
+    ])
+    if (!dataDirectory) return { database: null, traefikConfig: null }
+    const root = dataDirectory.replace(/^\/+/u, "")
+    const mode = proxy.mode ?? proxy.settings?.mode
     const files = {
       database: `${root}/network/relay.sqlite`,
-      // Only the bundled Traefik has a static file.
       traefikConfig:
-        staticConfiguration === null
-          ? null
-          : `${root}/infrastructure/traefik/traefik.yaml`,
+        mode === "traefik"
+          ? `${root}/infrastructure/traefik/traefik.yaml`
+          : null,
     }
-    const { pinFileByDefault } = await import("@/lib/file-activity")
-    const pinned = await Promise.all(
-      [files.database, files.traefikConfig]
-        .filter((path) => path !== null)
-        .map((path) => pinFileByDefault(relay.id, relay.id, path))
+    const { pinFilesByDefault } = await import("@/lib/file-activity")
+    const pinned = await pinFilesByDefault(
+      relay.id,
+      relay.id,
+      [files.database, files.traefikConfig].filter((path) => path !== null)
     )
-    if (pinned.some(Boolean)) {
+    if (pinned) {
       publishRealtimeChange({
         audience: { kind: "relays", relayIds: [relay.id] },
         scope: { instanceId: relay.id, relayId: relay.id },
@@ -445,6 +448,13 @@ export const getRelayHostFiles = createServerFn({ method: "GET" })
     }
     return files
   })
+
+// Relays answer with just the mode when asked without diagnostics; ones that
+// predate that option send the full settings.
+const relayProxyModeReadSchema = z.object({
+  mode: relayProxyModeSchema.optional(),
+  settings: z.object({ mode: relayProxyModeSchema }).optional(),
+})
 
 export const updateRelayProxy = createServerFn({ method: "POST" })
   .validator(relayProxyInputSchema)

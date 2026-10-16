@@ -673,11 +673,15 @@ export function relayProxyQueryOptions(relayId: string) {
 }
 
 // The paths only move if the Relay's data or proxy mode does, so they're read
-// rarely; a proxy change refreshes them.
-export function relayHostFilesQueryOptions(relayId: string) {
+// rarely; a proxy change refreshes them, and keying by the Relay's version
+// reads them again after it updates.
+export function relayHostFilesQueryOptions(
+  relayId: string,
+  version: string | null
+) {
   return queryOptions({
     queryFn: () => getRelayHostFiles({ data: { id: relayId } }),
-    queryKey: queryKeys.relayHostFiles(relayId),
+    queryKey: [...queryKeys.relayHostFiles(relayId), version] as const,
     retry: false,
     staleTime: 5 * 60_000,
   })

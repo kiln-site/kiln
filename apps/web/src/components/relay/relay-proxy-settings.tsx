@@ -22,13 +22,10 @@ import {
 } from "@/components/relay/relay-presentation"
 import {
   RelayConfigureButton,
-  useRelayPermission,
+  useRelayHostFiles,
 } from "@/components/relay/relay-settings"
 import { StatusIndicator } from "@/components/status-indicator"
-import {
-  relayProxyQueryOptions,
-  relayHostFilesQueryOptions,
-} from "@/lib/query-options"
+import { relayProxyQueryOptions } from "@/lib/query-options"
 import type { RelayDirectoryEntry } from "@/lib/relay-route"
 
 // How the Relay publishes web domains: its proxy's settings and whether it's
@@ -46,7 +43,9 @@ export function RelayProxySettings({
     enabled: connected,
   })
 
-  if (!proxy) {
+  // A paused or unreachable Relay keeps its last reading in the cache; don't
+  // present it as current.
+  if (!proxy || !connected) {
     return (
       <InfoSection
         title="Proxy"
@@ -55,11 +54,11 @@ export function RelayProxySettings({
         <p className="py-3 text-[0.8125rem] text-muted-foreground">
           {!relay.enabled
             ? "Resume this Relay to see its proxy."
-            : error
-              ? messageFrom(error, "Could not read the proxy settings.")
-              : connected
-                ? "Reading the proxy settings…"
-                : "The proxy appears once Hearth reaches the Relay."}
+            : !connected
+              ? "The proxy appears once Hearth reaches the Relay."
+              : error
+                ? messageFrom(error, "Could not read the proxy settings.")
+                : "Reading the proxy settings…"}
         </p>
       </InfoSection>
     )
@@ -89,7 +88,7 @@ export function RelayProxySettings({
               {settings.traefikImage}
             </span>
           </InfoFact>
-          <TraefikConfigLink relayId={relay.id} routeId={routeId} />
+          <TraefikConfigLink relay={relay} routeId={routeId} />
           <InfoFact label="Certificate email">
             <InfoDetails
               title="Certificate email"
@@ -127,25 +126,21 @@ export function RelayProxySettings({
 // Opens the bundled Traefik's config in the Relay's host files, where it's
 // pinned by default and the routes file sits beside it.
 function TraefikConfigLink({
-  relayId,
+  relay,
   routeId,
 }: {
-  relayId: string
+  relay: RelayDirectoryEntry
   routeId: string
 }) {
-  const canReadFiles = useRelayPermission(relayId, "relay.files.read")
-  const { data } = useQuery({
-    ...relayHostFilesQueryOptions(relayId),
-    enabled: canReadFiles,
-  })
-  if (!canReadFiles || !data?.traefikConfig) return null
+  const files = useRelayHostFiles(relay)
+  if (!files?.traefikConfig) return null
   return (
     <InfoFact label="Traefik config">
       <Link
         to="/relay/$relayId/files/$"
         params={{
           relayId: routeId,
-          _splat: data.traefikConfig,
+          _splat: files.traefikConfig,
         }}
         className="group flex min-w-0 items-center gap-1.5 font-mono text-xs transition-colors hover:text-primary"
       >

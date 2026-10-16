@@ -13,13 +13,16 @@ import {
   InfoSection,
 } from "@/components/info-page"
 import { InstanceFavoriteButton } from "@/components/instance-favorite"
+import { useRelayLiveStatus } from "@/components/relay/relay-presentation"
 import { RelayVersion } from "@/components/relay/relay-version"
 import { canAccessRelayPermission } from "@/lib/navigation-destinations"
 import type { AccessPermission } from "@/lib/permissions"
 import {
   accessCapabilitiesQueryOptions,
   relayHostFilesQueryOptions,
+  relaySnapshotQueryOptions,
 } from "@/lib/query-options"
+import type { RelayFleetSnapshot } from "@/lib/relay-fleet"
 import type { RelayDirectoryEntry } from "@/lib/relay-route"
 
 // Loaded when someone opens it, so the Relays page stays out of this route.
@@ -29,6 +32,28 @@ const EditRelayDialog = React.lazy(async () => {
 })
 
 // The Relay's details on its Info page; Configure changes them.
+
+// Where the Relay's database and Traefik config are in its host files, for
+// those who can browse them. Read only while the Relay is reachable, so a
+// paused Relay's failed read isn't kept once it's back.
+export function useRelayHostFiles(relay: RelayDirectoryEntry) {
+  const { connected } = useRelayLiveStatus(relay)
+  const canReadFiles = useRelayPermission(relay.id, "relay.files.read")
+  const selectVersion = React.useCallback(
+    (snapshot: RelayFleetSnapshot) =>
+      snapshot.nodes.find((node) => node.relayId === relay.id)?.version ?? null,
+    [relay.id]
+  )
+  const { data: version = null } = useQuery({
+    ...relaySnapshotQueryOptions(),
+    select: selectVersion,
+  })
+  const { data } = useQuery({
+    ...relayHostFilesQueryOptions(relay.id, version),
+    enabled: canReadFiles && connected,
+  })
+  return canReadFiles && connected ? (data ?? null) : null
+}
 
 export function useRelayPermission(
   relayId: string,
@@ -54,7 +79,7 @@ export function RelayGeneralSettings({
       title="Relay"
       action={
         <>
-          <RelayDatabaseButton relayId={relay.id} routeId={routeId} />
+          <RelayDatabaseButton relay={relay} routeId={routeId} />
           <InstanceFavoriteButton
             id={relay.id}
             kind="relay"
@@ -99,23 +124,19 @@ export function RelayGeneralSettings({
 // Opens the Relay's own SQLite database in its host files, where it's pinned
 // by default.
 function RelayDatabaseButton({
-  relayId,
+  relay,
   routeId,
 }: {
-  relayId: string
+  relay: RelayDirectoryEntry
   routeId: string
 }) {
-  const canReadFiles = useRelayPermission(relayId, "relay.files.read")
-  const { data } = useQuery({
-    ...relayHostFilesQueryOptions(relayId),
-    enabled: canReadFiles,
-  })
-  if (!canReadFiles || !data?.database) return null
+  const files = useRelayHostFiles(relay)
+  if (!files?.database) return null
   return (
     <Button asChild size="sm" variant="outline">
       <Link
         to="/relay/$relayId/files/$"
-        params={{ relayId: routeId, _splat: data.database }}
+        params={{ relayId: routeId, _splat: files.database }}
       >
         <Database />
         Database

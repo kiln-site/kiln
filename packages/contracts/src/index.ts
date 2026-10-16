@@ -339,6 +339,12 @@ export type RelayHostFiles = z.infer<typeof relayHostFilesSchema>
 export const relayHostAccessSchema = z.object({
   terminal: z.boolean(),
   files: relayHostFilesSchema,
+  /**
+   * The Relay's data folder on its host, where its database and the bundled
+   * Traefik's files are, for opening them in its host files. Absent from
+   * older Relays.
+   */
+  dataDirectory: z.string().min(1).optional(),
 })
 
 // Relay to Hearth: output for one attachment, in order. `ended` arrives with
@@ -1147,12 +1153,6 @@ export const relayProxyDiagnosticsSchema = z
 export const relayProxyConfigurationSchema = z.object({
   // Both files only exist for the bundled Traefik.
   dynamicConfiguration: z.string().nullable(),
-  /**
-   * The Relay's data folder on its host, where its database and the bundled
-   * Traefik's files are, for opening them in its host files. Absent from
-   * older Relays.
-   */
-  hostDataDirectory: z.string().min(1).optional(),
   routes: z.array(
     z.object({
       hostname: z.string(),

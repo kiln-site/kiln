@@ -120,7 +120,7 @@ function queryScopes(
     return [
       prefix(queryKeys.relayProxy(scope.relayId)),
       // The Traefik config only exists in Bundled mode.
-      exact(queryKeys.relayHostFiles(scope.relayId)),
+      prefix(queryKeys.relayHostFiles(scope.relayId)),
     ]
   }
   if (topic === "relays" && scope) {
