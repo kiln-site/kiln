@@ -1,5 +1,5 @@
 import type { RowDataPacket } from "mysql2/promise"
-import { Clock, Effect, Option, Schema } from "effect"
+import { Clock, Effect, Option, Schema, Semaphore } from "effect"
 
 import { Database } from "@/effect/database"
 import { databaseTable } from "@/lib/database-config"
@@ -27,6 +27,10 @@ const decode = Schema.decodeUnknownOption(GitHubRateLimitSchema)
 const settingId = "00000000-0000-4000-8000-000000000004"
 const settingKey = "kiln.githubRateLimit"
 
+// Requests answer in any order, so each records what it saw against what's
+// recorded, one at a time.
+const recordLock = Semaphore.makeUnsafe(1)
+
 export const loadGitHubRateLimitEffect = Effect.fnUntraced(function* () {
   const database = yield* Database
   const rows = yield* database.queryRows<
@@ -44,7 +48,40 @@ export const loadGitHubRateLimitEffect = Effect.fnUntraced(function* () {
   )
 })
 
-export const saveGitHubRateLimitEffect = Effect.fnUntraced(function* (
+/** Records what a GitHub response said is left, or a refusal (none left). */
+export const recordGitHubRateLimitEffect = (limit: GitHubRateLimit) =>
+  recordLock.withPermits(1)(
+    Effect.gen(function* () {
+      const now = yield* Clock.currentTimeMillis
+      const stored = yield* loadGitHubRateLimitEffect()
+      const next = mergeRateLimit(stored, limit, now)
+      if (next !== stored) yield* saveGitHubRateLimitEffect(next)
+    })
+  )
+
+function mergeRateLimit(
+  stored: GitHubRateLimit | null,
+  next: GitHubRateLimit,
+  now: number
+): GitHubRateLimit {
+  if (!stored || now >= stored.resetAt) return next
+  // A refusal holds until it ends, the later of two refusals included,
+  // whatever answers sent before it say.
+  if (next.remaining === 0) {
+    return stored.remaining === 0 && stored.resetAt > next.resetAt
+      ? stored
+      : next
+  }
+  if (stored.remaining === 0) return stored
+  // Within one window what's left only goes down, so an answer arriving
+  // late can't raise it.
+  if (next.resetAt === stored.resetAt) {
+    return next.remaining < stored.remaining ? next : stored
+  }
+  return next
+}
+
+const saveGitHubRateLimitEffect = Effect.fnUntraced(function* (
   limit: GitHubRateLimit
 ) {
   const database = yield* Database

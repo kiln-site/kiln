@@ -14,7 +14,7 @@ import {
 
 import { ExternalServiceError } from "@/effect/errors"
 import {
-  saveGitHubRateLimitEffect,
+  recordGitHubRateLimitEffect,
   type GitHubRateLimit,
 } from "@/effect/github-rate-limit"
 import { kilnGitRepository } from "@/lib/environment"
@@ -235,17 +235,15 @@ function requestJsonResponse<S extends Schema.Constraint>(
             const resetAt = Number.isFinite(retryAfter)
               ? now + retryAfter * 1_000
               : (rateLimit?.resetAt ?? now + 60 * 60_000)
-            yield* recordRateLimit({ remaining: 0, resetAt })
             const minutes = Math.max(1, Math.ceil((resetAt - now) / 60_000))
             return yield* GitHubRateLimitError.make({
               message: `GitHub's limit on requests from this Kiln is used up. Try again in ${minutes} minute${minutes === 1 ? "" : "s"}.`,
               resetAt,
             })
           }
-          if (rateLimit) yield* recordRateLimit(rateLimit)
           const ok = yield* HttpClientResponse.filterStatusOk(response)
           const body = yield* HttpClientResponse.schemaBodyJson(schema)(ok)
-          return { body, link: ok.headers["link"] ?? "" }
+          return { body, link: ok.headers["link"] ?? "", rateLimit }
         })
       ),
       Effect.timeout("15 seconds"),
@@ -271,13 +269,23 @@ function requestJsonResponse<S extends Schema.Constraint>(
                 : "GitHub returned an invalid response",
             service: "GitHub Releases",
           })
+    ),
+    // Recorded once the request is settled, so a slow write can't time it
+    // out into another request. Unanswered requests say nothing of it.
+    Effect.tap(({ rateLimit }) =>
+      rateLimit ? recordRateLimit(rateLimit) : Effect.void
+    ),
+    Effect.tapError((error) =>
+      error instanceof GitHubRateLimitError
+        ? recordRateLimit({ remaining: 0, resetAt: error.resetAt })
+        : Effect.void
     )
   )
 }
 
 // Recording is best effort: the request's own outcome matters more.
 const recordRateLimit = (limit: GitHubRateLimit) =>
-  saveGitHubRateLimitEffect(limit).pipe(
+  recordGitHubRateLimitEffect(limit).pipe(
     Effect.catch((error) =>
       Effect.logWarning("Could not record GitHub's rate limit", error)
     )

@@ -265,29 +265,81 @@ describeMysql("Kiln release feed", () => {
       })
     )
 
-    it.effect(
-      "ends history at what Hearth has while GitHub's limit is kept",
-      () =>
-        Effect.gen(function* () {
-          yield* resetDatabase
-          const now = yield* Clock.currentTimeMillis
-          const requests = serveReleasePages(
-            [
-              [nightly(4), nightly(3)],
-              [nightly(2), nightly(1)],
-            ],
-            { remaining: 5, resetAt: now + 30 * 60_000 }
-          )
+    it.effect("pauses history while GitHub's limit is kept, then resumes", () =>
+      Effect.gen(function* () {
+        yield* resetDatabase
+        const now = yield* Clock.currentTimeMillis
+        const resetAt = now + 30 * 60_000
+        const requests = serveReleasePages(
+          [
+            [nightly(4), nightly(3)],
+            [nightly(2), nightly(1)],
+          ],
+          { remaining: 5, resetAt }
+        )
 
-          const page = yield* releaseHistoryPageEffect(null, 3)
-          assert.deepStrictEqual(
-            page.releases.map(({ version }) => version),
-            [nightly(4).version, nightly(3).version]
+        const page = yield* releaseHistoryPageEffect(null, 3)
+        assert.deepStrictEqual(
+          page.releases.map(({ version }) => version),
+          [nightly(4).version, nightly(3).version]
+        )
+        assert.strictEqual(page.pausedUntil, resetAt)
+        assert.deepStrictEqual(requests, [1])
+
+        yield* TestClock.adjust("30 minutes")
+        const older = yield* releaseHistoryPageEffect(page.nextCursor, 3)
+        assert.deepStrictEqual(
+          older.releases.map(({ version }) => version),
+          [nightly(2).version, nightly(1).version]
+        )
+        assert.strictEqual(older.pausedUntil, null)
+      })
+    )
+
+    it.effect("keeps a refusal when an earlier answer arrives after it", () =>
+      Effect.gen(function* () {
+        yield* resetDatabase
+        serveReleasePages([[nightly(1)]])
+        yield* recentVersions
+
+        yield* TestClock.adjust("1 minute")
+        const refusedAt = yield* Clock.currentTimeMillis
+        serve = () =>
+          new Response("secondary rate limit", {
+            headers: { "retry-after": "120" },
+            status: 403,
+          })
+        yield* checkKilnReleasesEffect()
+
+        // An update's request answered before the refusal, but late.
+        serve = () =>
+          Response.json(
+            {
+              assets: [],
+              draft: false,
+              html_url: "https://github.com/kiln-site/kiln/releases/tag/v0",
+              name: "v0",
+              prerelease: true,
+              published_at: nightly(1).publishedAt,
+              tag_name: `v${nightly(1).version}`,
+            },
+            {
+              headers: {
+                "x-ratelimit-remaining": "41",
+                "x-ratelimit-reset": String((refusedAt + 3_600_000) / 1_000),
+              },
+            }
           )
-          // No cursor, so the changelog doesn't ask for the same page again.
-          assert.strictEqual(page.nextCursor, null)
-          assert.deepStrictEqual(requests, [1])
-        })
+        yield* Effect.exit(kilnReleaseManifestEffect(`v${nightly(1).version}`))
+
+        yield* TestClock.adjust("1 minute")
+        const requests = serveReleasePages([[nightly(2), nightly(1)]])
+        assert.strictEqual(
+          (yield* checkKilnReleasesEffect()).retryAt,
+          refusedAt + 120_000
+        )
+        assert.deepStrictEqual(requests, [])
+      })
     )
 
     it.effect("pages back through older releases only when asked", () =>

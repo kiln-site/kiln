@@ -95,6 +95,9 @@ export type ReleaseHistoryCursor = {
 
 export type ReleaseHistoryPage = {
   nextCursor: ReleaseHistoryCursor | null
+  // Older releases wait for GitHub's limit to reset at this time, while
+  // what's left of it is kept for updates.
+  pausedUntil: number | null
   releases: Array<ChangelogRelease>
 }
 
@@ -149,24 +152,23 @@ export const releaseHistoryPageEffect = Effect.fn("releases.historyPage")(
         ? stored
         : (yield* syncReleaseFeed(checkIntervalMs)).state
     let rows = yield* selectReleases(cursor, limit + 1)
-    let paused = false
+    let pausedUntil: number | null = null
     if (rows.length <= limit && state.historyPage !== null) {
       const backfilled = yield* feedLock.withPermits(1)(backfillReleaseHistory)
       state = backfilled.state
-      paused = backfilled.paused
+      pausedUntil = backfilled.pausedUntil
       rows = yield* selectReleases(cursor, limit + 1)
     }
     const releases = rows.slice(0, limit)
     const last = releases.at(-1)
-    // While GitHub's limit is kept for updates, history ends at what Hearth
-    // has, rather than being asked for again and again.
-    const more = rows.length > limit || (state.historyPage !== null && !paused)
+    const more = rows.length > limit || state.historyPage !== null
     return {
       nextCursor: more
         ? last
           ? { publishedAt: Number(last.published_at), tag: last.tag }
           : cursor
         : null,
+      pausedUntil: rows.length > limit ? null : pausedUntil,
       releases: releases.map(changelogRelease),
     } satisfies ReleaseHistoryPage
   }
@@ -361,13 +363,12 @@ const resolvePendingAliases = Effect.gen(function* () {
 const backfillReleaseHistory = Effect.gen(function* () {
   const state = yield* loadFeedState
   if (!state || state.historyPage === null) {
-    return { paused: false, state: state ?? emptyState() }
+    return { pausedUntil: null, state: state ?? emptyState() }
   }
   const now = yield* Clock.currentTimeMillis
   // Older releases wait while GitHub's limit is kept for updates.
-  if (rateLimitedUntil(yield* loadGitHubRateLimitEffect(), now) !== null) {
-    return { paused: true, state }
-  }
+  const pausedUntil = rateLimitedUntil(yield* loadGitHubRateLimitEffect(), now)
+  if (pausedUntil !== null) return { pausedUntil, state }
   // New releases push older ones to later pages, so this page may repeat
   // some Hearth has, but it never skips one.
   const { hasNextPage, releases } = yield* fetchKilnReleasePageEffect(
@@ -380,7 +381,7 @@ const backfillReleaseHistory = Effect.gen(function* () {
     historyPage: hasNextPage ? state.historyPage + 1 : null,
   }
   yield* saveFeedState(next)
-  return { paused: false, state: next }
+  return { pausedUntil: null, state: next }
 })
 
 function emptyState(): FeedState {

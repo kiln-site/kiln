@@ -2631,6 +2631,17 @@ const UpdateChangelogPage = React.memo(function UpdateChangelogPage({
     [markers, releases]
   )
   const pageCount = data?.pages.length ?? 0
+  const pausedUntil = data?.pages.at(-1)?.pausedUntil ?? null
+  // Rendering again once older releases may load lets paging continue.
+  const [, resumeHistory] = React.useReducer((count: number) => count + 1, 0)
+  React.useEffect(() => {
+    if (pausedUntil === null) return
+    const timer = window.setTimeout(
+      resumeHistory,
+      Math.max(0, pausedUntil - Date.now()) + 1_000
+    )
+    return () => window.clearTimeout(timer)
+  }, [pausedUntil])
 
   // Keep loading while a component's version is older than what's loaded,
   // so its line shows without scrolling down to it first.
@@ -2784,6 +2795,7 @@ const UpdateChangelogPage = React.memo(function UpdateChangelogPage({
         markerIndexes={timeline.markerIndexes}
         items={items}
         pageCount={pageCount}
+        pausedUntil={hasNextPage ? null : pausedUntil}
         pending={isPending}
         store={store}
       />
@@ -2805,6 +2817,7 @@ const ChangelogFeed = React.memo(function ChangelogFeed({
   jumpRef,
   markerIndexes,
   pageCount,
+  pausedUntil,
   pending,
   store,
 }: {
@@ -2817,6 +2830,7 @@ const ChangelogFeed = React.memo(function ChangelogFeed({
   jumpRef: React.Ref<(index: number) => void>
   markerIndexes: ReadonlyMap<string, number>
   pageCount: number
+  pausedUntil: number | null
   pending: boolean
   store: UpdateDialogViewStore
 }) {
@@ -2947,6 +2961,7 @@ const ChangelogFeed = React.memo(function ChangelogFeed({
                   <ChangelogEnd
                     error={error}
                     loading={hasNextPage || isFetchingNextPage}
+                    pausedUntil={pausedUntil}
                     onRetry={retry}
                   />
                 </div>
@@ -3476,10 +3491,12 @@ function ChangelogMarkerList({
 function ChangelogEnd({
   error,
   loading,
+  pausedUntil,
   onRetry,
 }: {
   error: boolean
   loading: boolean
+  pausedUntil: number | null
   onRetry: () => void
 }) {
   return (
@@ -3500,6 +3517,8 @@ function ChangelogEnd({
           <LoaderCircle className="size-3.5 animate-spin" />
           Loading older releases
         </>
+      ) : pausedUntil !== null ? (
+        `Older releases load after ${retryTimeFormatter.format(new Date(pausedUntil))}`
       ) : (
         "The first Kiln release"
       )}
