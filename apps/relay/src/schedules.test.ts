@@ -1,3 +1,4 @@
+import { symlinkSync } from "node:fs"
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { DatabaseSync } from "node:sqlite"
 import { randomUUID } from "node:crypto"
@@ -670,6 +671,36 @@ describe("Relay schedule persistence", () => {
     const recovered = await manager({ directory: dirname(filename) })
     expect((await latestRun(recovered.schedules))?.status).toBe("succeeded")
     expect((await recovered.schedules.overview()).deployments).toHaveLength(1)
+  })
+
+  it("refuses to start while an imported legacy file cannot be retired", async () => {
+    let archive = ""
+    const legacy = {
+      version: 1,
+      lastHeartbeatAt: Date.now(),
+      tombstones: {},
+      schedules: [{ ...projection, nextRunAt: Date.now() + hourMs }],
+      runs: [],
+    }
+    await expect(
+      manager({
+        legacy,
+        beforeMake: (filename) => {
+          archive = join(dirname(filename), "schedules.json.migrated")
+          symlinkSync(archive, archive)
+        },
+      })
+    ).rejects.toMatchObject({ code: "ELOOP" })
+    const directory = dirname(archive)
+    expect(
+      JSON.parse(await readFile(join(directory, "schedules.json"), "utf8"))
+    ).toEqual(legacy)
+    await rm(archive)
+    const recovered = await manager({ directory })
+    expect((await recovered.schedules.overview()).deployments).toHaveLength(1)
+    await expect(
+      readFile(join(directory, "schedules.json"), "utf8")
+    ).rejects.toMatchObject({ code: "ENOENT" })
   })
 
   it("accepts a same-revision redeploy with refreshed backup credentials", async () => {
