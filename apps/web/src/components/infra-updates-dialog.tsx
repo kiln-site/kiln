@@ -1,5 +1,6 @@
 import * as React from "react"
 import {
+  keepPreviousData,
   queryOptions,
   useInfiniteQuery,
   useMutation,
@@ -112,6 +113,12 @@ import {
   relayReconnectToastId,
   setSystemUpdateOverviewRefetchBlocked,
 } from "@/lib/system-update-presence"
+import {
+  observeReportedUpdate,
+  unfollowedRunningUpdates,
+  type ReportedUpdateObservation,
+  type SystemUpdateReport,
+} from "@/lib/system-update-reports"
 import type { UpdateOverview } from "@/server/updates"
 import {
   getSystemUpdates,
@@ -161,10 +168,15 @@ type UpdateFailure = {
   target: UpdateTarget | ActiveUpdate
 }
 
-type SystemUpdateOperation = Awaited<ReturnType<typeof getSystemUpdateStatus>>
+// How an update ended, or null when its Relay has no record of it.
+type SystemUpdateOutcome = {
+  error: string | null
+  status: "failed" | "running" | "succeeded"
+  version: string
+} | null
 
 type ActiveUpdatePollerController = {
-  complete: (update: ActiveUpdate, operation: SystemUpdateOperation) => void
+  complete: (update: ActiveUpdate, operation: SystemUpdateOutcome) => void
   setReconnecting: (operationId: string, reconnecting: boolean) => void
 }
 
@@ -194,7 +206,24 @@ const lastCheckedFormatter = new Intl.DateTimeFormat("en-US", {
   timeStyle: "short",
 })
 
-function activeUpdateQueryOptions(active: ActiveUpdate) {
+// The reports of the Relays running the updates the browser follows. They
+// come from Hearth's copy of each Relay's snapshot, so reading them doesn't
+// reach a Relay that's replacing itself.
+function systemUpdateReportsQueryOptions(relayIds: ReadonlyArray<string>) {
+  return queryOptions({
+    queryKey: ["updates", "reports", ...relayIds],
+    queryFn: () => getSystemUpdates({ data: { relayIds: [...relayIds] } }),
+    // Updates already followed keep their state while another Relay's is
+    // read for the first time.
+    placeholderData: keepPreviousData,
+    refetchInterval: 2_000,
+    retry: false,
+    notifyOnChangeProps: ["data", "isError"],
+  })
+}
+
+// Follows an update on a Relay from before updates were reported.
+function legacyActiveUpdateQueryOptions(active: ActiveUpdate) {
   return queryOptions({
     queryKey: ["updates", "operation", active.relayId, active.operationId],
     queryFn: () =>
@@ -312,42 +341,107 @@ export const InfraUpdatesDialog = React.memo(function InfraUpdatesDialog({
     viewStore.showOverview()
   }, [requestId, viewStore])
 
+  // Follows updates this browser didn't start just now: ones it followed
+  // before a reload, and ones the Relays report running.
+  const followUpdates = React.useCallback(
+    (updates: ReadonlyArray<ActiveUpdate>) => {
+      const unfollowed = updates.filter(
+        (update) =>
+          !completedOperations.current.has(update.operationId) &&
+          !activeRef.current.some(
+            (active) => active.operationId === update.operationId
+          )
+      )
+      const first = unfollowed[0]
+      if (!first) return
+      setSystemUpdateOverviewRefetchBlocked(true)
+      void queryClient.cancelQueries({
+        exact: true,
+        queryKey: queryKeys.updates,
+      })
+      for (const update of unfollowed) {
+        activityStore.setPhase(update.operationId, update.phase ?? "Preparing")
+        registerUpdatePresence(update)
+      }
+      preparingUpdatesRef.current = preparingUpdatesRef.current.filter(
+        (preparing) =>
+          !unfollowed.some((update) => update.targetKey === preparing.targetKey)
+      )
+      const versionName =
+        first.versionName ?? friendlyVersionName(first.targetVersion)
+      batch.current = beginSystemUpdateBatch(batch.current, versionName)
+      showSystemUpdateProgressToast(
+        batch.current.versionName ?? versionName,
+        reconnectingOperations.current.size > 0
+      )
+      replaceActive([...activeRef.current, ...unfollowed])
+    },
+    [activityStore, queryClient, replaceActive]
+  )
+
   React.useEffect(() => {
     const restored = Result.try(() => {
       const stored = window.localStorage.getItem(activeSystemUpdateStorageKey)
       return stored ? parseActiveUpdates(JSON.parse(stored) as unknown) : []
     })
     if (Result.isSuccess(restored) && restored.success.length > 0) {
-      setSystemUpdateOverviewRefetchBlocked(true)
-      void queryClient.cancelQueries({
-        exact: true,
-        queryKey: queryKeys.updates,
-      })
-      for (const update of restored.success) {
-        activityStore.setPhase(update.operationId, update.phase ?? "Preparing")
-        registerUpdatePresence(update)
-      }
-      const versionName =
-        restored.success[0]?.versionName ??
-        friendlyVersionName(restored.success[0]?.targetVersion ?? null)
-      batch.current = beginSystemUpdateBatch(batch.current, versionName)
-      showSystemUpdateProgressToast(versionName, false)
-      replaceActive(restored.success)
+      followUpdates(restored.success)
     } else {
       window.localStorage.removeItem(activeSystemUpdateStorageKey)
     }
-  }, [activityStore, queryClient, replaceActive])
+  }, [followUpdates])
+
+  // Opening the updater finds the updates running that this browser doesn't
+  // follow, so they're shown updating instead of offered again.
+  React.useEffect(() => {
+    if (!open) return
+    let current = true
+    void Effect.runPromise(
+      Effect.tryPromise(() => getSystemUpdates({ data: { relayIds: null } })).pipe(
+        Effect.option
+      )
+    ).then((reports) => {
+      if (!current || Option.isNone(reports)) return
+      const overview = queryClient.getQueryData<UpdateOverview>(
+        queryKeys.updates
+      )
+      followUpdates(
+        unfollowedRunningUpdates(
+          reports.value,
+          (operationId) =>
+            completedOperations.current.has(operationId) ||
+            activeRef.current.some(
+              (active) => active.operationId === operationId
+            )
+        ).map(({ report, update }) =>
+          reportedActiveUpdate(report, update, overview)
+        )
+      )
+    })
+    return () => {
+      current = false
+    }
+  }, [followUpdates, open, queryClient])
 
   const registerStartedUpdate = React.useCallback(
     (update: ActiveUpdate) => {
-      activityStore.setPhase(update.operationId, update.phase ?? "Preparing")
       preparingUpdatesRef.current = preparingUpdatesRef.current.filter(
         (preparing) => preparing.targetKey !== update.targetKey
       )
+      // Opening the updater may have found it in the Relay's report first.
+      if (
+        activeRef.current.some(
+          (active) => active.operationId === update.operationId
+        )
+      ) {
+        publishDisplayedActive()
+        return
+      }
+      activityStore.setPhase(update.operationId, update.phase ?? "Preparing")
       registerUpdatePresence(update)
       replaceActive([...activeRef.current, update])
     },
-    [activityStore, replaceActive]
+    [activityStore, publishDisplayedActive, replaceActive]
   )
   const updateMutation = useMutation({
     mutationFn: (update: PendingUpdate) =>
@@ -429,7 +523,7 @@ export const InfraUpdatesDialog = React.memo(function InfraUpdatesDialog({
   )
 
   const handleOperationComplete = React.useCallback(
-    (completed: ActiveUpdate, operation: SystemUpdateOperation) => {
+    (completed: ActiveUpdate, operation: SystemUpdateOutcome) => {
       if (operation?.status === "running") return
       if (completedOperations.current.has(completed.operationId)) return
       completedOperations.current.add(completed.operationId)
@@ -971,17 +1065,97 @@ const ActiveUpdatePollers = React.memo(function ActiveUpdatePollers({
   activityStore: SystemUpdateActivityStore
   controller: ActiveUpdatePollerController
 }) {
-  return active.map((update) => (
-    <ActiveUpdatePoller
-      activityStore={activityStore}
-      controller={controller}
-      key={update.operationId}
-      update={update}
-    />
-  ))
+  const relayIds = React.useMemo(
+    () => Array.from(new Set(active.map(({ relayId }) => relayId))).sort(),
+    [active]
+  )
+  const reportsQuery = useQuery({
+    ...systemUpdateReportsQueryOptions(relayIds),
+    enabled: relayIds.length > 0,
+  })
+  // Nothing is known until the first read answers.
+  if (reportsQuery.data === undefined && !reportsQuery.isError) return null
+  const reports = reportsQuery.isError ? null : (reportsQuery.data ?? null)
+  return active.map((update) => {
+    const observation = observeReportedUpdate(reports, update)
+    return observation.kind === "unsupported" ? (
+      <LegacyActiveUpdatePoller
+        activityStore={activityStore}
+        controller={controller}
+        key={update.operationId}
+        update={update}
+      />
+    ) : (
+      <ReportedActiveUpdate
+        activityStore={activityStore}
+        controller={controller}
+        error={observation.kind === "finished" ? observation.error : null}
+        key={update.operationId}
+        kind={observation.kind}
+        phase={observation.kind === "running" ? observation.phase : null}
+        status={observation.kind === "finished" ? observation.status : null}
+        update={update}
+        version={observation.kind === "finished" ? observation.version : null}
+      />
+    )
+  })
 })
 
-const ActiveUpdatePoller = React.memo(function ActiveUpdatePoller({
+/**
+ * Follows one update through its Relay's reports. One the Relay reports
+ * without for `notStartedAfterMs` has no record there, which fails it.
+ */
+const ReportedActiveUpdate = React.memo(function ReportedActiveUpdate({
+  activityStore,
+  controller,
+  error,
+  kind,
+  phase,
+  status,
+  update,
+  version,
+}: {
+  activityStore: SystemUpdateActivityStore
+  controller: ActiveUpdatePollerController
+  error: string | null
+  kind: Exclude<ReportedUpdateObservation["kind"], "unsupported">
+  phase: string | null
+  status: "failed" | "succeeded" | null
+  update: ActiveUpdate
+  version: string | null
+}) {
+  const completed = React.useRef(false)
+  const reconnecting = kind === "away"
+  const shownPhase = reconnecting ? "reconnecting" : phase
+
+  React.useEffect(() => {
+    if (shownPhase) activityStore.setPhase(update.operationId, shownPhase)
+  }, [activityStore, shownPhase, update.operationId])
+
+  React.useEffect(() => {
+    controller.setReconnecting(update.operationId, reconnecting)
+    return () => controller.setReconnecting(update.operationId, false)
+  }, [controller, reconnecting, update.operationId])
+
+  React.useEffect(() => {
+    if (completed.current) return
+    if (status !== null && version !== null) {
+      completed.current = true
+      controller.complete(update, { error, status, version })
+      return
+    }
+    if (kind !== "absent") return
+    const timer = window.setTimeout(() => {
+      completed.current = true
+      controller.complete(update, null)
+    }, notStartedAfterMs)
+    return () => window.clearTimeout(timer)
+  }, [controller, error, kind, status, update, version])
+
+  return null
+})
+
+const LegacyActiveUpdatePoller = React.memo(function LegacyActiveUpdatePoller({
   activityStore,
   controller,
   update,
@@ -990,7 +1164,7 @@ const ActiveUpdatePoller = React.memo(function ActiveUpdatePoller({
   controller: ActiveUpdatePollerController
   update: ActiveUpdate
 }) {
-  const operationQuery = useQuery(activeUpdateQueryOptions(update))
+  const operationQuery = useQuery(legacyActiveUpdateQueryOptions(update))
   const completed = React.useRef(false)
   const reconnecting = operationQuery.isError || operationQuery.isRefetchError
   const phase = reconnecting ? "reconnecting" : operationQuery.data?.phase
@@ -3449,6 +3623,34 @@ function updateTargets(overview: UpdateOverview): Array<UpdateTarget> {
   ]
 }
 
+// An update a Relay reports, as the updater follows it.
+function reportedActiveUpdate(
+  report: SystemUpdateReport,
+  update: SystemUpdateReport["updates"][number],
+  overview: UpdateOverview | undefined
+): ActiveUpdate {
+  const targetKey =
+    update.component === "hearth" ? "hearth" : relayTargetKey(report.relayId)
+  const target = overview
+    ? updateTargets(overview).find(({ key }) => key === targetKey)
+    : undefined
+  return {
+    component: update.component,
+    name:
+      target?.name ??
+      (update.component === "hearth" ? "Panel" : report.name),
+    operationId: update.id,
+    phase: update.phase,
+    previousVersion: target?.currentVersion ?? null,
+    relayId: report.relayId,
+    targetVersion: update.version,
+    targetKey,
+    versionName:
+      overview?.releases.find(({ version }) => version === update.version)
+        ?.name ?? friendlyVersionName(update.version),
+  }
+}
+
 function isViewedHearthUpdate(
   update: Pick<ActiveUpdate, "component" | "targetKey">
 ): boolean {
@@ -3555,10 +3757,14 @@ const findStartedUpdates = Effect.fnUntraced(function* (
   const unresolved = new Map(targets.map((target) => [target.key, target]))
   const reportingWithout = new Map<string, number>()
   const deadline = Date.now() + startRecoveryWindowMs
+  // Hearth's own Relay is unknown when the browser wasn't shown one.
+  const relayIds = targets.every(({ relayId }) => relayId)
+    ? Array.from(new Set(targets.flatMap(({ relayId }) => relayId ?? [])))
+    : null
   while (unresolved.size > 0 && Date.now() < deadline) {
-    const reports = yield* Effect.tryPromise(() => getSystemUpdates()).pipe(
-      Effect.option
-    )
+    const reports = yield* Effect.tryPromise(() =>
+      getSystemUpdates({ data: { relayIds } })
+    ).pipe(Effect.option)
     if (Option.isSome(reports)) {
       for (const target of unresolved.values()) {
         const report = reports.value.find(

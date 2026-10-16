@@ -52,6 +52,10 @@ const releaseHistorySchema = z.object({
     })
     .nullable(),
 })
+const systemUpdatesSchema = z.object({
+  // The Relays to read, or every one the user can update when null.
+  relayIds: z.array(z.string().min(1)).max(500).nullable(),
+})
 const updateStatusSchema = z.object({
   operationId: z.uuid(),
   relayId: z.string().min(1),
@@ -561,12 +565,14 @@ export const getSystemUpdateStatus = createServerFn({ method: "POST" })
 /**
  * The updates each Relay the user can update reported, running or finished;
  * Hearth's own only for platform administrators. `state` says whether they
- * are current (see `relayUpdateReportState`). The browser reads them when the
- * reply that started its updates was lost, often with the Hearth one of them
- * replaced.
+ * are current (see `relayUpdateReportState`). The browser follows its
+ * updates through them, so a Relay or Hearth that's away while it replaces
+ * itself is waited for rather than failed, and finds the ones started by a
+ * reply it lost or in another tab.
  */
-export const getSystemUpdates = createServerFn({ method: "GET" }).handler(
-  async () => {
+export const getSystemUpdates = createServerFn({ method: "GET" })
+  .validator(systemUpdatesSchema)
+  .handler(async ({ data }) => {
     const user = await requireUpdateAccess()
     const platformAdmin = isPlatformAdmin(user)
     const [relays, { relayRpc, relaySystemUpdates, relayUpdateReportState }] =
@@ -574,16 +580,22 @@ export const getSystemUpdates = createServerFn({ method: "GET" }).handler(
         updateRelaysForUser(user),
         import("@/lib/relay-connection"),
       ])
+    const requested = data.relayIds ? new Set(data.relayIds) : null
+    const read = requested
+      ? relays.filter((relay) => requested.has(relay.id))
+      : relays
     // A Relay this process hasn't heard from yet is connected to now, so
-    // its snapshot arrives.
+    // its snapshot arrives. One that's away fails here and is reported as
+    // unavailable.
     await Promise.allSettled(
-      relays.flatMap((relay) =>
+      read.flatMap((relay) =>
         relayUpdateReportState(relay.id) === "unavailable"
           ? [relayRpc(relay, "relay.snapshot", {}, 5_000)]
           : []
       )
     )
-    return relays.map((relay) => ({
+    return read.map((relay) => ({
+      name: relay.name,
       relayId: relay.id,
       state: relayUpdateReportState(relay.id),
       updates:
@@ -591,8 +603,9 @@ export const getSystemUpdates = createServerFn({ method: "GET" }).handler(
           (update) => platformAdmin || update.component === "relay"
         ) ?? [],
     }))
-  }
-)
+  })
+
+export type SystemUpdateReports = Awaited<ReturnType<typeof getSystemUpdates>>
 
 class UpdateApplyError extends Error {
   constructor(
