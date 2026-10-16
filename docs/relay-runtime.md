@@ -29,7 +29,9 @@ Everything but app Compose projects and Dockerfile builds uses it: the snapshot
 loop, power actions, console logs and streams, container terminals, readiness
 probes, resource stats, crash recovery, image pulls, container, network, and
 volume creation, databases, Tailscale stacks, Traefik and Coolify discovery,
-the update check, and self-updates. Console input and tab completion attach to
+the update check, self-updates, and the host's operating system for the
+node's details. That lookup runs in the background with a short timeout, so a
+slow daemon never holds up a snapshot. Console input and tab completion attach to
 the container over the same socket directly, because they hold the attach
 connection open themselves.
 
