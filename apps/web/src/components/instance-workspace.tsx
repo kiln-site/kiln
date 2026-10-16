@@ -44,6 +44,7 @@ import type {
 } from "@/components/instance-workspace-context"
 import {
   ResourceMeter,
+  ResourceMeterStrip,
   UptimeMeter,
   resourceItem,
   type ResourceId,
@@ -810,7 +811,7 @@ function InstancePowerControls({
     if (!Object.values(powerPermissions).some(Boolean)) return null
     return (
       <div
-        className="col-start-2 row-start-1 flex items-center justify-end gap-1.5 xl:col-start-3"
+        className="flex shrink-0 items-center justify-end gap-1.5"
         aria-label="Loading server power controls"
       >
         <span className="hidden h-9 w-[4.75rem] animate-pulse bg-muted/35 md:block" />
@@ -875,23 +876,21 @@ function LiveResourceMeters({
   )
 
   return (
-    <div
-      className="hidden min-w-0 md:col-span-2 md:block xl:col-span-1 xl:col-start-2 xl:row-start-1"
-      aria-label="Server resource usage"
+    <ResourceMeterStrip
+      columns={4}
+      label="Server resource usage"
+      uptime={<InstanceUptimeMeter instanceId={instanceId} relayId={relayId} />}
     >
-      <div className="grid h-14 min-w-0 grid-cols-[repeat(4,minmax(0,1fr))_5.5rem] divide-x divide-border/60 border border-border/80 bg-card/40 px-1.5 py-2 xl:grid-cols-[repeat(4,minmax(0,1fr))_5.75rem]">
-        {SERVER_RESOURCE_IDS.map((resourceId) => (
-          <LiveResourceMeter
-            key={resourceId}
-            instanceId={instanceId}
-            relayId={relayId}
-            resourceId={resourceId}
-            historyStore={historyStore}
-          />
-        ))}
-        <InstanceUptimeMeter instanceId={instanceId} relayId={relayId} />
-      </div>
-    </div>
+      {SERVER_RESOURCE_IDS.map((resourceId) => (
+        <LiveResourceMeter
+          key={resourceId}
+          instanceId={instanceId}
+          relayId={relayId}
+          resourceId={resourceId}
+          historyStore={historyStore}
+        />
+      ))}
+    </ResourceMeterStrip>
   )
 }
 

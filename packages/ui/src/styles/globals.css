@@ -5,6 +5,16 @@
 @import "@fontsource-variable/jetbrains-mono";
 
 @custom-variant dark (&:is(.dark *));
+/* A workspace header's resource meters stack into rows when collapsed, and
+   always when the header is too narrow to fit them beside the name. */
+@custom-variant meters-collapsed {
+  &:where([data-meters="collapsed"] *) {
+    @slot;
+  }
+  @container workspace-header (width < 72rem) {
+    @slot;
+  }
+}
 @source "../../../apps/**/*.{ts,tsx}";
 @source "../../../components/**/*.{ts,tsx}";
 @source "../**/*.{ts,tsx}";

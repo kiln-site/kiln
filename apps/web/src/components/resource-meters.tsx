@@ -1,4 +1,6 @@
 import * as React from "react"
+import { Result } from "effect"
+import { ChevronLeft, ChevronRight } from "lucide-react"
 import type { RelayInstanceResources } from "@workspace/contracts"
 
 import {
@@ -6,6 +8,11 @@ import {
   HoverCardContent,
   HoverCardTrigger,
 } from "@workspace/ui/components/hover-card"
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@workspace/ui/components/tooltip"
 
 import {
   RESOURCE_HISTORY_WINDOW_MS,
@@ -69,8 +76,109 @@ const RESOURCE_STYLES = {
 
 export type ResourceId = keyof typeof RESOURCE_STYLES
 
-// One usage card: its label, value, and bar, with its recent history on
-// hover.
+const metersCollapsedStorageKey = "kiln:resource-meters-collapsed:v1"
+const metersCollapsedChangedEvent = "kiln:resource-meters-collapsed:changed"
+
+function readMetersCollapsed(): boolean {
+  return Result.getOrElse(
+    Result.try(
+      () => window.localStorage.getItem(metersCollapsedStorageKey) === "true"
+    ),
+    () => false
+  )
+}
+
+function subscribeMetersCollapsed(listener: () => void): () => void {
+  const onStorage = (event: StorageEvent) => {
+    if (event.key === metersCollapsedStorageKey) listener()
+  }
+  window.addEventListener(metersCollapsedChangedEvent, listener)
+  window.addEventListener("storage", onStorage)
+  return () => {
+    window.removeEventListener(metersCollapsedChangedEvent, listener)
+    window.removeEventListener("storage", onStorage)
+  }
+}
+
+function setMetersCollapsed(collapsed: boolean) {
+  Result.try(() => {
+    if (collapsed)
+      window.localStorage.setItem(metersCollapsedStorageKey, "true")
+    else window.localStorage.removeItem(metersCollapsedStorageKey)
+    window.dispatchEvent(new Event(metersCollapsedChangedEvent))
+  })
+}
+
+// A workspace header's meters, a toggle, and uptime, each in its own card.
+// Collapsed, the meters stack into one row each, leaving network to the
+// expanded cards; the choice stays with this browser. Headers too narrow for
+// the full cards always collapse them, in CSS (the `meters-collapsed`
+// variant), and hide the toggle.
+export function ResourceMeterStrip({
+  children,
+  columns,
+  label,
+  uptime,
+}: {
+  children: React.ReactNode
+  columns: 3 | 4
+  // For example "Server resource usage".
+  label: string
+  uptime: React.ReactNode
+}) {
+  const collapsed = React.useSyncExternalStore(
+    subscribeMetersCollapsed,
+    readMetersCollapsed,
+    () => false
+  )
+
+  return (
+    <div
+      className="hidden h-14 shrink-0 gap-1.5 @[46rem]/workspace-header:flex"
+      data-meters={collapsed ? "collapsed" : "expanded"}
+      aria-label={label}
+    >
+      <div
+        className="flex min-w-0 border border-border/80 bg-card/40"
+        data-resource-meters=""
+      >
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <button
+              type="button"
+              className="hidden w-6 place-items-center border-r border-border/60 text-muted-foreground transition-colors outline-none hover:bg-muted/30 hover:text-foreground focus-visible:bg-muted/30 focus-visible:text-foreground @[72rem]/workspace-header:grid"
+              aria-label={
+                collapsed ? "Expand resource usage" : "Collapse resource usage"
+              }
+              aria-expanded={!collapsed}
+              onClick={() => setMetersCollapsed(!collapsed)}
+            >
+              {collapsed ? (
+                <ChevronLeft className="size-3.5" />
+              ) : (
+                <ChevronRight className="size-3.5" />
+              )}
+            </button>
+          </TooltipTrigger>
+          <TooltipContent side="bottom" sideOffset={6}>
+            {collapsed ? "Expand usage" : "Collapse usage"}
+          </TooltipContent>
+        </Tooltip>
+        <div
+          className={`grid min-w-0 divide-x divide-border/60 px-1.5 py-2 meters-collapsed:w-[13.5rem] meters-collapsed:auto-rows-fr meters-collapsed:grid-cols-1 meters-collapsed:gap-y-1 meters-collapsed:divide-x-0 meters-collapsed:px-2.5 meters-collapsed:py-[3px] ${columns === 4 ? "w-[29rem] grid-cols-4" : "w-[22rem] grid-cols-3"}`}
+        >
+          {children}
+        </div>
+      </div>
+      <div className="w-[5.75rem] border border-border/80 bg-card/40 py-2">
+        {uptime}
+      </div>
+    </div>
+  )
+}
+
+// One usage meter: its label, value, and bar, with its recent history on
+// hover. A column of the strip, or one row of it when collapsed.
 export function ResourceMeter({
   historyStore,
   resource,
@@ -82,27 +190,28 @@ export function ResourceMeter({
     <ResourceHistoryPopover resource={resource} historyStore={historyStore}>
       <button
         type="button"
-        className={`group min-w-0 text-left outline-none first:pl-1.5 focus-visible:bg-muted/25 ${resource.id === "network" ? "px-1.5" : "px-2.5"}`}
+        className={`group type-meta grid min-w-0 grid-cols-[auto_minmax(0,1fr)] content-start items-center gap-x-1.5 text-left font-mono tracking-[0.065em] outline-none first:pl-1.5 focus-visible:bg-muted/25 meters-collapsed:grid-cols-[2.25rem_minmax(0,1fr)_2.5rem] meters-collapsed:content-stretch meters-collapsed:gap-x-1.5 meters-collapsed:px-0 meters-collapsed:text-[0.6875rem] meters-collapsed:leading-[11px] meters-collapsed:first:pl-0 ${resource.id === "network" ? "px-1.5 meters-collapsed:hidden" : "px-2.5"}`}
       >
-        <div className="type-meta flex items-center justify-between gap-1.5 font-mono tracking-[0.065em]">
-          <span className="shrink-0 font-medium text-muted-foreground transition-colors group-hover:text-foreground">
-            {resource.label}
+        <span className="col-start-1 row-start-1 font-medium text-muted-foreground transition-colors group-hover:text-foreground">
+          {resource.label}
+        </span>
+        {resource.id === "network" ? (
+          <NetworkTransferValue
+            historyStore={historyStore}
+            received={resource.receivedDisplayValue ?? "—"}
+            sent={resource.sentDisplayValue ?? "—"}
+          />
+        ) : (
+          <span
+            className={`col-start-2 row-start-1 min-w-0 justify-self-end truncate font-medium tabular-nums meters-collapsed:col-start-3 ${resource.valueClassName}`}
+          >
+            {resource.displayValue}
           </span>
-          {resource.id === "network" ? (
-            <NetworkTransferValue
-              historyStore={historyStore}
-              received={resource.receivedDisplayValue ?? "—"}
-              sent={resource.sentDisplayValue ?? "—"}
-            />
-          ) : (
-            <span
-              className={`truncate font-medium tabular-nums ${resource.valueClassName}`}
-            >
-              {resource.displayValue}
-            </span>
-          )}
-        </div>
-        <ResourceBar resource={resource} className="mt-2" />
+        )}
+        <ResourceBar
+          resource={resource}
+          className="col-span-2 row-start-2 mt-2 h-3 meters-collapsed:col-span-1 meters-collapsed:col-start-2 meters-collapsed:row-start-1 meters-collapsed:mt-0 meters-collapsed:h-auto meters-collapsed:self-stretch"
+        />
       </button>
     </ResourceHistoryPopover>
   )
@@ -126,7 +235,7 @@ export function UptimeMeter({
     <HoverCard openDelay={160} closeDelay={100}>
       <HoverCardTrigger asChild>
         <div
-          className="type-meta min-w-0 px-1.5 font-mono outline-none focus-visible:bg-muted/25 xl:px-2"
+          className="type-meta min-w-0 px-2 font-mono outline-none focus-visible:bg-muted/25"
           aria-label={`${label} ${uptime ?? "unavailable"}`}
           tabIndex={startedAtLabel ? 0 : undefined}
         >
@@ -182,7 +291,7 @@ function NetworkTransferValue({
   const isReceived = sampleSequence % 2 === 0
   return (
     <span
-      className={`min-w-0 truncate font-medium tracking-[-0.045em] tabular-nums ${isReceived ? "text-cyan-200/95" : "text-primary/90"}`}
+      className={`col-start-2 row-start-1 min-w-0 justify-self-end truncate font-medium tracking-[-0.045em] tabular-nums meters-collapsed:col-start-3 ${isReceived ? "text-cyan-200/95" : "text-primary/90"}`}
       aria-label={`Download ${received}, upload ${sent}`}
     >
       {isReceived ? "↓" : "↑"} {isReceived ? received : sent}
@@ -417,7 +526,7 @@ function ResourceBar({
 }) {
   return (
     <div
-      className={`h-3 ${resource.id === "network" ? "grid grid-rows-2 gap-px" : "overflow-hidden bg-muted/55"} ${className}`}
+      className={`${resource.id === "network" ? "grid grid-rows-2 gap-px" : "overflow-hidden bg-muted/55"} ${className}`}
       role="progressbar"
       aria-label={`${resource.label} usage`}
       aria-valuemin={0}
@@ -469,13 +578,30 @@ function ResourceHistoryPopover({
   historyStore: ResourceHistoryStore
   children: React.ReactElement
 }) {
+  const triggerRef = React.useRef<HTMLAnchorElement>(null)
+  const [sideOffset, setSideOffset] = React.useState(8)
+
+  // Opens below the whole meters card rather than the hovered meter, so a
+  // stacked card's history doesn't cover the rows under it.
+  function anchorToCard(open: boolean) {
+    const trigger = triggerRef.current
+    const card = trigger?.closest("[data-resource-meters]")
+    if (!open || !trigger || !card) return
+    setSideOffset(
+      card.getBoundingClientRect().bottom -
+        trigger.getBoundingClientRect().bottom
+    )
+  }
+
   return (
-    <HoverCard openDelay={160} closeDelay={100}>
-      <HoverCardTrigger asChild>{children}</HoverCardTrigger>
+    <HoverCard openDelay={160} closeDelay={100} onOpenChange={anchorToCard}>
+      <HoverCardTrigger ref={triggerRef} asChild>
+        {children}
+      </HoverCardTrigger>
       <HoverCardContent
         align="center"
         side="bottom"
-        sideOffset={8}
+        sideOffset={sideOffset}
         collisionPadding={12}
         className="w-[min(20rem,calc(100vw-1.5rem))] border-border/90 bg-popover p-0 shadow-2xl"
       >

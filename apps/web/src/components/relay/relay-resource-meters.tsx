@@ -5,6 +5,7 @@ import { Effect } from "effect"
 import { useRelayLiveStatus } from "@/components/relay/relay-presentation"
 import {
   ResourceMeter,
+  ResourceMeterStrip,
   UptimeMeter,
   resourceItem,
   type ResourceId,
@@ -44,14 +45,15 @@ export const RelayResourceMeters = React.memo(function RelayResourceMeters({
   if (!supported) return null
 
   return (
-    <div
-      className="hidden min-w-0 md:col-span-2 md:block xl:col-span-1 xl:col-start-2 xl:row-start-1"
-      aria-label="Relay resource usage"
-    >
+    <>
       {connected ? (
         <RelayResourceSampler historyStore={historyStore} relayId={relay.id} />
       ) : null}
-      <div className="grid h-14 min-w-0 grid-cols-[repeat(3,minmax(0,1fr))_5.5rem] divide-x divide-border/60 border border-border/80 bg-card/40 px-1.5 py-2 xl:grid-cols-[repeat(3,minmax(0,1fr))_5.75rem]">
+      <ResourceMeterStrip
+        columns={3}
+        label="Relay resource usage"
+        uptime={<RelayUptimeMeter connected={connected} relayId={relay.id} />}
+      >
         {RELAY_RESOURCE_IDS.map((resourceId) => (
           <RelayResourceMeter
             key={resourceId}
@@ -61,9 +63,8 @@ export const RelayResourceMeters = React.memo(function RelayResourceMeters({
             unavailable={unavailable}
           />
         ))}
-        <RelayUptimeMeter connected={connected} relayId={relay.id} />
-      </div>
-    </div>
+      </ResourceMeterStrip>
+    </>
   )
 })
 

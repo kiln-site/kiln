@@ -97,7 +97,7 @@ export function WorkspacePowerControls({
   }
 
   return (
-    <div className="col-start-2 row-start-1 flex items-center justify-end gap-1.5 xl:col-start-3">
+    <div className="flex shrink-0 items-center justify-end gap-1.5">
       {primaryAction ? (
         <Button
           variant="outline"
