@@ -247,7 +247,7 @@ export function UptimeMeter({
           aria-label={`${label} ${uptime ?? "unavailable"}`}
           tabIndex={startedAtLabel ? 0 : undefined}
         >
-          <span className="block font-medium tracking-[0.065em] text-muted-foreground">
+          <span className="block text-center font-medium tracking-[0.065em] text-muted-foreground">
             UPTIME
           </span>
           <div className="mt-2.5 flex h-2 items-center justify-center">
