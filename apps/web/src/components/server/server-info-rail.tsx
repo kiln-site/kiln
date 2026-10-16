@@ -209,20 +209,24 @@ function ServerContainerCard({
 }) {
   return (
     <InfoRailCard icon={<Box />} title="Container">
-      <InfoFact label="Container">
+      <InfoFact label="Name">
+        <InfoCopyValue label="container name" value={instance.service} />
+      </InfoFact>
+      <InfoFact label="ID">
         {instance.containerId ? (
           <InfoCopyValue label="container ID" value={instance.containerId} />
         ) : (
           <span className="text-muted-foreground">Not created</span>
         )}
       </InfoFact>
-      <InfoFact label="Service">
-        <span className="truncate font-mono text-xs" title={instance.service}>
-          {instance.service}
-        </span>
-      </InfoFact>
       <InfoFact label="Data">
         <InfoCopyValue label="data directory" value={instance.directory} />
+      </InfoFact>
+      {/* Game servers have no CPU limit yet. */}
+      <InfoFact label="CPU">
+        <span className="text-muted-foreground" title="No CPU limit">
+          —
+        </span>
       </InfoFact>
       <InfoFact label="Memory">
         {instance.limits.memoryBytes > 0
