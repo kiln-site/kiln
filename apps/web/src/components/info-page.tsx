@@ -29,11 +29,13 @@ export function InfoPage({
 }) {
   return (
     <section className="min-h-0 flex-1 overflow-y-auto bg-card">
-      <div className="grid min-h-full lg:grid-cols-[minmax(0,1fr)_19rem]">
+      <div className="grid min-h-full lg:grid-cols-[minmax(0,1fr)_21rem]">
         <div className="flex min-w-0 flex-col gap-4 px-5 py-6 sm:px-7">
           {children}
         </div>
-        <aside className="min-w-0 border-t bg-background/30 px-5 py-6 sm:px-6 lg:border-t-0 lg:border-l [&_dt]:w-24">
+        {/* Rail labels are short, so they take only their width and leave the
+            rest to values. */}
+        <aside className="min-w-0 border-t bg-background/30 px-4 py-6 lg:border-t-0 lg:border-l [&_dt]:w-auto">
           {rail}
         </aside>
       </div>
