@@ -27,8 +27,11 @@ import { isExpectedAppError } from "@/observability/error-policy"
 
 export interface BrowserSpan {
   readonly setAttribute: (key: string, value: unknown) => void
-  /** Ends the span once; later calls are ignored. */
-  readonly end: (error?: unknown) => void
+  /**
+   * Ends the span once; later calls are ignored. `endedAt` is a
+   * `performance.now()` time for work that finished before the call.
+   */
+  readonly end: (error?: unknown, endedAt?: number) => void
 }
 
 interface BrowserTelemetry {
@@ -127,6 +130,9 @@ export function startBrowserSpan(
   options?: {
     readonly attributes?: Record<string, unknown>
     readonly parent?: BrowserSpan | undefined
+    // A `performance.now()` time the span began at, for work that started
+    // before anything could start a span, such as a navigation.
+    readonly startedAt?: number
   }
 ): BrowserSpan {
   const tracer = telemetry?.tracer
@@ -137,7 +143,7 @@ export function startBrowserSpan(
     parent: parent ? Option.some(parent) : Option.none(),
     annotations: Context.empty(),
     links: [],
-    startTime: nowNanos(),
+    startTime: nowNanos(options?.startedAt),
     kind: "internal",
     root: parent === undefined,
     sampled: true,
@@ -148,10 +154,13 @@ export function startBrowserSpan(
   let ended = false
   const browserSpan: BrowserSpan = {
     setAttribute: (key, value) => span.attribute(key, value),
-    end: (error) => {
+    end: (error, endedAt) => {
       if (ended) return
       ended = true
-      span.end(nowNanos(), error === undefined ? Exit.void : Exit.fail(error))
+      span.end(
+        nowNanos(endedAt),
+        error === undefined ? Exit.void : Exit.fail(error)
+      )
     },
   }
   spans.set(browserSpan, span)
@@ -173,6 +182,6 @@ export async function traceBrowser<TResult>(
   )
 }
 
-function nowNanos(): bigint {
-  return BigInt(Math.round((performance.timeOrigin + performance.now()) * 1e6))
+function nowNanos(at = performance.now()): bigint {
+  return BigInt(Math.round((performance.timeOrigin + at) * 1e6))
 }

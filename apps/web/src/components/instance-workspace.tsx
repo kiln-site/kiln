@@ -635,6 +635,8 @@ function InstanceIdentity({
     <WorkspaceIdentity
       error={error}
       name={instance.name}
+      // The fleet entry carries the server's live state.
+      statusConfirmed
       title={<InstanceRouteTitle />}
     >
       <span className="hidden shrink-0 items-center gap-1.5 @[30rem]:inline-flex">

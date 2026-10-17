@@ -158,6 +158,10 @@ const DatabaseWorkspaceHeader = React.memo(function DatabaseWorkspaceHeader({
         <WorkspaceIdentity
           error={error}
           name={database.name}
+          statusConfirmed={
+            database.runtimeStatus !== undefined &&
+            database.runtimeStatus.phase !== "checking"
+          }
           title={
             <WorkspaceRouteTitle
               destinations={databaseDestinations}

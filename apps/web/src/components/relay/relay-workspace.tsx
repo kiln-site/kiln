@@ -2,6 +2,7 @@ import * as React from "react"
 import { useQuery } from "@tanstack/react-query"
 import { RadioTower } from "lucide-react"
 
+import { usePageMilestone } from "@/lib/page-timing"
 import { RelayPowerControls } from "@/components/relay/relay-power-controls"
 import { useRelayLiveStatus } from "@/components/relay/relay-presentation"
 import { RelayResourceMeters } from "@/components/relay/relay-resource-meters"
@@ -130,6 +131,7 @@ const RelayWorkspaceHeader = React.memo(function RelayWorkspaceHeader({
 // why they're idle.
 function RelayStatusLabel({ relay }: { relay: RelayDirectoryEntry }) {
   const { presentation, relayStatus, updating } = useRelayLiveStatus(relay)
+  usePageMilestone("status", relayStatus !== "checking")
   if (!updating && (relayStatus === "connected" || relayStatus === "checking"))
     return null
   return (
