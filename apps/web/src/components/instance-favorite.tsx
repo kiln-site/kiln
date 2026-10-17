@@ -161,6 +161,8 @@ export const InstanceFavoriteToggle = React.memo(
     const toggle = useToggleInstanceFavorite()
     const [confirming, setConfirming] = React.useState(false)
     const [hovered, setHovered] = React.useState(false)
+    // Only a star the user just added animates, not one already set.
+    const [justStarred, setJustStarred] = React.useState(false)
 
     React.useEffect(() => {
       if (!confirming) return
@@ -173,6 +175,7 @@ export const InstanceFavoriteToggle = React.memo(
 
     const click = React.useCallback(() => {
       if (!starred) {
+        setJustStarred(true)
         toggle.mutate({ favorite, starred: true })
       } else if (confirming) {
         setConfirming(false)
@@ -209,7 +212,8 @@ export const InstanceFavoriteToggle = React.memo(
             <Star
               key={starred ? "starred" : "unstarred"}
               className={cn(
-                starred && "animate-in fill-current duration-200 zoom-in-50",
+                starred && "fill-current",
+                starred && justStarred && "animate-in duration-200 zoom-in-50",
                 confirming && "fill-amber-400/30"
               )}
               aria-hidden="true"

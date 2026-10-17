@@ -30,11 +30,18 @@ export interface DataTableColumnMeta {
 export interface DataTableVirtualizationOptions {
   estimateRowHeight?: number
   overscan?: number
+  /**
+   * The rows' CSS height, used to place server-rendered rows before they can
+   * be measured. Defaults to `estimateRowHeight` in pixels.
+   */
+  rowHeight?: string
 }
 
 export const defaultDataTableVirtualization = {
   estimateRowHeight: 56,
   overscan: 8,
+  // An `h-14` cell plus the row's bottom border.
+  rowHeight: "3.5rem + 1px",
 } satisfies Required<DataTableVirtualizationOptions>
 
 export type DataTableSearchValue = boolean | number | string | null | undefined

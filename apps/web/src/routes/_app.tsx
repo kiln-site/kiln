@@ -6,6 +6,7 @@ import {
   accessCapabilitiesQueryOptions,
   appDirectoryQueryOptions,
   authStateQueryOptions,
+  instanceFavoritesQueryOptions,
   managedDatabaseDirectoryQueryOptions,
   relaysQueryOptions,
   serverDirectoryQueryOptions,
@@ -45,6 +46,8 @@ export const Route = createFileRoute("/_app")({
         managedDatabaseDirectoryQueryOptions()
       ),
       context.queryClient.ensureQueryData(relaysQueryOptions()),
+      // Stars render with their rows instead of popping in afterwards.
+      context.queryClient.ensureQueryData(instanceFavoritesQueryOptions()),
     ])
   },
   component: AuthenticatedApp,
