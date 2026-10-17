@@ -93,6 +93,22 @@ it("keeps the original click time across a redirect", () => {
   expect(measured("route")).toEqual([{ start: 1_000, duration: 50 }])
 })
 
+it("times a second click before the first resolves from the second click", () => {
+  timing.startClientNavigation(
+    "/relay/gg9YBwL4/info",
+    "/_app/relay/$relayId/info"
+  )
+  now = 3_000
+  // The user gives up on a slow page and opens another.
+  timing.noteUserInput()
+  timing.startClientNavigation("/db/d9f9f0d6/info", "/_app/db/$databaseId/info")
+  now = 3_080
+  timing.resolveClientNavigation("/db/d9f9f0d6/info")
+  flushFrame()
+
+  expect(measured("route")).toEqual([{ start: 3_000, duration: 80 }])
+})
+
 it("cancels an open whose navigation resolves somewhere else", () => {
   timing.startClientNavigation(
     "/db/d9f9f0d6/network",

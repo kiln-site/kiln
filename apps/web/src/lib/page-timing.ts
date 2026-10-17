@@ -49,8 +49,10 @@ const maximumOpenMs = 30_000
 let current: PageOpen | null = null
 let nextId = 1
 // A redirect starts another navigation before the first resolves; the open
-// keeps the time of the original click.
+// keeps the time of the original click. A new click or key press in between
+// is a new navigation instead, timed from then.
 let pendingClientStart: number | undefined
+let lastInputAt = Number.NEGATIVE_INFINITY
 // Where the pending navigation is going; it may resolve somewhere else.
 let pendingClientPath: string | undefined
 const listeners = new Set<() => void>()
@@ -104,12 +106,18 @@ export function startPageOpen(
   notify()
 }
 
+/** The user clicked, pressed a key, or moved through history. */
+export function noteUserInput(): void {
+  lastInputAt = performance.now()
+}
+
 /** A client navigation to `path` began, possibly redirecting another. */
 export function startClientNavigation(
   path: string,
   routeId: string | undefined
 ): void {
-  pendingClientStart ??= performance.now()
+  if (pendingClientStart === undefined || lastInputAt >= pendingClientStart)
+    pendingClientStart = performance.now()
   pendingClientPath = path
   if (routeId) startPageOpen(routeId, "client", pendingClientStart)
   else finishPageOpen("left")
