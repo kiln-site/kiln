@@ -44,7 +44,11 @@ export default defineConfig({
       resolveDepSubpath: true,
       // Bundle the workspace packages while production dependencies stay in
       // the separately cached runtime layer.
-      alwaysBundle: ["@workspace/contracts", "@workspace/telemetry"],
+      alwaysBundle: [
+        "@workspace/contracts",
+        "@workspace/contracts/schedules",
+        "@workspace/telemetry",
+      ],
       onlyBundle: ["cron-parser", "luxon"],
     },
     // Named so outputs keep their dist/src paths: older Relays start
