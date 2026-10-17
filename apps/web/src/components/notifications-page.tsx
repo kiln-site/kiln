@@ -3,7 +3,6 @@ import { useLiveQuery } from "@tanstack/react-db"
 import { defaultRangeExtractor, useVirtualizer } from "@tanstack/react-virtual"
 import type { Range } from "@tanstack/react-virtual"
 
-import { Button } from "@workspace/ui/components/button"
 import { cn } from "@workspace/ui/lib/utils"
 
 import {
@@ -146,26 +145,3 @@ export function NotificationsPage({
 }
 
 /** Clear all, in the page header beside the title. */
-export const NotificationsToolbarActions = React.memo(
-  function NotificationsToolbarActions() {
-    const { data: newest } = useLiveQuery((query) =>
-      query
-        .from({ notification: notificationsCollectionOptions })
-        .orderBy(({ notification }) => notification.createdAt, "desc")
-        .limit(1)
-        .select(({ notification }) => ({ createdAt: notification.createdAt }))
-    )
-    const { clearThrough } = useNotificationClearing()
-    const through = newest[0]?.createdAt
-    return (
-      <Button
-        variant="outline"
-        size="sm"
-        disabled={through === undefined}
-        onClick={() => through !== undefined && clearThrough(through)}
-      >
-        Clear all
-      </Button>
-    )
-  }
-)

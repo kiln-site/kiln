@@ -7,6 +7,10 @@ import { z } from "zod"
 
 import {
   backupArtifactFilename,
+  type BackupTaskInput,
+  type RelayBackupTask,
+} from "@workspace/contracts"
+import {
   nextScheduleOccurrence,
   resolveScheduleBackupName,
   relayScheduleProjectionSchema,
@@ -15,15 +19,13 @@ import {
   scheduleDeterministicUuid,
   scheduleRunSchema,
   scheduleStableId,
-  type BackupTaskInput,
-  type RelayBackupTask,
   type RelayScheduleAction,
   type RelayScheduleProjection,
   type ScheduleActionAttempt,
   type ScheduleActionType,
   type ScheduleRun,
   type ScheduleTarget,
-} from "@workspace/contracts"
+} from "@workspace/contracts/schedules"
 
 import {
   legacyScheduleStateSchema,

@@ -2,7 +2,7 @@ import {
   scheduleActionAppliesToTarget,
   type ScheduleAction,
   type ScheduleTarget,
-} from "@workspace/contracts"
+} from "@workspace/contracts/schedules"
 
 import { loadBackupStorageEffect } from "@/backups/destinations/s3"
 import { runAppEffect } from "@/effect/runtime"

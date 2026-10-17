@@ -5,10 +5,10 @@ import { Clock, Data, Effect, Result } from "effect"
 import type { ResultSetHeader, RowDataPacket } from "mysql2/promise"
 import { z } from "zod"
 
+import { relaySnapshotSchema } from "@workspace/contracts"
 import {
   normalizeScheduleCron,
   relayScheduleOverviewSchema,
-  relaySnapshotSchema,
   scheduleActionAppliesToTarget,
   scheduleActionSchema,
   scheduleDefinitionSchema,
@@ -21,7 +21,7 @@ import {
   type ScheduleDefinition,
   type ScheduleRun,
   type ScheduleTarget,
-} from "@workspace/contracts"
+} from "@workspace/contracts/schedules"
 
 import { prepareResticRepositoryLocation } from "@/backups/destinations"
 import {

@@ -11,7 +11,7 @@ import {
   type RelayScheduleDeployment,
   type RelayScheduleProjection,
   type ScheduleRun,
-} from "@workspace/contracts"
+} from "@workspace/contracts/schedules"
 
 import { RelayStateError } from "./errors.js"
 

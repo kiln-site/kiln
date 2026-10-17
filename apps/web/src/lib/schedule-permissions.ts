@@ -2,7 +2,7 @@ import {
   scheduleActionAppliesToTarget,
   type ScheduleAction,
   type ScheduleTarget,
-} from "@workspace/contracts"
+} from "@workspace/contracts/schedules"
 
 import type { AuthenticatedUser } from "@/lib/auth-session"
 import type { AccessGrant } from "@/lib/access-control"

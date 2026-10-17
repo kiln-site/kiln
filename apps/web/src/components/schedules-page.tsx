@@ -41,14 +41,17 @@ import { useNavigate, useSearch } from "@tanstack/react-router"
 import cronstrue from "cronstrue"
 import { Result } from "effect"
 
-import type { ScheduleAction, ScheduleTarget } from "@workspace/contracts"
+import type {
+  ScheduleAction,
+  ScheduleTarget,
+} from "@workspace/contracts/schedules"
 import {
   normalizeScheduleCron,
   scheduleActionAppliesToTarget,
   scheduleActionSupportsTarget,
   scheduleCronAliases,
   validateScheduleCron,
-} from "@workspace/contracts"
+} from "@workspace/contracts/schedules"
 import { Badge } from "@workspace/ui/components/badge"
 import { Button } from "@workspace/ui/components/button"
 import {

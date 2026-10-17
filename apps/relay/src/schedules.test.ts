@@ -9,12 +9,12 @@ import { setImmediate as yieldToEventLoop } from "node:timers/promises"
 import { Effect, Fiber, ManagedRuntime } from "effect"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test"
 
-import type {
-  BackupTaskInput,
-  RelayBackupTask,
-  RelayScheduleProjection,
-} from "@workspace/contracts"
-import { nextScheduleOccurrence, scheduleStableId } from "@workspace/contracts"
+import type { BackupTaskInput, RelayBackupTask } from "@workspace/contracts"
+import type { RelayScheduleProjection } from "@workspace/contracts/schedules"
+import {
+  nextScheduleOccurrence,
+  scheduleStableId,
+} from "@workspace/contracts/schedules"
 
 import { makeRelayStateLayer, RelayStateStore } from "./effect/state.js"
 

@@ -4,7 +4,7 @@ import {
   scheduleBackupActionSchema,
   scheduleTargetKey,
   type ScheduleTarget,
-} from "@workspace/contracts"
+} from "@workspace/contracts/schedules"
 
 import type { AccessGrant } from "@/lib/access-control"
 import type { AuthenticatedUser } from "@/lib/auth-session"

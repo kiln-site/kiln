@@ -9,7 +9,7 @@ import {
 } from "@workspace/ui/components/tooltip"
 
 import { InfraToolbarActions } from "@/components/infra-layout"
-import { NotificationsToolbarActions } from "@/components/notifications-page"
+import { NotificationsToolbarActions } from "@/components/notifications-toolbar-actions"
 import { sectionDestinationLabel } from "@/lib/navigation-destinations"
 import type { GlobalSection } from "@/lib/route-sections"
 

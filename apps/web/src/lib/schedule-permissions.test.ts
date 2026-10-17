@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vite-plus/test"
 
-import type { ScheduleAction, ScheduleTarget } from "@workspace/contracts"
+import type {
+  ScheduleAction,
+  ScheduleTarget,
+} from "@workspace/contracts/schedules"
 
 import type { AuthenticatedUser } from "./auth-session"
 import type { AccessGrant } from "./access-control"

@@ -1,4 +1,7 @@
-import { scheduleTargetKey, type ScheduleTarget } from "@workspace/contracts"
+import {
+  scheduleTargetKey,
+  type ScheduleTarget,
+} from "@workspace/contracts/schedules"
 
 export type ScheduleTargetAvailability = ScheduleTarget & {
   available: boolean

@@ -9,7 +9,7 @@ export default defineConfig({
       resolveDepSubpath: true,
     },
     dts: true,
-    entry: ["src/index.ts"],
+    entry: ["src/index.ts", "src/schedules.ts"],
     format: "esm",
     outDir: "dist",
     platform: "neutral",

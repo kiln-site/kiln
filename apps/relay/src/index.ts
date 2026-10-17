@@ -93,8 +93,8 @@ import {
   relaySystemUpdateSchema,
   RelayBrowserAuthorizationReviseSchema,
   relayBrowserAuthorizationReviseMaxItems,
-  relayScheduleProjectionSchema,
 } from "@workspace/contracts"
+import { relayScheduleProjectionSchema } from "@workspace/contracts/schedules"
 import type {
   RelayControlOperation,
   RelayControlRequest,

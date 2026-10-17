@@ -6,8 +6,29 @@ import {
   useRouterState,
 } from "@tanstack/react-router"
 
-import { InfraUpdatesDialog } from "@/components/infra-updates-dialog"
+import { forkPromise, tapPromiseError } from "@/effect/promise"
 import { accessCapabilitiesQueryOptions } from "@/lib/query-options"
+
+// The dialog is large and rarely opened, so it loads after the page: when
+// the browser is idle, or when first opened.
+let dialogModulePromise:
+  | Promise<typeof import("@/components/infra-updates-dialog")>
+  | undefined
+
+function loadDialogModule() {
+  dialogModulePromise ??= tapPromiseError(
+    () => import("@/components/infra-updates-dialog"),
+    (error) => {
+      dialogModulePromise = undefined
+      throw error
+    }
+  )
+  return dialogModulePromise
+}
+
+const InfraUpdatesDialog = React.lazy(async () => ({
+  default: (await loadDialogModule()).InfraUpdatesDialog,
+}))
 
 export type InfraUpdateDialogView = "changelog" | "overview"
 
@@ -162,16 +183,34 @@ const AuthorizedInfraUpdatesDialogHost = React.memo(
       store.getSnapshot,
       store.getServerSnapshot
     )
+    // Stay mounted once opened, so closing still animates.
+    const [opened, setOpened] = React.useState(false)
+    if (state.open && !opened) setOpened(true)
 
+    React.useEffect(() => {
+      const idle =
+        "requestIdleCallback" in window
+          ? window.requestIdleCallback(() => forkPromise(loadDialogModule), {
+              timeout: 5_000,
+            })
+          : undefined
+      return () => {
+        if (idle !== undefined) window.cancelIdleCallback(idle)
+      }
+    }, [])
+
+    if (!opened) return null
     return (
-      <InfraUpdatesDialog
-        initialRelayId={state.relayId}
-        open={state.open}
-        requestId={state.requestId}
-        view={state.view}
-        onRetryTarget={returnToUpdater}
-        onOpenChange={handleOpenChange}
-      />
+      <React.Suspense fallback={null}>
+        <InfraUpdatesDialog
+          initialRelayId={state.relayId}
+          open={state.open}
+          requestId={state.requestId}
+          view={state.view}
+          onRetryTarget={returnToUpdater}
+          onOpenChange={handleOpenChange}
+        />
+      </React.Suspense>
     )
   }
 )
