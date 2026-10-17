@@ -35,6 +35,8 @@ interface ManagedDatabaseIdRow extends RowDataPacket {
 }
 
 interface ManagedDatabaseDirectoryRow extends RowDataPacket {
+  created_at: number
+  database_name: string
   database_id: string
   engine: string
   name: string
@@ -78,14 +80,16 @@ export const listManagedDatabaseDirectoryEffect = Effect.fn(
   const database = yield* Database
   const rows = yield* database.queryRows<ManagedDatabaseDirectoryRow>(
     "managed_databases_directory",
-    `SELECT database_id, relay_id, name, engine
+    `SELECT database_id, relay_id, name, engine, database_name, created_at
        FROM ${databaseTable("database")}
       ORDER BY name ASC, created_at ASC`
   )
   return rows.map((row) => {
     const engine = databaseEngineSchema.parse(row.engine)
     return {
+      createdAt: new Date(row.created_at).toISOString(),
       databaseId: row.database_id,
+      databaseName: row.database_name,
       engine,
       name: row.name,
       relayId: row.relay_id,

@@ -32,9 +32,9 @@ import {
 } from "@workspace/ui/components/tooltip"
 
 import {
-  InstanceName,
+  InstanceCard,
   type InstanceNameInstance,
-} from "@/components/instance-name"
+} from "@/components/instance-card"
 import {
   backupShowsArchivedLocalArtifact,
   backupTaskUploadProgressPercent,
@@ -801,7 +801,7 @@ export const BackupTargetLink = React.memo(function BackupTargetLink({
   targetKind: Backup["targetKind"]
 }) {
   const identity = (
-    <InstanceName
+    <InstanceCard
       className="w-full"
       instance={
         instance ?? {

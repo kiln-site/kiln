@@ -1,3 +1,5 @@
+import { instanceInventoryScope } from "@/lib/instance-inventory"
+import { instanceInventoryQueryOptions } from "@/lib/instance-inventory"
 import * as React from "react"
 import {
   useMutation,
@@ -30,14 +32,13 @@ import {
 import { canAccessInstancePermission } from "@/lib/navigation-destinations"
 import {
   accessCapabilitiesQueryOptions,
-  queryKeys,
   relaySnapshotQueryOptions,
 } from "@/lib/query-options"
 import { updateManagedDatabaseNetwork } from "@/server/databases"
 
 type NetworkDatabase = Pick<
   ManagedDatabase,
-  "connectedInstanceIds" | "id" | "name" | "relayId" | "relayName"
+  "id" | "name" | "relayId" | "relayName"
 >
 
 // Servers on the database's Relay that the user may attach to its network.
@@ -100,7 +101,11 @@ export function useDatabaseNetworkToggle(
       }),
     onSuccess: async () => {
       await queryClient.invalidateQueries({
-        queryKey: queryKeys.databases.list,
+        queryKey: instanceInventoryScope({
+          kind: "database",
+          relayId: database.relayId,
+          id: database.id,
+        }),
       })
     },
     onError: (error) =>
@@ -165,16 +170,25 @@ export const DatabaseNetworkPicker = React.memo(function DatabaseNetworkPicker({
 })
 
 function DatabaseServerPicker({ database }: { database: NetworkDatabase }) {
+  const inventory = useQuery(
+    instanceInventoryQueryOptions(
+      { kind: "database", id: database.id, relayId: database.relayId },
+      "detail"
+    )
+  )
+  const value = inventory.data
+  const current =
+    value?.kind === "database" && value.view === "detail" ? value.data : null
   const servers = useConnectableDatabaseServers(database)
   const { pendingInstanceId, toggle } = useDatabaseNetworkToggle(database)
   const selectedKeys = React.useMemo(
     () =>
       new Set(
-        database.connectedInstanceIds.map(
+        (current?.connectedInstanceIds ?? []).map(
           (instanceId) => `${database.relayId}:${instanceId}`
         )
       ),
-    [database.connectedInstanceIds, database.relayId]
+    [current?.connectedInstanceIds, database.relayId]
   )
   const toggleServer = React.useCallback(
     (item: InstancePickerItem) =>
@@ -184,6 +198,23 @@ function DatabaseServerPicker({ database }: { database: NetworkDatabase }) {
       }),
     [selectedKeys, toggle]
   )
+
+  // Background refreshes keep the open picker, its search, and its scroll.
+  if (!inventory.isFetchedAfterMount)
+    return (
+      <p className="p-4 text-xs text-muted-foreground">Checking connections…</p>
+    )
+  if (
+    inventory.isError ||
+    !current ||
+    value?.observation.inventory !== "available" ||
+    value.observation.reachability !== "connected"
+  )
+    return (
+      <p className="p-4 text-xs text-destructive">
+        Connections are unavailable. Close and reopen to retry.
+      </p>
+    )
 
   return (
     <InstancePickerContent

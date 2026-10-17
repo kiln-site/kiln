@@ -61,7 +61,7 @@ import {
   WorkspaceTableHeading,
 } from "@/components/workspace-table"
 import type { WorkspaceTableSearchStore } from "@/components/workspace-table"
-import { InstanceName } from "@/components/instance-name"
+import { InstanceCard } from "@/components/instance-card"
 import {
   InstancePickerContent,
   type InstancePickerItem,
@@ -638,7 +638,7 @@ const TailscaleMembershipRow = React.memo(function TailscaleMembershipRow({
             preload="intent"
             className="group/server-link flex min-h-[3.25rem] w-full min-w-0 flex-col justify-center px-3 outline-none focus-visible:ring-2 focus-visible:ring-ring/40 focus-visible:ring-inset"
           >
-            <InstanceName
+            <InstanceCard
               instance={{
                 id: server.id,
                 kind: "server",

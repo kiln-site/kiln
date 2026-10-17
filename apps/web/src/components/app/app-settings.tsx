@@ -26,7 +26,9 @@ import { useAppContainerSelection } from "@/components/app/app-container-selecti
 import {
   appAddresses,
   appContainers,
+  appRelayAvailable,
   appServices,
+  appStatusPresentation,
   showAppOperationError,
   sourceTypeLabels,
   type App,
@@ -61,6 +63,7 @@ export function AppGeneralSettings({
   canRename: boolean
 }) {
   const running = app.containers.filter((container) => container.running)
+  const available = appRelayAvailable(app)
   return (
     <InfoSection
       icon={<Boxes />}
@@ -83,7 +86,11 @@ export function AppGeneralSettings({
         <InfoCopyValue label="app ID" value={app.id} />
       </InfoFact>
       <InfoFact label="Containers">
-        {app.containers.length === 0 ? (
+        {!available ? (
+          <span className="text-muted-foreground">
+            {appStatusPresentation(app).label}
+          </span>
+        ) : app.containers.length === 0 ? (
           <span className="text-muted-foreground">Not deployed</span>
         ) : (
           <span className="tabular-nums">
@@ -132,7 +139,8 @@ export function AppSourceSettings({
   routeId: string
 }) {
   const [configuring, setConfiguring] = React.useState(false)
-  const deploying = app.deployment?.state === "running"
+  const deploying =
+    appRelayAvailable(app) && app.deployment?.state === "running"
   const kind = config.sourceType === "image" ? null : config.sourceType
   const singleContainer = config.sourceType !== "compose"
   const services = appServices(app)
@@ -364,13 +372,20 @@ export function AppDeploymentSettings({
   routeId: string
 }) {
   const deployment = app.deployment
+  const available = appRelayAvailable(app)
   return (
     <InfoSection
       icon={<Rocket />}
       title="Deployment"
       status={
         deployment ? (
-          <StatusIndicator status={deploymentStatus(deployment.state)} />
+          <StatusIndicator
+            status={
+              available
+                ? deploymentStatus(deployment.state)
+                : appStatusPresentation(app)
+            }
+          />
         ) : null
       }
       action={
@@ -401,7 +416,9 @@ export function AppDeploymentSettings({
             {deployment.finishedAt ? (
               <RelativeTime timestamp={Date.parse(deployment.finishedAt)} />
             ) : (
-              <span className="text-muted-foreground">In progress</span>
+              <span className="text-muted-foreground">
+                {available ? "In progress" : appStatusPresentation(app).label}
+              </span>
             )}
           </InfoFact>
           {deployment.error ? (
@@ -646,11 +663,14 @@ function ServiceTag({ app, service }: { app: App; service: string }) {
   const container = app.containers.find(
     (candidate) => candidate.service === service
   )
-  const state = !container
-    ? "Not deployed"
-    : container.running
-      ? "Running"
-      : "Stopped"
+  const available = appRelayAvailable(app)
+  const state = !available
+    ? appStatusPresentation(app).label
+    : !container
+      ? "Not deployed"
+      : container.running
+        ? "Running"
+        : "Stopped"
   return (
     <button
       type="button"
@@ -662,7 +682,7 @@ function ServiceTag({ app, service }: { app: App; service: string }) {
         aria-hidden="true"
         className={cn(
           "size-1.5 shrink-0 rounded-full",
-          !container
+          !available || !container
             ? "bg-muted-foreground/40"
             : container.running
               ? "bg-emerald-400"

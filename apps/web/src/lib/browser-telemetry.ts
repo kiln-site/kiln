@@ -40,6 +40,15 @@ const noopSpan: BrowserSpan = { setAttribute: () => {}, end: () => {} }
 const spans = new WeakMap<BrowserSpan, Tracer.Span>()
 let telemetry: BrowserTelemetry | undefined
 
+export function runBrowserEffect<A, E>(
+  effect: Effect.Effect<A, E>,
+  options?: { signal?: AbortSignal }
+): Promise<A> {
+  return telemetry
+    ? telemetry.runtime.runPromise(effect, options)
+    : Effect.runPromise(effect, options)
+}
+
 /** Starts exporting browser telemetry and reporting uncaught errors. */
 export function startBrowserTelemetry(): void {
   if (telemetry || typeof window === "undefined") return

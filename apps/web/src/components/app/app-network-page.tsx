@@ -1,3 +1,4 @@
+import { instanceInventoryScope } from "@/lib/instance-inventory"
 import * as React from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { Link } from "@tanstack/react-router"
@@ -54,7 +55,7 @@ import {
   accessCapabilitiesQueryOptions,
   appConfigQueryOptions,
   appWebRoutesQueryOptions,
-  managedDatabasesQueryOptions,
+  managedDatabaseDirectoryQueryOptions,
   queryKeys,
 } from "@/lib/query-options"
 import {
@@ -708,9 +709,9 @@ function ConnectedDatabases({
 }) {
   const queryClient = useQueryClient()
   const databases = useQuery({
-    ...managedDatabasesQueryOptions(),
+    ...managedDatabaseDirectoryQueryOptions(),
     select: (overview) =>
-      overview.databases.filter((database) => database.relayId === app.relayId),
+      overview.filter((database) => database.relayId === app.relayId),
   })
   const [adding, setAdding] = React.useState("")
   const network = useMutation({
@@ -724,7 +725,13 @@ function ConnectedDatabases({
         queryClient.invalidateQueries({
           queryKey: queryKeys.apps.config(app.relayId, app.id),
         }),
-        queryClient.invalidateQueries({ queryKey: queryKeys.apps.list }),
+        queryClient.invalidateQueries({
+          queryKey: instanceInventoryScope({
+            kind: "app",
+            relayId: app.relayId,
+            id: app.id,
+          }),
+        }),
       ])
     },
     onError: (error) =>

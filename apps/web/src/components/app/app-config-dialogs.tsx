@@ -24,6 +24,7 @@ import {
 } from "@/components/app/app-presentation"
 import { CodeDocumentPanel } from "@/components/code-document-panel"
 import { recoverPromise } from "@/effect/promise"
+import { instanceInventoryScope } from "@/lib/instance-inventory"
 import { queryKeys } from "@/lib/query-options"
 import { deployApp, updateAppConfig } from "@/server/apps"
 
@@ -63,7 +64,13 @@ export function useAppConfigSave(
           environmentHidden: current?.environmentHidden ?? false,
         })
       )
-      await queryClient.invalidateQueries({ queryKey: queryKeys.apps.list })
+      await queryClient.invalidateQueries({
+        queryKey: instanceInventoryScope({
+          kind: "app",
+          relayId: app.relayId,
+          id: app.id,
+        }),
+      })
       // Follow the deployment as it happens.
       if (next === "deploy" && app.permissions.includes("app.logs.read")) {
         await navigate({

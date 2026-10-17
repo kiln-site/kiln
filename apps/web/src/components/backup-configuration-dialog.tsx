@@ -29,7 +29,7 @@ import {
   InstancePickerContent,
   type InstancePickerItem,
 } from "@/components/instance-picker"
-import { InstanceName } from "@/components/instance-name"
+import { InstanceCard } from "@/components/instance-card"
 import { timestampedBackupName } from "@/lib/backup-name"
 
 export interface BackupConfigurationTarget {
@@ -483,7 +483,7 @@ const BackupTargetPicker = React.memo(function BackupTargetPicker({
           className="h-auto min-h-10 w-full justify-between gap-3 px-2 py-1.5 font-normal"
         >
           {selectedItem ? (
-            <InstanceName
+            <InstanceCard
               className="min-w-0 flex-1 gap-2 text-left"
               iconClassName="size-7 border-0 bg-muted/55"
               instance={selectedItem.identity}

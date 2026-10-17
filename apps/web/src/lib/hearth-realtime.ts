@@ -4,6 +4,7 @@ import type {
   HearthRealtimeScope,
   HearthRealtimeTopic,
 } from "@/lib/hearth-realtime-topics"
+import { instanceInventoryScope } from "@/lib/instance-inventory"
 import { queryKeys } from "@/lib/query-options"
 import {
   backupRunsInputFromQueryKey,
@@ -32,6 +33,7 @@ const prefix = (queryKey: QueryKey): HearthRealtimeQueryScope => ({
 
 const hearthRealtimeQueryScopes = {
   access: [
+    prefix(["instance-inventory"]),
     exact(queryKeys.access.capabilities),
     prefix(["resource-access"]),
     prefix(["access-resources"]),
@@ -42,7 +44,7 @@ const hearthRealtimeQueryScopes = {
   ],
   activity: [prefix(["activity"])],
   "app-directory": [exact(queryKeys.apps.directory)],
-  apps: [prefix(["apps"])],
+  apps: [prefix(["apps"]), prefix(["instance-inventory", "app"])],
   "backup-settings": [
     prefix(["backups", "policy"]),
     prefix(["backups", "usage"]),
@@ -54,7 +56,10 @@ const hearthRealtimeQueryScopes = {
     exact(queryKeys.databases.directory),
     exact(queryKeys.schedules.options),
   ],
-  databases: [exact(queryKeys.databases.list)],
+  databases: [
+    exact(queryKeys.databases.list),
+    prefix(["instance-inventory", "database"]),
+  ],
   domains: [prefix(["domains"])],
   favorites: [exact(queryKeys.instanceFavorites)],
   "file-activity": [prefix(["file-activity"])],
@@ -62,9 +67,13 @@ const hearthRealtimeQueryScopes = {
   "instance-web-routes": [prefix(["web-routes"])],
   notifications: [exact(queryKeys.notifications)],
   preferences: [exact(queryKeys.uiPreferences)],
-  "relay-health": [exact(queryKeys.relays)],
+  "relay-health": [
+    exact(queryKeys.relays),
+    prefix(["instance-inventory", "relay"]),
+  ],
   "relay-proxy": [prefix(["relays", "proxy"])],
   relays: [
+    prefix(["instance-inventory"]),
     exact(queryKeys.relays),
     exact(queryKeys.databases.list),
     exact(queryKeys.databases.directory),
@@ -92,6 +101,7 @@ function queryScopes(
     // One Relay's access edit: refresh that Relay's records and what the
     // viewer can reach, never the platform user or invitation lists.
     return [
+      prefix(["instance-inventory"]),
       exact(queryKeys.access.capabilities),
       prefix(["resource-access", scope.relayId]),
       prefix(["access-resources"]),
@@ -117,7 +127,18 @@ function queryScopes(
     return [exact(queryKeys.fileActivity(scope.relayId, scope.instanceId))]
   }
   if (topic === "apps" && scope) {
-    return hearthRealtimeQueryScopes.apps
+    return [
+      prefix(["apps"]),
+      prefix(instanceInventoryScope({ kind: "app", relayId: scope.relayId })),
+    ]
+  }
+  if (topic === "databases" && scope) {
+    return [
+      exact(queryKeys.databases.list),
+      prefix(
+        instanceInventoryScope({ kind: "database", relayId: scope.relayId })
+      ),
+    ]
   }
   if (topic === "instance-web-routes" && scope?.instanceId) {
     return [exact(queryKeys.relay.webRoutes(scope.relayId, scope.instanceId))]

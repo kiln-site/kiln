@@ -1,3 +1,5 @@
+import { instanceInventoryScope } from "@/lib/instance-inventory"
+import { useInstanceState } from "@/lib/instance-state"
 import * as React from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import {
@@ -23,7 +25,6 @@ import { Input } from "@workspace/ui/components/input"
 import { showToast } from "@workspace/ui/components/sonner"
 
 import {
-  databaseRelayAvailable,
   DATABASE_DUMP_LIMIT_BYTES,
   downloadTextFile,
   showDatabaseOperationError,
@@ -46,11 +47,19 @@ export function CredentialsDialog({
   open,
   onOpenChange,
 }: {
-  database: ManagedDatabase
+  database: Pick<
+    ManagedDatabase,
+    "id" | "name" | "relayId" | "permissions" | "engine" | "databaseName"
+  >
   open: boolean
   onOpenChange: (open: boolean) => void
 }) {
   const queryClient = useQueryClient()
+  const state = useInstanceState({
+    kind: "database",
+    id: database.id,
+    relayId: database.relayId,
+  })
   const credential = useQuery(
     managedDatabaseCredentialQueryOptions(database.relayId, database.id)
   )
@@ -85,13 +94,16 @@ export function CredentialsDialog({
           <p className="text-xs text-destructive">{credential.error.message}</p>
         ) : credential.data ? (
           <div className="space-y-3">
-            {database.inventoryStatus === "available" ? (
+            {credential.data.hostname !== undefined ? (
               <>
-                <CredentialField label="Host" value={database.hostname} />
+                <CredentialField
+                  label="Host"
+                  value={credential.data.hostname}
+                />
                 <div className="grid grid-cols-2 gap-3">
                   <CredentialField
                     label="Port"
-                    value={String(database.internalPort)}
+                    value={String(credential.data.internalPort)}
                   />
                   <CredentialField
                     label="Database"
@@ -117,7 +129,9 @@ export function CredentialsDialog({
           </div>
         ) : null}
         <DialogFooter className="sm:justify-between">
-          {databaseRelayAvailable(database) &&
+          {state.phase === "ready" &&
+          state.observation.reachability === "connected" &&
+          state.observation.inventory === "available" &&
           database.permissions.includes("database.credentials.rotate") ? (
             <RotateDatabasePasswordButton database={database} />
           ) : (
@@ -289,7 +303,10 @@ export function ImportDatabaseDialog({
   open,
   onOpenChange,
 }: {
-  database: ManagedDatabase
+  database: Pick<
+    ManagedDatabase,
+    "id" | "name" | "relayId" | "permissions" | "engine" | "databaseName"
+  >
   // A file already chosen, such as one dropped on the Info page.
   initialFile?: File | null
   open: boolean
@@ -434,7 +451,10 @@ export function WipeDatabaseDialog({
   database,
   onOpenChange,
 }: {
-  database: ManagedDatabase
+  database: Pick<
+    ManagedDatabase,
+    "id" | "name" | "relayId" | "permissions" | "engine" | "databaseName"
+  >
   onOpenChange: (open: boolean) => void
 }) {
   const queryClient = useQueryClient()
@@ -445,7 +465,13 @@ export function WipeDatabaseDialog({
       }),
     onSuccess: async () => {
       await Promise.all([
-        queryClient.invalidateQueries({ queryKey: queryKeys.databases.list }),
+        queryClient.invalidateQueries({
+          queryKey: instanceInventoryScope({
+            kind: "database",
+            relayId: database.relayId,
+            id: database.id,
+          }),
+        }),
         queryClient.invalidateQueries({
           queryKey: queryKeys.databases.container(
             database.relayId,
@@ -513,7 +539,10 @@ export function DeleteDatabaseDialog({
   onDeleted,
   onOpenChange,
 }: {
-  database: ManagedDatabase
+  database: Pick<
+    ManagedDatabase,
+    "id" | "name" | "relayId" | "permissions" | "engine" | "databaseName"
+  >
   open: boolean
   // Runs before the database lists refresh, so a page showing the database
   // can leave first.

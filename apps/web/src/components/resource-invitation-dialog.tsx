@@ -200,7 +200,7 @@ export function useResourceInvitationDecision(
       void queryClient.invalidateQueries({
         queryKey:
           result.scope.resourceType === "database"
-            ? queryKeys.databases.list
+            ? queryKeys.databases.directory
             : queryKeys.relays,
       })
       if (result.scope.resourceType === "instance")

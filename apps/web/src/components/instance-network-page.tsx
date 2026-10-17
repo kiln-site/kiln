@@ -80,6 +80,7 @@ import {
   replaceRelaySnapshotInstance,
   relaySnapshotQueryOptions,
 } from "@/lib/query-options"
+import { instanceInventoryScope } from "@/lib/instance-inventory"
 import type { RelayFleetSnapshot } from "@/lib/relay-fleet"
 import type { InstanceWorkspaceInstance } from "@/lib/relay-selectors"
 import {
@@ -334,7 +335,9 @@ function SavedDatabaseConnections() {
         (snapshot) => replaceRelaySnapshotInstance(snapshot, updated)
       )
       forkPromise(() =>
-        queryClient.invalidateQueries({ queryKey: queryKeys.databases.list })
+        queryClient.invalidateQueries({
+          queryKey: instanceInventoryScope({ kind: "database" }),
+        })
       )
       showToast({
         type: "success",

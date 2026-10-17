@@ -29,7 +29,7 @@ import { Input } from "@workspace/ui/components/input"
 import { cn } from "@workspace/ui/lib/utils"
 
 import { useInstanceFavoriteKeys } from "@/components/instance-favorite"
-import { InstanceName } from "@/components/instance-name"
+import { InstanceCard } from "@/components/instance-card"
 import { instanceFavoriteKey } from "@/lib/instance-favorites"
 import {
   availableInstancePickerFilters,
@@ -635,7 +635,7 @@ const InstancePickerRowButton = React.memo(function InstancePickerRowButton({
       {multiple ? (
         <InstancePickerCheckbox state={selected ? "all" : "none"} />
       ) : null}
-      <InstanceName
+      <InstanceCard
         className="min-w-0 flex-1 gap-2"
         iconClassName="border-0 bg-muted/55"
         instance={item.identity}

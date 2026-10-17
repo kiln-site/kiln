@@ -23,6 +23,10 @@ import {
   inventoryStale,
   withInventoryRelayStatus,
 } from "@/lib/inventory-relay-status"
+import {
+  instanceInventoryScope,
+  recheckInstanceObservations,
+} from "@/lib/instance-inventory"
 import type { RelayFleetSnapshot } from "@/lib/relay-fleet"
 
 type ManagedDatabaseOverview = Awaited<ReturnType<typeof getManagedDatabases>>
@@ -77,6 +81,17 @@ function applyRealtimeEvent(input: ApplyRealtimeEventInput): void {
     }
   )
   if (event.type === "instances.delta") {
+    // Game servers push their state; refresh only the ones that changed.
+    for (const { relayId, id } of [
+      ...event.upserted,
+      ...event.deleted.map(({ relayId, instanceId }) => ({
+        relayId,
+        id: instanceId,
+      })),
+    ])
+      void recheckInstanceObservations(queryClient, {
+        queryKey: instanceInventoryScope({ kind: "server", relayId, id }),
+      })
     if (!instances.isReady()) {
       const snapshot = queryClient.getQueryData<RelayFleetSnapshot>(
         queryKeys.relay.snapshot
@@ -119,6 +134,11 @@ function applyRealtimeEvent(input: ApplyRealtimeEventInput): void {
     return
   }
   if (event.type === "relay.status") {
+    // Every observation on this Relay depends on its reachability.
+    void recheckInstanceObservations(queryClient, {
+      predicate: ({ queryKey }) =>
+        queryKey[0] === "instance-inventory" && queryKey[2] === event.relayId,
+    })
     const staleTopics = [
       ...(applyRelayStatusToDatabases(queryClient, event)
         ? (["databases"] as const)
@@ -424,6 +444,12 @@ export function applyRecoveredRelayConnection(
   queryClient.setQueryData(queryKeys.relay.instances, snapshot.instances)
   queryClient.setQueryData(queryKeys.relay.snapshot, snapshot)
   queryClient.setQueryData(queryKeys.relay.connection, connection)
+  // Game server and Relay observations only refresh on pushed changes, and
+  // recovery means some may have been missed. Recheck the mounted ones.
+  for (const kind of ["server", "relay"] as const)
+    void recheckInstanceObservations(queryClient, {
+      queryKey: instanceInventoryScope({ kind }),
+    })
   return cancellation
 }
 

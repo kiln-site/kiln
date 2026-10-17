@@ -73,7 +73,7 @@ const appPermissions = accessPermissions.filter((permission) =>
 )
 
 type AppInventoryStatus = "available" | "missing" | "unavailable"
-type AppListItem = RelayApp & {
+export type AppListItem = RelayApp & {
   createdAt: string
   inventoryStatus: AppInventoryStatus
   name: string
@@ -106,6 +106,10 @@ export const getAppDirectory = createServerFn({ method: "GET" }).handler(
       return [
         {
           id: record.appId,
+          createdAt: record.createdAt,
+          permissions: appPermissions.filter((permission) =>
+            hasAppPermission(user, grants, record.relayId, permission)
+          ),
           name: record.name,
           relayId: record.relayId,
           relayName,

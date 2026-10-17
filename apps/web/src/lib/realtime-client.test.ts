@@ -7,7 +7,19 @@ vi.mock("@/server/databases", async (importOriginal) => ({
   getManagedDatabases: vi.fn(),
 }))
 
+// Observations are read from Hearth; tests decide what Hearth reports.
+vi.mock("@/server/instance-inventory", () => ({
+  getInstanceInventory: vi.fn(),
+}))
+
+import { QueryObserver } from "@tanstack/react-query"
+import type {
+  InstanceInventoryRequest,
+  InstanceInventoryResult,
+} from "@workspace/contracts"
 import { getManagedDatabasesCollection } from "@/lib/collections/managed-databases"
+import { instanceStateQueryOptions } from "@/lib/instance-state"
+import { getInstanceInventory } from "@/server/instance-inventory"
 import { getRelayInstancesCollection } from "@/lib/collections/relay-instances"
 import { createAppClients, type AppRouterContext } from "@/lib/query-client"
 import {
@@ -366,6 +378,128 @@ describe("realtime event application", () => {
     })
   })
 
+  it("rereads an observation whose first read began before a Relay status change", async () => {
+    const answers: Array<(reachability: "connected" | "unreachable") => void> =
+      []
+    vi.mocked(getInstanceInventory).mockImplementation(
+      (({ data }: { data: Array<InstanceInventoryRequest> }) =>
+        new Promise<Array<InstanceInventoryResult>>((resolve) => {
+          answers.push((reachability) =>
+            resolve(
+              data.map((request) => ({
+                request,
+                value: {
+                  kind: request.reference.kind,
+                  view: "status",
+                  data: null,
+                  observation: {
+                    ...request.reference,
+                    reachability,
+                    runtime: null,
+                    inventory: "unavailable",
+                    updating: false,
+                  },
+                },
+              }))
+            )
+          )
+        })) as unknown as typeof getInstanceInventory
+    )
+    const clients = fleet()
+    const observer = new QueryObserver(
+      clients.queryClient,
+      instanceStateQueryOptions({
+        kind: "server",
+        relayId: "relay-a",
+        id: "a".repeat(40),
+      })
+    )
+    const unsubscribe = observer.subscribe(() => {})
+    try {
+      await vi.waitFor(() => expect(answers).toHaveLength(1))
+      applyEvent(clients, relayStatus("relay-a", "unreachable"))
+      // The first read answers with what it saw before the change.
+      answers[0]!("connected")
+      await vi.waitFor(() => expect(answers).toHaveLength(2))
+      answers[1]!("unreachable")
+      await vi.waitFor(() =>
+        expect(observer.getCurrentResult().data?.reachability).toBe(
+          "unreachable"
+        )
+      )
+    } finally {
+      unsubscribe()
+    }
+  })
+
+  it("rechecks only the observations on a Relay whose reachability changed", async () => {
+    const reachability = new Map([
+      ["relay-a", "connected"],
+      ["relay-b", "connected"],
+    ])
+    vi.mocked(getInstanceInventory).mockImplementation((async ({
+      data,
+    }: {
+      data: Array<InstanceInventoryRequest>
+    }) =>
+      data.map((request): InstanceInventoryResult => ({
+        request,
+        value: {
+          kind: request.reference.kind,
+          view: "status",
+          data: null,
+          observation: {
+            ...request.reference,
+            reachability:
+              reachability.get(request.reference.relayId) === "connected"
+                ? "connected"
+                : "unreachable",
+            runtime: null,
+            inventory: "available",
+            updating: false,
+          },
+        },
+      }))) as unknown as typeof getInstanceInventory)
+    const clients = fleet()
+    const observe = (relayId: string) => {
+      const observer = new QueryObserver(
+        clients.queryClient,
+        instanceStateQueryOptions({
+          kind: "database",
+          relayId,
+          id: "d".repeat(40),
+        })
+      )
+      const unsubscribe = observer.subscribe(() => {})
+      return { observer, unsubscribe }
+    }
+    const a = observe("relay-a")
+    const b = observe("relay-b")
+    try {
+      await vi.waitFor(() => {
+        expect(a.observer.getCurrentResult().data?.reachability).toBe(
+          "connected"
+        )
+        expect(b.observer.getCurrentResult().data?.reachability).toBe(
+          "connected"
+        )
+      })
+      // Both Relays now drop, but only relay-a has said so.
+      reachability.set("relay-a", "unreachable")
+      reachability.set("relay-b", "unreachable")
+      applyEvent(clients, relayStatus("relay-a", "unreachable"))
+      await vi.waitFor(() =>
+        expect(a.observer.getCurrentResult().data?.reachability).toBe(
+          "unreachable"
+        )
+      )
+      expect(b.observer.getCurrentResult().data?.reachability).toBe("connected")
+    } finally {
+      a.unsubscribe()
+      b.unsubscribe()
+    }
+  })
+
   it("keeps Relay connection state and fleet rows in sync", () => {
     const clients = fleet()
     const current = snapshot()
@@ -509,6 +643,61 @@ describe("realtime event application", () => {
 })
 
 describe("authoritative Relay recovery", () => {
+  it("rechecks game server observations that pushes may have missed", async () => {
+    let reported: "unavailable" | "available" = "unavailable"
+    vi.mocked(getInstanceInventory).mockImplementation((async ({
+      data,
+    }: {
+      data: Array<InstanceInventoryRequest>
+    }) =>
+      data.map((request): InstanceInventoryResult => ({
+        request,
+        value: {
+          kind: request.reference.kind,
+          view: "status",
+          data: null,
+          observation: {
+            ...request.reference,
+            reachability: "connected",
+            runtime: reported === "available" ? "running" : null,
+            inventory: reported,
+            updating: false,
+          },
+        },
+      }))) as unknown as typeof getInstanceInventory)
+    const queryClient = new QueryClient()
+    const observer = new QueryObserver(
+      queryClient,
+      instanceStateQueryOptions({
+        kind: "server",
+        relayId: alpha.relayId,
+        id: alpha.id,
+      })
+    )
+    const unsubscribe = observer.subscribe(() => {})
+    try {
+      // Read while the reconnected Relay had not yet sent its snapshot.
+      await vi.waitFor(() =>
+        expect(observer.getCurrentResult().data?.inventory).toBe("unavailable")
+      )
+      reported = "available"
+      await applyRecoveredRelayConnection(queryClient, {
+        relay: { id: alpha.relayId, name: alpha.relayName },
+        relays: [
+          { id: alpha.relayId, name: alpha.relayName, status: "connected" },
+        ],
+        snapshot: snapshot(),
+        status: "connected",
+      } as RelayConnection)
+      await vi.waitFor(() =>
+        expect(observer.getCurrentResult().data?.runtime).toBe("running")
+      )
+    } finally {
+      unsubscribe()
+      queryClient.clear()
+    }
+  })
+
   it("replaces connection membership during authoritative recovery", async () => {
     const queryClient = new QueryClient()
     queryClient.setQueryData(queryKeys.relay.connection, {

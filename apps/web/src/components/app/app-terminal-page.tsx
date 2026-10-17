@@ -10,7 +10,12 @@ import {
   SelectValue,
 } from "@workspace/ui/components/select"
 
-import { appServices } from "@/components/app/app-presentation"
+import {
+  appRelayAvailable,
+  appServices,
+  appStatusPresentation,
+  type App,
+} from "@/components/app/app-presentation"
 import { useAppWorkspace } from "@/components/app/app-workspace-context"
 import type { TerminalBackend } from "@/components/terminal-session"
 import { appTerminalStreamUrl } from "@/lib/database-terminal-stream"
@@ -72,21 +77,16 @@ export function AppTerminalPage() {
   // Unavailable inventory only has a placeholder state; the terminal shows
   // its own reconnecting state while the Relay is away.
   if (!service || (app.inventoryStatus !== "unavailable" && !running)) {
+    const message = terminalUnavailableMessage(app, service)
     return (
       <div className="grid min-h-0 flex-1 place-items-center bg-card px-6 text-center">
         <div className="max-w-sm">
           <div className="mx-auto mb-4 grid size-11 place-items-center rounded-xl border bg-muted/20 text-muted-foreground">
             <Play className="size-5" />
           </div>
-          <p className="text-sm font-semibold">
-            {service
-              ? `${service} is not running`
-              : `${app.name} is not deployed`}
-          </p>
+          <p className="text-sm font-semibold">{message.title}</p>
           <p className="mt-1.5 text-xs leading-relaxed text-muted-foreground">
-            {service
-              ? "Start the app to open a shell in it."
-              : "Deploy the app to open a shell in its containers."}
+            {message.description}
           </p>
           {serviceSelect ? (
             <div className="mt-4 flex justify-center">{serviceSelect}</div>
@@ -107,6 +107,23 @@ export function AppTerminalPage() {
       />
     </React.Suspense>
   )
+}
+
+function terminalUnavailableMessage(app: App, service: string | undefined) {
+  if (!appRelayAvailable(app))
+    return {
+      title: appStatusPresentation(app).label,
+      description: "A current app state is needed to open a shell.",
+    }
+  if (service)
+    return {
+      title: `${service} is not running`,
+      description: "Start the app to open a shell in it.",
+    }
+  return {
+    title: `${app.name} is not deployed`,
+    description: "Deploy the app to open a shell in its containers.",
+  }
 }
 
 function AppTerminalSession({

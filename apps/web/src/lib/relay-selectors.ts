@@ -78,14 +78,8 @@ export type InstanceWorkspaceInstance = Pick<
 // data directory (whose `id` is its file root, `app:<appId>`).
 export type FileWorkspaceInstance = Pick<
   InstanceWorkspaceInstance,
-  | "id"
-  | "implementation"
-  | "name"
-  | "observedState"
-  | "relayId"
-  | "shortId"
-  | "version"
->
+  "id" | "implementation" | "name" | "relayId" | "shortId" | "version"
+> & { observedState?: RelayInstance["observedState"] }
 
 export type InstanceRuntime = Pick<
   RelayInstance,

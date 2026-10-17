@@ -138,7 +138,7 @@ const databaseEngineDetails = {
 >
 
 type DatabaseInventoryStatus = "available" | "missing" | "unavailable"
-type ManagedDatabaseListItem = RelayManagedDatabase & {
+export type ManagedDatabaseListItem = RelayManagedDatabase & {
   hasCredentials: boolean
   inventoryStatus: DatabaseInventoryStatus
   permissions: Array<AccessPermission>
@@ -176,7 +176,22 @@ export const getManagedDatabaseDirectory = createServerFn({
     }
     return [
       {
+        createdAt: record.createdAt,
         engine: record.engine,
+        databaseName: record.databaseName,
+        hostname: `database-${record.databaseId}`,
+        image: databaseEngineDetails[record.engine].image,
+        internalPort: databaseEngineDetails[record.engine].internalPort,
+        hasCredentials: true,
+        permissions: databasePermissions.filter((permission) =>
+          hasDatabasePermission(
+            user,
+            grants,
+            record.relayId,
+            record.databaseId,
+            permission
+          )
+        ),
         id: record.databaseId,
         name: record.name,
         relayId: record.relayId,
@@ -385,6 +400,8 @@ export const getManagedDatabaseCredential = createServerFn({ method: "GET" })
     if (!credential) throw new Error("Database credentials are unavailable")
     return {
       databaseName: credential.databaseName,
+      hostname: `database-${credential.databaseId}`,
+      internalPort: databaseEngineDetails[credential.engine].internalPort,
       password: credential.password,
       username: credential.username,
     }

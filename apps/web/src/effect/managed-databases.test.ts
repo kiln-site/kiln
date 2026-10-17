@@ -107,29 +107,35 @@ describeMysql("managed database persistence", () => {
 
         const directory = yield* listManagedDatabaseDirectoryEffect()
 
-        assert.deepStrictEqual(directory, [
-          {
-            databaseId: "postgres-id",
-            engine: "postgres",
-            name: "Postgres",
-            relayId: relayOne,
-            supportsImportExport: true,
-          },
-          {
-            databaseId: "redis-id",
-            engine: "redis",
-            name: "Redis",
-            relayId: relayOne,
-            supportsImportExport: false,
-          },
-          {
-            databaseId: "valkey-id",
-            engine: "valkey",
-            name: "Valkey",
-            relayId: relayOne,
-            supportsImportExport: false,
-          },
-        ])
+        assert.deepStrictEqual(
+          directory.map(({ createdAt: _createdAt, ...entry }) => entry),
+          [
+            {
+              databaseId: "postgres-id",
+              databaseName: "db_postgres-id",
+              engine: "postgres",
+              name: "Postgres",
+              relayId: relayOne,
+              supportsImportExport: true,
+            },
+            {
+              databaseId: "redis-id",
+              databaseName: "db_redis-id",
+              engine: "redis",
+              name: "Redis",
+              relayId: relayOne,
+              supportsImportExport: false,
+            },
+            {
+              databaseId: "valkey-id",
+              databaseName: "db_valkey-id",
+              engine: "valkey",
+              name: "Valkey",
+              relayId: relayOne,
+              supportsImportExport: false,
+            },
+          ]
+        )
       })
     )
 
