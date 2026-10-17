@@ -15,6 +15,7 @@ import {
   queryKeys,
   replaceRelaySnapshotInstance,
   type RelayConnection,
+  type RelayReachability,
 } from "@/lib/query-options"
 import type { FleetInstance, RealtimeClientEvent } from "@/lib/realtime-events"
 import {
@@ -125,6 +126,15 @@ function applyRealtimeEvent(input: ApplyRealtimeEventInput): void {
     return
   }
   if (event.type === "relay.status") {
+    queryClient.setQueryData<RelayReachability>(
+      queryKeys.relay.reachability,
+      (relays) =>
+        relays?.map((relay) =>
+          relay.id === event.relayId && relay.status !== event.status
+            ? { ...relay, status: event.status }
+            : relay
+        )
+    )
     // Every observation on this Relay depends on its reachability.
     void recheckInstanceObservations(queryClient, {
       predicate: ({ queryKey }) =>
@@ -369,13 +379,48 @@ export function applyRecoveredRelayConnection(
   queryClient.setQueryData(queryKeys.relay.instances, snapshot.instances)
   queryClient.setQueryData(queryKeys.relay.snapshot, snapshot)
   queryClient.setQueryData(queryKeys.relay.connection, connection)
-  // Game server and Relay observations only refresh on pushed changes, and
-  // recovery means some may have been missed. Recheck the mounted ones.
+  recheckPushedState(queryClient)
+  return cancellation
+}
+
+/**
+ * Whether anything on this page holds, reads, or is loading the fleet
+ * snapshot. Stream recovery only needs a fresh fleet when it does.
+ */
+export function fleetCacheInUse(
+  queryClient: QueryClient,
+  instances: RelayInstancesCollection
+): boolean {
+  if (instances.status !== "idle" && instances.status !== "cleaned-up")
+    return true
+  return [
+    queryKeys.relay.connection,
+    queryKeys.relay.snapshot,
+    queryKeys.relay.instances,
+  ].some((queryKey) => {
+    const query = queryClient.getQueryCache().find({ queryKey, exact: true })
+    return (
+      query !== undefined &&
+      (query.state.data !== undefined ||
+        query.getObserversCount() > 0 ||
+        query.state.fetchStatus !== "idle")
+    )
+  })
+}
+
+/**
+ * Game server and Relay state refreshes only on pushed changes, and stream
+ * recovery means some may have been missed. Recheck what is mounted.
+ */
+export function recheckPushedState(queryClient: QueryClient): void {
+  void queryClient.invalidateQueries({
+    queryKey: queryKeys.relay.reachability,
+    exact: true,
+  })
   for (const kind of ["server", "relay"] as const)
     void recheckInstanceObservations(queryClient, {
       queryKey: instanceInventoryScope({ kind }),
     })
-  return cancellation
 }
 
 function applyRealtimeRelayStatus(

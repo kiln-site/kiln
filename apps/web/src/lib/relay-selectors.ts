@@ -14,16 +14,10 @@ export type RelayConnectionSummary =
       "relay" | "relays" | "status"
     >
 
+/** A game server as navigation shows it: identity only, never live state. */
 export type SidebarInstance = Pick<
   RelayInstance,
-  | "brickId"
-  | "brickSource"
-  | "id"
-  | "implementation"
-  | "name"
-  | "observedState"
-  | "shortId"
-  | "version"
+  "brickId" | "id" | "implementation" | "name" | "shortId" | "version"
 > & {
   relayId: string
   relayName: string
@@ -165,11 +159,9 @@ function sidebarInstance(
 ): SidebarInstance {
   return {
     brickId: instance.brickId,
-    brickSource: instance.brickSource,
     id: instance.id,
     implementation: instance.implementation,
     name: instance.name,
-    observedState: instance.observedState,
     relayId: instance.relayId,
     relayName: instance.relayName,
     routeId: instance.routeId,

@@ -11,7 +11,8 @@ import { invitationReferenceFromRedirect } from "@/lib/invitation-auth"
 import { pageTitle } from "@/lib/page-title"
 import {
   accessCapabilitiesQueryOptions,
-  relayConnectionQueryOptions,
+  relayReachabilityQueryOptions,
+  serverDirectoryQueryOptions,
 } from "@/lib/query-options"
 import {
   relayInstanceRouteIdentifier,
@@ -66,10 +67,11 @@ export const Route = createFileRoute("/")({
     ) {
       throw redirect({ href: firstAccessibleAppHref(capabilities) })
     }
-    const [connection, uiPreferences] = await Promise.all([
-      context.queryClient.ensureQueryData(
-        relayConnectionQueryOptions(context.queryClient)
-      ),
+    // Hearth's own records and connection state decide where to land,
+    // without asking any Relay for its workloads.
+    const [reachability, instances, uiPreferences] = await Promise.all([
+      context.queryClient.ensureQueryData(relayReachabilityQueryOptions()),
+      context.queryClient.ensureQueryData(serverDirectoryQueryOptions()),
       getUiPreferences(),
     ])
     const rememberedDatabase = databaseRouteIdFromSelection(
@@ -90,7 +92,7 @@ export const Route = createFileRoute("/")({
         params: { relayId: rememberedRelay },
       })
     }
-    if (connection.status !== "connected") {
+    if (!reachability.some((relay) => relay.status === "connected")) {
       if (
         state.user.isDevelopmentBypass ||
         state.user.role === "admin" ||
@@ -100,7 +102,6 @@ export const Route = createFileRoute("/")({
       }
       throw redirect({ href: firstAccessibleAppHref(capabilities) })
     }
-    const instances = connection.snapshot.instances
     const rememberedResolution = resolveCanonicalRelayInstance(
       instances,
       uiPreferences.selectedInstanceRouteId

@@ -17,6 +17,8 @@ import { reconcilePendingPowerSnapshot } from "@/lib/instance-power-state"
 import {
   applyRecoveredRelayConnection,
   applyRealtimeEventSafely,
+  fleetCacheInUse,
+  recheckPushedState,
   parseRealtimeEventData,
   resetRealtimeEpoch,
 } from "@/lib/realtime-client"
@@ -219,7 +221,12 @@ export const RealtimeSync = React.memo(function RealtimeSync() {
                 activeRecoveryHearth = shouldRefetchHearth
                 const recoveryEpoch = activeEpoch
                 if (closed) return
-                const connection = await getFreshRelayConnectionState()
+                // With nothing on this page reading the fleet, nothing can be
+                // stale: its first reader fetches it fresh. Skip the fleet
+                // request and recheck the pushed state that is mounted.
+                const connection = fleetCacheInUse(queryClient, instances)
+                  ? await getFreshRelayConnectionState()
+                  : null
                 if (recoveryEpoch !== activeEpoch) continue
                 if (resetRequested) {
                   hearthRefetchRequested ||= shouldRefetchHearth
@@ -227,7 +234,12 @@ export const RealtimeSync = React.memo(function RealtimeSync() {
                   activeRecoveryHearth = false
                   continue
                 }
-                if (!(await applyRecoveryConnection(connection))) return
+                if (connection) {
+                  if (!(await applyRecoveryConnection(connection))) return
+                } else {
+                  if (closed) return
+                  recheckPushedState(queryClient)
+                }
                 recoveryFailures = 0
                 if (resetRequested) {
                   hearthRefetchRequested ||= shouldRefetchHearth

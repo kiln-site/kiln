@@ -109,7 +109,11 @@ import type { PersistedRelay } from "@/lib/relay-registry"
 import { listPersistedRelays } from "@/lib/relay-registry"
 import { resolveMclogsApiUrl } from "@/lib/mclogs"
 import { publishRealtimeChange } from "@/lib/realtime-source.server"
-import { isRelayUpdating, relayConnectionNode } from "@/lib/relay-connection"
+import {
+  isRelayUpdating,
+  relayConnectionNode,
+  relayConnectionState,
+} from "@/lib/relay-connection"
 import { updateInstanceSourceName } from "@/lib/instance-registry"
 
 const instanceInputSchema = z.object({
@@ -322,6 +326,28 @@ export const getRelayInstances = createServerFn({ method: "POST" }).handler(
   async () => {
     const user = await requireEligibleResourceUser()
     return (await authorizedFleetSnapshot(user, true)).instances
+  }
+)
+
+/**
+ * Each enabled Relay the user can see and whether Hearth holds its live
+ * connection. Answers from Hearth's own state, so it never waits on a Relay
+ * or returns any of its workloads.
+ */
+export const getRelayReachability = createServerFn({ method: "GET" }).handler(
+  async () => {
+    const user = await requireEligibleResourceUser()
+    const { relays } = await authorizedRelays(user, await listPersistedRelays())
+    return relays
+      .filter((relay) => relay.enabled)
+      .map((relay) => ({
+        id: relay.id,
+        name: relay.name,
+        status:
+          relayConnectionState(relay.id).status === "authenticated"
+            ? ("connected" as const)
+            : ("unreachable" as const),
+      }))
   }
 )
 

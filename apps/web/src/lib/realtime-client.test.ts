@@ -365,6 +365,25 @@ describe("realtime event application", () => {
     }
   })
 
+  it("tells connection toasts when a Relay drops and returns", () => {
+    const clients = fleet()
+    clients.queryClient.setQueryData(queryKeys.relay.reachability, [
+      { id: "relay-a", name: "Relay A", status: "connected" },
+      { id: "relay-b", name: "Relay B", status: "connected" },
+    ])
+    applyEvent(clients, relayStatus("relay-a", "unreachable"))
+    expect(
+      clients.queryClient.getQueryData(queryKeys.relay.reachability)
+    ).toEqual([
+      { id: "relay-a", name: "Relay A", status: "unreachable" },
+      { id: "relay-b", name: "Relay B", status: "connected" },
+    ])
+    applyEvent(clients, relayStatus("relay-a", "connected", 2))
+    expect(
+      clients.queryClient.getQueryData(queryKeys.relay.reachability)
+    ).toMatchObject([{ id: "relay-a", status: "connected" }, {}])
+  })
+
   it("keeps Relay connection state and fleet rows in sync", () => {
     const clients = fleet()
     const current = snapshot()

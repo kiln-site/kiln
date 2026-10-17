@@ -1,5 +1,5 @@
 import * as React from "react"
-import { useQueryClient, useQuery } from "@tanstack/react-query"
+import { useQuery } from "@tanstack/react-query"
 import { useRouter } from "@tanstack/react-router"
 import { Effect } from "effect"
 import { LoaderCircle, ServerOff, Wifi, WifiOff } from "lucide-react"
@@ -7,8 +7,10 @@ import { LoaderCircle, ServerOff, Wifi, WifiOff } from "lucide-react"
 import { dismissToast, showToast } from "@workspace/ui/components/sonner"
 
 import { RelayToastTitle } from "@/components/relay-toast-title"
-import { relayConnectionQueryOptions } from "@/lib/query-options"
-import type { RelayConnection } from "@/lib/query-options"
+import {
+  relayReachabilityQueryOptions,
+  type RelayReachability,
+} from "@/lib/query-options"
 import {
   applicationConnectionToastId,
   applicationReconnectedToastId,
@@ -22,13 +24,7 @@ import {
   relayReconnectToastId,
 } from "@/lib/system-update-presence"
 
-const emptyRelayStates: ReadonlyArray<RelayState> = []
-
-interface RelayState {
-  id: string
-  name: string
-  status: "connected" | "unreachable"
-}
+const emptyRelayStates: RelayReachability = []
 
 type ApplicationConnectionState =
   | "connected"
@@ -39,12 +35,9 @@ type ApplicationConnectionState =
 export const RelayConnectionToastMonitor = React.memo(
   function RelayConnectionToastMonitor() {
     hydrateSystemUpdatePresence()
-    const queryClient = useQueryClient()
     const router = useRouter()
-    const connectionQuery = useQuery({
-      ...relayConnectionQueryOptions(queryClient),
-      select: selectRelayStates,
-    })
+    // Reachability only: the toasts never need any Relay's workloads.
+    const connectionQuery = useQuery(relayReachabilityQueryOptions())
     const relays = connectionQuery.data ?? emptyRelayStates
 
     useApplicationConnectionToasts({
@@ -52,7 +45,7 @@ export const RelayConnectionToastMonitor = React.memo(
       refetch: connectionQuery.refetch,
     })
     const previousStatuses = React.useRef(
-      new Map<string, RelayState["status"]>()
+      new Map<string, RelayReachability[number]["status"]>()
     )
     const activeToastIds = React.useRef(new Set<string>())
     const cleanupTimer = React.useRef<number | undefined>(undefined)
@@ -74,7 +67,10 @@ export const RelayConnectionToastMonitor = React.memo(
     }, [])
 
     React.useEffect(() => {
-      const nextStatuses = new Map<string, RelayState["status"]>()
+      const nextStatuses = new Map<
+        string,
+        RelayReachability[number]["status"]
+      >()
 
       for (const relay of relays) {
         const disconnectToastId = relayDisconnectToastId(relay.id)
@@ -309,12 +305,4 @@ async function checkHearthConnection(): Promise<boolean> {
       Effect.orElseSucceed(() => false)
     )
   )
-}
-
-function selectRelayStates(
-  connection: RelayConnection
-): ReadonlyArray<RelayState> {
-  return connection.status === "unconfigured" || connection.status === "paused"
-    ? emptyRelayStates
-    : connection.relays
 }

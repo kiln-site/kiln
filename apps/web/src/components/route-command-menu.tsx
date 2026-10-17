@@ -27,12 +27,11 @@ import { Kbd } from "@workspace/ui/components/kbd"
 
 import { BackupIcon } from "@/components/backup-icon"
 import { filterRoutes } from "@/components/route-command-filter"
-import { relaySnapshotQueryOptions } from "@/lib/query-options"
+import { serverDirectoryQueryOptions } from "@/lib/query-options"
 import {
   findFirstCanonicalRelayInstance,
   relayInstanceRouteIdentifier,
   resolveCanonicalRelayInstance,
-  selectSidebarInstances,
 } from "@/lib/relay-selectors"
 import type { SidebarInstance } from "@/lib/relay-selectors"
 import { readSelectedInstanceRouteId } from "@/lib/ui-preference-cookies"
@@ -120,9 +119,8 @@ export function RouteCommandMenuProvider({
   const navigate = useNavigate()
   const [open, setOpen] = React.useState(false)
   const { data: instances = emptyInstances } = useQuery({
-    ...relaySnapshotQueryOptions(),
+    ...serverDirectoryQueryOptions(),
     enabled: relayConfigured,
-    select: selectSidebarInstances,
   })
   const serverId = useRouterState({
     select: (state) =>

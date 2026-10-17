@@ -69,8 +69,8 @@ import {
   accessCapabilitiesQueryOptions,
   appDirectoryQueryOptions,
   managedDatabaseDirectoryQueryOptions,
-  relaySnapshotQueryOptions,
   relaysQueryOptions,
+  serverDirectoryQueryOptions,
 } from "@/lib/query-options"
 import { kilnReleaseLabel } from "@/lib/release-version"
 import { disableDevelopmentBypass } from "@/server/auth"
@@ -90,7 +90,6 @@ import {
   resolveAppRoute,
   type AppDirectoryEntry,
 } from "@/lib/app-route"
-import type { RelayFleetSnapshot } from "@/lib/relay-fleet"
 import {
   relayRouteIdFromSelection,
   relayRouteIdentifier,
@@ -102,8 +101,6 @@ import {
   findFirstCanonicalRelayInstance,
   relayInstanceRouteIdentifier,
   resolveCanonicalRelayInstance,
-  selectSidebarInstanceCount,
-  selectSidebarInstances,
 } from "@/lib/relay-selectors"
 import type { SidebarInstance } from "@/lib/relay-selectors"
 import { globalSectionFromRouteId } from "@/lib/route-sections"
@@ -379,9 +376,9 @@ const InfrastructureInstanceCount = React.memo(
     relayConfigured: boolean
   }) {
     const { data: instanceCount = 0 } = useQuery({
-      ...relaySnapshotQueryOptions(),
+      ...serverDirectoryQueryOptions(),
       enabled: relayConfigured,
-      select: selectSidebarInstanceCount,
+      select: countDirectoryRows,
     })
 
     return instanceCount
@@ -800,9 +797,8 @@ function SidebarServerNavigation({
   relayConfigured: boolean
 }) {
   const { data: instances = emptyInstances, isPending } = useQuery({
-    ...relaySnapshotQueryOptions(),
+    ...serverDirectoryQueryOptions(),
     enabled: relayConfigured,
-    select: selectSidebarInstances,
   })
   const serverId = useRouterState({
     select: (state) =>
@@ -1045,11 +1041,10 @@ const InstanceSelector = React.memo(function InstanceSelector({
         )
         return
       }
-      const snapshot = queryClient.getQueryData(
-        relaySnapshotQueryOptions().queryKey
+      const instances = queryClient.getQueryData(
+        serverDirectoryQueryOptions().queryKey
       )
-      if (!snapshot) return
-      const instances = selectSidebarInstances(snapshot)
+      if (!instances) return
       const selected = instances.find(
         (candidate) =>
           candidate.id === item.identity.id &&
@@ -1122,7 +1117,6 @@ const InstanceSelector = React.memo(function InstanceSelector({
               <SelectorInstanceName
                 instance={{
                   brickId: instance.brickId,
-                  brickSource: instance.brickSource,
                   id: instance.id,
                   implementation: instance.implementation,
                   kind: "server",
@@ -1269,11 +1263,11 @@ const SidebarInstancePicker = React.memo(function SidebarInstancePicker({
     (destination) => destination.to === "/infra/apps"
   )
   const { data: serverItems = emptyPickerItems } = useQuery({
-    ...relaySnapshotQueryOptions(),
+    ...serverDirectoryQueryOptions(),
     select: selectSidebarServerPickerItems,
   })
   const { data: relayItems = emptyPickerItems } = useQuery({
-    ...relaySnapshotQueryOptions(),
+    ...relaysQueryOptions(),
     enabled: showRelays,
     select: selectSidebarRelayPickerItems,
   })
@@ -1333,42 +1327,39 @@ function sidebarPickerKey(
   return `${kind}:${relayId}:${id}`
 }
 
+function countDirectoryRows(rows: ReadonlyArray<unknown>): number {
+  return rows.length
+}
+
 function selectSidebarServerPickerItems(
-  snapshot: RelayFleetSnapshot
+  servers: ReadonlyArray<SidebarInstance>
 ): Array<InstancePickerItem> {
-  return selectSidebarInstances(snapshot).map((instance) => ({
+  return servers.map((instance) => ({
     identity: {
       brickId: instance.brickId,
-      brickSource: instance.brickSource,
       id: instance.id,
       implementation: instance.implementation,
       kind: "server",
-      observedState: instance.observedState,
       relayId: instance.relayId,
     },
     key: sidebarPickerKey("server", instance.relayId, instance.id),
     meta: `${instance.implementation} ${instance.version} · ${instance.shortId}`,
     name: instance.name,
-    searchText: `${instance.routeId} ${instance.relayName} ${instance.observedState}`,
+    searchText: `${instance.routeId} ${instance.relayName}`,
   }))
 }
 
 function selectSidebarRelayPickerItems(
-  snapshot: RelayFleetSnapshot
+  relays: Array<RelayDirectoryEntry>
 ): Array<InstancePickerItem> {
-  return snapshot.nodes.map((node) => ({
-    identity: {
-      id: node.relayId,
-      kind: "relay",
-      relayId: node.relayId,
-      relayStatus: node.relayStatus,
-      source: "fleet",
-      updating: node.relayUpdating,
-    },
-    key: sidebarPickerKey("relay", node.relayId, node.relayId),
-    meta: `${node.arch} · ${kilnReleaseLabel(node.version)}`,
-    name: node.relayName,
-    searchText: `${node.relayId} ${node.version}`,
+  return relays.map((relay) => ({
+    identity: { id: relay.id, kind: "relay", relayId: relay.id },
+    key: sidebarPickerKey("relay", relay.id, relay.id),
+    meta: `${relay.nodeArch ?? "unknown"} · ${
+      relay.nodeVersion ? kilnReleaseLabel(relay.nodeVersion) : relay.id.slice(0, 8)
+    }`,
+    name: relay.name,
+    searchText: `${relay.id} ${relay.nodeVersion ?? ""}`,
   }))
 }
 
