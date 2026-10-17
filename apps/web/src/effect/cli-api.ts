@@ -41,7 +41,8 @@ import {
   relayRemoteFileUploadResultSchema,
   relaySnapshotSchema,
 } from "@workspace/contracts"
-import { Effect, Option, Result } from "effect"
+import { Effect, Option, Result, Schedule } from "effect"
+import { logException } from "@workspace/telemetry"
 import { z } from "zod"
 
 import { cliRelaySubject, requireCliWrite } from "@/effect/cli-access"
@@ -88,6 +89,7 @@ import {
   type PersistedRelay,
 } from "@/lib/relay-registry"
 import { listManagedDatabaseRecordsEffect } from "@/effect/managed-databases"
+import { recordCreatedInstanceEffect } from "@/lib/instance-registry"
 import { getActivityForUser } from "@/server/activity-data.server"
 import { provisionInstanceDomainBestEffort } from "@/server/domains.server"
 import { visibleBrickCatalogs } from "@/server/brick-catalogs.server"
@@ -790,6 +792,18 @@ export const createCliServerEffect = Effect.fn("cli.api.servers.create")(
       360_000
     )
     const instance = relayInstanceSchema.parse(result)
+    // The server exists on the Relay now; a failed record only delays its
+    // directory row until Hearth next reconciles, so it does not fail the
+    // request.
+    yield* recordCreatedInstanceEffect(relay.id, instance).pipe(
+      Effect.retry(Schedule.exponential(100).pipe(Schedule.upTo({ times: 3 }))),
+      Effect.catch((error) =>
+        logException(error, {
+          operation: "cli.api.servers.recordCreated",
+          attributes: { "relay.id": relay.id, "instance.id": instance.id },
+        })
+      )
+    )
     yield* invalidateRelayCache(relayCachePolicy.snapshot(relay.id))
     yield* Effect.tryPromise({
       try: () => provisionInstanceDomainBestEffort(instance, relay.id),

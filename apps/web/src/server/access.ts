@@ -15,6 +15,7 @@ import {
   isPlatformAdmin,
   isRelayCreator,
   listUserGrants,
+  visibleRelaysForUser,
 } from "@/lib/access-control"
 import { auditInstanceCreatorId } from "@/lib/activity"
 import { databasePool } from "@/lib/database"
@@ -161,6 +162,9 @@ export const getAccessCapabilities = createServerFn({ method: "GET" }).handler(
       [user.id, Date.now()]
     )
     return {
+      // Whether any Relay this user can see is enabled, from Hearth's own
+      // records, so the app frame never waits on the fleet to decide.
+      relayConfigured: visibleRelaysForUser(user, relays, grants).length > 0,
       pendingScopes: pendingRows.map((row) => ({
         relayId: row.relay_id,
         resourceType: row.resource_type,

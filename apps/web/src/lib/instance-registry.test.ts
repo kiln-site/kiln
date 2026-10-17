@@ -5,12 +5,30 @@ import * as TestClock from "effect/testing/TestClock"
 import {
   backfillInstanceSourceNamesEffect,
   registerPreparedInstanceEffect,
+  recordCreatedInstanceEffect,
+  removeDeletedInstanceEffect,
   reservePreparedInstanceEffect,
   syncInstanceRegistryEffect,
   updateInstanceSourceNameEffect,
+  updateInstanceDirectoryEffect,
 } from "@/lib/instance-registry"
+import type { DirectoryInstance } from "@/lib/instance-directory"
+import { listInstanceDirectoryEffect } from "@/lib/instance-directory"
 import { TestDatabase, describeMysql, resetDatabase } from "@/test/database"
 import { insertInstance, insertRelay, selectRows } from "@/test/seed"
+import { subscribeRealtimeChanges } from "@/lib/realtime-source.server"
+
+const server = (
+  value: Pick<DirectoryInstance, "id" | "name">
+): DirectoryInstance => ({
+  ...value,
+  brickId: "minecraft-paper",
+  game: "Minecraft",
+  implementation: "Paper",
+  version: "1.21",
+  connectAddress: "play.example.test:25565",
+  tailscale: { enabled: false },
+})
 
 interface InstanceRow {
   instance_id: string
@@ -43,6 +61,41 @@ const seedRelay = Effect.gen(function* () {
 describeMysql("instance registry", () => {
   layer(TestDatabase)((it) => {
     it.effect(
+      "lists recorded metadata and leaves out records no Relay has described",
+      () =>
+        Effect.gen(function* () {
+          yield* seedRelay
+          yield* insertInstance("relay-one", "old", {
+            source_name: "Old server",
+          })
+          yield* registerPreparedInstanceEffect(
+            "relay-one",
+            server({ id: "new", name: "New server" }),
+            "owner"
+          )
+          const rows = yield* listInstanceDirectoryEffect()
+          assert.deepStrictEqual(
+            rows.find((row) => row.id === "new"),
+            {
+              id: "new",
+              relayId: "relay-one",
+              name: "New server",
+              brickId: "minecraft-paper",
+              game: "Minecraft",
+              implementation: "Paper",
+              version: "1.21",
+              connectAddress: "play.example.test:25565",
+              tailscaleEnabled: false,
+            }
+          )
+          assert.strictEqual(
+            rows.some((row) => row.id === "old"),
+            false
+          )
+        })
+    )
+
+    it.effect(
       "registers a prepared instance for its first owner and queues post-provisioning",
       () =>
         Effect.gen(function* () {
@@ -54,13 +107,13 @@ describeMysql("instance registry", () => {
           )
           yield* registerPreparedInstanceEffect(
             "relay-one",
-            { id: "instance-one", name: "Survival" },
+            server({ id: "instance-one", name: "Survival" }),
             "user-one"
           )
           // A later registration never takes ownership away.
           yield* registerPreparedInstanceEffect(
             "relay-one",
-            { id: "instance-one", name: "Survival" },
+            server({ id: "instance-one", name: "Survival" }),
             "user-two"
           )
 
@@ -95,7 +148,7 @@ describeMysql("instance registry", () => {
           )
 
           yield* syncInstanceRegistryEffect("relay-one", [
-            { id: "running", name: "Running" },
+            server({ id: "running", name: "Running" }),
           ])
           assert.deepEqual(Object.keys(yield* instances).sort(), [
             "provisioning",
@@ -125,8 +178,8 @@ describeMysql("instance registry", () => {
           yield* insertInstance("relay-one", "removed")
 
           yield* syncInstanceRegistryEffect("relay-one", [
-            { id: "instance-one", name: "Survival" },
-            { id: "instance-two", name: "Survival" },
+            server({ id: "instance-one", name: "Survival" }),
+            server({ id: "instance-two", name: "Survival" }),
           ])
 
           assert.deepEqual(yield* instances, {
@@ -158,8 +211,9 @@ describeMysql("instance registry", () => {
           })
 
           yield* backfillInstanceSourceNamesEffect("relay-one", [
-            { id: "named", name: "Cached" },
-            { id: "unnamed", name: "Cached" },
+            server({ id: "named", name: "Cached" }),
+            server({ id: "unnamed", name: "Cached" }),
+            server({ id: "deleted", name: "Stale cached server" }),
           ])
           yield* updateInstanceSourceNameEffect("relay-one", {
             id: "bystander",
@@ -177,6 +231,134 @@ describeMysql("instance registry", () => {
             named: "Kept",
             unnamed: "Cached",
           })
+        })
+    )
+
+    it.effect(
+      "refreshes recorded servers from live snapshots without creating others",
+      () =>
+        Effect.gen(function* () {
+          yield* seedRelay
+          yield* registerPreparedInstanceEffect(
+            "relay-one",
+            server({ id: "survival", name: "Survival" }),
+            "owner"
+          )
+          yield* updateInstanceDirectoryEffect("relay-one", [
+            {
+              ...server({ id: "survival", name: "Survival" }),
+              version: "1.22",
+            },
+            server({ id: "unrecorded", name: "Unrecorded" }),
+          ])
+          assert.deepStrictEqual(
+            (yield* listInstanceDirectoryEffect()).map((row) => [
+              row.id,
+              row.version,
+            ]),
+            [["survival", "1.22"]]
+          )
+        })
+    )
+
+    it.effect(
+      "never restores a deleted server from a snapshot read before the deletion",
+      () =>
+        Effect.gen(function* () {
+          yield* seedRelay
+          const survival = server({ id: "survival", name: "Survival" })
+          yield* registerPreparedInstanceEffect("relay-one", survival, "owner")
+          yield* removeDeletedInstanceEffect("relay-one", "survival")
+          yield* updateInstanceDirectoryEffect("relay-one", [survival])
+          assert.deepStrictEqual(yield* instances, {})
+        })
+    )
+
+    it.effect("records a server Hearth created outside provisioning", () =>
+      Effect.gen(function* () {
+        yield* seedRelay
+        yield* recordCreatedInstanceEffect(
+          "relay-one",
+          server({ id: "cli-server", name: "From the CLI" })
+        )
+        assert.deepStrictEqual(
+          (yield* listInstanceDirectoryEffect()).map((row) => row.name),
+          ["From the CLI"]
+        )
+      })
+    )
+
+    it.effect(
+      "keeps Hearth's deletion when a startup snapshot from before it commits later",
+      () =>
+        Effect.gen(function* () {
+          yield* resetDatabase
+          yield* insertRelay("relay-startup-delete")
+          const survival = server({ id: "survival", name: "Survival" })
+          const lobby = server({ id: "lobby", name: "Lobby" })
+          yield* registerPreparedInstanceEffect(
+            "relay-startup-delete",
+            survival,
+            "owner"
+          )
+          yield* registerPreparedInstanceEffect(
+            "relay-startup-delete",
+            lobby,
+            "owner"
+          )
+          yield* removeDeletedInstanceEffect("relay-startup-delete", "survival")
+          yield* syncInstanceRegistryEffect("relay-startup-delete", [
+            survival,
+            lobby,
+          ])
+          assert.deepStrictEqual(Object.keys(yield* instances), ["lobby"])
+        })
+    )
+
+    it.effect(
+      "keeps Hearth's creation when a startup snapshot from before it commits later",
+      () =>
+        Effect.gen(function* () {
+          yield* resetDatabase
+          yield* insertRelay("relay-startup-create")
+          const lobby = server({ id: "lobby", name: "Lobby" })
+          yield* recordCreatedInstanceEffect(
+            "relay-startup-create",
+            server({ id: "fresh", name: "Fresh" })
+          )
+          yield* syncInstanceRegistryEffect("relay-startup-create", [lobby])
+          assert.deepStrictEqual(Object.keys(yield* instances).sort(), [
+            "fresh",
+            "lobby",
+          ])
+        })
+    )
+
+    it.effect(
+      "tells open directories when Hearth records or removes a server",
+      () =>
+        Effect.gen(function* () {
+          yield* resetDatabase
+          yield* insertRelay("relay-notify")
+          const changed: Array<string | undefined> = []
+          yield* Effect.acquireRelease(
+            Effect.sync(() =>
+              subscribeRealtimeChanges((event) => {
+                if (
+                  event.type === "hearth.invalidate" &&
+                  event.topics.includes("instance-directory")
+                )
+                  changed.push(event.scope?.relayId)
+              })
+            ),
+            (unsubscribe) => Effect.sync(unsubscribe)
+          )
+          yield* recordCreatedInstanceEffect(
+            "relay-notify",
+            server({ id: "cli-server", name: "From the CLI" })
+          )
+          yield* removeDeletedInstanceEffect("relay-notify", "cli-server")
+          assert.deepStrictEqual(changed, ["relay-notify", "relay-notify"])
         })
     )
   })

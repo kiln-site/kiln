@@ -594,6 +594,9 @@ export async function maintainPersistedRelayConnections(): Promise<void> {
           })
         )
       )
+      // Reconcile once at startup with a fresh snapshot. Afterwards Hearth's
+      // own create and delete paths add and remove records, and the live
+      // directory worker only refreshes them.
       if (Result.isSuccess(freshSnapshot)) {
         await syncInstanceRegistry(relay.id, freshSnapshot.success.instances)
         return

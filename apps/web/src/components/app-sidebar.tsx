@@ -69,7 +69,6 @@ import {
   accessCapabilitiesQueryOptions,
   appDirectoryQueryOptions,
   managedDatabaseDirectoryQueryOptions,
-  relayConnectionQueryOptions,
   relaySnapshotQueryOptions,
   relaysQueryOptions,
 } from "@/lib/query-options"
@@ -103,7 +102,6 @@ import {
   findFirstCanonicalRelayInstance,
   relayInstanceRouteIdentifier,
   resolveCanonicalRelayInstance,
-  selectRelayConfigured,
   selectSidebarInstanceCount,
   selectSidebarInstances,
 } from "@/lib/relay-selectors"
@@ -150,14 +148,10 @@ export const AppSidebar = React.memo(function AppSidebar({
 }: {
   initialSelectedInstanceRouteId: string | null
 }) {
-  const queryClient = useQueryClient()
-  const { data: relayConfigured } = useSuspenseQuery({
-    ...relayConnectionQueryOptions(queryClient),
-    select: selectRelayConfigured,
-  })
   const { data: capabilities } = useSuspenseQuery(
     accessCapabilitiesQueryOptions()
   )
+  const { relayConfigured } = capabilities
 
   return (
     <AppSidebarView

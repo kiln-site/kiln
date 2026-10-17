@@ -2,6 +2,7 @@ import { Effect } from "effect"
 
 import { reportAppError } from "@/effect/runtime"
 import { deleteInstanceAccessEffect } from "@/lib/access-control"
+import { removeDeletedInstanceEffect } from "@/lib/instance-registry"
 import { invalidateRelayCache, relayCachePolicy } from "@/lib/relay-client"
 
 export const finalizeInstanceDeletionEffect = Effect.fn(
@@ -18,6 +19,14 @@ export const finalizeInstanceDeletionEffect = Effect.fn(
     relayId,
     instanceId,
     deleteInstanceAccessEffect(relayId, instanceId)
+  )
+  // The Relay has removed the server, so its directory record goes too.
+  // Live snapshots never remove records on their own.
+  yield* postDeleteCleanupStep(
+    "instances.registry.unregister",
+    relayId,
+    instanceId,
+    removeDeletedInstanceEffect(relayId, instanceId)
   )
 })
 

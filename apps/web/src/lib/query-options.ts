@@ -86,6 +86,7 @@ import {
 import { getScheduleOptions, getSchedules } from "@/server/schedules"
 import type { RelayFleetSnapshot } from "@/lib/relay-fleet"
 import { withInventoryRelayStatus } from "@/lib/inventory-relay-status"
+import { getInfraServerDirectory } from "@/server/infra-directory"
 import {
   getAppConfig,
   getAppDirectory,
@@ -148,6 +149,7 @@ export const queryKeys = {
       ["domains", "instances", relayId, instanceId] as const,
     settings: ["domains", "settings"] as const,
   },
+  servers: { directory: ["servers", "directory"] as const },
   apps: {
     all: ["apps"] as const,
     config: (relayId: string, appId: string) =>
@@ -573,6 +575,15 @@ export async function fetchManagedDatabases(queryClient: QueryClient) {
   return statuses
     ? withInventoryRelayStatus(overview, "databases", statuses)
     : overview
+}
+
+export function serverDirectoryQueryOptions() {
+  return queryOptions({
+    queryKey: queryKeys.servers.directory,
+    queryFn: ({ signal }) => getInfraServerDirectory({ signal }),
+    refetchOnWindowFocus: false,
+    staleTime: 30_000,
+  })
 }
 
 export function appDirectoryQueryOptions() {

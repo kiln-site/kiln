@@ -955,9 +955,12 @@ function assignmentOwner(instance: { id: string; relayId: string }): {
   }
 }
 
-function managedAddressForInstance(
+export function managedAddressForInstance(
   addresses: z.infer<typeof managedDomainAddressMapSchema>,
-  instance: FleetRelayInstance
+  instance: Pick<
+    FleetRelayInstance,
+    "connectAddress" | "id" | "publicHost" | "publicPort" | "relayId"
+  >
 ): string {
   const assignment = addresses[assignmentKey(instance.relayId, instance.id)]
   return assignment && managedDomainEndpointMatches(assignment, instance)

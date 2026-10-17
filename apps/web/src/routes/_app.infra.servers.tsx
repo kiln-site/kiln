@@ -1,6 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router"
 import { z } from "zod"
 
+import { infraServersCollectionOptions } from "@/lib/collections/infra-directories"
 import { ServersPage } from "@/components/servers-page"
 import {
   DATA_TABLE_SEARCH_MAX_LENGTH,
@@ -20,6 +21,10 @@ export const Route = createFileRoute("/_app/infra/servers")({
       context.queryClient,
       "/infra/servers"
     )
+  },
+  // A Hearth database read, so the first HTML can include every row.
+  loader: async ({ context }) => {
+    await context.dbClient.collection(infraServersCollectionOptions).preload()
   },
   head: () => ({ meta: [{ title: pageTitle("Game Servers") }] }),
   component: ServersRoute,

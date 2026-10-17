@@ -843,6 +843,8 @@ function DataTableBody<TData extends RowData>({
   )
 }
 
+const ssrTableRect = { height: 1080, width: 0 }
+
 function VirtualDataTableBody<TData extends RowData>({
   columns,
   getRowClassName,
@@ -868,6 +870,9 @@ function VirtualDataTableBody<TData extends RowData>({
       defaultDataTableVirtualization.estimateRowHeight,
     getItemKey: (index) => rows[index]?.id ?? `load-more-${index}`,
     getScrollElement: () => scrollElementRef.current,
+    // Server rendering and hydration have no element to measure. Assume a
+    // tall viewport so the first HTML holds the rows above the fold.
+    initialRect: ssrTableRect,
     overscan:
       virtualizationOptions.overscan ?? defaultDataTableVirtualization.overscan,
   })
