@@ -6,7 +6,7 @@ export function instanceStatePresentation(
   state: InstanceState
 ): IdentityStatusPresentation {
   if (state.phase === "checking")
-    return { label: "Checking", tone: "neutral", pulse: true }
+    return { label: "Checking", tone: "neutral", pending: true, pulse: true }
   if (state.phase === "error")
     return { label: "Unknown", detail: state.error.message, tone: "neutral" }
   const { observation } = state
@@ -19,7 +19,7 @@ export function instanceStatePresentation(
     })
   }
   if (observation.reachability === "checking")
-    return { label: "Checking", tone: "neutral", pulse: true }
+    return { label: "Checking", tone: "neutral", pending: true, pulse: true }
   if (observation.reachability === "paused")
     return { label: "Paused", tone: "neutral" }
   if (

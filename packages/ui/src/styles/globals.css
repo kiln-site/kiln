@@ -403,6 +403,12 @@ html {
 }
 
 @layer utilities {
+  /* Holds back a not-yet-known status, so one confirmed quickly goes
+     straight from blank to its value and only slow reads show it. */
+  .reveal-delayed {
+    animation: reveal-delayed 0s 300ms both;
+  }
+
   .editor-grid {
     background-image: linear-gradient(
       to right,
@@ -431,6 +437,12 @@ html {
     .kiln-code-editor .cm-deletedChunk {
       padding-left: 40px !important;
     }
+  }
+}
+
+@keyframes reveal-delayed {
+  from {
+    visibility: hidden;
   }
 }
 

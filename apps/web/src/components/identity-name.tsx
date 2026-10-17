@@ -5,6 +5,8 @@ import { cn } from "@workspace/ui/lib/utils"
 export interface IdentityStatusPresentation {
   detail?: string
   label: string
+  /** Not yet known; revealed only if it stays unknown for a moment. */
+  pending?: boolean
   pulse?: boolean
   tone: "danger" | "info" | "neutral" | "success" | "warning"
 }
@@ -49,6 +51,7 @@ export const IdentityName = React.memo(function IdentityName({
           <IdentityStatus
             className={statusClassName}
             label={status.label}
+            pending={status.pending}
             pulse={status.pulse}
             tone={status.tone}
           />
@@ -82,6 +85,7 @@ export const IdentityName = React.memo(function IdentityName({
 const IdentityStatus = React.memo(function IdentityStatus({
   className,
   label,
+  pending,
   pulse,
   tone,
 }: IdentityStatusPresentation & { className?: string }) {
@@ -92,6 +96,7 @@ const IdentityStatus = React.memo(function IdentityStatus({
           "absolute -right-0.5 -bottom-0.5 size-1.5 rounded-full ring-2 ring-background",
           statusToneClassName[tone],
           pulse && "animate-pulse",
+          pending && "reveal-delayed",
           className
         )}
         aria-hidden="true"

@@ -83,7 +83,7 @@ export function relayStatusPresentation(
     return { label: "Updating", pulse: true, tone: "info" }
   }
   if (relay.relayStatus === "checking") {
-    return { label: "Checking", pulse: true, tone: "neutral" }
+    return { label: "Checking", pending: true, pulse: true, tone: "neutral" }
   }
   if (
     relay.relayStatus === "unreachable" ||

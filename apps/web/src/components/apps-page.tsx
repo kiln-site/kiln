@@ -344,7 +344,14 @@ const AppTable = React.memo(function AppTable({
         header: "Containers",
         sortFn: "text",
         cell: ({ row }) => (
-          <DataTableTextCell value={appRowContainersLabel(row.original)} />
+          <DataTableTextCell
+            className={
+              row.original.instanceState.phase === "checking"
+                ? "reveal-delayed"
+                : undefined
+            }
+            value={appRowContainersLabel(row.original)}
+          />
         ),
         meta: dataTableColumnMeta({ hideBelow: "md", width: "9rem" }),
       }),

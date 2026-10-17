@@ -20,7 +20,8 @@ export const StatusIndicator = React.memo(function StatusIndicator({
       aria-label={status.detail ?? status.label}
       className={cn(
         "type-label inline-flex items-center gap-1.5 whitespace-nowrap",
-        tone.text
+        tone.text,
+        status.pending && "reveal-delayed"
       )}
     >
       <span
