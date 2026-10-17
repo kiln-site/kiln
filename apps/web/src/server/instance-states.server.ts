@@ -55,13 +55,14 @@ export const readInstanceStates = Effect.fn("Instances.readStates.batch")(
     >()
     const results: Array<InstanceStateResult> = []
     const source = yield* InstanceStateSource
+    const relaysById = new Map(relays.map((relay) => [relay.id, relay]))
     for (const reference of new Map(
       references.map((reference) => [
         instanceReferenceKey(reference),
         reference,
       ])
     ).values()) {
-      const relay = relays.find((relay) => relay.id === reference.relayId)
+      const relay = relaysById.get(reference.relayId)
       const resourceType =
         reference.kind === "server"
           ? "instance"
