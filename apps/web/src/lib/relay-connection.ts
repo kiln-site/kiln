@@ -226,6 +226,15 @@ function publishRelayState(relayId: string): void {
   })
 }
 
+/**
+ * Whether this process has failed to reach the Relay since it last
+ * authenticated. A first connection after startup is still in progress, not
+ * failing.
+ */
+export function relayConnectionFailing(relayId: string): boolean {
+  return connections.get(relayId)?.failing ?? false
+}
+
 export function relayConnectionState(relayId: string): RelayConnectionState {
   return (
     connections.get(relayId)?.state ?? {
@@ -323,6 +332,13 @@ class RelayConnection {
 
   get state(): RelayConnectionState {
     return this.#state
+  }
+
+  get failing(): boolean {
+    return (
+      this.#state.status !== "authenticated" &&
+      (this.#attempt > 0 || this.#state.status === "unreachable")
+    )
   }
 
   /** The node from the pushed snapshot, without consuming it for RPC reads. */

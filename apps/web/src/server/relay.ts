@@ -112,6 +112,7 @@ import { publishRealtimeChange } from "@/lib/realtime-source.server"
 import {
   isRelayUpdating,
   relayConnectionNode,
+  relayConnectionFailing,
   relayConnectionState,
 } from "@/lib/relay-connection"
 import { updateInstanceSourceName } from "@/lib/instance-registry"
@@ -1324,16 +1325,17 @@ async function authorizedRelayEntry(
       return fallback
     })
   )
-  // A read through a Relay this process is not connected to waits for a
+  // A read through a Relay this process has failed to reach waits for a
   // reconnect attempt, up to the request timeout, which holds page loads for
   // seconds. Connections are retried in the background and push a fresh
   // snapshot when they return, so serve the last one Hearth holds instead.
-  const disconnected =
+  // A first connection after startup is allowed to finish.
+  const failing =
     options.fallbackOnError &&
     !options.fresh &&
-    relayConnectionState(relay.id).status !== "authenticated"
+    relayConnectionFailing(relay.id)
   return Effect.runPromise(
-    (disconnected ? fallback : live).pipe(
+    (failing ? fallback : live).pipe(
       Effect.map(({ snapshot, status }) => ({
         relay,
         snapshot: snapshot

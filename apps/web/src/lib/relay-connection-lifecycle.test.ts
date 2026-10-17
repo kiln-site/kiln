@@ -44,6 +44,7 @@ import {
   isRelayUpdating,
   relayBrowserAuthorizationReady,
   relayConnectionBrowserMetadata,
+  relayConnectionFailing,
   relayConnectionState,
   relayConnectionNode,
   relayRpc,
@@ -174,6 +175,31 @@ effectIt.effect(
         })
     )
 )
+
+it("fails page reads fast only after a Relay drops, not while it first connects", async () => {
+  const fixture = await setupRelayServer()
+  try {
+    // A first connection after startup is still in progress.
+    const first = relayRpc(fixture.endpoint, "relay.snapshot", {}, 1_000)
+    expect(relayConnectionFailing(relayId)).toBe(false)
+    await first
+    expect(relayConnectionFailing(relayId)).toBe(false)
+
+    for (const client of fixture.server.clients) client.terminate()
+    await vi.waitFor(() => expect(relayConnectionFailing(relayId)).toBe(true))
+
+    // Reconnecting after the backoff clears it.
+    await vi.waitFor(async () => {
+      await vi.advanceTimersByTimeAsync(1_000)
+      expect(relayConnectionState(relayId).status).toBe("authenticated")
+    })
+    expect(relayConnectionFailing(relayId)).toBe(false)
+  } finally {
+    closeRelayConnection(relayId)
+    for (const client of fixture.server.clients) client.terminate()
+    await new Promise<void>((resolve) => fixture.server.close(() => resolve()))
+  }
+})
 
 it("settles failed generation readiness and replaces it for retry", async () => {
   let rejectSynchronization: (cause: Error) => void = () => undefined
