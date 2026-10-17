@@ -431,6 +431,41 @@ describe("realtime event application", () => {
     ).toEqual([{ id: "relay-a", name: "Relay A", status: "unreachable" }])
   })
 
+  it("lets a reachability read that replaced an older one win over an earlier push", async () => {
+    const clients = fleet()
+    const { queryClient } = clients
+    queryClient.setQueryData(queryKeys.relay.reachability, [
+      { id: "relay-a", name: "Relay A", status: "unreachable" },
+    ])
+    const reads: Array<(relays: RelayReachability) => void> = []
+    const queryFn = () =>
+      new Promise<RelayReachability>((resolve) => {
+        reads.push(resolve)
+      })
+    void queryClient
+      .fetchQuery({
+        queryKey: queryKeys.relay.reachability,
+        queryFn,
+        staleTime: 0,
+      })
+      .catch(() => undefined)
+
+    applyEvent(clients, relayStatus("relay-a", "connected"))
+    // Recovery rereads, replacing the read in flight. The Relay has since
+    // dropped again.
+    const reread = queryClient.refetchQueries({
+      queryKey: queryKeys.relay.reachability,
+      exact: true,
+    })
+    await vi.waitFor(() => expect(reads).toHaveLength(2))
+    reads[1]!([{ id: "relay-a", name: "Relay A", status: "unreachable" }])
+    await reread
+
+    expect(queryClient.getQueryData(queryKeys.relay.reachability)).toEqual([
+      { id: "relay-a", name: "Relay A", status: "unreachable" },
+    ])
+  })
+
   it("tells connection toasts when a Relay drops and returns", () => {
     const clients = fleet()
     clients.queryClient.setQueryData(queryKeys.relay.reachability, [

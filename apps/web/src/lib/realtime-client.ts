@@ -146,8 +146,11 @@ function applyRealtimeEvent(input: ApplyRealtimeEventInput): void {
       exact: true,
     })
     if (reading && reading.state.fetchStatus !== "idle") {
+      // A read that replaces this one starts after the change and wins.
+      const read = reading.promise
       const unsubscribe = cache.subscribe((change) => {
         if (change.query !== reading || change.type !== "updated") return
+        if (reading.promise !== read) return unsubscribe()
         if (reading.state.fetchStatus !== "idle") return
         unsubscribe()
         if (change.action.type === "success") patchReachability()
