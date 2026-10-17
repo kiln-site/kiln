@@ -458,17 +458,28 @@ describe("realtime event application", () => {
     await expect(reads.first).resolves.toEqual(relayA("connected"))
   })
 
-  it("reads reachability again when a read spans a stream gap", async () => {
+  it("reads reachability again after a read that spans a stream gap", async () => {
     const clients = fleet()
     const reads = controlledReads(clients.queryClient)
+    // A connection toast reads it.
+    const observer = new QueryObserver(
+      clients.queryClient,
+      relayReachabilityQueryOptions()
+    )
+    const unsubscribe = observer.subscribe(() => undefined)
+    try {
+      // Pushes may have been missed while the stream was down.
+      recheckPushedState(clients.queryClient)
+      reads.pending[0]!(relayA("connected"))
+      await vi.waitFor(() => expect(reads.pending).toHaveLength(2))
+      reads.pending[1]!(relayA("unreachable"))
 
-    // Pushes may have been missed while the stream was down.
-    recheckPushedState(clients.queryClient)
-    reads.pending[0]!(relayA("connected"))
-    await vi.waitFor(() => expect(reads.pending).toHaveLength(2))
-    reads.pending[1]!(relayA("unreachable"))
-
-    await expect(reads.first).resolves.toEqual(relayA("unreachable"))
+      await vi.waitFor(() =>
+        expect(observer.getCurrentResult().data).toEqual(relayA("unreachable"))
+      )
+    } finally {
+      unsubscribe()
+    }
   })
 
   it("tells connection toasts when a Relay drops and returns", () => {

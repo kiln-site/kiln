@@ -1,11 +1,12 @@
-import type { QueryClient } from "@tanstack/react-query"
+import type { QueryClient, QueryFunctionContext } from "@tanstack/react-query"
 
 type ReachabilityStatus = "connected" | "unreachable"
 
 // Pushed Relay states and stream gaps, ordered against reachability reads.
 // A read cannot tell whether Hearth sampled a Relay before or after a push
 // that arrived while it was in flight, so the push wins. After a gap, pushes
-// may have been missed, so a read that spans one reads again.
+// may have been missed, so a read that spans one is followed by another.
+// The journal holds one entry per Relay.
 interface ReachabilityJournal {
   sequence: number
   gap: number
@@ -13,7 +14,6 @@ interface ReachabilityJournal {
 }
 
 const journals = new WeakMap<QueryClient, ReachabilityJournal>()
-const maximumReads = 3
 
 function journalFor(client: QueryClient): ReachabilityJournal {
   let journal = journals.get(client)
@@ -41,26 +41,32 @@ export function recordReachabilityGap(client: QueryClient): void {
   journal.gap = journal.sequence
 }
 
-/** Reads reachability, keeping pushes that arrived while the read ran. */
+/**
+ * Reads reachability, keeping pushes that arrived while the read ran. A read
+ * that spans a stream gap may have missed changes, so once it settles the
+ * query is invalidated and read again.
+ */
 export async function readRelayReachability<
   TRelay extends { id: string; status: ReachabilityStatus },
 >(
-  client: QueryClient,
-  signal: AbortSignal,
+  {
+    client,
+    queryKey,
+    signal,
+  }: Pick<QueryFunctionContext, "client" | "queryKey" | "signal">,
   read: () => Promise<Array<TRelay>>
 ): Promise<Array<TRelay>> {
   const journal = journalFor(client)
-  for (let attempt = 1; ; attempt += 1) {
-    const startedAt = journal.sequence
-    const relays = await read()
-    // A cancelled read's result is discarded, so do not read again for it.
-    if (journal.gap > startedAt && attempt < maximumReads && !signal.aborted)
-      continue
-    return relays.map((relay) => {
-      const push = journal.pushes.get(relay.id)
-      return push && push.sequence > startedAt && push.status !== relay.status
-        ? { ...relay, status: push.status }
-        : relay
+  const startedAt = journal.sequence
+  const relays = await read()
+  if (journal.gap > startedAt && !signal.aborted)
+    setTimeout(() => {
+      void client.invalidateQueries({ queryKey, exact: true })
     })
-  }
+  return relays.map((relay) => {
+    const push = journal.pushes.get(relay.id)
+    return push && push.sequence > startedAt && push.status !== relay.status
+      ? { ...relay, status: push.status }
+      : relay
+  })
 }

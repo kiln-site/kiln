@@ -476,9 +476,12 @@ export type RelayReachability = Awaited<ReturnType<typeof getRelayReachability>>
 export function relayReachabilityQueryOptions() {
   return queryOptions({
     queryKey: queryKeys.relay.reachability,
-    queryFn: ({ client, signal }) =>
-      readRelayReachability(client, signal, () =>
-        getRelayReachability({ headers: relayPollHeaders, signal })
+    queryFn: (context) =>
+      readRelayReachability(context, () =>
+        getRelayReachability({
+          headers: relayPollHeaders,
+          signal: context.signal,
+        })
       ),
     refetchInterval: (query) =>
       query.state.data?.some((relay) => relay.status === "unreachable")
