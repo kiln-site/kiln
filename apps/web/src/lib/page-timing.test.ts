@@ -78,7 +78,7 @@ it("ignores milestones from a page that is leaving", () => {
   expect(timing.currentPageOpenId()).not.toBe(0)
 })
 
-it("keeps the original click time across a redirect", () => {
+it("times a redirect from its own start and records when the chain began", () => {
   timing.startClientNavigation(
     "/db/d9f9f0d6aa71cd4edf482289bbcf713ff224cc44/info",
     "/_app/db/$databaseId/info"
@@ -90,23 +90,30 @@ it("keeps the original click time across a redirect", () => {
   timing.resolveClientNavigation("/db/d9f9f0d6/info")
   flushFrame()
 
-  expect(measured("route")).toEqual([{ start: 1_000, duration: 50 }])
+  const [route] = performance.getEntriesByName("kiln:page:route")
+  expect(route).toMatchObject({ startTime: 1_030, duration: 20 })
+  expect((route as PerformanceMeasure).detail).toMatchObject({
+    chainStartedAt: 1_000,
+  })
 })
 
-it("times a second click before the first resolves from the second click", () => {
+it("starts a new chain once the previous navigation resolved", () => {
   timing.startClientNavigation(
     "/relay/gg9YBwL4/info",
     "/_app/relay/$relayId/info"
   )
+  timing.resolveClientNavigation("/relay/gg9YBwL4/info")
   now = 3_000
-  // The user gives up on a slow page and opens another.
-  timing.noteUserInput()
   timing.startClientNavigation("/db/d9f9f0d6/info", "/_app/db/$databaseId/info")
   now = 3_080
   timing.resolveClientNavigation("/db/d9f9f0d6/info")
   flushFrame()
 
-  expect(measured("route")).toEqual([{ start: 3_000, duration: 80 }])
+  const routes = performance.getEntriesByName("kiln:page:route")
+  expect(routes.at(-1)).toMatchObject({ startTime: 3_000, duration: 80 })
+  expect((routes.at(-1) as PerformanceMeasure).detail).toMatchObject({
+    chainStartedAt: 3_000,
+  })
 })
 
 it("cancels an open whose navigation resolves somewhere else", () => {

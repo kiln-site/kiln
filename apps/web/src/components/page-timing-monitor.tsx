@@ -3,7 +3,6 @@ import { useRouter } from "@tanstack/react-router"
 
 import {
   markPageMilestone,
-  noteUserInput,
   resolveClientNavigation,
   startClientNavigation,
   startPageOpen,
@@ -30,10 +29,6 @@ export function PageTimingMonitor() {
 
   React.useEffect(() => {
     markPageMilestone("hydrated")
-    // A navigation after user input is a new one, not a redirect.
-    const inputs = ["pointerdown", "keydown", "popstate"] as const
-    for (const input of inputs)
-      window.addEventListener(input, noteUserInput, { capture: true })
     const unsubscribeNavigate = router.subscribe(
       "onBeforeNavigate",
       (event) => {
@@ -47,8 +42,6 @@ export function PageTimingMonitor() {
       resolveClientNavigation(event.toLocation.pathname)
     )
     return () => {
-      for (const input of inputs)
-        window.removeEventListener(input, noteUserInput, { capture: true })
       unsubscribeNavigate()
       unsubscribeResolved()
     }

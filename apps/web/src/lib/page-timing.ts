@@ -30,6 +30,8 @@ interface PageOpen {
   identityServerRendered: boolean
   // The page reports no content milestone, though its route usually does.
   contentSkipped: boolean
+  // When the navigations that led here began, if one was still pending.
+  chainStartedAt: number
   // Requested, and painted: a page can request several in one frame.
   marked: Set<PageMilestone>
   recorded: Set<PageMilestone>
@@ -48,11 +50,11 @@ const maximumOpenMs = 30_000
 
 let current: PageOpen | null = null
 let nextId = 1
-// A redirect starts another navigation before the first resolves; the open
-// keeps the time of the original click. A new click or key press in between
-// is a new navigation instead, timed from then.
+// When the earliest navigation still pending began. A navigation that starts
+// before it resolves, such as a redirect, a second click, or one started by
+// code, is timed from its own start and records when the chain began; the
+// router does not say which of those it was.
 let pendingClientStart: number | undefined
-let lastInputAt = Number.NEGATIVE_INFINITY
 // Where the pending navigation is going; it may resolve somewhere else.
 let pendingClientPath: string | undefined
 const listeners = new Set<() => void>()
@@ -85,6 +87,7 @@ export function startPageOpen(
       typeof document !== "undefined" &&
       document.querySelector("[data-page-identity]") !== null,
     contentSkipped: false,
+    chainStartedAt: startedAt,
     marked: new Set(),
     recorded: new Set(),
     span: startBrowserSpan("Page open", {
@@ -106,21 +109,23 @@ export function startPageOpen(
   notify()
 }
 
-/** The user clicked, pressed a key, or moved through history. */
-export function noteUserInput(): void {
-  lastInputAt = performance.now()
-}
-
 /** A client navigation to `path` began, possibly redirecting another. */
 export function startClientNavigation(
   path: string,
   routeId: string | undefined
 ): void {
-  if (pendingClientStart === undefined || lastInputAt >= pendingClientStart)
-    pendingClientStart = performance.now()
+  const startedAt = performance.now()
+  const chainStartedAt = pendingClientStart ?? startedAt
+  pendingClientStart = chainStartedAt
   pendingClientPath = path
-  if (routeId) startPageOpen(routeId, "client", pendingClientStart)
-  else finishPageOpen("left")
+  if (!routeId) {
+    finishPageOpen("left")
+    return
+  }
+  startPageOpen(routeId, "client", startedAt, {
+    "kiln.page.chain_before_ms": Math.round(startedAt - chainStartedAt),
+  })
+  if (current) current.chainStartedAt = chainStartedAt
 }
 
 /**
@@ -248,7 +253,11 @@ function record(open: PageOpen, milestone: PageMilestone, at: number) {
   performance.measure(`kiln:page:${milestone}`, {
     start: open.startedAt,
     end,
-    detail: { route: open.routeId, navigation: open.navigation },
+    detail: {
+      route: open.routeId,
+      navigation: open.navigation,
+      chainStartedAt: open.chainStartedAt,
+    },
   })
   open.span.setAttribute(
     `kiln.page.${milestone}_ms`,
