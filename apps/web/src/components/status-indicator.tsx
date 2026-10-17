@@ -38,7 +38,7 @@ export const StatusIndicator = React.memo(function StatusIndicator({
   return (
     <Tooltip>
       <TooltipTrigger asChild>
-        <span tabIndex={0} className="cursor-default outline-none">
+        <span tabIndex={0} className="inline-flex cursor-default outline-none">
           {indicator}
         </span>
       </TooltipTrigger>
