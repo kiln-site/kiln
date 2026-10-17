@@ -33,6 +33,7 @@ import {
   applyRealtimeEventSafely,
   applyUpdatedInstance,
   fleetEventNeedsRecovery,
+  recheckPushedState,
   resetRealtimeEpoch,
 } from "@/lib/realtime-client"
 
@@ -129,6 +130,20 @@ async function readyFleet(rows: Array<FleetInstance>) {
   clients.queryClient.setQueryData(queryKeys.relay.instances, rows)
   await clients.instances.preload()
   return clients
+}
+
+// A reachability read in flight, as a route loader starts it, whose
+// responses the test resolves in any order.
+function controlledReads(queryClient: QueryClient) {
+  const pending: Array<(relays: RelayReachability) => void> = []
+  const first = queryClient.fetchQuery({
+    queryKey: queryKeys.relay.reachability,
+    queryFn: () =>
+      new Promise<RelayReachability>((resolve) => {
+        pending.push(resolve)
+      }),
+  })
+  return { first, pending }
 }
 
 function applyEvent(
@@ -411,59 +426,43 @@ describe("realtime event application", () => {
     }
   })
 
-  it("keeps a pushed Relay status over a reachability read that sampled before it", async () => {
+  it("rereads Relay reachability when a push lands during a read", async () => {
     const clients = fleet()
-    let resolveRead!: (relays: RelayReachability) => void
-    const read = clients.queryClient.fetchQuery({
-      queryKey: queryKeys.relay.reachability,
-      queryFn: () =>
-        new Promise<RelayReachability>((resolve) => {
-          resolveRead = resolve
-        }),
-    })
+    const reads = controlledReads(clients.queryClient)
 
     applyEvent(clients, relayStatus("relay-a", "unreachable"))
-    resolveRead([{ id: "relay-a", name: "Relay A", status: "connected" }])
-    await read
+    await vi.waitFor(() => expect(reads.pending).toHaveLength(2))
+    // The first read sampled before the push and lands last.
+    reads.pending[1]!([
+      { id: "relay-a", name: "Relay A", status: "unreachable" },
+    ])
+    reads.pending[0]!([{ id: "relay-a", name: "Relay A", status: "connected" }])
 
+    // Its caller, such as a route loader, receives the newer read.
+    await expect(reads.first).resolves.toEqual([
+      { id: "relay-a", name: "Relay A", status: "unreachable" },
+    ])
     expect(
       clients.queryClient.getQueryData(queryKeys.relay.reachability)
     ).toEqual([{ id: "relay-a", name: "Relay A", status: "unreachable" }])
   })
 
-  it("lets a reachability read that replaced an older one win over an earlier push", async () => {
+  it("rereads Relay reachability that recovery finds still loading", async () => {
     const clients = fleet()
-    const { queryClient } = clients
-    queryClient.setQueryData(queryKeys.relay.reachability, [
+    const reads = controlledReads(clients.queryClient)
+
+    // Pushes may have been missed while the stream was down.
+    recheckPushedState(clients.queryClient)
+    await vi.waitFor(() => expect(reads.pending).toHaveLength(2))
+    reads.pending[1]!([
       { id: "relay-a", name: "Relay A", status: "unreachable" },
     ])
-    const reads: Array<(relays: RelayReachability) => void> = []
-    const queryFn = () =>
-      new Promise<RelayReachability>((resolve) => {
-        reads.push(resolve)
-      })
-    void queryClient
-      .fetchQuery({
-        queryKey: queryKeys.relay.reachability,
-        queryFn,
-        staleTime: 0,
-      })
-      .catch(() => undefined)
+    reads.pending[0]!([{ id: "relay-a", name: "Relay A", status: "connected" }])
+    await reads.first
 
-    applyEvent(clients, relayStatus("relay-a", "connected"))
-    // Recovery rereads, replacing the read in flight. The Relay has since
-    // dropped again.
-    const reread = queryClient.refetchQueries({
-      queryKey: queryKeys.relay.reachability,
-      exact: true,
-    })
-    await vi.waitFor(() => expect(reads).toHaveLength(2))
-    reads[1]!([{ id: "relay-a", name: "Relay A", status: "unreachable" }])
-    await reread
-
-    expect(queryClient.getQueryData(queryKeys.relay.reachability)).toEqual([
-      { id: "relay-a", name: "Relay A", status: "unreachable" },
-    ])
+    expect(
+      clients.queryClient.getQueryData(queryKeys.relay.reachability)
+    ).toEqual([{ id: "relay-a", name: "Relay A", status: "unreachable" }])
   })
 
   it("tells connection toasts when a Relay drops and returns", () => {

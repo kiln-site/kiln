@@ -2,6 +2,7 @@ import type { QueryClient } from "@tanstack/react-query"
 import { Result } from "effect"
 import type { RelayInstance } from "@workspace/contracts"
 
+import { forkPromise } from "@/effect/promise"
 import type { RelayInstancesCollection } from "@/lib/collections/relay-instances"
 import {
   invalidateNameDependentBackupRuns,
@@ -127,35 +128,16 @@ function applyRealtimeEvent(input: ApplyRealtimeEventInput): void {
     return
   }
   if (event.type === "relay.status") {
-    const patchReachability = () =>
-      queryClient.setQueryData<RelayReachability>(
-        queryKeys.relay.reachability,
-        (relays) =>
-          relays?.map((relay) =>
-            relay.id === event.relayId && relay.status !== event.status
-              ? { ...relay, status: event.status }
-              : relay
-          )
-      )
-    patchReachability()
-    // A read in flight may have sampled the Relay before this change, so
-    // apply it again as that read lands, before its observers are notified.
-    const cache = queryClient.getQueryCache()
-    const reading = cache.find({
-      queryKey: queryKeys.relay.reachability,
-      exact: true,
-    })
-    if (reading && reading.state.fetchStatus !== "idle") {
-      // A read that replaces this one starts after the change and wins.
-      const read = reading.promise
-      const unsubscribe = cache.subscribe((change) => {
-        if (change.query !== reading || change.type !== "updated") return
-        if (reading.promise !== read) return unsubscribe()
-        if (reading.state.fetchStatus !== "idle") return
-        unsubscribe()
-        if (change.action.type === "success") patchReachability()
-      })
-    }
+    queryClient.setQueryData<RelayReachability>(
+      queryKeys.relay.reachability,
+      (relays) =>
+        relays?.map((relay) =>
+          relay.id === event.relayId && relay.status !== event.status
+            ? { ...relay, status: event.status }
+            : relay
+        )
+    )
+    rereadReachability(queryClient)
     // Every observation on this Relay depends on its reachability.
     void recheckInstanceObservations(queryClient, {
       predicate: ({ queryKey }) =>
@@ -456,10 +438,26 @@ export function fleetEventNeedsRecovery(
 }
 
 /**
+ * A reachability read in flight may have sampled a Relay before a pushed or
+ * missed change, and would overwrite it when it lands. Replace it with a
+ * read that starts now. The cancel is silent, so callers awaiting the old
+ * read receive the new one.
+ */
+function rereadReachability(queryClient: QueryClient): void {
+  const reading = queryClient
+    .getQueryCache()
+    .find({ queryKey: queryKeys.relay.reachability, exact: true })
+  if (!reading || reading.state.fetchStatus === "idle") return
+  void reading.cancel({ silent: true })
+  forkPromise(() => reading.fetch())
+}
+
+/**
  * Game server and Relay state refreshes only on pushed changes, and stream
  * recovery means some may have been missed. Recheck what is mounted.
  */
 export function recheckPushedState(queryClient: QueryClient): void {
+  rereadReachability(queryClient)
   void queryClient.invalidateQueries({
     queryKey: queryKeys.relay.reachability,
     exact: true,
