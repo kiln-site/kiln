@@ -844,6 +844,17 @@ function DataTableBody<TData extends RowData>({
   )
 }
 
+/** Resolves a CSS length in the browser; undefined while server rendering. */
+function cssLengthInPixels(length: string): number | undefined {
+  if (typeof document === "undefined") return undefined
+  const probe = document.createElement("div")
+  probe.style.cssText = `position:absolute;visibility:hidden;height:calc(${length})`
+  document.body.append(probe)
+  const height = probe.getBoundingClientRect().height
+  probe.remove()
+  return height > 0 ? height : undefined
+}
+
 const ssrTableRect = { height: 1080, width: 0 }
 
 function VirtualDataTableBody<TData extends RowData>({
@@ -873,9 +884,13 @@ function VirtualDataTableBody<TData extends RowData>({
     `${virtualizationOptions.estimateRowHeight ?? defaultDataTableVirtualization.estimateRowHeight}px`
   const rowStart = (index: number, start: number) =>
     hydrated ? `${start}px` : `calc(${index} * (${rowHeight}))`
+  // Estimate unmeasured rows at that same height, so the scroll height does
+  // not change when measured positions take over.
+  const [rowHeightPixels] = React.useState(() => cssLengthInPixels(rowHeight))
   const rowVirtualizer = useVirtualizer({
     count: rows.length + (showLoadMoreRow ? 1 : 0),
     estimateSize: () =>
+      rowHeightPixels ??
       virtualizationOptions.estimateRowHeight ??
       defaultDataTableVirtualization.estimateRowHeight,
     getItemKey: (index) => rows[index]?.id ?? `load-more-${index}`,

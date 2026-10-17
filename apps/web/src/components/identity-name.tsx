@@ -89,20 +89,20 @@ const IdentityStatus = React.memo(function IdentityStatus({
   pulse,
   tone,
 }: IdentityStatusPresentation & { className?: string }) {
+  // The delayed reveal sits on a wrapper so it does not replace the pulse.
   return (
-    <>
+    <span className={pending ? "reveal-delayed" : undefined}>
       <span
         className={cn(
           "absolute -right-0.5 -bottom-0.5 size-1.5 rounded-full ring-2 ring-background",
           statusToneClassName[tone],
           pulse && "animate-pulse",
-          pending && "reveal-delayed",
           className
         )}
         aria-hidden="true"
       />
       <span className="sr-only">Status: {label}</span>
-    </>
+    </span>
   )
 })
 
