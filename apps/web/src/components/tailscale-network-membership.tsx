@@ -1,10 +1,5 @@
 import * as React from "react"
-import {
-  useMutation,
-  useQuery,
-  useQueryClient,
-  useSuspenseQuery,
-} from "@tanstack/react-query"
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { Link } from "@tanstack/react-router"
 import { appTailscaleMember } from "@workspace/contracts"
 import {
@@ -42,6 +37,7 @@ import {
   DropdownMenuTrigger,
 } from "@workspace/ui/components/dropdown-menu"
 import { Input } from "@workspace/ui/components/input"
+import { Skeleton } from "@workspace/ui/components/skeleton"
 import {
   Popover,
   PopoverContent,
@@ -93,6 +89,12 @@ import {
 } from "@/server/tailscale"
 
 type StackBinding = TailscaleStackOverview["bindings"][number]
+
+const noTailscaleStacks: TailscaleStacksResult = {
+  stacks: [],
+  unsupportedRelays: [],
+  unavailableRelays: [],
+}
 type SaveStackInput = Parameters<typeof saveTailscaleStack>[0]["data"]
 
 const emptyServers: Array<TailscaleServer> = []
@@ -332,8 +334,9 @@ export function TailscaleMembershipSection({
   noun?: string
   title?: string
 }) {
-  const { data } = useSuspenseQuery(tailscaleStacksQueryOptions())
-  const { stacks, unsupportedRelays } = data
+  // Not suspended: the section waits for its networks, not the whole page.
+  const stacksQuery = useQuery(tailscaleStacksQueryOptions())
+  const { stacks, unsupportedRelays } = stacksQuery.data ?? noTailscaleStacks
   const availableStacks = React.useMemo(
     () => stacks.filter((stack) => !stack.cleanup),
     [stacks]
@@ -406,7 +409,28 @@ export function TailscaleMembershipSection({
           </Button>
         </div>
       </div>
-      {availableStacks.length ? (
+      {!stacksQuery.data ? (
+        stacksQuery.isError ? (
+          <p
+            className="px-4 py-8 text-center text-xs text-destructive"
+            role="alert"
+          >
+            {errorMessage(stacksQuery.error)}
+          </p>
+        ) : (
+          <div
+            className="grid items-center gap-3 px-4 py-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto]"
+            aria-busy="true"
+          >
+            <div className="space-y-1.5">
+              <Skeleton className="h-3 w-28" />
+              <Skeleton className="h-2.5 w-40" />
+            </div>
+            <Skeleton className="h-3 w-36" />
+            <Skeleton className="h-8 w-16" />
+          </div>
+        )
+      ) : availableStacks.length ? (
         <div className="divide-y divide-border/65">
           {availableStacks.map((stack) => {
             const binding = findBinding(stack, server)

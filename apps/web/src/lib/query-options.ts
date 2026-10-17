@@ -59,6 +59,7 @@ import {
   getRelayFileEntry,
   getRelayFile,
   getRelayFileActivity,
+  getInstanceWebRoutes,
   getRelayNodeReadings,
   getRelaySnapshot,
   getRelayTree,
@@ -1022,6 +1023,17 @@ export function relayFileEntryQueryOptions(
       getRelayFileEntry({ data: { instanceId, path, relayId }, signal }),
     retry: false,
     staleTime: 15_000,
+  })
+}
+
+export function instanceWebRoutesQueryOptions(
+  relayId: string,
+  instanceId: string
+) {
+  return queryOptions({
+    queryKey: queryKeys.relay.webRoutes(relayId, instanceId),
+    queryFn: () => getInstanceWebRoutes({ data: { instanceId, relayId } }),
+    staleTime: 10_000,
   })
 }
 

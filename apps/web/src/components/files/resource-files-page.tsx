@@ -5,15 +5,10 @@ import {
   FileTreeLoadingPanel,
   FileWorkspaceLoadingState,
 } from "@/components/file-tree-loading-panel"
+import { LazyFileWorkspace } from "@/components/files/lazy-file-workspace"
 import { uiPreferencesQueryOptions } from "@/lib/query-options"
 import type { FileWorkspaceInstance } from "@/lib/relay-selectors"
 import { warmSyntaxCodeEditorModule } from "@/lib/syntax-editor-module-preload"
-import { loadFileWorkspaceModule } from "@/lib/workspace-module-preloads"
-
-const FileWorkspace = React.lazy(async () => {
-  const module = await loadFileWorkspaceModule()
-  return { default: module.FileWorkspace }
-})
 
 export function ResourceFilesPage({
   instance,
@@ -52,7 +47,7 @@ export function ResourceFilesPage({
         </div>
       }
     >
-      <FileWorkspace
+      <LazyFileWorkspace
         key={`${instance.relayId}:${instance.id}`}
         instance={instance}
         route={route}

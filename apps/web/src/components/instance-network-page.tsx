@@ -76,6 +76,7 @@ import {
 } from "@/components/workspace-table"
 import {
   accessCapabilitiesQueryOptions,
+  instanceWebRoutesQueryOptions,
   queryKeys,
   replaceRelaySnapshotInstance,
   relaySnapshotQueryOptions,
@@ -84,7 +85,6 @@ import { instanceInventoryScope } from "@/lib/instance-inventory"
 import type { RelayFleetSnapshot } from "@/lib/relay-fleet"
 import type { InstanceWorkspaceInstance } from "@/lib/relay-selectors"
 import {
-  getInstanceWebRoutes,
   performRelayAction,
   removeInstanceDatabaseConnection,
   releaseInstancePort,
@@ -138,12 +138,8 @@ function WebRoutesNetworkPage({
     [instance.id, instance.relayId]
   )
   const routes = useQuery({
+    ...instanceWebRoutesQueryOptions(instance.relayId, instance.id),
     enabled: permissions.networkRead,
-    queryFn: () =>
-      getInstanceWebRoutes({
-        data: { instanceId: instance.id, relayId: instance.relayId },
-      }),
-    queryKey,
   })
   const update = useMutation({
     mutationFn: (next: Array<RelayInstanceWebRouteInput>) =>

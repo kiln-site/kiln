@@ -6,6 +6,7 @@ import {
   FileTreeLoadingPanel,
   FileWorkspaceLoadingState,
 } from "@/components/file-tree-loading-panel"
+import { LazyFileWorkspace } from "@/components/files/lazy-file-workspace"
 import {
   useFileTreePreferences,
   useInstanceIdentity,
@@ -15,19 +16,11 @@ import {
 import { pageTitle } from "@/lib/page-title"
 import { requireServerDestinationAccess } from "@/lib/route-access"
 import {
-  relayConnectionQueryOptions,
   relayFileActivityQueryOptions,
   relayRootDirectoryQueryOptions,
-  relaySnapshotQueryOptions,
 } from "@/lib/query-options"
-import { findRelayInstance } from "@/lib/relay-selectors"
 import { warmSyntaxCodeEditorModule } from "@/lib/syntax-editor-module-preload"
 import { loadFileWorkspaceModule } from "@/lib/workspace-module-preloads"
-
-const FileWorkspace = React.lazy(async () => {
-  const module = await loadFileWorkspaceModule()
-  return { default: module.FileWorkspace }
-})
 
 export const Route = createFileRoute("/_app/server/$serverId/files")({
   beforeLoad: async ({ context, params }) => {
@@ -38,34 +31,26 @@ export const Route = createFileRoute("/_app/server/$serverId/files")({
       params.serverId
     )
   },
-  loader: async ({ context, params }) => {
-    if (params.serverId === "unavailable") return
-
-    const connection = await context.queryClient.ensureQueryData(
-      relayConnectionQueryOptions(context.queryClient)
-    )
-    const snapshot =
-      connection.status === "connected"
-        ? connection.snapshot
-        : await context.queryClient.ensureQueryData(relaySnapshotQueryOptions())
-    const instance = findRelayInstance(snapshot.instances, params.serverId)
-    if (!instance) return
-
+  loader: async ({ context }) => {
+    const { instance, queryClient } = context
     // Start data work with client-side route transitions without holding them
     // open. Pending Relay requests cannot cross SSR hydration safely: if the
     // Relay disappears mid-request, the dehydrated promise remains pending in
     // the browser instead of reaching the bounded query error state.
-    if (typeof window === "undefined") return
+    if (typeof window === "undefined" || !instance) return
 
     // FileWorkspace observes these same query keys and reuses the in-flight work.
     void Promise.all([
-      context.queryClient.prefetchInfiniteQuery(
+      queryClient.prefetchInfiniteQuery(
         relayRootDirectoryQueryOptions(instance.relayId, instance.id)
       ),
-      context.queryClient.prefetchQuery(
+      queryClient.prefetchQuery(
         relayFileActivityQueryOptions(instance.relayId, instance.id)
       ),
     ])
+    // Loaded with the route, or on hover, the workspace renders without
+    // suspending behind its fallback.
+    await loadFileWorkspaceModule()
   },
   head: () => ({ meta: [{ title: pageTitle("Files") }] }),
   component: FilesRoute,
@@ -128,7 +113,7 @@ function FilesRoute() {
         </div>
       }
     >
-      <FileWorkspace
+      <LazyFileWorkspace
         key={`${instance.relayId}:${instance.id}`}
         instance={instance}
         route={{ id: serverId, kind: "server" }}
