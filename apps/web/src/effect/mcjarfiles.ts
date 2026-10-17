@@ -8,8 +8,10 @@ const headers = {
   "User-Agent": "kiln-hearth",
 }
 
+// An empty list is never cached: it would hide every version, and replace
+// the last-known list an outage falls back to.
 const VersionCatalogSchema = Schema.Struct({
-  versions: Schema.Array(Schema.String),
+  versions: Schema.NonEmptyArray(Schema.String),
 })
 const decodeCachedVersionCatalog =
   Schema.decodeUnknownSync(VersionCatalogSchema)
@@ -23,11 +25,19 @@ export const listMcJarVersionsEffect = Effect.fn("mcjarfiles.versions")(
       `https://mcjarfiles.com/api/get-versions/${encodeURIComponent(type)}/${encodeURIComponent(variant)}`,
       Schema.Array(Schema.String)
     ).pipe(
-      Effect.map((versions) => ({
-        versions: [
-          ...new Set(versions.map((version) => version.trim()).filter(Boolean)),
-        ],
-      }))
+      Effect.flatMap((listed) => {
+        const [first, ...rest] = new Set(
+          listed.map((version) => version.trim()).filter(Boolean)
+        )
+        return first === undefined
+          ? Effect.fail(
+              ExternalServiceError.make({
+                message: "mcjarfiles listed no versions",
+                service: "mcjarfiles",
+              })
+            )
+          : Effect.succeed({ versions: [first, ...rest] as const })
+      })
     )
     return yield* readThroughCache({
       decode: decodeCachedVersionCatalog,
