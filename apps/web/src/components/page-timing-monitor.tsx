@@ -13,7 +13,8 @@ let hardLoadTimed = false
 /**
  * Starts timing each instance page open: from the start of the document on
  * a fresh tab, or from the click on client navigation. Pages mark their own
- * milestones as they paint.
+ * milestones as they paint. Mounted for every page, including public ones,
+ * so navigations through them are still seen.
  */
 export function PageTimingMonitor() {
   const router = useRouter()
@@ -32,13 +33,13 @@ export function PageTimingMonitor() {
       "onBeforeNavigate",
       (event) => {
         if (!event.pathChanged) return
-        const [routes] = router.getMatchedRoutes(event.toLocation.pathname)
-        startClientNavigation(routes.at(-1)?.id)
+        const path = event.toLocation.pathname
+        const [routes] = router.getMatchedRoutes(path)
+        startClientNavigation(path, routes.at(-1)?.id)
       }
     )
-    const unsubscribeResolved = router.subscribe(
-      "onResolved",
-      resolveClientNavigation
+    const unsubscribeResolved = router.subscribe("onResolved", (event) =>
+      resolveClientNavigation(event.toLocation.pathname)
     )
     return () => {
       unsubscribeNavigate()

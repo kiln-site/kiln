@@ -3,6 +3,7 @@ import { Matches, useRouterState } from "@tanstack/react-router"
 import { AppDocument } from "@/components/app-document"
 import { AppRouterErrorBoundary } from "@/components/app-error-page"
 import { AppFrame } from "@/components/app-frame"
+import { PageTimingMonitor } from "@/components/page-timing-monitor"
 
 export function AppRouterApplication() {
   const usesAppFrame = useRouterState({
@@ -12,6 +13,7 @@ export function AppRouterApplication() {
 
   return (
     <AppDocument>
+      <PageTimingMonitor />
       <AppRouterErrorBoundary>
         {usesAppFrame ? (
           <AppFrame>

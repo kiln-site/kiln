@@ -39,7 +39,7 @@ function measured(milestone: string) {
 }
 
 it("finishes a client open only once its route, name, and status painted", () => {
-  timing.startClientNavigation("/_app/db/$databaseId/info")
+  timing.startClientNavigation("/db/d9f9f0d6/info", "/_app/db/$databaseId/info")
   now = 1_040
   // A cached page can paint its name and status before the route resolves.
   timing.markPageMilestone("identity")
@@ -48,7 +48,7 @@ it("finishes a client open only once its route, name, and status painted", () =>
   expect(timing.currentPageOpenId()).not.toBe(0)
 
   now = 1_060
-  timing.resolveClientNavigation()
+  timing.resolveClientNavigation("/db/d9f9f0d6/info")
   flushFrame()
 
   expect(timing.currentPageOpenId()).toBe(0)
@@ -58,11 +58,17 @@ it("finishes a client open only once its route, name, and status painted", () =>
 })
 
 it("ignores milestones from a page that is leaving", () => {
-  timing.startClientNavigation("/_app/server/$serverId/console")
-  timing.resolveClientNavigation()
+  timing.startClientNavigation(
+    "/server/7d3bce78/console",
+    "/_app/server/$serverId/console"
+  )
+  timing.resolveClientNavigation("/server/7d3bce78/console")
   const leaving = timing.currentPageOpenId()
   now = 2_000
-  timing.startClientNavigation("/_app/server/$serverId/files")
+  timing.startClientNavigation(
+    "/server/7d3bce78/files",
+    "/_app/server/$serverId/files"
+  )
 
   // The previous console finishes loading after the navigation started.
   timing.markPageMilestone("content", leaving)
@@ -73,15 +79,34 @@ it("ignores milestones from a page that is leaving", () => {
 })
 
 it("keeps the original click time across a redirect", () => {
-  timing.startClientNavigation("/_app/db/$databaseId/info")
+  timing.startClientNavigation(
+    "/db/d9f9f0d6aa71cd4edf482289bbcf713ff224cc44/info",
+    "/_app/db/$databaseId/info"
+  )
   now = 1_030
   // A route redirects to its canonical URL before resolving.
-  timing.startClientNavigation("/_app/db/$databaseId/info")
+  timing.startClientNavigation("/db/d9f9f0d6/info", "/_app/db/$databaseId/info")
   now = 1_050
-  timing.resolveClientNavigation()
+  timing.resolveClientNavigation("/db/d9f9f0d6/info")
   flushFrame()
 
   expect(measured("route")).toEqual([{ start: 1_000, duration: 50 }])
+})
+
+it("cancels an open whose navigation resolves somewhere else", () => {
+  timing.startClientNavigation(
+    "/db/d9f9f0d6/network",
+    "/_app/db/$databaseId/network"
+  )
+  // Returning to the page already shown abandons the navigation.
+  timing.resolveClientNavigation("/db/d9f9f0d6/info")
+  timing.markPageMilestone("identity")
+  timing.markPageMilestone("status")
+  flushFrame()
+
+  expect(timing.currentPageOpenId()).toBe(0)
+  expect(measured("route")).toEqual([])
+  expect(measured("identity")).toEqual([])
 })
 
 it("waits for the console's content unless the page reports none", () => {
@@ -107,7 +132,7 @@ it("ends an open that never completes", () => {
 })
 
 it("does not time pages that are not instance pages", () => {
-  timing.startClientNavigation("/_app/infra/servers")
+  timing.startClientNavigation("/infra/servers", "/_app/infra/servers")
 
   expect(timing.currentPageOpenId()).toBe(0)
 })

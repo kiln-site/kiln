@@ -13,7 +13,6 @@ import { AppRouteContent } from "@/components/app-route-content"
 import { AppSidebar } from "@/components/app-sidebar"
 import { InfraUpdateDialogProvider } from "@/components/infra-update-dialog-provider"
 import { NotificationsProvider } from "@/components/notifications"
-import { PageTimingMonitor } from "@/components/page-timing-monitor"
 import { PanelFooter } from "@/components/panel-footer"
 import { RealtimeSync } from "@/components/realtime-sync"
 import { RelayConnectionToastMonitor } from "@/components/relay-connection-toast"
@@ -46,7 +45,6 @@ export const AppFrame = React.memo(function AppFrame({
       <InfraUpdateDialogProvider>
         <NotificationsProvider>
           <AccountStatusSync />
-          <PageTimingMonitor />
           <RealtimeSync />
           <RelayConnectionToastMonitor />
           <MobileSidebarNavigationDismiss />

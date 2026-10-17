@@ -51,6 +51,8 @@ let nextId = 1
 // A redirect starts another navigation before the first resolves; the open
 // keeps the time of the original click.
 let pendingClientStart: number | undefined
+// Where the pending navigation is going; it may resolve somewhere else.
+let pendingClientPath: string | undefined
 const listeners = new Set<() => void>()
 
 export function isInstanceRoute(routeId: string): boolean {
@@ -102,17 +104,31 @@ export function startPageOpen(
   notify()
 }
 
-/** A client navigation began, possibly as a redirect of one in progress. */
-export function startClientNavigation(routeId: string | undefined): void {
+/** A client navigation to `path` began, possibly redirecting another. */
+export function startClientNavigation(
+  path: string,
+  routeId: string | undefined
+): void {
   pendingClientStart ??= performance.now()
+  pendingClientPath = path
   if (routeId) startPageOpen(routeId, "client", pendingClientStart)
   else finishPageOpen("left")
 }
 
-/** The client navigation resolved: its route is ready. */
-export function resolveClientNavigation(): void {
+/**
+ * A client navigation resolved at `path`. When that is not where the open
+ * was going, the navigation was abandoned, such as by returning to the page
+ * already shown, and the open is cancelled rather than completed.
+ */
+export function resolveClientNavigation(path: string): void {
   if (pendingClientStart === undefined) return
+  const expected = pendingClientPath
   pendingClientStart = undefined
+  pendingClientPath = undefined
+  if (path !== expected) {
+    finishPageOpen("cancelled")
+    return
+  }
   markPageMilestone("route")
   // Pages now show the new route's instance, so they may mark it.
   notify()
@@ -146,7 +162,7 @@ export function skipPageContent(openId: number): void {
 }
 
 export function finishPageOpen(
-  result: "ready" | "replaced" | "left" | "timeout"
+  result: "ready" | "replaced" | "left" | "cancelled" | "timeout"
 ): void {
   const open = current
   if (!open) return
