@@ -90,8 +90,9 @@ const IdentityStatus = React.memo(function IdentityStatus({
   tone,
 }: IdentityStatusPresentation & { className?: string }) {
   // The delayed reveal sits on a wrapper so it does not replace the pulse.
+  // The wrapper generates no box, so the icon box still centers its icon.
   return (
-    <span className={pending ? "reveal-delayed" : undefined}>
+    <span className={cn("contents", pending && "reveal-delayed")}>
       <span
         className={cn(
           "absolute -right-0.5 -bottom-0.5 size-1.5 rounded-full ring-2 ring-background",
