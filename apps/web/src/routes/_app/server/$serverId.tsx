@@ -8,6 +8,7 @@ import { Outlet, createFileRoute, redirect } from "@tanstack/react-router"
 import {
   relayConnectionQueryOptions,
   relaySnapshotQueryOptions,
+  serverDirectoryQueryOptions,
   serverNavigationQueryOptions,
 } from "@/lib/query-options"
 import {
@@ -21,14 +22,20 @@ export const Route = createFileRoute("/_app/server/$serverId")({
     if (params.serverId === "unavailable") return { instance: null }
 
     // The sidebar opens this server; load its entry with the route so it
-    // never shows the previous one.
+    // never shows the previous one. A loaded directory already answers it.
+    const directoryLoaded =
+      context.queryClient.getQueryData(
+        serverDirectoryQueryOptions().queryKey
+      ) !== undefined
     const [connection] = await Promise.all([
       context.queryClient.ensureQueryData(
         relayConnectionQueryOptions(context.queryClient)
       ),
-      context.queryClient.ensureQueryData(
-        serverNavigationQueryOptions({ serverId: params.serverId })
-      ),
+      directoryLoaded
+        ? undefined
+        : context.queryClient.ensureQueryData(
+            serverNavigationQueryOptions({ serverId: params.serverId })
+          ),
     ])
     const snapshot =
       connection.status === "connected"
