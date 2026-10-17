@@ -1,8 +1,17 @@
-import type { QueryClient } from "@tanstack/react-query"
+import { queryOptions, type QueryClient } from "@tanstack/react-query"
 import type { InstanceKind } from "@workspace/contracts"
 
 import { instanceInventoryScope } from "@/lib/instance-inventory"
 import { queryKeys } from "@/lib/query-options"
+import { getInfraRelayOptions } from "@/server/infra-directory"
+
+export function infraRelayOptionsQueryOptions(kind: "app" | "database") {
+  return queryOptions({
+    queryKey: ["infra-directory", "relays", kind],
+    queryFn: ({ signal }) => getInfraRelayOptions({ data: kind, signal }),
+    staleTime: 30_000,
+  })
+}
 
 const directoryKeys = {
   app: queryKeys.apps.directory,
@@ -24,5 +33,10 @@ export function refreshInfraTable(
     queryClient.invalidateQueries({
       queryKey: instanceInventoryScope({ kind }),
     }),
+    kind === "app" || kind === "database"
+      ? queryClient.invalidateQueries({
+          queryKey: infraRelayOptionsQueryOptions(kind).queryKey,
+        })
+      : undefined,
   ])
 }

@@ -4,14 +4,7 @@ import type { DatabaseEngine } from "@workspace/contracts"
 import { showToast } from "@workspace/ui/components/sonner"
 
 import { instanceStatusPresentation } from "@/components/instance-name-presentation"
-import type {
-  ManagedDatabaseListItem,
-  getManagedDatabases,
-} from "@/server/databases"
-
-export type ManagedDatabaseOverview = Awaited<
-  ReturnType<typeof getManagedDatabases>
->
+import type { ManagedDatabaseListItem } from "@/server/databases"
 
 export type ManagedDatabase = Omit<ManagedDatabaseListItem, "observedState"> & {
   relayStatus: "connected" | "unreachable"

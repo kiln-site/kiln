@@ -34,6 +34,9 @@ const prefix = (queryKey: QueryKey): HearthRealtimeQueryScope => ({
 const hearthRealtimeQueryScopes = {
   access: [
     exact(queryKeys.servers.directory),
+    exact(queryKeys.apps.directory),
+    exact(queryKeys.databases.directory),
+    prefix(["infra-directory"]),
     prefix(["instance-inventory"]),
     exact(queryKeys.access.capabilities),
     prefix(["resource-access"]),
@@ -57,10 +60,7 @@ const hearthRealtimeQueryScopes = {
     exact(queryKeys.databases.directory),
     exact(queryKeys.schedules.options),
   ],
-  databases: [
-    exact(queryKeys.databases.list),
-    prefix(["instance-inventory", "database"]),
-  ],
+  databases: [prefix(["instance-inventory", "database"])],
   domains: [exact(queryKeys.servers.directory), prefix(["domains"])],
   favorites: [exact(queryKeys.instanceFavorites)],
   "file-activity": [prefix(["file-activity"])],
@@ -77,13 +77,12 @@ const hearthRealtimeQueryScopes = {
   ],
   "relay-proxy": [prefix(["relays", "proxy"])],
   relays: [
+    prefix(["infra-directory"]),
     prefix(["instance-inventory"]),
     exact(queryKeys.access.capabilities),
     exact(queryKeys.relays),
-    exact(queryKeys.servers.directory),
-    exact(queryKeys.databases.list),
     exact(queryKeys.databases.directory),
-    exact(queryKeys.apps.list),
+    exact(queryKeys.servers.directory),
     exact(queryKeys.apps.directory),
     exact(queryKeys.domains.settings),
     exact(queryKeys.schedules.all),
@@ -108,6 +107,9 @@ function queryScopes(
     // viewer can reach, never the platform user or invitation lists.
     return [
       exact(queryKeys.servers.directory),
+      exact(queryKeys.apps.directory),
+      exact(queryKeys.databases.directory),
+      prefix(["infra-directory"]),
       prefix(["instance-inventory"]),
       exact(queryKeys.access.capabilities),
       prefix(["resource-access", scope.relayId]),
@@ -144,7 +146,6 @@ function queryScopes(
   }
   if (topic === "databases" && scope) {
     return [
-      exact(queryKeys.databases.list),
       prefix(
         instanceInventoryScope({ kind: "database", relayId: scope.relayId })
       ),

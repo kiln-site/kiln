@@ -2,7 +2,8 @@ import { createFileRoute } from "@tanstack/react-router"
 import { z } from "zod"
 
 import { AppsPage } from "@/components/apps-page"
-import { getAppsCollection } from "@/lib/collections/apps"
+import { infraAppsCollectionOptions } from "@/lib/collections/infra-directories"
+import { infraRelayOptionsQueryOptions } from "@/lib/infra-directory"
 import {
   DATA_TABLE_SEARCH_MAX_LENGTH,
   useDataTableSearchStore,
@@ -14,15 +15,19 @@ export const Route = createFileRoute("/_app/infra/apps")({
   validateSearch: z.object({
     search: z.string().max(DATA_TABLE_SEARCH_MAX_LENGTH).optional(),
   }),
-  ssr: false,
   beforeLoad: async ({ context }) => {
     await requireInfrastructureDestinationAccess(
       context.queryClient,
       "/infra/apps"
     )
   },
+  // Hearth database reads, so the first HTML can include every row and
+  // the create action.
   loader: async ({ context }) => {
-    await getAppsCollection(context.dbClient).preload()
+    await Promise.all([
+      context.dbClient.collection(infraAppsCollectionOptions).preload(),
+      context.queryClient.ensureQueryData(infraRelayOptionsQueryOptions("app")),
+    ])
   },
   head: () => ({ meta: [{ title: pageTitle("Apps") }] }),
   component: InfraAppsRoute,

@@ -2,7 +2,7 @@ import { z } from "zod"
 import { createFileRoute } from "@tanstack/react-router"
 
 import { RelaysPage } from "@/components/relays-page"
-import { getRelaysCollection } from "@/lib/collections/relays"
+import { relaysCollectionOptions } from "@/lib/collections/relays"
 import {
   DATA_TABLE_SEARCH_MAX_LENGTH,
   useDataTableSearchStore,
@@ -21,7 +21,10 @@ export const Route = createFileRoute("/_app/infra/relays")({
       "/infra/relays"
     )
   },
-  loader: ({ context }) => getRelaysCollection(context.dbClient).preload(),
+  // A Hearth database read, so the first HTML can include every row.
+  loader: async ({ context }) => {
+    await context.dbClient.collection(relaysCollectionOptions).preload()
+  },
   head: () => ({ meta: [{ title: pageTitle("Relays") }] }),
   component: InfraRelaysRoute,
 })

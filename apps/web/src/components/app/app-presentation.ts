@@ -4,9 +4,7 @@ import type { AppSourceType } from "@workspace/contracts"
 import { showToast } from "@workspace/ui/components/sonner"
 
 import { instanceStatusPresentation } from "@/components/instance-name-presentation"
-import type { AppListItem, getApps } from "@/server/apps"
-
-export type AppOverview = Awaited<ReturnType<typeof getApps>>
+import type { AppListItem } from "@/server/apps"
 
 export type App = Omit<AppListItem, "observedState"> & {
   relayStatus: "connected" | "unreachable"

@@ -4,6 +4,8 @@ import { queryCollectionOptions } from "@tanstack/query-db-collection"
 
 import { queryKeys } from "@/lib/query-options"
 import { getInfraServerDirectory } from "@/server/infra-directory"
+import { getAppDirectory } from "@/server/apps"
+import { getManagedDatabaseDirectory } from "@/server/databases"
 
 // Hearth's own records of each kind, permission-filtered, with no Relay
 // round trip. Route loaders preload them, so tables render their rows in
@@ -27,6 +29,16 @@ function infraDirectoryCollection<T extends { id: string; relayId: string }>(
   )
 }
 
+export const infraAppsCollectionOptions = infraDirectoryCollection(
+  "infra-app-directory",
+  queryKeys.apps.directory,
+  (signal) => getAppDirectory({ signal })
+)
+export const infraDatabasesCollectionOptions = infraDirectoryCollection(
+  "infra-database-directory",
+  queryKeys.databases.directory,
+  (signal) => getManagedDatabaseDirectory({ signal })
+)
 export const infraServersCollectionOptions = infraDirectoryCollection(
   "infra-server-directory",
   queryKeys.servers.directory,

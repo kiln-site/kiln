@@ -36,7 +36,6 @@ import {
 import { accessPermissions } from "@/lib/permissions"
 import type { AccessPermission } from "@/lib/permissions"
 import { publishRealtimeChange } from "@/lib/realtime-source.server"
-import { isRelayUpdating } from "@/lib/relay-connection"
 import { listPersistedRelays } from "@/lib/relay-registry"
 import {
   authorizedApp,
@@ -119,105 +118,6 @@ export const getAppDirectory = createServerFn({ method: "GET" }).handler(
     })
   }
 )
-
-export const getApps = createServerFn({ method: "GET" }).handler(async () => {
-  const user = await requireEligibleResourceUser()
-  const relays = (await listPersistedRelays()).filter((relay) => relay.enabled)
-  const grants = isPlatformAdmin(user) ? [] : await listUserGrants(user.id)
-  const readableRelays = relays.filter((relay) =>
-    hasAppPermission(user, grants, relay.id, "app.read")
-  )
-  const [records, settled] = await Promise.all([
-    runAppEffect("apps.records", listAppRecordsEffect()),
-    Promise.allSettled(
-      readableRelays.map(async (relay) => ({
-        apps: z
-          .array(relayAppSchema)
-          .parse(await databaseRpc(relay, "app.list", {}, 15_000)),
-        relay,
-      }))
-    ),
-  ])
-  const relayErrors: Array<{
-    message: string
-    relayId: string
-    relayName: string
-  }> = []
-  const inventories = new Map<string, Map<string, RelayApp> | null>()
-  settled.forEach((result, index) => {
-    const relay = readableRelays[index]!
-    if (result.status === "rejected") {
-      inventories.set(relay.id, null)
-      relayErrors.push({
-        message:
-          result.reason instanceof Error
-            ? result.reason.message
-            : "Relay app inventory is unavailable",
-        relayId: relay.id,
-        relayName: relay.name,
-      })
-      return
-    }
-    inventories.set(
-      relay.id,
-      new Map(result.value.apps.map((app) => [app.id, app]))
-    )
-  })
-  const apps = records.flatMap((record): Array<AppListItem> => {
-    const relay = readableRelays.find(
-      (candidate) => candidate.id === record.relayId
-    )
-    if (!relay) return []
-    const permissions = appPermissions.filter((permission) =>
-      hasAppPermission(user, grants, relay.id, permission)
-    )
-    const inventory = inventories.get(relay.id)
-    const reported = inventory?.get(record.appId)
-    const common = {
-      createdAt: record.createdAt,
-      name: record.name,
-      permissions,
-      relayId: relay.id,
-      relayName: relay.name,
-    }
-    if (reported) {
-      return [{ ...reported, ...common, inventoryStatus: "available" }]
-    }
-    return [
-      {
-        ...common,
-        connectedDatabaseIds: [],
-        containers: [],
-        dataDirectory: "",
-        deployment: null,
-        hostname: `app-${record.appId.slice(0, 8)}`,
-        id: record.appId,
-        inventoryStatus: inventory ? "missing" : "unavailable",
-        network: "",
-        observedState: "failed",
-        shortId: record.appId.slice(0, 8),
-        status: inventory ? "App missing" : "Relay inventory unavailable",
-      },
-    ]
-  })
-  return {
-    apps: apps.map((app) => ({
-      ...app,
-      // Realtime Relay status events patch these two fields in place.
-      relayStatus:
-        app.inventoryStatus === "unavailable"
-          ? ("unreachable" as const)
-          : ("connected" as const),
-      relayUpdating: isRelayUpdating(app.relayId),
-    })),
-    relayErrors,
-    relays: readableRelays.map((relay) => ({
-      canCreate: hasAppPermission(user, grants, relay.id, "app.create"),
-      id: relay.id,
-      name: relay.name,
-    })),
-  }
-})
 
 // The app's configuration. Its environment carries secrets, so only people
 // who can change the app see it.

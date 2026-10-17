@@ -2,7 +2,8 @@ import { createFileRoute } from "@tanstack/react-router"
 import { z } from "zod"
 
 import { DatabasesPage } from "@/components/databases-page"
-import { getManagedDatabasesCollection } from "@/lib/collections/managed-databases"
+import { infraDatabasesCollectionOptions } from "@/lib/collections/infra-directories"
+import { infraRelayOptionsQueryOptions } from "@/lib/infra-directory"
 import {
   DATA_TABLE_SEARCH_MAX_LENGTH,
   useDataTableSearchStore,
@@ -15,15 +16,21 @@ export const Route = createFileRoute("/_app/infra/databases")({
     invitation: z.uuid().optional(),
     search: z.string().max(DATA_TABLE_SEARCH_MAX_LENGTH).optional(),
   }),
-  ssr: false,
   beforeLoad: async ({ context }) => {
     await requireInfrastructureDestinationAccess(
       context.queryClient,
       "/infra/databases"
     )
   },
+  // Hearth database reads, so the first HTML can include every row and
+  // the create action.
   loader: async ({ context }) => {
-    await getManagedDatabasesCollection(context.dbClient).preload()
+    await Promise.all([
+      context.dbClient.collection(infraDatabasesCollectionOptions).preload(),
+      context.queryClient.ensureQueryData(
+        infraRelayOptionsQueryOptions("database")
+      ),
+    ])
   },
   head: () => ({ meta: [{ title: pageTitle("Databases") }] }),
   component: InfraDatabasesRoute,

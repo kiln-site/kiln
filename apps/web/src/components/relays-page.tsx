@@ -4,7 +4,7 @@ import {
   resourceInvitationScopeKey,
 } from "@/components/pending-resource-invitations"
 import * as React from "react"
-import { useLiveQuery } from "@tanstack/react-db"
+import { useLiveSuspenseQuery } from "@tanstack/react-db"
 import {
   useMutation,
   useQuery,
@@ -12,6 +12,8 @@ import {
   useSuspenseQuery,
 } from "@tanstack/react-query"
 import { Link, useNavigate } from "@tanstack/react-router"
+
+import { InfraSyncButton } from "@/components/infra-sync-button"
 import { Effect } from "effect"
 import {
   Check,
@@ -29,7 +31,6 @@ import {
 } from "lucide-react"
 
 import { Button } from "@workspace/ui/components/button"
-import { forkPromise } from "@/effect/promise"
 import {
   Dialog,
   DialogContent,
@@ -72,7 +73,6 @@ import {
   showRelayError,
   updateRelayCache,
 } from "@/components/relay/relay-actions"
-import { relayLiveState } from "@/components/relay/relay-presentation"
 import { CopyIdentifierMenuItem } from "@/components/copy-identifier-menu-item"
 import {
   FavoritesOnlyButton,
@@ -93,14 +93,9 @@ import {
   DataTableWorkspace,
 } from "@/components/data-table-workspace"
 import { IdentityName } from "@/components/identity-name"
-import { InstanceName } from "@/components/instance-name"
-import {
-  relayStatusPresentation,
-  statusColumnWidth,
-  type RelayIdentityStatus,
-} from "@/components/instance-name-presentation"
+import { InstanceCard, InstanceStatus } from "@/components/instance-card"
+import { statusColumnWidth } from "@/components/instance-name-presentation"
 import { RelayMemoryCell } from "@/components/relay-memory-cell"
-import { StatusIndicator } from "@/components/status-indicator"
 import { UserAvatar } from "@/components/account-avatar"
 import { relaysCollectionOptions } from "@/lib/collections/relays"
 import {
@@ -113,11 +108,9 @@ import { relayAddress } from "@/lib/relay-route"
 import {
   accessCapabilitiesQueryOptions,
   queryKeys,
-  relayConnectionQueryOptions,
   relayOwnerMinecraftProfilesQueryOptions,
   relayProxyQueryOptions,
   relaysQueryOptions,
-  type RelayConnection,
 } from "@/lib/query-options"
 import type { InstanceFavorite } from "@/lib/instance-favorites"
 import type { PersistedRelay } from "@/lib/relay-registry"
@@ -130,10 +123,7 @@ import {
   replaceDataTableUrlSearch,
   type DataTableSearchStore,
 } from "@/lib/data-table-search"
-import {
-  useLiveDataTableSource,
-  type DataTableSource,
-} from "@/lib/data-table-source"
+import { type DataTableSource } from "@/lib/data-table-source"
 import {
   addRelay,
   checkRelay,
@@ -142,6 +132,11 @@ import {
   updateRelay,
   updateRelayProxy,
 } from "@/server/relays"
+import {
+  loadingInfraTableSource,
+  useInfraTableSource,
+  type InfraInstanceRow,
+} from "@/lib/infra-table-source"
 import type { ManagedRelay } from "@/server/relays"
 
 const invitationTimeFormatter = new Intl.DateTimeFormat("en-US", {
@@ -150,8 +145,6 @@ const invitationTimeFormatter = new Intl.DateTimeFormat("en-US", {
   timeZone: "UTC",
   timeZoneName: "short",
 })
-const minimumRelaySyncFeedbackMs = 500
-const relayInventoryError = new Error("Could not load Relays")
 const noOwnerProfileIds: ReadonlyMap<string, string> = new Map()
 // Owner cells read profiles from context so avatars never rebuild columns.
 const RelayOwnerProfileIdsContext =
@@ -172,23 +165,12 @@ type RelayRegistryTableItem = Pick<
   | "useTls"
 >
 
-type RelayReachability = "connected" | "paused" | "unreachable"
-interface RelayConnectionStatus {
-  id: string
-  status: RelayReachability
-  updating: boolean
-}
-const noRelayConnectionStates: ReadonlyArray<RelayConnectionStatus> = []
-
-interface RelayTableItem extends RelayRegistryTableItem {
-  relayStatus: RelayIdentityStatus
-  updating: boolean
-}
-
-const relayTableItemCache = new WeakMap<
-  RelayRegistryTableItem,
-  Map<string, RelayTableItem>
->()
+type RelayTableItem = InfraInstanceRow<RelayRegistryTableItem>
+const relayReference = (relay: RelayRegistryTableItem) => ({
+  kind: "relay" as const,
+  id: relay.id,
+  relayId: relay.id,
+})
 
 const relayTableColumnHelper = createDataTableColumnHelper<RelayTableItem>()
 const relayTableSearchFields = [
@@ -199,7 +181,7 @@ const relayTableSearchFields = [
   (relay: RelayTableItem) => relay.nodePlatform,
   (relay: RelayTableItem) => relay.ownerEmail,
   (relay: RelayTableItem) => relay.ownerName,
-  (relay: RelayTableItem) => relayStatusPresentation(relay).label,
+  (relay: RelayTableItem) => relay.instanceStatus,
 ] as const
 
 interface RelayEditView {
@@ -209,43 +191,6 @@ interface RelayEditView {
   name: string
   port: number
   useTls: boolean
-}
-
-function selectRelayConnectionStates(
-  connection: RelayConnection
-): ReadonlyArray<RelayConnectionStatus> {
-  return connection.status === "unconfigured"
-    ? noRelayConnectionStates
-    : connection.relays.map(({ id, status, updating }) => ({
-        id,
-        status,
-        updating: updating === true,
-      }))
-}
-
-function projectRelayTableItems(
-  relays: ReadonlyArray<RelayRegistryTableItem> | undefined,
-  relayStatuses: ReadonlyMap<string, RelayConnectionStatus>,
-  missingStatus: "checking" | "unknown"
-): Array<RelayTableItem> | undefined {
-  return relays?.map((relay) => {
-    const { relayStatus, updating } = relayLiveState(
-      relay.enabled,
-      relayStatuses.get(relay.id),
-      missingStatus
-    )
-    let statusCache = relayTableItemCache.get(relay)
-    if (!statusCache) {
-      statusCache = new Map()
-      relayTableItemCache.set(relay, statusCache)
-    }
-    const cacheKey = `${relayStatus}:${updating}`
-    const cached = statusCache.get(cacheKey)
-    if (cached) return cached
-    const item = { ...relay, relayStatus, updating }
-    statusCache.set(cacheKey, item)
-    return item
-  })
 }
 
 export const RelaysPage = React.memo(function RelaysPage({
@@ -262,11 +207,22 @@ export const RelaysPage = React.memo(function RelaysPage({
           <RelayToolbar searchStore={searchStore} onAdd={dialogStore.openAdd} />
         }
       >
-        <FilteredRelayTable
-          searchStore={searchStore}
-          onAdd={dialogStore.openAdd}
-          onEdit={dialogStore.openEdit}
-        />
+        <React.Suspense
+          fallback={
+            <RelayTable
+              searchStore={searchStore}
+              onAdd={dialogStore.openAdd}
+              onEdit={dialogStore.openEdit}
+              source={loadingInfraTableSource}
+            />
+          }
+        >
+          <FilteredRelayTable
+            searchStore={searchStore}
+            onAdd={dialogStore.openAdd}
+            onEdit={dialogStore.openEdit}
+          />
+        </React.Suspense>
       </DataTableWorkspace>
 
       <RelayDialogHost store={dialogStore} />
@@ -434,8 +390,7 @@ const FilteredRelayTable = React.memo(function FilteredRelayTable({
   onAdd: () => void
   onEdit: (relayId: string) => void
 }) {
-  const queryClient = useQueryClient()
-  const result = useLiveQuery({
+  const { data } = useLiveSuspenseQuery({
     query: (query) =>
       query
         .from({ relay: relaysCollectionOptions })
@@ -455,41 +410,8 @@ const FilteredRelayTable = React.memo(function FilteredRelayTable({
           useTls: relay.useTls,
         })),
   })
-  const connectionQuery = useQuery({
-    ...relayConnectionQueryOptions(queryClient),
-    notifyOnChangeProps: ["data", "isPending"],
-    select: selectRelayConnectionStates,
-  })
-  const connectionStates = connectionQuery.data ?? noRelayConnectionStates
-  const ownerNames = React.useMemo(
-    () => relayOwnerNamesKey(result.data),
-    [result.data]
-  )
-  const relayStatuses = React.useMemo(
-    () => new Map(connectionStates.map((relay) => [relay.id, relay])),
-    [connectionStates]
-  )
-  const tableItems = React.useMemo(
-    () =>
-      projectRelayTableItems(
-        result.data,
-        relayStatuses,
-        connectionQuery.isPending ? "checking" : "unknown"
-      ),
-    [connectionQuery.isPending, relayStatuses, result.data]
-  )
-  const retry = React.useCallback(() => {
-    forkPromise(() =>
-      queryClient.refetchQueries({ exact: true, queryKey: queryKeys.relays })
-    )
-  }, [queryClient])
-  const source = useLiveDataTableSource<RelayTableItem>({
-    data: tableItems,
-    error: relayInventoryError,
-    isError: result.isError,
-    isLoading: result.isLoading,
-    retry,
-  })
+  const ownerNames = React.useMemo(() => relayOwnerNamesKey(data), [data])
+  const source = useInfraTableSource({ rows: data, reference: relayReference })
 
   return (
     <RelayOwnerProfilesProvider ownerNames={ownerNames}>
@@ -524,80 +446,32 @@ function RelayOwnerProfilesProvider({
 
 const RelaySyncButton = React.memo(function RelaySyncButton() {
   const queryClient = useQueryClient()
-  const [manualSyncing, setManualSyncing] = React.useState(false)
-  const manualSyncingRef = React.useRef(false)
-  const feedbackTimeoutRef = React.useRef<number>(undefined)
-  const mountedRef = React.useRef(true)
-  const { data: hasEnabledRelay } = useSuspenseQuery({
+  const { data: hasEnabledRelay } = useQuery({
     ...relaysQueryOptions(),
     select: selectHasEnabledRelay,
   })
-  const syncRelays = useMutation({
-    mutationFn: async () => {
-      const relays =
-        queryClient.getQueryData<Array<PersistedRelay>>(queryKeys.relays) ?? []
-      const checks: Array<ReturnType<typeof checkRelay>> = []
-      for (const relay of relays) {
-        if (relay.enabled) checks.push(checkRelay({ data: { id: relay.id } }))
-      }
-      const checkedRelays = await Promise.all(checks)
-      updateRelayCache(queryClient, checkedRelays)
-    },
-    onError: (cause) => showRelayError(cause, "Could not sync Relays"),
-  })
-  const syncing = manualSyncing || syncRelays.isPending
-
-  React.useEffect(() => {
-    mountedRef.current = true
-    return () => {
-      mountedRef.current = false
-      if (feedbackTimeoutRef.current !== undefined) {
-        window.clearTimeout(feedbackTimeoutRef.current)
-      }
-    }
-  }, [])
-
-  const sync = React.useCallback(() => {
-    if (!hasEnabledRelay || manualSyncingRef.current) return
-    manualSyncingRef.current = true
-    setManualSyncing(true)
-    const startedAt = performance.now()
-
-    syncRelays.mutate(undefined, {
-      onSettled: () => {
-        if (!mountedRef.current) return
-        const elapsed = performance.now() - startedAt
-        const remaining = Math.max(0, minimumRelaySyncFeedbackMs - elapsed)
-        feedbackTimeoutRef.current = window.setTimeout(() => {
-          manualSyncingRef.current = false
-          setManualSyncing(false)
-          feedbackTimeoutRef.current = undefined
-        }, remaining)
-      },
-    })
-  }, [hasEnabledRelay, syncRelays])
-
+  const sync = React.useCallback(async () => {
+    const relays =
+      queryClient.getQueryData<Array<PersistedRelay>>(queryKeys.relays) ?? []
+    const checkedRelays = await Promise.all(
+      relays.flatMap((relay) =>
+        relay.enabled ? [checkRelay({ data: { id: relay.id } })] : []
+      )
+    )
+    updateRelayCache(queryClient, checkedRelays)
+  }, [queryClient])
   return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <Button
-          type="button"
-          size="icon"
-          variant="outline"
-          aria-label="Sync relays"
-          aria-busy={syncing}
-          disabled={syncing || !hasEnabledRelay}
-          onClick={sync}
-        >
-          <RefreshCw className={syncing ? "animate-spin" : ""} />
-        </Button>
-      </TooltipTrigger>
-      <TooltipContent side="bottom" sideOffset={6}>
-        Sync relays
-      </TooltipContent>
-    </Tooltip>
+    <InfraSyncButton
+      disabled={!hasEnabledRelay}
+      label="Sync relays"
+      sync={sync}
+      onError={syncFailed}
+    />
   )
 })
+
+const syncFailed = (cause: Error) =>
+  showRelayError(cause, "Could not sync Relays")
 
 function RelayTable({
   searchStore,
@@ -631,25 +505,29 @@ function RelayTable({
   }))
   const definition = React.useMemo(() => {
     const columns = relayTableColumnHelper.columns([
-      relayTableColumnHelper.accessor(
-        (relay) => relayStatusPresentation(relay).label,
-        {
-          id: "status",
-          header: () => <span className="sr-only sm:not-sr-only">Status</span>,
-          sortFn: "text",
-          cell: ({ row }) => (
-            <StatusIndicator status={relayStatusPresentation(row.original)} />
-          ),
-          meta: dataTableColumnMeta(
-            { width: { base: "2.5rem", sm: statusColumnWidth } },
-            {
-              cellClassName: "px-2 sm:px-3",
-              headerClassName: "px-2 sm:px-3",
-              headerLabelClassName: "shrink-0 overflow-visible text-clip",
-            }
-          ),
-        }
-      ),
+      relayTableColumnHelper.accessor((relay) => relay.instanceStatus, {
+        id: "status",
+        header: () => <span className="sr-only sm:not-sr-only">Status</span>,
+        sortFn: "text",
+        cell: ({ row }) => (
+          <InstanceStatus
+            state={row.original.instanceState}
+            instance={{
+              kind: "relay",
+              id: row.original.id,
+              relayId: row.original.id,
+            }}
+          />
+        ),
+        meta: dataTableColumnMeta(
+          { width: { base: "2.5rem", sm: statusColumnWidth } },
+          {
+            cellClassName: "px-2 sm:px-3",
+            headerClassName: "px-2 sm:px-3",
+            headerLabelClassName: "shrink-0 overflow-visible text-clip",
+          }
+        ),
+      }),
       relayTableColumnHelper.display({
         id: "favorite",
         header: () => <span className="sr-only">Favorite</span>,
@@ -683,18 +561,10 @@ function RelayTable({
                 preload="intent"
                 className="group/relay-link flex min-h-14 min-w-0 flex-1 items-center outline-none focus-visible:ring-2 focus-visible:ring-ring/40 focus-visible:ring-inset"
               >
-                <InstanceName
+                <InstanceCard
+                  state={relay.instanceState}
                   className="min-w-0 flex-1"
-                  instance={{
-                    enabled: relay.enabled,
-                    id: relay.id,
-                    kind: "relay",
-                    relayId: relay.id,
-                    relayStatus: relay.relayStatus,
-                    source: "registry",
-                    updating: relay.updating,
-                  }}
-                  live={false}
+                  instance={{ id: relay.id, kind: "relay", relayId: relay.id }}
                   meta={
                     <span title={relay.id}>
                       {relay.nodeArch ?? "unknown"} <span aria-hidden>•</span>{" "}
@@ -729,7 +599,11 @@ function RelayTable({
         enableSorting: false,
         cell: ({ row }) => (
           <RelayMemoryCell
-            connected={row.original.relayStatus === "connected"}
+            connected={
+              row.original.instanceState.phase === "ready" &&
+              row.original.instanceState.observation.reachability ===
+                "connected"
+            }
             relayId={row.original.id}
           />
         ),

@@ -1,12 +1,6 @@
 import { QueryClient } from "@tanstack/react-query"
 import { afterEach, describe, expect, it, vi } from "vite-plus/test"
 
-// Database inventory is fetched from Hearth; tests control when it resolves.
-vi.mock("@/server/databases", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@/server/databases")>()),
-  getManagedDatabases: vi.fn(),
-}))
-
 // Observations are read from Hearth; tests decide what Hearth reports.
 vi.mock("@/server/instance-inventory", () => ({
   getInstanceInventory: vi.fn(),
@@ -17,17 +11,11 @@ import type {
   InstanceInventoryRequest,
   InstanceInventoryResult,
 } from "@workspace/contracts"
-import { getManagedDatabasesCollection } from "@/lib/collections/managed-databases"
-import { instanceStateQueryOptions } from "@/lib/instance-state"
-import { getInstanceInventory } from "@/server/instance-inventory"
 import { getRelayInstancesCollection } from "@/lib/collections/relay-instances"
+import { instanceStateQueryOptions } from "@/lib/instance-state"
 import { createAppClients, type AppRouterContext } from "@/lib/query-client"
-import {
-  managedDatabasesQueryOptions,
-  queryKeys,
-  type RelayConnection,
-} from "@/lib/query-options"
-import { getManagedDatabases } from "@/server/databases"
+import { queryKeys, type RelayConnection } from "@/lib/query-options"
+import { getInstanceInventory } from "@/server/instance-inventory"
 import type { RelayFleetSnapshot } from "@/lib/relay-fleet"
 import type {
   FleetInstance,
@@ -253,129 +241,6 @@ describe("realtime event application", () => {
     )
     expect(result?.instances).toBe(current.instances)
     expect(result?.nodes).toEqual([updatedNode])
-  })
-
-  it("patches database rows from Relay status and refetches only when the Relay returns", async () => {
-    const app = createAppClients()
-    openClients.push(app)
-    const clients = {
-      instances: getRelayInstancesCollection(app.dbClient),
-      queryClient: app.queryClient,
-    }
-    const databases = getManagedDatabasesCollection(app.dbClient)
-    const database = {
-      id: "d".repeat(40),
-      inventoryStatus: "available",
-      observedState: "running",
-      relayId: alpha.relayId,
-      relayStatus: "connected",
-      relayUpdating: false,
-    }
-    clients.queryClient.setQueryData(queryKeys.databases.list, {
-      databases: [database],
-      relayErrors: [],
-      relays: [],
-    })
-    await databases.preload()
-    const refreshTopics = vi.fn().mockResolvedValue(undefined)
-
-    applyEvent(
-      clients,
-      {
-        epoch,
-        relayId: alpha.relayId,
-        sequence: 1,
-        status: "unreachable",
-        type: "relay.status",
-        updating: true,
-      },
-      refreshTopics
-    )
-    // The collection follows its backing query cache.
-    await vi.waitFor(() =>
-      expect(databases.toArray).toMatchObject([
-        { relayStatus: "unreachable", relayUpdating: true },
-      ])
-    )
-    expect(refreshTopics).not.toHaveBeenCalled()
-
-    applyEvent(
-      clients,
-      relayStatus(alpha.relayId, "connected", 2),
-      refreshTopics
-    )
-    await vi.waitFor(() =>
-      expect(databases.toArray).toMatchObject([
-        { relayStatus: "connected", relayUpdating: false },
-      ])
-    )
-    expect(refreshTopics).toHaveBeenCalledWith(["databases"], {
-      relayId: alpha.relayId,
-    })
-  })
-
-  it("keeps a newer Relay status when an older inventory response arrives", async () => {
-    const clients = fleet()
-    clients.queryClient.setQueryData(queryKeys.relay.connection, {
-      relay: { id: alpha.relayId, name: alpha.relayName },
-      relays: [
-        { id: alpha.relayId, name: alpha.relayName, status: "connected" },
-      ],
-      snapshot: snapshot(),
-      status: "connected",
-    })
-    type Overview = Awaited<ReturnType<typeof getManagedDatabases>>
-    let resolveResponse!: (overview: Overview) => void
-    vi.mocked(getManagedDatabases).mockReturnValueOnce(
-      new Promise<Overview>((resolve) => {
-        resolveResponse = resolve
-      })
-    )
-    const fetching = clients.queryClient.fetchQuery(
-      managedDatabasesQueryOptions()
-    )
-
-    applyEvent(clients, relayStatus(alpha.relayId, "unreachable"))
-    resolveResponse({
-      databases: [
-        {
-          id: "d".repeat(40),
-          inventoryStatus: "available",
-          observedState: "running",
-          relayId: alpha.relayId,
-          relayStatus: "connected",
-          relayUpdating: false,
-        },
-      ],
-      relayErrors: [],
-      relays: [],
-    } as unknown as Overview)
-
-    expect((await fetching).databases).toMatchObject([
-      { relayStatus: "unreachable" },
-    ])
-  })
-
-  it("refetches databases when a Relay whose inventory failed returns", () => {
-    const clients = fleet()
-    clients.queryClient.setQueryData(queryKeys.databases.list, {
-      databases: [],
-      relayErrors: [
-        {
-          message: "Relay database inventory is unavailable",
-          relayId: alpha.relayId,
-          relayName: alpha.relayName,
-        },
-      ],
-      relays: [],
-    })
-    const refreshTopics = vi.fn().mockResolvedValue(undefined)
-
-    applyEvent(clients, relayStatus(alpha.relayId, "connected"), refreshTopics)
-
-    expect(refreshTopics).toHaveBeenCalledWith(["databases"], {
-      relayId: alpha.relayId,
-    })
   })
 
   it("rereads an observation whose first read began before a Relay status change", async () => {
