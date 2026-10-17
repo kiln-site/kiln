@@ -16,6 +16,7 @@ import type {
   ConsoleAggregateStreamStore,
   ConsoleStreamStore,
 } from "@/components/console/console-stores"
+import { usePageContentSkipped } from "@/lib/page-timing"
 import { createConsoleLoadTiming } from "@/lib/console-performance"
 import type { InstanceWorkspaceInstance } from "@/lib/relay-selectors"
 
@@ -65,6 +66,8 @@ function ConsoleWorkspaceSession({
       : createConsoleLoadTiming()
   )
   React.useEffect(() => () => loadTiming?.cancel(), [loadTiming])
+  // The aggregate console has no load timing, so its page ends without one.
+  usePageContentSkipped(tailscale)
 
   return (
     <section className="flex min-h-0 flex-1 flex-col bg-card">

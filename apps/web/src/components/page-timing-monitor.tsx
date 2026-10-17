@@ -2,8 +2,9 @@ import * as React from "react"
 import { useRouter } from "@tanstack/react-router"
 
 import {
-  finishPageOpen,
   markPageMilestone,
+  resolveClientNavigation,
+  startClientNavigation,
   startPageOpen,
 } from "@/lib/page-timing"
 
@@ -27,23 +28,18 @@ export function PageTimingMonitor() {
 
   React.useEffect(() => {
     markPageMilestone("hydrated")
-    let navigationStartedAt: number | undefined
     const unsubscribeNavigate = router.subscribe(
       "onBeforeNavigate",
       (event) => {
         if (!event.pathChanged) return
-        navigationStartedAt = performance.now()
         const [routes] = router.getMatchedRoutes(event.toLocation.pathname)
-        const leaf = routes.at(-1)
-        if (leaf) startPageOpen(leaf.id, "client", navigationStartedAt)
-        else finishPageOpen("left")
+        startClientNavigation(routes.at(-1)?.id)
       }
     )
-    const unsubscribeResolved = router.subscribe("onResolved", () => {
-      if (navigationStartedAt === undefined) return
-      navigationStartedAt = undefined
-      markPageMilestone("route")
-    })
+    const unsubscribeResolved = router.subscribe(
+      "onResolved",
+      resolveClientNavigation
+    )
     return () => {
       unsubscribeNavigate()
       unsubscribeResolved()

@@ -27,8 +27,11 @@ import { isExpectedAppError } from "@/observability/error-policy"
 
 export interface BrowserSpan {
   readonly setAttribute: (key: string, value: unknown) => void
-  /** Ends the span once; later calls are ignored. */
-  readonly end: (error?: unknown) => void
+  /**
+   * Ends the span once; later calls are ignored. `endedAt` is a
+   * `performance.now()` time for work that finished before the call.
+   */
+  readonly end: (error?: unknown, endedAt?: number) => void
 }
 
 interface BrowserTelemetry {
@@ -151,10 +154,13 @@ export function startBrowserSpan(
   let ended = false
   const browserSpan: BrowserSpan = {
     setAttribute: (key, value) => span.attribute(key, value),
-    end: (error) => {
+    end: (error, endedAt) => {
       if (ended) return
       ended = true
-      span.end(nowNanos(), error === undefined ? Exit.void : Exit.fail(error))
+      span.end(
+        nowNanos(endedAt),
+        error === undefined ? Exit.void : Exit.fail(error)
+      )
     },
   }
   spans.set(browserSpan, span)

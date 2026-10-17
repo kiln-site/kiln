@@ -8,6 +8,9 @@ import { startBrowserSpan, type BrowserSpan } from "@/lib/browser-telemetry"
  * status was confirmed, and its main content was ready. Each milestone is a
  * `performance.measure` entry named `kiln:page:<milestone>`, readable in
  * devtools and by measurement scripts, and a child span of "Page open".
+ *
+ * Every open has an ID. Milestones are marked against the open they belong
+ * to, so a page that is leaving cannot mark the one replacing it.
  */
 export type PageMilestone =
   | "route"
@@ -19,27 +22,44 @@ export type PageMilestone =
 type Navigation = "hard" | "client"
 
 interface PageOpen {
+  id: number
   routeId: string
   navigation: Navigation
   startedAt: number
   // The name was in the server's HTML, so it painted with the first paint.
   identityServerRendered: boolean
-  span: BrowserSpan
+  // The page reports no content milestone, though its route usually does.
+  contentSkipped: boolean
   // Requested, and painted: a page can request several in one frame.
   marked: Set<PageMilestone>
   recorded: Set<PageMilestone>
+  span: BrowserSpan
+  timeout: ReturnType<typeof setTimeout> | undefined
 }
 
 const instanceRoute = /^\/_app\/(server|db|app|relay)\//u
 
 // Pages whose open ends at a page-specific "content" milestone. The rest end
-// once their name and status are on screen.
+// once their route, name, and status are on screen.
 const contentRoutes = new Set(["/_app/server/$serverId/console"])
 
+// An open that never completes still ends, so its span is reported.
+const maximumOpenMs = 30_000
+
 let current: PageOpen | null = null
+let nextId = 1
+// A redirect starts another navigation before the first resolves; the open
+// keeps the time of the original click.
+let pendingClientStart: number | undefined
+const listeners = new Set<() => void>()
 
 export function isInstanceRoute(routeId: string): boolean {
   return instanceRoute.test(routeId)
+}
+
+/** The open being timed, or 0 when none is. */
+export function currentPageOpenId(): number {
+  return current?.id ?? 0
 }
 
 /** Starts timing a page open; any open still running is replaced. */
@@ -51,13 +71,16 @@ export function startPageOpen(
 ): void {
   finishPageOpen("replaced")
   if (!isInstanceRoute(routeId)) return
-  current = {
+  const open: PageOpen = {
+    id: nextId++,
     routeId,
     navigation,
     startedAt,
     identityServerRendered:
       navigation === "hard" &&
+      typeof document !== "undefined" &&
       document.querySelector("[data-page-identity]") !== null,
+    contentSkipped: false,
     marked: new Set(),
     recorded: new Set(),
     span: startBrowserSpan("Page open", {
@@ -70,34 +93,118 @@ export function startPageOpen(
         ...attributes,
       },
     }),
+    timeout: undefined,
   }
+  open.timeout = setTimeout(() => {
+    if (current === open) finishPageOpen("timeout")
+  }, maximumOpenMs)
+  current = open
+  notify()
 }
 
-/** Records a milestone of the open page once, when it is next painted. */
-export function markPageMilestone(milestone: PageMilestone): void {
+/** A client navigation began, possibly as a redirect of one in progress. */
+export function startClientNavigation(routeId: string | undefined): void {
+  pendingClientStart ??= performance.now()
+  if (routeId) startPageOpen(routeId, "client", pendingClientStart)
+  else finishPageOpen("left")
+}
+
+/** The client navigation resolved: its route is ready. */
+export function resolveClientNavigation(): void {
+  if (pendingClientStart === undefined) return
+  pendingClientStart = undefined
+  markPageMilestone("route")
+  // Pages now show the new route's instance, so they may mark it.
+  notify()
+}
+
+/**
+ * Records a milestone of an open once, when it is next painted. Marks for an
+ * open that has been replaced are ignored.
+ */
+export function markPageMilestone(
+  milestone: PageMilestone,
+  openId = currentPageOpenId()
+): void {
   const open = current
-  if (!open || open.marked.has(milestone)) return
+  if (!open || open.id !== openId || open.marked.has(milestone)) return
   open.marked.add(milestone)
-  requestAnimationFrame((paintedAt) => {
+  requestAnimationFrame((frame) => {
     if (current !== open) return
-    record(open, milestone, paintedTime(open, milestone, paintedAt))
+    record(open, milestone, paintedTime(open, milestone, frame))
     open.recorded.add(milestone)
-    if (
-      milestone === "content" ||
-      (!contentRoutes.has(open.routeId) &&
-        open.recorded.has("identity") &&
-        open.recorded.has("status"))
-    )
-      finishPageOpen("ready")
+    finishIfReady(open)
   })
 }
 
-export function finishPageOpen(result: "ready" | "replaced" | "left"): void {
+/** The page reports no content milestone, such as an aggregate console. */
+export function skipPageContent(openId: number): void {
+  const open = current
+  if (!open || open.id !== openId) return
+  open.contentSkipped = true
+  finishIfReady(open)
+}
+
+export function finishPageOpen(
+  result: "ready" | "replaced" | "left" | "timeout"
+): void {
   const open = current
   if (!open) return
   current = null
+  clearTimeout(open.timeout)
   open.span.setAttribute("kiln.page.result", result)
   open.span.end()
+  notify()
+}
+
+/** Marks a milestone of the open page once `reached` is true. */
+export function usePageMilestone(milestone: PageMilestone, reached: boolean) {
+  // Re-arms for each open once its route has resolved, so a header that
+  // stays mounted reports for the new page, and only once it shows the new
+  // page's instance rather than the previous one.
+  const openId = usePageOpenId()
+  React.useEffect(() => {
+    if (reached && openId) markPageMilestone(milestone, openId)
+  }, [milestone, openId, reached])
+}
+
+/** Declares, while `skipped`, that this page reports no content milestone. */
+export function usePageContentSkipped(skipped: boolean) {
+  const openId = usePageOpenId()
+  React.useEffect(() => {
+    if (skipped && openId) skipPageContent(openId)
+  }, [openId, skipped])
+}
+
+function usePageOpenId(): number {
+  return React.useSyncExternalStore(subscribe, resolvedPageOpenId, () => 0)
+}
+
+// The open, once its page shows the route it opened: at once on a fresh
+// tab, and after the route resolves on client navigation.
+function resolvedPageOpenId(): number {
+  const open = current
+  if (!open) return 0
+  return open.navigation === "hard" || open.marked.has("route") ? open.id : 0
+}
+
+function subscribe(listener: () => void) {
+  listeners.add(listener)
+  return () => listeners.delete(listener)
+}
+
+function notify() {
+  for (const listener of listeners) listener()
+}
+
+function finishIfReady(open: PageOpen) {
+  if (current !== open) return
+  const required: Array<PageMilestone> = ["identity", "status"]
+  if (open.navigation === "client") required.push("route")
+  if (contentRoutes.has(open.routeId) && !open.contentSkipped)
+    required.push("content")
+  if (required.every((milestone) => open.recorded.has(milestone)))
+    finishPageOpen("ready")
 }
 
 function paintedTime(
@@ -113,23 +220,19 @@ function paintedTime(
 }
 
 function record(open: PageOpen, milestone: PageMilestone, at: number) {
-  const elapsed = Math.max(0, at - open.startedAt)
+  const end = Math.max(open.startedAt, at)
   performance.measure(`kiln:page:${milestone}`, {
     start: open.startedAt,
-    end: Math.max(open.startedAt, at),
+    end,
     detail: { route: open.routeId, navigation: open.navigation },
   })
-  open.span.setAttribute(`kiln.page.${milestone}_ms`, Math.round(elapsed))
+  open.span.setAttribute(
+    `kiln.page.${milestone}_ms`,
+    Math.round(end - open.startedAt)
+  )
   startBrowserSpan(`Page ${milestone}`, {
     parent: open.span,
     startedAt: open.startedAt,
     attributes: { "kiln.operation": `ui.page.${milestone}` },
-  }).end()
-}
-
-/** Marks a milestone of the open page once `reached` is true. */
-export function usePageMilestone(milestone: PageMilestone, reached: boolean) {
-  React.useEffect(() => {
-    if (reached) markPageMilestone(milestone)
-  }, [milestone, reached])
+  }).end(undefined, end)
 }
