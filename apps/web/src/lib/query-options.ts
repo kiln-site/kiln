@@ -85,6 +85,7 @@ import {
 } from "@/server/resource-access"
 import { getScheduleOptions, getSchedules } from "@/server/schedules"
 import type { RelayFleetSnapshot } from "@/lib/relay-fleet"
+import { readRelayReachability } from "@/lib/relay-reachability"
 import { getInfraServerDirectory } from "@/server/infra-directory"
 import {
   getAppConfig,
@@ -475,8 +476,10 @@ export type RelayReachability = Awaited<ReturnType<typeof getRelayReachability>>
 export function relayReachabilityQueryOptions() {
   return queryOptions({
     queryKey: queryKeys.relay.reachability,
-    queryFn: ({ signal }) =>
-      getRelayReachability({ headers: relayPollHeaders, signal }),
+    queryFn: ({ client, signal }) =>
+      readRelayReachability(client, signal, () =>
+        getRelayReachability({ headers: relayPollHeaders, signal })
+      ),
     refetchInterval: (query) =>
       query.state.data?.some((relay) => relay.status === "unreachable")
         ? disconnectedRelayPollDelayMs
