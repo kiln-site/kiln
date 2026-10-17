@@ -1445,7 +1445,9 @@ const InstanceTabNavigationItem = React.memo(
               params={{ serverId: instanceRouteId }}
               activeOptions={{ exact: true }}
               activeProps={{ "data-active": true }}
-              preload="render"
+              // Warming on hover keeps the console quick to open without
+              // loading the fleet on every page while a server is selected.
+              preload="intent"
             >
               {content}
             </Link>
