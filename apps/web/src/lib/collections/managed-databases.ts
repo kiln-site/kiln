@@ -11,7 +11,7 @@ export const managedDatabasesCollectionOptions = collectionOptions(
       id: "managed-databases",
       getKey: managedDatabaseKey,
       queryClient: client.requireDependency<QueryClient>("queryClient"),
-      queryFn: ({ client }) => fetchManagedDatabases(client),
+      queryFn: ({ client, signal }) => fetchManagedDatabases(client, signal),
       queryKey: queryKeys.databases.list,
       refetchOnWindowFocus: "always",
       select: (overview) => overview.databases,

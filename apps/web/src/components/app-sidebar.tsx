@@ -151,7 +151,7 @@ export const AppSidebar = React.memo(function AppSidebar({
   initialSelectedInstanceRouteId: string | null
 }) {
   const queryClient = useQueryClient()
-  const { data: relayConfigured } = useSuspenseQuery({
+  const { data: relayConfigured = false } = useQuery({
     ...relayConnectionQueryOptions(queryClient),
     select: selectRelayConfigured,
   })

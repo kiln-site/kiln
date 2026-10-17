@@ -10,7 +10,6 @@ import {
   appDirectoryQueryOptions,
   authStateQueryOptions,
   managedDatabaseDirectoryQueryOptions,
-  relayConnectionQueryOptions,
   relaysQueryOptions,
   uiPreferencesQueryOptions,
 } from "@/lib/query-options"
@@ -37,12 +36,9 @@ export const Route = createFileRoute("/_app")({
     return { user }
   },
   loader: async ({ context }) => {
-    const [, uiPreferences] = await Promise.all([
-      context.queryClient.ensureQueryData(
-        relayConnectionQueryOptions(context.queryClient)
-      ),
-      context.queryClient.ensureQueryData(uiPreferencesQueryOptions()),
-    ])
+    const uiPreferences = await context.queryClient.ensureQueryData(
+      uiPreferencesQueryOptions()
+    )
     // The sidebar shows a remembered database from the directory; load it
     // with the frame so the sidebar does not switch after hydration.
     if (databaseRouteIdFromSelection(uiPreferences.selectedInstanceRouteId)) {

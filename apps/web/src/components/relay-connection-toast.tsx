@@ -1,5 +1,5 @@
 import * as React from "react"
-import { useQueryClient, useSuspenseQuery } from "@tanstack/react-query"
+import { useQueryClient, useQuery } from "@tanstack/react-query"
 import { useRouter } from "@tanstack/react-router"
 import { Effect } from "effect"
 import { LoaderCircle, ServerOff, Wifi, WifiOff } from "lucide-react"
@@ -41,11 +41,11 @@ export const RelayConnectionToastMonitor = React.memo(
     hydrateSystemUpdatePresence()
     const queryClient = useQueryClient()
     const router = useRouter()
-    const connectionQuery = useSuspenseQuery({
+    const connectionQuery = useQuery({
       ...relayConnectionQueryOptions(queryClient),
       select: selectRelayStates,
     })
-    const relays = connectionQuery.data
+    const relays = connectionQuery.data ?? emptyRelayStates
 
     useApplicationConnectionToasts({
       isError: connectionQuery.isError,

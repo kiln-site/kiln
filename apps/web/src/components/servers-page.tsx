@@ -1,4 +1,8 @@
 import {
+  useInfraTableSource,
+  type InfraInstanceRow,
+} from "@/lib/infra-table-source"
+import {
   PendingResourceInvitations,
   PendingResourceInvitationBadge,
   resourceInvitationScopeKey,
@@ -6,7 +10,11 @@ import {
 import * as React from "react"
 import { eq, not } from "@tanstack/db"
 import { useDbClient, useLiveQuery } from "@tanstack/react-db"
-import { useQueryClient, useSuspenseQuery } from "@tanstack/react-query"
+import {
+  useQuery,
+  useQueryClient,
+  useSuspenseQuery,
+} from "@tanstack/react-query"
 import { Link } from "@tanstack/react-router"
 import { ensuringPromise, forkPromise } from "@/effect/promise"
 import {
@@ -63,13 +71,9 @@ import {
 } from "@/components/data-table-workspace"
 import { DataTable } from "@/components/data-table-view"
 import { InstanceCard, InstanceStatus } from "@/components/instance-card"
-import {
-  instanceStatusPresentation,
-  statusColumnWidth,
-} from "@/components/instance-name-presentation"
+import { statusColumnWidth } from "@/components/instance-name-presentation"
 import {
   accessCapabilitiesQueryOptions,
-  brickCatalogQueryOptions,
   relayConnectionQueryOptions,
 } from "@/lib/query-options"
 import {
@@ -87,7 +91,6 @@ import {
 } from "@/lib/data-table-search"
 import {
   replaceDataTableRows,
-  useLiveDataTableSource,
   type DataTableSource,
 } from "@/lib/data-table-source"
 import type { InstanceFavorite } from "@/lib/instance-favorites"
@@ -97,11 +100,18 @@ import type { ServerListInstance } from "@/lib/relay-selectors"
 
 const minimumManualSyncFeedbackMs = 500
 const serverInventoryError = new Error("Could not load game servers")
+type InfraServer = InfraInstanceRow<ServerListInstance>
+const serverReference = (server: ServerListInstance) => ({
+  kind: "server" as const,
+  id: server.id,
+  relayId: server.relayId,
+})
+
 const serverTableItemCache = new WeakMap<ServerListInstance, ServerTableItem>()
 
 interface ServerTableItem {
   routeIdentifier: string
-  server: ServerListInstance
+  server: InfraServer
 }
 
 const serverTableColumnHelper = createDataTableColumnHelper<ServerTableItem>()
@@ -116,7 +126,7 @@ const serverTableSearchFields = [
   ({ server }: ServerTableItem) => server.connectAddress,
   ({ server }: ServerTableItem) => server.relayId,
   ({ server }: ServerTableItem) => server.relayName,
-  ({ server }: ServerTableItem) => serverStatus(server).label,
+  ({ server }: ServerTableItem) => server.instanceStatus,
 ] as const
 
 interface ServerDeleteAccess {
@@ -138,7 +148,7 @@ export const ServersPage = React.memo(function ServersPage({
   const [dialogStore] = React.useState(createAddServerDialogStore)
   const [deleteTarget, setDeleteTarget] =
     React.useState<ServerDeleteTarget | null>(null)
-  const { data: relayConfigured } = useSuspenseQuery({
+  const { data: relayConfigured } = useQuery({
     ...relayConnectionQueryOptions(queryClient),
     select: selectRelayConfigured,
   })
@@ -175,12 +185,6 @@ export const ServersPage = React.memo(function ServersPage({
   const openDelete = React.useCallback((target: ServerDeleteTarget) => {
     setDeleteTarget(target)
   }, [])
-
-  React.useEffect(() => {
-    if (canProvision) {
-      void queryClient.prefetchQuery(brickCatalogQueryOptions())
-    }
-  }, [canProvision, queryClient])
 
   return (
     <div className="mx-auto flex h-full min-h-[34rem] w-full max-w-[90rem] flex-col px-3 pb-3 sm:px-5 sm:pb-5">
@@ -354,7 +358,7 @@ const FilteredServerTableBoundary = React.memo(
     deleteAccess: ServerDeleteAccess
     dialogStore: AddServerDialogStore
     onDelete: (target: ServerDeleteTarget) => void
-    relayConfigured: boolean
+    relayConfigured: boolean | undefined
     searchStore: ServerSearchStore
   }) {
     const dbClient = useDbClient()
@@ -392,11 +396,13 @@ const FilteredServerTableBoundary = React.memo(
         })
       )
     }, [dbClient])
-    const liveSource = useLiveDataTableSource<ServerListInstance>({
-      data: result.data,
+    const liveSource = useInfraTableSource({
+      directory: {
+        ...result,
+        isLoading: result.isLoading || relayConfigured === undefined,
+      },
+      reference: serverReference,
       error: serverInventoryError,
-      isError: result.isError,
-      isLoading: result.isLoading,
       retry,
     })
     const items = React.useMemo(
@@ -457,31 +463,29 @@ const ServerDataTable = React.memo(function ServerDataTable({
   }))
   const definition = React.useMemo(() => {
     const columns = serverTableColumnHelper.columns([
-      serverTableColumnHelper.accessor(
-        ({ server }) => serverStatus(server).label,
-        {
-          id: "status",
-          header: () => <span className="sr-only sm:not-sr-only">Status</span>,
-          sortFn: "text",
-          cell: ({ row }) => (
-            <InstanceStatus
-              instance={{
-                kind: "server",
-                id: row.original.server.id,
-                relayId: row.original.server.relayId,
-              }}
-            />
-          ),
-          meta: dataTableColumnMeta(
-            { width: { base: "2.5rem", sm: statusColumnWidth } },
-            {
-              cellClassName: "px-2 sm:px-3",
-              headerClassName: "px-2 sm:px-3",
-              headerLabelClassName: "shrink-0 overflow-visible text-clip",
-            }
-          ),
-        }
-      ),
+      serverTableColumnHelper.accessor(({ server }) => server.instanceStatus, {
+        id: "status",
+        header: () => <span className="sr-only sm:not-sr-only">Status</span>,
+        sortFn: "text",
+        cell: ({ row }) => (
+          <InstanceStatus
+            state={row.original.server.instanceState}
+            instance={{
+              kind: "server",
+              id: row.original.server.id,
+              relayId: row.original.server.relayId,
+            }}
+          />
+        ),
+        meta: dataTableColumnMeta(
+          { width: { base: "2.5rem", sm: statusColumnWidth } },
+          {
+            cellClassName: "px-2 sm:px-3",
+            headerClassName: "px-2 sm:px-3",
+            headerLabelClassName: "shrink-0 overflow-visible text-clip",
+          }
+        ),
+      }),
       serverTableColumnHelper.display({
         id: "favorite",
         header: () => <span className="sr-only">Favorite</span>,
@@ -514,6 +518,7 @@ const ServerDataTable = React.memo(function ServerDataTable({
                 className="group/server-link flex min-h-14 min-w-0 flex-1 items-center px-3 outline-none focus-visible:ring-2 focus-visible:ring-ring/40 focus-visible:ring-inset"
               >
                 <InstanceCard
+                  state={server.instanceState}
                   instance={{
                     brickId: server.brickId,
                     id: server.id,
@@ -657,9 +662,11 @@ const ServerActions = React.memo(function ServerActions({
   canDelete: boolean
   onDelete: (target: ServerDeleteTarget) => void
   routeIdentifier: string
-  server: ServerListInstance
+  server: InfraServer
 }) {
-  const deleteEnabled = server.relayStatus === "connected"
+  const deleteEnabled =
+    server.instanceState.phase === "ready" &&
+    server.instanceState.observation.reachability === "connected"
   return (
     <DataTableActionGroup>
       <ServerActionLink
@@ -688,7 +695,9 @@ const ServerActions = React.memo(function ServerActions({
               disabled={!deleteEnabled}
               onClick={() =>
                 onDelete({
-                  backupAvailable: !server.provisioning,
+                  backupAvailable:
+                    server.instanceState.phase === "ready" &&
+                    server.instanceState.observation.runtime !== "provisioning",
                   id: server.id,
                   name: server.name,
                   relayId: server.relayId,
@@ -796,17 +805,6 @@ function canDeleteServer(
   )
 }
 
-function serverStatus(server: ServerListInstance) {
-  return instanceStatusPresentation({
-    id: server.id,
-    kind: "server",
-    observedState: server.observedState,
-    relayId: server.relayId,
-    relayStatus: server.relayStatus,
-    relayUpdating: server.relayUpdating,
-  })
-}
-
 function EmptyServerTable({
   canProvision,
   dialogStore,
@@ -859,7 +857,7 @@ function serverTableItemFavorite({
 }
 
 function createServerTableItems(
-  servers: Array<ServerListInstance>
+  servers: Array<InfraServer>
 ): Array<ServerTableItem> {
   const shortIdCounts = new Map<string, number>()
   for (const server of servers) {

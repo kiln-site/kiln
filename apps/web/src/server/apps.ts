@@ -45,6 +45,7 @@ import {
   hasAppPermission,
 } from "@/server/app-access"
 import { requireEligibleResourceUser } from "@/server/auth"
+import { readRelayInventories } from "@/server/infra-inventory.server"
 import { databaseRpc, requiredRelay } from "@/server/managed-database-access"
 
 const appInputSchema = z.strictObject({
@@ -125,13 +126,8 @@ export const getApps = createServerFn({ method: "GET" }).handler(async () => {
   )
   const [records, settled] = await Promise.all([
     runAppEffect("apps.records", listAppRecordsEffect()),
-    Promise.allSettled(
-      readableRelays.map(async (relay) => ({
-        apps: z
-          .array(relayAppSchema)
-          .parse(await databaseRpc(relay, "app.list", {}, 15_000)),
-        relay,
-      }))
+    readRelayInventories(readableRelays, "app.list", (value) =>
+      z.array(relayAppSchema).parse(value)
     ),
   ])
   const relayErrors: Array<{
@@ -156,7 +152,7 @@ export const getApps = createServerFn({ method: "GET" }).handler(async () => {
     }
     inventories.set(
       relay.id,
-      new Map(result.value.apps.map((app) => [app.id, app]))
+      new Map(result.value.inventory.map((app) => [app.id, app]))
     )
   })
   const apps = records.flatMap((record): Array<AppListItem> => {

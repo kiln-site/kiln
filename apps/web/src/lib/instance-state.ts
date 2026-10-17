@@ -1,4 +1,9 @@
-import { queryOptions, useQuery, type QueryClient } from "@tanstack/react-query"
+import {
+  queryOptions,
+  useQuery,
+  type QueryClient,
+  type QueryObserverResult,
+} from "@tanstack/react-query"
 import {
   instanceReferenceKey,
   type InstanceObservation,
@@ -158,6 +163,15 @@ export function useInstanceState(
     ...instanceStateQueryOptions(reference),
     enabled: enabled && typeof window !== "undefined",
   })
+  return instanceStateFromQuery(query)
+}
+
+export function instanceStateFromQuery(
+  query: Pick<
+    QueryObserverResult<InstanceObservation, Error>,
+    "fetchStatus" | "isFetchedAfterMount" | "error" | "data"
+  >
+): InstanceState {
   // Query retains data during refetches; runtime state must be checked again
   // before this observer presents it as current.
   if (query.fetchStatus !== "idle" || !query.isFetchedAfterMount)

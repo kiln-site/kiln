@@ -9,7 +9,7 @@ export const appsCollectionOptions = collectionOptions("apps", (client) =>
     id: "apps",
     getKey: appKey,
     queryClient: client.requireDependency<QueryClient>("queryClient"),
-    queryFn: ({ client }) => fetchApps(client),
+    queryFn: ({ client, signal }) => fetchApps(client, signal),
     queryKey: queryKeys.apps.list,
     refetchOnWindowFocus: "always",
     // Deployments run on the Relay; follow them until they finish.

@@ -3,15 +3,12 @@ import type { InstanceReference } from "@workspace/contracts"
 import { Boxes, Database, RadioTower, Server } from "lucide-react"
 
 import { IdentityName } from "@/components/identity-name"
-import type {
-  IdentityNameProps,
-  IdentityStatusPresentation,
-} from "@/components/identity-name"
+import type { IdentityNameProps } from "@/components/identity-name"
 import { LiveServerBrickIcon } from "@/components/server-brick-icon"
-import { instanceStatusPresentation } from "@/components/instance-name-presentation"
 import { InstanceFavoriteStar } from "@/components/instance-favorite"
 import { StatusIndicator } from "@/components/status-indicator"
 import { useInstanceState, type InstanceState } from "@/lib/instance-state"
+import { instanceStatePresentation } from "@/lib/instance-state-presentation"
 
 export type { InstanceNameInstance } from "@/components/instance-name-presentation"
 
@@ -29,62 +26,56 @@ export interface InstanceCardProps extends Omit<
   iconSizeClassName?: string
   showFavorite?: boolean
   showStatus?: boolean
-}
-
-function instanceStatePresentation(
-  state: InstanceState
-): IdentityStatusPresentation {
-  if (state.phase === "checking")
-    return { label: "Checking", tone: "neutral", pulse: true }
-  if (state.phase === "error")
-    return { label: "Unknown", detail: state.error.message, tone: "neutral" }
-  const { observation } = state
-  if (observation.kind === "relay") {
-    return instanceStatusPresentation({
-      ...observation,
-      kind: "relay",
-      relayStatus: observation.reachability,
-      updating: observation.updating,
-    })
-  }
-  if (observation.reachability === "checking")
-    return { label: "Checking", tone: "neutral", pulse: true }
-  if (observation.reachability === "paused")
-    return { label: "Paused", tone: "neutral" }
-  if (observation.reachability === "connected" && observation.inventory === "missing")
-    return { label: "Missing", detail: "Resource is missing from its Relay", tone: "danger" }
-  return instanceStatusPresentation({
-    ...observation,
-    kind: observation.kind,
-    inventoryStatus: observation.inventory,
-    observedState: observation.runtime ?? undefined,
-    relayStatus: observation.reachability,
-    relayUpdating: observation.updating,
-  })
+  state?: InstanceState
 }
 
 export const InstanceStatus = React.memo(function InstanceStatus({
   instance,
+  state,
 }: {
   instance: InstanceReference
+  state?: InstanceState
 }) {
+  return state ? (
+    <StatusIndicator status={instanceStatePresentation(state)} />
+  ) : (
+    <LiveInstanceStatus instance={instance} />
+  )
+})
+
+function LiveInstanceStatus({ instance }: { instance: InstanceReference }) {
   return (
     <StatusIndicator
       status={instanceStatePresentation(useInstanceState(instance))}
     />
   )
+}
+
+export const InstanceCard = React.memo(function InstanceCard(
+  props: InstanceCardProps
+) {
+  return props.state || props.showStatus === false ? (
+    <InstanceCardView {...props} />
+  ) : (
+    <LiveInstanceCard {...props} />
+  )
 })
 
-export const InstanceCard = React.memo(function InstanceCard({
+function LiveInstanceCard(props: InstanceCardProps) {
+  const state = useInstanceState(props.instance)
+  return <InstanceCardView {...props} state={state} />
+}
+
+const InstanceCardView = React.memo(function InstanceCardView({
   instance,
   iconSizeClassName,
   showFavorite = true,
   showStatus = true,
   nameAccessory,
   meta = instance.id.slice(0, 8),
+  state = { phase: "checking" },
   ...props
 }: InstanceCardProps) {
-  const state = useInstanceState(instance, showStatus)
   const Icon =
     instance.kind === "app"
       ? Boxes

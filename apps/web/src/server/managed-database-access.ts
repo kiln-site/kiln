@@ -49,8 +49,9 @@ export async function databaseRpc(
   operation: RelayControlOperation,
   payload: unknown,
   timeoutMs: number,
-  subject?: string
+  subject?: string,
+  signal?: AbortSignal
 ): Promise<unknown> {
   const { relayRpc } = await import("@/lib/relay-connection")
-  return relayRpc(relay, operation, payload, timeoutMs, subject)
+  return relayRpc(relay, operation, payload, timeoutMs, subject, signal)
 }

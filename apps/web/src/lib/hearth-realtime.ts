@@ -32,6 +32,8 @@ const prefix = (queryKey: QueryKey): HearthRealtimeQueryScope => ({
 
 const hearthRealtimeQueryScopes = {
   access: [
+    prefix(["infra-directory"]),
+    prefix(["instance-states"]),
     exact(queryKeys.access.capabilities),
     prefix(["resource-access"]),
     prefix(["access-resources"]),
@@ -71,6 +73,7 @@ const hearthRealtimeQueryScopes = {
   ],
   "relay-proxy": [prefix(["relays", "proxy"])],
   relays: [
+    prefix(["infra-directory"]),
     prefix(["instance-states"]),
     exact(queryKeys.relays),
     exact(queryKeys.databases.list),
@@ -99,6 +102,8 @@ function queryScopes(
     // One Relay's access edit: refresh that Relay's records and what the
     // viewer can reach, never the platform user or invitation lists.
     return [
+      prefix(["infra-directory"]),
+      prefix(["instance-states"]),
       exact(queryKeys.access.capabilities),
       prefix(["resource-access", scope.relayId]),
       prefix(["access-resources"]),

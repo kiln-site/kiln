@@ -1,3 +1,4 @@
+import type { getManagedDatabaseDirectory } from "@/server/databases"
 import {
   PendingResourceInvitations,
   PendingResourceInvitationBadge,
@@ -6,6 +7,7 @@ import {
 import * as React from "react"
 import { useDbClient, useLiveQuery } from "@tanstack/react-db"
 import {
+  useQuery,
   useMutation,
   useQueryClient,
   useSuspenseQuery,
@@ -73,8 +75,6 @@ import {
 } from "@/components/database/database-dialogs"
 import { DatabaseNetworkPicker } from "@/components/database/database-network"
 import {
-  databaseRelayAvailable,
-  databaseStatusPresentation,
   engineBadgeClasses,
   engineLabel,
   engineOptions,
@@ -97,7 +97,7 @@ import {
 } from "@/components/data-table-workspace"
 import { InstanceCard, InstanceStatus } from "@/components/instance-card"
 import { statusColumnWidth } from "@/components/instance-name-presentation"
-import { getManagedDatabasesCollection } from "@/lib/collections/managed-databases"
+import { getInfraDatabasesCollection } from "@/lib/collections/infra-directories"
 import type { InstanceFavorite } from "@/lib/instance-favorites"
 import type { AccessPermission } from "@/lib/permissions"
 import {
@@ -109,7 +109,15 @@ import {
   replaceDataTableUrlSearch,
   type DataTableSearchStore,
 } from "@/lib/data-table-search"
-import { useLiveDataTableSource } from "@/lib/data-table-source"
+import {
+  useInfraTableSource,
+  useInfraDetails,
+  type InfraInstanceRow,
+} from "@/lib/infra-table-source"
+import {
+  infraRelayOptionsQueryOptions,
+  refreshInfraTable,
+} from "@/lib/infra-directory"
 import { managedDatabasesQueryOptions, queryKeys } from "@/lib/query-options"
 import { ensuringPromise, forkPromise } from "@/effect/promise"
 import {
@@ -124,18 +132,32 @@ type DatabaseDialog =
   | { kind: "import"; database: ManagedDatabase }
   | null
 
+type DatabaseDirectory = Awaited<
+  ReturnType<typeof getManagedDatabaseDirectory>
+>[number]
+type DatabaseDirectoryRow = InfraInstanceRow<DatabaseDirectory, ManagedDatabase>
+const databaseReference = (row: DatabaseDirectory) => ({
+  kind: "database" as const,
+  id: row.id,
+  relayId: row.relayId,
+})
+
 const databaseInventoryError = new Error("Could not load databases")
 const minimumManualSyncFeedbackMs = 500
-const databaseTableColumnHelper = createDataTableColumnHelper<ManagedDatabase>()
+const databaseTableColumnHelper =
+  createDataTableColumnHelper<DatabaseDirectoryRow>()
 const databaseTableSearchFields = [
-  (database: ManagedDatabase) => database.name,
-  (database: ManagedDatabase) => database.id,
-  (database: ManagedDatabase) => database.shortId,
-  (database: ManagedDatabase) => database.engine,
-  (database: ManagedDatabase) => database.databaseName,
-  (database: ManagedDatabase) => database.hostname,
-  (database: ManagedDatabase) => database.relayId,
-  (database: ManagedDatabase) => database.relayName,
+  (row: DatabaseDirectoryRow) => row.name,
+  (row: DatabaseDirectoryRow) => row.id,
+  (row: DatabaseDirectoryRow) => row.shortId,
+  (row: DatabaseDirectoryRow) => row.relayId,
+  (row: DatabaseDirectoryRow) => row.relayName,
+  (row: DatabaseDirectoryRow) => row.engine,
+  (row: DatabaseDirectoryRow) => row.instanceStatus,
+  (row: DatabaseDirectoryRow) =>
+    row.detailPhase === "ready" ? row.detail?.databaseName : undefined,
+  (row: DatabaseDirectoryRow) =>
+    row.detailPhase === "ready" ? row.detail?.hostname : undefined,
 ] as const
 
 export const DatabasesPage = React.memo(function DatabasesPage({
@@ -143,10 +165,7 @@ export const DatabasesPage = React.memo(function DatabasesPage({
 }: {
   searchStore: DataTableSearchStore
 }) {
-  const { data } = useSuspenseQuery({
-    ...managedDatabasesQueryOptions(),
-    select: selectDatabasePageMeta,
-  })
+  const { data } = useSuspenseQuery(infraRelayOptionsQueryOptions("database"))
   const [createOpen, setCreateOpen] = React.useState(false)
   const [dialog, setDialog] = React.useState<DatabaseDialog>(null)
   const openCreate = React.useCallback(() => setCreateOpen(true), [])
@@ -154,21 +173,6 @@ export const DatabasesPage = React.memo(function DatabasesPage({
     setDialog(next)
   }, [])
   const canCreate = data.relays.some((relay) => relay.canCreate)
-  const relayErrorKey = data.relayErrors
-    .map((error) => `${error.relayId}:${error.message}`)
-    .join("|")
-  const relayErrorNames = data.relayErrors
-    .map((error) => error.relayName)
-    .join(", ")
-
-  React.useEffect(() => {
-    if (!relayErrorKey) return
-    showToast({
-      id: "database-inventory-relay-errors",
-      message: `${relayErrorNames} could not report database inventory`,
-      type: "warning",
-    })
-  }, [relayErrorKey, relayErrorNames])
 
   return (
     <div className="mx-auto flex h-full min-h-[34rem] w-full max-w-[90rem] flex-col px-3 pb-3 sm:px-5 sm:pb-5">
@@ -176,7 +180,6 @@ export const DatabasesPage = React.memo(function DatabasesPage({
         toolbar={
           <DatabaseToolbar
             canCreate={canCreate}
-            relayErrors={data.relayErrors}
             searchStore={searchStore}
             onCreate={openCreate}
           />
@@ -231,19 +234,13 @@ export const DatabasesPage = React.memo(function DatabasesPage({
   )
 })
 
-function selectDatabasePageMeta(data: ManagedDatabaseOverview) {
-  return { relayErrors: data.relayErrors, relays: data.relays }
-}
-
 const DatabaseToolbar = React.memo(function DatabaseToolbar({
   canCreate,
   onCreate,
-  relayErrors,
   searchStore,
 }: {
   canCreate: boolean
   onCreate: () => void
-  relayErrors: ManagedDatabaseOverview["relayErrors"]
   searchStore: DataTableSearchStore
 }) {
   return (
@@ -256,7 +253,7 @@ const DatabaseToolbar = React.memo(function DatabaseToolbar({
         ) : null
       }
       controls={<FavoritesOnlyButton table="databases" />}
-      leading={<DatabaseSyncButton relayErrors={relayErrors} />}
+      leading={<DatabaseSyncButton />}
       search={{
         ariaLabel: "Search databases",
         closeMobileWhenEmpty: true,
@@ -269,12 +266,8 @@ const DatabaseToolbar = React.memo(function DatabaseToolbar({
   )
 })
 
-const DatabaseSyncButton = React.memo(function DatabaseSyncButton({
-  relayErrors,
-}: {
-  relayErrors: ManagedDatabaseOverview["relayErrors"]
-}) {
-  const dbClient = useDbClient()
+const DatabaseSyncButton = React.memo(function DatabaseSyncButton() {
+  const queryClient = useQueryClient()
   const [syncing, setSyncing] = React.useState(false)
   const syncingRef = React.useRef(false)
   const feedbackTimeoutRef = React.useRef<number>(undefined)
@@ -298,10 +291,7 @@ const DatabaseSyncButton = React.memo(function DatabaseSyncButton({
 
     forkPromise(() =>
       ensuringPromise(
-        () =>
-          getManagedDatabasesCollection(dbClient).utils.refetch({
-            throwOnError: true,
-          }),
+        () => refreshInfraTable(queryClient, "database"),
         () => {
           if (!mountedRef.current) return
           const elapsed = performance.now() - startedAt
@@ -314,7 +304,7 @@ const DatabaseSyncButton = React.memo(function DatabaseSyncButton({
         }
       )
     )
-  }, [dbClient])
+  }, [queryClient])
 
   return (
     <Tooltip>
@@ -331,11 +321,7 @@ const DatabaseSyncButton = React.memo(function DatabaseSyncButton({
           <RefreshCw className={syncing ? "animate-spin" : ""} />
         </Button>
       </TooltipTrigger>
-      <TooltipContent side="bottom">
-        {relayErrors.length > 0
-          ? `Inventory unavailable from ${relayErrors.map((error) => error.relayName).join(", ")}. Sync again.`
-          : "Sync databases"}
-      </TooltipContent>
+      <TooltipContent side="bottom">Sync databases</TooltipContent>
     </Tooltip>
   )
 })
@@ -352,17 +338,25 @@ const DatabaseTable = React.memo(function DatabaseTable({
   searchStore: DataTableSearchStore
 }) {
   const dbClient = useDbClient()
-  const collection = getManagedDatabasesCollection(dbClient)
+  const collection = getInfraDatabasesCollection(dbClient)
   const result = useLiveQuery(collection)
   const retry = React.useCallback(() => {
     forkPromise(() => collection.utils.refetch({ throwOnError: true }))
   }, [collection])
-  const source = useLiveDataTableSource<ManagedDatabase>({
-    data: result.data,
+  const detailQuery = useQuery({
+    ...managedDatabasesQueryOptions(),
+    enabled: Boolean(result.data?.length) && typeof window !== "undefined",
+    staleTime: 0,
+    gcTime: 0,
+    refetchOnMount: "always",
+  })
+  const details = useInfraDetails(detailQuery, detailQuery.data?.databases)
+  const source = useInfraTableSource({
+    directory: result,
+    reference: databaseReference,
     error: databaseInventoryError,
-    isError: result.isError,
-    isLoading: result.isLoading,
     retry,
+    details,
   })
   const [favoritesOnly] = useFavoritesOnly("databases")
   const visibleSource = useFavoritesOnlySource(
@@ -386,13 +380,14 @@ const DatabaseTable = React.memo(function DatabaseTable({
   const definition = React.useMemo(() => {
     const columns = databaseTableColumnHelper.columns([
       databaseTableColumnHelper.accessor(
-        (database) => databaseStatusPresentation(database).label,
+        (database) => database.instanceStatus,
         {
           id: "status",
           header: () => <span className="sr-only sm:not-sr-only">Status</span>,
           sortFn: "text",
           cell: ({ row }) => (
             <InstanceStatus
+              state={row.original.instanceState}
               instance={{
                 kind: "database",
                 id: row.original.id,
@@ -444,6 +439,7 @@ const DatabaseTable = React.memo(function DatabaseTable({
                 className="group/database-link flex min-h-14 min-w-0 flex-1 items-center outline-none focus-visible:ring-2 focus-visible:ring-ring/40 focus-visible:ring-inset"
               >
                 <InstanceCard
+                  state={database.instanceState}
                   className="min-w-0 flex-1"
                   instance={{
                     id: database.id,
@@ -500,9 +496,20 @@ const DatabaseTable = React.memo(function DatabaseTable({
         id: "actions",
         header: () => <span className="sr-only">Actions</span>,
         enableSorting: false,
-        cell: ({ row }) => (
-          <DatabaseActions database={row.original} onDialog={onDialog} />
-        ),
+        cell: ({ row }) =>
+          row.original.detailPhase === "ready" && row.original.detail ? (
+            <DatabaseActions
+              database={row.original.detail}
+              state={row.original.instanceState}
+              onDialog={onDialog}
+            />
+          ) : (
+            <span className="type-meta text-muted-foreground">
+              {row.original.detailPhase === "error"
+                ? "Unavailable"
+                : "Checking"}
+            </span>
+          ),
         meta: dataTableColumnMeta(
           { width: { base: "8.5rem", sm: "9.5rem" } },
           {
@@ -557,9 +564,11 @@ const DatabaseTable = React.memo(function DatabaseTable({
 
 const DatabaseActions = React.memo(function DatabaseActions({
   database,
+  state,
   onDialog,
 }: {
   database: ManagedDatabase
+  state: import("@/lib/instance-state").InstanceState
   onDialog: (dialog: DatabaseDialog) => void
 }) {
   const queryClient = useQueryClient()
@@ -585,8 +594,12 @@ const DatabaseActions = React.memo(function DatabaseActions({
     (permission: AccessPermission) => database.permissions.includes(permission),
     [database.permissions]
   )
-  const running = database.observedState === "running"
-  const available = databaseRelayAvailable(database)
+  const running =
+    state.phase === "ready" && state.observation.runtime === "running"
+  const available =
+    state.phase === "ready" &&
+    state.observation.reachability === "connected" &&
+    state.observation.inventory === "available"
   const busy = action.isPending || exportDump.isPending
   const canExport =
     available &&
@@ -897,10 +910,13 @@ function EmptyDatabaseTable({
   )
 }
 
-function databaseRowKey(database: ManagedDatabase): string {
+function databaseRowKey(database: { id: string; relayId: string }): string {
   return `${database.relayId}:${database.id}`
 }
 
-function databaseFavorite(database: ManagedDatabase): InstanceFavorite {
+function databaseFavorite(database: {
+  id: string
+  relayId: string
+}): InstanceFavorite {
   return { id: database.id, kind: "database", relayId: database.relayId }
 }

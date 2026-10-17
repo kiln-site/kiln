@@ -548,7 +548,7 @@ function connectionWithCanonicalSnapshot(
 export function managedDatabaseDirectoryQueryOptions() {
   return queryOptions({
     queryKey: queryKeys.databases.directory,
-    queryFn: () => getManagedDatabaseDirectory(),
+    queryFn: ({ signal }) => getManagedDatabaseDirectory({ signal }),
     refetchOnWindowFocus: false,
     staleTime: 30_000,
   })
@@ -557,7 +557,7 @@ export function managedDatabaseDirectoryQueryOptions() {
 export function managedDatabasesQueryOptions() {
   return queryOptions({
     queryKey: queryKeys.databases.list,
-    queryFn: ({ client }) => fetchManagedDatabases(client),
+    queryFn: ({ client, signal }) => fetchManagedDatabases(client, signal),
     refetchOnWindowFocus: "always",
     staleTime: 5_000,
   })
@@ -567,8 +567,11 @@ export function managedDatabasesQueryOptions() {
  * Inventory responses can resolve after newer Relay status events, so the
  * live Relay status from the connection cache is reapplied to every result.
  */
-export async function fetchManagedDatabases(queryClient: QueryClient) {
-  const overview = await getManagedDatabases()
+export async function fetchManagedDatabases(
+  queryClient: QueryClient,
+  signal?: AbortSignal
+) {
+  const overview = await getManagedDatabases({ signal })
   const statuses = liveRelayStatuses(queryClient)
   return statuses
     ? withInventoryRelayStatus(overview, "databases", statuses)
@@ -578,7 +581,7 @@ export async function fetchManagedDatabases(queryClient: QueryClient) {
 export function appDirectoryQueryOptions() {
   return queryOptions({
     queryKey: queryKeys.apps.directory,
-    queryFn: () => getAppDirectory(),
+    queryFn: ({ signal }) => getAppDirectory({ signal }),
     refetchOnWindowFocus: false,
     staleTime: 30_000,
   })
@@ -587,7 +590,7 @@ export function appDirectoryQueryOptions() {
 export function appsQueryOptions() {
   return queryOptions({
     queryKey: queryKeys.apps.list,
-    queryFn: ({ client }) => fetchApps(client),
+    queryFn: ({ client, signal }) => fetchApps(client, signal),
     refetchOnWindowFocus: "always",
     // Deployments run on the Relay; follow them until they finish.
     refetchInterval: (query) =>
@@ -598,8 +601,11 @@ export function appsQueryOptions() {
   })
 }
 
-export async function fetchApps(queryClient: QueryClient) {
-  const overview = await getApps()
+export async function fetchApps(
+  queryClient: QueryClient,
+  signal?: AbortSignal
+) {
+  const overview = await getApps({ signal })
   const statuses = liveRelayStatuses(queryClient)
   return statuses
     ? withInventoryRelayStatus(overview, "apps", statuses)

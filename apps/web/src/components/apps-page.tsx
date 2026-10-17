@@ -1,6 +1,8 @@
+import type { getAppDirectory } from "@/server/apps"
 import * as React from "react"
 import { useDbClient, useLiveQuery } from "@tanstack/react-db"
 import {
+  useQuery,
   useMutation,
   useQueryClient,
   useSuspenseQuery,
@@ -44,7 +46,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@workspace/ui/components/select"
-import { showToast } from "@workspace/ui/components/sonner"
 import {
   Tooltip,
   TooltipContent,
@@ -52,8 +53,6 @@ import {
 } from "@workspace/ui/components/tooltip"
 
 import {
-  appRelayAvailable,
-  appStatusPresentation,
   showAppOperationError,
   type App,
   type AppOverview,
@@ -81,7 +80,7 @@ import {
 import { InstanceCard, InstanceStatus } from "@/components/instance-card"
 import { statusColumnWidth } from "@/components/instance-name-presentation"
 import { ensuringPromise, forkPromise } from "@/effect/promise"
-import { getAppsCollection } from "@/lib/collections/apps"
+import { getInfraAppsCollection } from "@/lib/collections/infra-directories"
 import {
   createDataTableColumnHelper,
   dataTableColumnMeta,
@@ -91,25 +90,45 @@ import {
   replaceDataTableUrlSearch,
   type DataTableSearchStore,
 } from "@/lib/data-table-search"
-import { useLiveDataTableSource } from "@/lib/data-table-source"
+import {
+  useInfraTableSource,
+  useInfraDetails,
+  type InfraInstanceRow,
+} from "@/lib/infra-table-source"
+import {
+  infraRelayOptionsQueryOptions,
+  refreshInfraTable,
+} from "@/lib/infra-directory"
 import type { InstanceFavorite } from "@/lib/instance-favorites"
 import { appsQueryOptions, queryKeys } from "@/lib/query-options"
 import { createApp, deployApp, runAppAction } from "@/server/apps"
 
 type AppRelay = AppOverview["relays"][number]
 
+type AppDirectory = Awaited<ReturnType<typeof getAppDirectory>>[number]
+type AppDirectoryRow = InfraInstanceRow<AppDirectory, App>
+const appReference = (row: AppDirectory) => ({
+  kind: "app" as const,
+  id: row.id,
+  relayId: row.relayId,
+})
+
 const appInventoryError = new Error("Could not load apps")
 const minimumManualSyncFeedbackMs = 500
-const appTableColumnHelper = createDataTableColumnHelper<App>()
+const appTableColumnHelper = createDataTableColumnHelper<AppDirectoryRow>()
 const appTableSearchFields = [
-  (app: App) => app.name,
-  (app: App) => app.id,
-  (app: App) => app.shortId,
-  (app: App) => app.hostname,
-  (app: App) => app.relayId,
-  (app: App) => app.relayName,
-  (app: App) => app.containers.map((container) => container.name).join(" "),
-  (app: App) => app.containers.map((container) => container.image).join(" "),
+  (row: AppDirectoryRow) => row.name,
+  (row: AppDirectoryRow) => row.id,
+  (row: AppDirectoryRow) => row.shortId,
+  (row: AppDirectoryRow) => row.relayId,
+  (row: AppDirectoryRow) => row.relayName,
+  (row: AppDirectoryRow) => row.instanceStatus,
+  (row: AppDirectoryRow) =>
+    row.detailPhase === "ready"
+      ? row.detail?.containers
+          .map((container) => `${container.name} ${container.image}`)
+          .join(" ")
+      : undefined,
 ] as const
 
 export const AppsPage = React.memo(function AppsPage({
@@ -117,29 +136,11 @@ export const AppsPage = React.memo(function AppsPage({
 }: {
   searchStore: DataTableSearchStore
 }) {
-  const { data } = useSuspenseQuery({
-    ...appsQueryOptions(),
-    select: selectAppPageMeta,
-  })
+  const { data } = useSuspenseQuery(infraRelayOptionsQueryOptions("app"))
   const [createOpen, setCreateOpen] = React.useState(false)
   const [deleting, setDeleting] = React.useState<App | null>(null)
   const openCreate = React.useCallback(() => setCreateOpen(true), [])
   const canCreate = data.relays.some((relay) => relay.canCreate)
-  const relayErrorKey = data.relayErrors
-    .map((error) => `${error.relayId}:${error.message}`)
-    .join("|")
-  const relayErrorNames = data.relayErrors
-    .map((error) => error.relayName)
-    .join(", ")
-
-  React.useEffect(() => {
-    if (!relayErrorKey) return
-    showToast({
-      id: "app-inventory-relay-errors",
-      message: `${relayErrorNames} could not report app inventory`,
-      type: "warning",
-    })
-  }, [relayErrorKey, relayErrorNames])
 
   return (
     <div className="mx-auto flex h-full min-h-[34rem] w-full max-w-[90rem] flex-col px-3 pb-3 sm:px-5 sm:pb-5">
@@ -147,7 +148,6 @@ export const AppsPage = React.memo(function AppsPage({
         toolbar={
           <AppToolbar
             canCreate={canCreate}
-            relayErrors={data.relayErrors}
             searchStore={searchStore}
             onCreate={openCreate}
           />
@@ -178,19 +178,13 @@ export const AppsPage = React.memo(function AppsPage({
   )
 })
 
-function selectAppPageMeta(data: AppOverview) {
-  return { relayErrors: data.relayErrors, relays: data.relays }
-}
-
 const AppToolbar = React.memo(function AppToolbar({
   canCreate,
   onCreate,
-  relayErrors,
   searchStore,
 }: {
   canCreate: boolean
   onCreate: () => void
-  relayErrors: AppOverview["relayErrors"]
   searchStore: DataTableSearchStore
 }) {
   return (
@@ -203,7 +197,7 @@ const AppToolbar = React.memo(function AppToolbar({
         ) : null
       }
       controls={<FavoritesOnlyButton table="apps" />}
-      leading={<AppSyncButton relayErrors={relayErrors} />}
+      leading={<AppSyncButton />}
       search={{
         ariaLabel: "Search apps",
         closeMobileWhenEmpty: true,
@@ -216,12 +210,8 @@ const AppToolbar = React.memo(function AppToolbar({
   )
 })
 
-const AppSyncButton = React.memo(function AppSyncButton({
-  relayErrors,
-}: {
-  relayErrors: AppOverview["relayErrors"]
-}) {
-  const dbClient = useDbClient()
+const AppSyncButton = React.memo(function AppSyncButton() {
+  const queryClient = useQueryClient()
   const [syncing, setSyncing] = React.useState(false)
   const syncingRef = React.useRef(false)
   const feedbackTimeoutRef = React.useRef<number>(undefined)
@@ -244,7 +234,7 @@ const AppSyncButton = React.memo(function AppSyncButton({
     const startedAt = performance.now()
     forkPromise(() =>
       ensuringPromise(
-        () => getAppsCollection(dbClient).utils.refetch({ throwOnError: true }),
+        () => refreshInfraTable(queryClient, "app"),
         () => {
           if (!mountedRef.current) return
           const elapsed = performance.now() - startedAt
@@ -257,7 +247,7 @@ const AppSyncButton = React.memo(function AppSyncButton({
         }
       )
     )
-  }, [dbClient])
+  }, [queryClient])
 
   return (
     <Tooltip>
@@ -274,11 +264,7 @@ const AppSyncButton = React.memo(function AppSyncButton({
           <RefreshCw className={syncing ? "animate-spin" : ""} />
         </Button>
       </TooltipTrigger>
-      <TooltipContent side="bottom">
-        {relayErrors.length > 0
-          ? `Inventory unavailable from ${relayErrors.map((error) => error.relayName).join(", ")}. Sync again.`
-          : "Sync apps"}
-      </TooltipContent>
+      <TooltipContent side="bottom">Sync apps</TooltipContent>
     </Tooltip>
   )
 })
@@ -295,17 +281,25 @@ const AppTable = React.memo(function AppTable({
   searchStore: DataTableSearchStore
 }) {
   const dbClient = useDbClient()
-  const collection = getAppsCollection(dbClient)
+  const collection = getInfraAppsCollection(dbClient)
   const result = useLiveQuery(collection)
   const retry = React.useCallback(() => {
     forkPromise(() => collection.utils.refetch({ throwOnError: true }))
   }, [collection])
-  const source = useLiveDataTableSource<App>({
-    data: result.data,
+  const detailQuery = useQuery({
+    ...appsQueryOptions(),
+    enabled: Boolean(result.data?.length) && typeof window !== "undefined",
+    staleTime: 0,
+    gcTime: 0,
+    refetchOnMount: "always",
+  })
+  const details = useInfraDetails(detailQuery, detailQuery.data?.apps)
+  const source = useInfraTableSource({
+    directory: result,
+    reference: appReference,
     error: appInventoryError,
-    isError: result.isError,
-    isLoading: result.isLoading,
     retry,
+    details,
   })
   const [favoritesOnly] = useFavoritesOnly("apps")
   const visibleSource = useFavoritesOnlySource(
@@ -319,12 +313,13 @@ const AppTable = React.memo(function AppTable({
   }))
   const definition = React.useMemo(() => {
     const columns = appTableColumnHelper.columns([
-      appTableColumnHelper.accessor((app) => appStatusPresentation(app).label, {
+      appTableColumnHelper.accessor((app) => app.instanceStatus, {
         id: "status",
         header: () => <span className="sr-only sm:not-sr-only">Status</span>,
         sortFn: "text",
         cell: ({ row }) => (
           <InstanceStatus
+            state={row.original.instanceState}
             instance={{
               kind: "app",
               id: row.original.id,
@@ -374,6 +369,7 @@ const AppTable = React.memo(function AppTable({
               className="group/app-link flex min-h-14 w-full min-w-0 items-center outline-none focus-visible:ring-2 focus-visible:ring-ring/40 focus-visible:ring-inset"
             >
               <InstanceCard
+                state={app.instanceState}
                 className="min-w-0 flex-1"
                 instance={{ id: app.id, kind: "app", relayId: app.relayId }}
                 name={app.name}
@@ -389,12 +385,12 @@ const AppTable = React.memo(function AppTable({
           width: { base: "minmax(0,1fr)", md: "minmax(0,1.5fr)" },
         }),
       }),
-      appTableColumnHelper.accessor((app) => appContainersLabel(app), {
+      appTableColumnHelper.accessor((app) => appRowContainersLabel(app), {
         id: "containers",
         header: "Containers",
         sortFn: "text",
         cell: ({ row }) => (
-          <DataTableTextCell value={appContainersLabel(row.original)} />
+          <DataTableTextCell value={appRowContainersLabel(row.original)} />
         ),
         meta: dataTableColumnMeta({ hideBelow: "md", width: "9rem" }),
       }),
@@ -412,9 +408,20 @@ const AppTable = React.memo(function AppTable({
         id: "actions",
         header: () => <span className="sr-only">Actions</span>,
         enableSorting: false,
-        cell: ({ row }) => (
-          <AppActions app={row.original} onDelete={onDelete} />
-        ),
+        cell: ({ row }) =>
+          row.original.detailPhase === "ready" && row.original.detail ? (
+            <AppActions
+              app={row.original.detail}
+              state={row.original.instanceState}
+              onDelete={onDelete}
+            />
+          ) : (
+            <span className="type-meta text-muted-foreground">
+              {row.original.detailPhase === "error"
+                ? "Unavailable"
+                : "Checking"}
+            </span>
+          ),
         meta: dataTableColumnMeta(
           { width: { base: "6.5rem", sm: "7.5rem" } },
           { cellClassName: "px-1 sm:px-3", headerClassName: "px-1 sm:px-3" }
@@ -457,9 +464,11 @@ const AppTable = React.memo(function AppTable({
 
 const AppActions = React.memo(function AppActions({
   app,
+  state,
   onDelete,
 }: {
   app: App
+  state: import("@/lib/instance-state").InstanceState
   onDelete: (app: App) => void
 }) {
   const queryClient = useQueryClient()
@@ -479,10 +488,14 @@ const AppActions = React.memo(function AppActions({
     onSuccess: invalidate,
     onError: (error) => showAppOperationError("App action failed", error),
   })
-  const available = appRelayAvailable(app)
+  const available =
+    state.phase === "ready" &&
+    state.observation.reachability === "connected" &&
+    state.observation.inventory === "available"
   const canManage = available && app.permissions.includes("app.manage")
   const deploying = app.deployment?.state === "running"
-  const running = app.observedState === "running"
+  const running =
+    state.phase === "ready" && state.observation.runtime === "running"
   const busy = deploy.isPending || action.isPending
 
   return (
@@ -759,16 +772,27 @@ function EmptyAppTable({
   )
 }
 
-function appContainersLabel(app: App): string {
+function appContainersLabel(app: Pick<App, "containers">): string {
   if (app.containers.length === 0) return "Not deployed"
   const running = app.containers.filter((container) => container.running)
   return `${running.length} of ${app.containers.length} running`
 }
 
-function appRowKey(app: App): string {
+function appRowKey(app: { id: string; relayId: string }): string {
   return `${app.relayId}:${app.id}`
 }
 
-function appFavorite(app: App): InstanceFavorite {
+function appFavorite(app: { id: string; relayId: string }): InstanceFavorite {
   return { id: app.id, kind: "app", relayId: app.relayId }
+}
+
+function appRowContainersLabel(row: AppDirectoryRow): string {
+  if (row.detailPhase === "checking") return "Checking"
+  if (
+    row.detailPhase === "error" ||
+    !row.detail ||
+    row.detail.inventoryStatus === "unavailable"
+  )
+    return "Unavailable"
+  return appContainersLabel(row.detail)
 }

@@ -2,7 +2,7 @@ import { createFileRoute } from "@tanstack/react-router"
 import { z } from "zod"
 
 import { DatabasesPage } from "@/components/databases-page"
-import { getManagedDatabasesCollection } from "@/lib/collections/managed-databases"
+import { getInfraDatabasesCollection } from "@/lib/collections/infra-directories"
 import {
   DATA_TABLE_SEARCH_MAX_LENGTH,
   useDataTableSearchStore,
@@ -23,7 +23,7 @@ export const Route = createFileRoute("/_app/infra/databases")({
     )
   },
   loader: async ({ context }) => {
-    await getManagedDatabasesCollection(context.dbClient).preload()
+    await getInfraDatabasesCollection(context.dbClient).preload()
   },
   head: () => ({ meta: [{ title: pageTitle("Databases") }] }),
   component: InfraDatabasesRoute,

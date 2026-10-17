@@ -53,6 +53,7 @@ import { publishRealtimeChange } from "@/lib/realtime-source.server"
 import { isRelayUpdating } from "@/lib/relay-connection"
 import { listPersistedRelays } from "@/lib/relay-registry"
 import { requireEligibleResourceUser } from "@/server/auth"
+import { readRelayInventories } from "@/server/infra-inventory.server"
 import {
   authorizedDatabase,
   databaseRpc,
@@ -203,13 +204,8 @@ export const getManagedDatabases = createServerFn({ method: "GET" }).handler(
         "managedDatabases.records",
         listManagedDatabaseRecordsEffect()
       ),
-      Promise.allSettled(
-        readableRelays.map(async (relay) => ({
-          databases: z
-            .array(relayManagedDatabaseSchema)
-            .parse(await databaseRpc(relay, "database.list", {}, 15_000)),
-          relay,
-        }))
+      readRelayInventories(readableRelays, "database.list", (value) =>
+        z.array(relayManagedDatabaseSchema).parse(value)
       ),
     ])
     const recordsById = new Map(
@@ -247,7 +243,7 @@ export const getManagedDatabases = createServerFn({ method: "GET" }).handler(
         }
         const { relay } = result.value
         inventoryByRelay.set(relay.id, "available")
-        return result.value.databases.flatMap((database) => {
+        return result.value.inventory.flatMap((database) => {
           const permissions = databasePermissions.filter((permission) =>
             hasDatabasePermission(
               user,
