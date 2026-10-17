@@ -7,10 +7,12 @@ import {
   AppRouterErrorBoundary,
 } from "@/components/app-error-page"
 import { createAppClients } from "@/lib/query-client"
+import { trackServerTiming } from "@/lib/server-timing"
 import { routeTree } from "./routeTree.gen"
 
 export function getRouter() {
   const { dbClient, queryClient } = createAppClients()
+  if (import.meta.env.SSR) trackServerTiming(queryClient)
   const router = createTanStackRouter({
     routeTree,
     context: { dbClient, queryClient },

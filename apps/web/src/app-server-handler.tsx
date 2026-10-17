@@ -8,6 +8,7 @@ import {
 } from "@tanstack/react-router/ssr/server"
 
 import { AppRouterApplication } from "@/components/app-router-application"
+import { serverTimingHeader } from "@/lib/server-timing"
 
 function HearthStartServer({ router }: { router: AnyRouter }) {
   return (
@@ -18,11 +19,14 @@ function HearthStartServer({ router }: { router: AnyRouter }) {
 }
 
 export const hearthStreamHandler = defineHandlerCallback(
-  ({ request, router, responseHeaders }) =>
-    renderRouterToStream({
+  ({ request, router, responseHeaders }) => {
+    const timing = serverTimingHeader(router.options.context.queryClient)
+    if (timing) responseHeaders.set("Server-Timing", timing)
+    return renderRouterToStream({
       request,
       router,
       responseHeaders,
       children: <HearthStartServer router={router} />,
     })
+  }
 )
