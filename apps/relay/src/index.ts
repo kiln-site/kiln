@@ -12,6 +12,7 @@ import { hostname } from "node:os"
 import { Effect, Schema, Semaphore } from "effect"
 
 import {
+  RelayInventoryLookupSchema,
   backupTaskIdSchema,
   backupTaskInputSchema,
   redactRelayBackupTask,
@@ -1663,7 +1664,14 @@ async function executeControlRequest(
       }
     }
     case "database.list":
-      return databases.list()
+      // Hearth's tables ask for specific views; older Hearths, for the list.
+      return "requests" in payload
+        ? databases.inventory(
+            Schema.decodeUnknownSync(RelayInventoryLookupSchema)(payload)
+              .requests,
+            signal
+          )
+        : databases.list()
     case "database.inspect":
       return databases.inspect(
         relayDatabaseInspectRequestSchema.parse(request.payload).databaseId
@@ -1769,7 +1777,14 @@ async function executeControlRequest(
       )
     }
     case "app.list":
-      return apps.list()
+      // Hearth's tables ask for specific views; older Hearths, for the list.
+      return "requests" in payload
+        ? apps.inventory(
+            Schema.decodeUnknownSync(RelayInventoryLookupSchema)(payload)
+              .requests,
+            signal
+          )
+        : apps.list()
     case "app.create":
       return apps.create(relayCreateAppSchema.parse(request.payload))
     case "app.delete": {

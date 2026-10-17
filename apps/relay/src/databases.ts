@@ -12,6 +12,9 @@ import type {
   RelayDeleteDatabase,
   RelayManagedDatabase,
   RelayRotateDatabaseCredentials,
+  InstanceObservedState,
+  RelayInventoryLookup,
+  RelayInventoryItem,
 } from "@workspace/contracts"
 import {
   databaseEngineSupportsLogicalBackups,
@@ -21,6 +24,7 @@ import {
 import { Effect, Option, Result, Semaphore } from "effect"
 
 import { promiseEffect } from "./effect/promise.js"
+import { traceRelayPromise } from "./effect/runtime.js"
 import type { DatabaseConnections } from "./database-connections.js"
 import type { RelayConfig } from "./config.js"
 import type { DockerDriver } from "./docker.js"
@@ -36,6 +40,16 @@ import {
   type DockerExecProcess,
 } from "./docker-engine.js"
 import { relayOwnerLabel, relayOwnsLabels } from "./relay-resources.js"
+
+function databaseObservedState(
+  container: DatabaseContainerInspect
+): InstanceObservedState {
+  if (container.State.Running) {
+    if (container.State.Health?.Status === "starting") return "starting"
+    return container.State.Health?.Status === "unhealthy" ? "failed" : "running"
+  }
+  return container.State.ExitCode === 0 ? "stopped" : "failed"
+}
 
 const DATABASE_KIND_LABEL = "kiln.resource.kind"
 const DATABASE_KIND = "database"
@@ -178,6 +192,45 @@ export class DatabaseDriver {
     const containers = await this.#discover()
     return Promise.all(
       containers.map((container) => this.#toManagedDatabase(container))
+    )
+  }
+
+  /** Only the requested views of the requested databases. */
+  inventory(
+    requests: RelayInventoryLookup["requests"],
+    signal: AbortSignal
+  ): Promise<Array<RelayInventoryItem>> {
+    return traceRelayPromise(
+      "Databases.inventory",
+      async () => {
+        const containers = await this.#discover(
+          [...new Set(requests.map((request) => request.id))],
+          signal
+        )
+        const byId = new Map(
+          containers.map((container) => [
+            requiredLabel(container.Config.Labels ?? {}, "kiln.database.id"),
+            container,
+          ])
+        )
+        const items = await Promise.all(
+          requests.map(async ({ id, view }) => {
+            const container = byId.get(id)
+            if (!container) return []
+            const item: RelayInventoryItem = {
+              id,
+              view,
+              observedState: databaseObservedState(container),
+            }
+            // Only the detail view needs the network's attached containers.
+            if (view === "detail")
+              item.database = await this.#toManagedDatabase(container, signal)
+            return [item]
+          })
+        )
+        return items.flat()
+      },
+      { "database.count": requests.length }
     )
   }
 
@@ -595,7 +648,10 @@ export class DatabaseDriver {
     return container
   }
 
-  async #discover(): Promise<Array<DatabaseContainerInspect>> {
+  async #discover(
+    ids?: ReadonlyArray<string>,
+    signal?: AbortSignal
+  ): Promise<Array<DatabaseContainerInspect>> {
     const engine = this.#engine
     const config = this.#config
     return Effect.runPromise(
@@ -606,15 +662,20 @@ export class DatabaseDriver {
         })
         return yield* engine.inspectContainers<DatabaseContainerInspect>(
           listed.flatMap((container) =>
-            relayOwnsLabels(config, container.Labels) ? [container.Id] : []
+            relayOwnsLabels(config, container.Labels) &&
+            (!ids || ids.includes(container.Labels?.["kiln.database.id"] ?? ""))
+              ? [container.Id]
+              : []
           )
         )
-      })
+      }),
+      { signal }
     )
   }
 
   async #toManagedDatabase(
-    container: DatabaseContainerInspect
+    container: DatabaseContainerInspect,
+    signal?: AbortSignal
   ): Promise<RelayManagedDatabase> {
     const labels = container.Config.Labels ?? {}
     const id = requiredLabel(labels, "kiln.database.id")
@@ -622,22 +683,14 @@ export class DatabaseDriver {
       requiredLabel(labels, "kiln.database.engine")
     )
     const network = requiredLabel(labels, "kiln.database.network")
-    const attached = await this.#attachedContainers(network)
+    const attached = await this.#attachedContainers(network, signal)
     const connectedInstanceIds = attached.flatMap((candidate) => {
       const instanceId = candidate.Labels?.[this.#config.serverIdLabel]
       return instanceId?.match(/^[a-f0-9]{40}$/iu)
         ? [instanceId.toLowerCase()]
         : []
     })
-    const observedState = container.State.Running
-      ? container.State.Health?.Status === "starting"
-        ? "starting"
-        : container.State.Health?.Status === "unhealthy"
-          ? "failed"
-          : "running"
-      : container.State.ExitCode === 0
-        ? "stopped"
-        : "failed"
+    const observedState = databaseObservedState(container)
     const status = container.State.Running
       ? container.State.Health?.Status === "starting"
         ? "Initializing"
@@ -668,13 +721,15 @@ export class DatabaseDriver {
 
   // Listed containers carry their labels, so none is inspected.
   async #attachedContainers(
-    network: string
+    network: string,
+    signal?: AbortSignal
   ): Promise<ReadonlyArray<DockerContainerSummary>> {
     return Effect.runPromise(
       this.#engine.listContainers({
         all: true,
         filters: { network: [network] },
-      })
+      }),
+      { signal }
     )
   }
 

@@ -15,6 +15,8 @@ import type {
   RelayCreateApp,
   RelayDeleteApp,
   RelayDeployApp,
+  RelayInventoryLookup,
+  RelayInventoryItem,
 } from "@workspace/contracts"
 import { appServiceNameSchema, relayAppSchema } from "@workspace/contracts"
 import { Effect, Result, Semaphore } from "effect"
@@ -34,7 +36,12 @@ import {
   isDockerNotFound,
   type DockerEngineError,
 } from "./docker-engine.js"
-import { forkPromise, promiseEffect } from "./effect/promise.js"
+import {
+  ensuringPromise,
+  forkPromise,
+  promiseEffect,
+} from "./effect/promise.js"
+import { traceRelayPromise } from "./effect/runtime.js"
 import {
   APP_SERVICE,
   relayOwnerLabel,
@@ -149,6 +156,7 @@ export class AppDriver {
   readonly #deployments = new Map<string, Deployment>()
   // Apps whose latest deployment has been read back from disk this run.
   readonly #restored = new Set<string>()
+  readonly #restoring = new Map<string, Promise<void>>()
   // Wakes whatever follows an app when its deployment or containers change.
   readonly #waiters = new Map<string, Set<() => void>>()
   readonly #mutations = new Map<
@@ -190,6 +198,52 @@ export class AppDriver {
         containers.filter((container) => container.appId === id),
         host
       )
+    )
+  }
+
+  /** Only the requested views of the requested apps, for Hearth's tables. */
+  inventory(
+    requests: RelayInventoryLookup["requests"],
+    signal: AbortSignal
+  ): Promise<Array<RelayInventoryItem>> {
+    return traceRelayPromise(
+      "Apps.inventory",
+      async () => {
+        const ids = [...new Set(requests.map((request) => request.id))]
+        const [containers, networks, host] = await Promise.all([
+          this.#containers(undefined, ids, signal),
+          this.#networks(signal),
+          requests.some((request) => request.view === "detail")
+            ? this.#hostDataDirectory()
+            : "",
+          Promise.all(ids.map((id) => this.#restoreDeployment(id))),
+        ])
+        return requests.flatMap(({ id, view }): Array<RelayInventoryItem> => {
+          const owned = containers.filter((container) => container.appId === id)
+          if (!owned.length && !networks.includes(id)) return []
+          const { observedState } = this.#runtimeState(id, owned)
+          const common = { id, view, observedState }
+          if (view === "detail")
+            return [{ ...common, app: this.#toApp(id, owned, host) }]
+          if (view === "status") return [common]
+          return [
+            {
+              ...common,
+              table: {
+                containerSearchText: owned
+                  .map((container) => `${container.name} ${container.image}`)
+                  .join(" "),
+                containerCount: owned.length,
+                runningContainerCount: owned.filter(
+                  (container) => container.running
+                ).length,
+                deploying: this.#deployments.get(id)?.state === "running",
+              },
+            },
+          ]
+        })
+      },
+      { "app.count": requests.length }
     )
   }
 
@@ -571,10 +625,26 @@ export class AppDriver {
     )
   }
 
-  // The latest deployment from before the Relay restarted, if any.
-  async #restoreDeployment(appId: string) {
-    if (this.#restored.has(appId) || this.#deployments.has(appId)) return
-    this.#restored.add(appId)
+  // The latest deployment from before the Relay restarted, if any. Callers
+  // that arrive while it is being read share that read.
+  #restoreDeployment(appId: string): Promise<void> {
+    if (this.#restored.has(appId) || this.#deployments.has(appId))
+      return Promise.resolve()
+    let pending = this.#restoring.get(appId)
+    if (!pending) {
+      pending = ensuringPromise(
+        () => this.#readDeployment(appId),
+        () => {
+          this.#restored.add(appId)
+          this.#restoring.delete(appId)
+        }
+      )
+      this.#restoring.set(appId, pending)
+    }
+    return pending
+  }
+
+  async #readDeployment(appId: string) {
     const directory = this.#deploymentDirectory(appId)
     const restored = await Effect.runPromise(
       promiseEffect(async () => {
@@ -1172,11 +1242,7 @@ export class AppDriver {
     )
   }
 
-  #toApp(
-    id: string,
-    containers: ReadonlyArray<AppContainer>,
-    host: string
-  ): RelayApp {
+  #runtimeState(id: string, containers: ReadonlyArray<AppContainer>) {
     const deployment = this.#deployments.get(id) ?? null
     const running = containers.filter((container) => container.running)
     const unhealthy = running.some(
@@ -1211,6 +1277,16 @@ export class AppDriver {
                     `Exited with code ${failed[0]!.exitCode ?? "unknown"}`,
                   ] as const)
                 : (["stopped", "Stopped"] as const)
+    return { observedState, status }
+  }
+
+  #toApp(
+    id: string,
+    containers: ReadonlyArray<AppContainer>,
+    host: string
+  ): RelayApp {
+    const deployment = this.#deployments.get(id) ?? null
+    const { observedState, status } = this.#runtimeState(id, containers)
     const prefix = this.#databaseNetworkPrefix()
     const connectedDatabaseIds = [
       ...new Set(
@@ -1273,7 +1349,11 @@ export class AppDriver {
     )
   }
 
-  async #containers(appId?: string): Promise<Array<AppContainer>> {
+  async #containers(
+    appId?: string,
+    ids?: ReadonlyArray<string>,
+    signal?: AbortSignal
+  ): Promise<Array<AppContainer>> {
     const engine = this.#engine
     const inspected = await docker(
       engine
@@ -1288,10 +1368,17 @@ export class AppDriver {
         .pipe(
           Effect.flatMap((containers) =>
             engine.inspectContainers<ContainerInspect>(
-              containers.map((container) => container.Id)
+              containers
+                .filter(
+                  (container) =>
+                    relayOwnsLabels(this.#config, container.Labels) &&
+                    (!ids || ids.includes(container.Labels?.[ID_LABEL] ?? ""))
+                )
+                .map((container) => container.Id)
             )
           )
-        )
+        ),
+      signal
     )
     return inspected.flatMap((container) => this.#appContainer(container))
   }
@@ -1345,11 +1432,12 @@ export class AppDriver {
   }
 
   // App IDs with a network on this Relay: every app has one from creation.
-  async #networks(): Promise<Array<string>> {
+  async #networks(signal?: AbortSignal): Promise<Array<string>> {
     const networks = await docker(
       this.#engine.listNetworks({
         filters: { label: [`${KIND_LABEL}=${APP_KIND}`] },
-      })
+      }),
+      signal
     )
     return networks.flatMap(({ Labels: labels }) => {
       const id = labels?.[ID_LABEL]
@@ -1680,8 +1768,11 @@ function labelArguments(labels: Readonly<Record<string, string>>) {
   ])
 }
 
-function docker<A>(effect: Effect.Effect<A, DockerEngineError>): Promise<A> {
-  return Effect.runPromise(effect)
+function docker<A>(
+  effect: Effect.Effect<A, DockerEngineError>,
+  signal?: AbortSignal
+): Promise<A> {
+  return Effect.runPromise(effect, { signal })
 }
 
 function sleep(milliseconds: number, signal: AbortSignal): Promise<void> {

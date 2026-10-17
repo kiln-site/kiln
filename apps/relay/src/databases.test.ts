@@ -10,7 +10,11 @@ import { describe, expect, it, vi } from "vite-plus/test"
 vi.mock("./command.js", () => import("./test/docker.js"))
 
 import { fakeDocker } from "./test/docker.js"
-import { relayHarness, TEST_NAMESPACE, type RelayHarness } from "./test/relay.js"
+import {
+  relayHarness,
+  TEST_NAMESPACE,
+  type RelayHarness,
+} from "./test/relay.js"
 
 const serverId = "a".repeat(40)
 const password = "correct-horse-battery-staple-1"
@@ -43,6 +47,29 @@ const networkOf = (id: string) => `${TEST_NAMESPACE}-kiln-db-${id}-network`
 const volumeOf = (id: string) => `${TEST_NAMESPACE}-kiln-db-${id}-data`
 
 describe("managed database recovery metadata", () => {
+  it("keeps database connection details out of the status view and scopes detail reads to requested IDs", async () => {
+    const harness = await relayHarness()
+    const id = "d".repeat(40)
+    await createDatabase(harness, id)
+    await createDatabase(harness, "e".repeat(40))
+    const items = await harness.databases.inventory(
+      [
+        { id, view: "status" },
+        { id, view: "detail" },
+        { id: "f".repeat(40), view: "detail" },
+      ],
+      new AbortController().signal
+    )
+    expect(items).toEqual([
+      { id, view: "status", observedState: "running" },
+      {
+        id,
+        view: "detail",
+        observedState: "running",
+        database: expect.objectContaining({ id, connectedInstanceIds: [] }),
+      },
+    ])
+  })
   it("labels databases for recovery without putting credentials in labels", async () => {
     const harness = await relayHarness()
     const id = "d".repeat(40)
@@ -64,7 +91,11 @@ describe("managed database recovery metadata", () => {
     expect(container.env.POSTGRES_PASSWORD).toBe(password)
     // A fresh Relay recovers the database from Docker alone.
     const [recovered] = await (await harness.restart()).databases.list()
-    expect(recovered).toMatchObject({ engine: "postgres", id, observedState: "running" })
+    expect(recovered).toMatchObject({
+      engine: "postgres",
+      id,
+      observedState: "running",
+    })
   })
 
   it("gives databases that share an id prefix separate resources", async () => {
@@ -81,7 +112,10 @@ describe("managed database recovery metadata", () => {
     expect([...fakeDocker.networks.keys()]).toEqual(
       expect.arrayContaining([networkOf(first), networkOf(second)])
     )
-    expect([...fakeDocker.volumes.keys()]).toEqual([volumeOf(first), volumeOf(second)])
+    expect([...fakeDocker.volumes.keys()]).toEqual([
+      volumeOf(first),
+      volumeOf(second),
+    ])
   })
 })
 
@@ -267,7 +301,10 @@ describe("managed database deletion", () => {
     await createDatabase(harness, id)
     const removal = fakeDocker.hold({ command: "rm" })
 
-    const deleting = harness.databases.delete({ databaseId: id, deleteData: true })
+    const deleting = harness.databases.delete({
+      databaseId: id,
+      deleteData: true,
+    })
     await removal.reached
     fakeDocker.removeContainer(databaseContainer(id).name)
     removal.release()
@@ -344,7 +381,10 @@ describe("database mutation serialization", () => {
       target: databaseContainer(id).id,
     })
 
-    const deleting = harness.databases.delete({ databaseId: id, deleteData: true })
+    const deleting = harness.databases.delete({
+      databaseId: id,
+      deleteData: true,
+    })
     await removal.reached
     const connecting = harness.databases.updateNetwork({
       connected: true,

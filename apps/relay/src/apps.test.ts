@@ -27,6 +27,40 @@ import {
 
 const appId = "c".repeat(40)
 
+it("returns only requested App views, with table summaries separated from container details", async () => {
+  const harness = await createdApp()
+  await harness.apps.create({ id: "d".repeat(40), name: "Other app" })
+  const items = await harness.apps.inventory(
+    [
+      { id: appId, view: "status" },
+      { id: appId, view: "table" },
+      { id: appId, view: "detail" },
+      { id: "f".repeat(40), view: "detail" },
+    ],
+    new AbortController().signal
+  )
+  expect(items).toEqual([
+    { id: appId, view: "status", observedState: "stopped" },
+    {
+      id: appId,
+      view: "table",
+      observedState: "stopped",
+      table: {
+        containerSearchText: "",
+        containerCount: 0,
+        runningContainerCount: 0,
+        deploying: false,
+      },
+    },
+    {
+      id: appId,
+      view: "detail",
+      observedState: "stopped",
+      app: expect.objectContaining({ id: appId, containers: [] }),
+    },
+  ])
+})
+
 afterEach(() => {
   vi.useRealTimers()
   vi.unstubAllEnvs()
