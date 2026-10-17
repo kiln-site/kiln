@@ -43,6 +43,21 @@ const networkOf = (id: string) => `${TEST_NAMESPACE}-kiln-db-${id}-network`
 const volumeOf = (id: string) => `${TEST_NAMESPACE}-kiln-db-${id}-data`
 
 describe("managed database recovery metadata", () => {
+  it("reports current state for requested databases without returning another database or its connections", async () => {
+    const harness = await relayHarness()
+    const id = "d".repeat(40)
+    await createDatabase(harness, id)
+    await createDatabase(harness, "e".repeat(40))
+    databaseContainer(id).state.running = false
+    databaseContainer(id).state.exitCode = 1
+    expect(
+      await harness.databases.states(
+        [id, "f".repeat(40)],
+        new AbortController().signal
+      )
+    ).toEqual([{ id, observedState: "failed" }])
+  })
+
   it("labels databases for recovery without putting credentials in labels", async () => {
     const harness = await relayHarness()
     const id = "d".repeat(40)

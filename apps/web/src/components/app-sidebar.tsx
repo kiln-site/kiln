@@ -57,8 +57,7 @@ import {
   RouteCommandMenuProvider,
   RouteCommandMenuTrigger,
 } from "@/components/route-command-menu"
-import { InstanceName } from "@/components/instance-name"
-import { useRelayLiveStatus } from "@/components/relay/relay-presentation"
+import { InstanceCard } from "@/components/instance-card"
 import {
   InstancePickerContent,
   type InstancePickerItem,
@@ -1133,7 +1132,6 @@ const InstanceSelector = React.memo(function InstanceSelector({
                   id: instance.id,
                   implementation: instance.implementation,
                   kind: "server",
-                  observedState: instance.observedState,
                   relayId: instance.relayId,
                 }}
                 label="Switch game server."
@@ -1211,27 +1209,23 @@ const InstanceSelector = React.memo(function InstanceSelector({
 function SelectorInstanceName({
   instance,
   label,
-  live,
   meta,
   name,
 }: {
-  instance: React.ComponentProps<typeof InstanceName>["instance"]
+  instance: React.ComponentProps<typeof InstanceCard>["instance"]
   // Read before the name by screen readers, for example "Switch app."
   label: string
-  // False when the caller already tracks the instance's live status.
-  live?: boolean
   meta: string
   name: string
 }) {
   return (
     <>
       <span className="sr-only">{label} </span>
-      <InstanceName
+      <InstanceCard
         className="min-w-0 flex-1 gap-2 group-data-[collapsible=icon]:gap-0"
         iconClassName="border-sidebar-border/70 bg-background/25 text-sidebar-foreground/85 group-data-[collapsible=icon]:absolute group-data-[collapsible=icon]:inset-0 group-data-[collapsible=icon]:size-full group-data-[collapsible=icon]:rounded-none group-data-[collapsible=icon]:border-0 group-data-[collapsible=icon]:bg-transparent"
         iconSizeClassName="group-data-[collapsible=icon]:size-5!"
         instance={instance}
-        live={live}
         meta={meta}
         metaClassName="text-sidebar-muted-foreground"
         name={name}
@@ -1245,19 +1239,14 @@ function SelectorInstanceName({
 }
 
 function SelectorRelayName({ relay }: { relay: RelayDirectoryEntry }) {
-  const { relayStatus, updating } = useRelayLiveStatus(relay)
   return (
     <SelectorInstanceName
       instance={{
-        enabled: relay.enabled,
         id: relay.id,
         kind: "relay",
         relayId: relay.id,
-        relayStatus,
-        updating,
       }}
       label="Switch Relay."
-      live={false}
       meta={`${relay.nodeArch ?? "unknown"} · ${relay.id.slice(0, 8)}`}
       name={relay.name}
     />

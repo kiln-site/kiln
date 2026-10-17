@@ -30,7 +30,7 @@ import {
   InfoSectionLink,
 } from "@/components/info-page"
 import { InstanceFavoriteButton } from "@/components/instance-favorite"
-import { LiveServerBrickIcon } from "@/components/instance-name"
+import { LiveServerBrickIcon } from "@/components/server-brick-icon"
 import { RenameButton } from "@/components/rename-dialog"
 import { StatusIndicator } from "@/components/status-indicator"
 import { hostPortAddress } from "@/lib/domain-address"

@@ -12,6 +12,7 @@ import { hostname } from "node:os"
 import { Effect, Schema, Semaphore } from "effect"
 
 import {
+  InstanceStateLookupSchema,
   backupTaskIdSchema,
   backupTaskInputSchema,
   redactRelayBackupTask,
@@ -1662,8 +1663,14 @@ async function executeControlRequest(
         source,
       }
     }
-    case "database.list":
+    case "database.list": {
+      const input = Schema.decodeUnknownSync(InstanceStateLookupSchema)(payload)
+      if (input.stateOnly) {
+        if (!input.ids) throw new Error("State lookups require resource IDs")
+        return databases.states(input.ids, signal)
+      }
       return databases.list()
+    }
     case "database.inspect":
       return databases.inspect(
         relayDatabaseInspectRequestSchema.parse(request.payload).databaseId
@@ -1768,8 +1775,14 @@ async function executeControlRequest(
         input.cols
       )
     }
-    case "app.list":
+    case "app.list": {
+      const input = Schema.decodeUnknownSync(InstanceStateLookupSchema)(payload)
+      if (input.stateOnly) {
+        if (!input.ids) throw new Error("State lookups require resource IDs")
+        return apps.states(input.ids, signal)
+      }
       return apps.list()
+    }
     case "app.create":
       return apps.create(relayCreateAppSchema.parse(request.payload))
     case "app.delete": {

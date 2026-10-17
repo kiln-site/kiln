@@ -46,9 +46,9 @@ import { cn } from "@workspace/ui/lib/utils"
 
 import { ServerScopePicker } from "@/components/server-scope-picker"
 import {
-  InstanceName,
+  InstanceCard,
   type InstanceNameInstance,
-} from "@/components/instance-name"
+} from "@/components/instance-card"
 import {
   activityLocalRangeToUtc,
   activityTypes,
@@ -1732,7 +1732,7 @@ function ActivityWhereLink({
         relayId: entry.relay.id,
       }
   const identity = (
-    <InstanceName
+    <InstanceCard
       instance={instance}
       name={entry.server?.name ?? entry.relay.name}
       nameClassName="transition-colors group-hover/where-link:text-primary"

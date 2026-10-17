@@ -82,6 +82,16 @@ function appContainers() {
 }
 
 describe("apps", () => {
+  it("checks only requested app identities and distinguishes an undeployed app from a missing one", async () => {
+    const harness = await createdApp()
+    await harness.apps.create({ id: "d".repeat(40), name: "Other app" })
+    const states = await harness.apps.states(
+      [appId, "e".repeat(40)],
+      new AbortController().signal
+    )
+    expect(states).toEqual([{ id: appId, observedState: "stopped" }])
+  })
+
   it("deploys an image as one container named for the app and the time", async () => {
     const harness = await createdApp()
 

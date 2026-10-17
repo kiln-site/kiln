@@ -93,14 +93,13 @@ import {
   DataTableWorkspace,
 } from "@/components/data-table-workspace"
 import { IdentityName } from "@/components/identity-name"
-import { InstanceName } from "@/components/instance-name"
+import { InstanceCard, InstanceStatus } from "@/components/instance-card"
 import {
   relayStatusPresentation,
   statusColumnWidth,
   type RelayIdentityStatus,
 } from "@/components/instance-name-presentation"
 import { RelayMemoryCell } from "@/components/relay-memory-cell"
-import { StatusIndicator } from "@/components/status-indicator"
 import { UserAvatar } from "@/components/account-avatar"
 import { relaysCollectionOptions } from "@/lib/collections/relays"
 import {
@@ -638,7 +637,13 @@ function RelayTable({
           header: () => <span className="sr-only sm:not-sr-only">Status</span>,
           sortFn: "text",
           cell: ({ row }) => (
-            <StatusIndicator status={relayStatusPresentation(row.original)} />
+            <InstanceStatus
+              instance={{
+                kind: "relay",
+                id: row.original.id,
+                relayId: row.original.id,
+              }}
+            />
           ),
           meta: dataTableColumnMeta(
             { width: { base: "2.5rem", sm: statusColumnWidth } },
@@ -683,18 +688,9 @@ function RelayTable({
                 preload="intent"
                 className="group/relay-link flex min-h-14 min-w-0 flex-1 items-center outline-none focus-visible:ring-2 focus-visible:ring-ring/40 focus-visible:ring-inset"
               >
-                <InstanceName
+                <InstanceCard
                   className="min-w-0 flex-1"
-                  instance={{
-                    enabled: relay.enabled,
-                    id: relay.id,
-                    kind: "relay",
-                    relayId: relay.id,
-                    relayStatus: relay.relayStatus,
-                    source: "registry",
-                    updating: relay.updating,
-                  }}
-                  live={false}
+                  instance={{ id: relay.id, kind: "relay", relayId: relay.id }}
                   meta={
                     <span title={relay.id}>
                       {relay.nodeArch ?? "unknown"} <span aria-hidden>•</span>{" "}

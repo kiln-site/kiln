@@ -15,7 +15,7 @@ import {
 } from "@/components/database/database-presentation"
 import { useDatabaseWorkspace } from "@/components/database/database-workspace-context"
 import { CopyMetaRow, InfoCard, InfoCardHeader } from "@/components/info-card"
-import { InstanceName } from "@/components/instance-name"
+import { InstanceCard } from "@/components/instance-card"
 import { SettingsEmptyState } from "@/components/settings-panel"
 import { canAccessInstancePermission } from "@/lib/navigation-destinations"
 import {
@@ -122,7 +122,7 @@ function ConnectedServers({
           )
         const pending = pendingInstanceId === id
         const name = instance ? (
-          <InstanceName
+          <InstanceCard
             className="min-w-0 flex-1"
             instance={{
               brickId: instance.brickId,
@@ -130,7 +130,6 @@ function ConnectedServers({
               id: instance.id,
               implementation: instance.implementation,
               kind: "server",
-              observedState: instance.observedState,
               relayId: instance.relayId,
             }}
             meta={`${instance.implementation} ${instance.version} · ${instance.shortId}`}

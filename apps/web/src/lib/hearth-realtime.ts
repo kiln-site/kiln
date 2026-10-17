@@ -42,7 +42,7 @@ const hearthRealtimeQueryScopes = {
   ],
   activity: [prefix(["activity"])],
   "app-directory": [exact(queryKeys.apps.directory)],
-  apps: [prefix(["apps"])],
+  apps: [prefix(["apps"]), prefix(["instance-states", "app"])],
   "backup-settings": [
     prefix(["backups", "policy"]),
     prefix(["backups", "usage"]),
@@ -54,7 +54,10 @@ const hearthRealtimeQueryScopes = {
     exact(queryKeys.databases.directory),
     exact(queryKeys.schedules.options),
   ],
-  databases: [exact(queryKeys.databases.list)],
+  databases: [
+    exact(queryKeys.databases.list),
+    prefix(["instance-states", "database"]),
+  ],
   domains: [prefix(["domains"])],
   favorites: [exact(queryKeys.instanceFavorites)],
   "file-activity": [prefix(["file-activity"])],
@@ -62,9 +65,13 @@ const hearthRealtimeQueryScopes = {
   "instance-web-routes": [prefix(["web-routes"])],
   notifications: [exact(queryKeys.notifications)],
   preferences: [exact(queryKeys.uiPreferences)],
-  "relay-health": [exact(queryKeys.relays)],
+  "relay-health": [
+    exact(queryKeys.relays),
+    prefix(["instance-states", "relay"]),
+  ],
   "relay-proxy": [prefix(["relays", "proxy"])],
   relays: [
+    prefix(["instance-states"]),
     exact(queryKeys.relays),
     exact(queryKeys.databases.list),
     exact(queryKeys.databases.directory),

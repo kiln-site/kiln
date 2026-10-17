@@ -77,6 +77,26 @@ function applyRealtimeEvent(input: ApplyRealtimeEventInput): void {
     }
   )
   if (event.type === "instances.delta") {
+    for (const reference of [
+      ...event.upserted.map((instance) => ({
+        relayId: instance.relayId,
+        id: instance.id,
+      })),
+      ...event.deleted.map((instance) => ({
+        relayId: instance.relayId,
+        id: instance.instanceId,
+      })),
+    ]) {
+      void queryClient.invalidateQueries({
+        queryKey: [
+          "instance-states",
+          "server",
+          reference.relayId,
+          reference.id,
+        ],
+        exact: true,
+      })
+    }
     if (!instances.isReady()) {
       const snapshot = queryClient.getQueryData<RelayFleetSnapshot>(
         queryKeys.relay.snapshot
@@ -119,6 +139,11 @@ function applyRealtimeEvent(input: ApplyRealtimeEventInput): void {
     return
   }
   if (event.type === "relay.status") {
+    void queryClient.invalidateQueries({
+      predicate: (query) =>
+        query.queryKey[0] === "instance-states" &&
+        query.queryKey[2] === event.relayId,
+    })
     const staleTopics = [
       ...(applyRelayStatusToDatabases(queryClient, event)
         ? (["databases"] as const)

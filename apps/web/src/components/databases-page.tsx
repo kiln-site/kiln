@@ -95,9 +95,8 @@ import {
   DataTableToolbar,
   DataTableWorkspace,
 } from "@/components/data-table-workspace"
-import { InstanceName } from "@/components/instance-name"
+import { InstanceCard, InstanceStatus } from "@/components/instance-card"
 import { statusColumnWidth } from "@/components/instance-name-presentation"
-import { StatusIndicator } from "@/components/status-indicator"
 import { getManagedDatabasesCollection } from "@/lib/collections/managed-databases"
 import type { InstanceFavorite } from "@/lib/instance-favorites"
 import type { AccessPermission } from "@/lib/permissions"
@@ -393,8 +392,12 @@ const DatabaseTable = React.memo(function DatabaseTable({
           header: () => <span className="sr-only sm:not-sr-only">Status</span>,
           sortFn: "text",
           cell: ({ row }) => (
-            <StatusIndicator
-              status={databaseStatusPresentation(row.original)}
+            <InstanceStatus
+              instance={{
+                kind: "database",
+                id: row.original.id,
+                relayId: row.original.relayId,
+              }}
             />
           ),
           meta: dataTableColumnMeta(
@@ -440,18 +443,13 @@ const DatabaseTable = React.memo(function DatabaseTable({
                 preload="intent"
                 className="group/database-link flex min-h-14 min-w-0 flex-1 items-center outline-none focus-visible:ring-2 focus-visible:ring-ring/40 focus-visible:ring-inset"
               >
-                <InstanceName
+                <InstanceCard
                   className="min-w-0 flex-1"
                   instance={{
                     id: database.id,
-                    inventoryStatus: database.inventoryStatus,
                     kind: "database",
-                    observedState: database.observedState,
                     relayId: database.relayId,
-                    relayStatus: database.relayStatus,
-                    relayUpdating: database.relayUpdating,
                   }}
-                  live={false}
                   name={database.name}
                   nameClassName="transition-colors group-hover/database-link:text-primary"
                   meta={database.shortId}

@@ -53,6 +53,17 @@ export function runRelayEffectUntraced<TResult, TError>(
   return activeRuntime().runPromise(Effect.withTracerEnabled(effect, false))
 }
 
+export function runRelayReadEffect<A, E>(
+  name: string,
+  effect: Effect.Effect<A, E>,
+  options?: { signal?: AbortSignal }
+): Promise<A> {
+  const traced = Telemetry.withActiveParent(Effect.withSpan(effect, name))
+  return runtime
+    ? runtime.runPromise(traced, options)
+    : Effect.runPromise(traced, options)
+}
+
 /**
  * Traces promise code; effects it runs become child spans. Before the Relay
  * runtime exists the span is created but not exported.

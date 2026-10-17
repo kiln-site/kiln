@@ -113,7 +113,8 @@ export async function relayRpc(
   timeoutMs = operation === "instance.delete"
     ? relayControlDeadlineMs(operation)
     : 10_000,
-  subject?: string
+  subject?: string,
+  signal?: AbortSignal
 ): Promise<unknown> {
   const effectiveRelay = relayControlEndpoint(relay)
   let connection = connections.get(relay.id)
@@ -132,7 +133,8 @@ export async function relayRpc(
   }
   const result = await runAppEffect(
     `relay.rpc.${operation}`,
-    connection.request(operation, payload, timeoutMs, subject)
+    connection.request(operation, payload, timeoutMs, subject),
+    { signal }
   )
   if (subject && isAuditedRelayControlOperation(operation)) {
     publishRealtimeChange({
@@ -243,6 +245,12 @@ export function relayConnectionNode(relayId: string): RelayNode | null {
   return connections.get(relayId)?.pushedNode ?? null
 }
 
+export function relayConnectionInstances(
+  relayId: string
+): ReadonlyArray<RelaySnapshot["instances"][number]> | null {
+  return connections.get(relayId)?.pushedInstances ?? null
+}
+
 export function relayConnectionBrowserMetadata(
   relayId: string
 ): RelayProxyBrowserMetadata | null {
@@ -317,6 +325,14 @@ class RelayConnection {
   get pushedNode(): RelayNode | null {
     return this.#state.status === "authenticated"
       ? (this.#pushedSnapshot?.node ?? null)
+      : null
+  }
+
+  get pushedInstances(): ReadonlyArray<
+    RelaySnapshot["instances"][number]
+  > | null {
+    return this.#state.status === "authenticated"
+      ? (this.#pushedSnapshot?.instances ?? null)
       : null
   }
 

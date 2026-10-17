@@ -15,6 +15,7 @@ import type {
   RelayCreateApp,
   RelayDeleteApp,
   RelayDeployApp,
+  InstanceRuntimeState,
 } from "@workspace/contracts"
 import { appServiceNameSchema, relayAppSchema } from "@workspace/contracts"
 import { Effect, Result, Semaphore } from "effect"
@@ -35,6 +36,7 @@ import {
   type DockerEngineError,
 } from "./docker-engine.js"
 import { forkPromise, promiseEffect } from "./effect/promise.js"
+import { runRelayReadEffect } from "./effect/runtime.js"
 import {
   APP_SERVICE,
   relayOwnerLabel,
@@ -191,6 +193,39 @@ export class AppDriver {
         host
       )
     )
+  }
+
+  async states(
+    ids: ReadonlyArray<string>,
+    signal: AbortSignal
+  ): Promise<Array<InstanceRuntimeState>> {
+    const containers = await this.#containers(undefined, ids, signal)
+    const networks = ids.some(
+      (id) => !containers.some((container) => container.appId === id)
+    )
+      ? await this.#networks(signal)
+      : []
+    await Effect.runPromise(
+      Effect.forEach(
+        ids,
+        (id) => promiseEffect(() => this.#restoreDeployment(id)),
+        { concurrency: 4 }
+      ),
+      { signal }
+    )
+    return ids
+      .filter(
+        (id) =>
+          networks.includes(id) ||
+          containers.some((container) => container.appId === id)
+      )
+      .map((id) => {
+        const app = this.#runtimeState(
+          id,
+          containers.filter((container) => container.appId === id)
+        )
+        return { id, observedState: app.observedState }
+      })
   }
 
   async get(appId: string): Promise<RelayApp> {
@@ -1172,11 +1207,7 @@ export class AppDriver {
     )
   }
 
-  #toApp(
-    id: string,
-    containers: ReadonlyArray<AppContainer>,
-    host: string
-  ): RelayApp {
+  #runtimeState(id: string, containers: ReadonlyArray<AppContainer>) {
     const deployment = this.#deployments.get(id) ?? null
     const running = containers.filter((container) => container.running)
     const unhealthy = running.some(
@@ -1211,6 +1242,16 @@ export class AppDriver {
                     `Exited with code ${failed[0]!.exitCode ?? "unknown"}`,
                   ] as const)
                 : (["stopped", "Stopped"] as const)
+    return { observedState, status }
+  }
+
+  #toApp(
+    id: string,
+    containers: ReadonlyArray<AppContainer>,
+    host: string
+  ): RelayApp {
+    const deployment = this.#deployments.get(id) ?? null
+    const { observedState, status } = this.#runtimeState(id, containers)
     const prefix = this.#databaseNetworkPrefix()
     const connectedDatabaseIds = [
       ...new Set(
@@ -1273,9 +1314,14 @@ export class AppDriver {
     )
   }
 
-  async #containers(appId?: string): Promise<Array<AppContainer>> {
+  async #containers(
+    appId?: string,
+    ids?: ReadonlyArray<string>,
+    signal?: AbortSignal
+  ): Promise<Array<AppContainer>> {
     const engine = this.#engine
-    const inspected = await docker(
+    const inspected = await runRelayReadEffect(
+      "Apps.discoverContainers",
       engine
         .listContainers({
           all: true,
@@ -1288,10 +1334,17 @@ export class AppDriver {
         .pipe(
           Effect.flatMap((containers) =>
             engine.inspectContainers<ContainerInspect>(
-              containers.map((container) => container.Id)
+              containers
+                .filter(
+                  (container) =>
+                    relayOwnsLabels(this.#config, container.Labels) &&
+                    (!ids || ids.includes(container.Labels?.[ID_LABEL] ?? ""))
+                )
+                .map((container) => container.Id)
             )
           )
-        )
+        ),
+      { signal }
     )
     return inspected.flatMap((container) => this.#appContainer(container))
   }
@@ -1345,11 +1398,13 @@ export class AppDriver {
   }
 
   // App IDs with a network on this Relay: every app has one from creation.
-  async #networks(): Promise<Array<string>> {
-    const networks = await docker(
+  async #networks(signal?: AbortSignal): Promise<Array<string>> {
+    const networks = await runRelayReadEffect(
+      "Apps.discoverNetworks",
       this.#engine.listNetworks({
         filters: { label: [`${KIND_LABEL}=${APP_KIND}`] },
-      })
+      }),
+      { signal }
     )
     return networks.flatMap(({ Labels: labels }) => {
       const id = labels?.[ID_LABEL]

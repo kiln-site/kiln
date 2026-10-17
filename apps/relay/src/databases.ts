@@ -12,6 +12,7 @@ import type {
   RelayDeleteDatabase,
   RelayManagedDatabase,
   RelayRotateDatabaseCredentials,
+  InstanceRuntimeState,
 } from "@workspace/contracts"
 import {
   databaseEngineSupportsLogicalBackups,
@@ -21,6 +22,7 @@ import {
 import { Effect, Option, Result, Semaphore } from "effect"
 
 import { promiseEffect } from "./effect/promise.js"
+import { runRelayReadEffect } from "./effect/runtime.js"
 import type { DatabaseConnections } from "./database-connections.js"
 import type { RelayConfig } from "./config.js"
 import type { DockerDriver } from "./docker.js"
@@ -36,6 +38,16 @@ import {
   type DockerExecProcess,
 } from "./docker-engine.js"
 import { relayOwnerLabel, relayOwnsLabels } from "./relay-resources.js"
+
+function databaseObservedState(
+  container: DatabaseContainerInspect
+): InstanceRuntimeState["observedState"] {
+  if (container.State.Running) {
+    if (container.State.Health?.Status === "starting") return "starting"
+    return container.State.Health?.Status === "unhealthy" ? "failed" : "running"
+  }
+  return container.State.ExitCode === 0 ? "stopped" : "failed"
+}
 
 const DATABASE_KIND_LABEL = "kiln.resource.kind"
 const DATABASE_KIND = "database"
@@ -179,6 +191,16 @@ export class DatabaseDriver {
     return Promise.all(
       containers.map((container) => this.#toManagedDatabase(container))
     )
+  }
+
+  async states(
+    ids: ReadonlyArray<string>,
+    signal: AbortSignal
+  ): Promise<Array<InstanceRuntimeState>> {
+    return (await this.#discover(ids, signal)).map((container) => ({
+      id: requiredLabel(container.Config.Labels ?? {}, "kiln.database.id"),
+      observedState: databaseObservedState(container),
+    }))
   }
 
   // The database as Docker reports it, for work that runs inside it.
@@ -595,10 +617,14 @@ export class DatabaseDriver {
     return container
   }
 
-  async #discover(): Promise<Array<DatabaseContainerInspect>> {
+  async #discover(
+    ids?: ReadonlyArray<string>,
+    signal?: AbortSignal
+  ): Promise<Array<DatabaseContainerInspect>> {
     const engine = this.#engine
     const config = this.#config
-    return Effect.runPromise(
+    return runRelayReadEffect(
+      "Databases.discoverContainers",
       Effect.gen(function* () {
         const listed = yield* engine.listContainers({
           all: true,
@@ -606,10 +632,14 @@ export class DatabaseDriver {
         })
         return yield* engine.inspectContainers<DatabaseContainerInspect>(
           listed.flatMap((container) =>
-            relayOwnsLabels(config, container.Labels) ? [container.Id] : []
+            relayOwnsLabels(config, container.Labels) &&
+            (!ids || ids.includes(container.Labels?.["kiln.database.id"] ?? ""))
+              ? [container.Id]
+              : []
           )
         )
-      })
+      }),
+      { signal }
     )
   }
 
@@ -629,15 +659,7 @@ export class DatabaseDriver {
         ? [instanceId.toLowerCase()]
         : []
     })
-    const observedState = container.State.Running
-      ? container.State.Health?.Status === "starting"
-        ? "starting"
-        : container.State.Health?.Status === "unhealthy"
-          ? "failed"
-          : "running"
-      : container.State.ExitCode === 0
-        ? "stopped"
-        : "failed"
+    const observedState = databaseObservedState(container)
     const status = container.State.Running
       ? container.State.Health?.Status === "starting"
         ? "Initializing"

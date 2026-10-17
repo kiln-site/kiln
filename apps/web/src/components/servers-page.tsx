@@ -62,12 +62,11 @@ import {
   DataTableWorkspace,
 } from "@/components/data-table-workspace"
 import { DataTable } from "@/components/data-table-view"
-import { InstanceName } from "@/components/instance-name"
+import { InstanceCard, InstanceStatus } from "@/components/instance-card"
 import {
   instanceStatusPresentation,
   statusColumnWidth,
 } from "@/components/instance-name-presentation"
-import { StatusIndicator } from "@/components/status-indicator"
 import {
   accessCapabilitiesQueryOptions,
   brickCatalogQueryOptions,
@@ -465,7 +464,13 @@ const ServerDataTable = React.memo(function ServerDataTable({
           header: () => <span className="sr-only sm:not-sr-only">Status</span>,
           sortFn: "text",
           cell: ({ row }) => (
-            <StatusIndicator status={serverStatus(row.original.server)} />
+            <InstanceStatus
+              instance={{
+                kind: "server",
+                id: row.original.server.id,
+                relayId: row.original.server.relayId,
+              }}
+            />
           ),
           meta: dataTableColumnMeta(
             { width: { base: "2.5rem", sm: statusColumnWidth } },
@@ -508,18 +513,14 @@ const ServerDataTable = React.memo(function ServerDataTable({
                 preload="intent"
                 className="group/server-link flex min-h-14 min-w-0 flex-1 items-center px-3 outline-none focus-visible:ring-2 focus-visible:ring-ring/40 focus-visible:ring-inset"
               >
-                <InstanceName
+                <InstanceCard
                   instance={{
                     brickId: server.brickId,
                     id: server.id,
                     implementation: server.implementation,
                     kind: "server",
-                    observedState: server.observedState,
                     relayId: server.relayId,
-                    relayStatus: server.relayStatus,
-                    relayUpdating: server.relayUpdating,
                   }}
-                  live={false}
                   name={server.name}
                   nameClassName="transition-colors group-hover/server-link:text-primary"
                   meta={`${server.game} · ${server.implementation}`}

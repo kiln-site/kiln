@@ -42,7 +42,7 @@ import {
   backupTargetPresentation,
   targetKey,
 } from "@/components/backups/table-row"
-import type { InstanceNameInstance } from "@/components/instance-name"
+import type { InstanceNameInstance } from "@/components/instance-card"
 import type {
   Backup,
   BackupAvailabilityDestination,

@@ -78,9 +78,8 @@ import {
   useFavoritesOnly,
   useFavoritesOnlySource,
 } from "@/components/instance-favorite"
-import { InstanceName } from "@/components/instance-name"
+import { InstanceCard, InstanceStatus } from "@/components/instance-card"
 import { statusColumnWidth } from "@/components/instance-name-presentation"
-import { StatusIndicator } from "@/components/status-indicator"
 import { ensuringPromise, forkPromise } from "@/effect/promise"
 import { getAppsCollection } from "@/lib/collections/apps"
 import {
@@ -325,7 +324,13 @@ const AppTable = React.memo(function AppTable({
         header: () => <span className="sr-only sm:not-sr-only">Status</span>,
         sortFn: "text",
         cell: ({ row }) => (
-          <StatusIndicator status={appStatusPresentation(row.original)} />
+          <InstanceStatus
+            instance={{
+              kind: "app",
+              id: row.original.id,
+              relayId: row.original.relayId,
+            }}
+          />
         ),
         meta: dataTableColumnMeta(
           { width: { base: "2.5rem", sm: statusColumnWidth } },
@@ -368,18 +373,9 @@ const AppTable = React.memo(function AppTable({
               preload="intent"
               className="group/app-link flex min-h-14 w-full min-w-0 items-center outline-none focus-visible:ring-2 focus-visible:ring-ring/40 focus-visible:ring-inset"
             >
-              <InstanceName
+              <InstanceCard
                 className="min-w-0 flex-1"
-                instance={{
-                  id: app.id,
-                  inventoryStatus: app.inventoryStatus,
-                  kind: "app",
-                  observedState: app.observedState,
-                  relayId: app.relayId,
-                  relayStatus: app.relayStatus,
-                  relayUpdating: app.relayUpdating,
-                }}
-                live={false}
+                instance={{ id: app.id, kind: "app", relayId: app.relayId }}
                 name={app.name}
                 nameClassName="transition-colors group-hover/app-link:text-primary"
                 meta={app.shortId}
