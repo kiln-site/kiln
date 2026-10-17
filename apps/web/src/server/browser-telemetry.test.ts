@@ -116,7 +116,7 @@ describe("browser telemetry forwarding", () => {
     })
   })
 
-  it("keeps or drops whole traces by trace ID", async () => {
+  it("keeps every browser trace while page opens are baselined", async () => {
     const spans = [
       { traceId: traceIdKept, name: "kept" },
       { traceId: traceIdDropped, name: "dropped" },
@@ -132,7 +132,9 @@ describe("browser telemetry forwarding", () => {
     expect(response.status).toBe(204)
     expect(boundary.forwarded).toHaveLength(1)
     expect(boundary.forwarded[0].body).toMatchObject({
-      resourceSpans: [{ scopeSpans: [{ spans: [{ name: "kept" }] }] }],
+      resourceSpans: [
+        { scopeSpans: [{ spans: [{ name: "kept" }, { name: "dropped" }] }] },
+      ],
     })
   })
 })

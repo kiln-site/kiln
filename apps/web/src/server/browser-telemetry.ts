@@ -107,7 +107,9 @@ export async function forwardBrowserTelemetry(
     const traces = tracesSchema.safeParse(payload)
     if (!traces.success) return status(400)
     if (Option.isNone(target)) return status(204)
-    const ratio = target.value.sampleRatio
+    // Temporarily keeps every browser trace to baseline instance page opens
+    // in production; restore `target.value.sampleRatio` once that is done.
+    const ratio = 1
     const resourceSpans = traces.data.resourceSpans
       .map((entry) => ({
         resource,
