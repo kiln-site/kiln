@@ -3,21 +3,15 @@ import { Clock, Effect } from "effect"
 
 import { Database } from "@/effect/database"
 import { runAppEffect } from "@/effect/runtime"
+import {
+  instanceDirectoryMetadata,
+  type DirectoryInstance,
+} from "@/lib/instance-directory"
 import { databaseTable } from "@/lib/database-config"
-
-export function syncInstanceRegistry(
-  relayId: string,
-  instances: ReadonlyArray<Pick<RelayInstance, "id" | "name">>
-): Promise<void> {
-  return runAppEffect(
-    "instances.registry.sync",
-    syncInstanceRegistryEffect(relayId, instances)
-  )
-}
 
 export function backfillInstanceSourceNames(
   relayId: string,
-  instances: ReadonlyArray<Pick<RelayInstance, "id" | "name">>
+  instances: ReadonlyArray<DirectoryInstance>
 ): Promise<void> {
   return runAppEffect(
     "instances.registry.backfillSourceNames",
@@ -27,7 +21,7 @@ export function backfillInstanceSourceNames(
 
 export function registerPreparedInstance(
   relayId: string,
-  instance: Pick<RelayInstance, "id" | "name">,
+  instance: DirectoryInstance,
   ownerId: string
 ): Promise<void> {
   return runAppEffect(
@@ -82,26 +76,31 @@ export const reservePreparedInstanceEffect = Effect.fn(
 
 export const registerPreparedInstanceEffect = Effect.fn(
   "instances.registry.registerPrepared"
-)(function* (
-  relayId: string,
-  instance: Pick<RelayInstance, "id" | "name">,
-  ownerId: string
-) {
+)(function* (relayId: string, instance: DirectoryInstance, ownerId: string) {
   const database = yield* Database
   const now = yield* Clock.currentTimeMillis
   yield* database.transaction("instances.registry.registerPrepared", (tx) =>
     Effect.gen(function* () {
       yield* tx.execute(
         `INSERT INTO ${databaseTable("instance")}
-           (relay_id, instance_id, display_name, source_name, owner_id,
+           (relay_id, instance_id, display_name, source_name, directory_metadata, owner_id,
             created_at, updated_at)
-         VALUES (?, ?, NULL, ?, ?, ?, ?)
+         VALUES (?, ?, NULL, ?, ?, ?, ?, ?)
          ON DUPLICATE KEY UPDATE
            source_name = VALUES(source_name),
+           directory_metadata = VALUES(directory_metadata),
            owner_id = COALESCE(owner_id, VALUES(owner_id)),
            provisioning_reserved_until = NULL,
            updated_at = VALUES(updated_at)`,
-        [relayId, instance.id, instance.name.slice(0, 255), ownerId, now, now]
+        [
+          relayId,
+          instance.id,
+          instance.name.slice(0, 255),
+          instanceDirectoryMetadata(instance),
+          ownerId,
+          now,
+          now,
+        ]
       )
       yield* tx.execute(
         `INSERT INTO ${databaseTable("instance_post_provision")}
@@ -134,30 +133,33 @@ export function unregisterInstance(relayId: string, instanceId: string) {
 
 export const backfillInstanceSourceNamesEffect = Effect.fn(
   "instances.registry.backfillSourceNames"
-)(function* (
-  relayId: string,
-  instances: ReadonlyArray<Pick<RelayInstance, "id" | "name">>
-) {
+)(function* (relayId: string, instances: ReadonlyArray<DirectoryInstance>) {
   if (instances.length === 0) return
   const database = yield* Database
   const now = yield* Clock.currentTimeMillis
-  const values = instances.map(() => "(?, ?, NULL, ?, ?, ?)").join(", ")
+  const values = instances
+    .map(() => "SELECT ? AS instance_id, ? AS source_name, ? AS metadata")
+    .join(" UNION ALL ")
+  // Cached startup snapshots may arrive after a live deletion. Only fill
+  // existing records; the live synchronizer owns additions and removals.
   yield* database.execute(
     "instances.registry.backfillSourceNames",
-    `INSERT INTO ${databaseTable("instance")}
-       (relay_id, instance_id, display_name, source_name, created_at,
-        updated_at)
-     VALUES ${values}
-     ON DUPLICATE KEY UPDATE
-       updated_at = IF(source_name IS NULL, VALUES(updated_at), updated_at),
-       source_name = COALESCE(source_name, VALUES(source_name))`,
-    instances.flatMap((instance) => [
+    `UPDATE ${databaseTable("instance")} AS existing_instance
+       JOIN (${values}) AS incoming
+         ON existing_instance.instance_id = incoming.instance_id
+        AND existing_instance.relay_id = ?
+        SET existing_instance.updated_at = IF(existing_instance.source_name IS NULL, ?, existing_instance.updated_at),
+            existing_instance.source_name = COALESCE(existing_instance.source_name, incoming.source_name),
+            existing_instance.directory_metadata = COALESCE(existing_instance.directory_metadata, incoming.metadata)`,
+    [
+      ...instances.flatMap((instance) => [
+        instance.id,
+        instance.name.slice(0, 255),
+        instanceDirectoryMetadata(instance),
+      ]),
       relayId,
-      instance.id,
-      instance.name.slice(0, 255),
       now,
-      now,
-    ])
+    ]
   )
 })
 
@@ -176,28 +178,33 @@ export const updateInstanceSourceNameEffect = Effect.fn(
 })
 
 export const syncInstanceRegistryEffect = Effect.fn("instances.registry.sync")(
-  function* (
-    relayId: string,
-    instances: ReadonlyArray<Pick<RelayInstance, "id" | "name">>
-  ) {
+  function* (relayId: string, instances: ReadonlyArray<DirectoryInstance>) {
+    yield* Effect.annotateCurrentSpan({
+      "relay.id": relayId,
+      "instance.count": instances.length,
+    })
     const database = yield* Database
     const now = yield* Clock.currentTimeMillis
     yield* database.transaction("instances.registry.sync", (transaction) =>
       Effect.gen(function* () {
         if (instances.length) {
-          const values = instances.map(() => "(?, ?, NULL, ?, ?, ?)").join(", ")
+          const values = instances
+            .map(() => "(?, ?, NULL, ?, ?, ?, ?)")
+            .join(", ")
           yield* transaction.execute(
             `INSERT INTO ${databaseTable("instance")}
-              (relay_id, instance_id, display_name, source_name, created_at,
+              (relay_id, instance_id, display_name, source_name, directory_metadata, created_at,
                updated_at)
          VALUES ${values}
          ON DUPLICATE KEY UPDATE
            source_name = VALUES(source_name),
+           directory_metadata = VALUES(directory_metadata),
            updated_at = VALUES(updated_at)`,
             instances.flatMap((instance) => [
               relayId,
               instance.id,
               instance.name.slice(0, 255),
+              instanceDirectoryMetadata(instance),
               now,
               now,
             ])

@@ -1,38 +1,47 @@
 import { collectionOptions, type DbClient } from "@tanstack/react-db"
-import type { QueryClient } from "@tanstack/react-query"
+import type { QueryClient, QueryKey } from "@tanstack/react-query"
 import { queryCollectionOptions } from "@tanstack/query-db-collection"
 
 import { queryKeys } from "@/lib/query-options"
+import { getInfraServerDirectory } from "@/server/infra-directory"
 import { getAppDirectory } from "@/server/apps"
 import { getManagedDatabaseDirectory } from "@/server/databases"
 
-export const infraAppsCollectionOptions = collectionOptions(
+function infraDirectoryCollection<T extends { id: string; relayId: string }>(
+  id: string,
+  queryKey: QueryKey,
+  load: (signal: AbortSignal) => Promise<Array<T>>
+) {
+  return collectionOptions(id, (client) =>
+    queryCollectionOptions({
+      id,
+      queryKey,
+      queryFn: ({ signal }) => load(signal),
+      staleTime: 30_000,
+      getKey: (row) => `${row.relayId}:${row.id}`,
+      queryClient: client.requireDependency<QueryClient>("queryClient"),
+    })
+  )
+}
+
+export const infraAppsCollectionOptions = infraDirectoryCollection(
   "infra-app-directory",
-  (client) =>
-    queryCollectionOptions({
-      queryKey: queryKeys.apps.directory,
-      queryFn: ({ signal }) => getAppDirectory({ signal }),
-      staleTime: 30_000,
-      id: "infra-app-directory",
-      getKey: (row) => `${row.relayId}:${row.id}`,
-      queryClient: client.requireDependency<QueryClient>("queryClient"),
-    })
+  queryKeys.apps.directory,
+  (signal) => getAppDirectory({ signal })
 )
-
-export const infraDatabasesCollectionOptions = collectionOptions(
+export const infraDatabasesCollectionOptions = infraDirectoryCollection(
   "infra-database-directory",
-  (client) =>
-    queryCollectionOptions({
-      queryKey: queryKeys.databases.directory,
-      queryFn: ({ signal }) => getManagedDatabaseDirectory({ signal }),
-      staleTime: 30_000,
-      id: "infra-database-directory",
-      getKey: (row) => `${row.relayId}:${row.id}`,
-      queryClient: client.requireDependency<QueryClient>("queryClient"),
-    })
+  queryKeys.databases.directory,
+  (signal) => getManagedDatabaseDirectory({ signal })
 )
-
+export const infraServersCollectionOptions = infraDirectoryCollection(
+  "infra-server-directory",
+  queryKeys.servers.directory,
+  (signal) => getInfraServerDirectory({ signal })
+)
 export const getInfraAppsCollection = (client: DbClient) =>
   client.collection(infraAppsCollectionOptions)
 export const getInfraDatabasesCollection = (client: DbClient) =>
   client.collection(infraDatabasesCollectionOptions)
+export const getInfraServersCollection = (client: DbClient) =>
+  client.collection(infraServersCollectionOptions)

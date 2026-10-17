@@ -40,10 +40,7 @@ import { runAppEffect } from "@/effect/runtime"
 import { databasePool } from "@/lib/database"
 import { databaseTable } from "@/lib/database-config"
 import { betterAuthSecrets, kilnPublicUrl } from "@/lib/environment"
-import {
-  backfillInstanceSourceNames,
-  syncInstanceRegistry,
-} from "@/lib/instance-registry"
+import { backfillInstanceSourceNames } from "@/lib/instance-registry"
 import { publishRealtimeChange } from "@/lib/realtime-source.server"
 
 import { decryptWithKeyring, encryptWithKeyring } from "../../keyring.mjs"
@@ -595,7 +592,7 @@ export async function maintainPersistedRelayConnections(): Promise<void> {
         )
       )
       if (Result.isSuccess(freshSnapshot)) {
-        await syncInstanceRegistry(relay.id, freshSnapshot.success.instances)
+        // The live directory worker persists authenticated pushed snapshots.
         return
       }
       const fallback = await cachedRelaySnapshotFallback(relay.id)

@@ -148,6 +148,7 @@ export const queryKeys = {
       ["domains", "instances", relayId, instanceId] as const,
     settings: ["domains", "settings"] as const,
   },
+  servers: { directory: ["servers", "directory"] as const },
   apps: {
     all: ["apps"] as const,
     config: (relayId: string, appId: string) =>

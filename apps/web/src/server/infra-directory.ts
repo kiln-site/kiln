@@ -4,7 +4,22 @@ import { Schema } from "effect"
 
 import { runAppEffect } from "@/effect/runtime"
 import { requireEligibleResourceUser } from "@/server/auth"
-import { readInfraRelayOptions } from "@/server/infra-directory.server"
+import {
+  readInfraRelayOptions,
+  readInfraServerDirectory,
+} from "@/server/infra-directory.server"
+
+export const getInfraServerDirectory = createServerFn({
+  method: "GET",
+}).handler(async () => {
+  const user = await requireEligibleResourceUser()
+  setResponseHeader("Cache-Control", "no-store")
+  return runAppEffect(
+    "Infra.directory.servers",
+    readInfraServerDirectory(user),
+    { signal: getRequest().signal }
+  )
+})
 
 export const getInfraRelayOptions = createServerFn({ method: "GET" })
   .validator(Schema.decodeUnknownSync(Schema.Literals(["app", "database"])))

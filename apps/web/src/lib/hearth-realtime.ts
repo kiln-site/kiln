@@ -32,6 +32,7 @@ const prefix = (queryKey: QueryKey): HearthRealtimeQueryScope => ({
 
 const hearthRealtimeQueryScopes = {
   access: [
+    exact(queryKeys.servers.directory),
     exact(queryKeys.apps.directory),
     exact(queryKeys.databases.directory),
     prefix(["infra-directory"]),
@@ -68,10 +69,13 @@ const hearthRealtimeQueryScopes = {
     prefix(["instance-states", "database"]),
     prefix(["instance-inventory", "database"]),
   ],
-  domains: [prefix(["domains"])],
+  domains: [exact(queryKeys.servers.directory), prefix(["domains"])],
   favorites: [exact(queryKeys.instanceFavorites)],
   "file-activity": [prefix(["file-activity"])],
-  "instance-directory": [exact(queryKeys.schedules.options)],
+  "instance-directory": [
+    exact(queryKeys.servers.directory),
+    exact(queryKeys.schedules.options),
+  ],
   "instance-web-routes": [prefix(["web-routes"])],
   notifications: [exact(queryKeys.notifications)],
   preferences: [exact(queryKeys.uiPreferences)],
@@ -88,6 +92,7 @@ const hearthRealtimeQueryScopes = {
     exact(queryKeys.databases.list),
     exact(queryKeys.databases.directory),
     exact(queryKeys.apps.list),
+    exact(queryKeys.servers.directory),
     exact(queryKeys.apps.directory),
     exact(queryKeys.domains.settings),
     exact(queryKeys.schedules.all),
@@ -111,6 +116,7 @@ function queryScopes(
     // One Relay's access edit: refresh that Relay's records and what the
     // viewer can reach, never the platform user or invitation lists.
     return [
+      exact(queryKeys.servers.directory),
       exact(queryKeys.apps.directory),
       exact(queryKeys.databases.directory),
       prefix(["infra-directory"]),
@@ -135,7 +141,10 @@ function queryScopes(
     ]
   }
   if (topic === "domains" && scope?.instanceId) {
-    return [exact(queryKeys.domains.instance(scope.relayId, scope.instanceId))]
+    return [
+      exact(queryKeys.servers.directory),
+      exact(queryKeys.domains.instance(scope.relayId, scope.instanceId)),
+    ]
   }
   if (topic === "file-activity" && scope?.instanceId) {
     return [exact(queryKeys.fileActivity(scope.relayId, scope.instanceId))]

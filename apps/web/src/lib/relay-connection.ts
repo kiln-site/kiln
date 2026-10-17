@@ -245,6 +245,10 @@ export function relayConnectionNode(relayId: string): RelayNode | null {
   return connections.get(relayId)?.pushedNode ?? null
 }
 
+export function relayConnectionIds(): ReadonlyArray<string> {
+  return Array.from(connections.keys())
+}
+
 export function relayConnectionInstances(
   relayId: string
 ): ReadonlyArray<RelaySnapshot["instances"][number]> | null {

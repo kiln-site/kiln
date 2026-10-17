@@ -11,6 +11,7 @@ import { scheduleBackupCopyProcessing } from "./lib/backup-copy"
 import { wakePendingAuthorizationDelivery } from "./lib/authorization-delivery"
 import { scheduleInstancePostProvisionProcessing } from "./lib/instance-post-provision"
 import { startKilnUpdateNotifications } from "./lib/kiln-update-notifications"
+import { startInstanceDirectorySync } from "./lib/instance-directory-sync"
 import { scheduleTailscaleCleanupProcessing } from "./lib/tailscale-cleanup.server"
 import {
   initializeRelayFromEnvironment,
@@ -18,6 +19,7 @@ import {
 } from "./lib/relay-registry"
 
 await migrateDatabase()
+startInstanceDirectorySync()
 
 await Effect.runPromise(
   Effect.tryPromise({

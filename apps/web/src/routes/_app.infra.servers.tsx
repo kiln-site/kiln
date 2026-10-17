@@ -1,6 +1,8 @@
 import { createFileRoute } from "@tanstack/react-router"
 import { z } from "zod"
 
+import { forkPromise } from "@/effect/promise"
+import { getInfraServersCollection } from "@/lib/collections/infra-directories"
 import { ServersPage } from "@/components/servers-page"
 import {
   DATA_TABLE_SEARCH_MAX_LENGTH,
@@ -20,6 +22,10 @@ export const Route = createFileRoute("/_app/infra/servers")({
       context.queryClient,
       "/infra/servers"
     )
+  },
+  loader: ({ context }) => {
+    if (typeof window !== "undefined")
+      forkPromise(() => getInfraServersCollection(context.dbClient).preload())
   },
   head: () => ({ meta: [{ title: pageTitle("Game Servers") }] }),
   component: ServersRoute,

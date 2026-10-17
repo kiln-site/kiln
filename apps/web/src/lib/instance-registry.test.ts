@@ -9,8 +9,22 @@ import {
   syncInstanceRegistryEffect,
   updateInstanceSourceNameEffect,
 } from "@/lib/instance-registry"
+import type { DirectoryInstance } from "@/lib/instance-directory"
+import { listInstanceDirectoryEffect } from "@/lib/instance-directory"
 import { TestDatabase, describeMysql, resetDatabase } from "@/test/database"
 import { insertInstance, insertRelay, selectRows } from "@/test/seed"
+
+const server = (
+  value: Pick<DirectoryInstance, "id" | "name">
+): DirectoryInstance => ({
+  ...value,
+  brickId: "minecraft-paper",
+  game: "Minecraft",
+  implementation: "Paper",
+  version: "1.21",
+  connectAddress: "play.example.test:25565",
+  tailscale: { enabled: false },
+})
 
 interface InstanceRow {
   instance_id: string
@@ -43,6 +57,41 @@ const seedRelay = Effect.gen(function* () {
 describeMysql("instance registry", () => {
   layer(TestDatabase)((it) => {
     it.effect(
+      "persists stable directory metadata while keeping old rows readable",
+      () =>
+        Effect.gen(function* () {
+          yield* seedRelay
+          yield* insertInstance("relay-one", "old", {
+            source_name: "Old server",
+          })
+          yield* registerPreparedInstanceEffect(
+            "relay-one",
+            server({ id: "new", name: "New server" }),
+            "owner"
+          )
+          const rows = yield* listInstanceDirectoryEffect()
+          assert.deepStrictEqual(
+            rows.find((row) => row.id === "new"),
+            {
+              id: "new",
+              relayId: "relay-one",
+              name: "New server",
+              brickId: "minecraft-paper",
+              game: "Minecraft",
+              implementation: "Paper",
+              version: "1.21",
+              connectAddress: "play.example.test:25565",
+              tailscaleEnabled: false,
+            }
+          )
+          assert.strictEqual(
+            rows.find((row) => row.id === "old")?.name,
+            "Old server"
+          )
+        })
+    )
+
+    it.effect(
       "registers a prepared instance for its first owner and queues post-provisioning",
       () =>
         Effect.gen(function* () {
@@ -54,13 +103,13 @@ describeMysql("instance registry", () => {
           )
           yield* registerPreparedInstanceEffect(
             "relay-one",
-            { id: "instance-one", name: "Survival" },
+            server({ id: "instance-one", name: "Survival" }),
             "user-one"
           )
           // A later registration never takes ownership away.
           yield* registerPreparedInstanceEffect(
             "relay-one",
-            { id: "instance-one", name: "Survival" },
+            server({ id: "instance-one", name: "Survival" }),
             "user-two"
           )
 
@@ -95,7 +144,7 @@ describeMysql("instance registry", () => {
           )
 
           yield* syncInstanceRegistryEffect("relay-one", [
-            { id: "running", name: "Running" },
+            server({ id: "running", name: "Running" }),
           ])
           assert.deepEqual(Object.keys(yield* instances).sort(), [
             "provisioning",
@@ -125,8 +174,8 @@ describeMysql("instance registry", () => {
           yield* insertInstance("relay-one", "removed")
 
           yield* syncInstanceRegistryEffect("relay-one", [
-            { id: "instance-one", name: "Survival" },
-            { id: "instance-two", name: "Survival" },
+            server({ id: "instance-one", name: "Survival" }),
+            server({ id: "instance-two", name: "Survival" }),
           ])
 
           assert.deepEqual(yield* instances, {
@@ -158,8 +207,9 @@ describeMysql("instance registry", () => {
           })
 
           yield* backfillInstanceSourceNamesEffect("relay-one", [
-            { id: "named", name: "Cached" },
-            { id: "unnamed", name: "Cached" },
+            server({ id: "named", name: "Cached" }),
+            server({ id: "unnamed", name: "Cached" }),
+            server({ id: "deleted", name: "Stale cached server" }),
           ])
           yield* updateInstanceSourceNameEffect("relay-one", {
             id: "bystander",

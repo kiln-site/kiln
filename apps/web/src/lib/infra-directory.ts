@@ -21,7 +21,7 @@ export function refreshInfraTable(
       : kind === "database"
         ? [queryKeys.databases.directory, queryKeys.databases.list]
         : kind === "server"
-          ? [queryKeys.relay.instances]
+          ? [queryKeys.servers.directory]
           : [queryKeys.relays]
   return Promise.all([
     ...keys.map((queryKey) =>

@@ -5,6 +5,64 @@ import type { AuthenticatedUser } from "@/lib/auth-session"
 import { grantHasPermission } from "@/lib/permissions"
 import { effectiveScopePermissions } from "@/lib/resource-permissions"
 import { listPersistedRelaysEffect } from "@/lib/relay-registry"
+import { builtinTailscaleBrickId } from "@workspace/contracts"
+import { listInstanceDirectoryEffect } from "@/lib/instance-directory"
+import { relayInstanceRouteId } from "@/lib/relay-fleet"
+import { loadActiveInstanceDomainAssignmentsEffect } from "@/effect/domains"
+import { managedDomainConnectAddress } from "@/lib/domain-address"
+
+export const readInfraServerDirectory = Effect.fn("Infra.directory.servers")(
+  function* (user: AuthenticatedUser) {
+    const { relays, grants, records, addresses } = yield* Effect.all(
+      {
+        relays: listPersistedRelaysEffect(),
+        grants: isPlatformAdmin(user)
+          ? Effect.succeed([])
+          : listUserGrantsEffect(user.id),
+        records: listInstanceDirectoryEffect(),
+        addresses: loadActiveInstanceDomainAssignmentsEffect(),
+      },
+      { concurrency: 4 }
+    )
+    const addressMap = new Map(
+      addresses.map((address) => [
+        `${address.relayId}:${address.instanceId}`,
+        managedDomainConnectAddress(address),
+      ])
+    )
+    const relayNames = new Map(
+      relays
+        .filter((relay) => relay.enabled)
+        .map((relay) => [relay.id, relay.name])
+    )
+    return records.flatMap((record) => {
+      const relayName = relayNames.get(record.relayId)
+      if (!relayName || record.brickId === builtinTailscaleBrickId) return []
+      if (
+        !isPlatformAdmin(user) &&
+        !effectiveScopePermissions(grants, {
+          relayId: record.relayId,
+          resourceType: "instance",
+          resourceId: record.id,
+        }).has("instance.read")
+      )
+        return []
+      const { tailscaleEnabled, ...metadata } = record
+      return [
+        {
+          ...metadata,
+          connectAddress:
+            (!tailscaleEnabled &&
+              addressMap.get(`${record.relayId}:${record.id}`)) ||
+            record.connectAddress,
+          relayName,
+          shortId: record.id.slice(0, 8),
+          routeId: relayInstanceRouteId(record.relayId, record.id.slice(0, 8)),
+        },
+      ]
+    })
+  }
+)
 
 export const readInfraRelayOptions = Effect.fn("Infra.directory.relays")(
   function* (user: AuthenticatedUser, kind: "app" | "database") {

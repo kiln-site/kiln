@@ -32,6 +32,13 @@ const TelemetryLive = Telemetry.layer(
 const AppLive = Layer.mergeAll(DatabaseLive, AppCacheLive, TelemetryLive)
 const runtime = ManagedRuntime.make(AppLive)
 
+/** Runtime-owned workers span individual jobs, rather than their lifetime. */
+export function forkAppWorker(
+  effect: Effect.Effect<void, never, AppCache | Database>
+) {
+  return runtime.runFork(effect)
+}
+
 export function runAppEffect<TResult, TError>(
   name: string,
   effect: Effect.Effect<TResult, TError, AppCache | Database>,

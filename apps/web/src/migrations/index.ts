@@ -11,6 +11,7 @@ import { apps } from "./0008_apps"
 import { fileActivityRoots } from "./0009_file_activity_roots"
 import { dropSystemUpdateOperations } from "./0010_drop_system_update_operations"
 import { scheduleContinueOnFailure } from "./0011_schedule_continue_on_failure"
+import { instanceDirectory } from "./0012_instance_directory"
 
 // Append new migrations with the next id. Never edit or reorder applied ones.
 export const migrations: ReadonlyArray<Migration> = [
@@ -25,4 +26,5 @@ export const migrations: ReadonlyArray<Migration> = [
   fileActivityRoots,
   dropSystemUpdateOperations,
   scheduleContinueOnFailure,
+  instanceDirectory,
 ]

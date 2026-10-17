@@ -9,13 +9,8 @@ import {
   resourceInvitationScopeKey,
 } from "@/components/pending-resource-invitations"
 import * as React from "react"
-import { eq, not } from "@tanstack/db"
 import { useDbClient, useLiveQuery } from "@tanstack/react-db"
-import {
-  useQuery,
-  useQueryClient,
-  useSuspenseQuery,
-} from "@tanstack/react-query"
+import { useSuspenseQuery, useQueryClient } from "@tanstack/react-query"
 import { ClientOnly, Link } from "@tanstack/react-router"
 import { ensuringPromise, forkPromise } from "@/effect/promise"
 import {
@@ -73,14 +68,9 @@ import {
 import { DataTable } from "@/components/data-table-view"
 import { InstanceCard, InstanceStatus } from "@/components/instance-card"
 import { statusColumnWidth } from "@/components/instance-name-presentation"
-import {
-  accessCapabilitiesQueryOptions,
-  relayConnectionQueryOptions,
-} from "@/lib/query-options"
-import {
-  getRelayInstancesCollection,
-  relayInstancesCollectionOptions,
-} from "@/lib/collections/relay-instances"
+import { accessCapabilitiesQueryOptions } from "@/lib/query-options"
+import { getInfraServersCollection } from "@/lib/collections/infra-directories"
+import { refreshInfraTable } from "@/lib/infra-directory"
 import {
   createDataTableColumnHelper,
   dataTableColumnMeta,
@@ -96,19 +86,21 @@ import {
 } from "@/lib/data-table-source"
 import type { InstanceFavorite } from "@/lib/instance-favorites"
 import { grantHasPermission } from "@/lib/permissions"
-import { selectRelayConfigured } from "@/lib/relay-selectors"
-import type { ServerListInstance } from "@/lib/relay-selectors"
+import type { getInfraServerDirectory } from "@/server/infra-directory"
+type ServerDirectory = Awaited<
+  ReturnType<typeof getInfraServerDirectory>
+>[number]
 
 const minimumManualSyncFeedbackMs = 500
 const serverInventoryError = new Error("Could not load game servers")
-type InfraServer = InfraInstanceRow<ServerListInstance>
-const serverReference = (server: ServerListInstance) => ({
+type InfraServer = InfraInstanceRow<ServerDirectory>
+const serverReference = (server: ServerDirectory) => ({
   kind: "server" as const,
   id: server.id,
   relayId: server.relayId,
 })
 
-const serverTableItemCache = new WeakMap<ServerListInstance, ServerTableItem>()
+const serverTableItemCache = new WeakMap<ServerDirectory, ServerTableItem>()
 
 interface ServerTableItem {
   routeIdentifier: string
@@ -145,14 +137,9 @@ export const ServersPage = React.memo(function ServersPage({
   passwordRequired: boolean
   searchStore: ServerSearchStore
 }) {
-  const queryClient = useQueryClient()
   const [dialogStore] = React.useState(createAddServerDialogStore)
   const [deleteTarget, setDeleteTarget] =
     React.useState<ServerDeleteTarget | null>(null)
-  const { data: relayConfigured } = useQuery({
-    ...relayConnectionQueryOptions(queryClient),
-    select: selectRelayConfigured,
-  })
   const { data: capabilities } = useSuspenseQuery(
     accessCapabilitiesQueryOptions()
   )
@@ -202,7 +189,7 @@ export const ServersPage = React.memo(function ServersPage({
               </>
             }
             controls={<FavoritesOnlyButton table="servers" />}
-            leading={<ServerSyncButton disabled={!relayConfigured} />}
+            leading={<ServerSyncButton />}
             search={{
               ariaLabel: "Search game servers",
               closeMobileWhenEmpty: true,
@@ -231,7 +218,6 @@ export const ServersPage = React.memo(function ServersPage({
             deleteAccess={deleteAccess}
             dialogStore={dialogStore}
             onDelete={openDelete}
-            relayConfigured={relayConfigured}
             searchStore={searchStore}
           />
         </ClientOnly>
@@ -252,12 +238,8 @@ export const ServersPage = React.memo(function ServersPage({
   )
 })
 
-const ServerSyncButton = React.memo(function ServerSyncButton({
-  disabled,
-}: {
-  disabled: boolean
-}) {
-  const dbClient = useDbClient()
+const ServerSyncButton = React.memo(function ServerSyncButton() {
+  const queryClient = useQueryClient()
   const [manualSyncing, setManualSyncing] = React.useState(false)
   const manualSyncingRef = React.useRef(false)
   const feedbackTimeoutRef = React.useRef<number>(undefined)
@@ -275,17 +257,14 @@ const ServerSyncButton = React.memo(function ServerSyncButton({
   }, [])
 
   const syncServers = React.useCallback(() => {
-    if (disabled || manualSyncingRef.current) return
+    if (manualSyncingRef.current) return
     manualSyncingRef.current = true
     setManualSyncing(true)
     const startedAt = performance.now()
 
     forkPromise(() =>
       ensuringPromise(
-        () =>
-          getRelayInstancesCollection(dbClient).utils.refetch({
-            throwOnError: true,
-          }),
+        () => refreshInfraTable(queryClient, "server"),
         () => {
           if (!mountedRef.current) return
           const elapsed = performance.now() - startedAt
@@ -298,7 +277,7 @@ const ServerSyncButton = React.memo(function ServerSyncButton({
         }
       )
     )
-  }, [disabled, dbClient])
+  }, [queryClient])
 
   return (
     <Tooltip>
@@ -309,7 +288,7 @@ const ServerSyncButton = React.memo(function ServerSyncButton({
           variant="outline"
           aria-label="Sync game servers"
           aria-busy={syncing}
-          disabled={disabled || syncing}
+          disabled={syncing}
           onClick={syncServers}
         >
           <RefreshCw className={syncing ? "animate-spin" : ""} />
@@ -367,56 +346,26 @@ const FilteredServerTableBoundary = React.memo(
     deleteAccess,
     dialogStore,
     onDelete,
-    relayConfigured,
     searchStore,
   }: {
     canProvision: boolean
     deleteAccess: ServerDeleteAccess
     dialogStore: AddServerDialogStore
     onDelete: (target: ServerDeleteTarget) => void
-    relayConfigured: boolean | undefined
     searchStore: ServerSearchStore
   }) {
     const dbClient = useDbClient()
-    const result = useLiveQuery({
-      query: (query) => {
-        if (!relayConfigured) return undefined
-        return query
-          .from({ instance: relayInstancesCollectionOptions })
-          .where(({ instance }) =>
-            not(eq(instance.brickId, builtinTailscaleBrickId))
-          )
-          .select(({ instance }) => ({
-            brickId: instance.brickId,
-            connectAddress: instance.connectAddress,
-            game: instance.game,
-            id: instance.id,
-            implementation: instance.implementation,
-            name: instance.name,
-            observedState: instance.observedState,
-            provisioning: instance.provisioning,
-            relayId: instance.relayId,
-            relayName: instance.relayName,
-            relayStatus: instance.relayStatus,
-            relayUpdating: instance.relayUpdating,
-            routeId: instance.routeId,
-            shortId: instance.shortId,
-            version: instance.version,
-          }))
-      },
-    })
+    const collection = getInfraServersCollection(dbClient)
+    const result = useLiveQuery(collection)
     const retry = React.useCallback(() => {
       forkPromise(() =>
-        getRelayInstancesCollection(dbClient).utils.refetch({
+        collection.utils.refetch({
           throwOnError: true,
         })
       )
-    }, [dbClient])
+    }, [collection])
     const liveSource = useInfraTableSource({
-      directory: {
-        ...result,
-        isLoading: result.isLoading || relayConfigured === undefined,
-      },
+      directory: result,
       reference: serverReference,
       error: serverInventoryError,
       retry,
@@ -544,7 +493,11 @@ const ServerDataTable = React.memo(function ServerDataTable({
                   }}
                   name={server.name}
                   nameClassName="transition-colors group-hover/server-link:text-primary"
-                  meta={`${server.game} · ${server.implementation}`}
+                  meta={
+                    [server.game, server.implementation]
+                      .filter(Boolean)
+                      .join(" · ") || server.shortId
+                  }
                   metaClassName="font-mono"
                   showFavorite={false}
                 />
@@ -584,7 +537,7 @@ const ServerDataTable = React.memo(function ServerDataTable({
         header: "Host / IP",
         sortFn: "text",
         cell: ({ row }) => {
-          const address = row.original.server.connectAddress
+          const address = row.original.server.connectAddress || "—"
           return (
             <DataTableTextCell
               className={
@@ -811,7 +764,7 @@ const ServerActionLink = React.memo(function ServerActionLink({
 
 function canDeleteServer(
   access: ServerDeleteAccess,
-  server: ServerListInstance
+  server: ServerDirectory
 ): boolean {
   if (server.brickId === builtinTailscaleBrickId) return false
   return (
@@ -858,7 +811,7 @@ function EmptyServerTable({
   )
 }
 
-function serverRowKey(server: ServerListInstance): string {
+function serverRowKey(server: ServerDirectory): string {
   return `${server.relayId}:${server.id}`
 }
 
